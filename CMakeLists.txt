@@ -1,4 +1,10 @@
 cmake_minimum_required(VERSION 3.16)
+
+# 必须在 project() 之前设置, 覆盖 conda gcc 的旧 ABI 默认值
+# conda OpenCV/GTest 用新 ABI, PyTorch 2.5.1 也跟随
+set(CMAKE_CXX_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")
+set(CMAKE_CUDA_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")
+
 project(PlaScan VERSION 1.0.0 LANGUAGES CXX)
 
 if(POLICY CMP0104)
@@ -15,15 +21,19 @@ if(DEFINED CMAKE_CUDA_ARCHITECTURES)
   unset(CMAKE_CUDA_ARCHITECTURES CACHE)
 endif()
 
-# 统一使用 C++11 ABI (与 conda 环境中的 OpenCV/GTest 保持一致)
-add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
+# 统一使用 C++11 ABI (与 conda OpenCV/GTest 一致)
+# conda gcc 默认旧 ABI, 直接替换 CXX_FLAGS 中的旧值为新值
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
+string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=0" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
+message(STATUS "plascan: C++11 ABI enabled")
 
 # pip 安装的 nvidia CUDA 头文件路径 (非标准 CUDA toolkit 布局)
 include_directories("$ENV{HOME}/anaconda3/envs/plascan/lib/python3.12/site-packages/nvidia/cu13/include")
 include_directories("$ENV{HOME}/anaconda3/envs/plascan/targets/x86_64-linux/include")
 
-# cuFFT 库路径 (PyTorch 2.5.1 cu124 需要)
-link_directories("$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64")
+# cuFFT 库路径 (PyTorch 2.5.1 cu124 需要, 全局 LINKER_FLAGS 确保传播到子目录)
+set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64 -Wl,-rpath,$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64")
+set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64 -Wl,-rpath,$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64")
 
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
