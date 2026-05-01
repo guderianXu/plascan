@@ -167,7 +167,7 @@ public:
         if (m_algo == "disk" || m_algo == "aliked")
         {
             script = QCoreApplication::applicationDirPath()
-                + "/../../scripts/run_disk_aliked.py";
+                + "/../../../src/core/feature_extractors/disk/run_disk_aliked.py";
         }
 
         QStringList args;
