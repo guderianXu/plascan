@@ -22,6 +22,7 @@ namespace ExtractorSuffix
     inline const char* orb        = ".orb";
     inline const char* akaze      = ".akz";
     inline const char* dedode     = ".dedode";
+    inline const char* surf       = ".surf";
 
     inline const char* forAlgorithm(const std::string &algo)
     {
@@ -32,6 +33,7 @@ namespace ExtractorSuffix
         if (algo == "orb")        return orb;
         if (algo == "akaze")      return akaze;
         if (algo == "dedode")     return dedode;
+        if (algo == "surf")       return surf;
         return ".sp";
     }
 }
