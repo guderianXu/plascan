@@ -10,8 +10,7 @@
 //   feature_match_cli -a loftr -m loftr_outdoor_cuda.pt -L A.tif -R B.tif -o out.match --cuda
 // =============================================================================
 #include "cli_common.h"
-#include "SuperGlueMatcher.h"
-#include "LightGlueMatcher.h"
+#include "MatcherFactory.h"
 #include "TraditionalFeatureMatcher.h"
 #include "FeatureData.h"
 #include "SuperPoint.h"
