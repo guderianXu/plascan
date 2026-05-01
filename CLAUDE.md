@@ -9,6 +9,10 @@
 - 嵌套不超过4层
 - 花括号使用 Allman 风格（左花括号独占一行），不用 K&R 风格
 
+# Git 同步
+- **每次 commit 后必须 push 到 GitHub**：`git push origin main`（含 tags: `git push origin <tag>`）
+- 仓库地址：`https://github.com/guderianXu/plascan`
+
 # 开发流程 (Feature Branch + TDD)
 
 **分支策略**：
