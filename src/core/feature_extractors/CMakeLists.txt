@@ -2,6 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 # SuperPoint
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/superpoint/CMakeLists.txt)
+	    ${CMAKE_CURRENT_SOURCE_DIR}/disk
+	    ${CMAKE_CURRENT_SOURCE_DIR}/aliked
   set(SUPERPOINT_INSTALL OFF CACHE BOOL "Disable SuperPoint standalone install/export in PlaScan build" FORCE)
   add_subdirectory(superpoint)
   message(STATUS "plascan_core: building feature extractor - SuperPoint")
@@ -12,6 +14,8 @@ endif()
 add_library(feature_extractors_traditional STATIC
   FeatureData.cpp
   FeatureData.h
+  ExtractorFactory.cpp
+  ExtractorFactory.h
   tradition/TraditionalFeatureExtractor.cpp
   tradition/TraditionalFeatureExtractor.h
 )
@@ -21,6 +25,8 @@ target_include_directories(feature_extractors_traditional
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/tradition
     ${CMAKE_CURRENT_SOURCE_DIR}/superpoint
+	    ${CMAKE_CURRENT_SOURCE_DIR}/disk
+	    ${CMAKE_CURRENT_SOURCE_DIR}/aliked
     ${TORCH_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
 )

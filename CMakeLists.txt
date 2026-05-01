@@ -28,7 +28,9 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=0" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 message(STATUS "plascan: C++11 ABI enabled")
 
-# CUDA 路径由 FindCUDAToolkit 自动管理, 不手动干预
+# CUDA runtime + toolkit 头文件 (pip nvidia 包, 非标准路径)
+include_directories("$ENV{HOME}/anaconda3/envs/plascan/lib/python3.12/site-packages/nvidia/cu13/include")
+include_directories("$ENV{HOME}/anaconda3/envs/plascan/targets/x86_64-linux/include")
 
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)

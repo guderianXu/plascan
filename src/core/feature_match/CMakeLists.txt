@@ -4,6 +4,9 @@ project(FeatureMatch LANGUAGES CXX)
 add_library(feature_match_common STATIC
   match.cpp
   match.h
+  MatcherFactory.cpp
+  MatcherFactory.h
+  IMatcher.h
 )
 
 target_include_directories(feature_match_common
@@ -11,6 +14,8 @@ target_include_directories(feature_match_common
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors/superpoint
+	    ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors/disk
+	    ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors/aliked
     ${TORCH_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
 )
