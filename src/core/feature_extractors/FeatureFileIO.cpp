@@ -1,11 +1,11 @@
 // =============================================================================
-// 文件: QFileBinaryIO.cpp
+// 文件: FeatureFileIO.cpp
 // 功能: 多提取器二进制特征文件 I/O (支持 SPBT/DSKB/ALKB/SFTB/ORBB/AKZB)
 // =============================================================================
 #include "SuperPoint.h"
 #include <torch/torch.h>
 
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 #include <QDebug>
 #include <cstring>
 
@@ -56,7 +56,7 @@ void writeMagic(QDataStream &out, const std::string &algoName)
 
 } // anonymous
 
-bool QFileBinaryIO::write(const QString& path, const QString& image_name,
+bool FeatureFileIO::write(const QString& path, const QString& image_name,
                           const SuperPointOutput& output, const std::string &algoName)
 {
     QFile file(path);
@@ -104,7 +104,7 @@ bool QFileBinaryIO::write(const QString& path, const QString& image_name,
     return true;
 }
 
-bool QFileBinaryIO::read(const QString& path, QString& image_name, SuperPointOutput& output)
+bool FeatureFileIO::read(const QString& path, QString& image_name, SuperPointOutput& output)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))
@@ -159,7 +159,7 @@ bool QFileBinaryIO::read(const QString& path, QString& image_name, SuperPointOut
     return true;
 }
 
-std::string QFileBinaryIO::peekAlgorithm(const QString& path)
+std::string FeatureFileIO::peekAlgorithm(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return "";
@@ -169,7 +169,7 @@ std::string QFileBinaryIO::peekAlgorithm(const QString& path)
     return ALGO_FOR_MAGIC(magic);
 }
 
-int QFileBinaryIO::peekKeypointCount(const QString& path)
+int FeatureFileIO::peekKeypointCount(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return -1;

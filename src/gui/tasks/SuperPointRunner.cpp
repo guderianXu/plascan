@@ -1,7 +1,7 @@
 #include "compat/QtTorchMacroGuard.h"
 
 #include "SuperPoint.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 #include "tradition/TraditionalFeatureExtractor.h"
 #include <opencv2/opencv.hpp>
 #include <torch/torch.h>
@@ -369,7 +369,7 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
                 QString baseName = fileInfo.completeBaseName();
                 QString outputPath = QDir(outputDir).filePath(baseName + ".sp");
                 
-                if (QFileBinaryIO::write(outputPath, fileInfo.fileName(), output)) 
+                if (FeatureFileIO::write(outputPath, fileInfo.fileName(), output)) 
                 {
                     LOG_INFO("%s", qUtf8Printable(QString("  检测到 %1 个特征点，已保存到: %2")
                         .arg(output.keypoints.size()).arg(outputPath)));

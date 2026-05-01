@@ -4,7 +4,7 @@
 #include "lightglue/LightGlueMatcher.h"
 #include "SuperGlueMatchIO.h"
 #include "MatchOutlierRejector.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 #include "SuperPoint.h"
 #include "TraditionalFeatureMatcher.h"
 #include "FeatureData.h"
@@ -373,13 +373,13 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         QString imgName0, imgName1;
                         SuperPointOutput sp0, sp1;
 
-                        if (!QFileBinaryIO::read(sp0Path, imgName0, sp0)) 
+                        if (!FeatureFileIO::read(sp0Path, imgName0, sp0)) 
                         {
                             LOG_ERROR("%s", qUtf8Printable(QString("读取特征文件失败: %1").arg(sp0Path)));
                             failCount.fetch_add(1);
                             continue;
                         }
-                        if (!QFileBinaryIO::read(sp1Path, imgName1, sp1)) 
+                        if (!FeatureFileIO::read(sp1Path, imgName1, sp1)) 
                         {
                             LOG_ERROR("%s", qUtf8Printable(QString("读取特征文件失败: %1").arg(sp1Path)));
                             failCount.fetch_add(1);

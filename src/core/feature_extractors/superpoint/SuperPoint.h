@@ -133,7 +133,7 @@ struct SuperPointOutput
 // 典型使用流程：
 //   1. 构造：SuperPoint sp("model.pt", config);  // 加载模型并预热
 //   2. 推理：auto out = sp.detect(image);          // 获得关键点+描述子
-//   3. 保存：QFileBinaryIO::write(path, name, out); // 持久化
+//   3. 保存：FeatureFileIO::write(path, name, out); // 持久化
 class SuperPoint 
 {
 public:
@@ -164,7 +164,7 @@ public:
     // setDevice: 在运行时切换设备（例如从 CPU 切换到 CUDA），会尝试将模型和缓存移动到新设备。
     void setDevice(torch::Device device);
     SuperPointConfig getConfig() const { return config_; }
-    // NOTE: 保存/加载由独立的二进制 I/O 类处理（例如 `QFileBinaryIO`），
+    // NOTE: 保存/加载由独立的二进制 I/O 类处理（例如 `FeatureFileIO`），
     //   - 设计理由：保持推理类集中于推理逻辑，I/O 由 GUI 层或专用类控制更灵活。
     //   - 如果需要不同序列化格式（例如 NPY、PROTOBUF），在 GUI 层调用相应工具类即可。
 

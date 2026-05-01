@@ -926,7 +926,7 @@ bool SuperPoint::saveOverlayImage(const cv::Mat& image, const SuperPointOutput& 
 }
 
 // Note: File-based saving/reading is intentionally handled outside this class.
-// Use a separate Qt-based I/O helper (e.g. QFileBinaryIO) in the GUI layer to write/read binary files via QFile/QDataStream.
+// Use a separate Qt-based I/O helper (e.g. FeatureFileIO) in the GUI layer to write/read binary files via QFile/QDataStream.
 
 // -------------------------------------------------------------------------
 // detectBatch: 批量推理，提高 GPU 容量利用率

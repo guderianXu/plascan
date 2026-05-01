@@ -11,7 +11,7 @@
 
 #include "SuperPoint.h"
 #include "FeatureData.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 #include "SuperGlueMatcher.h"
 #include "SuperGlueMatchIO.h"
 #include "MatchOutlierRejector.h"
@@ -498,7 +498,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 }
 
                 const QString spPath = QDir(ipDir).filePath(fi.completeBaseName() + QStringLiteral(".sp"));
-                if (!QFileBinaryIO::write(spPath, fi.fileName(), spOut)) 
+                if (!FeatureFileIO::write(spPath, fi.fileName(), spOut)) 
                 {
                     LOG_WARN(QStringLiteral("  保存特征文件失败: %1").arg(spPath));
                     continue;
@@ -538,7 +538,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
         QString imageName;
         SuperPointOutput spOut;
-        if (!QFileBinaryIO::read(spPath, imageName, spOut)) 
+        if (!FeatureFileIO::read(spPath, imageName, spOut)) 
         {
             LOG_WARN(QStringLiteral("  读取特征文件失败: %1").arg(spPath));
             continue;

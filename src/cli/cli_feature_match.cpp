@@ -15,7 +15,7 @@
 #include "TraditionalFeatureMatcher.h"
 #include "FeatureData.h"
 #include "SuperPoint.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -126,9 +126,9 @@ int main(int argc, char *argv[])
         xjw::feature_match::LightGlueMatcher matcher(lgCfg);
 
         SuperPointOutput spo1, spo2; QString n1, n2;
-        if (!QFileBinaryIO::read(QString::fromStdString(sp1), n1, spo1))
+        if (!FeatureFileIO::read(QString::fromStdString(sp1), n1, spo1))
             cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
-        if (!QFileBinaryIO::read(QString::fromStdString(sp2), n2, spo2))
+        if (!FeatureFileIO::read(QString::fromStdString(sp2), n2, spo2))
             cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
 
         auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo1);
@@ -157,9 +157,9 @@ int main(int argc, char *argv[])
         superglue::SuperGlueMatcher matcher(sgCfg);
 
         SuperPointOutput spo1, spo2; QString n1, n2;
-        if (!QFileBinaryIO::read(QString::fromStdString(sp1), n1, spo1))
+        if (!FeatureFileIO::read(QString::fromStdString(sp1), n1, spo1))
             cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
-        if (!QFileBinaryIO::read(QString::fromStdString(sp2), n2, spo2))
+        if (!FeatureFileIO::read(QString::fromStdString(sp2), n2, spo2))
             cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
 
         auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo1);
@@ -178,9 +178,9 @@ int main(int argc, char *argv[])
         if (sp1.empty() || sp2.empty()) cli::fatal("bf/flann 需要 --sp1/--sp2");
 
         SuperPointOutput spo1, spo2; QString n1, n2;
-        if (!QFileBinaryIO::read(QString::fromStdString(sp1), n1, spo1))
+        if (!FeatureFileIO::read(QString::fromStdString(sp1), n1, spo1))
             cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
-        if (!QFileBinaryIO::read(QString::fromStdString(sp2), n2, spo2))
+        if (!FeatureFileIO::read(QString::fromStdString(sp2), n2, spo2))
             cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
 
         auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo1);

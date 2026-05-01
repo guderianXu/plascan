@@ -2,7 +2,7 @@
 #include "compat/QtTorchMacroGuard.h"
 
 #include "SuperPoint.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 #include "SuperGlueMatcher.h"
 #include "SuperGlueMatchIO.h"
 

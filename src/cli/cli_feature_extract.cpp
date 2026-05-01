@@ -9,7 +9,7 @@
 #include "cli_common.h"
 #include "SuperPoint.h"
 #include "TraditionalFeatureExtractor.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -42,7 +42,7 @@ static int processSP(const std::string &modelPath, SuperPointConfig spCfg,
     if (output.keypoints.empty()) { fprintf(stderr, "未检测到关键点\n"); return cli::EXIT_ALGO_ERR; }
 
     QFileInfo fi(QString::fromStdString(imgPath));
-    if (!QFileBinaryIO::write(QString::fromStdString(outPath), fi.fileName(), output, "superpoint"))
+    if (!FeatureFileIO::write(QString::fromStdString(outPath), fi.fileName(), output, "superpoint"))
     { fprintf(stderr, "写入失败: %s\n", outPath.c_str()); return cli::EXIT_IO_ERR; }
 
     fprintf(stdout, "已保存: %s (%zu kp, orig %dx%d)\n", outPath.c_str(), output.keypoints.size(), origW, origH);
@@ -62,7 +62,7 @@ static int processTraditional(const std::string &algo, SuperPointConfig spCfg,
     if (output.keypoints.empty()) { fprintf(stderr, "未检测到关键点\n"); return cli::EXIT_ALGO_ERR; }
 
     QFileInfo fi(QString::fromStdString(imgPath));
-    if (!QFileBinaryIO::write(QString::fromStdString(outPath), fi.fileName(), output, algo))
+    if (!FeatureFileIO::write(QString::fromStdString(outPath), fi.fileName(), output, algo))
     { fprintf(stderr, "写入失败: %s\n", outPath.c_str()); return cli::EXIT_IO_ERR; }
 
     fprintf(stdout, "已保存: %s (%zu kp)\n", outPath.c_str(), output.keypoints.size());
@@ -111,7 +111,6 @@ int main(int argc, char *argv[])
     spCfg.remove_borders = removeBorder;
     spCfg.allow_device_fallback = true;
 
-    std::string norm = xjw::feature_extractors::TraditionalFeatureExtractor::normalizeAlgorithmName(algo);
     bool isSP = (norm == "superpoint");
 
     if (isSP && modelPath.empty())

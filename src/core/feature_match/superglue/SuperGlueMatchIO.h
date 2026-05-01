@@ -34,7 +34,7 @@
  *    - match_score: float (匹配置信度)
  * 
  * 注意：
- *  - 本文件只存储匹配关系，不存储关键点坐标和描述符（它们由 QFileBinaryIO 保存）
+ *  - 本文件只存储匹配关系，不存储关键点坐标和描述符（它们由 FeatureFileIO 保存）
  *  - 读取时需先加载两张影像的特征点文件，再加载匹配文件
  *  - 兼容 MatchViewerDialog 的 .match 文件格式要求
  */

@@ -19,7 +19,7 @@
 #endif
 
 #include "SuperPoint.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 
 // 恢复Qt宏
 #ifdef NEED_RESTORE_SLOTS
@@ -534,10 +534,10 @@ bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
         return false;
     }
 
-    // 使用QFileBinaryIO读取.sp文件
+    // 使用FeatureFileIO读取.sp文件
     QString imageName;
     SuperPointOutput output;
-    if (!QFileBinaryIO::read(spPath, imageName, output)) {
+    if (!FeatureFileIO::read(spPath, imageName, output)) {
         qWarning() << "Failed to read .sp file:" << spPath;
         return false;
     }

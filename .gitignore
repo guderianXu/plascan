@@ -12,7 +12,5 @@ __pycache__/
 *~
 .DS_Store
 data/
-resources/models/*.pt
 data/*
-3rdparty/*
 build*

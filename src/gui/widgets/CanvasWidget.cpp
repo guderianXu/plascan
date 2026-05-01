@@ -2,7 +2,7 @@
 
 #include "LayerRenderer.h"
 #include "ProjectIO.h"
-#include "QFileBinaryIO.h"
+#include "FeatureFileIO.h"
 
 // 为避免Qt的宏（slots, signals, emit）与LibTorch头文件冲突，
 // 在包含SuperPoint.h之前暂时undef这些宏，之后再恢复
@@ -449,10 +449,10 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
             return empty;
         }
 
-        // 使用 QFileBinaryIO 读取 SuperPoint 输出
+        // 使用 FeatureFileIO 读取 SuperPoint 输出
         QString imageName;
         SuperPointOutput output;
-        if (!QFileBinaryIO::read(spFile, imageName, output)) {
+        if (!FeatureFileIO::read(spFile, imageName, output)) {
             LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read .sp file %1").arg(spFile));
             return empty;
         }
@@ -555,7 +555,7 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
 
     QString imageName;
     SuperPointOutput output;
-    if (!QFileBinaryIO::read(spFile, imageName, output)) {
+    if (!FeatureFileIO::read(spFile, imageName, output)) {
         LOG_WARN(QStringLiteral("immediateReloadInterestPoints: failed to read .sp file %1").arg(spFile));
         if (isCurrentImage && m_layerRenderer) m_layerRenderer->clearFeatureLayers();
         emit featuresLoaded(imagePath, 0);
