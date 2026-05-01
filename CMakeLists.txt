@@ -18,6 +18,13 @@ endif()
 # 统一使用 C++11 ABI (与 conda 环境中的 OpenCV/GTest 保持一致)
 add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
 
+# pip 安装的 nvidia CUDA 头文件路径 (非标准 CUDA toolkit 布局)
+include_directories("$ENV{HOME}/anaconda3/envs/plascan/lib/python3.12/site-packages/nvidia/cu13/include")
+include_directories("$ENV{HOME}/anaconda3/envs/plascan/targets/x86_64-linux/include")
+
+# cuFFT 库路径 (PyTorch 2.5.1 cu124 需要)
+link_directories("$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64")
+
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
   enable_testing()
