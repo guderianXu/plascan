@@ -51,13 +51,28 @@ static int saveMatchFile(const std::string &path,
     return count;
 }
 
+// 根据特征文件后缀自动选择最佳匹配器
+static std::string autoMatcher(const std::string &spPath)
+{
+    std::string ext;
+    auto pos = spPath.rfind('.');
+    if (pos != std::string::npos) ext = spPath.substr(pos);
+
+    if (ext == ".sp" || ext == ".dedode") return "superglue";
+    if (ext == ".dsk")                    return "bf";     // 128d NN
+    if (ext == ".alk")                    return "bf";
+    if (ext == ".sift")                   return "bf";
+    if (ext == ".orb")                    return "bf";     // Hamming handled internally
+    return "superglue";  // default
+}
+
 int main(int argc, char *argv[])
 {
-    CLI::App app{"PlaScan 统一特征匹配 — SuperGlue | LightGlue | LightGlue-E2E | BF | FLANN"};
+    CLI::App app{"PlaScan 统一特征匹配 — 自动检测文件类型, 无需手动指定算法"};
 
-    std::string algo = "superglue";
+    std::string algo;  // 改为可选: 不填则自动检测
     app.add_option("-a,--algorithm", algo,
-        "算法: superglue, lightglue, lightglue-e2e, bf, flann");
+        "匹配算法 (留空则根据特征文件后缀自动选择)");
 
     std::string modelPath, spModelPath, sp1, sp2, imgL, imgR, outPath;
     app.add_option("-m,--model",    modelPath,   "匹配模型路径 (.pt)");
@@ -80,6 +95,15 @@ int main(int argc, char *argv[])
     app.add_flag("-V,--verbose", verbose);
 
     CLI11_PARSE(app, argc, argv);
+
+    // 自动检测: 从特征文件后缀推断提取器类型 + 匹配算法
+    if (algo.empty() && !sp1.empty())
+    {
+        algo = autoMatcher(sp1);
+        fprintf(stdout, "自动检测: %s → %s\n",
+                sp1.c_str(), algo.c_str());
+    }
+    if (algo.empty()) algo = "superglue"; // 最终回退
 
     if (algo == "lightglue-e2e")
     {
