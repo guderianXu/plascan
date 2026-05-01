@@ -123,7 +123,8 @@ struct SuperPointConfig
 //   1. 构造：SuperPoint sp("model.pt", config);  // 加载模型并预热
 //   2. 推理：auto out = sp.detect(image);          // 获得关键点+描述子
 //   3. 保存：FeatureFileIO::write(path, name, out); // 持久化
-class SuperPoint 
+#include "IExtractor.h"
+class SuperPoint : public IExtractor 
 {
 public:
     // 构造/析构
@@ -138,6 +139,8 @@ public:
     // config_.normalize_input 做相应缩放（推荐使用 0-1 归一化）。返回值为
     // 包含关键点（像素坐标）、分数和描述子的 `FeatureOutput`。
     FeatureOutput detect(const cv::Mat& image);
+    FeatureOutput extract(const cv::Mat &gray) override { return detect(gray); }
+    std::string algorithmName() const override { return "superpoint"; }
 
     // 批量推理：接受多张图像并返回每张的输出。实现可用于并行推理或批处理。
     std::vector<FeatureOutput> detectBatch(const std::vector<cv::Mat>& images);
