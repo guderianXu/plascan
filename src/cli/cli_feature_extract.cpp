@@ -70,7 +70,7 @@ int main(int argc, char *argv[])
     CLI11_PARSE(app, argc, argv);
 
     // 自动追加算法后缀
-    std::string norm = TraditionalFeatureExtractor::normalizeAlgorithmName(algo);
+    std::string norm = xjw::feature_extractors::TraditionalFeatureExtractor::normalizeAlgorithmName(algo);
     std::string suffix = ExtractorSuffix::forAlgorithm(norm);
     if (outPath.find('.') == std::string::npos)
         outPath += suffix;
@@ -100,7 +100,7 @@ int main(int argc, char *argv[])
         {
             std::string in = inDir.absoluteFilePath(fname).toStdString();
             std::string out = outDir.absoluteFilePath(
-                QFileInfo(fname).completeBaseName().toStdString() + suffix);
+                QFileInfo(fname).completeBaseName() + QString::fromStdString(suffix));
             int rc = processOne(algo, extractor, in, out);
             (rc == cli::EXIT_OK) ? ++ok : ++fail;
         }
