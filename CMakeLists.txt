@@ -28,13 +28,7 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=0" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 message(STATUS "plascan: C++11 ABI enabled")
 
-# pip 安装的 nvidia CUDA 头文件路径 (非标准 CUDA toolkit 布局)
-include_directories("$ENV{HOME}/anaconda3/envs/plascan/lib/python3.12/site-packages/nvidia/cu13/include")
-include_directories("$ENV{HOME}/anaconda3/envs/plascan/targets/x86_64-linux/include")
-
-# cuFFT 库路径 (PyTorch 2.5.1 cu124 需要, 全局 LINKER_FLAGS 确保传播到子目录)
-set(CMAKE_EXE_LINKER_FLAGS "${CMAKE_EXE_LINKER_FLAGS} -L$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64 -Wl,-rpath,$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64")
-set(CMAKE_SHARED_LINKER_FLAGS "${CMAKE_SHARED_LINKER_FLAGS} -L$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64 -Wl,-rpath,$ENV{HOME}/anaconda3/envs/plascan/cuda_toolkit/lib64")
+# CUDA 路径由 FindCUDAToolkit 自动管理, 不手动干预
 
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
