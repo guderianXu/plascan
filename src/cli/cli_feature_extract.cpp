@@ -8,6 +8,7 @@
 // =============================================================================
 #include "cli_common.h"
 #include "IExtractor.h"
+#include "TraditionalFeatureExtractor.h"
 #include "ExtractorFactory.h"
 #include "FeatureFileIO.h"
 
@@ -99,8 +100,8 @@ int main(int argc, char *argv[])
         for (const QString &fname : inDir.entryList(filters, QDir::Files, QDir::Name))
         {
             std::string in = inDir.absoluteFilePath(fname).toStdString();
-            std::string out = outDir.absoluteFilePath(
-                QFileInfo(fname).completeBaseName() + QString::fromStdString(suffix));
+            QString outName = QFileInfo(fname).completeBaseName() + QString::fromStdString(suffix);
+            std::string out = outDir.absoluteFilePath(outName).toStdString();
             int rc = processOne(algo, extractor, in, out);
             (rc == cli::EXIT_OK) ? ++ok : ++fail;
         }
