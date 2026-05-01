@@ -115,18 +115,7 @@ struct SuperPointConfig
     SuperPointConfig() = default;
 };
 
-// SuperPoint 单张图像推理结果结构体
-// 包含本次推理检测到的所有关键点信息
-struct FeatureOutput 
-{
-    // 关键点列表（像素坐标系，(pt.x=列, pt.y=行)，已可选做子像素精化）
-    std::vector<cv::KeyPoint> keypoints;
-    // 每个关键点的检测响应值（与 scores map 中的 softmax 输出对应）
-    std::vector<float> scores;
-    // 每个关键点对应的描述子，形状 [N, 256]（CPU float32 Tensor）
-    // 描述子已经过 L2 归一化，可直接用于余弦相似度匹配
-    torch::Tensor descriptors;  // [N, 256]
-};
+#include "FeatureOutput.h"
 
 // SuperPoint 特征点检测器类
 // 负责加载 TorchScript 模型、管理设备（CPU/CUDA）、执行推理并后处理输出。
