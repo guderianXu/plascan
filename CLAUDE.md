@@ -9,7 +9,29 @@
 - 嵌套不超过4层
 - 花括号使用 Allman 风格（左花括号独占一行），不用 K&R 风格
 
+# 开发流程 (Feature Branch + TDD)
+
+**分支策略**：
+- `main` 分支始终稳定可构建，不直接在 main 上开发
+- 每个功能/修复在独立 feature 分支上开发：`feat/<描述>` 或 `fix/<描述>`
+- 分支上完成 TDD 循环（红→绿→重构）且测试全部通过后，合并回 main
+
+**TDD 铁律**：
+1. 先写测试 → 运行确认失败（红）
+2. 写最小实现 → 运行确认通过（绿）
+3. 重构优化 → 保持测试通过
+4. 每次提交前跑相关测试，禁止提交破坏测试的代码
+
+**分支操作规范**：
+```bash
+git checkout -b feat/<功能名>   # 从 main 创建功能分支
+# ... TDD 开发 ...
+git checkout main && git merge feat/<功能名>   # 测试通过后合并
+git push origin main
+```
+
 # 项目结构
 - 项目整体架构文档在 `docs/PROJECT_ARCHITECTURE.md`，包含完整目录树、模块职责、菜单结构、数据流和已知技术债务
 - 密集匹配模块文档在 `src/core/dense_match/README.md`
+- 特征提取模块文档在 `src/core/feature_extractors/README.md`
 - **每次修改代码前后必须对照上述文档**：新增/删除/移动文件后同步更新文档中对应的目录树和模块说明，若发现文档与实际不符立即修正
