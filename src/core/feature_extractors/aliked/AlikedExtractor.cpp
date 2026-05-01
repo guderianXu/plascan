@@ -3,6 +3,7 @@
 // 功能: ALIKED 特征提取器 LibTorch 实现
 // =============================================================================
 #include "AlikedExtractor.h"
+#include "SuperPoint.h"
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
 
@@ -18,7 +19,7 @@ AlikedExtractor::AlikedExtractor(const AlikedConfig &cfg) : m_cfg(cfg)
     m_model.eval();
 }
 
-AlikedOutput AlikedExtractor::extract(const cv::Mat &grayImage)
+FeatureOutput AlikedExtractor::extract(const cv::Mat &grayImage)
 {
     CV_Assert(grayImage.type() == CV_8UC1);
 
@@ -47,8 +48,7 @@ AlikedOutput AlikedExtractor::extract(const cv::Mat &grayImage)
     auto kptAcc   = kpts.accessor<float, 3>();
     auto scoreAcc = scores.accessor<float, 2>();
 
-    AlikedOutput result;
-    result.scale = scale;
+    FeatureOutput result;
 
     for (int i = 0; i < N; ++i)
     {

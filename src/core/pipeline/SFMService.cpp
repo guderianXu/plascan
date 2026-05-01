@@ -283,7 +283,7 @@ QualityPresets presetsForLevel(int quality)
 /// 单张影像的缓存特征数据（含描述子，Phase 2 匹配需要）
 struct ImageFeatureCache
 {
-    SuperPointOutput spOutput;      ///< keypoints, scores, descriptors
+    FeatureOutput spOutput;      ///< keypoints, scores, descriptors
     int imgH = 0;                   ///< 图像高度（SuperGlue 位置编码需要）
     int imgW = 0;                   ///< 图像宽度
 };
@@ -484,7 +484,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     }
                 }
 
-                SuperPointOutput spOut = sp.detect(inputImg);
+                FeatureOutput spOut = sp.detect(inputImg);
 
                 // 若进行了缩放，将关键点坐标映射回原图分辨率
                 if (scale < 1.0f && !spOut.keypoints.empty()) 
@@ -537,7 +537,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         if (featureCache.contains(id)) continue;   // 刚提取的已在缓存中
 
         QString imageName;
-        SuperPointOutput spOut;
+        FeatureOutput spOut;
         if (!FeatureFileIO::read(spPath, imageName, spOut)) 
         {
             LOG_WARN(QStringLiteral("  读取特征文件失败: %1").arg(spPath));
@@ -1029,8 +1029,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     const ImageFeatureCache &fcA = *itA;
                     const ImageFeatureCache &fcB = *itB;
 
-                    auto fdA = xjw::feature_extractors::FeatureData::fromSuperPointOutput(fcA.spOutput, "superpoint");
-                    auto fdB = xjw::feature_extractors::FeatureData::fromSuperPointOutput(fcB.spOutput, "superpoint");
+                    auto fdA = xjw::feature_extractors::FeatureData::fromFeatureOutput(fcA.spOutput, "superpoint");
+                    auto fdB = xjw::feature_extractors::FeatureData::fromFeatureOutput(fcB.spOutput, "superpoint");
                     fdA.imageWidth = fcA.imgW;
                     fdA.imageHeight = fcA.imgH;
                     fdB.imageWidth = fcB.imgW;

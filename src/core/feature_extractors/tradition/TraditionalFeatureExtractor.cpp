@@ -80,7 +80,7 @@ bool TraditionalFeatureExtractor::isTraditionalAlgorithm(const std::string &norm
     return normalizedName == "orb" || normalizedName == "sift";
 }
 
-SuperPointOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
+FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
                                                      const SuperPointConfig &config,
                                                      const std::string &normalizedName)
 {
@@ -149,7 +149,7 @@ SuperPointOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
         keepIndices.resize(config.max_num_keypoints);
     }
 
-    SuperPointOutput output;
+    FeatureOutput output;
     output.keypoints.reserve(keepIndices.size());
     output.scores.reserve(keepIndices.size());
 

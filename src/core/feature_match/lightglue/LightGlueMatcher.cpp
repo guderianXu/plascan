@@ -3,7 +3,7 @@
  * @brief LightGlue 匹配器实现
  *
  * 支持两种工作模式：
- *  1. match(FeatureData, FeatureData) —— 使用已有特征数据（如从 .sp 文件读入的 SuperPointOutput）。
+ *  1. match(FeatureData, FeatureData) —— 使用已有特征数据（如从 .sp 文件读入的 FeatureOutput）。
  *  2. matchImages(cv::Mat, cv::Mat)   —— 通过内置 SP 模型端到端匹配。
  */
 

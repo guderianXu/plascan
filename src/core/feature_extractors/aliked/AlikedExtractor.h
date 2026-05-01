@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+struct FeatureOutput;
+
 namespace xjw::feature_extractors
 {
 
@@ -23,19 +25,11 @@ struct AlikedConfig
     int    cudaDevice     = 0;
 };
 
-struct AlikedOutput
-{
-    std::vector<cv::KeyPoint> keypoints;
-    std::vector<float>        scores;
-    torch::Tensor             descriptors;  // [N, 128]
-    float                     scale = 1.0f;
-};
-
 class AlikedExtractor
 {
 public:
     explicit AlikedExtractor(const AlikedConfig &cfg);
-    AlikedOutput extract(const cv::Mat &grayImage);
+    FeatureOutput extract(const cv::Mat &grayImage);
 
 private:
     AlikedConfig m_cfg;

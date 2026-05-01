@@ -341,7 +341,7 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
                 }
 
                 // 执行特征提取
-                SuperPointOutput output;
+                FeatureOutput output;
                 if (superPointExtractor)
                 {
                     output = superPointExtractor->detect(processImage);

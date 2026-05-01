@@ -536,13 +536,13 @@ bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
 
     // 使用FeatureFileIO读取.sp文件
     QString imageName;
-    SuperPointOutput output;
+    FeatureOutput output;
     if (!FeatureFileIO::read(spPath, imageName, output)) {
         qWarning() << "Failed to read .sp file:" << spPath;
         return false;
     }
     
-    // SuperPointOutput.keypoints已经是std::vector<cv::KeyPoint>
+    // FeatureOutput.keypoints已经是std::vector<cv::KeyPoint>
     // scores已经存在output.scores中,将其存入KeyPoint.response字段
     for (size_t i = 0; i < output.keypoints.size() && i < output.scores.size(); ++i) {
         output.keypoints[i].response = output.scores[i];

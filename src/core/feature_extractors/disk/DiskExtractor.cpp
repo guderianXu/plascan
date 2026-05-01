@@ -3,6 +3,7 @@
 // 功能: DISK 特征提取器 LibTorch 实现
 // =============================================================================
 #include "DiskExtractor.h"
+#include "SuperPoint.h"  // FeatureOutput 完整定义
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
 
@@ -18,7 +19,7 @@ DiskExtractor::DiskExtractor(const DiskConfig &cfg) : m_cfg(cfg)
     m_model.eval();
 }
 
-DiskOutput DiskExtractor::extract(const cv::Mat &grayImage)
+FeatureOutput DiskExtractor::extract(const cv::Mat &grayImage)
 {
     CV_Assert(grayImage.type() == CV_8UC1);
 
@@ -49,40 +50,35 @@ DiskOutput DiskExtractor::extract(const cv::Mat &grayImage)
     auto kptAcc = kpts.accessor<float, 3>();
     auto scoreAcc = scores.accessor<float, 2>();
 
-    DiskOutput result;
-    result.scale = scale;
+    FeatureOutput result;
 
     for (int i = 0; i < N; ++i)
     {
         float conf = scoreAcc[0][i];
         if (conf < m_cfg.scoreThreshold) continue;
 
-        float x = kptAcc[0][i][0] / scale;
-        float y = kptAcc[0][i][1] / scale;
-
         cv::KeyPoint kp;
-        kp.pt.x = x;
-        kp.pt.y = y;
+        kp.pt.x = kptAcc[0][i][0] / scale;
+        kp.pt.y = kptAcc[0][i][1] / scale;
         kp.response = conf;
         kp.size = 1.0f;
         result.keypoints.push_back(kp);
         result.scores.push_back(conf);
     }
 
-    // 描述子 [1,N,D] → [M,D] (仅筛选后的)
     if (!result.keypoints.empty())
     {
         auto descAcc = descs.accessor<float, 3>();
         int D = static_cast<int>(descs.size(2));
-        result.descriptors = torch::empty(
-            {static_cast<long>(result.keypoints.size()), D}, torch::kFloat32);
-        auto resDescAcc = result.descriptors.accessor<float, 2>();
+        int M = static_cast<int>(result.keypoints.size());
+        result.descriptors = torch::empty({M, D}, torch::kFloat32);
+        auto resAcc = result.descriptors.accessor<float, 2>();
         int outIdx = 0;
         for (int i = 0; i < N; ++i)
         {
             if (scoreAcc[0][i] < m_cfg.scoreThreshold) continue;
             for (int d = 0; d < D; ++d)
-                resDescAcc[outIdx][d] = descAcc[0][i][d];
+                resAcc[outIdx][d] = descAcc[0][i][d];
             ++outIdx;
         }
     }

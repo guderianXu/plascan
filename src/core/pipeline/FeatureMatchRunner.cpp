@@ -371,7 +371,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                     {
                         // 读取特征数据
                         QString imgName0, imgName1;
-                        SuperPointOutput sp0, sp1;
+                        FeatureOutput sp0, sp1;
 
                         if (!FeatureFileIO::read(sp0Path, imgName0, sp0)) 
                         {
@@ -421,8 +421,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                                                       .toLower();
                                 if (!a.isEmpty()) featureAlgo = a;
                             }
-                            auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(sp0, featureAlgo.toStdString());
-                            auto fd1 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(sp1, featureAlgo.toStdString());
+                            auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, featureAlgo.toStdString());
+                            auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, featureAlgo.toStdString());
                             fd0.imageWidth = w0;
                             fd0.imageHeight = h0;
                             fd1.imageWidth = w1;
@@ -436,8 +436,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             tmConfig.ratioTestThreshold = 0.75f;
                             tmConfig.requireMutualConsistency = true;
 
-                            const auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(sp0, "superpoint");
-                            const auto fd1 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(sp1, "superpoint");
+                            const auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, "superpoint");
+                            const auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, "superpoint");
                             const cv::Mat desc0 = fd0.toCvDescriptors(tmConfig.algorithmName);
                             const cv::Mat desc1 = fd1.toCvDescriptors(tmConfig.algorithmName);
                             matchResult = xjw::feature_match::tradition::TraditionalFeatureMatcher::match(

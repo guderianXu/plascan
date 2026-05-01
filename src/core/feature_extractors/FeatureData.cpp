@@ -1,6 +1,6 @@
 #include "FeatureData.h"
 
-#include "SuperPoint.h" // 提供 SuperPointOutput 定义
+#include "SuperPoint.h" // 提供 FeatureOutput 定义
 
 #include <algorithm>
 #include <cmath>
@@ -47,7 +47,7 @@ torch::Tensor FeatureData::toTensorSuperGlue() const
 // 工厂方法
 // ---------------------------------------------------------------------------
 
-FeatureData FeatureData::fromSuperPointOutput(const SuperPointOutput &out,
+FeatureData FeatureData::fromFeatureOutput(const FeatureOutput &out,
                                               const std::string &algoName)
 {
     FeatureData fd;
@@ -55,7 +55,7 @@ FeatureData FeatureData::fromSuperPointOutput(const SuperPointOutput &out,
     fd.scores = out.scores;
     fd.sourceAlgorithm = algoName;
 
-    // SuperPointOutput::descriptors 为 [N, D] float32 CPU Tensor
+    // FeatureOutput::descriptors 为 [N, D] float32 CPU Tensor
     if (out.descriptors.defined() && out.descriptors.numel() > 0)
     {
         const auto t = out.descriptors.contiguous().cpu().to(torch::kFloat32);

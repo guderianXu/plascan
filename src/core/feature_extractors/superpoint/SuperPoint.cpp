@@ -384,11 +384,11 @@ torch::Tensor SuperPoint::sampleDescriptors(const torch::Tensor& keypoints,
 //   4. 灰度过滤  查询 last_gray_cpu_ 起为 [grayscale_min, grayscale_max]
 //   5. 边界剔除  过滤边缘 remove_borders 像素内的点
 //   6. 描述子采样 sampleDescriptors(双线性插值) + L2 归一化
-SuperPointOutput SuperPoint::postprocess(const torch::Tensor& scores,
+FeatureOutput SuperPoint::postprocess(const torch::Tensor& scores,
                                          const torch::Tensor& descriptors_dense,
                                          int img_width, int img_height) 
 {
-    SuperPointOutput output;
+    FeatureOutput output;
     
     // 在CPU上处理
     auto scores_cpu = scores.to(torch::kCPU);
@@ -542,7 +542,7 @@ SuperPointOutput SuperPoint::postprocess(const torch::Tensor& scores,
 //   4. 对模型咆出的局郠关键点做子像素化、灰度迧滤、边界剔除
 //   5. 邻域黑边检查、稀疏 NMS、top-k 截断
 //   6. 从 dense descriptors 中为每个关键点采样调用一维描述子
-SuperPointOutput SuperPoint::detect(const cv::Mat& image) 
+FeatureOutput SuperPoint::detect(const cv::Mat& image) 
 {
     torch::NoGradGuard no_grad;  // 禁用梯度计算，减少显存占用
     
@@ -570,12 +570,12 @@ SuperPointOutput SuperPoint::detect(const cv::Mat& image)
         } catch (const c10::Error &retry_err) {
             std::cerr << "[SuperPoint] 推理 OOM 重试失败，返回空结果: "
                       << retry_err.what_without_backtrace() << std::endl;
-            return SuperPointOutput{};
+            return FeatureOutput{};
         }
     } catch (const c10::Error &e) {
         std::cerr << "[SuperPoint] 推理异常，返回空结果: "
                   << e.what_without_backtrace() << std::endl;
-        return SuperPointOutput{};
+        return FeatureOutput{};
     }
     
     // 解析输出：新模型可能返回 tuple of tensors (3 或 4 元素)
@@ -626,7 +626,7 @@ SuperPointOutput SuperPoint::detect(const cv::Mat& image)
     }
     
     // 转换为输出格式
-    SuperPointOutput result;
+    FeatureOutput result;
 
     // 当模型返回空关键点（如 superpoint_v1_compat 导出的占位格式）时，
     // 从 dense score map 提取关键点
@@ -847,7 +847,7 @@ SuperPointOutput SuperPoint::detect(const cv::Mat& image)
 // 表头格式: x,y,score[,d0,...,d{D-1}]
 // 描述子派算中会输出说明数据的评断信息
 // （为 0 比例较高时会打印警告，帮助排查描述子异常）
-bool SuperPoint::saveKeypointsCSV(const SuperPointOutput& output, const std::string& path) {
+bool SuperPoint::saveKeypointsCSV(const FeatureOutput& output, const std::string& path) {
     std::ofstream ofs(path);
     if (!ofs.is_open()) return false;
     // 如果有描述子，则在表头添加 d0..d{D-1}
@@ -915,7 +915,7 @@ bool SuperPoint::saveKeypointsCSV(const SuperPointOutput& output, const std::str
     return true;
 }
 
-bool SuperPoint::saveOverlayImage(const cv::Mat& image, const SuperPointOutput& output, const std::string& path) 
+bool SuperPoint::saveOverlayImage(const cv::Mat& image, const FeatureOutput& output, const std::string& path) 
 {
     if (image.empty()) return false;
     cv::Mat vis;
@@ -936,9 +936,9 @@ bool SuperPoint::saveOverlayImage(const cv::Mat& image, const SuperPointOutput& 
 //   3. 通过 pin_memory + 非阵塞传输到 GPU，减少 PCIe 带宽干扰
 //   4. 他得模型输出列表，逐张解析和采样描述子
 //   5. 无法识别的输出格式则回退到逐张 detect()
-std::vector<SuperPointOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& images) 
+std::vector<FeatureOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& images) 
 {
-    std::vector<SuperPointOutput> results;
+    std::vector<FeatureOutput> results;
     results.resize(images.size());
 
     // 如果禁用批处理或 batch_size <= 1，退回到逐张调用
@@ -1082,7 +1082,7 @@ std::vector<SuperPointOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>
                                 }
                             } catch(...) { std::cerr << "warn: failed to inspect model desc" << std::endl; }
                         }
-                        SuperPointOutput sop;
+                        FeatureOutput sop;
                         if (kp.numel() > 0) 
                         {
                             auto kp_cpu = kp.to(torch::kCPU);

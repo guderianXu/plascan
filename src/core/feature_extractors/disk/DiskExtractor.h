@@ -10,6 +10,8 @@
 #include <string>
 #include <vector>
 
+struct FeatureOutput;
+
 namespace xjw::feature_extractors
 {
 
@@ -18,24 +20,16 @@ struct DiskConfig
     std::string modelPath;
     int    maxKeypoints  = 2048;
     float  scoreThreshold = 0.0f;
-    int    maxImageDim    = 1600;      // 超则降采样
+    int    maxImageDim    = 1600;
     bool   useCuda        = true;
     int    cudaDevice     = 0;
-};
-
-struct DiskOutput
-{
-    std::vector<cv::KeyPoint> keypoints;
-    std::vector<float>        scores;
-    torch::Tensor             descriptors;  // [N, 128] float32
-    float                     scale = 1.0f;  // 降采样时的缩放因子
 };
 
 class DiskExtractor
 {
 public:
     explicit DiskExtractor(const DiskConfig &cfg);
-    DiskOutput extract(const cv::Mat &grayImage);
+    FeatureOutput extract(const cv::Mat &grayImage);
 
 private:
     DiskConfig m_cfg;
