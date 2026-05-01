@@ -21,5 +21,8 @@ struct ExtractorConfig
     int  cudaDevice     = 0;
 };
 
+namespace xjw::feature_extractors
+{
 std::unique_ptr<IExtractor> createExtractor(const std::string &algo,
                                              const ExtractorConfig &cfg);
+}  // namespace xjw::feature_extractors

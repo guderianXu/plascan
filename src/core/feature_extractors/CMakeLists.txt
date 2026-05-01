@@ -2,8 +2,6 @@ cmake_minimum_required(VERSION 3.16)
 
 # SuperPoint
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/superpoint/CMakeLists.txt)
-	    ${CMAKE_CURRENT_SOURCE_DIR}/disk
-	    ${CMAKE_CURRENT_SOURCE_DIR}/aliked
   set(SUPERPOINT_INSTALL OFF CACHE BOOL "Disable SuperPoint standalone install/export in PlaScan build" FORCE)
   add_subdirectory(superpoint)
   message(STATUS "plascan_core: building feature extractor - SuperPoint")
@@ -25,8 +23,8 @@ target_include_directories(feature_extractors_traditional
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/tradition
     ${CMAKE_CURRENT_SOURCE_DIR}/superpoint
-	    ${CMAKE_CURRENT_SOURCE_DIR}/disk
-	    ${CMAKE_CURRENT_SOURCE_DIR}/aliked
+    ${CMAKE_CURRENT_SOURCE_DIR}/disk
+    ${CMAKE_CURRENT_SOURCE_DIR}/aliked
     ${TORCH_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
 )
@@ -41,27 +39,13 @@ if(TARGET superpoint)
   target_link_libraries(feature_extractors_traditional PUBLIC superpoint)
 endif()
 
-add_executable(traditional_feature_extractor_orb_diagnostic
-  tradition/test_traditional_feature_extractor_orb.cpp
-)
-
-target_link_libraries(traditional_feature_extractor_orb_diagnostic
-  PRIVATE
-    feature_extractors_traditional
-    ${OpenCV_LIBS}
-)
-
-target_compile_definitions(traditional_feature_extractor_orb_diagnostic
-  PRIVATE
-    TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
-)
-
-# ── DISK extractor ──
+# ── DISK ──
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/disk/CMakeLists.txt)
   add_subdirectory(disk)
   message(STATUS "plascan_core: building feature extractor - DISK")
 endif()
 
+# ── ALIKED ──
 if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/aliked/CMakeLists.txt)
   add_subdirectory(aliked)
   message(STATUS "plascan_core: building feature extractor - ALIKED")

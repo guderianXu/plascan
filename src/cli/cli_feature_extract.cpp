@@ -87,7 +87,7 @@ int main(int argc, char *argv[])
     eCfg.useCuda      = cuda;
     eCfg.cudaDevice   = gpu;
 
-    auto extractor = createExtractor(algo, eCfg);
+    auto extractor = xjw::feature_extractors::createExtractor(algo, eCfg);
     fprintf(stdout, "算法: %s\n", extractor->algorithmName().c_str());
 
     QFileInfo fiIn(QString::fromStdString(imgPath)), fiOut(QString::fromStdString(outPath));
