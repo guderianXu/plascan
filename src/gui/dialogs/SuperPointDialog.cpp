@@ -94,12 +94,27 @@ void SuperPointDialog::setupUi()
     m_algorithmCombo->addItem("ORB", "orb");
     m_algorithmCombo->addItem("SIFT", "sift");
     m_algorithmCombo->setCurrentIndex(0);
-    m_algorithmCombo->setToolTip(tr("选择特征提取算法\n"
-                                    "SuperPoint: 256维深度学习特征\n"
-                                    "DISK: 128维旋转不变特征\n"
-                                    "ALIKED: 128维轻量级特征\n"
-                                    "输出文件格式始终保持为 .sp"));
+    m_algorithmCombo->setToolTip(tr("SuperPoint(256d)/DISK(128d)/ALIKED(128d)/ORB(32d)/SIFT(128d)\n"
+                                    "输出文件后缀自动匹配: .sp/.dsk/.alk/.orb/.sift"));
     basicForm->addRow(tr("特征提取算法:"), m_algorithmCombo);
+
+    // 模型路径 (深度学习算法共享)
+    m_modelPathEdit = new QLineEdit(right);
+    m_modelPathEdit->setPlaceholderText(tr("深度学习模型路径 (.pt)"));
+    basicForm->addRow(tr("模型路径:"), m_modelPathEdit);
+
+    // CUDA 开关
+    auto *cudaRow = new QHBoxLayout();
+    m_useCudaChk = new QCheckBox(tr("CUDA"), right);
+    m_useCudaChk->setChecked(true);
+    m_cudaDeviceSpin = new QSpinBox(right);
+    m_cudaDeviceSpin->setRange(0, 7);
+    m_cudaDeviceSpin->setValue(0);
+    m_cudaDeviceSpin->setPrefix(tr("GPU:"));
+    cudaRow->addWidget(m_useCudaChk);
+    cudaRow->addWidget(m_cudaDeviceSpin);
+    cudaRow->addStretch();
+    basicForm->addRow(tr("加速:"), cudaRow);
 
     // NMS 半径
     m_nmsRadiusSpin = new QSpinBox(right);
@@ -509,22 +524,38 @@ void SuperPointDialog::onResetDefaults()
 void SuperPointDialog::onAlgorithmChanged(int)
 {
     const QString algo = m_algorithmCombo->currentData().toString();
-    const bool isDL = (algo == "superpoint" || algo == "disk" || algo == "aliked");
-    const bool isDeepLearning256 = (algo == "superpoint");
+    const bool isDL  = (algo == "superpoint" || algo == "disk" || algo == "aliked");
+    const bool isSP  = (algo == "superpoint");
 
-    // DISK/ALIKED 是 128 维，SuperPoint 是 256 维
-    if (algo == "disk" || algo == "aliked") {
+    // 模型路径: 仅 DL 算法需要
+    m_modelPathEdit->setVisible(isDL);
+    m_useCudaChk->setVisible(isDL);
+    m_cudaDeviceSpin->setVisible(isDL);
+
+    // SuperPoint 专有参数
+    auto setSPVisible = [&](bool v) {
+        m_nmsRadiusSpin->setVisible(v);
+        m_detectionThresholdSpin->setVisible(v);
+        m_descriptorDimSpin->setVisible(v);
+        m_gridSizeSpin->setVisible(v);
+        m_normalizeInputChk->setVisible(v);
+        m_grayscaleMinSpin->setVisible(v);
+        m_grayscaleMaxSpin->setVisible(v);
+        m_removeBordersSpin->setVisible(v);
+        m_advancedGroup->setVisible(v);
+        m_batchSizeSpin->setVisible(v);
+        m_neighborhoodRadiusSpin->setVisible(v);
+        m_neighborhoodThresholdSpin->setVisible(v);
+    };
+    setSPVisible(isSP);
+
+    // 描述子维度自动设置
+    if (algo == "disk" || algo == "aliked")
         m_descriptorDimSpin->setValue(128);
-    } else if (algo == "superpoint") {
+    else if (isSP)
         m_descriptorDimSpin->setValue(256);
-    }
 
-    // 传统算法不支持 NMS、描述子维度等深度学习参数
-    m_nmsRadiusSpin->setEnabled(isDL);
-    m_detectionThresholdSpin->setEnabled(isDL);
-    m_descriptorDimSpin->setEnabled(isDL);
-    m_gridSizeSpin->setEnabled(isDL);
-    m_normalizeInputChk->setEnabled(isDL);
+    emitSettingsNow();
 }
 
 void SuperPointDialog::applySettings(const QJsonObject &settings) 
@@ -535,6 +566,13 @@ void SuperPointDialog::applySettings(const QJsonObject &settings)
         const int index = m_algorithmCombo->findData(featureAlgorithm);
         m_algorithmCombo->setCurrentIndex(index >= 0 ? index : 0);
     }
+
+    if (settings.contains("model_path"))
+        m_modelPathEdit->setText(settings["model_path"].toString());
+    if (settings.contains("use_cuda"))
+        m_useCudaChk->setChecked(settings["use_cuda"].toBool());
+    if (settings.contains("cuda_device"))
+        m_cudaDeviceSpin->setValue(settings["cuda_device"].toInt());
 
     // 基础参数
     if (settings.contains("nms_radius"))
@@ -612,6 +650,9 @@ QJsonObject SuperPointDialog::collectSettings() const
     QJsonObject settings;
 
     settings["feature_algorithm"] = m_algorithmCombo->currentData().toString();
+    settings["model_path"]  = m_modelPathEdit->text();
+    settings["use_cuda"]    = m_useCudaChk->isChecked();
+    settings["cuda_device"] = m_cudaDeviceSpin->value();
 
     // 基础参数
     settings["nms_radius"] = m_nmsRadiusSpin->value();

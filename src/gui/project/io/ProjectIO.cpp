@@ -116,3 +116,23 @@ QString ProjectIO::findSpForImage(const QString &plascanPath, const QString &ima
     }
     return QString();
 }
+
+QString ProjectIO::findFeatureForImage(const QString &plascanPath, const QString &imagePath)
+{
+    // 生成 .sp 候选路径，然后用所有后缀替换
+    const QStringList spPaths = spCandidates(plascanPath, imagePath);
+    static const char *suffixes[] = {".sp", ".dsk", ".alk", ".sift", ".orb", ".akz", ".dedode"};
+    for (const QString &spPath : spPaths)
+    {
+        QString base = spPath;
+        if (base.endsWith(".sp"))
+            base.chop(3);
+        for (const char *suf : suffixes)
+        {
+            QString candidate = base + suf;
+            if (QFileInfo::exists(candidate))
+                return candidate;
+        }
+    }
+    return QString();
+}
