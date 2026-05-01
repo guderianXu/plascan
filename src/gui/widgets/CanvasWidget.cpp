@@ -451,7 +451,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
 
         // 使用 FeatureFileIO 读取 SuperPoint 输出
         QString imageName;
-        SuperPointOutput output;
+        FeatureOutput output;
         if (!FeatureFileIO::read(spFile, imageName, output)) {
             LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read .sp file %1").arg(spFile));
             return empty;
@@ -554,7 +554,7 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
     }
 
     QString imageName;
-    SuperPointOutput output;
+    FeatureOutput output;
     if (!FeatureFileIO::read(spFile, imageName, output)) {
         LOG_WARN(QStringLiteral("immediateReloadInterestPoints: failed to read .sp file %1").arg(spFile));
         if (isCurrentImage && m_layerRenderer) m_layerRenderer->clearFeatureLayers();

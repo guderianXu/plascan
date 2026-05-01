@@ -10,7 +10,7 @@
 #include <opencv2/core.hpp>
 
 // 前向声明
-struct SuperPointOutput;
+struct FeatureOutput;
 
 // ── 提取器类型 → 文件后缀 / Magic Bytes ──
 namespace ExtractorSuffix
@@ -42,11 +42,11 @@ class FeatureFileIO
 public:
     // 写入 (自动根据 algoName 选择 magic bytes)
     static bool write(const QString& path, const QString& imageName,
-                      const SuperPointOutput& output,
+                      const FeatureOutput& output,
                       const std::string &algoName = "superpoint");
 
     // 读取
-    static bool read(const QString& path, QString& imageName, SuperPointOutput& output);
+    static bool read(const QString& path, QString& imageName, FeatureOutput& output);
 
     // 快速读取算法类型 (不加载描述子)
     static std::string peekAlgorithm(const QString& path);

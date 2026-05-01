@@ -7,7 +7,7 @@
 #include <vector>
 
 // Forward declaration - 避免强制包含 SuperPoint.h
-struct SuperPointOutput;
+struct FeatureOutput;
 
 namespace xjw::feature_extractors
 {
@@ -86,7 +86,7 @@ struct FeatureData
 
     /**
      * @brief 从传统特征描述子 cv::Mat 构建 torch::Tensor [N, targetDim]，
-     *        用于写入 SuperPointOutput::descriptors。
+     *        用于写入 FeatureOutput::descriptors。
      *
      * - ORB (CV_8U): 逐位展开为 {-1.0, +1.0}，L2 归一化，不足 targetDim 部分补零。
      * - 其他 (CV_32F 等): 转为 float，截断/补零到 targetDim，L2 归一化。
@@ -104,15 +104,15 @@ struct FeatureData
     // -----------------------------------------------------------------------
 
     /**
-     * @brief 从 SuperPointOutput 构建。
+     * @brief 从 FeatureOutput 构建。
      *
-     * SuperPointOutput::descriptors 为 [N, D] CPU float32 torch::Tensor，
+     * FeatureOutput::descriptors 为 [N, D] CPU float32 torch::Tensor，
      * 会被转换为 cv::Mat [N, D] CV_32F 存储。
      *
      * @param out       SuperPoint 推理结果。
      * @param algoName  算法名，默认为 "superpoint"。
      */
-    static FeatureData fromSuperPointOutput(const SuperPointOutput &out,
+    static FeatureData fromFeatureOutput(const FeatureOutput &out,
                                             const std::string &algoName = "superpoint");
 
     /**

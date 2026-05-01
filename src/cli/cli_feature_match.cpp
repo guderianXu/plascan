@@ -125,14 +125,14 @@ int main(int argc, char *argv[])
 
         xjw::feature_match::LightGlueMatcher matcher(lgCfg);
 
-        SuperPointOutput spo1, spo2; QString n1, n2;
+        FeatureOutput spo1, spo2; QString n1, n2;
         if (!FeatureFileIO::read(QString::fromStdString(sp1), n1, spo1))
             cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
         if (!FeatureFileIO::read(QString::fromStdString(sp2), n2, spo2))
             cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
 
-        auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo1);
-        auto fd1 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo2);
+        auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo1);
+        auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo2);
 
         fprintf(stdout, "LightGlue: %s <-> %s (%zu/%zu kp)\n",
                 sp1.c_str(), sp2.c_str(), fd0.keypoints.size(), fd1.keypoints.size());
@@ -156,14 +156,14 @@ int main(int argc, char *argv[])
 
         superglue::SuperGlueMatcher matcher(sgCfg);
 
-        SuperPointOutput spo1, spo2; QString n1, n2;
+        FeatureOutput spo1, spo2; QString n1, n2;
         if (!FeatureFileIO::read(QString::fromStdString(sp1), n1, spo1))
             cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
         if (!FeatureFileIO::read(QString::fromStdString(sp2), n2, spo2))
             cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
 
-        auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo1);
-        auto fd1 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo2);
+        auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo1);
+        auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo2);
 
         fprintf(stdout, "SuperGlue: %s <-> %s (%zu/%zu kp)\n",
                 sp1.c_str(), sp2.c_str(), fd0.keypoints.size(), fd1.keypoints.size());
@@ -177,14 +177,14 @@ int main(int argc, char *argv[])
     {
         if (sp1.empty() || sp2.empty()) cli::fatal("bf/flann 需要 --sp1/--sp2");
 
-        SuperPointOutput spo1, spo2; QString n1, n2;
+        FeatureOutput spo1, spo2; QString n1, n2;
         if (!FeatureFileIO::read(QString::fromStdString(sp1), n1, spo1))
             cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
         if (!FeatureFileIO::read(QString::fromStdString(sp2), n2, spo2))
             cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
 
-        auto fd0 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo1);
-        auto fd1 = xjw::feature_extractors::FeatureData::fromSuperPointOutput(spo2);
+        auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo1);
+        auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo2);
 
         xjw::feature_match::tradition::TraditionalMatchConfig tc;
         // SP float描述子需要 L2距离, 归一化名必须传 sift_bf_l2/sift_flann

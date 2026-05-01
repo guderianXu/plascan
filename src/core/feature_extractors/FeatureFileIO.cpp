@@ -57,7 +57,7 @@ void writeMagic(QDataStream &out, const std::string &algoName)
 } // anonymous
 
 bool FeatureFileIO::write(const QString& path, const QString& image_name,
-                          const SuperPointOutput& output, const std::string &algoName)
+                          const FeatureOutput& output, const std::string &algoName)
 {
     QFile file(path);
     if (!file.open(QIODevice::WriteOnly))
@@ -104,7 +104,7 @@ bool FeatureFileIO::write(const QString& path, const QString& image_name,
     return true;
 }
 
-bool FeatureFileIO::read(const QString& path, QString& image_name, SuperPointOutput& output)
+bool FeatureFileIO::read(const QString& path, QString& image_name, FeatureOutput& output)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly))

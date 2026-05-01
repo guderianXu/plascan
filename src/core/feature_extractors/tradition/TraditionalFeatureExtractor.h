@@ -13,7 +13,7 @@ namespace xjw::feature_extractors
  * @brief 传统特征提取器（ORB/SIFT）统一入口。
  *
  * 该类用于在不依赖 GUI 的情况下提供传统特征提取算法，
- * 并将结果转换为与 SuperPoint 相同的输出结构 `SuperPointOutput`，
+ * 并将结果转换为与 SuperPoint 相同的输出结构 `FeatureOutput`，
  * 以复用现有 `.sp` 文件写入与下游处理流程。
  */
 class TraditionalFeatureExtractor
@@ -40,7 +40,7 @@ public:
      * @param normalizedName 已规范化算法名（`orb`/`sift`）。
      * @return 与 SuperPoint 兼容的输出结构。
      */
-    static SuperPointOutput detect(const cv::Mat &grayImage,
+    static FeatureOutput detect(const cv::Mat &grayImage,
                                    const SuperPointConfig &config,
                                    const std::string &normalizedName);
 };

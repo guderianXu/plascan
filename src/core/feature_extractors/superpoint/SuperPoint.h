@@ -117,7 +117,7 @@ struct SuperPointConfig
 
 // SuperPoint 单张图像推理结果结构体
 // 包含本次推理检测到的所有关键点信息
-struct SuperPointOutput 
+struct FeatureOutput 
 {
     // 关键点列表（像素坐标系，(pt.x=列, pt.y=行)，已可选做子像素精化）
     std::vector<cv::KeyPoint> keypoints;
@@ -147,18 +147,18 @@ public:
     // 单张图像推理接口
     // image: 支持 CV_8U / CV_16U / CV_16S / CV_32F 等常见格式。函数内部会根据
     // config_.normalize_input 做相应缩放（推荐使用 0-1 归一化）。返回值为
-    // 包含关键点（像素坐标）、分数和描述子的 `SuperPointOutput`。
-    SuperPointOutput detect(const cv::Mat& image);
+    // 包含关键点（像素坐标）、分数和描述子的 `FeatureOutput`。
+    FeatureOutput detect(const cv::Mat& image);
 
     // 批量推理：接受多张图像并返回每张的输出。实现可用于并行推理或批处理。
-    std::vector<SuperPointOutput> detectBatch(const std::vector<cv::Mat>& images);
+    std::vector<FeatureOutput> detectBatch(const std::vector<cv::Mat>& images);
 
     // 输出接口（便于 GUI 层或调试使用）
     // 将关键点写为 CSV 文件（每行: x,y,score）
-    static bool saveKeypointsCSV(const SuperPointOutput& output, const std::string& path);
+    static bool saveKeypointsCSV(const FeatureOutput& output, const std::string& path);
 
     // 将关键点叠加到原图并保存为图像文件（BGR 输出）
-    static bool saveOverlayImage(const cv::Mat& image, const SuperPointOutput& output, const std::string& path);
+    static bool saveOverlayImage(const cv::Mat& image, const FeatureOutput& output, const std::string& path);
 
     // 辅助函数
     // setDevice: 在运行时切换设备（例如从 CPU 切换到 CUDA），会尝试将模型和缓存移动到新设备。
@@ -195,7 +195,7 @@ private:
     // 后处理：从 dense score map 和 dense descriptors 中提取关键点
     // 步骤: NMS → 阈值过滤 → top-k → 灰度过滤 → 边界剔除 → 描述子采样
     // scores: [H, W]，descriptors_dense: [1,256,H/8,W/8]
-    SuperPointOutput postprocess(const torch::Tensor& scores, 
+    FeatureOutput postprocess(const torch::Tensor& scores, 
                                   const torch::Tensor& descriptors_dense,
                                   int img_width, int img_height);
     
