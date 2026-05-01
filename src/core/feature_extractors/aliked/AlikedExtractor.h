@@ -25,11 +25,12 @@ struct AlikedConfig
     int    cudaDevice     = 0;
 };
 
-class AlikedExtractor
+class AlikedExtractor : public IExtractor
 {
 public:
     explicit AlikedExtractor(const AlikedConfig &cfg);
     FeatureOutput extract(const cv::Mat &grayImage);
+    std::string algorithmName() const override { return "aliked"; }
 
 private:
     AlikedConfig m_cfg;

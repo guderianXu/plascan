@@ -7,125 +7,36 @@
 //   feature_extract_cli -a orb         -i img.tif -o out.sp [-n 5000]
 // =============================================================================
 #include "cli_common.h"
-#include "SuperPoint.h"
-#include "TraditionalFeatureExtractor.h"
-#include "DiskExtractor.h"
-#include "AlikedExtractor.h"
+#include "IExtractor.h"
+#include "ExtractorFactory.h"
 #include "FeatureFileIO.h"
 
 #include <opencv2/imgcodecs.hpp>
-#include <opencv2/imgproc.hpp>
-#include <opencv2/features2d.hpp>
 #include <QFileInfo>
 #include <QDir>
 #include <QString>
-#include <string>
+#include <memory>
 
-static int processSP(const std::string &modelPath, SuperPointConfig spCfg,
-                     const std::string &imgPath, const std::string &outPath, int maxDim)
+static int processOne(const std::string &algo,
+                      std::unique_ptr<IExtractor> &extractor,
+                      const std::string &imgPath,
+                      const std::string &outPath)
 {
     cv::Mat img = cv::imread(imgPath, cv::IMREAD_GRAYSCALE);
     if (img.empty()) { fprintf(stderr, "加载失败: %s\n", imgPath.c_str()); return cli::EXIT_IO_ERR; }
 
-    int origW = img.cols, origH = img.rows;
-    double scale = 1.0;
-    int maxSide = std::max(origW, origH);
-    if (maxDim > 0 && maxSide > maxDim) {
-        scale = static_cast<double>(maxDim) / maxSide;
-        cv::resize(img, img, cv::Size(int(origW*scale), int(origH*scale)), 0, 0, cv::INTER_AREA);
-        fprintf(stdout, "降采样: %dx%d -> %dx%d\n", origW, origH, img.cols, img.rows);
-    }
-    fprintf(stdout, "SuperPoint: %s (%dx%d)\n", imgPath.c_str(), img.cols, img.rows);
+    fprintf(stdout, "%s: %s (%dx%d)\n",
+            extractor->algorithmName().c_str(), imgPath.c_str(), img.cols, img.rows);
 
-    SuperPoint sp(modelPath, spCfg);
-    auto output = sp.detect(img);
-    if (scale < 1.0) for (auto &kp : output.keypoints) { kp.pt.x /= scale; kp.pt.y /= scale; }
-
-    if (output.keypoints.empty()) { fprintf(stderr, "未检测到关键点\n"); return cli::EXIT_ALGO_ERR; }
+    auto output = extractor->extract(img);
+    if (output.empty()) { fprintf(stderr, "未检测到关键点\n"); return cli::EXIT_ALGO_ERR; }
 
     QFileInfo fi(QString::fromStdString(imgPath));
-    if (!FeatureFileIO::write(QString::fromStdString(outPath), fi.fileName(), output, "superpoint"))
-    { fprintf(stderr, "写入失败: %s\n", outPath.c_str()); return cli::EXIT_IO_ERR; }
-
-    fprintf(stdout, "已保存: %s (%zu kp, orig %dx%d)\n", outPath.c_str(), output.keypoints.size(), origW, origH);
-    return cli::EXIT_OK;
-}
-
-static int processTraditional(const std::string &algo, SuperPointConfig spCfg,
-                              const std::string &imgPath, const std::string &outPath)
-{
-    cv::Mat img = cv::imread(imgPath, cv::IMREAD_GRAYSCALE);
-    if (img.empty()) { fprintf(stderr, "加载失败: %s\n", imgPath.c_str()); return cli::EXIT_IO_ERR; }
-
-    std::string norm = xjw::feature_extractors::TraditionalFeatureExtractor::normalizeAlgorithmName(algo);
-    fprintf(stdout, "%s: %s (%dx%d)\n", norm.c_str(), imgPath.c_str(), img.cols, img.rows);
-
-    auto output = xjw::feature_extractors::TraditionalFeatureExtractor::detect(img, spCfg, norm);
-    if (output.keypoints.empty()) { fprintf(stderr, "未检测到关键点\n"); return cli::EXIT_ALGO_ERR; }
-
-    QFileInfo fi(QString::fromStdString(imgPath));
-    if (!FeatureFileIO::write(QString::fromStdString(outPath), fi.fileName(), output, algo))
+    if (!FeatureFileIO::write(QString::fromStdString(outPath), fi.fileName(),
+                              output, extractor->algorithmName()))
     { fprintf(stderr, "写入失败: %s\n", outPath.c_str()); return cli::EXIT_IO_ERR; }
 
     fprintf(stdout, "已保存: %s (%zu kp)\n", outPath.c_str(), output.keypoints.size());
-    return cli::EXIT_OK;
-}
-
-static int processDL(const std::string &algo, const std::string &modelPath,
-                     const std::string &imgPath, const std::string &outPath,
-                     int maxDim, bool cuda, int gpu, int maxKp)
-{
-    cv::Mat img = cv::imread(imgPath, cv::IMREAD_GRAYSCALE);
-    if (img.empty()) { fprintf(stderr, "加载失败: %s\n", imgPath.c_str()); return cli::EXIT_IO_ERR; }
-
-    int origW = img.cols, origH = img.rows;
-    double scale = 1.0;
-    int maxSide = std::max(origW, origH);
-    if (maxDim > 0 && maxSide > maxDim)
-    {
-        scale = static_cast<double>(maxDim) / maxSide;
-        cv::resize(img, img, cv::Size(int(origW*scale), int(origH*scale)), 0, 0, cv::INTER_AREA);
-        fprintf(stdout, "降采样: %dx%d -> %dx%d\n", origW, origH, img.cols, img.rows);
-    }
-
-    FeatureOutput output;
-
-    if (algo == "disk")
-    {
-        xjw::feature_extractors::DiskConfig cfg;
-        cfg.modelPath = modelPath;
-        cfg.useCuda = cuda;
-        cfg.cudaDevice = gpu;
-        cfg.maxImageDim = 0;
-        cfg.maxKeypoints = maxKp;
-        xjw::feature_extractors::DiskExtractor ext(cfg);
-        output = ext.extract(img);
-    }
-    else if (algo == "aliked")
-    {
-        xjw::feature_extractors::AlikedConfig cfg;
-        cfg.modelPath = modelPath;
-        cfg.useCuda = cuda;
-        cfg.cudaDevice = gpu;
-        cfg.maxImageDim = 0;
-        cfg.maxKeypoints = maxKp;
-        xjw::feature_extractors::AlikedExtractor ext(cfg);
-        output = ext.extract(img);
-    }
-
-    if (scale < 1.0)
-        for (auto &kp : output.keypoints) { kp.pt.x /= scale; kp.pt.y /= scale; }
-
-    if (output.keypoints.empty()) { fprintf(stderr, "未检测到关键点\n"); return cli::EXIT_ALGO_ERR; }
-
-    QFileInfo fi(QString::fromStdString(imgPath));
-    if (!FeatureFileIO::write(QString::fromStdString(outPath), fi.fileName(), output, algo))
-    { fprintf(stderr, "写入失败: %s\n", outPath.c_str()); return cli::EXIT_IO_ERR; }
-
-    fprintf(stdout, "已保存: %s (%zu kp, %dd, orig %dx%d)\n",
-            outPath.c_str(), output.keypoints.size(),
-            output.descriptors.defined() ? (int)output.descriptors.size(1) : 0,
-            origW, origH);
     return cli::EXIT_OK;
 }
 
@@ -164,17 +75,19 @@ int main(int argc, char *argv[])
     if (outPath.find('.') == std::string::npos)
         outPath += suffix;
 
-    SuperPointConfig spCfg;
-    spCfg.max_num_keypoints = maxKp;
-    spCfg.detection_threshold = detThresh;
-    spCfg.nms_radius = nmsRadius;
-    spCfg.remove_borders = removeBorder;
-    spCfg.allow_device_fallback = true;
+    // 创建提取器 (工厂 + 多态, 无需 if/else 链)
+    ExtractorConfig eCfg;
+    eCfg.modelPath    = modelPath;
+    eCfg.maxKeypoints = maxKp;
+    eCfg.detThreshold = detThresh;
+    eCfg.nmsRadius    = nmsRadius;
+    eCfg.removeBorder = removeBorder;
+    eCfg.maxImageDim  = maxDim;
+    eCfg.useCuda      = cuda;
+    eCfg.cudaDevice   = gpu;
 
-    bool isSP = (norm == "superpoint");
-
-    if (isSP && modelPath.empty())
-        cli::fatal("SuperPoint 需要 -m/--model 指定模型路径");
+    auto extractor = createExtractor(algo, eCfg);
+    fprintf(stdout, "算法: %s\n", extractor->algorithmName().c_str());
 
     QFileInfo fiIn(QString::fromStdString(imgPath)), fiOut(QString::fromStdString(outPath));
     if (fiIn.isDir())
@@ -186,17 +99,13 @@ int main(int argc, char *argv[])
         for (const QString &fname : inDir.entryList(filters, QDir::Files, QDir::Name))
         {
             std::string in = inDir.absoluteFilePath(fname).toStdString();
-            std::string out = outDir.absoluteFilePath(QFileInfo(fname).completeBaseName()+".sp").toStdString();
-            int rc;
-            if (isSP)           rc = processSP(modelPath, spCfg, in, out, maxDim);
-            else if (norm == "disk" || norm == "aliked") rc = processDL(norm, modelPath, in, out, maxDim, cuda, gpu, maxKp);
-            else                rc = processTraditional(algo, spCfg, in, out);
+            std::string out = outDir.absoluteFilePath(
+                QFileInfo(fname).completeBaseName().toStdString() + suffix);
+            int rc = processOne(algo, extractor, in, out);
             (rc == cli::EXIT_OK) ? ++ok : ++fail;
         }
         fprintf(stdout, "批量: %d 成功 %d 失败\n", ok, fail);
         return fail > 0 ? cli::EXIT_ALGO_ERR : cli::EXIT_OK;
     }
-    if (isSP)                           return processSP(modelPath, spCfg, imgPath, outPath, maxDim);
-    if (norm == "disk" || norm == "aliked") return processDL(norm, modelPath, imgPath, outPath, maxDim, cuda, gpu, maxKp);
-    return processTraditional(algo, spCfg, imgPath, outPath);
+    return processOne(algo, extractor, imgPath, outPath);
 }

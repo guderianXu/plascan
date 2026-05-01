@@ -25,11 +25,12 @@ struct DiskConfig
     int    cudaDevice     = 0;
 };
 
-class DiskExtractor
+class DiskExtractor : public IExtractor
 {
 public:
     explicit DiskExtractor(const DiskConfig &cfg);
     FeatureOutput extract(const cv::Mat &grayImage);
+    std::string algorithmName() const override { return "disk"; }
 
 private:
     DiskConfig m_cfg;
