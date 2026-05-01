@@ -1,0 +1,459 @@
+# PlaScan 项目架构文档
+
+行星表面摄影测量处理系统。最后更新: 2026-04-30。
+
+## 顶层目录
+
+```
+plascan/
+├── src/            # 所有源代码
+│   ├── common/     # 通用工具库 (日志, 数学, 空间索引)
+│   ├── core/       # 核心算法库 (相机, 特征, 匹配, SfM, MVS, 网格, 地形, 密集匹配)
+│   └── gui/        # Qt6 图形界面
+├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
+├── 3rdparty/       # 第三方库源码 (LightGlue)
+├── resources/      # 静态资源 (深度学习模型权重, 图标)
+├── scripts/        # Python 辅助脚本
+├── tools/          # 独立工具 (匹配转 CSV)
+├── tests/          # 顶层测试
+├── data/           # 示例/测试数据
+├── docs/           # 设计文档, 规格说明, 计划
+│   └── superpowers/
+│       ├── specs/  # 功能规格
+│       └── plans/  # 实现计划
+├── src/cli/        # 命令行工具 (独立于 GUI 的算法入口)
+├── docker/         # Docker 部署配置
+├── CMakeLists.txt  # 根构建文件
+└── CLAUDE.md       # AI 助手配置 (代码规范, 项目约定)
+```
+
+## 代码规范
+
+- 单文件 ≤ 400 行，超则拆分
+- 嵌套 ≤ 4 层
+- Allman 花括号风格 (左花括号独占一行)
+- 命名空间 `xjw::<模块名>`
+
+---
+
+## 一、common/ — 通用工具库
+
+```
+common/
+├── log/
+│   ├── Logger.h/cpp        # 全局日志单例 (LOG_INFO/LOG_ERROR/LOG_DEBUG 宏)
+├── math/
+│   ├── Vec.h               # 向量运算模板
+│   └── Vec3Ops.h           # 3D 向量特化
+├── project/
+│   └── ProjectCommonUtils.h # 项目通用工具
+├── result/
+│   └── OperationResult.h   # 操作结果包装 (成功/失败 + 错误信息)
+├── spatial/
+│   ├── KDTree.h            # K-D 树泛型模板
+│   ├── KDTree2D.h          # 2D K-D 树
+│   ├── KDTree3D.h          # 3D K-D 树
+│   └── tests/              # 空间索引测试
+└── CMakeLists.txt
+```
+
+---
+
+## 二、core/ — 核心算法库
+
+按模块组织，每个模块通过 `plascan_core_add_optional_module()` 注册到 `core/CMakeLists.txt`。
+
+```
+core/
+├── CMakeLists.txt              # 注册所有子模块
+│
+├── camera/                     # 相机模型
+│   ├── Camera.h/cpp            # 通用相机 (Pinhole + 位姿)
+│   ├── PositiveDepthCameraModel.h/cpp  # 正深度约束相机
+│   └── Camera_tests.cpp
+│
+├── feature_extractors/         # 特征点检测
+│   ├── FeatureData.h/cpp       # 特征点数据容器
+│   ├── superpoint/
+│   │   ├── SuperPoint.h/cpp    # SuperPoint 网络推理
+│   │   ├── QFileBinaryIO.h/cpp # 特征二进制 I/O
+│   │   └── tests/
+│   └── tradition/
+│       ├── TraditionalFeatureExtractor.h/cpp  # SIFT/ORB 等传统算法
+│       └── test_*.cpp
+│
+├── feature_match/              # 特征点匹配
+│   ├── match.h/cpp             # 通用匹配接口
+│   ├── superglue/
+│   │   ├── SuperGlueMatcher.h/cpp      # SuperGlue 推理
+│   │   ├── MatchOutlierRejector.h/cpp  # 粗差剔除
+│   │   └── SuperGlueMatchIO.h/cpp      # .match 文件 I/O
+│   ├── lightglue/
+│   │   └── LightGlueMatcher.h/cpp      # LightGlue 推理
+│   └── tradition/
+│       └── TraditionalFeatureMatcher.h/cpp  # BFMatcher/FLANN
+│
+├── intersection/               # 前方交汇精度检验
+│   └── Intersection.h/cpp      # 多射线交汇解算 + 精度评估
+│
+├── overlap/                    # 重叠度分析
+│   ├── OverlapAnalyzer.h/cpp   # 影像对重叠区域计算
+│   └── GroundBackProjector.h/cpp  # 地面投影
+│
+├── bundle_adjust/              # 光束法平差
+│   └── BundleAdjust.h/cpp      # Ceres BA 优化
+│
+├── sfm/                        # Structure-from-Motion
+│   ├── common/SfmTypes.h       # SfM 公共类型
+│   ├── graph/
+│   │   ├── CorrespondenceGraph.h/cpp      # 对应关系图
+│   │   └── ObservationNetworkBuilder.h/cpp # 观测网络构建
+│   ├── pose/PnpSolver.h/cpp    # PnP 位姿解算
+│   ├── triangulation/
+│   │   ├── Triangulator.h/cpp  # 基础三角化
+│   │   └── InitialSparsePointCloudTriangulator.h/cpp  # 初始稀疏点云
+│   ├── reconstruction/SfmReconstruction.h/cpp  # SfM 重建器
+│   ├── pipeline/IncrementalSfm.h/cpp  # 增量式 SfM 流水线
+│   ├── filtering/
+│   │   ├── SfmPointCloudFilter.h/cpp       # 点云过滤
+│   │   └── SparsePointCloudProcessor.h/cpp # 稀疏点云后处理
+│   ├── BaInputBuilder.h/cpp    # BA 输入构建器
+│   └── TriangulationService.h/cpp  # 三角化服务
+│
+├── mvs/                        # Multi-View Stereo (旧管线, 将逐步替换)
+│   ├── MvsTypes.h              # MVS 公共类型
+│   ├── PatchMatchCUDA.cu/h     # PatchMatch CUDA 实现
+│   ├── PatchMatchNoCUDA.cpp    # PatchMatch CPU 回退
+│   ├── DepthMapGenerator.h/cpp # 深度图估计 (调用 PatchMatch)
+│   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云
+│   ├── DepthFrameUtils.h/cpp   # 深度帧工具
+│   ├── EpipolarRectifier.h/cpp # 极线校正
+│   ├── DisparityFilter.h/cpp   # 视差滤波
+│   ├── DisparityTriangulator.h/cpp  # 视差三角化
+│   ├── DensePointCloudCUDA.cu  # 密集点云 CUDA
+│   ├── DensePointCloudGenerator.h/cpp  # 密集点云生成
+│   ├── DenseCloudBuilder.h/cpp # 密集云构建器
+│   ├── SparseCloudPreprocessor.h/cpp  # 稀疏云预处理
+│   ├── SparseCloudValidator.h/cpp     # 稀疏云验证
+│   ├── StereoDenseCloudPipeline.h/cpp # 立体密集云流水线 (主入口)
+│   ├── StereoDenseCloudPipelineOutput.h/cpp  # 流水线输出
+│   ├── StereoDenseCloudPipelinePaths.h/cpp   # 流水线路径管理
+│   ├── MVSPipeline.h           # MVS 流水线接口
+│   ├── PointCloudTifIO.h/cpp   # 点云 TIFF I/O
+│   ├── AspPointCloudMetrics.h/cpp  # ASP 兼容点云指标
+│   └── EpipolarRectifier_tests.cpp
+│
+├── dense_match/                # 密集匹配模块 (新, 将逐步替换 mvs 中的匹配)
+│   ├── README.md               # 模块文档 (详见该文件)
+│   ├── DenseMatchTypes.h       # CostFunction/StereoAlgorithm/SubpixelMode 枚举
+│   ├── DenseMatchConfig.h      # 参数配置结构体
+│   ├── CostFunctions.h/cpp/cu  # 5 种代价函数 (AD/SD/NCC/Census/TernaryCensus)
+│   ├── BlockMatcher.h/cpp      # WTA 块匹配 (CPU/CUDA 自动调度)
+│   ├── SgmMatcher.h/cpp        # SGM/MGM 半全局匹配 (8方向路径聚合)
+│   ├── SubpixelRefiner.h/cpp   # 子像素视差精化 (抛物线拟合)
+│   ├── DisparityValidator.h/cpp # L-R 一致性/中值滤波/Speckle 过滤
+│   ├── DenseMatchService.h/cpp # 服务层: 编排完整匹配流水线
+│   ├── opencv/
+│   │   └── OpenCVSgbmWrapper.h/cpp  # OpenCV SGBM 封装 (对比算法)
+│   └── tests/ (6 个测试文件, 22 项)
+│
+├── pointcloud/                 # 点云数据结构与处理
+│   ├── data/
+│   │   ├── PointCloud.h/cpp    # 点云容器
+│   │   └── PointCloudPoint.h/cpp  # 单点结构
+│   ├── io/
+│   │   ├── PointCloudIO.h/cpp  # 点云文件 I/O (PLY/XYZ/LAS)
+│   │   └── ObjMtlLoader.h/cpp  # OBJ/MTL 加载
+│   ├── processing/
+│   │   ├── PointCloudProcessor.h/cpp     # 点云处理 (CPU)
+│   │   ├── PointCloudProcessorMT.cpp     # 多线程处理
+│   │   └── PointCloudProcessorCuda.cpp   # CUDA 加速处理
+│   └── tests/
+│
+├── mesh/                       # 网格重建与纹理映射
+│   ├── MeshTypes.h             # 网格类型
+│   ├── SurfaceReconstructor.h/cpp           # 表面重建主流程
+│   ├── SurfaceReconstructorHeightGrid.h/cpp # 高度格网方法
+│   ├── SurfaceReconstructorPostprocess.h/cpp # 网格后处理
+│   ├── SurfaceReconstructorIO.h/cpp         # 表面 I/O
+│   ├── MeshIO.cpp              # 网格文件 I/O
+│   ├── MarchingCubesTable.h/cpp # Marching Cubes 查找表
+│   ├── TextureMapper.h/cpp     # 纹理映射
+│   ├── ModelWorkflowService.h/cpp  # 模型工作流服务
+│   └── poisson/                # Poisson 表面重建
+│       ├── PoissonLite.h/cpp   # 轻量 Poisson
+│       ├── PoissonPreprocess.h/cpp  # 预处理 (法向量估计)
+│       ├── PoissonVoxel.h/cpp  # 体素化
+│       ├── PoissonBranchPipeline.h/cpp  # 分支流水线
+│       └── PoissonCommon.h     # 公共类型
+│
+├── terrain/                    # 地形产品 (DEM/DOM)
+│   ├── DemDomTypes.h           # DEM/DOM 类型
+│   ├── DemGenerator.h/cpp      # DEM 生成
+│   ├── DemGeneratorFromDepth.cpp  # 从深度图生成 DEM
+│   ├── DomGenerator.h/cpp      # DOM 正射影像生成
+│   ├── DemDomIO.h/cpp          # DEM/DOM I/O
+│   ├── TerrainPipeline.h/cpp   # 地形流水线 (主入口)
+│   ├── projection/
+│   │   └── AsteroidProjection.h/cpp  # 小行星投影
+│   └── tests/ (5 个测试)
+│
+└── pipeline/                   # 核心流水线桥接 (GUI 可调用)
+    ├── FeatureMatchRunner.h/cpp  # 特征匹配异步执行器
+    └── SFMService.h/cpp         # SfM 异步服务
+```
+
+---
+
+## 三、gui/ — Qt6 图形界面
+
+### 目录结构
+
+```
+gui/
+├── main.cpp                    # 应用入口 (QApplication, 全局字体, 异常处理)
+├── CMakeLists.txt              # GUI 构建 (链接所有模块)
+│
+├── main_window/                # 主窗口层
+│   ├── MainWindow.h/cpp        # QMainWindow 派生, 顶层 UI 编排
+│   ├── MenuWorkflowController.h/cpp       # "工作流程" 菜单业务控制器
+│   └── ReconstructionWorkflowController.h/cpp  # "重建" 菜单业务控制器
+│
+├── menu/
+│   └── MainMenu.h/cpp          # 菜单栏/工具栏构建 (所有 QAction 创建)
+│
+├── dialogs/                    # 对话框 (28 个)
+│   ├── FeatureMatchingDialog.h/cpp          # 特征匹配参数
+│   ├── SuperPointDialog.h/cpp               # SuperPoint 特征提取
+│   ├── DenseMatchDialog.h/cpp/Ui.cpp        # 密集匹配参数 (新增)
+│   ├── DepthMapEstimateDialog.h/cpp         # 深度图估计参数
+│   ├── DepthFusionDialog.h/cpp              # 深度图融合参数
+│   ├── DenseCloudDialog.h/cpp               # 密集点云参数
+│   ├── DenseCloudRefineDialog.h/cpp         # 密集点云后处理
+│   ├── AerialTriangulationDialog.h/cpp      # 空中三角测量
+│   ├── BundleAdjustDialog.h/cpp             # 光束法平差参数
+│   ├── TriangulationDialog.h/cpp            # 三角化参数
+│   ├── MatchViewerDialog.h/cpp              # 统一连接点查看器 (稀疏+密集 Tab)
+│   ├── MatchPairSelectorDialog.h/cpp        # 匹配对选择器
+│   ├── ObservationNetworkDialog.h/cpp       # 观测网络参数
+│   ├── InitCameraPoseDialog.h/cpp           # 相机位姿初始化
+│   ├── SparseCloudPostProcessDialog.h/cpp   # 稀疏点云后处理
+│   ├── ForwardIntersectionCheckDialog.h/cpp # 前方交汇检测
+│   ├── ForwardIntersectionResultsDialog.h/cpp  # 前方交汇结果
+│   ├── CameraModel3DDialog.h/cpp            # 相机模型 3D 查看
+│   ├── CreateDemDialog.h/cpp                # DEM 生成参数
+│   ├── MapProjectDialog.h/cpp               # 地图投影参数
+│   ├── ModelGenerationDialog.h/cpp          # 模型生成
+│   ├── MeshReconstructionDialog.h/cpp       # 网格重建参数
+│   ├── TextureMappingDialog.h/cpp           # 纹理映射参数
+│   ├── ModelExportDialog.h/cpp              # 模型导出
+│   ├── OverlapAnalysisDialog.h/cpp          # 重叠度分析
+│   ├── SuperPointVisualizationDialog.h/cpp  # 特征点可视化
+│   ├── SimplePointCloudDialog.h/cpp         # 简单点云查看
+│   ├── StereoProcessingDialog.h/cpp         # 立体重建
+│   ├── MVSProgressDialog.h/cpp              # MVS 进度
+│   ├── WorkflowReportDialog.h/cpp           # 工作流程报告
+│   └── settings/                            # 对话框设置持久化支持
+│
+├── widgets/                    # 自定义 Qt 控件 (10 个)
+│   ├── CanvasWidget.h/cpp              # 3D 渲染画布 (OpenGL)
+│   ├── ImageViewWidget.h/cpp           # 2D 影像缩放/平移控件
+│   ├── DualImageViewer.h/cpp           # 双图并列查看器 (左右影像 + 匹配线)
+│   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
+│   ├── DisparityHeatmapOverlay.h/cpp   # 视差热力图叠加层 (密集 → 热力图/新增)
+│   ├── DataTreeWidget.h/cpp            # 项目数据树 (左侧面板)
+│   ├── ReferencePanelWidget.h/cpp      # 参考信息面板
+│   ├── WindowPanel.h/cpp               # 窗口面板组件
+│   ├── ObservationNetworkView.h/cpp    # 观测网络可视化
+│   └── WorkspaceCenterWidget.h/cpp     # 工作区布局管理
+│
+├── project/                    # 项目管理层
+│   ├── data/
+│   │   ├── ProjectData.h/cpp    # 项目数据模型 (影像, 相机, 匹配, 结果)
+│   │   └── ProjectFilesManager.h/cpp  # 项目文件管理
+│   ├── io/
+│   │   └── ProjectIO.h/cpp      # 项目文件 I/O (.plascan 归档格式)
+│   ├── archive/
+│   │   └── PlascanArchive.h/cpp # ZIP 归档封装
+│   ├── manager/
+│   │   ├── ProjectManager.h/cpp # 项目管理器 (核心协调器)
+│   │   ├── ProjectReconstructionManager.h/cpp       # 重建任务管理
+│   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
+│   │   ├── ProjectDenseReconstructionManager.h/cpp   # 密集重建管理
+│   │   ├── ProjectModelManager.h/cpp                 # 模型管理
+│   │   ├── ProjectTerrainProductsManager.h/cpp       # 地形产品管理
+│   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
+│   │   ├── ProjectTaskDispatcher.h/cpp               # 任务调度器
+│   │   └── ProjectUiCommands.h/cpp                   # UI 命令
+│   ├── services/
+│   │   ├── BundleAdjustService.h/cpp                 # BA 服务
+│   │   ├── ProjectBaInputBuilder.h/cpp               # BA 输入构建
+│   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
+│   │   ├── ProjectTriangulationService.h/cpp         # 三角化服务
+│   │   └── ProjectResourceCleanupService.h/cpp       # 资源清理
+│   └── support/                 # 支持/辅助类
+│       ├── ProjectSupportUtils.h/cpp               # 通用工具
+│       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
+│       ├── ProjectBundleAdjustWorkflow.h/cpp        # BA 工作流
+│       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
+│       ├── ProjectDenseWorkflowConfig.h/cpp         # 密集工作流配置
+│       ├── ProjectDepthFrameUtils.h/cpp             # 深度帧工具
+│       ├── ProjectMetadataOperations.h/cpp          # 元数据操作
+│       ├── ProjectResultRecords.h/cpp               # 结果记录
+│       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流
+│       ├── ProjectSparseWorkflow.h/cpp              # 稀疏工作流
+│       ├── ProjectWorkflowUtils.h/cpp               # 工作流工具
+│       └── ProjectWorkflowReports.h/cpp             # 工作流报告
+│
+├── tasks/                      # 异步任务执行器
+│   ├── SuperPointRunner.h/cpp  # SuperPoint 异步执行
+│   ├── SuperGlueRunner.h/cpp   # SuperGlue 异步执行
+│   └── SFMService.h/cpp        # SfM 异步服务
+│
+├── views/
+│   └── LayerRenderer.h/cpp     # 图层渲染器
+│
+├── config/                     # 配置管理
+│   ├── AppConfigManager.h/cpp          # 应用配置
+│   ├── ProjectConfigManager.h/cpp      # 项目配置
+│   ├── ProjectUiConfigManager.h/cpp    # UI 配置
+│   ├── ProjectWorkflowConfigManager.h/cpp  # 工作流配置
+│   ├── JsonMergeUtil.h/cpp             # JSON 合并工具
+│   └── settings/
+│       ├── GlobalSettings.h/cpp        # 全局设置
+│       ├── DialogSettingStore.h/cpp    # 对话框设置记忆化存储
+│       ├── DialogSettingKeys.h         # 各对话框设置键名
+│       ├── WindowStateManager.h/cpp    # 窗口状态持久化
+│       ├── FileDialogStateManager.h/cpp # 文件对话框状态
+│       ├── RecentProjectsManager.h/cpp # 最近项目管理
+│       └── ProjectDialogJsonSettingBase.h/cpp  # JSON 设置基类
+│
+├── panels/
+│   └── LogPanel.h/cpp          # 日志面板 (QPlainTextEdit)
+│
+├── log/                        # GUI 层日志 (使用 #include 快捷方式)
+├── cmake/                      # GUI 构建配置
+│   ├── GuiSources.cmake        # 源文件清单 (所有 .cpp/.h)
+│   ├── GuiCoreLinking.cmake    # 核心库条件链接
+│   ├── GuiInstall.cmake        # 安装规则
+│   └── cmake/                  # Qt 宏
+├── compat/
+│   └── QtTorchMacroGuard.h     # Qt/Torch 宏兼容
+└── packaging/                  # 打包配置
+```
+
+### 菜单结构
+
+```
+项目    视图    工作流程          重建                      工具              帮助
+├新建   ├放大  ├添加照片/文件夹   ├稀疏重建                ├重叠度获取       └关于
+├打开   ├缩小  ├空中三角测量     │├特征点提取              ├前方交汇精度检验
+├保存   ├重置  ├创建密集点云     │├创建连接点              │├检测交汇
+├最近   ├操控球├生成模型         │├构建观测网络...         │└查看结果
+│打开   ├特征点├创建 DEM         │├初始化相机位姿...       ├手动点云剔除
+├导出   │可视化├生成正射影像     │├生成初始稀疏点云...     ├连接点查看
+├最小化 └窗口                    │├光束法平差优化...       └查看工作流程报告
+└退出                            │└稀疏点云后处理...
+                                 ├密集重建
+                                 │├密集匹配...        ← 新增
+                                 │├深度图估计...
+                                 │├深度图融合...
+                                 │└密集点云后处理...
+                                 └模型生成
+                                  ├网格重建...
+                                  ├纹理映射...
+                                  └模型导出...
+```
+
+### 数据流 (稀疏重建 → 密集重建 → 模型)
+
+```
+影像导入
+  │
+  ├─ 1. 特征提取 (SuperPoint)           → .sp 文件
+  ├─ 2. 特征匹配 (SuperGlue/LightGlue)  → .match 文件 (稀疏匹配对)
+  ├─ 3. 空中三角测量 / 增量式 SfM       → 相机位姿 + 稀疏点云
+  │     ├─ 构建观测网络
+  │     ├─ 初始化相机位姿 (PnP)
+  │     ├─ 三角化 → 初始稀疏点云
+  │     ├─ 光束法平差 (Bundle Adjustment)
+  │     └─ 稀疏点云后处理
+  │
+  ├─ 4. 密集重建
+  │     ├─ 密集匹配 (dense_match)          → 逐像素视差图
+  │     ├─ 深度图估计 (PatchMatch)          → 深度图
+  │     ├─ 深度图融合                       → 密集点云
+  │     └─ 密集点云后处理
+  │
+  └─ 5. 模型生成 / 地形产品
+        ├─ 网格重建 (Poisson/MarchingCubes) → 三角网格
+        ├─ 纹理映射                         → 带纹理模型
+        ├─ DEM 生成                         → 数字高程模型
+        └─ DOM 正射影像生成                 → 正射影像
+```
+
+---
+
+## 四、cli/ — 命令行工具
+
+独立于 GUI 的算法入口，用于测试、批处理和脚本编排。
+
+```
+cli/
+├── CMakeLists.txt            # CLI 统一构建
+├── cli_common.h              # 公共基础设施 (参数解析, JSON 配置, 退出码)
+├── cli_dense_match.cpp       # 密集匹配 CLI
+├── cli_feature_extract.cpp   # (待实现) 特征提取 CLI
+├── cli_feature_match.cpp     # (待实现) 特征匹配 CLI
+└── tests/                    # CLI 端到端测试脚本
+```
+
+**统一约定**：
+- `--help` / `-h` — 打印参数说明
+- `--config <file>` — JSON 配置文件（可与命令行参数合并，命令行优先）
+- `-V` / `--verbose` — 详细诊断日志
+- 退出码: 0=成功, 1=参数错误, 2=I/O 错误, 3=算法错误
+- 进度/错误信息 → stderr，结果信息 → stdout
+
+**标准摄影测量流程与 CLI 覆盖**:
+
+```
+阶段 1: 稀疏重建 (GUI 完成)
+  ├─ 特征提取 (SuperPoint)           → .sp 文件
+  ├─ 特征匹配 (SuperGlue/LightGlue)  → .match 文件
+  └─ 光束法平差 / 增量SfM           → 精化相机 + 稀疏点云
+     (以上由 SFMService 编排, 暂通过 GUI 调用; sfm_cli 待 headless SFMService)
+
+阶段 2: 密集重建 (CLI 可用)
+  ├─ rectify_cli        极线校正     → 校正影像对 + 单应矩阵 .xml
+  ├─ dense_match_cli    密集匹配     → 视差图 .tif
+  └─ triangulate_cli    视差三角化   → 密集点云 .ply
+```
+
+**CLI 用法**:
+```bash
+# 两影像 + 两相机 → 密集点云
+rectify_cli -L L.tif -R R.tif --camL camL.txt --camR camR.txt -o rect
+dense_match_cli -L rect_L.tif -R rect_R.tif -o disp.tif --cuda
+triangulate_cli -d disp.tif --rect-params rect.xml \
+    --camL camL.txt --camR camR.txt -o cloud.ply
+```
+
+## 五、已知技术债务
+
+| 问题 | 位置 | 建议 |
+|------|------|------|
+| 多个 GUI 文件超 400 行 | `gui/dialogs/`, `gui/main_window/` | 按职责拆分类/提取 UI 构建 |
+| `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/`, 废弃 mvs 中版本 |
+| MVS 管线使用旧 PatchMatch | `mvs/PatchMatchCUDA.cu` | 逐步替换为 `dense_match` 模块 |
+| SFMService 耦合到 GUI | `core/pipeline/SFMService.cpp` 依赖 `ProjectIO` | 提取 headless SFMService, 启用 sfm_cli |
+| 部分文件超 1000 行 | `MainWindow.cpp`, `IncrementalSfm.cpp` 等 | 拆分为多个文件 |
+| 头文件依赖过重 | 多个地方 | 用前向声明替代 `#include` |
+
+## 五、构建系统
+
+- **根**: `CMakeLists.txt` → `cmake/PlascanPackages.cmake` (统一 find_package)
+- **Core**: 每个子模块有独立 `CMakeLists.txt`，通过 `plascan_core_add_optional_module()` 可选注册
+- **GUI**: `src/gui/CMakeLists.txt` + `cmake/GuiSources.cmake` (源文件清单) + `cmake/GuiCoreLinking.cmake` (核心库条件链接)
+- **CUDA**: 通过 `check_language(CUDA)` 自动检测，可用时编译 `.cu` 文件并定义 `*_ENABLE_CUDA` 宏
+- **测试**: 通过 `-DBUILD_TESTS=ON` 启用 → Google Test → `gtest_discover_tests`

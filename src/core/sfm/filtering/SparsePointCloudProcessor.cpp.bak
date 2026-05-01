@@ -1,0 +1,527 @@
+#include "SparsePointCloudProcessor.h"
+
+#include "spatial/KDTree.h"
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <map>
+#include <numeric>
+#include <tuple>
+#include <utility>
+#include <vector>
+
+namespace xjw {
+namespace {
+
+using Tree3 = xjw::common::spatial::KDTree<3, double>;
+
+Tree3 buildTree(const std::vector<SparsePointCloudPoint> &pts)
+{
+    std::vector<Tree3::CoordinateArray> coords;
+    coords.reserve(pts.size());
+    for (const auto &p : pts)
+        coords.push_back({p.x, p.y, p.z});
+    return Tree3(coords);
+}
+
+int filterByMaxReprojError(std::vector<SparsePointCloudPoint> *points,
+                           double maxReprojError)
+{
+    if (!points || maxReprojError <= 0.0)
+    {
+        return 0;
+    }
+
+    const int before = static_cast<int>(points->size());
+    points->erase(std::remove_if(points->begin(), points->end(), [maxReprojError](const SparsePointCloudPoint &point)
+    {
+        return point.rmsReprojPx > maxReprojError;
+    }), points->end());
+    return before - static_cast<int>(points->size());
+}
+
+int filterByMinTrackLength(std::vector<SparsePointCloudPoint> *points,
+                           int minTrackLength)
+{
+    if (!points || minTrackLength <= 0)
+    {
+        return 0;
+    }
+
+    const int before = static_cast<int>(points->size());
+    points->erase(std::remove_if(points->begin(), points->end(), [minTrackLength](const SparsePointCloudPoint &point)
+    {
+        return point.trackLen < minTrackLength;
+    }), points->end());
+    return before - static_cast<int>(points->size());
+}
+
+int filterByMinTriAngle(std::vector<SparsePointCloudPoint> *points,
+                        double minTriAngleDeg)
+{
+    if (!points || minTriAngleDeg <= 0.0)
+    {
+        return 0;
+    }
+
+    const int before = static_cast<int>(points->size());
+    points->erase(std::remove_if(points->begin(), points->end(), [minTriAngleDeg](const SparsePointCloudPoint &point)
+    {
+        return point.minTriAngleDeg < minTriAngleDeg;
+    }), points->end());
+    return before - static_cast<int>(points->size());
+}
+
+int filterByStatisticalOutlier(std::vector<SparsePointCloudPoint> *points,
+                               int k,
+                               double stdDevMul)
+{
+    if (!points || points->size() < 3 || k < 2)
+    {
+        return 0;
+    }
+
+    const Tree3 tree = buildTree(*points);
+    const int n = static_cast<int>(points->size());
+
+    std::vector<double> meanDists(n, 0.0);
+    std::vector<bool> valid(n, false);
+
+    for (int i = 0; i < n; ++i)
+    {
+        auto neighbors = tree.kNearestByPointIndex(static_cast<std::size_t>(i),
+                                                   static_cast<std::size_t>(k));
+        if (neighbors.empty())
+        {
+            continue;
+        }
+        double sum = 0.0;
+        for (const auto &nb : neighbors)
+            sum += std::sqrt(nb.distanceSquared);
+        meanDists[i] = sum / static_cast<double>(neighbors.size());
+        valid[i] = true;
+    }
+
+    double globalMean = 0.0;
+    int validCount = 0;
+    for (int i = 0; i < n; ++i)
+    {
+        if (valid[i]) { globalMean += meanDists[i]; ++validCount; }
+    }
+    if (validCount < 3) return 0;
+    globalMean /= validCount;
+
+    double variance = 0.0;
+    for (int i = 0; i < n; ++i)
+    {
+        if (!valid[i]) continue;
+        const double delta = meanDists[i] - globalMean;
+        variance += delta * delta;
+    }
+    variance /= validCount;
+    const double threshold = globalMean + stdDevMul * std::sqrt(std::max(variance, 0.0));
+
+    const int before = n;
+    std::vector<SparsePointCloudPoint> filtered;
+    filtered.reserve(n);
+    for (int i = 0; i < n; ++i)
+    {
+        if (!valid[i] || meanDists[i] <= threshold)
+            filtered.push_back((*points)[i]);
+    }
+    *points = std::move(filtered);
+    return before - static_cast<int>(points->size());
+}
+
+std::array<double, 3> subtractPoint(const SparsePointCloudPoint &lhs,
+                                    const SparsePointCloudPoint &rhs)
+{
+    return {lhs.x - rhs.x, lhs.y - rhs.y, lhs.z - rhs.z};
+}
+
+std::array<double, 3> cross3(const std::array<double, 3> &lhs,
+                             const std::array<double, 3> &rhs)
+{
+    return {
+        lhs[1] * rhs[2] - lhs[2] * rhs[1],
+        lhs[2] * rhs[0] - lhs[0] * rhs[2],
+        lhs[0] * rhs[1] - lhs[1] * rhs[0]
+    };
+}
+
+double dot3(const std::array<double, 3> &lhs,
+            const std::array<double, 3> &rhs)
+{
+    return lhs[0] * rhs[0] + lhs[1] * rhs[1] + lhs[2] * rhs[2];
+}
+
+double norm3(const std::array<double, 3> &value)
+{
+    return std::sqrt(dot3(value, value));
+}
+
+std::array<double, 3> estimateLocalNormal(const std::vector<SparsePointCloudPoint> &points,
+                                          int index,
+                                          const Tree3 &tree,
+                                          int k)
+{
+    auto neighbors = tree.kNearestByPointIndex(static_cast<std::size_t>(index),
+                                               static_cast<std::size_t>(k));
+    if (neighbors.size() < 2)
+    {
+        return {0.0, 0.0, 0.0};
+    }
+
+    const SparsePointCloudPoint &center = points.at(index);
+    for (int fi = 0; fi < static_cast<int>(neighbors.size()); ++fi)
+    {
+        for (int si = fi + 1; si < static_cast<int>(neighbors.size()); ++si)
+        {
+            const std::array<double, 3> vecA = subtractPoint(points.at(neighbors.at(fi).index), center);
+            const std::array<double, 3> vecB = subtractPoint(points.at(neighbors.at(si).index), center);
+            std::array<double, 3> normal = cross3(vecA, vecB);
+            const double length = norm3(normal);
+            if (length > 1e-8)
+            {
+                normal[0] /= length;
+                normal[1] /= length;
+                normal[2] /= length;
+                return normal;
+            }
+        }
+    }
+
+    return {0.0, 0.0, 0.0};
+}
+
+int filterByNormalConsistency(std::vector<SparsePointCloudPoint> *points,
+                              int k,
+                              double minMeanAbsDot)
+{
+    if (!points || points->size() < 6 || k < 3)
+    {
+        return 0;
+    }
+
+    const Tree3 tree = buildTree(*points);
+
+    std::vector<std::array<double, 3>> normals;
+    normals.reserve(points->size());
+    for (int i = 0; i < static_cast<int>(points->size()); ++i)
+    {
+        normals.push_back(estimateLocalNormal(*points, i, tree, k));
+    }
+
+    const int before = static_cast<int>(points->size());
+    std::vector<SparsePointCloudPoint> filtered;
+    filtered.reserve(points->size());
+    for (int i = 0; i < static_cast<int>(points->size()); ++i)
+    {
+        if (norm3(normals.at(i)) <= 1e-8)
+        {
+            filtered.push_back(points->at(i));
+            continue;
+        }
+
+        auto neighbors = tree.kNearestByPointIndex(static_cast<std::size_t>(i),
+                                                   static_cast<std::size_t>(k));
+        double sumAbsDot = 0.0;
+        int validCount = 0;
+        for (const auto &nb : neighbors)
+        {
+            if (norm3(normals.at(static_cast<std::size_t>(nb.index))) <= 1e-8)
+            {
+                continue;
+            }
+            sumAbsDot += std::abs(dot3(normals.at(i), normals.at(static_cast<std::size_t>(nb.index))));
+            ++validCount;
+        }
+
+        if (validCount < 3 || (sumAbsDot / validCount) >= minMeanAbsDot)
+        {
+            filtered.push_back(points->at(i));
+        }
+    }
+
+    *points = std::move(filtered);
+    return before - static_cast<int>(points->size());
+}
+
+/**
+ * @brief 半径密度过滤：副除李石封0点。
+ *
+ * 对每个点统计其半径 radius 内的邓居数（自身除外），
+ * 少于 minNeighbors 则删除该点。
+ */
+int filterByDensityRadius(std::vector<SparsePointCloudPoint> *points,
+                          double radius,
+                          int minNeighbors)
+{
+    if (!points || points->size() < 2 || radius <= 0.0 || minNeighbors < 1)
+    {
+        return 0;
+    }
+
+    const Tree3 tree = buildTree(*points);
+    const int n = static_cast<int>(points->size());
+
+    std::vector<SparsePointCloudPoint> filtered;
+    filtered.reserve(n);
+    for (int i = 0; i < n; ++i)
+    {
+        // radiusCountByPointIndex 已排除自身
+        const int cnt = tree.radiusCountByPointIndex(
+            static_cast<std::size_t>(i), radius, minNeighbors + 1);
+        if (cnt >= minNeighbors)
+            filtered.push_back((*points)[i]);
+    }
+    const int removed = n - static_cast<int>(filtered.size());
+    *points = std::move(filtered);
+    return removed;
+}
+
+} // namespace
+
+SparsePointCloudFilterStats SparsePointCloudProcessor::filter(std::vector<SparsePointCloudPoint> *points,
+                                                              const SparsePointCloudFilterOptions &options)
+{
+    SparsePointCloudFilterStats stats;
+    if (!points)
+    {
+        return stats;
+    }
+
+    stats.inputPoints = static_cast<int>(points->size());
+    if (options.filterByReprojError)
+    {
+        stats.removedByReprojError = filterByMaxReprojError(points, options.maxReprojError);
+    }
+    if (options.filterByTrackLen)
+    {
+        stats.removedByTrackLen = filterByMinTrackLength(points, options.minTrackLen);
+    }
+    if (options.filterByTriAngle)
+    {
+        stats.removedByTriAngle = filterByMinTriAngle(points, options.minTriAngleDeg);
+    }
+    if (options.filterByStatistical)
+    {
+        stats.removedByStatistical = filterByStatisticalOutlier(points, options.statK, options.statStdDevMul);
+    }
+    if (options.filterByNormalConsistency)
+    {
+        stats.removedByNormalConsistency =
+            filterByNormalConsistency(points, std::max(6, std::min(options.statK, 20)), options.normalConsistencyMinMeanAbsDot);
+    }
+    if (options.filterByDensity)
+    {
+        stats.removedByDensity =
+            filterByDensityRadius(points, options.densityRadius, options.densityMinNeighbors);
+    }
+
+    stats.outputPoints = static_cast<int>(points->size());
+    return stats;
+}
+
+SparsePointCloudRefineResult SparsePointCloudProcessor::refine(const std::vector<SparsePointCloudPoint> &basePoints,
+                                                               const SparsePointCloudRefineOptions &options)
+{
+    SparsePointCloudRefineResult result;
+    result.inputPoints = static_cast<int>(basePoints.size());
+    if (basePoints.empty())
+    {
+        return result;
+    }
+
+    std::vector<SparsePointCloudPoint> currentPoints = basePoints;
+    const int rounds = std::max(1, options.iterRounds);
+    for (int roundIndex = 0; roundIndex < rounds; ++roundIndex)
+    {
+        std::vector<SparsePointCloudPoint> working = options.retriangulate ? basePoints : currentPoints;
+        const double reprojThreshold = std::max(0.5, options.maxReprojError * (1.0 - 0.08 * roundIndex));
+        const double angleThreshold = options.minTriAngleDeg + 0.4 * roundIndex;
+        const int trackThreshold = options.minTrackLen + (roundIndex / 2);
+        const double stdThreshold = std::max(0.8, options.stdDevMultiplier - 0.2 * roundIndex);
+
+        SparsePointCloudFilterOptions filterOptions;
+        filterOptions.maxReprojError = reprojThreshold;
+        filterOptions.minTrackLen = trackThreshold;
+        filterOptions.minTriAngleDeg = angleThreshold;
+        filterOptions.statK = options.knnNeighbors;
+        filterOptions.statStdDevMul = stdThreshold;
+        filterOptions.filterByNormalConsistency = options.normalConsistency;
+        filterOptions.normalConsistencyMinMeanAbsDot = options.normalConsistencyMinMeanAbsDot;
+
+        SparsePointCloudRefineRound round;
+        round.round = roundIndex + 1;
+        round.inputPoints = static_cast<int>(working.size());
+        round.maxReprojError = reprojThreshold;
+        round.minTriAngleDeg = angleThreshold;
+        round.minTrackLen = trackThreshold;
+        round.statStdDevMul = stdThreshold;
+        round.stats = filter(&working, filterOptions);
+        currentPoints = std::move(working);
+        result.rounds.push_back(round);
+        if (currentPoints.empty())
+        {
+            break;
+        }
+    }
+
+    result.points = std::move(currentPoints);
+    result.outputPoints = static_cast<int>(result.points.size());
+    result.removedTotal = result.inputPoints - result.outputPoints;
+    return result;
+}
+
+// ============================================================
+// SparsePointCloudProcessor::localOptim
+// ============================================================
+
+SparseCloudLocalOptimResult SparsePointCloudProcessor::localOptim(
+    std::vector<SparsePointCloudPoint> *points,
+    const SparseCloudLocalOptimOptions &options)
+{
+    SparseCloudLocalOptimResult result;
+    if (!points || points->empty())
+    {
+        return result;
+    }
+    result.inputPoints = static_cast<int>(points->size());
+
+    const Tree3 tree = buildTree(*points);
+    const int n = static_cast<int>(points->size());
+
+    // ── 自动估算体素边长 ─────────────────────────────────────
+    double voxelSize = options.voxelSize;
+    if (voxelSize <= 0.0)
+    {
+        std::vector<double> nn1Dists;
+        nn1Dists.reserve(static_cast<std::size_t>(n));
+        for (int i = 0; i < n; ++i)
+        {
+            auto nbs = tree.kNearestByPointIndex(static_cast<std::size_t>(i), 1);
+            if (!nbs.empty())
+                nn1Dists.push_back(std::sqrt(nbs[0].distanceSquared));
+        }
+        if (!nn1Dists.empty())
+        {
+            auto mid = nn1Dists.begin() + static_cast<std::ptrdiff_t>(nn1Dists.size() / 2);
+            std::nth_element(nn1Dists.begin(), mid, nn1Dists.end());
+            voxelSize = *mid * 3.0;
+        }
+    }
+
+    if (voxelSize <= 0.0)
+    {
+        result.outputPoints = result.inputPoints;
+        return result;
+    }
+
+    // ── 体素分组 ───────────────────────────────────────────────
+    using VoxelKey = std::tuple<int64_t, int64_t, int64_t>;
+    std::map<VoxelKey, std::vector<int>> voxelMap;
+    for (int i = 0; i < n; ++i)
+    {
+        const auto &p = (*points)[i];
+        const auto vx = static_cast<int64_t>(std::floor(p.x / voxelSize));
+        const auto vy = static_cast<int64_t>(std::floor(p.y / voxelSize));
+        const auto vz = static_cast<int64_t>(std::floor(p.z / voxelSize));
+        voxelMap[{vx, vy, vz}].push_back(i);
+    }
+
+    std::vector<bool> removed(static_cast<std::size_t>(n), false);
+
+    // ── 孤岛体素剔除 + 体素内局部重投影过滤 ────────────────────
+    for (auto &kv : voxelMap)
+    {
+        const auto &indices = kv.second;
+
+        if (static_cast<int>(indices.size()) < options.minVoxelPoints)
+        {
+            for (int idx : indices)
+            {
+                removed[static_cast<std::size_t>(idx)] = true;
+                ++result.removedByVoxelIsolation;
+            }
+            continue;
+        }
+
+        if (options.localReprojFilter && static_cast<int>(indices.size()) >= 3)
+        {
+            double sumR = 0.0;
+            for (int idx : indices)
+                sumR += (*points)[static_cast<std::size_t>(idx)].rmsReprojPx;
+            const double meanR = sumR / static_cast<double>(indices.size());
+
+            double varR = 0.0;
+            for (int idx : indices)
+            {
+                const double d = (*points)[static_cast<std::size_t>(idx)].rmsReprojPx - meanR;
+                varR += d * d;
+            }
+            varR /= static_cast<double>(indices.size());
+            const double thr = meanR + options.localReprojStdMul * std::sqrt(std::max(varR, 0.0));
+
+            for (int idx : indices)
+            {
+                if (!removed[static_cast<std::size_t>(idx)] &&
+                    (*points)[static_cast<std::size_t>(idx)].rmsReprojPx > thr)
+                {
+                    removed[static_cast<std::size_t>(idx)] = true;
+                    ++result.removedByLocalReproj;
+                }
+            }
+        }
+    }
+
+    // ── 几何去重 ───────────────────────────────────────────────
+    if (options.deduplicationRadius > 0.0)
+    {
+        // 构建点的有序下标（按 trackLen 降序，优先保留质量高的点）
+        std::vector<int> sortedOrder(static_cast<std::size_t>(n));
+        std::iota(sortedOrder.begin(), sortedOrder.end(), 0);
+        std::sort(sortedOrder.begin(), sortedOrder.end(), [&](int a, int b) {
+            return (*points)[static_cast<std::size_t>(a)].trackLen >
+                   (*points)[static_cast<std::size_t>(b)].trackLen;
+        });
+
+        // 构建坐标数组（与原始 tree 对应）
+        std::vector<Tree3::CoordinateArray> coords;
+        coords.reserve(static_cast<std::size_t>(n));
+        for (const auto &p : *points)
+            coords.push_back({p.x, p.y, p.z});
+
+        for (int si = 0; si < n; ++si)
+        {
+            const int i = sortedOrder[static_cast<std::size_t>(si)];
+            if (removed[static_cast<std::size_t>(i)])
+                continue;
+            auto nbrs = tree.radiusSearch(coords[static_cast<std::size_t>(i)],
+                                          options.deduplicationRadius);
+            for (int nbIdx : nbrs)
+            {
+                if (nbIdx != i && !removed[static_cast<std::size_t>(nbIdx)])
+                {
+                    removed[static_cast<std::size_t>(nbIdx)] = true;
+                    ++result.removedByDeduplication;
+                }
+            }
+        }
+    }
+
+    // ── 收集存活点 ─────────────────────────────────────────────
+    std::vector<SparsePointCloudPoint> output;
+    output.reserve(static_cast<std::size_t>(n));
+    for (int i = 0; i < n; ++i)
+    {
+        if (!removed[static_cast<std::size_t>(i)])
+            output.push_back((*points)[static_cast<std::size_t>(i)]);
+    }
+    *points = std::move(output);
+    result.outputPoints = static_cast<int>(points->size());
+    return result;
+}
+
+} // namespace xjw

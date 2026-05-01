@@ -1,0 +1,372 @@
+#include "DemGenerator.h"
+
+#include <QtGlobal>
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
+#include <vector>
+
+namespace xjw
+{
+
+namespace
+{
+
+struct AccumulatorCell
+{
+    double sumWeightedZ = 0.0;
+    double sumWeight = 0.0;
+    double minZ = std::numeric_limits<double>::max();
+    double maxZ = std::numeric_limits<double>::lowest();
+    int count = 0;
+};
+
+void accumulateCell(AccumulatorCell *cell,
+                    double z,
+                    double weight,
+                    DemGenerationOptions::ElevationAggregation aggregation)
+{
+    if (!cell || weight <= 0.0)
+    {
+        return;
+    }
+
+    cell->sumWeightedZ += z * weight;
+    cell->sumWeight += weight;
+    cell->minZ = std::min(cell->minZ, z);
+    cell->maxZ = std::max(cell->maxZ, z);
+    ++cell->count;
+
+    Q_UNUSED(aggregation);
+}
+
+float resolveCellElevation(const AccumulatorCell &cell,
+                           DemGenerationOptions::ElevationAggregation aggregation)
+{
+    if (cell.count <= 0 || cell.sumWeight <= 0.0)
+    {
+        return 0.0f;
+    }
+
+    if (aggregation == DemGenerationOptions::ElevationAggregation::Min)
+    {
+        return static_cast<float>(cell.minZ);
+    }
+
+    if (aggregation == DemGenerationOptions::ElevationAggregation::Max)
+    {
+        return static_cast<float>(cell.maxZ);
+    }
+
+    return static_cast<float>(cell.sumWeightedZ / cell.sumWeight);
+}
+
+pointcloud::PointCloudBounds computeBounds(const pointcloud::PointCloud &pointCloud)
+{
+    return pointCloud.computeBounds();
+}
+
+pointcloud::PointCloud buildDenseCloud(const DemGridData &demGrid,
+                                       const pointcloud::PointCloudMetadata &metadata)
+{
+    pointcloud::PointCloud denseCloud;
+    denseCloud.setMetadata(metadata);
+    denseCloud.reserve(static_cast<std::size_t>(demGrid.width * demGrid.height));
+
+    for (int row = 0; row < demGrid.height; ++row)
+    {
+        for (int col = 0; col < demGrid.width; ++col)
+        {
+            if (demGrid.validMask.at<uchar>(row, col) == 0)
+            {
+                continue;
+            }
+
+            denseCloud.addPoint(pointcloud::Point3f{
+                static_cast<float>(demGrid.minX + demGrid.stepX * static_cast<double>(col)),
+                static_cast<float>(demGrid.minY + demGrid.stepY * static_cast<double>(row)),
+                demGrid.elevation.at<float>(row, col)});
+        }
+    }
+
+    return denseCloud;
+}
+
+} // namespace
+
+int DemGenerator::estimateGridResolution(const pointcloud::PointCloud &pointCloud,
+                                         const DemGenerationOptions &options)
+{
+    if (pointCloud.empty())
+    {
+        return 0;
+    }
+
+    const pointcloud::PointCloudBounds bounds = computeBounds(pointCloud);
+    const double spanX = std::max(1e-6, static_cast<double>(bounds.maxCorner.x - bounds.minCorner.x));
+
+    if (options.gridResolution > 0.0)
+    {
+        const int widthFromCellSize = static_cast<int>(std::ceil(spanX / options.gridResolution)) + 1;
+        return std::max(2, std::min(widthFromCellSize, options.maxGridSize));
+    }
+
+    const int autoWidth = static_cast<int>(std::sqrt(static_cast<double>(pointCloud.size())) * 1.8);
+    return qBound(options.minGridSize, autoWidth, options.maxGridSize);
+}
+
+bool DemGenerator::generateFromPointCloud(const pointcloud::PointCloud &pointCloud,
+                                          const DemGenerationOptions &options,
+                                          DemGridData *demGrid,
+                                          pointcloud::PointCloud *denseCloud,
+                                          QString *errorMsg)
+{
+    if (!demGrid)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 输出对象为空");
+        }
+        return false;
+    }
+
+    if (pointCloud.empty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("输入点云为空");
+        }
+        return false;
+    }
+
+    const pointcloud::PointCloudBounds bounds = computeBounds(pointCloud);
+    if (!bounds.valid)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("无法计算点云边界");
+        }
+        return false;
+    }
+
+    // Use percentile-based robust bounds to exclude outliers that inflate the grid
+    double robustMinX = bounds.minCorner.x, robustMaxX = bounds.maxCorner.x;
+    double robustMinY = bounds.minCorner.y, robustMaxY = bounds.maxCorner.y;
+    {
+        const auto &positions = pointCloud.positions();
+        const size_t n = positions.size();
+        if (n > 100)
+        {
+            std::vector<float> xs(n), ys(n);
+            for (size_t i = 0; i < n; ++i)
+            {
+                xs[i] = positions[i].x;
+                ys[i] = positions[i].y;
+            }
+            std::sort(xs.begin(), xs.end());
+            std::sort(ys.begin(), ys.end());
+            const size_t lo = n / 200;       // 0.5th percentile
+            const size_t hi = n - 1 - lo;    // 99.5th percentile
+            const float padX = (xs[hi] - xs[lo]) * 0.02f;
+            const float padY = (ys[hi] - ys[lo]) * 0.02f;
+            robustMinX = static_cast<double>(xs[lo] - padX);
+            robustMaxX = static_cast<double>(xs[hi] + padX);
+            robustMinY = static_cast<double>(ys[lo] - padY);
+            robustMaxY = static_cast<double>(ys[hi] + padY);
+        }
+    }
+
+    const double spanX = std::max(1e-6, robustMaxX - robustMinX);
+    const double spanY = std::max(1e-6, robustMaxY - robustMinY);
+
+    int width = 0;
+    if (options.gridResolution > 0.0)
+    {
+        width = std::max(2,
+                         std::min(static_cast<int>(std::ceil(spanX / options.gridResolution)) + 1,
+                                  options.maxGridSize));
+    }
+    else
+    {
+        const int autoWidth = static_cast<int>(std::sqrt(static_cast<double>(pointCloud.size())) * 1.8);
+        width = qBound(options.minGridSize, autoWidth, options.maxGridSize);
+    }
+
+    int height = 0;
+    if (options.gridResolution > 0.0)
+    {
+        height = std::max(2,
+                          std::min(static_cast<int>(std::ceil(spanY / options.gridResolution)) + 1,
+                                   options.maxGridSize));
+    }
+    else
+    {
+        height = qBound(options.minGridSize,
+                        static_cast<int>(std::round(static_cast<double>(width) * (spanY / spanX))),
+                        options.maxGridSize);
+    }
+
+    if (width <= 1 || height <= 1)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 栅格尺寸无效");
+        }
+        return false;
+    }
+
+    demGrid->width = width;
+    demGrid->height = height;
+    demGrid->minX = robustMinX;
+    demGrid->minY = robustMinY;
+    demGrid->stepX = options.gridResolution > 0.0 ? options.gridResolution : spanX / std::max(1, width - 1);
+    demGrid->stepY = options.gridResolution > 0.0 ? options.gridResolution : spanY / std::max(1, height - 1);
+
+    if (demGrid->stepX <= 0.0 || demGrid->stepY <= 0.0)
+    {
+        if (errorMsg)
+            *errorMsg = QStringLiteral("DEM 步长计算异常（stepX=%1 stepY=%2 须 > 0）")
+                            .arg(demGrid->stepX).arg(demGrid->stepY);
+        return false;
+    }
+
+    demGrid->projection = options.projection;
+    demGrid->elevation = cv::Mat(height, width, CV_32F, cv::Scalar(0));
+    demGrid->validMask = cv::Mat(height, width, CV_8U, cv::Scalar(0));
+
+    std::vector<AccumulatorCell> accumulators(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
+    auto cellIndex = [width](int col, int row) {
+        return static_cast<std::size_t>(row) * static_cast<std::size_t>(width) + static_cast<std::size_t>(col);
+    };
+
+    auto splatPointToGrid = [&](double x, double y, double z) {
+        const double gridX = (x - demGrid->minX) / demGrid->stepX;
+        const double gridY = (y - demGrid->minY) / demGrid->stepY;
+
+        if (options.useSubPixelBilinearSplat)
+        {
+            const int baseCol = static_cast<int>(std::floor(gridX));
+            const int baseRow = static_cast<int>(std::floor(gridY));
+            const double fracX = gridX - static_cast<double>(baseCol);
+            const double fracY = gridY - static_cast<double>(baseRow);
+
+            for (int rowOffset = 0; rowOffset <= 1; ++rowOffset)
+            {
+                for (int colOffset = 0; colOffset <= 1; ++colOffset)
+                {
+                    const int col = qBound(0, baseCol + colOffset, width - 1);
+                    const int row = qBound(0, baseRow + rowOffset, height - 1);
+                    const double weightX = colOffset == 0 ? (1.0 - fracX) : fracX;
+                    const double weightY = rowOffset == 0 ? (1.0 - fracY) : fracY;
+                    const double weight = std::max(0.0, weightX * weightY);
+
+                    if (weight <= 1e-9)
+                    {
+                        continue;
+                    }
+
+                    AccumulatorCell &accumulator = accumulators[cellIndex(col, row)];
+                    accumulateCell(&accumulator, z, weight, options.elevationAggregation);
+                    demGrid->validMask.at<uchar>(row, col) = 255;
+                }
+            }
+            return;
+        }
+
+        const int col = qBound(0, static_cast<int>(std::round(gridX)), width - 1);
+        const int row = qBound(0, static_cast<int>(std::round(gridY)), height - 1);
+
+        AccumulatorCell &accumulator = accumulators[cellIndex(col, row)];
+        accumulateCell(&accumulator, z, 1.0, options.elevationAggregation);
+        demGrid->validMask.at<uchar>(row, col) = 255;
+    };
+
+    for (const pointcloud::Point3f &position : pointCloud.positions())
+    {
+        splatPointToGrid(static_cast<double>(position.x),
+                         static_cast<double>(position.y),
+                         static_cast<double>(position.z));
+    }
+
+    for (int row = 0; row < height; ++row)
+    {
+        for (int col = 0; col < width; ++col)
+        {
+            const AccumulatorCell &accumulator = accumulators[cellIndex(col, row)];
+            if (accumulator.count > 0)
+            {
+                demGrid->elevation.at<float>(row, col) =
+                    resolveCellElevation(accumulator, options.elevationAggregation);
+            }
+        }
+    }
+
+    const int holeFillRadius = std::max(1, options.holeFillSearchRadius);
+    for (int iteration = 0; iteration < options.holeFillIterations; ++iteration)
+    {
+        cv::Mat elevationCopy = demGrid->elevation.clone();
+        cv::Mat validCopy = demGrid->validMask.clone();
+        for (int row = 0; row < height; ++row)
+        {
+            for (int col = 0; col < width; ++col)
+            {
+                if (demGrid->validMask.at<uchar>(row, col) != 0)
+                {
+                    continue;
+                }
+
+                double weightedNeighborSum = 0.0;
+                double weightSum = 0.0;
+                int neighborCount = 0;
+                const int minRow = std::max(0, row - holeFillRadius);
+                const int maxRow = std::min(height - 1, row + holeFillRadius);
+                const int minCol = std::max(0, col - holeFillRadius);
+                const int maxCol = std::min(width - 1, col + holeFillRadius);
+
+                for (int neighborRow = minRow; neighborRow <= maxRow; ++neighborRow)
+                {
+                    for (int neighborCol = minCol; neighborCol <= maxCol; ++neighborCol)
+                    {
+                        if (neighborCol == col && neighborRow == row)
+                        {
+                            continue;
+                        }
+
+                        if (demGrid->validMask.at<uchar>(neighborRow, neighborCol) != 0)
+                        {
+                            const int dx = neighborCol - col;
+                            const int dy = neighborRow - row;
+                            const double distance = std::sqrt(static_cast<double>(dx * dx + dy * dy));
+                            const double weight = 1.0 / std::max(1e-6, distance);
+                            weightedNeighborSum +=
+                                static_cast<double>(demGrid->elevation.at<float>(neighborRow, neighborCol)) * weight;
+                            weightSum += weight;
+                            ++neighborCount;
+                        }
+                    }
+                }
+
+                if (neighborCount >= options.holeFillMinNeighbors && weightSum > 0.0)
+                {
+                    elevationCopy.at<float>(row, col) = static_cast<float>(weightedNeighborSum / weightSum);
+                    validCopy.at<uchar>(row, col) = 255;
+                }
+            }
+        }
+
+        demGrid->elevation = elevationCopy;
+        demGrid->validMask = validCopy;
+    }
+
+    if (denseCloud)
+    {
+        pointcloud::PointCloudMetadata metadata = pointCloud.metadata();
+        metadata.description = "Dense cloud sampled from DEM grid";
+        *denseCloud = buildDenseCloud(*demGrid, metadata);
+    }
+
+    return demGrid->isValid();
+}
+
+} // namespace xjw

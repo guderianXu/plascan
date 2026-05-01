@@ -1,0 +1,27 @@
+#!/usr/bin/env sh
+set -eu
+
+SELF_DIR="$(CDPATH= cd -- "$(dirname -- "$0")" && pwd)"
+APP_BIN="${SELF_DIR}/plascan_gui.bin"
+LIB_DIR="${SELF_DIR}/../lib"
+PLUGIN_DIR="${SELF_DIR}/../plugins"
+
+if [ ! -x "${APP_BIN}" ]; then
+  if [ -x "/opt/plascan/bin/plascan_gui.bin" ]; then
+    APP_BIN="/opt/plascan/bin/plascan_gui.bin"
+    LIB_DIR="/opt/plascan/lib"
+    PLUGIN_DIR="/opt/plascan/plugins"
+  else
+    echo "plascan_gui.bin not found: ${APP_BIN}" >&2
+    exit 1
+  fi
+fi
+
+if [ -n "${LD_LIBRARY_PATH:-}" ]; then
+  export LD_LIBRARY_PATH="${LIB_DIR}:${LD_LIBRARY_PATH}"
+else
+  export LD_LIBRARY_PATH="${LIB_DIR}"
+fi
+
+export QT_PLUGIN_PATH="${PLUGIN_DIR}"
+exec "${APP_BIN}" "$@"

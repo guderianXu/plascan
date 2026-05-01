@@ -1,0 +1,46 @@
+// =============================================================================
+// 文件: AlikedExtractor.h
+// 功能: ALIKED 特征提取器 C++ LibTorch wrapper
+// =============================================================================
+#pragma once
+
+#include <opencv2/core.hpp>
+#include <torch/script.h>
+#include <torch/torch.h>
+#include <string>
+#include <vector>
+
+namespace xjw::feature_extractors
+{
+
+struct AlikedConfig
+{
+    std::string modelPath;
+    int    maxKeypoints  = 2048;
+    float  scoreThreshold = 0.0f;
+    int    maxImageDim    = 1600;
+    bool   useCuda        = true;
+    int    cudaDevice     = 0;
+};
+
+struct AlikedOutput
+{
+    std::vector<cv::KeyPoint> keypoints;
+    std::vector<float>        scores;
+    torch::Tensor             descriptors;  // [N, 128]
+    float                     scale = 1.0f;
+};
+
+class AlikedExtractor
+{
+public:
+    explicit AlikedExtractor(const AlikedConfig &cfg);
+    AlikedOutput extract(const cv::Mat &grayImage);
+
+private:
+    AlikedConfig m_cfg;
+    torch::jit::script::Module m_model;
+    torch::Device m_device{torch::kCPU};
+};
+
+} // namespace xjw::feature_extractors

@@ -1,0 +1,433 @@
+#include "TextureMapper.h"
+
+#include "../pointcloud/io/PointCloudIO.h"
+
+#include <QDir>
+#include <QImage>
+
+#include <algorithm>
+#include <array>
+#include <cmath>
+#include <cstdint>
+#include <vector>
+
+namespace xjw::mesh
+{
+
+namespace
+{
+
+float pointAxisValue(const xjw::Point3f &point, int axis)
+{
+    if (axis == 0)
+    {
+        return point.x;
+    }
+    if (axis == 1)
+    {
+        return point.y;
+    }
+    return point.z;
+}
+
+struct ProjectionAxes
+{
+    int uAxis = 0;
+    int vAxis = 1;
+};
+
+ProjectionAxes chooseProjectionAxes(const xjw::pointcloud::PointCloudBounds &bounds)
+{
+    ProjectionAxes axes;
+    if (!bounds.valid)
+    {
+        return axes;
+    }
+
+    const std::array<float, 3> extents = {
+        bounds.maxCorner.x - bounds.minCorner.x,
+        bounds.maxCorner.y - bounds.minCorner.y,
+        bounds.maxCorner.z - bounds.minCorner.z};
+    std::array<int, 3> indices = {0, 1, 2};
+    std::sort(indices.begin(), indices.end(), [&extents](int lhs, int rhs) {
+        return extents[lhs] > extents[rhs];
+    });
+    axes.uAxis = indices[0];
+    axes.vAxis = indices[1];
+    return axes;
+}
+
+bool assignPlanarTextureCoordinates(xjw::pointcloud::PointCloud *meshCloud,
+                                    std::string *errorMessage)
+{
+    if (!meshCloud || meshCloud->empty() || !meshCloud->hasFaces())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "网格缺少可用于纹理映射的三角面";
+        }
+        return false;
+    }
+
+    const auto bounds = meshCloud->computeBounds();
+    const ProjectionAxes axes = chooseProjectionAxes(bounds);
+    const float minU = pointAxisValue(bounds.minCorner, axes.uAxis);
+    const float maxU = pointAxisValue(bounds.maxCorner, axes.uAxis);
+    const float minV = pointAxisValue(bounds.minCorner, axes.vAxis);
+    const float maxV = pointAxisValue(bounds.maxCorner, axes.vAxis);
+    const float rangeU = std::max(maxU - minU, 1e-6f);
+    const float rangeV = std::max(maxV - minV, 1e-6f);
+
+    std::vector<xjw::Point2f> textureCoordinates;
+    textureCoordinates.reserve(meshCloud->size());
+    for (const xjw::Point3f &position : meshCloud->positions())
+    {
+        const float u = (pointAxisValue(position, axes.uAxis) - minU) / rangeU;
+        const float v = (pointAxisValue(position, axes.vAxis) - minV) / rangeV;
+        textureCoordinates.push_back({std::clamp(u, 0.0f, 1.0f), std::clamp(v, 0.0f, 1.0f)});
+    }
+    meshCloud->setTextureCoordinates(textureCoordinates);
+
+    const std::vector<xjw::pointcloud::PointCloudFace> faces = meshCloud->faces();
+    meshCloud->clearFaces();
+    for (xjw::pointcloud::PointCloudFace face : faces)
+    {
+        face.textureIndices = face.vertexIndices;
+        face.hasTextureIndices = true;
+        if (!meshCloud->addFace(face))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = "为网格附加纹理索引失败";
+            }
+            return false;
+        }
+    }
+
+    return true;
+}
+
+xjw::ColorRGBA averageMeshColor(const xjw::pointcloud::PointCloud &meshCloud)
+{
+    if (!meshCloud.hasColors() || meshCloud.colors().empty())
+    {
+        return xjw::ColorRGBA{180, 180, 180, 255};
+    }
+
+    std::uint64_t sumR = 0;
+    std::uint64_t sumG = 0;
+    std::uint64_t sumB = 0;
+    for (const xjw::ColorRGBA &color : meshCloud.colors())
+    {
+        sumR += color.r;
+        sumG += color.g;
+        sumB += color.b;
+    }
+
+    const std::uint64_t count = static_cast<std::uint64_t>(meshCloud.colors().size());
+    return xjw::ColorRGBA{
+        static_cast<std::uint8_t>(sumR / count),
+        static_cast<std::uint8_t>(sumG / count),
+        static_cast<std::uint8_t>(sumB / count),
+        255};
+}
+
+xjw::ColorRGBA vertexColorAt(const xjw::pointcloud::PointCloud &meshCloud, std::size_t index)
+{
+    if (meshCloud.hasColors() && index < meshCloud.colors().size())
+    {
+        return meshCloud.colors()[index];
+    }
+    return xjw::ColorRGBA{180, 180, 180, 255};
+}
+
+void expandTexturePadding(QImage *image, std::vector<std::uint8_t> *filledMask, int padding)
+{
+    if (!image || !filledMask || padding <= 0)
+    {
+        return;
+    }
+
+    const int width = image->width();
+    const int height = image->height();
+    for (int iteration = 0; iteration < padding; ++iteration)
+    {
+        bool changed = false;
+        const QImage previous = image->copy();
+        const std::vector<std::uint8_t> previousMask = *filledMask;
+        for (int y = 0; y < height; ++y)
+        {
+            for (int x = 0; x < width; ++x)
+            {
+                const int index = y * width + x;
+                if (previousMask[index] != 0)
+                {
+                    continue;
+                }
+
+                int sumR = 0;
+                int sumG = 0;
+                int sumB = 0;
+                int samples = 0;
+                for (int dy = -1; dy <= 1; ++dy)
+                {
+                    for (int dx = -1; dx <= 1; ++dx)
+                    {
+                        if (dx == 0 && dy == 0)
+                        {
+                            continue;
+                        }
+
+                        const int nx = x + dx;
+                        const int ny = y + dy;
+                        if (nx < 0 || nx >= width || ny < 0 || ny >= height)
+                        {
+                            continue;
+                        }
+
+                        const int neighborIndex = ny * width + nx;
+                        if (previousMask[neighborIndex] == 0)
+                        {
+                            continue;
+                        }
+
+                        const QRgb pixel = previous.pixel(nx, ny);
+                        sumR += qRed(pixel);
+                        sumG += qGreen(pixel);
+                        sumB += qBlue(pixel);
+                        ++samples;
+                    }
+                }
+
+                if (samples == 0)
+                {
+                    continue;
+                }
+
+                image->setPixel(x, y, qRgb(sumR / samples, sumG / samples, sumB / samples));
+                (*filledMask)[index] = 1;
+                changed = true;
+            }
+        }
+
+        if (!changed)
+        {
+            break;
+        }
+    }
+}
+
+bool bakeTextureFromVertexColors(const xjw::pointcloud::PointCloud &meshCloud,
+                                 const TextureMappingConfig &config,
+                                 QImage *textureImage,
+                                 std::string *errorMessage)
+{
+    if (!textureImage)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "内部错误：纹理图输出对象无效";
+        }
+        return false;
+    }
+
+    if (!meshCloud.hasFaces() || !meshCloud.hasTextureCoordinates())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "网格缺少三角面或纹理坐标";
+        }
+        return false;
+    }
+
+    const int textureSize = std::clamp(config.textureSize, 512, 16384);
+    const int padding = std::clamp(config.padding, 0, 32);
+    const xjw::ColorRGBA background = config.keepUnmapped
+        ? averageMeshColor(meshCloud)
+        : xjw::ColorRGBA{0, 0, 0, 255};
+    *textureImage = QImage(textureSize, textureSize, QImage::Format_RGB32);
+    textureImage->fill(qRgb(background.r, background.g, background.b));
+
+    std::vector<std::uint8_t> filledMask(static_cast<std::size_t>(textureSize) * textureSize, 0);
+
+    const auto edgeFunction = [](const QPointF &a, const QPointF &b, const QPointF &c) {
+        return (c.x() - a.x()) * (b.y() - a.y()) - (c.y() - a.y()) * (b.x() - a.x());
+    };
+
+    const auto &texCoords = meshCloud.textureCoordinates();
+    const auto &faces = meshCloud.faces();
+    for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
+    {
+        if (config.progressFn && (faceIndex % 256 == 0 || faceIndex + 1 == faces.size()))
+        {
+            const int percent = 25 + static_cast<int>((60.0 * (faceIndex + 1)) / std::max<std::size_t>(faces.size(), 1));
+            config.progressFn("正在烘焙纹理...", percent);
+        }
+
+        const xjw::pointcloud::PointCloudFace &face = faces[faceIndex];
+        const std::size_t i0 = face.vertexIndices[0];
+        const std::size_t i1 = face.vertexIndices[1];
+        const std::size_t i2 = face.vertexIndices[2];
+        if (i0 >= meshCloud.size() || i1 >= meshCloud.size() || i2 >= meshCloud.size())
+        {
+            continue;
+        }
+
+        const std::size_t t0 = face.hasTextureIndices ? face.textureIndices[0] : i0;
+        const std::size_t t1 = face.hasTextureIndices ? face.textureIndices[1] : i1;
+        const std::size_t t2 = face.hasTextureIndices ? face.textureIndices[2] : i2;
+        if (t0 >= texCoords.size() || t1 >= texCoords.size() || t2 >= texCoords.size())
+        {
+            continue;
+        }
+
+        const QPointF p0(texCoords[t0].u * (textureSize - 1), (1.0f - texCoords[t0].v) * (textureSize - 1));
+        const QPointF p1(texCoords[t1].u * (textureSize - 1), (1.0f - texCoords[t1].v) * (textureSize - 1));
+        const QPointF p2(texCoords[t2].u * (textureSize - 1), (1.0f - texCoords[t2].v) * (textureSize - 1));
+        const double area = edgeFunction(p0, p1, p2);
+        if (std::abs(area) < 1e-8)
+        {
+            continue;
+        }
+
+        const int minX = std::max(0, static_cast<int>(std::floor(std::min({p0.x(), p1.x(), p2.x()}))));
+        const int maxX = std::min(textureSize - 1, static_cast<int>(std::ceil(std::max({p0.x(), p1.x(), p2.x()}))));
+        const int minY = std::max(0, static_cast<int>(std::floor(std::min({p0.y(), p1.y(), p2.y()}))));
+        const int maxY = std::min(textureSize - 1, static_cast<int>(std::ceil(std::max({p0.y(), p1.y(), p2.y()}))));
+
+        const xjw::ColorRGBA c0 = vertexColorAt(meshCloud, i0);
+        const xjw::ColorRGBA c1 = vertexColorAt(meshCloud, i1);
+        const xjw::ColorRGBA c2 = vertexColorAt(meshCloud, i2);
+
+        for (int y = minY; y <= maxY; ++y)
+        {
+            for (int x = minX; x <= maxX; ++x)
+            {
+                const QPointF pixelCenter(static_cast<double>(x) + 0.5, static_cast<double>(y) + 0.5);
+                const double w0 = edgeFunction(p1, p2, pixelCenter) / area;
+                const double w1 = edgeFunction(p2, p0, pixelCenter) / area;
+                const double w2 = edgeFunction(p0, p1, pixelCenter) / area;
+                if (w0 < -1e-6 || w1 < -1e-6 || w2 < -1e-6)
+                {
+                    continue;
+                }
+
+                int red = static_cast<int>(std::lround(w0 * c0.r + w1 * c1.r + w2 * c2.r));
+                int green = static_cast<int>(std::lround(w0 * c0.g + w1 * c1.g + w2 * c2.g));
+                int blue = static_cast<int>(std::lround(w0 * c0.b + w1 * c1.b + w2 * c2.b));
+                const int maskIndex = y * textureSize + x;
+
+                if (filledMask[maskIndex] != 0 && config.blendMethod.find("加权") != std::string::npos)
+                {
+                    const QRgb existing = textureImage->pixel(x, y);
+                    red = (red + qRed(existing)) / 2;
+                    green = (green + qGreen(existing)) / 2;
+                    blue = (blue + qBlue(existing)) / 2;
+                }
+
+                textureImage->setPixel(x,
+                                       y,
+                                       qRgb(std::clamp(red, 0, 255),
+                                            std::clamp(green, 0, 255),
+                                            std::clamp(blue, 0, 255)));
+                filledMask[maskIndex] = 1;
+            }
+        }
+    }
+
+    if (config.progressFn)
+    {
+        config.progressFn("正在扩展纹理边界...", 88);
+    }
+    expandTexturePadding(textureImage, &filledMask, padding);
+    return true;
+}
+
+} // namespace
+
+bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPath,
+                                                      const std::string &productsDir,
+                                                      const TextureMappingConfig &config,
+                                                      TextureMappingResult *result,
+                                                      std::string *errorMsg)
+{
+    if (result)
+    {
+        *result = TextureMappingResult();
+    }
+
+    xjw::pointcloud::PointCloud meshCloud;
+    xjw::pointcloud::PointCloudIOResult readResult;
+    if (!xjw::pointcloud::readPointCloud(meshPath, &meshCloud, {}, &readResult))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "无法读取网格模型: " + readResult.errorMessage;
+        }
+        return false;
+    }
+
+    if (!assignPlanarTextureCoordinates(&meshCloud, errorMsg))
+    {
+        return false;
+    }
+
+    if (config.progressFn)
+    {
+        config.progressFn("正在准备纹理图集...", 20);
+    }
+
+    QImage textureImage;
+    if (!bakeTextureFromVertexColors(meshCloud, config, &textureImage, errorMsg))
+    {
+        return false;
+    }
+
+    const QString outputDir = QString::fromStdString(productsDir);
+    const QString texturesDir = QDir(outputDir).filePath(QStringLiteral("textures"));
+    QDir().mkpath(texturesDir);
+
+    const QString texturePngPath = QDir(texturesDir).filePath(QStringLiteral("model_texture.png"));
+    if (!textureImage.save(texturePngPath))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "无法写出纹理图像: " + texturePngPath.toStdString();
+        }
+        return false;
+    }
+
+    const QString objPath = QDir(outputDir).filePath(QStringLiteral("textured_model.obj"));
+    const QString mtlPath = QDir(outputDir).filePath(QStringLiteral("textured_model.mtl"));
+    meshCloud.setMaterialLibraryFile(QStringLiteral("textured_model.mtl").toStdString());
+    meshCloud.setTextureImageFile(QStringLiteral("textures/model_texture.png").toStdString());
+
+    xjw::pointcloud::PointCloudIOResult writeResult;
+    xjw::pointcloud::PointCloudWriteOptions writeOptions;
+    writeOptions.format = xjw::pointcloud::PointCloudFileFormat::Obj;
+    writeOptions.materialLibraryFile = QStringLiteral("textured_model.mtl").toStdString();
+    writeOptions.textureImageFile = QStringLiteral("textures/model_texture.png").toStdString();
+    if (!xjw::pointcloud::writePointCloud(objPath.toStdString(), meshCloud, writeOptions, &writeResult))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "无法写出带纹理 OBJ: " + writeResult.errorMessage;
+        }
+        return false;
+    }
+
+    if (result)
+    {
+        result->modelObjPath = objPath.toStdString();
+        result->modelMtlPath = mtlPath.toStdString();
+        result->texturePngPath = texturePngPath.toStdString();
+        result->textureSize = textureImage.width();
+        result->textureAlgorithm = "vertex_color_planar_bake";
+        result->uvMethod = config.uvMethod;
+        result->blendMethod = config.blendMethod;
+    }
+
+    return true;
+}
+
+} // namespace xjw::mesh

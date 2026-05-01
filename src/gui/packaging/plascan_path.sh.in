@@ -1,0 +1,7 @@
+#!/usr/bin/env sh
+if [ -d "/opt/plascan/bin" ]; then
+    case ":${PATH}:" in
+        *:/opt/plascan/bin:*) ;;
+        *) export PATH="/opt/plascan/bin:${PATH}" ;;
+    esac
+fi

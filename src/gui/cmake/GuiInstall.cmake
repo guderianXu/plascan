@@ -1,0 +1,116 @@
+# 安装与打包
+
+option(PLASCAN_BUNDLE_RUNTIME "Bundle runtime shared libraries (Qt/OpenCV/Torch etc.) into install/package" ON)
+
+install(TARGETS plascan_gui
+  RUNTIME DESTINATION bin
+)
+
+if(TARGET superpoint)
+  install(TARGETS superpoint
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+  )
+endif()
+
+if(TARGET superglue_matcher)
+  install(TARGETS superglue_matcher
+    LIBRARY DESTINATION lib
+    RUNTIME DESTINATION bin
+  )
+endif()
+
+if(TARGET lightglue_matcher)
+  install(TARGETS lightglue_matcher
+    LIBRARY DESTINATION lib
+    ARCHIVE DESTINATION lib
+    RUNTIME DESTINATION bin
+  )
+endif()
+
+set(PLASCAN_LAUNCHER_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_gui_launcher.sh.in")
+set(PLASCAN_QT_CONF_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/qt.conf.in")
+set(PLASCAN_PATH_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_path.sh.in")
+
+configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan" @ONLY)
+configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" @ONLY)
+configure_file("${PLASCAN_QT_CONF_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" @ONLY)
+configure_file("${PLASCAN_PATH_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" @ONLY)
+
+install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin)
+install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" DESTINATION bin)
+install(FILES "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" DESTINATION /etc/profile.d RENAME plascan.sh)
+install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin)
+
+if(PLASCAN_BUNDLE_RUNTIME)
+  set(_plascan_qt_core_lib "")
+  foreach(_qt_cfg RELEASE RELWITHDEBINFO MINSIZEREL DEBUG)
+    get_target_property(_qt_core_candidate Qt6::Core IMPORTED_LOCATION_${_qt_cfg})
+    if(_qt_core_candidate)
+      set(_plascan_qt_core_lib "${_qt_core_candidate}")
+      break()
+    endif()
+  endforeach()
+  if(NOT _plascan_qt_core_lib)
+    get_target_property(_plascan_qt_core_lib Qt6::Core IMPORTED_LOCATION)
+  endif()
+
+  if(_plascan_qt_core_lib)
+    get_filename_component(_plascan_qt_lib_dir "${_plascan_qt_core_lib}" DIRECTORY)
+    get_filename_component(_plascan_qt_prefix_dir "${_plascan_qt_lib_dir}" DIRECTORY)
+    set(_plascan_qt_plugin_candidates
+      "${_plascan_qt_prefix_dir}/plugins"
+      "${_plascan_qt_prefix_dir}/lib/qt6/plugins"
+      "${_plascan_qt_lib_dir}/qt6/plugins"
+    )
+    set(PLASCAN_QT_PLUGINS_DIR "")
+    foreach(_plugin_candidate IN LISTS _plascan_qt_plugin_candidates)
+      if(EXISTS "${_plugin_candidate}")
+        set(PLASCAN_QT_PLUGINS_DIR "${_plugin_candidate}")
+        break()
+      endif()
+    endforeach()
+  else()
+    set(PLASCAN_QT_PLUGINS_DIR "")
+  endif()
+
+  set(PLASCAN_TORCH_LIB_DIR "")
+  foreach(_torch_lib IN LISTS TORCH_LIBRARIES)
+    if(EXISTS "${_torch_lib}")
+      get_filename_component(_torch_lib_dir_candidate "${_torch_lib}" DIRECTORY)
+      if(EXISTS "${_torch_lib_dir_candidate}")
+        set(PLASCAN_TORCH_LIB_DIR "${_torch_lib_dir_candidate}")
+        break()
+      endif()
+    endif()
+  endforeach()
+
+  if(PLASCAN_QT_PLUGINS_DIR AND EXISTS "${PLASCAN_QT_PLUGINS_DIR}/platforms")
+    install(
+      DIRECTORY "${PLASCAN_QT_PLUGINS_DIR}/platforms/"
+      DESTINATION plugins/platforms
+      FILES_MATCHING
+      PATTERN "libq*.so*"
+    )
+  endif()
+
+  if(PLASCAN_QT_PLUGINS_DIR AND EXISTS "${PLASCAN_QT_PLUGINS_DIR}/imageformats")
+    install(
+      DIRECTORY "${PLASCAN_QT_PLUGINS_DIR}/imageformats/"
+      DESTINATION plugins/imageformats
+      FILES_MATCHING
+      PATTERN "libq*.so*"
+    )
+  endif()
+
+  set(PLASCAN_INSTALL_BUNDLE_SCRIPT "${CMAKE_CURRENT_BINARY_DIR}/InstallBundledRuntime.cmake")
+  configure_file(
+    "${CMAKE_CURRENT_SOURCE_DIR}/packaging/InstallBundledRuntime.cmake.in"
+    "${PLASCAN_INSTALL_BUNDLE_SCRIPT}"
+    @ONLY
+  )
+  install(SCRIPT "${PLASCAN_INSTALL_BUNDLE_SCRIPT}")
+endif()
+
+message(STATUS "plascan_gui configuration complete")

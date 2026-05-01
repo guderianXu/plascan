@@ -1,0 +1,301 @@
+# Auto-generated at configure time. Runs during `cmake --install` / CPack staging.
+
+set(_prefix "${CMAKE_INSTALL_PREFIX}")
+if(DEFINED ENV{DESTDIR} AND NOT "$ENV{DESTDIR}" STREQUAL "")
+    set(_destdir "$ENV{DESTDIR}")
+    string(LENGTH "${_destdir}" _destdir_len)
+    string(SUBSTRING "${_prefix}" 0 ${_destdir_len} _prefix_head)
+    if(_prefix_head STREQUAL "${_destdir}")
+        string(SUBSTRING "${_prefix}" ${_destdir_len} -1 _prefix_tail)
+        if(_prefix_tail STREQUAL "")
+            set(_prefix "/")
+        else()
+            set(_prefix "${_prefix_tail}")
+        endif()
+    endif()
+endif()
+message(STATUS "[bundle] CMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}")
+message(STATUS "[bundle] ENV{DESTDIR}=$ENV{DESTDIR}")
+message(STATUS "[bundle] normalized _prefix=${_prefix}")
+set(_app_bin "@CMAKE_BINARY_DIR@/bin/plascan_gui.bin")
+set(_lib_dir "${_prefix}/lib")
+set(_plugin_root "${_prefix}/plugins")
+set(_torch_lib_dir "@PLASCAN_TORCH_LIB_DIR@")
+
+if(NOT EXISTS "${_app_bin}")
+    message(WARNING "[bundle] App binary not found at install time: ${_app_bin}")
+    return()
+endif()
+
+file(MAKE_DIRECTORY "${_lib_dir}")
+file(MAKE_DIRECTORY "${_plugin_root}/platforms")
+file(MAKE_DIRECTORY "${_plugin_root}/imageformats")
+
+if(EXISTS "@PLASCAN_CONDA_PREFIX@/lib")
+    file(GLOB _qt_runtime_libs "@PLASCAN_CONDA_PREFIX@/lib/libQt6*.so*")
+    foreach(_qt_lib IN LISTS _qt_runtime_libs)
+        if(EXISTS "${_qt_lib}")
+            file(INSTALL DESTINATION "${_lib_dir}" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_qt_lib}")
+        endif()
+    endforeach()
+
+    file(GLOB _cpp_runtime_libs
+        "@PLASCAN_CONDA_PREFIX@/lib/libstdc++.so*"
+        "@PLASCAN_CONDA_PREFIX@/lib/libgcc_s.so*"
+    )
+    foreach(_cpp_lib IN LISTS _cpp_runtime_libs)
+        if(EXISTS "${_cpp_lib}")
+            file(INSTALL DESTINATION "${_lib_dir}" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_cpp_lib}")
+        endif()
+    endforeach()
+endif()
+
+function(_plascan_copy_resolved_deps)
+    foreach(_dep IN LISTS ARGN)
+        if(NOT EXISTS "${_dep}")
+            continue()
+        endif()
+        if(_dep MATCHES "/ld-linux[^/]*[.]so")
+            continue()
+        endif()
+        if(_dep MATCHES "/lib(c|m|pthread|rt|dl|resolv|util|nsl|anl)[.]so([.].*)?$")
+            continue()
+        endif()
+
+        get_filename_component(_dep_name "${_dep}" NAME)
+        set(_preferred_dep "${_dep}")
+        if(EXISTS "@PLASCAN_CONDA_PREFIX@/lib/${_dep_name}")
+            set(_preferred_dep "@PLASCAN_CONDA_PREFIX@/lib/${_dep_name}")
+        elseif(EXISTS "${_torch_lib_dir}/${_dep_name}")
+            set(_preferred_dep "${_torch_lib_dir}/${_dep_name}")
+        elseif(_dep MATCHES "^${_lib_dir}/")
+            set(_preferred_dep "${_dep}")
+        elseif(_dep MATCHES "^@PLASCAN_CONDA_PREFIX@/")
+            set(_preferred_dep "${_dep}")
+        elseif(_dep MATCHES "^${_torch_lib_dir}/")
+            set(_preferred_dep "${_dep}")
+        else()
+            message(STATUS "[bundle] skip non-conda dependency: ${_dep}")
+            continue()
+        endif()
+
+        file(INSTALL DESTINATION "${_lib_dir}" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_preferred_dep}")
+    endforeach()
+endfunction()
+
+function(_plascan_bundle_glob_patterns)
+    foreach(_pattern IN LISTS ARGN)
+        file(GLOB _matches "${_pattern}")
+        foreach(_lib_file IN LISTS _matches)
+            if(EXISTS "${_lib_file}")
+                file(INSTALL DESTINATION "${_lib_dir}" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_lib_file}")
+            endif()
+        endforeach()
+    endforeach()
+endfunction()
+
+function(_plascan_copy_missing_deps_by_ldd _target_bin)
+    if(NOT EXISTS "${_target_bin}")
+        return()
+    endif()
+
+    set(_search_dirs
+        "${_lib_dir}"
+        "@PLASCAN_CONDA_PREFIX@/lib"
+        "${_torch_lib_dir}"
+    )
+
+    set(_max_passes 6)
+    foreach(_pass RANGE 1 ${_max_passes})
+        execute_process(
+            COMMAND /usr/bin/env "LD_LIBRARY_PATH=${_lib_dir}:@PLASCAN_CONDA_PREFIX@/lib:${_torch_lib_dir}"
+                    ldd "${_target_bin}"
+            OUTPUT_VARIABLE _ldd_out
+            ERROR_VARIABLE _ldd_err
+            RESULT_VARIABLE _ldd_rc
+            OUTPUT_STRIP_TRAILING_WHITESPACE
+        )
+
+        if(NOT _ldd_rc EQUAL 0)
+            message(STATUS "[bundle] ldd returned ${_ldd_rc} for ${_target_bin}: ${_ldd_err}")
+        endif()
+
+        string(REGEX MATCHALL "[A-Za-z0-9_.+-]+[.]so([.][A-Za-z0-9_.+-]+)* => not found" _missing_lines "${_ldd_out}")
+        if(NOT _missing_lines)
+            break()
+        endif()
+
+        set(_copied_this_pass FALSE)
+        foreach(_line IN LISTS _missing_lines)
+            string(REGEX REPLACE " => not found$" "" _missing_soname "${_line}")
+            set(_found_path "")
+
+            foreach(_dir IN LISTS _search_dirs)
+                if(_dir STREQUAL "")
+                    continue()
+                endif()
+                if(EXISTS "${_dir}/${_missing_soname}")
+                    set(_found_path "${_dir}/${_missing_soname}")
+                    break()
+                endif()
+            endforeach()
+
+            if(NOT _found_path)
+                foreach(_dir IN LISTS _search_dirs)
+                    if(_dir STREQUAL "")
+                        continue()
+                    endif()
+                    file(GLOB _fallback_candidates "${_dir}/${_missing_soname}*")
+                    list(LENGTH _fallback_candidates _fallback_count)
+                    if(_fallback_count GREATER 0)
+                        list(GET _fallback_candidates 0 _found_path)
+                        break()
+                    endif()
+                endforeach()
+            endif()
+
+            if(NOT _found_path)
+                string(REGEX REPLACE "[.]so([.].*)?$" "" _stem_base "${_missing_soname}")
+                string(REGEX REPLACE "-[0-9][0-9.]*$" "" _stem_no_suffix "${_stem_base}")
+                set(_fallback_patterns "${_stem_base}.so*")
+                if(NOT _stem_no_suffix STREQUAL "${_stem_base}")
+                    list(APPEND _fallback_patterns "${_stem_no_suffix}.so*")
+                endif()
+
+                foreach(_dir IN LISTS _search_dirs)
+                    if(_dir STREQUAL "")
+                        continue()
+                    endif()
+                    foreach(_pat IN LISTS _fallback_patterns)
+                        file(GLOB _fallback_candidates "${_dir}/${_pat}")
+                        list(LENGTH _fallback_candidates _fallback_count)
+                        if(_fallback_count GREATER 0)
+                            list(GET _fallback_candidates 0 _found_path)
+                            break()
+                        endif()
+                    endforeach()
+                    if(_found_path)
+                        break()
+                    endif()
+                endforeach()
+            endif()
+
+            if(_found_path AND EXISTS "${_found_path}")
+                file(INSTALL DESTINATION "${_lib_dir}" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_found_path}")
+                set(_copied_this_pass TRUE)
+            endif()
+        endforeach()
+
+        if(NOT _copied_this_pass)
+            break()
+        endif()
+    endforeach()
+endfunction()
+
+file(GET_RUNTIME_DEPENDENCIES
+    EXECUTABLES "${_app_bin}"
+    RESOLVED_DEPENDENCIES_VAR _app_deps
+    UNRESOLVED_DEPENDENCIES_VAR _app_unresolved
+    CONFLICTING_DEPENDENCIES_PREFIX _app_conflict
+    PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+    POST_EXCLUDE_REGEXES ".*/ld-linux-.*" ".*/linux-vdso[.]so.*"
+)
+
+_plascan_copy_resolved_deps(${_app_deps})
+
+if(DEFINED _app_conflict_FILENAMES)
+    foreach(_dep_name IN LISTS _app_conflict_FILENAMES)
+        set(_selected_dep "")
+        foreach(_candidate_dep IN LISTS _app_conflict_${_dep_name})
+            if(_candidate_dep MATCHES "^@PLASCAN_CONDA_PREFIX@/")
+                set(_selected_dep "${_candidate_dep}")
+                break()
+            endif()
+        endforeach()
+        if(NOT _selected_dep)
+            foreach(_candidate_dep IN LISTS _app_conflict_${_dep_name})
+                if(_candidate_dep MATCHES "^${_torch_lib_dir}/")
+                    set(_selected_dep "${_candidate_dep}")
+                    break()
+                endif()
+            endforeach()
+        endif()
+        if(_selected_dep)
+            _plascan_copy_resolved_deps("${_selected_dep}")
+        else()
+            message(STATUS "[bundle] unresolved conflict dependency not in conda/torch: ${_dep_name}")
+        endif()
+    endforeach()
+endif()
+
+if(_app_unresolved)
+    message(STATUS "[bundle] unresolved app deps (kept as system-provided): ${_app_unresolved}")
+endif()
+
+_plascan_copy_missing_deps_by_ldd("${_app_bin}")
+
+set(_qt_plugins_dir "@PLASCAN_QT_PLUGINS_DIR@")
+if(EXISTS "${_qt_plugins_dir}")
+    file(GLOB _platform_plugins "${_qt_plugins_dir}/platforms/libq*.so*")
+    foreach(_plugin IN LISTS _platform_plugins)
+        file(INSTALL DESTINATION "${_plugin_root}/platforms" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_plugin}")
+    endforeach()
+
+    file(GLOB _image_plugins "${_qt_plugins_dir}/imageformats/libq*.so*")
+    foreach(_plugin IN LISTS _image_plugins)
+        file(INSTALL DESTINATION "${_plugin_root}/imageformats" TYPE SHARED_LIBRARY FOLLOW_SYMLINK_CHAIN FILES "${_plugin}")
+    endforeach()
+
+    file(GLOB _installed_plugins
+        "${_plugin_root}/platforms/libq*.so*"
+        "${_plugin_root}/imageformats/libq*.so*"
+    )
+
+    foreach(_plugin IN LISTS _installed_plugins)
+        if(NOT EXISTS "${_plugin}")
+            continue()
+        endif()
+        file(GET_RUNTIME_DEPENDENCIES
+            LIBRARIES "${_plugin}"
+            RESOLVED_DEPENDENCIES_VAR _plugin_deps
+            UNRESOLVED_DEPENDENCIES_VAR _plugin_unresolved
+            CONFLICTING_DEPENDENCIES_PREFIX _plugin_conflict
+            PRE_EXCLUDE_REGEXES "api-ms-.*" "ext-ms-.*"
+            POST_EXCLUDE_REGEXES ".*/ld-linux-.*" ".*/linux-vdso[.]so.*"
+        )
+        _plascan_copy_resolved_deps(${_plugin_deps})
+        if(DEFINED _plugin_conflict_FILENAMES)
+            foreach(_plugin_dep_name IN LISTS _plugin_conflict_FILENAMES)
+                set(_selected_plugin_dep "")
+                foreach(_plugin_candidate_dep IN LISTS _plugin_conflict_${_plugin_dep_name})
+                    if(_plugin_candidate_dep MATCHES "^@PLASCAN_CONDA_PREFIX@/")
+                        set(_selected_plugin_dep "${_plugin_candidate_dep}")
+                        break()
+                    endif()
+                endforeach()
+                if(NOT _selected_plugin_dep)
+                    foreach(_plugin_candidate_dep IN LISTS _plugin_conflict_${_plugin_dep_name})
+                        if(_plugin_candidate_dep MATCHES "^${_torch_lib_dir}/")
+                            set(_selected_plugin_dep "${_plugin_candidate_dep}")
+                            break()
+                        endif()
+                    endforeach()
+                endif()
+                if(_selected_plugin_dep)
+                    _plascan_copy_resolved_deps("${_selected_plugin_dep}")
+                else()
+                    message(STATUS "[bundle] unresolved plugin conflict dependency not in conda/torch: ${_plugin_dep_name}")
+                endif()
+            endforeach()
+        endif()
+        if(_plugin_unresolved)
+            message(STATUS "[bundle] unresolved plugin deps for ${_plugin}: ${_plugin_unresolved}")
+        endif()
+
+        _plascan_copy_missing_deps_by_ldd("${_plugin}")
+    endforeach()
+else()
+    message(WARNING "[bundle] Qt plugins directory not found: ${_qt_plugins_dir}")
+endif()
+
+message(STATUS "[bundle] Runtime bundling finished: ${_prefix}")

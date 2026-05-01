@@ -1,0 +1,14 @@
+build/
+build_test/
+build_new/
+*.o
+*.so
+*.a
+*.pyc
+__pycache__/
+.cache/
+*.swp
+*.swo
+*~
+.DS_Store
+data/
