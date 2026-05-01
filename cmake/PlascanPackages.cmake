@@ -17,33 +17,37 @@ message(STATUS "plascan: found Qt6 ${Qt6_VERSION}")
 find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs)
 message(STATUS "plascan: found OpenCV ${OpenCV_VERSION}")
 
-# ── LibTorch ──────────────────────────────────────────────────────────────────
-# 预先设置 CUDA 架构，避免 PyTorch 的自动检测失败
-# 如果用户通过 -DPLASCAN_CUDA_ARCHITECTURES 指定了架构，使用用户指定的值
-# 否则使用默认值（支持 RTX 20/30/40 系列：75=Turing, 86=Ampere, 89=Ada）
-if(NOT DEFINED PLASCAN_CUDA_ARCHITECTURES)
-  set(PLASCAN_CUDA_ARCHITECTURES "75;86;89" CACHE STRING "Target CUDA architectures")
+# ── 平台检测 ──────────────────────────────────────────────────────────────────
+set(PLASCAN_APPLE_SILICON OFF)
+set(PLASCAN_CUDA_AVAILABLE OFF)
+if(APPLE AND CMAKE_SYSTEM_PROCESSOR MATCHES "arm64|aarch64")
+  set(PLASCAN_APPLE_SILICON ON)
+  message(STATUS "plascan: Apple Silicon (M-series) detected — CUDA disabled, MPS used via PyTorch")
 endif()
 
-# 设置 CMAKE_CUDA_ARCHITECTURES，让 PyTorch 跳过自动检测
-set(CMAKE_CUDA_ARCHITECTURES ${PLASCAN_CUDA_ARCHITECTURES})
-message(STATUS "plascan: CUDA architectures set to ${CMAKE_CUDA_ARCHITECTURES}")
+# ── LibTorch ──────────────────────────────────────────────────────────────────
+if(NOT PLASCAN_APPLE_SILICON)
+  # CUDA 架构 (仅 Linux/Windows NVIDIA GPU)
+  if(NOT DEFINED PLASCAN_CUDA_ARCHITECTURES)
+    set(PLASCAN_CUDA_ARCHITECTURES "75;86;89" CACHE STRING "Target CUDA architectures")
+  endif()
+  set(CMAKE_CUDA_ARCHITECTURES ${PLASCAN_CUDA_ARCHITECTURES})
+  message(STATUS "plascan: CUDA architectures set to ${CMAKE_CUDA_ARCHITECTURES}")
+else()
+  message(STATUS "plascan: Apple Silicon — skipping CUDA, using MPS acceleration")
+endif()
 
-# 如果在 conda 环境中，使用系统链接器而不是 conda 的链接器
-# 这可以避免 conda ld 与系统 glibc 不兼容的问题
-if(DEFINED ENV{CONDA_PREFIX})
-  # 保存原始的 CMAKE_LINKER
+# conda linker fix (Linux only)
+if(DEFINED ENV{CONDA_PREFIX} AND NOT APPLE)
   set(PLASCAN_ORIGINAL_CMAKE_LINKER ${CMAKE_LINKER})
-  # 使用系统链接器
   set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "System linker" FORCE)
-  message(STATUS "plascan: Using system linker to avoid conda ld/glibc conflicts")
+  message(STATUS "plascan: Using system linker")
 endif()
 
 find_package(Torch REQUIRED)
 message(STATUS "plascan: found LibTorch")
 
-# 恢复原始的链接器设置
-if(DEFINED PLASCAN_ORIGINAL_CMAKE_LINKER)
+if(DEFINED PLASCAN_ORIGINAL_CMAKE_LINKER AND NOT APPLE)
   set(CMAKE_LINKER ${PLASCAN_ORIGINAL_CMAKE_LINKER} CACHE FILEPATH "Linker" FORCE)
 endif()
 
@@ -77,11 +81,28 @@ endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
 # ── OpenMP ────────────────────────────────────────────────────────────────────
-find_package(OpenMP QUIET)
+if(PLASCAN_APPLE_SILICON)
+  # macOS 不自带 OpenMP, 尝试 Homebrew libomp
+  find_package(OpenMP QUIET)
+  if(NOT OpenMP_CXX_FOUND)
+    execute_process(COMMAND brew --prefix libomp OUTPUT_VARIABLE LIBOMP_PREFIX ERROR_QUIET OUTPUT_STRIP_TRAILING_WHITESPACE)
+    if(LIBOMP_PREFIX)
+      set(OpenMP_CXX_FLAGS "-Xpreprocessor -fopenmp -I${LIBOMP_PREFIX}/include")
+      set(OpenMP_CXX_LIB_NAMES omp)
+      set(OpenMP_omp_LIBRARY ${LIBOMP_PREFIX}/lib/libomp.dylib)
+      set(OpenMP_CXX_FOUND TRUE)
+      message(STATUS "plascan: found OpenMP via Homebrew (${LIBOMP_PREFIX})")
+    else()
+      message(STATUS "plascan: OpenMP not found, install: brew install libomp")
+    endif()
+  endif()
+else()
+  find_package(OpenMP QUIET)
+endif()
 if(OpenMP_CXX_FOUND)
   message(STATUS "plascan: found OpenMP ${OpenMP_CXX_VERSION}")
 else()
-  message(STATUS "plascan: OpenMP not found, parallel modules will use single-thread fallback")
+  message(STATUS "plascan: OpenMP not found, single-thread fallback")
 endif()
 
 # ── GTest ─────────────────────────────────────────────────────────────────────
