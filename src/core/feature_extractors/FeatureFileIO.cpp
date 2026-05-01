@@ -6,6 +6,8 @@
 #include <torch/torch.h>
 
 #include "FeatureFileIO.h"
+#include <QFile>
+#include <QDataStream>
 #include <QDebug>
 #include <cstring>
 
@@ -169,7 +171,7 @@ std::string FeatureFileIO::peekAlgorithm(const QString& path)
     return ALGO_FOR_MAGIC(magic);
 }
 
-int FeatureFileIO::peekKeypointCount(const QString& path)
+int FeatureFileIO::peekCount(const QString& path)
 {
     QFile file(path);
     if (!file.open(QIODevice::ReadOnly)) return -1;
