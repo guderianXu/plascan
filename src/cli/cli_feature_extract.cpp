@@ -45,7 +45,7 @@ int main(int argc, char *argv[])
     CLI::App app{"PlaScan 统一特征提取 — SuperPoint | SIFT | ORB | AKAZE | DISK | ALIKED"};
 
     std::string algo = "superpoint";
-    app.add_option("-a,--algorithm", algo, "算法: superpoint, sift, orb, akaze, disk, aliked");
+    app.add_option("-a,--algorithm", algo, "算法: superpoint, sift, orb, akaze, surf, disk, aliked");
 
     std::string modelPath, imgPath, outPath;
     app.add_option("-m,--model", modelPath, "模型路径 (.pt, SuperPoint 必填)");

@@ -4,6 +4,7 @@
 
 #include <torch/torch.h>
 
+#include <opencv2/xfeatures2d.hpp>
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -68,7 +69,8 @@ std::string TraditionalFeatureExtractor::normalizeAlgorithmName(const std::strin
                    });
 
     if (normalized == "orb" || normalized == "sift" || normalized == "superpoint"
-        || normalized == "disk" || normalized == "aliked")
+        || normalized == "disk" || normalized == "aliked"
+        || normalized == "surf")
     {
         return normalized;
     }
@@ -77,7 +79,7 @@ std::string TraditionalFeatureExtractor::normalizeAlgorithmName(const std::strin
 
 bool TraditionalFeatureExtractor::isTraditionalAlgorithm(const std::string &normalizedName)
 {
-    return normalizedName == "orb" || normalizedName == "sift";
+    return normalizedName == "orb" || normalizedName == "sift" || normalizedName == "surf";
 }
 
 FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
@@ -106,6 +108,13 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
     {
         cv::Ptr<cv::SIFT> sift = cv::SIFT::create(maxKpForDetector > 0 ? maxKpForDetector : 0);
         sift->detectAndCompute(grayImage, cv::noArray(), keypoints, descriptors, false);
+    }
+    else if (normalizedName == "surf")
+    {
+        // SURF (GPU via CUDA if available, else CPU)
+        // hessianThreshold: 越大关键点越少 (默认 100, 卫星影像推荐 400-800)
+        auto surf = cv::xfeatures2d::SURF::create(400.0, 4, 3, false, false);
+        surf->detectAndCompute(grayImage, cv::noArray(), keypoints, descriptors, false);
     }
     else
     {
