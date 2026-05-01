@@ -15,6 +15,9 @@ if(DEFINED CMAKE_CUDA_ARCHITECTURES)
   unset(CMAKE_CUDA_ARCHITECTURES CACHE)
 endif()
 
+# 统一使用 C++11 ABI (与 conda 环境中的 OpenCV/GTest 保持一致)
+add_compile_definitions(_GLIBCXX_USE_CXX11_ABI=1)
+
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
   enable_testing()

@@ -26,6 +26,7 @@ if(BUILD_TESTS)
             ${OpenCV_LIBS}
             ${TORCH_LIBRARIES}
         )
+        target_compile_definitions(test_aliked_unit PRIVATE _GLIBCXX_USE_CXX11_ABI=1)
         target_include_directories(test_aliked_unit PRIVATE
             ${CMAKE_CURRENT_SOURCE_DIR}
             ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
