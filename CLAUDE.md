@@ -13,6 +13,13 @@
 - **每次 commit 后必须 push 到 GitHub**：`git push origin main`（含 tags: `git push origin <tag>`）
 - 仓库地址：`https://github.com/guderianXu/plascan`
 
+# 编译验证
+- **每次修改代码后必须在 build 目录编译验证**：
+  ```bash
+  cd build && cmake .. -DBUILD_TESTS=ON && cmake --build . -j$(nproc)
+  ```
+- 编译失败不能提交；编译警告需评估
+
 # 开发流程 (Feature Branch + TDD)
 
 **分支策略**：
