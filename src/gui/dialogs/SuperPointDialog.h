@@ -15,6 +15,7 @@ class QSpinBox;
 class QDoubleSpinBox;
 class QCheckBox;
 class QGroupBox;
+class QStackedWidget;
 
 namespace Ui { class SuperPointDialog; }
 
@@ -103,4 +104,15 @@ private:
     QPushButton*      m_runBtn{nullptr};
     QPushButton*      m_cancelBtn{nullptr};
     QPushButton*      m_resetBtn{nullptr};
+
+    // ── 多算法参数切换 ──
+    QStackedWidget*   m_paramStack{nullptr};
+    QLineEdit*        m_modelPathEdit{nullptr};    // DL 算法模型路径 (共享)
+    QCheckBox*        m_useCudaChk{nullptr};       // CUDA 开关 (共享)
+    QSpinBox*         m_cudaDeviceSpin{nullptr};   // CUDA 设备ID (共享)
+    // 简单算法页控件
+    QSpinBox*         m_simpleMaxKpSpin{nullptr};  // SIFT/ORB 最大特征数
+    QSpinBox*         m_diskMaxKpSpin{nullptr};    // DISK 最大KP
+    QDoubleSpinBox*   m_diskScoreThreshSpin{nullptr};
+    QSpinBox*         m_alikedMaxKpSpin{nullptr};
 };

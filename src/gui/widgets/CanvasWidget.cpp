@@ -441,19 +441,19 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([this, imagePathCopy]() -> std::vector<cv::KeyPoint> {
         std::vector<cv::KeyPoint> empty;
         const QString projectPath = property("currentProjectPath").toString();
-        const QString spFile = ProjectIO::findSpForImage(projectPath, imagePathCopy);
-        LOG_DEBUG(QStringLiteral("startSpLoadForImage: projectPath=%1 image=%2 spCandidate=%3").arg(projectPath, imagePathCopy, spFile));
+        const QString spFile = ProjectIO::findFeatureForImage(projectPath, imagePathCopy);
+        LOG_DEBUG(QStringLiteral("startSpLoadForImage: projectPath=%1 image=%2 feature=%3").arg(projectPath, imagePathCopy, spFile));
 
         if (spFile.isEmpty()) {
-            LOG_DEBUG(QStringLiteral("startSpLoadForImage: no .sp found for %1").arg(imagePathCopy));
+            LOG_DEBUG(QStringLiteral("startSpLoadForImage: no feature file found for %1").arg(imagePathCopy));
             return empty;
         }
 
-        // 使用 FeatureFileIO 读取 SuperPoint 输出
+        // 读取特征文件 (支持所有提取器类型)
         QString imageName;
         FeatureOutput output;
         if (!FeatureFileIO::read(spFile, imageName, output)) {
-            LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read .sp file %1").arg(spFile));
+            LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read feature file %1").arg(spFile));
             return empty;
         }
 
@@ -544,7 +544,7 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
 
     // 直接在主线程同步读取 .sp 并更新显示，确保 UI 立刻反映新结果
     const QString projectPath = property("currentProjectPath").toString();
-    const QString spFile = ProjectIO::findSpForImage(projectPath, imagePath);
+    const QString spFile = ProjectIO::findFeatureForImage(projectPath, imagePath);
     if (spFile.isEmpty()) {
         LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no .sp found for %1").arg(imagePath));
         // 仅在当前显示影像时清除场景中的兴趣点，避免覆盖用户正在看的其它影像

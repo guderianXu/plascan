@@ -62,6 +62,8 @@ public:
     // 在多个候选目录中查找指定影像对应的 .sp 特征点文件
     // 返回第一个存在的文件路径；若均不存在则返回空字符串
     static QString findSpForImage(const QString &plascanPath, const QString &imagePath);
+    // 查找任意提取器的特征文件 (尝试 .sp/.dsk/.alk/.sift/.orb/.akz)
+    static QString findFeatureForImage(const QString &plascanPath, const QString &imagePath);
 
 private:
     // 生成 .sp 文件的候选路径列表（优先检查临时目录，其次标准目录，再次影像同目录）
