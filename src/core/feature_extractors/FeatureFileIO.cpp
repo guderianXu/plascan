@@ -2,7 +2,7 @@
 // 文件: FeatureFileIO.cpp
 // 功能: 多提取器二进制特征文件 I/O (支持 SPBT/DSKB/ALKB/SFTB/ORBB/AKZB)
 // =============================================================================
-#include "SuperPoint.h"
+#include "FeatureOutput.h"
 #include <torch/torch.h>
 
 #include "FeatureFileIO.h"
