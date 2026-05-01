@@ -36,13 +36,14 @@ set(SUPERPOINT_SOURCES
     SuperPoint.h
 )
 if (QT_LIBS)
-    list(APPEND SUPERPOINT_SOURCES QFileBinaryIO.cpp QFileBinaryIO.h)
+    list(APPEND SUPERPOINT_SOURCES ../FeatureFileIO.cpp ../FeatureFileIO.h)
 endif()
 
 add_library(superpoint SHARED ${SUPERPOINT_SOURCES})
 
 target_include_directories(superpoint
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
+           $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>
            $<INSTALL_INTERFACE:include>
 )
 

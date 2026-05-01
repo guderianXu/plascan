@@ -10,7 +10,8 @@
 #include <string>
 #include <vector>
 
-struct FeatureOutput;
+#include "FeatureOutput.h"
+#include "IExtractor.h"
 
 namespace xjw::feature_extractors
 {
