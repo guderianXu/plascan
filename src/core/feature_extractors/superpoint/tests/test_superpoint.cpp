@@ -13,32 +13,13 @@ namespace
 
 std::string findModelPath()
 {
-    // 从不同 CWD 回退到项目根, 优先真实 CPU 模型
     std::vector<std::string> candidates = {
         "../resources/models/superpoint_extractor_cpu.pt",
-        "../resources/models/superpoint_v6_cpu.pt",
-        "../resources/models/superpoint_extractor.pt",
-        "../resources/models/superpoint_test.pt",
         "../../resources/models/superpoint_extractor_cpu.pt",
-        "../../resources/models/superpoint_v6_cpu.pt",
-        "../../resources/models/superpoint_extractor.pt",
-        "../../resources/models/superpoint_test.pt",
         "../../../resources/models/superpoint_extractor_cpu.pt",
-        "../../../resources/models/superpoint_v6_cpu.pt",
-        "../../../resources/models/superpoint_extractor.pt",
-        "../../../resources/models/superpoint_test.pt",
         "../../../../resources/models/superpoint_extractor_cpu.pt",
-        "../../../../resources/models/superpoint_v6_cpu.pt",
-        "../../../../resources/models/superpoint_extractor.pt",
-        "../../../../resources/models/superpoint_test.pt",
         "../../../../../resources/models/superpoint_extractor_cpu.pt",
-        "../../../../../resources/models/superpoint_v6_cpu.pt",
-        "../../../../../resources/models/superpoint_extractor.pt",
-        "../../../../../resources/models/superpoint_test.pt",
         "../../../../../../resources/models/superpoint_extractor_cpu.pt",
-        "../../../../../../resources/models/superpoint_v6_cpu.pt",
-        "../../../../../../resources/models/superpoint_extractor.pt",
-        "../../../../../../resources/models/superpoint_test.pt"
     };
     for (const auto &p : candidates)
         if (fs::exists(p)) return p;
@@ -92,7 +73,7 @@ protected:
     void SetUp() override
     {
         modelPath = findModelPath();
-        ASSERT_FALSE(modelPath.empty()) << "未找到 superpoint_v6_cuda.pt，请确认 resources/models/ 目录";
+        ASSERT_FALSE(modelPath.empty()) << "未找到 superpoint_extractor_cpu.pt，运行 scripts/export_superpoint.py 生成";
     }
 
     std::string modelPath;
@@ -185,7 +166,7 @@ TEST_F(SuperPointTest, KeypointBounds)
 // 和 SuperPoint.cpp 的 detect() 提取描述子，对比同一关键点的描述子余弦相似度。
 // 如果采样公式一致，相似度应接近 1.0。
 //
-// 注意：此测试依赖 superpoint_v6_cuda.pt 就是 superpoint_v1_compat 版本，
+// 注意：此测试依赖 superpoint_extractor_cpu.pt（由 scripts/export_superpoint.py 导出），
 // 即已经完成了模型替换。
 // ==============================================================================
 TEST_F(SuperPointTest, SampleDescriptorsConsistency)

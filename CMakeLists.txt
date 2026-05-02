@@ -17,9 +17,22 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
 
+# ── conda/PyTorch 前缀 (所有路径的根) ──
+if(NOT PLASCAN_CONDA_PREFIX)
+  # 优先使用环境变量, 其次检查 targets 目录验证是真正的 conda env
+  set(_p "$ENV{CONDA_PREFIX}")
+  if(_p AND EXISTS "${_p}/targets/x86_64-linux/include")
+    set(PLASCAN_CONDA_PREFIX "${_p}")
+  else()
+    set(PLASCAN_CONDA_PREFIX "$ENV{HOME}/anaconda3/envs/plascan")
+  endif()
+  set(PLASCAN_CONDA_PREFIX "${PLASCAN_CONDA_PREFIX}" CACHE PATH "Conda environment prefix")
+endif()
+message(STATUS "plascan: CONDA_PREFIX = ${PLASCAN_CONDA_PREFIX}")
+
 # 全局启用 CUDA (各子模块不需要单独 enable_language)
 # conda nvcc 不在默认 PATH 中, 显式指定路径
-set(PLASCAN_CONDA_NVCC "$ENV{HOME}/anaconda3/envs/plascan/bin/nvcc")
+set(PLASCAN_CONDA_NVCC "${PLASCAN_CONDA_PREFIX}/bin/nvcc")
 if(NOT DEFINED CMAKE_CUDA_COMPILER OR NOT CMAKE_CUDA_COMPILER)
   if(EXISTS "${PLASCAN_CONDA_NVCC}")
     set(CMAKE_CUDA_COMPILER "${PLASCAN_CONDA_NVCC}" CACHE FILEPATH "CUDA compiler")
@@ -56,8 +69,17 @@ message(STATUS "plascan: C++11 ABI enabled")
 
 # CUDA runtime + toolkit 头文件 (pip nvidia 包, 非标准路径)
 # targets 必须在 cu13 之前, 否则 nvcc 13.1 会找到 cu13 的 13.0 版 cuda_runtime_api.h
-include_directories("$ENV{HOME}/anaconda3/envs/plascan/targets/x86_64-linux/include")
-include_directories("$ENV{HOME}/anaconda3/envs/plascan/lib/python3.12/site-packages/nvidia/cu13/include")
+include_directories("${PLASCAN_CONDA_PREFIX}/targets/x86_64-linux/include")
+
+# cu13 Python site-packages 路径 (GLOB 兼容不同 Python 版本)
+file(GLOB _plascan_cu13_dirs LIST_DIRECTORIES true
+  "${PLASCAN_CONDA_PREFIX}/lib/python3.*/site-packages/nvidia/cu13/include")
+if(_plascan_cu13_dirs)
+  list(GET _plascan_cu13_dirs 0 _plascan_cu13_include)
+  include_directories("${_plascan_cu13_include}")
+else()
+  message(WARNING "plascan: nvidia/cu13/include not found")
+endif()
 
 option(BUILD_TESTS "Build unit tests" ON)
 if(BUILD_TESTS)
@@ -73,13 +95,6 @@ include(PlascanPackages)
 # 典型问题：libnvrtc.so 能加载，但 dlopen("libnvrtc-builtins.so.*") 在默认搜索路径中找不到。
 set(PLASCAN_EXTRA_NVRTC_RPATHS "")
 set(_plascan_runtime_prefix "${PLASCAN_CONDA_PREFIX}")
-if(NOT _plascan_runtime_prefix OR NOT EXISTS "${_plascan_runtime_prefix}")
-  # 回退: 先尝试 plascan conda env, 再尝试 base env
-  set(_plascan_runtime_prefix "$ENV{HOME}/anaconda3/envs/plascan")
-endif()
-if(NOT EXISTS "${_plascan_runtime_prefix}" AND DEFINED ENV{CONDA_PREFIX})
-  set(_plascan_runtime_prefix "$ENV{CONDA_PREFIX}")
-endif()
 
 if(_plascan_runtime_prefix AND EXISTS "${_plascan_runtime_prefix}")
   set(_plascan_nvrtc_candidates

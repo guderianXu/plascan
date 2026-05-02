@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-04-30。
+行星表面摄影测量处理系统。最后更新: 2026-05-02。
 
 ## 顶层目录
 
@@ -72,24 +72,38 @@ core/
 │   ├── PositiveDepthCameraModel.h/cpp  # 正深度约束相机
 │   └── Camera_tests.cpp
 │
-├── feature_extractors/         # 特征点检测
-│   ├── FeatureData.h/cpp       # 特征点数据容器
-│   ├── superpoint/
-│   │   ├── SuperPoint.h/cpp    # SuperPoint 网络推理
-│   │   ├── QFileBinaryIO.h/cpp # 特征二进制 I/O
+├── feature_extractors/         # 特征点检测 (8 种算法)
+│   ├── IExtractor.h             # 提取器虚接口
+│   ├── ExtractorFactory.h/cpp   # 工厂: 根据算法名创建提取器
+│   ├── FeatureOutput.h          # 通用特征输出结构 (所有提取器共用)
+│   ├── FeatureFileIO.h/cpp      # 特征二进制 I/O (8 种文件后缀, magic bytes)
+│   ├── FeatureData.h/cpp        # 特征数据容器 (fromFeatureOutput, 推荐匹配器)
+│   ├── superpoint/              # SuperPoint (256d, GPU/CPU)
+│   │   ├── SuperPoint.h/cpp     # TorchScript 推理
 │   │   └── tests/
-│   └── tradition/
-│       ├── TraditionalFeatureExtractor.h/cpp  # SIFT/ORB 等传统算法
-│       └── test_*.cpp
+│   ├── disk/                    # DISK (128d, GPU/CPU)
+│   │   ├── DiskExtractor.h/cpp  # TorchScript 推理
+│   │   └── tests/
+│   ├── aliked/                  # ALIKED (128d, GPU/CPU)
+│   │   ├── AlikedExtractor.h/cpp # TorchScript 推理
+│   │   └── tests/
+│   ├── tradition/               # 传统算法 (SIFT/SURF/ORB/AKAZE, CPU)
+│   │   ├── TraditionalFeatureExtractor.h/cpp
+│   │   └── test_*.cpp
+│   ├── loftr/                   # LoFTR (Python 子进程)
+│   └── dedode/                  # DeDoDe (Python 子进程)
 │
-├── feature_match/              # 特征点匹配
-│   ├── match.h/cpp             # 通用匹配接口
+├── feature_match/              # 特征点匹配 (7 种算法)
+│   ├── IMatcher.h              # 匹配器虚接口
+│   ├── MatcherFactory.h/cpp    # 工厂 (独立库 feature_match_factory)
+│   ├── match.h/cpp             # 通用匹配结果结构
 │   ├── superglue/
 │   │   ├── SuperGlueMatcher.h/cpp      # SuperGlue 推理
 │   │   ├── MatchOutlierRejector.h/cpp  # 粗差剔除
 │   │   └── SuperGlueMatchIO.h/cpp      # .match 文件 I/O
 │   ├── lightglue/
 │   │   └── LightGlueMatcher.h/cpp      # LightGlue 推理
+│   ├── loftr/                  # LoFTR 匹配器
 │   └── tradition/
 │       └── TraditionalFeatureMatcher.h/cpp  # BFMatcher/FLANN
 │
@@ -370,8 +384,8 @@ gui/
 ```
 影像导入
   │
-  ├─ 1. 特征提取 (SuperPoint)           → .sp 文件
-  ├─ 2. 特征匹配 (SuperGlue/LightGlue)  → .match 文件 (稀疏匹配对)
+  ├─ 1. 特征提取 (SuperPoint/DISK/ALIKED/SIFT/...) → .sp/.dsk/.alk/... 文件
+  ├─ 2. 特征匹配 (SuperGlue/LightGlue/BF/FLANN) → .match 文件
   ├─ 3. 空中三角测量 / 增量式 SfM       → 相机位姿 + 稀疏点云
   │     ├─ 构建观测网络
   │     ├─ 初始化相机位姿 (PnP)
@@ -403,8 +417,8 @@ cli/
 ├── CMakeLists.txt            # CLI 统一构建
 ├── cli_common.h              # 公共基础设施 (参数解析, JSON 配置, 退出码)
 ├── cli_dense_match.cpp       # 密集匹配 CLI
-├── cli_feature_extract.cpp   # (待实现) 特征提取 CLI
-├── cli_feature_match.cpp     # (待实现) 特征匹配 CLI
+├── cli_feature_extract.cpp   # 特征提取 CLI (8 种算法, 工厂模式)
+├── cli_feature_match.cpp     # 特征匹配 CLI (工厂模式, 自动检测算法)
 └── tests/                    # CLI 端到端测试脚本
 ```
 
@@ -419,15 +433,17 @@ cli/
 
 ```
 阶段 1: 稀疏重建 (GUI 完成)
-  ├─ 特征提取 (SuperPoint)           → .sp 文件
-  ├─ 特征匹配 (SuperGlue/LightGlue)  → .match 文件
+  ├─ 特征提取 (SuperPoint/DISK/ALIKED/...) → .sp/.dsk/.alk/... 文件
+  ├─ 特征匹配 (SuperGlue/LightGlue/BF/FLANN) → .match 文件
   └─ 光束法平差 / 增量SfM           → 精化相机 + 稀疏点云
      (以上由 SFMService 编排, 暂通过 GUI 调用; sfm_cli 待 headless SFMService)
 
 阶段 2: 密集重建 (CLI 可用)
-  ├─ rectify_cli        极线校正     → 校正影像对 + 单应矩阵 .xml
-  ├─ dense_match_cli    密集匹配     → 视差图 .tif
-  └─ triangulate_cli    视差三角化   → 密集点云 .ply
+  ├─ feature_extract_cli  特征提取    → .sp/.dsk/.alk 等
+  ├─ feature_match_cli    特征匹配    → .match 文件
+  ├─ rectify_cli          极线校正    → 校正影像对 + 单应矩阵 .xml
+  ├─ dense_match_cli      密集匹配    → 视差图 .tif
+  └─ triangulate_cli      视差三角化  → 密集点云 .ply
 ```
 
 **CLI 用法**:
@@ -443,17 +459,19 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 | 问题 | 位置 | 建议 |
 |------|------|------|
-| 多个 GUI 文件超 400 行 | `gui/dialogs/`, `gui/main_window/` | 按职责拆分类/提取 UI 构建 |
-| `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/`, 废弃 mvs 中版本 |
-| MVS 管线使用旧 PatchMatch | `mvs/PatchMatchCUDA.cu` | 逐步替换为 `dense_match` 模块 |
+| 14 个文件超 400 行 | `PointCloudIO.cpp`(1768), `MainWindow.cpp`(1744), 等 | 按职责拆分 |
+| 多个 GUI 文件超 1000 行 | `gui/dialogs/`, `gui/main_window/` | 提取 UI 构建逻辑 |
+| `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
 | SFMService 耦合到 GUI | `core/pipeline/SFMService.cpp` 依赖 `ProjectIO` | 提取 headless SFMService, 启用 sfm_cli |
-| 部分文件超 1000 行 | `MainWindow.cpp`, `IncrementalSfm.cpp` 等 | 拆分为多个文件 |
-| 头文件依赖过重 | 多个地方 | 用前向声明替代 `#include` |
+| 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |
+| ALIKED 导出脚本依赖 lightglue pip 包 | `scripts/export_disk_aliked.py` | 已内联 pure-PyTorch DCN |
+| `export_models.py` DISK/ALIKED 部分废弃 | `scripts/export_models.py` | 移除或更新接口 |
 
-## 五、构建系统
+## 六、构建系统
 
-- **根**: `CMakeLists.txt` → `cmake/PlascanPackages.cmake` (统一 find_package)
-- **Core**: 每个子模块有独立 `CMakeLists.txt`，通过 `plascan_core_add_optional_module()` 可选注册
-- **GUI**: `src/gui/CMakeLists.txt` + `cmake/GuiSources.cmake` (源文件清单) + `cmake/GuiCoreLinking.cmake` (核心库条件链接)
-- **CUDA**: 通过 `check_language(CUDA)` 自动检测，可用时编译 `.cu` 文件并定义 `*_ENABLE_CUDA` 宏
-- **测试**: 通过 `-DBUILD_TESTS=ON` 启用 → Google Test → `gtest_discover_tests`
+- **根**: `CMakeLists.txt` — `PLASCAN_CONDA_PREFIX` 变量 (可覆盖), CUDA 自动查找
+- **依赖**: `cmake/PlascanPackages.cmake` (统一 find_package)
+- **Core**: 每个子模块独立 `CMakeLists.txt`, 通过 `plascan_core_add_optional_module()` 注册
+- **NVRTC**: RPATH 自动配置 conda/pip CUDA 库路径
+- **CUDA**: 全局 `enable_language(CUDA)`, 自动查找 conda nvcc
+- **测试**: `-DBUILD_TESTS=ON` → CTest, 162/162 通过
