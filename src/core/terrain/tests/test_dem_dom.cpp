@@ -25,7 +25,10 @@ class TerrainDemDomTest : public ::testing::Test
 protected:
     void SetUp() override
     {
-        _tempDir = fs::temp_directory_path() / "plascan_terrain_test";
+        // 每个测试用独立临时目录，避免并行时互相删除文件
+        auto testName = ::testing::UnitTest::GetInstance()->current_test_info()->name();
+        _tempDir = fs::temp_directory_path()
+            / ("plascan_terrain_" + std::string(testName));
         std::error_code errorCode;
         fs::remove_all(_tempDir, errorCode);
         fs::create_directories(_tempDir);

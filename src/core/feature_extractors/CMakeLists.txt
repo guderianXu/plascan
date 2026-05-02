@@ -50,3 +50,11 @@ if(EXISTS ${CMAKE_CURRENT_SOURCE_DIR}/aliked/CMakeLists.txt)
   add_subdirectory(aliked)
   message(STATUS "plascan_core: building feature extractor - ALIKED")
 endif()
+
+# ExtractorFactory 引用 DiskExtractor/AlikedExtractor, 链接对应库
+if(TARGET feature_extractors_disk)
+  target_link_libraries(feature_extractors_traditional PUBLIC feature_extractors_disk)
+endif()
+if(TARGET feature_extractors_aliked)
+  target_link_libraries(feature_extractors_traditional PUBLIC feature_extractors_aliked)
+endif()

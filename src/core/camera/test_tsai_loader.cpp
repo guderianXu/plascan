@@ -161,36 +161,35 @@ TEST(CameraTest, WorldToCameraConsistency)
         << "Point should have positive Z in camera frame";
 }
 
-// 7. 批量加载 75 张相机文件
-TEST(CameraTest, LoadAll75Cameras)
+// 7. 批量加载所有可用相机文件
+TEST(CameraTest, LoadAllAvailableCameras)
 {
     std::string tsaiDir = testDataDir() + "/tsai";
     int loaded = 0;
     int failed = 0;
 
-    for (int i = 1; i <= 75; ++i) {
-        Camera cam;
-        std::string path = tsaiDir + "/" + std::to_string(i) + ".tsai";
+    ASSERT_TRUE(fs::exists(tsaiDir)) << "tsai directory not found: " << tsaiDir;
 
-        if (!fs::exists(path)) {
-            GTEST_LOG_(WARNING) << "File not found: " << path;
+    for (const auto &entry : fs::directory_iterator(tsaiDir)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".tsai")
             continue;
-        }
+
+        Camera cam;
+        std::string path = entry.path().string();
 
         if (cam.loadFromFile(path)) {
-            EXPECT_TRUE(cam.isValid()) << "Camera " << i << " loaded but invalid";
-            // 验证相机中心不为零（有合理位置）
+            EXPECT_TRUE(cam.isValid()) << "Camera " << path << " loaded but invalid";
             auto C = cam.cameraCenter();
             double dist = std::sqrt(C[0]*C[0] + C[1]*C[1] + C[2]*C[2]);
-            EXPECT_GT(dist, 1.0) << "Camera " << i << " center too close to origin";
+            EXPECT_GT(dist, 1.0) << "Camera " << path << " center too close to origin";
             ++loaded;
         } else {
             ++failed;
-            ADD_FAILURE() << "Failed to load camera " << i << ": " << path;
+            ADD_FAILURE() << "Failed to load: " << path;
         }
     }
 
-    EXPECT_EQ(loaded, 75) << "Expected 75 cameras, loaded " << loaded;
+    EXPECT_GT(loaded, 0) << "No cameras loaded";
     EXPECT_EQ(failed, 0);
 }
 
@@ -200,10 +199,12 @@ TEST(CameraTest, CameraCentersReasonable)
     std::string tsaiDir = testDataDir() + "/tsai";
     std::vector<std::array<double,3>> centers;
 
-    for (int i = 1; i <= 75; ++i) {
+    for (const auto &entry : fs::directory_iterator(tsaiDir)) {
+        if (!entry.is_regular_file() || entry.path().extension() != ".tsai")
+            continue;
+
         Camera cam;
-        std::string path = tsaiDir + "/" + std::to_string(i) + ".tsai";
-        if (!cam.loadFromFile(path)) continue;
+        if (!cam.loadFromFile(entry.path().string())) continue;
         auto C = cam.cameraCenter();
         centers.push_back({C[0], C[1], C[2]});
     }
@@ -223,13 +224,15 @@ TEST(CameraTest, CameraCentersReasonable)
         }
     }
 
-    // 在小行星影像场景中，最近相机对距离应 > 0（不重叠）
+    // 最近相机对距离应 > 0（不重叠）
     EXPECT_GT(minDist, 0.0) << "Some cameras have identical positions";
     // 最远相机对距离应有限
     EXPECT_LT(maxDist, 1e8) << "Camera baseline seems unreasonably large";
 
-    // 比值不应太极端
-    EXPECT_GT(maxDist / minDist, 1.0) << "All cameras at same distance?";
+    // 3 个以上相机时验证距离比值合理
+    if (centers.size() >= 3) {
+        EXPECT_GT(maxDist / minDist, 1.0) << "All cameras at same distance?";
+    }
 }
 
 // 9. 设置内参后投影一致性

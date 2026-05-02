@@ -18,8 +18,13 @@ from pathlib import Path
 MODELS_DIR = Path(__file__).parent.parent / "resources" / "models"
 
 
-def export_disk(device: str = "cuda"):
-    """导出 DISK 特征提取器（kornia/LightGlue 仓库）"""
+def export_disk(device: str = "cuda", max_kpts: int = 2048):
+    """导出 DISK 特征提取器。
+
+    生成的模型接口与 C++ DiskExtractor 兼容:
+      输入:  image [1,1,H,W] float32 grayscale
+      输出:  (kpts [N,2], descs [N,128], scores [N])
+    """
     try:
         import torch
         from lightglue import DISK as DISKExtractor
@@ -27,42 +32,49 @@ def export_disk(device: str = "cuda"):
         print("[DISK] 需要安装 lightglue: pip install git+https://github.com/cvg/LightGlue.git")
         return False
 
-    print(f"[DISK] 导出中 (device={device})...")
+    print(f"[DISK] 导出中 (device={device}, max_kpts={max_kpts})...")
     dev = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
 
-    extractor = DISKExtractor(max_num_keypoints=2048).eval().to(dev)
+    extractor = DISKExtractor(max_num_keypoints=max_kpts).eval().to(dev)
 
-    # 包装为接受 (image_tensor [1,3,H,W], orig_wh [1,2]) 的 TorchScript 模块
     class DISKWrapper(torch.nn.Module):
         def __init__(self, model):
             super().__init__()
             self.model = model
 
-        def forward(self, image: torch.Tensor, orig_wh: torch.Tensor):
-            # image: [1,3,H,W] float32 [0,1]
-            feats = self.model.extract(image)
-            kpts = feats["keypoints"]       # [1,N,2]
-            descs = feats["descriptors"]    # [1,N,128]
-            fixed_wh = orig_wh             # 直接透传，DISK 输出已是像素坐标
-            return kpts, descs, fixed_wh
+        def forward(self, image: torch.Tensor):
+            # image: [1,1,H,W] grayscale → 转 3 通道
+            rgb = image.expand(-1, 3, -1, -1)
+            feats = self.model.extract(rgb)
+            kpts = feats["keypoints"][0]      # [N,2]
+            descs = feats["descriptors"][0]   # [N,128]
+            scores = feats.get("keypoint_scores",
+                     feats.get("scores",
+                     torch.ones(kpts.shape[0], device=kpts.device)))
+            if scores.dim() > 1:
+                scores = scores[0]
+            return kpts, descs, scores
 
     wrapper = DISKWrapper(extractor).eval().to(dev)
-    # 用随机图像 trace，避免全零图像导致关键点为空
     torch.manual_seed(42)
-    dummy_img = torch.rand(1, 3, 480, 640, device=dev)
-    dummy_wh = torch.tensor([[640.0, 480.0]], device=dev)
+    dummy = torch.rand(1, 1, 480, 640, device=dev)
     with torch.no_grad():
-        traced = torch.jit.trace(wrapper, (dummy_img, dummy_wh), strict=False)
+        traced = torch.jit.trace(wrapper, (dummy,), strict=False)
 
     suffix = "cuda" if dev.type == "cuda" else "cpu"
-    out_path = MODELS_DIR / f"disk_{suffix}.pt"
+    out_path = MODELS_DIR / f"disk_extractor_{suffix}_{max_kpts}.pt"
     traced.save(str(out_path))
     print(f"[DISK] 已保存: {out_path}")
     return True
 
 
-def export_aliked(device: str = "cuda"):
-    """导出 ALIKED 特征提取器（kornia/LightGlue 仓库）"""
+def export_aliked(device: str = "cuda", max_kpts: int = 2048):
+    """导出 ALIKED 特征提取器。
+
+    生成的模型接口与 C++ AlikedExtractor 兼容:
+      输入:  image [1,1,H,W] float32 grayscale
+      输出:  (kpts [N,2], descs [N,128], scores [N])
+    """
     try:
         import torch
         from lightglue import ALIKED as ALIKEDExtractor
@@ -70,31 +82,37 @@ def export_aliked(device: str = "cuda"):
         print("[ALIKED] 需要安装 lightglue: pip install git+https://github.com/cvg/LightGlue.git")
         return False
 
-    print(f"[ALIKED] 导出中 (device={device})...")
+    print(f"[ALIKED] 导出中 (device={device}, max_kpts={max_kpts})...")
     dev = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
 
-    extractor = ALIKEDExtractor(max_num_keypoints=2048).eval().to(dev)
+    extractor = ALIKEDExtractor(max_num_keypoints=max_kpts).eval().to(dev)
 
     class ALIKEDWrapper(torch.nn.Module):
         def __init__(self, model):
             super().__init__()
             self.model = model
 
-        def forward(self, image: torch.Tensor, orig_wh: torch.Tensor):
-            feats = self.model.extract(image)
-            kpts = feats["keypoints"]
-            descs = feats["descriptors"]
-            return kpts, descs, orig_wh
+        def forward(self, image: torch.Tensor):
+            # image: [1,1,H,W] grayscale → 转 3 通道
+            rgb = image.expand(-1, 3, -1, -1)
+            feats = self.model.extract(rgb)
+            kpts = feats["keypoints"][0]      # [N,2]
+            descs = feats["descriptors"][0]   # [N,128]
+            scores = feats.get("keypoint_scores",
+                     feats.get("scores",
+                     torch.ones(kpts.shape[0], device=kpts.device)))
+            if scores.dim() > 1:
+                scores = scores[0]
+            return kpts, descs, scores
 
     wrapper = ALIKEDWrapper(extractor).eval().to(dev)
     torch.manual_seed(42)
-    dummy_img = torch.rand(1, 3, 480, 640, device=dev)
-    dummy_wh = torch.tensor([[640.0, 480.0]], device=dev)
+    dummy = torch.rand(1, 1, 480, 640, device=dev)
     with torch.no_grad():
-        traced = torch.jit.trace(wrapper, (dummy_img, dummy_wh), strict=False)
+        traced = torch.jit.trace(wrapper, (dummy,), strict=False)
 
     suffix = "cuda" if dev.type == "cuda" else "cpu"
-    out_path = MODELS_DIR / f"aliked_{suffix}.pt"
+    out_path = MODELS_DIR / f"aliked_extractor_{suffix}_{max_kpts}.pt"
     traced.save(str(out_path))
     print(f"[ALIKED] 已保存: {out_path}")
     return True

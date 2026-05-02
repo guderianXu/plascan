@@ -17,19 +17,6 @@ set(TEST_DATA_DIR "${CMAKE_SOURCE_DIR}/testData")
 add_definitions(-DTEST_DATA_DIR="${TEST_DATA_DIR}")
 
 # ==============================================================================
-# test_camera — 相机模型加载与投影
-# ==============================================================================
-add_executable(test_camera test_camera.cpp)
-target_link_libraries(test_camera PRIVATE
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_camera PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_camera)
-
-# ==============================================================================
 # test_sfm_filter — 稀疏点云过滤器
 # ==============================================================================
 add_executable(test_sfm_filter test_sfm_filter.cpp)

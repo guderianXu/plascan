@@ -165,9 +165,12 @@ SuperPoint::SuperPoint(const std::string& model_path, const SuperPointConfig& co
                                                   .dtype(torch::kFloat32)
                                                   .device(config_.device));
                 
+                auto dummy_wh = torch::tensor({640.0f, 480.0f},
+                    torch::TensorOptions().dtype(torch::kFloat32).device(config_.device));
                 std::vector<torch::jit::IValue> inputs;
                 inputs.push_back(dummy_input);
-                
+                inputs.push_back(dummy_wh);
+
                 // 执行预热推理（触发CUDA kernel编译和内存预分配）
                 auto _ = model_.forward(inputs);
                 
@@ -553,8 +556,11 @@ FeatureOutput SuperPoint::detect(const cv::Mat& image)
 
     // 前向推理
     // 新模型wrapper返回: (keypoints [N,2], scores [N], dense_descriptors [1,256,H/8,W/8])
+    auto orig_wh = torch::tensor({static_cast<float>(image.cols), static_cast<float>(image.rows)},
+        torch::TensorOptions().dtype(torch::kFloat32).device(config_.device));
     std::vector<torch::jit::IValue> inputs;
     inputs.push_back(input_device);
+    inputs.push_back(orig_wh);
     
     // 前向推理：首次 OOM 清空缓存后重试一次；两次都失败返回空结果
     torch::jit::IValue output;
@@ -607,8 +613,12 @@ FeatureOutput SuperPoint::detect(const cv::Mat& image)
             if (e3.isTensor()) scores_dense = e3.toTensor();
             // else silently ignore
         }
-    } 
-    else if (output.isGenericDict()) 
+
+        // 真实模型返回带 batch 维 [1,N,...], squeeze 掉 batch dim
+        if (keypoints.dim() == 3) keypoints = keypoints.squeeze(0);
+        if (scores.dim() == 2) scores = scores.squeeze(0);
+    }
+    else if (output.isGenericDict())
     {
         // 字典模式（旧模型格式，已弃用）
         auto output_dict = output.toGenericDict();
@@ -1005,8 +1015,14 @@ std::vector<FeatureOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& i
             auto batch_pinned = batch_cpu.pin_memory();
             auto batch_input = batch_pinned.to(config_.device, /*non_blocking=*/true);
 
+            // 批量 orig_wh: [B,2] 每行 [W,H]
+            int bw = g.first.first, bh = g.first.second;
+            auto wh_tpl = torch::tensor({static_cast<float>(bw), static_cast<float>(bh)},
+                torch::TensorOptions().dtype(torch::kFloat32).device(config_.device));
+            auto batch_wh = wh_tpl.unsqueeze(0).repeat({static_cast<long>(end - start), 1});
             std::vector<torch::jit::IValue> inputs;
             inputs.push_back(batch_input);
+            inputs.push_back(batch_wh);
             // 在批量推理中禁用梯度以减少显存占用
             torch::NoGradGuard no_grad;
 

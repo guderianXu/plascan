@@ -13,33 +13,75 @@ namespace
 
 std::string findModelPath()
 {
+    // 从不同 CWD 回退到项目根, 优先真实 CPU 模型
     std::vector<std::string> candidates = {
-        "../resources/models/superpoint_v6_cuda.pt",
-        "../../resources/models/superpoint_v6_cuda.pt",
-        "../../../resources/models/superpoint_v6_cuda.pt",
-        "../../../../resources/models/superpoint_v6_cuda.pt"
+        "../resources/models/superpoint_extractor_cpu.pt",
+        "../resources/models/superpoint_v6_cpu.pt",
+        "../resources/models/superpoint_extractor.pt",
+        "../resources/models/superpoint_test.pt",
+        "../../resources/models/superpoint_extractor_cpu.pt",
+        "../../resources/models/superpoint_v6_cpu.pt",
+        "../../resources/models/superpoint_extractor.pt",
+        "../../resources/models/superpoint_test.pt",
+        "../../../resources/models/superpoint_extractor_cpu.pt",
+        "../../../resources/models/superpoint_v6_cpu.pt",
+        "../../../resources/models/superpoint_extractor.pt",
+        "../../../resources/models/superpoint_test.pt",
+        "../../../../resources/models/superpoint_extractor_cpu.pt",
+        "../../../../resources/models/superpoint_v6_cpu.pt",
+        "../../../../resources/models/superpoint_extractor.pt",
+        "../../../../resources/models/superpoint_test.pt",
+        "../../../../../resources/models/superpoint_extractor_cpu.pt",
+        "../../../../../resources/models/superpoint_v6_cpu.pt",
+        "../../../../../resources/models/superpoint_extractor.pt",
+        "../../../../../resources/models/superpoint_test.pt",
+        "../../../../../../resources/models/superpoint_extractor_cpu.pt",
+        "../../../../../../resources/models/superpoint_v6_cpu.pt",
+        "../../../../../../resources/models/superpoint_extractor.pt",
+        "../../../../../../resources/models/superpoint_test.pt"
     };
     for (const auto &p : candidates)
         if (fs::exists(p)) return p;
     return "";
 }
 
+cv::Mat loadTestImage()
+{
+    // 从多层 CWD 回退查找真实测试影像
+    std::vector<std::string> candidates = {
+        "../src/core/feature_extractors/testdata/1.tif",
+        "../../src/core/feature_extractors/testdata/1.tif",
+        "../../../src/core/feature_extractors/testdata/1.tif",
+        "../../../../src/core/feature_extractors/testdata/1.tif",
+        "../../../../../src/core/feature_extractors/testdata/1.tif",
+        "../../../../../../src/core/feature_extractors/testdata/1.tif",
+    };
+    for (const auto &p : candidates)
+        if (fs::exists(p))
+            return cv::imread(p, cv::IMREAD_GRAYSCALE);
+    return cv::Mat();
+}
+
 cv::Mat makeTestImage(int width, int height)
 {
-    // 生成有明确角点的合成图像：多个矩形 + 圆形，SuperPoint 能稳定检测到角点
+    // 先尝试真实影像
+    auto real = loadTestImage();
+    if (!real.empty())
+    {
+        cv::resize(real, real, cv::Size(width, height));
+        return real;
+    }
+    // 回退: 合成图像
     cv::Mat img = cv::Mat::zeros(height, width, CV_8UC1);
-    // 绘制多个矩形（角点丰富）
     for (int i = 0; i < 6; ++i)
     {
         int x = 30 + i * (width / 6);
         int y = 30 + (i % 3) * (height / 3);
         cv::rectangle(img, cv::Point(x, y), cv::Point(x + 60, y + 60), cv::Scalar(200), 2);
     }
-    // 绘制几个实心矩形（强角点）
     cv::rectangle(img, cv::Point(10, 10), cv::Point(80, 80), cv::Scalar(180), cv::FILLED);
     cv::rectangle(img, cv::Point(width - 90, 10), cv::Point(width - 10, 80), cv::Scalar(160), cv::FILLED);
     cv::rectangle(img, cv::Point(10, height - 90), cv::Point(80, height - 10), cv::Scalar(140), cv::FILLED);
-    // 轻微模糊，使图像更接近自然图像
     cv::GaussianBlur(img, img, cv::Size(3, 3), 0.8);
     return img;
 }
@@ -62,6 +104,8 @@ protected:
 TEST_F(SuperPointTest, BasicInference)
 {
     SuperPointConfig cfg;
+    cfg.device = torch::kCPU;
+    cfg.device = torch::kCPU;
     cfg.max_num_keypoints = 500;
     cfg.detection_threshold = 0.005f;
 
@@ -85,6 +129,7 @@ TEST_F(SuperPointTest, BasicInference)
 TEST_F(SuperPointTest, DescriptorNormalization)
 {
     SuperPointConfig cfg;
+    cfg.device = torch::kCPU;
     cfg.max_num_keypoints = 200;
 
     SuperPoint sp(modelPath, cfg);
@@ -110,6 +155,7 @@ TEST_F(SuperPointTest, DescriptorNormalization)
 TEST_F(SuperPointTest, KeypointBounds)
 {
     SuperPointConfig cfg;
+    cfg.device = torch::kCPU;
     cfg.max_num_keypoints = 500;
 
     SuperPoint sp(modelPath, cfg);
@@ -145,6 +191,7 @@ TEST_F(SuperPointTest, KeypointBounds)
 TEST_F(SuperPointTest, SampleDescriptorsConsistency)
 {
     SuperPointConfig cfg;
+    cfg.device = torch::kCPU;
     cfg.max_num_keypoints = 100;
     cfg.detection_threshold = 0.01f;
 
@@ -180,6 +227,7 @@ TEST_F(SuperPointTest, SampleDescriptorsConsistency)
 TEST_F(SuperPointTest, BatchVsSingleConsistency)
 {
     SuperPointConfig cfg;
+    cfg.device = torch::kCPU;
     cfg.max_num_keypoints = 100;
     cfg.batch_size = 4;
 

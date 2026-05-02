@@ -39,7 +39,9 @@ FeatureOutput DiskExtractor::extract(const cv::Mat &grayImage)
     auto input = torch::from_blob(f.data, {1, 1, f.rows, f.cols},
                                   torch::kFloat32).clone().to(m_device);
 
-    auto outputs = m_model.forward({input}).toTuple();
+    auto orig_wh = torch::tensor({static_cast<float>(origW), static_cast<float>(origH)},
+        torch::TensorOptions().dtype(torch::kFloat32).device(m_device));
+    auto outputs = m_model.forward({input, orig_wh}).toTuple();
     auto kpts   = outputs->elements()[0].toTensor();
     auto descs  = outputs->elements()[1].toTensor();
     auto scores = outputs->elements()[2].toTensor();

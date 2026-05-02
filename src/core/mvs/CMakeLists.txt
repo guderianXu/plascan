@@ -4,12 +4,8 @@ project(mvs LANGUAGES CXX)
 set(CMAKE_AUTOMOC ON)
 
 # ── CUDA（可选）──────────────────────────────────────────────────────────────
-include(CheckLanguage)
-check_language(CUDA)
-if(CMAKE_CUDA_COMPILER)
-    enable_language(CUDA)
-    set(CMAKE_CUDA_STANDARD 17)
-    set(CMAKE_CUDA_STANDARD_REQUIRED ON)
+# CUDA 已在根 CMakeLists 中全局启用, 直接判断即可
+if(DEFINED CMAKE_CUDA_COMPILER AND CMAKE_CUDA_COMPILER)
     set(MVS_HAS_CUDA TRUE)
     message(STATUS "mvs: CUDA 已启用 (${CMAKE_CUDA_COMPILER})")
 else()

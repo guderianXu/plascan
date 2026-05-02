@@ -12,7 +12,7 @@ using namespace xjw::feature_extractors;
 TEST(AlikedExtractorTest, ModelLoads)
 {
     AlikedConfig cfg;
-    cfg.modelPath = std::string(MODEL_DIR) + "/aliked_extractor_cpu_480.pt";
+    cfg.modelPath = std::string(MODEL_DIR) + "/aliked_extractor_cuda_480.pt";
     cfg.useCuda   = false;
     try {
         AlikedExtractor ext(cfg);
@@ -32,7 +32,7 @@ TEST(AlikedExtractorTest, ExtractOnTestImage)
     cv::resize(img, img, cv::Size(), s, s);
 
     AlikedConfig cfg;
-    cfg.modelPath   = std::string(MODEL_DIR) + "/aliked_extractor_cpu_480.pt";
+    cfg.modelPath   = std::string(MODEL_DIR) + "/aliked_extractor_cuda_480.pt";
     cfg.useCuda     = false;
     cfg.maxImageDim = 0;
     AlikedExtractor ext(cfg);
@@ -54,7 +54,7 @@ TEST(AlikedExtractorTest, CoordinatesInRange)
     cv::resize(img, img, cv::Size(), s, s);
 
     AlikedConfig cfg;
-    cfg.modelPath   = std::string(MODEL_DIR) + "/aliked_extractor_cpu_480.pt";
+    cfg.modelPath   = std::string(MODEL_DIR) + "/aliked_extractor_cuda_480.pt";
     cfg.useCuda     = false;
     cfg.maxImageDim = 0;
     AlikedExtractor ext(cfg);

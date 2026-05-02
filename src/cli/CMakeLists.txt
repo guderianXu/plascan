@@ -39,14 +39,14 @@ endif()
 # ── 特征提取 ──
 if(TARGET superpoint)
     add_plascan_cli(feature_extract_cli cli_feature_extract.cpp
-        "superpoint;feature_extractors_traditional;Qt6::Core;${TORCH_LIBRARIES}"
-        "${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint;${CMAKE_SOURCE_DIR}/src/core/feature_extractors;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition")
+        "superpoint;feature_extractors_disk;feature_extractors_aliked;feature_extractors_traditional;Qt6::Core;${TORCH_LIBRARIES}"
+        "${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint;${CMAKE_SOURCE_DIR}/src/core/feature_extractors;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked")
 endif()
 
 # ── 特征匹配 ──
 if(TARGET superglue_matcher)
     add_plascan_cli(feature_match_cli cli_feature_match.cpp
-        "superglue_matcher;lightglue_matcher;feature_match_traditional;loftr_matcher;Qt6::Core;${TORCH_LIBRARIES}"
+        "feature_match_factory;superglue_matcher;lightglue_matcher;feature_match_traditional;loftr_matcher;Qt6::Core;${TORCH_LIBRARIES}"
         "${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition;${CMAKE_SOURCE_DIR}/src/core/feature_match/loftr;${CMAKE_SOURCE_DIR}/src/core/feature_match;${CMAKE_SOURCE_DIR}/src/core/feature_extractors")
 endif()
 

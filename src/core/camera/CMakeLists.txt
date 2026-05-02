@@ -17,5 +17,16 @@ if(BUILD_TESTS)
 		)
 		target_include_directories(test_camera_unit PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
 		gtest_discover_tests(test_camera_unit)
+
+		add_executable(test_camera_tsai test_tsai_loader.cpp)
+		target_link_libraries(test_camera_tsai PRIVATE
+			camera
+			GTest::gtest_main
+		)
+		target_include_directories(test_camera_tsai PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
+		target_compile_definitions(test_camera_tsai PRIVATE
+			TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
+		)
+		gtest_discover_tests(test_camera_tsai)
 	endif()
 endif()
