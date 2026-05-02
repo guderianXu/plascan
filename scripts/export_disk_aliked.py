@@ -28,12 +28,59 @@ def _patched_attn(self, q, k, v, mask=None):
     return torch.einsum("...ij,...jd->...id", attn, v)
 Attention.forward = _patched_attn
 
-# ── Monkey-patch 2: DeformableConv2d → regular Conv2d (avoids torchvision dep) ──
+# ── Monkey-patch 2: DeformableConv2d with pure-PyTorch DCN (avoids torchvision) ──
 from lightglue.aliked import DeformableConv2d
 _orig_deform_forward = DeformableConv2d.forward
+
+def _pure_deform_conv2d(x, offset, weight, bias, stride=1, padding=1):
+    """Trace-safe deformable conv2d using grid_sample (no torchvision dependency)."""
+    B, C_in, H, W = x.shape
+    C_out = weight.shape[0]
+    kH, kW = weight.shape[2], weight.shape[3]
+    pad = padding[0] if isinstance(padding, tuple) else padding
+    x_pad = F.pad(x, (pad, pad, pad, pad))
+    # offset [B, 2*kH*kW, H, W] → [B, kH*kW, H, W, 2]
+    o = offset.reshape(B, 2, kH * kW, H, W).permute(0, 2, 3, 4, 1)
+    dy, dx = o[..., 0], o[..., 1]
+    # Grid positions (linspace is trace-safe)
+    gy = torch.linspace(float(pad), float(H + pad - 1), H, device=x.device)
+    gx = torch.linspace(float(pad), float(W + pad - 1), W, device=x.device)
+    # Kernel base offsets
+    ky = torch.arange(kH, device=x.device, dtype=torch.float32) - (kH - 1) / 2.0
+    ky = ky.repeat_interleave(kW)
+    kx = torch.arange(kW, device=x.device, dtype=torch.float32) - (kW - 1) / 2.0
+    kx = kx.repeat(kH)
+    ky = ky.reshape(1, kH * kW, 1, 1)
+    kx = kx.reshape(1, kH * kW, 1, 1)
+    # Sample positions [B, N, H, W]
+    sy = gy.reshape(1, 1, H, 1) + ky + dy
+    sx = gx.reshape(1, 1, 1, W) + kx + dx
+    Hp, Wp = H + 2 * pad, W + 2 * pad
+    sy = sy / (Hp - 1) * 2.0 - 1.0
+    sx = sx / (Wp - 1) * 2.0 - 1.0
+    # Stack into grid [B, N, H, W, 2] → [B, H, N*W, 2] for grid_sample
+    grid = torch.stack([sx, sy], dim=-1)
+    grid = grid.permute(0, 2, 1, 3, 4).reshape(B, H, kH * kW * W, 2)
+    sampled = F.grid_sample(x_pad, grid, mode='bilinear', align_corners=True)
+    sampled = sampled.reshape(B, C_in, H, kH * kW, W).permute(0, 1, 3, 2, 4)
+    sampled = sampled.reshape(B, C_in * kH * kW, H, W)
+    w = weight.reshape(C_out, C_in * kH * kW, 1, 1)
+    return F.conv2d(sampled, w, bias)
+
 def _patched_deform_forward(self, x):
-    return F.conv2d(x, self.regular_conv.weight, self.regular_conv.bias,
-                    stride=1, padding=self.padding)
+    h, w = x.shape[2:]
+    max_offset = max(h, w) / 4.0
+    # offset_conv predicts offsets, with optional mask
+    out = self.offset_conv(x)
+    if self.mask:
+        o1, o2, mask = torch.chunk(out, 3, dim=1)
+        offset = torch.cat((o1, o2), dim=1)
+    else:
+        offset = out
+    offset = offset.clamp(-max_offset, max_offset)
+    return _pure_deform_conv2d(x, offset, self.regular_conv.weight,
+                               self.regular_conv.bias, padding=self.padding)
+
 DeformableConv2d.forward = _patched_deform_forward
 
 # ── DISK: bypass kornia heatmap_to_keypoints ──
