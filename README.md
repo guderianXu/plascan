@@ -40,15 +40,15 @@ PlaScan 是一套完整的摄影测量流水线，用于从卫星或无人机影
 src/
 ├── core/
 │   ├── camera/                # 相机模型 (Pinhole, Brown 畸变)
-│   ├── feature_extractors/    # 7 种提取器, IExtractor 接口 + 工厂
+│   ├── feature_extractors/    # 8 种提取器, IExtractor 接口 + 工厂
 │   │   ├── superpoint/        # SuperPoint (256d, TorchScript)
-│   │   ├── disk/              # DISK (128d, kornia)
-│   │   ├── aliked/            # ALIKED (128d, lightglue)
-│   │   └── tradition/         # SIFT / ORB / AKAZE (OpenCV)
-│   ├── feature_match/         # 5 种匹配器, IMatcher 接口 + 工厂
+│   │   ├── disk/              # DISK (128d, TorchScript)
+│   │   ├── aliked/            # ALIKED (128d, TorchScript)
+│   │   └── tradition/         # SIFT / SURF / ORB / AKAZE (OpenCV)
+│   ├── feature_match/         # 7 种匹配器, IMatcher 接口 + 工厂
 │   │   ├── superglue/         # SuperGlue (GNN, 256d)
 │   │   ├── lightglue/         # LightGlue (GNN, 256d/128d)
-│   │   ├── loftr/             # LoFTR (端到端密集, LibTorch)
+│   │   ├── loftr/             # LoFTR (端到端密集, Python 子进程)
 │   │   └── tradition/         # BF / FLANN (OpenCV)
 │   ├── sfm/                   # 增量式 SfM + 光束法平差 (Ceres)
 │   ├── mvs/                   # PatchMatch 深度图 + 融合
@@ -61,7 +61,7 @@ src/
 │   ├── dialogs/               # 参数配置对话框
 │   ├── widgets/               # 3D 画布 + 影像查看器
 │   └── project/               # 项目管理 (.plascan 归档)
-└── cli/                       # 命令行工具 (5 CLI, CLI11)
+└── cli/                       # 命令行工具 (6 CLI, CLI11)
     ├── feature_extract_cli    # 统一特征提取
     ├── feature_match_cli      # 统一特征匹配
     ├── dense_match_cli        # 密集匹配
@@ -70,6 +70,23 @@ src/
 ```
 
 ## 快速开始
+
+### 系统依赖
+
+构建前需确保以下符号链接存在（conda GCC 环境特定）：
+
+```bash
+# libmvec / libm / libc (conda sysroot 链接器脚本要求)
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libm.so.6      /lib64/libm.so.6
+sudo ln -sf /usr/lib/x86_64-linux-gnu/libc.so.6      /lib64/libc.so.6
+sudo ln -sf ~/anaconda3/envs/plascan/x86_64-conda-linux-gnu/sysroot/lib64/libmvec-2.28.so /lib64/libmvec.so.1
+sudo ln -sf ~/anaconda3/envs/plascan/x86_64-conda-linux-gnu/sysroot/usr/lib64/libc_nonshared.a /usr/lib64/libc_nonshared.a
+sudo ln -sf ~/anaconda3/envs/plascan/x86_64-conda-linux-gnu/sysroot/usr/lib64/libmvec_nonshared.a /usr/lib64/libmvec_nonshared.a
+
+# NVRTC builtins (PyTorch CUDA JIT 编译需要)
+sudo ln -sf ~/anaconda3/envs/plascan/targets/x86_64-linux/lib/libnvrtc-builtins.so.13.1 /lib/x86_64-linux-gnu/libnvrtc-builtins.so.13.0
+sudo ldconfig
+```
 
 ### 从源码构建
 
@@ -82,6 +99,9 @@ mkdir build && cd build
 cmake .. -DBUILD_TESTS=ON
 cmake --build . -j$(nproc)
 
+# 可指定 conda 环境前缀 (如果自动检测失败)
+cmake .. -DBUILD_TESTS=ON -DPLASCAN_CONDA_PREFIX=/path/to/conda/env
+
 # macOS (Apple Silicon M-series)
 brew install cmake qt@6 opencv libtorch gdal libtiff libzip openmp
 mkdir build && cd build
@@ -93,20 +113,30 @@ cmake --build . -j$(sysctl -n hw.logicalcpu)
 
 ```bash
 cd build && ctest --output-on-failure
-# 密集匹配模块: 22 tests
+# 162 tests, 100% 通过
 ```
 
 ### 模型文件
 
-从 [Releases](https://github.com/guderianXu/plascan/releases) 下载预训练模型，放置到 `resources/models/`：
+从 [Releases](https://github.com/guderianXu/plascan/releases) 下载预训练模型，或通过导出脚本生成：
 
 ```
 resources/models/
-├── superpoint_v6_cuda.pt        # SuperPoint 检测器 (GPU)
-├── superglue_outdoor_cuda.pt    # SuperGlue 匹配器 (室外)
-├── lightglue_matcher_cuda.pt    # LightGlue 匹配器
-├── superpoint_extractor_cuda.pt # SuperPoint 提取器
-└── ...                           # 其他模型
+├── superpoint_extractor_cpu.pt      # SuperPoint 检测器 (CPU, TorchScript)
+├── disk_extractor_cpu_1200.pt       # DISK 检测器 (CPU, TorchScript)
+├── aliked_extractor_cpu_480.pt      # ALIKED 检测器 (CPU, TorchScript)
+├── superglue_outdoor_cuda.pt        # SuperGlue 匹配器 (室外)
+├── lightglue_matcher_cuda.pt        # LightGlue 匹配器
+└── ...                               # 其他模型
+```
+
+**导出模型** (需要 conda env + lightglue/kornia):
+
+```bash
+conda activate plascan
+python scripts/export_superpoint.py                      # SuperPoint
+python scripts/export_disk_aliked.py                     # DISK + ALIKED
+python scripts/export_models.py --loftr --roma           # LoFTR + RoMa
 ```
 
 ## CLI 工具
@@ -114,7 +144,8 @@ resources/models/
 ### 特征提取 (`feature_extract_cli`)
 
 ```bash
-# 自动选择算法 + 后缀, 无需手动指定
+# 8 种算法: superpoint, disk, aliked, sift, surf, orb, akaze, dedode
+# 自动追加算法后缀 (.sp/.dsk/.alk/.sift 等)
 feature_extract_cli -a superpoint -m sp.pt -i img.tif -o out.sp --cuda
 feature_extract_cli -a sift       -i img.tif -o out.sift -n 4096
 feature_extract_cli -a disk       -m disk.pt -i img.tif -o out.dsk --cuda
@@ -161,7 +192,7 @@ triangulate_cli   -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o cloud
 | CUDA 加速 | ✅ | ❌ (MPS via PyTorch) |
 | dense_match MGM/SGM | CUDA + CPU | CPU only |
 | SuperPoint/DISK/ALIKED | CUDA + CPU | MPS + CPU |
-| SIFT/ORB/AKAZE | CPU | CPU |
+| SIFT/SURF/ORB/AKAZE | CPU | CPU |
 | 全部 CLI 工具 | ✅ | ✅ |
 | Qt6 GUI | ✅ | ✅ |
 | 构建指南 | — | `docs/BUILD_MACOS.md` |
@@ -188,9 +219,9 @@ git push origin main
 |------|------|
 | `docs/PROJECT_ARCHITECTURE.md` | 完整目录树、模块职责、数据流、技术债务 |
 | `docs/BUILD_MACOS.md` | macOS Apple Silicon 构建指南 |
+| `CONTEXT.md` | 当前环境、构建状态、系统依赖、已知问题 |
 | `docs/superpowers/specs/` | 功能规格说明 |
 | `src/core/dense_match/README.md` | MGM/SGM 密集匹配算法文档 |
-| `src/core/feature_extractors/README.md` | 7 种提取器对比、API、基准 |
 
 ## 依赖
 
