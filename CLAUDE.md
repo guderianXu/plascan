@@ -12,6 +12,11 @@
 # Git 同步
 - **每次 commit 后必须 push 到 GitHub**：`git push origin main`（含 tags: `git push origin <tag>`）
 - 仓库地址：`https://github.com/guderianXu/plascan`
+- **Git 作者配置**：必须使用 GitHub 关联邮箱，否则提交不计入贡献统计
+  - `git config user.email "guderian_xu@henu.edu.cn"`
+  - `git config user.name "guderianXu"`
+  - 注意：`guderian@plascan.local` 是不关联 GitHub 的本地邮箱，不要使用
+  - 如已用错误邮箱提交，需要用 `git filter-branch --env-filter` 重写历史
 
 # 编译验证
 - **每次修改代码后必须在 build 目录编译验证**：

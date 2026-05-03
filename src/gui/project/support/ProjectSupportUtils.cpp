@@ -211,14 +211,14 @@ QString resolveProjectFeaturePathFromToken(const QString &plascanPath,
     const QString imagePath = resolveProjectImagePathFromToken(token, meta);
     if (!imagePath.isEmpty())
     {
-        const QString spPath = ProjectIO::findSpForImage(plascanPath, imagePath);
+        const QString spPath = ProjectIO::findFeatureForImage(plascanPath, imagePath);
         if (!spPath.isEmpty())
         {
             return spPath;
         }
     }
 
-    return ProjectIO::findSpForImage(plascanPath, token);
+    return ProjectIO::findFeatureForImage(plascanPath, token);
 }
 
 QJsonObject cameraToJson(const xjw::Camera &camera)

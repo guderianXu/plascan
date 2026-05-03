@@ -45,6 +45,8 @@ QString findModelFile(const QString &modelName)
 
     const QString exePath = QCoreApplication::applicationDirPath();
     candidates.append(QDir(exePath).filePath(QStringLiteral("../models/%1").arg(modelName)));
+    candidates.append(QDir(exePath).filePath(QStringLiteral("../resources/models/%1").arg(modelName)));
+    candidates.append(QDir(exePath).filePath(QStringLiteral("../../resources/models/%1").arg(modelName)));
     candidates.append(QStringLiteral("models/%1").arg(modelName));
 
     for (const QString &candidate : candidates)
@@ -148,7 +150,8 @@ static bool runPythonExtractor(const QString &algo, const QStringList &inputs,
     for (const QString &imagePath : inputs)
     {
         QFileInfo fi(imagePath);
-        const QString spPath = QDir(outputDir).filePath(fi.completeBaseName() + QStringLiteral(".sp"));
+        const QString suffix = QString::fromStdString(ExtractorSuffix::forAlgorithm(algo.toStdString()));
+        const QString spPath = QDir(outputDir).filePath(fi.completeBaseName() + suffix);
         if (QFile::exists(spPath))
         {
             if (projectManager)
@@ -185,9 +188,12 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
                             std::atomic<int> &progressCount)
 {
     const QString featureAlgorithm = normalizedFeatureAlgorithm(config);
-    LOG_INFO("%s", qUtf8Printable(QString("开始特征提取(%1): %2 张影像")
+    const QString fileSuffix = QString::fromStdString(
+        ExtractorSuffix::forAlgorithm(featureAlgorithm.toStdString()));
+    LOG_INFO("%s", qUtf8Printable(QString("开始特征提取(%1): %2 张影像, 后缀=%3")
         .arg(featureAlgorithm.toUpper())
-        .arg(inputs.size())));
+        .arg(inputs.size())
+        .arg(fileSuffix)));
     
     // 创建输出目录
     QString outputDir = config["output_dir"].toString();
@@ -268,18 +274,25 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
     {
         if (featureAlgorithm == QStringLiteral("superpoint"))
         {
-            // 确定模型路径（自动检测源码、安装和运行目录）
-            const QString modelName = spConfig.device.is_cuda() ? "superpoint_v6_cuda.pt" : "superpoint_v6_cpu.pt";
-            const QString modelPath = findModelFile(modelName);
+            // 确定模型路径: 优先 CPU 模型 (始终存在), CUDA 模型可选
+            QStringList modelCandidates;
+            if (spConfig.device.is_cuda())
+                modelCandidates << "superpoint_extractor_cuda.pt";
+            modelCandidates << "superpoint_extractor_cpu.pt" << "superpoint_extractor.pt";
 
-            // 检查模型文件是否存在
+            QString modelPath;
+            for (const QString &name : modelCandidates)
+            {
+                modelPath = findModelFile(name);
+                if (!modelPath.isEmpty()) break;
+            }
+
             if (modelPath.isEmpty())
             {
-                LOG_ERROR("%s", qUtf8Printable(QString("模型文件不存在: %1 (已尝试多个路径)").arg(modelName)));
+                LOG_ERROR("%s", "SuperPoint 模型文件不存在 (已尝试: superpoint_extractor_*.pt)");
                 return false;
             }
 
-            // 加载模型
             LOG_INFO("%s", qUtf8Printable(QString("加载 SuperPoint 模型: %1").arg(modelPath)));
             superPointExtractor = std::make_unique<SuperPoint>(modelPath.toStdString(), spConfig);
         }
@@ -365,9 +378,9 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
                     }
                 }
                 
-                // 保存结果为二进制格式(.sp)
+                // 保存结果为二进制格式 (使用算法对应的后缀)
                 QString baseName = fileInfo.completeBaseName();
-                QString outputPath = QDir(outputDir).filePath(baseName + ".sp");
+                QString outputPath = QDir(outputDir).filePath(baseName + fileSuffix);
                 
                 if (FeatureFileIO::write(outputPath, fileInfo.fileName(), output)) 
                 {

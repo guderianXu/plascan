@@ -527,10 +527,10 @@ bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
 {
     if (!m_scene) return false;
     
-    // 使用ProjectIO查找.sp文件
-    QString spPath = ProjectIO::findSpForImage(m_currentProjectPath, imagePath);
+    // 使用ProjectIO查找特征文件(支持所有提取器后缀)
+    QString spPath = ProjectIO::findFeatureForImage(m_currentProjectPath, imagePath);
     if (spPath.isEmpty()) {
-        qDebug() << "LayerRenderer: No .sp found for" << imagePath;
+        qDebug() << "LayerRenderer: No feature file found for" << imagePath;
         return false;
     }
 

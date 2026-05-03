@@ -83,6 +83,19 @@ QString ProjectIO::vwipOutputPathForImage(const QString &plascanPath, const QStr
     return QDir(outDir).filePath(fi.completeBaseName() + QStringLiteral(".sp"));
 }
 
+QString ProjectIO::featureOutputPathForImage(const QString &plascanPath,
+                                              const QString &imagePath,
+                                              const QString &suffix)
+{
+    QFileInfo fi(imagePath);
+    if (fi.fileName().isEmpty()) return QString();
+
+    const QString outDir = ipfindOutputDir(plascanPath);
+    if (outDir.isEmpty()) return QString();
+
+    return QDir(outDir).filePath(fi.completeBaseName() + suffix);
+}
+
 QStringList ProjectIO::spCandidates(const QString &plascanPath, const QString &imagePath)
 {
     QStringList candidates;
