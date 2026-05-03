@@ -1,12 +1,14 @@
 #!/usr/bin/env python3
 """
-导出 DISK、ALIKED、LoFTR、RoMa 为 TorchScript .pt 文件。
+导出 LoFTR、RoMa 为 TorchScript .pt 文件。
+
+DISK/ALIKED 导出已移至 scripts/export_disk_aliked.py
+(含 NMS 修复 + DeformableConv2d monkey-patch)。
 
 用法：
     conda activate plascan
-    python scripts/export_models.py --all
-    python scripts/export_models.py --disk --aliked
     python scripts/export_models.py --loftr --roma
+    python scripts/export_models.py --all  # 仅 LoFTR + RoMa
 
 输出目录：resources/models/
 """
@@ -16,106 +18,6 @@ import sys
 from pathlib import Path
 
 MODELS_DIR = Path(__file__).parent.parent / "resources" / "models"
-
-
-def export_disk(device: str = "cuda", max_kpts: int = 2048):
-    """导出 DISK 特征提取器。
-
-    生成的模型接口与 C++ DiskExtractor 兼容:
-      输入:  image [1,1,H,W] float32 grayscale
-      输出:  (kpts [N,2], descs [N,128], scores [N])
-    """
-    try:
-        import torch
-        from lightglue import DISK as DISKExtractor
-    except ImportError:
-        print("[DISK] 需要安装 lightglue: pip install git+https://github.com/cvg/LightGlue.git")
-        return False
-
-    print(f"[DISK] 导出中 (device={device}, max_kpts={max_kpts})...")
-    dev = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
-
-    extractor = DISKExtractor(max_num_keypoints=max_kpts).eval().to(dev)
-
-    class DISKWrapper(torch.nn.Module):
-        def __init__(self, model):
-            super().__init__()
-            self.model = model
-
-        def forward(self, image: torch.Tensor):
-            # image: [1,1,H,W] grayscale → 转 3 通道
-            rgb = image.expand(-1, 3, -1, -1)
-            feats = self.model.extract(rgb)
-            kpts = feats["keypoints"][0]      # [N,2]
-            descs = feats["descriptors"][0]   # [N,128]
-            scores = feats.get("keypoint_scores",
-                     feats.get("scores",
-                     torch.ones(kpts.shape[0], device=kpts.device)))
-            if scores.dim() > 1:
-                scores = scores[0]
-            return kpts, descs, scores
-
-    wrapper = DISKWrapper(extractor).eval().to(dev)
-    torch.manual_seed(42)
-    dummy = torch.rand(1, 1, 480, 640, device=dev)
-    with torch.no_grad():
-        traced = torch.jit.trace(wrapper, (dummy,), strict=False)
-
-    suffix = "cuda" if dev.type == "cuda" else "cpu"
-    out_path = MODELS_DIR / f"disk_extractor_{suffix}_{max_kpts}.pt"
-    traced.save(str(out_path))
-    print(f"[DISK] 已保存: {out_path}")
-    return True
-
-
-def export_aliked(device: str = "cuda", max_kpts: int = 2048):
-    """导出 ALIKED 特征提取器。
-
-    生成的模型接口与 C++ AlikedExtractor 兼容:
-      输入:  image [1,1,H,W] float32 grayscale
-      输出:  (kpts [N,2], descs [N,128], scores [N])
-    """
-    try:
-        import torch
-        from lightglue import ALIKED as ALIKEDExtractor
-    except ImportError:
-        print("[ALIKED] 需要安装 lightglue: pip install git+https://github.com/cvg/LightGlue.git")
-        return False
-
-    print(f"[ALIKED] 导出中 (device={device}, max_kpts={max_kpts})...")
-    dev = torch.device(device if torch.cuda.is_available() and device == "cuda" else "cpu")
-
-    extractor = ALIKEDExtractor(max_num_keypoints=max_kpts).eval().to(dev)
-
-    class ALIKEDWrapper(torch.nn.Module):
-        def __init__(self, model):
-            super().__init__()
-            self.model = model
-
-        def forward(self, image: torch.Tensor):
-            # image: [1,1,H,W] grayscale → 转 3 通道
-            rgb = image.expand(-1, 3, -1, -1)
-            feats = self.model.extract(rgb)
-            kpts = feats["keypoints"][0]      # [N,2]
-            descs = feats["descriptors"][0]   # [N,128]
-            scores = feats.get("keypoint_scores",
-                     feats.get("scores",
-                     torch.ones(kpts.shape[0], device=kpts.device)))
-            if scores.dim() > 1:
-                scores = scores[0]
-            return kpts, descs, scores
-
-    wrapper = ALIKEDWrapper(extractor).eval().to(dev)
-    torch.manual_seed(42)
-    dummy = torch.rand(1, 1, 480, 640, device=dev)
-    with torch.no_grad():
-        traced = torch.jit.trace(wrapper, (dummy,), strict=False)
-
-    suffix = "cuda" if dev.type == "cuda" else "cpu"
-    out_path = MODELS_DIR / f"aliked_extractor_{suffix}_{max_kpts}.pt"
-    traced.save(str(out_path))
-    print(f"[ALIKED] 已保存: {out_path}")
-    return True
 
 
 def export_loftr(scene: str = "outdoor", device: str = "cuda"):
@@ -310,9 +212,7 @@ def export_roma(scene: str = "outdoor", device: str = "cuda"):
 
 def main():
     parser = argparse.ArgumentParser(description="导出深度学习匹配模型为 TorchScript")
-    parser.add_argument("--all", action="store_true", help="导出所有模型")
-    parser.add_argument("--disk", action="store_true")
-    parser.add_argument("--aliked", action="store_true")
+    parser.add_argument("--all", action="store_true", help="导出 LoFTR + RoMa")
     parser.add_argument("--loftr", action="store_true")
     parser.add_argument("--roma", action="store_true")
     parser.add_argument("--cpu-only", action="store_true", help="只导出 CPU 版本")
@@ -320,7 +220,7 @@ def main():
                         help="LoFTR/RoMa 场景类型（默认 both）")
     args = parser.parse_args()
 
-    if not any([args.all, args.disk, args.aliked, args.loftr, args.roma]):
+    if not any([args.all, args.loftr, args.roma]):
         parser.print_help()
         sys.exit(1)
 
@@ -329,14 +229,6 @@ def main():
     scenes = ["outdoor", "indoor"] if args.scene == "both" else [args.scene]
 
     results = {}
-
-    if args.all or args.disk:
-        for dev in devices:
-            results[f"disk_{dev}"] = export_disk(dev)
-
-    if args.all or args.aliked:
-        for dev in devices:
-            results[f"aliked_{dev}"] = export_aliked(dev)
 
     if args.all or args.loftr:
         for scene in scenes:

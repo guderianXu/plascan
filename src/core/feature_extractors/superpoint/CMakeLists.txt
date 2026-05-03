@@ -30,9 +30,12 @@ include_directories(
     ${TORCH_INCLUDE_DIRS}
 )
 
-# SuperPoint 库
+# SuperPoint 库 (拆分为 4 个文件, 每个 ≤400 行)
 set(SUPERPOINT_SOURCES
     SuperPoint.cpp
+    SuperPointPostprocess.cpp
+    SuperPointDetect.cpp
+    SuperPointBatch.cpp
     SuperPoint.h
 )
 if (QT_LIBS)
