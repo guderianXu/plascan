@@ -37,8 +37,14 @@ public slots:
     void showImage(const QString &path);
 
 public slots:
-    // 控制是否在视图上叠加显示兴趣点（.sp SuperPoint文件）
+    // 控制是否在视图上叠加显示兴趣点
     void setShowInterestPoints(bool show);
+
+    // 切换当前显示的特征提取器后缀 (.sp/.dsk/.alk 等), 重新加载特征点
+    void setActiveFeatureSuffix(const QString &suffix);
+
+    // 获取当前影像可用的特征文件后缀列表 (供 UI 构建选择器)
+    QStringList availableFeatureSuffixes() const;
 
     // 在主画布上显示一对匹配影像并绘制匹配连线（基于 .match 二进制文件）
     void showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile);
@@ -78,6 +84,7 @@ protected:
 private:
     LayerRenderer *m_layerRenderer{};
     bool m_showInterestPoints{true};  // 默认启用特征点显示
+    QString m_activeFeatureSuffix{QStringLiteral(".sp")};  // 当前选择的特征提取器后缀
     // 当前的兴趣点显示选项（由 UI 通过 applyFeatureDisplayOptions 设置）
     LayerRenderer::FeatureDisplayOptions m_currentFeatureOpts;
     QString m_currentImagePath;
@@ -86,6 +93,7 @@ private:
     // cache: imagePath -> (lastModified, keypoints)
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> m_spCache;
     QString m_lastRequestedSpPath;
+    QString m_lastRequestedSpSuffix;
 
     // 缩放限制（避免无限放大/缩小导致精度或性能问题）
     double m_zoomFactor{1.0};

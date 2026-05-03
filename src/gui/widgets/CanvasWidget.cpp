@@ -82,9 +82,9 @@ CanvasWidget::CanvasWidget(QWidget *parent)
         std::vector<cv::KeyPoint> kps = m_spWatcher->result();
         const QString imagePath = m_lastRequestedSpPath;
         if (!imagePath.trimmed().isEmpty()) {
-            // 更新缓存的 mtime
             QFileInfo fi(imagePath);
-            m_spCache[imagePath] = std::make_pair(fi.lastModified(), kps);
+            const QString key = imagePath + m_lastRequestedSpSuffix;
+            m_spCache[key] = std::make_pair(fi.lastModified(), kps);
         }
         if (m_layerRenderer) {
             // 重新应用当前显示设置，确保使用 UI 中的参数
@@ -400,6 +400,22 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
     m_zoomFactor = 1.0;
 }
 
+void CanvasWidget::setActiveFeatureSuffix(const QString &suffix)
+{
+    if (suffix.isEmpty() || suffix == m_activeFeatureSuffix) return;
+    m_activeFeatureSuffix = suffix;
+    // 清除当前影像的缓存, 强制重新加载
+    if (!m_currentImagePath.isEmpty())
+        setShowInterestPoints(m_showInterestPoints);
+}
+
+QStringList CanvasWidget::availableFeatureSuffixes() const
+{
+    if (m_currentImagePath.isEmpty()) return {};
+    const QString projectPath = property("currentProjectPath").toString();
+    return ProjectIO::availableFeatureSuffixes(projectPath, m_currentImagePath);
+}
+
 void CanvasWidget::setShowInterestPoints(bool show)
 {
     m_showInterestPoints = show;
@@ -422,11 +438,11 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     if (imagePath.trimmed().isEmpty()) return;
 
     const QString imagePathCopy = imagePath;
-    // 检查缓存
+    // 检查缓存 (key 含 suffix)
     QFileInfo fiCheck(imagePathCopy);
-    auto it = m_spCache.find(imagePathCopy);
+    const QString cacheKey = imagePathCopy + m_activeFeatureSuffix;
+    auto it = m_spCache.find(cacheKey);
     if (it != m_spCache.end()) {
-        // 如果 mtime 一致，直接使用缓存
         if (it->second.first == fiCheck.lastModified()) {
             if (m_layerRenderer) {
                 m_layerRenderer->setFeatureDisplayOptions(m_currentFeatureOpts);
@@ -438,14 +454,18 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
     }
     
-    QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([this, imagePathCopy]() -> std::vector<cv::KeyPoint> {
+    QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([this, imagePathCopy, cacheKey]() -> std::vector<cv::KeyPoint> {
         std::vector<cv::KeyPoint> empty;
         const QString projectPath = property("currentProjectPath").toString();
-        const QString spFile = ProjectIO::findFeatureForImage(projectPath, imagePathCopy);
-        LOG_DEBUG(QStringLiteral("startSpLoadForImage: projectPath=%1 image=%2 feature=%3").arg(projectPath, imagePathCopy, spFile));
+        // 使用当前选中的后缀查找特征文件
+        const QString spFile = ProjectIO::featureOutputPathForImage(
+            projectPath, imagePathCopy, m_activeFeatureSuffix);
+        LOG_DEBUG(QStringLiteral("startSpLoadForImage: suffix=%1 file=%2")
+            .arg(m_activeFeatureSuffix, spFile));
 
-        if (spFile.isEmpty()) {
-            LOG_DEBUG(QStringLiteral("startSpLoadForImage: no feature file found for %1").arg(imagePathCopy));
+        if (spFile.isEmpty() || !QFile::exists(spFile)) {
+            LOG_DEBUG(QStringLiteral("startSpLoadForImage: no %1 found for %2")
+                .arg(m_activeFeatureSuffix, imagePathCopy));
             return empty;
         }
 
@@ -500,6 +520,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     // 取消上一个 watcher（如果有）并启动新 watcher
     if (m_spWatcher->isRunning()) m_spWatcher->cancel();
     m_lastRequestedSpPath = imagePathCopy;
+    m_lastRequestedSpSuffix = m_activeFeatureSuffix;
     m_spWatcher->setFuture(future);
 }
 
@@ -599,9 +620,9 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
         // 忽略方向估计失败
     }
 
-    // 更新 cache（使用 image 文件的 mtime）
+    // 更新 cache (key 含 suffix, 支持多提取器)
     QFileInfo fi(imagePath);
-    m_spCache[imagePath] = std::make_pair(fi.lastModified(), output.keypoints);
+    m_spCache[imagePath + m_activeFeatureSuffix] = std::make_pair(fi.lastModified(), output.keypoints);
 
     // 仅当刷新的是“当前显示的影像”时才更新场景，避免处理批量图像时最后一张覆盖当前视图。
     if (isCurrentImage && m_layerRenderer) {
