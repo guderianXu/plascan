@@ -70,7 +70,7 @@ std::string TraditionalFeatureExtractor::normalizeAlgorithmName(const std::strin
 
     if (normalized == "orb" || normalized == "sift" || normalized == "superpoint"
         || normalized == "disk" || normalized == "aliked"
-        || normalized == "surf")
+        || normalized == "surf" || normalized == "akaze")
     {
         return normalized;
     }
@@ -79,7 +79,8 @@ std::string TraditionalFeatureExtractor::normalizeAlgorithmName(const std::strin
 
 bool TraditionalFeatureExtractor::isTraditionalAlgorithm(const std::string &normalizedName)
 {
-    return normalizedName == "orb" || normalizedName == "sift" || normalizedName == "surf";
+    return normalizedName == "orb" || normalizedName == "sift"
+        || normalizedName == "surf" || normalizedName == "akaze";
 }
 
 FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,

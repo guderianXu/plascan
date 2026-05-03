@@ -216,3 +216,23 @@ endif()
 # pointcloud 模块测试迁移到 src/core/pointcloud/tests，
 # 不再在全局 tests 目录内维护该测试源码。
 
+# ==============================================================================
+# test_feature_extractor_suffix — 多提取器后缀映射 + FeatureFileIO + 工厂
+# ==============================================================================
+add_executable(test_feature_extractor_suffix test_feature_extractor_suffix.cpp)
+target_link_libraries(test_feature_extractor_suffix PRIVATE
+    feature_extractors_traditional
+    GTest::gtest_main
+    ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
+)
+target_include_directories(test_feature_extractor_suffix PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/compat
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition
+)
+gtest_discover_tests(test_feature_extractor_suffix)
+
