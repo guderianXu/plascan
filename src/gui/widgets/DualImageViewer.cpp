@@ -511,23 +511,31 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
         }
 
         if (sp0Path.isEmpty() || sp1Path.isEmpty()) {
-            // 回退：基于目录规则查找，优先 assets/ip（新结构），兼容旧目录
-            QStringList sp0Candidates = {
-                QDir(assetsDir).filePath("ip/" + image0Name + ".sp"),
-                QDir(projectRoot).filePath("assets/ip/" + image0Name + ".sp"),
-                QDir(projectRoot).filePath("ip/" + image0Name + ".sp"),
-            };
-            QStringList sp1Candidates = {
-                QDir(assetsDir).filePath("ip/" + image1Name + ".sp"),
-                QDir(projectRoot).filePath("assets/ip/" + image1Name + ".sp"),
-                QDir(projectRoot).filePath("ip/" + image1Name + ".sp"),
-            };
-            sp0Path = findExistingPath(sp0Candidates);
-            sp1Path = findExistingPath(sp1Candidates);
+            // 回退：尝试所有特征文件后缀 (.sp/.dsk/.alk/.sift 等)
+            static const char *suffixes[] = {".sp",".dsk",".alk",".sift",".orb",".akz",".dedode"};
+            for (const char *suf : suffixes) {
+                if (sp0Path.isEmpty()) {
+                    QStringList c0 = {
+                        QDir(assetsDir).filePath("ip/" + image0Name + suf),
+                        QDir(projectRoot).filePath("assets/ip/" + image0Name + suf),
+                        QDir(projectRoot).filePath("ip/" + image0Name + suf),
+                    };
+                    sp0Path = findExistingPath(c0);
+                }
+                if (sp1Path.isEmpty()) {
+                    QStringList c1 = {
+                        QDir(assetsDir).filePath("ip/" + image1Name + suf),
+                        QDir(projectRoot).filePath("assets/ip/" + image1Name + suf),
+                        QDir(projectRoot).filePath("ip/" + image1Name + suf),
+                    };
+                    sp1Path = findExistingPath(c1);
+                }
+                if (!sp0Path.isEmpty() && !sp1Path.isEmpty()) break;
+            }
         }
 
         if (sp0Path.isEmpty() || sp1Path.isEmpty()) {
-            qWarning() << "无法找到 .sp 文件:" << image0Name << image1Name;
+            qWarning() << "无法找到特征文件:" << image0Name << image1Name;
             return false;
         }
 

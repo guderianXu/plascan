@@ -59,6 +59,12 @@ public:
     // 输出格式：assets/ip/<basename>.sp
     static QString vwipOutputPathForImage(const QString &plascanPath, const QString &imagePath);
 
+    // 根据算法后缀推算特征文件输出路径
+    // 输出格式：assets/ip/<basename><suffix>
+    static QString featureOutputPathForImage(const QString &plascanPath,
+                                              const QString &imagePath,
+                                              const QString &suffix);
+
     // 在多个候选目录中查找指定影像对应的 .sp 特征点文件
     // 返回第一个存在的文件路径；若均不存在则返回空字符串
     static QString findSpForImage(const QString &plascanPath, const QString &imagePath);
