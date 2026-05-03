@@ -17,18 +17,20 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
 
-# ── conda/PyTorch 前缀 (所有路径的根) ──
-if(NOT PLASCAN_CONDA_PREFIX)
-  # 优先使用环境变量, 其次检查 targets 目录验证是真正的 conda env
+# ── conda/PyTorch 前缀 (可选, Docker/系统构建不需要) ──
+if(NOT DEFINED PLASCAN_CONDA_PREFIX)
   set(_p "$ENV{CONDA_PREFIX}")
   if(_p AND EXISTS "${_p}/targets/x86_64-linux/include")
-    set(PLASCAN_CONDA_PREFIX "${_p}")
+    set(PLASCAN_CONDA_PREFIX "${_p}" CACHE PATH "Conda environment prefix")
+  elseif(EXISTS "$ENV{HOME}/anaconda3/envs/plascan")
+    set(PLASCAN_CONDA_PREFIX "$ENV{HOME}/anaconda3/envs/plascan" CACHE PATH "Conda env prefix")
   else()
-    set(PLASCAN_CONDA_PREFIX "$ENV{HOME}/anaconda3/envs/plascan")
+    set(PLASCAN_CONDA_PREFIX "" CACHE PATH "Conda env prefix (empty = system build)")
   endif()
-  set(PLASCAN_CONDA_PREFIX "${PLASCAN_CONDA_PREFIX}" CACHE PATH "Conda environment prefix")
 endif()
 message(STATUS "plascan: CONDA_PREFIX = ${PLASCAN_CONDA_PREFIX}")
+
+# 全局启用 CUDA (各子模块不需要单独 enable_language)
 
 # 全局启用 CUDA (各子模块不需要单独 enable_language)
 # conda nvcc 不在默认 PATH 中, 显式指定路径
@@ -67,18 +69,19 @@ set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 string(REPLACE "-D_GLIBCXX_USE_CXX11_ABI=0" "" CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS}")
 message(STATUS "plascan: C++11 ABI enabled")
 
-# CUDA runtime + toolkit 头文件 (pip nvidia 包, 非标准路径)
-# targets 必须在 cu13 之前, 否则 nvcc 13.1 会找到 cu13 的 13.0 版 cuda_runtime_api.h
-include_directories("${PLASCAN_CONDA_PREFIX}/targets/x86_64-linux/include")
+# CUDA runtime + toolkit 头文件 (conda 环境才需要, 系统构建跳过)
+if(PLASCAN_CONDA_PREFIX AND EXISTS "${PLASCAN_CONDA_PREFIX}")
+  # targets 必须在 cu13 之前, 否则 nvcc 13.1 会找到 cu13 的 13.0 版 cuda_runtime_api.h
+  include_directories("${PLASCAN_CONDA_PREFIX}/targets/x86_64-linux/include")
 
-# cu13 Python site-packages 路径 (GLOB 兼容不同 Python 版本)
-file(GLOB _plascan_cu13_dirs LIST_DIRECTORIES true
-  "${PLASCAN_CONDA_PREFIX}/lib/python3.*/site-packages/nvidia/cu13/include")
-if(_plascan_cu13_dirs)
-  list(GET _plascan_cu13_dirs 0 _plascan_cu13_include)
-  include_directories("${_plascan_cu13_include}")
+  file(GLOB _plascan_cu13_dirs LIST_DIRECTORIES true
+    "${PLASCAN_CONDA_PREFIX}/lib/python3.*/site-packages/nvidia/cu13/include")
+  if(_plascan_cu13_dirs)
+    list(GET _plascan_cu13_dirs 0 _plascan_cu13_include)
+    include_directories("${_plascan_cu13_include}")
+  endif()
 else()
-  message(WARNING "plascan: nvidia/cu13/include not found")
+  message(STATUS "plascan: system build (no conda), assuming deps from find_package")
 endif()
 
 option(BUILD_TESTS "Build unit tests" ON)

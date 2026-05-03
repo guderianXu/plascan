@@ -1,0 +1,46 @@
+# PlaScan 构建环境 — Ubuntu 24.04 + LibTorch + Qt6 + OpenCV + GDAL
+# 用法: docker build -t plascan-build -f docker/Dockerfile.ubuntu2404 .
+
+FROM ubuntu:24.04
+
+ENV DEBIAN_FRONTEND=noninteractive
+ENV TZ=Etc/UTC
+
+# ── 系统依赖 ──
+RUN apt-get update && apt-get install -y --no-install-recommends \
+    build-essential cmake ninja-build g++ \
+    git curl wget ca-certificates \
+    qt6-base-dev qt6-base-dev-tools qt6-tools-dev qt6-tools-dev-tools \
+    libqt6opengl6-dev libqt6concurrent6-dev \
+    libopencv-dev \
+    libgdal-dev \
+    libtiff-dev \
+    libzip-dev \
+    libgtest-dev \
+    libomp-dev \
+    pkg-config \
+    python3 \
+    && apt-get clean && rm -rf /var/lib/apt/lists/*
+
+# ── LibTorch (CPU, 2.6.0 作为稳定版本) ──
+# CUDA 版本可在运行时通过 -v 挂载或环境变量覆盖
+RUN wget -q https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.6.0%2Bcpu.zip \
+    -O /tmp/libtorch.zip && \
+    unzip -q /tmp/libtorch.zip -d /opt && \
+    rm /tmp/libtorch.zip
+ENV Torch_DIR=/opt/libtorch/share/cmake/Torch
+
+# ── CLI11 (header-only) ──
+RUN wget -q https://github.com/CLIUtils/CLI11/releases/download/v2.4.2/CLI11.hpp \
+    -O /usr/local/include/CLI/CLI11.hpp && mkdir -p /usr/local/include/CLI || true
+
+# ── 编译 Google Test (apt 只提供源码) ──
+RUN cd /usr/src/gtest && cmake . && make -j$(nproc) && \
+    cp lib/libgtest*.a /usr/lib/ && cp lib/libgtest*.a /usr/lib/x86_64-linux-gnu/ 2>/dev/null || true
+
+# ── 工作目录 ──
+WORKDIR /src
+VOLUME ["/src"]
+
+# ── 入口: 交互式 shell 或直接构建 ──
+ENTRYPOINT ["/bin/bash"]
