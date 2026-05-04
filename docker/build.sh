@@ -1,11 +1,10 @@
 #!/bin/bash
-# 在 Docker 中构建 PlaScan 并运行测试
-# 用法: ./docker/build.sh [cmake-extra-args...]
+# Docker 内构建 PlaScan 并运行测试
+# 用法: ./docker/build.sh [cmake-args...]
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
 PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
-BUILD_DIR="${PROJECT_DIR}/build"
 
 IMAGE="plascan-build"
 if ! docker image inspect "$IMAGE" &>/dev/null; then
@@ -13,10 +12,11 @@ if ! docker image inspect "$IMAGE" &>/dev/null; then
     docker build -t "$IMAGE" -f "$SCRIPT_DIR/Dockerfile.ubuntu2404" "$PROJECT_DIR"
 fi
 
-mkdir -p "$BUILD_DIR"
+mkdir -p "$PROJECT_DIR/build"
 
 docker run --rm \
+    --gpus all \
     -v "$PROJECT_DIR:/src" \
     -w /src/build \
     "$IMAGE" \
-    bash -c "cmake .. $* && make -j\$(nproc) && ctest --output-on-failure"
+    bash -c "cmake .. $* -DBUILD_TESTS=ON && make -j\$(nproc) && ctest --output-on-failure"

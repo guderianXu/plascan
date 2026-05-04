@@ -1,7 +1,6 @@
 #!/bin/bash
-# 进入 PlaScan Docker 构建环境 (交互式 shell)
+# 进入 PlaScan Docker 构建环境 (交互式, 支持 GPU)
 # 用法: ./docker/shell.sh
-#   然后在容器里: cd build && cmake .. -DBUILD_TESTS=ON && make -j$(nproc) && ctest
 
 set -e
 SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
@@ -14,6 +13,8 @@ if ! docker image inspect "$IMAGE" &>/dev/null; then
 fi
 
 docker run --rm -it \
+    --gpus all \
     -v "$PROJECT_DIR:/src" \
     -w /src \
-    "$IMAGE"
+    "$IMAGE" \
+    bash
