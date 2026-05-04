@@ -44,6 +44,10 @@ endif()
 
 add_library(superpoint SHARED ${SUPERPOINT_SOURCES})
 
+if(CMAKE_CUDA_COMPILER)
+    target_compile_definitions(superpoint PRIVATE USE_CUDA=1)
+endif()
+
 target_include_directories(superpoint
     PUBLIC $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}>
            $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/..>

@@ -4,7 +4,10 @@
 
 #include <torch/torch.h>
 
+#if __has_include(<opencv2/xfeatures2d.hpp>)
 #include <opencv2/xfeatures2d.hpp>
+#define HAS_XFEATURES2D 1
+#endif
 #include <algorithm>
 #include <cmath>
 #include <stdexcept>
@@ -114,8 +117,12 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
     {
         // SURF (GPU via CUDA if available, else CPU)
         // hessianThreshold: 越大关键点越少 (默认 100, 卫星影像推荐 400-800)
+#ifdef HAS_XFEATURES2D
         auto surf = cv::xfeatures2d::SURF::create(400.0, 4, 3, false, false);
         surf->detectAndCompute(grayImage, cv::noArray(), keypoints, descriptors, false);
+#else
+        throw std::runtime_error("SURF requires opencv_contrib (xfeatures2d not available)");
+#endif
     }
     else
     {

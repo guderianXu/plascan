@@ -2,7 +2,9 @@
 #include "SuperPointUtils.h"
 #include <iostream>
 #include <cmath>
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
+#endif
 
 torch::Tensor SuperPoint::batchedNMS(const torch::Tensor& scores, int nms_radius) 
 {

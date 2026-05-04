@@ -4,7 +4,9 @@
 #include <future>
 #include <algorithm>
 #include <cmath>
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
+#endif
 
 // -------------------------------------------------------------------------
 // detectBatch: 批量推理，提高 GPU 容量利用率
@@ -101,7 +103,9 @@ std::vector<FeatureOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& i
                 // 显存不足：清空缓存后重试；若仍失败则回退到逐张处理
                 if (config_.device.is_cuda()) {
                     torch::cuda::synchronize();
-                    c10::cuda::CUDACachingAllocator::emptyCache();
+            #ifdef USE_CUDA
+        c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
                 }
                 try {
                     out = model_.forward(inputs);

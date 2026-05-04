@@ -53,5 +53,15 @@ std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
     return {};
 }
 
+bool PatchMatchDepthEstimator::estimate(
+    const cv::Mat &, const std::vector<cv::Mat> &,
+    const PositiveDepthCameraModel &, const std::vector<PositiveDepthCameraModel> &,
+    float, float, const PatchMatchConfig &,
+    cv::Mat &, cv::Mat *, std::string *errorMsg, const cv::Mat *)
+{
+    if (errorMsg) *errorMsg = "CUDA unavailable (PatchMatch requires CUDA)";
+    return false;
+}
+
 } // namespace mvs
 } // namespace xjw

@@ -9,7 +9,9 @@
 #include <algorithm>
 #include <cmath>
 #include <numeric>
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
+#endif
 
 SuperPoint::SuperPoint(const std::string& model_path, const SuperPointConfig& config)
     : config_(config) 

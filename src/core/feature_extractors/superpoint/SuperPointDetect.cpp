@@ -1,7 +1,9 @@
 #include "SuperPoint.h"
 #include "SuperPointUtils.h"
 #include <iostream>
+#ifdef USE_CUDA
 #include <c10/cuda/CUDACachingAllocator.h>
+#endif
 
 // -------------------------------------------------------------------------
 // detect: 对单张图像进行完整的 SuperPoint 推理
@@ -36,7 +38,9 @@ FeatureOutput SuperPoint::detect(const cv::Mat& image)
     } catch (const c10::OutOfMemoryError &) {
         if (config_.device.is_cuda()) {
             torch::cuda::synchronize();
-            c10::cuda::CUDACachingAllocator::emptyCache();
+    #ifdef USE_CUDA
+        c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
         }
         try {
             output = model_.forward(inputs);
@@ -313,7 +317,9 @@ FeatureOutput SuperPoint::detect(const cv::Mat& image)
     // 推理结束后主动释放 CUDA 缓存，阻止碎片在多图提取时堆积
     if (config_.device.is_cuda()) {
         torch::cuda::synchronize();
+#ifdef USE_CUDA
         c10::cuda::CUDACachingAllocator::emptyCache();
+#endif
     }
 
     return result;
