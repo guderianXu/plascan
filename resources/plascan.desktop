@@ -1,0 +1,9 @@
+[Desktop Entry]
+Name=PlaScan
+Comment=Planetary Surface Photogrammetry Suite
+Exec=plascan
+Icon=plascan
+Terminal=false
+Type=Application
+Categories=Science;Geoscience;Graphics;
+Keywords=photogrammetry;planetary;DEM;3D;mapping;

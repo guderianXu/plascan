@@ -1,0 +1,29 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+  <defs>
+    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="#1a1a2e"/>
+      <stop offset="100%" stop-color="#16213e"/>
+    </linearGradient>
+    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
+      <stop offset="0%" stop-color="#0f3460"/>
+      <stop offset="100%" stop-color="#533483"/>
+    </linearGradient>
+  </defs>
+  <!-- 背景: 行星表面 -->
+  <circle cx="64" cy="64" r="60" fill="url(#g1)" stroke="#e94560" stroke-width="2"/>
+  <!-- 地平线扫描线 -->
+  <path d="M14 75 Q40 45 64 55 Q88 65 114 50" fill="none" stroke="#e94560" stroke-width="2.5" opacity="0.9"/>
+  <path d="M10 90 Q40 68 70 75 Q95 80 118 65" fill="none" stroke="#e94560" stroke-width="1.5" opacity="0.6"/>
+  <path d="M8 102 Q45 85 80 90 Q105 93 120 80" fill="none" stroke="#e94560" stroke-width="1" opacity="0.3"/>
+  <!-- 扫描光束 -->
+  <polygon points="64,55 58,100 70,100" fill="#e94560" opacity="0.15"/>
+  <!-- 特征点 -->
+  <circle cx="32" cy="62" r="2.5" fill="#00ff88"/>
+  <circle cx="55" cy="48" r="2" fill="#00ff88"/>
+  <circle cx="80" cy="58" r="2.5" fill="#00ff88"/>
+  <circle cx="95" cy="45" r="2" fill="#00ff88"/>
+  <circle cx="45" cy="70" r="2" fill="#00dd77" opacity="0.7"/>
+  <circle cx="70" cy="65" r="1.5" fill="#00dd77" opacity="0.5"/>
+  <!-- P 字母 -->
+  <text x="64" y="118" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="14" fill="#e94560">P</text>
+</svg>
