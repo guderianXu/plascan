@@ -1,29 +1,52 @@
 #!/bin/bash
-# run.sh — 在目标机器上启动 PlaScan 容器
-#
-# 用法：
-#   bash run.sh [数据目录]
-#
-# 示例：
-#   bash run.sh /home/user/survey_data
+# 在 Docker 中运行 PlaScan CLI 工具 (带 GPU 支持)
+# 用法:
+#   ./docker/run.sh feature_extract_cli -a superpoint -m sp.pt -i img.tif -o out.sp --cuda
+#   ./docker/run.sh feature_match_cli --sp1 a.sp --sp2 b.sp -o out.match --cuda
+#   ./docker/run.sh dense_match_cli -L a.tif -R b.tif -o disp.tif --cuda
+#   ./docker/run.sh bash   # 交互式 shell
 
 set -e
+SCRIPT_DIR="$(cd "$(dirname "$0")" && pwd)"
+PROJECT_DIR="$(dirname "$SCRIPT_DIR")"
 
-DATA_DIR="${1:-$HOME/plascan_data}"
-mkdir -p "$DATA_DIR"
+# 确定要运行的程序
+if [ $# -eq 0 ]; then
+    echo "用法: $0 <command> [args...]"
+    echo ""
+    echo "CLI 工具:"
+    echo "  feature_extract_cli   特征提取"
+    echo "  feature_match_cli     特征匹配"  
+    echo "  dense_match_cli       密集匹配"
+    echo "  rectify_cli           极线校正"
+    echo "  triangulate_cli       视差三角化"
+    echo ""
+    echo "其他:"
+    echo "  bash                  交互式 shell"
+    echo ""
+    echo "示例:"
+    echo "  $0 feature_extract_cli -a superpoint -m sp.pt -i img.tif -o out.sp --cuda"
+    exit 1
+fi
 
-# 允许本地 X11 连接
-xhost +local:docker 2>/dev/null || true
+CMD="$1"
+shift
 
-docker run --rm \
-    --gpus all \
-    --ipc=host \
-    -e DISPLAY="$DISPLAY" \
-    -e QT_QPA_PLATFORM=xcb \
-    -v /tmp/.X11-unix:/tmp/.X11-unix:rw \
-    -v "$DATA_DIR":/data \
-    --name plascan \
-    plascan:latest
+case "$CMD" in
+    feature_extract_cli|feature_match_cli|dense_match_cli|rectify_cli|triangulate_cli)
+        BIN="build/bin/$CMD"
+        ;;
+    bash|shell)
+        BIN="bash"
+        ;;
+    *)
+        echo "未知命令: $CMD"
+        exit 1
+        ;;
+esac
 
-# 运行结束后撤销 X11 授权
-xhost -local:docker 2>/dev/null || true
+sudo docker run --rm --runtime=nvidia --gpus all \
+    -v "$PROJECT_DIR:/src" \
+    -w /src \
+    plascan-build \
+    bash -c "/src/$BIN $*"
