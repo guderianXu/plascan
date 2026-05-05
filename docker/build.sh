@@ -15,7 +15,7 @@ fi
 mkdir -p "$PROJECT_DIR/build"
 
 docker run --rm \
-    --gpus all \
+    --runtime=nvidia --gpus all \
     -v "$PROJECT_DIR:/src" \
     -w /src/build \
     "$IMAGE" \
