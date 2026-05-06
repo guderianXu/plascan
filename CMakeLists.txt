@@ -237,16 +237,18 @@ set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
 
 # 离线安装优先：不依赖目标机在线拉取 Qt 等运行时依赖。
 set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "")
+set(CPACK_DEBIAN_PACKAGE_DEPENDS "libxcb-cursor0, libgl1, qt6-qpa-plugins")
 set(CPACK_DEBIAN_COMPRESSION_TYPE "xz")
 
 # ── 安装规则 ──
+# 启动脚本 (处理 conda 隔离 + LibTorch + 系统 Qt6 GLX)
+install(PROGRAMS resources/plascan.sh
+    DESTINATION bin RENAME plascan)
 install(DIRECTORY resources/ DESTINATION share/plascan
     FILES_MATCHING PATTERN "*.svg" PATTERN "*.desktop")
-# 桌面集成: 图标和 .desktop 文件
+# 桌面集成
 install(FILES resources/plascan.svg
-    DESTINATION share/icons/hicolor/scalable/apps
-    RENAME plascan.svg)
+    DESTINATION share/icons/hicolor/scalable/apps RENAME plascan.svg)
 install(FILES resources/plascan.desktop
     DESTINATION share/applications)
 

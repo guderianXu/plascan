@@ -18,13 +18,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     libgtest-dev libomp-dev unzip pkg-config python3 \
     && apt-get clean && rm -rf /var/lib/apt/lists/*
 
-# ── 1b. NVIDIA GL 库 (必须精确匹配宿主驱动版本, 当前: 580.126.09) ──
-# 版本不匹配会导致 NV-GLX BadValue / QRhiGles2 context 失败
-RUN apt-get update && apt-get install -y --no-install-recommends \
-    libnvidia-gl-580=580.126.09-0ubuntu0.24.04.2 \
-    libnvidia-egl-wayland1 \
-    && apt-mark hold libnvidia-gl-580 \
-    && apt-get clean && rm -rf /var/lib/apt/lists/*
+# ── 1b. NVIDIA GL 库 (从本地 .deb 安装, 精确匹配宿主 580.126.09) ──
+COPY docker/debs/libnvidia-gl-580_580.126.09-0ubuntu0.24.04.2_amd64.deb /tmp/
+RUN dpkg -i /tmp/libnvidia-gl-580_580.126.09-0ubuntu0.24.04.2_amd64.deb && \
+    apt-get update && apt-get install -f -y --no-install-recommends && \
+    rm /tmp/libnvidia-gl-580_580.126.09-0ubuntu0.24.04.2_amd64.deb && \
+    apt-mark hold libnvidia-gl-580
 
 # ── 2. CUDA Toolkit 12.5 (NVIDIA 官方, 包含 nvcc) ──
 RUN wget -q https://developer.download.nvidia.com/compute/cuda/repos/ubuntu2404/x86_64/cuda-keyring_1.1-1_all.deb \
