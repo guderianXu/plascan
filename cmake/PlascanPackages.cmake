@@ -84,6 +84,10 @@ else()
 endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
+# ── plapoint ──────────────────────────────────────────────────────────────────
+find_package(plapoint REQUIRED)
+message(STATUS "plascan: found plapoint")
+
 # ── OpenMP ────────────────────────────────────────────────────────────────────
 if(PLASCAN_APPLE_SILICON)
   # macOS 不自带 OpenMP, 尝试 Homebrew libomp
