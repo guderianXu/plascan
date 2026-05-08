@@ -26,8 +26,8 @@
 #include "Camera.h"
 #include "pipeline/IncrementalSfm.h"
 #include "common/SfmTypes.h"
-#include "data/PointCloud.h"
-#include "io/PointCloudIO.h"
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/io/ply_io.h>
 
 #include <QDir>
 #include <QFile>
@@ -1560,13 +1560,15 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             }
         }
 
-        // 4b. 导出稀疏点云（使用 xjw::pointcloud::PointCloud 写 PLY 二进制）
+        // 4b. 导出稀疏点云（使用 plapoint::PointCloud 写 PLY 二进制）
         if (!outDir.isEmpty()) {
             const QString plyPath = QDir(outDir).filePath(QStringLiteral("sfm_sparse.ply"));
             const auto ptIds = recon->allPoint3DIds();
 
-            xjw::pointcloud::PointCloud cloud;
-            cloud.reserve(ptIds.size());
+            std::vector<float> ptsData;
+            std::vector<uint8_t> colorsData;
+            ptsData.reserve(ptIds.size() * 3);
+            colorsData.reserve(ptIds.size() * 3);
 
             // 懒加载彩色图像用于颜色采样（每幅图像只加载一次）
             QMap<ImageId, cv::Mat> imgColorCache;
@@ -1604,25 +1606,40 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     }
                 }
 
-                cloud.addPoint(
-                    xjw::Point3f{static_cast<float>(pt.xyz[0]),
-                                 static_cast<float>(pt.xyz[1]),
-                                 static_cast<float>(pt.xyz[2])},
-                    xjw::ColorRGBA{cr, cg, cb, 255});
+                ptsData.push_back(static_cast<float>(pt.xyz[0]));
+                ptsData.push_back(static_cast<float>(pt.xyz[1]));
+                ptsData.push_back(static_cast<float>(pt.xyz[2]));
+                colorsData.push_back(cr);
+                colorsData.push_back(cg);
+                colorsData.push_back(cb);
             }
 
-            xjw::pointcloud::PointCloudWriteOptions writeOpts;
-            writeOpts.format = xjw::pointcloud::PointCloudFileFormat::PlyBinaryLittleEndian;
-            writeOpts.writeNormals = false;
-            writeOpts.writeTextureCoordinates = false;
-            writeOpts.writeFaces = false;
+            const size_t N = ptsData.size() / 3;
+            plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(N, 3);
+            plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(N, 3);
+            for (size_t i = 0; i < N; ++i)
+            {
+                for (int c = 0; c < 3; ++c)
+                {
+                    pts(i, c) = ptsData[i * 3 + c];
+                    colors(i, c) = colorsData[i * 3 + c];
+                }
+            }
 
-            if (xjw::pointcloud::writePointCloud(plyPath.toStdString(), cloud, writeOpts)) {
+            plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(pts));
+            cloud.setColors(std::move(colors));
+
+            try
+            {
+                plapoint::io::writePly<float>(plyPath.toStdString(), cloud, plapoint::io::PlyFormat::BinaryLE);
                 result.sparseCloudPath = plyPath;
                 LOG_INFO(QStringLiteral("SFM: 稀疏点云已保存 %1 个点（原始 %2 个）→ %3")
-                    .arg((int)cloud.size()).arg((int)ptIds.size()).arg(plyPath));
-            } else {
-                LOG_INFO(QStringLiteral("SFM: 稀疏点云写出失败 → %1").arg(plyPath));
+                    .arg(static_cast<int>(N)).arg(static_cast<int>(ptIds.size())).arg(plyPath));
+            }
+            catch (const std::exception &e)
+            {
+                LOG_INFO(QStringLiteral("SFM: 稀疏点云写出失败 → %1: %2")
+                    .arg(plyPath).arg(QString::fromStdString(e.what())));
             }
         }
 

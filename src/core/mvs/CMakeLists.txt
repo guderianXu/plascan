@@ -113,7 +113,7 @@ target_link_libraries(mvs
         Qt6::Concurrent
         ${OpenCV_LIBS}
         ${PLASCAN_GDAL_TARGET}
-        pointcloud
+        plapoint::plapoint
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 
