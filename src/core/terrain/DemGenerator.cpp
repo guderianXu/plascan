@@ -62,17 +62,44 @@ float resolveCellElevation(const AccumulatorCell &cell,
     return static_cast<float>(cell.sumWeightedZ / cell.sumWeight);
 }
 
-pointcloud::PointCloudBounds computeBounds(const pointcloud::PointCloud &pointCloud)
+struct PointCloudBounds
 {
-    return pointCloud.computeBounds();
+    bool valid = false;
+    struct { float x = 0, y = 0, z = 0; } minCorner;
+    struct { float x = 0, y = 0, z = 0; } maxCorner;
+};
+
+PointCloudBounds computeBounds(const PlaPointCloud &pointCloud)
+{
+    PointCloudBounds result;
+    if (pointCloud.size() == 0)
+    {
+        return result;
+    }
+
+    float minX = std::numeric_limits<float>::max(), maxX = -std::numeric_limits<float>::max();
+    float minY = std::numeric_limits<float>::max(), maxY = -std::numeric_limits<float>::max();
+    float minZ = std::numeric_limits<float>::max(), maxZ = -std::numeric_limits<float>::max();
+    for (size_t i = 0; i < pointCloud.size(); ++i)
+    {
+        auto pt = pointCloud[i];
+        minX = std::min(minX, pt.x()); maxX = std::max(maxX, pt.x());
+        minY = std::min(minY, pt.y()); maxY = std::max(maxY, pt.y());
+        minZ = std::min(minZ, pt.z()); maxZ = std::max(maxZ, pt.z());
+    }
+    result.valid = true;
+    result.minCorner = {minX, minY, minZ};
+    result.maxCorner = {maxX, maxY, maxZ};
+    return result;
 }
 
-pointcloud::PointCloud buildDenseCloud(const DemGridData &demGrid,
-                                       const pointcloud::PointCloudMetadata &metadata)
+PlaPointCloud buildDenseCloud(const DemGridData &demGrid)
 {
-    pointcloud::PointCloud denseCloud;
-    denseCloud.setMetadata(metadata);
-    denseCloud.reserve(static_cast<std::size_t>(demGrid.width * demGrid.height));
+    std::vector<float> xs, ys, zs;
+    const size_t n = static_cast<std::size_t>(demGrid.width) * static_cast<std::size_t>(demGrid.height);
+    xs.reserve(n);
+    ys.reserve(n);
+    zs.reserve(n);
 
     for (int row = 0; row < demGrid.height; ++row)
     {
@@ -83,27 +110,33 @@ pointcloud::PointCloud buildDenseCloud(const DemGridData &demGrid,
                 continue;
             }
 
-            denseCloud.addPoint(pointcloud::Point3f{
-                static_cast<float>(demGrid.minX + demGrid.stepX * static_cast<double>(col)),
-                static_cast<float>(demGrid.minY + demGrid.stepY * static_cast<double>(row)),
-                demGrid.elevation.at<float>(row, col)});
+            xs.push_back(static_cast<float>(demGrid.minX + demGrid.stepX * static_cast<double>(col)));
+            ys.push_back(static_cast<float>(demGrid.minY + demGrid.stepY * static_cast<double>(row)));
+            zs.push_back(demGrid.elevation.at<float>(row, col));
         }
     }
 
-    return denseCloud;
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(xs.size(), 3);
+    for (size_t i = 0; i < xs.size(); ++i)
+    {
+        pts(static_cast<plamatrix::Index>(i), 0) = xs[i];
+        pts(static_cast<plamatrix::Index>(i), 1) = ys[i];
+        pts(static_cast<plamatrix::Index>(i), 2) = zs[i];
+    }
+    return PlaPointCloud(std::move(pts));
 }
 
 } // namespace
 
-int DemGenerator::estimateGridResolution(const pointcloud::PointCloud &pointCloud,
+int DemGenerator::estimateGridResolution(const PlaPointCloud &pointCloud,
                                          const DemGenerationOptions &options)
 {
-    if (pointCloud.empty())
+    if (pointCloud.size() == 0)
     {
         return 0;
     }
 
-    const pointcloud::PointCloudBounds bounds = computeBounds(pointCloud);
+    const PointCloudBounds bounds = computeBounds(pointCloud);
     const double spanX = std::max(1e-6, static_cast<double>(bounds.maxCorner.x - bounds.minCorner.x));
 
     if (options.gridResolution > 0.0)
@@ -116,10 +149,10 @@ int DemGenerator::estimateGridResolution(const pointcloud::PointCloud &pointClou
     return qBound(options.minGridSize, autoWidth, options.maxGridSize);
 }
 
-bool DemGenerator::generateFromPointCloud(const pointcloud::PointCloud &pointCloud,
+bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
                                           const DemGenerationOptions &options,
                                           DemGridData *demGrid,
-                                          pointcloud::PointCloud *denseCloud,
+                                          PlaPointCloud *denseCloud,
                                           QString *errorMsg)
 {
     if (!demGrid)
@@ -131,7 +164,7 @@ bool DemGenerator::generateFromPointCloud(const pointcloud::PointCloud &pointClo
         return false;
     }
 
-    if (pointCloud.empty())
+    if (pointCloud.size() == 0)
     {
         if (errorMsg)
         {
@@ -140,7 +173,7 @@ bool DemGenerator::generateFromPointCloud(const pointcloud::PointCloud &pointClo
         return false;
     }
 
-    const pointcloud::PointCloudBounds bounds = computeBounds(pointCloud);
+    const PointCloudBounds bounds = computeBounds(pointCloud);
     if (!bounds.valid)
     {
         if (errorMsg)
@@ -151,18 +184,20 @@ bool DemGenerator::generateFromPointCloud(const pointcloud::PointCloud &pointClo
     }
 
     // Use percentile-based robust bounds to exclude outliers that inflate the grid
-    double robustMinX = bounds.minCorner.x, robustMaxX = bounds.maxCorner.x;
-    double robustMinY = bounds.minCorner.y, robustMaxY = bounds.maxCorner.y;
+    double robustMinX = static_cast<double>(bounds.minCorner.x);
+    double robustMaxX = static_cast<double>(bounds.maxCorner.x);
+    double robustMinY = static_cast<double>(bounds.minCorner.y);
+    double robustMaxY = static_cast<double>(bounds.maxCorner.y);
     {
-        const auto &positions = pointCloud.positions();
-        const size_t n = positions.size();
+        const size_t n = pointCloud.size();
         if (n > 100)
         {
             std::vector<float> xs(n), ys(n);
             for (size_t i = 0; i < n; ++i)
             {
-                xs[i] = positions[i].x;
-                ys[i] = positions[i].y;
+                auto pt = pointCloud[i];
+                xs[i] = pt.x();
+                ys[i] = pt.y();
             }
             std::sort(xs.begin(), xs.end());
             std::sort(ys.begin(), ys.end());
@@ -282,11 +317,12 @@ bool DemGenerator::generateFromPointCloud(const pointcloud::PointCloud &pointClo
         demGrid->validMask.at<uchar>(row, col) = 255;
     };
 
-    for (const pointcloud::Point3f &position : pointCloud.positions())
+    for (size_t i = 0; i < pointCloud.size(); ++i)
     {
-        splatPointToGrid(static_cast<double>(position.x),
-                         static_cast<double>(position.y),
-                         static_cast<double>(position.z));
+        auto pt = pointCloud[i];
+        splatPointToGrid(static_cast<double>(pt.x()),
+                         static_cast<double>(pt.y()),
+                         static_cast<double>(pt.z()));
     }
 
     for (int row = 0; row < height; ++row)
@@ -361,9 +397,7 @@ bool DemGenerator::generateFromPointCloud(const pointcloud::PointCloud &pointClo
 
     if (denseCloud)
     {
-        pointcloud::PointCloudMetadata metadata = pointCloud.metadata();
-        metadata.description = "Dense cloud sampled from DEM grid";
-        *denseCloud = buildDenseCloud(*demGrid, metadata);
+        *denseCloud = buildDenseCloud(*demGrid);
     }
 
     return demGrid->isValid();

@@ -84,6 +84,10 @@ else()
 endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
+# ── plamatrix ────────────────────────────────────────────────────────────────
+find_package(plamatrix REQUIRED)
+message(STATUS "plascan: found plamatrix")
+
 # ── plapoint ──────────────────────────────────────────────────────────────────
 find_package(plapoint REQUIRED)
 message(STATUS "plascan: found plapoint")

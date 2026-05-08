@@ -2,7 +2,7 @@
 
 #include "DemDomTypes.h"
 
-#include "data/PointCloud.h"
+#include <plapoint/core/point_cloud.h>
 #include "Camera.h"
 
 #include <QString>
@@ -23,10 +23,10 @@ public:
     /**
      * @brief 从点云生成 DEM 栅格。
      */
-    static bool generateFromPointCloud(const pointcloud::PointCloud &pointCloud,
+    static bool generateFromPointCloud(const PlaPointCloud &pointCloud,
                                        const DemGenerationOptions &options,
                                        DemGridData *demGrid,
-                                       pointcloud::PointCloud *denseCloud,
+                                       PlaPointCloud *denseCloud,
                                        QString *errorMsg = nullptr);
 
     /**
@@ -51,7 +51,7 @@ public:
     /**
      * @brief 根据点云与参数估算 DEM 栅格宽度。
      */
-    static int estimateGridResolution(const pointcloud::PointCloud &pointCloud,
+    static int estimateGridResolution(const PlaPointCloud &pointCloud,
                                       const DemGenerationOptions &options);
 };
 

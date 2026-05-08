@@ -1,6 +1,7 @@
 #pragma once
 
-#include "io/ObjMtlLoader.h"
+#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/dense_matrix.h>
 
 #include <QString>
 
@@ -8,6 +9,9 @@
 
 namespace xjw
 {
+
+// Convenience alias for the CPU point cloud type
+using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
 /**
  * @brief DEM 栅格输出格式。
@@ -138,11 +142,16 @@ struct DomArtifacts
 };
 
 /**
- * @brief 带纹理的 OBJ 网格输入（pointcloud::TexturedMesh 的别名）。
+ * @brief 带纹理的网格输入（plapoint 原生类型）。
  *
- * 由 pointcloud::ObjMtlLoader::load() 填充，供 DemGenerator 与 DomGenerator 直接消费。
+ * 由 plapoint::io::readObj + cv::imread 填充，
+ * 供 DemGenerator 与 DomGenerator 直接消费。
  * texture 为空时表示无纹理（只能生成 DEM，不能生成 DOM）。
  */
-using TerrainMeshInput = pointcloud::TexturedMesh;
+struct TerrainMeshInput
+{
+    PlaPointCloud mesh;
+    cv::Mat texture;
+};
 
 } // namespace xjw

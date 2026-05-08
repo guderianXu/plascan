@@ -18,7 +18,7 @@ endif()
 target_link_libraries(terrain
     PUBLIC
         camera
-        pointcloud
+        plapoint::plapoint
     PRIVATE
         Qt6::Core
         Qt6::Gui

@@ -2,7 +2,7 @@
 
 #include "DemDomTypes.h"
 
-#include "data/PointCloud.h"
+#include <plapoint/core/point_cloud.h>
 
 #include <QString>
 
@@ -32,7 +32,7 @@ public:
                               QString *errorMsg = nullptr);
 
     /** @brief 写出栅格补密后的 XYZ 点云。 */
-    static bool writeDenseCloudXyz(const pointcloud::PointCloud &denseCloud,
+    static bool writeDenseCloudXyz(const PlaPointCloud &denseCloud,
                                    const QString &outputPath,
                                    QString *errorMsg = nullptr);
 

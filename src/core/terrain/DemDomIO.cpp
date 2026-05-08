@@ -417,11 +417,11 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
     return true;
 }
 
-bool DemDomIO::writeDenseCloudXyz(const pointcloud::PointCloud &denseCloud,
+bool DemDomIO::writeDenseCloudXyz(const PlaPointCloud &denseCloud,
                                   const QString &outputPath,
                                   QString *errorMsg)
 {
-    if (denseCloud.empty())
+    if (denseCloud.size() == 0)
     {
         if (errorMsg)
         {
@@ -442,9 +442,10 @@ bool DemDomIO::writeDenseCloudXyz(const pointcloud::PointCloud &denseCloud,
     }
 
     QTextStream stream(&file);
-    for (const pointcloud::Point3f &position : denseCloud.positions())
+    for (size_t i = 0; i < denseCloud.size(); ++i)
     {
-        stream << position.x << ' ' << position.y << ' ' << position.z << '\n';
+        auto pt = denseCloud[i];
+        stream << pt.x() << ' ' << pt.y() << ' ' << pt.z() << '\n';
     }
     return true;
 }

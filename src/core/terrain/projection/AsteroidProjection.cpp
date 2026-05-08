@@ -1,6 +1,7 @@
 #include "AsteroidProjection.h"
 
-#include "data/PointCloud.h"
+#include <plapoint/core/point_cloud.h>
+#include <plamatrix/dense/dense_matrix.h>
 
 #include <opencv2/core.hpp>
 
@@ -56,34 +57,36 @@ std::array<double, 9> AsteroidProjection::identityRotation()
 // computeCenter
 // -----------------------------------------------------------------------------
 
-AsteroidBodyCenter AsteroidProjection::computeCenter(const pointcloud::PointCloud &pc)
+AsteroidBodyCenter AsteroidProjection::computeCenter(
+    const plapoint::PointCloud<float, plamatrix::Device::CPU> &pc)
 {
     AsteroidBodyCenter result;
-    if (pc.empty())
+    if (pc.size() == 0)
     {
         return result;
     }
 
-    const auto &positions = pc.positions();
-    const std::size_t n = positions.size();
+    const std::size_t n = pc.size();
 
     double sumX = 0, sumY = 0, sumZ = 0;
-    for (const auto &p : positions)
+    for (std::size_t i = 0; i < n; ++i)
     {
-        sumX += static_cast<double>(p.x);
-        sumY += static_cast<double>(p.y);
-        sumZ += static_cast<double>(p.z);
+        auto p = pc[i];
+        sumX += static_cast<double>(p.x());
+        sumY += static_cast<double>(p.y());
+        sumZ += static_cast<double>(p.z());
     }
     result.cx = sumX / static_cast<double>(n);
     result.cy = sumY / static_cast<double>(n);
     result.cz = sumZ / static_cast<double>(n);
 
     double sumDist = 0.0;
-    for (const auto &p : positions)
+    for (std::size_t i = 0; i < n; ++i)
     {
-        const double dx = static_cast<double>(p.x) - result.cx;
-        const double dy = static_cast<double>(p.y) - result.cy;
-        const double dz = static_cast<double>(p.z) - result.cz;
+        auto p = pc[i];
+        const double dx = static_cast<double>(p.x()) - result.cx;
+        const double dy = static_cast<double>(p.y()) - result.cy;
+        const double dz = static_cast<double>(p.z()) - result.cz;
         sumDist += std::sqrt(dx * dx + dy * dy + dz * dz);
     }
     result.referenceRadius = sumDist / static_cast<double>(n);
@@ -96,7 +99,7 @@ AsteroidBodyCenter AsteroidProjection::computeCenter(const pointcloud::PointClou
 // -----------------------------------------------------------------------------
 
 TriaxialEllipsoidParams AsteroidProjection::fitEllipsoid(
-    const pointcloud::PointCloud &pc,
+    const plapoint::PointCloud<float, plamatrix::Device::CPU> &pc,
     const AsteroidBodyCenter &center,
     std::array<double, 9> *rotationMatrix)
 {
@@ -113,16 +116,16 @@ TriaxialEllipsoidParams AsteroidProjection::fitEllipsoid(
         return result;
     }
 
-    const auto &positions = pc.positions();
-    const int n = static_cast<int>(positions.size());
+    const int n = static_cast<int>(pc.size());
 
-    // 构建以质心为原点的去中心化坐标矩阵 (n × 3)
+    // 构建以质心为原点的去中心化坐标矩阵 (n x 3)
     cv::Mat data(n, 3, CV_64F);
     for (int i = 0; i < n; ++i)
     {
-        data.at<double>(i, 0) = static_cast<double>(positions[static_cast<std::size_t>(i)].x) - center.cx;
-        data.at<double>(i, 1) = static_cast<double>(positions[static_cast<std::size_t>(i)].y) - center.cy;
-        data.at<double>(i, 2) = static_cast<double>(positions[static_cast<std::size_t>(i)].z) - center.cz;
+        auto p = pc[static_cast<std::size_t>(i)];
+        data.at<double>(i, 0) = static_cast<double>(p.x()) - center.cx;
+        data.at<double>(i, 1) = static_cast<double>(p.y()) - center.cy;
+        data.at<double>(i, 2) = static_cast<double>(p.z()) - center.cz;
     }
 
     // PCA：特征值按降序排列（方差最大轴 → 最长半轴 a）

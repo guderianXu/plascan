@@ -4,12 +4,14 @@
 #include "DemDomTypes.h"
 #include "DemGenerator.h"
 #include "DomGenerator.h"
-#include "io/ObjMtlLoader.h"
 #include "projection/AsteroidProjection.h"
 #include "Camera.h"
 
-#include "io/PointCloudIO.h"
-#include "data/PointCloud.h"
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/io/ply_io.h>
+#include <plapoint/io/obj_io.h>
+#include <plapoint/io/xyz_io.h>
+#include <plamatrix/dense/dense_matrix.h>
 
 #include <QDir>
 #include <QDateTime>
@@ -23,6 +25,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 #include <vector>
 
 namespace
@@ -439,11 +442,35 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
                                           QJsonObject *result,
                                           QString *errorMsg)
 {
-    pointcloud::PointCloud pointCloud;
-    pointcloud::PointCloudIOResult ioResult;
-    if (!pointcloud::readPointCloud(pointCloudPath.toStdString(), &pointCloud, {}, &ioResult)) 
+    // Auto-detect file format and read
+    std::shared_ptr<PlaPointCloud> cloudPtr;
+    const std::string path = pointCloudPath.toStdString();
+    const QString suffix = QFileInfo(pointCloudPath).suffix().toLower();
+    try
     {
-        if (errorMsg) *errorMsg = QStringLiteral("读取点云失败: %1").arg(QString::fromStdString(ioResult.errorMessage));
+        if (suffix == QStringLiteral("ply"))
+            cloudPtr = plapoint::io::readPly<float>(path);
+        else if (suffix == QStringLiteral("obj"))
+            cloudPtr = plapoint::io::readObj<float>(path);
+        else if (suffix == QStringLiteral("xyz"))
+            cloudPtr = plapoint::io::readXyz<float>(path);
+        else
+        {
+            // Try all formats
+            try { cloudPtr = plapoint::io::readPly<float>(path); } catch (...) {}
+            if (!cloudPtr) try { cloudPtr = plapoint::io::readObj<float>(path); } catch (...) {}
+            if (!cloudPtr) try { cloudPtr = plapoint::io::readXyz<float>(path); } catch (...) {}
+        }
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("读取点云失败: %1").arg(QString::fromStdString(e.what()));
+        return false;
+    }
+
+    if (!cloudPtr || cloudPtr->size() == 0)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("读取点云失败: 文件为空或格式不支持");
         return false;
     }
 
@@ -458,8 +485,8 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
     options.useSubPixelBilinearSplat = true;
 
     DemGridData demGrid;
-    pointcloud::PointCloud denseCloud;
-    if (!DemGenerator::generateFromPointCloud(pointCloud, options, &demGrid, &denseCloud, errorMsg)) 
+    PlaPointCloud denseCloud;
+    if (!DemGenerator::generateFromPointCloud(*cloudPtr, options, &demGrid, &denseCloud, errorMsg))
     {
         return false;
     }
@@ -499,9 +526,9 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
     }
 
     int densePointCount = 0;
-    if (generateDenseCloud && !denseCloud.empty()) 
+    if (generateDenseCloud && denseCloud.size() > 0)
     {
-        if (!DemDomIO::writeDenseCloudXyz(denseCloud, denseXyz, errorMsg)) 
+        if (!DemDomIO::writeDenseCloudXyz(denseCloud, denseXyz, errorMsg))
         {
             return false;
         }
@@ -511,7 +538,7 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
     int vertexCount = 0;
     int faceCount = 0;
     if (options.generateMesh
-        && !DemDomIO::writeMeshPlyFromDemGrid(demGrid, meshPly, &vertexCount, &faceCount, errorMsg)) 
+        && !DemDomIO::writeMeshPlyFromDemGrid(demGrid, meshPly, &vertexCount, &faceCount, errorMsg))
     {
         if (errorMsg && errorMsg->isEmpty())
         {
@@ -525,7 +552,7 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
         faceCount = 0;
     }
 
-    if (result) 
+    if (result)
     {
         QJsonObject output;
         output[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
@@ -677,11 +704,32 @@ bool TerrainPipeline::generateFromObjMtl(const QString &objPath,
                                           QJsonObject *result,
                                           QString *errorMsg)
 {
-    // 1. 加载 OBJ + MTL + 纹理
-    TerrainMeshInput meshInput;
-    if (!pointcloud::ObjMtlLoader::load(objPath, &meshInput, errorMsg))
+    // 1. 加载 OBJ + 纹理（plapoint native）
+    std::shared_ptr<PlaPointCloud> cloudPtr;
+    try
     {
+        cloudPtr = plapoint::io::readObj<float>(objPath.toStdString());
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("OBJ 读取失败: %1").arg(QString::fromStdString(e.what()));
         return false;
+    }
+
+    TerrainMeshInput meshInput;
+    meshInput.mesh = std::move(*cloudPtr);
+
+    // Load texture image if referenced
+    const std::string &texFile = meshInput.mesh.textureImageFile();
+    if (!texFile.empty())
+    {
+        QString texPath = QFileInfo(objPath).dir().filePath(QString::fromStdString(texFile));
+        meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+        if (meshInput.texture.empty())
+        {
+            texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() + QString::fromStdString(texFile));
+            meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+        }
     }
 
     // 2. 生成 DEM（直接用顶点 Z 光栅化）
@@ -693,7 +741,7 @@ bool TerrainPipeline::generateFromObjMtl(const QString &objPath,
     demOptions.useSubPixelBilinearSplat = true;
 
     DemGridData demGrid;
-    pointcloud::PointCloud denseCloud;
+    PlaPointCloud denseCloud;
     if (!DemGenerator::generateFromPointCloud(meshInput.mesh, demOptions, &demGrid, &denseCloud, errorMsg))
     {
         return false;
@@ -725,7 +773,7 @@ bool TerrainPipeline::generateFromObjMtl(const QString &objPath,
     }
 
     // 5. 生成并写出 DOM（彩色）
-    bool hasTexture = !meshInput.texture.empty() && !meshInput.mesh.faces().empty();
+    bool hasTexture = !meshInput.texture.empty() && meshInput.mesh.hasFaces();
     if (hasTexture)
     {
         cv::Mat domImage;
@@ -780,27 +828,49 @@ bool TerrainPipeline::generateFromObjMtlDir(const QString &dirPath,
     std::vector<TerrainMeshInput> tileInputs;
     tileInputs.reserve(static_cast<std::size_t>(objNames.size()));
 
-    pointcloud::PointCloud combinedCloud;
+    // Accumulate all points for combined cloud
+    std::vector<float> allXs, allYs, allZs;
 
     for (const QString &objName : objNames)
     {
         const QString objPath = dir.filePath(objName);
-        TerrainMeshInput tile;
-        QString tileError;
-        if (!pointcloud::ObjMtlLoader::load(objPath, &tile, &tileError))
-        {
-            // 跳过损坏的瓦片，不中断整体
+
+        std::shared_ptr<PlaPointCloud> tilePtr;
+        try { tilePtr = plapoint::io::readObj<float>(objPath.toStdString()); }
+        catch (...) { continue; }
+
+        if (!tilePtr || tilePtr->size() == 0)
             continue;
+
+        TerrainMeshInput tile;
+        tile.mesh = std::move(*tilePtr);
+
+        // Load texture
+        const std::string &texFile = tile.mesh.textureImageFile();
+        if (!texFile.empty())
+        {
+            QString texPath = QFileInfo(objPath).dir().filePath(QString::fromStdString(texFile));
+            tile.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+            if (tile.texture.empty())
+            {
+                texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() + QString::fromStdString(texFile));
+                tile.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+            }
         }
 
-        if (!tile.mesh.empty())
+        // Accumulate points for combined cloud
+        for (size_t i = 0; i < tile.mesh.size(); ++i)
         {
-            combinedCloud.append(tile.mesh);
-            tileInputs.push_back(std::move(tile));
+            auto pt = tile.mesh[i];
+            allXs.push_back(pt.x());
+            allYs.push_back(pt.y());
+            allZs.push_back(pt.z());
         }
+
+        tileInputs.push_back(std::move(tile));
     }
 
-    if (combinedCloud.empty())
+    if (allXs.empty())
     {
         if (errorMsg)
         {
@@ -808,6 +878,16 @@ bool TerrainPipeline::generateFromObjMtlDir(const QString &dirPath,
         }
         return false;
     }
+
+    // Build combined point cloud
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> combinedPts(allXs.size(), 3);
+    for (size_t i = 0; i < allXs.size(); ++i)
+    {
+        combinedPts(static_cast<plamatrix::Index>(i), 0) = allXs[i];
+        combinedPts(static_cast<plamatrix::Index>(i), 1) = allYs[i];
+        combinedPts(static_cast<plamatrix::Index>(i), 2) = allZs[i];
+    }
+    PlaPointCloud combinedCloud(std::move(combinedPts));
 
     // 3. 用合并后的顶点云生成全局 DEM
     DemGenerationOptions demOptions;
@@ -818,7 +898,7 @@ bool TerrainPipeline::generateFromObjMtlDir(const QString &dirPath,
     demOptions.useSubPixelBilinearSplat = true;
 
     DemGridData demGrid;
-    pointcloud::PointCloud denseCloud;
+    PlaPointCloud denseCloud;
     if (!DemGenerator::generateFromPointCloud(combinedCloud, demOptions, &demGrid, &denseCloud, errorMsg))
     {
         return false;
@@ -855,7 +935,7 @@ bool TerrainPipeline::generateFromObjMtlDir(const QString &dirPath,
 
     for (const TerrainMeshInput &tile : tileInputs)
     {
-        if (tile.texture.empty() || tile.mesh.faces().empty())
+        if (tile.texture.empty() || !tile.mesh.hasFaces())
         {
             continue;
         }
@@ -904,14 +984,35 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
     QJsonObject *result,
     QString *errorMsg)
 {
-    // 1. 加载 OBJ + MTL + 纹理
-    TerrainMeshInput meshInput;
-    if (!pointcloud::ObjMtlLoader::load(objPath, &meshInput, errorMsg))
+    // 1. 加载 OBJ + 纹理 (plapoint native)
+    std::shared_ptr<PlaPointCloud> cloudPtr;
+    try
     {
+        cloudPtr = plapoint::io::readObj<float>(objPath.toStdString());
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("OBJ 读取失败: %1").arg(QString::fromStdString(e.what()));
         return false;
     }
 
-    if (meshInput.mesh.empty())
+    TerrainMeshInput meshInput;
+    meshInput.mesh = std::move(*cloudPtr);
+
+    // Load texture
+    const std::string &texFile = meshInput.mesh.textureImageFile();
+    if (!texFile.empty())
+    {
+        QString texPath = QFileInfo(objPath).dir().filePath(QString::fromStdString(texFile));
+        meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+        if (meshInput.texture.empty())
+        {
+            texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() + QString::fromStdString(texFile));
+            meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+        }
+    }
+
+    if (meshInput.mesh.size() == 0)
     {
         if (errorMsg)
         {
@@ -931,7 +1032,7 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
         return false;
     }
 
-    const bool hasTexture = !meshInput.texture.empty() && !meshInput.mesh.faces().empty();
+    const bool hasTexture = !meshInput.texture.empty() && meshInput.mesh.hasFaces();
 
     // 3. 计算质心（全部投影共用）
     const AsteroidBodyCenter center = AsteroidProjection::computeCenter(meshInput.mesh);
@@ -951,7 +1052,7 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
         baseOptions.useSubPixelBilinearSplat = true;
 
         DemGridData baseGrid;
-        pointcloud::PointCloud denseCloud;
+        PlaPointCloud denseCloud;
         if (DemGenerator::generateFromPointCloud(meshInput.mesh, baseOptions, &baseGrid, &denseCloud, nullptr))
         {
             const QString depthPng = QDir(productsDir).filePath(QStringLiteral("depth_map.png"));
@@ -995,8 +1096,7 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
     outputJson[QStringLiteral("ellipsoid_b")] = triaxEllipsoid.b;
     outputJson[QStringLiteral("ellipsoid_c")] = triaxEllipsoid.c;
 
-    const auto &origPositions = meshInput.mesh.positions();
-    const std::size_t nPts = origPositions.size();
+    const std::size_t nPts = meshInput.mesh.size();
 
     for (const ProjectionJob &job : jobs)
     {
@@ -1007,23 +1107,33 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
         params.ellipsoid = job.ellipsoid;
 
         // 6a. 构建投影后的点云（用于 DEM 生成）
-        pointcloud::PointCloud projCloud;
-        projCloud.reserve(nPts);
+        std::vector<float> projXs, projYs, projZs;
+        projXs.reserve(nPts);
+        projYs.reserve(nPts);
+        projZs.reserve(nPts);
         for (std::size_t i = 0; i < nPts; ++i)
         {
-            const auto &p = origPositions[i];
+            auto pt = meshInput.mesh[i];
             double u = 0, v = 0, elev = 0;
             AsteroidProjection::projectPoint(
-                static_cast<double>(p.x),
-                static_cast<double>(p.y),
-                static_cast<double>(p.z),
+                static_cast<double>(pt.x()),
+                static_cast<double>(pt.y()),
+                static_cast<double>(pt.z()),
                 center, params, job.rotMatrix,
                 &u, &v, &elev);
-            projCloud.addPoint(pointcloud::Point3f{
-                static_cast<float>(u),
-                static_cast<float>(v),
-                static_cast<float>(elev)});
+            projXs.push_back(static_cast<float>(u));
+            projYs.push_back(static_cast<float>(v));
+            projZs.push_back(static_cast<float>(elev));
         }
+
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> projPts(projXs.size(), 3);
+        for (size_t i = 0; i < projXs.size(); ++i)
+        {
+            projPts(static_cast<plamatrix::Index>(i), 0) = projXs[i];
+            projPts(static_cast<plamatrix::Index>(i), 1) = projYs[i];
+            projPts(static_cast<plamatrix::Index>(i), 2) = projZs[i];
+        }
+        PlaPointCloud projCloud(std::move(projPts));
 
         // 6b. 生成投影 DEM
         DemGenerationOptions demOptions;
@@ -1036,7 +1146,7 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
             AsteroidProjection::buildProjectionWkt(job.type, center, job.ellipsoid);
 
         DemGridData projDemGrid;
-        pointcloud::PointCloud denseCloud;
+        PlaPointCloud denseCloud;
         QString demError;
         if (!DemGenerator::generateFromPointCloud(projCloud, demOptions, &projDemGrid, &denseCloud, &demError))
         {
@@ -1073,21 +1183,35 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
             // 用投影后顶点坐标覆盖位置，但保留 UV 纹理坐标和三角面（深拷贝 mesh）
             TerrainMeshInput projMesh;
             projMesh.texture = meshInput.texture;
-            projMesh.mesh = meshInput.mesh;  // 深拷贝（包含 UV + faces）
+            // Manually deep-copy PointCloud (DenseMatrix is move-only)
+            {
+                const auto &srcPts = meshInput.mesh.points();
+                plamatrix::DenseMatrix<float, plamatrix::Device::CPU> ptsCopy(srcPts.rows(), srcPts.cols());
+                for (plamatrix::Index r = 0; r < srcPts.rows(); ++r)
+                    for (int c = 0; c < 3; ++c)
+                        ptsCopy(r, c) = srcPts(r, c);
+                projMesh.mesh = PlaPointCloud(std::move(ptsCopy));
+            }
+            if (meshInput.mesh.hasNormals()) projMesh.mesh.setNormals(*meshInput.mesh.normals());
+            if (meshInput.mesh.hasColors()) projMesh.mesh.setColors(*meshInput.mesh.colors());
+            if (meshInput.mesh.hasTextureCoords()) projMesh.mesh.setTextureCoords(*meshInput.mesh.textureCoords());
+            if (meshInput.mesh.hasFaces()) projMesh.mesh.setFaces(*meshInput.mesh.faces());
+            if (meshInput.mesh.hasFaceTextureIndices()) projMesh.mesh.setFaceTextureIndices(*meshInput.mesh.faceTextureIndices());
+            projMesh.mesh.setMaterialLibraryFile(meshInput.mesh.materialLibraryFile());
+            projMesh.mesh.setTextureImageFile(meshInput.mesh.textureImageFile());
             for (std::size_t i = 0; i < nPts; ++i)
             {
-                const auto &p = origPositions[i];
+                auto pt = meshInput.mesh[i];
                 double u = 0, v = 0, elev = 0;
                 AsteroidProjection::projectPoint(
-                    static_cast<double>(p.x),
-                    static_cast<double>(p.y),
-                    static_cast<double>(p.z),
+                    static_cast<double>(pt.x()),
+                    static_cast<double>(pt.y()),
+                    static_cast<double>(pt.z()),
                     center, params, job.rotMatrix,
                     &u, &v, &elev);
-                projMesh.mesh.setPosition(i, pointcloud::Point3f{
-                    static_cast<float>(u),
-                    static_cast<float>(v),
-                    static_cast<float>(elev)});
+                projMesh.mesh.points()(static_cast<plamatrix::Index>(i), 0) = static_cast<float>(u);
+                projMesh.mesh.points()(static_cast<plamatrix::Index>(i), 1) = static_cast<float>(v);
+                projMesh.mesh.points()(static_cast<plamatrix::Index>(i), 2) = static_cast<float>(elev);
             }
 
             cv::Mat domImage;

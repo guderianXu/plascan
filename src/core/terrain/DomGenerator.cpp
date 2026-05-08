@@ -242,23 +242,23 @@ bool barycentricCoords(double px, double py,
     return true;
 }
 
-void rasterizeTriangle(const pointcloud::Point3f &v0,
-                       const pointcloud::Point3f &v1,
-                       const pointcloud::Point3f &v2,
-                       const pointcloud::Point2f &uv0,
-                       const pointcloud::Point2f &uv1,
-                       const pointcloud::Point2f &uv2,
+void rasterizeTriangle(float v0x, float v0y,
+                       float v1x, float v1y,
+                       float v2x, float v2y,
+                       float uv0u, float uv0v,
+                       float uv1u, float uv1v,
+                       float uv2u, float uv2v,
                        const DemGridData &demGrid,
                        const cv::Mat &texture,
                        cv::Mat &domImage)
 {
     // 投影到栅格坐标（XY 平面，忽略 Z）
-    const double gx0 = (static_cast<double>(v0.x) - demGrid.minX) / demGrid.stepX;
-    const double gy0 = (static_cast<double>(v0.y) - demGrid.minY) / demGrid.stepY;
-    const double gx1 = (static_cast<double>(v1.x) - demGrid.minX) / demGrid.stepX;
-    const double gy1 = (static_cast<double>(v1.y) - demGrid.minY) / demGrid.stepY;
-    const double gx2 = (static_cast<double>(v2.x) - demGrid.minX) / demGrid.stepX;
-    const double gy2 = (static_cast<double>(v2.y) - demGrid.minY) / demGrid.stepY;
+    const double gx0 = (static_cast<double>(v0x) - demGrid.minX) / demGrid.stepX;
+    const double gy0 = (static_cast<double>(v0y) - demGrid.minY) / demGrid.stepY;
+    const double gx1 = (static_cast<double>(v1x) - demGrid.minX) / demGrid.stepX;
+    const double gy1 = (static_cast<double>(v1y) - demGrid.minY) / demGrid.stepY;
+    const double gx2 = (static_cast<double>(v2x) - demGrid.minX) / demGrid.stepX;
+    const double gy2 = (static_cast<double>(v2y) - demGrid.minY) / demGrid.stepY;
 
     // 计算包围盒（整数栅格范围）
     const int minCol = std::max(0, static_cast<int>(std::floor(std::min({gx0, gx1, gx2}))));
@@ -296,8 +296,8 @@ void rasterizeTriangle(const pointcloud::Point3f &v0,
             }
 
             // 插值 UV
-            const float u = static_cast<float>(w0 * uv0.u + w1 * uv1.u + w2 * uv2.u);
-            const float v = static_cast<float>(w0 * uv0.v + w1 * uv1.v + w2 * uv2.v);
+            const float u = static_cast<float>(static_cast<double>(w0) * uv0u + static_cast<double>(w1) * uv1u + static_cast<double>(w2) * uv2u);
+            const float v = static_cast<float>(static_cast<double>(w0) * uv0v + static_cast<double>(w1) * uv1v + static_cast<double>(w2) * uv2v);
 
             domImage.at<cv::Vec3b>(row, col) = sampleTextureBilinear(texture, u, v);
         }
@@ -338,7 +338,7 @@ bool DomGenerator::generateFromTexturedMesh(const TerrainMeshInput &input,
         return false;
     }
 
-    if (input.mesh.faces().empty())
+    if (!input.mesh.hasFaces())
     {
         if (errorMsg)
         {
@@ -364,12 +364,8 @@ bool DomGenerator::generateFromTexturedMesh(const TerrainMeshInput &input,
         cv::cvtColor(texture, texture, cv::COLOR_BGRA2BGR);
     }
 
-    const auto &positions = input.mesh.positions();
-    const auto &texCoords = input.mesh.textureCoordinates();
-    const auto &faces = input.mesh.faces();
-
     // 需要逐顶点 UV 数组
-    if (texCoords.empty())
+    if (!input.mesh.hasTextureCoords())
     {
         if (errorMsg)
         {
@@ -378,24 +374,32 @@ bool DomGenerator::generateFromTexturedMesh(const TerrainMeshInput &input,
         return false;
     }
 
-    for (const pointcloud::PointCloudFace &face : faces)
+    const auto &texCoords = *input.mesh.textureCoords();
+    const auto &faces = *input.mesh.faces();
+    const size_t nPts = input.mesh.size();
+    const size_t nTex = static_cast<size_t>(texCoords.rows());
+    const plamatrix::Index nFaces = faces.rows();
+
+    for (plamatrix::Index fi = 0; fi < nFaces; ++fi)
     {
-        const std::size_t i0 = face.vertexIndices[0];
-        const std::size_t i1 = face.vertexIndices[1];
-        const std::size_t i2 = face.vertexIndices[2];
+        const int i0 = faces(fi, 0);
+        const int i1 = faces(fi, 1);
+        const int i2 = faces(fi, 2);
 
-        if (i0 >= positions.size() || i1 >= positions.size() || i2 >= positions.size())
-        {
+        if (i0 < 0 || i1 < 0 || i2 < 0)
             continue;
-        }
-        if (i0 >= texCoords.size() || i1 >= texCoords.size() || i2 >= texCoords.size())
-        {
+        const size_t u0 = static_cast<size_t>(i0), u1 = static_cast<size_t>(i1), u2 = static_cast<size_t>(i2);
+        if (u0 >= nPts || u1 >= nPts || u2 >= nPts)
             continue;
-        }
+        if (u0 >= nTex || u1 >= nTex || u2 >= nTex)
+            continue;
 
+        auto v0 = input.mesh[u0], v1 = input.mesh[u1], v2 = input.mesh[u2];
         rasterizeTriangle(
-            positions[i0], positions[i1], positions[i2],
-            texCoords[i0], texCoords[i1], texCoords[i2],
+            v0.x(), v0.y(), v1.x(), v1.y(), v2.x(), v2.y(),
+            texCoords(static_cast<plamatrix::Index>(u0), 0), texCoords(static_cast<plamatrix::Index>(u0), 1),
+            texCoords(static_cast<plamatrix::Index>(u1), 0), texCoords(static_cast<plamatrix::Index>(u1), 1),
+            texCoords(static_cast<plamatrix::Index>(u2), 0), texCoords(static_cast<plamatrix::Index>(u2), 1),
             demGrid, texture, *domImage);
     }
 
