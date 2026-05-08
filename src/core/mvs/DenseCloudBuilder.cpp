@@ -4,7 +4,8 @@
 // =============================================================================
 
 #include "DenseCloudBuilder.h"
-#include "spatial/KDTree3D.h"
+#include <plapoint/search/kdtree.h>
+#include <plapoint/core/point_cloud.h>
 #include "log/Logger.h"
 #include <fstream>
 #include <algorithm>
@@ -178,20 +179,21 @@ bool DenseCloudBuilder::savePLY(const std::string &path,
 }
 
 // =============================================================================
-// 辅助：将 DensePoint 数组打包为紧凑 float[N*3] 供 common/spatial/KDTree3D 使用
+// 辅助：将 DensePoint 数组构建为 plapoint::PointCloud 供 plapoint::KdTree 使用
 // =============================================================================
 namespace
 {
-static std::vector<float> packCoords(const std::vector<DensePoint> &cloud)
+static std::shared_ptr<plapoint::PointCloud<float, plamatrix::Device::CPU>>
+buildPointCloud(const std::vector<DensePoint> &cloud)
 {
-    std::vector<float> coords(cloud.size() * 3);
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
     for (size_t i = 0; i < cloud.size(); ++i)
     {
-        coords[i * 3 + 0] = cloud[i].x;
-        coords[i * 3 + 1] = cloud[i].y;
-        coords[i * 3 + 2] = cloud[i].z;
+        pts(static_cast<plamatrix::Index>(i), 0) = cloud[i].x;
+        pts(static_cast<plamatrix::Index>(i), 1) = cloud[i].y;
+        pts(static_cast<plamatrix::Index>(i), 2) = cloud[i].z;
     }
-    return coords;
+    return std::make_shared<plapoint::PointCloud<float, plamatrix::Device::CPU>>(std::move(pts));
 }
 } // anonymous namespace
 
@@ -220,9 +222,10 @@ std::vector<DensePoint> DenseCloudBuilder::statisticalOutlierRemoval(
              N, kNeighbors, stdRatio, numThreads);
 
     // ── 建 KD-tree ─────────────────────────────────────────────────────────
-    auto coords = packCoords(cloud);
-    common::spatial::KDTree3D tree;
-    tree.build(coords.data(), N);
+    auto pc = buildPointCloud(cloud);
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
+    tree.setInputCloud(pc);
+    tree.build();
 
     auto t1 = std::chrono::steady_clock::now();
     LOG_DEBUG("[SOR] KD-tree 建树完成, 耗时 %.3f s",
@@ -235,7 +238,19 @@ std::vector<DensePoint> DenseCloudBuilder::statisticalOutlierRemoval(
 #endif
     for (int i = 0; i < N; ++i)
     {
-        meanDists[i] = tree.knnMeanDist(i, kNeighbors);
+        plamatrix::Vec3<float> query{cloud[i].x, cloud[i].y, cloud[i].z};
+        auto neighbors = tree.nearestKSearch(query, kNeighbors);
+        float sum = 0.0f;
+        int actualCount = 0;
+        for (int nb : neighbors)
+        {
+            float dx = cloud[i].x - cloud[nb].x;
+            float dy = cloud[i].y - cloud[nb].y;
+            float dz = cloud[i].z - cloud[nb].z;
+            sum += std::sqrt(dx * dx + dy * dy + dz * dz);
+            ++actualCount;
+        }
+        meanDists[i] = (actualCount > 0) ? (sum / static_cast<float>(actualCount)) : 1e9f;
     }
 
     auto t2 = std::chrono::steady_clock::now();
@@ -313,9 +328,10 @@ std::vector<DensePoint> DenseCloudBuilder::radiusOutlierRemoval(
              N, radius, minNeighbors, numThreads);
 
     // ── 建 KD-tree ─────────────────────────────────────────────────────────
-    auto coords = packCoords(cloud);
-    common::spatial::KDTree3D tree;
-    tree.build(coords.data(), N);
+    auto pcRad = buildPointCloud(cloud);
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> treeRad;
+    treeRad.setInputCloud(pcRad);
+    treeRad.build();
 
     auto t1 = std::chrono::steady_clock::now();
     LOG_DEBUG("[RadiusOR] KD-tree 建树完成, 耗时 %.3f s",
@@ -328,7 +344,8 @@ std::vector<DensePoint> DenseCloudBuilder::radiusOutlierRemoval(
     #pragma omp parallel for schedule(dynamic, 256) reduction(+:removed)
 #endif
     for (int i = 0; i < N; ++i) {
-        int cnt = tree.radiusCount(i, radius, minNeighbors);
+        plamatrix::Vec3<float> query{cloud[i].x, cloud[i].y, cloud[i].z};
+        int cnt = static_cast<int>(treeRad.radiusSearch(query, radius).size());
         if (cnt >= minNeighbors)
             keep[i] = 1;
         else

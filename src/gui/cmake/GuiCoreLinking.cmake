@@ -56,13 +56,6 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
     message(WARNING "plascan_core bundle_adjust target not available - 光束法平差功能将不可用")
   endif()
 
-  if(TARGET pointcloud)
-    message(STATUS "plascan_gui: linking against pointcloud target")
-    target_link_libraries(plascan_gui PRIVATE pointcloud)
-  else()
-    message(WARNING "plascan_core pointcloud target not available - 点云功能将不可用")
-  endif()
-
   if(TARGET plapoint::plapoint)
     message(STATUS "plascan_gui: linking against plapoint::plapoint")
     target_link_libraries(plascan_gui PRIVATE plapoint::plapoint)

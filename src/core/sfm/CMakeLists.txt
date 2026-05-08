@@ -56,6 +56,7 @@ target_include_directories(sfm PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
     ${CMAKE_CURRENT_SOURCE_DIR}/../intersection
     ${CMAKE_CURRENT_SOURCE_DIR}/../bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 
 target_link_libraries(sfm
@@ -67,7 +68,6 @@ target_link_libraries(sfm
         Qt6::Core
         Qt6::Gui
         plascan_common_log
-        plascan_common_spatial
         ${OpenCV_LIBS}
 )
 

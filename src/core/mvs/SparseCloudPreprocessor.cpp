@@ -1,6 +1,7 @@
 // SparseCloudPreprocessor.cpp
 #include "SparseCloudPreprocessor.h"
-#include "spatial/KDTree3D.h"
+#include <plapoint/search/kdtree.h>
+#include <plapoint/core/point_cloud.h>
 #include "log/Logger.h"
 #include <fstream>
 #include <sstream>
@@ -94,9 +95,18 @@ void SparseCloudPreprocessor::filterOutliers(
 
     LOG_INFO("[SparseFilter] 开始稀疏点云离群点过滤: %d 点", N);
 
-    // ── 建 KD-tree ─────────────────────────────────────────────────────────
-    common::spatial::KDTree3D tree;
-    tree.build(pts);
+    // ── 建 KD-tree (plapoint) ───────────────────────────────────────────────
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> ptsMat(N, 3);
+    for (int i = 0; i < N; ++i)
+    {
+        ptsMat(i, 0) = pts[static_cast<size_t>(i)][0];
+        ptsMat(i, 1) = pts[static_cast<size_t>(i)][1];
+        ptsMat(i, 2) = pts[static_cast<size_t>(i)][2];
+    }
+    auto pc = std::make_shared<plapoint::PointCloud<float, plamatrix::Device::CPU>>(std::move(ptsMat));
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
+    tree.setInputCloud(pc);
+    tree.build();
 
     auto t1 = std::chrono::steady_clock::now();
     LOG_DEBUG("[SparseFilter] KD-tree 建树完成, 耗时 %.3f s",
@@ -112,7 +122,19 @@ void SparseCloudPreprocessor::filterOutliers(
 #endif
     for (int i = 0; i < N; ++i)
     {
-        meanDists[i] = tree.knnMeanDist(i, kNeighbors);
+        plamatrix::Vec3<float> query{pts[static_cast<size_t>(i)][0], pts[static_cast<size_t>(i)][1], pts[static_cast<size_t>(i)][2]};
+        auto neighbors = tree.nearestKSearch(query, kNeighbors);
+        float sum = 0.0f;
+        int actualCount = 0;
+        for (int nb : neighbors)
+        {
+            float dx = pts[static_cast<size_t>(i)][0] - pts[static_cast<size_t>(nb)][0];
+            float dy = pts[static_cast<size_t>(i)][1] - pts[static_cast<size_t>(nb)][1];
+            float dz = pts[static_cast<size_t>(i)][2] - pts[static_cast<size_t>(nb)][2];
+            sum += std::sqrt(dx * dx + dy * dy + dz * dz);
+            ++actualCount;
+        }
+        meanDists[i] = (actualCount > 0) ? (sum / static_cast<float>(actualCount)) : 1e9f;
     }
 
     // ── IQR 鲁棒阈值（替代 mean+k*std，不受极远点拉偏影响）─────────────
@@ -155,7 +177,8 @@ void SparseCloudPreprocessor::filterOutliers(
             continue;
         }
         // 半径过滤
-        int cnt = tree.radiusCount(i, adaptiveRadius, minNeigh);
+        plamatrix::Vec3<float> rquery{pts[static_cast<size_t>(i)][0], pts[static_cast<size_t>(i)][1], pts[static_cast<size_t>(i)][2]};
+        int cnt = static_cast<int>(tree.radiusSearch(rquery, adaptiveRadius).size());
         if (cnt < minNeigh)
         {
             ++radRemoved;

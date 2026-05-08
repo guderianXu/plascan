@@ -2,10 +2,8 @@
 
 #include "DemGenerator.h"
 #include "DomGenerator.h"
-#include "io/ObjMtlLoader.h"
+#include "ObjMtlLoader.h"
 #include "TerrainPipeline.h"
-
-#include "data/PointCloud.h"
 
 #include <filesystem>
 #include <fstream>
@@ -40,14 +38,14 @@ protected:
         fs::remove_all(_tempDir, errorCode);
     }
 
-    pointcloud::PointCloud makePlaneCloud() const
+    PlaPointCloud makePlaneCloud() const
     {
-        pointcloud::PointCloud cloud;
-        cloud.addPoint(pointcloud::Point3f{0.0f, 0.0f, 10.0f});
-        cloud.addPoint(pointcloud::Point3f{1.0f, 0.0f, 11.0f});
-        cloud.addPoint(pointcloud::Point3f{0.0f, 1.0f, 12.0f});
-        cloud.addPoint(pointcloud::Point3f{1.0f, 1.0f, 13.0f});
-        return cloud;
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(4, 3);
+        pts(0, 0) = 0.0f; pts(0, 1) = 0.0f; pts(0, 2) = 10.0f;
+        pts(1, 0) = 1.0f; pts(1, 1) = 0.0f; pts(1, 2) = 11.0f;
+        pts(2, 0) = 0.0f; pts(2, 1) = 1.0f; pts(2, 2) = 12.0f;
+        pts(3, 0) = 1.0f; pts(3, 1) = 1.0f; pts(3, 2) = 13.0f;
+        return PlaPointCloud(std::move(pts));
     }
 
     fs::path writeObjPointCloud() const
@@ -207,7 +205,7 @@ protected:
 
 TEST_F(TerrainDemDomTest, DemGeneratorBuildsRasterAndDenseCloud)
 {
-    const pointcloud::PointCloud cloud = makePlaneCloud();
+    const PlaPointCloud cloud = makePlaneCloud();
 
     DemGenerationOptions options;
     options.gridResolution = 0.5;
@@ -215,7 +213,7 @@ TEST_F(TerrainDemDomTest, DemGeneratorBuildsRasterAndDenseCloud)
     options.maxGridSize = 8;
 
     DemGridData demGrid;
-    pointcloud::PointCloud denseCloud;
+    PlaPointCloud denseCloud;
     QString error;
     ASSERT_TRUE(DemGenerator::generateFromPointCloud(cloud, options, &demGrid, &denseCloud, &error))
         << error.toStdString();
@@ -223,7 +221,7 @@ TEST_F(TerrainDemDomTest, DemGeneratorBuildsRasterAndDenseCloud)
     EXPECT_TRUE(demGrid.isValid());
     EXPECT_EQ(demGrid.width, 3);
     EXPECT_EQ(demGrid.height, 3);
-    EXPECT_FALSE(denseCloud.empty());
+    EXPECT_GT(denseCloud.size(), 0u);
 }
 
 TEST_F(TerrainDemDomTest, TerrainPipelineWritesDemProductsFromObj)
@@ -250,10 +248,11 @@ TEST_F(TerrainDemDomTest, TerrainPipelineWritesDemProductsFromObj)
 
 TEST_F(TerrainDemDomTest, DemGeneratorSubPixelBilinearSplatIncreasesCoverage)
 {
-    pointcloud::PointCloud cloud;
-    cloud.addPoint(pointcloud::Point3f{0.0f, 0.0f, 1.0f});
-    cloud.addPoint(pointcloud::Point3f{2.0f, 2.0f, 1.0f});
-    cloud.addPoint(pointcloud::Point3f{0.9f, 0.9f, 10.0f});
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(3, 3);
+    pts(0, 0) = 0.0f; pts(0, 1) = 0.0f; pts(0, 2) = 1.0f;
+    pts(1, 0) = 2.0f; pts(1, 1) = 2.0f; pts(1, 2) = 1.0f;
+    pts(2, 0) = 0.9f; pts(2, 1) = 0.9f; pts(2, 2) = 10.0f;
+    PlaPointCloud cloud(std::move(pts));
 
     DemGenerationOptions nearestOptions;
     nearestOptions.gridResolution = 1.0;
@@ -261,7 +260,7 @@ TEST_F(TerrainDemDomTest, DemGeneratorSubPixelBilinearSplatIncreasesCoverage)
     nearestOptions.useSubPixelBilinearSplat = false;
 
     DemGridData nearestGrid;
-    pointcloud::PointCloud nearestDense;
+    PlaPointCloud nearestDense;
     QString error;
     ASSERT_TRUE(DemGenerator::generateFromPointCloud(cloud,
                                                      nearestOptions,
@@ -274,7 +273,7 @@ TEST_F(TerrainDemDomTest, DemGeneratorSubPixelBilinearSplatIncreasesCoverage)
     bilinearOptions.useSubPixelBilinearSplat = true;
 
     DemGridData bilinearGrid;
-    pointcloud::PointCloud bilinearDense;
+    PlaPointCloud bilinearDense;
     ASSERT_TRUE(DemGenerator::generateFromPointCloud(cloud,
                                                      bilinearOptions,
                                                      &bilinearGrid,
@@ -388,12 +387,12 @@ TEST_F(TerrainDemDomTest, ObjMtlLoaderLoadsMeshAndTexture)
 
     TerrainMeshInput meshInput;
     QString error;
-    ASSERT_TRUE(pointcloud::ObjMtlLoader::load(QString::fromStdString(objPath.string()), &meshInput, &error))
+    ASSERT_TRUE(ObjMtlLoader::load(QString::fromStdString(objPath.string()), &meshInput, &error))
         << error.toStdString();
 
     EXPECT_GT(meshInput.mesh.size(), 0u);
-    EXPECT_FALSE(meshInput.mesh.faces().empty());
-    EXPECT_FALSE(meshInput.mesh.textureCoordinates().empty());
+    EXPECT_TRUE(meshInput.mesh.hasFaces());
+    EXPECT_TRUE(meshInput.mesh.hasTextureCoords());
     EXPECT_FALSE(meshInput.texture.empty());
 
     // 纹理应为 3 通道 BGR
@@ -407,7 +406,7 @@ TEST_F(TerrainDemDomTest, DomGeneratorTexturedMeshProducesColorOutput)
 
     TerrainMeshInput meshInput;
     QString loadError;
-    ASSERT_TRUE(pointcloud::ObjMtlLoader::load(QString::fromStdString(objPath.string()), &meshInput, &loadError))
+    ASSERT_TRUE(ObjMtlLoader::load(QString::fromStdString(objPath.string()), &meshInput, &loadError))
         << loadError.toStdString();
 
     // 构建覆盖整个网格的 DEM 网格

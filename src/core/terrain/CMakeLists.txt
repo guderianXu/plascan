@@ -4,6 +4,7 @@ add_library(terrain STATIC
     DemGeneratorFromDepth.cpp
     DomGenerator.cpp
     DemDomIO.cpp
+    ObjMtlLoader.cpp
     projection/AsteroidProjection.cpp
 )
 
@@ -65,69 +66,7 @@ if(BUILD_TESTS)
 
     gtest_discover_tests(test_terrain_dem_dom)
 
-    add_executable(terrain_stereo_test
-        tests/terrain_stereo_test.cpp
-    )
-
-    target_link_libraries(terrain_stereo_test PRIVATE
-        terrain
-        mvs
-        pointcloud
-        camera
-        Qt6::Core
-        Qt6::Concurrent
-        ${OpenCV_LIBS}
-        ${PLASCAN_GDAL_TARGET}
-    )
-
-    target_include_directories(terrain_stereo_test PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src/core/mvs
-        ${CMAKE_SOURCE_DIR}/src/core/camera
-        ${CMAKE_SOURCE_DIR}/src/core/pointcloud
-    )
-
-    add_executable(stereo_pipeline_test
-        tests/stereo_pipeline_test.cpp
-    )
-
-    target_link_libraries(stereo_pipeline_test PRIVATE
-        terrain
-        mvs
-        pointcloud
-        camera
-        Qt6::Core
-        Qt6::Concurrent
-        ${OpenCV_LIBS}
-        ${PLASCAN_GDAL_TARGET}
-    )
-
-    target_include_directories(stereo_pipeline_test PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src/core/mvs
-        ${CMAKE_SOURCE_DIR}/src/core/camera
-        ${CMAKE_SOURCE_DIR}/src/core/pointcloud
-    )
-
-    add_executable(stereo_pipeline_benchmark
-        tests/stereo_pipeline_benchmark.cpp
-    )
-
-    target_link_libraries(stereo_pipeline_benchmark PRIVATE
-        terrain
-        mvs
-        pointcloud
-        camera
-        Qt6::Core
-        Qt6::Concurrent
-        ${OpenCV_LIBS}
-        ${PLASCAN_GDAL_TARGET}
-    )
-
-    target_include_directories(stereo_pipeline_benchmark PRIVATE
-        ${CMAKE_CURRENT_SOURCE_DIR}
-        ${CMAKE_SOURCE_DIR}/src/core/mvs
-        ${CMAKE_SOURCE_DIR}/src/core/camera
-        ${CMAKE_SOURCE_DIR}/src/core/pointcloud
-    )
+    # terrain_stereo_test / stereo_pipeline_test / stereo_pipeline_benchmark
+    # require the old pointcloud module which has been removed.
+    # Re-enable after migrating these tests to plapoint.
 endif()

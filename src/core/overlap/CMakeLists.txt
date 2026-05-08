@@ -8,7 +8,10 @@ target_include_directories(overlap PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
 )
 
+target_include_directories(overlap PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+
 target_link_libraries(overlap PUBLIC
     camera
-    plascan_common_spatial
 )

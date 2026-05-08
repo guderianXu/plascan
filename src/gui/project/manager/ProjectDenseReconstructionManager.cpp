@@ -10,9 +10,10 @@
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "SparseCloudPreprocessor.h"
-#include "data/PointCloud.h"
-#include "io/PointCloudIO.h"
-#include "processing/PointCloudProcessor.h"
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/search/kdtree.h>
+#include <plapoint/filters/voxel_grid.h>
+#include <plapoint/features/normal_estimation.h>
 
 #include <QDateTime>
 #include <QDir>
@@ -29,6 +30,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <fstream>
+#include <sstream>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -172,74 +175,378 @@ void upsertExistingDepthRecords(ProjectData *projectData,
     }
 }
 
-xjw::pointcloud::PointCloud densePointsToPointCloud(const std::vector<xjw::mvs::DensePoint> &cloud)
-{
-    using namespace xjw::pointcloud;
+using PlaPC = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
-    PointCloud pointCloud;
-    pointCloud.reserve(cloud.size());
-    for (const auto &point : cloud)
+PlaPC densePointsToPointCloud(const std::vector<xjw::mvs::DensePoint> &cloud)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
+    for (size_t i = 0; i < cloud.size(); ++i)
     {
-        pointCloud.addPoint(Point3f{point.x, point.y, point.z},
-                            ColorRGBA{point.r, point.g, point.b, 255});
+        pts(i, 0) = cloud[i].x;
+        pts(i, 1) = cloud[i].y;
+        pts(i, 2) = cloud[i].z;
+        colors(i, 0) = cloud[i].r;
+        colors(i, 1) = cloud[i].g;
+        colors(i, 2) = cloud[i].b;
     }
-    return pointCloud;
+    PlaPC pc(std::move(pts));
+    pc.setColors(std::move(colors));
+    return pc;
 }
 
-xjw::pointcloud::PointCloud fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
-                                                    bool keepColor,
-                                                    bool keepNormals)
+PlaPC fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
+                              bool keepColor,
+                              bool keepNormals)
 {
-    using namespace xjw::pointcloud;
-
-    PointCloud pointCloud;
-    pointCloud.reserve(cloud.size());
-    for (const auto &point : cloud)
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
+    for (size_t i = 0; i < cloud.size(); ++i)
     {
-        const Point3f position{point.x, point.y, point.z};
-        const Point3f normal{point.nx, point.ny, point.nz};
-        const ColorRGBA color{point.r, point.g, point.b, 255};
+        pts(i, 0) = cloud[i].x;
+        pts(i, 1) = cloud[i].y;
+        pts(i, 2) = cloud[i].z;
+    }
+    PlaPC pc(std::move(pts));
 
-        if (keepNormals && keepColor)
+    if (keepColor)
+    {
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
+        for (size_t i = 0; i < cloud.size(); ++i)
         {
-            pointCloud.addPoint(position, normal, color);
+            colors(i, 0) = cloud[i].r;
+            colors(i, 1) = cloud[i].g;
+            colors(i, 2) = cloud[i].b;
         }
-        else if (keepNormals)
+        pc.setColors(std::move(colors));
+    }
+
+    if (keepNormals)
+    {
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> nrm(cloud.size(), 3);
+        for (size_t i = 0; i < cloud.size(); ++i)
         {
-            pointCloud.addPoint(position, normal);
+            nrm(i, 0) = cloud[i].nx;
+            nrm(i, 1) = cloud[i].ny;
+            nrm(i, 2) = cloud[i].nz;
         }
-        else if (keepColor)
+        pc.setNormals(std::move(nrm));
+    }
+
+    return pc;
+}
+
+bool readPointCloudPly(const QString &path, PlaPC *cloud, QString *errorMessage)
+{
+    std::ifstream f(path.toStdString(), std::ios::binary);
+    if (!f)
+    {
+        if (errorMessage) *errorMessage = QStringLiteral("无法打开文件: %1").arg(path);
+        return false;
+    }
+
+    std::string line;
+    std::getline(f, line);
+    if (line != "ply") { if (errorMessage) *errorMessage = QStringLiteral("不是PLY文件"); return false; }
+
+    std::getline(f, line); // format line
+    bool isBinary = (line.find("binary_little_endian") != std::string::npos);
+
+    int nVerts = 0;
+    bool hasColor = false;
+    std::vector<std::string> props;
+    while (std::getline(f, line))
+    {
+        if (!line.empty() && line.back() == '\r') line.pop_back();
+        if (line == "end_header") break;
+        std::istringstream iss(line);
+        std::string token;
+        iss >> token;
+        if (token == "element") { std::string e; iss >> e >> nVerts; }
+        else if (token == "property")
         {
-            pointCloud.addPoint(position, color);
-        }
-        else
-        {
-            pointCloud.addPoint(position);
+            std::string type, name;
+            iss >> type >> name;
+            props.push_back(name);
+            if (name == "red") hasColor = true;
         }
     }
-    return pointCloud;
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(nVerts, 3);
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(nVerts, 3);
+    if (isBinary)
+    {
+        for (int i = 0; i < nVerts; ++i)
+        {
+            for (const auto &p : props)
+            {
+                if (p == "x" || p == "y" || p == "z")
+                {
+                    float v; f.read(reinterpret_cast<char*>(&v), 4);
+                    int col = (p == "x") ? 0 : (p == "y") ? 1 : 2;
+                    pts(i, col) = v;
+                }
+                else if (p == "red")   { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 0) = v; }
+                else if (p == "green") { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 1) = v; }
+                else if (p == "blue")  { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 2) = v; }
+                else { float dummy; f.read(reinterpret_cast<char*>(&dummy), 4); } // skip unknown float props
+            }
+        }
+    }
+    else
+    {
+        for (int i = 0; i < nVerts; ++i)
+        {
+            std::getline(f, line);
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            std::istringstream iss(line);
+            for (const auto &p : props)
+            {
+                if (p == "x") { float v; iss >> v; pts(i, 0) = v; }
+                else if (p == "y") { float v; iss >> v; pts(i, 1) = v; }
+                else if (p == "z") { float v; iss >> v; pts(i, 2) = v; }
+                else if (p == "red")   { int v; iss >> v; colors(i, 0) = static_cast<uint8_t>(v); }
+                else if (p == "green") { int v; iss >> v; colors(i, 1) = static_cast<uint8_t>(v); }
+                else if (p == "blue")  { int v; iss >> v; colors(i, 2) = static_cast<uint8_t>(v); }
+                else { float dummy; iss >> dummy; } // skip unknown props
+            }
+        }
+    }
+
+    *cloud = PlaPC(std::move(pts));
+    if (hasColor) cloud->setColors(std::move(colors));
+    return true;
 }
 
 bool writePointCloudPly(const QString &path,
-                        const xjw::pointcloud::PointCloud &pointCloud,
+                        const PlaPC &pointCloud,
                         bool writeNormals,
-                        QString *errorMessage = nullptr)
+                        QString *errorMessage)
 {
-    xjw::pointcloud::PointCloudWriteOptions options;
-    options.format = xjw::pointcloud::PointCloudFileFormat::PlyBinaryLittleEndian;
-    options.writeNormals = writeNormals && pointCloud.hasNormals();
-    options.writeColors = pointCloud.hasColors();
-
-    xjw::pointcloud::PointCloudIOResult result;
-    if (!xjw::pointcloud::writePlyPointCloud(path.toStdString(), pointCloud, options, &result))
+    std::ofstream ofs(path.toStdString(), std::ios::binary);
+    if (!ofs)
     {
-        if (errorMessage)
-        {
-            *errorMessage = QString::fromStdString(result.errorMessage);
-        }
+        if (errorMessage) *errorMessage = QStringLiteral("无法创建文件: %1").arg(path);
         return false;
     }
-    return true;
+
+    const bool hasNormalsOut = writeNormals && pointCloud.hasNormals();
+    const bool hasColorsOut = pointCloud.hasColors();
+
+    ofs << "ply\n"
+        << "format binary_little_endian 1.0\n"
+        << "element vertex " << pointCloud.size() << "\n"
+        << "property float x\nproperty float y\nproperty float z\n";
+    if (hasNormalsOut)
+        ofs << "property float nx\nproperty float ny\nproperty float nz\n";
+    if (hasColorsOut)
+        ofs << "property uchar red\nproperty uchar green\nproperty uchar blue\n";
+    ofs << "end_header\n";
+
+    for (size_t i = 0; i < pointCloud.size(); ++i)
+    {
+        float v[3];
+        for (int d = 0; d < 3; ++d) v[d] = static_cast<float>(pointCloud.points()(static_cast<plamatrix::Index>(i), d));
+        ofs.write(reinterpret_cast<const char*>(v), sizeof(float) * 3);
+
+        if (hasNormalsOut)
+        {
+            float n[3];
+            auto *nrm = pointCloud.normals();
+            for (int d = 0; d < 3; ++d) n[d] = static_cast<float>(nrm->getValue(static_cast<plamatrix::Index>(i), d));
+            ofs.write(reinterpret_cast<const char*>(n), sizeof(float) * 3);
+        }
+
+        if (hasColorsOut)
+        {
+            uint8_t c[3];
+            auto *col = pointCloud.colors();
+            for (int d = 0; d < 3; ++d) c[d] = col->getValue(static_cast<plamatrix::Index>(i), d);
+            ofs.write(reinterpret_cast<const char*>(c), sizeof(uint8_t) * 3);
+        }
+    }
+
+    return ofs.good();
+}
+
+// Helper: deep-copy PointCloud to shared_ptr
+static std::shared_ptr<PlaPC> cloneCloud(const PlaPC &cloud)
+{
+    auto copy = std::make_shared<PlaPC>(cloud.size());
+    for (size_t i = 0; i < cloud.size(); ++i)
+        for (int d = 0; d < 3; ++d)
+            copy->points()(static_cast<plamatrix::Index>(i), d) = cloud.points()(static_cast<plamatrix::Index>(i), d);
+    if (cloud.hasColors())
+    {
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> c(cloud.size(), 3);
+        for (size_t i = 0; i < cloud.size(); ++i)
+            for (int d = 0; d < 3; ++d)
+                c(static_cast<plamatrix::Index>(i), d) = cloud.colors()->getValue(static_cast<plamatrix::Index>(i), d);
+        copy->setColors(std::move(c));
+    }
+    if (cloud.hasNormals())
+    {
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> n(cloud.size(), 3);
+        for (size_t i = 0; i < cloud.size(); ++i)
+            for (int d = 0; d < 3; ++d)
+                n(static_cast<plamatrix::Index>(i), d) = cloud.normals()->getValue(static_cast<plamatrix::Index>(i), d);
+        copy->setNormals(std::move(n));
+    }
+    return copy;
+}
+
+// Color-preserving SOR filter
+PlaPC sorFilter(const PlaPC &cloud, int k, float stdRatio)
+{
+    if (cloud.size() < static_cast<size_t>(k + 1))
+    {
+        return std::move(*cloneCloud(cloud));
+    }
+
+    auto pcCopy = cloneCloud(cloud);
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
+    tree.setInputCloud(pcCopy);
+    tree.build();
+
+    const int N = static_cast<int>(cloud.size());
+    std::vector<float> meanDists(N);
+    for (int i = 0; i < N; ++i)
+    {
+        plamatrix::Vec3<float> q{cloud.points()(i, 0), cloud.points()(i, 1), cloud.points()(i, 2)};
+        auto neighbors = tree.nearestKSearch(q, k + 1);
+        float sum = 0; int cnt = 0;
+        for (int nb : neighbors)
+        {
+            if (nb == i) continue;
+            float dx = cloud.points()(i, 0) - cloud.points()(nb, 0);
+            float dy = cloud.points()(i, 1) - cloud.points()(nb, 1);
+            float dz = cloud.points()(i, 2) - cloud.points()(nb, 2);
+            sum += std::sqrt(dx*dx + dy*dy + dz*dz);
+            ++cnt;
+        }
+        meanDists[i] = cnt > 0 ? sum / static_cast<float>(cnt) : 1e9f;
+    }
+
+    double s = 0, s2 = 0;
+    for (float d : meanDists) { s += d; s2 += static_cast<double>(d) * d; }
+    float mean = static_cast<float>(s / N);
+    float std = static_cast<float>(std::sqrt(s2 / N - static_cast<double>(mean) * mean));
+    float thresh = mean + stdRatio * std;
+
+    std::vector<int> keep;
+    for (int i = 0; i < N; ++i)
+        if (meanDists[i] <= thresh) keep.push_back(i);
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> outPts(keep.size(), 3);
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> outCol(keep.size(), 3);
+    for (size_t i = 0; i < keep.size(); ++i)
+    {
+        int src = keep[i];
+        for (int d = 0; d < 3; ++d) outPts(static_cast<plamatrix::Index>(i), d) = cloud.points()(src, d);
+        if (cloud.hasColors())
+        {
+            auto *col = cloud.colors();
+            for (int d = 0; d < 3; ++d) outCol(static_cast<plamatrix::Index>(i), d) = col->getValue(src, d);
+        }
+    }
+    PlaPC out(std::move(outPts));
+    if (cloud.hasColors()) out.setColors(std::move(outCol));
+    return out;
+}
+
+// Color-preserving radius filter
+PlaPC radiusFilter(const PlaPC &cloud, float radius, int minNeighbors)
+{
+    if (cloud.size() == 0)
+    {
+        PlaPC emptyOut(0);
+        return emptyOut;
+    }
+
+    auto pcCopy = cloneCloud(cloud);
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
+    tree.setInputCloud(pcCopy);
+    tree.build();
+
+    const int N = static_cast<int>(cloud.size());
+    std::vector<int> keep;
+    for (int i = 0; i < N; ++i)
+    {
+        plamatrix::Vec3<float> q{cloud.points()(i, 0), cloud.points()(i, 1), cloud.points()(i, 2)};
+        int cnt = static_cast<int>(tree.radiusSearch(q, radius).size());
+        if (cnt >= minNeighbors) keep.push_back(i);
+    }
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> outPts(keep.size(), 3);
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> outCol(keep.size(), 3);
+    for (size_t i = 0; i < keep.size(); ++i)
+    {
+        int src = keep[i];
+        for (int d = 0; d < 3; ++d) outPts(static_cast<plamatrix::Index>(i), d) = cloud.points()(src, d);
+        if (cloud.hasColors())
+        {
+            auto *col = cloud.colors();
+            for (int d = 0; d < 3; ++d) outCol(static_cast<plamatrix::Index>(i), d) = col->getValue(src, d);
+        }
+    }
+    PlaPC out(std::move(outPts));
+    if (cloud.hasColors()) out.setColors(std::move(outCol));
+    return out;
+}
+
+// Color-preserving voxel downsample
+PlaPC voxelDownsample(const PlaPC &cloud, float leafSize)
+{
+    if (cloud.size() == 0 || leafSize <= 0) return std::move(*cloneCloud(cloud));
+
+    using Key = std::tuple<int, int, int>;
+    struct Accum { float sx = 0, sy = 0, sz = 0; uint32_t cr = 0, cg = 0, cb = 0; int count = 0; };
+    std::map<Key, Accum> voxels;
+
+    const bool hasCol = cloud.hasColors();
+    auto *col = hasCol ? cloud.colors() : nullptr;
+
+    for (size_t i = 0; i < cloud.size(); ++i)
+    {
+        Key key{
+            static_cast<int>(std::floor(cloud.points()(static_cast<plamatrix::Index>(i), 0) / leafSize)),
+            static_cast<int>(std::floor(cloud.points()(static_cast<plamatrix::Index>(i), 1) / leafSize)),
+            static_cast<int>(std::floor(cloud.points()(static_cast<plamatrix::Index>(i), 2) / leafSize))
+        };
+        auto &acc = voxels[key];
+        acc.sx += cloud.points()(static_cast<plamatrix::Index>(i), 0);
+        acc.sy += cloud.points()(static_cast<plamatrix::Index>(i), 1);
+        acc.sz += cloud.points()(static_cast<plamatrix::Index>(i), 2);
+        if (hasCol)
+        {
+            acc.cr += col->getValue(static_cast<plamatrix::Index>(i), 0);
+            acc.cg += col->getValue(static_cast<plamatrix::Index>(i), 1);
+            acc.cb += col->getValue(static_cast<plamatrix::Index>(i), 2);
+        }
+        acc.count += 1;
+    }
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(voxels.size(), 3);
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> outCol(voxels.size(), 3);
+    int outIdx = 0;
+    for (const auto &kv : voxels)
+    {
+        const auto &acc = kv.second;
+        float inv = 1.0f / static_cast<float>(acc.count);
+        pts(outIdx, 0) = acc.sx * inv;
+        pts(outIdx, 1) = acc.sy * inv;
+        pts(outIdx, 2) = acc.sz * inv;
+        if (hasCol)
+        {
+            outCol(outIdx, 0) = static_cast<uint8_t>(static_cast<float>(acc.cr) * inv + 0.5f);
+            outCol(outIdx, 1) = static_cast<uint8_t>(static_cast<float>(acc.cg) * inv + 0.5f);
+            outCol(outIdx, 2) = static_cast<uint8_t>(static_cast<float>(acc.cb) * inv + 0.5f);
+        }
+        ++outIdx;
+    }
+
+    PlaPC out(std::move(pts));
+    if (hasCol) out.setColors(std::move(outCol));
+    return out;
 }
 
 } // namespace
@@ -541,7 +848,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             return;
         }
 
-        const xjw::pointcloud::PointCloud pointCloud = fusedPointsToPointCloud(fusedPoints, keepColor, keepNormals);
+        const PlaPC pointCloud = fusedPointsToPointCloud(fusedPoints, keepColor, keepNormals);
         QString saveError;
         if (!writePointCloudPly(outputPly, pointCloud, keepNormals, &saveError))
         {
@@ -721,12 +1028,12 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     });
     connect(gen, &DepthMapGenerator::pointCloudReady, this,
             [this, mvsOutDir](const std::vector<DensePoint> &cloud) {
-        if (cloud.empty())
+        if ((cloud.size() == 0))
         {
             return;
         }
         const QString plyPath = mvsOutDir + QStringLiteral("/dense_cloud.ply");
-        const xjw::pointcloud::PointCloud pointCloud = densePointsToPointCloud(cloud);
+        const PlaPC pointCloud = densePointsToPointCloud(cloud);
         QString saveErr;
         if (writePointCloudPly(plyPath, pointCloud, false, &saveErr))
         {
@@ -795,8 +1102,6 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
 void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonObject &settings)
 {
-    using namespace xjw::pointcloud;
-
     if (!ensureProjectOpen(QStringLiteral("请先打开一个项目。"), QStringLiteral("密集点云后处理")))
     {
         return;
@@ -819,16 +1124,15 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
 
     emit mvsProgressChanged(QStringLiteral("正在加载密集点云..."), 0);
     (void)QtConcurrent::run([this, inputPly, outputPly, request]() {
-        PointCloud cloud;
-        PointCloudIOResult ioResult;
-        if (!readPlyPointCloud(inputPly.toStdString(), &cloud, &ioResult))
+        PlaPC cloud;
+        QString loadErr;
+        if (!readPointCloudPly(inputPly, &cloud, &loadErr))
         {
-            const QString err = QString::fromStdString(ioResult.errorMessage);
-            QMetaObject::invokeMethod(this, [this, err]() {
+            QMetaObject::invokeMethod(this, [this, loadErr]() {
                 emit mvsProgressFinished(false);
                 QMessageBox::warning(m_parentWidget,
                                      QStringLiteral("密集点云后处理"),
-                                     QStringLiteral("加载点云失败：%1").arg(err));
+                                     QStringLiteral("加载点云失败：%1").arg(loadErr));
             }, Qt::QueuedConnection);
             return;
         }
@@ -838,18 +1142,31 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             QMetaObject::invokeMethod(this, [this]() {
                 emit mvsProgressChanged(QStringLiteral("统计离群点移除 (SOR)..."), 20);
             }, Qt::QueuedConnection);
-            const std::size_t beforeSor = cloud.size();
-            cloud = xjw::pointcloud::detail::statisticalFilterMultithread(cloud,
-                                                                          request.sorK,
-                                                                          request.sorStdDev,
-                                                                          request.threads);
 
-            const xjw::pointcloud::PointCloudBounds bounds = cloud.computeBounds();
-            if (bounds.valid && cloud.size() > 64)
+            const auto beforeSor = cloud.size();
+            cloud = sorFilter(cloud, request.sorK, static_cast<float>(request.sorStdDev));
+
+            if (cloud.size() > 64)
             {
-                const double dx = static_cast<double>(bounds.maxCorner.x - bounds.minCorner.x);
-                const double dy = static_cast<double>(bounds.maxCorner.y - bounds.minCorner.y);
-                const double dz = static_cast<double>(bounds.maxCorner.z - bounds.minCorner.z);
+                // Compute bounds
+                float minX = 1e30f, minY = 1e30f, minZ = 1e30f;
+                float maxX = -1e30f, maxY = -1e30f, maxZ = -1e30f;
+                for (size_t i = 0; i < cloud.size(); ++i)
+                {
+                    float x = cloud.points()(static_cast<plamatrix::Index>(i), 0);
+                    float y = cloud.points()(static_cast<plamatrix::Index>(i), 1);
+                    float z = cloud.points()(static_cast<plamatrix::Index>(i), 2);
+                    if (x < minX) minX = x;
+                    if (y < minY) minY = y;
+                    if (z < minZ) minZ = z;
+                    if (x > maxX) maxX = x;
+                    if (y > maxY) maxY = y;
+                    if (z > maxZ) maxZ = z;
+                }
+
+                const double dx = static_cast<double>(maxX - minX);
+                const double dy = static_cast<double>(maxY - minY);
+                const double dz = static_cast<double>(maxZ - minZ);
                 const double diag = std::sqrt(dx * dx + dy * dy + dz * dz);
                 const double volume = std::max(dx * dy * dz, 1e-12);
                 const double density = static_cast<double>(cloud.size()) / volume;
@@ -867,12 +1184,9 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 QMetaObject::invokeMethod(this, [this]() {
                     emit mvsProgressChanged(QStringLiteral("半径离群点移除..."), 35);
                 }, Qt::QueuedConnection);
-                cloud = xjw::pointcloud::detail::radiusFilterMultithread(cloud,
-                                                                         adaptiveRadius,
-                                                                         radiusMinNeighbors,
-                                                                         request.threads);
+                cloud = radiusFilter(cloud, static_cast<float>(adaptiveRadius), radiusMinNeighbors);
 
-                const std::size_t afterRadius = cloud.size();
+                const auto afterRadius = cloud.size();
                 const bool largeCloud = beforeSor > 200000;
                 const bool weakRemoval = (beforeSor > 0)
                     && (static_cast<double>(beforeSor - afterRadius) / static_cast<double>(beforeSor) < 0.02);
@@ -883,10 +1197,7 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                     QMetaObject::invokeMethod(this, [this]() {
                         emit mvsProgressChanged(QStringLiteral("离群点二次清理..."), 42);
                     }, Qt::QueuedConnection);
-                    cloud = xjw::pointcloud::detail::statisticalFilterMultithread(cloud,
-                                                                                  stricterK,
-                                                                                  stricterStdDev,
-                                                                                  request.threads);
+                    cloud = sorFilter(cloud, stricterK, static_cast<float>(stricterStdDev));
                 }
             }
         }
@@ -895,46 +1206,41 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             QMetaObject::invokeMethod(this, [this]() {
                 emit mvsProgressChanged(QStringLiteral("体素下采样..."), 50);
             }, Qt::QueuedConnection);
-            cloud = xjw::pointcloud::detail::voxelDownsampleMultithread(cloud,
-                                                                        request.voxelSize,
-                                                                        request.threads);
+            cloud = voxelDownsample(cloud, static_cast<float>(request.voxelSize));
         }
         if (request.normalsEnabled)
         {
             QMetaObject::invokeMethod(this, [this]() {
                 emit mvsProgressChanged(QStringLiteral("估计法向量..."), 70);
             }, Qt::QueuedConnection);
-            PointCloudProcessParams normParams;
-            normParams.threads = request.threads;
-            normParams.normalK = request.normalK;
-            normParams.smoothNormals = request.smoothNormals;
-            normParams.unifyNormalDirection = true;
-            normParams.statStdMul = 1e9;
-            normParams.voxelSize = 0.0;
-            normParams.downsampleMethod = PointCloudProcessParams::DownsampleMethod::Uniform;
-            normParams.uniformStep = 1;
-            PointCloud normOut;
-            PointCloudProcessResult normResult;
-            PointCloudProcessor::runCustomProcess(cloud, normParams, &normOut, &normResult);
-            cloud = std::move(normOut);
+
+            auto pcPtr = cloneCloud(cloud);
+            plapoint::search::KdTree<float, plamatrix::Device::CPU> normTree;
+            normTree.setInputCloud(pcPtr);
+            normTree.build();
+
+            plapoint::NormalEstimation<float, plamatrix::Device::CPU> ne;
+            ne.setInputCloud(pcPtr);
+            auto treePtr = std::make_shared<plapoint::search::KdTree<float, plamatrix::Device::CPU>>(std::move(normTree));
+            ne.setSearchMethod(treePtr);
+            ne.setKSearch(request.normalK);
+            auto normals = ne.compute();
+            cloud.setNormals(std::move(normals));
         }
 
         QMetaObject::invokeMethod(this, [this]() {
             emit mvsProgressChanged(QStringLiteral("保存后处理结果..."), 90);
         }, Qt::QueuedConnection);
-        PointCloudWriteOptions writeOpts;
-        writeOpts.format = PointCloudFileFormat::PlyBinaryLittleEndian;
-        writeOpts.writeNormals = request.normalsEnabled && cloud.hasNormals();
-        writeOpts.writeColors = cloud.hasColors();
-        PointCloudIOResult saveResult;
-        if (!writePlyPointCloud(outputPly.toStdString(), cloud, writeOpts, &saveResult))
+
+        const bool writeNormalsOut = request.normalsEnabled && cloud.hasNormals();
+        QString saveErr;
+        if (!writePointCloudPly(outputPly, cloud, writeNormalsOut, &saveErr))
         {
-            const QString err = QString::fromStdString(saveResult.errorMessage);
-            QMetaObject::invokeMethod(this, [this, err]() {
+            QMetaObject::invokeMethod(this, [this, saveErr]() {
                 emit mvsProgressFinished(false);
                 QMessageBox::warning(m_parentWidget,
                                      QStringLiteral("密集点云后处理"),
-                                     QStringLiteral("保存点云失败：%1").arg(err));
+                                     QStringLiteral("保存点云失败：%1").arg(saveErr));
             }, Qt::QueuedConnection);
             return;
         }

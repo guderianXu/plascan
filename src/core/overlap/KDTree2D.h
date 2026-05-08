@@ -11,7 +11,7 @@
 
 #include <vector>
 
-#include "spatial/KDTree.h"
+#include "KDTree.h"
 
 namespace xjw
 {

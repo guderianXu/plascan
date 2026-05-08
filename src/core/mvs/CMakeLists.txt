@@ -97,6 +97,7 @@ endif()
 target_include_directories(mvs PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 
 if(GDAL_INCLUDE_DIRS)
@@ -107,13 +108,12 @@ target_link_libraries(mvs
     PUBLIC
         camera
         plascan_common_log
-        plascan_common_spatial
+        plapoint::plapoint
     PRIVATE
         Qt6::Core
         Qt6::Concurrent
         ${OpenCV_LIBS}
         ${PLASCAN_GDAL_TARGET}
-        plapoint::plapoint
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 

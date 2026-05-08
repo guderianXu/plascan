@@ -24,11 +24,10 @@
 #include <QFutureWatcher>
 #include <QRect>
 #include <vector>
-#include "data/PointCloud.h"
+#include <plapoint/core/point_cloud.h>
 
-/// XYZ 文件异步加载结果（坐标 + 可选颜色）
-/// 已代替为 xjw::pointcloud::PointCloud，保留此别名以兼容旧调用点
-using XyzCloudData = xjw::pointcloud::PointCloud;
+/// 渲染用点云类型别名
+using RenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
 // Qt OpenGL 4.3 Core Profile 函数集（用于可编程管线渲染）
 class QOpenGLFunctions_4_3_Core;
@@ -71,10 +70,10 @@ public:
     void setCameraPoses(const QVector<CameraPose> &poses);
     // 直接设置点云或网格模型数据（不启动异步 IO）。
     // cloud.hasFaces() == false 时作点云渲染，true 时作 Phong 网格渲染。
-    void setPointCloud(const xjw::pointcloud::PointCloud &cloud);
+    void setPointCloud(const RenderCloud &cloud);
 
     // setPointCloud 的网格语义别名（cloud 应包含面片）
-    void setMesh(const xjw::pointcloud::PointCloud &mesh);
+    void setMesh(const RenderCloud &mesh);
     // 从 XYZ 文本文件加载点云（每行 "x y z [r g b ...]"）
     void loadPointCloudFromXyz(const QString &xyzPath);
 
@@ -190,7 +189,7 @@ private:
     void invalidateCache() const;
 
     int removePointsInScreenRect(const QRect &screenRect);
-    void pushManualUndoSnapshot(const xjw::pointcloud::PointCloud &snapshot);
+    void pushManualUndoSnapshot(RenderCloud snapshot);
     void collectPointIndicesInScreenRect(const QRect &screenRect, std::vector<std::size_t> *indices) const;
 
     // 取消未完成的异步加载并等待结束（在新加载开始前调用）
@@ -227,7 +226,7 @@ private:
     int m_lineCount = 0;
 
     QVector<CameraPose> m_poses;             // 当前相机姿态列表
-    xjw::pointcloud::PointCloud m_cloud;     // 当前显示的点云或网格（源自文件或外部调用）
+    RenderCloud m_cloud;     // 当前显示的点云或网格（源自文件或外部调用）
 
     // 场景中心/半径/包围盒缓存（避免每帧遍历大量点）
     mutable QVector3D  m_cachedCenter;
@@ -259,7 +258,7 @@ private:
     QRect m_manualSelectRect;
     std::vector<std::size_t> m_manualPreviewIndices;
     QString m_currentCloudPath;
-    std::vector<xjw::pointcloud::PointCloud> m_manualUndoStack;
+    std::vector<RenderCloud> m_manualUndoStack;
     int m_manualUndoLimit = 10;
 };
 

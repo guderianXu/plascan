@@ -11,7 +11,7 @@
 // ============================================================
 
 #include "Camera.h"
-#include "spatial/KDTree2D.h"
+#include "KDTree2D.h"
 
 #include <array>
 #include <string>

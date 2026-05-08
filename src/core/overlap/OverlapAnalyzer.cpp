@@ -21,7 +21,7 @@
 //   score = 0.0 表示距离恰好等于阈值（临界无重叠）
 // ============================================================
 
-#include "spatial/KDTree2D.h"
+#include "KDTree2D.h"
 
 #include <algorithm>
 #include <cmath>

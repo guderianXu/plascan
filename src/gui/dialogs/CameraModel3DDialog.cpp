@@ -39,7 +39,58 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <algorithm>
-#include "io/PointCloudIO.h"
+#include <plapoint/io/xyz_io.h>
+#include <plapoint/io/ply_io.h>
+#include <fstream>
+#include <sstream>
+
+namespace
+{
+
+RenderCloud cloneRenderCloud(const RenderCloud &src)
+{
+    RenderCloud dst(src.size());
+    for (size_t i = 0; i < src.size(); ++i)
+        for (int d = 0; d < 3; ++d)
+            dst.points()(static_cast<plamatrix::Index>(i), d) = src.points()(static_cast<plamatrix::Index>(i), d);
+    if (src.hasColors())
+    {
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> c(src.size(), 3);
+        for (size_t i = 0; i < src.size(); ++i)
+            for (int d = 0; d < 3; ++d)
+                c(static_cast<plamatrix::Index>(i), d) = src.colors()->getValue(static_cast<plamatrix::Index>(i), d);
+        dst.setColors(std::move(c));
+    }
+    if (src.hasNormals())
+    {
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> n(src.size(), 3);
+        for (size_t i = 0; i < src.size(); ++i)
+            for (int d = 0; d < 3; ++d)
+                n(static_cast<plamatrix::Index>(i), d) = src.normals()->getValue(static_cast<plamatrix::Index>(i), d);
+        dst.setNormals(std::move(n));
+    }
+    if (src.hasTextureCoords())
+    {
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> t(src.size(), 2);
+        for (size_t i = 0; i < src.size(); ++i)
+            for (int d = 0; d < 2; ++d)
+                t(static_cast<plamatrix::Index>(i), d) = src.textureCoords()->getValue(static_cast<plamatrix::Index>(i), d);
+        dst.setTextureCoords(std::move(t));
+    }
+    if (src.hasFaces())
+    {
+        plamatrix::DenseMatrix<int, plamatrix::Device::CPU> f(src.faces()->rows(), 3);
+        for (int i = 0; i < src.faces()->rows(); ++i)
+            for (int d = 0; d < 3; ++d)
+                f(i, d) = src.faces()->getValue(i, d);
+        dst.setFaces(std::move(f));
+    }
+    dst.setMaterialLibraryFile(src.materialLibraryFile());
+    dst.setTextureImageFile(src.textureImageFile());
+    return dst;
+}
+
+} // namespace
 
 // 构造函数：设置最小尺寸，启用鼠标追踪（悬停检测需要），
 // 设置默认视角为俯仰 -25°、偏航 35°（斜上方看向场景）
@@ -102,7 +153,12 @@ void CameraSceneWidget::invalidateCache() const
     };
 
     for (const auto &p : m_poses)             accum(p.center);
-    for (const auto &p : m_cloud.positions()) accum(QVector3D(p.x, p.y, p.z));
+    for (size_t i = 0; i < m_cloud.size(); ++i)
+    {
+        accum(QVector3D(m_cloud.points()(static_cast<plamatrix::Index>(i), 0),
+                        m_cloud.points()(static_cast<plamatrix::Index>(i), 1),
+                        m_cloud.points()(static_cast<plamatrix::Index>(i), 2)));
+    }
 
     if (count <= 0)
     {
@@ -120,8 +176,11 @@ void CameraSceneWidget::invalidateCache() const
         std::vector<float> dists;
         dists.reserve(m_poses.size() + m_cloud.size());
         for (const auto &p : m_poses)             dists.push_back((p.center - m_cachedCenter).length());
-        for (const auto &p : m_cloud.positions()) {
-            const QVector3D qp(p.x, p.y, p.z);
+        for (size_t i = 0; i < m_cloud.size(); ++i)
+        {
+            const QVector3D qp(m_cloud.points()(static_cast<plamatrix::Index>(i), 0),
+                               m_cloud.points()(static_cast<plamatrix::Index>(i), 1),
+                               m_cloud.points()(static_cast<plamatrix::Index>(i), 2));
             dists.push_back((qp - m_cachedCenter).length());
         }
         if (!dists.empty())
@@ -139,10 +198,10 @@ void CameraSceneWidget::invalidateCache() const
 }
 
 // 直接设置点云或网格（cloud.hasFaces() 决定渲染模式）
-void CameraSceneWidget::setPointCloud(const xjw::pointcloud::PointCloud &cloud)
+void CameraSceneWidget::setPointCloud(const RenderCloud &cloud)
 {
     cancelPendingLoad();
-    m_cloud = cloud;
+    m_cloud = cloneRenderCloud(cloud);
     m_currentCloudPath.clear();
     m_preferModelPointRender = false;
     m_cacheDirty = true;
@@ -150,71 +209,80 @@ void CameraSceneWidget::setPointCloud(const xjw::pointcloud::PointCloud &cloud)
     update();
 }
 
-void CameraSceneWidget::setMesh(const xjw::pointcloud::PointCloud &mesh)
+void CameraSceneWidget::setMesh(const RenderCloud &mesh)
 {
     setPointCloud(mesh); // 实现相同，语义区分（mesh 应含面片）
 }
 
-// 从 XYZ 格式文本文件异步加载点云数据，使用 core PointCloudIO 解析。
+// 从 XYZ 格式文本文件异步加载点云数据，使用 plapoint IO 解析。
 void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
 {
     cancelPendingLoad();
     m_currentCloudPath = xyzPath;
-    m_cloud.clear();
+    m_cloud = RenderCloud();
     m_preferModelPointRender = false;
     m_cacheDirty = true;
     m_gpuDirty   = true;
     LOG_INFO(QStringLiteral("[3D] 正在加载点云: %1").arg(xyzPath));
 
     const int gen = m_loadGen;
-    auto *watcher = new QFutureWatcher<xjw::pointcloud::PointCloud>(this);
-    connect(watcher, &QFutureWatcher<xjw::pointcloud::PointCloud>::finished,
+    auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
+    connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
             this, [this, watcher, gen]()
     {
         if (gen == m_loadGen)
         {
-            m_cloud = watcher->result();
-            LOG_INFO(QStringLiteral("[3D] 点云加载完成，共 %1 点%2")
-                .arg(m_cloud.size())
-                .arg(m_cloud.hasColors() ? QStringLiteral("（含RGB颜色）") : QStringLiteral("（无颜色）")));
-            invalidateCache();
-            m_gpuDirty = true;
-            update();
+            auto result = watcher->result();
+            if (result)
+            {
+                m_cloud = std::move(*result);
+                LOG_INFO(QStringLiteral("[3D] 点云加载完成，共 %1 点")
+                    .arg(m_cloud.size()));
+                invalidateCache();
+                m_gpuDirty = true;
+                update();
+            }
         }
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([xyzPath]()
+    watcher->setFuture(QtConcurrent::run([xyzPath]() -> std::shared_ptr<RenderCloud>
     {
-        xjw::pointcloud::PointCloud cloud;
-        xjw::pointcloud::PointCloudIOResult result;
-        xjw::pointcloud::readPointCloud(xyzPath.toStdString(), &cloud, {}, &result);
-        return cloud;
+        try
+        {
+            return plapoint::io::readXyz<float>(xyzPath.toStdString());
+        }
+        catch (const std::exception &e)
+        {
+            LOG_ERROR(QStringLiteral("[3D] XYZ 加载失败: %1").arg(QString::fromStdString(e.what())));
+        }
+        return nullptr;
     }));
 }
 
-// 从 PLY 文件异步加载网格模型或点云（使用 core PointCloudIO 统一解析）。
+// 从 PLY 文件异步加载网格模型或点云。
 void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
 {
     cancelPendingLoad();
     m_currentCloudPath = plyPath;
-    m_cloud.clear();
+    m_cloud = RenderCloud();
     m_preferModelPointRender = true;
     m_cacheDirty = true;
     m_gpuDirty   = true;
     LOG_INFO(QStringLiteral("[3D] 正在加载模型: %1").arg(plyPath));
 
     const int gen = m_loadGen;
-    auto *watcher = new QFutureWatcher<xjw::pointcloud::PointCloud>(this);
-    connect(watcher, &QFutureWatcher<xjw::pointcloud::PointCloud>::finished,
+    auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
+    connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
             this, [this, watcher, gen]()
     {
         if (gen == m_loadGen)
         {
-            m_cloud = watcher->result();
+            auto result = watcher->result();
+            if (result) m_cloud = std::move(*result);
             m_preferModelPointRender = !m_cloud.hasFaces();
             LOG_INFO(QStringLiteral("[3D] 模型加载完成，共 %1 顶点 / %2 面%3")
                      .arg(m_cloud.size())
-                     .arg(m_cloud.faces().size())
+                     .arg(m_cloud.hasFaces() ? static_cast<int>(m_cloud.faces()->rows()) : 0)
                      .arg(m_cloud.hasColors() ? QStringLiteral("（含RGB颜色）")
                                               : QStringLiteral("（无颜色）")));
             invalidateCache();
@@ -223,12 +291,136 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
         }
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([plyPath]()
+    watcher->setFuture(QtConcurrent::run([plyPath]() -> std::shared_ptr<RenderCloud>
     {
-        xjw::pointcloud::PointCloud cloud;
-        xjw::pointcloud::PointCloudIOResult result;
-        xjw::pointcloud::readPointCloud(plyPath.toStdString(), &cloud, {}, &result);
-        return cloud;
+        // Custom PLY reader supporting positions, colors, faces, normals
+        std::ifstream f(plyPath.toStdString(), std::ios::binary);
+        if (!f) return nullptr;
+
+        std::string line;
+        std::getline(f, line);
+        if (line.find("ply") == std::string::npos) return nullptr;
+
+        std::getline(f, line); // format
+        bool isBinary = (line.find("binary_little_endian") != std::string::npos);
+
+        int nVerts = 0, nFaces = 0;
+        std::vector<std::string> vertProps;
+        while (std::getline(f, line))
+        {
+            if (!line.empty() && line.back() == '\r') line.pop_back();
+            if (line == "end_header") break;
+            std::istringstream iss(line);
+            std::string token;
+            iss >> token;
+            if (token == "element")
+            {
+                std::string elem; int count;
+                iss >> elem >> count;
+                if (elem == "vertex") nVerts = count;
+                else if (elem == "face") nFaces = count;
+            }
+            else if (token == "property")
+            {
+                std::string type, name;
+                iss >> type >> name;
+                vertProps.push_back(name);
+            }
+        }
+
+        bool hasColor = false, hasNx = false, hasNy = false, hasNz = false;
+        for (const auto &p : vertProps)
+        {
+            if (p == "red") hasColor = true;
+            if (p == "nx") hasNx = true;
+            if (p == "ny") hasNy = true;
+            if (p == "nz") hasNz = true;
+        }
+
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(nVerts, 3);
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(nVerts, 3);
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> nrm(nVerts, 3);
+
+        if (isBinary)
+        {
+            for (int i = 0; i < nVerts; ++i)
+            {
+                for (const auto &p : vertProps)
+                {
+                    if (p == "x")      { float v; f.read(reinterpret_cast<char*>(&v), 4); pts(i, 0) = v; }
+                    else if (p == "y") { float v; f.read(reinterpret_cast<char*>(&v), 4); pts(i, 1) = v; }
+                    else if (p == "z") { float v; f.read(reinterpret_cast<char*>(&v), 4); pts(i, 2) = v; }
+                    else if (p == "nx") { float v; f.read(reinterpret_cast<char*>(&v), 4); nrm(i, 0) = v; }
+                    else if (p == "ny") { float v; f.read(reinterpret_cast<char*>(&v), 4); nrm(i, 1) = v; }
+                    else if (p == "nz") { float v; f.read(reinterpret_cast<char*>(&v), 4); nrm(i, 2) = v; }
+                    else if (p == "red")   { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 0) = v; }
+                    else if (p == "green") { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 1) = v; }
+                    else if (p == "blue")  { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 2) = v; }
+                    else { float dummy; f.read(reinterpret_cast<char*>(&dummy), 4); }
+                }
+            }
+        }
+        else
+        {
+            for (int i = 0; i < nVerts; ++i)
+            {
+                std::getline(f, line);
+                if (!line.empty() && line.back() == '\r') line.pop_back();
+                std::istringstream iss(line);
+                for (const auto &p : vertProps)
+                {
+                    if (p == "x")      { float v; iss >> v; pts(i, 0) = v; }
+                    else if (p == "y") { float v; iss >> v; pts(i, 1) = v; }
+                    else if (p == "z") { float v; iss >> v; pts(i, 2) = v; }
+                    else if (p == "nx") { float v; iss >> v; nrm(i, 0) = v; }
+                    else if (p == "ny") { float v; iss >> v; nrm(i, 1) = v; }
+                    else if (p == "nz") { float v; iss >> v; nrm(i, 2) = v; }
+                    else if (p == "red")   { int v; iss >> v; colors(i, 0) = static_cast<uint8_t>(v); }
+                    else if (p == "green") { int v; iss >> v; colors(i, 1) = static_cast<uint8_t>(v); }
+                    else if (p == "blue")  { int v; iss >> v; colors(i, 2) = static_cast<uint8_t>(v); }
+                    else { float dummy; iss >> dummy; }
+                }
+            }
+        }
+
+        RenderCloud cloud(std::move(pts));
+        if (hasColor) cloud.setColors(std::move(colors));
+        if (hasNx && hasNy && hasNz) cloud.setNormals(std::move(nrm));
+
+        // Read faces
+        if (nFaces > 0)
+        {
+            plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(nFaces, 3);
+            for (int fi = 0; fi < nFaces; ++fi)
+            {
+                if (isBinary)
+                {
+                    uint8_t nv; f.read(reinterpret_cast<char*>(&nv), 1);
+                    int inds[3] = {-1, -1, -1};
+                    for (int v = 0; v < static_cast<int>(nv); ++v)
+                    {
+                        int idx; f.read(reinterpret_cast<char*>(&idx), 4);
+                        if (v < 3) inds[v] = idx;
+                    }
+                    for (int v = 0; v < 3; ++v) faces(fi, v) = inds[v];
+                }
+                else
+                {
+                    std::getline(f, line);
+                    if (!line.empty() && line.back() == '\r') line.pop_back();
+                    std::istringstream iss(line);
+                    int nv; iss >> nv;
+                    for (int v = 0; v < 3 && v < nv; ++v)
+                    {
+                        int idx; iss >> idx;
+                        faces(fi, v) = idx;
+                    }
+                }
+            }
+            cloud.setFaces(std::move(faces));
+        }
+
+        return std::make_shared<RenderCloud>(std::move(cloud));
     }));
 }
 
@@ -626,16 +818,18 @@ void CameraSceneWidget::uploadGpuData()
     // ── 1. 点云（m_cloud，无面片且无法向量，颜色直通）──────────────────────────
     m_pointCount = 0;
     m_modelPtCount = 0;
-    if (!m_cloud.empty() && !m_cloud.hasFaces() && !m_cloud.hasNormals()) {
+    if (!(m_cloud.size() == 0) && !m_cloud.hasFaces() && !m_cloud.hasNormals()) {
         const bool hasColors = m_cloud.hasColors();
         QVector<float> data;
         data.reserve((int)m_cloud.size() * 6);
         for (std::size_t i = 0; i < m_cloud.size(); ++i) {
-            const auto &pt = m_cloud.positions()[i];
-            data << pt.x << pt.y << pt.z;
+            data << m_cloud.points()(static_cast<plamatrix::Index>(i), 0)
+                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 1)
+                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 2);
             if (hasColors) {
-                const auto &c = m_cloud.colors()[i];
-                data << c.r / 255.f << c.g / 255.f << c.b / 255.f;
+                data << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 0) / 255.f
+                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 1) / 255.f
+                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 2) / 255.f;
             } else {
                 data << 0.45f << 0.45f << 0.50f;
             }
@@ -652,7 +846,7 @@ void CameraSceneWidget::uploadGpuData()
     // ── 2. 网格（hasFaces）或含法向量点云（!hasFaces && hasNormals）──────────
     m_meshVertCount = 0;
     m_meshHasFaces = false;
-    if (!m_cloud.empty() && m_cloud.hasFaces()) {
+    if (!(m_cloud.size() == 0) && m_cloud.hasFaces()) {
         m_meshHasFaces = true;
         const bool hasVertCol = m_cloud.hasColors();
         const bool hasNrm     = m_cloud.hasNormals();
@@ -662,21 +856,30 @@ void CameraSceneWidget::uploadGpuData()
         std::vector<QVector3D> vNormals(Nv);
         if (hasNrm) {
             for (std::size_t i = 0; i < Nv; ++i) {
-                const auto &n = m_cloud.normals()[i];
-                vNormals[i] = QVector3D(n.x, n.y, n.z);
+                vNormals[i] = QVector3D(
+                    m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 0),
+                    m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 1),
+                    m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 2));
             }
         } else {
-            for (const auto &face : m_cloud.faces()) {
-                const std::size_t i0 = face.vertexIndices[0];
-                const std::size_t i1 = face.vertexIndices[1];
-                const std::size_t i2 = face.vertexIndices[2];
+            const auto nF = static_cast<std::size_t>(m_cloud.faces()->rows());
+            for (std::size_t fi = 0; fi < nF; ++fi) {
+                const std::size_t i0 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 0));
+                const std::size_t i1 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 1));
+                const std::size_t i2 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 2));
                 if (i0 >= Nv || i1 >= Nv || i2 >= Nv) continue;
-                const auto &p0 = m_cloud.positions()[i0];
-                const auto &p1 = m_cloud.positions()[i1];
-                const auto &p2 = m_cloud.positions()[i2];
+                float p0x = m_cloud.points()(static_cast<plamatrix::Index>(i0), 0);
+                float p0y = m_cloud.points()(static_cast<plamatrix::Index>(i0), 1);
+                float p0z = m_cloud.points()(static_cast<plamatrix::Index>(i0), 2);
+                float p1x = m_cloud.points()(static_cast<plamatrix::Index>(i1), 0);
+                float p1y = m_cloud.points()(static_cast<plamatrix::Index>(i1), 1);
+                float p1z = m_cloud.points()(static_cast<plamatrix::Index>(i1), 2);
+                float p2x = m_cloud.points()(static_cast<plamatrix::Index>(i2), 0);
+                float p2y = m_cloud.points()(static_cast<plamatrix::Index>(i2), 1);
+                float p2z = m_cloud.points()(static_cast<plamatrix::Index>(i2), 2);
                 const QVector3D fn = QVector3D::crossProduct(
-                    QVector3D(p1.x - p0.x, p1.y - p0.y, p1.z - p0.z),
-                    QVector3D(p2.x - p0.x, p2.y - p0.y, p2.z - p0.z));
+                    QVector3D(p1x - p0x, p1y - p0y, p1z - p0z),
+                    QVector3D(p2x - p0x, p2y - p0y, p2z - p0z));
                 vNormals[i0] += fn;
                 vNormals[i1] += fn;
                 vNormals[i2] += fn;
@@ -686,21 +889,24 @@ void CameraSceneWidget::uploadGpuData()
 
         // 展开面片为平坦顶点数组（stride=9 floats: xyz nxnynz rgb）
         QVector<float> data;
-        data.reserve((int)m_cloud.faces().size() * 3 * 9);
-        for (const auto &face : m_cloud.faces()) {
-            const std::size_t i0 = face.vertexIndices[0];
-            const std::size_t i1 = face.vertexIndices[1];
-            const std::size_t i2 = face.vertexIndices[2];
+        data.reserve(static_cast<int>(m_cloud.faces()->rows()) * 3 * 9);
+        const auto nFaces = static_cast<std::size_t>(m_cloud.faces()->rows());
+        for (std::size_t fi = 0; fi < nFaces; ++fi) {
+            const std::size_t i0 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 0));
+            const std::size_t i1 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 1));
+            const std::size_t i2 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 2));
             if (i0 >= Nv || i1 >= Nv || i2 >= Nv) continue;
+            const std::size_t indices[3] = {i0, i1, i2};
             for (int vi = 0; vi < 3; ++vi) {
-                const std::size_t idx = face.vertexIndices[vi];
-                const auto &pos = m_cloud.positions()[idx];
-                const QVector3D &n = vNormals[idx];
-                data << pos.x << pos.y << pos.z;
-                data << n.x() << n.y() << n.z();
+                const std::size_t idx = indices[vi];
+                data << m_cloud.points()(static_cast<plamatrix::Index>(idx), 0)
+                     << m_cloud.points()(static_cast<plamatrix::Index>(idx), 1)
+                     << m_cloud.points()(static_cast<plamatrix::Index>(idx), 2);
+                data << vNormals[idx].x() << vNormals[idx].y() << vNormals[idx].z();
                 if (hasVertCol) {
-                    const auto &c = m_cloud.colors()[idx];
-                    data << c.r / 255.f << c.g / 255.f << c.b / 255.f;
+                    data << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 0) / 255.f
+                         << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 1) / 255.f
+                         << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 2) / 255.f;
                 } else {
                     data << 0.55f << 0.55f << 0.58f;
                 }
@@ -721,22 +927,23 @@ void CameraSceneWidget::uploadGpuData()
         m_meshVbo.release();
         m_meshVao.release();
         m_meshVertCount = data.size() / 9;
-    } else if (!m_cloud.empty() && !m_cloud.hasFaces() && m_cloud.hasNormals()) {
+    } else if (!(m_cloud.size() == 0) && !m_cloud.hasFaces() && m_cloud.hasNormals()) {
         // 含法向量但无面片 → GL_POINTS + Phong 光照（稠密点云等）
         const bool hasColors = m_cloud.hasColors();
         const std::size_t Nv = m_cloud.size();
-        const auto &normals  = m_cloud.normals();
-        const auto &colors   = m_cloud.colors();
         QVector<float> data;
         data.reserve((int)Nv * 9);
         for (std::size_t i = 0; i < Nv; ++i) {
-            const auto &pt = m_cloud.positions()[i];
-            const auto &n  = normals[i];
-            data << pt.x << pt.y << pt.z;
-            data << n.x  << n.y  << n.z;
+            data << m_cloud.points()(static_cast<plamatrix::Index>(i), 0)
+                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 1)
+                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 2);
+            data << m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 0)
+                 << m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 1)
+                 << m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 2);
             if (hasColors) {
-                const auto &c = colors[i];
-                data << c.r / 255.f << c.g / 255.f << c.b / 255.f;
+                data << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 0) / 255.f
+                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 1) / 255.f
+                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 2) / 255.f;
             } else {
                 data << 0.55f << 0.55f << 0.58f;
             }
@@ -762,7 +969,7 @@ void CameraSceneWidget::uploadGpuData()
     m_lineCount = 0;
     {
         if (m_cacheDirty) invalidateCache();
-        const bool empty = m_poses.isEmpty() && m_cloud.empty();
+        const bool empty = m_poses.isEmpty() && (m_cloud.size() == 0);
         if (!empty) {
             const QVector3D &mn = m_cachedAABBMin;
             const QVector3D &mx = m_cachedAABBMax;
@@ -1086,8 +1293,10 @@ void CameraSceneWidget::drawOverlay()
                 continue;
             }
             bool ok = false;
-            const auto &position = m_cloud.positions()[pointIndex];
-            const QPointF screenPoint = projectToScreen(QVector3D(position.x, position.y, position.z), &ok);
+            const QPointF screenPoint = projectToScreen(QVector3D(
+                m_cloud.points()(static_cast<plamatrix::Index>(pointIndex), 0),
+                m_cloud.points()(static_cast<plamatrix::Index>(pointIndex), 1),
+                m_cloud.points()(static_cast<plamatrix::Index>(pointIndex), 2)), &ok);
             if (ok)
             {
                 painter.drawEllipse(screenPoint, 1.5, 1.5);
@@ -1105,7 +1314,7 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
 {
     if (enabled)
     {
-        if (m_cloud.empty())
+        if ((m_cloud.size() == 0))
         {
             if (errorMessage)
             {
@@ -1137,13 +1346,13 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
     return true;
 }
 
-void CameraSceneWidget::pushManualUndoSnapshot(const xjw::pointcloud::PointCloud &snapshot)
+void CameraSceneWidget::pushManualUndoSnapshot(RenderCloud snapshot)
 {
     if (!m_manualPruneMode)
     {
         return;
     }
-    m_manualUndoStack.push_back(snapshot);
+    m_manualUndoStack.push_back(std::move(snapshot));
     if (static_cast<int>(m_manualUndoStack.size()) > m_manualUndoLimit)
     {
         m_manualUndoStack.erase(m_manualUndoStack.begin());
@@ -1194,7 +1403,7 @@ bool CameraSceneWidget::undoLastManualPrune(QString *errorMessage)
 int CameraSceneWidget::removePointsInScreenRect(const QRect &screenRect)
 {
     const QRect rect = screenRect.normalized();
-    if (rect.width() < 3 || rect.height() < 3 || m_cloud.empty())
+    if (rect.width() < 3 || rect.height() < 3 || (m_cloud.size() == 0))
     {
         return 0;
     }
@@ -1217,43 +1426,66 @@ int CameraSceneWidget::removePointsInScreenRect(const QRect &screenRect)
         return 0;
     }
 
-    xjw::pointcloud::PointCloud filtered;
-    filtered.reserve(pointCount - static_cast<std::size_t>(removedCount));
-    filtered.setMetadata(m_cloud.metadata());
+    // Build kept indices list
+    const std::size_t keepCount = pointCount - static_cast<std::size_t>(removedCount);
+    std::vector<plamatrix::Index> kept;
+    kept.reserve(keepCount);
+    for (std::size_t index = 0; index < pointCount; ++index)
+    {
+        if (!removeMask[index])
+            kept.push_back(static_cast<plamatrix::Index>(index));
+    }
+
+    // Build new point cloud from kept indices
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> newPts(keepCount, 3);
+    for (std::size_t i = 0; i < keepCount; ++i)
+    {
+        plamatrix::Index src = kept[i];
+        for (int d = 0; d < 3; ++d)
+            newPts(static_cast<plamatrix::Index>(i), d) = m_cloud.points()(src, d);
+    }
+
+    RenderCloud filtered(std::move(newPts));
     filtered.setMaterialLibraryFile(m_cloud.materialLibraryFile());
     filtered.setTextureImageFile(m_cloud.textureImageFile());
 
-    for (std::size_t index = 0; index < pointCount; ++index)
+    // Copy colors if present
+    if (m_cloud.hasColors())
     {
-        if (removeMask[index])
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> newCol(keepCount, 3);
+        for (std::size_t i = 0; i < keepCount; ++i)
         {
-            continue;
+            plamatrix::Index src = kept[i];
+            for (int d = 0; d < 3; ++d)
+                newCol(static_cast<plamatrix::Index>(i), d) = m_cloud.colors()->getValue(src, d);
         }
-        const auto point = m_cloud.pointAt(index);
-        if (point.hasPhotogrammetry)
+        filtered.setColors(std::move(newCol));
+    }
+
+    // Copy normals if present
+    if (m_cloud.hasNormals())
+    {
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> newNrm(keepCount, 3);
+        for (std::size_t i = 0; i < keepCount; ++i)
         {
-            filtered.addPoint(point.position, point.normal, point.color, point.photogrammetry);
+            plamatrix::Index src = kept[i];
+            for (int d = 0; d < 3; ++d)
+                newNrm(static_cast<plamatrix::Index>(i), d) = m_cloud.normals()->getValue(src, d);
         }
-        else if (point.hasNormal && point.hasColor)
+        filtered.setNormals(std::move(newNrm));
+    }
+
+    // Copy texture coords if present
+    if (m_cloud.hasTextureCoords())
+    {
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> newTex(keepCount, 2);
+        for (std::size_t i = 0; i < keepCount; ++i)
         {
-            filtered.addPoint(point.position, point.normal, point.color);
+            plamatrix::Index src = kept[i];
+            for (int d = 0; d < 2; ++d)
+                newTex(static_cast<plamatrix::Index>(i), d) = m_cloud.textureCoords()->getValue(src, d);
         }
-        else if (point.hasNormal)
-        {
-            filtered.addPoint(point.position, point.normal);
-        }
-        else if (point.hasColor)
-        {
-            filtered.addPoint(point.position, point.color);
-        }
-        else
-        {
-            filtered.addPoint(point.position);
-        }
-        if (point.hasTextureCoordinate)
-        {
-            filtered.setTextureCoordinate(filtered.size() - 1, point.textureCoordinate);
-        }
+        filtered.setTextureCoords(std::move(newTex));
     }
 
     m_cloud = std::move(filtered);
@@ -1273,7 +1505,7 @@ void CameraSceneWidget::collectPointIndicesInScreenRect(const QRect &screenRect,
     indices->clear();
 
     const QRect rect = screenRect.normalized();
-    if (rect.width() < 3 || rect.height() < 3 || m_cloud.empty())
+    if (rect.width() < 3 || rect.height() < 3 || (m_cloud.size() == 0))
     {
         return;
     }
@@ -1283,8 +1515,10 @@ void CameraSceneWidget::collectPointIndicesInScreenRect(const QRect &screenRect,
     for (std::size_t index = 0; index < pointCount; ++index)
     {
         bool projected = false;
-        const auto &position = m_cloud.positions()[index];
-        const QPointF screenPoint = projectToScreen(QVector3D(position.x, position.y, position.z), &projected);
+        const QPointF screenPoint = projectToScreen(QVector3D(
+            m_cloud.points()(static_cast<plamatrix::Index>(index), 0),
+            m_cloud.points()(static_cast<plamatrix::Index>(index), 1),
+            m_cloud.points()(static_cast<plamatrix::Index>(index), 2)), &projected);
         if (projected && rect.contains(screenPoint.toPoint()))
         {
             indices->push_back(index);
@@ -1303,23 +1537,31 @@ bool CameraSceneWidget::saveCurrentPointCloudToSource(QString *errorMessage)
         return false;
     }
 
-    xjw::pointcloud::PointCloudWriteOptions writeOptions;
-    writeOptions.format = xjw::pointcloud::PointCloudFileFormat::Auto;
-    writeOptions.writeNormals = m_cloud.hasNormals();
-    writeOptions.writeColors = m_cloud.hasColors();
-    writeOptions.writeTextureCoordinates = m_cloud.hasTextureCoordinates();
-    writeOptions.writeFaces = false;
+    // Determine file format from extension
+    const std::string stdPath = m_currentCloudPath.toStdString();
+    const bool isPly = (stdPath.size() >= 4 &&
+        (stdPath.substr(stdPath.size() - 4) == ".ply" || stdPath.substr(stdPath.size() - 4) == ".PLY"));
 
-    xjw::pointcloud::PointCloudIOResult ioResult;
-    if (!xjw::pointcloud::writePointCloud(m_currentCloudPath.toStdString(), m_cloud, writeOptions, &ioResult))
+    try
+    {
+        if (isPly)
+        {
+            plapoint::io::writePly<float>(stdPath, m_cloud);
+        }
+        else
+        {
+            plapoint::io::writeXyz<float>(stdPath, m_cloud);
+        }
+        return true;
+    }
+    catch (const std::exception &e)
     {
         if (errorMessage)
         {
-            *errorMessage = QString::fromStdString(ioResult.errorMessage);
+            *errorMessage = QString::fromStdString(e.what());
         }
         return false;
     }
-    return true;
 }
 
 void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
@@ -1340,11 +1582,11 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
     if (m_manualPruneMode && event->button() == Qt::ForwardButton)
     {
         const QRect selectionRect = m_manualSelectRect.normalized();
-        const xjw::pointcloud::PointCloud beforeDelete = m_cloud;
+        RenderCloud snapshot = cloneRenderCloud(m_cloud);
         const int removedCount = removePointsInScreenRect(selectionRect);
         if (removedCount > 0)
         {
-            pushManualUndoSnapshot(beforeDelete);
+            pushManualUndoSnapshot(std::move(snapshot));
             emit manualPruneApplied(removedCount, static_cast<int>(m_cloud.size()));
             QString saveError;
             if (saveCurrentPointCloudToSource(&saveError))

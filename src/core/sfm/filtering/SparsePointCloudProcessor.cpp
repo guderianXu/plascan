@@ -1,7 +1,7 @@
 #include "SparsePointCloudProcessor.h"
 
 #include "math/Vec3Ops.h"
-#include "spatial/KDTree.h"
+#include "KDTree.h"
 
 #include <algorithm>
 #include <array>
