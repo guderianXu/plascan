@@ -62,6 +62,7 @@ target_include_directories(sfm PUBLIC
 target_link_libraries(sfm
     PUBLIC
         camera
+        plapoint::plapoint
     PRIVATE
         intersection
         bundle_adjust
