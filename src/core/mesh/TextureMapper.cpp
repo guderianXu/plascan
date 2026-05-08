@@ -1,6 +1,8 @@
 #include "TextureMapper.h"
 
-#include "../pointcloud/io/PointCloudIO.h"
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/io/obj_io.h>
+#include <plamatrix/dense/dense_matrix.h>
 
 #include <QDir>
 #include <QImage>
@@ -17,17 +19,55 @@ namespace xjw::mesh
 namespace
 {
 
-float pointAxisValue(const xjw::Point3f &point, int axis)
+using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+
+struct Bounds
 {
+    float minX = 0.0f;
+    float minY = 0.0f;
+    float minZ = 0.0f;
+    float maxX = 0.0f;
+    float maxY = 0.0f;
+    float maxZ = 0.0f;
+    bool valid = false;
+};
+
+Bounds computeCloudBounds(const PlaPointCloud &cloud)
+{
+    Bounds bounds;
+    if (cloud.size() == 0)
+    {
+        return bounds;
+    }
+
+    bounds.valid = true;
+    bounds.minX = bounds.minY = bounds.minZ = std::numeric_limits<float>::max();
+    bounds.maxX = bounds.maxY = bounds.maxZ = -std::numeric_limits<float>::max();
+    for (size_t i = 0; i < cloud.size(); ++i)
+    {
+        auto pt = cloud[i];
+        bounds.minX = std::min(bounds.minX, pt.x());
+        bounds.minY = std::min(bounds.minY, pt.y());
+        bounds.minZ = std::min(bounds.minZ, pt.z());
+        bounds.maxX = std::max(bounds.maxX, pt.x());
+        bounds.maxY = std::max(bounds.maxY, pt.y());
+        bounds.maxZ = std::max(bounds.maxZ, pt.z());
+    }
+    return bounds;
+}
+
+float pointAxisValue(const PlaPointCloud &cloud, size_t index, int axis)
+{
+    auto pt = cloud[index];
     if (axis == 0)
     {
-        return point.x;
+        return pt.x();
     }
     if (axis == 1)
     {
-        return point.y;
+        return pt.y();
     }
-    return point.z;
+    return pt.z();
 }
 
 struct ProjectionAxes
@@ -36,7 +76,7 @@ struct ProjectionAxes
     int vAxis = 1;
 };
 
-ProjectionAxes chooseProjectionAxes(const xjw::pointcloud::PointCloudBounds &bounds)
+ProjectionAxes chooseProjectionAxes(const Bounds &bounds)
 {
     ProjectionAxes axes;
     if (!bounds.valid)
@@ -45,9 +85,9 @@ ProjectionAxes chooseProjectionAxes(const xjw::pointcloud::PointCloudBounds &bou
     }
 
     const std::array<float, 3> extents = {
-        bounds.maxCorner.x - bounds.minCorner.x,
-        bounds.maxCorner.y - bounds.minCorner.y,
-        bounds.maxCorner.z - bounds.minCorner.z};
+        bounds.maxX - bounds.minX,
+        bounds.maxY - bounds.minY,
+        bounds.maxZ - bounds.minZ};
     std::array<int, 3> indices = {0, 1, 2};
     std::sort(indices.begin(), indices.end(), [&extents](int lhs, int rhs) {
         return extents[lhs] > extents[rhs];
@@ -57,10 +97,10 @@ ProjectionAxes chooseProjectionAxes(const xjw::pointcloud::PointCloudBounds &bou
     return axes;
 }
 
-bool assignPlanarTextureCoordinates(xjw::pointcloud::PointCloud *meshCloud,
+bool assignPlanarTextureCoordinates(PlaPointCloud *meshCloud,
                                     std::string *errorMessage)
 {
-    if (!meshCloud || meshCloud->empty() || !meshCloud->hasFaces())
+    if (!meshCloud || meshCloud->size() == 0 || !meshCloud->hasFaces())
     {
         if (errorMessage)
         {
@@ -69,76 +109,117 @@ bool assignPlanarTextureCoordinates(xjw::pointcloud::PointCloud *meshCloud,
         return false;
     }
 
-    const auto bounds = meshCloud->computeBounds();
+    const Bounds bounds = computeCloudBounds(*meshCloud);
     const ProjectionAxes axes = chooseProjectionAxes(bounds);
-    const float minU = pointAxisValue(bounds.minCorner, axes.uAxis);
-    const float maxU = pointAxisValue(bounds.maxCorner, axes.uAxis);
-    const float minV = pointAxisValue(bounds.minCorner, axes.vAxis);
-    const float maxV = pointAxisValue(bounds.maxCorner, axes.vAxis);
-    const float rangeU = std::max(maxU - minU, 1e-6f);
-    const float rangeV = std::max(maxV - minV, 1e-6f);
+    const float minU = pointAxisValue(*meshCloud, 0, axes.uAxis);
+    const float maxU = pointAxisValue(*meshCloud, 0, axes.uAxis);
+    const float minV = pointAxisValue(*meshCloud, 0, axes.vAxis);
+    const float maxV = pointAxisValue(*meshCloud, 0, axes.vAxis);
 
-    std::vector<xjw::Point2f> textureCoordinates;
-    textureCoordinates.reserve(meshCloud->size());
-    for (const xjw::Point3f &position : meshCloud->positions())
+    // Compute actual min/max for projection
+    float actualMinU = std::numeric_limits<float>::max();
+    float actualMaxU = -std::numeric_limits<float>::max();
+    float actualMinV = std::numeric_limits<float>::max();
+    float actualMaxV = -std::numeric_limits<float>::max();
+    for (size_t i = 0; i < meshCloud->size(); ++i)
     {
-        const float u = (pointAxisValue(position, axes.uAxis) - minU) / rangeU;
-        const float v = (pointAxisValue(position, axes.vAxis) - minV) / rangeV;
-        textureCoordinates.push_back({std::clamp(u, 0.0f, 1.0f), std::clamp(v, 0.0f, 1.0f)});
+        const float u = pointAxisValue(*meshCloud, i, axes.uAxis);
+        const float v = pointAxisValue(*meshCloud, i, axes.vAxis);
+        actualMinU = std::min(actualMinU, u);
+        actualMaxU = std::max(actualMaxU, u);
+        actualMinV = std::min(actualMinV, v);
+        actualMaxV = std::max(actualMaxV, v);
     }
-    meshCloud->setTextureCoordinates(textureCoordinates);
+    Q_UNUSED(minU);
+    Q_UNUSED(maxU);
+    Q_UNUSED(minV);
+    Q_UNUSED(maxV);
 
-    const std::vector<xjw::pointcloud::PointCloudFace> faces = meshCloud->faces();
-    meshCloud->clearFaces();
-    for (xjw::pointcloud::PointCloudFace face : faces)
+    const float rangeU = std::max(actualMaxU - actualMinU, 1e-6f);
+    const float rangeV = std::max(actualMaxV - actualMinV, 1e-6f);
+
+    const auto n = static_cast<plamatrix::Index>(meshCloud->size());
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texCoords(n, 2);
+    for (size_t i = 0; i < meshCloud->size(); ++i)
     {
-        face.textureIndices = face.vertexIndices;
-        face.hasTextureIndices = true;
-        if (!meshCloud->addFace(face))
+        const float u = (pointAxisValue(*meshCloud, i, axes.uAxis) - actualMinU) / rangeU;
+        const float v = (pointAxisValue(*meshCloud, i, axes.vAxis) - actualMinV) / rangeV;
+        const auto idx = static_cast<plamatrix::Index>(i);
+        texCoords(idx, 0) = std::clamp(u, 0.0f, 1.0f);
+        texCoords(idx, 1) = std::clamp(v, 0.0f, 1.0f);
+    }
+    meshCloud->setTextureCoords(std::move(texCoords));
+
+    auto *faces = meshCloud->faces();
+    if (!faces)
+    {
+        if (errorMessage)
         {
-            if (errorMessage)
-            {
-                *errorMessage = "为网格附加纹理索引失败";
-            }
-            return false;
+            *errorMessage = "网格缺少三角面数据";
         }
+        return false;
     }
+
+    const int faceCount = static_cast<int>(faces->rows());
+    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> texIdx(faceCount, 3);
+    for (int fi = 0; fi < faceCount; ++fi)
+    {
+        texIdx(fi, 0) = (*faces)(fi, 0);
+        texIdx(fi, 1) = (*faces)(fi, 1);
+        texIdx(fi, 2) = (*faces)(fi, 2);
+    }
+    meshCloud->setFaceTextureIndices(std::move(texIdx));
 
     return true;
 }
 
-xjw::ColorRGBA averageMeshColor(const xjw::pointcloud::PointCloud &meshCloud)
+struct ColorRGBA
 {
-    if (!meshCloud.hasColors() || meshCloud.colors().empty())
+    std::uint8_t r = 200;
+    std::uint8_t g = 200;
+    std::uint8_t b = 200;
+    std::uint8_t a = 255;
+};
+
+ColorRGBA averageMeshColor(const PlaPointCloud &meshCloud)
+{
+    if (!meshCloud.hasColors())
     {
-        return xjw::ColorRGBA{180, 180, 180, 255};
+        return ColorRGBA{180, 180, 180, 255};
+    }
+
+    auto *colors = meshCloud.colors();
+    if (!colors || colors->rows() == 0)
+    {
+        return ColorRGBA{180, 180, 180, 255};
     }
 
     std::uint64_t sumR = 0;
     std::uint64_t sumG = 0;
     std::uint64_t sumB = 0;
-    for (const xjw::ColorRGBA &color : meshCloud.colors())
+    for (int i = 0; i < colors->rows(); ++i)
     {
-        sumR += color.r;
-        sumG += color.g;
-        sumB += color.b;
+        sumR += (*colors)(i, 0);
+        sumG += (*colors)(i, 1);
+        sumB += (*colors)(i, 2);
     }
 
-    const std::uint64_t count = static_cast<std::uint64_t>(meshCloud.colors().size());
-    return xjw::ColorRGBA{
+    const std::uint64_t count = static_cast<std::uint64_t>(colors->rows());
+    return ColorRGBA{
         static_cast<std::uint8_t>(sumR / count),
         static_cast<std::uint8_t>(sumG / count),
         static_cast<std::uint8_t>(sumB / count),
         255};
 }
 
-xjw::ColorRGBA vertexColorAt(const xjw::pointcloud::PointCloud &meshCloud, std::size_t index)
+ColorRGBA vertexColorAt(const PlaPointCloud &meshCloud, std::size_t index)
 {
-    if (meshCloud.hasColors() && index < meshCloud.colors().size())
+    if (meshCloud.hasColors() && index < meshCloud.size())
     {
-        return meshCloud.colors()[index];
+        auto pt = meshCloud[index];
+        return ColorRGBA{pt.r(), pt.g(), pt.b(), 255};
     }
-    return xjw::ColorRGBA{180, 180, 180, 255};
+    return ColorRGBA{180, 180, 180, 255};
 }
 
 void expandTexturePadding(QImage *image, std::vector<std::uint8_t> *filledMask, int padding)
@@ -217,7 +298,7 @@ void expandTexturePadding(QImage *image, std::vector<std::uint8_t> *filledMask, 
     }
 }
 
-bool bakeTextureFromVertexColors(const xjw::pointcloud::PointCloud &meshCloud,
+bool bakeTextureFromVertexColors(const PlaPointCloud &meshCloud,
                                  const TextureMappingConfig &config,
                                  QImage *textureImage,
                                  std::string *errorMessage)
@@ -231,7 +312,7 @@ bool bakeTextureFromVertexColors(const xjw::pointcloud::PointCloud &meshCloud,
         return false;
     }
 
-    if (!meshCloud.hasFaces() || !meshCloud.hasTextureCoordinates())
+    if (!meshCloud.hasFaces() || !meshCloud.hasTextureCoords())
     {
         if (errorMessage)
         {
@@ -240,11 +321,23 @@ bool bakeTextureFromVertexColors(const xjw::pointcloud::PointCloud &meshCloud,
         return false;
     }
 
+    auto *faces = meshCloud.faces();
+    auto *texCoords = meshCloud.textureCoords();
+    auto *faceTexIndices = meshCloud.faceTextureIndices();
+    if (!faces || !texCoords)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = "网格面或纹理坐标数据无效";
+        }
+        return false;
+    }
+
     const int textureSize = std::clamp(config.textureSize, 512, 16384);
     const int padding = std::clamp(config.padding, 0, 32);
-    const xjw::ColorRGBA background = config.keepUnmapped
+    const ColorRGBA background = config.keepUnmapped
         ? averageMeshColor(meshCloud)
-        : xjw::ColorRGBA{0, 0, 0, 255};
+        : ColorRGBA{0, 0, 0, 255};
     *textureImage = QImage(textureSize, textureSize, QImage::Format_RGB32);
     textureImage->fill(qRgb(background.r, background.g, background.b));
 
@@ -254,36 +347,41 @@ bool bakeTextureFromVertexColors(const xjw::pointcloud::PointCloud &meshCloud,
         return (c.x() - a.x()) * (b.y() - a.y()) - (c.y() - a.y()) * (b.x() - a.x());
     };
 
-    const auto &texCoords = meshCloud.textureCoordinates();
-    const auto &faces = meshCloud.faces();
-    for (std::size_t faceIndex = 0; faceIndex < faces.size(); ++faceIndex)
+    const int faceCount = faces->rows();
+    for (int fi = 0; fi < faceCount; ++fi)
     {
-        if (config.progressFn && (faceIndex % 256 == 0 || faceIndex + 1 == faces.size()))
+        if (config.progressFn && (static_cast<std::size_t>(fi) % 256 == 0 || fi + 1 == faceCount))
         {
-            const int percent = 25 + static_cast<int>((60.0 * (faceIndex + 1)) / std::max<std::size_t>(faces.size(), 1));
+            const int percent = 25 + static_cast<int>((60.0 * (fi + 1)) / std::max(faceCount, 1));
             config.progressFn("正在烘焙纹理...", percent);
         }
 
-        const xjw::pointcloud::PointCloudFace &face = faces[faceIndex];
-        const std::size_t i0 = face.vertexIndices[0];
-        const std::size_t i1 = face.vertexIndices[1];
-        const std::size_t i2 = face.vertexIndices[2];
-        if (i0 >= meshCloud.size() || i1 >= meshCloud.size() || i2 >= meshCloud.size())
+        const int i0 = (*faces)(fi, 0);
+        const int i1 = (*faces)(fi, 1);
+        const int i2 = (*faces)(fi, 2);
+        if (i0 >= static_cast<int>(meshCloud.size())
+            || i1 >= static_cast<int>(meshCloud.size())
+            || i2 >= static_cast<int>(meshCloud.size()))
         {
             continue;
         }
 
-        const std::size_t t0 = face.hasTextureIndices ? face.textureIndices[0] : i0;
-        const std::size_t t1 = face.hasTextureIndices ? face.textureIndices[1] : i1;
-        const std::size_t t2 = face.hasTextureIndices ? face.textureIndices[2] : i2;
-        if (t0 >= texCoords.size() || t1 >= texCoords.size() || t2 >= texCoords.size())
+        const std::size_t t0Idx = faceTexIndices ? static_cast<std::size_t>((*faceTexIndices)(fi, 0)) : static_cast<std::size_t>(i0);
+        const std::size_t t1Idx = faceTexIndices ? static_cast<std::size_t>((*faceTexIndices)(fi, 1)) : static_cast<std::size_t>(i1);
+        const std::size_t t2Idx = faceTexIndices ? static_cast<std::size_t>((*faceTexIndices)(fi, 2)) : static_cast<std::size_t>(i2);
+        if (t0Idx >= static_cast<std::size_t>(texCoords->rows())
+            || t1Idx >= static_cast<std::size_t>(texCoords->rows())
+            || t2Idx >= static_cast<std::size_t>(texCoords->rows()))
         {
             continue;
         }
 
-        const QPointF p0(texCoords[t0].u * (textureSize - 1), (1.0f - texCoords[t0].v) * (textureSize - 1));
-        const QPointF p1(texCoords[t1].u * (textureSize - 1), (1.0f - texCoords[t1].v) * (textureSize - 1));
-        const QPointF p2(texCoords[t2].u * (textureSize - 1), (1.0f - texCoords[t2].v) * (textureSize - 1));
+        const QPointF p0((*texCoords)(static_cast<int>(t0Idx), 0) * (textureSize - 1),
+                         (1.0f - (*texCoords)(static_cast<int>(t0Idx), 1)) * (textureSize - 1));
+        const QPointF p1((*texCoords)(static_cast<int>(t1Idx), 0) * (textureSize - 1),
+                         (1.0f - (*texCoords)(static_cast<int>(t1Idx), 1)) * (textureSize - 1));
+        const QPointF p2((*texCoords)(static_cast<int>(t2Idx), 0) * (textureSize - 1),
+                         (1.0f - (*texCoords)(static_cast<int>(t2Idx), 1)) * (textureSize - 1));
         const double area = edgeFunction(p0, p1, p2);
         if (std::abs(area) < 1e-8)
         {
@@ -295,9 +393,9 @@ bool bakeTextureFromVertexColors(const xjw::pointcloud::PointCloud &meshCloud,
         const int minY = std::max(0, static_cast<int>(std::floor(std::min({p0.y(), p1.y(), p2.y()}))));
         const int maxY = std::min(textureSize - 1, static_cast<int>(std::ceil(std::max({p0.y(), p1.y(), p2.y()}))));
 
-        const xjw::ColorRGBA c0 = vertexColorAt(meshCloud, i0);
-        const xjw::ColorRGBA c1 = vertexColorAt(meshCloud, i1);
-        const xjw::ColorRGBA c2 = vertexColorAt(meshCloud, i2);
+        const ColorRGBA c0 = vertexColorAt(meshCloud, static_cast<std::size_t>(i0));
+        const ColorRGBA c1 = vertexColorAt(meshCloud, static_cast<std::size_t>(i1));
+        const ColorRGBA c2 = vertexColorAt(meshCloud, static_cast<std::size_t>(i2));
 
         for (int y = minY; y <= maxY; ++y)
         {
@@ -356,18 +454,17 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
         *result = TextureMappingResult();
     }
 
-    xjw::pointcloud::PointCloud meshCloud;
-    xjw::pointcloud::PointCloudIOResult readResult;
-    if (!xjw::pointcloud::readPointCloud(meshPath, &meshCloud, {}, &readResult))
+    auto meshCloudPtr = plapoint::io::readObj<float>(meshPath);
+    if (!meshCloudPtr)
     {
         if (errorMsg)
         {
-            *errorMsg = "无法读取网格模型: " + readResult.errorMessage;
+            *errorMsg = "无法读取网格模型: " + meshPath;
         }
         return false;
     }
 
-    if (!assignPlanarTextureCoordinates(&meshCloud, errorMsg))
+    if (!assignPlanarTextureCoordinates(meshCloudPtr.get(), errorMsg))
     {
         return false;
     }
@@ -378,7 +475,7 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
     }
 
     QImage textureImage;
-    if (!bakeTextureFromVertexColors(meshCloud, config, &textureImage, errorMsg))
+    if (!bakeTextureFromVertexColors(*meshCloudPtr, config, &textureImage, errorMsg))
     {
         return false;
     }
@@ -399,22 +496,10 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
 
     const QString objPath = QDir(outputDir).filePath(QStringLiteral("textured_model.obj"));
     const QString mtlPath = QDir(outputDir).filePath(QStringLiteral("textured_model.mtl"));
-    meshCloud.setMaterialLibraryFile(QStringLiteral("textured_model.mtl").toStdString());
-    meshCloud.setTextureImageFile(QStringLiteral("textures/model_texture.png").toStdString());
+    meshCloudPtr->setMaterialLibraryFile(QStringLiteral("textured_model.mtl").toStdString());
+    meshCloudPtr->setTextureImageFile(QStringLiteral("textures/model_texture.png").toStdString());
 
-    xjw::pointcloud::PointCloudIOResult writeResult;
-    xjw::pointcloud::PointCloudWriteOptions writeOptions;
-    writeOptions.format = xjw::pointcloud::PointCloudFileFormat::Obj;
-    writeOptions.materialLibraryFile = QStringLiteral("textured_model.mtl").toStdString();
-    writeOptions.textureImageFile = QStringLiteral("textures/model_texture.png").toStdString();
-    if (!xjw::pointcloud::writePointCloud(objPath.toStdString(), meshCloud, writeOptions, &writeResult))
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "无法写出带纹理 OBJ: " + writeResult.errorMessage;
-        }
-        return false;
-    }
+    plapoint::io::writeObj<float>(objPath.toStdString(), *meshCloudPtr);
 
     if (result)
     {

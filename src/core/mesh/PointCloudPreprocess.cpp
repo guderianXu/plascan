@@ -1,11 +1,10 @@
-#include "PoissonPreprocess.h"
-
-#include "../MeshTypes.h"
-#include "PoissonCommon.h"
+#include "PointCloudPreprocess.h"
 
 #include <algorithm>
 #include <cmath>
+#include <cstddef>
 #include <cstdint>
+#include <functional>
 #include <unordered_map>
 #include <utility>
 #include <vector>
@@ -14,19 +13,61 @@ namespace xjw
 {
 namespace mesh
 {
-namespace poisson
+namespace detail
 {
 
 namespace
 {
 
-using PointXYZRGB = detail::PointXYZRGB;
+struct Vec3
+{
+    float x = 0.0f;
+    float y = 0.0f;
+    float z = 0.0f;
+};
 
-using common::Vec3;
-using common::VoxelKey;
-using common::VoxelKeyHash;
-using common::normalize;
-using common::dot;
+struct VoxelKey
+{
+    int x = 0;
+    int y = 0;
+    int z = 0;
+
+    bool operator==(const VoxelKey &other) const
+    {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct VoxelKeyHash
+{
+    std::size_t operator()(const VoxelKey &key) const
+    {
+        const std::size_t h1 = std::hash<int>{}(key.x);
+        const std::size_t h2 = std::hash<int>{}(key.y);
+        const std::size_t h3 = std::hash<int>{}(key.z);
+        return h1 ^ (h2 << 1) ^ (h3 << 7);
+    }
+};
+
+inline float dot(const Vec3 &a, const Vec3 &b)
+{
+    return a.x * b.x + a.y * b.y + a.z * b.z;
+}
+
+inline float norm(const Vec3 &v)
+{
+    return std::sqrt(dot(v, v));
+}
+
+inline Vec3 normalize(const Vec3 &v)
+{
+    const float n = norm(v);
+    if (n < 1e-12f)
+    {
+        return {0.0f, 0.0f, 1.0f};
+    }
+    return {v.x / n, v.y / n, v.z / n};
+}
 
 struct NeighborGrid
 {
@@ -79,10 +120,13 @@ struct NeighborGrid
         }
     }
 
-    std::vector<int> gatherKnn(const std::vector<PointXYZRGB> &points, int queryIndex, int k) const
+    std::vector<int> gatherKnn(const std::vector<PointXYZRGB> &points,
+                               int queryIndex,
+                               int k) const
     {
         std::vector<int> candidates;
-        if (points.empty() || queryIndex < 0 || queryIndex >= static_cast<int>(points.size()) || k <= 0)
+        if (points.empty() || queryIndex < 0
+            || queryIndex >= static_cast<int>(points.size()) || k <= 0)
         {
             return candidates;
         }
@@ -111,7 +155,9 @@ struct NeighborGrid
                     for (int ix = x0; ix <= x1; ++ix)
                     {
                         const bool onShell = (radius == 0)
-                                             || ix == x0 || ix == x1 || iy == y0 || iy == y1 || iz == z0 || iz == z1;
+                            || ix == x0 || ix == x1
+                            || iy == y0 || iy == y1
+                            || iz == z0 || iz == z1;
                         if (!onShell)
                         {
                             continue;
@@ -147,7 +193,8 @@ struct NeighborGrid
         }
 
         const int keep = std::min(k, static_cast<int>(distWithIndex.size()));
-        std::nth_element(distWithIndex.begin(), distWithIndex.begin() + keep - 1, distWithIndex.end(),
+        std::nth_element(distWithIndex.begin(), distWithIndex.begin() + keep - 1,
+                         distWithIndex.end(),
                          [](const auto &a, const auto &b) { return a.first < b.first; });
         std::sort(distWithIndex.begin(), distWithIndex.begin() + keep,
                   [](const auto &a, const auto &b) { return a.first < b.first; });
@@ -163,8 +210,8 @@ struct NeighborGrid
 
 } // namespace
 
-float PoissonPreprocessor::estimateBaseVoxelStep(const std::vector<detail::PointXYZRGB> &points,
-                                                 int resolution) const
+float estimateBaseVoxelStep(const std::vector<PointXYZRGB> &points,
+                            int resolution)
 {
     if (points.empty())
     {
@@ -191,9 +238,8 @@ float PoissonPreprocessor::estimateBaseVoxelStep(const std::vector<detail::Point
     return std::max(1e-5f, maxSpan / std::max(16, resolution));
 }
 
-std::vector<detail::PointXYZRGB> PoissonPreprocessor::voxelDownsamplePoints(
-    const std::vector<detail::PointXYZRGB> &points,
-    float voxelSize) const
+std::vector<PointXYZRGB> voxelDownsamplePoints(const std::vector<PointXYZRGB> &points,
+                                                float voxelSize)
 {
     if (points.empty() || voxelSize <= 1e-6f)
     {
@@ -265,11 +311,10 @@ std::vector<detail::PointXYZRGB> PoissonPreprocessor::voxelDownsamplePoints(
     return downsampled;
 }
 
-std::vector<detail::PointXYZRGB> PoissonPreprocessor::statisticalDenoisePoints(
-    const std::vector<detail::PointXYZRGB> &points,
-    int k,
-    float stdMul,
-    float gridCellSize) const
+std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB> &points,
+                                                    int k,
+                                                    float stdMul,
+                                                    float gridCellSize)
 {
     if (points.size() < 64 || k < 4)
     {
@@ -334,7 +379,8 @@ std::vector<detail::PointXYZRGB> PoissonPreprocessor::statisticalDenoisePoints(
     filtered.reserve(points.size());
     for (int i = 0; i < static_cast<int>(points.size()); ++i)
     {
-        if (valid[static_cast<std::size_t>(i)] == 0 || meanDistances[static_cast<std::size_t>(i)] <= threshold)
+        if (valid[static_cast<std::size_t>(i)] == 0
+            || meanDistances[static_cast<std::size_t>(i)] <= threshold)
         {
             filtered.push_back(points[static_cast<std::size_t>(i)]);
         }
@@ -343,105 +389,6 @@ std::vector<detail::PointXYZRGB> PoissonPreprocessor::statisticalDenoisePoints(
     return filtered.size() >= 100 ? filtered : points;
 }
 
-std::vector<cv::Vec3f> PoissonPreprocessor::estimateNormals(const std::vector<detail::PointXYZRGB> &points,
-                                                            int k,
-                                                            float gridCellSize) const
-{
-    std::vector<cv::Vec3f> normals(points.size(), cv::Vec3f(0.0f, 0.0f, 1.0f));
-    if (points.empty())
-    {
-        return normals;
-    }
-
-    NeighborGrid grid;
-    grid.build(points, std::max(1e-5f, gridCellSize));
-
-    Vec3 centroid{0.0f, 0.0f, 0.0f};
-    for (const auto &point : points)
-    {
-        centroid.x += point.x;
-        centroid.y += point.y;
-        centroid.z += point.z;
-    }
-    centroid.x /= static_cast<float>(points.size());
-    centroid.y /= static_cast<float>(points.size());
-    centroid.z /= static_cast<float>(points.size());
-
-    for (int index = 0; index < static_cast<int>(points.size()); ++index)
-    {
-        const auto neighbors = grid.gatherKnn(points, index, std::max(8, k));
-        if (neighbors.size() < 6)
-        {
-            const Vec3 radial = normalize(Vec3{points[static_cast<std::size_t>(index)].x - centroid.x,
-                                               points[static_cast<std::size_t>(index)].y - centroid.y,
-                                               points[static_cast<std::size_t>(index)].z - centroid.z});
-            normals[static_cast<std::size_t>(index)] = cv::Vec3f(radial.x, radial.y, radial.z);
-            continue;
-        }
-
-        double mx = 0.0;
-        double my = 0.0;
-        double mz = 0.0;
-        for (int neighborIndex : neighbors)
-        {
-            const auto &point = points[static_cast<std::size_t>(neighborIndex)];
-            mx += point.x;
-            my += point.y;
-            mz += point.z;
-        }
-        const double invCount = 1.0 / static_cast<double>(neighbors.size());
-        mx *= invCount;
-        my *= invCount;
-        mz *= invCount;
-
-        cv::Matx33f covariance(0, 0, 0,
-                               0, 0, 0,
-                               0, 0, 0);
-        for (int neighborIndex : neighbors)
-        {
-            const auto &point = points[static_cast<std::size_t>(neighborIndex)];
-            const float dx = static_cast<float>(point.x - mx);
-            const float dy = static_cast<float>(point.y - my);
-            const float dz = static_cast<float>(point.z - mz);
-            covariance(0, 0) += dx * dx;
-            covariance(0, 1) += dx * dy;
-            covariance(0, 2) += dx * dz;
-            covariance(1, 0) += dy * dx;
-            covariance(1, 1) += dy * dy;
-            covariance(1, 2) += dy * dz;
-            covariance(2, 0) += dz * dx;
-            covariance(2, 1) += dz * dy;
-            covariance(2, 2) += dz * dz;
-        }
-
-        cv::Mat eigenValues;
-        cv::Mat eigenVectors;
-        if (!cv::eigen(cv::Mat(covariance), eigenValues, eigenVectors))
-        {
-            normals[static_cast<std::size_t>(index)] = cv::Vec3f(0.0f, 0.0f, 1.0f);
-            continue;
-        }
-
-        Vec3 normalVector{
-            eigenVectors.at<float>(2, 0),
-            eigenVectors.at<float>(2, 1),
-            eigenVectors.at<float>(2, 2)};
-        normalVector = normalize(normalVector);
-
-        const Vec3 outward = normalize(Vec3{points[static_cast<std::size_t>(index)].x - centroid.x,
-                                            points[static_cast<std::size_t>(index)].y - centroid.y,
-                                            points[static_cast<std::size_t>(index)].z - centroid.z});
-        if (dot(normalVector, outward) < 0.0f)
-        {
-            normalVector = normalVector * -1.0f;
-        }
-
-        normals[static_cast<std::size_t>(index)] = cv::Vec3f(normalVector.x, normalVector.y, normalVector.z);
-    }
-
-    return normals;
-}
-
-} // namespace poisson
+} // namespace detail
 } // namespace mesh
 } // namespace xjw

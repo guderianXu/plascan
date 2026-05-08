@@ -11,7 +11,7 @@
  */
 
 #include "MeshTypes.h"
-#include "SurfaceReconstructorIO.h"
+#include "PointCloudPreprocess.h"
 
 #include <cstdint>
 #include <vector>
