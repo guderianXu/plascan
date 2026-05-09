@@ -6,6 +6,17 @@ install(TARGETS plascan_gui
   RUNTIME DESTINATION bin
 )
 
+# 应用图标 (SVG — 矢量, 适配所有尺寸)
+install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.svg"
+  DESTINATION share/icons/hicolor/scalable/apps
+  RENAME plascan.svg
+)
+
+# 桌面启动器
+install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.desktop"
+  DESTINATION share/applications
+)
+
 if(TARGET superpoint)
   install(TARGETS superpoint
     LIBRARY DESTINATION lib
@@ -112,5 +123,18 @@ if(PLASCAN_BUNDLE_RUNTIME)
   )
   install(SCRIPT "${PLASCAN_INSTALL_BUNDLE_SCRIPT}")
 endif()
+
+# 安装后更新图标缓存 (GNOME/KDE 需要)
+install(CODE "
+  find_program(GTK_UPDATE_EXECUTABLE gtk-update-icon-cache)
+  if(GTK_UPDATE_EXECUTABLE)
+    set(_icon_dir \"\${CMAKE_INSTALL_PREFIX}/share/icons/hicolor\")
+    if(EXISTS \"\${_icon_dir}\")
+      execute_process(COMMAND \"\${GTK_UPDATE_EXECUTABLE}\" -f -t \"\${_icon_dir}\"
+        ERROR_QUIET)
+      message(STATUS \"Updated GTK icon cache: \${_icon_dir}\")
+    endif()
+  endif()
+")
 
 message(STATUS "plascan_gui configuration complete")
