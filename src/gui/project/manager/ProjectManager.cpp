@@ -706,7 +706,13 @@ void ProjectManager::appendIpfindResult(const QString &input, const QString &out
     if (m_projectData) {
         m_projectData->appendIpfindResult(input, output, settings);
         // 通知界面刷新该影像的 interest points 缓存
-        emit ipfindResultAppended(input);
+        // 从输出路径推导后缀 (.sp/.dsk/.alk/.sift/...)
+        QString suffix;
+        for (const char *suf : {".sp", ".dsk", ".alk", ".sift", ".orb", ".akz", ".dedode"})
+        {
+            if (output.endsWith(QLatin1String(suf))) { suffix = QLatin1String(suf); break; }
+        }
+        emit ipfindResultAppended(input, suffix.isEmpty() ? QStringLiteral(".sp") : suffix);
     }
 }
 

@@ -585,11 +585,14 @@ void MainWindow::setupProjectManager()
         connect(m_projectManager, &ProjectManager::projectCreated, this, &MainWindow::onProjectOpened);
         connect(m_projectManager, &ProjectManager::projectOpened,  this, &MainWindow::onProjectOpened);
 
-        // 当 SuperPoint 追加了新的 .sp 结果时，要求 Canvas 刷新该影像的兴趣点显示
-        connect(m_projectManager, &ProjectManager::ipfindResultAppended, this, [this](const QString &imagePath)
+        // 当特征提取完成后，切换 Canvas 到对应后缀并刷新显示
+        connect(m_projectManager, &ProjectManager::ipfindResultAppended, this,
+            [this](const QString &imagePath, const QString &suffix)
         {
             if (m_canvas)
             {
+                if (!suffix.isEmpty())
+                    m_canvas->setActiveFeatureSuffix(suffix);
                 m_canvas->immediateReloadInterestPoints(imagePath);
             }
         });

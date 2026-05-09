@@ -70,6 +70,9 @@ public:
     static QString findSpForImage(const QString &plascanPath, const QString &imagePath);
     // 查找任意提取器的特征文件 (尝试 .sp/.dsk/.alk/.sift/.orb/.akz)
     static QString findFeatureForImage(const QString &plascanPath, const QString &imagePath);
+    // 按固定后缀查找特征文件 (不扫描所有后缀)
+    static QString featureFileForSuffix(const QString &plascanPath, const QString &imagePath,
+                                        const QString &suffix);
     // 列出影像所有存在的特征文件后缀 (用于 GUI 多提取器切换)
     static QStringList availableFeatureSuffixes(const QString &plascanPath,
                                                  const QString &imagePath);

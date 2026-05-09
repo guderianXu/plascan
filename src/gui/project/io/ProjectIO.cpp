@@ -150,6 +150,22 @@ QString ProjectIO::findFeatureForImage(const QString &plascanPath, const QString
     return QString();
 }
 
+QString ProjectIO::featureFileForSuffix(const QString &plascanPath, const QString &imagePath,
+                                         const QString &suffix)
+{
+    const QStringList candidates = spCandidates(plascanPath, imagePath);
+    for (const QString &spPath : candidates)
+    {
+        QString base = spPath;
+        if (base.endsWith(QStringLiteral(".sp")))
+            base.chop(3);
+        const QString path = base + suffix;
+        if (QFileInfo::exists(path))
+            return path;
+    }
+    return QString();
+}
+
 QStringList ProjectIO::availableFeatureSuffixes(const QString &plascanPath,
                                                   const QString &imagePath)
 {

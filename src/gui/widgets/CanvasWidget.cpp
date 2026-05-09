@@ -563,11 +563,11 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
         m_spCache.erase(it);
     }
 
-    // 直接在主线程同步读取 .sp 并更新显示，确保 UI 立刻反映新结果
+    // 直接在主线程同步读取特征文件并更新显示，使用当前活动的后缀
     const QString projectPath = property("currentProjectPath").toString();
-    const QString spFile = ProjectIO::findFeatureForImage(projectPath, imagePath);
+    const QString spFile = ProjectIO::featureFileForSuffix(projectPath, imagePath, m_activeFeatureSuffix);
     if (spFile.isEmpty()) {
-        LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no .sp found for %1").arg(imagePath));
+        LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no %1 found for %2").arg(m_activeFeatureSuffix, imagePath));
         // 仅在当前显示影像时清除场景中的兴趣点，避免覆盖用户正在看的其它影像
         if (isCurrentImage && m_layerRenderer) m_layerRenderer->clearFeatureLayers();
         emit featuresLoaded(imagePath, 0);

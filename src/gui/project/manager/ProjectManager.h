@@ -76,7 +76,7 @@ signals:
     // 脏状态变化：dirty=true 表示有未保存更改
     void metadataDirtyChanged(bool dirty);
     // 单个 ipfind 结果追加到元数据后发出，参数为对应的输入影像绝对路径
-    void ipfindResultAppended(const QString &imagePath);
+    void ipfindResultAppended(const QString &imagePath, const QString &suffix = QString());
     /// 每对影像匹配完成时实时发出（在主线程中）
     /// img0/img1: 影像绝对路径; matchFilePath: .match 文件路径; numMatches: 内点数
     void matchPairReady(const QString &img0, const QString &img1,
