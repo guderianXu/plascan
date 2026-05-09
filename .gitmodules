@@ -1,0 +1,6 @@
+[submodule "/home/guderian/code/plascan/3rdparty/plamatrix"]
+	path = /home/guderian/code/plascan/3rdparty/plamatrix
+	url = https://github.com/guderianXu/plamatrix.git
+[submodule "/home/guderian/code/plascan/3rdparty/plapoint"]
+	path = /home/guderian/code/plascan/3rdparty/plapoint
+	url = https://github.com/guderianXu/plapoint.git

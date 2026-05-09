@@ -84,13 +84,13 @@ else()
 endif()
 message(STATUS "plascan: found libzip, target=${PLASCAN_LIBZIP_TARGET}")
 
-# ── plamatrix ────────────────────────────────────────────────────────────────
-find_package(plamatrix REQUIRED)
-message(STATUS "plascan: found plamatrix")
+# ── plamatrix (submodule) ──────────────────────────────────────────────────────
+add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plamatrix ${CMAKE_BINARY_DIR}/3rdparty/plamatrix)
+message(STATUS "plascan: using plamatrix from 3rdparty/")
 
-# ── plapoint ──────────────────────────────────────────────────────────────────
-find_package(plapoint REQUIRED)
-message(STATUS "plascan: found plapoint")
+# ── plapoint (submodule) ───────────────────────────────────────────────────────
+add_subdirectory(${CMAKE_SOURCE_DIR}/3rdparty/plapoint ${CMAKE_BINARY_DIR}/3rdparty/plapoint)
+message(STATUS "plascan: using plapoint from 3rdparty/")
 
 # ── OpenMP ────────────────────────────────────────────────────────────────────
 if(PLASCAN_APPLE_SILICON)
