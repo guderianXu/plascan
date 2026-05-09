@@ -1,4 +1,4 @@
-# <img src="" width="28"> PlaScan
+# PlaScan
 
 **行星表面摄影测量处理系统** — 从多视角影像生成高精度三维模型。
 
@@ -16,28 +16,36 @@
 | SIFT | BF (L2) | 230 | 2.7s | <0.1s | 2.7s | CPU |
 | ORB | BF (Hamming) | 135 | 0.1s | <0.1s | 0.1s | CPU |
 
-## 快速开始 (Docker, 推荐)
+## 快速开始
+
+### 依赖
+
+- C++17 编译器 (GCC 11+ / Clang 15+)
+- CMake ≥ 3.18
+- CUDA Toolkit (可选，GPU 加速)
+- Qt6, OpenCV, LibTorch, GDAL, libtiff, libzip, OpenMP, GTest
+
+### 克隆并构建
 
 ```bash
-git clone https://github.com/guderianXu/plascan.git
+git clone --recurse-submodules https://github.com/guderianXu/plascan.git
 cd plascan
-
-# 1. 构建 Docker 镜像 (首次约 10 分钟, 含 CUDA 12.4 + LibTorch)
-sudo docker build -t plascan-build -f docker/Dockerfile.ubuntu2404 .
-
-# 2. 进入容器交互开发
-./docker/shell.sh
-
-# 3. 在容器内编译并测试
-mkdir -p build && cd build
+mkdir build && cd build
 cmake .. -DBUILD_TESTS=ON
-make -j$(nproc)
+cmake --build . -j$(nproc)
 ctest --output-on-failure
 ```
 
-**一键构建+测试**：`./docker/build.sh`
+项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。
 
-**打包 .deb**：`./docker/package.sh`
+### Docker 构建
+
+```bash
+sudo docker build -t plascan-build -f docker/Dockerfile.ubuntu2404 .
+./docker/shell.sh                    # 进入容器
+./docker/build.sh                    # 一键构建+测试
+./docker/package.sh                  # 打包 .deb
+```
 
 ## 模块架构
 
@@ -58,20 +66,20 @@ src/
 │   ├── sfm/                   # 增量式 SfM + 光束法平差 (Ceres)
 │   ├── mvs/                   # PatchMatch 深度图 + 融合
 │   ├── dense_match/           # MGM/SGM 密集立体匹配 (自研 CUDA)
-│   ├── pointcloud/            # 点云数据结构 + I/O
 │   ├── mesh/                  # Poisson 表面重建 + 纹理映射
 │   ├── terrain/               # DEM + DOM 正射影像
+│   ├── overlap/               # 影像重叠度分析
+│   ├── intersection/          # 前方交汇精度检验
 │   └── pipeline/              # SfM 服务层
 ├── gui/                       # Qt6 图形界面
 │   ├── dialogs/               # 参数配置对话框
 │   ├── widgets/               # 3D 画布 + 影像查看器
 │   └── project/               # 项目管理 (.plascan 归档)
-└── cli/                       # 命令行工具 (6 CLI, CLI11)
-    ├── feature_extract_cli    # 统一特征提取
-    ├── feature_match_cli      # 统一特征匹配
-    ├── dense_match_cli        # 密集匹配
-    ├── rectify_cli            # 极线校正
-    └── triangulate_cli        # 视差三角化 → 点云
+├── cli/                       # 命令行工具
+└── common/                    # 通用工具 (日志, 数学, 结果包装)
+3rdparty/
+├── plapoint/   (submodule)    # 自研 GPU 点云库
+└── plamatrix/  (submodule)    # 自研矩阵运算后端
 ```
 
 ## CLI 工具
@@ -91,7 +99,7 @@ feature_extract_cli -a superpoint -m sp.pt -i ./images/ -o ./features/ --cuda
 ### 特征匹配 (`feature_match_cli`)
 
 ```bash
-# 自动检测文件后缀, 无需手动指定匹配器
+# 自动检测文件后缀
 feature_match_cli --sp1 a.sp  --sp2 b.sp  -o out.match --cuda    # .sp → SuperGlue
 feature_match_cli --sp1 a.dsk --sp2 b.dsk -o out.match --cuda    # .dsk → NN
 
@@ -114,12 +122,12 @@ triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o clo
 
 从 [Releases](https://github.com/guderianXu/plascan/releases) 下载预训练模型，放置到 `resources/models/`。
 
-或通过导出脚本生成（需要 conda env + lightglue/kornia）：
+或通过导出脚本生成：
 
 ```bash
-python scripts/export_superpoint.py                      # SuperPoint
-python scripts/export_disk_aliked.py                     # DISK + ALIKED
-python scripts/export_models.py --loftr --roma           # LoFTR + RoMa
+python scripts/export_superpoint.py                 # SuperPoint
+python scripts/export_disk_aliked.py                # DISK + ALIKED
+python scripts/export_models.py --loftr --roma      # LoFTR + RoMa
 ```
 
 ## 平台支持
@@ -136,19 +144,14 @@ python scripts/export_models.py --loftr --roma           # LoFTR + RoMa
 
 ## 开发
 
-### 工作流
-
 ```bash
-git checkout -b feat/<name>    # 从 main 创建
+git checkout -b feat/<name>    # 从 main 创建特性分支
 # ... TDD: 红 → 绿 → 重构 ...
 git checkout main && git merge feat/<name> --no-ff
 git push origin main
 ```
 
-### 代码规范
-
-- 单文件 ≤ 400 行 | 嵌套 ≤ 4 层 | Allman 花括号
-- 详细见 `CLAUDE.md`
+代码规范见 `CLAUDE.md`（单文件 ≤ 400 行、嵌套 ≤ 4 层、Allman 花括号）。
 
 ## 文档
 
