@@ -12,6 +12,7 @@
 #include <QApplication>
 #include <QDir>
 #include <QFontDatabase>
+#include <QIcon>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QStandardPaths>
@@ -78,6 +79,13 @@ int main(int argc, char *argv[])
 
     // 创建 Qt 应用程序对象，必须在任何 Qt 对象之前创建
     SafeApplication app(argc, argv);
+
+    // GNOME/桌面集成 — 必须与 .desktop 文件名一致
+    app.setApplicationName(QStringLiteral("PlaScan"));
+    app.setDesktopFileName(QStringLiteral("plascan"));
+
+    // 设置应用图标 (从 hicolor 主题加载 SVG)
+    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("plascan")));
 
     // 设置应用程序全局字体（优先使用思源黑体，回退到系统默认）
     QFont appFont;
