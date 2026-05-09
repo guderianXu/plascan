@@ -7,6 +7,16 @@
 #include <QFileInfo>
 #include <QMessageBox>
 
+namespace {
+
+void configureDialog(QFileDialog &dialog)
+{
+    dialog.setOption(QFileDialog::DontUseNativeDialog, true);
+    dialog.setFilter(QDir::AllEntries | QDir::Hidden | QDir::AllDirs);
+}
+
+} // namespace
+
 ProjectUiCommands::ProjectUiCommands(ProjectData *projectData, QWidget *parentWidget)
     : _projectData(projectData)
     , _parentWidget(parentWidget)
@@ -22,10 +32,19 @@ void ProjectUiCommands::setDirectoryAccessors(std::function<QString(const QStrin
 
 bool ProjectUiCommands::createNewProject(QString *createdPath) const
 {
-    QString plascanPath = QFileDialog::getSaveFileName(_parentWidget,
-                                                       QStringLiteral("创建新项目"),
-                                                       readLastDir(QStringLiteral("project")),
-                                                       QStringLiteral("PlaScan项目 (*.plascan)"));
+    QFileDialog dialog(_parentWidget,
+                       QStringLiteral("创建新项目"),
+                       readLastDir(QStringLiteral("project")),
+                       QStringLiteral("PlaScan项目 (*.plascan)"));
+    configureDialog(dialog);
+    dialog.setAcceptMode(QFileDialog::AcceptSave);
+    dialog.setFileMode(QFileDialog::AnyFile);
+    dialog.setDefaultSuffix(QStringLiteral("plascan"));
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return false;
+    }
+    QString plascanPath = dialog.selectedFiles().first();
     if (plascanPath.isEmpty())
     {
         return false;
@@ -56,10 +75,18 @@ bool ProjectUiCommands::createNewProject(QString *createdPath) const
 
 bool ProjectUiCommands::openProjectByDialog(QString *openedPath) const
 {
-    const QString plascanPath = QFileDialog::getOpenFileName(_parentWidget,
-                                                             QStringLiteral("打开项目"),
-                                                             readLastDir(QStringLiteral("project")),
-                                                             QStringLiteral("PlaScan项目 (*.plascan)"));
+    QFileDialog dialog(_parentWidget,
+                       QStringLiteral("打开项目"),
+                       readLastDir(QStringLiteral("project")),
+                       QStringLiteral("PlaScan项目 (*.plascan)"));
+    configureDialog(dialog);
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFile);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return false;
+    }
+    const QString plascanPath = dialog.selectedFiles().first();
     if (plascanPath.isEmpty())
     {
         return false;
@@ -126,12 +153,18 @@ bool ProjectUiCommands::addPhoto() const
         return false;
     }
 
-    const QStringList files = QFileDialog::getOpenFileNames(
-        _parentWidget,
-        QStringLiteral("添加图片"),
-        readLastDir(QStringLiteral("images")),
-        QStringLiteral("图片文件 (*.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.jpeg *.JPG *.JPEG)"));
-
+    QFileDialog dialog(_parentWidget,
+                       QStringLiteral("添加图片"),
+                       readLastDir(QStringLiteral("images")),
+                       QStringLiteral("图片文件 (*.tif *.tiff *.TIF *.TIFF *.png *.PNG *.jpg *.jpeg *.JPG *.JPEG)"));
+    configureDialog(dialog);
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::ExistingFiles);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return false;
+    }
+    const QStringList files = dialog.selectedFiles();
     if (files.isEmpty())
     {
         return false;
@@ -162,9 +195,17 @@ bool ProjectUiCommands::addFolder() const
         return false;
     }
 
-    const QString folder = QFileDialog::getExistingDirectory(_parentWidget,
-                                                             QStringLiteral("选择文件夹"),
-                                                             readLastDir(QStringLiteral("images")));
+    QFileDialog dialog(_parentWidget,
+                       QStringLiteral("选择文件夹"),
+                       readLastDir(QStringLiteral("images")));
+    configureDialog(dialog);
+    dialog.setAcceptMode(QFileDialog::AcceptOpen);
+    dialog.setFileMode(QFileDialog::Directory);
+    if (dialog.exec() != QDialog::Accepted)
+    {
+        return false;
+    }
+    const QString folder = dialog.selectedFiles().first();
     if (folder.isEmpty())
     {
         return false;
