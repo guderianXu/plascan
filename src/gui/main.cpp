@@ -11,6 +11,7 @@
 
 #include <QApplication>
 #include <QDir>
+#include <QFile>
 #include <QFontDatabase>
 #include <QIcon>
 #include <QMessageBox>
@@ -84,8 +85,23 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("PlaScan"));
     app.setDesktopFileName(QStringLiteral("plascan"));
 
-    // 设置应用图标 (从 hicolor 主题加载 SVG)
-    app.setWindowIcon(QIcon::fromTheme(QStringLiteral("plascan")));
+    // 设置应用图标 — 先尝试系统主题，失败则从本地文件加载
+    QIcon appIcon = QIcon::fromTheme(QStringLiteral("plascan"));
+    if (appIcon.isNull())
+    {
+        // 从 build 目录运行时使用的 fallback 路径
+        QStringList iconPaths = {
+            QCoreApplication::applicationDirPath() + QStringLiteral("/../resources/plascan.svg"),
+            QCoreApplication::applicationDirPath() + QStringLiteral("/../share/icons/hicolor/scalable/apps/plascan.svg"),
+            QStringLiteral("/usr/share/icons/hicolor/scalable/apps/plascan.svg"),
+            QStringLiteral("/usr/local/share/icons/hicolor/scalable/apps/plascan.svg"),
+        };
+        for (const auto &p : iconPaths)
+        {
+            if (QFile::exists(p)) { appIcon = QIcon(p); break; }
+        }
+    }
+    app.setWindowIcon(appIcon);
 
     // 设置应用程序全局字体（优先使用思源黑体，回退到系统默认）
     QFont appFont;
