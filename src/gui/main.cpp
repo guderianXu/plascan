@@ -85,22 +85,10 @@ int main(int argc, char *argv[])
     app.setApplicationName(QStringLiteral("PlaScan"));
     app.setDesktopFileName(QStringLiteral("plascan"));
 
-    // 设置应用图标 — 先尝试系统主题，失败则从本地文件加载
-    QIcon appIcon = QIcon::fromTheme(QStringLiteral("plascan"));
+    // 应用图标 — 内嵌 PNG 资源, 不依赖 SVG 插件
+    QIcon appIcon(QStringLiteral(":/plascan.png"));
     if (appIcon.isNull())
-    {
-        // 从 build 目录运行时使用的 fallback 路径
-        QStringList iconPaths = {
-            QCoreApplication::applicationDirPath() + QStringLiteral("/../resources/plascan.svg"),
-            QCoreApplication::applicationDirPath() + QStringLiteral("/../share/icons/hicolor/scalable/apps/plascan.svg"),
-            QStringLiteral("/usr/share/icons/hicolor/scalable/apps/plascan.svg"),
-            QStringLiteral("/usr/local/share/icons/hicolor/scalable/apps/plascan.svg"),
-        };
-        for (const auto &p : iconPaths)
-        {
-            if (QFile::exists(p)) { appIcon = QIcon(p); break; }
-        }
-    }
+        appIcon = QIcon::fromTheme(QStringLiteral("plascan"));
     app.setWindowIcon(appIcon);
 
     // 设置应用程序全局字体（优先使用思源黑体，回退到系统默认）

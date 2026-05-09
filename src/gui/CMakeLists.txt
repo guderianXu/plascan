@@ -30,6 +30,7 @@ add_executable(plascan_gui
   ${GUI_DIALOG_SOURCES}
   $<TARGET_OBJECTS:gui_project>
   $<TARGET_OBJECTS:gui_tasks>
+  ${CMAKE_SOURCE_DIR}/resources/resources.qrc
 )
 
 # 包含目录

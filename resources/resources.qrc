@@ -1,0 +1,5 @@
+<RCC>
+    <qresource prefix="/">
+        <file>plascan.png</file>
+    </qresource>
+</RCC>
