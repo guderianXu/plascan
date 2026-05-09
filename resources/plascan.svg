@@ -1,29 +1,67 @@
-<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 128 128">
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 512 512">
   <defs>
-    <linearGradient id="g1" x1="0" y1="0" x2="1" y2="1">
-      <stop offset="0%" stop-color="#1a1a2e"/>
-      <stop offset="100%" stop-color="#16213e"/>
+    <!-- 行星渐变 -->
+    <radialGradient id="planet" cx="35%" cy="35%" r="65%">
+      <stop offset="0%" stop-color="#4fc3f7"/>
+      <stop offset="40%" stop-color="#1565c0"/>
+      <stop offset="100%" stop-color="#0d2137"/>
+    </radialGradient>
+    <!-- 光束渐变 -->
+    <linearGradient id="beam" x1="0" y1="0" x2="1" y2="0">
+      <stop offset="0%" stop-color="#00e5ff" stop-opacity="0"/>
+      <stop offset="50%" stop-color="#00e5ff" stop-opacity="0.6"/>
+      <stop offset="100%" stop-color="#00e5ff" stop-opacity="0"/>
     </linearGradient>
-    <linearGradient id="g2" x1="0" y1="0" x2="0" y2="1">
-      <stop offset="0%" stop-color="#0f3460"/>
-      <stop offset="100%" stop-color="#533483"/>
-    </linearGradient>
+    <!-- 高光 -->
+    <radialGradient id="highlight" cx="30%" cy="30%" r="40%">
+      <stop offset="0%" stop-color="#ffffff" stop-opacity="0.25"/>
+      <stop offset="100%" stop-color="#ffffff" stop-opacity="0"/>
+    </radialGradient>
   </defs>
-  <!-- 背景: 行星表面 -->
-  <circle cx="64" cy="64" r="60" fill="url(#g1)" stroke="#e94560" stroke-width="2"/>
-  <!-- 地平线扫描线 -->
-  <path d="M14 75 Q40 45 64 55 Q88 65 114 50" fill="none" stroke="#e94560" stroke-width="2.5" opacity="0.9"/>
-  <path d="M10 90 Q40 68 70 75 Q95 80 118 65" fill="none" stroke="#e94560" stroke-width="1.5" opacity="0.6"/>
-  <path d="M8 102 Q45 85 80 90 Q105 93 120 80" fill="none" stroke="#e94560" stroke-width="1" opacity="0.3"/>
+
+  <!-- 背景圆 -->
+  <rect width="512" height="512" rx="100" fill="#0a1628"/>
+
+  <!-- 行星 -->
+  <circle cx="256" cy="240" r="160" fill="url(#planet)"/>
+  <circle cx="256" cy="240" r="160" fill="url(#highlight)"/>
+
+  <!-- 3D 网格线 (纬线) -->
+  <ellipse cx="256" cy="240" rx="160" ry="30" fill="none" stroke="#4fc3f7" stroke-width="1.5" opacity="0.3"/>
+  <ellipse cx="256" cy="240" rx="160" ry="60" fill="none" stroke="#4fc3f7" stroke-width="1.2" opacity="0.25"/>
+  <ellipse cx="256" cy="240" rx="160" ry="90" fill="none" stroke="#4fc3f7" stroke-width="1" opacity="0.2"/>
+  <ellipse cx="256" cy="240" rx="160" ry="120" fill="none" stroke="#4fc3f7" stroke-width="0.8" opacity="0.15"/>
+  <ellipse cx="256" cy="240" rx="160" ry="150" fill="none" stroke="#4fc3f7" stroke-width="0.6" opacity="0.1"/>
+
+  <!-- 3D 网格线 (经线) -->
+  <ellipse cx="256" cy="240" rx="40" ry="160" fill="none" stroke="#4fc3f7" stroke-width="1.5" opacity="0.3"/>
+  <ellipse cx="256" cy="240" rx="80" ry="160" fill="none" stroke="#4fc3f7" stroke-width="1" opacity="0.2"/>
+  <ellipse cx="256" cy="240" rx="120" ry="160" fill="none" stroke="#4fc3f7" stroke-width="0.8" opacity="0.15"/>
+
   <!-- 扫描光束 -->
-  <polygon points="64,55 58,100 70,100" fill="#e94560" opacity="0.15"/>
-  <!-- 特征点 -->
-  <circle cx="32" cy="62" r="2.5" fill="#00ff88"/>
-  <circle cx="55" cy="48" r="2" fill="#00ff88"/>
-  <circle cx="80" cy="58" r="2.5" fill="#00ff88"/>
-  <circle cx="95" cy="45" r="2" fill="#00ff88"/>
-  <circle cx="45" cy="70" r="2" fill="#00dd77" opacity="0.7"/>
-  <circle cx="70" cy="65" r="1.5" fill="#00dd77" opacity="0.5"/>
-  <!-- P 字母 -->
-  <text x="64" y="118" text-anchor="middle" font-family="Arial,sans-serif" font-weight="bold" font-size="14" fill="#e94560">P</text>
+  <polygon points="96,240 416,80 416,400" fill="url(#beam)" opacity="0.15"/>
+  <line x1="96" y1="240" x2="416" y2="240" stroke="#00e5ff" stroke-width="2" opacity="0.5"/>
+
+  <!-- 特征点 (十字星) -->
+  <g transform="translate(180, 180)" stroke="#00e5ff" stroke-width="2" opacity="0.9">
+    <line x1="-6" y1="0" x2="6" y2="0"/>
+    <line x1="0" y1="-6" x2="0" y2="6"/>
+    <line x1="-3" y1="-3" x2="3" y2="3" stroke-width="1" opacity="0.5"/>
+    <line x1="3" y1="-3" x2="-3" y2="3" stroke-width="1" opacity="0.5"/>
+  </g>
+  <g transform="translate(300, 170)" stroke="#00e5ff" stroke-width="1.5" opacity="0.7">
+    <line x1="-4" y1="0" x2="4" y2="0"/>
+    <line x1="0" y1="-4" x2="0" y2="4"/>
+  </g>
+  <g transform="translate(240, 290)" stroke="#00e5ff" stroke-width="1.5" opacity="0.6">
+    <line x1="-4" y1="0" x2="4" y2="0"/>
+    <line x1="0" y1="-4" x2="0" y2="4"/>
+  </g>
+  <g transform="translate(150, 260)" stroke="#00e5ff" stroke-width="1.2" opacity="0.5">
+    <line x1="-3" y1="0" x2="3" y2="0"/>
+    <line x1="0" y1="-3" x2="0" y2="3"/>
+  </g>
+
+  <!-- 项目名称 -->
+  <text x="256" y="460" text-anchor="middle" font-family="'Segoe UI',Arial,sans-serif" font-weight="700" font-size="48" letter-spacing="8" fill="#4fc3f7">PLASCAN</text>
 </svg>
