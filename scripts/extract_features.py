@@ -1,13 +1,12 @@
 #!/usr/bin/env python3
 """
-DISK / ALIKED 特征提取器，输出与 SuperPoint 相同格式的 .sp 文件。
+DISK / ALIKED 特征提取器，输出与 PlaScan 格式兼容的特征文件。
 
 用法：
-    conda activate plascan
-    python scripts/extract_features.py --algo disk --images /path/to/images/*.jpg --output /path/to/output
+    python scripts/extract_features.py --algo disk   --images /path/to/images/*.jpg --output /path/to/output
     python scripts/extract_features.py --algo aliked --images /path/to/images/*.jpg --output /path/to/output
 
-输出：每张图像对应一个 .sp 文件（与 SuperPoint 输出格式相同）。
+输出：每张图像对应一个算法特定的特征文件（.dsk / .alk）。
 """
 
 import argparse
@@ -18,6 +17,12 @@ from pathlib import Path
 import numpy as np
 import torch
 import cv2
+
+# 算法 → 文件后缀 + Magic Bytes 映射（与 C++ FeatureFileIO / ExtractorSuffix 一致）
+ALGO_CONFIG = {
+    "disk":   {"suffix": ".dsk", "magic": b"DSKB"},
+    "aliked": {"suffix": ".alk", "magic": b"ALKB"},
+}
 
 
 def load_extractor(algo: str, max_keypoints: int, device: torch.device):
@@ -84,12 +89,12 @@ def extract(extractor, img_path: Path, device: torch.device, max_keypoints: int 
     }
 
 
-def save_sp(data: dict, out_path: Path):
+def save_features(data: dict, out_path: Path, magic: bytes):
     """
-    保存为 SPBT 格式（与 C++ QFileBinaryIO::write 完全一致，小端序）。
+    保存特征文件（二进制格式，小端序，与 C++ FeatureFileIO::write 完全一致）。
 
     格式：
-        magic:      char[4] = "SPBT"
+        magic:      char[4] (SPBT/DSKB/ALKB/etc.)
         version:    uint32 = 1
         name_len:   uint32
         name:       utf8[name_len]  (图像文件名)
@@ -103,11 +108,11 @@ def save_sp(data: dict, out_path: Path):
     scores = data["scores"]     # [N] float32
     N = len(kpts)
     D = descs.shape[1] if N > 0 else 0
-    image_name = out_path.stem  # 用文件名（不含扩展名）作为图像名
+    image_name = out_path.stem
 
     name_bytes = image_name.encode("utf-8")
     with open(out_path, "wb") as f:
-        f.write(b"SPBT")                                    # magic
+        f.write(magic)                                      # magic (算法特定)
         f.write(struct.pack("<I", 1))                       # version
         f.write(struct.pack("<I", len(name_bytes)))         # name_len
         f.write(name_bytes)                                 # name
@@ -120,13 +125,18 @@ def save_sp(data: dict, out_path: Path):
 
 
 def main():
-    parser = argparse.ArgumentParser(description="DISK/ALIKED 特征提取，输出 .sp 文件")
+    parser = argparse.ArgumentParser(description="DISK/ALIKED 特征提取")
     parser.add_argument("--algo", choices=["disk", "aliked"], required=True)
     parser.add_argument("--images", nargs="+", required=True, help="输入图像路径（支持通配符）")
     parser.add_argument("--output", required=True, help="输出目录")
     parser.add_argument("--max-keypoints", type=int, default=2048)
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     args = parser.parse_args()
+
+    cfg = ALGO_CONFIG.get(args.algo)
+    if cfg is None:
+        print(f"不支持的算法: {args.algo}", file=sys.stderr)
+        sys.exit(1)
 
     dev = torch.device(args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu")
     print(f"[{args.algo.upper()}] 使用设备: {dev}")
@@ -146,15 +156,18 @@ def main():
         else:
             image_paths.append(pattern)
 
+    suffix = cfg["suffix"]
+    magic = cfg["magic"]
+
     print(f"[{args.algo.upper()}] 处理 {len(image_paths)} 张图像...")
     failed = []
     for i, img_path in enumerate(image_paths):
         img_path = Path(img_path)
-        out_path = out_dir / (img_path.stem + ".sp")
+        out_path = out_dir / (img_path.stem + suffix)
         try:
             data = extract(extractor, img_path, dev, args.max_keypoints)
-            save_sp(data, out_path)
-            print(f"  [{i+1}/{len(image_paths)}] {img_path.name} → {data['keypoints'].shape[0]} 个关键点")
+            save_features(data, out_path, magic)
+            print(f"  [{i+1}/{len(image_paths)}] {img_path.name} → {data['keypoints'].shape[0]} 个关键点 → {out_path.name}")
         except Exception as e:
             print(f"  [{i+1}/{len(image_paths)}] {img_path.name} 失败: {e}", file=sys.stderr)
             failed.append(img_path)

@@ -382,7 +382,8 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
                 QString baseName = fileInfo.completeBaseName();
                 QString outputPath = QDir(outputDir).filePath(baseName + fileSuffix);
                 
-                if (FeatureFileIO::write(outputPath, fileInfo.fileName(), output)) 
+                if (FeatureFileIO::write(outputPath, fileInfo.fileName(), output,
+                                         featureAlgorithm.toStdString()))
                 {
                     LOG_INFO("%s", qUtf8Printable(QString("  检测到 %1 个特征点，已保存到: %2")
                         .arg(output.keypoints.size()).arg(outputPath)));

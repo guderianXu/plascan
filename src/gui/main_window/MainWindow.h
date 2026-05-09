@@ -87,6 +87,8 @@ private:
     ReferencePanelWidget* m_referencePanel{};           // 参考面板（相机参数外参导入）
     WorkspaceCenterWidget* m_workspaceCenter{};         // 中央工作区（影像画布 + 三维模型视图）
     CanvasWidget*     m_canvas{};                       // 影像画布（从 workspaceCenter 获取的直接引用）
+public:
+    CanvasWidget* canvas() const { return m_canvas; }
     LogPanel*         m_log{};                          // 日志面板（底部 Dock 的内容 widget）
     MainMenu*         m_mainMenu{};                     // 菜单栏封装对象（管理所有 QAction）
     AppConfigManager* m_config{};                       // 应用级配置管理器（窗口状态/最近项目）

@@ -42,6 +42,8 @@ public slots:
 
     // 切换当前显示的特征提取器后缀 (.sp/.dsk/.alk 等), 重新加载特征点
     void setActiveFeatureSuffix(const QString &suffix);
+    // 获取当前活动的特征文件后缀
+    QString activeFeatureSuffix() const { return m_activeFeatureSuffix; }
 
     // 获取当前影像可用的特征文件后缀列表 (供 UI 构建选择器)
     QStringList availableFeatureSuffixes() const;

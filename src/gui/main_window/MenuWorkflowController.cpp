@@ -9,6 +9,7 @@
 #include "SuperPointDialog.h"
 #include "SuperPointRunner.h"
 #include "SuperPointVisualizationDialog.h"
+#include "CanvasWidget.h"
 #include "MainWindow.h"
 #include "MatchPairSelectorDialog.h"
 #include "AerialTriangulationDialog.h"
@@ -311,8 +312,31 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
         return;
     }
 
-    auto *dlg = new SuperPointVisualizationDialog(m_mainWindow);
+    // 收集当前可用的特征文件后缀
+    QStringList availableSuffixes;
+    QString currentSuffix;
+    auto *mainWin = qobject_cast<MainWindow*>(m_mainWindow.data());
+    auto *canvas = mainWin ? mainWin->canvas() : nullptr;
+    if (canvas)
+    {
+        availableSuffixes = canvas->availableFeatureSuffixes();
+        currentSuffix = canvas->activeFeatureSuffix();
+    }
+    if (availableSuffixes.isEmpty())
+        availableSuffixes << QStringLiteral(".sp") << QStringLiteral(".dsk") << QStringLiteral(".alk")
+                           << QStringLiteral(".sift") << QStringLiteral(".orb") << QStringLiteral(".akz");
+
+    auto *dlg = new SuperPointVisualizationDialog(availableSuffixes, m_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
+    if (!currentSuffix.isEmpty())
+        dlg->setCurrentSuffix(currentSuffix);
+
+    // 切换特征文件后缀 → CanvasWidget 重新加载
+    if (canvas)
+    {
+        connect(dlg, &SuperPointVisualizationDialog::featureSuffixChanged,
+                canvas, &CanvasWidget::setActiveFeatureSuffix);
+    }
 
     // 懒初始化可视化记忆化管理器并加载保存的设置
     if (m_projectManager)

@@ -27,15 +27,43 @@
 #include <QColorDialog>
 #include <QFrame>
 
-// 构造函数：调用 setupUi() 构建界面，再调用 setupConnections() 连接信号槽
-SuperPointVisualizationDialog::SuperPointVisualizationDialog(QWidget *parent)
+SuperPointVisualizationDialog::SuperPointVisualizationDialog(const QStringList &availableSuffixes,
+                                                           QWidget *parent)
     : QDialog(parent)
 {
     setupUi();
+    if (!availableSuffixes.isEmpty())
+    {
+        m_suffixCombo->addItems(availableSuffixes);
+    }
     setupConnections();
 }
 
 SuperPointVisualizationDialog::~SuperPointVisualizationDialog() = default;
+
+QString SuperPointVisualizationDialog::currentSuffix() const
+{
+    return m_suffixCombo->currentText();
+}
+
+void SuperPointVisualizationDialog::setCurrentSuffix(const QString &suffix)
+{
+    const int idx = m_suffixCombo->findText(suffix);
+    if (idx >= 0)
+        m_suffixCombo->setCurrentIndex(idx);
+}
+
+void SuperPointVisualizationDialog::setAvailableSuffixes(const QStringList &suffixes)
+{
+    const QString current = m_suffixCombo->currentText();
+    m_suffixCombo->blockSignals(true);
+    m_suffixCombo->clear();
+    m_suffixCombo->addItems(suffixes);
+    const int idx = m_suffixCombo->findText(current);
+    if (idx >= 0)
+        m_suffixCombo->setCurrentIndex(idx);
+    m_suffixCombo->blockSignals(false);
+}
 
 // setupUi: 构建对话框全部控件和分组布局
 // 布局结构（从上到下）：
@@ -47,10 +75,19 @@ SuperPointVisualizationDialog::~SuperPointVisualizationDialog() = default;
 //   6. 底部按钮    —— 恢复默认 | 应用 | 关闭
 void SuperPointVisualizationDialog::setupUi()
 {
-    setWindowTitle(tr("SuperPoint 特征点显示设置"));
-    resize(500, 600);  // 固定初始尺寸（宽×高）
+    setWindowTitle(tr("特征点显示设置"));
+    resize(500, 640);
 
     QVBoxLayout *mainLayout = new QVBoxLayout(this);
+
+    // ==================== 特征文件选择 ====================
+    QGroupBox *fileGroup = new QGroupBox(tr("特征文件"), this);
+    QHBoxLayout *fileLayout = new QHBoxLayout(fileGroup);
+    fileLayout->addWidget(new QLabel(tr("当前算法:"), fileGroup));
+    m_suffixCombo = new QComboBox(fileGroup);
+    m_suffixCombo->setToolTip(tr("切换显示不同算法提取的特征点文件"));
+    fileLayout->addWidget(m_suffixCombo, 1);
+    mainLayout->addWidget(fileGroup);
 
     // ==================== 显示内容组 ====================
     QGroupBox *displayGroup = new QGroupBox(tr("显示内容"), this);
@@ -202,6 +239,12 @@ void SuperPointVisualizationDialog::setupUi()
 // 底部按钮 → 对应槽函数
 void SuperPointVisualizationDialog::setupConnections()
 {
+    // 特征文件后缀切换 → 通知外部
+    connect(m_suffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this]() {
+        emit featureSuffixChanged(m_suffixCombo->currentText());
+    });
+
     // 显示选项变化 → 实时刷新预览文字
     connect(m_showPointsChk, &QCheckBox::toggled, this, &SuperPointVisualizationDialog::updatePreview);
     connect(m_showScaleChk, &QCheckBox::toggled, this, &SuperPointVisualizationDialog::updatePreview);
