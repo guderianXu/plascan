@@ -6,13 +6,18 @@ install(TARGETS plascan_gui
   RUNTIME DESTINATION bin
 )
 
-# 应用图标 (SVG — 矢量, 适配所有尺寸)
+# 应用图标 — PNG (256x256, 所有桌面环境通用)
+install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.png"
+  DESTINATION share/icons/hicolor/256x256/apps
+  RENAME plascan.png
+)
+# SVG 备选 (供支持矢量图标的桌面环境)
 install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.svg"
   DESTINATION share/icons/hicolor/scalable/apps
   RENAME plascan.svg
 )
 
-# 桌面启动器
+# 桌面启动器 (StartupWMClass 必须与 setDesktopFileName 一致)
 install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.desktop"
   DESTINATION share/applications
 )
