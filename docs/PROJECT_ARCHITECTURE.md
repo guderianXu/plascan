@@ -49,11 +49,6 @@ common/
 │   └── ProjectCommonUtils.h # 项目通用工具
 ├── result/
 │   └── OperationResult.h   # 操作结果包装 (成功/失败 + 错误信息)
-├── spatial/
-│   ├── KDTree.h            # K-D 树泛型模板
-│   ├── KDTree2D.h          # 2D K-D 树
-│   ├── KDTree3D.h          # 3D K-D 树
-│   └── tests/              # 空间索引测试
 └── CMakeLists.txt
 ```
 
@@ -171,17 +166,6 @@ core/
 │   │   └── OpenCVSgbmWrapper.h/cpp  # OpenCV SGBM 封装 (对比算法)
 │   └── tests/ (6 个测试文件, 22 项)
 │
-├── pointcloud/                 # 点云数据结构与处理
-│   ├── data/
-│   │   ├── PointCloud.h/cpp    # 点云容器
-│   │   └── PointCloudPoint.h/cpp  # 单点结构
-│   ├── io/
-│   │   ├── PointCloudIO.h/cpp  # 点云文件 I/O (PLY/XYZ/LAS)
-│   │   └── ObjMtlLoader.h/cpp  # OBJ/MTL 加载
-│   ├── processing/
-│   │   ├── PointCloudProcessor.h/cpp     # 点云处理 (CPU)
-│   │   ├── PointCloudProcessorMT.cpp     # 多线程处理
-│   │   └── PointCloudProcessorCuda.cpp   # CUDA 加速处理
 │   └── tests/
 │
 ├── mesh/                       # 网格重建与纹理映射
@@ -189,18 +173,9 @@ core/
 │   ├── SurfaceReconstructor.h/cpp           # 表面重建主流程
 │   ├── SurfaceReconstructorHeightGrid.h/cpp # 高度格网方法
 │   ├── SurfaceReconstructorPostprocess.h/cpp # 网格后处理
-│   ├── SurfaceReconstructorIO.h/cpp         # 表面 I/O
 │   ├── MeshIO.cpp              # 网格文件 I/O
-│   ├── MarchingCubesTable.h/cpp # Marching Cubes 查找表
 │   ├── TextureMapper.h/cpp     # 纹理映射
 │   ├── ModelWorkflowService.h/cpp  # 模型工作流服务
-│   └── poisson/                # Poisson 表面重建
-│       ├── PoissonLite.h/cpp   # 轻量 Poisson
-│       ├── PoissonPreprocess.h/cpp  # 预处理 (法向量估计)
-│       ├── PoissonVoxel.h/cpp  # 体素化
-│       ├── PoissonBranchPipeline.h/cpp  # 分支流水线
-│       └── PoissonCommon.h     # 公共类型
-│
 ├── terrain/                    # 地形产品 (DEM/DOM)
 │   ├── DemDomTypes.h           # DEM/DOM 类型
 │   ├── DemGenerator.h/cpp      # DEM 生成
@@ -459,7 +434,6 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 
 | 问题 | 位置 | 建议 |
 |------|------|------|
-| 14 个文件超 400 行 | `PointCloudIO.cpp`(1768), `MainWindow.cpp`(1744), 等 | 按职责拆分 |
 | 多个 GUI 文件超 1000 行 | `gui/dialogs/`, `gui/main_window/` | 提取 UI 构建逻辑 |
 | `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
 | SFMService 耦合到 GUI | `core/pipeline/SFMService.cpp` 依赖 `ProjectIO` | 提取 headless SFMService, 启用 sfm_cli |
