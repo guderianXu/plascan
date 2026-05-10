@@ -44,8 +44,12 @@ QString resolveProjectFeaturePathFromToken(const QString &plascanPath,
 										  const QJsonObject &meta,
 										  const QString &token);
 
-// 将内部相机模型序列化为 JSON 元数据（用于写入项目 metadata）。
-QJsonObject cameraToJson(const xjw::Camera &camera);
+	// 根据 token + 后缀解析对应提取器的特征文件路径
+	QString resolveFeaturePathBySuffix(const QString &plascanPath, const QJsonObject &meta,
+	                                   const QString &token, const QString &suffix);
+
+	// 将内部相机模型序列化为 JSON 元数据（用于写入项目 metadata）。
+	QJsonObject cameraToJson(const xjw::Camera &camera);
 
 // 解析 tsai 相机文件并转换为统一 JSON 元数据；失败时返回 false 并写入错误信息。
 bool parseTsaiCamera(const QString &tsaiPath, QJsonObject *cameraMeta, QString *errorMsg = nullptr);

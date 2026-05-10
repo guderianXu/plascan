@@ -221,6 +221,14 @@ QString resolveProjectFeaturePathFromToken(const QString &plascanPath,
     return ProjectIO::findFeatureForImage(plascanPath, token);
 }
 
+QString resolveFeaturePathBySuffix(const QString &plascanPath, const QJsonObject &meta,
+                                   const QString &token, const QString &suffix)
+{
+    const QString imagePath = resolveProjectImagePathFromToken(token, meta);
+    if (imagePath.isEmpty()) return {};
+    return ProjectIO::featureFileForSuffix(plascanPath, imagePath, suffix);
+}
+
 QJsonObject cameraToJson(const xjw::Camera &camera)
 {
     // 统一输出字段命名，供 ProjectData / ProjectManager 持久化使用。

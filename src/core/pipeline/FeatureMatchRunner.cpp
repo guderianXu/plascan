@@ -21,6 +21,7 @@
 #include <QFile>
 #include <QCoreApplication>
 #include <QDateTime>
+#include <QProcess>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -85,9 +86,15 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                            std::atomic<int> &progressCount)
 {
     const QString matchAlgorithm = config.value("match_algorithm").toString("superglue").trimmed().toLower();
+    const QString featureSuffix   = config.value("feature_suffix").toString();
     const bool isSuperGlueMatch = (matchAlgorithm == QStringLiteral("superglue"));
     const bool isLightGlueMatch = (matchAlgorithm == QStringLiteral("lightglue"));
-    const bool isTraditionalMatch = !isSuperGlueMatch && !isLightGlueMatch;
+    const bool isLoftrMatch     = (matchAlgorithm == QStringLiteral("loftr"));
+    const bool isRomaMatch      = (matchAlgorithm == QStringLiteral("roma"));
+    const bool isPythonE2E      = isLoftrMatch || isRomaMatch;
+    const bool isBfFlann        = (matchAlgorithm == QStringLiteral("orb_bf_hamming") ||
+                                   matchAlgorithm == QStringLiteral("sift_bf_l2") ||
+                                   matchAlgorithm == QStringLiteral("sift_flann"));
     LOG_INFO("%s", qUtf8Printable(QString("开始特征匹配(%1): %2 对影像")
         .arg(matchAlgorithm)
         .arg(imagePairs.size())));
@@ -119,6 +126,81 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         }
     }
     
+    // ââ Python E2E åæ¯ (LoFTR / RoMa) âââââââââââââââââââââââââââââââ
+    if (isPythonE2E)
+    {
+        const QString pyModelType = config["model_type"].toString("outdoor");
+
+        const QString scriptName = isLoftrMatch ? QStringLiteral("run_loftr.py") : QStringLiteral("match_roma.py");
+        QStringList scriptCandidates;
+        scriptCandidates << QCoreApplication::applicationDirPath() + "/../scripts/" + scriptName;
+        scriptCandidates << QCoreApplication::applicationDirPath() + "/../../scripts/" + scriptName;
+        QString scriptPath;
+        for (const auto &c : scriptCandidates)
+        {
+            if (QFile::exists(c)) { scriptPath = c; break; }
+        }
+        if (scriptPath.isEmpty())
+        {
+            LOG_ERROR("E2E script not found: %s", qUtf8Printable(scriptName));
+            return;
+        }
+
+        for (const QString &pairStr : imagePairs)
+        {
+            if (cancelFlag.load()) break;
+            struct PairDone { std::atomic<int> &cnt; ~PairDone() { cnt.fetch_add(1); } } _done{progressCount};
+
+            QStringList parts = pairStr.split("__");
+            if (parts.size() != 2)
+            {
+                LOG_WARN("%s", qUtf8Printable(QString("æ æçå¹éå¯¹æ ¼å¼: %1").arg(pairStr)));
+                continue;
+            }
+
+            const QString imageToken0 = QFileInfo(parts[0]).fileName();
+            const QString imageToken1 = QFileInfo(parts[1]).fileName();
+            const QString imagePath0 = xjw::gui::project::resolveProjectImagePathFromToken(imageToken0, currentMeta);
+            const QString imagePath1 = xjw::gui::project::resolveProjectImagePathFromToken(imageToken1, currentMeta);
+
+            if (imagePath0.isEmpty() || imagePath1.isEmpty())
+            {
+                LOG_WARN("%s", qUtf8Printable(QString("æ æ³è§£æå½±åè·¯å¾: %1").arg(pairStr)));
+                continue;
+            }
+
+            const QString baseName0 = QFileInfo(imagePath0).completeBaseName();
+            const QString baseName1 = QFileInfo(imagePath1).completeBaseName();
+            const QString outPath = QDir(outputDir).filePath(baseName0 + "__" + baseName1 + ".match");
+
+            QStringList args;
+            args << scriptPath << "-L" << imagePath0 << "-R" << imagePath1 << "-o" << outPath;
+            if (isRomaMatch)
+                args << "--scene" << pyModelType;
+
+            QProcess process;
+            process.start("python3", args);
+            if (!process.waitForFinished(300000))
+            {
+                LOG_ERROR("%s", qUtf8Printable(QString("Python E2E è¶æ¶: %1").arg(pairStr)));
+                process.kill();
+                continue;
+            }
+
+            if (process.exitCode() != 0)
+            {
+                LOG_ERROR("%s", qUtf8Printable(QString("Python E2E å¤±è´¥ %1: %2")
+                    .arg(pairStr).arg(QString::fromUtf8(process.readAllStandardError()))));
+                continue;
+            }
+
+            LOG_INFO("%s", qUtf8Printable(QString("E2E å¹éå®æ: %1").arg(baseName0 + "__" + baseName1)));
+        }
+
+        LOG_INFO("%s", qUtf8Printable(QString("Python E2E (%1) å®æ").arg(matchAlgorithm)));
+        return;
+    }
+
     // 构建 SuperGlueConfig
     superglue::SuperGlueConfig sgConfig;
     sgConfig.match_threshold = static_cast<float>(config["match_threshold"].toDouble(0.15));
@@ -155,7 +237,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     outlierConfig.reprojThreshold = config["outlier_reproj_threshold"].toDouble(1.5);
     outlierConfig.confidence = config["outlier_confidence"].toDouble(0.9999);
     outlierConfig.maxIters = config["outlier_max_iters"].toInt(10000);
-    const int defaultMinInliers = isTraditionalMatch ? 8 : 25;
+    const int defaultMinInliers = isBfFlann ? 8 : 25;
     outlierConfig.minInliers = config["outlier_min_inliers"].toInt(defaultMinInliers);
 
     const int overrideInputWidth = config["input_width"].toInt(-1);
@@ -354,9 +436,9 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                     const QString baseName1 = QFileInfo(imagePath1.isEmpty() ? imageToken1 : imagePath1).completeBaseName();
                     const QString canonicalPairName = QString("%1__%2").arg(baseName0, baseName1);
 
-                    // 根据项目影像映射解析对应的 .sp 特征文件，兼容 lis 中带后缀或完整路径的 token。
-                    const QString sp0Path = xjw::gui::project::resolveProjectFeaturePathFromToken(plascanPath, currentMeta, imageToken0);
-                    const QString sp1Path = xjw::gui::project::resolveProjectFeaturePathFromToken(plascanPath, currentMeta, imageToken1);
+                    // 根据项目和特征后缀解析特征文件路径
+                    const QString sp0Path = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, imageToken0, featureSuffix);
+                    const QString sp1Path = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, imageToken1, featureSuffix);
 
                     if (!QFile::exists(sp0Path) || !QFile::exists(sp1Path)) 
                     {
@@ -429,23 +511,43 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             fd1.imageHeight = h1;
                             matchResult = localMatcher->match(fd0, fd1);
                         }
-                        else
+                        else if (isBfFlann)
                         {
-                            xjw::feature_match::tradition::TraditionalMatchConfig tmConfig;
-                            tmConfig.algorithmName = matchAlgorithm.toStdString();
-                            tmConfig.ratioTestThreshold = 0.75f;
-                            tmConfig.requireMutualConsistency = true;
+                            // 根据匹配算法确定特征提取器名称
+                            std::string featureAlgoName;
+                            if (matchAlgorithm == QStringLiteral("orb_bf_hamming"))
+                                featureAlgoName = "orb";
+                            else
+                                featureAlgoName = "sift";
 
-                            const auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, "superpoint");
-                            const auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, "superpoint");
-                            const cv::Mat desc0 = fd0.toCvDescriptors(tmConfig.algorithmName);
-                            const cv::Mat desc1 = fd1.toCvDescriptors(tmConfig.algorithmName);
-                            matchResult = xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
-                                desc0,
-                                desc1,
+                            auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, featureAlgoName);
+                            auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, featureAlgoName);
+                            fd0.imageWidth = w0;
+                            fd0.imageHeight = h0;
+                            fd1.imageWidth = w1;
+                            fd1.imageHeight = h1;
+
+                            cv::Mat desc0 = fd0.toCvDescriptors(matchAlgorithm.toStdString());
+                            cv::Mat desc1 = fd1.toCvDescriptors(matchAlgorithm.toStdString());
+
+                            std::vector<cv::DMatch> cvMatches;
+                            if (matchAlgorithm == QStringLiteral("sift_flann"))
+                            {
+                                cv::FlannBasedMatcher matcher;
+                                matcher.match(desc0, desc1, cvMatches);
+                            }
+                            else
+                            {
+                                int norm = (matchAlgorithm == QStringLiteral("orb_bf_hamming")) ? cv::NORM_HAMMING : cv::NORM_L2;
+                                cv::BFMatcher matcher(norm, true);
+                                matcher.match(desc0, desc1, cvMatches);
+                            }
+
+                            matchResult = xjw::feature_match::MatchResult::fromCvMatches(
+                                cvMatches,
                                 static_cast<int>(sp0.keypoints.size()),
                                 static_cast<int>(sp1.keypoints.size()),
-                                tmConfig);
+                                matchAlgorithm.toStdString());
                         }
 
                         const int rawMatchCount = matchResult.numMatches;
@@ -457,8 +559,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             matchResult, sp0.keypoints, sp1.keypoints,
                             outlierConfig, &inlierCount);
 
-                        // 传统匹配分支容错：几何过滤过严导致全丢时，回退到原始匹配结果。
-                        if (isTraditionalMatch && rawMatchCount > 0 && matchResult.numMatches <= 0)
+                        // BF/FLANN 分支容错：几何过滤过严导致全丢时，回退到原始匹配结果。
+                        if (isBfFlann && rawMatchCount > 0 && matchResult.numMatches <= 0)
                         {
                             matchResult.cvMatches = rawMatches;
                             matchResult.numMatches = static_cast<int>(rawMatches.size());
@@ -485,9 +587,9 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         // ── 内点不足：记录到无匹配列表，不生成文件 ───────────────
                         if (matchResult.numMatches < outlierConfig.minInliers) 
                         {
-                            if (isTraditionalMatch && matchResult.numMatches > 0)
+                            if (isBfFlann && matchResult.numMatches > 0)
                             {
-                                LOG_WARN("%s", qUtf8Printable(QString("  %1 内点(%2)低于阈值(%3)，仍保留传统匹配结果")
+                                LOG_WARN("%s", qUtf8Printable(QString("  %1 内点(%2)低于阈值(%3)，仍保留 BF/FLANN 匹配结果")
                                     .arg(canonicalPairName)
                                     .arg(matchResult.numMatches)
                                     .arg(outlierConfig.minInliers)));
