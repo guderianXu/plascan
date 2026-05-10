@@ -51,40 +51,28 @@ void FeatureMatchingDialog::setupUi()
     QWidget* left = new QWidget(this);
     QVBoxLayout* leftLayout = new QVBoxLayout(left);
 
-    // ── 特征文件输入区（SuperGlue/LightGlue/传统算法使用）──
-    m_featureInputWidget = new QWidget(left);
-    QVBoxLayout* featureInputLayout = new QVBoxLayout(m_featureInputWidget);
-    featureInputLayout->setContentsMargins(0, 0, 0, 0);
-
-    QHBoxLayout* featureHeaderRow = new QHBoxLayout();
-    featureHeaderRow->addWidget(new QLabel(tr("可用特征点文件:"), m_featureInputWidget));
-    featureHeaderRow->addStretch();
-    m_selectAllBtn = new QPushButton(tr("全选"), m_featureInputWidget);
-    m_selectAllBtn->setFixedWidth(60);
-    m_selectAllBtn->setToolTip(tr("选中所有特征点文件"));
-    m_deselectAllBtn = new QPushButton(tr("清除"), m_featureInputWidget);
-    m_deselectAllBtn->setFixedWidth(60);
-    m_deselectAllBtn->setToolTip(tr("取消选中所有特征点文件"));
-    featureHeaderRow->addWidget(m_selectAllBtn);
-    featureHeaderRow->addWidget(m_deselectAllBtn);
-    featureInputLayout->addLayout(featureHeaderRow);
-
-    m_featureList = new QListWidget(m_featureInputWidget);
-    m_featureList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_featureList->setToolTip(tr("项目中已提取的特征点文件\n选中后可生成匹配对"));
-    featureInputLayout->addWidget(m_featureList, 1);
-    leftLayout->addWidget(m_featureInputWidget, 1);
-
-    // ── 影像输入区（LoFTR/RoMa 使用）──
+    // ── 影像输入区（所有算法共用）──
     m_imageInputWidget = new QWidget(left);
     QVBoxLayout* imageInputLayout = new QVBoxLayout(m_imageInputWidget);
     imageInputLayout->setContentsMargins(0, 0, 0, 0);
-    imageInputLayout->addWidget(new QLabel(tr("选择影像（直接输入原始图像）:"), m_imageInputWidget));
+
+    QHBoxLayout* imageHeaderRow = new QHBoxLayout();
+    imageHeaderRow->addWidget(new QLabel(tr("选择影像:"), m_imageInputWidget));
+    imageHeaderRow->addStretch();
+    m_selectAllBtn = new QPushButton(tr("全选"), m_imageInputWidget);
+    m_selectAllBtn->setFixedWidth(60);
+    m_selectAllBtn->setToolTip(tr("选中所有影像"));
+    m_deselectAllBtn = new QPushButton(tr("清除"), m_imageInputWidget);
+    m_deselectAllBtn->setFixedWidth(60);
+    m_deselectAllBtn->setToolTip(tr("取消选中所有影像"));
+    imageHeaderRow->addWidget(m_selectAllBtn);
+    imageHeaderRow->addWidget(m_deselectAllBtn);
+    imageInputLayout->addLayout(imageHeaderRow);
+
     m_imageList = new QListWidget(m_imageInputWidget);
     m_imageList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_imageList->setToolTip(tr("LoFTR/RoMa 直接处理原始图像，不使用预提取特征"));
+    m_imageList->setToolTip(tr("所有算法共用的影像列表\n选中后可生成匹配对"));
     imageInputLayout->addWidget(m_imageList, 1);
-    m_imageInputWidget->setVisible(false);
     leftLayout->addWidget(m_imageInputWidget, 1);
 
     // lis文件输入
@@ -104,7 +92,7 @@ void FeatureMatchingDialog::setupUi()
 
     // 生成匹配对按钮
     m_generatePairsBtn = new QPushButton(tr("生成匹配对"), left);
-    m_generatePairsBtn->setToolTip(tr("根据选中的特征文件和lis文件生成匹配对列表"));
+    m_generatePairsBtn->setToolTip(tr("根据选中的影像和lis文件生成匹配对列表"));
     leftLayout->addWidget(m_generatePairsBtn);
 
     // 匹配对预览
@@ -572,8 +560,8 @@ void FeatureMatchingDialog::setupConnections()
             this, &FeatureMatchingDialog::emitSettingsNow);
     connect(m_lgInputHeightSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureMatchingDialog::emitSettingsNow);
-    // 特征列表 checkbox 变化时保存
-    connect(m_featureList, &QListWidget::itemChanged,
+    // 影像列表 checkbox 变化时保存
+    connect(m_imageList, &QListWidget::itemChanged,
             this, &FeatureMatchingDialog::emitSettingsNow);
     // 输出路径、lis 文件改变时保存
     connect(m_outputLine, &QLineEdit::textChanged,
@@ -584,16 +572,16 @@ void FeatureMatchingDialog::setupConnections()
 
 void FeatureMatchingDialog::onSelectAll()
 {
-    for (int i = 0; i < m_featureList->count(); ++i) {
-        m_featureList->item(i)->setCheckState(Qt::Checked);
+    for (int i = 0; i < m_imageList->count(); ++i) {
+        m_imageList->item(i)->setCheckState(Qt::Checked);
     }
     emitSettingsNow();
 }
 
 void FeatureMatchingDialog::onDeselectAll()
 {
-    for (int i = 0; i < m_featureList->count(); ++i) {
-        m_featureList->item(i)->setCheckState(Qt::Unchecked);
+    for (int i = 0; i < m_imageList->count(); ++i) {
+        m_imageList->item(i)->setCheckState(Qt::Unchecked);
     }
     emitSettingsNow();
 }
@@ -618,24 +606,9 @@ void FeatureMatchingDialog::onClearLis()
 void FeatureMatchingDialog::onGeneratePairs()
 {
     QString lisPath = m_lisFileLine->text().trimmed();
-    const QString algo = m_matchAlgorithmCombo->currentData().toString();
-    const bool isRawImage = (algo == "loftr" || algo == "roma");
 
     if (!lisPath.isEmpty()) {
         m_currentPairs = parseLisFile(lisPath);
-    } else if (isRawImage) {
-        // 从影像列表生成对
-        QStringList selected;
-        for (int i = 0; i < m_imageList->count(); ++i) {
-            QListWidgetItem *item = m_imageList->item(i);
-            if (item->checkState() == Qt::Checked) {
-                selected.append(QFileInfo(item->data(Qt::UserRole).toString()).completeBaseName());
-            }
-        }
-        m_currentPairs.clear();
-        for (int i = 0; i < selected.size(); ++i)
-            for (int j = i + 1; j < selected.size(); ++j)
-                m_currentPairs.append(QString("%1__%2").arg(selected[i], selected[j]));
     } else {
         m_currentPairs = generateAllPairs();
     }
@@ -738,11 +711,6 @@ void FeatureMatchingDialog::onAlgorithmOrFeatureChanged()
     else
         m_paramStack->setCurrentIndex(2);
 
-    // 端到端算法使用原始影像，切换输入区
-    m_featureInputWidget->setVisible(!isE2E);
-    m_imageInputWidget->setVisible(isE2E);
-    m_generatePairsBtn->setEnabled(!isE2E || m_imageList->count() > 0);
-
     // 更新特征后缀选择器
     if (!isE2E) {
         setAvailableFeatureSuffixes(
@@ -831,19 +799,6 @@ void FeatureMatchingDialog::applySettings(const QJsonObject &settings)
     m_outputLine->setText(settings.value("output_dir").toString());
     m_lisFileLine->setText(settings.value("lis_file").toString());
 
-    // 恢复选中的特征文件
-    const QJsonArray selectedFeatures = settings.value(QStringLiteral("selected_features")).toArray();
-    if (!selectedFeatures.isEmpty()) {
-        QSet<QString> selectedSet;
-        for (const QJsonValue &v : selectedFeatures)
-            selectedSet.insert(v.toString());
-        for (int i = 0; i < m_featureList->count(); ++i) {
-            QListWidgetItem *item = m_featureList->item(i);
-            const QString path = item->data(Qt::UserRole).toString();
-            item->setCheckState(selectedSet.contains(path) ? Qt::Checked : Qt::Unchecked);
-        }
-    }
-
     // 恢复已生成的匹配对
     const QJsonArray savedPairs = settings.value(QStringLiteral("generated_pairs")).toArray();
     if (!savedPairs.isEmpty()) {
@@ -875,20 +830,6 @@ void FeatureMatchingDialog::setProjectImages(const QStringList &imagePaths)
         item->setData(Qt::UserRole, path);
         item->setCheckState(Qt::Checked);
         m_imageList->addItem(item);
-    }
-}
-
-void FeatureMatchingDialog::setProjectFeatures(const QStringList &featurePaths)
-{
-    m_availableFeatures = featurePaths;
-    m_featureList->clear();
-    
-    for (const QString &path : featurePaths) {
-        QFileInfo fi(path);
-        QListWidgetItem *item = new QListWidgetItem(fi.fileName());
-        item->setData(Qt::UserRole, path);  // 存储完整路径
-        item->setCheckState(Qt::Checked);   // 默认选中
-        m_featureList->addItem(item);
     }
 }
 
@@ -976,15 +917,6 @@ QJsonObject FeatureMatchingDialog::collectSettings() const
     obj["output_dir"] = m_outputLine->text();
     obj["lis_file"] = m_lisFileLine->text();
 
-    // 将当前选中的特征文件路径列表保存（用于项目记忆化）
-    QJsonArray selectedFeatures;
-    for (int i = 0; i < m_featureList->count(); ++i) {
-        QListWidgetItem *item = m_featureList->item(i);
-        if (item->checkState() == Qt::Checked)
-            selectedFeatures.append(item->data(Qt::UserRole).toString());
-    }
-    obj[QStringLiteral("selected_features")] = selectedFeatures;
-
     // 保存已生成的匹配对列表
     QJsonArray pairsArr;
     for (const QString &p : m_currentPairs)
@@ -1026,29 +958,22 @@ QStringList FeatureMatchingDialog::generateAllPairs() const
 {
     QStringList pairs;
     QStringList selected;
-    
-    // 收集选中的特征文件
-    for (int i = 0; i < m_featureList->count(); ++i) {
-        QListWidgetItem *item = m_featureList->item(i);
+
+    // 收集选中的影像
+    for (int i = 0; i < m_imageList->count(); ++i) {
+        QListWidgetItem *item = m_imageList->item(i);
         if (item->checkState() == Qt::Checked) {
-            QString fullPath = item->data(Qt::UserRole).toString();
-            QFileInfo fi(fullPath);
-            // 提取基础名称（去除扩展名）
-            QString baseName = fi.completeBaseName();
-            // 如果是 .ip 文件，进一步去除可能的 .ip
-            if (baseName.endsWith(".ip")) {
-                baseName = baseName.left(baseName.length() - 3);
-            }
+            QString baseName = QFileInfo(item->data(Qt::UserRole).toString()).completeBaseName();
             selected.append(baseName);
         }
     }
-    
+
     // 生成两两匹配对
     for (int i = 0; i < selected.size(); ++i) {
         for (int j = i + 1; j < selected.size(); ++j) {
             pairs.append(QString("%1__%2").arg(selected[i], selected[j]));
         }
     }
-    
+
     return pairs;
 }

@@ -52,15 +52,15 @@ signals:
     void viewMatchesRequested();
 
 private slots:
-    // 全选所有特征点文件
+    // 全选所有影像
     void onSelectAll();
-    // 清除所有特征点文件的选中状态
+    // 清除所有影像的选中状态
     void onDeselectAll();
     // 点击"添加 lis 文件"按钮，弹出文件选择对话框并解析 lis 文件中的影像路径
     void onAddLisFile();
     // 清空当前已加载的 lis 文件路径及生成的匹配对列表
     void onClearLis();
-    // 根据 m_availableFeatures 自动生成所有两两影像组合并填入 m_currentPairs
+    // 根据选中的影像自动生成所有两两影像组合并填入 m_currentPairs
     void onGeneratePairs();
     // 点击"浏览"按钮，弹出目录选择对话框并设置匹配结果输出路径
     void onBrowseOutput();
@@ -82,11 +82,7 @@ public slots:
     // settings — 与 collectSettings() 返回格式相同的 JSON 对象
     void applySettings(const QJsonObject &settings);
 
-    // 将项目中已检测到的特征点文件路径列表传入对话框，填充 m_featureList
-    // featurePaths — SuperPoint 输出的 .pt 特征文件路径列表
-    void setProjectFeatures(const QStringList &featurePaths);
-
-    // 将项目中的原始影像路径传入对话框，供 LoFTR/RoMa 使用
+    // 将项目中的原始影像路径传入对话框，填充影像列表
     void setProjectImages(const QStringList &imagePaths);
 
     // 设置可用的特征文件后缀列表，更新特征类型下拉框
@@ -108,16 +104,14 @@ private:
     // 解析指定 lis 文件，返回其中包含的影像路径列表（每行一个路径，忽略空行和注释）
     // lisPath — lis 文件的绝对路径
     QStringList parseLisFile(const QString &lisPath) const;
-    // 将 m_availableFeatures 中所有特征文件两两组合，返回 "img1__img2" 格式字符串列表
+    // 将选中的影像两两组合，返回 "img1__img2" 格式字符串列表
     QStringList generateAllPairs() const;
 
     // ── 输入输出控件 ──────────────────────────────────────────────
     QPushButton*      m_selectAllBtn{nullptr};     // 全选按钮
     QPushButton*      m_deselectAllBtn{nullptr};   // 清除按钮
-    QListWidget*      m_featureList{nullptr};      // 项目中可用特征点文件的列表控件
-    QListWidget*      m_imageList{nullptr};        // 原始影像列表（LoFTR/RoMa 使用）
-    QWidget*          m_featureInputWidget{nullptr};  // 特征文件输入区（可切换显示）
-    QWidget*          m_imageInputWidget{nullptr};    // 影像输入区（LoFTR/RoMa）
+    QListWidget*      m_imageList{nullptr};        // 影像列表（所有算法共用）
+    QWidget*          m_imageInputWidget{nullptr};    // 影像输入区
     QTextEdit*        m_pairPreview{nullptr};      // 当前匹配对的预览文本框（只读）
     QLineEdit*        m_lisFileLine{nullptr};      // lis 文件路径输入框
     QPushButton*      m_addLisBtn{nullptr};        // "添加 lis 文件"按钮
@@ -184,6 +178,5 @@ private:
     QPushButton*      m_resetBtn{nullptr};       // "恢复默认"按钮：重置所有参数
     
     // ── 数据成员 ──────────────────────────────────────────────────
-    QStringList       m_availableFeatures;  // 项目中已探测到的特征点文件路径列表
     QStringList       m_currentPairs;       // 当前待匹配的影像对列表（格式："img1__img2"）
 };

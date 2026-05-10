@@ -408,23 +408,9 @@ void MainWindow::setupProjectManager()
                     LOG_ERROR(QStringLiteral("无法打开匹配配置：ProjectManager 未初始化"));
                     return;
                 }
-                // 从项目元数据中收集已提取的特征文件（ipfind 输出）
-                QStringList featurePaths;
-                QJsonObject meta = m_projectManager->currentMeta();
-                QJsonArray ipfind = meta.value("ipfind_results").toArray();
-                for (const QJsonValue &v : ipfind)
-                {
-                    QJsonObject obj = v.toObject();
-                    QString out = obj.value("output").toString();
-                    if (!out.isEmpty())
-                    {
-                        featurePaths.append(out);
-                    }
-                }
-
                 auto *dlg = new FeatureMatchingDialog(this);
                 dlg->setAttribute(Qt::WA_DeleteOnClose);
-                dlg->setProjectFeatures(featurePaths);
+                dlg->setProjectImages(m_projectManager->getAllImages());
 
                 // 从当前项目影像收集可用的特征后缀并设置到下拉框
                 if (m_canvas)
