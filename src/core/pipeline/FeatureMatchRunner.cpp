@@ -11,6 +11,7 @@
 #include <opencv2/opencv.hpp>
 #include <torch/torch.h>
 
+#include "AlgorithmCompat.h"
 #include "FeatureMatchRunner.h"
 #include "Logger.h"
 #include "ProjectIO.h"
@@ -86,7 +87,34 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                            std::atomic<int> &progressCount)
 {
     const QString matchAlgorithm = config.value("match_algorithm").toString("superglue").trimmed().toLower();
-    const QString featureSuffix   = config.value("feature_suffix").toString();
+    const QString rawSuffix      = config.value("feature_suffix").toString();
+
+    // "__all__" mode: try all compatible feature suffixes
+    QStringList suffixesToTry;
+    if (rawSuffix == "__all__" && xjw::feature_match::compatibleFeatureSuffixes(matchAlgorithm).size() > 1) {
+        suffixesToTry = xjw::feature_match::compatibleFeatureSuffixes(matchAlgorithm);
+        LOG_INFO("All-features mode: will try %d suffixes (%s)",
+                 static_cast<int>(suffixesToTry.size()),
+                 qUtf8Printable(suffixesToTry.join(", ")));
+    } else {
+        suffixesToTry << rawSuffix;
+    }
+
+    // "__all__" mode: recursively call run() for each suffix
+    if (suffixesToTry.size() > 1)
+    {
+        for (const auto &suf : suffixesToTry)
+        {
+            if (cancelFlag.load()) break;
+            QJsonObject cfg = config;
+            cfg["feature_suffix"] = suf;
+            LOG_INFO("All-features: trying suffix %s", qUtf8Printable(suf));
+            run(cfg, imagePairs, projectManager, cancelFlag, progressCount);
+        }
+        return;
+    }
+
+    const QString featureSuffix = rawSuffix;
     const bool isSuperGlueMatch = (matchAlgorithm == QStringLiteral("superglue"));
     const bool isLightGlueMatch = (matchAlgorithm == QStringLiteral("lightglue"));
     const bool isLoftrMatch     = (matchAlgorithm == QStringLiteral("loftr"));
@@ -274,19 +302,14 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     }
     else if (isLightGlueMatch)
     {
-        // 根据特征提取算法选择对应的 LightGlue 模型
-        // 从项目元数据的 ipfind_results 里读取 feature_algorithm
-        QString featureAlgo = QStringLiteral("superpoint");
-        const QJsonArray ipfindResults = currentMeta.value(QLatin1String("ipfind_results")).toArray();
-        if (!ipfindResults.isEmpty())
-        {
-            const QString algo = ipfindResults.first().toObject()
-                                     .value(QLatin1String("settings")).toObject()
-                                     .value(QLatin1String("feature_algorithm")).toString()
-                                     .toLower();
-            if (!algo.isEmpty())
-                featureAlgo = algo;
-        }
+        // 根据 feature_suffix 选择对应的 LightGlue 模型
+        QString featureAlgo;
+        if (featureSuffix == QStringLiteral(".dsk"))
+            featureAlgo = QStringLiteral("disk");
+        else if (featureSuffix == QStringLiteral(".alk"))
+            featureAlgo = QStringLiteral("aliked");
+        else
+            featureAlgo = QStringLiteral("superpoint");
 
         if (featureAlgo == QStringLiteral("disk"))
             modelName = QString("lightglue_disk_%1.pt").arg(deviceSuffix);
@@ -295,8 +318,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         else
             modelName = QString("lightglue_matcher_%1.pt").arg(deviceSuffix);
 
-        LOG_INFO("%s", qUtf8Printable(QString("LightGlue 使用特征算法: %1 → 模型: %2")
-                                          .arg(featureAlgo).arg(modelName)));
+        LOG_INFO("%s", qUtf8Printable(QString("LightGlue suffix=%1 algo=%2 model=%3")
+                                          .arg(featureSuffix, featureAlgo, modelName)));
     }
     const QString modelPath = findModelFile(modelName);
     

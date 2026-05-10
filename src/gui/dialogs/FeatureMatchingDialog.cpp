@@ -681,7 +681,11 @@ void FeatureMatchingDialog::setAvailableFeatureSuffixes(const QStringList &suffi
 {
     m_featureSuffixCombo->blockSignals(true);
     m_featureSuffixCombo->clear();
-    m_featureSuffixCombo->addItems(suffixes);
+    if (suffixes.size() > 1) {
+        m_featureSuffixCombo->addItem(tr("所有特征类型"), QStringLiteral("__all__"));
+    }
+    for (const auto &s : suffixes)
+        m_featureSuffixCombo->addItem(s, s);
     m_featureSuffixCombo->blockSignals(false);
 
     bool visible = !suffixes.isEmpty();
@@ -691,7 +695,8 @@ void FeatureMatchingDialog::setAvailableFeatureSuffixes(const QStringList &suffi
 
 QString FeatureMatchingDialog::selectedFeatureSuffix() const
 {
-    return m_featureSuffixCombo->currentText();
+    QVariant data = m_featureSuffixCombo->currentData();
+    return data.isValid() ? data.toString() : m_featureSuffixCombo->currentText();
 }
 
 void FeatureMatchingDialog::onAlgorithmOrFeatureChanged()
