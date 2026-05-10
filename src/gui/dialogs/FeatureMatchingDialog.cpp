@@ -26,6 +26,8 @@
 #include <QFileInfo>
 #include <QRegularExpression>
 
+#include "AlgorithmCompat.h"
+
 FeatureMatchingDialog::FeatureMatchingDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -146,6 +148,12 @@ void FeatureMatchingDialog::setupUi()
                                          "SuperGlue/LightGlue: 需要预提取特征\n"
                                          "LoFTR/RoMa: 直接处理原始图像"));
     commonForm->addRow(tr("匹配算法:"), m_matchAlgorithmCombo);
+
+    m_featureSuffixLabel = new QLabel(tr("特征类型:"), right);
+    m_featureSuffixCombo = new QComboBox(right);
+    m_featureSuffixCombo->setToolTip(tr("选择用于匹配的特征文件类型\n"
+                                         "根据所选算法自动过滤可用后缀"));
+    commonForm->addRow(m_featureSuffixLabel, m_featureSuffixCombo);
 
     m_maxKeypointsSpin = new QSpinBox(right);
     m_maxKeypointsSpin->setRange(-1, 100000);
@@ -517,11 +525,16 @@ void FeatureMatchingDialog::setupConnections()
     
     // 算法切换：更新参数控件启用状态 + 持久化
     connect(m_matchAlgorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &FeatureMatchingDialog::onAlgorithmChanged);
+            this, [this](int){ onAlgorithmOrFeatureChanged(); });
     connect(m_matchAlgorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &FeatureMatchingDialog::emitSettingsNow);
+    // 特征类型切换
+    connect(m_featureSuffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, [this](int){ updatePreview(); });
+    connect(m_featureSuffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &FeatureMatchingDialog::emitSettingsNow);
     // 初始状态
-    onAlgorithmChanged(m_matchAlgorithmCombo->currentIndex());
+    onAlgorithmOrFeatureChanged();
     connect(m_modelTypeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &FeatureMatchingDialog::emitSettingsNow);
     connect(m_outlierMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -688,9 +701,32 @@ void FeatureMatchingDialog::onResetDefaults()
 
 void FeatureMatchingDialog::onAlgorithmChanged(int)
 {
-    const QString algo = m_matchAlgorithmCombo->currentData().toString();
-    const bool isRawImage = (algo == "loftr" || algo == "roma");
+    onAlgorithmOrFeatureChanged();
+}
 
+void FeatureMatchingDialog::setAvailableFeatureSuffixes(const QStringList &suffixes)
+{
+    m_featureSuffixCombo->blockSignals(true);
+    m_featureSuffixCombo->clear();
+    m_featureSuffixCombo->addItems(suffixes);
+    m_featureSuffixCombo->blockSignals(false);
+
+    bool visible = !suffixes.isEmpty();
+    m_featureSuffixLabel->setVisible(visible);
+    m_featureSuffixCombo->setVisible(visible);
+}
+
+QString FeatureMatchingDialog::selectedFeatureSuffix() const
+{
+    return m_featureSuffixCombo->currentText();
+}
+
+void FeatureMatchingDialog::onAlgorithmOrFeatureChanged()
+{
+    const QString algo = m_matchAlgorithmCombo->currentData().toString();
+    const bool isE2E = xjw::feature_match::isEndToEndAlgorithm(algo);
+
+    // 算法参数面板切换
     if (algo == "superglue")
         m_paramStack->setCurrentIndex(0);
     else if (algo == "lightglue")
@@ -702,10 +738,20 @@ void FeatureMatchingDialog::onAlgorithmChanged(int)
     else
         m_paramStack->setCurrentIndex(2);
 
-    // LoFTR/RoMa 使用原始影像，切换输入区
-    m_featureInputWidget->setVisible(!isRawImage);
-    m_imageInputWidget->setVisible(isRawImage);
-    m_generatePairsBtn->setEnabled(!isRawImage || m_imageList->count() > 0);
+    // 端到端算法使用原始影像，切换输入区
+    m_featureInputWidget->setVisible(!isE2E);
+    m_imageInputWidget->setVisible(isE2E);
+    m_generatePairsBtn->setEnabled(!isE2E || m_imageList->count() > 0);
+
+    // 更新特征后缀选择器
+    if (!isE2E) {
+        setAvailableFeatureSuffixes(
+            xjw::feature_match::compatibleFeatureSuffixes(algo));
+    } else {
+        setAvailableFeatureSuffixes({});
+    }
+
+    updatePreview();
 }
 
 void FeatureMatchingDialog::onViewMatches()
@@ -809,7 +855,15 @@ void FeatureMatchingDialog::applySettings(const QJsonObject &settings)
     }
 
     blockSignals(block);
-    onAlgorithmChanged(m_matchAlgorithmCombo->currentIndex());
+    onAlgorithmOrFeatureChanged();
+
+    // 恢复特征后缀选择（必须在 onAlgorithmOrFeatureChanged 之后，因为该函数会填充后缀列表）
+    const QString featureSuffix = settings.value("feature_suffix").toString();
+    if (!featureSuffix.isEmpty() && m_featureSuffixCombo->count() > 0) {
+        int idx = m_featureSuffixCombo->findText(featureSuffix);
+        if (idx >= 0)
+            m_featureSuffixCombo->setCurrentIndex(idx);
+    }
 }
 
 void FeatureMatchingDialog::setProjectImages(const QStringList &imagePaths)
@@ -867,6 +921,7 @@ QJsonObject FeatureMatchingDialog::collectSettings() const
     // 基础参数
     const QString algo = m_matchAlgorithmCombo->currentData().toString();
     obj["match_algorithm"] = algo;
+    obj["feature_suffix"] = selectedFeatureSuffix();
     obj["outlier_method"] = m_outlierMethodCombo->currentData().toString();
     obj["max_keypoints"] = m_maxKeypointsSpin->value();
 

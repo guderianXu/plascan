@@ -88,6 +88,7 @@ target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feat
 target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_extractors)
 
 # 添加特征匹配头文件目录
+target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match)
 target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue)
 target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue)
 target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition)

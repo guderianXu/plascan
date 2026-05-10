@@ -18,6 +18,7 @@
 #include <QDialog>
 #include <QJsonObject>
 
+class QLabel;
 class QListWidget;
 class QLineEdit;
 class QPushButton;
@@ -73,6 +74,8 @@ private slots:
     void onViewMatches();
     // 算法切换时更新参数控件的启用状态
     void onAlgorithmChanged(int index);
+    // 算法或特征类型切换时更新参数面板、输入区及特征后缀选择
+    void onAlgorithmOrFeatureChanged();
 
 public slots:
     // 将外部传入的 JSON 设置对象应用到各控件（由 ProjectManager 加载项目时调用）
@@ -85,6 +88,11 @@ public slots:
 
     // 将项目中的原始影像路径传入对话框，供 LoFTR/RoMa 使用
     void setProjectImages(const QStringList &imagePaths);
+
+    // 设置可用的特征文件后缀列表，更新特征类型下拉框
+    void setAvailableFeatureSuffixes(const QStringList &suffixes);
+    // 返回当前选中的特征文件后缀（如 ".sp", ".dsk", ".alk"）
+    QString selectedFeatureSuffix() const;
 
 private:
     // 构建对话框全部控件和分组布局（基础/高级/系统/调试参数组 + 输入输出区 + 按钮）
@@ -120,6 +128,8 @@ private:
 
     // ── 基础参数控件（Basic） ─────────────────────────────────────
     QComboBox*        m_matchAlgorithmCombo{nullptr}; // 匹配算法选择
+    QLabel*           m_featureSuffixLabel{nullptr};  // 特征类型标签
+    QComboBox*        m_featureSuffixCombo{nullptr};  // 特征文件后缀选择
     QComboBox*        m_outlierMethodCombo{nullptr};  // 粗差剔除算法（始终显示）
     QSpinBox*         m_maxKeypointsSpin{nullptr};    // 最大关键点数（始终显示）
 
