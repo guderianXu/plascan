@@ -153,13 +153,16 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
     else:
         model = roma_outdoor(device=device)
 
-    imgL = cv2.imread(imgL_path, cv2.IMREAD_GRAYSCALE)
-    imgR = cv2.imread(imgR_path, cv2.IMREAD_GRAYSCALE)
+    imgL = cv2.imread(imgL_path, cv2.IMREAD_COLOR)
+    imgR = cv2.imread(imgR_path, cv2.IMREAD_COLOR)
     if imgL is None or imgR is None:
         raise FileNotFoundError(f"Cannot read images: {imgL_path}, {imgR_path}")
+    # RoMa requires RGB (not BGR from OpenCV)
+    imgL = cv2.cvtColor(imgL, cv2.COLOR_BGR2RGB)
+    imgR = cv2.cvtColor(imgR, cv2.COLOR_BGR2RGB)
 
-    tL = torch.from_numpy(imgL.astype(np.float32) / 255.0).unsqueeze(0).unsqueeze(0).to(device)
-    tR = torch.from_numpy(imgR.astype(np.float32) / 255.0).unsqueeze(0).unsqueeze(0).to(device)
+    tL = torch.from_numpy(imgL.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)
+    tR = torch.from_numpy(imgR.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)
 
     with torch.no_grad():
         warped, certainty = model.match(tL, tR)

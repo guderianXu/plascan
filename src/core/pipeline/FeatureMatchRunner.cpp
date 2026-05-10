@@ -126,7 +126,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         }
     }
     
-    // ââ Python E2E åæ¯ (LoFTR / RoMa) âââââââââââââââââââââââââââââââ
+    // ---- Python E2E branch (LoFTR / RoMa) ----â
     if (isPythonE2E)
     {
         const QString pyModelType = config["model_type"].toString("outdoor");
@@ -154,7 +154,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             QStringList parts = pairStr.split("__");
             if (parts.size() != 2)
             {
-                LOG_WARN("%s", qUtf8Printable(QString("æ æçå¹éå¯¹æ ¼å¼: %1").arg(pairStr)));
+                LOG_WARN("%s", qUtf8Printable(QString("Invalid pair format: %1").arg(pairStr)));
                 continue;
             }
 
@@ -165,7 +165,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
             if (imagePath0.isEmpty() || imagePath1.isEmpty())
             {
-                LOG_WARN("%s", qUtf8Printable(QString("æ æ³è§£æå½±åè·¯å¾: %1").arg(pairStr)));
+                LOG_WARN("%s", qUtf8Printable(QString("Cannot resolve image path: %1").arg(pairStr)));
                 continue;
             }
 
@@ -182,22 +182,22 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             process.start("python3", args);
             if (!process.waitForFinished(300000))
             {
-                LOG_ERROR("%s", qUtf8Printable(QString("Python E2E è¶æ¶: %1").arg(pairStr)));
+                LOG_ERROR("%s", qUtf8Printable(QString("Python E2E timeout: %1").arg(pairStr)));
                 process.kill();
                 continue;
             }
 
             if (process.exitCode() != 0)
             {
-                LOG_ERROR("%s", qUtf8Printable(QString("Python E2E å¤±è´¥ %1: %2")
+                LOG_ERROR("%s", qUtf8Printable(QString("Python E2E failed %1: %2")
                     .arg(pairStr).arg(QString::fromUtf8(process.readAllStandardError()))));
                 continue;
             }
 
-            LOG_INFO("%s", qUtf8Printable(QString("E2E å¹éå®æ: %1").arg(baseName0 + "__" + baseName1)));
+            LOG_INFO("%s", qUtf8Printable(QString("E2E match done: %1").arg(baseName0 + "__" + baseName1)));
         }
 
-        LOG_INFO("%s", qUtf8Printable(QString("Python E2E (%1) å®æ").arg(matchAlgorithm)));
+        LOG_INFO("%s", qUtf8Printable(QString("Python E2E (%1) done").arg(matchAlgorithm)));
         return;
     }
 
