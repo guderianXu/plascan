@@ -321,11 +321,25 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         LOG_INFO("%s", qUtf8Printable(QString("LightGlue suffix=%1 algo=%2 model=%3")
                                           .arg(featureSuffix, featureAlgo, modelName)));
     }
-    const QString modelPath = findModelFile(modelName);
-    
+    QString modelPath = findModelFile(modelName);
+
+    // 如果专用模型不存在, 尝试通用 LightGlue 模型作为 fallback
+    if (isLightGlueMatch && modelPath.isEmpty() && featureAlgo != QStringLiteral("superpoint"))
+    {
+        const QString fallbackName = QString("lightglue_matcher_%1.pt").arg(deviceSuffix);
+        const QString fallbackPath = findModelFile(fallbackName);
+        if (!fallbackPath.isEmpty())
+        {
+            LOG_WARN("%s", qUtf8Printable(QString("模型 %1 不存在, fallback 到 %2 (可能存在维度不匹配)")
+                                              .arg(modelName, fallbackName)));
+            modelName = fallbackName;
+            modelPath = fallbackPath;
+        }
+    }
+
     if ((isSuperGlueMatch || isLightGlueMatch) && modelPath.isEmpty())
     {
-        LOG_ERROR("%s", qUtf8Printable(QString("模型文件不存在: %1").arg(modelName)));
+        LOG_ERROR("%s", qUtf8Printable(QString("模型文件不存在: %1, 跳过此特征类型").arg(modelName)));
         return;
     }
     
