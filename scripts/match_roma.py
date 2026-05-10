@@ -12,6 +12,7 @@ RoMa 特征匹配脚本，输出与 SuperGlue/LightGlue 相同格式的 .match �
 
 import argparse
 import json
+import struct
 import sys
 from pathlib import Path
 
@@ -40,8 +41,8 @@ def preprocess_image(img_path: Path, device: torch.device, target_size=(672, 504
     return t.to(device), orig_w, orig_h, target_size[0], target_size[1]
 
 
-def match_pair(model, img0_path: Path, img1_path: Path, device: torch.device,
-               threshold: float = 0.05, max_keypoints: int = 10000) -> dict:
+def match_pair_batch(model, img0_path: Path, img1_path: Path, device: torch.device,
+                     threshold: float = 0.05, max_keypoints: int = 10000) -> dict:
     t0, ow0, oh0, rw0, rh0 = preprocess_image(img0_path, device)
     t1, ow1, oh1, rw1, rh1 = preprocess_image(img1_path, device)
 
@@ -119,7 +120,7 @@ def main():
 
         out_path = out_dir / f"{pair}.match"
         try:
-            result = match_pair(model, img0, img1, dev, args.threshold, args.max_keypoints)
+            result = match_pair_batch(model, img0, img1, dev, args.threshold, args.max_keypoints)
             with open(out_path, "w") as f:
                 json.dump(result, f)
             print(f"  [{i+1}/{len(args.pairs)}] {pair} → {result['num_matches']} 个匹配")
@@ -132,5 +133,67 @@ def main():
         sys.exit(1)
 
 
+def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, max_kpts=2048):
+    """Single image pair matching with RoMa (unified CLI entry).
+
+    Args:
+        imgL_path: Left image path
+        imgR_path: Right image path
+        out_path: Output .match file path
+        scene: "outdoor" or "indoor"
+        threshold: confidence threshold
+        max_kpts: max keypoints to sample
+    """
+    from romatch import roma_outdoor, roma_indoor
+
+    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+
+    if scene == "indoor":
+        model = roma_indoor(device=device)
+    else:
+        model = roma_outdoor(device=device)
+
+    imgL = cv2.imread(imgL_path, cv2.IMREAD_GRAYSCALE)
+    imgR = cv2.imread(imgR_path, cv2.IMREAD_GRAYSCALE)
+    if imgL is None or imgR is None:
+        raise FileNotFoundError(f"Cannot read images: {imgL_path}, {imgR_path}")
+
+    tL = torch.from_numpy(imgL.astype(np.float32) / 255.0).unsqueeze(0).unsqueeze(0).to(device)
+    tR = torch.from_numpy(imgR.astype(np.float32) / 255.0).unsqueeze(0).unsqueeze(0).to(device)
+
+    with torch.no_grad():
+        warped, certainty = model.match(tL, tR)
+
+    matches, certainty = model.sample(warped, certainty, num=max_kpts)
+    kptsL = matches[..., :2].cpu().numpy()
+    kptsR = matches[..., 2:].cpu().numpy()
+    conf = certainty.cpu().numpy()
+
+    mask = conf > threshold
+    kptsL, kptsR = kptsL[mask], kptsR[mask]
+
+    # Write binary .match format (big-endian, same as LoFTR/SuperGlue)
+    with open(out_path, "wb") as f:
+        f.write(struct.pack(">i", len(kptsL)))
+        for i in range(len(kptsL)):
+            f.write(struct.pack(">ffff",
+                float(kptsL[i, 0]), float(kptsL[i, 1]),
+                float(kptsR[i, 0]), float(kptsR[i, 1])))
+
+    print(f"RoMa: {len(kptsL)} matches saved to {out_path}")
+    return len(kptsL)
+
+
 if __name__ == "__main__":
-    main()
+    if "-L" in sys.argv:
+        ap = argparse.ArgumentParser(description="RoMa single-pair matching")
+        ap.add_argument("-L", required=True, help="Left image path")
+        ap.add_argument("-R", required=True, help="Right image path")
+        ap.add_argument("-o", required=True, help="Output .match file path")
+        ap.add_argument("--scene", default="outdoor", choices=["outdoor", "indoor"])
+        ap.add_argument("--threshold", type=float, default=0.8)
+        ap.add_argument("--max-keypoints", type=int, default=2048)
+        args = ap.parse_args()
+        match_pair(args.L, args.R, args.o, args.scene, args.threshold, args.max_keypoints)
+    else:
+        main()
