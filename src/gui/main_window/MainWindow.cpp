@@ -426,6 +426,16 @@ void MainWindow::setupProjectManager()
                 dlg->setAttribute(Qt::WA_DeleteOnClose);
                 dlg->setProjectFeatures(featurePaths);
 
+                // 从当前项目影像收集可用的特征后缀并设置到下拉框
+                if (m_canvas)
+                {
+                    const QStringList projectSuffixes = m_canvas->availableFeatureSuffixes();
+                    if (!projectSuffixes.isEmpty())
+                    {
+                        dlg->setAvailableFeatureSuffixes(projectSuffixes);
+                    }
+                }
+
                 // 懒初始化 SuperGlue 记忆化设置管理器
                 if (!m_sgSetting)
                 {
