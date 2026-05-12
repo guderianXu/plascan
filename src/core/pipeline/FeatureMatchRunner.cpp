@@ -200,7 +200,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
             const QString baseName0 = QFileInfo(imagePath0).completeBaseName();
             const QString baseName1 = QFileInfo(imagePath1).completeBaseName();
-            const QString outPath = QDir(outputDir).filePath(baseName0 + "__" + baseName1 + ".match");
+            const QString matchFileName = baseName0 + "__" + baseName1 + "_" + matchAlgorithm + ".match";
+            const QString outPath = QDir(outputDir).filePath(matchFileName);
 
             QStringList args;
             args << scriptPath << "-L" << imagePath0 << "-R" << imagePath1 << "-o" << outPath;

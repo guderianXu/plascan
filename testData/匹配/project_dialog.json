@@ -13,15 +13,18 @@
     },
     "superglue": {
         "cuda_parallel_pairs": 1,
-        "feature_suffix": "",
+        "feature_suffix": "__all__",
         "generated_pairs": [
             "20260510T173954657_NAS_PAN_L2b__20260510T191252977_NAS_PAN_L2b"
         ],
+        "lg_batch_size": 1,
+        "lg_input_height": -1,
+        "lg_input_width": -1,
+        "lg_match_threshold": 0.15,
         "lis_file": "",
-        "loftr_match_threshold": 0.2,
-        "loftr_model_type": "outdoor",
-        "match_algorithm": "loftr",
+        "match_algorithm": "lightglue",
         "max_keypoints": -1,
+        "model_type": "outdoor",
         "num_threads": -1,
         "outlier_confidence": 0.9999,
         "outlier_max_iters": 10000,
