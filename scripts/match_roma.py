@@ -157,9 +157,20 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
     imgR = cv2.imread(imgR_path, cv2.IMREAD_COLOR)
     if imgL is None or imgR is None:
         raise FileNotFoundError(f"Cannot read images: {imgL_path}, {imgR_path}")
-    # RoMa requires RGB (not BGR from OpenCV) and dimensions multiple of 14
     imgL = cv2.cvtColor(imgL, cv2.COLOR_BGR2RGB)
     imgR = cv2.cvtColor(imgR, cv2.COLOR_BGR2RGB)
+
+    # Resize large images to prevent GPU OOM (max 1200px on longest side)
+    h, w = imgL.shape[:2]
+    max_side = max(h, w)
+    scale = 1.0
+    if max_side > 1200:
+        scale = 1200.0 / max_side
+        new_h = int(h * scale)
+        new_w = int(w * scale)
+        imgL = cv2.resize(imgL, (new_w, new_h))
+        imgR = cv2.resize(imgR, (new_w, new_h))
+        h, w = new_h, new_w
 
     # Ensure both dims are multiples of 14 (RoMa requirement)
     h, w = imgL.shape[:2]

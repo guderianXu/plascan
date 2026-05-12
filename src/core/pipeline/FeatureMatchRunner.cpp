@@ -331,12 +331,50 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     }
     QString modelPath = findModelFile(modelName);
 
-    // DISK/ALIKED 专用模型缺失时不 fallback (128-dim vs 256-dim 必然失败)
+    // DISK/ALIKED 专用 TorchScript 模型缺失时使用 Python LightGlue 脚本
     if (isLightGlueMatch && modelPath.isEmpty() && lightglueAlgo != QStringLiteral("superpoint"))
     {
-        LOG_WARN("%s", qUtf8Printable(
-            QString("LightGlue %1 模型不存在, 跳过 (需要导出专用模型, 无法用 SuperPoint 模型)")
-                .arg(lightglueAlgo)));
+        LOG_INFO("%s", qUtf8Printable(
+            QString("LightGlue %1 TorchScript 模型不存在, 使用 Python 脚本").arg(lightglueAlgo)));
+
+        QString pyScript;
+        for (const auto &c : QStringList{
+            QCoreApplication::applicationDirPath() + "/../scripts/run_lightglue.py",
+            QCoreApplication::applicationDirPath() + "/../../scripts/run_lightglue.py"})
+        {
+            if (QFile::exists(c)) { pyScript = c; break; }
+        }
+        if (pyScript.isEmpty()) { LOG_ERROR("run_lightglue.py not found"); return; }
+
+        for (const QString &pairStr : imagePairs)
+        {
+            if (cancelFlag.load()) break;
+            struct PairDone { std::atomic<int> &cnt; ~PairDone() { cnt.fetch_add(1); } } _done{progressCount};
+
+            QStringList parts = pairStr.split("__");
+            if (parts.size() != 2) continue;
+            const QString token0 = QFileInfo(parts[0]).fileName();
+            const QString token1 = QFileInfo(parts[1]).fileName();
+            const QString sp0 = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, token0, featureSuffix);
+            const QString sp1 = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, token1, featureSuffix);
+            if (!QFile::exists(sp0) || !QFile::exists(sp1)) { LOG_WARN("Feature file missing for %s", qUtf8Printable(pairStr)); continue; }
+
+            const QString base0 = QFileInfo(sp0).completeBaseName();
+            const QString base1 = QFileInfo(sp1).completeBaseName();
+            const QString matchName = base0 + "__" + base1 + "_" + matchAlgorithm + ".match";
+            const QString outPath = QDir(outputDir).filePath(matchName);
+
+            QProcess proc;
+            proc.start("python3", {pyScript, "-f1", sp0, "-f2", sp1, "-o", outPath, "--cuda"});
+            if (!proc.waitForFinished(300000)) { LOG_ERROR("Python LG timeout"); proc.kill(); continue; }
+            if (proc.exitCode() != 0)
+            {
+                LOG_ERROR("Python LG failed: %s", qUtf8Printable(QString::fromUtf8(proc.readAllStandardError())));
+                continue;
+            }
+            LOG_INFO("Python LG done: %s", qUtf8Printable(matchName));
+        }
+        LOG_INFO("Python LightGlue (%s) done", qUtf8Printable(lightglueAlgo));
         return;
     }
 
