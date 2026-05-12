@@ -296,35 +296,34 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     QString modelType = config["model_type"].toString("outdoor");
     QString deviceSuffix = sgConfig.use_cuda ? "cuda" : "cpu";
     QString modelName;
+    QString lightglueAlgo; // 用于 fallback 判断 (仅 LightGlue 有效)
     if (isSuperGlueMatch)
     {
         modelName = QString("superglue_%1_%2.pt").arg(modelType).arg(deviceSuffix);
     }
     else if (isLightGlueMatch)
     {
-        // 根据 feature_suffix 选择对应的 LightGlue 模型
-        QString featureAlgo;
         if (featureSuffix == QStringLiteral(".dsk"))
-            featureAlgo = QStringLiteral("disk");
+            lightglueAlgo = QStringLiteral("disk");
         else if (featureSuffix == QStringLiteral(".alk"))
-            featureAlgo = QStringLiteral("aliked");
+            lightglueAlgo = QStringLiteral("aliked");
         else
-            featureAlgo = QStringLiteral("superpoint");
+            lightglueAlgo = QStringLiteral("superpoint");
 
-        if (featureAlgo == QStringLiteral("disk"))
+        if (lightglueAlgo == QStringLiteral("disk"))
             modelName = QString("lightglue_disk_%1.pt").arg(deviceSuffix);
-        else if (featureAlgo == QStringLiteral("aliked"))
+        else if (lightglueAlgo == QStringLiteral("aliked"))
             modelName = QString("lightglue_aliked_%1.pt").arg(deviceSuffix);
         else
             modelName = QString("lightglue_matcher_%1.pt").arg(deviceSuffix);
 
         LOG_INFO("%s", qUtf8Printable(QString("LightGlue suffix=%1 algo=%2 model=%3")
-                                          .arg(featureSuffix, featureAlgo, modelName)));
+                                          .arg(featureSuffix, lightglueAlgo, modelName)));
     }
     QString modelPath = findModelFile(modelName);
 
     // 如果专用模型不存在, 尝试通用 LightGlue 模型作为 fallback
-    if (isLightGlueMatch && modelPath.isEmpty() && featureAlgo != QStringLiteral("superpoint"))
+    if (isLightGlueMatch && modelPath.isEmpty() && lightglueAlgo != QStringLiteral("superpoint"))
     {
         const QString fallbackName = QString("lightglue_matcher_%1.pt").arg(deviceSuffix);
         const QString fallbackPath = findModelFile(fallbackName);
@@ -644,7 +643,9 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         }
 
                         // ── 保存 .match 文件 ────────────────────────────────────
-                        const QString outputPath = QDir(outputDir).filePath(canonicalPairName + ".match");
+                        // 文件名包含算法名以区分不同匹配器结果
+                        const QString matchFileName = canonicalPairName + "_" + matchAlgorithm + ".match";
+                        const QString outputPath = QDir(outputDir).filePath(matchFileName);
                         const QString imagePath0ForMeta = imagePath0Resolved.isEmpty() ? imageToken0 : imagePath0Resolved;
                         const QString imagePath1ForMeta = imagePath1Resolved.isEmpty() ? imageToken1 : imagePath1Resolved;
 

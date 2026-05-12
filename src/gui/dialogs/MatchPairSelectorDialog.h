@@ -70,6 +70,7 @@ private:
     struct MatchInfo {
         QString imagePath;       // 匹配影像的完整路径
         QString imageName;       // 匹配影像的文件名（用于显示）
+        QString algorithm;       // 匹配算法名 (superglue/lightglue/loftr/...)
         int totalPoints;         // 总匹配点数
         int validPoints;         // 有效（内点）匹配点数
         int invalidPoints;       // 无效（外点）匹配点数

@@ -1,0 +1,60 @@
+{
+    "main_window_ui": {
+        "active_image_path": "/home/guderian/code/plascan/testData/匹配/20260510T173954657_NAS_PAN_L2b.tif"
+    },
+    "match_viewer": {
+        "lineColor": "#ffff00",
+        "lineWidth": 1.5,
+        "maxCount": 0,
+        "opacity": 70,
+        "rainbowMode": false,
+        "showEndPoints": true,
+        "syncMode": false
+    },
+    "superglue": {
+        "cuda_parallel_pairs": 1,
+        "feature_suffix": "",
+        "generated_pairs": [
+            "20260510T173954657_NAS_PAN_L2b__20260510T191252977_NAS_PAN_L2b"
+        ],
+        "lis_file": "",
+        "loftr_match_threshold": 0.2,
+        "loftr_model_type": "outdoor",
+        "match_algorithm": "loftr",
+        "max_keypoints": -1,
+        "num_threads": -1,
+        "outlier_confidence": 0.9999,
+        "outlier_max_iters": 10000,
+        "outlier_method": "fundamental_usac_magsac",
+        "outlier_min_inliers": 25,
+        "outlier_reproj_threshold": 1.5,
+        "output_dir": "/home/guderian/code/plascan/testData/匹配/assets/matches",
+        "save_csv": false,
+        "save_visualization": false,
+        "use_cuda": true,
+        "verbose": false
+    },
+    "superpoint": {
+        "allow_device_fallback": true,
+        "batch_size": 8,
+        "cuda_device": 0,
+        "descriptor_dim": 256,
+        "detection_threshold": 0.003,
+        "device": "CUDA",
+        "feature_algorithm": "orb",
+        "grayscale_max": 1,
+        "grayscale_min": 0,
+        "grid_size": 8,
+        "max_num_keypoints": -1,
+        "model_path": "",
+        "neighborhood_check_radius": 3,
+        "neighborhood_threshold": 0.05,
+        "nms_radius": 3,
+        "normalize_input": true,
+        "output_dir": "/home/guderian/code/plascan/testData/匹配/assets/ip",
+        "remove_borders": 4,
+        "save_keypoints_csv": false,
+        "save_overlay_image": false,
+        "use_cuda": true
+    }
+}

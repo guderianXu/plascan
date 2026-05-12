@@ -121,17 +121,18 @@ void MatchPairSelectorDialog::setupUI()
 void MatchPairSelectorDialog::setupTable()
 {
     m_matchTable = new QTableWidget(this);
-    m_matchTable->setColumnCount(4);
-    
+    m_matchTable->setColumnCount(5);
+
     QStringList headers;
-    headers << tr("图像") << tr("总计") << tr("有效") << tr("无效");
+    headers << tr("图像") << tr("算法") << tr("总计") << tr("有效") << tr("无效");
     m_matchTable->setHorizontalHeaderLabels(headers);
-    
+
     // 设置列宽
-    m_matchTable->setColumnWidth(0, 400);
+    m_matchTable->setColumnWidth(0, 320);
     m_matchTable->setColumnWidth(1, 100);
-    m_matchTable->setColumnWidth(2, 100);
-    m_matchTable->setColumnWidth(3, 100);
+    m_matchTable->setColumnWidth(2, 80);
+    m_matchTable->setColumnWidth(3, 80);
+    m_matchTable->setColumnWidth(4, 80);
     
     // 设置表格属性
     m_matchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -207,26 +208,33 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
     
     for (int i = 0; i < m_currentMatches.size(); ++i) {
         const MatchInfo &info = m_currentMatches[i];
-        
+
         // 图像名称
         QTableWidgetItem *nameItem = new QTableWidgetItem(info.imageName);
         nameItem->setToolTip(info.imagePath);
         m_matchTable->setItem(i, 0, nameItem);
-        
+
+        // 算法名
+        QString algoDisplay = info.algorithm;
+        if (algoDisplay.isEmpty()) algoDisplay = tr("(旧格式)");
+        QTableWidgetItem *algoItem = new QTableWidgetItem(algoDisplay);
+        algoItem->setTextAlignment(Qt::AlignCenter);
+        m_matchTable->setItem(i, 1, algoItem);
+
         // 总计
         QTableWidgetItem *totalItem = new QTableWidgetItem(QString::number(info.totalPoints));
         totalItem->setTextAlignment(Qt::AlignCenter);
-        m_matchTable->setItem(i, 1, totalItem);
-        
+        m_matchTable->setItem(i, 2, totalItem);
+
         // 有效
         QTableWidgetItem *validItem = new QTableWidgetItem(QString::number(info.validPoints));
         validItem->setTextAlignment(Qt::AlignCenter);
-        m_matchTable->setItem(i, 2, validItem);
-        
+        m_matchTable->setItem(i, 3, validItem);
+
         // 无效
         QTableWidgetItem *invalidItem = new QTableWidgetItem(QString::number(info.invalidPoints));
         invalidItem->setTextAlignment(Qt::AlignCenter);
-        m_matchTable->setItem(i, 3, invalidItem);
+        m_matchTable->setItem(i, 4, invalidItem);
     }
     
     m_statusLabel->setText(tr("找到 %1 个匹配对").arg(m_currentMatches.size()));
@@ -250,18 +258,32 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
     // ── 方式一：扫描 matchDir/*.match 文件（实时，无需等待元数据写入）───────────
     QSet<QString> seenMatchFiles;
 
+    // 已知算法后缀名列表(匹配文件名中可能出现)
+    static const QStringList knownAlgos = {"superglue","lightglue","loftr","roma",
+                                            "orb_bf_hamming","sift_bf_l2","sift_flann"};
+
     if (!m_matchDir.isEmpty()) {
         QDir matchDirObj(m_matchDir);
         const QStringList matchFiles = matchDirObj.entryList(
             QStringList{QStringLiteral("*.match")}, QDir::Files);
 
         for (const QString &mf : matchFiles) {
-            const QString stem = QFileInfo(mf).completeBaseName();  // "baseA__baseB"
+            const QString stem = QFileInfo(mf).completeBaseName();  // e.g. "A__B_superglue"
             const QStringList parts = stem.split(QStringLiteral("__"));
             if (parts.size() != 2) continue;
 
             const QString &partA = parts[0];
-            const QString &partB = parts[1];
+            QString partB = parts[1];
+            // 解析算法后缀: "B_algo" -> base="B", algo="algo"
+            QString algoName;
+            for (const auto &algo : knownAlgos) {
+                const QString suffix = "_" + algo;
+                if (partB.endsWith(suffix)) {
+                    partB.chop(suffix.size());
+                    algoName = algo;
+                    break;
+                }
+            }
 
             // 检查是否包含当前影像
             bool containsCurrent = false;
@@ -282,6 +304,8 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
                 info.imageName = otherBase;
             if (info.imagePath.isEmpty())
                 info.imagePath = otherImagePath;
+            if (!algoName.isEmpty())
+                info.algorithm = algoName;
             matches.append(info);
         }
     }
