@@ -157,9 +157,17 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
     imgR = cv2.imread(imgR_path, cv2.IMREAD_COLOR)
     if imgL is None or imgR is None:
         raise FileNotFoundError(f"Cannot read images: {imgL_path}, {imgR_path}")
-    # RoMa requires RGB (not BGR from OpenCV)
+    # RoMa requires RGB (not BGR from OpenCV) and dimensions multiple of 14
     imgL = cv2.cvtColor(imgL, cv2.COLOR_BGR2RGB)
     imgR = cv2.cvtColor(imgR, cv2.COLOR_BGR2RGB)
+
+    # Ensure both dims are multiples of 14 (RoMa requirement)
+    h, w = imgL.shape[:2]
+    new_h = (h // 14) * 14
+    new_w = (w // 14) * 14
+    if new_h != h or new_w != w:
+        imgL = cv2.resize(imgL, (new_w, new_h))
+        imgR = cv2.resize(imgR, (new_w, new_h))
 
     tL = torch.from_numpy(imgL.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)
     tR = torch.from_numpy(imgR.astype(np.float32) / 255.0).permute(2, 0, 1).unsqueeze(0).to(device)

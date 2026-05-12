@@ -331,18 +331,13 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     }
     QString modelPath = findModelFile(modelName);
 
-    // 如果专用模型不存在, 尝试通用 LightGlue 模型作为 fallback
+    // DISK/ALIKED 专用模型缺失时不 fallback (128-dim vs 256-dim 必然失败)
     if (isLightGlueMatch && modelPath.isEmpty() && lightglueAlgo != QStringLiteral("superpoint"))
     {
-        const QString fallbackName = QString("lightglue_matcher_%1.pt").arg(deviceSuffix);
-        const QString fallbackPath = findModelFile(fallbackName);
-        if (!fallbackPath.isEmpty())
-        {
-            LOG_WARN("%s", qUtf8Printable(QString("模型 %1 不存在, fallback 到 %2 (可能存在维度不匹配)")
-                                              .arg(modelName, fallbackName)));
-            modelName = fallbackName;
-            modelPath = fallbackPath;
-        }
+        LOG_WARN("%s", qUtf8Printable(
+            QString("LightGlue %1 模型不存在, 跳过 (需要导出专用模型, 无法用 SuperPoint 模型)")
+                .arg(lightglueAlgo)));
+        return;
     }
 
     if ((isSuperGlueMatch || isLightGlueMatch) && modelPath.isEmpty())

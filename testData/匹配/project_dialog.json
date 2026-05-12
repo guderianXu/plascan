@@ -13,7 +13,7 @@
     },
     "superglue": {
         "cuda_parallel_pairs": 1,
-        "feature_suffix": "__all__",
+        "feature_suffix": ".alk",
         "generated_pairs": [
             "20260510T173954657_NAS_PAN_L2b__20260510T191252977_NAS_PAN_L2b"
         ],
@@ -41,10 +41,10 @@
         "allow_device_fallback": true,
         "batch_size": 8,
         "cuda_device": 0,
-        "descriptor_dim": 256,
+        "descriptor_dim": 128,
         "detection_threshold": 0.003,
         "device": "CUDA",
-        "feature_algorithm": "orb",
+        "feature_algorithm": "aliked",
         "grayscale_max": 1,
         "grayscale_min": 0,
         "grid_size": 8,
