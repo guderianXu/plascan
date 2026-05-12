@@ -26,6 +26,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QRegularExpression>
 #include <QThread>
 #include <atomic>
 #include <memory>
@@ -222,7 +223,14 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                 continue;
             }
 
-            LOG_INFO("%s", qUtf8Printable(QString("E2E match done: %1").arg(baseName0 + "__" + baseName1)));
+            // 从 stdout 解析匹配点数
+            QString stdOut = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+            int matchCount = 0;
+            QRegularExpression re(QStringLiteral("(\\d+)\\s+matches"));
+            auto m = re.match(stdOut);
+            if (m.hasMatch()) matchCount = m.captured(1).toInt();
+
+            LOG_INFO("%s", qUtf8Printable(QString("E2E match done: %1, %2 matches").arg(baseName0 + "__" + baseName1).arg(matchCount)));
         }
 
         LOG_INFO("%s", qUtf8Printable(QString("Python E2E (%1) done").arg(matchAlgorithm)));

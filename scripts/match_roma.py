@@ -175,16 +175,28 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
     mask = conf > threshold
     kptsL, kptsR = kptsL[mask], kptsR[mask]
 
-    # Write binary .match format (big-endian, same as LoFTR/SuperGlue)
-    with open(out_path, "wb") as f:
-        f.write(struct.pack(">i", len(kptsL)))
-        for i in range(len(kptsL)):
-            f.write(struct.pack(">ffff",
-                float(kptsL[i, 0]), float(kptsL[i, 1]),
-                float(kptsR[i, 0]), float(kptsR[i, 1])))
+    # Write SGMT binary .match format (LE, compatible with PlaScan viewer)
+    import os
+    conf = certainty.cpu().numpy()
+    mask = conf > threshold
+    conf_filtered = conf[mask]
+    n = len(kptsL)
 
-    print(f"RoMa: {len(kptsL)} matches saved to {out_path}")
-    return len(kptsL)
+    with open(out_path, "wb") as f:
+        f.write(b'SGMT')
+        f.write(struct.pack('<I', 1))
+        name0 = os.path.splitext(os.path.basename(imgL_path))[0].encode('utf-8')
+        name1 = os.path.splitext(os.path.basename(imgR_path))[0].encode('utf-8')
+        f.write(struct.pack('<I', len(name0))); f.write(name0)
+        f.write(struct.pack('<I', len(name1))); f.write(name1)
+        f.write(struct.pack('<i', n)); f.write(struct.pack('<i', n)); f.write(struct.pack('<i', n))
+        for i in range(n):
+            f.write(struct.pack('<if', i, float(conf_filtered[i])))
+        for i in range(n):
+            f.write(struct.pack('<if', i, float(conf_filtered[i])))
+
+    print(f"RoMa: {n} matches saved to {out_path}")
+    return n
 
 
 if __name__ == "__main__":

@@ -57,13 +57,30 @@ def main():
     mkpts0, mkpts1, mconf = mkpts0[mask], mkpts1[mask], mconf[mask]
     n = len(mkpts0)
 
-    # Save .match (coords back to original scale)
+    # Save .match (SGMT binary format, LE, compatible with PlaScan viewer)
+    scale_back_pts0 = mkpts0 / scale if scale != 1.0 else mkpts0
+    scale_back_pts1 = mkpts1 / scale if scale != 1.0 else mkpts1
+
     with open(args.output, 'wb') as f:
-        f.write(struct.pack('>i', n))
+        # SGMT header
+        f.write(b'SGMT')
+        f.write(struct.pack('<I', 1))  # version
+        # Image names
+        import os
+        name0 = os.path.splitext(os.path.basename(args.left))[0].encode('utf-8')
+        name1 = os.path.splitext(os.path.basename(args.right))[0].encode('utf-8')
+        f.write(struct.pack('<I', len(name0))); f.write(name0)
+        f.write(struct.pack('<I', len(name1))); f.write(name1)
+        # Match stats
+        f.write(struct.pack('<i', n))     # numMatches
+        f.write(struct.pack('<i', n))     # num_keypoints0
+        f.write(struct.pack('<i', n))     # num_keypoints1
+        # Per-kp0: match_idx + score
         for i in range(n):
-            f.write(struct.pack('>ffff',
-                mkpts0[i][0] / scale, mkpts0[i][1] / scale,
-                mkpts1[i][0] / scale, mkpts1[i][1] / scale))
+            f.write(struct.pack('<if', i, float(mconf[i])))
+        # Per-kp1: match_idx + score
+        for i in range(n):
+            f.write(struct.pack('<if', i, float(mconf[i])))
 
     t_total = time.time() - t0
     print(f"LoFTR: {n} matches, load={t_load-t0:.1f}s infer={t_infer-t_load:.1f}s, saved to {args.output}")
