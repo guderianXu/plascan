@@ -82,6 +82,21 @@ def main():
         for i in range(n):
             f.write(struct.pack('<if', i, float(mconf[i])))
 
+    # Write sidecar .match.json (required by PlaScan viewer for coord loading)
+    import json
+    sidecar = {
+        "match_file": args.output,
+        "image0_path": args.left, "image1_path": args.right,
+        "image0_name": os.path.splitext(os.path.basename(args.left))[0],
+        "image1_name": os.path.splitext(os.path.basename(args.right))[0],
+        "num_matches": n,
+        "match_algorithm": "loftr",
+        "matched_points0": scale_back_pts0[:, :2].tolist(),
+        "matched_points1": scale_back_pts1[:, :2].tolist()
+    }
+    with open(args.output + ".json", "w") as fj:
+        json.dump(sidecar, fj)
+
     t_total = time.time() - t0
     print(f"LoFTR: {n} matches, load={t_load-t0:.1f}s infer={t_infer-t_load:.1f}s, saved to {args.output}")
 

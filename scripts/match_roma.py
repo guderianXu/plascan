@@ -195,6 +195,21 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
         for i in range(n):
             f.write(struct.pack('<if', i, float(conf_filtered[i])))
 
+    # Write sidecar .match.json
+    import json
+    sidecar = {
+        "match_file": out_path,
+        "image0_path": imgL_path, "image1_path": imgR_path,
+        "image0_name": os.path.splitext(os.path.basename(imgL_path))[0],
+        "image1_name": os.path.splitext(os.path.basename(imgR_path))[0],
+        "num_matches": int(n),
+        "match_algorithm": "roma",
+        "matched_points0": kptsL[:, :2].tolist(),
+        "matched_points1": kptsR[:, :2].tolist()
+    }
+    with open(out_path + ".json", "w") as fj:
+        json.dump(sidecar, fj)
+
     print(f"RoMa: {n} matches saved to {out_path}")
     return n
 
