@@ -206,10 +206,678 @@
      <widget class="QWidget" name="rightWidget">
       <layout class="QVBoxLayout" name="rightLayout">
        <item>
-        <layout class="QFormLayout" name="commonForm"/>
+        <layout class="QFormLayout" name="commonForm">
+         <item row="0" column="0">
+          <widget class="QLabel" name="matchAlgorithmLabel">
+           <property name="text">
+            <string>匹配算法:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QComboBox" name="m_matchAlgorithmCombo">
+           <property name="toolTip">
+            <string>选择特征匹配算法
+SuperGlue/LightGlue: 需要预提取特征
+LoFTR/RoMa: 直接处理原始图像</string>
+           </property>
+           <item>
+            <property name="text">
+             <string>SuperGlue</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>LightGlue</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>LoFTR</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>RoMa</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>BF-Hamming (ORB)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>BF-L2 (SIFT)</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>FLANN (SIFT)</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="m_featureSuffixLabel">
+           <property name="text">
+            <string>特征类型:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QComboBox" name="m_featureSuffixCombo">
+           <property name="toolTip">
+            <string>选择用于匹配的特征文件类型
+根据所选算法自动过滤可用后缀</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="maxKeypointsLabel">
+           <property name="text">
+            <string>最大关键点数:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QSpinBox" name="m_maxKeypointsSpin">
+           <property name="toolTip">
+            <string>最大关键点数量限制，-1 表示不限制</string>
+           </property>
+           <property name="specialValueText">
+            <string>不限制</string>
+           </property>
+           <property name="minimum">
+            <number>-1</number>
+           </property>
+           <property name="maximum">
+            <number>100000</number>
+           </property>
+           <property name="value">
+            <number>-1</number>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="0">
+          <widget class="QLabel" name="outlierMethodLabel">
+           <property name="text">
+            <string>粗差剔除:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QComboBox" name="m_outlierMethodCombo">
+           <property name="toolTip">
+            <string>匹配后粗差剔除算法（推荐 USAC_MAGSAC）
+
+★ Fundamental USAC_MAGSAC: 自适应阈值，粗差剔除能力远超传统 RANSAC（强烈推荐）
+Fundamental RANSAC: 传统基础矩阵 RANSAC
+Homography RANSAC: 仅适用于纯平面/纯旋转场景
+Affine RANSAC: 仅适用于远距离平行投影场景
+不剔除: 仅调试时使用</string>
+           </property>
+           <property name="currentIndex">
+            <number>2</number>
+           </property>
+           <item>
+            <property name="text">
+             <string>不剔除</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Fundamental RANSAC</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Fundamental USAC_MAGSAC （推荐）</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Homography RANSAC</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>Affine RANSAC</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+        </layout>
        </item>
        <item>
-        <widget class="QStackedWidget" name="m_paramStack"/>
+        <widget class="QStackedWidget" name="m_paramStack">
+         <property name="currentIndex">
+          <number>0</number>
+         </property>
+         <widget class="QWidget" name="superGluePage">
+          <layout class="QFormLayout" name="superGlueForm">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>4</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>4</number>
+           </property>
+           <item row="0" column="0">
+            <widget class="QLabel" name="modelTypeLabel">
+             <property name="text">
+              <string>模型类型:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="m_modelTypeCombo">
+             <property name="toolTip">
+              <string>SuperGlue 预训练模型类型
+Outdoor: 适用于外景、航空摄影
+Indoor: 适用于室内、近景摄影</string>
+             </property>
+             <item>
+              <property name="text">
+               <string>Outdoor （室外/航空）</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>Indoor （室内/近景）</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="matchThresholdLabel">
+             <property name="text">
+              <string>匹配阈值:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QDoubleSpinBox" name="m_matchThresholdSpin">
+             <property name="toolTip">
+              <string>SuperGlue 匹配置信度阈值 [0.0-1.0]
+推荐 0.15（航空）/ 0.10（近景）</string>
+             </property>
+             <property name="decimals">
+              <number>3</number>
+             </property>
+             <property name="singleStep">
+              <double>0.010000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>1.000000000000000</double>
+             </property>
+             <property name="value">
+              <double>0.150000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="sinkhornIterLabel">
+             <property name="text">
+              <string>Sinkhorn 迭代:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QSpinBox" name="m_sinkhornIterSpin">
+             <property name="toolTip">
+              <string>Sinkhorn 正则化迭代次数，推荐 20-200</string>
+             </property>
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>1000</number>
+             </property>
+             <property name="value">
+              <number>150</number>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="batchSizeLabel">
+             <property name="text">
+              <string>批处理大小:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QSpinBox" name="m_batchSizeSpin">
+             <property name="toolTip">
+              <string>推理批次大小，GPU 环境下可增大以提高吞吐量</string>
+             </property>
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>64</number>
+             </property>
+             <property name="value">
+              <number>1</number>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="inputWidthLabel">
+             <property name="text">
+              <string>输入宽度:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QSpinBox" name="m_inputWidthSpin">
+             <property name="specialValueText">
+              <string>自动</string>
+             </property>
+             <property name="minimum">
+              <number>-1</number>
+             </property>
+             <property name="maximum">
+              <number>20000</number>
+             </property>
+             <property name="value">
+              <number>-1</number>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="0">
+            <widget class="QLabel" name="inputHeightLabel">
+             <property name="text">
+              <string>输入高度:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="1">
+            <widget class="QSpinBox" name="m_inputHeightSpin">
+             <property name="specialValueText">
+              <string>自动</string>
+             </property>
+             <property name="minimum">
+              <number>-1</number>
+             </property>
+             <property name="maximum">
+              <number>20000</number>
+             </property>
+             <property name="value">
+              <number>-1</number>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="lightGluePage">
+          <layout class="QFormLayout" name="lightGlueForm">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>4</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>4</number>
+           </property>
+           <item row="0" column="0">
+            <widget class="QLabel" name="lgMatchThresholdLabel">
+             <property name="text">
+              <string>匹配阈值:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QDoubleSpinBox" name="m_lgMatchThresholdSpin">
+             <property name="toolTip">
+              <string>LightGlue 匹配置信度阈值 [0.0-1.0]
+推荐 0.15（航空）/ 0.10（近景）</string>
+             </property>
+             <property name="decimals">
+              <number>3</number>
+             </property>
+             <property name="singleStep">
+              <double>0.010000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>1.000000000000000</double>
+             </property>
+             <property name="value">
+              <double>0.150000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="lgBatchSizeLabel">
+             <property name="text">
+              <string>批处理大小:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QSpinBox" name="m_lgBatchSizeSpin">
+             <property name="toolTip">
+              <string>推理批次大小，GPU 环境下可增大以提高吞吐量</string>
+             </property>
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>64</number>
+             </property>
+             <property name="value">
+              <number>1</number>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="lgInputWidthLabel">
+             <property name="text">
+              <string>输入宽度:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QSpinBox" name="m_lgInputWidthSpin">
+             <property name="specialValueText">
+              <string>自动</string>
+             </property>
+             <property name="minimum">
+              <number>-1</number>
+             </property>
+             <property name="maximum">
+              <number>20000</number>
+             </property>
+             <property name="value">
+              <number>-1</number>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="lgInputHeightLabel">
+             <property name="text">
+              <string>输入高度:</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QSpinBox" name="m_lgInputHeightSpin">
+             <property name="specialValueText">
+              <string>自动</string>
+             </property>
+             <property name="minimum">
+              <number>-1</number>
+             </property>
+             <property name="maximum">
+              <number>20000</number>
+             </property>
+             <property name="value">
+              <number>-1</number>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="traditionalPage">
+          <layout class="QVBoxLayout" name="traditionalLayout">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>4</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>4</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="traditionalHintLabel">
+             <property name="text">
+              <string>传统算法（BF / FLANN）无额外参数。
+匹配质量由粗差剔除算法和 RANSAC 参数控制。</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <spacer name="traditionalSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>40</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="loftrPage">
+          <layout class="QVBoxLayout" name="loftrLayout">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>4</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>4</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="loftrWarningLabel">
+             <property name="styleSheet">
+              <string notr="true">color: #ff9800; font-weight: bold;</string>
+             </property>
+             <property name="text">
+              <string>⚠ LoFTR 直接处理原始图像，不使用已有特征提取结果</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QFormLayout" name="loftrForm">
+             <item row="0" column="0">
+              <widget class="QLabel" name="loftrModelTypeLabel">
+               <property name="text">
+                <string>模型类型:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QComboBox" name="m_loftrModelTypeCombo">
+               <item>
+                <property name="text">
+                 <string>Outdoor （室外/航空）</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Indoor （室内/近景）</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="loftrMatchThresholdLabel">
+               <property name="text">
+                <string>匹配阈值:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="m_loftrMatchThresholdSpin">
+               <property name="toolTip">
+                <string>LoFTR 匹配置信度阈值</string>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="singleStep">
+                <double>0.010000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1.000000000000000</double>
+               </property>
+               <property name="value">
+                <double>0.200000000000000</double>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <spacer name="loftrSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>40</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </widget>
+         <widget class="QWidget" name="romaPage">
+          <layout class="QVBoxLayout" name="romaLayout">
+           <property name="leftMargin">
+            <number>0</number>
+           </property>
+           <property name="topMargin">
+            <number>4</number>
+           </property>
+           <property name="rightMargin">
+            <number>0</number>
+           </property>
+           <property name="bottomMargin">
+            <number>4</number>
+           </property>
+           <item>
+            <widget class="QLabel" name="romaWarningLabel">
+             <property name="styleSheet">
+              <string notr="true">color: #ff9800; font-weight: bold;</string>
+             </property>
+             <property name="text">
+              <string>⚠ RoMa 直接处理原始图像，不使用已有特征提取结果
+适合大旋转角度的小行星影像</string>
+             </property>
+             <property name="wordWrap">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item>
+            <layout class="QFormLayout" name="romaForm">
+             <item row="0" column="0">
+              <widget class="QLabel" name="romaModelTypeLabel">
+               <property name="text">
+                <string>模型类型:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="0" column="1">
+              <widget class="QComboBox" name="m_romaModelTypeCombo">
+               <item>
+                <property name="text">
+                 <string>Outdoor （室外/航空）</string>
+                </property>
+               </item>
+               <item>
+                <property name="text">
+                 <string>Indoor （室内/近景）</string>
+                </property>
+               </item>
+              </widget>
+             </item>
+             <item row="1" column="0">
+              <widget class="QLabel" name="romaMatchThresholdLabel">
+               <property name="text">
+                <string>匹配阈值:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="1" column="1">
+              <widget class="QDoubleSpinBox" name="m_romaMatchThresholdSpin">
+               <property name="toolTip">
+                <string>RoMa 匹配置信度阈值</string>
+               </property>
+               <property name="decimals">
+                <number>3</number>
+               </property>
+               <property name="singleStep">
+                <double>0.010000000000000</double>
+               </property>
+               <property name="maximum">
+                <double>1.000000000000000</double>
+               </property>
+               <property name="value">
+                <double>0.050000000000000</double>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="0">
+              <widget class="QLabel" name="romaMaxKeypointsLabel">
+               <property name="text">
+                <string>最大关键点数:</string>
+               </property>
+              </widget>
+             </item>
+             <item row="2" column="1">
+              <widget class="QSpinBox" name="m_romaMaxKeypointsSpin">
+               <property name="toolTip">
+                <string>RoMa 最大关键点数</string>
+               </property>
+               <property name="minimum">
+                <number>100</number>
+               </property>
+               <property name="maximum">
+                <number>50000</number>
+               </property>
+               <property name="value">
+                <number>10000</number>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+           <item>
+            <spacer name="romaSpacer">
+             <property name="orientation">
+              <enum>Qt::Vertical</enum>
+             </property>
+             <property name="sizeHint" stdset="0">
+              <size>
+               <width>20</width>
+               <height>40</height>
+              </size>
+             </property>
+            </spacer>
+           </item>
+          </layout>
+         </widget>
+        </widget>
        </item>
        <item>
         <widget class="QToolButton" name="advancedToggle">
@@ -238,7 +906,114 @@
          <property name="visible">
           <bool>false</bool>
          </property>
-         <layout class="QFormLayout" name="advancedForm"/>
+         <layout class="QFormLayout" name="advancedForm">
+          <item row="0" column="0">
+           <widget class="QLabel" name="outlierReprojLabel">
+            <property name="text">
+             <string>RANSAC 阈值(px):</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QDoubleSpinBox" name="m_outlierReprojSpin">
+            <property name="toolTip">
+             <string>RANSAC/USAC 重投影误差阈值（像素）
+推荐: 1.0-1.5（高分辨率）/ 1.5-3.0（中等）/ 3.0-6.0（低分辨率）</string>
+            </property>
+            <property name="decimals">
+             <number>2</number>
+            </property>
+            <property name="singleStep">
+             <double>0.100000000000000</double>
+            </property>
+            <property name="minimum">
+             <double>0.100000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>50.000000000000000</double>
+            </property>
+            <property name="value">
+             <double>1.500000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="outlierConfidenceLabel">
+            <property name="text">
+             <string>RANSAC 置信度:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QDoubleSpinBox" name="m_outlierConfidenceSpin">
+            <property name="toolTip">
+             <string>RANSAC/USAC 置信度 [0.5-0.9999]，推荐 0.9999</string>
+            </property>
+            <property name="decimals">
+             <number>4</number>
+            </property>
+            <property name="singleStep">
+             <double>0.001000000000000</double>
+            </property>
+            <property name="minimum">
+             <double>0.500000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>0.999900000000000</double>
+            </property>
+            <property name="value">
+             <double>0.999900000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="outlierMaxItersLabel">
+            <property name="text">
+             <string>RANSAC 最大迭代:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="m_outlierMaxItersSpin">
+            <property name="toolTip">
+             <string>RANSAC/USAC 最大迭代次数，推荐 10000</string>
+            </property>
+            <property name="minimum">
+             <number>100</number>
+            </property>
+            <property name="maximum">
+             <number>100000</number>
+            </property>
+            <property name="value">
+             <number>10000</number>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="outlierMinInliersLabel">
+            <property name="text">
+             <string>最少内点数:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QSpinBox" name="m_outlierMinInliersSpin">
+            <property name="toolTip">
+             <string>粗差剔除后最少内点数，低于此值则丢弃该匹配对
+推荐: ≥25（航空）/ ≥15（近景）</string>
+            </property>
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>100000</number>
+            </property>
+            <property name="value">
+             <number>25</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
        </item>
        <item>
@@ -268,7 +1043,85 @@
          <property name="visible">
           <bool>false</bool>
          </property>
-         <layout class="QFormLayout" name="systemForm"/>
+         <layout class="QFormLayout" name="systemForm">
+          <item row="0" column="0">
+           <widget class="QLabel" name="deviceLabel">
+            <property name="text">
+             <string>计算设备:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QComboBox" name="m_deviceCombo">
+            <property name="toolTip">
+             <string>计算设备选择
+CUDA需要GPU支持</string>
+            </property>
+            <item>
+             <property name="text">
+              <string>CUDA（如可用）</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>CPU</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="numThreadsLabel">
+            <property name="text">
+             <string>CPU线程数:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QSpinBox" name="m_numThreadsSpin">
+            <property name="toolTip">
+             <string>CPU线程数（仅CPU模式有效）
+-1 表示自动检测</string>
+            </property>
+            <property name="specialValueText">
+             <string>自动</string>
+            </property>
+            <property name="minimum">
+             <number>-1</number>
+            </property>
+            <property name="maximum">
+             <number>64</number>
+            </property>
+            <property name="value">
+             <number>-1</number>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="cudaParallelLabel">
+            <property name="text">
+             <string>CUDA并行对数:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="m_cudaParallelSpin">
+            <property name="toolTip">
+             <string>CUDA模式下同时处理的影像对数
+每对独立持有一个模型实例，每实例约占显存 200-400 MB
+请确认 GPU 显存充裕再增大此参数</string>
+            </property>
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>8</number>
+            </property>
+            <property name="value">
+             <number>1</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
        </item>
        <item>
@@ -298,7 +1151,38 @@
          <property name="visible">
           <bool>false</bool>
          </property>
-         <layout class="QFormLayout" name="debugForm"/>
+         <layout class="QFormLayout" name="debugForm">
+          <item row="0" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_saveCsvChk">
+            <property name="toolTip">
+             <string>将匹配关系导出为CSV格式（便于调试）</string>
+            </property>
+            <property name="text">
+             <string>保存匹配结果为CSV</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_saveVisChk">
+            <property name="toolTip">
+             <string>生成带匹配连线的可视化图像</string>
+            </property>
+            <property name="text">
+             <string>保存匹配可视化图像</string>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_verboseChk">
+            <property name="toolTip">
+             <string>打印详细的匹配过程信息</string>
+            </property>
+            <property name="text">
+             <string>详细日志输出</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
        </item>
        <item>

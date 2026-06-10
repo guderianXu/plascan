@@ -372,18 +372,50 @@ def read_ply_vertex_count(path: Path) -> int:
     return -1
 
 
+def format_intensity_token(value: str) -> str:
+    try:
+        return str(max(0, min(255, int(round(float(value))))))
+    except ValueError:
+        return "128"
+
+
+def row_has_intensity(row: str) -> bool:
+    return len(row.split()) >= 5
+
+
 def read_ascii_ply_vertex_rows(path: Path) -> list[str]:
     rows: list[str] = []
     vertex_count = -1
+    vertex_props: list[str] = []
+    current_element = ""
     with path.open("r", encoding="utf-8", errors="replace") as handle:
         for raw in handle:
             line = raw.strip()
             if line.startswith("format ") and "ascii" not in line:
                 raise RuntimeError(f"only ASCII PLY can be merged: {path}")
-            if line.startswith("element vertex "):
-                vertex_count = int(line.split()[-1])
+            if line.startswith("element "):
+                parts = line.split()
+                if len(parts) >= 3:
+                    current_element = parts[1]
+                    if current_element == "vertex":
+                        vertex_count = int(parts[2])
+            elif line.startswith("property ") and current_element == "vertex":
+                parts = line.split()
+                if len(parts) >= 3 and parts[1] != "list":
+                    vertex_props.append(parts[-1])
             if line == "end_header":
                 break
+
+        def token_for(parts: list[str], name: str, default_index: int, default_value: str) -> str:
+            if name in vertex_props:
+                prop_index = vertex_props.index(name)
+                if prop_index < len(parts):
+                    return parts[prop_index]
+            if vertex_props:
+                return default_value
+            if default_index < len(parts):
+                return parts[default_index]
+            return default_value
 
         for raw in handle:
             line = raw.strip()
@@ -392,9 +424,31 @@ def read_ascii_ply_vertex_rows(path: Path) -> list[str]:
             parts = line.split()
             if len(parts) < 3:
                 continue
-            if len(parts) == 3:
-                parts.append("0")
-            rows.append(" ".join(parts[:4]))
+            x = token_for(parts, "x", 0, "0")
+            y = token_for(parts, "y", 1, "0")
+            z = token_for(parts, "z", 2, "0")
+            error = token_for(parts, "error", 3, "0")
+            row_parts = [x, y, z, error]
+
+            intensity = ""
+            for prop_name in ("intensity", "gray", "grey", "luminance"):
+                if prop_name in vertex_props:
+                    prop_index = vertex_props.index(prop_name)
+                    if prop_index < len(parts):
+                        intensity = format_intensity_token(parts[prop_index])
+                        break
+            if not intensity and all(prop in vertex_props for prop in ("red", "green", "blue")):
+                try:
+                    red = float(parts[vertex_props.index("red")])
+                    green = float(parts[vertex_props.index("green")])
+                    blue = float(parts[vertex_props.index("blue")])
+                    intensity = format_intensity_token(str(0.299 * red + 0.587 * green + 0.114 * blue))
+                except (ValueError, IndexError):
+                    intensity = "128"
+            if intensity:
+                row_parts.append(intensity)
+
+            rows.append(" ".join(row_parts))
             if vertex_count >= 0 and len(rows) >= vertex_count:
                 break
     return rows
@@ -530,24 +584,13 @@ def write_merged_ascii_ply(paths: list[Path], output_path: Path) -> int:
     for path in paths:
         rows.extend(read_ascii_ply_vertex_rows(path))
 
-    output_path.parent.mkdir(parents=True, exist_ok=True)
-    with output_path.open("w", encoding="utf-8") as handle:
-        handle.write("ply\n")
-        handle.write("format ascii 1.0\n")
-        handle.write(f"element vertex {len(rows)}\n")
-        handle.write("property float x\n")
-        handle.write("property float y\n")
-        handle.write("property float z\n")
-        handle.write("property float error\n")
-        handle.write("end_header\n")
-        for row in rows:
-            handle.write(row)
-            handle.write("\n")
+    write_ascii_ply_rows(rows, output_path)
     return len(rows)
 
 
 def write_ascii_ply_rows(rows: list[str], output_path: Path) -> None:
     output_path.parent.mkdir(parents=True, exist_ok=True)
+    has_intensity = any(row_has_intensity(row) for row in rows)
     with output_path.open("w", encoding="utf-8") as handle:
         handle.write("ply\n")
         handle.write("format ascii 1.0\n")
@@ -556,9 +599,14 @@ def write_ascii_ply_rows(rows: list[str], output_path: Path) -> None:
         handle.write("property float y\n")
         handle.write("property float z\n")
         handle.write("property float error\n")
+        if has_intensity:
+            handle.write("property uchar intensity\n")
         handle.write("end_header\n")
         for row in rows:
-            handle.write(row)
+            parts = row.split()
+            if has_intensity and len(parts) == 4:
+                parts.append("128")
+            handle.write(" ".join(parts[:5] if has_intensity else parts[:4]))
             handle.write("\n")
 
 
@@ -689,15 +737,17 @@ def prepare_terrain_local_frame(point_cloud_path: Path,
         parsed = parse_ascii_ply_vertex_row(row)
         if parsed is None:
             continue
+        parts = row.split()
         local = transform_point_to_local((parsed[0], parsed[1], parsed[2]), local_frame)
-        local_rows.append(
-            " ".join([
-                format_float(local[0]),
-                format_float(local[1]),
-                format_float(local[2]),
-                format_float(parsed[3]),
-            ])
-        )
+        local_row = [
+            format_float(local[0]),
+            format_float(local[1]),
+            format_float(local[2]),
+            format_float(parsed[3]),
+        ]
+        if len(parts) >= 5:
+            local_row.append(format_intensity_token(parts[4]))
+        local_rows.append(" ".join(local_row))
     write_ascii_ply_rows(local_rows, local_cloud)
 
     camera_dir = frame_dir / "cameras"
@@ -1070,6 +1120,7 @@ def run_dense_attempt(args: argparse.Namespace,
         "--camL", str(items[left].work_camera),
         "--camR", str(items[right].work_camera),
         "-o", str(ply_path),
+        "--intensity-image", rect_prefix + "_L.tif",
         "--max-error", "100",
         "--threads", str(args.threads),
         "-V",

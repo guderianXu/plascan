@@ -41,8 +41,12 @@ else()
   message(STATUS "plascan: Apple Silicon — skipping CUDA, using MPS acceleration")
 endif()
 
-# conda linker fix (Linux only)
-if(DEFINED ENV{CONDA_PREFIX} AND NOT APPLE)
+# conda linker fix (Linux only). Keep this opt-in because full conda toolchains
+# must not mix the system linker with the conda sysroot.
+option(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH
+  "Temporarily use /usr/bin/ld while finding LibTorch in mixed system/conda builds"
+  ON)
+if(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH AND DEFINED ENV{CONDA_PREFIX} AND NOT APPLE)
   set(PLASCAN_ORIGINAL_CMAKE_LINKER ${CMAKE_LINKER})
   set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "System linker" FORCE)
   message(STATUS "plascan: Using system linker")

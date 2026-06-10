@@ -47,7 +47,6 @@
 #include "SparseCloudValidator.h"
 #include "SurfaceReconstructor.h"
 
-#include "ModelGenerationDialog.h"
 #include "SFMService.h"
 
 #include <QMessageBox>
@@ -1227,5 +1226,4 @@ void ProjectManager::cancelAt()
         qDebug() << "[AT] 已请求取消";
     }
 }
-
 

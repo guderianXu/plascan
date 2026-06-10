@@ -8,6 +8,7 @@ inline const QString SuperPoint = QStringLiteral("superpoint");
 inline const QString SuperPointVisualization = QStringLiteral("superpoint_visualization");
 inline const QString BundleAdjust = QStringLiteral("bundle_adjust");
 inline const QString AerialTriangulation = QStringLiteral("aerial_triangulation");
+inline const QString ThreeDReconstruction = QStringLiteral("three_d_reconstruction");
 inline const QString CreateDem = QStringLiteral("create_dem");
 inline const QString MapProject = QStringLiteral("mapproject");
 inline const QString DenseCloud = QStringLiteral("dense_cloud");

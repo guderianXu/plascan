@@ -8,22 +8,35 @@
 #include "ProjectSupportUtils.h"
 #include "ProjectTriangulationService.h"
 #include "FeatureExtractionDialog.h"
+#include "ThreeDReconstructionDialog.h"
+#include "MapProjectDialog.h"
 #include "ModelDropSupport.h"
+#include "DataTreeWidget.h"
+#include "MainMenu.h"
 
 #include "Camera.h"
 
 #include <QApplication>
 #include <QDir>
+#include <QCheckBox>
+#include <QDoubleSpinBox>
 #include <QFile>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QLabel>
 #include <QLineEdit>
+#include <QListWidget>
+#include <QMainWindow>
+#include <QMenu>
+#include <QMenuBar>
 #include <QFileInfo>
+#include <QPushButton>
 #include <QTemporaryDir>
 #include <QToolButton>
+#include <QTreeView>
 #include <QUrl>
+#include <QStandardItemModel>
 
 #include <array>
 #include <vector>
@@ -314,6 +327,140 @@ TEST(FeatureExtractionDialogTest, PreservesConfiguredPythonExecutable)
     EXPECT_EQ(emittedSettings.value(QStringLiteral("python_executable")).toString(), changedPythonPath);
 }
 
+TEST(ThreeDReconstructionDialogTest, UsesUiDefaultsAndImageCountGate)
+{
+    ThreeDReconstructionDialog dialog;
+
+    auto *outputEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_outputDirEdit"));
+    auto *startButton = dialog.findChild<QPushButton *>(QStringLiteral("m_startBtn"));
+    auto *generateDemCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_generateDemCheck"));
+    auto *generateDomCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_generateDomCheck"));
+    auto *demResolutionSpin = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("m_demResolutionSpin"));
+    ASSERT_NE(outputEdit, nullptr);
+    ASSERT_NE(startButton, nullptr);
+    EXPECT_EQ(generateDemCheck, nullptr);
+    EXPECT_EQ(generateDomCheck, nullptr);
+    EXPECT_EQ(demResolutionSpin, nullptr);
+
+    dialog.setImageCount(1);
+    EXPECT_FALSE(startButton->isEnabled());
+    dialog.setImageCount(2);
+    EXPECT_TRUE(startButton->isEnabled());
+
+    dialog.setDefaultOutputDir(QStringLiteral("/tmp/plascan-model"));
+    QJsonObject settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("quality")).toString(), QStringLiteral("standard"));
+    EXPECT_EQ(settings.value(QStringLiteral("device")).toString(), QStringLiteral("auto"));
+    EXPECT_GE(settings.value(QStringLiteral("threads")).toInt(), 1);
+    EXPECT_EQ(settings.value(QStringLiteral("output_dir")).toString(),
+              QDir::cleanPath(QStringLiteral("/tmp/plascan-model")));
+    EXPECT_FALSE(settings.value(QStringLiteral("export_obj")).toBool());
+    EXPECT_FALSE(settings.contains(QStringLiteral("generate_dem")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("generate_dom")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("dem_resolution")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("dom_resolution")));
+
+    QJsonObject appliedSettings;
+    appliedSettings[QStringLiteral("quality")] = QStringLiteral("fast");
+    appliedSettings[QStringLiteral("device")] = QStringLiteral("cpu");
+    appliedSettings[QStringLiteral("threads")] = 3;
+    appliedSettings[QStringLiteral("output_dir")] = QStringLiteral("/tmp/another-model");
+    appliedSettings[QStringLiteral("export_obj")] = true;
+    dialog.applySettings(appliedSettings);
+
+    settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("quality")).toString(), QStringLiteral("fast"));
+    EXPECT_EQ(settings.value(QStringLiteral("device")).toString(), QStringLiteral("cpu"));
+    EXPECT_EQ(settings.value(QStringLiteral("threads")).toInt(), 3);
+    EXPECT_EQ(settings.value(QStringLiteral("output_dir")).toString(),
+              QDir::cleanPath(QStringLiteral("/tmp/another-model")));
+    EXPECT_TRUE(settings.value(QStringLiteral("export_obj")).toBool());
+    EXPECT_FALSE(settings.contains(QStringLiteral("generate_dem")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("generate_dom")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("dem_resolution")));
+    EXPECT_FALSE(settings.contains(QStringLiteral("dom_resolution")));
+}
+
+TEST(MapProjectDialogTest, DefaultsToOneClickDomEngineeringSettings)
+{
+    MapProjectDialog dialog;
+    const QString projectRoot = QStringLiteral("/tmp/plascan-project");
+    const QString demPath = QDir(projectRoot).filePath(QStringLiteral("assets/dem/relative_dem/dem.tif"));
+    const QString expectedOutput = QDir(projectRoot).filePath(QStringLiteral("assets/ortho/relative_dom.tif"));
+    const QStringList images{
+        QStringLiteral("/tmp/plascan-project/assets/img/1.png"),
+        QStringLiteral("/tmp/plascan-project/assets/img/2.png")
+    };
+
+    dialog.setAvailableImages(images);
+    dialog.setProjectRoot(projectRoot);
+    dialog.setDefaultDemPath(demPath);
+
+    auto *imageList = dialog.findChild<QListWidget *>(QStringLiteral("m_imageList"));
+    auto *demEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_demEdit"));
+    auto *outputEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_outputEdit"));
+    auto *resolutionSpin = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("m_resolutionSpin"));
+    auto *runButton = dialog.findChild<QPushButton *>(QStringLiteral("runBtn"));
+
+    ASSERT_NE(imageList, nullptr);
+    ASSERT_NE(demEdit, nullptr);
+    ASSERT_NE(outputEdit, nullptr);
+    ASSERT_NE(resolutionSpin, nullptr);
+    ASSERT_NE(runButton, nullptr);
+
+    ASSERT_EQ(imageList->count(), images.size());
+    for (int i = 0; i < imageList->count(); ++i)
+    {
+        EXPECT_EQ(imageList->item(i)->checkState(), Qt::Checked);
+    }
+    EXPECT_EQ(demEdit->text(), demPath);
+    EXPECT_EQ(outputEdit->text(), expectedOutput);
+    EXPECT_DOUBLE_EQ(resolutionSpin->value(), 0.0);
+    EXPECT_TRUE(resolutionSpin->specialValueText().contains(QStringLiteral("自动")));
+    EXPECT_TRUE(runButton->text().contains(QStringLiteral("一键")));
+    EXPECT_TRUE(runButton->text().contains(QStringLiteral("DOM")));
+
+    bool emitted = false;
+    QStringList emittedImages;
+    QString emittedDem;
+    QString emittedOutput;
+    double emittedResolution = -1.0;
+    QObject::connect(&dialog, &MapProjectDialog::requestRunMapProject, &dialog,
+                     [&](const QStringList &runImages,
+                         const QString &runDem,
+                         const QString &runOutput,
+                         double runResolution)
+                     {
+                         emitted = true;
+                         emittedImages = runImages;
+                         emittedDem = runDem;
+                         emittedOutput = runOutput;
+                         emittedResolution = runResolution;
+                     });
+    runButton->click();
+
+    EXPECT_TRUE(emitted);
+    EXPECT_EQ(emittedImages, images);
+    EXPECT_EQ(emittedDem, demPath);
+    EXPECT_EQ(emittedOutput, expectedOutput);
+    EXPECT_DOUBLE_EQ(emittedResolution, 0.0);
+}
+
+TEST(CreateDemDialogTest, UiAdvertisesOneClickDemWorkflow)
+{
+    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CreateDemDialog.ui"));
+    ASSERT_FALSE(ui.isEmpty());
+
+    EXPECT_TRUE(ui.contains(QStringLiteral("自动模式")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("手动模式")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("选择 2 张立体影像")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("已有密集点云")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_stageLabel")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_progressBar")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_runBtn")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("一键生成 DEM")));
+}
+
 TEST(SuperPointRunnerTest, PythonExtractorSupportsConfigEnvVenvAndDiagnosticLogging)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/SuperPointRunner.cpp"));
@@ -427,6 +574,85 @@ TEST(ModelDropSupportTest, AcceptsStandaloneModelAndPointCloudFiles)
     EXPECT_EQ(xjw::gui::main_window::firstStandaloneModelFile({projectUrl, imageUrl, plyUrl, xyzUrl}),
               QStringLiteral("/tmp/model.ply"));
     EXPECT_TRUE(xjw::gui::main_window::firstStandaloneModelFile({imageUrl}).isEmpty());
+}
+
+TEST(DataTreeWidgetTest, ShowsTemporaryDroppedModelUntilCleared)
+{
+    DataTreeWidget tree;
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray();
+    tree.loadFromJson(meta);
+
+    const QString modelPath = QStringLiteral("/tmp/temporary_model.ply");
+    tree.addTransientModel(modelPath);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    QStandardItem *modelSection = nullptr;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("3D模型 (1)")))
+        {
+            modelSection = item;
+            break;
+        }
+    }
+    ASSERT_NE(modelSection, nullptr);
+    ASSERT_EQ(modelSection->rowCount(), 1);
+    EXPECT_EQ(modelSection->child(0, 0)->text(), QStringLiteral("temporary_model.ply  [临时]"));
+    EXPECT_EQ(modelSection->child(0, 1)->text(), modelPath);
+
+    tree.clearTransientResources();
+
+    bool foundClearedModelSection = false;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("3D模型 (0)")))
+        {
+            foundClearedModelSection = true;
+            EXPECT_EQ(item->rowCount(), 0);
+            break;
+        }
+    }
+    EXPECT_TRUE(foundClearedModelSection);
+}
+
+TEST(MainMenuTest, WorkflowMenuExposesOnlyOneClickThreeDReconstruction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QMenu *workflowMenu = nullptr;
+    for (QAction *action : window.menuBar()->actions())
+    {
+        if (action && action->text() == QStringLiteral("工作流程"))
+        {
+            workflowMenu = action->menu();
+            break;
+        }
+    }
+    ASSERT_NE(workflowMenu, nullptr);
+
+    QStringList visibleActions;
+    for (QAction *action : workflowMenu->actions())
+    {
+        if (action && !action->isSeparator())
+        {
+            visibleActions.append(action->text());
+        }
+    }
+
+    EXPECT_TRUE(visibleActions.contains(QStringLiteral("三维重建")));
+    EXPECT_FALSE(visibleActions.contains(QStringLiteral("空中三角测量")));
+    EXPECT_FALSE(visibleActions.contains(QStringLiteral("创建密集点云")));
+    EXPECT_FALSE(visibleActions.contains(QStringLiteral("生成模型")));
+    ASSERT_NE(menu.threeDReconstructionAction(), nullptr);
+    EXPECT_EQ(menu.threeDReconstructionAction()->text(), QStringLiteral("三维重建"));
 }
 
 int main(int argc, char **argv)

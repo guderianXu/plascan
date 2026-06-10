@@ -48,6 +48,38 @@ protected:
         return PlaPointCloud(std::move(pts));
     }
 
+    PlaPointCloud makeColoredPlaneCloud() const
+    {
+        PlaPointCloud cloud = makePlaneCloud();
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(4, 3);
+        colors(0, 0) = 51; colors(0, 1) = 51; colors(0, 2) = 51;
+        colors(1, 0) = 87; colors(1, 1) = 87; colors(1, 2) = 87;
+        colors(2, 0) = 86; colors(2, 1) = 86; colors(2, 2) = 86;
+        colors(3, 0) = 7;  colors(3, 1) = 7;  colors(3, 2) = 7;
+        cloud.setColors(std::move(colors));
+        return cloud;
+    }
+
+    fs::path writeIntensityPlyPointCloud() const
+    {
+        const fs::path plyPath = _tempDir / "input_intensity.ply";
+        std::ofstream stream(plyPath);
+        stream << "ply\n"
+               << "format ascii 1.0\n"
+               << "element vertex 4\n"
+               << "property float x\n"
+               << "property float y\n"
+               << "property float z\n"
+               << "property float error\n"
+               << "property uchar intensity\n"
+               << "end_header\n"
+               << "0 0 10 0.01 51\n"
+               << "1 0 11 0.01 87\n"
+               << "0 1 12 0.01 86\n"
+               << "1 1 13 0.01 7\n";
+        return plyPath;
+    }
+
     fs::path writeObjPointCloud() const
     {
         const fs::path objPath = _tempDir / "input.obj";
@@ -224,6 +256,39 @@ TEST_F(TerrainDemDomTest, DemGeneratorBuildsRasterAndDenseCloud)
     EXPECT_GT(denseCloud.size(), 0u);
 }
 
+TEST_F(TerrainDemDomTest, DemGeneratorPreservesPointCloudColors)
+{
+    const PlaPointCloud cloud = makeColoredPlaneCloud();
+
+    DemGenerationOptions options;
+    options.gridResolution = 0.5;
+    options.minGridSize = 4;
+    options.maxGridSize = 8;
+    options.holeFillIterations = 0;
+
+    DemGridData demGrid;
+    PlaPointCloud denseCloud;
+    QString error;
+    ASSERT_TRUE(DemGenerator::generateFromPointCloud(cloud, options, &demGrid, &denseCloud, &error))
+        << error.toStdString();
+
+    ASSERT_TRUE(demGrid.hasColor());
+    EXPECT_TRUE(denseCloud.hasColors());
+    bool sawInputGray = false;
+    for (int row = 0; row < demGrid.height; ++row)
+    {
+        for (int col = 0; col < demGrid.width; ++col)
+        {
+            if (demGrid.validMask.at<uchar>(row, col) == 0)
+                continue;
+            const cv::Vec3b color = demGrid.color.at<cv::Vec3b>(row, col);
+            if (color[0] == 51 && color[1] == 51 && color[2] == 51)
+                sawInputGray = true;
+        }
+    }
+    EXPECT_TRUE(sawInputGray);
+}
+
 TEST_F(TerrainDemDomTest, TerrainPipelineWritesDemProductsFromObj)
 {
     const fs::path objPath = writeObjPointCloud();
@@ -244,6 +309,34 @@ TEST_F(TerrainDemDomTest, TerrainPipelineWritesDemProductsFromObj)
     EXPECT_TRUE(fs::exists(result.value(QStringLiteral("depth_png")).toString().toStdString()));
     EXPECT_TRUE(fs::exists(result.value(QStringLiteral("dense_cloud_xyz")).toString().toStdString()));
     EXPECT_GE(result.value(QStringLiteral("face_count")).toInt(), 0);
+}
+
+TEST_F(TerrainDemDomTest, TerrainPipelineWritesVertexColorsFromIntensityPly)
+{
+    const fs::path plyPath = writeIntensityPlyPointCloud();
+    const fs::path outputDir = _tempDir / "terrain_intensity_output";
+
+    QJsonObject result;
+    QString error;
+    ASSERT_TRUE(TerrainPipeline::generateDemProducts(QString::fromStdString(plyPath.string()),
+                                                     QString::fromStdString(outputDir.string()),
+                                                     0.5,
+                                                     QStringLiteral("float32"),
+                                                     true,
+                                                     &result,
+                                                     &error))
+        << error.toStdString();
+
+    const fs::path meshPath = result.value(QStringLiteral("mesh_ply")).toString().toStdString();
+    ASSERT_TRUE(fs::exists(meshPath));
+    std::ifstream stream(meshPath);
+    ASSERT_TRUE(stream.is_open());
+    const std::string text((std::istreambuf_iterator<char>(stream)),
+                           std::istreambuf_iterator<char>());
+    EXPECT_NE(text.find("property uchar red\n"), std::string::npos);
+    EXPECT_NE(text.find("property uchar green\n"), std::string::npos);
+    EXPECT_NE(text.find("property uchar blue\n"), std::string::npos);
+    EXPECT_NE(text.find("0 0 10 51 51 51\n"), std::string::npos);
 }
 
 TEST_F(TerrainDemDomTest, DemGeneratorSubPixelBilinearSplatIncreasesCoverage)

@@ -131,7 +131,7 @@
      <item>
       <widget class="QPushButton" name="runBtn">
        <property name="text">
-        <string>运行正射投影</string>
+        <string>一键生成 DOM</string>
        </property>
       </widget>
      </item>

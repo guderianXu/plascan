@@ -149,6 +149,20 @@ class FullPipelineScriptTest(unittest.TestCase):
             for point in points:
                 handle.write(f"{point[0]} {point[1]} {point[2]} {point[3]}\n")
 
+    def write_ascii_ply_with_intensity(self, path, points):
+        with path.open("w", encoding="utf-8") as handle:
+            handle.write("ply\n")
+            handle.write("format ascii 1.0\n")
+            handle.write(f"element vertex {len(points)}\n")
+            handle.write("property float x\n")
+            handle.write("property float y\n")
+            handle.write("property float z\n")
+            handle.write("property float error\n")
+            handle.write("property uchar intensity\n")
+            handle.write("end_header\n")
+            for point in points:
+                handle.write(f"{point[0]} {point[1]} {point[2]} {point[3]} {point[4]}\n")
+
     def test_quality_filtered_merge_removes_far_outliers(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
@@ -172,6 +186,28 @@ class FullPipelineScriptTest(unittest.TestCase):
             self.assertGreater(result["removed_outlier_count"], 0)
             self.assertTrue(result["quality"]["passed"])
             self.assertNotIn("1000000.0", output.read_text(encoding="utf-8"))
+
+    def test_quality_filtered_merge_preserves_intensity_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            ply_a = root / "a.ply"
+            output = root / "merged.ply"
+            self.write_ascii_ply_with_intensity(
+                ply_a,
+                [
+                    (-1.0, 0.0, 0.0, 0.01, 51),
+                    (0.0, 0.0, 0.0, 0.01, 87),
+                    (1.0, 0.0, 0.0, 0.01, 86),
+                ],
+            )
+
+            result = pipeline.write_quality_filtered_ascii_ply([ply_a], output)
+
+            self.assertEqual(result["point_count"], 3)
+            text = output.read_text(encoding="utf-8")
+            self.assertIn("property uchar intensity", text)
+            self.assertIn("-1.0 0.0 0.0 0.01 51", text)
+            self.assertIn("0.0 0.0 0.0 0.01 87", text)
 
     def test_terrain_local_frame_transforms_cloud_and_cameras_together(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -218,6 +254,49 @@ class FullPipelineScriptTest(unittest.TestCase):
             local_camera = Path(result["items"][0].work_camera).read_text(encoding="utf-8")
             self.assertIn("C = 2 1 3", local_camera)
             self.assertIn("R = 0 1 0 1 0 0 0 0 -1", local_camera)
+
+    def test_terrain_local_frame_preserves_intensity_column(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            dense_cloud = root / "dense.ply"
+            self.write_ascii_ply_with_intensity(dense_cloud, [(11.0, 22.0, 27.0, 0.25, 51)])
+
+            image = root / "image.png"
+            image.write_bytes(b"image")
+            camera = root / "camera.tsai"
+            camera.write_text(
+                "\n".join([
+                    "VERSION_4",
+                    "PINHOLE",
+                    "fu = 10",
+                    "fv = 10",
+                    "cu = 5",
+                    "cv = 5",
+                    "u_direction = 1 0 0",
+                    "v_direction = 0 1 0",
+                    "w_direction = 0 0 1",
+                    "C = 11 22 27",
+                    "R = 1 0 0 0 1 0 0 0 1",
+                    "pitch = 1",
+                    "",
+                ]),
+                encoding="utf-8",
+            )
+            item = pipeline.InputItem(image=image, camera=camera, work_image=image, work_camera=camera)
+            frame = pipeline.LocalFrame(
+                origin=(10.0, 20.0, 30.0),
+                axes=(
+                    (0.0, 1.0, 0.0),
+                    (1.0, 0.0, 0.0),
+                    (0.0, 0.0, -1.0),
+                ),
+            )
+
+            result = pipeline.prepare_terrain_local_frame(dense_cloud, [item], root / "local", frame=frame)
+
+            self.assertTrue(result["enabled"])
+            local_rows = pipeline.read_ascii_ply_vertex_rows(Path(result["point_cloud"]))
+            self.assertEqual(local_rows, ["2 1 3 0.25 51"])
 
     def test_dom_mask_quality_rejects_fragmented_large_components(self):
         mask = [

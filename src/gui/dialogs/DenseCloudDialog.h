@@ -30,8 +30,6 @@ class QLineEdit;
 class QPushButton;
 class QProgressBar;
 class QTextEdit;
-class QGroupBox;
-class QTabWidget;
 class ProjectManager;
 
 class DenseCloudDialog : public QDialog
@@ -58,9 +56,6 @@ private slots:
 
 private:
     void setupUi();
-    void buildSgbmGroup(QGroupBox *gb);
-    void buildCloudGroup(QGroupBox *gb);
-    void buildMeshGroup(QGroupBox *gb);
     void appendLog(const QString &line);
 
     ProjectManager *m_projectManager = nullptr;

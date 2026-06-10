@@ -14,6 +14,7 @@
 #include <QFile>
 #include <QFontDatabase>
 #include <QIcon>
+#include <QIODevice>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QStandardPaths>
@@ -59,6 +60,23 @@ public:
     }
 };
 
+namespace
+{
+void applyApplicationStyle(QApplication &app)
+{
+    QApplication::setStyle(QStringLiteral("Fusion"));
+
+    QFile styleFile(QStringLiteral(":/styles/app.qss"));
+    if (!styleFile.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        LOG_WARN("Failed to load application stylesheet: :/styles/app.qss");
+        return;
+    }
+
+    app.setStyleSheet(QString::fromUtf8(styleFile.readAll()));
+}
+} // namespace
+
 // main - 程序入口
 // 参数:
 //   argc - 命令行参数数量
@@ -80,6 +98,7 @@ int main(int argc, char *argv[])
 
     // 创建 Qt 应用程序对象，必须在任何 Qt 对象之前创建
     SafeApplication app(argc, argv);
+    applyApplicationStyle(app);
 
     // GNOME/桌面集成 — 必须与 .desktop 文件名一致
     app.setApplicationName(QStringLiteral("PlaScan"));

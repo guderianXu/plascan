@@ -70,6 +70,32 @@ std::array<double, 4> readFirstPlyVertex(const fs::path &path)
     return vertex;
 }
 
+std::array<double, 5> readFirstPlyVertexWithIntensity(const fs::path &path)
+{
+    std::ifstream in(path);
+    EXPECT_TRUE(in.is_open()) << path;
+
+    std::string line;
+    bool hasIntensityProperty = false;
+    while (std::getline(in, line))
+    {
+        if (line == "property uchar intensity")
+        {
+            hasIntensityProperty = true;
+        }
+        if (line == "end_header")
+        {
+            break;
+        }
+    }
+    EXPECT_TRUE(hasIntensityProperty);
+
+    std::array<double, 5> vertex{0.0, 0.0, 0.0, 0.0, 0.0};
+    in >> vertex[0] >> vertex[1] >> vertex[2] >> vertex[3] >> vertex[4];
+    EXPECT_TRUE(in.good() || in.eof());
+    return vertex;
+}
+
 } // namespace
 
 TEST(TriangulateCli, WritesAbsoluteWorldCoordinates)
@@ -115,5 +141,58 @@ TEST(TriangulateCli, WritesAbsoluteWorldCoordinates)
     EXPECT_NEAR(vertex[0], 0.0, 1e-6);
     EXPECT_NEAR(vertex[1], 0.0, 1e-6);
     EXPECT_NEAR(vertex[2], 10.0, 1e-6);
-}
 #endif
+}
+
+TEST(TriangulateCli, WritesIntensityWhenImageProvided)
+{
+#ifndef PLASCAN_TRIANGULATE_CLI_PATH
+    GTEST_SKIP() << "triangulate_cli path is not configured";
+#else
+    const fs::path root = fs::temp_directory_path() / "plascan_triangulate_cli_intensity";
+    fs::remove_all(root);
+    fs::create_directories(root);
+
+    const fs::path leftCamera = root / "left.tsai";
+    const fs::path rightCamera = root / "right.tsai";
+    const fs::path rectPath = root / "rect.xml";
+    const fs::path disparityPath = root / "disp.tif";
+    const fs::path intensityPath = root / "left_rect.tif";
+    const fs::path outPath = root / "cloud.ply";
+
+    writeCamera(leftCamera, 0.0);
+    writeCamera(rightCamera, 1.0);
+
+    cv::Mat disparity(101, 101, CV_32FC1, cv::Scalar(0.0f));
+    disparity.at<float>(50, 50) = 10.0f;
+    ASSERT_TRUE(cv::imwrite(disparityPath.string(), disparity));
+
+    cv::Mat intensity(101, 101, CV_8UC1, cv::Scalar(0));
+    intensity.at<uchar>(50, 50) = 51;
+    ASSERT_TRUE(cv::imwrite(intensityPath.string(), intensity));
+
+    cv::FileStorage fsOut(rectPath.string(), cv::FileStorage::WRITE);
+    ASSERT_TRUE(fsOut.isOpened());
+    fsOut << "H1inv" << cv::Mat::eye(3, 3, CV_64F);
+    fsOut << "H2inv" << cv::Mat::eye(3, 3, CV_64F);
+    fsOut.release();
+
+    std::ostringstream command;
+    command << shellQuote(PLASCAN_TRIANGULATE_CLI_PATH)
+            << " --disparity " << shellQuote(disparityPath.string())
+            << " --rect " << shellQuote(rectPath.string())
+            << " --camL " << shellQuote(leftCamera.string())
+            << " --camR " << shellQuote(rightCamera.string())
+            << " --output " << shellQuote(outPath.string())
+            << " --intensity-image " << shellQuote(intensityPath.string())
+            << " --threads 1";
+
+    ASSERT_EQ(std::system(command.str().c_str()), 0);
+
+    const auto vertex = readFirstPlyVertexWithIntensity(outPath);
+    EXPECT_NEAR(vertex[0], 0.0, 1e-6);
+    EXPECT_NEAR(vertex[1], 0.0, 1e-6);
+    EXPECT_NEAR(vertex[2], 10.0, 1e-6);
+    EXPECT_EQ(static_cast<int>(vertex[4]), 51);
+#endif
+}

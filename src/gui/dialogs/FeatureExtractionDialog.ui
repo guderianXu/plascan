@@ -74,11 +74,11 @@
          </item>
          <item>
           <widget class="QLineEdit" name="m_outputLine">
-           <property name="placeholderText">
-            <string>保存到项目 assets/ip</string>
-           </property>
            <property name="toolTip">
             <string>留空时：默认保存到项目 assets/ip 目录</string>
+           </property>
+           <property name="placeholderText">
+            <string>保存到项目 assets/ip</string>
            </property>
           </widget>
          </item>
@@ -103,7 +103,325 @@
         </widget>
        </item>
        <item>
-        <layout class="QFormLayout" name="m_basicForm"/>
+        <layout class="QFormLayout" name="m_basicForm">
+         <item row="0" column="0">
+          <widget class="QLabel" name="algorithmLabel">
+           <property name="text">
+            <string>特征提取算法:</string>
+           </property>
+           <property name="buddy">
+            <cstring>m_algorithmCombo</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="0" column="1">
+          <widget class="QComboBox" name="m_algorithmCombo">
+           <property name="toolTip">
+            <string>SuperPoint(256d)/DISK(128d)/ALIKED(128d)/ORB(32d)/SIFT(128d)
+输出文件后缀自动匹配: .sp/.dsk/.alk/.orb/.sift</string>
+           </property>
+           <item>
+            <property name="text">
+             <string>SuperPoint</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>DISK</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>ALIKED</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>ORB</string>
+            </property>
+           </item>
+           <item>
+            <property name="text">
+             <string>SIFT</string>
+            </property>
+           </item>
+          </widget>
+         </item>
+         <item row="1" column="0">
+          <widget class="QLabel" name="modelPathLabel">
+           <property name="text">
+            <string>模型路径:</string>
+           </property>
+           <property name="buddy">
+            <cstring>m_modelPathEdit</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="1" column="1">
+          <widget class="QLineEdit" name="m_modelPathEdit">
+           <property name="toolTip">
+            <string>按当前算法和设备自动解析模型路径</string>
+           </property>
+           <property name="readOnly">
+            <bool>true</bool>
+           </property>
+           <property name="placeholderText">
+            <string>深度学习模型路径 (.pt)</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="0">
+          <widget class="QLabel" name="cudaLabel">
+           <property name="text">
+            <string>加速:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="2" column="1">
+          <widget class="QWidget" name="m_cudaRowWidget" native="true">
+           <layout class="QHBoxLayout" name="cudaRowLayout">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>0</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+            <item>
+             <widget class="QCheckBox" name="m_useCudaChk">
+              <property name="text">
+               <string>CUDA</string>
+              </property>
+              <property name="checked">
+               <bool>true</bool>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QSpinBox" name="m_cudaDeviceSpin">
+              <property name="prefix">
+               <string>GPU:</string>
+              </property>
+              <property name="maximum">
+               <number>7</number>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <spacer name="cudaRowSpacer">
+              <property name="orientation">
+               <enum>Qt::Horizontal</enum>
+              </property>
+              <property name="sizeHint" stdset="0">
+               <size>
+                <width>40</width>
+                <height>20</height>
+               </size>
+              </property>
+             </spacer>
+            </item>
+           </layout>
+          </widget>
+         </item>
+         <item row="3" column="0">
+          <widget class="QLabel" name="nmsRadiusLabel">
+           <property name="text">
+            <string>NMS 半径(像素):</string>
+           </property>
+           <property name="buddy">
+            <cstring>m_nmsRadiusSpin</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="3" column="1">
+          <widget class="QSpinBox" name="m_nmsRadiusSpin">
+           <property name="toolTip">
+            <string>非极大值抑制半径（像素）
+值越大抑制越强，推荐范围 1-8
+图像尺度较大时可增大</string>
+           </property>
+           <property name="minimum">
+            <number>1</number>
+           </property>
+           <property name="maximum">
+            <number>16</number>
+           </property>
+           <property name="value">
+            <number>3</number>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="0">
+          <widget class="QLabel" name="detectionThresholdLabel">
+           <property name="text">
+            <string>检测阈值:</string>
+           </property>
+           <property name="buddy">
+            <cstring>m_detectionThresholdSpin</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="4" column="1">
+          <widget class="QDoubleSpinBox" name="m_detectionThresholdSpin">
+           <property name="toolTip">
+            <string>检测阈值（score map 阈值）
+阈值越低检测到的点越多
+推荐范围 0.001-0.02</string>
+           </property>
+           <property name="decimals">
+            <number>4</number>
+           </property>
+           <property name="minimum">
+            <double>0.000100000000000</double>
+           </property>
+           <property name="maximum">
+            <double>1.000000000000000</double>
+           </property>
+           <property name="singleStep">
+            <double>0.001000000000000</double>
+           </property>
+           <property name="value">
+            <double>0.003000000000000</double>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="0">
+          <widget class="QLabel" name="maxKeypointsLabel">
+           <property name="text">
+            <string>最大关键点数:</string>
+           </property>
+           <property name="buddy">
+            <cstring>m_maxKeypointsSpin</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="5" column="1">
+          <widget class="QSpinBox" name="m_maxKeypointsSpin">
+           <property name="toolTip">
+            <string>最大关键点数量
+按 score 截断，-1 表示不限制
+实时 GUI 中建议设置 500-2000</string>
+           </property>
+           <property name="specialValueText">
+            <string>不限制</string>
+           </property>
+           <property name="minimum">
+            <number>-1</number>
+           </property>
+           <property name="maximum">
+            <number>100000</number>
+           </property>
+           <property name="value">
+            <number>-1</number>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="0">
+          <widget class="QLabel" name="removeBordersLabel">
+           <property name="text">
+            <string>边界移除(像素):</string>
+           </property>
+           <property name="buddy">
+            <cstring>m_removeBordersSpin</cstring>
+           </property>
+          </widget>
+         </item>
+         <item row="6" column="1">
+          <widget class="QSpinBox" name="m_removeBordersSpin">
+           <property name="toolTip">
+            <string>在图像边界内移除指定像素数
+防止靠近边界的点被误检</string>
+           </property>
+           <property name="maximum">
+            <number>50</number>
+           </property>
+           <property name="value">
+            <number>4</number>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="0">
+          <widget class="QLabel" name="grayRangeLabel">
+           <property name="text">
+            <string>灰度过滤范围:</string>
+           </property>
+          </widget>
+         </item>
+         <item row="7" column="1">
+          <widget class="QWidget" name="m_grayRangeWidget" native="true">
+           <layout class="QHBoxLayout" name="grayRangeLayout">
+            <property name="leftMargin">
+             <number>0</number>
+            </property>
+            <property name="topMargin">
+             <number>0</number>
+            </property>
+            <property name="rightMargin">
+             <number>0</number>
+            </property>
+            <property name="bottomMargin">
+             <number>0</number>
+            </property>
+            <item>
+             <widget class="QLabel" name="grayMinLabel">
+              <property name="text">
+               <string>最小:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="m_grayscaleMinSpin">
+              <property name="toolTip">
+               <string>灰度过滤阈值区间（归一化 0.0-1.0）
+例如 [0.05,0.95] 可过滤极暗或极亮区域</string>
+              </property>
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="maximum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.050000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="grayMaxLabel">
+              <property name="text">
+               <string>最大:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="m_grayscaleMaxSpin">
+              <property name="toolTip">
+               <string>灰度过滤阈值区间（归一化 0.0-1.0）
+例如 [0.05,0.95] 可过滤极暗或极亮区域</string>
+              </property>
+              <property name="decimals">
+               <number>2</number>
+              </property>
+              <property name="maximum">
+               <double>1.000000000000000</double>
+              </property>
+              <property name="singleStep">
+               <double>0.050000000000000</double>
+              </property>
+              <property name="value">
+               <double>1.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </widget>
+         </item>
+        </layout>
        </item>
        <item>
         <widget class="QToolButton" name="advancedToggle">
@@ -132,7 +450,174 @@
          <property name="visible">
           <bool>false</bool>
          </property>
-         <layout class="QFormLayout" name="m_advancedForm"/>
+         <layout class="QFormLayout" name="m_advancedForm">
+          <item row="0" column="0" colspan="2">
+           <widget class="QLabel" name="m_advancedHintLabel">
+            <property name="visible">
+             <bool>false</bool>
+            </property>
+            <property name="wordWrap">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_normalizeInputChk">
+            <property name="toolTip">
+             <string>按位深度归一化到浮点数范围（0-1）
+建议启用并与训练时设置一致</string>
+            </property>
+            <property name="text">
+             <string>对输入图像归一化</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="descriptorDimLabel">
+            <property name="text">
+             <string>描述子维度:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_descriptorDimSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="m_descriptorDimSpin">
+            <property name="toolTip">
+             <string>描述子维度（通常为 256）
+用于分配输出张量大小与匹配逻辑</string>
+            </property>
+            <property name="minimum">
+             <number>64</number>
+            </property>
+            <property name="maximum">
+             <number>512</number>
+            </property>
+            <property name="value">
+             <number>256</number>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="gridSizeLabel">
+            <property name="text">
+             <string>网格大小:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_gridSizeSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QSpinBox" name="m_gridSizeSpin">
+            <property name="toolTip">
+             <string>网络输出到输入的下采样步长（通常为 8）
+用于从 dense descriptors 中采样局部描述子</string>
+            </property>
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>32</number>
+            </property>
+            <property name="value">
+             <number>8</number>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QLabel" name="batchSizeLabel">
+            <property name="text">
+             <string>批处理大小:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_batchSizeSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QSpinBox" name="m_batchSizeSpin">
+            <property name="toolTip">
+             <string>批处理大小（用于 detectBatch）
+同时处理多张图像以提高 GPU 利用率
+-1 或 0 表示禁用批处理，逐张调用</string>
+            </property>
+            <property name="specialValueText">
+             <string>禁用批处理</string>
+            </property>
+            <property name="minimum">
+             <number>-1</number>
+            </property>
+            <property name="maximum">
+             <number>128</number>
+            </property>
+            <property name="value">
+             <number>8</number>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="0">
+           <widget class="QLabel" name="neighborhoodRadiusLabel">
+            <property name="text">
+             <string>邻域判断范围(px):</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_neighborhoodRadiusSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QSpinBox" name="m_neighborhoodRadiusSpin">
+            <property name="toolTip">
+             <string>检查特征点周围邻域的半径（像素）
+检测邻域内是否有纯黑像素，如有则丢弃该点</string>
+            </property>
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>20</number>
+            </property>
+            <property name="value">
+             <number>3</number>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0">
+           <widget class="QLabel" name="neighborhoodThresholdLabel">
+            <property name="text">
+             <string>邻域灰度阈值:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_neighborhoodThresholdSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="1">
+           <widget class="QDoubleSpinBox" name="m_neighborhoodThresholdSpin">
+            <property name="toolTip">
+             <string>邻域灰度阈值 [0,1]
+邻域内有像素低于此值，则认为靠近边界并丢弃该点</string>
+            </property>
+            <property name="decimals">
+             <number>3</number>
+            </property>
+            <property name="maximum">
+             <double>1.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.010000000000000</double>
+            </property>
+            <property name="value">
+             <double>0.050000000000000</double>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
        </item>
        <item>
@@ -162,7 +647,74 @@
          <property name="visible">
           <bool>false</bool>
          </property>
-         <layout class="QFormLayout" name="systemForm"/>
+         <layout class="QFormLayout" name="systemForm">
+          <item row="0" column="0">
+           <widget class="QLabel" name="deviceLabel">
+            <property name="text">
+             <string>运行设备:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_deviceCombo</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QComboBox" name="m_deviceCombo">
+            <property name="toolTip">
+             <string>运行设备（CPU 或 CUDA）
+如果选择 CUDA 且系统不支持，将根据回退设置处理</string>
+            </property>
+            <property name="currentIndex">
+             <number>1</number>
+            </property>
+            <item>
+             <property name="text">
+              <string>CPU</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>CUDA</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_allowFallbackChk">
+            <property name="toolTip">
+             <string>在 CUDA 不可用时自动回退到 CPU
+GUI 应用通常建议启用以提高容错性</string>
+            </property>
+            <property name="text">
+             <string>允许设备回退到 CPU</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="pythonPathLabel">
+            <property name="text">
+             <string>Python 路径:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_pythonPathEdit</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QLineEdit" name="m_pythonPathEdit">
+            <property name="toolTip">
+             <string>DISK/ALIKED 调用 scripts/extract_features.py 时使用
+留空时按 PLASCAN_PYTHON_EXECUTABLE、VIRTUAL_ENV、CONDA_PREFIX、plascan 环境、PATH 顺序选择</string>
+            </property>
+            <property name="placeholderText">
+             <string>Python 可执行文件路径（留空自动选择）</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
        </item>
        <item>
@@ -192,7 +744,28 @@
          <property name="visible">
           <bool>false</bool>
          </property>
-         <layout class="QFormLayout" name="debugForm"/>
+         <layout class="QFormLayout" name="debugForm">
+          <item row="0" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_saveCsvChk">
+            <property name="toolTip">
+             <string>调试用：将关键点坐标和分数写入 CSV 文件</string>
+            </property>
+            <property name="text">
+             <string>每次推理后保存关键点到 CSV</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_saveOverlayChk">
+            <property name="toolTip">
+             <string>调试用：将关键点叠加到原图并保存为图像文件</string>
+            </property>
+            <property name="text">
+             <string>每次推理后保存叠加图像</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
         </widget>
        </item>
        <item>
@@ -216,11 +789,11 @@
     <layout class="QHBoxLayout" name="bottomLayout">
      <item>
       <widget class="QPushButton" name="m_resetBtn">
-       <property name="text">
-        <string>恢复默认参数</string>
-       </property>
        <property name="toolTip">
         <string>恢复 SuperPoint 的默认参数</string>
+       </property>
+       <property name="text">
+        <string>恢复默认参数</string>
        </property>
       </widget>
      </item>

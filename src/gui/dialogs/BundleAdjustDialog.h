@@ -12,8 +12,6 @@ class QCheckBox;
 class QLabel;
 class QTableWidget;
 class QToolButton;
-class QWidget;
-class QCheckBox;
 
 class BundleAdjustDialog : public QDialog
 {
@@ -45,9 +43,6 @@ private slots:
     void emitSettingsNow();
 
 private:
-    // 创建一个可折叠分组（基础/高级/系统/调试）。
-    // title: 分组标题；expandedByDefault: 是否默认展开；contentOut: 返回可放置控件的内容容器。
-    QWidget* createCollapsibleGroup(const QString &title, bool expandedByDefault, QWidget **contentOut);
     // 统一更新结果区域按钮状态。
     void updateResultButtons();
     QStringList selectedImages() const;

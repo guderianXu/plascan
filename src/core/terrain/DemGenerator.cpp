@@ -17,6 +17,10 @@ struct AccumulatorCell
 {
     double sumWeightedZ = 0.0;
     double sumWeight = 0.0;
+    double sumWeightedB = 0.0;
+    double sumWeightedG = 0.0;
+    double sumWeightedR = 0.0;
+    double sumColorWeight = 0.0;
     double minZ = std::numeric_limits<double>::max();
     double maxZ = std::numeric_limits<double>::lowest();
     int count = 0;
@@ -25,7 +29,8 @@ struct AccumulatorCell
 void accumulateCell(AccumulatorCell *cell,
                     double z,
                     double weight,
-                    DemGenerationOptions::ElevationAggregation aggregation)
+                    DemGenerationOptions::ElevationAggregation aggregation,
+                    const cv::Vec3b *color = nullptr)
 {
     if (!cell || weight <= 0.0)
     {
@@ -37,6 +42,13 @@ void accumulateCell(AccumulatorCell *cell,
     cell->minZ = std::min(cell->minZ, z);
     cell->maxZ = std::max(cell->maxZ, z);
     ++cell->count;
+    if (color)
+    {
+        cell->sumWeightedB += static_cast<double>((*color)[0]) * weight;
+        cell->sumWeightedG += static_cast<double>((*color)[1]) * weight;
+        cell->sumWeightedR += static_cast<double>((*color)[2]) * weight;
+        cell->sumColorWeight += weight;
+    }
 
     Q_UNUSED(aggregation);
 }
@@ -60,6 +72,22 @@ float resolveCellElevation(const AccumulatorCell &cell,
     }
 
     return static_cast<float>(cell.sumWeightedZ / cell.sumWeight);
+}
+
+cv::Vec3b resolveCellColor(const AccumulatorCell &cell)
+{
+    if (cell.count <= 0 || cell.sumColorWeight <= 0.0)
+    {
+        return cv::Vec3b(128, 128, 128);
+    }
+
+    auto channel = [](double value) {
+        return static_cast<uchar>(std::clamp(static_cast<int>(std::lround(value)), 0, 255));
+    };
+    const double invWeight = 1.0 / cell.sumColorWeight;
+    return cv::Vec3b(channel(cell.sumWeightedB * invWeight),
+                     channel(cell.sumWeightedG * invWeight),
+                     channel(cell.sumWeightedR * invWeight));
 }
 
 struct PointCloudBounds
@@ -96,10 +124,15 @@ PointCloudBounds computeBounds(const PlaPointCloud &pointCloud)
 PlaPointCloud buildDenseCloud(const DemGridData &demGrid)
 {
     std::vector<float> xs, ys, zs;
+    std::vector<cv::Vec3b> colors;
     const size_t n = static_cast<std::size_t>(demGrid.width) * static_cast<std::size_t>(demGrid.height);
     xs.reserve(n);
     ys.reserve(n);
     zs.reserve(n);
+    if (demGrid.hasColor())
+    {
+        colors.reserve(n);
+    }
 
     for (int row = 0; row < demGrid.height; ++row)
     {
@@ -113,6 +146,10 @@ PlaPointCloud buildDenseCloud(const DemGridData &demGrid)
             xs.push_back(static_cast<float>(demGrid.minX + demGrid.stepX * static_cast<double>(col)));
             ys.push_back(static_cast<float>(demGrid.minY + demGrid.stepY * static_cast<double>(row)));
             zs.push_back(demGrid.elevation.at<float>(row, col));
+            if (demGrid.hasColor())
+            {
+                colors.push_back(demGrid.color.at<cv::Vec3b>(row, col));
+            }
         }
     }
 
@@ -123,7 +160,19 @@ PlaPointCloud buildDenseCloud(const DemGridData &demGrid)
         pts(static_cast<plamatrix::Index>(i), 1) = ys[i];
         pts(static_cast<plamatrix::Index>(i), 2) = zs[i];
     }
-    return PlaPointCloud(std::move(pts));
+    PlaPointCloud cloud(std::move(pts));
+    if (!colors.empty() && colors.size() == xs.size())
+    {
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colorMatrix(colors.size(), 3);
+        for (size_t i = 0; i < colors.size(); ++i)
+        {
+            colorMatrix(static_cast<plamatrix::Index>(i), 0) = colors[i][2];
+            colorMatrix(static_cast<plamatrix::Index>(i), 1) = colors[i][1];
+            colorMatrix(static_cast<plamatrix::Index>(i), 2) = colors[i][0];
+        }
+        cloud.setColors(std::move(colorMatrix));
+    }
+    return cloud;
 }
 
 } // namespace
@@ -268,14 +317,22 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
 
     demGrid->projection = options.projection;
     demGrid->elevation = cv::Mat(height, width, CV_32F, cv::Scalar(0));
+    demGrid->color.release();
     demGrid->validMask = cv::Mat(height, width, CV_8U, cv::Scalar(0));
+    const bool hasSourceColors = pointCloud.hasColors() && pointCloud.colors()
+                              && pointCloud.colors()->rows() == static_cast<plamatrix::Index>(pointCloud.size())
+                              && pointCloud.colors()->cols() >= 3;
+    if (hasSourceColors)
+    {
+        demGrid->color = cv::Mat(height, width, CV_8UC3, cv::Scalar(128, 128, 128));
+    }
 
     std::vector<AccumulatorCell> accumulators(static_cast<std::size_t>(width) * static_cast<std::size_t>(height));
     auto cellIndex = [width](int col, int row) {
         return static_cast<std::size_t>(row) * static_cast<std::size_t>(width) + static_cast<std::size_t>(col);
     };
 
-    auto splatPointToGrid = [&](double x, double y, double z) {
+    auto splatPointToGrid = [&](double x, double y, double z, const cv::Vec3b *color) {
         const double gridX = (x - demGrid->minX) / demGrid->stepX;
         const double gridY = (y - demGrid->minY) / demGrid->stepY;
 
@@ -302,7 +359,7 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
                     }
 
                     AccumulatorCell &accumulator = accumulators[cellIndex(col, row)];
-                    accumulateCell(&accumulator, z, weight, options.elevationAggregation);
+                    accumulateCell(&accumulator, z, weight, options.elevationAggregation, color);
                     demGrid->validMask.at<uchar>(row, col) = 255;
                 }
             }
@@ -313,16 +370,28 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
         const int row = qBound(0, static_cast<int>(std::round(gridY)), height - 1);
 
         AccumulatorCell &accumulator = accumulators[cellIndex(col, row)];
-        accumulateCell(&accumulator, z, 1.0, options.elevationAggregation);
+        accumulateCell(&accumulator, z, 1.0, options.elevationAggregation, color);
         demGrid->validMask.at<uchar>(row, col) = 255;
     };
 
     for (size_t i = 0; i < pointCloud.size(); ++i)
     {
         auto pt = pointCloud[i];
+        cv::Vec3b sourceColor;
+        const cv::Vec3b *sourceColorPtr = nullptr;
+        if (hasSourceColors)
+        {
+            const auto *colors = pointCloud.colors();
+            sourceColor = cv::Vec3b(
+                colors->getValue(static_cast<plamatrix::Index>(i), 2),
+                colors->getValue(static_cast<plamatrix::Index>(i), 1),
+                colors->getValue(static_cast<plamatrix::Index>(i), 0));
+            sourceColorPtr = &sourceColor;
+        }
         splatPointToGrid(static_cast<double>(pt.x()),
                          static_cast<double>(pt.y()),
-                         static_cast<double>(pt.z()));
+                         static_cast<double>(pt.z()),
+                         sourceColorPtr);
     }
 
     for (int row = 0; row < height; ++row)
@@ -334,6 +403,10 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
             {
                 demGrid->elevation.at<float>(row, col) =
                     resolveCellElevation(accumulator, options.elevationAggregation);
+                if (hasSourceColors)
+                {
+                    demGrid->color.at<cv::Vec3b>(row, col) = resolveCellColor(accumulator);
+                }
             }
         }
     }
@@ -342,6 +415,7 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
     for (int iteration = 0; iteration < options.holeFillIterations; ++iteration)
     {
         cv::Mat elevationCopy = demGrid->elevation.clone();
+        cv::Mat colorCopy = demGrid->hasColor() ? demGrid->color.clone() : cv::Mat();
         cv::Mat validCopy = demGrid->validMask.clone();
         for (int row = 0; row < height; ++row)
         {
@@ -353,6 +427,9 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
                 }
 
                 double weightedNeighborSum = 0.0;
+                double weightedB = 0.0;
+                double weightedG = 0.0;
+                double weightedR = 0.0;
                 double weightSum = 0.0;
                 int neighborCount = 0;
                 const int minRow = std::max(0, row - holeFillRadius);
@@ -377,6 +454,13 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
                             const double weight = 1.0 / std::max(1e-6, distance);
                             weightedNeighborSum +=
                                 static_cast<double>(demGrid->elevation.at<float>(neighborRow, neighborCol)) * weight;
+                            if (demGrid->hasColor())
+                            {
+                                const cv::Vec3b neighborColor = demGrid->color.at<cv::Vec3b>(neighborRow, neighborCol);
+                                weightedB += static_cast<double>(neighborColor[0]) * weight;
+                                weightedG += static_cast<double>(neighborColor[1]) * weight;
+                                weightedR += static_cast<double>(neighborColor[2]) * weight;
+                            }
                             weightSum += weight;
                             ++neighborCount;
                         }
@@ -386,12 +470,26 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
                 if (neighborCount >= options.holeFillMinNeighbors && weightSum > 0.0)
                 {
                     elevationCopy.at<float>(row, col) = static_cast<float>(weightedNeighborSum / weightSum);
+                    if (!colorCopy.empty())
+                    {
+                        auto channel = [](double value) {
+                            return static_cast<uchar>(std::clamp(static_cast<int>(std::lround(value)), 0, 255));
+                        };
+                        const double invWeight = 1.0 / weightSum;
+                        colorCopy.at<cv::Vec3b>(row, col) = cv::Vec3b(channel(weightedB * invWeight),
+                                                                       channel(weightedG * invWeight),
+                                                                       channel(weightedR * invWeight));
+                    }
                     validCopy.at<uchar>(row, col) = 255;
                 }
             }
         }
 
         demGrid->elevation = elevationCopy;
+        if (!colorCopy.empty())
+        {
+            demGrid->color = colorCopy;
+        }
         demGrid->validMask = validCopy;
     }
 

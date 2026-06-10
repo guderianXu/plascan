@@ -15,7 +15,6 @@
 
 // 前向声明，减少头文件依赖
 class DualImageViewer;  // 双图并列查看器（左右各一个 ImageViewWidget）
-class QToolBar;         // 工具栏
 class QLabel;           // 状态栏文字标签
 class QCheckBox;        // 复选框控件
 class QPushButton;      // 按钮控件
@@ -114,15 +113,7 @@ private slots:
     void onDenseRangeChanged();
 
 private:
-    // ── 界面构建私有方法 ──────────────────────────────────────────
-    // 构建并填充工具栏（同步/适应/重置/缩放按钮）
-    void setupToolBar();
-    // 构建底部状态栏（m_statusLabel）
-    void setupStatusBar();
-    // 在工具栏末尾追加显示选项控件组（颜色/宽度/透明度等）
-    void setupDisplayOptions();
-    // 在工具栏末尾追加密集显示选项控件组（透明度/色彩/范围等）
-    void setupDenseDisplayOptions();
+    // ── 设置持久化 ────────────────────────────────────────────────
     // 从 project_dialog.json 恢复上次保存的显示参数（项目级）
     void loadSettings();
     // 将当前显示参数保存到 project_dialog.json（项目级）
@@ -139,7 +130,6 @@ private:
     QString            m_disparityFile;
 
     // ── 工具栏及工具按钮 ──────────────────────────────────────────
-    QToolBar    *m_toolbar;        // 主工具栏（嵌于对话框顶部）
     QCheckBox   *m_syncModeChk;    // 同步缩放/平移开关
     QPushButton *m_fitBtn;         // 适应窗口按钮
     QPushButton *m_resetBtn;       // 重置到 100% 按钮

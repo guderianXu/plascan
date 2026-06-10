@@ -8,12 +8,18 @@
 #include "PatchMatchCUDA.h"
 #include "DepthMapFusion.h"
 #include "DenseCloudBuilder.h"
+#include "SparseCloudPreprocessor.h"
 #include "Camera.h"
+
+#include <plamatrix/dense/dense_matrix.h>
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/io/ply_io.h>
 
 #include <opencv2/imgproc.hpp>
 
 #include <array>
 #include <cmath>
+#include <filesystem>
 
 namespace
 {
@@ -61,6 +67,30 @@ xjw::mvs::PositiveDepthCameraModel makePosCam(double fu, double fv,
 }
 
 } // namespace
+
+TEST(MvsPipelineTest, SparseCloudPreprocessorReadsBinaryPly)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mvs_binary_sparse_test";
+    fs::create_directories(root);
+    const fs::path plyPath = root / "sparse_binary.ply";
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(4, 3);
+    points(0, 0) = 0.0f; points(0, 1) = 0.0f; points(0, 2) = 0.0f;
+    points(1, 0) = 1.0f; points(1, 1) = 0.0f; points(1, 2) = 0.0f;
+    points(2, 0) = 0.0f; points(2, 1) = 1.0f; points(2, 2) = 0.0f;
+    points(3, 0) = 0.0f; points(3, 1) = 0.0f; points(3, 2) = 1.0f;
+    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
+
+    xjw::mvs::SparseCloudPreprocessor preprocessor;
+    xjw::mvs::PreprocessResult result;
+    std::string error;
+    ASSERT_TRUE(preprocessor.run(plyPath.string(), {}, result, &error)) << error;
+    EXPECT_EQ(result.rawCount, 4);
+    EXPECT_EQ(result.filteredCount, 4);
+    EXPECT_EQ(result.cloud.points.size(), 4u);
+}
 
 // ---------------------------------------------------------------------------
 // Test 1: CPU PatchMatch 输出格式与有效像素

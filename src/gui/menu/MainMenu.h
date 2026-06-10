@@ -115,14 +115,8 @@ public:
     QAction *viewMatchesAction() const;
     QAction *denseMatchAction() const;
 
-    /** @brief 返回"空中三角测量"（完整流程）动作。 */
-    QAction *aerialTriangulationAction() const;
-
-    /** @brief 返回"创建点云"（一键稠密重建）动作。 */
-    QAction *createPointCloudAction() const;
-
-    /** @brief 返回"生成模型"（密集重建完整流程）动作。 */
-    QAction *generateModelAction() const;
+    /** @brief 返回"三维重建"（一键完整建模）动作。 */
+    QAction *threeDReconstructionAction() const;
 
     /** @brief 返回"重叠度获取"分析动作。 */
     QAction *overlapAnalysisAction() const;
@@ -220,9 +214,7 @@ private:
     QAction *m_matchFeaturesAct{};       ///< 特征点匹配（SuperGlue）生成连接点
     QAction *m_viewMatchesAct{};         ///< 查看匹配结果
     QAction *m_denseMatchAct{};          ///< 密集匹配
-    QAction *m_aerialTriangulationAct{}; ///< 空中三角测量（完整流程）
-    QAction *m_createPointCloudAct{};    ///< 创建点云（一键稠密重建）
-    QAction *m_generateModelAct{};       ///< 生成三维模型（密集重建）
+    QAction *m_threeDReconstructionAct{}; ///< 三维重建（一键完整建模）
     QAction *m_overlapAnalysisAct{};     ///< 重叠度分析
     QAction *m_intersectionCheckAct{};   ///< 前方交汇精度检验
     QAction *m_intersectionViewResultsAct{}; ///< 查看前方交汇结果

@@ -126,6 +126,14 @@ void MainWindow::dropEvent(QDropEvent *event)
         m_workspaceCenter->showModelFile(modelPath);
         statusBar()->showMessage(tr("已加载三维模型：%1").arg(QFileInfo(modelPath).fileName()), 5000);
     }
+    if (m_dataTree)
+    {
+        m_dataTree->addTransientModel(modelPath);
+    }
+    if (m_leftTabs && m_dataTree)
+    {
+        m_leftTabs->setCurrentWidget(m_dataTree);
+    }
     event->acceptProposedAction();
 }
 
@@ -375,20 +383,10 @@ void MainWindow::setupProjectManager()
                 connect(m_mainMenu->featureVisualizationAction(), &QAction::triggered,
                         m_menuWorkflowController, &MenuWorkflowController::openSuperPointVisualizationDialog);
             }
-            if (m_mainMenu->aerialTriangulationAction())
+            if (m_mainMenu->threeDReconstructionAction())
             {
-                connect(m_mainMenu->aerialTriangulationAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openAerialTriangulationDialog);
-            }
-            if (m_mainMenu->createPointCloudAction())
-            {
-                connect(m_mainMenu->createPointCloudAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openCreatePointCloudDialog);
-            }
-            if (m_mainMenu->generateModelAction())
-            {
-                connect(m_mainMenu->generateModelAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::startGenerateModelWorkflow);
+                connect(m_mainMenu->threeDReconstructionAction(), &QAction::triggered,
+                        m_menuWorkflowController, &MenuWorkflowController::openThreeDReconstructionDialog);
             }
             if (m_mainMenu->overlapAnalysisAction())
             {
@@ -1614,6 +1612,11 @@ void MainWindow::onProjectCreated(const QString &plascanPath)
 
 void MainWindow::onProjectOpened(const QString &plascanPath)
 {
+    if (m_dataTree)
+    {
+        m_dataTree->clearTransientResources();
+    }
+
     QFileInfo fi(plascanPath);
     QString name = fi.baseName();
     if (name.isEmpty())

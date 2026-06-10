@@ -17,11 +17,7 @@
 #include <QFileDialog>
 #include <QFile>
 #include <QTextStream>
-#include <QHBoxLayout>
-#include <QVBoxLayout>
-#include <QFormLayout>
 #include <QLabel>
-#include <QSplitter>
 #include <QStackedWidget>
 #include <QToolButton>
 #include <QMessageBox>
@@ -44,410 +40,76 @@ void FeatureMatchingDialog::setupUi()
     setWindowTitle(tr("特征匹配"));
     resize(1000, 700);
 
+    Ui::FeatureMatchingDialog ui;
+    ui.setupUi(this);
+
+    m_imageInputWidget = ui.m_imageInputWidget;
+    m_selectAllBtn = ui.m_selectAllBtn;
+    m_deselectAllBtn = ui.m_deselectAllBtn;
+    m_imageList = ui.m_imageList;
+    m_pairPreview = ui.m_pairPreview;
+    m_lisFileLine = ui.m_lisFileLine;
+    m_addLisBtn = ui.m_addLisBtn;
+    m_clearLisBtn = ui.m_clearLisBtn;
+    m_generatePairsBtn = ui.m_generatePairsBtn;
+    m_outputLine = ui.m_outputLine;
+    m_browseOutBtn = ui.m_browseOutBtn;
+
+    m_matchAlgorithmCombo = ui.m_matchAlgorithmCombo;
+    m_featureSuffixLabel = ui.m_featureSuffixLabel;
+    m_featureSuffixCombo = ui.m_featureSuffixCombo;
+    m_maxKeypointsSpin = ui.m_maxKeypointsSpin;
+    m_outlierMethodCombo = ui.m_outlierMethodCombo;
+    m_paramStack = ui.m_paramStack;
+
+    m_modelTypeCombo = ui.m_modelTypeCombo;
+    m_matchThresholdSpin = ui.m_matchThresholdSpin;
+    m_sinkhornIterSpin = ui.m_sinkhornIterSpin;
+    m_batchSizeSpin = ui.m_batchSizeSpin;
+    m_inputWidthSpin = ui.m_inputWidthSpin;
+    m_inputHeightSpin = ui.m_inputHeightSpin;
+
+    m_lgMatchThresholdSpin = ui.m_lgMatchThresholdSpin;
+    m_lgBatchSizeSpin = ui.m_lgBatchSizeSpin;
+    m_lgInputWidthSpin = ui.m_lgInputWidthSpin;
+    m_lgInputHeightSpin = ui.m_lgInputHeightSpin;
+
+    m_loftrModelTypeCombo = ui.m_loftrModelTypeCombo;
+    m_loftrMatchThresholdSpin = ui.m_loftrMatchThresholdSpin;
+    m_romaModelTypeCombo = ui.m_romaModelTypeCombo;
+    m_romaMatchThresholdSpin = ui.m_romaMatchThresholdSpin;
+    m_romaMaxKeypointsSpin = ui.m_romaMaxKeypointsSpin;
+
+    m_advancedGroup = ui.m_advancedGroup;
+    m_outlierReprojSpin = ui.m_outlierReprojSpin;
+    m_outlierConfidenceSpin = ui.m_outlierConfidenceSpin;
+    m_outlierMaxItersSpin = ui.m_outlierMaxItersSpin;
+    m_outlierMinInliersSpin = ui.m_outlierMinInliersSpin;
+
+    m_systemGroup = ui.m_systemGroup;
+    m_deviceCombo = ui.m_deviceCombo;
+    m_numThreadsSpin = ui.m_numThreadsSpin;
+    m_cudaParallelSpin = ui.m_cudaParallelSpin;
+
+    m_debugGroup = ui.m_debugGroup;
+    m_saveCsvChk = ui.m_saveCsvChk;
+    m_saveVisChk = ui.m_saveVisChk;
+    m_verboseChk = ui.m_verboseChk;
+
+    m_resetBtn = ui.m_resetBtn;
+    m_viewMatchesBtn = ui.m_viewMatchesBtn;
+    m_runBtn = ui.m_runBtn;
+    m_cancelBtn = ui.m_cancelBtn;
+
+    if (ui.topSplit)
     {
-        Ui::FeatureMatchingDialog ui;
-        ui.setupUi(this);
-
-        m_imageInputWidget = ui.m_imageInputWidget;
-        m_selectAllBtn = ui.m_selectAllBtn;
-        m_deselectAllBtn = ui.m_deselectAllBtn;
-        m_imageList = ui.m_imageList;
-        m_pairPreview = ui.m_pairPreview;
-        m_lisFileLine = ui.m_lisFileLine;
-        m_addLisBtn = ui.m_addLisBtn;
-        m_clearLisBtn = ui.m_clearLisBtn;
-        m_generatePairsBtn = ui.m_generatePairsBtn;
-        m_outputLine = ui.m_outputLine;
-        m_browseOutBtn = ui.m_browseOutBtn;
-        m_paramStack = ui.m_paramStack;
-        m_advancedGroup = ui.m_advancedGroup;
-        m_systemGroup = ui.m_systemGroup;
-        m_debugGroup = ui.m_debugGroup;
-        m_resetBtn = ui.m_resetBtn;
-        m_viewMatchesBtn = ui.m_viewMatchesBtn;
-        m_runBtn = ui.m_runBtn;
-        m_cancelBtn = ui.m_cancelBtn;
-
-        if (ui.topSplit)
-        {
-            ui.topSplit->setStretchFactor(0, 3);
-            ui.topSplit->setStretchFactor(1, 2);
-        }
-
-        auto *right = ui.rightWidget;
-        m_imageList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-
-        auto *commonForm = ui.commonForm;
-        m_matchAlgorithmCombo = new QComboBox(right);
-        m_matchAlgorithmCombo->addItem(tr("SuperGlue"), "superglue");
-        m_matchAlgorithmCombo->addItem(tr("LightGlue"), "lightglue");
-        m_matchAlgorithmCombo->addItem(tr("LoFTR"), "loftr");
-        m_matchAlgorithmCombo->addItem(tr("RoMa"), "roma");
-        m_matchAlgorithmCombo->addItem(tr("BF-Hamming (ORB)"), "orb_bf_hamming");
-        m_matchAlgorithmCombo->addItem(tr("BF-L2 (SIFT)"), "sift_bf_l2");
-        m_matchAlgorithmCombo->addItem(tr("FLANN (SIFT)"), "sift_flann");
-        m_matchAlgorithmCombo->setToolTip(tr("选择特征匹配算法\n"
-                                             "SuperGlue/LightGlue: 需要预提取特征\n"
-                                             "LoFTR/RoMa: 直接处理原始图像"));
-        commonForm->addRow(tr("匹配算法:"), m_matchAlgorithmCombo);
-
-        m_featureSuffixLabel = new QLabel(tr("特征类型:"), right);
-        m_featureSuffixCombo = new QComboBox(right);
-        m_featureSuffixCombo->setToolTip(tr("选择用于匹配的特征文件类型\n"
-                                            "根据所选算法自动过滤可用后缀"));
-        commonForm->addRow(m_featureSuffixLabel, m_featureSuffixCombo);
-
-        m_maxKeypointsSpin = new QSpinBox(right);
-        m_maxKeypointsSpin->setRange(-1, 100000);
-        m_maxKeypointsSpin->setValue(-1);
-        m_maxKeypointsSpin->setSpecialValueText(tr("不限制"));
-        m_maxKeypointsSpin->setToolTip(tr("最大关键点数量限制，-1 表示不限制"));
-        commonForm->addRow(tr("最大关键点数:"), m_maxKeypointsSpin);
-
-        m_outlierMethodCombo = new QComboBox(right);
-        m_outlierMethodCombo->addItem(tr("不剔除"), "none");
-        m_outlierMethodCombo->addItem(tr("Fundamental RANSAC"), "fundamental");
-        m_outlierMethodCombo->addItem(tr("Fundamental USAC_MAGSAC （推荐）"), "fundamental_usac_magsac");
-        m_outlierMethodCombo->addItem(tr("Homography RANSAC"), "homography");
-        m_outlierMethodCombo->addItem(tr("Affine RANSAC"), "affine");
-        m_outlierMethodCombo->setCurrentIndex(2);
-        m_outlierMethodCombo->setToolTip(tr("匹配后粗差剔除算法（推荐 USAC_MAGSAC）\n\n"
-                                            "★ Fundamental USAC_MAGSAC: 自适应阈值，粗差剔除能力远超传统 RANSAC（强烈推荐）\n"
-                                            "Fundamental RANSAC: 传统基础矩阵 RANSAC\n"
-                                            "Homography RANSAC: 仅适用于纯平面/纯旋转场景\n"
-                                            "Affine RANSAC: 仅适用于远距离平行投影场景\n"
-                                            "不剔除: 仅调试时使用"));
-        commonForm->addRow(tr("粗差剔除:"), m_outlierMethodCombo);
-
-        {
-            auto *sgPage = new QWidget(m_paramStack);
-            auto *sgForm = new QFormLayout(sgPage);
-            sgForm->setContentsMargins(0, 4, 0, 4);
-
-            m_modelTypeCombo = new QComboBox(sgPage);
-            m_modelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
-            m_modelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
-            m_modelTypeCombo->setToolTip(tr("SuperGlue 预训练模型类型\nOutdoor: 适用于外景、航空摄影\nIndoor: 适用于室内、近景摄影"));
-            sgForm->addRow(tr("模型类型:"), m_modelTypeCombo);
-
-            m_matchThresholdSpin = new QDoubleSpinBox(sgPage);
-            m_matchThresholdSpin->setRange(0.0, 1.0);
-            m_matchThresholdSpin->setDecimals(3);
-            m_matchThresholdSpin->setSingleStep(0.01);
-            m_matchThresholdSpin->setValue(0.15);
-            m_matchThresholdSpin->setToolTip(tr("SuperGlue 匹配置信度阈值 [0.0-1.0]\n推荐 0.15（航空）/ 0.10（近景）"));
-            sgForm->addRow(tr("匹配阈值:"), m_matchThresholdSpin);
-
-            m_sinkhornIterSpin = new QSpinBox(sgPage);
-            m_sinkhornIterSpin->setRange(1, 1000);
-            m_sinkhornIterSpin->setValue(150);
-            m_sinkhornIterSpin->setToolTip(tr("Sinkhorn 正则化迭代次数，推荐 20-200"));
-            sgForm->addRow(tr("Sinkhorn 迭代:"), m_sinkhornIterSpin);
-
-            m_batchSizeSpin = new QSpinBox(sgPage);
-            m_batchSizeSpin->setRange(1, 64);
-            m_batchSizeSpin->setValue(1);
-            m_batchSizeSpin->setToolTip(tr("推理批次大小，GPU 环境下可增大以提高吞吐量"));
-            sgForm->addRow(tr("批处理大小:"), m_batchSizeSpin);
-
-            m_inputWidthSpin = new QSpinBox(sgPage);
-            m_inputWidthSpin->setRange(-1, 20000);
-            m_inputWidthSpin->setValue(-1);
-            m_inputWidthSpin->setSpecialValueText(tr("自动"));
-            sgForm->addRow(tr("输入宽度:"), m_inputWidthSpin);
-
-            m_inputHeightSpin = new QSpinBox(sgPage);
-            m_inputHeightSpin->setRange(-1, 20000);
-            m_inputHeightSpin->setValue(-1);
-            m_inputHeightSpin->setSpecialValueText(tr("自动"));
-            sgForm->addRow(tr("输入高度:"), m_inputHeightSpin);
-
-            m_paramStack->addWidget(sgPage);
-        }
-
-        {
-            auto *lgPage = new QWidget(m_paramStack);
-            auto *lgForm = new QFormLayout(lgPage);
-            lgForm->setContentsMargins(0, 4, 0, 4);
-
-            m_lgMatchThresholdSpin = new QDoubleSpinBox(lgPage);
-            m_lgMatchThresholdSpin->setRange(0.0, 1.0);
-            m_lgMatchThresholdSpin->setDecimals(3);
-            m_lgMatchThresholdSpin->setSingleStep(0.01);
-            m_lgMatchThresholdSpin->setValue(0.15);
-            m_lgMatchThresholdSpin->setToolTip(tr("LightGlue 匹配置信度阈值 [0.0-1.0]\n推荐 0.15（航空）/ 0.10（近景）"));
-            lgForm->addRow(tr("匹配阈值:"), m_lgMatchThresholdSpin);
-
-            m_lgBatchSizeSpin = new QSpinBox(lgPage);
-            m_lgBatchSizeSpin->setRange(1, 64);
-            m_lgBatchSizeSpin->setValue(1);
-            m_lgBatchSizeSpin->setToolTip(tr("推理批次大小，GPU 环境下可增大以提高吞吐量"));
-            lgForm->addRow(tr("批处理大小:"), m_lgBatchSizeSpin);
-
-            m_lgInputWidthSpin = new QSpinBox(lgPage);
-            m_lgInputWidthSpin->setRange(-1, 20000);
-            m_lgInputWidthSpin->setValue(-1);
-            m_lgInputWidthSpin->setSpecialValueText(tr("自动"));
-            lgForm->addRow(tr("输入宽度:"), m_lgInputWidthSpin);
-
-            m_lgInputHeightSpin = new QSpinBox(lgPage);
-            m_lgInputHeightSpin->setRange(-1, 20000);
-            m_lgInputHeightSpin->setValue(-1);
-            m_lgInputHeightSpin->setSpecialValueText(tr("自动"));
-            lgForm->addRow(tr("输入高度:"), m_lgInputHeightSpin);
-
-            m_paramStack->addWidget(lgPage);
-        }
-
-        {
-            auto *tradPage = new QWidget(m_paramStack);
-            auto *tradLayout = new QVBoxLayout(tradPage);
-            tradLayout->setContentsMargins(0, 4, 0, 4);
-            auto *tradHint = new QLabel(tr("传统算法（BF / FLANN）无额外参数。\n"
-                                           "匹配质量由粗差剔除算法和 RANSAC 参数控制。"), tradPage);
-            tradHint->setWordWrap(true);
-            tradLayout->addWidget(tradHint);
-            tradLayout->addStretch();
-            m_paramStack->addWidget(tradPage);
-        }
-
-        {
-            auto *loftrPage = new QWidget(m_paramStack);
-            auto *loftrLayout = new QVBoxLayout(loftrPage);
-            loftrLayout->setContentsMargins(0, 4, 0, 4);
-
-            auto *loftrWarning = new QLabel(tr("⚠ LoFTR 直接处理原始图像，不使用已有特征提取结果"), loftrPage);
-            loftrWarning->setStyleSheet("color: #ff9800; font-weight: bold;");
-            loftrWarning->setWordWrap(true);
-            loftrLayout->addWidget(loftrWarning);
-
-            auto *loftrForm = new QFormLayout();
-            loftrLayout->addLayout(loftrForm);
-
-            m_loftrModelTypeCombo = new QComboBox(loftrPage);
-            m_loftrModelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
-            m_loftrModelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
-            loftrForm->addRow(tr("模型类型:"), m_loftrModelTypeCombo);
-
-            m_loftrMatchThresholdSpin = new QDoubleSpinBox(loftrPage);
-            m_loftrMatchThresholdSpin->setRange(0.0, 1.0);
-            m_loftrMatchThresholdSpin->setDecimals(3);
-            m_loftrMatchThresholdSpin->setSingleStep(0.01);
-            m_loftrMatchThresholdSpin->setValue(0.2);
-            m_loftrMatchThresholdSpin->setToolTip(tr("LoFTR 匹配置信度阈值"));
-            loftrForm->addRow(tr("匹配阈值:"), m_loftrMatchThresholdSpin);
-
-            loftrLayout->addStretch();
-            m_paramStack->addWidget(loftrPage);
-        }
-
-        {
-            auto *romaPage = new QWidget(m_paramStack);
-            auto *romaLayout = new QVBoxLayout(romaPage);
-            romaLayout->setContentsMargins(0, 4, 0, 4);
-
-            auto *romaWarning = new QLabel(tr("⚠ RoMa 直接处理原始图像，不使用已有特征提取结果\n"
-                                              "适合大旋转角度的小行星影像"), romaPage);
-            romaWarning->setStyleSheet("color: #ff9800; font-weight: bold;");
-            romaWarning->setWordWrap(true);
-            romaLayout->addWidget(romaWarning);
-
-            auto *romaForm = new QFormLayout();
-            romaLayout->addLayout(romaForm);
-
-            m_romaModelTypeCombo = new QComboBox(romaPage);
-            m_romaModelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
-            m_romaModelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
-            romaForm->addRow(tr("模型类型:"), m_romaModelTypeCombo);
-
-            m_romaMatchThresholdSpin = new QDoubleSpinBox(romaPage);
-            m_romaMatchThresholdSpin->setRange(0.0, 1.0);
-            m_romaMatchThresholdSpin->setDecimals(3);
-            m_romaMatchThresholdSpin->setSingleStep(0.01);
-            m_romaMatchThresholdSpin->setValue(0.05);
-            m_romaMatchThresholdSpin->setToolTip(tr("RoMa 匹配置信度阈值"));
-            romaForm->addRow(tr("匹配阈值:"), m_romaMatchThresholdSpin);
-
-            m_romaMaxKeypointsSpin = new QSpinBox(romaPage);
-            m_romaMaxKeypointsSpin->setRange(100, 50000);
-            m_romaMaxKeypointsSpin->setValue(10000);
-            m_romaMaxKeypointsSpin->setToolTip(tr("RoMa 最大关键点数"));
-            romaForm->addRow(tr("最大关键点数:"), m_romaMaxKeypointsSpin);
-
-            romaLayout->addStretch();
-            m_paramStack->addWidget(romaPage);
-        }
-
-        connect(ui.advancedToggle, &QToolButton::toggled, this, [this, advancedToggle = ui.advancedToggle](bool checked)
-        {
-            m_advancedGroup->setVisible(checked);
-            advancedToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
-        });
-
-        auto *advancedForm = ui.advancedForm;
-        m_outlierReprojSpin = new QDoubleSpinBox(right);
-        m_outlierReprojSpin->setRange(0.1, 50.0);
-        m_outlierReprojSpin->setDecimals(2);
-        m_outlierReprojSpin->setSingleStep(0.1);
-        m_outlierReprojSpin->setValue(1.5);
-        m_outlierReprojSpin->setToolTip(tr("RANSAC/USAC 重投影误差阈值（像素）\n"
-                                           "推荐: 1.0-1.5（高分辨率）/ 1.5-3.0（中等）/ 3.0-6.0（低分辨率）"));
-        advancedForm->addRow(tr("RANSAC 阈值(px):"), m_outlierReprojSpin);
-
-        m_outlierConfidenceSpin = new QDoubleSpinBox(right);
-        m_outlierConfidenceSpin->setRange(0.50, 0.9999);
-        m_outlierConfidenceSpin->setDecimals(4);
-        m_outlierConfidenceSpin->setSingleStep(0.0010);
-        m_outlierConfidenceSpin->setValue(0.9999);
-        m_outlierConfidenceSpin->setToolTip(tr("RANSAC/USAC 置信度 [0.5-0.9999]，推荐 0.9999"));
-        advancedForm->addRow(tr("RANSAC 置信度:"), m_outlierConfidenceSpin);
-
-        m_outlierMaxItersSpin = new QSpinBox(right);
-        m_outlierMaxItersSpin->setRange(100, 100000);
-        m_outlierMaxItersSpin->setValue(10000);
-        m_outlierMaxItersSpin->setToolTip(tr("RANSAC/USAC 最大迭代次数，推荐 10000"));
-        advancedForm->addRow(tr("RANSAC 最大迭代:"), m_outlierMaxItersSpin);
-
-        m_outlierMinInliersSpin = new QSpinBox(right);
-        m_outlierMinInliersSpin->setRange(1, 100000);
-        m_outlierMinInliersSpin->setValue(25);
-        m_outlierMinInliersSpin->setToolTip(tr("粗差剔除后最少内点数，低于此值则丢弃该匹配对\n推荐: ≥25（航空）/ ≥15（近景）"));
-        advancedForm->addRow(tr("最少内点数:"), m_outlierMinInliersSpin);
-
-        connect(ui.systemToggle, &QToolButton::toggled, this, [this, systemToggle = ui.systemToggle](bool checked)
-        {
-            m_systemGroup->setVisible(checked);
-            systemToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
-        });
-
-        auto *systemForm = ui.systemForm;
-        m_deviceCombo = new QComboBox(right);
-        m_deviceCombo->addItems({tr("CUDA（如可用）"), tr("CPU")});
-        m_deviceCombo->setToolTip(tr("计算设备选择\n"
-                                     "CUDA需要GPU支持"));
-        systemForm->addRow(tr("计算设备:"), m_deviceCombo);
-
-        m_numThreadsSpin = new QSpinBox(right);
-        m_numThreadsSpin->setRange(-1, 64);
-        m_numThreadsSpin->setValue(-1);
-        m_numThreadsSpin->setSpecialValueText(tr("自动"));
-        m_numThreadsSpin->setToolTip(tr("CPU线程数（仅CPU模式有效）\n"
-                                        "-1 表示自动检测"));
-        systemForm->addRow(tr("CPU线程数:"), m_numThreadsSpin);
-
-        m_cudaParallelSpin = new QSpinBox(right);
-        m_cudaParallelSpin->setRange(1, 8);
-        m_cudaParallelSpin->setValue(1);
-        m_cudaParallelSpin->setToolTip(tr("CUDA模式下同时处理的影像对数\n"
-                                          "每对独立持有一个模型实例，每实例约占显存 200-400 MB\n"
-                                          "请确认 GPU 显存充裕再增大此参数"));
-        systemForm->addRow(tr("CUDA并行对数:"), m_cudaParallelSpin);
-
-        connect(ui.debugToggle, &QToolButton::toggled, this, [this, debugToggle = ui.debugToggle](bool checked)
-        {
-            m_debugGroup->setVisible(checked);
-            debugToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
-        });
-
-        auto *debugForm = ui.debugForm;
-        m_saveCsvChk = new QCheckBox(tr("保存匹配结果为CSV"), right);
-        m_saveCsvChk->setToolTip(tr("将匹配关系导出为CSV格式（便于调试）"));
-        debugForm->addRow(m_saveCsvChk);
-
-        m_saveVisChk = new QCheckBox(tr("保存匹配可视化图像"), right);
-        m_saveVisChk->setToolTip(tr("生成带匹配连线的可视化图像"));
-        debugForm->addRow(m_saveVisChk);
-
-        m_verboseChk = new QCheckBox(tr("详细日志输出"), right);
-        m_verboseChk->setToolTip(tr("打印详细的匹配过程信息"));
-        debugForm->addRow(m_verboseChk);
-
-        return;
+        ui.topSplit->setStretchFactor(0, 3);
+        ui.topSplit->setStretchFactor(1, 2);
     }
 
-    QVBoxLayout* mainLayout = new QVBoxLayout(this);
-
-    // 上部：特征列表 + 匹配对预览 + 参数面板
-    QSplitter* topSplit = new QSplitter(this);
-
-    // ==================== 左侧：特征文件与匹配对 ====================
-    QWidget* left = new QWidget(this);
-    QVBoxLayout* leftLayout = new QVBoxLayout(left);
-
-    // ── 影像输入区（所有算法共用）──
-    m_imageInputWidget = new QWidget(left);
-    QVBoxLayout* imageInputLayout = new QVBoxLayout(m_imageInputWidget);
-    imageInputLayout->setContentsMargins(0, 0, 0, 0);
-
-    QHBoxLayout* imageHeaderRow = new QHBoxLayout();
-    imageHeaderRow->addWidget(new QLabel(tr("选择影像:"), m_imageInputWidget));
-    imageHeaderRow->addStretch();
-    m_selectAllBtn = new QPushButton(tr("全选"), m_imageInputWidget);
-    m_selectAllBtn->setFixedWidth(60);
-    m_selectAllBtn->setToolTip(tr("选中所有影像"));
-    m_deselectAllBtn = new QPushButton(tr("清除"), m_imageInputWidget);
-    m_deselectAllBtn->setFixedWidth(60);
-    m_deselectAllBtn->setToolTip(tr("取消选中所有影像"));
-    imageHeaderRow->addWidget(m_selectAllBtn);
-    imageHeaderRow->addWidget(m_deselectAllBtn);
-    imageInputLayout->addLayout(imageHeaderRow);
-
-    m_imageList = new QListWidget(m_imageInputWidget);
     m_imageList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_imageList->setToolTip(tr("所有算法共用的影像列表\n选中后可生成匹配对"));
-    imageInputLayout->addWidget(m_imageList, 1);
-    leftLayout->addWidget(m_imageInputWidget, 1);
 
-    // lis文件输入
-    QHBoxLayout* lisRow = new QHBoxLayout();
-    m_lisFileLine = new QLineEdit(left);
-    m_lisFileLine->setPlaceholderText(tr("可选：lis文件路径（格式：1 2\\n2 3）"));
-    m_lisFileLine->setToolTip(tr("lis文件定义匹配对关系\n"
-                                 "每行格式：image1_id image2_id\n"
-                                 "不指定则自动两两匹配"));
-    m_addLisBtn = new QPushButton(tr("浏览..."), left);
-    m_clearLisBtn = new QPushButton(tr("清空"), left);
-    lisRow->addWidget(new QLabel(tr("lis文件:"), left));
-    lisRow->addWidget(m_lisFileLine);
-    lisRow->addWidget(m_addLisBtn);
-    lisRow->addWidget(m_clearLisBtn);
-    leftLayout->addLayout(lisRow);
-
-    // 生成匹配对按钮
-    m_generatePairsBtn = new QPushButton(tr("生成匹配对"), left);
-    m_generatePairsBtn->setToolTip(tr("根据选中的影像和lis文件生成匹配对列表"));
-    leftLayout->addWidget(m_generatePairsBtn);
-
-    // 匹配对预览
-    leftLayout->addWidget(new QLabel(tr("匹配对预览:"), left));
-    m_pairPreview = new QTextEdit(left);
-    m_pairPreview->setReadOnly(true);
-    m_pairPreview->setMaximumHeight(150);
-    m_pairPreview->setToolTip(tr("将要执行的匹配对列表"));
-    leftLayout->addWidget(m_pairPreview);
-
-    // 输出设置
-    QHBoxLayout* outRow = new QHBoxLayout();
-    m_outputLine = new QLineEdit(left);
-    m_outputLine->setPlaceholderText(tr("保存到项目 assets/matches"));
-    m_outputLine->setToolTip(tr("留空时：默认保存到项目 assets/matches 目录"));
-    m_browseOutBtn = new QPushButton(tr("浏览..."), left);
-    outRow->addWidget(new QLabel(tr("输出目录："), left));
-    outRow->addWidget(m_outputLine);
-    outRow->addWidget(m_browseOutBtn);
-    leftLayout->addLayout(outRow);
-
-    topSplit->addWidget(left);
-
-    // ==================== 右侧：参数面板 ====================
-    QWidget* right = new QWidget(this);
-    QVBoxLayout* rightLayout = new QVBoxLayout(right);
-
-    // ── 始终显示的基础参数 ──────────────────────────────────────
-    QFormLayout* commonForm = new QFormLayout();
-    rightLayout->addLayout(commonForm);
-
-    m_matchAlgorithmCombo = new QComboBox(right);
+    m_matchAlgorithmCombo->clear();
     m_matchAlgorithmCombo->addItem(tr("SuperGlue"), "superglue");
     m_matchAlgorithmCombo->addItem(tr("LightGlue"), "lightglue");
     m_matchAlgorithmCombo->addItem(tr("LoFTR"), "loftr");
@@ -455,366 +117,47 @@ void FeatureMatchingDialog::setupUi()
     m_matchAlgorithmCombo->addItem(tr("BF-Hamming (ORB)"), "orb_bf_hamming");
     m_matchAlgorithmCombo->addItem(tr("BF-L2 (SIFT)"), "sift_bf_l2");
     m_matchAlgorithmCombo->addItem(tr("FLANN (SIFT)"), "sift_flann");
-    m_matchAlgorithmCombo->setToolTip(tr("选择特征匹配算法\n"
-                                         "SuperGlue/LightGlue: 需要预提取特征\n"
-                                         "LoFTR/RoMa: 直接处理原始图像"));
-    commonForm->addRow(tr("匹配算法:"), m_matchAlgorithmCombo);
 
-    m_featureSuffixLabel = new QLabel(tr("特征类型:"), right);
-    m_featureSuffixCombo = new QComboBox(right);
-    m_featureSuffixCombo->setToolTip(tr("选择用于匹配的特征文件类型\n"
-                                         "根据所选算法自动过滤可用后缀"));
-    commonForm->addRow(m_featureSuffixLabel, m_featureSuffixCombo);
-
-    m_maxKeypointsSpin = new QSpinBox(right);
-    m_maxKeypointsSpin->setRange(-1, 100000);
-    m_maxKeypointsSpin->setValue(-1);
-    m_maxKeypointsSpin->setSpecialValueText(tr("不限制"));
-    m_maxKeypointsSpin->setToolTip(tr("最大关键点数量限制，-1 表示不限制"));
-    commonForm->addRow(tr("最大关键点数:"), m_maxKeypointsSpin);
-
-    m_outlierMethodCombo = new QComboBox(right);
+    m_outlierMethodCombo->clear();
     m_outlierMethodCombo->addItem(tr("不剔除"), "none");
     m_outlierMethodCombo->addItem(tr("Fundamental RANSAC"), "fundamental");
     m_outlierMethodCombo->addItem(tr("Fundamental USAC_MAGSAC （推荐）"), "fundamental_usac_magsac");
     m_outlierMethodCombo->addItem(tr("Homography RANSAC"), "homography");
     m_outlierMethodCombo->addItem(tr("Affine RANSAC"), "affine");
     m_outlierMethodCombo->setCurrentIndex(2);
-    m_outlierMethodCombo->setToolTip(tr("匹配后粗差剔除算法（推荐 USAC_MAGSAC）\n\n"
-                                        "★ Fundamental USAC_MAGSAC: 自适应阈值，粗差剔除能力远超传统 RANSAC（强烈推荐）\n"
-                                        "Fundamental RANSAC: 传统基础矩阵 RANSAC\n"
-                                        "Homography RANSAC: 仅适用于纯平面/纯旋转场景\n"
-                                        "Affine RANSAC: 仅适用于远距离平行投影场景\n"
-                                        "不剔除: 仅调试时使用"));
-    commonForm->addRow(tr("粗差剔除:"), m_outlierMethodCombo);
 
-    // ── 算法专属参数（QStackedWidget）──────────────────────────
-    m_paramStack = new QStackedWidget(right);
-    rightLayout->addWidget(m_paramStack);
+    m_modelTypeCombo->clear();
+    m_modelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
+    m_modelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
 
-    // ── Page 0: SuperGlue ──────────────────────────────────────
-    {
-        QWidget* sgPage = new QWidget();
-        QFormLayout* sgForm = new QFormLayout(sgPage);
-        sgForm->setContentsMargins(0, 4, 0, 4);
+    m_loftrModelTypeCombo->clear();
+    m_loftrModelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
+    m_loftrModelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
 
-        m_modelTypeCombo = new QComboBox(sgPage);
-        m_modelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
-        m_modelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
-        m_modelTypeCombo->setToolTip(tr("SuperGlue 预训练模型类型\nOutdoor: 适用于外景、航空摄影\nIndoor: 适用于室内、近景摄影"));
-        sgForm->addRow(tr("模型类型:"), m_modelTypeCombo);
+    m_romaModelTypeCombo->clear();
+    m_romaModelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
+    m_romaModelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
 
-        m_matchThresholdSpin = new QDoubleSpinBox(sgPage);
-        m_matchThresholdSpin->setRange(0.0, 1.0);
-        m_matchThresholdSpin->setDecimals(3);
-        m_matchThresholdSpin->setSingleStep(0.01);
-        m_matchThresholdSpin->setValue(0.15);
-        m_matchThresholdSpin->setToolTip(tr("SuperGlue 匹配置信度阈值 [0.0-1.0]\n推荐 0.15（航空）/ 0.10（近景）"));
-        sgForm->addRow(tr("匹配阈值:"), m_matchThresholdSpin);
+    m_deviceCombo->clear();
+    m_deviceCombo->addItems({tr("CUDA（如可用）"), tr("CPU")});
 
-        m_sinkhornIterSpin = new QSpinBox(sgPage);
-        m_sinkhornIterSpin->setRange(1, 1000);
-        m_sinkhornIterSpin->setValue(150);
-        m_sinkhornIterSpin->setToolTip(tr("Sinkhorn 正则化迭代次数，推荐 20-200"));
-        sgForm->addRow(tr("Sinkhorn 迭代:"), m_sinkhornIterSpin);
-
-        m_batchSizeSpin = new QSpinBox(sgPage);
-        m_batchSizeSpin->setRange(1, 64);
-        m_batchSizeSpin->setValue(1);
-        m_batchSizeSpin->setToolTip(tr("推理批次大小，GPU 环境下可增大以提高吞吐量"));
-        sgForm->addRow(tr("批处理大小:"), m_batchSizeSpin);
-
-        m_inputWidthSpin = new QSpinBox(sgPage);
-        m_inputWidthSpin->setRange(-1, 20000);
-        m_inputWidthSpin->setValue(-1);
-        m_inputWidthSpin->setSpecialValueText(tr("自动"));
-        sgForm->addRow(tr("输入宽度:"), m_inputWidthSpin);
-
-        m_inputHeightSpin = new QSpinBox(sgPage);
-        m_inputHeightSpin->setRange(-1, 20000);
-        m_inputHeightSpin->setValue(-1);
-        m_inputHeightSpin->setSpecialValueText(tr("自动"));
-        sgForm->addRow(tr("输入高度:"), m_inputHeightSpin);
-
-        m_paramStack->addWidget(sgPage);  // index 0
-    }
-
-    // ── Page 1: LightGlue ─────────────────────────────────────
-    {
-        QWidget* lgPage = new QWidget();
-        QFormLayout* lgForm = new QFormLayout(lgPage);
-        lgForm->setContentsMargins(0, 4, 0, 4);
-
-        m_lgMatchThresholdSpin = new QDoubleSpinBox(lgPage);
-        m_lgMatchThresholdSpin->setRange(0.0, 1.0);
-        m_lgMatchThresholdSpin->setDecimals(3);
-        m_lgMatchThresholdSpin->setSingleStep(0.01);
-        m_lgMatchThresholdSpin->setValue(0.15);
-        m_lgMatchThresholdSpin->setToolTip(tr("LightGlue 匹配置信度阈值 [0.0-1.0]\n推荐 0.15（航空）/ 0.10（近景）"));
-        lgForm->addRow(tr("匹配阈值:"), m_lgMatchThresholdSpin);
-
-        m_lgBatchSizeSpin = new QSpinBox(lgPage);
-        m_lgBatchSizeSpin->setRange(1, 64);
-        m_lgBatchSizeSpin->setValue(1);
-        m_lgBatchSizeSpin->setToolTip(tr("推理批次大小，GPU 环境下可增大以提高吞吐量"));
-        lgForm->addRow(tr("批处理大小:"), m_lgBatchSizeSpin);
-
-        m_lgInputWidthSpin = new QSpinBox(lgPage);
-        m_lgInputWidthSpin->setRange(-1, 20000);
-        m_lgInputWidthSpin->setValue(-1);
-        m_lgInputWidthSpin->setSpecialValueText(tr("自动"));
-        lgForm->addRow(tr("输入宽度:"), m_lgInputWidthSpin);
-
-        m_lgInputHeightSpin = new QSpinBox(lgPage);
-        m_lgInputHeightSpin->setRange(-1, 20000);
-        m_lgInputHeightSpin->setValue(-1);
-        m_lgInputHeightSpin->setSpecialValueText(tr("自动"));
-        lgForm->addRow(tr("输入高度:"), m_lgInputHeightSpin);
-
-        m_paramStack->addWidget(lgPage);  // index 1
-    }
-
-    // ── Page 2: 传统算法（BF / FLANN）────────────────────────
-    {
-        QWidget* tradPage = new QWidget();
-        QVBoxLayout* tradLayout = new QVBoxLayout(tradPage);
-        tradLayout->setContentsMargins(0, 4, 0, 4);
-        QLabel* tradHint = new QLabel(tr("传统算法（BF / FLANN）无额外参数。\n"
-                                         "匹配质量由粗差剔除算法和 RANSAC 参数控制。"), tradPage);
-        tradHint->setWordWrap(true);
-        tradLayout->addWidget(tradHint);
-        tradLayout->addStretch();
-        m_paramStack->addWidget(tradPage);  // index 2
-    }
-
-    // ── Page 3: LoFTR ─────────────────────────────────────────
-    {
-        QWidget* loftrPage = new QWidget();
-        QVBoxLayout* loftrLayout = new QVBoxLayout(loftrPage);
-        loftrLayout->setContentsMargins(0, 4, 0, 4);
-
-        QLabel* loftrWarning = new QLabel(tr("⚠ LoFTR 直接处理原始图像，不使用已有特征提取结果"), loftrPage);
-        loftrWarning->setStyleSheet("color: #ff9800; font-weight: bold;");
-        loftrWarning->setWordWrap(true);
-        loftrLayout->addWidget(loftrWarning);
-
-        QFormLayout* loftrForm = new QFormLayout();
-        loftrLayout->addLayout(loftrForm);
-
-        m_loftrModelTypeCombo = new QComboBox(loftrPage);
-        m_loftrModelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
-        m_loftrModelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
-        loftrForm->addRow(tr("模型类型:"), m_loftrModelTypeCombo);
-
-        m_loftrMatchThresholdSpin = new QDoubleSpinBox(loftrPage);
-        m_loftrMatchThresholdSpin->setRange(0.0, 1.0);
-        m_loftrMatchThresholdSpin->setDecimals(3);
-        m_loftrMatchThresholdSpin->setSingleStep(0.01);
-        m_loftrMatchThresholdSpin->setValue(0.2);
-        m_loftrMatchThresholdSpin->setToolTip(tr("LoFTR 匹配置信度阈值"));
-        loftrForm->addRow(tr("匹配阈值:"), m_loftrMatchThresholdSpin);
-
-        loftrLayout->addStretch();
-        m_paramStack->addWidget(loftrPage);  // index 3
-    }
-
-    // ── Page 4: RoMa ──────────────────────────────────────────
-    {
-        QWidget* romaPage = new QWidget();
-        QVBoxLayout* romaLayout = new QVBoxLayout(romaPage);
-        romaLayout->setContentsMargins(0, 4, 0, 4);
-
-        QLabel* romaWarning = new QLabel(tr("⚠ RoMa 直接处理原始图像，不使用已有特征提取结果\n"
-                                            "适合大旋转角度的小行星影像"), romaPage);
-        romaWarning->setStyleSheet("color: #ff9800; font-weight: bold;");
-        romaWarning->setWordWrap(true);
-        romaLayout->addWidget(romaWarning);
-
-        QFormLayout* romaForm = new QFormLayout();
-        romaLayout->addLayout(romaForm);
-
-        m_romaModelTypeCombo = new QComboBox(romaPage);
-        m_romaModelTypeCombo->addItem(tr("Outdoor （室外/航空）"), "outdoor");
-        m_romaModelTypeCombo->addItem(tr("Indoor （室内/近景）"), "indoor");
-        romaForm->addRow(tr("模型类型:"), m_romaModelTypeCombo);
-
-        m_romaMatchThresholdSpin = new QDoubleSpinBox(romaPage);
-        m_romaMatchThresholdSpin->setRange(0.0, 1.0);
-        m_romaMatchThresholdSpin->setDecimals(3);
-        m_romaMatchThresholdSpin->setSingleStep(0.01);
-        m_romaMatchThresholdSpin->setValue(0.05);
-        m_romaMatchThresholdSpin->setToolTip(tr("RoMa 匹配置信度阈值"));
-        romaForm->addRow(tr("匹配阈值:"), m_romaMatchThresholdSpin);
-
-        m_romaMaxKeypointsSpin = new QSpinBox(romaPage);
-        m_romaMaxKeypointsSpin->setRange(100, 50000);
-        m_romaMaxKeypointsSpin->setValue(10000);
-        m_romaMaxKeypointsSpin->setToolTip(tr("RoMa 最大关键点数"));
-        romaForm->addRow(tr("最大关键点数:"), m_romaMaxKeypointsSpin);
-
-        romaLayout->addStretch();
-        m_paramStack->addWidget(romaPage);  // index 4
-    }
-
-    // ── 高级参数（折叠）：RANSAC 参数，所有算法共用 ──────────────
-    auto *advancedToggle = new QToolButton(right);
-    advancedToggle->setText(tr("高级参数（RANSAC）"));
-    advancedToggle->setCheckable(true);
-    advancedToggle->setChecked(false);
-    advancedToggle->setArrowType(Qt::RightArrow);
-    advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    rightLayout->addWidget(advancedToggle);
-
-    m_advancedGroup = new QGroupBox(right);
-    m_advancedGroup->setFlat(true);
-    m_advancedGroup->setTitle(QString());
-    m_advancedGroup->setVisible(false);
-    QFormLayout* advancedForm = new QFormLayout(m_advancedGroup);
-    rightLayout->addWidget(m_advancedGroup);
-
-    connect(advancedToggle, &QToolButton::toggled, this, [this, advancedToggle](bool checked)
+    connect(ui.advancedToggle, &QToolButton::toggled, this, [this, advancedToggle = ui.advancedToggle](bool checked)
     {
         m_advancedGroup->setVisible(checked);
         advancedToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
     });
 
-    m_outlierReprojSpin = new QDoubleSpinBox(right);
-    m_outlierReprojSpin->setRange(0.1, 50.0);
-    m_outlierReprojSpin->setDecimals(2);
-    m_outlierReprojSpin->setSingleStep(0.1);
-    m_outlierReprojSpin->setValue(1.5);
-    m_outlierReprojSpin->setToolTip(tr("RANSAC/USAC 重投影误差阈值（像素）\n"
-                                       "推荐: 1.0-1.5（高分辨率）/ 1.5-3.0（中等）/ 3.0-6.0（低分辨率）"));
-    advancedForm->addRow(tr("RANSAC 阈值(px):"), m_outlierReprojSpin);
-
-    m_outlierConfidenceSpin = new QDoubleSpinBox(right);
-    m_outlierConfidenceSpin->setRange(0.50, 0.9999);
-    m_outlierConfidenceSpin->setDecimals(4);
-    m_outlierConfidenceSpin->setSingleStep(0.0010);
-    m_outlierConfidenceSpin->setValue(0.9999);
-    m_outlierConfidenceSpin->setToolTip(tr("RANSAC/USAC 置信度 [0.5-0.9999]，推荐 0.9999"));
-    advancedForm->addRow(tr("RANSAC 置信度:"), m_outlierConfidenceSpin);
-
-    m_outlierMaxItersSpin = new QSpinBox(right);
-    m_outlierMaxItersSpin->setRange(100, 100000);
-    m_outlierMaxItersSpin->setValue(10000);
-    m_outlierMaxItersSpin->setToolTip(tr("RANSAC/USAC 最大迭代次数，推荐 10000"));
-    advancedForm->addRow(tr("RANSAC 最大迭代:"), m_outlierMaxItersSpin);
-
-    m_outlierMinInliersSpin = new QSpinBox(right);
-    m_outlierMinInliersSpin->setRange(1, 100000);
-    m_outlierMinInliersSpin->setValue(25);
-    m_outlierMinInliersSpin->setToolTip(tr("粗差剔除后最少内点数，低于此值则丢弃该匹配对\n推荐: ≥25（航空）/ ≥15（近景）"));
-    advancedForm->addRow(tr("最少内点数:"), m_outlierMinInliersSpin);
-
-    // --------------- 系统参数（折叠） ---------------
-    auto *systemToggle = new QToolButton(right);
-    systemToggle->setText(tr("系统参数"));
-    systemToggle->setCheckable(true);
-    systemToggle->setChecked(false);
-    systemToggle->setArrowType(Qt::RightArrow);
-    systemToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    rightLayout->addWidget(systemToggle);
-
-    m_systemGroup = new QGroupBox(right);
-    m_systemGroup->setFlat(true);
-    m_systemGroup->setTitle(QString());
-    m_systemGroup->setVisible(false);
-    QFormLayout* systemForm = new QFormLayout(m_systemGroup);
-    rightLayout->addWidget(m_systemGroup);
-
-    connect(systemToggle, &QToolButton::toggled, this, [this, systemToggle](bool checked)
+    connect(ui.systemToggle, &QToolButton::toggled, this, [this, systemToggle = ui.systemToggle](bool checked)
     {
         m_systemGroup->setVisible(checked);
         systemToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
     });
 
-    // 设备选择
-    m_deviceCombo = new QComboBox(right);
-    m_deviceCombo->addItems({tr("CUDA（如可用）"), tr("CPU")});
-    m_deviceCombo->setToolTip(tr("计算设备选择\n"
-                                 "CUDA需要GPU支持"));
-    systemForm->addRow(tr("计算设备:"), m_deviceCombo);
-
-    // CPU线程数
-    m_numThreadsSpin = new QSpinBox(right);
-    m_numThreadsSpin->setRange(-1, 64);
-    m_numThreadsSpin->setValue(-1);
-    m_numThreadsSpin->setSpecialValueText(tr("自动"));
-    m_numThreadsSpin->setToolTip(tr("CPU线程数（仅CPU模式有效）\n"
-                                    "-1 表示自动检测"));
-    systemForm->addRow(tr("CPU线程数:"), m_numThreadsSpin);
-
-    // CUDA 并行对数
-    m_cudaParallelSpin = new QSpinBox(right);
-    m_cudaParallelSpin->setRange(1, 8);
-    m_cudaParallelSpin->setValue(1);
-    m_cudaParallelSpin->setToolTip(tr("CUDA模式下同时处理的影像对数\n"
-                                       "每对独立持有一个模型实例，每实例约占显存 200-400 MB\n"
-                                       "请确认 GPU 显存充裕再增大此参数"));
-    systemForm->addRow(tr("CUDA并行对数:"), m_cudaParallelSpin);
-
-    // --------------- 调试参数（折叠） ---------------
-    auto *debugToggle = new QToolButton(right);
-    debugToggle->setText(tr("调试参数"));
-    debugToggle->setCheckable(true);
-    debugToggle->setChecked(false);
-    debugToggle->setArrowType(Qt::RightArrow);
-    debugToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    rightLayout->addWidget(debugToggle);
-
-    m_debugGroup = new QGroupBox(right);
-    m_debugGroup->setFlat(true);
-    m_debugGroup->setTitle(QString());
-    m_debugGroup->setVisible(false);
-    QFormLayout* debugForm = new QFormLayout(m_debugGroup);
-    rightLayout->addWidget(m_debugGroup);
-
-    connect(debugToggle, &QToolButton::toggled, this, [this, debugToggle](bool checked)
+    connect(ui.debugToggle, &QToolButton::toggled, this, [this, debugToggle = ui.debugToggle](bool checked)
     {
         m_debugGroup->setVisible(checked);
         debugToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
     });
-
-    // 保存CSV
-    m_saveCsvChk = new QCheckBox(tr("保存匹配结果为CSV"), right);
-    m_saveCsvChk->setToolTip(tr("将匹配关系导出为CSV格式（便于调试）"));
-    debugForm->addRow(m_saveCsvChk);
-
-    // 保存可视化
-    m_saveVisChk = new QCheckBox(tr("保存匹配可视化图像"), right);
-    m_saveVisChk->setToolTip(tr("生成带匹配连线的可视化图像"));
-    debugForm->addRow(m_saveVisChk);
-
-    // 详细日志
-    m_verboseChk = new QCheckBox(tr("详细日志输出"), right);
-    m_verboseChk->setToolTip(tr("打印详细的匹配过程信息"));
-    debugForm->addRow(m_verboseChk);
-
-    rightLayout->addStretch();
-    
-    topSplit->addWidget(right);
-    topSplit->setStretchFactor(0, 3);
-    topSplit->setStretchFactor(1, 2);
-    
-    mainLayout->addWidget(topSplit);
-
-    // ==================== 底部按钮 ====================
-    QHBoxLayout* btnRow = new QHBoxLayout();
-    btnRow->addStretch();
-    
-    m_resetBtn = new QPushButton(tr("重置默认值"), this);
-    m_viewMatchesBtn = new QPushButton(tr("查看匹配"), this);
-    m_runBtn = new QPushButton(tr("运行匹配"), this);
-    m_runBtn->setDefault(true);
-    m_cancelBtn = new QPushButton(tr("取消"), this);
-    
-    btnRow->addWidget(m_resetBtn);
-    btnRow->addWidget(m_viewMatchesBtn);
-    btnRow->addWidget(m_runBtn);
-    btnRow->addWidget(m_cancelBtn);
-    
-    mainLayout->addLayout(btnRow);
 }
 
 void FeatureMatchingDialog::setupConnections() 

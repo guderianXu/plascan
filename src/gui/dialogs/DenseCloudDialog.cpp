@@ -7,24 +7,17 @@
 #include "ProjectManager.h"
 #include "ui_DenseCloudDialog.h"
 
-#include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDialogButtonBox>
 #include <QDoubleSpinBox>
 #include <QFileDialog>
-#include <QFormLayout>
-#include <QGroupBox>
 #include <QJsonArray>
 #include <QJsonObject>
-#include <QLabel>
 #include <QLineEdit>
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSpinBox>
-#include <QTabWidget>
 #include <QTextEdit>
-#include <QTimer>
 
 DenseCloudDialog::DenseCloudDialog(ProjectManager *projectManager, QWidget *parent)
     : QDialog(parent)
@@ -129,154 +122,6 @@ void DenseCloudDialog::setupUi()
     // 初始日志
     appendLog(tr("[MVS] 就绪。请确认已完成空中三角测量后再运行稠密重建。"));
     appendLog(tr("[提示] 匹配点数量少 ≠ 点云质量差；MVS 通过像素级密集匹配生成稠密点云。"));
-}
-
-// =============================================================================
-// buildSgbmGroup
-// =============================================================================
-
-void DenseCloudDialog::buildSgbmGroup(QGroupBox *gb)
-{
-    gb->setTitle(tr("SGBM 视差估计参数"));
-    auto *form = new QFormLayout(gb);
-
-    m_numDispSpin = new QSpinBox(this);
-    m_numDispSpin->setRange(16, 512);
-    m_numDispSpin->setSingleStep(16);
-    m_numDispSpin->setValue(128);
-    m_numDispSpin->setToolTip(tr("视差搜索范围（像素，必须是16的倍数）。"
-                                  "值越大可检测更大深度差，但运算更慢。\n"
-                                  "建议：128（标准）~256（大场景）"));
-    form->addRow(tr("视差范围:"), m_numDispSpin);
-
-    m_blockSizeSpin = new QSpinBox(this);
-    m_blockSizeSpin->setRange(3, 21);
-    m_blockSizeSpin->setSingleStep(2);
-    m_blockSizeSpin->setValue(9);
-    m_blockSizeSpin->setToolTip(tr("立体匹配块大小（奇数，3~21）。"
-                                    "越大越稳健但细节损失；纹理丰富时用小值。\n"
-                                    "建议：7~11"));
-    form->addRow(tr("匹配块大小:"), m_blockSizeSpin);
-
-    m_uniquenessSpin = new QSpinBox(this);
-    m_uniquenessSpin->setRange(0, 50);
-    m_uniquenessSpin->setValue(10);
-    m_uniquenessSpin->setSuffix(tr(" %"));
-    m_uniquenessSpin->setToolTip(tr("唯一性比率：最优视差得分比次优好多少才接受（0=关闭）。\n"
-                                     "值越高误匹配越少但覆盖率下降。建议：5~15"));
-    form->addRow(tr("唯一性比率:"), m_uniquenessSpin);
-
-    m_speckleSizeSpin = new QSpinBox(this);
-    m_speckleSizeSpin->setRange(0, 1000);
-    m_speckleSizeSpin->setValue(100);
-    m_speckleSizeSpin->setToolTip(tr("噪斑消除窗口（像素数）。小于此尺寸的孤立视差区域将被过滤。\n"
-                                      "建议：50~200"));
-    form->addRow(tr("噪斑消除窗口:"), m_speckleSizeSpin);
-
-    m_fullDpCheck = new QCheckBox(tr("使用 SGBM_3WAY 模式（更慢更精确）"), this);
-    m_fullDpCheck->setChecked(true);
-    form->addRow(QString(), m_fullDpCheck);
-
-    m_wlsFilterCheck = new QCheckBox(tr("启用 WLS 视差后过滤（平滑边缘，需要 opencv_ximgproc）"), this);
-    m_wlsFilterCheck->setChecked(true);
-    form->addRow(QString(), m_wlsFilterCheck);
-
-    // 深度范围
-    auto *depthRow = new QHBoxLayout;
-    m_minDepthSpin = new QDoubleSpinBox(this);
-    m_minDepthSpin->setRange(0.001, 9999);
-    m_minDepthSpin->setValue(0.01);
-    m_minDepthSpin->setDecimals(3);
-
-    m_maxDepthSpin = new QDoubleSpinBox(this);
-    m_maxDepthSpin->setRange(0.1, 1e7);
-    m_maxDepthSpin->setValue(1e5);
-    m_maxDepthSpin->setDecimals(1);
-    m_maxDepthSpin->setSuffix(tr(" (单位:与坐标系一致)"));
-
-    depthRow->addWidget(new QLabel(tr("最小:")));
-    depthRow->addWidget(m_minDepthSpin);
-    depthRow->addWidget(new QLabel(tr("  最大:")));
-    depthRow->addWidget(m_maxDepthSpin);
-    form->addRow(tr("有效深度范围:"), depthRow);
-}
-
-// =============================================================================
-// buildCloudGroup
-// =============================================================================
-
-void DenseCloudDialog::buildCloudGroup(QGroupBox *gb)
-{
-    gb->setTitle(tr("稠密点云参数"));
-    auto *form = new QFormLayout(gb);
-
-    m_minConfSpin = new QDoubleSpinBox(this);
-    m_minConfSpin->setRange(0.0, 1.0);
-    m_minConfSpin->setSingleStep(0.05);
-    m_minConfSpin->setValue(0.1);
-    m_minConfSpin->setDecimals(2);
-    m_minConfSpin->setToolTip(tr("WLS 滤波后的最低置信度阈值（0~1）。"
-                                  "越高误差越少但点云越稀疏。建议：0.1~0.3"));
-    form->addRow(tr("最低置信度:"), m_minConfSpin);
-
-    m_multiViewCheck = new QCheckBox(tr("多视图一致性融合（减少飞点，需要 ≥2 组深度图）"), this);
-    m_multiViewCheck->setChecked(true);
-    form->addRow(QString(), m_multiViewCheck);
-
-    m_colorsCheck = new QCheckBox(tr("从影像采样颜色（RGB 点云）"), this);
-    m_colorsCheck->setChecked(true);
-    form->addRow(QString(), m_colorsCheck);
-
-    m_normalsCheck = new QCheckBox(tr("估计点云法向量（Poisson 重建必须开启）"), this);
-    m_normalsCheck->setChecked(true);
-    form->addRow(QString(), m_normalsCheck);
-
-    m_normalKnnSpin = new QSpinBox(this);
-    m_normalKnnSpin->setRange(8, 64);
-    m_normalKnnSpin->setValue(20);
-    form->addRow(tr("法向量 KNN 邻域:"), m_normalKnnSpin);
-
-    // 连接法向量复选框与 KNN 纺控件联动
-    connect(m_normalsCheck, &QCheckBox::toggled, m_normalKnnSpin, &QSpinBox::setEnabled);
-}
-
-// =============================================================================
-// buildMeshGroup
-// =============================================================================
-
-void DenseCloudDialog::buildMeshGroup(QGroupBox *gb)
-{
-    gb->setTitle(tr("（可选）网格重建"));
-    auto *form = new QFormLayout(gb);
-
-    m_buildMeshCheck = new QCheckBox(tr("同时重建三角网格模型"), this);
-    m_buildMeshCheck->setChecked(false);
-    form->addRow(QString(), m_buildMeshCheck);
-
-    m_meshMethodCombo = new QComboBox(this);
-    m_meshMethodCombo->addItem(tr("体素 TSDF + Marching Cubes（推荐）"), QStringLiteral("voxel_poisson"));
-    m_meshMethodCombo->addItem(tr("Ball Pivoting（快速近似）"),            QStringLiteral("ball_pivoting"));
-    form->addRow(tr("重建算法:"), m_meshMethodCombo);
-
-    m_voxelResSpin = new QSpinBox(this);
-    m_voxelResSpin->setRange(64, 512);
-    m_voxelResSpin->setValue(256);
-    m_voxelResSpin->setToolTip(tr("体素格沿最长轴的分辨率。256=精度与速度平衡，512=高精度但内存开销大。"));
-    form->addRow(tr("体素分辨率:"), m_voxelResSpin);
-
-    m_smoothIterSpin = new QSpinBox(this);
-    m_smoothIterSpin->setRange(0, 10);
-    m_smoothIterSpin->setValue(1);
-    form->addRow(tr("Laplacian 平滑迭代:"), m_smoothIterSpin);
-
-    // 联动：仅网格重建开启时相关控件可用
-    auto onMeshToggle = [=](bool checked) {
-        m_meshMethodCombo->setEnabled(checked);
-        m_voxelResSpin->setEnabled(checked);
-        m_smoothIterSpin->setEnabled(checked);
-    };
-    onMeshToggle(false);
-    connect(m_buildMeshCheck, &QCheckBox::toggled, onMeshToggle);
 }
 
 // =============================================================================

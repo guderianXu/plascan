@@ -1,11 +1,10 @@
 #include "ReferencePanelWidget.h"
+#include "ui_ReferencePanelWidget.h"
 
 #include <QTableWidget>
 #include <QHeaderView>
 #include <QPushButton>
 #include <QItemSelectionModel>
-#include <QHBoxLayout>
-#include <QVBoxLayout>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QFileInfo>
@@ -53,7 +52,14 @@ bool computeYprFromR(const QJsonObject &camObj, double *yawDeg, double *pitchDeg
 ReferencePanelWidget::ReferencePanelWidget(QWidget *parent)
     : QWidget(parent)
 {
-    m_table = new QTableWidget(this);
+    Ui::ReferencePanelWidget ui;
+    ui.setupUi(this);
+
+    m_table = ui.m_table;
+    m_exactImportBtn = ui.m_exactImportBtn;
+    m_batchImportBtn = ui.m_batchImportBtn;
+    m_clearCameraBtn = ui.m_clearCameraBtn;
+
     m_table->setColumnCount(10);
     m_table->setHorizontalHeaderLabels({
         tr("影像"),
@@ -78,28 +84,6 @@ ReferencePanelWidget::ReferencePanelWidget(QWidget *parent)
     m_table->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(8, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(9, QHeaderView::Stretch);
-    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_table->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
-
-    m_exactImportBtn = new QPushButton(tr("为所选影像导入相机..."), this);
-    m_batchImportBtn = new QPushButton(tr("按文件名批量匹配导入..."), this);
-    m_clearCameraBtn = new QPushButton(tr("清除相机参数"), this);
-    m_exactImportBtn->setEnabled(false);
-    m_clearCameraBtn->setEnabled(false);
-
-    auto *btnLayout = new QHBoxLayout();
-    btnLayout->setContentsMargins(0, 0, 0, 0);
-    btnLayout->addWidget(m_exactImportBtn);
-    btnLayout->addWidget(m_batchImportBtn);
-    btnLayout->addWidget(m_clearCameraBtn);
-    btnLayout->addStretch(1);
-
-    auto *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addLayout(btnLayout);
-    layout->addWidget(m_table);
-    setLayout(layout);
 
     connect(m_exactImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onExactImportClicked);
     connect(m_batchImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onBatchImportClicked);

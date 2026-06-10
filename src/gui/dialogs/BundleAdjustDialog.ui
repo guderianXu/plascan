@@ -72,11 +72,68 @@
     </widget>
    </item>
    <item>
-    <widget class="QGroupBox" name="basicGroup">
+   <widget class="QGroupBox" name="basicGroup">
      <property name="title">
       <string>基础参数（常用）</string>
      </property>
-     <layout class="QFormLayout" name="basicForm"/>
+     <layout class="QFormLayout" name="basicForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="maxIterationsLabel">
+        <property name="text">
+         <string>外层迭代</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="m_maxIterationsSpin">
+        <property name="toolTip">
+         <string>外层交替优化迭代次数。过大可能增加耗时。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>100</number>
+        </property>
+        <property name="value">
+         <number>12</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="minMatchesLabel">
+        <property name="text">
+         <string>最小匹配点阈值</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="m_minMatchesSpin">
+        <property name="toolTip">
+         <string>少于该匹配点数的影像对将被跳过。</string>
+        </property>
+        <property name="maximum">
+         <number>100000</number>
+        </property>
+        <property name="value">
+         <number>10</number>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_refinePoseCheck">
+        <property name="toolTip">
+         <string>开启后会同时优化相机外参，可提升整体一致性。</string>
+        </property>
+        <property name="text">
+         <string>优化相机位姿（推荐开启）</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>
@@ -84,7 +141,164 @@
      <property name="title">
       <string>高级参数（鲁棒/收敛）</string>
      </property>
-     <layout class="QFormLayout" name="advForm"/>
+     <layout class="QFormLayout" name="advForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="maxPointItersLabel">
+        <property name="text">
+         <string>点优化迭代</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="m_maxPointItersSpin">
+        <property name="toolTip">
+         <string>每条空间点轨迹的局部优化迭代上限。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>80</number>
+        </property>
+        <property name="value">
+         <number>8</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="maxCameraItersLabel">
+        <property name="text">
+         <string>相机优化迭代</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="m_maxCameraItersSpin">
+        <property name="toolTip">
+         <string>每台相机位姿优化迭代上限。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>80</number>
+        </property>
+        <property name="value">
+         <number>5</number>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="huberDeltaLabel">
+        <property name="text">
+         <string>Huber δ</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QDoubleSpinBox" name="m_huberDeltaSpin">
+        <property name="toolTip">
+         <string>Huber 鲁棒核阈值（像素）。越小越强抑制粗差。</string>
+        </property>
+        <property name="decimals">
+         <number>4</number>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>3.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="dampingLabel">
+        <property name="text">
+         <string>阻尼</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QDoubleSpinBox" name="m_dampingSpin">
+        <property name="toolTip">
+         <string>LM 阻尼系数，过大可能收敛慢，过小可能不稳定。</string>
+        </property>
+        <property name="decimals">
+         <number>10</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000001000</double>
+        </property>
+        <property name="maximum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.000001000000000</double>
+        </property>
+        <property name="value">
+         <double>0.000001000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="stepTolLabel">
+        <property name="text">
+         <string>收敛阈值</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QDoubleSpinBox" name="m_stepTolSpin">
+        <property name="toolTip">
+         <string>参数步长收敛阈值，小于该值视为收敛。</string>
+        </property>
+        <property name="decimals">
+         <number>10</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000000100000</double>
+        </property>
+        <property name="maximum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.000001000000000</double>
+        </property>
+        <property name="value">
+         <double>0.000001000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="finiteDiffLabel">
+        <property name="text">
+         <string>数值微分步长</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QDoubleSpinBox" name="m_finiteDiffSpin">
+        <property name="toolTip">
+         <string>数值微分步长，用于雅可比近似。</string>
+        </property>
+        <property name="decimals">
+         <number>10</number>
+        </property>
+        <property name="minimum">
+         <double>0.000000010000000</double>
+        </property>
+        <property name="maximum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.000100000000000</double>
+        </property>
+        <property name="value">
+         <double>0.000100000000000</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>
@@ -92,7 +306,48 @@
      <property name="title">
       <string>系统参数（并发/资源）</string>
      </property>
-     <layout class="QFormLayout" name="sysForm"/>
+     <layout class="QFormLayout" name="sysForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="threadsLabel">
+        <property name="text">
+         <string>线程数</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="m_threadsSpin">
+        <property name="toolTip">
+         <string>并行线程数。0 表示自动根据系统决定。</string>
+        </property>
+        <property name="maximum">
+         <number>128</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="chunkSizeLabel">
+        <property name="text">
+         <string>批处理块大小</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="m_chunkSizeSpin">
+        <property name="toolTip">
+         <string>每批处理轨迹数（用于控制内存峰值与响应性）。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>1000000</number>
+        </property>
+        <property name="value">
+         <number>2000</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>
@@ -100,7 +355,96 @@
      <property name="title">
       <string>调试参数（开发/诊断）</string>
      </property>
-     <layout class="QFormLayout" name="dbgForm"/>
+     <layout class="QFormLayout" name="dbgForm">
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_exportTsaiCheck">
+        <property name="toolTip">
+         <string>输出到 output_dir/refined_tsai/*.ba.tsai。</string>
+        </property>
+        <property name="text">
+         <string>输出平差后 tsai 文件</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_exportSummaryTxtCheck">
+        <property name="toolTip">
+         <string>输出 ba_summary.txt，便于快速查看整体指标。</string>
+        </property>
+        <property name="text">
+         <string>输出 summary 文本</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_exportPointsCsvCheck">
+        <property name="toolTip">
+         <string>输出 ba_points_metrics.csv。</string>
+        </property>
+        <property name="text">
+         <string>输出点级指标 CSV</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_exportCameraCsvCheck">
+        <property name="toolTip">
+         <string>输出 ba_camera_metrics.csv。</string>
+        </property>
+        <property name="text">
+         <string>输出相机级指标 CSV</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_exportRunJsonCheck">
+        <property name="toolTip">
+         <string>输出 ba_run_summary.json（用于后续读取和复现）。</string>
+        </property>
+        <property name="text">
+         <string>输出运行摘要 JSON</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_exportEvalPlotCheck">
+        <property name="toolTip">
+         <string>输出 RMS 对比图、相机位移图等 PNG。</string>
+        </property>
+        <property name="text">
+         <string>输出精度评价图像</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_dryRunCheck">
+        <property name="toolTip">
+         <string>用于检查当前数据是否可运行，不会修改任何结果。</string>
+        </property>
+        <property name="text">
+         <string>Dry Run（仅统计输入，不执行优化）</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>

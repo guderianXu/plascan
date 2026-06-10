@@ -2,9 +2,6 @@
 #include "ui_CreateDemDialog.h"
 #include "ProjectManager.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGroupBox>
 #include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
@@ -29,161 +26,41 @@ CreateDemDialog::CreateDemDialog(ProjectManager *projectManager, QWidget *parent
 
 void CreateDemDialog::setupUi()
 {
-    {
-        Ui::CreateDemDialog ui;
-        ui.setupUi(this);
+    Ui::CreateDemDialog ui;
+    ui.setupUi(this);
 
-        m_autoModeBtn = ui.m_autoModeBtn;
-        m_manualModeBtn = ui.m_manualModeBtn;
-        m_modeStack = ui.m_modeStack;
-        m_imageList = ui.m_imageList;
-        m_camStatusLabel = ui.m_camStatusLabel;
-        m_denseEdit = ui.m_denseEdit;
-        m_stageLabel = ui.m_stageLabel;
-        m_progressBar = ui.m_progressBar;
-        m_runBtn = ui.m_runBtn;
-        m_closeBtn = ui.m_closeBtn;
+    m_autoModeBtn = ui.m_autoModeBtn;
+    m_manualModeBtn = ui.m_manualModeBtn;
+    m_modeStack = ui.m_modeStack;
+    m_imageList = ui.m_imageList;
+    m_camStatusLabel = ui.m_camStatusLabel;
+    m_denseEdit = ui.m_denseEdit;
+    m_stageLabel = ui.m_stageLabel;
+    m_progressBar = ui.m_progressBar;
+    m_runBtn = ui.m_runBtn;
+    m_closeBtn = ui.m_closeBtn;
 
-        const QString modeStyle = QStringLiteral(
-            "QPushButton:checked { font-weight: bold; border-bottom: 2px solid palette(highlight); }");
-        m_autoModeBtn->setStyleSheet(modeStyle);
-        m_manualModeBtn->setStyleSheet(modeStyle);
+    const QString modeStyle = QStringLiteral(
+        "QPushButton:checked { font-weight: bold; border-bottom: 2px solid palette(highlight); }");
+    m_autoModeBtn->setStyleSheet(modeStyle);
+    m_manualModeBtn->setStyleSheet(modeStyle);
 
-        auto *modeGroup = new QButtonGroup(this);
-        modeGroup->addButton(m_autoModeBtn);
-        modeGroup->addButton(m_manualModeBtn);
-        modeGroup->setExclusive(true);
-
-        connect(ui.addImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseImages);
-        connect(ui.clearImagesBtn, &QPushButton::clicked, m_imageList, &QListWidget::clear);
-        connect(ui.clearImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::refreshRunButton);
-        connect(m_imageList->model(), &QAbstractItemModel::rowsInserted,
-                this, &CreateDemDialog::refreshRunButton);
-        connect(m_imageList->model(), &QAbstractItemModel::rowsRemoved,
-                this, &CreateDemDialog::refreshRunButton);
-
-        connect(ui.browseDenseBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseDenseCloud);
-        connect(m_autoModeBtn, &QPushButton::toggled, this, &CreateDemDialog::onModeToggled);
-        connect(m_runBtn, &QPushButton::clicked, this, &CreateDemDialog::onRunClicked);
-        connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-
-        refreshRunButton();
-        return;
-    }
-
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(10);
-
-    // ── 模式切换（两个扁平按钮，像 tab） ──────────────────────────
-    auto *modeRow = new QHBoxLayout();
-    m_autoModeBtn  = new QPushButton(tr("自动模式"), this);
-    m_manualModeBtn = new QPushButton(tr("手动模式"), this);
-    m_autoModeBtn->setCheckable(true);
-    m_manualModeBtn->setCheckable(true);
-    m_autoModeBtn->setChecked(true);
-    m_autoModeBtn->setFlat(true);
-    m_manualModeBtn->setFlat(true);
-    m_autoModeBtn->setStyleSheet(QStringLiteral("QPushButton:checked { font-weight: bold; border-bottom: 2px solid palette(highlight); }"));
-    m_manualModeBtn->setStyleSheet(m_autoModeBtn->styleSheet());
     auto *modeGroup = new QButtonGroup(this);
     modeGroup->addButton(m_autoModeBtn);
     modeGroup->addButton(m_manualModeBtn);
     modeGroup->setExclusive(true);
-    modeRow->addWidget(m_autoModeBtn);
-    modeRow->addWidget(m_manualModeBtn);
-    modeRow->addStretch(1);
-    mainLayout->addLayout(modeRow);
 
-    // ── 模式面板 ────────────────────────────────────────────────
-    m_modeStack = new QStackedWidget(this);
+    connect(ui.addImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseImages);
+    connect(ui.clearImagesBtn, &QPushButton::clicked, m_imageList, &QListWidget::clear);
+    connect(ui.clearImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::refreshRunButton);
+    connect(m_imageList->model(), &QAbstractItemModel::rowsInserted,
+            this, &CreateDemDialog::refreshRunButton);
+    connect(m_imageList->model(), &QAbstractItemModel::rowsRemoved,
+            this, &CreateDemDialog::refreshRunButton);
 
-    // 自动模式页
-    auto *autoPage = new QWidget(this);
-    {
-        auto *layout = new QVBoxLayout(autoPage);
-        layout->setSpacing(6);
-
-        auto *hint = new QLabel(tr("选择 2 张立体影像，其余全自动完成。"), autoPage);
-        hint->setWordWrap(true);
-        layout->addWidget(hint);
-
-        m_imageList = new QListWidget(autoPage);
-        m_imageList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-        m_imageList->setMaximumHeight(110);
-        layout->addWidget(m_imageList);
-
-        auto *btnRow = new QHBoxLayout();
-        auto *addBtn   = new QPushButton(tr("添加影像..."), autoPage);
-        auto *clearBtn = new QPushButton(tr("清空"), autoPage);
-        btnRow->addWidget(addBtn);
-        btnRow->addWidget(clearBtn);
-        btnRow->addStretch(1);
-        layout->addLayout(btnRow);
-
-        m_camStatusLabel = new QLabel(autoPage);
-        m_camStatusLabel->setWordWrap(true);
-        layout->addWidget(m_camStatusLabel);
-
-        connect(addBtn,   &QPushButton::clicked, this, &CreateDemDialog::onBrowseImages);
-        connect(clearBtn, &QPushButton::clicked, m_imageList, &QListWidget::clear);
-        connect(clearBtn, &QPushButton::clicked, this, &CreateDemDialog::refreshRunButton);
-        connect(m_imageList->model(), &QAbstractItemModel::rowsInserted,
-                this, &CreateDemDialog::refreshRunButton);
-        connect(m_imageList->model(), &QAbstractItemModel::rowsRemoved,
-                this, &CreateDemDialog::refreshRunButton);
-    }
-    m_modeStack->addWidget(autoPage);
-
-    // 手动模式页
-    auto *manualPage = new QWidget(this);
-    {
-        auto *layout = new QVBoxLayout(manualPage);
-        layout->setSpacing(6);
-
-        auto *hint = new QLabel(tr("已有密集点云？直接指定文件路径，跳过特征提取/MVS 步骤。"), manualPage);
-        hint->setWordWrap(true);
-        layout->addWidget(hint);
-
-        auto *row = new QHBoxLayout();
-        m_denseEdit = new QLineEdit(manualPage);
-        m_denseEdit->setPlaceholderText(tr("（留空则自动使用项目最新密集点云）"));
-        auto *browseBtn = new QPushButton(tr("浏览..."), manualPage);
-        browseBtn->setFixedWidth(64);
-        row->addWidget(m_denseEdit, 1);
-        row->addWidget(browseBtn);
-        layout->addLayout(row);
-        layout->addStretch(1);
-
-        connect(browseBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseDenseCloud);
-    }
-    m_modeStack->addWidget(manualPage);
-
-    mainLayout->addWidget(m_modeStack);
-
-    // ── 进度区域（运行时显示） ──────────────────────────────────
-    m_stageLabel = new QLabel(this);
-    m_stageLabel->setVisible(false);
-    mainLayout->addWidget(m_stageLabel);
-
-    m_progressBar = new QProgressBar(this);
-    m_progressBar->setRange(0, 100);
-    m_progressBar->setVisible(false);
-    mainLayout->addWidget(m_progressBar);
-
-    // ── 按钮 ────────────────────────────────────────────────────
-    auto *btnRow = new QHBoxLayout();
-    btnRow->addStretch(1);
-    m_runBtn   = new QPushButton(tr("运行"), this);
-    m_closeBtn = new QPushButton(tr("关闭"), this);
-    m_runBtn->setDefault(true);
-    m_runBtn->setMinimumWidth(80);
-    m_closeBtn->setMinimumWidth(80);
-    btnRow->addWidget(m_runBtn);
-    btnRow->addWidget(m_closeBtn);
-    mainLayout->addLayout(btnRow);
-
-    connect(m_autoModeBtn,  &QPushButton::toggled, this, &CreateDemDialog::onModeToggled);
-    connect(m_runBtn,   &QPushButton::clicked, this, &CreateDemDialog::onRunClicked);
+    connect(ui.browseDenseBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseDenseCloud);
+    connect(m_autoModeBtn, &QPushButton::toggled, this, &CreateDemDialog::onModeToggled);
+    connect(m_runBtn, &QPushButton::clicked, this, &CreateDemDialog::onRunClicked);
     connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     refreshRunButton();

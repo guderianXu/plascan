@@ -1,0 +1,148 @@
+#include "ThreeDReconstructionDialog.h"
+
+#include "ui_ThreeDReconstructionDialog.h"
+
+#include <QCheckBox>
+#include <QComboBox>
+#include <QDir>
+#include <QFileDialog>
+#include <QLabel>
+#include <QLineEdit>
+#include <QPushButton>
+#include <QSpinBox>
+#include <QThread>
+#include <QtGlobal>
+
+ThreeDReconstructionDialog::ThreeDReconstructionDialog(QWidget *parent)
+    : QDialog(parent)
+{
+    setupUi();
+}
+
+void ThreeDReconstructionDialog::setupUi()
+{
+    Ui::ThreeDReconstructionDialog form;
+    form.setupUi(this);
+    setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
+
+    m_statusLabel = form.m_statusLabel;
+    m_qualityCombo = form.m_qualityCombo;
+    m_deviceCombo = form.m_deviceCombo;
+    m_threadsSpin = form.m_threadsSpin;
+    m_outputDirEdit = form.m_outputDirEdit;
+    m_exportObjCheck = form.m_exportObjCheck;
+    m_startBtn = form.m_startBtn;
+    m_cancelBtn = form.m_cancelBtn;
+
+    m_qualityCombo->setItemData(0, QStringLiteral("standard"));
+    m_qualityCombo->setItemData(1, QStringLiteral("fast"));
+    m_qualityCombo->setItemData(2, QStringLiteral("quality"));
+    m_deviceCombo->setItemData(0, QStringLiteral("auto"));
+    m_deviceCombo->setItemData(1, QStringLiteral("cuda"));
+    m_deviceCombo->setItemData(2, QStringLiteral("cpu"));
+    m_threadsSpin->setValue(qMax(1, QThread::idealThreadCount()));
+
+    connect(form.m_browseBtn, &QPushButton::clicked, this, &ThreeDReconstructionDialog::browseOutputDir);
+    connect(m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
+    connect(m_startBtn, &QPushButton::clicked, this, &ThreeDReconstructionDialog::start);
+
+    connect(m_qualityCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ThreeDReconstructionDialog::emitSettingsChanged);
+    connect(m_deviceCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ThreeDReconstructionDialog::emitSettingsChanged);
+    connect(m_threadsSpin, qOverload<int>(&QSpinBox::valueChanged),
+            this, &ThreeDReconstructionDialog::emitSettingsChanged);
+    connect(m_outputDirEdit, &QLineEdit::textChanged,
+            this, &ThreeDReconstructionDialog::emitSettingsChanged);
+    connect(m_exportObjCheck, &QCheckBox::toggled,
+            this, &ThreeDReconstructionDialog::emitSettingsChanged);
+}
+
+void ThreeDReconstructionDialog::setImageCount(int count)
+{
+    m_statusLabel->setText(tr("当前项目影像：%1 张").arg(count));
+    m_startBtn->setEnabled(count >= 2);
+}
+
+void ThreeDReconstructionDialog::setDefaultOutputDir(const QString &dir)
+{
+    if (m_outputDirEdit && m_outputDirEdit->text().trimmed().isEmpty())
+    {
+        m_outputDirEdit->setText(QDir::cleanPath(dir));
+    }
+}
+
+void ThreeDReconstructionDialog::applySettings(const QJsonObject &settings)
+{
+    if (settings.isEmpty())
+    {
+        return;
+    }
+
+    const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
+    const int qualityIndex = m_qualityCombo->findData(quality);
+    if (qualityIndex >= 0)
+    {
+        m_qualityCombo->setCurrentIndex(qualityIndex);
+    }
+
+    const QString device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
+    const int deviceIndex = m_deviceCombo->findData(device);
+    if (deviceIndex >= 0)
+    {
+        m_deviceCombo->setCurrentIndex(deviceIndex);
+    }
+
+    if (settings.contains(QStringLiteral("threads")))
+    {
+        m_threadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt(m_threadsSpin->value()));
+    }
+    if (settings.contains(QStringLiteral("output_dir")))
+    {
+        m_outputDirEdit->setText(settings.value(QStringLiteral("output_dir")).toString());
+    }
+    m_exportObjCheck->setChecked(settings.value(QStringLiteral("export_obj")).toBool(m_exportObjCheck->isChecked()));
+}
+
+QJsonObject ThreeDReconstructionDialog::collectSettings() const
+{
+    QJsonObject settings;
+    QString quality = m_qualityCombo->currentData().toString();
+    if (quality.isEmpty())
+    {
+        quality = QStringLiteral("standard");
+    }
+    QString device = m_deviceCombo->currentData().toString();
+    if (device.isEmpty())
+    {
+        device = QStringLiteral("auto");
+    }
+    settings[QStringLiteral("quality")] = quality;
+    settings[QStringLiteral("device")] = device;
+    settings[QStringLiteral("threads")] = m_threadsSpin->value();
+    settings[QStringLiteral("output_dir")] = QDir::cleanPath(m_outputDirEdit->text().trimmed());
+    settings[QStringLiteral("export_obj")] = m_exportObjCheck->isChecked();
+    return settings;
+}
+
+void ThreeDReconstructionDialog::emitSettingsChanged()
+{
+    emit settingsChanged(collectSettings());
+}
+
+void ThreeDReconstructionDialog::browseOutputDir()
+{
+    const QString dir = QFileDialog::getExistingDirectory(this,
+                                                          tr("选择输出目录"),
+                                                          m_outputDirEdit->text().trimmed());
+    if (!dir.isEmpty())
+    {
+        m_outputDirEdit->setText(QDir::cleanPath(dir));
+    }
+}
+
+void ThreeDReconstructionDialog::start()
+{
+    emit runRequested(collectSettings());
+    accept();
+}

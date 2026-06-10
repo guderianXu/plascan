@@ -135,12 +135,14 @@ void DataTreeWidget::loadFromArchive(const QString &plascanPath)
 
     if (content.isEmpty())
     {
+        m_lastMeta = QJsonObject();
         return; // 没有元数据可显示
     }
 
     QJsonDocument doc = QJsonDocument::fromJson(content);
     if (!doc.isObject()) return;
-    populateFromMeta(doc.object());
+    m_lastMeta = doc.object();
+    populateFromMeta(m_lastMeta);
 
 }
 
@@ -168,7 +170,48 @@ void DataTreeWidget::loadFromJson(const QJsonObject &meta)
     if (!hasImagesKey) return;
 
     // 无论 images 是否为空，只要 meta 明确提供了 images，我们就清空并重建模型（允许清空列表）。
+    m_lastMeta = meta;
     populateFromMeta(meta);
+}
+
+void DataTreeWidget::addTransientModel(const QString &modelPath)
+{
+    const QString cleanPath = QDir::cleanPath(modelPath.trimmed());
+    if (cleanPath.isEmpty())
+    {
+        return;
+    }
+
+    if (!m_transientModels.contains(cleanPath))
+    {
+        m_transientModels.append(cleanPath);
+    }
+
+    if (m_lastMeta.isEmpty())
+    {
+        QJsonObject emptyProject;
+        emptyProject.insert(QStringLiteral("images"), QJsonArray());
+        m_lastMeta = emptyProject;
+    }
+    populateFromMeta(m_lastMeta);
+}
+
+void DataTreeWidget::clearTransientResources()
+{
+    if (m_transientModels.isEmpty())
+    {
+        return;
+    }
+
+    m_transientModels.clear();
+    if (!m_lastMeta.isEmpty())
+    {
+        populateFromMeta(m_lastMeta);
+    }
+    else
+    {
+        m_model->removeRows(0, m_model->rowCount());
+    }
 }
 
 QJsonObject DataTreeWidget::normalizeMeta(const QJsonObject &meta) const
@@ -251,6 +294,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     }
 
     const int denseCount = denseResults.size();
+    const int modelCount = modelResults.size() + m_transientModels.size();
 
     // ── 保存展开状态 ──────────────────────────────────────────────────────
     QSet<QString> expandedSections;
@@ -274,7 +318,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     auto *matches   = createSection(QStringLiteral("连接点"),  matchesCount);
     auto *depthMaps = createSection(QStringLiteral("深度图"),  depthResults.size());
     auto *denseCloud= createSection(QStringLiteral("稠密点云"),denseCount);
-    auto *model3d   = createSection(QStringLiteral("3D模型"),  modelResults.size());
+    auto *model3d   = createSection(QStringLiteral("3D模型"),  modelCount);
     auto *dem       = createSection(QStringLiteral("DEM"),      demResults.size());
     auto *ortho     = createSection(QStringLiteral("正射影像"),orthoResults.size());
 
@@ -385,6 +429,14 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
             name += QStringLiteral("  [纹理]");
         }
         appendItemRow(model3d, name, modelPath, QStringLiteral("generated"));
+    }
+
+    for (const QString &modelPath : m_transientModels) {
+        if (modelPath.trimmed().isEmpty()) continue;
+        QString name = QFileInfo(modelPath).fileName();
+        if (name.isEmpty()) name = modelPath;
+        name += QStringLiteral("  [临时]");
+        appendItemRow(model3d, name, modelPath, QStringLiteral("temporary"));
     }
 
     // ── 深度图 ────────────────────────────────────────────────────────────

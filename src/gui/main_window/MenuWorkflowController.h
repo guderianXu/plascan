@@ -34,12 +34,12 @@ class MenuWorkflowController : public QObject
 
 public:
     /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
-    DialogSettingStore *m_atSetting = nullptr;
     DialogSettingStore *m_spSetting = nullptr;
     DialogSettingStore *m_spVisSetting = nullptr;
     DialogSettingStore *m_baSetting = nullptr;
     DialogSettingStore *m_mapSetting = nullptr;
     DialogSettingStore *m_dcSetting = nullptr;
+    DialogSettingStore *m_threeDSetting = nullptr;
 
     /// 构造菜单业务流程控制器。
     /// @param mainWindow 父主窗口，用于创建模态或非模态对话框。
@@ -61,20 +61,14 @@ public slots:
     /// @param ui 项目级 UI 设置 JSON，包含 superpoint_visualization 配置。
     void applySavedFeatureDisplayOptions(const QJsonObject &ui);
 
-    /// 打开空中三角测量配置对话框。
-    void openAerialTriangulationDialog();
-
-    /// 触发三维模型生成的自动化工作流。
-    void startGenerateModelWorkflow();
+    /// 打开一键三维重建对话框。
+    void openThreeDReconstructionDialog();
 
     /// 打开影像重叠度分析对话框。
     void openOverlapAnalysisDialog();
 
     /// 打开 DEM 生成对话框。
     void openCreateDemDialog();
-
-    /// 打开一键创建稠密点云对话框。
-    void openCreatePointCloudDialog();
 
     /// 打开正射影像生成对话框。
     void openMapProjectDialog();
@@ -101,6 +95,10 @@ private:
     /// @param config 配置参数 JSON，如设备、阈值和输出目录。
     /// @param inputs 待处理的影像路径列表。
     void runSuperPointExtraction(const QJsonObject &config, const QStringList &inputs);
+
+    void startThreeDReconstructionWorkflow(const QJsonObject &settings);
+    void startThreeDReconstructionDenseStage(const QJsonObject &settings);
+    void startThreeDReconstructionMeshStage(const QJsonObject &settings);
 
     QPointer<QMainWindow> m_mainWindow;            // 父主窗口弱引用（不拥有）
     ProjectManager *m_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）

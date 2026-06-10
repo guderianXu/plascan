@@ -8,7 +8,6 @@
 #include "ProjectWorkflowUtils.h"
 #include "Logger.h"
 #include "ModelWorkflowService.h"
-#include "ModelGenerationDialog.h"
 #include "project/ProjectCommonUtils.h"
 
 #include <QDateTime>
@@ -349,110 +348,12 @@ bool ProjectModelManager::ensureProjectOpen(const QString &message,
 
 void ProjectModelManager::startGenerateModelAsync()
 {
-    if (!ensureProjectOpen(QStringLiteral("请先打开项目"), QStringLiteral("提示")))
-    {
-        return;
-    }
-
-    const QJsonObject meta = m_projectData->metadata();
-    const QJsonArray atArray = meta.value(QStringLiteral("aerial_triangulation_results")).toArray();
-    if (atArray.isEmpty())
-    {
-        QMessageBox::warning(m_parentWidget,
-                             QStringLiteral("生成模型"),
-                             QStringLiteral("未找到空中三角测量结果，请先执行空中三角测量。"));
-        return;
-    }
-
-    const QJsonObject atLast = atArray.last().toObject();
-
-    QString cloudPath;
-    QString denseError;
-    const bool isDense = resolveLatestDenseCloudPath(m_projectData, &cloudPath, &denseError);
-    if (!isDense)
-    {
-        QMessageBox::warning(m_parentWidget,
-                             QStringLiteral("生成模型"),
-                             QStringLiteral("未找到稠密点云（MVS 生成的 XYZ 文件）。\n"
-                                            "请先在[工作流程 → 创建点云]中执行稠密重建，\n"
-                                            "再运行生成模型。"));
-        return;
-    }
-
-    ModelGenerationDialog dlg(m_parentWidget);
-    dlg.applySettings(meta.value(QStringLiteral("model_generation_settings")).toObject());
-    if (dlg.exec() != QDialog::Accepted)
-    {
-        return;
-    }
-    const QJsonObject genSettings = dlg.collectSettings();
-
-    {
-        QJsonObject updatedMeta = m_projectData->metadata();
-        updatedMeta[QStringLiteral("model_generation_settings")] = genSettings;
-        xjw::gui::project::persistProjectMeta(m_projectData, updatedMeta, false);
-    }
-
-    {
-        const auto report = xjw::mesh::workflow::evaluatePointCloudQuality(cloudPath, 200);
-        if (!report.hasCount || report.pointCount <= 0)
-        {
-            LOG_WARN(QStringLiteral("[生成模型] 点云质量警告: 无法读取点数或文件为空: %1").arg(cloudPath));
-        }
-        else if (report.belowRecommended)
-        {
-            LOG_WARN(QStringLiteral("[生成模型] 点云质量警告: 点数量不足: %1 < 200").arg(report.pointCount));
-        }
-        else
-        {
-            LOG_INFO(QStringLiteral("[生成模型] 点云校验通过，点数: %1").arg(report.pointCount));
-        }
-    }
-
-    const int gridRes = genSettings.value(QStringLiteral("grid_resolution")).toInt(512);
-    const int meshRes = genSettings.value(QStringLiteral("mesh_resolution")).toInt(128);
-    const int meshSmoothIter = genSettings.value(QStringLiteral("mesh_smooth_iterations")).toInt(2);
-    const double meshSmoothLambda = genSettings.value(QStringLiteral("mesh_smooth_lambda")).toDouble(0.5);
-    const double meshPadding = genSettings.value(QStringLiteral("mesh_padding")).toDouble(0.05);
-    const bool exportObj = xjw::mesh::workflow::exportObjRequested(genSettings);
-
-    QString outputRoot = atLast.value(QStringLiteral("output_dir")).toString();
-    if (outputRoot.isEmpty())
-    {
-        outputRoot = QFileInfo(cloudPath).absolutePath();
-    }
-
-    GenerateModelTaskInput taskInput;
-    taskInput.cloudPath = cloudPath;
-    taskInput.sourceIsDense = isDense;
-    taskInput.outputRoot = outputRoot;
-    taskInput.gridResolution = gridRes;
-    taskInput.meshResolution = meshRes;
-    taskInput.meshSmoothIterations = meshSmoothIter;
-    taskInput.meshSmoothLambda = meshSmoothLambda;
-    taskInput.meshPadding = meshPadding;
-    taskInput.exportObj = exportObj;
-
-    emit meshProgressChanged(tr("正在初始化网格重建..."), 0);
-    runModelAsyncTask(
-        this,
-        [this, taskInput]() -> ModelTaskResult {
-            return runGenerateModelTask(this, taskInput);
-        },
-        [this, cloudPath, isDense](const ModelTaskResult &task) {
-            emit meshProgressFinished(task.ok);
-            handleTaskResult(m_parentWidget,
-                             QStringLiteral("生成模型"),
-                             QStringLiteral("模型生成失败"),
-                             task,
-                             [this, cloudPath, isDense](const QJsonObject &terrainResult) {
-                finalizeModelGenerationSuccess(terrainResult, cloudPath, isDense);
-
-                QMessageBox::information(m_parentWidget,
-                                         QStringLiteral("生成模型"),
-                                         modelGenerationSuccessMessage(terrainResult));
-            });
-        });
+    QJsonObject settings;
+    settings[QStringLiteral("method")] = QStringLiteral("Poisson Surface");
+    settings[QStringLiteral("qualityProfile")] = QStringLiteral("balanced");
+    settings[QStringLiteral("voxelDensity")] = QStringLiteral("medium");
+    settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
+    startMeshReconstructionAsync(settings);
 }
 
 void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settings)
@@ -603,9 +504,12 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                                                                                denseCloudPath,
                                                                                settings);
                 persistModelResult(m_projectData, modelRecord);
-                QMessageBox::information(m_parentWidget,
-                                         QStringLiteral("网格重建"),
-                                         meshReconstructionSuccessMessage(taskResult));
+                if (!settings.value(QStringLiteral("pipeline_mode")).toBool(false))
+                {
+                    QMessageBox::information(m_parentWidget,
+                                             QStringLiteral("网格重建"),
+                                             meshReconstructionSuccessMessage(taskResult));
+                }
             });
         });
 }

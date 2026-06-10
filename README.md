@@ -38,6 +38,34 @@ ctest --output-on-failure
 
 项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。
 
+### GUI 一键工作流
+
+GUI 的 `工作流程` 菜单提供三个互相独立的工程入口：
+
+| 入口 | 输出 | 说明 |
+|------|------|------|
+| `三维重建` | 稀疏点云、密集点云、PLY/OBJ 三维模型 | 不生成 DEM/DOM，适合检查建模与点云质量 |
+| `创建 DEM` | `dem.tif`、`depth_map.png`、可选 DEM 网格模型 | 自动模式从立体影像开始，手动模式可直接使用已有密集点云 |
+| `生成 正射影像` | DOM GeoTIFF/PNG | 默认全选项目影像，分辨率为 `0` 时自动沿用 DEM 网格 |
+
+这三个入口的 UI 契约由 `test_gui_project_utils` 覆盖，避免后续改动把 DEM/DOM 错误耦合进三维重建流程。
+
+### CLI 一键重建
+
+`scripts/run_full_pipeline.py` 封装了与 GUI 等价的批处理入口，输入为影像和相机文件列表：
+
+```bash
+cmake --build build --target reconstruct_pipeline_cli -j$(nproc)
+python scripts/run_full_pipeline.py path/to/input.lis \
+  --build-dir build \
+  --output-dir build/测试用临时文件/full_pipeline \
+  --device cuda \
+  --quality 3 \
+  --dem-resolution 0
+```
+
+默认流程为 `SfM -> MVS 密集点云 -> 网格模型 -> DEM/DOM`。如只验证三维模型可加 `--skip-terrain`；如只验证地形产品前的点云/模型阶段可结合 `--skip-model` 或输出报告检查。
+
 ### Docker 构建
 
 ```bash
@@ -152,6 +180,23 @@ git push origin main
 ```
 
 代码规范见 `CLAUDE.md`（单文件 ≤ 400 行、嵌套 ≤ 4 层、Allman 花括号）。
+
+### 回归测试建议
+
+面向工作流和地形产品的改动至少运行：
+
+```bash
+cmake --build build --target test_gui_project_utils test_mesh_reconstructor test_terrain_dem_dom plascan_gui -j$(nproc)
+QT_QPA_PLATFORM=offscreen ./build/tests/test_gui_project_utils
+./build/tests/test_mesh_reconstructor
+./build/src/core/terrain/test_terrain_dem_dom
+```
+
+这些测试分别覆盖：
+
+- GUI 一键入口边界：三维重建只负责点云/模型，DEM 和 DOM 使用独立按钮。
+- 模型生成降级路径：点云缺少法向量时 Poisson 重建能回退到可用网格。
+- DEM/DOM 工程质量：DEM 栅格、点云颜色/强度保留、DOM 锐度融合、OBJ/MTL 纹理、目录瓦片拼接输出。
 
 ## 文档
 

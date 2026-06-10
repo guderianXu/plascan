@@ -9,6 +9,7 @@
 #include <plamatrix/dense/dense_matrix.h>
 
 #include <algorithm>
+#include <exception>
 #include <string>
 #include <vector>
 
@@ -164,13 +165,21 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     if (config.forcePoisson)
     {
         progress("正在执行 Poisson 重建...", 0.30f);
-        PlaPointCloud poissonCloud = pointXYZRGBToCloud(points);
-        auto poissonCloudPtr = std::make_shared<const PlaPointCloud>(std::move(poissonCloud));
-        plapoint::mesh::PoissonReconstruction<float> poisson;
-        poisson.setInputCloud(poissonCloudPtr);
-        poisson.setDepth(config.poissonDepth);
-        auto [verts, faces] = poisson.reconstruct();
-        convertPoissonResultToMesh(verts, faces, &mesh);
+        try
+        {
+            PlaPointCloud poissonCloud = pointXYZRGBToCloud(points);
+            auto poissonCloudPtr = std::make_shared<const PlaPointCloud>(std::move(poissonCloud));
+            plapoint::mesh::PoissonReconstruction<float> poisson;
+            poisson.setInputCloud(poissonCloudPtr);
+            poisson.setDepth(std::clamp(config.poissonDepth, 1, 8));
+            auto [verts, faces] = poisson.reconstruct();
+            convertPoissonResultToMesh(verts, faces, &mesh);
+        }
+        catch (const std::exception &)
+        {
+            mesh = TriMesh{};
+            progress("Poisson 重建失败，改用高度格网...", 0.34f);
+        }
 
         if (!mesh.empty())
         {

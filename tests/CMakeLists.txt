@@ -160,11 +160,19 @@ add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTriangulationService.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/WindowPanel.cpp
 )
 set_target_properties(test_gui_project_utils PROPERTIES
     AUTOMOC ON
@@ -178,10 +186,15 @@ target_link_libraries(test_gui_project_utils PRIVATE
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
+    ${PLASCAN_LIBZIP_TARGET}
     GTest::gtest
+)
+target_compile_definitions(test_gui_project_utils PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/gui/menu
     ${CMAKE_SOURCE_DIR}/src/gui/main_window
     ${CMAKE_SOURCE_DIR}/src/gui/project
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive
@@ -190,6 +203,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/project/manager
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets
     ${CMAKE_SOURCE_DIR}/src/core/sfm
     ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/intersection
@@ -246,6 +260,20 @@ if(CMAKE_CUDA_COMPILER)
 else()
     message(WARNING "tests: CUDA compiler not found, skipping test_mvs_pipeline")
 endif()
+
+# ==============================================================================
+# test_mesh_reconstructor — 点云到网格重建降级路径
+# ==============================================================================
+add_executable(test_mesh_reconstructor test_mesh_reconstructor.cpp)
+target_link_libraries(test_mesh_reconstructor PRIVATE
+    meshing
+    plapoint::plapoint
+    GTest::gtest_main
+)
+target_include_directories(test_mesh_reconstructor PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mesh
+)
+gtest_discover_tests(test_mesh_reconstructor)
 
 # pointcloud 模块测试迁移到 src/core/pointcloud/tests，
 # 不再在全局 tests 目录内维护该测试源码。

@@ -2,6 +2,7 @@
 #include "SparseCloudPreprocessor.h"
 #include <plapoint/search/kdtree.h>
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/io/ply_io.h>
 #include "log/Logger.h"
 #include <fstream>
 #include <sstream>
@@ -22,7 +23,7 @@ namespace mvs
 /**
  * @brief 从文本点云文件加载 XYZ 坐标。
  *
- * 支持简单 `.xyz` 行格式与带 header 的 ASCII `.ply`。
+ * 支持简单 `.xyz` 行格式与 ASCII/Binary `.ply`。
  */
 
 // =============================================================================
@@ -46,13 +47,39 @@ bool SparseCloudPreprocessor::loadXYZ(const std::string &path,
     bool isPly = (firstLine.find("ply") != std::string::npos);
     if (isPly)
     {
-        std::string line;
-        while (std::getline(ifs, line))
+        try
         {
-            if (line == "end_header")
+            auto cloud = plapoint::io::readPly<float>(path);
+            if (!cloud)
             {
-                break;
+                if (err)
+                {
+                    *err = "PLY 读取失败: " + path;
+                }
+                return false;
             }
+
+            pts.clear();
+            pts.reserve(cloud->size());
+            const auto &matrix = cloud->points();
+            for (std::size_t i = 0; i < cloud->size(); ++i)
+            {
+                const auto row = static_cast<plamatrix::Index>(i);
+                pts.push_back({
+                    matrix.getValue(row, 0),
+                    matrix.getValue(row, 1),
+                    matrix.getValue(row, 2)
+                });
+            }
+            return true;
+        }
+        catch (const std::exception &ex)
+        {
+            if (err)
+            {
+                *err = "PLY 读取失败: " + std::string(ex.what());
+            }
+            return false;
         }
     }
     else

@@ -11,10 +11,8 @@ class QComboBox;
 class QSpinBox;
 class QDoubleSpinBox;
 class QCheckBox;
-class QPushButton;
 class QStackedWidget;
 class QLabel;
-class QSpinBox;
 
 /**
  * @brief 初始化相机位姿对话框。

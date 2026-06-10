@@ -442,10 +442,21 @@ bool DemDomIO::writeDenseCloudXyz(const PlaPointCloud &denseCloud,
     }
 
     QTextStream stream(&file);
+    const bool hasColor = denseCloud.hasColors() && denseCloud.colors()
+                       && denseCloud.colors()->rows() == static_cast<plamatrix::Index>(denseCloud.size())
+                       && denseCloud.colors()->cols() >= 3;
     for (size_t i = 0; i < denseCloud.size(); ++i)
     {
         auto pt = denseCloud[i];
-        stream << pt.x() << ' ' << pt.y() << ' ' << pt.z() << '\n';
+        stream << pt.x() << ' ' << pt.y() << ' ' << pt.z();
+        if (hasColor)
+        {
+            const auto *colors = denseCloud.colors();
+            stream << ' ' << static_cast<int>(colors->getValue(static_cast<plamatrix::Index>(i), 0))
+                   << ' ' << static_cast<int>(colors->getValue(static_cast<plamatrix::Index>(i), 1))
+                   << ' ' << static_cast<int>(colors->getValue(static_cast<plamatrix::Index>(i), 2));
+        }
+        stream << '\n';
     }
     return true;
 }
@@ -475,7 +486,9 @@ bool DemDomIO::writeMeshPlyFromDemGrid(const DemGridData &demGrid,
     }
 
     std::vector<QVector3D> vertices;
+    std::vector<cv::Vec3b> colors;
     std::vector<int> gridToVertex(static_cast<std::size_t>(demGrid.width * demGrid.height), -1);
+    const bool hasColor = demGrid.hasColor();
     auto gridIndex = [&demGrid](int col, int row) {
         return static_cast<std::size_t>(row * demGrid.width + col);
     };
@@ -493,6 +506,10 @@ bool DemDomIO::writeMeshPlyFromDemGrid(const DemGridData &demGrid,
             vertices.push_back(QVector3D(static_cast<float>(demGrid.minX + demGrid.stepX * static_cast<double>(col)),
                                          static_cast<float>(demGrid.minY + demGrid.stepY * static_cast<double>(row)),
                                          demGrid.elevation.at<float>(row, col)));
+            if (hasColor)
+            {
+                colors.push_back(demGrid.color.at<cv::Vec3b>(row, col));
+            }
         }
     }
 
@@ -543,12 +560,27 @@ bool DemDomIO::writeMeshPlyFromDemGrid(const DemGridData &demGrid,
     stream << "property float x\n";
     stream << "property float y\n";
     stream << "property float z\n";
+    if (hasColor)
+    {
+        stream << "property uchar red\n";
+        stream << "property uchar green\n";
+        stream << "property uchar blue\n";
+    }
     stream << "element face " << faces.size() << "\n";
     stream << "property list uchar int vertex_indices\n";
     stream << "end_header\n";
-    for (const QVector3D &vertex : vertices)
+    for (std::size_t i = 0; i < vertices.size(); ++i)
     {
-        stream << vertex.x() << ' ' << vertex.y() << ' ' << vertex.z() << '\n';
+        const QVector3D &vertex = vertices[i];
+        stream << vertex.x() << ' ' << vertex.y() << ' ' << vertex.z();
+        if (hasColor && i < colors.size())
+        {
+            const cv::Vec3b color = colors[i];
+            stream << ' ' << static_cast<int>(color[2])
+                   << ' ' << static_cast<int>(color[1])
+                   << ' ' << static_cast<int>(color[0]);
+        }
+        stream << '\n';
     }
     for (const std::array<int, 3> &face : faces)
     {

@@ -3,6 +3,7 @@
 #include <QWidget>
 #include <QJsonObject>
 #include <QStandardItem>
+#include <QStringList>
 
 class QTreeView;
 class QStandardItemModel;
@@ -24,6 +25,10 @@ public:
 public slots:
     // 直接从内存提供的 JSON 元数据刷新视图（由 ProjectManager 在修改后立即调用）
     void loadFromJson(const QJsonObject &meta);
+    // 添加会话级临时模型：只显示在左侧工作区，不写入项目元数据。
+    void addTransientModel(const QString &modelPath);
+    // 清除所有会话级临时资源。打开/新建/切换项目时调用。
+    void clearTransientResources();
 
 signals:
     // 用户在右键菜单选择打开时发出（传递被选中资源的路径，可能为相对或绝对）
@@ -58,4 +63,6 @@ private:
     QTreeView *m_view{};
     QStandardItemModel *m_model{};
     QString m_currentPlascanPath{};
+    QJsonObject m_lastMeta{};
+    QStringList m_transientModels{};
 };

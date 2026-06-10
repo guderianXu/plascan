@@ -4,6 +4,7 @@
 #include "DemDomTypes.h"
 #include "DemGenerator.h"
 #include "DomGenerator.h"
+#include "ObjMtlLoader.h"
 #include "projection/AsteroidProjection.h"
 #include "Camera.h"
 
@@ -835,27 +836,11 @@ bool TerrainPipeline::generateFromObjMtlDir(const QString &dirPath,
     {
         const QString objPath = dir.filePath(objName);
 
-        std::shared_ptr<PlaPointCloud> tilePtr;
-        try { tilePtr = plapoint::io::readObj<float>(objPath.toStdString()); }
-        catch (...) { continue; }
-
-        if (!tilePtr || tilePtr->size() == 0)
-            continue;
-
         TerrainMeshInput tile;
-        tile.mesh = std::move(*tilePtr);
-
-        // Load texture
-        const std::string &texFile = tile.mesh.textureImageFile();
-        if (!texFile.empty())
+        QString tileLoadError;
+        if (!ObjMtlLoader::load(objPath, &tile, &tileLoadError) || tile.mesh.size() == 0)
         {
-            QString texPath = QFileInfo(objPath).dir().filePath(QString::fromStdString(texFile));
-            tile.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
-            if (tile.texture.empty())
-            {
-                texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() + QString::fromStdString(texFile));
-                tile.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
-            }
+            continue;
         }
 
         // Accumulate points for combined cloud

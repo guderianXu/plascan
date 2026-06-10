@@ -40,6 +40,8 @@
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <algorithm>
+#include <cmath>
+#include <cstdint>
 #include <plapoint/io/xyz_io.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/obj_io.h>
@@ -90,6 +92,107 @@ RenderCloud cloneRenderCloud(const RenderCloud &src)
     dst.setMaterialLibraryFile(src.materialLibraryFile());
     dst.setTextureImageFile(src.textureImageFile());
     return dst;
+}
+
+struct PlyProperty
+{
+    std::string name;
+    std::string type;
+    bool isList = false;
+    std::string countType;
+    std::string valueType;
+};
+
+bool isIntensityProperty(const std::string &name)
+{
+    return name == "intensity" || name == "gray" || name == "grey" || name == "luminance";
+}
+
+uint8_t clampPlyByte(double value)
+{
+    if (!std::isfinite(value))
+    {
+        return 0;
+    }
+    return static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(value)), 0, 255));
+}
+
+template <typename T>
+T readBinaryValue(std::ifstream &stream)
+{
+    T value{};
+    stream.read(reinterpret_cast<char*>(&value), sizeof(T));
+    return value;
+}
+
+double readBinaryScalar(std::ifstream &stream, const std::string &type)
+{
+    if (type == "char" || type == "int8")
+        return static_cast<double>(readBinaryValue<int8_t>(stream));
+    if (type == "uchar" || type == "uint8")
+        return static_cast<double>(readBinaryValue<uint8_t>(stream));
+    if (type == "short" || type == "int16")
+        return static_cast<double>(readBinaryValue<int16_t>(stream));
+    if (type == "ushort" || type == "uint16")
+        return static_cast<double>(readBinaryValue<uint16_t>(stream));
+    if (type == "int" || type == "int32")
+        return static_cast<double>(readBinaryValue<int32_t>(stream));
+    if (type == "uint" || type == "uint32")
+        return static_cast<double>(readBinaryValue<uint32_t>(stream));
+    if (type == "double" || type == "float64")
+        return readBinaryValue<double>(stream);
+    return static_cast<double>(readBinaryValue<float>(stream));
+}
+
+double readBinaryProperty(std::ifstream &stream, const PlyProperty &property)
+{
+    if (!property.isList)
+    {
+        return readBinaryScalar(stream, property.type);
+    }
+
+    const int count = std::max(0, static_cast<int>(std::lround(readBinaryScalar(stream, property.countType))));
+    for (int i = 0; i < count; ++i)
+    {
+        Q_UNUSED(readBinaryScalar(stream, property.valueType));
+    }
+    return 0.0;
+}
+
+double readAsciiProperty(std::istringstream &stream, const PlyProperty &property)
+{
+    std::string token;
+    if (!(stream >> token))
+    {
+        return 0.0;
+    }
+
+    if (property.isList)
+    {
+        int count = 0;
+        try
+        {
+            count = std::max(0, static_cast<int>(std::lround(std::stod(token))));
+        }
+        catch (...)
+        {
+            count = 0;
+        }
+        for (int i = 0; i < count; ++i)
+        {
+            stream >> token;
+        }
+        return 0.0;
+    }
+
+    try
+    {
+        return std::stod(token);
+    }
+    catch (...)
+    {
+        return 0.0;
+    }
 }
 
 } // namespace
@@ -307,7 +410,8 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
         bool isBinary = (line.find("binary_little_endian") != std::string::npos);
 
         int nVerts = 0, nFaces = 0;
-        std::vector<std::string> vertProps;
+        std::string currentElement;
+        std::vector<PlyProperty> vertProps;
         while (std::getline(f, line))
         {
             if (!line.empty() && line.back() == '\r') line.pop_back();
@@ -319,25 +423,45 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
             {
                 std::string elem; int count;
                 iss >> elem >> count;
+                currentElement = elem;
                 if (elem == "vertex") nVerts = count;
                 else if (elem == "face") nFaces = count;
             }
-            else if (token == "property")
+            else if (token == "property" && currentElement == "vertex")
             {
-                std::string type, name;
-                iss >> type >> name;
-                vertProps.push_back(name);
+                PlyProperty property;
+                iss >> property.type;
+                if (property.type == "list")
+                {
+                    property.isList = true;
+                    iss >> property.countType >> property.valueType >> property.name;
+                }
+                else
+                {
+                    iss >> property.name;
+                }
+                if (!property.name.empty())
+                {
+                    vertProps.push_back(property);
+                }
             }
         }
 
-        bool hasColor = false, hasNx = false, hasNy = false, hasNz = false;
+        bool hasRed = false, hasGreen = false, hasBlue = false;
+        bool hasIntensity = false, hasNx = false, hasNy = false, hasNz = false;
         for (const auto &p : vertProps)
         {
-            if (p == "red") hasColor = true;
-            if (p == "nx") hasNx = true;
-            if (p == "ny") hasNy = true;
-            if (p == "nz") hasNz = true;
+            if (p.name == "red") hasRed = true;
+            if (p.name == "green") hasGreen = true;
+            if (p.name == "blue") hasBlue = true;
+            if (isIntensityProperty(p.name)) hasIntensity = true;
+            if (p.name == "nx") hasNx = true;
+            if (p.name == "ny") hasNy = true;
+            if (p.name == "nz") hasNz = true;
         }
+        const bool hasRgbColor = hasRed && hasGreen && hasBlue;
+        const bool hasGrayColor = !hasRgbColor && hasIntensity;
+        const bool hasColor = hasRgbColor || hasGrayColor;
 
         plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(nVerts, 3);
         plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(nVerts, 3);
@@ -347,18 +471,31 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
         {
             for (int i = 0; i < nVerts; ++i)
             {
+                if (hasColor)
+                {
+                    colors(i, 0) = 180;
+                    colors(i, 1) = 180;
+                    colors(i, 2) = 180;
+                }
                 for (const auto &p : vertProps)
                 {
-                    if (p == "x")      { float v; f.read(reinterpret_cast<char*>(&v), 4); pts(i, 0) = v; }
-                    else if (p == "y") { float v; f.read(reinterpret_cast<char*>(&v), 4); pts(i, 1) = v; }
-                    else if (p == "z") { float v; f.read(reinterpret_cast<char*>(&v), 4); pts(i, 2) = v; }
-                    else if (p == "nx") { float v; f.read(reinterpret_cast<char*>(&v), 4); nrm(i, 0) = v; }
-                    else if (p == "ny") { float v; f.read(reinterpret_cast<char*>(&v), 4); nrm(i, 1) = v; }
-                    else if (p == "nz") { float v; f.read(reinterpret_cast<char*>(&v), 4); nrm(i, 2) = v; }
-                    else if (p == "red")   { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 0) = v; }
-                    else if (p == "green") { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 1) = v; }
-                    else if (p == "blue")  { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 2) = v; }
-                    else { float dummy; f.read(reinterpret_cast<char*>(&dummy), 4); }
+                    const double v = readBinaryProperty(f, p);
+                    if (p.name == "x") pts(i, 0) = static_cast<float>(v);
+                    else if (p.name == "y") pts(i, 1) = static_cast<float>(v);
+                    else if (p.name == "z") pts(i, 2) = static_cast<float>(v);
+                    else if (p.name == "nx") nrm(i, 0) = static_cast<float>(v);
+                    else if (p.name == "ny") nrm(i, 1) = static_cast<float>(v);
+                    else if (p.name == "nz") nrm(i, 2) = static_cast<float>(v);
+                    else if (hasRgbColor && p.name == "red") colors(i, 0) = clampPlyByte(v);
+                    else if (hasRgbColor && p.name == "green") colors(i, 1) = clampPlyByte(v);
+                    else if (hasRgbColor && p.name == "blue") colors(i, 2) = clampPlyByte(v);
+                    else if (hasGrayColor && isIntensityProperty(p.name))
+                    {
+                        const uint8_t gray = clampPlyByte(v);
+                        colors(i, 0) = gray;
+                        colors(i, 1) = gray;
+                        colors(i, 2) = gray;
+                    }
                 }
             }
         }
@@ -369,18 +506,31 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
                 std::getline(f, line);
                 if (!line.empty() && line.back() == '\r') line.pop_back();
                 std::istringstream iss(line);
+                if (hasColor)
+                {
+                    colors(i, 0) = 180;
+                    colors(i, 1) = 180;
+                    colors(i, 2) = 180;
+                }
                 for (const auto &p : vertProps)
                 {
-                    if (p == "x")      { float v; iss >> v; pts(i, 0) = v; }
-                    else if (p == "y") { float v; iss >> v; pts(i, 1) = v; }
-                    else if (p == "z") { float v; iss >> v; pts(i, 2) = v; }
-                    else if (p == "nx") { float v; iss >> v; nrm(i, 0) = v; }
-                    else if (p == "ny") { float v; iss >> v; nrm(i, 1) = v; }
-                    else if (p == "nz") { float v; iss >> v; nrm(i, 2) = v; }
-                    else if (p == "red")   { int v; iss >> v; colors(i, 0) = static_cast<uint8_t>(v); }
-                    else if (p == "green") { int v; iss >> v; colors(i, 1) = static_cast<uint8_t>(v); }
-                    else if (p == "blue")  { int v; iss >> v; colors(i, 2) = static_cast<uint8_t>(v); }
-                    else { float dummy; iss >> dummy; }
+                    const double v = readAsciiProperty(iss, p);
+                    if (p.name == "x") pts(i, 0) = static_cast<float>(v);
+                    else if (p.name == "y") pts(i, 1) = static_cast<float>(v);
+                    else if (p.name == "z") pts(i, 2) = static_cast<float>(v);
+                    else if (p.name == "nx") nrm(i, 0) = static_cast<float>(v);
+                    else if (p.name == "ny") nrm(i, 1) = static_cast<float>(v);
+                    else if (p.name == "nz") nrm(i, 2) = static_cast<float>(v);
+                    else if (hasRgbColor && p.name == "red") colors(i, 0) = clampPlyByte(v);
+                    else if (hasRgbColor && p.name == "green") colors(i, 1) = clampPlyByte(v);
+                    else if (hasRgbColor && p.name == "blue") colors(i, 2) = clampPlyByte(v);
+                    else if (hasGrayColor && isIntensityProperty(p.name))
+                    {
+                        const uint8_t gray = clampPlyByte(v);
+                        colors(i, 0) = gray;
+                        colors(i, 1) = gray;
+                        colors(i, 2) = gray;
+                    }
                 }
             }
         }

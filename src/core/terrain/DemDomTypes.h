@@ -100,11 +100,13 @@ struct DemGridData
     cv::Mat elevation;   ///< Z 坐标 (CV_32FC1)
     cv::Mat worldX;      ///< X 坐标 (CV_32FC1)，可选
     cv::Mat worldY;      ///< Y 坐标 (CV_32FC1)，可选
+    cv::Mat color;       ///< RGB 顶点颜色 (CV_8UC3)，可选
     cv::Mat validMask;
     cv::Mat triangulationError; ///< 三角化误差 (CV_32FC1)，可选
     DemProjectionParameters projection;
 
     bool hasWorldXY() const { return !worldX.empty() && !worldY.empty(); }
+    bool hasColor() const { return !color.empty() && color.rows == height && color.cols == width && color.type() == CV_8UC3; }
     bool hasTriangulationError() const { return !triangulationError.empty(); }
 
     bool isValid() const

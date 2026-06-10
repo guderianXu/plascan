@@ -1058,7 +1058,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
         const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
 
-        if (success && (continueMissingMode || pipelineMode))
+        if (success && continueMissingMode)
         {
             if (!pipelineMode)
             {

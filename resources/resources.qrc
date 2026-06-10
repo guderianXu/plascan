@@ -1,5 +1,6 @@
 <RCC>
     <qresource prefix="/">
         <file>plascan.png</file>
+        <file>styles/app.qss</file>
     </qresource>
 </RCC>

@@ -2,7 +2,7 @@
 // 文件: MatchViewerDialog.cpp
 // 功能: MatchViewerDialog 的实现
 // 职责:
-//   - 构建工具栏、显示选项控件组、状态栏
+//   - 绑定 .ui 中的工具栏、显示选项控件组、状态栏
 //   - 通过 DualImageViewer 加载并展示两张影像及匹配连线
 //   - 将用户操作（同步缩放、颜色、宽度等）实时转发给 MatchLineOverlay
 //   - 通过 project_dialog.json 持久化显示配置（项目级）
@@ -16,9 +16,6 @@
 #include "settings/DialogSettingKeys.h"
 #include "ui_MatchViewerDialog.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QToolBar>
 #include <QLabel>
 #include <QCheckBox>
 #include <QPushButton>
@@ -52,22 +49,73 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     Ui::MatchViewerDialog form;
     form.setupUi(this);
 
-    // 构建工具栏（含同步、缩放按钮）
-    setupToolBar();
-    // 在工具栏末尾追加显示选项控件组
-    setupDisplayOptions();
-    // 在工具栏末尾追加密集显示选项控件组
-    setupDenseDisplayOptions();
-
-    form.mainLayout->insertWidget(0, m_toolbar);
-
     m_tabWidget = form.m_tabWidget;
     m_sparseTab = form.m_sparseTab;
     m_denseTab = form.m_denseTab;
     m_statusLabel = form.m_statusLabel;
 
+    m_syncModeChk = form.m_syncModeChk;
+    m_fitBtn = form.m_fitBtn;
+    m_resetBtn = form.m_resetBtn;
+    m_zoomInBtn = form.m_zoomInBtn;
+    m_zoomOutBtn = form.m_zoomOutBtn;
+
+    m_lineColorBtn = form.m_lineColorBtn;
+    m_lineWidthSpin = form.m_lineWidthSpin;
+    m_opacitySlider = form.m_opacitySlider;
+    m_maxCountSpin = form.m_maxCountSpin;
+    m_showEndPointsChk = form.m_showEndPointsChk;
+    m_showOnlyInliersChk = form.m_showOnlyInliersChk;
+    m_rainbowChk = form.m_rainbowChk;
+
+    m_denseDisplayGroup = form.m_denseDisplayGroup;
+    m_denseOpacitySlider = form.m_denseOpacitySlider;
+    m_denseColormapCombo = form.m_denseColormapCombo;
+    m_denseAutoRangeChk = form.m_denseAutoRangeChk;
+    m_denseMinSpin = form.m_denseMinSpin;
+    m_denseMaxSpin = form.m_denseMaxSpin;
+
+    m_denseColormapCombo->clear();
+    m_denseColormapCombo->addItem(tr("Jet"), 2);
+    m_denseColormapCombo->addItem(tr("Hot"), 11);
+    m_denseColormapCombo->addItem(tr("Turbo"), 20);
+
     m_viewer = new DualImageViewer(m_sparseTab);
     form.sparseLayout->addWidget(m_viewer);
+
+    connect(m_syncModeChk, &QCheckBox::toggled, this, &MatchViewerDialog::onSyncModeToggled);
+    connect(m_fitBtn, &QPushButton::clicked, this, &MatchViewerDialog::onFitToView);
+    connect(m_resetBtn, &QPushButton::clicked, this, &MatchViewerDialog::onResetView);
+    connect(m_zoomInBtn, &QPushButton::clicked, this, &MatchViewerDialog::onZoomIn);
+    connect(m_zoomOutBtn, &QPushButton::clicked, this, &MatchViewerDialog::onZoomOut);
+
+    connect(m_lineColorBtn, &QPushButton::clicked, this, &MatchViewerDialog::onLineColorChanged);
+    connect(m_lineWidthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &MatchViewerDialog::onLineWidthChanged);
+    connect(m_opacitySlider, &QSlider::valueChanged, this, &MatchViewerDialog::onOpacityChanged);
+    connect(m_maxCountSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &MatchViewerDialog::onMaxCountChanged);
+    connect(m_showEndPointsChk, &QCheckBox::toggled, this, &MatchViewerDialog::onShowEndPointsToggled);
+    connect(m_showOnlyInliersChk, &QCheckBox::toggled, this, &MatchViewerDialog::onShowOnlyInliersToggled);
+    connect(m_rainbowChk, &QCheckBox::toggled, this, &MatchViewerDialog::onRainbowToggled);
+
+    connect(m_denseOpacitySlider, &QSlider::valueChanged, this,
+            &MatchViewerDialog::onDenseOpacityChanged);
+    connect(m_denseColormapCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MatchViewerDialog::onDenseColormapChanged);
+    connect(m_denseAutoRangeChk, &QCheckBox::toggled, this, [this](bool checked)
+    {
+        m_denseMinSpin->setEnabled(!checked);
+        m_denseMaxSpin->setEnabled(!checked);
+        if (m_viewer && m_viewer->disparityOverlay())
+        {
+            m_viewer->disparityOverlay()->setAutoRange(checked);
+        }
+    });
+    connect(m_denseMinSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &MatchViewerDialog::onDenseRangeChanged);
+    connect(m_denseMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &MatchViewerDialog::onDenseRangeChanged);
 
     // 标签页切换处理
     connect(m_tabWidget, &QTabWidget::currentChanged, this, [this](int idx)
@@ -131,211 +179,6 @@ void MatchViewerDialog::setProjectPath(const QString &plascanPath)
     if (!m_setting) m_setting = new DialogSettingStore(DialogSettingKeys::MatchViewer, this);
     m_setting->setProjectPath(plascanPath);
     loadSettings();
-}
-
-// setupToolBar: 构建主工具栏，依次添加：同步开关、分隔符、适应/重置/放大/缩小按钮，
-//               末尾放一个弹性占位控件以右对齐后续显示选项
-void MatchViewerDialog::setupToolBar()
-{
-    m_toolbar = new QToolBar(this);
-    m_toolbar->setMovable(false);         // 禁止工具栏被拖动浮动
-    m_toolbar->setIconSize(QSize(24, 24)); // 图标尺寸（当前按钮不含图标）
-    
-    // 同步模式复选框：启用后左右视图缩放/平移同步
-    m_syncModeChk = new QCheckBox(tr("同步缩放"), this);
-    m_syncModeChk->setToolTip(tr("启用后，左右视图缩放和平移将联动"));
-    connect(m_syncModeChk, &QCheckBox::toggled, this, &MatchViewerDialog::onSyncModeToggled);
-    m_toolbar->addWidget(m_syncModeChk);
-    
-    m_toolbar->addSeparator();
-    
-    // 适应窗口
-    m_fitBtn = new QPushButton(tr("适应窗口"), this);
-    m_fitBtn->setToolTip(tr("将图像缩放到适合窗口大小"));
-    connect(m_fitBtn, &QPushButton::clicked, this, &MatchViewerDialog::onFitToView);
-    m_toolbar->addWidget(m_fitBtn);
-    
-    // 重置视图
-    m_resetBtn = new QPushButton(tr("重置"), this);
-    m_resetBtn->setToolTip(tr("重置缩放到100%"));
-    connect(m_resetBtn, &QPushButton::clicked, this, &MatchViewerDialog::onResetView);
-    m_toolbar->addWidget(m_resetBtn);
-    
-    m_toolbar->addSeparator();
-    
-    // 放大
-    m_zoomInBtn = new QPushButton(tr("+"), this);
-    m_zoomInBtn->setToolTip(tr("放大"));
-    m_zoomInBtn->setMaximumWidth(40);
-    connect(m_zoomInBtn, &QPushButton::clicked, this, &MatchViewerDialog::onZoomIn);
-    m_toolbar->addWidget(m_zoomInBtn);
-    
-    // 缩小
-    m_zoomOutBtn = new QPushButton(tr("-"), this);
-    m_zoomOutBtn->setToolTip(tr("缩小"));
-    m_zoomOutBtn->setMaximumWidth(40);
-    connect(m_zoomOutBtn, &QPushButton::clicked, this, &MatchViewerDialog::onZoomOut);
-    m_toolbar->addWidget(m_zoomOutBtn);
-    
-    m_toolbar->addSeparator();
-    
-    // 弹性占位控件：将后续的显示选项组推到工具栏右侧
-    QWidget *spacer = new QWidget();
-    spacer->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Preferred);
-    m_toolbar->addWidget(spacer);
-}
-
-// setupDisplayOptions: 在工具栏末尾添加显示选项控件组（QGroupBox）
-// 包含：线条颜色按钮、宽度微调框、透明度滑块、最大显示数、端点开关、彩虹模式、内点过滤
-void MatchViewerDialog::setupDisplayOptions()
-{
-    // 创建显示选项面板，嵌入工具栏末尾
-    QGroupBox *optionsGroup = new QGroupBox(tr("显示选项"), this);
-    QHBoxLayout *optLayout = new QHBoxLayout(optionsGroup);
-    
-    // 线条颜色
-    QLabel *colorLabel = new QLabel(tr("线条颜色:"), optionsGroup);
-    m_lineColorBtn = new QPushButton(optionsGroup);
-    m_lineColorBtn->setMaximumWidth(50);
-    m_lineColorBtn->setStyleSheet("background-color: yellow;");
-    connect(m_lineColorBtn, &QPushButton::clicked, this, &MatchViewerDialog::onLineColorChanged);
-    optLayout->addWidget(colorLabel);
-    optLayout->addWidget(m_lineColorBtn);
-    
-    // 线条宽度
-    QLabel *widthLabel = new QLabel(tr("宽度:"), optionsGroup);
-    m_lineWidthSpin = new QDoubleSpinBox(optionsGroup);
-    m_lineWidthSpin->setRange(0.5, 10.0);
-    m_lineWidthSpin->setSingleStep(0.5);
-    m_lineWidthSpin->setValue(1.5);
-    m_lineWidthSpin->setMaximumWidth(80);
-    connect(m_lineWidthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, &MatchViewerDialog::onLineWidthChanged);
-    optLayout->addWidget(widthLabel);
-    optLayout->addWidget(m_lineWidthSpin);
-    
-    // 透明度
-    QLabel *opacityLabel = new QLabel(tr("透明度:"), optionsGroup);
-    m_opacitySlider = new QSlider(Qt::Horizontal, optionsGroup);
-    m_opacitySlider->setRange(0, 100);
-    m_opacitySlider->setValue(70);
-    m_opacitySlider->setMaximumWidth(100);
-    connect(m_opacitySlider, &QSlider::valueChanged, this, &MatchViewerDialog::onOpacityChanged);
-    optLayout->addWidget(opacityLabel);
-    optLayout->addWidget(m_opacitySlider);
-    
-    // 最大显示数量
-    QLabel *maxCountLabel = new QLabel(tr("最大显示:"), optionsGroup);
-    m_maxCountSpin = new QSpinBox(optionsGroup);
-    m_maxCountSpin->setRange(0, 2000000);
-    m_maxCountSpin->setValue(0);
-    m_maxCountSpin->setSpecialValueText(tr("全部"));
-    m_maxCountSpin->setMaximumWidth(100);
-    connect(m_maxCountSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &MatchViewerDialog::onMaxCountChanged);
-    optLayout->addWidget(maxCountLabel);
-    optLayout->addWidget(m_maxCountSpin);
-    
-    // 显示端点
-    m_showEndPointsChk = new QCheckBox(tr("显示端点"), optionsGroup);
-    m_showEndPointsChk->setChecked(true);
-    connect(m_showEndPointsChk, &QCheckBox::toggled, this, &MatchViewerDialog::onShowEndPointsToggled);
-    optLayout->addWidget(m_showEndPointsChk);
-    
-    // 五彩斑斓模式（每条线不同颜色）
-    m_rainbowChk = new QCheckBox(tr("五彩斑斓"), optionsGroup);
-    m_rainbowChk->setToolTip(tr("启用后每条匹配线使用不同颜色，有助于区分重叠匹配"));
-    m_rainbowChk->setChecked(false);
-    connect(m_rainbowChk, &QCheckBox::toggled, this, &MatchViewerDialog::onRainbowToggled);
-    optLayout->addWidget(m_rainbowChk);
-    
-    // 只显示内点（需要bundle_adjust结果）
-    m_showOnlyInliersChk = new QCheckBox(tr("只显示内点"), optionsGroup);
-    m_showOnlyInliersChk->setChecked(false);
-    m_showOnlyInliersChk->setEnabled(false); // 默认禁用，需要加载内点数据
-    connect(m_showOnlyInliersChk, &QCheckBox::toggled, this, &MatchViewerDialog::onShowOnlyInliersToggled);
-    optLayout->addWidget(m_showOnlyInliersChk);
-    
-    m_toolbar->addWidget(optionsGroup);
-}
-
-// setupDenseDisplayOptions: 在工具栏末尾添加密集显示选项控件组
-// 包含：透明度滑块、色彩映射下拉框、自动范围、范围微调框
-void MatchViewerDialog::setupDenseDisplayOptions()
-{
-    m_denseDisplayGroup = new QGroupBox(tr("密集显示"), this);
-    QHBoxLayout *lay = new QHBoxLayout(m_denseDisplayGroup);
-
-    // 透明度滑块
-    lay->addWidget(new QLabel(tr("透明度:"), m_denseDisplayGroup));
-    m_denseOpacitySlider = new QSlider(Qt::Horizontal, m_denseDisplayGroup);
-    m_denseOpacitySlider->setRange(0, 100);
-    m_denseOpacitySlider->setValue(60);
-    lay->addWidget(m_denseOpacitySlider);
-    connect(m_denseOpacitySlider, &QSlider::valueChanged, this,
-            &MatchViewerDialog::onDenseOpacityChanged);
-
-    // 色彩下拉框
-    lay->addWidget(new QLabel(tr("色彩:"), m_denseDisplayGroup));
-    m_denseColormapCombo = new QComboBox(m_denseDisplayGroup);
-    m_denseColormapCombo->addItem(tr("Jet"), 2);
-    m_denseColormapCombo->addItem(tr("Hot"), 11);
-    m_denseColormapCombo->addItem(tr("Turbo"), 20);
-    lay->addWidget(m_denseColormapCombo);
-    connect(m_denseColormapCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &MatchViewerDialog::onDenseColormapChanged);
-
-    // 自动范围
-    m_denseAutoRangeChk = new QCheckBox(tr("自动范围"), m_denseDisplayGroup);
-    m_denseAutoRangeChk->setChecked(true);
-    lay->addWidget(m_denseAutoRangeChk);
-
-    // 范围微调框
-    lay->addWidget(new QLabel(tr("范围:"), m_denseDisplayGroup));
-    m_denseMinSpin = new QDoubleSpinBox(m_denseDisplayGroup);
-    m_denseMinSpin->setRange(0, 1024);
-    m_denseMinSpin->setValue(0);
-    m_denseMinSpin->setEnabled(false);
-    lay->addWidget(m_denseMinSpin);
-
-    m_denseMaxSpin = new QDoubleSpinBox(m_denseDisplayGroup);
-    m_denseMaxSpin->setRange(1, 2048);
-    m_denseMaxSpin->setValue(256);
-    m_denseMaxSpin->setEnabled(false);
-    lay->addWidget(m_denseMaxSpin);
-
-    connect(m_denseAutoRangeChk, &QCheckBox::toggled, this, [this](bool checked)
-    {
-        m_denseMinSpin->setEnabled(!checked);
-        m_denseMaxSpin->setEnabled(!checked);
-        if (m_viewer && m_viewer->disparityOverlay())
-            m_viewer->disparityOverlay()->setAutoRange(checked);
-    });
-
-    connect(m_denseMinSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, &MatchViewerDialog::onDenseRangeChanged);
-    connect(m_denseMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, &MatchViewerDialog::onDenseRangeChanged);
-
-    m_toolbar->addWidget(m_denseDisplayGroup);
-    m_denseDisplayGroup->hide();
-}
-
-// setupStatusBar: 在主布局底部添加简单状态栏
-// 状态栏仅含一个 QLabel（m_statusLabel），左对齐显示匹配点数等信息
-void MatchViewerDialog::setupStatusBar()
-{
-    m_statusLabel = new QLabel(this);
-    
-    // 水平布局：状态文字左侧，右侧弹性填充
-    QHBoxLayout *statusLayout = new QHBoxLayout();
-    statusLayout->addWidget(m_statusLabel);
-    statusLayout->addStretch();
-    
-    QWidget *statusWidget = new QWidget(this);
-    statusWidget->setLayout(statusLayout);
-    
-    layout()->addWidget(statusWidget);
 }
 
 // onSyncModeToggled: 同步缩放/平移开关切换，转发给 DualImageViewer

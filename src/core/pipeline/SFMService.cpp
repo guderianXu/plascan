@@ -205,21 +205,48 @@ QJsonObject cameraToJson(const Camera &camera)
 QString findModelFile(const QString &modelName)
 {
     QStringList candidates;
+    QStringList modelNames;
+    modelNames.append(modelName);
+
+    // 兼容当前资源目录中的 SuperPoint 导出文件名。SFM 服务历史上查找
+    // superpoint_v6_*.pt，而 GUI 特征提取和脚本使用 superpoint_extractor_*.pt。
+    if (modelName == QStringLiteral("superpoint_v6_cuda.pt"))
+    {
+        modelNames.append(QStringLiteral("superpoint_extractor_cuda.pt"));
+        modelNames.append(QStringLiteral("superpoint_extractor.pt"));
+        modelNames.append(QStringLiteral("superpoint_extractor_cpu.pt"));
+    }
+    else if (modelName == QStringLiteral("superpoint_v6_cpu.pt"))
+    {
+        modelNames.append(QStringLiteral("superpoint_extractor_cpu.pt"));
+        modelNames.append(QStringLiteral("superpoint_extractor.pt"));
+    }
 
     const QString envModelDir = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
     if (!envModelDir.isEmpty())
     {
-        candidates.append(QDir(envModelDir).filePath(modelName));
+        for (const QString &name : modelNames)
+        {
+            candidates.append(QDir(envModelDir).filePath(name));
+        }
     }
 
 #ifdef PLASCAN_SOURCE_DIR
-    candidates.append(
-        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("resources/models/%1").arg(modelName)));
+    for (const QString &name : modelNames)
+    {
+        candidates.append(
+            QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("resources/models/%1").arg(name)));
+    }
 #endif
 
     const QString exeDir = QCoreApplication::applicationDirPath();
-    candidates.append(QDir(exeDir).filePath(QStringLiteral("../models/%1").arg(modelName)));
-    candidates.append(QStringLiteral("models/%1").arg(modelName));
+    for (const QString &name : modelNames)
+    {
+        candidates.append(QDir(exeDir).filePath(QStringLiteral("../models/%1").arg(name)));
+        candidates.append(QDir(exeDir).filePath(QStringLiteral("../resources/models/%1").arg(name)));
+        candidates.append(QDir(exeDir).filePath(QStringLiteral("../../resources/models/%1").arg(name)));
+        candidates.append(QStringLiteral("models/%1").arg(name));
+    }
 
     for (const QString &candidate : candidates)
     {

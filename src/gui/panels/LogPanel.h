@@ -19,12 +19,12 @@
  */
 
 #include <QWidget>
-#include <QTextEdit>
-#include <QComboBox>
-#include <QPushButton>
-#include <QHBoxLayout>
-#include <QVBoxLayout>
+
 #include "Logger.h"
+
+class QComboBox;
+class QPushButton;
+class QTextEdit;
 
 /**
  * @class LogPanel

@@ -62,6 +62,354 @@
       <property name="spacing">
        <number>4</number>
       </property>
+      <item>
+       <layout class="QHBoxLayout" name="reprojRowLayout">
+        <item>
+         <widget class="QCheckBox" name="m_reprojCheck">
+          <property name="toolTip">
+           <string>移除 BA 计算的逐点重投影误差超过此阈值的三维点。
+重投影误差越大说明该点定位越不精确。
+BA 质量较好时建议 2–3 px，初始三角化结果建议 4–6 px。</string>
+          </property>
+          <property name="text">
+           <string>重投影误差 ≤</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="m_reprojSpin">
+          <property name="toolTip">
+           <string>移除 BA 计算的逐点重投影误差超过此阈值的三维点。
+重投影误差越大说明该点定位越不精确。
+BA 质量较好时建议 2–3 px，初始三角化结果建议 4–6 px。</string>
+          </property>
+          <property name="suffix">
+           <string> px</string>
+          </property>
+          <property name="decimals">
+           <number>1</number>
+          </property>
+          <property name="singleStep">
+           <double>0.500000000000000</double>
+          </property>
+          <property name="minimum">
+           <double>0.100000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>50.000000000000000</double>
+          </property>
+          <property name="value">
+           <double>4.000000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="reprojSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="trackRowLayout">
+        <item>
+         <widget class="QCheckBox" name="m_trackCheck">
+          <property name="toolTip">
+           <string>移除被少于此数量影像观测到的三维点。
+若所有点轨迹长度相同，此过滤器不会生效（安全保护）。
+建议：2（不过滤）、3（平衡）或 4（严格）。</string>
+          </property>
+          <property name="text">
+           <string>轨迹长度 ≥</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="m_trackSpin">
+          <property name="toolTip">
+           <string>移除被少于此数量影像观测到的三维点。
+若所有点轨迹长度相同，此过滤器不会生效（安全保护）。
+建议：2（不过滤）、3（平衡）或 4（严格）。</string>
+          </property>
+          <property name="suffix">
+           <string> 次观测</string>
+          </property>
+          <property name="minimum">
+           <number>2</number>
+          </property>
+          <property name="maximum">
+           <number>50</number>
+          </property>
+          <property name="value">
+           <number>2</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="trackSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="angleRowLayout">
+        <item>
+         <widget class="QCheckBox" name="m_angleCheck">
+          <property name="toolTip">
+           <string>移除所有观测射线最大交角小于此值的三维点。
+角度越大说明三角化几何条件越好。建议 2°（宽Song）至 5°（严格）。</string>
+          </property>
+          <property name="text">
+           <string>三角化角度 ≥</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="m_angleSpin">
+          <property name="toolTip">
+           <string>移除所有观测射线最大交角小于此值的三维点。
+角度越大说明三角化几何条件越好。建议 2°（宽Song）至 5°（严格）。</string>
+          </property>
+          <property name="suffix">
+           <string> °</string>
+          </property>
+          <property name="decimals">
+           <number>1</number>
+          </property>
+          <property name="singleStep">
+           <double>0.500000000000000</double>
+          </property>
+          <property name="minimum">
+           <double>0.100000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>30.000000000000000</double>
+          </property>
+          <property name="value">
+           <double>2.000000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="angleSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="statRowLayout">
+        <item>
+         <widget class="QCheckBox" name="m_statCheck">
+          <property name="toolTip">
+           <string>基于 KNN 邻域统计检测空间离群点。
+K：近邻数量，越大越稳定但越慢（建议 16–30）。
+σ：若某点到邻域中心的距离超过 均值 + σ×标准差则剪除（建议 2.0–2.5）。</string>
+          </property>
+          <property name="text">
+           <string>统计离群</string>
+          </property>
+          <property name="checked">
+           <bool>true</bool>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="statKLabel">
+          <property name="text">
+           <string>K:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="m_statKSpin">
+          <property name="toolTip">
+           <string>基于 KNN 邻域统计检测空间离群点。
+K：近邻数量，越大越稳定但越慢（建议 16–30）。
+σ：若某点到邻域中心的距离超过 均值 + σ×标准差则剪除（建议 2.0–2.5）。</string>
+          </property>
+          <property name="minimum">
+           <number>2</number>
+          </property>
+          <property name="maximum">
+           <number>200</number>
+          </property>
+          <property name="value">
+           <number>20</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="statSigmaLabel">
+          <property name="text">
+           <string>σ:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="m_statStdSpin">
+          <property name="toolTip">
+           <string>基于 KNN 邻域统计检测空间离群点。
+K：近邻数量，越大越稳定但越慢（建议 16–30）。
+σ：若某点到邻域中心的距离超过 均值 + σ×标准差则剪除（建议 2.0–2.5）。</string>
+          </property>
+          <property name="decimals">
+           <number>1</number>
+          </property>
+          <property name="singleStep">
+           <double>0.500000000000000</double>
+          </property>
+          <property name="minimum">
+           <double>0.500000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>10.000000000000000</double>
+          </property>
+          <property name="value">
+           <double>2.000000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="statSpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
+      <item>
+       <layout class="QHBoxLayout" name="densityRowLayout">
+        <item>
+         <widget class="QCheckBox" name="m_densityCheck">
+          <property name="toolTip">
+           <string>移除指定半径球内邻居数不足的孤立点。
+适合清理真正孤立的噪声点，但计算较慢。
+半径应与点云空间尺度匹配，最少邻居建议 3–6。</string>
+          </property>
+          <property name="text">
+           <string>半径密度（慢）</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="densityRadiusLabel">
+          <property name="text">
+           <string>半径:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QDoubleSpinBox" name="m_densityRadiusSpin">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="toolTip">
+           <string>移除指定半径球内邻居数不足的孤立点。
+适合清理真正孤立的噪声点，但计算较慢。
+半径应与点云空间尺度匹配，最少邻居建议 3–6。</string>
+          </property>
+          <property name="decimals">
+           <number>3</number>
+          </property>
+          <property name="singleStep">
+           <double>0.100000000000000</double>
+          </property>
+          <property name="minimum">
+           <double>0.010000000000000</double>
+          </property>
+          <property name="maximum">
+           <double>1000.000000000000000</double>
+          </property>
+          <property name="value">
+           <double>0.500000000000000</double>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="densityMinNeighborsLabel">
+          <property name="text">
+           <string>最少邻居:</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QSpinBox" name="m_densityMinNbSpin">
+          <property name="enabled">
+           <bool>false</bool>
+          </property>
+          <property name="toolTip">
+           <string>移除指定半径球内邻居数不足的孤立点。
+适合清理真正孤立的噪声点，但计算较慢。
+半径应与点云空间尺度匹配，最少邻居建议 3–6。</string>
+          </property>
+          <property name="minimum">
+           <number>1</number>
+          </property>
+          <property name="maximum">
+           <number>50</number>
+          </property>
+          <property name="value">
+           <number>5</number>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <spacer name="densitySpacer">
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>40</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </item>
      </layout>
     </widget>
    </item>
@@ -81,7 +429,78 @@
      <property name="checked">
       <bool>false</bool>
      </property>
-     <layout class="QFormLayout" name="refineForm"/>
+     <layout class="QFormLayout" name="refineForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="iterRoundsLabel">
+        <property name="text">
+         <string>精修轮数:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="m_iterRoundsSpin">
+        <property name="toolTip">
+         <string>每轮迭代内执行一次完整过滤，阈值逐轮收紧。建议 3–5 轮。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>20</number>
+        </property>
+        <property name="value">
+         <number>3</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_retriangCheck">
+        <property name="toolTip">
+         <string>不勾选（推荐）：每轮在上一轮保留的点上继续过滤，统计
+滤波随着离群点减少而逐渐收敛，效果更好。
+勾选：每轮均从原始完整点集重新过滤，各轮独立。
+注意：此选项不会重新执行三角化或光束法平差。</string>
+        </property>
+        <property name="text">
+         <string>独立轮次（每轮从原始点集重新过滤）</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_normalConsCheck">
+        <property name="toolTip">
+         <string>额外检查三维点周围法向量的一致性，移除方向异常的点。
+计算较慢，适合密度较高的点云。</string>
+        </property>
+        <property name="text">
+         <string>启用法向一致性检查</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="threadsLabel">
+        <property name="text">
+         <string>线程数:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QSpinBox" name="m_threadsSpin">
+        <property name="toolTip">
+         <string>并行计算的线程数。建议与 CPU 核心数相近。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>128</number>
+        </property>
+        <property name="value">
+         <number>8</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>
@@ -100,7 +519,131 @@
      <property name="checked">
       <bool>false</bool>
      </property>
-     <layout class="QFormLayout" name="spatialForm"/>
+     <layout class="QFormLayout" name="spatialForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="voxelSizeLabel">
+        <property name="text">
+         <string>体素边长:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QDoubleSpinBox" name="m_voxelSizeSpin">
+        <property name="toolTip">
+         <string>将空间划分为该边长的体素，移除只含极少点的孤立体素。设 0（自动）时系统自动估算合理的体素尺度。</string>
+        </property>
+        <property name="specialValueText">
+         <string>自动</string>
+        </property>
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="minVoxelPtsLabel">
+        <property name="text">
+         <string>体素最少点数:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="m_minVoxelPtsSpin">
+        <property name="toolTip">
+         <string>体素内点数低于此值时，该体素内所有点被将为孤立噪声并剪除。建议 2–3。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>20</number>
+        </property>
+        <property name="value">
+         <number>2</number>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_localReprojCheck">
+        <property name="toolTip">
+         <string>在每个局部邻域内计算重投影误差统计，剪除超出阈值的异常点。</string>
+        </property>
+        <property name="text">
+         <string>局部重投影过滤</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="reprojStdMulLabel">
+        <property name="text">
+         <string>重投影 σ 倍数:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QDoubleSpinBox" name="m_reprojStdMulSpin">
+        <property name="toolTip">
+         <string>局部重投影过滤的标准差倍数阈值。值越小过滤越激进（建议 2.0–3.0）。</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="singleStep">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="minimum">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>10.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>2.500000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="dedupRadiusLabel">
+        <property name="text">
+         <string>去重半径:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QDoubleSpinBox" name="m_dedupRadiusSpin">
+        <property name="toolTip">
+         <string>移除距离小于此半径的重复点（仅保留其中一个）。设为“禁用”时不执行去重操作。</string>
+        </property>
+        <property name="specialValueText">
+         <string>禁用</string>
+        </property>
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="singleStep">
+         <double>0.010000000000000</double>
+        </property>
+        <property name="minimum">
+         <double>-1.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>100.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>-1.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
     </widget>
    </item>
    <item>

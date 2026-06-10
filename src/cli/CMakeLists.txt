@@ -50,5 +50,59 @@ if(TARGET superglue_matcher)
         "${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition;${CMAKE_SOURCE_DIR}/src/core/feature_match/loftr;${CMAKE_SOURCE_DIR}/src/core/feature_match;${CMAKE_SOURCE_DIR}/src/core/feature_extractors")
 endif()
 
-# ── 待实现 ──
-# sfm_cli: 需 headless SFMService (当前 SFMService 耦合到 GUI ProjectIO)
+# ── GUI 等价一键重建：SFM -> MVS -> Mesh -> DEM/DOM ──
+if(TARGET superpoint AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing AND TARGET terrain)
+    add_executable(reconstruct_pipeline_cli
+        cli_reconstruct_pipeline.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
+    )
+    target_link_libraries(reconstruct_pipeline_cli PRIVATE
+        sfm
+        mvs
+        meshing
+        terrain
+        superpoint
+        superglue_matcher
+        feature_extractors_traditional
+        feature_match_common
+        camera
+        Qt6::Core
+        Qt6::Concurrent
+        Qt6::Gui
+        plascan_common_log
+        ${TORCH_LIBRARIES}
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(reconstruct_pipeline_cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/common
+        ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue
+        ${CMAKE_SOURCE_DIR}/src/core/mesh
+        ${CMAKE_SOURCE_DIR}/src/core/mvs
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline
+        ${CMAKE_SOURCE_DIR}/src/core/sfm
+        ${CMAKE_SOURCE_DIR}/src/core/terrain
+        ${CMAKE_SOURCE_DIR}/src/gui
+        ${CMAKE_SOURCE_DIR}/src/gui/compat
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support
+        ${TORCH_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_compile_definitions(reconstruct_pipeline_cli PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    set_target_properties(reconstruct_pipeline_cli PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        BUILD_RPATH_USE_ORIGIN TRUE
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+    if(PLASCAN_EXTRA_NVRTC_RPATHS)
+        set_property(TARGET reconstruct_pipeline_cli APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
+    endif()
+endif()

@@ -102,9 +102,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     m_addPhotoAct       = workflowMenu->addAction(tr("添加 照片"));
     m_addFolderAct      = workflowMenu->addAction(tr("添加 文件夹"));
     workflowMenu->addSeparator();
-    m_aerialTriangulationAct = workflowMenu->addAction(tr("空中三角测量")); // 完整空三流程
-    m_createPointCloudAct    = workflowMenu->addAction(tr("创建密集点云"));    // 一键稠密点云生成
-    m_generateModelAct  = workflowMenu->addAction(tr("生成模型"));          // 密集重建完整流程
+    m_threeDReconstructionAct = workflowMenu->addAction(tr("三维重建"));     // 一键完整建模流程
     m_createDEMAct      = workflowMenu->addAction(tr("创建 DEM"));          // DEM 完整流程
     m_generateOrthoAct  = workflowMenu->addAction(tr("生成 正射影像"));     // 正射影像完整流程
 
@@ -255,9 +253,7 @@ QAction *MainMenu::detectFeaturesAction() const { return m_detectFeaturesAct; }
 QAction *MainMenu::featureVisualizationAction() const { return m_featureVisualizationAct; }
 QAction *MainMenu::matchFeaturesAction() const  { return m_matchFeaturesAct; }
 QAction *MainMenu::viewMatchesAction() const    { return m_viewMatchesAct; }
-QAction *MainMenu::aerialTriangulationAction() const { return m_aerialTriangulationAct; }
-QAction *MainMenu::createPointCloudAction() const   { return m_createPointCloudAct; }
-QAction *MainMenu::generateModelAction() const  { return m_generateModelAct; }
+QAction *MainMenu::threeDReconstructionAction() const { return m_threeDReconstructionAct; }
 QAction *MainMenu::overlapAnalysisAction() const { return m_overlapAnalysisAct; }
 QAction *MainMenu::intersectionCheckAction() const { return m_intersectionCheckAct; }
 QAction *MainMenu::intersectionViewResultsAction() const { return m_intersectionViewResultsAct; }

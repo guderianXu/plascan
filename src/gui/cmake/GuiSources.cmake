@@ -64,7 +64,6 @@ set(GUI_SOURCES
   dialogs/CameraModel3DDialog.cpp
   dialogs/StereoProcessingDialog.cpp
   dialogs/OverlapAnalysisDialog.cpp
-  dialogs/AerialTriangulationDialog.cpp
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
   dialogs/FeatureExtractionDialog.cpp
@@ -73,8 +72,8 @@ set(GUI_SOURCES
   dialogs/ForwardIntersectionCheckDialog.cpp
   dialogs/ForwardIntersectionResultsDialog.cpp
   dialogs/DenseCloudDialog.cpp
-  dialogs/ModelGenerationDialog.cpp
-  dialogs/SimplePointCloudDialog.cpp
+  dialogs/ThreeDReconstructionDialog.cpp
+  dialogs/ThreeDReconstructionDialog.ui
   dialogs/SparseCloudPostProcessDialog.cpp
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp
@@ -161,7 +160,6 @@ set(GUI_HEADERS
   dialogs/CameraModel3DDialog.h
   dialogs/StereoProcessingDialog.h
   dialogs/OverlapAnalysisDialog.h
-  dialogs/AerialTriangulationDialog.h
   dialogs/CreateDemDialog.h
   dialogs/MapProjectDialog.h
   dialogs/FeatureExtractionDialog.h
@@ -170,8 +168,7 @@ set(GUI_HEADERS
   dialogs/ForwardIntersectionCheckDialog.h
   dialogs/ForwardIntersectionResultsDialog.h
   dialogs/DenseCloudDialog.h
-  dialogs/ModelGenerationDialog.h
-  dialogs/SimplePointCloudDialog.h
+  dialogs/ThreeDReconstructionDialog.h
   dialogs/SparseCloudPostProcessDialog.h
   dialogs/WorkflowReportDialog.h
   dialogs/ObservationNetworkDialog.h
@@ -229,7 +226,6 @@ set(GUI_DIALOG_SOURCES
   dialogs/CameraModel3DDialog.cpp
   dialogs/StereoProcessingDialog.cpp
   dialogs/OverlapAnalysisDialog.cpp
-  dialogs/AerialTriangulationDialog.cpp
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
   dialogs/FeatureExtractionDialog.cpp
@@ -238,8 +234,8 @@ set(GUI_DIALOG_SOURCES
   dialogs/ForwardIntersectionCheckDialog.cpp
   dialogs/ForwardIntersectionResultsDialog.cpp
   dialogs/DenseCloudDialog.cpp
-  dialogs/ModelGenerationDialog.cpp
-  dialogs/SimplePointCloudDialog.cpp
+  dialogs/ThreeDReconstructionDialog.cpp
+  dialogs/ThreeDReconstructionDialog.ui
   dialogs/SparseCloudPostProcessDialog.cpp
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp

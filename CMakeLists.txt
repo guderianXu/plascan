@@ -51,11 +51,21 @@ else()
   message(STATUS "plascan: CUDA compiler not found, GPU modules will fall back to CPU")
 endif()
 
-# 系统库路径必须在 conda sysroot 之前, 避免 glibc 版本冲突
-if(EXISTS "/usr/lib/x86_64-linux-gnu")
+# 系统工具链构建时可优先补充系统库路径；全 conda 工具链构建必须避免污染 conda sysroot。
+set(_plascan_use_system_library_path_default ON)
+if(PLASCAN_CONDA_PREFIX)
+  set(_plascan_use_system_library_path_default OFF)
+endif()
+option(PLASCAN_USE_SYSTEM_LIBRARY_PATH
+  "Prepend /usr/lib/x86_64-linux-gnu to linker search paths for system toolchain builds"
+  ${_plascan_use_system_library_path_default})
+
+if(PLASCAN_USE_SYSTEM_LIBRARY_PATH AND EXISTS "/usr/lib/x86_64-linux-gnu")
   link_directories(BEFORE "/usr/lib/x86_64-linux-gnu")
   set(CMAKE_EXE_LINKER_FLAGS "-L/usr/lib/x86_64-linux-gnu ${CMAKE_EXE_LINKER_FLAGS}")
   set(CMAKE_SHARED_LINKER_FLAGS "-L/usr/lib/x86_64-linux-gnu ${CMAKE_SHARED_LINKER_FLAGS}")
+elseif(PLASCAN_CONDA_PREFIX)
+  message(STATUS "plascan: skipping system library path injection for conda toolchain")
 endif()
 
 set(PLASCAN_CUDA_ARCHITECTURES "75;86;89" CACHE STRING "Default CUDA architectures for PlaScan targets")

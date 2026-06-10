@@ -6,9 +6,11 @@
  * LogPanel 实现：包含级别选择控件与文本区，注册全局 Logger sink 并在 UI 中显示日志。
  */
 #include "LogPanel.h"
+#include "ui_LogPanel.h"
+
+#include <QComboBox>
 #include <QFile>
 #include <QTextStream>
-#include <QLabel>
 #include <QFileDialog>
 #include <QDir>
 #include <QIODevice>
@@ -16,9 +18,8 @@
 #include <QPointer>
 #include <QStringList>
 #include <QTextCursor>
+#include <QTextEdit>
 #include <QPushButton>
-#include <QHBoxLayout>
-#include <QVBoxLayout>
 
 /**
  * @brief 构造函数：创建 UI 布局，初始化所有子控件，并注册 Logger sink。
@@ -43,43 +44,25 @@
 LogPanel::LogPanel(QWidget *parent)
     : QWidget(parent)
 {
-    // ---- 顶部工具栏：等级选择 + 操作按钮 ----
-    auto *topLayout = new QHBoxLayout();
+    Ui::LogPanel ui;
+    ui.setupUi(this);
 
-    // 日志等级过滤下拉框，选项顺序与 Logger::Level 枚举值一一对应
-    m_levelCombo = new QComboBox(this);
-    m_levelCombo->addItems(QStringList() << "Debug" << "Info" << "Warn" << "Error");
+    m_levelCombo = ui.m_levelCombo;
+    m_clearBtn = ui.m_clearBtn;
+    m_saveBtn = ui.m_saveBtn;
+    m_text = ui.m_text;
+
     m_levelCombo->setCurrentIndex(static_cast<int>(m_displayLevel));
     connect(m_levelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &LogPanel::onLevelChanged);
 
-    // 清空按钮：清除 UI 文本区内容并截断磁盘日志文件
-    m_clearBtn = new QPushButton(tr("清空"), this);
     connect(m_clearBtn, &QPushButton::clicked, this, &LogPanel::clearLogs);
 
-    // 保存按钮：弹出文件选择对话框，将面板内容另存为文本文件
-    m_saveBtn = new QPushButton(tr("保存"), this);
     connect(m_saveBtn, &QPushButton::clicked, this, [this]() {
         QString p = QFileDialog::getSaveFileName(
             this, tr("保存日志为"), QDir::homePath(), tr("文本文件 (*.txt);;所有文件 (*)"));
         if (!p.isEmpty()) saveLogsToFile(p);
     });
-
-    topLayout->addWidget(new QLabel(tr("显示等级:"), this));
-    topLayout->addWidget(m_levelCombo);
-    topLayout->addStretch(); // 弹性空间，将操作按钮推到右侧
-    topLayout->addWidget(m_clearBtn);
-    topLayout->addWidget(m_saveBtn);
-
-    // ---- 日志文本区：只读，自动换行 ----
-    m_text = new QTextEdit(this);
-    m_text->setReadOnly(true);
-
-    // ---- 主布局：顶部工具栏 + 文本区 ----
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->addLayout(topLayout);
-    mainLayout->addWidget(m_text);
-    setLayout(mainLayout);
 
     QPointer<LogPanel> self(this);
     m_sinkId = Logger::instance()->registerSink(
