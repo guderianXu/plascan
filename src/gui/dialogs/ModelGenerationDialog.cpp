@@ -3,18 +3,14 @@
 // 模块: GUI / 对话框
 // =============================================================================
 #include "ModelGenerationDialog.h"
+#include "ui_ModelGenerationDialog.h"
 
 #include <QComboBox>
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QLabel>
-#include <QGroupBox>
 #include <QPushButton>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QFormLayout>
-#include <QDialogButtonBox>
 #include <QJsonObject>
 
 // ── 预设描述文本 ──────────────────────────────────────────────────────────────
@@ -42,116 +38,30 @@ static const Preset kPresets[3] = {
 ModelGenerationDialog::ModelGenerationDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle(QStringLiteral("生成模型 - 参数设置"));
-    setMinimumWidth(520);
     setupUi();
     applyPreset(1); // 默认中精度
 }
 
 void ModelGenerationDialog::setupUi()
 {
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(12);
+    Ui::ModelGenerationDialog form;
+    form.setupUi(this);
 
-    // ── 精度预设组 ─────────────────────────────────────────────────────────
-    auto *presetGroup = new QGroupBox(QStringLiteral("重建精度"), this);
-    auto *presetForm  = new QFormLayout(presetGroup);
-
-    m_presetCombo = new QComboBox(this);
-    m_presetCombo->addItem(QStringLiteral("低 (Low)"));
-    m_presetCombo->addItem(QStringLiteral("中 (Medium)  — 默认"));
-    m_presetCombo->addItem(QStringLiteral("高 (High)"));
-    m_presetCombo->setCurrentIndex(1);
-    presetForm->addRow(QStringLiteral("精度预设："), m_presetCombo);
-
-    m_outputFormatCombo = new QComboBox(this);
-    m_outputFormatCombo->addItem(QStringLiteral("PLY"));
-    m_outputFormatCombo->addItem(QStringLiteral("OBJ"));
-    m_outputFormatCombo->setCurrentIndex(0);
-    m_outputFormatCombo->setToolTip(QStringLiteral("最终模型输出格式。PLY 为默认；OBJ 适合带纹理输出。"));
-    presetForm->addRow(QStringLiteral("最终格式："), m_outputFormatCombo);
-
-    m_presetDescLabel = new QLabel(this);
-    m_presetDescLabel->setWordWrap(true);
-    m_presetDescLabel->setStyleSheet(QStringLiteral("color: gray; font-size: 11px;"));
-    presetForm->addRow(m_presetDescLabel);
-
-    mainLayout->addWidget(presetGroup);
-
-    // ── 高级参数组 ─────────────────────────────────────────────────────────
-    auto *advGroup = new QGroupBox(QStringLiteral("重建参数（可与预设独立调整）"), this);
-    auto *advForm  = new QFormLayout(advGroup);
-
-    m_disparitySpin = new QSpinBox(this);
-    m_disparitySpin->setRange(16, 512);
-    m_disparitySpin->setSingleStep(16);
-    m_disparitySpin->setToolTip(QStringLiteral("SGBM 视差搜索范围，必须为 16 的倍数。越大越慢但覆盖更深的景深差异。"));
-    advForm->addRow(QStringLiteral("视差范围："), m_disparitySpin);
-
-    m_gridResSpin = new QSpinBox(this);
-    m_gridResSpin->setRange(64, 4096);
-    m_gridResSpin->setSingleStep(64);
-    m_gridResSpin->setToolTip(QStringLiteral("地形网格横向像素分辨率。越高细节越丰富，内存消耗越大。"));
-    advForm->addRow(QStringLiteral("网格分辨率："), m_gridResSpin);
-
-    m_meshResSpin = new QSpinBox(this);
-    m_meshResSpin->setRange(64, 1024);
-    m_meshResSpin->setSingleStep(32);
-    m_meshResSpin->setToolTip(QStringLiteral("隐式场分辨率（最长轴体素数）。越高细节越多，耗时越长。"));
-    advForm->addRow(QStringLiteral("网格体素分辨率："), m_meshResSpin);
-
-    m_meshSmoothIterSpin = new QSpinBox(this);
-    m_meshSmoothIterSpin->setRange(0, 10);
-    m_meshSmoothIterSpin->setToolTip(QStringLiteral("Taubin 平滑迭代次数。0 表示不平滑。"));
-    advForm->addRow(QStringLiteral("平滑迭代："), m_meshSmoothIterSpin);
-
-    m_meshSmoothLambdaSpin = new QDoubleSpinBox(this);
-    m_meshSmoothLambdaSpin->setRange(0.0, 1.0);
-    m_meshSmoothLambdaSpin->setSingleStep(0.05);
-    m_meshSmoothLambdaSpin->setDecimals(2);
-    m_meshSmoothLambdaSpin->setToolTip(QStringLiteral("平滑步长，越大越平滑但会损失细节。"));
-    advForm->addRow(QStringLiteral("平滑强度："), m_meshSmoothLambdaSpin);
-
-    m_meshPaddingSpin = new QDoubleSpinBox(this);
-    m_meshPaddingSpin->setRange(0.0, 0.30);
-    m_meshPaddingSpin->setSingleStep(0.01);
-    m_meshPaddingSpin->setDecimals(2);
-    m_meshPaddingSpin->setToolTip(QStringLiteral("重建包围盒外扩比例。适度外扩可避免边界截断。"));
-    advForm->addRow(QStringLiteral("包围盒外扩："), m_meshPaddingSpin);
-
-    m_runtimeHintLabel = new QLabel(this);
-    m_runtimeHintLabel->setWordWrap(true);
-    m_runtimeHintLabel->setStyleSheet(QStringLiteral("color: #666; font-size: 11px;"));
-    advForm->addRow(QStringLiteral("预计耗时："), m_runtimeHintLabel);
-
-    mainLayout->addWidget(advGroup);
-
-    // ── 选项组 ─────────────────────────────────────────────────────────────
-    auto *optGroup = new QGroupBox(QStringLiteral("生成选项"), this);
-    auto *optLayout = new QVBoxLayout(optGroup);
-
-    m_useCudaCheck = new QCheckBox(QStringLiteral("使用 CUDA 加速（需要 NVIDIA GPU）"), this);
-    m_useCudaCheck->setChecked(true); // 默认开启
-    m_useCudaCheck->setToolTip(QStringLiteral("启用后，立体匹配阶段将使用 GPU 加速，速度显著提升。"));
-    optLayout->addWidget(m_useCudaCheck);
-
-    m_outputColorCheck = new QCheckBox(QStringLiteral("输出颜色（XYZRGB）"), this);
-    m_outputColorCheck->setChecked(true);
-    m_outputColorCheck->setToolTip(QStringLiteral("从原始影像采样 RGB 颜色写入点云/网格。"));
-    optLayout->addWidget(m_outputColorCheck);
-
-    m_outputNormalCheck = new QCheckBox(QStringLiteral("输出法向量"), this);
-    m_outputNormalCheck->setChecked(false);
-    m_outputNormalCheck->setToolTip(QStringLiteral("为网格顶点估算并写入法向量（计算量较大）。"));
-    optLayout->addWidget(m_outputNormalCheck);
-
-    mainLayout->addWidget(optGroup);
-
-    // ── 按钮 ───────────────────────────────────────────────────────────────
-    auto *btnBox = new QDialogButtonBox(this);
-    m_okBtn     = btnBox->addButton(QStringLiteral("确定"), QDialogButtonBox::AcceptRole);
-    m_cancelBtn = btnBox->addButton(QStringLiteral("取消"), QDialogButtonBox::RejectRole);
-    mainLayout->addWidget(btnBox);
+    m_presetCombo          = form.m_presetCombo;
+    m_outputFormatCombo    = form.m_outputFormatCombo;
+    m_disparitySpin        = form.m_disparitySpin;
+    m_gridResSpin          = form.m_gridResSpin;
+    m_meshResSpin          = form.m_meshResSpin;
+    m_meshSmoothIterSpin   = form.m_meshSmoothIterSpin;
+    m_meshSmoothLambdaSpin = form.m_meshSmoothLambdaSpin;
+    m_meshPaddingSpin      = form.m_meshPaddingSpin;
+    m_useCudaCheck         = form.m_useCudaCheck;
+    m_outputColorCheck     = form.m_outputColorCheck;
+    m_outputNormalCheck    = form.m_outputNormalCheck;
+    m_presetDescLabel      = form.m_presetDescLabel;
+    m_runtimeHintLabel     = form.m_runtimeHintLabel;
+    m_okBtn                = form.m_okBtn;
+    m_cancelBtn            = form.m_cancelBtn;
 
     // ── 信号 ───────────────────────────────────────────────────────────────
     connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),

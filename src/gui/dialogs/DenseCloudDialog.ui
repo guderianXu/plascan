@@ -1,0 +1,666 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>DenseCloudDialog</class>
+ <widget class="QDialog" name="DenseCloudDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>540</width>
+    <height>640</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>生成稠密点云 (MVS)</string>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>540</width>
+    <height>640</height>
+   </size>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <property name="spacing">
+    <number>8</number>
+   </property>
+   <item>
+    <widget class="QGroupBox" name="inputGroup">
+     <property name="title">
+      <string>输入配置</string>
+     </property>
+     <layout class="QFormLayout" name="inputForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="imagePairLabel">
+        <property name="text">
+         <string>影像对:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_imagePairCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_imagePairCombo">
+        <property name="toolTip">
+         <string>选择用于立体匹配的影像对（默认全部影像对）</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="atResultLabel">
+        <property name="text">
+         <string>AT 结果:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_atResultCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="m_atResultCombo">
+        <property name="toolTip">
+         <string>选择已完成空三/相对定向的 AT 结果（提供相机位姿）</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="presetLabel">
+        <property name="text">
+         <string>参数预设:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_presetCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QComboBox" name="m_presetCombo">
+        <property name="currentIndex">
+         <number>1</number>
+        </property>
+        <item>
+         <property name="text">
+          <string>快速 (低精度，适合预览)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>标准 (推荐)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>精细 (高精度，较慢)</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="outputDirLabel">
+        <property name="text">
+         <string>输出目录:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_outputDirEdit</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <layout class="QHBoxLayout" name="outputDirLayout">
+        <item>
+         <widget class="QLineEdit" name="m_outputDirEdit"/>
+        </item>
+        <item>
+         <widget class="QPushButton" name="browseOutputButton">
+          <property name="minimumSize">
+           <size>
+            <width>64</width>
+            <height>0</height>
+           </size>
+          </property>
+          <property name="maximumSize">
+           <size>
+            <width>64</width>
+            <height>16777215</height>
+           </size>
+          </property>
+          <property name="text">
+           <string>浏览...</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTabWidget" name="denseTabs">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <widget class="QWidget" name="sgbmTab">
+      <attribute name="title">
+       <string>深度图 (SGBM)</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="sgbmTabLayout">
+       <item>
+        <widget class="QGroupBox" name="sgbmGroup">
+         <property name="title">
+          <string>SGBM 视差估计参数</string>
+         </property>
+         <layout class="QFormLayout" name="sgbmForm">
+          <item row="0" column="0">
+           <widget class="QLabel" name="numDispLabel">
+            <property name="text">
+             <string>视差范围:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_numDispSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QSpinBox" name="m_numDispSpin">
+            <property name="toolTip">
+             <string>视差搜索范围（像素，必须是16的倍数）。值越大可检测更大深度差，但运算更慢。
+建议：128（标准）~256（大场景）</string>
+            </property>
+            <property name="minimum">
+             <number>16</number>
+            </property>
+            <property name="maximum">
+             <number>512</number>
+            </property>
+            <property name="singleStep">
+             <number>16</number>
+            </property>
+            <property name="value">
+             <number>128</number>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="blockSizeLabel">
+            <property name="text">
+             <string>匹配块大小:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_blockSizeSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QSpinBox" name="m_blockSizeSpin">
+            <property name="toolTip">
+             <string>立体匹配块大小（奇数，3~21）。越大越稳健但细节损失；纹理丰富时用小值。
+建议：7~11</string>
+            </property>
+            <property name="minimum">
+             <number>3</number>
+            </property>
+            <property name="maximum">
+             <number>21</number>
+            </property>
+            <property name="singleStep">
+             <number>2</number>
+            </property>
+            <property name="value">
+             <number>9</number>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="uniquenessLabel">
+            <property name="text">
+             <string>唯一性比率:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_uniquenessSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="m_uniquenessSpin">
+            <property name="toolTip">
+             <string>唯一性比率：最优视差得分比次优好多少才接受（0=关闭）。
+值越高误匹配越少但覆盖率下降。建议：5~15</string>
+            </property>
+            <property name="suffix">
+             <string> %</string>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>50</number>
+            </property>
+            <property name="value">
+             <number>10</number>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="speckleSizeLabel">
+            <property name="text">
+             <string>噪斑消除窗口:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_speckleSizeSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QSpinBox" name="m_speckleSizeSpin">
+            <property name="toolTip">
+             <string>噪斑消除窗口（像素数）。小于此尺寸的孤立视差区域将被过滤。
+建议：50~200</string>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>1000</number>
+            </property>
+            <property name="value">
+             <number>100</number>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_fullDpCheck">
+            <property name="text">
+             <string>使用 SGBM_3WAY 模式（更慢更精确）</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_wlsFilterCheck">
+            <property name="text">
+             <string>启用 WLS 视差后过滤（平滑边缘，需要 opencv_ximgproc）</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0">
+           <widget class="QLabel" name="depthRangeLabel">
+            <property name="text">
+             <string>有效深度范围:</string>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="1">
+           <layout class="QHBoxLayout" name="depthRangeLayout">
+            <item>
+             <widget class="QLabel" name="minDepthLabel">
+              <property name="text">
+               <string>最小:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="m_minDepthSpin">
+              <property name="decimals">
+               <number>3</number>
+              </property>
+              <property name="minimum">
+               <double>0.001000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>9999.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>0.010000000000000</double>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QLabel" name="maxDepthLabel">
+              <property name="text">
+               <string>  最大:</string>
+              </property>
+             </widget>
+            </item>
+            <item>
+             <widget class="QDoubleSpinBox" name="m_maxDepthSpin">
+              <property name="suffix">
+               <string> (单位:与坐标系一致)</string>
+              </property>
+              <property name="decimals">
+               <number>1</number>
+              </property>
+              <property name="minimum">
+               <double>0.100000000000000</double>
+              </property>
+              <property name="maximum">
+               <double>10000000.000000000000000</double>
+              </property>
+              <property name="value">
+               <double>100000.000000000000000</double>
+              </property>
+             </widget>
+            </item>
+           </layout>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="sgbmSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>40</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="cloudTab">
+      <attribute name="title">
+       <string>点云</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="cloudTabLayout">
+       <item>
+        <widget class="QGroupBox" name="cloudGroup">
+         <property name="title">
+          <string>稠密点云参数</string>
+         </property>
+         <layout class="QFormLayout" name="cloudForm">
+          <item row="0" column="0">
+           <widget class="QLabel" name="minConfLabel">
+            <property name="text">
+             <string>最低置信度:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_minConfSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="0" column="1">
+           <widget class="QDoubleSpinBox" name="m_minConfSpin">
+            <property name="toolTip">
+             <string>WLS 滤波后的最低置信度阈值（0~1）。越高误差越少但点云越稀疏。建议：0.1~0.3</string>
+            </property>
+            <property name="decimals">
+             <number>2</number>
+            </property>
+            <property name="minimum">
+             <double>0.000000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>1.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.050000000000000</double>
+            </property>
+            <property name="value">
+             <double>0.100000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_multiViewCheck">
+            <property name="text">
+             <string>多视图一致性融合（减少飞点，需要 ≥2 组深度图）</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_colorsCheck">
+            <property name="text">
+             <string>从影像采样颜色（RGB 点云）</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_normalsCheck">
+            <property name="text">
+             <string>估计点云法向量（Poisson 重建必须开启）</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QLabel" name="normalKnnLabel">
+            <property name="text">
+             <string>法向量 KNN 邻域:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_normalKnnSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QSpinBox" name="m_normalKnnSpin">
+            <property name="minimum">
+             <number>8</number>
+            </property>
+            <property name="maximum">
+             <number>64</number>
+            </property>
+            <property name="value">
+             <number>20</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="cloudSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>40</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QWidget" name="meshTab">
+      <attribute name="title">
+       <string>网格重建（可选）</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="meshTabLayout">
+       <item>
+        <widget class="QGroupBox" name="meshGroup">
+         <property name="title">
+          <string>（可选）网格重建</string>
+         </property>
+         <layout class="QFormLayout" name="meshForm">
+          <item row="0" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_buildMeshCheck">
+            <property name="text">
+             <string>同时重建三角网格模型</string>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="0">
+           <widget class="QLabel" name="meshMethodLabel">
+            <property name="text">
+             <string>重建算法:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_meshMethodCombo</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="1" column="1">
+           <widget class="QComboBox" name="m_meshMethodCombo">
+            <item>
+             <property name="text">
+              <string>体素 TSDF + Marching Cubes（推荐）</string>
+             </property>
+            </item>
+            <item>
+             <property name="text">
+              <string>Ball Pivoting（快速近似）</string>
+             </property>
+            </item>
+           </widget>
+          </item>
+          <item row="2" column="0">
+           <widget class="QLabel" name="voxelResLabel">
+            <property name="text">
+             <string>体素分辨率:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_voxelResSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="m_voxelResSpin">
+            <property name="toolTip">
+             <string>体素格沿最长轴的分辨率。256=精度与速度平衡，512=高精度但内存开销大。</string>
+            </property>
+            <property name="minimum">
+             <number>64</number>
+            </property>
+            <property name="maximum">
+             <number>512</number>
+            </property>
+            <property name="value">
+             <number>256</number>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0">
+           <widget class="QLabel" name="smoothIterLabel">
+            <property name="text">
+             <string>Laplacian 平滑迭代:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_smoothIterSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="1">
+           <widget class="QSpinBox" name="m_smoothIterSpin">
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>10</number>
+            </property>
+            <property name="value">
+             <number>1</number>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </widget>
+       </item>
+       <item>
+        <spacer name="meshSpacer">
+         <property name="orientation">
+          <enum>Qt::Vertical</enum>
+         </property>
+         <property name="sizeHint" stdset="0">
+          <size>
+           <width>20</width>
+           <height>40</height>
+          </size>
+         </property>
+        </spacer>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QProgressBar" name="m_progressBar">
+     <property name="value">
+      <number>0</number>
+     </property>
+     <property name="textVisible">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTextEdit" name="m_logEdit">
+     <property name="minimumSize">
+      <size>
+       <width>0</width>
+       <height>120</height>
+      </size>
+     </property>
+     <property name="maximumSize">
+      <size>
+       <width>16777215</width>
+       <height>120</height>
+      </size>
+     </property>
+     <property name="font">
+      <font>
+       <family>Monospace</family>
+       <pointsize>9</pointsize>
+      </font>
+     </property>
+     <property name="readOnly">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_runButton">
+       <property name="text">
+        <string>开始生成</string>
+       </property>
+       <property name="default">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_cancelButton">
+       <property name="text">
+        <string>取消</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

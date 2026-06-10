@@ -1,0 +1,514 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>TriangulationDialog</class>
+ <widget class="QDialog" name="TriangulationDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>500</width>
+    <height>690</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>500</width>
+    <height>0</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>生成初始稀疏点云</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item>
+    <widget class="QGroupBox" name="presetGroup">
+     <property name="title">
+      <string>预设方案</string>
+     </property>
+     <layout class="QFormLayout" name="presetForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="presetLabel">
+        <property name="text">
+         <string>预设:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_presetCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_presetCombo">
+        <property name="toolTip">
+         <string>选择预设后自动调整下方参数</string>
+        </property>
+        <property name="currentIndex">
+         <number>1</number>
+        </property>
+        <item>
+         <property name="text">
+          <string>宽松 (更多点)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>标准</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>严格 (高质量)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>自定义</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="triangulationGroup">
+     <property name="title">
+      <string>三角化条件</string>
+     </property>
+     <layout class="QFormLayout" name="triangulationForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="minAngleLabel">
+        <property name="text">
+         <string>最小交会角:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_minAngleSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QDoubleSpinBox" name="m_minAngleSpin">
+        <property name="toolTip">
+         <string>两条射线最小夹角。★ 推荐 2.0; 角度过小导致深度不确定性大</string>
+        </property>
+        <property name="suffix">
+         <string> °</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>30.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="value">
+         <double>2.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="reprojThreshLabel">
+        <property name="text">
+         <string>重投影阈值:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_reprojThreshSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="m_reprojThreshSpin">
+        <property name="toolTip">
+         <string>三角化点反投影最大允许误差。★ 推荐 2.0 px</string>
+        </property>
+        <property name="suffix">
+         <string> px</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>20.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="value">
+         <double>2.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="minObsLabel">
+        <property name="text">
+         <string>最少观测数:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_minObsSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QSpinBox" name="m_minObsSpin">
+        <property name="toolTip">
+         <string>每个三维点至少需在多少张图像中被观测到。当前初始三角化推荐 2</string>
+        </property>
+        <property name="minimum">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <number>50</number>
+        </property>
+        <property name="value">
+         <number>2</number>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_ignoreTwoViewCheck">
+        <property name="toolTip">
+         <string>开启后仅在两张图出现的特征点将不被三角化</string>
+        </property>
+        <property name="text">
+         <string>忽略仅两视图观测</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="depthStabLabel">
+        <property name="text">
+         <string>深度稳定性:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_depthStabSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QDoubleSpinBox" name="m_depthStabSpin">
+        <property name="toolTip">
+         <string>深度估计标准差/深度值。★ 推荐 1.0; 越小越严格</string>
+        </property>
+        <property name="decimals">
+         <number>2</number>
+        </property>
+        <property name="minimum">
+         <double>0.010000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>100.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="filterGroup">
+     <property name="title">
+      <string>低质量点过滤</string>
+     </property>
+     <layout class="QFormLayout" name="filterForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="filterModeLabel">
+        <property name="text">
+         <string>过滤模式:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_filterModeCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_filterModeCombo">
+        <property name="currentIndex">
+         <number>3</number>
+        </property>
+        <item>
+         <property name="text">
+          <string>不过滤</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>仅统计报告</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>标记但保留</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>直接移除</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="maxReprojErrLabel">
+        <property name="text">
+         <string>过滤重投影阈值:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_maxReprojErrSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="m_maxReprojErrSpin">
+        <property name="toolTip">
+         <string>★ 推荐 4.0 px</string>
+        </property>
+        <property name="suffix">
+         <string> px</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>50.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.500000000000000</double>
+        </property>
+        <property name="value">
+         <double>4.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="minAngleFiltLabel">
+        <property name="text">
+         <string>过滤最小角:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_minAngleFiltSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QDoubleSpinBox" name="m_minAngleFiltSpin">
+        <property name="suffix">
+         <string> °</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>30.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.500000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="minTrackLenLabel">
+        <property name="text">
+         <string>最短 track:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_minTrackLenSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QSpinBox" name="m_minTrackLenSpin">
+        <property name="minimum">
+         <number>2</number>
+        </property>
+        <property name="maximum">
+         <number>50</number>
+        </property>
+        <property name="value">
+         <number>3</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="systemGroup">
+     <property name="title">
+      <string>系统</string>
+     </property>
+     <layout class="QFormLayout" name="systemForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="threadsLabel">
+        <property name="text">
+         <string>线程数:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_threadsSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="m_threadsSpin">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>128</number>
+        </property>
+        <property name="value">
+         <number>8</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_overwriteResultCheck">
+        <property name="toolTip">
+         <string>开启后会复用最近一次初始稀疏点云的输出目录，并在 DataTree 中覆盖该记录。</string>
+        </property>
+        <property name="text">
+         <string>覆盖最近一次初始稀疏点云结果</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="suggestGroup">
+     <property name="title">
+      <string>动态阈值建议</string>
+     </property>
+     <layout class="QFormLayout" name="suggestForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="focalLenLabel">
+        <property name="text">
+         <string>参考焦距:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_focalLenSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QDoubleSpinBox" name="m_focalLenSpin">
+        <property name="suffix">
+         <string> px</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>100.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>100000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>3000.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="baselineLabel">
+        <property name="text">
+         <string>参考基线:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_baselineSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="m_baselineSpin">
+        <property name="suffix">
+         <string> m</string>
+        </property>
+        <property name="decimals">
+         <number>2</number>
+        </property>
+        <property name="minimum">
+         <double>0.010000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>10000.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <layout class="QHBoxLayout" name="suggestButtonLayout">
+        <item>
+         <widget class="QPushButton" name="m_suggestBtn">
+          <property name="text">
+           <string>计算建议</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="m_suggestLabel">
+          <property name="text">
+           <string>点击按钮获取建议</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_runBtn">
+       <property name="text">
+        <string>运行三角化</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_cancelBtn">
+       <property name="text">
+        <string>取消</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

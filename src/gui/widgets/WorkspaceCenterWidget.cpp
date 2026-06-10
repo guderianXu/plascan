@@ -206,7 +206,26 @@ void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
     {
         return;
     }
-    m_modelView->loadModelFromPly(modelPath);
+
+    const QString ext = QFileInfo(modelPath).suffix().toLower();
+    if (ext == QLatin1String("obj"))
+    {
+        m_modelView->loadModelFromObj(modelPath);
+    }
+    else if (ext == QLatin1String("ply"))
+    {
+        m_modelView->loadModelFromPly(modelPath);
+    }
+    else
+    {
+        m_modelView->loadPointCloudFromXyz(modelPath);
+    }
+
+    if (m_modelBtn)
+    {
+        const QString base = QFileInfo(modelPath).completeBaseName();
+        m_modelBtn->setText(base.isEmpty() ? QFileInfo(modelPath).fileName() : base);
+    }
     showModelView();
 }
 
@@ -216,17 +235,21 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
     {
         return;
     }
-    // PLY 文件使用 PLY 加载器，其它格式（.xyz/.txt）使用 XYZ 文本加载器
     const QString ext = QFileInfo(pointCloudPath).suffix().toLower();
-    if (ext == QLatin1String("ply"))
+    if (ext == QLatin1String("ply") || ext == QLatin1String("obj"))
     {
-        m_modelView->loadModelFromPly(pointCloudPath);
+        showModelFile(pointCloudPath);
     }
     else
     {
         m_modelView->loadPointCloudFromXyz(pointCloudPath);
+        if (m_modelBtn)
+        {
+            const QString base = QFileInfo(pointCloudPath).completeBaseName();
+            m_modelBtn->setText(base.isEmpty() ? QFileInfo(pointCloudPath).fileName() : base);
+        }
+        showModelView();
     }
-    showModelView();
 }
 
 void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title)

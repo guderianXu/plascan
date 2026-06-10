@@ -14,6 +14,7 @@
 #include "DisparityHeatmapOverlay.h" // 视差热力图覆盖层
 #include "settings/DialogSettingStore.h" // 项目级记忆化
 #include "settings/DialogSettingKeys.h"
+#include "ui_MatchViewerDialog.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -48,10 +49,8 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
                    .arg(QFileInfo(imgB).fileName()));
     resize(1400, 800);  // 初始窗口尺寸：宽 1400px，高 800px
 
-    // 设置主布局（垂直方向：工具栏 → 查看器 → 状态栏）
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);  // 去掉边距使控件充满窗口
-    mainLayout->setSpacing(0);
+    Ui::MatchViewerDialog form;
+    form.setupUi(this);
 
     // 构建工具栏（含同步、缩放按钮）
     setupToolBar();
@@ -60,23 +59,15 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     // 在工具栏末尾追加密集显示选项控件组
     setupDenseDisplayOptions();
 
-    // 创建标签页控件
-    m_tabWidget = new QTabWidget(this);
+    form.mainLayout->insertWidget(0, m_toolbar);
 
-    // Tab 0: 稀疏匹配
-    m_sparseTab = new QWidget();
-    QVBoxLayout *sparseLayout = new QVBoxLayout(m_sparseTab);
-    sparseLayout->setContentsMargins(0, 0, 0, 0);
+    m_tabWidget = form.m_tabWidget;
+    m_sparseTab = form.m_sparseTab;
+    m_denseTab = form.m_denseTab;
+    m_statusLabel = form.m_statusLabel;
+
     m_viewer = new DualImageViewer(m_sparseTab);
-    sparseLayout->addWidget(m_viewer);
-    m_tabWidget->addTab(m_sparseTab, tr("稀疏匹配"));
-
-    // Tab 1: 密集匹配（切换覆盖层模式）
-    m_denseTab = new QWidget();
-    m_tabWidget->addTab(m_denseTab, tr("密集匹配"));
-
-    mainLayout->addWidget(m_toolbar);       // 工具栏固定在顶部
-    mainLayout->addWidget(m_tabWidget, 1);  // 标签页占满剩余空间（stretch=1）
+    form.sparseLayout->addWidget(m_viewer);
 
     // 标签页切换处理
     connect(m_tabWidget, &QTabWidget::currentChanged, this, [this](int idx)
@@ -90,11 +81,6 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
         }
     });
     
-    // 在布局最底部添加状态栏
-    setupStatusBar();
-    
-    setLayout(mainLayout);
-
     // 设置初始标签页
     m_tabWidget->setCurrentIndex(m_initialTab);
 

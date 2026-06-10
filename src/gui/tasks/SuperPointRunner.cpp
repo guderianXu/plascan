@@ -15,11 +15,153 @@
 #include <QFile>
 #include <QCoreApplication>
 #include <QProcess>
+#include <QStandardPaths>
 
 #include <memory>
 
 namespace
 {
+
+struct PythonExecutableChoice
+{
+    QString executable;
+    QString source;
+    QString error;
+};
+
+QString resolvedExecutablePath(const QString &candidate)
+{
+    const QString trimmed = candidate.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return QString();
+    }
+
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
+    {
+        const QFileInfo info(trimmed);
+        if (info.exists() && info.isFile() && info.isExecutable())
+        {
+            return QDir::cleanPath(info.absoluteFilePath());
+        }
+        return QString();
+    }
+
+    const QString resolved = QStandardPaths::findExecutable(trimmed);
+    if (!resolved.isEmpty())
+    {
+        return QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
+    }
+
+    return QString();
+}
+
+QString pythonInEnvironmentPrefix(const QString &prefix)
+{
+    const QString trimmed = prefix.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return QString();
+    }
+
+    QStringList candidates;
+#ifdef Q_OS_WIN
+    candidates << QDir(trimmed).filePath(QStringLiteral("python.exe"))
+               << QDir(trimmed).filePath(QStringLiteral("Scripts/python.exe"));
+#else
+    candidates << QDir(trimmed).filePath(QStringLiteral("bin/python"));
+#endif
+
+    for (const QString &candidate : candidates)
+    {
+        const QString resolved = resolvedExecutablePath(candidate);
+        if (!resolved.isEmpty())
+        {
+            return resolved;
+        }
+    }
+
+    return QString();
+}
+
+QStringList defaultPythonEnvironmentPrefixes()
+{
+    QStringList prefixes;
+
+    const QString mambaRoot = qEnvironmentVariable("MAMBA_ROOT_PREFIX").trimmed();
+    if (!mambaRoot.isEmpty())
+    {
+        prefixes << QDir(mambaRoot).filePath(QStringLiteral("envs/plascan"));
+    }
+
+    const QString home = QDir::homePath();
+    prefixes << QDir(home).filePath(QStringLiteral(".local/share/mamba/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("mambaforge/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("miniforge3/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("miniconda3/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("anaconda3/envs/plascan"));
+
+    prefixes.removeDuplicates();
+    return prefixes;
+}
+
+PythonExecutableChoice resolvePythonExecutable(const QJsonObject &config)
+{
+    const QString configuredPython = config.value(QStringLiteral("python_executable")).toString().trimmed();
+    if (!configuredPython.isEmpty())
+    {
+        const QString resolved = resolvedExecutablePath(configuredPython);
+        if (!resolved.isEmpty())
+        {
+            return {resolved, QStringLiteral("配置 python_executable"), QString()};
+        }
+        return {QString(), QString(), QStringLiteral("配置的 Python 可执行文件不可用: %1").arg(configuredPython)};
+    }
+
+    const QString envPython = qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed();
+    if (!envPython.isEmpty())
+    {
+        const QString resolved = resolvedExecutablePath(envPython);
+        if (!resolved.isEmpty())
+        {
+            return {resolved, QStringLiteral("环境变量 PLASCAN_PYTHON_EXECUTABLE"), QString()};
+        }
+        return {QString(), QString(),
+                QStringLiteral("环境变量 PLASCAN_PYTHON_EXECUTABLE 指向的 Python 不可用: %1").arg(envPython)};
+    }
+
+    const QString venvPython = pythonInEnvironmentPrefix(qEnvironmentVariable("VIRTUAL_ENV"));
+    if (!venvPython.isEmpty())
+    {
+        return {venvPython, QStringLiteral("环境变量 VIRTUAL_ENV"), QString()};
+    }
+
+    const QString condaPython = pythonInEnvironmentPrefix(qEnvironmentVariable("CONDA_PREFIX"));
+    if (!condaPython.isEmpty())
+    {
+        return {condaPython, QStringLiteral("环境变量 CONDA_PREFIX"), QString()};
+    }
+
+    for (const QString &prefix : defaultPythonEnvironmentPrefixes())
+    {
+        const QString defaultEnvPython = pythonInEnvironmentPrefix(prefix);
+        if (!defaultEnvPython.isEmpty())
+        {
+            return {defaultEnvPython, QStringLiteral("默认 plascan Python 环境"), QString()};
+        }
+    }
+
+    for (const QString &candidate : {QStringLiteral("python3"), QStringLiteral("python")})
+    {
+        const QString resolved = resolvedExecutablePath(candidate);
+        if (!resolved.isEmpty())
+        {
+            return {resolved, QStringLiteral("PATH"), QString()};
+        }
+    }
+
+    return {QString(), QString(), QStringLiteral("未找到可用的 Python 可执行文件")};
+}
 
 QString normalizedFeatureAlgorithm(const QJsonObject &config)
 {
@@ -66,6 +208,7 @@ QString findModelFile(const QString &modelName)
 // ---------------------------------------------------------------------------
 static bool runPythonExtractor(const QString &algo, const QStringList &inputs,
                                 const QString &outputDir, int maxKeypoints,
+                                double scoreThreshold,
                                 const QString &device,
                                 ProjectManager *projectManager,
                                 const QJsonObject &config,
@@ -89,14 +232,13 @@ static bool runPythonExtractor(const QString &algo, const QStringList &inputs,
         return false;
     }
 
-    // Find python executable (prefer conda env)
-    QString pythonExe = QStringLiteral("python");
-    const QString condaPrefix = qEnvironmentVariable("CONDA_PREFIX").trimmed();
-    if (!condaPrefix.isEmpty())
+    const PythonExecutableChoice python = resolvePythonExecutable(config);
+    if (python.executable.isEmpty())
     {
-        const QString condaPython = QDir(condaPrefix).filePath(QStringLiteral("bin/python"));
-        if (QFile::exists(condaPython))
-            pythonExe = condaPython;
+        LOG_ERROR("%s", qUtf8Printable(QString("[%1] %2")
+                                           .arg(algo.toUpper())
+                                           .arg(python.error)));
+        return false;
     }
 
     QStringList args;
@@ -104,20 +246,30 @@ static bool runPythonExtractor(const QString &algo, const QStringList &inputs,
          << QStringLiteral("--algo") << algo
          << QStringLiteral("--output") << outputDir
          << QStringLiteral("--max-keypoints") << QString::number(maxKeypoints)
+         << QStringLiteral("--score-threshold") << QString::number(scoreThreshold, 'g', 6)
          << QStringLiteral("--device") << device.toLower()
          << QStringLiteral("--images");
     args << inputs;
 
     LOG_INFO("%s", qUtf8Printable(QString("[%1] 调用 Python 脚本提取特征: %2 张影像")
                                       .arg(algo.toUpper()).arg(inputs.size())));
+    LOG_INFO("%s", qUtf8Printable(QString("[%1] Python 可执行文件: %2 (%3)")
+                                      .arg(algo.toUpper())
+                                      .arg(python.executable)
+                                      .arg(python.source)));
+    LOG_INFO("%s", qUtf8Printable(QString("[%1] Python 脚本路径: %2")
+                                      .arg(algo.toUpper())
+                                      .arg(QDir::cleanPath(QFileInfo(scriptPath).absoluteFilePath()))));
 
     QProcess proc;
     proc.setProcessChannelMode(QProcess::MergedChannels);
-    proc.start(pythonExe, args);
+    proc.start(python.executable, args);
 
     if (!proc.waitForStarted(10000))
     {
-        LOG_ERROR("%s", qUtf8Printable(QString("[%1] 无法启动 Python 进程").arg(algo.toUpper())));
+        LOG_ERROR("%s", qUtf8Printable(QString("[%1] 无法启动 Python 进程: %2")
+                                           .arg(algo.toUpper())
+                                           .arg(python.executable)));
         return false;
     }
 
@@ -140,8 +292,11 @@ static bool runPythonExtractor(const QString &algo, const QStringList &inputs,
 
     if (proc.exitCode() != 0)
     {
-        LOG_ERROR("%s", qUtf8Printable(QString("[%1] Python 脚本退出码: %2")
-                                           .arg(algo.toUpper()).arg(proc.exitCode())));
+        LOG_ERROR("%s", qUtf8Printable(QString("[%1] Python 脚本退出码: %2, Python=%3, 脚本=%4")
+                                           .arg(algo.toUpper())
+                                           .arg(proc.exitCode())
+                                           .arg(python.executable)
+                                           .arg(scriptPath)));
         return false;
     }
 
@@ -214,8 +369,9 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
     if (featureAlgorithm == QStringLiteral("disk") || featureAlgorithm == QStringLiteral("aliked"))
     {
         const int maxKpts = config["max_num_keypoints"].toInt(2048);
+        const double scoreThreshold = config["detection_threshold"].toDouble(0.0);
         const QString device = config["device"].toString("CPU");
-        return runPythonExtractor(featureAlgorithm, inputs, outputDir, maxKpts, device,
+        return runPythonExtractor(featureAlgorithm, inputs, outputDir, maxKpts, scoreThreshold, device,
                                   projectManager, config, cancelFlag, progressCount);
     }
     
@@ -280,11 +436,20 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
                 modelCandidates << "superpoint_extractor_cuda.pt";
             modelCandidates << "superpoint_extractor_cpu.pt" << "superpoint_extractor.pt";
 
-            QString modelPath;
-            for (const QString &name : modelCandidates)
+            QString modelPath = config["model_path"].toString().trimmed();
+            if (!modelPath.isEmpty() && !QFile::exists(modelPath))
             {
-                modelPath = findModelFile(name);
-                if (!modelPath.isEmpty()) break;
+                LOG_ERROR("%s", qUtf8Printable(QString("SuperPoint 模型文件不存在: %1").arg(modelPath)));
+                return false;
+            }
+
+            if (modelPath.isEmpty())
+            {
+                for (const QString &name : modelCandidates)
+                {
+                    modelPath = findModelFile(name);
+                    if (!modelPath.isEmpty()) break;
+                }
             }
 
             if (modelPath.isEmpty())

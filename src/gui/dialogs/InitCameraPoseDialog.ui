@@ -1,0 +1,83 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>InitCameraPoseDialog</class>
+ <widget class="QDialog" name="InitCameraPoseDialog">
+  <property name="minimumSize">
+   <size>
+    <width>720</width>
+    <height>560</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>初始化相机位姿</string>
+  </property>
+  <layout class="QVBoxLayout" name="rootLayout">
+   <property name="spacing">
+    <number>10</number>
+   </property>
+   <item>
+    <widget class="QGroupBox" name="modeBox">
+     <property name="title">
+      <string>相机信息来源</string>
+     </property>
+     <layout class="QFormLayout" name="modeForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="modeLabel">
+        <property name="text">
+         <string>模式:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_modeCombo">
+        <property name="toolTip">
+         <string>选择当前可用的相机信息类型，系统将据此选择初始化策略</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="m_statusLabel">
+     <property name="styleSheet">
+      <string>QLabel { background: #eef6ff; border: 1px solid #c9def5; border-radius: 6px; padding: 8px; }</string>
+     </property>
+     <property name="text">
+      <string/>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="m_applyBox">
+     <property name="title">
+      <string>写入范围</string>
+     </property>
+     <layout class="QVBoxLayout" name="applyBoxLayout">
+      <item>
+       <layout class="QFormLayout" name="m_applyForm"/>
+      </item>
+      <item>
+       <layout class="QFormLayout" name="solveForm"/>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QStackedWidget" name="m_modeStack"/>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

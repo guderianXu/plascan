@@ -7,7 +7,8 @@ include(CheckLanguage)
 # ── GTest ────────────────────────────────────────────────────────────────────
 find_package(GTest REQUIRED)
 include(GoogleTest)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Python3 COMPONENTS Interpreter)
 
 # ── 依赖 ─────────────────────────────────────────────────────────────────────
 find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
@@ -157,10 +158,17 @@ gtest_discover_tests(test_initial_sparse_triangulator)
 # ==============================================================================
 add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTriangulationService.cpp
+)
+set_target_properties(test_gui_project_utils PROPERTIES
+    AUTOMOC ON
+    AUTOUIC ON
 )
 target_link_libraries(test_gui_project_utils PRIVATE
     sfm
@@ -169,9 +177,12 @@ target_link_libraries(test_gui_project_utils PRIVATE
     bundle_adjust
     Qt6::Core
     Qt6::Gui
-    GTest::gtest_main
+    Qt6::Widgets
+    GTest::gtest
 )
 target_include_directories(test_gui_project_utils PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/gui/main_window
     ${CMAKE_SOURCE_DIR}/src/gui/project
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
@@ -185,6 +196,29 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
 )
 gtest_discover_tests(test_gui_project_utils)
+
+if(Python3_Interpreter_FOUND)
+    add_test(
+        NAME FullPipelineScriptTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_full_pipeline_script
+    )
+    set_tests_properties(FullPipelineScriptTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+endif()
+
+if(TARGET triangulate_cli)
+    add_executable(test_triangulate_cli test_triangulate_cli.cpp)
+    target_link_libraries(test_triangulate_cli PRIVATE
+        ${OpenCV_LIBS}
+        GTest::gtest_main
+    )
+    target_compile_definitions(test_triangulate_cli PRIVATE
+        PLASCAN_TRIANGULATE_CLI_PATH="$<TARGET_FILE:triangulate_cli>"
+    )
+    add_dependencies(test_triangulate_cli triangulate_cli)
+    gtest_discover_tests(test_triangulate_cli)
+endif()
 
 # ==============================================================================
 # test_mvs_pipeline — MVS 管道集成测试（CPU PatchMatch → 融合 → 反投影）
@@ -235,4 +269,3 @@ target_include_directories(test_feature_extractor_suffix PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition
 )
 gtest_discover_tests(test_feature_extractor_suffix)
-

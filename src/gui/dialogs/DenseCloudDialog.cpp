@@ -5,6 +5,7 @@
 #include "DenseCloudDialog.h"
 
 #include "ProjectManager.h"
+#include "ui_DenseCloudDialog.h"
 
 #include <QBoxLayout>
 #include <QCheckBox>
@@ -41,20 +42,42 @@ DenseCloudDialog::DenseCloudDialog(ProjectManager *projectManager, QWidget *pare
 
 void DenseCloudDialog::setupUi()
 {
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(8);
+    Ui::DenseCloudDialog form;
+    form.setupUi(this);
 
-    // ---- 顶部：输入选择 ----
-    auto *inputGroup = new QGroupBox(tr("输入配置"), this);
-    auto *inputForm = new QFormLayout(inputGroup);
+    m_imagePairCombo = form.m_imagePairCombo;
+    m_atResultCombo = form.m_atResultCombo;
+    m_presetCombo = form.m_presetCombo;
+    m_outputDirEdit = form.m_outputDirEdit;
+    m_numDispSpin = form.m_numDispSpin;
+    m_blockSizeSpin = form.m_blockSizeSpin;
+    m_uniquenessSpin = form.m_uniquenessSpin;
+    m_speckleSizeSpin = form.m_speckleSizeSpin;
+    m_fullDpCheck = form.m_fullDpCheck;
+    m_wlsFilterCheck = form.m_wlsFilterCheck;
+    m_minDepthSpin = form.m_minDepthSpin;
+    m_maxDepthSpin = form.m_maxDepthSpin;
+    m_minConfSpin = form.m_minConfSpin;
+    m_multiViewCheck = form.m_multiViewCheck;
+    m_colorsCheck = form.m_colorsCheck;
+    m_normalsCheck = form.m_normalsCheck;
+    m_normalKnnSpin = form.m_normalKnnSpin;
+    m_buildMeshCheck = form.m_buildMeshCheck;
+    m_meshMethodCombo = form.m_meshMethodCombo;
+    m_voxelResSpin = form.m_voxelResSpin;
+    m_smoothIterSpin = form.m_smoothIterSpin;
+    m_progressBar = form.m_progressBar;
+    m_logEdit = form.m_logEdit;
+    m_runButton = form.m_runButton;
+    m_cancelButton = form.m_cancelButton;
 
-    m_imagePairCombo = new QComboBox(this);
-    m_imagePairCombo->setToolTip(tr("选择用于立体匹配的影像对（默认全部影像对）"));
-    inputForm->addRow(tr("影像对:"), m_imagePairCombo);
+    m_presetCombo->setItemData(0, QStringLiteral("fast"));
+    m_presetCombo->setItemData(1, QStringLiteral("standard"));
+    m_presetCombo->setItemData(2, QStringLiteral("quality"));
+    m_presetCombo->setCurrentIndex(1);
 
-    m_atResultCombo = new QComboBox(this);
-    m_atResultCombo->setToolTip(tr("选择已完成空三/相对定向的 AT 结果（提供相机位姿）"));
-    inputForm->addRow(tr("AT 结果:"), m_atResultCombo);
+    m_meshMethodCombo->setItemData(0, QStringLiteral("voxel_poisson"));
+    m_meshMethodCombo->setItemData(1, QStringLiteral("ball_pivoting"));
 
     // 填充 AT 结果列表
     if (m_projectManager) 
@@ -83,86 +106,22 @@ void DenseCloudDialog::setupUi()
         }
     }
 
-    // 预设选择
-    m_presetCombo = new QComboBox(this);
-    m_presetCombo->addItem(tr("快速 (低精度，适合预览)"), QStringLiteral("fast"));
-    m_presetCombo->addItem(tr("标准 (推荐)"),              QStringLiteral("standard"));
-    m_presetCombo->addItem(tr("精细 (高精度，较慢)"),      QStringLiteral("quality"));
-    m_presetCombo->setCurrentIndex(1);
-    inputForm->addRow(tr("参数预设:"), m_presetCombo);
     connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &DenseCloudDialog::onPresetChanged);
-        connect(m_atResultCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(m_atResultCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &DenseCloudDialog::onAnyChanged);
 
-    // 输出目录
-    auto *outputRow = new QHBoxLayout;
-    m_outputDirEdit = new QLineEdit(this);
-    auto *browseBtn = new QPushButton(tr("浏览..."), this);
-    browseBtn->setFixedWidth(64);
-    outputRow->addWidget(m_outputDirEdit);
-    outputRow->addWidget(browseBtn);
-    connect(browseBtn, &QPushButton::clicked, this, &DenseCloudDialog::onBrowseOutput);
-    inputForm->addRow(tr("输出目录:"), outputRow);
+    connect(form.browseOutputButton, &QPushButton::clicked, this, &DenseCloudDialog::onBrowseOutput);
+    connect(m_normalsCheck, &QCheckBox::toggled, m_normalKnnSpin, &QSpinBox::setEnabled);
 
-    mainLayout->addWidget(inputGroup);
-
-    // ---- 参数选项卡 ----
-    auto *tabs = new QTabWidget(this);
-
-    // Tab 1: SGBM 深度图参数
-    auto *sgbmWidget = new QWidget;
-    auto *sgbmGroup = new QGroupBox;
-    auto *sgbmOuter = new QVBoxLayout(sgbmWidget);
-    buildSgbmGroup(sgbmGroup);
-    sgbmOuter->addWidget(sgbmGroup);
-    sgbmOuter->addStretch();
-    tabs->addTab(sgbmWidget, tr("深度图 (SGBM)"));
-
-    // Tab 2: 点云参数
-    auto *cloudWidget = new QWidget;
-    auto *cloudGroup = new QGroupBox;
-    auto *cloudOuter = new QVBoxLayout(cloudWidget);
-    buildCloudGroup(cloudGroup);
-    cloudOuter->addWidget(cloudGroup);
-    cloudOuter->addStretch();
-    tabs->addTab(cloudWidget, tr("点云"));
-
-    // Tab 3: 网格重建（可选）
-    auto *meshWidget = new QWidget;
-    auto *meshGroup = new QGroupBox;
-    auto *meshOuter = new QVBoxLayout(meshWidget);
-    buildMeshGroup(meshGroup);
-    meshOuter->addWidget(meshGroup);
-    meshOuter->addStretch();
-    tabs->addTab(meshWidget, tr("网格重建（可选）"));
-
-    mainLayout->addWidget(tabs);
-
-    // ---- 进度条 ----
-    m_progressBar = new QProgressBar(this);
-    m_progressBar->setRange(0, 100);
-    m_progressBar->setValue(0);
-    m_progressBar->setTextVisible(true);
-    mainLayout->addWidget(m_progressBar);
-
-    // ---- 日志 ----
-    m_logEdit = new QTextEdit(this);
-    m_logEdit->setReadOnly(true);
-    m_logEdit->setFixedHeight(120);
-    m_logEdit->setFontFamily(QStringLiteral("Monospace"));
-    m_logEdit->setFontPointSize(9);
-    mainLayout->addWidget(m_logEdit);
-
-    // ---- 按钮 ----
-    auto *btnLayout = new QHBoxLayout;
-    m_runButton    = new QPushButton(tr("开始生成"), this);
-    m_cancelButton = new QPushButton(tr("取消"),     this);
-    m_runButton->setDefault(true);
-    btnLayout->addStretch();
-    btnLayout->addWidget(m_runButton);
-    btnLayout->addWidget(m_cancelButton);
-    mainLayout->addLayout(btnLayout);
+    auto onMeshToggle = [this](bool checked)
+    {
+        m_meshMethodCombo->setEnabled(checked);
+        m_voxelResSpin->setEnabled(checked);
+        m_smoothIterSpin->setEnabled(checked);
+    };
+    onMeshToggle(false);
+    connect(m_buildMeshCheck, &QCheckBox::toggled, this, onMeshToggle);
 
     connect(m_runButton,    &QPushButton::clicked, this, &DenseCloudDialog::onRun);
     connect(m_cancelButton, &QPushButton::clicked, this, &DenseCloudDialog::onCancel);

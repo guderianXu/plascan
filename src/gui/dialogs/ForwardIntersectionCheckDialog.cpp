@@ -1,4 +1,5 @@
 #include "ForwardIntersectionCheckDialog.h"
+#include "ui_ForwardIntersectionCheckDialog.h"
 
 #include "ProjectManager.h"
 #include "ProjectIO.h"
@@ -164,40 +165,25 @@ ForwardIntersectionCheckDialog::~ForwardIntersectionCheckDialog() = default;
 
 void ForwardIntersectionCheckDialog::setupUi()
 {
-    auto *mainLayout = new QVBoxLayout(this);
+    Ui::ForwardIntersectionCheckDialog form;
+    form.setupUi(this);
 
-    auto *pairLayout = new QHBoxLayout();
-    m_image1Combo = new QComboBox(this);
-    m_image2Combo = new QComboBox(this);
-    pairLayout->addWidget(new QLabel(tr("影像 1:"), this));
-    pairLayout->addWidget(m_image1Combo, 1);
-    pairLayout->addSpacing(12);
-    pairLayout->addWidget(new QLabel(tr("影像 2:"), this));
-    pairLayout->addWidget(m_image2Combo, 1);
+    m_image1Combo = form.m_image1Combo;
+    m_image2Combo = form.m_image2Combo;
+    m_pickModeCombo = form.m_pickModeCombo;
+    m_viewer = form.m_viewer;
+    m_hintLabel = form.m_hintLabel;
+    m_deleteSelectedBtn = form.m_deleteSelectedBtn;
+    m_clearManualBtn = form.m_clearManualBtn;
+    m_runBtn = form.m_runBtn;
+    m_pairTable = form.m_pairTable;
+    m_resultTable = form.m_resultTable;
+    m_tabWidget = form.m_tabWidget;
 
-    auto *modeLayout = new QHBoxLayout();
-    m_pickModeCombo = new QComboBox(this);
+    m_pickModeCombo->clear();
     m_pickModeCombo->addItem(tr("连接点自动选点（全点）"), QStringLiteral("auto"));
     m_pickModeCombo->addItem(tr("手动选点（多点）"), QStringLiteral("manual"));
-    modeLayout->addWidget(new QLabel(tr("选点方式:"), this));
-    modeLayout->addWidget(m_pickModeCombo, 1);
 
-    m_viewer = new DualImageViewer(this);
-
-    auto *manualBar = new QHBoxLayout();
-    m_hintLabel = new QLabel(tr("手动模式：右键依次在左右图像选点完成配对。"), this);
-    m_deleteSelectedBtn = new QPushButton(tr("删除选中点对"), this);
-    m_clearManualBtn = new QPushButton(tr("清空点对"), this);
-    manualBar->addWidget(m_hintLabel, 1);
-    manualBar->addWidget(m_deleteSelectedBtn);
-    manualBar->addWidget(m_clearManualBtn);
-
-    auto *runLayout = new QHBoxLayout();
-    m_runBtn = new QPushButton(tr("交汇检验"), this);
-    runLayout->addStretch(1);
-    runLayout->addWidget(m_runBtn);
-
-    m_pairTable = new QTableWidget(this);
     m_pairTable->setColumnCount(5);
     m_pairTable->setHorizontalHeaderLabels({
         tr("序号"), tr("u1"), tr("v1"), tr("u2"), tr("v2")
@@ -208,7 +194,6 @@ void ForwardIntersectionCheckDialog::setupUi()
     m_pairTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_pairTable->horizontalHeader()->setStretchLastSection(true);
 
-    m_resultTable = new QTableWidget(this);
     m_resultTable->setColumnCount(10);
     m_resultTable->setHorizontalHeaderLabels({
         tr("序号"), tr("有效"), tr("X"), tr("Y"), tr("Z"), tr("交汇角(deg)"), tr("射线距离(m)"),
@@ -222,28 +207,6 @@ void ForwardIntersectionCheckDialog::setupUi()
     m_resultTable->horizontalHeader()->setSectionsClickable(true);
     m_resultTable->horizontalHeader()->setSortIndicatorShown(true);
     m_resultTable->setSortingEnabled(false); // 手动排序，避免 Qt 自动排序破坏 UserRole 映射
-
-    mainLayout->addLayout(pairLayout);
-    mainLayout->addLayout(modeLayout);
-    mainLayout->addWidget(m_viewer, 1);
-    mainLayout->addLayout(manualBar);
-    mainLayout->addLayout(runLayout);
-
-    // 使用标签页切换当前匹配点对与前方交汇结果
-    m_tabWidget = new QTabWidget(this);
-    QWidget *tab1 = new QWidget(this);
-    QVBoxLayout *tab1Layout = new QVBoxLayout(tab1);
-    tab1Layout->setContentsMargins(0,0,0,0);
-    tab1Layout->addWidget(m_pairTable);
-    m_tabWidget->addTab(tab1, tr("当前匹配点对"));
-
-    QWidget *tab2 = new QWidget(this);
-    QVBoxLayout *tab2Layout = new QVBoxLayout(tab2);
-    tab2Layout->setContentsMargins(0,0,0,0);
-    tab2Layout->addWidget(m_resultTable);
-    m_tabWidget->addTab(tab2, tr("前方交汇结果"));
-
-    mainLayout->addWidget(m_tabWidget, 1);
 
     connect(m_image1Combo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &ForwardIntersectionCheckDialog::onImageSelectionChanged);

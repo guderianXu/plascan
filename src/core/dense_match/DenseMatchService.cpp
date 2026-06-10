@@ -1,6 +1,7 @@
 #include "DenseMatchService.h"
 #include "BlockMatcher.h"
 #include "SgmMatcher.h"
+#include "opencv/OpenCVSgbmWrapper.h"
 #include "SubpixelRefiner.h"
 #include "DisparityValidator.h"
 #include <opencv2/imgcodecs.hpp>
@@ -55,6 +56,11 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
         BlockMatcher bm(m_cfg);
         result = bm.compute(left, right);
     }
+    else if (m_cfg.algorithm == StereoAlgorithm::OpenCV_SGBM)
+    {
+        OpenCVSgbmWrapper sgbm(m_cfg);
+        result = sgbm.compute(left, right);
+    }
     else
     {
         SgmMatcher sgm(m_cfg);
@@ -67,6 +73,7 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
 
     DisparityValidator validator(m_cfg);
     result = validator.validate(result.disparity, result.confidence);
+    validator.applyImageSupportMask(result, left, right);
 
     auto t2 = std::chrono::steady_clock::now();
     fprintf(stdout, "[DenseMatch] validate: %.0f ms, total: %.0f ms\n",

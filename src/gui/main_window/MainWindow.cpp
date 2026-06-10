@@ -28,6 +28,9 @@
 #include <QEventLoop>
 #include <QtConcurrent>
 #include <QFutureWatcher>
+#include <QDragEnterEvent>
+#include <QDropEvent>
+#include <QMimeData>
 
 #include "CanvasWidget.h"
 #include "ProjectSupportUtils.h"
@@ -54,6 +57,7 @@
 #include "CameraModel3DDialog.h"
 #include "LayerRenderer.h"
 #include "Logger.h"
+#include "ModelDropSupport.h"
 
 // ============================================================
 //  构造 / 析构
@@ -83,10 +87,47 @@ MainWindow::MainWindow(QWidget *parent)
     setupMenuConnections();
     setupProjectManager();
 
+    setAcceptDrops(true);
     statusBar()->showMessage(tr("就绪"));
 }
 
 MainWindow::~MainWindow() = default;
+
+void MainWindow::dragEnterEvent(QDragEnterEvent *event)
+{
+    if (event && event->mimeData()
+        && !xjw::gui::main_window::firstStandaloneModelFile(event->mimeData()->urls()).isEmpty())
+    {
+        event->acceptProposedAction();
+        return;
+    }
+
+    QMainWindow::dragEnterEvent(event);
+}
+
+void MainWindow::dropEvent(QDropEvent *event)
+{
+    if (!event || !event->mimeData())
+    {
+        QMainWindow::dropEvent(event);
+        return;
+    }
+
+    const QString modelPath =
+        xjw::gui::main_window::firstStandaloneModelFile(event->mimeData()->urls());
+    if (modelPath.isEmpty())
+    {
+        QMainWindow::dropEvent(event);
+        return;
+    }
+
+    if (m_workspaceCenter)
+    {
+        m_workspaceCenter->showModelFile(modelPath);
+        statusBar()->showMessage(tr("已加载三维模型：%1").arg(QFileInfo(modelPath).fileName()), 5000);
+    }
+    event->acceptProposedAction();
+}
 
 // ============================================================
 //  setupUi — 创建核心布局组件
@@ -327,7 +368,7 @@ void MainWindow::setupProjectManager()
             if (m_mainMenu->detectFeaturesAction())
             {
                 connect(m_mainMenu->detectFeaturesAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openSuperPointDialog);
+                        m_menuWorkflowController, &MenuWorkflowController::openFeatureExtractionDialog);
             }
             if (m_mainMenu->featureVisualizationAction())
             {

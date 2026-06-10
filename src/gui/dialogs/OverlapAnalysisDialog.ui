@@ -1,0 +1,169 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>OverlapAnalysisDialog</class>
+ <widget class="QDialog" name="OverlapAnalysisDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>900</width>
+    <height>660</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>影像重叠度获取</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item>
+    <widget class="QGroupBox" name="inputBox">
+     <property name="title">
+      <string>输入参数</string>
+     </property>
+     <layout class="QGridLayout" name="inputGrid">
+      <item row="0" column="0">
+       <widget class="QLabel" name="imageListLabel">
+        <property name="text">
+         <string>影像列表</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_imageList</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" rowspan="4" colspan="2">
+       <widget class="QListWidget" name="m_imageList">
+        <property name="selectionMode">
+         <enum>QAbstractItemView::ExtendedSelection</enum>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="2">
+       <widget class="QLabel" name="demPathLabel">
+        <property name="text">
+         <string>DEM (XYZ)</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_demPathEdit</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="3">
+       <widget class="QLineEdit" name="m_demPathEdit"/>
+      </item>
+      <item row="0" column="4">
+       <widget class="QPushButton" name="browseBtn">
+        <property name="text">
+         <string>浏览</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="2" colspan="2">
+       <widget class="QCheckBox" name="m_useFixedZCheck">
+        <property name="text">
+         <string>使用假定高程 Z</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="2">
+       <widget class="QLabel" name="fixedZLabel">
+        <property name="text">
+         <string>固定 Z</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_fixedZSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="3">
+       <widget class="QDoubleSpinBox" name="m_fixedZSpin">
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="minimum">
+         <double>-100000.000000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>100000.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="2">
+       <widget class="QLabel" name="neighborLabel">
+        <property name="text">
+         <string>邻域系数</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_neighborSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="3">
+       <widget class="QDoubleSpinBox" name="m_neighborSpin">
+        <property name="decimals">
+         <number>2</number>
+        </property>
+        <property name="minimum">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>20.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.500000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="4">
+       <widget class="QPushButton" name="runBtn">
+        <property name="text">
+         <string>计算重叠度</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="m_summaryLabel">
+     <property name="text">
+      <string/>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableWidget" name="m_resultTable">
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <column>
+      <property name="text">
+       <string>影像A</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>影像B</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>中心距(m)</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>重叠评分</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>是否重叠</string>
+      </property>
+     </column>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

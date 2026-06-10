@@ -1,15 +1,13 @@
 #include "ForwardIntersectionResultsDialog.h"
 
 #include "ProjectManager.h"
+#include "ui_ForwardIntersectionResultsDialog.h"
 
 #include <QComboBox>
 #include <QHeaderView>
-#include <QHBoxLayout>
 #include <QJsonObject>
-#include <QLabel>
 #include <QPushButton>
 #include <QTableWidget>
-#include <QVBoxLayout>
 
 #include <QSet>
 
@@ -29,45 +27,19 @@ ForwardIntersectionResultsDialog::~ForwardIntersectionResultsDialog() = default;
 
 void ForwardIntersectionResultsDialog::setupUi()
 {
-    auto *mainLayout = new QVBoxLayout(this);
+    Ui::ForwardIntersectionResultsDialog ui;
+    ui.setupUi(this);
 
-    auto *topLayout = new QHBoxLayout();
-    m_pairCombo = new QComboBox(this);
-    topLayout->addWidget(new QLabel(tr("影像对:"), this));
-    topLayout->addWidget(m_pairCombo, 1);
-    auto *refreshBtn = new QPushButton(tr("刷新"), this);
-    topLayout->addWidget(refreshBtn);
+    m_pairCombo = ui.m_pairCombo;
+    m_table = ui.m_table;
+    m_detailTable = ui.m_detailTable;
 
-    m_table = new QTableWidget(this);
-    m_table->setColumnCount(6);
-    m_table->setHorizontalHeaderLabels({
-        tr("时间"), tr("选点方式"), tr("点数"), tr("有效点"), tr("有效率"), tr("平均RMS(px)")
-    });
-    m_table->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_table->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_table->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_table->horizontalHeader()->setStretchLastSection(true);
 
-    m_detailTable = new QTableWidget(this);
-    m_detailTable->setColumnCount(14);
-    m_detailTable->setHorizontalHeaderLabels({
-        tr("序号"), tr("u1"), tr("v1"), tr("u2"), tr("v2"), tr("有效"),
-        tr("X"), tr("Y"), tr("Z"), tr("交汇角(deg)"), tr("射线距离(m)"),
-        tr("误差1(px)"), tr("误差2(px)"), tr("RMS(px)")
-    });
-    m_detailTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_detailTable->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_detailTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
     m_detailTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
     m_detailTable->horizontalHeader()->setStretchLastSection(true);
 
-    mainLayout->addLayout(topLayout);
-    mainLayout->addWidget(new QLabel(tr("批次列表"), this));
-    mainLayout->addWidget(m_table, 1);
-    mainLayout->addWidget(new QLabel(tr("点级结果"), this));
-    mainLayout->addWidget(m_detailTable, 1);
-
-    connect(refreshBtn, &QPushButton::clicked, this, &ForwardIntersectionResultsDialog::loadResults);
+    connect(ui.refreshBtn, &QPushButton::clicked, this, &ForwardIntersectionResultsDialog::loadResults);
     connect(m_pairCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, &ForwardIntersectionResultsDialog::onPairChanged);
     connect(m_table, &QTableWidget::cellClicked, this, &ForwardIntersectionResultsDialog::onRowChanged);
 }

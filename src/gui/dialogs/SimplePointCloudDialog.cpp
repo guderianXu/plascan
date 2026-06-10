@@ -4,17 +4,15 @@
 // =============================================================================
 #include "SimplePointCloudDialog.h"
 #include "ProjectManager.h"
+#include "ui_SimplePointCloudDialog.h"
 
-#include <QBoxLayout>
 #include <QCheckBox>
 #include <QComboBox>
-#include <QDialogButtonBox>
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QLabel>
 #include <QPushButton>
-#include <QFrame>
 #include <QStyle>
 
 SimplePointCloudDialog::SimplePointCloudDialog(ProjectManager *projectManager,
@@ -37,76 +35,25 @@ void SimplePointCloudDialog::setDefaultOutputDir(const QString &dir)
 // ─────────────────────────────────────────────────────────────────────────────
 void SimplePointCloudDialog::setupUi()
 {
-    auto *root = new QVBoxLayout(this);
-    root->setSpacing(10);
-    root->setContentsMargins(16, 14, 16, 12);
+    Ui::SimplePointCloudDialog form;
+    form.setupUi(this);
 
-    // ── 顶部图标 + 说明 ──────────────────────────────────────────────────
-    auto *titleRow = new QHBoxLayout;
-    auto *iconLabel = new QLabel(this);
-    iconLabel->setPixmap(
+    m_infoLabel = form.m_infoLabel;
+    m_atResultCombo = form.m_atResultCombo;
+    m_qualityCombo = form.m_qualityCombo;
+    m_colorsCheck = form.m_colorsCheck;
+    m_meshCheck = form.m_meshCheck;
+    m_cancelBtn = form.m_cancelBtn;
+    m_startBtn = form.m_startBtn;
+
+    form.iconLabel->setPixmap(
         style()->standardPixmap(QStyle::SP_FileDialogDetailedView)
               .scaled(28, 28, Qt::KeepAspectRatio, Qt::SmoothTransformation));
-    iconLabel->setFixedSize(32, 32);
-    titleRow->addWidget(iconLabel);
 
-    auto *titleLabel = new QLabel(tr("<b>从稀疏点云创建密集点云</b>"), this);
-    titleRow->addWidget(titleLabel, 1);
-    root->addLayout(titleRow);
-
-    // ── 分隔线 ────────────────────────────────────────────────────────────
-    auto *sep = new QFrame(this);
-    sep->setFrameShape(QFrame::HLine);
-    sep->setFrameShadow(QFrame::Sunken);
-    root->addWidget(sep);
-
-    // ── AT 状态信息 ───────────────────────────────────────────────────────
-    m_infoLabel = new QLabel(tr("正在读取空三结果..."), this);
-    m_infoLabel->setWordWrap(true);
-    m_infoLabel->setStyleSheet(QStringLiteral("color: #555; font-size: 12px;"));
-    root->addWidget(m_infoLabel);
-
-    auto *atRow = new QHBoxLayout;
-    atRow->addWidget(new QLabel(tr("输入稀疏点云："), this));
-    m_atResultCombo = new QComboBox(this);
-    atRow->addWidget(m_atResultCombo, 1);
-    root->addLayout(atRow);
-
-    // ── 质量档位 ──────────────────────────────────────────────────────────
-    auto *qualRow = new QHBoxLayout;
-    qualRow->addWidget(new QLabel(tr("处理质量："), this));
-    m_qualityCombo = new QComboBox(this);
-    m_qualityCombo->addItem(tr("快速（1/2 分辨率，速度优先）"), QStringLiteral("fast"));
-    m_qualityCombo->addItem(tr("标准（原始分辨率，推荐）"),     QStringLiteral("standard"));
-    m_qualityCombo->addItem(tr("精细（高精度，较慢）"),         QStringLiteral("quality"));
+    m_qualityCombo->setItemData(0, QStringLiteral("fast"));
+    m_qualityCombo->setItemData(1, QStringLiteral("standard"));
+    m_qualityCombo->setItemData(2, QStringLiteral("quality"));
     m_qualityCombo->setCurrentIndex(1);
-    m_qualityCombo->setToolTip(tr("快速：半分辨率 SGBM，速度约 4 倍\n"
-                                    "标准：原始分辨率，精度与速度平衡\n"
-                                    "精细：增大视差范围 + WLS 滤波，最高质量"));
-    qualRow->addWidget(m_qualityCombo, 1);
-    root->addLayout(qualRow);
-
-    // ── 输出选项 ──────────────────────────────────────────────────────────
-    m_colorsCheck = new QCheckBox(tr("生成彩色点云（从影像采样 RGB）"), this);
-    m_colorsCheck->setChecked(true);
-    root->addWidget(m_colorsCheck);
-
-    m_meshCheck = new QCheckBox(tr("同时生成三角网格模型"), this);
-    m_meshCheck->setChecked(false);
-    root->addWidget(m_meshCheck);
-
-    root->addStretch();
-
-    // ── 按钮行 ────────────────────────────────────────────────────────────
-    auto *btnRow = new QHBoxLayout;
-    btnRow->addStretch();
-    m_cancelBtn = new QPushButton(tr("取消"), this);
-    m_startBtn  = new QPushButton(tr("开始生成密集点云"), this);
-    m_startBtn->setDefault(true);
-    m_startBtn->setFixedWidth(120);
-    btnRow->addWidget(m_cancelBtn);
-    btnRow->addWidget(m_startBtn);
-    root->addLayout(btnRow);
 
     connect(m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     connect(m_startBtn,  &QPushButton::clicked, this, &SimplePointCloudDialog::onStartClicked);

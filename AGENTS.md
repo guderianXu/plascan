@@ -1,0 +1,140 @@
+# AGENTS.md
+
+本文件给后续 agent 使用，优先级低于用户当前指令和系统/开发者指令。目标是在 PlaScan 项目里改代码、验证功能、维护文档和处理模型资源时保持一致做法。
+
+## 项目定位
+
+PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多视角影像生成稀疏点云、密集点云、网格、DEM 和 DOM。项目包含：
+
+- C++17 / CMake 的核心库、CLI 工具和 Qt6 GUI。
+- OpenCV、LibTorch、GDAL、libtiff、libzip、OpenMP、GTest 等依赖。
+- CUDA 可选加速，主要用于深度学习特征、匹配、MVS 和 dense match。
+- Python 脚本用于模型导出、深度学习特征提取和辅助处理。
+- `3rdparty/plapoint` 和 `3rdparty/plamatrix` 两个 git submodule。
+
+先读现有实现、测试和文档，再改动。优先延续当前模块边界、命名方式和 UI 行为，避免无关重构。
+
+## 工作区约束
+
+- 开始改动前先检查工作区状态：
+  ```bash
+  git status --short
+  git submodule status --recursive
+  ```
+- 可能存在 GUI、构建、测试或长时间运行的处理任务。需要确认时使用：
+  ```bash
+  pgrep -af 'plascan|feature_extract_cli|feature_match_cli|dense_match_cli|triangulate_cli|cmake --build|ctest' || true
+  ```
+- 不要随意删除、覆盖或重生成 `testData/`、`.plascan` 工程文件、`resources/models/`、用户输出目录或大体量中间结果。需要清理磁盘或重建数据时先确认路径和用途。
+- 子模块目录内的改动要特别谨慎。除非任务明确要求，不要重置、更新或提交 `3rdparty/plapoint`、`3rdparty/plamatrix` 的指针或内部 dirty state。
+- 仓库可能已有用户改动。只修改与当前任务相关的文件，不回滚未授权改动。
+
+## 代码规范
+
+### C++
+
+- 使用 C++17，4 空格缩进，不使用 tab，行宽尽量不超过 120 字符。
+- 花括号使用 Allman 风格，左大括号独占一行。
+  ```cpp
+  if (ok)
+  {
+      runPipeline();
+  }
+  else
+  {
+      reportError();
+  }
+  ```
+- 一个文件尽量不超过 400 行，嵌套尽量不超过 4 层。超过时优先拆分真实职责，不做机械式拆分。
+- 类和结构体使用 PascalCase，函数和方法使用 camelCase，局部变量使用 snake_case。
+- 延续现有命名空间和目录边界。`src/core` 不应新增对 GUI 的依赖；GUI 通过 service、runner 或 task 调用核心能力。
+- Qt GUI 中不要阻塞主线程。耗时处理放到已有 runner、manager、task 或 worker 模式中，并保持取消、进度、错误提示可用。
+- 参数对话框应显示真实生效值；自动推导的模型、输出路径和设备选择也要能被用户看见。
+- include 顺序优先为标准库、第三方库、项目头文件。涉及 Qt 与 Torch 宏冲突时，沿用项目里的兼容头文件做法。
+- IO、模型加载、图像读取、CUDA 设备选择等失败路径要返回明确错误，不要静默降级。
+
+### Python
+
+- 使用 `pathlib.Path`、`argparse` 和结构化读写接口，避免硬编码本机绝对路径。
+- 脚本入口保持 `parse_args()`、`main()` 结构，错误信息写清缺失路径、参数和建议修复方式。
+- 深度学习脚本要明确区分 CPU/CUDA、模型路径、输入输出目录和阈值参数。
+- `scripts/extract_features.py` 等运行时脚本依赖 torch、cv2 和相关模型库；验证失败时要说明缺少的 Python 包或环境。
+- 新增长期保留的脚本时，同步补充脚本用途、输入输出和依赖说明；一次性探索脚本不要长期留在根目录。
+
+## 构建与验证
+
+改 C++ 后至少在 `build` 目录编译验证：
+
+```bash
+cd build
+cmake .. -DBUILD_TESTS=ON
+cmake --build . -j$(nproc)
+```
+
+按改动范围优先跑相关测试，再决定是否跑全量：
+
+```bash
+ctest --output-on-failure -R 'SuperPoint|Feature|Match|DenseMatch|Mvs|Sfm|Terrain|Gui'
+ctest --output-on-failure
+```
+
+也可直接运行单个测试二进制，例如：
+
+```bash
+./tests/test_gui_project_utils
+```
+
+改 Python 脚本后至少做语法检查：
+
+```bash
+python -m py_compile scripts/extract_features.py
+```
+
+若需要运行脚本本体，必须使用同时包含 torch、cv2 和相关模型依赖的 Python 环境。不要在依赖缺失时声称脚本验证通过。
+
+截至 2026-06-10，若全量 `ctest` 遇到 `TerrainDemDomTest.TerrainPipelineGeneratesDemDomFromDirectory` 中 `dom_png not found`，这是已观察到的历史失败。仍需在最终说明中单独列出，不能把全量测试描述为全部通过。
+
+## 模型与资源
+
+- 预训练模型默认放在 `resources/models/`，也可能通过 `PLASCAN_MODEL_DIR` 指定。
+- GUI 中自动选择的模型路径应显示给用户，且实际运行配置要与显示路径一致。
+- 不要删除或替换 `.pt` 模型文件，除非任务明确要求并说明来源。
+- 修改模型查找逻辑时，同时考虑 CPU/CUDA 文件、Release 下载模型、源码树运行和安装后运行。
+- 修改 `docs/models/README.md`、`README.md` 或模型导出脚本时，保持模型文件名、算法名和 GUI/CLI 行为一致。
+
+## 模块约定
+
+- `src/core/feature_extractors`：维护 `IExtractor` 接口和各算法实现，新增算法要补工厂、CLI/GUI 参数、模型说明和测试。
+- `src/core/feature_match`：维护匹配器接口和算法实现，注意描述子维度、距离度量和 CUDA/CPU 差异。
+- `src/core/sfm`、`src/core/mvs`、`src/core/dense_match`、`src/core/terrain`：改动会影响重建主链，必须补针对性测试或最小可复现验证命令。
+- `src/gui`：保持对话框、任务 runner、项目服务和主窗口职责分离。UI 文案使用中文，错误信息要能定位到路径、算法或参数。
+- `src/cli`：CLI 参数应与核心配置一致，错误输出适合脚本调用和日志排查。
+- `src/common`：只放跨模块通用能力，不把业务流程塞进 common。
+
+## 文档同步
+
+- 新增、删除或移动核心文件后，对照并更新 `docs/PROJECT_ARCHITECTURE.md`。
+- 修改密集匹配、特征提取或 SfM 边界时，同步检查：
+  - `src/core/dense_match/README.md`
+  - `src/core/feature_extractors/README.md`
+  - `src/core/sfm/README.md`
+- 修改构建、依赖、模型、CLI 或 Docker 流程时，同步检查 `README.md`、`docs/models/README.md` 和 `docker/` 相关脚本说明。
+- 文档要写当前真实行为，不保留已经失效的命令、路径或测试数量。
+
+## Git 与提交
+
+- 只有用户明确要求时才 commit。
+- commit 前必须重新检查 `git status --short`，确认提交内容只包含当前任务相关文件。
+- 若需要 commit，Git 作者信息使用：
+  ```bash
+  git config user.email "guderian_xu@henu.edu.cn"
+  git config user.name "guderianXu"
+  ```
+- 按 `CLAUDE.md` 要求，commit 后需要 push 到 GitHub；除非用户另有指令，不要擅自改远端、重写历史或强推。
+
+## 沟通方式
+
+- 对用户用中文简洁说明做了什么、验证了什么、还剩什么风险。
+- 涉及失败、跳过验证、依赖缺失或历史问题时，给出具体命令、测试名和错误要点。
+- 涉及路径时写绝对路径或项目相对路径，避免只说“这里”“那个文件”。
+- 不要把临时 PID、一次性估算、私密 token 或 sudo 密码写进文档。

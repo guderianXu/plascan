@@ -1,16 +1,12 @@
 #include "MeshReconstructionDialog.h"
+#include "ui_MeshReconstructionDialog.h"
 
-#include <QVBoxLayout>
-#include <QFormLayout>
-#include <QGroupBox>
 #include <QComboBox>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
 #include <QLabel>
-#include <QDialogButtonBox>
 #include <QPushButton>
-#include <QHBoxLayout>
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QDir>
@@ -18,164 +14,33 @@
 MeshReconstructionDialog::MeshReconstructionDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle(tr("网格重建 (Mesh Reconstruction)"));
-    setMinimumWidth(480);
+    Ui::MeshReconstructionDialog form;
+    form.setupUi(this);
 
-    auto *root = new QVBoxLayout(this);
+    m_denseCloudCombo     = form.m_denseCloudCombo;
+    m_browseDenseBtn      = form.m_browseDenseBtn;
+    m_methodCombo         = form.m_methodCombo;
+    m_outputFormatCombo   = form.m_outputFormatCombo;
+    m_qualityProfileCombo = form.m_qualityProfileCombo;
+    m_octreeDepthSpin     = form.m_octreeDepthSpin;
+    m_meshResSpin         = form.m_meshResSpin;
+    m_smoothIterSpin      = form.m_smoothIterSpin;
+    m_holeFillCheck       = form.m_holeFillCheck;
+    m_maxHoleSizeSpin     = form.m_maxHoleSizeSpin;
+    m_cleanCheck          = form.m_cleanCheck;
+    m_minFacesSpin        = form.m_minFacesSpin;
+    m_voxelDensityCombo   = form.m_voxelDensityCombo;
+    m_decimateCheck       = form.m_decimateCheck;
+    m_decimateRatioSpin   = form.m_decimateRatioSpin;
+    m_threadsSpin         = form.m_threadsSpin;
+    m_infoLabel           = form.m_infoLabel;
 
-    // ── 输入点云 ──
-    {
-        auto *box = new QGroupBox(tr("输入点云"));
-        auto *fl = new QFormLayout(box);
-
-        auto *row = new QWidget(box);
-        auto *hl = new QHBoxLayout(row);
-        hl->setContentsMargins(0, 0, 0, 0);
-
-        m_denseCloudCombo = new QComboBox(row);
-        m_denseCloudCombo->setEditable(true);
-        m_denseCloudCombo->setInsertPolicy(QComboBox::NoInsert);
-        m_denseCloudCombo->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
-        m_denseCloudCombo->setToolTip(tr("选择用于网格重建的密集点云文件（XYZ/PLY）。"));
-
-        m_browseDenseBtn = new QPushButton(tr("浏览..."), row);
-
-        hl->addWidget(m_denseCloudCombo, 1);
-        hl->addWidget(m_browseDenseBtn);
-        fl->addRow(tr("密集点云:"), row);
-
-        root->addWidget(box);
-    }
-
-    // ── 重建方法 ──
-    {
-        auto *box = new QGroupBox(tr("重建方法"));
-        auto *fl = new QFormLayout(box);
-
-        m_methodCombo = new QComboBox;
-        m_methodCombo->addItems({
-            tr("Poisson Surface"),
-            tr("Delaunay Triangulation"),
-            tr("Ball Pivoting")
-        });
-        m_methodCombo->setCurrentIndex(0);
-        m_methodCombo->setToolTip(
-            tr("Poisson: 全局封闭曲面，适合 watertight 模型; Delaunay: 快速但需后处理; Ball Pivoting: 保留细节但慢"));
-        fl->addRow(tr("方法:"), m_methodCombo);
-
-        m_outputFormatCombo = new QComboBox;
-        m_outputFormatCombo->addItems({tr("PLY"), tr("OBJ")});
-        m_outputFormatCombo->setCurrentIndex(0);
-        m_outputFormatCombo->setToolTip(tr("最终模型输出格式。PLY 为默认；OBJ 适合带纹理输出。"));
-        fl->addRow(tr("最终格式:"), m_outputFormatCombo);
-
-        m_qualityProfileCombo = new QComboBox;
-        m_qualityProfileCombo->addItem(tr("细节优先 (清晰度高)"), QStringLiteral("detail"));
-        m_qualityProfileCombo->addItem(tr("平衡 (推荐)"), QStringLiteral("balanced"));
-        m_qualityProfileCombo->addItem(tr("轻量 (更快/更少面)"), QStringLiteral("lite"));
-        m_qualityProfileCombo->setCurrentIndex(1);
-        m_qualityProfileCombo->setToolTip(tr("控制网格重建参数组合：细节优先更清晰，轻量模式更省面数和时间。"));
-        fl->addRow(tr("质量档位:"), m_qualityProfileCombo);
-
-        m_octreeDepthSpin = new QSpinBox;
-        m_octreeDepthSpin->setRange(4, 14);
-        m_octreeDepthSpin->setValue(10);
-        m_octreeDepthSpin->setToolTip(
-            tr("Poisson 八叉树深度。★ 推荐 10; 增大提升细节但指数级增加内存"));
-        fl->addRow(tr("八叉树深度:"), m_octreeDepthSpin);
-
-        m_meshResSpin = new QDoubleSpinBox;
-        m_meshResSpin->setRange(0.0, 1024.0);
-        m_meshResSpin->setDecimals(0);
-        m_meshResSpin->setSingleStep(32.0);
-        m_meshResSpin->setValue(0.0);
-        m_meshResSpin->setToolTip(tr("目标网格分辨率 (0=自动，建议 128~512)"));
-        fl->addRow(tr("网格分辨率:"), m_meshResSpin);
-
-        root->addWidget(box);
-    }
-
-    // ── 后处理 ──
-    {
-        auto *box = new QGroupBox(tr("后处理"));
-        auto *fl = new QFormLayout(box);
-
-        m_smoothIterSpin = new QSpinBox;
-        m_smoothIterSpin->setRange(0, 50);
-        m_smoothIterSpin->setValue(3);
-        m_smoothIterSpin->setToolTip(tr("Taubin 平滑迭代次数。★ 推荐 2~4"));
-        fl->addRow(tr("平滑迭代:"), m_smoothIterSpin);
-
-        m_holeFillCheck = new QCheckBox(tr("启用补洞"));
-        m_holeFillCheck->setChecked(true);
-        fl->addRow(m_holeFillCheck);
-
-        m_maxHoleSizeSpin = new QDoubleSpinBox;
-        m_maxHoleSizeSpin->setRange(0.0, 100000.0);
-        m_maxHoleSizeSpin->setDecimals(1);
-        m_maxHoleSizeSpin->setValue(100.0);
-        m_maxHoleSizeSpin->setToolTip(tr("最大补洞面积 (面数)。超过此值的洞不补"));
-        fl->addRow(tr("最大洞面积:"), m_maxHoleSizeSpin);
-
-        m_cleanCheck = new QCheckBox(tr("清除小连通体"));
-        m_cleanCheck->setChecked(true);
-        m_cleanCheck->setToolTip(tr("移除面数少于阈值的孤立碎片"));
-        fl->addRow(m_cleanCheck);
-
-        m_minFacesSpin = new QSpinBox;
-        m_minFacesSpin->setRange(1, 100000);
-        m_minFacesSpin->setValue(100);
-        m_minFacesSpin->setToolTip(tr("小于此面数的连通体将被移除"));
-        fl->addRow(tr("最小面数:"), m_minFacesSpin);
-
-        m_voxelDensityCombo = new QComboBox;
-        m_voxelDensityCombo->addItem(tr("粗 (更少三角)"), QStringLiteral("coarse"));
-        m_voxelDensityCombo->addItem(tr("中"), QStringLiteral("medium"));
-        m_voxelDensityCombo->addItem(tr("细 (更多细节)"), QStringLiteral("fine"));
-        m_voxelDensityCombo->setCurrentIndex(1);
-        m_voxelDensityCombo->setToolTip(tr("仅对封闭体 3D 重建分支生效。粗=更少小三角，细=保留更多细节。"));
-        fl->addRow(tr("体素面密度:"), m_voxelDensityCombo);
-
-        root->addWidget(box);
-    }
-
-    // ── 简化 ──
-    {
-        auto *box = new QGroupBox(tr("网格简化"));
-        auto *fl = new QFormLayout(box);
-
-        m_decimateCheck = new QCheckBox(tr("启用简化"));
-        m_decimateCheck->setChecked(false);
-        m_decimateCheck->setToolTip(tr("用二次误差度量 (QEM) 减少三角面数"));
-        fl->addRow(m_decimateCheck);
-
-        m_decimateRatioSpin = new QDoubleSpinBox;
-        m_decimateRatioSpin->setRange(0.01, 1.0);
-        m_decimateRatioSpin->setDecimals(2);
-        m_decimateRatioSpin->setValue(0.50);
-        m_decimateRatioSpin->setToolTip(tr("目标保留比例。0.5 表示保留50%的面"));
-        fl->addRow(tr("保留比例:"), m_decimateRatioSpin);
-
-        root->addWidget(box);
-    }
-
-    // ── 系统 ──
-    {
-        auto *box = new QGroupBox(tr("系统"));
-        auto *fl = new QFormLayout(box);
-        m_threadsSpin = new QSpinBox;
-        m_threadsSpin->setRange(1, 128);
-        m_threadsSpin->setValue(8);
-        fl->addRow(tr("线程数:"), m_threadsSpin);
-        root->addWidget(box);
-    }
-
-    m_infoLabel = new QLabel(tr("输出: 项目目录下的 mesh 文件"));
-    root->addWidget(m_infoLabel);
-
-    auto *btnBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel);
-    btnBox->button(QDialogButtonBox::Ok)->setText(tr("开始重建"));
-    root->addWidget(btnBox);
+    m_qualityProfileCombo->setItemData(0, QStringLiteral("detail"));
+    m_qualityProfileCombo->setItemData(1, QStringLiteral("balanced"));
+    m_qualityProfileCombo->setItemData(2, QStringLiteral("lite"));
+    m_voxelDensityCombo->setItemData(0, QStringLiteral("coarse"));
+    m_voxelDensityCombo->setItemData(1, QStringLiteral("medium"));
+    m_voxelDensityCombo->setItemData(2, QStringLiteral("fine"));
 
     auto changed = [this]() { emitSettingsNow(); };
     connect(m_denseCloudCombo, &QComboBox::editTextChanged, this, changed);
@@ -218,8 +83,8 @@ MeshReconstructionDialog::MeshReconstructionDialog(QWidget *parent)
         emitSettingsNow();
     });
 
-    connect(btnBox, &QDialogButtonBox::accepted, this, &MeshReconstructionDialog::onRun);
-    connect(btnBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+    connect(form.m_runBtn, &QPushButton::clicked, this, &MeshReconstructionDialog::onRun);
+    connect(form.m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
 }
 
 QJsonObject MeshReconstructionDialog::collectSettings() const

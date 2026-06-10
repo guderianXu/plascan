@@ -25,7 +25,26 @@ ALGO_CONFIG = {
 }
 
 
+def is_missing_lightglue_error(exc: ModuleNotFoundError) -> bool:
+    missing_name = getattr(exc, "name", None)
+    return missing_name == "lightglue" or "No module named 'lightglue'" in str(exc)
+
+
+def add_vendored_lightglue_to_path(project_root: Path | None = None) -> Path | None:
+    root = project_root if project_root is not None else Path(__file__).resolve().parents[1]
+    vendored = root / "3rdparty" / "LightGlue-main"
+    if not (vendored / "lightglue" / "__init__.py").exists():
+        return None
+
+    vendored_str = str(vendored)
+    if vendored_str not in sys.path:
+        sys.path.insert(0, vendored_str)
+    return vendored
+
+
 def load_extractor(algo: str, max_keypoints: int, device: torch.device):
+    add_vendored_lightglue_to_path()
+
     if algo == "disk":
         from lightglue import DISK
         # DISK 的 max_num_keypoints 在关键点少于该值时会触发 kthvalue() 错误
@@ -38,7 +57,8 @@ def load_extractor(algo: str, max_keypoints: int, device: torch.device):
         raise ValueError(f"Unknown algorithm: {algo}")
 
 
-def extract(extractor, img_path: Path, device: torch.device, max_keypoints: int = -1) -> dict:
+def extract(extractor, img_path: Path, device: torch.device,
+            max_keypoints: int = -1, score_threshold: float = 0.0) -> dict:
     """返回 {'keypoints': np.ndarray [N,2], 'descriptors': np.ndarray [N,D], 'scores': np.ndarray [N]}"""
     img_bgr = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
     if img_bgr is None:
@@ -72,6 +92,12 @@ def extract(extractor, img_path: Path, device: torch.device, max_keypoints: int 
         scores = scores[0].cpu().numpy()
     else:
         scores = np.ones(len(kpts), dtype=np.float32)
+
+    if score_threshold > 0 and len(kpts) > 0:
+        keep = scores >= score_threshold
+        kpts = kpts[keep]
+        descs = descs[keep]
+        scores = scores[keep]
 
     # 手动截断（DISK 使用 max_num_keypoints=None 时需要）
     if max_keypoints > 0 and len(kpts) > max_keypoints:
@@ -130,6 +156,7 @@ def main():
     parser.add_argument("--images", nargs="+", required=True, help="输入图像路径（支持通配符）")
     parser.add_argument("--output", required=True, help="输出目录")
     parser.add_argument("--max-keypoints", type=int, default=2048)
+    parser.add_argument("--score-threshold", type=float, default=0.0)
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     args = parser.parse_args()
 
@@ -141,7 +168,20 @@ def main():
     dev = torch.device(args.device if torch.cuda.is_available() and args.device == "cuda" else "cpu")
     print(f"[{args.algo.upper()}] 使用设备: {dev}")
 
-    extractor = load_extractor(args.algo, args.max_keypoints, dev)
+    try:
+        extractor = load_extractor(args.algo, args.max_keypoints, dev)
+    except ModuleNotFoundError as exc:
+        if not is_missing_lightglue_error(exc):
+            raise
+        print(
+            f"[{args.algo.upper()}] 无法加载 Python 依赖 lightglue。"
+            "DISK/ALIKED 特征提取需要 lightglue；未生成替代 DISK/ALIKED 输出。"
+            "请使用包含 lightglue 的 Python 环境，例如执行: "
+            "python -m pip install git+https://github.com/cvg/LightGlue.git；"
+            "或在 GUI 中选择 SuperPoint/SIFT/ORB/AKAZE/SURF。",
+            file=sys.stderr,
+        )
+        sys.exit(1)
 
     out_dir = Path(args.output)
     out_dir.mkdir(parents=True, exist_ok=True)
@@ -165,7 +205,7 @@ def main():
         img_path = Path(img_path)
         out_path = out_dir / (img_path.stem + suffix)
         try:
-            data = extract(extractor, img_path, dev, args.max_keypoints)
+            data = extract(extractor, img_path, dev, args.max_keypoints, args.score_threshold)
             save_features(data, out_path, magic)
             print(f"  [{i+1}/{len(image_paths)}] {img_path.name} → {data['keypoints'].shape[0]} 个关键点 → {out_path.name}")
         except Exception as e:

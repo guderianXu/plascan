@@ -105,9 +105,9 @@ int main(int argc, char *argv[])
             double err = result.errorMap.empty() ? 0.0
                         : result.errorMap.at<float>(y, x);
             fprintf(ply, "%.6f %.6f %.6f %.6f\n",
-                    pt[0] - result.pointOffset[0],
-                    pt[1] - result.pointOffset[1],
-                    pt[2] - result.pointOffset[2], err);
+                    pt[0] + result.pointOffset[0],
+                    pt[1] + result.pointOffset[1],
+                    pt[2] + result.pointOffset[2], err);
         }
     }
     fclose(ply);

@@ -79,6 +79,8 @@ public:
 
     // 从 PLY 文件加载三角网格或点云模型
     void loadModelFromPly(const QString &plyPath);
+    // 从 OBJ 文件加载三角网格或点云模型
+    void loadModelFromObj(const QString &objPath);
 
     bool setManualPruneModeEnabled(bool enabled, QString *errorMessage = nullptr);
     bool isManualPruneModeEnabled() const { return m_manualPruneMode; }

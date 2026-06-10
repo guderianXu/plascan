@@ -13,10 +13,8 @@
 
 #include "SuperPointVisualizationDialog.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QFormLayout>
-#include <QGroupBox>
+#include "ui_SuperPointVisualizationDialog.h"
+
 #include <QCheckBox>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -25,7 +23,6 @@
 #include <QPushButton>
 #include <QComboBox>
 #include <QColorDialog>
-#include <QFrame>
 
 SuperPointVisualizationDialog::SuperPointVisualizationDialog(const QStringList &availableSuffixes,
                                                            QWidget *parent)
@@ -75,161 +72,35 @@ void SuperPointVisualizationDialog::setAvailableSuffixes(const QStringList &suff
 //   6. 底部按钮    —— 恢复默认 | 应用 | 关闭
 void SuperPointVisualizationDialog::setupUi()
 {
-    setWindowTitle(tr("特征点显示设置"));
-    resize(500, 640);
+    Ui::SuperPointVisualizationDialog ui;
+    ui.setupUi(this);
 
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
+    m_suffixCombo = ui.m_suffixCombo;
+    m_showPointsChk = ui.m_showPointsChk;
+    m_showScaleChk = ui.m_showScaleChk;
+    m_showOrientationChk = ui.m_showOrientationChk;
+    m_useFillChk = ui.m_useFillChk;
+    m_pointSizeSpin = ui.m_pointSizeSpin;
+    m_scaleMultiplierSpin = ui.m_scaleMultiplierSpin;
+    m_opacitySlider = ui.m_opacitySlider;
+    m_opacityLabel = ui.m_opacityLabel;
+    m_pointColorBtn = ui.m_pointColorBtn;
+    m_scaleColorBtn = ui.m_scaleColorBtn;
+    m_orientColorBtn = ui.m_orientColorBtn;
+    m_markerShapeCombo = ui.m_markerShapeCombo;
+    m_maxDisplaySpin = ui.m_maxDisplaySpin;
+    m_showTopScoresChk = ui.m_showTopScoresChk;
+    m_previewLabel = ui.m_previewLabel;
+    m_applyBtn = ui.m_applyBtn;
+    m_resetBtn = ui.m_resetBtn;
+    m_closeBtn = ui.m_closeBtn;
 
-    // ==================== 特征文件选择 ====================
-    QGroupBox *fileGroup = new QGroupBox(tr("特征文件"), this);
-    QHBoxLayout *fileLayout = new QHBoxLayout(fileGroup);
-    fileLayout->addWidget(new QLabel(tr("当前算法:"), fileGroup));
-    m_suffixCombo = new QComboBox(fileGroup);
-    m_suffixCombo->setToolTip(tr("切换显示不同算法提取的特征点文件"));
-    fileLayout->addWidget(m_suffixCombo, 1);
-    mainLayout->addWidget(fileGroup);
-
-    // ==================== 显示内容组 ====================
-    QGroupBox *displayGroup = new QGroupBox(tr("显示内容"), this);
-    QVBoxLayout *displayLayout = new QVBoxLayout(displayGroup);
-    
-    m_showPointsChk = new QCheckBox(tr("显示特征点"), displayGroup);
-    m_showPointsChk->setChecked(true);
-    m_showPointsChk->setToolTip(tr("显示关键点中心标记"));
-    displayLayout->addWidget(m_showPointsChk);
-    
-    m_showScaleChk = new QCheckBox(tr("显示尺度圈"), displayGroup);
-    m_showScaleChk->setChecked(false);
-    m_showScaleChk->setToolTip(tr("显示关键点的尺度圆圈（基于KeyPoint.size）"));
-    displayLayout->addWidget(m_showScaleChk);
-    
-    m_showOrientationChk = new QCheckBox(tr("显示方向箭头"), displayGroup);
-    m_showOrientationChk->setChecked(false);
-    m_showOrientationChk->setToolTip(tr("显示关键点的方向（基于KeyPoint.angle）\\nSuperPoint默认无方向"));
-    displayLayout->addWidget(m_showOrientationChk);
-    
-    m_useFillChk = new QCheckBox(tr("实心填充"), displayGroup);
-    m_useFillChk->setChecked(false);
-    m_useFillChk->setToolTip(tr("使用实心标记（默认空心）"));
-    displayLayout->addWidget(m_useFillChk);
-    
-    mainLayout->addWidget(displayGroup);
-
-    // ==================== 样式设置组 ====================
-    QGroupBox *styleGroup = new QGroupBox(tr("样式设置"), this);
-    QFormLayout *styleForm = new QFormLayout(styleGroup);
-    
-    // 标记形状
-    m_markerShapeCombo = new QComboBox(styleGroup);
-    // 增加“点”选项并调整顺序：点, 圆形, 十字, 加号
-    m_markerShapeCombo->addItems({tr("点"), tr("圆形"), tr("十字"), tr("加号")});
-    m_markerShapeCombo->setToolTip(tr("特征点标记的形状"));
-    styleForm->addRow(tr("标记形状:"), m_markerShapeCombo);
-    
-    // 点大小
-    m_pointSizeSpin = new QSpinBox(styleGroup);
-    m_pointSizeSpin->setRange(1, 20);
-    m_pointSizeSpin->setValue(3);
-    m_pointSizeSpin->setToolTip(tr("特征点标记的大小（像素）"));
-    styleForm->addRow(tr("点大小:"), m_pointSizeSpin);
-    
-    // 尺度倍数
-    m_scaleMultiplierSpin = new QDoubleSpinBox(styleGroup);
-    m_scaleMultiplierSpin->setRange(0.1, 10.0);
-    m_scaleMultiplierSpin->setValue(1.0);
-    m_scaleMultiplierSpin->setDecimals(1);
-    m_scaleMultiplierSpin->setSingleStep(0.1);
-    m_scaleMultiplierSpin->setToolTip(tr("尺度圈相对于KeyPoint.size的倍数"));
-    styleForm->addRow(tr("尺度倍数:"), m_scaleMultiplierSpin);
-    
-    // 透明度
-    QHBoxLayout *opacityLayout = new QHBoxLayout();
-    m_opacitySlider = new QSlider(Qt::Horizontal, styleGroup);
-    m_opacitySlider->setRange(0, 255);
-    m_opacitySlider->setValue(180);
-    m_opacitySlider->setToolTip(tr("显示透明度 (0=完全透明, 255=完全不透明)"));
-    m_opacityLabel = new QLabel(tr("180"), styleGroup);
-    m_opacityLabel->setMinimumWidth(40);
-    opacityLayout->addWidget(m_opacitySlider);
-    opacityLayout->addWidget(m_opacityLabel);
-    styleForm->addRow(tr("透明度:"), opacityLayout);
-    
-    mainLayout->addWidget(styleGroup);
-
-    // ==================== 颜色设置组 ====================
-    QGroupBox *colorGroup = new QGroupBox(tr("颜色设置"), this);
-    QFormLayout *colorForm = new QFormLayout(colorGroup);
-    
-    // 点颜色
-    m_pointColorBtn = new QPushButton(styleGroup);
-    m_pointColorBtn->setText("    ");
     m_pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
         .arg(m_pointColor.red()).arg(m_pointColor.green()).arg(m_pointColor.blue()));
-    m_pointColorBtn->setToolTip(tr("点击选择特征点颜色"));
-    colorForm->addRow(tr("点颜色:"), m_pointColorBtn);
-    
-    // 尺度圈颜色
-    m_scaleColorBtn = new QPushButton(styleGroup);
-    m_scaleColorBtn->setText("    ");
     m_scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
         .arg(m_scaleColor.red()).arg(m_scaleColor.green()).arg(m_scaleColor.blue()));
-    m_scaleColorBtn->setToolTip(tr("点击选择尺度圈颜色"));
-    colorForm->addRow(tr("尺度圈颜色:"), m_scaleColorBtn);
-    
-    // 方向箭头颜色
-    m_orientColorBtn = new QPushButton(styleGroup);
-    m_orientColorBtn->setText("    ");
     m_orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
         .arg(m_orientColor.red()).arg(m_orientColor.green()).arg(m_orientColor.blue()));
-    m_orientColorBtn->setToolTip(tr("点击选择方向箭头颜色"));
-    colorForm->addRow(tr("方向箭头颜色:"), m_orientColorBtn);
-    
-    mainLayout->addWidget(colorGroup);
-
-    // ==================== 过滤设置组 ====================
-    QGroupBox *filterGroup = new QGroupBox(tr("显示过滤"), this);
-    QFormLayout *filterForm = new QFormLayout(filterGroup);
-    
-    // 最大显示数量
-    m_maxDisplaySpin = new QSpinBox(filterGroup);
-    m_maxDisplaySpin->setRange(0, 100000);
-    m_maxDisplaySpin->setValue(0);
-    m_maxDisplaySpin->setSpecialValueText(tr("全部显示"));
-    m_maxDisplaySpin->setToolTip(tr("限制显示的特征点数量\\n0 = 全部显示"));
-    filterForm->addRow(tr("最大显示数:"), m_maxDisplaySpin);
-    
-    // 显示高分优先
-    m_showTopScoresChk = new QCheckBox(tr("优先显示高分点"), filterGroup);
-    m_showTopScoresChk->setChecked(true);
-    m_showTopScoresChk->setToolTip(tr("当限制显示数量时，优先显示score最高的点"));
-    filterForm->addRow("", m_showTopScoresChk);
-    
-    mainLayout->addWidget(filterGroup);
-
-    // ==================== 预览区 ====================
-    QGroupBox *previewGroup = new QGroupBox(tr("预览"), this);
-    QVBoxLayout *previewLayout = new QVBoxLayout(previewGroup);
-    
-    m_previewLabel = new QLabel(tr("调整参数后点击应用查看效果"), previewGroup);
-    m_previewLabel->setAlignment(Qt::AlignCenter);
-    m_previewLabel->setFrameStyle(QFrame::Panel | QFrame::Sunken);
-    m_previewLabel->setMinimumHeight(80);
-    previewLayout->addWidget(m_previewLabel);
-    
-    mainLayout->addWidget(previewGroup);
-
-    // ==================== 底部按钮 ====================
-    QHBoxLayout *buttonLayout = new QHBoxLayout();
-    m_resetBtn = new QPushButton(tr("恢复默认"), this);
-    buttonLayout->addWidget(m_resetBtn);
-    buttonLayout->addStretch();
-    m_applyBtn = new QPushButton(tr("应用"), this);
-    m_closeBtn = new QPushButton(tr("关闭"), this);
-    buttonLayout->addWidget(m_applyBtn);
-    buttonLayout->addWidget(m_closeBtn);
-    
-    mainLayout->addLayout(buttonLayout);
-
     m_applyBtn->setDefault(true);
 }
 

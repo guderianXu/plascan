@@ -1,6 +1,7 @@
 #include "DisparityValidator.h"
 #include <opencv2/imgproc.hpp>
 #include <cmath>
+#include <cstdio>
 
 namespace xjw::dense_match
 {
@@ -76,6 +77,70 @@ cv::Mat DisparityValidator::speckleFilter(const cv::Mat &disp,
         }
     }
     return filtered;
+}
+
+void DisparityValidator::applyImageSupportMask(DisparityResult &result,
+                                               const cv::Mat &left,
+                                               const cv::Mat &right) const
+{
+    if (result.disparity.empty() || left.empty() || right.empty())
+        return;
+    CV_Assert(result.disparity.size() == left.size());
+    CV_Assert(result.disparity.size() == right.size());
+    CV_Assert(result.disparity.type() == CV_32FC1);
+    CV_Assert(left.type() == CV_8UC1);
+    CV_Assert(right.type() == CV_8UC1);
+
+    if (result.validMask.empty())
+        result.validMask = cv::Mat(result.disparity.size(), CV_8UC1, cv::Scalar(1));
+
+    const int threshold = std::max(0, m_cfg.supportIntensityThreshold);
+    int removed = 0;
+    int kept = 0;
+
+    for (int y = 0; y < result.disparity.rows; ++y)
+    {
+        float *dispRow = result.disparity.ptr<float>(y);
+        uchar *maskRow = result.validMask.ptr<uchar>(y);
+        float *confRow = result.confidence.empty() ? nullptr : result.confidence.ptr<float>(y);
+        const uchar *leftRow = left.ptr<uchar>(y);
+        const uchar *rightRow = right.ptr<uchar>(y);
+
+        for (int x = 0; x < result.disparity.cols; ++x)
+        {
+            if (maskRow[x] == 0)
+            {
+                dispRow[x] = 0.0f;
+                if (confRow) confRow[x] = 0.0f;
+                continue;
+            }
+
+            const float disparity = dispRow[x];
+            const int rightX = cvRound(static_cast<float>(x) - disparity);
+            const bool supported =
+                std::isfinite(disparity)
+                && disparity > 0.0f
+                && rightX >= 0
+                && rightX < result.disparity.cols
+                && leftRow[x] > threshold
+                && rightRow[rightX] > threshold;
+
+            if (!supported)
+            {
+                maskRow[x] = 0;
+                dispRow[x] = 0.0f;
+                if (confRow) confRow[x] = 0.0f;
+                ++removed;
+            }
+            else
+            {
+                ++kept;
+            }
+        }
+    }
+
+    fprintf(stderr, "[DisparityValidator] image support mask: kept=%d removed=%d threshold=%d\n",
+            kept, removed, threshold);
 }
 
 } // namespace xjw::dense_match

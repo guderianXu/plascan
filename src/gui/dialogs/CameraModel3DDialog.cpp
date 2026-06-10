@@ -10,6 +10,7 @@
 //   - CameraModel3DDialog：对话框 UI + 从 ProjectManager 读取相机姿态
 // =============================================================================
 #include "CameraModel3DDialog.h"
+#include "ui_CameraModel3DDialog.h"
 
 #include "ProjectManager.h"
 #include "ProjectSupportUtils.h"
@@ -41,6 +42,7 @@
 #include <algorithm>
 #include <plapoint/io/xyz_io.h>
 #include <plapoint/io/ply_io.h>
+#include <plapoint/io/obj_io.h>
 #include <fstream>
 #include <sstream>
 
@@ -421,6 +423,52 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
         }
 
         return std::make_shared<RenderCloud>(std::move(cloud));
+    }));
+}
+
+void CameraSceneWidget::loadModelFromObj(const QString &objPath)
+{
+    cancelPendingLoad();
+    m_currentCloudPath = objPath;
+    m_cloud = RenderCloud();
+    m_preferModelPointRender = false;
+    m_cacheDirty = true;
+    m_gpuDirty = true;
+    LOG_INFO(QStringLiteral("[3D] 正在加载 OBJ 模型: %1").arg(objPath));
+
+    const int gen = m_loadGen;
+    auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
+    connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
+            this, [this, watcher, gen]()
+    {
+        if (gen == m_loadGen)
+        {
+            auto result = watcher->result();
+            if (result)
+            {
+                m_cloud = std::move(*result);
+            }
+            m_preferModelPointRender = !m_cloud.hasFaces();
+            LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面")
+                         .arg(m_cloud.size())
+                         .arg(m_cloud.hasFaces() ? static_cast<int>(m_cloud.faces()->rows()) : 0));
+            invalidateCache();
+            m_gpuDirty = true;
+            update();
+        }
+        watcher->deleteLater();
+    });
+    watcher->setFuture(QtConcurrent::run([objPath]() -> std::shared_ptr<RenderCloud>
+    {
+        try
+        {
+            return plapoint::io::readObj<float>(objPath.toStdString());
+        }
+        catch (const std::exception &e)
+        {
+            LOG_ERROR(QStringLiteral("[3D] OBJ 加载失败: %1").arg(QString::fromStdString(e.what())));
+        }
+        return nullptr;
     }));
 }
 
@@ -1760,25 +1808,14 @@ CameraModel3DDialog::CameraModel3DDialog(ProjectManager *projectManager, QWidget
     : QDialog(parent)
     , m_projectManager(projectManager)
 {
-    setWindowTitle(tr("相机模型三维视图"));
-    resize(860, 620);
+    Ui::CameraModel3DDialog form;
+    form.setupUi(this);
 
-    auto *layout = new QVBoxLayout(this);
-    m_scene = new CameraSceneWidget(this);
-    m_summaryLabel = new QLabel(this);
+    m_scene = form.m_scene;
+    m_summaryLabel = form.m_summaryLabel;
 
-    auto *buttons = new QHBoxLayout();
-    auto *reloadBtn = new QPushButton(tr("刷新"), this);
-    auto *closeBtn = new QPushButton(tr("关闭"), this);
-    buttons->addWidget(m_summaryLabel, 1);
-    buttons->addWidget(reloadBtn);
-    buttons->addWidget(closeBtn);
-
-    layout->addWidget(m_scene, 1);
-    layout->addLayout(buttons);
-
-    connect(reloadBtn, &QPushButton::clicked, this, &CameraModel3DDialog::reloadFromProject);
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    connect(form.reloadButton, &QPushButton::clicked, this, &CameraModel3DDialog::reloadFromProject);
+    connect(form.closeButton, &QPushButton::clicked, this, &QDialog::accept);
 
     reloadFromProject();
 }

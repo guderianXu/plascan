@@ -113,6 +113,11 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
         cv::Ptr<cv::SIFT> sift = cv::SIFT::create(maxKpForDetector > 0 ? maxKpForDetector : 0);
         sift->detectAndCompute(grayImage, cv::noArray(), keypoints, descriptors, false);
     }
+    else if (normalizedName == "akaze")
+    {
+        cv::Ptr<cv::AKAZE> akaze = cv::AKAZE::create();
+        akaze->detectAndCompute(grayImage, cv::noArray(), keypoints, descriptors, false);
+    }
     else if (normalizedName == "surf")
     {
         // SURF (GPU via CUDA if available, else CPU)

@@ -34,6 +34,7 @@ struct DenseMatchConfig
 
     float lrCheckThreshold = 1.0f;
     int   medianFilterSize = 3;
+    int   supportIntensityThreshold = 5;
 
     bool useCuda     = true;
     int  cudaDevice  = 0;

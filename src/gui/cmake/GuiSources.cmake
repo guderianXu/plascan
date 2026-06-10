@@ -14,6 +14,7 @@ set(GUI_SOURCES
   config/settings/ProjectDialogJsonSettingBase.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
+  main_window/ModelDropSupport.cpp
   main_window/MenuWorkflowController.cpp
   main_window/ReconstructionWorkflowController.cpp
   menu/MainMenu.cpp
@@ -66,7 +67,7 @@ set(GUI_SOURCES
   dialogs/AerialTriangulationDialog.cpp
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
-  dialogs/SuperPointDialog.cpp
+  dialogs/FeatureExtractionDialog.cpp
   dialogs/SuperPointVisualizationDialog.cpp
   dialogs/FeatureMatchingDialog.cpp
   dialogs/ForwardIntersectionCheckDialog.cpp
@@ -105,6 +106,7 @@ set(GUI_HEADERS
   config/settings/DialogSettingKeys.h
   compat/QtTorchMacroGuard.h
   main_window/MainWindow.h
+  main_window/ModelDropSupport.h
   main_window/MenuWorkflowController.h
   main_window/ReconstructionWorkflowController.h
   menu/MainMenu.h
@@ -162,7 +164,7 @@ set(GUI_HEADERS
   dialogs/AerialTriangulationDialog.h
   dialogs/CreateDemDialog.h
   dialogs/MapProjectDialog.h
-  dialogs/SuperPointDialog.h
+  dialogs/FeatureExtractionDialog.h
   dialogs/SuperPointVisualizationDialog.h
   dialogs/FeatureMatchingDialog.h
   dialogs/ForwardIntersectionCheckDialog.h
@@ -230,7 +232,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/AerialTriangulationDialog.cpp
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
-  dialogs/SuperPointDialog.cpp
+  dialogs/FeatureExtractionDialog.cpp
   dialogs/SuperPointVisualizationDialog.cpp
   dialogs/FeatureMatchingDialog.cpp
   dialogs/ForwardIntersectionCheckDialog.cpp

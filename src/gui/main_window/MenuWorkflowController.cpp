@@ -6,7 +6,7 @@
 #include "SFMService.h"
 #include "Logger.h"
 
-#include "SuperPointDialog.h"
+#include "FeatureExtractionDialog.h"
 #include "SuperPointRunner.h"
 #include "SuperPointVisualizationDialog.h"
 #include "CanvasWidget.h"
@@ -234,14 +234,14 @@ QStringList MenuWorkflowController::getProjectImages() const
     return images;
 }
 
-void MenuWorkflowController::openSuperPointDialog()
+void MenuWorkflowController::openFeatureExtractionDialog()
 {
     if (!m_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new SuperPointDialog(m_mainWindow);
+    auto *dlg = new FeatureExtractionDialog(m_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
     if (m_projectManager)
@@ -277,11 +277,11 @@ void MenuWorkflowController::openSuperPointDialog()
     }
     else
     {
-        LOG_ERROR(QStringLiteral("无法运行 SuperPoint：项目管理器未初始化"));
+        LOG_ERROR(QStringLiteral("无法运行特征提取：项目管理器未初始化"));
     }
 
     // 连接设置变更信号，实时保存到 project_dialog.json
-    connect(dlg, &SuperPointDialog::settingsChanged, this, [this](const QJsonObject &s)
+    connect(dlg, &FeatureExtractionDialog::settingsChanged, this, [this](const QJsonObject &s)
     {
         if (m_spSetting)
         {
@@ -290,12 +290,12 @@ void MenuWorkflowController::openSuperPointDialog()
     });
 
     // 连接运行请求信号
-    connect(dlg, &SuperPointDialog::runRequested, this,
+    connect(dlg, &FeatureExtractionDialog::runRequested, this,
         [this](const QJsonObject &config, const QStringList &inputs)
     {
         if (!m_projectManager)
         {
-            LOG_ERROR(QStringLiteral("无法运行 SuperPoint：项目管理器未初始化"));
+            LOG_ERROR(QStringLiteral("无法运行特征提取：项目管理器未初始化"));
             return;
         }
 

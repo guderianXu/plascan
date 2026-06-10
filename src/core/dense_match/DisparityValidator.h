@@ -21,6 +21,10 @@ public:
     cv::Mat speckleFilter(const cv::Mat &disp, const cv::Mat &valid,
                           int maxSpeckleSize = 100);
 
+    void applyImageSupportMask(DisparityResult &result,
+                               const cv::Mat &left,
+                               const cv::Mat &right) const;
+
 private:
     DenseMatchConfig m_cfg;
 };

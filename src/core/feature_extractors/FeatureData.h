@@ -44,7 +44,7 @@ struct FeatureData
     int  descriptorDim() const { return descriptors.empty() ? 0 : descriptors.cols; }
 
     /// @brief 是否为 binary 描述子 (需 Hamming 距离匹配)
-    bool isBinary() const { return sourceAlgorithm == "orb"; }
+    bool isBinary() const { return sourceAlgorithm == "orb" || sourceAlgorithm == "akaze"; }
 
     /// @brief 推荐的匹配器算法名
     std::string recommendedMatcher() const

@@ -9,9 +9,8 @@
 #include "ProjectManager.h"
 #include "ProjectIO.h"
 #include "Logger.h"
+#include "ui_MatchPairSelectorDialog.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QComboBox>
 #include <QTableWidget>
 #include <QPushButton>
@@ -70,57 +69,31 @@ MatchPairSelectorDialog::~MatchPairSelectorDialog()
 // 包含：顶部图像选择区、中间匹配表格、底部状态栏和操作按钮
 void MatchPairSelectorDialog::setupUI()
 {
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    
-    // 顶部：图像选择
-    QHBoxLayout *topLayout = new QHBoxLayout();
-    QLabel *imageLabel = new QLabel(tr("图像:"), this);
-    m_imageComboBox = new QComboBox(this);
-    m_imageComboBox->setMinimumWidth(300);
+    Ui::MatchPairSelectorDialog ui;
+    ui.setupUi(this);
+
+    m_imageComboBox = ui.m_imageComboBox;
+    m_matchTable = ui.m_matchTable;
+    m_viewDetailBtn = ui.m_viewDetailBtn;
+    m_refreshBtn = ui.m_refreshBtn;
+    m_statusLabel = ui.m_statusLabel;
+
     connect(m_imageComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MatchPairSelectorDialog::onCurrentImageChanged);
-    
-    m_refreshBtn = new QPushButton(tr("刷新"), this);
     connect(m_refreshBtn, &QPushButton::clicked, this, &MatchPairSelectorDialog::onRefresh);
-    
-    topLayout->addWidget(imageLabel);
-    topLayout->addWidget(m_imageComboBox, 1);
-    topLayout->addWidget(m_refreshBtn);
-    
-    mainLayout->addLayout(topLayout);
-    
-    // 中间：匹配表格
+
     setupTable();
-    mainLayout->addWidget(m_matchTable, 1);
-    
-    // 底部：操作按钮和状态
-    QHBoxLayout *bottomLayout = new QHBoxLayout();
-    
-    m_statusLabel = new QLabel(this);
-    m_statusLabel->setStyleSheet("QLabel { color: gray; }");
-    
-    m_viewDetailBtn = new QPushButton(tr("查看详细匹配"), this);
-    m_viewDetailBtn->setEnabled(false);
+
     connect(m_viewDetailBtn, &QPushButton::clicked, 
             this, &MatchPairSelectorDialog::onViewDetailedMatch);
-    
-    QPushButton *closeBtn = new QPushButton(tr("关闭"), this);
-    connect(closeBtn, &QPushButton::clicked, this, &QDialog::accept);
-    
-    bottomLayout->addWidget(m_statusLabel, 1);
-    bottomLayout->addWidget(m_viewDetailBtn);
-    bottomLayout->addWidget(closeBtn);
-    
-    mainLayout->addLayout(bottomLayout);
-    
-    setLayout(mainLayout);
+
+    connect(ui.closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 }
 
 // setupTable: 初始化匹配对信息表格
 // 设置列数（4列）、列头、列宽、选择行为、文字对齐、交替行颜色等属性
 void MatchPairSelectorDialog::setupTable()
 {
-    m_matchTable = new QTableWidget(this);
     m_matchTable->setColumnCount(5);
 
     QStringList headers;

@@ -1,0 +1,502 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ObservationNetworkDialog</class>
+ <widget class="QDialog" name="ObservationNetworkDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>620</width>
+    <height>560</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>620</width>
+    <height>560</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>构建观测网络模型</string>
+  </property>
+  <layout class="QVBoxLayout" name="rootLayout">
+   <item>
+    <widget class="QTabWidget" name="m_tabs">
+     <property name="currentIndex">
+      <number>0</number>
+     </property>
+     <widget class="QScrollArea" name="paramScroll">
+      <property name="frameShape">
+       <enum>QFrame::NoFrame</enum>
+      </property>
+      <property name="widgetResizable">
+       <bool>true</bool>
+      </property>
+      <attribute name="title">
+       <string>参数</string>
+      </attribute>
+      <widget class="QWidget" name="paramScrollContent">
+       <property name="geometry">
+        <rect>
+         <x>0</x>
+         <y>0</y>
+         <width>596</width>
+         <height>472</height>
+        </rect>
+       </property>
+       <layout class="QVBoxLayout" name="paramLayout">
+        <property name="spacing">
+         <number>8</number>
+        </property>
+        <item>
+         <widget class="QGroupBox" name="presetGroup">
+          <property name="title">
+           <string>快速预设</string>
+          </property>
+          <layout class="QFormLayout" name="presetForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="presetLabel">
+             <property name="text">
+              <string>预设档位:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_presetCombo</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="m_presetCombo">
+             <property name="toolTip">
+              <string>选择预设档位可一键设置所有关键参数。选 [自定义]后可手动调整每个参数。</string>
+             </property>
+             <property name="currentIndex">
+              <number>1</number>
+             </property>
+             <item>
+              <property name="text">
+               <string>低 (快速/稀疏)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>中 (均衡)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>高 (精细/密集)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>自定义</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="connectionGroup">
+          <property name="title">
+           <string>连接策略</string>
+          </property>
+          <layout class="QFormLayout" name="connectionForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="graphAlgoLabel">
+             <property name="text">
+              <string>图算法:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_graphAlgoCombo</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="m_graphAlgoCombo">
+             <property name="toolTip">
+              <string>图构建算法。
+• Complete: 所有有效匹配对均建立连接，适合小数据集
+• KNN: 每张图保留 K 个最佳邻居，推荐首选
+• MST: 最大生成树，使网络连通且冗余最小
+• Spatial: 仅连接序号相邻的图像，适合序列影像
+• KDTree: 基于地理/序列坐标的空间近邻搜索</string>
+             </property>
+             <property name="currentIndex">
+              <number>1</number>
+             </property>
+             <item>
+              <property name="text">
+               <string>完全图 (Complete)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>K 近邻 (KNN)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>最小生成树 (MST)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>空间邻近 (Spatial)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>空间 KDTree</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="maxNeighborsLabel">
+             <property name="text">
+              <string>最大邻居数 K:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_maxNeighborsSpin</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QSpinBox" name="m_maxNeighborsSpin">
+             <property name="toolTip">
+              <string>KNN / KDTree 算法中每张图像保留的最大邻居数。★ 推荐 20</string>
+             </property>
+             <property name="minimum">
+              <number>2</number>
+             </property>
+             <property name="maximum">
+              <number>200</number>
+             </property>
+             <property name="value">
+              <number>20</number>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="minMatchCountLabel">
+             <property name="text">
+              <string>最少匹配数:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_minMatchCountSpin</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QSpinBox" name="m_minMatchCountSpin">
+             <property name="toolTip">
+              <string>建立连接所需的最少匹配点数。★ 推荐 30</string>
+             </property>
+             <property name="minimum">
+              <number>5</number>
+             </property>
+             <property name="maximum">
+              <number>5000</number>
+             </property>
+             <property name="value">
+              <number>30</number>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="minOverlapLabel">
+             <property name="text">
+              <string>最小重叠率:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_minOverlapSpin</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QDoubleSpinBox" name="m_minOverlapSpin">
+             <property name="toolTip">
+              <string>建立连接所需的最小重叠率 (0~1)。★ 推荐 0.10</string>
+             </property>
+             <property name="decimals">
+              <number>2</number>
+             </property>
+             <property name="maximum">
+              <double>1.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>0.050000000000000</double>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="verifyGroup">
+          <property name="title">
+           <string>几何验证</string>
+          </property>
+          <layout class="QFormLayout" name="verifyForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="verifyMethodLabel">
+             <property name="text">
+              <string>验证方法:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_verifyMethodCombo</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="m_verifyMethodCombo">
+             <property name="toolTip">
+              <string>用于验证匹配一致性的几何模型</string>
+             </property>
+             <item>
+              <property name="text">
+               <string>基础矩阵 (F)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>本质矩阵 (E)</string>
+              </property>
+             </item>
+             <item>
+              <property name="text">
+               <string>单应矩阵 (H)</string>
+              </property>
+             </item>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="verifyThreshLabel">
+             <property name="text">
+              <string>验证阈值:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_verifyThreshSpin</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QDoubleSpinBox" name="m_verifyThreshSpin">
+             <property name="toolTip">
+              <string>RANSAC 内点阈值。★ 推荐 3.0 px</string>
+             </property>
+             <property name="suffix">
+              <string> px</string>
+             </property>
+             <property name="decimals">
+              <number>1</number>
+             </property>
+             <property name="minimum">
+              <double>0.100000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>20.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>0.500000000000000</double>
+             </property>
+             <property name="value">
+              <double>3.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="pruneGroup">
+          <property name="title">
+           <string>弱连接剪枝</string>
+          </property>
+          <layout class="QFormLayout" name="pruneForm">
+           <item row="0" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_pruneWeakCheck">
+             <property name="toolTip">
+              <string>移除内点率过低的边，减少噪声</string>
+             </property>
+             <property name="text">
+              <string>启用弱连接剪枝</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="pruneThreshLabel">
+             <property name="text">
+              <string>剪枝阈值 (内点率):</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_pruneThreshSpin</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QDoubleSpinBox" name="m_pruneThreshSpin">
+             <property name="toolTip">
+              <string>内点率低于此值的边将被剪掉。★ 推荐 0.15</string>
+             </property>
+             <property name="decimals">
+              <number>2</number>
+             </property>
+             <property name="maximum">
+              <double>1.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>0.050000000000000</double>
+             </property>
+             <property name="value">
+              <double>0.150000000000000</double>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="systemGroup">
+          <property name="title">
+           <string>系统</string>
+          </property>
+          <layout class="QFormLayout" name="systemForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="threadsLabel">
+             <property name="text">
+              <string>线程数:</string>
+             </property>
+             <property name="buddy">
+              <cstring>m_threadsSpin</cstring>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QSpinBox" name="m_threadsSpin">
+             <property name="toolTip">
+              <string>并行线程数</string>
+             </property>
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>128</number>
+             </property>
+             <property name="value">
+              <number>8</number>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <layout class="QHBoxLayout" name="previewButtonLayout">
+          <item>
+           <spacer name="previewButtonSpacer">
+            <property name="orientation">
+             <enum>Qt::Horizontal</enum>
+            </property>
+            <property name="sizeHint" stdset="0">
+             <size>
+              <width>40</width>
+              <height>20</height>
+             </size>
+            </property>
+           </spacer>
+          </item>
+          <item>
+           <widget class="QPushButton" name="previewBtn">
+            <property name="toolTip">
+             <string>根据当前参数立即构建观测网络并切换到网络图标签页预览</string>
+            </property>
+            <property name="text">
+             <string>构建预览</string>
+            </property>
+           </widget>
+          </item>
+         </layout>
+        </item>
+        <item>
+         <spacer name="paramSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>40</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+     <widget class="QWidget" name="networkTab">
+      <attribute name="title">
+       <string>网络图</string>
+      </attribute>
+      <layout class="QVBoxLayout" name="networkLayout">
+       <property name="spacing">
+        <number>6</number>
+       </property>
+       <item>
+        <widget class="QWidget" name="networkViewContainer">
+         <property name="minimumSize">
+          <size>
+           <width>500</width>
+           <height>380</height>
+          </size>
+         </property>
+        </widget>
+       </item>
+       <item>
+        <layout class="QHBoxLayout" name="statsLayout">
+         <item>
+          <widget class="QLabel" name="m_statsLabel">
+           <property name="text">
+            <string>尚未构建 — 请在 [参数] 标签页点击 [构建预览]</string>
+           </property>
+           <property name="wordWrap">
+            <bool>true</bool>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="forceLayoutBtn">
+           <property name="toolTip">
+            <string>重新运行 Fruchterman-Reingold 力导向布局算法</string>
+           </property>
+           <property name="text">
+            <string>力导向布局</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+      </layout>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

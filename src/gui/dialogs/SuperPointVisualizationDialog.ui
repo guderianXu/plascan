@@ -1,0 +1,434 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SuperPointVisualizationDialog</class>
+ <widget class="QDialog" name="SuperPointVisualizationDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>500</width>
+    <height>640</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>特征点显示设置</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item>
+    <widget class="QGroupBox" name="fileGroup">
+     <property name="title">
+      <string>特征文件</string>
+     </property>
+     <layout class="QHBoxLayout" name="fileLayout">
+      <item>
+       <widget class="QLabel" name="suffixLabel">
+        <property name="text">
+         <string>当前算法:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_suffixCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QComboBox" name="m_suffixCombo">
+        <property name="toolTip">
+         <string>切换显示不同算法提取的特征点文件</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="displayGroup">
+     <property name="title">
+      <string>显示内容</string>
+     </property>
+     <layout class="QVBoxLayout" name="displayLayout">
+      <item>
+       <widget class="QCheckBox" name="m_showPointsChk">
+        <property name="toolTip">
+         <string>显示关键点中心标记</string>
+        </property>
+        <property name="text">
+         <string>显示特征点</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="m_showScaleChk">
+        <property name="toolTip">
+         <string>显示关键点的尺度圆圈（基于KeyPoint.size）</string>
+        </property>
+        <property name="text">
+         <string>显示尺度圈</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="m_showOrientationChk">
+        <property name="toolTip">
+         <string>显示关键点的方向（基于KeyPoint.angle）
+SuperPoint默认无方向</string>
+        </property>
+        <property name="text">
+         <string>显示方向箭头</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QCheckBox" name="m_useFillChk">
+        <property name="toolTip">
+         <string>使用实心标记（默认空心）</string>
+        </property>
+        <property name="text">
+         <string>实心填充</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="styleGroup">
+     <property name="title">
+      <string>样式设置</string>
+     </property>
+     <layout class="QFormLayout" name="styleForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="markerShapeLabel">
+        <property name="text">
+         <string>标记形状:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_markerShapeCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_markerShapeCombo">
+        <property name="toolTip">
+         <string>特征点标记的形状</string>
+        </property>
+        <item>
+         <property name="text">
+          <string>点</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>圆形</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>十字</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>加号</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="pointSizeLabel">
+        <property name="text">
+         <string>点大小:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_pointSizeSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QSpinBox" name="m_pointSizeSpin">
+        <property name="toolTip">
+         <string>特征点标记的大小（像素）</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>20</number>
+        </property>
+        <property name="value">
+         <number>3</number>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="scaleMultiplierLabel">
+        <property name="text">
+         <string>尺度倍数:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_scaleMultiplierSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QDoubleSpinBox" name="m_scaleMultiplierSpin">
+        <property name="toolTip">
+         <string>尺度圈相对于KeyPoint.size的倍数</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="minimum">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>10.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="opacityTitleLabel">
+        <property name="text">
+         <string>透明度:</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <layout class="QHBoxLayout" name="opacityLayout">
+        <item>
+         <widget class="QSlider" name="m_opacitySlider">
+          <property name="toolTip">
+           <string>显示透明度 (0=完全透明, 255=完全不透明)</string>
+          </property>
+          <property name="maximum">
+           <number>255</number>
+          </property>
+          <property name="value">
+           <number>180</number>
+          </property>
+          <property name="orientation">
+           <enum>Qt::Horizontal</enum>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QLabel" name="m_opacityLabel">
+          <property name="minimumWidth">
+           <number>40</number>
+          </property>
+          <property name="text">
+           <string>180</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="colorGroup">
+     <property name="title">
+      <string>颜色设置</string>
+     </property>
+     <layout class="QFormLayout" name="colorForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="pointColorLabel">
+        <property name="text">
+         <string>点颜色:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_pointColorBtn</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QPushButton" name="m_pointColorBtn">
+        <property name="toolTip">
+         <string>点击选择特征点颜色</string>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">background-color: rgb(255, 200, 0);</string>
+        </property>
+        <property name="text">
+         <string>    </string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="scaleColorLabel">
+        <property name="text">
+         <string>尺度圈颜色:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_scaleColorBtn</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QPushButton" name="m_scaleColorBtn">
+        <property name="toolTip">
+         <string>点击选择尺度圈颜色</string>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">background-color: rgb(255, 255, 0);</string>
+        </property>
+        <property name="text">
+         <string>    </string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="orientColorLabel">
+        <property name="text">
+         <string>方向箭头颜色:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_orientColorBtn</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QPushButton" name="m_orientColorBtn">
+        <property name="toolTip">
+         <string>点击选择方向箭头颜色</string>
+        </property>
+        <property name="styleSheet">
+         <string notr="true">background-color: rgb(255, 0, 0);</string>
+        </property>
+        <property name="text">
+         <string>    </string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="filterGroup">
+     <property name="title">
+      <string>显示过滤</string>
+     </property>
+     <layout class="QFormLayout" name="filterForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="maxDisplayLabel">
+        <property name="text">
+         <string>最大显示数:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_maxDisplaySpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="m_maxDisplaySpin">
+        <property name="toolTip">
+         <string>限制显示的特征点数量
+0 = 全部显示</string>
+        </property>
+        <property name="specialValueText">
+         <string>全部显示</string>
+        </property>
+        <property name="maximum">
+         <number>100000</number>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QCheckBox" name="m_showTopScoresChk">
+        <property name="toolTip">
+         <string>当限制显示数量时，优先显示score最高的点</string>
+        </property>
+        <property name="text">
+         <string>优先显示高分点</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="previewGroup">
+     <property name="title">
+      <string>预览</string>
+     </property>
+     <layout class="QVBoxLayout" name="previewLayout">
+      <item>
+       <widget class="QLabel" name="m_previewLabel">
+        <property name="minimumHeight">
+         <number>80</number>
+        </property>
+        <property name="frameShape">
+         <enum>QFrame::Panel</enum>
+        </property>
+        <property name="frameShadow">
+         <enum>QFrame::Sunken</enum>
+        </property>
+        <property name="text">
+         <string>调整参数后点击应用查看效果</string>
+        </property>
+        <property name="alignment">
+         <set>Qt::AlignCenter</set>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <widget class="QPushButton" name="m_resetBtn">
+       <property name="text">
+        <string>恢复默认</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_applyBtn">
+       <property name="text">
+        <string>应用</string>
+       </property>
+       <property name="default">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_closeBtn">
+       <property name="text">
+        <string>关闭</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

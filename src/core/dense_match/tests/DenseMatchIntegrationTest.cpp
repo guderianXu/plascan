@@ -58,6 +58,32 @@ TEST_F(DenseMatchIntegrationTest, SGM_EndToEnd)
     EXPECT_NEAR(meanDisp[0], 10.0, 2.0);
 }
 
+TEST_F(DenseMatchIntegrationTest, OpenCVSgbmUsesWrapperPath)
+{
+    DenseMatchConfig cfg;
+    cfg.algorithm    = StereoAlgorithm::OpenCV_SGBM;
+    cfg.minDisparity = 0;
+    cfg.maxDisparity = 32;
+    cfg.corrKernelW  = 5;
+    cfg.corrKernelH  = 5;
+    cfg.supportIntensityThreshold = 0;
+    DenseMatchService service(cfg);
+
+    auto result = service.process(left, right);
+
+    ASSERT_FALSE(result.disparity.empty());
+    ASSERT_FALSE(result.confidence.empty());
+    cv::Rect interior(30, 30, 68, 68);
+    ASSERT_GT(cv::countNonZero(result.validMask(interior)), 0);
+    cv::Mat validConfidence;
+    result.confidence(interior).copyTo(validConfidence, result.validMask(interior));
+    double minConfidence = 0.0;
+    double maxConfidence = 0.0;
+    cv::minMaxLoc(validConfidence, &minConfidence, &maxConfidence, nullptr, nullptr, result.validMask(interior));
+    EXPECT_NEAR(minConfidence, 1.0, 1e-6);
+    EXPECT_NEAR(maxConfidence, 1.0, 1e-6);
+}
+
 TEST_F(DenseMatchIntegrationTest, SaveAndReloadDisparity)
 {
     DenseMatchConfig cfg;

@@ -1,0 +1,117 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>SparseCloudPostProcessDialog</class>
+ <widget class="QDialog" name="SparseCloudPostProcessDialog">
+  <property name="minimumSize">
+   <size>
+    <width>500</width>
+    <height>0</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>稀疏点云后处理</string>
+  </property>
+  <layout class="QVBoxLayout" name="rootLayout">
+   <property name="spacing">
+    <number>8</number>
+   </property>
+   <item>
+    <widget class="QLabel" name="infoLabel">
+     <property name="text">
+      <string>过滤阈值基于光束法平差（BA）为每个三维点计算的逐点重投影误差、三角化角度和轨迹长度。悬停在各参数上可查看详细说明。</string>
+     </property>
+     <property name="wordWrap">
+      <bool>true</bool>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <layout class="QFormLayout" name="sourceForm">
+     <item row="0" column="0">
+      <widget class="QLabel" name="sourceLabel">
+       <property name="text">
+        <string>输入稀疏点云:</string>
+       </property>
+      </widget>
+     </item>
+     <item row="0" column="1">
+      <widget class="QComboBox" name="m_sourceCombo">
+       <property name="toolTip">
+        <string>选择要处理的稀疏点云。建议选经过光束法平差的最新结果。</string>
+       </property>
+      </widget>
+     </item>
+     <item row="1" column="1">
+      <widget class="QLabel" name="m_statsLabel">
+       <property name="text">
+        <string/>
+       </property>
+       <property name="wordWrap">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="qualityGroup">
+     <property name="title">
+      <string>1. 点级质量过滤（必选，始终执行）</string>
+     </property>
+     <layout class="QVBoxLayout" name="pointQualityLayout">
+      <property name="spacing">
+       <number>4</number>
+      </property>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="m_refineGroup">
+     <property name="title">
+      <string>2. 迭代精修（勾选后启用）</string>
+     </property>
+     <property name="toolTip">
+      <string>多轮迭代：每轮先按第一步阈值过滤，再逐步收紧阈值。
+适合在较粗糙的初始点云上做渐进式精化。
+若同时启用了第三步“空间去噪”，精修完成后会继续执行空间去噪。</string>
+     </property>
+     <property name="checkable">
+      <bool>true</bool>
+     </property>
+     <property name="checked">
+      <bool>false</bool>
+     </property>
+     <layout class="QFormLayout" name="refineForm"/>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="m_spatialGroup">
+     <property name="title">
+      <string>3. 空间去噪（勾选后启用）</string>
+     </property>
+     <property name="toolTip">
+      <string>基于体素网格移除孤立点簇、局部重投影异常点和近邻重复点。
+基于几何结构做清理，不依赖 BA 指标。
+注意：单独启用本步骤时，第一步点级过滤不会执行。</string>
+     </property>
+     <property name="checkable">
+      <bool>true</bool>
+     </property>
+     <property name="checked">
+      <bool>false</bool>
+     </property>
+     <layout class="QFormLayout" name="spatialForm"/>
+    </widget>
+   </item>
+   <item>
+    <widget class="QDialogButtonBox" name="buttonBox">
+     <property name="standardButtons">
+      <set>QDialogButtonBox::Cancel|QDialogButtonBox::Ok</set>
+     </property>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

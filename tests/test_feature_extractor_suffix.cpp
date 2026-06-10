@@ -7,6 +7,8 @@
 #include "ExtractorFactory.h"
 #include "TraditionalFeatureExtractor.h"
 
+#include <opencv2/imgproc.hpp>
+
 #include <string>
 
 // ── 1. 后缀映射 (验证与 FeatureFileIO.h 中 ExtractorSuffix 一致) ──
@@ -90,6 +92,27 @@ TEST(AlgorithmNormalizationTest, IsTraditionalAlgorithm)
     EXPECT_FALSE(TraditionalFeatureExtractor::isTraditionalAlgorithm("superpoint"));
     EXPECT_FALSE(TraditionalFeatureExtractor::isTraditionalAlgorithm("disk"));
     EXPECT_FALSE(TraditionalFeatureExtractor::isTraditionalAlgorithm("aliked"));
+}
+
+TEST(TraditionalFeatureExtractorTest, AkazeProducesFeatures)
+{
+    cv::Mat image(240, 320, CV_8UC1, cv::Scalar(20));
+    cv::circle(image, cv::Point(80, 80), 30, cv::Scalar(220), -1);
+    cv::rectangle(image, cv::Rect(180, 60, 80, 80), cv::Scalar(180), -1);
+    cv::line(image, cv::Point(40, 200), cv::Point(280, 180), cv::Scalar(240), 3);
+
+    SuperPointConfig cfg;
+    cfg.max_num_keypoints = 256;
+    cfg.remove_borders = 0;
+    cfg.grayscale_min = 0.0f;
+    cfg.grayscale_max = 1.0f;
+
+    const FeatureOutput output =
+        xjw::feature_extractors::TraditionalFeatureExtractor::detect(image, cfg, "akaze");
+
+    EXPECT_FALSE(output.empty());
+    EXPECT_TRUE(output.descriptors.defined());
+    EXPECT_EQ(output.descriptors.size(0), static_cast<int64_t>(output.keypoints.size()));
 }
 
 // ── 4. ExtractorConfig 默认值 ──

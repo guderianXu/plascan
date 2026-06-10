@@ -1,0 +1,157 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>MapProjectDialog</class>
+ <widget class="QDialog" name="MapProjectDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>620</width>
+    <height>440</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>生成正射影像</string>
+  </property>
+  <layout class="QHBoxLayout" name="mainLayout">
+   <item>
+    <layout class="QVBoxLayout" name="leftLayout">
+     <item>
+      <widget class="QLabel" name="hintLabel">
+       <property name="styleSheet">
+        <string notr="true">color:#666;</string>
+       </property>
+       <property name="text">
+        <string>建议输出 GeoTIFF（.tif）以保持与 DEM 一致的投影与像元网格；分辨率设为“自动”时将直接沿用 DEM 分辨率。</string>
+       </property>
+       <property name="wordWrap">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QLabel" name="imageListLabel">
+       <property name="text">
+        <string>输入影像（可多选）</string>
+       </property>
+       <property name="buddy">
+        <cstring>m_imageList</cstring>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QListWidget" name="m_imageList">
+       <property name="selectionMode">
+        <enum>QAbstractItemView::NoSelection</enum>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <layout class="QVBoxLayout" name="rightLayout">
+     <item>
+      <layout class="QFormLayout" name="formLayout">
+       <item row="0" column="0">
+        <widget class="QLabel" name="demLabel">
+         <property name="text">
+          <string>DEM：</string>
+         </property>
+         <property name="buddy">
+          <cstring>m_demEdit</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="0" column="1">
+        <layout class="QHBoxLayout" name="demLayout">
+         <item>
+          <widget class="QLineEdit" name="m_demEdit"/>
+         </item>
+         <item>
+          <widget class="QPushButton" name="demBtn">
+           <property name="text">
+            <string>选择 DEM...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="1" column="0">
+        <widget class="QLabel" name="outputLabel">
+         <property name="text">
+          <string>输出影像：</string>
+         </property>
+         <property name="buddy">
+          <cstring>m_outputEdit</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="1" column="1">
+        <layout class="QHBoxLayout" name="outputLayout">
+         <item>
+          <widget class="QLineEdit" name="m_outputEdit"/>
+         </item>
+         <item>
+          <widget class="QPushButton" name="outBtn">
+           <property name="text">
+            <string>选择输出...</string>
+           </property>
+          </widget>
+         </item>
+        </layout>
+       </item>
+       <item row="2" column="0">
+        <widget class="QLabel" name="resolutionLabel">
+         <property name="text">
+          <string>分辨率：</string>
+         </property>
+         <property name="buddy">
+          <cstring>m_resolutionSpin</cstring>
+         </property>
+        </widget>
+       </item>
+       <item row="2" column="1">
+        <widget class="QDoubleSpinBox" name="m_resolutionSpin">
+         <property name="specialValueText">
+          <string>自动（与 DEM 一致）</string>
+         </property>
+         <property name="suffix">
+          <string> m/px</string>
+         </property>
+         <property name="decimals">
+          <number>3</number>
+         </property>
+         <property name="maximum">
+          <double>10000.000000000000000</double>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </item>
+     <item>
+      <widget class="QPushButton" name="runBtn">
+       <property name="text">
+        <string>运行正射投影</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="rightSpacer">
+       <property name="orientation">
+        <enum>Qt::Vertical</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>20</width>
+         <height>40</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

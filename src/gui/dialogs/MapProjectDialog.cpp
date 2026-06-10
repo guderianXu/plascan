@@ -1,8 +1,7 @@
 #include "MapProjectDialog.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QFormLayout>
+#include "ui_MapProjectDialog.h"
+
 #include <QListWidget>
 #include <QLineEdit>
 #include <QPushButton>
@@ -16,59 +15,17 @@
 MapProjectDialog::MapProjectDialog(QWidget *parent)
     : QDialog(parent)
 {
-    setWindowTitle(QStringLiteral("生成正射影像"));
-    resize(620, 440);
+    Ui::MapProjectDialog ui;
+    ui.setupUi(this);
 
-    auto *mainLay = new QHBoxLayout(this);
+    m_imageList = ui.m_imageList;
+    m_demEdit = ui.m_demEdit;
+    m_outputEdit = ui.m_outputEdit;
+    m_resolutionSpin = ui.m_resolutionSpin;
 
-    auto *leftLay = new QVBoxLayout();
-    auto *hint = new QLabel(
-        QStringLiteral("建议输出 GeoTIFF（.tif）以保持与 DEM 一致的投影与像元网格；"
-                       "分辨率设为“自动”时将直接沿用 DEM 分辨率。"),
-        this);
-    hint->setWordWrap(true);
-    hint->setStyleSheet(QStringLiteral("color:#666;"));
-    leftLay->addWidget(hint);
-    leftLay->addWidget(new QLabel(QStringLiteral("输入影像（可多选）"), this));
-    m_imageList = new QListWidget(this);
-    m_imageList->setSelectionMode(QAbstractItemView::NoSelection);
-    leftLay->addWidget(m_imageList, 1);
-    mainLay->addLayout(leftLay, 1);
-
-    auto *rightLay = new QVBoxLayout();
-    auto *form = new QFormLayout();
-
-    m_demEdit = new QLineEdit(this);
-    auto *demBtn = new QPushButton(QStringLiteral("选择 DEM..."), this);
-    connect(demBtn, &QPushButton::clicked, this, &MapProjectDialog::onChooseDem);
-    auto *demLay = new QHBoxLayout();
-    demLay->addWidget(m_demEdit, 1);
-    demLay->addWidget(demBtn);
-    form->addRow(QStringLiteral("DEM："), demLay);
-
-    m_outputEdit = new QLineEdit(this);
-    auto *outBtn = new QPushButton(QStringLiteral("选择输出..."), this);
-    connect(outBtn, &QPushButton::clicked, this, &MapProjectDialog::onChooseOutput);
-    auto *outLay = new QHBoxLayout();
-    outLay->addWidget(m_outputEdit, 1);
-    outLay->addWidget(outBtn);
-    form->addRow(QStringLiteral("输出影像："), outLay);
-
-    m_resolutionSpin = new QDoubleSpinBox(this);
-    m_resolutionSpin->setRange(0.0, 10000.0);
-    m_resolutionSpin->setDecimals(3);
-    m_resolutionSpin->setValue(0.0);
-    m_resolutionSpin->setSpecialValueText(QStringLiteral("自动（与 DEM 一致）"));
-    m_resolutionSpin->setSuffix(QStringLiteral(" m/px"));
-    form->addRow(QStringLiteral("分辨率："), m_resolutionSpin);
-
-    rightLay->addLayout(form);
-
-    auto *runBtn = new QPushButton(QStringLiteral("运行正射投影"), this);
-    connect(runBtn, &QPushButton::clicked, this, &MapProjectDialog::onRun);
-    rightLay->addWidget(runBtn);
-    rightLay->addStretch(1);
-    mainLay->addLayout(rightLay, 1);
+    connect(ui.demBtn, &QPushButton::clicked, this, &MapProjectDialog::onChooseDem);
+    connect(ui.outBtn, &QPushButton::clicked, this, &MapProjectDialog::onChooseOutput);
+    connect(ui.runBtn, &QPushButton::clicked, this, &MapProjectDialog::onRun);
 
     connect(m_demEdit, &QLineEdit::textChanged, this, &MapProjectDialog::onSettingsModified);
     connect(m_outputEdit, &QLineEdit::textChanged, this, &MapProjectDialog::onSettingsModified);

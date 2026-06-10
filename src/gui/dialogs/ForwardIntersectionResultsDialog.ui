@@ -1,0 +1,185 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ForwardIntersectionResultsDialog</class>
+ <widget class="QDialog" name="ForwardIntersectionResultsDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>980</width>
+    <height>700</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>前方交汇结果查看</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item>
+    <layout class="QHBoxLayout" name="topLayout">
+     <item>
+      <widget class="QLabel" name="pairLabel">
+       <property name="text">
+        <string>影像对:</string>
+       </property>
+       <property name="buddy">
+        <cstring>m_pairCombo</cstring>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QComboBox" name="m_pairCombo"/>
+     </item>
+     <item>
+      <widget class="QPushButton" name="refreshBtn">
+       <property name="text">
+        <string>刷新</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+   <item>
+    <widget class="QLabel" name="batchListLabel">
+     <property name="text">
+      <string>批次列表</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableWidget" name="m_table">
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <property name="selectionMode">
+      <enum>QAbstractItemView::SingleSelection</enum>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectRows</enum>
+     </property>
+     <column>
+      <property name="text">
+       <string>时间</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>选点方式</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>点数</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>有效点</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>有效率</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>平均RMS(px)</string>
+      </property>
+     </column>
+    </widget>
+   </item>
+   <item>
+    <widget class="QLabel" name="pointResultLabel">
+     <property name="text">
+      <string>点级结果</string>
+     </property>
+    </widget>
+   </item>
+   <item>
+    <widget class="QTableWidget" name="m_detailTable">
+     <property name="editTriggers">
+      <set>QAbstractItemView::NoEditTriggers</set>
+     </property>
+     <property name="selectionMode">
+      <enum>QAbstractItemView::SingleSelection</enum>
+     </property>
+     <property name="selectionBehavior">
+      <enum>QAbstractItemView::SelectRows</enum>
+     </property>
+     <column>
+      <property name="text">
+       <string>序号</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>u1</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>v1</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>u2</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>v2</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>有效</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>X</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Y</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>Z</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>交汇角(deg)</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>射线距离(m)</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>误差1(px)</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>误差2(px)</string>
+      </property>
+     </column>
+     <column>
+      <property name="text">
+       <string>RMS(px)</string>
+      </property>
+     </column>
+    </widget>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

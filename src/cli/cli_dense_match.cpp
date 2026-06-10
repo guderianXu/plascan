@@ -45,8 +45,8 @@ int main(int argc, char *argv[])
     app.add_option("--pyramid",    pyramid,    "金字塔层数");
 
     bool useCuda = true;
-    app.add_flag("--cuda",   useCuda, "使用 CUDA 加速 (默认)");
-    app.add_flag("--no-cuda{true}", useCuda, "强制 CPU")->disable_flag_override();
+    app.add_flag("--cuda{true}", useCuda, "使用 CUDA 加速 (默认)");
+    app.add_flag("--no-cuda{false}", useCuda, "强制 CPU");
 
     int gpu = 0, threads = 4;
     app.add_option("--gpu",     gpu,     "CUDA 设备 ID");

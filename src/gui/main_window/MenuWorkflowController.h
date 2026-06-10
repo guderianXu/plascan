@@ -51,8 +51,8 @@ public:
     void setProjectManager(ProjectManager *projectManager);
 
 public slots:
-    /// 打开 SuperPoint 特征提取配置对话框，并恢复记忆化参数。
-    void openSuperPointDialog();
+    /// 打开特征提取配置对话框，并恢复记忆化参数。
+    void openFeatureExtractionDialog();
 
     /// 打开特征点渲染选项对话框，并支持实时预览。
     void openSuperPointVisualizationDialog();

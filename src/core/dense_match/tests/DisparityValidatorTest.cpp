@@ -52,3 +52,40 @@ TEST(DisparityValidatorTest, Validate_OutputTypes)
     EXPECT_EQ(result.validMask.type(), CV_8UC1);
     EXPECT_EQ(result.validMask.size(), disp.size());
 }
+
+TEST(DisparityValidatorTest, ImageSupportMaskRemovesBlackAndOutOfBoundsMatches)
+{
+    DenseMatchConfig cfg;
+    cfg.supportIntensityThreshold = 5;
+    DisparityValidator validator(cfg);
+
+    DisparityResult result;
+    result.disparity = cv::Mat(1, 5, CV_32FC1, cv::Scalar(2.0f));
+    result.confidence = cv::Mat(1, 5, CV_32FC1, cv::Scalar(1.0f));
+    result.validMask = cv::Mat(1, 5, CV_8UC1, cv::Scalar(1));
+
+    cv::Mat left(1, 5, CV_8UC1);
+    left.at<uchar>(0, 0) = 10;  // right projection out of bounds
+    left.at<uchar>(0, 1) = 10;  // right projection out of bounds
+    left.at<uchar>(0, 2) = 0;   // invalid left support
+    left.at<uchar>(0, 3) = 10;  // only valid pixel
+    left.at<uchar>(0, 4) = 10;  // invalid right support
+
+    cv::Mat right(1, 5, CV_8UC1);
+    right.at<uchar>(0, 0) = 10;
+    right.at<uchar>(0, 1) = 10; // x=3 projects here
+    right.at<uchar>(0, 2) = 0;  // x=4 projects here
+    right.at<uchar>(0, 3) = 10;
+    right.at<uchar>(0, 4) = 10;
+
+    validator.applyImageSupportMask(result, left, right);
+
+    EXPECT_EQ(result.validMask.at<uchar>(0, 0), 0);
+    EXPECT_EQ(result.validMask.at<uchar>(0, 1), 0);
+    EXPECT_EQ(result.validMask.at<uchar>(0, 2), 0);
+    EXPECT_EQ(result.validMask.at<uchar>(0, 3), 1);
+    EXPECT_EQ(result.validMask.at<uchar>(0, 4), 0);
+    EXPECT_FLOAT_EQ(result.disparity.at<float>(0, 0), 0.0f);
+    EXPECT_FLOAT_EQ(result.disparity.at<float>(0, 3), 2.0f);
+    EXPECT_FLOAT_EQ(result.disparity.at<float>(0, 4), 0.0f);
+}

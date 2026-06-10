@@ -9,11 +9,8 @@
 #include "ProjectManager.h"
 #include "ProjectSupportUtils.h"
 #include "OverlapAnalyzer.h"
+#include "ui_OverlapAnalysisDialog.h"
 
-#include <QVBoxLayout>
-#include <QHBoxLayout>
-#include <QGroupBox>
-#include <QGridLayout>
 #include <QListWidget>
 #include <QLineEdit>
 #include <QPushButton>
@@ -34,59 +31,21 @@ OverlapAnalysisDialog::OverlapAnalysisDialog(ProjectManager *projectManager, QWi
     : QDialog(parent)
     , m_projectManager(projectManager)
 {
-    setWindowTitle(tr("影像重叠度获取"));
-    resize(900, 660);
+    Ui::OverlapAnalysisDialog ui;
+    ui.setupUi(this);
 
-    auto *layout = new QVBoxLayout(this);
+    m_imageList = ui.m_imageList;
+    m_demPathEdit = ui.m_demPathEdit;
+    m_useFixedZCheck = ui.m_useFixedZCheck;
+    m_fixedZSpin = ui.m_fixedZSpin;
+    m_neighborSpin = ui.m_neighborSpin;
+    m_summaryLabel = ui.m_summaryLabel;
+    m_resultTable = ui.m_resultTable;
 
-    auto *inputBox = new QGroupBox(tr("输入参数"), this);
-    auto *grid = new QGridLayout(inputBox);
-
-    m_imageList = new QListWidget(inputBox);
-    m_imageList->setSelectionMode(QAbstractItemView::ExtendedSelection);
-
-    m_demPathEdit = new QLineEdit(inputBox);
-    auto *browseBtn = new QPushButton(tr("浏览"), inputBox);
-
-    m_useFixedZCheck = new QCheckBox(tr("使用假定高程 Z"), inputBox);
-    m_fixedZSpin = new QDoubleSpinBox(inputBox);
-    m_fixedZSpin->setRange(-100000.0, 100000.0);
-    m_fixedZSpin->setDecimals(3);
-    m_fixedZSpin->setValue(0.0);
-
-    m_neighborSpin = new QDoubleSpinBox(inputBox);
-    m_neighborSpin->setRange(0.1, 20.0);
-    m_neighborSpin->setDecimals(2);
-    m_neighborSpin->setValue(1.5);
-
-    auto *runBtn = new QPushButton(tr("计算重叠度"), inputBox);
-
-    grid->addWidget(new QLabel(tr("影像列表"), inputBox), 0, 0);
-    grid->addWidget(m_imageList, 1, 0, 4, 2);
-    grid->addWidget(new QLabel(tr("DEM (XYZ)"), inputBox), 0, 2);
-    grid->addWidget(m_demPathEdit, 0, 3);
-    grid->addWidget(browseBtn, 0, 4);
-    grid->addWidget(m_useFixedZCheck, 1, 2, 1, 2);
-    grid->addWidget(new QLabel(tr("固定 Z"), inputBox), 2, 2);
-    grid->addWidget(m_fixedZSpin, 2, 3);
-    grid->addWidget(new QLabel(tr("邻域系数"), inputBox), 3, 2);
-    grid->addWidget(m_neighborSpin, 3, 3);
-    grid->addWidget(runBtn, 4, 4);
-
-    m_summaryLabel = new QLabel(this);
-    m_resultTable = new QTableWidget(this);
-    m_resultTable->setColumnCount(5);
-    m_resultTable->setHorizontalHeaderLabels(
-        {tr("影像A"), tr("影像B"), tr("中心距(m)"), tr("重叠评分"), tr("是否重叠")});
     m_resultTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
-    m_resultTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
 
-    layout->addWidget(inputBox);
-    layout->addWidget(m_summaryLabel);
-    layout->addWidget(m_resultTable, 1);
-
-    connect(browseBtn, &QPushButton::clicked, this, &OverlapAnalysisDialog::browseDemPath);
-    connect(runBtn, &QPushButton::clicked, this, &OverlapAnalysisDialog::runAnalysis);
+    connect(ui.browseBtn, &QPushButton::clicked, this, &OverlapAnalysisDialog::browseDemPath);
+    connect(ui.runBtn, &QPushButton::clicked, this, &OverlapAnalysisDialog::runAnalysis);
 
     loadProjectImages();
 }

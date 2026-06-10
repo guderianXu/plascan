@@ -1,4 +1,5 @@
 #include "CreateDemDialog.h"
+#include "ui_CreateDemDialog.h"
 #include "ProjectManager.h"
 
 #include <QVBoxLayout>
@@ -28,6 +29,48 @@ CreateDemDialog::CreateDemDialog(ProjectManager *projectManager, QWidget *parent
 
 void CreateDemDialog::setupUi()
 {
+    {
+        Ui::CreateDemDialog ui;
+        ui.setupUi(this);
+
+        m_autoModeBtn = ui.m_autoModeBtn;
+        m_manualModeBtn = ui.m_manualModeBtn;
+        m_modeStack = ui.m_modeStack;
+        m_imageList = ui.m_imageList;
+        m_camStatusLabel = ui.m_camStatusLabel;
+        m_denseEdit = ui.m_denseEdit;
+        m_stageLabel = ui.m_stageLabel;
+        m_progressBar = ui.m_progressBar;
+        m_runBtn = ui.m_runBtn;
+        m_closeBtn = ui.m_closeBtn;
+
+        const QString modeStyle = QStringLiteral(
+            "QPushButton:checked { font-weight: bold; border-bottom: 2px solid palette(highlight); }");
+        m_autoModeBtn->setStyleSheet(modeStyle);
+        m_manualModeBtn->setStyleSheet(modeStyle);
+
+        auto *modeGroup = new QButtonGroup(this);
+        modeGroup->addButton(m_autoModeBtn);
+        modeGroup->addButton(m_manualModeBtn);
+        modeGroup->setExclusive(true);
+
+        connect(ui.addImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseImages);
+        connect(ui.clearImagesBtn, &QPushButton::clicked, m_imageList, &QListWidget::clear);
+        connect(ui.clearImagesBtn, &QPushButton::clicked, this, &CreateDemDialog::refreshRunButton);
+        connect(m_imageList->model(), &QAbstractItemModel::rowsInserted,
+                this, &CreateDemDialog::refreshRunButton);
+        connect(m_imageList->model(), &QAbstractItemModel::rowsRemoved,
+                this, &CreateDemDialog::refreshRunButton);
+
+        connect(ui.browseDenseBtn, &QPushButton::clicked, this, &CreateDemDialog::onBrowseDenseCloud);
+        connect(m_autoModeBtn, &QPushButton::toggled, this, &CreateDemDialog::onModeToggled);
+        connect(m_runBtn, &QPushButton::clicked, this, &CreateDemDialog::onRunClicked);
+        connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+
+        refreshRunButton();
+        return;
+    }
+
     auto *mainLayout = new QVBoxLayout(this);
     mainLayout->setSpacing(10);
 

@@ -45,6 +45,8 @@ class QTabWidget;
 class ReferencePanelWidget;
 class WorkspaceCenterWidget;
 class DialogSettingStore;
+class QDragEnterEvent;
+class QDropEvent;
 
 class MainWindow : public QMainWindow
 {
@@ -57,6 +59,8 @@ public:
 protected:
     // closeEvent: 在用户关闭窗口时触发；若有未保存更改则弹出确认对话框
     void closeEvent(QCloseEvent *event) override;
+    void dragEnterEvent(QDragEnterEvent *event) override;
+    void dropEvent(QDropEvent *event) override;
 
 private:
     // ---- 初始化（由构造函数按顺序调用）----

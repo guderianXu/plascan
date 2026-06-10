@@ -1,4 +1,5 @@
 #include "AerialTriangulationDialog.h"
+#include "ui_AerialTriangulationDialog.h"
 
 // Qt核心控件头文件
 #include <QVBoxLayout>
@@ -45,132 +46,40 @@ AerialTriangulationDialog::AerialTriangulationDialog(QWidget *parent)
  */
 void AerialTriangulationDialog::initUI()
 {
-    // 设置窗口基本属性：标题+原始尺寸（640x480），保留你的原始设置
-    setWindowTitle(tr("空中三角测量"));
-    resize(640, 480); 
+    Ui::AerialTriangulationDialog form;
+    form.setupUi(this);
 
-    // ========== 整体布局 ==========
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(10, 10, 10, 10); // 优化边距，保留原始视觉
-    mainLayout->setSpacing(10);                     // 控件间距优化
+    m_imageCountLabel = form.m_imageCountLabel;
+    m_selectAllBtn = form.m_selectAllBtn;
+    m_deselectAllBtn = form.m_deselectAllBtn;
+    m_imageList = form.m_imageList;
+    m_qualityCombo = form.m_qualityCombo;
+    m_cameraOptCombo = form.m_cameraOptCombo;
+    m_stepCompletionCheck = form.m_stepCompletionCheck;
+    m_outputDirEdit = form.m_outputDirEdit;
+    m_browseBtn = form.m_browseBtn;
+    m_intrinsicsCheck = form.m_intrinsicsCheck;
+    m_fuSpin = form.m_fuSpin;
+    m_fvSpin = form.m_fvSpin;
+    m_cuSpin = form.m_cuSpin;
+    m_cvSpin = form.m_cvSpin;
+    m_pitchSpin = form.m_pitchSpin;
+    m_resetCurrentAlignCheck = form.m_resetCurrentAlignCheck;
+    m_threadsCombo = form.m_threadsCombo;
+    m_baRefinePoseCheck = form.m_baRefinePoseCheck;
+    m_baMaxIterSpin = form.m_baMaxIterSpin;
+    m_baHuberDeltaSpin = form.m_baHuberDeltaSpin;
+    m_baFilterReprojSpin = form.m_baFilterReprojSpin;
+    m_baDampingSpin = form.m_baDampingSpin;
+    m_btnBox = form.m_btnBox;
 
-    // 内容容器（左右布局）
-    auto *contentWidget = new QWidget(this);
-    auto *contentHLayout = new QHBoxLayout(contentWidget);
-    contentHLayout->setSpacing(10);
-
-    // ========== 左侧：影像列表区域（保留复选框模式） ==========
-    auto *leftGroupBox = new QGroupBox(tr("影像"), contentWidget);
-    auto *leftVLayout = new QVBoxLayout(leftGroupBox);
-    leftVLayout->setContentsMargins(5, 5, 5, 5);
-
-    // 已选影像数量提示标签（新增核心功能）
-    m_imageCountLabel = new QLabel(tr("已选影像：0张"), leftGroupBox);
-    leftVLayout->addWidget(m_imageCountLabel);
-
-    // 全选 / 取消 按钮
-    auto *selectBtnWidget = new QWidget(leftGroupBox);
-    auto *selectBtnLayout = new QHBoxLayout(selectBtnWidget);
-    selectBtnLayout->setContentsMargins(0, 0, 0, 0);
-    selectBtnLayout->setSpacing(6);
-    m_selectAllBtn = new QPushButton(tr("全选"), selectBtnWidget);
-    m_deselectAllBtn = new QPushButton(tr("取消"), selectBtnWidget);
-    selectBtnLayout->addWidget(m_selectAllBtn);
-    selectBtnLayout->addWidget(m_deselectAllBtn);
-    leftVLayout->addWidget(selectBtnWidget);
-
-    // 影像列表控件（保留复选框模式，你的原始逻辑）
-    m_imageList = new QListWidget(leftGroupBox);
-    m_imageList->setSelectionMode(QAbstractItemView::ExtendedSelection); 
-    leftVLayout->addWidget(m_imageList);
-
-    // 右键菜单支持
-    m_imageList->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_imageList, &QListWidget::customContextMenuRequested, this, &AerialTriangulationDialog::onImageListContextMenu);
 
     // 连接全选/取消按钮
     connect(m_selectAllBtn, &QPushButton::clicked, this, &AerialTriangulationDialog::onSelectAll);
     connect(m_deselectAllBtn, &QPushButton::clicked, this, &AerialTriangulationDialog::onDeselectAll);
 
-    // 设置左侧布局权重（保留你的原始比例）
-    contentHLayout->addWidget(leftGroupBox, 1);
-
-    // ========== 右侧：参数设置区域（保留所有原始控件） ==========
-    auto *rightWidget = new QWidget(contentWidget);
-    auto *rightVLayout = new QVBoxLayout(rightWidget);
-    rightVLayout->setContentsMargins(0, 0, 0, 0);
-    rightVLayout->setSpacing(10);
-
-    // ---------- 基础设置组（保留所有原始控件） ----------
-    auto *generalGroupBox = new QGroupBox(tr("一般"), rightWidget);
-    auto *generalGridLayout = new QGridLayout(generalGroupBox);
-    generalGridLayout->setContentsMargins(5, 5, 5, 5);
-    generalGridLayout->setSpacing(5);
-
-    // 重建精度下拉框（保留原始4级：低/中/高/最高）
-    m_qualityCombo = new QComboBox(generalGroupBox);
-    m_qualityCombo->addItems({tr("低"), tr("中"), tr("高"), tr("最高")});
-    m_qualityCombo->setCurrentIndex(3); // 默认选中“最高”（你的原始设置）
-    generalGridLayout->addWidget(new QLabel(tr("精度"), generalGroupBox), 0, 0);
-    generalGridLayout->addWidget(m_qualityCombo, 0, 1);
-
-    // 相机优化路径下拉框（SFM/光束法平差/自动）
-    m_cameraOptCombo = new QComboBox(generalGroupBox);
-    m_cameraOptCombo->addItems({tr("SFM"), tr("光束法平差"), tr("自动")});
-    m_cameraOptCombo->setCurrentIndex(2); // 默认选中"自动"
-    generalGridLayout->addWidget(new QLabel(tr("相机优化"), generalGroupBox), 1, 0);
-    generalGridLayout->addWidget(m_cameraOptCombo, 1, 1);
-
-    // 通用预选复选框（已移除）
-
-    // 步骤完成后保存复选框（保留你的原始控件）
-    m_stepCompletionCheck = new QCheckBox(tr("在每个步骤完成后保存项目"), generalGroupBox);
-    m_stepCompletionCheck->setChecked(false);
-    generalGridLayout->addWidget(m_stepCompletionCheck, 3, 0, 1, 2);
-
-    // 输出目录：输入框 + 浏览按钮（新增核心功能，不修改其他逻辑）
-    m_outputDirEdit = new QLineEdit(generalGroupBox);
-    m_browseBtn = new QPushButton(tr("浏览"), generalGroupBox);
-    // 绑定浏览按钮点击事件
     connect(m_browseBtn, &QPushButton::clicked, this, &AerialTriangulationDialog::onBrowseOutputDir);
-    generalGridLayout->addWidget(new QLabel(tr("输出目录"), generalGroupBox), 4, 0);
-    generalGridLayout->addWidget(m_outputDirEdit, 4, 1);
-    generalGridLayout->addWidget(m_browseBtn, 4, 2); // 新增浏览按钮，不影响其他布局
-
-    rightVLayout->addWidget(generalGroupBox);
-
-    // ---------- 相机内方位元素组 ----------
-    auto *intrinsicsGroupBox = new QGroupBox(tr("相机内方位元素"), rightWidget);
-    auto *intrinsicsLayout = new QGridLayout(intrinsicsGroupBox);
-    intrinsicsLayout->setContentsMargins(5, 5, 5, 5);
-    intrinsicsLayout->setSpacing(5);
-
-    m_intrinsicsCheck = new QCheckBox(tr("手动输入内参"), intrinsicsGroupBox);
-    m_intrinsicsCheck->setChecked(false);
-    intrinsicsLayout->addWidget(m_intrinsicsCheck, 0, 0, 1, 4);
-
-    auto makeSpin = [&](const QString &label, const QString &suffix,
-                        int row, int decimals, double maxVal, double step) -> QDoubleSpinBox* {
-        auto *spin = new QDoubleSpinBox(intrinsicsGroupBox);
-        spin->setRange(0.0, maxVal);
-        spin->setDecimals(decimals);
-        spin->setSingleStep(step);
-        spin->setValue(0.0);
-        spin->setEnabled(false);
-        spin->setSuffix(suffix);
-        intrinsicsLayout->addWidget(new QLabel(label, intrinsicsGroupBox), row, 0);
-        intrinsicsLayout->addWidget(spin, row, 1);
-        return spin;
-    };
-
-    // fu/fv: 焦距，单位 mm（配合 pitch 转像素），保留 9 位小数
-    m_fuSpin = makeSpin(tr("fu"), QStringLiteral(" mm"), 1, 9, 99999.0, 0.001);
-    m_fvSpin = makeSpin(tr("fv"), QStringLiteral(" mm"), 2, 9, 99999.0, 0.001);
-    // cu/cv: 主点偏移，单位 mm，保留 9 位小数
-    m_cuSpin = makeSpin(tr("cu"), QStringLiteral(" mm"), 3, 9, 99999.0, 0.001);
-    m_cvSpin = makeSpin(tr("cv"), QStringLiteral(" mm"), 4, 9, 99999.0, 0.001);
-    // pitch: 像元大小，单位 mm，保留 6 位小数
-    m_pitchSpin = makeSpin(tr("pitch"), QStringLiteral(" mm"), 5, 6, 1.0, 0.0001);
 
     connect(m_intrinsicsCheck, &QCheckBox::toggled, this, [this](bool on) {
         m_fuSpin->setEnabled(on);
@@ -180,23 +89,7 @@ void AerialTriangulationDialog::initUI()
         m_pitchSpin->setEnabled(on);
     });
 
-    rightVLayout->addWidget(intrinsicsGroupBox);
-
-    // ---------- 高级选项组（折叠）（保留线程数手动选择） ----------
-    auto *advancedWrapper = new QWidget(rightWidget);
-    auto *advWrapperLayout = new QVBoxLayout(advancedWrapper);
-    advWrapperLayout->setContentsMargins(0, 0, 0, 0);
-    advWrapperLayout->setSpacing(5);
-
-    // 折叠按钮
-    auto *advToggleBtn = new QToolButton(advancedWrapper);
-    advToggleBtn->setText(tr("高级选项"));
-    advToggleBtn->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-    advToggleBtn->setCheckable(true);
-    advToggleBtn->setChecked(false);
-    advToggleBtn->setArrowType(Qt::RightArrow);
-    // 优化折叠按钮样式，不修改核心逻辑
-    advToggleBtn->setStyleSheet(R"(
+    form.advancedToggleButton->setStyleSheet(R"(
         QToolButton {
             border: none;
             padding: 5px;
@@ -207,89 +100,13 @@ void AerialTriangulationDialog::initUI()
         }
     )");
 
-    // 高级选项内容容器（默认隐藏）
-    auto *advContentWidget = new QWidget(advancedWrapper);
-    advContentWidget->setVisible(false);
-    auto *advGridLayout = new QGridLayout(advContentWidget);
-    advGridLayout->setContentsMargins(5, 5, 5, 5);
-    advGridLayout->setSpacing(5);
-
-    // 重置当前对齐复选框（保留）
-    m_resetCurrentAlignCheck = new QCheckBox(tr("重置当前对齐"), advContentWidget);
-    m_resetCurrentAlignCheck->setChecked(true);
-    advGridLayout->addWidget(m_resetCurrentAlignCheck, 0, 0);
-
     // 线程数下拉框（严格保留手动选择，你的原始逻辑：1-系统最大核心数）
-    m_threadsCombo = new QComboBox(advContentWidget);
     int maxTh = QThread::idealThreadCount();
     if (maxTh <= 0) maxTh = 1;
     for (int i = 1; i <= maxTh; ++i) m_threadsCombo->addItem(QString::number(i));
     m_threadsCombo->setCurrentIndex(maxTh - 1); // 默认选中最大线程数
-    advGridLayout->addWidget(new QLabel(tr("线程数"), advContentWidget), 0, 1);
-    advGridLayout->addWidget(m_threadsCombo, 0, 2);
 
-    // ── 光束法平差参数 ──────────────────────────────────────────────────────
-    auto *baSepLine = new QFrame(advContentWidget);
-    baSepLine->setFrameShape(QFrame::HLine);
-    baSepLine->setFrameShadow(QFrame::Sunken);
-    advGridLayout->addWidget(new QLabel(QStringLiteral("<b>光束法平差</b>"), advContentWidget), 1, 0, 1, 3);
-    advGridLayout->addWidget(baSepLine, 2, 0, 1, 3);
-
-    // 是否优化相机位姿
-    m_baRefinePoseCheck = new QCheckBox(tr("优化相机位姿（6-DOF）"), advContentWidget);
-    m_baRefinePoseCheck->setChecked(true);
-    m_baRefinePoseCheck->setToolTip(tr("勾选后 BA 将同时优化相机外参；仅优化三维点时取消勾选"));
-    advGridLayout->addWidget(m_baRefinePoseCheck, 3, 0, 1, 3);
-
-    // 最大迭代次数
-    m_baMaxIterSpin = new QSpinBox(advContentWidget);
-    m_baMaxIterSpin->setRange(2, 200);
-    m_baMaxIterSpin->setValue(20);
-    m_baMaxIterSpin->setToolTip(tr("光束法平差外层交替迭代轮数（点+相机各一次为一轮）"));
-    advGridLayout->addWidget(new QLabel(tr("最大迭代次数"), advContentWidget), 4, 0);
-    advGridLayout->addWidget(m_baMaxIterSpin, 4, 1);
-
-    // Huber 阈值
-    m_baHuberDeltaSpin = new QDoubleSpinBox(advContentWidget);
-    m_baHuberDeltaSpin->setRange(0.5, 20.0);
-    m_baHuberDeltaSpin->setDecimals(1);
-    m_baHuberDeltaSpin->setSingleStep(0.5);
-    m_baHuberDeltaSpin->setValue(2.0);
-    m_baHuberDeltaSpin->setSuffix(tr(" px"));
-    m_baHuberDeltaSpin->setToolTip(tr("Huber 损失阈值：残差超过此值的观测被降权以抑制粗差影响\n\n"
-                                      "较小值粗差抑制能力更强但可能影响正常观测收敛\n"
-                                      "建议值: 1.5-3.0 px（航空摄影推荐 2.0 px）"));
-    advGridLayout->addWidget(new QLabel(tr("鲁棒核阈值"), advContentWidget), 5, 0);
-    advGridLayout->addWidget(m_baHuberDeltaSpin, 5, 1);
-
-    // 离群点过滤阈值
-    m_baFilterReprojSpin = new QDoubleSpinBox(advContentWidget);
-    m_baFilterReprojSpin->setRange(1.0, 50.0);
-    m_baFilterReprojSpin->setDecimals(1);
-    m_baFilterReprojSpin->setSingleStep(1.0);
-    m_baFilterReprojSpin->setValue(4.0);
-    m_baFilterReprojSpin->setSuffix(tr(" px"));
-    m_baFilterReprojSpin->setToolTip(tr("BA 后重投影误差超过此值的三维点将被过滤删除\n\n"
-                                        "较小值可剔除更多粗差但可能误删正确点\n"
-                                        "建议值: 3.0-6.0 px（航空摄影推荐 4.0 px）"));
-    advGridLayout->addWidget(new QLabel(tr("过滤阈值"), advContentWidget), 6, 0);
-    advGridLayout->addWidget(m_baFilterReprojSpin, 6, 1);
-
-    // LM 阻尼因子
-    m_baDampingSpin = new QDoubleSpinBox(advContentWidget);
-    m_baDampingSpin->setRange(1e-10, 1e-1);
-    m_baDampingSpin->setDecimals(8);
-    m_baDampingSpin->setSingleStep(1e-6);
-    m_baDampingSpin->setValue(1e-6);
-    m_baDampingSpin->setToolTip(tr("Levenberg-Marquardt 阻尼因子，较大值更稳定但收敛慢"));
-    advGridLayout->addWidget(new QLabel(tr("LM 阻尼"), advContentWidget), 7, 0);
-    advGridLayout->addWidget(m_baDampingSpin, 7, 1);
-
-    // 分隔线（优化视觉，不影响逻辑）
-    auto *advLine = new QFrame(advancedWrapper);
-    advLine->setFrameShape(QFrame::HLine);
-    advLine->setFrameShadow(QFrame::Sunken);
-    advLine->setStyleSheet(R"(
+    form.advancedLine->setStyleSheet(R"(
         QFrame {
             margin: 10px 0;
             color: #E0E0E0;
@@ -297,30 +114,15 @@ void AerialTriangulationDialog::initUI()
     )");
 
     // 绑定折叠按钮事件
-    connect(advToggleBtn, &QToolButton::toggled, this, [advToggleBtn, advContentWidget](bool checked) {
-        advToggleBtn->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
-        advContentWidget->setVisible(checked);
+    connect(form.advancedToggleButton, &QToolButton::toggled, this,
+        [toggle = form.advancedToggleButton, content = form.advancedContentWidget](bool checked)
+    {
+        toggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
+        content->setVisible(checked);
     });
 
-    // 组装高级选项布局
-    advWrapperLayout->addWidget(advToggleBtn);
-    advWrapperLayout->addWidget(advContentWidget);
-    advWrapperLayout->addWidget(advLine);
-
-    rightVLayout->addWidget(advancedWrapper);
-    rightVLayout->addStretch(); // 拉伸填充空白，优化布局
-
-    // 设置右侧布局权重（保留你的原始比例）
-    contentHLayout->addWidget(rightWidget, 0);
-
-    // ========== 底部：按钮区域 ==========
-    m_btnBox = new QDialogButtonBox(QDialogButtonBox::Cancel | QDialogButtonBox::Ok, this);
     // 默认禁用OK按钮（无影像时）
     m_btnBox->button(QDialogButtonBox::Ok)->setEnabled(false);
-
-    // ========== 组装整体布局 ==========
-    mainLayout->addWidget(contentWidget);
-    mainLayout->addWidget(m_btnBox);
 
     // ========== 信号与槽绑定（保留所有原始绑定，新增防抖） ==========
     // 按钮点击事件（保留原始逻辑）

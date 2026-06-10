@@ -1,4 +1,5 @@
 #include "BundleAdjustDialog.h"
+#include "ui_BundleAdjustDialog.h"
 
 #include <QAbstractItemView>
 #include <QCheckBox>
@@ -36,6 +37,179 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
 {
     setWindowTitle(QStringLiteral("光束法平差"));
     resize(980, 760);
+
+    {
+        Ui::BundleAdjustDialog ui;
+        ui.setupUi(this);
+
+        m_imageList = ui.m_imageList;
+        m_outputDirEdit = ui.m_outputDirEdit;
+        m_resultSummaryLabel = ui.m_resultSummaryLabel;
+        m_resultCameraTable = ui.m_resultCameraTable;
+        m_applyResultBtn = ui.m_applyResultBtn;
+        m_discardResultBtn = ui.m_discardResultBtn;
+
+        auto *basicForm = ui.basicForm;
+        auto *advForm = ui.advForm;
+        auto *sysForm = ui.sysForm;
+        auto *dbgForm = ui.dbgForm;
+
+        m_resultCameraTable->setColumnCount(10);
+        m_resultCameraTable->setHorizontalHeaderLabels({
+            QStringLiteral("影像"), QStringLiteral("ΔC(m)"),
+            QStringLiteral("yaw前"), QStringLiteral("yaw后"),
+            QStringLiteral("pitch前"), QStringLiteral("pitch后"),
+            QStringLiteral("roll前"), QStringLiteral("roll后"),
+            QStringLiteral("RMS前"), QStringLiteral("RMS后")
+        });
+        m_resultCameraTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        m_resultCameraTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+        m_resultCameraTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        m_resultCameraTable->horizontalHeader()->setStretchLastSection(true);
+
+        m_maxIterationsSpin = new QSpinBox(this);
+        m_maxIterationsSpin->setRange(1, 100);
+        m_maxIterationsSpin->setValue(12);
+        m_maxIterationsSpin->setToolTip(QStringLiteral("外层交替优化迭代次数。过大可能增加耗时。"));
+
+        m_minMatchesSpin = new QSpinBox(this);
+        m_minMatchesSpin->setRange(0, 100000);
+        m_minMatchesSpin->setValue(10);
+        m_minMatchesSpin->setToolTip(QStringLiteral("少于该匹配点数的影像对将被跳过。"));
+
+        m_refinePoseCheck = new QCheckBox(QStringLiteral("优化相机位姿（推荐开启）"), this);
+        m_refinePoseCheck->setChecked(true);
+        m_refinePoseCheck->setToolTip(QStringLiteral("开启后会同时优化相机外参，可提升整体一致性。"));
+
+        basicForm->addRow(QStringLiteral("外层迭代"), m_maxIterationsSpin);
+        basicForm->addRow(QStringLiteral("最小匹配点阈值"), m_minMatchesSpin);
+        basicForm->addRow(m_refinePoseCheck);
+
+        m_maxPointItersSpin = new QSpinBox(this);
+        m_maxPointItersSpin->setRange(1, 80);
+        m_maxPointItersSpin->setValue(8);
+        m_maxPointItersSpin->setToolTip(QStringLiteral("每条空间点轨迹的局部优化迭代上限。"));
+
+        m_maxCameraItersSpin = new QSpinBox(this);
+        m_maxCameraItersSpin->setRange(1, 80);
+        m_maxCameraItersSpin->setValue(5);
+        m_maxCameraItersSpin->setToolTip(QStringLiteral("每台相机位姿优化迭代上限。"));
+
+        m_huberDeltaSpin = new QDoubleSpinBox(this);
+        m_huberDeltaSpin->setRange(0.0, 1000.0);
+        m_huberDeltaSpin->setDecimals(4);
+        m_huberDeltaSpin->setValue(3.0);
+        m_huberDeltaSpin->setToolTip(QStringLiteral("Huber 鲁棒核阈值（像素）。越小越强抑制粗差。"));
+
+        m_dampingSpin = new QDoubleSpinBox(this);
+        m_dampingSpin->setRange(1e-12, 1.0);
+        m_dampingSpin->setDecimals(10);
+        m_dampingSpin->setSingleStep(1e-6);
+        m_dampingSpin->setValue(1e-6);
+        m_dampingSpin->setToolTip(QStringLiteral("LM 阻尼系数，过大可能收敛慢，过小可能不稳定。"));
+
+        m_stepTolSpin = new QDoubleSpinBox(this);
+        m_stepTolSpin->setRange(1e-10, 1.0);
+        m_stepTolSpin->setDecimals(10);
+        m_stepTolSpin->setSingleStep(1e-6);
+        m_stepTolSpin->setValue(1e-6);
+        m_stepTolSpin->setToolTip(QStringLiteral("参数步长收敛阈值，小于该值视为收敛。"));
+
+        m_finiteDiffSpin = new QDoubleSpinBox(this);
+        m_finiteDiffSpin->setRange(1e-8, 1.0);
+        m_finiteDiffSpin->setDecimals(10);
+        m_finiteDiffSpin->setSingleStep(1e-4);
+        m_finiteDiffSpin->setValue(1e-4);
+        m_finiteDiffSpin->setToolTip(QStringLiteral("数值微分步长，用于雅可比近似。"));
+
+        advForm->addRow(QStringLiteral("点优化迭代"), m_maxPointItersSpin);
+        advForm->addRow(QStringLiteral("相机优化迭代"), m_maxCameraItersSpin);
+        advForm->addRow(QStringLiteral("Huber δ"), m_huberDeltaSpin);
+        advForm->addRow(QStringLiteral("阻尼"), m_dampingSpin);
+        advForm->addRow(QStringLiteral("收敛阈值"), m_stepTolSpin);
+        advForm->addRow(QStringLiteral("数值微分步长"), m_finiteDiffSpin);
+
+        m_threadsSpin = new QSpinBox(this);
+        m_threadsSpin->setRange(0, 128);
+        m_threadsSpin->setValue(0);
+        m_threadsSpin->setToolTip(QStringLiteral("并行线程数。0 表示自动根据系统决定。"));
+
+        m_chunkSizeSpin = new QSpinBox(this);
+        m_chunkSizeSpin->setRange(1, 1000000);
+        m_chunkSizeSpin->setValue(2000);
+        m_chunkSizeSpin->setToolTip(QStringLiteral("每批处理轨迹数（用于控制内存峰值与响应性）。"));
+
+        sysForm->addRow(QStringLiteral("线程数"), m_threadsSpin);
+        sysForm->addRow(QStringLiteral("批处理块大小"), m_chunkSizeSpin);
+
+        m_dryRunCheck = new QCheckBox(QStringLiteral("Dry Run（仅统计输入，不执行优化）"), this);
+        m_dryRunCheck->setChecked(false);
+        m_dryRunCheck->setToolTip(QStringLiteral("用于检查当前数据是否可运行，不会修改任何结果。"));
+
+        m_exportTsaiCheck = new QCheckBox(QStringLiteral("输出平差后 tsai 文件"), this);
+        m_exportTsaiCheck->setChecked(true);
+        m_exportTsaiCheck->setToolTip(QStringLiteral("输出到 output_dir/refined_tsai/*.ba.tsai。"));
+
+        m_exportSummaryTxtCheck = new QCheckBox(QStringLiteral("输出 summary 文本"), this);
+        m_exportSummaryTxtCheck->setChecked(true);
+        m_exportSummaryTxtCheck->setToolTip(QStringLiteral("输出 ba_summary.txt，便于快速查看整体指标。"));
+
+        m_exportPointsCsvCheck = new QCheckBox(QStringLiteral("输出点级指标 CSV"), this);
+        m_exportPointsCsvCheck->setChecked(true);
+        m_exportPointsCsvCheck->setToolTip(QStringLiteral("输出 ba_points_metrics.csv。"));
+
+        m_exportCameraCsvCheck = new QCheckBox(QStringLiteral("输出相机级指标 CSV"), this);
+        m_exportCameraCsvCheck->setChecked(true);
+        m_exportCameraCsvCheck->setToolTip(QStringLiteral("输出 ba_camera_metrics.csv。"));
+
+        m_exportRunJsonCheck = new QCheckBox(QStringLiteral("输出运行摘要 JSON"), this);
+        m_exportRunJsonCheck->setChecked(true);
+        m_exportRunJsonCheck->setToolTip(QStringLiteral("输出 ba_run_summary.json（用于后续读取和复现）。"));
+
+        m_exportEvalPlotCheck = new QCheckBox(QStringLiteral("输出精度评价图像"), this);
+        m_exportEvalPlotCheck->setChecked(true);
+        m_exportEvalPlotCheck->setToolTip(QStringLiteral("输出 RMS 对比图、相机位移图等 PNG。"));
+
+        dbgForm->addRow(m_exportTsaiCheck);
+        dbgForm->addRow(m_exportSummaryTxtCheck);
+        dbgForm->addRow(m_exportPointsCsvCheck);
+        dbgForm->addRow(m_exportCameraCsvCheck);
+        dbgForm->addRow(m_exportRunJsonCheck);
+        dbgForm->addRow(m_exportEvalPlotCheck);
+        dbgForm->addRow(m_dryRunCheck);
+
+        connect(ui.chooseOutputBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onChooseOutputDir);
+        connect(ui.runBtn, &QPushButton::clicked, this, &BundleAdjustDialog::onRun);
+        connect(ui.closeBtn, &QPushButton::clicked, this, &BundleAdjustDialog::reject);
+        connect(ui.restoreBtn, &QPushButton::clicked, this, &BundleAdjustDialog::requestRestore);
+
+        connect(m_applyResultBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onApplyResult);
+        connect(m_discardResultBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onDiscardResult);
+        connect(m_imageList, &QListWidget::itemChanged, this, &BundleAdjustDialog::emitSettingsNow);
+
+        connect(m_outputDirEdit, &QLineEdit::textChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_chunkSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_maxIterationsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_maxPointItersSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_maxCameraItersSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_minMatchesSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_huberDeltaSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_dampingSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_finiteDiffSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_stepTolSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_refinePoseCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_dryRunCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_exportTsaiCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_exportSummaryTxtCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_exportPointsCsvCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_exportCameraCsvCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_exportRunJsonCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_exportEvalPlotCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+
+        updateResultButtons();
+        return;
+    }
 
     auto *root = new QVBoxLayout(this);
 

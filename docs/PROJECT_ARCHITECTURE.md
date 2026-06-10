@@ -211,9 +211,9 @@ gui/
 ├── menu/
 │   └── MainMenu.h/cpp          # 菜单栏/工具栏构建 (所有 QAction 创建)
 │
-├── dialogs/                    # 对话框 (28 个)
+├── dialogs/                    # 对话框 (30 个)
 │   ├── FeatureMatchingDialog.h/cpp          # 特征匹配参数
-│   ├── SuperPointDialog.h/cpp               # SuperPoint 特征提取
+│   ├── FeatureExtractionDialog.h/cpp/ui     # 多算法特征提取参数
 │   ├── DenseMatchDialog.h/cpp/Ui.cpp        # 密集匹配参数 (新增)
 │   ├── DepthMapEstimateDialog.h/cpp         # 深度图估计参数
 │   ├── DepthFusionDialog.h/cpp              # 深度图融合参数

@@ -1,5 +1,6 @@
 #include "OpenCVSgbmWrapper.h"
 #include <opencv2/calib3d.hpp>
+#include <algorithm>
 
 namespace xjw::dense_match
 {
@@ -9,16 +10,23 @@ OpenCVSgbmWrapper::OpenCVSgbmWrapper(const DenseMatchConfig &cfg) : m_cfg(cfg) {
 DisparityResult OpenCVSgbmWrapper::compute(const cv::Mat &left, const cv::Mat &right)
 {
     int numDisp = m_cfg.maxDisparity - m_cfg.minDisparity;
-    int numDisp16 = ((numDisp + 15) / 16) * 16;
+    int numDisp16 = std::max(16, ((numDisp + 15) / 16) * 16);
+    int blockSize = std::max(3, m_cfg.corrKernelW | 1);
+    int p1 = std::max(m_cfg.p1, 8 * blockSize * blockSize);
+    int p2 = std::max(m_cfg.p2, 32 * blockSize * blockSize);
 
     auto sgbm = cv::StereoSGBM::create(
         m_cfg.minDisparity,
         numDisp16,
-        std::max(3, m_cfg.corrKernelW | 1),
-        8 * m_cfg.corrKernelW * m_cfg.corrKernelH,
-        32 * m_cfg.corrKernelW * m_cfg.corrKernelH,
-        0, 0, 100, 0, 0,
-        cv::StereoSGBM::MODE_SGBM_3WAY
+        blockSize,
+        p1,
+        p2,
+        1,
+        31,
+        5,
+        50,
+        2,
+        cv::StereoSGBM::MODE_SGBM
     );
 
     cv::Mat disp16;

@@ -1,0 +1,308 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>TextureMappingDialog</class>
+ <widget class="QDialog" name="TextureMappingDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>460</width>
+    <height>420</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>460</width>
+    <height>0</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>纹理映射 (Texture Mapping)</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item>
+    <widget class="QGroupBox" name="textureGroup">
+     <property name="title">
+      <string>纹理参数</string>
+     </property>
+     <layout class="QFormLayout" name="textureForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="texSizeLabel">
+        <property name="text">
+         <string>纹理分辨率:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_texSizeCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_texSizeCombo">
+        <property name="toolTip">
+         <string>纹理图分辨率。★ 推荐 4096; 大模型可选 8192 但内存消耗倍增</string>
+        </property>
+        <property name="currentIndex">
+         <number>2</number>
+        </property>
+        <item>
+         <property name="text">
+          <string>1024</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>2048</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>4096</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>8192</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>16384</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="blendLabel">
+        <property name="text">
+         <string>混合方式:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_blendCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="m_blendCombo">
+        <property name="toolTip">
+         <string>多频段混合: 接缝最不明显; 最佳视角: 最锐利但有缝; 加权平均: 折中</string>
+        </property>
+        <property name="currentIndex">
+         <number>2</number>
+        </property>
+        <item>
+         <property name="text">
+          <string>最佳视角优先</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>加权平均</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>多频段混合 (Multiband)</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="uvMethodLabel">
+        <property name="text">
+         <string>UV 展开:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_uvMethodCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QComboBox" name="m_uvMethodCombo">
+        <property name="toolTip">
+         <string>UV 参数化方法。通常自动即可</string>
+        </property>
+        <item>
+         <property name="text">
+          <string>自动 (基于面法线)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>LSCM (最小二乘共形)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>投射展开</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="qualityGroup">
+     <property name="title">
+      <string>质量增强</string>
+     </property>
+     <layout class="QFormLayout" name="qualityForm">
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_colorCorrCheck">
+        <property name="toolTip">
+         <string>对来自不同图像的纹理块做全局色彩均衡</string>
+        </property>
+        <property name="text">
+         <string>色彩一致性校正</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_ghostFilterCheck">
+        <property name="toolTip">
+         <string>检测并过滤不同时刻出现差异的区域</string>
+        </property>
+        <property name="text">
+         <string>去除鬼影 (移动物体)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="seamsMarginLabel">
+        <property name="text">
+         <string>接缝边距:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_seamsMarginSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QDoubleSpinBox" name="m_seamsMarginSpin">
+        <property name="toolTip">
+         <string>接缝处过渡带宽度。★ 推荐 3 px</string>
+        </property>
+        <property name="suffix">
+         <string> px</string>
+        </property>
+        <property name="decimals">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <double>20.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>3.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="paddingLabel">
+        <property name="text">
+         <string>填充边距:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_paddingSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QSpinBox" name="m_paddingSpin">
+        <property name="toolTip">
+         <string>纹理图内每个 chart 外扩像素数，避免采样越界</string>
+        </property>
+        <property name="maximum">
+         <number>32</number>
+        </property>
+        <property name="value">
+         <number>4</number>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_keepUnmappedCheck">
+        <property name="text">
+         <string>保留无纹理区域 (默认色填充)</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="systemGroup">
+     <property name="title">
+      <string>系统</string>
+     </property>
+     <layout class="QFormLayout" name="systemForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="threadsLabel">
+        <property name="text">
+         <string>线程数:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_threadsSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QSpinBox" name="m_threadsSpin">
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>128</number>
+        </property>
+        <property name="value">
+         <number>8</number>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_runBtn">
+       <property name="text">
+        <string>开始纹理映射</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_cancelBtn">
+       <property name="text">
+        <string>取消</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

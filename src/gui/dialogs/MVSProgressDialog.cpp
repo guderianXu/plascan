@@ -4,6 +4,8 @@
 // =============================================================================
 #include "MVSProgressDialog.h"
 
+#include "ui_MVSProgressDialog.h"
+
 #include <QApplication>
 
 namespace xjw {
@@ -30,41 +32,16 @@ MVSProgressDialog::MVSProgressDialog(QWidget *parent, Qt::WindowFlags f)
 // ─────────────────────────────────────────────────────────────────────────────
 void MVSProgressDialog::setupUi()
 {
-    // ── 阶段文字 ─────────────────────────────────────────────────────────
-    m_stageLabel = new QLabel("正在初始化…", this);
-    m_stageLabel->setWordWrap(true);
-    m_stageLabel->setAlignment(Qt::AlignLeft | Qt::AlignVCenter);
+    Ui::MVSProgressDialog ui;
+    ui.setupUi(this);
 
-    // ── 进度条 ────────────────────────────────────────────────────────────
-    m_progressBar = new QProgressBar(this);
-    m_progressBar->setRange(0, 100);
-    m_progressBar->setValue(0);
-    m_progressBar->setTextVisible(true);
-    m_progressBar->setMinimumHeight(22);
+    m_stageLabel = ui.m_stageLabel;
+    m_progressBar = ui.m_progressBar;
+    m_elapsedLabel = ui.m_elapsedLabel;
+    m_cancelBtn = ui.m_cancelBtn;
 
-    // ── 已用时 ────────────────────────────────────────────────────────────
-    m_elapsedLabel = new QLabel("已用时: 0 秒", this);
-    m_elapsedLabel->setAlignment(Qt::AlignRight | Qt::AlignVCenter);
-
-    // ── 底部行（已用时 + 取消按钮） ───────────────────────────────────────
-    m_cancelBtn = new QPushButton("取消", this);
-    m_cancelBtn->setFixedWidth(80);
     connect(m_cancelBtn, &QPushButton::clicked,
             this, &MVSProgressDialog::onCancelClicked);
-
-    auto *bottomRow = new QHBoxLayout();
-    bottomRow->addWidget(m_elapsedLabel, 1);
-    bottomRow->addWidget(m_cancelBtn);
-
-    // ── 主布局 ────────────────────────────────────────────────────────────
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setSpacing(10);
-    mainLayout->setContentsMargins(16, 16, 16, 14);
-    mainLayout->addWidget(m_stageLabel);
-    mainLayout->addWidget(m_progressBar);
-    mainLayout->addLayout(bottomRow);
-
-    setLayout(mainLayout);
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

@@ -1,0 +1,291 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>ModelExportDialog</class>
+ <widget class="QDialog" name="ModelExportDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>480</width>
+    <height>420</height>
+   </rect>
+  </property>
+  <property name="minimumSize">
+   <size>
+    <width>480</width>
+    <height>0</height>
+   </size>
+  </property>
+  <property name="windowTitle">
+   <string>模型导出 (Export Model)</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <item>
+    <widget class="QGroupBox" name="formatGroup">
+     <property name="title">
+      <string>格式与坐标系</string>
+     </property>
+     <layout class="QFormLayout" name="formatForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="formatLabel">
+        <property name="text">
+         <string>导出格式:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_formatCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_formatCombo">
+        <property name="toolTip">
+         <string>OBJ: 兼容性最好; PLY: 含顶点属性; glTF: Web/实时渲染; FBX: 动画软件; STL: 3D 打印</string>
+        </property>
+        <item>
+         <property name="text">
+          <string>OBJ (.obj)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>PLY (.ply)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>glTF (.gltf)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>FBX (.fbx)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>STL (.stl)</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="coordSysLabel">
+        <property name="text">
+         <string>坐标系:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_coordSysCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="m_coordSysCombo">
+        <property name="toolTip">
+         <string>导出时的坐标系变换</string>
+        </property>
+        <item>
+         <property name="text">
+          <string>原始 (不变换)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>ENU (东-北-上)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>NED (北-东-下)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>OpenGL (右手 Y-up)</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Unity (左手 Y-up)</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="upAxisLabel">
+        <property name="text">
+         <string>Up 轴:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_upAxisCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QComboBox" name="m_upAxisCombo">
+        <property name="toolTip">
+         <string>Up 轴方向。摄影测量通常 Z-up, 图形引擎通常 Y-up</string>
+        </property>
+        <property name="currentIndex">
+         <number>1</number>
+        </property>
+        <item>
+         <property name="text">
+          <string>Y</string>
+         </property>
+        </item>
+        <item>
+         <property name="text">
+          <string>Z</string>
+         </property>
+        </item>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="includeGroup">
+     <property name="title">
+      <string>包含数据</string>
+     </property>
+     <layout class="QFormLayout" name="includeForm">
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_includeTexCheck">
+        <property name="text">
+         <string>纹理</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_includeNormalCheck">
+        <property name="text">
+         <string>法向量</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_includeColorCheck">
+        <property name="text">
+         <string>顶点颜色</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="simplifyGroup">
+     <property name="title">
+      <string>导出时简化</string>
+     </property>
+     <layout class="QFormLayout" name="simplifyForm">
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_simplifyCheck">
+        <property name="toolTip">
+         <string>导出前对网格做 QEM 简化</string>
+        </property>
+        <property name="text">
+         <string>启用简化</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="simplifyRatioLabel">
+        <property name="text">
+         <string>保留比例:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_simplifyRatioSpin</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QDoubleSpinBox" name="m_simplifyRatioSpin">
+        <property name="toolTip">
+         <string>目标保留面数比例</string>
+        </property>
+        <property name="decimals">
+         <number>2</number>
+        </property>
+        <property name="minimum">
+         <double>0.010000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="value">
+         <double>0.500000000000000</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="outputGroup">
+     <property name="title">
+      <string>输出路径</string>
+     </property>
+     <layout class="QHBoxLayout" name="outputLayout">
+      <item>
+       <widget class="QLineEdit" name="m_outputPathEdit">
+        <property name="placeholderText">
+         <string>选择输出目录或文件...</string>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QPushButton" name="m_browseBtn">
+        <property name="text">
+         <string>浏览...</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_runBtn">
+       <property name="text">
+        <string>导出</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_cancelBtn">
+       <property name="text">
+        <string>取消</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

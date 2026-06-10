@@ -3,6 +3,7 @@
 // =============================================================================
 
 #include "WorkflowReportDialog.h"
+#include "ui_WorkflowReportDialog.h"
 
 #include <QApplication>
 #include <QColor>
@@ -400,35 +401,27 @@ QLabel *WorkflowReportDialog::makeKVLabel(const QString &key, const QString &val
 
 void WorkflowReportDialog::buildUi()
 {
-    auto *vl = new QVBoxLayout(this);
-    vl->setContentsMargins(8, 8, 8, 8);
-    vl->setSpacing(4);
+    Ui::WorkflowReportDialog form;
+    form.setupUi(this);
 
-    // 顶部操作栏
-    auto *topBar = new QHBoxLayout;
-    auto *titleLbl = new QLabel(tr("工作流程历史报告"));
+    m_refreshBtn = form.m_refreshBtn;
+    m_tabs = form.m_tabs;
+
+    auto *titleLbl = form.reportTitleLabel;
     QFont tf = titleLbl->font();
     tf.setPointSize(13);
     tf.setBold(true);
     titleLbl->setFont(tf);
-    m_refreshBtn = new QPushButton(tr("⟳ 刷新"));
-    m_refreshBtn->setFixedWidth(80);
+
     m_refreshBtn->setStyleSheet("QPushButton{border:1px solid #ccc;border-radius:3px;"
                                 "padding:3px 8px;background:#f5f5f5;}"
                                 "QPushButton:hover{background:#e5e5e5;}");
     connect(m_refreshBtn, &QPushButton::clicked, this, &WorkflowReportDialog::refresh);
-    topBar->addWidget(titleLbl);
-    topBar->addStretch();
-    topBar->addWidget(m_refreshBtn);
-    vl->addLayout(topBar);
 
-    m_tabs = new QTabWidget;
-    m_tabs->setTabPosition(QTabWidget::North);
     m_tabs->setStyleSheet("QTabWidget::pane{border:1px solid #ddd;}"
                           "QTabBar::tab{padding:6px 18px;background:#f0f0f2;border:1px solid #ddd;"
                           "border-bottom:none;border-radius:3px 3px 0 0;}"
                           "QTabBar::tab:selected{background:white;font-weight:bold;}");
-    vl->addWidget(m_tabs);
 
     m_tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
     m_tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));
