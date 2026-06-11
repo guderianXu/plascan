@@ -41,8 +41,6 @@
 #include "SparseCloudPreprocessor.h"
 #include "DenseCloudBuilder.h"
 #include "Intersection.h"
-#include <plapoint/core/point_cloud.h>
-#include <plapoint/io/ply_io.h>
 #include "BundleAdjust.h"
 #include "SparseCloudValidator.h"
 #include "SurfaceReconstructor.h"
@@ -147,120 +145,6 @@ void appendMetaArrayRecord(QJsonObject *meta,
     QJsonArray arr = meta->value(arrayKey).toArray();
     arr.append(record);
     (*meta)[arrayKey] = arr;
-}
-
-using PlaPC = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-
-PlaPC densePointsToPointCloud(const std::vector<xjw::mvs::DensePoint> &cloud)
-{
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
-    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
-    for (size_t i = 0; i < cloud.size(); ++i)
-    {
-        pts(i, 0) = cloud[i].x;
-        pts(i, 1) = cloud[i].y;
-        pts(i, 2) = cloud[i].z;
-        colors(i, 0) = cloud[i].r;
-        colors(i, 1) = cloud[i].g;
-        colors(i, 2) = cloud[i].b;
-    }
-    PlaPC pc(std::move(pts));
-    pc.setColors(std::move(colors));
-    return pc;
-}
-
-PlaPC fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
-                              bool keepColor,
-                              bool keepNormals)
-{
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
-    for (size_t i = 0; i < cloud.size(); ++i)
-    {
-        pts(i, 0) = cloud[i].x;
-        pts(i, 1) = cloud[i].y;
-        pts(i, 2) = cloud[i].z;
-    }
-    PlaPC pc(std::move(pts));
-
-    if (keepColor)
-    {
-        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
-        for (size_t i = 0; i < cloud.size(); ++i)
-        {
-            colors(i, 0) = cloud[i].r;
-            colors(i, 1) = cloud[i].g;
-            colors(i, 2) = cloud[i].b;
-        }
-        pc.setColors(std::move(colors));
-    }
-
-    if (keepNormals)
-    {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> nrm(cloud.size(), 3);
-        for (size_t i = 0; i < cloud.size(); ++i)
-        {
-            nrm(i, 0) = cloud[i].nx;
-            nrm(i, 1) = cloud[i].ny;
-            nrm(i, 2) = cloud[i].nz;
-        }
-        pc.setNormals(std::move(nrm));
-    }
-
-    return pc;
-}
-
-bool writePointCloudPly(const QString &path,
-                        const PlaPC &pointCloud,
-                        bool writeNormals,
-                        QString *errorMessage)
-{
-    std::ofstream ofs(path.toStdString(), std::ios::binary);
-    if (!ofs)
-    {
-        if (errorMessage) *errorMessage = QStringLiteral("无法创建文件: %1").arg(path);
-        return false;
-    }
-
-    const bool hasNormalsOut = writeNormals && pointCloud.hasNormals();
-    const bool hasColorsOut = pointCloud.hasColors();
-
-    ofs << "ply\n"
-        << "format binary_little_endian 1.0\n"
-        << "element vertex " << pointCloud.size() << "\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n";
-    if (hasNormalsOut)
-        ofs << "property float nx\nproperty float ny\nproperty float nz\n";
-    if (hasColorsOut)
-        ofs << "property uchar red\nproperty uchar green\nproperty uchar blue\n";
-    ofs << "end_header\n";
-
-    const auto &pc = pointCloud;
-    for (size_t i = 0; i < pc.size(); ++i)
-    {
-        float v[3];
-        for (int d = 0; d < 3; ++d) v[d] = static_cast<float>(pc.points()(static_cast<plamatrix::Index>(i), d));
-        ofs.write(reinterpret_cast<const char*>(v), sizeof(float) * 3);
-
-        if (hasNormalsOut)
-        {
-            float n[3];
-            auto *nrm = pc.normals();
-            for (int d = 0; d < 3; ++d) n[d] = static_cast<float>(nrm->getValue(static_cast<plamatrix::Index>(i), d));
-            ofs.write(reinterpret_cast<const char*>(n), sizeof(float) * 3);
-        }
-
-        if (hasColorsOut)
-        {
-            uint8_t c[3];
-            auto *col = pc.colors();
-            for (int d = 0; d < 3; ++d) c[d] = col->getValue(static_cast<plamatrix::Index>(i), d);
-            ofs.write(reinterpret_cast<const char*>(c), sizeof(uint8_t) * 3);
-        }
-    }
-
-    return ofs.good();
 }
 
 } // namespace
@@ -1226,4 +1110,3 @@ void ProjectManager::cancelAt()
         qDebug() << "[AT] 已请求取消";
     }
 }
-

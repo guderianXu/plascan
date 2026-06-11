@@ -1,19 +1,25 @@
 #include "DemDomIO.h"
 
+#include <plapoint/io/ply_io.h>
+#include <plapoint/io/xyz_io.h>
+#include <plapoint/mesh/height_grid.h>
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QTextStream>
-#include <QVector3D>
 
 #include <gdal_priv.h>
 #include <cpl_conv.h>
 
 #include <opencv2/imgcodecs.hpp>
 
-#include <array>
+#include <algorithm>
 #include <cmath>
+#include <cstdint>
 #include <limits>
+#include <memory>
+#include <utility>
 #include <vector>
 
 namespace xjw
@@ -58,6 +64,119 @@ bool isRasterNoData(float value, bool hasNoData, double noDataValue)
 
     return value == static_cast<float>(noDataValue) ||
            std::fabs(static_cast<double>(value) - noDataValue) < 1e-6;
+}
+
+plapoint::mesh::HeightGrid<float> heightGridFromDemGrid(const DemGridData &demGrid)
+{
+    plapoint::mesh::HeightGrid<float> grid;
+    grid.width = demGrid.width;
+    grid.height = demGrid.height;
+    grid.minX = static_cast<float>(demGrid.minX);
+    grid.minY = static_cast<float>(demGrid.minY);
+    grid.stepX = static_cast<float>(demGrid.stepX);
+    grid.stepY = static_cast<float>(demGrid.stepY);
+
+    const std::size_t cellCount =
+        static_cast<std::size_t>(std::max(0, grid.width)) *
+        static_cast<std::size_t>(std::max(0, grid.height));
+    grid.heights.assign(cellCount, 0.0f);
+    grid.weights.assign(cellCount, 0.0f);
+    grid.valid.assign(cellCount, 0);
+    grid.fillPass.assign(cellCount, 0);
+    if (demGrid.hasColor())
+    {
+        grid.colors.assign(cellCount * 3, 0);
+    }
+
+    for (int row = 0; row < demGrid.height; ++row)
+    {
+        for (int col = 0; col < demGrid.width; ++col)
+        {
+            const auto cell = static_cast<std::size_t>(row * demGrid.width + col);
+            if (demGrid.validMask.at<uchar>(row, col) == 0)
+            {
+                continue;
+            }
+            grid.heights[cell] = demGrid.elevation.at<float>(row, col);
+            grid.weights[cell] = 1.0f;
+            grid.valid[cell] = 1;
+            if (demGrid.hasColor())
+            {
+                const cv::Vec3b bgr = demGrid.color.at<cv::Vec3b>(row, col);
+                grid.colors[cell * 3] = bgr[2];
+                grid.colors[cell * 3 + 1] = bgr[1];
+                grid.colors[cell * 3 + 2] = bgr[0];
+            }
+        }
+    }
+    return grid;
+}
+
+PlaPointCloud pointCloudFromDemGrid(const DemGridData &demGrid)
+{
+    std::vector<std::pair<int, int>> validCells;
+    validCells.reserve(static_cast<std::size_t>(demGrid.width * demGrid.height));
+    for (int row = 0; row < demGrid.height; ++row)
+    {
+        for (int col = 0; col < demGrid.width; ++col)
+        {
+            if (demGrid.validMask.at<uchar>(row, col) != 0)
+            {
+                validCells.emplace_back(row, col);
+            }
+        }
+    }
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(validCells.size(), 3);
+    std::unique_ptr<plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU>> colors;
+    if (demGrid.hasColor())
+    {
+        colors = std::make_unique<plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU>>(
+            validCells.size(), 3);
+    }
+    std::unique_ptr<plamatrix::DenseMatrix<float, plamatrix::Device::CPU>> errors;
+    if (demGrid.hasTriangulationError())
+    {
+        errors = std::make_unique<plamatrix::DenseMatrix<float, plamatrix::Device::CPU>>(
+            validCells.size(), 1);
+    }
+
+    for (std::size_t i = 0; i < validCells.size(); ++i)
+    {
+        const auto [row, col] = validCells[i];
+        const auto matrixRow = static_cast<plamatrix::Index>(i);
+        const float x = demGrid.hasWorldXY()
+            ? demGrid.worldX.at<float>(row, col)
+            : static_cast<float>(demGrid.minX + demGrid.stepX * static_cast<double>(col));
+        const float y = demGrid.hasWorldXY()
+            ? demGrid.worldY.at<float>(row, col)
+            : static_cast<float>(demGrid.minY + demGrid.stepY * static_cast<double>(row));
+        points(matrixRow, 0) = x;
+        points(matrixRow, 1) = y;
+        points(matrixRow, 2) = demGrid.elevation.at<float>(row, col);
+        if (colors)
+        {
+            const cv::Vec3b bgr = demGrid.color.at<cv::Vec3b>(row, col);
+            (*colors)(matrixRow, 0) = bgr[2];
+            (*colors)(matrixRow, 1) = bgr[1];
+            (*colors)(matrixRow, 2) = bgr[0];
+        }
+        if (errors)
+        {
+            (*errors)(matrixRow, 0) = demGrid.triangulationError.at<float>(row, col);
+        }
+    }
+
+    PlaPointCloud cloud(std::move(points));
+    if (colors)
+    {
+        cloud.setColors(std::move(*colors));
+    }
+    if (errors)
+    {
+        cloud.setScalarFields(std::vector<std::string>{"error"}, std::move(*errors));
+    }
+    return cloud;
 }
 
 } // namespace
@@ -550,34 +669,17 @@ bool DemDomIO::writeDenseCloudXyz(const PlaPointCloud &denseCloud,
     }
 
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
-    QFile file(outputPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+    try
     {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("密集点云 XYZ 写出失败: %1").arg(outputPath);
-        }
+        plapoint::io::writeXyz(outputPath.toStdString(), denseCloud);
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("密集点云 XYZ 写出失败: %1 (%2)")
+                                      .arg(outputPath, QString::fromStdString(e.what()));
         return false;
     }
-
-    QTextStream stream(&file);
-    const bool hasColor = denseCloud.hasColors() && denseCloud.colors()
-                       && denseCloud.colors()->rows() == static_cast<plamatrix::Index>(denseCloud.size())
-                       && denseCloud.colors()->cols() >= 3;
-    for (size_t i = 0; i < denseCloud.size(); ++i)
-    {
-        auto pt = denseCloud[i];
-        stream << pt.x() << ' ' << pt.y() << ' ' << pt.z();
-        if (hasColor)
-        {
-            const auto *colors = denseCloud.colors();
-            stream << ' ' << static_cast<int>(colors->getValue(static_cast<plamatrix::Index>(i), 0))
-                   << ' ' << static_cast<int>(colors->getValue(static_cast<plamatrix::Index>(i), 1))
-                   << ' ' << static_cast<int>(colors->getValue(static_cast<plamatrix::Index>(i), 2));
-        }
-        stream << '\n';
-    }
-    return true;
 }
 
 bool DemDomIO::writeMeshPlyFromDemGrid(const DemGridData &demGrid,
@@ -604,55 +706,15 @@ bool DemDomIO::writeMeshPlyFromDemGrid(const DemGridData &demGrid,
         return false;
     }
 
-    std::vector<QVector3D> vertices;
-    std::vector<cv::Vec3b> colors;
-    std::vector<int> gridToVertex(static_cast<std::size_t>(demGrid.width * demGrid.height), -1);
-    const bool hasColor = demGrid.hasColor();
-    auto gridIndex = [&demGrid](int col, int row) {
-        return static_cast<std::size_t>(row * demGrid.width + col);
-    };
+    auto grid = heightGridFromDemGrid(demGrid);
+    auto sourceCloud = plapoint::mesh::heightGridToPointCloud(grid);
+    plapoint::mesh::HeightGridOptions<float> meshOptions;
+    meshOptions.maxHeightJump = std::numeric_limits<float>::max();
+    meshOptions.minAbsNormalZ = 0.0f;
+    meshOptions.maxFillPassForFaces = std::numeric_limits<int>::max();
+    auto mesh = plapoint::mesh::heightGridToMesh(grid, sourceCloud, meshOptions);
 
-    for (int row = 0; row < demGrid.height; ++row)
-    {
-        for (int col = 0; col < demGrid.width; ++col)
-        {
-            if (demGrid.validMask.at<uchar>(row, col) == 0)
-            {
-                continue;
-            }
-
-            gridToVertex[gridIndex(col, row)] = static_cast<int>(vertices.size());
-            vertices.push_back(QVector3D(static_cast<float>(demGrid.minX + demGrid.stepX * static_cast<double>(col)),
-                                         static_cast<float>(demGrid.minY + demGrid.stepY * static_cast<double>(row)),
-                                         demGrid.elevation.at<float>(row, col)));
-            if (hasColor)
-            {
-                colors.push_back(demGrid.color.at<cv::Vec3b>(row, col));
-            }
-        }
-    }
-
-    std::vector<std::array<int, 3>> faces;
-    for (int row = 0; row < demGrid.height - 1; ++row)
-    {
-        for (int col = 0; col < demGrid.width - 1; ++col)
-        {
-            const int v00 = gridToVertex[gridIndex(col, row)];
-            const int v10 = gridToVertex[gridIndex(col + 1, row)];
-            const int v01 = gridToVertex[gridIndex(col, row + 1)];
-            const int v11 = gridToVertex[gridIndex(col + 1, row + 1)];
-            if (v00 >= 0 && v10 >= 0 && v11 >= 0)
-            {
-                faces.push_back({v00, v10, v11});
-            }
-            if (v00 >= 0 && v11 >= 0 && v01 >= 0)
-            {
-                faces.push_back({v00, v11, v01});
-            }
-        }
-    }
-
-    if (vertices.empty() || faces.empty())
+    if (mesh.size() == 0 || !mesh.hasFaces() || mesh.faces()->rows() == 0)
     {
         if (errorMsg)
         {
@@ -662,58 +724,18 @@ bool DemDomIO::writeMeshPlyFromDemGrid(const DemGridData &demGrid,
     }
 
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
-    QFile file(outputPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+    try
     {
-        if (errorMsg)
-        {
-            *errorMsg = QStringLiteral("PLY 网格写出失败: %1").arg(outputPath);
-        }
+        plapoint::io::writePly(outputPath.toStdString(), mesh, plapoint::io::PlyFormat::ASCII);
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("PLY 网格写出失败: %1 (%2)")
+                                      .arg(outputPath, QString::fromStdString(e.what()));
         return false;
     }
-
-    QTextStream stream(&file);
-    stream << "ply\n";
-    stream << "format ascii 1.0\n";
-    stream << "element vertex " << vertices.size() << "\n";
-    stream << "property float x\n";
-    stream << "property float y\n";
-    stream << "property float z\n";
-    if (hasColor)
-    {
-        stream << "property uchar red\n";
-        stream << "property uchar green\n";
-        stream << "property uchar blue\n";
-    }
-    stream << "element face " << faces.size() << "\n";
-    stream << "property list uchar int vertex_indices\n";
-    stream << "end_header\n";
-    for (std::size_t i = 0; i < vertices.size(); ++i)
-    {
-        const QVector3D &vertex = vertices[i];
-        stream << vertex.x() << ' ' << vertex.y() << ' ' << vertex.z();
-        if (hasColor && i < colors.size())
-        {
-            const cv::Vec3b color = colors[i];
-            stream << ' ' << static_cast<int>(color[2])
-                   << ' ' << static_cast<int>(color[1])
-                   << ' ' << static_cast<int>(color[0]);
-        }
-        stream << '\n';
-    }
-    for (const std::array<int, 3> &face : faces)
-    {
-        stream << "3 " << face[0] << ' ' << face[1] << ' ' << face[2] << '\n';
-    }
-
-    if (vertexCount)
-    {
-        *vertexCount = static_cast<int>(vertices.size());
-    }
-    if (faceCount)
-    {
-        *faceCount = static_cast<int>(faces.size());
-    }
+    if (vertexCount) *vertexCount = static_cast<int>(mesh.size());
+    if (faceCount) *faceCount = static_cast<int>(mesh.faces()->rows());
     return true;
 }
 
@@ -730,11 +752,8 @@ bool DemDomIO::writeDenseCloudPly(const DemGridData &demGrid,
         return false;
     }
 
-    int count = 0;
-    for (int row = 0; row < demGrid.height; ++row)
-        for (int col = 0; col < demGrid.width; ++col)
-            if (demGrid.validMask.at<uchar>(row, col) != 0)
-                ++count;
+    auto cloud = pointCloudFromDemGrid(demGrid);
+    const int count = static_cast<int>(cloud.size());
 
     if (count == 0)
     {
@@ -743,28 +762,16 @@ bool DemDomIO::writeDenseCloudPly(const DemGridData &demGrid,
     }
 
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
-    QFile file(outputPath);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    try
     {
-        if (errorMsg) *errorMsg = QStringLiteral("无法写出 PLY: %1").arg(outputPath);
+        plapoint::io::writePly(outputPath.toStdString(), cloud, plapoint::io::PlyFormat::ASCII);
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("无法写出 PLY: %1 (%2)")
+                                      .arg(outputPath, QString::fromStdString(e.what()));
         return false;
     }
-
-    QTextStream stream(&file);
-    stream << "ply\n";
-    stream << "format ascii 1.0\n";
-    stream << "element vertex " << count << "\n";
-    stream << "property float x\n";
-    stream << "property float y\n";
-    stream << "property float z\n";
-    stream << "end_header\n";
-
-    for (int row = 0; row < demGrid.height; ++row)
-        for (int col = 0; col < demGrid.width; ++col)
-            if (demGrid.validMask.at<uchar>(row, col) != 0)
-                stream << demGrid.worldX.at<float>(row, col) << ' '
-                       << demGrid.worldY.at<float>(row, col) << ' '
-                       << demGrid.elevation.at<float>(row, col) << '\n';
 
     if (pointCount) *pointCount = count;
     return true;

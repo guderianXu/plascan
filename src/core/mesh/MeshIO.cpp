@@ -1,5 +1,8 @@
 #include "MeshTypes.h"
 
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/io/ply_io.h>
+
 #include <fstream>
 #include <filesystem>
 
@@ -16,56 +19,48 @@ bool TriMesh::savePLY(const std::string &path, std::string *errorMsg) const
     }
 
     std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-    std::ofstream ofs(path, std::ios::binary);
-    if (!ofs) {
-        if (errorMsg) *errorMsg = "无法创建文件: " + path;
+    try
+    {
+        using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(vertices.size(), 3);
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(vertices.size(), 3);
+        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(vertices.size(), 3);
+        for (std::size_t i = 0; i < vertices.size(); ++i)
+        {
+            const auto row = static_cast<plamatrix::Index>(i);
+            const MeshVertex &vertex = vertices[i];
+            points(row, 0) = vertex.x;
+            points(row, 1) = vertex.y;
+            points(row, 2) = vertex.z;
+            normals(row, 0) = vertex.nx;
+            normals(row, 1) = vertex.ny;
+            normals(row, 2) = vertex.nz;
+            colors(row, 0) = vertex.r;
+            colors(row, 1) = vertex.g;
+            colors(row, 2) = vertex.b;
+        }
+
+        plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faceMatrix(faces.size(), 3);
+        for (std::size_t i = 0; i < faces.size(); ++i)
+        {
+            const auto row = static_cast<plamatrix::Index>(i);
+            faceMatrix(row, 0) = faces[i].v[0];
+            faceMatrix(row, 1) = faces[i].v[1];
+            faceMatrix(row, 2) = faces[i].v[2];
+        }
+
+        PlaCloud cloud(std::move(points));
+        cloud.setNormals(std::move(normals));
+        cloud.setColors(std::move(colors));
+        cloud.setFaces(std::move(faceMatrix));
+        plapoint::io::writePly(path, cloud, plapoint::io::PlyFormat::BinaryLE);
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = e.what();
         return false;
     }
-
-    ofs << "ply\n";
-    ofs << "format binary_little_endian 1.0\n";
-    ofs << "element vertex " << vertices.size() << "\n";
-    ofs << "property float x\n";
-    ofs << "property float y\n";
-    ofs << "property float z\n";
-    ofs << "property float nx\n";
-    ofs << "property float ny\n";
-    ofs << "property float nz\n";
-    ofs << "property uchar red\n";
-    ofs << "property uchar green\n";
-    ofs << "property uchar blue\n";
-    ofs << "element face " << faces.size() << "\n";
-    ofs << "property list uchar int vertex_indices\n";
-    ofs << "end_header\n";
-
-#pragma pack(push, 1)
-    struct VOut 
-    {
-        float x, y, z;
-        float nx, ny, nz;
-        uint8_t r, g, b;
-    };
-#pragma pack(pop)
-
-    for (const auto &v : vertices) 
-    {
-        const VOut out{v.x, v.y, v.z, v.nx, v.ny, v.nz, v.r, v.g, v.b};
-        ofs.write(reinterpret_cast<const char*>(&out), sizeof(VOut));
-    }
-
-    for (const auto &f : faces) {
-        const uint8_t n = 3;
-        ofs.write(reinterpret_cast<const char*>(&n), sizeof(uint8_t));
-        ofs.write(reinterpret_cast<const char*>(&f.v[0]), sizeof(int));
-        ofs.write(reinterpret_cast<const char*>(&f.v[1]), sizeof(int));
-        ofs.write(reinterpret_cast<const char*>(&f.v[2]), sizeof(int));
-    }
-
-    if (!ofs.good()) {
-        if (errorMsg) *errorMsg = "写入 PLY 失败: " + path;
-        return false;
-    }
-    return true;
 }
 
 bool TriMesh::saveOBJ(const std::string &path, std::string *errorMsg) const

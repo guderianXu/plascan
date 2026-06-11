@@ -2,6 +2,9 @@
 
 #include "PointCloudTifIO.h"
 
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/search/kdtree.h>
+
 #include <gdal_priv.h>
 #include <opencv2/core.hpp>
 
@@ -9,8 +12,8 @@
 #include <cmath>
 #include <cstdio>
 #include <limits>
+#include <memory>
 #include <sstream>
-#include <unordered_map>
 #include <vector>
 
 namespace xjw
@@ -35,6 +38,21 @@ struct LoadedCloud
     std::array<double, 3> offset = {0.0, 0.0, 0.0};
     std::vector<Point3> points;
 };
+
+using PlaMetricCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+
+std::shared_ptr<PlaMetricCloud> toPlaCloud(const std::vector<Point3> &points)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> matrix(points.size(), 3);
+    for (std::size_t i = 0; i < points.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        matrix(row, 0) = points[i].x;
+        matrix(row, 1) = points[i].y;
+        matrix(row, 2) = points[i].z;
+    }
+    return std::make_shared<PlaMetricCloud>(std::move(matrix));
+}
 
 bool readAspTif(const std::string &path, LoadedCloud &cloud, std::string *errorMessage)
 {
@@ -130,13 +148,6 @@ bool readPlascanTif(const std::string &path, LoadedCloud &cloud, std::string *er
     return true;
 }
 
-uint64_t cellKey(int x, int y, int z)
-{
-    return (static_cast<uint64_t>(static_cast<uint32_t>(x)) * 73856093ULL) ^
-           (static_cast<uint64_t>(static_cast<uint32_t>(y)) * 19349663ULL) ^
-           (static_cast<uint64_t>(static_cast<uint32_t>(z)) * 83492791ULL);
-}
-
 void updateBounds(const Point3 &p, Point3 &minP, Point3 &maxP)
 {
     minP.x = std::min(minP.x, p.x);
@@ -200,12 +211,9 @@ bool AspPointCloudMetrics::compare(const std::string &plascanTifPath,
 
     Point3 aspMin{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
     Point3 aspMax{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
-    Point3 allMin = aspMin;
-    Point3 allMax = aspMax;
     for (const Point3 &p : asp.points)
     {
         updateBounds(p, aspMin, aspMax);
-        updateBounds(p, allMin, allMax);
     }
 
     int insideBbox = 0;
@@ -215,26 +223,13 @@ bool AspPointCloudMetrics::compare(const std::string &plascanTifPath,
         {
             ++insideBbox;
         }
-        updateBounds(p, allMin, allMax);
     }
     result.bboxContainmentRatio = static_cast<double>(insideBbox) / static_cast<double>(plascan.points.size());
 
-    const float cellSize = 0.05f;
-    std::unordered_map<uint64_t, std::vector<int>> grid;
-    grid.reserve(asp.points.size());
-    auto indexFor = [&](const Point3 &p, int &ix, int &iy, int &iz)
-    {
-        ix = static_cast<int>(std::floor((p.x - allMin.x) / cellSize));
-        iy = static_cast<int>(std::floor((p.y - allMin.y) / cellSize));
-        iz = static_cast<int>(std::floor((p.z - allMin.z) / cellSize));
-    };
-
-    for (int index = 0; index < static_cast<int>(asp.points.size()); ++index)
-    {
-        int ix, iy, iz;
-        indexFor(asp.points[index], ix, iy, iz);
-        grid[cellKey(ix, iy, iz)].push_back(index);
-    }
+    auto aspCloud = toPlaCloud(asp.points);
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> aspTree;
+    aspTree.setInputCloud(aspCloud);
+    aspTree.build();
 
     const int sampleStep = std::max(1, static_cast<int>(plascan.points.size()) / 100000);
     std::vector<double> distances;
@@ -245,45 +240,23 @@ bool AspPointCloudMetrics::compare(const std::string &plascanTifPath,
     for (int index = 0; index < static_cast<int>(plascan.points.size()); index += sampleStep)
     {
         const Point3 &p = plascan.points[index];
-        int ix, iy, iz;
-        indexFor(p, ix, iy, iz);
-        double best = std::numeric_limits<double>::max();
-        int bestIndex = -1;
-        for (int dx = -2; dx <= 2; ++dx)
+        const auto neighbors = aspTree.nearestKSearch(plamatrix::Vec3<float>{p.x, p.y, p.z}, 1);
+        if (neighbors.empty())
         {
-            for (int dy = -2; dy <= 2; ++dy)
-            {
-                for (int dz = -2; dz <= 2; ++dz)
-                {
-                    auto it = grid.find(cellKey(ix + dx, iy + dy, iz + dz));
-                    if (it == grid.end())
-                    {
-                        continue;
-                    }
-                    for (int aspIndex : it->second)
-                    {
-                        const Point3 &q = asp.points[aspIndex];
-                        const double ddx = static_cast<double>(p.x) - q.x;
-                        const double ddy = static_cast<double>(p.y) - q.y;
-                        const double ddz = static_cast<double>(p.z) - q.z;
-                        const double dist2 = ddx * ddx + ddy * ddy + ddz * ddz;
-                        if (dist2 < best)
-                        {
-                            best = dist2;
-                            bestIndex = aspIndex;
-                        }
-                    }
-                }
-            }
+            continue;
         }
+        const int bestIndex = neighbors.front();
         if (bestIndex >= 0)
         {
-            const double dist = std::sqrt(best);
             const Point3 &q = asp.points[bestIndex];
+            const double ddx = static_cast<double>(p.x) - q.x;
+            const double ddy = static_cast<double>(p.y) - q.y;
+            const double ddz = static_cast<double>(p.z) - q.z;
+            const double dist = std::sqrt(ddx * ddx + ddy * ddy + ddz * ddz);
             distances.push_back(dist);
-            offsetX += static_cast<double>(p.x) - q.x;
-            offsetY += static_cast<double>(p.y) - q.y;
-            offsetZ += static_cast<double>(p.z) - q.z;
+            offsetX += ddx;
+            offsetY += ddy;
+            offsetZ += ddz;
             ++matched;
         }
     }

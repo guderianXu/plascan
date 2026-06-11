@@ -9,8 +9,12 @@
 #include "DisparityTriangulator.h"
 #include "Camera.h"
 
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/io/ply_io.h>
+
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/core.hpp>
+#include <cstdint>
 #include <string>
 
 int main(int argc, char *argv[])
@@ -24,7 +28,7 @@ int main(int argc, char *argv[])
     app.add_option("--camR", camR,    "右相机文件路径")->required();
     app.add_option("-o,--output", outPath, "输出点云路径 (.ply)")->required();
     app.add_option("--intensity-image", intensityImagePath,
-                   "可选：与视差图同尺寸的灰度影像，用于写入 property uchar intensity");
+                   "可选：与视差图同尺寸的灰度影像，用于写入 intensity 属性");
 
     float maxError = 0.01f;
     int   threads  = 4;
@@ -91,51 +95,55 @@ int main(int argc, char *argv[])
         fprintf(stdout, "  中位误差: %.4f m\n", result.medianError);
     }
 
-    // 写入 PLY
-    FILE *ply = fopen(outPath.c_str(), "w");
-    if (!ply)
-        cli::fatal("无法写入: " + outPath, cli::EXIT_IO_ERR);
-
     // 计数有效点
     int count = 0;
     for (int y = 0; y < result.pointCloud.rows; ++y)
         for (int x = 0; x < result.pointCloud.cols; ++x)
             if (result.validMask.at<uchar>(y, x)) ++count;
 
-    fprintf(ply, "ply\nformat ascii 1.0\n"
-            "element vertex %d\n"
-            "property float x\nproperty float y\nproperty float z\n"
-            "property float error\n", count);
-    if (!intensityImage.empty())
-        fprintf(ply, "property uchar intensity\n");
-    fprintf(ply, "end_header\n");
+    using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(count, 3);
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> errors(count, 1);
+    plamatrix::DenseMatrix<std::uint16_t, plamatrix::Device::CPU> intensities(count, 1);
 
+    int row = 0;
     for (int y = 0; y < result.pointCloud.rows; ++y)
     {
         for (int x = 0; x < result.pointCloud.cols; ++x)
         {
             if (!result.validMask.at<uchar>(y, x)) continue;
             auto pt = result.pointCloud.at<cv::Vec3d>(y, x);
-            double err = result.errorMap.empty() ? 0.0
-                        : result.errorMap.at<float>(y, x);
+            const float err = result.errorMap.empty() ? 0.0f
+                              : result.errorMap.at<float>(y, x);
+            const auto matrixRow = static_cast<plamatrix::Index>(row);
+            points(matrixRow, 0) = static_cast<float>(pt[0] + result.pointOffset[0]);
+            points(matrixRow, 1) = static_cast<float>(pt[1] + result.pointOffset[1]);
+            points(matrixRow, 2) = static_cast<float>(pt[2] + result.pointOffset[2]);
+            errors(matrixRow, 0) = err;
             if (!intensityImage.empty())
             {
-                const int intensity = static_cast<int>(intensityImage.at<uchar>(y, x));
-                fprintf(ply, "%.6f %.6f %.6f %.6f %d\n",
-                        pt[0] + result.pointOffset[0],
-                        pt[1] + result.pointOffset[1],
-                        pt[2] + result.pointOffset[2], err, intensity);
+                intensities(matrixRow, 0) =
+                    static_cast<std::uint16_t>(intensityImage.at<uchar>(y, x));
             }
-            else
-            {
-                fprintf(ply, "%.6f %.6f %.6f %.6f\n",
-                        pt[0] + result.pointOffset[0],
-                        pt[1] + result.pointOffset[1],
-                        pt[2] + result.pointOffset[2], err);
-            }
+            ++row;
         }
     }
-    fclose(ply);
+
+    PlaCloud cloud(std::move(points));
+    cloud.setScalarFields(std::vector<std::string>{"error"}, std::move(errors));
+    if (!intensityImage.empty())
+    {
+        cloud.setIntensities(std::move(intensities));
+    }
+
+    try
+    {
+        plapoint::io::writePly(outPath, cloud, plapoint::io::PlyFormat::ASCII);
+    }
+    catch (const std::exception &e)
+    {
+        cli::fatal(std::string("无法写入: ") + outPath + " (" + e.what() + ")", cli::EXIT_IO_ERR);
+    }
 
     fprintf(stdout, "点云已保存: %s (%d 点)\n", outPath.c_str(), count);
     return cli::EXIT_OK;

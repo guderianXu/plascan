@@ -14,6 +14,9 @@
 #include "TerrainPipeline.h"
 #include "project/ProjectCommonUtils.h"
 
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/io/ply_io.h>
+
 #include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
@@ -32,7 +35,6 @@
 
 #include <algorithm>
 #include <cstdio>
-#include <fstream>
 #include <vector>
 
 namespace
@@ -482,31 +484,31 @@ bool writeDenseCloudPly(const QString &path,
                         QString *error)
 {
     QDir().mkpath(QFileInfo(path).absolutePath());
-    std::ofstream out(path.toStdString(), std::ios::out | std::ios::trunc);
-    if (!out)
+    try
     {
-        if (error) *error = QStringLiteral("无法写入点云: %1").arg(path);
+        using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(cloud.size(), 3);
+        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
+        for (std::size_t i = 0; i < cloud.size(); ++i)
+        {
+            const auto row = static_cast<plamatrix::Index>(i);
+            points(row, 0) = cloud[i].x;
+            points(row, 1) = cloud[i].y;
+            points(row, 2) = cloud[i].z;
+            colors(row, 0) = cloud[i].r;
+            colors(row, 1) = cloud[i].g;
+            colors(row, 2) = cloud[i].b;
+        }
+        PlaCloud pointCloud(std::move(points));
+        pointCloud.setColors(std::move(colors));
+        plapoint::io::writePly(path.toStdString(), pointCloud, plapoint::io::PlyFormat::ASCII);
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        if (error) *error = QString::fromStdString(e.what());
         return false;
     }
-
-    out << "ply\n"
-        << "format ascii 1.0\n"
-        << "element vertex " << cloud.size() << "\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n"
-        << "property uchar red\n"
-        << "property uchar green\n"
-        << "property uchar blue\n"
-        << "end_header\n";
-    for (const xjw::mvs::DensePoint &point : cloud)
-    {
-        out << point.x << ' ' << point.y << ' ' << point.z << ' '
-            << static_cast<int>(point.r) << ' '
-            << static_cast<int>(point.g) << ' '
-            << static_cast<int>(point.b) << '\n';
-    }
-    return true;
 }
 
 bool writeReport(const QString &outputDir, const QJsonObject &report, QJsonObject *writtenReport, QString *error)

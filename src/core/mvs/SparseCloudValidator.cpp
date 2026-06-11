@@ -1,73 +1,88 @@
 // SparseCloudValidator.cpp
 #include "SparseCloudValidator.h"
-#include <fstream>
-#include <sstream>
-#include <cstdio>
+
+#include <plapoint/io/ply_io.h>
+#include <plapoint/io/xyz_io.h>
+
+#include <algorithm>
+#include <cctype>
+#include <cmath>
+#include <memory>
 
 namespace xjw
 {
 namespace mvs
 {
 
+namespace
+{
+
+using SparsePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+
+bool endsWithIgnoreCase(const std::string &text, const std::string &suffix)
+{
+    if (text.size() < suffix.size())
+    {
+        return false;
+    }
+    return std::equal(suffix.rbegin(), suffix.rend(), text.rbegin(),
+                      [](char a, char b) {
+                          return std::tolower(static_cast<unsigned char>(a)) ==
+                                 std::tolower(static_cast<unsigned char>(b));
+                      });
+}
+
+} // namespace
+
 bool SparseCloudValidator::validate(const std::string &cloudPath,
                                      SparseCloudStats  *stats,
                                      void              * /*unused*/,
                                      std::string       *errorMsg) const
 {
-    std::ifstream ifs(cloudPath);
-    if (!ifs)
+    std::shared_ptr<SparsePlaCloud> cloud;
+    try
     {
-        if (errorMsg)
+        if (endsWithIgnoreCase(cloudPath, ".ply"))
         {
-            *errorMsg = "无法打开点云文件: " + cloudPath;
+            cloud = plapoint::io::readPly<float>(cloudPath);
         }
+        else
+        {
+            cloud = plapoint::io::readXyz<float>(cloudPath);
+        }
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = "点云读取失败: " + std::string(e.what());
         return false;
     }
 
     std::array<float, 3> minPt = {1e18f, 1e18f, 1e18f};
     std::array<float, 3> maxPt = {-1e18f, -1e18f, -1e18f};
-    int count = 0;
-    std::string line;
-
-    // 跳过 PLY 头部
-    bool isPly = cloudPath.size() >= 4 &&
-                 cloudPath.substr(cloudPath.size() - 4) == ".ply";
-    if (isPly)
+    const int count = cloud ? static_cast<int>(cloud->size()) : 0;
+    bool hasFinitePoint = false;
+    if (cloud)
     {
-        while (std::getline(ifs, line))
+        const auto &points = cloud->points();
+        for (std::size_t i = 0; i < cloud->size(); ++i)
         {
-            if (line == "end_header")
+            const auto row = static_cast<plamatrix::Index>(i);
+            const float values[3] = {
+                points.getValue(row, 0),
+                points.getValue(row, 1),
+                points.getValue(row, 2)
+            };
+            if (!std::isfinite(values[0]) || !std::isfinite(values[1]) || !std::isfinite(values[2]))
             {
-                break;
+                continue;
+            }
+            hasFinitePoint = true;
+            for (int k = 0; k < 3; ++k)
+            {
+                minPt[k] = std::min(minPt[k], values[k]);
+                maxPt[k] = std::max(maxPt[k], values[k]);
             }
         }
-    }
-
-    while (std::getline(ifs, line))
-    {
-        if (line.empty() || line[0] == '#')
-        {
-            continue;
-        }
-        std::istringstream ss(line);
-        float x, y, z;
-        if (!(ss >> x >> y >> z))
-        {
-            continue;
-        }
-        for (int k = 0; k < 3; ++k)
-        {
-            float v = (k == 0 ? x : k == 1 ? y : z);
-            if (v < minPt[k])
-            {
-                minPt[k] = v;
-            }
-            if (v > maxPt[k])
-            {
-                maxPt[k] = v;
-            }
-        }
-        ++count;
     }
 
     if (stats)
@@ -75,6 +90,15 @@ bool SparseCloudValidator::validate(const std::string &cloudPath,
         stats->pointCount = count;
         stats->minPt = minPt;
         stats->maxPt = maxPt;
+    }
+
+    if (!hasFinitePoint)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "点云中没有有限坐标";
+        }
+        return false;
     }
 
     if (count < m_opts.minPoints)

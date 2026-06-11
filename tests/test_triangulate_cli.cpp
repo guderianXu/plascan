@@ -8,11 +8,14 @@
 #include <QStringList>
 #include <QTemporaryDir>
 
+#include <algorithm>
 #include <array>
 #include <filesystem>
 #include <fstream>
 #include <memory>
+#include <sstream>
 #include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
 
@@ -74,29 +77,64 @@ std::array<double, 4> readFirstPlyVertex(const fs::path &path)
     return vertex;
 }
 
-std::array<double, 5> readFirstPlyVertexWithIntensity(const fs::path &path)
+struct FirstPlyVertexWithIntensity
+{
+    double x = 0.0;
+    double y = 0.0;
+    double z = 0.0;
+    double error = 0.0;
+    int intensity = 0;
+};
+
+FirstPlyVertexWithIntensity readFirstPlyVertexWithIntensity(const fs::path &path)
 {
     std::ifstream in(path);
     EXPECT_TRUE(in.is_open()) << path;
 
     std::string line;
-    bool hasIntensityProperty = false;
+    std::vector<std::string> propertyNames;
     while (std::getline(in, line))
     {
-        if (line == "property uchar intensity")
-        {
-            hasIntensityProperty = true;
-        }
         if (line == "end_header")
         {
             break;
         }
+        std::istringstream header(line);
+        std::string propertyToken;
+        std::string typeToken;
+        std::string nameToken;
+        if ((header >> propertyToken >> typeToken >> nameToken) && propertyToken == "property")
+        {
+            propertyNames.push_back(nameToken);
+        }
     }
-    EXPECT_TRUE(hasIntensityProperty);
+    const auto errorIt = std::find(propertyNames.begin(), propertyNames.end(), "error");
+    const auto intensityIt = std::find(propertyNames.begin(), propertyNames.end(), "intensity");
+    EXPECT_NE(errorIt, propertyNames.end());
+    EXPECT_NE(intensityIt, propertyNames.end());
 
-    std::array<double, 5> vertex{0.0, 0.0, 0.0, 0.0, 0.0};
-    in >> vertex[0] >> vertex[1] >> vertex[2] >> vertex[3] >> vertex[4];
+    std::vector<double> values(propertyNames.size(), 0.0);
+    for (double &value : values)
+    {
+        in >> value;
+    }
     EXPECT_TRUE(in.good() || in.eof());
+
+    auto valueOf = [&](const std::string &name) {
+        const auto it = std::find(propertyNames.begin(), propertyNames.end(), name);
+        EXPECT_NE(it, propertyNames.end());
+        if (it == propertyNames.end())
+        {
+            return 0.0;
+        }
+        return values[static_cast<std::size_t>(std::distance(propertyNames.begin(), it))];
+    };
+    FirstPlyVertexWithIntensity vertex;
+    vertex.x = valueOf("x");
+    vertex.y = valueOf("y");
+    vertex.z = valueOf("z");
+    vertex.error = valueOf("error");
+    vertex.intensity = static_cast<int>(valueOf("intensity"));
     return vertex;
 }
 
@@ -192,9 +230,10 @@ TEST(TriangulateCli, WritesIntensityWhenImageProvided)
     ASSERT_EQ(runTriangulateCli(arguments), 0);
 
     const auto vertex = readFirstPlyVertexWithIntensity(outPath);
-    EXPECT_NEAR(vertex[0], 0.0, 1e-6);
-    EXPECT_NEAR(vertex[1], 0.0, 1e-6);
-    EXPECT_NEAR(vertex[2], 10.0, 1e-6);
-    EXPECT_EQ(static_cast<int>(vertex[4]), 51);
+    EXPECT_NEAR(vertex.x, 0.0, 1e-6);
+    EXPECT_NEAR(vertex.y, 0.0, 1e-6);
+    EXPECT_NEAR(vertex.z, 10.0, 1e-6);
+    EXPECT_NEAR(vertex.error, 0.0, 1e-6);
+    EXPECT_EQ(vertex.intensity, 51);
 #endif
 }

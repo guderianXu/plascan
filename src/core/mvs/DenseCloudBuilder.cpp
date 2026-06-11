@@ -6,8 +6,8 @@
 #include "DenseCloudBuilder.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/filters/preprocessing.h>
+#include <plapoint/io/ply_io.h>
 #include "log/Logger.h"
-#include <fstream>
 #include <algorithm>
 #include <numeric>
 #include <cmath>
@@ -21,6 +21,12 @@ namespace xjw
 {
 namespace mvs
 {
+
+namespace
+{
+static plapoint::PointCloud<float, plamatrix::Device::CPU>
+buildPointCloud(const std::vector<DensePoint> &cloud);
+} // namespace
 
 // =============================================================================
 std::vector<DensePoint> DenseCloudBuilder::unproject(
@@ -135,47 +141,18 @@ bool DenseCloudBuilder::savePLY(const std::string &path,
                                  const std::vector<DensePoint> &cloud,
                                  std::string *errorMsg)
 {
-    std::ofstream ofs(path, std::ios::binary);
-    if (!ofs)
+    try
     {
-        if (errorMsg)
-        {
-            *errorMsg = "无法创建文件: " + path;
-        }
+        plapoint::io::writePly(path,
+                               buildPointCloud(cloud),
+                               plapoint::io::PlyFormat::BinaryLE);
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMsg) *errorMsg = e.what();
         return false;
     }
-
-    // ASCII PLY header
-    ofs << "ply\n"
-        << "format binary_little_endian 1.0\n"
-        << "element vertex " << cloud.size() << "\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n"
-        << "property uchar red\n"
-        << "property uchar green\n"
-        << "property uchar blue\n"
-        << "end_header\n";
-
-#pragma pack(push, 1)
-    struct PLYVertex
-    {
-        float x;
-        float y;
-        float z;
-        uint8_t r;
-        uint8_t g;
-        uint8_t b;
-    };
-#pragma pack(pop)
-    static_assert(sizeof(PLYVertex) == 15, "PLYVertex must be 15 bytes (no padding)");
-    for (const auto &pt : cloud)
-    {
-        PLYVertex v{pt.x, pt.y, pt.z, pt.r, pt.g, pt.b};
-        ofs.write(reinterpret_cast<const char*>(&v), sizeof(PLYVertex));
-    }
-
-    return ofs.good();
 }
 
 // =============================================================================

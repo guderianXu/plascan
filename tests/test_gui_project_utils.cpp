@@ -16,6 +16,8 @@
 
 #include "Camera.h"
 
+#include <plapoint/io/ply_io.h>
+
 #include <QApplication>
 #include <QDir>
 #include <QCheckBox>
@@ -34,6 +36,7 @@
 #include <QFileInfo>
 #include <QPushButton>
 #include <QTemporaryDir>
+#include <QTextStream>
 #include <QToolButton>
 #include <QTreeView>
 #include <QUrl>
@@ -709,13 +712,30 @@ TEST(DataTreeWidgetTest, ContextMenuUsesSameResourcePathResolutionAsActivation)
 
 TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
-    ASSERT_FALSE(source.isEmpty());
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString plyPath = QDir(tempDir.path()).filePath(QStringLiteral("float_intensity.ply"));
+    QFile file(plyPath);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text));
+    QTextStream stream(&file);
+    stream << "ply\n"
+           << "format ascii 1.0\n"
+           << "element vertex 1\n"
+           << "property float x\n"
+           << "property float y\n"
+           << "property float z\n"
+           << "property float intensity\n"
+           << "end_header\n"
+           << "1 2 3 0.5\n";
+    file.close();
 
-    EXPECT_TRUE(source.contains(QStringLiteral("scalePlyIntensityToByte")));
-    EXPECT_TRUE(source.contains(QStringLiteral("isFloatingPlyScalar")));
-    EXPECT_TRUE(source.contains(QStringLiteral("value <= 1.0")));
-    EXPECT_TRUE(source.contains(QStringLiteral("value * 255.0")));
+    auto cloud = plapoint::io::readPly<float>(plyPath.toStdString());
+    ASSERT_TRUE(cloud != nullptr);
+    ASSERT_EQ(cloud->size(), 1u);
+    ASSERT_TRUE(cloud->hasColors());
+    EXPECT_EQ(cloud->colors()->getValue(0, 0), 128);
+    EXPECT_EQ(cloud->colors()->getValue(0, 1), 128);
+    EXPECT_EQ(cloud->colors()->getValue(0, 2), 128);
 }
 
 TEST(MainMenuTest, WorkflowMenuExposesOnlyOneClickThreeDReconstruction)

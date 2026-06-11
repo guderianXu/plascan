@@ -3,11 +3,11 @@
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
+#include <plapoint/io/xyz_io.h>
 #include <plapoint/search/kdtree.h>
 #include "log/Logger.h"
-#include <fstream>
-#include <sstream>
 #include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <limits>
 #include <chrono>
@@ -26,6 +26,19 @@ namespace
 {
 
 using SparsePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+
+bool endsWithIgnoreCase(const std::string &text, const std::string &suffix)
+{
+    if (text.size() < suffix.size())
+    {
+        return false;
+    }
+    return std::equal(suffix.rbegin(), suffix.rend(), text.rbegin(),
+                      [](char a, char b) {
+                          return std::tolower(static_cast<unsigned char>(a)) ==
+                                 std::tolower(static_cast<unsigned char>(b));
+                      });
+}
 
 SparsePlaCloud toPlaCloud(const std::vector<std::array<float,3>> &pts)
 {
@@ -111,79 +124,42 @@ bool SparseCloudPreprocessor::loadXYZ(const std::string &path,
                                        std::vector<std::array<float,3>> &pts,
                                        std::string *err)
 {
-    std::ifstream ifs(path);
-    if (!ifs)
+    try
     {
-        if (err)
+        std::shared_ptr<SparsePlaCloud> cloud;
+        if (endsWithIgnoreCase(path, ".ply"))
         {
-            *err = "无法打开文件: " + path;
+            cloud = plapoint::io::readPly<float>(path);
         }
-        return false;
-    }
-
-    // 检测是否为 PLY
-    std::string firstLine;
-    std::getline(ifs, firstLine);
-    bool isPly = (firstLine.find("ply") != std::string::npos);
-    if (isPly)
-    {
-        try
+        else
         {
-            auto cloud = plapoint::io::readPly<float>(path);
-            if (!cloud)
-            {
-                if (err)
-                {
-                    *err = "PLY 读取失败: " + path;
-                }
-                return false;
-            }
-
-            pts.clear();
-            pts.reserve(cloud->size());
-            const auto &matrix = cloud->points();
-            for (std::size_t i = 0; i < cloud->size(); ++i)
-            {
-                const auto row = static_cast<plamatrix::Index>(i);
-                pts.push_back({
-                    matrix.getValue(row, 0),
-                    matrix.getValue(row, 1),
-                    matrix.getValue(row, 2)
-                });
-            }
-            return true;
+            cloud = plapoint::io::readXyz<float>(path);
         }
-        catch (const std::exception &ex)
+        if (!cloud)
         {
-            if (err)
-            {
-                *err = "PLY 读取失败: " + std::string(ex.what());
-            }
+            if (err) *err = "点云读取失败: " + path;
             return false;
         }
-    }
-    else
-    {
-        ifs.seekg(0);
-    }
 
-    pts.clear();
-    std::string line;
-    while (std::getline(ifs, line))
-    {
-        if (line.empty() || line[0] == '#')
+        pts.clear();
+        pts.reserve(cloud->size());
+        const auto &matrix = cloud->points();
+        for (std::size_t i = 0; i < cloud->size(); ++i)
         {
-            continue;
+            const auto row = static_cast<plamatrix::Index>(i);
+            pts.push_back({
+                matrix.getValue(row, 0),
+                matrix.getValue(row, 1),
+                matrix.getValue(row, 2)
+            });
         }
-        std::istringstream ss(line);
-        float x, y, z;
-        if (!(ss >> x >> y >> z))
-        {
-            continue;
-        }
-        pts.push_back({x, y, z});
+        return true;
     }
-    return true;
+    catch (const std::exception &ex)
+    {
+        if (err) *err = "点云读取失败: " + std::string(ex.what());
+        return false;
+    }
 }
 
 // =============================================================================

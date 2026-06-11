@@ -12,6 +12,7 @@
 #include "SparseCloudPreprocessor.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/search/kdtree.h>
+#include <plapoint/io/ply_io.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/features/normal_estimation.h>
 
@@ -30,8 +31,6 @@
 
 #include <algorithm>
 #include <cmath>
-#include <fstream>
-#include <sstream>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -237,84 +236,40 @@ PlaPC fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
 
 bool readPointCloudPly(const QString &path, PlaPC *cloud, QString *errorMessage)
 {
-    std::ifstream f(path.toStdString(), std::ios::binary);
-    if (!f)
+    try
     {
-        if (errorMessage) *errorMessage = QStringLiteral("无法打开文件: %1").arg(path);
+        auto loaded = plapoint::io::readPly<float>(path.toStdString());
+        if (!loaded)
+        {
+            if (errorMessage) *errorMessage = QStringLiteral("读取PLY文件失败: %1").arg(path);
+            return false;
+        }
+        *cloud = std::move(*loaded);
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMessage) *errorMessage = QString::fromStdString(e.what());
         return false;
     }
+}
 
-    std::string line;
-    std::getline(f, line);
-    if (line != "ply") { if (errorMessage) *errorMessage = QStringLiteral("不是PLY文件"); return false; }
+PlaPC cloneCloudValue(const PlaPC &cloud, bool includeNormals = true)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
+    for (size_t i = 0; i < cloud.size(); ++i)
+        for (int d = 0; d < 3; ++d)
+            pts(static_cast<plamatrix::Index>(i), d) = cloud.points()(static_cast<plamatrix::Index>(i), d);
 
-    std::getline(f, line); // format line
-    bool isBinary = (line.find("binary_little_endian") != std::string::npos);
-
-    int nVerts = 0;
-    bool hasColor = false;
-    std::vector<std::string> props;
-    while (std::getline(f, line))
-    {
-        if (!line.empty() && line.back() == '\r') line.pop_back();
-        if (line == "end_header") break;
-        std::istringstream iss(line);
-        std::string token;
-        iss >> token;
-        if (token == "element") { std::string e; iss >> e >> nVerts; }
-        else if (token == "property")
-        {
-            std::string type, name;
-            iss >> type >> name;
-            props.push_back(name);
-            if (name == "red") hasColor = true;
-        }
-    }
-
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(nVerts, 3);
-    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(nVerts, 3);
-    if (isBinary)
-    {
-        for (int i = 0; i < nVerts; ++i)
-        {
-            for (const auto &p : props)
-            {
-                if (p == "x" || p == "y" || p == "z")
-                {
-                    float v; f.read(reinterpret_cast<char*>(&v), 4);
-                    int col = (p == "x") ? 0 : (p == "y") ? 1 : 2;
-                    pts(i, col) = v;
-                }
-                else if (p == "red")   { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 0) = v; }
-                else if (p == "green") { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 1) = v; }
-                else if (p == "blue")  { uint8_t v; f.read(reinterpret_cast<char*>(&v), 1); colors(i, 2) = v; }
-                else { float dummy; f.read(reinterpret_cast<char*>(&dummy), 4); } // skip unknown float props
-            }
-        }
-    }
-    else
-    {
-        for (int i = 0; i < nVerts; ++i)
-        {
-            std::getline(f, line);
-            if (!line.empty() && line.back() == '\r') line.pop_back();
-            std::istringstream iss(line);
-            for (const auto &p : props)
-            {
-                if (p == "x") { float v; iss >> v; pts(i, 0) = v; }
-                else if (p == "y") { float v; iss >> v; pts(i, 1) = v; }
-                else if (p == "z") { float v; iss >> v; pts(i, 2) = v; }
-                else if (p == "red")   { int v; iss >> v; colors(i, 0) = static_cast<uint8_t>(v); }
-                else if (p == "green") { int v; iss >> v; colors(i, 1) = static_cast<uint8_t>(v); }
-                else if (p == "blue")  { int v; iss >> v; colors(i, 2) = static_cast<uint8_t>(v); }
-                else { float dummy; iss >> dummy; } // skip unknown props
-            }
-        }
-    }
-
-    *cloud = PlaPC(std::move(pts));
-    if (hasColor) cloud->setColors(std::move(colors));
-    return true;
+    PlaPC copy(std::move(pts));
+    if (cloud.hasColors()) copy.setColors(*cloud.colors());
+    if (cloud.hasIntensities()) copy.setIntensities(*cloud.intensities());
+    if (includeNormals && cloud.hasNormals()) copy.setNormals(*cloud.normals());
+    if (cloud.hasScalarFields()) copy.setScalarFields(cloud.scalarFieldNames(), *cloud.scalarFields());
+    if (cloud.hasFaces()) copy.setFaces(*cloud.faces());
+    copy.setMaterialLibraryFile(cloud.materialLibraryFile());
+    copy.setTextureImageFile(cloud.textureImageFile());
+    return copy;
 }
 
 bool writePointCloudPly(const QString &path,
@@ -322,76 +277,30 @@ bool writePointCloudPly(const QString &path,
                         bool writeNormals,
                         QString *errorMessage)
 {
-    std::ofstream ofs(path.toStdString(), std::ios::binary);
-    if (!ofs)
+    try
     {
-        if (errorMessage) *errorMessage = QStringLiteral("无法创建文件: %1").arg(path);
+        if (writeNormals || !pointCloud.hasNormals())
+        {
+            plapoint::io::writePly(path.toStdString(), pointCloud, plapoint::io::PlyFormat::BinaryLE);
+        }
+        else
+        {
+            const auto withoutNormals = cloneCloudValue(pointCloud, false);
+            plapoint::io::writePly(path.toStdString(), withoutNormals, plapoint::io::PlyFormat::BinaryLE);
+        }
+        return true;
+    }
+    catch (const std::exception &e)
+    {
+        if (errorMessage) *errorMessage = QString::fromStdString(e.what());
         return false;
     }
-
-    const bool hasNormalsOut = writeNormals && pointCloud.hasNormals();
-    const bool hasColorsOut = pointCloud.hasColors();
-
-    ofs << "ply\n"
-        << "format binary_little_endian 1.0\n"
-        << "element vertex " << pointCloud.size() << "\n"
-        << "property float x\nproperty float y\nproperty float z\n";
-    if (hasNormalsOut)
-        ofs << "property float nx\nproperty float ny\nproperty float nz\n";
-    if (hasColorsOut)
-        ofs << "property uchar red\nproperty uchar green\nproperty uchar blue\n";
-    ofs << "end_header\n";
-
-    for (size_t i = 0; i < pointCloud.size(); ++i)
-    {
-        float v[3];
-        for (int d = 0; d < 3; ++d) v[d] = static_cast<float>(pointCloud.points()(static_cast<plamatrix::Index>(i), d));
-        ofs.write(reinterpret_cast<const char*>(v), sizeof(float) * 3);
-
-        if (hasNormalsOut)
-        {
-            float n[3];
-            auto *nrm = pointCloud.normals();
-            for (int d = 0; d < 3; ++d) n[d] = static_cast<float>(nrm->getValue(static_cast<plamatrix::Index>(i), d));
-            ofs.write(reinterpret_cast<const char*>(n), sizeof(float) * 3);
-        }
-
-        if (hasColorsOut)
-        {
-            uint8_t c[3];
-            auto *col = pointCloud.colors();
-            for (int d = 0; d < 3; ++d) c[d] = col->getValue(static_cast<plamatrix::Index>(i), d);
-            ofs.write(reinterpret_cast<const char*>(c), sizeof(uint8_t) * 3);
-        }
-    }
-
-    return ofs.good();
 }
 
 // Helper: deep-copy PointCloud to shared_ptr
 static std::shared_ptr<PlaPC> cloneCloud(const PlaPC &cloud)
 {
-    auto copy = std::make_shared<PlaPC>(cloud.size());
-    for (size_t i = 0; i < cloud.size(); ++i)
-        for (int d = 0; d < 3; ++d)
-            copy->points()(static_cast<plamatrix::Index>(i), d) = cloud.points()(static_cast<plamatrix::Index>(i), d);
-    if (cloud.hasColors())
-    {
-        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> c(cloud.size(), 3);
-        for (size_t i = 0; i < cloud.size(); ++i)
-            for (int d = 0; d < 3; ++d)
-                c(static_cast<plamatrix::Index>(i), d) = cloud.colors()->getValue(static_cast<plamatrix::Index>(i), d);
-        copy->setColors(std::move(c));
-    }
-    if (cloud.hasNormals())
-    {
-        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> n(cloud.size(), 3);
-        for (size_t i = 0; i < cloud.size(); ++i)
-            for (int d = 0; d < 3; ++d)
-                n(static_cast<plamatrix::Index>(i), d) = cloud.normals()->getValue(static_cast<plamatrix::Index>(i), d);
-        copy->setNormals(std::move(n));
-    }
-    return copy;
+    return std::make_shared<PlaPC>(cloneCloudValue(cloud));
 }
 
 PlaPC sorFilter(const PlaPC &cloud,
