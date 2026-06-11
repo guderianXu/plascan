@@ -1,10 +1,11 @@
 #include "ImageViewWidget.h"
 
+#include "ui_ImageViewWidget.h"
+
 #include <QGraphicsView>
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
 #include <QGraphicsEllipseItem>
-#include <QVBoxLayout>
 #include <QWheelEvent>
 #include <QScrollBar>
 #include <QImage>
@@ -33,8 +34,12 @@ ImageViewWidget::~ImageViewWidget()
 
 void ImageViewWidget::setupView()
 {
+    Ui::ImageViewWidget ui;
+    ui.setupUi(this);
+
     m_scene = new QGraphicsScene(this);
-    m_view = new QGraphicsView(m_scene, this);
+    m_view = ui.m_view;
+    m_view->setScene(m_scene);
     
     // 设置视图属性
     m_view->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
@@ -53,11 +58,6 @@ void ImageViewWidget::setupView()
     connect(m_view->verticalScrollBar(), &QScrollBar::valueChanged,
         this, &ImageViewWidget::onViewChanged, Qt::QueuedConnection);
     
-    // 布局
-    QVBoxLayout *layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(m_view);
-    setLayout(layout);
 }
 
 bool ImageViewWidget::loadImage(const QString &imagePath)

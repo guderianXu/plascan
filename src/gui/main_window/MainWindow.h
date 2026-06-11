@@ -48,6 +48,10 @@ class DialogSettingStore;
 class QDragEnterEvent;
 class QDropEvent;
 
+namespace Ui {
+class MainWindow;
+}
+
 class MainWindow : public QMainWindow
 {
     Q_OBJECT
@@ -85,6 +89,7 @@ private:
     bool exportMatchedPairsToLis(QString *outputPath, QString *errorMessage) const;
 
     // ---- 成员 ----
+    Ui::MainWindow*  m_ui{};                           // Qt Designer 生成的主窗口静态布局
     QSplitter*        m_mainSplitter{};                 // 左右主分割器（左=数据树选项卡, 右=工作区）
     QTabWidget*       m_leftTabs{};                     // 左侧选项卡容器（工作区 | 参考）
     DataTreeWidget*   m_dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）

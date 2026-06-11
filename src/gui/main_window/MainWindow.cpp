@@ -1,18 +1,17 @@
 #include "MainWindow.h"
 
+#include "ui_MainWindow.h"
+
 #include <QApplication>
 #include <QSplitter>
 #include <QDockWidget>
 #include <QToolBar>
 #include <QMenuBar>
 #include <QStatusBar>
-#include <QVBoxLayout>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QFileInfo>
 #include <QDesktopServices>
 #include <QUrl>
-#include <QListWidget>
 #include <QToolButton>
 #include <QButtonGroup>
 #include <QJsonObject>
@@ -64,6 +63,7 @@
 // ============================================================
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
+    , m_ui(new Ui::MainWindow)
 {
     Qt::WindowFlags flags = windowFlags();
     flags |= Qt::Window;
@@ -73,8 +73,10 @@ MainWindow::MainWindow(QWidget *parent)
     flags &= ~Qt::FramelessWindowHint;
     setWindowFlags(flags);
     setWindowTitle(QStringLiteral("PlaScan"));
-    m_mainMenu = new MainMenu(this);
     m_config   = new AppConfigManager(this);
+
+    setupUi();
+    m_mainMenu = new MainMenu(this);
     m_config->windowState()->load(this);
 
     if (windowState().testFlag(Qt::WindowFullScreen))
@@ -82,7 +84,6 @@ MainWindow::MainWindow(QWidget *parent)
         setWindowState((windowState() & ~Qt::WindowFullScreen) | Qt::WindowMaximized);
     }
 
-    setupUi();
     setupBottomPanel();
     setupMenuConnections();
     setupProjectManager();
@@ -91,7 +92,10 @@ MainWindow::MainWindow(QWidget *parent)
     statusBar()->showMessage(tr("就绪"));
 }
 
-MainWindow::~MainWindow() = default;
+MainWindow::~MainWindow()
+{
+    delete m_ui;
+}
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
 {
@@ -143,31 +147,19 @@ void MainWindow::dropEvent(QDropEvent *event)
 
 void MainWindow::setupUi()
 {
-    m_mainSplitter = new QSplitter(this);
-    m_leftTabs     = new QTabWidget();
-    m_dataTree     = new DataTreeWidget();
-    m_referencePanel = new ReferencePanelWidget();
-    m_workspaceCenter = new WorkspaceCenterWidget();
+    m_ui->setupUi(this);
+
+    m_mainSplitter = m_ui->mainSplitter;
+    m_leftTabs = m_ui->leftTabs;
+    m_dataTree = m_ui->dataTree;
+    m_referencePanel = m_ui->referencePanel;
+    m_workspaceCenter = m_ui->workspaceCenter;
     m_canvas       = m_workspaceCenter->canvas();
-
-    m_leftTabs->addTab(m_dataTree, tr("工作区"));
-    m_leftTabs->addTab(m_referencePanel, tr("参考"));
-
-    QWidget* centerWidget = new QWidget();
-    QVBoxLayout* centerLayout = new QVBoxLayout(centerWidget);
-    centerLayout->setContentsMargins(0, 0, 0, 0);
-    centerLayout->addWidget(m_workspaceCenter);
-
-    m_mainSplitter->addWidget(m_leftTabs);
-    m_mainSplitter->addWidget(centerWidget);
     m_mainSplitter->setStretchFactor(1, 1);
-    setCentralWidget(m_mainSplitter);
 
-    m_log = new LogPanel();
-    m_logDock = new QDockWidget(tr("日志"), this);
+    m_log = m_ui->logPanel;
+    m_logDock = m_ui->logDock;
     m_logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
-    m_logDock->setWidget(m_log);
-    addDockWidget(Qt::BottomDockWidgetArea, m_logDock);
 
     LOG_INFO("%s", qUtf8Printable(tr("日志面板已就绪")));
 
@@ -1636,7 +1628,7 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     }
     if (m_dataTree)
     {
-        m_dataTree->loadFromArchive(plascanPath);
+        m_dataTree->setProjectPath(plascanPath);
     }
     if (m_projectManager && m_dataTree)
         m_dataTree->loadFromJson(m_projectManager->currentMeta());

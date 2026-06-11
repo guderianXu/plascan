@@ -1,5 +1,7 @@
 #include "WindowPanel.h"
 
+#include "ui_WindowPanel.h"
+
 #include <QVBoxLayout>
 #include <QToolButton>
 #include <QAction>
@@ -7,15 +9,9 @@
 WindowPanel::WindowPanel(QWidget *parent)
     : QWidget(parent)
 {
-    auto *lay = new QVBoxLayout(this);
-    lay->setContentsMargins(6, 6, 6, 6);
-    lay->setSpacing(6);
-    m_container = new QWidget(this);
-    auto *inner = new QVBoxLayout(m_container);
-    inner->setContentsMargins(0, 0, 0, 0);
-    inner->setSpacing(4);
-    lay->addWidget(m_container);
-    lay->addStretch();
+    Ui::WindowPanel ui;
+    ui.setupUi(this);
+    m_container = ui.m_container;
 }
 
 WindowPanel::~WindowPanel() = default;
@@ -26,11 +22,8 @@ void WindowPanel::setActions(const QList<QAction*> &actions)
         return;
 
     auto *inner = qobject_cast<QVBoxLayout*>(m_container->layout());
-    if (!inner) {
-        inner = new QVBoxLayout(m_container);
-        inner->setContentsMargins(0, 0, 0, 0);
-        inner->setSpacing(4);
-    }
+    if (!inner)
+        return;
 
     // 清理已有子控件
     QLayoutItem *child;

@@ -1,13 +1,13 @@
 #include "WorkspaceCenterWidget.h"
 
+#include "ui_WorkspaceCenterWidget.h"
+
 #include "CanvasWidget.h"
 #include "CameraModel3DDialog.h"
 #include "DualImageViewer.h"
 #include "ObservationNetworkView.h"
 #include "ProjectSupportUtils.h"
 
-#include <QHBoxLayout>
-#include <QVBoxLayout>
 #include <QPushButton>
 #include <QStackedWidget>
 #include <QFileInfo>
@@ -16,49 +16,19 @@
 
 WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
     : QWidget(parent)
+    , m_ui(new Ui::WorkspaceCenterWidget)
 {
-    auto *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->setSpacing(0);
+    m_ui->setupUi(this);
 
-    auto *topBar = new QHBoxLayout();
-    topBar->setContentsMargins(6, 6, 6, 4);
-    topBar->setSpacing(6);
-
-    m_modelBtn = new QPushButton(tr("模型"), this);
-    m_modelBtn->setCheckable(true);
-
-    m_imageBtn = new QPushButton(tr("-"), this);
-    m_imageBtn->setCheckable(true);
-    m_imageBtn->setVisible(false);
-
-    m_compareBtn = new QPushButton(tr("对比"), this);
-    m_compareBtn->setCheckable(true);
-    m_compareBtn->setVisible(false);
-
-    m_obsNetBtn = new QPushButton(tr("观测网络"), this);
-    m_obsNetBtn->setCheckable(true);
-    m_obsNetBtn->setVisible(false);
-
-    topBar->addWidget(m_modelBtn);
-    topBar->addWidget(m_imageBtn);
-    topBar->addWidget(m_compareBtn);
-    topBar->addWidget(m_obsNetBtn);
-    topBar->addStretch(1);
-
-    m_stack = new QStackedWidget(this);
-    m_modelView = new CameraSceneWidget(this);
-    m_canvas = new CanvasWidget(this);
-    m_dualImageViewer = new DualImageViewer(this);
-    m_obsNetView = new ObservationNetworkView(this);
-
-    m_stack->addWidget(m_modelView);
-    m_stack->addWidget(m_canvas);
-    m_stack->addWidget(m_dualImageViewer);
-    m_stack->addWidget(m_obsNetView);
-
-    mainLayout->addLayout(topBar);
-    mainLayout->addWidget(m_stack, 1);
+    m_modelBtn = m_ui->m_modelBtn;
+    m_imageBtn = m_ui->m_imageBtn;
+    m_compareBtn = m_ui->m_compareBtn;
+    m_obsNetBtn = m_ui->m_obsNetBtn;
+    m_stack = m_ui->m_stack;
+    m_modelView = m_ui->m_modelView;
+    m_canvas = m_ui->m_canvas;
+    m_dualImageViewer = m_ui->m_dualImageViewer;
+    m_obsNetView = m_ui->m_obsNetView;
 
     connect(m_modelBtn, &QPushButton::clicked, this, &WorkspaceCenterWidget::showModelView);
     connect(m_imageBtn, &QPushButton::clicked, this, [this]()
@@ -107,6 +77,11 @@ WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
     });
 
     showModelView();
+}
+
+WorkspaceCenterWidget::~WorkspaceCenterWidget()
+{
+    delete m_ui;
 }
 
 CanvasWidget *WorkspaceCenterWidget::canvas() const

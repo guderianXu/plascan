@@ -12,11 +12,16 @@ class CameraSceneWidget;
 class ObservationNetworkView;
 class DualImageViewer;
 
+namespace Ui {
+class WorkspaceCenterWidget;
+}
+
 class WorkspaceCenterWidget : public QWidget
 {
     Q_OBJECT
 public:
     explicit WorkspaceCenterWidget(QWidget *parent = nullptr);
+    ~WorkspaceCenterWidget() override;
 
     CanvasWidget *canvas() const;
     CameraSceneWidget *modelView() const;
@@ -33,6 +38,7 @@ public slots:
 private:
     void refreshModelFromMeta(const QJsonObject &meta);
 
+    Ui::WorkspaceCenterWidget *m_ui = nullptr;
     QPushButton *m_modelBtn = nullptr;
     QPushButton *m_imageBtn = nullptr;
     QPushButton *m_compareBtn = nullptr;

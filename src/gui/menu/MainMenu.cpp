@@ -22,6 +22,16 @@
 #include <QStyle>
 #include <Qt>
 
+namespace {
+
+template <typename T>
+T *findNamedChild(QObject *root, const char *name)
+{
+    return root ? root->findChild<T *>(QString::fromLatin1(name)) : nullptr;
+}
+
+} // namespace
+
 // ============================================================
 //  构造函数 — 创建完整的菜单结构
 // ============================================================
@@ -43,6 +53,96 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     : QObject(mainWindow), m_mainWindow(mainWindow)
 {
     if (!m_mainWindow) return;
+
+    if (findNamedChild<QAction>(m_mainWindow, "actionNewProject"))
+    {
+        m_fileMenu = findNamedChild<QMenu>(m_mainWindow, "menuProject");
+        m_recentMenu = findNamedChild<QMenu>(m_mainWindow, "menuRecentProjects");
+        auto *windowMenu = findNamedChild<QMenu>(m_mainWindow, "menuWindow");
+
+        m_newAct = findNamedChild<QAction>(m_mainWindow, "actionNewProject");
+        m_openAct = findNamedChild<QAction>(m_mainWindow, "actionOpenProject");
+        m_saveAct = findNamedChild<QAction>(m_mainWindow, "actionSaveProject");
+        m_exportMatchedPairsAct = findNamedChild<QAction>(m_mainWindow, "actionExportMatchedPairs");
+        m_minimizeAct = findNamedChild<QAction>(m_mainWindow, "actionMinimize");
+        m_exitAct = findNamedChild<QAction>(m_mainWindow, "actionExit");
+
+        m_zoomInAct = findNamedChild<QAction>(m_mainWindow, "actionZoomIn");
+        m_zoomOutAct = findNamedChild<QAction>(m_mainWindow, "actionZoomOut");
+        m_resetViewAct = findNamedChild<QAction>(m_mainWindow, "actionResetView");
+        m_toggleGizmoAct = findNamedChild<QAction>(m_mainWindow, "actionToggleGizmo");
+        m_featureVisualizationAct = findNamedChild<QAction>(m_mainWindow, "actionFeatureVisualization");
+        m_toggleLogAct = findNamedChild<QAction>(m_mainWindow, "actionToggleLog");
+        m_featureInfoAct = findNamedChild<QAction>(m_mainWindow, "actionFeatureInfo");
+
+        m_addPhotoAct = findNamedChild<QAction>(m_mainWindow, "actionAddPhoto");
+        m_addFolderAct = findNamedChild<QAction>(m_mainWindow, "actionAddFolder");
+        m_threeDReconstructionAct = findNamedChild<QAction>(m_mainWindow, "actionThreeDReconstruction");
+        m_createDEMAct = findNamedChild<QAction>(m_mainWindow, "actionCreateDEM");
+        m_generateOrthoAct = findNamedChild<QAction>(m_mainWindow, "actionGenerateOrtho");
+
+        m_detectFeaturesAct = findNamedChild<QAction>(m_mainWindow, "actionDetectFeatures");
+        m_matchFeaturesAct = findNamedChild<QAction>(m_mainWindow, "actionMatchFeatures");
+        m_buildObsNetworkAct = findNamedChild<QAction>(m_mainWindow, "actionBuildObsNetwork");
+        m_initCameraPoseAct = findNamedChild<QAction>(m_mainWindow, "actionInitCameraPose");
+        m_triangulateAct = findNamedChild<QAction>(m_mainWindow, "actionTriangulate");
+        m_reconBundleAdjustAct = findNamedChild<QAction>(m_mainWindow, "actionReconBundleAdjust");
+        m_sparseCloudPostProcessAct = findNamedChild<QAction>(m_mainWindow, "actionSparseCloudPostProcess");
+        m_denseMatchAct = findNamedChild<QAction>(m_mainWindow, "actionDenseMatch");
+        m_depthMapEstimateAct = findNamedChild<QAction>(m_mainWindow, "actionDepthMapEstimate");
+        m_fuseDepthMapsAct = findNamedChild<QAction>(m_mainWindow, "actionFuseDepthMaps");
+        m_refineDenseCloudAct = findNamedChild<QAction>(m_mainWindow, "actionRefineDenseCloud");
+        m_meshReconstructAct = findNamedChild<QAction>(m_mainWindow, "actionMeshReconstruct");
+        m_textureMappingAct = findNamedChild<QAction>(m_mainWindow, "actionTextureMapping");
+        m_exportModelAct = findNamedChild<QAction>(m_mainWindow, "actionExportModel");
+
+        m_overlapAnalysisAct = findNamedChild<QAction>(m_mainWindow, "actionOverlapAnalysis");
+        m_intersectionCheckAct = findNamedChild<QAction>(m_mainWindow, "actionIntersectionCheck");
+        m_intersectionViewResultsAct = findNamedChild<QAction>(m_mainWindow, "actionIntersectionViewResults");
+        m_manualPointCloudPruneAct = findNamedChild<QAction>(m_mainWindow, "actionManualPointCloudPrune");
+        m_viewMatchesAct = findNamedChild<QAction>(m_mainWindow, "actionViewMatches");
+        m_viewWorkflowReportAct = findNamedChild<QAction>(m_mainWindow, "actionViewWorkflowReport");
+
+        if (m_exitAct)
+        {
+            connect(m_exitAct, &QAction::triggered, qApp, &QCoreApplication::quit);
+        }
+        if (auto *aboutAct = findNamedChild<QAction>(m_mainWindow, "actionAbout"))
+        {
+            connect(aboutAct, &QAction::triggered, m_mainWindow, [mw = m_mainWindow]() {
+                mw->statusBar()->showMessage(tr("PlaScan: 行星表面摄影测量处理系统"), 3000);
+            });
+        }
+
+        if (windowMenu)
+        {
+            QList<QAction*> windowActs = { m_toggleLogAct, m_featureInfoAct };
+            auto *panelAct = new QWidgetAction(windowMenu);
+            auto *wp = new WindowPanel(windowMenu);
+            panelAct->setDefaultWidget(wp);
+            windowMenu->addAction(panelAct);
+            wp->setActions(windowActs);
+        }
+
+        m_toolBar = findNamedChild<QToolBar>(m_mainWindow, "mainToolBar");
+        if (m_toolBar)
+        {
+            m_toolBar->setMovable(false);
+            m_toolBar->setFloatable(false);
+            m_toolBar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
+            m_toolBar->setIconSize(QSize(24, 24));
+        }
+        if (m_saveAct)
+        {
+            m_saveAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DialogSaveButton));
+        }
+        if (m_manualPointCloudPruneAct)
+        {
+            m_manualPointCloudPruneAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_CommandLink));
+        }
+
+        return;
+    }
 
     // ---- 项目菜单 ----
     // 创建顶级"项目"菜单并依次添加固定动作

@@ -6,7 +6,6 @@
 #include "graph/ObservationNetworkBuilder.h"
 #include "ui_ObservationNetworkDialog.h"
 
-#include <QVBoxLayout>
 #include <QComboBox>
 #include <QSpinBox>
 #include <QDoubleSpinBox>
@@ -54,12 +53,7 @@ ObservationNetworkDialog::ObservationNetworkDialog(QWidget *parent)
     m_pruneWeakCheck = ui.m_pruneWeakCheck;
     m_pruneThreshSpin = ui.m_pruneThreshSpin;
     m_threadsSpin = ui.m_threadsSpin;
-
-    auto *netLayout = new QVBoxLayout(ui.networkViewContainer);
-    netLayout->setContentsMargins(0, 0, 0, 0);
-    m_netView = new ObservationNetworkView(ui.networkViewContainer);
-    m_netView->setMinimumSize(500, 380);
-    netLayout->addWidget(m_netView);
+    m_netView = ui.m_netView;
 
     ui.buttonBox->button(QDialogButtonBox::Ok)->setText(tr("执行构建"));
 

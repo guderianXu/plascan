@@ -4,9 +4,10 @@
  * @file MainMenu.h
  * @brief 主菜单栏与工具栏管理器的声明文件。
  *
- * MainMenu 封装了应用程序所有菜单项（QAction）的创建与组织，
+ * MainMenu 封装了应用程序所有菜单项（QAction）的访问与动态内容维护，
  * 遵循"只负责构建 UI 结构，不承载业务逻辑"的原则：
- *   - 构造函数在 QMainWindow 的菜单栏中创建所有菜单和动作；
+ *   - 优先绑定 MainWindow.ui 中定义的菜单和动作；
+ *   - 在裸 QMainWindow 测试场景下回退为代码创建菜单和动作；
  *   - 通过公开的访问器方法（xxxAction()）将各 QAction 暴露给主窗口；
  *   - 主窗口负责将这些 QAction 的 triggered 信号连接到实际的业务槽函数。
  *
@@ -27,21 +28,20 @@ class QMenu;
 
 /**
  * @class MainMenu
- * @brief 构建并管理应用程序菜单栏与工具栏的所有动作。
+ * @brief 绑定并管理应用程序菜单栏与工具栏的所有动作。
  *
- * 所有 QAction 均由本类在构造时创建并持有，外部通过访问器方法获取指针并连接信号。
- * 父对象设为 QMainWindow，生命周期由 Qt 对象树管理。
+ * 正常运行时 QAction 来自 MainWindow.ui，外部通过访问器方法获取指针并连接信号。
+ * 最近打开项目和窗口面板等动态菜单内容仍由本类维护。
  */
 class MainMenu : public QObject
 {
     Q_OBJECT
 public:
     /**
-     * @brief 构造函数：在指定主窗口上创建完整的菜单系统与工具栏。
+     * @brief 构造函数：绑定或创建指定主窗口上的菜单系统与工具栏。
      *
-     * 依次创建：项目菜单、视图菜单（含窗口子菜单）、
-    * 工作流程菜单、工具菜单、帮助菜单，
-     * 以及主工具栏。
+     * 优先绑定 MainWindow.ui 中的项目、视图、工作流程、重建、工具、帮助菜单和主工具栏；
+     * 若主窗口未通过 .ui 初始化，则回退到代码创建，保持单元测试可独立运行。
      *
      * @param mainWindow 要在其上添加菜单/工具栏的主窗口，不可为 nullptr。
      */

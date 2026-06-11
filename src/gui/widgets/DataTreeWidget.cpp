@@ -1,34 +1,32 @@
 #include "DataTreeWidget.h"
 
+#include "ui_DataTreeWidget.h"
+
 #include <QTreeView>
 #include <QStandardItemModel>
 #include <QHeaderView>
 #include <QMenu>
 #include <QAction>
-#include <QJsonDocument>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QFileInfo>
-#include <QFile>
 #include <QDir>
-#include <QVBoxLayout>
-#include <QDebug>
 #include <QMessageBox>
 #include <QImageReader>
 #include <QStyle>
 
-#include "PlascanArchive.h"
-#include "Logger.h"
-
 // DataTreeWidget 的实现：
-// - 通过 PlascanArchive 读取 project_files.json（或回退到磁盘上的文件），解析 images 数组
+// - 只消费 ProjectData/ProjectManager 提供的内存元数据快照
 // - 将每个资源作为一行显示，列为：名称 / 路径 / 存储方式（internal/reference）
 // - 右键菜单提供打开 / 在文件管理器中显示 / 打包 / 移除等操作（只发出信号，由上层处理）
 
 DataTreeWidget::DataTreeWidget(QWidget *parent)
     : QWidget(parent)
 {
-    m_view = new QTreeView(this);
+    Ui::DataTreeWidget ui;
+    ui.setupUi(this);
+
+    m_view = ui.m_view;
     m_model = new QStandardItemModel(this);
     // 左侧列表显示策略：
     // - 只展示“名称”一列，保持列表简洁（用户不希望直接看到路径/存储）。
@@ -43,7 +41,6 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     // 允许使用 Ctrl / Shift 多选
     m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    m_view->setContextMenuPolicy(Qt::CustomContextMenu);
     connect(m_view, &QTreeView::customContextMenuRequested, this, &DataTreeWidget::onContextMenuRequested);
 
     // 单击/双击任意项时，通知上层切换中央影像显示
@@ -61,10 +58,7 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
         }
         if (!path.trimmed().isEmpty())
         {
-            if (!QFileInfo(path).isAbsolute() && !m_currentPlascanPath.trimmed().isEmpty()) {
-                const QString root = QFileInfo(m_currentPlascanPath).absolutePath();
-                path = QDir(root).filePath(path);
-            }
+            path = resolveResourcePath(path);
             emit resourceActivated(section, path);
             if (section == QStringLiteral("照片")
                 || section == QStringLiteral("深度图")
@@ -75,82 +69,29 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
         }
     });
 
-    auto layout = new QVBoxLayout(this);
-    layout->setContentsMargins(0, 0, 0, 0);
-    layout->addWidget(m_view);
-    setLayout(layout);
 }
 
 DataTreeWidget::~DataTreeWidget()
 {
 }
 
-void DataTreeWidget::loadFromArchive(const QString &plascanPath)
+void DataTreeWidget::setProjectPath(const QString &plascanPath)
 {
     m_currentPlascanPath = plascanPath;
+    m_lastMeta = QJsonObject();
     m_model->removeRows(0, m_model->rowCount());
+}
 
-        // debug logs removed
-
-    QByteArray content;
-
-    // 优先检查运行时临时目录中的元数据（避免打开归档每次写入）
-    QString projectRoot = QFileInfo(plascanPath).absolutePath();
-    QString tempMeta = QDir(projectRoot).filePath(".plascan_tmp/project_files.json");
-    QFile tf(tempMeta);
-    if (tf.open(QIODevice::ReadOnly))
-    {
-        content = tf.readAll();
-        tf.close();
-    }
-
-    // 临时文件不存在时再尝试从归档中读取
-    if (content.isEmpty())
-    {
-        QString err;
-        PlascanArchive arch(plascanPath);
-        if (arch.isValid())
-        {
-            content = arch.readEntry("project_files.json", &err);
-        }
-        else
-        {
-        }
-    }
-
-    // 最后回退到磁盘上的 project_files.json
-    if (content.isEmpty())
-    {
-        QString metaPath = QDir(projectRoot).filePath("project_files.json");
-        QFile f(metaPath);
-        if (f.open(QIODevice::ReadOnly))
-        {
-            content = f.readAll();
-            f.close();
-        }
-        else
-        {
-        }
-    }
-
-    if (content.isEmpty())
-    {
-        m_lastMeta = QJsonObject();
-        return; // 没有元数据可显示
-    }
-
-    QJsonDocument doc = QJsonDocument::fromJson(content);
-    if (!doc.isObject()) return;
-    m_lastMeta = doc.object();
-    populateFromMeta(m_lastMeta);
-
+void DataTreeWidget::loadFromArchive(const QString &plascanPath)
+{
+    setProjectPath(plascanPath);
 }
 
 void DataTreeWidget::loadFromJson(const QJsonObject &meta)
 {
     // 注意：这里不能在 images 为空时就清空列表并返回。
     // 因为 projectOpened/metadataChanged 等信号可能会短暂发送一个空 meta，
-    // 若直接清空会覆盖掉刚从 loadFromArchive() 填充的列表，造成“解析出 rowCount=2 但 UI 仍空”。
+    // 若直接清空会覆盖掉当前项目树，造成 UI 闪烁或误清空。
     if (meta.isEmpty()) return;
 
     // 支持两种结构：根对象的 "images" 或嵌套在 "project_files" 中的 "images"。
@@ -251,6 +192,23 @@ void DataTreeWidget::appendItemRow(QStandardItem *parent, const QString &name, c
     pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
     parent->appendRow({nameItem, pathItem, storageItem});
+}
+
+QString DataTreeWidget::resolveResourcePath(const QString &resourcePath) const
+{
+    const QString trimmedPath = resourcePath.trimmed();
+    if (trimmedPath.isEmpty())
+    {
+        return QString();
+    }
+
+    if (QFileInfo(trimmedPath).isAbsolute() || m_currentPlascanPath.trimmed().isEmpty())
+    {
+        return QDir::cleanPath(trimmedPath);
+    }
+
+    const QString projectRoot = QFileInfo(m_currentPlascanPath).absolutePath();
+    return QDir::cleanPath(QDir(projectRoot).filePath(trimmedPath));
 }
 
 void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
@@ -531,7 +489,7 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
         }
         QModelIndex pathIdx = i.sibling(i.row(), 1);
         if (pathIdx.isValid()) {
-            paths << m_model->data(pathIdx).toString();
+            paths << resolveResourcePath(m_model->data(pathIdx).toString());
             rows.append(i);
 
             const QString rowSection = m_model->data(i.parent()).toString().section(' ', 0, 0);

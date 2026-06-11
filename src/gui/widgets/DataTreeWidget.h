@@ -11,7 +11,7 @@ class QStandardItemModel;
 // DataTreeWidget: 显示项目中的资源（影像/图层等）的树状视图
 // 设计要点：
 // - 仅负责视图显示与用户交互（选择/右键菜单），不做磁盘 I/O 或归档写操作
-// - 提供 loadFromArchive(plascanPath) 方法，从 .plascan 或回退的磁盘文件读取 project_files.json 并显示
+// - 通过 loadFromJson(meta) 消费 ProjectData 发出的内存元数据快照
 // - 通过信号把用户操作（打开/在文件管理器中显示/打包/移除引用）传递给上层组件（例如 MainWindow / ProjectManager）
 class DataTreeWidget : public QWidget
 {
@@ -20,7 +20,9 @@ public:
     explicit DataTreeWidget(QWidget *parent = nullptr);
     ~DataTreeWidget() override;
 
-    // 从指定的 .plascan（归档文件路径）加载资源索引并刷新视图
+    // 记录当前 .plascan 路径，用于解析树中相对资源路径；不读取磁盘。
+    void setProjectPath(const QString &plascanPath);
+    // 兼容旧调用：仅记录项目路径，不再直接读取归档或临时文件。
     void loadFromArchive(const QString &plascanPath);
 public slots:
     // 直接从内存提供的 JSON 元数据刷新视图（由 ProjectManager 在修改后立即调用）
@@ -59,6 +61,7 @@ private:
     QJsonObject normalizeMeta(const QJsonObject &meta) const;
     QStandardItem *createSection(const QString &title, int count);
     void appendItemRow(QStandardItem *parent, const QString &name, const QString &path, const QString &storage);
+    QString resolveResourcePath(const QString &resourcePath) const;
 
     QTreeView *m_view{};
     QStandardItemModel *m_model{};

@@ -14,6 +14,7 @@ set(GUI_SOURCES
   config/settings/ProjectDialogJsonSettingBase.cpp
   config/settings/DialogSettingStore.cpp
   main_window/MainWindow.cpp
+  main_window/MainWindow.ui
   main_window/ModelDropSupport.cpp
   main_window/MenuWorkflowController.cpp
   main_window/ReconstructionWorkflowController.cpp
@@ -50,14 +51,19 @@ set(GUI_SOURCES
   views/LayerRenderer.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
+  widgets/DataTreeWidget.ui
   widgets/ReferencePanelWidget.cpp
   widgets/WindowPanel.cpp
+  widgets/WindowPanel.ui
   widgets/ImageViewWidget.cpp
+  widgets/ImageViewWidget.ui
   widgets/MatchLineOverlay.cpp
   widgets/DisparityHeatmapOverlay.cpp
   widgets/DualImageViewer.cpp
+  widgets/DualImageViewer.ui
   widgets/ObservationNetworkView.cpp
   widgets/WorkspaceCenterWidget.cpp
+  widgets/WorkspaceCenterWidget.ui
   dialogs/MatchViewerDialog.cpp
   dialogs/MatchPairSelectorDialog.cpp
   dialogs/BundleAdjustDialog.cpp

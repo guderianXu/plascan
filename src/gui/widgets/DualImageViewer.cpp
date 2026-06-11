@@ -1,4 +1,7 @@
 #include "DualImageViewer.h"
+
+#include "ui_DualImageViewer.h"
+
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
 #include "DisparityHeatmapOverlay.h"
@@ -10,9 +13,6 @@
 #include <QJsonObject>
 #include <QTextStream>
 
-#include <QHBoxLayout>
-#include <QVBoxLayout>
-#include <QSplitter>
 #include <QTimer>
 #include <QFile>
 #include <QDataStream>
@@ -241,22 +241,13 @@ DualImageViewer::~DualImageViewer()
 
 void DualImageViewer::setupLayout()
 {
-    // 创建左右视图
-    m_leftView = new ImageViewWidget(this);
-    m_rightView = new ImageViewWidget(this);
-    
-    // 使用 QSplitter 允许用户调整左右比例
-    QSplitter *splitter = new QSplitter(Qt::Horizontal, this);
-    splitter->addWidget(m_leftView);
-    splitter->addWidget(m_rightView);
-    splitter->setStretchFactor(0, 1);
-    splitter->setStretchFactor(1, 1);
-    
-    // 主布局
-    QVBoxLayout *mainLayout = new QVBoxLayout(this);
-    mainLayout->setContentsMargins(0, 0, 0, 0);
-    mainLayout->addWidget(splitter);
-    setLayout(mainLayout);
+    Ui::DualImageViewer ui;
+    ui.setupUi(this);
+
+    m_leftView = ui.m_leftView;
+    m_rightView = ui.m_rightView;
+    ui.m_splitter->setStretchFactor(0, 1);
+    ui.m_splitter->setStretchFactor(1, 1);
     
     // 创建覆盖层（在所有控件之上）
     m_overlay = new MatchLineOverlay(this);
