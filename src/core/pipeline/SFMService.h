@@ -3,7 +3,7 @@
 // 描述:   增量式 SFM（运动恢复结构）一站式服务层。
 //
 //         本服务实现了"傻瓜式"空中三角测量：
-//           - 自动检查并补全 SuperPoint 特征提取
+//           - 自动检查并补全 DISK 特征提取
 //           - 优先复用已有特征匹配（可选自动补全缺失匹配）
 //           - 执行增量式 SFM 重建
 //           - 回收恢复的相机参数
@@ -44,7 +44,7 @@ struct SFMServiceOptions
     // ── 影像列表 ───────────────────────────────────────────────────────────
     QStringList         images;             ///< 参与 SFM 的影像完整路径列表
 
-    // ── 项目路径（用于查找已有 .sp / .match 文件）────────────────────────
+    // ── 项目路径（用于查找已有特征 / .match 文件）────────────────────────
     QString             plascanPath;        ///< 当前 .plascan 项目路径
 
     // ── 项目元数据（备用；目前优先目录扫描）─────────────────────────────
@@ -71,7 +71,11 @@ struct SFMServiceOptions
     // ── 自动化流水线配置 ───────────────────────────────────────────────────
     /// 设备偏好: "auto"（自动检测 CUDA）, "cuda", "cpu"
     QString             device = "auto";
-    /// SuperGlue 模型类型: "outdoor"（航拍推荐）, "indoor"
+    /// 一键空三默认特征提取算法。默认 DISK，不再使用 SuperPoint。
+    QString             featureAlgorithm = QStringLiteral("disk");
+    /// 一键空三默认特征匹配算法。默认 LightGlue，不再使用 SuperGlue。
+    QString             matchAlgorithm = QStringLiteral("lightglue");
+    /// 旧 SuperGlue 模型类型配置，仅保留兼容旧调用方。
     QString             sgModelType = "outdoor";
 
     /// CUDA 模式下并行处理的影像对数（每对独立持有一个 Matcher 实例）
@@ -93,7 +97,7 @@ struct SFMServiceOptions
                        const QString &matchPath, int numMatches)> pairMatchedFn;
 
     /// 是否自动补全缺失匹配对。
-    /// true: 对缺失匹配自动调用 SuperGlue 生成；false: 仅复用已有 .match 文件。
+    /// true: 对缺失匹配自动调用配置的匹配器生成；false: 仅复用已有 .match 文件。
     bool                autoGenerateMissingMatches = true;
 
     /// 取消标志（由调用方提供的原子标志，置 true 则流水线尽早中止）
@@ -120,7 +124,7 @@ struct SFMServiceOptions
 struct SpFileRecord
 {
     QString imagePath;              ///< 原始影像路径
-    QString spPath;                 ///< 生成的 .sp 特征文件路径
+    QString spPath;                 ///< 生成的特征文件路径（字段名保留兼容旧调用方）
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -176,7 +180,7 @@ struct SFMServiceResult
     QJsonArray perCameraResiduals;
 
     // ── 自动生成的中间文件记录（供调用方更新项目元数据）───────────────────
-    QVector<SpFileRecord>    newSpFiles;     ///< 自动提取的特征文件
+    QVector<SpFileRecord>    newSpFiles;     ///< 自动提取的特征文件（字段名保留兼容旧调用方）
     QVector<MatchFileRecord> newMatchFiles;  ///< 自动生成的匹配文件
 
     /// 本次运行中内点数不足（无有效匹配）的影像对
@@ -193,11 +197,11 @@ public:
     /// 执行完整的增量式 SFM 全自动流程（同步阻塞，应在后台线程中调用）：
     ///
     ///   Phase 1 — 确保特征:
-    ///     检查每张影像是否已有 .sp 特征文件，缺失的自动调用 SuperPoint 提取。
+    ///     检查每张影像是否已有对应算法特征文件，缺失的自动提取。
     ///
     ///   Phase 2 — 确保匹配:
     ///     优先复用已有 .match 文件；当 autoGenerateMissingMatches=true 时，
-    ///     对缺失配对自动调用 SuperGlue 匹配补齐。
+    ///     对缺失配对自动调用配置的匹配器补齐。
     ///
     ///   Phase 3 — SFM 重建:
     ///     将特征点和匹配传入 IncrementalSfm 执行增量式重建。

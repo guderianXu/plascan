@@ -51,7 +51,7 @@ if(TARGET superglue_matcher)
 endif()
 
 # ── GUI 等价一键重建：SFM -> MVS -> Mesh -> DEM/DOM ──
-if(TARGET superpoint AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing AND TARGET terrain)
+if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing AND TARGET terrain)
     add_executable(reconstruct_pipeline_cli
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
@@ -64,8 +64,8 @@ if(TARGET superpoint AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs 
         mvs
         meshing
         terrain
-        superpoint
         superglue_matcher
+        lightglue_matcher
         feature_extractors_traditional
         feature_match_common
         camera
@@ -82,8 +82,11 @@ if(TARGET superpoint AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs 
         ${CMAKE_SOURCE_DIR}/src/core/camera
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked
         ${CMAKE_SOURCE_DIR}/src/core/feature_match
         ${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue
         ${CMAKE_SOURCE_DIR}/src/core/mesh
         ${CMAKE_SOURCE_DIR}/src/core/mvs
         ${CMAKE_SOURCE_DIR}/src/core/pipeline

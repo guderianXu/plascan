@@ -2,19 +2,19 @@
 // 文件名: SFMService.cpp
 // 描述:   增量式 SFM 一站式服务实现，详细说明见 SFMService.h。
 //
-//         全自动流水线：SuperPoint 特征提取 → SuperGlue 匹配 → 增量式 SFM
+//         全自动流水线：DISK 特征提取 → LightGlue 匹配 → 增量式 SFM
 //         本文件不依赖任何 Qt Widget，所有 GUI 提示由调用方负责。
 // =============================================================================
 
 // ── LibTorch / OpenCV 头文件必须在 Qt 头文件之前引入，避免宏冲突 ────────
 #include "compat/QtTorchMacroGuard.h"
 
-#include "SuperPoint.h"
+#include "ExtractorFactory.h"
 #include "FeatureData.h"
 #include "FeatureFileIO.h"
-#include "SuperGlueMatcher.h"
 #include "SuperGlueMatchIO.h"
 #include "MatchOutlierRejector.h"
+#include "lightglue/LightGlueMatcher.h"
 #include <opencv2/opencv.hpp>
 #include <torch/torch.h>
 
@@ -208,20 +208,6 @@ QString findModelFile(const QString &modelName)
     QStringList modelNames;
     modelNames.append(modelName);
 
-    // 兼容当前资源目录中的 SuperPoint 导出文件名。SFM 服务历史上查找
-    // superpoint_v6_*.pt，而 GUI 特征提取和脚本使用 superpoint_extractor_*.pt。
-    if (modelName == QStringLiteral("superpoint_v6_cuda.pt"))
-    {
-        modelNames.append(QStringLiteral("superpoint_extractor_cuda.pt"));
-        modelNames.append(QStringLiteral("superpoint_extractor.pt"));
-        modelNames.append(QStringLiteral("superpoint_extractor_cpu.pt"));
-    }
-    else if (modelName == QStringLiteral("superpoint_v6_cpu.pt"))
-    {
-        modelNames.append(QStringLiteral("superpoint_extractor_cpu.pt"));
-        modelNames.append(QStringLiteral("superpoint_extractor.pt"));
-    }
-
     const QString envModelDir = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
     if (!envModelDir.isEmpty())
     {
@@ -259,6 +245,70 @@ QString findModelFile(const QString &modelName)
     return QString();
 }
 
+QString findFirstModelFile(const QStringList &modelNames, QString *pickedModelName = nullptr)
+{
+    for (const QString &modelName : modelNames)
+    {
+        const QString path = findModelFile(modelName);
+        if (!path.isEmpty())
+        {
+            if (pickedModelName)
+            {
+                *pickedModelName = modelName;
+            }
+            return path;
+        }
+    }
+    return QString();
+}
+
+QString normalizedAlgorithm(QString value, const QString &fallback)
+{
+    value = value.trimmed().toLower();
+    return value.isEmpty() ? fallback : value;
+}
+
+QString featureModelName(const QString &featureAlgorithm, bool useCuda)
+{
+    const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
+    if (featureAlgorithm == QStringLiteral("disk"))
+    {
+        return QStringLiteral("disk_extractor_%1_1200.pt").arg(suffix);
+    }
+    if (featureAlgorithm == QStringLiteral("aliked"))
+    {
+        return QStringLiteral("aliked_extractor_%1_480.pt").arg(suffix);
+    }
+    return QString();
+}
+
+QStringList lightGlueModelCandidates(const QString &featureAlgorithm, bool useCuda)
+{
+    const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
+    QStringList candidates;
+    if (featureAlgorithm == QStringLiteral("disk"))
+    {
+        candidates << QStringLiteral("lightglue_disk_%1.pt").arg(suffix);
+    }
+    else if (featureAlgorithm == QStringLiteral("aliked"))
+    {
+        candidates << QStringLiteral("lightglue_aliked_%1.pt").arg(suffix);
+    }
+    candidates << QStringLiteral("lightglue_matcher_%1.pt").arg(suffix)
+               << QStringLiteral("lightglue_matcher.pt");
+    return candidates;
+}
+
+QJsonObject readJsonObjectFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return QJsonObject();
+    }
+    return QJsonDocument::fromJson(file.readAll()).object();
+}
+
 // ── 精度等级参数预设 ─────────────────────────────────────────────────────────
 
 struct QualityPresets
@@ -268,20 +318,20 @@ struct QualityPresets
     int   initMinNumInliers;
     int   localBAInterval;
     int   globalBAInterval;
-    // SuperPoint
-    float spDetectionThreshold;   ///< 检测阈值，越低特征点越多
-    int   spMaxKeypoints;         ///< 最大关键点数，<=0 不限制
-    int   spNmsRadius;            ///< NMS 半径（像素），越小特征越密
-    int   spRemoveBorders;        ///< 边界移除宽度（像素）
-    int   spNeighborhoodRadius;   ///< 邻域黑边检测半径，0=禁用
-    float spNeighborhoodThresh;   ///< 邻域检测灰度阈值
-    int   spMaxImageDim;          ///< 输入图像最长边限制，<=0 不缩放
-    // SuperGlue
-    float sgMatchThreshold;       ///< 匹配置信度阈值，越低匹配越多
-    int   sgSinkhornIters;        ///< Sinkhorn 迭代次数
+    // 深度特征
+    float featureDetectionThreshold;   ///< 检测阈值，越低特征点越多
+    int   featureMaxKeypoints;         ///< 最大关键点数，<=0 不限制
+    int   featureNmsRadius;            ///< NMS 半径（像素），越小特征越密
+    int   featureRemoveBorders;        ///< 边界移除宽度（像素）
+    int   featureNeighborhoodRadius;   ///< 邻域黑边检测半径，0=禁用
+    float featureNeighborhoodThresh;   ///< 邻域检测灰度阈值
+    int   featureMaxImageDim;          ///< 输入图像最长边限制，<=0 不缩放
+    // LightGlue
+    float matchThreshold;              ///< 匹配置信度阈值，越低匹配越多
+    int   reservedMatcherIterations;   ///< 兼容旧预设表，LightGlue 当前不使用
     // 粗差剔除
     double outlierReprojThresh;   ///< RANSAC 重投影误差阈值（像素）
-    int    sgMinInliers;          ///< 粗差剔除后最少内点数；低于此阈值则舍弃该影像对
+    int    minInliers;            ///< 粗差剔除后最少内点数；低于此阈值则舍弃该影像对
 };
 
 QualityPresets presetsForLevel(int quality)
@@ -290,10 +340,9 @@ QualityPresets presetsForLevel(int quality)
     // 自动流水线使用估算内参（非精确标定），相对定向内点率会偏低。
     // 阈值过高会导致完全无法初始化。
     //
-    // SuperPoint 原始论文使用 640-1600px 输入，大图需缩放否则特征稀疏。
-    // spMaxImageDim 控制最长边上限：先缩放再提特征，坐标自动映射回原图。
+    // featureMaxImageDim 控制最长边上限：提取器内部按需缩放并映射回原图。
     //
-    //                           SFM                              SuperPoint                                                    SuperGlue          Outlier
+    //                           SFM                              Feature                                                      LightGlue          Outlier
     //                   minMatch inl  lBA gBA   thresh  maxKp nms brd  nbR  nbT   maxDim  sgThr  sink  reproj  minInl
     switch (quality)
     {
@@ -310,9 +359,9 @@ QualityPresets presetsForLevel(int quality)
 /// 单张影像的缓存特征数据（含描述子，Phase 2 匹配需要）
 struct ImageFeatureCache
 {
-    FeatureOutput spOutput;      ///< keypoints, scores, descriptors
-    int imgH = 0;                   ///< 图像高度（SuperGlue 位置编码需要）
-    int imgW = 0;                   ///< 图像宽度
+    FeatureOutput featureOutput;     ///< keypoints, scores, descriptors
+    int imgH = 0;                    ///< 图像高度（LightGlue 位置编码需要）
+    int imgW = 0;                    ///< 图像宽度
 };
 
 /// 一对影像的匹配数据
@@ -374,6 +423,28 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         .arg(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"))
         .arg(opts.quality));
 
+    const QString featureAlgorithm = normalizedAlgorithm(opts.featureAlgorithm, QStringLiteral("disk"));
+    const QString matchAlgorithm = normalizedAlgorithm(opts.matchAlgorithm, QStringLiteral("lightglue"));
+    if (featureAlgorithm != QStringLiteral("disk") && featureAlgorithm != QStringLiteral("aliked"))
+    {
+        result.errorMessage = QStringLiteral("一键空三当前支持 DISK/ALIKED 特征，收到: %1")
+            .arg(featureAlgorithm);
+        result.summary = result.errorMessage;
+        return result;
+    }
+    if (matchAlgorithm != QStringLiteral("lightglue"))
+    {
+        result.errorMessage = QStringLiteral("一键空三当前默认链路只使用 LightGlue，收到: %1")
+            .arg(matchAlgorithm);
+        result.summary = result.errorMessage;
+        return result;
+    }
+    const QString featureSuffix = QString::fromLatin1(
+        ExtractorSuffix::forAlgorithm(featureAlgorithm.toStdString()));
+
+    LOG_INFO(QStringLiteral("SFM 流水线算法: %1 + %2, 特征后缀=%3")
+        .arg(featureAlgorithm.toUpper(), matchAlgorithm, featureSuffix));
+
     // ══════════════════════════════════════════════════════════════════════════
     // 2. 设置目录
     // ══════════════════════════════════════════════════════════════════════════
@@ -411,57 +482,61 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     LOG_INFO(QStringLiteral("SFM Phase 1: 检查 / 提取特征..."));
 
     QMap<ImageId, ImageFeatureCache> featureCache;
-    QMap<ImageId, QString> spFilePaths;     // id → .sp 文件路径
-    QVector<ImageId> missingSpIds;
+    QMap<ImageId, QString> featureFilePaths;     // id → 当前算法特征文件路径
+    QVector<ImageId> missingFeatureIds;
 
-    // 1a. 查找已有的 .sp 文件
+    // 1a. 查找已有的当前算法特征文件
     for (auto it = imageIdMap.constBegin(); it != imageIdMap.constEnd(); ++it) {
         const QString &imgPath = it.key();
         const ImageId id       = it.value();
-        const QString spPath   = ProjectIO::findSpForImage(opts.plascanPath, imgPath);
-        if (!spPath.isEmpty()) {
-            spFilePaths[id] = spPath;
-        } else {
-            missingSpIds.append(id);
+        const QString featurePath = ProjectIO::featureFileForSuffix(opts.plascanPath, imgPath, featureSuffix);
+        if (!featurePath.isEmpty() &&
+            QString::fromStdString(FeatureFileIO::peekAlgorithm(featurePath)) == featureAlgorithm)
+        {
+            featureFilePaths[id] = featurePath;
+        }
+        else
+        {
+            missingFeatureIds.append(id);
         }
     }
 
     LOG_INFO(QStringLiteral("  已有特征: %1/%2, 需提取: %3")
-        .arg(spFilePaths.size()).arg(N).arg(missingSpIds.size()));
+        .arg(featureFilePaths.size()).arg(N).arg(missingFeatureIds.size()));
 
-    // 1b. 提取缺失的 SuperPoint 特征
-    if (!missingSpIds.isEmpty()) 
+    // 1b. 提取缺失的当前算法特征
+    if (!missingFeatureIds.isEmpty())
     {
-        LOG_INFO(QStringLiteral("  启动 SuperPoint 特征提取..."));
+        LOG_INFO(QStringLiteral("  启动 %1 特征提取...").arg(featureAlgorithm.toUpper()));
 
-        const QString spModelName = useCuda
-            ? QStringLiteral("superpoint_v6_cuda.pt")
-            : QStringLiteral("superpoint_v6_cpu.pt");
-        const QString spModelPath = findModelFile(spModelName);
-        if (spModelPath.isEmpty()) 
+        const QString extractorModelName = featureModelName(featureAlgorithm, useCuda);
+        const QString extractorModelPath = findModelFile(extractorModelName);
+        if (extractorModelPath.isEmpty())
         {
-            result.errorMessage = QStringLiteral("未找到 SuperPoint 模型文件: %1").arg(spModelName);
+            result.errorMessage = QStringLiteral("未找到 %1 模型文件: %2")
+                .arg(featureAlgorithm.toUpper(), extractorModelName);
             result.summary      = result.errorMessage;
             return result;
         }
 
-        try 
+        try
         {
-            SuperPointConfig spCfg;
-            spCfg.device                   = useCuda ? torch::kCUDA : torch::kCPU;
-            spCfg.detection_threshold      = presets.spDetectionThreshold;
-            spCfg.max_num_keypoints        = presets.spMaxKeypoints;
-            spCfg.nms_radius               = presets.spNmsRadius;
-            spCfg.remove_borders           = presets.spRemoveBorders;
-            spCfg.neighborhood_check_radius = presets.spNeighborhoodRadius;
-            spCfg.neighborhood_threshold   = presets.spNeighborhoodThresh;
-            spCfg.allow_device_fallback    = true;
+            ExtractorConfig extractorCfg;
+            extractorCfg.modelPath     = extractorModelPath.toStdString();
+            extractorCfg.maxKeypoints  = presets.featureMaxKeypoints;
+            extractorCfg.detThreshold  = presets.featureDetectionThreshold;
+            extractorCfg.nmsRadius     = presets.featureNmsRadius;
+            extractorCfg.removeBorder  = presets.featureRemoveBorders;
+            extractorCfg.maxImageDim   = presets.featureMaxImageDim;
+            extractorCfg.useCuda       = useCuda;
+            extractorCfg.cudaDevice    = 0;
 
-            SuperPoint sp(spModelPath.toStdString(), spCfg);
+            std::unique_ptr<IExtractor> extractor =
+                xjw::feature_extractors::createExtractor(featureAlgorithm.toStdString(), extractorCfg);
 
-            int spDoneCount = 0;
-            const int spTotalCount = static_cast<int>(missingSpIds.size());
-            for (const ImageId id : missingSpIds) 
+            int featureDoneCount = 0;
+            const int featureTotalCount = static_cast<int>(missingFeatureIds.size());
+            for (const ImageId id : missingFeatureIds)
             {
                 // 取消检查
                 if (isCancelled())
@@ -473,9 +548,9 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
                 // 报告特征提取进度（2%~35% 区间映射）
                 {
-                    int pct = 2 + (spDoneCount * 33) / std::max(1, spTotalCount);
+                    int pct = 2 + (featureDoneCount * 33) / std::max(1, featureTotalCount);
                     reportProgress(QStringLiteral("正在查找特征点... %1/%2")
-                        .arg(spDoneCount + 1).arg(spTotalCount), pct);
+                        .arg(featureDoneCount + 1).arg(featureTotalCount), pct);
                 }
 
                 const QString &imgPath = idToPath[id];
@@ -488,91 +563,59 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     continue;
                 }
 
-                // ── 大图自适应缩放 ──────────────────────────────────
-                // SuperPoint 训练分辨率约 480-640px，大图需缩放到合理尺度
-                // 以提高特征密度。提取后将坐标自动映射回原图分辨率。
-                const int origH = image.rows;
-                const int origW = image.cols;
-                float scale = 1.0f;
-                cv::Mat inputImg = image;
+                FeatureOutput featureOut = extractor->extract(image);
 
-                if (presets.spMaxImageDim > 0) 
+                const QString featurePath = QDir(ipDir).filePath(fi.completeBaseName() + featureSuffix);
+                if (!FeatureFileIO::write(featurePath, fi.fileName(), featureOut,
+                                          featureAlgorithm.toStdString()))
                 {
-                    const int maxDim = std::max(origH, origW);
-                    if (maxDim > presets.spMaxImageDim) 
-                    {
-                        scale = static_cast<float>(presets.spMaxImageDim) / static_cast<float>(maxDim);
-                        const int newW = static_cast<int>(std::round(origW * scale));
-                        const int newH = static_cast<int>(std::round(origH * scale));
-                        cv::resize(image, inputImg, cv::Size(newW, newH), 0, 0, cv::INTER_AREA);
-                        LOG_INFO(QStringLiteral("  图像缩放: %1x%2 → %3x%4 (scale=%5)")
-                            .arg(origW).arg(origH).arg(newW).arg(newH)
-                            .arg(static_cast<double>(scale), 0, 'f', 3));
-                    }
-                }
-
-                FeatureOutput spOut = sp.detect(inputImg);
-
-                // 若进行了缩放，将关键点坐标映射回原图分辨率
-                if (scale < 1.0f && !spOut.keypoints.empty()) 
-                {
-                    const float invScale = 1.0f / scale;
-                    for (auto &kp : spOut.keypoints)  
-                    {
-                        kp.pt.x *= invScale;
-                        kp.pt.y *= invScale;
-                    }
-                }
-
-                const QString spPath = QDir(ipDir).filePath(fi.completeBaseName() + QStringLiteral(".sp"));
-                if (!FeatureFileIO::write(spPath, fi.fileName(), spOut)) 
-                {
-                    LOG_WARN(QStringLiteral("  保存特征文件失败: %1").arg(spPath));
+                    LOG_WARN(QStringLiteral("  保存特征文件失败: %1").arg(featurePath));
                     continue;
                 }
 
                 LOG_INFO(QStringLiteral("  提取 %1 个特征点: %2")
-                    .arg(spOut.keypoints.size()).arg(fi.fileName()));
+                    .arg(featureOut.keypoints.size()).arg(fi.fileName()));
 
-                spFilePaths[id] = spPath;
+                featureFilePaths[id] = featurePath;
 
                 // 缓存特征及图像尺寸（Phase 2 匹配可直接使用）
                 ImageFeatureCache &fc = featureCache[id];
-                fc.spOutput = std::move(spOut);
+                fc.featureOutput = std::move(featureOut);
                 fc.imgH     = image.rows;
                 fc.imgW     = image.cols;
 
                 // 记录新生成的文件
-                result.newSpFiles.append({imgPath, spPath});
-                ++spDoneCount;
+                result.newSpFiles.append({imgPath, featurePath});
+                ++featureDoneCount;
             }
-        } 
-        catch (const std::exception &e) 
+        }
+        catch (const std::exception &e)
         {
-            result.errorMessage = QStringLiteral("SuperPoint 特征提取失败: %1")
+            result.errorMessage = QStringLiteral("%1 特征提取失败: %2")
+                .arg(featureAlgorithm.toUpper())
                 .arg(QString::fromStdString(e.what()));
             result.summary = result.errorMessage;
             return result;
         }
     }
 
-    // 1c. 加载已有 .sp 文件到缓存（仅加载尚未缓存的）
-    for (auto it = spFilePaths.constBegin(); it != spFilePaths.constEnd(); ++it) 
+    // 1c. 加载已有特征文件到缓存（仅加载尚未缓存的）
+    for (auto it = featureFilePaths.constBegin(); it != featureFilePaths.constEnd(); ++it)
     {
         const ImageId id     = it.key();
-        const QString &spPath = it.value();
+        const QString &featurePath = it.value();
         if (featureCache.contains(id)) continue;   // 刚提取的已在缓存中
 
         QString imageName;
-        FeatureOutput spOut;
-        if (!FeatureFileIO::read(spPath, imageName, spOut)) 
+        FeatureOutput featureOut;
+        if (!FeatureFileIO::read(featurePath, imageName, featureOut))
         {
-            LOG_WARN(QStringLiteral("  读取特征文件失败: %1").arg(spPath));
+            LOG_WARN(QStringLiteral("  读取特征文件失败: %1").arg(featurePath));
             continue;
         }
 
         ImageFeatureCache &fc = featureCache[id];
-        fc.spOutput = std::move(spOut);
+        fc.featureOutput = std::move(featureOut);
         // 图像尺寸未知，Phase 2 匹配时按需读取
     }
 
@@ -619,6 +662,14 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             for (const QJsonValue &v : arr) 
             {
                 const QJsonObject o = v.toObject();
+                const QString recFeatureAlgorithm =
+                    o.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
+                const QString recMatchAlgorithm =
+                    o.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+                if (recFeatureAlgorithm != featureAlgorithm || recMatchAlgorithm != matchAlgorithm)
+                {
+                    continue;
+                }
                 const QString p0 = normalizePath(o.value(QStringLiteral("image0")).toString());
                 const QString p1 = normalizePath(o.value(QStringLiteral("image1")).toString());
                 if (!p0.isEmpty() && !p1.isEmpty()) 
@@ -738,6 +789,70 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     int metaReadOkCount = 0;
     int metaBaseHitCount = 0;
 
+    auto existingMatchCompatible = [&](const QString &matchPath, ImageId idA, ImageId idB) -> bool
+    {
+        const QString sidecarPath = matchPath + QStringLiteral(".json");
+        if (!QFile::exists(sidecarPath))
+        {
+            return false;
+        }
+
+        const QJsonObject sc = readJsonObjectFile(sidecarPath);
+        if (sc.isEmpty())
+        {
+            return false;
+        }
+
+        QString scFeatureAlgorithm = sc.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
+        if (scFeatureAlgorithm.isEmpty())
+        {
+            scFeatureAlgorithm = sc.value(QStringLiteral("settings")).toObject()
+                .value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
+        }
+        if (!scFeatureAlgorithm.isEmpty() && scFeatureAlgorithm != featureAlgorithm)
+        {
+            return false;
+        }
+
+        QString scMatchAlgorithm = sc.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+        if (scMatchAlgorithm.isEmpty())
+        {
+            scMatchAlgorithm = sc.value(QStringLiteral("settings")).toObject()
+                .value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+        }
+        if (!scMatchAlgorithm.isEmpty() && scMatchAlgorithm != matchAlgorithm)
+        {
+            return false;
+        }
+
+        QString feature0 = sc.value(QStringLiteral("feature0_path")).toString().trimmed();
+        QString feature1 = sc.value(QStringLiteral("feature1_path")).toString().trimmed();
+        if (feature0.isEmpty())
+        {
+            feature0 = sc.value(QStringLiteral("sp0_path")).toString().trimmed();
+        }
+        if (feature1.isEmpty())
+        {
+            feature1 = sc.value(QStringLiteral("sp1_path")).toString().trimmed();
+        }
+
+        if (!feature0.isEmpty() || !feature1.isEmpty())
+        {
+            if (feature0.isEmpty() || feature1.isEmpty())
+            {
+                return false;
+            }
+            const QString sideFeature0 = normalizePath(feature0);
+            const QString sideFeature1 = normalizePath(feature1);
+            const QString currentA = normalizePath(featureFilePaths.value(idA));
+            const QString currentB = normalizePath(featureFilePaths.value(idB));
+            return (sideFeature0 == currentA && sideFeature1 == currentB) ||
+                   (sideFeature0 == currentB && sideFeature1 == currentA);
+        }
+
+        return !scFeatureAlgorithm.isEmpty();
+    };
+
     // 生成所有需要处理的影像对并检查已有匹配文件
     QVector<PairMatchData> allPairs;
     QVector<int> missingPairIndices;
@@ -796,18 +911,25 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 }
             }
 
-            // 检查 .match 文件是否过期：仅当 .sp 特征文件比 .match 更新时才视为过期
+            if (!foundPath.isEmpty() && !existingMatchCompatible(foundPath, idA, idB))
+            {
+                LOG_INFO(QStringLiteral("  匹配缓存与当前 %1 + %2 链路不兼容，重新生成: %3")
+                    .arg(featureAlgorithm.toUpper(), matchAlgorithm, foundPath));
+                foundPath.clear();
+            }
+
+            // 检查 .match 文件是否过期：仅当特征文件比 .match 更新时才视为过期
             // （即特征点重新提取后，旧匹配结果失效）
             // 注意：不再检查 match_threshold，避免因参数变化引发全量重匹配
             if (!foundPath.isEmpty()) 
             {
                 const QDateTime matchTime = QFileInfo(foundPath).lastModified();
                 bool stale = false;
-                if (spFilePaths.contains(idA) &&
-                    QFileInfo(spFilePaths[idA]).lastModified() > matchTime)
+                if (featureFilePaths.contains(idA) &&
+                    QFileInfo(featureFilePaths[idA]).lastModified() > matchTime)
                     stale = true;
-                if (spFilePaths.contains(idB) &&
-                    QFileInfo(spFilePaths[idB]).lastModified() > matchTime)
+                if (featureFilePaths.contains(idB) &&
+                    QFileInfo(featureFilePaths[idB]).lastModified() > matchTime)
                     stale = true;
 
                 if (stale)
@@ -894,15 +1016,15 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 if (noMatchSet.contains(nmKey) && noMatchFileMtime.isValid()) 
                 {
                     // 以 no_match_pairs.json 文件的修改时间为基准
-                    // 若两张影像的 sp 文件均早于该时间 → 特征未变 → 直接跳过
-                    bool spNewer = false;
-                    if (spFilePaths.contains(idA) &&
-                        QFileInfo(spFilePaths[idA]).lastModified() > noMatchFileMtime)
-                        spNewer = true;
-                    if (spFilePaths.contains(idB) &&
-                        QFileInfo(spFilePaths[idB]).lastModified() > noMatchFileMtime)
-                        spNewer = true;
-                    if (!spNewer)
+                    // 若两张影像的特征文件均早于该时间 → 特征未变 → 直接跳过
+                    bool featureNewer = false;
+                    if (featureFilePaths.contains(idA) &&
+                        QFileInfo(featureFilePaths[idA]).lastModified() > noMatchFileMtime)
+                        featureNewer = true;
+                    if (featureFilePaths.contains(idB) &&
+                        QFileInfo(featureFilePaths[idB]).lastModified() > noMatchFileMtime)
+                        featureNewer = true;
+                    if (!featureNewer)
                         pd.loaded = true;   // 已知无匹配且特征未更新，跳过
                 }
             }
@@ -937,20 +1059,21 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             .arg(metaReadOkCount));
     }
 
-    // 2a. 对缺失配对执行 SuperGlue 匹配（可按选项禁用）
+    // 2a. 对缺失配对执行 LightGlue 匹配（可按选项禁用）
     if (!missingPairIndices.isEmpty() && opts.autoGenerateMissingMatches)
     {
-        LOG_INFO(QStringLiteral("  启动 SuperGlue 特征匹配..."));
+        LOG_INFO(QStringLiteral("  启动 LightGlue 特征匹配..."));
 
-        const QString sgModelName = QStringLiteral("superglue_%1_%2.pt")
-            .arg(opts.sgModelType, useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu"));
-        const QString sgModelPath = findModelFile(sgModelName);
-        if (sgModelPath.isEmpty()) 
+        QString lgModelName;
+        const QString lgModelPath = findFirstModelFile(lightGlueModelCandidates(featureAlgorithm, useCuda), &lgModelName);
+        if (lgModelPath.isEmpty())
         {
-            result.errorMessage = QStringLiteral("未找到 SuperGlue 模型文件: %1").arg(sgModelName);
+            result.errorMessage = QStringLiteral("未找到 LightGlue 模型文件: %1")
+                .arg(lightGlueModelCandidates(featureAlgorithm, useCuda).join(QStringLiteral(", ")));
             result.summary      = result.errorMessage;
             return result;
         }
+        LOG_INFO(QStringLiteral("  LightGlue 模型: %1").arg(lgModelName));
 
         // ── 粗差剔除配置（USAC_MAGSAC，最优粗差剔除）──────────────────────────────────
         superglue::OutlierFilterConfig outlierCfg;
@@ -958,7 +1081,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         outlierCfg.reprojThreshold = presets.outlierReprojThresh;
         outlierCfg.confidence      = 0.9999;
         outlierCfg.maxIters        = 10000;
-        outlierCfg.minInliers      = presets.sgMinInliers;
+        outlierCfg.minInliers      = presets.minInliers;
 
         // ── 预加载所有影像尺寸，消除并行阶段的写竞争 ──────────────────────
         {
@@ -990,19 +1113,18 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             .arg(numMatchThreads)
             .arg(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU-并行")));
 
-        // 每个工作线程独立持有一个 SuperGlueMatcher，避免模型权重并发写入问题
-        superglue::SuperGlueConfig sgCfg;
-        sgCfg.model_path          = sgModelPath.toStdString();
-        sgCfg.use_cuda            = useCuda;
-        sgCfg.match_threshold     = presets.sgMatchThreshold;
-        sgCfg.sinkhorn_iterations = presets.sgSinkhornIters;
+        // 每个工作线程独立持有一个 LightGlueMatcher，避免模型权重并发写入问题
+        xjw::feature_match::LightGlueConfig lgCfg;
+        lgCfg.matcherModelPath = lgModelPath.toStdString();
+        lgCfg.useCuda = useCuda;
+        lgCfg.scoreThreshold = presets.matchThreshold;
 
         // ── 验证模型可加载（用单个测试实例） ─────────────────────────────
         {
-            superglue::SuperGlueMatcher testMatcher(sgCfg);
+            xjw::feature_match::LightGlueMatcher testMatcher(lgCfg);
             if (!testMatcher.isLoaded()) 
             {
-                result.errorMessage = QStringLiteral("SuperGlue 模型加载失败");
+                result.errorMessage = QStringLiteral("LightGlue 模型加载失败");
                 result.summary      = result.errorMessage;
                 return result;
             }
@@ -1015,7 +1137,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         std::atomic<int>          pairCursor{0};    // 原子索引，各线程竞争取下一个待处理 pair
         const int                 totalMissing = static_cast<int>(missingPairIndices.size());
 
-        // 省去重复读取：featureCache/idToPath/spFilePaths 在预加载后为纯只读
+        // 省去重复读取：featureCache/idToPath/featureFilePaths 在预加载后为纯只读
         // 使用 constFind 进行线程安全只读访问（无写入时并发读取安全）
         auto matchWorker = [&]() 
         {
@@ -1024,9 +1146,9 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 // 每线程自有 matcher 实例
                 std::unique_ptr<xjw::feature_match::IFeatureMatcher> localMatcher;
                 {
-                    auto sgMatcher = std::make_unique<superglue::SuperGlueMatcher>(sgCfg);
-                    if (!sgMatcher->isLoaded()) return;
-                    localMatcher = std::move(sgMatcher);
+                    auto lgMatcher = std::make_unique<xjw::feature_match::LightGlueMatcher>(lgCfg);
+                    if (!lgMatcher->isLoaded()) return;
+                    localMatcher = std::move(lgMatcher);
                 }
 
                 while (!matchErrorFlag.load()) 
@@ -1056,8 +1178,10 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     const ImageFeatureCache &fcA = *itA;
                     const ImageFeatureCache &fcB = *itB;
 
-                    auto fdA = xjw::feature_extractors::FeatureData::fromFeatureOutput(fcA.spOutput, "superpoint");
-                    auto fdB = xjw::feature_extractors::FeatureData::fromFeatureOutput(fcB.spOutput, "superpoint");
+                    auto fdA = xjw::feature_extractors::FeatureData::fromFeatureOutput(
+                        fcA.featureOutput, featureAlgorithm.toStdString());
+                    auto fdB = xjw::feature_extractors::FeatureData::fromFeatureOutput(
+                        fcB.featureOutput, featureAlgorithm.toStdString());
                     fdA.imageWidth = fcA.imgW;
                     fdA.imageHeight = fcA.imgH;
                     fdB.imageWidth = fcB.imgW;
@@ -1069,7 +1193,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     // 粗差剔除
                     int inlierCount = mr.numMatches;
                     mr = superglue::MatchOutlierRejector::filter(
-                        mr, fcA.spOutput.keypoints, fcB.spOutput.keypoints,
+                        mr, fcA.featureOutput.keypoints, fcB.featureOutput.keypoints,
                         outlierCfg, &inlierCount);
 
                     const QString baseA    = QFileInfo(idToPath.value(idA)).completeBaseName();
@@ -1077,11 +1201,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     const QString pairName = QStringLiteral("%1__%2").arg(baseA, baseB);
 
                     // ── 最小内点数检测：内点不足时记录到 failedPairs（不写文件）──
-                    if (mr.numMatches < presets.sgMinInliers) 
+                    if (mr.numMatches < presets.minInliers)
                     {
                         LOG_INFO(
                             QStringLiteral("  跳过 %1: 内点数 %2 < 阈值 %3（已记录为无匹配对）")
-                            .arg(pairName).arg(mr.numMatches).arg(presets.sgMinInliers));
+                            .arg(pairName).arg(mr.numMatches).arg(presets.minInliers));
                         {
                             std::lock_guard<std::mutex> lk(writeMutex);
                             FailedPairRecord fpr;
@@ -1107,20 +1231,24 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     sidecar[QStringLiteral("image1_name")]     = baseB;
                     sidecar[QStringLiteral("image0_path")]     = idToPath.value(idA);
                     sidecar[QStringLiteral("image1_path")]     = idToPath.value(idB);
-                    sidecar[QStringLiteral("sp0_path")]        = spFilePaths.value(idA);
-                    sidecar[QStringLiteral("sp1_path")]        = spFilePaths.value(idB);
+                    sidecar[QStringLiteral("feature0_path")]   = featureFilePaths.value(idA);
+                    sidecar[QStringLiteral("feature1_path")]   = featureFilePaths.value(idB);
+                    sidecar[QStringLiteral("sp0_path")]        = featureFilePaths.value(idA);
+                    sidecar[QStringLiteral("sp1_path")]        = featureFilePaths.value(idB);
+                    sidecar[QStringLiteral("feature_algorithm")] = featureAlgorithm;
+                    sidecar[QStringLiteral("match_algorithm")] = matchAlgorithm;
                     sidecar[QStringLiteral("num_matches")]     = mr.numMatches;
-                    sidecar[QStringLiteral("match_threshold")] = static_cast<double>(presets.sgMatchThreshold);
+                    sidecar[QStringLiteral("match_threshold")] = static_cast<double>(presets.matchThreshold);
 
                     QJsonArray pts0, pts1;
                     for (const auto &dm : mr.cvMatches) 
                     {
                         const int qi = dm.queryIdx, ti = dm.trainIdx;
-                        if (qi >= 0 && qi < static_cast<int>(fcA.spOutput.keypoints.size()) &&
-                            ti >= 0 && ti < static_cast<int>(fcB.spOutput.keypoints.size()))
+                        if (qi >= 0 && qi < static_cast<int>(fcA.featureOutput.keypoints.size()) &&
+                            ti >= 0 && ti < static_cast<int>(fcB.featureOutput.keypoints.size()))
                         {
-                            const auto &kp0 = fcA.spOutput.keypoints[qi];
-                            const auto &kp1 = fcB.spOutput.keypoints[ti];
+                            const auto &kp0 = fcA.featureOutput.keypoints[qi];
+                            const auto &kp1 = fcB.featureOutput.keypoints[ti];
                             QJsonArray p0; p0.append(kp0.pt.x); p0.append(kp0.pt.y);
                             QJsonArray p1; p1.append(kp1.pt.x); p1.append(kp1.pt.y);
                             pts0.append(p0);
@@ -1151,8 +1279,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     pairSettings[QStringLiteral("image_files")]  = imageFiles;
                     pairSettings[QStringLiteral("pair_name")]    = pairName;
                     pairSettings[QStringLiteral("sidecar_json")] = sidecarPath;
-                    pairSettings[QStringLiteral("sp0_path")]     = spFilePaths.value(idA);
-                    pairSettings[QStringLiteral("sp1_path")]     = spFilePaths.value(idB);
+                    pairSettings[QStringLiteral("feature0_path")] = featureFilePaths.value(idA);
+                    pairSettings[QStringLiteral("feature1_path")] = featureFilePaths.value(idB);
+                    pairSettings[QStringLiteral("sp0_path")]     = featureFilePaths.value(idA);
+                    pairSettings[QStringLiteral("sp1_path")]     = featureFilePaths.value(idB);
+                    pairSettings[QStringLiteral("feature_algorithm")] = featureAlgorithm;
+                    pairSettings[QStringLiteral("match_algorithm")] = matchAlgorithm;
                     mfr.settings = pairSettings;
 
                     // ── 转换为 SFM 需要的 FeatureMatch ──────────────────────
@@ -1198,7 +1330,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
         if (matchErrorFlag.load()) 
         {
-            result.errorMessage = QStringLiteral("SuperGlue 匹配失败: %1")
+            result.errorMessage = QStringLiteral("LightGlue 匹配失败: %1")
                 .arg(QString::fromStdString(matchErrorMsg));
             result.summary = result.errorMessage;
             return result;
@@ -1218,6 +1350,14 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             for (const QJsonValue &v : existing) 
             {
                 const QJsonObject o = v.toObject();
+                const QString recFeatureAlgorithm =
+                    o.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
+                const QString recMatchAlgorithm =
+                    o.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+                if (recFeatureAlgorithm != featureAlgorithm || recMatchAlgorithm != matchAlgorithm)
+                {
+                    continue;
+                }
                 existingKeys.insert(o[QStringLiteral("image0")].toString() +
                                     QStringLiteral("|") +
                                     o[QStringLiteral("image1")].toString());
@@ -1232,6 +1372,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     o[QStringLiteral("image0")]      = fpr.imagePath0;
                     o[QStringLiteral("image1")]      = fpr.imagePath1;
                     o[QStringLiteral("checked_at")]  = ts;
+                    o[QStringLiteral("feature_algorithm")] = featureAlgorithm;
+                    o[QStringLiteral("match_algorithm")] = matchAlgorithm;
                     existing.append(o);
                     existingKeys.insert(key);
                 }
@@ -1366,8 +1508,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         const ImageFeatureCache &fc = it.value();
 
         std::vector<FeatureKeypoint> kpts;
-        kpts.reserve(fc.spOutput.keypoints.size());
-        for (const auto &kp : fc.spOutput.keypoints)
+        kpts.reserve(fc.featureOutput.keypoints.size());
+        for (const auto &kp : fc.featureOutput.keypoints)
         {
             FeatureKeypoint fkp;
             fkp.x = kp.pt.x;
@@ -1493,7 +1635,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     // 保存关键点位置（轻量，不含描述子），供导出步骤做颜色采样
     QMap<ImageId, std::vector<cv::KeyPoint>> kptPositions;
     for (auto it = featureCache.constBegin(); it != featureCache.constEnd(); ++it)
-        kptPositions[it.key()] = it.value().spOutput.keypoints;
+        kptPositions[it.key()] = it.value().featureOutput.keypoints;
 
     // 释放特征缓存（描述子张量等大块内存），SFM 不再需要
     featureCache.clear();

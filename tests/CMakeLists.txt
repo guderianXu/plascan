@@ -268,6 +268,14 @@ if(Python3_Interpreter_FOUND)
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
+    add_test(
+        NAME SfmServiceDefaultAlgorithmsTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_sfm_service_default_algorithms
+    )
+    set_tests_properties(SfmServiceDefaultAlgorithmsTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
     if(TARGET reconstruct_pipeline_cli)
         add_test(
             NAME ReconstructPipelineCliTest
