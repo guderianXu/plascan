@@ -6,6 +6,8 @@
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/gpu/cuda_check.h>
+#include <plapoint/gpu/height_grid.h>
 #include <plapoint/mesh/height_grid.h>
 
 namespace xjw
@@ -113,6 +115,35 @@ plapoint::mesh::HeightGridOptions<float> makeHeightGridOptions(
     return options;
 }
 
+PlaHeightGrid buildHeightGridWithRequestedDevice(
+    const PlaCloud &cloud,
+    const plapoint::mesh::HeightGridOptions<float> &options,
+    plapoint::ProcessingDevice processingDevice)
+{
+    if (processingDevice == plapoint::ProcessingDevice::GPU ||
+        processingDevice == plapoint::ProcessingDevice::Auto)
+    {
+#ifdef PLAPOINT_WITH_CUDA
+        if (plapoint::gpu::hasUsableCudaDevice())
+        {
+            try
+            {
+                return plapoint::gpu::buildHeightGrid(cloud.toGpu(), options);
+            }
+            catch (const std::exception &)
+            {
+                if (processingDevice == plapoint::ProcessingDevice::GPU)
+                {
+                    throw;
+                }
+            }
+        }
+#endif
+    }
+
+    return plapoint::mesh::buildHeightGrid(cloud, options);
+}
+
 void assignMeshFromPlaCloud(const PlaCloud &source, TriMesh *mesh)
 {
     if (!mesh)
@@ -170,7 +201,9 @@ HeightGrid buildHeightGrid(const std::vector<PointXYZRGB> &points,
 
     const auto cloud = toPlaCloud(points);
     const auto options = makeHeightGridOptions(points, config);
-    return fromPlaGrid(plapoint::mesh::buildHeightGrid(cloud, options));
+    return fromPlaGrid(buildHeightGridWithRequestedDevice(cloud,
+                                                         options,
+                                                         config.preprocessingDevice));
 }
 
 void fillHoles(HeightGrid *heightGrid, int maxPasses)

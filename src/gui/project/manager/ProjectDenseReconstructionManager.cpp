@@ -303,40 +303,109 @@ static std::shared_ptr<PlaPC> cloneCloud(const PlaPC &cloud)
     return std::make_shared<PlaPC>(cloneCloudValue(cloud));
 }
 
+QString processingDeviceLabel(plapoint::ProcessingDevice device)
+{
+    switch (device)
+    {
+    case plapoint::ProcessingDevice::CPU:
+        return QStringLiteral("CPU");
+    case plapoint::ProcessingDevice::GPU:
+        return QStringLiteral("GPU");
+    case plapoint::ProcessingDevice::Auto:
+        return QStringLiteral("Auto");
+    }
+    return QStringLiteral("Unknown");
+}
+
+void logPlaPointReport(const QString &stage,
+                       const plapoint::ProcessingReport &report,
+                       std::size_t beforeCount,
+                       std::size_t afterCount)
+{
+    QString message = QStringLiteral("[DenseRefine] %1: %2 → %3, requested=%4, usedDevice=%5")
+        .arg(stage)
+        .arg(beforeCount)
+        .arg(afterCount)
+        .arg(processingDeviceLabel(report.requestedDevice),
+             processingDeviceLabel(report.usedDevice));
+    if (report.usedFallback)
+    {
+        message += QStringLiteral(", fallback=%1")
+            .arg(QString::fromStdString(report.fallbackReason));
+    }
+    LOG_INFO(message);
+}
+
 PlaPC sorFilter(const PlaPC &cloud,
                 int k,
                 float stdRatio,
-                plapoint::ProcessingDevice processingDevice)
+                plapoint::ProcessingDevice processingDevice,
+                plapoint::ProcessingReport *report = nullptr)
 {
     if (cloud.size() < static_cast<size_t>(k + 1))
     {
+        if (report)
+        {
+            report->requestedDevice = processingDevice;
+            report->usedDevice = plapoint::ProcessingDevice::CPU;
+            report->usedFallback = false;
+            report->fallbackReason = "skipped: point count is smaller than k + 1";
+        }
         return std::move(*cloneCloud(cloud));
     }
 
-    return plapoint::statisticalOutlierRemoval(cloud, k, stdRatio, processingDevice);
+    return plapoint::statisticalOutlierRemoval(cloud, k, stdRatio, processingDevice, nullptr, report);
 }
 
 PlaPC radiusFilter(const PlaPC &cloud,
                    float radius,
                    int minNeighbors,
-                   plapoint::ProcessingDevice processingDevice)
+                   plapoint::ProcessingDevice processingDevice,
+                   plapoint::ProcessingReport *report = nullptr)
 {
     if (cloud.size() == 0)
     {
+        if (report)
+        {
+            report->requestedDevice = processingDevice;
+            report->usedDevice = plapoint::ProcessingDevice::CPU;
+            report->usedFallback = false;
+            report->fallbackReason = "skipped: empty cloud";
+        }
         PlaPC emptyOut(0);
         return emptyOut;
     }
 
-    return plapoint::radiusOutlierRemoval(cloud, radius, minNeighbors, processingDevice);
+    return plapoint::radiusOutlierRemoval(cloud, radius, minNeighbors, processingDevice, nullptr, report);
 }
 
 PlaPC voxelDownsample(const PlaPC &cloud,
                       float leafSize,
-                      plapoint::ProcessingDevice processingDevice)
+                      plapoint::ProcessingDevice processingDevice,
+                      plapoint::ProcessingReport *report = nullptr)
 {
-    if (cloud.size() == 0 || leafSize <= 0) return std::move(*cloneCloud(cloud));
+    if (cloud.size() == 0 || leafSize <= 0)
+    {
+        if (report)
+        {
+            report->requestedDevice = processingDevice;
+            report->usedDevice = plapoint::ProcessingDevice::CPU;
+            report->usedFallback = false;
+            report->fallbackReason = "skipped: empty cloud or invalid leaf size";
+        }
+        return std::move(*cloneCloud(cloud));
+    }
 
-    return plapoint::voxelDownsample(cloud, leafSize, processingDevice);
+    return plapoint::voxelDownsample(cloud, leafSize, processingDevice, report);
+}
+
+plamatrix::DenseMatrix<float, plamatrix::Device::CPU> estimateNormals(
+    const PlaPC &cloud,
+    int normalK,
+    plapoint::ProcessingDevice processingDevice,
+    plapoint::ProcessingReport *report = nullptr)
+{
+    return plapoint::estimateNormals(cloud, normalK, processingDevice, report);
 }
 
 } // namespace
@@ -934,10 +1003,13 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             }, Qt::QueuedConnection);
 
             const auto beforeSor = cloud.size();
+            plapoint::ProcessingReport sorReport;
             cloud = sorFilter(cloud,
                               request.sorK,
                               static_cast<float>(request.sorStdDev),
-                              request.processingDevice);
+                              request.processingDevice,
+                              &sorReport);
+            logPlaPointReport(QStringLiteral("统计离群点移除 (SOR)"), sorReport, beforeSor, cloud.size());
 
             if (cloud.size() > 64)
             {
@@ -977,10 +1049,14 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 QMetaObject::invokeMethod(this, [this]() {
                     emit mvsProgressChanged(QStringLiteral("半径离群点移除..."), 35);
                 }, Qt::QueuedConnection);
+                const auto beforeRadius = cloud.size();
+                plapoint::ProcessingReport radiusReport;
                 cloud = radiusFilter(cloud,
                                      static_cast<float>(adaptiveRadius),
                                      radiusMinNeighbors,
-                                     request.processingDevice);
+                                     request.processingDevice,
+                                     &radiusReport);
+                logPlaPointReport(QStringLiteral("半径离群点移除"), radiusReport, beforeRadius, cloud.size());
 
                 const auto afterRadius = cloud.size();
                 const bool largeCloud = beforeSor > 200000;
@@ -993,10 +1069,14 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                     QMetaObject::invokeMethod(this, [this]() {
                         emit mvsProgressChanged(QStringLiteral("离群点二次清理..."), 42);
                     }, Qt::QueuedConnection);
+                    const auto beforeStrictSor = cloud.size();
+                    plapoint::ProcessingReport strictSorReport;
                     cloud = sorFilter(cloud,
                                       stricterK,
                                       static_cast<float>(stricterStdDev),
-                                      request.processingDevice);
+                                      request.processingDevice,
+                                      &strictSorReport);
+                    logPlaPointReport(QStringLiteral("离群点二次清理"), strictSorReport, beforeStrictSor, cloud.size());
                 }
             }
         }
@@ -1005,9 +1085,13 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             QMetaObject::invokeMethod(this, [this]() {
                 emit mvsProgressChanged(QStringLiteral("体素下采样..."), 50);
             }, Qt::QueuedConnection);
+            const auto beforeVoxel = cloud.size();
+            plapoint::ProcessingReport voxelReport;
             cloud = voxelDownsample(cloud,
                                     static_cast<float>(request.voxelSize),
-                                    request.processingDevice);
+                                    request.processingDevice,
+                                    &voxelReport);
+            logPlaPointReport(QStringLiteral("体素下采样"), voxelReport, beforeVoxel, cloud.size());
         }
         if (request.normalsEnabled)
         {
@@ -1015,18 +1099,10 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 emit mvsProgressChanged(QStringLiteral("估计法向量..."), 70);
             }, Qt::QueuedConnection);
 
-            auto pcPtr = cloneCloud(cloud);
-            plapoint::search::KdTree<float, plamatrix::Device::CPU> normTree;
-            normTree.setInputCloud(pcPtr);
-            normTree.build();
-
-            plapoint::NormalEstimation<float, plamatrix::Device::CPU> ne;
-            ne.setInputCloud(pcPtr);
-            auto treePtr = std::make_shared<plapoint::search::KdTree<float, plamatrix::Device::CPU>>(std::move(normTree));
-            ne.setSearchMethod(treePtr);
-            ne.setKSearch(request.normalK);
-            auto normals = ne.compute();
+            plapoint::ProcessingReport normalReport;
+            auto normals = estimateNormals(cloud, request.normalK, request.processingDevice, &normalReport);
             cloud.setNormals(std::move(normals));
+            logPlaPointReport(QStringLiteral("估计法向量"), normalReport, cloud.size(), cloud.size());
         }
 
         QMetaObject::invokeMethod(this, [this]() {

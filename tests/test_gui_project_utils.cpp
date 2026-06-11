@@ -738,6 +738,38 @@ TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
     EXPECT_EQ(cloud->colors()->getValue(0, 2), 128);
 }
 
+TEST(DenseCloudRefineTest, ReportsPlaPointProcessingDeviceForGui)
+{
+    const QString guiSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(guiSource.isEmpty());
+
+    EXPECT_TRUE(guiSource.contains(QStringLiteral("plapoint::ProcessingReport")));
+    EXPECT_TRUE(guiSource.contains(QStringLiteral("processingDeviceLabel")));
+    EXPECT_TRUE(guiSource.contains(QStringLiteral("usedDevice")));
+}
+
+TEST(DenseCloudRefineTest, NormalEstimationUsesRequestedPlaPointDevice)
+{
+    const QString guiSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(guiSource.isEmpty());
+
+    EXPECT_TRUE(guiSource.contains(QStringLiteral("estimateNormals(cloud, request.normalK, request.processingDevice")));
+    EXPECT_FALSE(guiSource.contains(QStringLiteral("NormalEstimation<float, plamatrix::Device::CPU> ne")));
+}
+
+TEST(SurfaceReconstructorTest, HeightGridFallbackUsesPlaPointGpuCapablePath)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mesh/SurfaceReconstructorHeightGrid.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include <plapoint/gpu/height_grid.h>")));
+    EXPECT_TRUE(source.contains(QStringLiteral("buildHeightGridWithRequestedDevice")));
+    EXPECT_TRUE(source.contains(QStringLiteral("config.preprocessingDevice")));
+    EXPECT_TRUE(source.contains(QStringLiteral("plapoint::gpu::buildHeightGrid")));
+}
+
 TEST(MainMenuTest, WorkflowMenuExposesOnlyOneClickThreeDReconstruction)
 {
     QMainWindow window;
