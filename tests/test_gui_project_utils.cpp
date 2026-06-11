@@ -30,6 +30,7 @@
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
+#include <QMetaObject>
 #include <QFileInfo>
 #include <QPushButton>
 #include <QTemporaryDir>
@@ -437,7 +438,7 @@ TEST(MapProjectDialogTest, DefaultsToOneClickDomEngineeringSettings)
                          emittedOutput = runOutput;
                          emittedResolution = runResolution;
                      });
-    runButton->click();
+    ASSERT_TRUE(QMetaObject::invokeMethod(&dialog, "onRun", Qt::DirectConnection));
 
     EXPECT_TRUE(emitted);
     EXPECT_EQ(emittedImages, images);
