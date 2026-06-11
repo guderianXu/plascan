@@ -154,6 +154,38 @@ target_include_directories(test_initial_sparse_triangulator PRIVATE
 gtest_discover_tests(test_initial_sparse_triangulator)
 
 # ==============================================================================
+# test_project_data — ProjectData 持久化契约与 core/results 分域
+# ==============================================================================
+add_executable(test_project_data
+    test_project_data.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
+)
+set_target_properties(test_project_data PROPERTIES
+    AUTOMOC ON
+)
+target_link_libraries(test_project_data PRIVATE
+    Qt6::Core
+    ${PLASCAN_LIBZIP_TARGET}
+    GTest::gtest_main
+)
+target_include_directories(test_project_data PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common/log
+    ${CMAKE_SOURCE_DIR}/src/gui/config
+    ${CMAKE_SOURCE_DIR}/src/gui/project/archive
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io
+)
+gtest_discover_tests(test_project_data)
+
+# ==============================================================================
 # test_gui_project_utils — GUI project 工具与三角化服务
 # ==============================================================================
 add_executable(test_gui_project_utils
@@ -219,11 +251,39 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(FullPipelineScriptTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
+
+    add_test(
+        NAME FullPipelineEntrypointTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_full_pipeline_entrypoint
+    )
+    set_tests_properties(FullPipelineEntrypointTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME RepoHygieneTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_repo_hygiene
+    )
+    set_tests_properties(RepoHygieneTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    if(TARGET reconstruct_pipeline_cli)
+        add_test(
+            NAME ReconstructPipelineCliTest
+            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_reconstruct_pipeline_cli
+        )
+        set_tests_properties(ReconstructPipelineCliTest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT "PLASCAN_RECONSTRUCT_PIPELINE_CLI=$<TARGET_FILE:reconstruct_pipeline_cli>"
+        )
+    endif()
 endif()
 
 if(TARGET triangulate_cli)
     add_executable(test_triangulate_cli test_triangulate_cli.cpp)
     target_link_libraries(test_triangulate_cli PRIVATE
+        Qt6::Core
         ${OpenCV_LIBS}
         GTest::gtest_main
     )

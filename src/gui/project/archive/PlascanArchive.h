@@ -5,7 +5,8 @@
 //         .plascan 文件本质上是一个 ZIP 压缩包，包含以下标准条目：
 //           manifest.json       <- 格式版本、类型标识
 //           project.json        <- 旧版兼容条目（新版已迁移为以下两个）
-//           project_files.json  <- 影像列表、流程结果数据
+//           project_files.json  <- 影像列表、相机参数等轻量核心数据
+//           project_results.json <- 特征、匹配、重建、DEM/DOM 等流程结果
 //           project_config.json <- 工作流设置、UI 配置
 //
 //         本类对 libzip C API 进行了轻量封装，隐藏 C API 细节，

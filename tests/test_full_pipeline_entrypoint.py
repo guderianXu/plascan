@@ -35,6 +35,21 @@ class FullPipelineEntrypointTest(unittest.TestCase):
         self.assertNotIn("dense_match_cli", " ".join(cmd))
         self.assertNotIn("triangulate_cli", " ".join(cmd))
 
+    def test_force_flag_is_forwarded_to_reconstruction_cli(self):
+        args = pipeline.parse_args([
+            "input.lis",
+            "--build-dir",
+            "/tmp/plascan-build",
+            "--output-dir",
+            "/tmp/out",
+            "--force",
+        ])
+
+        with mock.patch.object(Path, "resolve", lambda self: self):
+            cmd = pipeline.build_command(args)
+
+        self.assertIn("--force", cmd)
+
     def test_legacy_flag_dispatches_old_validation_script(self):
         args = [
             "input.lis",

@@ -258,10 +258,10 @@ gui/
 │
 ├── project/                    # 项目管理层
 │   ├── data/
-│   │   ├── ProjectData.h/cpp    # 项目数据模型 (影像, 相机, 匹配, 结果)
-│   │   └── ProjectFilesManager.h/cpp  # 项目文件管理
+│   │   ├── ProjectData.h/cpp    # 项目数据入口：core/results 分域、归档与临时缓存持久化
+│   │   └── ProjectFilesManager.h/cpp  # project_files.json / project_results.json 内存模型
 │   ├── io/
-│   │   └── ProjectIO.h/cpp      # 项目文件 I/O (.plascan 归档格式)
+│   │   └── ProjectIO.h/cpp      # 项目目录、临时缓存和产物路径规则
 │   ├── archive/
 │   │   └── PlascanArchive.h/cpp # ZIP 归档封装
 │   ├── manager/
@@ -448,4 +448,4 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 - **Core**: 每个子模块独立 `CMakeLists.txt`, 通过 `plascan_core_add_optional_module()` 注册
 - **NVRTC**: RPATH 自动配置 conda/pip CUDA 库路径
 - **CUDA**: 全局 `enable_language(CUDA)`, 自动查找 conda nvcc
-- **测试**: `-DBUILD_TESTS=ON` → CTest, 162/162 通过
+- **测试**: `-DBUILD_TESTS=ON` → CTest；按改动范围优先跑相关测试，再决定是否跑全量

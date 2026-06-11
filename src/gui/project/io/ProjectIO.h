@@ -7,13 +7,14 @@
 //
 // 目录结构约定（以 /path/to/proj.plascan 为例）：
 //   /path/to/
-//   ├── proj.plascan         <- ZIP 归档，含 project_files.json 等
+//   ├── proj.plascan         <- ZIP 归档，含 project_files.json / project_results.json / project_config.json
 //   ├── assets/
-//   │   ├── images/          <- 用户添加的原始影像
+//   │   ├── images/          <- 预留给打包/复制进项目的影像，默认添加影像仅保存外部引用
 //   │   ├── ip/              <- ipfind 输出的特征点文件 (.vwip/.sp)
 //   │   └── matches/         <- ipmatch 输出的匹配文件
 //   └── .plascan_tmp/        <- 临时缓存目录（崩溃恢复用）
 //       ├── project_files.json
+//       ├── project_results.json  <- qCompress 后的 Compact JSON
 //       └── project_config.json
 // =============================================================================
 #pragma once
@@ -31,7 +32,7 @@ public:
     // 返回 assets/ 目录的绝对路径
     static QString projectAssetsDir(const QString &plascanPath);
 
-    // 返回 assets/images/ 目录的绝对路径（存放原始影像）
+    // 返回 assets/images/ 目录的绝对路径（预留给打包/复制进项目的影像）
     static QString projectImagesDir(const QString &plascanPath);
 
     // 返回 .plascan_tmp/ 临时目录的绝对路径

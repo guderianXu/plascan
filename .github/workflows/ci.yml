@@ -1,0 +1,59 @@
+name: CI
+
+on:
+  push:
+  pull_request:
+
+jobs:
+  build-test:
+    runs-on: ubuntu-24.04
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Install system dependencies
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends \
+            build-essential \
+            cmake \
+            ninja-build \
+            g++ \
+            python3 \
+            wget \
+            unzip \
+            pkg-config \
+            qt6-base-dev \
+            qt6-base-dev-tools \
+            qt6-tools-dev \
+            qt6-tools-dev-tools \
+            libgl1-mesa-dev \
+            libxkbcommon-dev \
+            libopencv-dev \
+            libgdal-dev \
+            libtiff-dev \
+            libzip-dev \
+            libgtest-dev \
+            libomp-dev
+
+      - name: Install CPU LibTorch
+        run: |
+          mkdir -p .deps
+          wget -q https://download.pytorch.org/libtorch/cpu/libtorch-cxx11-abi-shared-with-deps-2.6.0%2Bcpu.zip -O .deps/libtorch.zip
+          unzip -q .deps/libtorch.zip -d .deps
+
+      - name: Configure
+        run: |
+          cmake -S . -B build -G Ninja \
+            -DCMAKE_BUILD_TYPE=Release \
+            -DBUILD_TESTS=ON \
+            -DTorch_DIR="$PWD/.deps/libtorch/share/cmake/Torch"
+
+      - name: Build
+        run: cmake --build build --parallel 2
+
+      - name: Test
+        run: QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure

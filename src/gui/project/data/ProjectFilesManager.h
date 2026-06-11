@@ -8,17 +8,14 @@
 //           - images[]：所有影像的路径、类型、相机参数等（常用，必须快速可用）
 //
 //         【project_results.json】—— 惰性加载的结果数据，仅在需要时读取
-//           - ipfind_results[]：特征点提取记录（1 条/影像，小型）
-//           - ipmatch_results[]：特征匹配记录（O(N²) 条，可能极大）
-//           - intersection_results[]：前方交会结果
-//           - bundle_adjust_results[]：光束法平差结果
+//           - *_results[]：特征、匹配、稀疏/密集重建、模型、DEM/DOM 等产物记录
 //
 //         拆分动机：
 //           ipmatch_results 对 N 张影像最多有 C(N,2) 条（例如 1000 张 ≈ 50 万条），
 //           若与 images 混放在同一文件，将导致开项目时需要解析整个大文件，严重拖慢加载。
 //
-//         本类只负责内存操作，不涉及文件 I/O。
-//         持久化由 ProjectData 通过 PlascanArchive 完成。
+//         本类主要负责内存模型。appendIpmatchResult 为提取匹配数量会读取 sidecar/二进制文件；
+//         project_files.json / project_results.json 的持久化由 ProjectData 通过 PlascanArchive 完成。
 // =============================================================================
 #pragma once
 
@@ -33,7 +30,7 @@ public:
     /// 归档中两个 JSON 条目的名称常量
     static constexpr const char *kArchiveCoreFile        = "project_files.json";
     static constexpr const char *kArchiveResultsFile    = "project_results.json";
-    static constexpr const char *kArchiveCborResultsFile = "project_results.cbor"; ///< 新版 CBOR 格式（更快）
+    static constexpr const char *kArchiveCborResultsFile = "project_results.cbor"; ///< 预留 CBOR 结果条目（当前未读写）
     ProjectFilesManager() = default;
 
     // ── 核心数据（images）── 项目打开时立即可用 ──────────────────────────
@@ -52,6 +49,8 @@ public:
     QJsonObject data() const;
     /// 将整体 JSON（旧格式）拆分写入 core/results 两个内部对象（迁移用）
     void setData(const QJsonObject &data);
+    // 判断某个 key 是否属于 results 域
+    static bool isResultKey(const QString &key);
 
     // ── 默认结构 ─────────────────────────────────────────────────────────
     /// 返回空的默认 core 对象（project_files.json 初始内容）
@@ -75,11 +74,9 @@ public:
 private:
     // 核心数据（images 数组）
     QJsonObject m_coreFiles;
-    // 结果数据（ipfind/ipmatch/intersection/bundle_adjust 结果数组）
+    // 结果数据（*_results 结果数组）
     QJsonObject m_resultFiles;
     // 结果数据脏标记
     bool m_resultsDirty = false;
 
-    // 判断某个 key 是否属于 results 域
-    static bool isResultKey(const QString &key);
 };

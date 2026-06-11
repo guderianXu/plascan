@@ -382,15 +382,34 @@ TEST(ThreeDReconstructionDialogTest, UsesUiDefaultsAndImageCountGate)
     EXPECT_FALSE(settings.contains(QStringLiteral("dom_resolution")));
 }
 
+TEST(MenuWorkflowControllerTest, DenseStageAdvancesOnMvsSuccessWithoutRequiringChangedOutputPath)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_FALSE(source.contains(QStringLiteral("densePath == beforePath")));
+    EXPECT_TRUE(source.contains(QStringLiteral("mvsProgressFinished")));
+    EXPECT_TRUE(source.contains(QStringLiteral("startThreeDReconstructionMeshStage(settings)")));
+}
+
 TEST(MapProjectDialogTest, DefaultsToOneClickDomEngineeringSettings)
 {
     MapProjectDialog dialog;
-    const QString projectRoot = QStringLiteral("/tmp/plascan-project");
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectRoot = tempDir.path();
     const QString demPath = QDir(projectRoot).filePath(QStringLiteral("assets/dem/relative_dem/dem.tif"));
     const QString expectedOutput = QDir(projectRoot).filePath(QStringLiteral("assets/ortho/relative_dom.tif"));
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(demPath).absolutePath()));
+    QFile demFile(demPath);
+    ASSERT_TRUE(demFile.open(QIODevice::WriteOnly));
+    demFile.write("dem");
+    demFile.close();
+
     const QStringList images{
-        QStringLiteral("/tmp/plascan-project/assets/img/1.png"),
-        QStringLiteral("/tmp/plascan-project/assets/img/2.png")
+        QDir(projectRoot).filePath(QStringLiteral("assets/img/1.png")),
+        QDir(projectRoot).filePath(QStringLiteral("assets/img/2.png"))
     };
 
     dialog.setAvailableImages(images);
@@ -447,6 +466,47 @@ TEST(MapProjectDialogTest, DefaultsToOneClickDomEngineeringSettings)
     EXPECT_DOUBLE_EQ(emittedResolution, 0.0);
 }
 
+TEST(MapProjectDialogTest, KeepsLatestDemDefaultWhenSavedDemIsMissing)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectRoot = tempDir.path();
+    const QString latestDemPath = QDir(projectRoot).filePath(QStringLiteral("assets/dem/latest/dem.tif"));
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(latestDemPath).absolutePath()));
+    QFile latestDemFile(latestDemPath);
+    ASSERT_TRUE(latestDemFile.open(QIODevice::WriteOnly));
+    latestDemFile.write("dem");
+    latestDemFile.close();
+
+    MapProjectDialog dialog;
+    dialog.setProjectRoot(projectRoot);
+    dialog.setDefaultDemPath(latestDemPath);
+
+    auto *demEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_demEdit"));
+    ASSERT_NE(demEdit, nullptr);
+    ASSERT_EQ(demEdit->text(), latestDemPath);
+
+    QJsonObject savedSettings;
+    savedSettings[QStringLiteral("dem_path")] =
+        QDir(projectRoot).filePath(QStringLiteral("assets/dem/old/missing_dem.tif"));
+    savedSettings[QStringLiteral("output_path")] =
+        QDir(projectRoot).filePath(QStringLiteral("assets/ortho/relative_dom.tif"));
+    dialog.applySettings(savedSettings);
+
+    EXPECT_EQ(demEdit->text(), latestDemPath);
+}
+
+TEST(MapProjectDialogTest, ValidatesDemFileExistsBeforeRunning)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MapProjectDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QFileInfo demInfo")));
+    EXPECT_TRUE(source.contains(QStringLiteral("demInfo.exists()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("不是有效的 DEM 文件")));
+}
+
 TEST(CreateDemDialogTest, UiAdvertisesOneClickDemWorkflow)
 {
     const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CreateDemDialog.ui"));
@@ -460,6 +520,20 @@ TEST(CreateDemDialogTest, UiAdvertisesOneClickDemWorkflow)
     EXPECT_TRUE(ui.contains(QStringLiteral("m_progressBar")));
     EXPECT_TRUE(ui.contains(QStringLiteral("m_runBtn")));
     EXPECT_TRUE(ui.contains(QStringLiteral("一键生成 DEM")));
+}
+
+TEST(CreateDemDialogTest, OpenCreateDemDialogRequiresProjectManagerBeforeShowingManualRunDialog)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int openIndex = source.indexOf(QStringLiteral("void MenuWorkflowController::openCreateDemDialog()"));
+    const int newDialogIndex = source.indexOf(QStringLiteral("new CreateDemDialog"), openIndex);
+    const int warningIndex = source.indexOf(QStringLiteral("请先打开项目"), openIndex);
+    ASSERT_GE(openIndex, 0);
+    ASSERT_GE(newDialogIndex, 0);
+    ASSERT_GE(warningIndex, 0);
+    EXPECT_LT(warningIndex, newDialogIndex);
 }
 
 TEST(SuperPointRunnerTest, PythonExtractorSupportsConfigEnvVenvAndDiagnosticLogging)
@@ -621,6 +695,27 @@ TEST(DataTreeWidgetTest, ShowsTemporaryDroppedModelUntilCleared)
         }
     }
     EXPECT_TRUE(foundClearedModelSection);
+}
+
+TEST(DataTreeWidgetTest, ContextMenuUsesSameResourcePathResolutionAsActivation)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QString DataTreeWidget::resolveResourcePath")));
+    EXPECT_TRUE(source.contains(QStringLiteral("path = resolveResourcePath(path)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("paths << resolveResourcePath")));
+}
+
+TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("scalePlyIntensityToByte")));
+    EXPECT_TRUE(source.contains(QStringLiteral("isFloatingPlyScalar")));
+    EXPECT_TRUE(source.contains(QStringLiteral("value <= 1.0")));
+    EXPECT_TRUE(source.contains(QStringLiteral("value * 255.0")));
 }
 
 TEST(MainMenuTest, WorkflowMenuExposesOnlyOneClickThreeDReconstruction)

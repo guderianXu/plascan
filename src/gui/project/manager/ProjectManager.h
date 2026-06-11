@@ -69,7 +69,7 @@ signals:
     void projectClosed();
     
     // === 元数据变化信号（转发自 ProjectData） ===
-    // 运行时元数据（project_files.json）内容变化时发出
+    // 运行时项目元数据（project_files.json + project_results.json 合并视图）变化时发出
     void projectMetadataChanged(const QJsonObject &meta);
     // 元数据被更新并已持久化到临时缓存时发出（包含 plascanPath 便于接收方定位文件）
     void projectMetadataUpdated(const QString &plascanPath);

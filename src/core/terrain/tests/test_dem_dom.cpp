@@ -1,12 +1,14 @@
 #include <gtest/gtest.h>
 
 #include "DemGenerator.h"
+#include "DemDomIO.h"
 #include "DomGenerator.h"
 #include "ObjMtlLoader.h"
 #include "TerrainPipeline.h"
 
 #include <filesystem>
 #include <fstream>
+#include <limits>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -375,6 +377,85 @@ TEST_F(TerrainDemDomTest, DemGeneratorSubPixelBilinearSplatIncreasesCoverage)
         << error.toStdString();
 
     EXPECT_GT(countValidCells(bilinearGrid.validMask), countValidCells(nearestGrid.validMask));
+}
+
+TEST_F(TerrainDemDomTest, DemGeneratorSkipsPointsOutsideRobustBoundsAndNonFiniteValues)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(202, 3);
+    for (int i = 0; i < 200; ++i)
+    {
+        pts(i, 0) = 5.0f;
+        pts(i, 1) = 5.0f;
+        pts(i, 2) = 10.0f;
+    }
+    pts(200, 0) = 1000.0f;
+    pts(200, 1) = 1000.0f;
+    pts(200, 2) = 999.0f;
+    pts(201, 0) = 5.0f;
+    pts(201, 1) = 5.0f;
+    pts(201, 2) = std::numeric_limits<float>::quiet_NaN();
+    PlaPointCloud cloud(std::move(pts));
+
+    DemGenerationOptions options;
+    options.gridResolution = 1.0;
+    options.holeFillIterations = 0;
+    options.useSubPixelBilinearSplat = false;
+
+    DemGridData demGrid;
+    PlaPointCloud denseCloud;
+    QString error;
+    ASSERT_TRUE(DemGenerator::generateFromPointCloud(cloud, options, &demGrid, &denseCloud, &error))
+        << error.toStdString();
+
+    ASSERT_EQ(demGrid.width, 2);
+    ASSERT_EQ(demGrid.height, 2);
+    EXPECT_EQ(countValidCells(demGrid.validMask), 1);
+    ASSERT_NE(demGrid.validMask.at<uchar>(0, 0), 0);
+    EXPECT_TRUE(std::isfinite(demGrid.elevation.at<float>(0, 0)));
+    EXPECT_FLOAT_EQ(demGrid.elevation.at<float>(0, 0), 10.0f);
+}
+
+TEST_F(TerrainDemDomTest, DemRasterReadRestoresFourBandXyzErrorRaster)
+{
+    DemGridData demGrid;
+    demGrid.width = 2;
+    demGrid.height = 2;
+    demGrid.minX = 100.0;
+    demGrid.minY = 200.0;
+    demGrid.stepX = 2.0;
+    demGrid.stepY = 3.0;
+    demGrid.worldX = (cv::Mat_<float>(2, 2) << 100.0f, 102.0f, 100.0f, 102.0f);
+    demGrid.worldY = (cv::Mat_<float>(2, 2) << 200.0f, 200.0f, 203.0f, 203.0f);
+    demGrid.elevation = (cv::Mat_<float>(2, 2) << 10.0f, 11.0f, 12.0f, 13.0f);
+    demGrid.triangulationError = (cv::Mat_<float>(2, 2) << 0.1f, 0.2f, 0.3f, 0.4f);
+    demGrid.validMask = (cv::Mat_<uchar>(2, 2) << 255, 0, 255, 255);
+
+    const fs::path demPath = _tempDir / "four_band_dem.tif";
+    QString error;
+    ASSERT_TRUE(DemDomIO::writeDemRaster(demGrid,
+                                         QString::fromStdString(demPath.string()),
+                                         DemRasterFormat::Float32Tiff,
+                                         &error))
+        << error.toStdString();
+
+    DemGridData readGrid;
+    ASSERT_TRUE(DemDomIO::readDemRaster(QString::fromStdString(demPath.string()), &readGrid, &error))
+        << error.toStdString();
+
+    ASSERT_TRUE(readGrid.isValid());
+    ASSERT_TRUE(readGrid.hasWorldXY());
+    ASSERT_TRUE(readGrid.hasTriangulationError());
+    EXPECT_EQ(readGrid.width, demGrid.width);
+    EXPECT_EQ(readGrid.height, demGrid.height);
+    EXPECT_FLOAT_EQ(readGrid.elevation.at<float>(0, 0), 10.0f);
+    EXPECT_FLOAT_EQ(readGrid.elevation.at<float>(1, 1), 13.0f);
+    EXPECT_FLOAT_EQ(readGrid.worldX.at<float>(1, 1), 102.0f);
+    EXPECT_FLOAT_EQ(readGrid.worldY.at<float>(1, 0), 203.0f);
+    EXPECT_FLOAT_EQ(readGrid.triangulationError.at<float>(1, 1), 0.4f);
+    EXPECT_NE(readGrid.validMask.at<uchar>(0, 0), 0);
+    EXPECT_EQ(readGrid.validMask.at<uchar>(0, 1), 0);
+    EXPECT_NE(readGrid.validMask.at<uchar>(1, 0), 0);
+    EXPECT_NE(readGrid.validMask.at<uchar>(1, 1), 0);
 }
 
 TEST_F(TerrainDemDomTest, DomGeneratorSharpnessWeightingImprovesDetailRetention)

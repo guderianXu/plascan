@@ -65,7 +65,10 @@ void MapProjectDialog::setDefaultDemPath(const QString &demPath)
 void MapProjectDialog::applySettings(const QJsonObject &settings)
 {
     if (settings.contains(QStringLiteral("dem_path"))) {
-        m_demEdit->setText(settings.value(QStringLiteral("dem_path")).toString());
+        const QString savedDemPath = settings.value(QStringLiteral("dem_path")).toString().trimmed();
+        if (QFileInfo::exists(savedDemPath)) {
+            m_demEdit->setText(savedDemPath);
+        }
     }
     if (settings.contains(QStringLiteral("output_path"))) {
         m_outputEdit->setText(settings.value(QStringLiteral("output_path")).toString());
@@ -107,6 +110,13 @@ void MapProjectDialog::onRun()
     }
     if (m_demEdit->text().trimmed().isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("参数错误"), QStringLiteral("请指定 DEM 文件。"));
+        return;
+    }
+    const QFileInfo demInfo(m_demEdit->text().trimmed());
+    if (!demInfo.exists() || !demInfo.isFile()) {
+        QMessageBox::warning(this,
+                             QStringLiteral("参数错误"),
+                             QStringLiteral("DEM 路径不是有效的 DEM 文件。"));
         return;
     }
     if (m_outputEdit->text().trimmed().isEmpty()) {

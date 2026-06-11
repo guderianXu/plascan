@@ -17,7 +17,7 @@ QJsonObject projectFilesMeta(ProjectData *projectData)
         return QJsonObject();
     }
 
-    const QJsonObject meta = projectData->metadata();
+    const QJsonObject meta = projectData->coreFilesMeta();
     if (meta.value(QStringLiteral("project_files")).isObject())
     {
         return meta.value(QStringLiteral("project_files")).toObject();
@@ -105,9 +105,7 @@ void upsertProjectRecordByPath(ProjectData *projectData,
         return;
     }
 
-    QJsonObject meta = projectData->metadata();
-    upsertMetaArrayRecordByPath(&meta, arrayKey, pathKey, record);
-    persistProjectMeta(projectData, meta, markDirty);
+    projectData->upsertResultRecordByPath(arrayKey, pathKey, record, markDirty);
 }
 
 void replaceProjectRecordWithLatest(ProjectData *projectData,
@@ -120,9 +118,7 @@ void replaceProjectRecordWithLatest(ProjectData *projectData,
         return;
     }
 
-    QJsonObject meta = projectData->metadata();
-    replaceMetaArrayWithLatest(&meta, arrayKey, record);
-    persistProjectMeta(projectData, meta, markDirty);
+    projectData->replaceResultRecordWithLatest(arrayKey, record, markDirty);
 }
 
 void appendAtResult(ProjectData *projectData,
@@ -147,12 +143,10 @@ void appendAtResult(ProjectData *projectData,
     entry[QStringLiteral("operation_display_name")] =
         sparseOperationDisplayName(entry.value(QStringLiteral("operation")).toString());
 
-    QJsonObject meta = projectData->metadata();
-    upsertMetaArrayRecordByIndex(&meta,
-                                 QStringLiteral("aerial_triangulation_results"),
-                                 entry,
-                                 replaceIndex);
-    persistProjectMeta(projectData, meta, true);
+    projectData->upsertResultRecordByIndex(QStringLiteral("aerial_triangulation_results"),
+                                           entry,
+                                           replaceIndex,
+                                           true);
 }
 
 void appendObsNetResult(ProjectData *projectData,
@@ -176,9 +170,9 @@ void appendObsNetResult(ProjectData *projectData,
         entry[it.key()] = it.value();
     }
 
-    QJsonObject meta = projectData->metadata();
-    meta[QStringLiteral("observation_network_results")] = QJsonArray{entry};
-    persistProjectMeta(projectData, meta, true);
+    projectData->replaceResultRecordWithLatest(QStringLiteral("observation_network_results"),
+                                               entry,
+                                               true);
 }
 
 } // namespace xjw::gui::project

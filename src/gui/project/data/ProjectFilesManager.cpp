@@ -15,7 +15,12 @@
 //         // 精简格式：去掉 sp0/sp1/pair_name 等冗余字段，sidecar 由 output+".json" 推导
 //       ],
 //       "intersection_results":   [...],
-//       "bundle_adjust_results":  [...]
+//       "bundle_adjust_results":  [...],
+//       "depth_map_results":      [...],
+//       "dense_cloud_results":    [...],
+//       "model_results":          [...],
+//       "dem_results":            [...],
+//       "ortho_results":          [...]
 //     }
 //
 //   旧格式兼容：读取时若 record 含 "settings" 字段则按旧格式解析，写入时统一精简格式。
@@ -38,8 +43,13 @@ bool ProjectFilesManager::isResultKey(const QString &key)
         || key == QLatin1String("ipmatch_results")
         || key == QLatin1String("intersection_results")
         || key == QLatin1String("bundle_adjust_results")
-        || key == QLatin1String("aerial_triangulation_results")   // 兼容旧版
-        || key == QLatin1String("observation_network_results");  // 观测网络构建结果
+        || key == QLatin1String("aerial_triangulation_results")
+        || key == QLatin1String("observation_network_results")
+        || key == QLatin1String("depth_map_results")
+        || key == QLatin1String("dense_cloud_results")
+        || key == QLatin1String("model_results")
+        || key == QLatin1String("dem_results")
+        || key == QLatin1String("ortho_results");
 }
 
 // ── 默认结构 ─────────────────────────────────────────────────────────────────
@@ -293,4 +303,3 @@ void ProjectFilesManager::appendIpmatchResult(const QStringList &outputs,
     m_resultFiles[QLatin1String("ipmatch_results")] = results;
     m_resultsDirty = true;
 }
-

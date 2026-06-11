@@ -23,7 +23,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
-#include <QRegularExpression>
+#include <QSaveFile>
 #include <QTextStream>
 #include <QTimer>
 #include <QtGlobal>
@@ -64,6 +64,290 @@ QString resolveListToken(const QString &token, const QDir &baseDir)
         return QDir::cleanPath(info.absoluteFilePath());
     }
     return QDir::cleanPath(QFileInfo(baseDir.filePath(trimmed)).absoluteFilePath());
+}
+
+bool hasUnquotedComma(const QString &line)
+{
+    bool inQuote = false;
+    QChar quoteChar;
+    bool escaped = false;
+
+    for (const QChar ch : line)
+    {
+        if (escaped)
+        {
+            escaped = false;
+            continue;
+        }
+        if (ch == QLatin1Char('\\'))
+        {
+            escaped = true;
+            continue;
+        }
+        if (inQuote)
+        {
+            if (ch == quoteChar)
+            {
+                inQuote = false;
+            }
+            continue;
+        }
+        if (ch == QLatin1Char('\'') || ch == QLatin1Char('"'))
+        {
+            inQuote = true;
+            quoteChar = ch;
+            continue;
+        }
+        if (ch == QLatin1Char(','))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool appendParsedToken(QStringList *parts, QString *token, bool *hasToken)
+{
+    if (!parts || !token || !hasToken)
+    {
+        return false;
+    }
+    if (*hasToken || !token->isEmpty())
+    {
+        parts->append(token->trimmed());
+        token->clear();
+        *hasToken = false;
+    }
+    return true;
+}
+
+bool parseShellTokens(const QString &line, QStringList *parts, QString *error)
+{
+    if (!parts)
+    {
+        if (error) *error = QStringLiteral("内部错误：列表行输出对象为空");
+        return false;
+    }
+
+    parts->clear();
+    QString token;
+    bool hasToken = false;
+    bool inQuote = false;
+    QChar quoteChar;
+    bool escaped = false;
+
+    for (const QChar ch : line)
+    {
+        if (escaped)
+        {
+            token.append(ch);
+            hasToken = true;
+            escaped = false;
+            continue;
+        }
+        if (ch == QLatin1Char('\\'))
+        {
+            escaped = true;
+            hasToken = true;
+            continue;
+        }
+        if (inQuote)
+        {
+            if (ch == quoteChar)
+            {
+                inQuote = false;
+            }
+            else
+            {
+                token.append(ch);
+            }
+            hasToken = true;
+            continue;
+        }
+        if (ch == QLatin1Char('\'') || ch == QLatin1Char('"'))
+        {
+            inQuote = true;
+            quoteChar = ch;
+            hasToken = true;
+            continue;
+        }
+        if (ch.isSpace())
+        {
+            appendParsedToken(parts, &token, &hasToken);
+            continue;
+        }
+
+        token.append(ch);
+        hasToken = true;
+    }
+
+    if (escaped)
+    {
+        if (error) *error = QStringLiteral("行尾转义字符缺少目标字符");
+        return false;
+    }
+    if (inQuote)
+    {
+        if (error) *error = QStringLiteral("引号未闭合");
+        return false;
+    }
+
+    appendParsedToken(parts, &token, &hasToken);
+    return true;
+}
+
+bool parseCsvTokens(const QString &line, QStringList *parts, QString *error)
+{
+    if (!parts)
+    {
+        if (error) *error = QStringLiteral("内部错误：列表行输出对象为空");
+        return false;
+    }
+
+    parts->clear();
+    QString token;
+    bool hasToken = false;
+    bool inQuote = false;
+    QChar quoteChar;
+    bool escaped = false;
+
+    for (int index = 0; index < line.size(); ++index)
+    {
+        const QChar ch = line.at(index);
+        if (escaped)
+        {
+            token.append(ch);
+            hasToken = true;
+            escaped = false;
+            continue;
+        }
+        if (ch == QLatin1Char('\\'))
+        {
+            escaped = true;
+            hasToken = true;
+            continue;
+        }
+        if (inQuote)
+        {
+            if (ch == quoteChar)
+            {
+                if (quoteChar == QLatin1Char('"')
+                    && index + 1 < line.size()
+                    && line.at(index + 1) == QLatin1Char('"'))
+                {
+                    token.append(ch);
+                    hasToken = true;
+                    ++index;
+                }
+                else
+                {
+                    inQuote = false;
+                    hasToken = true;
+                }
+            }
+            else
+            {
+                token.append(ch);
+                hasToken = true;
+            }
+            continue;
+        }
+        if (ch == QLatin1Char('\'') || ch == QLatin1Char('"'))
+        {
+            inQuote = true;
+            quoteChar = ch;
+            hasToken = true;
+            continue;
+        }
+        if (ch == QLatin1Char(','))
+        {
+            parts->append(token.trimmed());
+            token.clear();
+            hasToken = false;
+            continue;
+        }
+
+        token.append(ch);
+        hasToken = true;
+    }
+
+    if (escaped)
+    {
+        if (error) *error = QStringLiteral("行尾转义字符缺少目标字符");
+        return false;
+    }
+    if (inQuote)
+    {
+        if (error) *error = QStringLiteral("引号未闭合");
+        return false;
+    }
+
+    if (hasToken || !token.isEmpty() || line.endsWith(QLatin1Char(',')))
+    {
+        parts->append(token.trimmed());
+    }
+    return true;
+}
+
+bool parseListLine(const QString &line, QStringList *parts, QString *error)
+{
+    if (hasUnquotedComma(line))
+    {
+        return parseCsvTokens(line, parts, error);
+    }
+    return parseShellTokens(line, parts, error);
+}
+
+QStringList criticalOutputPaths(const QString &outputDir)
+{
+    const QDir dir(outputDir);
+    return {
+        dir.filePath(QStringLiteral("report.json")),
+        dir.filePath(QStringLiteral("headless.plascan")),
+        dir.filePath(QStringLiteral("sparse")),
+        dir.filePath(QStringLiteral("mvs/dense_cloud.ply")),
+        dir.filePath(QStringLiteral("model")),
+        dir.filePath(QStringLiteral("terrain/products/dem.tif")),
+        dir.filePath(QStringLiteral("terrain/products/dom.png"))
+    };
+}
+
+bool validateOutputDirectory(const QString &outputDir, bool force, QString *error)
+{
+    const QFileInfo outputInfo(outputDir);
+    if (outputInfo.exists() && !outputInfo.isDir())
+    {
+        if (error) *error = QStringLiteral("输出路径已存在但不是目录: %1").arg(outputDir);
+        return false;
+    }
+
+    if (force)
+    {
+        return true;
+    }
+
+    if (outputInfo.exists())
+    {
+        const QDir dir(outputDir);
+        const QFileInfoList entries = dir.entryInfoList(QDir::NoDotAndDotDot | QDir::AllEntries);
+        if (!entries.isEmpty())
+        {
+            if (error) *error = QStringLiteral("输出目录非空，拒绝覆盖已有结果: %1；如需复用/覆盖请添加 --force").arg(outputDir);
+            return false;
+        }
+    }
+
+    for (const QString &path : criticalOutputPaths(outputDir))
+    {
+        if (QFileInfo::exists(path))
+        {
+            if (error) *error = QStringLiteral("输出目录已有关键输出文件，拒绝覆盖: %1；如需复用/覆盖请添加 --force").arg(path);
+            return false;
+        }
+    }
+
+    return true;
 }
 
 QJsonObject cameraToJson(const xjw::Camera &camera)
@@ -140,14 +424,14 @@ bool readImageCameraList(const QString &listPath,
         }
 
         QStringList parts;
-        if (line.contains(QLatin1Char(',')))
+        QString parseError;
+        if (!parseListLine(line, &parts, &parseError))
         {
-            const int comma = line.indexOf(QLatin1Char(','));
-            parts << line.left(comma).trimmed() << line.mid(comma + 1).trimmed();
-        }
-        else
-        {
-            parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+            if (error)
+            {
+                *error = QStringLiteral("%1:%2 %3").arg(listPath).arg(lineNumber).arg(parseError);
+            }
+            return false;
         }
 
         if (parts.size() != 2)
@@ -225,19 +509,41 @@ bool writeDenseCloudPly(const QString &path,
     return true;
 }
 
-QJsonObject writeReport(const QString &outputDir, const QJsonObject &report)
+bool writeReport(const QString &outputDir, const QJsonObject &report, QJsonObject *writtenReport, QString *error)
 {
-    QDir().mkpath(outputDir);
-    const QString reportPath = QDir(outputDir).filePath(QStringLiteral("report.json"));
-    QFile file(reportPath);
-    if (file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    if (!QDir().mkpath(outputDir))
     {
-        file.write(QJsonDocument(report).toJson(QJsonDocument::Indented));
-        file.close();
+        if (error) *error = QStringLiteral("无法创建报告目录: %1").arg(outputDir);
+        return false;
     }
+
+    const QString reportPath = QDir(outputDir).filePath(QStringLiteral("report.json"));
     QJsonObject out = report;
     out[QStringLiteral("report_json")] = reportPath;
-    return out;
+    const QByteArray payload = QJsonDocument(out).toJson(QJsonDocument::Indented);
+
+    QSaveFile file(reportPath);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        if (error) *error = QStringLiteral("无法打开报告文件: %1 (%2)").arg(reportPath, file.errorString());
+        return false;
+    }
+    if (file.write(payload) != payload.size())
+    {
+        if (error) *error = QStringLiteral("报告写入失败: %1 (%2)").arg(reportPath, file.errorString());
+        return false;
+    }
+    if (!file.commit())
+    {
+        if (error) *error = QStringLiteral("报告提交失败: %1 (%2)").arg(reportPath, file.errorString());
+        return false;
+    }
+
+    if (writtenReport)
+    {
+        *writtenReport = out;
+    }
+    return true;
 }
 
 QJsonArray inputsToJson(const std::vector<InputItem> &items)
@@ -281,6 +587,7 @@ int main(int argc, char *argv[])
     bool skipModel = false;
     bool skipTerrain = false;
     bool exportObj = false;
+    bool forceOutput = false;
 
     app.add_option("list_file", listPathArg, "image/camera .lis file")->required();
     app.add_option("-o,--output-dir", outputDirArg, "output directory");
@@ -293,16 +600,26 @@ int main(int argc, char *argv[])
     app.add_flag("--skip-model", skipModel, "skip mesh reconstruction");
     app.add_flag("--skip-terrain", skipTerrain, "skip DEM/DOM generation");
     app.add_flag("--export-obj", exportObj, "also export OBJ/MTL/texture where supported");
+    app.add_flag("--force", forceOutput, "allow reusing or overwriting a non-empty output directory");
 
     CLI11_PARSE(app, argc, argv);
 
     const QString listPath = cleanAbsolutePath(QString::fromStdString(listPathArg));
     const QString outputDir = cleanAbsolutePath(QString::fromStdString(outputDirArg));
-    QDir().mkpath(outputDir);
+    QString error;
+    if (!validateOutputDirectory(outputDir, forceOutput, &error))
+    {
+        std::fprintf(stderr, "输出目录错误: %s\n", qUtf8Printable(error));
+        return cli::EXIT_ARG_ERR;
+    }
+    if (!QDir().mkpath(outputDir))
+    {
+        std::fprintf(stderr, "输出目录创建失败: %s\n", qUtf8Printable(outputDir));
+        return cli::EXIT_IO_ERR;
+    }
 
     std::vector<InputItem> items;
     QJsonObject projectMeta;
-    QString error;
     if (!readImageCameraList(listPath, &items, &projectMeta, &error))
     {
         std::fprintf(stderr, "列表读取失败: %s\n", qUtf8Printable(error));
@@ -323,6 +640,16 @@ int main(int argc, char *argv[])
     report[QStringLiteral("list_file")] = listPath;
     report[QStringLiteral("output_dir")] = outputDir;
     report[QStringLiteral("inputs")] = inputsToJson(items);
+
+    auto writeFinalReport = [&](QJsonObject *finalReport) {
+        QString reportError;
+        if (!writeReport(outputDir, report, finalReport, &reportError))
+        {
+            std::fprintf(stderr, "报告写入失败: %s\n", qUtf8Printable(reportError));
+            return false;
+        }
+        return true;
+    };
 
     std::fprintf(stdout, "[1/4] SFM 稀疏重建...\n");
     xjw::gui::SFMServiceOptions sfmOptions;
@@ -352,7 +679,11 @@ int main(int argc, char *argv[])
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
         report[QStringLiteral("reason")] = sfmResult.errorMessage;
-        const QJsonObject finalReport = writeReport(outputDir, report);
+        QJsonObject finalReport;
+        if (!writeFinalReport(&finalReport))
+        {
+            return cli::EXIT_IO_ERR;
+        }
         std::fprintf(stderr, "SFM 失败: %s\n", qUtf8Printable(sfmResult.errorMessage));
         std::fprintf(stderr, "report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
         return cli::EXIT_ALGO_ERR;
@@ -407,7 +738,11 @@ int main(int argc, char *argv[])
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
         report[QStringLiteral("reason")] = QStringLiteral("SFM 后可用于 MVS 的相机不足 2 张");
-        const QJsonObject finalReport = writeReport(outputDir, report);
+        QJsonObject finalReport;
+        if (!writeFinalReport(&finalReport))
+        {
+            return cli::EXIT_IO_ERR;
+        }
         std::fprintf(stderr, "MVS 输入不足: report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
         return cli::EXIT_ALGO_ERR;
     }
@@ -476,7 +811,11 @@ int main(int argc, char *argv[])
     {
         report[QStringLiteral("status")] = QStringLiteral("failed");
         report[QStringLiteral("reason")] = !error.isEmpty() ? error : (mvsError.isEmpty() ? QStringLiteral("MVS 未生成有效稠密点云") : mvsError);
-        const QJsonObject finalReport = writeReport(outputDir, report);
+        QJsonObject finalReport;
+        if (!writeFinalReport(&finalReport))
+        {
+            return cli::EXIT_IO_ERR;
+        }
         std::fprintf(stderr, "MVS 失败: %s\n", qUtf8Printable(report.value(QStringLiteral("reason")).toString()));
         std::fprintf(stderr, "report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
         return cli::EXIT_ALGO_ERR;
@@ -567,7 +906,11 @@ int main(int argc, char *argv[])
     const bool terrainOk = skipTerrain || ((!demPath.isEmpty() && QFileInfo::exists(demPath))
                                            && (!domPath.isEmpty() && QFileInfo::exists(domPath)));
     report[QStringLiteral("status")] = (modelOk && terrainOk) ? QStringLiteral("ok") : QStringLiteral("partial");
-    const QJsonObject finalReport = writeReport(outputDir, report);
+    QJsonObject finalReport;
+    if (!writeFinalReport(&finalReport))
+    {
+        return cli::EXIT_IO_ERR;
+    }
 
     std::fprintf(stdout, "status=%s\n", qUtf8Printable(report.value(QStringLiteral("status")).toString()));
     std::fprintf(stdout, "output_dir=%s\n", qUtf8Printable(outputDir));

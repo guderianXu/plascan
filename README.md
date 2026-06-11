@@ -1,5 +1,8 @@
 # PlaScan
 
+[![CI](https://github.com/guderianXu/plascan/actions/workflows/ci.yml/badge.svg)](https://github.com/guderianXu/plascan/actions/workflows/ci.yml)
+[![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](LICENSE)
+
 **行星表面摄影测量处理系统** — 从多视角影像生成高精度三维模型。
 
 ## 实测性能
@@ -209,4 +212,4 @@ QT_QPA_PLATFORM=offscreen ./build/tests/test_gui_project_utils
 
 ## 许可
 
-MIT License
+MIT License，详见 [LICENSE](LICENSE)。

@@ -664,37 +664,17 @@ void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObje
         return;
     }
 
-    auto latestDensePath = [](const QJsonObject &meta) -> QString {
-        const QJsonArray arr = meta.value(QStringLiteral("dense_cloud_results")).toArray();
-        if (arr.isEmpty())
-        {
-            return QString();
-        }
-        return arr.last().toObject().value(QStringLiteral("dense_cloud_xyz")).toString();
-    };
-
-    const QString beforePath = latestDensePath(m_projectManager->currentMeta());
     QObject *ctx = new QObject(m_projectManager);
     QPointer<MenuWorkflowController> self(this);
-    connect(m_projectManager, &ProjectManager::projectMetadataChanged, ctx,
-            [self, ctx, beforePath, settings, latestDensePath](const QJsonObject &meta) {
-        const QString densePath = latestDensePath(meta);
-        if (densePath.isEmpty() || densePath == beforePath)
+    connect(m_projectManager, &ProjectManager::mvsProgressFinished, ctx,
+            [self, ctx, settings](bool success) {
+        ctx->deleteLater();
+        if (!success || !self)
         {
             return;
         }
-        ctx->deleteLater();
-        if (self)
-        {
-            self->startThreeDReconstructionMeshStage(settings);
-        }
-    });
-    connect(m_projectManager, &ProjectManager::mvsProgressFinished, ctx,
-            [ctx](bool success) {
-        if (!success)
-        {
-            ctx->deleteLater();
-        }
+
+        self->startThreeDReconstructionMeshStage(settings);
     });
 
     const QString outputRoot = settings.value(QStringLiteral("output_dir")).toString();
@@ -801,16 +781,22 @@ void MenuWorkflowController::openOverlapAnalysisDialog()
 void MenuWorkflowController::openCreateDemDialog()
 {
     if (!m_mainWindow)
+    {
         return;
+    }
+    if (!m_projectManager)
+    {
+        QMessageBox::warning(m_mainWindow, QStringLiteral("生成 DEM"), QStringLiteral("请先打开项目"));
+        return;
+    }
 
     auto *dlg = new CreateDemDialog(m_projectManager, m_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
-    if (m_projectManager)
+    QStringList images = getProjectImages();
+    if (!images.isEmpty())
     {
-        QStringList images = getProjectImages();
-        if (!images.isEmpty())
-            dlg->setAvailableImages(images);
+        dlg->setAvailableImages(images);
     }
 
     // 自动模式：完整流水线

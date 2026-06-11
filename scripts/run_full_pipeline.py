@@ -30,6 +30,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--skip-model", action="store_true")
     parser.add_argument("--skip-terrain", action="store_true")
     parser.add_argument("--export-obj", action="store_true")
+    parser.add_argument("--force", action="store_true")
     parser.add_argument(
         "--legacy-stereo-test",
         action="store_true",
@@ -81,6 +82,8 @@ def build_command(args: argparse.Namespace) -> list[str]:
         cmd.append("--skip-terrain")
     if args.export_obj:
         cmd.append("--export-obj")
+    if args.force:
+        cmd.append("--force")
     return cmd
 
 

@@ -117,6 +117,24 @@ uint8_t clampPlyByte(double value)
     return static_cast<uint8_t>(std::clamp(static_cast<int>(std::lround(value)), 0, 255));
 }
 
+bool isFloatingPlyScalar(const std::string &type)
+{
+    return type == "float" || type == "float32" || type == "double" || type == "float64";
+}
+
+uint8_t scalePlyIntensityToByte(double value, const PlyProperty &property)
+{
+    if (!std::isfinite(value))
+    {
+        return 0;
+    }
+    if (isFloatingPlyScalar(property.type) && value >= 0.0 && value <= 1.0)
+    {
+        return clampPlyByte(value * 255.0);
+    }
+    return clampPlyByte(value);
+}
+
 template <typename T>
 T readBinaryValue(std::ifstream &stream)
 {
@@ -491,7 +509,7 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
                     else if (hasRgbColor && p.name == "blue") colors(i, 2) = clampPlyByte(v);
                     else if (hasGrayColor && isIntensityProperty(p.name))
                     {
-                        const uint8_t gray = clampPlyByte(v);
+                        const uint8_t gray = scalePlyIntensityToByte(v, p);
                         colors(i, 0) = gray;
                         colors(i, 1) = gray;
                         colors(i, 2) = gray;
@@ -526,7 +544,7 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
                     else if (hasRgbColor && p.name == "blue") colors(i, 2) = clampPlyByte(v);
                     else if (hasGrayColor && isIntensityProperty(p.name))
                     {
-                        const uint8_t gray = clampPlyByte(v);
+                        const uint8_t gray = scalePlyIntensityToByte(v, p);
                         colors(i, 0) = gray;
                         colors(i, 1) = gray;
                         colors(i, 2) = gray;

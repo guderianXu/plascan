@@ -108,13 +108,26 @@ PointCloudBounds computeBounds(const PlaPointCloud &pointCloud)
     float minX = std::numeric_limits<float>::max(), maxX = -std::numeric_limits<float>::max();
     float minY = std::numeric_limits<float>::max(), maxY = -std::numeric_limits<float>::max();
     float minZ = std::numeric_limits<float>::max(), maxZ = -std::numeric_limits<float>::max();
+    bool hasFinitePoint = false;
     for (size_t i = 0; i < pointCloud.size(); ++i)
     {
         auto pt = pointCloud[i];
+        if (!std::isfinite(pt.x()) || !std::isfinite(pt.y()) || !std::isfinite(pt.z()))
+        {
+            continue;
+        }
+
         minX = std::min(minX, pt.x()); maxX = std::max(maxX, pt.x());
         minY = std::min(minY, pt.y()); maxY = std::max(maxY, pt.y());
         minZ = std::min(minZ, pt.z()); maxZ = std::max(maxZ, pt.z());
+        hasFinitePoint = true;
     }
+
+    if (!hasFinitePoint)
+    {
+        return result;
+    }
+
     result.valid = true;
     result.minCorner = {minX, minY, minZ};
     result.maxCorner = {maxX, maxY, maxZ};
@@ -241,23 +254,34 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
         const size_t n = pointCloud.size();
         if (n > 100)
         {
-            std::vector<float> xs(n), ys(n);
+            std::vector<float> xs;
+            std::vector<float> ys;
+            xs.reserve(n);
+            ys.reserve(n);
             for (size_t i = 0; i < n; ++i)
             {
                 auto pt = pointCloud[i];
-                xs[i] = pt.x();
-                ys[i] = pt.y();
+                if (!std::isfinite(pt.x()) || !std::isfinite(pt.y()) || !std::isfinite(pt.z()))
+                {
+                    continue;
+                }
+
+                xs.push_back(pt.x());
+                ys.push_back(pt.y());
             }
-            std::sort(xs.begin(), xs.end());
-            std::sort(ys.begin(), ys.end());
-            const size_t lo = n / 200;       // 0.5th percentile
-            const size_t hi = n - 1 - lo;    // 99.5th percentile
-            const float padX = (xs[hi] - xs[lo]) * 0.02f;
-            const float padY = (ys[hi] - ys[lo]) * 0.02f;
-            robustMinX = static_cast<double>(xs[lo] - padX);
-            robustMaxX = static_cast<double>(xs[hi] + padX);
-            robustMinY = static_cast<double>(ys[lo] - padY);
-            robustMaxY = static_cast<double>(ys[hi] + padY);
+            if (xs.size() > 100)
+            {
+                std::sort(xs.begin(), xs.end());
+                std::sort(ys.begin(), ys.end());
+                const size_t lo = xs.size() / 200;        // 0.5th percentile
+                const size_t hi = xs.size() - 1 - lo;     // 99.5th percentile
+                const float padX = (xs[hi] - xs[lo]) * 0.02f;
+                const float padY = (ys[hi] - ys[lo]) * 0.02f;
+                robustMinX = static_cast<double>(xs[lo] - padX);
+                robustMaxX = static_cast<double>(xs[hi] + padX);
+                robustMinY = static_cast<double>(ys[lo] - padY);
+                robustMaxY = static_cast<double>(ys[hi] + padY);
+            }
         }
     }
 
@@ -333,8 +357,18 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
     };
 
     auto splatPointToGrid = [&](double x, double y, double z, const cv::Vec3b *color) {
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+        {
+            return;
+        }
+
         const double gridX = (x - demGrid->minX) / demGrid->stepX;
         const double gridY = (y - demGrid->minY) / demGrid->stepY;
+        if (gridX < 0.0 || gridX > static_cast<double>(width - 1) ||
+            gridY < 0.0 || gridY > static_cast<double>(height - 1))
+        {
+            return;
+        }
 
         if (options.useSubPixelBilinearSplat)
         {
@@ -347,8 +381,13 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
             {
                 for (int colOffset = 0; colOffset <= 1; ++colOffset)
                 {
-                    const int col = qBound(0, baseCol + colOffset, width - 1);
-                    const int row = qBound(0, baseRow + rowOffset, height - 1);
+                    const int col = baseCol + colOffset;
+                    const int row = baseRow + rowOffset;
+                    if (col < 0 || col >= width || row < 0 || row >= height)
+                    {
+                        continue;
+                    }
+
                     const double weightX = colOffset == 0 ? (1.0 - fracX) : fracX;
                     const double weightY = rowOffset == 0 ? (1.0 - fracY) : fracY;
                     const double weight = std::max(0.0, weightX * weightY);
@@ -366,8 +405,12 @@ bool DemGenerator::generateFromPointCloud(const PlaPointCloud &pointCloud,
             return;
         }
 
-        const int col = qBound(0, static_cast<int>(std::round(gridX)), width - 1);
-        const int row = qBound(0, static_cast<int>(std::round(gridY)), height - 1);
+        const int col = static_cast<int>(std::round(gridX));
+        const int row = static_cast<int>(std::round(gridY));
+        if (col < 0 || col >= width || row < 0 || row >= height)
+        {
+            return;
+        }
 
         AccumulatorCell &accumulator = accumulators[cellIndex(col, row)];
         accumulateCell(&accumulator, z, 1.0, options.elevationAggregation, color);

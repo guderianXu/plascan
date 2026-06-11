@@ -44,6 +44,22 @@ cv::Mat flipForRasterWrite(const cv::Mat &input)
     return output;
 }
 
+bool isRasterNoData(float value, bool hasNoData, double noDataValue)
+{
+    if (!std::isfinite(value))
+    {
+        return true;
+    }
+
+    if (!hasNoData)
+    {
+        return false;
+    }
+
+    return value == static_cast<float>(noDataValue) ||
+           std::fabs(static_cast<double>(value) - noDataValue) < 1e-6;
+}
+
 } // namespace
 
 bool DemDomIO::writeDemPreviewPng(const DemGridData &demGrid,
@@ -226,6 +242,7 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
         // 4-band output: X, Y, Z, validity mask (like ASP run-PC.tif)
         const cv::Mat *bands[3] = { &demGrid.worldX, &demGrid.worldY, &demGrid.elevation };
         const float nodata = -3.40282e+38f;
+        bool writeOk = true;
         for (int b = 0; b < 3; ++b)
         {
             cv::Mat raster(demGrid.height, demGrid.width, CV_32F, cv::Scalar(nodata));
@@ -235,10 +252,16 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
                         raster.at<float>(row, col) = bands[b]->at<float>(row, col);
             cv::Mat writeRaster = flipForRasterWrite(raster);
             GDALRasterBand *gBand = dataset->GetRasterBand(b + 1);
+            if (!gBand)
+            {
+                writeOk = false;
+                continue;
+            }
             gBand->SetNoDataValue(static_cast<double>(nodata));
-            gBand->RasterIO(GF_Write, 0, 0, demGrid.width, demGrid.height,
-                            writeRaster.data, demGrid.width, demGrid.height,
-                            GDT_Float32, 0, 0);
+            writeOk = writeOk &&
+                      gBand->RasterIO(GF_Write, 0, 0, demGrid.width, demGrid.height,
+                                      writeRaster.data, demGrid.width, demGrid.height,
+                                      GDT_Float32, 0, 0) == CE_None;
         }
         // Band 4: triangulation error (like ASP's intersection_error band)
         // Falls back to validity mask if no triangulation error available
@@ -254,10 +277,18 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
                         band4.at<float>(row, col) = nodata4;
             cv::Mat writeBand4 = flipForRasterWrite(band4);
             GDALRasterBand *gBand4 = dataset->GetRasterBand(4);
-            gBand4->SetNoDataValue(static_cast<double>(nodata4));
-            gBand4->RasterIO(GF_Write, 0, 0, demGrid.width, demGrid.height,
-                             writeBand4.data, demGrid.width, demGrid.height,
-                             GDT_Float32, 0, 0);
+            if (gBand4)
+            {
+                gBand4->SetNoDataValue(static_cast<double>(nodata4));
+                writeOk = writeOk &&
+                          gBand4->RasterIO(GF_Write, 0, 0, demGrid.width, demGrid.height,
+                                           writeBand4.data, demGrid.width, demGrid.height,
+                                           GDT_Float32, 0, 0) == CE_None;
+            }
+            else
+            {
+                writeOk = false;
+            }
         }
         else
         {
@@ -266,11 +297,29 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
                     if (demGrid.validMask.at<uchar>(row, col) != 0)
                         band4.at<float>(row, col) = 1.0f;
             cv::Mat writeBand4 = flipForRasterWrite(band4);
-            dataset->GetRasterBand(4)->RasterIO(GF_Write, 0, 0, demGrid.width, demGrid.height,
-                                                writeBand4.data, demGrid.width, demGrid.height,
-                                                GDT_Float32, 0, 0);
+            GDALRasterBand *gBand4 = dataset->GetRasterBand(4);
+            if (gBand4)
+            {
+                writeOk = writeOk &&
+                          gBand4->RasterIO(GF_Write, 0, 0, demGrid.width, demGrid.height,
+                                           writeBand4.data, demGrid.width, demGrid.height,
+                                           GDT_Float32, 0, 0) == CE_None;
+            }
+            else
+            {
+                writeOk = false;
+            }
         }
         GDALClose(dataset);
+        if (!writeOk)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("GDAL 写出 4-band Float32 DEM 失败: %1").arg(outputPath);
+            }
+            return false;
+        }
+
         return true;
     }
 
@@ -347,19 +396,59 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
         return false;
     }
 
-    cv::Mat raster(height, width, CV_32F, cv::Scalar(0));
-    GDALRasterBand *band = dataset->GetRasterBand(1);
-    if (!band || band->RasterIO(GF_Read,
-                                0,
-                                0,
-                                width,
-                                height,
-                                raster.data,
-                                width,
-                                height,
-                                GDT_Float32,
-                                0,
-                                0) != CE_None)
+    auto readFloatBand = [&](int bandIndex, cv::Mat *raster) {
+        if (!raster)
+        {
+            return false;
+        }
+
+        GDALRasterBand *band = dataset->GetRasterBand(bandIndex);
+        if (!band)
+        {
+            return false;
+        }
+
+        *raster = cv::Mat(height, width, CV_32F, cv::Scalar(0));
+        if (band->RasterIO(GF_Read,
+                           0,
+                           0,
+                           width,
+                           height,
+                           raster->data,
+                           width,
+                           height,
+                           GDT_Float32,
+                           0,
+                           0) != CE_None)
+        {
+            return false;
+        }
+
+        cv::flip(*raster, *raster, 0);
+        return true;
+    };
+
+    const int rasterCount = dataset->GetRasterCount();
+    cv::Mat elevationRaster;
+    cv::Mat worldXRaster;
+    cv::Mat worldYRaster;
+    cv::Mat errorRaster;
+    if (rasterCount >= 4)
+    {
+        if (!readFloatBand(1, &worldXRaster) ||
+            !readFloatBand(2, &worldYRaster) ||
+            !readFloatBand(3, &elevationRaster) ||
+            !readFloatBand(4, &errorRaster))
+        {
+            GDALClose(dataset);
+            if (errorMsg)
+            {
+                *errorMsg = QStringLiteral("GDAL 读取 4-band DEM 波段失败: %1").arg(inputPath);
+            }
+            return false;
+        }
+    }
+    else if (!readFloatBand(1, &elevationRaster))
     {
         GDALClose(dataset);
         if (errorMsg)
@@ -369,22 +458,52 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
         return false;
     }
 
-    cv::flip(raster, raster, 0);
-
-    int hasNoData = 0;
-    const double noDataValue = band->GetNoDataValue(&hasNoData);
-
     demGrid->width = width;
     demGrid->height = height;
-    demGrid->elevation = raster;
+    demGrid->elevation = elevationRaster;
+    demGrid->worldX.release();
+    demGrid->worldY.release();
+    demGrid->triangulationError.release();
+    demGrid->color.release();
     demGrid->validMask = cv::Mat(height, width, CV_8U, cv::Scalar(255));
+
+    GDALRasterBand *elevationBand = dataset->GetRasterBand(rasterCount >= 4 ? 3 : 1);
+    int hasElevationNoData = 0;
+    const double elevationNoDataValue = elevationBand->GetNoDataValue(&hasElevationNoData);
+
+    int hasWorldXNoData = 0;
+    int hasWorldYNoData = 0;
+    int hasErrorNoData = 0;
+    double worldXNoDataValue = 0.0;
+    double worldYNoDataValue = 0.0;
+    double errorNoDataValue = 0.0;
+    if (rasterCount >= 4)
+    {
+        worldXNoDataValue = dataset->GetRasterBand(1)->GetNoDataValue(&hasWorldXNoData);
+        worldYNoDataValue = dataset->GetRasterBand(2)->GetNoDataValue(&hasWorldYNoData);
+        errorNoDataValue = dataset->GetRasterBand(4)->GetNoDataValue(&hasErrorNoData);
+        demGrid->worldX = worldXRaster;
+        demGrid->worldY = worldYRaster;
+        demGrid->triangulationError = errorRaster;
+    }
 
     for (int row = 0; row < height; ++row)
     {
         for (int col = 0; col < width; ++col)
         {
-            const float value = raster.at<float>(row, col);
-            if ((hasNoData && std::fabs(static_cast<double>(value) - noDataValue) < 1e-6) || !std::isfinite(value))
+            const float elevationValue = elevationRaster.at<float>(row, col);
+            bool valid = !isRasterNoData(elevationValue, hasElevationNoData != 0, elevationNoDataValue);
+            if (valid && rasterCount >= 4)
+            {
+                const float xValue = worldXRaster.at<float>(row, col);
+                const float yValue = worldYRaster.at<float>(row, col);
+                const float errorValue = errorRaster.at<float>(row, col);
+                valid = !isRasterNoData(xValue, hasWorldXNoData != 0, worldXNoDataValue) &&
+                        !isRasterNoData(yValue, hasWorldYNoData != 0, worldYNoDataValue) &&
+                        !isRasterNoData(errorValue, hasErrorNoData != 0, errorNoDataValue);
+            }
+
+            if (!valid)
             {
                 demGrid->validMask.at<uchar>(row, col) = 0;
             }

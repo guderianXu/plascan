@@ -10,7 +10,7 @@
 //
 // 设计原则:
 //   - ProjectData 不持有 QWidget，不弹对话框，不执行后台任务
-//   - 所有写操作都会触发 metadataChanged / dirtyStateChanged 信号
+//   - 项目元数据写操作触发 metadataChanged / dirtyStateChanged 信号
 //   - 临时保存（saveTemporaryMetadata）用于崩溃恢复
 // =============================================================================
 #pragma once
@@ -28,7 +28,7 @@
 // ProjectData: 轻量级项目数据管理类
 // 职责:
 // 1. 项目文件(.plascan)的读写
-// 2. 元数据(JSON)的管理
+// 2. 元数据(JSON)的管理：core 写 project_files.json，workflow results 写 project_results.json
 // 3. 资源路径的查询
 // 不负责: UI交互、对话框、业务逻辑执行
 class ProjectData : public QObject
@@ -73,7 +73,7 @@ public:
     bool hasTemporaryMetadata() const;
 
     // === 资源管理 ===
-    // 添加影像到项目(复制到assets/images)
+    // 添加影像到项目（默认保存外部文件绝对路径引用，不复制原始文件）
     bool addImages(const QStringList &imagePaths, QString *errorMsg = nullptr);
     // 添加文件夹中的影像
     bool addImagesFromFolder(const QString &folderPath, QString *errorMsg = nullptr);
@@ -94,6 +94,20 @@ public:
     QJsonArray getIntersectionResults() const;
     bool appendBundleAdjustResult(const QJsonObject &result, QString *errorMsg = nullptr);
     QJsonArray getBundleAdjustResults() const;
+    bool appendResultRecord(const QString &arrayKey,
+                            const QJsonObject &record,
+                            bool markDirty = true);
+    bool upsertResultRecordByPath(const QString &arrayKey,
+                                  const QString &pathKey,
+                                  const QJsonObject &record,
+                                  bool markDirty = true);
+    bool upsertResultRecordByIndex(const QString &arrayKey,
+                                   const QJsonObject &record,
+                                   int replaceIndex,
+                                   bool markDirty = true);
+    bool replaceResultRecordWithLatest(const QString &arrayKey,
+                                       const QJsonObject &record,
+                                       bool markDirty = true);
     // 打包外部资源到项目内部
     bool packResource(const QString &resourcePath, QString *errorMsg = nullptr);
 
@@ -136,7 +150,7 @@ signals:
     void dirtyStateChanged(bool dirty);
 
 private Q_SLOTS:
-    /// 防抖定时器触发：将脚脂数据批量写入 .plascan 归档（一次 zip_open/close）
+    /// 防抖定时器触发：将项目数据批量写入 .plascan 归档（一次 zip_open/close）
     void syncToArchive();
 
 private:
@@ -154,6 +168,9 @@ private:
 
     // 惰性加载 results：仅在首次访问时读取 project_results.json
     void ensureResultsLoaded() const;
+    void markDirtyIfRequested(bool markDirty);
+    void emitCurrentMetadataChanged();
+    void scheduleArchiveSync(bool coreDirty, bool resultsDirty, bool writeTemporary);
 
     // 辅助方法
     QString projectDir() const;        // 返回项目目录(.plascan文件所在目录)

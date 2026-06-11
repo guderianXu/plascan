@@ -3,11 +3,15 @@
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
 
+#include <QProcess>
+#include <QString>
+#include <QStringList>
+#include <QTemporaryDir>
+
 #include <array>
-#include <cstdio>
 #include <filesystem>
 #include <fstream>
-#include <sstream>
+#include <memory>
 #include <string>
 
 namespace fs = std::filesystem;
@@ -15,22 +19,22 @@ namespace fs = std::filesystem;
 namespace
 {
 
-std::string shellQuote(const std::string &value)
+std::unique_ptr<QTemporaryDir> makeUniqueTempDir()
 {
-    std::string quoted = "'";
-    for (char ch : value)
-    {
-        if (ch == '\'')
-        {
-            quoted += "'\\''";
-        }
-        else
-        {
-            quoted += ch;
-        }
-    }
-    quoted += "'";
-    return quoted;
+    auto dir = std::make_unique<QTemporaryDir>(
+        QString::fromStdString((fs::temp_directory_path() / "plascan_triangulate_cli_XXXXXX").string()));
+    EXPECT_TRUE(dir->isValid()) << dir->errorString().toStdString();
+    return dir;
+}
+
+int runTriangulateCli(const QStringList &arguments)
+{
+#ifdef PLASCAN_TRIANGULATE_CLI_PATH
+    return QProcess::execute(QString::fromUtf8(PLASCAN_TRIANGULATE_CLI_PATH), arguments);
+#else
+    Q_UNUSED(arguments);
+    return -1;
+#endif
 }
 
 void writeCamera(const fs::path &path, double cx)
@@ -103,9 +107,9 @@ TEST(TriangulateCli, WritesAbsoluteWorldCoordinates)
 #ifndef PLASCAN_TRIANGULATE_CLI_PATH
     GTEST_SKIP() << "triangulate_cli path is not configured";
 #else
-    const fs::path root = fs::temp_directory_path() / "plascan_triangulate_cli_regression";
-    fs::remove_all(root);
-    fs::create_directories(root);
+    auto tempDir = makeUniqueTempDir();
+    ASSERT_TRUE(tempDir->isValid());
+    const fs::path root = tempDir->path().toStdString();
 
     const fs::path leftCamera = root / "left.tsai";
     const fs::path rightCamera = root / "right.tsai";
@@ -126,16 +130,15 @@ TEST(TriangulateCli, WritesAbsoluteWorldCoordinates)
     fsOut << "H2inv" << cv::Mat::eye(3, 3, CV_64F);
     fsOut.release();
 
-    std::ostringstream command;
-    command << shellQuote(PLASCAN_TRIANGULATE_CLI_PATH)
-            << " --disparity " << shellQuote(disparityPath.string())
-            << " --rect " << shellQuote(rectPath.string())
-            << " --camL " << shellQuote(leftCamera.string())
-            << " --camR " << shellQuote(rightCamera.string())
-            << " --output " << shellQuote(outPath.string())
-            << " --threads 1";
-
-    ASSERT_EQ(std::system(command.str().c_str()), 0);
+    const QStringList arguments{
+        QStringLiteral("--disparity"), QString::fromStdString(disparityPath.string()),
+        QStringLiteral("--rect"), QString::fromStdString(rectPath.string()),
+        QStringLiteral("--camL"), QString::fromStdString(leftCamera.string()),
+        QStringLiteral("--camR"), QString::fromStdString(rightCamera.string()),
+        QStringLiteral("--output"), QString::fromStdString(outPath.string()),
+        QStringLiteral("--threads"), QStringLiteral("1")
+    };
+    ASSERT_EQ(runTriangulateCli(arguments), 0);
 
     const auto vertex = readFirstPlyVertex(outPath);
     EXPECT_NEAR(vertex[0], 0.0, 1e-6);
@@ -149,9 +152,9 @@ TEST(TriangulateCli, WritesIntensityWhenImageProvided)
 #ifndef PLASCAN_TRIANGULATE_CLI_PATH
     GTEST_SKIP() << "triangulate_cli path is not configured";
 #else
-    const fs::path root = fs::temp_directory_path() / "plascan_triangulate_cli_intensity";
-    fs::remove_all(root);
-    fs::create_directories(root);
+    auto tempDir = makeUniqueTempDir();
+    ASSERT_TRUE(tempDir->isValid());
+    const fs::path root = tempDir->path().toStdString();
 
     const fs::path leftCamera = root / "left.tsai";
     const fs::path rightCamera = root / "right.tsai";
@@ -177,17 +180,16 @@ TEST(TriangulateCli, WritesIntensityWhenImageProvided)
     fsOut << "H2inv" << cv::Mat::eye(3, 3, CV_64F);
     fsOut.release();
 
-    std::ostringstream command;
-    command << shellQuote(PLASCAN_TRIANGULATE_CLI_PATH)
-            << " --disparity " << shellQuote(disparityPath.string())
-            << " --rect " << shellQuote(rectPath.string())
-            << " --camL " << shellQuote(leftCamera.string())
-            << " --camR " << shellQuote(rightCamera.string())
-            << " --output " << shellQuote(outPath.string())
-            << " --intensity-image " << shellQuote(intensityPath.string())
-            << " --threads 1";
-
-    ASSERT_EQ(std::system(command.str().c_str()), 0);
+    const QStringList arguments{
+        QStringLiteral("--disparity"), QString::fromStdString(disparityPath.string()),
+        QStringLiteral("--rect"), QString::fromStdString(rectPath.string()),
+        QStringLiteral("--camL"), QString::fromStdString(leftCamera.string()),
+        QStringLiteral("--camR"), QString::fromStdString(rightCamera.string()),
+        QStringLiteral("--output"), QString::fromStdString(outPath.string()),
+        QStringLiteral("--intensity-image"), QString::fromStdString(intensityPath.string()),
+        QStringLiteral("--threads"), QStringLiteral("1")
+    };
+    ASSERT_EQ(runTriangulateCli(arguments), 0);
 
     const auto vertex = readFirstPlyVertexWithIntensity(outPath);
     EXPECT_NEAR(vertex[0], 0.0, 1e-6);
