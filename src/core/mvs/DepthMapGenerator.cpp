@@ -1314,6 +1314,7 @@ void DepthMapGenerator::runInBackground()
     fusionCfg.maxReprojError = m_config.fusion.pixelThresh;
     fusionCfg.maxDepthError  = m_config.fusion.relDepthThresh;
     fusionCfg.checkNumImages = std::min(50, NV);
+    fusionCfg.workerCount    = std::max(1, m_config.cpuWorkerCount);
 
     // 少视图场景（≤2张）：crossCheck 已保证深度一致性，
     // 融合只需 1 个观测即可通过（避免 BFS 因级联过滤找不到第二观测而全部拒绝）

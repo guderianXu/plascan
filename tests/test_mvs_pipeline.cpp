@@ -21,6 +21,7 @@
 #include <array>
 #include <cmath>
 #include <filesystem>
+#include <string>
 
 namespace
 {
@@ -181,6 +182,55 @@ TEST(MvsPipelineTest, DepthMapFusionTwoFrames)
     ASSERT_TRUE(ok) << err;
     EXPECT_GT(static_cast<int>(pts.size()), 0)
         << "DepthMapFusion should produce at least one fused point";
+}
+
+TEST(MvsPipelineTest, DepthMapFusionTwoViewSingleObservationUsesFastParallelPath)
+{
+    constexpr int W = 32, H = 24;
+    constexpr float DEPTH_VAL = 8.0f;
+    constexpr double FOCAL = 40.0, BASELINE = 1.0;
+
+    cv::Mat d0(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
+    cv::Mat d1(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
+    d0(cv::Rect(0, 0, W, 2)) = 0;
+    d1(cv::Rect(0, 0, W, 2)) = 0;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C0[3] = {0,0,0};
+    const double C1[3] = {BASELINE,0,0};
+
+    xjw::mvs::FusionFrameInput fr0, fr1;
+    fr0.depthMap = d0;
+    fr0.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    fr0.imgW = W;
+    fr0.imgH = H;
+
+    fr1.depthMap = d1;
+    fr1.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
+    fr1.imgW = W;
+    fr1.imgH = H;
+
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.minNumPixels = 1;
+    fcfg.maxReprojError = 3.0f;
+    fcfg.maxDepthError = 0.10f;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts;
+    std::vector<std::string> stages;
+    std::string err;
+    const bool ok = fusion.fuse({fr0, fr1},
+                                pts,
+                                [&](const std::string &stage, float) {
+                                    stages.push_back(stage);
+                                },
+                                &err);
+
+    ASSERT_TRUE(ok) << err;
+    EXPECT_GT(static_cast<int>(pts.size()), 0);
+    EXPECT_TRUE(std::any_of(stages.begin(), stages.end(), [](const std::string &stage) {
+        return stage.find("快速并行融合") != std::string::npos;
+    }));
 }
 
 // ---------------------------------------------------------------------------

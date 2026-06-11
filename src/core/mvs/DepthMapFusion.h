@@ -32,6 +32,7 @@ struct StereoFusionConfig
     float maxDepthError      = 0.01f;  ///< 最大相对深度误差（|d_meas - d_expect| / d_expect）
     float maxNormalError     = 10.0f;  ///< 最大法线角度差（度）
     int   checkNumImages     = 50;     ///< 传递检查的重叠图像数目
+    int   workerCount        = 0;      ///< CPU 融合线程数；0 表示按硬件自动选择
     bool  useBoundingBox     = false;  ///< 是否裁剪到指定包围盒
     float bboxMin[3]         = {-1e9f, -1e9f, -1e9f};
     float bboxMax[3]         = { 1e9f,  1e9f,  1e9f};
@@ -128,6 +129,14 @@ private:
                    const std::vector<cv::Mat> &colorImages,
                    std::vector<std::vector<char>> &fusedMask,
                    FusedPoint &outPoint);
+
+    /// 两视图 minNumPixels<=1 场景的并行快速融合路径
+    bool fuseTwoViewSingleObservationFast(
+        const std::vector<FusionFrameInput> &frames,
+        const std::vector<FrameGeometry> &geom,
+        const std::vector<cv::Mat> &colorImages,
+        std::vector<FusedPoint> &fusedPoints,
+        MvsProgressCallback progressCb);
 
     /// 取中位数
     static float median(std::vector<float> &v);

@@ -676,6 +676,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         fusionCfg.maxReprojError = request.depthConsistency;
         fusionCfg.maxDepthError = 0.05f;
         fusionCfg.checkNumImages = std::min(50, static_cast<int>(frames.size()));
+        fusionCfg.workerCount = std::max(1, request.threads);
         if (static_cast<int>(frames.size()) <= 2)
         {
             fusionCfg.minNumPixels = 1;
