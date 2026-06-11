@@ -7,9 +7,7 @@
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
-#include <plapoint/filters/statistical_outlier_removal.h>
-#include <plapoint/filters/voxel_grid.h>
-#include <plapoint/search/kdtree.h>
+#include <plapoint/filters/preprocessing.h>
 
 namespace xjw
 {
@@ -98,7 +96,8 @@ float estimateBaseVoxelStep(const std::vector<PointXYZRGB> &points,
 }
 
 std::vector<PointXYZRGB> voxelDownsamplePoints(const std::vector<PointXYZRGB> &points,
-                                                float voxelSize)
+                                                float voxelSize,
+                                                plapoint::ProcessingDevice device)
 {
     if (points.empty() || voxelSize <= 1e-6f)
     {
@@ -106,19 +105,15 @@ std::vector<PointXYZRGB> voxelDownsamplePoints(const std::vector<PointXYZRGB> &p
     }
 
     const auto inputCloud = std::make_shared<PlaCloud>(toPlaCloud(points));
-    plapoint::VoxelGrid<float, plamatrix::Device::CPU> voxelGrid;
-    voxelGrid.setInputCloud(inputCloud);
-    voxelGrid.setLeafSize(voxelSize, voxelSize, voxelSize);
-
-    PlaCloud output;
-    voxelGrid.filter(output);
+    PlaCloud output = plapoint::voxelDownsample(*inputCloud, voxelSize, device);
     return fromPlaCloud(output);
 }
 
 std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB> &points,
                                                     int k,
                                                     float stdMul,
-                                                    float gridCellSize)
+                                                    float gridCellSize,
+                                                    plapoint::ProcessingDevice device)
 {
     (void)gridCellSize;
     if (points.size() < 64 || k < 4)
@@ -127,18 +122,8 @@ std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB>
     }
 
     const auto inputCloud = std::make_shared<PlaCloud>(toPlaCloud(points));
-    auto tree = std::make_shared<plapoint::search::KdTree<float, plamatrix::Device::CPU>>();
-    tree->setInputCloud(inputCloud);
-    tree->build();
-
-    plapoint::StatisticalOutlierRemoval<float, plamatrix::Device::CPU> filter;
-    filter.setInputCloud(inputCloud);
-    filter.setSearchMethod(tree);
-    filter.setMeanK(k);
-    filter.setStddevMulThresh(std::max(0.2f, stdMul));
-
-    PlaCloud output;
-    filter.filter(output);
+    PlaCloud output = plapoint::statisticalOutlierRemoval(
+        *inputCloud, k, std::max(0.2f, stdMul), device);
     const auto filtered = fromPlaCloud(output);
     return filtered.size() >= 100 ? filtered : points;
 }

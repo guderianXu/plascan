@@ -4,8 +4,8 @@
 // =============================================================================
 
 #include "DenseCloudBuilder.h"
-#include <plapoint/search/kdtree.h>
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/filters/preprocessing.h>
 #include "log/Logger.h"
 #include <fstream>
 #include <algorithm>
@@ -179,31 +179,95 @@ bool DenseCloudBuilder::savePLY(const std::string &path,
 }
 
 // =============================================================================
-// 辅助：将 DensePoint 数组构建为 plapoint::PointCloud 供 plapoint::KdTree 使用
+// 辅助：在 PlaScan 的 DensePoint 和 plapoint::PointCloud 之间转换，保留颜色属性。
 // =============================================================================
 namespace
 {
-static std::shared_ptr<plapoint::PointCloud<float, plamatrix::Device::CPU>>
+using DensePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+
+static DensePlaCloud
 buildPointCloud(const std::vector<DensePoint> &cloud)
 {
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
+    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(cloud.size(), 3);
     for (size_t i = 0; i < cloud.size(); ++i)
     {
-        pts(static_cast<plamatrix::Index>(i), 0) = cloud[i].x;
-        pts(static_cast<plamatrix::Index>(i), 1) = cloud[i].y;
-        pts(static_cast<plamatrix::Index>(i), 2) = cloud[i].z;
+        const auto row = static_cast<plamatrix::Index>(i);
+        pts(row, 0) = cloud[i].x;
+        pts(row, 1) = cloud[i].y;
+        pts(row, 2) = cloud[i].z;
+        colors(row, 0) = cloud[i].r;
+        colors(row, 1) = cloud[i].g;
+        colors(row, 2) = cloud[i].b;
     }
-    return std::make_shared<plapoint::PointCloud<float, plamatrix::Device::CPU>>(std::move(pts));
+    DensePlaCloud pointCloud(std::move(pts));
+    pointCloud.setColors(std::move(colors));
+    return pointCloud;
 }
+
+static std::vector<DensePoint> fromPointCloud(const DensePlaCloud &cloud)
+{
+    std::vector<DensePoint> points;
+    points.reserve(cloud.size());
+    const auto &matrix = cloud.points();
+    for (std::size_t i = 0; i < cloud.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        DensePoint point;
+        point.x = matrix.getValue(row, 0);
+        point.y = matrix.getValue(row, 1);
+        point.z = matrix.getValue(row, 2);
+        if (cloud.hasColors())
+        {
+            point.r = cloud.colors()->getValue(row, 0);
+            point.g = cloud.colors()->getValue(row, 1);
+            point.b = cloud.colors()->getValue(row, 2);
+        }
+        points.push_back(point);
+    }
+    return points;
+}
+
 } // anonymous namespace
 
 // =============================================================================
-// Statistical Outlier Removal  (KD-tree + OpenMP 并行)
+// Voxel Downsample
+// =============================================================================
+std::vector<DensePoint> DenseCloudBuilder::voxelDownsample(
+    const std::vector<DensePoint> &cloud,
+    float voxelSize,
+    plapoint::ProcessingDevice processingDevice)
+{
+    if (cloud.empty() || voxelSize <= 0.0f)
+    {
+        return cloud;
+    }
+
+    const int N = static_cast<int>(cloud.size());
+    auto t0 = std::chrono::steady_clock::now();
+    LOG_INFO("[Voxel] 开始 plapoint 体素下采样: %d 点, voxelSize=%.4f", N, voxelSize);
+
+    DensePlaCloud pointCloud = buildPointCloud(cloud);
+    plapoint::ProcessingReport report;
+    DensePlaCloud filtered = plapoint::voxelDownsample(
+        pointCloud, voxelSize, processingDevice, &report);
+    std::vector<DensePoint> result = fromPointCloud(filtered);
+
+    auto t1 = std::chrono::steady_clock::now();
+    LOG_INFO("[Voxel] plapoint 下采样完成: %d → %d 点 (设备=%d) 耗时 %.3f s",
+             N, static_cast<int>(result.size()), static_cast<int>(report.usedDevice),
+             std::chrono::duration<double>(t1 - t0).count());
+    return result;
+}
+
+// =============================================================================
+// Statistical Outlier Removal
 // =============================================================================
 std::vector<DensePoint> DenseCloudBuilder::statisticalOutlierRemoval(
     const std::vector<DensePoint> &cloud,
     int   kNeighbors,
-    float stdRatio)
+    float stdRatio,
+    plapoint::ProcessingDevice processingDevice)
 {
     if (cloud.size() < (size_t)kNeighbors + 1)
     {
@@ -213,153 +277,52 @@ std::vector<DensePoint> DenseCloudBuilder::statisticalOutlierRemoval(
     const int N = (int)cloud.size();
     auto t0 = std::chrono::steady_clock::now();
 
-#ifdef HAS_OPENMP
-    int numThreads = omp_get_max_threads();
-#else
-    int numThreads = 1;
-#endif
-    LOG_INFO("[SOR] 开始统计离群点过滤: %d 点, k=%d, stdRatio=%.2f, threads=%d",
-             N, kNeighbors, stdRatio, numThreads);
+    LOG_INFO("[SOR] 开始 plapoint 统计离群点过滤: %d 点, k=%d, stdRatio=%.2f",
+             N, kNeighbors, stdRatio);
 
-    // ── 建 KD-tree ─────────────────────────────────────────────────────────
-    auto pc = buildPointCloud(cloud);
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
-    tree.setInputCloud(pc);
-    tree.build();
-
-    auto t1 = std::chrono::steady_clock::now();
-    LOG_DEBUG("[SOR] KD-tree 建树完成, 耗时 %.3f s",
-              std::chrono::duration<double>(t1 - t0).count());
-
-    // ── 并行计算每个点的 kNN 平均距离 ──────────────────────────────────────
-    std::vector<float> meanDists(N);
-#ifdef HAS_OPENMP
-    #pragma omp parallel for schedule(dynamic, 256)
-#endif
-    for (int i = 0; i < N; ++i)
-    {
-        plamatrix::Vec3<float> query{cloud[i].x, cloud[i].y, cloud[i].z};
-        auto neighbors = tree.nearestKSearch(query, kNeighbors);
-        float sum = 0.0f;
-        int actualCount = 0;
-        for (int nb : neighbors)
-        {
-            float dx = cloud[i].x - cloud[nb].x;
-            float dy = cloud[i].y - cloud[nb].y;
-            float dz = cloud[i].z - cloud[nb].z;
-            sum += std::sqrt(dx * dx + dy * dy + dz * dz);
-            ++actualCount;
-        }
-        meanDists[i] = (actualCount > 0) ? (sum / static_cast<float>(actualCount)) : 1e9f;
-    }
-
-    auto t2 = std::chrono::steady_clock::now();
-    LOG_DEBUG("[SOR] kNN 查询完成, 耗时 %.3f s",
-              std::chrono::duration<double>(t2 - t1).count());
-
-    // ── 计算全局均值和标准差 ────────────────────────────────────────────────
-    double sum = 0, sum2 = 0;
-    for (float d : meanDists)
-    {
-        sum += d;
-        sum2 += (double)d * d;
-    }
-    float globalMean = (float)(sum / N);
-    float globalStd  = (float)std::sqrt(sum2 / N - (double)globalMean * globalMean);
-    float threshold  = globalMean + stdRatio * globalStd;
-
-    LOG_DEBUG("[SOR] 全局 kNN 距离: mean=%.6f std=%.6f threshold=%.6f",
-              globalMean, globalStd, threshold);
-
-    // ── 并行标记 + 收集 ────────────────────────────────────────────────────
-    std::vector<uint8_t> keep(N, 0);
-    int removed = 0;
-#ifdef HAS_OPENMP
-    #pragma omp parallel for schedule(static) reduction(+:removed)
-#endif
-    for (int i = 0; i < N; ++i)
-    {
-        if (meanDists[i] <= threshold)
-        {
-            keep[i] = 1;
-        }
-        else
-        {
-            ++removed;
-        }
-    }
-
-    std::vector<DensePoint> result;
-    result.reserve(N - removed);
-    for (int i = 0; i < N; ++i)
-    {
-        if (keep[i])
-        {
-            result.push_back(cloud[i]);
-        }
-    }
+    DensePlaCloud pointCloud = buildPointCloud(cloud);
+    std::vector<int> removedIndices;
+    plapoint::ProcessingReport report;
+    DensePlaCloud filtered = plapoint::statisticalOutlierRemoval(
+        pointCloud, kNeighbors, stdRatio, processingDevice, &removedIndices, &report);
+    std::vector<DensePoint> result = fromPointCloud(filtered);
 
     auto t3 = std::chrono::steady_clock::now();
-    LOG_INFO("[SOR] 过滤完成: %d → %d 点 (移除 %d, %.1f%%) 总耗时 %.3f s",
-             N, (int)result.size(), removed, 100.f * removed / N,
+    LOG_INFO("[SOR] plapoint 过滤完成: %d → %d 点 (移除 %zu, %.1f%%, 设备=%d) 总耗时 %.3f s",
+             N, (int)result.size(), removedIndices.size(), 100.f * removedIndices.size() / N,
+             static_cast<int>(report.usedDevice),
              std::chrono::duration<double>(t3 - t0).count());
     return result;
 }
 
 // =============================================================================
-// Radius Outlier Removal  (KD-tree + OpenMP 并行)
+// Radius Outlier Removal
 // =============================================================================
 std::vector<DensePoint> DenseCloudBuilder::radiusOutlierRemoval(
     const std::vector<DensePoint> &cloud,
     float radius,
-    int   minNeighbors)
+    int   minNeighbors,
+    plapoint::ProcessingDevice processingDevice)
 {
     if (cloud.empty()) return cloud;
 
     const int N = (int)cloud.size();
     auto t0 = std::chrono::steady_clock::now();
 
-#ifdef HAS_OPENMP
-    int numThreads = omp_get_max_threads();
-#else
-    int numThreads = 1;
-#endif
-    LOG_INFO("[RadiusOR] 开始半径离群点过滤: %d 点, radius=%.4f, minNeighbors=%d, threads=%d",
-             N, radius, minNeighbors, numThreads);
+    LOG_INFO("[RadiusOR] 开始 plapoint 半径离群点过滤: %d 点, radius=%.4f, minNeighbors=%d",
+             N, radius, minNeighbors);
 
-    // ── 建 KD-tree ─────────────────────────────────────────────────────────
-    auto pcRad = buildPointCloud(cloud);
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> treeRad;
-    treeRad.setInputCloud(pcRad);
-    treeRad.build();
-
-    auto t1 = std::chrono::steady_clock::now();
-    LOG_DEBUG("[RadiusOR] KD-tree 建树完成, 耗时 %.3f s",
-              std::chrono::duration<double>(t1 - t0).count());
-
-    // ── 并行半径查询 ───────────────────────────────────────────────────────
-    std::vector<uint8_t> keep(N, 0);
-    int removed = 0;
-#ifdef HAS_OPENMP
-    #pragma omp parallel for schedule(dynamic, 256) reduction(+:removed)
-#endif
-    for (int i = 0; i < N; ++i) {
-        plamatrix::Vec3<float> query{cloud[i].x, cloud[i].y, cloud[i].z};
-        int cnt = static_cast<int>(treeRad.radiusSearch(query, radius).size());
-        if (cnt >= minNeighbors)
-            keep[i] = 1;
-        else
-            ++removed;
-    }
-
-    std::vector<DensePoint> result;
-    result.reserve(N - removed);
-    for (int i = 0; i < N; ++i)
-        if (keep[i]) result.push_back(cloud[i]);
+    DensePlaCloud pointCloud = buildPointCloud(cloud);
+    std::vector<int> removedIndices;
+    plapoint::ProcessingReport report;
+    DensePlaCloud filtered = plapoint::radiusOutlierRemoval(
+        pointCloud, radius, minNeighbors, processingDevice, &removedIndices, &report);
+    std::vector<DensePoint> result = fromPointCloud(filtered);
 
     auto t2 = std::chrono::steady_clock::now();
-    LOG_INFO("[RadiusOR] 过滤完成: %d → %d 点 (移除 %d, %.1f%%) 耗时 %.3f s",
-             N, (int)result.size(), removed, 100.f * removed / N,
+    LOG_INFO("[RadiusOR] plapoint 过滤完成: %d → %d 点 (移除 %zu, %.1f%%, 设备=%d) 耗时 %.3f s",
+             N, (int)result.size(), removedIndices.size(), 100.f * removedIndices.size() / N,
+             static_cast<int>(report.usedDevice),
              std::chrono::duration<double>(t2 - t0).count());
     return result;
 }

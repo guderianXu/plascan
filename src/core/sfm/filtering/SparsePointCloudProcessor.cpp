@@ -3,6 +3,7 @@
 #include "math/Vec3Ops.h"
 #include <plapoint/search/kdtree.h>
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/filters/preprocessing.h>
 #include <plamatrix/ops/point_cloud.h>
 
 #include <algorithm>
@@ -39,6 +40,20 @@ TreeAndCloud buildTree(const std::vector<SparsePointCloudPoint> &pts)
     tree->setInputCloud(cloud);
     tree->build();
     return {tree, cloud};
+}
+
+plapoint::PointCloud<double, plamatrix::Device::CPU> buildPlaCloud(
+    const std::vector<SparsePointCloudPoint> &pts)
+{
+    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> matrix(
+        static_cast<plamatrix::Index>(pts.size()), 3);
+    for (size_t i = 0; i < pts.size(); ++i)
+    {
+        matrix(static_cast<plamatrix::Index>(i), 0) = pts[i].x;
+        matrix(static_cast<plamatrix::Index>(i), 1) = pts[i].y;
+        matrix(static_cast<plamatrix::Index>(i), 2) = pts[i].z;
+    }
+    return plapoint::PointCloud<double, plamatrix::Device::CPU>(std::move(matrix));
 }
 
 std::array<double, 3> pointToArray(const SparsePointCloudPoint &point)
@@ -120,70 +135,6 @@ int filterByMinTriAngle(std::vector<SparsePointCloudPoint> *points,
     return before - static_cast<int>(points->size());
 }
 
-int filterByStatisticalOutlier(std::vector<SparsePointCloudPoint> *points,
-                               const std::vector<NeighborList> &knnCache,
-                               int k,
-                               double stdDevMul)
-{
-    if (!points || points->size() < 3 || k < 2)
-    {
-        return 0;
-    }
-
-    const int n = static_cast<int>(points->size());
-
-    std::vector<double> meanDists(n, 0.0);
-    std::vector<bool> valid(n, false);
-
-    for (int i = 0; i < n; ++i)
-    {
-        const auto &neighbors = knnCache[static_cast<size_t>(i)];
-        const size_t usedNeighbors = std::min(neighbors.size(), static_cast<size_t>(k));
-        if (usedNeighbors == 0)
-        {
-            continue;
-        }
-        double sum = 0.0;
-        for (size_t ni = 0; ni < usedNeighbors; ++ni)
-        {
-            const auto &nb = neighbors[ni];
-            sum += std::sqrt(nb.distanceSquared);
-        }
-        meanDists[i] = sum / static_cast<double>(usedNeighbors);
-        valid[i] = true;
-    }
-
-    double globalMean = 0.0;
-    int validCount = 0;
-    for (int i = 0; i < n; ++i)
-    {
-        if (valid[i]) { globalMean += meanDists[i]; ++validCount; }
-    }
-    if (validCount < 3) return 0;
-    globalMean /= validCount;
-
-    double variance = 0.0;
-    for (int i = 0; i < n; ++i)
-    {
-        if (!valid[i]) continue;
-        const double delta = meanDists[i] - globalMean;
-        variance += delta * delta;
-    }
-    variance /= validCount;
-    const double threshold = globalMean + stdDevMul * std::sqrt(std::max(variance, 0.0));
-
-    const int before = n;
-    std::vector<SparsePointCloudPoint> filtered;
-    filtered.reserve(n);
-    for (int i = 0; i < n; ++i)
-    {
-        if (!valid[i] || meanDists[i] <= threshold)
-            filtered.push_back((*points)[i]);
-    }
-    *points = std::move(filtered);
-    return before - static_cast<int>(points->size());
-}
-
 std::array<double, 3> estimateLocalNormal(const std::vector<SparsePointCloudPoint> &points,
                                           int index,
                                           const NeighborList &neighbors)
@@ -217,96 +168,10 @@ std::array<double, 3> estimateLocalNormal(const std::vector<SparsePointCloudPoin
     return {0.0, 0.0, 0.0};
 }
 
-int filterByNormalConsistency(std::vector<SparsePointCloudPoint> *points,
-                              const std::vector<NeighborList> &knnCache,
-                              int k,
-                              double minMeanAbsDot)
-{
-    if (!points || points->size() < 6 || k < 3)
-    {
-        return 0;
-    }
-
-    std::vector<std::array<double, 3>> normals;
-    normals.reserve(points->size());
-    for (int i = 0; i < static_cast<int>(points->size()); ++i)
-    {
-        normals.push_back(estimateLocalNormal(*points, i, knnCache[static_cast<size_t>(i)]));
-    }
-
-    const int before = static_cast<int>(points->size());
-    std::vector<SparsePointCloudPoint> filtered;
-    filtered.reserve(points->size());
-    for (int i = 0; i < static_cast<int>(points->size()); ++i)
-    {
-        if (vec3::norm(normals.at(i)) <= 1e-8)
-        {
-            filtered.push_back(points->at(i));
-            continue;
-        }
-
-        double sumAbsDot = 0.0;
-        int validCount = 0;
-        const auto &neighbors = knnCache[static_cast<size_t>(i)];
-        const size_t usedNeighbors = std::min(neighbors.size(), static_cast<size_t>(k));
-        for (size_t ni = 0; ni < usedNeighbors; ++ni)
-        {
-            const auto &nb = neighbors[ni];
-            if (vec3::norm(normals.at(static_cast<std::size_t>(nb.index))) <= 1e-8)
-            {
-                continue;
-            }
-            sumAbsDot += std::abs(vec3::dot(normals.at(i), normals.at(static_cast<std::size_t>(nb.index))));
-            ++validCount;
-        }
-
-        if (validCount < 3 || (sumAbsDot / validCount) >= minMeanAbsDot)
-        {
-            filtered.push_back(points->at(i));
-        }
-    }
-
-    *points = std::move(filtered);
-    return before - static_cast<int>(points->size());
-}
-
-/**
- * @brief 半径密度过滤：副除李石封0点。
- *
- * 对每个点统计其半径 radius 内的邓居数（自身除外），
- * 少于 minNeighbors 则删除该点。
- */
-int filterByDensityRadius(std::vector<SparsePointCloudPoint> *points,
-                          const TreeAndCloud &tc,
-                          double radius,
-                          int minNeighbors)
-{
-    if (!points || points->size() < 2 || radius <= 0.0 || minNeighbors < 1)
-    {
-        return 0;
-    }
-
-    const int n = static_cast<int>(points->size());
-
-    std::vector<SparsePointCloudPoint> filtered;
-    filtered.reserve(n);
-    for (int i = 0; i < n; ++i)
-    {
-        plamatrix::Vec3<double> query{points->at(i).x, points->at(i).y, points->at(i).z};
-        auto rindices = tc.tree->radiusSearch(query, radius);
-        int cnt = static_cast<int>(rindices.size()) - 1; // subtract self
-        if (cnt >= minNeighbors)
-            filtered.push_back((*points)[i]);
-    }
-    const int removed = n - static_cast<int>(filtered.size());
-    *points = std::move(filtered);
-    return removed;
-}
-
 std::vector<bool> computeStatisticalKeepMask(const std::vector<SparsePointCloudPoint> &points,
-                                             const std::vector<NeighborList> &knnCache,
                                              int k,
                                              double stdDevMul,
+                                             plapoint::ProcessingDevice processingDevice,
                                              int *removed)
 {
     std::vector<bool> keep(points.size(), true);
@@ -319,65 +184,20 @@ std::vector<bool> computeStatisticalKeepMask(const std::vector<SparsePointCloudP
         return keep;
     }
 
-    const int n = static_cast<int>(points.size());
-    std::vector<double> meanDists(n, 0.0);
-    std::vector<bool> valid(n, false);
-    for (int i = 0; i < n; ++i)
+    auto cloud = buildPlaCloud(points);
+    std::vector<int> removed_indices;
+    plapoint::statisticalOutlierRemoval(
+        cloud, k, stdDevMul, processingDevice, &removed_indices);
+    for (int index : removed_indices)
     {
-        const auto &neighbors = knnCache[static_cast<size_t>(i)];
-        const size_t usedNeighbors = std::min(neighbors.size(), static_cast<size_t>(k));
-        if (usedNeighbors == 0)
+        if (index >= 0 && static_cast<std::size_t>(index) < keep.size())
         {
-            continue;
-        }
-        double sum = 0.0;
-        for (size_t ni = 0; ni < usedNeighbors; ++ni)
-        {
-            sum += std::sqrt(neighbors[ni].distanceSquared);
-        }
-        meanDists[i] = sum / static_cast<double>(usedNeighbors);
-        valid[i] = true;
-    }
-
-    double globalMean = 0.0;
-    int validCount = 0;
-    for (int i = 0; i < n; ++i)
-    {
-        if (valid[i])
-        {
-            globalMean += meanDists[i];
-            ++validCount;
+            keep[static_cast<std::size_t>(index)] = false;
         }
     }
-    if (validCount < 3)
+    if (removed)
     {
-        return keep;
-    }
-    globalMean /= validCount;
-
-    double variance = 0.0;
-    for (int i = 0; i < n; ++i)
-    {
-        if (!valid[i])
-        {
-            continue;
-        }
-        const double delta = meanDists[i] - globalMean;
-        variance += delta * delta;
-    }
-    variance /= validCount;
-    const double threshold = globalMean + stdDevMul * std::sqrt(std::max(variance, 0.0));
-
-    for (int i = 0; i < n; ++i)
-    {
-        if (valid[i] && meanDists[i] > threshold)
-        {
-            keep[static_cast<size_t>(i)] = false;
-            if (removed)
-            {
-                ++(*removed);
-            }
-        }
+        *removed = static_cast<int>(removed_indices.size());
     }
 
     return keep;
@@ -442,9 +262,9 @@ std::vector<bool> computeNormalConsistencyKeepMask(const std::vector<SparsePoint
 }
 
 std::vector<bool> computeDensityKeepMask(const std::vector<SparsePointCloudPoint> &points,
-                                         const TreeAndCloud &tc,
                                          double radius,
                                          int minNeighbors,
+                                         plapoint::ProcessingDevice processingDevice,
                                          int *removed)
 {
     std::vector<bool> keep(points.size(), true);
@@ -457,19 +277,20 @@ std::vector<bool> computeDensityKeepMask(const std::vector<SparsePointCloudPoint
         return keep;
     }
 
-    for (size_t i = 0; i < points.size(); ++i)
+    auto cloud = buildPlaCloud(points);
+    std::vector<int> removed_indices;
+    plapoint::radiusOutlierRemoval(
+        cloud, radius, minNeighbors + 1, processingDevice, &removed_indices);
+    for (int index : removed_indices)
     {
-        plamatrix::Vec3<double> query{points[i].x, points[i].y, points[i].z};
-        auto rindices = tc.tree->radiusSearch(query, radius);
-        int count = static_cast<int>(rindices.size()) - 1; // subtract self
-        if (count < minNeighbors)
+        if (index >= 0 && static_cast<std::size_t>(index) < keep.size())
         {
-            keep[i] = false;
-            if (removed)
-            {
-                ++(*removed);
-            }
+            keep[static_cast<std::size_t>(index)] = false;
         }
+    }
+    if (removed)
+    {
+        *removed = static_cast<int>(removed_indices.size());
     }
 
     return keep;
@@ -522,15 +343,20 @@ SparsePointCloudFilterStats SparsePointCloudProcessor::filter(std::vector<Sparse
                                     options.filterByDensity;
     if (needsSpatialFilter && points->size() >= 2)
     {
-        const TreeAndCloud tc = buildTree(*points);
+        std::optional<TreeAndCloud> tc;
+        std::vector<NeighborList> knnCache;
         const int normalK = std::max(6, std::min(options.statK, 20));
-        const int cacheK = std::max(options.statK, normalK);
-        const std::vector<NeighborList> knnCache = buildKnnCache(tc, cacheK);
+        if (options.filterByNormalConsistency)
+        {
+            tc = buildTree(*points);
+            knnCache = buildKnnCache(*tc, normalK);
+        }
 
         std::vector<bool> keep(points->size(), true);
         if (options.filterByStatistical)
         {
-            const auto statKeep = computeStatisticalKeepMask(*points, knnCache, options.statK, options.statStdDevMul,
+            const auto statKeep = computeStatisticalKeepMask(*points, options.statK, options.statStdDevMul,
+                                                             options.processingDevice,
                                                              &stats.removedByStatistical);
             for (size_t i = 0; i < keep.size(); ++i)
             {
@@ -548,8 +374,10 @@ SparsePointCloudFilterStats SparsePointCloudProcessor::filter(std::vector<Sparse
         }
         if (options.filterByDensity)
         {
-            const auto densityKeep = computeDensityKeepMask(*points, tc, options.densityRadius,
-                                                            options.densityMinNeighbors, &stats.removedByDensity);
+            const auto densityKeep = computeDensityKeepMask(*points, options.densityRadius,
+                                                            options.densityMinNeighbors,
+                                                            options.processingDevice,
+                                                            &stats.removedByDensity);
             for (size_t i = 0; i < keep.size(); ++i)
             {
                 keep[i] = keep[i] && densityKeep[i];
@@ -583,6 +411,7 @@ SparsePointCloudRefineResult SparsePointCloudProcessor::refine(const std::vector
     filterOptions.statStdDevMul = options.stdDevMultiplier;
     filterOptions.filterByNormalConsistency = options.normalConsistency;
     filterOptions.normalConsistencyMinMeanAbsDot = options.normalConsistencyMinMeanAbsDot;
+    filterOptions.processingDevice = options.processingDevice;
 
     SparsePointCloudOptimizeOptions optimizeOptions;
     optimizeOptions.filterOptions = filterOptions;

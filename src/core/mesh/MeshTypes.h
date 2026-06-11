@@ -9,6 +9,8 @@
 #include <string>
 #include <cstdint>
 
+#include <plapoint/filters/preprocessing.h>
+
 namespace xjw 
 {
 namespace mesh 
@@ -46,6 +48,7 @@ struct ReconstructionConfig
     float denoiseStdMul    = 1.1f;
     bool  enableDownsample = true;
     float downsampleVoxelScale = 0.8f;
+    plapoint::ProcessingDevice preprocessingDevice = plapoint::ProcessingDevice::Auto;
     bool  forcePoisson     = true;
     int   poissonDepth     = 9;
     float poissonPointWeight = 4.0f;

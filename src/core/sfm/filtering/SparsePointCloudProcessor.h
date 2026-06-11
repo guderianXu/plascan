@@ -1,5 +1,7 @@
 #pragma once
 
+#include <plapoint/filters/preprocessing.h>
+
 #include <vector>
 
 namespace xjw 
@@ -39,6 +41,9 @@ struct SparsePointCloudFilterOptions
     double densityRadius = 0.5;
     /// 半径内最少邓居数（少于此则删除）
     int densityMinNeighbors = 5;
+
+    /// 通用点云过滤在 plapoint 中使用的处理设备
+    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
 };
 
 struct SparsePointCloudFilterStats 
@@ -84,6 +89,7 @@ struct SparsePointCloudRefineOptions
     bool retriangulate = true;
     bool normalConsistency = false;
     double normalConsistencyMinMeanAbsDot = 0.45;
+    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
 };
 
 /**

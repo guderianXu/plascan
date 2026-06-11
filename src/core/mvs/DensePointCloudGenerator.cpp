@@ -9,7 +9,6 @@
 #include <fstream>
 #include <algorithm>
 #include <cmath>
-#include <unordered_map>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
@@ -161,68 +160,17 @@ void DensePointCloudGenerator::postProcess(QVector<DensePoint> &cloud)
     // 体素降采样
     if (m_config.voxelSize > 0.0f)
     {
-        float xMin = cloud[0].x, xMax = cloud[0].x;
-        float yMin = cloud[0].y, yMax = cloud[0].y;
-        float zMin = cloud[0].z, zMax = cloud[0].z;
-        for (const auto &p : cloud)
-        {
-            xMin = std::min(xMin, p.x);
-            xMax = std::max(xMax, p.x);
-            yMin = std::min(yMin, p.y);
-            yMax = std::max(yMax, p.y);
-            zMin = std::min(zMin, p.z);
-            zMax = std::max(zMax, p.z);
-        }
-        const float vs = m_config.voxelSize;
-        const int nx = std::max(1, static_cast<int>((xMax - xMin) / vs) + 1);
-        const int ny = std::max(1, static_cast<int>((yMax - yMin) / vs) + 1);
-
-        struct VoxelAcc
-        {
-            double sx = 0;
-            double sy = 0;
-            double sz = 0;
-            float sr = 0;
-            float sg = 0;
-            float sb = 0;
-            int cnt = 0;
-        };
-        std::unordered_map<int64_t, VoxelAcc> voxelMap;
-        voxelMap.reserve(cloud.size());
-
-        for (const auto &p : cloud)
-        {
-            int ix = std::max(0, (int)((p.x - xMin) / vs));
-            int iy = std::max(0, (int)((p.y - yMin) / vs));
-            int iz = std::max(0, (int)((p.z - zMin) / vs));
-            int64_t key = (int64_t)iz * nx * ny + (int64_t)iy * nx + ix;
-            auto &acc = voxelMap[key];
-            acc.sx += p.x;
-            acc.sy += p.y;
-            acc.sz += p.z;
-            acc.sr += p.r;
-            acc.sg += p.g;
-            acc.sb += p.b;
-            ++acc.cnt;
-        }
-
+        std::vector<DensePoint> input(cloud.begin(), cloud.end());
+        std::vector<DensePoint> filtered = DenseCloudBuilder::voxelDownsample(
+            input, m_config.voxelSize, m_config.processingDevice);
         QVector<DensePoint> downsampled;
-        downsampled.reserve(static_cast<int>(voxelMap.size()));
-        for (const auto &kv : voxelMap)
+        downsampled.reserve(static_cast<int>(filtered.size()));
+        for (const DensePoint &point : filtered)
         {
-            const VoxelAcc &a = kv.second;
-            float n = static_cast<float>(a.cnt);
-            DensePoint p;
-            p.x = float(a.sx / n);
-            p.y = float(a.sy / n);
-            p.z = float(a.sz / n);
-            p.r = uint8_t(a.sr / n);
-            p.g = uint8_t(a.sg / n);
-            p.b = uint8_t(a.sb / n);
-            downsampled.push_back(p);
+            downsampled.push_back(point);
         }
         fprintf(stderr, "[PostProcess] 体素降采样: %d → %d 点 (vs=%.4f)\n",
-                cloud.size(), downsampled.size(), vs);
+                static_cast<int>(cloud.size()), static_cast<int>(downsampled.size()), m_config.voxelSize);
         cloud = std::move(downsampled);
     }
 }

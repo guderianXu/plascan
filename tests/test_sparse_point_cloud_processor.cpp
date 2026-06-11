@@ -2,6 +2,8 @@
 
 #include "filtering/SparsePointCloudProcessor.h"
 
+#include <plapoint/filters/preprocessing.h>
+
 #include <vector>
 
 using namespace xjw;
@@ -75,6 +77,7 @@ TEST(SparsePointCloudProcessorTest, RefineMatchesOptimizeWrapper)
     refineOptions.iterRounds = 2;
     refineOptions.retriangulate = true;
     refineOptions.normalConsistency = false;
+    refineOptions.processingDevice = plapoint::ProcessingDevice::CPU;
 
     SparsePointCloudOptimizeOptions optimizeOptions;
     optimizeOptions.filterOptions.maxReprojError = refineOptions.maxReprojError;
@@ -83,6 +86,7 @@ TEST(SparsePointCloudProcessorTest, RefineMatchesOptimizeWrapper)
     optimizeOptions.filterOptions.statK = refineOptions.knnNeighbors;
     optimizeOptions.filterOptions.statStdDevMul = refineOptions.stdDevMultiplier;
     optimizeOptions.filterOptions.filterByNormalConsistency = refineOptions.normalConsistency;
+    optimizeOptions.filterOptions.processingDevice = plapoint::ProcessingDevice::CPU;
     optimizeOptions.iterative = true;
     optimizeOptions.iterRounds = refineOptions.iterRounds;
     optimizeOptions.restartFromInputEachRound = refineOptions.retriangulate;

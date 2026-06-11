@@ -13,6 +13,8 @@
 
 #include "reconstruction/SfmReconstruction.h"
 
+#include <plapoint/filters/preprocessing.h>
+
 #include <functional>
 #include <string>
 
@@ -43,6 +45,9 @@ struct SfmPointCloudFilterOptions {
     int statK = 16;
     /// 标准差倍数阈值（平均距离超过 mean + stdDevMul * stdDev 的点被剔除）
     double statStdDevMul = 2.5;
+
+    /// 通用点云过滤在 plapoint 中使用的处理设备
+    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
 };
 
 /**
@@ -105,7 +110,9 @@ private:
     int filterByTriAngle(double minAngleDeg);
 
     /// 统计离群点过滤（基于 KNN 空间距离）
-    int filterByStatistical(int k, double stdDevMul);
+    int filterByStatistical(int k,
+                            double stdDevMul,
+                            plapoint::ProcessingDevice processingDevice);
 };
 
 } // namespace xjw

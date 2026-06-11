@@ -2,6 +2,8 @@
 
 #include "MvsTypes.h"
 
+#include <plapoint/filters/preprocessing.h>
+
 #include <QJsonObject>
 #include <QString>
 
@@ -41,6 +43,7 @@ struct DenseRefineSettings
     int normalK = 30;
     bool smoothNormals = false;
     int threads = 8;
+    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
 };
 
 DenseRefineSettings denseRefineSettingsFromJson(const QJsonObject &settings);

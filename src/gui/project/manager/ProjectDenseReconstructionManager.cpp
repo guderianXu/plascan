@@ -12,7 +12,7 @@
 #include "SparseCloudPreprocessor.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/search/kdtree.h>
-#include <plapoint/filters/voxel_grid.h>
+#include <plapoint/filters/preprocessing.h>
 #include <plapoint/features/normal_estimation.h>
 
 #include <QDateTime>
@@ -394,67 +394,23 @@ static std::shared_ptr<PlaPC> cloneCloud(const PlaPC &cloud)
     return copy;
 }
 
-// Color-preserving SOR filter
-PlaPC sorFilter(const PlaPC &cloud, int k, float stdRatio)
+PlaPC sorFilter(const PlaPC &cloud,
+                int k,
+                float stdRatio,
+                plapoint::ProcessingDevice processingDevice)
 {
     if (cloud.size() < static_cast<size_t>(k + 1))
     {
         return std::move(*cloneCloud(cloud));
     }
 
-    auto pcCopy = cloneCloud(cloud);
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
-    tree.setInputCloud(pcCopy);
-    tree.build();
-
-    const int N = static_cast<int>(cloud.size());
-    std::vector<float> meanDists(N);
-    for (int i = 0; i < N; ++i)
-    {
-        plamatrix::Vec3<float> q{cloud.points()(i, 0), cloud.points()(i, 1), cloud.points()(i, 2)};
-        auto neighbors = tree.nearestKSearch(q, k + 1);
-        float sum = 0; int cnt = 0;
-        for (int nb : neighbors)
-        {
-            if (nb == i) continue;
-            float dx = cloud.points()(i, 0) - cloud.points()(nb, 0);
-            float dy = cloud.points()(i, 1) - cloud.points()(nb, 1);
-            float dz = cloud.points()(i, 2) - cloud.points()(nb, 2);
-            sum += std::sqrt(dx*dx + dy*dy + dz*dz);
-            ++cnt;
-        }
-        meanDists[i] = cnt > 0 ? sum / static_cast<float>(cnt) : 1e9f;
-    }
-
-    double s = 0, s2 = 0;
-    for (float d : meanDists) { s += d; s2 += static_cast<double>(d) * d; }
-    float mean = static_cast<float>(s / N);
-    float std = static_cast<float>(std::sqrt(s2 / N - static_cast<double>(mean) * mean));
-    float thresh = mean + stdRatio * std;
-
-    std::vector<int> keep;
-    for (int i = 0; i < N; ++i)
-        if (meanDists[i] <= thresh) keep.push_back(i);
-
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> outPts(keep.size(), 3);
-    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> outCol(keep.size(), 3);
-    for (size_t i = 0; i < keep.size(); ++i)
-    {
-        int src = keep[i];
-        for (int d = 0; d < 3; ++d) outPts(static_cast<plamatrix::Index>(i), d) = cloud.points()(src, d);
-        if (cloud.hasColors())
-        {
-            auto *col = cloud.colors();
-            for (int d = 0; d < 3; ++d) outCol(static_cast<plamatrix::Index>(i), d) = col->getValue(src, d);
-        }
-    }
-    PlaPC out(std::move(outPts));
-    if (cloud.hasColors()) out.setColors(std::move(outCol));
-    return out;
+    return plapoint::statisticalOutlierRemoval(cloud, k, stdRatio, processingDevice);
 }
 
-// Color-preserving radius filter
-PlaPC radiusFilter(const PlaPC &cloud, float radius, int minNeighbors)
+PlaPC radiusFilter(const PlaPC &cloud,
+                   float radius,
+                   int minNeighbors,
+                   plapoint::ProcessingDevice processingDevice)
 {
     if (cloud.size() == 0)
     {
@@ -462,91 +418,16 @@ PlaPC radiusFilter(const PlaPC &cloud, float radius, int minNeighbors)
         return emptyOut;
     }
 
-    auto pcCopy = cloneCloud(cloud);
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
-    tree.setInputCloud(pcCopy);
-    tree.build();
-
-    const int N = static_cast<int>(cloud.size());
-    std::vector<int> keep;
-    for (int i = 0; i < N; ++i)
-    {
-        plamatrix::Vec3<float> q{cloud.points()(i, 0), cloud.points()(i, 1), cloud.points()(i, 2)};
-        int cnt = static_cast<int>(tree.radiusSearch(q, radius).size());
-        if (cnt >= minNeighbors) keep.push_back(i);
-    }
-
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> outPts(keep.size(), 3);
-    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> outCol(keep.size(), 3);
-    for (size_t i = 0; i < keep.size(); ++i)
-    {
-        int src = keep[i];
-        for (int d = 0; d < 3; ++d) outPts(static_cast<plamatrix::Index>(i), d) = cloud.points()(src, d);
-        if (cloud.hasColors())
-        {
-            auto *col = cloud.colors();
-            for (int d = 0; d < 3; ++d) outCol(static_cast<plamatrix::Index>(i), d) = col->getValue(src, d);
-        }
-    }
-    PlaPC out(std::move(outPts));
-    if (cloud.hasColors()) out.setColors(std::move(outCol));
-    return out;
+    return plapoint::radiusOutlierRemoval(cloud, radius, minNeighbors, processingDevice);
 }
 
-// Color-preserving voxel downsample
-PlaPC voxelDownsample(const PlaPC &cloud, float leafSize)
+PlaPC voxelDownsample(const PlaPC &cloud,
+                      float leafSize,
+                      plapoint::ProcessingDevice processingDevice)
 {
     if (cloud.size() == 0 || leafSize <= 0) return std::move(*cloneCloud(cloud));
 
-    using Key = std::tuple<int, int, int>;
-    struct Accum { float sx = 0, sy = 0, sz = 0; uint32_t cr = 0, cg = 0, cb = 0; int count = 0; };
-    std::map<Key, Accum> voxels;
-
-    const bool hasCol = cloud.hasColors();
-    auto *col = hasCol ? cloud.colors() : nullptr;
-
-    for (size_t i = 0; i < cloud.size(); ++i)
-    {
-        Key key{
-            static_cast<int>(std::floor(cloud.points()(static_cast<plamatrix::Index>(i), 0) / leafSize)),
-            static_cast<int>(std::floor(cloud.points()(static_cast<plamatrix::Index>(i), 1) / leafSize)),
-            static_cast<int>(std::floor(cloud.points()(static_cast<plamatrix::Index>(i), 2) / leafSize))
-        };
-        auto &acc = voxels[key];
-        acc.sx += cloud.points()(static_cast<plamatrix::Index>(i), 0);
-        acc.sy += cloud.points()(static_cast<plamatrix::Index>(i), 1);
-        acc.sz += cloud.points()(static_cast<plamatrix::Index>(i), 2);
-        if (hasCol)
-        {
-            acc.cr += col->getValue(static_cast<plamatrix::Index>(i), 0);
-            acc.cg += col->getValue(static_cast<plamatrix::Index>(i), 1);
-            acc.cb += col->getValue(static_cast<plamatrix::Index>(i), 2);
-        }
-        acc.count += 1;
-    }
-
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(voxels.size(), 3);
-    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> outCol(voxels.size(), 3);
-    int outIdx = 0;
-    for (const auto &kv : voxels)
-    {
-        const auto &acc = kv.second;
-        float inv = 1.0f / static_cast<float>(acc.count);
-        pts(outIdx, 0) = acc.sx * inv;
-        pts(outIdx, 1) = acc.sy * inv;
-        pts(outIdx, 2) = acc.sz * inv;
-        if (hasCol)
-        {
-            outCol(outIdx, 0) = static_cast<uint8_t>(static_cast<float>(acc.cr) * inv + 0.5f);
-            outCol(outIdx, 1) = static_cast<uint8_t>(static_cast<float>(acc.cg) * inv + 0.5f);
-            outCol(outIdx, 2) = static_cast<uint8_t>(static_cast<float>(acc.cb) * inv + 0.5f);
-        }
-        ++outIdx;
-    }
-
-    PlaPC out(std::move(pts));
-    if (hasCol) out.setColors(std::move(outCol));
-    return out;
+    return plapoint::voxelDownsample(cloud, leafSize, processingDevice);
 }
 
 } // namespace
@@ -1144,7 +1025,10 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             }, Qt::QueuedConnection);
 
             const auto beforeSor = cloud.size();
-            cloud = sorFilter(cloud, request.sorK, static_cast<float>(request.sorStdDev));
+            cloud = sorFilter(cloud,
+                              request.sorK,
+                              static_cast<float>(request.sorStdDev),
+                              request.processingDevice);
 
             if (cloud.size() > 64)
             {
@@ -1184,7 +1068,10 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 QMetaObject::invokeMethod(this, [this]() {
                     emit mvsProgressChanged(QStringLiteral("半径离群点移除..."), 35);
                 }, Qt::QueuedConnection);
-                cloud = radiusFilter(cloud, static_cast<float>(adaptiveRadius), radiusMinNeighbors);
+                cloud = radiusFilter(cloud,
+                                     static_cast<float>(adaptiveRadius),
+                                     radiusMinNeighbors,
+                                     request.processingDevice);
 
                 const auto afterRadius = cloud.size();
                 const bool largeCloud = beforeSor > 200000;
@@ -1197,7 +1084,10 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                     QMetaObject::invokeMethod(this, [this]() {
                         emit mvsProgressChanged(QStringLiteral("离群点二次清理..."), 42);
                     }, Qt::QueuedConnection);
-                    cloud = sorFilter(cloud, stricterK, static_cast<float>(stricterStdDev));
+                    cloud = sorFilter(cloud,
+                                      stricterK,
+                                      static_cast<float>(stricterStdDev),
+                                      request.processingDevice);
                 }
             }
         }
@@ -1206,7 +1096,9 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             QMetaObject::invokeMethod(this, [this]() {
                 emit mvsProgressChanged(QStringLiteral("体素下采样..."), 50);
             }, Qt::QueuedConnection);
-            cloud = voxelDownsample(cloud, static_cast<float>(request.voxelSize));
+            cloud = voxelDownsample(cloud,
+                                    static_cast<float>(request.voxelSize),
+                                    request.processingDevice);
         }
         if (request.normalsEnabled)
         {

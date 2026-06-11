@@ -13,6 +13,7 @@
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
 
 #include <opencv2/imgproc.hpp>
@@ -83,7 +84,7 @@ TEST(MvsPipelineTest, SparseCloudPreprocessorReadsBinaryPly)
     plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
     plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
 
-    xjw::mvs::SparseCloudPreprocessor preprocessor;
+    xjw::mvs::SparseCloudPreprocessor preprocessor(plapoint::ProcessingDevice::CPU);
     xjw::mvs::PreprocessResult result;
     std::string error;
     ASSERT_TRUE(preprocessor.run(plyPath.string(), {}, result, &error)) << error;

@@ -12,6 +12,8 @@
 #include <vector>
 #include <array>
 
+#include <plapoint/filters/preprocessing.h>
+
 namespace xjw
 {
 namespace mvs
@@ -40,7 +42,11 @@ struct PreprocessResult
 class SparseCloudPreprocessor
 {
 public:
-    SparseCloudPreprocessor() = default;
+    explicit SparseCloudPreprocessor(
+        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto)
+        : _processingDevice(processingDevice)
+    {
+    }
 
     /// 从文件加载稀疏点云并预处理
     /// @param cloudPath  .xyz 或 .ply 文件路径
@@ -61,7 +67,11 @@ private:
 
     /// 统计离群值并过滤
     static void filterOutliers(std::vector<std::array<float,3>> &pts,
-                               float radius, int minNeigh);
+                               float radius,
+                               int minNeigh,
+                               plapoint::ProcessingDevice processingDevice);
+
+    plapoint::ProcessingDevice _processingDevice = plapoint::ProcessingDevice::Auto;
 };
 
 } // namespace mvs

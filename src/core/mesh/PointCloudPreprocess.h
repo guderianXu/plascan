@@ -3,6 +3,8 @@
 #include <cstdint>
 #include <vector>
 
+#include <plapoint/filters/preprocessing.h>
+
 namespace xjw
 {
 namespace mesh
@@ -24,12 +26,14 @@ float estimateBaseVoxelStep(const std::vector<PointXYZRGB> &points,
                             int resolution);
 
 std::vector<PointXYZRGB> voxelDownsamplePoints(const std::vector<PointXYZRGB> &points,
-                                                float voxelSize);
+                                                float voxelSize,
+                                                plapoint::ProcessingDevice device = plapoint::ProcessingDevice::Auto);
 
 std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB> &points,
                                                     int k,
                                                     float stdMul,
-                                                    float gridCellSize);
+                                                    float gridCellSize,
+                                                    plapoint::ProcessingDevice device = plapoint::ProcessingDevice::Auto);
 
 } // namespace detail
 } // namespace mesh

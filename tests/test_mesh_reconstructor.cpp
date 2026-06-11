@@ -2,6 +2,8 @@
 
 #include "SurfaceReconstructor.h"
 
+#include <plapoint/filters/preprocessing.h>
+
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
@@ -42,6 +44,7 @@ TEST(MeshReconstructorTest, ForcePoissonFallsBackWhenCloudHasNoNormals)
     config.resolution = 48;
     config.enableDenoise = false;
     config.enableDownsample = false;
+    config.preprocessingDevice = plapoint::ProcessingDevice::CPU;
     config.cleanSmallComponents = false;
     config.smoothIterations = 0;
     config.holeFillPasses = 2;

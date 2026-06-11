@@ -34,6 +34,7 @@ struct DenseCloudGenConfig {
 
     // 体素降采样
     float voxelSize            = 0.0f;  ///< 0 = 不做
+    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
 
     // 统计过滤
     bool  doStatisticalFilter  = false;

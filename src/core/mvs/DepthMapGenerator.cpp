@@ -1449,9 +1449,12 @@ void DepthMapGenerator::runInBackground()
             cloud.swap(filtered);
         };
 
+        const plapoint::ProcessingDevice pointFilterDevice =
+            m_config.patchMatch.useCuda ? plapoint::ProcessingDevice::Auto : plapoint::ProcessingDevice::CPU;
+
         // 第 1 遍：统计离群点过滤（SOR）— 移除 kNN 距离异常的点
-        applyFilterWithGuard("SOR-1", [](const std::vector<DensePoint> &inputCloud) {
-            return DenseCloudBuilder::statisticalOutlierRemoval(inputCloud, 30, 1.2f);
+        applyFilterWithGuard("SOR-1", [pointFilterDevice](const std::vector<DensePoint> &inputCloud) {
+            return DenseCloudBuilder::statisticalOutlierRemoval(inputCloud, 30, 1.2f, pointFilterDevice);
         });
 
         // 第 2 遍：半径过滤 — 基于点云密度估算搜索半径
@@ -1470,14 +1473,14 @@ void DepthMapGenerator::runInBackground()
             volume = std::max(volume, 1e-12f);
             float avgSpacing = std::cbrt(volume / (float)cloud.size());
             float searchRadius = std::max(avgSpacing * 4.0f, 1e-4f); // 4 倍平均间距内至少要有邻居
-            applyFilterWithGuard("RadiusOR", [searchRadius](const std::vector<DensePoint> &inputCloud) {
-                return DenseCloudBuilder::radiusOutlierRemoval(inputCloud, searchRadius, 5);
+            applyFilterWithGuard("RadiusOR", [searchRadius, pointFilterDevice](const std::vector<DensePoint> &inputCloud) {
+                return DenseCloudBuilder::radiusOutlierRemoval(inputCloud, searchRadius, 5, pointFilterDevice);
             });
 
             // 第 3 遍：再做一轮 SOR 清除残余离群
             if (cloud.size() > 100) {
-                applyFilterWithGuard("SOR-2", [](const std::vector<DensePoint> &inputCloud) {
-                    return DenseCloudBuilder::statisticalOutlierRemoval(inputCloud, 20, 1.5f);
+                applyFilterWithGuard("SOR-2", [pointFilterDevice](const std::vector<DensePoint> &inputCloud) {
+                    return DenseCloudBuilder::statisticalOutlierRemoval(inputCloud, 20, 1.5f, pointFilterDevice);
                 });
             }
         }

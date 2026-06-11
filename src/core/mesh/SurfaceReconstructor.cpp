@@ -140,14 +140,15 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         points = detail::statisticalDenoisePoints(points,
                                                    std::clamp(config.denoiseK, 8, 64),
                                                    std::clamp(config.denoiseStdMul, 0.6f, 3.0f),
-                                                   baseVoxel * 2.0f);
+                                                   baseVoxel * 2.0f,
+                                                   config.preprocessingDevice);
     }
 
     if (config.enableDownsample)
     {
         progress("正在点云下采样...", 0.12f);
         const float voxelSize = baseVoxel * std::clamp(config.downsampleVoxelScale, 0.4f, 2.5f);
-        points = detail::voxelDownsamplePoints(points, voxelSize);
+        points = detail::voxelDownsamplePoints(points, voxelSize, config.preprocessingDevice);
     }
 
     if (points.size() < 120)

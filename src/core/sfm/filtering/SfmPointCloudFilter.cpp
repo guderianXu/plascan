@@ -1,5 +1,9 @@
 #include "SfmPointCloudFilter.h"
 
+#include <plamatrix/dense/dense_matrix.h>
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/filters/preprocessing.h>
+
 #include <algorithm>
 #include <cmath>
 #include <numeric>
@@ -117,7 +121,9 @@ SfmPointCloudFilterResult SfmPointCloudFilter::run(
             result.pointsAfter = static_cast<int>(reconstruction_.numPoints3D());
             return result;
         }
-        result.removedByStatistical = filterByStatistical(options.statK, options.statStdDevMul);
+        result.removedByStatistical = filterByStatistical(options.statK,
+                                                          options.statStdDevMul,
+                                                          options.processingDevice);
         ++step;
     }
 
@@ -254,7 +260,9 @@ int SfmPointCloudFilter::filterByTriAngle(double minAngleDeg)
     return removed;
 }
 
-int SfmPointCloudFilter::filterByStatistical(int k, double stdDevMul)
+int SfmPointCloudFilter::filterByStatistical(int k,
+                                             double stdDevMul,
+                                             plapoint::ProcessingDevice processingDevice)
 {
     // 收集所有点的坐标
     auto allIds = reconstruction_.allPoint3DIds();
@@ -264,14 +272,10 @@ int SfmPointCloudFilter::filterByStatistical(int k, double stdDevMul)
         return 0;
     }
 
-    // 建立坐标数组
-    struct PtEntry
-    {
-        Point3DId id;
-        double x, y, z;
-    };
-    std::vector<PtEntry> pts;
-    pts.reserve(n);
+    std::vector<Point3DId> pointIds;
+    pointIds.reserve(n);
+    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> points(
+        static_cast<plamatrix::Index>(n), 3);
     for (Point3DId pid : allIds)
     {
         if (!reconstruction_.hasPoint3D(pid))
@@ -279,84 +283,30 @@ int SfmPointCloudFilter::filterByStatistical(int k, double stdDevMul)
             continue;
         }
         const auto &pt = reconstruction_.point3D(pid);
-        pts.push_back({pid, pt.xyz[0], pt.xyz[1], pt.xyz[2]});
+        const auto row = static_cast<plamatrix::Index>(pointIds.size());
+        points(row, 0) = pt.xyz[0];
+        points(row, 1) = pt.xyz[1];
+        points(row, 2) = pt.xyz[2];
+        pointIds.push_back(pid);
     }
 
-    const int numPts = static_cast<int>(pts.size());
+    const int numPts = static_cast<int>(pointIds.size());
     if (numPts <= k)
     {
         return 0;
     }
 
-    // 计算每个点到 K 近邻的平均距离（暴力搜索，稀疏点云通常 < 100k 点）
-    std::vector<double> meanDists(numPts, 0.0);
+    plapoint::PointCloud<double, plamatrix::Device::CPU> cloud(std::move(points));
+    std::vector<int> removedIndices;
+    plapoint::statisticalOutlierRemoval(
+        cloud, k, stdDevMul, processingDevice, &removedIndices);
 
-    for (int i = 0; i < numPts; ++i)
-    {
-        // 计算到所有其他点的距离
-        std::vector<double> dists;
-        dists.reserve(numPts - 1);
-
-        for (int j = 0; j < numPts; ++j)
-        {
-            if (j == i)
-            {
-                continue;
-            }
-            double dx = pts[i].x - pts[j].x;
-            double dy = pts[i].y - pts[j].y;
-            double dz = pts[i].z - pts[j].z;
-            dists.push_back(dx*dx + dy*dy + dz*dz);
-        }
-
-        // 找 k 最小距离
-        if (static_cast<int>(dists.size()) <= k)
-        {
-            double sum = 0;
-            for (double d : dists)
-            {
-                sum += std::sqrt(d);
-            }
-            meanDists[i] = dists.empty() ? 0.0 : sum / dists.size();
-        }
-        else
-        {
-            std::partial_sort(dists.begin(), dists.begin() + k, dists.end());
-            double sum = 0;
-            for (int ki = 0; ki < k; ++ki)
-            {
-                sum += std::sqrt(dists[ki]);
-            }
-            meanDists[i] = sum / k;
-        }
-    }
-
-    // 计算全局均值和标准差
-    double globalMean = 0;
-    for (double d : meanDists)
-    {
-        globalMean += d;
-    }
-    globalMean /= numPts;
-
-    double globalVar = 0;
-    for (double d : meanDists)
-    {
-        double diff = d - globalMean;
-        globalVar += diff * diff;
-    }
-    globalVar /= numPts;
-    double globalStd = std::sqrt(globalVar);
-
-    double threshold = globalMean + stdDevMul * globalStd;
-
-    // 删除超出阈值的点
     int removed = 0;
-    for (int i = 0; i < numPts; ++i)
+    for (int index : removedIndices)
     {
-        if (meanDists[i] > threshold)
+        if (index >= 0 && index < numPts)
         {
-            reconstruction_.deletePoint3D(pts[i].id);
+            reconstruction_.deletePoint3D(pointIds[static_cast<std::size_t>(index)]);
             ++removed;
         }
     }

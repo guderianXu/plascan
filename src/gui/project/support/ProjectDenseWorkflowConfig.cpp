@@ -7,6 +7,25 @@
 
 namespace xjw::gui::project {
 
+namespace
+{
+
+plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized == QStringLiteral("cpu"))
+    {
+        return plapoint::ProcessingDevice::CPU;
+    }
+    if (normalized == QStringLiteral("gpu") || normalized == QStringLiteral("cuda"))
+    {
+        return plapoint::ProcessingDevice::GPU;
+    }
+    return plapoint::ProcessingDevice::Auto;
+}
+
+} // namespace
+
 DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &settings)
 {
     DenseGenerationSettings parsed;
@@ -77,6 +96,8 @@ DenseRefineSettings denseRefineSettingsFromJson(const QJsonObject &settings)
     parsed.normalK = settings.value(QStringLiteral("normalK")).toInt(30);
     parsed.smoothNormals = settings.value(QStringLiteral("smoothIter")).toInt(0) > 0;
     parsed.threads = qMax(1, settings.value(QStringLiteral("threads")).toInt(8));
+    parsed.processingDevice = processingDeviceFromString(
+        settings.value(QStringLiteral("processingDevice")).toString(QStringLiteral("auto")));
     return parsed;
 }
 

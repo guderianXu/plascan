@@ -7,6 +7,7 @@
 // =============================================================================
 
 #include "MvsTypes.h"
+#include <plapoint/filters/preprocessing.h>
 #include <opencv2/core.hpp>
 #include <string>
 #include <vector>
@@ -58,6 +59,12 @@ public:
                         const std::vector<DensePoint> &cloud,
                         std::string *errorMsg = nullptr);
 
+    /// 体素下采样，保留并平均 RGB 颜色属性
+    static std::vector<DensePoint> voxelDownsample(
+        const std::vector<DensePoint> &cloud,
+        float voxelSize,
+        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto);
+
     /// 统计离群点过滤 (Statistical Outlier Removal)
     /// 对每个点计算 k 近邻平均距离，移除偏离均值过多的点
     /// @param cloud       输入点云
@@ -67,7 +74,8 @@ public:
     static std::vector<DensePoint> statisticalOutlierRemoval(
         const std::vector<DensePoint> &cloud,
         int   kNeighbors = 30,
-        float stdRatio   = 1.5f);
+        float stdRatio   = 1.5f,
+        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto);
 
     /// 半径离群点过滤
     /// 移除在指定半径内邻居数少于阈值的点
@@ -78,7 +86,8 @@ public:
     static std::vector<DensePoint> radiusOutlierRemoval(
         const std::vector<DensePoint> &cloud,
         float radius,
-        int   minNeighbors = 6);
+        int   minNeighbors = 6,
+        plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto);
 };
 
 } // namespace mvs

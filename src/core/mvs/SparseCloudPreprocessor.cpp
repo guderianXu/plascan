@@ -1,8 +1,9 @@
 // SparseCloudPreprocessor.cpp
 #include "SparseCloudPreprocessor.h"
-#include <plapoint/search/kdtree.h>
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
+#include <plapoint/search/kdtree.h>
 #include "log/Logger.h"
 #include <fstream>
 #include <sstream>
@@ -10,6 +11,7 @@
 #include <cmath>
 #include <limits>
 #include <chrono>
+#include <memory>
 
 #ifdef HAS_OPENMP
 #include <omp.h>
@@ -19,6 +21,84 @@ namespace xjw
 {
 namespace mvs
 {
+
+namespace
+{
+
+using SparsePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+
+SparsePlaCloud toPlaCloud(const std::vector<std::array<float,3>> &pts)
+{
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> matrix(
+        static_cast<plamatrix::Index>(pts.size()), 3);
+    for (std::size_t i = 0; i < pts.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        matrix(row, 0) = pts[i][0];
+        matrix(row, 1) = pts[i][1];
+        matrix(row, 2) = pts[i][2];
+    }
+    return SparsePlaCloud(std::move(matrix));
+}
+
+std::vector<std::array<float,3>> fromPlaCloud(const SparsePlaCloud &cloud)
+{
+    std::vector<std::array<float,3>> pts;
+    pts.reserve(cloud.size());
+    const auto &matrix = cloud.points();
+    for (std::size_t i = 0; i < cloud.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        pts.push_back({matrix.getValue(row, 0),
+                       matrix.getValue(row, 1),
+                       matrix.getValue(row, 2)});
+    }
+    return pts;
+}
+
+float estimateMedianNearestNeighborDistance(const SparsePlaCloud &cloud)
+{
+    if (cloud.size() < 2)
+    {
+        return 0.0f;
+    }
+
+    auto cloudPtr = std::shared_ptr<const SparsePlaCloud>(&cloud, [](const SparsePlaCloud*) {});
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
+    tree.setInputCloud(cloudPtr);
+    tree.build();
+
+    std::vector<float> distances;
+    distances.reserve(cloud.size());
+    const auto &matrix = cloud.points();
+    for (std::size_t i = 0; i < cloud.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        plamatrix::Vec3<float> query{matrix.getValue(row, 0),
+                                     matrix.getValue(row, 1),
+                                     matrix.getValue(row, 2)};
+        const auto neighbors = tree.nearestKSearch(query, 2);
+        if (neighbors.size() < 2)
+        {
+            continue;
+        }
+        const int nn = neighbors[0] == static_cast<int>(i) ? neighbors[1] : neighbors[0];
+        const float dx = matrix.getValue(nn, 0) - query.x;
+        const float dy = matrix.getValue(nn, 1) - query.y;
+        const float dz = matrix.getValue(nn, 2) - query.z;
+        distances.push_back(std::sqrt(dx * dx + dy * dy + dz * dz));
+    }
+    if (distances.empty())
+    {
+        return 0.0f;
+    }
+
+    auto mid = distances.begin() + static_cast<std::ptrdiff_t>(distances.size() / 2);
+    std::nth_element(distances.begin(), mid, distances.end());
+    return *mid;
+}
+
+} // namespace
 
 /**
  * @brief 从文本点云文件加载 XYZ 坐标。
@@ -107,12 +187,15 @@ bool SparseCloudPreprocessor::loadXYZ(const std::string &path,
 }
 
 // =============================================================================
-// KD-tree 加速的离群点过滤 (SOR + 半径过滤，支持任意规模点云)
+// PlaPoint-backed outlier filtering (SOR + radius filtering).
 // =============================================================================
 void SparseCloudPreprocessor::filterOutliers(
-    std::vector<std::array<float,3>> &pts, float radius, int minNeigh)
+    std::vector<std::array<float,3>> &pts,
+    float radius,
+    int minNeigh,
+    plapoint::ProcessingDevice processingDevice)
 {
-    if (pts.size() < 10 || radius <= 0)
+    if (pts.size() < 10 || minNeigh <= 0)
     {
         return;
     }
@@ -122,113 +205,40 @@ void SparseCloudPreprocessor::filterOutliers(
 
     LOG_INFO("[SparseFilter] 开始稀疏点云离群点过滤: %d 点", N);
 
-    // ── 建 KD-tree (plapoint) ───────────────────────────────────────────────
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> ptsMat(N, 3);
-    for (int i = 0; i < N; ++i)
-    {
-        ptsMat(i, 0) = pts[static_cast<size_t>(i)][0];
-        ptsMat(i, 1) = pts[static_cast<size_t>(i)][1];
-        ptsMat(i, 2) = pts[static_cast<size_t>(i)][2];
-    }
-    auto pc = std::make_shared<plapoint::PointCloud<float, plamatrix::Device::CPU>>(std::move(ptsMat));
-    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
-    tree.setInputCloud(pc);
-    tree.build();
-
-    auto t1 = std::chrono::steady_clock::now();
-    LOG_DEBUG("[SparseFilter] KD-tree 建树完成, 耗时 %.3f s",
-              std::chrono::duration<double>(t1 - t0).count());
-
-    // ── 第一步: SOR (Statistical Outlier Removal) ──────────────────────────
-    // 使用更多近邻(20)使均值更稳定，并用 IQR 替代 mean+k*std，对重尾分布更鲁棒
-    const int kNeighbors = std::min(20, N - 1);  // 12→20，均值更稳定
-
-    std::vector<float> meanDists(N);
-#ifdef HAS_OPENMP
-    #pragma omp parallel for schedule(dynamic, 64)
-#endif
-    for (int i = 0; i < N; ++i)
-    {
-        plamatrix::Vec3<float> query{pts[static_cast<size_t>(i)][0], pts[static_cast<size_t>(i)][1], pts[static_cast<size_t>(i)][2]};
-        auto neighbors = tree.nearestKSearch(query, kNeighbors);
-        float sum = 0.0f;
-        int actualCount = 0;
-        for (int nb : neighbors)
-        {
-            float dx = pts[static_cast<size_t>(i)][0] - pts[static_cast<size_t>(nb)][0];
-            float dy = pts[static_cast<size_t>(i)][1] - pts[static_cast<size_t>(nb)][1];
-            float dz = pts[static_cast<size_t>(i)][2] - pts[static_cast<size_t>(nb)][2];
-            sum += std::sqrt(dx * dx + dy * dy + dz * dz);
-            ++actualCount;
-        }
-        meanDists[i] = (actualCount > 0) ? (sum / static_cast<float>(actualCount)) : 1e9f;
-    }
-
-    // ── IQR 鲁棒阈值（替代 mean+k*std，不受极远点拉偏影响）─────────────
-    std::vector<float> sortedForIQR = meanDists;
-    std::sort(sortedForIQR.begin(), sortedForIQR.end());
-    float q1 = sortedForIQR[N / 4];
-    float q3 = sortedForIQR[3 * N / 4];
-    float iqr = q3 - q1;
-    float sorThreshold = q3 + 1.5f * iqr;   // 系数越小越严格；1.5 是 Tukey 标准值
-
-    LOG_DEBUG("[SparseFilter] SOR(IQR): Q1=%.4f Q3=%.4f IQR=%.4f threshold=%.4f",
-              q1, q3, iqr, sorThreshold);
-
-    // ── 第二步: 半径过滤 (使用自适应半径) ──────────────────────────────────
-    // 传入的固定 radius 可能与点云实际尺度不匹配（例如 BA 结果坐标单位很大），
-    // 因此当固定半径远小于点间距中位数时，自动切换为自适应半径。
-    float medianKnnDist = sortedForIQR[N / 2];
+    SparsePlaCloud cloud = toPlaCloud(pts);
+    const int kNeighbors = std::clamp(20, 2, std::max(2, N - 1));
+    const float medianKnnDist = estimateMedianNearestNeighborDistance(cloud);
     float adaptiveRadius = radius;
-    if (adaptiveRadius <= 0 || adaptiveRadius < medianKnnDist * 0.5f ||
-        adaptiveRadius > sorThreshold * 5.f)
+    if (adaptiveRadius <= 0.0f || adaptiveRadius < medianKnnDist * 0.5f ||
+        adaptiveRadius > medianKnnDist * 15.0f)
     {
-        // 自适应: 3× 中位数 kNN 距离（保证大部分点在该半径内有足够邻居）
         adaptiveRadius = medianKnnDist * 3.0f;
         LOG_WARN("[SparseFilter] 固定半径 %.4f 与点间距 (median=%.4f) 不匹配，使用自适应半径: %.4f",
                  radius, medianKnnDist, adaptiveRadius);
     }
 
-    // ── 联合标记 ───────────────────────────────────────────────────────────
-    std::vector<bool> keep(N, false);
-    int sorRemoved = 0, radRemoved = 0;
-#ifdef HAS_OPENMP
-    #pragma omp parallel for schedule(dynamic, 64) reduction(+:sorRemoved,radRemoved)
-#endif
-    for (int i = 0; i < N; ++i)
+    std::vector<int> sorRemovedIndices;
+    plapoint::ProcessingReport sorReport;
+    SparsePlaCloud sorCloud = plapoint::statisticalOutlierRemoval(
+        cloud, kNeighbors, 1.5f, processingDevice, &sorRemovedIndices, &sorReport);
+
+    std::vector<int> radiusRemovedIndices;
+    plapoint::ProcessingReport radiusReport;
+    SparsePlaCloud filteredCloud = plapoint::radiusOutlierRemoval(
+        sorCloud, adaptiveRadius, minNeigh, processingDevice, &radiusRemovedIndices, &radiusReport);
+
+    if (!filteredCloud.size())
     {
-        // SOR 过滤
-        if (meanDists[i] > sorThreshold)
-        {
-            ++sorRemoved;
-            continue;
-        }
-        // 半径过滤
-        plamatrix::Vec3<float> rquery{pts[static_cast<size_t>(i)][0], pts[static_cast<size_t>(i)][1], pts[static_cast<size_t>(i)][2]};
-        int cnt = static_cast<int>(tree.radiusSearch(rquery, adaptiveRadius).size());
-        if (cnt < minNeigh)
-        {
-            ++radRemoved;
-            continue;
-        }
-        keep[i] = true;
+        LOG_WARN("[SparseFilter] plapoint 过滤结果为空，保留输入点云避免 MVS 无输入");
+        return;
     }
 
-    // 收集结果
-    std::vector<std::array<float,3>> filtered;
-    filtered.reserve(N - sorRemoved - radRemoved);
-    for (int i = 0; i < N; ++i)
-    {
-        if (keep[i])
-        {
-            filtered.push_back(pts[i]);
-        }
-    }
-    pts = std::move(filtered);
+    pts = fromPlaCloud(filteredCloud);
 
     auto t2 = std::chrono::steady_clock::now();
-    LOG_INFO("[SparseFilter] 过滤完成: %d → %zu 点 (SOR移除 %d, 半径移除 %d) 耗时 %.3f s",
-             N, pts.size(), sorRemoved, radRemoved,
+    LOG_INFO("[SparseFilter] plapoint 过滤完成: %d → %zu 点 (SOR移除 %zu, 半径移除 %zu, SOR设备=%d, 半径设备=%d) 耗时 %.3f s",
+             N, pts.size(), sorRemovedIndices.size(), radiusRemovedIndices.size(),
+             static_cast<int>(sorReport.usedDevice), static_cast<int>(radiusReport.usedDevice),
              std::chrono::duration<double>(t2 - t0).count());
 }
 
@@ -256,11 +266,11 @@ bool SparseCloudPreprocessor::run(const std::string             &cloudPath,
 
     // KD-tree 加速离群点过滤
     // 注意 radius 参数会在 filterOutliers 内自适应：当固定值远小于点间距时自动放大
-    filterOutliers(pts, -1.0f, 3);   // radius=-1 强制自适应, minNeigh=3
+    filterOutliers(pts, -1.0f, 3, _processingDevice);   // radius=-1 强制自适应, minNeigh=3
     // 第二轮: 仅当点数充足时再过滤（小规模点云二次过滤会过于激进）
     if (pts.size() > 200)
     {
-        filterOutliers(pts, -1.0f, 4);  // 第二轮自适应半径, minNeigh=4
+        filterOutliers(pts, -1.0f, 4, _processingDevice);  // 第二轮自适应半径, minNeigh=4
     }
     else
     {
