@@ -55,19 +55,42 @@ GUI 的 `工作流程` 菜单提供三个互相独立的工程入口：
 
 ### CLI 一键重建
 
-`scripts/run_full_pipeline.py` 封装了与 GUI 等价的批处理入口，输入为影像和相机文件列表：
+输入 `.lis` 文件每行是一组影像和相机文件，支持空格或逗号分隔：
+
+```bash
+path/to/image_001.png path/to/image_001.tsai
+path/to/image_002.png path/to/image_002.tsai
+```
+
+三维建模专用 CLI 与 GUI 的 `工作流程 -> 三维重建` 使用同一套服务链路，只生成稀疏点云、密集点云和三维模型，不生成 DEM/DOM：
+
+```bash
+cmake --build build --target three_d_reconstruction_cli -j$(nproc)
+build/bin/three_d_reconstruction_cli path/to/input.lis \
+  --output-dir build/测试用临时文件/three_d_reconstruction \
+  --device auto \
+  --quality 3 \
+  --threads 8 \
+  --feature-max-image-dim 0
+```
+
+`--device auto` 是默认值：CUDA 可用时特征提取、LightGlue 匹配和 MVS PatchMatch 会优先使用 GPU；
+需要强制 CPU 时再传 `--device cpu`。`--feature-max-image-dim 0` 表示使用质量档位的默认设置；
+最高质量档不会自动把 DISK/ALIKED 输入缩回 1200 px。显存紧张时可手动调小，
+例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
+
+完整地形产品流水线仍使用 `reconstruct_pipeline_cli` 或脚本封装，流程为 `SfM -> MVS 密集点云 -> 网格模型 -> DEM/DOM`：
 
 ```bash
 cmake --build build --target reconstruct_pipeline_cli -j$(nproc)
 python scripts/run_full_pipeline.py path/to/input.lis \
   --build-dir build \
   --output-dir build/测试用临时文件/full_pipeline \
-  --device cuda \
+  --device auto \
   --quality 3 \
+  --feature-max-image-dim 0 \
   --dem-resolution 0
 ```
-
-默认流程为 `SfM -> MVS 密集点云 -> 网格模型 -> DEM/DOM`。如只验证三维模型可加 `--skip-terrain`；如只验证地形产品前的点云/模型阶段可结合 `--skip-model` 或输出报告检查。
 
 ### Docker 构建
 
@@ -119,12 +142,12 @@ src/
 
 ```bash
 # 8 种算法: superpoint, disk, aliked, sift, surf, orb, akaze, dedode
-feature_extract_cli -a superpoint -m sp.pt -i img.tif -o out.sp --cuda
-feature_extract_cli -a disk       -m disk.pt -i img.tif -o out.dsk --cuda
+feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i img.tif -o out.sp --cuda
+feature_extract_cli -a disk       -m disk_extractor_cuda_8192.torchscript -i img.tif -o out.dsk --cuda
 feature_extract_cli -a sift       -i img.tif -o out.sift -n 4096
 
 # 批量处理目录
-feature_extract_cli -a superpoint -m sp.pt -i ./images/ -o ./features/ --cuda
+feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i ./images/ -o ./features/ --cuda
 ```
 
 ### 特征匹配 (`feature_match_cli`)
@@ -141,9 +164,9 @@ feature_match_cli -a loftr -L a.tif -R b.tif -o out.match --cuda
 ### 密集重建流水线
 
 ```bash
-feature_extract_cli -a superpoint -m sp.pt -i A.tif -o A.sp --cuda
-feature_extract_cli -a superpoint -m sp.pt -i B.tif -o B.sp --cuda
-feature_match_cli   -a superglue -m sg.pt --sp1 A.sp --sp2 B.sp -o AB.match --cuda
+feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i A.tif -o A.sp --cuda
+feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i B.tif -o B.sp --cuda
+feature_match_cli   -a superglue -m superglue_outdoor_cuda.torchscript --sp1 A.sp --sp2 B.sp -o AB.match --cuda
 rectify_cli         -L A.tif -R B.tif --camL A.txt --camR B.txt -o rect
 dense_match_cli     -L rect_L.tif -R rect_R.tif -o disp.tif --cuda --algorithm mgm
 triangulate_cli     -d disp.tif --rect rect.xml --camL A.txt --camR B.txt -o cloud.ply

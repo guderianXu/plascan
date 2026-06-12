@@ -10,6 +10,60 @@
 #include <QDialogButtonBox>
 #include <QPushButton>
 
+namespace
+{
+
+QString costFunctionToolTip(const QString &name)
+{
+    if (name == QStringLiteral("NCC"))
+    {
+        return QStringLiteral("NCC（归一化互相关）：比较两个局部窗口的相关性，对整体亮度缩放较稳，常用于 PatchMatch 深度估计。计算量比 AD/SAD 更高。");
+    }
+    if (name == QStringLiteral("Census"))
+    {
+        return QStringLiteral("Census：把局部灰度排序编码成二进制描述子，再比较汉明距离。对光照变化和低纹理区域更稳，但可能损失精细灰度差异。");
+    }
+    if (name == QStringLiteral("SAD"))
+    {
+        return QStringLiteral("SAD/AD（灰度绝对差之和）：在窗口内累加左右影像灰度绝对差。速度快、直观，但对曝光差、阴影和辐射差异敏感。");
+    }
+    if (name == QStringLiteral("ZNCC"))
+    {
+        return QStringLiteral("ZNCC（零均值归一化互相关）：先去除窗口平均亮度再做 NCC，对局部亮度偏移更稳，适合有曝光差的影像。");
+    }
+
+    return QStringLiteral("SD（平方差）会放大较大灰度误差，Ternary Census（三值 Census）会给微小灰度变化留容差；二者是密集匹配中常见代价函数。");
+}
+
+void updateCostFunctionToolTip(QComboBox *combo)
+{
+    if (!combo)
+    {
+        return;
+    }
+
+    const QString summary =
+        QStringLiteral("代价函数决定如何评价同一地面点在两幅影像局部窗口中的相似程度。当前选项：%1\n\n%2")
+            .arg(combo->currentText(), costFunctionToolTip(combo->currentText()));
+    combo->setToolTip(summary);
+}
+
+void installCostFunctionToolTips(QComboBox *combo)
+{
+    if (!combo)
+    {
+        return;
+    }
+
+    for (int i = 0; i < combo->count(); ++i)
+    {
+        combo->setItemData(i, costFunctionToolTip(combo->itemText(i)), Qt::ToolTipRole);
+    }
+    updateCostFunctionToolTip(combo);
+}
+
+} // namespace
+
 DepthMapEstimateDialog::DepthMapEstimateDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -36,6 +90,7 @@ DepthMapEstimateDialog::DepthMapEstimateDialog(QWidget *parent)
     m_estimateLabel = nullptr; // 占位，不再显示"预计: -"
     form.buttonBox->button(QDialogButtonBox::Ok)->setText(tr("开始估计"));
     m_atResultCombo->setItemData(0, -1);
+    installCostFunctionToolTips(m_costFuncCombo);
 
     connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &DepthMapEstimateDialog::onPresetChanged);
@@ -52,7 +107,11 @@ DepthMapEstimateDialog::DepthMapEstimateDialog(QWidget *parent)
     connect(m_resScaleSpin,   QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
     connect(m_atResultCombo,  QOverload<int>::of(&QComboBox::currentIndexChanged),  this, changed);
     connect(m_iterationsSpin, QOverload<int>::of(&QSpinBox::valueChanged),          this, changed);
-    connect(m_costFuncCombo,  QOverload<int>::of(&QComboBox::currentIndexChanged),  this, changed);
+    connect(m_costFuncCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this, changed]()
+    {
+        updateCostFunctionToolTip(m_costFuncCombo);
+        changed();
+    });
     connect(m_propagCombo,    QOverload<int>::of(&QComboBox::currentIndexChanged),  this, changed);
     connect(m_patchSizeSpin,  QOverload<int>::of(&QSpinBox::valueChanged),          this, changed);
     connect(m_minViewsSpin,   QOverload<int>::of(&QSpinBox::valueChanged),          this, changed);

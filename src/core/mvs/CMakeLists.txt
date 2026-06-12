@@ -35,6 +35,7 @@ set(MVS_CXX_SOURCES
 
 set(MVS_HEADERS
     MvsTypes.h
+    MvsViewSelection.h
     PatchMatchCUDA.h
     DepthMapFusion.h
     DepthFrameUtils.h

@@ -41,13 +41,13 @@
       <widget class="QTabWidget" name="leftTabs">
        <property name="minimumSize">
         <size>
-         <width>260</width>
+         <width>220</width>
          <height>0</height>
         </size>
        </property>
        <property name="maximumSize">
         <size>
-         <width>520</width>
+         <width>440</width>
          <height>16777215</height>
         </size>
        </property>
@@ -142,6 +142,7 @@
       <string>稀疏重建</string>
      </property>
      <addaction name="actionDetectFeatures"/>
+     <addaction name="actionVocabularyOverlap"/>
      <addaction name="actionMatchFeatures"/>
      <addaction name="separator"/>
      <addaction name="actionBuildObsNetwork"/>
@@ -216,12 +217,12 @@
     <bool>false</bool>
    </property>
    <property name="toolButtonStyle">
-    <enum>Qt::ToolButtonTextUnderIcon</enum>
+    <enum>Qt::ToolButtonTextBesideIcon</enum>
    </property>
    <property name="iconSize">
     <size>
-     <width>24</width>
-     <height>24</height>
+     <width>18</width>
+     <height>18</height>
     </size>
    </property>
    <attribute name="toolBarArea">
@@ -231,6 +232,14 @@
     <bool>false</bool>
    </attribute>
    <addaction name="actionSaveProject"/>
+   <addaction name="separator"/>
+   <addaction name="actionAddPhoto"/>
+   <addaction name="actionAddFolder"/>
+   <addaction name="separator"/>
+   <addaction name="actionThreeDReconstruction"/>
+   <addaction name="actionCreateDEM"/>
+   <addaction name="actionGenerateOrtho"/>
+   <addaction name="separator"/>
    <addaction name="actionManualPointCloudPrune"/>
   </widget>
   <widget class="QDockWidget" name="logDock">
@@ -258,6 +267,9 @@
   <action name="actionSaveProject">
    <property name="text">
     <string>保存项目</string>
+   </property>
+   <property name="toolTip">
+    <string>保存当前项目元数据和处理结果索引</string>
    </property>
   </action>
   <action name="actionExportMatchedPairs">
@@ -330,32 +342,52 @@
   </action>
   <action name="actionAddPhoto">
    <property name="text">
-    <string>添加 照片</string>
+    <string>添加照片</string>
+   </property>
+   <property name="toolTip">
+    <string>向当前项目添加单张或多张影像</string>
    </property>
   </action>
   <action name="actionAddFolder">
    <property name="text">
-    <string>添加 文件夹</string>
+    <string>添加文件夹</string>
+   </property>
+   <property name="toolTip">
+    <string>从文件夹批量导入影像</string>
    </property>
   </action>
   <action name="actionThreeDReconstruction">
    <property name="text">
     <string>三维重建</string>
    </property>
+   <property name="toolTip">
+    <string>执行从特征、匹配、空三到模型生成的一键重建流程</string>
+   </property>
   </action>
   <action name="actionCreateDEM">
    <property name="text">
     <string>创建 DEM</string>
    </property>
+   <property name="toolTip">
+    <string>从当前重建结果生成数字高程模型</string>
+   </property>
   </action>
   <action name="actionGenerateOrtho">
    <property name="text">
-    <string>生成 正射影像</string>
+    <string>生成正射影像</string>
+   </property>
+   <property name="toolTip">
+    <string>基于 DEM 和影像生成正射影像产品</string>
    </property>
   </action>
   <action name="actionDetectFeatures">
    <property name="text">
     <string>特征点提取</string>
+   </property>
+  </action>
+  <action name="actionVocabularyOverlap">
+   <property name="text">
+    <string>获取重叠对...</string>
    </property>
   </action>
   <action name="actionMatchFeatures">
@@ -441,6 +473,9 @@
   <action name="actionManualPointCloudPrune">
    <property name="text">
     <string>手动点云剔除</string>
+   </property>
+   <property name="toolTip">
+    <string>打开点云交互剔除工具</string>
    </property>
   </action>
   <action name="actionViewMatches">

@@ -470,6 +470,11 @@ static double computeMedianRms(const std::vector<BARefinedPoint> &pts)
     return (vals.size() % 2 == 0) ? 0.5 * (vals[m - 1] + vals[m]) : vals[m];
 }
 
+static bool isCancelled(const BAOptions &options)
+{
+    return options.cancelFlag && options.cancelFlag->load(std::memory_order_relaxed);
+}
+
 BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                                       const std::vector<BATrack> &tracks,
                                       const BAOptions &options)
@@ -481,6 +486,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     result.points.resize(tracks.size());
 
     if (cameras.empty() || tracks.empty()) return result;
+    if (isCancelled(options)) return result;
 
     // 配置 OpenMP 线程数
 #ifdef _OPENMP
@@ -494,22 +500,33 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     // 加载初始点坐标并计算优化前重投影误差，用于后续对比
 #pragma omp parallel for schedule(dynamic, 32)
     for (int i = 0; i < numTracks; ++i) {
+        if (isCancelled(options)) continue;
         result.points[static_cast<size_t>(i)].point  = tracks[static_cast<size_t>(i)].initialPoint;
         result.points[static_cast<size_t>(i)].valid  = vec3::isFinite(tracks[static_cast<size_t>(i)].initialPoint);
         result.points[static_cast<size_t>(i)].rmsBefore = computeTrackRms(
             result.refinedCameras, tracks[static_cast<size_t>(i)],
             tracks[static_cast<size_t>(i)].initialPoint);
     }
+    if (isCancelled(options)) {
+        Logger::instance()->info("[BA] 已请求取消，跳过光束法平差优化");
+        return result;
+    }
 
     // 外层交替优化：先点后相机，重复迭代直到达到最大次数或收敛
     double prevTotalCost = std::numeric_limits<double>::max();
+    const int maxOuterIterations = std::max(1, options.maxIterations);
 
-    for (int outer = 0; outer < std::max(1, options.maxIterations); ++outer) {
+    for (int outer = 0; outer < maxOuterIterations; ++outer) {
+        if (isCancelled(options)) {
+            Logger::instance()->info("[BA] 已请求取消，终止外层迭代");
+            break;
+        }
 
         // 阶段一：固定相机，并行优化每条轨迹的三维点坐标
         // 每个轨迹独立写入 result.points[i]，无读写竞争
 #pragma omp parallel for schedule(dynamic, 16)
         for (int i = 0; i < numTracks; ++i) {
+            if (isCancelled(options)) continue;
             const size_t si = static_cast<size_t>(i);
             if (!result.points[si].valid) continue;   // 离群点跳过
             BARefinedPoint p = optimizeOnePoint(result.refinedCameras, tracks[si], options);
@@ -521,6 +538,10 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             }
             result.points[si] = p;
         }
+        if (isCancelled(options)) {
+            Logger::instance()->info("[BA] 已请求取消，点优化阶段后终止");
+            break;
+        }
 
         // 阶段二：固定三维点，并行优化每台相机的 6-DOF 位姿
         // 每个相机独立写入 result.refinedCameras[ci]，无读写竞争
@@ -528,6 +549,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             int refinedCnt = 0;
 #pragma omp parallel for schedule(static) reduction(+:refinedCnt)
             for (int ci = 0; ci < numCameras; ++ci) {
+                if (isCancelled(options)) continue;
                 if (isCameraFixed(ci, options)) continue;   // gauge 固定
                 if (optimizeOneCamera(&result.refinedCameras[static_cast<size_t>(ci)],
                                       ci, tracks, result.points, options)) {
@@ -535,6 +557,10 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                 }
             }
             result.refinedCameraCount = refinedCnt;
+        }
+        if (isCancelled(options)) {
+            Logger::instance()->info("[BA] 已请求取消，相机优化阶段后终止");
+            break;
         }
 
         // 阶段三（可选）：离群点过滤——每轮结束后根据 rmsAfter 过滤高误差点
@@ -549,6 +575,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
 #pragma omp parallel for schedule(static)
             for (int i = 0; i < numTracks; ++i) {
+                if (isCancelled(options)) continue;
                 auto &p = result.points[static_cast<size_t>(i)];
                 if (!p.valid) continue;
                 if (std::isfinite(p.rmsAfter) && p.rmsAfter > adaptThresh) {
@@ -573,7 +600,13 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
                 ? std::fabs(prevTotalCost - avgCost) / prevTotalCost : 1.0;
 
             Logger::instance()->infof("[BA] iter %d/%d: avgRMS=%.6f, relChange=%.6f, validPts=%d", outer + 1,
-                                      options.maxIterations, avgCost, relChange, costCnt);
+                                      maxOuterIterations, avgCost, relChange, costCnt);
+
+            if (options.progressCallback &&
+                !options.progressCallback(outer + 1, maxOuterIterations, avgCost, costCnt)) {
+                Logger::instance()->info("[BA] 进度回调请求终止光束法平差");
+                break;
+            }
 
             if (outer >= 2 && relChange < 1e-4) {
                 Logger::instance()->infof("[BA] 收敛: relChange=%.2e < 1e-4, 终止", relChange);

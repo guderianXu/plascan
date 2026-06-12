@@ -24,9 +24,44 @@
 #include <QToolButton>
 #include <QMessageBox>
 #include <QSignalBlocker>
+#include <QtGlobal>
 
 namespace
 {
+
+constexpr int kDefaultGrayscaleMinPx = 5;
+constexpr int kDefaultGrayscaleMaxPx = 255;
+
+double grayscalePixelToNormalized(int value)
+{
+    return static_cast<double>(qBound(0, value, 255)) / 255.0;
+}
+
+int normalizedGrayscaleToPixel(double value)
+{
+    if (value > 1.0)
+    {
+        return qBound(0, qRound(value), 255);
+    }
+    return qBound(0, qRound(value * 255.0), 255);
+}
+
+int grayscalePixelSetting(const QJsonObject &settings,
+                          const QString &pixelKey,
+                          const QString &normalizedKey,
+                          int fallback)
+{
+    if (settings.contains(pixelKey))
+    {
+        return qBound(0, settings.value(pixelKey).toInt(fallback), 255);
+    }
+    if (settings.contains(normalizedKey))
+    {
+        return normalizedGrayscaleToPixel(
+            settings.value(normalizedKey).toDouble(grayscalePixelToNormalized(fallback)));
+    }
+    return fallback;
+}
 
 QString findModelFile(const QString &modelName)
 {
@@ -68,9 +103,12 @@ QStringList modelCandidates(const QString &algorithm, bool useCuda)
         QStringList candidates;
         if (useCuda)
         {
-            candidates << QStringLiteral("superpoint_extractor_cuda.pt");
+            candidates << QStringLiteral("superpoint_extractor_cuda.torchscript")
+                       << QStringLiteral("superpoint_extractor_cuda.pt");
         }
-        candidates << QStringLiteral("superpoint_extractor_cpu.pt")
+        candidates << QStringLiteral("superpoint_extractor_cpu.torchscript")
+                   << QStringLiteral("superpoint_extractor_cpu.pt")
+                   << QStringLiteral("superpoint_extractor.torchscript")
                    << QStringLiteral("superpoint_extractor.pt");
         return candidates;
     }
@@ -80,9 +118,16 @@ QStringList modelCandidates(const QString &algorithm, bool useCuda)
         QStringList candidates;
         if (useCuda)
         {
-            candidates << QStringLiteral("disk_extractor_cuda_1200.pt");
+            candidates << QStringLiteral("disk_extractor_cuda_8192.torchscript")
+                       << QStringLiteral("disk_extractor_cuda_8192.pt")
+                       << QStringLiteral("disk_extractor_cuda_1200.torchscript")
+                       << QStringLiteral("disk_extractor_cuda_1200.pt");
         }
-        candidates << QStringLiteral("disk_extractor_cpu_1200.pt")
+        candidates << QStringLiteral("disk_extractor_cpu_8192.torchscript")
+                   << QStringLiteral("disk_extractor_cpu_8192.pt")
+                   << QStringLiteral("disk_extractor_cpu_1200.torchscript")
+                   << QStringLiteral("disk_extractor_cpu_1200.pt")
+                   << QStringLiteral("disk_extractor.torchscript")
                    << QStringLiteral("disk_extractor.pt");
         return candidates;
     }
@@ -92,9 +137,12 @@ QStringList modelCandidates(const QString &algorithm, bool useCuda)
         QStringList candidates;
         if (useCuda)
         {
-            candidates << QStringLiteral("aliked_extractor_cuda_480.pt");
+            candidates << QStringLiteral("aliked_extractor_cuda_480.torchscript")
+                       << QStringLiteral("aliked_extractor_cuda_480.pt");
         }
-        candidates << QStringLiteral("aliked_extractor_cpu_480.pt")
+        candidates << QStringLiteral("aliked_extractor_cpu_480.torchscript")
+                   << QStringLiteral("aliked_extractor_cpu_480.pt")
+                   << QStringLiteral("aliked_extractor.torchscript")
                    << QStringLiteral("aliked_extractor.pt");
         return candidates;
     }
@@ -124,6 +172,11 @@ bool isManagedModelPath(const QString &path)
         || fileName.startsWith(QStringLiteral("aliked_extractor"));
 }
 
+bool deviceTextRequestsCuda(const QString &deviceText)
+{
+    return deviceText.compare(QStringLiteral("CUDA"), Qt::CaseInsensitive) == 0;
+}
+
 void setFormRowVisible(QFormLayout *form, QWidget *field, bool visible)
 {
     if (!form || !field)
@@ -136,6 +189,17 @@ void setFormRowVisible(QFormLayout *form, QWidget *field, bool visible)
         label->setVisible(visible);
     }
     field->setVisible(visible);
+}
+
+void setComboDataOrFirst(QComboBox *combo, const QString &data)
+{
+    if (!combo)
+    {
+        return;
+    }
+
+    const int index = combo->findData(data);
+    combo->setCurrentIndex(index >= 0 ? index : 0);
 }
 
 } // namespace
@@ -208,11 +272,12 @@ void FeatureExtractionDialog::setupUi()
     m_algorithmCombo->addItem("ALIKED", "aliked");
     m_algorithmCombo->addItem("ORB", "orb");
     m_algorithmCombo->addItem("SIFT", "sift");
-    m_algorithmCombo->setCurrentIndex(0);
+    setComboDataOrFirst(m_algorithmCombo, QStringLiteral("disk"));
 
     m_deviceCombo->clear();
     m_deviceCombo->addItems(QStringList() << "CPU" << "CUDA");
     m_deviceCombo->setCurrentText("CUDA");
+    setFormRowVisible(ui.systemForm, m_pythonPathEdit, false);
 
     connect(ui.advancedToggle, &QToolButton::toggled, this, [this, advancedToggle = ui.advancedToggle](bool checked)
     {
@@ -261,12 +326,16 @@ void FeatureExtractionDialog::setupConnections()
             this, &FeatureExtractionDialog::emitSettingsNow);
     connect(m_removeBordersSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_grayscaleMinSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(m_grayscaleMinSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_grayscaleMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(m_grayscaleMaxSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
     connect(m_useCudaChk, &QCheckBox::toggled, this, [this]()
     {
+        {
+            QSignalBlocker blocker(m_deviceCombo);
+            m_deviceCombo->setCurrentText(m_useCudaChk->isChecked() ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+        }
         updateModelPathForCurrentAlgorithm();
         emitSettingsNow();
     });
@@ -285,8 +354,15 @@ void FeatureExtractionDialog::setupConnections()
     connect(m_neighborhoodThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &FeatureExtractionDialog::emitSettingsNow);
 
     // 系统参数
-    connect(m_deviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(m_deviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]()
+    {
+        {
+            QSignalBlocker blocker(m_useCudaChk);
+            m_useCudaChk->setChecked(deviceTextRequestsCuda(m_deviceCombo->currentText()));
+        }
+        updateModelPathForCurrentAlgorithm();
+        emitSettingsNow();
+    });
     connect(m_allowFallbackChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
     connect(m_pythonPathEdit, &QLineEdit::textChanged, this, &FeatureExtractionDialog::emitSettingsNow);
 
@@ -403,13 +479,13 @@ void FeatureExtractionDialog::onCancel()
 void FeatureExtractionDialog::onResetDefaults()
 {
     // 恢复所有参数到默认值
-    m_algorithmCombo->setCurrentIndex(0);
+    setComboDataOrFirst(m_algorithmCombo, QStringLiteral("disk"));
     m_nmsRadiusSpin->setValue(3);
     m_detectionThresholdSpin->setValue(0.003);
     m_maxKeypointsSpin->setValue(-1);
     m_removeBordersSpin->setValue(4);
-    m_grayscaleMinSpin->setValue(0.0);
-    m_grayscaleMaxSpin->setValue(1.0);
+    m_grayscaleMinSpin->setValue(kDefaultGrayscaleMinPx);
+    m_grayscaleMaxSpin->setValue(kDefaultGrayscaleMaxPx);
 
     m_normalizeInputChk->setChecked(true);
     m_descriptorDimSpin->setValue(256);
@@ -443,23 +519,24 @@ void FeatureExtractionDialog::onAlgorithmChanged(int)
     setFormRowVisible(m_basicForm, m_nmsRadiusSpin, isSP);
     setFormRowVisible(m_basicForm, m_detectionThresholdSpin, isDL);
     setFormRowVisible(m_basicForm, m_removeBordersSpin, isSP);
-    setFormRowVisible(m_basicForm, m_grayRangeWidget, isSP);
 
     if (m_advancedHintLabel)
     {
         const bool showHint = isPythonDL || isTraditional;
         if (isPythonDL)
         {
-            m_advancedHintLabel->setText(tr("DISK/ALIKED 的可调提取参数集中在基础参数：检测阈值、最大关键点数；"
-                                            "模型路径、设备和 Python 环境在系统参数中设置。"));
+            m_advancedHintLabel->setText(tr("DISK/ALIKED 的检测阈值、最大关键点数在基础参数中设置；"
+                                            "灰度阈值在高级参数中设置；"
+                                            "模型路径和设备会传给 C++ TorchScript 提取器。"));
         }
         else if (isTraditional)
         {
-            m_advancedHintLabel->setText(tr("ORB/SIFT 使用 OpenCV 提取器，基础参数中的最大关键点数、边界移除和灰度过滤会生效。"));
+            m_advancedHintLabel->setText(tr("ORB/SIFT 使用 OpenCV 提取器，基础参数中的最大关键点数和高级参数中的灰度阈值会生效。"));
         }
         setFormRowVisible(m_advancedForm, m_advancedHintLabel, showHint);
     }
 
+    setFormRowVisible(m_advancedForm, m_grayRangeWidget, isDL || isTraditional);
     setFormRowVisible(m_advancedForm, m_normalizeInputChk, isSP);
     setFormRowVisible(m_advancedForm, m_descriptorDimSpin, isSP);
     setFormRowVisible(m_advancedForm, m_gridSizeSpin, isSP);
@@ -488,7 +565,7 @@ void FeatureExtractionDialog::updateModelPathForCurrentAlgorithm()
         return;
     }
 
-    const QString resolvedPath = defaultModelPath(algo, m_useCudaChk->isChecked());
+    const QString resolvedPath = defaultModelPath(algo, deviceTextRequestsCuda(m_deviceCombo->currentText()));
     const QString currentPath = m_modelPathEdit->text().trimmed();
     const bool shouldReplace = currentPath.isEmpty() || isManagedModelPath(currentPath);
 
@@ -512,9 +589,8 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
 {
     if (settings.contains("feature_algorithm"))
     {
-        const QString featureAlgorithm = settings["feature_algorithm"].toString("superpoint").trimmed().toLower();
-        const int index = m_algorithmCombo->findData(featureAlgorithm);
-        m_algorithmCombo->setCurrentIndex(index >= 0 ? index : 0);
+        const QString featureAlgorithm = settings["feature_algorithm"].toString("disk").trimmed().toLower();
+        setComboDataOrFirst(m_algorithmCombo, featureAlgorithm);
     }
 
     if (settings.contains("model_path"))
@@ -525,8 +601,6 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
             m_modelPathEdit->setText(modelPath);
         }
     }
-    if (settings.contains("use_cuda"))
-        m_useCudaChk->setChecked(settings["use_cuda"].toBool());
     if (settings.contains("cuda_device"))
         m_cudaDeviceSpin->setValue(settings["cuda_device"].toInt());
     if (settings.contains("python_executable"))
@@ -541,10 +615,14 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
         m_maxKeypointsSpin->setValue(settings["max_num_keypoints"].toInt(-1));
     if (settings.contains("remove_borders"))
         m_removeBordersSpin->setValue(settings["remove_borders"].toInt(4));
-    if (settings.contains("grayscale_min"))
-        m_grayscaleMinSpin->setValue(settings["grayscale_min"].toDouble(0.0));
-    if (settings.contains("grayscale_max"))
-        m_grayscaleMaxSpin->setValue(settings["grayscale_max"].toDouble(1.0));
+    m_grayscaleMinSpin->setValue(grayscalePixelSetting(settings,
+                                                       QStringLiteral("grayscale_min_px"),
+                                                       QStringLiteral("grayscale_min"),
+                                                       kDefaultGrayscaleMinPx));
+    m_grayscaleMaxSpin->setValue(grayscalePixelSetting(settings,
+                                                       QStringLiteral("grayscale_max_px"),
+                                                       QStringLiteral("grayscale_max"),
+                                                       kDefaultGrayscaleMaxPx));
 
     // 高级参数
     if (settings.contains("normalize_input"))
@@ -562,7 +640,17 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
 
     // 系统参数
     if (settings.contains("device"))
-        m_deviceCombo->setCurrentText(settings["device"].toString("CUDA"));  // 默认CUDA
+    {
+        const bool useCuda = deviceTextRequestsCuda(settings["device"].toString("CUDA").trimmed());
+        m_deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+        m_useCudaChk->setChecked(useCuda);
+    }
+    else if (settings.contains("use_cuda"))
+    {
+        const bool useCuda = settings["use_cuda"].toBool();
+        m_useCudaChk->setChecked(useCuda);
+        m_deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+    }
     if (settings.contains("allow_device_fallback"))
         m_allowFallbackChk->setChecked(settings["allow_device_fallback"].toBool(true));
 
@@ -611,7 +699,7 @@ QJsonObject FeatureExtractionDialog::collectSettings() const
 
     settings["feature_algorithm"] = m_algorithmCombo->currentData().toString();
     settings["model_path"]  = m_modelPathEdit->text();
-    settings["use_cuda"]    = m_useCudaChk->isChecked();
+    settings["use_cuda"]    = deviceTextRequestsCuda(m_deviceCombo->currentText());
     settings["cuda_device"] = m_cudaDeviceSpin->value();
 
     // 基础参数
@@ -619,8 +707,12 @@ QJsonObject FeatureExtractionDialog::collectSettings() const
     settings["detection_threshold"] = m_detectionThresholdSpin->value();
     settings["max_num_keypoints"] = m_maxKeypointsSpin->value();
     settings["remove_borders"] = m_removeBordersSpin->value();
-    settings["grayscale_min"] = m_grayscaleMinSpin->value();
-    settings["grayscale_max"] = m_grayscaleMaxSpin->value();
+    const int grayscaleMinPx = qBound(0, qMin(m_grayscaleMinSpin->value(), m_grayscaleMaxSpin->value()), 255);
+    const int grayscaleMaxPx = qBound(0, qMax(m_grayscaleMinSpin->value(), m_grayscaleMaxSpin->value()), 255);
+    settings["grayscale_min_px"] = grayscaleMinPx;
+    settings["grayscale_max_px"] = grayscaleMaxPx;
+    settings["grayscale_min"] = grayscalePixelToNormalized(grayscaleMinPx);
+    settings["grayscale_max"] = grayscalePixelToNormalized(grayscaleMaxPx);
 
     // 高级参数
     settings["normalize_input"] = m_normalizeInputChk->isChecked();

@@ -36,6 +36,7 @@ private:
     QLabel *m_statusLabel = nullptr;
     QComboBox *m_qualityCombo = nullptr;
     QComboBox *m_deviceCombo = nullptr;
+    QSpinBox *m_featureGrayMinSpin = nullptr;
     QSpinBox *m_threadsSpin = nullptr;
     QLineEdit *m_outputDirEdit = nullptr;
     QCheckBox *m_exportObjCheck = nullptr;

@@ -11,6 +11,7 @@
 
 #include <gtest/gtest.h>
 #include "MvsTypes.h"
+#include "MvsViewSelection.h"
 #include "Camera.h"
 
 #include <cmath>
@@ -88,6 +89,102 @@ TEST(PatchMatchConfigTest, GeometricConsistencyEnabled)
         << "Geometric consistency should be enabled by default";
     EXPECT_FLOAT_EQ(cfg.geomConsistencyMaxErr, 1.0f)
         << "Max geometric consistency error should be 1.0 pixel";
+}
+
+// ─── MVS 源视图 / 稀疏 hint 可见性测试 ───────────────────────────
+
+TEST(MvsSourceViewSelectionTest, SelectsSparseOverlapInsteadOfNearestIndex)
+{
+    const double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};
+    const double badLeft[3] = {-100, 0, 0};
+    const double badRight[3] = {100, 0, 0};
+    const double refCenter[3] = {0, 0, 0};
+    const double goodCenter[3] = {0.1, 0, 0};
+
+    std::vector<CameraView> views(6);
+    views[0].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, badLeft, false);
+    views[1].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, badLeft, false);
+    views[2].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, refCenter, false);
+    views[3].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, badRight, false);
+    views[4].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, badRight, false);
+    views[5].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, goodCenter, false);
+    for (auto &view : views)
+    {
+        view.imageWidth = 100;
+        view.imageHeight = 100;
+    }
+
+    SparseCloud sparse;
+    sparse.points = {{
+        {0.00f, 0.00f, 10.0f},
+        {0.02f, 0.01f, 10.0f},
+        {-0.01f, 0.03f, 10.0f}
+    }};
+
+    const std::vector<int> selected = selectMvsSourceViewIndices(views, sparse, 2, 1);
+
+    ASSERT_EQ(selected.size(), 1u);
+    EXPECT_EQ(selected.front(), 5);
+}
+
+TEST(MvsSourceViewSelectionTest, DoesNotPadScoredSourcesWithZeroOverlapNeighbors)
+{
+    const double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};
+    const double badLeft[3] = {-100, 0, 0};
+    const double badRight[3] = {100, 0, 0};
+    const double refCenter[3] = {0, 0, 0};
+    const double goodCenter[3] = {0.1, 0, 0};
+
+    std::vector<CameraView> views(4);
+    views[0].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, badLeft, false);
+    views[1].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, refCenter, false);
+    views[2].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, badRight, false);
+    views[3].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, goodCenter, false);
+    for (auto &view : views)
+    {
+        view.imageWidth = 100;
+        view.imageHeight = 100;
+    }
+
+    SparseCloud sparse;
+    sparse.points = {{
+        {0.00f, 0.00f, 10.0f},
+        {0.02f, 0.01f, 10.0f}
+    }};
+
+    const std::vector<int> selected = selectMvsSourceViewIndices(views, sparse, 1, 3);
+
+    ASSERT_EQ(selected.size(), 1u);
+    EXPECT_EQ(selected.front(), 3);
+}
+
+TEST(MvsSparseHintVisibilityTest, RequiresReferenceAndSelectedSourceVisibility)
+{
+    const double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};
+    const double refCenter[3] = {0, 0, 0};
+    const double sourceCenter[3] = {0.1, 0, 0};
+
+    std::vector<CameraView> views(2);
+    views[0].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, refCenter, false);
+    views[1].camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1, R_wc, sourceCenter, false);
+    for (auto &view : views)
+    {
+        view.imageWidth = 100;
+        view.imageHeight = 100;
+    }
+
+    SparseCloud sparse;
+    sparse.points = {{
+        {0.00f, 0.00f, 10.0f},  // ref/source 都可见
+        {-0.49f, 0.00f, 10.0f}, // ref 可见，source 中落到左边界外
+        {0.00f, 1.00f, 10.0f}   // ref/source 都不可见
+    }};
+
+    const std::vector<size_t> visible =
+        collectMvsVisibleSparsePointIndices(views, sparse, 0, std::vector<int>{1}, 1);
+
+    ASSERT_EQ(visible.size(), 1u);
+    EXPECT_EQ(visible.front(), 0u);
 }
 
 // ─── FusionConfig 参数验证 ──────────────────────────────────────

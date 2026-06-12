@@ -59,6 +59,7 @@ set(GUI_SOURCES
   widgets/ImageViewWidget.ui
   widgets/MatchLineOverlay.cpp
   widgets/DisparityHeatmapOverlay.cpp
+  widgets/TaskStatusWidget.cpp
   widgets/DualImageViewer.cpp
   widgets/DualImageViewer.ui
   widgets/ObservationNetworkView.cpp
@@ -73,6 +74,8 @@ set(GUI_SOURCES
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
   dialogs/FeatureExtractionDialog.cpp
+  dialogs/VocabularyOverlapDialog.cpp
+  dialogs/VocabularyOverlapDialog.ui
   dialogs/SuperPointVisualizationDialog.cpp
   dialogs/FeatureMatchingDialog.cpp
   dialogs/ForwardIntersectionCheckDialog.cpp
@@ -157,6 +160,7 @@ set(GUI_HEADERS
   widgets/ImageViewWidget.h
   widgets/MatchLineOverlay.h
   widgets/DisparityHeatmapOverlay.h
+  widgets/TaskStatusWidget.h
   widgets/DualImageViewer.h
   widgets/ObservationNetworkView.h
   widgets/WorkspaceCenterWidget.h
@@ -169,6 +173,7 @@ set(GUI_HEADERS
   dialogs/CreateDemDialog.h
   dialogs/MapProjectDialog.h
   dialogs/FeatureExtractionDialog.h
+  dialogs/VocabularyOverlapDialog.h
   dialogs/SuperPointVisualizationDialog.h
   dialogs/FeatureMatchingDialog.h
   dialogs/ForwardIntersectionCheckDialog.h
@@ -235,6 +240,8 @@ set(GUI_DIALOG_SOURCES
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
   dialogs/FeatureExtractionDialog.cpp
+  dialogs/VocabularyOverlapDialog.cpp
+  dialogs/VocabularyOverlapDialog.ui
   dialogs/SuperPointVisualizationDialog.cpp
   dialogs/FeatureMatchingDialog.cpp
   dialogs/ForwardIntersectionCheckDialog.cpp

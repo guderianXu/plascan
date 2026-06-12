@@ -48,6 +48,8 @@ std::unique_ptr<IExtractor> createExtractor(const std::string &algo,
         spCfg.detection_threshold = cfg.detThreshold;
         spCfg.nms_radius          = cfg.nmsRadius;
         spCfg.remove_borders      = cfg.removeBorder;
+        spCfg.grayscale_min       = cfg.grayscaleMin;
+        spCfg.grayscale_max       = cfg.grayscaleMax;
         spCfg.allow_device_fallback = true;
 
         return std::make_unique<TraditionalAdapter>(norm, spCfg);
@@ -61,6 +63,8 @@ std::unique_ptr<IExtractor> createExtractor(const std::string &algo,
         spCfg.detection_threshold = cfg.detThreshold;
         spCfg.nms_radius          = cfg.nmsRadius;
         spCfg.remove_borders      = cfg.removeBorder;
+        spCfg.grayscale_min       = cfg.grayscaleMin;
+        spCfg.grayscale_max       = cfg.grayscaleMax;
         spCfg.allow_device_fallback = true;
 
         auto sp = std::make_unique<SuperPoint>(cfg.modelPath, spCfg);
@@ -72,7 +76,10 @@ std::unique_ptr<IExtractor> createExtractor(const std::string &algo,
         DiskConfig dcfg;
         dcfg.modelPath    = cfg.modelPath;
         dcfg.maxKeypoints = cfg.maxKeypoints;
+        dcfg.scoreThreshold = cfg.detThreshold;
         dcfg.maxImageDim  = cfg.maxImageDim;
+        dcfg.grayscaleMin = cfg.grayscaleMin;
+        dcfg.grayscaleMax = cfg.grayscaleMax;
         dcfg.useCuda      = cfg.useCuda;
         dcfg.cudaDevice   = cfg.cudaDevice;
         return std::make_unique<DiskExtractor>(dcfg);
@@ -83,7 +90,10 @@ std::unique_ptr<IExtractor> createExtractor(const std::string &algo,
         AlikedConfig acfg;
         acfg.modelPath    = cfg.modelPath;
         acfg.maxKeypoints = cfg.maxKeypoints;
+        acfg.scoreThreshold = cfg.detThreshold;
         acfg.maxImageDim  = cfg.maxImageDim;
+        acfg.grayscaleMin = cfg.grayscaleMin;
+        acfg.grayscaleMax = cfg.grayscaleMax;
         acfg.useCuda      = cfg.useCuda;
         acfg.cudaDevice   = cfg.cudaDevice;
         return std::make_unique<AlikedExtractor>(acfg);

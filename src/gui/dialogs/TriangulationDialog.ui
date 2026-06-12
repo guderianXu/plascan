@@ -21,6 +21,13 @@
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
    <item>
+    <widget class="QScrollArea" name="parameterScrollArea">
+     <property name="widgetResizable">
+      <bool>true</bool>
+     </property>
+     <widget class="QWidget" name="parameterScrollWidget">
+      <layout class="QVBoxLayout" name="parameterLayout">
+   <item>
     <widget class="QGroupBox" name="presetGroup">
      <property name="title">
       <string>预设方案</string>
@@ -474,6 +481,10 @@
        </layout>
       </item>
      </layout>
+    </widget>
+   </item>
+      </layout>
+     </widget>
     </widget>
    </item>
    <item>

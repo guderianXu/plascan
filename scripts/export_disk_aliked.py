@@ -8,13 +8,17 @@ Fixes:
 
 C++ interface: forward(image [1,1,H,W], orig_wh [W,H]) -> (kpts [N,2], descs [N,D], scores [N])
 """
+import os
+import argparse
 import torch, torch.nn as nn, torch.nn.functional as F
 from pathlib import Path
 
-OUT = Path("/home/guderian/code/plascan/resources/models")
+OUT = Path(os.environ.get(
+    "PLASCAN_MODEL_OUT",
+    Path(__file__).resolve().parents[1] / "resources" / "models",
+))
 
 # ── Monkey-patch 1: Attention (bitwise_xor bug) ──
-from lightglue.lightglue import Attention
 def _patched_attn(self, q, k, v, mask=None):
     if self.has_sdp:
         args = [x.contiguous() for x in [q, k, v]]
@@ -26,12 +30,8 @@ def _patched_attn(self, q, k, v, mask=None):
         sim = sim.masked_fill(torch.logical_not(mask), -float("inf"))
     attn = F.softmax(sim, -1)
     return torch.einsum("...ij,...jd->...id", attn, v)
-Attention.forward = _patched_attn
 
 # ── Monkey-patch 2: DeformableConv2d with pure-PyTorch DCN (avoids torchvision) ──
-from lightglue.aliked import DeformableConv2d
-_orig_deform_forward = DeformableConv2d.forward
-
 def _pure_deform_conv2d(x, offset, weight, bias, stride=1, padding=1):
     """Trace-safe deformable conv2d using grid_sample (no torchvision dependency)."""
     B, C_in, H, W = x.shape
@@ -81,7 +81,12 @@ def _patched_deform_forward(self, x):
     return _pure_deform_conv2d(x, offset, self.regular_conv.weight,
                                self.regular_conv.bias, padding=self.padding)
 
-DeformableConv2d.forward = _patched_deform_forward
+def patch_lightglue_for_export():
+    from lightglue.lightglue import Attention
+    from lightglue.aliked import DeformableConv2d
+
+    Attention.forward = _patched_attn
+    DeformableConv2d.forward = _patched_deform_forward
 
 # ── DISK: bypass kornia heatmap_to_keypoints ──
 class DiskExtractorWrap(nn.Module):
@@ -106,16 +111,18 @@ class DiskExtractorWrap(nn.Module):
         nms_mask = (heatmap == pooled) & (heatmap > 0.0)
         scores_masked = heatmap * nms_mask.float()
         flat = scores_masked.reshape(1, -1)
-        W = heatmap.shape[2]
+        shape = torch._shape_as_tensor(heatmap)
+        W_index = shape[2]
         k = min(self.max_kpts, flat.shape[1])
         top_vals, top_idx = torch.topk(flat, k, dim=1)
-        top_y = (top_idx // W).float()
-        top_x = (top_idx % W).float()
+        top_y = torch.div(top_idx, W_index, rounding_mode="floor").float()
+        top_x = torch.remainder(top_idx, W_index).float()
         kpts = torch.stack([top_x, top_y], dim=-1)
-        H = heatmap.shape[1]
+        wh = shape[[2, 1]].to(device=top_x.device, dtype=top_x.dtype)
+        denom = torch.clamp(wh - 1.0, min=1.0)
         kpts_norm = torch.stack([
-            top_x / (float(W) - 1.0) * 2.0 - 1.0,
-            top_y / (float(H) - 1.0) * 2.0 - 1.0
+            top_x / denom[0] * 2.0 - 1.0,
+            top_y / denom[1] * 2.0 - 1.0
         ], dim=-1).unsqueeze(2)
         desc_sampled = F.grid_sample(descriptors, kpts_norm, mode='bilinear', align_corners=True)
         descs = F.normalize(desc_sampled.squeeze(-1).permute(0, 2, 1), p=2, dim=2)
@@ -125,6 +132,7 @@ class DiskExtractorWrap(nn.Module):
 class AlikedExtractorWrap(nn.Module):
     def __init__(self, max_kpts=2048):
         super().__init__()
+        patch_lightglue_for_export()
         from lightglue import ALIKED as _ALIKED
         self.ext = _ALIKED(max_num_keypoints=max_kpts).eval()
         self.ext.dkd.top_k = max_kpts
@@ -135,26 +143,108 @@ class AlikedExtractorWrap(nn.Module):
             image = image.repeat(1, 3, 1, 1)
         feature_map, score_map = self.ext.extract_dense_map(image)
         keypoints, kptscores, _ = self.ext.dkd(score_map)
-        _, _, h, w = image.shape
-        wh = torch.tensor([float(w) - 1.0, float(h) - 1.0], device=image.device)
+        shape = torch._shape_as_tensor(image).to(device=image.device, dtype=torch.float32)
+        wh = torch.stack([shape[3] - 1.0, shape[2] - 1.0])
         kpts = (torch.stack(keypoints) + 1.0) / 2.0 * wh[None, None, :]
         scores = torch.stack(kptscores)
         descriptors, _ = self.ext.desc_head(feature_map, keypoints)
         descs = F.normalize(torch.stack(descriptors), p=2, dim=2)
         return kpts, descs, scores
 
-# ── Export ──
-OUT.mkdir(parents=True, exist_ok=True)
-for name, cls, max_k in [("disk_extractor_cpu_1200", DiskExtractorWrap, 1200),
-                          ("aliked_extractor_cpu_480", AlikedExtractorWrap, 480)]:
-    print(f"Exporting {name}...")
-    model = cls(max_kpts=max_k)
-    dummy = torch.rand(1, 1, 480, 640)
-    dummy_wh = torch.tensor([640., 480.])
-    traced = torch.jit.trace(model, (dummy, dummy_wh), strict=False)
-    path = OUT / f"{name}.pt"
+
+def parse_args():
+    parser = argparse.ArgumentParser(
+        description="Export PlaScan DISK/ALIKED extractor TorchScript models."
+    )
+    parser.add_argument(
+        "--models",
+        choices=("disk", "aliked", "all"),
+        default="disk",
+        help="models to export; default exports the DISK 8192 main model",
+    )
+    parser.add_argument(
+        "--devices",
+        choices=("auto", "cpu", "cuda", "all"),
+        default="auto",
+        help="devices to trace; auto exports CPU and CUDA when CUDA is available",
+    )
+    parser.add_argument(
+        "--output-dir",
+        type=Path,
+        default=OUT,
+        help="output directory, defaults to PLASCAN_MODEL_OUT or resources/models",
+    )
+    parser.add_argument(
+        "--disk-max-kpts",
+        type=int,
+        default=8192,
+        help="maximum DISK keypoints to export into the main model",
+    )
+    parser.add_argument(
+        "--aliked-max-kpts",
+        type=int,
+        default=480,
+        help="maximum ALIKED keypoints when --models includes aliked",
+    )
+    return parser.parse_args()
+
+
+def selected_models(models):
+    if models == "all":
+        return ("disk", "aliked")
+    return (models,)
+
+
+def selected_devices(devices):
+    cuda_available = torch.cuda.is_available()
+    if devices == "cpu":
+        return ("cpu",)
+    if devices == "cuda":
+        if not cuda_available:
+            raise RuntimeError("CUDA was requested but torch.cuda.is_available() is false")
+        return ("cuda",)
+    if devices == "all":
+        if not cuda_available:
+            print("CUDA is not available; exporting CPU only")
+            return ("cpu",)
+        return ("cpu", "cuda")
+    if cuda_available:
+        return ("cpu", "cuda")
+    return ("cpu",)
+
+
+def export_model(name, cls, max_kpts, device, output_dir):
+    filename = f"{name}_{device}_{max_kpts}.torchscript"
+    path = output_dir / filename
+    print(f"Exporting {filename}...")
+    torch_device = torch.device(device)
+    model = cls(max_kpts=max_kpts).eval().to(torch_device)
+    dummy = torch.rand(1, 1, 480, 640, device=torch_device)
+    dummy_wh = torch.tensor([640., 480.], device=torch_device)
+    with torch.no_grad():
+        traced = torch.jit.trace(model, (dummy, dummy_wh), strict=False)
     traced.save(str(path))
-    # Also save cuda variant
-    traced.save(str(OUT / f"{name.replace('_cpu_', '_cuda_')}.pt"))
     print(f"  OK: {path}")
-print("Done")
+    return path
+
+
+def export_all(args=None):
+    args = args or parse_args()
+    output_dir = args.output_dir
+    output_dir.mkdir(parents=True, exist_ok=True)
+
+    specs = {
+        "disk": ("disk_extractor", DiskExtractorWrap, args.disk_max_kpts),
+        "aliked": ("aliked_extractor", AlikedExtractorWrap, args.aliked_max_kpts),
+    }
+    exported = []
+    for model_key in selected_models(args.models):
+        name, cls, max_kpts = specs[model_key]
+        for device in selected_devices(args.devices):
+            exported.append(export_model(name, cls, max_kpts, device, output_dir))
+    print("Done")
+    return exported
+
+
+if __name__ == "__main__":
+    export_all()

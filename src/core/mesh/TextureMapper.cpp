@@ -2,15 +2,19 @@
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/obj_io.h>
+#include <plapoint/io/ply_io.h>
 #include <plamatrix/dense/dense_matrix.h>
 
 #include <QDir>
+#include <QFileInfo>
 #include <QImage>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <cstdint>
+#include <fstream>
+#include <memory>
 #include <vector>
 
 namespace xjw::mesh
@@ -454,7 +458,17 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
         *result = TextureMappingResult();
     }
 
-    auto meshCloudPtr = plapoint::io::readObj<float>(meshPath);
+    const QString meshSuffix = QFileInfo(QString::fromStdString(meshPath)).suffix().toLower();
+    std::shared_ptr<PlaPointCloud> meshCloudPtr;
+    if (meshSuffix == QStringLiteral("ply"))
+    {
+        meshCloudPtr = plapoint::io::readPly<float>(meshPath);
+    }
+    else
+    {
+        meshCloudPtr = plapoint::io::readObj<float>(meshPath);
+    }
+
     if (!meshCloudPtr)
     {
         if (errorMsg)
@@ -498,6 +512,25 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
     const QString mtlPath = QDir(outputDir).filePath(QStringLiteral("textured_model.mtl"));
     meshCloudPtr->setMaterialLibraryFile(QStringLiteral("textured_model.mtl").toStdString());
     meshCloudPtr->setTextureImageFile(QStringLiteral("textures/model_texture.png").toStdString());
+
+    {
+        std::ofstream mtl(mtlPath.toStdString());
+        if (!mtl)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "无法写出 MTL 文件: " + mtlPath.toStdString();
+            }
+            return false;
+        }
+        mtl << "newmtl material0\n"
+            << "Ka 1.000000 1.000000 1.000000\n"
+            << "Kd 1.000000 1.000000 1.000000\n"
+            << "Ks 0.000000 0.000000 0.000000\n"
+            << "d 1.000000\n"
+            << "illum 2\n"
+            << "map_Kd textures/model_texture.png\n";
+    }
 
     plapoint::io::writeObj<float>(objPath.toStdString(), *meshCloudPtr);
 

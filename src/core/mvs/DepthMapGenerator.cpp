@@ -6,17 +6,20 @@
 #include "DepthMapGenerator.h"
 #include "DenseCloudBuilder.h"
 #include "EpipolarRectifier.h"
+#include "MvsViewSelection.h"
 #include "Logger.h"
 #include <QtConcurrent/QtConcurrent>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <cmath>
 #include <algorithm>
+#include <atomic>
 #include <cstdio>
 #include <thread>
 #include <mutex>
 #include <deque>
 #include <chrono>
+#include <sstream>
 
 namespace xjw
 {
@@ -41,6 +44,121 @@ bool writeCvMatStorage(const std::string &path, const cv::Mat &matrix, std::stri
     storage << "mat" << matrix;
     storage.release();
     return true;
+}
+
+template <typename Fn>
+void parallelForRows(int rowCount, int workerCount, Fn &&fn)
+{
+    if (rowCount <= 0)
+    {
+        return;
+    }
+    const int workers = std::clamp(std::max(1, workerCount), 1, rowCount);
+    if (workers == 1)
+    {
+        for (int row = 0; row < rowCount; ++row)
+        {
+            fn(row);
+        }
+        return;
+    }
+
+    std::atomic<int> nextRow{0};
+    std::vector<std::thread> threads;
+    threads.reserve(static_cast<size_t>(workers));
+    for (int worker = 0; worker < workers; ++worker)
+    {
+        threads.emplace_back([&]() {
+            for (;;)
+            {
+                const int row = nextRow.fetch_add(1);
+                if (row >= rowCount)
+                {
+                    break;
+                }
+                fn(row);
+            }
+        });
+    }
+    for (std::thread &thread : threads)
+    {
+        if (thread.joinable())
+        {
+            thread.join();
+        }
+    }
+}
+
+int clampPatchMatchIterations(int requested)
+{
+    return std::clamp(requested, 1, 64);
+}
+
+PatchMatchConfig makeCoarsePatchMatchConfig(const PatchMatchConfig &baseConfig, bool useRectified)
+{
+    PatchMatchConfig coarseConfig = baseConfig;
+    coarseConfig.downsampleFactor = std::max(baseConfig.downsampleFactor * 2, 4);
+    coarseConfig.numIterations = std::max(1, std::min(clampPatchMatchIterations(baseConfig.numIterations),
+                                                      std::max(1, baseConfig.numIterations / 2)));
+    coarseConfig.confidenceThresh = std::min(baseConfig.confidenceThresh, 0.08f);
+    coarseConfig.epipolarRectified = useRectified;
+    return coarseConfig;
+}
+
+PatchMatchConfig makeFinePatchMatchConfig(const PatchMatchConfig &baseConfig,
+                                          bool useRectified,
+                                          float hintCoverage)
+{
+    PatchMatchConfig fineConfig = baseConfig;
+    fineConfig.numIterations = clampPatchMatchIterations(baseConfig.numIterations);
+    fineConfig.epipolarRectified = useRectified;
+
+    if (hintCoverage > 0.35f)
+    {
+        fineConfig.numIterations = std::max(1, fineConfig.numIterations - 1);
+    }
+    if (hintCoverage > 0.55f)
+    {
+        fineConfig.numIterations = std::max(1, fineConfig.numIterations - 1);
+    }
+
+    return fineConfig;
+}
+
+std::vector<int> consistencySourceIndicesForFrame(const std::vector<DepthFrameResult> &frames,
+                                                  int refIdx,
+                                                  int viewCount)
+{
+    std::vector<int> sources;
+    if (refIdx >= 0 && refIdx < static_cast<int>(frames.size()))
+    {
+        for (int sourceIdx : frames[refIdx].sourceViewIndices)
+        {
+            if (sourceIdx < 0 || sourceIdx >= viewCount || sourceIdx == refIdx)
+            {
+                continue;
+            }
+            if (std::find(sources.begin(), sources.end(), sourceIdx) == sources.end())
+            {
+                sources.push_back(sourceIdx);
+            }
+        }
+    }
+
+    if (!sources.empty())
+    {
+        return sources;
+    }
+
+    sources.reserve(static_cast<size_t>(std::max(0, viewCount - 1)));
+    for (int idx = 0; idx < viewCount; ++idx)
+    {
+        if (idx != refIdx)
+        {
+            sources.push_back(idx);
+        }
+    }
+    return sources;
 }
 
 } // namespace
@@ -215,16 +333,36 @@ void DepthMapGenerator::start()
 }
 
 // =============================================================================
-bool DepthMapGenerator::estimateDepthRange(int refIdx, float &zNear, float &zFar) const
+bool DepthMapGenerator::estimateDepthRange(int refIdx,
+                                           float &zNear,
+                                           float &zFar,
+                                           const std::vector<int> &sourceIndices) const
 {
     const CameraView &ref = m_views[refIdx];
     PositiveDepthCameraModel cam = ref.positiveDepthModel();
 
-    std::vector<float> depths;
-    depths.reserve(m_sparse.points.size());
-
-    for (const auto &pt : m_sparse.points)
+    const int minSourceViews = sourceIndices.empty() ? 0 : 1;
+    std::vector<size_t> visiblePointIndices =
+        collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, sourceIndices, minSourceViews);
+    if (visiblePointIndices.size() < 5 && minSourceViews > 0)
     {
+        visiblePointIndices =
+            collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, {}, 0);
+        fprintf(stderr,
+                "[MVS] 帧 %d: 共视稀疏点不足，深度范围回退到参考帧可见点 (%zu)\n",
+                refIdx, visiblePointIndices.size());
+    }
+
+    std::vector<float> depths;
+    depths.reserve(visiblePointIndices.size());
+
+    for (size_t pointIndex : visiblePointIndices)
+    {
+        if (pointIndex >= m_sparse.points.size())
+        {
+            continue;
+        }
+        const auto &pt = m_sparse.points[pointIndex];
         float Zc = cam.R_cw[6]*pt[0] + cam.R_cw[7]*pt[1] + cam.R_cw[8]*pt[2] + cam.T[2];
         if (Zc > 0.f)
         {
@@ -296,23 +434,41 @@ bool DepthMapGenerator::estimateDepthRange(int refIdx, float &zNear, float &zFar
     zNear = std::max(zNear, 0.01f);
     zFar  = std::max(zFar,  zNear + 0.1f);
 
-    fprintf(stderr, "[MVS] 深度范围 IQR: Q1=%.4f Q3=%.4f IQR=%.4f fence=[%.4f, %.4f] inliers=%zu/%zu\n",
-            Q1, Q3, IQR, lowerFence, upperFence, inlierDepths.size(), n);
+    fprintf(stderr,
+            "[MVS] 帧 %d: 深度范围 IQR: Q1=%.4f Q3=%.4f IQR=%.4f fence=[%.4f, %.4f] inliers=%zu/%zu visiblePts=%zu\n",
+            refIdx, Q1, Q3, IQR, lowerFence, upperFence, inlierDepths.size(), n, visiblePointIndices.size());
     return true;
 }
 
 // =============================================================================
-cv::Mat DepthMapGenerator::buildHintDepth(int refIdx, int W, int H) const
+cv::Mat DepthMapGenerator::buildHintDepth(int refIdx,
+                                          int W,
+                                          int H,
+                                          const std::vector<int> &sourceIndices) const
 {
     if (m_sparse.points.empty()) return cv::Mat();
 
     const CameraView &ref = m_views[refIdx];
     PositiveDepthCameraModel cam = ref.positiveDepthModel();
 
+    const int minSourceViews = sourceIndices.empty() ? 0 : 1;
+    std::vector<size_t> visiblePointIndices =
+        collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, sourceIndices, minSourceViews);
+    if (visiblePointIndices.empty() && minSourceViews > 0)
+    {
+        visiblePointIndices =
+            collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, {}, 0);
+        fprintf(stderr,
+                "[Hint] 帧 %d: 共视 hint 点为空，回退到参考帧可见点 (%zu)\n",
+                refIdx, visiblePointIndices.size());
+    }
+
     // 先计算深度的 IQR fence，过滤离群稀疏点的深度提示
     std::vector<float> allZc;
-    allZc.reserve(m_sparse.points.size());
-    for (const auto &pt : m_sparse.points) {
+    allZc.reserve(visiblePointIndices.size());
+    for (size_t pointIndex : visiblePointIndices) {
+        if (pointIndex >= m_sparse.points.size()) continue;
+        const auto &pt = m_sparse.points[pointIndex];
         float Zc = cam.R_cw[6]*pt[0] + cam.R_cw[7]*pt[1] + cam.R_cw[8]*pt[2] + cam.T[2];
         if (Zc > 0.f) allZc.push_back(Zc);
     }
@@ -329,7 +485,9 @@ cv::Mat DepthMapGenerator::buildHintDepth(int refIdx, int W, int H) const
     cv::Mat hint(H, W, CV_32F, cv::Scalar(0.f));
 
     // 第一步：将稀疏点投影到 hint 图，每点周围 ±3px 小区域赋深度
-    for (const auto &pt : m_sparse.points) {
+    for (size_t pointIndex : visiblePointIndices) {
+        if (pointIndex >= m_sparse.points.size()) continue;
+        const auto &pt = m_sparse.points[pointIndex];
         float u, v;
         if (!cam.project(pt[0], pt[1], pt[2], u, v)) continue;
         int iu = static_cast<int>(std::round(u));
@@ -354,7 +512,11 @@ cv::Mat DepthMapGenerator::buildHintDepth(int refIdx, int W, int H) const
     //   GPU 初始化对有 hint 的像素使用 hint±30% 的窄范围，
     //   若 hint 覆盖了距离真实深度很远的区域，PatchMatch 将无法逃脱。
     // 超出 maxHintRadius 的像素保持 hint=0 → GPU 用全范围随机初始化。
-    const int maxHintRadius = 64; // 像素
+    const int seedHintCnt = cv::countNonZero(hint > 0);
+    const int adaptiveHintRadius = seedHintCnt > 0
+        ? std::clamp(static_cast<int>(std::sqrt(static_cast<float>(W * H) / seedHintCnt) * 0.5f), 16, 48)
+        : 0;
+    const int maxHintRadius = adaptiveHintRadius;
     // BFS 限距离膨胀：每步把所有"边界上有 hint 且邻居无 hint"的像素填充
     {
         // distMap: 到最近稀疏种子的曼哈顿（棋盘）距离近似（使用 2 次线性扫描）
@@ -418,7 +580,9 @@ cv::Mat DepthMapGenerator::buildHintDepth(int refIdx, int W, int H) const
     }
 
     int hintCnt = cv::countNonZero(hint > 0);
-    fprintf(stderr, "[Hint] hint 覆盖像素: %d / %d (%.1f%%)\n",
+    fprintf(stderr,
+            "[Hint] 帧 %d: 可见稀疏点=%zu seedPixels=%d radius=%d hint覆盖=%d/%d (%.1f%%)\n",
+            refIdx, visiblePointIndices.size(), seedHintCnt, maxHintRadius,
             hintCnt, W*H, 100.f*hintCnt/(W*H));
     return hint;
 }
@@ -454,29 +618,47 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     int numSrc = std::min(config.numSourceViews, NV - 1);
     std::vector<cv::Mat> srcGrays;
     std::vector<PositiveDepthCameraModel> srcCams;
+    std::vector<int> sourceIndices;
 
-    for (int delta = 1; delta <= NV && static_cast<int>(srcGrays.size()) < numSrc; ++delta) {
-        for (int sign : {-1, 1}) {
-            int si = refIdx + sign * delta;
-            if (si < 0 || si >= NV) continue;
-            cv::Mat srcImg;
-            if (si >= 0 && si < (int)m_grayCache.size() && !m_grayCache[si].empty()) {
-                srcImg = m_grayCache[si];
-            } else {
-                srcImg = cv::imread(m_views[si].imagePath, cv::IMREAD_GRAYSCALE);
-            }
-            if (srcImg.empty()) continue;
-            if (srcImg.cols != W || srcImg.rows != H)
-                cv::resize(srcImg, srcImg, cv::Size(W, H));
-            srcGrays.push_back(srcImg);
-            srcCams.push_back(m_views[si].positiveDepthModel());
-            if (static_cast<int>(srcGrays.size()) >= numSrc) break;
+    const std::vector<int> selectedSources = selectMvsSourceViewIndices(m_views, m_sparse, refIdx, numSrc);
+    for (int si : selectedSources)
+    {
+        if (si < 0 || si >= NV || si == refIdx)
+        {
+            continue;
         }
+        cv::Mat srcImg;
+        if (si >= 0 && si < (int)m_grayCache.size() && !m_grayCache[si].empty()) {
+            srcImg = m_grayCache[si];
+        } else {
+            srcImg = cv::imread(m_views[si].imagePath, cv::IMREAD_GRAYSCALE);
+        }
+        if (srcImg.empty()) continue;
+        if (srcImg.cols != W || srcImg.rows != H)
+            cv::resize(srcImg, srcImg, cv::Size(W, H));
+        srcGrays.push_back(srcImg);
+        srcCams.push_back(m_views[si].positiveDepthModel());
+        sourceIndices.push_back(si);
+        if (static_cast<int>(srcGrays.size()) >= numSrc) break;
     }
 
     if (srcGrays.empty()) {
         result.errorMsg = "没有可用的源帧";
         return result;
+    }
+    result.sourceViewIndices = sourceIndices;
+
+    {
+        std::ostringstream oss;
+        for (size_t k = 0; k < sourceIndices.size(); ++k)
+        {
+            if (k > 0)
+            {
+                oss << ",";
+            }
+            oss << sourceIndices[k];
+        }
+        fprintf(stderr, "[MVS] 帧 %d: 共视评分选择源帧 [%s]\n", refIdx, oss.str().c_str());
     }
 
     // 自适应置信度阈值：源视图越少，NCC 方差越大，需适当降低阈值
@@ -503,11 +685,11 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
     // 深度范围
     float zNear, zFar;
-    estimateDepthRange(refIdx, zNear, zFar);
+    estimateDepthRange(refIdx, zNear, zFar, sourceIndices);
     fprintf(stderr, "[MVS] 帧 %d: zNear=%.4f  zFar=%.4f\n", refIdx, zNear, zFar);
 
     // 提示深度
-    cv::Mat hintDepth = buildHintDepth(refIdx, W, H);
+    cv::Mat hintDepth = buildHintDepth(refIdx, W, H, sourceIndices);
 
     // =========================================================================
     // ★ 极线校正（仅双目立体对时启用）
@@ -524,13 +706,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
     if (srcGrays.size() == 1)
     {
-        int srcIdx = -1;
-        for (int delta = 1; delta <= NV; ++delta)
-            for (int sign : {-1, 1}) {
-                int si = refIdx + sign * delta;
-                if (si >= 0 && si < NV) { srcIdx = si; goto found_src; }
-            }
-        found_src:
+        int srcIdx = sourceIndices.empty() ? -1 : sourceIndices.front();
 
         bool refIsCanonicalLeft = (srcIdx < 0 || refIdx < srcIdx);
 
@@ -578,11 +754,14 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     std::string errMsg;
 
     // ── Pass 1: 粗分辨率 ────────────────────────────────────────────────
-    PatchMatchConfig coarseCfg = pmCfg;
-    coarseCfg.downsampleFactor = std::max(pmCfg.downsampleFactor * 2, 4); // 通常 ds=4
-    coarseCfg.numIterations    = 12;         // 粗分辨率像素少，12 轮足够
-    coarseCfg.confidenceThresh = 0.08f;      // 低阈值获取更多种子点
-    coarseCfg.epipolarRectified = useRectified;
+    PatchMatchConfig coarseCfg = makeCoarsePatchMatchConfig(pmCfg, useRectified);
+    fprintf(stderr,
+            "[MVS] 帧 %d: 粗层 PatchMatch ds=%d iters=%d patch=%d parallelSweep=%d\n",
+            refIdx,
+            coarseCfg.downsampleFactor,
+            coarseCfg.numIterations,
+            coarseCfg.patchHalf * 2 + 1,
+            coarseCfg.cudaUseParallelSweep ? 1 : 0);
 
     cv::Mat coarseDepth, coarseConf;
     bool coarseOk = PatchMatchDepthEstimator::estimate(
@@ -604,20 +783,17 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         }
 
         // ── Pass 2: 精细分辨率 ──────────────────────────────────────
-        PatchMatchConfig fineCfg = pmCfg;
-        fineCfg.numIterations = useRectified ? 6 : 8;
-        fineCfg.epipolarRectified = useRectified;
-
         const int hintValid = cv::countNonZero(fineHint > 0);
         const float hintCoverage = static_cast<float>(hintValid) / std::max(1, W * H);
-        if (hintCoverage > 0.35f)
-        {
-            fineCfg.numIterations = std::min(fineCfg.numIterations, useRectified ? 5 : 6);
-        }
-        if (hintCoverage > 0.55f)
-        {
-            fineCfg.numIterations = std::min(fineCfg.numIterations, useRectified ? 4 : 5);
-        }
+        PatchMatchConfig fineCfg = makeFinePatchMatchConfig(pmCfg, useRectified, hintCoverage);
+        fprintf(stderr,
+                "[MVS] 帧 %d: 精细层 PatchMatch ds=%d iters=%d patch=%d hintCoverage=%.1f%% parallelSweep=%d\n",
+                refIdx,
+                fineCfg.downsampleFactor,
+                fineCfg.numIterations,
+                fineCfg.patchHalf * 2 + 1,
+                hintCoverage * 100.0f,
+                fineCfg.cudaUseParallelSweep ? 1 : 0);
 
         bool fineOk = PatchMatchDepthEstimator::estimate(
             workRefImg, workSrcGrays, workRefCam, workSrcCams,
@@ -804,8 +980,11 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         // ─── 多视图模式: 初始化为全部移除, 需要"被确认"才保留 ──────────
         cv::Mat consistentMask(depthI.size(), CV_8U,
                                fewViews ? cv::Scalar(255) : cv::Scalar(0));
+        const int rowWorkers = std::max(1, m_config.cpuWorkerCount);
+        const std::vector<int> consistencySources =
+            consistencySourceIndicesForFrame(m_depthFrames, i, NV);
 
-        for (int j = 0; j < NV; ++j)
+        for (int j : consistencySources)
         {
             if (j == i)
             {
@@ -818,7 +997,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
             const cv::Mat &depthJ = origDepths[j];
             PositiveDepthCameraModel camJ = m_views[j].positiveDepthModel();
 
-            for (int v = 0; v < depthI.rows; ++v)
+            parallelForRows(depthI.rows, rowWorkers, [&](int v)
             {
                 const float *pdi = depthI.ptr<float>(v);
                 uint8_t     *pMask = consistentMask.ptr<uint8_t>(v);
@@ -896,7 +1075,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                         }
                     }
                 }
-            }
+            });
         }
 
         // 剔除不一致像素
@@ -904,8 +1083,9 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         depthI.setTo(0, consistentMask == 0);
         int afterValid = cv::countNonZero(depthI > 0);
         float keepRate = beforeValid > 0 ? 100.f * afterValid / beforeValid : 0.f;
-        fprintf(stderr, "[MVS] 帧%d 一致性检查(%s): %d→%d 有效像素 (保留 %.1f%%)\n",
+        fprintf(stderr, "[MVS] 帧%d 一致性检查(%s, 源视图 %zu/%d): %d→%d 有效像素 (保留 %.1f%%)\n",
                 i, fewViews ? "仅移除矛盾" : "需要确认",
+                consistencySources.size(), std::max(0, NV - 1),
                 beforeValid, afterValid, keepRate);
 
         // 安全回退：如果保留率过低（< 10%），回退使用原始深度图
@@ -961,7 +1141,6 @@ void DepthMapGenerator::runInBackground()
 
     const bool cudaAvailable = m_config.patchMatch.useCuda && PatchMatchDepthEstimator::isCudaAvailable();
     const int cpuThreadCount = std::max(1, m_config.cpuWorkerCount);
-    const int cpuWorkers = cudaAvailable ? 0 : 1;
 
     std::vector<FramePriority> framePriorities;
     framePriorities.reserve(static_cast<size_t>(NV));
@@ -1021,10 +1200,20 @@ void DepthMapGenerator::runInBackground()
         }
     }
 
+    const int pendingFrameCount = static_cast<int>(framePriorities.size());
+    const int maxWorkersByPendingFrames = std::max(1, pendingFrameCount);
+    const int maxFrameWorkers = std::min(4, maxWorkersByPendingFrames);
+    const int gpuFrameWorkers = cudaAvailable
+        ? std::clamp(std::max(1, m_config.gpuFrameWorkerCount), 1, maxFrameWorkers)
+        : 0;
+    const int cpuFrameWorkers = cudaAvailable
+        ? std::clamp(std::max(0, m_config.cpuFrameWorkerCount), 0, maxFrameWorkers)
+        : std::clamp(std::max(1, m_config.cpuFrameWorkerCount), 1, maxFrameWorkers);
+
     LOG_INFO(QStringLiteral("[MVS] 深度估计调度: cuda=%1 gpu_frame_workers=%2 cpu_frame_workers=%3 cpu_pixel_threads=%4 views=%5 gpuQueue=%6 cpuQueue=%7")
                  .arg(cudaAvailable ? QStringLiteral("on") : QStringLiteral("off"))
-                 .arg(cudaAvailable ? 1 : 0)
-                 .arg(cpuWorkers)
+                 .arg(gpuFrameWorkers)
+                 .arg(cpuFrameWorkers)
                  .arg(cpuThreadCount)
                  .arg(NV)
                  .arg(static_cast<qulonglong>(gpuQueue.size()))
@@ -1035,7 +1224,8 @@ void DepthMapGenerator::runInBackground()
     }
     if (cudaAvailable)
     {
-        LOG_INFO(QStringLiteral("[MVS] CUDA 已启用，最终深度图统一由 GPU 生成；CPU 仅保留为无 CUDA 场景的像素级并行回退"));
+        LOG_INFO(QStringLiteral("[MVS] CUDA 已启用，GPU 帧并发=%1；每帧内部使用 CUDA kernel，显存不足时可降低 gpu_frame_workers")
+                     .arg(gpuFrameWorkers));
     }
 
     auto emitDepthProgress = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &taskMutex, &gpuQueue, &cpuQueue](
@@ -1215,13 +1405,13 @@ void DepthMapGenerator::runInBackground()
     };
 
     std::vector<std::thread> workers;
-    workers.reserve(static_cast<size_t>(cpuWorkers + (cudaAvailable ? 1 : 0)));
+    workers.reserve(static_cast<size_t>(cpuFrameWorkers + gpuFrameWorkers));
 
-    if (cudaAvailable)
+    for (int workerIndex = 0; workerIndex < gpuFrameWorkers; ++workerIndex)
     {
         workers.emplace_back(workerFunc, true);
     }
-    for (int workerIndex = 0; workerIndex < cpuWorkers; ++workerIndex)
+    for (int workerIndex = 0; workerIndex < cpuFrameWorkers; ++workerIndex)
     {
         workers.emplace_back(workerFunc, false);
     }

@@ -154,6 +154,20 @@ target_include_directories(test_initial_sparse_triangulator PRIVATE
 gtest_discover_tests(test_initial_sparse_triangulator)
 
 # ==============================================================================
+# test_vocabulary_overlap_retriever — 基于特征词汇的重叠对预检索
+# ==============================================================================
+add_executable(test_vocabulary_overlap_retriever test_vocabulary_overlap_retriever.cpp)
+target_link_libraries(test_vocabulary_overlap_retriever PRIVATE
+    overlap
+    ${OpenCV_LIBS}
+    GTest::gtest_main
+)
+target_include_directories(test_vocabulary_overlap_retriever PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/overlap
+)
+gtest_discover_tests(test_vocabulary_overlap_retriever)
+
+# ==============================================================================
 # test_project_data — ProjectData 持久化契约与 core/results 分域
 # ==============================================================================
 add_executable(test_project_data
@@ -192,10 +206,14 @@ add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
@@ -204,6 +222,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTriangulationService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WindowPanel.cpp
 )
 set_target_properties(test_gui_project_utils PROPERTIES
@@ -238,6 +257,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/widgets
     ${CMAKE_SOURCE_DIR}/src/core/sfm
     ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/core/feature_match
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
 )
@@ -273,6 +293,54 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_sfm_service_default_algorithms
     )
     set_tests_properties(SfmServiceDefaultAlgorithmsTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME DownloadPhotogrammetryTestDataTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_download_photogrammetry_testdata
+    )
+    set_tests_properties(DownloadPhotogrammetryTestDataTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME MvsSchedulerConfigTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_mvs_scheduler_config
+    )
+    set_tests_properties(MvsSchedulerConfigTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME ThreeDReconstructionCliTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_three_d_reconstruction_cli
+    )
+    set_tests_properties(ThreeDReconstructionCliTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME RunLightGlueScriptTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_run_lightglue_script
+    )
+    set_tests_properties(RunLightGlueScriptTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME DiskTorchscriptModelTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_disk_torchscript_model
+    )
+    set_tests_properties(DiskTorchscriptModelTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME LightGlueTorchscriptModelTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_lightglue_torchscript_models
+    )
+    set_tests_properties(LightGlueTorchscriptModelTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 

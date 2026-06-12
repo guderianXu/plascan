@@ -29,7 +29,7 @@ def export_superglue(weight_type='outdoor', output_path=None, device='cpu',
     # 设置输出路径
     if output_path is None:
         device_suffix = device if device in ['cpu', 'cuda'] else 'cpu'
-        output_path = f'superglue_{weight_type}_{device_suffix}.pt'
+        output_path = f'superglue_{weight_type}_{device_suffix}.torchscript'
     
     print(f"=" * 60)
     print(f"导出 SuperGlue 模型配置:")
@@ -233,7 +233,7 @@ if __name__ == '__main__':
   python export_torchscript.py --all
   
   # 指定输出路径
-  python export_torchscript.py --weights outdoor --device cpu --output my_model.pt
+  python export_torchscript.py --weights outdoor --device cpu --output my_model.torchscript
         """
     )
     

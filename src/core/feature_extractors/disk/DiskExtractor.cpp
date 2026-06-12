@@ -46,7 +46,13 @@ FeatureOutput DiskExtractor::extract(const cv::Mat &grayImage)
     auto descs  = outputs->elements()[1].toTensor();
     auto scores = outputs->elements()[2].toTensor();
 
-    return tensorToFeatureOutput(kpts, descs, scores, m_cfg.scoreThreshold, scale);
+    return tensorToFeatureOutput(kpts, descs, scores,
+                                 m_cfg.scoreThreshold,
+                                 scale,
+                                 m_cfg.maxKeypoints,
+                                 &grayImage,
+                                 m_cfg.grayscaleMin,
+                                 m_cfg.grayscaleMax);
 }
 
 } // namespace xjw::feature_extractors

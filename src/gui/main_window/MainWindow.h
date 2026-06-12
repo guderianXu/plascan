@@ -36,8 +36,6 @@ class ProjectData;
 class MenuWorkflowController;
 class ReconstructionWorkflowController;
 class QProgressDialog;
-class QProgressBar;
-class QLabel;
 class QDockWidget;
 class QToolButton;
 class QListWidget;
@@ -45,6 +43,7 @@ class QTabWidget;
 class ReferencePanelWidget;
 class WorkspaceCenterWidget;
 class DialogSettingStore;
+class TaskStatusWidget;
 class QDragEnterEvent;
 class QDropEvent;
 
@@ -106,29 +105,13 @@ public:
     ReconstructionWorkflowController* m_reconController{}; // 重建菜单业务控制器
     ProjectManager*   m_projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
     QProgressDialog*  m_saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
-    // MVS 状态栏嵌入式进度条（初始隐藏）
-    QProgressBar*     m_mvsProgressBar{};                // MVS 进度条
-    QLabel*           m_mvsStatusLabel{};                // MVS 阶段文字
-    QToolButton*      m_mvsCancelBtn{};                  // 取消 MVS 按钟
-    // 网格重建状态栏进度条（初始隐藏）
-    QProgressBar*     m_meshProgressBar{};               // 网格重建进度条
-    QLabel*           m_meshStatusLabel{};               // 网格重建阶段文字
-    // 空三（AT/SFM）状态栏嵌入式进度条（初始隐藏）
-    QProgressBar*     m_atProgressBar{};                 // AT 进度条
-    QLabel*           m_atStatusLabel{};                 // AT 阶段文字
-    QToolButton*      m_atCancelBtn{};                   // 取消 AT 按钮
-    // SuperGlue 连接点匹配状态栏进度条（初始隐藏）
-    QProgressBar*     m_sgProgressBar{};
-    QLabel*           m_sgStatusLabel{};
-    QToolButton*      m_sgCancelBtn{};
-    // SuperPoint 特征点提取状态栏进度条（初始隐藏）
-    QProgressBar*     m_spProgressBar{};
-    QLabel*           m_spStatusLabel{};
-    QToolButton*      m_spCancelBtn{};
-    // 观测网络构建状态栏进度条（初始隐藏）
-    QProgressBar*     m_obsNetProgressBar{};
-    QProgressBar*     m_dmProgressBar{};     // 密集匹配进度条
-    QLabel*           m_obsNetStatusLabel{};
+    TaskStatusWidget* m_mvsTaskStatus{};                 // MVS 状态栏任务状态
+    TaskStatusWidget* m_meshTaskStatus{};                // 网格重建状态栏任务状态
+    TaskStatusWidget* m_atTaskStatus{};                  // 空三状态栏任务状态
+    TaskStatusWidget* m_sgTaskStatus{};                  // 特征匹配状态栏任务状态
+    TaskStatusWidget* m_spTaskStatus{};                  // 特征提取状态栏任务状态
+    TaskStatusWidget* m_dmTaskStatus{};                  // 密集匹配状态栏任务状态
+    TaskStatusWidget* m_obsNetTaskStatus{};              // 观测网络状态栏任务状态
     QDockWidget*      m_logDock{};                      // 底部日志 Dock 窗口容器
     QToolButton*      m_logBtn{};                       // 标题栏中的「日志」可选中切换按钮
     DialogSettingStore*   m_sgSetting{};                // SuperGlue 对话框记忆化设置
@@ -178,7 +161,9 @@ private slots:
     void onMvsFinished(bool success);
 
 signals:
+    void sgCancelRequested();
     void spCancelRequested();
+    void dmCancelRequested();
 
 public slots:
     // SuperPoint 状态栏进度（由 MenuWorkflowController 调用）

@@ -32,7 +32,7 @@ TEST_F(DiskExtractorTest, ModelLoads)
 {
     if (testImg.empty()) GTEST_SKIP() << "test image not found";
     DiskConfig cfg;
-    cfg.modelPath = std::string(MODEL_DIR) + "/disk_extractor_cuda_1200.pt";
+    cfg.modelPath = std::string(MODEL_DIR) + "/disk_extractor_cpu_8192.torchscript";
     cfg.useCuda   = false;  // CPU test
     cfg.maxImageDim = 1200; // DISK requires 16-aligned dims, let extractor handle resize
     try {
@@ -47,7 +47,7 @@ TEST_F(DiskExtractorTest, ExtractReturnsKeypoints)
 {
     if (testImg.empty()) GTEST_SKIP() << "test image not found";
     DiskConfig cfg;
-    cfg.modelPath  = std::string(MODEL_DIR) + "/disk_extractor_cuda_1200.pt";
+    cfg.modelPath  = std::string(MODEL_DIR) + "/disk_extractor_cpu_8192.torchscript";
     cfg.useCuda    = false;
     cfg.maxImageDim = 1200;
     DiskExtractor ext(cfg);
@@ -60,7 +60,7 @@ TEST_F(DiskExtractorTest, DescriptorsCorrectShape)
 {
     if (testImg.empty()) GTEST_SKIP() << "test image not found";
     DiskConfig cfg;
-    cfg.modelPath  = std::string(MODEL_DIR) + "/disk_extractor_cuda_1200.pt";
+    cfg.modelPath  = std::string(MODEL_DIR) + "/disk_extractor_cpu_8192.torchscript";
     cfg.useCuda    = false;
     cfg.maxImageDim = 1200;
     DiskExtractor ext(cfg);
@@ -74,7 +74,7 @@ TEST_F(DiskExtractorTest, MaxKeypointsRespected)
 {
     if (testImg.empty()) GTEST_SKIP() << "test image not found";
     DiskConfig cfg;
-    cfg.modelPath   = std::string(MODEL_DIR) + "/disk_extractor_cuda_1200.pt";
+    cfg.modelPath   = std::string(MODEL_DIR) + "/disk_extractor_cpu_8192.torchscript";
     cfg.useCuda     = false;
     cfg.maxImageDim = 1200;
     cfg.maxKeypoints = 1200;
@@ -87,7 +87,7 @@ TEST_F(DiskExtractorTest, CoordinatesInImageRange)
 {
     if (testImg.empty()) GTEST_SKIP() << "test image not found";
     DiskConfig cfg;
-    cfg.modelPath  = std::string(MODEL_DIR) + "/disk_extractor_cuda_1200.pt";
+    cfg.modelPath  = std::string(MODEL_DIR) + "/disk_extractor_cpu_8192.torchscript";
     cfg.useCuda    = false;
     cfg.maxImageDim = 1200;
     DiskExtractor ext(cfg);

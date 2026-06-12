@@ -1,11 +1,15 @@
 """Export SuperPoint for PlaScan C++ extractor interface.
 C++ expects: forward(image [1,1,H,W], orig_wh [W,H]) -> (kpts [N,2], scores [N], desc_dense [1,256,H/8,W/8])
 """
+import os
 import torch, torch.nn as nn, torch.nn.functional as F
 from lightglue import SuperPoint
 from pathlib import Path
 
-OUT = Path("/home/guderian/code/plascan/resources/models")
+OUT = Path(os.environ.get(
+    "PLASCAN_MODEL_OUT",
+    Path(__file__).resolve().parents[1] / "resources" / "models",
+))
 
 class SuperPointExtractor(nn.Module):
     def __init__(self, max_kpts=2048):
@@ -41,8 +45,9 @@ class SuperPointExtractor(nn.Module):
         return kpts.squeeze(0), vals.squeeze(0), desc_dense  # [N,2],[N],[1,256,H/8,W/8]
 
 print("Exporting SuperPoint extractor...")
+OUT.mkdir(parents=True, exist_ok=True)
 model = SuperPointExtractor(max_kpts=2048)
 traced = torch.jit.trace(model, (torch.rand(1,1,480,640), torch.tensor([640.,480.])), strict=False)
-path = OUT / "superpoint_extractor_cpu.pt"
+path = OUT / "superpoint_extractor_cpu.torchscript"
 traced.save(str(path))
 print(f"OK: {path}")

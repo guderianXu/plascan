@@ -120,7 +120,7 @@
       <item row="0" column="1">
        <widget class="QDoubleSpinBox" name="m_resScaleSpin">
         <property name="toolTip">
-         <string>图像分辨率缩放。★ 标准 0.5; 精细 1.0 (原始分辨率)</string>
+         <string>分辨率缩放：先把影像按该比例缩小后估计深度。数值越小越快、显存占用越低，但细节会减少；1.0 表示原始分辨率。</string>
         </property>
         <property name="decimals">
          <number>2</number>
@@ -152,7 +152,7 @@
       <item row="1" column="1">
        <widget class="QSpinBox" name="m_iterationsSpin">
         <property name="toolTip">
-         <string>PatchMatch 迭代次数。★ 推荐 6; 更多次收敛更好但更慢</string>
+         <string>迭代次数：PatchMatch 随机搜索和传播的轮数。增加可提高深度收敛稳定性，尤其适合宽深度范围，但运行时间会增加。</string>
         </property>
         <property name="minimum">
          <number>1</number>
@@ -178,7 +178,7 @@
       <item row="2" column="1">
        <widget class="QComboBox" name="m_costFuncCombo">
         <property name="toolTip">
-         <string>NCC: 归一化互相关，平衡精度和速度; Census: 抗光照变化</string>
+         <string>代价函数说明：AD/灰度绝对差速度快但怕光照变化；SD/平方差会放大大误差；NCC/归一化互相关适合亮度整体变化；Census/局部灰度排序对光照更稳；Ternary Census/三值 Census 对微小噪声更宽容。当前 PatchMatch 深度估计主要使用 NCC/Census/SAD/ZNCC 族选项。</string>
         </property>
         <item>
          <property name="text">
@@ -247,7 +247,7 @@
       <item row="4" column="1">
        <widget class="QSpinBox" name="m_patchSizeSpin">
         <property name="toolTip">
-         <string>匹配窗口大小 (奇数)。★ 推荐 11; 增大可减少噪声但丢失细节</string>
+         <string>窗口大小：计算代价函数时参与比较的局部邻域尺寸，必须为奇数。增大可降低噪声和弱纹理误匹配，但会抹平边缘和小地形细节。</string>
         </property>
         <property name="minimum">
          <number>3</number>
@@ -276,7 +276,7 @@
       <item row="5" column="1">
        <widget class="QSpinBox" name="m_minViewsSpin">
         <property name="toolTip">
-         <string>参与深度估计的最少视图。★ 推荐 3</string>
+         <string>最少视图：一个深度点至少需要多少个相邻视图支持才更可信。调大更严格、噪声更少，但可能减少可生成深度的区域。</string>
         </property>
         <property name="minimum">
          <number>2</number>
@@ -311,7 +311,7 @@
       <item row="0" column="1">
        <widget class="QDoubleSpinBox" name="m_depthMinSpin">
         <property name="toolTip">
-         <string>最小深度 (0=自动)</string>
+         <string>最小深度：深度搜索范围下限，0 表示根据相机和稀疏结果自动估计。范围过窄会漏解，过宽会变慢并增加误匹配。</string>
         </property>
         <property name="decimals">
          <number>2</number>
@@ -337,7 +337,7 @@
       <item row="1" column="1">
        <widget class="QDoubleSpinBox" name="m_depthMaxSpin">
         <property name="toolTip">
-         <string>最大深度 (0=自动)</string>
+         <string>最大深度：深度搜索范围上限，0 表示自动估计。应覆盖真实地形深度，过大时 PatchMatch 搜索空间变大、收敛更慢。</string>
         </property>
         <property name="decimals">
          <number>2</number>
@@ -363,7 +363,7 @@
       <item row="2" column="1">
        <widget class="QDoubleSpinBox" name="m_confidenceSpin">
         <property name="toolTip">
-         <string>低于此置信度的深度值被标记为无效。★ 推荐 0.5</string>
+         <string>置信度阈值：低于此值的深度像素会被标记为无效。调高会减少噪声和错误深度，但空洞会增加；调低会保留更多点但风险更高。</string>
         </property>
         <property name="decimals">
          <number>2</number>
@@ -384,6 +384,9 @@
       </item>
       <item row="3" column="0" colspan="2">
        <widget class="QCheckBox" name="m_normalMapCheck">
+        <property name="toolTip">
+         <string>根据深度图估算法向量图，后续融合和网格重建可用来判断表面方向，但会增加少量计算和输出文件。</string>
+        </property>
         <property name="text">
          <string>同时输出法向量图</string>
         </property>
@@ -403,6 +406,9 @@
      <layout class="QFormLayout" name="hardwareForm">
       <item row="0" column="0" colspan="2">
        <widget class="QCheckBox" name="m_cudaCheck">
+        <property name="toolTip">
+         <string>启用 CUDA 后优先使用 GPU 计算深度图。速度通常更快，但显存不足时需要降低分辨率缩放或 Tile 尺寸。</string>
+        </property>
         <property name="text">
          <string>启用 CUDA 加速</string>
         </property>
@@ -424,7 +430,7 @@
       <item row="1" column="1">
        <widget class="QSpinBox" name="m_tileWSpin">
         <property name="toolTip">
-         <string>Tile 宽度 (px)。大显存可设更大</string>
+         <string>Tile 宽度：分块处理的水平像素数。大 Tile 可减少边界开销但更占显存；显存不足时优先调小。</string>
         </property>
         <property name="minimum">
          <number>128</number>
@@ -453,7 +459,7 @@
       <item row="2" column="1">
        <widget class="QSpinBox" name="m_tileHSpin">
         <property name="toolTip">
-         <string>Tile 高度 (px)。大显存可设更大，小显存需相应减小</string>
+         <string>Tile 高度：分块处理的垂直像素数。与 Tile 宽度共同决定单块显存占用，小显存或高分辨率影像应降低。</string>
         </property>
         <property name="minimum">
          <number>128</number>
@@ -482,7 +488,7 @@
       <item row="3" column="1">
        <widget class="QSpinBox" name="m_threadsSpin">
         <property name="toolTip">
-         <string>CPU 线程数（CUDA 关闭时生效）。建议设为物理核心数</string>
+         <string>CPU 线程数：CUDA 关闭或回退到 CPU 路径时生效。通常设为物理核心数附近，过高可能造成线程争用。</string>
         </property>
         <property name="minimum">
          <number>1</number>

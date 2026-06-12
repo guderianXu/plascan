@@ -97,6 +97,8 @@ private:
     void setupConnections();
     // 根据 m_currentPairs 刷新 m_pairPreview 文本框的预览内容
     void updatePreview();
+    // 根据项目已有后缀和当前算法兼容性刷新特征后缀选择器
+    void refreshFeatureSuffixChoices();
     // 收集当前全部控件状态并通过 settingsChanged 信号立即发出（用于自动保存）
     void emitSettingsNow();
     // 将界面所有控件状态序列化为 JSON 对象（用于持久化和 runRequested 信号）
@@ -179,4 +181,5 @@ private:
     
     // ── 数据成员 ──────────────────────────────────────────────────
     QStringList       m_currentPairs;       // 当前待匹配的影像对列表（格式："img1__img2"）
+    QStringList       m_projectFeatureSuffixes; // 项目中实际存在的特征后缀；空表示未知，回退算法兼容列表
 };

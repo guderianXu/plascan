@@ -698,12 +698,10 @@ TEST(NegativeDepthTest, FilterRemovesBehindCameraPoints)
         for (const auto &elem : pt.track.elements) {
             if (!recon.hasCamera(elem.imageId)) continue;
             const Camera &cam = recon.camera(elem.imageId);
-            auto R = cam.cameraToWorldRotation();
-            auto C = cam.cameraCenter();
-            double depth = R[6] * (pt.xyz[0] - C[0])
-                         + R[7] * (pt.xyz[1] - C[1])
-                         + R[8] * (pt.xyz[2] - C[2]);
-            if (depth < 0) ++negCount;
+            const double world[3] = {pt.xyz[0], pt.xyz[1], pt.xyz[2]};
+            double cameraPoint[3] = {0.0, 0.0, 0.0};
+            cam.worldToCamera(world, cameraPoint);
+            if (cameraPoint[2] < 0) ++negCount;
         }
     }
 
@@ -1067,10 +1065,10 @@ TEST_F(RetriangulationTest, NegativeDepthNotRetriangulated)
 
     // 重三角化后的点应该在相机前方
     const auto &pt = recon.point3D(pid);
-    auto R = cam0.cameraToWorldRotation();
-    auto C = cam0.cameraCenter();
-    double depth = R[6]*(pt.xyz[0]-C[0]) + R[7]*(pt.xyz[1]-C[1]) + R[8]*(pt.xyz[2]-C[2]);
-    EXPECT_GT(depth, 0) << "After retriangulation, point should be in front of camera";
+    const double world[3] = {pt.xyz[0], pt.xyz[1], pt.xyz[2]};
+    double cameraPoint[3] = {0.0, 0.0, 0.0};
+    cam0.worldToCamera(world, cameraPoint);
+    EXPECT_GT(cameraPoint[2], 0) << "After retriangulation, point should be in front of camera";
 
     // 验证坐标接近真实值
     double dist = std::sqrt(std::pow(pt.xyz[0]-trueX,2) + std::pow(pt.xyz[1]-trueY,2) + std::pow(pt.xyz[2]-trueZ,2));
@@ -1149,4 +1147,57 @@ TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
     for (const auto &elem : pt.track.elements) {
         EXPECT_NE(elem.imageId, 3u) << "Should not extend track to camera with negative depth";
     }
+}
+
+TEST_F(RetriangulationTest, CompleteTracksUsesWorldToCameraDepthForRotatedCamera)
+{
+    Camera baseCam = makeCamera(0, 0, -50);
+
+    Camera rotatedCam;
+    rotatedCam.setIntrinsics(1000.0, 1000.0, 512.0, 384.0);
+    // Camera-to-world rotation around X by +90 degrees. The world point below
+    // has positive depth via Camera::worldToCamera(), but the old row-based
+    // depth formula reports it as negative.
+    rotatedCam.setPose({1, 0, 0, 0, 0, -1, 0, 1, 0}, {0, 0, 0});
+
+    addRegisteredImage(0, baseCam, 5);
+    addRegisteredImage(1, rotatedCam, 5);
+
+    const double trueX = 0.0;
+    const double trueY = -10.0;
+    const double trueZ = 0.0;
+
+    double u0, v0, u1, v1;
+    ASSERT_TRUE(projectPoint(baseCam, trueX, trueY, trueZ, u0, v0));
+    ASSERT_TRUE(projectPoint(rotatedCam, trueX, trueY, trueZ, u1, v1));
+
+    auto &img0 = recon.image(0);
+    auto &img1 = recon.image(1);
+    img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
+    img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
+
+    auto pid = addPointWithTrack(trueX, trueY, trueZ, {{0, 0}});
+
+    FeatureMatch m;
+    m.idx1 = 0;
+    m.idx2 = 0;
+    graph.addMatches(0, 1, {m});
+    graph.buildCorrespondences();
+
+    Triangulator tri(recon, graph);
+    TriangulatorOptions opts;
+    opts.completeMaxReprojError = 0.5;
+    int completed = tri.completeTracks(opts);
+
+    EXPECT_EQ(completed, 1) << "Positive-depth rotated camera observation should extend the track";
+
+    const auto &pt = recon.point3D(pid);
+    bool hasRotatedObservation = false;
+    for (const auto &elem : pt.track.elements) {
+        if (elem.imageId == 1u) {
+            hasRotatedObservation = true;
+            break;
+        }
+    }
+    EXPECT_TRUE(hasRotatedObservation);
 }

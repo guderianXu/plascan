@@ -2,7 +2,7 @@
 // 文件: cli_feature_extract.cpp
 // 功能: 统一特征提取 CLI — SuperPoint | SIFT | ORB | AKAZE
 // 用法:
-//   feature_extract_cli -a superpoint -m model.pt -i img.tif -o out.sp [--cuda --max-dim 2048]
+//   feature_extract_cli -a superpoint -m model.torchscript -i img.tif -o out.sp [--cuda --max-dim 2048]
 //   feature_extract_cli -a sift        -i img.tif -o out.sp [-n 4096]
 //   feature_extract_cli -a orb         -i img.tif -o out.sp [-n 5000]
 // =============================================================================
@@ -49,16 +49,18 @@ int main(int argc, char *argv[])
     app.add_option("-a,--algorithm", algo, "算法: superpoint, sift, orb, akaze, surf, disk, aliked");
 
     std::string modelPath, imgPath, outPath;
-    app.add_option("-m,--model", modelPath, "模型路径 (.pt, SuperPoint 必填)");
+    app.add_option("-m,--model", modelPath, "模型路径 (.torchscript/.pt, SuperPoint 必填)");
     app.add_option("-i,--input",  imgPath,  "输入影像或目录")->required();
     app.add_option("-o,--output", outPath,  "输出 .sp 文件或目录")->required();
 
     int  maxKp = 4096, nmsRadius = 3, removeBorder = 4, maxDim = 2048, gpu = 0;
-    float detThresh = 0.003f;
+    float detThresh = 0.003f, grayscaleMin = 0.0f, grayscaleMax = 1.0f;
     bool  cuda = true;
 
     app.add_option("-n,--max-keypoints", maxKp, "最大关键点数");
     app.add_option("-t,--det-threshold", detThresh, "检测阈值");
+    app.add_option("--grayscale-min", grayscaleMin, "灰度阈值下限 [0,1]");
+    app.add_option("--grayscale-max", grayscaleMax, "灰度阈值上限 [0,1]");
     app.add_option("--nms-radius", nmsRadius, "NMS 半径 (SuperPoint)");
     app.add_option("--remove-border", removeBorder, "边界移除像素");
     app.add_option("--max-dim", maxDim, "GPU 最大边长 (超则降采样)");
@@ -84,6 +86,8 @@ int main(int argc, char *argv[])
     eCfg.nmsRadius    = nmsRadius;
     eCfg.removeBorder = removeBorder;
     eCfg.maxImageDim  = maxDim;
+    eCfg.grayscaleMin = grayscaleMin;
+    eCfg.grayscaleMax = grayscaleMax;
     eCfg.useCuda      = cuda;
     eCfg.cudaDevice   = gpu;
 

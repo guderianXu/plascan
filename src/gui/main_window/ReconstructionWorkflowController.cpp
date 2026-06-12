@@ -812,8 +812,19 @@ void ReconstructionWorkflowController::openDenseMatchDialog()
         if (mw) mw->showDmProgress(totalSteps);
 
         auto progress = std::make_shared<std::atomic<int>>(0);
+        auto dmCancelFlag = std::make_shared<std::atomic<bool>>(false);
         auto *watcher = new QFutureWatcher<void>(this);
         auto *timer = new QTimer(this);
+
+        QMetaObject::Connection cancelConn;
+        if (mw)
+        {
+            cancelConn = connect(mw, &MainWindow::dmCancelRequested,
+                                 this, [dmCancelFlag]()
+            {
+                dmCancelFlag->store(true);
+            });
+        }
 
         connect(timer, &QTimer::timeout, this,
                 [mw, progress, totalSteps]()
@@ -823,20 +834,27 @@ void ReconstructionWorkflowController::openDenseMatchDialog()
         timer->start(150);
 
         connect(watcher, &QFutureWatcher<void>::finished, this,
-                [timer, watcher, mw, dlg_ptr, progress]()
+                [timer, watcher, mw, dlg_ptr, progress, dmCancelFlag, cancelConn]()
         {
             timer->stop();
             timer->deleteLater();
             watcher->deleteLater();
-            if (mw) mw->hideDmProgress(true);
+            if (mw)
+            {
+                QObject::disconnect(cancelConn);
+                const bool cancelled = dmCancelFlag->load();
+                mw->hideDmProgress(!cancelled);
+            }
             if (dlg_ptr)
+            {
                 dlg_ptr->onProcessingFinished();
+            }
         });
 
         watcher->setFuture(QtConcurrent::run(
-            [this, settings, progress]()
+            [this, settings, progress, dmCancelFlag]()
         {
-            m_projectManager->startDenseMatchAsyncWithProgress(settings, progress);
+            m_projectManager->startDenseMatchAsyncWithProgress(settings, progress, dmCancelFlag);
         }));
     });
 
@@ -1021,4 +1039,3 @@ void ReconstructionWorkflowController::openModelExportDialog()
 
     dlg->exec();
 }
-

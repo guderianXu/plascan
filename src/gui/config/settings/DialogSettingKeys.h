@@ -14,6 +14,7 @@ inline const QString MapProject = QStringLiteral("mapproject");
 inline const QString DenseCloud = QStringLiteral("dense_cloud");
 inline const QString MatchViewer = QStringLiteral("match_viewer");
 inline const QString SuperGlue = QStringLiteral("superglue");
+inline const QString VocabularyOverlap = QStringLiteral("vocabulary_overlap");
 inline const QString MainWindowUi = QStringLiteral("main_window_ui");
 
 // ==== 重建菜单对话框 ====

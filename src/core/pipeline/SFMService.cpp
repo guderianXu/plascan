@@ -16,6 +16,7 @@
 #include "MatchOutlierRejector.h"
 #include "lightglue/LightGlueMatcher.h"
 #include <opencv2/opencv.hpp>
+#include <c10/cuda/CUDACachingAllocator.h>
 #include <torch/torch.h>
 
 // ── 项目 / 服务头文件 ──────────────────────────────────────────────────────
@@ -38,12 +39,15 @@
 #include <QDateTime>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QProcess>
 #include <QSet>
+#include <QStandardPaths>
 
 #include <algorithm>
 #include <atomic>
 #include <cmath>
 #include <mutex>
+#include <stdexcept>
 #include <thread>
 
 namespace xjw
@@ -268,35 +272,324 @@ QString normalizedAlgorithm(QString value, const QString &fallback)
     return value.isEmpty() ? fallback : value;
 }
 
-QString featureModelName(const QString &featureAlgorithm, bool useCuda)
+QStringList featureModelCandidates(const QString &featureAlgorithm, bool useCuda)
 {
     const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
     if (featureAlgorithm == QStringLiteral("disk"))
     {
-        return QStringLiteral("disk_extractor_%1_1200.pt").arg(suffix);
+        return {
+            QStringLiteral("disk_extractor_%1_8192.torchscript").arg(suffix),
+            QStringLiteral("disk_extractor_%1_8192.pt").arg(suffix),
+            QStringLiteral("disk_extractor_%1_1200.torchscript").arg(suffix),
+            QStringLiteral("disk_extractor_%1_1200.pt").arg(suffix),
+            QStringLiteral("disk_extractor.torchscript"),
+            QStringLiteral("disk_extractor.pt")
+        };
     }
     if (featureAlgorithm == QStringLiteral("aliked"))
     {
-        return QStringLiteral("aliked_extractor_%1_480.pt").arg(suffix);
+        return {
+            QStringLiteral("aliked_extractor_%1_480.torchscript").arg(suffix),
+            QStringLiteral("aliked_extractor_%1_480.pt").arg(suffix),
+            QStringLiteral("aliked_extractor.torchscript"),
+            QStringLiteral("aliked_extractor.pt")
+        };
     }
-    return QString();
+    return {};
 }
 
 QStringList lightGlueModelCandidates(const QString &featureAlgorithm, bool useCuda)
 {
     const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
-    QStringList candidates;
     if (featureAlgorithm == QStringLiteral("disk"))
     {
-        candidates << QStringLiteral("lightglue_disk_%1.pt").arg(suffix);
+        return {
+            QStringLiteral("lightglue_disk_%1.torchscript").arg(suffix),
+            QStringLiteral("lightglue_disk_%1.pt").arg(suffix)
+        };
     }
-    else if (featureAlgorithm == QStringLiteral("aliked"))
+    if (featureAlgorithm == QStringLiteral("aliked"))
     {
-        candidates << QStringLiteral("lightglue_aliked_%1.pt").arg(suffix);
+        return {
+            QStringLiteral("lightglue_aliked_%1.torchscript").arg(suffix),
+            QStringLiteral("lightglue_aliked_%1.pt").arg(suffix)
+        };
     }
-    candidates << QStringLiteral("lightglue_matcher_%1.pt").arg(suffix)
-               << QStringLiteral("lightglue_matcher.pt");
-    return candidates;
+    return {
+        QStringLiteral("lightglue_matcher_%1.torchscript").arg(suffix),
+        QStringLiteral("lightglue_matcher_%1.pt").arg(suffix),
+        QStringLiteral("lightglue_matcher.torchscript"),
+        QStringLiteral("lightglue_matcher.pt")
+    };
+}
+
+QString findScriptFile(const QString &scriptName)
+{
+    QStringList candidates;
+
+    const QString envScriptDir = qEnvironmentVariable("PLASCAN_SCRIPT_DIR").trimmed();
+    if (!envScriptDir.isEmpty())
+    {
+        candidates.append(QDir(envScriptDir).filePath(scriptName));
+    }
+
+#ifdef PLASCAN_SOURCE_DIR
+    candidates.append(
+        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+#endif
+
+    const QString exeDir = QCoreApplication::applicationDirPath();
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(QDir::currentPath()).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+        {
+            return QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+        }
+    }
+
+    return QString();
+}
+
+QString resolvedExecutablePath(const QString &candidate)
+{
+    const QString trimmed = candidate.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return QString();
+    }
+
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
+    {
+        const QFileInfo info(trimmed);
+        if (info.exists() && info.isFile() && info.isExecutable())
+        {
+            return QDir::cleanPath(info.absoluteFilePath());
+        }
+        return QString();
+    }
+
+    const QString resolved = QStandardPaths::findExecutable(trimmed);
+    return resolved.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
+}
+
+QString pythonInEnvironmentPrefix(const QString &prefix)
+{
+    const QString trimmed = prefix.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return QString();
+    }
+
+    QStringList candidates;
+#ifdef Q_OS_WIN
+    candidates << QDir(trimmed).filePath(QStringLiteral("python.exe"))
+               << QDir(trimmed).filePath(QStringLiteral("Scripts/python.exe"));
+#else
+    candidates << QDir(trimmed).filePath(QStringLiteral("bin/python"));
+#endif
+
+    for (const QString &candidate : candidates)
+    {
+        const QString resolved = resolvedExecutablePath(candidate);
+        if (!resolved.isEmpty())
+        {
+            return resolved;
+        }
+    }
+    return QString();
+}
+
+QStringList defaultPythonEnvironmentPrefixes()
+{
+    QStringList prefixes;
+
+    const QString mambaRoot = qEnvironmentVariable("MAMBA_ROOT_PREFIX").trimmed();
+    if (!mambaRoot.isEmpty())
+    {
+        prefixes << QDir(mambaRoot).filePath(QStringLiteral("envs/plascan"));
+    }
+
+    const QString home = QDir::homePath();
+    prefixes << QDir(home).filePath(QStringLiteral(".local/share/mamba/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("mambaforge/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("miniforge3/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("miniconda3/envs/plascan"))
+             << QDir(home).filePath(QStringLiteral("anaconda3/envs/plascan"));
+
+    prefixes.removeDuplicates();
+    return prefixes;
+}
+
+bool pythonHasLightGlueBackend(const QString &executable)
+{
+    QProcess process;
+    process.start(executable, {QStringLiteral("-c"), QStringLiteral("import torch, lightglue")});
+    if (!process.waitForFinished(10000))
+    {
+        process.kill();
+        process.waitForFinished(3000);
+        return false;
+    }
+    return process.exitStatus() == QProcess::NormalExit && process.exitCode() == 0;
+}
+
+QString resolvePythonExecutableForLightGlue()
+{
+    QStringList candidates;
+    candidates << qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed()
+               << qEnvironmentVariable("PLASCAN_PYTHON").trimmed()
+               << pythonInEnvironmentPrefix(qEnvironmentVariable("VIRTUAL_ENV"))
+               << pythonInEnvironmentPrefix(qEnvironmentVariable("CONDA_PREFIX"));
+
+    for (const QString &prefix : defaultPythonEnvironmentPrefixes())
+    {
+        candidates << pythonInEnvironmentPrefix(prefix);
+    }
+
+    const QString pythonEnv = qEnvironmentVariable("PYTHON").trimmed();
+    if (!pythonEnv.isEmpty())
+    {
+        candidates << pythonEnv;
+    }
+    candidates << QStringLiteral("python3") << QStringLiteral("python");
+    candidates.removeAll(QString());
+    candidates.removeDuplicates();
+
+    QString firstResolved;
+    for (const QString &candidate : candidates)
+    {
+        const QString resolved = resolvedExecutablePath(candidate);
+        if (resolved.isEmpty())
+        {
+            continue;
+        }
+        if (firstResolved.isEmpty())
+        {
+            firstResolved = resolved;
+        }
+        if (pythonHasLightGlueBackend(resolved))
+        {
+            return resolved;
+        }
+    }
+    return firstResolved.isEmpty() ? QStringLiteral("python3") : firstResolved;
+}
+
+QString pythonExecutable()
+{
+    static const QString cached = resolvePythonExecutableForLightGlue();
+    return cached;
+}
+
+QString processOutputSummary(QProcess &process)
+{
+    const QString stdoutText = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+    const QString stderrText = QString::fromUtf8(process.readAllStandardError()).trimmed();
+    if (!stderrText.isEmpty() && !stdoutText.isEmpty())
+    {
+        return QStringLiteral("%1\n%2").arg(stderrText, stdoutText);
+    }
+    if (!stderrText.isEmpty())
+    {
+        return stderrText;
+    }
+    return stdoutText;
+}
+
+bool runPythonLightGlue(const QString &scriptPath,
+                        const QString &featurePath0,
+                        const QString &featurePath1,
+                        const QString &matchPath,
+                        bool useCuda,
+                        float threshold,
+                        const QString &featureAlgorithm,
+                        const QString &matchAlgorithm,
+                        xjw::feature_match::MatchResult *matchResult,
+                        QString *error)
+{
+    if (!matchResult)
+    {
+        if (error) *error = QStringLiteral("内部错误：匹配结果输出为空");
+        return false;
+    }
+
+    QStringList args;
+    args << scriptPath
+         << QStringLiteral("-f1") << featurePath0
+         << QStringLiteral("-f2") << featurePath1
+         << QStringLiteral("-o") << matchPath
+         << QStringLiteral("--threshold") << QString::number(threshold, 'g', 6)
+         << QStringLiteral("--feature-algorithm") << featureAlgorithm
+         << QStringLiteral("--match-algorithm") << matchAlgorithm;
+    if (useCuda)
+    {
+        args << QStringLiteral("--cuda");
+    }
+
+    QProcess process;
+    process.setWorkingDirectory(QFileInfo(scriptPath).absolutePath());
+    process.start(pythonExecutable(), args);
+    if (!process.waitForStarted(30000))
+    {
+        if (error) *error = QStringLiteral("无法启动 Python LightGlue: %1").arg(process.errorString());
+        return false;
+    }
+    if (!process.waitForFinished(600000))
+    {
+        process.kill();
+        process.waitForFinished(5000);
+        if (error) *error = QStringLiteral("Python LightGlue 超时: %1").arg(processOutputSummary(process));
+        return false;
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    {
+        if (error)
+        {
+            const QString details = processOutputSummary(process);
+            *error = details.isEmpty()
+                ? QStringLiteral("Python LightGlue 退出码: %1").arg(process.exitCode())
+                : QStringLiteral("Python LightGlue 退出码: %1\n%2").arg(process.exitCode()).arg(details);
+        }
+        return false;
+    }
+
+    QString image0Name;
+    QString image1Name;
+    if (!SuperGlueMatchIO::read(matchPath, image0Name, image1Name, *matchResult))
+    {
+        if (error) *error = QStringLiteral("Python LightGlue 已退出但无法读取匹配文件: %1").arg(matchPath);
+        return false;
+    }
+    LOG_INFO(QStringLiteral("  Python LightGlue 输出: %1 对匹配 (%2)")
+        .arg(matchResult->numMatches)
+        .arg(pythonExecutable()));
+    matchResult->sourceAlgorithm = matchAlgorithm.toStdString();
+    return true;
+}
+
+float pythonLightGlueFallbackThreshold(const QString &featureAlgorithm, float presetThreshold)
+{
+    if (featureAlgorithm == QStringLiteral("disk") || featureAlgorithm == QStringLiteral("aliked"))
+    {
+        return 0.0f;
+    }
+    return presetThreshold;
+}
+
+bool allowPythonLightGlueFallback()
+{
+    const QString value = qEnvironmentVariable("PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK")
+        .trimmed()
+        .toLower();
+    return value == QStringLiteral("1")
+        || value == QStringLiteral("true")
+        || value == QStringLiteral("yes")
+        || value == QStringLiteral("on");
 }
 
 QJsonObject readJsonObjectFile(const QString &path)
@@ -352,6 +645,214 @@ QualityPresets presetsForLevel(int quality)
     case 3:
     default: return {      30,    5,  3,  10,   0.001f,   -1,  2,  2,   0,  0.00f,    0,  0.20f, 200,  2.0,    25  };   // 最高精度 — 不缩放
     }
+}
+
+int safeDefaultFeatureMaxImageDim(const QString &featureAlgorithm)
+{
+    if (featureAlgorithm == QStringLiteral("disk"))
+    {
+        return 4096;
+    }
+    if (featureAlgorithm == QStringLiteral("aliked"))
+    {
+        return 2048;
+    }
+    return 2048;
+}
+
+int resolveFeatureMaxImageDim(const SFMServiceOptions &opts,
+                              const QualityPresets &presets,
+                              const QString &featureAlgorithm)
+{
+    if (opts.featureMaxImageDim < 0)
+    {
+        return 0;
+    }
+    if (opts.featureMaxImageDim > 0)
+    {
+        return opts.featureMaxImageDim;
+    }
+
+    const int safeMax = safeDefaultFeatureMaxImageDim(featureAlgorithm);
+    if (presets.featureMaxImageDim <= 0)
+    {
+        return 0;
+    }
+    if ((featureAlgorithm == QStringLiteral("disk") ||
+         featureAlgorithm == QStringLiteral("aliked")) &&
+        presets.featureMaxImageDim > safeMax)
+    {
+        return safeMax;
+    }
+    return presets.featureMaxImageDim;
+}
+
+QString featureMaxImageDimLabel(int maxImageDim)
+{
+    return maxImageDim > 0 ? QStringLiteral("%1 px").arg(maxImageDim)
+                           : QStringLiteral("原始尺寸");
+}
+
+bool isCudaOutOfMemoryError(const QString &message)
+{
+    const QString lower = message.toLower();
+    return lower.contains(QStringLiteral("cuda out of memory"))
+        || lower.contains(QStringLiteral("cuda error: out of memory"))
+        || (lower.contains(QStringLiteral("cuda")) && lower.contains(QStringLiteral("out of memory")));
+}
+
+bool isCudaOutOfMemoryError(const std::exception &error)
+{
+    return isCudaOutOfMemoryError(QString::fromUtf8(error.what()));
+}
+
+void clearTorchCudaCache()
+{
+    if (!torch::cuda::is_available())
+    {
+        return;
+    }
+    try
+    {
+        c10::cuda::CUDACachingAllocator::emptyCache();
+    }
+    catch (...)
+    {
+        // 清理缓存只是 OOM 后的辅助动作，失败时不要遮蔽原始错误。
+    }
+}
+
+int alignFeatureRetryDim(int value)
+{
+    if (value <= 0)
+    {
+        return 0;
+    }
+    return std::max(256, (value / 16) * 16);
+}
+
+QVector<int> adaptiveFeatureMaxImageDims(int initialMaxImageDim,
+                                         int imageMaxSide,
+                                         const QString &featureAlgorithm)
+{
+    QVector<int> dims;
+    auto appendDim = [&dims](int value) {
+        value = alignFeatureRetryDim(value);
+        if (!dims.contains(value))
+        {
+            dims.append(value);
+        }
+    };
+
+    appendDim(initialMaxImageDim);
+    if (imageMaxSide <= 0)
+    {
+        return dims;
+    }
+
+    const int currentEffectiveSide = initialMaxImageDim > 0
+        ? std::min(alignFeatureRetryDim(initialMaxImageDim), imageMaxSide)
+        : imageMaxSide;
+    const QVector<int> candidates = featureAlgorithm == QStringLiteral("aliked")
+        ? QVector<int>{2048, 1792, 1600, 1536, 1280, 1200, 1024, 960}
+        : QVector<int>{4096, 3584, 3072, 2560, 2048, 1792, 1600, 1536, 1280, 1200, 1024};
+
+    for (const int candidate : candidates)
+    {
+        if (candidate < currentEffectiveSide)
+        {
+            appendDim(candidate);
+        }
+    }
+
+    return dims;
+}
+
+FeatureOutput extractFeatureWithAdaptiveRetry(const QString &featureAlgorithm,
+                                              const QString &imageName,
+                                              const cv::Mat &image,
+                                              const QString &cpuExtractorModelPath,
+                                              ExtractorConfig *extractorCfg,
+                                              std::unique_ptr<IExtractor> *extractor)
+{
+    if (!extractorCfg || !extractor)
+    {
+        throw std::invalid_argument("extractFeatureWithAdaptiveRetry received null state");
+    }
+
+    auto recreateExtractor = [&]() {
+        *extractor = xjw::feature_extractors::createExtractor(featureAlgorithm.toStdString(), *extractorCfg);
+    };
+
+    if (!*extractor)
+    {
+        recreateExtractor();
+    }
+
+    const QVector<int> retryDims = adaptiveFeatureMaxImageDims(extractorCfg->maxImageDim,
+                                                               std::max(image.cols, image.rows),
+                                                               featureAlgorithm);
+    QString lastCudaOom;
+    for (int attempt = 0; attempt < retryDims.size(); ++attempt)
+    {
+        const int retryMaxImageDim = retryDims.at(attempt);
+        if (extractorCfg->maxImageDim != retryMaxImageDim || !*extractor)
+        {
+            extractorCfg->maxImageDim = retryMaxImageDim;
+            recreateExtractor();
+        }
+
+        try
+        {
+            return (*extractor)->extract(image);
+        }
+        catch (const c10::Error &error)
+        {
+            if (!(extractorCfg->useCuda && isCudaOutOfMemoryError(error)))
+            {
+                throw;
+            }
+            lastCudaOom = QString::fromUtf8(error.what());
+        }
+        catch (const std::exception &error)
+        {
+            if (!(extractorCfg->useCuda && isCudaOutOfMemoryError(error)))
+            {
+                throw;
+            }
+            lastCudaOom = QString::fromUtf8(error.what());
+        }
+
+        clearTorchCudaCache();
+        if (attempt + 1 < retryDims.size())
+        {
+            LOG_WARN(QStringLiteral("  %1 CUDA OOM: %2 使用 %3 失败，自动降到 %4 重试")
+                .arg(featureAlgorithm.toUpper(),
+                     imageName,
+                     featureMaxImageDimLabel(retryMaxImageDim),
+                     featureMaxImageDimLabel(retryDims.at(attempt + 1))));
+            continue;
+        }
+    }
+
+    if (extractorCfg->useCuda && !cpuExtractorModelPath.isEmpty())
+    {
+        LOG_WARN(QStringLiteral("  %1 CUDA OOM: %2 GPU 自适应降级仍失败，切换 CPU 模型重试")
+            .arg(featureAlgorithm.toUpper(), imageName));
+        extractorCfg->useCuda = false;
+        extractorCfg->modelPath = cpuExtractorModelPath.toStdString();
+        if (extractorCfg->maxImageDim <= 0)
+        {
+            extractorCfg->maxImageDim = safeDefaultFeatureMaxImageDim(featureAlgorithm);
+        }
+        *extractor = nullptr;
+        recreateExtractor();
+        return (*extractor)->extract(image);
+    }
+
+    throw std::runtime_error(lastCudaOom.isEmpty()
+        ? "feature extraction failed after adaptive retry"
+        : lastCudaOom.toStdString());
 }
 
 // ── 内部数据结构 ─────────────────────────────────────────────────────────────
@@ -441,9 +942,18 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     }
     const QString featureSuffix = QString::fromLatin1(
         ExtractorSuffix::forAlgorithm(featureAlgorithm.toStdString()));
+    const int featureMaxImageDim = resolveFeatureMaxImageDim(opts, presets, featureAlgorithm);
 
     LOG_INFO(QStringLiteral("SFM 流水线算法: %1 + %2, 特征后缀=%3")
         .arg(featureAlgorithm.toUpper(), matchAlgorithm, featureSuffix));
+    if (featureMaxImageDim > 0)
+    {
+        LOG_INFO(QStringLiteral("SFM 特征提取图像最长边上限: %1 px").arg(featureMaxImageDim));
+    }
+    else
+    {
+        LOG_INFO(QStringLiteral("SFM 特征提取图像最长边: 自动自适应（先尝试原始尺寸，CUDA OOM 时自动降低）"));
+    }
 
     // ══════════════════════════════════════════════════════════════════════════
     // 2. 设置目录
@@ -509,25 +1019,37 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     {
         LOG_INFO(QStringLiteral("  启动 %1 特征提取...").arg(featureAlgorithm.toUpper()));
 
-        const QString extractorModelName = featureModelName(featureAlgorithm, useCuda);
-        const QString extractorModelPath = findModelFile(extractorModelName);
+        QString pickedExtractorModelName;
+        const QString extractorModelPath = findFirstModelFile(
+            featureModelCandidates(featureAlgorithm, useCuda),
+            &pickedExtractorModelName);
         if (extractorModelPath.isEmpty())
         {
             result.errorMessage = QStringLiteral("未找到 %1 模型文件: %2")
-                .arg(featureAlgorithm.toUpper(), extractorModelName);
+                .arg(featureAlgorithm.toUpper(),
+                     featureModelCandidates(featureAlgorithm, useCuda).join(QStringLiteral(", ")));
             result.summary      = result.errorMessage;
             return result;
         }
+        LOG_INFO(QStringLiteral("  特征提取模型: %1").arg(pickedExtractorModelName));
 
         try
         {
+            QString cpuExtractorModelPath;
+            if (useCuda)
+            {
+                cpuExtractorModelPath = findFirstModelFile(featureModelCandidates(featureAlgorithm, false));
+            }
+
             ExtractorConfig extractorCfg;
             extractorCfg.modelPath     = extractorModelPath.toStdString();
             extractorCfg.maxKeypoints  = presets.featureMaxKeypoints;
             extractorCfg.detThreshold  = presets.featureDetectionThreshold;
             extractorCfg.nmsRadius     = presets.featureNmsRadius;
             extractorCfg.removeBorder  = presets.featureRemoveBorders;
-            extractorCfg.maxImageDim   = presets.featureMaxImageDim;
+            extractorCfg.maxImageDim   = featureMaxImageDim;
+            extractorCfg.grayscaleMin  = opts.featureGrayscaleMin;
+            extractorCfg.grayscaleMax  = opts.featureGrayscaleMax;
             extractorCfg.useCuda       = useCuda;
             extractorCfg.cudaDevice    = 0;
 
@@ -563,7 +1085,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     continue;
                 }
 
-                FeatureOutput featureOut = extractor->extract(image);
+                FeatureOutput featureOut = extractFeatureWithAdaptiveRetry(featureAlgorithm,
+                                                                           fi.fileName(),
+                                                                           image,
+                                                                           cpuExtractorModelPath,
+                                                                           &extractorCfg,
+                                                                           &extractor);
 
                 const QString featurePath = QDir(ipDir).filePath(fi.completeBaseName() + featureSuffix);
                 if (!FeatureFileIO::write(featurePath, fi.fileName(), featureOut,
@@ -1066,14 +1593,48 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
         QString lgModelName;
         const QString lgModelPath = findFirstModelFile(lightGlueModelCandidates(featureAlgorithm, useCuda), &lgModelName);
-        if (lgModelPath.isEmpty())
+        const bool canUsePythonLightGlue = featureAlgorithm == QStringLiteral("disk")
+                                        || featureAlgorithm == QStringLiteral("aliked");
+        const bool usePythonLightGlue = lgModelPath.isEmpty()
+                                     && canUsePythonLightGlue
+                                     && allowPythonLightGlueFallback();
+        const float activeMatchThreshold = usePythonLightGlue
+            ? pythonLightGlueFallbackThreshold(featureAlgorithm, presets.matchThreshold)
+            : presets.matchThreshold;
+        QString pythonLightGlueScript;
+        if (usePythonLightGlue)
+        {
+            pythonLightGlueScript = findScriptFile(QStringLiteral("run_lightglue.py"));
+            if (pythonLightGlueScript.isEmpty())
+            {
+                result.errorMessage =
+                    QStringLiteral("未找到 %1 专用 LightGlue TorchScript 模型(%2)，且未找到 scripts/run_lightglue.py")
+                        .arg(featureAlgorithm.toUpper(),
+                             lightGlueModelCandidates(featureAlgorithm, useCuda).join(QStringLiteral(", ")));
+                result.summary = result.errorMessage;
+                return result;
+            }
+            LOG_INFO(QStringLiteral("  未找到 %1 专用 LightGlue TorchScript，使用 Python LightGlue: %2")
+                .arg(featureAlgorithm.toUpper(), pythonLightGlueScript));
+            LOG_INFO(QStringLiteral("  Python LightGlue 阈值: %1").arg(activeMatchThreshold, 0, 'g', 6));
+        }
+        else if (lgModelPath.isEmpty())
         {
             result.errorMessage = QStringLiteral("未找到 LightGlue 模型文件: %1")
                 .arg(lightGlueModelCandidates(featureAlgorithm, useCuda).join(QStringLiteral(", ")));
+            if (canUsePythonLightGlue)
+            {
+                result.errorMessage += QStringLiteral(
+                    "。默认流程不再自动回退 Python LightGlue；请先运行 scripts/export_lightglue_torchscript.py 导出 TorchScript，"
+                    "或临时设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1");
+            }
             result.summary      = result.errorMessage;
             return result;
         }
-        LOG_INFO(QStringLiteral("  LightGlue 模型: %1").arg(lgModelName));
+        else
+        {
+            LOG_INFO(QStringLiteral("  LightGlue 模型: %1").arg(lgModelName));
+        }
 
         // ── 粗差剔除配置（USAC_MAGSAC，最优粗差剔除）──────────────────────────────────
         superglue::OutlierFilterConfig outlierCfg;
@@ -1117,9 +1678,10 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         xjw::feature_match::LightGlueConfig lgCfg;
         lgCfg.matcherModelPath = lgModelPath.toStdString();
         lgCfg.useCuda = useCuda;
-        lgCfg.scoreThreshold = presets.matchThreshold;
+        lgCfg.scoreThreshold = activeMatchThreshold;
 
         // ── 验证模型可加载（用单个测试实例） ─────────────────────────────
+        if (!usePythonLightGlue)
         {
             xjw::feature_match::LightGlueMatcher testMatcher(lgCfg);
             if (!testMatcher.isLoaded()) 
@@ -1145,6 +1707,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             {
                 // 每线程自有 matcher 实例
                 std::unique_ptr<xjw::feature_match::IFeatureMatcher> localMatcher;
+                if (!usePythonLightGlue)
                 {
                     auto lgMatcher = std::make_unique<xjw::feature_match::LightGlueMatcher>(lgCfg);
                     if (!lgMatcher->isLoaded()) return;
@@ -1178,6 +1741,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     const ImageFeatureCache &fcA = *itA;
                     const ImageFeatureCache &fcB = *itB;
 
+                    const QString baseA    = QFileInfo(idToPath.value(idA)).completeBaseName();
+                    const QString baseB    = QFileInfo(idToPath.value(idB)).completeBaseName();
+                    const QString pairName = QStringLiteral("%1__%2").arg(baseA, baseB);
+                    const QString matchPath = QDir(matchDir).filePath(pairName + QStringLiteral(".match"));
+
                     auto fdA = xjw::feature_extractors::FeatureData::fromFeatureOutput(
                         fcA.featureOutput, featureAlgorithm.toStdString());
                     auto fdB = xjw::feature_extractors::FeatureData::fromFeatureOutput(
@@ -1188,17 +1756,34 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     fdB.imageHeight = fcB.imgH;
 
                     // 执行匹配
-                    xjw::feature_match::MatchResult mr = localMatcher->match(fdA, fdB);
+                    xjw::feature_match::MatchResult mr;
+                    if (usePythonLightGlue)
+                    {
+                        QString pythonError;
+                        if (!runPythonLightGlue(pythonLightGlueScript,
+                                                featureFilePaths.value(idA),
+                                                featureFilePaths.value(idB),
+                                                matchPath,
+                                                useCuda,
+                                                activeMatchThreshold,
+                                                featureAlgorithm,
+                                                matchAlgorithm,
+                                                &mr,
+                                                &pythonError))
+                        {
+                            throw std::runtime_error(pythonError.toStdString());
+                        }
+                    }
+                    else
+                    {
+                        mr = localMatcher->match(fdA, fdB);
+                    }
 
                     // 粗差剔除
                     int inlierCount = mr.numMatches;
                     mr = superglue::MatchOutlierRejector::filter(
                         mr, fcA.featureOutput.keypoints, fcB.featureOutput.keypoints,
                         outlierCfg, &inlierCount);
-
-                    const QString baseA    = QFileInfo(idToPath.value(idA)).completeBaseName();
-                    const QString baseB    = QFileInfo(idToPath.value(idB)).completeBaseName();
-                    const QString pairName = QStringLiteral("%1__%2").arg(baseA, baseB);
 
                     // ── 最小内点数检测：内点不足时记录到 failedPairs（不写文件）──
                     if (mr.numMatches < presets.minInliers)
@@ -1221,7 +1806,6 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                         .arg(pairName).arg(mr.numMatches));
 
                     // ── 保存 .match 文件 ────────────────────────────────────
-                    const QString matchPath = QDir(matchDir).filePath(pairName + QStringLiteral(".match"));
                     SuperGlueMatchIO::write(matchPath, baseA, baseB, mr);
 
                     // ── 保存 sidecar JSON ───────────────────────────────────
@@ -1238,7 +1822,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     sidecar[QStringLiteral("feature_algorithm")] = featureAlgorithm;
                     sidecar[QStringLiteral("match_algorithm")] = matchAlgorithm;
                     sidecar[QStringLiteral("num_matches")]     = mr.numMatches;
-                    sidecar[QStringLiteral("match_threshold")] = static_cast<double>(presets.matchThreshold);
+                    sidecar[QStringLiteral("match_threshold")] = static_cast<double>(activeMatchThreshold);
 
                     QJsonArray pts0, pts1;
                     for (const auto &dm : mr.cvMatches) 

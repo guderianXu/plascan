@@ -35,6 +35,7 @@ class MenuWorkflowController : public QObject
 public:
     /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
     DialogSettingStore *m_spSetting = nullptr;
+    DialogSettingStore *m_vocabOverlapSetting = nullptr;
     DialogSettingStore *m_spVisSetting = nullptr;
     DialogSettingStore *m_baSetting = nullptr;
     DialogSettingStore *m_mapSetting = nullptr;
@@ -53,6 +54,9 @@ public:
 public slots:
     /// 打开特征提取配置对话框，并恢复记忆化参数。
     void openFeatureExtractionDialog();
+
+    /// 打开基于特征词汇的重叠对预检索对话框。
+    void openVocabularyOverlapDialog();
 
     /// 打开特征点渲染选项对话框，并支持实时预览。
     void openSuperPointVisualizationDialog();
@@ -98,6 +102,7 @@ private:
 
     void startThreeDReconstructionWorkflow(const QJsonObject &settings);
     void startThreeDReconstructionDenseStage(const QJsonObject &settings);
+    void startThreeDReconstructionDenseRefineStage(const QJsonObject &settings);
     void startThreeDReconstructionMeshStage(const QJsonObject &settings);
 
     QPointer<QMainWindow> m_mainWindow;            // 父主窗口弱引用（不拥有）

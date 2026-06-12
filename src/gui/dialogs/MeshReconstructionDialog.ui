@@ -21,6 +21,13 @@
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
    <item>
+    <widget class="QScrollArea" name="parameterScrollArea">
+     <property name="widgetResizable">
+      <bool>true</bool>
+     </property>
+     <widget class="QWidget" name="parameterScrollWidget">
+      <layout class="QVBoxLayout" name="parameterLayout">
+   <item>
     <widget class="QGroupBox" name="inputGroup">
      <property name="title">
       <string>输入点云</string>
@@ -459,10 +466,14 @@
     </widget>
    </item>
    <item>
-    <widget class="QLabel" name="m_infoLabel">
+   <widget class="QLabel" name="m_infoLabel">
      <property name="text">
       <string>输出: 项目目录下的 mesh 文件</string>
      </property>
+    </widget>
+   </item>
+      </layout>
+     </widget>
     </widget>
    </item>
    <item>

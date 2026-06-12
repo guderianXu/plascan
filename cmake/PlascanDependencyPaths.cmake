@@ -85,15 +85,134 @@ function(plascan_find_cuda_root_from_prefix prefix out_var)
     set(${out_var} "" PARENT_SCOPE)
 endfunction()
 
+function(plascan_path_is_under_prefix path prefix out_var)
+    if(NOT path OR NOT prefix)
+        set(${out_var} FALSE PARENT_SCOPE)
+        return()
+    endif()
+
+    file(REAL_PATH "${path}" _realPath BASE_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    file(REAL_PATH "${prefix}" _realPrefix BASE_DIRECTORY "${CMAKE_SOURCE_DIR}")
+    string(FIND "${_realPath}" "${_realPrefix}/" _prefixPos)
+    if(_prefixPos EQUAL 0 OR _realPath STREQUAL _realPrefix)
+        set(${out_var} TRUE PARENT_SCOPE)
+    else()
+        set(${out_var} FALSE PARENT_SCOPE)
+    endif()
+endfunction()
+
+function(plascan_append_unique_flag var_name flag)
+    if(NOT "${${var_name}}" MATCHES "(^| )${flag}($| )")
+        set(${var_name} "${flag} ${${var_name}}" CACHE STRING "" FORCE)
+    endif()
+endfunction()
+
+function(plascan_configure_mixed_toolchain_binutils conda_prefix)
+    if(APPLE OR NOT conda_prefix OR NOT EXISTS "${conda_prefix}")
+        set(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN OFF CACHE BOOL
+            "Use system binutils when system compilers are combined with conda dependencies" FORCE)
+        return()
+    endif()
+
+    plascan_path_is_under_prefix("${CMAKE_CXX_COMPILER}" "${conda_prefix}" _compilerInConda)
+    if(_compilerInConda)
+        set(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN OFF CACHE BOOL
+            "Use system binutils when system compilers are combined with conda dependencies" FORCE)
+        return()
+    endif()
+
+    if(EXISTS "/usr/bin/ld")
+        set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "Linker" FORCE)
+    endif()
+    if(EXISTS "/usr/bin/ar")
+        set(CMAKE_AR "/usr/bin/ar" CACHE FILEPATH "Archiver" FORCE)
+    endif()
+    if(EXISTS "/usr/bin/ranlib")
+        set(CMAKE_RANLIB "/usr/bin/ranlib" CACHE FILEPATH "Ranlib" FORCE)
+    endif()
+    if(EXISTS "/usr/bin/nm")
+        set(CMAKE_NM "/usr/bin/nm" CACHE FILEPATH "nm" FORCE)
+    endif()
+    if(EXISTS "/usr/bin/g++")
+        set(CMAKE_CUDA_HOST_COMPILER "/usr/bin/g++" CACHE FILEPATH "CUDA host compiler" FORCE)
+    elseif(CMAKE_CXX_COMPILER)
+        set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}" CACHE FILEPATH "CUDA host compiler" FORCE)
+    endif()
+
+    # The system compiler can still locate conda's ld through an activated
+    # environment. Prefer system binutils explicitly for every link step.
+    plascan_append_unique_flag(CMAKE_EXE_LINKER_FLAGS "-B/usr/bin")
+    plascan_append_unique_flag(CMAKE_SHARED_LINKER_FLAGS "-B/usr/bin")
+    plascan_append_unique_flag(CMAKE_MODULE_LINKER_FLAGS "-B/usr/bin")
+    plascan_append_unique_flag(CMAKE_CUDA_FLAGS "-Xcompiler=-B/usr/bin")
+
+    set(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN ON CACHE BOOL
+        "Use system binutils when system compilers are combined with conda dependencies" FORCE)
+    message(STATUS
+        "plascan: system C++ compiler detected; using system binutils to avoid conda sysroot/glibc mixing")
+endfunction()
+
+function(plascan_apply_mixed_toolchain_binutils_to_scope)
+    if(NOT PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)
+        return()
+    endif()
+
+    set(CMAKE_LINKER "/usr/bin/ld")
+    set(CMAKE_AR "/usr/bin/ar")
+    set(CMAKE_RANLIB "/usr/bin/ranlib")
+    set(CMAKE_NM "/usr/bin/nm")
+    if(EXISTS "/usr/bin/g++")
+        set(CMAKE_CUDA_HOST_COMPILER "/usr/bin/g++")
+    elseif(CMAKE_CXX_COMPILER)
+        set(CMAKE_CUDA_HOST_COMPILER "${CMAKE_CXX_COMPILER}")
+    endif()
+
+    foreach(_flagVar IN ITEMS
+            CMAKE_EXE_LINKER_FLAGS
+            CMAKE_SHARED_LINKER_FLAGS
+            CMAKE_MODULE_LINKER_FLAGS)
+        if(NOT "${${_flagVar}}" MATCHES "(^| )-B/usr/bin($| )")
+            set(${_flagVar} "-B/usr/bin ${${_flagVar}}" CACHE STRING "" FORCE)
+        endif()
+    endforeach()
+
+    if(NOT "${CMAKE_CUDA_FLAGS}" MATCHES "(^| )-Xcompiler=-B/usr/bin($| )")
+        set(CMAKE_CUDA_FLAGS "-Xcompiler=-B/usr/bin ${CMAKE_CUDA_FLAGS}"
+            CACHE STRING "CUDA compiler flags" FORCE)
+    endif()
+
+    foreach(_lang IN ITEMS C CXX CUDA)
+        set(CMAKE_${_lang}_ARCHIVE_CREATE
+            "/usr/bin/ar qc <TARGET> <LINK_FLAGS> <OBJECTS>")
+        set(CMAKE_${_lang}_ARCHIVE_APPEND
+            "/usr/bin/ar q <TARGET> <LINK_FLAGS> <OBJECTS>")
+        set(CMAKE_${_lang}_ARCHIVE_FINISH
+            "/usr/bin/ranlib <TARGET>")
+
+        set(CMAKE_${_lang}_ARCHIVE_CREATE
+            "${CMAKE_${_lang}_ARCHIVE_CREATE}" PARENT_SCOPE)
+        set(CMAKE_${_lang}_ARCHIVE_APPEND
+            "${CMAKE_${_lang}_ARCHIVE_APPEND}" PARENT_SCOPE)
+        set(CMAKE_${_lang}_ARCHIVE_FINISH
+            "${CMAKE_${_lang}_ARCHIVE_FINISH}" PARENT_SCOPE)
+    endforeach()
+
+    foreach(_toolVar IN ITEMS
+            CMAKE_LINKER
+            CMAKE_AR
+            CMAKE_RANLIB
+            CMAKE_NM
+            CMAKE_CUDA_HOST_COMPILER
+            CMAKE_CUDA_FLAGS
+            CMAKE_EXE_LINKER_FLAGS
+            CMAKE_SHARED_LINKER_FLAGS
+            CMAKE_MODULE_LINKER_FLAGS)
+        set(${_toolVar} "${${_toolVar}}" PARENT_SCOPE)
+    endforeach()
+endfunction()
+
 function(plascan_configure_dependency_paths)
     set(_providerSummary "")
-
-    # 强制使用系统 binutils 避免 conda ld 与系统 glibc 版本冲突
-    if(DEFINED ENV{CONDA_PREFIX} AND NOT CMAKE_LINKER)
-        if(EXISTS "/usr/bin/ld")
-            set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "Linker" FORCE)
-        endif()
-    endif()
 
     if(PLASCAN_ENABLE_VCPKG)
         if(CMAKE_TOOLCHAIN_FILE)
@@ -107,6 +226,9 @@ function(plascan_configure_dependency_paths)
     if(NOT _condaPrefix AND DEFINED ENV{CONDA_PREFIX})
         set(_condaPrefix "$ENV{CONDA_PREFIX}")
     endif()
+
+    plascan_configure_mixed_toolchain_binutils("${_condaPrefix}")
+    plascan_apply_mixed_toolchain_binutils_to_scope()
 
     if(PLASCAN_ENABLE_CONDA AND _condaPrefix)
         plascan_append_prefix_if_exists("${_condaPrefix}")

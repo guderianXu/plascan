@@ -438,9 +438,10 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     if (imagePath.trimmed().isEmpty()) return;
 
     const QString imagePathCopy = imagePath;
+    const QString activeSuffix = m_activeFeatureSuffix;
     // 检查缓存 (key 含 suffix)
     QFileInfo fiCheck(imagePathCopy);
-    const QString cacheKey = imagePathCopy + m_activeFeatureSuffix;
+    const QString cacheKey = imagePathCopy + activeSuffix;
     auto it = m_spCache.find(cacheKey);
     if (it != m_spCache.end()) {
         if (it->second.first == fiCheck.lastModified()) {
@@ -454,18 +455,18 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
     }
     
-    QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([this, imagePathCopy, cacheKey]() -> std::vector<cv::KeyPoint> {
+    QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([this, imagePathCopy, activeSuffix]() -> std::vector<cv::KeyPoint> {
         std::vector<cv::KeyPoint> empty;
         const QString projectPath = property("currentProjectPath").toString();
         // 使用当前选中的后缀查找特征文件
         const QString spFile = ProjectIO::featureOutputPathForImage(
-            projectPath, imagePathCopy, m_activeFeatureSuffix);
+            projectPath, imagePathCopy, activeSuffix);
         LOG_DEBUG(QStringLiteral("startSpLoadForImage: suffix=%1 file=%2")
-            .arg(m_activeFeatureSuffix, spFile));
+            .arg(activeSuffix, spFile));
 
         if (spFile.isEmpty() || !QFile::exists(spFile)) {
             LOG_DEBUG(QStringLiteral("startSpLoadForImage: no %1 found for %2")
-                .arg(m_activeFeatureSuffix, imagePathCopy));
+                .arg(activeSuffix, imagePathCopy));
             return empty;
         }
 
@@ -520,7 +521,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     // 取消上一个 watcher（如果有）并启动新 watcher
     if (m_spWatcher->isRunning()) m_spWatcher->cancel();
     m_lastRequestedSpPath = imagePathCopy;
-    m_lastRequestedSpSuffix = m_activeFeatureSuffix;
+    m_lastRequestedSpSuffix = activeSuffix;
     m_spWatcher->setFuture(future);
 }
 

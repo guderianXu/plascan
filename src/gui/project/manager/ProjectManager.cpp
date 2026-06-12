@@ -294,7 +294,8 @@ void ProjectManager::startDenseMatchAsync(const QJsonObject &settings)
 
 void ProjectManager::startDenseMatchAsyncWithProgress(
     const QJsonObject &settings,
-    std::shared_ptr<std::atomic<int>> progress)
+    std::shared_ptr<std::atomic<int>> progress,
+    std::shared_ptr<std::atomic<bool>> cancelFlag)
 {
     const QJsonArray pairs = settings.value(QStringLiteral("match_pairs")).toArray();
     const QString outputDir  = settings.value(QStringLiteral("output_dir")).toString();
@@ -322,6 +323,12 @@ void ProjectManager::startDenseMatchAsyncWithProgress(
     int completed = 0;
     for (const QJsonValue &val : pairs)
     {
+        if (cancelFlag && cancelFlag->load())
+        {
+            LOG_INFO(QStringLiteral("密集匹配已请求取消，停止处理剩余匹配对"));
+            break;
+        }
+
         const QJsonObject pair = val.toObject();
         const QString imgA = pair.value(QStringLiteral("imgA")).toString();
         const QString imgB = pair.value(QStringLiteral("imgB")).toString();
@@ -359,6 +366,12 @@ void ProjectManager::startDenseMatchAsyncWithProgress(
 
         xjw::dense_match::DenseMatchService service(cfg);
         auto result = service.process();
+        if (cancelFlag && cancelFlag->load())
+        {
+            LOG_INFO(QStringLiteral("密集匹配已请求取消，跳过当前结果保存"));
+            break;
+        }
+
         if (!result.disparity.empty())
         {
             // Step 5: Save
@@ -657,29 +670,118 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.exportRunJson     = extraSettings.value(QStringLiteral("export_run_json")).toBool(true);
     opts.exportEvalPlot    = extraSettings.value(QStringLiteral("export_eval_plot")).toBool(true);
 
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    setAtCancelFlag(cancelFlag);
+    opts.baOpt.cancelFlag = cancelFlag;
+    opts.baOpt.progressCallback =
+        [self = this, cancelFlag](int currentIteration, int maxIterations, double avgRms, int validPoints) -> bool
+        {
+            if (cancelFlag->load(std::memory_order_relaxed))
+            {
+                return false;
+            }
+
+            const int safeMaxIterations = std::max(1, maxIterations);
+            const int percent = qBound(
+                10,
+                10 + static_cast<int>(std::lround(80.0 * currentIteration / safeMaxIterations)),
+                90);
+            const QString stage = QStringLiteral("光束法平差优化中... %1/%2 RMS=%3 有效点=%4")
+                .arg(currentIteration)
+                .arg(safeMaxIterations)
+                .arg(avgRms, 0, 'f', 4)
+                .arg(validPoints);
+            QMetaObject::invokeMethod(
+                self,
+                [self, cancelFlag, stage, percent]()
+                {
+                    if (self->m_atCancelFlag != cancelFlag ||
+                        cancelFlag->load(std::memory_order_relaxed))
+                    {
+                        return;
+                    }
+                    emit self->atProgressChanged(stage, percent);
+                },
+                Qt::QueuedConnection);
+            return true;
+        };
+
+    emit atProgressChanged(QStringLiteral("光束法平差准备中..."), 1);
+
     LOG_INFO(QStringLiteral("BA: 特征/匹配准备完毕，启动光束法平差"));
 
     auto *self = this;
 
 (void)QtConcurrent::run(
         [self, coreData, plascanPath, images, minMatches,
-         opts = std::move(opts), isDryRun = dryRun]() mutable
+         cancelFlag, opts = std::move(opts), isDryRun = dryRun]() mutable
     {
+        auto finishTask = [self, cancelFlag](bool success)
+        {
+            QMetaObject::invokeMethod(
+                self,
+                [self, cancelFlag, success]()
+                {
+                    if (self->m_atCancelFlag != cancelFlag)
+                    {
+                        return;
+                    }
+                    self->m_atCancelFlag.reset();
+                    emit self->atProgressFinished(success);
+                },
+                Qt::QueuedConnection);
+        };
+
+        QMetaObject::invokeMethod(
+            self,
+            [self, cancelFlag]()
+            {
+                if (self->m_atCancelFlag != cancelFlag ||
+                    cancelFlag->load(std::memory_order_relaxed))
+                {
+                    return;
+                }
+                emit self->atProgressChanged(QStringLiteral("光束法平差构建输入..."), 5);
+            },
+            Qt::QueuedConnection);
+
         const BundleAdjustExecutionResult executionResult = runBundleAdjustExecution(coreData,
                                                                                      plascanPath,
                                                                                      images,
                                                                                      minMatches,
                                                                                      std::move(opts));
 
+        if (cancelFlag->load(std::memory_order_relaxed))
+        {
+            LOG_INFO(QStringLiteral("BA: 用户取消了光束法平差"));
+            QMetaObject::invokeMethod(self,
+                [self, cancelFlag]()
+                {
+                    if (self->m_atCancelFlag == cancelFlag)
+                    {
+                        emit self->bundleAdjustPreviewReady(QJsonObject());
+                    }
+                },
+                Qt::QueuedConnection);
+            finishTask(false);
+            return;
+        }
+
         if (executionResult.buildStatus != xjw::gui::project::BaInputBuildStatus::Ok) {
             QMetaObject::invokeMethod(self,
-                [self, buildStatus = executionResult.buildStatus]() {
+                [self, cancelFlag, buildStatus = executionResult.buildStatus]() {
+                    if (self->m_atCancelFlag != cancelFlag)
+                    {
+                        return;
+                    }
                     const QString msg =
                         buildStatus == xjw::gui::project::BaInputBuildStatus::NotEnoughCameras
                         ? QStringLiteral("所选影像中可用相机参数不足（至少需要两台相机）")
                         : QStringLiteral("未找到可用于光束法平差的匹配点（请检查选中影像是否已有匹配结果）");
                     QMessageBox::warning(self->m_parent, QStringLiteral("提示"), msg);
                     emit self->bundleAdjustPreviewReady(QJsonObject());
+                    self->m_atCancelFlag.reset();
+                    emit self->atProgressFinished(false);
                 },
                 Qt::QueuedConnection);
             return;
@@ -692,20 +794,37 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
 
         QMetaObject::invokeMethod(self,
             [self,
+             cancelFlag,
              baResult = executionResult.serviceResult,
              beforeCamMeta = executionResult.beforeCamMeta,
              isDryRun]()
             {
+                if (self->m_atCancelFlag != cancelFlag)
+                {
+                    return;
+                }
+                if (cancelFlag->load(std::memory_order_relaxed))
+                {
+                    emit self->bundleAdjustPreviewReady(QJsonObject());
+                    self->m_atCancelFlag.reset();
+                    emit self->atProgressFinished(false);
+                    return;
+                }
+
+                emit self->atProgressChanged(QStringLiteral("光束法平差整理结果..."), 95);
+
                 if (!baResult.success && !isDryRun) {
                     QMessageBox::warning(self->m_parent,
                         QStringLiteral("平差提示"),
                         QStringLiteral("光束法平差执行出现问题：%1").arg(baResult.errorMessage));
                 }
-                    self->m_pendingBaBeforeCameraMeta = beforeCamMeta;
+                self->m_pendingBaBeforeCameraMeta = beforeCamMeta;
                 self->m_pendingBaCameraMeta  = baResult.pendingCamUpdates;
                 self->m_pendingBaResult      = baResult.resultJson;
                 self->m_hasPendingBaPreview  = !self->m_pendingBaCameraMeta.isEmpty();
                 emit self->bundleAdjustPreviewReady(baResult.resultJson);
+                self->m_atCancelFlag.reset();
+                emit self->atProgressFinished(baResult.success);
             },
             Qt::QueuedConnection);
     });
@@ -1107,6 +1226,6 @@ void ProjectManager::cancelAt()
     if (m_atCancelFlag)
     {
         m_atCancelFlag->store(true);
-        qDebug() << "[AT] 已请求取消";
+        qDebug() << "[AT/BA] 已请求取消";
     }
 }

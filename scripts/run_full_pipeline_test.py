@@ -34,25 +34,39 @@ SUFFIX = {
 
 MODEL_CANDIDATES = {
     "superpoint": {
-        "cpu": ["superpoint_extractor_cpu.pt", "superpoint_extractor.pt"],
-        "cuda": ["superpoint_extractor_cuda.pt", "superpoint_extractor.pt"],
+        "cpu": ["superpoint_extractor_cpu.torchscript", "superpoint_extractor_cpu.pt", "superpoint_extractor.torchscript", "superpoint_extractor.pt"],
+        "cuda": ["superpoint_extractor_cuda.torchscript", "superpoint_extractor_cuda.pt", "superpoint_extractor.torchscript", "superpoint_extractor.pt"],
     },
     "disk": {
-        "cpu": ["disk_extractor_cpu_1200.pt", "disk_extractor.pt"],
-        "cuda": ["disk_extractor_cuda_1200.pt", "disk_extractor.pt"],
+        "cpu": ["disk_extractor_cpu_8192.torchscript", "disk_extractor_cpu_8192.pt", "disk_extractor_cpu_1200.torchscript", "disk_extractor_cpu_1200.pt", "disk_extractor.torchscript", "disk_extractor.pt"],
+        "cuda": ["disk_extractor_cuda_8192.torchscript", "disk_extractor_cuda_8192.pt", "disk_extractor_cuda_1200.torchscript", "disk_extractor_cuda_1200.pt", "disk_extractor.torchscript", "disk_extractor.pt"],
     },
     "aliked": {
-        "cpu": ["aliked_extractor_cpu_480.pt", "aliked_extractor.pt"],
-        "cuda": ["aliked_extractor_cuda_480.pt", "aliked_extractor.pt"],
+        "cpu": ["aliked_extractor_cpu_480.torchscript", "aliked_extractor_cpu_480.pt", "aliked_extractor.torchscript", "aliked_extractor.pt"],
+        "cuda": ["aliked_extractor_cuda_480.torchscript", "aliked_extractor_cuda_480.pt", "aliked_extractor.torchscript", "aliked_extractor.pt"],
     },
     "superglue": {
         "cpu": ["superglue_outdoor_cpu.pt", "superglue_outdoor.pt", "superglue_indoor_cpu.pt"],
         "cuda": ["superglue_outdoor_cuda.pt", "superglue_outdoor.pt", "superglue_indoor_cuda.pt"],
     },
     "lightglue": {
-        "cpu": ["lightglue_matcher_cpu.pt", "lightglue_matcher.pt"],
-        "cuda": ["lightglue_matcher_cuda.pt", "lightglue_matcher.pt"],
+        "cpu": ["lightglue_matcher_cpu.torchscript", "lightglue_matcher_cpu.pt", "lightglue_matcher.torchscript", "lightglue_matcher.pt"],
+        "cuda": ["lightglue_matcher_cuda.torchscript", "lightglue_matcher_cuda.pt", "lightglue_matcher.torchscript", "lightglue_matcher.pt"],
     },
+    "lightglue_disk": {
+        "cpu": ["lightglue_disk_cpu.torchscript", "lightglue_disk_cpu.pt"],
+        "cuda": ["lightglue_disk_cuda.torchscript", "lightglue_disk_cuda.pt"],
+    },
+    "lightglue_aliked": {
+        "cpu": ["lightglue_aliked_cpu.torchscript", "lightglue_aliked_cpu.pt"],
+        "cuda": ["lightglue_aliked_cuda.torchscript", "lightglue_aliked_cuda.pt"],
+    },
+}
+
+DEFAULT_MAX_KEYPOINTS = {
+    "disk": 8192,
+    "aliked": 480,
+    "superpoint": 4096,
 }
 
 
@@ -99,8 +113,9 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--algorithms", default="all",
                         help="comma list or all; default runs all CLI feature algorithms")
     parser.add_argument("--pair-mode", choices=["all", "adjacent"], default="all")
-    parser.add_argument("--max-image-dim", type=int, default=1200)
-    parser.add_argument("--max-keypoints", type=int, default=1200)
+    parser.add_argument("--max-image-dim", type=int, default=0)
+    parser.add_argument("--max-keypoints", type=int, default=0,
+                        help="0 uses per-algorithm defaults; DISK defaults to 8192")
     parser.add_argument("--dense-max-disp", type=int, default=0,
                         help="dense disparity upper bound in pixels; 0 estimates from camera geometry")
     parser.add_argument("--dense-algorithm", default="opencv_sgbm")
@@ -275,6 +290,21 @@ def find_model(root: Path, kind: str, device: str) -> Path | None:
         if candidate.exists():
             return candidate
     return None
+
+
+def max_keypoints_for_algorithm(args: argparse.Namespace, algo: str) -> int:
+    explicit = int(getattr(args, "max_keypoints", 0) or 0)
+    if explicit > 0:
+        return explicit
+    return DEFAULT_MAX_KEYPOINTS.get(algo, 4096)
+
+
+def lightglue_model_kind_for_algorithm(algo: str) -> str:
+    if algo == "disk":
+        return "lightglue_disk"
+    if algo == "aliked":
+        return "lightglue_aliked"
+    return "lightglue"
 
 
 def run_command(cmd: list[str], log_path: Path) -> CommandResult:
@@ -973,7 +1003,7 @@ def extract_features(args: argparse.Namespace,
                 "-a", algo,
                 "-i", str(item.work_image),
                 "-o", str(out_path),
-                "-n", str(args.max_keypoints),
+                "-n", str(max_keypoints_for_algorithm(args, algo)),
                 "--max-dim", str(args.max_image_dim),
             ]
             if model:
@@ -1016,7 +1046,7 @@ def match_features(args: argparse.Namespace,
             continue
         matcher_specs: list[tuple[str, Path | None]] = [("bf", None)]
         if not args.skip_learned_matchers:
-            lg_model = find_model(root, "lightglue", args.device)
+            lg_model = find_model(root, lightglue_model_kind_for_algorithm(algo), args.device)
             if lg_model is not None:
                 matcher_specs.append(("lightglue", lg_model))
             if algo == "superpoint":

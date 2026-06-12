@@ -49,6 +49,45 @@ bool pathTokenMatchesImage(const QString &token, const QString &imagePath)
     return QFileInfo(token).completeBaseName() == QFileInfo(imagePath).completeBaseName();
 }
 
+QStringList sidecarImageTokens(const QJsonObject &sidecar, int imageIndex)
+{
+    const QStringList keys = imageIndex == 0
+        ? QStringList{
+            QStringLiteral("image0_path"),
+            QStringLiteral("image0_name"),
+            QStringLiteral("feature0_path"),
+            QStringLiteral("sp0_path")
+        }
+        : QStringList{
+            QStringLiteral("image1_path"),
+            QStringLiteral("image1_name"),
+            QStringLiteral("feature1_path"),
+            QStringLiteral("sp1_path")
+        };
+    QStringList tokens;
+    for (const QString &key : keys)
+    {
+        const QString token = sidecar.value(key).toString().trimmed();
+        if (!token.isEmpty())
+        {
+            tokens.append(token);
+        }
+    }
+    return tokens;
+}
+
+bool sidecarTokensMatchImage(const QStringList &tokens, const QString &imagePath)
+{
+    for (const QString &token : tokens)
+    {
+        if (pathTokenMatchesImage(token, imagePath))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
 struct IntersectionBatchCandidate
 {
     QVector<xjw::Intersection::Result> results;
@@ -304,10 +343,12 @@ static bool loadSidecarMatchPoints(const QString &sidecarPath,
     const QJsonArray p1 = sidecar.value(QStringLiteral("matched_points1")).toArray();
     if (p0.isEmpty() || p0.size() != p1.size()) return false;
 
-    const QString im0 = sidecar.value(QStringLiteral("image0_path")).toString();
-    const QString im1 = sidecar.value(QStringLiteral("image1_path")).toString();
-    const bool direct  = pathTokenMatchesImage(im0, img1) && pathTokenMatchesImage(im1, img2);
-    const bool reverse = pathTokenMatchesImage(im0, img2) && pathTokenMatchesImage(im1, img1);
+    const QStringList im0Tokens = sidecarImageTokens(sidecar, 0);
+    const QStringList im1Tokens = sidecarImageTokens(sidecar, 1);
+    const bool direct = sidecarTokensMatchImage(im0Tokens, img1)
+        && sidecarTokensMatchImage(im1Tokens, img2);
+    const bool reverse = sidecarTokensMatchImage(im0Tokens, img2)
+        && sidecarTokensMatchImage(im1Tokens, img1);
     if (!direct && !reverse) return false;
 
     pts1->clear();

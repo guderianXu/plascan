@@ -247,7 +247,8 @@ public slots:
     // settings 支持的字段见 DenseMatchDialog::collectSettings()。
     void startDenseMatchAsync(const QJsonObject &settings);
     void startDenseMatchAsyncWithProgress(const QJsonObject &settings,
-                                          std::shared_ptr<std::atomic<int>> progress);
+                                          std::shared_ptr<std::atomic<int>> progress,
+                                          std::shared_ptr<std::atomic<bool>> cancelFlag = nullptr);
 
     // 异步执行初始稀疏点云三角化，并将结果注册到 aerial_triangulation_results。
     void startTriangulationAsync(const QJsonObject &settings);

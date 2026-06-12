@@ -84,6 +84,10 @@ ReferencePanelWidget::ReferencePanelWidget(QWidget *parent)
     m_table->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(8, QHeaderView::ResizeToContents);
     m_table->horizontalHeader()->setSectionResizeMode(9, QHeaderView::Stretch);
+    m_table->verticalHeader()->setVisible(false);
+    m_table->setAlternatingRowColors(true);
+    m_table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    m_table->setWordWrap(false);
 
     connect(m_exactImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onExactImportClicked);
     connect(m_batchImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onBatchImportClicked);

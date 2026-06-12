@@ -25,6 +25,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--quality", type=int, default=3)
     parser.add_argument("--threads", type=int, default=8)
     parser.add_argument("--cuda-parallel-pairs", type=int, default=1)
+    parser.add_argument("--feature-max-image-dim", type=int, default=0)
     parser.add_argument("--dem-resolution", type=float, default=0.0)
     parser.add_argument("--mesh-resolution", type=int, default=160)
     parser.add_argument("--skip-model", action="store_true")
@@ -71,6 +72,8 @@ def build_command(args: argparse.Namespace) -> list[str]:
         str(args.threads),
         "--cuda-parallel-pairs",
         str(args.cuda_parallel_pairs),
+        "--feature-max-image-dim",
+        str(args.feature_max_image_dim),
         "--dem-resolution",
         str(args.dem_resolution),
         "--mesh-resolution",

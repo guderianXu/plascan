@@ -82,6 +82,15 @@ struct SFMServiceOptions
     /// 默认: 1（串行）；增大前确认 GPU 显存充裕（每实例约占 200-400 MB）
     int                 cudaParallelPairs = 1;
 
+    /// 深度特征提取输入图像最长边限制。
+    /// >0: 使用调用方指定初始值；0: 使用质量档位，最高质量档先尝试不缩放；
+    /// <0: 从不缩放开始。CUDA OOM 时内部会自动降低尺寸并重试。
+    int                 featureMaxImageDim = 0;
+
+    /// 特征点灰度过滤范围。默认过滤近黑背景，保留有效地物纹理。
+    float               featureGrayscaleMin = 5.0f / 255.0f;
+    float               featureGrayscaleMax = 1.0f;
+
     /// 若为 true，则 Phase 2 只处理 allowedPairs 中显式给出的影像对。
     /// 若 allowedPairs 为空，则视为没有可用配对约束并直接失败。
     bool                restrictPairs = false;

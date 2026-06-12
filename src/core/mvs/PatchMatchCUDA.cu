@@ -657,6 +657,36 @@ __device__ inline float perturbDepth(float perturbation, float depth, curandStat
     return d_min + curand_uniform(rs) * (d_max - d_min);
 }
 
+__device__ inline uint32_t mixRngSeed(unsigned long long seed, int idx, int parity)
+{
+    uint32_t state = static_cast<uint32_t>(seed) ^ static_cast<uint32_t>(seed >> 32);
+    state ^= static_cast<uint32_t>(idx) * 747796405u;
+    state ^= static_cast<uint32_t>(parity) * 2891336453u;
+    state = (state ^ (state >> 16)) * 2246822519u;
+    state = (state ^ (state >> 13)) * 3266489917u;
+    return state ^ (state >> 16);
+}
+
+__device__ inline uint32_t xorshift32(uint32_t &state)
+{
+    state ^= state << 13;
+    state ^= state >> 17;
+    state ^= state << 5;
+    return state;
+}
+
+__device__ inline float fastUniform(uint32_t &state)
+{
+    return (static_cast<float>(xorshift32(state)) + 1.0f) * 2.3283064365386963e-10f;
+}
+
+__device__ inline float perturbDepthFast(float perturbation, float depth, uint32_t &state)
+{
+    float d_min = (1.f - perturbation) * depth;
+    float d_max = (1.f + perturbation) * depth;
+    return d_min + fastUniform(state) * (d_max - d_min);
+}
+
 // =============================================================================
 // 法向量处理
 // =============================================================================
@@ -719,6 +749,46 @@ __device__ void perturbNormal(int row, int col,
     }
     float inv = rsqrtf(dot3(out, out));
     out[0]*=inv; out[1]*=inv; out[2]*=inv;
+}
+
+__device__ void perturbNormalFast(int row, int col,
+                                  float perturbation,
+                                  const float n[3],
+                                  uint32_t &state,
+                                  float out[3])
+{
+    float activePerturbation = perturbation;
+    for (int trial = 0; trial < 4; ++trial)
+    {
+        float a1 = (fastUniform(state) - 0.5f) * activePerturbation;
+        float a2 = (fastUniform(state) - 0.5f) * activePerturbation;
+        float a3 = (fastUniform(state) - 0.5f) * activePerturbation;
+
+        float sa1=sinf(a1), ca1=cosf(a1);
+        float sa2=sinf(a2), ca2=cosf(a2);
+        float sa3=sinf(a3), ca3=cosf(a3);
+
+        float R[9];
+        R[0]=ca2*ca3;  R[1]=-ca2*sa3; R[2]=sa2;
+        R[3]=ca1*sa3+ca3*sa1*sa2; R[4]=ca1*ca3-sa1*sa2*sa3; R[5]=-ca2*sa1;
+        R[6]=sa1*sa3-ca1*ca3*sa2; R[7]=ca3*sa1+ca1*sa2*sa3; R[8]=ca1*ca2;
+
+        mat33MulVec3(R, n, out);
+
+        float ray[3] = { c_ref_inv_K[0]*col + c_ref_inv_K[1],
+                         c_ref_inv_K[2]*row + c_ref_inv_K[3],
+                         1.f };
+        if (dot3(out, ray) < 0.f)
+        {
+            float inv = rsqrtf(dot3(out, out));
+            out[0]*=inv; out[1]*=inv; out[2]*=inv;
+            return;
+        }
+
+        activePerturbation *= 0.5f;
+    }
+
+    out[0]=n[0]; out[1]=n[1]; out[2]=n[2];
 }
 
 // =============================================================================
@@ -1197,6 +1267,137 @@ __global__ void kernelSweepRL(
     }
 }
 
+__device__ inline void considerHypothesis(
+    int col, int row,
+    float candidateDepth, const float candidateNormal[3],
+    const float *refImg, int W, int H,
+    const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    float zNear, float zFar, int patchHalf,
+    float *bestCost, float *bestDepth, float bestNormal[3])
+{
+    if (candidateDepth <= 0.f)
+    {
+        return;
+    }
+
+    candidateDepth = fmaxf(zNear, fminf(zFar, candidateDepth));
+    const float cost = evalHypCost(col, row, candidateDepth, candidateNormal,
+                                   refImg, W, H,
+                                   srcImgs, srcDatas, srcW, srcH, numSrc,
+                                   patchHalf);
+    if (cost < *bestCost)
+    {
+        *bestCost = cost;
+        *bestDepth = candidateDepth;
+        bestNormal[0] = candidateNormal[0];
+        bestNormal[1] = candidateNormal[1];
+        bestNormal[2] = candidateNormal[2];
+    }
+}
+
+// =============================================================================
+// 棋盘格并行传播：一像素一线程，按红黑格分两次更新，避免同色写冲突。
+// 相比传统行/列 sweep，每次传播有 W*H/2 个线程并行执行，吞吐更适合现代 GPU。
+// =============================================================================
+__global__ void kernelCheckerboardSweep(
+    float *depthMap, float *normalMap, float *confMap,
+    const float *refImg, int W, int H,
+    const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    float zNear, float zFar, int patchHalf,
+    float perturbation, unsigned long long seed,
+    int parity)
+{
+    int col = blockIdx.x * blockDim.x + threadIdx.x;
+    int row = blockIdx.y * blockDim.y + threadIdx.y;
+    if (col >= W || row >= H)
+    {
+        return;
+    }
+    if (((row + col) & 1) != parity)
+    {
+        return;
+    }
+
+    const int idx = row * W + col;
+    float currDepth = depthMap[idx];
+    float currNormal[3] = {
+        normalMap[idx * 3],
+        normalMap[idx * 3 + 1],
+        normalMap[idx * 3 + 2]
+    };
+
+    float bestDepth = currDepth;
+    float bestNormal[3] = { currNormal[0], currNormal[1], currNormal[2] };
+    float bestCost = evalHypCost(col, row, bestDepth, bestNormal,
+                                 refImg, W, H,
+                                 srcImgs, srcDatas, srcW, srcH, numSrc,
+                                 patchHalf);
+
+    uint32_t rngState = mixRngSeed(seed, idx, parity);
+    float randDepth = perturbDepthFast(perturbation, currDepth, rngState);
+    randDepth = fmaxf(zNear, fminf(zFar, randDepth));
+    float randNormal[3];
+    perturbNormalFast(row, col, perturbation * static_cast<float>(M_PI), currNormal, rngState, randNormal);
+
+    considerHypothesis(col, row, randDepth, randNormal,
+                       refImg, W, H,
+                       srcImgs, srcDatas, srcW, srcH, numSrc,
+                       zNear, zFar, patchHalf,
+                       &bestCost, &bestDepth, bestNormal);
+    considerHypothesis(col, row, currDepth, randNormal,
+                       refImg, W, H,
+                       srcImgs, srcDatas, srcW, srcH, numSrc,
+                       zNear, zFar, patchHalf,
+                       &bestCost, &bestDepth, bestNormal);
+    considerHypothesis(col, row, randDepth, currNormal,
+                       refImg, W, H,
+                       srcImgs, srcDatas, srcW, srcH, numSrc,
+                       zNear, zFar, patchHalf,
+                       &bestCost, &bestDepth, bestNormal);
+
+    const int dRow[4] = { -1, 1, 0, 0 };
+    const int dCol[4] = { 0, 0, -1, 1 };
+    for (int ni = 0; ni < 4; ++ni)
+    {
+        const int neighborRow = row + dRow[ni];
+        const int neighborCol = col + dCol[ni];
+        if (neighborRow < 0 || neighborRow >= H || neighborCol < 0 || neighborCol >= W)
+        {
+            continue;
+        }
+
+        const int neighborIdx = neighborRow * W + neighborCol;
+        const float neighborDepth = depthMap[neighborIdx];
+        if (neighborDepth <= 0.f)
+        {
+            continue;
+        }
+
+        float neighborNormal[3] = {
+            normalMap[neighborIdx * 3],
+            normalMap[neighborIdx * 3 + 1],
+            normalMap[neighborIdx * 3 + 2]
+        };
+        const float propDepth = propagateDepth(neighborDepth,
+                                               neighborNormal,
+                                               static_cast<float>(neighborRow),
+                                               static_cast<float>(neighborCol),
+                                               static_cast<float>(row),
+                                               static_cast<float>(col));
+        considerHypothesis(col, row, propDepth, neighborNormal,
+                           refImg, W, H,
+                           srcImgs, srcDatas, srcW, srcH, numSrc,
+                           zNear, zFar, patchHalf,
+                           &bestCost, &bestDepth, bestNormal);
+    }
+
+    depthMap[idx] = bestDepth;
+    normalMap[idx * 3] = bestNormal[0];
+    normalMap[idx * 3 + 1] = bestNormal[1];
+    normalMap[idx * 3 + 2] = bestNormal[2];
+    confMap[idx] = 1.f - bestCost * 0.5f;
+}
+
 /// 置信度阈值过滤
 __global__ void kernelFinalizeDepth(
     float *depthMap, const float *confMap, int W, int H, float confThresh)
@@ -1359,53 +1560,77 @@ bool PatchMatchDepthEstimator::estimateGPU(
         d_depth, d_normal, d_hint, sW, sH, zNear, zFar, 42ULL);
     CUDA_CHECK(cudaGetLastError());
 
-    // ── 迭代传播 + 精化（4 向 sweep，仿照 COLMAP）───────────────────
-    // 每次迭代做 4 次方向扫描：TtoB → BtoT → LtoR → RtoL
-    // perturbation 指数退火：1.0 → 0.5 → 0.25 ...
+    // ── 迭代传播 + 精化 ───────────────────────────────────────
+    // 默认使用棋盘格像素级并行传播；必要时可回退传统 4 向行列 sweep。
     dim3 blockSweep(bS);
     dim3 gridCols((sW + bS - 1) / bS);
     dim3 gridRows((sH + bS - 1) / bS);
+    dim3 blockPixel(bW, bH);
+    dim3 gridPixel((sW + bW - 1) / bW, (sH + bH - 1) / bH);
 
     float perturbation = 1.0f;
     for (int iter = 0; iter < config.numIterations; ++iter) 
     {
         unsigned long long baseSeed = (unsigned long long)(iter + 1) * 999983ULL;
 
-        // 自上而下
-        kernelSweepTB<<<gridCols, blockSweep>>>(
-            d_depth, d_normal, d_conf,
-            d_ref, sW, sH,
-            d_srcPtrs, d_srcData, srcW, srcH2, N,
-            zNear, zFar, config.patchHalf,
-            perturbation, baseSeed);
-        CUDA_CHECK(cudaGetLastError());
+        if (config.cudaUseParallelSweep)
+        {
+            kernelCheckerboardSweep<<<gridPixel, blockPixel>>>(
+                d_depth, d_normal, d_conf,
+                d_ref, sW, sH,
+                d_srcPtrs, d_srcData, srcW, srcH2, N,
+                zNear, zFar, config.patchHalf,
+                perturbation, baseSeed,
+                0);
+            CUDA_CHECK(cudaGetLastError());
 
-        // 自下而上
-        kernelSweepBT<<<gridCols, blockSweep>>>(
-            d_depth, d_normal, d_conf,
-            d_ref, sW, sH,
-            d_srcPtrs, d_srcData, srcW, srcH2, N,
-            zNear, zFar, config.patchHalf,
-            perturbation, baseSeed + 111111ULL);
-        CUDA_CHECK(cudaGetLastError());
+            kernelCheckerboardSweep<<<gridPixel, blockPixel>>>(
+                d_depth, d_normal, d_conf,
+                d_ref, sW, sH,
+                d_srcPtrs, d_srcData, srcW, srcH2, N,
+                zNear, zFar, config.patchHalf,
+                perturbation, baseSeed + 111111ULL,
+                1);
+            CUDA_CHECK(cudaGetLastError());
+        }
+        else
+        {
+            // 自上而下
+            kernelSweepTB<<<gridCols, blockSweep>>>(
+                d_depth, d_normal, d_conf,
+                d_ref, sW, sH,
+                d_srcPtrs, d_srcData, srcW, srcH2, N,
+                zNear, zFar, config.patchHalf,
+                perturbation, baseSeed);
+            CUDA_CHECK(cudaGetLastError());
 
-        // 自左向右
-        kernelSweepLR<<<gridRows, blockSweep>>>(
-            d_depth, d_normal, d_conf,
-            d_ref, sW, sH,
-            d_srcPtrs, d_srcData, srcW, srcH2, N,
-            zNear, zFar, config.patchHalf,
-            perturbation, baseSeed + 222222ULL);
-        CUDA_CHECK(cudaGetLastError());
+            // 自下而上
+            kernelSweepBT<<<gridCols, blockSweep>>>(
+                d_depth, d_normal, d_conf,
+                d_ref, sW, sH,
+                d_srcPtrs, d_srcData, srcW, srcH2, N,
+                zNear, zFar, config.patchHalf,
+                perturbation, baseSeed + 111111ULL);
+            CUDA_CHECK(cudaGetLastError());
 
-        // 自右向左
-        kernelSweepRL<<<gridRows, blockSweep>>>(
-            d_depth, d_normal, d_conf,
-            d_ref, sW, sH,
-            d_srcPtrs, d_srcData, srcW, srcH2, N,
-            zNear, zFar, config.patchHalf,
-            perturbation, baseSeed + 333333ULL);
-        CUDA_CHECK(cudaGetLastError());
+            // 自左向右
+            kernelSweepLR<<<gridRows, blockSweep>>>(
+                d_depth, d_normal, d_conf,
+                d_ref, sW, sH,
+                d_srcPtrs, d_srcData, srcW, srcH2, N,
+                zNear, zFar, config.patchHalf,
+                perturbation, baseSeed + 222222ULL);
+            CUDA_CHECK(cudaGetLastError());
+
+            // 自右向左
+            kernelSweepRL<<<gridRows, blockSweep>>>(
+                d_depth, d_normal, d_conf,
+                d_ref, sW, sH,
+                d_srcPtrs, d_srcData, srcW, srcH2, N,
+                zNear, zFar, config.patchHalf,
+                perturbation, baseSeed + 333333ULL);
+            CUDA_CHECK(cudaGetLastError());
+        }
 
         perturbation = fmaxf(perturbation * 0.5f, 0.02f);
     }
@@ -1479,11 +1704,13 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     int valid = cv::countNonZero(depthFull > 0);
     float mean = (valid>0) ? (float)cv::mean(depthFull, depthFull>0)[0] : 0.f;
+    const int fullPx = depthFull.rows * depthFull.cols;
     fprintf(stderr,
-        "[PatchMatchGPU] %dx%d zNear=%.2f zFar=%.2f valid=%d/%d mean=%.2f "
-        "conf>=%.2f hint=%d iters=%d\n",
-        sW, sH, zNear, zFar, valid, sW*sH, mean,
-        config.confidenceThresh, hasHint?1:0, config.numIterations);
+        "[PatchMatchGPU] scaled=%dx%d full=%dx%d zNear=%.2f zFar=%.2f valid=%d/%d mean=%.2f "
+        "conf>=%.2f hint=%d iters=%d parallelSweep=%d\n",
+        sW, sH, refW, refH, zNear, zFar, valid, fullPx, mean,
+        config.confidenceThresh, hasHint?1:0, config.numIterations,
+        config.cudaUseParallelSweep ? 1 : 0);
     fprintf(stderr,
         "[PatchMatchGPU] gray cache refHit=%d srcHit=%d srcMiss=%d usage=%.1f/%.1f MB\n",
         refCacheHit ? 1 : 0,

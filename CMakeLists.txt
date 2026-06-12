@@ -17,6 +17,9 @@ set(CMAKE_CXX_STANDARD_REQUIRED ON)
 set(CMAKE_EXPORT_COMPILE_COMMANDS ON)
 set(CMAKE_FIND_PACKAGE_PREFER_CONFIG ON)
 
+list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
+include(PlascanDependencyPaths)
+
 # ── conda/PyTorch 前缀 (可选, Docker/系统构建不需要) ──
 if(NOT DEFINED PLASCAN_CONDA_PREFIX)
   set(_p "$ENV{CONDA_PREFIX}")
@@ -30,7 +33,8 @@ if(NOT DEFINED PLASCAN_CONDA_PREFIX)
 endif()
 message(STATUS "plascan: CONDA_PREFIX = ${PLASCAN_CONDA_PREFIX}")
 
-# 全局启用 CUDA (各子模块不需要单独 enable_language)
+plascan_configure_mixed_toolchain_binutils("${PLASCAN_CONDA_PREFIX}")
+plascan_apply_mixed_toolchain_binutils_to_scope()
 
 # 全局启用 CUDA (各子模块不需要单独 enable_language)
 # conda nvcc 不在默认 PATH 中, 显式指定路径
@@ -99,8 +103,6 @@ if(BUILD_TESTS)
   enable_testing()
 endif()
 
-list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
-include(PlascanDependencyPaths)
 plascan_configure_dependency_paths()
 include(PlascanPackages)
 

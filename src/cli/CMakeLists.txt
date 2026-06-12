@@ -109,3 +109,64 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         set_property(TARGET reconstruct_pipeline_cli APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
     endif()
 endif()
+
+# ── GUI 三维重建等价 CLI：SFM -> MVS -> Mesh（不生成 DEM/DOM） ──
+if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing)
+    add_executable(three_d_reconstruction_cli
+        cli_reconstruct_pipeline.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
+    )
+    target_link_libraries(three_d_reconstruction_cli PRIVATE
+        sfm
+        mvs
+        meshing
+        superglue_matcher
+        lightglue_matcher
+        feature_extractors_traditional
+        feature_match_common
+        camera
+        Qt6::Core
+        Qt6::Concurrent
+        Qt6::Gui
+        plascan_common_log
+        ${TORCH_LIBRARIES}
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(three_d_reconstruction_cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/common
+        ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue
+        ${CMAKE_SOURCE_DIR}/src/core/mesh
+        ${CMAKE_SOURCE_DIR}/src/core/mvs
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline
+        ${CMAKE_SOURCE_DIR}/src/core/sfm
+        ${CMAKE_SOURCE_DIR}/src/gui
+        ${CMAKE_SOURCE_DIR}/src/gui/compat
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support
+        ${TORCH_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_compile_definitions(three_d_reconstruction_cli PRIVATE
+        PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+        PLASCAN_THREE_D_ONLY
+    )
+    set_target_properties(three_d_reconstruction_cli PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        BUILD_RPATH_USE_ORIGIN TRUE
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+    if(PLASCAN_EXTRA_NVRTC_RPATHS)
+        set_property(TARGET three_d_reconstruction_cli APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
+    endif()
+endif()

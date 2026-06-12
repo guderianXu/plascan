@@ -7,13 +7,13 @@
     <x>0</x>
     <y>0</y>
     <width>460</width>
-    <height>280</height>
+    <height>320</height>
    </rect>
   </property>
   <property name="minimumSize">
    <size>
     <width>460</width>
-    <height>280</height>
+    <height>320</height>
    </size>
   </property>
   <property name="windowTitle">
@@ -113,6 +113,33 @@
       </widget>
      </item>
      <item row="2" column="0">
+      <widget class="QLabel" name="featureGrayMinLabel">
+       <property name="text">
+        <string>特征灰度下限:</string>
+       </property>
+       <property name="buddy">
+        <cstring>m_featureGrayMinSpin</cstring>
+       </property>
+      </widget>
+     </item>
+     <item row="2" column="1">
+      <widget class="QSpinBox" name="m_featureGrayMinSpin">
+       <property name="toolTip">
+        <string>特征提取的灰度过滤下限（像素值 0-255）。
+默认 5 表示灰度小于 5 的极暗位置不会作为特征点参与匹配。</string>
+       </property>
+       <property name="maximum">
+        <number>255</number>
+       </property>
+       <property name="suffix">
+        <string> px</string>
+       </property>
+       <property name="value">
+        <number>5</number>
+       </property>
+      </widget>
+     </item>
+     <item row="3" column="0">
       <widget class="QLabel" name="threadsLabel">
        <property name="text">
         <string>线程:</string>
@@ -122,7 +149,7 @@
        </property>
       </widget>
      </item>
-     <item row="2" column="1">
+     <item row="3" column="1">
       <widget class="QSpinBox" name="m_threadsSpin">
        <property name="minimum">
         <number>1</number>
@@ -135,7 +162,7 @@
        </property>
       </widget>
      </item>
-     <item row="3" column="0">
+     <item row="4" column="0">
       <widget class="QLabel" name="outputDirLabel">
        <property name="text">
         <string>输出目录:</string>
@@ -145,7 +172,7 @@
        </property>
       </widget>
      </item>
-     <item row="3" column="1">
+     <item row="4" column="1">
       <layout class="QHBoxLayout" name="outputLayout">
        <item>
         <widget class="QLineEdit" name="m_outputDirEdit"/>
@@ -162,9 +189,12 @@
    </layout>
   </item>
   <item>
-    <widget class="QCheckBox" name="m_exportObjCheck">
+   <widget class="QCheckBox" name="m_exportObjCheck">
      <property name="text">
       <string>同时导出 OBJ</string>
+     </property>
+     <property name="checked">
+      <bool>true</bool>
      </property>
     </widget>
    </item>

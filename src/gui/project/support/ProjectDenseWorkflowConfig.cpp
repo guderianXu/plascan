@@ -24,6 +24,20 @@ plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
     return plapoint::ProcessingDevice::Auto;
 }
 
+int autoGpuFrameWorkers(int threads, int viewCount)
+{
+    Q_UNUSED(threads);
+    Q_UNUSED(viewCount);
+    return 1;
+}
+
+int autoCpuFrameWorkers(int threads, int viewCount)
+{
+    const int maxByViews = std::max(1, viewCount);
+    const int maxCpuWorkers = std::min(4, maxByViews);
+    return std::clamp(std::max(1, threads / 4), 1, maxCpuWorkers);
+}
+
 } // namespace
 
 DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &settings)
@@ -34,6 +48,8 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.resScale = settings.value(QStringLiteral("resScale")).toDouble(0.5);
     parsed.iterations = settings.value(QStringLiteral("iterations")).toInt(6);
     parsed.threads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    parsed.gpuFrameWorkers = std::max(0, settings.value(QStringLiteral("gpu_frame_workers")).toInt(0));
+    parsed.cpuFrameWorkers = std::max(0, settings.value(QStringLiteral("cpu_frame_workers")).toInt(0));
     parsed.patchSize = settings.value(QStringLiteral("patchSize")).toInt(11);
     parsed.minViews = settings.value(QStringLiteral("minViews")).toInt(3);
     parsed.patchMatchConfidence = static_cast<float>(
@@ -55,7 +71,25 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
 {
     xjw::mvs::DepthGenConfig config;
     config.numSourceViews = std::min(settings.minViews, viewCount - 1);
-    config.cpuWorkerCount = std::max(1, settings.threads);
+    const int totalThreads = std::max(1, settings.threads);
+    const int maxByViews = std::max(1, viewCount);
+    const int maxGpuWorkers = std::min(2, maxByViews);
+    const int maxCpuWorkers = std::min(4, maxByViews);
+    config.gpuFrameWorkerCount = settings.useCuda
+        ? std::clamp(settings.gpuFrameWorkers > 0
+                         ? settings.gpuFrameWorkers
+                         : autoGpuFrameWorkers(totalThreads, viewCount),
+                     1,
+                     maxGpuWorkers)
+        : 0;
+    config.cpuFrameWorkerCount = settings.useCuda
+        ? std::clamp(settings.cpuFrameWorkers, 0, maxCpuWorkers)
+        : std::clamp(settings.cpuFrameWorkers > 0
+                         ? settings.cpuFrameWorkers
+                         : autoCpuFrameWorkers(totalThreads, viewCount),
+                     1,
+                     maxCpuWorkers);
+    config.cpuWorkerCount = std::max(1, totalThreads / std::max(1, config.cpuFrameWorkerCount));
     config.patchMatch.numIterations = settings.iterations;
     config.patchMatch.patchHalf = (settings.patchSize - 1) / 2;
     config.patchMatch.numSourceViews = config.numSourceViews;
@@ -70,15 +104,13 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
 
     if (viewCount <= 2)
     {
-        // 两视图立体对：全分辨率 + 更多迭代 + 极宽松融合阈值，最大化密集点云覆盖率
-        config.patchMatch.downsampleFactor = 1;          // 全分辨率，不降采样
-        config.patchMatch.numIterations = std::max(config.patchMatch.numIterations, 32);  // 增加到32次迭代
-        config.patchMatch.confidenceThresh = 0.0001f;    // 极度放宽到 0.0001
-        config.patchMatch.geomConsistency = false;        // 两视图无法做几何一致性检查
-        config.fusion.confidenceThresh = 0.0001f;        // 融合阈值同步放宽
+        // 两视图立体对：允许融合但不强制全分辨率或超高迭代，避免小样本一键重建被 MVS 拖慢。
+        config.patchMatch.confidenceThresh = std::min(config.patchMatch.confidenceThresh, 0.05f);
+        config.patchMatch.geomConsistency = false;       // 两视图无法做几何一致性检查
+        config.fusion.confidenceThresh = std::min(config.fusion.confidenceThresh, 0.05f);
         config.fusion.minConsistentViews = 1;
-        config.fusion.relDepthThresh = 0.40f;            // 相对深度阈值放宽到 40%
-        config.fusion.pixelThresh = 10.0f;               // 像素阈值放宽到 10 像素
+        config.fusion.relDepthThresh = std::max(config.fusion.relDepthThresh, 0.20f);
+        config.fusion.pixelThresh = std::max(config.fusion.pixelThresh, 5.0f);
     }
 
     return config;

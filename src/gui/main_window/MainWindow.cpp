@@ -8,7 +8,6 @@
 #include <QToolBar>
 #include <QMenuBar>
 #include <QStatusBar>
-#include <QLabel>
 #include <QFileInfo>
 #include <QDesktopServices>
 #include <QUrl>
@@ -17,7 +16,6 @@
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QProgressDialog>
-#include <QProgressBar>
 #include <QSaveFile>
 #include <QTabWidget>
 #include <QTextStream>
@@ -31,6 +29,9 @@
 #include <QDropEvent>
 #include <QMimeData>
 
+#include <algorithm>
+
+#include "AlgorithmCompat.h"
 #include "CanvasWidget.h"
 #include "ProjectSupportUtils.h"
 #include "LogPanel.h"
@@ -50,6 +51,7 @@
 #include "DialogSettingKeys.h"
 #include "DataTreeWidget.h"
 #include "ReferencePanelWidget.h"
+#include "TaskStatusWidget.h"
 #include "ObservationNetworkView.h"
 #include "graph/ObservationNetworkBuilder.h"
 #include "WorkspaceCenterWidget.h"
@@ -370,6 +372,11 @@ void MainWindow::setupProjectManager()
                 connect(m_mainMenu->detectFeaturesAction(), &QAction::triggered,
                         m_menuWorkflowController, &MenuWorkflowController::openFeatureExtractionDialog);
             }
+            if (m_mainMenu->vocabularyOverlapAction())
+            {
+                connect(m_mainMenu->vocabularyOverlapAction(), &QAction::triggered,
+                        m_menuWorkflowController, &MenuWorkflowController::openVocabularyOverlapDialog);
+            }
             if (m_mainMenu->featureVisualizationAction())
             {
                 connect(m_mainMenu->featureVisualizationAction(), &QAction::triggered,
@@ -443,14 +450,12 @@ void MainWindow::setupProjectManager()
                 dlg->setAttribute(Qt::WA_DeleteOnClose);
                 dlg->setProjectImages(m_projectManager->getAllImages());
 
-                // 从当前项目影像收集可用的特征后缀并设置到下拉框
-                if (m_canvas)
+                // 从项目整体收集可用的特征后缀并设置到下拉框
+                const QStringList projectSuffixes = xjw::gui::project::projectFeatureSuffixes(
+                    m_projectManager->currentProjectPath(), m_projectManager->currentMeta());
+                if (!projectSuffixes.isEmpty())
                 {
-                    const QStringList projectSuffixes = m_canvas->availableFeatureSuffixes();
-                    if (!projectSuffixes.isEmpty())
-                    {
-                        dlg->setAvailableFeatureSuffixes(projectSuffixes);
-                    }
+                    dlg->setAvailableFeatureSuffixes(projectSuffixes);
                 }
 
                 // 懒初始化 SuperGlue 记忆化设置管理器
@@ -506,16 +511,42 @@ void MainWindow::setupProjectManager()
                     // 在状态栏展示 SuperGlue 匹配进度
                     auto cancelFlag    = std::make_shared<std::atomic<bool>>(false);
                     auto progressCount = std::make_shared<std::atomic<int>>(0);
-                    const int total    = imagePairs.size();
+                    int total = imagePairs.size();
+                    const QString featureSuffix = config.value(QStringLiteral("feature_suffix")).toString();
+                    if (featureSuffix == QStringLiteral("__all__"))
+                    {
+                        const QStringList compatibleSuffixes =
+                            xjw::feature_match::compatibleFeatureSuffixes(algorithm);
+                        const QStringList availableSuffixes = xjw::gui::project::projectFeatureSuffixes(
+                            m_projectManager->currentProjectPath(), m_projectManager->currentMeta());
+                        int suffixCount = 0;
+                        if (availableSuffixes.isEmpty())
+                        {
+                            suffixCount = compatibleSuffixes.size();
+                        }
+                        else
+                        {
+                            for (const QString &suffix : compatibleSuffixes)
+                            {
+                                if (availableSuffixes.contains(suffix))
+                                {
+                                    ++suffixCount;
+                                }
+                            }
+                        }
+                        if (suffixCount > 1)
+                        {
+                            total *= suffixCount;
+                        }
+                    }
 
                     showSgProgress(total);
 
-                    // 取消按钒临时连接
-                    auto cancelConn = connect(m_sgCancelBtn, &QToolButton::clicked,
+                    auto cancelConn = connect(this, &MainWindow::sgCancelRequested,
                                               this, [cancelFlag]()
-                                              {
-                                                  cancelFlag->store(true);
-                                              });
+                    {
+                        cancelFlag->store(true);
+                    });
 
                     // 定时刷新进度（100ms 轮询）
                     auto *timer = new QTimer(this);
@@ -618,9 +649,14 @@ void MainWindow::setupProjectManager()
         {
             if (m_canvas)
             {
+                const bool isCurrentImage =
+                    QDir::cleanPath(imagePath) == QDir::cleanPath(m_canvas->currentImagePath());
                 if (!suffix.isEmpty())
                     m_canvas->setActiveFeatureSuffix(suffix);
-                m_canvas->immediateReloadInterestPoints(imagePath);
+                if (isCurrentImage)
+                {
+                    m_canvas->reloadInterestPoints(imagePath);
+                }
             }
         });
 
@@ -908,28 +944,28 @@ void MainWindow::setupProjectManager()
         }
     });
 
+    auto createTaskStatus = [this](int labelWidth, bool cancellable, const QString &cancellingText)
+    {
+        auto *widget = new TaskStatusWidget(this);
+        widget->setLabelMinimumWidth(labelWidth);
+        widget->setCancellable(cancellable);
+        if (!cancellingText.isEmpty())
+        {
+            widget->setCancellingText(cancellingText);
+        }
+        statusBar()->addPermanentWidget(widget);
+        return widget;
+    };
+
     // ── MVS 状态栏进度条 ──────────────────────────────────────────
-    m_mvsStatusLabel = new QLabel(this);
-    m_mvsStatusLabel->setMinimumWidth(220);
-    m_mvsStatusLabel->hide();
-
-    m_mvsProgressBar = new QProgressBar(this);
-    m_mvsProgressBar->setRange(0, 100);
-    m_mvsProgressBar->setFixedWidth(200);
-    m_mvsProgressBar->setFixedHeight(16);
-    m_mvsProgressBar->setTextVisible(false);
-    m_mvsProgressBar->hide();
-
-    m_mvsCancelBtn = new QToolButton(this);
-    m_mvsCancelBtn->setText(tr("取消"));
-    m_mvsCancelBtn->setFixedHeight(18);
-    m_mvsCancelBtn->hide();
-    connect(m_mvsCancelBtn, &QToolButton::clicked,
-            m_projectManager, &ProjectManager::cancelMvs);
-
-    statusBar()->addPermanentWidget(m_mvsStatusLabel);
-    statusBar()->addPermanentWidget(m_mvsProgressBar);
-    statusBar()->addPermanentWidget(m_mvsCancelBtn);
+    m_mvsTaskStatus = createTaskStatus(220, true, tr("正在取消稠密重建..."));
+    connect(m_mvsTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        if (m_projectManager)
+        {
+            m_projectManager->cancelMvs();
+        }
+    });
 
     connect(m_projectManager, &ProjectManager::mvsProgressChanged,
             this, &MainWindow::onMvsProgress);
@@ -937,47 +973,22 @@ void MainWindow::setupProjectManager()
             this, &MainWindow::onMvsFinished);
 
     // ── 网格重建状态栏进度条 ──────────────────────────────────────
-    m_meshStatusLabel = new QLabel(this);
-    m_meshStatusLabel->setMinimumWidth(220);
-    m_meshStatusLabel->hide();
-
-    m_meshProgressBar = new QProgressBar(this);
-    m_meshProgressBar->setRange(0, 100);
-    m_meshProgressBar->setFixedWidth(200);
-    m_meshProgressBar->setFixedHeight(16);
-    m_meshProgressBar->setTextVisible(false);
-    m_meshProgressBar->hide();
-
-    statusBar()->addPermanentWidget(m_meshStatusLabel);
-    statusBar()->addPermanentWidget(m_meshProgressBar);
+    m_meshTaskStatus = createTaskStatus(220, false, QString());
 
     connect(m_projectManager, &ProjectManager::meshProgressChanged,
             this, &MainWindow::onMeshProgress);
     connect(m_projectManager, &ProjectManager::meshProgressFinished,
             this, &MainWindow::onMeshFinished);
 
-    // ── 空三（AT）状态栏进度条 ──────────────────────────────────
-    m_atStatusLabel = new QLabel(this);
-    m_atStatusLabel->setMinimumWidth(220);
-    m_atStatusLabel->hide();
-
-    m_atProgressBar = new QProgressBar(this);
-    m_atProgressBar->setRange(0, 100);
-    m_atProgressBar->setFixedWidth(200);
-    m_atProgressBar->setFixedHeight(16);
-    m_atProgressBar->setTextVisible(false);
-    m_atProgressBar->hide();
-
-    m_atCancelBtn = new QToolButton(this);
-    m_atCancelBtn->setText(tr("取消"));
-    m_atCancelBtn->setFixedHeight(18);
-    m_atCancelBtn->hide();
-    connect(m_atCancelBtn, &QToolButton::clicked,
-            m_projectManager, &ProjectManager::cancelAt);
-
-    statusBar()->addPermanentWidget(m_atStatusLabel);
-    statusBar()->addPermanentWidget(m_atProgressBar);
-    statusBar()->addPermanentWidget(m_atCancelBtn);
+    // ── 空三（AT）/光束法平差状态栏进度条 ───────────────────────
+    m_atTaskStatus = createTaskStatus(220, true, tr("正在取消空三/光束法平差..."));
+    connect(m_atTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        if (m_projectManager)
+        {
+            m_projectManager->cancelAt();
+        }
+    });
 
     connect(m_projectManager, &ProjectManager::atProgressChanged,
             this, &MainWindow::onAtProgress);
@@ -985,71 +996,28 @@ void MainWindow::setupProjectManager()
             this, &MainWindow::onAtFinished);
 
     // ── SuperGlue 连接点匹配状态栏进度条 ────────────────────────────
-    m_sgStatusLabel = new QLabel(this);
-    m_sgStatusLabel->setMinimumWidth(180);
-    m_sgStatusLabel->hide();
-
-    m_sgProgressBar = new QProgressBar(this);
-    m_sgProgressBar->setRange(0, 100);
-    m_sgProgressBar->setFixedWidth(200);
-    m_sgProgressBar->setFixedHeight(16);
-    m_sgProgressBar->setTextVisible(false);
-    m_sgProgressBar->hide();
-
-    m_sgCancelBtn = new QToolButton(this);
-    m_sgCancelBtn->setText(tr("取消"));
-    m_sgCancelBtn->setFixedHeight(18);
-    m_sgCancelBtn->hide();
-
-    statusBar()->addPermanentWidget(m_sgStatusLabel);
-    statusBar()->addPermanentWidget(m_sgProgressBar);
-    statusBar()->addPermanentWidget(m_sgCancelBtn);
+    m_sgTaskStatus = createTaskStatus(180, true, tr("正在取消特征匹配..."));
+    connect(m_sgTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        emit sgCancelRequested();
+    });
 
     // ── SuperPoint 特征点提取状态栏进度条 ──────────────────────────
-    m_spStatusLabel = new QLabel(this);
-    m_spStatusLabel->setMinimumWidth(180);
-    m_spStatusLabel->hide();
-
-    m_spProgressBar = new QProgressBar(this);
-    m_spProgressBar->setRange(0, 100);
-    m_spProgressBar->setFixedWidth(200);
-    m_spProgressBar->setFixedHeight(16);
-    m_spProgressBar->setTextVisible(false);
-    m_spProgressBar->hide();
-
-    m_spCancelBtn = new QToolButton(this);
-    m_spCancelBtn->setText(tr("取消"));
-    m_spCancelBtn->setFixedHeight(18);
-    m_spCancelBtn->hide();
-    connect(m_spCancelBtn, &QToolButton::clicked, this, &MainWindow::spCancelRequested);
-
-    statusBar()->addPermanentWidget(m_spStatusLabel);
-    statusBar()->addPermanentWidget(m_spProgressBar);
-    statusBar()->addPermanentWidget(m_spCancelBtn);
+    m_spTaskStatus = createTaskStatus(180, true, tr("正在取消特征提取..."));
+    connect(m_spTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        emit spCancelRequested();
+    });
 
     // ── 密集匹配进度条 ─────────────────────────────────────────
-    m_dmProgressBar = new QProgressBar(this);
-    m_dmProgressBar->setRange(0, 100);
-    m_dmProgressBar->setFixedWidth(200);
-    m_dmProgressBar->setFixedHeight(16);
-    m_dmProgressBar->setTextVisible(false);
-    m_dmProgressBar->hide();
-    statusBar()->addPermanentWidget(m_dmProgressBar);
+    m_dmTaskStatus = createTaskStatus(180, true, tr("正在取消密集匹配..."));
+    connect(m_dmTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        emit dmCancelRequested();
+    });
 
     // ── 观测网络构建状态栏进度条 ─────────────────────────────────────
-    m_obsNetStatusLabel = new QLabel(this);
-    m_obsNetStatusLabel->setMinimumWidth(200);
-    m_obsNetStatusLabel->hide();
-
-    m_obsNetProgressBar = new QProgressBar(this);
-    m_obsNetProgressBar->setRange(0, 100);
-    m_obsNetProgressBar->setFixedWidth(200);
-    m_obsNetProgressBar->setFixedHeight(16);
-    m_obsNetProgressBar->setTextVisible(false);
-    m_obsNetProgressBar->hide();
-
-    statusBar()->addPermanentWidget(m_obsNetStatusLabel);
-    statusBar()->addPermanentWidget(m_obsNetProgressBar);
+    m_obsNetTaskStatus = createTaskStatus(200, false, QString());
 
     connect(m_projectManager, &ProjectManager::obsNetProgressChanged,
             this, &MainWindow::onObsNetProgress);
@@ -1199,27 +1167,25 @@ void MainWindow::onManualPointCloudPrune()
 
 void MainWindow::onMvsProgress(const QString &stage, int percent)
 {
-    if (!m_mvsProgressBar)
+    if (!m_mvsTaskStatus)
     {
         return;
     }
-    m_mvsStatusLabel->setText(stage);
-    m_mvsProgressBar->setValue(percent);
-    m_mvsStatusLabel->show();
-    m_mvsProgressBar->show();
-    m_mvsCancelBtn->show();
+    if (!m_mvsTaskStatus->isActive())
+    {
+        m_mvsTaskStatus->begin(stage, 0, 100);
+    }
+    m_mvsTaskStatus->updateProgress(stage, percent);
     statusBar()->showMessage(QString());   // 清空普通消息，让 permanent widget 露出
 }
 
 void MainWindow::onMvsFinished(bool success)
 {
-    if (!m_mvsProgressBar)
+    if (!m_mvsTaskStatus)
     {
         return;
     }
-    m_mvsStatusLabel->hide();
-    m_mvsProgressBar->hide();
-    m_mvsCancelBtn->hide();
+    m_mvsTaskStatus->finish();
     statusBar()->showMessage(
         success ? tr("稠密重建完成") : tr("稠密重建已取消或失败"), 4000);
 }
@@ -1230,66 +1196,62 @@ void MainWindow::onMvsFinished(bool success)
 
 void MainWindow::onMeshProgress(const QString &stage, int percent)
 {
-    if (!m_meshProgressBar)
+    if (!m_meshTaskStatus)
     {
         return;
     }
-    m_meshStatusLabel->setText(stage);
-    m_meshProgressBar->setValue(percent);
-    m_meshStatusLabel->show();
-    m_meshProgressBar->show();
+    if (!m_meshTaskStatus->isActive())
+    {
+        m_meshTaskStatus->begin(stage, 0, 100);
+    }
+    m_meshTaskStatus->updateProgress(stage, percent);
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::onMeshFinished(bool success)
 {
-    if (!m_meshProgressBar)
+    if (!m_meshTaskStatus)
     {
         return;
     }
-    m_meshStatusLabel->hide();
-    m_meshProgressBar->hide();
+    m_meshTaskStatus->finish();
     statusBar()->showMessage(
         success ? tr("网格重建完成") : tr("网格重建失败"), 4000);
 }
 
 // ============================================================
-//  AT（空三）进度状态栏槽
+//  AT（空三）/光束法平差进度状态栏槽
 // ============================================================
 
 void MainWindow::onAtProgress(const QString &stage, int percent)
 {
-    if (!m_atProgressBar)
+    if (!m_atTaskStatus)
     {
         return;
     }
     // 显示阶段信息和百分比，例如 "正在匹配特征点... 50%"
+    QString statusText = stage;
     if (percent > 0 && percent < 100)
     {
-        m_atStatusLabel->setText(QStringLiteral("%1 %2%").arg(stage).arg(percent));
+        statusText = QStringLiteral("%1 %2%").arg(stage).arg(percent);
     }
-    else
+    if (!m_atTaskStatus->isActive())
     {
-        m_atStatusLabel->setText(stage);
+        m_atTaskStatus->begin(statusText, 0, 100);
     }
-    m_atProgressBar->setValue(percent);
-    m_atStatusLabel->show();
-    m_atProgressBar->show();
-    if (m_atCancelBtn) m_atCancelBtn->show();
+    m_atTaskStatus->updateProgress(statusText, percent);
     statusBar()->showMessage(QString());   // 清空普通消息，让 permanent widget 露出
 }
 
 void MainWindow::onAtFinished(bool success)
 {
-    if (!m_atProgressBar)
+    if (!m_atTaskStatus)
     {
         return;
     }
-    m_atStatusLabel->hide();
-    m_atProgressBar->hide();
-    if (m_atCancelBtn) m_atCancelBtn->hide();
+    m_atTaskStatus->finish();
     statusBar()->showMessage(
-        success ? tr("空三（AT）完成") : tr("空三（AT）已取消或失败"), 4000);
+        success ? tr("空三/光束法平差完成") : tr("空三/光束法平差已取消或失败"), 4000);
 }
 
 void MainWindow::onCancelAt()
@@ -1306,86 +1268,91 @@ void MainWindow::onCancelAt()
 
 void MainWindow::onObsNetProgress(const QString &stage, int percent)
 {
-    if (!m_obsNetProgressBar)
+    if (!m_obsNetTaskStatus)
     {
         return;
     }
-    m_obsNetStatusLabel->setText(QStringLiteral("观测网络: %1 %2%").arg(stage).arg(percent));
-    m_obsNetProgressBar->setValue(percent);
-    m_obsNetStatusLabel->show();
-    m_obsNetProgressBar->show();
+    const QString statusText = QStringLiteral("观测网络: %1 %2%").arg(stage).arg(percent);
+    if (!m_obsNetTaskStatus->isActive())
+    {
+        m_obsNetTaskStatus->begin(statusText, 0, 100);
+    }
+    m_obsNetTaskStatus->updateProgress(statusText, percent);
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::onObsNetFinished(bool success)
 {
-    if (!m_obsNetProgressBar)
+    if (!m_obsNetTaskStatus)
     {
         return;
     }
-    m_obsNetStatusLabel->hide();
-    m_obsNetProgressBar->hide();
+    m_obsNetTaskStatus->finish();
     statusBar()->showMessage(
         success ? tr("观测网络构建完成") : tr("观测网络构建失败"), 4000);
 }
 
-
-
 void MainWindow::showSgProgress(int total)
 {
-    if (!m_sgProgressBar)
+    if (!m_sgTaskStatus)
     {
         return;
     }
-    m_sgProgressBar->setRange(0, total);
-    m_sgProgressBar->setValue(0);
-    m_sgStatusLabel->setText(tr("特征匹配 0/%1").arg(total));
-    m_sgStatusLabel->show();
-    m_sgProgressBar->show();
-    m_sgCancelBtn->show();
+    m_sgTaskStatus->begin(tr("特征匹配 0/%1").arg(total), 0, total);
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::updateSgProgress(int done)
 {
-    if (!m_sgProgressBar)
+    if (!m_sgTaskStatus)
     {
         return;
     }
-    m_sgProgressBar->setValue(done);
-    m_sgStatusLabel->setText(tr("特征匹配 %1/%2").arg(done).arg(m_sgProgressBar->maximum()));
+    const int total = m_sgTaskStatus->progressMaximum();
+    const int clampedDone = std::clamp(done, 0, total);
+    m_sgTaskStatus->updateProgress(
+        tr("特征匹配 %1/%2").arg(clampedDone).arg(total), clampedDone);
 }
 
 void MainWindow::hideSgProgress(bool ok)
 {
-    if (!m_sgProgressBar)
+    if (!m_sgTaskStatus)
     {
         return;
     }
-    m_sgStatusLabel->hide();
-    m_sgProgressBar->hide();
-    m_sgCancelBtn->hide();
+    m_sgTaskStatus->finish();
     statusBar()->showMessage(ok ? tr("匹配完成") : tr("匹配已取消"), 4000);
 }
 
 void MainWindow::showDmProgress(int total)
 {
-    if (!m_dmProgressBar) return;
-    m_dmProgressBar->setRange(0, total);
-    m_dmProgressBar->setValue(0);
-    m_dmProgressBar->show();
+    if (!m_dmTaskStatus)
+    {
+        return;
+    }
+    m_dmTaskStatus->begin(tr("密集匹配 0/%1").arg(total), 0, total);
+    statusBar()->showMessage(QString());
 }
 
 void MainWindow::updateDmProgress(int done)
 {
-    if (!m_dmProgressBar) return;
-    m_dmProgressBar->setValue(done);
+    if (!m_dmTaskStatus)
+    {
+        return;
+    }
+    const int total = m_dmTaskStatus->progressMaximum();
+    const int clampedDone = std::clamp(done, 0, total);
+    m_dmTaskStatus->updateProgress(
+        tr("密集匹配 %1/%2").arg(clampedDone).arg(total), clampedDone);
 }
 
 void MainWindow::hideDmProgress(bool ok)
 {
-    if (!m_dmProgressBar) return;
-    m_dmProgressBar->hide();
+    if (!m_dmTaskStatus)
+    {
+        return;
+    }
+    m_dmTaskStatus->finish();
     statusBar()->showMessage(ok ? tr("密集匹配完成") : tr("密集匹配已取消"), 4000);
 }
 
@@ -1395,38 +1362,33 @@ void MainWindow::hideDmProgress(bool ok)
 
 void MainWindow::showSpProgress(int total)
 {
-    if (!m_spProgressBar)
+    if (!m_spTaskStatus)
     {
         return;
     }
-    m_spProgressBar->setRange(0, total);
-    m_spProgressBar->setValue(0);
-    m_spStatusLabel->setText(tr("特征提取 0/%1").arg(total));
-    m_spStatusLabel->show();
-    m_spProgressBar->show();
-    m_spCancelBtn->show();
+    m_spTaskStatus->begin(tr("特征提取 0/%1").arg(total), 0, total);
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::updateSpProgress(int done)
 {
-    if (!m_spProgressBar)
+    if (!m_spTaskStatus)
     {
         return;
     }
-    m_spProgressBar->setValue(done);
-    m_spStatusLabel->setText(tr("特征提取 %1/%2").arg(done).arg(m_spProgressBar->maximum()));
+    const int total = m_spTaskStatus->progressMaximum();
+    const int clampedDone = std::clamp(done, 0, total);
+    m_spTaskStatus->updateProgress(
+        tr("特征提取 %1/%2").arg(clampedDone).arg(total), clampedDone);
 }
 
 void MainWindow::hideSpProgress(bool ok)
 {
-    if (!m_spProgressBar)
+    if (!m_spTaskStatus)
     {
         return;
     }
-    m_spStatusLabel->hide();
-    m_spProgressBar->hide();
-    m_spCancelBtn->hide();
+    m_spTaskStatus->finish();
     statusBar()->showMessage(ok ? tr("特征提取完成") : tr("特征提取已取消"), 4000);
 }
 
@@ -1675,6 +1637,12 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
 
 void MainWindow::applyUiSettings(const QJsonObject &ui)
 {
+    // 特征后缀恢复不能依赖主窗口 UI 设置存在；旧项目可能只有 assets/ip/*.dsk。
+    if (m_menuWorkflowController)
+    {
+        m_menuWorkflowController->applySavedFeatureDisplayOptions(ui);
+    }
+
     if (ui.isEmpty())
     {
         return;
@@ -1727,11 +1695,6 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
                 }
             });
         }
-    }
-    // Apply saved feature display options (visualization) if present
-    if (m_menuWorkflowController)
-    {
-        m_menuWorkflowController->applySavedFeatureDisplayOptions(ui);
     }
 }
 

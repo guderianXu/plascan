@@ -6,10 +6,18 @@
 #include <opencv2/imgproc.hpp>
 
 #include <array>
+#include <chrono>
 #include <cmath>
+#include <cstdio>
 
 namespace
 {
+
+struct CudaPatchMatchRunStats
+{
+    int validCount = 0;
+    double elapsedMs = 0.0;
+};
 
 xjw::Camera makeCamera(double fu,
                        double fv,
@@ -67,6 +75,72 @@ cv::Mat makeShiftedImage(const cv::Mat &image, int disparity)
         }
     }
     return shifted;
+}
+
+CudaPatchMatchRunStats executeCudaPatchMatchCase(
+    const cv::Mat &refGray,
+    const cv::Mat &srcGray,
+    const xjw::mvs::PositiveDepthCameraModel &refCam,
+    const xjw::mvs::PositiveDepthCameraModel &srcCam,
+    bool useParallelSweep,
+    int iterations)
+{
+    xjw::mvs::PatchMatchConfig config;
+    config.useCuda = true;
+    config.cudaUseParallelSweep = useParallelSweep;
+    config.downsampleFactor = 2;
+    config.numIterations = iterations;
+    config.patchHalf = 2;
+    config.confidenceThresh = 0.05f;
+    config.doMedianBlur = false;
+    config.doBilateralFilter = false;
+
+    cv::Mat depthMap;
+    cv::Mat confidenceMap;
+    std::string errorMessage;
+    const auto start = std::chrono::steady_clock::now();
+    const bool ok = xjw::mvs::PatchMatchDepthEstimator::estimate(
+        refGray,
+        std::vector<cv::Mat>{srcGray},
+        refCam,
+        std::vector<xjw::mvs::PositiveDepthCameraModel>{srcCam},
+        5.0f,
+        15.0f,
+        config,
+        depthMap,
+        &confidenceMap,
+        &errorMessage,
+        nullptr);
+    const auto stop = std::chrono::steady_clock::now();
+
+    EXPECT_TRUE(ok) << errorMessage;
+    if (!ok)
+    {
+        return {};
+    }
+    EXPECT_EQ(depthMap.size(), refGray.size());
+    EXPECT_EQ(confidenceMap.size(), refGray.size());
+
+    const cv::Rect roi(refGray.cols / 6,
+                       refGray.rows / 6,
+                       refGray.cols * 2 / 3,
+                       refGray.rows * 2 / 3);
+    int validCount = 0;
+    for (int y = roi.y; y < roi.y + roi.height; ++y)
+    {
+        for (int x = roi.x; x < roi.x + roi.width; ++x)
+        {
+            if (depthMap.at<float>(y, x) > 0.0f)
+            {
+                ++validCount;
+            }
+        }
+    }
+
+    CudaPatchMatchRunStats stats;
+    stats.validCount = validCount;
+    stats.elapsedMs = std::chrono::duration<double, std::milli>(stop - start).count();
+    return stats;
 }
 
 } // namespace
@@ -162,4 +236,115 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
         << "Recovered CPU depth should stay close to the expected plane depth";
     EXPECT_GT(meanConfidence, 0.35)
         << "Recovered CPU depth should have meaningful confidence";
+}
+
+CudaPatchMatchRunStats runCudaPatchMatchSmallPlane(bool useParallelSweep)
+{
+    constexpr int IMAGE_WIDTH = 96;
+    constexpr int IMAGE_HEIGHT = 72;
+    constexpr double FOCAL = 80.0;
+    constexpr double BASELINE = 1.0;
+    constexpr int DISPARITY = 8;
+
+    cv::Mat refGray = makeTexturedImage(IMAGE_WIDTH, IMAGE_HEIGHT);
+    cv::Mat srcGray = makeShiftedImage(refGray, DISPARITY);
+    cv::GaussianBlur(srcGray, srcGray, cv::Size(3, 3), 0.0);
+
+    const double identity[9] = {1.0, 0.0, 0.0,
+                                0.0, 1.0, 0.0,
+                                0.0, 0.0, 1.0};
+    const double refCenter[3] = {0.0, 0.0, 0.0};
+    const double srcCenter[3] = {BASELINE, 0.0, 0.0};
+
+    const auto refCam = makeCamera(FOCAL, FOCAL,
+                                   IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
+                                   1, 1,
+                                   identity, refCenter,
+                                   false).toPositiveDepthModel();
+    const auto srcCam = makeCamera(FOCAL, FOCAL,
+                                   IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
+                                   1, 1,
+                                   identity, srcCenter,
+                                   false).toPositiveDepthModel();
+
+    CudaPatchMatchRunStats stats = executeCudaPatchMatchCase(refGray,
+                                                             srcGray,
+                                                             refCam,
+                                                             srcCam,
+                                                             useParallelSweep,
+                                                             3);
+    const cv::Rect roi(16, 12, IMAGE_WIDTH - 32, IMAGE_HEIGHT - 24);
+    const int pixelCount = roi.width * roi.height;
+    EXPECT_GT(stats.validCount, pixelCount * 0.10)
+        << "CUDA PatchMatch should produce a non-trivial valid depth region";
+    return stats;
+}
+
+TEST(PatchMatchCudaRegressionTest, ParallelSweepProducesDepthForSmallPlane)
+{
+    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        GTEST_SKIP() << "CUDA PatchMatch is not available in this environment";
+    }
+    runCudaPatchMatchSmallPlane(true);
+}
+
+TEST(PatchMatchCudaRegressionTest, LegacySweepFallbackProducesDepthForSmallPlane)
+{
+    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        GTEST_SKIP() << "CUDA PatchMatch is not available in this environment";
+    }
+    runCudaPatchMatchSmallPlane(false);
+}
+
+TEST(PatchMatchCudaBenchmarkTest, DISABLED_CompareParallelAndLegacySweepAfterWarmup)
+{
+    if (!xjw::mvs::PatchMatchDepthEstimator::isCudaAvailable())
+    {
+        GTEST_SKIP() << "CUDA PatchMatch is not available in this environment";
+    }
+
+    constexpr int IMAGE_WIDTH = 640;
+    constexpr int IMAGE_HEIGHT = 480;
+    constexpr double FOCAL = 520.0;
+    constexpr double BASELINE = 1.0;
+    constexpr int DISPARITY = 26;
+
+    cv::Mat refGray = makeTexturedImage(IMAGE_WIDTH, IMAGE_HEIGHT);
+    cv::Mat srcGray = makeShiftedImage(refGray, DISPARITY);
+    cv::GaussianBlur(srcGray, srcGray, cv::Size(3, 3), 0.0);
+
+    const double identity[9] = {1.0, 0.0, 0.0,
+                                0.0, 1.0, 0.0,
+                                0.0, 0.0, 1.0};
+    const double refCenter[3] = {0.0, 0.0, 0.0};
+    const double srcCenter[3] = {BASELINE, 0.0, 0.0};
+    const auto refCam = makeCamera(FOCAL, FOCAL,
+                                   IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
+                                   1, 1,
+                                   identity, refCenter,
+                                   false).toPositiveDepthModel();
+    const auto srcCam = makeCamera(FOCAL, FOCAL,
+                                   IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
+                                   1, 1,
+                                   identity, srcCenter,
+                                   false).toPositiveDepthModel();
+
+    (void)executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, true, 4);
+    (void)executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, false, 4);
+
+    const CudaPatchMatchRunStats parallelStats =
+        executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, true, 4);
+    const CudaPatchMatchRunStats legacyStats =
+        executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, false, 4);
+
+    const int pixelCount = (IMAGE_WIDTH * 2 / 3) * (IMAGE_HEIGHT * 2 / 3);
+    EXPECT_GT(parallelStats.validCount, pixelCount * 0.10);
+    EXPECT_GT(legacyStats.validCount, pixelCount * 0.10);
+    std::fprintf(stderr,
+                 "[PatchMatchCudaBenchmark] parallel=%.2f ms legacy=%.2f ms speedup=%.2fx\n",
+                 parallelStats.elapsedMs,
+                 legacyStats.elapsedMs,
+                 legacyStats.elapsedMs / std::max(1e-6, parallelStats.elapsedMs));
 }

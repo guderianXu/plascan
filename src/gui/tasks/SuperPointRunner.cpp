@@ -2,6 +2,7 @@
 
 #include "SuperPoint.h"
 #include "FeatureFileIO.h"
+#include "ExtractorFactory.h"
 #include "tradition/TraditionalFeatureExtractor.h"
 #include <opencv2/opencv.hpp>
 #include <torch/torch.h>
@@ -14,154 +15,11 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QCoreApplication>
-#include <QProcess>
-#include <QStandardPaths>
 
 #include <memory>
 
 namespace
 {
-
-struct PythonExecutableChoice
-{
-    QString executable;
-    QString source;
-    QString error;
-};
-
-QString resolvedExecutablePath(const QString &candidate)
-{
-    const QString trimmed = candidate.trimmed();
-    if (trimmed.isEmpty())
-    {
-        return QString();
-    }
-
-    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
-    {
-        const QFileInfo info(trimmed);
-        if (info.exists() && info.isFile() && info.isExecutable())
-        {
-            return QDir::cleanPath(info.absoluteFilePath());
-        }
-        return QString();
-    }
-
-    const QString resolved = QStandardPaths::findExecutable(trimmed);
-    if (!resolved.isEmpty())
-    {
-        return QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
-    }
-
-    return QString();
-}
-
-QString pythonInEnvironmentPrefix(const QString &prefix)
-{
-    const QString trimmed = prefix.trimmed();
-    if (trimmed.isEmpty())
-    {
-        return QString();
-    }
-
-    QStringList candidates;
-#ifdef Q_OS_WIN
-    candidates << QDir(trimmed).filePath(QStringLiteral("python.exe"))
-               << QDir(trimmed).filePath(QStringLiteral("Scripts/python.exe"));
-#else
-    candidates << QDir(trimmed).filePath(QStringLiteral("bin/python"));
-#endif
-
-    for (const QString &candidate : candidates)
-    {
-        const QString resolved = resolvedExecutablePath(candidate);
-        if (!resolved.isEmpty())
-        {
-            return resolved;
-        }
-    }
-
-    return QString();
-}
-
-QStringList defaultPythonEnvironmentPrefixes()
-{
-    QStringList prefixes;
-
-    const QString mambaRoot = qEnvironmentVariable("MAMBA_ROOT_PREFIX").trimmed();
-    if (!mambaRoot.isEmpty())
-    {
-        prefixes << QDir(mambaRoot).filePath(QStringLiteral("envs/plascan"));
-    }
-
-    const QString home = QDir::homePath();
-    prefixes << QDir(home).filePath(QStringLiteral(".local/share/mamba/envs/plascan"))
-             << QDir(home).filePath(QStringLiteral("mambaforge/envs/plascan"))
-             << QDir(home).filePath(QStringLiteral("miniforge3/envs/plascan"))
-             << QDir(home).filePath(QStringLiteral("miniconda3/envs/plascan"))
-             << QDir(home).filePath(QStringLiteral("anaconda3/envs/plascan"));
-
-    prefixes.removeDuplicates();
-    return prefixes;
-}
-
-PythonExecutableChoice resolvePythonExecutable(const QJsonObject &config)
-{
-    const QString configuredPython = config.value(QStringLiteral("python_executable")).toString().trimmed();
-    if (!configuredPython.isEmpty())
-    {
-        const QString resolved = resolvedExecutablePath(configuredPython);
-        if (!resolved.isEmpty())
-        {
-            return {resolved, QStringLiteral("配置 python_executable"), QString()};
-        }
-        return {QString(), QString(), QStringLiteral("配置的 Python 可执行文件不可用: %1").arg(configuredPython)};
-    }
-
-    const QString envPython = qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed();
-    if (!envPython.isEmpty())
-    {
-        const QString resolved = resolvedExecutablePath(envPython);
-        if (!resolved.isEmpty())
-        {
-            return {resolved, QStringLiteral("环境变量 PLASCAN_PYTHON_EXECUTABLE"), QString()};
-        }
-        return {QString(), QString(),
-                QStringLiteral("环境变量 PLASCAN_PYTHON_EXECUTABLE 指向的 Python 不可用: %1").arg(envPython)};
-    }
-
-    const QString venvPython = pythonInEnvironmentPrefix(qEnvironmentVariable("VIRTUAL_ENV"));
-    if (!venvPython.isEmpty())
-    {
-        return {venvPython, QStringLiteral("环境变量 VIRTUAL_ENV"), QString()};
-    }
-
-    const QString condaPython = pythonInEnvironmentPrefix(qEnvironmentVariable("CONDA_PREFIX"));
-    if (!condaPython.isEmpty())
-    {
-        return {condaPython, QStringLiteral("环境变量 CONDA_PREFIX"), QString()};
-    }
-
-    for (const QString &prefix : defaultPythonEnvironmentPrefixes())
-    {
-        const QString defaultEnvPython = pythonInEnvironmentPrefix(prefix);
-        if (!defaultEnvPython.isEmpty())
-        {
-            return {defaultEnvPython, QStringLiteral("默认 plascan Python 环境"), QString()};
-        }
-    }
-
-    for (const QString &candidate : {QStringLiteral("python3"), QStringLiteral("python")})
-    {
-        const QString resolved = resolvedExecutablePath(candidate);
-        if (!resolved.isEmpty())
-        {
-            return {resolved, QStringLiteral("PATH"), QString()};
-        }
-    }
-
-    return {QString(), QString(), QStringLiteral("未找到可用的 Python 可执行文件")};
-}
 
 QString normalizedFeatureAlgorithm(const QJsonObject &config)
 {
@@ -201,135 +59,68 @@ QString findModelFile(const QString &modelName)
     return QString();
 }
 
-} // namespace
-
-// ---------------------------------------------------------------------------
-// DISK / ALIKED: invoke Python script, return false on failure
-// ---------------------------------------------------------------------------
-static bool runPythonExtractor(const QString &algo, const QStringList &inputs,
-                                const QString &outputDir, int maxKeypoints,
-                                double scoreThreshold,
-                                const QString &device,
-                                ProjectManager *projectManager,
-                                const QJsonObject &config,
-                                std::atomic<bool> &cancelFlag,
-                                std::atomic<int> &progressCount)
+QStringList extractorModelCandidates(const QString &algorithm, bool useCuda)
 {
-    // Locate extract_features.py next to the source tree
-    QString scriptPath;
-#ifdef PLASCAN_SOURCE_DIR
-    scriptPath = QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("scripts/extract_features.py"));
-#endif
-    if (scriptPath.isEmpty() || !QFile::exists(scriptPath))
+    const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
+    if (algorithm == QStringLiteral("disk"))
     {
-        // Fallback: relative to binary
-        scriptPath = QDir(QCoreApplication::applicationDirPath())
-                         .filePath(QStringLiteral("../scripts/extract_features.py"));
+        return {
+            QStringLiteral("disk_extractor_%1_8192.torchscript").arg(suffix),
+            QStringLiteral("disk_extractor_%1_8192.pt").arg(suffix),
+            QStringLiteral("disk_extractor_%1_1200.torchscript").arg(suffix),
+            QStringLiteral("disk_extractor_%1_1200.pt").arg(suffix),
+            QStringLiteral("disk_extractor.torchscript"),
+            QStringLiteral("disk_extractor.pt"),
+        };
     }
-    if (!QFile::exists(scriptPath))
+    if (algorithm == QStringLiteral("aliked"))
     {
-        LOG_ERROR("%s", qUtf8Printable(QString("找不到 extract_features.py: %1").arg(scriptPath)));
-        return false;
-    }
-
-    const PythonExecutableChoice python = resolvePythonExecutable(config);
-    if (python.executable.isEmpty())
-    {
-        LOG_ERROR("%s", qUtf8Printable(QString("[%1] %2")
-                                           .arg(algo.toUpper())
-                                           .arg(python.error)));
-        return false;
+        return {
+            QStringLiteral("aliked_extractor_%1_480.torchscript").arg(suffix),
+            QStringLiteral("aliked_extractor_%1_480.pt").arg(suffix),
+            QStringLiteral("aliked_extractor.torchscript"),
+            QStringLiteral("aliked_extractor.pt"),
+        };
     }
 
-    QStringList args;
-    args << scriptPath
-         << QStringLiteral("--algo") << algo
-         << QStringLiteral("--output") << outputDir
-         << QStringLiteral("--max-keypoints") << QString::number(maxKeypoints)
-         << QStringLiteral("--score-threshold") << QString::number(scoreThreshold, 'g', 6)
-         << QStringLiteral("--device") << device.toLower()
-         << QStringLiteral("--images");
-    args << inputs;
-
-    LOG_INFO("%s", qUtf8Printable(QString("[%1] 调用 Python 脚本提取特征: %2 张影像")
-                                      .arg(algo.toUpper()).arg(inputs.size())));
-    LOG_INFO("%s", qUtf8Printable(QString("[%1] Python 可执行文件: %2 (%3)")
-                                      .arg(algo.toUpper())
-                                      .arg(python.executable)
-                                      .arg(python.source)));
-    LOG_INFO("%s", qUtf8Printable(QString("[%1] Python 脚本路径: %2")
-                                      .arg(algo.toUpper())
-                                      .arg(QDir::cleanPath(QFileInfo(scriptPath).absoluteFilePath()))));
-
-    QProcess proc;
-    proc.setProcessChannelMode(QProcess::MergedChannels);
-    proc.start(python.executable, args);
-
-    if (!proc.waitForStarted(10000))
-    {
-        LOG_ERROR("%s", qUtf8Printable(QString("[%1] 无法启动 Python 进程: %2")
-                                           .arg(algo.toUpper())
-                                           .arg(python.executable)));
-        return false;
-    }
-
-    // Stream output line by line while waiting
-    while (!proc.waitForFinished(500))
-    {
-        if (cancelFlag.load())
-        {
-            proc.kill();
-            LOG_WARN("%s", qUtf8Printable(QString("[%1] 用户取消").arg(algo.toUpper())));
-            return false;
-        }
-        const QByteArray out = proc.readAllStandardOutput();
-        if (!out.isEmpty())
-            LOG_INFO("%s", out.trimmed().constData());
-    }
-    const QByteArray remaining = proc.readAllStandardOutput();
-    if (!remaining.isEmpty())
-        LOG_INFO("%s", remaining.trimmed().constData());
-
-    if (proc.exitCode() != 0)
-    {
-        LOG_ERROR("%s", qUtf8Printable(QString("[%1] Python 脚本退出码: %2, Python=%3, 脚本=%4")
-                                           .arg(algo.toUpper())
-                                           .arg(proc.exitCode())
-                                           .arg(python.executable)
-                                           .arg(scriptPath)));
-        return false;
-    }
-
-    // Register output .sp files with the project
-    int successCount = 0;
-    for (const QString &imagePath : inputs)
-    {
-        QFileInfo fi(imagePath);
-        const QString suffix = QString::fromStdString(ExtractorSuffix::forAlgorithm(algo.toStdString()));
-        const QString spPath = QDir(outputDir).filePath(fi.completeBaseName() + suffix);
-        if (QFile::exists(spPath))
-        {
-            if (projectManager)
-            {
-                QMetaObject::invokeMethod(projectManager, "appendIpfindResult",
-                                          Qt::QueuedConnection,
-                                          Q_ARG(QString, imagePath),
-                                          Q_ARG(QString, spPath),
-                                          Q_ARG(QJsonObject, config));
-            }
-            successCount++;
-        }
-        else
-        {
-            LOG_WARN("%s", qUtf8Printable(QString("[%1] 未找到输出文件: %2").arg(algo.toUpper()).arg(spPath)));
-        }
-        progressCount.fetch_add(1);
-    }
-
-    LOG_INFO("%s", qUtf8Printable(QString("[%1] 特征提取完成: 成功 %2/%3 张")
-                                      .arg(algo.toUpper()).arg(successCount).arg(inputs.size())));
-    return successCount > 0;
+    return {};
 }
+
+bool isManagedExtractorModelPath(const QString &path)
+{
+    const QString fileName = QFileInfo(path).fileName().toLower();
+    return fileName.startsWith(QStringLiteral("superpoint_extractor"))
+        || fileName.startsWith(QStringLiteral("disk_extractor"))
+        || fileName.startsWith(QStringLiteral("aliked_extractor"));
+}
+
+QString resolveExtractorModelPath(const QString &algorithm, bool useCuda, const QString &configuredPath)
+{
+    QString modelPath = configuredPath.trimmed();
+    if (!modelPath.isEmpty())
+    {
+        const QFileInfo info(modelPath);
+        const QString fileName = info.fileName().toLower();
+        const QString expectedDeviceToken = useCuda ? QStringLiteral("_cuda") : QStringLiteral("_cpu");
+        if (info.exists() && (!isManagedExtractorModelPath(modelPath) || fileName.contains(expectedDeviceToken)))
+        {
+            return QDir::cleanPath(info.absoluteFilePath());
+        }
+    }
+
+    for (const QString &candidate : extractorModelCandidates(algorithm, useCuda))
+    {
+        modelPath = findModelFile(candidate);
+        if (!modelPath.isEmpty())
+        {
+            return QDir::cleanPath(QFileInfo(modelPath).absoluteFilePath());
+        }
+    }
+
+    return QString();
+}
+
+} // namespace
 
 bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs, ProjectManager *projectManager)
 {
@@ -365,23 +156,13 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
         }
     }
 
-    // DISK / ALIKED: delegate entirely to Python script
-    if (featureAlgorithm == QStringLiteral("disk") || featureAlgorithm == QStringLiteral("aliked"))
-    {
-        const int maxKpts = config["max_num_keypoints"].toInt(2048);
-        const double scoreThreshold = config["detection_threshold"].toDouble(0.0);
-        const QString device = config["device"].toString("CPU");
-        return runPythonExtractor(featureAlgorithm, inputs, outputDir, maxKpts, scoreThreshold, device,
-                                  projectManager, config, cancelFlag, progressCount);
-    }
-    
     // 构建 SuperPointConfig
     SuperPointConfig spConfig;
     spConfig.nms_radius = config["nms_radius"].toInt(4);
     spConfig.detection_threshold = static_cast<float>(config["detection_threshold"].toDouble(0.005));
     spConfig.max_num_keypoints = config["max_num_keypoints"].toInt(-1);
     spConfig.remove_borders = config["remove_borders"].toInt(4);
-    spConfig.grayscale_min = static_cast<float>(config["grayscale_min"].toDouble(0.0));
+    spConfig.grayscale_min = static_cast<float>(config["grayscale_min"].toDouble(5.0 / 255.0));
     spConfig.grayscale_max = static_cast<float>(config["grayscale_max"].toDouble(1.0));
     spConfig.normalize_input = config["normalize_input"].toBool(true);
     spConfig.descriptor_dim = config["descriptor_dim"].toInt(256);
@@ -425,6 +206,7 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
     spConfig.max_image_size = config["max_image_size"].toInt(2048);  // 默认 2048，遥感大图自动缩放
     
     std::unique_ptr<SuperPoint> superPointExtractor;
+    std::unique_ptr<IExtractor> nativeExtractor;
 
     try 
     {
@@ -433,8 +215,12 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
             // 确定模型路径: 优先 CPU 模型 (始终存在), CUDA 模型可选
             QStringList modelCandidates;
             if (spConfig.device.is_cuda())
-                modelCandidates << "superpoint_extractor_cuda.pt";
-            modelCandidates << "superpoint_extractor_cpu.pt" << "superpoint_extractor.pt";
+                modelCandidates << "superpoint_extractor_cuda.torchscript"
+                                << "superpoint_extractor_cuda.pt";
+            modelCandidates << "superpoint_extractor_cpu.torchscript"
+                            << "superpoint_extractor_cpu.pt"
+                            << "superpoint_extractor.torchscript"
+                            << "superpoint_extractor.pt";
 
             QString modelPath = config["model_path"].toString().trimmed();
             if (!modelPath.isEmpty() && !QFile::exists(modelPath))
@@ -454,12 +240,42 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
 
             if (modelPath.isEmpty())
             {
-                LOG_ERROR("%s", "SuperPoint 模型文件不存在 (已尝试: superpoint_extractor_*.pt)");
+                LOG_ERROR("%s", "SuperPoint 模型文件不存在 (已尝试: superpoint_extractor_*.torchscript/.pt)");
                 return false;
             }
 
             LOG_INFO("%s", qUtf8Printable(QString("加载 SuperPoint 模型: %1").arg(modelPath)));
             superPointExtractor = std::make_unique<SuperPoint>(modelPath.toStdString(), spConfig);
+        }
+        else if (featureAlgorithm == QStringLiteral("disk") || featureAlgorithm == QStringLiteral("aliked"))
+        {
+            const QString modelPath = resolveExtractorModelPath(
+                featureAlgorithm,
+                spConfig.device.is_cuda(),
+                config["model_path"].toString());
+            if (modelPath.isEmpty())
+            {
+                LOG_ERROR("%s", qUtf8Printable(QString("%1 C++ TorchScript 模型文件不存在")
+                    .arg(featureAlgorithm.toUpper())));
+                return false;
+            }
+
+            ExtractorConfig extractorCfg;
+            extractorCfg.modelPath = modelPath.toStdString();
+            extractorCfg.maxKeypoints = config["max_num_keypoints"].toInt(-1);
+            extractorCfg.detThreshold = static_cast<float>(config["detection_threshold"].toDouble(0.0));
+            extractorCfg.nmsRadius = spConfig.nms_radius;
+            extractorCfg.removeBorder = spConfig.remove_borders;
+            extractorCfg.maxImageDim = 0;
+            extractorCfg.grayscaleMin = spConfig.grayscale_min;
+            extractorCfg.grayscaleMax = spConfig.grayscale_max;
+            extractorCfg.useCuda = spConfig.device.is_cuda();
+            extractorCfg.cudaDevice = config["cuda_device"].toInt(0);
+
+            LOG_INFO("%s", qUtf8Printable(QString("加载 %1 C++ TorchScript 模型: %2")
+                .arg(featureAlgorithm.toUpper(), modelPath)));
+            nativeExtractor = xjw::feature_extractors::createExtractor(
+                featureAlgorithm.toStdString(), extractorCfg);
         }
 
         // 打印实际使用的配置，便于调试参数未生效的问题
@@ -523,6 +339,10 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
                 if (superPointExtractor)
                 {
                     output = superPointExtractor->detect(processImage);
+                }
+                else if (nativeExtractor)
+                {
+                    output = nativeExtractor->extract(processImage);
                 }
                 else
                 {

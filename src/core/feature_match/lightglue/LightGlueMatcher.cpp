@@ -124,10 +124,10 @@ LightGlueMatcher::_filterScores(const torch::Tensor &scores, int64_t expectedN0,
 // IFeatureMatcher::match —— 从 FeatureData 输入匹配
 //
 // 设计思路：
-//   FeatureData 在项目中存储的是尿素坐标（原图尺度）和 [N,256] CV_32F 描述子。
+//   FeatureData 在项目中存储的是像素坐标（原图尺度）和 [N,D] CV_32F 描述子。
 //   LightGlue 模型需要：
 //     kpts_t  [1,N,2] 坐标（fixed-size 空间）
-//     descs_t [1,N,256] 描述子
+//     descs_t [1,N,D] 描述子（DISK/ALIKED 为 128 维，SuperPoint 为 256 维）
 //     fixed_wh [1,2]   fixed 宽高
 //   将 imageWidth/imageHeight 设为 fixed_wh，则 kpts_t = 像素坐标，无需坐标变换。
 // ---------------------------------------------------------------------------
@@ -222,23 +222,6 @@ LightGlueMatcher::match(const xjw::feature_extractors::FeatureData &feat0,
         throw std::runtime_error(
             "[LightGlueMatcher] 模型输出维度错误: 期望 3 维, 实际 " +
             std::to_string(scoresTensor.dim()) + " 维");
-    }
-
-    // 临时调试：打印 score 范围和 exp 后的置信度分布（TODO: 验证完成后删除）
-    {
-        auto s_cpu = scoresTensor[0].cpu();
-        const int64_t r = (s_cpu.size(0) == N0 + 1) ? s_cpu.size(0) - 1 : s_cpu.size(0);
-        const int64_t c = (s_cpu.size(1) == N1 + 1) ? s_cpu.size(1) - 1 : s_cpu.size(1);
-        auto s_slice = s_cpu.slice(0, 0, r).slice(1, 0, c);
-        auto max_per_row = std::get<0>(s_slice.max(1)).exp();
-        float minConf = max_per_row.min().item<float>();
-        float maxConf = max_per_row.max().item<float>();
-        float meanConf = max_per_row.mean().item<float>();
-        int above02 = (max_per_row > 0.2f).sum().item<int>();
-        int above01 = (max_per_row > 0.1f).sum().item<int>();
-        int above005 = (max_per_row > 0.05f).sum().item<int>();
-        fprintf(stderr, "[LG_DEBUG] N0=%d N1=%d conf: min=%.4f max=%.4f mean=%.4f >0.2:%d >0.1:%d >0.05:%d\n",
-                N0, N1, minConf, maxConf, meanConf, above02, above01, above005);
     }
 
     auto validPairs = _filterScores(scoresTensor, N0, N1);
@@ -352,4 +335,3 @@ LightGlueMatcher::matchImages(const cv::Mat &img0, const cv::Mat &img1)
 }
 
 } // namespace xjw::feature_match
-

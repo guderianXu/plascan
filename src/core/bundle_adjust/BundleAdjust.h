@@ -11,6 +11,9 @@
 // ============================================================
 
 #include <array>
+#include <atomic>
+#include <functional>
+#include <memory>
 #include <vector>
 
 #include "Camera.h"
@@ -73,6 +76,12 @@ struct BAOptions
     // ── 并行计算 ───────────────────────────────────────────
     /// OpenMP 线程数；0 表示使用系统默认（OMP_NUM_THREADS 或 CPU 核心数）。
     int numThreads = 0;
+
+    // ── 任务控制 ──────────────────────────────────────────────────────────
+    /// 外部取消标志；GUI/CLI 长任务可在外层迭代边界中止 BA。
+    std::shared_ptr<std::atomic<bool>> cancelFlag;
+    /// 外层迭代进度回调，返回 false 表示调用方要求停止后续迭代。
+    std::function<bool(int currentIteration, int maxIterations, double avgRms, int validPoints)> progressCallback;
 };
 
 /**

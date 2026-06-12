@@ -56,7 +56,11 @@ find_package(Torch REQUIRED)
 message(STATUS "plascan: found LibTorch")
 
 if(DEFINED PLASCAN_ORIGINAL_CMAKE_LINKER AND NOT APPLE)
-  set(CMAKE_LINKER ${PLASCAN_ORIGINAL_CMAKE_LINKER} CACHE FILEPATH "Linker" FORCE)
+  if(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN AND EXISTS "/usr/bin/ld")
+    set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "Linker" FORCE)
+  else()
+    set(CMAKE_LINKER ${PLASCAN_ORIGINAL_CMAKE_LINKER} CACHE FILEPATH "Linker" FORCE)
+  endif()
 endif()
 
 # ── GDAL ──────────────────────────────────────────────────────────────────────

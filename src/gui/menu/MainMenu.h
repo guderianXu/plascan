@@ -105,6 +105,9 @@ public:
     /** @brief 返回"特征点查找"（SuperPoint 特征检测）动作。 */
     QAction *detectFeaturesAction() const;
 
+    /** @brief 返回"获取重叠对"动作。 */
+    QAction *vocabularyOverlapAction() const;
+
     /** @brief 返回"特征点可视化设置"对话框动作。 */
     QAction *featureVisualizationAction() const;
 
@@ -210,6 +213,7 @@ private:
     QAction *m_addPhotoAct{};            ///< 添加单张照片
     QAction *m_addFolderAct{};           ///< 批量添加文件夹中的图片
     QAction *m_detectFeaturesAct{};      ///< 特征点检测（SuperPoint）
+    QAction *m_vocabularyOverlapAct{};   ///< 基于特征词汇预获取重叠影像对
     QAction *m_featureVisualizationAct{};///< 特征点可视化设置对话框
     QAction *m_matchFeaturesAct{};       ///< 特征点匹配（SuperGlue）生成连接点
     QAction *m_viewMatchesAct{};         ///< 查看匹配结果

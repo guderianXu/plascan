@@ -26,6 +26,50 @@
 
 #include "AlgorithmCompat.h"
 
+namespace
+{
+
+void setComboDataOrFirst(QComboBox *combo, const QString &data)
+{
+    if (!combo)
+    {
+        return;
+    }
+
+    const int index = combo->findData(data);
+    combo->setCurrentIndex(index >= 0 ? index : 0);
+}
+
+QString normalizeFeatureSuffix(QString suffix)
+{
+    suffix = suffix.trimmed().toLower();
+    if (suffix.isEmpty())
+    {
+        return QString();
+    }
+    if (!suffix.startsWith(QLatin1Char('.')))
+    {
+        suffix.prepend(QLatin1Char('.'));
+    }
+    return suffix;
+}
+
+QStringList normalizeFeatureSuffixes(const QStringList &suffixes)
+{
+    QStringList normalizedSuffixes;
+    for (const QString &suffix : suffixes)
+    {
+        const QString normalized = normalizeFeatureSuffix(suffix);
+        if (!normalized.isEmpty() && !normalizedSuffixes.contains(normalized))
+        {
+            normalizedSuffixes.append(normalized);
+        }
+    }
+    return normalizedSuffixes;
+}
+
+} // namespace
+
 FeatureMatchingDialog::FeatureMatchingDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -117,6 +161,7 @@ void FeatureMatchingDialog::setupUi()
     m_matchAlgorithmCombo->addItem(tr("BF-Hamming (ORB)"), "orb_bf_hamming");
     m_matchAlgorithmCombo->addItem(tr("BF-L2 (SIFT)"), "sift_bf_l2");
     m_matchAlgorithmCombo->addItem(tr("FLANN (SIFT)"), "sift_flann");
+    setComboDataOrFirst(m_matchAlgorithmCombo, QStringLiteral("lightglue"));
 
     m_outlierMethodCombo->clear();
     m_outlierMethodCombo->addItem(tr("不剔除"), "none");
@@ -311,7 +356,7 @@ void FeatureMatchingDialog::onCancel()
 
 void FeatureMatchingDialog::onResetDefaults()
 {
-    m_matchAlgorithmCombo->setCurrentIndex(0);  // superglue
+    setComboDataOrFirst(m_matchAlgorithmCombo, QStringLiteral("lightglue"));
     m_modelTypeCombo->setCurrentIndex(0);  // outdoor
     m_outlierMethodCombo->setCurrentIndex(2);  // Fundamental USAC_MAGSAC（推荐默认，最优粗差剔除）
     m_matchThresholdSpin->setValue(0.15);
@@ -345,16 +390,61 @@ void FeatureMatchingDialog::onAlgorithmChanged(int)
 
 void FeatureMatchingDialog::setAvailableFeatureSuffixes(const QStringList &suffixes)
 {
+    m_projectFeatureSuffixes = normalizeFeatureSuffixes(suffixes);
+    refreshFeatureSuffixChoices();
+}
+
+void FeatureMatchingDialog::refreshFeatureSuffixChoices()
+{
+    const QString previousSuffix = selectedFeatureSuffix();
+    const QString algo = m_matchAlgorithmCombo->currentData().toString();
+    QStringList suffixes;
+    if (!xjw::feature_match::isEndToEndAlgorithm(algo))
+    {
+        const QStringList compatibleSuffixes = xjw::feature_match::compatibleFeatureSuffixes(algo);
+        if (m_projectFeatureSuffixes.isEmpty())
+        {
+            suffixes = compatibleSuffixes;
+        }
+        else
+        {
+            for (const QString &suffix : compatibleSuffixes)
+            {
+                if (m_projectFeatureSuffixes.contains(suffix))
+                {
+                    suffixes.append(suffix);
+                }
+            }
+        }
+    }
+
     m_featureSuffixCombo->blockSignals(true);
     m_featureSuffixCombo->clear();
-    if (suffixes.size() > 1) {
+    if (suffixes.size() > 1)
+    {
         m_featureSuffixCombo->addItem(tr("所有特征类型"), QStringLiteral("__all__"));
     }
     for (const auto &s : suffixes)
+    {
         m_featureSuffixCombo->addItem(s, s);
+    }
+
+    int restoreIndex = m_featureSuffixCombo->findData(previousSuffix);
+    if (restoreIndex < 0 && previousSuffix == QStringLiteral("__all__") && suffixes.size() > 1)
+    {
+        restoreIndex = m_featureSuffixCombo->findData(QStringLiteral("__all__"));
+    }
+    if (restoreIndex < 0 && m_featureSuffixCombo->count() > 0)
+    {
+        restoreIndex = 0;
+    }
+    if (restoreIndex >= 0)
+    {
+        m_featureSuffixCombo->setCurrentIndex(restoreIndex);
+    }
     m_featureSuffixCombo->blockSignals(false);
 
-    bool visible = !suffixes.isEmpty();
+    const bool visible = !suffixes.isEmpty();
     m_featureSuffixLabel->setVisible(visible);
     m_featureSuffixCombo->setVisible(visible);
 }
@@ -368,7 +458,6 @@ QString FeatureMatchingDialog::selectedFeatureSuffix() const
 void FeatureMatchingDialog::onAlgorithmOrFeatureChanged()
 {
     const QString algo = m_matchAlgorithmCombo->currentData().toString();
-    const bool isE2E = xjw::feature_match::isEndToEndAlgorithm(algo);
 
     // 算法参数面板切换
     if (algo == "superglue")
@@ -383,12 +472,7 @@ void FeatureMatchingDialog::onAlgorithmOrFeatureChanged()
         m_paramStack->setCurrentIndex(2);
 
     // 更新特征后缀选择器
-    if (!isE2E) {
-        setAvailableFeatureSuffixes(
-            xjw::feature_match::compatibleFeatureSuffixes(algo));
-    } else {
-        setAvailableFeatureSuffixes({});
-    }
+    refreshFeatureSuffixChoices();
 
     updatePreview();
 }
@@ -402,10 +486,8 @@ void FeatureMatchingDialog::applySettings(const QJsonObject &settings)
 {
     bool block = blockSignals(true);
 
-    const QString matchAlgorithm = settings.value("match_algorithm").toString("superglue");
-    const int matchAlgorithmIndex = m_matchAlgorithmCombo->findData(matchAlgorithm);
-    if (matchAlgorithmIndex >= 0)
-        m_matchAlgorithmCombo->setCurrentIndex(matchAlgorithmIndex);
+    const QString matchAlgorithm = settings.value("match_algorithm").toString("lightglue");
+    setComboDataOrFirst(m_matchAlgorithmCombo, matchAlgorithm);
 
     const QString outlierMethod = settings.value("outlier_method").toString("fundamental_usac_magsac");
     const int outlierIdx = m_outlierMethodCombo->findData(outlierMethod);
@@ -486,7 +568,7 @@ void FeatureMatchingDialog::applySettings(const QJsonObject &settings)
     // 恢复特征后缀选择（必须在 onAlgorithmOrFeatureChanged 之后，因为该函数会填充后缀列表）
     const QString featureSuffix = settings.value("feature_suffix").toString();
     if (!featureSuffix.isEmpty() && m_featureSuffixCombo->count() > 0) {
-        int idx = m_featureSuffixCombo->findText(featureSuffix);
+        int idx = m_featureSuffixCombo->findData(featureSuffix);
         if (idx >= 0)
             m_featureSuffixCombo->setCurrentIndex(idx);
     }

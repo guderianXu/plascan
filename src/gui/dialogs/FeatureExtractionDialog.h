@@ -83,8 +83,8 @@ private:
     QDoubleSpinBox*   m_detectionThresholdSpin{nullptr};
     QSpinBox*         m_maxKeypointsSpin{nullptr};
     QSpinBox*         m_removeBordersSpin{nullptr};
-    QDoubleSpinBox*   m_grayscaleMinSpin{nullptr};
-    QDoubleSpinBox*   m_grayscaleMaxSpin{nullptr};
+    QSpinBox*         m_grayscaleMinSpin{nullptr};
+    QSpinBox*         m_grayscaleMaxSpin{nullptr};
 
     // 高级参数 (Advanced) - 折叠组
     QGroupBox*        m_advancedGroup{nullptr};

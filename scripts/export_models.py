@@ -1,6 +1,6 @@
 #!/usr/bin/env python3
 """
-导出 LoFTR、RoMa 为 TorchScript .pt 文件。
+导出 LoFTR、RoMa 为 TorchScript .torchscript 文件。
 
 DISK/ALIKED 导出已移至 scripts/export_disk_aliked.py
 (含 NMS 修复 + DeformableConv2d monkey-patch)。
@@ -137,7 +137,7 @@ def export_loftr(scene: str = "outdoor", device: str = "cuda"):
         try:
             with torch.no_grad():
                 traced = torch.jit.trace(wrapper, (dummy0, dummy1), strict=False)
-            out_path = MODELS_DIR / f"loftr_{scene}_{suffix}.pt"
+            out_path = MODELS_DIR / f"loftr_{scene}_{suffix}.torchscript"
             traced.save(str(out_path))
             print(f"[LoFTR] 已保存: {out_path} ({h}x{w}, 仅粗匹配)")
             break  # 成功就停止
@@ -204,7 +204,7 @@ def export_roma(scene: str = "outdoor", device: str = "cuda"):
         traced = torch.jit.trace(wrapper, (dummy0, dummy1), strict=False)
 
     suffix = "cuda" if dev.type == "cuda" else "cpu"
-    out_path = MODELS_DIR / f"roma_{scene}_{suffix}.pt"
+    out_path = MODELS_DIR / f"roma_{scene}_{suffix}.torchscript"
     traced.save(str(out_path))
     print(f"[RoMa] 已保存: {out_path}")
     return True

@@ -178,6 +178,11 @@ BaServiceResult BundleAdjustService::run(
     // xjw::BundleAdjust::optimizePoints 内部使用 Levenberg-Marquardt 算法，
     // 对所有相机与所有点交替迭代，最小化重投影误差的 Huber 加权和。
     const xjw::BAResult baResult = xjw::BundleAdjust::optimizePoints(cameras, tracks, opts.baOpt);
+    if (opts.baOpt.cancelFlag && opts.baOpt.cancelFlag->load())
+    {
+        result.errorMessage = QStringLiteral("用户取消了光束法平差");
+        return result;
+    }
 
     // ── 准备各输出文件路径 ─────────────────────────────────────────────────
     const QString tsaiDir       = QDir(outDir).filePath(QStringLiteral("refined_tsai"));

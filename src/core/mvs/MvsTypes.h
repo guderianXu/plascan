@@ -61,6 +61,7 @@ struct PatchMatchConfig
     int   cudaBlockSweep       = 32;     ///< 1D sweep kernel 线程块大小（必须为 2 的幂）
 
     bool  epipolarRectified    = false;  ///< 图像已极线校正，偏向水平传播
+    bool  cudaUseParallelSweep = true;   ///< CUDA 使用棋盘格像素级并行传播；false 时回退传统行列 sweep
 };
 
 // =============================================================================
@@ -110,7 +111,9 @@ struct DepthGenConfig
     PatchMatchConfig patchMatch;
     FusionConfig     fusion;
     int   numSourceViews        = 4;
-    int   cpuWorkerCount        = 1;     ///< CPU 路径的像素级并行线程数
+    int   cpuWorkerCount        = 1;     ///< 每个 CPU 帧 worker 内部的像素级线程数
+    int   gpuFrameWorkerCount   = 1;     ///< CUDA 路径的帧级并发数；过大可能增加显存压力
+    int   cpuFrameWorkerCount   = 1;     ///< CPU 路径的帧级并发数
     float zNearScale            = 0.75f;  ///< IQR 内 2%ile × 0.75（原0.5太宽致PatchMatch难收敛）
     float zFarScale             = 1.5f;   ///< IQR 内 98%ile × 1.5（原2.0产生6x搜索比，现3x更合理）
     bool  runDepthEstimation    = true;

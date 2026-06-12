@@ -14,6 +14,29 @@
 #include <QJsonArray>
 #include <QJsonObject>
 
+namespace {
+
+QString displayNameForPath(const QString &path)
+{
+    const QFileInfo info(path);
+    const QString base = info.completeBaseName();
+    return base.isEmpty() ? info.fileName() : base;
+}
+
+void setViewButtonText(QPushButton *button, const QString &text, const QString &tooltip)
+{
+    if (!button)
+    {
+        return;
+    }
+
+    const QString cleanText = text.trimmed().isEmpty() ? QStringLiteral("-") : text.trimmed();
+    button->setText(button->fontMetrics().elidedText(cleanText, Qt::ElideMiddle, 190));
+    button->setToolTip(tooltip.trimmed().isEmpty() ? cleanText : tooltip);
+}
+
+} // namespace
+
 WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
     : QWidget(parent)
     , m_ui(new Ui::WorkspaceCenterWidget)
@@ -135,8 +158,7 @@ void WorkspaceCenterWidget::showImageView(const QString &imagePath)
 
     if (!imagePath.trimmed().isEmpty())
     {
-        const QString base = QFileInfo(imagePath).completeBaseName();
-        m_imageBtn->setText(base.isEmpty() ? QFileInfo(imagePath).fileName() : base);
+        setViewButtonText(m_imageBtn, displayNameForPath(imagePath), imagePath);
         m_imageBtn->setVisible(true);
         m_canvas->showImage(imagePath);
     }
@@ -160,13 +182,13 @@ void WorkspaceCenterWidget::showSideBySideImages(const QString &primaryImagePath
     m_dualImageViewer->fitBothViews();
     m_stack->setCurrentWidget(m_dualImageViewer);
 
-    const QString primaryName = QFileInfo(primaryImagePath).completeBaseName();
-    const QString sideName = QFileInfo(sideImagePath).completeBaseName();
+    const QString primaryName = displayNameForPath(primaryImagePath);
+    const QString sideName = displayNameForPath(sideImagePath);
     if (m_compareBtn)
     {
-        m_compareBtn->setText(QStringLiteral("对比: %1 | %2")
-                                  .arg(primaryName.isEmpty() ? QFileInfo(primaryImagePath).fileName() : primaryName)
-                                  .arg(sideName.isEmpty() ? QFileInfo(sideImagePath).fileName() : sideName));
+        setViewButtonText(m_compareBtn,
+                          QStringLiteral("对比: %1 | %2").arg(primaryName, sideName),
+                          QStringLiteral("%1\n%2").arg(primaryImagePath, sideImagePath));
         m_compareBtn->setVisible(true);
         m_compareBtn->setChecked(true);
     }
@@ -198,8 +220,7 @@ void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
 
     if (m_modelBtn)
     {
-        const QString base = QFileInfo(modelPath).completeBaseName();
-        m_modelBtn->setText(base.isEmpty() ? QFileInfo(modelPath).fileName() : base);
+        setViewButtonText(m_modelBtn, displayNameForPath(modelPath), modelPath);
     }
     showModelView();
 }
@@ -220,8 +241,7 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
         m_modelView->loadPointCloudFromXyz(pointCloudPath);
         if (m_modelBtn)
         {
-            const QString base = QFileInfo(pointCloudPath).completeBaseName();
-            m_modelBtn->setText(base.isEmpty() ? QFileInfo(pointCloudPath).fileName() : base);
+            setViewButtonText(m_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
         }
         showModelView();
     }
@@ -235,7 +255,7 @@ void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork
     }
 
     const QString buttonText = title.trimmed().isEmpty() ? tr("观测网络") : title.trimmed();
-    m_obsNetBtn->setText(buttonText);
+    setViewButtonText(m_obsNetBtn, buttonText, buttonText);
     m_obsNetBtn->setVisible(true);
 
     m_obsNetView->setNetwork(net);

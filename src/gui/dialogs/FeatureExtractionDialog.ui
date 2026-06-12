@@ -96,6 +96,13 @@
      <widget class="QWidget" name="rightWidget">
       <layout class="QVBoxLayout" name="rightLayout">
        <item>
+        <widget class="QScrollArea" name="rightParameterScrollArea">
+         <property name="widgetResizable">
+          <bool>true</bool>
+         </property>
+         <widget class="QWidget" name="rightParameterScrollWidget">
+          <layout class="QVBoxLayout" name="rightParameterLayout">
+       <item>
         <widget class="QLabel" name="basicLabel">
          <property name="text">
           <string>&lt;b&gt;基础参数&lt;/b&gt;</string>
@@ -166,7 +173,7 @@
             <bool>true</bool>
            </property>
            <property name="placeholderText">
-            <string>深度学习模型路径 (.pt)</string>
+            <string>深度学习模型路径 (.torchscript/.pt)</string>
            </property>
           </widget>
          </item>
@@ -345,82 +352,6 @@
            </property>
           </widget>
          </item>
-         <item row="7" column="0">
-          <widget class="QLabel" name="grayRangeLabel">
-           <property name="text">
-            <string>灰度过滤范围:</string>
-           </property>
-          </widget>
-         </item>
-         <item row="7" column="1">
-          <widget class="QWidget" name="m_grayRangeWidget" native="true">
-           <layout class="QHBoxLayout" name="grayRangeLayout">
-            <property name="leftMargin">
-             <number>0</number>
-            </property>
-            <property name="topMargin">
-             <number>0</number>
-            </property>
-            <property name="rightMargin">
-             <number>0</number>
-            </property>
-            <property name="bottomMargin">
-             <number>0</number>
-            </property>
-            <item>
-             <widget class="QLabel" name="grayMinLabel">
-              <property name="text">
-               <string>最小:</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QDoubleSpinBox" name="m_grayscaleMinSpin">
-              <property name="toolTip">
-               <string>灰度过滤阈值区间（归一化 0.0-1.0）
-例如 [0.05,0.95] 可过滤极暗或极亮区域</string>
-              </property>
-              <property name="decimals">
-               <number>2</number>
-              </property>
-              <property name="maximum">
-               <double>1.000000000000000</double>
-              </property>
-              <property name="singleStep">
-               <double>0.050000000000000</double>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QLabel" name="grayMaxLabel">
-              <property name="text">
-               <string>最大:</string>
-              </property>
-             </widget>
-            </item>
-            <item>
-             <widget class="QDoubleSpinBox" name="m_grayscaleMaxSpin">
-              <property name="toolTip">
-               <string>灰度过滤阈值区间（归一化 0.0-1.0）
-例如 [0.05,0.95] 可过滤极暗或极亮区域</string>
-              </property>
-              <property name="decimals">
-               <number>2</number>
-              </property>
-              <property name="maximum">
-               <double>1.000000000000000</double>
-              </property>
-              <property name="singleStep">
-               <double>0.050000000000000</double>
-              </property>
-              <property name="value">
-               <double>1.000000000000000</double>
-              </property>
-             </widget>
-            </item>
-           </layout>
-          </widget>
-         </item>
         </layout>
        </item>
        <item>
@@ -561,6 +492,85 @@
            </widget>
           </item>
           <item row="5" column="0">
+           <widget class="QLabel" name="grayRangeLabel">
+            <property name="text">
+             <string>灰度阈值范围 (0-255):</string>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QWidget" name="m_grayRangeWidget" native="true">
+            <layout class="QHBoxLayout" name="grayRangeLayout">
+             <property name="leftMargin">
+              <number>0</number>
+             </property>
+             <property name="topMargin">
+              <number>0</number>
+             </property>
+             <property name="rightMargin">
+              <number>0</number>
+             </property>
+             <property name="bottomMargin">
+              <number>0</number>
+             </property>
+             <item>
+              <widget class="QLabel" name="grayMinLabel">
+               <property name="text">
+                <string>最小:</string>
+               </property>
+             </widget>
+             </item>
+             <item>
+              <widget class="QSpinBox" name="m_grayscaleMinSpin">
+               <property name="toolTip">
+                <string>灰度过滤阈值区间（像素值 0-255）。
+默认最小值 5 会过滤灰度小于 5 的极暗特征点。</string>
+               </property>
+               <property name="maximum">
+                <number>255</number>
+               </property>
+               <property name="singleStep">
+                <number>1</number>
+               </property>
+               <property name="suffix">
+                <string> px</string>
+               </property>
+               <property name="value">
+                <number>5</number>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QLabel" name="grayMaxLabel">
+               <property name="text">
+                <string>最大:</string>
+               </property>
+             </widget>
+             </item>
+             <item>
+              <widget class="QSpinBox" name="m_grayscaleMaxSpin">
+               <property name="toolTip">
+                <string>灰度过滤阈值区间（像素值 0-255）。
+通常保持 255，仅在需要过滤过曝区域时调低。</string>
+               </property>
+               <property name="maximum">
+                <number>255</number>
+               </property>
+               <property name="singleStep">
+                <number>1</number>
+               </property>
+               <property name="suffix">
+                <string> px</string>
+               </property>
+               <property name="value">
+                <number>255</number>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </widget>
+          </item>
+          <item row="6" column="0">
            <widget class="QLabel" name="neighborhoodRadiusLabel">
             <property name="text">
              <string>邻域判断范围(px):</string>
@@ -570,7 +580,7 @@
             </property>
            </widget>
           </item>
-          <item row="5" column="1">
+          <item row="6" column="1">
            <widget class="QSpinBox" name="m_neighborhoodRadiusSpin">
             <property name="toolTip">
              <string>检查特征点周围邻域的半径（像素）
@@ -587,7 +597,7 @@
             </property>
            </widget>
           </item>
-          <item row="6" column="0">
+          <item row="7" column="0">
            <widget class="QLabel" name="neighborhoodThresholdLabel">
             <property name="text">
              <string>邻域灰度阈值:</string>
@@ -597,7 +607,7 @@
             </property>
            </widget>
           </item>
-          <item row="6" column="1">
+          <item row="7" column="1">
            <widget class="QDoubleSpinBox" name="m_neighborhoodThresholdSpin">
             <property name="toolTip">
              <string>邻域灰度阈值 [0,1]
@@ -706,7 +716,7 @@ GUI 应用通常建议启用以提高容错性</string>
           <item row="2" column="1">
            <widget class="QLineEdit" name="m_pythonPathEdit">
             <property name="toolTip">
-             <string>DISK/ALIKED 调用 scripts/extract_features.py 时使用
+             <string>兼容旧 Python 提取脚本时使用；当前 GUI 默认使用 C++ TorchScript 模型路径
 留空时按 PLASCAN_PYTHON_EXECUTABLE、VIRTUAL_ENV、CONDA_PREFIX、plascan 环境、PATH 顺序选择</string>
             </property>
             <property name="placeholderText">
@@ -780,6 +790,10 @@ GUI 应用通常建议启用以提高容错性</string>
           </size>
          </property>
         </spacer>
+       </item>
+          </layout>
+         </widget>
+        </widget>
        </item>
       </layout>
      </widget>

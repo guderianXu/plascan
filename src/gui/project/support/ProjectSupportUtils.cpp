@@ -221,12 +221,124 @@ QString resolveProjectFeaturePathFromToken(const QString &plascanPath,
     return ProjectIO::findFeatureForImage(plascanPath, token);
 }
 
+namespace
+{
+
+QString normalizedFeatureSuffix(QString suffix)
+{
+    suffix = suffix.trimmed().toLower();
+    if (suffix.isEmpty())
+    {
+        return QString();
+    }
+    if (!suffix.startsWith(QLatin1Char('.')))
+    {
+        suffix.prepend(QLatin1Char('.'));
+    }
+    return suffix;
+}
+
+QSet<QString> collectProjectFeatureSuffixes(const QString &plascanPath, const QJsonObject &meta)
+{
+    QSet<QString> availableSuffixes;
+    const QStringList imagePaths = projectImagePaths(meta);
+    for (const QString &imagePath : imagePaths)
+    {
+        for (const QString &suffix : ProjectIO::availableFeatureSuffixes(plascanPath, imagePath))
+        {
+            const QString normalized = normalizedFeatureSuffix(suffix);
+            if (!normalized.isEmpty())
+            {
+                availableSuffixes.insert(normalized);
+            }
+        }
+    }
+
+    const QDir ipDir(ProjectIO::ipfindOutputDir(plascanPath));
+    if (ipDir.exists())
+    {
+        static const QStringList knownSuffixes = {
+            QStringLiteral(".sp"),
+            QStringLiteral(".dsk"),
+            QStringLiteral(".alk"),
+            QStringLiteral(".sift"),
+            QStringLiteral(".orb"),
+            QStringLiteral(".akz"),
+            QStringLiteral(".dedode")
+        };
+        const QFileInfoList files = ipDir.entryInfoList(QDir::Files | QDir::NoDotAndDotDot);
+        for (const QFileInfo &fileInfo : files)
+        {
+            const QString fileName = fileInfo.fileName().toLower();
+            for (const QString &suffix : knownSuffixes)
+            {
+                if (fileName.endsWith(suffix))
+                {
+                    availableSuffixes.insert(suffix);
+                }
+            }
+        }
+    }
+
+    return availableSuffixes;
+}
+
+} // namespace
+
 QString resolveFeaturePathBySuffix(const QString &plascanPath, const QJsonObject &meta,
                                    const QString &token, const QString &suffix)
 {
     const QString imagePath = resolveProjectImagePathFromToken(token, meta);
     if (imagePath.isEmpty()) return {};
     return ProjectIO::featureFileForSuffix(plascanPath, imagePath, suffix);
+}
+
+QStringList projectFeatureSuffixes(const QString &plascanPath, const QJsonObject &meta)
+{
+    QSet<QString> availableSuffixes = collectProjectFeatureSuffixes(plascanPath, meta);
+    static const QStringList preferredOrder = {
+        QStringLiteral(".dsk"),
+        QStringLiteral(".alk"),
+        QStringLiteral(".sp"),
+        QStringLiteral(".sift"),
+        QStringLiteral(".orb"),
+        QStringLiteral(".akz"),
+        QStringLiteral(".dedode")
+    };
+
+    QStringList ordered;
+    for (const QString &suffix : preferredOrder)
+    {
+        if (availableSuffixes.remove(suffix))
+        {
+            ordered.append(suffix);
+        }
+    }
+
+    QStringList extras = availableSuffixes.values();
+    std::sort(extras.begin(), extras.end());
+    ordered.append(extras);
+    return ordered;
+}
+
+QString inferPreferredFeatureSuffix(const QString &plascanPath, const QJsonObject &meta)
+{
+    for (const QString &suffix : projectFeatureSuffixes(plascanPath, meta))
+    {
+        return suffix;
+    }
+
+    return QString();
+}
+
+bool projectHasFeatureSuffix(const QString &plascanPath, const QJsonObject &meta, const QString &suffix)
+{
+    const QString normalized = normalizedFeatureSuffix(suffix);
+    if (normalized.isEmpty())
+    {
+        return false;
+    }
+    return collectProjectFeatureSuffixes(plascanPath, meta).contains(normalized);
 }
 
 QJsonObject cameraToJson(const xjw::Camera &camera)

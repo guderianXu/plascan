@@ -396,11 +396,10 @@ bool Triangulator::hasPositiveDepth(const std::array<double, 3> &xyz, ImageId im
     if (!_reconstruction.hasCamera(imageId))
         return false;
     const Camera &cam = _reconstruction.camera(imageId);
-    auto R = cam.cameraToWorldRotation();
-    auto C = cam.cameraCenter();
-    // 深度 = R[2,:] · (X - C)  （相机坐标系 Z 分量）
-    double depth = R[6] * (xyz[0] - C[0]) + R[7] * (xyz[1] - C[1]) + R[8] * (xyz[2] - C[2]);
-    return depth > 0.0;
+    const double world[3] = {xyz[0], xyz[1], xyz[2]};
+    double cameraPoint[3] = {0.0, 0.0, 0.0};
+    cam.worldToCamera(world, cameraPoint);
+    return cameraPoint[2] > 0.0;
 }
 
 // ---- 多视图 DLT 三角化 ----

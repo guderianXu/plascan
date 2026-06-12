@@ -8,21 +8,26 @@
 #include "ProjectSupportUtils.h"
 #include "ProjectTriangulationService.h"
 #include "FeatureExtractionDialog.h"
+#include "FeatureMatchingDialog.h"
 #include "ThreeDReconstructionDialog.h"
 #include "MapProjectDialog.h"
+#include "BundleAdjustDialog.h"
 #include "ModelDropSupport.h"
 #include "DataTreeWidget.h"
 #include "MainMenu.h"
+#include "TaskStatusWidget.h"
 
 #include "Camera.h"
 
 #include <plapoint/io/ply_io.h>
 
 #include <QApplication>
+#include <QComboBox>
 #include <QDir>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
 #include <QFile>
+#include <QGroupBox>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -35,6 +40,9 @@
 #include <QMetaObject>
 #include <QFileInfo>
 #include <QPushButton>
+#include <QScrollArea>
+#include <QSpinBox>
+#include <QStackedWidget>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QToolButton>
@@ -246,6 +254,96 @@ TEST(ProjectSupportUtilsTest, ResolveFeaturePathFromTokenSupportsSuffix)
     EXPECT_EQ(xjw::gui::project::resolveProjectFeaturePathFromToken(projectPath, meta, imagePath), spPath);
 }
 
+TEST(ProjectSupportUtilsTest, InfersDiskFeatureSuffixWhenProjectHasOnlyDskOutputs)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
+    const QString ipDir = ProjectIO::ipfindOutputDir(projectPath);
+    ASSERT_TRUE(QDir().mkpath(ipDir));
+
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("img");
+    imageFile.close();
+
+    const QString dskPath = QDir(ipDir).filePath(QStringLiteral("66.dsk"));
+    QFile dskFile(dskPath);
+    ASSERT_TRUE(dskFile.open(QIODevice::WriteOnly));
+    dskFile.write("dsk");
+    dskFile.close();
+
+    QJsonArray images;
+    images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = images;
+
+    EXPECT_EQ(xjw::gui::project::inferPreferredFeatureSuffix(projectPath, meta),
+              QStringLiteral(".dsk"));
+}
+
+TEST(ProjectSupportUtilsTest, DetectsWhetherProjectHasRequestedFeatureSuffix)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
+    const QString ipDir = ProjectIO::ipfindOutputDir(projectPath);
+    ASSERT_TRUE(QDir().mkpath(ipDir));
+
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("img");
+    imageFile.close();
+
+    QFile dskFile(QDir(ipDir).filePath(QStringLiteral("66.dsk")));
+    ASSERT_TRUE(dskFile.open(QIODevice::WriteOnly));
+    dskFile.write("dsk");
+    dskFile.close();
+
+    QJsonArray images;
+    images.append(QJsonObject{{QStringLiteral("path"), imagePath}});
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = images;
+
+    EXPECT_TRUE(xjw::gui::project::projectHasFeatureSuffix(projectPath, meta, QStringLiteral(".dsk")));
+    EXPECT_FALSE(xjw::gui::project::projectHasFeatureSuffix(projectPath, meta, QStringLiteral(".sp")));
+}
+
+TEST(ProjectSupportUtilsTest, ListsOnlyFeatureSuffixesPresentInProject)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
+    const QString ipDir = ProjectIO::ipfindOutputDir(projectPath);
+    ASSERT_TRUE(QDir().mkpath(ipDir));
+
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("75.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("img");
+    imageFile.close();
+
+    QFile dskFile(QDir(ipDir).filePath(QStringLiteral("75.dsk")));
+    ASSERT_TRUE(dskFile.open(QIODevice::WriteOnly));
+    dskFile.write("dsk");
+    dskFile.close();
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), imagePath}}
+    };
+
+    const QStringList suffixes = xjw::gui::project::projectFeatureSuffixes(projectPath, meta);
+    EXPECT_EQ(suffixes, QStringList{QStringLiteral(".dsk")});
+}
+
 TEST(FeatureExtractionDialogTest, DiskSelectionShowsResolvedModelPath)
 {
     FeatureExtractionDialog dialog;
@@ -259,7 +357,157 @@ TEST(FeatureExtractionDialogTest, DiskSelectionShowsResolvedModelPath)
     ASSERT_NE(modelPathEdit, nullptr);
     EXPECT_FALSE(modelPathEdit->text().trimmed().isEmpty());
     EXPECT_TRUE(modelPathEdit->text().contains(QStringLiteral("disk_extractor")));
-    EXPECT_TRUE(modelPathEdit->text().endsWith(QStringLiteral(".pt")));
+    EXPECT_TRUE(modelPathEdit->text().endsWith(QStringLiteral(".torchscript")));
+}
+
+TEST(FeatureExtractionDialogTest, DeviceSelectionControlsCudaModelAndConfig)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject settings;
+    settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    settings[QStringLiteral("use_cuda")] = false;
+    dialog.applySettings(settings);
+
+    QLineEdit *modelPathEdit = findModelPathEdit(&dialog);
+    ASSERT_NE(modelPathEdit, nullptr);
+    EXPECT_TRUE(modelPathEdit->text().contains(QStringLiteral("disk_extractor_cuda")))
+        << modelPathEdit->text().toStdString();
+
+    QJsonObject emittedConfig;
+    QObject::connect(&dialog, &FeatureExtractionDialog::runRequested, &dialog,
+                     [&emittedConfig](const QJsonObject &config, const QStringList &)
+                     {
+                         emittedConfig = config;
+                     });
+    dialog.setProjectImages(QStringList{QStringLiteral("/tmp/1.png")});
+    QPushButton *runButton = dialog.findChild<QPushButton *>(QStringLiteral("m_runBtn"));
+    ASSERT_NE(runButton, nullptr);
+    runButton->click();
+
+    EXPECT_TRUE(emittedConfig.value(QStringLiteral("use_cuda")).toBool());
+    EXPECT_EQ(emittedConfig.value(QStringLiteral("device")).toString(), QStringLiteral("CUDA"));
+}
+
+TEST(FeatureExtractionDialogTest, CudaCheckboxControlsRuntimeDevice)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject settings;
+    settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    settings[QStringLiteral("device")] = QStringLiteral("CPU");
+    dialog.applySettings(settings);
+
+    QCheckBox *cudaCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_useCudaChk"));
+    ASSERT_NE(cudaCheck, nullptr);
+    cudaCheck->setChecked(true);
+
+    QJsonObject emittedConfig;
+    QObject::connect(&dialog, &FeatureExtractionDialog::runRequested, &dialog,
+                     [&emittedConfig](const QJsonObject &config, const QStringList &)
+                     {
+                         emittedConfig = config;
+                     });
+    dialog.setProjectImages(QStringList{QStringLiteral("/tmp/1.png")});
+    QPushButton *runButton = dialog.findChild<QPushButton *>(QStringLiteral("m_runBtn"));
+    ASSERT_NE(runButton, nullptr);
+    runButton->click();
+
+    EXPECT_TRUE(emittedConfig.value(QStringLiteral("use_cuda")).toBool());
+    EXPECT_EQ(emittedConfig.value(QStringLiteral("device")).toString(), QStringLiteral("CUDA"));
+}
+
+TEST(FeatureExtractionDialogTest, DefaultsToDiskAlgorithm)
+{
+    FeatureExtractionDialog dialog;
+
+    QComboBox *algorithmCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_algorithmCombo"));
+    ASSERT_NE(algorithmCombo, nullptr);
+    EXPECT_EQ(algorithmCombo->currentData().toString(), QStringLiteral("disk"));
+
+    QPushButton *resetButton = dialog.findChild<QPushButton *>(QStringLiteral("m_resetBtn"));
+    ASSERT_NE(resetButton, nullptr);
+    resetButton->click();
+
+    EXPECT_EQ(algorithmCombo->currentData().toString(), QStringLiteral("disk"));
+}
+
+TEST(FeatureExtractionDialogTest, GrayscaleThresholdLivesInAdvancedParameters)
+{
+    for (const QString &algorithm : {
+             QStringLiteral("superpoint"),
+             QStringLiteral("disk"),
+             QStringLiteral("aliked"),
+             QStringLiteral("orb"),
+             QStringLiteral("sift")
+         })
+    {
+        FeatureExtractionDialog dialog;
+
+        QJsonObject settings;
+        settings[QStringLiteral("feature_algorithm")] = algorithm;
+        dialog.applySettings(settings);
+
+        QToolButton *advancedButton = findToolButton(&dialog, QStringLiteral("高级参数"));
+        ASSERT_NE(advancedButton, nullptr);
+        advancedButton->setChecked(true);
+        dialog.show();
+        QApplication::processEvents();
+
+        QGroupBox *advancedGroup = dialog.findChild<QGroupBox *>(QStringLiteral("m_advancedGroup"));
+        QWidget *grayRangeWidget = dialog.findChild<QWidget *>(QStringLiteral("m_grayRangeWidget"));
+        ASSERT_NE(advancedGroup, nullptr);
+        ASSERT_NE(grayRangeWidget, nullptr);
+
+        EXPECT_TRUE(advancedGroup->isAncestorOf(grayRangeWidget)) << algorithm.toStdString();
+        EXPECT_TRUE(grayRangeWidget->isVisibleTo(&dialog)) << algorithm.toStdString();
+    }
+}
+
+TEST(FeatureExtractionDialogTest, GrayscaleThresholdUsesPixelValuesAndEmitsNormalizedRange)
+{
+    FeatureExtractionDialog dialog;
+
+    QSpinBox *minSpin = dialog.findChild<QSpinBox *>(QStringLiteral("m_grayscaleMinSpin"));
+    QSpinBox *maxSpin = dialog.findChild<QSpinBox *>(QStringLiteral("m_grayscaleMaxSpin"));
+    ASSERT_NE(minSpin, nullptr);
+    ASSERT_NE(maxSpin, nullptr);
+
+    EXPECT_EQ(minSpin->minimum(), 0);
+    EXPECT_EQ(minSpin->maximum(), 255);
+    EXPECT_EQ(minSpin->value(), 5);
+    EXPECT_EQ(maxSpin->minimum(), 0);
+    EXPECT_EQ(maxSpin->maximum(), 255);
+    EXPECT_EQ(maxSpin->value(), 255);
+    EXPECT_TRUE(minSpin->toolTip().contains(QStringLiteral("0-255")));
+
+    QJsonObject emittedConfig;
+    QObject::connect(&dialog, &FeatureExtractionDialog::runRequested, &dialog,
+                     [&emittedConfig](const QJsonObject &config, const QStringList &)
+                     {
+                         emittedConfig = config;
+                     });
+
+    dialog.setProjectImages(QStringList{QStringLiteral("/tmp/1.png")});
+    QPushButton *runButton = dialog.findChild<QPushButton *>(QStringLiteral("m_runBtn"));
+    ASSERT_NE(runButton, nullptr);
+    runButton->click();
+
+    EXPECT_NEAR(emittedConfig.value(QStringLiteral("grayscale_min")).toDouble(), 5.0 / 255.0, 1e-6);
+    EXPECT_DOUBLE_EQ(emittedConfig.value(QStringLiteral("grayscale_max")).toDouble(), 1.0);
+    EXPECT_EQ(emittedConfig.value(QStringLiteral("grayscale_min_px")).toInt(), 5);
+    EXPECT_EQ(emittedConfig.value(QStringLiteral("grayscale_max_px")).toInt(), 255);
+}
+
+TEST(FeatureExtractionDialogTest, NativeFeatureRunnerReceivesGrayscaleRange)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/SuperPointRunner.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("extractorCfg.grayscaleMin = spConfig.grayscale_min")));
+    EXPECT_TRUE(source.contains(QStringLiteral("extractorCfg.grayscaleMax = spConfig.grayscale_max")));
+    EXPECT_TRUE(source.contains(QStringLiteral("config[\"grayscale_min\"].toDouble(5.0 / 255.0)")));
 }
 
 TEST(FeatureExtractionDialogTest, DiskSelectionHidesSuperPointOnlyAdvancedRows)
@@ -331,20 +579,62 @@ TEST(FeatureExtractionDialogTest, PreservesConfiguredPythonExecutable)
     EXPECT_EQ(emittedSettings.value(QStringLiteral("python_executable")).toString(), changedPythonPath);
 }
 
+TEST(FeatureMatchingDialogTest, DefaultsToLightGlueAlgorithm)
+{
+    FeatureMatchingDialog dialog;
+
+    QComboBox *algorithmCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_matchAlgorithmCombo"));
+    ASSERT_NE(algorithmCombo, nullptr);
+    EXPECT_EQ(algorithmCombo->currentData().toString(), QStringLiteral("lightglue"));
+
+    QStackedWidget *paramStack = dialog.findChild<QStackedWidget *>(QStringLiteral("m_paramStack"));
+    ASSERT_NE(paramStack, nullptr);
+    EXPECT_EQ(paramStack->currentIndex(), 1);
+
+    QPushButton *resetButton = dialog.findChild<QPushButton *>(QStringLiteral("m_resetBtn"));
+    ASSERT_NE(resetButton, nullptr);
+    resetButton->click();
+
+    EXPECT_EQ(algorithmCombo->currentData().toString(), QStringLiteral("lightglue"));
+    EXPECT_EQ(paramStack->currentIndex(), 1);
+}
+
+TEST(FeatureMatchingDialogTest, ProjectAvailableSuffixesConstrainLightGlueChoicesAfterApplyingSettings)
+{
+    FeatureMatchingDialog dialog;
+    dialog.setAvailableFeatureSuffixes(QStringList{QStringLiteral(".dsk")});
+
+    QJsonObject settings;
+    settings[QStringLiteral("match_algorithm")] = QStringLiteral("lightglue");
+    settings[QStringLiteral("feature_suffix")] = QStringLiteral("__all__");
+    dialog.applySettings(settings);
+
+    QComboBox *suffixCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_featureSuffixCombo"));
+    ASSERT_NE(suffixCombo, nullptr);
+    ASSERT_EQ(suffixCombo->count(), 1);
+    EXPECT_EQ(suffixCombo->itemData(0).toString(), QStringLiteral(".dsk"));
+    EXPECT_EQ(dialog.selectedFeatureSuffix(), QStringLiteral(".dsk"));
+}
+
 TEST(ThreeDReconstructionDialogTest, UsesUiDefaultsAndImageCountGate)
 {
     ThreeDReconstructionDialog dialog;
 
     auto *outputEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_outputDirEdit"));
     auto *startButton = dialog.findChild<QPushButton *>(QStringLiteral("m_startBtn"));
+    auto *featureGrayMinSpin = dialog.findChild<QSpinBox *>(QStringLiteral("m_featureGrayMinSpin"));
     auto *generateDemCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_generateDemCheck"));
     auto *generateDomCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_generateDomCheck"));
     auto *demResolutionSpin = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("m_demResolutionSpin"));
     ASSERT_NE(outputEdit, nullptr);
     ASSERT_NE(startButton, nullptr);
+    ASSERT_NE(featureGrayMinSpin, nullptr);
     EXPECT_EQ(generateDemCheck, nullptr);
     EXPECT_EQ(generateDomCheck, nullptr);
     EXPECT_EQ(demResolutionSpin, nullptr);
+    EXPECT_EQ(featureGrayMinSpin->minimum(), 0);
+    EXPECT_EQ(featureGrayMinSpin->maximum(), 255);
+    EXPECT_EQ(featureGrayMinSpin->value(), 5);
 
     dialog.setImageCount(1);
     EXPECT_FALSE(startButton->isEnabled());
@@ -358,7 +648,9 @@ TEST(ThreeDReconstructionDialogTest, UsesUiDefaultsAndImageCountGate)
     EXPECT_GE(settings.value(QStringLiteral("threads")).toInt(), 1);
     EXPECT_EQ(settings.value(QStringLiteral("output_dir")).toString(),
               QDir::cleanPath(QStringLiteral("/tmp/plascan-model")));
-    EXPECT_FALSE(settings.value(QStringLiteral("export_obj")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("export_obj")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("feature_grayscale_min_px")).toInt(), 5);
+    EXPECT_NEAR(settings.value(QStringLiteral("feature_grayscale_min")).toDouble(), 5.0 / 255.0, 1e-6);
     EXPECT_FALSE(settings.contains(QStringLiteral("generate_dem")));
     EXPECT_FALSE(settings.contains(QStringLiteral("generate_dom")));
     EXPECT_FALSE(settings.contains(QStringLiteral("dem_resolution")));
@@ -385,6 +677,174 @@ TEST(ThreeDReconstructionDialogTest, UsesUiDefaultsAndImageCountGate)
     EXPECT_FALSE(settings.contains(QStringLiteral("dom_resolution")));
 }
 
+TEST(BundleAdjustDialogTest, KeepsActionButtonsOutsideScrollableParameterArea)
+{
+    BundleAdjustDialog dialog;
+
+    QScrollArea *parameterScrollArea = dialog.findChild<QScrollArea *>(QStringLiteral("parameterScrollArea"));
+    ASSERT_NE(parameterScrollArea, nullptr);
+    EXPECT_TRUE(parameterScrollArea->widgetResizable());
+
+    QWidget *parameterScrollWidget = dialog.findChild<QWidget *>(QStringLiteral("parameterScrollWidget"));
+    ASSERT_NE(parameterScrollWidget, nullptr);
+
+    QWidget *debugGroup = dialog.findChild<QWidget *>(QStringLiteral("debugGroup"));
+    ASSERT_NE(debugGroup, nullptr);
+    EXPECT_TRUE(parameterScrollWidget->isAncestorOf(debugGroup));
+
+    QPushButton *runButton = dialog.findChild<QPushButton *>(QStringLiteral("runBtn"));
+    QPushButton *closeButton = dialog.findChild<QPushButton *>(QStringLiteral("closeBtn"));
+    ASSERT_NE(runButton, nullptr);
+    ASSERT_NE(closeButton, nullptr);
+    EXPECT_FALSE(parameterScrollWidget->isAncestorOf(runButton));
+    EXPECT_FALSE(parameterScrollWidget->isAncestorOf(closeButton));
+}
+
+TEST(ParameterDialogLayoutTest, UiFilesKeepLongDialogFootersOutsideScrollableParameterArea)
+{
+    const QString meshUi = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MeshReconstructionDialog.ui"));
+    ASSERT_FALSE(meshUi.isEmpty());
+    EXPECT_TRUE(meshUi.contains(QStringLiteral("QScrollArea\" name=\"parameterScrollArea")));
+    EXPECT_TRUE(meshUi.contains(QStringLiteral("<bool>true</bool>")));
+    EXPECT_LT(meshUi.indexOf(QStringLiteral("parameterScrollWidget")),
+              meshUi.indexOf(QStringLiteral("systemGroup")));
+    EXPECT_LT(meshUi.indexOf(QStringLiteral("systemGroup")),
+              meshUi.indexOf(QStringLiteral("buttonLayout")));
+
+    const QString triangulationUi =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/TriangulationDialog.ui"));
+    ASSERT_FALSE(triangulationUi.isEmpty());
+    EXPECT_TRUE(triangulationUi.contains(QStringLiteral("QScrollArea\" name=\"parameterScrollArea")));
+    EXPECT_LT(triangulationUi.indexOf(QStringLiteral("parameterScrollWidget")),
+              triangulationUi.indexOf(QStringLiteral("suggestGroup")));
+    EXPECT_LT(triangulationUi.indexOf(QStringLiteral("suggestGroup")),
+              triangulationUi.indexOf(QStringLiteral("buttonLayout")));
+
+    const QString sparseUi =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/SparseCloudPostProcessDialog.ui"));
+    ASSERT_FALSE(sparseUi.isEmpty());
+    EXPECT_TRUE(sparseUi.contains(QStringLiteral("QScrollArea\" name=\"parameterScrollArea")));
+    EXPECT_LT(sparseUi.indexOf(QStringLiteral("parameterScrollWidget")),
+              sparseUi.indexOf(QStringLiteral("m_spatialGroup")));
+    EXPECT_LT(sparseUi.indexOf(QStringLiteral("m_spatialGroup")),
+              sparseUi.indexOf(QStringLiteral("buttonBox")));
+}
+
+TEST(DenseMatchDialogLayoutTest, UiFileKeepsRightParametersScrollableAndFooterFixed)
+{
+    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseMatchDialog.ui"));
+    ASSERT_FALSE(ui.isEmpty());
+    EXPECT_TRUE(ui.contains(QStringLiteral("QScrollArea\" name=\"rightParameterScrollArea")));
+    EXPECT_LT(ui.indexOf(QStringLiteral("rightParameterScrollWidget")),
+              ui.indexOf(QStringLiteral("postGroup")));
+    EXPECT_LT(ui.indexOf(QStringLiteral("postGroup")),
+              ui.indexOf(QStringLiteral("buttonLayout")));
+
+    const QString featureExtractionUi =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeatureExtractionDialog.ui"));
+    ASSERT_FALSE(featureExtractionUi.isEmpty());
+    EXPECT_TRUE(featureExtractionUi.contains(QStringLiteral("QScrollArea\" name=\"rightParameterScrollArea")));
+    EXPECT_LT(featureExtractionUi.indexOf(QStringLiteral("rightParameterScrollWidget")),
+              featureExtractionUi.indexOf(QStringLiteral("m_debugGroup")));
+    EXPECT_LT(featureExtractionUi.indexOf(QStringLiteral("m_debugGroup")),
+              featureExtractionUi.indexOf(QStringLiteral("bottomLayout")));
+
+    const QString featureMatchingUi =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeatureMatchingDialog.ui"));
+    ASSERT_FALSE(featureMatchingUi.isEmpty());
+    EXPECT_TRUE(featureMatchingUi.contains(QStringLiteral("QScrollArea\" name=\"rightParameterScrollArea")));
+    EXPECT_LT(featureMatchingUi.indexOf(QStringLiteral("rightParameterScrollWidget")),
+              featureMatchingUi.indexOf(QStringLiteral("m_debugGroup")));
+    EXPECT_LT(featureMatchingUi.indexOf(QStringLiteral("m_debugGroup")),
+              featureMatchingUi.indexOf(QStringLiteral("buttonLayout")));
+}
+
+TEST(DepthMapEstimateDialogTooltipTest, UiExplainsCostFunctionAndParameters)
+{
+    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DepthMapEstimateDialog.ui"));
+    ASSERT_FALSE(ui.isEmpty());
+
+    const QStringList expectedPhrases = {
+        QStringLiteral("AD"),
+        QStringLiteral("灰度绝对差"),
+        QStringLiteral("SD"),
+        QStringLiteral("平方差"),
+        QStringLiteral("NCC"),
+        QStringLiteral("归一化互相关"),
+        QStringLiteral("Census"),
+        QStringLiteral("局部灰度排序"),
+        QStringLiteral("Ternary Census"),
+        QStringLiteral("三值"),
+        QStringLiteral("分辨率缩放"),
+        QStringLiteral("迭代次数"),
+        QStringLiteral("窗口大小"),
+        QStringLiteral("最少视图"),
+        QStringLiteral("深度搜索范围"),
+        QStringLiteral("置信度阈值"),
+        QStringLiteral("Tile"),
+        QStringLiteral("CPU 线程数")
+    };
+
+    for (const QString &phrase : expectedPhrases)
+    {
+        EXPECT_TRUE(ui.contains(phrase)) << phrase.toStdString();
+    }
+}
+
+TEST(DepthMapEstimateDialogTooltipTest, CostFunctionComboItemsHaveTooltips)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DepthMapEstimateDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("Qt::ToolTipRole")));
+    EXPECT_TRUE(source.contains(QStringLiteral("costFunctionToolTip")));
+    EXPECT_TRUE(source.contains(QStringLiteral("updateCostFunctionToolTip")));
+}
+
+TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
+{
+    TaskStatusWidget widget;
+    widget.setCancellable(true);
+    widget.setCancellingText(QStringLiteral("正在取消特征匹配..."));
+
+    bool cancelEmitted = false;
+    QObject::connect(&widget, &TaskStatusWidget::cancelRequested, &widget,
+                     [&cancelEmitted]()
+                     {
+                         cancelEmitted = true;
+                     });
+
+    widget.begin(QStringLiteral("特征匹配 0/5"), 0, 5);
+    EXPECT_TRUE(widget.isActive());
+    EXPECT_EQ(widget.statusText(), QStringLiteral("特征匹配 0/5"));
+    EXPECT_EQ(widget.progressValue(), 0);
+    EXPECT_EQ(widget.progressMaximum(), 5);
+
+    widget.updateProgress(QStringLiteral("特征匹配 2/5"), 2);
+    EXPECT_EQ(widget.statusText(), QStringLiteral("特征匹配 2/5"));
+    EXPECT_EQ(widget.progressValue(), 2);
+
+    QToolButton *cancelButton = widget.findChild<QToolButton *>(QStringLiteral("cancelButton"));
+    ASSERT_NE(cancelButton, nullptr);
+    ASSERT_TRUE(cancelButton->isEnabled());
+    cancelButton->click();
+
+    EXPECT_TRUE(cancelEmitted);
+    EXPECT_TRUE(widget.isCancelling());
+    EXPECT_FALSE(cancelButton->isEnabled());
+    EXPECT_EQ(cancelButton->text(), QStringLiteral("正在取消"));
+    EXPECT_EQ(widget.statusText(), QStringLiteral("正在取消特征匹配..."));
+
+    widget.updateProgress(QStringLiteral("特征匹配 3/5"), 3);
+    EXPECT_EQ(widget.progressValue(), 3);
+    EXPECT_EQ(widget.statusText(), QStringLiteral("正在取消特征匹配..."));
+
+    widget.finish();
+    EXPECT_FALSE(widget.isActive());
+    EXPECT_FALSE(widget.isCancelling());
+    EXPECT_EQ(cancelButton->text(), QStringLiteral("取消"));
+}
+
 TEST(MenuWorkflowControllerTest, DenseStageAdvancesOnMvsSuccessWithoutRequiringChangedOutputPath)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
@@ -392,7 +852,174 @@ TEST(MenuWorkflowControllerTest, DenseStageAdvancesOnMvsSuccessWithoutRequiringC
 
     EXPECT_FALSE(source.contains(QStringLiteral("densePath == beforePath")));
     EXPECT_TRUE(source.contains(QStringLiteral("mvsProgressFinished")));
+    EXPECT_TRUE(source.contains(QStringLiteral("startThreeDReconstructionDenseRefineStage(settings)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("startDenseCloudRefineAsync(refineSettings)")));
     EXPECT_TRUE(source.contains(QStringLiteral("startThreeDReconstructionMeshStage(settings)")));
+}
+
+TEST(MainWindowProgressTest, FeatureMatchProgressExpandsAllFeatureModeAndClampsDisplay)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("projectFeatureSuffixes")));
+    EXPECT_TRUE(source.contains(QStringLiteral("feature_suffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::clamp(done")));
+}
+
+TEST(MainWindowFeatureMatchingTest, DialogUsesProjectFeatureSuffixesInsteadOfCurrentCanvasOnly)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("projectFeatureSuffixes")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_canvas->availableFeatureSuffixes()")));
+}
+
+TEST(MainWindowCancelTest, StatusBarCancelButtonsGiveImmediateFeedbackAndEmitSignals)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("sgCancelRequested")));
+    EXPECT_TRUE(header.contains(QStringLiteral("spCancelRequested")));
+    EXPECT_TRUE(source.contains(QStringLiteral("正在取消特征匹配")));
+    EXPECT_TRUE(source.contains(QStringLiteral("正在取消特征提取")));
+    EXPECT_TRUE(source.contains(QStringLiteral("m_sgTaskStatus")));
+    EXPECT_TRUE(source.contains(QStringLiteral("m_spTaskStatus")));
+    EXPECT_TRUE(source.contains(QStringLiteral("TaskStatusWidget::cancelRequested")));
+    EXPECT_TRUE(source.contains(QStringLiteral("emit sgCancelRequested()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("emit spCancelRequested()")));
+}
+
+TEST(BundleAdjustStatusBarTest, UsesAtProgressWidgetWithCancelableCoreOptimization)
+{
+    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString projectManagerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString bundleAdjustHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
+    const QString bundleAdjustSource = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.cpp"));
+    const QString serviceSource = readProjectSourceFile(QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+    ASSERT_FALSE(projectManagerSource.isEmpty());
+    ASSERT_FALSE(bundleAdjustHeader.isEmpty());
+    ASSERT_FALSE(bundleAdjustSource.isEmpty());
+    ASSERT_FALSE(serviceSource.isEmpty());
+
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("正在取消空三/光束法平差")));
+    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("std::make_shared<std::atomic<bool>>(false)")));
+    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("opts.baOpt.cancelFlag = cancelFlag")));
+    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("opts.baOpt.progressCallback")));
+    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("光束法平差优化中")));
+    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("emit self->atProgressFinished")));
+    EXPECT_TRUE(bundleAdjustHeader.contains(QStringLiteral("std::shared_ptr<std::atomic<bool>> cancelFlag")));
+    EXPECT_TRUE(bundleAdjustHeader.contains(QStringLiteral("progressCallback")));
+    EXPECT_TRUE(bundleAdjustSource.contains(QStringLiteral("isCancelled(options)")));
+    EXPECT_TRUE(serviceSource.contains(QStringLiteral("用户取消了光束法平差")));
+}
+
+TEST(FeatureMatchRunnerCancelTest, PythonProcessesArePolledForCancellation)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("waitForProcessOrCancel")));
+    EXPECT_TRUE(source.contains(QStringLiteral("waitForFinished(100)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cancelFlag.load()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("process.kill()")));
+}
+
+TEST(FeatureMatchRunnerTest, AllFeatureModeFiltersUnavailableSuffixesAndSummarizesMissingFeatures)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("projectFeatureSuffixes")));
+    EXPECT_TRUE(source.contains(QStringLiteral("availableSuffixes")));
+    EXPECT_TRUE(source.contains(QStringLiteral("缺失特征文件")));
+    EXPECT_FALSE(source.contains(QStringLiteral("LOG_ERROR(\"%s\", qUtf8Printable(QString(\"特征文件不存在: %1 或 %2\")")));
+}
+
+TEST(DenseMatchCancelTest, StatusBarCancelSignalStopsRemainingPairs)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString controllerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
+    const QString projectManagerHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString projectManagerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+    ASSERT_FALSE(controllerSource.isEmpty());
+    ASSERT_FALSE(projectManagerHeader.isEmpty());
+    ASSERT_FALSE(projectManagerSource.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("dmCancelRequested")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("m_dmTaskStatus")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("emit dmCancelRequested()")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("MainWindow::dmCancelRequested")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("dmCancelFlag")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("hideDmProgress(!cancelled)")));
+    EXPECT_TRUE(projectManagerHeader.contains(QStringLiteral("std::shared_ptr<std::atomic<bool>> cancelFlag")));
+    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("cancelFlag && cancelFlag->load()")));
+    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("密集匹配已请求取消")));
+}
+
+TEST(ForwardIntersectionCheckDialogTest, AutoModeAcceptsPythonLightGlueSidecarTokens)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/ForwardIntersectionCheckDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("feature0_path")));
+    EXPECT_TRUE(source.contains(QStringLiteral("feature1_path")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sp0_path")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sp1_path")));
+    EXPECT_TRUE(source.contains(QStringLiteral("image0_name")));
+    EXPECT_TRUE(source.contains(QStringLiteral("image1_name")));
+}
+
+TEST(FeatureVisualizationSettingsTest, PersistsAndRestoresActiveFeatureSuffix)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("feature_suffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setActiveFeatureSuffix")));
+}
+
+TEST(FeatureVisualizationSettingsTest, ProjectOpenRestoresFeatureSuffixEvenWhenUiSettingsAreEmpty)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int applyIndex = source.indexOf(QStringLiteral("applySavedFeatureDisplayOptions(ui)"));
+    const int emptyReturnIndex = source.indexOf(QStringLiteral("if (ui.isEmpty())"), source.indexOf(QStringLiteral("void MainWindow::applyUiSettings")));
+    ASSERT_GE(applyIndex, 0);
+    ASSERT_GE(emptyReturnIndex, 0);
+    EXPECT_LT(applyIndex, emptyReturnIndex);
+}
+
+TEST(FeatureVisualizationSettingsTest, VisualizationRestoreInfersSuffixFromExistingFeatureFiles)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("inferPreferredFeatureSuffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("inferredSuffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setActiveFeatureSuffix(inferredSuffix)")));
+}
+
+TEST(FeatureVisualizationSettingsTest, SavedSuffixIsUsedOnlyWhenProjectContainsThatSuffix)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("projectHasFeatureSuffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("savedSuffixUsable")));
 }
 
 TEST(MapProjectDialogTest, DefaultsToOneClickDomEngineeringSettings)
@@ -539,18 +1166,42 @@ TEST(CreateDemDialogTest, OpenCreateDemDialogRequiresProjectManagerBeforeShowing
     EXPECT_LT(warningIndex, newDialogIndex);
 }
 
-TEST(SuperPointRunnerTest, PythonExtractorSupportsConfigEnvVenvAndDiagnosticLogging)
+TEST(SuperPointRunnerTest, DiskAndAlikedUseNativeTorchscriptExtractor)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/SuperPointRunner.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("python_executable")));
-    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_PYTHON_EXECUTABLE")));
-    EXPECT_TRUE(source.contains(QStringLiteral("VIRTUAL_ENV")));
-    EXPECT_TRUE(source.contains(QStringLiteral("默认 plascan Python 环境")));
-    EXPECT_TRUE(source.contains(QStringLiteral(".local/share/mamba/envs/plascan")));
-    EXPECT_TRUE(source.contains(QStringLiteral("Python 可执行文件")));
-    EXPECT_TRUE(source.contains(QStringLiteral("脚本路径")));
+    EXPECT_TRUE(source.contains(QStringLiteral("ExtractorFactory.h")));
+    EXPECT_TRUE(source.contains(QStringLiteral("createExtractor(")));
+    EXPECT_TRUE(source.contains(QStringLiteral("featureAlgorithm.toStdString()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("C++ TorchScript")));
+    EXPECT_FALSE(source.contains(QStringLiteral("runPythonExtractor")));
+}
+
+TEST(SuperPointRunnerTest, FeatureExtractionLogUsesSelectedAlgorithmName)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_FALSE(source.contains(QStringLiteral("开始在后台线程执行 SuperPoint...")));
+    EXPECT_TRUE(source.contains(QStringLiteral("开始在后台线程执行 %1 特征提取")));
+}
+
+TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int connectIndex = source.indexOf(QStringLiteral("ipfindResultAppended"));
+    ASSERT_GE(connectIndex, 0);
+    const int blockEnd = source.indexOf(QStringLiteral("if (m_config)"), connectIndex);
+    ASSERT_GE(blockEnd, connectIndex);
+    const QString block = source.mid(connectIndex, blockEnd - connectIndex);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("currentImagePath()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("isCurrentImage")));
+    EXPECT_TRUE(block.contains(QStringLiteral("reloadInterestPoints(imagePath)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("immediateReloadInterestPoints(imagePath)")));
 }
 
 TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
@@ -768,6 +1419,129 @@ TEST(SurfaceReconstructorTest, HeightGridFallbackUsesPlaPointGpuCapablePath)
     EXPECT_TRUE(source.contains(QStringLiteral("buildHeightGridWithRequestedDevice")));
     EXPECT_TRUE(source.contains(QStringLiteral("config.preprocessingDevice")));
     EXPECT_TRUE(source.contains(QStringLiteral("plapoint::gpu::buildHeightGrid")));
+}
+
+TEST(ReconstructPipelineCliTest, LargeDenseCloudIsVoxelThinnedBeforeSor)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int preVoxelIndex = source.indexOf(QStringLiteral("大点云预降采样"));
+    const int refineIndex = source.indexOf(QStringLiteral("refineDenseCloud(std::move(refineInput)"));
+    ASSERT_GE(preVoxelIndex, 0);
+    ASSERT_GE(refineIndex, 0);
+    EXPECT_LT(preVoxelIndex, refineIndex);
+}
+
+TEST(ReconstructPipelineCliTest, LargeDenseCloudIsPreAggregatedBeforePlaPointRefinement)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("voxelDownsampleFusedPoints")));
+    EXPECT_TRUE(source.contains(QStringLiteral("开始大点云预降采样")));
+    EXPECT_TRUE(source.contains(QStringLiteral("完成大点云预降采样")));
+
+    const int preAggregateIndex = source.indexOf(QStringLiteral("voxelDownsampleFusedPointsToTarget"));
+    const int preAggregateArgIndex = source.indexOf(QStringLiteral("fusedCloud"), preAggregateIndex);
+    const int plaCloudIndex = source.indexOf(QStringLiteral("fusedPointsToPointCloud(fusedCloud"));
+    ASSERT_GE(preAggregateIndex, 0);
+    ASSERT_GE(preAggregateArgIndex, 0);
+    ASSERT_GE(plaCloudIndex, 0);
+    EXPECT_LT(preAggregateIndex, plaCloudIndex);
+    EXPECT_LT(preAggregateArgIndex, plaCloudIndex);
+}
+
+TEST(ReconstructPipelineCliTest, LargeDenseCloudPreAggregationCapsPlaPointRefineInput)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("kMaxRefineInputPoints")));
+    EXPECT_TRUE(source.contains(QStringLiteral("voxelDownsampleFusedPointsToTarget")));
+    EXPECT_TRUE(source.contains(QStringLiteral("targetPoints=%zu")));
+}
+
+TEST(ReconstructPipelineCliTest, LongRunningCliProgressIsFlushedAndThrottled)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("lastMeshProgressPercent")));
+    EXPECT_TRUE(source.contains(QStringLiteral("lastMeshProgressStage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::fflush(stdout);")));
+}
+
+TEST(ReconstructPipelineCliTest, FinalSummaryReportsElapsedTimings)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("timings")));
+    EXPECT_TRUE(source.contains(QStringLiteral("total_elapsed_ms")));
+    EXPECT_TRUE(source.contains(QStringLiteral("elapsed_total=%.3fs")));
+    EXPECT_TRUE(source.contains(QStringLiteral("elapsed_sfm=%.3fs")));
+    EXPECT_TRUE(source.contains(QStringLiteral("elapsed_mvs=%.3fs")));
+}
+
+TEST(MainMenuTest, SparseReconstructionMenuPlacesVocabularyOverlapBetweenFeatureSteps)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int detectIndex = source.indexOf(QStringLiteral("m_detectFeaturesAct"));
+    const int overlapIndex = source.indexOf(QStringLiteral("m_vocabularyOverlapAct"));
+    const int matchIndex = source.indexOf(QStringLiteral("m_matchFeaturesAct"));
+
+    ASSERT_GE(detectIndex, 0);
+    ASSERT_GE(overlapIndex, 0);
+    ASSERT_GE(matchIndex, 0);
+    EXPECT_LT(detectIndex, overlapIndex);
+    EXPECT_LT(overlapIndex, matchIndex);
+}
+
+TEST(VocabularyOverlapDialogTest, UiDefinesRequiredControls)
+{
+    const QString uiSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.ui"));
+    ASSERT_FALSE(uiSource.isEmpty());
+
+    const QStringList requiredControls = {
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_featureAlgorithmCombo"),
+        QStringLiteral("m_branchFactorSpin"),
+        QStringLiteral("m_treeDepthSpin"),
+        QStringLiteral("m_topKSpin"),
+        QStringLiteral("m_minSimilaritySpin"),
+        QStringLiteral("m_enableGeometryCheck"),
+        QStringLiteral("m_pairTable"),
+        QStringLiteral("m_applyToMatchingCheck"),
+        QStringLiteral("m_runBtn")
+    };
+
+    for (const QString &controlName : requiredControls)
+    {
+        EXPECT_TRUE(uiSource.contains(controlName)) << controlName.toStdString();
+    }
+}
+
+TEST(VocabularyOverlapDialogTest, DialogKeyIsAvailableForPersistence)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/config/settings/DialogSettingKeys.h"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("VocabularyOverlap")));
+    EXPECT_TRUE(source.contains(QStringLiteral("vocabulary_overlap")));
+}
+
+TEST(MenuWorkflowControllerTest, VocabularyOverlapAppliesGeneratedPairsToFeatureMatchingSettings)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("VocabularyOverlapDialog")));
+    EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::VocabularyOverlap")));
+    EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::SuperGlue")));
+    EXPECT_TRUE(source.contains(QStringLiteral("generated_pairs")));
 }
 
 TEST(MainMenuTest, WorkflowMenuExposesOnlyOneClickThreeDReconstruction)

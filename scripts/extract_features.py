@@ -9,6 +9,8 @@ DISK / ALIKED 特征提取器，输出与 PlaScan 格式兼容的特征文件。
 输出：每张图像对应一个算法特定的特征文件（.dsk / .alk）。
 """
 
+from __future__ import annotations
+
 import argparse
 import struct
 import sys
@@ -57,9 +59,47 @@ def load_extractor(algo: str, max_keypoints: int, device: torch.device):
         raise ValueError(f"Unknown algorithm: {algo}")
 
 
+def validate_grayscale_range(grayscale_min: float, grayscale_max: float) -> None:
+    if not 0.0 <= grayscale_min <= grayscale_max <= 1.0:
+        raise ValueError(
+            "灰度阈值范围无效: "
+            f"grayscale_min={grayscale_min}, grayscale_max={grayscale_max}; "
+            "需要满足 0.0 <= min <= max <= 1.0"
+        )
+
+
+def filter_features_by_grayscale_range(kpts: np.ndarray, descs: np.ndarray, scores: np.ndarray,
+                                       img_f: np.ndarray, grayscale_min: float,
+                                       grayscale_max: float) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
+    validate_grayscale_range(grayscale_min, grayscale_max)
+    if len(kpts) == 0 or (grayscale_min <= 0.0 and grayscale_max >= 1.0):
+        return kpts, descs, scores
+
+    if img_f.ndim == 3:
+        gray_f = img_f.mean(axis=2)
+    else:
+        gray_f = img_f
+
+    height, width = gray_f.shape[:2]
+    pixel_xy = np.rint(kpts).astype(np.int64)
+    x = pixel_xy[:, 0]
+    y = pixel_xy[:, 1]
+    inside = (x >= 0) & (x < width) & (y >= 0) & (y < height)
+
+    keep = np.zeros(len(kpts), dtype=bool)
+    if np.any(inside):
+        gray_values = gray_f[y[inside], x[inside]]
+        keep[inside] = (gray_values >= grayscale_min) & (gray_values <= grayscale_max)
+
+    return kpts[keep], descs[keep], scores[keep]
+
+
 def extract(extractor, img_path: Path, device: torch.device,
-            max_keypoints: int = -1, score_threshold: float = 0.0) -> dict:
+            max_keypoints: int = -1, score_threshold: float = 0.0,
+            grayscale_min: float = 0.0, grayscale_max: float = 1.0) -> dict:
     """返回 {'keypoints': np.ndarray [N,2], 'descriptors': np.ndarray [N,D], 'scores': np.ndarray [N]}"""
+    validate_grayscale_range(grayscale_min, grayscale_max)
+
     img_bgr = cv2.imread(str(img_path), cv2.IMREAD_UNCHANGED)
     if img_bgr is None:
         raise FileNotFoundError(f"Cannot read image: {img_path}")
@@ -98,6 +138,15 @@ def extract(extractor, img_path: Path, device: torch.device,
         kpts = kpts[keep]
         descs = descs[keep]
         scores = scores[keep]
+
+    kpts, descs, scores = filter_features_by_grayscale_range(
+        kpts,
+        descs,
+        scores,
+        img_f,
+        grayscale_min,
+        grayscale_max,
+    )
 
     # 手动截断（DISK 使用 max_num_keypoints=None 时需要）
     if max_keypoints > 0 and len(kpts) > max_keypoints:
@@ -157,8 +206,16 @@ def main():
     parser.add_argument("--output", required=True, help="输出目录")
     parser.add_argument("--max-keypoints", type=int, default=2048)
     parser.add_argument("--score-threshold", type=float, default=0.0)
+    parser.add_argument("--grayscale-min", type=float, default=0.0)
+    parser.add_argument("--grayscale-max", type=float, default=1.0)
     parser.add_argument("--device", default="cuda", choices=["cuda", "cpu"])
     args = parser.parse_args()
+
+    try:
+        validate_grayscale_range(args.grayscale_min, args.grayscale_max)
+    except ValueError as exc:
+        print(str(exc), file=sys.stderr)
+        sys.exit(2)
 
     cfg = ALGO_CONFIG.get(args.algo)
     if cfg is None:
@@ -200,12 +257,21 @@ def main():
     magic = cfg["magic"]
 
     print(f"[{args.algo.upper()}] 处理 {len(image_paths)} 张图像...")
+    print(f"[{args.algo.upper()}] 灰度阈值: [{args.grayscale_min}, {args.grayscale_max}]")
     failed = []
     for i, img_path in enumerate(image_paths):
         img_path = Path(img_path)
         out_path = out_dir / (img_path.stem + suffix)
         try:
-            data = extract(extractor, img_path, dev, args.max_keypoints, args.score_threshold)
+            data = extract(
+                extractor,
+                img_path,
+                dev,
+                args.max_keypoints,
+                args.score_threshold,
+                args.grayscale_min,
+                args.grayscale_max,
+            )
             save_features(data, out_path, magic)
             print(f"  [{i+1}/{len(image_paths)}] {img_path.name} → {data['keypoints'].shape[0]} 个关键点 → {out_path.name}")
         except Exception as e:

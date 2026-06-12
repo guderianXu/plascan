@@ -413,15 +413,7 @@ void WorkflowReportDialog::buildUi()
     tf.setBold(true);
     titleLbl->setFont(tf);
 
-    m_refreshBtn->setStyleSheet("QPushButton{border:1px solid #ccc;border-radius:3px;"
-                                "padding:3px 8px;background:#f5f5f5;}"
-                                "QPushButton:hover{background:#e5e5e5;}");
     connect(m_refreshBtn, &QPushButton::clicked, this, &WorkflowReportDialog::refresh);
-
-    m_tabs->setStyleSheet("QTabWidget::pane{border:1px solid #ddd;}"
-                          "QTabBar::tab{padding:6px 18px;background:#f0f0f2;border:1px solid #ddd;"
-                          "border-bottom:none;border-radius:3px 3px 0 0;}"
-                          "QTabBar::tab:selected{background:white;font-weight:bold;}");
 
     m_tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
     m_tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));

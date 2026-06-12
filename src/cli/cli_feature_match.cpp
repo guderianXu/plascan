@@ -32,7 +32,7 @@ int main(int argc, char *argv[])
     app.add_option("-a,--algorithm", algo, "留空自动检测");
 
     std::string modelPath, sp1, sp2, imgL, imgR, outPath;
-    app.add_option("-m,--model",  modelPath, "模型路径 (.pt)");
+    app.add_option("-m,--model",  modelPath, "模型路径 (.torchscript/.pt)");
     app.add_option("--sp1", sp1, "左特征文件");
     app.add_option("--sp2", sp2, "右特征文件");
     app.add_option("-L,--left",  imgL,    "左影像 (端到端模式)");

@@ -1178,14 +1178,11 @@ int IncrementalSfm::filterNegativeDepthPoints()
                 continue;
 
             const Camera &cam = _reconstruction->camera(elem.imageId);
-            const auto rotation = cam.cameraToWorldRotation();
-            const auto center = cam.cameraCenter();
+            const double world[3] = {xyz[0], xyz[1], xyz[2]};
+            double cameraPoint[3] = {0.0, 0.0, 0.0};
+            cam.worldToCamera(world, cameraPoint);
 
-            // 深度 = R[2,:] · (X - C) （相机坐标系 Z 分量）
-            double depth = rotation[6] * (xyz[0] - center[0]) + rotation[7] * (xyz[1] - center[1]) +
-                           rotation[8] * (xyz[2] - center[2]);
-
-            if (depth < 0.0)
+            if (cameraPoint[2] < 0.0)
             {
                 badObsIndices.push_back(oi);
                 hasNegativeDepth = true;

@@ -7,6 +7,7 @@
 #include "Logger.h"
 
 #include "FeatureExtractionDialog.h"
+#include "VocabularyOverlapDialog.h"
 #include "SuperPointRunner.h"
 #include "SuperPointVisualizationDialog.h"
 #include "CanvasWidget.h"
@@ -29,6 +30,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QJsonArray>
 #include <QJsonDocument>
 #include <QMainWindow>
 #include <QMessageBox>
@@ -56,6 +58,32 @@ QString canonicalPairKey(const QString &imageA, const QString &imageB)
     return (normA < normB)
         ? (normA + QStringLiteral("\n") + normB)
         : (normB + QStringLiteral("\n") + normA);
+}
+
+QJsonArray stringListToJsonArray(const QStringList &values)
+{
+    QJsonArray array;
+    for (const QString &value : values)
+    {
+        array.append(value);
+    }
+    return array;
+}
+
+float normalizedFeatureGrayscaleMin(const QJsonObject &settings)
+{
+    if (settings.contains(QStringLiteral("feature_grayscale_min_px")))
+    {
+        const int px = std::clamp(settings.value(QStringLiteral("feature_grayscale_min_px")).toInt(5), 0, 255);
+        return static_cast<float>(px) / 255.0f;
+    }
+
+    double value = settings.value(QStringLiteral("feature_grayscale_min")).toDouble(5.0 / 255.0);
+    if (value > 1.0)
+    {
+        value /= 255.0;
+    }
+    return static_cast<float>(std::clamp(value, 0.0, 1.0));
 }
 
 /// 将最新报告写入 latest 文件，并把同一份报告追加到历史数组文件中。
@@ -305,6 +333,71 @@ void MenuWorkflowController::openFeatureExtractionDialog()
     dlg->exec();
 }
 
+void MenuWorkflowController::openVocabularyOverlapDialog()
+{
+    if (!m_mainWindow)
+    {
+        return;
+    }
+    if (!m_projectManager || m_projectManager->currentProjectPath().isEmpty())
+    {
+        LOG_ERROR(QStringLiteral("无法获取重叠对：请先打开或创建项目"));
+        QMessageBox::warning(m_mainWindow, QStringLiteral("获取重叠对"), QStringLiteral("请先打开或创建项目。"));
+        return;
+    }
+
+    if (!m_vocabOverlapSetting)
+    {
+        m_vocabOverlapSetting = new DialogSettingStore(DialogSettingKeys::VocabularyOverlap, this);
+    }
+    m_vocabOverlapSetting->setProjectPath(m_projectManager->currentProjectPath());
+
+    auto *dlg = new VocabularyOverlapDialog(m_projectManager, m_mainWindow);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setProjectImages(getProjectImages());
+
+    const QJsonObject saved = m_vocabOverlapSetting->load();
+    if (!saved.isEmpty())
+    {
+        dlg->applySettings(saved);
+    }
+
+    connect(dlg, &VocabularyOverlapDialog::settingsChanged, this, [this](const QJsonObject &settings)
+    {
+        if (m_vocabOverlapSetting)
+        {
+            m_vocabOverlapSetting->save(settings);
+        }
+    });
+
+    connect(dlg,
+            &VocabularyOverlapDialog::generatedPairsReady,
+            this,
+            [this](const QStringList &pairs, const QJsonObject &settings)
+    {
+        if (!m_projectManager || m_projectManager->currentProjectPath().isEmpty())
+        {
+            return;
+        }
+
+        DialogSettingStore matchStore(DialogSettingKeys::SuperGlue, this);
+        matchStore.setProjectPath(m_projectManager->currentProjectPath());
+
+        QJsonObject matchingSettings = matchStore.load();
+        matchingSettings.insert(QStringLiteral("generated_pairs"), stringListToJsonArray(pairs));
+        matchingSettings.insert(QStringLiteral("pair_source"), QStringLiteral("vocabulary_overlap"));
+        matchingSettings.insert(QStringLiteral("feature_suffix"), settings.value(QStringLiteral("feature_suffix")));
+        matchingSettings.insert(QStringLiteral("lis_file"), settings.value(QStringLiteral("output_lis")));
+        matchingSettings.insert(QStringLiteral("overlap_lis"), settings.value(QStringLiteral("output_lis")));
+        matchingSettings.insert(QStringLiteral("overlap_json"), settings.value(QStringLiteral("output_json")));
+        matchStore.save(matchingSettings);
+
+        LOG_INFO(QStringLiteral("词汇重叠对已应用到特征匹配设置：%1 对").arg(pairs.size()));
+    });
+
+    dlg->exec();
+}
+
 void MenuWorkflowController::openSuperPointVisualizationDialog()
 {
     if (!m_mainWindow)
@@ -326,19 +419,7 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
         availableSuffixes << QStringLiteral(".sp") << QStringLiteral(".dsk") << QStringLiteral(".alk")
                            << QStringLiteral(".sift") << QStringLiteral(".orb") << QStringLiteral(".akz");
 
-    auto *dlg = new SuperPointVisualizationDialog(availableSuffixes, m_mainWindow);
-    dlg->setAttribute(Qt::WA_DeleteOnClose);
-    if (!currentSuffix.isEmpty())
-        dlg->setCurrentSuffix(currentSuffix);
-
-    // 切换特征文件后缀 → CanvasWidget 重新加载
-    if (canvas)
-    {
-        connect(dlg, &SuperPointVisualizationDialog::featureSuffixChanged,
-                canvas, &CanvasWidget::setActiveFeatureSuffix);
-    }
-
-    // 懒初始化可视化记忆化管理器并加载保存的设置
+    QJsonObject sv;
     if (m_projectManager)
     {
         if (!m_spVisSetting)
@@ -346,8 +427,46 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
             m_spVisSetting = new DialogSettingStore(DialogSettingKeys::SuperPointVisualization, this);
         }
         m_spVisSetting->setProjectPath(m_projectManager->currentProjectPath());
+        sv = m_spVisSetting->load();
 
-        const QJsonObject sv = m_spVisSetting->load();
+        const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
+        if (!savedSuffix.isEmpty())
+        {
+            currentSuffix = savedSuffix;
+        }
+    }
+
+    auto *dlg = new SuperPointVisualizationDialog(availableSuffixes, m_mainWindow);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    if (!currentSuffix.isEmpty())
+    {
+        dlg->setCurrentSuffix(currentSuffix);
+    }
+    const QString effectiveSuffix = dlg->currentSuffix();
+    if (canvas && !effectiveSuffix.isEmpty())
+    {
+        canvas->setActiveFeatureSuffix(effectiveSuffix);
+    }
+
+    // 切换特征文件后缀 → CanvasWidget 重新加载
+    if (canvas)
+    {
+        connect(dlg, &SuperPointVisualizationDialog::featureSuffixChanged,
+                this, [this, canvas](const QString &suffix)
+        {
+            canvas->setActiveFeatureSuffix(suffix);
+            if (m_spVisSetting)
+            {
+                QJsonObject sv = m_spVisSetting->load();
+                sv[QStringLiteral("feature_suffix")] = suffix;
+                m_spVisSetting->save(sv);
+            }
+        });
+    }
+
+    // 懒初始化可视化记忆化管理器并加载保存的设置
+    if (m_projectManager)
+    {
         if (!sv.isEmpty())
         {
             LayerRenderer::FeatureDisplayOptions opts;
@@ -384,7 +503,7 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
 
     // 连接实时更新信号
     connect(dlg, &SuperPointVisualizationDialog::displayOptionsChanged, this,
-        [this](const LayerRenderer::FeatureDisplayOptions &opts)
+        [this, dlg](const LayerRenderer::FeatureDisplayOptions &opts)
         {
             // 发送信号给MainWindow应用到CanvasWidget
             emit requestApplyFeatureDisplayOptions(opts);
@@ -403,6 +522,7 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
                 sv["markerShape"] = opts.markerShape;
                 sv["maxDisplayCount"] = opts.maxDisplayCount;
                 sv["showTopScores"] = opts.showTopScores;
+                sv[QStringLiteral("feature_suffix")] = dlg->currentSuffix();
                 sv["pointColor"] = colorToJson(opts.pointColor);
                 sv["scaleColor"] = colorToJson(opts.scaleColor);
                 sv["orientColor"] = colorToJson(opts.orientColor);
@@ -434,6 +554,27 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     {
         sv = ui.value(QStringLiteral("superpoint_visualization")).toObject();
     }
+    auto *mainWin = qobject_cast<MainWindow*>(m_mainWindow.data());
+    auto *canvas = mainWin ? mainWin->canvas() : nullptr;
+    const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
+    if (canvas)
+    {
+        const QString inferredSuffix = xjw::gui::project::inferPreferredFeatureSuffix(
+            m_projectManager->currentProjectPath(), m_projectManager->currentMeta());
+        const bool savedSuffixUsable = !savedSuffix.isEmpty()
+            && (inferredSuffix.isEmpty()
+                || xjw::gui::project::projectHasFeatureSuffix(
+                    m_projectManager->currentProjectPath(), m_projectManager->currentMeta(), savedSuffix));
+        if (savedSuffixUsable)
+        {
+            canvas->setActiveFeatureSuffix(savedSuffix);
+        }
+        else if (!inferredSuffix.isEmpty())
+        {
+            canvas->setActiveFeatureSuffix(inferredSuffix);
+        }
+    }
+
     if (sv.isEmpty())
     {
         return;
@@ -551,9 +692,14 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     opts.plascanPath = pm->currentProjectPath();
     opts.projectMeta = pm->coreProjectMeta();
     opts.outputDir = QDir(outputRoot).filePath(QStringLiteral("sparse"));
-    opts.threads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    opts.threads = workflowThreads;
     opts.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
-    opts.cudaParallelPairs = 1;
+    opts.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
+    opts.featureGrayscaleMax = 1.0f;
+    opts.cudaParallelPairs = opts.device == QStringLiteral("cpu")
+        ? 1
+        : std::clamp(std::max(1, workflowThreads / 4), 1, 2);
 
     const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
     if (quality == QStringLiteral("fast"))
@@ -629,11 +775,35 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                 }
             }
 
+            int registeredImageCount = result.numRegisteredImages;
             if (result.success && !result.sparseCloudPath.isEmpty())
             {
+                const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
+                QStringList registeredImages;
+                registeredImages.reserve(sfmImages.size());
+                for (const QString &imagePath : sfmImages)
+                {
+                    const QString normalized = xjw::gui::project::normalizePath(imagePath);
+                    if (registeredCameraKeys.contains(normalized))
+                    {
+                        registeredImages.append(normalized);
+                    }
+                }
+                if (registeredImages.size() < registeredCameraKeys.size())
+                {
+                    for (const QString &imagePath : registeredCameraKeys)
+                    {
+                        if (!registeredImages.contains(imagePath))
+                        {
+                            registeredImages.append(imagePath);
+                        }
+                    }
+                }
+                registeredImageCount = registeredImages.size();
+
                 pm->appendAtResult(result.sparseCloudPath,
                                    result.numPoints3D,
-                                   sfmImages,
+                                   registeredImages,
                                    sfmOutputDir,
                                    QJsonObject{{QStringLiteral("source"), QStringLiteral("three_d_reconstruction")}});
             }
@@ -651,7 +821,9 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
 
             if (self)
             {
-                self->startThreeDReconstructionDenseStage(runSettings);
+                QJsonObject denseRunSettings = runSettings;
+                denseRunSettings[QStringLiteral("registered_image_count")] = registeredImageCount;
+                self->startThreeDReconstructionDenseStage(denseRunSettings);
             }
         }, Qt::QueuedConnection);
     });
@@ -674,7 +846,7 @@ void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObje
             return;
         }
 
-        self->startThreeDReconstructionMeshStage(settings);
+        self->startThreeDReconstructionDenseRefineStage(settings);
     });
 
     const QString outputRoot = settings.value(QStringLiteral("output_dir")).toString();
@@ -684,16 +856,28 @@ void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObje
     denseSettings[QStringLiteral("pipeline_mode")] = true;
     denseSettings[QStringLiteral("at_index")] = -1;
     denseSettings[QStringLiteral("output_dir")] = QDir(outputRoot).filePath(QStringLiteral("mvs"));
-    denseSettings[QStringLiteral("threads")] = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    denseSettings[QStringLiteral("cuda")] = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto")) != QStringLiteral("cpu");
+    const int denseThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    const bool useCuda = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto")) != QStringLiteral("cpu");
+    denseSettings[QStringLiteral("threads")] = denseThreads;
+    denseSettings[QStringLiteral("cuda")] = useCuda;
+    denseSettings[QStringLiteral("gpu_frame_workers")] = useCuda
+        ? std::clamp(std::max(1, denseThreads / 4), 1, 2)
+        : 0;
+    denseSettings[QStringLiteral("cpu_frame_workers")] = useCuda
+        ? 0
+        : std::clamp(std::max(1, denseThreads / 4), 1, 4);
     denseSettings[QStringLiteral("keepColor")] = true;
-    denseSettings[QStringLiteral("keepNormals")] = false;
-    denseSettings[QStringLiteral("minConsistentViews")] = 2;
-    denseSettings[QStringLiteral("minViews")] = 3;
+    denseSettings[QStringLiteral("keepNormals")] = true;
+    const int registeredImageCount = settings.value(QStringLiteral("registered_image_count")).toInt(0);
+    const int denseMinViewCount = registeredImageCount > 0
+        ? std::clamp(registeredImageCount, 2, 3)
+        : 2;
+    denseSettings[QStringLiteral("minConsistentViews")] = denseMinViewCount;
+    denseSettings[QStringLiteral("minViews")] = denseMinViewCount;
     denseSettings[QStringLiteral("patchSize")] = 11;
     denseSettings[QStringLiteral("confidence")] = 0.20;
-    denseSettings[QStringLiteral("minConfidence")] = 0.20;
-    denseSettings[QStringLiteral("depthConsistency")] = 2.0;
+    denseSettings[QStringLiteral("minConfidence")] = 0.50;
+    denseSettings[QStringLiteral("depthConsistency")] = 1.0;
     denseSettings[QStringLiteral("maxReprojError")] = 2.0;
     if (quality == QStringLiteral("fast"))
     {
@@ -712,6 +896,44 @@ void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObje
     }
 
     m_projectManager->startGenerateDenseCloudAsync(denseSettings);
+}
+
+void MenuWorkflowController::startThreeDReconstructionDenseRefineStage(const QJsonObject &settings)
+{
+    if (!m_projectManager)
+    {
+        return;
+    }
+
+    QObject *ctx = new QObject(m_projectManager);
+    QPointer<MenuWorkflowController> self(this);
+    connect(m_projectManager, &ProjectManager::mvsProgressFinished, ctx,
+            [self, ctx, settings](bool success) {
+        ctx->deleteLater();
+        if (!success || !self)
+        {
+            return;
+        }
+
+        self->startThreeDReconstructionMeshStage(settings);
+    });
+
+    const bool useCuda = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto")) != QStringLiteral("cpu");
+    QJsonObject refineSettings;
+    refineSettings[QStringLiteral("pipeline_mode")] = true;
+    refineSettings[QStringLiteral("sorEnabled")] = true;
+    refineSettings[QStringLiteral("sorK")] = 30;
+    refineSettings[QStringLiteral("sorStdDev")] = 2.0;
+    refineSettings[QStringLiteral("voxelEnabled")] = false;
+    refineSettings[QStringLiteral("voxelSize")] = 0.005;
+    refineSettings[QStringLiteral("normalsEnabled")] = true;
+    refineSettings[QStringLiteral("normalK")] = 30;
+    refineSettings[QStringLiteral("smoothIter")] = 2;
+    refineSettings[QStringLiteral("colorEnabled")] = false;
+    refineSettings[QStringLiteral("threads")] = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    refineSettings[QStringLiteral("processingDevice")] = useCuda ? QStringLiteral("gpu") : QStringLiteral("cpu");
+
+    m_projectManager->startDenseCloudRefineAsync(refineSettings);
 }
 
 void MenuWorkflowController::startThreeDReconstructionMeshStage(const QJsonObject &settings)
@@ -917,7 +1139,8 @@ void MenuWorkflowController::openMapProjectDialog()
 
 void MenuWorkflowController::runSuperPointExtraction(const QJsonObject &config, const QStringList &inputs)
 {
-    LOG_INFO(QStringLiteral("开始在后台线程执行 SuperPoint..."));
+    const QString featureAlgorithm = config.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("disk")).toUpper();
+    LOG_INFO(QStringLiteral("开始在后台线程执行 %1 特征提取...").arg(featureAlgorithm));
 
     auto *mainWin = qobject_cast<MainWindow *>(m_mainWindow.data());
 

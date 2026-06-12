@@ -14,5 +14,7 @@ __pycache__/
 .DS_Store
 data/
 data/*
+testData/photogrammetry_benchmarks/
+testData/火星数据/
 build*
 docker/debs/

@@ -22,6 +22,8 @@ struct DiskConfig
     int    maxKeypoints  = 2048;
     float  scoreThreshold = 0.0f;
     int    maxImageDim    = 1600;
+    float  grayscaleMin   = 0.0f;
+    float  grayscaleMax   = 1.0f;
     bool   useCuda        = true;
     int    cudaDevice     = 0;
 };

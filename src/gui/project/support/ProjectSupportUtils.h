@@ -44,9 +44,19 @@ QString resolveProjectFeaturePathFromToken(const QString &plascanPath,
 										  const QJsonObject &meta,
 										  const QString &token);
 
-	// 根据 token + 后缀解析对应提取器的特征文件路径
-	QString resolveFeaturePathBySuffix(const QString &plascanPath, const QJsonObject &meta,
-	                                   const QString &token, const QString &suffix);
+// 根据 token + 后缀解析对应提取器的特征文件路径
+QString resolveFeaturePathBySuffix(const QString &plascanPath, const QJsonObject &meta,
+                                   const QString &token, const QString &suffix);
+
+// 收集项目中实际存在的特征文件后缀，按默认偏好顺序返回。
+QStringList projectFeatureSuffixes(const QString &plascanPath, const QJsonObject &meta);
+
+// 根据项目中已存在的特征文件推断默认显示后缀。
+// 优先级面向当前默认流程：.dsk, .alk, .sp, .sift, .orb, .akz, .dedode。
+QString inferPreferredFeatureSuffix(const QString &plascanPath, const QJsonObject &meta);
+
+// 判断项目中是否存在指定后缀的特征文件；suffix 可传 ".dsk" 或 "dsk"。
+bool projectHasFeatureSuffix(const QString &plascanPath, const QJsonObject &meta, const QString &suffix);
 
 	// 将内部相机模型序列化为 JSON 元数据（用于写入项目 metadata）。
 	QJsonObject cameraToJson(const xjw::Camera &camera);

@@ -16,6 +16,13 @@
     <number>8</number>
    </property>
    <item>
+    <widget class="QScrollArea" name="parameterScrollArea">
+     <property name="widgetResizable">
+      <bool>true</bool>
+     </property>
+     <widget class="QWidget" name="parameterScrollWidget">
+      <layout class="QVBoxLayout" name="parameterLayout">
+   <item>
     <widget class="QLabel" name="infoLabel">
      <property name="text">
       <string>过滤阈值基于光束法平差（BA）为每个三维点计算的逐点重投影误差、三角化角度和轨迹长度。悬停在各参数上可查看详细说明。</string>
@@ -644,6 +651,10 @@ K：近邻数量，越大越稳定但越慢（建议 16–30）。
        </widget>
       </item>
      </layout>
+    </widget>
+   </item>
+      </layout>
+     </widget>
     </widget>
    </item>
    <item>

@@ -31,7 +31,7 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(QStringLiteral("光束法平差"));
-    resize(980, 760);
+    resize(980, 680);
 
     {
         Ui::BundleAdjustDialog ui;

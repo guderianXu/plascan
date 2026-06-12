@@ -38,6 +38,7 @@ struct DepthFrameResult
     int refViewIdx = -1;  ///< 参考帧在 views 数组中的下标
     int imageIndex = -1;  ///< 向后兼容别名 = refViewIdx
     bool depthFlippedZ = false;
+    std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
     bool success = false;
@@ -129,10 +130,16 @@ private:
     FusionFrameInput buildFusionFrame(const DepthFrameResult &res) const;
 
     /// 估计参考帧的深度范围
-    bool estimateDepthRange(int refIdx, float &zNear, float &zFar) const;
+    bool estimateDepthRange(int refIdx,
+                            float &zNear,
+                            float &zFar,
+                            const std::vector<int> &sourceIndices = {}) const;
 
     /// 从稀疏点云生成提示深度图
-    cv::Mat buildHintDepth(int refIdx, int W, int H) const;
+    cv::Mat buildHintDepth(int refIdx,
+                           int W,
+                           int H,
+                           const std::vector<int> &sourceIndices = {}) const;
 
     /// 双视图深度图左右一致性检查（剔除互不一致的深度像素）
     void crossCheckDepthConsistency();

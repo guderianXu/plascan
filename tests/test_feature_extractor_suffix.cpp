@@ -115,6 +115,50 @@ TEST(TraditionalFeatureExtractorTest, AkazeProducesFeatures)
     EXPECT_EQ(output.descriptors.size(0), static_cast<int64_t>(output.keypoints.size()));
 }
 
+TEST(FeatureOutputPostprocessTest, GrayscaleRangeFiltersTensorOutput)
+{
+    cv::Mat gray(4, 4, CV_8UC1, cv::Scalar(0));
+    gray.at<uchar>(0, 0) = 25;
+    gray.at<uchar>(1, 1) = 115;
+    gray.at<uchar>(2, 2) = 204;
+    gray.at<uchar>(3, 3) = 242;
+
+    const torch::Tensor kpts = torch::tensor(
+        {{{0.0f, 0.0f},
+          {1.0f, 1.0f},
+          {2.0f, 2.0f},
+          {3.0f, 3.0f},
+          {99.0f, 99.0f}}},
+        torch::kFloat32);
+    const torch::Tensor descs = torch::arange(10, torch::kFloat32).reshape({1, 5, 2});
+    const torch::Tensor scores = torch::tensor({{0.1f, 0.2f, 0.3f, 0.4f, 0.5f}}, torch::kFloat32);
+
+    const FeatureOutput output = tensorToFeatureOutput(
+        kpts,
+        descs,
+        scores,
+        0.0f,
+        1.0f,
+        -1,
+        &gray,
+        0.4f,
+        0.85f);
+
+    ASSERT_EQ(output.keypoints.size(), 2u);
+    EXPECT_FLOAT_EQ(output.keypoints[0].pt.x, 1.0f);
+    EXPECT_FLOAT_EQ(output.keypoints[0].pt.y, 1.0f);
+    EXPECT_FLOAT_EQ(output.keypoints[1].pt.x, 2.0f);
+    EXPECT_FLOAT_EQ(output.keypoints[1].pt.y, 2.0f);
+    EXPECT_EQ(output.scores.size(), 2u);
+    EXPECT_FLOAT_EQ(output.scores[0], 0.2f);
+    EXPECT_FLOAT_EQ(output.scores[1], 0.3f);
+    ASSERT_TRUE(output.descriptors.defined());
+    ASSERT_EQ(output.descriptors.size(0), 2);
+    ASSERT_EQ(output.descriptors.size(1), 2);
+    EXPECT_FLOAT_EQ(output.descriptors[0][0].item<float>(), 2.0f);
+    EXPECT_FLOAT_EQ(output.descriptors[1][0].item<float>(), 4.0f);
+}
+
 // ── 4. ExtractorConfig 默认值 ──
 
 TEST(ExtractorConfigTest, DefaultValuesAreReasonable)
@@ -125,6 +169,8 @@ TEST(ExtractorConfigTest, DefaultValuesAreReasonable)
     EXPECT_EQ(cfg.nmsRadius, 3);
     EXPECT_EQ(cfg.removeBorder, 4);
     EXPECT_EQ(cfg.maxImageDim, 2048);
+    EXPECT_FLOAT_EQ(cfg.grayscaleMin, 0.0f);
+    EXPECT_FLOAT_EQ(cfg.grayscaleMax, 1.0f);
     EXPECT_TRUE(cfg.useCuda);
     EXPECT_EQ(cfg.cudaDevice, 0);
 }

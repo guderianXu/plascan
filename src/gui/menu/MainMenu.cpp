@@ -82,6 +82,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_generateOrthoAct = findNamedChild<QAction>(m_mainWindow, "actionGenerateOrtho");
 
         m_detectFeaturesAct = findNamedChild<QAction>(m_mainWindow, "actionDetectFeatures");
+        m_vocabularyOverlapAct = findNamedChild<QAction>(m_mainWindow, "actionVocabularyOverlap");
         m_matchFeaturesAct = findNamedChild<QAction>(m_mainWindow, "actionMatchFeatures");
         m_buildObsNetworkAct = findNamedChild<QAction>(m_mainWindow, "actionBuildObsNetwork");
         m_initCameraPoseAct = findNamedChild<QAction>(m_mainWindow, "actionInitCameraPose");
@@ -129,12 +130,32 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             m_toolBar->setMovable(false);
             m_toolBar->setFloatable(false);
-            m_toolBar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-            m_toolBar->setIconSize(QSize(24, 24));
+            m_toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+            m_toolBar->setIconSize(QSize(18, 18));
         }
         if (m_saveAct)
         {
             m_saveAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DialogSaveButton));
+        }
+        if (m_addPhotoAct)
+        {
+            m_addPhotoAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_FileIcon));
+        }
+        if (m_addFolderAct)
+        {
+            m_addFolderAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DirOpenIcon));
+        }
+        if (m_threeDReconstructionAct)
+        {
+            m_threeDReconstructionAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
+        }
+        if (m_createDEMAct)
+        {
+            m_createDEMAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DriveHDIcon));
+        }
+        if (m_generateOrthoAct)
+        {
+            m_generateOrthoAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DesktopIcon));
         }
         if (m_manualPointCloudPruneAct)
         {
@@ -213,6 +234,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     // ── 稀疏重建 ──
     auto *sparseReconMenu = reconMenu->addMenu(tr("稀疏重建"));
     m_detectFeaturesAct = sparseReconMenu->addAction(tr("特征点提取"));
+    m_vocabularyOverlapAct = sparseReconMenu->addAction(tr("获取重叠对..."));
     m_matchFeaturesAct  = sparseReconMenu->addAction(tr("创建连接点"));
     sparseReconMenu->addSeparator();
     m_buildObsNetworkAct     = sparseReconMenu->addAction(tr("构建观测网络模型..."));
@@ -265,14 +287,42 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     {
         m_toolBar->setMovable(false);
         m_toolBar->setFloatable(false);
-        m_toolBar->setToolButtonStyle(Qt::ToolButtonTextUnderIcon);
-        m_toolBar->setIconSize(QSize(24, 24));
+        m_toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
+        m_toolBar->setIconSize(QSize(18, 18));
 
         if (m_saveAct)
         {
             m_saveAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DialogSaveButton));
             m_toolBar->addAction(m_saveAct);
         }
+        m_toolBar->addSeparator();
+        if (m_addPhotoAct)
+        {
+            m_addPhotoAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_FileIcon));
+            m_toolBar->addAction(m_addPhotoAct);
+        }
+        if (m_addFolderAct)
+        {
+            m_addFolderAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DirOpenIcon));
+            m_toolBar->addAction(m_addFolderAct);
+        }
+        m_toolBar->addSeparator();
+        if (m_threeDReconstructionAct)
+        {
+            m_threeDReconstructionAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
+            m_toolBar->addAction(m_threeDReconstructionAct);
+        }
+        if (m_createDEMAct)
+        {
+            m_createDEMAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DriveHDIcon));
+            m_toolBar->addAction(m_createDEMAct);
+        }
+        if (m_generateOrthoAct)
+        {
+            m_generateOrthoAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_DesktopIcon));
+            m_toolBar->addAction(m_generateOrthoAct);
+        }
+        m_toolBar->addSeparator();
         if (m_manualPointCloudPruneAct)
         {
             m_manualPointCloudPruneAct->setIcon(m_mainWindow->style()->standardIcon(QStyle::SP_CommandLink));
@@ -350,6 +400,7 @@ QAction *MainMenu::toggleGizmoAction() const { return m_toggleGizmoAct; }
 QAction *MainMenu::addPhotoAction() const       { return m_addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return m_addFolderAct; }
 QAction *MainMenu::detectFeaturesAction() const { return m_detectFeaturesAct; }
+QAction *MainMenu::vocabularyOverlapAction() const { return m_vocabularyOverlapAct; }
 QAction *MainMenu::featureVisualizationAction() const { return m_featureVisualizationAct; }
 QAction *MainMenu::matchFeaturesAction() const  { return m_matchFeaturesAct; }
 QAction *MainMenu::viewMatchesAction() const    { return m_viewMatchesAct; }

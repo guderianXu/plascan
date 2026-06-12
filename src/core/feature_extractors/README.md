@@ -39,12 +39,12 @@ feature_extractors/
 
 | 提取器 | 模型 | 描述子维度 | 设备 | 特点 |
 |--------|------|:---:|------|------|
-| SuperPoint | superpoint_v6_{cuda,cpu}.pt | 256 | GPU/CPU | 最通用, 与SuperGlue/LightGlue配套 |
+| SuperPoint | superpoint_extractor_{cuda,cpu}.torchscript | 256 | GPU/CPU | 最通用, 与SuperGlue/LightGlue配套 |
 | SIFT | OpenCV内置 | 128 | CPU | 尺度不变, 卫星影像鲁棒 |
 | ORB | OpenCV内置 | 32 | CPU | 极快, binary描述子 |
 | AKAZE | OpenCV内置 | 61 | CPU | 非线性扩散, 边缘保持 |
-| DISK | disk_extractor_cuda_*.pt | 128 | GPU/CPU | 深度学习, 与LightGlue disk配套 |
-| ALIKED | aliked_extractor_cpu_480.pt | 128 | CPU | 深度学习, 与LightGlue aliked配套 |
+| DISK | disk_extractor_{cuda,cpu}_8192.torchscript | 128 | GPU/CPU | 深度学习, 与LightGlue disk配套 |
+| ALIKED | aliked_extractor_{cuda,cpu}_480.torchscript | 128 | GPU/CPU | 深度学习, 与LightGlue aliked配套 |
 
 ## 性能基准 (testdata/1.tif, 4608×3456)
 
@@ -54,7 +54,7 @@ feature_extractors/
 | SIFT 4k | 428 | 1.3s | CPU |
 | ORB 4k | 351 | 0.0s | CPU |
 | AKAZE | 188 | 0.9s | CPU |
-| DISK (1200px) | ~1300 | ~0.4s | GPU (Python) |
+| DISK (8192 keypoints) | up to 8192 | 视图像尺寸而定 | GPU/CPU |
 | ALIKED (480px) | ~150 | ~0.3s | CPU |
 
 ## 使用方式
@@ -63,7 +63,7 @@ feature_extractors/
 
 ```bash
 # SuperPoint
-feature_extract_cli -a superpoint -m superpoint_v6_cuda.pt -i img.tif -o out.sp --cuda --max-dim 2800
+feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i img.tif -o out.sp --cuda --max-dim 2800
 
 # SIFT/ORB/AKAZE (无需模型)
 feature_extract_cli -a sift  -i img.tif -o out.sp -n 4096
@@ -77,18 +77,18 @@ feature_extract_cli -a akaze -i img.tif -o out.sp
 // SuperPoint
 SuperPointConfig cfg;
 cfg.max_num_keypoints = 4096;
-SuperPoint sp("superpoint_v6_cuda.pt", cfg);
+SuperPoint sp("superpoint_extractor_cpu.torchscript", cfg);
 auto output = sp.detect(image);
 
 // DISK
 xjw::feature_extractors::DiskConfig dcfg;
-dcfg.modelPath = "disk_extractor_cuda_1200.pt";
+dcfg.modelPath = "disk_extractor_cuda_8192.torchscript";
 xjw::feature_extractors::DiskExtractor disk(dcfg);
 auto dout = disk.extract(grayImage);
 
 // ALIKED
 xjw::feature_extractors::AlikedConfig acfg;
-acfg.modelPath = "aliked_extractor_cpu_480.pt";
+acfg.modelPath = "aliked_extractor_cpu_480.torchscript";
 xjw::feature_extractors::AlikedExtractor aliked(acfg);
 auto aout = aliked.extract(grayImage);
 

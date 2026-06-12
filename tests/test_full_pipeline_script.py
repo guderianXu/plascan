@@ -8,6 +8,8 @@ from unittest import mock
 import sys
 from pathlib import Path
 
+import numpy as np
+
 
 SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "run_full_pipeline_test.py"
 EXTRACT_FEATURES_SCRIPT_PATH = Path(__file__).resolve().parents[1] / "scripts" / "extract_features.py"
@@ -25,6 +27,23 @@ class FullPipelineScriptTest(unittest.TestCase):
 
         self.assertEqual(args.dense_algorithm, "opencv_sgbm")
         self.assertEqual(args.dense_cost, "census")
+
+    def test_default_disk_feature_settings_are_not_limited_to_1200(self):
+        with mock.patch.object(sys, "argv", ["run_full_pipeline_test.py", "input.lis"]):
+            args = pipeline.parse_args()
+
+        self.assertEqual(args.max_image_dim, 0)
+        self.assertEqual(args.max_keypoints, 0)
+        self.assertEqual(pipeline.max_keypoints_for_algorithm(args, "disk"), 8192)
+        self.assertEqual(pipeline.MODEL_CANDIDATES["disk"]["cpu"][0], "disk_extractor_cpu_8192.torchscript")
+
+    def test_disk_and_aliked_lightglue_candidates_use_dedicated_torchscript_models(self):
+        self.assertEqual(pipeline.lightglue_model_kind_for_algorithm("disk"), "lightglue_disk")
+        self.assertEqual(pipeline.lightglue_model_kind_for_algorithm("aliked"), "lightglue_aliked")
+        self.assertEqual(pipeline.MODEL_CANDIDATES["lightglue_disk"]["cpu"][0],
+                         "lightglue_disk_cpu.torchscript")
+        self.assertEqual(pipeline.MODEL_CANDIDATES["lightglue_aliked"]["cuda"][0],
+                         "lightglue_aliked_cuda.torchscript")
 
     def test_auto_dense_max_disparity_uses_camera_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:
@@ -333,6 +352,22 @@ class ExtractFeaturesScriptTest(unittest.TestCase):
             spec.loader.exec_module(module)
         return module
 
+    def load_script_with_real_numpy_dependency_stubs(self):
+        spec = importlib.util.spec_from_file_location("extract_features_under_test", EXTRACT_FEATURES_SCRIPT_PATH)
+        module = importlib.util.module_from_spec(spec)
+        assert spec.loader is not None
+
+        fake_torch = types.ModuleType("torch")
+        fake_torch.cuda = types.SimpleNamespace(is_available=lambda: False)
+        fake_torch.device = lambda name: name
+
+        with mock.patch.dict(sys.modules, {
+            "cv2": types.ModuleType("cv2"),
+            "torch": fake_torch,
+        }):
+            spec.loader.exec_module(module)
+        return module
+
     def assert_missing_lightglue_is_reported_cleanly(self, algo):
         module = self.load_script_with_dependency_stubs()
 
@@ -395,6 +430,37 @@ class ExtractFeaturesScriptTest(unittest.TestCase):
 
     def test_aliked_reports_missing_lightglue_without_traceback(self):
         self.assert_missing_lightglue_is_reported_cleanly("aliked")
+
+    def test_grayscale_range_filter_keeps_only_points_inside_image_intensity_window(self):
+        module = self.load_script_with_real_numpy_dependency_stubs()
+
+        image = np.zeros((4, 4, 3), dtype=np.float32)
+        image[0, 0, :] = 0.10
+        image[1, 1, :] = 0.45
+        image[2, 2, :] = 0.80
+        image[3, 3, :] = 0.95
+        keypoints = np.array([
+            [0.0, 0.0],
+            [1.0, 1.0],
+            [2.0, 2.0],
+            [3.0, 3.0],
+            [99.0, 99.0],
+        ], dtype=np.float32)
+        descriptors = np.arange(10, dtype=np.float32).reshape(5, 2)
+        scores = np.array([0.1, 0.2, 0.3, 0.4, 0.5], dtype=np.float32)
+
+        filtered_keypoints, filtered_descriptors, filtered_scores = module.filter_features_by_grayscale_range(
+            keypoints,
+            descriptors,
+            scores,
+            image,
+            0.40,
+            0.85,
+        )
+
+        self.assertEqual(filtered_keypoints.tolist(), [[1.0, 1.0], [2.0, 2.0]])
+        self.assertEqual(filtered_descriptors.tolist(), [[2.0, 3.0], [4.0, 5.0]])
+        np.testing.assert_allclose(filtered_scores, np.array([0.2, 0.3], dtype=np.float32))
 
 
 if __name__ == "__main__":

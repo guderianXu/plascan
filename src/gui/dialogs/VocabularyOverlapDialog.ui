@@ -1,0 +1,524 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<ui version="4.0">
+ <class>VocabularyOverlapDialog</class>
+ <widget class="QDialog" name="VocabularyOverlapDialog">
+  <property name="geometry">
+   <rect>
+    <x>0</x>
+    <y>0</y>
+    <width>1120</width>
+    <height>760</height>
+   </rect>
+  </property>
+  <property name="windowTitle">
+   <string>获取重叠对</string>
+  </property>
+  <layout class="QVBoxLayout" name="mainLayout">
+   <property name="leftMargin">
+    <number>12</number>
+   </property>
+   <property name="topMargin">
+    <number>12</number>
+   </property>
+   <property name="rightMargin">
+    <number>12</number>
+   </property>
+   <property name="bottomMargin">
+    <number>12</number>
+   </property>
+   <item>
+    <widget class="QSplitter" name="topSplit">
+     <property name="orientation">
+      <enum>Qt::Horizontal</enum>
+     </property>
+     <widget class="QGroupBox" name="imageGroup">
+      <property name="title">
+       <string>输入影像</string>
+      </property>
+      <layout class="QVBoxLayout" name="imageLayout">
+       <item>
+        <layout class="QHBoxLayout" name="imageButtonLayout">
+         <item>
+          <widget class="QPushButton" name="m_selectAllBtn">
+           <property name="text">
+            <string>全选</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <widget class="QPushButton" name="m_clearSelectionBtn">
+           <property name="text">
+            <string>清空选择</string>
+           </property>
+          </widget>
+         </item>
+         <item>
+          <spacer name="imageButtonSpacer">
+           <property name="orientation">
+            <enum>Qt::Horizontal</enum>
+           </property>
+           <property name="sizeHint" stdset="0">
+            <size>
+             <width>40</width>
+             <height>20</height>
+            </size>
+           </property>
+          </spacer>
+         </item>
+        </layout>
+       </item>
+       <item>
+        <widget class="QListWidget" name="m_imageList">
+         <property name="alternatingRowColors">
+          <bool>true</bool>
+         </property>
+         <property name="selectionMode">
+          <enum>QAbstractItemView::ExtendedSelection</enum>
+         </property>
+        </widget>
+       </item>
+      </layout>
+     </widget>
+     <widget class="QScrollArea" name="paramScrollArea">
+      <property name="widgetResizable">
+       <bool>true</bool>
+      </property>
+      <widget class="QWidget" name="paramScrollContents">
+       <property name="geometry">
+        <rect>
+         <x>0</x>
+         <y>0</y>
+         <width>520</width>
+         <height>584</height>
+        </rect>
+       </property>
+       <layout class="QVBoxLayout" name="paramLayout">
+        <item>
+         <widget class="QGroupBox" name="featureGroup">
+          <property name="title">
+           <string>特征来源</string>
+          </property>
+          <layout class="QFormLayout" name="featureForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="featureAlgorithmLabel">
+             <property name="text">
+              <string>特征算法</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="m_featureAlgorithmCombo"/>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="featureDirLabel">
+             <property name="text">
+              <string>特征目录</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <layout class="QHBoxLayout" name="featureDirLayout">
+             <item>
+              <widget class="QLineEdit" name="m_featureDirEdit"/>
+             </item>
+             <item>
+              <widget class="QPushButton" name="m_autoDetectFeatureDirBtn">
+               <property name="text">
+                <string>自动</string>
+               </property>
+              </widget>
+             </item>
+             <item>
+              <widget class="QPushButton" name="m_browseFeatureDirBtn">
+               <property name="text">
+                <string>浏览...</string>
+               </property>
+              </widget>
+             </item>
+            </layout>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="vocabularyGroup">
+          <property name="title">
+           <string>词汇树参数</string>
+          </property>
+          <layout class="QFormLayout" name="vocabularyForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="branchFactorLabel">
+             <property name="text">
+              <string>分支数</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QSpinBox" name="m_branchFactorSpin">
+             <property name="minimum">
+              <number>2</number>
+             </property>
+             <property name="maximum">
+              <number>64</number>
+             </property>
+             <property name="value">
+              <number>10</number>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="treeDepthLabel">
+             <property name="text">
+              <string>树深度</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QSpinBox" name="m_treeDepthSpin">
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>8</number>
+             </property>
+             <property name="value">
+              <number>3</number>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="samplePerImageLabel">
+             <property name="text">
+              <string>每图采样描述子</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QSpinBox" name="m_samplePerImageSpin">
+             <property name="minimum">
+              <number>10</number>
+             </property>
+             <property name="maximum">
+              <number>50000</number>
+             </property>
+             <property name="singleStep">
+              <number>100</number>
+             </property>
+             <property name="value">
+              <number>500</number>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="maxTrainingDescriptorsLabel">
+             <property name="text">
+              <string>最大训练描述子</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QSpinBox" name="m_maxTrainingDescriptorsSpin">
+             <property name="minimum">
+              <number>100</number>
+             </property>
+             <property name="maximum">
+              <number>1000000</number>
+             </property>
+             <property name="singleStep">
+              <number>1000</number>
+             </property>
+             <property name="value">
+              <number>50000</number>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="candidateGroup">
+          <property name="title">
+           <string>候选对筛选</string>
+          </property>
+          <layout class="QFormLayout" name="candidateForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="topKLabel">
+             <property name="text">
+              <string>每图候选数</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QSpinBox" name="m_topKSpin">
+             <property name="minimum">
+              <number>1</number>
+             </property>
+             <property name="maximum">
+              <number>200</number>
+             </property>
+             <property name="value">
+              <number>8</number>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="minSimilarityLabel">
+             <property name="text">
+              <string>最小相似度</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QDoubleSpinBox" name="m_minSimilaritySpin">
+             <property name="decimals">
+              <number>3</number>
+             </property>
+             <property name="minimum">
+              <double>0.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>1.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>0.010000000000000</double>
+             </property>
+             <property name="value">
+              <double>0.050000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_useTfidfCheck">
+             <property name="text">
+              <string>使用 TF-IDF 权重</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_mutualTopKCheck">
+             <property name="text">
+              <string>要求互为 Top-K</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="geometryGroup">
+          <property name="title">
+           <string>几何验证</string>
+          </property>
+          <layout class="QFormLayout" name="geometryForm">
+           <item row="0" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_enableGeometryCheck">
+             <property name="text">
+              <string>启用 RANSAC 几何验证</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="geometryModelLabel">
+             <property name="text">
+              <string>模型</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QComboBox" name="m_geometryModelCombo"/>
+           </item>
+           <item row="2" column="0">
+            <widget class="QLabel" name="minInliersLabel">
+             <property name="text">
+              <string>最小内点数</string>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="1">
+            <widget class="QSpinBox" name="m_minInliersSpin">
+             <property name="minimum">
+              <number>4</number>
+             </property>
+             <property name="maximum">
+              <number>10000</number>
+             </property>
+             <property name="value">
+              <number>30</number>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="ransacThresholdLabel">
+             <property name="text">
+              <string>RANSAC 阈值(px)</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QDoubleSpinBox" name="m_ransacThresholdSpin">
+             <property name="decimals">
+              <number>2</number>
+             </property>
+             <property name="minimum">
+              <double>0.100000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>50.000000000000000</double>
+             </property>
+             <property name="value">
+              <double>3.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="outputGroup">
+          <property name="title">
+           <string>输出</string>
+          </property>
+          <layout class="QFormLayout" name="outputForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="outputJsonLabel">
+             <property name="text">
+              <string>JSON</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QLineEdit" name="m_outputJsonEdit"/>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="outputLisLabel">
+             <property name="text">
+              <string>LIS</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QLineEdit" name="m_outputLisEdit"/>
+           </item>
+           <item row="2" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_applyToMatchingCheck">
+             <property name="text">
+              <string>运行后应用到特征匹配</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
+         <spacer name="paramSpacer">
+          <property name="orientation">
+           <enum>Qt::Vertical</enum>
+          </property>
+          <property name="sizeHint" stdset="0">
+           <size>
+            <width>20</width>
+            <height>20</height>
+           </size>
+          </property>
+         </spacer>
+        </item>
+       </layout>
+      </widget>
+     </widget>
+    </widget>
+   </item>
+   <item>
+    <widget class="QGroupBox" name="resultGroup">
+     <property name="title">
+      <string>重叠对结果</string>
+     </property>
+     <layout class="QVBoxLayout" name="resultLayout">
+      <item>
+       <widget class="QTableWidget" name="m_pairTable">
+        <property name="alternatingRowColors">
+         <bool>true</bool>
+        </property>
+        <property name="selectionBehavior">
+         <enum>QAbstractItemView::SelectRows</enum>
+        </property>
+       </widget>
+      </item>
+      <item>
+       <widget class="QLabel" name="m_summaryLabel">
+        <property name="text">
+         <string>尚未运行</string>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
+    <layout class="QHBoxLayout" name="buttonLayout">
+     <item>
+      <widget class="QPushButton" name="m_resetBtn">
+       <property name="text">
+        <string>恢复默认</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <spacer name="buttonSpacer">
+       <property name="orientation">
+        <enum>Qt::Horizontal</enum>
+       </property>
+       <property name="sizeHint" stdset="0">
+        <size>
+         <width>40</width>
+         <height>20</height>
+        </size>
+       </property>
+      </spacer>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_exportLisBtn">
+       <property name="text">
+        <string>导出 LIS</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_applyToMatchingBtn">
+       <property name="text">
+        <string>应用到匹配</string>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_runBtn">
+       <property name="text">
+        <string>运行</string>
+       </property>
+       <property name="default">
+        <bool>true</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
+      <widget class="QPushButton" name="m_closeBtn">
+       <property name="text">
+        <string>关闭</string>
+       </property>
+      </widget>
+     </item>
+    </layout>
+   </item>
+  </layout>
+ </widget>
+ <resources/>
+ <connections/>
+</ui>

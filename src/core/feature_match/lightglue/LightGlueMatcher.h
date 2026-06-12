@@ -10,10 +10,10 @@
  *   3. extractNative(cv::Mat)           —— 使用内置 SP 模型提取特征
  *
  * 模型路径通过 LightGlueConfig 指定：
- *   - resources/models/lightglue_matcher_cpu.pt
- *   - resources/models/lightglue_matcher_cuda.pt
+ *   - DISK/ALIKED: resources/models/lightglue_{disk,aliked}_{cpu,cuda}.torchscript
+ *   - SuperPoint legacy: resources/models/lightglue_matcher_{cpu,cuda}.torchscript
  *
- * SP 模型路径 (matcherModelPath 利用内罬 SP wrapper）可选配置。
+ * SP 模型路径（SuperPoint extractor wrapper）可选配置。
  *
  * 依赖： LibTorch、OpenCV
  */
@@ -35,7 +35,7 @@ namespace xjw::feature_match
  */
 struct LightGlueConfig
 {
-    /// LightGlue TorchScript 匹配器模型路径（lightglue_matcher_{cpu|cuda}.pt）
+    /// LightGlue TorchScript 匹配器模型路径（描述子维度必须与模型匹配）
     std::string matcherModelPath;
     /// 包含 SP 提取器的 TorchScript 模型路径（可选，仅 matchImages / extractNative 需要）
     std::string spModelPath;
@@ -50,8 +50,8 @@ struct LightGlueConfig
  *
  * 支持两个工作模式：
  *  - 通用模式: match(FeatureData, FeatureData)
- *    传入已有的 SuperPoint .sp 特征（关键点像素坐标 + [N,256] 描述子），
- *    内部构造 [1,N,2] 坐标张量和 [1,N,256] 描述子张量送入 LightGlue。
+ *    传入已有特征（关键点像素坐标 + [N,D] 描述子；DISK/ALIKED 为 128 维，
+ *    SuperPoint 为 256 维），内部构造 [1,N,2] 坐标张量和 [1,N,D] 描述子张量送入 LightGlue。
  *  - 原始图像模式: matchImages(cv::Mat, cv::Mat)
  *    需要额外配置 SP 模型路径，从 BGR 图像直接匹配。
  */
@@ -67,9 +67,9 @@ public:
     // ========== IFeatureMatcher 接口 ==========
 
     /**
-     * @brief 通用匹配接口：频率 keypoints 出匹配输入张量。
+     * @brief 通用匹配接口：从 keypoints/descriptors 构造匹配输入张量。
      *
-     * FeatureData::imageWidth/Height 用于提供坐标偿差信息（如果为 0 则尝试尤夤跨坐标推断）。
+     * FeatureData::imageWidth/Height 用于提供图像尺寸信息（如果为 0 则尝试从坐标范围推断）。
      */
     xjw::feature_match::MatchResult match(
         const xjw::feature_extractors::FeatureData &feat0,

@@ -13,6 +13,39 @@
 #include <QThread>
 #include <QtGlobal>
 
+namespace
+{
+
+constexpr int kDefaultFeatureGrayscaleMinPx = 5;
+
+double grayscalePixelToNormalized(int value)
+{
+    return static_cast<double>(qBound(0, value, 255)) / 255.0;
+}
+
+int grayscaleSettingToPixel(const QJsonObject &settings,
+                            const QString &pixelKey,
+                            const QString &normalizedKey,
+                            int fallback)
+{
+    if (settings.contains(pixelKey))
+    {
+        return qBound(0, settings.value(pixelKey).toInt(fallback), 255);
+    }
+    if (settings.contains(normalizedKey))
+    {
+        const double normalized = settings.value(normalizedKey).toDouble(grayscalePixelToNormalized(fallback));
+        if (normalized > 1.0)
+        {
+            return qBound(0, qRound(normalized), 255);
+        }
+        return qBound(0, qRound(normalized * 255.0), 255);
+    }
+    return fallback;
+}
+
+} // namespace
+
 ThreeDReconstructionDialog::ThreeDReconstructionDialog(QWidget *parent)
     : QDialog(parent)
 {
@@ -28,11 +61,13 @@ void ThreeDReconstructionDialog::setupUi()
     m_statusLabel = form.m_statusLabel;
     m_qualityCombo = form.m_qualityCombo;
     m_deviceCombo = form.m_deviceCombo;
+    m_featureGrayMinSpin = form.m_featureGrayMinSpin;
     m_threadsSpin = form.m_threadsSpin;
     m_outputDirEdit = form.m_outputDirEdit;
     m_exportObjCheck = form.m_exportObjCheck;
     m_startBtn = form.m_startBtn;
     m_cancelBtn = form.m_cancelBtn;
+    m_exportObjCheck->setChecked(true);
 
     m_qualityCombo->setItemData(0, QStringLiteral("standard"));
     m_qualityCombo->setItemData(1, QStringLiteral("fast"));
@@ -49,6 +84,8 @@ void ThreeDReconstructionDialog::setupUi()
     connect(m_qualityCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
     connect(m_deviceCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ThreeDReconstructionDialog::emitSettingsChanged);
+    connect(m_featureGrayMinSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
     connect(m_threadsSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
@@ -97,6 +134,10 @@ void ThreeDReconstructionDialog::applySettings(const QJsonObject &settings)
     {
         m_threadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt(m_threadsSpin->value()));
     }
+    m_featureGrayMinSpin->setValue(grayscaleSettingToPixel(settings,
+                                                           QStringLiteral("feature_grayscale_min_px"),
+                                                           QStringLiteral("feature_grayscale_min"),
+                                                           kDefaultFeatureGrayscaleMinPx));
     if (settings.contains(QStringLiteral("output_dir")))
     {
         m_outputDirEdit->setText(settings.value(QStringLiteral("output_dir")).toString());
@@ -119,6 +160,9 @@ QJsonObject ThreeDReconstructionDialog::collectSettings() const
     }
     settings[QStringLiteral("quality")] = quality;
     settings[QStringLiteral("device")] = device;
+    const int featureGrayscaleMinPx = qBound(0, m_featureGrayMinSpin->value(), 255);
+    settings[QStringLiteral("feature_grayscale_min_px")] = featureGrayscaleMinPx;
+    settings[QStringLiteral("feature_grayscale_min")] = grayscalePixelToNormalized(featureGrayscaleMinPx);
     settings[QStringLiteral("threads")] = m_threadsSpin->value();
     settings[QStringLiteral("output_dir")] = QDir::cleanPath(m_outputDirEdit->text().trimmed());
     settings[QStringLiteral("export_obj")] = m_exportObjCheck->isChecked();

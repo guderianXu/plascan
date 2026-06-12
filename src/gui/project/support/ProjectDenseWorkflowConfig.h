@@ -16,6 +16,8 @@ struct DenseGenerationSettings
     double resScale = 0.5;
     int iterations = 6;
     int threads = 8;
+    int gpuFrameWorkers = 0; // 0 表示按线程数和视图数自动选择
+    int cpuFrameWorkers = 0; // 0 表示按线程数和视图数自动选择
     int patchSize = 11;
     int minViews = 3;
     float patchMatchConfidence = 0.20f;

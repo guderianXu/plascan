@@ -17,6 +17,8 @@ struct ExtractorConfig
     int  nmsRadius      = 3;
     int  removeBorder   = 4;
     int  maxImageDim    = 2048;
+    float grayscaleMin  = 0.0f;
+    float grayscaleMax  = 1.0f;
     bool useCuda        = true;
     int  cudaDevice     = 0;
 };

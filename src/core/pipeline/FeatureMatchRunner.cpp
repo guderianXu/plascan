@@ -67,6 +67,67 @@ QString findModelFile(const QString &modelName)
     return QString();
 }
 
+QString findFirstModelFile(const QStringList &modelNames, QString *pickedModelName = nullptr)
+{
+    for (const QString &modelName : modelNames)
+    {
+        const QString path = findModelFile(modelName);
+        if (!path.isEmpty())
+        {
+            if (pickedModelName)
+            {
+                *pickedModelName = modelName;
+            }
+            return path;
+        }
+    }
+    return QString();
+}
+
+bool allowPythonLightGlueFallback()
+{
+    const QString value = qEnvironmentVariable("PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK")
+        .trimmed()
+        .toLower();
+    return value == QStringLiteral("1")
+        || value == QStringLiteral("true")
+        || value == QStringLiteral("yes")
+        || value == QStringLiteral("on");
+}
+
+bool waitForProcessOrCancel(QProcess &process,
+                            std::atomic<bool> &cancelFlag,
+                            int timeoutMs,
+                            const QString &label)
+{
+    constexpr int pollMs = 100;
+    int elapsedMs = 0;
+    while (!process.waitForFinished(100))
+    {
+        if (cancelFlag.load())
+        {
+            LOG_INFO("%s", qUtf8Printable(QString("%1: 用户请求取消，终止 Python 子进程").arg(label)));
+            process.terminate();
+            if (!process.waitForFinished(2000))
+            {
+                process.kill();
+                process.waitForFinished(1000);
+            }
+            return false;
+        }
+
+        elapsedMs += pollMs;
+        if (timeoutMs > 0 && elapsedMs >= timeoutMs)
+        {
+            LOG_ERROR("%s", qUtf8Printable(QString("%1: Python 子进程超时").arg(label)));
+            process.kill();
+            process.waitForFinished(1000);
+            return false;
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &imagePairs, ProjectManager *projectManager)
@@ -89,15 +150,48 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 {
     const QString matchAlgorithm = config.value("match_algorithm").toString("superglue").trimmed().toLower();
     const QString rawSuffix      = config.value("feature_suffix").toString();
+    const QString plascanPath = projectManager ? projectManager->currentProjectPath() : QString();
+    const QJsonObject currentMeta = projectManager ? projectManager->currentMeta() : QJsonObject();
 
     // "__all__" mode: try all compatible feature suffixes
     QStringList suffixesToTry;
-    if (rawSuffix == "__all__" && xjw::feature_match::compatibleFeatureSuffixes(matchAlgorithm).size() > 1) {
-        suffixesToTry = xjw::feature_match::compatibleFeatureSuffixes(matchAlgorithm);
+    if (rawSuffix == "__all__")
+    {
+        const QStringList compatibleSuffixes = xjw::feature_match::compatibleFeatureSuffixes(matchAlgorithm);
+        const QStringList availableSuffixes = xjw::gui::project::projectFeatureSuffixes(plascanPath, currentMeta);
+        if (compatibleSuffixes.isEmpty())
+        {
+            LOG_WARN("%s", qUtf8Printable(QString("All-features mode: %1 不依赖预提取特征，跳过后缀匹配")
+                .arg(matchAlgorithm)));
+            return;
+        }
+        if (availableSuffixes.isEmpty())
+        {
+            suffixesToTry = compatibleSuffixes;
+        }
+        else
+        {
+            for (const QString &suffix : compatibleSuffixes)
+            {
+                if (availableSuffixes.contains(suffix))
+                {
+                    suffixesToTry.append(suffix);
+                }
+            }
+            if (suffixesToTry.isEmpty())
+            {
+                LOG_WARN("%s", qUtf8Printable(QString("All-features mode: 项目中没有 %1 可用的兼容特征文件，"
+                                                       "已有后缀: %2")
+                    .arg(matchAlgorithm, availableSuffixes.join(QStringLiteral(", ")))));
+                return;
+            }
+        }
         LOG_INFO("All-features mode: will try %d suffixes (%s)",
                  static_cast<int>(suffixesToTry.size()),
                  qUtf8Printable(suffixesToTry.join(", ")));
-    } else {
+    }
+    else
+    {
         suffixesToTry << rawSuffix;
     }
 
@@ -115,7 +209,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         return;
     }
 
-    const QString featureSuffix = rawSuffix;
+    const QString featureSuffix = suffixesToTry.value(0, rawSuffix);
     const bool isSuperGlueMatch = (matchAlgorithm == QStringLiteral("superglue"));
     const bool isLightGlueMatch = (matchAlgorithm == QStringLiteral("lightglue"));
     const bool isLoftrMatch     = (matchAlgorithm == QStringLiteral("loftr"));
@@ -134,9 +228,6 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         return;
     }
 
-    const QString plascanPath = projectManager ? projectManager->currentProjectPath() : QString();
-    const QJsonObject currentMeta = projectManager ? projectManager->currentMeta() : QJsonObject();
-    
     // 创建输出目录
     QString outputDir = config["output_dir"].toString();
     if (outputDir.isEmpty()) 
@@ -210,10 +301,11 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
             QProcess process;
             process.start("python3", args);
-            if (!process.waitForFinished(300000))
+            if (!waitForProcessOrCancel(process,
+                                        cancelFlag,
+                                        300000,
+                                        QStringLiteral("Python E2E %1").arg(pairStr)))
             {
-                LOG_ERROR("%s", qUtf8Printable(QString("Python E2E timeout: %1").arg(pairStr)));
-                process.kill();
                 continue;
             }
 
@@ -240,7 +332,10 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
     // 构建 SuperGlueConfig
     superglue::SuperGlueConfig sgConfig;
-    sgConfig.match_threshold = static_cast<float>(config["match_threshold"].toDouble(0.15));
+    const double configuredMatchThreshold = isLightGlueMatch
+        ? config.value("lg_match_threshold").toDouble(config.value("match_threshold").toDouble(0.15))
+        : config.value("match_threshold").toDouble(0.15);
+    sgConfig.match_threshold = static_cast<float>(configuredMatchThreshold);
     sgConfig.max_keypoints = config["max_keypoints"].toInt(-1);
     sgConfig.batch_size = config["batch_size"].toInt(1);
     sgConfig.sinkhorn_iterations = config["sinkhorn_iterations"].toInt(150);
@@ -277,8 +372,12 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     const int defaultMinInliers = isBfFlann ? 8 : 25;
     outlierConfig.minInliers = config["outlier_min_inliers"].toInt(defaultMinInliers);
 
-    const int overrideInputWidth = config["input_width"].toInt(-1);
-    const int overrideInputHeight = config["input_height"].toInt(-1);
+    const int overrideInputWidth = isLightGlueMatch
+        ? config.value("lg_input_width").toInt(config.value("input_width").toInt(-1))
+        : config.value("input_width").toInt(-1);
+    const int overrideInputHeight = isLightGlueMatch
+        ? config.value("lg_input_height").toInt(config.value("input_height").toInt(-1))
+        : config.value("input_height").toInt(-1);
     
     // 设备选择
     bool useCuda = config["use_cuda"].toBool(true);
@@ -304,11 +403,12 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     // 确定模型路径（深度匹配算法需要）
     QString modelType = config["model_type"].toString("outdoor");
     QString deviceSuffix = sgConfig.use_cuda ? "cuda" : "cpu";
-    QString modelName;
+    QStringList modelCandidates;
     QString lightglueAlgo; // 用于 fallback 判断 (仅 LightGlue 有效)
     if (isSuperGlueMatch)
     {
-        modelName = QString("superglue_%1_%2.pt").arg(modelType).arg(deviceSuffix);
+        modelCandidates << QString("superglue_%1_%2.torchscript").arg(modelType).arg(deviceSuffix)
+                        << QString("superglue_%1_%2.pt").arg(modelType).arg(deviceSuffix);
     }
     else if (isLightGlueMatch)
     {
@@ -320,20 +420,42 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             lightglueAlgo = QStringLiteral("superpoint");
 
         if (lightglueAlgo == QStringLiteral("disk"))
-            modelName = QString("lightglue_disk_%1.pt").arg(deviceSuffix);
+        {
+            modelCandidates << QString("lightglue_disk_%1.torchscript").arg(deviceSuffix)
+                            << QString("lightglue_disk_%1.pt").arg(deviceSuffix);
+        }
         else if (lightglueAlgo == QStringLiteral("aliked"))
-            modelName = QString("lightglue_aliked_%1.pt").arg(deviceSuffix);
+        {
+            modelCandidates << QString("lightglue_aliked_%1.torchscript").arg(deviceSuffix)
+                            << QString("lightglue_aliked_%1.pt").arg(deviceSuffix);
+        }
         else
-            modelName = QString("lightglue_matcher_%1.pt").arg(deviceSuffix);
+        {
+            modelCandidates << QString("lightglue_matcher_%1.torchscript").arg(deviceSuffix)
+                            << QString("lightglue_matcher_%1.pt").arg(deviceSuffix)
+                            << QStringLiteral("lightglue_matcher.torchscript")
+                            << QStringLiteral("lightglue_matcher.pt");
+        }
 
         LOG_INFO("%s", qUtf8Printable(QString("LightGlue suffix=%1 algo=%2 model=%3")
-                                          .arg(featureSuffix, lightglueAlgo, modelName)));
+                                          .arg(featureSuffix, lightglueAlgo,
+                                               modelCandidates.join(QStringLiteral(",")))));
     }
-    QString modelPath = findModelFile(modelName);
+    QString pickedModelName;
+    QString modelPath = findFirstModelFile(modelCandidates, &pickedModelName);
 
     // DISK/ALIKED 专用 TorchScript 模型缺失时使用 Python LightGlue 脚本
     if (isLightGlueMatch && modelPath.isEmpty() && lightglueAlgo != QStringLiteral("superpoint"))
     {
+        if (!allowPythonLightGlueFallback())
+        {
+            LOG_ERROR("%s", qUtf8Printable(
+                QString("LightGlue %1 TorchScript 模型不存在(%2)。默认不再自动回退 Python；"
+                        "请先运行 scripts/export_lightglue_torchscript.py 导出 TorchScript，"
+                        "或临时设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1")
+                    .arg(lightglueAlgo, modelCandidates.join(QStringLiteral(", ")))));
+            return;
+        }
         LOG_INFO("%s", qUtf8Printable(
             QString("LightGlue %1 TorchScript 模型不存在, 使用 Python 脚本").arg(lightglueAlgo)));
 
@@ -355,22 +477,98 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             if (parts.size() != 2) continue;
             const QString token0 = QFileInfo(parts[0]).fileName();
             const QString token1 = QFileInfo(parts[1]).fileName();
+            const QString imagePath0 = xjw::gui::project::resolveProjectImagePathFromToken(token0, currentMeta);
+            const QString imagePath1 = xjw::gui::project::resolveProjectImagePathFromToken(token1, currentMeta);
             const QString sp0 = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, token0, featureSuffix);
             const QString sp1 = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, token1, featureSuffix);
             if (!QFile::exists(sp0) || !QFile::exists(sp1)) { LOG_WARN("Feature file missing for %s", qUtf8Printable(pairStr)); continue; }
 
-            const QString base0 = QFileInfo(sp0).completeBaseName();
-            const QString base1 = QFileInfo(sp1).completeBaseName();
+            const QString imagePath0ForMeta = imagePath0.isEmpty() ? token0 : imagePath0;
+            const QString imagePath1ForMeta = imagePath1.isEmpty() ? token1 : imagePath1;
+            const QString base0 = QFileInfo(imagePath0.isEmpty() ? sp0 : imagePath0).completeBaseName();
+            const QString base1 = QFileInfo(imagePath1.isEmpty() ? sp1 : imagePath1).completeBaseName();
+            const QString canonicalPairName = base0 + "__" + base1;
             const QString matchName = base0 + "__" + base1 + "_" + matchAlgorithm + ".match";
             const QString outPath = QDir(outputDir).filePath(matchName);
 
             QProcess proc;
-            proc.start("python3", {pyScript, "-f1", sp0, "-f2", sp1, "-o", outPath, "--cuda"});
-            if (!proc.waitForFinished(300000)) { LOG_ERROR("Python LG timeout"); proc.kill(); continue; }
+            QStringList args{pyScript, QStringLiteral("-f1"), sp0, QStringLiteral("-f2"), sp1,
+                             QStringLiteral("-o"), outPath,
+                             QStringLiteral("--threshold"), QString::number(sgConfig.match_threshold, 'g', 6),
+                             QStringLiteral("--feature-algorithm"), lightglueAlgo,
+                             QStringLiteral("--match-algorithm"), matchAlgorithm};
+            if (sgConfig.use_cuda)
+            {
+                args << QStringLiteral("--cuda");
+            }
+            proc.start(QStringLiteral("python3"), args);
+            if (!waitForProcessOrCancel(proc,
+                                        cancelFlag,
+                                        300000,
+                                        QStringLiteral("Python LightGlue %1").arg(canonicalPairName)))
+            {
+                continue;
+            }
             if (proc.exitCode() != 0)
             {
                 LOG_ERROR("Python LG failed: %s", qUtf8Printable(QString::fromUtf8(proc.readAllStandardError())));
                 continue;
+            }
+
+            const QString sidecarPath = outPath + QStringLiteral(".json");
+            QJsonObject sidecar;
+            {
+                QFile sidecarFile(sidecarPath);
+                if (sidecarFile.open(QIODevice::ReadOnly))
+                {
+                    const QJsonDocument doc = QJsonDocument::fromJson(sidecarFile.readAll());
+                    if (doc.isObject())
+                    {
+                        sidecar = doc.object();
+                    }
+                }
+            }
+            sidecar[QStringLiteral("match_file")] = outPath;
+            sidecar[QStringLiteral("image0_name")] = base0;
+            sidecar[QStringLiteral("image1_name")] = base1;
+            sidecar[QStringLiteral("image0_path")] = imagePath0ForMeta;
+            sidecar[QStringLiteral("image1_path")] = imagePath1ForMeta;
+            sidecar[QStringLiteral("feature0_path")] = sp0;
+            sidecar[QStringLiteral("feature1_path")] = sp1;
+            sidecar[QStringLiteral("sp0_path")] = sp0;
+            sidecar[QStringLiteral("sp1_path")] = sp1;
+            sidecar[QStringLiteral("feature_algorithm")] = lightglueAlgo;
+            sidecar[QStringLiteral("match_algorithm")] = matchAlgorithm;
+            {
+                QFile sidecarFile(sidecarPath);
+                if (sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                {
+                    sidecarFile.write(QJsonDocument(sidecar).toJson(QJsonDocument::Compact));
+                }
+            }
+
+            if (projectManager)
+            {
+                QJsonObject pairSettings = config;
+                QJsonArray imgFilesForMeta;
+                imgFilesForMeta.append(imagePath0ForMeta);
+                imgFilesForMeta.append(imagePath1ForMeta);
+                pairSettings[QStringLiteral("image_files")] = imgFilesForMeta;
+                pairSettings[QStringLiteral("image0")] = imagePath0ForMeta;
+                pairSettings[QStringLiteral("image1")] = imagePath1ForMeta;
+                pairSettings[QStringLiteral("sp0_path")] = sp0;
+                pairSettings[QStringLiteral("sp1_path")] = sp1;
+                pairSettings[QStringLiteral("feature0_path")] = sp0;
+                pairSettings[QStringLiteral("feature1_path")] = sp1;
+                pairSettings[QStringLiteral("pair_name")] = canonicalPairName;
+                pairSettings[QStringLiteral("sidecar_json")] = sidecarPath;
+                pairSettings[QStringLiteral("match_algorithm")] = matchAlgorithm;
+
+                QStringList singleOutput{outPath};
+                QMetaObject::invokeMethod(projectManager, "appendIpmatchResult",
+                                          Qt::QueuedConnection,
+                                          Q_ARG(QStringList, singleOutput),
+                                          Q_ARG(QJsonObject, pairSettings));
             }
             LOG_INFO("Python LG done: %s", qUtf8Printable(matchName));
         }
@@ -380,8 +578,13 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
     if ((isSuperGlueMatch || isLightGlueMatch) && modelPath.isEmpty())
     {
-        LOG_ERROR("%s", qUtf8Printable(QString("模型文件不存在: %1, 跳过此特征类型").arg(modelName)));
+        LOG_ERROR("%s", qUtf8Printable(QString("模型文件不存在: %1, 跳过此特征类型")
+            .arg(modelCandidates.join(QStringLiteral(", ")))));
         return;
+    }
+    if (!pickedModelName.isEmpty())
+    {
+        LOG_INFO("%s", qUtf8Printable(QString("匹配模型: %1").arg(pickedModelName)));
     }
     
     sgConfig.model_path = modelPath.toStdString();
@@ -450,6 +653,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         
         std::atomic<int>  successCount{0};
         std::atomic<int>  failCount{0};
+        std::atomic<int>  missingFeatureCount{0};
+        std::atomic<int>  missingFeatureSamples{0};
         std::atomic<int>  pairCursor{0};
         std::mutex        writeMutex;
         std::atomic<bool> errorFlag{false};
@@ -520,7 +725,14 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
                     if (!QFile::exists(sp0Path) || !QFile::exists(sp1Path)) 
                     {
-                        LOG_ERROR("%s", qUtf8Printable(QString("特征文件不存在: %1 或 %2").arg(sp0Path, sp1Path)));
+                        const int sampleIndex = missingFeatureSamples.fetch_add(1);
+                        if (sampleIndex < 5)
+                        {
+                            LOG_WARN("%s", qUtf8Printable(
+                                QString("缺失特征文件，跳过匹配对 %1 (suffix=%2): %3 / %4")
+                                    .arg(canonicalPairName, featureSuffix, sp0Path, sp1Path)));
+                        }
+                        missingFeatureCount.fetch_add(1);
                         failCount.fetch_add(1);
                         continue;
                     }
@@ -791,6 +1003,14 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         }
         else
         {
+            if (missingFeatureCount.load() > 0)
+            {
+                LOG_WARN("%s", qUtf8Printable(QString("缺失特征文件: %1 对已跳过 (suffix=%2)。"
+                                                       "如需匹配该类型，请先提取对应特征；"
+                                                       "当前 run 不会逐对重复打印缺失错误。")
+                    .arg(missingFeatureCount.load())
+                    .arg(featureSuffix)));
+            }
             LOG_INFO("%s", qUtf8Printable(QString("%1 匹配完成: 成功 %2, 跳过/失败 %3")
                 .arg(matchAlgorithm).arg(successCount.load()).arg(failCount.load())));
         }

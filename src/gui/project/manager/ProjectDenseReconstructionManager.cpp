@@ -802,6 +802,11 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     genCfg.saveIntermediateDepthMaps = true;
     const QString mvsOutDir = resolveProjectOutputDir(m_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     genCfg.intermediateDir = mvsOutDir.toStdString();
+    if (request.pipelineMode)
+    {
+        // 一键流程复用“深度图融合生成密集点云”的同一入口，避免内部融合与手动融合产物不一致。
+        genCfg.runFusion = false;
+    }
 
     const QSet<int> existingIndices = collectExistingDepthFrameIndices(mvsOutDir, selectedImages.size());
     QSet<int> skipIndices;
@@ -908,8 +913,6 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         }
     });
     connect(gen, &DepthMapGenerator::finished, this, [this, settings, continueMissingMode](bool success) {
-        emit mvsProgressFinished(success);
-
         if (m_activeMvsGenerator)
         {
             m_activeMvsGenerator->deleteLater();
@@ -917,8 +920,14 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         }
 
         const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
+        const bool shouldStartFusion = success && (continueMissingMode || pipelineMode);
 
-        if (success && continueMissingMode)
+        if (!shouldStartFusion)
+        {
+            emit mvsProgressFinished(success);
+        }
+
+        if (shouldStartFusion)
         {
             if (!pipelineMode)
             {
@@ -978,12 +987,13 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
     }
 
     const xjw::gui::project::DenseRefineSettings request = denseRefineSettingsFromJson(settings);
+    const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
     const QString outDir = QFileInfo(inputPly).absolutePath();
     const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     const QString outputPly = outDir + QStringLiteral("/dense_cloud_refined_%1.ply").arg(ts);
 
     emit mvsProgressChanged(QStringLiteral("正在加载密集点云..."), 0);
-    (void)QtConcurrent::run([this, inputPly, outputPly, request]() {
+    (void)QtConcurrent::run([this, inputPly, outputPly, request, pipelineMode]() {
         PlaPC cloud;
         QString loadErr;
         if (!readPointCloudPly(inputPly, &cloud, &loadErr))
@@ -1124,15 +1134,18 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
         }
 
         const int pointCount = static_cast<int>(cloud.size());
-        QMetaObject::invokeMethod(this, [this, outputPly, pointCount]() {
+        QMetaObject::invokeMethod(this, [this, outputPly, pointCount, pipelineMode]() {
             upsertProjectRecordByPath(m_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
             emit mvsProgressFinished(true);
-            QMessageBox::information(m_parentWidget,
-                                     QStringLiteral("密集点云后处理"),
-                                     QStringLiteral("后处理完成，共 %1 个点。").arg(pointCount));
+            if (!pipelineMode)
+            {
+                QMessageBox::information(m_parentWidget,
+                                         QStringLiteral("密集点云后处理"),
+                                         QStringLiteral("后处理完成，共 %1 个点。").arg(pointCount));
+            }
         }, Qt::QueuedConnection);
     });
 }
