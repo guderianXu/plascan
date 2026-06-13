@@ -1076,6 +1076,32 @@ TEST(FeatureVisualizationSettingsTest, PersistsAndRestoresActiveFeatureSuffix)
     EXPECT_TRUE(source.contains(QStringLiteral("setActiveFeatureSuffix")));
 }
 
+TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
+{
+    const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
+    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.cpp"));
+    const QString dialogUi = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.ui"));
+    ASSERT_FALSE(rendererHeader.isEmpty());
+    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(uiDefaults.isEmpty());
+    ASSERT_FALSE(dialogSource.isEmpty());
+    ASSERT_FALSE(dialogUi.isEmpty());
+
+    EXPECT_TRUE(rendererHeader.contains(QStringLiteral("int pointSize = 1")));
+    EXPECT_TRUE(rendererHeader.contains(QStringLiteral("markerShape = QStringLiteral(\"cross\")")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("const double crossRadius")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("crossPen.setWidthF(1.0)")));
+
+    EXPECT_TRUE(uiDefaults.contains(QStringLiteral("featureDisplay[\"pointSize\"]         = 1")));
+    EXPECT_TRUE(uiDefaults.contains(QStringLiteral("featureDisplay[\"markerShape\"]       = QStringLiteral(\"cross\")")));
+
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_markerShapeCombo->setCurrentIndex(2)")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_pointSizeSpin->setValue(1)")));
+    EXPECT_TRUE(dialogUi.contains(QStringLiteral("<number>1</number>")));
+}
+
 TEST(FeatureVisualizationSettingsTest, ProjectOpenRestoresFeatureSuffixEvenWhenUiSettingsAreEmpty)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
@@ -1592,11 +1618,19 @@ TEST(VocabularyOverlapDialogTest, UiDefinesRequiredControls)
 
     const QStringList requiredControls = {
         QStringLiteral("m_imageList"),
+        QStringLiteral("m_overlapMethodCombo"),
+        QStringLiteral("m_referenceBodyCombo"),
+        QStringLiteral("m_autoReferenceElevationCheck"),
+        QStringLiteral("m_referenceElevationSpin"),
         QStringLiteral("m_featureAlgorithmCombo"),
         QStringLiteral("m_branchFactorSpin"),
         QStringLiteral("m_treeDepthSpin"),
         QStringLiteral("m_topKSpin"),
         QStringLiteral("m_minSimilaritySpin"),
+        QStringLiteral("m_overlapThreadsSpin"),
+        QStringLiteral("m_useFlannAssignmentCheck"),
+        QStringLiteral("m_useInvertedIndexCheck"),
+        QStringLiteral("m_useCudaOverlapCheck"),
         QStringLiteral("m_enableGeometryCheck"),
         QStringLiteral("m_pairTable"),
         QStringLiteral("m_applyToMatchingCheck"),
@@ -1616,6 +1650,89 @@ TEST(VocabularyOverlapDialogTest, DialogKeyIsAvailableForPersistence)
 
     EXPECT_TRUE(source.contains(QStringLiteral("VocabularyOverlap")));
     EXPECT_TRUE(source.contains(QStringLiteral("vocabulary_overlap")));
+}
+
+TEST(VocabularyOverlapDialogTest, RetrievalRunsAsynchronously)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QFutureWatcher")));
+    EXPECT_TRUE(header.contains(QStringLiteral("overlapProgressChanged")));
+    EXPECT_TRUE(header.contains(QStringLiteral("cancelRun")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setUiBusy")));
+
+    const int onRunIndex = source.indexOf(QStringLiteral("void VocabularyOverlapDialog::onRun()"));
+    const int onExportIndex = source.indexOf(QStringLiteral("void VocabularyOverlapDialog::onExportLis()"));
+    ASSERT_GE(onRunIndex, 0);
+    ASSERT_GT(onExportIndex, onRunIndex);
+    const QString onRunBody = source.mid(onRunIndex, onExportIndex - onRunIndex);
+    EXPECT_FALSE(onRunBody.contains(QStringLiteral("VocabularyOverlapRetriever::retrieve")));
+}
+
+TEST(VocabularyOverlapDialogTest, SupportsCameraModelModeAndStatusProgress)
+{
+    const QString dialogHeader = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.h"));
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    const QString mainHeader = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString mainSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString menuSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(dialogHeader.isEmpty());
+    ASSERT_FALSE(dialogSource.isEmpty());
+    ASSERT_FALSE(mainHeader.isEmpty());
+    ASSERT_FALSE(mainSource.isEmpty());
+    ASSERT_FALSE(menuSource.isEmpty());
+
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("OverlapAnalyzer::analyze")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("imageCameraFromEntry")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_overlapMethodCombo")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("ReferenceBody::Earth")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("ReferenceBody::Moon")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("ReferenceBody::Mars")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("m_overlapTaskStatus")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("overlapCancelRequested")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("onOverlapProgress")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("onOverlapFinished")));
+    EXPECT_TRUE(menuSource.contains(QStringLiteral("overlapProgressChanged")));
+    EXPECT_TRUE(menuSource.contains(QStringLiteral("overlapCancelRequested")));
+}
+
+TEST(VocabularyOverlapDialogTest, DisplaysResultsWithoutOverwritingSummary)
+{
+    const QString dialogHeader = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.h"));
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    ASSERT_FALSE(dialogHeader.isEmpty());
+    ASSERT_FALSE(dialogSource.isEmpty());
+
+    EXPECT_TRUE(dialogHeader.contains(QStringLiteral("updateMethodUi(bool refreshSummary = true)")));
+
+    const int setUiBusyIndex = dialogSource.indexOf(QStringLiteral("void VocabularyOverlapDialog::setUiBusy"));
+    const int handleProgressIndex = dialogSource.indexOf(QStringLiteral("void VocabularyOverlapDialog::handleProgress"));
+    ASSERT_GE(setUiBusyIndex, 0);
+    ASSERT_GT(handleProgressIndex, setUiBusyIndex);
+    const QString setUiBusyBody = dialogSource.mid(setUiBusyIndex, handleProgressIndex - setUiBusyIndex);
+    EXPECT_TRUE(setUiBusyBody.contains(QStringLiteral("updateMethodUi(false)")));
+
+    const int finishIndex = dialogSource.indexOf(QStringLiteral("void VocabularyOverlapDialog::handleRunFinished"));
+    const int writeOutputsIndex = dialogSource.indexOf(QStringLiteral("bool VocabularyOverlapDialog::writeOutputs"));
+    ASSERT_GE(finishIndex, 0);
+    ASSERT_GT(writeOutputsIndex, finishIndex);
+    const QString finishBody = dialogSource.mid(finishIndex, writeOutputsIndex - finishIndex);
+    EXPECT_TRUE(finishBody.contains(QStringLiteral("populatePairTable();")));
+    EXPECT_TRUE(finishBody.contains(QStringLiteral("m_summaryLabel->setText(QStringLiteral(\"候选 %1，对外输出 %2，词汇数 %3\")")));
+    EXPECT_TRUE(finishBody.contains(QStringLiteral("setUiBusy(false);")));
+
+    const int tableIndex = dialogSource.indexOf(QStringLiteral("void VocabularyOverlapDialog::populatePairTable"));
+    const int methodUiIndex = dialogSource.indexOf(QStringLiteral("void VocabularyOverlapDialog::updateMethodUi"));
+    ASSERT_GE(tableIndex, 0);
+    ASSERT_GT(methodUiIndex, tableIndex);
+    const QString tableBody = dialogSource.mid(tableIndex, methodUiIndex - tableIndex);
+    EXPECT_TRUE(tableBody.contains(QStringLiteral("m_pairTable->setRowCount")));
+    EXPECT_TRUE(tableBody.contains(QStringLiteral("m_pairTable->setVisible(true)")));
+    EXPECT_TRUE(tableBody.contains(QStringLiteral("m_pairTable->viewport()->update()")));
 }
 
 TEST(MenuWorkflowControllerTest, VocabularyOverlapAppliesGeneratedPairsToFeatureMatchingSettings)

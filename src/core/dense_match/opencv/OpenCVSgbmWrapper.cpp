@@ -1,5 +1,7 @@
 #include "OpenCVSgbmWrapper.h"
-#include <opencv2/calib3d.hpp>
+
+#include "OpenCvCompat.h"
+
 #include <algorithm>
 
 namespace xjw::dense_match

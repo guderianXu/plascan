@@ -62,8 +62,9 @@ path/to/image_001.png path/to/image_001.tsai
 path/to/image_002.png path/to/image_002.tsai
 ```
 
-外部相机文件可先用通用转换工具生成 PlaScan 输入。当前支持自动识别、Middlebury `*_par.txt`
-和 EPFL/Strecha `.camera`：
+外部相机文件可先用通用转换工具生成 PlaScan 输入。当前支持自动识别、Middlebury `*_par.txt`、
+EPFL/Strecha `.camera`、COLMAP text sparse (`cameras.txt` / `images.txt`) 和 Metashape
+`doc.xml` / `Project.files/0/chunk.zip`：
 
 ```bash
 cmake --build build --target camera_convert_cli -j$(nproc)
@@ -89,6 +90,20 @@ build/bin/three_d_reconstruction_cli path/to/input.lis \
 需要强制 CPU 时再传 `--device cpu`。`--feature-max-image-dim 0` 表示使用质量档位的默认设置；
 最高质量档不会自动把 DISK/ALIKED 输入缩回 1200 px。显存紧张时可手动调小，
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
+
+调试和 benchmark 时可分阶段运行：`--stop-after-sfm` 只生成稀疏结果，`--skip-mvs` 在 SfM 后写报告并跳过后续阶段，
+`--skip-mesh` 则保留 MVS 稠密点云但不生成网格。
+
+批量测试 `testData/photogrammetry_benchmarks` 中已转换为 PlaScan 输入的数据：
+
+```bash
+python scripts/run_photogrammetry_benchmarks.py \
+  --root testData/photogrammetry_benchmarks \
+  --output-dir build/benchmark_runs/photogrammetry_benchmarks \
+  --stage sfm \
+  --device cpu \
+  --dry-run
+```
 
 完整地形产品流水线仍使用 `reconstruct_pipeline_cli` 或脚本封装，流程为 `SfM -> MVS 密集点云 -> 网格模型 -> DEM/DOM`：
 
@@ -155,6 +170,8 @@ src/
 camera_convert_cli --list-formats
 camera_convert_cli --format middlebury-par -i ./dinoSparseRing -o ./plascan_cameras --overwrite
 camera_convert_cli --format epfl-camera -i ./epfl_scene -o ./plascan_cameras --overwrite
+camera_convert_cli --format colmap-text -i ./south-building/sparse -o ./plascan_cameras --overwrite
+camera_convert_cli --format metashape-xml -i ./depth_images -o ./plascan_cameras --overwrite
 ```
 
 输出目录包含 `image_camera.lis`、`cameras/*.tsai` 和 `summary.json`，可直接传给重建类 CLI。

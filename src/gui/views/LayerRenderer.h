@@ -45,13 +45,13 @@ public:
         bool showPoints = true;
         bool showScale = false;
         bool showOrientation = false;
-        int pointSize = 3;
+        int pointSize = 1;
         double scaleMultiplier = 1.0;
         QColor pointColor = QColor(255,200,0);
         QColor scaleColor = QColor(255,255,0);
         QColor orientColor = QColor(255,0,0);
         int opacity = 180; // 0-255
-        QString markerShape = QStringLiteral("point");
+        QString markerShape = QStringLiteral("cross");
         int maxDisplayCount = 0; // 0=all
         bool showTopScores = true;
         bool useFill = false; // 是否使用实心填充(默认空心)

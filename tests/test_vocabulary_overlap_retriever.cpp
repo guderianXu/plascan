@@ -100,3 +100,63 @@ TEST(VocabularyOverlapRetrieverTest, RejectsDescriptorDimensionMismatch)
     EXPECT_FALSE(xjw::VocabularyOverlapRetriever::retrieve(images, config, &result, &error));
     EXPECT_NE(error.find("描述子维度"), std::string::npos);
 }
+
+TEST(VocabularyOverlapRetrieverTest, InvertedIndexMatchesDensePairScoring)
+{
+    std::vector<xjw::VocabularyImageFeatures> images;
+    images.push_back(makeImage("a.tif", makeDescriptors({
+        {0.00f, 0.00f}, {0.02f, 0.01f}, {1.00f, 1.00f}, {1.02f, 1.01f},
+    })));
+    images.push_back(makeImage("b.tif", makeDescriptors({
+        {0.01f, 0.00f}, {0.03f, 0.02f}, {1.01f, 1.00f}, {1.03f, 1.02f},
+    })));
+    images.push_back(makeImage("c.tif", makeDescriptors({
+        {8.00f, 8.00f}, {8.10f, 8.00f}, {9.00f, 9.00f}, {9.10f, 9.00f},
+    })));
+
+    xjw::VocabularyOverlapConfig config;
+    config.branchFactor = 2;
+    config.treeDepth = 2;
+    config.samplePerImage = 100;
+    config.maxTrainingDescriptors = 1000;
+    config.topK = 1;
+    config.minSimilarity = 0.05;
+    config.useTfidf = true;
+    config.mutualTopK = true;
+    config.geometryCheck = false;
+    config.useFlannAssignment = false;
+    config.numThreads = 2;
+
+    xjw::VocabularyOverlapResult denseResult;
+    std::string denseError;
+    config.useInvertedIndex = false;
+    ASSERT_TRUE(xjw::VocabularyOverlapRetriever::retrieve(images, config, &denseResult, &denseError)) << denseError;
+
+    xjw::VocabularyOverlapResult invertedResult;
+    std::string invertedError;
+    config.useInvertedIndex = true;
+    ASSERT_TRUE(xjw::VocabularyOverlapRetriever::retrieve(images, config, &invertedResult, &invertedError)) << invertedError;
+
+    ASSERT_EQ(invertedResult.acceptedPairs.size(), denseResult.acceptedPairs.size());
+    ASSERT_FALSE(invertedResult.acceptedPairs.empty());
+    EXPECT_EQ(invertedResult.acceptedPairs.front().indexA, denseResult.acceptedPairs.front().indexA);
+    EXPECT_EQ(invertedResult.acceptedPairs.front().indexB, denseResult.acceptedPairs.front().indexB);
+}
+
+TEST(VocabularyOverlapRetrieverTest, ProgressCallbackCanCancel)
+{
+    std::vector<xjw::VocabularyImageFeatures> images;
+    images.push_back(makeImage("a.tif", makeDescriptors({{0.0f, 0.0f}, {1.0f, 1.0f}})));
+    images.push_back(makeImage("b.tif", makeDescriptors({{0.0f, 0.0f}, {1.0f, 1.0f}})));
+
+    xjw::VocabularyOverlapConfig config;
+    config.progressCallback = [](const std::string &, int)
+    {
+        return false;
+    };
+
+    xjw::VocabularyOverlapResult result;
+    std::string error;
+    EXPECT_FALSE(xjw::VocabularyOverlapRetriever::retrieve(images, config, &result, &error));
+    EXPECT_NE(error.find("取消"), std::string::npos);
+}

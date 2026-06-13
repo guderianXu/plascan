@@ -105,6 +105,25 @@ public:
         return m_cancelled.load();
     }
 
+    /// 基于稀疏点投影生成深度过滤支撑区，返回 CV_8U 掩码 (255=保留)；覆盖率不可靠时返回空 Mat
+    static cv::Mat buildSparseSupportMask(const std::vector<CameraView> &views,
+                                          const SparseCloud &sparse,
+                                          int refIdx,
+                                          int W,
+                                          int H,
+                                          const std::vector<int> &sourceIndices = {});
+
+    /// 基于原始灰度图生成内容区域掩码；近似全图有效时返回空 Mat 表示跳过过滤
+    static cv::Mat buildContentMask(const cv::Mat &gray,
+                                    float *coverage = nullptr,
+                                    double *otsuThreshold = nullptr,
+                                    int *adaptiveThreshold = nullptr);
+
+    /// CUDA PatchMatch 显存不足后的下一次重试配置
+    static PatchMatchConfig nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,
+                                                          int imageWidth,
+                                                          int imageHeight);
+
 signals:
     /// 每估计完一帧就发出
     void depthMapReady(DepthFrameResult result);

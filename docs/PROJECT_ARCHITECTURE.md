@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-06-12。
+行星表面摄影测量处理系统。最后更新: 2026-06-13。
 
 ## 顶层目录
 
@@ -13,7 +13,7 @@ plascan/
 ├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
 ├── 3rdparty/       # 第三方库源码 (LightGlue)
 ├── resources/      # 静态资源 (深度学习模型权重, 图标)
-├── scripts/        # Python 辅助脚本
+├── scripts/        # Python 辅助脚本和 benchmark runner
 ├── tools/          # 独立工具 (匹配转 CSV)
 ├── tests/          # 顶层测试
 ├── data/           # 示例/测试数据
@@ -191,6 +191,7 @@ core/
 │
 └── pipeline/                   # 核心流水线桥接 (GUI 可调用)
     ├── FeatureMatchRunner.h/cpp  # 特征匹配异步执行器
+    ├── SfmPairPlanner.h        # 已知相机序列的 SfM 匹配配对规划
     └── SFMService.h/cpp         # SfM 异步服务
 ```
 
@@ -398,6 +399,7 @@ cli/
 ├── cli_common.h              # 公共基础设施 (参数解析, JSON 配置, 退出码)
 ├── cli_dense_match.cpp       # 密集匹配 CLI
 ├── cli_camera_convert.cpp    # 外部相机格式转换 CLI
+├── cli_reconstruct_pipeline.cpp # GUI 等价一键重建 / 三维重建 CLI
 ├── cli_feature_extract.cpp   # 特征提取 CLI (8 种算法, 工厂模式)
 ├── cli_feature_match.cpp     # 特征匹配 CLI (工厂模式, 自动检测算法)
 └── tests/                    # CLI 端到端测试脚本
@@ -409,6 +411,8 @@ cli/
 - `-V` / `--verbose` — 详细诊断日志
 - 退出码: 0=成功, 1=参数错误, 2=I/O 错误, 3=算法错误
 - 进度/错误信息 → stderr，结果信息 → stdout
+- `three_d_reconstruction_cli` 支持 `--stop-after-sfm`、`--skip-mvs`、`--skip-mesh` 分阶段运行，用于大数据 benchmark 和问题定位。
+- `scripts/run_photogrammetry_benchmarks.py` 扫描 `prepared/plascan/image_camera.lis`，批量调用三维重建 CLI 并汇总 JSON。
 
 **标准摄影测量流程与 CLI 覆盖**:
 

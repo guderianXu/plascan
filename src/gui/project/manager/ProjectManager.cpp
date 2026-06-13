@@ -70,9 +70,8 @@
 #include <limits>
 #include <optional>
 
-#include <opencv2/calib3d.hpp>
+#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
-#include <opencv2/features2d.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 

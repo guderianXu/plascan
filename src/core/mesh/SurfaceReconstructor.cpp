@@ -28,6 +28,7 @@ std::vector<detail::PointXYZRGB> cloudToPointXYZRGB(const PlaPointCloud &cloud)
     std::vector<detail::PointXYZRGB> points;
     points.reserve(static_cast<std::size_t>(cloud.size()));
     const bool hasColors = cloud.hasColors();
+    const bool hasNormals = cloud.hasNormals();
     for (size_t i = 0; i < cloud.size(); ++i)
     {
         auto pt = cloud[i];
@@ -35,6 +36,13 @@ std::vector<detail::PointXYZRGB> cloudToPointXYZRGB(const PlaPointCloud &cloud)
         p.x = pt.x();
         p.y = pt.y();
         p.z = pt.z();
+        if (hasNormals)
+        {
+            p.hasNormal = true;
+            p.nx = pt.nx();
+            p.ny = pt.ny();
+            p.nz = pt.nz();
+        }
         if (hasColors)
         {
             p.r = pt.r();
@@ -49,8 +57,13 @@ std::vector<detail::PointXYZRGB> cloudToPointXYZRGB(const PlaPointCloud &cloud)
 PlaPointCloud pointXYZRGBToCloud(const std::vector<detail::PointXYZRGB> &points)
 {
     const auto n = static_cast<plamatrix::Index>(points.size());
+    const bool hasNormals = !points.empty() &&
+                            std::all_of(points.begin(), points.end(), [](const detail::PointXYZRGB &point) {
+                                return point.hasNormal;
+                            });
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(n, 3);
     plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(n, 3);
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(hasNormals ? n : 0, 3);
     for (plamatrix::Index i = 0; i < n; ++i)
     {
         pts(i, 0) = points[static_cast<std::size_t>(i)].x;
@@ -59,9 +72,19 @@ PlaPointCloud pointXYZRGBToCloud(const std::vector<detail::PointXYZRGB> &points)
         colors(i, 0) = points[static_cast<std::size_t>(i)].r;
         colors(i, 1) = points[static_cast<std::size_t>(i)].g;
         colors(i, 2) = points[static_cast<std::size_t>(i)].b;
+        if (hasNormals)
+        {
+            normals(i, 0) = points[static_cast<std::size_t>(i)].nx;
+            normals(i, 1) = points[static_cast<std::size_t>(i)].ny;
+            normals(i, 2) = points[static_cast<std::size_t>(i)].nz;
+        }
     }
     PlaPointCloud cloud(std::move(pts));
     cloud.setColors(std::move(colors));
+    if (hasNormals)
+    {
+        cloud.setNormals(std::move(normals));
+    }
     return cloud;
 }
 
@@ -111,8 +134,14 @@ bool convertPoissonResultToMesh(const plamatrix::DenseMatrix<float, plamatrix::D
 bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &cloudPath,
                                                          const ReconstructionConfig &config,
                                                          TriMesh &outMesh,
-                                                         std::string *errorMsg)
+                                                         std::string *errorMsg,
+                                                         std::string *algorithmUsed)
 {
+    if (algorithmUsed)
+    {
+        algorithmUsed->clear();
+    }
+
     auto progress = [&](const std::string &stage, float p) {
         if (config.progressFn)
         {
@@ -162,6 +191,35 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
 
     TriMesh mesh;
     bool usedHeightGridFallback = false;
+    bool usedLateHeightGridFallback = false;
+    std::string selectedAlgorithm;
+    auto buildHeightGridMesh = [&](float buildProgress, float fillProgress, float triangulateProgress) {
+        usedHeightGridFallback = true;
+        selectedAlgorithm = "height_grid";
+        progress("正在构建高度格网...", buildProgress);
+        detail::HeightGrid hg = detail::buildHeightGrid(points, config);
+        if (hg.nx < 4 || hg.ny < 4)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "高程格网构建失败（点云范围过小）";
+            }
+            return false;
+        }
+
+        if (config.fillHoles)
+        {
+            progress("正在填充空洞...", fillProgress);
+            detail::fillHoles(&hg, std::max(0, config.holeFillPasses));
+        }
+
+        progress("正在三角分割...", triangulateProgress);
+        detail::heightGridToMesh(hg, points, config, &mesh);
+        return !mesh.empty();
+    };
+    auto minUsefulPoissonFaces = [&]() {
+        return std::max(16, std::min(std::max(2, config.minComponentFaces), 256));
+    };
 
     if (config.forcePoisson)
     {
@@ -176,14 +234,17 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
             auto [verts, faces] = poisson.reconstruct();
             convertPoissonResultToMesh(verts, faces, &mesh);
         }
-        catch (const std::exception &)
+        catch (const std::exception &e)
         {
             mesh = TriMesh{};
-            progress("Poisson 重建失败，改用高度格网...", 0.34f);
+            const std::string reason = std::string(e.what()).empty() ? "unknown error" : e.what();
+            progress("Poisson 重建失败(" + reason + ")，改用高度格网...", 0.34f);
         }
 
         if (!mesh.empty())
         {
+            selectedAlgorithm = "poisson";
+
             // Light simplification for Poisson output if extremely dense
             const int poissonFaceCount = mesh.faceCount();
             const int hardUpperBound = std::max(120000, std::max(1, config.simplifyTargetFaces) * 4);
@@ -200,26 +261,14 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
 
     if (mesh.empty())
     {
-        usedHeightGridFallback = true;
-        progress("正在构建高度格网...", 0.10f);
-        detail::HeightGrid hg = detail::buildHeightGrid(points, config);
-        if (hg.nx < 4 || hg.ny < 4)
+        if (!buildHeightGridMesh(0.10f, 0.30f, 0.50f))
         {
-            if (errorMsg)
+            if (errorMsg && errorMsg->empty())
             {
-                *errorMsg = "高程格网构建失败（点云范围过小）";
+                *errorMsg = "高度格网重建失败";
             }
             return false;
         }
-
-        if (config.fillHoles)
-        {
-            progress("正在填充空洞...", 0.30f);
-            detail::fillHoles(&hg, std::max(0, config.holeFillPasses));
-        }
-
-        progress("正在三角分割...", 0.50f);
-        detail::heightGridToMesh(hg, points, config, &mesh);
     }
 
     if (mesh.empty())
@@ -238,6 +287,22 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     {
         progress("正在清理碎片连通体...", 0.70f);
         detail::removeSmallConnectedComponents(&mesh, std::max(2, config.minComponentFaces));
+        if (selectedAlgorithm == "poisson" && mesh.faceCount() < minUsefulPoissonFaces())
+        {
+            progress("Poisson 网格主体过小，改用高度格网...", 0.72f);
+            mesh = TriMesh{};
+            usedLateHeightGridFallback = true;
+            if (!buildHeightGridMesh(0.72f, 0.74f, 0.76f))
+            {
+                if (errorMsg && errorMsg->empty())
+                {
+                    *errorMsg = "Poisson 网格主体过小，且高度格网重建失败";
+                }
+                return false;
+            }
+            detail::removeDegenerateFaces(&mesh);
+            detail::removeSmallConnectedComponents(&mesh, std::max(2, config.minComponentFaces));
+        }
         if (mesh.empty())
         {
             if (errorMsg)
@@ -248,7 +313,7 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         }
     }
 
-    progress("正在平滑网格...", 0.75f);
+    progress("正在平滑网格...", usedLateHeightGridFallback ? 0.80f : 0.75f);
     int smoothIters = config.smoothIterations;
     float smoothLambda = config.smoothLambda;
     if (!usedHeightGridFallback)
@@ -262,6 +327,10 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     detail::recomputeNormals(&mesh);
 
     progress("网格重建完成", 1.0f);
+    if (algorithmUsed)
+    {
+        *algorithmUsed = selectedAlgorithm.empty() ? "unknown" : selectedAlgorithm;
+    }
     outMesh = std::move(mesh);
     return true;
 }

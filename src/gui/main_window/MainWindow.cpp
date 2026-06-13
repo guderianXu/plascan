@@ -1021,6 +1021,13 @@ void MainWindow::setupProjectManager()
         emit dmCancelRequested();
     });
 
+    // ── 重叠对获取进度条 ─────────────────────────────────────────
+    m_overlapTaskStatus = createTaskStatus(200, true, tr("正在取消重叠对获取..."));
+    connect(m_overlapTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        emit overlapCancelRequested();
+    });
+
     // ── 观测网络构建状态栏进度条 ─────────────────────────────────────
     m_obsNetTaskStatus = createTaskStatus(200, false, QString());
 
@@ -1359,6 +1366,33 @@ void MainWindow::hideDmProgress(bool ok)
     }
     m_dmTaskStatus->finish();
     statusBar()->showMessage(ok ? tr("密集匹配完成") : tr("密集匹配已取消"), 4000);
+}
+
+void MainWindow::onOverlapProgress(const QString &stage, int percent)
+{
+    if (!m_overlapTaskStatus)
+    {
+        return;
+    }
+    const QString statusText = percent > 0 && percent < 100
+        ? tr("重叠对: %1 %2%").arg(stage).arg(percent)
+        : tr("重叠对: %1").arg(stage);
+    if (!m_overlapTaskStatus->isActive())
+    {
+        m_overlapTaskStatus->begin(statusText, 0, 100);
+    }
+    m_overlapTaskStatus->updateProgress(statusText, std::clamp(percent, 0, 100));
+    statusBar()->showMessage(QString());
+}
+
+void MainWindow::onOverlapFinished(bool success)
+{
+    if (!m_overlapTaskStatus)
+    {
+        return;
+    }
+    m_overlapTaskStatus->finish();
+    statusBar()->showMessage(success ? tr("重叠对获取完成") : tr("重叠对获取已取消或失败"), 4000);
 }
 
 // ============================================================

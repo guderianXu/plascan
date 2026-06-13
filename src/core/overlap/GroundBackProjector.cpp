@@ -41,6 +41,14 @@ double distance2D(const std::array<double, 3> &a, const std::array<double, 3> &b
     return std::sqrt(dx * dx + dy * dy);
 }
 
+double distance3D(const std::array<double, 3> &a, const std::array<double, 3> &b)
+{
+    const double dx = a[0] - b[0];
+    const double dy = a[1] - b[1];
+    const double dz = a[2] - b[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 } // namespace
 
 namespace xjw {
@@ -325,6 +333,80 @@ bool GroundBackProjector::backProjectWithDem(const Camera &camera,
 }
 
 // ============================================================
+// 函数：GroundBackProjector::backProjectToSphere
+// 功能：射线与基准球面求交（解析二次方程）。
+// ============================================================
+bool GroundBackProjector::backProjectToSphere(const Camera &camera,
+                                              double u,
+                                              double v,
+                                              const ReferenceSphereSurface &sphere,
+                                              std::array<double, 3> *ground,
+                                              std::string *errorMsg)
+{
+    if (!ground)
+    {
+        return false;
+    }
+    if (sphere.radiusMeters <= 0.0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "基准球半径无效";
+        }
+        return false;
+    }
+
+    std::array<double, 3> origin;
+    std::array<double, 3> dir;
+    if (!pixelRayWorld(camera, u, v, &origin, &dir, errorMsg))
+    {
+        return false;
+    }
+
+    const std::array<double, 3> oc{
+        origin[0] - sphere.center[0],
+        origin[1] - sphere.center[1],
+        origin[2] - sphere.center[2]};
+
+    const double b = 2.0 * (oc[0] * dir[0] + oc[1] * dir[1] + oc[2] * dir[2]);
+    const double c = oc[0] * oc[0] + oc[1] * oc[1] + oc[2] * oc[2] -
+                     sphere.radiusMeters * sphere.radiusMeters;
+    const double disc = b * b - 4.0 * c;
+    if (disc < 0.0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "射线与基准球无交点";
+        }
+        return false;
+    }
+
+    const double root = std::sqrt(std::max(0.0, disc));
+    const double t0 = (-b - root) * 0.5;
+    const double t1 = (-b + root) * 0.5;
+    double t = 0.0;
+    if (t0 > 1e-9)
+    {
+        t = t0;
+    }
+    else if (t1 > 1e-9)
+    {
+        t = t1;
+    }
+    else
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "基准球交点在相机后方";
+        }
+        return false;
+    }
+
+    *ground = {origin[0] + t * dir[0], origin[1] + t * dir[1], origin[2] + t * dir[2]};
+    return true;
+}
+
+// ============================================================
 // 函数：GroundBackProjector::imageCenterToGround
 // 功能：将影像中心像素反投影为地面坐标，作为影像的地面中心点。
 //   像素坐标选取策略：
@@ -351,6 +433,18 @@ bool GroundBackProjector::imageCenterToGround(const Camera &camera,
         return backProjectToFixedZ(camera, u, v, fixedZ, ground, errorMsg);
     }
     return backProjectWithDem(camera, u, v, *dem, ground, errorMsg);
+}
+
+bool GroundBackProjector::imageCenterToSphere(const Camera &camera,
+                                              int imageWidth,
+                                              int imageHeight,
+                                              const ReferenceSphereSurface &sphere,
+                                              std::array<double, 3> *ground,
+                                              std::string *errorMsg)
+{
+    const double u = imageWidth > 0 ? 0.5 * double(imageWidth) : camera.principalX();
+    const double v = imageHeight > 0 ? 0.5 * double(imageHeight) : camera.principalY();
+    return backProjectToSphere(camera, u, v, sphere, ground, errorMsg);
 }
 
 // ============================================================
@@ -413,6 +507,55 @@ bool GroundBackProjector::estimateFootprintRadius(const Camera &camera,
     }
 
     // Step 3：平均距离作为等效半径
+    *radius = sum / double(valid);
+    return true;
+}
+
+bool GroundBackProjector::estimateFootprintRadiusOnSphere(const Camera &camera,
+                                                          int imageWidth,
+                                                          int imageHeight,
+                                                          const ReferenceSphereSurface &sphere,
+                                                          double *radius,
+                                                          std::string *errorMsg)
+{
+    if (!radius)
+    {
+        return false;
+    }
+
+    std::array<double, 3> center;
+    if (!imageCenterToSphere(camera, imageWidth, imageHeight, sphere, &center, errorMsg))
+    {
+        return false;
+    }
+
+    const double w = imageWidth > 0 ? double(imageWidth) : camera.principalX() * 2.0;
+    const double h = imageHeight > 0 ? double(imageHeight) : camera.principalY() * 2.0;
+    const std::pair<double, double> uv[4] = {{0.0, 0.0}, {w, 0.0}, {w, h}, {0.0, h}};
+
+    double sum = 0.0;
+    int valid = 0;
+    for (int i = 0; i < 4; ++i)
+    {
+        std::array<double, 3> corner;
+        std::string tmpErr;
+        if (!backProjectToSphere(camera, uv[i].first, uv[i].second, sphere, &corner, &tmpErr))
+        {
+            continue;
+        }
+        sum += distance3D(center, corner);
+        ++valid;
+    }
+
+    if (valid <= 0)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "无法估计基准球面影像覆盖半径";
+        }
+        return false;
+    }
+
     *radius = sum / double(valid);
     return true;
 }

@@ -7,6 +7,7 @@
 
 #include "PatchMatchCUDA.h"
 #include "DepthMapFusion.h"
+#include "DepthMapGenerator.h"
 #include "DenseCloudBuilder.h"
 #include "SparseCloudPreprocessor.h"
 #include "Camera.h"
@@ -22,6 +23,7 @@
 #include <cmath>
 #include <filesystem>
 #include <string>
+#include <vector>
 
 namespace
 {
@@ -231,6 +233,136 @@ TEST(MvsPipelineTest, DepthMapFusionTwoViewSingleObservationUsesFastParallelPath
     EXPECT_TRUE(std::any_of(stages.begin(), stages.end(), [](const std::string &stage) {
         return stage.find("快速并行融合") != std::string::npos;
     }));
+}
+
+TEST(MvsPipelineTest, DepthMapFusionFilteredDepthsIncludeAllAcceptedObservations)
+{
+    constexpr int W = 24;
+    constexpr int H = 18;
+    constexpr float DEPTH_VAL = 8.0f;
+    constexpr double FOCAL = 40.0;
+
+    cv::Mat depth(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
+    depth(cv::Rect(0, 0, W, 3)) = 0;
+    depth(cv::Rect(0, H - 3, W, 3)) = 0;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C[3] = {0,0,0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(3);
+    for (auto &frame : frames)
+    {
+        frame.depthMap = depth.clone();
+        frame.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+        frame.imgW = W;
+        frame.imgH = H;
+    }
+
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.minNumPixels = 3;
+    fcfg.checkNumImages = 2;
+    fcfg.maxReprojError = 1.0f;
+    fcfg.maxDepthError = 0.01f;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts;
+    std::string err;
+    const bool ok = fusion.fuse(frames, pts, nullptr, &err);
+
+    ASSERT_TRUE(ok) << err;
+    ASSERT_GT(static_cast<int>(pts.size()), 0);
+
+    const auto &filteredDepths = fusion.filteredDepths();
+    ASSERT_EQ(filteredDepths.size(), frames.size());
+
+    const int validPixels = cv::countNonZero(depth > 0);
+    for (size_t frameIndex = 0; frameIndex < filteredDepths.size(); ++frameIndex)
+    {
+        EXPECT_EQ(cv::countNonZero(filteredDepths[frameIndex] > 0), validPixels)
+            << "Accepted source observations should be visible in filtered depth frame " << frameIndex;
+    }
+}
+
+TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
+{
+    constexpr int W = 120;
+    constexpr int H = 90;
+    constexpr double FOCAL = 80.0;
+    constexpr float Z = 10.0f;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C[3] = {0,0,0};
+
+    xjw::mvs::CameraView view;
+    view.imageWidth = W;
+    view.imageHeight = H;
+    view.camera.setIntrinsics(FOCAL, FOCAL, W * 0.5, H * 0.5);
+    view.camera.setPose(
+        std::array<double, 9>{I[0], I[1], I[2], I[3], I[4], I[5], I[6], I[7], I[8]},
+        std::array<double, 3>{C[0], C[1], C[2]});
+    view.camera.setAxisDirections(1, 1);
+    view.camera.setDepthAxisFlipped(false);
+
+    xjw::mvs::SparseCloud sparse;
+    for (int py = 36; py <= 54; py += 6)
+    {
+        for (int px = 45; px <= 75; px += 6)
+        {
+            const float x = static_cast<float>((px - W * 0.5) * Z / FOCAL);
+            const float y = static_cast<float>((py - H * 0.5) * Z / FOCAL);
+            sparse.points.push_back({x, y, Z});
+        }
+    }
+
+    const cv::Mat mask = xjw::mvs::DepthMapGenerator::buildSparseSupportMask({view}, sparse, 0, W, H);
+
+    ASSERT_FALSE(mask.empty());
+    EXPECT_GT(cv::countNonZero(mask(cv::Rect(35, 25, 50, 40))), 0);
+    EXPECT_EQ(mask.at<uint8_t>(5, 5), 0);
+
+    const float coverage = static_cast<float>(cv::countNonZero(mask)) / static_cast<float>(W * H);
+    EXPECT_GT(coverage, 0.05f);
+    EXPECT_LT(coverage, 0.90f);
+}
+
+TEST(MvsPipelineTest, ContentMaskSkipsNearlyFullAerialFrame)
+{
+    cv::Mat gray(120, 200, CV_8U, cv::Scalar(122));
+    cv::Mat mask = xjw::mvs::DepthMapGenerator::buildContentMask(gray);
+
+    EXPECT_TRUE(mask.empty())
+        << "Nearly full-content aerial frames should skip the content mask instead of filtering no pixels";
+}
+
+TEST(MvsPipelineTest, ContentMaskKeepsRealBlackBorderMask)
+{
+    cv::Mat gray(120, 200, CV_8U, cv::Scalar(0));
+    gray(cv::Rect(35, 25, 130, 70)) = cv::Scalar(125);
+
+    cv::Mat mask = xjw::mvs::DepthMapGenerator::buildContentMask(gray);
+
+    ASSERT_FALSE(mask.empty());
+    EXPECT_EQ(mask.at<uint8_t>(5, 5), 0);
+    EXPECT_GT(mask.at<uint8_t>(60, 100), 0);
+
+    const float coverage = static_cast<float>(cv::countNonZero(mask)) / static_cast<float>(mask.rows * mask.cols);
+    EXPECT_GT(coverage, 0.20f);
+    EXPECT_LT(coverage, 0.80f);
+}
+
+TEST(MvsPipelineTest, CudaRetryDownsampleIncreasesUntilGpuFriendlyScale)
+{
+    xjw::mvs::PatchMatchConfig cfg;
+    cfg.downsampleFactor = 2;
+
+    cfg = xjw::mvs::DepthMapGenerator::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
+    EXPECT_EQ(cfg.downsampleFactor, 3);
+
+    cfg = xjw::mvs::DepthMapGenerator::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
+    EXPECT_EQ(cfg.downsampleFactor, 4);
+
+    cfg = xjw::mvs::DepthMapGenerator::nextCudaRetryPatchMatchConfig(cfg, 6000, 4000);
+    EXPECT_EQ(cfg.downsampleFactor, 6);
 }
 
 // ---------------------------------------------------------------------------

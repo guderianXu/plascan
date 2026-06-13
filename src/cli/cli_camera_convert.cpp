@@ -9,6 +9,82 @@
 #include <cstdio>
 #include <filesystem>
 #include <string>
+#include <unordered_map>
+#include <vector>
+
+namespace
+{
+struct WarningSummary
+{
+    std::string message;
+    std::string firstSample;
+    int count = 0;
+};
+
+std::pair<std::string, std::string> splitWarningSample(const std::string &warning)
+{
+    const std::string separator = ": ";
+    const size_t pos = warning.find(separator);
+    if (pos == std::string::npos)
+    {
+        return {warning, std::string()};
+    }
+    return {warning.substr(pos + separator.size()), warning.substr(0, pos)};
+}
+
+void printWarnings(const std::vector<std::string> &warnings)
+{
+    std::vector<std::string> order;
+    std::unordered_map<std::string, WarningSummary> grouped;
+    for (const std::string &warning : warnings)
+    {
+        const auto [message, sample] = splitWarningSample(warning);
+        auto it = grouped.find(message);
+        if (it == grouped.end())
+        {
+            WarningSummary summary;
+            summary.message = message;
+            summary.firstSample = sample;
+            summary.count = 1;
+            grouped.emplace(message, summary);
+            order.push_back(message);
+        }
+        else
+        {
+            ++it->second.count;
+        }
+    }
+
+    for (const std::string &message : order)
+    {
+        const WarningSummary &summary = grouped.at(message);
+        if (summary.count <= 1)
+        {
+            if (summary.firstSample.empty())
+            {
+                std::fprintf(stderr, "警告: %s\n", summary.message.c_str());
+            }
+            else
+            {
+                std::fprintf(stderr, "警告: %s: %s\n", summary.firstSample.c_str(), summary.message.c_str());
+            }
+            continue;
+        }
+
+        if (summary.firstSample.empty())
+        {
+            std::fprintf(stderr, "警告: %s (%d 次)\n", summary.message.c_str(), summary.count);
+        }
+        else
+        {
+            std::fprintf(stderr, "警告: %s (%d 个相机，示例: %s)\n",
+                         summary.message.c_str(),
+                         summary.count,
+                         summary.firstSample.c_str());
+        }
+    }
+}
+} // namespace
 
 int main(int argc, char *argv[])
 {
@@ -22,7 +98,8 @@ int main(int argc, char *argv[])
     bool listFormats = false;
 
     app.add_flag("--list-formats", listFormats, "列出支持的输入相机格式");
-    app.add_option("-f,--format", formatName, "输入格式: auto, middlebury-par, epfl-camera");
+    app.add_option("-f,--format", formatName,
+                   "输入格式: auto, middlebury-par, epfl-camera, colmap-text, metashape-xml");
     app.add_option("-i,--input", inputPath, "输入相机文件或目录");
     app.add_option("-o,--output-dir", outputDir, "输出目录，将写入 image_camera.lis 和 cameras/*.tsai");
     app.add_option("--dataset-id", datasetId, "写入 summary.json 的数据集标识");
@@ -76,9 +153,6 @@ int main(int argc, char *argv[])
     std::fprintf(stdout, "输入格式: %s\n", xjw::camera::cameraFormatName(result.inputFormat).c_str());
     std::fprintf(stdout, "image_camera.lis: %s\n", result.imageCameraList.string().c_str());
     std::fprintf(stdout, "summary.json: %s\n", result.summaryPath.string().c_str());
-    for (const std::string &warning : result.warnings)
-    {
-        std::fprintf(stderr, "警告: %s\n", warning.c_str());
-    }
+    printWarnings(result.warnings);
     return cli::EXIT_OK;
 }

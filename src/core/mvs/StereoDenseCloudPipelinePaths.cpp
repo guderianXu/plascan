@@ -10,7 +10,7 @@
 
 #include <QDir>
 
-#include <opencv2/calib3d.hpp>
+#include "OpenCvCompat.h"
 #include <opencv2/imgproc.hpp>
 
 #include <algorithm>

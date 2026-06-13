@@ -106,6 +106,28 @@ class ThreeDReconstructionCliTest(unittest.TestCase):
         self.assertIn("meshRequest.reconstruction.poissonDepth = 9", source)
         self.assertIn("meshRequest.reconstruction.simplifyTargetFaces = 28000", source)
 
+    def test_cli_supports_stage_control_for_benchmark_runs(self):
+        source = (ROOT / "src/cli/cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("--stop-after-sfm", source)
+        self.assertIn("--skip-mvs", source)
+        self.assertIn("--skip-mesh", source)
+
+        stop_guard = re.search(
+            r"if\s*\(\s*stopAfterSfm\s*\|\|\s*skipMvs\s*\)(?P<body>.*?)"
+            r"kMinimumRegisteredImagesForDenseWorkflow",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(stop_guard)
+        self.assertIn('report[QStringLiteral("status")] = QStringLiteral("ok")', stop_guard.group("body"))
+        self.assertIn("mvs", stop_guard.group("body"))
+        self.assertIn("mesh", stop_guard.group("body"))
+        self.assertIn("return cli::EXIT_OK", stop_guard.group("body"))
+
+        self.assertLess(source.index("stopAfterSfm || skipMvs"),
+                        source.index("kMinimumSparsePointsForDenseWorkflow"))
+
     def test_mvs_uses_only_sfm_registered_cameras(self):
         cli_source = (ROOT / "src/cli/cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
         gui_source = (ROOT / "src/gui/main_window/MenuWorkflowController.cpp").read_text(encoding="utf-8")

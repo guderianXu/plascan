@@ -357,6 +357,22 @@ void MenuWorkflowController::openVocabularyOverlapDialog()
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->setProjectImages(getProjectImages());
 
+    auto *mainWin = qobject_cast<MainWindow *>(m_mainWindow.data());
+    QMetaObject::Connection overlapCancelConn;
+    if (mainWin)
+    {
+        connect(dlg, &VocabularyOverlapDialog::overlapProgressChanged,
+                mainWin, &MainWindow::onOverlapProgress);
+        connect(dlg, &VocabularyOverlapDialog::overlapFinished,
+                mainWin, &MainWindow::onOverlapFinished);
+        overlapCancelConn = connect(mainWin, &MainWindow::overlapCancelRequested,
+                                    dlg, &VocabularyOverlapDialog::cancelRun);
+        connect(dlg, &QObject::destroyed, mainWin, [overlapCancelConn]()
+        {
+            QObject::disconnect(overlapCancelConn);
+        });
+    }
+
     const QJsonObject saved = m_vocabOverlapSetting->load();
     if (!saved.isEmpty())
     {

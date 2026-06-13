@@ -94,6 +94,94 @@
        </property>
        <layout class="QVBoxLayout" name="paramLayout">
         <item>
+         <widget class="QGroupBox" name="methodGroup">
+          <property name="title">
+           <string>获取方式</string>
+          </property>
+          <layout class="QFormLayout" name="methodForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="overlapMethodLabel">
+             <property name="text">
+              <string>算法</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QComboBox" name="m_overlapMethodCombo"/>
+           </item>
+           <item row="1" column="0">
+            <widget class="QLabel" name="referenceBodyLabel">
+             <property name="text">
+              <string>基准球体</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="1">
+            <widget class="QComboBox" name="m_referenceBodyCombo"/>
+           </item>
+           <item row="2" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_autoReferenceElevationCheck">
+             <property name="text">
+              <string>自动估算局部地表高程</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0">
+            <widget class="QLabel" name="referenceElevationLabel">
+             <property name="text">
+              <string>地表高程/局部切面 Z</string>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="1">
+            <widget class="QDoubleSpinBox" name="m_referenceElevationSpin">
+             <property name="decimals">
+              <number>3</number>
+             </property>
+             <property name="minimum">
+              <double>-1000000000.000000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>1000000000.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>1.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="cameraNeighborFactorLabel">
+             <property name="text">
+              <string>相机邻域系数</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QDoubleSpinBox" name="m_cameraNeighborFactorSpin">
+             <property name="decimals">
+              <number>2</number>
+             </property>
+             <property name="minimum">
+              <double>0.100000000000000</double>
+             </property>
+             <property name="maximum">
+              <double>20.000000000000000</double>
+             </property>
+             <property name="singleStep">
+              <double>0.100000000000000</double>
+             </property>
+             <property name="value">
+              <double>2.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+          </layout>
+         </widget>
+        </item>
+        <item>
          <widget class="QGroupBox" name="featureGroup">
           <property name="title">
            <string>特征来源</string>
@@ -373,6 +461,108 @@
              </property>
              <property name="value">
               <double>3.000000000000000</double>
+             </property>
+            </widget>
+           </item>
+         </layout>
+         </widget>
+        </item>
+        <item>
+         <widget class="QGroupBox" name="optimizationGroup">
+          <property name="title">
+           <string>性能优化</string>
+          </property>
+          <layout class="QFormLayout" name="optimizationForm">
+           <item row="0" column="0">
+            <widget class="QLabel" name="overlapThreadsLabel">
+             <property name="text">
+              <string>线程数</string>
+             </property>
+            </widget>
+           </item>
+           <item row="0" column="1">
+            <widget class="QSpinBox" name="m_overlapThreadsSpin">
+             <property name="minimum">
+              <number>0</number>
+             </property>
+             <property name="maximum">
+              <number>512</number>
+             </property>
+             <property name="specialValueText">
+              <string>自动</string>
+             </property>
+            </widget>
+           </item>
+           <item row="1" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_useFlannAssignmentCheck">
+             <property name="text">
+              <string>使用 FLANN 加速视觉词分配</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="2" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_useInvertedIndexCheck">
+             <property name="text">
+              <string>使用倒排索引筛选候选对</string>
+             </property>
+             <property name="checked">
+              <bool>true</bool>
+             </property>
+            </widget>
+           </item>
+           <item row="3" column="0" colspan="2">
+            <widget class="QCheckBox" name="m_useCudaOverlapCheck">
+             <property name="text">
+              <string>优先使用 CUDA（可用时）</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="0">
+            <widget class="QLabel" name="geometryMaxDescriptorsLabel">
+             <property name="text">
+              <string>几何验证最大描述子</string>
+             </property>
+            </widget>
+           </item>
+           <item row="4" column="1">
+            <widget class="QSpinBox" name="m_geometryMaxDescriptorsSpin">
+             <property name="minimum">
+              <number>0</number>
+             </property>
+             <property name="maximum">
+              <number>200000</number>
+             </property>
+             <property name="specialValueText">
+              <string>不限</string>
+             </property>
+             <property name="value">
+              <number>2048</number>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="0">
+            <widget class="QLabel" name="geometryMaxPairsLabel">
+             <property name="text">
+              <string>几何验证最大候选对</string>
+             </property>
+            </widget>
+           </item>
+           <item row="5" column="1">
+            <widget class="QSpinBox" name="m_geometryMaxPairsSpin">
+             <property name="minimum">
+              <number>0</number>
+             </property>
+             <property name="maximum">
+              <number>1000000</number>
+             </property>
+             <property name="specialValueText">
+              <string>不限</string>
+             </property>
+             <property name="value">
+              <number>2000</number>
              </property>
             </widget>
            </item>

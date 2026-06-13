@@ -9,6 +9,7 @@ add_library(feature_match_traditional STATIC
 target_include_directories(feature_match_traditional
     PUBLIC
         ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/common
 )
 
 target_link_libraries(feature_match_traditional

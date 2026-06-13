@@ -231,6 +231,12 @@ bool DepthMapFusion::fusePixel(
         int col;
         int depth;
     };
+    struct AcceptedPixel
+    {
+        int frameIdx;
+        int row;
+        int col;
+    };
     std::queue<QueueItem> bfsQueue;
     bfsQueue.push({imageIdx, row, col, 0});
 
@@ -238,6 +244,7 @@ bool DepthMapFusion::fusePixel(
     std::vector<float> xs, ys, zs;
     std::vector<float> nxs, nys, nzs;
     std::vector<uint8_t> rs_v, gs_v, bs_v;
+    std::vector<AcceptedPixel> acceptedPixels;
 
     // 参考点
     float refX = 0.f, refY = 0.f, refZ = 0.f;
@@ -260,8 +267,10 @@ bool DepthMapFusion::fusePixel(
             continue;
         }
 
+        const int pixelIdx = r * g.W + c;
+
         // 已融合检查
-        if (fusedMask[fi][r * g.W + c])
+        if (fusedMask[fi][pixelIdx])
         {
             continue;
         }
@@ -349,8 +358,8 @@ bool DepthMapFusion::fusePixel(
             }
         }
 
-        // 标记为已融合
-        fusedMask[fi][r * g.W + c] = 1;
+        acceptedPixels.push_back({fi, r, c});
+        fusedMask[fi][pixelIdx] = 2;
 
         // 记录参考点
         if (!hasRef)
@@ -450,6 +459,11 @@ bool DepthMapFusion::fusePixel(
     // 检查最少观测数
     if ((int)xs.size() < m_config.minNumPixels)
     {
+        for (const AcceptedPixel &pixel : acceptedPixels)
+        {
+            const FrameGeometry &g = geom[pixel.frameIdx];
+            fusedMask[pixel.frameIdx][pixel.row * g.W + pixel.col] = 0;
+        }
         return false;
     }
 
@@ -483,6 +497,17 @@ bool DepthMapFusion::fusePixel(
         outPoint.r = static_cast<uint8_t>(std::clamp(median(rf), 0.f, 255.f));
         outPoint.g = static_cast<uint8_t>(std::clamp(median(gf), 0.f, 255.f));
         outPoint.b = static_cast<uint8_t>(std::clamp(median(bf), 0.f, 255.f));
+    }
+
+    for (const AcceptedPixel &pixel : acceptedPixels)
+    {
+        const FrameGeometry &g = geom[pixel.frameIdx];
+        fusedMask[pixel.frameIdx][pixel.row * g.W + pixel.col] = 1;
+        if (pixel.frameIdx >= 0 && pixel.frameIdx < static_cast<int>(m_filteredDepths.size()))
+        {
+            m_filteredDepths[pixel.frameIdx].at<float>(pixel.row, pixel.col) =
+                frames[pixel.frameIdx].depthMap.at<float>(pixel.row, pixel.col);
+        }
     }
 
     return true;

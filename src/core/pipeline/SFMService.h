@@ -99,6 +99,16 @@ struct SFMServiceOptions
     /// key 格式: minPath + "\n" + maxPath。
     QStringList         allowedPairs;
 
+    /// 已知相机文件与影像一一对应且影像数量较大时，自动只匹配相邻若干张。
+    /// 这避免航拍/有序采集数据退化为 O(N^2) 全配对。显式 restrictPairs 优先。
+    bool                autoRestrictKnownCameraPairs = true;
+
+    /// 自动配对裁剪的邻域窗口。4 表示第 i 张最多匹配 i+1 到 i+4。
+    int                 knownCameraPairWindow = 4;
+
+    /// 影像数大于该阈值时才启用已知相机自动配对裁剪，小数据集保留全配对。
+    int                 knownCameraAllPairsMaxImages = 20;
+
     /// 每完成一对影像的匹配后立即调用此回调（在工作线程中调用）
     /// 可用于实时更新 UI（调用方需通过 Qt::QueuedConnection 转回主线程）
     /// img0/img1: 影像绝对路径; matchPath: .match 文件路径; numMatches: 内点数

@@ -3,9 +3,10 @@
 // ============================================================
 // 文件：GroundBackProjector.h
 // 功能：将影像像素坐标反投影为地面三维坐标（反向投影 / Back-Projection）。
-//       支持两种地面模型：
+//       支持三种地面模型：
 //         1) 固定高程面（Flat Earth / Plane at fixed Z）
 //         2) 数字高程模型（DEM，通过迭代射线-曲面求交实现）
+//         3) 基准球面（Reference sphere，用于行星/局部切平面近似）
 //       另提供 DemSurface 类，用于从 XYZ 文本文件加载 DEM 点云并快速查询最近邻高程。
 // 典型应用：影像地面覆盖范围估算、重叠度分析、相机姿态验证。
 // ============================================================
@@ -18,6 +19,18 @@
 #include <vector>
 
 namespace xjw {
+
+// ============================================================
+// 结构体：ReferenceSphereSurface
+// 描述：射线-基准球面求交所需的几何参数。
+//   center       - 球心坐标；行星中心坐标通常为 (0,0,0)，本地坐标可放在局部切面下方
+//   radiusMeters - 球半径，单位与相机坐标一致（项目中通常为米）
+// ============================================================
+struct ReferenceSphereSurface
+{
+    std::array<double, 3> center{{0.0, 0.0, 0.0}};
+    double radiusMeters = 0.0;
+};
 
 // ============================================================
 // 类：DemSurface
@@ -112,6 +125,19 @@ public:
                                    std::string *errorMsg = nullptr);
 
     // --------------------------------------------------------
+    // 函数：backProjectToSphere
+    // 功能：将像素坐标 (u,v) 沿射线方向与基准球面求交。
+    //   射线方程 P(t)=C+t*dir，球面方程 |P-center|=radius。
+    //   选择最小正根作为相机前方的近端交点。
+    // --------------------------------------------------------
+    static bool backProjectToSphere(const Camera &camera,
+                                    double u,
+                                    double v,
+                                    const ReferenceSphereSurface &sphere,
+                                    std::array<double, 3> *ground,
+                                    std::string *errorMsg = nullptr);
+
+    // --------------------------------------------------------
     // 函数：imageCenterToGround
     // 功能：将影像中心像素反投影到地面，得到影像的地面投影中心点。
     //   若 imageWidth/imageHeight > 0 则使用影像中心坐标（w/2, h/2），
@@ -133,6 +159,17 @@ public:
                                     std::string *errorMsg = nullptr);
 
     // --------------------------------------------------------
+    // 函数：imageCenterToSphere
+    // 功能：将影像中心像素反投影到基准球面。
+    // --------------------------------------------------------
+    static bool imageCenterToSphere(const Camera &camera,
+                                    int imageWidth,
+                                    int imageHeight,
+                                    const ReferenceSphereSurface &sphere,
+                                    std::array<double, 3> *ground,
+                                    std::string *errorMsg = nullptr);
+
+    // --------------------------------------------------------
     // 函数：estimateFootprintRadius
     // 功能：估计影像地面覆盖区域的近似"等效半径"（单位与坐标系一致，如米）。
     //   方法：将影像四角 (0,0)、(w,0)、(w,h)、(0,h) 反投影到地面，
@@ -149,6 +186,17 @@ public:
                                         double fixedZ,
                                         double *radius,
                                         std::string *errorMsg = nullptr);
+
+    // --------------------------------------------------------
+    // 函数：estimateFootprintRadiusOnSphere
+    // 功能：估计影像在基准球面上的近似覆盖半径。
+    // --------------------------------------------------------
+    static bool estimateFootprintRadiusOnSphere(const Camera &camera,
+                                                int imageWidth,
+                                                int imageHeight,
+                                                const ReferenceSphereSurface &sphere,
+                                                double *radius,
+                                                std::string *errorMsg = nullptr);
 
 private:
     // --------------------------------------------------------

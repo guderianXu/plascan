@@ -13,9 +13,15 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent OpenGL OpenGLWi
 message(STATUS "plascan: found Qt6 ${Qt6_VERSION}")
 
 # ── OpenCV ────────────────────────────────────────────────────────────────────
-# 合并所有模块所需组件（core/imgproc/calib3d/imgcodecs）
-find_package(OpenCV REQUIRED COMPONENTS core imgproc calib3d imgcodecs)
-message(STATUS "plascan: found OpenCV ${OpenCV_VERSION}")
+find_package(OpenCV REQUIRED)
+if(OpenCV_VERSION VERSION_GREATER_EQUAL "5.0.0")
+  # OpenCV 5 将 calib3d/features2d 能力拆到 geometry/features/stereo 模块。
+  set(PLASCAN_OPENCV_COMPONENTS core imgproc geometry stereo features imgcodecs flann xfeatures2d ximgproc)
+else()
+  set(PLASCAN_OPENCV_COMPONENTS core imgproc calib3d features2d imgcodecs flann)
+endif()
+find_package(OpenCV REQUIRED COMPONENTS ${PLASCAN_OPENCV_COMPONENTS})
+message(STATUS "plascan: found OpenCV ${OpenCV_VERSION} (${PLASCAN_OPENCV_COMPONENTS})")
 
 # ── 平台检测 ──────────────────────────────────────────────────────────────────
 set(PLASCAN_APPLE_SILICON OFF)

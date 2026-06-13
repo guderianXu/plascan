@@ -20,6 +20,7 @@
 #include <deque>
 #include <chrono>
 #include <sstream>
+#include <cctype>
 
 namespace xjw
 {
@@ -28,6 +29,8 @@ namespace mvs
 
 namespace
 {
+
+constexpr float kSkipContentMaskCoverage = 0.985f;
 
 bool writeCvMatStorage(const std::string &path, const cv::Mat &matrix, std::string *errorMsg)
 {
@@ -161,7 +164,216 @@ std::vector<int> consistencySourceIndicesForFrame(const std::vector<DepthFrameRe
     return sources;
 }
 
+bool isCudaMemoryFailure(const std::string &message)
+{
+    std::string lower;
+    lower.reserve(message.size());
+    for (unsigned char ch : message)
+    {
+        lower.push_back(static_cast<char>(std::tolower(ch)));
+    }
+
+    return lower.find("out of memory") != std::string::npos
+        || lower.find("cuda_error_memory") != std::string::npos
+        || (lower.find("cuda") != std::string::npos && lower.find("memory") != std::string::npos);
+}
+
+bool estimatePatchMatchWithAdaptiveCuda(
+    const char *stageLabel,
+    int refIdx,
+    const cv::Mat &refGray,
+    const std::vector<cv::Mat> &srcGrays,
+    const PositiveDepthCameraModel &refCam,
+    const std::vector<PositiveDepthCameraModel> &srcCams,
+    float zNear,
+    float zFar,
+    const PatchMatchConfig &config,
+    cv::Mat &depthOut,
+    cv::Mat *confOut,
+    std::string *errorMsg,
+    const cv::Mat *hintDepth)
+{
+    const bool tryCuda = config.useCuda && PatchMatchDepthEstimator::isCudaAvailable();
+    if (!tryCuda)
+    {
+        return PatchMatchDepthEstimator::estimate(refGray,
+                                                  srcGrays,
+                                                  refCam,
+                                                  srcCams,
+                                                  zNear,
+                                                  zFar,
+                                                  config,
+                                                  depthOut,
+                                                  confOut,
+                                                  errorMsg,
+                                                  hintDepth);
+    }
+
+    constexpr int kMaxCudaAttempts = 4;
+    PatchMatchConfig attemptConfig = config;
+    attemptConfig.cudaFallbackToCpu = false;
+    std::string lastCudaError;
+
+    for (int attempt = 0; attempt < kMaxCudaAttempts; ++attempt)
+    {
+        std::string attemptError;
+        if (PatchMatchDepthEstimator::estimate(refGray,
+                                               srcGrays,
+                                               refCam,
+                                               srcCams,
+                                               zNear,
+                                               zFar,
+                                               attemptConfig,
+                                               depthOut,
+                                               confOut,
+                                               &attemptError,
+                                               hintDepth))
+        {
+            if (attemptConfig.downsampleFactor != config.downsampleFactor)
+            {
+                fprintf(stderr,
+                        "[MVS] 帧 %d: %s CUDA 自适应重试成功，最终 ds=%d iters=%d patch=%d\n",
+                        refIdx,
+                        stageLabel,
+                        attemptConfig.downsampleFactor,
+                        attemptConfig.numIterations,
+                        attemptConfig.patchHalf * 2 + 1);
+            }
+            if (errorMsg)
+            {
+                errorMsg->clear();
+            }
+            return true;
+        }
+
+        lastCudaError = attemptError;
+        PatchMatchDepthEstimator::cleanupGpuImageCache();
+
+        if (!isCudaMemoryFailure(attemptError) || attemptConfig.downsampleFactor >= 12)
+        {
+            break;
+        }
+
+        PatchMatchConfig nextConfig = DepthMapGenerator::nextCudaRetryPatchMatchConfig(attemptConfig,
+                                                                                       refGray.cols,
+                                                                                       refGray.rows);
+        if (nextConfig.downsampleFactor <= attemptConfig.downsampleFactor)
+        {
+            break;
+        }
+
+        fprintf(stderr,
+                "[MVS] 帧 %d: %s CUDA 显存不足，ds=%d -> ds=%d 自动重试 (%s)\n",
+                refIdx,
+                stageLabel,
+                attemptConfig.downsampleFactor,
+                nextConfig.downsampleFactor,
+                attemptError.c_str());
+
+        attemptConfig = nextConfig;
+        attemptConfig.cudaFallbackToCpu = false;
+    }
+
+    fprintf(stderr,
+            "[MVS] 帧 %d: %s CUDA 自适应重试未成功，回退 CPU (%s)\n",
+            refIdx,
+            stageLabel,
+            lastCudaError.empty() ? "未知 CUDA 错误" : lastCudaError.c_str());
+
+    PatchMatchConfig cpuConfig = config;
+    cpuConfig.useCuda = false;
+    cpuConfig.cudaFallbackToCpu = false;
+    const bool cpuOk = PatchMatchDepthEstimator::estimate(refGray,
+                                                          srcGrays,
+                                                          refCam,
+                                                          srcCams,
+                                                          zNear,
+                                                          zFar,
+                                                          cpuConfig,
+                                                          depthOut,
+                                                          confOut,
+                                                          errorMsg,
+                                                          hintDepth);
+    if (!cpuOk && errorMsg && errorMsg->empty())
+    {
+        *errorMsg = lastCudaError;
+    }
+    return cpuOk;
+}
+
 } // namespace
+
+cv::Mat DepthMapGenerator::buildContentMask(const cv::Mat &gray,
+                                            float *coverage,
+                                            double *otsuThreshold,
+                                            int *adaptiveThreshold)
+{
+    if (gray.empty())
+    {
+        if (coverage)
+        {
+            *coverage = 0.f;
+        }
+        return cv::Mat();
+    }
+
+    cv::Mat blurOrig;
+    cv::GaussianBlur(gray, blurOrig, cv::Size(15, 15), 0);
+
+    cv::Mat otsuBin;
+    const double otsuThresh = cv::threshold(blurOrig, otsuBin, 0, 255,
+                                            cv::THRESH_BINARY | cv::THRESH_OTSU);
+    const int adaptiveThresh = std::max(8, static_cast<int>(otsuThresh * 0.3));
+
+    cv::Mat mask = (blurOrig > adaptiveThresh);
+    const cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15));
+    cv::morphologyEx(mask, mask, cv::MORPH_CLOSE, kernel);
+
+    const int totalPx = gray.rows * gray.cols;
+    const float maskCoverage = totalPx > 0
+        ? static_cast<float>(cv::countNonZero(mask)) / static_cast<float>(totalPx)
+        : 0.f;
+
+    if (coverage)
+    {
+        *coverage = maskCoverage;
+    }
+    if (otsuThreshold)
+    {
+        *otsuThreshold = otsuThresh;
+    }
+    if (adaptiveThreshold)
+    {
+        *adaptiveThreshold = adaptiveThresh;
+    }
+
+    if (maskCoverage >= kSkipContentMaskCoverage)
+    {
+        return cv::Mat();
+    }
+
+    return mask;
+}
+
+PatchMatchConfig DepthMapGenerator::nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,
+                                                                  int imageWidth,
+                                                                  int imageHeight)
+{
+    PatchMatchConfig retryConfig = config;
+    const int current = std::max(1, retryConfig.downsampleFactor);
+    int next = current < 4 ? current + 1 : current + 2;
+
+    const int maxDim = std::max(imageWidth, imageHeight);
+    if (maxDim >= 5000 && current <= 2)
+    {
+        next = std::max(next, 3);
+    }
+
+    retryConfig.downsampleFactor = std::min(next, 12);
+    retryConfig.numIterations = std::max(1, retryConfig.numIterations - 1);
+    retryConfig.patchHalf = std::max(3, retryConfig.patchHalf - 1);
+    return retryConfig;
+}
 
 // =============================================================================
 // 辅助：旋转矩阵行列式
@@ -261,25 +473,27 @@ void DepthMapGenerator::preloadImages()
         // 使得本应被屏蔽的黑边像素通过暗区阈值，
         // 导致 PatchMatch 在无纹理黑边区域生成大量噪声深度。
         {
-            cv::Mat blurOrig;
-            cv::GaussianBlur(m_grayCache[i], blurOrig, cv::Size(15, 15), 0);
-            // 原始图像上的暗区阈值：内容区像素通常 > 20，黑边 < 5
-            // 使用 Otsu 自动阈值以自适应不同亮度的图像
-            cv::Mat otsuBin;
-            double otsuThresh = cv::threshold(blurOrig, otsuBin, 0, 255,
-                                              cv::THRESH_BINARY | cv::THRESH_OTSU);
-            // 取 Otsu 阈值的 30%（更保守）与固定下限(8)中较大的
-            int adaptiveThresh = std::max(8, static_cast<int>(otsuThresh * 0.3));
-            m_contentMasks[i] = (blurOrig > adaptiveThresh);
+            float coverage = 0.f;
+            double otsuThresh = 0.0;
+            int adaptiveThresh = 0;
+            m_contentMasks[i] = buildContentMask(m_grayCache[i], &coverage, &otsuThresh, &adaptiveThresh);
 
-            // 形态学闭操作填补内容区域中的小孔洞
-            cv::Mat kernel = cv::getStructuringElement(cv::MORPH_ELLIPSE, cv::Size(15, 15));
-            cv::morphologyEx(m_contentMasks[i], m_contentMasks[i], cv::MORPH_CLOSE, kernel);
-
-            int contentPx = cv::countNonZero(m_contentMasks[i]);
-            int totalPx = m_grayCache[i].rows * m_grayCache[i].cols;
-            fprintf(stderr, "[MVS] 图像 %d: 内容掩码 (Otsu=%.0f adaptiveThresh=%d): %d/%d (%.1f%%)\n",
-                    i, otsuThresh, adaptiveThresh, contentPx, totalPx, 100.f*contentPx/totalPx);
+            const int totalPx = m_grayCache[i].rows * m_grayCache[i].cols;
+            const int contentPx = static_cast<int>(std::round(coverage * totalPx));
+            if (m_contentMasks[i].empty())
+            {
+                fprintf(stderr,
+                        "[MVS] 图像 %d: 内容掩码覆盖 %.1f%%，自动跳过内容掩码过滤 (Otsu=%.0f adaptiveThresh=%d)\n",
+                        i,
+                        coverage * 100.0f,
+                        otsuThresh,
+                        adaptiveThresh);
+            }
+            else
+            {
+                fprintf(stderr, "[MVS] 图像 %d: 内容掩码 (Otsu=%.0f adaptiveThresh=%d): %d/%d (%.1f%%)\n",
+                        i, otsuThresh, adaptiveThresh, contentPx, totalPx, coverage * 100.0f);
+            }
         }
 
         // ── 自适应对比度增强 (CLAHE) ──────────────────────────────────
@@ -588,6 +802,136 @@ cv::Mat DepthMapGenerator::buildHintDepth(int refIdx,
 }
 
 // =============================================================================
+cv::Mat DepthMapGenerator::buildSparseSupportMask(const std::vector<CameraView> &views,
+                                                  const SparseCloud &sparse,
+                                                  int refIdx,
+                                                  int W,
+                                                  int H,
+                                                  const std::vector<int> &sourceIndices)
+{
+    if (W <= 0 || H <= 0 || refIdx < 0 || refIdx >= static_cast<int>(views.size()) || sparse.points.size() < 20)
+    {
+        return cv::Mat();
+    }
+
+    PositiveDepthCameraModel cam = views[refIdx].positiveDepthModel();
+    if (!cam.valid())
+    {
+        return cv::Mat();
+    }
+
+    const int minSourceViews = sourceIndices.empty() ? 0 : 1;
+    std::vector<size_t> visiblePointIndices =
+        collectMvsVisibleSparsePointIndices(views, sparse, refIdx, sourceIndices, minSourceViews);
+    if (visiblePointIndices.size() < 20 && minSourceViews > 0)
+    {
+        visiblePointIndices = collectMvsVisibleSparsePointIndices(views, sparse, refIdx, {}, 0);
+    }
+    if (visiblePointIndices.size() < 20)
+    {
+        return cv::Mat();
+    }
+
+    std::vector<float> depths;
+    depths.reserve(visiblePointIndices.size());
+    for (size_t pointIndex : visiblePointIndices)
+    {
+        if (pointIndex >= sparse.points.size())
+        {
+            continue;
+        }
+        const auto &pt = sparse.points[pointIndex];
+        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
+        if (z > 0.f && std::isfinite(z))
+        {
+            depths.push_back(z);
+        }
+    }
+    if (depths.size() < 20)
+    {
+        return cv::Mat();
+    }
+
+    std::sort(depths.begin(), depths.end());
+    const size_t n = depths.size();
+    const float q1 = depths[n / 4];
+    const float q3 = depths[n * 3 / 4];
+    const float iqr = q3 - q1;
+    const float margin = std::max(1e-4f, 1.5f * iqr);
+    const float depthLo = q1 - margin;
+    const float depthHi = q3 + margin;
+
+    cv::Mat seed(H, W, CV_8U, cv::Scalar(0));
+    int projectedSeeds = 0;
+    for (size_t pointIndex : visiblePointIndices)
+    {
+        if (pointIndex >= sparse.points.size())
+        {
+            continue;
+        }
+        const auto &pt = sparse.points[pointIndex];
+        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
+        if (z <= 0.f || z < depthLo || z > depthHi)
+        {
+            continue;
+        }
+
+        float u = 0.f;
+        float v = 0.f;
+        if (!cam.project(pt[0], pt[1], pt[2], u, v))
+        {
+            continue;
+        }
+
+        const int iu = static_cast<int>(std::round(u));
+        const int iv = static_cast<int>(std::round(v));
+        if (iu < 0 || iu >= W || iv < 0 || iv >= H)
+        {
+            continue;
+        }
+
+        seed.at<uint8_t>(iv, iu) = 255;
+        ++projectedSeeds;
+    }
+
+    const int seedPixels = cv::countNonZero(seed);
+    if (seedPixels < 10)
+    {
+        return cv::Mat();
+    }
+
+    const int maxDim = std::max(W, H);
+    const int radius = maxDim < 512
+        ? std::clamp(maxDim / 8, 8, 48)
+        : (maxDim < 1200
+            ? std::clamp(maxDim / 16, 32, 64)
+            : std::clamp(maxDim / 48, 48, 128));
+    cv::Mat support;
+    const cv::Mat kernel = cv::getStructuringElement(
+        cv::MORPH_ELLIPSE,
+        cv::Size(radius * 2 + 1, radius * 2 + 1));
+    cv::dilate(seed, support, kernel);
+
+    const int supportPixels = cv::countNonZero(support);
+    const float coverage = static_cast<float>(supportPixels) / static_cast<float>(W * H);
+    if (coverage < 0.03f || coverage > 0.95f)
+    {
+        return cv::Mat();
+    }
+
+    fprintf(stderr,
+            "[MVS] 帧 %d: 稀疏支撑掩码 seed=%d/%d radius=%d coverage=%d/%d (%.1f%%)\n",
+            refIdx,
+            seedPixels,
+            projectedSeeds,
+            radius,
+            supportPixels,
+            W * H,
+            coverage * 100.0f);
+    return support;
+}
+
+// =============================================================================
 DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthGenConfig *configOverride)
 {
     DepthFrameResult result;
@@ -690,6 +1034,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
     // 提示深度
     cv::Mat hintDepth = buildHintDepth(refIdx, W, H, sourceIndices);
+    cv::Mat sparseSupportMask = buildSparseSupportMask(m_views, m_sparse, refIdx, W, H, sourceIndices);
 
     // =========================================================================
     // ★ 极线校正（仅双目立体对时启用）
@@ -764,7 +1109,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             coarseCfg.cudaUseParallelSweep ? 1 : 0);
 
     cv::Mat coarseDepth, coarseConf;
-    bool coarseOk = PatchMatchDepthEstimator::estimate(
+    bool coarseOk = estimatePatchMatchWithAdaptiveCuda(
+        "粗层 PatchMatch",
+        refIdx,
         workRefImg, workSrcGrays, workRefCam, workSrcCams,
         zNear, zFar, coarseCfg,
         coarseDepth, &coarseConf, &errMsg,
@@ -795,7 +1142,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                 hintCoverage * 100.0f,
                 fineCfg.cudaUseParallelSweep ? 1 : 0);
 
-        bool fineOk = PatchMatchDepthEstimator::estimate(
+        bool fineOk = estimatePatchMatchWithAdaptiveCuda(
+            "精细层 PatchMatch",
+            refIdx,
             workRefImg, workSrcGrays, workRefCam, workSrcCams,
             zNear, zFar, fineCfg,
             depthMap, &confMap, &errMsg,
@@ -810,7 +1159,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         fprintf(stderr, "[MVS] 帧 %d: 粗分辨率失败，回退单尺度\n", refIdx);
         PatchMatchConfig fallbackCfg = pmCfg;
         fallbackCfg.epipolarRectified = useRectified;
-        bool ok = PatchMatchDepthEstimator::estimate(
+        bool ok = estimatePatchMatchWithAdaptiveCuda(
+            "单尺度 PatchMatch",
+            refIdx,
             workRefImg, workSrcGrays, workRefCam, workSrcCams,
             zNear, zFar, fallbackCfg,
             depthMap, &confMap, &errMsg,
@@ -838,30 +1189,106 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     // 区域产生大量噪声深度（如 44% 有效像素 vs 实际仅 10% 内容区域）。
     {
         cv::Mat brightMask;
-        if (refIdx >= 0 && refIdx < (int)m_contentMasks.size() && !m_contentMasks[refIdx].empty()) {
+        const bool hasPreloadedMaskSlot = refIdx >= 0 && refIdx < static_cast<int>(m_contentMasks.size());
+        if (hasPreloadedMaskSlot && !m_contentMasks[refIdx].empty())
+        {
             brightMask = m_contentMasks[refIdx];
-        } else {
-            // 回退：直接用原始阈值（不应走到这里）
-            cv::Mat blurred;
-            cv::GaussianBlur(refImg, blurred, cv::Size(15, 15), 0);
-            brightMask = (blurred > 15);
-            fprintf(stderr, "[MVS] 帧 %d: 警告 - 内容掩码不可用，回退默认阈值\n", refIdx);
+        }
+        else if (hasPreloadedMaskSlot)
+        {
+            fprintf(stderr, "[MVS] 帧 %d: 内容掩码已自动跳过\n", refIdx);
+        }
+        else
+        {
+            float coverage = 0.f;
+            double otsuThresh = 0.0;
+            int adaptiveThresh = 0;
+            brightMask = buildContentMask(refImg, &coverage, &otsuThresh, &adaptiveThresh);
+            if (brightMask.empty())
+            {
+                fprintf(stderr,
+                        "[MVS] 帧 %d: 内容掩码覆盖 %.1f%%，自动跳过内容掩码过滤\n",
+                        refIdx,
+                        coverage * 100.0f);
+            }
+            else
+            {
+                fprintf(stderr,
+                        "[MVS] 帧 %d: 警告 - 内容掩码不可用，现场生成 (覆盖 %.1f%%, Otsu=%.0f adaptiveThresh=%d)\n",
+                        refIdx,
+                        coverage * 100.0f,
+                        otsuThresh,
+                        adaptiveThresh);
+            }
         }
 
-        // 适配深度图尺寸（PatchMatch 可能有上采样）
-        if (brightMask.size() != depthMap.size()) {
-            cv::resize(brightMask, brightMask, depthMap.size(), 0, 0, cv::INTER_NEAREST);
+        if (!brightMask.empty())
+        {
+            // 适配深度图尺寸（PatchMatch 可能有上采样）
+            if (brightMask.size() != depthMap.size())
+            {
+                cv::resize(brightMask, brightMask, depthMap.size(), 0, 0, cv::INTER_NEAREST);
+            }
+
+            int beforeMask = cv::countNonZero(depthMap > 0);
+            depthMap.setTo(0, ~brightMask);
+            if (!confMap.empty())
+            {
+                confMap.setTo(0, ~brightMask);
+            }
+            int afterMask = cv::countNonZero(depthMap > 0);
+
+            if (afterMask < beforeMask)
+            {
+                fprintf(stderr, "[MVS] 帧 %d: 内容掩码过滤 %d→%d 有效像素\n",
+                        refIdx, beforeMask, afterMask);
+            }
+        }
+    }
+
+    if (!sparseSupportMask.empty())
+    {
+        cv::Mat supportMask = sparseSupportMask;
+        if (supportMask.size() != depthMap.size())
+        {
+            cv::resize(supportMask, supportMask, depthMap.size(), 0, 0, cv::INTER_NEAREST);
         }
 
-        int beforeMask = cv::countNonZero(depthMap > 0);
-        depthMap.setTo(0, ~brightMask);
+        const int beforeSupport = cv::countNonZero(depthMap > 0);
+        cv::Mat depthBackup = depthMap.clone();
+        cv::Mat confBackup;
         if (!confMap.empty())
-            confMap.setTo(0, ~brightMask);
-        int afterMask = cv::countNonZero(depthMap > 0);
+        {
+            confBackup = confMap.clone();
+        }
 
-        if (afterMask < beforeMask) {
-            fprintf(stderr, "[MVS] 帧 %d: 内容掩码过滤 %d→%d 有效像素\n",
-                    refIdx, beforeMask, afterMask);
+        depthMap.setTo(0, supportMask == 0);
+        if (!confMap.empty())
+        {
+            confMap.setTo(0, supportMask == 0);
+        }
+
+        const int afterSupport = cv::countNonZero(depthMap > 0);
+        if (beforeSupport > 100 && afterSupport < beforeSupport / 20)
+        {
+            depthMap = depthBackup;
+            if (!confBackup.empty())
+            {
+                confMap = confBackup;
+            }
+            fprintf(stderr,
+                    "[MVS] 帧 %d: 稀疏支撑过滤过强 %d→%d，已回退\n",
+                    refIdx,
+                    beforeSupport,
+                    afterSupport);
+        }
+        else if (afterSupport < beforeSupport)
+        {
+            fprintf(stderr,
+                    "[MVS] 帧 %d: 稀疏支撑过滤 %d→%d 有效像素\n",
+                    refIdx,
+                    beforeSupport,
+                    afterSupport);
         }
     }
 

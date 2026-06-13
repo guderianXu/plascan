@@ -32,7 +32,11 @@
 #define CUDA_CHECK(x) do { \
     cudaError_t _e = (x); \
     if (_e != cudaSuccess) { \
-        fprintf(stderr,"[CUDA] %s:%d %s\n",__FILE__,__LINE__,cudaGetErrorString(_e)); \
+        const char *_cuda_msg = cudaGetErrorString(_e); \
+        fprintf(stderr,"[CUDA] %s:%d %s\n",__FILE__,__LINE__,_cuda_msg); \
+        if (errorMsg) { \
+            *errorMsg = std::string("CUDA error at ") + __FILE__ + ":" + std::to_string(__LINE__) + " " + _cuda_msg; \
+        } \
         return false; \
     } } while(0)
 
@@ -45,6 +49,40 @@ namespace
 {
 
 using CpuNormal = std::array<float, 3>;
+
+template <typename T>
+struct CudaDevicePtr
+{
+    T *ptr = nullptr;
+
+    ~CudaDevicePtr()
+    {
+        if (ptr)
+        {
+            cudaFree(ptr);
+        }
+    }
+
+    void **out()
+    {
+        return reinterpret_cast<void **>(&ptr);
+    }
+
+    T *get() const
+    {
+        return ptr;
+    }
+
+    explicit operator bool() const
+    {
+        return ptr != nullptr;
+    }
+
+    operator T *() const
+    {
+        return ptr;
+    }
+};
 
 inline float cpuDot3(const CpuNormal &a, const CpuNormal &b)
 {
@@ -1491,15 +1529,19 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     const int refPx = sW * sH;
 
-    float *d_ref=nullptr, *d_srcData=nullptr;
-    float *d_depth=nullptr, *d_normal=nullptr, *d_conf=nullptr, *d_hint=nullptr;
-    float **d_srcPtrs = nullptr;
+    float *d_ref=nullptr;
+    CudaDevicePtr<float> d_srcData;
+    CudaDevicePtr<float> d_depth;
+    CudaDevicePtr<float> d_normal;
+    CudaDevicePtr<float> d_conf;
+    CudaDevicePtr<float> d_hint;
+    CudaDevicePtr<float*> d_srcPtrs;
 
-    CUDA_CHECK(cudaMalloc(&d_srcData, N*16    * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_depth,   refPx   * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_normal,  refPx*3 * sizeof(float)));  // 法向量图
-    CUDA_CHECK(cudaMalloc(&d_conf,    refPx   * sizeof(float)));
-    CUDA_CHECK(cudaMalloc(&d_srcPtrs, N * sizeof(float*)));
+    CUDA_CHECK(cudaMalloc(d_srcData.out(), N*16    * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(d_depth.out(),   refPx   * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(d_normal.out(),  refPx*3 * sizeof(float)));  // 法向量图
+    CUDA_CHECK(cudaMalloc(d_conf.out(),    refPx   * sizeof(float)));
+    CUDA_CHECK(cudaMalloc(d_srcPtrs.out(), N * sizeof(float*)));
 
     CUDA_CHECK(cudaMemcpy(d_srcData, srcDatas.data(),     N*16*sizeof(float),    cudaMemcpyHostToDevice));
     CUDA_CHECK(cudaMemset(d_conf, 0, refPx * sizeof(float)));
@@ -1510,11 +1552,6 @@ bool PatchMatchDepthEstimator::estimateGPU(
     int cacheMisses = 0;
     if (!getOrUploadGrayImageGpu(refGray, sW, sH, ds, &d_ref, &refCacheHit, errorMsg))
     {
-        if (d_srcData) cudaFree(d_srcData);
-        if (d_depth) cudaFree(d_depth);
-        if (d_normal) cudaFree(d_normal);
-        if (d_conf) cudaFree(d_conf);
-        if (d_srcPtrs) cudaFree(d_srcPtrs);
         return false;
     }
 
@@ -1523,11 +1560,6 @@ bool PatchMatchDepthEstimator::estimateGPU(
         bool cacheHit = false;
         if (!getOrUploadGrayImageGpu(srcGrays[si], sW, sH, ds, &hSrcPtrs[si], &cacheHit, errorMsg))
         {
-            if (d_srcData) cudaFree(d_srcData);
-            if (d_depth) cudaFree(d_depth);
-            if (d_normal) cudaFree(d_normal);
-            if (d_conf) cudaFree(d_conf);
-            if (d_srcPtrs) cudaFree(d_srcPtrs);
             return false;
         }
         if (cacheHit)
@@ -1545,7 +1577,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     if (hasHint) 
     {
         cv::Mat hF; hintScaled.convertTo(hF, CV_32F);
-        CUDA_CHECK(cudaMalloc(&d_hint, refPx*sizeof(float)));
+        CUDA_CHECK(cudaMalloc(d_hint.out(), refPx*sizeof(float)));
         CUDA_CHECK(cudaMemcpy(d_hint, hF.ptr<float>(), refPx*sizeof(float), cudaMemcpyHostToDevice));
     }
 
@@ -1666,10 +1698,6 @@ bool PatchMatchDepthEstimator::estimateGPU(
         }
     }
 
-
-    cudaFree(d_srcData); cudaFree(d_srcPtrs);
-    cudaFree(d_depth); cudaFree(d_normal); cudaFree(d_conf);
-    if (d_hint) cudaFree(d_hint);
 
     // ── 后处理（在降采样分辨率上做，再 upscale → 更快 ×4+）───────
     if (config.doMedianBlur && config.medianKernelSize > 1) 
@@ -2094,7 +2122,13 @@ bool PatchMatchDepthEstimator::estimate(
     {
         if (estimateGPU(refGray, srcGrays, refCam, srcCams,
                         zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth))
+        {
             return true;
+        }
+        if (!config.cudaFallbackToCpu)
+        {
+            return false;
+        }
         fprintf(stderr, "[PatchMatch] GPU 失败，回退 CPU\n");
     }
     return estimateCPU(refGray, srcGrays, refCam, srcCams,

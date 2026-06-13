@@ -2,7 +2,7 @@
 
 #include "log/Logger.h"
 
-#include <opencv2/calib3d.hpp>
+#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
 #include <cmath>

@@ -3,6 +3,7 @@
 #include <opencv2/core.hpp>
 #include <opencv2/core/types.hpp>
 
+#include <functional>
 #include <string>
 #include <vector>
 
@@ -29,6 +30,13 @@ struct VocabularyOverlapConfig
     bool geometryCheck = false;
     int minInliers = 30;
     double ransacThreshold = 3.0;
+    int numThreads = 0;
+    bool useFlannAssignment = true;
+    bool useInvertedIndex = true;
+    bool useCuda = false;
+    int geometryMaxDescriptors = 2048;
+    int geometryMaxCandidatePairs = 2000;
+    std::function<bool(const std::string &stage, int percent)> progressCallback;
 };
 
 struct VocabularyOverlapPairResult

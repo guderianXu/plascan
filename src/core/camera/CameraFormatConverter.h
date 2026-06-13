@@ -12,7 +12,9 @@ enum class CameraFormat
 {
     Auto,
     MiddleburyPar,
-    EpflCamera
+    EpflCamera,
+    ColmapText,
+    MetashapeXml
 };
 
 struct CameraConversionOptions

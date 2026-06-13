@@ -22,6 +22,7 @@
 
 // ── 项目 / 服务头文件 ──────────────────────────────────────────────────────
 #include "SFMService.h"
+#include "SfmPairPlanner.h"
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "Logger.h"
@@ -1243,8 +1244,17 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         }
     }
 
+    SfmPairPlannerOptions pairPlanOptions;
+    pairPlanOptions.restrictPairs = opts.restrictPairs;
+    pairPlanOptions.allowedPairs = opts.allowedPairs;
+    pairPlanOptions.autoRestrictKnownCameraPairs = opts.autoRestrictKnownCameraPairs;
+    pairPlanOptions.knownCameraPairWindow = opts.knownCameraPairWindow;
+    pairPlanOptions.knownCameraAllPairsMaxImages = opts.knownCameraAllPairsMaxImages;
+
+    const SfmPairPlan pairPlan = planSfmMatchPairs(opts.images, opts.cameraPaths, pairPlanOptions);
+
     QSet<QString> allowedPairSet;
-    for (const QString &pairKey : opts.allowedPairs)
+    for (const QString &pairKey : pairPlan.allowedPairKeys)
     {
         const QString trimmedKey = pairKey.trimmed();
         if (!trimmedKey.isEmpty())
@@ -1253,9 +1263,16 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         }
     }
 
-    if (opts.restrictPairs)
+    if (pairPlan.restrictPairs)
     {
         LOG_INFO(QStringLiteral("  匹配对约束已启用: %1 对").arg(allowedPairSet.size()));
+        if (pairPlan.autoRestricted)
+        {
+            LOG_INFO(QStringLiteral("  已知相机顺序配对裁剪: 原始 %1 对 -> %2 对, 邻域窗口=%3")
+                .arg(pairPlan.allPairCount)
+                .arg(allowedPairSet.size())
+                .arg(pairPlan.knownCameraPairWindow));
+        }
     }
 
     // 从项目元数据复用已有匹配记录（覆盖“仅按 assets/matches 规范命名扫描”的限制）
@@ -1424,7 +1441,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             const ImageId idA = validIds[i];
             const ImageId idB = validIds[j];
 
-            if (opts.restrictPairs)
+            if (pairPlan.restrictPairs)
             {
                 const QString pairKey = canonicalPairKey(idToPath.value(idA), idToPath.value(idB));
                 if (pairKey.isEmpty() || !allowedPairSet.contains(pairKey))
@@ -1600,7 +1617,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
     if (allPairs.isEmpty())
     {
-        result.errorMessage = opts.restrictPairs
+        result.errorMessage = pairPlan.restrictPairs
             ? QStringLiteral("所选影像中没有可用的已生成匹配对，请先创建连接点或检查 .lis 配对范围")
             : QStringLiteral("未找到可用影像对");
         result.summary = result.errorMessage;
@@ -2065,14 +2082,27 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         sfmOpts.iterativeBARounds    = 4;         // 更多迭代精化轮数
     }
 
-    IncrementalSfm sfm(sfmOpts);
-
     // 3a. 添加影像（使用缓存中的特征点 + 内参）
     // 内参来源优先级：cameraPaths(.tsai文件) > projectMeta(项目元数据) > userFu/Fv > 自动估算
     const bool hasUserIntrinsics = (opts.userFu > 0 && opts.userFv > 0);
     const bool hasUserPitch = (opts.userPitch > 0);
     const bool hasCameraPaths = (!opts.cameraPaths.isEmpty()
                                  && opts.cameraPaths.size() == opts.images.size());
+    bool hasCompleteCameraFiles = hasCameraPaths;
+    if (hasCompleteCameraFiles)
+    {
+        for (const QString &cameraPath : opts.cameraPaths)
+        {
+            if (cameraPath.isEmpty() || !QFileInfo::exists(cameraPath))
+            {
+                hasCompleteCameraFiles = false;
+                break;
+            }
+        }
+    }
+    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles;
+
+    IncrementalSfm sfm(sfmOpts);
 
     // 从 projectMeta 中预构建 imagePath → cameraJson 映射
     QMap<QString, QJsonObject> projectCameraMap;
@@ -2096,6 +2126,14 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     {
         LOG_INFO(QStringLiteral("  使用相机文件路径列表 (%1 个)")
             .arg(opts.cameraPaths.size()));
+        if (hasCompleteCameraFiles)
+        {
+            LOG_INFO(QStringLiteral("  使用 .tsai 已知外参模式：固定相机位姿并直接三角化"));
+        }
+        else
+        {
+            LOG_WARN(QStringLiteral("  相机文件列表不完整，回退到增量 SfM 估计位姿"));
+        }
     } 
     else if (!projectCameraMap.isEmpty()) 
     {

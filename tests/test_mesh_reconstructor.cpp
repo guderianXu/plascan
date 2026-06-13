@@ -1,6 +1,8 @@
 #include <gtest/gtest.h>
 
+#include "ModelWorkflowService.h"
 #include "SurfaceReconstructor.h"
+#include "SurfaceReconstructorPostprocess.h"
 #include "TextureMapper.h"
 
 #include <plapoint/filters/preprocessing.h>
@@ -15,11 +17,14 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <vector>
 
-TEST(MeshReconstructorTest, ForcePoissonFallsBackWhenCloudHasNoNormals)
+namespace
+{
+
+std::filesystem::path writeNoNormalsPointCloud(const std::filesystem::path &root)
 {
     namespace fs = std::filesystem;
-    const fs::path root = fs::temp_directory_path() / "plascan_mesh_no_normals_test";
     fs::remove_all(root);
     fs::create_directories(root);
     const fs::path plyPath = root / "dense_no_normals.ply";
@@ -41,7 +46,57 @@ TEST(MeshReconstructorTest, ForcePoissonFallsBackWhenCloudHasNoNormals)
 
     plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
     plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
+    return plyPath;
+}
 
+std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::path &root)
+{
+    namespace fs = std::filesystem;
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path plyPath = root / "sphere_with_normals.ply";
+
+    constexpr int rings = 16;
+    constexpr int segments = 16;
+    constexpr int pointCount = rings * segments;
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(pointCount, 3);
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(pointCount, 3);
+    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(pointCount, 3);
+
+    int row = 0;
+    for (int ring = 0; ring < rings; ++ring)
+    {
+        const float phi = static_cast<float>(ring + 1) * static_cast<float>(M_PI) /
+                          static_cast<float>(rings + 1);
+        for (int segment = 0; segment < segments; ++segment)
+        {
+            const float theta = static_cast<float>(segment) * 2.0f * static_cast<float>(M_PI) /
+                                static_cast<float>(segments);
+            const float nx = std::sin(phi) * std::cos(theta);
+            const float ny = std::sin(phi) * std::sin(theta);
+            const float nz = std::cos(phi);
+            points(row, 0) = 2.0f * nx;
+            points(row, 1) = 2.0f * ny;
+            points(row, 2) = 2.0f * nz;
+            normals(row, 0) = nx;
+            normals(row, 1) = ny;
+            normals(row, 2) = nz;
+            colors(row, 0) = 180;
+            colors(row, 1) = 190;
+            colors(row, 2) = 210;
+            ++row;
+        }
+    }
+
+    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    cloud.setNormals(std::move(normals));
+    cloud.setColors(std::move(colors));
+    plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
+    return plyPath;
+}
+
+xjw::mesh::ReconstructionConfig fallbackMeshConfig()
+{
     xjw::mesh::ReconstructionConfig config;
     config.forcePoisson = true;
     config.poissonDepth = 12;
@@ -52,20 +107,156 @@ TEST(MeshReconstructorTest, ForcePoissonFallsBackWhenCloudHasNoNormals)
     config.cleanSmallComponents = false;
     config.smoothIterations = 0;
     config.holeFillPasses = 2;
+    return config;
+}
+
+} // namespace
+
+TEST(MeshReconstructorTest, ForcePoissonUsesInputNormalsWhenPresent)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_normals_test";
+    const fs::path plyPath = writeSpherePointCloudWithNormals(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.poissonDepth = 4;
 
     xjw::mesh::TriMesh mesh;
     std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_GT(mesh.vertexCount(), 0);
+    EXPECT_GT(mesh.faceCount(), 0);
+    EXPECT_EQ(algorithmUsed, "poisson");
+}
+
+TEST(MeshReconstructorTest, SmallComponentCleanupKeepsLargestComponent)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(7);
+    mesh.vertices[0].x = 0.0f; mesh.vertices[0].y = 0.0f; mesh.vertices[0].z = 0.0f;
+    mesh.vertices[1].x = 1.0f; mesh.vertices[1].y = 0.0f; mesh.vertices[1].z = 0.0f;
+    mesh.vertices[2].x = 0.0f; mesh.vertices[2].y = 1.0f; mesh.vertices[2].z = 0.0f;
+    mesh.vertices[3].x = 1.0f; mesh.vertices[3].y = 1.0f; mesh.vertices[3].z = 0.0f;
+    mesh.vertices[4].x = 10.0f; mesh.vertices[4].y = 0.0f; mesh.vertices[4].z = 0.0f;
+    mesh.vertices[5].x = 11.0f; mesh.vertices[5].y = 0.0f; mesh.vertices[5].z = 0.0f;
+    mesh.vertices[6].x = 10.0f; mesh.vertices[6].y = 1.0f; mesh.vertices[6].z = 0.0f;
+
+    xjw::mesh::Triangle firstA;
+    firstA.v[0] = 0; firstA.v[1] = 1; firstA.v[2] = 2;
+    xjw::mesh::Triangle secondA;
+    secondA.v[0] = 1; secondA.v[1] = 3; secondA.v[2] = 2;
+    xjw::mesh::Triangle firstB;
+    firstB.v[0] = 4; firstB.v[1] = 5; firstB.v[2] = 6;
+    mesh.faces = {firstA, secondA, firstB};
+
+    xjw::mesh::detail::removeSmallConnectedComponents(&mesh, 10);
+
+    EXPECT_EQ(mesh.faceCount(), 2);
+    EXPECT_EQ(mesh.vertexCount(), 4);
+}
+
+TEST(MeshReconstructorTest, FallsBackToHeightGridWhenPoissonCleanupLeavesTinyMesh)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_tiny_cleanup_test";
+    const fs::path plyPath = writeSpherePointCloudWithNormals(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.cleanSmallComponents = true;
+    config.minComponentFaces = 100000;
+    config.poissonDepth = 4;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_EQ(algorithmUsed, "height_grid");
+    EXPECT_GT(mesh.faceCount(), 100);
+}
+
+TEST(MeshReconstructorTest, ForcePoissonFallsBackWhenCloudHasNoNormals)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_no_normals_test";
+    const fs::path plyPath = writeNoNormalsPointCloud(root);
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
     bool ok = false;
     ASSERT_NO_THROW({
         ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
-                                                                            config,
+                                                                            fallbackMeshConfig(),
                                                                             mesh,
-                                                                            &error);
+                                                                            &error,
+                                                                            &algorithmUsed);
     });
 
     ASSERT_TRUE(ok) << error;
     EXPECT_GT(mesh.vertexCount(), 0);
     EXPECT_GT(mesh.faceCount(), 0);
+    EXPECT_EQ(algorithmUsed, "height_grid");
+}
+
+TEST(MeshReconstructorTest, PoissonFallbackProgressIncludesFailureReason)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_reason_test";
+    const fs::path plyPath = writeNoNormalsPointCloud(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    std::vector<std::string> progressMessages;
+    config.progressFn = [&](const std::string &stage, float) {
+        progressMessages.push_back(stage);
+    };
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_EQ(algorithmUsed, "height_grid");
+    const auto it = std::find_if(progressMessages.begin(), progressMessages.end(), [](const std::string &message) {
+        return message.find("Poisson 重建失败(") != std::string::npos &&
+               message.find("改用高度格网") != std::string::npos;
+    });
+    EXPECT_NE(it, progressMessages.end());
+}
+
+TEST(MeshWorkflowServiceTest, RecordsActualFallbackAlgorithmInPayload)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_workflow_algorithm_test";
+    const fs::path plyPath = writeNoNormalsPointCloud(root / "input");
+
+    xjw::mesh::workflow::MeshBuildRequest request;
+    request.pointCloudPath = QString::fromStdString(plyPath.string());
+    request.outputRoot = QString::fromStdString((root / "model").string());
+    request.reconstruction = fallbackMeshConfig();
+    request.exportObj = false;
+
+    const auto result = xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
+    ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
+    EXPECT_EQ(result.payload.value(QStringLiteral("mesh_algorithm")).toString().toStdString(), "height_grid");
+    EXPECT_TRUE(fs::exists(result.payload.value(QStringLiteral("model_ply")).toString().toStdString()));
 }
 
 TEST(TextureMapperTest, ReadsPlyMeshFacesForTextureMapping)

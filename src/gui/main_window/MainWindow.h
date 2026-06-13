@@ -111,6 +111,7 @@ public:
     TaskStatusWidget* m_sgTaskStatus{};                  // 特征匹配状态栏任务状态
     TaskStatusWidget* m_spTaskStatus{};                  // 特征提取状态栏任务状态
     TaskStatusWidget* m_dmTaskStatus{};                  // 密集匹配状态栏任务状态
+    TaskStatusWidget* m_overlapTaskStatus{};             // 重叠对获取状态栏任务状态
     TaskStatusWidget* m_obsNetTaskStatus{};              // 观测网络状态栏任务状态
     QDockWidget*      m_logDock{};                      // 底部日志 Dock 窗口容器
     QToolButton*      m_logBtn{};                       // 标题栏中的「日志」可选中切换按钮
@@ -164,6 +165,7 @@ signals:
     void sgCancelRequested();
     void spCancelRequested();
     void dmCancelRequested();
+    void overlapCancelRequested();
 
 public slots:
     // SuperPoint 状态栏进度（由 MenuWorkflowController 调用）
@@ -177,6 +179,8 @@ public slots:
     void showDmProgress(int total);
     void updateDmProgress(int done);
     void hideDmProgress(bool ok);
+    void onOverlapProgress(const QString &stage, int percent);
+    void onOverlapFinished(bool success);
 
 private slots:
     // 网格重建进度状态栏更新

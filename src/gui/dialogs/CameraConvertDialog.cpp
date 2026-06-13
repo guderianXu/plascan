@@ -40,6 +40,8 @@ void CameraConvertDialog::buildUi()
     m_formatCombo->addItem(tr("自动识别"), QStringLiteral("auto"));
     m_formatCombo->addItem(tr("Middlebury *_par.txt"), QStringLiteral("middlebury-par"));
     m_formatCombo->addItem(tr("EPFL/Strecha *.camera"), QStringLiteral("epfl-camera"));
+    m_formatCombo->addItem(tr("COLMAP text sparse"), QStringLiteral("colmap-text"));
+    m_formatCombo->addItem(tr("Metashape doc.xml / chunk.zip"), QStringLiteral("metashape-xml"));
     formLayout->addRow(tr("输入格式:"), m_formatCombo);
 
     auto *inputRow = new QWidget(this);

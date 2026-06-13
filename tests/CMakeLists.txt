@@ -11,7 +11,12 @@ find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
 find_package(Python3 COMPONENTS Interpreter)
 
 # ── 依赖 ─────────────────────────────────────────────────────────────────────
-find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
+find_package(OpenCV REQUIRED)
+if(OpenCV_VERSION VERSION_GREATER_EQUAL "5.0.0")
+    find_package(OpenCV REQUIRED COMPONENTS core geometry stereo imgproc)
+else()
+    find_package(OpenCV REQUIRED COMPONENTS core calib3d imgproc)
+endif()
 
 # ── 测试数据根目录──────────────────────────────────────────────────────────────
 set(TEST_DATA_DIR "${CMAKE_SOURCE_DIR}/testData")
@@ -135,6 +140,19 @@ target_include_directories(test_sfm_pipeline PRIVATE
 gtest_discover_tests(test_sfm_pipeline)
 
 # ==============================================================================
+# test_sfm_pair_planner — SFM 已知相机匹配配对规划
+# ==============================================================================
+add_executable(test_sfm_pair_planner test_sfm_pair_planner.cpp)
+target_link_libraries(test_sfm_pair_planner PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_sfm_pair_planner PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
+)
+gtest_discover_tests(test_sfm_pair_planner)
+
+# ==============================================================================
 # test_initial_sparse_triangulator — core/sfm 初始稀疏点云三角化器
 # ==============================================================================
 add_executable(test_initial_sparse_triangulator test_initial_sparse_triangulator.cpp)
@@ -166,6 +184,18 @@ target_include_directories(test_vocabulary_overlap_retriever PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/overlap
 )
 gtest_discover_tests(test_vocabulary_overlap_retriever)
+
+# test_overlap_analyzer — 基于相机模型的重叠对估计
+
+add_executable(test_overlap_analyzer test_overlap_analyzer.cpp)
+target_link_libraries(test_overlap_analyzer PRIVATE
+    overlap
+    GTest::gtest_main
+)
+target_include_directories(test_overlap_analyzer PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/overlap
+)
+gtest_discover_tests(test_overlap_analyzer)
 
 # ==============================================================================
 # test_project_data — ProjectData 持久化契约与 core/results 分域
@@ -331,6 +361,14 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
+        NAME PhotogrammetryBenchmarkRunnerTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_photogrammetry_benchmark_runner
+    )
+    set_tests_properties(PhotogrammetryBenchmarkRunnerTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
         NAME RunLightGlueScriptTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_run_lightglue_script
     )
@@ -405,6 +443,7 @@ if(CMAKE_CUDA_COMPILER)
     target_link_libraries(test_mvs_pipeline PRIVATE
         mvs
         camera
+        Qt6::Core
         ${OpenCV_LIBS}
         GTest::gtest_main
     )
@@ -425,6 +464,7 @@ add_executable(test_mesh_reconstructor test_mesh_reconstructor.cpp)
 target_link_libraries(test_mesh_reconstructor PRIVATE
     meshing
     plapoint::plapoint
+    Qt6::Core
     GTest::gtest_main
 )
 target_include_directories(test_mesh_reconstructor PRIVATE

@@ -622,10 +622,21 @@ void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
             item = m_scene->addRect(kp.pt.x - r, kp.pt.y - r, r * 2.0, r * 2.0, pen, brush);
         } else if (m_featureOpts.markerShape == QLatin1String("cross")) {
             QPen crossPen(m_featureOpts.pointColor);
-            crossPen.setWidthF(1.2);
+            crossPen.setWidthF(1.0);
             crossPen.setCosmetic(true);
-            QGraphicsLineItem *l1 = m_scene->addLine(kp.pt.x - r, kp.pt.y - r, kp.pt.x + r, kp.pt.y + r, crossPen);
-            QGraphicsLineItem *l2 = m_scene->addLine(kp.pt.x - r, kp.pt.y + r, kp.pt.x + r, kp.pt.y - r, crossPen);
+            const double crossRadius = std::max(
+                1.0,
+                static_cast<double>(m_featureOpts.pointSize) * m_featureOpts.scaleMultiplier);
+            QGraphicsLineItem *l1 = m_scene->addLine(kp.pt.x - crossRadius,
+                                                     kp.pt.y - crossRadius,
+                                                     kp.pt.x + crossRadius,
+                                                     kp.pt.y + crossRadius,
+                                                     crossPen);
+            QGraphicsLineItem *l2 = m_scene->addLine(kp.pt.x - crossRadius,
+                                                     kp.pt.y + crossRadius,
+                                                     kp.pt.x + crossRadius,
+                                                     kp.pt.y - crossRadius,
+                                                     crossPen);
             if (l1) { l1->setZValue(1000.0); m_featureItems.append(l1); }
             if (l2) { l2->setZValue(1000.0); m_featureItems.append(l2); }
             item = nullptr;

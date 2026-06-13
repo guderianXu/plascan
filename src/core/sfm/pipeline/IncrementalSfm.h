@@ -57,6 +57,8 @@ struct IncrementalSfmOptions
     bool autoSelectInitPair = true;
     ImageId initImageId1 = kInvalidImageId;
     ImageId initImageId2 = kInvalidImageId;
+    /// 使用输入相机中的已知外参，跳过初始像对相对定向和 PnP 注册
+    bool useKnownCameraPoses = false;
     /// 自动选择初始像对时的最大候选对数量（参考 COLMAP 多候选重试策略）
     int maxInitPairCandidates = 10;
 
@@ -269,6 +271,14 @@ class IncrementalSfm
      * @return 成功返回 true
      */
     bool getCamera(ImageId imageId, Camera &cam) const;
+
+    /**
+     * @brief 使用输入相机外参执行固定相机位姿三角化。
+     *
+     * 适用于 `.tsai` 等外部相机文件已经提供可靠位姿的场景。
+     * 此路径不会重新估计相机位姿，只注册所有输入相机并基于匹配生成稀疏点。
+     */
+    IncrementalSfmResult runKnownCameraPoseReconstruction(SfmProgressCallback progressCb);
 
     /**
      * @brief 从 .tsai 文件加载相机参数。

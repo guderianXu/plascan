@@ -1289,6 +1289,9 @@ int main(int argc, char *argv[])
 #endif
     int meshResolution = 224;
     bool skipModel = false;
+    bool skipMesh = false;
+    bool stopAfterSfm = false;
+    bool skipMvs = false;
 #ifdef PLASCAN_THREE_D_ONLY
     bool skipTerrain = true;
 #else
@@ -1310,6 +1313,9 @@ int main(int argc, char *argv[])
     app.add_option("--dem-resolution", demResolution, "DEM/DOM resolution; 0 lets TerrainPipeline choose");
 #endif
     app.add_option("--mesh-resolution", meshResolution, "mesh reconstruction grid resolution");
+    app.add_flag("--stop-after-sfm", stopAfterSfm, "run SFM only, write report, then stop before MVS");
+    app.add_flag("--skip-mvs", skipMvs, "skip MVS and downstream mesh/terrain stages after SFM");
+    app.add_flag("--skip-mesh", skipMesh, "skip mesh reconstruction after MVS dense cloud generation");
 #ifndef PLASCAN_THREE_D_ONLY
     app.add_flag("--skip-model", skipModel, "skip mesh reconstruction");
     app.add_flag("--skip-terrain", skipTerrain, "skip DEM/DOM generation");
@@ -1322,6 +1328,10 @@ int main(int argc, char *argv[])
     if (skipTexture)
     {
         exportObj = false;
+    }
+    if (skipMesh)
+    {
+        skipModel = true;
     }
 
     const QString listPath = cleanAbsolutePath(QString::fromStdString(listPathArg));
@@ -1386,6 +1396,11 @@ int main(int argc, char *argv[])
         timings[key] = elapsedMs;
         return elapsedMs;
     };
+    auto markSkippedStage = [&report](const QString &stage, const QString &reason) {
+        QJsonObject skippedStages = report.value(QStringLiteral("skipped_stages")).toObject();
+        skippedStages[stage] = reason;
+        report[QStringLiteral("skipped_stages")] = skippedStages;
+    };
     double sfmElapsedMs = 0.0;
     double sparsePreprocessElapsedMs = 0.0;
     double mvsElapsedMs = 0.0;
@@ -1435,6 +1450,56 @@ int main(int argc, char *argv[])
         std::fprintf(stderr, "SFM 失败: %s\n", qUtf8Printable(sfmResult.errorMessage));
         std::fprintf(stderr, "report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
         return cli::EXIT_ALGO_ERR;
+    }
+
+    if (stopAfterSfm || skipMvs)
+    {
+        const QString reason = stopAfterSfm
+            ? QStringLiteral("用户请求在 SFM 后停止")
+            : QStringLiteral("用户请求跳过 MVS");
+        report[QStringLiteral("status")] = QStringLiteral("ok");
+        report[QStringLiteral("stop_stage")] = QStringLiteral("sfm");
+        report[QStringLiteral("mvs")] = QJsonObject{
+            {QStringLiteral("status"), QStringLiteral("skipped")},
+            {QStringLiteral("reason"), reason}
+        };
+        report[QStringLiteral("model")] = QJsonObject{
+            {QStringLiteral("status"), QStringLiteral("skipped")},
+            {QStringLiteral("reason"), reason}
+        };
+        markSkippedStage(QStringLiteral("mvs"), reason);
+        markSkippedStage(QStringLiteral("mesh"), reason);
+#ifndef PLASCAN_THREE_D_ONLY
+        markSkippedStage(QStringLiteral("terrain"), reason);
+#endif
+        timings[QStringLiteral("sparse_preprocess_elapsed_ms")] = 0.0;
+        timings[QStringLiteral("mvs_elapsed_ms")] = 0.0;
+        timings[QStringLiteral("mesh_elapsed_ms")] = 0.0;
+#ifndef PLASCAN_THREE_D_ONLY
+        timings[QStringLiteral("terrain_elapsed_ms")] = 0.0;
+#endif
+        const double totalElapsedMs = recordTiming(QStringLiteral("total_elapsed_ms"), pipelineStart);
+        report[QStringLiteral("timings")] = timings;
+
+        QJsonObject finalReport;
+        if (!writeFinalReport(&finalReport))
+        {
+            return cli::EXIT_IO_ERR;
+        }
+        std::fprintf(stdout, "status=ok\n");
+        std::fprintf(stdout, "output_dir=%s\n", qUtf8Printable(outputDir));
+        std::fprintf(stdout, "sparse_cloud=%s\n", qUtf8Printable(sfmResult.sparseCloudPath));
+        std::fprintf(stdout, "skipped_mvs=%s\n", qUtf8Printable(reason));
+        std::fprintf(stdout, "elapsed_total=%.3fs\n", totalElapsedMs / 1000.0);
+        std::fprintf(stdout, "elapsed_sfm=%.3fs\n", sfmElapsedMs / 1000.0);
+        std::fprintf(stdout, "elapsed_sparse_preprocess=0.000s\n");
+        std::fprintf(stdout, "elapsed_mvs=0.000s\n");
+        std::fprintf(stdout, "elapsed_mesh=0.000s\n");
+#ifndef PLASCAN_THREE_D_ONLY
+        std::fprintf(stdout, "elapsed_terrain=0.000s\n");
+#endif
+        std::fprintf(stdout, "report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
+        return cli::EXIT_OK;
     }
 
     constexpr int kMinimumRegisteredImagesForDenseWorkflow = 2;
@@ -1872,6 +1937,7 @@ int main(int argc, char *argv[])
     }
     else
     {
+        markSkippedStage(QStringLiteral("mesh"), QStringLiteral("用户请求跳过网格模型"));
         timings[QStringLiteral("mesh_elapsed_ms")] = 0.0;
     }
 

@@ -2,6 +2,8 @@
 
 #include "FeatureData.h"
 
+#include "OpenCvCompat.h"
+
 #include <torch/torch.h>
 
 #if __has_include(<opencv2/xfeatures2d.hpp>)
@@ -115,7 +117,7 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
     }
     else if (normalizedName == "akaze")
     {
-        cv::Ptr<cv::AKAZE> akaze = cv::AKAZE::create();
+        cv::Ptr<xjw::opencv_compat::AkazeFeature> akaze = xjw::opencv_compat::AkazeFeature::create();
         akaze->detectAndCompute(grayImage, cv::noArray(), keypoints, descriptors, false);
     }
     else if (normalizedName == "surf")

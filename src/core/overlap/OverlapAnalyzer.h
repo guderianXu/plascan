@@ -16,10 +16,57 @@
 
 #include "GroundBackProjector.h"
 
+#include <array>
 #include <string>
 #include <vector>
 
 namespace xjw {
+
+// ============================================================
+// 枚举：ReferenceBody
+// 描述：常用行星/天体基准球半径预设。
+// ============================================================
+enum class ReferenceBody
+{
+    Earth,
+    Moon,
+    Mars
+};
+
+double referenceBodyRadiusMeters(ReferenceBody body);
+const char *referenceBodyName(ReferenceBody body);
+
+enum class OverlapGroundModel
+{
+    FixedZPlane,
+    Dem,
+    ReferenceSphere
+};
+
+enum class ReferenceSphereCenterMode
+{
+    Auto,
+    PlanetCentered,
+    LocalTangent
+};
+
+struct ReferenceSphereOptions
+{
+    ReferenceBody body = ReferenceBody::Earth;
+    double radiusMeters = 0.0;
+    double elevationMeters = 0.0;
+    bool autoLocalTangentHeight = true;
+    ReferenceSphereCenterMode centerMode = ReferenceSphereCenterMode::Auto;
+};
+
+struct OverlapAnalysisOptions
+{
+    OverlapGroundModel groundModel = OverlapGroundModel::FixedZPlane;
+    const DemSurface *dem = nullptr;
+    double fixedZ = 0.0;
+    double neighborFactor = 2.0;
+    ReferenceSphereOptions referenceSphere;
+};
 
 // ============================================================
 // 结构体：OverlapImageInput
@@ -105,6 +152,11 @@ public:
                         bool useFixedZ,
                         double fixedZ,
                         double neighborFactor,
+                        OverlapAnalysisResult *result,
+                        std::string *errorMsg = nullptr);
+
+    static bool analyze(const std::vector<OverlapImageInput> &images,
+                        const OverlapAnalysisOptions &options,
                         OverlapAnalysisResult *result,
                         std::string *errorMsg = nullptr);
 };

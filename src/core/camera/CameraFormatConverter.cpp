@@ -6,8 +6,12 @@
 #include <cmath>
 #include <fstream>
 #include <iomanip>
+#include <regex>
 #include <sstream>
 #include <stdexcept>
+#include <unordered_map>
+
+#include <zip.h>
 
 namespace xjw::camera
 {
@@ -25,6 +29,29 @@ struct CameraRecord
                                                  0.0, 1.0, 0.0,
                                                  0.0, 0.0, 1.0}};
     std::array<double, 3> center{{0.0, 0.0, 0.0}};
+    std::vector<std::string> warnings;
+};
+
+struct ColmapCameraModel
+{
+    std::array<double, 9> k{{0.0, 0.0, 0.0,
+                             0.0, 0.0, 0.0,
+                             0.0, 0.0, 1.0}};
+    std::vector<std::string> warnings;
+};
+
+struct MetashapeProject
+{
+    std::filesystem::path docPath;
+    std::filesystem::path chunkZipPath;
+    std::filesystem::path searchRoot;
+};
+
+struct MetashapeSensor
+{
+    std::array<double, 9> k{{0.0, 0.0, 0.0,
+                             0.0, 0.0, 0.0,
+                             0.0, 0.0, 1.0}};
     std::vector<std::string> warnings;
 };
 
@@ -147,6 +174,31 @@ std::array<double, 3> matVecMul(const std::array<double, 9> &matrix,
     }};
 }
 
+std::array<double, 9> colmapQvecToWorldToCameraRotation(double qw, double qx, double qy, double qz)
+{
+    const double norm = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
+    if (norm <= 0.0)
+    {
+        throw std::runtime_error("COLMAP images.txt 中存在无效四元数");
+    }
+    qw /= norm;
+    qx /= norm;
+    qy /= norm;
+    qz /= norm;
+
+    return std::array<double, 9>{{
+        1.0 - 2.0 * qy * qy - 2.0 * qz * qz,
+        2.0 * qx * qy - 2.0 * qz * qw,
+        2.0 * qx * qz + 2.0 * qy * qw,
+        2.0 * qx * qy + 2.0 * qz * qw,
+        1.0 - 2.0 * qx * qx - 2.0 * qz * qz,
+        2.0 * qy * qz - 2.0 * qx * qw,
+        2.0 * qx * qz - 2.0 * qy * qw,
+        2.0 * qy * qz + 2.0 * qx * qw,
+        1.0 - 2.0 * qx * qx - 2.0 * qy * qy
+    }};
+}
+
 std::vector<std::string> readDataLines(const std::filesystem::path &path)
 {
     std::ifstream in(path);
@@ -183,6 +235,124 @@ std::vector<double> parseNumericLine(const std::string &line, int expectedCount)
         throw std::runtime_error("数值行字段数量错误: " + line);
     }
     return values;
+}
+
+std::string readTextFile(const std::filesystem::path &path)
+{
+    std::ifstream in(path, std::ios::binary);
+    if (!in)
+    {
+        throw std::runtime_error("无法打开文本文件: " + path.string());
+    }
+
+    std::ostringstream buffer;
+    buffer << in.rdbuf();
+    return buffer.str();
+}
+
+std::string readZipEntryText(const std::filesystem::path &zipPath,
+                             const std::string &entryPath)
+{
+    int errorCode = 0;
+    zip_t *archive = zip_open(zipPath.string().c_str(), ZIP_RDONLY, &errorCode);
+    if (!archive)
+    {
+        throw std::runtime_error("无法打开 Metashape zip 文件: " + zipPath.string());
+    }
+
+    zip_file_t *file = zip_fopen(archive, entryPath.c_str(), 0);
+    if (!file)
+    {
+        const std::string error = zip_strerror(archive);
+        zip_close(archive);
+        throw std::runtime_error("Metashape zip 中缺少 " + entryPath + ": " + error);
+    }
+
+    std::string text;
+    std::array<char, 16384> buffer{};
+    while (true)
+    {
+        const zip_int64_t bytesRead = zip_fread(file, buffer.data(), buffer.size());
+        if (bytesRead < 0)
+        {
+            const std::string error = zip_file_strerror(file);
+            zip_fclose(file);
+            zip_close(archive);
+            throw std::runtime_error("读取 Metashape zip 条目失败: " + error);
+        }
+        if (bytesRead == 0)
+        {
+            break;
+        }
+        text.append(buffer.data(), static_cast<size_t>(bytesRead));
+    }
+
+    zip_fclose(file);
+    zip_close(archive);
+    return text;
+}
+
+std::vector<std::string> xmlBlocks(const std::string &xml,
+                                   const std::string &tag)
+{
+    std::vector<std::string> blocks;
+    const std::regex re("<" + tag + "\\b[^>]*>[\\s\\S]*?</" + tag + ">");
+    for (auto it = std::sregex_iterator(xml.begin(), xml.end(), re);
+         it != std::sregex_iterator(); ++it)
+    {
+        blocks.push_back(it->str());
+    }
+    return blocks;
+}
+
+std::optional<std::string> xmlElementText(const std::string &xml,
+                                          const std::string &tag)
+{
+    const std::regex re("<" + tag + "\\b[^>]*>([\\s\\S]*?)</" + tag + ">");
+    std::smatch match;
+    if (!std::regex_search(xml, match, re) || match.size() < 2)
+    {
+        return std::nullopt;
+    }
+    return trim(match[1].str());
+}
+
+std::optional<std::string> xmlAttribute(const std::string &xml,
+                                        const std::string &name)
+{
+    const std::regex re(name + "\\s*=\\s*[\"']([^\"']*)[\"']");
+    std::smatch match;
+    if (!std::regex_search(xml, match, re) || match.size() < 2)
+    {
+        return std::nullopt;
+    }
+    return match[1].str();
+}
+
+double xmlDoubleOr(const std::string &xml,
+                   const std::string &tag,
+                   double fallback)
+{
+    const auto value = xmlElementText(xml, tag);
+    if (!value.has_value() || value->empty())
+    {
+        return fallback;
+    }
+    return std::stod(*value);
+}
+
+bool xmlHasNonZeroTags(const std::string &xml,
+                       const std::vector<std::string> &tags)
+{
+    for (const std::string &tag : tags)
+    {
+        const auto value = xmlElementText(xml, tag);
+        if (value.has_value() && std::abs(std::stod(*value)) > 1e-12)
+        {
+            return true;
+        }
+    }
+    return false;
 }
 
 void warnIfUnsupportedSkew(const std::array<double, 9> &k,
@@ -321,6 +491,219 @@ CameraRecord parseEpflCameraFile(const std::filesystem::path &path)
     return record;
 }
 
+void warnIfColmapDistortion(const std::string &model,
+                            const std::vector<double> &params,
+                            size_t firstDistortionIndex,
+                            std::vector<std::string> *warnings)
+{
+    if (!warnings || firstDistortionIndex >= params.size())
+    {
+        return;
+    }
+
+    const bool hasDistortion = std::any_of(params.begin() + static_cast<std::ptrdiff_t>(firstDistortionIndex),
+                                           params.end(),
+                                           [](double value) { return std::abs(value) > 1e-12; });
+    if (hasDistortion)
+    {
+        warnings->push_back("COLMAP " + model + " distortion terms are not exported to PlaScan tsai output");
+    }
+}
+
+ColmapCameraModel parseColmapCameraLine(const std::string &line)
+{
+    std::istringstream in(line);
+    int cameraId = 0;
+    std::string model;
+    int width = 0;
+    int height = 0;
+    if (!(in >> cameraId >> model >> width >> height))
+    {
+        throw std::runtime_error("COLMAP cameras.txt 相机行格式错误: " + line);
+    }
+
+    std::vector<double> params;
+    double value = 0.0;
+    while (in >> value)
+    {
+        params.push_back(value);
+    }
+
+    ColmapCameraModel camera;
+    if (model == "SIMPLE_PINHOLE")
+    {
+        if (params.size() != 3)
+        {
+            throw std::runtime_error("COLMAP SIMPLE_PINHOLE 参数数量错误: " + line);
+        }
+        camera.k = std::array<double, 9>{{params[0], 0.0, params[1], 0.0, params[0], params[2], 0.0, 0.0, 1.0}};
+    }
+    else if (model == "PINHOLE")
+    {
+        if (params.size() != 4)
+        {
+            throw std::runtime_error("COLMAP PINHOLE 参数数量错误: " + line);
+        }
+        camera.k = std::array<double, 9>{{params[0], 0.0, params[2], 0.0, params[1], params[3], 0.0, 0.0, 1.0}};
+    }
+    else if (model == "SIMPLE_RADIAL" || model == "SIMPLE_RADIAL_FISHEYE")
+    {
+        if (params.size() != 4)
+        {
+            throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
+        }
+        camera.k = std::array<double, 9>{{params[0], 0.0, params[1], 0.0, params[0], params[2], 0.0, 0.0, 1.0}};
+        warnIfColmapDistortion(model, params, 3, &camera.warnings);
+    }
+    else if (model == "RADIAL" || model == "RADIAL_FISHEYE")
+    {
+        if (params.size() != 5)
+        {
+            throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
+        }
+        camera.k = std::array<double, 9>{{params[0], 0.0, params[1], 0.0, params[0], params[2], 0.0, 0.0, 1.0}};
+        warnIfColmapDistortion(model, params, 3, &camera.warnings);
+    }
+    else if (model == "OPENCV" || model == "OPENCV_FISHEYE")
+    {
+        if (params.size() != 8)
+        {
+            throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
+        }
+        camera.k = std::array<double, 9>{{params[0], 0.0, params[2], 0.0, params[1], params[3], 0.0, 0.0, 1.0}};
+        warnIfColmapDistortion(model, params, 4, &camera.warnings);
+    }
+    else if (model == "FULL_OPENCV")
+    {
+        if (params.size() != 12)
+        {
+            throw std::runtime_error("COLMAP " + model + " 参数数量错误: " + line);
+        }
+        camera.k = std::array<double, 9>{{params[0], 0.0, params[2], 0.0, params[1], params[3], 0.0, 0.0, 1.0}};
+        warnIfColmapDistortion(model, params, 4, &camera.warnings);
+    }
+    else
+    {
+        throw std::runtime_error("暂不支持的 COLMAP 相机模型: " + model);
+    }
+
+    (void)cameraId;
+    (void)width;
+    (void)height;
+    return camera;
+}
+
+std::unordered_map<int, ColmapCameraModel> parseColmapCameras(const std::filesystem::path &path)
+{
+    std::unordered_map<int, ColmapCameraModel> cameras;
+    for (const std::string &line : readDataLines(path))
+    {
+        std::istringstream in(line);
+        int cameraId = 0;
+        if (!(in >> cameraId))
+        {
+            throw std::runtime_error("COLMAP cameras.txt 相机 ID 格式错误: " + line);
+        }
+        cameras.emplace(cameraId, parseColmapCameraLine(line));
+    }
+    if (cameras.empty())
+    {
+        throw std::runtime_error("COLMAP cameras.txt 中没有相机记录: " + path.string());
+    }
+    return cameras;
+}
+
+CameraRecord parseColmapImageLine(const std::string &line,
+                                  const std::unordered_map<int, ColmapCameraModel> &cameras)
+{
+    std::istringstream in(line);
+    int imageId = 0;
+    double qw = 0.0;
+    double qx = 0.0;
+    double qy = 0.0;
+    double qz = 0.0;
+    std::array<double, 3> t{{0.0, 0.0, 0.0}};
+    int cameraId = 0;
+    if (!(in >> imageId >> qw >> qx >> qy >> qz >> t[0] >> t[1] >> t[2] >> cameraId))
+    {
+        throw std::runtime_error("COLMAP images.txt 影像行格式错误: " + line);
+    }
+
+    std::string imageName;
+    std::getline(in, imageName);
+    imageName = trim(imageName);
+    if (imageName.empty())
+    {
+        throw std::runtime_error("COLMAP images.txt 影像行缺少影像名: " + line);
+    }
+
+    const auto cameraIt = cameras.find(cameraId);
+    if (cameraIt == cameras.end())
+    {
+        throw std::runtime_error("COLMAP images.txt 引用了不存在的 CAMERA_ID: " + std::to_string(cameraId));
+    }
+
+    CameraRecord record;
+    record.imageName = imageName;
+    record.k = cameraIt->second.k;
+    record.warnings = cameraIt->second.warnings;
+
+    const std::array<double, 9> rotationWorldToCamera = colmapQvecToWorldToCameraRotation(qw, qx, qy, qz);
+    record.rotationCameraToWorld = transpose(rotationWorldToCamera);
+    const auto centerRaw = matVecMul(record.rotationCameraToWorld, t);
+    record.center = std::array<double, 3>{{-centerRaw[0], -centerRaw[1], -centerRaw[2]}};
+    record.cameraFileName = cameraFileNameFromStem(record.imageName);
+    warnIfUnsupportedSkew(record.k, &record.warnings);
+    (void)imageId;
+    return record;
+}
+
+std::vector<CameraRecord> parseColmapImages(const std::filesystem::path &path,
+                                            const std::unordered_map<int, ColmapCameraModel> &cameras)
+{
+    std::ifstream in(path);
+    if (!in)
+    {
+        throw std::runtime_error("无法打开相机文件: " + path.string());
+    }
+
+    std::vector<CameraRecord> records;
+    std::string line;
+    int lineNumber = 0;
+    while (std::getline(in, line))
+    {
+        ++lineNumber;
+        const std::string header = trim(line);
+        if (header.empty() || header.rfind("#", 0) == 0)
+        {
+            continue;
+        }
+
+        records.push_back(parseColmapImageLine(header, cameras));
+
+        if (!std::getline(in, line))
+        {
+            throw std::runtime_error("COLMAP images.txt 第 " + std::to_string(lineNumber)
+                                     + " 行影像记录缺少 POINTS2D 行: " + path.string());
+        }
+        ++lineNumber;
+    }
+
+    if (records.empty())
+    {
+        throw std::runtime_error("COLMAP images.txt 中没有影像记录: " + path.string());
+    }
+    return records;
+}
+
+void sortRecordsByImageName(std::vector<CameraRecord> *records)
+{
+    std::stable_sort(records->begin(), records->end(), [](const CameraRecord &lhs, const CameraRecord &rhs) {
+        return toLower(std::filesystem::path(lhs.imageName).generic_string())
+            < toLower(std::filesystem::path(rhs.imageName).generic_string());
+    });
+}
+
 bool hasExtension(const std::filesystem::path &path, const std::string &extension)
 {
     return normalizedFormatName(path.extension().string()) == normalizedFormatName(extension);
@@ -395,6 +778,509 @@ std::vector<std::filesystem::path> findEpflCameraFiles(const std::filesystem::pa
     return matches;
 }
 
+bool isColmapTextDirectory(const std::filesystem::path &path)
+{
+    return std::filesystem::is_directory(path)
+        && std::filesystem::exists(path / "cameras.txt")
+        && std::filesystem::exists(path / "images.txt");
+}
+
+std::filesystem::path findColmapTextDirectory(const std::filesystem::path &inputPath)
+{
+    if (std::filesystem::is_regular_file(inputPath))
+    {
+        const std::filesystem::path parent = inputPath.parent_path();
+        if (isColmapTextDirectory(parent))
+        {
+            return parent;
+        }
+        throw std::runtime_error("指定文件所在目录不是 COLMAP text sparse 目录: " + inputPath.string());
+    }
+
+    if (isColmapTextDirectory(inputPath))
+    {
+        return inputPath;
+    }
+    if (isColmapTextDirectory(inputPath / "sparse"))
+    {
+        return inputPath / "sparse";
+    }
+    if (isColmapTextDirectory(inputPath / "sparse" / "0"))
+    {
+        return inputPath / "sparse" / "0";
+    }
+    if (isColmapTextDirectory(inputPath / "0"))
+    {
+        return inputPath / "0";
+    }
+    throw std::runtime_error("目录下未找到 COLMAP text cameras.txt/images.txt: " + inputPath.string());
+}
+
+std::filesystem::path findColmapImageRoot(const std::filesystem::path &inputPath,
+                                          const std::filesystem::path &colmapDir,
+                                          const std::vector<CameraRecord> &records)
+{
+    std::vector<std::filesystem::path> candidates;
+    if (std::filesystem::is_directory(inputPath))
+    {
+        candidates.push_back(inputPath / "images");
+    }
+    candidates.push_back(colmapDir.parent_path() / "images");
+    candidates.push_back(colmapDir.parent_path().parent_path() / "images");
+    candidates.push_back(colmapDir);
+    candidates.push_back(colmapDir.parent_path());
+
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+    for (const std::filesystem::path &candidate : candidates)
+    {
+        if (!std::filesystem::is_directory(candidate))
+        {
+            continue;
+        }
+        const bool allImagesFound = std::all_of(records.begin(), records.end(), [&](const CameraRecord &record) {
+            return std::filesystem::exists(candidate / record.imageName);
+        });
+        if (allImagesFound)
+        {
+            return candidate;
+        }
+    }
+
+    throw std::runtime_error("未找到 COLMAP 影像目录，已检查 sparse 目录相邻 images 目录");
+}
+
+bool isImageFile(const std::filesystem::path &path)
+{
+    const std::string ext = toLower(path.extension().string());
+    return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".tif" || ext == ".tiff" || ext == ".ppm";
+}
+
+std::filesystem::path metashapeSearchRootFrom(const std::filesystem::path &path)
+{
+    if (path.filename() == "0" && path.parent_path().extension() == ".files")
+    {
+        const std::filesystem::path metashapeDir = path.parent_path().parent_path();
+        if (toLower(metashapeDir.filename().string()) == "metashape")
+        {
+            return metashapeDir.parent_path();
+        }
+        return metashapeDir;
+    }
+
+    if (toLower(path.filename().string()) == "metashape")
+    {
+        return path.parent_path();
+    }
+    return path;
+}
+
+std::optional<MetashapeProject> makeMetashapeProjectFromFilesDir(const std::filesystem::path &filesDir,
+                                                                  const std::filesystem::path &searchRoot)
+{
+    const std::filesystem::path chunkDir = filesDir / "0";
+    if (std::filesystem::exists(chunkDir / "doc.xml"))
+    {
+        return MetashapeProject{chunkDir / "doc.xml", {}, searchRoot};
+    }
+    if (std::filesystem::exists(chunkDir / "chunk.zip"))
+    {
+        return MetashapeProject{{}, chunkDir / "chunk.zip", searchRoot};
+    }
+    return std::nullopt;
+}
+
+std::optional<MetashapeProject> findMetashapeProject(const std::filesystem::path &inputPath)
+{
+    if (std::filesystem::is_regular_file(inputPath))
+    {
+        const std::string fileName = inputPath.filename().string();
+        if (fileName == "doc.xml")
+        {
+            return MetashapeProject{inputPath, {}, metashapeSearchRootFrom(inputPath.parent_path())};
+        }
+        if (fileName == "chunk.zip")
+        {
+            return MetashapeProject{{}, inputPath, metashapeSearchRootFrom(inputPath.parent_path())};
+        }
+        if (hasExtension(inputPath, ".psx"))
+        {
+            const std::filesystem::path filesDir =
+                inputPath.parent_path() / (inputPath.stem().string() + ".files");
+            return makeMetashapeProjectFromFilesDir(filesDir,
+                                                    metashapeSearchRootFrom(inputPath.parent_path()));
+        }
+        return std::nullopt;
+    }
+
+    if (!std::filesystem::is_directory(inputPath))
+    {
+        return std::nullopt;
+    }
+
+    std::vector<std::filesystem::path> dirs{inputPath};
+    if (std::filesystem::is_directory(inputPath / "Metashape"))
+    {
+        dirs.push_back(inputPath / "Metashape");
+    }
+
+    for (const std::filesystem::path &dir : dirs)
+    {
+        if (std::filesystem::exists(dir / "doc.xml"))
+        {
+            return MetashapeProject{dir / "doc.xml", {}, metashapeSearchRootFrom(dir)};
+        }
+        if (std::filesystem::exists(dir / "chunk.zip"))
+        {
+            return MetashapeProject{{}, dir / "chunk.zip", metashapeSearchRootFrom(dir)};
+        }
+        if (std::filesystem::exists(dir / "0" / "doc.xml"))
+        {
+            return MetashapeProject{dir / "0" / "doc.xml", {}, metashapeSearchRootFrom(dir / "0")};
+        }
+        if (std::filesystem::exists(dir / "0" / "chunk.zip"))
+        {
+            return MetashapeProject{{}, dir / "0" / "chunk.zip", metashapeSearchRootFrom(dir / "0")};
+        }
+
+        for (const auto &entry : std::filesystem::directory_iterator(dir))
+        {
+            const std::filesystem::path path = entry.path();
+            if (entry.is_regular_file() && hasExtension(path, ".psx"))
+            {
+                const auto project =
+                    makeMetashapeProjectFromFilesDir(path.parent_path() / (path.stem().string() + ".files"),
+                                                     metashapeSearchRootFrom(path.parent_path()));
+                if (project.has_value())
+                {
+                    return project;
+                }
+            }
+            else if (entry.is_directory() && path.extension() == ".files")
+            {
+                const auto project = makeMetashapeProjectFromFilesDir(path, metashapeSearchRootFrom(dir));
+                if (project.has_value())
+                {
+                    return project;
+                }
+            }
+        }
+    }
+
+    return std::nullopt;
+}
+
+std::string readMetashapeDocXml(const MetashapeProject &project)
+{
+    if (!project.docPath.empty())
+    {
+        return readTextFile(project.docPath);
+    }
+    if (!project.chunkZipPath.empty())
+    {
+        return readZipEntryText(project.chunkZipPath, "doc.xml");
+    }
+    throw std::runtime_error("Metashape 工程缺少 doc.xml 或 chunk.zip");
+}
+
+std::unordered_map<int, MetashapeSensor> parseMetashapeSensors(const std::string &xml)
+{
+    std::unordered_map<int, MetashapeSensor> sensors;
+    for (const std::string &sensorBlock : xmlBlocks(xml, "sensor"))
+    {
+        const auto idText = xmlAttribute(sensorBlock, "id");
+        if (!idText.has_value())
+        {
+            continue;
+        }
+
+        const auto resolutionMatch = [&]() -> std::optional<std::string> {
+            const std::regex re("<resolution\\b[^>]*/?>");
+            std::smatch match;
+            if (std::regex_search(sensorBlock, match, re))
+            {
+                return match[0].str();
+            }
+            return std::nullopt;
+        }();
+        if (!resolutionMatch.has_value())
+        {
+            throw std::runtime_error("Metashape sensor 缺少 resolution");
+        }
+
+        const auto widthText = xmlAttribute(*resolutionMatch, "width");
+        const auto heightText = xmlAttribute(*resolutionMatch, "height");
+        if (!widthText.has_value() || !heightText.has_value())
+        {
+            throw std::runtime_error("Metashape resolution 缺少 width/height");
+        }
+        const double width = std::stod(*widthText);
+        const double height = std::stod(*heightText);
+
+        const std::vector<std::string> calibrationBlocks = xmlBlocks(sensorBlock, "calibration");
+        if (calibrationBlocks.empty())
+        {
+            throw std::runtime_error("Metashape sensor 缺少 calibration");
+        }
+
+        std::string calibration = calibrationBlocks.front();
+        for (const std::string &block : calibrationBlocks)
+        {
+            const auto klass = xmlAttribute(block, "class");
+            if (klass.has_value() && *klass == "adjusted")
+            {
+                calibration = block;
+                break;
+            }
+        }
+
+        const double f = xmlDoubleOr(calibration, "f", 0.0);
+        const double fx = xmlDoubleOr(calibration, "fx", f);
+        const double fy = xmlDoubleOr(calibration, "fy", f);
+        if (fx <= 0.0 || fy <= 0.0)
+        {
+            throw std::runtime_error("Metashape calibration 缺少有效焦距");
+        }
+
+        const double cx = xmlDoubleOr(calibration, "cx", 0.0);
+        const double cy = xmlDoubleOr(calibration, "cy", 0.0);
+
+        MetashapeSensor sensor;
+        sensor.k = std::array<double, 9>{{
+            fx, 0.0, width * 0.5 + cx,
+            0.0, fy, height * 0.5 + cy,
+            0.0, 0.0, 1.0
+        }};
+
+        if (xmlHasNonZeroTags(calibration, {"k1", "k2", "k3", "k4", "p1", "p2", "b1", "b2"}))
+        {
+            sensor.warnings.push_back("Metashape distortion terms are not exported to PlaScan tsai output");
+        }
+        warnIfUnsupportedSkew(sensor.k, &sensor.warnings);
+        sensors.emplace(std::stoi(*idText), sensor);
+    }
+
+    if (sensors.empty())
+    {
+        throw std::runtime_error("Metashape doc.xml 中没有可用 sensor");
+    }
+    return sensors;
+}
+
+std::string stripMetashapeCameraSuffix(const std::string &label)
+{
+    const size_t slash = label.find_last_of("/\\");
+    const std::string filename = slash == std::string::npos ? label : label.substr(slash + 1);
+    const std::filesystem::path path(filename);
+    std::string stem = path.has_extension() ? path.stem().string() : filename;
+    const size_t underscore = stem.find_last_of('_');
+    if (underscore != std::string::npos && underscore + 1 < stem.size())
+    {
+        const std::string suffix = stem.substr(underscore + 1);
+        const bool numericSuffix = std::all_of(suffix.begin(), suffix.end(), [](unsigned char ch) {
+            return std::isdigit(ch) != 0;
+        });
+        if (numericSuffix)
+        {
+            stem = stem.substr(0, underscore);
+        }
+    }
+    return stem;
+}
+
+std::string metashapeLabelBasename(const std::string &label)
+{
+    const size_t slash = label.find_last_of("/\\");
+    return slash == std::string::npos ? label : label.substr(slash + 1);
+}
+
+std::optional<CameraRecord> parseMetashapeCameraBlock(
+    const std::string &cameraBlock,
+    const std::unordered_map<int, MetashapeSensor> &sensors)
+{
+    const auto label = xmlAttribute(cameraBlock, "label");
+    const auto sensorId = xmlAttribute(cameraBlock, "sensor_id");
+    const auto transform = xmlElementText(cameraBlock, "transform");
+    if (!label.has_value() || !sensorId.has_value() || !transform.has_value())
+    {
+        return std::nullopt;
+    }
+
+    const auto sensorIt = sensors.find(std::stoi(*sensorId));
+    if (sensorIt == sensors.end())
+    {
+        throw std::runtime_error("Metashape camera 引用了不存在的 sensor_id: " + *sensorId);
+    }
+
+    const std::vector<double> values = parseNumericLine(*transform, 16);
+
+    CameraRecord record;
+    record.imageName = metashapeLabelBasename(*label);
+    record.k = sensorIt->second.k;
+    record.warnings = sensorIt->second.warnings;
+    record.rotationCameraToWorld = std::array<double, 9>{{
+        values[0], values[1], values[2],
+        values[4], values[5], values[6],
+        values[8], values[9], values[10]
+    }};
+    record.center = std::array<double, 3>{{values[3], values[7], values[11]}};
+    return record;
+}
+
+std::vector<CameraRecord> parseMetashapeRecords(const std::string &xml)
+{
+    const auto sensors = parseMetashapeSensors(xml);
+    std::vector<CameraRecord> records;
+    for (const std::string &cameraBlock : xmlBlocks(xml, "camera"))
+    {
+        auto record = parseMetashapeCameraBlock(cameraBlock, sensors);
+        if (record.has_value())
+        {
+            records.push_back(*record);
+        }
+    }
+    if (records.empty())
+    {
+        throw std::runtime_error("Metashape doc.xml 中没有带 transform 的相机记录");
+    }
+    return records;
+}
+
+std::optional<std::filesystem::path> findMetashapeImage(const std::filesystem::path &imageRoot,
+                                                        const std::string &label)
+{
+    if (!std::filesystem::is_directory(imageRoot))
+    {
+        return std::nullopt;
+    }
+
+    std::vector<std::string> stems{label, stripMetashapeCameraSuffix(label)};
+    std::sort(stems.begin(), stems.end());
+    stems.erase(std::unique(stems.begin(), stems.end()), stems.end());
+
+    const std::vector<std::string> extensions{".JPG", ".jpg", ".JPEG", ".jpeg", ".PNG", ".png", ".TIF", ".tif", ".TIFF", ".tiff"};
+    for (const std::string &stem : stems)
+    {
+        const std::filesystem::path direct = imageRoot / stem;
+        if (std::filesystem::exists(direct) && std::filesystem::is_regular_file(direct))
+        {
+            return direct;
+        }
+        for (const std::string &ext : extensions)
+        {
+            const std::filesystem::path candidate = imageRoot / (stem + ext);
+            if (std::filesystem::exists(candidate) && std::filesystem::is_regular_file(candidate))
+            {
+                return candidate;
+            }
+        }
+    }
+
+    for (const auto &entry : std::filesystem::directory_iterator(imageRoot))
+    {
+        if (!entry.is_regular_file() || !isImageFile(entry.path()))
+        {
+            continue;
+        }
+        const std::string fileStem = toLower(entry.path().stem().string());
+        const std::string fileName = toLower(entry.path().filename().string());
+        for (const std::string &stem : stems)
+        {
+            if (fileStem == toLower(stem) || fileName == toLower(stem))
+            {
+                return entry.path();
+            }
+        }
+    }
+    return std::nullopt;
+}
+
+std::filesystem::path assignMetashapeImageRoot(const std::filesystem::path &inputPath,
+                                               const MetashapeProject &project,
+                                               std::vector<CameraRecord> *records)
+{
+    if (!records)
+    {
+        throw std::runtime_error("内部错误：Metashape records 为空");
+    }
+
+    std::vector<std::filesystem::path> candidates;
+    auto pushCandidates = [&](const std::filesystem::path &root) {
+        if (root.empty())
+        {
+            return;
+        }
+        candidates.push_back(root / "Depthimages");
+        candidates.push_back(root / "depthimages");
+        candidates.push_back(root / "Images");
+        candidates.push_back(root / "images");
+        candidates.push_back(root);
+    };
+
+    pushCandidates(project.searchRoot);
+    if (std::filesystem::is_directory(inputPath))
+    {
+        pushCandidates(inputPath);
+    }
+    if (!project.docPath.empty())
+    {
+        pushCandidates(project.docPath.parent_path());
+    }
+    if (!project.chunkZipPath.empty())
+    {
+        pushCandidates(project.chunkZipPath.parent_path());
+    }
+
+    std::sort(candidates.begin(), candidates.end());
+    candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
+
+    for (const std::filesystem::path &candidate : candidates)
+    {
+        std::vector<std::filesystem::path> images;
+        bool allFound = true;
+        for (const CameraRecord &record : *records)
+        {
+            const auto image = findMetashapeImage(candidate, record.imageName);
+            if (!image.has_value())
+            {
+                allFound = false;
+                break;
+            }
+            images.push_back(*image);
+        }
+
+        if (!allFound)
+        {
+            continue;
+        }
+
+        for (size_t i = 0; i < records->size(); ++i)
+        {
+            (*records)[i].imageName = images[i].filename().string();
+            (*records)[i].cameraFileName = cameraFileNameFromStem((*records)[i].imageName);
+        }
+        return candidate;
+    }
+
+    throw std::runtime_error("未找到 Metashape 影像目录，已检查 Depthimages/Images/images 和工程相邻目录");
+}
+
+std::vector<CameraRecord> loadMetashapeRecords(const std::filesystem::path &inputPath,
+                                               std::filesystem::path *sourceDir)
+{
+    const auto project = findMetashapeProject(inputPath);
+    if (!project.has_value())
+    {
+        throw std::runtime_error("目录下未找到 Metashape doc.xml 或 Project.files/0/chunk.zip: "
+                                 + inputPath.string());
+    }
+
+    std::vector<CameraRecord> records = parseMetashapeRecords(readMetashapeDocXml(*project));
+    *sourceDir = assignMetashapeImageRoot(inputPath, *project, &records);
+    return records;
+}
+
 CameraFormat detectFormat(const std::filesystem::path &inputPath)
 {
     if (std::filesystem::is_regular_file(inputPath))
@@ -408,6 +1294,14 @@ CameraFormat detectFormat(const std::filesystem::path &inputPath)
         {
             return CameraFormat::EpflCamera;
         }
+        if (isColmapTextDirectory(inputPath.parent_path()))
+        {
+            return CameraFormat::ColmapText;
+        }
+        if (findMetashapeProject(inputPath).has_value())
+        {
+            return CameraFormat::MetashapeXml;
+        }
     }
     else if (std::filesystem::is_directory(inputPath))
     {
@@ -419,8 +1313,20 @@ CameraFormat detectFormat(const std::filesystem::path &inputPath)
         {
             return CameraFormat::EpflCamera;
         }
+        try
+        {
+            (void)findColmapTextDirectory(inputPath);
+            return CameraFormat::ColmapText;
+        }
+        catch (const std::exception &)
+        {
+        }
+        if (findMetashapeProject(inputPath).has_value())
+        {
+            return CameraFormat::MetashapeXml;
+        }
     }
-    throw std::runtime_error("无法自动识别相机格式，请使用 --format 指定 middlebury-par 或 epfl-camera");
+    throw std::runtime_error("无法自动识别相机格式，请使用 --format 指定 middlebury-par、epfl-camera、colmap-text 或 metashape-xml");
 }
 
 std::filesystem::path sourceDirectoryFor(const std::filesystem::path &inputPath)
@@ -456,6 +1362,19 @@ std::vector<CameraRecord> loadRecords(CameraFormat format,
             records.push_back(parseEpflCameraFile(path));
         }
         return records;
+    }
+    if (format == CameraFormat::ColmapText)
+    {
+        const std::filesystem::path colmapDir = findColmapTextDirectory(inputPath);
+        std::vector<CameraRecord> records =
+            parseColmapImages(colmapDir / "images.txt", parseColmapCameras(colmapDir / "cameras.txt"));
+        sortRecordsByImageName(&records);
+        *sourceDir = findColmapImageRoot(inputPath, colmapDir, records);
+        return records;
+    }
+    if (format == CameraFormat::MetashapeXml)
+    {
+        return loadMetashapeRecords(inputPath, sourceDir);
     }
 
     throw std::runtime_error("内部错误：不能直接加载 auto 格式");
@@ -593,7 +1512,7 @@ void prepareOutputDirectory(const std::filesystem::path &sourceDir,
 
 std::vector<std::string> supportedFormatNames()
 {
-    return {"auto", "middlebury-par", "epfl-camera"};
+    return {"auto", "middlebury-par", "epfl-camera", "colmap-text", "metashape-xml"};
 }
 
 std::string cameraFormatName(CameraFormat format)
@@ -606,6 +1525,10 @@ std::string cameraFormatName(CameraFormat format)
         return "middlebury-par";
     case CameraFormat::EpflCamera:
         return "epfl-camera";
+    case CameraFormat::ColmapText:
+        return "colmap-text";
+    case CameraFormat::MetashapeXml:
+        return "metashape-xml";
     }
     return "unknown";
 }
@@ -620,6 +1543,10 @@ std::string cameraFormatDescription(CameraFormat format)
         return "Middlebury *_par.txt";
     case CameraFormat::EpflCamera:
         return "EPFL/Strecha *.camera";
+    case CameraFormat::ColmapText:
+        return "COLMAP text sparse cameras.txt/images.txt";
+    case CameraFormat::MetashapeXml:
+        return "Metashape doc.xml / Project.files/0/chunk.zip";
     }
     return "未知格式";
 }
@@ -638,6 +1565,14 @@ std::optional<CameraFormat> parseCameraFormat(const std::string &name)
     if (normalized == "epfl-camera" || normalized == "epfl" || normalized == "strecha-camera")
     {
         return CameraFormat::EpflCamera;
+    }
+    if (normalized == "colmap-text" || normalized == "colmap")
+    {
+        return CameraFormat::ColmapText;
+    }
+    if (normalized == "metashape-xml" || normalized == "metashape" || normalized == "agisoft-metashape")
+    {
+        return CameraFormat::MetashapeXml;
     }
     return std::nullopt;
 }

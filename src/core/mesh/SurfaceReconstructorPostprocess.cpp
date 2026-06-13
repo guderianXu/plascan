@@ -1,8 +1,12 @@
 #include "SurfaceReconstructorPostprocess.h"
 
 #include <algorithm>
+#include <array>
 #include <cstddef>
 #include <cstdint>
+#include <queue>
+#include <unordered_map>
+#include <vector>
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
@@ -113,6 +117,113 @@ void assignFromPlaMesh(const PlaMesh &source, TriMesh *mesh)
     }
 }
 
+std::uint64_t edgeKey(int a, int b)
+{
+    const std::uint32_t lo = static_cast<std::uint32_t>(std::min(a, b));
+    const std::uint32_t hi = static_cast<std::uint32_t>(std::max(a, b));
+    return (static_cast<std::uint64_t>(lo) << 32) | hi;
+}
+
+void keepLargestConnectedComponent(TriMesh *mesh)
+{
+    if (!mesh || mesh->faces.empty())
+    {
+        return;
+    }
+
+    std::unordered_map<std::uint64_t, std::vector<int>> edgeToFaces;
+    edgeToFaces.reserve(mesh->faces.size() * 3);
+    for (std::size_t faceIndex = 0; faceIndex < mesh->faces.size(); ++faceIndex)
+    {
+        const Triangle &face = mesh->faces[faceIndex];
+        edgeToFaces[edgeKey(face.v[0], face.v[1])].push_back(static_cast<int>(faceIndex));
+        edgeToFaces[edgeKey(face.v[1], face.v[2])].push_back(static_cast<int>(faceIndex));
+        edgeToFaces[edgeKey(face.v[2], face.v[0])].push_back(static_cast<int>(faceIndex));
+    }
+
+    std::vector<std::vector<int>> adjacency(mesh->faces.size());
+    for (const auto &entry : edgeToFaces)
+    {
+        const auto &edgeFaces = entry.second;
+        for (std::size_t i = 0; i < edgeFaces.size(); ++i)
+        {
+            for (std::size_t j = i + 1; j < edgeFaces.size(); ++j)
+            {
+                adjacency[static_cast<std::size_t>(edgeFaces[i])].push_back(edgeFaces[j]);
+                adjacency[static_cast<std::size_t>(edgeFaces[j])].push_back(edgeFaces[i]);
+            }
+        }
+    }
+
+    std::vector<std::uint8_t> visited(mesh->faces.size(), 0);
+    std::vector<int> largestComponent;
+    for (std::size_t start = 0; start < mesh->faces.size(); ++start)
+    {
+        if (visited[start])
+        {
+            continue;
+        }
+
+        std::vector<int> component;
+        std::queue<int> queue;
+        visited[start] = 1;
+        queue.push(static_cast<int>(start));
+        while (!queue.empty())
+        {
+            const int faceIndex = queue.front();
+            queue.pop();
+            component.push_back(faceIndex);
+            for (int neighbor : adjacency[static_cast<std::size_t>(faceIndex)])
+            {
+                const auto neighborIndex = static_cast<std::size_t>(neighbor);
+                if (!visited[neighborIndex])
+                {
+                    visited[neighborIndex] = 1;
+                    queue.push(neighbor);
+                }
+            }
+        }
+
+        if (component.size() > largestComponent.size())
+        {
+            largestComponent = std::move(component);
+        }
+    }
+
+    if (largestComponent.empty())
+    {
+        return;
+    }
+
+    std::vector<int> oldToNew(mesh->vertices.size(), -1);
+    std::vector<MeshVertex> compactVertices;
+    std::vector<Triangle> compactFaces;
+    compactFaces.reserve(largestComponent.size());
+    for (int faceIndex : largestComponent)
+    {
+        Triangle remapped;
+        const Triangle &source = mesh->faces[static_cast<std::size_t>(faceIndex)];
+        for (int corner = 0; corner < 3; ++corner)
+        {
+            const int oldIndex = source.v[corner];
+            if (oldIndex < 0 || static_cast<std::size_t>(oldIndex) >= mesh->vertices.size())
+            {
+                return;
+            }
+            if (oldToNew[static_cast<std::size_t>(oldIndex)] < 0)
+            {
+                oldToNew[static_cast<std::size_t>(oldIndex)] = static_cast<int>(compactVertices.size());
+                compactVertices.push_back(mesh->vertices[static_cast<std::size_t>(oldIndex)]);
+            }
+            remapped.v[corner] = oldToNew[static_cast<std::size_t>(oldIndex)];
+        }
+        compactFaces.push_back(remapped);
+    }
+
+    mesh->vertices = std::move(compactVertices);
+    mesh->faces = std::move(compactFaces);
+}
+
 } // namespace
 
 void removeDegenerateFaces(TriMesh *mesh)
@@ -130,9 +241,16 @@ void removeSmallConnectedComponents(TriMesh *mesh, int minFaces)
     {
         return;
     }
-    assignFromPlaMesh(
-        plapoint::mesh::removeSmallConnectedComponents(toPlaMesh(*mesh), static_cast<std::size_t>(minFaces)),
-        mesh);
+    PlaMesh filtered = plapoint::mesh::removeSmallConnectedComponents(
+        toPlaMesh(*mesh),
+        static_cast<std::size_t>(minFaces));
+    if (filtered.hasFaces() && filtered.faces()->rows() > 0)
+    {
+        assignFromPlaMesh(filtered, mesh);
+        return;
+    }
+
+    keepLargestConnectedComponent(mesh);
 }
 
 void simplifyVoxelMeshAdaptive(TriMesh *mesh,

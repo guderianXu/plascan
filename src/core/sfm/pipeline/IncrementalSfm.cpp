@@ -3,7 +3,7 @@
 
 #include "log/Logger.h"
 
-#include <opencv2/calib3d.hpp>
+#include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
 #include <algorithm>
@@ -14,6 +14,146 @@
 
 namespace xjw
 {
+
+namespace
+{
+
+struct KnownPoseTriangulationPolicy
+{
+    TriangulatorOptions triangulatorOptions;
+    double filterMinTriAngle = 2.0;
+    bool adapted = false;
+    int validCandidates = 0;
+    int acceptedWithDefault = 0;
+    int acceptedWithAdapted = 0;
+    double chosenMinTriAngle = 2.0;
+};
+
+double percentile(std::vector<double> values, double ratio)
+{
+    if (values.empty())
+    {
+        return 0.0;
+    }
+
+    std::sort(values.begin(), values.end());
+    const double clampedRatio = std::max(0.0, std::min(1.0, ratio));
+    const auto index = static_cast<size_t>(std::round(clampedRatio * static_cast<double>(values.size() - 1)));
+    return values[index];
+}
+
+KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
+    const std::shared_ptr<SfmReconstruction> &reconstruction,
+    const CorrespondenceGraph &correspondenceGraph,
+    const std::vector<ImageId> &imageIds,
+    const IncrementalSfmOptions &options)
+{
+    KnownPoseTriangulationPolicy policy;
+    policy.triangulatorOptions = options.triangulatorOptions;
+    policy.filterMinTriAngle = options.filterMinTriAngle;
+    policy.chosenMinTriAngle = options.triangulatorOptions.minTriAngle;
+
+    constexpr int minUsefulTriangulations = 20;
+    constexpr double relaxedMinTriAngle = 0.1;
+    constexpr double absoluteMinTriAngle = 0.05;
+
+    std::vector<double> validAngles;
+    validAngles.reserve(1024);
+
+    for (ImageId imageId : imageIds)
+    {
+        if (!reconstruction->isRegistered(imageId) || !reconstruction->hasCamera(imageId))
+        {
+            continue;
+        }
+
+        const ImageData &image = reconstruction->image(imageId);
+        const Camera &camera = reconstruction->camera(imageId);
+
+        for (FeatureIdx featureIdx = 0; featureIdx < static_cast<FeatureIdx>(image.keypoints.size()); ++featureIdx)
+        {
+            const auto correspondences = correspondenceGraph.findCorrespondences(imageId, featureIdx);
+            for (const auto &correspondence : correspondences)
+            {
+                if (correspondence.imageId <= imageId ||
+                    !reconstruction->isRegistered(correspondence.imageId) ||
+                    !reconstruction->hasCamera(correspondence.imageId))
+                {
+                    continue;
+                }
+
+                const ImageData &otherImage = reconstruction->image(correspondence.imageId);
+                if (correspondence.featureIdx >= otherImage.keypoints.size())
+                {
+                    continue;
+                }
+
+                const Camera &otherCamera = reconstruction->camera(correspondence.imageId);
+                const auto &keypoint = image.keypoints[featureIdx];
+                const auto &otherKeypoint = otherImage.keypoints[correspondence.featureIdx];
+                const auto triResult = Intersection::intersectPair(camera,
+                                                                    keypoint.x,
+                                                                    keypoint.y,
+                                                                    otherCamera,
+                                                                    otherKeypoint.x,
+                                                                    otherKeypoint.y);
+                if (!triResult.valid ||
+                    !std::isfinite(triResult.angle_deg) ||
+                    !std::isfinite(triResult.reproj_error_rms) ||
+                    triResult.reproj_error_rms > options.triangulatorOptions.maxReprojError)
+                {
+                    continue;
+                }
+
+                validAngles.push_back(triResult.angle_deg);
+            }
+        }
+    }
+
+    policy.validCandidates = static_cast<int>(validAngles.size());
+    policy.acceptedWithDefault = static_cast<int>(std::count_if(validAngles.begin(),
+                                                                validAngles.end(),
+                                                                [&](double angle)
+                                                                {
+                                                                    return angle >= options.triangulatorOptions.minTriAngle;
+                                                                }));
+
+    if (policy.acceptedWithDefault >= minUsefulTriangulations ||
+        policy.validCandidates < minUsefulTriangulations)
+    {
+        policy.acceptedWithAdapted = policy.acceptedWithDefault;
+        return policy;
+    }
+
+    int acceptedWithRelaxed = static_cast<int>(std::count_if(validAngles.begin(),
+                                                            validAngles.end(),
+                                                            [](double angle)
+                                                            {
+                                                                return angle >= relaxedMinTriAngle;
+                                                            }));
+
+    double adaptedMinTriAngle = relaxedMinTriAngle;
+    if (acceptedWithRelaxed < minUsefulTriangulations)
+    {
+        adaptedMinTriAngle = std::max(absoluteMinTriAngle, percentile(validAngles, 0.20) * 0.8);
+        adaptedMinTriAngle = std::min(adaptedMinTriAngle, relaxedMinTriAngle);
+    }
+
+    policy.triangulatorOptions.minTriAngle = std::min(options.triangulatorOptions.minTriAngle, adaptedMinTriAngle);
+    policy.filterMinTriAngle = std::min(options.filterMinTriAngle, policy.triangulatorOptions.minTriAngle);
+    policy.chosenMinTriAngle = policy.triangulatorOptions.minTriAngle;
+    policy.adapted = policy.chosenMinTriAngle < options.triangulatorOptions.minTriAngle;
+    policy.acceptedWithAdapted = static_cast<int>(std::count_if(validAngles.begin(),
+                                                                validAngles.end(),
+                                                                [&](double angle)
+                                                                {
+                                                                    return angle >= policy.chosenMinTriAngle;
+                                                                }));
+
+    return policy;
+}
+
+} // namespace
 
 // ============================================================
 // 构造
@@ -90,6 +230,11 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
 
     if (!reportProgress(0, totalImages, "Building correspondence graph...", progressCb))
         return result;
+
+    if (_sfmOptions.useKnownCameraPoses)
+    {
+        return runKnownCameraPoseReconstruction(progressCb);
+    }
 
     // ---- 步骤 1：选择并初始化初始像对 ----
     ImageId initId1, initId2;
@@ -253,6 +398,95 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
     result.baTracksTotal = _lastGlobalBATracksTotal;
     result.baTracksOptimized = _lastGlobalBATracksOptimized;
     result.baTracksFiltered = _lastGlobalBATracksFiltered;
+
+    return result;
+}
+
+IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgressCallback progressCb)
+{
+    IncrementalSfmResult result;
+    const int totalImages = static_cast<int>(_reconstruction->numImages());
+
+    auto imageIds = _reconstruction->allImageIds();
+    std::sort(imageIds.begin(), imageIds.end());
+
+    int registeredCount = 0;
+    for (ImageId imageId : imageIds)
+    {
+        Camera camera;
+        if (!getCamera(imageId, camera))
+        {
+            result.summary = "Failed to load known camera pose for image " + std::to_string(imageId);
+            return result;
+        }
+
+        _reconstruction->registerImage(imageId, camera);
+        ++registeredCount;
+
+        if (!reportProgress(registeredCount, totalImages, "Registered known camera pose", progressCb))
+        {
+            result.summary = "Known camera pose reconstruction aborted";
+            return result;
+        }
+    }
+
+    const auto triangulationPolicy = resolveKnownPoseTriangulationPolicy(_reconstruction,
+                                                                         _correspondenceGraph,
+                                                                         imageIds,
+                                                                         _sfmOptions);
+    if (triangulationPolicy.adapted)
+    {
+        Logger::instance()->infof(
+            "[SFM] Known-pose narrow-baseline adaptation: minTriAngle %.3f -> %.3f deg "
+            "(valid=%d defaultAccepted=%d adaptedAccepted=%d)",
+            _sfmOptions.triangulatorOptions.minTriAngle,
+            triangulationPolicy.chosenMinTriAngle,
+            triangulationPolicy.validCandidates,
+            triangulationPolicy.acceptedWithDefault,
+            triangulationPolicy.acceptedWithAdapted);
+    }
+
+    Triangulator triangulator(*_reconstruction, _correspondenceGraph);
+    int createdPoints = 0;
+    int continuedObservations = 0;
+    for (ImageId imageId : imageIds)
+    {
+        const auto stats = triangulator.triangulateImage(imageId, triangulationPolicy.triangulatorOptions);
+        createdPoints += stats.numCreated;
+        continuedObservations += stats.numContinued;
+    }
+
+    const int completedObservations = triangulator.completeTracks(triangulationPolicy.triangulatorOptions);
+    triangulator.retriangulatePoints(triangulationPolicy.triangulatorOptions.maxReprojError);
+    triangulator.recomputeReprojErrors();
+    const int filteredPoints = triangulator.filterPoints(_sfmOptions.filterMaxReprojError,
+                                                         triangulationPolicy.filterMinTriAngle);
+    const int shortTrackFiltered = triangulator.filterShortTracks(_sfmOptions.filterMinTrackLen);
+    triangulator.recomputeReprojErrors();
+
+    result.numRegisteredImages = static_cast<int>(_reconstruction->numRegisteredImages());
+    result.numPoints3D = static_cast<int>(_reconstruction->numPoints3D());
+    result.meanReprojError = _reconstruction->meanReprojError();
+    result.reconstruction = _reconstruction;
+    result.summary = _reconstruction->summary();
+    result.success = result.numRegisteredImages >= 2 && result.numPoints3D > 0;
+
+    Logger::instance()->infof(
+        "[SFM] Known-pose reconstruction: registered=%d/%d created=%d continued=%d completed=%d "
+        "filtered=%d shortTrackFiltered=%d points=%d",
+        result.numRegisteredImages,
+        totalImages,
+        createdPoints,
+        continuedObservations,
+        completedObservations,
+        filteredPoints,
+        shortTrackFiltered,
+        result.numPoints3D);
+
+    if (!result.success)
+    {
+        result.summary = "Known camera pose reconstruction produced insufficient sparse points";
+    }
 
     return result;
 }
@@ -471,7 +705,7 @@ bool IncrementalSfm::initializeFromPair(ImageId id1, ImageId id2)
     const double ransacThresh = 1.0; // 像素
     cv::Mat maskE, maskH;
 
-    cv::Mat E = cv::findEssentialMat(pts1, pts2, K, cv::RANSAC, 0.999, ransacThresh, maskE);
+    cv::Mat E = xjw::opencv_compat::findEssentialMat(pts1, pts2, K, cv::RANSAC, 0.999, ransacThresh, maskE);
     int E_inliers = cv::countNonZero(maskE);
 
     cv::Mat H = cv::findHomography(pts1, pts2, cv::RANSAC, ransacThresh, maskH);

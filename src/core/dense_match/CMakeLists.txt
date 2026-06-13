@@ -64,6 +64,7 @@ endif()
 target_include_directories(dense_match PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/..
+    ${CMAKE_SOURCE_DIR}/src/common
 )
 
 target_link_libraries(dense_match

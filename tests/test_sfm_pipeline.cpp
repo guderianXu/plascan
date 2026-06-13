@@ -115,6 +115,55 @@ void buildSyntheticMatches(
     }
 }
 
+void buildKnownPoseTracks(const std::vector<Camera> &cameras,
+                          const std::vector<SyntheticPoint> &points3D,
+                          std::vector<std::vector<FeatureKeypoint>> &keypoints,
+                          std::vector<FeatureMatch> &matches01,
+                          std::vector<FeatureMatch> &matches12,
+                          std::vector<FeatureMatch> &matches02)
+{
+    keypoints.assign(cameras.size(), {});
+    matches01.clear();
+    matches12.clear();
+    matches02.clear();
+
+    for (const auto &point : points3D)
+    {
+        std::vector<std::pair<double, double>> projections;
+        projections.reserve(cameras.size());
+
+        bool visibleInAll = true;
+        for (const Camera &camera : cameras)
+        {
+            double u = 0.0;
+            double v = 0.0;
+            if (!projectPoint(camera, point.x, point.y, point.z, u, v) ||
+                u < 0.0 || u > 1024.0 || v < 0.0 || v > 768.0)
+            {
+                visibleInAll = false;
+                break;
+            }
+            projections.emplace_back(u, v);
+        }
+
+        if (!visibleInAll)
+        {
+            continue;
+        }
+
+        const FeatureIdx idx = static_cast<FeatureIdx>(keypoints[0].size());
+        for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
+        {
+            keypoints[cameraIndex].push_back({static_cast<float>(projections[cameraIndex].first),
+                                              static_cast<float>(projections[cameraIndex].second)});
+        }
+
+        matches01.push_back({idx, idx});
+        matches12.push_back({idx, idx});
+        matches02.push_back({idx, idx});
+    }
+}
+
 } // anonymous namespace
 
 // ═══════════════════════════════════════════════════════════════
@@ -271,6 +320,85 @@ TEST_F(SfmInitTest, LoadCameraFromTsaiFile)
     auto result = sfm.run();
     EXPECT_FALSE(result.success);
     // 关键：不崩溃
+}
+
+TEST_F(SfmInitTest, KnownCameraPoseModeRegistersAllImagesAndPreservesPoses)
+{
+    opts.useKnownCameraPoses = true;
+    opts.triangulatorOptions.minTriAngle = 0.1;
+    opts.triangulatorOptions.maxReprojError = 0.5;
+    opts.triangulatorOptions.continueMaxReprojError = 0.5;
+    opts.triangulatorOptions.completeMaxReprojError = 0.5;
+    opts.filterMaxReprojError = 0.5;
+    opts.filterMinTriAngle = 0.1;
+
+    std::vector<Camera> cameras = {
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+        makeCamera(4.0, 0.0, 0.0),
+    };
+
+    const auto points = generatePoints(80, 2.0, 0.0, 70.0, 1.5, 7);
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    std::vector<FeatureMatch> matches01;
+    std::vector<FeatureMatch> matches12;
+    std::vector<FeatureMatch> matches02;
+    buildKnownPoseTracks(cameras, points, keypoints, matches01, matches12, matches02);
+    ASSERT_GT(matches01.size(), 50u);
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "known_pose_0.png", cameras[0], keypoints[0]);
+    sfm.addImageWithCamera(1, "known_pose_1.png", cameras[1], keypoints[1]);
+    sfm.addImageWithCamera(2, "known_pose_2.png", cameras[2], keypoints[2]);
+    sfm.addMatches(0, 1, matches01);
+    sfm.addMatches(1, 2, matches12);
+    sfm.addMatches(0, 2, matches02);
+
+    auto result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    ASSERT_NE(result.reconstruction, nullptr);
+    EXPECT_EQ(result.numRegisteredImages, 3);
+    EXPECT_GT(result.numPoints3D, 50);
+
+    for (ImageId imageId = 0; imageId < 3; ++imageId)
+    {
+        const auto expectedCenter = cameras[imageId].cameraCenter();
+        const auto actualCenter = result.reconstruction->camera(imageId).cameraCenter();
+        EXPECT_NEAR(actualCenter[0], expectedCenter[0], 1e-9);
+        EXPECT_NEAR(actualCenter[1], expectedCenter[1], 1e-9);
+        EXPECT_NEAR(actualCenter[2], expectedCenter[2], 1e-9);
+    }
+}
+
+TEST_F(SfmInitTest, KnownCameraPoseModeAdaptsTriangulationAngleForNarrowBaseline)
+{
+    opts.useKnownCameraPoses = true;
+
+    std::vector<Camera> cameras = {
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(0.35, 0.0, 0.0),
+    };
+
+    const auto points = generatePoints(80, 0.2, 0.0, 110.0, 1.0, 11);
+
+    std::vector<FeatureKeypoint> keypoints0;
+    std::vector<FeatureKeypoint> keypoints1;
+    std::vector<FeatureMatch> matches01;
+    buildSyntheticMatches(cameras[0], cameras[1], points, keypoints0, keypoints1, matches01);
+    ASSERT_GT(matches01.size(), 50u);
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "narrow_known_pose_0.png", cameras[0], keypoints0);
+    sfm.addImageWithCamera(1, "narrow_known_pose_1.png", cameras[1], keypoints1);
+    sfm.addMatches(0, 1, matches01);
+
+    auto result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    ASSERT_NE(result.reconstruction, nullptr);
+    EXPECT_EQ(result.numRegisteredImages, 2);
+    EXPECT_GT(result.numPoints3D, 50);
 }
 
 // ═══════════════════════════════════════════════════════════════

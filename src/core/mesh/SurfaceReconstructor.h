@@ -17,7 +17,8 @@ public:
     static bool reconstructFromPointCloudFile(const std::string &cloudPath,
                                               const ReconstructionConfig &config,
                                               TriMesh &outMesh,
-                                              std::string *errorMsg = nullptr);
+                                              std::string *errorMsg = nullptr,
+                                              std::string *algorithmUsed = nullptr);
 };
 
 } // namespace mesh

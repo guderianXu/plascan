@@ -1,4 +1,4 @@
-#include <opencv2/features2d.hpp>
+#include "OpenCvCompat.h"
 #include <opencv2/imgcodecs.hpp>
 
 #include <cstdlib>

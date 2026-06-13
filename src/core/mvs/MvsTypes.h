@@ -62,6 +62,7 @@ struct PatchMatchConfig
 
     bool  epipolarRectified    = false;  ///< 图像已极线校正，偏向水平传播
     bool  cudaUseParallelSweep = true;   ///< CUDA 使用棋盘格像素级并行传播；false 时回退传统行列 sweep
+    bool  cudaFallbackToCpu    = true;   ///< CUDA 失败时是否由估计器内部直接回退 CPU
 };
 
 // =============================================================================

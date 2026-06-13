@@ -181,10 +181,12 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
 
     xjw::mesh::TriMesh mesh;
     std::string meshError;
+    std::string meshAlgorithm;
     if (!xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(request.pointCloudPath.toStdString(),
                                                                          reconstruction,
                                                                          mesh,
-                                                                         &meshError))
+                                                                         &meshError,
+                                                                         &meshAlgorithm))
     {
         result.errorMessage = QStringLiteral("网格重建失败: %1").arg(QString::fromStdString(meshError));
         return result;
@@ -203,7 +205,8 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
     result.payload[QStringLiteral("model_ply")] = meshPlyPath;
     result.payload[QStringLiteral("vertex_count")] = mesh.vertexCount();
     result.payload[QStringLiteral("face_count")] = mesh.faceCount();
-    result.payload[QStringLiteral("mesh_algorithm")] = QStringLiteral("implicit_tetra");
+    result.payload[QStringLiteral("mesh_algorithm")] =
+        QString::fromStdString(meshAlgorithm.empty() ? "unknown" : meshAlgorithm);
 
     if (request.exportObj)
     {

@@ -25,6 +25,7 @@ target_include_directories(feature_extractors_traditional
     ${CMAKE_CURRENT_SOURCE_DIR}/superpoint
     ${CMAKE_CURRENT_SOURCE_DIR}/disk
     ${CMAKE_CURRENT_SOURCE_DIR}/aliked
+    ${CMAKE_SOURCE_DIR}/src/common
     ${TORCH_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
 )

@@ -23,10 +23,16 @@ using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
 PlaCloud toPlaCloud(const std::vector<PointXYZRGB> &points)
 {
+    const bool hasNormals = !points.empty() &&
+                            std::all_of(points.begin(), points.end(), [](const PointXYZRGB &point) {
+                                return point.hasNormal;
+                            });
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> xyz(
         static_cast<plamatrix::Index>(points.size()), 3);
     plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(
         static_cast<plamatrix::Index>(points.size()), 3);
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> normals(
+        hasNormals ? static_cast<plamatrix::Index>(points.size()) : 0, 3);
     for (std::size_t i = 0; i < points.size(); ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
@@ -36,10 +42,20 @@ PlaCloud toPlaCloud(const std::vector<PointXYZRGB> &points)
         colors.setValue(row, 0, points[i].r);
         colors.setValue(row, 1, points[i].g);
         colors.setValue(row, 2, points[i].b);
+        if (hasNormals)
+        {
+            normals.setValue(row, 0, points[i].nx);
+            normals.setValue(row, 1, points[i].ny);
+            normals.setValue(row, 2, points[i].nz);
+        }
     }
 
     PlaCloud cloud(std::move(xyz));
     cloud.setColors(std::move(colors));
+    if (hasNormals)
+    {
+        cloud.setNormals(std::move(normals));
+    }
     return cloud;
 }
 
@@ -54,6 +70,13 @@ std::vector<PointXYZRGB> fromPlaCloud(const PlaCloud &cloud)
         point.x = cloud.points().getValue(row, 0);
         point.y = cloud.points().getValue(row, 1);
         point.z = cloud.points().getValue(row, 2);
+        if (cloud.hasNormals())
+        {
+            point.hasNormal = true;
+            point.nx = cloud.normals()->getValue(row, 0);
+            point.ny = cloud.normals()->getValue(row, 1);
+            point.nz = cloud.normals()->getValue(row, 2);
+        }
         if (cloud.hasColors())
         {
             point.r = cloud.colors()->getValue(row, 0);
