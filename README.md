@@ -41,6 +41,72 @@ ctest --output-on-failure
 
 项目通过 git submodule 引用自研点云库 [plapoint](https://github.com/guderianXu/plapoint) 和矩阵库 [plamatrix](https://github.com/guderianXu/plamatrix)，无需额外安装。
 
+### vcpkg / CPack 跨平台构建
+
+项目提供 `vcpkg.json` 和 `CMakePresets.json`，用于统一 Windows/Linux 的依赖解析、构建、测试和打包。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖；LibTorch 和 CUDA 仍通过外部安装路径提供，避免把深度学习运行环境绑死在 vcpkg 里。
+
+Linux:
+
+```bash
+export VCPKG_ROOT=/path/to/vcpkg
+export Torch_DIR=/path/to/libtorch/share/cmake/Torch
+cmake --preset linux-vcpkg-release
+cmake --build --preset linux-vcpkg-release
+ctest --preset linux-vcpkg-release
+cpack --preset linux-vcpkg-release
+```
+
+Windows PowerShell:
+
+```powershell
+$env:VCPKG_ROOT = "C:\src\vcpkg"
+$env:Torch_DIR = "C:\path\to\libtorch\share\cmake\Torch"
+cmake --preset windows-vcpkg-release
+cmake --build --preset windows-vcpkg-release
+ctest --preset windows-vcpkg-release
+cpack --preset windows-vcpkg-release
+```
+
+当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
+
+### Python / LibTorch 环境脚本
+
+`scripts/env/` 集中管理 Python 和 LibTorch 相关的本机环境准备脚本。默认输出到 `build/env/`，不会把下载的大包和机器本地路径写进源码目录。
+
+准备 vcpkg：
+
+```bash
+python scripts/env/setup_vcpkg.py --root /path/to/vcpkg --install
+```
+
+准备 Python 环境：
+
+```bash
+python scripts/env/setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+```
+
+注册已有 LibTorch，或让脚本下载到 `build/env/libtorch`：
+
+```bash
+python scripts/env/setup_libtorch.py --libtorch-root /opt/libtorch --cuda-root /usr/local/cuda-12.8
+python scripts/env/setup_libtorch.py --device cuda --version 2.7.1 --cuda-wheel cu128
+```
+
+用生成的 `build/env/plascan-env.json` 配置、构建、测试和打包：
+
+```bash
+python scripts/env/configure_with_env.py --build-type release --build --test --package
+```
+
+Windows PowerShell 使用同一套脚本，只把路径换成 Windows 路径：
+
+```powershell
+python scripts\env\setup_vcpkg.py --root C:\src\vcpkg --clone --install --triplet x64-windows
+python scripts\env\setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+python scripts\env\setup_libtorch.py --libtorch-root C:\deps\libtorch --cuda-root "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
+python scripts\env\configure_with_env.py --build-type release --build
+```
+
 ### GUI 一键工作流
 
 GUI 的 `工作流程` 菜单提供三个互相独立的工程入口：

@@ -6,21 +6,29 @@ install(TARGETS plascan_gui
   RUNTIME DESTINATION bin
 )
 
-# 应用图标 — PNG (256x256, 所有桌面环境通用)
-install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.png"
-  DESTINATION share/icons/hicolor/256x256/apps
-  RENAME plascan.png
-)
-# SVG 备选 (供支持矢量图标的桌面环境)
-install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.svg"
-  DESTINATION share/icons/hicolor/scalable/apps
-  RENAME plascan.svg
-)
+if(WIN32)
+  install(FILES
+    "${CMAKE_SOURCE_DIR}/resources/plascan.png"
+    "${CMAKE_SOURCE_DIR}/resources/plascan.svg"
+    DESTINATION share/plascan
+  )
+else()
+  # 应用图标 — PNG (256x256, 所有桌面环境通用)
+  install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.png"
+    DESTINATION share/icons/hicolor/256x256/apps
+    RENAME plascan.png
+  )
+  # SVG 备选 (供支持矢量图标的桌面环境)
+  install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.svg"
+    DESTINATION share/icons/hicolor/scalable/apps
+    RENAME plascan.svg
+  )
 
-# 桌面启动器 (StartupWMClass 必须与 setDesktopFileName 一致)
-install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.desktop"
-  DESTINATION share/applications
-)
+  # 桌面启动器 (StartupWMClass 必须与 setDesktopFileName 一致)
+  install(FILES "${CMAKE_SOURCE_DIR}/resources/plascan.desktop"
+    DESTINATION share/applications
+  )
+endif()
 
 if(TARGET superpoint)
   install(TARGETS superpoint
@@ -44,22 +52,26 @@ if(TARGET lightglue_matcher)
   )
 endif()
 
-set(PLASCAN_LAUNCHER_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_gui_launcher.sh.in")
 set(PLASCAN_QT_CONF_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/qt.conf.in")
-set(PLASCAN_PATH_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_path.sh.in")
-
-configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan" @ONLY)
-configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" @ONLY)
 configure_file("${PLASCAN_QT_CONF_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" @ONLY)
-configure_file("${PLASCAN_PATH_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" @ONLY)
 
-install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin)
-install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" DESTINATION bin)
 install(FILES "${CMAKE_CURRENT_BINARY_DIR}/qt.conf" DESTINATION bin)
-install(FILES "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" DESTINATION /etc/profile.d RENAME plascan.sh)
-install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin)
 
-if(PLASCAN_BUNDLE_RUNTIME)
+if(NOT WIN32)
+  set(PLASCAN_LAUNCHER_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_gui_launcher.sh.in")
+  set(PLASCAN_PATH_TEMPLATE "${CMAKE_CURRENT_SOURCE_DIR}/packaging/plascan_path.sh.in")
+
+  configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan" @ONLY)
+  configure_file("${PLASCAN_LAUNCHER_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" @ONLY)
+  configure_file("${PLASCAN_PATH_TEMPLATE}" "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" @ONLY)
+
+  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin)
+  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan_gui" DESTINATION bin)
+  install(FILES "${CMAKE_CURRENT_BINARY_DIR}/plascan_path.sh" DESTINATION /etc/profile.d RENAME plascan.sh)
+  install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin)
+endif()
+
+if(PLASCAN_BUNDLE_RUNTIME AND NOT WIN32)
   set(_plascan_qt_core_lib "")
   foreach(_qt_cfg RELEASE RELWITHDEBINFO MINSIZEREL DEBUG)
     get_target_property(_qt_core_candidate Qt6::Core IMPORTED_LOCATION_${_qt_cfg})
@@ -129,17 +141,19 @@ if(PLASCAN_BUNDLE_RUNTIME)
   install(SCRIPT "${PLASCAN_INSTALL_BUNDLE_SCRIPT}")
 endif()
 
-# 安装后更新图标缓存 (GNOME/KDE 需要)
-install(CODE "
-  find_program(GTK_UPDATE_EXECUTABLE gtk-update-icon-cache)
-  if(GTK_UPDATE_EXECUTABLE)
-    set(_icon_dir \"\${CMAKE_INSTALL_PREFIX}/share/icons/hicolor\")
-    if(EXISTS \"\${_icon_dir}\")
-      execute_process(COMMAND \"\${GTK_UPDATE_EXECUTABLE}\" -f -t \"\${_icon_dir}\"
-        ERROR_QUIET)
-      message(STATUS \"Updated GTK icon cache: \${_icon_dir}\")
+if(NOT WIN32)
+  # 安装后更新图标缓存 (GNOME/KDE 需要)
+  install(CODE "
+    find_program(GTK_UPDATE_EXECUTABLE gtk-update-icon-cache)
+    if(GTK_UPDATE_EXECUTABLE)
+      set(_icon_dir \"\${CMAKE_INSTALL_PREFIX}/share/icons/hicolor\")
+      if(EXISTS \"\${_icon_dir}\")
+        execute_process(COMMAND \"\${GTK_UPDATE_EXECUTABLE}\" -f -t \"\${_icon_dir}\"
+          ERROR_QUIET)
+        message(STATUS \"Updated GTK icon cache: \${_icon_dir}\")
+      endif()
     endif()
-  endif()
-")
+  ")
+endif()
 
 message(STATUS "plascan_gui configuration complete")

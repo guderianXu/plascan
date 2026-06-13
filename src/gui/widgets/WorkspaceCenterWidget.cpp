@@ -314,7 +314,7 @@ void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
                 rot(row, col) = float(cameraToWorldRotation[row * 3 + col]);
             }
         }
-        pose.rotation = rot.transposed();
+        pose.rotation = rot;
         poses.push_back(pose);
     }
 

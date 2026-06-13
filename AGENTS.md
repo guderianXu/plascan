@@ -119,11 +119,31 @@ python -m py_compile scripts/extract_features.py
   - `src/core/feature_extractors/README.md`
   - `src/core/sfm/README.md`
 - 修改构建、依赖、模型、CLI 或 Docker 流程时，同步检查 `README.md`、`docs/models/README.md` 和 `docker/` 相关脚本说明。
+- 版本更新文档集中维护：
+  - `CHANGELOG.md`：根目录版本变更索引，按版本倒序记录每个版本的主要新增、优化、修复、验证和已知问题。
+  - `docs/releases/RELEASE_PROCESS.md`：发版流程、分支规则、tag 规则、GitHub Release 模板和检查清单。
+  - `docs/releases/vX.Y.Z*.md`：单个版本的详细说明，包括变更背景、影响范围、验证命令、测试数据结果和遗留风险。
+  - 修改版本号、tag、Release 内容或阶段性功能说明时，同步更新以上文档；目录或文件不存在时先创建。
 - 文档要写当前真实行为，不保留已经失效的命令、路径或测试数量。
 
 ## Git 与提交
 
 - 只有用户明确要求时才 commit。
+- 分支管理建议：
+  - `main`：稳定可运行版本，只合并已经构建和测试验证过的代码。
+  - `develop`：日常集成分支，用于汇总多个功能或修复后再进入 `main`。
+  - `feature/<name>`：单个功能开发分支，例如 `feature/windows-packaging`。
+  - `fix/<name>`：单个 bug 修复分支，例如 `fix/mvs-depth-mask`。
+  - `release/vX.Y.Z`：发版准备分支，用于版本号、文档、打包和最终验证。
+- 轻量流程也可以只使用 `main` 加 `feature/<name>` / `fix/<name>`，但阶段性成果必须用 tag 和 GitHub Release 记录。
+- 版本 tag 使用语义化版本，并在快速迭代期使用预发布后缀：
+  ```bash
+  git tag -a v0.2.1-alpha.1 -m "PlaScan v0.2.1-alpha.1"
+  git push origin v0.2.1-alpha.1
+  ```
+  不要每个 commit 都打 tag；完成用户可感知的一组功能、优化或修复后再打 tag。
+- GitHub Release 说明按固定结构编写：新增、优化、修复、验证、已知问题。验证项要写具体命令和通过/失败结果。
+- 若修改了版本、tag 或 Release 内容，同步维护 `CHANGELOG.md` 和 `docs/releases/` 下的对应版本文档；没有相关文件时应先创建。
 - commit 前必须重新检查 `git status --short`，确认提交内容只包含当前任务相关文件。
 - 若需要 commit，Git 作者信息使用：
   ```bash

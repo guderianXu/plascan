@@ -19,7 +19,7 @@ WindowStateManager::WindowStateManager(QObject *parent)
 }
 
 /**
- * @brief 从 QSettings 恢复主窗口的几何尺寸、停靠布局和全屏状态。
+ * @brief 从 QSettings 恢复主窗口的几何尺寸、停靠布局和最大化状态。
  *
  * 执行步骤：
  * 1. 检查 "hasRunBefore" 标志；若为 false（首次运行），
@@ -27,10 +27,9 @@ WindowStateManager::WindowStateManager(QObject *parent)
  * 2. 非首次运行时，依次恢复：
  *    a. 窗口几何（位置与大小）——通过 restoreGeometry；
  *    b. 停靠布局（DockWidget 排列、工具栏位置）——通过 restoreState；
- *    c. 全屏标志——若上次退出时处于全屏则重新进入全屏。
+ *    c. 窗口状态标志——若上次退出时处于全屏或最大化则恢复为最大化。
  *
- * @note 全屏恢复放在 geometry/state 之后，防止非全屏状态的几何数据
- *       被全屏窗口覆盖导致下次非全屏时还原失败。
+ * @note 最大化恢复放在 geometry/state 之后，防止普通窗口尺寸覆盖用户期望的屏幕占用状态。
  *
  * @param mainWindow 需要恢复状态的主窗口；为 nullptr 时立即返回。
  */
@@ -59,8 +58,10 @@ void WindowStateManager::load(QMainWindow *mainWindow)
 
     // 恢复窗口状态：将历史全屏回退为最大化，确保窗口控制按钮可用。
     const bool wasFull = settings.value("MainWindow/isFullScreen", false).toBool();
-    if (wasFull) {
-        mainWindow->setWindowState(mainWindow->windowState() | Qt::WindowMaximized);
+    const bool wasMaximized = settings.value("MainWindow/isMaximized", false).toBool();
+    if (wasFull || wasMaximized)
+    {
+        mainWindow->setWindowState((mainWindow->windowState() & ~Qt::WindowFullScreen) | Qt::WindowMaximized);
     }
 }
 
@@ -70,7 +71,8 @@ void WindowStateManager::load(QMainWindow *mainWindow)
  * 保存内容：
  * - "MainWindow/geometry"     : 当前窗口几何（经 saveGeometry 序列化）；
  * - "MainWindow/state"        : 当前停靠布局（经 saveState 序列化）；
- * - "MainWindow/isFullScreen" : 当前是否处于全屏模式的布尔标志。
+ * - "MainWindow/isFullScreen" : 当前是否处于全屏模式的布尔标志；
+ * - "MainWindow/isMaximized"  : 当前是否处于最大化模式的布尔标志。
  *
  * 应在 closeEvent 中调用，以保证数据在进程退出前已写入磁盘。
  *
@@ -84,4 +86,5 @@ void WindowStateManager::save(QMainWindow *mainWindow)
     settings.setValue("MainWindow/geometry",     mainWindow->saveGeometry());
     settings.setValue("MainWindow/state",        mainWindow->saveState());
     settings.setValue("MainWindow/isFullScreen", mainWindow->isFullScreen());
+    settings.setValue("MainWindow/isMaximized",  mainWindow->isMaximized());
 }

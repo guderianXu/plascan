@@ -655,6 +655,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         std::atomic<int>  failCount{0};
         std::atomic<int>  missingFeatureCount{0};
         std::atomic<int>  missingFeatureSamples{0};
+        std::atomic<int>  lowInlierPairCount{0};
+        std::atomic<int>  lowInlierPairSamples{0};
         std::atomic<int>  pairCursor{0};
         std::mutex        writeMutex;
         std::atomic<bool> errorFlag{false};
@@ -886,13 +888,19 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             }
                             else
                             {
-                            LOG_INFO("%s", qUtf8Printable(QString("  跳过 %1: 内点不足（已记录为无匹配对）").arg(canonicalPairName)));
-                            {
-                                std::lock_guard<std::mutex> lk(writeMutex);
-                                failedPairs.append({imagePath0Resolved, imagePath1Resolved});
-                            }
-                            failCount.fetch_add(1);
-                            continue;
+                                const int sampleIndex = lowInlierPairSamples.fetch_add(1);
+                                if (sampleIndex < 8)
+                                {
+                                    LOG_INFO("%s", qUtf8Printable(QString("  跳过 %1: 内点不足（已记录为无匹配对）")
+                                        .arg(canonicalPairName)));
+                                }
+                                lowInlierPairCount.fetch_add(1);
+                                {
+                                    std::lock_guard<std::mutex> lk(writeMutex);
+                                    failedPairs.append({imagePath0Resolved, imagePath1Resolved});
+                                }
+                                failCount.fetch_add(1);
+                                continue;
                             }
                         }
 
@@ -1010,6 +1018,11 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                                                        "当前 run 不会逐对重复打印缺失错误。")
                     .arg(missingFeatureCount.load())
                     .arg(featureSuffix)));
+            }
+            if (lowInlierPairCount.load() > 8)
+            {
+                LOG_INFO("%s", qUtf8Printable(QString("内点不足跳过 %1 对，日志仅显示前 8 对样例")
+                    .arg(lowInlierPairCount.load())));
             }
             LOG_INFO("%s", qUtf8Printable(QString("%1 匹配完成: 成功 %2, 跳过/失败 %3")
                 .arg(matchAlgorithm).arg(successCount.load()).arg(failCount.load())));

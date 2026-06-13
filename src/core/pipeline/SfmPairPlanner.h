@@ -26,16 +26,19 @@ struct SfmPairPlannerOptions
     int knownCameraAllPairsMaxImages = 20;
     int knownCameraSpatialNeighborCount = 8;
     std::vector<std::array<double, 3>> knownCameraCenters;
+    std::vector<std::array<int, 2>> knownCameraOverlapPairs;
 };
 
 struct SfmPairPlan
 {
     bool restrictPairs = false;
     bool autoRestricted = false;
+    bool usedCameraOverlapPairs = false;
     bool usedSpatialCameraCenters = false;
     int allPairCount = 0;
     int knownCameraPairWindow = 0;
     int knownCameraSpatialNeighborCount = 0;
+    int knownCameraOverlapPairCount = 0;
     QStringList allowedPairKeys;
 };
 
@@ -174,6 +177,24 @@ inline SfmPairPlan planSfmMatchPairs(
     plan.knownCameraSpatialNeighborCount = spatialNeighborCount;
 
     QSet<QString> seen;
+    for (const auto &pair : options.knownCameraOverlapPairs)
+    {
+        const int indexA = pair[0];
+        const int indexB = pair[1];
+        if (indexA < 0 || indexA >= imageCount || indexB < 0 || indexB >= imageCount)
+        {
+            continue;
+        }
+        appendUniqueSfmPairKey(images, indexA, indexB, &seen, &plan.allowedPairKeys);
+    }
+
+    if (!plan.allowedPairKeys.isEmpty())
+    {
+        plan.usedCameraOverlapPairs = true;
+        plan.knownCameraOverlapPairCount = plan.allowedPairKeys.size();
+        return plan;
+    }
+
     for (int i = 0; i < imageCount; ++i)
     {
         const int last = std::min(imageCount - 1, i + window);

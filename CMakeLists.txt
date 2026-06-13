@@ -233,36 +233,64 @@ endif()
 include(GNUInstallDirs)
 
 if(CMAKE_INSTALL_PREFIX_INITIALIZED_TO_DEFAULT)
-  set(CMAKE_INSTALL_PREFIX "/opt/plascan" CACHE PATH "Install path prefix" FORCE)
+  if(WIN32)
+    set(CMAKE_INSTALL_PREFIX "${CMAKE_BINARY_DIR}/install" CACHE PATH "Install path prefix" FORCE)
+  else()
+    set(CMAKE_INSTALL_PREFIX "/opt/plascan" CACHE PATH "Install path prefix" FORCE)
+  endif()
 endif()
 
 set(CPACK_PACKAGE_NAME "PlaScan")
 set(CPACK_PACKAGE_VERSION "${PROJECT_VERSION}")
 set(CPACK_PACKAGE_VENDOR "PlaScan Team")
 set(CPACK_PACKAGE_CONTACT "plascan@example.com")
-set(CPACK_DEBIAN_PACKAGE_MAINTAINER "PlaScan Team")
 set(CPACK_PACKAGE_DESCRIPTION_SUMMARY "Planetary Scanning Tool")
-set(CPACK_GENERATOR "DEB;TGZ")
+set(CPACK_PACKAGE_INSTALL_DIRECTORY "PlaScan")
+if(NOT CPACK_GENERATOR)
+  if(WIN32)
+    set(CPACK_GENERATOR "ZIP")
+  elseif(APPLE)
+    set(CPACK_GENERATOR "TGZ")
+  else()
+    set(CPACK_GENERATOR "DEB;TGZ")
+  endif()
+endif()
 set(CPACK_PACKAGE_FILE_NAME "plascan-${PROJECT_VERSION}-${CMAKE_SYSTEM_NAME}-${CMAKE_SYSTEM_PROCESSOR}")
-set(CPACK_SET_DESTDIR ON)
-set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
+set(CPACK_PACKAGE_DIRECTORY "${CMAKE_BINARY_DIR}/packages" CACHE PATH "CPack package output directory")
+if(WIN32)
+  set(CPACK_SET_DESTDIR OFF)
+  set(CPACK_PACKAGING_INSTALL_PREFIX "PlaScan")
+else()
+  set(CPACK_SET_DESTDIR ON)
+  set(CPACK_PACKAGING_INSTALL_PREFIX "/opt/plascan")
+endif()
 
-# 离线安装优先：不依赖目标机在线拉取 Qt 等运行时依赖。
-set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
-set(CPACK_DEBIAN_PACKAGE_DEPENDS "libxcb-cursor0, libgl1, qt6-qpa-plugins")
-set(CPACK_DEBIAN_COMPRESSION_TYPE "xz")
+if(UNIX AND NOT APPLE)
+  set(CPACK_DEBIAN_PACKAGE_MAINTAINER "PlaScan Team")
+  # 离线安装优先：不依赖目标机在线拉取 Qt 等运行时依赖。
+  set(CPACK_DEBIAN_PACKAGE_SHLIBDEPS OFF)
+  set(CPACK_DEBIAN_PACKAGE_DEPENDS "libxcb-cursor0, libgl1, qt6-qpa-plugins")
+  set(CPACK_DEBIAN_COMPRESSION_TYPE "xz")
+endif()
 
 # ── 安装规则 ──
-# 启动脚本 (处理 conda 隔离 + LibTorch + 系统 Qt6 GLX)
-install(PROGRAMS resources/plascan.sh
-    DESTINATION bin RENAME plascan)
-install(DIRECTORY resources/ DESTINATION share/plascan
-    FILES_MATCHING PATTERN "*.svg" PATTERN "*.desktop")
-# 桌面集成
-install(FILES resources/plascan.svg
-    DESTINATION share/icons/hicolor/scalable/apps RENAME plascan.svg)
-install(FILES resources/plascan.desktop
-    DESTINATION share/applications)
+if(WIN32)
+  install(DIRECTORY resources/ DESTINATION share/plascan
+      FILES_MATCHING
+      PATTERN "*.png"
+      PATTERN "*.svg")
+else()
+  # 启动脚本 (处理 conda 隔离 + LibTorch + 系统 Qt6 GLX)
+  install(PROGRAMS resources/plascan.sh
+      DESTINATION bin RENAME plascan)
+  install(DIRECTORY resources/ DESTINATION share/plascan
+      FILES_MATCHING PATTERN "*.svg" PATTERN "*.desktop")
+  # 桌面集成
+  install(FILES resources/plascan.svg
+      DESTINATION share/icons/hicolor/scalable/apps RENAME plascan.svg)
+  install(FILES resources/plascan.desktop
+      DESTINATION share/applications)
+endif()
 
 include(CPack)
 

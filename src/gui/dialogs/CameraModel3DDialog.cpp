@@ -461,7 +461,20 @@ qreal CameraSceneWidget::manipRadiusPx() const
 
 int CameraSceneWidget::maxVisibleCameraLabels() const
 {
-    return 40;
+    const int viewportBudget = qBound(8, width() / 140, 28);
+    if (m_poses.size() > 300)
+    {
+        return qMin(viewportBudget, 12);
+    }
+    if (m_poses.size() > 120)
+    {
+        return qMin(viewportBudget, 18);
+    }
+    if (m_poses.size() > 60)
+    {
+        return qMin(viewportBudget, 24);
+    }
+    return qMin(viewportBudget, 40);
 }
 
 float CameraSceneWidget::cameraFrustumBase() const
@@ -1117,7 +1130,7 @@ void CameraSceneWidget::drawOverlay()
     const float frustumBase = cameraFrustumBase();
     const int labelBudget = maxVisibleCameraLabels();
     const int cameraCount = static_cast<int>(m_poses.size());
-    const bool drawAllCameraLabels = cameraCount <= labelBudget;
+    const bool drawAllCameraLabels = m_poses.size() <= maxVisibleCameraLabels();
     const int cameraLabelStride = drawAllCameraLabels
         ? 1
         : qMax(1, static_cast<int>(std::ceil(double(cameraCount) / double(qMax(1, labelBudget)))));
@@ -1224,7 +1237,7 @@ void CameraSceneWidget::drawOverlay()
             || (static_cast<int>(poseIndex) % cameraLabelStride == 0);
         if (drawCameraLabel)
         {
-            painter.setPen(QColor(60, 60, 60));
+            painter.setPen(drawAllCameraLabels ? QColor(60, 60, 60) : QColor(45, 45, 45, 170));
             painter.drawText(pc + QPointF(7.0, -7.0), QFileInfo(pose.name).fileName());
         }
     }

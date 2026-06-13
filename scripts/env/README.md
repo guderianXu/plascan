@@ -1,0 +1,95 @@
+# PlaScan Environment Scripts
+
+This directory contains machine-local environment setup helpers. The scripts write generated files to
+`build/env/` by default so downloaded runtimes and local paths do not enter the source tree.
+
+## vcpkg
+
+Register an existing vcpkg checkout and write PlaScan vcpkg config:
+
+```bash
+python scripts/env/setup_vcpkg.py --root /path/to/vcpkg
+```
+
+Clone, bootstrap, and install PlaScan manifest dependencies:
+
+```bash
+python scripts/env/setup_vcpkg.py --root build/env/vcpkg --clone --install
+```
+
+Windows PowerShell:
+
+```powershell
+python scripts\env\setup_vcpkg.py --root C:\src\vcpkg --clone --install --triplet x64-windows
+```
+
+The script writes:
+
+- `build/env/plascan-vcpkg.json`
+- `build/env/plascan-vcpkg.cmake`
+- `build/env/plascan-vcpkg.sh`
+- `build/env/plascan-vcpkg.ps1`
+
+Use `--dry-run` to print the clone/bootstrap/install commands without running them.
+
+## Python Runtime
+
+Create a CPU Python environment:
+
+```bash
+python scripts/env/setup_python_env.py --manager conda --name plascan --device cpu
+```
+
+Create a CUDA Python environment with a specific PyTorch wheel channel:
+
+```bash
+python scripts/env/setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+```
+
+On Windows PowerShell the command is the same:
+
+```powershell
+python scripts\env\setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+```
+
+The script writes:
+
+- `build/env/plascan-env.json`
+- `build/env/plascan-env.cmake`
+- `build/env/plascan-env.sh`
+- `build/env/plascan-env.ps1`
+
+## LibTorch
+
+Register an existing LibTorch directory:
+
+```bash
+python scripts/env/setup_libtorch.py --libtorch-root /opt/libtorch --cuda-root /usr/local/cuda-12.8
+```
+
+Download and extract LibTorch into `build/env/libtorch`:
+
+```bash
+python scripts/env/setup_libtorch.py --device cuda --version 2.7.1 --cuda-wheel cu128
+```
+
+Use `--url` when the default PyTorch archive URL does not match the release you want.
+
+## Configure
+
+Configure with the generated environment file:
+
+```bash
+python scripts/env/configure_with_env.py --build-type release
+```
+
+Configure, build, test, and package:
+
+```bash
+python scripts/env/configure_with_env.py --build-type release --build --test --package
+```
+
+The configure script passes `Torch_DIR`, `PLASCAN_TORCH_DIR`, `CUDAToolkit_ROOT`, and
+`CUDA_TOOLKIT_ROOT_DIR` to CMake when those values exist in `plascan-env.json`. It also
+reads `plascan-vcpkg.json` when present and exports `VCPKG_ROOT` for presets that use the
+vcpkg toolchain.

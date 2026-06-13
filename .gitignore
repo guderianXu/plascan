@@ -8,6 +8,7 @@ build_new/
 __pycache__/
 .cache/
 .vscode/
+vcpkg_installed/
 *.swp
 *.swo
 *~

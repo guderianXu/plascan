@@ -70,6 +70,7 @@ MainWindow::MainWindow(QWidget *parent)
     Qt::WindowFlags flags = windowFlags();
     flags |= Qt::Window;
     flags |= Qt::WindowMinimizeButtonHint;
+    flags |= Qt::WindowMaximizeButtonHint;
     flags |= Qt::WindowCloseButtonHint;
     flags |= Qt::WindowSystemMenuHint;
     flags &= ~Qt::FramelessWindowHint;

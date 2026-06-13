@@ -1,0 +1,193 @@
+{
+  "version": 6,
+  "cmakeMinimumRequired": {
+    "major": 3,
+    "minor": 25,
+    "patch": 0
+  },
+  "configurePresets": [
+    {
+      "name": "vcpkg-base",
+      "hidden": true,
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/${presetName}",
+      "toolchainFile": "$env{VCPKG_ROOT}/scripts/buildsystems/vcpkg.cmake",
+      "cacheVariables": {
+        "BUILD_TESTS": "ON",
+        "CMAKE_EXPORT_COMPILE_COMMANDS": "ON",
+        "PLASCAN_BUNDLE_RUNTIME": "ON",
+        "PLASCAN_ENABLE_CONDA": "OFF",
+        "PLASCAN_ENABLE_VCPKG": "ON",
+        "PLASCAN_CONDA_PREFIX": ""
+      }
+    },
+    {
+      "name": "linux-vcpkg-debug",
+      "displayName": "Linux vcpkg Debug",
+      "inherits": "vcpkg-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPACK_GENERATOR": "TGZ;DEB",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic"
+      }
+    },
+    {
+      "name": "linux-vcpkg-release",
+      "displayName": "Linux vcpkg Release",
+      "inherits": "vcpkg-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Linux"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPACK_GENERATOR": "TGZ;DEB",
+        "VCPKG_TARGET_TRIPLET": "x64-linux-dynamic"
+      }
+    },
+    {
+      "name": "windows-vcpkg-debug",
+      "displayName": "Windows vcpkg Debug",
+      "inherits": "vcpkg-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "CPACK_GENERATOR": "ZIP",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    },
+    {
+      "name": "windows-vcpkg-release",
+      "displayName": "Windows vcpkg Release",
+      "inherits": "vcpkg-base",
+      "condition": {
+        "type": "equals",
+        "lhs": "${hostSystemName}",
+        "rhs": "Windows"
+      },
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Release",
+        "CPACK_GENERATOR": "ZIP",
+        "VCPKG_TARGET_TRIPLET": "x64-windows"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "linux-vcpkg-debug",
+      "configurePreset": "linux-vcpkg-debug",
+      "jobs": 0
+    },
+    {
+      "name": "linux-vcpkg-release",
+      "configurePreset": "linux-vcpkg-release",
+      "jobs": 0
+    },
+    {
+      "name": "windows-vcpkg-debug",
+      "configurePreset": "windows-vcpkg-debug",
+      "jobs": 0
+    },
+    {
+      "name": "windows-vcpkg-release",
+      "configurePreset": "windows-vcpkg-release",
+      "jobs": 0
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "linux-vcpkg-debug",
+      "configurePreset": "linux-vcpkg-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "linux-vcpkg-release",
+      "configurePreset": "linux-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-vcpkg-debug",
+      "configurePreset": "windows-vcpkg-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    },
+    {
+      "name": "windows-vcpkg-release",
+      "configurePreset": "windows-vcpkg-release",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ],
+  "packagePresets": [
+    {
+      "name": "linux-vcpkg-debug",
+      "configurePreset": "linux-vcpkg-debug",
+      "generators": [
+        "TGZ",
+        "DEB"
+      ],
+      "configurations": [
+        "Debug"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/dist/packages/linux-vcpkg-debug"
+      }
+    },
+    {
+      "name": "linux-vcpkg-release",
+      "configurePreset": "linux-vcpkg-release",
+      "generators": [
+        "TGZ",
+        "DEB"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/dist/packages/linux-vcpkg-release"
+      }
+    },
+    {
+      "name": "windows-vcpkg-debug",
+      "configurePreset": "windows-vcpkg-debug",
+      "generators": [
+        "ZIP"
+      ],
+      "configurations": [
+        "Debug"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/dist/packages/windows-vcpkg-debug"
+      }
+    },
+    {
+      "name": "windows-vcpkg-release",
+      "configurePreset": "windows-vcpkg-release",
+      "generators": [
+        "ZIP"
+      ],
+      "configurations": [
+        "Release"
+      ],
+      "variables": {
+        "CPACK_PACKAGE_DIRECTORY": "${sourceDir}/dist/packages/windows-vcpkg-release"
+      }
+    }
+  ]
+}

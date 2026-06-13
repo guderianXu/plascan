@@ -76,6 +76,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         feature_extractors_traditional
         feature_match_common
         camera
+        overlap
         Qt6::Core
         Qt6::Concurrent
         Qt6::Gui
@@ -96,6 +97,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue
         ${CMAKE_SOURCE_DIR}/src/core/mesh
         ${CMAKE_SOURCE_DIR}/src/core/mvs
+        ${CMAKE_SOURCE_DIR}/src/core/overlap
         ${CMAKE_SOURCE_DIR}/src/core/pipeline
         ${CMAKE_SOURCE_DIR}/src/core/sfm
         ${CMAKE_SOURCE_DIR}/src/core/terrain
@@ -135,6 +137,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         feature_extractors_traditional
         feature_match_common
         camera
+        overlap
         Qt6::Core
         Qt6::Concurrent
         Qt6::Gui
@@ -155,6 +158,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue
         ${CMAKE_SOURCE_DIR}/src/core/mesh
         ${CMAKE_SOURCE_DIR}/src/core/mvs
+        ${CMAKE_SOURCE_DIR}/src/core/overlap
         ${CMAKE_SOURCE_DIR}/src/core/pipeline
         ${CMAKE_SOURCE_DIR}/src/core/sfm
         ${CMAKE_SOURCE_DIR}/src/gui

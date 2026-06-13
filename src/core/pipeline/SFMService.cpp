@@ -27,6 +27,7 @@
 #include "ProjectSupportUtils.h"
 #include "Logger.h"
 #include "Camera.h"
+#include "OverlapAnalyzer.h"
 #include "pipeline/IncrementalSfm.h"
 #include "common/SfmTypes.h"
 #include <plapoint/core/point_cloud.h>
@@ -41,6 +42,7 @@
 #include <QDateTime>
 #include <QCoreApplication>
 #include <QElapsedTimer>
+#include <QImageReader>
 #include <QProcess>
 #include <QSet>
 #include <QStandardPaths>
@@ -193,6 +195,115 @@ std::vector<std::array<double, 3>> loadKnownCameraCentersFromPaths(const QString
     }
 
     return centers;
+}
+
+std::vector<std::array<int, 2>> loadKnownCameraOverlapPairsFromPaths(const QStringList &images,
+                                                                     const QStringList &cameraPaths,
+                                                                     double neighborFactor,
+                                                                     QString *detailMessage,
+                                                                     QString *errorMessage)
+{
+    std::vector<std::array<int, 2>> pairs;
+    if (detailMessage)
+    {
+        detailMessage->clear();
+    }
+    if (errorMessage)
+    {
+        errorMessage->clear();
+    }
+
+    if (images.isEmpty() || cameraPaths.size() != images.size())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("影像数量和相机文件数量不一致");
+        }
+        return pairs;
+    }
+
+    std::vector<OverlapImageInput> inputs;
+    inputs.reserve(static_cast<std::size_t>(images.size()));
+    for (int i = 0; i < images.size(); ++i)
+    {
+        const QString imagePath = images.at(i).trimmed();
+        const QString cameraPath = cameraPaths.at(i).trimmed();
+        if (imagePath.isEmpty() || cameraPath.isEmpty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("第 %1 张影像缺少影像或相机路径").arg(i + 1);
+            }
+            return pairs;
+        }
+
+        Camera camera;
+        if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("无法读取相机文件: %1").arg(cameraPath);
+            }
+            return pairs;
+        }
+
+        QSize imageSize = QImageReader(imagePath).size();
+        if (!imageSize.isValid() || imageSize.width() <= 0 || imageSize.height() <= 0)
+        {
+            const cv::Mat image = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+            if (!image.empty())
+            {
+                imageSize = QSize(image.cols, image.rows);
+            }
+        }
+
+        if (!imageSize.isValid() || imageSize.width() <= 0 || imageSize.height() <= 0)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("无法读取影像尺寸: %1").arg(imagePath);
+            }
+            return pairs;
+        }
+
+        OverlapImageInput input;
+        input.imagePath = imagePath.toStdString();
+        input.camera = camera;
+        input.width = imageSize.width();
+        input.height = imageSize.height();
+        inputs.push_back(std::move(input));
+    }
+
+    OverlapAnalysisOptions overlapOptions;
+    overlapOptions.groundModel = OverlapGroundModel::ReferenceSphere;
+    overlapOptions.neighborFactor = std::max(0.1, neighborFactor);
+    overlapOptions.referenceSphere.body = ReferenceBody::Earth;
+    overlapOptions.referenceSphere.radiusMeters = referenceBodyRadiusMeters(ReferenceBody::Earth);
+    overlapOptions.referenceSphere.centerMode = ReferenceSphereCenterMode::Auto;
+    overlapOptions.referenceSphere.autoLocalTangentHeight = true;
+
+    OverlapAnalysisResult overlapResult;
+    std::string overlapError;
+    if (!OverlapAnalyzer::analyze(inputs, overlapOptions, &overlapResult, &overlapError))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QString::fromStdString(overlapError);
+        }
+        return pairs;
+    }
+
+    pairs.reserve(overlapResult.pairs.size());
+    for (const OverlapPairResult &pair : overlapResult.pairs)
+    {
+        pairs.push_back({pair.indexA, pair.indexB});
+    }
+
+    if (detailMessage)
+    {
+        *detailMessage = QString::fromStdString(overlapResult.detail);
+    }
+    return pairs;
 }
 
 // ── 相机 JSON 序列化 ─────────────────────────────────────────────────────────
@@ -1297,11 +1408,37 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     pairPlanOptions.knownCameraPairWindow = opts.knownCameraPairWindow;
     pairPlanOptions.knownCameraSpatialNeighborCount = opts.knownCameraSpatialNeighborCount;
     pairPlanOptions.knownCameraAllPairsMaxImages = opts.knownCameraAllPairsMaxImages;
+    const bool canUseKnownCameraAutoPairs =
+        !opts.restrictPairs &&
+        opts.autoRestrictKnownCameraPairs &&
+        opts.images.size() > std::max(0, opts.knownCameraAllPairsMaxImages) &&
+        hasCompleteCameraPathList(opts.images, opts.cameraPaths);
+    if (canUseKnownCameraAutoPairs && opts.useKnownCameraOverlapPairs)
+    {
+        QString overlapDetail;
+        QString overlapError;
+        pairPlanOptions.knownCameraOverlapPairs =
+            loadKnownCameraOverlapPairsFromPaths(opts.images,
+                                                 opts.cameraPaths,
+                                                 opts.knownCameraOverlapNeighborFactor,
+                                                 &overlapDetail,
+                                                 &overlapError);
+        if (!pairPlanOptions.knownCameraOverlapPairs.empty())
+        {
+            LOG_INFO(QStringLiteral("  已知相机足迹重叠分析: %1")
+                .arg(overlapDetail.isEmpty() ? QStringLiteral("完成") : overlapDetail));
+        }
+        else
+        {
+            LOG_WARN(QStringLiteral("  已知相机足迹重叠配对不可用，将回退顺序/中心邻域: %1")
+                .arg(overlapError.isEmpty() ? QStringLiteral("没有可用重叠对") : overlapError));
+        }
+    }
     if (!opts.restrictPairs &&
         opts.autoRestrictKnownCameraPairs &&
+        pairPlanOptions.knownCameraOverlapPairs.empty() &&
         opts.knownCameraSpatialNeighborCount > 0 &&
-        opts.images.size() > std::max(0, opts.knownCameraAllPairsMaxImages) &&
-        hasCompleteCameraPathList(opts.images, opts.cameraPaths))
+        canUseKnownCameraAutoPairs)
     {
         QString knownCameraCenterError;
         pairPlanOptions.knownCameraCenters = loadKnownCameraCentersFromPaths(opts.images,
@@ -1330,7 +1467,15 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         LOG_INFO(QStringLiteral("  匹配对约束已启用: %1 对").arg(allowedPairSet.size()));
         if (pairPlan.autoRestricted)
         {
-            if (pairPlan.usedSpatialCameraCenters)
+            if (pairPlan.usedCameraOverlapPairs)
+            {
+                LOG_INFO(QStringLiteral("  已知相机足迹重叠配对裁剪: 原始 %1 对 -> %2 对, 重叠候选=%3, 邻域系数=%4")
+                    .arg(pairPlan.allPairCount)
+                    .arg(allowedPairSet.size())
+                    .arg(pairPlan.knownCameraOverlapPairCount)
+                    .arg(opts.knownCameraOverlapNeighborFactor, 0, 'g', 4));
+            }
+            else if (pairPlan.usedSpatialCameraCenters)
             {
                 LOG_INFO(QStringLiteral("  已知相机空间+顺序配对裁剪: 原始 %1 对 -> %2 对, 顺序窗口=%3, 空间邻居=%4")
                     .arg(pairPlan.allPairCount)
@@ -1820,6 +1965,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         std::string               matchErrorMsg;
         std::mutex                writeMutex;       // 保护对 result 的追加操作
         std::atomic<int>          pairCursor{0};    // 原子索引，各线程竞争取下一个待处理 pair
+        std::atomic<int>          lowInlierPairCount{0};
+        std::atomic<int>          lowInlierPairSamples{0};
         const int                 totalMissing = static_cast<int>(missingPairIndices.size());
 
         // 省去重复读取：featureCache/idToPath/featureFilePaths 在预加载后为纯只读
@@ -1911,9 +2058,14 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     // ── 最小内点数检测：内点不足时记录到 failedPairs（不写文件）──
                     if (mr.numMatches < presets.minInliers)
                     {
-                        LOG_INFO(
-                            QStringLiteral("  跳过 %1: 内点数 %2 < 阈值 %3（已记录为无匹配对）")
-                            .arg(pairName).arg(mr.numMatches).arg(presets.minInliers));
+                        const int sampleIndex = lowInlierPairSamples.fetch_add(1);
+                        if (sampleIndex < 8)
+                        {
+                            LOG_INFO(
+                                QStringLiteral("  跳过 %1: 内点数 %2 < 阈值 %3（已记录为无匹配对）")
+                                .arg(pairName).arg(mr.numMatches).arg(presets.minInliers));
+                        }
+                        lowInlierPairCount.fetch_add(1);
                         {
                             std::lock_guard<std::mutex> lk(writeMutex);
                             FailedPairRecord fpr;
@@ -2041,6 +2193,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 .arg(QString::fromStdString(matchErrorMsg));
             result.summary = result.errorMessage;
             return result;
+        }
+
+        if (lowInlierPairCount.load() > 8)
+        {
+            LOG_INFO(QStringLiteral("  内点不足跳过 %1 对，日志仅显示前 8 对样例")
+                .arg(lowInlierPairCount.load()));
         }
 
         // ── 将无匹配的影像对追加写入 no_match_pairs.json ─────────────────────

@@ -110,6 +110,13 @@ struct SFMServiceOptions
     /// 与顺序邻域取并集，用于航带换行、跨航带和文件顺序不可靠的数据。
     int                 knownCameraSpatialNeighborCount = 8;
 
+    /// 已知相机自动配对时，优先根据相机足迹重叠生成候选对。
+    /// 成功时会替代仅按顺序/相机中心距离的裁剪，减少无重叠影像的无效匹配。
+    bool                useKnownCameraOverlapPairs = true;
+
+    /// 相机足迹重叠的邻域宽松系数。值越大，候选对越多。
+    double              knownCameraOverlapNeighborFactor = 2.0;
+
     /// 影像数大于该阈值时才启用已知相机自动配对裁剪，小数据集保留全配对。
     int                 knownCameraAllPairsMaxImages = 20;
 

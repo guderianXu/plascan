@@ -380,6 +380,25 @@ TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowContro
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("CameraConvertDialog")));
 }
 
+TEST(MainWindowChromeTest, KeepsNativeMaximizeControlAvailable)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("Qt::WindowMaximizeButtonHint")));
+}
+
+TEST(WindowStateManagerTest, PersistsAndRestoresMaximizedState)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/config/settings/WindowStateManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("MainWindow/isMaximized")));
+    EXPECT_TRUE(source.contains(QStringLiteral("mainWindow->isMaximized()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("wasMaximized")));
+    EXPECT_TRUE(source.contains(QStringLiteral("Qt::WindowMaximized")));
+}
+
 TEST(FeatureExtractionDialogTest, DiskSelectionShowsResolvedModelPath)
 {
     FeatureExtractionDialog dialog;
@@ -1498,6 +1517,29 @@ TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
     EXPECT_EQ(cloud->colors()->getValue(0, 0), 128);
     EXPECT_EQ(cloud->colors()->getValue(0, 1), 128);
     EXPECT_EQ(cloud->colors()->getValue(0, 2), 128);
+}
+
+TEST(CameraModel3DDialogTest, DenseCameraScenesThrottleLabelsAndFrustumSize)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("maxVisibleCameraLabels")));
+    EXPECT_TRUE(source.contains(QStringLiteral("m_poses.size() <= maxVisibleCameraLabels")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraFrustumBase()")));
+    EXPECT_FALSE(source.contains(QStringLiteral("const float base = qMax(0.1f, r * 0.06f);")));
+}
+
+TEST(CameraModel3DDialogTest, UsesCameraToWorldRotationWithoutTransposeForFrustums)
+{
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const QString workspaceSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
+    ASSERT_FALSE(dialogSource.isEmpty());
+    ASSERT_FALSE(workspaceSource.isEmpty());
+
+    const QString combined = dialogSource + workspaceSource;
+    EXPECT_FALSE(combined.contains(QStringLiteral("pose.rotation = rot.transposed();")));
+    EXPECT_TRUE(combined.contains(QStringLiteral("pose.rotation = rot;")));
 }
 
 TEST(DenseCloudRefineTest, ReportsPlaPointProcessingDeviceForGui)

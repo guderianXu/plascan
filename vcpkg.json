@@ -1,0 +1,37 @@
+{
+  "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
+  "name": "plascan",
+  "version-string": "1.0.0",
+  "builtin-baseline": "dd306f32e07d87fdb16837af64f33b6b415c770a",
+  "dependencies": [
+    {
+      "name": "gdal",
+      "default-features": false,
+      "features": [
+        "jpeg",
+        "openjpeg",
+        "png",
+        "zstd"
+      ]
+    },
+    "gtest",
+    "libzip",
+    {
+      "name": "opencv",
+      "default-features": false,
+      "features": [
+        "calib3d",
+        "contrib",
+        "highgui",
+        "intrinsics",
+        "jpeg",
+        "openjpeg",
+        "png",
+        "thread",
+        "tiff"
+      ]
+    },
+    "qtbase",
+    "tiff"
+  ]
+}

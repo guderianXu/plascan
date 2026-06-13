@@ -1,25 +1,27 @@
 # Auto-generated at configure time. Runs during `cmake --install` / CPack staging.
 
 set(_prefix "${CMAKE_INSTALL_PREFIX}")
+string(REGEX REPLACE "/$" "" _prefix "${_prefix}")
+set(_physical_prefix "${_prefix}")
 if(DEFINED ENV{DESTDIR} AND NOT "$ENV{DESTDIR}" STREQUAL "")
     set(_destdir "$ENV{DESTDIR}")
-    string(LENGTH "${_destdir}" _destdir_len)
-    string(SUBSTRING "${_prefix}" 0 ${_destdir_len} _prefix_head)
-    if(_prefix_head STREQUAL "${_destdir}")
-        string(SUBSTRING "${_prefix}" ${_destdir_len} -1 _prefix_tail)
-        if(_prefix_tail STREQUAL "")
-            set(_prefix "/")
-        else()
-            set(_prefix "${_prefix_tail}")
-        endif()
+    string(REGEX REPLACE "/$" "" _destdir "${_destdir}")
+    if(_prefix MATCHES "^/")
+        set(_physical_prefix "${_destdir}${_prefix}")
+    else()
+        set(_physical_prefix "${_destdir}/${_prefix}")
     endif()
 endif()
+string(REGEX REPLACE "/$" "" _physical_prefix "${_physical_prefix}")
 message(STATUS "[bundle] CMAKE_INSTALL_PREFIX=${CMAKE_INSTALL_PREFIX}")
 message(STATUS "[bundle] ENV{DESTDIR}=$ENV{DESTDIR}")
-message(STATUS "[bundle] normalized _prefix=${_prefix}")
+message(STATUS "[bundle] logical prefix=${_prefix}")
+message(STATUS "[bundle] physical prefix=${_physical_prefix}")
 set(_app_bin "@CMAKE_BINARY_DIR@/bin/plascan_gui.bin")
 set(_lib_dir "${_prefix}/lib")
 set(_plugin_root "${_prefix}/plugins")
+set(_physical_lib_dir "${_physical_prefix}/lib")
+set(_physical_plugin_root "${_physical_prefix}/plugins")
 set(_torch_lib_dir "@PLASCAN_TORCH_LIB_DIR@")
 
 if(NOT EXISTS "${_app_bin}")
@@ -27,9 +29,9 @@ if(NOT EXISTS "${_app_bin}")
     return()
 endif()
 
-file(MAKE_DIRECTORY "${_lib_dir}")
-file(MAKE_DIRECTORY "${_plugin_root}/platforms")
-file(MAKE_DIRECTORY "${_plugin_root}/imageformats")
+file(MAKE_DIRECTORY "${_physical_lib_dir}")
+file(MAKE_DIRECTORY "${_physical_plugin_root}/platforms")
+file(MAKE_DIRECTORY "${_physical_plugin_root}/imageformats")
 
 if(EXISTS "@PLASCAN_CONDA_PREFIX@/lib")
     file(GLOB _qt_runtime_libs "@PLASCAN_CONDA_PREFIX@/lib/libQt6*.so*")
@@ -68,7 +70,7 @@ function(_plascan_copy_resolved_deps)
             set(_preferred_dep "@PLASCAN_CONDA_PREFIX@/lib/${_dep_name}")
         elseif(EXISTS "${_torch_lib_dir}/${_dep_name}")
             set(_preferred_dep "${_torch_lib_dir}/${_dep_name}")
-        elseif(_dep MATCHES "^${_lib_dir}/")
+        elseif(_dep MATCHES "^${_physical_lib_dir}/")
             set(_preferred_dep "${_dep}")
         elseif(_dep MATCHES "^@PLASCAN_CONDA_PREFIX@/")
             set(_preferred_dep "${_dep}")
@@ -100,7 +102,7 @@ function(_plascan_copy_missing_deps_by_ldd _target_bin)
     endif()
 
     set(_search_dirs
-        "${_lib_dir}"
+        "${_physical_lib_dir}"
         "@PLASCAN_CONDA_PREFIX@/lib"
         "${_torch_lib_dir}"
     )
@@ -108,7 +110,7 @@ function(_plascan_copy_missing_deps_by_ldd _target_bin)
     set(_max_passes 6)
     foreach(_pass RANGE 1 ${_max_passes})
         execute_process(
-            COMMAND /usr/bin/env "LD_LIBRARY_PATH=${_lib_dir}:@PLASCAN_CONDA_PREFIX@/lib:${_torch_lib_dir}"
+            COMMAND /usr/bin/env "LD_LIBRARY_PATH=${_physical_lib_dir}:@PLASCAN_CONDA_PREFIX@/lib:${_torch_lib_dir}"
                     ldd "${_target_bin}"
             OUTPUT_VARIABLE _ldd_out
             ERROR_VARIABLE _ldd_err
@@ -247,8 +249,8 @@ if(EXISTS "${_qt_plugins_dir}")
     endforeach()
 
     file(GLOB _installed_plugins
-        "${_plugin_root}/platforms/libq*.so*"
-        "${_plugin_root}/imageformats/libq*.so*"
+        "${_physical_plugin_root}/platforms/libq*.so*"
+        "${_physical_plugin_root}/imageformats/libq*.so*"
     )
 
     foreach(_plugin IN LISTS _installed_plugins)
@@ -298,4 +300,4 @@ else()
     message(WARNING "[bundle] Qt plugins directory not found: ${_qt_plugins_dir}")
 endif()
 
-message(STATUS "[bundle] Runtime bundling finished: ${_prefix}")
+message(STATUS "[bundle] Runtime bundling finished: ${_physical_prefix}")
