@@ -139,6 +139,7 @@ public:
     /** @brief 返回"查看工作流程报告"动作。 */
     QAction *viewWorkflowReportAction() const;
     QAction *manualPointCloudPruneAction() const;
+    QAction *cameraConvertAction() const;
 
     // ==== 重建菜单动作（稀疏/密集/模型） ====
 
@@ -227,6 +228,7 @@ private:
 
     QAction *m_viewWorkflowReportAct{};        ///< 查看工作流程历史报告
     QAction *m_manualPointCloudPruneAct{};     ///< 手动点云剔除
+    QAction *m_cameraConvertAct{};             ///< 通用相机格式转换
 
     // ---- 重建菜单动作 ----
     QAction *m_buildObsNetworkAct{};         ///< 构建观测网络模型

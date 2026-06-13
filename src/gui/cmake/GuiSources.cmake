@@ -86,6 +86,7 @@ set(GUI_SOURCES
   dialogs/SparseCloudPostProcessDialog.cpp
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp
+  dialogs/CameraConvertDialog.cpp
   dialogs/ObservationNetworkDialog.cpp
   dialogs/InitCameraPoseDialog.cpp
   dialogs/TriangulationDialog.cpp
@@ -182,6 +183,7 @@ set(GUI_HEADERS
   dialogs/ThreeDReconstructionDialog.h
   dialogs/SparseCloudPostProcessDialog.h
   dialogs/WorkflowReportDialog.h
+  dialogs/CameraConvertDialog.h
   dialogs/ObservationNetworkDialog.h
   dialogs/InitCameraPoseDialog.h
   dialogs/TriangulationDialog.h
@@ -252,6 +254,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/SparseCloudPostProcessDialog.cpp
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp
+  dialogs/CameraConvertDialog.cpp
   dialogs/ObservationNetworkDialog.cpp
   dialogs/InitCameraPoseDialog.cpp
   dialogs/TriangulationDialog.cpp

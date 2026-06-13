@@ -9,6 +9,7 @@
 #include "ProjectTriangulationService.h"
 #include "FeatureExtractionDialog.h"
 #include "FeatureMatchingDialog.h"
+#include "InitCameraPoseDialog.h"
 #include "ThreeDReconstructionDialog.h"
 #include "MapProjectDialog.h"
 #include "BundleAdjustDialog.h"
@@ -344,6 +345,41 @@ TEST(ProjectSupportUtilsTest, ListsOnlyFeatureSuffixesPresentInProject)
     EXPECT_EQ(suffixes, QStringList{QStringLiteral(".dsk")});
 }
 
+TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.cameraConvertAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->text().contains(QStringLiteral("相机格式转换")));
+
+    bool foundInToolsMenu = false;
+    const QList<QMenu *> menus = window.menuBar()->findChildren<QMenu *>();
+    for (QMenu *candidate : menus)
+    {
+        if (candidate && candidate->title() == QStringLiteral("工具"))
+        {
+            foundInToolsMenu = candidate->actions().contains(action);
+            break;
+        }
+    }
+    EXPECT_TRUE(foundInToolsMenu);
+}
+
+TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowController)
+{
+    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString controllerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+    ASSERT_FALSE(controllerSource.isEmpty());
+
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("cameraConvertAction")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("openCameraConvertDialog")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("CameraConvertDialog")));
+}
+
 TEST(FeatureExtractionDialogTest, DiskSelectionShowsResolvedModelPath)
 {
     FeatureExtractionDialog dialog;
@@ -614,6 +650,55 @@ TEST(FeatureMatchingDialogTest, ProjectAvailableSuffixesConstrainLightGlueChoice
     ASSERT_EQ(suffixCombo->count(), 1);
     EXPECT_EQ(suffixCombo->itemData(0).toString(), QStringLiteral(".dsk"));
     EXPECT_EQ(dialog.selectedFeatureSuffix(), QStringLiteral(".dsk"));
+}
+
+TEST(InitCameraPoseDialogTest, ExposesSelectedMatchPipelineInSettings)
+{
+    InitCameraPoseDialog dialog;
+
+    QComboBox *matchAlgorithmCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_matchAlgorithmCombo"));
+    ASSERT_NE(matchAlgorithmCombo, nullptr);
+    EXPECT_EQ(matchAlgorithmCombo->currentData().toString(), QStringLiteral("lightglue"));
+
+    QComboBox *featureSuffixCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_featureSuffixCombo"));
+    ASSERT_NE(featureSuffixCombo, nullptr);
+    EXPECT_EQ(featureSuffixCombo->currentData().toString(), QStringLiteral(".dsk"));
+
+    QJsonObject emittedSettings;
+    QObject::connect(&dialog, &InitCameraPoseDialog::settingsChanged, &dialog,
+                     [&emittedSettings](const QJsonObject &settings)
+                     {
+                         emittedSettings = settings;
+                     });
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(&dialog, "emitSettingsNow", Qt::DirectConnection));
+    EXPECT_EQ(emittedSettings.value(QStringLiteral("match_algorithm")).toString(), QStringLiteral("lightglue"));
+    EXPECT_EQ(emittedSettings.value(QStringLiteral("feature_algorithm")).toString(), QStringLiteral("disk"));
+    EXPECT_EQ(emittedSettings.value(QStringLiteral("feature_suffix")).toString(), QStringLiteral(".dsk"));
+}
+
+TEST(InitCameraPoseDialogTest, SfmInitializationUsesSelectedMatchPipeline)
+{
+    const QString controllerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
+    const QString managerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectCameraSetupManager.cpp"));
+    const QString sfmServiceSource =
+        readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    ASSERT_FALSE(controllerSource.isEmpty());
+    ASSERT_FALSE(managerSource.isEmpty());
+    ASSERT_FALSE(sfmServiceSource.isEmpty());
+
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("projectFeatureSuffixes")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("setAvailableFeatureSuffixes")));
+
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("settings.value(QStringLiteral(\"feature_algorithm\")")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("settings.value(QStringLiteral(\"match_algorithm\")")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("opts.featureAlgorithm")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("opts.matchAlgorithm")));
+
+    EXPECT_TRUE(sfmServiceSource.contains(QStringLiteral("isExistingMatchOnlyMode")));
+    EXPECT_TRUE(sfmServiceSource.contains(QStringLiteral("compatibleFeatureSuffixes(matchAlgorithm)")));
 }
 
 TEST(ThreeDReconstructionDialogTest, UsesUiDefaultsAndImageCountGate)

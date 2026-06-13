@@ -14,6 +14,7 @@
 #include "FeatureFileIO.h"
 #include "SuperGlueMatchIO.h"
 #include "MatchOutlierRejector.h"
+#include "AlgorithmCompat.h"
 #include "lightglue/LightGlueMatcher.h"
 #include <opencv2/opencv.hpp>
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -270,6 +271,16 @@ QString normalizedAlgorithm(QString value, const QString &fallback)
 {
     value = value.trimmed().toLower();
     return value.isEmpty() ? fallback : value;
+}
+
+bool isSfmFeatureAlgorithm(const QString &featureAlgorithm)
+{
+    return featureAlgorithm == QStringLiteral("superpoint") ||
+           featureAlgorithm == QStringLiteral("disk") ||
+           featureAlgorithm == QStringLiteral("aliked") ||
+           featureAlgorithm == QStringLiteral("sift") ||
+           featureAlgorithm == QStringLiteral("orb") ||
+           featureAlgorithm == QStringLiteral("akaze");
 }
 
 QStringList featureModelCandidates(const QString &featureAlgorithm, bool useCuda)
@@ -926,22 +937,44 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
     const QString featureAlgorithm = normalizedAlgorithm(opts.featureAlgorithm, QStringLiteral("disk"));
     const QString matchAlgorithm = normalizedAlgorithm(opts.matchAlgorithm, QStringLiteral("lightglue"));
-    if (featureAlgorithm != QStringLiteral("disk") && featureAlgorithm != QStringLiteral("aliked"))
+    const bool isExistingMatchOnlyMode = !opts.autoGenerateMissingMatches;
+
+    if (!isSfmFeatureAlgorithm(featureAlgorithm))
     {
-        result.errorMessage = QStringLiteral("一键空三当前支持 DISK/ALIKED 特征，收到: %1")
+        result.errorMessage = QStringLiteral("SFM 当前不支持该特征类型: %1")
             .arg(featureAlgorithm);
         result.summary = result.errorMessage;
         return result;
     }
-    if (matchAlgorithm != QStringLiteral("lightglue"))
+
+    const QString featureSuffix = QString::fromLatin1(
+        ExtractorSuffix::forAlgorithm(featureAlgorithm.toStdString()));
+    const QStringList compatibleSuffixes = xjw::feature_match::compatibleFeatureSuffixes(matchAlgorithm);
+    if (compatibleSuffixes.isEmpty())
     {
-        result.errorMessage = QStringLiteral("一键空三当前默认链路只使用 LightGlue，收到: %1")
+        result.errorMessage = QStringLiteral("SFM 初始化需要显式特征文件轨迹，当前不支持端到端或未知匹配算法: %1")
             .arg(matchAlgorithm);
         result.summary = result.errorMessage;
         return result;
     }
-    const QString featureSuffix = QString::fromLatin1(
-        ExtractorSuffix::forAlgorithm(featureAlgorithm.toStdString()));
+    if (!compatibleSuffixes.contains(featureSuffix))
+    {
+        result.errorMessage = QStringLiteral("匹配算法 %1 不兼容特征类型 %2")
+            .arg(matchAlgorithm, featureSuffix);
+        result.summary = result.errorMessage;
+        return result;
+    }
+
+    if (!isExistingMatchOnlyMode &&
+        (matchAlgorithm != QStringLiteral("lightglue") ||
+         (featureAlgorithm != QStringLiteral("disk") && featureAlgorithm != QStringLiteral("aliked"))))
+    {
+        result.errorMessage = QStringLiteral("自动补全匹配当前只支持 DISK/ALIKED + LightGlue，收到: %1 + %2")
+            .arg(featureAlgorithm, matchAlgorithm);
+        result.summary = result.errorMessage;
+        return result;
+    }
+
     const int featureMaxImageDim = resolveFeatureMaxImageDim(opts, presets, featureAlgorithm);
 
     LOG_INFO(QStringLiteral("SFM 流水线算法: %1 + %2, 特征后缀=%3")

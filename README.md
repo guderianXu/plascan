@@ -62,6 +62,17 @@ path/to/image_001.png path/to/image_001.tsai
 path/to/image_002.png path/to/image_002.tsai
 ```
 
+外部相机文件可先用通用转换工具生成 PlaScan 输入。当前支持自动识别、Middlebury `*_par.txt`
+和 EPFL/Strecha `.camera`：
+
+```bash
+cmake --build build --target camera_convert_cli -j$(nproc)
+build/bin/camera_convert_cli --format auto \
+  --input testData/photogrammetry_benchmarks/middlebury_dino_sparse_ring/extracted/dinoSparseRing \
+  --output-dir build/camera_inputs/dino \
+  --overwrite
+```
+
 三维建模专用 CLI 与 GUI 的 `工作流程 -> 三维重建` 使用同一套服务链路，只生成稀疏点云、密集点云和三维模型，不生成 DEM/DOM：
 
 ```bash
@@ -106,7 +117,7 @@ sudo docker build -t plascan-build -f docker/Dockerfile.ubuntu2404 .
 ```
 src/
 ├── core/
-│   ├── camera/                # 相机模型 (Pinhole, Brown 畸变)
+│   ├── camera/                # 相机模型与外部相机格式转换
 │   ├── feature_extractors/    # 8 种提取器, IExtractor 接口 + 工厂
 │   │   ├── superpoint/        # SuperPoint (256d, TorchScript)
 │   │   ├── disk/              # DISK (128d, TorchScript)
@@ -137,6 +148,16 @@ src/
 ```
 
 ## CLI 工具
+
+### 相机格式转换 (`camera_convert_cli`)
+
+```bash
+camera_convert_cli --list-formats
+camera_convert_cli --format middlebury-par -i ./dinoSparseRing -o ./plascan_cameras --overwrite
+camera_convert_cli --format epfl-camera -i ./epfl_scene -o ./plascan_cameras --overwrite
+```
+
+输出目录包含 `image_camera.lis`、`cameras/*.tsai` 和 `summary.json`，可直接传给重建类 CLI。
 
 ### 特征提取 (`feature_extract_cli`)
 

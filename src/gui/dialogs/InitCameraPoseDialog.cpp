@@ -1,6 +1,8 @@
 #include "InitCameraPoseDialog.h"
 #include "ui_InitCameraPoseDialog.h"
 
+#include "AlgorithmCompat.h"
+
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QComboBox>
@@ -12,6 +14,83 @@
 #include <QLabel>
 #include <QDialogButtonBox>
 #include <QFileInfo>
+
+namespace
+{
+
+QString normalizeFeatureSuffix(QString suffix)
+{
+    suffix = suffix.trimmed().toLower();
+    if (suffix.isEmpty())
+    {
+        return QString();
+    }
+    if (!suffix.startsWith(QLatin1Char('.')))
+    {
+        suffix.prepend(QLatin1Char('.'));
+    }
+    return suffix;
+}
+
+QStringList normalizeFeatureSuffixes(const QStringList &suffixes)
+{
+    QStringList normalized;
+    for (const QString &suffix : suffixes)
+    {
+        const QString value = normalizeFeatureSuffix(suffix);
+        if (!value.isEmpty() && !normalized.contains(value))
+        {
+            normalized.append(value);
+        }
+    }
+    return normalized;
+}
+
+QString featureAlgorithmForSuffix(const QString &suffix)
+{
+    const QString normalized = normalizeFeatureSuffix(suffix);
+    if (normalized == QStringLiteral(".dsk"))
+    {
+        return QStringLiteral("disk");
+    }
+    if (normalized == QStringLiteral(".alk"))
+    {
+        return QStringLiteral("aliked");
+    }
+    if (normalized == QStringLiteral(".sp"))
+    {
+        return QStringLiteral("superpoint");
+    }
+    if (normalized == QStringLiteral(".sift"))
+    {
+        return QStringLiteral("sift");
+    }
+    if (normalized == QStringLiteral(".orb"))
+    {
+        return QStringLiteral("orb");
+    }
+    if (normalized == QStringLiteral(".akz"))
+    {
+        return QStringLiteral("akaze");
+    }
+    if (normalized == QStringLiteral(".dedode"))
+    {
+        return QStringLiteral("dedode");
+    }
+    return QString();
+}
+
+void setComboDataOrFirst(QComboBox *combo, const QString &data)
+{
+    if (!combo)
+    {
+        return;
+    }
+    const int idx = combo->findData(data);
+    combo->setCurrentIndex(idx >= 0 ? idx : 0);
+}
+
+} // namespace
 
 InitCameraPoseDialog::InitCameraPoseDialog(QWidget *parent)
     : QDialog(parent)
@@ -33,6 +112,12 @@ InitCameraPoseDialog::InitCameraPoseDialog(QWidget *parent)
     m_applyHintLabel = ui.m_applyHintLabel;
     m_qualityCombo = ui.m_qualityCombo;
     m_threadsSpin = ui.m_threadsSpin;
+    m_matchAlgorithmCombo = new QComboBox(this);
+    m_matchAlgorithmCombo->setObjectName(QStringLiteral("m_matchAlgorithmCombo"));
+    m_matchAlgorithmCombo->setToolTip(tr("选择初始化位姿时复用哪一种已生成匹配。"));
+    m_featureSuffixCombo = new QComboBox(this);
+    m_featureSuffixCombo->setObjectName(QStringLiteral("m_featureSuffixCombo"));
+    m_featureSuffixCombo->setToolTip(tr("选择与匹配结果对应的特征文件类型。"));
     m_exifAutoCheck = ui.m_exifAutoCheck;
     m_defaultFocalSpin = ui.m_defaultFocalSpin;
     m_sensorWidthSpin = ui.m_sensorWidthSpin;
@@ -71,6 +156,20 @@ InitCameraPoseDialog::InitCameraPoseDialog(QWidget *parent)
     m_qualityCombo->addItem(tr("高质量"), 2);
     m_qualityCombo->addItem(tr("最高质量"), 3);
     m_qualityCombo->setCurrentIndex(1);
+
+    m_matchAlgorithmCombo->clear();
+    m_matchAlgorithmCombo->addItem(tr("LightGlue"), QStringLiteral("lightglue"));
+    m_matchAlgorithmCombo->addItem(tr("SuperGlue"), QStringLiteral("superglue"));
+    m_matchAlgorithmCombo->addItem(tr("BF-Hamming (ORB)"), QStringLiteral("orb_bf_hamming"));
+    m_matchAlgorithmCombo->addItem(tr("BF-L2 (SIFT)"), QStringLiteral("sift_bf_l2"));
+    m_matchAlgorithmCombo->addItem(tr("FLANN (SIFT)"), QStringLiteral("sift_flann"));
+    setComboDataOrFirst(m_matchAlgorithmCombo, QStringLiteral("lightglue"));
+    if (ui.solveForm)
+    {
+        ui.solveForm->addRow(tr("匹配算法:"), m_matchAlgorithmCombo);
+        ui.solveForm->addRow(tr("特征类型:"), m_featureSuffixCombo);
+    }
+    refreshFeatureSuffixChoices();
 
     m_distModelCombo->clear();
     m_distModelCombo->addItems({
@@ -111,6 +210,9 @@ InitCameraPoseDialog::InitCameraPoseDialog(QWidget *parent)
     connect(m_overwriteExistingCheck, &QCheckBox::toggled, this, changed);
     connect(m_qualityCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(m_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
+    connect(m_matchAlgorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &InitCameraPoseDialog::onMatchPipelineChanged);
+    connect(m_featureSuffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(m_cameraImportModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(m_targetImageCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(m_cameraFormatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
@@ -131,6 +233,7 @@ InitCameraPoseDialog::InitCameraPoseDialog(QWidget *parent)
     connect(ui.buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
     onModeChanged(0);
+    onMatchPipelineChanged();
     onInitTargetModeChanged(0);
     onCameraImportModeChanged(0);
     onDistortionModelChanged(m_distModelCombo->currentIndex());
@@ -253,6 +356,12 @@ void InitCameraPoseDialog::setAvailableImages(const QStringList &imagePaths)
     updateTargetUi();
 }
 
+void InitCameraPoseDialog::setAvailableFeatureSuffixes(const QStringList &suffixes)
+{
+    m_projectFeatureSuffixes = normalizeFeatureSuffixes(suffixes);
+    refreshFeatureSuffixChoices();
+}
+
 QJsonObject InitCameraPoseDialog::collectSettings() const
 {
     QJsonObject o;
@@ -263,6 +372,9 @@ QJsonObject InitCameraPoseDialog::collectSettings() const
     o["overwriteExisting"] = m_overwriteExistingCheck->isChecked();
     o["quality"] = m_qualityCombo->currentData().toInt();
     o["threads"] = m_threadsSpin->value();
+    o["match_algorithm"] = m_matchAlgorithmCombo->currentData().toString();
+    o["feature_suffix"] = selectedFeatureSuffix();
+    o["feature_algorithm"] = selectedFeatureAlgorithm();
     // 模式 0
     o["exifAuto"]     = m_exifAutoCheck->isChecked();
     o["defaultFocal"]  = m_defaultFocalSpin->value();
@@ -316,6 +428,21 @@ void InitCameraPoseDialog::applySettings(const QJsonObject &s)
         }
     }
     if (s.contains("threads")) m_threadsSpin->setValue(s["threads"].toInt());
+    if (s.contains("match_algorithm"))
+    {
+        setComboDataOrFirst(m_matchAlgorithmCombo,
+                            s.value(QStringLiteral("match_algorithm")).toString(QStringLiteral("lightglue")));
+        refreshFeatureSuffixChoices();
+    }
+    if (s.contains("feature_suffix"))
+    {
+        const QString suffix = normalizeFeatureSuffix(s.value(QStringLiteral("feature_suffix")).toString());
+        const int idx = m_featureSuffixCombo->findData(suffix);
+        if (idx >= 0)
+        {
+            m_featureSuffixCombo->setCurrentIndex(idx);
+        }
+    }
     if (s.contains("exifAuto"))      m_exifAutoCheck->setChecked(s["exifAuto"].toBool());
     if (s.contains("defaultFocal"))  m_defaultFocalSpin->setValue(s["defaultFocal"].toDouble());
     if (s.contains("sensorWidth"))   m_sensorWidthSpin->setValue(s["sensorWidth"].toDouble());
@@ -349,6 +476,81 @@ void InitCameraPoseDialog::applySettings(const QJsonObject &s)
     }
     updateTargetUi();
     updateStatusText();
+}
+
+QString InitCameraPoseDialog::selectedFeatureSuffix() const
+{
+    if (!m_featureSuffixCombo)
+    {
+        return QStringLiteral(".dsk");
+    }
+    const QVariant data = m_featureSuffixCombo->currentData();
+    const QString suffix = data.isValid() ? data.toString() : m_featureSuffixCombo->currentText();
+    const QString normalized = normalizeFeatureSuffix(suffix);
+    return normalized.isEmpty() ? QStringLiteral(".dsk") : normalized;
+}
+
+QString InitCameraPoseDialog::selectedFeatureAlgorithm() const
+{
+    const QString algorithm = featureAlgorithmForSuffix(selectedFeatureSuffix());
+    return algorithm.isEmpty() ? QStringLiteral("disk") : algorithm;
+}
+
+void InitCameraPoseDialog::refreshFeatureSuffixChoices()
+{
+    if (!m_matchAlgorithmCombo || !m_featureSuffixCombo)
+    {
+        return;
+    }
+
+    const QString previousSuffix = selectedFeatureSuffix();
+    const QString algo = m_matchAlgorithmCombo->currentData().toString();
+    const QStringList compatibleSuffixes = xjw::feature_match::compatibleFeatureSuffixes(algo);
+
+    QStringList suffixes;
+    for (const QString &suffix : compatibleSuffixes)
+    {
+        const QString normalized = normalizeFeatureSuffix(suffix);
+        if (normalized.isEmpty())
+        {
+            continue;
+        }
+        if (m_projectFeatureSuffixes.isEmpty() || m_projectFeatureSuffixes.contains(normalized))
+        {
+            suffixes.append(normalized);
+        }
+    }
+
+    if (suffixes.isEmpty())
+    {
+        suffixes = compatibleSuffixes.isEmpty()
+            ? QStringList{QStringLiteral(".dsk")}
+            : normalizeFeatureSuffixes(compatibleSuffixes);
+    }
+
+    m_featureSuffixCombo->blockSignals(true);
+    m_featureSuffixCombo->clear();
+    for (const QString &suffix : suffixes)
+    {
+        m_featureSuffixCombo->addItem(suffix, suffix);
+    }
+
+    int restoreIndex = m_featureSuffixCombo->findData(previousSuffix);
+    if (restoreIndex < 0 && m_featureSuffixCombo->count() > 0)
+    {
+        restoreIndex = 0;
+    }
+    if (restoreIndex >= 0)
+    {
+        m_featureSuffixCombo->setCurrentIndex(restoreIndex);
+    }
+    m_featureSuffixCombo->blockSignals(false);
+}
+
+void InitCameraPoseDialog::onMatchPipelineChanged()
+{
+    refreshFeatureSuffixChoices();
+    emitSettingsNow();
 }
 
 void InitCameraPoseDialog::emitSettingsNow()

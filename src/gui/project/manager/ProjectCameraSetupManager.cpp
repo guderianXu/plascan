@@ -32,6 +32,49 @@ using xjw::gui::project::makeInitializedCameraMeta;
 using xjw::gui::project::resolveInitTargets;
 using xjw::gui::project::withPreparedCameras;
 
+namespace
+{
+
+QString featureAlgorithmFromSuffix(QString suffix)
+{
+    suffix = suffix.trimmed().toLower();
+    if (!suffix.startsWith(QLatin1Char('.')))
+    {
+        suffix.prepend(QLatin1Char('.'));
+    }
+    if (suffix == QStringLiteral(".dsk"))
+    {
+        return QStringLiteral("disk");
+    }
+    if (suffix == QStringLiteral(".alk"))
+    {
+        return QStringLiteral("aliked");
+    }
+    if (suffix == QStringLiteral(".sp"))
+    {
+        return QStringLiteral("superpoint");
+    }
+    if (suffix == QStringLiteral(".sift"))
+    {
+        return QStringLiteral("sift");
+    }
+    if (suffix == QStringLiteral(".orb"))
+    {
+        return QStringLiteral("orb");
+    }
+    if (suffix == QStringLiteral(".akz"))
+    {
+        return QStringLiteral("akaze");
+    }
+    if (suffix == QStringLiteral(".dedode"))
+    {
+        return QStringLiteral("dedode");
+    }
+    return QString();
+}
+
+} // namespace
+
 ProjectCameraSetupManager::ProjectCameraSetupManager(ProjectManager *owner,
                                                      ProjectData *projectData,
                                                      QWidget *parentWidget,
@@ -540,7 +583,26 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
     opts.outputDir = outputDir;
     opts.quality = settings.value(QStringLiteral("quality")).toInt(1);
     opts.threads = settings.value(QStringLiteral("threads")).toInt(8);
+    const QString requestedFeatureSuffix =
+        settings.value(QStringLiteral("feature_suffix")).toString().trimmed().toLower();
+    QString requestedFeatureAlgorithm =
+        settings.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
+    if (requestedFeatureAlgorithm.isEmpty())
+    {
+        requestedFeatureAlgorithm = featureAlgorithmFromSuffix(requestedFeatureSuffix);
+    }
+    opts.featureAlgorithm = requestedFeatureAlgorithm.isEmpty()
+        ? QStringLiteral("disk")
+        : requestedFeatureAlgorithm;
+    opts.matchAlgorithm = settings.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+    if (opts.matchAlgorithm.isEmpty())
+    {
+        opts.matchAlgorithm = QStringLiteral("lightglue");
+    }
     opts.autoGenerateMissingMatches = false;
+
+    LOG_INFO(QStringLiteral("初始化相机位姿: 使用匹配链路 %1 + %2")
+        .arg(opts.featureAlgorithm.toUpper(), opts.matchAlgorithm));
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     m_owner->setAtCancelFlag(cancelFlag);

@@ -15,6 +15,13 @@ function(add_plascan_cli name src_file libs include_dirs)
     )
 endfunction()
 
+# ── 通用相机格式转换 ──
+if(TARGET camera)
+    add_plascan_cli(camera_convert_cli cli_camera_convert.cpp
+        "camera"
+        "${CMAKE_SOURCE_DIR}/src/core/camera")
+endif()
+
 # ── 密集匹配 ──
 if(TARGET dense_match)
     add_plascan_cli(dense_match_cli cli_dense_match.cpp

@@ -208,6 +208,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.cpp
@@ -305,6 +307,14 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
+        NAME PreparePhotogrammetryBenchmarksTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_photogrammetry_benchmarks
+    )
+    set_tests_properties(PreparePhotogrammetryBenchmarksTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
         NAME MvsSchedulerConfigTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_mvs_scheduler_config
     )
@@ -352,6 +362,17 @@ if(Python3_Interpreter_FOUND)
         set_tests_properties(ReconstructPipelineCliTest PROPERTIES
             WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
             ENVIRONMENT "PLASCAN_RECONSTRUCT_PIPELINE_CLI=$<TARGET_FILE:reconstruct_pipeline_cli>"
+        )
+    endif()
+
+    if(TARGET camera_convert_cli)
+        add_test(
+            NAME CameraConvertCliTest
+            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_camera_convert_cli
+        )
+        set_tests_properties(CameraConvertCliTest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT "PLASCAN_CAMERA_CONVERT_CLI=$<TARGET_FILE:camera_convert_cli>"
         )
     endif()
 endif()

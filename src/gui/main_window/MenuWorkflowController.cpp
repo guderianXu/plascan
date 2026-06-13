@@ -18,6 +18,7 @@
 #include "CreateDemDialog.h"
 #include "MapProjectDialog.h"
 #include "WorkflowReportDialog.h"
+#include "CameraConvertDialog.h"
 
 #include "settings/DialogSettingStore.h"
 #include "settings/DialogSettingKeys.h"
@@ -1213,6 +1214,18 @@ void MenuWorkflowController::openWorkflowReportDialog()
     }
 
     auto *dlg = new WorkflowReportDialog(assetsDir, m_mainWindow);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->show();
+}
+
+void MenuWorkflowController::openCameraConvertDialog()
+{
+    if (!m_mainWindow)
+    {
+        return;
+    }
+
+    auto *dlg = new CameraConvertDialog(m_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }

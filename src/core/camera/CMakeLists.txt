@@ -1,4 +1,4 @@
-add_library(camera STATIC Camera.cpp PositiveDepthCameraModel.cpp)
+add_library(camera STATIC Camera.cpp PositiveDepthCameraModel.cpp CameraFormatConverter.cpp)
 target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 # no extra dependencies
 
@@ -28,5 +28,13 @@ if(BUILD_TESTS)
 			TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
 		)
 		gtest_discover_tests(test_camera_tsai)
+
+		add_executable(test_camera_format_converter CameraFormatConverter_tests.cpp)
+		target_link_libraries(test_camera_format_converter PRIVATE
+			camera
+			GTest::gtest_main
+		)
+		target_include_directories(test_camera_format_converter PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
+		gtest_discover_tests(test_camera_format_converter)
 	endif()
 endif()

@@ -59,6 +59,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_fileMenu = findNamedChild<QMenu>(m_mainWindow, "menuProject");
         m_recentMenu = findNamedChild<QMenu>(m_mainWindow, "menuRecentProjects");
         auto *windowMenu = findNamedChild<QMenu>(m_mainWindow, "menuWindow");
+        auto *toolsMenu = findNamedChild<QMenu>(m_mainWindow, "menuTools");
 
         m_newAct = findNamedChild<QAction>(m_mainWindow, "actionNewProject");
         m_openAct = findNamedChild<QAction>(m_mainWindow, "actionOpenProject");
@@ -103,6 +104,28 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_manualPointCloudPruneAct = findNamedChild<QAction>(m_mainWindow, "actionManualPointCloudPrune");
         m_viewMatchesAct = findNamedChild<QAction>(m_mainWindow, "actionViewMatches");
         m_viewWorkflowReportAct = findNamedChild<QAction>(m_mainWindow, "actionViewWorkflowReport");
+        m_cameraConvertAct = findNamedChild<QAction>(m_mainWindow, "actionCameraConvert");
+        if (!m_cameraConvertAct)
+        {
+            QObject *actionParent = toolsMenu
+                ? static_cast<QObject *>(toolsMenu)
+                : static_cast<QObject *>(m_mainWindow);
+            m_cameraConvertAct = new QAction(tr("相机格式转换..."), actionParent);
+            m_cameraConvertAct->setObjectName(QStringLiteral("actionCameraConvert"));
+            m_cameraConvertAct->setToolTip(tr("将外部相机文件转换为 PlaScan tsai 和 image_camera.lis"));
+            if (toolsMenu)
+            {
+                if (m_viewWorkflowReportAct)
+                {
+                    toolsMenu->insertAction(m_viewWorkflowReportAct, m_cameraConvertAct);
+                    toolsMenu->insertSeparator(m_viewWorkflowReportAct);
+                }
+                else
+                {
+                    toolsMenu->addAction(m_cameraConvertAct);
+                }
+            }
+        }
 
         if (m_exitAct)
         {
@@ -270,6 +293,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     toolsMenu->addSeparator();
     m_viewMatchesAct = toolsMenu->addAction(tr("连接点查看"));
 
+    // 相机格式转换：外部 benchmark/摄影测量相机 -> tsai + image_camera.lis
+    toolsMenu->addSeparator();
+    m_cameraConvertAct = toolsMenu->addAction(tr("相机格式转换..."));
+
     // 报告：查看各工作流程的历史统计报告
     toolsMenu->addSeparator();
     m_viewWorkflowReportAct = toolsMenu->addAction(tr("查看工作流程报告..."));
@@ -413,6 +440,7 @@ QAction *MainMenu::generateOrthoAction() const  { return m_generateOrthoAct; }
 
 QAction *MainMenu::viewWorkflowReportAction() const         { return m_viewWorkflowReportAct; }
 QAction *MainMenu::manualPointCloudPruneAction() const      { return m_manualPointCloudPruneAct; }
+QAction *MainMenu::cameraConvertAction() const              { return m_cameraConvertAct; }
 
 QAction *MainMenu::buildObsNetworkAction() const     { return m_buildObsNetworkAct; }
 QAction *MainMenu::initCameraPoseAction() const      { return m_initCameraPoseAct; }

@@ -64,6 +64,7 @@ core/
 │
 ├── camera/                     # 相机模型
 │   ├── Camera.h/cpp            # 通用相机 (Pinhole + 位姿)
+│   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
 │   ├── PositiveDepthCameraModel.h/cpp  # 正深度约束相机
 │   └── Camera_tests.cpp
 │
@@ -231,6 +232,7 @@ gui/
 │   ├── ForwardIntersectionCheckDialog.h/cpp # 前方交汇检测
 │   ├── ForwardIntersectionResultsDialog.h/cpp  # 前方交汇结果
 │   ├── CameraModel3DDialog.h/cpp            # 相机模型 3D 查看
+│   ├── CameraConvertDialog.h/cpp            # 外部相机格式转换
 │   ├── CreateDemDialog.h/cpp                # DEM 生成参数
 │   ├── MapProjectDialog.h/cpp               # 地图投影参数
 │   ├── ModelGenerationDialog.h/cpp          # 模型生成
@@ -343,8 +345,8 @@ gui/
 ├最近   ├操控球├生成模型         │├创建连接点              │└查看结果
 │打开   ├特征点├创建 DEM         │├构建观测网络...         ├手动点云剔除
 ├导出   │可视化├生成正射影像     │├初始化相机位姿...       ├连接点查看
-├最小化 └窗口                    │├生成初始稀疏点云...     └查看工作流程报告
-└退出                            │├光束法平差优化...
+├最小化 └窗口                    │├生成初始稀疏点云...     ├相机格式转换...
+└退出                            │├光束法平差优化...       └查看工作流程报告
                                  │└稀疏点云后处理...
                                  ├密集重建
                                  │├密集匹配...        ← 新增
@@ -395,6 +397,7 @@ cli/
 ├── CMakeLists.txt            # CLI 统一构建
 ├── cli_common.h              # 公共基础设施 (参数解析, JSON 配置, 退出码)
 ├── cli_dense_match.cpp       # 密集匹配 CLI
+├── cli_camera_convert.cpp    # 外部相机格式转换 CLI
 ├── cli_feature_extract.cpp   # 特征提取 CLI (8 种算法, 工厂模式)
 ├── cli_feature_match.cpp     # 特征匹配 CLI (工厂模式, 自动检测算法)
 └── tests/                    # CLI 端到端测试脚本

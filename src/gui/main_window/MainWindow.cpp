@@ -407,6 +407,11 @@ void MainWindow::setupProjectManager()
                 connect(m_mainMenu->viewWorkflowReportAction(), &QAction::triggered,
                         m_menuWorkflowController, &MenuWorkflowController::openWorkflowReportDialog);
             }
+            if (m_mainMenu->cameraConvertAction())
+            {
+                connect(m_mainMenu->cameraConvertAction(), &QAction::triggered,
+                        m_menuWorkflowController, &MenuWorkflowController::openCameraConvertDialog);
+            }
         }
 
         // ── 重建菜单 → ReconstructionWorkflowController ──

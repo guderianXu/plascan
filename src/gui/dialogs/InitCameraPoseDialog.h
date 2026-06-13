@@ -29,6 +29,7 @@ public:
     explicit InitCameraPoseDialog(QWidget *parent = nullptr);
     void applySettings(const QJsonObject &settings);
     void setAvailableImages(const QStringList &imagePaths);
+    void setAvailableFeatureSuffixes(const QStringList &suffixes);
 
 signals:
     void runRequested(const QJsonObject &settings);
@@ -41,9 +42,13 @@ private slots:
     void onInitTargetModeChanged(int index);
     void onCameraImportModeChanged(int index);
     void onDistortionModelChanged(int index);
+    void onMatchPipelineChanged();
 
 private:
     QJsonObject collectSettings() const;
+    QString selectedFeatureSuffix() const;
+    QString selectedFeatureAlgorithm() const;
+    void refreshFeatureSuffixChoices();
     void updateStatusText();
     void updateTargetUi();
 
@@ -61,6 +66,9 @@ private:
     QLabel         *m_applyHintLabel        = nullptr;
     QComboBox      *m_qualityCombo          = nullptr;
     QSpinBox       *m_threadsSpin           = nullptr;
+    QComboBox      *m_matchAlgorithmCombo   = nullptr;
+    QComboBox      *m_featureSuffixCombo    = nullptr;
+    QStringList     m_projectFeatureSuffixes;
 
     // ── 模式 1: 无相机文件 ──
     QCheckBox      *m_exifAutoCheck      = nullptr;  ///< 自动读取 EXIF

@@ -486,6 +486,9 @@ void ReconstructionWorkflowController::openInitCameraPoseDialog()
     if (m_projectManager)
     {
         imagePaths = xjw::gui::project::projectImagePaths(m_projectManager->currentMeta());
+        dlg->setAvailableFeatureSuffixes(
+            xjw::gui::project::projectFeatureSuffixes(m_projectManager->currentProjectPath(),
+                                                       m_projectManager->currentMeta()));
     }
     dlg->setAvailableImages(imagePaths);
     if (m_initPoseStore)
