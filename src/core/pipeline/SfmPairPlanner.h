@@ -7,6 +7,10 @@
 #include <QStringList>
 
 #include <algorithm>
+#include <array>
+#include <cmath>
+#include <utility>
+#include <vector>
 
 namespace xjw
 {
@@ -20,14 +24,18 @@ struct SfmPairPlannerOptions
     bool autoRestrictKnownCameraPairs = true;
     int knownCameraPairWindow = 4;
     int knownCameraAllPairsMaxImages = 20;
+    int knownCameraSpatialNeighborCount = 8;
+    std::vector<std::array<double, 3>> knownCameraCenters;
 };
 
 struct SfmPairPlan
 {
     bool restrictPairs = false;
     bool autoRestricted = false;
+    bool usedSpatialCameraCenters = false;
     int allPairCount = 0;
     int knownCameraPairWindow = 0;
+    int knownCameraSpatialNeighborCount = 0;
     QStringList allowedPairKeys;
 };
 
@@ -88,6 +96,53 @@ inline bool hasCompleteCameraPathList(const QStringList &images, const QStringLi
     return true;
 }
 
+inline bool hasCompleteKnownCameraCenters(int imageCount, const std::vector<std::array<double, 3>> &centers)
+{
+    if (imageCount <= 0 || centers.size() != static_cast<std::size_t>(imageCount))
+    {
+        return false;
+    }
+
+    for (const auto &center : centers)
+    {
+        if (!std::isfinite(center[0]) || !std::isfinite(center[1]) || !std::isfinite(center[2]))
+        {
+            return false;
+        }
+    }
+
+    return true;
+}
+
+inline double squaredCenterDistance(const std::array<double, 3> &a, const std::array<double, 3> &b)
+{
+    const double dx = a[0] - b[0];
+    const double dy = a[1] - b[1];
+    const double dz = a[2] - b[2];
+    return dx * dx + dy * dy + dz * dz;
+}
+
+inline void appendUniqueSfmPairKey(const QStringList &images,
+                                   int indexA,
+                                   int indexB,
+                                   QSet<QString> *seen,
+                                   QStringList *pairKeys)
+{
+    if (!seen || !pairKeys || indexA == indexB)
+    {
+        return;
+    }
+
+    const QString pairKey = canonicalSfmPairKey(images.at(indexA), images.at(indexB));
+    if (pairKey.isEmpty() || seen->contains(pairKey))
+    {
+        return;
+    }
+
+    seen->insert(pairKey);
+    pairKeys->append(pairKey);
+}
+
 inline SfmPairPlan planSfmMatchPairs(
     const QStringList &images,
     const QStringList &cameraPaths,
@@ -112,9 +167,11 @@ inline SfmPairPlan planSfmMatchPairs(
     }
 
     const int window = std::max(1, options.knownCameraPairWindow);
+    const int spatialNeighborCount = std::max(0, options.knownCameraSpatialNeighborCount);
     plan.restrictPairs = true;
     plan.autoRestricted = true;
     plan.knownCameraPairWindow = window;
+    plan.knownCameraSpatialNeighborCount = spatialNeighborCount;
 
     QSet<QString> seen;
     for (int i = 0; i < imageCount; ++i)
@@ -122,13 +179,44 @@ inline SfmPairPlan planSfmMatchPairs(
         const int last = std::min(imageCount - 1, i + window);
         for (int j = i + 1; j <= last; ++j)
         {
-            const QString pairKey = canonicalSfmPairKey(images.at(i), images.at(j));
-            if (pairKey.isEmpty() || seen.contains(pairKey))
+            appendUniqueSfmPairKey(images, i, j, &seen, &plan.allowedPairKeys);
+        }
+    }
+
+    if (spatialNeighborCount > 0 && hasCompleteKnownCameraCenters(imageCount, options.knownCameraCenters))
+    {
+        plan.usedSpatialCameraCenters = true;
+        for (int i = 0; i < imageCount; ++i)
+        {
+            std::vector<std::pair<double, int>> neighbors;
+            neighbors.reserve(static_cast<std::size_t>(imageCount - 1));
+            for (int j = 0; j < imageCount; ++j)
             {
-                continue;
+                if (i == j)
+                {
+                    continue;
+                }
+
+                neighbors.emplace_back(squaredCenterDistance(options.knownCameraCenters[static_cast<std::size_t>(i)],
+                                                             options.knownCameraCenters[static_cast<std::size_t>(j)]),
+                                       j);
             }
-            seen.insert(pairKey);
-            plan.allowedPairKeys.append(pairKey);
+
+            std::sort(neighbors.begin(), neighbors.end(), [](const auto &lhs, const auto &rhs)
+            {
+                if (lhs.first == rhs.first)
+                {
+                    return lhs.second < rhs.second;
+                }
+                return lhs.first < rhs.first;
+            });
+
+            const int keep = std::min(spatialNeighborCount, static_cast<int>(neighbors.size()));
+            for (int n = 0; n < keep; ++n)
+            {
+                appendUniqueSfmPairKey(images, i, neighbors[static_cast<std::size_t>(n)].second, &seen,
+                                       &plan.allowedPairKeys);
+            }
         }
     }
 

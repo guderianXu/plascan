@@ -46,6 +46,7 @@
 #include <QStandardPaths>
 
 #include <algorithm>
+#include <array>
 #include <atomic>
 #include <cmath>
 #include <mutex>
@@ -147,6 +148,51 @@ QString canonicalNamePairKey(const QString &nameA, const QString &nameB)
         return QString();
     }
     return (a < b) ? (a + QStringLiteral("\n") + b) : (b + QStringLiteral("\n") + a);
+}
+
+std::vector<std::array<double, 3>> loadKnownCameraCentersFromPaths(const QStringList &images,
+                                                                   const QStringList &cameraPaths,
+                                                                   QString *errorMessage)
+{
+    std::vector<std::array<double, 3>> centers;
+    if (images.isEmpty() || cameraPaths.size() != images.size())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("影像数量和相机文件数量不一致");
+        }
+        return centers;
+    }
+
+    centers.reserve(static_cast<std::size_t>(cameraPaths.size()));
+    for (int i = 0; i < cameraPaths.size(); ++i)
+    {
+        const QString cameraPath = cameraPaths.at(i).trimmed();
+        if (cameraPath.isEmpty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("第 %1 张影像缺少相机文件: %2").arg(i + 1).arg(images.value(i));
+            }
+            centers.clear();
+            return centers;
+        }
+
+        Camera camera;
+        if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("无法读取相机文件: %1").arg(cameraPath);
+            }
+            centers.clear();
+            return centers;
+        }
+
+        centers.push_back(camera.cameraCenter());
+    }
+
+    return centers;
 }
 
 // ── 相机 JSON 序列化 ─────────────────────────────────────────────────────────
@@ -1249,7 +1295,23 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     pairPlanOptions.allowedPairs = opts.allowedPairs;
     pairPlanOptions.autoRestrictKnownCameraPairs = opts.autoRestrictKnownCameraPairs;
     pairPlanOptions.knownCameraPairWindow = opts.knownCameraPairWindow;
+    pairPlanOptions.knownCameraSpatialNeighborCount = opts.knownCameraSpatialNeighborCount;
     pairPlanOptions.knownCameraAllPairsMaxImages = opts.knownCameraAllPairsMaxImages;
+    if (!opts.restrictPairs &&
+        opts.autoRestrictKnownCameraPairs &&
+        opts.knownCameraSpatialNeighborCount > 0 &&
+        opts.images.size() > std::max(0, opts.knownCameraAllPairsMaxImages) &&
+        hasCompleteCameraPathList(opts.images, opts.cameraPaths))
+    {
+        QString knownCameraCenterError;
+        pairPlanOptions.knownCameraCenters = loadKnownCameraCentersFromPaths(opts.images,
+                                                                             opts.cameraPaths,
+                                                                             &knownCameraCenterError);
+        if (pairPlanOptions.knownCameraCenters.empty())
+        {
+            LOG_WARN(QStringLiteral("  已知相机空间配对不可用，将回退顺序邻域: %1").arg(knownCameraCenterError));
+        }
+    }
 
     const SfmPairPlan pairPlan = planSfmMatchPairs(opts.images, opts.cameraPaths, pairPlanOptions);
 
@@ -1268,10 +1330,21 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         LOG_INFO(QStringLiteral("  匹配对约束已启用: %1 对").arg(allowedPairSet.size()));
         if (pairPlan.autoRestricted)
         {
-            LOG_INFO(QStringLiteral("  已知相机顺序配对裁剪: 原始 %1 对 -> %2 对, 邻域窗口=%3")
-                .arg(pairPlan.allPairCount)
-                .arg(allowedPairSet.size())
-                .arg(pairPlan.knownCameraPairWindow));
+            if (pairPlan.usedSpatialCameraCenters)
+            {
+                LOG_INFO(QStringLiteral("  已知相机空间+顺序配对裁剪: 原始 %1 对 -> %2 对, 顺序窗口=%3, 空间邻居=%4")
+                    .arg(pairPlan.allPairCount)
+                    .arg(allowedPairSet.size())
+                    .arg(pairPlan.knownCameraPairWindow)
+                    .arg(pairPlan.knownCameraSpatialNeighborCount));
+            }
+            else
+            {
+                LOG_INFO(QStringLiteral("  已知相机顺序配对裁剪: 原始 %1 对 -> %2 对, 邻域窗口=%3")
+                    .arg(pairPlan.allPairCount)
+                    .arg(allowedPairSet.size())
+                    .arg(pairPlan.knownCameraPairWindow));
+            }
         }
     }
 

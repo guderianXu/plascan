@@ -42,6 +42,7 @@
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <limits>
 #include <plapoint/io/xyz_io.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/obj_io.h>
@@ -166,6 +167,7 @@ void CameraSceneWidget::invalidateCache() const
     {
         m_cachedCenter  = QVector3D(0, 0, 0);
         m_cachedRadius  = 10.0f;
+        m_cachedCameraFrustumBase = 0.6f;
         m_cachedAABBMin = QVector3D(-10, -10, -10);
         m_cachedAABBMax = QVector3D( 10,  10,  10);
     }
@@ -194,6 +196,38 @@ void CameraSceneWidget::invalidateCache() const
         else
         {
             m_cachedRadius = 1.0f;
+        }
+
+        m_cachedCameraFrustumBase = qMax(0.1f, m_cachedRadius * 0.02f);
+        if (m_poses.size() > 1)
+        {
+            std::vector<float> nearestDistances;
+            nearestDistances.reserve(static_cast<size_t>(m_poses.size()));
+            for (qsizetype i = 0; i < m_poses.size(); ++i)
+            {
+                float nearest = std::numeric_limits<float>::max();
+                for (qsizetype j = 0; j < m_poses.size(); ++j)
+                {
+                    if (i == j)
+                    {
+                        continue;
+                    }
+                    nearest = qMin(nearest, (m_poses[i].center - m_poses[j].center).length());
+                }
+                if (std::isfinite(nearest))
+                {
+                    nearestDistances.push_back(nearest);
+                }
+            }
+            if (!nearestDistances.empty())
+            {
+                const size_t medianIndex = nearestDistances.size() / 2;
+                std::nth_element(nearestDistances.begin(),
+                                 nearestDistances.begin() + static_cast<std::ptrdiff_t>(medianIndex),
+                                 nearestDistances.end());
+                const float spacingBase = nearestDistances[medianIndex] * 0.25f;
+                m_cachedCameraFrustumBase = qMax(0.1f, qMin(m_cachedCameraFrustumBase, spacingBase));
+            }
         }
     }
     m_cacheDirty = false;
@@ -423,6 +457,17 @@ qreal CameraSceneWidget::manipRadiusPx() const
 {
     const qreal base = qMin(width(), height()) * 0.11;
     return qBound<qreal>(30.0, base, qMin(width(), height()) * 0.24);
+}
+
+int CameraSceneWidget::maxVisibleCameraLabels() const
+{
+    return 40;
+}
+
+float CameraSceneWidget::cameraFrustumBase() const
+{
+    if (m_cacheDirty) invalidateCache();
+    return m_cachedCameraFrustumBase;
 }
 
 // Gizmo 操控球的世界中心点（等于场景质心）
@@ -1069,8 +1114,17 @@ void CameraSceneWidget::drawOverlay()
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    const QVector3D c = manipCenterWorld();
-    const float r = sceneRadius();
+    const float frustumBase = cameraFrustumBase();
+    const int labelBudget = maxVisibleCameraLabels();
+    const int cameraCount = static_cast<int>(m_poses.size());
+    const bool drawAllCameraLabels = cameraCount <= labelBudget;
+    const int cameraLabelStride = drawAllCameraLabels
+        ? 1
+        : qMax(1, static_cast<int>(std::ceil(double(cameraCount) / double(qMax(1, labelBudget)))));
+    const QColor frustumColor = cameraCount > 200
+        ? QColor(180, 130, 50, 105)
+        : QColor(180, 130, 50, 210);
+    const qreal frustumLineWidth = cameraCount > 200 ? 0.8 : 1.5;
     auto drawLine3D = [&](const QVector3D &a, const QVector3D &b, const QPen &pen) {
         bool okA = false;
         bool okB = false;
@@ -1139,7 +1193,8 @@ void CameraSceneWidget::drawOverlay()
 
     painter.setBrush(QColor(220, 100, 40));
     painter.setPen(Qt::NoPen);
-    for (const CameraPose &pose : m_poses) {
+    for (qsizetype poseIndex = 0; poseIndex < m_poses.size(); ++poseIndex) {
+        const CameraPose &pose = m_poses.at(poseIndex);
         bool ok = false;
         const QPointF pc = projectToScreen(pose.center, &ok);
         if (!ok) continue;
@@ -1148,13 +1203,13 @@ void CameraSceneWidget::drawOverlay()
         const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
         const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
         const QVector3D forward(pose.rotation(0, 2), pose.rotation(1, 2), pose.rotation(2, 2));
-        const float base = qMax(0.1f, r * 0.06f);
+        const float base = frustumBase;
         const QVector3D fc = pose.center + forward * (base * 2.2f);
         const QVector3D p1 = fc + right * base + up * base;
         const QVector3D p2 = fc - right * base + up * base;
         const QVector3D p3 = fc - right * base - up * base;
         const QVector3D p4 = fc + right * base - up * base;
-        const QPen frustumPen(QColor(180, 130, 50), 1.5);
+        const QPen frustumPen(frustumColor, frustumLineWidth);
         drawLine3D(pose.center, p1, frustumPen);
         drawLine3D(pose.center, p2, frustumPen);
         drawLine3D(pose.center, p3, frustumPen);
@@ -1163,8 +1218,15 @@ void CameraSceneWidget::drawOverlay()
         drawLine3D(p2, p3, frustumPen);
         drawLine3D(p3, p4, frustumPen);
         drawLine3D(p4, p1, frustumPen);
-        painter.setPen(QColor(60, 60, 60));
-        painter.drawText(pc + QPointF(7.0, -7.0), pose.name);
+        const bool drawCameraLabel = drawAllCameraLabels
+            || (poseIndex == 0)
+            || (poseIndex == m_poses.size() - 1)
+            || (static_cast<int>(poseIndex) % cameraLabelStride == 0);
+        if (drawCameraLabel)
+        {
+            painter.setPen(QColor(60, 60, 60));
+            painter.drawText(pc + QPointF(7.0, -7.0), QFileInfo(pose.name).fileName());
+        }
     }
 
     bool okO = false;
@@ -1741,7 +1803,7 @@ QVector<CameraSceneWidget::CameraPose> CameraModel3DDialog::readCamerasFromMeta(
                 rot(row, col) = float(cameraToWorldRotation[row * 3 + col]);
             }
         }
-        pose.rotation = rot.transposed();
+        pose.rotation = rot;
         poses.push_back(pose);
     }
 
@@ -1752,5 +1814,8 @@ void CameraModel3DDialog::reloadFromProject()
 {
     const QVector<CameraSceneWidget::CameraPose> poses = readCamerasFromMeta();
     m_scene->setCameraPoses(poses);
-    m_summaryLabel->setText(tr("相机数量: %1（左键旋转，滚轮缩放）").arg(poses.size()));
+    const QString labelHint = poses.size() > 40
+        ? tr("，相机名称已抽样显示")
+        : QString();
+    m_summaryLabel->setText(tr("相机数量: %1%2（左键旋转，滚轮缩放）").arg(poses.size()).arg(labelHint));
 }

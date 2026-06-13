@@ -106,6 +106,10 @@ struct SFMServiceOptions
     /// 自动配对裁剪的邻域窗口。4 表示第 i 张最多匹配 i+1 到 i+4。
     int                 knownCameraPairWindow = 4;
 
+    /// 已知相机自动配对时，每张影像额外选择的空间最近邻数量。
+    /// 与顺序邻域取并集，用于航带换行、跨航带和文件顺序不可靠的数据。
+    int                 knownCameraSpatialNeighborCount = 8;
+
     /// 影像数大于该阈值时才启用已知相机自动配对裁剪，小数据集保留全配对。
     int                 knownCameraAllPairsMaxImages = 20;
 

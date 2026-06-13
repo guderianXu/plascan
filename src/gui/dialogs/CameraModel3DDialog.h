@@ -177,6 +177,9 @@ private:
     // 根据当前拖拽状态和悬停轴更新鼠标光标样式
     void updateCursor();
 
+    int maxVisibleCameraLabels() const;
+    float cameraFrustumBase() const;
+
     // 在 OpenGL 渲染完成后，用 QPainter 绘制 2D 覆盖层：
     //   - 操控球 Gizmo（旋转环）
     //   - 相机视锥体和名称标注
@@ -233,6 +236,7 @@ private:
     // 场景中心/半径/包围盒缓存（避免每帧遍历大量点）
     mutable QVector3D  m_cachedCenter;
     mutable float      m_cachedRadius = 10.0f;
+    mutable float      m_cachedCameraFrustumBase = 0.6f;
     mutable QVector3D  m_cachedAABBMin;
     mutable QVector3D  m_cachedAABBMax;
     mutable bool       m_cacheDirty = true;
