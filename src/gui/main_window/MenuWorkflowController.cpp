@@ -5,6 +5,7 @@
 #include "ProjectSupportUtils.h"
 #include "SFMService.h"
 #include "Logger.h"
+#include "project/SparseResultQuality.h"
 
 #include "FeatureExtractionDialog.h"
 #include "VocabularyOverlapDialog.h"
@@ -793,6 +794,9 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
             }
 
             int registeredImageCount = result.numRegisteredImages;
+            int sfmAtIndex = -1;
+            bool currentSfmIsProduction = false;
+            QString currentSfmBlockingReason = QStringLiteral("SFM 未生成可用的正式稀疏点云，已停止后续 MVS 流程。");
             if (result.success && !result.sparseCloudPath.isEmpty())
             {
                 const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
@@ -818,11 +822,19 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                 }
                 registeredImageCount = registeredImages.size();
 
+                QJsonObject resultRecordExtra = result.resultRecordExtra;
+                resultRecordExtra[QStringLiteral("source")] = QStringLiteral("three_d_reconstruction");
+                sfmAtIndex = pm->currentMeta()
+                                 .value(QStringLiteral("aerial_triangulation_results"))
+                                 .toArray()
+                                 .size();
                 pm->appendAtResult(result.sparseCloudPath,
                                    result.numPoints3D,
                                    registeredImages,
                                    sfmOutputDir,
-                                   QJsonObject{{QStringLiteral("source"), QStringLiteral("three_d_reconstruction")}});
+                                   resultRecordExtra);
+                currentSfmIsProduction = xjw::gui::project::isProductionSparseResult(resultRecordExtra);
+                currentSfmBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
             }
 
             emit pm->atProgressFinished(result.success);
@@ -836,10 +848,21 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                 return;
             }
 
+            if (!currentSfmIsProduction)
+            {
+                QMessageBox::warning(nullptr,
+                                     QStringLiteral("三维重建"),
+                                     currentSfmBlockingReason.isEmpty()
+                                         ? QStringLiteral("当前 SFM 稀疏点云质量不足，已停止后续 MVS 流程。")
+                                         : currentSfmBlockingReason);
+                return;
+            }
+
             if (self)
             {
                 QJsonObject denseRunSettings = runSettings;
                 denseRunSettings[QStringLiteral("registered_image_count")] = registeredImageCount;
+                denseRunSettings[QStringLiteral("sfm_at_index")] = sfmAtIndex;
                 self->startThreeDReconstructionDenseStage(denseRunSettings);
             }
         }, Qt::QueuedConnection);
@@ -871,7 +894,7 @@ void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObje
 
     QJsonObject denseSettings;
     denseSettings[QStringLiteral("pipeline_mode")] = true;
-    denseSettings[QStringLiteral("at_index")] = -1;
+    denseSettings[QStringLiteral("at_index")] = settings.value(QStringLiteral("sfm_at_index")).toInt(-1);
     denseSettings[QStringLiteral("output_dir")] = QDir(outputRoot).filePath(QStringLiteral("mvs"));
     const int denseThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
     const bool useCuda = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto")) != QStringLiteral("cpu");

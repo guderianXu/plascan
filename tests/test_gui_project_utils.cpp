@@ -1631,6 +1631,14 @@ TEST(SfmSparseResultMetadataTest, SfmServicePublishesProductionQualityRecord)
     EXPECT_TRUE(workflow.contains(QStringLiteral("result.resultRecordExtra")));
 }
 
+TEST(SfmSparseResultMetadataTest, OneClickWorkflowPreservesProductionQualityRecord)
+{
+    const QString controller = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(controller.isEmpty());
+
+    EXPECT_TRUE(controller.contains(QStringLiteral("result.resultRecordExtra")));
+}
+
 TEST(BundleAdjustSparseResultMetadataTest, ExportedSparseCloudCarriesFormalQualityMetadata)
 {
     QTemporaryDir tempDir;
@@ -1759,6 +1767,27 @@ TEST(DownstreamSparseInputGateTest, DenseAndDemUseProductionSparseInputs)
     EXPECT_TRUE(denseSource.contains(QStringLiteral("sparseResultBlockingReason")));
     EXPECT_TRUE(terrainSource.contains(QStringLiteral("findLatestProductionAtResultIndex")));
     EXPECT_FALSE(terrainSource.contains(QStringLiteral("startTriangulationAsync(triangulationSettings)")));
+}
+
+TEST(DownstreamSparseInputGateTest, OneClickDenseStageUsesCurrentSfmResultIndex)
+{
+    const QString controllerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(controllerSource.isEmpty());
+
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("sfm_at_index")));
+    EXPECT_TRUE(controllerSource.contains(
+        QStringLiteral("settings.value(QStringLiteral(\"sfm_at_index\")).toInt(-1)")));
+}
+
+TEST(DownstreamSparseInputGateTest, OneClickWorkflowStopsDenseWhenCurrentSfmQualityIsBlocked)
+{
+    const QString controllerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(controllerSource.isEmpty());
+
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("isProductionSparseResult(resultRecordExtra)")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("sparseResultBlockingReason(resultRecordExtra)")));
 }
 
 TEST(FeatureMatchSidecarTest, NativeRunnerWritesSidecarV2Indices)
