@@ -58,6 +58,7 @@ void ThreeDReconstructionDialog::setupUi()
     form.setupUi(this);
     setWindowFlags(windowFlags() & ~Qt::WindowContextHelpButtonHint);
 
+    m_titleLabel = form.m_titleLabel;
     m_statusLabel = form.m_statusLabel;
     m_qualityCombo = form.m_qualityCombo;
     m_deviceCombo = form.m_deviceCombo;
@@ -65,6 +66,7 @@ void ThreeDReconstructionDialog::setupUi()
     m_threadsSpin = form.m_threadsSpin;
     m_outputDirEdit = form.m_outputDirEdit;
     m_exportObjCheck = form.m_exportObjCheck;
+    m_browseBtn = form.m_browseBtn;
     m_startBtn = form.m_startBtn;
     m_cancelBtn = form.m_cancelBtn;
     m_exportObjCheck->setChecked(true);
@@ -77,7 +79,7 @@ void ThreeDReconstructionDialog::setupUi()
     m_deviceCombo->setItemData(2, QStringLiteral("cpu"));
     m_threadsSpin->setValue(qMax(1, QThread::idealThreadCount()));
 
-    connect(form.m_browseBtn, &QPushButton::clicked, this, &ThreeDReconstructionDialog::browseOutputDir);
+    connect(m_browseBtn, &QPushButton::clicked, this, &ThreeDReconstructionDialog::browseOutputDir);
     connect(m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
     connect(m_startBtn, &QPushButton::clicked, this, &ThreeDReconstructionDialog::start);
 
@@ -93,6 +95,44 @@ void ThreeDReconstructionDialog::setupUi()
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
     connect(m_exportObjCheck, &QCheckBox::toggled,
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
+}
+
+void ThreeDReconstructionDialog::setMode(Mode mode)
+{
+    m_mode = mode;
+    if (mode == Mode::AerialTriangulation)
+    {
+        setWindowTitle(QStringLiteral("空中三角测量"));
+        if (m_titleLabel)
+        {
+            m_titleLabel->setText(QStringLiteral("<b>一键生成正式 SfM/BA 稀疏云</b>"));
+        }
+        if (m_exportObjCheck)
+        {
+            m_exportObjCheck->setChecked(false);
+            m_exportObjCheck->setVisible(false);
+        }
+        if (m_startBtn)
+        {
+            m_startBtn->setText(QStringLiteral("开始空三"));
+        }
+        return;
+    }
+
+    setWindowTitle(QStringLiteral("三维重建"));
+    if (m_titleLabel)
+    {
+        m_titleLabel->setText(QStringLiteral("<b>一键生成三维模型</b>"));
+    }
+    if (m_exportObjCheck)
+    {
+        m_exportObjCheck->setChecked(true);
+        m_exportObjCheck->setVisible(true);
+    }
+    if (m_startBtn)
+    {
+        m_startBtn->setText(QStringLiteral("开始重建"));
+    }
 }
 
 void ThreeDReconstructionDialog::setImageCount(int count)
@@ -166,6 +206,14 @@ QJsonObject ThreeDReconstructionDialog::collectSettings() const
     settings[QStringLiteral("threads")] = m_threadsSpin->value();
     settings[QStringLiteral("output_dir")] = QDir::cleanPath(m_outputDirEdit->text().trimmed());
     settings[QStringLiteral("export_obj")] = m_exportObjCheck->isChecked();
+    settings[QStringLiteral("workflow_kind")] =
+        m_mode == Mode::AerialTriangulation
+            ? QStringLiteral("aerial_triangulation")
+            : QStringLiteral("three_d_reconstruction");
+    if (m_mode == Mode::AerialTriangulation)
+    {
+        settings[QStringLiteral("export_obj")] = false;
+    }
     return settings;
 }
 

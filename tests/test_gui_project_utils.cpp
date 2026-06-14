@@ -1083,6 +1083,49 @@ TEST(ThreeDReconstructionDialogTest, UsesUiDefaultsAndImageCountGate)
     EXPECT_FALSE(settings.contains(QStringLiteral("dom_resolution")));
 }
 
+TEST(ThreeDReconstructionDialogTest, AerialTriangulationModeUsesSparseOnlyLabels)
+{
+    ThreeDReconstructionDialog dialog;
+    auto *titleLabel = dialog.findChild<QLabel *>(QStringLiteral("m_titleLabel"));
+    auto *exportObjCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_exportObjCheck"));
+    auto *startButton = dialog.findChild<QPushButton *>(QStringLiteral("m_startBtn"));
+    ASSERT_NE(titleLabel, nullptr);
+    ASSERT_NE(exportObjCheck, nullptr);
+    ASSERT_NE(startButton, nullptr);
+
+    dialog.setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation);
+    dialog.setImageCount(12);
+    dialog.setDefaultOutputDir(QStringLiteral("E:/tmp/at"));
+
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("空中三角测量"));
+    EXPECT_EQ(titleLabel->text(), QStringLiteral("<b>一键生成正式 SfM/BA 稀疏云</b>"));
+    EXPECT_FALSE(exportObjCheck->isChecked());
+    EXPECT_TRUE(exportObjCheck->isHidden());
+    EXPECT_EQ(startButton->text(), QStringLiteral("开始空三"));
+
+    QJsonObject settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_kind")).toString(),
+              QStringLiteral("aerial_triangulation"));
+    EXPECT_FALSE(settings.value(QStringLiteral("export_obj")).toBool(true));
+
+    QJsonObject appliedSettings;
+    appliedSettings[QStringLiteral("export_obj")] = true;
+    dialog.applySettings(appliedSettings);
+    settings = dialog.collectSettings();
+    EXPECT_FALSE(settings.value(QStringLiteral("export_obj")).toBool(true));
+
+    dialog.setMode(ThreeDReconstructionDialog::Mode::ThreeDReconstruction);
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("三维重建"));
+    EXPECT_EQ(titleLabel->text(), QStringLiteral("<b>一键生成三维模型</b>"));
+    EXPECT_FALSE(exportObjCheck->isHidden());
+    EXPECT_TRUE(exportObjCheck->isChecked());
+    EXPECT_EQ(startButton->text(), QStringLiteral("开始重建"));
+
+    settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_kind")).toString(),
+              QStringLiteral("three_d_reconstruction"));
+}
+
 TEST(BundleAdjustDialogTest, KeepsActionButtonsOutsideScrollableParameterArea)
 {
     BundleAdjustDialog dialog;

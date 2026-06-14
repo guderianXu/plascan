@@ -36,7 +36,7 @@
     <number>12</number>
    </property>
    <item>
-    <widget class="QLabel" name="titleLabel">
+    <widget class="QLabel" name="m_titleLabel">
      <property name="text">
       <string>&lt;b&gt;一键生成三维模型&lt;/b&gt;</string>
      </property>
