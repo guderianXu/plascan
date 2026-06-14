@@ -25,6 +25,9 @@ struct BaInputBuildResult
     QStringList imagePathByIndex;
     QMap<QString, QJsonObject> beforeCamMeta;
     std::vector<xjw::BATrack> tracks;
+    int sidecarV2PairCount = 0;
+    int multiViewTrackCount = 0;
+    int rejectedConflictTrackCount = 0;
 };
 
 BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,

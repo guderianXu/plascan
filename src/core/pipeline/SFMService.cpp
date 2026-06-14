@@ -28,6 +28,7 @@
 #include "Logger.h"
 #include "Camera.h"
 #include "OverlapAnalyzer.h"
+#include "project/SparseResultQuality.h"
 #include "pipeline/IncrementalSfm.h"
 #include "common/SfmTypes.h"
 #include <plapoint/core/point_cloud.h>
@@ -71,6 +72,24 @@ namespace
 QString normalizePath(const QString &path)
 {
     return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
+}
+
+bool shouldReportIndexedProgress(int doneCount, int totalCount, int maxReports = 200)
+{
+    if (totalCount <= 0)
+    {
+        return false;
+    }
+    if (doneCount <= 1 || doneCount >= totalCount)
+    {
+        return true;
+    }
+    if (totalCount <= maxReports)
+    {
+        return true;
+    }
+    const int stride = std::max(1, totalCount / std::max(1, maxReports));
+    return (doneCount % stride) == 0;
 }
 
 QString canonicalPairKey(const QString &pathA, const QString &pathB)
@@ -771,6 +790,25 @@ QJsonObject readJsonObjectFile(const QString &path)
     return QJsonDocument::fromJson(file.readAll()).object();
 }
 
+float matchScoreForDMatch(const xjw::feature_match::MatchResult &result, const cv::DMatch &match)
+{
+    if (match.queryIdx >= 0 &&
+        match.queryIdx < static_cast<int>(result.matchingScores0.size()))
+    {
+        const float score = result.matchingScores0[static_cast<std::size_t>(match.queryIdx)];
+        if (std::isfinite(score) && score > 0.0f)
+        {
+            return std::max(0.0f, std::min(1.0f, score));
+        }
+    }
+
+    if (std::isfinite(match.distance))
+    {
+        return std::max(0.0f, std::min(1.0f, 1.0f / (1.0f + std::max(0.0f, match.distance))));
+    }
+    return 1.0f;
+}
+
 // ── 精度等级参数预设 ─────────────────────────────────────────────────────────
 
 struct QualityPresets
@@ -1260,6 +1298,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 }
 
                 // 报告特征提取进度（2%~35% 区间映射）
+                if (shouldReportIndexedProgress(featureDoneCount + 1, featureTotalCount))
                 {
                     int pct = 2 + (featureDoneCount * 33) / std::max(1, featureTotalCount);
                     reportProgress(QStringLiteral("正在查找特征点... %1/%2")
@@ -1436,7 +1475,6 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     }
     if (!opts.restrictPairs &&
         opts.autoRestrictKnownCameraPairs &&
-        pairPlanOptions.knownCameraOverlapPairs.empty() &&
         opts.knownCameraSpatialNeighborCount > 0 &&
         canUseKnownCameraAutoPairs)
     {
@@ -1477,6 +1515,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             }
             else if (pairPlan.usedSpatialCameraCenters)
             {
+                if (pairPlan.knownCameraOverlapPairCount > 0)
+                {
+                    LOG_WARN(QStringLiteral("  已知相机足迹重叠候选过密(%1 对)，已回退为空间+顺序邻域")
+                        .arg(pairPlan.knownCameraOverlapPairCount));
+                }
                 LOG_INFO(QStringLiteral("  已知相机空间+顺序配对裁剪: 原始 %1 对 -> %2 对, 顺序窗口=%3, 空间邻居=%4")
                     .arg(pairPlan.allPairCount)
                     .arg(allowedPairSet.size())
@@ -1791,6 +1834,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                             fm.idx1 = static_cast<FeatureIdx>(dm.trainIdx);
                             fm.idx2 = static_cast<FeatureIdx>(dm.queryIdx);
                         }
+                        fm.score = matchScoreForDMatch(mr, dm);
                         pd.matches.push_back(fm);
                     }
                     pd.loaded = true;
@@ -1993,6 +2037,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     if (localIdx >= totalMissing) break;
 
                     // 报告匹配进度（35%~70% 区间映射）
+                    if (shouldReportIndexedProgress(localIdx + 1, totalMissing))
                     {
                         int pct = 35 + (localIdx * 35) / std::max(1, totalMissing);
                         reportProgress(QStringLiteral("正在匹配特征点... %1/%2")
@@ -2096,10 +2141,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     sidecar[QStringLiteral("sp1_path")]        = featureFilePaths.value(idB);
                     sidecar[QStringLiteral("feature_algorithm")] = featureAlgorithm;
                     sidecar[QStringLiteral("match_algorithm")] = matchAlgorithm;
+                    sidecar[QStringLiteral("feature_format_version")] = 2;
                     sidecar[QStringLiteral("num_matches")]     = mr.numMatches;
                     sidecar[QStringLiteral("match_threshold")] = static_cast<double>(activeMatchThreshold);
 
-                    QJsonArray pts0, pts1;
+                    QJsonArray pts0, pts1, indices0, indices1, scores;
                     for (const auto &dm : mr.cvMatches) 
                     {
                         const int qi = dm.queryIdx, ti = dm.trainIdx;
@@ -2112,10 +2158,16 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                             QJsonArray p1; p1.append(kp1.pt.x); p1.append(kp1.pt.y);
                             pts0.append(p0);
                             pts1.append(p1);
+                            indices0.append(qi);
+                            indices1.append(ti);
+                            scores.append(static_cast<double>(matchScoreForDMatch(mr, dm)));
                         }
                     }
                     sidecar[QStringLiteral("matched_points0")] = pts0;
                     sidecar[QStringLiteral("matched_points1")] = pts1;
+                    sidecar[QStringLiteral("matched_indices0")] = indices0;
+                    sidecar[QStringLiteral("matched_indices1")] = indices1;
+                    sidecar[QStringLiteral("matched_scores")] = scores;
 
                     const QString sidecarPath = matchPath + QStringLiteral(".json");
                     QFile sf(sidecarPath);
@@ -2152,6 +2204,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                         FeatureMatch fm;
                         fm.idx1 = static_cast<FeatureIdx>(dm.queryIdx);
                         fm.idx2 = static_cast<FeatureIdx>(dm.trainIdx);
+                        fm.score = matchScoreForDMatch(mr, dm);
                         pd.matches.push_back(fm);
                     }
                     pd.loaded = true;
@@ -2622,6 +2675,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
             std::vector<float> ptsData;
             std::vector<uint8_t> colorsData;
+            QJsonArray pointsForQuality;
             ptsData.reserve(ptIds.size() * 3);
             colorsData.reserve(ptIds.size() * 3);
 
@@ -2667,6 +2721,13 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 colorsData.push_back(cr);
                 colorsData.push_back(cg);
                 colorsData.push_back(cb);
+
+                QJsonObject pointObject;
+                pointObject[QStringLiteral("track_len")] = static_cast<int>(pt.track.length());
+                pointObject[QStringLiteral("rms_reproj_px")] = pt.error;
+                pointObject[QStringLiteral("min_tri_angle_deg")] = 0.0;
+                pointObject[QStringLiteral("point_xyz")] = QJsonArray{pt.xyz[0], pt.xyz[1], pt.xyz[2]};
+                pointsForQuality.append(pointObject);
             }
 
             const size_t N = ptsData.size() / 3;
@@ -2688,6 +2749,35 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             {
                 plapoint::io::writePly<float>(plyPath.toStdString(), cloud, plapoint::io::PlyFormat::BinaryLE);
                 result.sparseCloudPath = plyPath;
+                result.qualityMetadata = xjw::common::project::buildSparseQualityMetadata(
+                    pointsForQuality,
+                    sfmResult.numRegisteredImages,
+                    true,
+                    xjw::common::project::kSparseResultKindSfmSparseReconstruction);
+
+                const QString sidecarPath = QDir(outDir).filePath(QStringLiteral("sfm_sparse_points.json"));
+                QJsonObject sidecarRoot = xjw::common::project::mergeSparseQualityIntoRecord(
+                    QJsonObject{{QStringLiteral("points"), pointsForQuality},
+                                {QStringLiteral("operation"), QStringLiteral("workflow_aerial_triangulation")}},
+                    result.qualityMetadata);
+                QFile sidecarFile(sidecarPath);
+                if (sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+                {
+                    sidecarFile.write(QJsonDocument(sidecarRoot).toJson(QJsonDocument::Indented));
+                    sidecarFile.close();
+                }
+                else
+                {
+                    LOG_WARN(QStringLiteral("SFM: 稀疏点云 sidecar 写出失败 → %1").arg(sidecarPath));
+                }
+
+                QJsonObject files;
+                files[QStringLiteral("sparse_cloud_points_json")] = sidecarPath;
+                result.resultRecordExtra = xjw::common::project::mergeSparseQualityIntoRecord(
+                    QJsonObject{{QStringLiteral("files"), files},
+                                {QStringLiteral("source"), QStringLiteral("workflow_aerial_triangulation")},
+                                {QStringLiteral("operation"), QStringLiteral("workflow_aerial_triangulation")}},
+                    result.qualityMetadata);
                 LOG_INFO(QStringLiteral("SFM: 稀疏点云已保存 %1 个点（原始 %2 个）→ %3")
                     .arg(static_cast<int>(N)).arg(static_cast<int>(ptIds.size())).arg(plyPath));
             }

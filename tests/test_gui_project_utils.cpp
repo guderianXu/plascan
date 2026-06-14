@@ -7,6 +7,9 @@
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "ProjectTriangulationService.h"
+#include "ProjectWorkflowReports.h"
+#include "ProjectWorkflowUtils.h"
+#include "project/SparseResultQuality.h"
 #include "FeatureExtractionDialog.h"
 #include "FeatureMatchingDialog.h"
 #include "InitCameraPoseDialog.h"
@@ -343,6 +346,57 @@ TEST(ProjectSupportUtilsTest, ListsOnlyFeatureSuffixesPresentInProject)
 
     const QStringList suffixes = xjw::gui::project::projectFeatureSuffixes(projectPath, meta);
     EXPECT_EQ(suffixes, QStringList{QStringLiteral(".dsk")});
+}
+
+TEST(SparseResultQualityTest, BuildsHistogramAndClassifiesPairwisePreview)
+{
+    QJsonArray points;
+    points.append(QJsonObject{{QStringLiteral("track_len"), 2},
+                              {QStringLiteral("rms_reproj_px"), 1.0},
+                              {QStringLiteral("min_tri_angle_deg"), 5.0}});
+    points.append(QJsonObject{{QStringLiteral("track_len"), 2},
+                              {QStringLiteral("rms_reproj_px"), 2.0},
+                              {QStringLiteral("min_tri_angle_deg"), 7.0}});
+
+    const QJsonObject quality = xjw::gui::project::buildSparseQualityMetadata(
+        points,
+        2,
+        false,
+        xjw::gui::project::kSparseResultKindPairwisePreview);
+
+    EXPECT_EQ(quality.value(QStringLiteral("result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindPairwisePreview);
+    EXPECT_EQ(quality.value(QStringLiteral("camera_count")).toInt(), 2);
+    EXPECT_EQ(quality.value(QStringLiteral("point_count")).toInt(), 2);
+    EXPECT_DOUBLE_EQ(quality.value(QStringLiteral("two_view_ratio")).toDouble(), 1.0);
+    EXPECT_FALSE(quality.value(QStringLiteral("ba_applied")).toBool());
+
+    const QJsonObject histogram = quality.value(QStringLiteral("track_len_histogram")).toObject();
+    EXPECT_EQ(histogram.value(QStringLiteral("2")).toInt(), 2);
+    EXPECT_TRUE(xjw::gui::project::isPairwisePreviewSparseResult(quality));
+    EXPECT_FALSE(xjw::gui::project::isProductionSparseResult(quality));
+}
+
+TEST(SparseResultQualityTest, AcceptsFormalSfmWithMultiViewSupport)
+{
+    QJsonArray points;
+    points.append(QJsonObject{{QStringLiteral("track_len"), 2},
+                              {QStringLiteral("rms_reproj_px"), 0.8}});
+    points.append(QJsonObject{{QStringLiteral("track_len"), 3},
+                              {QStringLiteral("rms_reproj_px"), 0.6}});
+    points.append(QJsonObject{{QStringLiteral("track_len"), 4},
+                              {QStringLiteral("rms_reproj_px"), 0.7}});
+
+    const QJsonObject quality = xjw::gui::project::buildSparseQualityMetadata(
+        points,
+        3,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+
+    EXPECT_TRUE(xjw::gui::project::isProductionSparseResult(quality));
+    EXPECT_FALSE(xjw::gui::project::sparseResultBlockingReason(quality).contains(QStringLiteral("两视")));
+    EXPECT_DOUBLE_EQ(quality.value(QStringLiteral("two_view_ratio")).toDouble(), 1.0 / 3.0);
+    EXPECT_EQ(quality.value(QStringLiteral("median_track_len")).toInt(), 3);
 }
 
 TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
@@ -1414,6 +1468,286 @@ TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
     EXPECT_TRUE(result.success) << result.errorMessage.toStdString();
     EXPECT_GT(result.exportedPointCount, 0);
     EXPECT_TRUE(QFileInfo::exists(result.sparseCloudPath));
+
+    const QJsonObject quality = result.resultJson.value(QStringLiteral("quality")).toObject();
+    EXPECT_EQ(result.resultJson.value(QStringLiteral("result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindPairwisePreview);
+    EXPECT_EQ(quality.value(QStringLiteral("result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindPairwisePreview);
+    EXPECT_EQ(quality.value(QStringLiteral("point_count")).toInt(), result.exportedPointCount);
+    EXPECT_TRUE(xjw::gui::project::isPairwisePreviewSparseResult(result.resultJson));
+    EXPECT_FALSE(xjw::gui::project::isProductionSparseResult(result.resultJson));
+}
+
+TEST(ProjectTriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
+    const QString matchesDir = ProjectIO::ipmatchOutputDir(projectPath);
+    ASSERT_TRUE(QDir().mkpath(matchesDir));
+
+    const QString image0Path = QDir(tempDir.path()).filePath(QStringLiteral("1.jpg"));
+    const QString image1Path = QDir(tempDir.path()).filePath(QStringLiteral("2.jpg"));
+    const QString image2Path = QDir(tempDir.path()).filePath(QStringLiteral("3.jpg"));
+
+    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const xjw::Camera camera2 = makeCamera(16.0, 0.0, 0.0);
+    const std::array<double, 3> point = {6.0, 0.5, 36.0};
+
+    double u0 = 0.0;
+    double v0 = 0.0;
+    double u1 = 0.0;
+    double v1 = 0.0;
+    double u2 = 0.0;
+    double v2 = 0.0;
+    ASSERT_TRUE(projectPoint(camera0, point, &u0, &v0));
+    ASSERT_TRUE(projectPoint(camera1, point, &u1, &v1));
+    ASSERT_TRUE(projectPoint(camera2, point, &u2, &v2));
+
+    auto writeSidecar = [](const QString &path,
+                           const QString &imageA,
+                           const QString &imageB,
+                           const QPointF &uvA,
+                           const QPointF &uvB,
+                           int featureA,
+                           int featureB) {
+        QFile matchFile(path);
+        ASSERT_TRUE(matchFile.open(QIODevice::WriteOnly));
+        matchFile.write("dummy");
+        matchFile.close();
+
+        QFile sidecarFile(path + QStringLiteral(".json"));
+        ASSERT_TRUE(sidecarFile.open(QIODevice::WriteOnly));
+        QJsonArray matchedPoints0;
+        QJsonArray matchedPoints1;
+        QJsonArray matchedIndices0;
+        QJsonArray matchedIndices1;
+        matchedPoints0.append(QJsonArray{uvA.x(), uvA.y()});
+        matchedPoints1.append(QJsonArray{uvB.x(), uvB.y()});
+        matchedIndices0.append(featureA);
+        matchedIndices1.append(featureB);
+        const QJsonObject sidecarObject{
+            {QStringLiteral("feature_format_version"), 2},
+            {QStringLiteral("image0_path"), imageA},
+            {QStringLiteral("image1_path"), imageB},
+            {QStringLiteral("matched_points0"), matchedPoints0},
+            {QStringLiteral("matched_points1"), matchedPoints1},
+            {QStringLiteral("matched_indices0"), matchedIndices0},
+            {QStringLiteral("matched_indices1"), matchedIndices1}
+        };
+        sidecarFile.write(QJsonDocument(sidecarObject).toJson());
+        sidecarFile.close();
+    };
+
+    const QString match01Path = QDir(matchesDir).filePath(QStringLiteral("1__2.match"));
+    const QString match02Path = QDir(matchesDir).filePath(QStringLiteral("1__3.match"));
+    writeSidecar(match01Path, image0Path, image1Path, QPointF(u0, v0), QPointF(u1, v1), 7, 13);
+    writeSidecar(match02Path, image0Path, image2Path, QPointF(u0, v0), QPointF(u2, v2), 7, 29);
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray{
+        buildImageEntry(image0Path, camera0),
+        buildImageEntry(image1Path, camera1),
+        buildImageEntry(image2Path, camera2)
+    };
+    meta[QStringLiteral("ipmatch_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("image0"), image0Path},
+                    {QStringLiteral("image1"), image1Path},
+                    {QStringLiteral("output"), match01Path}},
+        QJsonObject{{QStringLiteral("image0"), image0Path},
+                    {QStringLiteral("image1"), image2Path},
+                    {QStringLiteral("output"), match02Path}}
+    };
+
+    xjw::gui::project::TriangulationServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out"));
+    options.minTriAngleDeg = 1.0;
+    options.maxReprojErrorPx = 2.0;
+    options.minObservations = 3;
+    options.ignoreTwoViewTracks = true;
+    options.minTrackLength = 3;
+
+    const auto result = xjw::gui::project::ProjectTriangulationService::run(
+        meta, QStringList{image0Path, image1Path, image2Path}, options);
+
+    ASSERT_TRUE(result.success) << result.errorMessage.toStdString();
+    ASSERT_EQ(result.exportedPointCount, 1);
+
+    const QJsonArray points = result.resultJson.value(QStringLiteral("points")).toArray();
+    ASSERT_EQ(points.size(), 1);
+    EXPECT_EQ(points.at(0).toObject().value(QStringLiteral("track_len")).toInt(), 3);
+}
+
+TEST(ProjectTriangulationUiTest, FinalizeTriangulationStoresPreviewQualityMetadata)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("mergeSparseQualityIntoRecord")));
+    EXPECT_TRUE(source.contains(QStringLiteral("result.resultJson.value(QStringLiteral(\"quality\"))")));
+    EXPECT_TRUE(source.contains(QStringLiteral("两视预览云")));
+}
+
+TEST(SfmSparseResultMetadataTest, SfmServicePublishesProductionQualityRecord)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.h"));
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString workflow = readProjectSourceFile(QStringLiteral("src/gui/project/support/ProjectSfmWorkflow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(service.isEmpty());
+    ASSERT_FALSE(workflow.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject qualityMetadata")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject resultRecordExtra")));
+    EXPECT_TRUE(service.contains(QStringLiteral("kSparseResultKindSfmSparseReconstruction")));
+    EXPECT_TRUE(service.contains(QStringLiteral("result.qualityMetadata")));
+    EXPECT_TRUE(service.contains(QStringLiteral("result.resultRecordExtra")));
+    EXPECT_TRUE(workflow.contains(QStringLiteral("result.resultRecordExtra")));
+}
+
+TEST(BundleAdjustSparseResultMetadataTest, ExportedSparseCloudCarriesFormalQualityMetadata)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    QJsonArray points;
+    points.append(QJsonObject{
+        {QStringLiteral("valid"), true},
+        {QStringLiteral("converged"), true},
+        {QStringLiteral("rms_after"), 0.5},
+        {QStringLiteral("track_len"), 3},
+        {QStringLiteral("point_xyz"), QJsonArray{1.0, 2.0, 3.0}}
+    });
+    points.append(QJsonObject{
+        {QStringLiteral("valid"), true},
+        {QStringLiteral("converged"), true},
+        {QStringLiteral("rms_after"), 0.7},
+        {QStringLiteral("track_len"), 2},
+        {QStringLiteral("point_xyz"), QJsonArray{2.0, 3.0, 4.0}}
+    });
+
+    const QJsonObject baResult{
+        {QStringLiteral("camera_count"), 3},
+        {QStringLiteral("mean_rms_after"), 0.6},
+        {QStringLiteral("points"), points}
+    };
+
+    const auto exportResult = xjw::gui::project::exportBundleAdjustSparseCloud(
+        baResult,
+        QStringList{QStringLiteral("1.jpg"), QStringLiteral("2.jpg"), QStringLiteral("3.jpg")},
+        tempDir.path(),
+        true);
+
+    ASSERT_TRUE(exportResult.exported) << exportResult.errorMessage.toStdString();
+    EXPECT_EQ(exportResult.extraRecord.value(QStringLiteral("result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindSparsePostprocess);
+    EXPECT_EQ(exportResult.extraRecord.value(QStringLiteral("source_result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+    EXPECT_TRUE(xjw::gui::project::isProductionSparseResult(exportResult.extraRecord));
+
+    const QString sidecarPath = exportResult.extraRecord.value(QStringLiteral("files")).toObject()
+                                    .value(QStringLiteral("sparse_cloud_points_json")).toString();
+    QFile sidecarFile(sidecarPath);
+    ASSERT_TRUE(sidecarFile.open(QIODevice::ReadOnly));
+    const QJsonObject sidecar = QJsonDocument::fromJson(sidecarFile.readAll()).object();
+    EXPECT_EQ(sidecar.value(QStringLiteral("result_kind")).toString(),
+              xjw::gui::project::kSparseResultKindSparsePostprocess);
+    EXPECT_TRUE(xjw::gui::project::isProductionSparseResult(sidecar));
+}
+
+TEST(DownstreamSparseInputGateTest, ResolveSparseContextSkipsPreviewAndRequiresProduction)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString previewSidecar = QDir(tempDir.path()).filePath(QStringLiteral("preview_points.json"));
+    const QString formalSidecar = QDir(tempDir.path()).filePath(QStringLiteral("formal_points.json"));
+    QFile previewFile(previewSidecar);
+    ASSERT_TRUE(previewFile.open(QIODevice::WriteOnly));
+    previewFile.write("{}");
+    previewFile.close();
+    QFile formalFile(formalSidecar);
+    ASSERT_TRUE(formalFile.open(QIODevice::WriteOnly));
+    formalFile.write("{}");
+    formalFile.close();
+
+    const QJsonObject previewQuality = xjw::gui::project::buildSparseQualityMetadata(
+        QJsonArray{QJsonObject{{QStringLiteral("track_len"), 2},
+                               {QStringLiteral("rms_reproj_px"), 1.0}}},
+        2,
+        false,
+        xjw::gui::project::kSparseResultKindPairwisePreview);
+    const QJsonObject formalQuality = xjw::gui::project::buildSparseQualityMetadata(
+        QJsonArray{QJsonObject{{QStringLiteral("track_len"), 2},
+                               {QStringLiteral("rms_reproj_px"), 0.8}},
+                   QJsonObject{{QStringLiteral("track_len"), 3},
+                               {QStringLiteral("rms_reproj_px"), 0.6}}},
+        3,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+
+    QJsonObject formalRecord = xjw::gui::project::mergeSparseQualityIntoRecord(
+        QJsonObject{{QStringLiteral("output_dir"), tempDir.path()},
+                    {QStringLiteral("files"), QJsonObject{
+                         {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("formal.ply")},
+                         {QStringLiteral("sparse_cloud_points_json"), formalSidecar}}},
+                    {QStringLiteral("selected_images"), QJsonArray{
+                         QStringLiteral("1.jpg"), QStringLiteral("2.jpg"), QStringLiteral("3.jpg")}}},
+        formalQuality);
+    QJsonObject previewRecord = xjw::gui::project::mergeSparseQualityIntoRecord(
+        QJsonObject{{QStringLiteral("output_dir"), tempDir.path()},
+                    {QStringLiteral("files"), QJsonObject{
+                         {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("preview.ply")},
+                         {QStringLiteral("sparse_cloud_points_json"), previewSidecar}}},
+                    {QStringLiteral("selected_images"), QJsonArray{
+                         QStringLiteral("1.jpg"), QStringLiteral("2.jpg")}}},
+        previewQuality);
+
+    QJsonObject meta;
+    meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{formalRecord, previewRecord};
+
+    xjw::gui::project::SparsePointContext context;
+    QString errorMessage;
+    EXPECT_TRUE(xjw::gui::project::resolveSparsePointContext(meta, -1, &context, &errorMessage));
+    EXPECT_EQ(context.sourceResultIndex, 0);
+
+    errorMessage.clear();
+    EXPECT_FALSE(xjw::gui::project::resolveSparsePointContext(meta, 1, &context, &errorMessage));
+    EXPECT_TRUE(errorMessage.contains(QStringLiteral("两视")));
+
+    errorMessage.clear();
+    EXPECT_TRUE(xjw::gui::project::resolveSparsePointContext(meta, 0, &context, &errorMessage));
+    EXPECT_EQ(context.sourceResultIndex, 0);
+}
+
+TEST(DownstreamSparseInputGateTest, DenseAndDemUseProductionSparseInputs)
+{
+    const QString denseSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    const QString terrainSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(denseSource.isEmpty());
+    ASSERT_FALSE(terrainSource.isEmpty());
+
+    EXPECT_TRUE(denseSource.contains(QStringLiteral("findLatestProductionAtResultIndex")));
+    EXPECT_TRUE(denseSource.contains(QStringLiteral("sparseResultBlockingReason")));
+    EXPECT_TRUE(terrainSource.contains(QStringLiteral("findLatestProductionAtResultIndex")));
+    EXPECT_FALSE(terrainSource.contains(QStringLiteral("startTriangulationAsync(triangulationSettings)")));
+}
+
+TEST(FeatureMatchSidecarTest, NativeRunnerWritesSidecarV2Indices)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("feature_format_version")));
+    EXPECT_TRUE(source.contains(QStringLiteral("matched_indices0")));
+    EXPECT_TRUE(source.contains(QStringLiteral("matched_indices1")));
+    EXPECT_TRUE(source.contains(QStringLiteral("matched_scores")));
 }
 
 TEST(ModelDropSupportTest, AcceptsStandaloneModelAndPointCloudFiles)

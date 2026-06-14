@@ -1,5 +1,6 @@
 #include "IncrementalSfm.h"
 #include "Intersection.h"
+#include "tracks/MultiViewTrackBuilder.h"
 
 #include "log/Logger.h"
 
@@ -151,6 +152,48 @@ KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
                                                                 }));
 
     return policy;
+}
+
+bool knownPoseMatchPassesGeometry(const SfmReconstruction &reconstruction,
+                                  ImageId imageId,
+                                  ImageId otherImageId,
+                                  const FeatureMatch &match,
+                                  const TriangulatorOptions &options)
+{
+    if (!reconstruction.hasCamera(imageId) ||
+        !reconstruction.hasCamera(otherImageId) ||
+        !reconstruction.hasImage(imageId) ||
+        !reconstruction.hasImage(otherImageId))
+    {
+        return false;
+    }
+
+    const ImageData &image = reconstruction.image(imageId);
+    const ImageData &otherImage = reconstruction.image(otherImageId);
+    if (match.idx1 >= image.keypoints.size() || match.idx2 >= otherImage.keypoints.size())
+    {
+        return false;
+    }
+
+    const Camera &camera = reconstruction.camera(imageId);
+    const Camera &otherCamera = reconstruction.camera(otherImageId);
+    const FeatureKeypoint &keypoint = image.keypoints[match.idx1];
+    const FeatureKeypoint &otherKeypoint = otherImage.keypoints[match.idx2];
+    const auto triResult = Intersection::intersectPair(camera,
+                                                       keypoint.x,
+                                                       keypoint.y,
+                                                       otherCamera,
+                                                       otherKeypoint.x,
+                                                       otherKeypoint.y);
+    if (!triResult.valid ||
+        !std::isfinite(triResult.angle_deg) ||
+        !std::isfinite(triResult.reproj_error_rms))
+    {
+        return false;
+    }
+
+    return triResult.angle_deg >= options.minTriAngle &&
+           triResult.reproj_error_rms <= options.maxReprojError;
 }
 
 } // namespace
@@ -449,14 +492,138 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     Triangulator triangulator(*_reconstruction, _correspondenceGraph);
     int createdPoints = 0;
     int continuedObservations = 0;
+    int completedObservations = 0;
+
+    MultiViewTrackBuilder trackBuilder;
+    int indexedPairCount = 0;
+    int indexedMatchCount = 0;
+    int rawIndexedMatchCount = 0;
+    int geometryRejectedMatchCount = 0;
     for (ImageId imageId : imageIds)
     {
-        const auto stats = triangulator.triangulateImage(imageId, triangulationPolicy.triangulatorOptions);
-        createdPoints += stats.numCreated;
-        continuedObservations += stats.numContinued;
+        const std::vector<ImageId> connected = _correspondenceGraph.connectedImages(imageId);
+        for (ImageId otherImageId : connected)
+        {
+            if (otherImageId <= imageId)
+            {
+                continue;
+            }
+
+            const auto &matches = _correspondenceGraph.matchesBetween(imageId, otherImageId);
+            if (matches.empty())
+            {
+                continue;
+            }
+
+            std::vector<MultiViewTrackBuilder::MatchIndexPair> indexedMatches;
+            indexedMatches.reserve(matches.size());
+            for (const FeatureMatch &match : matches)
+            {
+                if (match.idx1 == kInvalidFeatureIdx || match.idx2 == kInvalidFeatureIdx)
+                {
+                    continue;
+                }
+                ++rawIndexedMatchCount;
+                if (!knownPoseMatchPassesGeometry(*_reconstruction,
+                                                  imageId,
+                                                  otherImageId,
+                                                  match,
+                                                  triangulationPolicy.triangulatorOptions))
+                {
+                    ++geometryRejectedMatchCount;
+                    continue;
+                }
+                indexedMatches.emplace_back(match.idx1, match.idx2, match.score);
+            }
+
+            if (!indexedMatches.empty())
+            {
+                trackBuilder.addMatchPair(imageId, otherImageId, indexedMatches);
+                ++indexedPairCount;
+                indexedMatchCount += static_cast<int>(indexedMatches.size());
+            }
+        }
     }
 
-    const int completedObservations = triangulator.completeTracks(triangulationPolicy.triangulatorOptions);
+    const MultiViewTrackBuildResult multiViewTracks = trackBuilder.build();
+    if (!multiViewTracks.tracks.empty())
+    {
+        std::ostringstream trackLengthHistogram;
+        int emittedTrackLengthBins = 0;
+        for (const auto &entry : multiViewTracks.trackLengthHistogram)
+        {
+            if (emittedTrackLengthBins > 0)
+            {
+                trackLengthHistogram << ",";
+            }
+            trackLengthHistogram << entry.first << ":" << entry.second;
+            ++emittedTrackLengthBins;
+            if (emittedTrackLengthBins >= 8)
+            {
+                break;
+            }
+        }
+
+        const auto trackStats = triangulator.triangulateTracks(multiViewTracks.tracks,
+                                                               triangulationPolicy.triangulatorOptions);
+        createdPoints += trackStats.numCreated;
+        continuedObservations += trackStats.numContinued;
+        Logger::instance()->infof(
+            "[SFM] Known-pose multiview tracks: pairs=%d matches=%d rawMatches=%d "
+            "geometryRejected=%d components=%d accepted=%d rejectedConflict=%d "
+            "rejectedConflictEdges=%d hist=%s created=%d addedObservations=%d",
+            indexedPairCount,
+            indexedMatchCount,
+            rawIndexedMatchCount,
+            geometryRejectedMatchCount,
+            multiViewTracks.totalComponents,
+            multiViewTracks.acceptedComponents,
+            multiViewTracks.rejectedConflictComponents,
+            multiViewTracks.rejectedConflictEdges,
+            trackLengthHistogram.str().c_str(),
+            trackStats.numCreated,
+            trackStats.numContinued);
+        Logger::instance()->infof(
+            "[SFM] Known-pose triangulation stats: inputTracks=%d inputLong=%d unusable=%d "
+            "noCandidate=%d createdTwoView=%d createdLong=%d seedTests=%d seedRejected=%d "
+            "depthRejected=%d reprojRejected=%d longTwoView=%d rejectedExtraSamples=%d "
+            "rejectedExtraAvg=%.3f rejectedExtraMax=%.3f rejectedExtraHist=<=5:%d,<=10:%d,<=25:%d,>25:%d",
+            trackStats.inputTracks,
+            trackStats.inputLongTracks,
+            trackStats.unusableTracks,
+            trackStats.noCandidateTracks,
+            trackStats.createdTwoViewTracks,
+            trackStats.createdLongTracks,
+            trackStats.seedPairTests,
+            trackStats.seedPairRejected,
+            trackStats.depthObservationRejected,
+            trackStats.reprojObservationRejected,
+            trackStats.longTrackTwoViewOnly,
+            trackStats.longTrackRejectedExtraSamples,
+            trackStats.longTrackRejectedExtraSamples > 0
+                ? trackStats.longTrackRejectedExtraErrorSum /
+                      static_cast<double>(trackStats.longTrackRejectedExtraSamples)
+                : 0.0,
+            trackStats.longTrackRejectedExtraErrorMax,
+            trackStats.longTrackRejectedExtraLe5,
+            trackStats.longTrackRejectedExtraLe10,
+            trackStats.longTrackRejectedExtraLe25,
+            trackStats.longTrackRejectedExtraGt25);
+    }
+
+    if (createdPoints == 0)
+    {
+        Logger::instance()->warnf(
+            "[SFM] Known-pose multiview triangulation produced no points; falling back to pairwise triangulation");
+        for (ImageId imageId : imageIds)
+        {
+            const auto stats = triangulator.triangulateImage(imageId, triangulationPolicy.triangulatorOptions);
+            createdPoints += stats.numCreated;
+            continuedObservations += stats.numContinued;
+        }
+    }
+
+    completedObservations = triangulator.completeTracks(triangulationPolicy.triangulatorOptions);
     triangulator.retriangulatePoints(triangulationPolicy.triangulatorOptions.maxReprojError);
     triangulator.recomputeReprojErrors();
     const int filteredPoints = triangulator.filterPoints(_sfmOptions.filterMaxReprojError,

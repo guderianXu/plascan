@@ -1,6 +1,7 @@
 #include "ProjectWorkflowUtils.h"
 
 #include "filtering/SparsePointCloudProcessor.h"
+#include "project/SparseResultQuality.h"
 #include "TerrainPipeline.h"
 
 #include <QDateTime>
@@ -199,6 +200,19 @@ int findLatestAtResultIndex(const QJsonObject &meta,
     return -1;
 }
 
+int findLatestProductionAtResultIndex(const QJsonObject &meta)
+{
+    const QJsonArray results = meta.value(QStringLiteral("aerial_triangulation_results")).toArray();
+    for (int index = results.size() - 1; index >= 0; --index)
+    {
+        if (isProductionSparseResult(results.at(index).toObject()))
+        {
+            return index;
+        }
+    }
+    return -1;
+}
+
 bool writeJsonObjectFile(const QString &path,
                          const QJsonObject &object,
                          QString *errorMessage)
@@ -286,6 +300,18 @@ bool resolveSparsePointContext(const QJsonObject &meta,
     if (requestedIndex >= 0 && requestedIndex < results.size())
     {
         const QJsonObject record = results.at(requestedIndex).toObject();
+        if (!isProductionSparseResult(record))
+        {
+            if (errorMessage)
+            {
+                const QString reason = sparseResultBlockingReason(record);
+                *errorMessage = reason.isEmpty()
+                    ? QStringLiteral("所选稀疏点云不是正式 SfM/BA 结果，无法继续执行该操作")
+                    : reason;
+            }
+            return false;
+        }
+
         const QJsonObject files = record.value(QStringLiteral("files")).toObject();
         QString sidecarPath = files.value(QStringLiteral("sparse_cloud_points_json")).toString();
         const QString outputDir = record.value(QStringLiteral("output_dir")).toString();
@@ -316,6 +342,11 @@ bool resolveSparsePointContext(const QJsonObject &meta,
     for (int index = results.size() - 1; index >= 0; --index)
     {
         const QJsonObject record = results.at(index).toObject();
+        if (!isProductionSparseResult(record))
+        {
+            continue;
+        }
+
         const QJsonObject files = record.value(QStringLiteral("files")).toObject();
         QString sidecarPath = files.value(QStringLiteral("sparse_cloud_points_json")).toString();
         const QString outputDir = record.value(QStringLiteral("output_dir")).toString();
@@ -347,7 +378,7 @@ bool resolveSparsePointContext(const QJsonObject &meta,
 
     if (errorMessage)
     {
-        *errorMessage = QStringLiteral("所选稀疏点云结果缺少点级 sidecar，无法继续执行该操作");
+        *errorMessage = QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三，而不是两视预览三角化。");
     }
     return false;
 }

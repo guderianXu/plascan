@@ -90,6 +90,7 @@ struct FeatureKeypoint {
 struct FeatureMatch {
     FeatureIdx idx1 = kInvalidFeatureIdx;  ///< 图像 1 中的特征索引
     FeatureIdx idx2 = kInvalidFeatureIdx;  ///< 图像 2 中的特征索引
+    float score = 1.0f;                    ///< 匹配置信度，范围通常为 [0,1]
 };
 
 // ---- 轨迹 ----

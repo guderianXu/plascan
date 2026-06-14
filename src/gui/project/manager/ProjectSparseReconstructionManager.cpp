@@ -8,6 +8,7 @@
 #include "ProjectSparseWorkflow.h"
 #include "ProjectTriangulationService.h"
 #include "ProjectWorkflowUtils.h"
+#include "project/SparseResultQuality.h"
 #include "Logger.h"
 
 #include <QDateTime>
@@ -20,6 +21,7 @@
 
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
 using xjw::gui::project::findLatestAtResultIndex;
+using xjw::gui::project::mergeSparseQualityIntoRecord;
 using xjw::gui::project::projectFilesMeta;
 using xjw::gui::project::resolveSparsePointContextResult;
 using xjw::gui::project::runSparsePointWorkflowResult;
@@ -66,7 +68,7 @@ bool ProjectSparseReconstructionManager::ensureProjectOpen(const QString &messag
 void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObject &settings)
 {
     if (!ensureProjectOpen(QStringLiteral("请先打开项目后再执行三角化"),
-                           QStringLiteral("生成初始稀疏点云")))
+                           QStringLiteral("生成两视预览云")))
     {
         return;
     }
@@ -75,7 +77,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
     if (selectedImages.size() < 2)
     {
         QMessageBox::warning(m_parentWidget,
-                             QStringLiteral("生成初始稀疏点云"),
+                             QStringLiteral("生成两视预览云"),
                              QStringLiteral("至少需要两张影像才能执行三角化"));
         return;
     }
@@ -122,7 +124,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
     options.ignoreTwoViewTracks = settings.value(QStringLiteral("ignoreTwoView")).toBool(false);
     options.minTrackLength = settings.value(QStringLiteral("minTrackLen")).toInt(2);
 
-    emit atProgressChanged(QStringLiteral("正在构建初始稀疏点云..."), 10);
+    emit atProgressChanged(QStringLiteral("正在构建两视预览云..."), 10);
 
     QPointer<ProjectSparseReconstructionManager> self(this);
     (void)QtConcurrent::run([self, mergedMeta, selectedImages, options, replaceIndex]() {
@@ -144,7 +146,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
             {
                 emit self->atProgressFinished(false);
                 QMessageBox::warning(self->m_parentWidget,
-                                     QStringLiteral("生成初始稀疏点云"),
+                                     QStringLiteral("生成两视预览云"),
                                      result.errorMessage);
                 return;
             }
@@ -190,6 +192,11 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
     extraRecord[QStringLiteral("source")] = QStringLiteral("triangulation");
     extraRecord[QStringLiteral("operation")] = QStringLiteral("triangulation");
     extraRecord[QStringLiteral("candidate_track_count")] = result.candidateTrackCount;
+    const QJsonObject quality = result.resultJson.value(QStringLiteral("quality")).toObject();
+    if (!quality.isEmpty())
+    {
+        extraRecord = mergeSparseQualityIntoRecord(extraRecord, quality);
+    }
 
     m_owner->appendAtResult(result.sparseCloudPath,
                             result.exportedPointCount,
@@ -205,8 +212,8 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
 
     emit atProgressFinished(true);
     QMessageBox::information(m_parentWidget,
-                             QStringLiteral("生成初始稀疏点云"),
-                             QStringLiteral("三角化完成。\n候选轨迹: %1\n导出点数: %2\n输出文件: %3")
+                             QStringLiteral("生成两视预览云"),
+                             QStringLiteral("两视预览云生成完成。\n候选轨迹: %1\n导出点数: %2\n输出文件: %3")
                                  .arg(result.candidateTrackCount)
                                  .arg(result.exportedPointCount)
                                  .arg(result.sparseCloudPath));

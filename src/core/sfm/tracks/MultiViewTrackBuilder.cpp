@@ -1,0 +1,235 @@
+#include "tracks/MultiViewTrackBuilder.h"
+
+#include <algorithm>
+#include <cmath>
+
+namespace xjw
+{
+
+namespace
+{
+
+class DisjointSet
+{
+public:
+    int add(const MultiViewTrackBuilder::ObservationKey &key)
+    {
+        const auto it = m_indexByKey.find(key);
+        if (it != m_indexByKey.end())
+        {
+            return it->second;
+        }
+
+        const int index = static_cast<int>(m_keys.size());
+        m_indexByKey.emplace(key, index);
+        m_keys.push_back(key);
+        m_parent.push_back(index);
+        return index;
+    }
+
+    int addMergedRoot(int a, int b, int *mergedRoot)
+    {
+        int rootA = find(a);
+        int rootB = find(b);
+        if (rootA == rootB)
+        {
+            if (mergedRoot)
+            {
+                *mergedRoot = rootA;
+            }
+            return rootA;
+        }
+        if (rootB < rootA)
+        {
+            std::swap(rootA, rootB);
+        }
+        m_parent[rootB] = rootA;
+        if (mergedRoot)
+        {
+            *mergedRoot = rootB;
+        }
+        return rootA;
+    }
+
+    int find(int index)
+    {
+        int root = index;
+        while (m_parent[root] != root)
+        {
+            root = m_parent[root];
+        }
+        while (m_parent[index] != index)
+        {
+            const int next = m_parent[index];
+            m_parent[index] = root;
+            index = next;
+        }
+        return root;
+    }
+
+    const std::vector<MultiViewTrackBuilder::ObservationKey> &keys() const
+    {
+        return m_keys;
+    }
+
+private:
+    std::map<MultiViewTrackBuilder::ObservationKey, int> m_indexByKey;
+    std::vector<MultiViewTrackBuilder::ObservationKey> m_keys;
+    std::vector<int> m_parent;
+};
+
+} // namespace
+
+void MultiViewTrackBuilder::addMatchPair(ImageId imageA,
+                                         ImageId imageB,
+                                         const std::vector<MatchIndexPair> &matches)
+{
+    if (imageA == imageB || imageA == kInvalidImageId || imageB == kInvalidImageId)
+    {
+        return;
+    }
+
+    for (const MatchIndexPair &match : matches)
+    {
+        if (match.first == kInvalidFeatureIdx || match.second == kInvalidFeatureIdx)
+        {
+            continue;
+        }
+
+        m_edges.push_back({
+            ObservationKey{imageA, match.first},
+            ObservationKey{imageB, match.second},
+            std::isfinite(match.score) ? match.score : 0.0f,
+            static_cast<int>(m_edges.size())
+        });
+    }
+}
+
+MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
+{
+    MultiViewTrackBuildResult result;
+
+    DisjointSet disjointSet;
+    std::vector<std::pair<int, int>> indexedEdges;
+    indexedEdges.reserve(m_edges.size());
+    for (const auto &edge : m_edges)
+    {
+        const int left = disjointSet.add(edge.first);
+        const int right = disjointSet.add(edge.second);
+        indexedEdges.emplace_back(left, right);
+    }
+
+    const std::vector<ObservationKey> &keys = disjointSet.keys();
+    std::vector<std::map<ImageId, FeatureIdx>> featureByImageByRoot(keys.size());
+    for (int i = 0; i < static_cast<int>(keys.size()); ++i)
+    {
+        featureByImageByRoot[static_cast<size_t>(i)].emplace(keys[static_cast<size_t>(i)].imageId,
+                                                             keys[static_cast<size_t>(i)].featureIdx);
+    }
+
+    std::vector<int> order(m_edges.size());
+    for (int i = 0; i < static_cast<int>(order.size()); ++i)
+    {
+        order[static_cast<size_t>(i)] = i;
+    }
+    std::sort(order.begin(), order.end(), [&](int left, int right)
+    {
+        const Edge &leftEdge = m_edges[static_cast<size_t>(left)];
+        const Edge &rightEdge = m_edges[static_cast<size_t>(right)];
+        if (leftEdge.score != rightEdge.score)
+        {
+            return leftEdge.score > rightEdge.score;
+        }
+        return leftEdge.insertionOrder < rightEdge.insertionOrder;
+    });
+
+    for (int edgeIndex : order)
+    {
+        const auto [leftIndex, rightIndex] = indexedEdges[static_cast<size_t>(edgeIndex)];
+        int leftRoot = disjointSet.find(leftIndex);
+        int rightRoot = disjointSet.find(rightIndex);
+        if (leftRoot == rightRoot)
+        {
+            continue;
+        }
+
+        const auto &leftFeatures = featureByImageByRoot[static_cast<size_t>(leftRoot)];
+        const auto &rightFeatures = featureByImageByRoot[static_cast<size_t>(rightRoot)];
+        bool hasConflict = false;
+        for (const auto &entry : rightFeatures)
+        {
+            const auto it = leftFeatures.find(entry.first);
+            if (it != leftFeatures.end() && it->second != entry.second)
+            {
+                hasConflict = true;
+                break;
+            }
+        }
+
+        if (hasConflict)
+        {
+            ++result.rejectedConflictEdges;
+            continue;
+        }
+
+        int mergedRoot = leftRoot;
+        const int newRoot = disjointSet.addMergedRoot(leftRoot, rightRoot, &mergedRoot);
+        auto &newFeatures = featureByImageByRoot[static_cast<size_t>(newRoot)];
+        auto &oldFeatures = featureByImageByRoot[static_cast<size_t>(mergedRoot)];
+        if (newRoot != mergedRoot)
+        {
+            newFeatures.insert(oldFeatures.begin(), oldFeatures.end());
+            oldFeatures.clear();
+        }
+    }
+
+    std::map<int, std::vector<ObservationKey>> components;
+    for (int i = 0; i < static_cast<int>(keys.size()); ++i)
+    {
+        components[disjointSet.find(i)].push_back(keys[static_cast<size_t>(i)]);
+    }
+
+    result.totalComponents = static_cast<int>(components.size());
+    for (auto &entry : components)
+    {
+        std::vector<ObservationKey> &component = entry.second;
+        std::sort(component.begin(), component.end());
+
+        bool hasConflict = false;
+        std::map<ImageId, FeatureIdx> featureByImage;
+        for (const ObservationKey &observation : component)
+        {
+            const auto inserted = featureByImage.emplace(observation.imageId, observation.featureIdx);
+            if (!inserted.second)
+            {
+                hasConflict = true;
+                break;
+            }
+        }
+
+        if (hasConflict)
+        {
+            ++result.rejectedConflictComponents;
+            continue;
+        }
+        if (component.size() < 2)
+        {
+            continue;
+        }
+
+        Track track;
+        track.elements.reserve(component.size());
+        for (const ObservationKey &observation : component)
+        {
+            track.elements.push_back(TrackElement{observation.imageId, observation.featureIdx});
+        }
+
+        ++result.acceptedComponents;
+        ++result.trackLengthHistogram[static_cast<int>(track.length())];
+        result.tracks.push_back(std::move(track));
+    }
+
+    return result;
+}
+
+} // namespace xjw

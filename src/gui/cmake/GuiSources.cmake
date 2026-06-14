@@ -74,6 +74,7 @@ set(GUI_SOURCES
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
   dialogs/FeatureExtractionDialog.cpp
+  dialogs/FeaturePairPlanner.cpp
   dialogs/VocabularyOverlapDialog.cpp
   dialogs/VocabularyOverlapDialog.ui
   dialogs/SuperPointVisualizationDialog.cpp
@@ -174,6 +175,7 @@ set(GUI_HEADERS
   dialogs/CreateDemDialog.h
   dialogs/MapProjectDialog.h
   dialogs/FeatureExtractionDialog.h
+  dialogs/FeaturePairPlanner.h
   dialogs/VocabularyOverlapDialog.h
   dialogs/SuperPointVisualizationDialog.h
   dialogs/FeatureMatchingDialog.h
@@ -242,6 +244,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/CreateDemDialog.cpp
   dialogs/MapProjectDialog.cpp
   dialogs/FeatureExtractionDialog.cpp
+  dialogs/FeaturePairPlanner.cpp
   dialogs/VocabularyOverlapDialog.cpp
   dialogs/VocabularyOverlapDialog.ui
   dialogs/SuperPointVisualizationDialog.cpp

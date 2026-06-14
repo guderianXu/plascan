@@ -6,6 +6,8 @@
 #include "ProjectDepthFrameUtils.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
+#include "ProjectWorkflowUtils.h"
+#include "project/SparseResultQuality.h"
 #include "Logger.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
@@ -37,8 +39,10 @@
 using xjw::gui::project::buildDepthGenConfig;
 using xjw::gui::project::denseGenerationSettingsFromJson;
 using xjw::gui::project::denseRefineSettingsFromJson;
+using xjw::gui::project::findLatestProductionAtResultIndex;
 using xjw::gui::project::makeDenseResultRecord;
 using xjw::gui::project::makeDepthResultRecord;
+using xjw::gui::project::sparseResultBlockingReason;
 using xjw::gui::project::buildStoredFusionFrame;
 using xjw::gui::project::collectLatestStoredDepthFrames;
 using xjw::gui::project::persistProjectMeta;
@@ -452,8 +456,27 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         return;
     }
 
-    const int realIdx = (request.atIndex >= 0 && request.atIndex < atArr.size()) ? request.atIndex : atArr.size() - 1;
+    const int realIdx = (request.atIndex >= 0 && request.atIndex < atArr.size())
+        ? request.atIndex
+        : findLatestProductionAtResultIndex(meta);
+    if (realIdx < 0)
+    {
+        QMessageBox::warning(m_parentWidget,
+                             QStringLiteral("深度图估计"),
+                             QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三。"));
+        return;
+    }
     const QJsonObject atResult = atArr[realIdx].toObject();
+    if (!xjw::gui::project::isProductionSparseResult(atResult))
+    {
+        const QString reason = sparseResultBlockingReason(atResult);
+        QMessageBox::warning(m_parentWidget,
+                             QStringLiteral("深度图估计"),
+                             reason.isEmpty()
+                                 ? QStringLiteral("所选稀疏点云不是正式 SfM/BA 结果。")
+                                 : reason);
+        return;
+    }
     const QJsonArray selImgArr = atResult.value(QStringLiteral("selected_images")).toArray();
     const QJsonObject files = atResult.value(QStringLiteral("files")).toObject();
     const QString sparseXyz = files.value(QStringLiteral("sparse_cloud_xyz")).toString();
@@ -758,8 +781,27 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         return;
     }
 
-    const int realIdx = (request.atIndex >= 0 && request.atIndex < atArr.size()) ? request.atIndex : atArr.size() - 1;
+    const int realIdx = (request.atIndex >= 0 && request.atIndex < atArr.size())
+        ? request.atIndex
+        : findLatestProductionAtResultIndex(meta);
+    if (realIdx < 0)
+    {
+        QMessageBox::warning(m_parentWidget,
+                             QStringLiteral("稠密重建"),
+                             QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三。"));
+        return;
+    }
     const QJsonObject atResult = atArr[realIdx].toObject();
+    if (!xjw::gui::project::isProductionSparseResult(atResult))
+    {
+        const QString reason = sparseResultBlockingReason(atResult);
+        QMessageBox::warning(m_parentWidget,
+                             QStringLiteral("稠密重建"),
+                             reason.isEmpty()
+                                 ? QStringLiteral("所选稀疏点云不是正式 SfM/BA 结果。")
+                                 : reason);
+        return;
+    }
     const QJsonArray selImgArr = atResult.value(QStringLiteral("selected_images")).toArray();
     const QJsonObject files = atResult.value(QStringLiteral("files")).toObject();
     const QString sparseXyz = files.value(QStringLiteral("sparse_cloud_xyz")).toString();

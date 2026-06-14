@@ -1,6 +1,7 @@
 #include "TriangulationService.h"
 
 #include "BaInputBuilder.h"
+#include "project/SparseResultQuality.h"
 #include "triangulation/InitialSparsePointCloudTriangulator.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -243,7 +244,13 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     summary[QStringLiteral("rejected_by_reproj_count")] = result.rejectedByReprojCount;
     summary[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
     summary[QStringLiteral("points")] = pointsArray;
-    result.resultJson = summary;
+
+    const QJsonObject quality = xjw::common::project::buildSparseQualityMetadata(
+        pointsArray,
+        static_cast<int>(buildResult.cameras.size()),
+        false,
+        xjw::common::project::kSparseResultKindPairwisePreview);
+    result.resultJson = xjw::common::project::mergeSparseQualityIntoRecord(summary, quality);
 
     return result;
 }

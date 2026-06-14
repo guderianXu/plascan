@@ -1,4 +1,8 @@
 # 链接核心库（仅当 core 可用）
+if(TARGET plascan_common_project)
+  target_link_libraries(plascan_gui PRIVATE plascan_common_project)
+endif()
+
 if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
   if(TARGET superpoint)
     message(STATUS "plascan_gui: linking against superpoint target")

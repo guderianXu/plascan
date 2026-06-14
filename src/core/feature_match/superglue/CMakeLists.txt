@@ -26,7 +26,7 @@ include_directories(
 find_package(Qt6 COMPONENTS Core REQUIRED)
 
 # SuperGlue 库
-add_library(superglue_matcher SHARED
+add_library(superglue_matcher STATIC
     SuperGlueMatcher.cpp
     SuperGlueMatchIO.cpp
     MatchOutlierRejector.cpp

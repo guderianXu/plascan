@@ -237,9 +237,13 @@ def write_sgmt_match(out_path, feat_path0, feat_path1, data0, data1, pairs, scor
         "feature_algorithm": feature_algorithm,
         "match_algorithm": match_algorithm,
         "backend": "python_lightglue",
+        "feature_format_version": 2,
         "num_matches": int(len(pairs)),
         "matched_points0": [[float(p[0]), float(p[1])] for p in pts0],
         "matched_points1": [[float(p[0]), float(p[1])] for p in pts1],
+        "matched_indices0": [int(pair[0]) for pair in pairs],
+        "matched_indices1": [int(pair[1]) for pair in pairs],
+        "matched_scores": [float(score) for score in scores],
     }
     with open(out_path + ".json", "w", encoding="utf-8") as fj:
         json.dump(sidecar, fj, ensure_ascii=False)

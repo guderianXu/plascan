@@ -1,5 +1,7 @@
 #include "ProjectWorkflowReports.h"
 
+#include "project/SparseResultQuality.h"
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
@@ -218,9 +220,16 @@ BundleAdjustSparseCloudExport exportBundleAdjustSparseCloud(const QJsonObject &b
     plyFile.close();
 
     const QString sidecarPath = QDir(outputDir).filePath(QStringLiteral("sparse_cloud_points.json"));
-    QJsonObject sidecarRoot;
-    sidecarRoot[QStringLiteral("points")] = pointsForSidecar;
-    sidecarRoot[QStringLiteral("operation")] = QStringLiteral("bundle_adjust");
+    const QJsonObject quality = buildSparseQualityMetadata(
+        pointsForSidecar,
+        baResult.value(QStringLiteral("camera_count")).toInt(selectedImages.size()),
+        true,
+        kSparseResultKindSparsePostprocess,
+        kSparseResultKindSfmSparseReconstruction);
+    QJsonObject sidecarRoot = mergeSparseQualityIntoRecord(
+        QJsonObject{{QStringLiteral("points"), pointsForSidecar},
+                    {QStringLiteral("operation"), QStringLiteral("bundle_adjust")}},
+        quality);
     QFile sidecarFile(sidecarPath);
     if (!sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
     {
@@ -238,6 +247,7 @@ BundleAdjustSparseCloudExport exportBundleAdjustSparseCloud(const QJsonObject &b
     exportResult.extraRecord[QStringLiteral("ba_mean_rms_after")] =
         baResult.value(QStringLiteral("mean_rms_after")).toDouble();
     exportResult.extraRecord[QStringLiteral("selected_images")] = QJsonArray::fromStringList(selectedImages);
+    exportResult.extraRecord = mergeSparseQualityIntoRecord(exportResult.extraRecord, quality);
     exportResult.pointCount = validPts.size();
     exportResult.exported = true;
     return exportResult;

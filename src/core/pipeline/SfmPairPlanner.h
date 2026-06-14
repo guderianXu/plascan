@@ -27,6 +27,7 @@ struct SfmPairPlannerOptions
     int knownCameraSpatialNeighborCount = 8;
     std::vector<std::array<double, 3>> knownCameraCenters;
     std::vector<std::array<int, 2>> knownCameraOverlapPairs;
+    double knownCameraOverlapMaxExpansion = 2.0;
 };
 
 struct SfmPairPlan
@@ -146,6 +147,39 @@ inline void appendUniqueSfmPairKey(const QStringList &images,
     pairKeys->append(pairKey);
 }
 
+inline int slidingWindowPairCount(int imageCount, int window)
+{
+    if (imageCount <= 1 || window <= 0)
+    {
+        return 0;
+    }
+
+    int count = 0;
+    for (int i = 0; i < imageCount; ++i)
+    {
+        count += std::min(window, imageCount - i - 1);
+    }
+    return count;
+}
+
+inline bool acceptsKnownCameraOverlapPairs(int imageCount,
+                                           int window,
+                                           int spatialNeighborCount,
+                                           int overlapPairCount,
+                                           double maxExpansion)
+{
+    if (overlapPairCount <= 0)
+    {
+        return false;
+    }
+
+    const int sequenceBudget = slidingWindowPairCount(imageCount, window);
+    const int spatialBudget = std::max(0, imageCount * std::max(0, spatialNeighborCount));
+    const int boundedBudget = std::max(1, sequenceBudget + spatialBudget);
+    const double expansion = std::max(1.0, maxExpansion);
+    return static_cast<double>(overlapPairCount) <= static_cast<double>(boundedBudget) * expansion;
+}
+
 inline SfmPairPlan planSfmMatchPairs(
     const QStringList &images,
     const QStringList &cameraPaths,
@@ -190,9 +224,19 @@ inline SfmPairPlan planSfmMatchPairs(
 
     if (!plan.allowedPairKeys.isEmpty())
     {
-        plan.usedCameraOverlapPairs = true;
         plan.knownCameraOverlapPairCount = plan.allowedPairKeys.size();
-        return plan;
+        if (acceptsKnownCameraOverlapPairs(imageCount,
+                                           window,
+                                           spatialNeighborCount,
+                                           plan.knownCameraOverlapPairCount,
+                                           options.knownCameraOverlapMaxExpansion))
+        {
+            plan.usedCameraOverlapPairs = true;
+            return plan;
+        }
+
+        plan.allowedPairKeys.clear();
+        seen.clear();
     }
 
     for (int i = 0; i < imageCount; ++i)

@@ -29,6 +29,7 @@
 #include <QRegularExpression>
 #include <QThread>
 #include <atomic>
+#include <cmath>
 #include <memory>
 #include <mutex>
 #include <thread>
@@ -927,10 +928,11 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         sidecar["image1_path"]  = imagePath1ForMeta;
                         sidecar["sp0_path"]     = sp0Path;
                         sidecar["sp1_path"]     = sp1Path;
+                        sidecar["feature_format_version"] = 2;
                         sidecar["num_matches"]  = matchResult.numMatches;
                         sidecar["match_algorithm"] = matchAlgorithm;
 
-                        QJsonArray pts0, pts1;
+                        QJsonArray pts0, pts1, indices0, indices1, scores;
                         for (const auto &dm : matchResult.cvMatches) 
                         {
                             const int i0 = dm.queryIdx, i1 = dm.trainIdx;
@@ -940,10 +942,25 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                                 QJsonArray p0; p0.append(sp0.keypoints[i0].pt.x); p0.append(sp0.keypoints[i0].pt.y);
                                 QJsonArray p1; p1.append(sp1.keypoints[i1].pt.x); p1.append(sp1.keypoints[i1].pt.y);
                                 pts0.append(p0); pts1.append(p1);
+                                indices0.append(i0);
+                                indices1.append(i1);
+                                float score = 1.0f;
+                                if (i0 >= 0 && i0 < static_cast<int>(matchResult.matchingScores0.size()))
+                                {
+                                    score = matchResult.matchingScores0[static_cast<std::size_t>(i0)];
+                                }
+                                else if (std::isfinite(dm.distance))
+                                {
+                                    score = 1.0f / (1.0f + std::max(0.0f, dm.distance));
+                                }
+                                scores.append(static_cast<double>(std::max(0.0f, std::min(1.0f, score))));
                             }
                         }
                         sidecar["matched_points0"] = pts0;
                         sidecar["matched_points1"] = pts1;
+                        sidecar["matched_indices0"] = indices0;
+                        sidecar["matched_indices1"] = indices1;
+                        sidecar["matched_scores"] = scores;
 
                         const QString sidecarPath = outputPath + ".json";
                         {

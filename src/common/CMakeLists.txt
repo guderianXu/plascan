@@ -6,6 +6,10 @@ add_library(plascan_common_log STATIC
 
 add_library(plascan_common_math INTERFACE)
 
+add_library(plascan_common_project STATIC
+  project/SparseResultQuality.cpp
+)
+
 target_include_directories(plascan_common_log PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}/log
 )
@@ -14,5 +18,12 @@ target_include_directories(plascan_common_math INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+target_include_directories(plascan_common_project PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
 target_compile_features(plascan_common_log PUBLIC cxx_std_17)
 target_compile_features(plascan_common_math INTERFACE cxx_std_17)
+target_compile_features(plascan_common_project PUBLIC cxx_std_17)
+
+target_link_libraries(plascan_common_project PUBLIC Qt6::Core)

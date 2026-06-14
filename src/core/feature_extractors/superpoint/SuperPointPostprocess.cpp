@@ -199,8 +199,8 @@ FeatureOutput SuperPoint::postprocess(const torch::Tensor& scores,
     auto descriptors = sampleDescriptors(keypoints_tensor, desc_cpu, config_.grid_size);
     
     // 转换为OpenCV格式
-    auto x_coords_acc = x_coords.accessor<long, 1>();
-    auto y_coords_acc = y_coords.accessor<long, 1>();
+    auto x_coords_acc = x_coords.accessor<int64_t, 1>();
+    auto y_coords_acc = y_coords.accessor<int64_t, 1>();
     auto scores_acc = keypoint_scores.accessor<float, 1>();
     
     for (int i = 0; i < num_keypoints; i++) 

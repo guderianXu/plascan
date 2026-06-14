@@ -13,6 +13,7 @@ set(SFM_SOURCES
     # ---- 图结构 ----
     graph/CorrespondenceGraph.cpp
     graph/ObservationNetworkBuilder.cpp
+    tracks/MultiViewTrackBuilder.cpp
 
     # ---- 重建状态 ----
     reconstruction/SfmReconstruction.cpp
@@ -38,6 +39,7 @@ set(SFM_HEADERS
     common/SfmTypes.h
     graph/CorrespondenceGraph.h
     graph/ObservationNetworkBuilder.h
+    tracks/MultiViewTrackBuilder.h
     reconstruction/SfmReconstruction.h
     pose/PnpSolver.h
     triangulation/Triangulator.h
@@ -69,6 +71,7 @@ target_link_libraries(sfm
         Qt6::Core
         Qt6::Gui
         plascan_common_log
+        plascan_common_project
         ${OpenCV_LIBS}
 )
 

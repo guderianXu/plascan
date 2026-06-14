@@ -70,7 +70,8 @@ InitPoseFinalizeResult finalizeInitializedCameraPoses(ProjectData *projectData,
                        result.sparseCloudPath,
                        result.numPoints3D,
                        allImages,
-                       outputDir);
+                       outputDir,
+                       result.resultRecordExtra);
     }
 
     finalizeResult.success = true;

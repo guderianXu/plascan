@@ -1,4 +1,5 @@
 import importlib.util
+import json
 import struct
 import tempfile
 import unittest
@@ -48,6 +49,12 @@ class RunLightGlueScriptTest(unittest.TestCase):
             expected_size = offset + (data0["n_keypoints"] + data1["n_keypoints"]) * 12
             self.assertEqual(len(raw), expected_size)
             self.assertEqual(struct.unpack(">id", raw[offset:offset + 12]), (2, 0.75))
+
+            sidecar = json.loads(Path(str(out_path) + ".json").read_text(encoding="utf-8"))
+            self.assertEqual(sidecar["feature_format_version"], 2)
+            self.assertEqual(sidecar["matched_indices0"], [0, 1])
+            self.assertEqual(sidecar["matched_indices1"], [2, 1])
+            self.assertEqual(sidecar["matched_scores"], [0.75, 0.5])
 
 
 if __name__ == "__main__":

@@ -51,6 +51,25 @@ struct TriangulationStats
     int numCreated = 0;   ///< 新创建的三维点数
     int numContinued = 0; ///< 延续现有轨迹的观测数
     int numFiltered = 0;  ///< 被过滤的三维点数
+
+    int inputTracks = 0;             ///< 输入轨迹数
+    int inputLongTracks = 0;         ///< 输入观测数 >= 3 的轨迹数
+    int unusableTracks = 0;          ///< 因影像/特征/已占用观测不可用而跳过的轨迹数
+    int noCandidateTracks = 0;       ///< 未找到任何可三角化候选的轨迹数
+    int createdTwoViewTracks = 0;    ///< 最终只生成两视点的数量
+    int createdLongTracks = 0;       ///< 最终生成 >=3 观测点的数量
+    int seedPairTests = 0;           ///< 尝试作为种子的观测对数量
+    int seedPairRejected = 0;        ///< 双视种子三角化失败数量
+    int reprojObservationRejected = 0; ///< 候选点补观测时因重投影误差被拒数量
+    int depthObservationRejected = 0;  ///< 候选点补观测时因深度被拒数量
+    int longTrackTwoViewOnly = 0;      ///< 输入长轨迹最终只产生两视点的数量
+    int longTrackRejectedExtraSamples = 0; ///< 两视化长轨迹中可量化最近被拒观测的数量
+    int longTrackRejectedExtraLe5 = 0;     ///< 最近被拒观测误差 <= 5px
+    int longTrackRejectedExtraLe10 = 0;    ///< 最近被拒观测误差 <= 10px
+    int longTrackRejectedExtraLe25 = 0;    ///< 最近被拒观测误差 <= 25px
+    int longTrackRejectedExtraGt25 = 0;    ///< 最近被拒观测误差 > 25px
+    double longTrackRejectedExtraErrorSum = 0.0; ///< 最近被拒观测误差求和
+    double longTrackRejectedExtraErrorMax = 0.0; ///< 最近被拒观测误差最大值
 };
 
 /**
@@ -81,6 +100,19 @@ class Triangulator
      * @return 三角化统计
      */
     TriangulationStats triangulateImage(ImageId imageId, const TriangulatorOptions &options = TriangulatorOptions());
+
+    /**
+     * @brief 基于已经合并好的多视图轨迹批量创建三维点。
+     *
+     * 适用于已知相机位姿路径：先把 pairwise matches 合并为一致的多视观测，
+     * 再直接对每条轨迹做多视 DLT 三角化，避免生成大量仅两视观测的预览点。
+     *
+     * @param tracks   已经去除同图像冲突的轨迹
+     * @param options  三角化选项
+     * @return 三角化统计
+     */
+    TriangulationStats triangulateTracks(const std::vector<Track> &tracks,
+                                         const TriangulatorOptions &options = TriangulatorOptions());
 
     /**
      * @brief 过滤重投影误差过大的三维点。
@@ -167,6 +199,12 @@ class Triangulator
      * @return 深度为正返回 true
      */
     bool hasPositiveDepth(const std::array<double, 3> &xyz, ImageId imageId) const;
+
+    /**
+     * @brief 计算轨迹观测相机之间的最大三角化角。
+     */
+    double computeMaxTriangulationAngle(const std::array<double, 3> &xyz,
+                                        const std::vector<TrackElement> &observations) const;
 
     /**
      * @brief 多视图 DLT 三角化：利用 >= 2 个观测求解最优三维点。

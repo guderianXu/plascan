@@ -2,6 +2,7 @@
 
 #include "Intersection.h"
 #include "project/ProjectCommonUtils.h"
+#include "tracks/MultiViewTrackBuilder.h"
 
 #include <QFile>
 #include <QJsonArray>
@@ -11,6 +12,8 @@
 
 #include <cmath>
 #include <limits>
+#include <map>
+#include <utility>
 
 namespace xjw::core::project
 {
@@ -91,6 +94,149 @@ PairIntersectionCandidate triangulatePairWithDirectionFallback(const xjw::Camera
     return bestCandidate;
 }
 
+struct IndexedObservation
+{
+    int cameraIndex = -1;
+    QPointF uv;
+};
+
+using IndexedFeatureKey = std::pair<int, xjw::FeatureIdx>;
+
+bool readFeatureIndex(const QJsonArray &indices, int index, xjw::FeatureIdx *featureIdx)
+{
+    if (!featureIdx || index < 0 || index >= indices.size())
+    {
+        return false;
+    }
+
+    bool ok = false;
+    const double raw = indices.at(index).toDouble(-1.0);
+    if (!std::isfinite(raw) || raw < 0.0
+        || raw > static_cast<double>(std::numeric_limits<xjw::FeatureIdx>::max()))
+    {
+        return false;
+    }
+
+    const double rounded = std::floor(raw);
+    if (std::fabs(raw - rounded) > 1e-6)
+    {
+        return false;
+    }
+
+    const auto parsed = static_cast<unsigned long long>(rounded);
+    if (parsed > static_cast<unsigned long long>(std::numeric_limits<xjw::FeatureIdx>::max()))
+    {
+        return false;
+    }
+
+    *featureIdx = static_cast<xjw::FeatureIdx>(parsed);
+    ok = true;
+    return ok;
+}
+
+void rememberObservation(std::map<IndexedFeatureKey, IndexedObservation> *observations,
+                         int cameraIndex,
+                         xjw::FeatureIdx featureIdx,
+                         const QPointF &uv)
+{
+    if (!observations || cameraIndex < 0 || featureIdx == xjw::kInvalidFeatureIdx)
+    {
+        return;
+    }
+
+    const IndexedFeatureKey key{cameraIndex, featureIdx};
+    observations->emplace(key, IndexedObservation{cameraIndex, uv});
+}
+
+std::array<double, 3> midpointBetweenCameras(const xjw::Camera &cameraA, const xjw::Camera &cameraB)
+{
+    const auto cA = cameraA.cameraCenter();
+    const auto cB = cameraB.cameraCenter();
+    return {{
+        0.5 * (cA[0] + cB[0]),
+        0.5 * (cA[1] + cB[1]),
+        0.5 * (cA[2] + cB[2])
+    }};
+}
+
+xjw::BATrack makeBaTrackFromIndexedTrack(
+    const xjw::Track &track,
+    const std::map<IndexedFeatureKey, IndexedObservation> &observationsByIndexedFeature,
+    const std::vector<xjw::Camera> &cameras)
+{
+    std::vector<IndexedObservation> observations;
+    observations.reserve(track.elements.size());
+
+    for (const xjw::TrackElement &element : track.elements)
+    {
+        if (element.imageId > static_cast<xjw::ImageId>(std::numeric_limits<int>::max()))
+        {
+            continue;
+        }
+
+        const int cameraIndex = static_cast<int>(element.imageId);
+        const auto it = observationsByIndexedFeature.find(IndexedFeatureKey{cameraIndex, element.featureIdx});
+        if (it != observationsByIndexedFeature.end())
+        {
+            observations.push_back(it->second);
+        }
+    }
+
+    xjw::BATrack baTrack;
+    if (observations.size() < 2)
+    {
+        return baTrack;
+    }
+
+    bool initialized = false;
+    for (std::size_t i = 0; i < observations.size() && !initialized; ++i)
+    {
+        for (std::size_t j = i + 1; j < observations.size(); ++j)
+        {
+            const IndexedObservation &obsA = observations[i];
+            const IndexedObservation &obsB = observations[j];
+            if (obsA.cameraIndex < 0 || obsB.cameraIndex < 0
+                || obsA.cameraIndex >= static_cast<int>(cameras.size())
+                || obsB.cameraIndex >= static_cast<int>(cameras.size()))
+            {
+                continue;
+            }
+
+            const PairIntersectionCandidate init = triangulatePairWithDirectionFallback(
+                cameras[static_cast<std::size_t>(obsA.cameraIndex)],
+                obsA.uv,
+                cameras[static_cast<std::size_t>(obsB.cameraIndex)],
+                obsB.uv);
+            if (init.valid)
+            {
+                baTrack.initialPoint = init.point;
+                initialized = true;
+                break;
+            }
+        }
+    }
+
+    if (!initialized)
+    {
+        const IndexedObservation &obsA = observations[0];
+        const IndexedObservation &obsB = observations[1];
+        baTrack.initialPoint = midpointBetweenCameras(
+            cameras[static_cast<std::size_t>(obsA.cameraIndex)],
+            cameras[static_cast<std::size_t>(obsB.cameraIndex)]);
+    }
+
+    for (const IndexedObservation &observation : observations)
+    {
+        baTrack.observations.push_back(xjw::BAObservation{
+            observation.cameraIndex,
+            observation.uv.x(),
+            observation.uv.y()
+        });
+    }
+
+    return baTrack;
+}
+
 } // namespace
 
 BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
@@ -107,6 +253,12 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
     result->imagePathByIndex.clear();
     result->beforeCamMeta.clear();
     result->tracks.clear();
+    result->sidecarV2PairCount = 0;
+    result->multiViewTrackCount = 0;
+    result->rejectedConflictTrackCount = 0;
+
+    xjw::MultiViewTrackBuilder multiViewTrackBuilder;
+    std::map<IndexedFeatureKey, IndexedObservation> observationsByIndexedFeature;
 
     QSet<QString> selectedNormalized;
     for (const QString &path : selectedImages)
@@ -244,6 +396,20 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
         const int indexB = cameraIndexByPath.value(imageB);
         const auto &cameraA = result->cameras.at(static_cast<size_t>(indexA));
         const auto &cameraB = result->cameras.at(static_cast<size_t>(indexB));
+        const QJsonArray indices0 = sidecar.value(QStringLiteral("matched_indices0")).toArray();
+        const QJsonArray indices1 = sidecar.value(QStringLiteral("matched_indices1")).toArray();
+        const QJsonArray matchedScores = sidecar.value(QStringLiteral("matched_scores")).toArray();
+        const bool hasIndexedMatches =
+            !indices0.isEmpty()
+            && indices0.size() == matched0.size()
+            && indices1.size() == matched1.size();
+        const bool hasMatchScores = matchedScores.size() == matched0.size();
+
+        std::vector<xjw::MultiViewTrackBuilder::MatchIndexPair> indexedMatches;
+        if (hasIndexedMatches)
+        {
+            indexedMatches.reserve(static_cast<std::size_t>(matched0.size()));
+        }
 
         for (int pointIndex = 0; pointIndex < matched0.size(); ++pointIndex)
         {
@@ -260,6 +426,28 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
             const QPointF uvB = direct
                 ? QPointF(a1.at(0).toDouble(), a1.at(1).toDouble())
                 : QPointF(a0.at(0).toDouble(), a0.at(1).toDouble());
+
+            if (hasIndexedMatches)
+            {
+                xjw::FeatureIdx feature0 = xjw::kInvalidFeatureIdx;
+                xjw::FeatureIdx feature1 = xjw::kInvalidFeatureIdx;
+                if (!readFeatureIndex(indices0, pointIndex, &feature0)
+                    || !readFeatureIndex(indices1, pointIndex, &feature1))
+                {
+                    continue;
+                }
+
+                const xjw::FeatureIdx featureA = direct ? feature0 : feature1;
+                const xjw::FeatureIdx featureB = direct ? feature1 : feature0;
+                const float matchScore = hasMatchScores
+                    ? static_cast<float>(matchedScores.at(pointIndex).toDouble(1.0))
+                    : 1.0f;
+                indexedMatches.emplace_back(featureA, featureB, matchScore);
+                rememberObservation(&observationsByIndexedFeature, indexA, featureA, uvA);
+                rememberObservation(&observationsByIndexedFeature, indexB, featureB, uvB);
+                ++result->sidecarV2PairCount;
+                continue;
+            }
 
             xjw::BATrack track;
             const PairIntersectionCandidate init = triangulatePairWithDirectionFallback(cameraA, uvA, cameraB, uvB);
@@ -281,6 +469,26 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
             track.observations.push_back(xjw::BAObservation{indexA, uvA.x(), uvA.y()});
             track.observations.push_back(xjw::BAObservation{indexB, uvB.x(), uvB.y()});
             result->tracks.push_back(std::move(track));
+        }
+
+        if (!indexedMatches.empty())
+        {
+            multiViewTrackBuilder.addMatchPair(
+                static_cast<xjw::ImageId>(indexA),
+                static_cast<xjw::ImageId>(indexB),
+                indexedMatches);
+        }
+    }
+
+    const xjw::MultiViewTrackBuildResult multiViewResult = multiViewTrackBuilder.build();
+    result->multiViewTrackCount = static_cast<int>(multiViewResult.tracks.size());
+    result->rejectedConflictTrackCount = multiViewResult.rejectedConflictComponents;
+    for (const xjw::Track &track : multiViewResult.tracks)
+    {
+        xjw::BATrack baTrack = makeBaTrackFromIndexedTrack(track, observationsByIndexedFeature, result->cameras);
+        if (baTrack.observations.size() >= 2)
+        {
+            result->tracks.push_back(std::move(baTrack));
         }
     }
 

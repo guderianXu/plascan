@@ -1,5 +1,6 @@
 #include "FeatureMatchingDialog.h"
 #include "ui_FeatureMatchingDialog.h"
+#include "FeaturePairPlanner.h"
 #include "MatchViewerDialog.h"
 
 #include <QAbstractItemView>
@@ -721,12 +722,5 @@ QStringList FeatureMatchingDialog::generateAllPairs() const
         }
     }
 
-    // 生成两两匹配对
-    for (int i = 0; i < selected.size(); ++i) {
-        for (int j = i + 1; j < selected.size(); ++j) {
-            pairs.append(QString("%1__%2").arg(selected[i], selected[j]));
-        }
-    }
-
-    return pairs;
+    return xjw::gui::planFeatureMatchPairs(selected);
 }

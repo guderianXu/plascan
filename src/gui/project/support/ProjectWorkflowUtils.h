@@ -49,6 +49,8 @@ QString sparseOperationDisplayName(const QString &operation);
 int findLatestAtResultIndex(const QJsonObject &meta,
                             const QString &operation = QString());
 
+int findLatestProductionAtResultIndex(const QJsonObject &meta);
+
 bool writeJsonObjectFile(const QString &path,
                          const QJsonObject &object,
                          QString *errorMessage = nullptr);

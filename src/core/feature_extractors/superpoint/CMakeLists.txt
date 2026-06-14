@@ -42,7 +42,7 @@ if (QT_LIBS)
     list(APPEND SUPERPOINT_SOURCES ../FeatureFileIO.cpp ../FeatureFileIO.h)
 endif()
 
-add_library(superpoint SHARED ${SUPERPOINT_SOURCES})
+add_library(superpoint STATIC ${SUPERPOINT_SOURCES})
 
 if(CMAKE_CUDA_COMPILER)
     target_compile_definitions(superpoint PRIVATE USE_CUDA=1)

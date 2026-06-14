@@ -550,7 +550,7 @@ bool getOrUploadGrayImageGpu(
     {
         if (errorMsg)
         {
-            *errorMsg = "devicePtrOut 为空";
+            *errorMsg = "devicePtrOut is null";
         }
         return false;
     }
@@ -558,7 +558,7 @@ bool getOrUploadGrayImageGpu(
     {
         if (errorMsg)
         {
-            *errorMsg = "源图为空，无法上传 GPU";
+            *errorMsg = "source image is empty; cannot upload to GPU";
         }
         return false;
     }
@@ -597,7 +597,7 @@ bool getOrUploadGrayImageGpu(
     {
         if (errorMsg)
         {
-            *errorMsg = std::string("cudaMalloc 失败: ") + cudaGetErrorString(allocErr);
+            *errorMsg = std::string("cudaMalloc failed: ") + cudaGetErrorString(allocErr);
         }
         return false;
     }
@@ -608,7 +608,7 @@ bool getOrUploadGrayImageGpu(
         cudaFree(newDevicePtr);
         if (errorMsg)
         {
-            *errorMsg = std::string("cudaMemcpy 失败: ") + cudaGetErrorString(copyErr);
+            *errorMsg = std::string("cudaMemcpy failed: ") + cudaGetErrorString(copyErr);
         }
         return false;
     }
@@ -1516,7 +1516,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     }
 
     // ── GPU 参数摘要 ──────────────────────────────────────────
-    fprintf(stderr, "[GPU] 降采样尺寸: %d×%d  ds=%d  N源=%d  iters=%d  patch=%d\n",
+    fprintf(stderr, "[GPU] scaled size: %dx%d  ds=%d  src=%d  iters=%d  patch=%d\n",
             sW, sH, ds, N, config.numIterations, config.patchHalf*2+1);
     for (int si = 0; si < N; ++si) 
     {
@@ -1524,7 +1524,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
         const float *T_rel = sd + 13;
         float baseline = sqrtf(T_rel[0]*T_rel[0]+T_rel[1]*T_rel[1]+T_rel[2]*T_rel[2]);
         if (baseline < 1e-4f)
-            fprintf(stderr, "[GPU SRC %d] ★★ 警告: 基线≈0! ★★\n", si);
+            fprintf(stderr, "[GPU SRC %d] warning: near-zero baseline\n", si);
     }
 
     const int refPx = sW * sH;
@@ -1688,13 +1688,13 @@ bool PatchMatchDepthEstimator::estimateGPU(
             dMean = cv::mean(depthS, validMask)[0];
         }
         double cMean = validCnt > 0 ? cv::mean(confS, validMask)[0] : 0;
-        fprintf(stderr, "[GPU RESULT] 有效像素: %d/%d (%.1f%%)  深度: [%.4f, %.4f] mean=%.4f  conf=%.4f\n",
+        fprintf(stderr, "[GPU RESULT] valid pixels: %d/%d (%.1f%%)  depth: [%.4f, %.4f] mean=%.4f  conf=%.4f\n",
                 validCnt, totalPx, 100.f*validCnt/totalPx,
                 (float)dMin, (float)dMax, (float)dMean, (float)cMean);
 
         if (validCnt == 0) 
         {
-            fprintf(stderr, "[GPU RESULT] ★★ 警告: 0 个有效深度像素! ★★\n");
+            fprintf(stderr, "[GPU RESULT] warning: zero valid depth pixels\n");
         }
     }
 
@@ -2107,12 +2107,12 @@ bool PatchMatchDepthEstimator::estimate(
 {
     if (srcGrays.empty() || srcCams.empty() || srcGrays.size() != srcCams.size()) 
     {
-        if (errorMsg) *errorMsg = "源帧数量不匹配或为空";
+        if (errorMsg) *errorMsg = "source frame count mismatch or empty";
         return false;
     }
     if (!refCam.valid()) 
     {
-        if (errorMsg) *errorMsg = "参考相机参数无效";
+        if (errorMsg) *errorMsg = "reference camera parameters are invalid";
         return false;
     }
     zNear = std::max(zNear, 0.01f);
@@ -2129,7 +2129,7 @@ bool PatchMatchDepthEstimator::estimate(
         {
             return false;
         }
-        fprintf(stderr, "[PatchMatch] GPU 失败，回退 CPU\n");
+        fprintf(stderr, "[PatchMatch] GPU failed, falling back to CPU\n");
     }
     return estimateCPU(refGray, srcGrays, refCam, srcCams,
                        zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth);

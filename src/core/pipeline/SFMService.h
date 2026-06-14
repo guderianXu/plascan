@@ -199,6 +199,12 @@ struct SFMServiceResult
     /// 稀疏点云输出路径（若成功则非空）
     QString sparseCloudPath;
 
+    /// 正式 SfM 稀疏点云质量元数据，供工程记录和下游流程判定使用。
+    QJsonObject qualityMetadata;
+
+    /// 追加到 aerial_triangulation_results 的附加字段。
+    QJsonObject resultRecordExtra;
+
     // ── 光束法平差统计（供报告使用） ──────────────────────────────────────
     double  baRmsBefore        = 0.0;  ///< BA 优化前平均重投影 RMS（px）
     double  baRmsAfter         = 0.0;  ///< BA 优化后平均重投影 RMS（px）

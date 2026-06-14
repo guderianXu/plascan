@@ -152,6 +152,19 @@ target_include_directories(test_sfm_pair_planner PRIVATE
 )
 gtest_discover_tests(test_sfm_pair_planner)
 
+add_executable(test_feature_pair_planner
+    test_feature_pair_planner.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeaturePairPlanner.cpp
+)
+target_link_libraries(test_feature_pair_planner PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_feature_pair_planner PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+)
+gtest_discover_tests(test_feature_pair_planner)
+
 # ==============================================================================
 # test_initial_sparse_triangulator — core/sfm 初始稀疏点云三角化器
 # ==============================================================================
@@ -236,6 +249,7 @@ add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeaturePairPlanner.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.cpp
@@ -251,6 +265,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTriangulationService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
@@ -266,6 +282,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     camera
     intersection
     bundle_adjust
+    terrain
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -292,8 +309,16 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/feature_match
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/terrain
 )
 gtest_discover_tests(test_gui_project_utils)
+
+add_executable(test_multiview_track_builder test_multiview_track_builder.cpp)
+target_link_libraries(test_multiview_track_builder PRIVATE sfm GTest::gtest_main)
+target_include_directories(test_multiview_track_builder PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+)
+gtest_discover_tests(test_multiview_track_builder)
 
 if(Python3_Interpreter_FOUND)
     add_test(
