@@ -399,6 +399,28 @@ TEST(SparseResultQualityTest, AcceptsFormalSfmWithMultiViewSupport)
     EXPECT_EQ(quality.value(QStringLiteral("median_track_len")).toInt(), 3);
 }
 
+TEST(SparseResultQualityTest, RejectsFormalSfmWhenAlmostAllTracksAreTwoView)
+{
+    QJsonArray points;
+    for (int i = 0; i < 99; ++i)
+    {
+        points.append(QJsonObject{{QStringLiteral("track_len"), 2},
+                                  {QStringLiteral("rms_reproj_px"), 0.8}});
+    }
+    points.append(QJsonObject{{QStringLiteral("track_len"), 3},
+                              {QStringLiteral("rms_reproj_px"), 0.9}});
+
+    const QJsonObject quality = xjw::gui::project::buildSparseQualityMetadata(
+        points,
+        60,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+
+    EXPECT_GT(quality.value(QStringLiteral("two_view_ratio")).toDouble(), 0.95);
+    EXPECT_FALSE(xjw::gui::project::isProductionSparseResult(quality));
+    EXPECT_TRUE(xjw::gui::project::sparseResultBlockingReason(quality).contains(QStringLiteral("两视")));
+}
+
 TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
 {
     QMainWindow window;
@@ -1831,7 +1853,7 @@ TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
     ASSERT_TRUE(tempDir.isValid());
     const QString plyPath = QDir(tempDir.path()).filePath(QStringLiteral("float_intensity.ply"));
     QFile file(plyPath);
-    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text));
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
     QTextStream stream(&file);
     stream << "ply\n"
            << "format ascii 1.0\n"
@@ -1842,6 +1864,7 @@ TEST(CameraModel3DDialogTest, PlyFloatIntensityIsScaledToByteRange)
            << "property float intensity\n"
            << "end_header\n"
            << "1 2 3 0.5\n";
+    stream.flush();
     file.close();
 
     auto cloud = plapoint::io::readPly<float>(plyPath.toStdString());

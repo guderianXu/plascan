@@ -13,6 +13,9 @@ namespace xjw::common::project
 namespace
 {
 
+constexpr double kProductionMaxTwoViewRatio = 0.95;
+constexpr double kWarningTwoViewRatio = 0.8;
+
 int pointTrackLen(const QJsonObject &point)
 {
     return std::max(0, point.value(QStringLiteral("track_len")).toInt(0));
@@ -212,7 +215,7 @@ bool isProductionSparseResult(const QJsonObject &record)
     {
         return false;
     }
-    if (quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0) >= 1.0)
+    if (quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0) >= kProductionMaxTwoViewRatio)
     {
         return false;
     }
@@ -231,9 +234,13 @@ QString sparseResultBlockingReason(const QJsonObject &record)
     {
         return QStringLiteral("当前稀疏点云没有光束法平差质量标记，请先运行三维重建/空三。");
     }
-    if (quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0) >= 1.0)
+    const double twoViewRatio = quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0);
+    if (twoViewRatio >= kProductionMaxTwoViewRatio)
     {
-        return QStringLiteral("当前稀疏点云全部为两视 track，质量不足。请先运行正式 SfM/BA 重建。");
+        return QStringLiteral("当前稀疏点云两视 track 占比过高（%1%，生产阈值 %2%），多视约束不足。"
+                              "请检查相机位姿/匹配结果，建议使用调整后的相机或重新运行正式 SfM/BA。")
+            .arg(twoViewRatio * 100.0, 0, 'f', 1)
+            .arg(kProductionMaxTwoViewRatio * 100.0, 0, 'f', 0);
     }
     if (quality.value(QStringLiteral("point_count")).toInt(0) <= 0)
     {
@@ -246,7 +253,7 @@ QString sparseResultWarningText(const QJsonObject &record)
 {
     const QJsonObject quality = qualityObjectFromRecord(record);
     const double twoViewRatio = quality.value(QStringLiteral("two_view_ratio")).toDouble(0.0);
-    if (twoViewRatio >= 0.8)
+    if (twoViewRatio >= kWarningTwoViewRatio)
     {
         return QStringLiteral("两视 track 占比过高：%1%，结果可能不稳定。")
             .arg(twoViewRatio * 100.0, 0, 'f', 1);
