@@ -1,6 +1,8 @@
 #include "SparseCloudPostProcessDialog.h"
 #include "ui_SparseCloudPostProcessDialog.h"
 
+#include "project/SparseResultQuality.h"
+
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
@@ -124,15 +126,22 @@ void SparseCloudPostProcessDialog::setAvailableSparseClouds(const QJsonArray &re
         return;
     }
 
-    m_availableResults = results;
+    QJsonArray filteredResults;
     m_sourceCombo->clear();
     for (const QJsonValue &value : results)
     {
-        const QJsonObject item = value.toObject();
-        const QString label = item.value(QStringLiteral("display_name")).toString(
-            QFileInfo(item.value(QStringLiteral("sparse_cloud_xyz")).toString()).fileName());
-        m_sourceCombo->addItem(label, item.value(QStringLiteral("index")).toInt(-1));
+        const QJsonObject record = value.toObject();
+        if (!xjw::gui::project::isProductionSparseResult(record))
+        {
+            continue;
+        }
+
+        filteredResults.append(record);
+        const QString label = record.value(QStringLiteral("display_name")).toString(
+            QFileInfo(record.value(QStringLiteral("sparse_cloud_xyz")).toString()).fileName());
+        m_sourceCombo->addItem(label, record.value(QStringLiteral("index")).toInt(-1));
     }
+    m_availableResults = filteredResults;
 
     if (m_runButton)
     {

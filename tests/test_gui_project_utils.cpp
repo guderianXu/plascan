@@ -14,6 +14,7 @@
 #include "FeatureMatchingDialog.h"
 #include "InitCameraPoseDialog.h"
 #include "ThreeDReconstructionDialog.h"
+#include "SparseCloudPostProcessDialog.h"
 #include "MapProjectDialog.h"
 #include "BundleAdjustDialog.h"
 #include "ModelDropSupport.h"
@@ -27,6 +28,7 @@
 
 #include <QApplication>
 #include <QComboBox>
+#include <QDialogButtonBox>
 #include <QDir>
 #include <QCheckBox>
 #include <QDoubleSpinBox>
@@ -210,6 +212,36 @@ QString readProjectSourceFile(const QString &relativePath)
         return QString();
     }
     return QString::fromUtf8(file.readAll());
+}
+
+QJsonArray productionSparsePoints()
+{
+    return QJsonArray{
+        QJsonObject{{QStringLiteral("track_len"), 2},
+                    {QStringLiteral("rms_reproj_px"), 0.8}},
+        QJsonObject{{QStringLiteral("track_len"), 3},
+                    {QStringLiteral("rms_reproj_px"), 0.6}},
+        QJsonObject{{QStringLiteral("track_len"), 4},
+                    {QStringLiteral("rms_reproj_px"), 0.7}}
+    };
+}
+
+QJsonObject sparseResultRecord(int index,
+                               const QString &displayName,
+                               const QString &operation,
+                               const QString &operationDisplayName,
+                               int sparsePointCount,
+                               const QJsonObject &quality)
+{
+    QJsonObject record{
+        {QStringLiteral("index"), index},
+        {QStringLiteral("display_name"), displayName},
+        {QStringLiteral("operation"), operation},
+        {QStringLiteral("operation_display_name"), operationDisplayName},
+        {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("E:/tmp/%1.xyz").arg(displayName)},
+        {QStringLiteral("sparse_point_count"), sparsePointCount}
+    };
+    return xjw::gui::project::mergeSparseQualityIntoRecord(record, quality);
 }
 
 } // namespace
@@ -486,6 +518,152 @@ TEST(SparseResultQualityTest, LegacyTriangulationRecordsAreShownAsPairwisePrevie
     EXPECT_TRUE(xjw::gui::project::isPairwisePreviewSparseResult(legacyRecord));
     EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("triangulation")),
               QStringLiteral("两视预览云"));
+}
+
+TEST(SparseCloudPostProcessDialogTest, ListsOnlyProductionSparseInputs)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SparseCloudPostProcessDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+    EXPECT_TRUE(source.contains(QStringLiteral("isProductionSparseResult(record)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("continue;")));
+    EXPECT_FALSE(source.contains(QStringLiteral("isPairwisePreviewSparseResult(record) &&")));
+}
+
+TEST(SparseCloudPostProcessDialogTest, FiltersPreviewRecordsAndKeepsSettingsAligned)
+{
+    const QJsonObject previewQuality = xjw::gui::project::buildSparseQualityMetadata(
+        QJsonArray{
+            QJsonObject{{QStringLiteral("track_len"), 2},
+                        {QStringLiteral("rms_reproj_px"), 1.0}},
+            QJsonObject{{QStringLiteral("track_len"), 2},
+                        {QStringLiteral("rms_reproj_px"), 1.2}}
+        },
+        2,
+        false,
+        xjw::gui::project::kSparseResultKindPairwisePreview);
+    const QJsonObject sfmQuality = xjw::gui::project::buildSparseQualityMetadata(
+        productionSparsePoints(),
+        3,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+    const QJsonObject postprocessQuality = xjw::gui::project::buildSparseQualityMetadata(
+        productionSparsePoints(),
+        3,
+        true,
+        xjw::gui::project::kSparseResultKindSparsePostprocess,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction,
+        QStringLiteral("sfm-11"));
+
+    const QJsonObject previewRecord = sparseResultRecord(7,
+                                                         QStringLiteral("preview"),
+                                                         QStringLiteral("triangulation"),
+                                                         QStringLiteral("两视预览云"),
+                                                         120,
+                                                         previewQuality);
+    const QJsonObject sfmRecord = sparseResultRecord(11,
+                                                     QStringLiteral("sfm"),
+                                                     QStringLiteral("workflow_aerial_triangulation"),
+                                                     QStringLiteral("空中三角测量"),
+                                                     420,
+                                                     sfmQuality);
+    const QJsonObject postprocessRecord = sparseResultRecord(13,
+                                                             QStringLiteral("postprocess"),
+                                                             QStringLiteral("sparse_postprocess"),
+                                                             QStringLiteral("稀疏云后处理"),
+                                                             260,
+                                                             postprocessQuality);
+
+    ASSERT_FALSE(xjw::gui::project::isProductionSparseResult(previewRecord));
+    ASSERT_TRUE(xjw::gui::project::isProductionSparseResult(sfmRecord));
+    ASSERT_TRUE(xjw::gui::project::isProductionSparseResult(postprocessRecord));
+
+    SparseCloudPostProcessDialog dialog;
+    auto *sourceCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_sourceCombo"));
+    auto *statsLabel = dialog.findChild<QLabel *>(QStringLiteral("m_statsLabel"));
+    auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+    ASSERT_NE(sourceCombo, nullptr);
+    ASSERT_NE(statsLabel, nullptr);
+    ASSERT_NE(buttonBox, nullptr);
+    QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok);
+    ASSERT_NE(okButton, nullptr);
+
+    dialog.setAvailableSparseClouds(QJsonArray{previewRecord, sfmRecord, postprocessRecord});
+
+    ASSERT_EQ(sourceCombo->count(), 2);
+    EXPECT_EQ(sourceCombo->itemData(0).toInt(), 11);
+    EXPECT_EQ(sourceCombo->itemData(1).toInt(), 13);
+    for (int i = 0; i < sourceCombo->count(); ++i)
+    {
+        EXPECT_NE(sourceCombo->itemData(i).toInt(), 7);
+    }
+    EXPECT_TRUE(okButton->isEnabled());
+    EXPECT_EQ(sourceCombo->currentIndex(), 0);
+    EXPECT_TRUE(statsLabel->text().contains(QStringLiteral("420 个三维点")));
+    EXPECT_TRUE(statsLabel->text().contains(QStringLiteral("空中三角测量")));
+
+    QJsonObject runSettings;
+    QObject::connect(&dialog,
+                     &SparseCloudPostProcessDialog::runRequested,
+                     [&runSettings](const QJsonObject &settings)
+                     {
+                         runSettings = settings;
+                     });
+    okButton->click();
+    EXPECT_EQ(runSettings.value(QStringLiteral("sourceAtIndex")).toInt(-1), 11);
+
+    sourceCombo->setCurrentIndex(1);
+    EXPECT_TRUE(statsLabel->text().contains(QStringLiteral("260 个三维点")));
+    EXPECT_TRUE(statsLabel->text().contains(QStringLiteral("稀疏云后处理")));
+}
+
+TEST(SparseCloudPostProcessDialogTest, DisablesRunWhenOnlyPreviewSparseInputsExist)
+{
+    const QJsonObject previewQuality = xjw::gui::project::buildSparseQualityMetadata(
+        QJsonArray{
+            QJsonObject{{QStringLiteral("track_len"), 2},
+                        {QStringLiteral("rms_reproj_px"), 0.9}},
+            QJsonObject{{QStringLiteral("track_len"), 2},
+                        {QStringLiteral("rms_reproj_px"), 1.1}}
+        },
+        2,
+        false,
+        xjw::gui::project::kSparseResultKindPairwisePreview);
+    const QJsonObject previewRecord = sparseResultRecord(7,
+                                                         QStringLiteral("preview-only"),
+                                                         QStringLiteral("triangulation"),
+                                                         QStringLiteral("两视预览云"),
+                                                         120,
+                                                         previewQuality);
+    ASSERT_FALSE(xjw::gui::project::isProductionSparseResult(previewRecord));
+
+    SparseCloudPostProcessDialog dialog;
+    auto *sourceCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_sourceCombo"));
+    auto *statsLabel = dialog.findChild<QLabel *>(QStringLiteral("m_statsLabel"));
+    auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+    auto *reprojCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_reprojCheck"));
+    ASSERT_NE(sourceCombo, nullptr);
+    ASSERT_NE(statsLabel, nullptr);
+    ASSERT_NE(buttonBox, nullptr);
+    ASSERT_NE(reprojCheck, nullptr);
+    QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok);
+    ASSERT_NE(okButton, nullptr);
+
+    QJsonObject changedSettings;
+    QObject::connect(&dialog,
+                     &SparseCloudPostProcessDialog::settingsChanged,
+                     [&changedSettings](const QJsonObject &settings)
+                     {
+                         changedSettings = settings;
+                     });
+
+    dialog.setAvailableSparseClouds(QJsonArray{previewRecord});
+
+    EXPECT_EQ(sourceCombo->count(), 0);
+    EXPECT_FALSE(okButton->isEnabled());
+    EXPECT_TRUE(statsLabel->text().isEmpty());
+
+    reprojCheck->setChecked(!reprojCheck->isChecked());
+    EXPECT_EQ(changedSettings.value(QStringLiteral("sourceAtIndex")).toInt(0), -1);
 }
 
 TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)

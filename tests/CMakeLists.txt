@@ -256,6 +256,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SparseCloudPostProcessDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SparseCloudPostProcessDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
