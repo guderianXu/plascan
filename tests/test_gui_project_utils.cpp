@@ -94,6 +94,61 @@ bool projectPoint(const xjw::Camera &camera,
     return true;
 }
 
+QMenu *findTopLevelMenuByTitle(QMenuBar *menuBar, const QString &title)
+{
+    if (!menuBar)
+    {
+        return nullptr;
+    }
+
+    for (QAction *action : menuBar->actions())
+    {
+        if (action && action->menu() && action->menu()->title() == title)
+        {
+            return action->menu();
+        }
+    }
+
+    return nullptr;
+}
+
+QMenu *findSubMenuByTitle(QMenu *menu, const QString &title)
+{
+    if (!menu)
+    {
+        return nullptr;
+    }
+
+    for (QAction *action : menu->actions())
+    {
+        if (action && action->menu() && action->menu()->title() == title)
+        {
+            return action->menu();
+        }
+    }
+
+    return nullptr;
+}
+
+QStringList directActionTexts(QMenu *menu)
+{
+    QStringList texts;
+    if (!menu)
+    {
+        return texts;
+    }
+
+    for (QAction *action : menu->actions())
+    {
+        if (action && !action->isSeparator() && !action->menu())
+        {
+            texts.push_back(action->text());
+        }
+    }
+
+    return texts;
+}
+
 QJsonObject buildImageEntry(const QString &path, const xjw::Camera &camera)
 {
     QJsonObject imageObject;
@@ -464,6 +519,154 @@ TEST(MainMenuTest, TriangulationActionNamesPairwisePreviewCloud)
     ASSERT_NE(action, nullptr);
     EXPECT_TRUE(action->text().contains(QStringLiteral("两视预览云")));
     EXPECT_FALSE(action->text().contains(QStringLiteral("初始稀疏点云")));
+}
+
+TEST(MainMenuTest, SparseReconstructionSeparatesMainFlowAndAdvancedTools)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    ASSERT_NE(menu.detectFeaturesAction(), nullptr);
+    ASSERT_NE(menu.vocabularyOverlapAction(), nullptr);
+    ASSERT_NE(menu.matchFeaturesAction(), nullptr);
+    ASSERT_NE(menu.aerialTriangulationAction(), nullptr);
+    ASSERT_NE(menu.sparseCloudPostProcessAction(), nullptr);
+    ASSERT_NE(menu.viewMatchesAction(), nullptr);
+    ASSERT_NE(menu.buildObsNetworkAction(), nullptr);
+    ASSERT_NE(menu.initCameraPoseAction(), nullptr);
+    ASSERT_NE(menu.triangulateAction(), nullptr);
+    ASSERT_NE(menu.reconBundleAdjustAction(), nullptr);
+
+    EXPECT_EQ(menu.aerialTriangulationAction()->text(), QStringLiteral("空中三角测量..."));
+    EXPECT_EQ(menu.triangulateAction()->text(), QStringLiteral("生成两视预览云..."));
+    EXPECT_FALSE(menu.triangulateAction()->text().contains(QStringLiteral("空中三角")));
+
+    QMenu *reconstructionMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("重建"));
+    ASSERT_NE(reconstructionMenu, nullptr);
+    QMenu *sparseMenu = findSubMenuByTitle(reconstructionMenu, QStringLiteral("稀疏重建"));
+    ASSERT_NE(sparseMenu, nullptr);
+    QMenu *advancedMenu = findSubMenuByTitle(sparseMenu, QStringLiteral("高级工具"));
+    ASSERT_NE(advancedMenu, nullptr);
+
+    const QStringList mainFlowActions = {
+        QStringLiteral("特征点提取"),
+        QStringLiteral("重叠对规划..."),
+        QStringLiteral("连接点匹配"),
+        QStringLiteral("空中三角测量..."),
+        QStringLiteral("稀疏点云后处理...")
+    };
+    const QStringList advancedActions = {
+        QStringLiteral("查看匹配"),
+        QStringLiteral("构建观测网络..."),
+        QStringLiteral("初始化相机位姿..."),
+        QStringLiteral("生成两视预览云..."),
+        QStringLiteral("单独光束法平差...")
+    };
+    EXPECT_EQ(directActionTexts(sparseMenu).join(QStringLiteral("|")),
+              mainFlowActions.join(QStringLiteral("|")));
+    EXPECT_EQ(directActionTexts(advancedMenu).join(QStringLiteral("|")),
+              advancedActions.join(QStringLiteral("|")));
+
+    const QList<QAction *> sparseActions = sparseMenu->actions();
+    ASSERT_GE(sparseActions.size(), 7);
+    EXPECT_TRUE(sparseActions.at(5)->isSeparator());
+    ASSERT_NE(sparseActions.at(6)->menu(), nullptr);
+    EXPECT_EQ(sparseActions.at(6)->menu(), advancedMenu);
+
+    QMenu *toolsMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("工具"));
+    ASSERT_NE(toolsMenu, nullptr);
+    EXPECT_FALSE(directActionTexts(toolsMenu).contains(QStringLiteral("查看匹配")));
+}
+
+TEST(MainMenuTest, UiBackedSparseReconstructionBindsExistingActionsAndKeepsMenuTree)
+{
+    QMainWindow window;
+
+    auto *projectMenu = window.menuBar()->addMenu(QStringLiteral("项目"));
+    projectMenu->setObjectName(QStringLiteral("menuProject"));
+    auto *newProject = new QAction(QStringLiteral("新建项目"), &window);
+    newProject->setObjectName(QStringLiteral("actionNewProject"));
+    projectMenu->addAction(newProject);
+
+    auto makeAction = [&window](const char *objectName, const QString &text) {
+        auto *action = new QAction(text, &window);
+        action->setObjectName(QString::fromLatin1(objectName));
+        return action;
+    };
+
+    QAction *detectFeatures = makeAction("actionDetectFeatures", QStringLiteral("特征点提取"));
+    QAction *vocabularyOverlap = makeAction("actionVocabularyOverlap", QStringLiteral("重叠对规划..."));
+    QAction *matchFeatures = makeAction("actionMatchFeatures", QStringLiteral("连接点匹配"));
+    QAction *aerialTriangulation = makeAction("actionAerialTriangulation", QStringLiteral("空中三角测量..."));
+    QAction *sparseCloudPostProcess =
+        makeAction("actionSparseCloudPostProcess", QStringLiteral("稀疏点云后处理..."));
+    QAction *viewMatches = makeAction("actionViewMatches", QStringLiteral("查看匹配"));
+    QAction *buildObsNetwork = makeAction("actionBuildObsNetwork", QStringLiteral("构建观测网络..."));
+    QAction *initCameraPose = makeAction("actionInitCameraPose", QStringLiteral("初始化相机位姿..."));
+    QAction *triangulate = makeAction("actionTriangulate", QStringLiteral("生成两视预览云..."));
+    QAction *reconBundleAdjust = makeAction("actionReconBundleAdjust", QStringLiteral("单独光束法平差..."));
+    QAction *manualPointCloudPrune = makeAction("actionManualPointCloudPrune", QStringLiteral("手动点云剔除"));
+    QAction *viewWorkflowReport = makeAction("actionViewWorkflowReport", QStringLiteral("查看工作流程报告..."));
+
+    auto *reconstructionMenu = window.menuBar()->addMenu(QStringLiteral("重建"));
+    reconstructionMenu->setObjectName(QStringLiteral("menuReconstruction"));
+    auto *sparseMenu = reconstructionMenu->addMenu(QStringLiteral("稀疏重建"));
+    sparseMenu->setObjectName(QStringLiteral("menuSparseReconstruction"));
+    auto *advancedMenu = new QMenu(QStringLiteral("高级工具"), sparseMenu);
+    advancedMenu->setObjectName(QStringLiteral("menuSparseAdvancedTools"));
+
+    advancedMenu->addAction(viewMatches);
+    advancedMenu->addAction(buildObsNetwork);
+    advancedMenu->addAction(initCameraPose);
+    advancedMenu->addAction(triangulate);
+    advancedMenu->addAction(reconBundleAdjust);
+    sparseMenu->addAction(detectFeatures);
+    sparseMenu->addAction(vocabularyOverlap);
+    sparseMenu->addAction(matchFeatures);
+    sparseMenu->addAction(aerialTriangulation);
+    sparseMenu->addAction(sparseCloudPostProcess);
+    sparseMenu->addSeparator();
+    sparseMenu->addMenu(advancedMenu);
+
+    auto *toolsMenu = window.menuBar()->addMenu(QStringLiteral("工具"));
+    toolsMenu->setObjectName(QStringLiteral("menuTools"));
+    toolsMenu->addAction(manualPointCloudPrune);
+    toolsMenu->addSeparator();
+    toolsMenu->addAction(viewWorkflowReport);
+
+    MainMenu menu(&window);
+
+    EXPECT_EQ(menu.detectFeaturesAction(), detectFeatures);
+    EXPECT_EQ(menu.vocabularyOverlapAction(), vocabularyOverlap);
+    EXPECT_EQ(menu.matchFeaturesAction(), matchFeatures);
+    EXPECT_EQ(menu.aerialTriangulationAction(), aerialTriangulation);
+    EXPECT_EQ(menu.sparseCloudPostProcessAction(), sparseCloudPostProcess);
+    EXPECT_EQ(menu.viewMatchesAction(), viewMatches);
+    EXPECT_EQ(menu.buildObsNetworkAction(), buildObsNetwork);
+    EXPECT_EQ(menu.initCameraPoseAction(), initCameraPose);
+    EXPECT_EQ(menu.triangulateAction(), triangulate);
+    EXPECT_EQ(menu.reconBundleAdjustAction(), reconBundleAdjust);
+    EXPECT_EQ(menu.aerialTriangulationAction()->text(), QStringLiteral("空中三角测量..."));
+
+    const QStringList mainFlowActions = {
+        QStringLiteral("特征点提取"),
+        QStringLiteral("重叠对规划..."),
+        QStringLiteral("连接点匹配"),
+        QStringLiteral("空中三角测量..."),
+        QStringLiteral("稀疏点云后处理...")
+    };
+    const QStringList advancedActions = {
+        QStringLiteral("查看匹配"),
+        QStringLiteral("构建观测网络..."),
+        QStringLiteral("初始化相机位姿..."),
+        QStringLiteral("生成两视预览云..."),
+        QStringLiteral("单独光束法平差...")
+    };
+    EXPECT_EQ(directActionTexts(sparseMenu).join(QStringLiteral("|")),
+              mainFlowActions.join(QStringLiteral("|")));
+    EXPECT_EQ(directActionTexts(advancedMenu).join(QStringLiteral("|")),
+              advancedActions.join(QStringLiteral("|")));
+    EXPECT_FALSE(directActionTexts(toolsMenu).contains(QStringLiteral("查看匹配")));
 }
 
 TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowController)

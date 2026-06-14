@@ -141,15 +141,23 @@
      <property name="title">
       <string>稀疏重建</string>
      </property>
+     <widget class="QMenu" name="menuSparseAdvancedTools">
+      <property name="title">
+       <string>高级工具</string>
+      </property>
+      <addaction name="actionViewMatches"/>
+      <addaction name="actionBuildObsNetwork"/>
+      <addaction name="actionInitCameraPose"/>
+      <addaction name="actionTriangulate"/>
+      <addaction name="actionReconBundleAdjust"/>
+     </widget>
      <addaction name="actionDetectFeatures"/>
      <addaction name="actionVocabularyOverlap"/>
      <addaction name="actionMatchFeatures"/>
-     <addaction name="separator"/>
-     <addaction name="actionBuildObsNetwork"/>
-     <addaction name="actionInitCameraPose"/>
-     <addaction name="actionTriangulate"/>
-     <addaction name="actionReconBundleAdjust"/>
+     <addaction name="actionAerialTriangulation"/>
      <addaction name="actionSparseCloudPostProcess"/>
+     <addaction name="separator"/>
+     <addaction name="menuSparseAdvancedTools"/>
     </widget>
     <widget class="QMenu" name="menuDenseReconstruction">
      <property name="title">
@@ -187,8 +195,6 @@
     <addaction name="menuIntersectionCheck"/>
     <addaction name="separator"/>
     <addaction name="actionManualPointCloudPrune"/>
-    <addaction name="separator"/>
-    <addaction name="actionViewMatches"/>
     <addaction name="separator"/>
     <addaction name="actionViewWorkflowReport"/>
    </widget>
@@ -387,17 +393,22 @@
   </action>
   <action name="actionVocabularyOverlap">
    <property name="text">
-    <string>获取重叠对...</string>
+    <string>重叠对规划...</string>
    </property>
   </action>
   <action name="actionMatchFeatures">
    <property name="text">
-    <string>创建连接点</string>
+    <string>连接点匹配</string>
+   </property>
+  </action>
+  <action name="actionAerialTriangulation">
+   <property name="text">
+    <string>空中三角测量...</string>
    </property>
   </action>
   <action name="actionBuildObsNetwork">
    <property name="text">
-    <string>构建观测网络模型...</string>
+    <string>构建观测网络...</string>
    </property>
   </action>
   <action name="actionInitCameraPose">
@@ -412,7 +423,7 @@
   </action>
   <action name="actionReconBundleAdjust">
    <property name="text">
-    <string>光束法平差优化...</string>
+    <string>单独光束法平差...</string>
    </property>
   </action>
   <action name="actionSparseCloudPostProcess">
@@ -480,7 +491,7 @@
   </action>
   <action name="actionViewMatches">
    <property name="text">
-    <string>连接点查看</string>
+    <string>查看匹配</string>
    </property>
   </action>
   <action name="actionViewWorkflowReport">

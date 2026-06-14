@@ -145,6 +145,7 @@ public:
 
     QAction *buildObsNetworkAction() const;
     QAction *initCameraPoseAction() const;
+    QAction *aerialTriangulationAction() const;
     QAction *triangulateAction() const;
     QAction *reconBundleAdjustAction() const;
     QAction *sparseCloudPostProcessAction() const;
@@ -233,7 +234,8 @@ private:
     // ---- 重建菜单动作 ----
     QAction *m_buildObsNetworkAct{};         ///< 构建观测网络模型
     QAction *m_initCameraPoseAct{};          ///< 初始化相机位姿
-    QAction *m_triangulateAct{};             ///< 三角化
+    QAction *m_aerialTriangulationAct{};     ///< 正式空中三角测量（SfM + BA）
+    QAction *m_triangulateAct{};             ///< 两视预览云三角化
     QAction *m_reconBundleAdjustAct{};       ///< 光束法平差（重建菜单）
     QAction *m_sparseCloudPostProcessAct{};  ///< 稀疏点云后处理
     QAction *m_depthMapEstimateAct{};        ///< 深度图估计

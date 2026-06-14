@@ -85,6 +85,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_detectFeaturesAct = findNamedChild<QAction>(m_mainWindow, "actionDetectFeatures");
         m_vocabularyOverlapAct = findNamedChild<QAction>(m_mainWindow, "actionVocabularyOverlap");
         m_matchFeaturesAct = findNamedChild<QAction>(m_mainWindow, "actionMatchFeatures");
+        m_aerialTriangulationAct = findNamedChild<QAction>(m_mainWindow, "actionAerialTriangulation");
         m_buildObsNetworkAct = findNamedChild<QAction>(m_mainWindow, "actionBuildObsNetwork");
         m_initCameraPoseAct = findNamedChild<QAction>(m_mainWindow, "actionInitCameraPose");
         m_triangulateAct = findNamedChild<QAction>(m_mainWindow, "actionTriangulate");
@@ -257,14 +258,18 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     // ── 稀疏重建 ──
     auto *sparseReconMenu = reconMenu->addMenu(tr("稀疏重建"));
     m_detectFeaturesAct = sparseReconMenu->addAction(tr("特征点提取"));
-    m_vocabularyOverlapAct = sparseReconMenu->addAction(tr("获取重叠对..."));
-    m_matchFeaturesAct  = sparseReconMenu->addAction(tr("创建连接点"));
-    sparseReconMenu->addSeparator();
-    m_buildObsNetworkAct     = sparseReconMenu->addAction(tr("构建观测网络模型..."));
-    m_initCameraPoseAct      = sparseReconMenu->addAction(tr("初始化相机位姿..."));
-    m_triangulateAct         = sparseReconMenu->addAction(tr("生成两视预览云..."));
-    m_reconBundleAdjustAct   = sparseReconMenu->addAction(tr("光束法平差优化..."));
+    m_vocabularyOverlapAct = sparseReconMenu->addAction(tr("重叠对规划..."));
+    m_matchFeaturesAct  = sparseReconMenu->addAction(tr("连接点匹配"));
+    m_aerialTriangulationAct = sparseReconMenu->addAction(tr("空中三角测量..."));
     m_sparseCloudPostProcessAct = sparseReconMenu->addAction(tr("稀疏点云后处理..."));
+
+    sparseReconMenu->addSeparator();
+    auto *advancedSparseMenu = sparseReconMenu->addMenu(tr("高级工具"));
+    m_viewMatchesAct = advancedSparseMenu->addAction(tr("查看匹配"));
+    m_buildObsNetworkAct = advancedSparseMenu->addAction(tr("构建观测网络..."));
+    m_initCameraPoseAct = advancedSparseMenu->addAction(tr("初始化相机位姿..."));
+    m_triangulateAct = advancedSparseMenu->addAction(tr("生成两视预览云..."));
+    m_reconBundleAdjustAct = advancedSparseMenu->addAction(tr("单独光束法平差..."));
 
     // ── 密集重建 ──
     auto *denseReconMenu = reconMenu->addMenu(tr("密集重建"));
@@ -290,8 +295,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     m_intersectionViewResultsAct = intersectionMenu->addAction(tr("查看结果"));
     toolsMenu->addSeparator();
     m_manualPointCloudPruneAct = toolsMenu->addAction(tr("手动点云剔除"));
-    toolsMenu->addSeparator();
-    m_viewMatchesAct = toolsMenu->addAction(tr("连接点查看"));
 
     // 相机格式转换：外部 benchmark/摄影测量相机 -> tsai + image_camera.lis
     toolsMenu->addSeparator();
@@ -444,6 +447,7 @@ QAction *MainMenu::cameraConvertAction() const              { return m_cameraCon
 
 QAction *MainMenu::buildObsNetworkAction() const     { return m_buildObsNetworkAct; }
 QAction *MainMenu::initCameraPoseAction() const      { return m_initCameraPoseAct; }
+QAction *MainMenu::aerialTriangulationAction() const { return m_aerialTriangulationAct; }
 QAction *MainMenu::triangulateAction() const         { return m_triangulateAct; }
 QAction *MainMenu::reconBundleAdjustAction() const   { return m_reconBundleAdjustAct; }
 QAction *MainMenu::sparseCloudPostProcessAction() const { return m_sparseCloudPostProcessAct; }
