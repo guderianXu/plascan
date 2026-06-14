@@ -1359,6 +1359,45 @@ TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
     EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMesh")));
 }
 
+TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataOffersAutoFillOrManualReturn)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("SparsePrerequisiteSummary")));
+    EXPECT_TRUE(source.contains(QStringLiteral("自动补齐缺失步骤")));
+    EXPECT_TRUE(source.contains(QStringLiteral("返回手动处理")));
+    EXPECT_TRUE(source.contains(QStringLiteral("autoGenerateMissingMatches = autoFillMissing")));
+    EXPECT_TRUE(source.contains(QStringLiteral("缺少连接点")));
+
+    const int summaryStart = source.indexOf(
+        QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
+    ASSERT_GE(summaryStart, 0);
+    const int promptStart = source.indexOf(
+        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        summaryStart);
+    ASSERT_GT(promptStart, summaryStart);
+    const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("ProjectIO::findFeatureForImage")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("collectMatchedImageNamePairs")));
+    EXPECT_FALSE(summaryBody.contains(QStringLiteral("summary.hasFeatures = !suffixes.isEmpty()")));
+    EXPECT_FALSE(summaryBody.contains(QStringLiteral("summary.hasMatches = !matches.isEmpty()")));
+    EXPECT_FALSE(summaryBody.contains(QStringLiteral("meta.value(QStringLiteral(\"ipmatch_results\"))")));
+
+    const int sparseStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
+    ASSERT_GE(sparseStart, 0);
+    const int threeDStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startThreeDReconstructionWorkflow"),
+        sparseStart);
+    ASSERT_GT(threeDStart, sparseStart);
+    const QString sparseBody = source.mid(sparseStart, threeDStart - sparseStart);
+    EXPECT_TRUE(sparseBody.contains(QStringLiteral("opts.projectMeta = pm->currentMeta()")));
+    EXPECT_FALSE(sparseBody.contains(QStringLiteral("opts.projectMeta = pm->coreProjectMeta()")));
+}
+
 TEST(MainWindowProgressTest, FeatureMatchProgressExpandsAllFeatureModeAndClampsDisplay)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));

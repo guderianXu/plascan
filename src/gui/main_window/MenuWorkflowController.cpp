@@ -36,6 +36,7 @@
 #include <QJsonDocument>
 #include <QMainWindow>
 #include <QMessageBox>
+#include <QPushButton>
 #include <QSet>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrent>
@@ -262,6 +263,141 @@ QStringList MenuWorkflowController::getProjectImages() const
     if (images.isEmpty()) images = m_projectManager->getImagesByCategory(QStringLiteral("Photos"));
     if (images.isEmpty()) images = m_projectManager->getAllImages();
     return images;
+}
+
+MenuWorkflowController::SparsePrerequisiteSummary
+MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
+                                                     const QJsonObject &meta,
+                                                     const QString &projectPath) const
+{
+    SparsePrerequisiteSummary summary;
+    summary.imageCount = images.size();
+
+    int availableFeatureCount = 0;
+    for (const QString &imagePath : images)
+    {
+        if (!ProjectIO::findFeatureForImage(projectPath, imagePath).isEmpty())
+        {
+            ++availableFeatureCount;
+        }
+    }
+    summary.hasFeatures = images.isEmpty() || availableFeatureCount == images.size();
+
+    auto nameAliases = [](const QString &pathOrName) -> QStringList
+    {
+        const QFileInfo info(pathOrName);
+        QStringList aliases;
+        const QString fileName = info.fileName().toCaseFolded();
+        const QString baseName = info.completeBaseName().toCaseFolded();
+        const QString rawName = pathOrName.trimmed().toCaseFolded();
+        if (!fileName.isEmpty())
+        {
+            aliases.append(fileName);
+        }
+        if (!baseName.isEmpty() && !aliases.contains(baseName))
+        {
+            aliases.append(baseName);
+        }
+        if (!rawName.isEmpty() && !aliases.contains(rawName))
+        {
+            aliases.append(rawName);
+        }
+        return aliases;
+    };
+
+    auto matchPairKey = [](const QString &left, const QString &right) -> QString
+    {
+        if (left.isEmpty() || right.isEmpty() || left == right)
+        {
+            return QString();
+        }
+        return (left < right)
+            ? (left + QStringLiteral("\n") + right)
+            : (right + QStringLiteral("\n") + left);
+    };
+
+    QSet<QString> matchedPairKeys;
+    const QVector<QPair<QString, QString>> matchedPairs =
+        xjw::gui::project::collectMatchedImageNamePairs(projectPath, meta);
+    for (const auto &pair : matchedPairs)
+    {
+        const QStringList leftAliases = nameAliases(pair.first);
+        const QStringList rightAliases = nameAliases(pair.second);
+        for (const QString &left : leftAliases)
+        {
+            for (const QString &right : rightAliases)
+            {
+                const QString key = matchPairKey(left, right);
+                if (!key.isEmpty())
+                {
+                    matchedPairKeys.insert(key);
+                }
+            }
+        }
+    }
+
+    int requiredPairCount = 0;
+    int coveredPairCount = 0;
+    for (int i = 0; i < images.size(); ++i)
+    {
+        const QStringList leftAliases = nameAliases(images.at(i));
+        for (int j = i + 1; j < images.size(); ++j)
+        {
+            const QStringList rightAliases = nameAliases(images.at(j));
+            bool pairCovered = false;
+            for (const QString &left : leftAliases)
+            {
+                for (const QString &right : rightAliases)
+                {
+                    if (matchedPairKeys.contains(matchPairKey(left, right)))
+                    {
+                        pairCovered = true;
+                        break;
+                    }
+                }
+                if (pairCovered)
+                {
+                    break;
+                }
+            }
+
+            ++requiredPairCount;
+            if (pairCovered)
+            {
+                ++coveredPairCount;
+            }
+        }
+    }
+    summary.hasMatches = requiredPairCount == 0 || coveredPairCount == requiredPairCount;
+
+    if (!summary.hasFeatures)
+    {
+        summary.missingMessages.append(QStringLiteral("缺少特征：当前影像特征不完整，无法直接用于空三。"));
+    }
+    if (!summary.hasMatches)
+    {
+        summary.missingMessages.append(QStringLiteral("缺少连接点：当前影像对匹配不完整，无法直接用于空三。"));
+    }
+    return summary;
+}
+
+bool MenuWorkflowController::confirmAutoFillMissingSparseInputs(const SparsePrerequisiteSummary &summary) const
+{
+    if (summary.missingMessages.isEmpty())
+    {
+        return true;
+    }
+
+    const QString message = QStringLiteral("空中三角测量缺少上游数据：\n\n%1\n\n是否自动补齐缺失步骤？")
+        .arg(summary.missingMessages.join(QStringLiteral("\n")));
+    QMessageBox box(m_mainWindow);
+    box.setIcon(QMessageBox::Question);
+    box.setWindowTitle(QStringLiteral("空中三角测量"));
+    box.setText(message);
+    QPushButton *autoFill = box.addButton(QStringLiteral("自动补齐缺失步骤"), QMessageBox::AcceptRole);
+    box.addButton(QStringLiteral("返回手动处理"), QMessageBox::RejectRole);
+    box.exec();
+    return box.clickedButton() == autoFill;
 }
 
 void MenuWorkflowController::openFeatureExtractionDialog()
@@ -740,6 +876,16 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         return;
     }
 
+    const SparsePrerequisiteSummary prereq = summarizeSparsePrerequisites(
+        images,
+        m_projectManager->currentMeta(),
+        m_projectManager->currentProjectPath());
+    const bool autoFillMissing = confirmAutoFillMissingSparseInputs(prereq);
+    if (!autoFillMissing && !prereq.missingMessages.isEmpty())
+    {
+        return;
+    }
+
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
     if (outputRoot.isEmpty())
     {
@@ -751,9 +897,10 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
 
     auto *pm = m_projectManager;
     xjw::gui::SFMServiceOptions opts;
+    opts.autoGenerateMissingMatches = autoFillMissing;
     opts.images = images;
     opts.plascanPath = pm->currentProjectPath();
-    opts.projectMeta = pm->coreProjectMeta();
+    opts.projectMeta = pm->currentMeta();
     opts.outputDir = QDir(outputRoot).filePath(QStringLiteral("sfm_sparse"));
     const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
     opts.threads = workflowThreads;

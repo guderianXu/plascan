@@ -19,6 +19,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QPointer>
+#include <QStringList>
 #include "LayerRenderer.h"
 
 class QMainWindow;
@@ -101,6 +102,19 @@ private:
     /// 按约定优先顺序从当前项目中收集影像绝对路径列表。
     /// @return 当前项目的影像绝对路径列表；若未打开项目则返回空列表。
     QStringList getProjectImages() const;
+
+    struct SparsePrerequisiteSummary
+    {
+        int imageCount = 0;
+        bool hasFeatures = false;
+        bool hasMatches = false;
+        QStringList missingMessages;
+    };
+
+    SparsePrerequisiteSummary summarizeSparsePrerequisites(const QStringList &images,
+                                                           const QJsonObject &meta,
+                                                           const QString &projectPath) const;
+    bool confirmAutoFillMissingSparseInputs(const SparsePrerequisiteSummary &summary) const;
 
     /// 在后台线程中启动 SuperPoint 特征提取任务。
     /// @param config 配置参数 JSON，如设备、阈值和输出目录。
