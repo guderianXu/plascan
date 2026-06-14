@@ -1306,6 +1306,59 @@ TEST(MenuWorkflowControllerTest, DenseStageAdvancesOnMvsSuccessWithoutRequiringC
     EXPECT_TRUE(source.contains(QStringLiteral("startThreeDReconstructionMeshStage(settings)")));
 }
 
+TEST(AerialTriangulationWorkflowTest, MainWindowWiresSparseOnlyAerialTriangulationAction)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int actionIndex = source.indexOf(QStringLiteral("aerialTriangulationAction()"));
+    ASSERT_GE(actionIndex, 0);
+    const int nextMenuAction = source.indexOf(QStringLiteral("if (m_mainMenu->"), actionIndex + 1);
+    ASSERT_GT(nextMenuAction, actionIndex);
+    const QString connectBlock = source.mid(actionIndex, nextMenuAction - actionIndex);
+
+    EXPECT_TRUE(connectBlock.contains(QStringLiteral("connect(m_mainMenu->aerialTriangulationAction()"))
+                || connectBlock.contains(QStringLiteral("aerialTriangulationAction()")));
+    EXPECT_TRUE(connectBlock.contains(QStringLiteral("&QAction::triggered")));
+    EXPECT_TRUE(connectBlock.contains(QStringLiteral("m_menuWorkflowController")));
+    EXPECT_TRUE(connectBlock.contains(QStringLiteral("&MenuWorkflowController::openAerialTriangulationDialog")));
+    EXPECT_FALSE(connectBlock.contains(QStringLiteral("openThreeDReconstructionDialog")));
+}
+
+TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("openAerialTriangulationDialog")));
+    EXPECT_TRUE(header.contains(QStringLiteral("startAerialTriangulationWorkflow")));
+    EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::AerialTriangulation")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("source\"] = QStringLiteral(\"aerial_triangulation\")"))
+                || source.contains(QStringLiteral("source\", QStringLiteral(\"aerial_triangulation\")")));
+
+    const int sparseStart = source.indexOf(QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
+    ASSERT_GE(sparseStart, 0);
+    const int nextFunction = source.indexOf(QStringLiteral("void MenuWorkflowController::startThreeDReconstructionWorkflow"),
+                                            sparseStart);
+    ASSERT_GT(nextFunction, sparseStart);
+    const QString sparseBlock = source.mid(sparseStart, nextFunction - sparseStart);
+    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("SFMService::run(opts)")));
+    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("appendAtResult")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionWorkflow")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionDenseStage")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionDenseRefineStage")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionMeshStage")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startGenerateDenseCloudAsync")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startDenseCloudRefineAsync")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMeshReconstructionAsync")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startDenseMatch")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMVS")));
+    EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMesh")));
+}
+
 TEST(MainWindowProgressTest, FeatureMatchProgressExpandsAllFeatureModeAndClampsDisplay)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));

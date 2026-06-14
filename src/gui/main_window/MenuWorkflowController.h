@@ -41,6 +41,7 @@ public:
     DialogSettingStore *m_mapSetting = nullptr;
     DialogSettingStore *m_dcSetting = nullptr;
     DialogSettingStore *m_threeDSetting = nullptr;
+    DialogSettingStore *m_aerialTriangulationSetting = nullptr;
 
     /// 构造菜单业务流程控制器。
     /// @param mainWindow 父主窗口，用于创建模态或非模态对话框。
@@ -67,6 +68,9 @@ public slots:
 
     /// 打开一键三维重建对话框。
     void openThreeDReconstructionDialog();
+
+    /// 打开空中三角测量对话框。
+    void openAerialTriangulationDialog();
 
     /// 打开影像重叠度分析对话框。
     void openOverlapAnalysisDialog();
@@ -103,6 +107,7 @@ private:
     /// @param inputs 待处理的影像路径列表。
     void runSuperPointExtraction(const QJsonObject &config, const QStringList &inputs);
 
+    void startAerialTriangulationWorkflow(const QJsonObject &settings);
     void startThreeDReconstructionWorkflow(const QJsonObject &settings);
     void startThreeDReconstructionDenseStage(const QJsonObject &settings);
     void startThreeDReconstructionDenseRefineStage(const QJsonObject &settings);

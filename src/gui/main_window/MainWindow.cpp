@@ -378,6 +378,11 @@ void MainWindow::setupProjectManager()
                 connect(m_mainMenu->vocabularyOverlapAction(), &QAction::triggered,
                         m_menuWorkflowController, &MenuWorkflowController::openVocabularyOverlapDialog);
             }
+            if (m_mainMenu->aerialTriangulationAction())
+            {
+                connect(m_mainMenu->aerialTriangulationAction(), &QAction::triggered,
+                        m_menuWorkflowController, &MenuWorkflowController::openAerialTriangulationDialog);
+            }
             if (m_mainMenu->featureVisualizationAction())
             {
                 connect(m_mainMenu->featureVisualizationAction(), &QAction::triggered,

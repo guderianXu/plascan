@@ -675,6 +675,236 @@ void MenuWorkflowController::openThreeDReconstructionDialog()
     dlg->exec();
 }
 
+void MenuWorkflowController::openAerialTriangulationDialog()
+{
+    if (!m_mainWindow)
+    {
+        return;
+    }
+
+    auto *dlg = new ThreeDReconstructionDialog(m_mainWindow);
+    dlg->setAttribute(Qt::WA_DeleteOnClose);
+    dlg->setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation);
+
+    const QStringList images = getProjectImages();
+    dlg->setImageCount(images.size());
+
+    if (!m_aerialTriangulationSetting)
+    {
+        m_aerialTriangulationSetting = new DialogSettingStore(DialogSettingKeys::AerialTriangulation, this);
+    }
+
+    if (m_projectManager)
+    {
+        const QString projectPath = m_projectManager->currentProjectPath();
+        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+        if (!assetsDir.isEmpty())
+        {
+            dlg->setDefaultOutputDir(QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation")));
+        }
+        m_aerialTriangulationSetting->setProjectPath(projectPath);
+        dlg->applySettings(m_aerialTriangulationSetting->load());
+    }
+
+    connect(dlg, &ThreeDReconstructionDialog::settingsChanged, this, [this](const QJsonObject &settings) {
+        if (m_aerialTriangulationSetting)
+        {
+            m_aerialTriangulationSetting->save(settings);
+        }
+    });
+    connect(dlg, &ThreeDReconstructionDialog::runRequested, this, [this](const QJsonObject &settings) {
+        if (m_aerialTriangulationSetting)
+        {
+            m_aerialTriangulationSetting->save(settings);
+        }
+        startAerialTriangulationWorkflow(settings);
+    });
+
+    dlg->exec();
+}
+
+void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject &settings)
+{
+    if (!m_projectManager)
+    {
+        QMessageBox::warning(m_mainWindow, QStringLiteral("空中三角测量"), QStringLiteral("请先打开项目"));
+        return;
+    }
+
+    const QStringList images = getProjectImages();
+    if (images.size() < 2)
+    {
+        QMessageBox::warning(m_mainWindow,
+                             QStringLiteral("空中三角测量"),
+                             QStringLiteral("至少需要 2 张影像才能进行空中三角测量。"));
+        return;
+    }
+
+    QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
+    if (outputRoot.isEmpty())
+    {
+        const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
+        outputRoot = QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation"));
+    }
+    outputRoot = QDir::cleanPath(outputRoot);
+    QDir().mkpath(outputRoot);
+
+    auto *pm = m_projectManager;
+    xjw::gui::SFMServiceOptions opts;
+    opts.images = images;
+    opts.plascanPath = pm->currentProjectPath();
+    opts.projectMeta = pm->coreProjectMeta();
+    opts.outputDir = QDir(outputRoot).filePath(QStringLiteral("sfm_sparse"));
+    const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
+    opts.threads = workflowThreads;
+    opts.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
+    opts.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
+    opts.featureGrayscaleMax = 1.0f;
+    opts.cudaParallelPairs = opts.device == QStringLiteral("cpu")
+        ? 1
+        : std::clamp(std::max(1, workflowThreads / 4), 1, 2);
+
+    const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
+    if (quality == QStringLiteral("fast"))
+    {
+        opts.quality = 1;
+    }
+    else
+    {
+        opts.quality = 3;
+    }
+
+    opts.progressFn = [pm](const QString &stage, int percent) {
+        QMetaObject::invokeMethod(pm, [pm, stage, percent]() {
+            emit pm->atProgressChanged(QStringLiteral("空中三角测量: %1").arg(stage), percent);
+        }, Qt::QueuedConnection);
+    };
+    opts.pairMatchedFn = [pm](const QString &img0,
+                              const QString &img1,
+                              const QString &matchPath,
+                              int numMatches) {
+        QMetaObject::invokeMethod(pm, [pm, img0, img1, matchPath, numMatches]() {
+            emit pm->matchPairReady(img0, img1, matchPath, numMatches);
+        }, Qt::QueuedConnection);
+    };
+
+    auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    pm->setAtCancelFlag(cancelFlag);
+    opts.cancelFlag = cancelFlag;
+
+    emit pm->atProgressChanged(QStringLiteral("空中三角测量: 启动 SfM/BA..."), 0);
+
+    const QStringList sfmImages = images;
+    const QString sfmOutputDir = opts.outputDir;
+    const QString assetsDir = ProjectIO::projectAssetsDir(pm->currentProjectPath());
+    (void)QtConcurrent::run([pm, opts, sfmImages, sfmOutputDir, assetsDir]() {
+        xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(opts);
+
+        if (result.success && !assetsDir.isEmpty())
+        {
+            QJsonObject report;
+            report[QStringLiteral("type")] = QStringLiteral("aerial_triangulation_sfm");
+            report[QStringLiteral("timestamp")] = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+            report[QStringLiteral("num_images")] = sfmImages.size();
+            report[QStringLiteral("num_registered")] = result.numRegisteredImages;
+            report[QStringLiteral("num_points_3d")] = result.numPoints3D;
+            report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
+            report[QStringLiteral("output_dir")] = sfmOutputDir;
+            report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
+            writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
+                                              QStringLiteral("aerial_triangulation_sfm_report.json"),
+                                              QStringLiteral("aerial_triangulation_sfm_report_history.json"),
+                                              report);
+        }
+
+        QMetaObject::invokeMethod(pm, [pm, result = std::move(result), sfmImages, sfmOutputDir]() mutable {
+            for (const auto &sp : result.newSpFiles)
+            {
+                pm->appendIpfindResult(sp.imagePath, sp.spPath, QJsonObject());
+            }
+            for (const auto &match : result.newMatchFiles)
+            {
+                pm->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
+            }
+
+            if (!result.pendingCamUpdates.isEmpty())
+            {
+                int updated = 0;
+                QString err;
+                if (!pm->setImageCameras(result.pendingCamUpdates, &updated, &err))
+                {
+                    LOG_WARN(QStringLiteral("空中三角测量: SFM 相机写回失败: %1").arg(err));
+                }
+            }
+
+            int registeredImageCount = result.numRegisteredImages;
+            QJsonObject resultRecordExtra = result.resultRecordExtra;
+            QString sparseBlockingReason = QStringLiteral("SFM 未生成可用的正式稀疏点云。");
+            if (result.success && !result.sparseCloudPath.isEmpty())
+            {
+                const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
+                QStringList registeredImages;
+                registeredImages.reserve(sfmImages.size());
+                for (const QString &imagePath : sfmImages)
+                {
+                    const QString normalized = xjw::gui::project::normalizePath(imagePath);
+                    if (registeredCameraKeys.contains(normalized))
+                    {
+                        registeredImages.append(normalized);
+                    }
+                }
+                if (registeredImages.size() < registeredCameraKeys.size())
+                {
+                    for (const QString &imagePath : registeredCameraKeys)
+                    {
+                        if (!registeredImages.contains(imagePath))
+                        {
+                            registeredImages.append(imagePath);
+                        }
+                    }
+                }
+                registeredImageCount = registeredImages.size();
+
+                resultRecordExtra["source"] = QStringLiteral("aerial_triangulation");
+                pm->appendAtResult(result.sparseCloudPath,
+                                   result.numPoints3D,
+                                   registeredImages,
+                                   sfmOutputDir,
+                                   resultRecordExtra);
+                sparseBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
+            }
+
+            emit pm->atProgressFinished(result.success);
+            if (!result.success)
+            {
+                QMessageBox::warning(nullptr,
+                                     QStringLiteral("空中三角测量"),
+                                     result.errorMessage.isEmpty()
+                                         ? QStringLiteral("空中三角测量失败。")
+                                         : result.errorMessage);
+                return;
+            }
+
+            if (!xjw::gui::project::isProductionSparseResult(resultRecordExtra))
+            {
+                QMessageBox::warning(nullptr,
+                                     QStringLiteral("空中三角测量"),
+                                     sparseBlockingReason.isEmpty()
+                                         ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
+                                         : sparseBlockingReason);
+                return;
+            }
+
+            QMessageBox::information(nullptr,
+                                     QStringLiteral("空中三角测量"),
+                                     QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3")
+                                         .arg(registeredImageCount)
+                                         .arg(result.numPoints3D)
+                                         .arg(result.sparseCloudPath));
+        }, Qt::QueuedConnection);
+    });
+}
+
 void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject &settings)
 {
     if (!m_projectManager)
