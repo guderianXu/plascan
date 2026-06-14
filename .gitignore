@@ -19,3 +19,4 @@ testData/photogrammetry_benchmarks/
 testData/火星数据/
 build*
 docker/debs/
+.worktrees/
