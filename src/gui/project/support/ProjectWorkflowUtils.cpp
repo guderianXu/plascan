@@ -159,7 +159,7 @@ QString sparseOperationDisplayName(const QString &operation)
 {
     if (operation == QLatin1String("triangulation"))
     {
-        return QStringLiteral("初始稀疏点云");
+        return QStringLiteral("两视预览云");
     }
     if (operation == QLatin1String("outlier_removal"))
     {

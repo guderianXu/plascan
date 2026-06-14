@@ -1,6 +1,7 @@
 #include "DataTreeWidget.h"
 
 #include "ui_DataTreeWidget.h"
+#include "ProjectWorkflowUtils.h"
 
 #include <QTreeView>
 #include <QStandardItemModel>
@@ -330,15 +331,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         const QString operation = obj.value(QStringLiteral("operation")).toString(QStringLiteral("triangulation"));
         QString operationLabel = obj.value(QStringLiteral("operation_display_name")).toString();
         if (operationLabel.isEmpty()) {
-            if (operation == QStringLiteral("triangulation")) {
-                operationLabel = QStringLiteral("初始稀疏点云");
-            } else if (operation == QStringLiteral("outlier_removal")) {
-                operationLabel = QStringLiteral("离群点剔除");
-            } else if (operation == QStringLiteral("sparse_refine")) {
-                operationLabel = QStringLiteral("稀疏点云精修");
-            } else {
-                operationLabel = QStringLiteral("稀疏点云");
-            }
+            operationLabel = xjw::gui::project::sparseOperationDisplayName(operation);
         }
 
         QString name = QStringLiteral("#%1 %2").arg(i).arg(operationLabel);

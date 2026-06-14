@@ -262,7 +262,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     sparseReconMenu->addSeparator();
     m_buildObsNetworkAct     = sparseReconMenu->addAction(tr("构建观测网络模型..."));
     m_initCameraPoseAct      = sparseReconMenu->addAction(tr("初始化相机位姿..."));
-    m_triangulateAct         = sparseReconMenu->addAction(tr("生成初始稀疏点云..."));
+    m_triangulateAct         = sparseReconMenu->addAction(tr("生成两视预览云..."));
     m_reconBundleAdjustAct   = sparseReconMenu->addAction(tr("光束法平差优化..."));
     m_sparseCloudPostProcessAct = sparseReconMenu->addAction(tr("稀疏点云后处理..."));
 

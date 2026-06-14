@@ -421,6 +421,18 @@ TEST(SparseResultQualityTest, RejectsFormalSfmWhenAlmostAllTracksAreTwoView)
     EXPECT_TRUE(xjw::gui::project::sparseResultBlockingReason(quality).contains(QStringLiteral("两视")));
 }
 
+TEST(SparseResultQualityTest, LegacyTriangulationRecordsAreShownAsPairwisePreview)
+{
+    const QJsonObject legacyRecord{
+        {QStringLiteral("operation"), QStringLiteral("triangulation")},
+        {QStringLiteral("source"), QStringLiteral("triangulation")}
+    };
+
+    EXPECT_TRUE(xjw::gui::project::isPairwisePreviewSparseResult(legacyRecord));
+    EXPECT_EQ(xjw::gui::project::sparseOperationDisplayName(QStringLiteral("triangulation")),
+              QStringLiteral("两视预览云"));
+}
+
 TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
 {
     QMainWindow window;
@@ -441,6 +453,17 @@ TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
         }
     }
     EXPECT_TRUE(foundInToolsMenu);
+}
+
+TEST(MainMenuTest, TriangulationActionNamesPairwisePreviewCloud)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.triangulateAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->text().contains(QStringLiteral("两视预览云")));
+    EXPECT_FALSE(action->text().contains(QStringLiteral("初始稀疏点云")));
 }
 
 TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowController)

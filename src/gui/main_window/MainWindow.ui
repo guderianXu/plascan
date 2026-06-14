@@ -407,7 +407,7 @@
   </action>
   <action name="actionTriangulate">
    <property name="text">
-    <string>生成初始稀疏点云...</string>
+    <string>生成两视预览云...</string>
    </property>
   </action>
   <action name="actionReconBundleAdjust">
