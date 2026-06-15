@@ -23,9 +23,9 @@
 ```bash
 git switch main
 git pull --ff-only origin main
-git tag -a v1.1.0-alpha.2 -m "PlaScan v1.1.0-alpha.2"
+git tag -a v1.1.0-alpha.3 -m "PlaScan v1.1.0-alpha.3"
 git push origin main
-git push origin v1.1.0-alpha.2
+git push origin v1.1.0-alpha.3
 ```
 
 ## Release 文档
