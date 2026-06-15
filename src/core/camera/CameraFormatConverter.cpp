@@ -25,6 +25,7 @@ struct CameraRecord
     std::array<double, 9> k{{0.0, 0.0, 0.0,
                              0.0, 0.0, 0.0,
                              0.0, 0.0, 0.0}};
+    std::array<double, 5> distortion{{0.0, 0.0, 0.0, 0.0, 0.0}};
     std::array<double, 9> rotationCameraToWorld{{1.0, 0.0, 0.0,
                                                  0.0, 1.0, 0.0,
                                                  0.0, 0.0, 1.0}};
@@ -52,6 +53,7 @@ struct MetashapeSensor
     std::array<double, 9> k{{0.0, 0.0, 0.0,
                              0.0, 0.0, 0.0,
                              0.0, 0.0, 1.0}};
+    std::array<double, 5> distortion{{0.0, 0.0, 0.0, 0.0, 0.0}};
     std::vector<std::string> warnings;
 };
 
@@ -1052,10 +1054,17 @@ std::unordered_map<int, MetashapeSensor> parseMetashapeSensors(const std::string
             0.0, fy, height * 0.5 + cy,
             0.0, 0.0, 1.0
         }};
+        sensor.distortion = std::array<double, 5>{{
+            xmlDoubleOr(calibration, "k1", 0.0),
+            xmlDoubleOr(calibration, "k2", 0.0),
+            xmlDoubleOr(calibration, "k3", 0.0),
+            xmlDoubleOr(calibration, "p1", 0.0),
+            xmlDoubleOr(calibration, "p2", 0.0)
+        }};
 
-        if (xmlHasNonZeroTags(calibration, {"k1", "k2", "k3", "k4", "p1", "p2", "b1", "b2"}))
+        if (xmlHasNonZeroTags(calibration, {"k4", "b1", "b2"}))
         {
-            sensor.warnings.push_back("Metashape distortion terms are not exported to PlaScan tsai output");
+            sensor.warnings.push_back("unsupported Metashape calibration terms are not exported to PlaScan tsai output");
         }
         warnIfUnsupportedSkew(sensor.k, &sensor.warnings);
         sensors.emplace(std::stoi(*idText), sensor);
@@ -1118,6 +1127,7 @@ std::optional<CameraRecord> parseMetashapeCameraBlock(
     CameraRecord record;
     record.imageName = metashapeLabelBasename(*label);
     record.k = sensorIt->second.k;
+    record.distortion = sensorIt->second.distortion;
     record.warnings = sensorIt->second.warnings;
     record.rotationCameraToWorld = std::array<double, 9>{{
         values[0], values[1], values[2],
@@ -1411,11 +1421,11 @@ void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
     out << "v_direction = 0 1 0\n";
     out << "w_direction = 0 0 1\n";
     out << "pitch = 1\n";
-    out << "k1 = 0\n";
-    out << "k2 = 0\n";
-    out << "k3 = 0\n";
-    out << "p1 = 0\n";
-    out << "p2 = 0\n";
+    out << "k1 = " << formatNumber(record.distortion[0]) << "\n";
+    out << "k2 = " << formatNumber(record.distortion[1]) << "\n";
+    out << "k3 = " << formatNumber(record.distortion[2]) << "\n";
+    out << "p1 = " << formatNumber(record.distortion[3]) << "\n";
+    out << "p2 = " << formatNumber(record.distortion[4]) << "\n";
     out << "C = " << formatNumber(record.center[0]) << " "
         << formatNumber(record.center[1]) << " "
         << formatNumber(record.center[2]) << "\n";

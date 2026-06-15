@@ -205,7 +205,7 @@ class CameraConvertCliTest(unittest.TestCase):
             self.assertEqual(summary["input_format"], "metashape-xml")
             self.assertEqual(summary["camera_count"], 1)
 
-    def test_metashape_repeated_warnings_are_summarized(self):
+    def test_metashape_supported_distortion_is_exported_to_tsai(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             dataset = root / "depth_images"
@@ -222,7 +222,9 @@ class CameraConvertCliTest(unittest.TestCase):
       <sensor id="0" label="RGB" type="frame">
         <resolution width="1000" height="800"/>
         <calibration type="frame" class="adjusted">
-          <f>500</f><cx>10</cx><cy>-20</cy><k1>0.01</k1>
+          <f>500</f><cx>10</cx><cy>-20</cy>
+          <k1>0.01</k1><k2>-0.02</k2><k3>0.03</k3>
+          <p1>0.0004</p1><p2>-0.0005</p2>
         </calibration>
       </sensor>
     </sensors>
@@ -254,9 +256,16 @@ class CameraConvertCliTest(unittest.TestCase):
             )
 
             self.assertEqual(result.returncode, 0, result.stderr)
-            self.assertEqual(result.stderr.count("Metashape distortion terms"), 1)
-            self.assertIn("2 个相机", result.stderr)
-            self.assertIn("IMG_0262.JPG", result.stderr)
+            self.assertNotIn("distortion terms are not exported", result.stderr)
+            self.assertIn("image_camera.lis", result.stdout)
+            summary = json.loads((output_dir / "summary.json").read_text(encoding="utf-8"))
+            self.assertEqual(summary["warnings"], [])
+            tsai = (output_dir / "cameras" / "IMG_0262.tsai").read_text(encoding="utf-8")
+            self.assertIn("k1 = 0.01", tsai)
+            self.assertIn("k2 = -0.02", tsai)
+            self.assertIn("k3 = 0.03", tsai)
+            self.assertIn("p1 = 0.0004", tsai)
+            self.assertIn("p2 = -0.0005", tsai)
 
 
 if __name__ == "__main__":

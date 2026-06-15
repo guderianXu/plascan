@@ -2584,8 +2584,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     const bool hasCameraPaths = (!opts.cameraPaths.isEmpty()
                                  && opts.cameraPaths.size() == opts.images.size());
 
-    // 从 projectMeta 中预构建 imagePath → cameraJson 映射。这里必须在创建 IncrementalSfm
-    // 之前完成，因为完整的项目相机位姿也应触发已知位姿重建，而不是只作为增量 SfM 初值。
+    // 从 projectMeta 中预构建 imagePath → cameraJson 映射。项目元数据里的相机通常来自 EXIF/GPS
+    // 或前置估计，只作为增量 SfM 的相机初值/内参；只有显式 .tsai 列表才触发固定外参模式。
     QMap<QString, QJsonObject> projectCameraMap;
     if (!opts.projectMeta.isEmpty())
     {
@@ -2635,7 +2635,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             }
         }
     }
-    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras;
+    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles;
 
     IncrementalSfm sfm(sfmOpts);
 
@@ -2654,7 +2654,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     } 
     if (hasCompleteProjectMetaCameras)
     {
-        LOG_INFO(QStringLiteral("  使用项目元数据已知外参模式：固定相机位姿并直接三角化 (%1/%2)")
+        LOG_INFO(QStringLiteral("  使用项目元数据相机初值：增量 SfM + BA，允许位姿调整 (%1/%2)")
             .arg(projectMetaKnownCameraCount)
             .arg(opts.images.size()));
     }
@@ -2989,10 +2989,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             {
                 plapoint::io::writePly<float>(plyPath.toStdString(), cloud, plapoint::io::PlyFormat::BinaryLE);
                 result.sparseCloudPath = plyPath;
+                const bool baApplied = sfmResult.baTracksTotal > 0 || sfmResult.baTracksOptimized > 0;
                 result.qualityMetadata = xjw::common::project::buildSparseQualityMetadata(
                     pointsForQuality,
                     sfmResult.numRegisteredImages,
-                    true,
+                    baApplied,
                     xjw::common::project::kSparseResultKindSfmSparseReconstruction,
                     QString(),
                     QString(),

@@ -1717,16 +1717,19 @@ TEST(SfmServicePairPlanningTest, ProjectMetaCamerasEnableBoundedPairPlanning)
     EXPECT_TRUE(source.contains(QStringLiteral("pairKey.split(QStringLiteral(\"\\n\"))")));
 }
 
-TEST(SfmServiceKnownPoseModeTest, CompleteProjectMetaCamerasEnableKnownPoseReconstruction)
+TEST(SfmServiceKnownPoseModeTest, ProjectMetaCamerasStayIncrementalSfmPriors)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("hasCompleteProjectMetaCameras")));
-    EXPECT_TRUE(source.contains(QStringLiteral(
+    EXPECT_TRUE(source.contains(QStringLiteral("sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles")));
+    EXPECT_FALSE(source.contains(QStringLiteral(
         "sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras")));
     EXPECT_TRUE(source.contains(QStringLiteral("projectImageMetaByPath(opts.projectMeta, true)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("使用项目元数据已知外参模式")));
+    EXPECT_TRUE(source.contains(QStringLiteral("使用项目元数据相机初值")));
+    EXPECT_FALSE(source.contains(QStringLiteral("使用项目元数据已知外参模式")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const bool baApplied = sfmResult.baTracksTotal > 0")));
 }
 
 TEST(MainWindowProgressTest, FeatureMatchProgressExpandsAllFeatureModeAndClampsDisplay)

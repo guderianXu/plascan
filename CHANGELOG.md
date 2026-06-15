@@ -2,6 +2,32 @@
 
 本文件按版本倒序记录用户可感知的主要变更。详细验证记录见 `docs/releases/`。
 
+## v1.1.0-alpha.4 - 2026-06-15
+
+### 优化
+
+- 优化 Metashape 相机转换，`k1/k2/k3/p1/p2` 畸变参数会写入 PlaScan `.tsai`，避免空三使用被简化为零畸变的相机模型。
+- 优化 SFM 对项目元数据相机的处理：GUI 项目元数据只作为增量 SfM/BA 初值，只有显式 `.tsai` 列表才进入固定外参直接三角化。
+- 优化已知外参 SfM 质量门，若输入存在多视 track 但输出几乎全退化为两视图点云，会标记失败并给出可定位的日志。
+
+### 修复
+
+- 修复 Metashape aerial GCP 数据经旧转换器导出零畸变相机后，444 张影像空三点云和飞行轨迹明显异常的问题。
+- 修复正式 SFM 结果质量元数据中 BA 状态被无条件标记为已应用的问题。
+
+### 验证
+
+- `test_camera_format_converter.exe` 通过，6/6。
+- `test_sfm_pipeline.exe` 通过，31/31。
+- `test_gui_project_utils.exe` 通过，113/113。
+- `python -m unittest tests.test_camera_convert_cli` 通过，6/6。
+- agisoft aerial GCP 444 张，CUDA + `--feature-max-image-dim 2048`，SFM-only CLI 验证通过：444/444 注册，211037 个稀疏点，平均重投影误差 1.00 px，`finalTwoViewRatio=0.4191`。
+
+### 已知问题
+
+- 本轮完成的是 SFM-only 验证，MVS/mesh/DEM/DOM 下游仍需单独长时验证。
+- 全量 `ctest` 的历史已知问题仍需单独确认：`TerrainDemDomTest.TerrainPipelineGeneratesDemDomFromDirectory` 可能出现 `dom_png not found`。
+
 ## v1.1.0-alpha.3 - 2026-06-15
 
 ### 优化

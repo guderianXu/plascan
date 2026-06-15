@@ -299,7 +299,9 @@ TEST(CameraFormatConverterTest, MetashapeXmlConvertsDepthImagesProject)
               "      <sensor id=\"0\" label=\"RGB\" type=\"frame\">\n"
               "        <resolution width=\"1000\" height=\"800\"/>\n"
               "        <calibration type=\"frame\" class=\"adjusted\">\n"
-              "          <f>500</f><cx>10</cx><cy>-20</cy><k1>0.01</k1>\n"
+              "          <f>500</f><cx>10</cx><cy>-20</cy>\n"
+              "          <k1>0.01</k1><k2>-0.02</k2><k3>0.03</k3>\n"
+              "          <p1>0.0004</p1><p2>-0.0005</p2>\n"
               "        </calibration>\n"
               "      </sensor>\n"
               "    </sensors>\n"
@@ -328,8 +330,7 @@ TEST(CameraFormatConverterTest, MetashapeXmlConvertsDepthImagesProject)
     ASSERT_TRUE(result.success) << result.errorMessage;
     EXPECT_EQ(xjw::camera::cameraFormatName(result.inputFormat), "metashape-xml");
     ASSERT_EQ(result.cameraCount, 3);
-    ASSERT_FALSE(result.warnings.empty());
-    EXPECT_NE(result.warnings.front().find("distortion"), std::string::npos);
+    EXPECT_TRUE(result.warnings.empty());
 
     const std::string lis = readText(result.imageCameraList);
     EXPECT_NE(lis.find("../depth_images/Depthimages/IMG_0001.JPG cameras/IMG_0001.tsai"), std::string::npos);
@@ -343,6 +344,12 @@ TEST(CameraFormatConverterTest, MetashapeXmlConvertsDepthImagesProject)
     EXPECT_DOUBLE_EQ(first.focalY(), 500.0);
     EXPECT_DOUBLE_EQ(first.principalX(), 510.0);
     EXPECT_DOUBLE_EQ(first.principalY(), 380.0);
+    const auto firstDistortion = first.distortion();
+    EXPECT_DOUBLE_EQ(firstDistortion.radialK1, 0.01);
+    EXPECT_DOUBLE_EQ(firstDistortion.radialK2, -0.02);
+    EXPECT_DOUBLE_EQ(firstDistortion.radialK3, 0.03);
+    EXPECT_DOUBLE_EQ(firstDistortion.tangentialP1, 0.0004);
+    EXPECT_DOUBLE_EQ(firstDistortion.tangentialP2, -0.0005);
 
     const auto firstCenter = first.cameraCenter();
     EXPECT_DOUBLE_EQ(firstCenter[0], 1.0);

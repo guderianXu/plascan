@@ -371,6 +371,98 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRegistersAllImagesAndPreservesPoses)
     }
 }
 
+TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAllTwoViewOutputWhenMultiViewTracksExist)
+{
+    opts.useKnownCameraPoses = true;
+    opts.triangulatorOptions.minTriAngle = 0.1;
+    opts.triangulatorOptions.maxReprojError = 25.0;
+    opts.triangulatorOptions.continueMaxReprojError = 0.5;
+    opts.triangulatorOptions.completeMaxReprojError = 0.5;
+    opts.filterMaxReprojError = 25.0;
+    opts.filterMinTriAngle = 0.1;
+    opts.filterMinTrackLen = 2;
+
+    std::vector<Camera> cameras = {
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+    };
+
+    const auto points = generatePoints(80, 8.0, 0.0, 60.0, 1.0, 19);
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    std::vector<FeatureMatch> matches01;
+    std::vector<FeatureMatch> matches12;
+    std::vector<FeatureMatch> matches02;
+    buildKnownPoseTracks(cameras, points, keypoints, matches01, matches12, matches02);
+    ASSERT_GT(matches01.size(), 30u);
+
+    for (FeatureKeypoint &keypoint : keypoints[2])
+    {
+        keypoint.x += 20.0f;
+    }
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "known_pose_noisy_0.png", cameras[0], keypoints[0]);
+    sfm.addImageWithCamera(1, "known_pose_noisy_1.png", cameras[1], keypoints[1]);
+    sfm.addImageWithCamera(2, "known_pose_noisy_2.png", cameras[2], keypoints[2]);
+    sfm.addMatches(0, 1, matches01);
+    sfm.addMatches(1, 2, matches12);
+    sfm.addMatches(0, 2, matches02);
+
+    const auto result = sfm.run();
+
+    EXPECT_FALSE(result.success) << "Formal known-pose SfM must not accept an all two-view sparse cloud";
+    EXPECT_NE(result.summary.find("two-view"), std::string::npos) << result.summary;
+}
+
+TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAlmostAllTwoViewOutputWhenMultiViewTracksExist)
+{
+    opts.useKnownCameraPoses = true;
+    opts.triangulatorOptions.minTriAngle = 0.1;
+    opts.triangulatorOptions.maxReprojError = 25.0;
+    opts.triangulatorOptions.continueMaxReprojError = 0.5;
+    opts.triangulatorOptions.completeMaxReprojError = 0.5;
+    opts.filterMaxReprojError = 25.0;
+    opts.filterMinTriAngle = 0.1;
+    opts.filterMinTrackLen = 2;
+
+    std::vector<Camera> cameras = {
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(16.0, 0.0, 0.0),
+    };
+
+    const auto points = generatePoints(80, 8.0, 0.0, 60.0, 1.0, 23);
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    std::vector<FeatureMatch> matches01;
+    std::vector<FeatureMatch> matches12;
+    std::vector<FeatureMatch> matches02;
+    buildKnownPoseTracks(cameras, points, keypoints, matches01, matches12, matches02);
+    ASSERT_GT(matches01.size(), 30u);
+    ASSERT_FALSE(keypoints[2].empty());
+
+    const FeatureKeypoint oneGoodThirdViewObservation = keypoints[2][0];
+    for (FeatureKeypoint &keypoint : keypoints[2])
+    {
+        keypoint.x += 20.0f;
+    }
+    keypoints[2][0] = oneGoodThirdViewObservation;
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "known_pose_sparse_long_0.png", cameras[0], keypoints[0]);
+    sfm.addImageWithCamera(1, "known_pose_sparse_long_1.png", cameras[1], keypoints[1]);
+    sfm.addImageWithCamera(2, "known_pose_sparse_long_2.png", cameras[2], keypoints[2]);
+    sfm.addMatches(0, 1, matches01);
+    sfm.addMatches(1, 2, matches12);
+    sfm.addMatches(0, 2, matches02);
+
+    const auto result = sfm.run();
+
+    EXPECT_FALSE(result.success)
+        << "Formal known-pose SfM must not accept a sparse cloud whose multi-view support is nearly absent";
+    EXPECT_NE(result.summary.find("two-view"), std::string::npos) << result.summary;
+}
+
 TEST_F(SfmInitTest, KnownCameraPoseModeAdaptsTriangulationAngleForNarrowBaseline)
 {
     opts.useKnownCameraPoses = true;

@@ -130,7 +130,8 @@ path/to/image_002.png path/to/image_002.tsai
 
 外部相机文件可先用通用转换工具生成 PlaScan 输入。当前支持自动识别、Middlebury `*_par.txt`、
 EPFL/Strecha `.camera`、COLMAP text sparse (`cameras.txt` / `images.txt`) 和 Metashape
-`doc.xml` / `Project.files/0/chunk.zip`：
+`doc.xml` / `Project.files/0/chunk.zip`。Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2`
+会写入 PlaScan `.tsai`；暂不支持的 `k4/b1/b2` 会在 `summary.json` 中记录 warning：
 
 ```bash
 cmake --build build --target camera_convert_cli -j$(nproc)
@@ -241,6 +242,7 @@ camera_convert_cli --format metashape-xml -i ./depth_images -o ./plascan_cameras
 ```
 
 输出目录包含 `image_camera.lis`、`cameras/*.tsai` 和 `summary.json`，可直接传给重建类 CLI。
+Metashape adjusted calibration 中的 `k1/k2/k3/p1/p2` 会写入 `.tsai`。
 
 ### 特征提取 (`feature_extract_cli`)
 

@@ -30,6 +30,10 @@ struct KnownPoseTriangulationPolicy
     double chosenMinTriAngle = 2.0;
 };
 
+constexpr int kKnownPoseMinLongInputTracksForQualityGate = 10;
+constexpr int kKnownPoseMinPointsForTrackRatioGate = 20;
+constexpr double kKnownPoseMaxTwoViewTrackRatio = 0.95;
+
 double percentile(std::vector<double> values, double ratio)
 {
     if (values.empty())
@@ -493,6 +497,9 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     int createdPoints = 0;
     int continuedObservations = 0;
     int completedObservations = 0;
+    int inputMultiViewTrackCount = 0;
+    int createdLongTrackCount = 0;
+    int longTrackTwoViewOnlyCount = 0;
 
     MultiViewTrackBuilder trackBuilder;
     int indexedPairCount = 0;
@@ -568,6 +575,9 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
                                                                triangulationPolicy.triangulatorOptions);
         createdPoints += trackStats.numCreated;
         continuedObservations += trackStats.numContinued;
+        inputMultiViewTrackCount = trackStats.inputLongTracks;
+        createdLongTrackCount = trackStats.createdLongTracks;
+        longTrackTwoViewOnlyCount = trackStats.longTrackTwoViewOnly;
         Logger::instance()->infof(
             "[SFM] Known-pose multiview tracks: pairs=%d matches=%d rawMatches=%d "
             "geometryRejected=%d components=%d accepted=%d rejectedConflict=%d "
@@ -636,11 +646,52 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     result.meanReprojError = _reconstruction->meanReprojError();
     result.reconstruction = _reconstruction;
     result.summary = _reconstruction->summary();
-    result.success = result.numRegisteredImages >= 2 && result.numPoints3D > 0;
+
+    int finalLongTrackCount = 0;
+    int finalTwoViewTrackCount = 0;
+    for (Point3DId pointId : _reconstruction->allPoint3DIds())
+    {
+        if (!_reconstruction->hasPoint3D(pointId))
+        {
+            continue;
+        }
+
+        const size_t trackLength = _reconstruction->point3D(pointId).track.length();
+        if (trackLength >= 3)
+        {
+            ++finalLongTrackCount;
+        }
+        else if (trackLength == 2)
+        {
+            ++finalTwoViewTrackCount;
+        }
+    }
+
+    const int finalTrackCount = finalLongTrackCount + finalTwoViewTrackCount;
+    const double finalTwoViewTrackRatio = finalTrackCount > 0
+        ? static_cast<double>(finalTwoViewTrackCount) / static_cast<double>(finalTrackCount)
+        : 0.0;
+    const bool hasEnoughMultiViewInputForQualityGate =
+        inputMultiViewTrackCount >= kKnownPoseMinLongInputTracksForQualityGate &&
+        result.numPoints3D >= kKnownPoseMinPointsForTrackRatioGate;
+    const bool hasOnlyTwoViewOutputFromMultiViewInput =
+        result.numRegisteredImages >= 3 &&
+        inputMultiViewTrackCount > 0 &&
+        result.numPoints3D > 0 &&
+        finalLongTrackCount == 0;
+    const bool hasTooLittleMultiViewOutputFromMultiViewInput =
+        result.numRegisteredImages >= 3 &&
+        hasEnoughMultiViewInputForQualityGate &&
+        finalTwoViewTrackRatio >= kKnownPoseMaxTwoViewTrackRatio;
+    result.success = result.numRegisteredImages >= 2 &&
+        result.numPoints3D > 0 &&
+        !hasOnlyTwoViewOutputFromMultiViewInput &&
+        !hasTooLittleMultiViewOutputFromMultiViewInput;
 
     Logger::instance()->infof(
         "[SFM] Known-pose reconstruction: registered=%d/%d created=%d continued=%d completed=%d "
-        "filtered=%d shortTrackFiltered=%d points=%d",
+        "filtered=%d shortTrackFiltered=%d points=%d finalLongTracks=%d finalTwoViewTracks=%d "
+        "finalTwoViewRatio=%.4f",
         result.numRegisteredImages,
         totalImages,
         createdPoints,
@@ -648,11 +699,48 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
         completedObservations,
         filteredPoints,
         shortTrackFiltered,
-        result.numPoints3D);
+        result.numPoints3D,
+        finalLongTrackCount,
+        finalTwoViewTrackCount,
+        finalTwoViewTrackRatio);
+
+    if (hasOnlyTwoViewOutputFromMultiViewInput)
+    {
+        Logger::instance()->warnf(
+            "[SFM] Known-pose reconstruction rejected all-two-view output: inputLongTracks=%d "
+            "createdLongTracks=%d longTrackTwoViewOnly=%d finalTwoViewTracks=%d",
+            inputMultiViewTrackCount,
+            createdLongTrackCount,
+            longTrackTwoViewOnlyCount,
+            finalTwoViewTrackCount);
+        result.summary =
+            "Known camera pose reconstruction produced only two-view tracks despite multi-view matches; "
+            "check camera poses, match consistency, or rerun SfM/BA with adjusted cameras.";
+    }
+    else if (hasTooLittleMultiViewOutputFromMultiViewInput)
+    {
+        Logger::instance()->warnf(
+            "[SFM] Known-pose reconstruction rejected weak multi-view output: inputLongTracks=%d "
+            "createdLongTracks=%d longTrackTwoViewOnly=%d finalLongTracks=%d finalTwoViewTracks=%d "
+            "finalTwoViewRatio=%.4f threshold=%.4f",
+            inputMultiViewTrackCount,
+            createdLongTrackCount,
+            longTrackTwoViewOnlyCount,
+            finalLongTrackCount,
+            finalTwoViewTrackCount,
+            finalTwoViewTrackRatio,
+            kKnownPoseMaxTwoViewTrackRatio);
+        result.summary =
+            "Known camera pose reconstruction produced mostly two-view tracks despite multi-view matches; "
+            "check camera poses, match consistency, or rerun SfM/BA with adjusted cameras.";
+    }
 
     if (!result.success)
     {
-        result.summary = "Known camera pose reconstruction produced insufficient sparse points";
+        if (result.summary.empty())
+        {
+            result.summary = "Known camera pose reconstruction produced insufficient sparse points";
+        }
     }
 
     return result;
