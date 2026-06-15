@@ -440,14 +440,11 @@ void LayerRenderer::setCurrentProjectPath(const QString &plascanPath)
 
 bool LayerRenderer::addImageLayer(const QString &path, int z)
 {
-    if (!m_scene)
-    {
-        return false;
-    }
+    return addImageLayer(loadImageForDisplay(path, m_currentProjectPath), z);
+}
 
-    // 影像读取：
-    // - 优先使用 QImageReader：可拿到更多格式信息，并支持部分高位深格式。
-    // - 若读取失败，则回退到 QImage(path)。
+QImage LayerRenderer::loadImageForDisplay(const QString &path, const QString &plascanPath)
+{
     QImage img;
     QImageReader reader(path);
     if (reader.canRead())
@@ -480,9 +477,9 @@ bool LayerRenderer::addImageLayer(const QString &path, int z)
     const bool needConvert = needsConvertTo8Bit_GDAL(path);
     if (img.isNull() || needConvert)
     {
-        const QString projectRoot = m_currentProjectPath.trimmed().isEmpty()
+        const QString projectRoot = plascanPath.trimmed().isEmpty()
                                         ? QString()
-                                        : QFileInfo(m_currentProjectPath).absolutePath();
+                                        : QFileInfo(plascanPath).absolutePath();
         const QString out8 = make8BitCachePath(path, projectRoot);
         const bool fresh = isCacheFresh(path, out8);
 
@@ -507,9 +504,19 @@ bool LayerRenderer::addImageLayer(const QString &path, int z)
     if (img.isNull())
     {
         LOG_WARN(QStringLiteral("addImageLayer: failed to load image %1").arg(path));
+        return QImage();
+    }
+    return img;
+}
+
+bool LayerRenderer::addImageLayer(const QImage &image, int z)
+{
+    if (!m_scene || image.isNull())
+    {
         return false;
     }
-    QPixmap pix = QPixmap::fromImage(img);
+
+    QPixmap pix = QPixmap::fromImage(image);
     auto *item = m_scene->addPixmap(pix);
     if (!item)
     {

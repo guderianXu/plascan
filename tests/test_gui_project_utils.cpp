@@ -55,6 +55,7 @@
 #include <QTreeView>
 #include <QUrl>
 #include <QStandardItemModel>
+#include <QSignalSpy>
 
 #include <array>
 #include <vector>
@@ -1949,6 +1950,39 @@ TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadN
     EXPECT_FALSE(block.contains(QStringLiteral("immediateReloadInterestPoints(imagePath)")));
 }
 
+TEST(CanvasWidgetResponsivenessTest, ImageSwitchUsesBackgroundLoadAndIgnoresStaleResults)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
+    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(rendererHeader.isEmpty());
+    ASSERT_FALSE(rendererSource.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QFutureWatcher<QImage> *m_imageWatcher")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run([pathCopy, projectPath]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("LayerRenderer::loadImageForDisplay(pathCopy, projectPath)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QDir::cleanPath(loadedPath) != QDir::cleanPath(m_currentImagePath)")));
+    EXPECT_TRUE(rendererHeader.contains(QStringLiteral("static QImage loadImageForDisplay")));
+    EXPECT_TRUE(rendererHeader.contains(QStringLiteral("bool addImageLayer(const QImage &image, int z = 0)")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("QPixmap::fromImage(image)")));
+}
+
+TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int finishedIndex = source.indexOf(QStringLiteral("m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished"));
+    ASSERT_GE(finishedIndex, 0);
+    const QString finishedBlock = source.mid(finishedIndex, 1800);
+
+    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("QDir::cleanPath(imagePath) == QDir::cleanPath(m_currentImagePath)")));
+    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && m_layerRenderer)")));
+}
+
 TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
 {
     QTemporaryDir tempDir;
@@ -2403,6 +2437,66 @@ TEST(DataTreeWidgetTest, ShowsTemporaryDroppedModelUntilCleared)
         }
     }
     EXPECT_TRUE(foundClearedModelSection);
+}
+
+TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)
+{
+    DataTreeWidget tree;
+    const QString imagePath = QStringLiteral("/tmp/aerial_image_001.jpg");
+
+    QJsonObject image;
+    image[QStringLiteral("path")] = imagePath;
+    image[QStringLiteral("storage")] = QStringLiteral("reference");
+
+    QJsonArray images;
+    images.append(image);
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = images;
+    tree.loadFromJson(meta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    QStandardItem *photoSection = nullptr;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("照片 (1)")))
+        {
+            photoSection = item;
+            break;
+        }
+    }
+    ASSERT_NE(photoSection, nullptr);
+    ASSERT_EQ(photoSection->rowCount(), 1);
+
+    const QModelIndex imageIndex = photoSection->child(0, 0)->index();
+    ASSERT_TRUE(imageIndex.isValid());
+
+    QSignalSpy imageSpy(&tree, &DataTreeWidget::imageActivated);
+    QSignalSpy resourceSpy(&tree, &DataTreeWidget::resourceActivated);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(view,
+                                          "clicked",
+                                          Qt::DirectConnection,
+                                          Q_ARG(QModelIndex, imageIndex)));
+    EXPECT_EQ(imageSpy.count(), 0);
+    EXPECT_EQ(resourceSpy.count(), 0);
+
+    ASSERT_TRUE(QMetaObject::invokeMethod(view,
+                                          "activated",
+                                          Qt::DirectConnection,
+                                          Q_ARG(QModelIndex, imageIndex)));
+    ASSERT_EQ(imageSpy.count(), 1);
+    ASSERT_EQ(resourceSpy.count(), 1);
+    EXPECT_EQ(imageSpy.takeFirst().at(0).toString(), imagePath);
+    const QList<QVariant> resourceArgs = resourceSpy.takeFirst();
+    ASSERT_EQ(resourceArgs.size(), 2);
+    EXPECT_EQ(resourceArgs.at(0).toString(), QStringLiteral("照片"));
+    EXPECT_EQ(resourceArgs.at(1).toString(), imagePath);
 }
 
 TEST(DataTreeWidgetTest, ContextMenuUsesSameResourcePathResolutionAsActivation)

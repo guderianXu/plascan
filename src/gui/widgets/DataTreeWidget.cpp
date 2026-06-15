@@ -44,8 +44,9 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     connect(m_view, &QTreeView::customContextMenuRequested, this, &DataTreeWidget::onContextMenuRequested);
 
-    // 单击/双击任意项时，通知上层切换中央影像显示
-    connect(m_view, &QTreeView::clicked, this, [this](const QModelIndex &idx) {
+    // 双击或回车激活资源时，通知上层切换中央显示。
+    // 单击只负责选择，避免浏览资源树时同步加载大图造成界面卡顿。
+    connect(m_view, &QTreeView::activated, this, [this](const QModelIndex &idx) {
         if (!idx.isValid()) return;
         // Use the index to access the hidden 'path' column in the same row/parent
         QModelIndex pathIdx = idx.sibling(idx.row(), 1);

@@ -41,6 +41,7 @@
 
 
 #include <QGraphicsScene>
+#include <QDir>
 #include <QFileInfo>
 #include <QWheelEvent>
 #include <QMouseEvent>
@@ -81,12 +82,13 @@ CanvasWidget::CanvasWidget(QWidget *parent)
         // 获取结果并在主线程通过 LayerRenderer 绘制；同时更新缓存并发出信号
         std::vector<cv::KeyPoint> kps = m_spWatcher->result();
         const QString imagePath = m_lastRequestedSpPath;
+        const bool isCurrentImage = QDir::cleanPath(imagePath) == QDir::cleanPath(m_currentImagePath);
         if (!imagePath.trimmed().isEmpty()) {
             QFileInfo fi(imagePath);
             const QString key = imagePath + m_lastRequestedSpSuffix;
             m_spCache[key] = std::make_pair(fi.lastModified(), kps);
         }
-        if (m_layerRenderer) {
+        if (isCurrentImage && m_layerRenderer) {
             // 重新应用当前显示设置，确保使用 UI 中的参数
             m_layerRenderer->setFeatureDisplayOptions(m_currentFeatureOpts);
             m_layerRenderer->clearFeatureLayers();
@@ -130,16 +132,16 @@ void CanvasWidget::showImage(const QString &path)
         return;
     }
 
-    // 清理旧图层：先清除兴趣点覆盖，再清除影像图层。
+    // 清理旧覆盖层；影像图层在新影像加载完成后替换，避免磁盘解码期间界面空白。
     // NOTE: 不调用 scene()->clear() —— 那会使 QGraphicsScene 删除所有 items，
     // 导致 LayerRenderer 持有的指针变为悬空并在后续删除时造成双重释放。
     m_layerRenderer->clearFeatureLayers();
     // 确保清除上一次的匹配连线层，避免其干扰新的场景布局
     m_layerRenderer->clearMatchLayers();
-    m_layerRenderer->clear();
 
     if (path.trimmed().isEmpty())
     {
+        m_layerRenderer->clear();
         return;
     }
 
@@ -158,34 +160,58 @@ void CanvasWidget::showImage(const QString &path)
     // 记录当前影像路径
     m_currentImagePath = path;
 
-    // 重新加载影像
-    if (!m_layerRenderer->addImageLayer(path, 0))
+    const QString pathCopy = path;
+    const QString projectPath = property("currentProjectPath").toString();
+    auto *watcher = new QFutureWatcher<QImage>(this);
+    m_imageWatcher = watcher;
+    connect(watcher, &QFutureWatcher<QImage>::finished, this, [this, watcher, loadedPath = pathCopy]()
     {
-        // 读取失败时不抛异常：保持 UI 稳定
-        return;
-    }
+        const QImage image = watcher->result();
+        watcher->deleteLater();
+        if (watcher != m_imageWatcher)
+        {
+            return;
+        }
+        m_imageWatcher = nullptr;
+        if (QDir::cleanPath(loadedPath) != QDir::cleanPath(m_currentImagePath))
+        {
+            return;
+        }
+        if (image.isNull() || !m_layerRenderer)
+        {
+            LOG_WARN(QStringLiteral("showImage: failed to load image %1").arg(loadedPath));
+            return;
+        }
 
-    // 通知外部当前活跃影像已变更（MainWindow 据此持久化状态）
-    emit activeImageChanged(path);
+        m_layerRenderer->clear();
+        if (!m_layerRenderer->addImageLayer(image, 0))
+        {
+            return;
+        }
 
-    // 让视图自动适配内容
-    scene()->setSceneRect(scene()->itemsBoundingRect());
-    fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
+        // 通知外部当前活跃影像已变更（MainWindow 据此持久化状态）
+        emit activeImageChanged(loadedPath);
 
-    // 重新适配后，重置缩放因子
-    m_zoomFactor = 1.0;
+        // 让视图自动适配内容
+        scene()->setSceneRect(scene()->itemsBoundingRect());
+        fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
 
-    // 自动加载特征点（默认启用）
-    // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
-    if (m_layerRenderer)
-    {
-        const QString fileName = QFileInfo(path).fileName();
+        // 重新适配后，重置缩放因子
+        m_zoomFactor = 1.0;
+
+        // 自动加载特征点（默认启用）
+        // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
+        const QString fileName = QFileInfo(loadedPath).fileName();
         const bool isDepthMap = fileName.startsWith(QLatin1String("depth_"), Qt::CaseInsensitive)
                              && fileName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive);
         if (!isDepthMap) {
-            startSpLoadForImage(path);
+            startSpLoadForImage(loadedPath);
         }
-    }
+    });
+    QFuture<QImage> future = QtConcurrent::run([pathCopy, projectPath]() {
+        return LayerRenderer::loadImageForDisplay(pathCopy, projectPath);
+    });
+    watcher->setFuture(future);
 }
 
 void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile)
@@ -445,7 +471,8 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     auto it = m_spCache.find(cacheKey);
     if (it != m_spCache.end()) {
         if (it->second.first == fiCheck.lastModified()) {
-            if (m_layerRenderer) {
+            const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(m_currentImagePath);
+            if (isCurrentImage && m_layerRenderer) {
                 m_layerRenderer->setFeatureDisplayOptions(m_currentFeatureOpts);
                 m_layerRenderer->clearFeatureLayers();
                 if (!it->second.second.empty()) m_layerRenderer->addFeatureItems(it->second.second);

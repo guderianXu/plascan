@@ -3,6 +3,7 @@
 #include <QGraphicsView>
 #include "LayerRenderer.h"
 #include <QFutureWatcher>
+#include <QImage>
 #include <opencv2/core/types.hpp>  // 完整cv::KeyPoint定义,MOC需要
 #include <vector>
 #include <map>
@@ -92,6 +93,7 @@ private:
     QString m_currentImagePath;
     // 后台读取 .sp 的 watcher（每次启动一个异步任务）
     QFutureWatcher<std::vector<cv::KeyPoint>> *m_spWatcher{nullptr};
+    QFutureWatcher<QImage> *m_imageWatcher{nullptr};
     // cache: imagePath -> (lastModified, keypoints)
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> m_spCache;
     QString m_lastRequestedSpPath;

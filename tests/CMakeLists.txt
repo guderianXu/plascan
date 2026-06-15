@@ -7,7 +7,7 @@ include(CheckLanguage)
 # ── GTest ────────────────────────────────────────────────────────────────────
 find_package(GTest REQUIRED)
 include(GoogleTest)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Widgets)
 find_package(Python3 COMPONENTS Interpreter)
 
 # ── 依赖 ─────────────────────────────────────────────────────────────────────
@@ -287,6 +287,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     terrain
     Qt6::Core
     Qt6::Gui
+    Qt6::Test
     Qt6::Widgets
     ${PLASCAN_LIBZIP_TARGET}
     GTest::gtest

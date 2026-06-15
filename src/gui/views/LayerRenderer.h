@@ -6,6 +6,7 @@
 #include <QVector>
 #include <QPointF>
 #include <QColor>
+#include <QImage>
 #include <QString>
 
 class QGraphicsScene;
@@ -30,6 +31,8 @@ public:
 
     // 从文件路径加载影像并添加为图层，返回是否成功
     bool addImageLayer(const QString &path, int z = 0);
+    bool addImageLayer(const QImage &image, int z = 0);
+    static QImage loadImageForDisplay(const QString &path, const QString &plascanPath);
 
     // 清除所有已添加的图层
     void clear();
