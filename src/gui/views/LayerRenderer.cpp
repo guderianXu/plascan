@@ -55,6 +55,7 @@
 #include <cpl_conv.h>
 
 #include <QGraphicsEllipseItem>
+#include <QGraphicsItem>
 #include <QGraphicsLineItem>
 #include <QVector>
 #include <QPointF>
@@ -418,6 +419,199 @@ static bool isCacheFresh(const QString &inputPath, const QString &cachePath)
     return outFi.lastModified() >= inFi.lastModified();
 }
 
+namespace
+{
+class BatchedFeatureOverlayItem : public QGraphicsItem
+{
+public:
+    BatchedFeatureOverlayItem(std::vector<cv::KeyPoint> keypoints,
+                              const LayerRenderer::FeatureDisplayOptions &options,
+                              const QRectF &imageBounds)
+        : m_keypoints(std::move(keypoints))
+        , m_options(options)
+        , m_bounds(computeBounds(m_keypoints, options, imageBounds))
+    {
+        if (m_options.maxDisplayCount > 0)
+        {
+            if (m_options.showTopScores)
+            {
+                std::sort(m_keypoints.begin(), m_keypoints.end(),
+                          [](const auto &a, const auto &b)
+                          {
+                              return a.response > b.response;
+                          });
+            }
+            if (static_cast<int>(m_keypoints.size()) > m_options.maxDisplayCount)
+            {
+                m_keypoints.resize(static_cast<size_t>(m_options.maxDisplayCount));
+                m_bounds = computeBounds(m_keypoints, m_options, imageBounds);
+            }
+        }
+        setZValue(1000.0);
+    }
+
+    QRectF boundingRect() const override
+    {
+        return m_bounds;
+    }
+
+    void paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidget *) override
+    {
+        if (!painter || m_keypoints.empty() || !m_options.showPoints)
+        {
+            return;
+        }
+
+        painter->setRenderHint(QPainter::Antialiasing, true);
+
+        QColor pointColor = m_options.pointColor;
+        pointColor.setAlpha(m_options.opacity);
+        QPen pointPen(pointColor);
+        pointPen.setWidthF(1.5);
+        pointPen.setCosmetic(true);
+        QBrush pointBrush = m_options.useFill
+                                ? QBrush(pointColor)
+                                : QBrush(Qt::NoBrush);
+
+        for (const auto &kp : m_keypoints)
+        {
+            drawKeypoint(painter, kp, pointPen, pointBrush);
+        }
+    }
+
+private:
+    static double markerRadius(const cv::KeyPoint &keypoint,
+                               const LayerRenderer::FeatureDisplayOptions &options)
+    {
+        const double sizeFactor = static_cast<double>(options.pointSize) * options.scaleMultiplier;
+        return std::max(1.0, std::min(100.0, static_cast<double>(keypoint.size) * sizeFactor));
+    }
+
+    static QRectF computeBounds(const std::vector<cv::KeyPoint> &keypoints,
+                                const LayerRenderer::FeatureDisplayOptions &options,
+                                const QRectF &imageBounds)
+    {
+        QRectF bounds = imageBounds;
+        for (const auto &kp : keypoints)
+        {
+            const double r = std::max(markerRadius(kp, options), 8.0);
+            const QRectF kpRect(static_cast<qreal>(kp.pt.x - r),
+                                static_cast<qreal>(kp.pt.y - r),
+                                static_cast<qreal>(r * 2.0),
+                                static_cast<qreal>(r * 2.0));
+            bounds = bounds.isNull() ? kpRect : bounds.united(kpRect);
+        }
+
+        if (bounds.isNull())
+        {
+            return QRectF();
+        }
+        return bounds.adjusted(-4.0, -4.0, 4.0, 4.0);
+    }
+
+    void drawKeypoint(QPainter *painter,
+                      const cv::KeyPoint &kp,
+                      const QPen &pointPen,
+                      const QBrush &pointBrush) const
+    {
+        const double r = markerRadius(kp, m_options);
+        const QPointF center(static_cast<qreal>(kp.pt.x), static_cast<qreal>(kp.pt.y));
+
+        painter->setPen(pointPen);
+        painter->setBrush(pointBrush);
+
+        if (m_options.markerShape == QLatin1String("circle"))
+        {
+            painter->drawEllipse(center, r, r);
+        }
+        else if (m_options.markerShape == QLatin1String("square"))
+        {
+            painter->drawRect(QRectF(center.x() - r, center.y() - r, r * 2.0, r * 2.0));
+        }
+        else if (m_options.markerShape == QLatin1String("cross"))
+        {
+            QPen crossPen(m_options.pointColor);
+            crossPen.setWidthF(1.0);
+            crossPen.setCosmetic(true);
+            painter->setPen(crossPen);
+            const double crossRadius = std::max(
+                1.0,
+                static_cast<double>(m_options.pointSize) * m_options.scaleMultiplier);
+            painter->drawLine(QPointF(center.x() - crossRadius, center.y() - crossRadius),
+                              QPointF(center.x() + crossRadius, center.y() + crossRadius));
+            painter->drawLine(QPointF(center.x() - crossRadius, center.y() + crossRadius),
+                              QPointF(center.x() + crossRadius, center.y() - crossRadius));
+        }
+        else if (m_options.markerShape == QLatin1String("dot"))
+        {
+            QPen dotPen(m_options.pointColor);
+            dotPen.setWidthF(0.5);
+            dotPen.setCosmetic(true);
+            QColor fill = m_options.pointColor;
+            fill.setAlpha(m_options.opacity);
+            painter->setPen(dotPen);
+            painter->setBrush(QBrush(fill));
+            const double dotR = std::min(3.0, r * 0.4);
+            painter->drawEllipse(center, dotR, dotR);
+        }
+        else if (m_options.markerShape == QLatin1String("point"))
+        {
+            QColor fill = m_options.pointColor;
+            fill.setAlpha(m_options.opacity);
+            QPen pointPixelPen(fill);
+            pointPixelPen.setWidthF(0.0);
+            pointPixelPen.setCosmetic(true);
+            painter->setPen(pointPixelPen);
+            painter->setBrush(QBrush(fill));
+            painter->drawRect(QRectF(center.x(), center.y(), 1.0, 1.0));
+        }
+        else
+        {
+            painter->drawEllipse(center, r, r);
+        }
+
+        if (m_options.showScale)
+        {
+            QPen scalePen(m_options.scaleColor);
+            scalePen.setWidthF(0.8);
+            scalePen.setCosmetic(true);
+            painter->setPen(scalePen);
+            painter->setBrush(Qt::NoBrush);
+            const double scaleRadius = static_cast<double>(kp.size) * m_options.scaleMultiplier;
+            painter->drawEllipse(center, scaleRadius, scaleRadius);
+        }
+
+        if (m_options.showOrientation && kp.angle >= 0.0f)
+        {
+            QPen orientPen(m_options.orientColor);
+            orientPen.setWidthF(1.5);
+            orientPen.setCosmetic(true);
+            painter->setPen(orientPen);
+
+            const double orientRad = static_cast<double>(kp.angle) * M_PI / 180.0;
+            const double arrowLen = r * 1.8;
+            const QPointF end(center.x() + arrowLen * std::cos(orientRad),
+                              center.y() + arrowLen * std::sin(orientRad));
+            painter->drawLine(center, end);
+
+            const double arrowHeadLen = r * 0.6;
+            const double angle1 = orientRad + M_PI * 0.85;
+            const double angle2 = orientRad - M_PI * 0.85;
+            painter->drawLine(end,
+                              QPointF(end.x() + arrowHeadLen * std::cos(angle1),
+                                      end.y() + arrowHeadLen * std::sin(angle1)));
+            painter->drawLine(end,
+                              QPointF(end.x() + arrowHeadLen * std::cos(angle2),
+                                      end.y() + arrowHeadLen * std::sin(angle2)));
+        }
+    }
+
+    std::vector<cv::KeyPoint> m_keypoints;
+    LayerRenderer::FeatureDisplayOptions m_options;
+    QRectF m_bounds;
+};
+} // namespace
+
 LayerRenderer::LayerRenderer(QGraphicsScene *scene, QObject *parent)
     : QObject(parent)
     , m_scene(scene)
@@ -527,6 +721,7 @@ bool LayerRenderer::addImageLayer(const QImage &image, int z)
     item->setVisible(true);
     item->setZValue(z);
     m_layers.append(item);
+    m_imageBounds = m_imageBounds.isNull() ? item->sceneBoundingRect() : m_imageBounds.united(item->sceneBoundingRect());
     return true;
 }
 
@@ -572,23 +767,6 @@ void LayerRenderer::clearFeatureLayers()
         }
     }
     m_featureItems.clear();
-
-    // Defensive cleanup: remove any remaining scene items that look like
-    // feature overlay remnants (high z-values used by feature drawing).
-    // This guards against stale items created by earlier renderer instances
-    // or race conditions where some items weren't tracked in m_featureItems.
-    if (m_scene) {
-        const QList<QGraphicsItem*> all = m_scene->items();
-        for (QGraphicsItem *it : all) {
-            if (!it) continue;
-            const qreal z = it->zValue();
-            // Feature overlays use z-values around 999..1001 — remove high-z items only
-            if (z >= 900.0) {
-                m_scene->removeItem(it);
-                delete it;
-            }
-        }
-    }
 }
 
 void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
@@ -596,126 +774,16 @@ void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
     if (!m_scene) return;
     // Debug incoming keypoints for troubleshooting feature rendering
     LOG_DEBUG(QStringLiteral("addFeatureItems: incoming keypoints=%1").arg(static_cast<int>(keypoints.size())));
-    // apply display options: color, opacity, size multipliers, shape and filtering
-    std::vector<cv::KeyPoint> list = keypoints;
 
-    // filter by top scores if requested  - 使用response字段作为score
-    if (m_featureOpts.maxDisplayCount > 0) {
-        if (m_featureOpts.showTopScores) {
-            std::sort(list.begin(), list.end(), [](const auto &a, const auto &b){ return a.response > b.response; });
-        }
-        if (static_cast<int>(list.size()) > m_featureOpts.maxDisplayCount) {
-            list.resize(static_cast<size_t>(m_featureOpts.maxDisplayCount));
-        }
-    }
-
-    const double sizeFactor = static_cast<double>(m_featureOpts.pointSize) * m_featureOpts.scaleMultiplier;
-    QPen pen(m_featureOpts.pointColor);
-    pen.setWidthF(1.5);
-    pen.setCosmetic(true);
-    // 使用空心填充(Qt::NoBrush)以避免实心圆过于醒目
-    QBrush brush = m_featureOpts.useFill 
-        ? QBrush(QColor(m_featureOpts.pointColor.red(), m_featureOpts.pointColor.green(), m_featureOpts.pointColor.blue(), m_featureOpts.opacity))
-        : QBrush(Qt::NoBrush);
-
-    const int beforeCount = m_featureItems.size();
-    for (const auto &kp : list)
+    if (keypoints.empty() || !m_featureOpts.showPoints)
     {
-        const double r = std::max(1.0, std::min(100.0, static_cast<double>(kp.size) * sizeFactor));
-        QGraphicsItem *item = nullptr;
-        if (m_featureOpts.markerShape == QLatin1String("circle")) {
-            item = m_scene->addEllipse(kp.pt.x - r, kp.pt.y - r, r * 2.0, r * 2.0, pen, brush);
-        } else if (m_featureOpts.markerShape == QLatin1String("square")) {
-            item = m_scene->addRect(kp.pt.x - r, kp.pt.y - r, r * 2.0, r * 2.0, pen, brush);
-        } else if (m_featureOpts.markerShape == QLatin1String("cross")) {
-            QPen crossPen(m_featureOpts.pointColor);
-            crossPen.setWidthF(1.0);
-            crossPen.setCosmetic(true);
-            const double crossRadius = std::max(
-                1.0,
-                static_cast<double>(m_featureOpts.pointSize) * m_featureOpts.scaleMultiplier);
-            QGraphicsLineItem *l1 = m_scene->addLine(kp.pt.x - crossRadius,
-                                                     kp.pt.y - crossRadius,
-                                                     kp.pt.x + crossRadius,
-                                                     kp.pt.y + crossRadius,
-                                                     crossPen);
-            QGraphicsLineItem *l2 = m_scene->addLine(kp.pt.x - crossRadius,
-                                                     kp.pt.y + crossRadius,
-                                                     kp.pt.x + crossRadius,
-                                                     kp.pt.y - crossRadius,
-                                                     crossPen);
-            if (l1) { l1->setZValue(1000.0); m_featureItems.append(l1); }
-            if (l2) { l2->setZValue(1000.0); m_featureItems.append(l2); }
-            item = nullptr;
-        } else if (m_featureOpts.markerShape == QLatin1String("dot")) {
-            // 点状: 小实心圆点
-            QPen dotPen(m_featureOpts.pointColor);
-            dotPen.setWidthF(0.5);
-            dotPen.setCosmetic(true);
-            QBrush dotBrush(QColor(m_featureOpts.pointColor.red(), m_featureOpts.pointColor.green(), 
-                                   m_featureOpts.pointColor.blue(), m_featureOpts.opacity));
-            const double dotR = std::min(3.0, r * 0.4);  // 点的半径固定为3px或更小
-            item = m_scene->addEllipse(kp.pt.x - dotR, kp.pt.y - dotR, dotR * 2.0, dotR * 2.0, dotPen, dotBrush);
-            } else if (m_featureOpts.markerShape == QLatin1String("point")) {
-                // 单像素点：用小矩形绘制，便于在高缩放下也可见
-                QPen ppen(m_featureOpts.pointColor);
-                ppen.setWidthF(0);
-                QBrush pbrush(QColor(m_featureOpts.pointColor.red(), m_featureOpts.pointColor.green(), m_featureOpts.pointColor.blue(), m_featureOpts.opacity));
-                item = m_scene->addRect(kp.pt.x, kp.pt.y, 1.0, 1.0, ppen, pbrush);
-        } else {
-            // fallback to circle
-            item = m_scene->addEllipse(kp.pt.x - r, kp.pt.y - r, r * 2.0, r * 2.0, pen, brush);
-        }
-        if (item) {
-            item->setZValue(1000.0);
-            m_featureItems.append(item);
-        }
-
-        // optionally draw scale circle (使用kp.size作为scale)
-        if (m_featureOpts.showScale) {
-            QPen spen(m_featureOpts.scaleColor);
-            spen.setWidthF(0.8);
-            spen.setCosmetic(true);
-            QBrush sbrush(Qt::NoBrush);
-            const double scaleRadius = kp.size * m_featureOpts.scaleMultiplier;
-            auto *sc = m_scene->addEllipse(kp.pt.x - scaleRadius, kp.pt.y - scaleRadius,
-                                            scaleRadius * 2.0, scaleRadius * 2.0,
-                                            spen, sbrush);
-            if (sc) { sc->setZValue(999.0); m_featureItems.append(sc); }
-        }
-
-        // optionally draw orientation arrow (使用kp.angle作为orientation, 注意OpenCV的angle是度数)
-        if (m_featureOpts.showOrientation && kp.angle >= 0.0) {
-            QPen orpen(m_featureOpts.orientColor);
-            orpen.setWidthF(1.5);
-            orpen.setCosmetic(true);
-            // 将角度从度转换为弧度
-            const double orientRad = kp.angle * M_PI / 180.0;
-            // 计算箭头终点 (从圆心指向方向角度)
-            const double arrowLen = r * 1.8; // 箭头长度为半径的1.8倍
-            const double endX = kp.pt.x + arrowLen * std::cos(orientRad);
-            const double endY = kp.pt.y + arrowLen * std::sin(orientRad);
-            auto *arrow = m_scene->addLine(kp.pt.x, kp.pt.y, endX, endY, orpen);
-            if (arrow) { 
-                arrow->setZValue(1000.5); 
-                m_featureItems.append(arrow); 
-                
-                // 添加箭头头部 (两条短线形成V字形)
-                const double arrowHeadLen = r * 0.6;
-                const double angle1 = orientRad + M_PI * 0.85; // 约153度
-                const double angle2 = orientRad - M_PI * 0.85;
-                const double hx1 = endX + arrowHeadLen * std::cos(angle1);
-                const double hy1 = endY + arrowHeadLen * std::sin(angle1);
-                const double hx2 = endX + arrowHeadLen * std::cos(angle2);
-                const double hy2 = endY + arrowHeadLen * std::sin(angle2);
-                auto *head1 = m_scene->addLine(endX, endY, hx1, hy1, orpen);
-                auto *head2 = m_scene->addLine(endX, endY, hx2, hy2, orpen);
-                if (head1) { head1->setZValue(1000.5); m_featureItems.append(head1); }
-                if (head2) { head2->setZValue(1000.5); m_featureItems.append(head2); }
-            }
-        }
+        return;
     }
-    const int added = static_cast<int>(m_featureItems.size()) - beforeCount;
+
+    auto *item = new BatchedFeatureOverlayItem(keypoints, m_featureOpts, m_imageBounds);
+    m_scene->addItem(item);
+    m_featureItems.append(item);
+    const int added = 1;
     LOG_DEBUG(QStringLiteral("addFeatureItems: added items=%1 total_scene_items=%2").arg(added).arg(m_scene ? m_scene->items().size() : 0));
 }
 
@@ -730,6 +798,7 @@ void LayerRenderer::clear()
         }
     }
     m_layers.clear();
+    m_imageBounds = QRectF();
 }
 
 bool LayerRenderer::addStitchedImagePair(const QString &pathA, const QString &pathB, QGraphicsPixmapItem **outA, QGraphicsPixmapItem **outB, int gap)
@@ -764,6 +833,7 @@ bool LayerRenderer::addStitchedImagePair(const QString &pathA, const QString &pa
     // position B to the right of A
     qreal bx = itemA->pixmap().width() + gap;
     itemB->setPos(bx, 0);
+    m_imageBounds = itemA->sceneBoundingRect().united(itemB->sceneBoundingRect());
 
     if (outA) *outA = itemA;
     if (outB) *outB = itemB;

@@ -100,6 +100,23 @@ inline bool hasCompleteCameraPathList(const QStringList &images, const QStringLi
     return true;
 }
 
+inline bool hasCompleteSfmImageList(const QStringList &images)
+{
+    if (images.isEmpty())
+    {
+        return false;
+    }
+
+    for (const QString &image : images)
+    {
+        if (canonicalSfmPath(image).isEmpty())
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 inline bool hasCompleteKnownCameraCenters(int imageCount, const std::vector<std::array<double, 3>> &centers)
 {
     if (imageCount <= 0 || centers.size() != static_cast<std::size_t>(imageCount))
@@ -196,9 +213,15 @@ inline SfmPairPlan planSfmMatchPairs(
         return plan;
     }
 
+    const bool hasRestrictionInputs =
+        hasCompleteCameraPathList(images, cameraPaths) ||
+        hasCompleteKnownCameraCenters(imageCount, options.knownCameraCenters) ||
+        !options.knownCameraOverlapPairs.empty();
+
     if (!options.autoRestrictKnownCameraPairs ||
         imageCount <= std::max(0, options.knownCameraAllPairsMaxImages) ||
-        !hasCompleteCameraPathList(images, cameraPaths))
+        !hasCompleteSfmImageList(images) ||
+        !hasRestrictionInputs)
     {
         return plan;
     }

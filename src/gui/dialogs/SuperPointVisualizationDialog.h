@@ -101,7 +101,7 @@ private:
     QPushButton*    m_closeBtn{nullptr};
 
     // ── 当前颜色缓存 ──────────────────────────────────────────────
-    QColor m_pointColor{255, 200, 0};
+    QColor m_pointColor{0, 120, 255};
     QColor m_scaleColor{255, 255, 0};
     QColor m_orientColor{255, 0, 0};
 };

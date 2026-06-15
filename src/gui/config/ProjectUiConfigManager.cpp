@@ -19,6 +19,7 @@
  *   - showOrientation   : 是否显示特征点方向线（默认关闭）
  *   - useFill           : 是否填充特征点标记（默认关闭）
  *   - pointSize         : 标记大小（像素，默认 1）
+ *   - pointColor        : 点颜色（默认蓝色 RGB 0/120/255）
  *   - scaleMultiplier   : 尺度圆半径倍数（默认 1.0）
  *   - opacity           : 不透明度 0-255（默认 180，约 70%）
  *   - markerShape       : 标记形状（"point"/"circle"/"cross" 等）
@@ -48,6 +49,11 @@ QJsonObject ProjectUiConfigManager::defaultUiSettings()
     featureDisplay["showOrientation"]   = false;   // 默认不显示方向线
     featureDisplay["useFill"]           = false;   // 默认不填充
     featureDisplay["pointSize"]         = 1;        // 默认标记大小为 1 像素
+    QJsonObject pointColor;
+    pointColor["r"] = 0;
+    pointColor["g"] = 120;
+    pointColor["b"] = 255;
+    featureDisplay["pointColor"]        = pointColor; // 默认蓝色
     featureDisplay["scaleMultiplier"]   = 1.0;     // 尺度圆半径不做额外放大
     featureDisplay["opacity"]           = 180;     // 约 70% 不透明
     featureDisplay["markerShape"]       = QStringLiteral("cross"); // 默认十字标记

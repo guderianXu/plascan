@@ -316,6 +316,40 @@ target_include_directories(test_gui_project_utils PRIVATE
 )
 gtest_discover_tests(test_gui_project_utils)
 
+add_executable(test_layer_renderer_batched_overlay
+    test_layer_renderer_batched_overlay.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
+)
+set_target_properties(test_layer_renderer_batched_overlay PROPERTIES
+    AUTOMOC ON
+)
+target_link_libraries(test_layer_renderer_batched_overlay PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    ${OpenCV_LIBS}
+    ${TORCH_LIBRARIES}
+    ${PLASCAN_GDAL_TARGET}
+    GTest::gtest
+)
+target_include_directories(test_layer_renderer_batched_overlay PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/views
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io
+    ${CMAKE_SOURCE_DIR}/src/common/log
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
+    ${OpenCV_INCLUDE_DIRS}
+    ${TORCH_INCLUDE_DIRS}
+)
+if(GDAL_INCLUDE_DIRS)
+    target_include_directories(test_layer_renderer_batched_overlay PRIVATE ${GDAL_INCLUDE_DIRS})
+endif()
+add_test(NAME test_layer_renderer_batched_overlay
+         COMMAND test_layer_renderer_batched_overlay)
+
 add_executable(test_multiview_track_builder test_multiview_track_builder.cpp)
 target_link_libraries(test_multiview_track_builder PRIVATE sfm GTest::gtest_main)
 target_include_directories(test_multiview_track_builder PRIVATE

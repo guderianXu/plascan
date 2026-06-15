@@ -465,6 +465,8 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
 
     const QString imagePathCopy = imagePath;
     const QString activeSuffix = m_activeFeatureSuffix;
+    const QString projectPath = property("currentProjectPath").toString();
+    const bool shouldEstimateOrientation = m_currentFeatureOpts.showOrientation;
     // 检查缓存 (key 含 suffix)
     QFileInfo fiCheck(imagePathCopy);
     const QString cacheKey = imagePathCopy + activeSuffix;
@@ -482,9 +484,8 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
     }
     
-    QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([this, imagePathCopy, activeSuffix]() -> std::vector<cv::KeyPoint> {
+    QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]() -> std::vector<cv::KeyPoint> {
         std::vector<cv::KeyPoint> empty;
-        const QString projectPath = property("currentProjectPath").toString();
         // 使用当前选中的后缀查找特征文件
         const QString spFile = ProjectIO::featureOutputPathForImage(
             projectPath, imagePathCopy, activeSuffix);
@@ -512,33 +513,37 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
             }
         }
 
-        // 尝试从影像中估计每个 keypoint 的方向（梯度方向），以便显示方向箭头
-        try {
-            cv::Mat img = cv::imread(imagePathCopy.toStdString(), cv::IMREAD_GRAYSCALE);
-            if (!img.empty()) {
-                cv::Mat gx, gy;
-                cv::Sobel(img, gx, CV_32F, 1, 0, 3);
-                cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                for (auto &kp : output.keypoints) {
-                    int x = static_cast<int>(std::round(kp.pt.x));
-                    int y = static_cast<int>(std::round(kp.pt.y));
-                    if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
-                        float vx = gx.at<float>(y, x);
-                        float vy = gy.at<float>(y, x);
-                        if (std::isfinite(vx) && std::isfinite(vy) && (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f)) {
-                            double ang = std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
-                            if (ang < 0) ang += 360.0;
-                            kp.angle = static_cast<float>(ang);
+        if (shouldEstimateOrientation)
+        {
+            // 尝试从影像中估计每个 keypoint 的方向（梯度方向），以便显示方向箭头。
+            // 默认不开方向显示时跳过整图 imread/Sobel，避免切换影像时抢占磁盘与 CPU。
+            try {
+                cv::Mat img = cv::imread(imagePathCopy.toStdString(), cv::IMREAD_GRAYSCALE);
+                if (!img.empty()) {
+                    cv::Mat gx, gy;
+                    cv::Sobel(img, gx, CV_32F, 1, 0, 3);
+                    cv::Sobel(img, gy, CV_32F, 0, 1, 3);
+                    for (auto &kp : output.keypoints) {
+                        int x = static_cast<int>(std::round(kp.pt.x));
+                        int y = static_cast<int>(std::round(kp.pt.y));
+                        if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
+                            float vx = gx.at<float>(y, x);
+                            float vy = gy.at<float>(y, x);
+                            if (std::isfinite(vx) && std::isfinite(vy) && (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f)) {
+                                double ang = std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
+                                if (ang < 0) ang += 360.0;
+                                kp.angle = static_cast<float>(ang);
+                            } else {
+                                kp.angle = 0.0f;
+                            }
                         } else {
                             kp.angle = 0.0f;
                         }
-                    } else {
-                        kp.angle = 0.0f;
                     }
                 }
+            } catch (...) {
+                // 估计失败则忽略，保持原有角度值
             }
-        } catch (...) {
-            // 估计失败则忽略，保持原有角度值
         }
 
         LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2").arg(static_cast<int>(output.keypoints.size())).arg(spFile));
@@ -618,34 +623,37 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
         }
     }
 
-    // 估计每个 keypoint 的方向（用于显示方向箭头）。
-    // 注意：startSpLoadForImage 的异步路径有做这个；这里同步刷新也需要同样处理，否则 showOrientation 不会生效。
-    try {
-        cv::Mat img = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
-        if (!img.empty()) {
-            cv::Mat gx, gy;
-            cv::Sobel(img, gx, CV_32F, 1, 0, 3);
-            cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-            for (auto &kp : output.keypoints) {
-                int x = static_cast<int>(std::round(kp.pt.x));
-                int y = static_cast<int>(std::round(kp.pt.y));
-                if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
-                    float vx = gx.at<float>(y, x);
-                    float vy = gy.at<float>(y, x);
-                    if (std::isfinite(vx) && std::isfinite(vy) && (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f)) {
-                        double ang = std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
-                        if (ang < 0) ang += 360.0;
-                        kp.angle = static_cast<float>(ang);
+    if (m_currentFeatureOpts.showOrientation)
+    {
+        // 估计每个 keypoint 的方向（用于显示方向箭头）。
+        // 注意：startSpLoadForImage 的异步路径有做这个；这里同步刷新也需要同样处理，否则 showOrientation 不会生效。
+        try {
+            cv::Mat img = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+            if (!img.empty()) {
+                cv::Mat gx, gy;
+                cv::Sobel(img, gx, CV_32F, 1, 0, 3);
+                cv::Sobel(img, gy, CV_32F, 0, 1, 3);
+                for (auto &kp : output.keypoints) {
+                    int x = static_cast<int>(std::round(kp.pt.x));
+                    int y = static_cast<int>(std::round(kp.pt.y));
+                    if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
+                        float vx = gx.at<float>(y, x);
+                        float vy = gy.at<float>(y, x);
+                        if (std::isfinite(vx) && std::isfinite(vy) && (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f)) {
+                            double ang = std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
+                            if (ang < 0) ang += 360.0;
+                            kp.angle = static_cast<float>(ang);
+                        } else {
+                            kp.angle = 0.0f;
+                        }
                     } else {
                         kp.angle = 0.0f;
                     }
-                } else {
-                    kp.angle = 0.0f;
                 }
             }
+        } catch (...) {
+            // 忽略方向估计失败
         }
-    } catch (...) {
-        // 忽略方向估计失败
     }
 
     // 更新 cache (key 含 suffix, 支持多提取器)

@@ -14,6 +14,7 @@ namespace
 {
 
 constexpr double kProductionMaxTwoViewRatio = 0.95;
+constexpr double kProductionMinRegisteredImageRatio = 0.5;
 constexpr double kWarningTwoViewRatio = 0.8;
 
 int pointTrackLen(const QJsonObject &point)
@@ -64,6 +65,36 @@ QJsonObject qualityObjectFromRecord(const QJsonObject &record)
     return record;
 }
 
+int registeredImageCount(const QJsonObject &quality)
+{
+    return quality.value(QStringLiteral("registered_image_count")).toInt(
+        quality.value(QStringLiteral("camera_count")).toInt(0));
+}
+
+int inputImageCount(const QJsonObject &quality)
+{
+    return quality.value(QStringLiteral("input_image_count")).toInt(
+        quality.value(QStringLiteral("selected_image_count")).toInt(0));
+}
+
+bool hasInsufficientRegisteredImageCoverage(const QJsonObject &quality)
+{
+    const int inputCount = inputImageCount(quality);
+    if (inputCount < 3)
+    {
+        return false;
+    }
+
+    const int registeredCount = registeredImageCount(quality);
+    if (registeredCount < 2)
+    {
+        return true;
+    }
+
+    return static_cast<double>(registeredCount) / static_cast<double>(inputCount)
+        < kProductionMinRegisteredImageRatio;
+}
+
 } // namespace
 
 QJsonObject buildSparseQualityMetadata(const QJsonArray &points,
@@ -72,6 +103,23 @@ QJsonObject buildSparseQualityMetadata(const QJsonArray &points,
                                        const QString &resultKind,
                                        const QString &sourceResultKind,
                                        const QString &sourceResultRef)
+{
+    return buildSparseQualityMetadata(points,
+                                      cameraCount,
+                                      baApplied,
+                                      resultKind,
+                                      sourceResultKind,
+                                      sourceResultRef,
+                                      0);
+}
+
+QJsonObject buildSparseQualityMetadata(const QJsonArray &points,
+                                       int cameraCount,
+                                       bool baApplied,
+                                       const QString &resultKind,
+                                       const QString &sourceResultKind,
+                                       const QString &sourceResultRef,
+                                       int inputImageCount)
 {
     QJsonObject histogram;
     std::vector<int> trackLens;
@@ -117,6 +165,11 @@ QJsonObject buildSparseQualityMetadata(const QJsonArray &points,
     quality[QStringLiteral("result_kind")] =
         resultKind.isEmpty() ? kSparseResultKindUnknown : resultKind;
     quality[QStringLiteral("camera_count")] = std::max(0, cameraCount);
+    quality[QStringLiteral("registered_image_count")] = std::max(0, cameraCount);
+    if (inputImageCount > 0)
+    {
+        quality[QStringLiteral("input_image_count")] = inputImageCount;
+    }
     quality[QStringLiteral("point_count")] = pointCount;
     quality[QStringLiteral("track_len_histogram")] = histogram;
     quality[QStringLiteral("two_view_ratio")] = twoViewRatio;
@@ -207,7 +260,11 @@ bool isProductionSparseResult(const QJsonObject &record)
     {
         return false;
     }
-    if (quality.value(QStringLiteral("camera_count")).toInt(0) < 2)
+    if (registeredImageCount(quality) < 2)
+    {
+        return false;
+    }
+    if (hasInsufficientRegisteredImageCoverage(quality))
     {
         return false;
     }
@@ -233,6 +290,24 @@ QString sparseResultBlockingReason(const QJsonObject &record)
     if (!quality.value(QStringLiteral("ba_applied")).toBool(false))
     {
         return QStringLiteral("当前稀疏点云没有光束法平差质量标记，请先运行三维重建/空三。");
+    }
+    if (registeredImageCount(quality) < 2)
+    {
+        return QStringLiteral("当前稀疏点云注册影像少于 2 张，不能作为正式航测稀疏点云。");
+    }
+    if (hasInsufficientRegisteredImageCoverage(quality))
+    {
+        const int registeredCount = registeredImageCount(quality);
+        const int inputCount = inputImageCount(quality);
+        const double ratio = inputCount > 0
+            ? static_cast<double>(registeredCount) / static_cast<double>(inputCount)
+            : 0.0;
+        return QStringLiteral("当前稀疏点云注册影像覆盖率过低（%1/%2，%3%，生产阈值 %4%）。"
+                              "请检查匹配连通性/相机位姿，重新运行正式 SfM/空三。")
+            .arg(registeredCount)
+            .arg(inputCount)
+            .arg(ratio * 100.0, 0, 'f', 1)
+            .arg(kProductionMinRegisteredImageRatio * 100.0, 0, 'f', 0);
     }
     const double twoViewRatio = quality.value(QStringLiteral("two_view_ratio")).toDouble(1.0);
     if (twoViewRatio >= kProductionMaxTwoViewRatio)

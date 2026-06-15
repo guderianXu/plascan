@@ -509,6 +509,28 @@ TEST(SparseResultQualityTest, RejectsFormalSfmWhenAlmostAllTracksAreTwoView)
     EXPECT_TRUE(xjw::gui::project::sparseResultBlockingReason(quality).contains(QStringLiteral("两视")));
 }
 
+TEST(SparseResultQualityTest, RejectsFormalSfmWhenTooFewSelectedImagesRegister)
+{
+    QJsonArray points;
+    points.append(QJsonObject{{QStringLiteral("track_len"), 3},
+                              {QStringLiteral("rms_reproj_px"), 0.6}});
+    points.append(QJsonObject{{QStringLiteral("track_len"), 4},
+                              {QStringLiteral("rms_reproj_px"), 0.7}});
+    points.append(QJsonObject{{QStringLiteral("track_len"), 5},
+                              {QStringLiteral("rms_reproj_px"), 0.8}});
+
+    QJsonObject quality = xjw::gui::project::buildSparseQualityMetadata(
+        points,
+        35,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+    quality[QStringLiteral("input_image_count")] = 444;
+    quality[QStringLiteral("registered_image_count")] = 35;
+
+    EXPECT_FALSE(xjw::gui::project::isProductionSparseResult(quality));
+    EXPECT_TRUE(xjw::gui::project::sparseResultBlockingReason(quality).contains(QStringLiteral("注册影像")));
+}
+
 TEST(SparseResultQualityTest, LegacyTriangulationRecordsAreShownAsPairwisePreview)
 {
     const QJsonObject legacyRecord{
@@ -1516,7 +1538,8 @@ TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
     EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::AerialTriangulation")));
     EXPECT_TRUE(source.contains(QStringLiteral("setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation)")));
     EXPECT_TRUE(source.contains(QStringLiteral("source\"] = QStringLiteral(\"aerial_triangulation\")"))
-                || source.contains(QStringLiteral("source\", QStringLiteral(\"aerial_triangulation\")")));
+                || source.contains(QStringLiteral("source\", QStringLiteral(\"aerial_triangulation\")"))
+                || source.contains(QStringLiteral("resultRecordExtra[QStringLiteral(\"source\")] = QStringLiteral(\"aerial_triangulation\")")));
 
     const int sparseStart = source.indexOf(QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
     ASSERT_GE(sparseStart, 0);
@@ -1524,7 +1547,7 @@ TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
                                             sparseStart);
     ASSERT_GT(nextFunction, sparseStart);
     const QString sparseBlock = source.mid(sparseStart, nextFunction - sparseStart);
-    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("SFMService::run(opts)")));
+    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("SFMService::run(runOpts)")));
     EXPECT_TRUE(sparseBlock.contains(QStringLiteral("appendAtResult")));
     EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionWorkflow")));
     EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionDenseStage")));
@@ -1573,8 +1596,137 @@ TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataOffersAutoFillOrManualR
         sparseStart);
     ASSERT_GT(threeDStart, sparseStart);
     const QString sparseBody = source.mid(sparseStart, threeDStart - sparseStart);
-    EXPECT_TRUE(sparseBody.contains(QStringLiteral("opts.projectMeta = pm->currentMeta()")));
+    EXPECT_TRUE(sparseBody.contains(QStringLiteral("const QJsonObject projectMeta = pm->currentMeta()")));
+    EXPECT_TRUE(sparseBody.contains(QStringLiteral("opts.projectMeta = projectMeta")));
     EXPECT_FALSE(sparseBody.contains(QStringLiteral("opts.projectMeta = pm->coreProjectMeta()")));
+}
+
+TEST(AerialTriangulationWorkflowTest, PreflightReusesGeneratedPairPlanBeforeReportingMissingMatches)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int summaryStart = source.indexOf(
+        QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
+    ASSERT_GE(summaryStart, 0);
+    const int promptStart = source.indexOf(
+        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        summaryStart);
+    ASSERT_GT(promptStart, summaryStart);
+    const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
+
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("loadGeneratedPairConstraints")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("usedStoredPairs")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("storedPairsStale")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("generatedPairCoveredCount")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("generatedPairRequiredCount")));
+    EXPECT_FALSE(summaryBody.contains(QStringLiteral("coveredPairCount == requiredPairCount")));
+}
+
+TEST(AerialTriangulationWorkflowTest, DialogStartsWorkflowWithQueuedConnection)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int dialogStart = source.indexOf(QStringLiteral("void MenuWorkflowController::openAerialTriangulationDialog"));
+    ASSERT_GE(dialogStart, 0);
+    const int nextFunction = source.indexOf(QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"),
+                                            dialogStart);
+    ASSERT_GT(nextFunction, dialogStart);
+    const QString dialogBody = source.mid(dialogStart, nextFunction - dialogStart);
+
+    const int runConnect = dialogBody.indexOf(QStringLiteral("&ThreeDReconstructionDialog::runRequested"));
+    ASSERT_GE(runConnect, 0);
+    const int dialogExec = dialogBody.indexOf(QStringLiteral("dlg->exec()"), runConnect);
+    ASSERT_GT(dialogExec, runConnect);
+    const QString runConnectBlock = dialogBody.mid(runConnect, dialogExec - runConnect);
+    EXPECT_TRUE(runConnectBlock.contains(QStringLiteral("Qt::QueuedConnection")));
+}
+
+TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThread)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("launchAerialTriangulationSfm")));
+    EXPECT_TRUE(header.contains(QStringLiteral("static SparsePrerequisiteSummary summarizeSparsePrerequisites")));
+
+    const int sparseStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
+    ASSERT_GE(sparseStart, 0);
+    const int launchStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::launchAerialTriangulationSfm"),
+        sparseStart);
+    ASSERT_GT(launchStart, sparseStart);
+    const QString startBody = source.mid(sparseStart, launchStart - sparseStart);
+
+    EXPECT_TRUE(startBody.contains(QStringLiteral("QFutureWatcher<SparsePrerequisiteSummary>")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral("watcher->setFuture(QtConcurrent::run")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral("summarizeSparsePrerequisites(images, projectMeta, projectPath)")));
+    const int preflightLaunch = startBody.indexOf(QStringLiteral("watcher->setFuture(QtConcurrent::run"));
+    ASSERT_GE(preflightLaunch, 0);
+    EXPECT_FALSE(startBody.left(preflightLaunch).contains(QStringLiteral("summarizeSparsePrerequisites(")));
+
+    const int threeDStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startThreeDReconstructionWorkflow"),
+        launchStart);
+    ASSERT_GT(threeDStart, launchStart);
+    const QString launchBody = source.mid(launchStart, threeDStart - launchStart);
+
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("QFutureWatcher<xjw::gui::SFMServiceResult>")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("watcher->setFuture(QtConcurrent::run")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::SFMService::run(runOpts)")));
+    const int sfmLaunch = launchBody.indexOf(QStringLiteral("watcher->setFuture(QtConcurrent::run"));
+    ASSERT_GE(sfmLaunch, 0);
+    EXPECT_FALSE(launchBody.left(sfmLaunch).contains(QStringLiteral("SFMService::run")));
+}
+
+TEST(AerialTriangulationWorkflowTest, SfmLaunchReusesGeneratedPairConstraints)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int launchStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::launchAerialTriangulationSfm"));
+    ASSERT_GE(launchStart, 0);
+    const int nextFunction = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startThreeDReconstructionWorkflow"),
+        launchStart);
+    ASSERT_GT(nextFunction, launchStart);
+    const QString launchBody = source.mid(launchStart, nextFunction - launchStart);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("loadGeneratedPairConstraints")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("const QStringList allowedPairs = loadGeneratedPairConstraints")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("opts.restrictPairs = true")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("opts.allowedPairs = allowedPairs")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("storedPairsStale")));
+}
+
+TEST(SfmServicePairPlanningTest, ProjectMetaCamerasEnableBoundedPairPlanning)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("loadKnownCameraCentersFromProjectMeta")));
+    EXPECT_TRUE(source.contains(QStringLiteral("hasProjectMetaCameraCenters")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pairPlanOptions.knownCameraCenters = projectMetaCameraCenters")));
+    EXPECT_TRUE(source.contains(QStringLiteral("匹配候选对")));
+    EXPECT_TRUE(source.contains(QStringLiteral("validIdByPath")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pairKey.split(QStringLiteral(\"\\n\"))")));
+}
+
+TEST(SfmServiceKnownPoseModeTest, CompleteProjectMetaCamerasEnableKnownPoseReconstruction)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("hasCompleteProjectMetaCameras")));
+    EXPECT_TRUE(source.contains(QStringLiteral(
+        "sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras")));
+    EXPECT_TRUE(source.contains(QStringLiteral("projectImageMetaByPath(opts.projectMeta, true)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("使用项目元数据已知外参模式")));
 }
 
 TEST(MainWindowProgressTest, FeatureMatchProgressExpandsAllFeatureModeAndClampsDisplay)
@@ -1735,6 +1887,27 @@ TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_markerShapeCombo->setCurrentIndex(2)")));
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_pointSizeSpin->setValue(1)")));
     EXPECT_TRUE(dialogUi.contains(QStringLiteral("<number>1</number>")));
+}
+
+TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
+{
+    const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
+    const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
+    const QString dialogHeader = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.h"));
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.cpp"));
+    ASSERT_FALSE(rendererHeader.isEmpty());
+    ASSERT_FALSE(uiDefaults.isEmpty());
+    ASSERT_FALSE(dialogHeader.isEmpty());
+    ASSERT_FALSE(dialogSource.isEmpty());
+
+    EXPECT_TRUE(rendererHeader.contains(QStringLiteral("QColor pointColor = QColor(0, 120, 255)")));
+    EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor")));
+    EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"r\"] = 0")));
+    EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"g\"] = 120")));
+    EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"b\"] = 255")));
+    EXPECT_TRUE(dialogHeader.contains(QStringLiteral("QColor m_pointColor{0, 120, 255}")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_pointColor = QColor(0, 120, 255)")));
+    EXPECT_FALSE(dialogSource.contains(QStringLiteral("点颜色黄")));
 }
 
 TEST(FeatureVisualizationSettingsTest, ProjectOpenRestoresFeatureSuffixEvenWhenUiSettingsAreEmpty)
@@ -1981,6 +2154,23 @@ TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage
 
     EXPECT_TRUE(finishedBlock.contains(QStringLiteral("QDir::cleanPath(imagePath) == QDir::cleanPath(m_currentImagePath)")));
     EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && m_layerRenderer)")));
+}
+
+TEST(CanvasWidgetResponsivenessTest, FeatureLoadEstimatesOrientationOnlyWhenDisplayed)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int startIndex = source.indexOf(QStringLiteral("void CanvasWidget::startSpLoadForImage"));
+    ASSERT_GE(startIndex, 0);
+    const int imreadIndex = source.indexOf(QStringLiteral("cv::imread(imagePathCopy.toStdString()"), startIndex);
+    ASSERT_GE(imreadIndex, startIndex);
+    const QString loadBlock = source.mid(startIndex, imreadIndex - startIndex + 600);
+
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("const QString projectPath = property(\"currentProjectPath\").toString()")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("const bool shouldEstimateOrientation = m_currentFeatureOpts.showOrientation")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("[imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]()")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("if (shouldEstimateOrientation)")));
 }
 
 TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
@@ -2372,6 +2562,23 @@ TEST(FeatureMatchSidecarTest, NativeRunnerWritesSidecarV2Indices)
     EXPECT_TRUE(source.contains(QStringLiteral("matched_indices0")));
     EXPECT_TRUE(source.contains(QStringLiteral("matched_indices1")));
     EXPECT_TRUE(source.contains(QStringLiteral("matched_scores")));
+}
+
+TEST(FeatureMatchSidecarTest, FormalSfmRejectsLegacyCoordinateOnlyMatchCaches)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int compatibleStart = source.indexOf(QStringLiteral("existingMatchCompatible"));
+    ASSERT_GE(compatibleStart, 0);
+    const int candidateStart = source.indexOf(QStringLiteral("appendCandidatePair"), compatibleStart);
+    ASSERT_GT(candidateStart, compatibleStart);
+    const QString compatibilityBlock = source.mid(compatibleStart, candidateStart - compatibleStart);
+
+    EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("feature_format_version")));
+    EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("matched_indices0")));
+    EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("matched_indices1")));
+    EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("缺少 V2 特征索引")));
 }
 
 TEST(ModelDropSupportTest, AcceptsStandaloneModelAndPointCloudFiles)

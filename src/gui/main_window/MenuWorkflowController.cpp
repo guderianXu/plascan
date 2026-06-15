@@ -32,6 +32,7 @@
 #include <QFileDialog>
 #include <QFileInfo>
 #include <QFutureWatcher>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QMainWindow>
@@ -45,6 +46,7 @@
 #include <atomic>
 #include <cmath>
 #include <memory>
+#include <numeric>
 
 namespace
 {
@@ -268,7 +270,7 @@ QStringList MenuWorkflowController::getProjectImages() const
 MenuWorkflowController::SparsePrerequisiteSummary
 MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                                                      const QJsonObject &meta,
-                                                     const QString &projectPath) const
+                                                     const QString &projectPath)
 {
     SparsePrerequisiteSummary summary;
     summary.imageCount = images.size();
@@ -336,39 +338,148 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         }
     }
 
-    int requiredPairCount = 0;
-    int coveredPairCount = 0;
-    for (int i = 0; i < images.size(); ++i)
+    auto pairCoveredByAliases = [&](const QStringList &leftAliases, const QStringList &rightAliases) -> bool
     {
-        const QStringList leftAliases = nameAliases(images.at(i));
-        for (int j = i + 1; j < images.size(); ++j)
+        for (const QString &left : leftAliases)
         {
-            const QStringList rightAliases = nameAliases(images.at(j));
-            bool pairCovered = false;
-            for (const QString &left : leftAliases)
+            for (const QString &right : rightAliases)
             {
-                for (const QString &right : rightAliases)
+                if (matchedPairKeys.contains(matchPairKey(left, right)))
                 {
-                    if (matchedPairKeys.contains(matchPairKey(left, right)))
-                    {
-                        pairCovered = true;
-                        break;
-                    }
-                }
-                if (pairCovered)
-                {
-                    break;
+                    return true;
                 }
             }
+        }
+        return false;
+    };
 
-            ++requiredPairCount;
-            if (pairCovered)
+    auto imagePairCovered = [&](const QString &leftImage, const QString &rightImage) -> bool
+    {
+        return pairCoveredByAliases(nameAliases(leftImage), nameAliases(rightImage));
+    };
+
+    bool usedStoredPairs = false;
+    bool storedPairsStale = false;
+    const QStringList generatedPairs = loadGeneratedPairConstraints(projectPath,
+                                                                    meta,
+                                                                    images,
+                                                                    &usedStoredPairs,
+                                                                    &storedPairsStale);
+    int generatedPairRequiredCount = 0;
+    int generatedPairCoveredCount = 0;
+
+    auto currentMatchGraphIsUsable = [&]() -> bool
+    {
+        if (images.size() < 2)
+        {
+            return true;
+        }
+
+        QHash<QString, int> imageIndexByAlias;
+        for (int i = 0; i < images.size(); ++i)
+        {
+            const QStringList aliases = nameAliases(images.at(i));
+            for (const QString &alias : aliases)
             {
-                ++coveredPairCount;
+                if (!imageIndexByAlias.contains(alias))
+                {
+                    imageIndexByAlias.insert(alias, i);
+                }
+            }
+        }
+
+        QVector<int> parent(images.size());
+        std::iota(parent.begin(), parent.end(), 0);
+        auto findRoot = [&parent](int index) -> int
+        {
+            int root = index;
+            while (parent[root] != root)
+            {
+                root = parent[root];
+            }
+            while (parent[index] != index)
+            {
+                const int next = parent[index];
+                parent[index] = root;
+                index = next;
+            }
+            return root;
+        };
+
+        auto resolveImageIndex = [&](const QString &pathOrName) -> int
+        {
+            const QStringList aliases = nameAliases(pathOrName);
+            for (const QString &alias : aliases)
+            {
+                const auto it = imageIndexByAlias.constFind(alias);
+                if (it != imageIndexByAlias.constEnd())
+                {
+                    return it.value();
+                }
+            }
+            return -1;
+        };
+
+        int matchedEdgeCount = 0;
+        QSet<int> matchedImageIndices;
+        for (const auto &pair : matchedPairs)
+        {
+            const int leftIndex = resolveImageIndex(pair.first);
+            const int rightIndex = resolveImageIndex(pair.second);
+            if (leftIndex < 0 || rightIndex < 0 || leftIndex == rightIndex)
+            {
+                continue;
+            }
+
+            const int leftRoot = findRoot(leftIndex);
+            const int rightRoot = findRoot(rightIndex);
+            if (leftRoot != rightRoot)
+            {
+                parent[rightRoot] = leftRoot;
+            }
+            matchedImageIndices.insert(leftIndex);
+            matchedImageIndices.insert(rightIndex);
+            ++matchedEdgeCount;
+        }
+
+        if (matchedEdgeCount <= 0 || matchedImageIndices.size() != images.size())
+        {
+            return false;
+        }
+
+        const int firstRoot = findRoot(0);
+        for (int i = 1; i < images.size(); ++i)
+        {
+            if (findRoot(i) != firstRoot)
+            {
+                return false;
+            }
+        }
+        return true;
+    };
+
+    if (usedStoredPairs && !storedPairsStale)
+    {
+        for (const QString &pairKey : generatedPairs)
+        {
+            const QStringList parts = pairKey.split(QStringLiteral("\n"));
+            if (parts.size() != 2)
+            {
+                continue;
+            }
+
+            ++generatedPairRequiredCount;
+            if (imagePairCovered(parts.at(0), parts.at(1)))
+            {
+                ++generatedPairCoveredCount;
             }
         }
     }
-    summary.hasMatches = requiredPairCount == 0 || coveredPairCount == requiredPairCount;
+    const bool generatedPlanHasNoCoveredPairs = usedStoredPairs
+        && !storedPairsStale
+        && generatedPairRequiredCount > 0
+        && generatedPairCoveredCount == 0;
+    summary.hasMatches = !generatedPlanHasNoCoveredPairs && currentMatchGraphIsUsable();
 
     if (!summary.hasFeatures)
     {
@@ -806,7 +917,7 @@ void MenuWorkflowController::openThreeDReconstructionDialog()
             m_threeDSetting->save(settings);
         }
         startThreeDReconstructionWorkflow(settings);
-    });
+    }, Qt::QueuedConnection);
 
     dlg->exec();
 }
@@ -854,7 +965,7 @@ void MenuWorkflowController::openAerialTriangulationDialog()
             m_aerialTriangulationSetting->save(settings);
         }
         startAerialTriangulationWorkflow(settings);
-    });
+    }, Qt::QueuedConnection);
 
     dlg->exec();
 }
@@ -876,31 +987,90 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         return;
     }
 
-    const SparsePrerequisiteSummary prereq = summarizeSparsePrerequisites(
-        images,
-        m_projectManager->currentMeta(),
-        m_projectManager->currentProjectPath());
-    const bool autoFillMissing = confirmAutoFillMissingSparseInputs(prereq);
-    if (!autoFillMissing && !prereq.missingMessages.isEmpty())
-    {
-        return;
-    }
-
+    auto *pm = m_projectManager;
+    const QString projectPath = pm->currentProjectPath();
+    const QJsonObject projectMeta = pm->currentMeta();
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
     if (outputRoot.isEmpty())
     {
-        const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
+        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
         outputRoot = QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation"));
     }
     outputRoot = QDir::cleanPath(outputRoot);
     QDir().mkpath(outputRoot);
 
+    QJsonObject runSettings = settings;
+    runSettings[QStringLiteral("output_dir")] = outputRoot;
+
+    emit pm->atProgressChanged(QStringLiteral("空中三角测量: 检查上游数据..."), 0);
+
+    auto *watcher = new QFutureWatcher<SparsePrerequisiteSummary>(this);
+    QPointer<MenuWorkflowController> self(this);
+    QPointer<ProjectManager> pmGuard(pm);
+    connect(watcher, &QFutureWatcher<SparsePrerequisiteSummary>::finished, this,
+            [self, pmGuard, watcher, runSettings, images, projectPath, projectMeta, outputRoot]() {
+        const SparsePrerequisiteSummary prereq = watcher->result();
+        watcher->deleteLater();
+
+        if (!self || !pmGuard)
+        {
+            return;
+        }
+        if (pmGuard->currentProjectPath() != projectPath)
+        {
+            emit pmGuard->atProgressFinished(false);
+            QMessageBox::warning(self->m_mainWindow,
+                                 QStringLiteral("空中三角测量"),
+                                 QStringLiteral("项目已切换，本次空三启动已取消。"));
+            return;
+        }
+
+        const bool autoFillMissing = self->confirmAutoFillMissingSparseInputs(prereq);
+        if (!autoFillMissing && !prereq.missingMessages.isEmpty())
+        {
+            emit pmGuard->atProgressFinished(false);
+            return;
+        }
+
+        self->launchAerialTriangulationSfm(runSettings,
+                                           images,
+                                           projectPath,
+                                           projectMeta,
+                                           outputRoot,
+                                           autoFillMissing);
+    });
+    watcher->setFuture(QtConcurrent::run([images, projectMeta, projectPath]() {
+        return MenuWorkflowController::summarizeSparsePrerequisites(images, projectMeta, projectPath);
+    }));
+}
+
+void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &settings,
+                                                         const QStringList &images,
+                                                         const QString &projectPath,
+                                                         const QJsonObject &projectMeta,
+                                                         const QString &outputRoot,
+                                                         bool autoFillMissing)
+{
+    if (!m_projectManager)
+    {
+        return;
+    }
+
     auto *pm = m_projectManager;
+    if (pm->currentProjectPath() != projectPath)
+    {
+        emit pm->atProgressFinished(false);
+        QMessageBox::warning(m_mainWindow,
+                             QStringLiteral("空中三角测量"),
+                             QStringLiteral("项目已切换，本次空三启动已取消。"));
+        return;
+    }
+
     xjw::gui::SFMServiceOptions opts;
     opts.autoGenerateMissingMatches = autoFillMissing;
     opts.images = images;
-    opts.plascanPath = pm->currentProjectPath();
-    opts.projectMeta = pm->currentMeta();
+    opts.plascanPath = projectPath;
+    opts.projectMeta = projectMeta;
     opts.outputDir = QDir(outputRoot).filePath(QStringLiteral("sfm_sparse"));
     const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
     opts.threads = workflowThreads;
@@ -910,6 +1080,24 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
     opts.cudaParallelPairs = opts.device == QStringLiteral("cpu")
         ? 1
         : std::clamp(std::max(1, workflowThreads / 4), 1, 2);
+
+    bool usedStoredPairs = false;
+    bool storedPairsStale = false;
+    const QStringList allowedPairs = loadGeneratedPairConstraints(projectPath,
+                                                                  projectMeta,
+                                                                  images,
+                                                                  &usedStoredPairs,
+                                                                  &storedPairsStale);
+    if (!allowedPairs.isEmpty())
+    {
+        opts.restrictPairs = true;
+        opts.allowedPairs = allowedPairs;
+        LOG_INFO(QStringLiteral("空中三角测量: 使用已生成候选配对约束 %1 对").arg(allowedPairs.size()));
+    }
+    else if (storedPairsStale)
+    {
+        LOG_WARN(QStringLiteral("空中三角测量: 已生成候选配对与当前影像集合不一致，改用自动配对规划"));
+    }
 
     const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
     if (quality == QStringLiteral("fast"))
@@ -921,17 +1109,34 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
         opts.quality = 3;
     }
 
-    opts.progressFn = [pm](const QString &stage, int percent) {
-        QMetaObject::invokeMethod(pm, [pm, stage, percent]() {
-            emit pm->atProgressChanged(QStringLiteral("空中三角测量: %1").arg(stage), percent);
+    QPointer<ProjectManager> pmGuard(pm);
+    opts.progressFn = [pmGuard](const QString &stage, int percent) {
+        if (!pmGuard)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(pmGuard, [pmGuard, stage, percent]() {
+            if (!pmGuard)
+            {
+                return;
+            }
+            emit pmGuard->atProgressChanged(QStringLiteral("空中三角测量: %1").arg(stage), percent);
         }, Qt::QueuedConnection);
     };
-    opts.pairMatchedFn = [pm](const QString &img0,
-                              const QString &img1,
-                              const QString &matchPath,
-                              int numMatches) {
-        QMetaObject::invokeMethod(pm, [pm, img0, img1, matchPath, numMatches]() {
-            emit pm->matchPairReady(img0, img1, matchPath, numMatches);
+    opts.pairMatchedFn = [pmGuard](const QString &img0,
+                                   const QString &img1,
+                                   const QString &matchPath,
+                                   int numMatches) {
+        if (!pmGuard)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(pmGuard, [pmGuard, img0, img1, matchPath, numMatches]() {
+            if (!pmGuard)
+            {
+                return;
+            }
+            emit pmGuard->matchPairReady(img0, img1, matchPath, numMatches);
         }, Qt::QueuedConnection);
     };
 
@@ -943,10 +1148,118 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
 
     const QStringList sfmImages = images;
     const QString sfmOutputDir = opts.outputDir;
-    const QString assetsDir = ProjectIO::projectAssetsDir(pm->currentProjectPath());
-    (void)QtConcurrent::run([pm, opts, sfmImages, sfmOutputDir, assetsDir]() {
-        xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(opts);
+    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+    auto *watcher = new QFutureWatcher<xjw::gui::SFMServiceResult>(this);
+    connect(watcher, &QFutureWatcher<xjw::gui::SFMServiceResult>::finished, this,
+            [this, watcher, pmGuard, cancelFlag, sfmImages, sfmOutputDir, projectPath]() mutable {
+        xjw::gui::SFMServiceResult result = watcher->result();
+        watcher->deleteLater();
 
+        if (!pmGuard)
+        {
+            return;
+        }
+        pmGuard->clearAtCancelFlag(cancelFlag);
+        if (pmGuard->currentProjectPath() != projectPath)
+        {
+            emit pmGuard->atProgressFinished(false);
+            QMessageBox::warning(m_mainWindow,
+                                 QStringLiteral("空中三角测量"),
+                                 QStringLiteral("项目已切换，本次空三结果未写回。"));
+            return;
+        }
+
+        const bool wasCanceled = cancelFlag->load(std::memory_order_relaxed);
+        for (const auto &sp : result.newSpFiles)
+        {
+            pmGuard->appendIpfindResult(sp.imagePath, sp.spPath, QJsonObject());
+        }
+        for (const auto &match : result.newMatchFiles)
+        {
+            pmGuard->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
+        }
+
+        if (!result.pendingCamUpdates.isEmpty())
+        {
+            int updated = 0;
+            QString err;
+            if (!pmGuard->setImageCameras(result.pendingCamUpdates, &updated, &err))
+            {
+                LOG_WARN(QStringLiteral("空中三角测量: SFM 相机写回失败: %1").arg(err));
+            }
+        }
+
+        int registeredImageCount = result.numRegisteredImages;
+        QJsonObject resultRecordExtra = result.resultRecordExtra;
+        QString sparseBlockingReason = QStringLiteral("SFM 未生成可用的正式稀疏点云。");
+        if (result.success && !result.sparseCloudPath.isEmpty())
+        {
+            const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
+            QStringList registeredImages;
+            registeredImages.reserve(sfmImages.size());
+            for (const QString &imagePath : sfmImages)
+            {
+                const QString normalized = xjw::gui::project::normalizePath(imagePath);
+                if (registeredCameraKeys.contains(normalized))
+                {
+                    registeredImages.append(normalized);
+                }
+            }
+            if (registeredImages.size() < registeredCameraKeys.size())
+            {
+                for (const QString &imagePath : registeredCameraKeys)
+                {
+                    if (!registeredImages.contains(imagePath))
+                    {
+                        registeredImages.append(imagePath);
+                    }
+                }
+            }
+            registeredImageCount = registeredImages.size();
+
+            resultRecordExtra[QStringLiteral("source")] = QStringLiteral("aerial_triangulation");
+            pmGuard->appendAtResult(result.sparseCloudPath,
+                                    result.numPoints3D,
+                                    registeredImages,
+                                    sfmOutputDir,
+                                    resultRecordExtra);
+            sparseBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
+        }
+
+        emit pmGuard->atProgressFinished(result.success);
+        if (wasCanceled)
+        {
+            return;
+        }
+        if (!result.success)
+        {
+            QMessageBox::warning(m_mainWindow,
+                                 QStringLiteral("空中三角测量"),
+                                 result.errorMessage.isEmpty()
+                                     ? QStringLiteral("空中三角测量失败。")
+                                     : result.errorMessage);
+            return;
+        }
+
+        if (!xjw::gui::project::isProductionSparseResult(resultRecordExtra))
+        {
+            QMessageBox::warning(m_mainWindow,
+                                 QStringLiteral("空中三角测量"),
+                                 sparseBlockingReason.isEmpty()
+                                     ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
+                                     : sparseBlockingReason);
+            return;
+        }
+
+        QMessageBox::information(m_mainWindow,
+                                 QStringLiteral("空中三角测量"),
+                                 QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3")
+                                     .arg(registeredImageCount)
+                                     .arg(result.numPoints3D)
+                                     .arg(result.sparseCloudPath));
+    });
+    watcher->setFuture(QtConcurrent::run([runOpts = std::move(opts), sfmImages, sfmOutputDir, assetsDir]() mutable {
+        xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(runOpts);
         if (result.success && !assetsDir.isEmpty())
         {
             QJsonObject report;
@@ -963,93 +1276,8 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
                                               QStringLiteral("aerial_triangulation_sfm_report_history.json"),
                                               report);
         }
-
-        QMetaObject::invokeMethod(pm, [pm, result = std::move(result), sfmImages, sfmOutputDir]() mutable {
-            for (const auto &sp : result.newSpFiles)
-            {
-                pm->appendIpfindResult(sp.imagePath, sp.spPath, QJsonObject());
-            }
-            for (const auto &match : result.newMatchFiles)
-            {
-                pm->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
-            }
-
-            if (!result.pendingCamUpdates.isEmpty())
-            {
-                int updated = 0;
-                QString err;
-                if (!pm->setImageCameras(result.pendingCamUpdates, &updated, &err))
-                {
-                    LOG_WARN(QStringLiteral("空中三角测量: SFM 相机写回失败: %1").arg(err));
-                }
-            }
-
-            int registeredImageCount = result.numRegisteredImages;
-            QJsonObject resultRecordExtra = result.resultRecordExtra;
-            QString sparseBlockingReason = QStringLiteral("SFM 未生成可用的正式稀疏点云。");
-            if (result.success && !result.sparseCloudPath.isEmpty())
-            {
-                const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
-                QStringList registeredImages;
-                registeredImages.reserve(sfmImages.size());
-                for (const QString &imagePath : sfmImages)
-                {
-                    const QString normalized = xjw::gui::project::normalizePath(imagePath);
-                    if (registeredCameraKeys.contains(normalized))
-                    {
-                        registeredImages.append(normalized);
-                    }
-                }
-                if (registeredImages.size() < registeredCameraKeys.size())
-                {
-                    for (const QString &imagePath : registeredCameraKeys)
-                    {
-                        if (!registeredImages.contains(imagePath))
-                        {
-                            registeredImages.append(imagePath);
-                        }
-                    }
-                }
-                registeredImageCount = registeredImages.size();
-
-                resultRecordExtra["source"] = QStringLiteral("aerial_triangulation");
-                pm->appendAtResult(result.sparseCloudPath,
-                                   result.numPoints3D,
-                                   registeredImages,
-                                   sfmOutputDir,
-                                   resultRecordExtra);
-                sparseBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
-            }
-
-            emit pm->atProgressFinished(result.success);
-            if (!result.success)
-            {
-                QMessageBox::warning(nullptr,
-                                     QStringLiteral("空中三角测量"),
-                                     result.errorMessage.isEmpty()
-                                         ? QStringLiteral("空中三角测量失败。")
-                                         : result.errorMessage);
-                return;
-            }
-
-            if (!xjw::gui::project::isProductionSparseResult(resultRecordExtra))
-            {
-                QMessageBox::warning(nullptr,
-                                     QStringLiteral("空中三角测量"),
-                                     sparseBlockingReason.isEmpty()
-                                         ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
-                                         : sparseBlockingReason);
-                return;
-            }
-
-            QMessageBox::information(nullptr,
-                                     QStringLiteral("空中三角测量"),
-                                     QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3")
-                                         .arg(registeredImageCount)
-                                         .arg(result.numPoints3D)
-                                         .arg(result.sparseCloudPath));
-        }, Qt::QueuedConnection);
-    });
+        return result;
+    }));
 }
 
 void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject &settings)

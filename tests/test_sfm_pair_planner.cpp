@@ -94,6 +94,38 @@ TEST(SfmPairPlannerTest, KnownCameraCentersAddSpatialNeighborsOutsideSequenceWin
     EXPECT_FALSE(keys.contains(xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(4))));
 }
 
+TEST(SfmPairPlannerTest, KnownCameraCentersWithoutCameraFilesStillRestrictLargeProject)
+{
+    xjw::gui::SfmPairPlannerOptions options;
+    options.autoRestrictKnownCameraPairs = true;
+    options.knownCameraPairWindow = 3;
+    options.knownCameraAllPairsMaxImages = 20;
+    options.knownCameraSpatialNeighborCount = 2;
+
+    std::vector<std::array<double, 3>> centers;
+    centers.reserve(40);
+    for (int i = 0; i < 40; ++i)
+    {
+        centers.push_back({1000.0 * double(i), 0.0, 100.0});
+    }
+    centers[30] = {5.0, 0.0, 100.0};
+    options.knownCameraCenters = centers;
+
+    const xjw::gui::SfmPairPlan plan =
+        xjw::gui::planSfmMatchPairs(imagePaths(40), QStringList(), options);
+
+    EXPECT_TRUE(plan.restrictPairs);
+    EXPECT_TRUE(plan.autoRestricted);
+    EXPECT_TRUE(plan.usedSpatialCameraCenters);
+    EXPECT_EQ(plan.allPairCount, 780);
+    EXPECT_LT(plan.allowedPairKeys.size(), plan.allPairCount / 2);
+
+    const QSet<QString> keys(plan.allowedPairKeys.begin(), plan.allowedPairKeys.end());
+    EXPECT_TRUE(keys.contains(xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(30))));
+    EXPECT_TRUE(keys.contains(xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(3))));
+    EXPECT_FALSE(keys.contains(xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(4))));
+}
+
 TEST(SfmPairPlannerTest, KnownCameraOverlapPairsTakePriorityOverCenterNeighbors)
 {
     xjw::gui::SfmPairPlannerOptions options;

@@ -111,9 +111,9 @@ private:
         QStringList missingMessages;
     };
 
-    SparsePrerequisiteSummary summarizeSparsePrerequisites(const QStringList &images,
-                                                           const QJsonObject &meta,
-                                                           const QString &projectPath) const;
+    static SparsePrerequisiteSummary summarizeSparsePrerequisites(const QStringList &images,
+                                                                  const QJsonObject &meta,
+                                                                  const QString &projectPath);
     bool confirmAutoFillMissingSparseInputs(const SparsePrerequisiteSummary &summary) const;
 
     /// 在后台线程中启动 SuperPoint 特征提取任务。
@@ -122,6 +122,12 @@ private:
     void runSuperPointExtraction(const QJsonObject &config, const QStringList &inputs);
 
     void startAerialTriangulationWorkflow(const QJsonObject &settings);
+    void launchAerialTriangulationSfm(const QJsonObject &settings,
+                                      const QStringList &images,
+                                      const QString &projectPath,
+                                      const QJsonObject &projectMeta,
+                                      const QString &outputRoot,
+                                      bool autoFillMissing);
     void startThreeDReconstructionWorkflow(const QJsonObject &settings);
     void startThreeDReconstructionDenseStage(const QJsonObject &settings);
     void startThreeDReconstructionDenseRefineStage(const QJsonObject &settings);

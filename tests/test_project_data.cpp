@@ -118,6 +118,43 @@ TEST(ProjectFilesManagerTest, SeparatesAllWorkflowResultsFromCoreMetadata)
     }
 }
 
+TEST(PlascanArchiveTest, WriteEntryReleasesExistingReadHandleBeforeReplacingArchive)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    QJsonObject manifest;
+    manifest[QStringLiteral("format_version")] = QStringLiteral("1.0");
+    manifest[QStringLiteral("type")] = QStringLiteral("plascan_project");
+
+    const QJsonObject initialFiles{
+        {QStringLiteral("images"), QJsonArray{}}
+    };
+
+    QString error;
+    ASSERT_TRUE(PlascanArchive::createArchive(projectPath,
+                                             QJsonDocument(manifest).toJson(QJsonDocument::Compact),
+                                             QJsonDocument(initialFiles).toJson(QJsonDocument::Compact),
+                                             &error))
+        << qPrintable(error);
+
+    PlascanArchive archive(projectPath);
+    ASSERT_TRUE(archive.isValid()) << qPrintable(projectPath);
+
+    const QJsonObject updatedFiles{
+        {QStringLiteral("images"), QJsonArray{}},
+        {QStringLiteral("project_note"), QStringLiteral("updated")}
+    };
+    ASSERT_TRUE(archive.writeEntry(QStringLiteral("project_files.json"),
+                                   QJsonDocument(updatedFiles).toJson(QJsonDocument::Compact),
+                                   &error))
+        << qPrintable(error);
+
+    const QJsonObject storedFiles = archiveObject(projectPath, QStringLiteral("project_files.json"));
+    EXPECT_EQ(storedFiles.value(QStringLiteral("project_note")).toString(), QStringLiteral("updated"));
+}
+
 TEST(ProjectDataTest, SaveProjectWritesWorkflowResultsToResultsEntryOnly)
 {
     QTemporaryDir dir;

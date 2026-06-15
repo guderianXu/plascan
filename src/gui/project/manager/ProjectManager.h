@@ -169,6 +169,14 @@ public slots:
     {
         m_atCancelFlag = flag;
     }
+
+    void clearAtCancelFlag(const std::shared_ptr<std::atomic<bool>> &flag)
+    {
+        if (m_atCancelFlag == flag)
+        {
+            m_atCancelFlag.reset();
+        }
+    }
     
     // === 结果追加接口（供后台任务通过 Qt::QueuedConnection 调用） ===
     // 追加一条 ipfind 结果到项目元数据，并立即持久化到归档

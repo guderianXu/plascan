@@ -23,6 +23,14 @@ QJsonObject buildSparseQualityMetadata(const QJsonArray &points,
                                        const QString &sourceResultKind = QString(),
                                        const QString &sourceResultRef = QString());
 
+QJsonObject buildSparseQualityMetadata(const QJsonArray &points,
+                                       int cameraCount,
+                                       bool baApplied,
+                                       const QString &resultKind,
+                                       const QString &sourceResultKind,
+                                       const QString &sourceResultRef,
+                                       int inputImageCount);
+
 QJsonObject mergeSparseQualityIntoRecord(const QJsonObject &record,
                                          const QJsonObject &quality);
 

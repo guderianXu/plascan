@@ -8,6 +8,7 @@
 #include <QColor>
 #include <QImage>
 #include <QString>
+#include <QRectF>
 
 class QGraphicsScene;
 class QGraphicsPixmapItem;
@@ -50,7 +51,7 @@ public:
         bool showOrientation = false;
         int pointSize = 1;
         double scaleMultiplier = 1.0;
-        QColor pointColor = QColor(255,200,0);
+        QColor pointColor = QColor(0, 120, 255);
         QColor scaleColor = QColor(255,255,0);
         QColor orientColor = QColor(255,0,0);
         int opacity = 180; // 0-255
@@ -91,6 +92,7 @@ private:
     QList<QGraphicsPixmapItem *> m_layers{};
     QList<QGraphicsItem *> m_featureItems{};
     QList<QGraphicsItem *> m_matchItems{};
+    QRectF m_imageBounds{};
 
     // 当前项目的 .plascan 文件路径（可为空：表示未打开项目）
     QString m_currentProjectPath;

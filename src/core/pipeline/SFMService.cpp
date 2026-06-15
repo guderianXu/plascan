@@ -216,6 +216,55 @@ std::vector<std::array<double, 3>> loadKnownCameraCentersFromPaths(const QString
     return centers;
 }
 
+std::vector<std::array<double, 3>> loadKnownCameraCentersFromProjectMeta(const QStringList &images,
+                                                                        const QJsonObject &projectMeta,
+                                                                        int *matchedCount)
+{
+    std::vector<std::array<double, 3>> centers;
+    if (matchedCount)
+    {
+        *matchedCount = 0;
+    }
+    if (images.isEmpty() || projectMeta.isEmpty())
+    {
+        return centers;
+    }
+
+    const QMap<QString, QJsonObject> imageMetaByPath =
+        xjw::gui::project::projectImageMetaByPath(projectMeta, true);
+    if (imageMetaByPath.isEmpty())
+    {
+        return centers;
+    }
+
+    centers.reserve(static_cast<std::size_t>(images.size()));
+    int matched = 0;
+    for (const QString &imagePath : images)
+    {
+        const QString normalizedImagePath = xjw::gui::project::normalizePath(imagePath);
+        const QJsonObject imageMeta = imageMetaByPath.value(normalizedImagePath);
+        Camera camera;
+        if (imageMeta.isEmpty() || !xjw::gui::project::imageCameraFromEntry(imageMeta, &camera) || !camera.isValid())
+        {
+            centers.clear();
+            if (matchedCount)
+            {
+                *matchedCount = matched;
+            }
+            return centers;
+        }
+
+        centers.push_back(camera.cameraCenter());
+        ++matched;
+    }
+
+    if (matchedCount)
+    {
+        *matchedCount = matched;
+    }
+    return centers;
+}
+
 std::vector<std::array<int, 2>> loadKnownCameraOverlapPairsFromPaths(const QStringList &images,
                                                                      const QStringList &cameraPaths,
                                                                      double neighborFactor,
@@ -1081,6 +1130,120 @@ struct PairMatchData
     bool loaded = false;
 };
 
+bool resolveIndexedSidecarOrder(const QJsonObject &sidecar,
+                                const QString &imagePathA,
+                                const QString &imagePathB,
+                                const QString &featurePathA,
+                                const QString &featurePathB,
+                                bool *direct)
+{
+    auto matchesOrder = [](const QString &side0,
+                           const QString &side1,
+                           const QString &currentA,
+                           const QString &currentB,
+                           bool *directOut) -> bool
+    {
+        if (side0.isEmpty() || side1.isEmpty() || currentA.isEmpty() || currentB.isEmpty())
+        {
+            return false;
+        }
+
+        const QString norm0 = normalizePath(side0);
+        const QString norm1 = normalizePath(side1);
+        const QString normA = normalizePath(currentA);
+        const QString normB = normalizePath(currentB);
+        if (norm0 == normA && norm1 == normB)
+        {
+            if (directOut)
+            {
+                *directOut = true;
+            }
+            return true;
+        }
+        if (norm0 == normB && norm1 == normA)
+        {
+            if (directOut)
+            {
+                *directOut = false;
+            }
+            return true;
+        }
+        return false;
+    };
+
+    const QString image0 = sidecar.value(QStringLiteral("image0_path")).toString().trimmed();
+    const QString image1 = sidecar.value(QStringLiteral("image1_path")).toString().trimmed();
+    if (matchesOrder(image0, image1, imagePathA, imagePathB, direct))
+    {
+        return true;
+    }
+
+    QString feature0 = sidecar.value(QStringLiteral("feature0_path")).toString().trimmed();
+    QString feature1 = sidecar.value(QStringLiteral("feature1_path")).toString().trimmed();
+    if (feature0.isEmpty())
+    {
+        feature0 = sidecar.value(QStringLiteral("sp0_path")).toString().trimmed();
+    }
+    if (feature1.isEmpty())
+    {
+        feature1 = sidecar.value(QStringLiteral("sp1_path")).toString().trimmed();
+    }
+    return matchesOrder(feature0, feature1, featurePathA, featurePathB, direct);
+}
+
+bool appendIndexedMatchesFromSidecar(const QJsonObject &sidecar,
+                                     bool direct,
+                                     const ImageFeatureCache &fcA,
+                                     const ImageFeatureCache &fcB,
+                                     std::vector<FeatureMatch> *matches)
+{
+    if (!matches)
+    {
+        return false;
+    }
+
+    const QJsonArray indices0 = sidecar.value(QStringLiteral("matched_indices0")).toArray();
+    const QJsonArray indices1 = sidecar.value(QStringLiteral("matched_indices1")).toArray();
+    if (sidecar.value(QStringLiteral("feature_format_version")).toInt(0) < 2 ||
+        indices0.isEmpty() ||
+        indices0.size() != indices1.size())
+    {
+        return false;
+    }
+
+    const QJsonArray scores = sidecar.value(QStringLiteral("matched_scores")).toArray();
+    const std::size_t originalSize = matches->size();
+    matches->reserve(originalSize + static_cast<std::size_t>(indices0.size()));
+    for (int i = 0; i < indices0.size(); ++i)
+    {
+        const int idx0 = indices0.at(i).toInt(-1);
+        const int idx1 = indices1.at(i).toInt(-1);
+        const int mappedA = direct ? idx0 : idx1;
+        const int mappedB = direct ? idx1 : idx0;
+        if (mappedA < 0 ||
+            mappedB < 0 ||
+            mappedA >= static_cast<int>(fcA.featureOutput.keypoints.size()) ||
+            mappedB >= static_cast<int>(fcB.featureOutput.keypoints.size()))
+        {
+            continue;
+        }
+
+        FeatureMatch fm;
+        fm.idx1 = static_cast<FeatureIdx>(mappedA);
+        fm.idx2 = static_cast<FeatureIdx>(mappedB);
+        if (i < scores.size())
+        {
+            const double score = scores.at(i).toDouble(1.0);
+            if (std::isfinite(score))
+            {
+                fm.score = static_cast<float>(std::clamp(score, 0.0, 1.0));
+            }
+        }
+        matches->push_back(fm);
+    }
+    return matches->size() > originalSize;
+}
+
 } // anonymous namespace
 
 // ══════════════════════════════════════════════════════════════════════════════
@@ -1447,12 +1610,18 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     pairPlanOptions.knownCameraPairWindow = opts.knownCameraPairWindow;
     pairPlanOptions.knownCameraSpatialNeighborCount = opts.knownCameraSpatialNeighborCount;
     pairPlanOptions.knownCameraAllPairsMaxImages = opts.knownCameraAllPairsMaxImages;
+    int projectMetaCameraCenterCount = 0;
+    const std::vector<std::array<double, 3>> projectMetaCameraCenters =
+        loadKnownCameraCentersFromProjectMeta(opts.images, opts.projectMeta, &projectMetaCameraCenterCount);
+    const bool hasCameraPathRestrictionInputs = hasCompleteCameraPathList(opts.images, opts.cameraPaths);
+    const bool hasProjectMetaCameraCenters =
+        hasCompleteKnownCameraCenters(static_cast<int>(opts.images.size()), projectMetaCameraCenters);
     const bool canUseKnownCameraAutoPairs =
         !opts.restrictPairs &&
         opts.autoRestrictKnownCameraPairs &&
         opts.images.size() > std::max(0, opts.knownCameraAllPairsMaxImages) &&
-        hasCompleteCameraPathList(opts.images, opts.cameraPaths);
-    if (canUseKnownCameraAutoPairs && opts.useKnownCameraOverlapPairs)
+        (hasCameraPathRestrictionInputs || hasProjectMetaCameraCenters);
+    if (canUseKnownCameraAutoPairs && opts.useKnownCameraOverlapPairs && hasCameraPathRestrictionInputs)
     {
         QString overlapDetail;
         QString overlapError;
@@ -1473,18 +1642,32 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 .arg(overlapError.isEmpty() ? QStringLiteral("没有可用重叠对") : overlapError));
         }
     }
+    else if (canUseKnownCameraAutoPairs && opts.useKnownCameraOverlapPairs && hasProjectMetaCameraCenters)
+    {
+        LOG_INFO(QStringLiteral("  项目元数据相机中心可用于配对裁剪；未提供 .tsai 文件，跳过足迹重叠分析"));
+    }
     if (!opts.restrictPairs &&
         opts.autoRestrictKnownCameraPairs &&
         opts.knownCameraSpatialNeighborCount > 0 &&
         canUseKnownCameraAutoPairs)
     {
-        QString knownCameraCenterError;
-        pairPlanOptions.knownCameraCenters = loadKnownCameraCentersFromPaths(opts.images,
-                                                                             opts.cameraPaths,
-                                                                             &knownCameraCenterError);
-        if (pairPlanOptions.knownCameraCenters.empty())
+        if (hasCameraPathRestrictionInputs)
         {
-            LOG_WARN(QStringLiteral("  已知相机空间配对不可用，将回退顺序邻域: %1").arg(knownCameraCenterError));
+            QString knownCameraCenterError;
+            pairPlanOptions.knownCameraCenters = loadKnownCameraCentersFromPaths(opts.images,
+                                                                                 opts.cameraPaths,
+                                                                                 &knownCameraCenterError);
+            if (pairPlanOptions.knownCameraCenters.empty())
+            {
+                LOG_WARN(QStringLiteral("  已知相机空间配对不可用，将回退顺序邻域: %1").arg(knownCameraCenterError));
+            }
+        }
+        else if (hasProjectMetaCameraCenters)
+        {
+            pairPlanOptions.knownCameraCenters = projectMetaCameraCenters;
+            LOG_INFO(QStringLiteral("  从项目元数据读取相机中心用于配对裁剪: %1/%2")
+                .arg(projectMetaCameraCenterCount)
+                .arg(opts.images.size()));
         }
     }
 
@@ -1684,33 +1867,37 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             const QString sideFeature1 = normalizePath(feature1);
             const QString currentA = normalizePath(featureFilePaths.value(idA));
             const QString currentB = normalizePath(featureFilePaths.value(idB));
-            return (sideFeature0 == currentA && sideFeature1 == currentB) ||
-                   (sideFeature0 == currentB && sideFeature1 == currentA);
+            if (!((sideFeature0 == currentA && sideFeature1 == currentB) ||
+                  (sideFeature0 == currentB && sideFeature1 == currentA)))
+            {
+                return false;
+            }
+        }
+        else if (scFeatureAlgorithm.isEmpty())
+        {
+            return false;
         }
 
-        return !scFeatureAlgorithm.isEmpty();
+        const QJsonArray indices0 = sc.value(QStringLiteral("matched_indices0")).toArray();
+        const QJsonArray indices1 = sc.value(QStringLiteral("matched_indices1")).toArray();
+        if (sc.value(QStringLiteral("feature_format_version")).toInt(0) < 2 ||
+            indices0.isEmpty() ||
+            indices0.size() != indices1.size())
+        {
+            LOG_INFO(QStringLiteral("  匹配缓存缺少 V2 特征索引，不能用于正式 SfM track 合并: %1")
+                .arg(matchPath));
+            return false;
+        }
+
+        return true;
     };
 
     // 生成所有需要处理的影像对并检查已有匹配文件
     QVector<PairMatchData> allPairs;
     QVector<int> missingPairIndices;
 
-    for (int i = 0; i < validIds.size(); ++i) 
+    auto appendCandidatePair = [&](ImageId idA, ImageId idB)
     {
-        for (int j = i + 1; j < validIds.size(); ++j) 
-        {
-            const ImageId idA = validIds[i];
-            const ImageId idB = validIds[j];
-
-            if (pairPlan.restrictPairs)
-            {
-                const QString pairKey = canonicalPairKey(idToPath.value(idA), idToPath.value(idB));
-                if (pairKey.isEmpty() || !allowedPairSet.contains(pairKey))
-                {
-                    continue;
-                }
-            }
-
             const QString baseA = QFileInfo(idToPath[idA]).completeBaseName();
             const QString baseB = QFileInfo(idToPath[idB]).completeBaseName();
 
@@ -1790,53 +1977,20 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
             if (!foundPath.isEmpty()) 
             {
-                // 读取已有匹配
-                QString img0name, img1name;
-                xjw::feature_match::MatchResult mr;
-                if (SuperGlueMatchIO::read(foundPath, img0name, img1name, mr)
-                    && !mr.cvMatches.empty())
+                const QJsonObject sidecar = readJsonObjectFile(foundPath + QStringLiteral(".json"));
+                auto itA = featureCache.constFind(idA);
+                auto itB = featureCache.constFind(idB);
+                bool direct = true;
+                if (itA != featureCache.constEnd() &&
+                    itB != featureCache.constEnd() &&
+                    resolveIndexedSidecarOrder(sidecar,
+                                                idToPath.value(idA),
+                                                idToPath.value(idB),
+                                                featureFilePaths.value(idA),
+                                                featureFilePaths.value(idB),
+                                                &direct) &&
+                    appendIndexedMatchesFromSidecar(sidecar, direct, *itA, *itB, &pd.matches))
                 {
-                    // 判断方向：image0 (query) 对应哪张影像
-                    bool direct = true;     // 默认 idA = image0
-                    const QString sidecarPath = foundPath + QStringLiteral(".json");
-                    if (QFile::exists(sidecarPath)) 
-                    {
-                        QFile f(sidecarPath);
-                        if (f.open(QIODevice::ReadOnly)) 
-                        {
-                            const QJsonObject sc = QJsonDocument::fromJson(f.readAll()).object();
-                            f.close();
-                            const QString si0 = normalizePath(sc.value(QStringLiteral("image0_path")).toString());
-                            const QString si1 = normalizePath(sc.value(QStringLiteral("image1_path")).toString());
-                            if (si0 == idToPath[idA] && si1 == idToPath[idB])
-                                direct = true;
-                            else if (si0 == idToPath[idB] && si1 == idToPath[idA])
-                                direct = false;
-                        }
-                    } 
-                    else 
-                    {
-                        // 无 sidecar：通过文件中的影像名推断
-                        if (img0name == baseB) direct = false;
-                    }
-
-                    pd.matches.reserve(mr.cvMatches.size());
-                    for (const auto &dm : mr.cvMatches) 
-                    {
-                        FeatureMatch fm;
-                        if (direct) 
-                        {
-                            fm.idx1 = static_cast<FeatureIdx>(dm.queryIdx);
-                            fm.idx2 = static_cast<FeatureIdx>(dm.trainIdx);
-                        } 
-                        else 
-                        {
-                            fm.idx1 = static_cast<FeatureIdx>(dm.trainIdx);
-                            fm.idx2 = static_cast<FeatureIdx>(dm.queryIdx);
-                        }
-                        fm.score = matchScoreForDMatch(mr, dm);
-                        pd.matches.push_back(fm);
-                    }
                     pd.loaded = true;
                     ++metaReadOkCount;
                 }
@@ -1874,6 +2028,58 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             {
                 missingPairIndices.append(pairIdx);
             }
+    };
+
+    if (pairPlan.restrictPairs)
+    {
+        QMap<QString, ImageId> validIdByPath;
+        for (const ImageId id : validIds)
+        {
+            const QString normalizedPath = normalizePath(idToPath.value(id));
+            if (!normalizedPath.isEmpty())
+            {
+                validIdByPath.insert(normalizedPath, id);
+            }
+        }
+
+        QSet<QString> emittedPairKeys;
+        for (const QString &pairKey : pairPlan.allowedPairKeys)
+        {
+            const QString trimmedPairKey = pairKey.trimmed();
+            if (trimmedPairKey.isEmpty() ||
+                !allowedPairSet.contains(trimmedPairKey) ||
+                emittedPairKeys.contains(trimmedPairKey))
+            {
+                continue;
+            }
+
+            const QStringList pairPaths = pairKey.split(QStringLiteral("\n"));
+            if (pairPaths.size() != 2)
+            {
+                continue;
+            }
+
+            auto itA = validIdByPath.constFind(normalizePath(pairPaths.at(0).trimmed()));
+            auto itB = validIdByPath.constFind(normalizePath(pairPaths.at(1).trimmed()));
+            if (itA == validIdByPath.constEnd() ||
+                itB == validIdByPath.constEnd() ||
+                itA.value() == itB.value())
+            {
+                continue;
+            }
+
+            emittedPairKeys.insert(trimmedPairKey);
+            appendCandidatePair(itA.value(), itB.value());
+        }
+    }
+    else
+    {
+        for (int i = 0; i < validIds.size(); ++i)
+        {
+            for (int j = i + 1; j < validIds.size(); ++j)
+            {
+                appendCandidatePair(validIds[i], validIds[j]);
+            }
         }
     }
 
@@ -1886,6 +2092,9 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         return result;
     }
 
+    reportProgress(QStringLiteral("匹配候选对: %1 对，需生成 %2 对")
+        .arg(allPairs.size())
+        .arg(missingPairIndices.size()), 35);
     LOG_INFO(QStringLiteral("  总配对: %1, 已有匹配: %2, 需生成: %3")
         .arg(allPairs.size())
         .arg(allPairs.size() - missingPairIndices.size())
@@ -2039,9 +2248,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     // 报告匹配进度（35%~70% 区间映射）
                     if (shouldReportIndexedProgress(localIdx + 1, totalMissing))
                     {
-                        int pct = 35 + (localIdx * 35) / std::max(1, totalMissing);
+                        const int doneCount = localIdx + 1;
+                        int pct = 35 + (doneCount * 35) / std::max(1, totalMissing);
+                        pct = std::clamp(pct, 35, 70);
                         reportProgress(QStringLiteral("正在匹配特征点... %1/%2")
-                            .arg(localIdx + 1).arg(totalMissing), pct);
+                            .arg(doneCount).arg(totalMissing), pct);
                     }
 
                     const int pi      = missingPairIndices[localIdx];
@@ -2372,6 +2583,46 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     const bool hasUserPitch = (opts.userPitch > 0);
     const bool hasCameraPaths = (!opts.cameraPaths.isEmpty()
                                  && opts.cameraPaths.size() == opts.images.size());
+
+    // 从 projectMeta 中预构建 imagePath → cameraJson 映射。这里必须在创建 IncrementalSfm
+    // 之前完成，因为完整的项目相机位姿也应触发已知位姿重建，而不是只作为增量 SfM 初值。
+    QMap<QString, QJsonObject> projectCameraMap;
+    if (!opts.projectMeta.isEmpty())
+    {
+        const QMap<QString, QJsonObject> projectImageMetaByPath =
+            xjw::gui::project::projectImageMetaByPath(opts.projectMeta, true);
+        for (auto it = projectImageMetaByPath.constBegin(); it != projectImageMetaByPath.constEnd(); ++it)
+        {
+            Camera camera;
+            if (!xjw::gui::project::imageCameraFromEntry(it.value(), &camera) || !camera.isValid())
+            {
+                continue;
+            }
+
+            const QJsonObject camObj = it.value().value(QStringLiteral("camera")).toObject();
+            if (!camObj.isEmpty())
+            {
+                projectCameraMap.insert(it.key(), camObj);
+            }
+        }
+    }
+
+    int projectMetaKnownCameraCount = 0;
+    bool hasCompleteProjectMetaCameras = !opts.images.isEmpty() && !projectCameraMap.isEmpty();
+    if (hasCompleteProjectMetaCameras)
+    {
+        for (const QString &imagePath : opts.images)
+        {
+            const QString normImgPath = normalizePath(imagePath);
+            if (!projectCameraMap.contains(normImgPath))
+            {
+                hasCompleteProjectMetaCameras = false;
+                break;
+            }
+            ++projectMetaKnownCameraCount;
+        }
+    }
+
     bool hasCompleteCameraFiles = hasCameraPaths;
     if (hasCompleteCameraFiles)
     {
@@ -2384,27 +2635,9 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             }
         }
     }
-    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles;
+    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras;
 
     IncrementalSfm sfm(sfmOpts);
-
-    // 从 projectMeta 中预构建 imagePath → cameraJson 映射
-    QMap<QString, QJsonObject> projectCameraMap;
-    if (!opts.projectMeta.isEmpty()) 
-    {
-        const QJsonArray images = opts.projectMeta.value(QStringLiteral("images")).toArray();
-        for (int i = 0; i < images.size(); ++i) 
-        {
-            if (!images[i].isObject()) continue;
-            const QJsonObject imgObj = images[i].toObject();
-            const QString imgPath = normalizePath(imgObj.value(QStringLiteral("path")).toString());
-            const QJsonObject camObj = imgObj.value(QStringLiteral("camera")).toObject();
-            if (!camObj.isEmpty() && camObj.contains(QStringLiteral("fu"))) 
-            {
-                projectCameraMap.insert(imgPath, camObj);
-            }
-        }
-    }
 
     if (hasCameraPaths) 
     {
@@ -2419,11 +2652,18 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             LOG_WARN(QStringLiteral("  相机文件列表不完整，回退到增量 SfM 估计位姿"));
         }
     } 
-    else if (!projectCameraMap.isEmpty()) 
+    if (hasCompleteProjectMetaCameras)
+    {
+        LOG_INFO(QStringLiteral("  使用项目元数据已知外参模式：固定相机位姿并直接三角化 (%1/%2)")
+            .arg(projectMetaKnownCameraCount)
+            .arg(opts.images.size()));
+    }
+    else if (!projectCameraMap.isEmpty())
     {
         LOG_INFO(QStringLiteral("  从项目元数据加载相机参数 (%1 个)")
             .arg(projectCameraMap.size()));
-    } else if (hasUserIntrinsics) {
+    }
+    else if (hasUserIntrinsics) {
         LOG_INFO(QStringLiteral("  使用用户提供的内参: fu=%1 fv=%2 cu=%3 cv=%4")
             .arg(opts.userFu, 0, 'f', 2).arg(opts.userFv, 0, 'f', 2)
             .arg(opts.userCu, 0, 'f', 2).arg(opts.userCv, 0, 'f', 2));
@@ -2753,7 +2993,10 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     pointsForQuality,
                     sfmResult.numRegisteredImages,
                     true,
-                    xjw::common::project::kSparseResultKindSfmSparseReconstruction);
+                    xjw::common::project::kSparseResultKindSfmSparseReconstruction,
+                    QString(),
+                    QString(),
+                    opts.images.size());
 
                 const QString sidecarPath = QDir(outDir).filePath(QStringLiteral("sfm_sparse_points.json"));
                 QJsonObject sidecarRoot = xjw::common::project::mergeSparseQualityIntoRecord(

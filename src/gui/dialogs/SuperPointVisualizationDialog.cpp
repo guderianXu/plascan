@@ -263,7 +263,7 @@ void SuperPointVisualizationDialog::onClose()
 
 // onResetDefaults: 将所有控件恢复为内置默认值，然后刷新预览区
 // 默认配置：仅显示点（1px 十字）、透明度180/255、
-//           点颜色黄(255,200,0)、尺度圈亮黄(255,255,0)、方向箭头红(255,0,0)
+//           点颜色蓝(0,120,255)、尺度圈亮黄(255,255,0)、方向箭头红(255,0,0)
 //           最大显示0（全部）、优先高分开启
 void SuperPointVisualizationDialog::onResetDefaults()
 {
@@ -278,7 +278,7 @@ void SuperPointVisualizationDialog::onResetDefaults()
     m_scaleMultiplierSpin->setValue(1.0);
     m_opacitySlider->setValue(180);
     
-    m_pointColor = QColor(255, 200, 0);
+    m_pointColor = QColor(0, 120, 255);
     m_scaleColor = QColor(255, 255, 0);
     m_orientColor = QColor(255, 0, 0);
     

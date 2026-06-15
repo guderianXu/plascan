@@ -155,6 +155,16 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
         return false;
     }
 
+    // Windows 不允许在同一归档仍被本对象的只读句柄占用时，用 libzip
+    // 在 zip_close() 阶段重命名临时文件覆盖原归档。
+    if (m_impl)
+    {
+        zip_t *readArchive = static_cast<zip_t*>(m_impl);
+        zip_close(readArchive);
+        m_impl = nullptr;
+        m_valid = false;
+    }
+
     int errorp = 0;
     // 以可写方式打开（如果不存在则创建）
     zip_t *za = zip_open(m_path.toLocal8Bit().constData(), ZIP_CREATE, &errorp);
@@ -201,7 +211,16 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
     {
         if (err)
             *err = QString::fromUtf8(zip_strerror(za));
+        zip_discard(za);
         return false;
+    }
+
+    int reopenErr = 0;
+    zip_t *readArchive = zip_open(m_path.toLocal8Bit().constData(), ZIP_RDONLY, &reopenErr);
+    if (readArchive)
+    {
+        m_impl = readArchive;
+        m_valid = true;
     }
 
     return true;
