@@ -25,6 +25,71 @@
 #include <QFile>
 #include <QDataStream>
 #include <QTimer>
+#include <QSet>
+#include <QRegularExpression>
+
+#include <algorithm>
+
+namespace {
+
+QString normalizedImagePathKey(const QString &path)
+{
+    QString key = QDir::cleanPath(path.trimmed());
+    key.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return key.toLower();
+}
+
+QString imageBaseKey(const QString &path)
+{
+    const QString base = QFileInfo(path.trimmed()).completeBaseName();
+    return (base.isEmpty() ? path.trimmed() : base).toLower();
+}
+
+bool imageTokenMatches(const QString &candidate, const QString &imagePath)
+{
+    if (candidate.trimmed().isEmpty() || imagePath.trimmed().isEmpty())
+    {
+        return false;
+    }
+
+    return normalizedImagePathKey(candidate) == normalizedImagePathKey(imagePath) ||
+           imageBaseKey(candidate) == imageBaseKey(imagePath);
+}
+
+QString canonicalPairKeyForImages(const QString &imageA, const QString &imageB)
+{
+    QString keyA = normalizedImagePathKey(imageA);
+    QString keyB = normalizedImagePathKey(imageB);
+    if (keyA > keyB)
+    {
+        std::swap(keyA, keyB);
+    }
+    return keyA + QStringLiteral("|") + keyB;
+}
+
+QString resolveProjectImagePath(const QString &token,
+                                const QStringList &projectImages,
+                                const QMap<QString, QString> &baseToPath)
+{
+    const QString normalizedToken = normalizedImagePathKey(token);
+    for (const QString &imagePath : projectImages)
+    {
+        if (normalizedImagePathKey(imagePath) == normalizedToken)
+        {
+            return imagePath;
+        }
+    }
+
+    const QString base = imageBaseKey(token);
+    if (baseToPath.contains(base))
+    {
+        return baseToPath.value(base);
+    }
+
+    return token;
+}
+
+} // namespace
 
 // 构造函数：初始化对话框，构建界面，加载项目影像列表
 MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager, QWidget *parent)
@@ -195,22 +260,49 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
         m_matchTable->setItem(i, 1, algoItem);
 
         // 总计
-        QTableWidgetItem *totalItem = new QTableWidgetItem(QString::number(info.totalPoints));
+        QTableWidgetItem *totalItem = new QTableWidgetItem(
+            info.overlapCandidate && info.matchFilePath.isEmpty()
+                ? tr("未匹配")
+                : QString::number(info.totalPoints));
         totalItem->setTextAlignment(Qt::AlignCenter);
         m_matchTable->setItem(i, 2, totalItem);
 
         // 有效
-        QTableWidgetItem *validItem = new QTableWidgetItem(QString::number(info.validPoints));
+        QTableWidgetItem *validItem = new QTableWidgetItem(
+            info.overlapCandidate && info.matchFilePath.isEmpty()
+                ? QStringLiteral("-")
+                : QString::number(info.validPoints));
         validItem->setTextAlignment(Qt::AlignCenter);
         m_matchTable->setItem(i, 3, validItem);
 
         // 无效
-        QTableWidgetItem *invalidItem = new QTableWidgetItem(QString::number(info.invalidPoints));
+        QTableWidgetItem *invalidItem = new QTableWidgetItem(
+            info.overlapCandidate && info.matchFilePath.isEmpty()
+                ? QStringLiteral("-")
+                : QString::number(info.invalidPoints));
         invalidItem->setTextAlignment(Qt::AlignCenter);
         m_matchTable->setItem(i, 4, invalidItem);
     }
     
-    m_statusLabel->setText(tr("找到 %1 个匹配对").arg(m_currentMatches.size()));
+    int overlapCandidateCount = 0;
+    for (const MatchInfo &info : m_currentMatches)
+    {
+        if (info.overlapCandidate && info.matchFilePath.isEmpty())
+        {
+            ++overlapCandidateCount;
+        }
+    }
+
+    if (overlapCandidateCount > 0)
+    {
+        m_statusLabel->setText(tr("找到 %1 个影像对（含 %2 个重叠候选）")
+                                   .arg(m_currentMatches.size())
+                                   .arg(overlapCandidateCount));
+    }
+    else
+    {
+        m_statusLabel->setText(tr("找到 %1 个匹配对").arg(m_currentMatches.size()));
+    }
 }
 
 QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDataForImage(const QString &imagePath)
@@ -230,6 +322,7 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
 
     // ── 方式一：扫描 matchDir/*.match 文件（实时，无需等待元数据写入）───────────
     QSet<QString> seenMatchFiles;
+    QSet<QString> seenPairKeys;
 
     // 已知算法后缀名列表(匹配文件名中可能出现)
     static const QStringList knownAlgos = {"superglue","lightglue","loftr","roma",
@@ -272,6 +365,7 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
             seenMatchFiles.insert(cleanPath);
 
             const QString otherImagePath = baseToPath.value(otherBase, otherBase);
+            seenPairKeys.insert(canonicalPairKeyForImages(imagePath, otherImagePath));
             MatchInfo info = getMatchStatistics(imagePath, otherImagePath, matchFilePath);
             if (info.imageName.isEmpty())
                 info.imageName = otherBase;
@@ -331,12 +425,140 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
             const QString cleanPath = QDir::cleanPath(matchFile);
             if (seenMatchFiles.contains(cleanPath)) continue;
             seenMatchFiles.insert(cleanPath);
+            seenPairKeys.insert(canonicalPairKeyForImages(imagePath, matchedPath));
 
             matches.append(getMatchStatistics(imagePath, matchedPath, matchFile));
         }
     }
 
+    matches.append(loadOverlapCandidatesForImage(imagePath, seenPairKeys, baseToPath));
+
     return matches;
+}
+
+QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCandidatesForImage(
+    const QString &imagePath,
+    const QSet<QString> &seenPairKeys,
+    const QMap<QString, QString> &baseToPath) const
+{
+    QList<MatchInfo> candidates;
+    if (!m_projectManager || m_projectManager->currentProjectPath().isEmpty())
+    {
+        return candidates;
+    }
+
+    const QString overlapDir = QDir(ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath()))
+                                   .filePath(QStringLiteral("overlap"));
+    const QString jsonPath = QDir(overlapDir).filePath(QStringLiteral("vocabulary_overlap_pairs.json"));
+    const QString lisPath = QDir(overlapDir).filePath(QStringLiteral("vocabulary_overlap_pairs.lis"));
+    QSet<QString> seenOverlapPairs;
+
+    auto appendCandidate = [&](const QString &imageA,
+                               const QString &imageB,
+                               double overlapScore,
+                               const QString &sourcePath)
+    {
+        if (imageA.trimmed().isEmpty() || imageB.trimmed().isEmpty())
+        {
+            return;
+        }
+
+        if (!imageTokenMatches(imageA, imagePath) && !imageTokenMatches(imageB, imagePath))
+        {
+            return;
+        }
+
+        const QString otherToken = imageTokenMatches(imageA, imagePath) ? imageB : imageA;
+        const QString otherImagePath = resolveProjectImagePath(otherToken, m_allImages, baseToPath);
+        if (otherImagePath.trimmed().isEmpty() || imageTokenMatches(otherImagePath, imagePath))
+        {
+            return;
+        }
+
+        const QString pairKey = canonicalPairKeyForImages(imagePath, otherImagePath);
+        if (seenPairKeys.contains(pairKey) || seenOverlapPairs.contains(pairKey))
+        {
+            return;
+        }
+        seenOverlapPairs.insert(pairKey);
+
+        MatchInfo info;
+        info.imagePath = otherImagePath;
+        info.imageName = QFileInfo(otherImagePath).fileName();
+        if (info.imageName.isEmpty())
+        {
+            info.imageName = otherToken;
+        }
+        info.algorithm = tr("重叠候选");
+        info.totalPoints = 0;
+        info.validPoints = 0;
+        info.invalidPoints = 0;
+        info.matchFilePath.clear();
+        info.overlapCandidate = true;
+        info.overlapScore = overlapScore;
+        info.overlapSource = sourcePath;
+        candidates.append(info);
+    };
+
+    if (QFile::exists(jsonPath))
+    {
+        QFile jsonFile(jsonPath);
+        if (jsonFile.open(QIODevice::ReadOnly))
+        {
+            const QJsonDocument doc = QJsonDocument::fromJson(jsonFile.readAll());
+            jsonFile.close();
+            const QJsonArray candidateArray = doc.object().value(QStringLiteral("candidates")).toArray();
+            for (const QJsonValue &value : candidateArray)
+            {
+                const QJsonObject object = value.toObject();
+                if (object.contains(QStringLiteral("accepted")) &&
+                    !object.value(QStringLiteral("accepted")).toBool(false))
+                {
+                    continue;
+                }
+                appendCandidate(object.value(QStringLiteral("image_a")).toString(),
+                                object.value(QStringLiteral("image_b")).toString(),
+                                object.value(QStringLiteral("overlap_score")).toDouble(
+                                    object.value(QStringLiteral("bow_score")).toDouble(0.0)),
+                                jsonPath);
+            }
+        }
+    }
+
+    if (!candidates.isEmpty())
+    {
+        std::sort(candidates.begin(), candidates.end(), [](const MatchInfo &a, const MatchInfo &b)
+        {
+            return a.imageName < b.imageName;
+        });
+        return candidates;
+    }
+
+    QFile lisFile(lisPath);
+    if (lisFile.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        QTextStream stream(&lisFile);
+        while (!stream.atEnd())
+        {
+            const QString line = stream.readLine().trimmed();
+            if (line.isEmpty() || line.startsWith(QLatin1Char('#')))
+            {
+                continue;
+            }
+            const QStringList parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+            if (parts.size() >= 2)
+            {
+                appendCandidate(parts.at(0), parts.at(1), 0.0, lisPath);
+            }
+        }
+        lisFile.close();
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const MatchInfo &a, const MatchInfo &b)
+    {
+        return a.imageName < b.imageName;
+    });
+    return candidates;
 }
 
 QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QString &imgB)
@@ -474,9 +696,16 @@ void MatchPairSelectorDialog::onMatchPairSelected(int row, int column)
     m_viewDetailBtn->setEnabled(true);
     
     const MatchInfo &info = m_currentMatches[row];
-    m_statusLabel->setText(tr("已选择：%1 (%2 个匹配点)")
-        .arg(info.imageName)
-        .arg(info.totalPoints));
+    if (info.overlapCandidate && info.matchFilePath.isEmpty())
+    {
+        m_statusLabel->setText(tr("已选择：%1（重叠候选，尚未匹配）").arg(info.imageName));
+    }
+    else
+    {
+        m_statusLabel->setText(tr("已选择：%1 (%2 个匹配点)")
+            .arg(info.imageName)
+            .arg(info.totalPoints));
+    }
 }
 
 void MatchPairSelectorDialog::onMatchPairDoubleClicked(int row, int column)

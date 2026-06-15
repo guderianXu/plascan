@@ -40,6 +40,8 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     , m_matchFile(matchFile)  // 保存匹配文件路径
     , m_totalMatches(0)       // 初始化匹配点计数
 {
+    m_sparseMatchFileMissing = m_matchFile.trimmed().isEmpty();
+
     // 窗口标题显示两张影像的文件名（去除目录部分）
     setWindowTitle(tr("匹配查看：%1 <-> %2")
                    .arg(QFileInfo(imgA).fileName())
@@ -293,6 +295,12 @@ void MatchViewerDialog::onLoadFailed(const QString &error)
 // 若后续需要显示可见点数、内点数等，可在此处扩展
 void MatchViewerDialog::updateStatusBar()
 {
+    if (m_sparseMatchFileMissing)
+    {
+        m_statusLabel->setText(tr("尚未生成匹配：当前仅显示重叠候选影像对"));
+        return;
+    }
+
     QString status = tr("总匹配点数：%1").arg(m_totalMatches);
     
     // 可以添加更多统计信息（如可见点数）：

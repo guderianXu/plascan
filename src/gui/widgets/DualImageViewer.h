@@ -89,6 +89,8 @@ private:
     
     // 解析 .match 文件
     bool parseMatchFile(const QString &matchFile,
+                        const QString &imgA,
+                        const QString &imgB,
                         QVector<QPointF> &ptsA,
                         QVector<QPointF> &ptsB);
 

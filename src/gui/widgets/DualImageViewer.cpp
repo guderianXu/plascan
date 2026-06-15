@@ -126,6 +126,97 @@ QString findExistingPath(const QStringList &candidates)
     return QString();
 }
 
+QString normalizedImageToken(const QString &token)
+{
+    QString normalized = QDir::cleanPath(token.trimmed());
+    normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return normalized.toLower();
+}
+
+QString imageBaseToken(const QString &token)
+{
+    const QString base = QFileInfo(token.trimmed()).completeBaseName();
+    return (base.isEmpty() ? token.trimmed() : base).toLower();
+}
+
+bool imageTokenMatches(const QString &filePath,
+                       const QString &fileName,
+                       const QString &displayPath)
+{
+    if (displayPath.trimmed().isEmpty())
+    {
+        return false;
+    }
+
+    const QString displayNorm = normalizedImageToken(displayPath);
+    const QString displayBase = imageBaseToken(displayPath);
+
+    if (!filePath.trimmed().isEmpty())
+    {
+        if (normalizedImageToken(filePath) == displayNorm ||
+            imageBaseToken(filePath) == displayBase)
+        {
+            return true;
+        }
+    }
+
+    return !fileName.trimmed().isEmpty() && imageBaseToken(fileName) == displayBase;
+}
+
+enum class MatchFileDisplayOrder
+{
+    Direct,
+    Reversed,
+    Unknown
+};
+
+MatchFileDisplayOrder displayOrderForMatchFile(const QString &fileImage0Path,
+                                               const QString &fileImage0Name,
+                                               const QString &fileImage1Path,
+                                               const QString &fileImage1Name,
+                                               const QString &displayImageA,
+                                               const QString &displayImageB)
+{
+    const bool direct =
+        imageTokenMatches(fileImage0Path, fileImage0Name, displayImageA) &&
+        imageTokenMatches(fileImage1Path, fileImage1Name, displayImageB);
+    const bool reversed =
+        imageTokenMatches(fileImage0Path, fileImage0Name, displayImageB) &&
+        imageTokenMatches(fileImage1Path, fileImage1Name, displayImageA);
+
+    if (direct)
+    {
+        return MatchFileDisplayOrder::Direct;
+    }
+    if (reversed)
+    {
+        return MatchFileDisplayOrder::Reversed;
+    }
+    return MatchFileDisplayOrder::Unknown;
+}
+
+void appendSidecarMatchedPoints(const QJsonArray &points0,
+                                const QJsonArray &points1,
+                                bool reversed,
+                                QVector<QPointF> &ptsA,
+                                QVector<QPointF> &ptsB)
+{
+    for (int i = 0; i < points0.size(); ++i)
+    {
+        const QJsonArray p0 = points0.at(i).toArray();
+        const QJsonArray p1 = points1.at(i).toArray();
+        if (p0.size() < 2 || p1.size() < 2)
+        {
+            continue;
+        }
+
+        const QJsonArray &leftPoint = reversed ? p1 : p0;
+        const QJsonArray &rightPoint = reversed ? p0 : p1;
+        ptsA.append(QPointF(leftPoint.at(0).toDouble(), leftPoint.at(1).toDouble()));
+        ptsB.append(QPointF(rightPoint.at(0).toDouble(), rightPoint.at(1).toDouble()));
+    }
+}
+
 }
 
 DualImageViewer::DualImageViewer(QWidget *parent)
@@ -275,9 +366,14 @@ void DualImageViewer::connectSignals()
 bool DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
                                     const QString &matchFile)
 {
+    if (matchFile.trimmed().isEmpty()) {
+        loadMatchPair(imgA, imgB, QVector<QPointF>{}, QVector<QPointF>{});
+        return true;
+    }
+
     // 解析匹配文件
     QVector<QPointF> ptsA, ptsB;
-    if (!parseMatchFile(matchFile, ptsA, ptsB)) {
+    if (!parseMatchFile(matchFile, imgA, imgB, ptsA, ptsB)) {
         emit loadFailed(tr("无法解析匹配文件：%1").arg(matchFile));
         return false;
     }
@@ -451,6 +547,8 @@ void DualImageViewer::updateOverlayGeometry()
 }
 
 bool DualImageViewer::parseMatchFile(const QString &matchFile,
+                                     const QString &imgA,
+                                     const QString &imgB,
                                      QVector<QPointF> &ptsA,
                                      QVector<QPointF> &ptsB)
 {
@@ -481,14 +579,19 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
                 QJsonArray m0 = sobj.value("matched_points0").toArray();
                 QJsonArray m1 = sobj.value("matched_points1").toArray();
                 if (!m0.isEmpty() && m0.size() == m1.size()) {
-                    for (int i = 0; i < m0.size(); ++i) {
-                        const QJsonArray p0 = m0.at(i).toArray();
-                        const QJsonArray p1 = m1.at(i).toArray();
-                        if (p0.size() >= 2 && p1.size() >= 2) {
-                            ptsA.append(QPointF(p0.at(0).toDouble(), p0.at(1).toDouble()));
-                            ptsB.append(QPointF(p1.at(0).toDouble(), p1.at(1).toDouble()));
-                        }
-                    }
+                    const MatchFileDisplayOrder order = displayOrderForMatchFile(
+                        sobj.value("image0_path").toString(),
+                        sobj.value("image0_name").toString(image0Name),
+                        sobj.value("image1_path").toString(),
+                        sobj.value("image1_name").toString(image1Name),
+                        imgA,
+                        imgB);
+                    appendSidecarMatchedPoints(
+                        m0,
+                        m1,
+                        order == MatchFileDisplayOrder::Reversed,
+                        ptsA,
+                        ptsB);
                     if (!ptsA.isEmpty() && ptsA.size() == ptsB.size()) {
                         return true;
                     }
@@ -537,13 +640,26 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
             return false;
         }
 
+        QVector<QPointF> filePts0;
+        QVector<QPointF> filePts1;
         for (int idx0 = 0; idx0 < matches0.size(); ++idx0) {
             int idx1 = matches0[idx0];
             if (idx1 >= 0 && idx0 < kpts0.size() && idx1 < kpts1.size()) {
-                ptsA.append(kpts0[idx0]);
-                ptsB.append(kpts1[idx1]);
+                filePts0.append(kpts0[idx0]);
+                filePts1.append(kpts1[idx1]);
             }
         }
+
+        const MatchFileDisplayOrder order = displayOrderForMatchFile(
+            QString(),
+            image0Name,
+            QString(),
+            image1Name,
+            imgA,
+            imgB);
+        const bool reversed = order == MatchFileDisplayOrder::Reversed;
+        ptsA = reversed ? filePts1 : filePts0;
+        ptsB = reversed ? filePts0 : filePts1;
 
         return !ptsA.isEmpty();
     }

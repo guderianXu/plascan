@@ -128,6 +128,7 @@ private:
     QWidget           *m_denseTab      = nullptr;
     int                m_initialTab    = 0;
     QString            m_disparityFile;
+    bool               m_sparseMatchFileMissing = false;
 
     // ── 工具栏及工具按钮 ──────────────────────────────────────────
     QCheckBox   *m_syncModeChk;    // 同步缩放/平移开关

@@ -265,12 +265,19 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTriangulationService.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WindowPanel.cpp
@@ -296,6 +303,7 @@ target_compile_definitions(test_gui_project_utils PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_include_directories(test_gui_project_utils PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/gui/menu
     ${CMAKE_SOURCE_DIR}/src/gui/main_window

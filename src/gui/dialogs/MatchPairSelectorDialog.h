@@ -12,6 +12,8 @@
 #include <QStringList>
 #include <QJsonObject>
 #include <QTimer>
+#include <QMap>
+#include <QSet>
 
 // Qt 控件前向声明
 class QComboBox;
@@ -75,12 +77,19 @@ private:
         int validPoints;         // 有效（内点）匹配点数
         int invalidPoints;       // 无效（外点）匹配点数
         QString matchFilePath;   // 对应 .match 文件的完整路径
+        bool overlapCandidate = false; // true 表示来自重叠对规划，尚无匹配文件
+        double overlapScore = 0.0;      // 重叠评分（若输出中提供）
+        QString overlapSource;          // overlap json/lis 文件路径
     };
     
     // 解析指定影像与其他影像的所有匹配信息
     // imagePath — 当前选中影像的完整路径
     // 返回值    — 所有与之存在匹配关系的 MatchInfo 列表
     QList<MatchInfo> parseMatchDataForImage(const QString &imagePath);
+
+    QList<MatchInfo> loadOverlapCandidatesForImage(const QString &imagePath,
+                                                   const QSet<QString> &seenPairKeys,
+                                                   const QMap<QString, QString> &baseToPath) const;
     
     // 在元数据和文件系统中查找两张影像对应的 .match 文件路径
     // imgA, imgB — 两张影像的完整路径

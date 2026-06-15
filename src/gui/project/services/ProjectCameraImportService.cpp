@@ -29,6 +29,7 @@ SingleCameraImportStatus buildSingleCameraImport(const QString &imagePath,
         out->error = parseErr;
         return SingleCameraImportStatus::ParseFailed;
     }
+    out->cameraMeta[QStringLiteral("source_file")] = QFileInfo(tsaiPath).absoluteFilePath();
 
     return SingleCameraImportStatus::Ok;
 }
@@ -89,6 +90,7 @@ BatchCameraImportStatus buildBatchCameraImport(const QString &tsaiFolder,
             out->parseErrors.push_back(parseErr);
             continue;
         }
+        cameraMeta[QStringLiteral("source_file")] = tsaiFile.absoluteFilePath();
 
         out->cameraMetaByImage.insert(matchedImages.first(), cameraMeta);
     }

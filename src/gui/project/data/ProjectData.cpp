@@ -712,6 +712,7 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
         if (it == normalizedMap.constEnd()) continue;
 
         // 写入相机参数到影像对象的 camera 字段
+        imgObj.remove(QStringLiteral("camera_file"));
         imgObj["camera"] = it.value();
         images[i] = imgObj;
         ++changed;

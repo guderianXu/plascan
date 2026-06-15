@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "ProjectIO.h"
+#include "ProjectCameraImportService.h"
+#include "ProjectData.h"
 #include "ProjectSupportUtils.h"
 #include "ProjectTriangulationService.h"
 #include "ProjectWorkflowReports.h"
@@ -150,6 +152,115 @@ QStringList directActionTexts(QMenu *menu)
     }
 
     return texts;
+}
+
+void writeMinimalTsai(const QString &path, double fu, double cx)
+{
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream out(&file);
+    out << "VERSION_3\n";
+    out << "PINHOLE\n";
+    out << "TSAI\n";
+    out << "fu = " << QString::number(fu, 'f', 8) << "\n";
+    out << "fv = " << QString::number(fu, 'f', 8) << "\n";
+    out << "cu = " << QString::number(cx, 'f', 8) << "\n";
+    out << "cv = 500\n";
+    out << "u_direction = 1 0 0\n";
+    out << "v_direction = 0 1 0\n";
+    out << "w_direction = 0 0 1\n";
+    out << "pitch = 1\n";
+    out << "k1 = -0.01\n";
+    out << "k2 = 0.02\n";
+    out << "k3 = -0.03\n";
+    out << "p1 = 0.0001\n";
+    out << "p2 = -0.0002\n";
+    out << "C = 1 2 3\n";
+    out << "R = 1 0 0 0 1 0 0 0 1\n";
+}
+
+TEST(ProjectCameraImportServiceTest, BatchImportRecordsActualTsaiSourceFileInCameraMeta)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_001.JPG"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("jpg");
+    imageFile.close();
+
+    const QString tsaiPath = QDir(tempDir.path()).filePath(QStringLiteral("cameras/IMG_001.tsai"));
+    writeMinimalTsai(tsaiPath, 1234.0, 640.0);
+
+    xjw::gui::project::BatchCameraImportResult result;
+    const auto status = xjw::gui::project::buildBatchCameraImport(
+        QFileInfo(tsaiPath).absolutePath(),
+        QStringList{imagePath},
+        &result);
+
+    ASSERT_EQ(status, xjw::gui::project::BatchCameraImportStatus::Ok);
+    ASSERT_EQ(result.cameraMetaByImage.size(), 1);
+    const QJsonObject camera = result.cameraMetaByImage.constBegin().value();
+    EXPECT_EQ(QDir::cleanPath(camera.value(QStringLiteral("source_file")).toString()),
+              QDir::cleanPath(QFileInfo(tsaiPath).absoluteFilePath()));
+    EXPECT_DOUBLE_EQ(camera.value(QStringLiteral("fu")).toDouble(), 1234.0);
+    EXPECT_NEAR(camera.value(QStringLiteral("k1")).toDouble(), -0.01, 1e-12);
+}
+
+TEST(ProjectDataCameraMetadataTest, SetImageCamerasClearsLegacyTopLevelCameraFile)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("camera_meta.plascan"));
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("IMG_002.JPG"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("jpg");
+    imageFile.close();
+
+    ProjectData data;
+    ASSERT_TRUE(data.createProject(projectPath, QStringLiteral("camera_meta")));
+    ASSERT_TRUE(data.addImages(QStringList{imagePath}));
+
+    QJsonObject core = data.coreFilesMeta();
+    QJsonArray images = core.value(QStringLiteral("images")).toArray();
+    ASSERT_EQ(images.size(), 1);
+    QJsonObject imageObject = images.at(0).toObject();
+    imageObject[QStringLiteral("camera_file")] = QStringLiteral("stale/old.tsai");
+    images[0] = imageObject;
+    core[QStringLiteral("images")] = images;
+    data.updateMetadata(core, false);
+
+    QJsonObject camera;
+    camera[QStringLiteral("model")] = QStringLiteral("tsai");
+    camera[QStringLiteral("source_file")] = QStringLiteral("fresh/new.tsai");
+    camera[QStringLiteral("intrinsics_unit")] = QStringLiteral("mm");
+    camera[QStringLiteral("camera_center_unit")] = QStringLiteral("m");
+    camera[QStringLiteral("pitch")] = 1.0;
+    camera[QStringLiteral("fu")] = 1111.0;
+    camera[QStringLiteral("fv")] = 1111.0;
+    camera[QStringLiteral("cu")] = 500.0;
+    camera[QStringLiteral("cv")] = 400.0;
+    camera[QStringLiteral("C")] = QJsonArray{0.0, 0.0, 0.0};
+    camera[QStringLiteral("R")] = QJsonArray{1.0, 0.0, 0.0,
+                                             0.0, 1.0, 0.0,
+                                             0.0, 0.0, 1.0};
+
+    int updated = 0;
+    QString error;
+    ASSERT_TRUE(data.setImageCameras(QMap<QString, QJsonObject>{{imagePath, camera}}, &updated, &error))
+        << error.toStdString();
+    EXPECT_EQ(updated, 1);
+
+    const QJsonObject updatedImage =
+        data.coreFilesMeta().value(QStringLiteral("images")).toArray().at(0).toObject();
+    EXPECT_FALSE(updatedImage.contains(QStringLiteral("camera_file")));
+    EXPECT_EQ(updatedImage.value(QStringLiteral("camera")).toObject()
+                  .value(QStringLiteral("source_file")).toString(),
+              QStringLiteral("fresh/new.tsai"));
 }
 
 QJsonObject buildImageEntry(const QString &path, const xjw::Camera &camera)
@@ -2582,6 +2693,44 @@ TEST(FeatureMatchSidecarTest, FormalSfmRejectsLegacyCoordinateOnlyMatchCaches)
     EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("matched_indices0")));
     EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("matched_indices1")));
     EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("缺少 V2 特征索引")));
+}
+
+TEST(MatchViewerSidecarOrderTest, ReordersCachedPointsWhenDisplayOrderIsReversed)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("parseMatchFile(matchFile, imgA, imgB")));
+    EXPECT_TRUE(source.contains(QStringLiteral("displayOrderForMatchFile")));
+    EXPECT_TRUE(source.contains(QStringLiteral("appendSidecarMatchedPoints")));
+    EXPECT_TRUE(source.contains(QStringLiteral("reversed ? p1 : p0")));
+}
+
+TEST(MatchPairSelectorOverlapCandidatesTest, ListsOverlapPairsEvenWhenNoMatchFileExists)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("overlapCandidate")));
+    EXPECT_TRUE(header.contains(QStringLiteral("loadOverlapCandidatesForImage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("vocabulary_overlap_pairs.json")));
+    EXPECT_TRUE(source.contains(QStringLiteral("vocabulary_overlap_pairs.lis")));
+    EXPECT_TRUE(source.contains(QStringLiteral("重叠候选")));
+    EXPECT_TRUE(source.contains(QStringLiteral("matchFilePath.isEmpty()")));
+}
+
+TEST(MatchViewerEmptyMatchTest, CanOpenImagePairWithoutSparseMatchFile)
+{
+    const QString viewerSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchViewerDialog.cpp"));
+    ASSERT_FALSE(viewerSource.isEmpty());
+    ASSERT_FALSE(dialogSource.isEmpty());
+
+    EXPECT_TRUE(viewerSource.contains(QStringLiteral("matchFile.trimmed().isEmpty()")));
+    EXPECT_TRUE(viewerSource.contains(QStringLiteral("QVector<QPointF>{}, QVector<QPointF>{}")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("尚未生成匹配")));
 }
 
 TEST(ModelDropSupportTest, AcceptsStandaloneModelAndPointCloudFiles)
