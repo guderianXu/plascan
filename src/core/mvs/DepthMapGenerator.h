@@ -134,6 +134,13 @@ public:
                                         float maxRemovalRatio,
                                         int refIdx);
 
+    /// 融合前统一后处理深度图，并返回置信度/局部离群过滤统计
+    static DepthPostProcessStats postprocessFusionDepthMap(cv::Mat &depthMap,
+                                                           cv::Mat &confidenceMap,
+                                                           const FusionConfig &config,
+                                                           int refIdx,
+                                                           int viewCount);
+
     /// CUDA PatchMatch 显存不足后的下一次重试配置
     static PatchMatchConfig nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,
                                                           int imageWidth,

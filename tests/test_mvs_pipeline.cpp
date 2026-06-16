@@ -381,6 +381,33 @@ TEST(MvsPipelineTest, LocalDepthOutlierFilterPreservesSmoothSlope)
     EXPECT_EQ(cv::countNonZero(depth > 0), beforeValid);
 }
 
+TEST(MvsPipelineTest, FusionDepthPostprocessReportsConfidenceAndLocalOutliers)
+{
+    cv::Mat depth(7, 7, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(7, 7, CV_32F, cv::Scalar(0.9f));
+    depth.at<float>(3, 3) = 30.0f;
+    confidence.at<float>(0, 0) = 0.10f;
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.25f;
+    config.enableLocalDepthOutlierFilter = true;
+    config.localDepthOutlierKernelSize = 3;
+    config.localDepthOutlierRelThresh = 0.25f;
+    config.maxLocalDepthOutlierRemovalRatio = 0.50f;
+
+    const xjw::mvs::DepthPostProcessStats stats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
+
+    EXPECT_EQ(stats.validBeforePostprocess, 49);
+    EXPECT_EQ(stats.validAfterConfidenceFilter, 48);
+    EXPECT_EQ(stats.confidenceRemoved, 1);
+    EXPECT_EQ(stats.localDepthOutlierRemoved, 1);
+    EXPECT_EQ(stats.validAfterPostprocess, 47);
+    EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 0.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);
+    EXPECT_FLOAT_EQ(confidence.at<float>(3, 3), 0.0f);
+}
+
 TEST(MvsPipelineTest, ContentMaskSkipsNearlyFullAerialFrame)
 {
     cv::Mat gray(120, 200, CV_8U, cv::Scalar(122));

@@ -125,10 +125,22 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
         self.assertIn("removeLocalDepthOutliers", scheduler)
-        self.assertIn("removeLocalDepthOutliers(filteredDepth", scheduler)
+        self.assertIn("postprocessFusionDepthMap(filteredDepth", scheduler)
+        self.assertIn("DepthPostProcessStats", mvs_types)
         self.assertIn("enableLocalDepthOutlierFilter", mvs_types)
         self.assertIn("localDepthOutlierRelThresh", mvs_types)
         self.assertIn("maxLocalDepthOutlierRemovalRatio", mvs_types)
+
+    def test_cli_depth_reuse_applies_same_postprocess_and_reports_stats(self):
+        mvs_types = self.read("src/core/mvs/MvsTypes.h")
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
+
+        self.assertIn("DepthPostProcessStats", mvs_types)
+        self.assertIn("postprocessFusionDepthMap", scheduler)
+        self.assertIn("postprocessFusionDepthMap", cli)
+        self.assertIn("depth_postprocess", cli)
+        self.assertIn("local_depth_outlier_removed", cli)
 
     def test_cuda_scheduler_defaults_to_one_frame_worker(self):
         config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")

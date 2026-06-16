@@ -1814,6 +1814,113 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
     return candidateCount;
 }
 
+DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &depthMap,
+                                                                    cv::Mat &confidenceMap,
+                                                                    const FusionConfig &config,
+                                                                    int refIdx,
+                                                                    int viewCount)
+{
+    DepthPostProcessStats stats;
+    if (depthMap.empty() || depthMap.type() != CV_32F)
+    {
+        return stats;
+    }
+
+    stats.validBeforePostprocess = cv::countNonZero(depthMap > 0.0f);
+    stats.validAfterConfidenceFilter = stats.validBeforePostprocess;
+    stats.validAfterPostprocess = stats.validBeforePostprocess;
+    if (stats.validBeforePostprocess <= 0)
+    {
+        return stats;
+    }
+
+    float confThresh = config.confidenceThresh;
+    if (viewCount <= 2)
+    {
+        confThresh = 0.0f;
+    }
+    stats.effectiveConfidenceThreshold = confThresh;
+
+    const bool hasConfidence = !confidenceMap.empty()
+        && confidenceMap.size() == depthMap.size()
+        && confidenceMap.type() == CV_32F;
+    if (hasConfidence)
+    {
+        double cMin = 0.0;
+        double cMax = 0.0;
+        cv::minMaxLoc(confidenceMap, &cMin, &cMax);
+        const cv::Mat validMask = depthMap > 0.0f;
+        const cv::Scalar cMean = cv::mean(confidenceMap, validMask);
+        fprintf(stderr,
+                "[MVS] 帧%d 置信度统计: min=%.4f max=%.4f mean=%.4f (thresh=%.4f)\n",
+                refIdx,
+                cMin,
+                cMax,
+                cMean[0],
+                confThresh);
+
+        if (confThresh > 0.0f)
+        {
+            cv::Mat beforeConfidence = depthMap.clone();
+            for (int v = 0; v < depthMap.rows; ++v)
+            {
+                float *depthRow = depthMap.ptr<float>(v);
+                const float *confRow = confidenceMap.ptr<float>(v);
+                for (int u = 0; u < depthMap.cols; ++u)
+                {
+                    if (depthRow[u] > 0.0f && confRow[u] < confThresh)
+                    {
+                        depthRow[u] = 0.0f;
+                    }
+                }
+            }
+
+            int validAfterConfidence = cv::countNonZero(depthMap > 0.0f);
+            fprintf(stderr,
+                    "[MVS] 帧%d 置信度过滤: %d→%d 有效像素 (thresh=%.4f)\n",
+                    refIdx,
+                    stats.validBeforePostprocess,
+                    validAfterConfidence,
+                    confThresh);
+
+            if (validAfterConfidence < stats.validBeforePostprocess / 20)
+            {
+                fprintf(stderr, "[MVS] 帧%d 置信度过滤后像素太少，回退为不过滤\n", refIdx);
+                depthMap = std::move(beforeConfidence);
+                validAfterConfidence = stats.validBeforePostprocess;
+            }
+
+            stats.validAfterConfidenceFilter = validAfterConfidence;
+            stats.confidenceRemoved = std::max(0, stats.validBeforePostprocess - validAfterConfidence);
+        }
+    }
+
+    if (config.enableLocalDepthOutlierFilter)
+    {
+        stats.localDepthOutlierRemoved = removeLocalDepthOutliers(
+            depthMap,
+            confidenceMap,
+            config.localDepthOutlierKernelSize,
+            config.localDepthOutlierRelThresh,
+            config.maxLocalDepthOutlierRemovalRatio,
+            refIdx);
+    }
+
+    stats.validAfterPostprocess = cv::countNonZero(depthMap > 0.0f);
+    if (stats.confidenceRemoved > 0 || stats.localDepthOutlierRemoved > 0)
+    {
+        fprintf(stderr,
+                "[MVS] 帧%d 深度后处理: before=%d after_conf=%d conf_removed=%d local_removed=%d after=%d\n",
+                refIdx,
+                stats.validBeforePostprocess,
+                stats.validAfterConfidenceFilter,
+                stats.confidenceRemoved,
+                stats.localDepthOutlierRemoved,
+                stats.validAfterPostprocess);
+    }
+    return stats;
+}
+
 // =============================================================================
 DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthGenConfig *configOverride)
 {
@@ -2236,67 +2343,15 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
 
     if (!res.depthMap || res.depthMap->empty()) return frame;
 
-    // 置信度过滤：将低置信度像素的深度置 0，防止随机初始化深度进入融合
     const cv::Mat &rawDepth = *res.depthMap;
-    // 少视图场景使用适当的置信度阈值
-    // 注：PatchMatch GPU 已在 kernelFinalizeDepth 用 0.20 过滤，
-    //     这里再次过滤用更高阈值去除低质量匹配
-    const int NV = static_cast<int>(m_views.size());
-    float confThresh = m_config.fusion.confidenceThresh;
-    if (NV <= 2) {
-        // 少视图：GPU 已用 confidenceThresh=0.10 过滤纯噪声，
-        // 此处不做额外二次过滤，crossCheck 负责清除不一致深度
-        confThresh = 0.0f;
-    }
-
     cv::Mat filteredDepth = rawDepth.clone();
     cv::Mat filteredConfidence = res.confidence ? res.confidence->clone() : cv::Mat();
 
-    if (!filteredConfidence.empty())
-    {
-        const cv::Mat &conf = filteredConfidence;
-        // 先统计置信度分布（用于诊断）
-        double cMin, cMax;
-        cv::minMaxLoc(conf, &cMin, &cMax);
-        cv::Scalar cMean = cv::mean(conf, rawDepth > 0);
-        fprintf(stderr, "[MVS] 帧%d 置信度统计: min=%.4f max=%.4f mean=%.4f (thresh=%.4f)\n",
-                res.imageIndex, cMin, cMax, cMean[0], confThresh);
-
-        for (int v = 0; v < rawDepth.rows; ++v) {
-            const float *pd = rawDepth.ptr<float>(v);
-            const float *pc = conf.ptr<float>(v);
-            float       *pf = filteredDepth.ptr<float>(v);
-            for (int u = 0; u < rawDepth.cols; ++u)
-            {
-                if (pc[u] < confThresh)
-                {
-                    pf[u] = 0.f;
-                }
-            }
-        }
-        int validBefore = cv::countNonZero(rawDepth > 0);
-        int validAfter  = cv::countNonZero(filteredDepth > 0);
-        fprintf(stderr, "[MVS] 帧%d 置信度过滤: %d→%d 有效像素 (thresh=%.4f)\n",
-                res.imageIndex, validBefore, validAfter, confThresh);
-
-        // 如果过滤后像素太少，自动回退为不过滤
-        if (validAfter < validBefore / 20)
-        {
-            // 保留不足 5%
-            fprintf(stderr, "[MVS] 帧%d 置信度过滤后像素太少，回退为不过滤\n", res.imageIndex);
-            filteredDepth = rawDepth.clone();
-        }
-    }
-
-    if (m_config.fusion.enableLocalDepthOutlierFilter)
-    {
-        removeLocalDepthOutliers(filteredDepth,
-                                 filteredConfidence,
-                                 m_config.fusion.localDepthOutlierKernelSize,
-                                 m_config.fusion.localDepthOutlierRelThresh,
-                                 m_config.fusion.maxLocalDepthOutlierRemovalRatio,
-                                 res.imageIndex);
-    }
+    frame.depthPostprocess = postprocessFusionDepthMap(filteredDepth,
+                                                       filteredConfidence,
+                                                       m_config.fusion,
+                                                       res.imageIndex,
+                                                       static_cast<int>(m_views.size()));
 
     frame.depthMap   = filteredDepth;
     frame.confidence = filteredConfidence;

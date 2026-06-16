@@ -1135,7 +1135,7 @@ bool loadCvMatStorage(const QString &path, cv::Mat *matrix, QString *error)
 
 bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
                                    const std::vector<xjw::mvs::CameraView> &views,
-                                   float confidenceThreshold,
+                                   const xjw::mvs::FusionConfig &fusionConfig,
                                    std::vector<xjw::mvs::FusionFrameInput> *frames,
                                    QString *error)
 {
@@ -1147,7 +1147,6 @@ bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
 
     frames->clear();
     frames->reserve(views.size());
-    const float effectiveConfidence = views.size() <= 2 ? 0.0f : confidenceThreshold;
     const QDir dir(mvsDir);
 
     for (std::size_t index = 0; index < views.size(); ++index)
@@ -1170,23 +1169,13 @@ bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
             }
         }
 
-        if (!confidence.empty() && effectiveConfidence > 0.0f)
-        {
-            cv::Mat filteredDepth = depth.clone();
-            for (int row = 0; row < filteredDepth.rows; ++row)
-            {
-                float *depthRow = filteredDepth.ptr<float>(row);
-                const float *confRow = confidence.ptr<float>(row);
-                for (int col = 0; col < filteredDepth.cols; ++col)
-                {
-                    if (confRow[col] < effectiveConfidence)
-                    {
-                        depthRow[col] = 0.0f;
-                    }
-                }
-            }
-            depth = std::move(filteredDepth);
-        }
+        const xjw::mvs::DepthPostProcessStats postprocessStats =
+            xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+                depth,
+                confidence,
+                fusionConfig,
+                static_cast<int>(index),
+                static_cast<int>(views.size()));
 
         xjw::mvs::FusionFrameInput frame;
         frame.cameraModel = views[index].positiveDepthModel();
@@ -1195,10 +1184,51 @@ bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
         frame.imagePath = views[index].imagePath;
         frame.depthMap = std::move(depth);
         frame.confidence = std::move(confidence);
+        frame.depthPostprocess = postprocessStats;
         frames->push_back(std::move(frame));
     }
 
     return true;
+}
+
+QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameInput> &frames)
+{
+    qint64 validBefore = 0;
+    qint64 validAfterConfidence = 0;
+    qint64 confidenceRemoved = 0;
+    qint64 localDepthOutlierRemoved = 0;
+    qint64 validAfter = 0;
+    QJsonArray perFrame;
+
+    for (std::size_t index = 0; index < frames.size(); ++index)
+    {
+        const xjw::mvs::DepthPostProcessStats &stats = frames[index].depthPostprocess;
+        validBefore += stats.validBeforePostprocess;
+        validAfterConfidence += stats.validAfterConfidenceFilter;
+        confidenceRemoved += stats.confidenceRemoved;
+        localDepthOutlierRemoved += stats.localDepthOutlierRemoved;
+        validAfter += stats.validAfterPostprocess;
+
+        perFrame.append(QJsonObject{
+            {QStringLiteral("index"), static_cast<int>(index)},
+            {QStringLiteral("valid_before"), stats.validBeforePostprocess},
+            {QStringLiteral("valid_after_confidence"), stats.validAfterConfidenceFilter},
+            {QStringLiteral("confidence_removed"), stats.confidenceRemoved},
+            {QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved},
+            {QStringLiteral("valid_after"), stats.validAfterPostprocess},
+            {QStringLiteral("effective_confidence_threshold"), stats.effectiveConfidenceThreshold}
+        });
+    }
+
+    return QJsonObject{
+        {QStringLiteral("frames"), static_cast<int>(frames.size())},
+        {QStringLiteral("valid_before"), static_cast<double>(validBefore)},
+        {QStringLiteral("valid_after_confidence"), static_cast<double>(validAfterConfidence)},
+        {QStringLiteral("confidence_removed"), static_cast<double>(confidenceRemoved)},
+        {QStringLiteral("local_depth_outlier_removed"), static_cast<double>(localDepthOutlierRemoved)},
+        {QStringLiteral("valid_after"), static_cast<double>(validAfter)},
+        {QStringLiteral("per_frame"), perFrame}
+    };
 }
 
 bool writeReport(const QString &outputDir, const QJsonObject &report, QJsonObject *writtenReport, QString *error)
@@ -1687,7 +1717,7 @@ int main(int argc, char *argv[])
     {
         if (!loadFusionFramesFromDepthMaps(mvsDir,
                                            views,
-                                           denseSettings.fusionMinConfidence,
+                                           depthConfig.fusion,
                                            &fusionFrames,
                                            &error))
         {
@@ -1884,7 +1914,7 @@ int main(int argc, char *argv[])
         std::fprintf(stderr, "report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
         return cli::EXIT_ALGO_ERR;
     }
-    report[QStringLiteral("dense")] = QJsonObject{
+    QJsonObject denseReport{
         {QStringLiteral("point_cloud"), denseCloudPathForReport},
         {QStringLiteral("refined_point_cloud"), refinedCloudPathForModel},
         {QStringLiteral("points"), densePointCount},
@@ -1892,6 +1922,8 @@ int main(int argc, char *argv[])
         {QStringLiteral("has_rgb"), true},
         {QStringLiteral("has_normals"), true}
     };
+    denseReport[QStringLiteral("depth_postprocess")] = depthPostprocessStatsToJson(fusionFrames);
+    report[QStringLiteral("dense")] = denseReport;
     mvsElapsedMs = recordTiming(QStringLiteral("mvs_elapsed_ms"), mvsStart);
 
     if (!skipModel)

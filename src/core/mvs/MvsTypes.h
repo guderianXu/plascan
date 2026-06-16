@@ -86,6 +86,19 @@ struct FusionConfig
 };
 
 // =============================================================================
+// 深度图后处理统计
+// =============================================================================
+struct DepthPostProcessStats
+{
+    int validBeforePostprocess = 0;       ///< 后处理前有效深度像素数
+    int validAfterConfidenceFilter = 0;   ///< 置信度过滤后有效深度像素数
+    int confidenceRemoved = 0;            ///< 置信度过滤移除像素数
+    int localDepthOutlierRemoved = 0;     ///< 局部深度离群过滤移除像素数
+    int validAfterPostprocess = 0;        ///< 所有后处理后有效深度像素数
+    float effectiveConfidenceThreshold = 0.0f; ///< 实际使用的融合前置信度阈值
+};
+
+// =============================================================================
 // 融合输入帧
 // =============================================================================
 struct FusionFrameInput
@@ -97,6 +110,7 @@ struct FusionFrameInput
     int       imgW = 0;
     int       imgH = 0;
     std::string imagePath; ///< 原始彩色图像路径（用于取色）
+    DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
 };
 
 // =============================================================================
