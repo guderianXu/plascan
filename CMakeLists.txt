@@ -65,6 +65,7 @@ if(CMAKE_CUDA_COMPILER)
   set(CMAKE_CUDA_STANDARD_REQUIRED ON)
   message(STATUS "plascan: CUDA enabled (${CMAKE_CUDA_COMPILER})")
 else()
+  add_compile_definitions(PLAMATRIX_NO_CUDA=1)
   message(STATUS "plascan: CUDA compiler not found, GPU modules will fall back to CPU")
 endif()
 
