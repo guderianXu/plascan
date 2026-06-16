@@ -1466,10 +1466,11 @@ bool PatchMatchDepthEstimator::estimateGPU(
     const int N    = (int)srcGrays.size();
     const int ds   = config.downsampleFactor > 0 ? config.downsampleFactor : 1;
 
-    // ── 降采样 ──────────────────────────────────────────────────────
-    cv::Mat refScaled, hintScaled;
-    cv::resize(refGray, refScaled, cv::Size(refW/ds, refH/ds), 0, 0, cv::INTER_AREA);
-    const int sW = refScaled.cols, sH = refScaled.rows;
+    // ── 工作分辨率 ──────────────────────────────────────────────────
+    // 参考图本身由 getOrUploadGrayImageGpu() 统一缩放/上传/缓存，避免这里先做一次重复 resize。
+    cv::Mat hintScaled;
+    const int sW = std::max(1, refW / ds);
+    const int sH = std::max(1, refH / ds);
 
     PositiveDepthCameraModel refCamS = refCam;
     if (ds > 1) { refCamS.fx/=ds; refCamS.fy/=ds; refCamS.cx/=ds; refCamS.cy/=ds; }

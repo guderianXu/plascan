@@ -105,6 +105,17 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("hintDepth->cols == W && hintDepth->rows == H", cuda)
         self.assertIn("hintScaled = *hintDepth", cuda)
 
+    def test_patchmatch_gpu_avoids_duplicate_reference_resize_before_upload(self):
+        cuda = self.read("src/core/mvs/PatchMatchCUDA.cu")
+        gpu_start = cuda.index("bool PatchMatchDepthEstimator::estimateGPU")
+        cpu_start = cuda.index("bool PatchMatchDepthEstimator::estimateCPU")
+        gpu_body = cuda[gpu_start:cpu_start]
+
+        self.assertIn("const int sW = std::max(1, refW / ds);", gpu_body)
+        self.assertIn("const int sH = std::max(1, refH / ds);", gpu_body)
+        self.assertIn("getOrUploadGrayImageGpu(refGray, sW, sH, ds", gpu_body)
+        self.assertNotIn("cv::resize(refGray, refScaled", gpu_body)
+
     def test_sparse_hint_skips_propagation_when_no_seed_pixels(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
