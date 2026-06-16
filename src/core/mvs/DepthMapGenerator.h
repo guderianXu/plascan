@@ -129,6 +129,14 @@ public:
         int H,
         const std::vector<ProjectedSparseDepthSample> &samples);
 
+    /// 基于已投影样本仅生成局部种子深度，不做距离传播；用于精细层覆盖粗层 hint
+    static cv::Mat buildSparseSeedDepthFromProjectedSamples(
+        int refIdx,
+        int W,
+        int H,
+        const std::vector<ProjectedSparseDepthSample> &samples,
+        int seedRadius = 3);
+
     /// 基于已投影样本生成稀疏支撑掩码，避免重复投影同一批稀疏点
     static cv::Mat buildSparseSupportMaskFromProjectedSamples(
         int refIdx,

@@ -80,6 +80,12 @@ class RepoHygieneTest(unittest.TestCase):
             "Bundle Adjustment",
             "control points",
             "point cloud fusion",
+            "First Small Fixture Plan",
+            "source_manifest.json",
+            "LaserControlPoint",
+            "LaserObservation",
+            "LiDARFrame",
+            "Residual Diagnostics",
         ]
         for term in required_terms:
             with self.subTest(term=term):

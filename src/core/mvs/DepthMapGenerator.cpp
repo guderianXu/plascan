@@ -1320,33 +1320,10 @@ cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples(
         return cv::Mat();
     }
 
-    cv::Mat hint(H, W, CV_32F, cv::Scalar(0.f));
-
-    for (const ProjectedSparseDepthSample &sample : samples)
+    cv::Mat hint = buildSparseSeedDepthFromProjectedSamples(refIdx, W, H, samples);
+    if (hint.empty())
     {
-        const int iu = static_cast<int>(std::round(sample.uNorm * static_cast<float>(W)));
-        const int iv = static_cast<int>(std::round(sample.vNorm * static_cast<float>(H)));
-        if (iu < 0 || iu >= W || iv < 0 || iv >= H || sample.depth <= 0.0f)
-        {
-            continue;
-        }
-
-        for (int dv = -3; dv <= 3; ++dv)
-        {
-            for (int du = -3; du <= 3; ++du)
-            {
-                int nu = iu+du, nv = iv+dv;
-                if (nu<0||nu>=W||nv<0||nv>=H)
-                {
-                    continue;
-                }
-                float &h = hint.at<float>(nv, nu);
-                if (h == 0.f || sample.depth < h)
-                {
-                    h = sample.depth;
-                }
-            }
-        }
+        return cv::Mat();
     }
 
     // 第二步：限距离膨胀——仅将稀疏种子传播到 maxHintRadius 像素范围内
@@ -1436,6 +1413,52 @@ cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples(
             refIdx, samples.size(), seedHintCnt, maxHintRadius,
             hintCnt, W*H, 100.f*hintCnt/(W*H));
     return hint;
+}
+
+cv::Mat DepthMapGenerator::buildSparseSeedDepthFromProjectedSamples(
+    int refIdx,
+    int W,
+    int H,
+    const std::vector<ProjectedSparseDepthSample> &samples,
+    int seedRadius)
+{
+    (void)refIdx;
+    if (samples.empty() || W <= 0 || H <= 0)
+    {
+        return cv::Mat();
+    }
+
+    const int radius = std::clamp(seedRadius, 0, 8);
+    cv::Mat hint(H, W, CV_32F, cv::Scalar(0.f));
+
+    for (const ProjectedSparseDepthSample &sample : samples)
+    {
+        const int iu = static_cast<int>(std::round(sample.uNorm * static_cast<float>(W)));
+        const int iv = static_cast<int>(std::round(sample.vNorm * static_cast<float>(H)));
+        if (iu < 0 || iu >= W || iv < 0 || iv >= H || sample.depth <= 0.0f)
+        {
+            continue;
+        }
+
+        for (int dv = -radius; dv <= radius; ++dv)
+        {
+            for (int du = -radius; du <= radius; ++du)
+            {
+                int nu = iu+du, nv = iv+dv;
+                if (nu<0||nu>=W||nv<0||nv>=H)
+                {
+                    continue;
+                }
+                float &h = hint.at<float>(nv, nu);
+                if (h == 0.f || sample.depth < h)
+                {
+                    h = sample.depth;
+                }
+            }
+        }
+    }
+
+    return cv::countNonZero(hint > 0) > 0 ? hint : cv::Mat();
 }
 
 // =============================================================================
@@ -2100,13 +2123,13 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         const cv::Size fineHintSize = patchMatchWorkSize(workRefImg, fineCfg);
         cv::Mat fineHint;
         cv::resize(coarseDepth, fineHint, fineHintSize, 0, 0, cv::INTER_NEAREST);
-        cv::Mat fineSparseHint = buildHintDepthFromProjectedSamples(refIdx,
-                                                                    fineHintSize.width,
-                                                                    fineHintSize.height,
-                                                                    workRefSparseSamples);
-        if (!fineSparseHint.empty())
+        cv::Mat fineSparseSeedHint = buildSparseSeedDepthFromProjectedSamples(refIdx,
+                                                                              fineHintSize.width,
+                                                                              fineHintSize.height,
+                                                                              workRefSparseSamples);
+        if (!fineSparseSeedHint.empty())
         {
-            fineSparseHint.copyTo(fineHint, fineSparseHint > 0);
+            fineSparseSeedHint.copyTo(fineHint, fineSparseSeedHint > 0);
         }
 
         // ── Pass 2: 精细分辨率 ──────────────────────────────────────

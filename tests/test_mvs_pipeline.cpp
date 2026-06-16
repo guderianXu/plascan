@@ -379,6 +379,28 @@ TEST(MvsPipelineTest, ProjectedSparseSamplesFeedHintAndSupportReuse)
     EXPECT_EQ(support.at<uint8_t>(5, 5), 0);
 }
 
+TEST(MvsPipelineTest, SparseSeedDepthOverlayDoesNotPropagateAcrossFineHint)
+{
+    std::vector<xjw::mvs::ProjectedSparseDepthSample> samples;
+    xjw::mvs::ProjectedSparseDepthSample sample;
+    sample.uNorm = 0.5f;
+    sample.vNorm = 0.5f;
+    sample.depth = 10.0f;
+    samples.push_back(sample);
+
+    const cv::Mat propagated = xjw::mvs::DepthMapGenerator::buildHintDepthFromProjectedSamples(
+        0, 64, 64, samples);
+    const cv::Mat seedOnly = xjw::mvs::DepthMapGenerator::buildSparseSeedDepthFromProjectedSamples(
+        0, 64, 64, samples);
+
+    ASSERT_FALSE(propagated.empty());
+    ASSERT_FALSE(seedOnly.empty());
+    EXPECT_LT(cv::countNonZero(seedOnly > 0), cv::countNonZero(propagated > 0))
+        << "Fine sparse overlay should stamp local seeds only; full propagation is reserved for coarse hints.";
+    EXPECT_FLOAT_EQ(seedOnly.at<float>(32, 32), 10.0f);
+    EXPECT_FLOAT_EQ(seedOnly.at<float>(0, 0), 0.0f);
+}
+
 TEST(MvsPipelineTest, SparseSupportPriorKeepsDepthAndSoftensConfidence)
 {
     cv::Mat depth(3, 3, CV_32F, cv::Scalar(12.0f));

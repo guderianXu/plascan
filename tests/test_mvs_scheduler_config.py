@@ -98,6 +98,21 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("buildHintDepthForCamera(refIdx,\n                                                 coarseHintCam", scheduler)
         self.assertNotIn("buildHintDepthForCamera(refIdx,\n                                                         fineHintCam", scheduler)
 
+    def test_fine_sparse_hint_uses_seed_overlay_without_full_propagation(self):
+        header = self.read("src/core/mvs/DepthMapGenerator.h")
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("buildSparseSeedDepthFromProjectedSamples", header)
+        self.assertIn("buildSparseSeedDepthFromProjectedSamples", scheduler)
+
+        fine_start = scheduler.index("cv::resize(coarseDepth, fineHint")
+        fine_end = scheduler.index("const int hintValid", fine_start)
+        fine_block = scheduler[fine_start:fine_end]
+
+        self.assertIn("fineSparseSeedHint", fine_block)
+        self.assertIn("fineSparseSeedHint.copyTo(fineHint", fine_block)
+        self.assertNotIn("buildHintDepthFromProjectedSamples(refIdx", fine_block)
+
     def test_patchmatch_accepts_prescaled_hint_without_extra_resize(self):
         cuda = self.read("src/core/mvs/PatchMatchCUDA.cu")
 
