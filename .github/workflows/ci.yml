@@ -41,7 +41,9 @@ jobs:
             libgdal-dev \
             libtiff-dev \
             libzip-dev \
+            libzip-tools \
             libgtest-dev \
+            libgmock-dev \
             libomp-dev
 
       - name: Install CPU LibTorch
@@ -52,12 +54,17 @@ jobs:
 
       - name: Configure
         run: |
-          cmake -S . -B build -G Ninja \
+          set -o pipefail
+          if ! cmake -S . -B build -G Ninja \
             -DCMAKE_BUILD_TYPE=Release \
             -DBUILD_TESTS=ON \
             -DPLASCAN_ENABLE_CONDA=OFF \
             -DPLASCAN_ENABLE_VCPKG=OFF \
-            -DTorch_DIR="$PWD/.deps/libtorch/share/cmake/Torch"
+            -DTorch_DIR="$PWD/.deps/libtorch/share/cmake/Torch" 2>&1 | tee configure.log; then
+            tail_msg="$(tail -n 80 configure.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            echo "::error title=CMake configure failed::$tail_msg"
+            exit 1
+          fi
 
       - name: Build
         run: cmake --build build --parallel 2
