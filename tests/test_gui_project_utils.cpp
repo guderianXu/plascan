@@ -7,6 +7,7 @@
 #include "ProjectIO.h"
 #include "ProjectCameraImportService.h"
 #include "ProjectData.h"
+#include "ProjectDepthFrameUtils.h"
 #include "ProjectSupportUtils.h"
 #include "ProjectTriangulationService.h"
 #include "ProjectWorkflowReports.h"
@@ -631,6 +632,136 @@ TEST(ProjectSupportUtilsTest, ListsOnlyFeatureSuffixesPresentInProject)
 
     const QStringList suffixes = xjw::gui::project::projectFeatureSuffixes(projectPath, meta);
     EXPECT_EQ(suffixes, QStringList{QStringLiteral(".dsk")});
+}
+
+TEST(ProjectDepthFrameUtilsTest, ExistingFrameArtifactsRequirePreviewAndRawDepth)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString pngPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_0.png"));
+    EXPECT_FALSE(xjw::gui::project::depthFrameArtifactsExist(pngPath));
+
+    QFile pngFile(pngPath);
+    ASSERT_TRUE(pngFile.open(QIODevice::WriteOnly));
+    pngFile.write("png");
+    pngFile.close();
+
+    EXPECT_FALSE(xjw::gui::project::depthFrameArtifactsExist(pngPath));
+
+    QFile rawFile(xjw::gui::project::rawDepthStoragePath(pngPath));
+    ASSERT_TRUE(rawFile.open(QIODevice::WriteOnly));
+    rawFile.write("raw");
+    rawFile.close();
+
+    EXPECT_TRUE(xjw::gui::project::depthFrameArtifactsExist(pngPath));
+    EXPECT_FALSE(xjw::gui::project::depthFrameArtifactsExist(pngPath, true));
+
+    QFile confidenceFile(xjw::gui::project::rawConfidenceStoragePath(pngPath));
+    ASSERT_TRUE(confidenceFile.open(QIODevice::WriteOnly));
+    confidenceFile.write("confidence");
+    confidenceFile.close();
+
+    EXPECT_TRUE(xjw::gui::project::depthFrameArtifactsExist(pngPath, true));
+}
+
+TEST(DenseDepthReuseTest, ExistingDepthReuseRequiresRawDepthArtifact)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int collectStart = source.indexOf(QStringLiteral("QSet<int> collectExistingDepthFrameIndices"));
+    ASSERT_GE(collectStart, 0);
+    const int collectEnd = source.indexOf(QStringLiteral("ExistingDepthAction askExistingDepthAction"), collectStart);
+    ASSERT_GT(collectEnd, collectStart);
+    const QString collectBlock = source.mid(collectStart, collectEnd - collectStart);
+    EXPECT_TRUE(collectBlock.contains(QStringLiteral("depthFrameArtifactsExist(pngPath)")))
+        << collectBlock.toStdString();
+
+    const int upsertStart = source.indexOf(QStringLiteral("void upsertExistingDepthRecords"));
+    ASSERT_GE(upsertStart, 0);
+    const int upsertEnd = source.indexOf(QStringLiteral("} // namespace"), upsertStart);
+    ASSERT_GT(upsertEnd, upsertStart);
+    const QString upsertBlock = source.mid(upsertStart, upsertEnd - upsertStart);
+    EXPECT_TRUE(upsertBlock.contains(QStringLiteral("depthFrameArtifactsExist(pngPath)")))
+        << upsertBlock.toStdString();
+}
+
+TEST(DenseDepthCameraLookupTest, MvsCameraLookupUsesNormalizedImageKeys)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(camMap, imgPath")))
+        << "Dense estimation should query cameras with the same normalized key used by ProjectManager.";
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(camMap, stored.refImage")))
+        << "Stored-depth fusion should normalize ref_image before camera lookup.";
+    EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(imgPath)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(stored.refImage)")));
+}
+
+TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
+{
+    const QString terrainSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    const QString modelSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+    const QString treeSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
+    ASSERT_FALSE(terrainSource.isEmpty());
+    ASSERT_FALSE(modelSource.isEmpty());
+    ASSERT_FALSE(treeSource.isEmpty());
+
+    EXPECT_FALSE(terrainSource.contains(QStringLiteral("depth_map_results")))
+        << "DEM product previews should be stored on dem_results.depth_preview_png, not as MVS depth maps.";
+    EXPECT_FALSE(modelSource.contains(QStringLiteral("depth_map_results")))
+        << "Model/terrain previews should not be inserted into the MVS depth map result list.";
+    EXPECT_TRUE(treeSource.contains(QStringLiteral("depthResultKind(obj) == QStringLiteral(\"mvs_depth\")")))
+        << "The depth-map tree should filter out non-MVS preview records.";
+    EXPECT_TRUE(treeSource.contains(QStringLiteral("depth_preview_png")))
+        << "DEM previews should be available from the DEM section instead.";
+}
+
+TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int workerSave = source.indexOf(
+        QStringLiteral("saveQueue.enqueue(i, res, QStringLiteral(\"初始\"))"));
+    const int waitBeforeConsistency = source.indexOf(QStringLiteral("saveQueue.waitUntilIdle()"));
+    const int consistencyPass = source.indexOf(QStringLiteral("crossCheckDepthConsistency();"));
+    const int finalSave = source.indexOf(
+        QStringLiteral("saveQueue.enqueue(i, res, QStringLiteral(\"过滤后\"))"));
+
+    ASSERT_GE(workerSave, 0);
+    ASSERT_GE(waitBeforeConsistency, 0);
+    ASSERT_GE(consistencyPass, 0);
+    ASSERT_GE(finalSave, 0);
+    EXPECT_LT(workerSave, consistencyPass)
+        << "Each completed depth frame should be persisted before the all-frame consistency pass.";
+    EXPECT_LT(waitBeforeConsistency, consistencyPass)
+        << "Initial async saves must drain before the consistency pass mutates depth maps.";
+    EXPECT_LT(consistencyPass, finalSave)
+        << "The final consistency-filtered depth maps should still overwrite the provisional artifacts.";
+}
+
+TEST(DisparityHeatmapOverlayTest, InvalidPixelsUseAlphaMask)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QImage::Format_RGBA8888")))
+        << "Heatmap storage should carry alpha so invalid disparity can be transparent.";
+    EXPECT_TRUE(source.contains(QStringLiteral("alphaRow[col] = validRow[col] ? 255 : 0")))
+        << "Invalid disparity pixels should be masked out, not colorized as low disparity.";
+    EXPECT_TRUE(source.contains(QStringLiteral("if (m_showInvalid)")))
+        << "setShowInvalid() must affect the rendered invalid-pixel state.";
+    EXPECT_TRUE(header.contains(QStringLiteral("QImage heatmapImage() const")))
+        << "Tests and callers need a mask-aware image accessor.";
 }
 
 TEST(SparseResultQualityTest, BuildsHistogramAndClassifiesPairwisePreview)
@@ -3190,6 +3321,58 @@ TEST(DataTreeWidgetTest, ShowsTemporaryDroppedModelUntilCleared)
         }
     }
     EXPECT_TRUE(foundClearedModelSection);
+}
+
+TEST(DataTreeWidgetTest, ResultOnlyMetadataUpdateRefreshesDepthMapSection)
+{
+    DataTreeWidget tree;
+
+    QJsonObject image;
+    image[QStringLiteral("path")] = QStringLiteral("/tmp/ref_image_001.jpg");
+    image[QStringLiteral("storage")] = QStringLiteral("reference");
+
+    QJsonArray images;
+    images.append(image);
+
+    QJsonObject initialMeta;
+    initialMeta[QStringLiteral("images")] = images;
+    tree.loadFromJson(initialMeta);
+
+    QJsonObject depthRecord;
+    depthRecord[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
+    depthRecord[QStringLiteral("depth_png")] = QStringLiteral("/tmp/mvs_output/depth_0.png");
+    depthRecord[QStringLiteral("raw_depth_path")] = QStringLiteral("/tmp/mvs_output/depth_0.yml.gz");
+    depthRecord[QStringLiteral("ref_image")] = QStringLiteral("/tmp/ref_image_001.jpg");
+    depthRecord[QStringLiteral("grid_width")] = 6000;
+    depthRecord[QStringLiteral("grid_height")] = 4000;
+
+    QJsonArray depthResults;
+    depthResults.append(depthRecord);
+
+    QJsonObject resultOnlyMeta;
+    resultOnlyMeta[QStringLiteral("depth_map_results")] = depthResults;
+    tree.loadFromJson(resultOnlyMeta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    QStandardItem *depthSection = nullptr;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("深度图 (1)")))
+        {
+            depthSection = item;
+            break;
+        }
+    }
+
+    ASSERT_NE(depthSection, nullptr);
+    ASSERT_EQ(depthSection->rowCount(), 1);
+    EXPECT_EQ(depthSection->child(0, 0)->text(), QStringLiteral("depth_0.png  [6000x4000]"));
+    EXPECT_EQ(depthSection->child(0, 1)->text(), QStringLiteral("/tmp/mvs_output/depth_0.png"));
 }
 
 TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)

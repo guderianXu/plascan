@@ -23,12 +23,10 @@
 #include <utility>
 
 using xjw::gui::project::makeDenseResultRecord;
-using xjw::gui::project::makeDepthResultRecord;
 using xjw::gui::project::makeModelResultRecord;
 using xjw::gui::project::replaceMetaArrayWithLatest;
 using xjw::gui::project::resolveLatestDenseCloudPath;
 using xjw::gui::project::runDemProducts;
-using xjw::gui::project::upsertMetaArrayRecordByPath;
 
 namespace
 {
@@ -588,15 +586,9 @@ void ProjectModelManager::finalizeModelGenerationSuccess(const QJsonObject &terr
                                                          const QString &sourceCloudPath,
                                                          bool sourceIsDense)
 {
-    const QString depthPng = terrainResult.value(QStringLiteral("depth_png")).toString();
     const QString denseXyz = terrainResult.value(QStringLiteral("dense_cloud_xyz")).toString();
     const int denseCount = terrainResult.value(QStringLiteral("dense_point_count")).toInt(-1);
 
-    const QJsonObject depthResult = makeDepthResultRecord(utcNowIso(),
-                                                          depthPng,
-                                                          terrainResult.value(QStringLiteral("grid_width")).toInt(),
-                                                          terrainResult.value(QStringLiteral("grid_height")).toInt(),
-                                                          sourceCloudPath);
     const QJsonObject denseResult = makeDenseResultRecord(utcNowIso(),
                                                           denseXyz,
                                                           denseCount,
@@ -615,10 +607,6 @@ void ProjectModelManager::finalizeModelGenerationSuccess(const QJsonObject &terr
         xjw::common::project::enrichModelResultFromTerrain(modelResult, terrainResult);
 
     QJsonObject updatedMeta = m_projectData->metadata();
-    upsertMetaArrayRecordByPath(&updatedMeta,
-                                QStringLiteral("depth_map_results"),
-                                QStringLiteral("depth_png"),
-                                depthResult);
     replaceMetaArrayWithLatest(&updatedMeta, QStringLiteral("dense_cloud_results"), denseResult);
     replaceMetaArrayWithLatest(&updatedMeta, QStringLiteral("model_results"), enrichedModelResult);
     xjw::gui::project::persistProjectMeta(m_projectData, updatedMeta, true);

@@ -18,6 +18,7 @@ QJsonObject makeDepthResultRecord(const QString &createdAt,
         rec[QStringLiteral("source_sparse_cloud")] = sourceSparseCloud;
     }
     rec[QStringLiteral("depth_png")] = depthPng;
+    rec[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
     rec[QStringLiteral("grid_width")] = gridWidth;
     rec[QStringLiteral("grid_height")] = gridHeight;
     if (!refImage.isEmpty()) {

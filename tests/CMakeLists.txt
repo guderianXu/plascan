@@ -79,9 +79,6 @@ if(CMAKE_CUDA_COMPILER)
     enable_language(CUDA)
     add_executable(test_patchmatch_cpu test_patchmatch_cpu.cpp)
     set_target_properties(test_patchmatch_cpu PROPERTIES
-        LINKER_LANGUAGE CUDA
-        CUDA_SEPARABLE_COMPILATION ON
-        CUDA_RESOLVE_DEVICE_SYMBOLS ON
         CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
     )
     target_link_libraries(test_patchmatch_cpu PRIVATE
@@ -287,6 +284,7 @@ set_target_properties(test_gui_project_utils PROPERTIES
     AUTOUIC ON
 )
 target_link_libraries(test_gui_project_utils PRIVATE
+    mvs
     sfm
     camera
     intersection
@@ -296,6 +294,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     Qt6::Gui
     Qt6::Test
     Qt6::Widgets
+    ${OpenCV_LIBS}
     ${PLASCAN_LIBZIP_TARGET}
     GTest::gtest
 )
@@ -321,8 +320,17 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/terrain
+    ${CMAKE_SOURCE_DIR}/src/core/mvs
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${OpenCV_INCLUDE_DIRS}
 )
-gtest_discover_tests(test_gui_project_utils)
+set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
+    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
+gtest_discover_tests(test_gui_project_utils
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
 
 add_executable(test_layer_renderer_batched_overlay
     test_layer_renderer_batched_overlay.cpp
@@ -505,9 +513,6 @@ endif()
 if(CMAKE_CUDA_COMPILER)
     add_executable(test_mvs_pipeline test_mvs_pipeline.cpp)
     set_target_properties(test_mvs_pipeline PROPERTIES
-        LINKER_LANGUAGE CUDA
-        CUDA_SEPARABLE_COMPILATION ON
-        CUDA_RESOLVE_DEVICE_SYMBOLS ON
         CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
     )
     target_link_libraries(test_mvs_pipeline PRIVATE

@@ -4,9 +4,10 @@
 // =============================================================================
 #pragma once
 
+#include <QImage>
+#include <QPixmap>
 #include <QWidget>
 #include <opencv2/core.hpp>
-#include <QPixmap>
 
 class DisparityHeatmapOverlay : public QWidget
 {
@@ -24,6 +25,7 @@ public:
     void setShowInvalid(bool show);
 
     float opacity() const { return m_opacity; }
+    QImage heatmapImage() const { return m_heatmapImage; }
 
 protected:
     void paintEvent(QPaintEvent *event) override;
@@ -32,6 +34,7 @@ private:
     void rebuildHeatmap();
 
     cv::Mat m_disparity;
+    QImage  m_heatmapImage;
     QPixmap m_heatmap;
     float   m_opacity     = 0.6f;
     float   m_dispMin     = 0.0f;

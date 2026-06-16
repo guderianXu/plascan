@@ -6,6 +6,7 @@
 #include "ProjectDepthFrameUtils.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
+#include "ProjectSupportUtils.h"
 #include "ProjectWorkflowUtils.h"
 #include "project/SparseResultQuality.h"
 #include "Logger.h"
@@ -23,6 +24,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QMap>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
@@ -45,6 +47,8 @@ using xjw::gui::project::makeDepthResultRecord;
 using xjw::gui::project::sparseResultBlockingReason;
 using xjw::gui::project::buildStoredFusionFrame;
 using xjw::gui::project::collectLatestStoredDepthFrames;
+using xjw::gui::project::depthFrameArtifactsExist;
+using xjw::gui::project::normalizePath;
 using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::rawConfidenceStoragePath;
 using xjw::gui::project::rawDepthStoragePath;
@@ -62,6 +66,26 @@ QString utcNowIso()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
+bool cameraForImagePath(const QMap<QString, xjw::Camera> &camMap,
+                        const QString &imagePath,
+                        xjw::Camera *camera)
+{
+    if (!camera)
+    {
+        return false;
+    }
+
+    const QString normalizedPath = normalizePath(imagePath);
+    const auto it = camMap.constFind(normalizedPath);
+    if (it == camMap.constEnd())
+    {
+        return false;
+    }
+
+    *camera = it.value();
+    return true;
+}
+
 enum class ExistingDepthAction
 {
     Cancel,
@@ -75,7 +99,7 @@ QSet<int> collectExistingDepthFrameIndices(const QString &outputDir, int expecte
     for (int index = 0; index < expectedCount; ++index)
     {
         const QString pngPath = QDir(outputDir).filePath(QStringLiteral("depth_%1.png").arg(index));
-        if (QFileInfo::exists(pngPath))
+        if (depthFrameArtifactsExist(pngPath))
         {
             indices.insert(index);
         }
@@ -151,7 +175,7 @@ void upsertExistingDepthRecords(ProjectData *projectData,
         }
 
         const QString pngPath = QDir(outputDir).filePath(QStringLiteral("depth_%1.png").arg(index));
-        if (!QFileInfo::exists(pngPath))
+        if (!depthFrameArtifactsExist(pngPath))
         {
             continue;
         }
@@ -549,7 +573,13 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     {
         CameraView view;
         view.imagePath = imgPath.toStdString();
-        view.camera = camMap.value(imgPath);
+        if (!cameraForImagePath(camMap, imgPath, &view.camera))
+        {
+            QMessageBox::warning(m_parentWidget,
+                                 QStringLiteral("深度图估计"),
+                                 QStringLiteral("影像缺少相机参数：%1").arg(QDir::toNativeSeparators(imgPath)));
+            return;
+        }
         views.push_back(std::move(view));
     }
 
@@ -606,11 +636,11 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     m_activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
-    (void)QtConcurrent::run([gen, sparseXyz, views]() {
+    (void)QtConcurrent::run([gen, sparseXyz, views, request]() {
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
-            SparseCloudPreprocessor pp;
+            SparseCloudPreprocessor pp(request.processingDevice);
             PreprocessResult ppRes;
             std::string ppErr;
             if (pp.run(sparseXyz.toStdString(), views, ppRes, &ppErr))
@@ -677,7 +707,19 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         frames.reserve(storedFrames.size());
         for (const auto &stored : storedFrames)
         {
-            const xjw::Camera camera = camMap.value(stored.refImage);
+            xjw::Camera camera;
+            if (!cameraForImagePath(camMap, stored.refImage, &camera))
+            {
+                const QString missingImage = stored.refImage;
+                QMetaObject::invokeMethod(this, [this, missingImage]() {
+                    emit mvsProgressFinished(false);
+                    QMessageBox::warning(m_parentWidget,
+                                         QStringLiteral("深度图融合"),
+                                         QStringLiteral("深度图对应影像缺少相机参数：%1")
+                                             .arg(QDir::toNativeSeparators(missingImage)));
+                }, Qt::QueuedConnection);
+                return;
+            }
             auto frameResult = buildStoredFusionFrame(stored,
                                                       camera,
                                                       request.fusionMinConfidence,
@@ -834,7 +876,13 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     {
         CameraView view;
         view.imagePath = imgPath.toStdString();
-        view.camera = camMap.value(imgPath);
+        if (!cameraForImagePath(camMap, imgPath, &view.camera))
+        {
+            QMessageBox::warning(m_parentWidget,
+                                 QStringLiteral("稠密重建"),
+                                 QStringLiteral("影像缺少相机参数：%1").arg(QDir::toNativeSeparators(imgPath)));
+            return;
+        }
         view.imageWidth = 0;
         view.imageHeight = 0;
         views.push_back(std::move(view));
@@ -994,11 +1042,11 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
     m_activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
-    (void)QtConcurrent::run([gen, sparseXyz, views]() {
+    (void)QtConcurrent::run([gen, sparseXyz, views, request]() {
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
-            SparseCloudPreprocessor pp;
+            SparseCloudPreprocessor pp(request.processingDevice);
             PreprocessResult ppRes;
             std::string ppErr;
             if (pp.run(sparseXyz.toStdString(), views, ppRes, &ppErr))

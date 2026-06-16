@@ -22,7 +22,6 @@
 #include <opencv2/core.hpp>
 
 using xjw::gui::project::makeDemResultRecord;
-using xjw::gui::project::makeDepthResultRecord;
 using xjw::gui::project::makeOrthoResultRecord;
 using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::findLatestProductionAtResultIndex;
@@ -151,17 +150,6 @@ void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringLi
     {
         return;
     }
-
-    QJsonObject depthResult = makeDepthResultRecord(
-        terrainResult.value(QStringLiteral("created_at")).toString(),
-        terrainResult.value(QStringLiteral("depth_png")).toString(),
-        terrainResult.value(QStringLiteral("grid_width")).toInt(),
-        terrainResult.value(QStringLiteral("grid_height")).toInt(),
-        denseCloudPath);
-    upsertMetaArrayRecordByPath(&meta,
-                                QStringLiteral("depth_map_results"),
-                                QStringLiteral("depth_png"),
-                                depthResult);
 
     QJsonObject demResult = makeDemResultRecord(
         terrainResult.value(QStringLiteral("created_at")).toString(),
@@ -339,17 +327,6 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
     {
         return;
     }
-
-    QJsonObject depthResult = makeDepthResultRecord(
-        terrainResult.value(QStringLiteral("created_at")).toString(),
-        terrainResult.value(QStringLiteral("depth_png")).toString(),
-        terrainResult.value(QStringLiteral("grid_width")).toInt(),
-        terrainResult.value(QStringLiteral("grid_height")).toInt(),
-        resolvedDenseCloud);
-    upsertMetaArrayRecordByPath(&meta,
-                                QStringLiteral("depth_map_results"),
-                                QStringLiteral("depth_png"),
-                                depthResult);
 
     QJsonObject demResult = makeDemResultRecord(
         terrainResult.value(QStringLiteral("created_at")).toString(),
@@ -678,15 +655,6 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 }
 
                 QJsonObject metaUpdated = m_projectData->metadata();
-                QJsonObject depthResult = makeDepthResultRecord(
-                    terrainResult.value(QStringLiteral("created_at")).toString(),
-                    terrainResult.value(QStringLiteral("depth_png")).toString(),
-                    terrainResult.value(QStringLiteral("grid_width")).toInt(),
-                    terrainResult.value(QStringLiteral("grid_height")).toInt(),
-                    plyPath);
-                upsertMetaArrayRecordByPath(&metaUpdated, QStringLiteral("depth_map_results"),
-                                            QStringLiteral("depth_png"), depthResult);
-
                 QJsonObject demResult = makeDemResultRecord(
                     terrainResult.value(QStringLiteral("created_at")).toString(),
                     outDir, QString(),

@@ -26,6 +26,7 @@ struct DenseGenerationSettings
     int minConsistentViews = 2;
     float depthConsistency = 2.0f;
     float maxReprojError = 2.0f;
+    plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
     bool pipelineMode = false;  // 流水线模式：跳过所有交互对话框
 };
 

@@ -26,6 +26,7 @@
 #include <functional>
 #include <atomic>
 #include <mutex>
+#include <cstdint>
 
 namespace xjw
 {
@@ -139,11 +140,26 @@ signals:
     void finished(bool success);
 
 private:
+    struct FrameMvsCache
+    {
+        std::vector<size_t> visiblePointIndices;
+        std::vector<int> sourceViewIndices;
+    };
+
     /// 在 QtConcurrent 线程中运行的主函数
     void runInBackground();
 
     /// 计算单帧深度图
     DepthFrameResult computeDepthForView(int refIdx, const DepthGenConfig *configOverride = nullptr);
+
+    /// 预计算 MVS 可见性与源视图候选，避免每帧重复全量扫描稀疏点
+    void prepareFrameCaches();
+    void clearFrameCaches();
+    std::vector<int> sourceViewIndicesForFrame(int refIdx, int maxSources) const;
+    std::vector<size_t> visibleSparsePointIndicesForFrame(int refIdx,
+                                                          const std::vector<int> &sourceIndices,
+                                                          int minSourceViews) const;
+    bool isSparsePointVisibleInFrame(int viewIdx, size_t pointIndex) const;
 
     /// 将 DepthFrameResult 组装为 FusionFrameInput
     FusionFrameInput buildFusionFrame(const DepthFrameResult &res) const;
@@ -153,15 +169,43 @@ private:
                             float &zNear,
                             float &zFar,
                             const std::vector<int> &sourceIndices = {}) const;
+    bool estimateDepthRangeFromVisiblePoints(int refIdx,
+                                             const std::vector<size_t> &visiblePointIndices,
+                                             float &zNear,
+                                             float &zFar) const;
 
     /// 从稀疏点云生成提示深度图
     cv::Mat buildHintDepth(int refIdx,
                            int W,
                            int H,
                            const std::vector<int> &sourceIndices = {}) const;
+    cv::Mat buildHintDepthFromVisiblePoints(int refIdx,
+                                            int W,
+                                            int H,
+                                            const std::vector<size_t> &visiblePointIndices) const;
+    cv::Mat buildHintDepthForCamera(int refIdx,
+                                    const PositiveDepthCameraModel &camera,
+                                    int W,
+                                    int H,
+                                    const std::vector<size_t> &visiblePointIndices) const;
+
+    cv::Mat buildSparseSupportMaskFromVisiblePoints(int refIdx,
+                                                    int W,
+                                                    int H,
+                                                    const std::vector<size_t> &visiblePointIndices) const;
+    cv::Mat buildSparseSupportMaskForCamera(int refIdx,
+                                            const PositiveDepthCameraModel &camera,
+                                            int W,
+                                            int H,
+                                            const std::vector<size_t> &visiblePointIndices) const;
 
     /// 双视图深度图左右一致性检查（剔除互不一致的深度像素）
     void crossCheckDepthConsistency();
+
+    /// 保存单帧深度图预览、原始深度和置信图，并通知 GUI 更新项目结果树
+    bool saveDepthFrameArtifacts(int frameIndex,
+                                 const DepthFrameResult &result,
+                                 const QString &stageLabel);
 
     /// 预加载所有图像到内存，避免逐帧重复磁盘读取
     void preloadImages();
@@ -183,6 +227,13 @@ private:
     /// gamma/CLAHE 会将黑边像素 (gray≈3) 提升到 37+，使暗区掩码失效
     /// 因此必须在增强前计算真正的内容/黑边分界
     std::vector<cv::Mat> m_contentMasks;
+
+    /// MVS 稀疏点可见性与源视图缓存；runInBackground 中预计算一次，帧 worker 仅读取
+    std::vector<FrameMvsCache> m_frameCaches;
+    std::vector<uint64_t> m_visibilityBits;
+    std::vector<int> m_pairCommonCounts;
+    size_t m_visibilityWordCount = 0;
+    bool m_frameCachesReady = false;
 
 public:
     /// 融合完可获取每帧一致性过滤的深度图（返回副本，线程安全）

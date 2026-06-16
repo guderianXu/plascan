@@ -27,6 +27,9 @@ namespace
 
 using SparsePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
+constexpr std::size_t kMaxMedianSpacingSamples = 65536;
+constexpr std::ptrdiff_t kParallelLinearPassThreshold = 4096;
+
 bool endsWithIgnoreCase(const std::string &text, const std::string &suffix)
 {
     if (text.size() < suffix.size())
@@ -44,29 +47,46 @@ SparsePlaCloud toPlaCloud(const std::vector<std::array<float,3>> &pts)
 {
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> matrix(
         static_cast<plamatrix::Index>(pts.size()), 3);
-    for (std::size_t i = 0; i < pts.size(); ++i)
+    const auto count = static_cast<std::ptrdiff_t>(pts.size());
+#ifdef HAS_OPENMP
+#pragma omp parallel for schedule(static) if(count > kParallelLinearPassThreshold)
+#endif
+    for (std::ptrdiff_t i = 0; i < count; ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
-        matrix(row, 0) = pts[i][0];
-        matrix(row, 1) = pts[i][1];
-        matrix(row, 2) = pts[i][2];
+        const auto index = static_cast<std::size_t>(i);
+        matrix(row, 0) = pts[index][0];
+        matrix(row, 1) = pts[index][1];
+        matrix(row, 2) = pts[index][2];
     }
     return SparsePlaCloud(std::move(matrix));
 }
 
 std::vector<std::array<float,3>> fromPlaCloud(const SparsePlaCloud &cloud)
 {
-    std::vector<std::array<float,3>> pts;
-    pts.reserve(cloud.size());
+    std::vector<std::array<float,3>> pts(cloud.size());
     const auto &matrix = cloud.points();
-    for (std::size_t i = 0; i < cloud.size(); ++i)
+    const auto count = static_cast<std::ptrdiff_t>(cloud.size());
+#ifdef HAS_OPENMP
+#pragma omp parallel for schedule(static) if(count > kParallelLinearPassThreshold)
+#endif
+    for (std::ptrdiff_t i = 0; i < count; ++i)
     {
         const auto row = static_cast<plamatrix::Index>(i);
-        pts.push_back({matrix.getValue(row, 0),
-                       matrix.getValue(row, 1),
-                       matrix.getValue(row, 2)});
+        pts[static_cast<std::size_t>(i)] = {matrix.getValue(row, 0),
+                                            matrix.getValue(row, 1),
+                                            matrix.getValue(row, 2)};
     }
     return pts;
+}
+
+std::size_t sampledPointIndex(std::size_t sample, std::size_t sampleCount, std::size_t pointCount)
+{
+    if (sampleCount >= pointCount)
+    {
+        return sample;
+    }
+    return (sample * pointCount) / sampleCount;
 }
 
 float estimateMedianNearestNeighborDistance(const SparsePlaCloud &cloud)
@@ -81,11 +101,18 @@ float estimateMedianNearestNeighborDistance(const SparsePlaCloud &cloud)
     tree.setInputCloud(cloudPtr);
     tree.build();
 
-    std::vector<float> distances;
-    distances.reserve(cloud.size());
+    const std::size_t sampleCount = std::min(cloud.size(), kMaxMedianSpacingSamples);
+    std::vector<float> distances(sampleCount, 0.0f);
+    std::vector<unsigned char> valid(sampleCount, 0);
     const auto &matrix = cloud.points();
-    for (std::size_t i = 0; i < cloud.size(); ++i)
+    const auto sampleLimit = static_cast<std::ptrdiff_t>(sampleCount);
+#ifdef HAS_OPENMP
+#pragma omp parallel for schedule(static) if(sampleLimit > kParallelLinearPassThreshold)
+#endif
+    for (std::ptrdiff_t sample = 0; sample < sampleLimit; ++sample)
     {
+        const auto sampleIndex = static_cast<std::size_t>(sample);
+        const std::size_t i = sampledPointIndex(sampleIndex, sampleCount, cloud.size());
         const auto row = static_cast<plamatrix::Index>(i);
         plamatrix::Vec3<float> query{matrix.getValue(row, 0),
                                      matrix.getValue(row, 1),
@@ -99,15 +126,28 @@ float estimateMedianNearestNeighborDistance(const SparsePlaCloud &cloud)
         const float dx = matrix.getValue(nn, 0) - query.x;
         const float dy = matrix.getValue(nn, 1) - query.y;
         const float dz = matrix.getValue(nn, 2) - query.z;
-        distances.push_back(std::sqrt(dx * dx + dy * dy + dz * dz));
+        distances[sampleIndex] = std::sqrt(dx * dx + dy * dy + dz * dz);
+        valid[sampleIndex] = 1;
     }
-    if (distances.empty())
+
+    std::vector<float> compacted;
+    compacted.reserve(sampleCount);
+    for (std::size_t i = 0; i < sampleCount; ++i)
+    {
+        if (valid[i])
+        {
+            compacted.push_back(distances[i]);
+        }
+    }
+    if (compacted.empty())
     {
         return 0.0f;
     }
 
-    auto mid = distances.begin() + static_cast<std::ptrdiff_t>(distances.size() / 2);
-    std::nth_element(distances.begin(), mid, distances.end());
+    auto mid = compacted.begin() + static_cast<std::ptrdiff_t>(compacted.size() / 2);
+    std::nth_element(compacted.begin(), mid, compacted.end());
+    LOG_DEBUG("[SparseCloudPreprocessor] 点间距估计: samples=%zu/%zu median=%.4f",
+              compacted.size(), cloud.size(), *mid);
     return *mid;
 }
 
@@ -141,17 +181,20 @@ bool SparseCloudPreprocessor::loadXYZ(const std::string &path,
             return false;
         }
 
-        pts.clear();
-        pts.reserve(cloud->size());
+        pts.assign(cloud->size(), {0.0f, 0.0f, 0.0f});
         const auto &matrix = cloud->points();
-        for (std::size_t i = 0; i < cloud->size(); ++i)
+        const auto count = static_cast<std::ptrdiff_t>(cloud->size());
+#ifdef HAS_OPENMP
+#pragma omp parallel for schedule(static) if(count > kParallelLinearPassThreshold)
+#endif
+        for (std::ptrdiff_t i = 0; i < count; ++i)
         {
             const auto row = static_cast<plamatrix::Index>(i);
-            pts.push_back({
+            pts[static_cast<std::size_t>(i)] = {
                 matrix.getValue(row, 0),
                 matrix.getValue(row, 1),
                 matrix.getValue(row, 2)
-            });
+            };
         }
         return true;
     }

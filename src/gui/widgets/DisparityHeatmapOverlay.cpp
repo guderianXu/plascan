@@ -7,6 +7,8 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
+#include <vector>
+
 DisparityHeatmapOverlay::DisparityHeatmapOverlay(QWidget *parent)
     : QWidget(parent)
 {
@@ -57,26 +59,37 @@ void DisparityHeatmapOverlay::setColormap(int cvColormap)
 void DisparityHeatmapOverlay::setShowInvalid(bool show)
 {
     m_showInvalid = show;
-    update();
+    rebuildHeatmap();
 }
 
 void DisparityHeatmapOverlay::rebuildHeatmap()
 {
-    if (m_disparity.empty()) return;
+    if (m_disparity.empty())
+    {
+        m_heatmapImage = QImage();
+        m_heatmap = QPixmap();
+        update();
+        return;
+    }
+
+    cv::Mat dispF;
+    m_disparity.convertTo(dispF, CV_32FC1);
+    cv::Mat validMask = dispF > 0;
 
     float dMin = m_dispMin, dMax = m_dispMax;
     if (m_autoRange)
     {
-        double minVal, maxVal;
-        cv::Mat mask = (m_disparity > 0);
-        cv::minMaxLoc(m_disparity, &minVal, &maxVal, nullptr, nullptr, mask);
+        double minVal = 0.0;
+        double maxVal = 1.0;
+        if (cv::countNonZero(validMask) > 0)
+        {
+            cv::minMaxLoc(dispF, &minVal, &maxVal, nullptr, nullptr, validMask);
+        }
         dMin = static_cast<float>(minVal);
         dMax = static_cast<float>(maxVal);
         if (dMax <= dMin) dMax = dMin + 1.0f;
     }
 
-    cv::Mat dispF;
-    m_disparity.convertTo(dispF, CV_32FC1);
     cv::Mat clamped = cv::max(dMin, cv::min(dMax, dispF));
     clamped = (clamped - dMin) / (dMax - dMin) * 255.0;
     cv::Mat normalized;
@@ -87,8 +100,43 @@ void DisparityHeatmapOverlay::rebuildHeatmap()
 
     cv::Mat rgb;
     cv::cvtColor(colored, rgb, cv::COLOR_BGR2RGB);
-    QImage qimg(rgb.data, rgb.cols, rgb.rows, rgb.step, QImage::Format_RGB888);
-    m_heatmap = QPixmap::fromImage(qimg.copy());
+
+    m_heatmapImage = QImage(rgb.cols, rgb.rows, QImage::Format_RGBA8888);
+    for (int row = 0; row < rgb.rows; ++row)
+    {
+        const uchar *rgbRow = rgb.ptr<uchar>(row);
+        const uchar *validRow = validMask.ptr<uchar>(row);
+        uchar *outRow = m_heatmapImage.scanLine(row);
+        std::vector<uchar> alphaRow(static_cast<size_t>(rgb.cols), 0);
+        for (int col = 0; col < rgb.cols; ++col)
+        {
+            uchar *pixel = outRow + col * 4;
+            if (validRow[col])
+            {
+                pixel[0] = rgbRow[col * 3 + 0];
+                pixel[1] = rgbRow[col * 3 + 1];
+                pixel[2] = rgbRow[col * 3 + 2];
+            }
+            else
+            {
+                pixel[0] = 0;
+                pixel[1] = 0;
+                pixel[2] = 0;
+            }
+
+            if (m_showInvalid)
+            {
+                alphaRow[col] = 255;
+            }
+            else
+            {
+                alphaRow[col] = validRow[col] ? 255 : 0;
+            }
+            pixel[3] = alphaRow[col];
+        }
+    }
+
+    m_heatmap = QPixmap::fromImage(m_heatmapImage);
     update();
 }
 

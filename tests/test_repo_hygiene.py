@@ -39,6 +39,31 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("QProcess", source)
         self.assertIn("makeUniqueTempDir", source)
 
+    def test_windows_runtime_scripts_force_utf8_console_for_native_logs(self):
+        script_paths = [
+            ROOT / "scripts" / "env" / "env_common.py",
+            ROOT / "scripts" / "build_win" / "build_windows_cuda.ps1",
+        ]
+
+        for script_path in script_paths:
+            with self.subTest(script=str(script_path.relative_to(ROOT))):
+                text = script_path.read_text(encoding="utf-8")
+                self.assertIn("[Console]::InputEncoding", text)
+                self.assertIn("[Console]::OutputEncoding", text)
+                self.assertIn("chcp.com 65001", text)
+                self.assertIn("PYTHONUTF8", text)
+                self.assertIn("PYTHONIOENCODING", text)
+
+    def test_windows_cuda_build_keeps_vs_compiler_path_for_nvcc_device_link(self):
+        script_path = ROOT / "scripts" / "build_win" / "build_windows_cuda.ps1"
+        text = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("Capture-VsDevPathEntries", text)
+        self.assertIn("$vsDevPathEntries", text)
+        self.assertIn("$prepend + $vsDevPathEntries + $filtered", text)
+        self.assertIn("$vsDevPathValue", text)
+        self.assertIn("-ieq \"Path\"", text)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -18,5 +18,9 @@ data/*
 testData/photogrammetry_benchmarks/
 testData/火星数据/
 build*
+!scripts/build_win/
+!scripts/build_win/**
 docker/debs/
 .worktrees/
+logs/
+.superpowers/

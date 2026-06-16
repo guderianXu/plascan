@@ -1475,7 +1475,16 @@ bool PatchMatchDepthEstimator::estimateGPU(
     if (ds > 1) { refCamS.fx/=ds; refCamS.fy/=ds; refCamS.cx/=ds; refCamS.cy/=ds; }
 
     if (hintDepth && !hintDepth->empty())
-        cv::resize(*hintDepth, hintScaled, cv::Size(sW, sH), 0, 0, cv::INTER_NEAREST);
+    {
+        if (hintDepth->cols == sW && hintDepth->rows == sH)
+        {
+            hintScaled = *hintDepth;
+        }
+        else
+        {
+            cv::resize(*hintDepth, hintScaled, cv::Size(sW, sH), 0, 0, cv::INTER_NEAREST);
+        }
+    }
 
     // ── 设置常量内存 c_ref_inv_K ─────────────────────────────────
     float h_inv_K[4] = 
@@ -1789,7 +1798,14 @@ bool PatchMatchDepthEstimator::estimateCPU(
     cv::Mat hintScaled;
     if (hintDepth && !hintDepth->empty())
     {
-        cv::resize(*hintDepth, hintScaled, cv::Size(W, H), 0, 0, cv::INTER_NEAREST);
+        if (hintDepth->cols == W && hintDepth->rows == H)
+        {
+            hintScaled = *hintDepth;
+        }
+        else
+        {
+            cv::resize(*hintDepth, hintScaled, cv::Size(W, H), 0, 0, cv::INTER_NEAREST);
+        }
     }
 
     const float invK[4] = {

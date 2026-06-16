@@ -60,6 +60,48 @@ QString rawConfidenceStoragePath(const QString &pngPath)
     return info.dir().filePath(info.completeBaseName() + QStringLiteral("_conf.yml.gz"));
 }
 
+bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence)
+{
+    if (pngPath.trimmed().isEmpty() || !QFileInfo::exists(pngPath))
+    {
+        return false;
+    }
+
+    const QString rawDepthPath = rawDepthStoragePath(pngPath);
+    if (!QFileInfo::exists(rawDepthPath))
+    {
+        return false;
+    }
+
+    if (requireConfidence && !QFileInfo::exists(rawConfidenceStoragePath(pngPath)))
+    {
+        return false;
+    }
+
+    return true;
+}
+
+bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireConfidence)
+{
+    if (frame.depthPng.trimmed().isEmpty() || !QFileInfo::exists(frame.depthPng))
+    {
+        return false;
+    }
+
+    if (frame.rawDepthPath.trimmed().isEmpty() || !QFileInfo::exists(frame.rawDepthPath))
+    {
+        return false;
+    }
+
+    if (requireConfidence &&
+        (frame.rawConfidencePath.trimmed().isEmpty() || !QFileInfo::exists(frame.rawConfidencePath)))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projectMeta)
 {
     StoredDepthFramesResult result;
@@ -69,8 +111,12 @@ StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projec
     for (int index = depthResults.size() - 1; index >= 0; --index)
     {
         const QJsonObject record = depthResults.at(index).toObject();
+        const QString depthPng = record.value(QStringLiteral("depth_png")).toString();
         const QString rawDepthPath = record.value(QStringLiteral("raw_depth_path")).toString();
-        if (!rawDepthPath.isEmpty() && QFileInfo::exists(rawDepthPath))
+        if (!depthPng.isEmpty() &&
+            !rawDepthPath.isEmpty() &&
+            QFileInfo::exists(depthPng) &&
+            QFileInfo::exists(rawDepthPath))
         {
             latestDir = QFileInfo(rawDepthPath).absolutePath();
             break;
@@ -103,7 +149,7 @@ StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projec
         frame.rawConfidencePath = record.value(QStringLiteral("raw_confidence_path")).toString();
         frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
         frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
-        if (!frame.refImage.isEmpty() && QFileInfo::exists(frame.rawDepthPath))
+        if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))
         {
             result.frames.push_back(std::move(frame));
         }

@@ -17,10 +17,12 @@
 #include <cstdio>
 #include <thread>
 #include <mutex>
+#include <condition_variable>
 #include <deque>
 #include <chrono>
 #include <sstream>
 #include <cctype>
+#include <functional>
 
 namespace xjw
 {
@@ -31,6 +33,159 @@ namespace
 {
 
 constexpr float kSkipContentMaskCoverage = 0.985f;
+
+using Clock = std::chrono::steady_clock;
+
+double elapsedMs(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double, std::milli>(end - start).count();
+}
+
+struct FrameTiming
+{
+    double sourceMs = 0.0;
+    double rangeMs = 0.0;
+    double hintMs = 0.0;
+    double rectifyMs = 0.0;
+    double patchmatchMs = 0.0;
+    double filterMs = 0.0;
+    double totalMs = 0.0;
+};
+
+int preloadImagesWorkerCount(int viewCount, int requestedThreads)
+{
+    if (viewCount <= 1)
+    {
+        return std::max(0, viewCount);
+    }
+
+    const int hwThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+    const int requested = std::max(1, requestedThreads);
+    return std::clamp(std::min(requested, hwThreads), 1, std::min(viewCount, 8));
+}
+
+class DepthFrameArtifactSaveQueue
+{
+public:
+    using SaveFn = std::function<bool(int, const DepthFrameResult &, const QString &)>;
+
+    explicit DepthFrameArtifactSaveQueue(SaveFn saveFn)
+        : m_saveFn(std::move(saveFn))
+        , m_worker(&DepthFrameArtifactSaveQueue::run, this)
+    {
+    }
+
+    ~DepthFrameArtifactSaveQueue()
+    {
+        stop();
+    }
+
+    void enqueue(int frameIndex, const DepthFrameResult &result, const QString &stageLabel)
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_stopping)
+            {
+                return;
+            }
+            m_tasks.push_back(SaveTask{frameIndex, result, stageLabel});
+        }
+        m_cv.notify_one();
+    }
+
+    void waitUntilIdle()
+    {
+        std::unique_lock<std::mutex> lock(m_mutex);
+        m_idleCv.wait(lock, [this]() {
+            return m_tasks.empty() && m_activeTasks == 0;
+        });
+    }
+
+    void stop()
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_stopping = true;
+        }
+        m_cv.notify_all();
+        if (m_worker.joinable())
+        {
+            m_worker.join();
+        }
+    }
+
+    bool failed() const
+    {
+        return m_failed.load();
+    }
+
+private:
+    struct SaveTask
+    {
+        int frameIndex = -1;
+        DepthFrameResult result;
+        QString stageLabel;
+    };
+
+    void run()
+    {
+        for (;;)
+        {
+            SaveTask task;
+            {
+                std::unique_lock<std::mutex> lock(m_mutex);
+                m_cv.wait(lock, [this]() {
+                    return m_stopping || !m_tasks.empty();
+                });
+
+                if (m_tasks.empty())
+                {
+                    if (m_stopping)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
+                task = m_tasks.front();
+                m_tasks.pop_front();
+                ++m_activeTasks;
+            }
+
+            if (!m_saveFn(task.frameIndex, task.result, task.stageLabel))
+            {
+                m_failed = true;
+            }
+
+            {
+                std::lock_guard<std::mutex> lock(m_mutex);
+                --m_activeTasks;
+                if (m_tasks.empty() && m_activeTasks == 0)
+                {
+                    m_idleCv.notify_all();
+                }
+            }
+        }
+
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            if (m_tasks.empty() && m_activeTasks == 0)
+            {
+                m_idleCv.notify_all();
+            }
+        }
+    }
+
+    SaveFn m_saveFn;
+    std::deque<SaveTask> m_tasks;
+    mutable std::mutex m_mutex;
+    std::condition_variable m_cv;
+    std::condition_variable m_idleCv;
+    std::thread m_worker;
+    std::atomic<bool> m_failed{false};
+    bool m_stopping = false;
+    int m_activeTasks = 0;
+};
 
 bool writeCvMatStorage(const std::string &path, const cv::Mat &matrix, std::string *errorMsg)
 {
@@ -46,6 +201,56 @@ bool writeCvMatStorage(const std::string &path, const cv::Mat &matrix, std::stri
 
     storage << "mat" << matrix;
     storage.release();
+    return true;
+}
+
+bool saveDepthPreviewPng(const std::string &path, const cv::Mat &depthMap, std::string *errorMsg)
+{
+    if (path.empty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "深度预览 PNG 路径为空";
+        }
+        return false;
+    }
+
+    if (depthMap.empty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "深度图为空，无法写入预览 PNG: " + path;
+        }
+        return false;
+    }
+
+    const cv::Mat validMask = depthMap > 0;
+    cv::Mat vis = cv::Mat::zeros(depthMap.size(), CV_8U);
+    if (cv::countNonZero(validMask) > 0)
+    {
+        double dMin = 0.0;
+        double dMax = 0.0;
+        cv::minMaxLoc(depthMap, &dMin, &dMax, nullptr, nullptr, validMask);
+        if (dMax > dMin)
+        {
+            depthMap.convertTo(vis, CV_8U, 255.0 / (dMax - dMin), -255.0 * dMin / (dMax - dMin));
+        }
+    }
+    vis.setTo(0, depthMap <= 0);
+
+    cv::Mat colorVis;
+    cv::applyColorMap(vis, colorVis, cv::COLORMAP_TURBO);
+    colorVis.setTo(cv::Scalar(0, 0, 0), depthMap <= 0);
+
+    if (!cv::imwrite(path, colorVis))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "无法写入深度预览 PNG: " + path;
+        }
+        return false;
+    }
+
     return true;
 }
 
@@ -126,6 +331,32 @@ PatchMatchConfig makeFinePatchMatchConfig(const PatchMatchConfig &baseConfig,
     }
 
     return fineConfig;
+}
+
+cv::Size patchMatchWorkSize(const cv::Mat &image, const PatchMatchConfig &config)
+{
+    const int ds = std::max(1, config.downsampleFactor);
+    return cv::Size(std::max(1, image.cols / ds), std::max(1, image.rows / ds));
+}
+
+PositiveDepthCameraModel scaleCameraForImageSize(const PositiveDepthCameraModel &camera,
+                                                 const cv::Size &sourceSize,
+                                                 const cv::Size &targetSize)
+{
+    PositiveDepthCameraModel scaled = camera;
+    if (sourceSize.width <= 0 || sourceSize.height <= 0
+        || targetSize.width <= 0 || targetSize.height <= 0)
+    {
+        return scaled;
+    }
+
+    const float sx = static_cast<float>(targetSize.width) / static_cast<float>(sourceSize.width);
+    const float sy = static_cast<float>(targetSize.height) / static_cast<float>(sourceSize.height);
+    scaled.fx *= sx;
+    scaled.fy *= sy;
+    scaled.cx *= sx;
+    scaled.cy *= sy;
+    return scaled;
 }
 
 std::vector<int> consistencySourceIndicesForFrame(const std::vector<DepthFrameResult> &frames,
@@ -426,11 +657,13 @@ void DepthMapGenerator::setViews(const std::vector<CameraView> &views)
 {
     m_views = views;
     m_skipFrameMask.assign(m_views.size(), 0);
+    clearFrameCaches();
 }
 
 void DepthMapGenerator::setSparseCloud(const SparseCloud &sparse)
 {
     m_sparse = sparse;
+    clearFrameCaches();
 }
 
 void DepthMapGenerator::setConfig(const DepthGenConfig &config)
@@ -450,6 +683,282 @@ void DepthMapGenerator::setSkippedFrameIndices(const std::vector<int> &indices)
     }
 }
 
+void DepthMapGenerator::clearFrameCaches()
+{
+    m_frameCaches.clear();
+    m_visibilityBits.clear();
+    m_pairCommonCounts.clear();
+    m_visibilityWordCount = 0;
+    m_frameCachesReady = false;
+}
+
+bool DepthMapGenerator::isSparsePointVisibleInFrame(int viewIdx, size_t pointIndex) const
+{
+    if (!m_frameCachesReady
+        || viewIdx < 0
+        || viewIdx >= static_cast<int>(m_frameCaches.size())
+        || m_visibilityWordCount == 0
+        || pointIndex >= m_sparse.points.size())
+    {
+        return false;
+    }
+
+    const size_t word = pointIndex / 64;
+    const size_t bit = pointIndex % 64;
+    const size_t offset = static_cast<size_t>(viewIdx) * m_visibilityWordCount + word;
+    if (offset >= m_visibilityBits.size())
+    {
+        return false;
+    }
+    return (m_visibilityBits[offset] & (uint64_t{1} << bit)) != 0;
+}
+
+void DepthMapGenerator::prepareFrameCaches()
+{
+    if (m_frameCachesReady)
+    {
+        return;
+    }
+
+    const int NV = static_cast<int>(m_views.size());
+    const size_t pointCount = m_sparse.points.size();
+    m_frameCaches.assign(static_cast<size_t>(std::max(0, NV)), FrameMvsCache{});
+    m_visibilityWordCount = (pointCount + 63) / 64;
+    m_visibilityBits.assign(static_cast<size_t>(std::max(0, NV)) * m_visibilityWordCount, 0);
+    m_pairCommonCounts.assign(static_cast<size_t>(std::max(0, NV)) * static_cast<size_t>(std::max(0, NV)), 0);
+
+    if (NV <= 0 || pointCount == 0)
+    {
+        m_frameCachesReady = true;
+        return;
+    }
+
+    const auto start = Clock::now();
+    constexpr int kMaxPairViewsPerPoint = 32;
+    std::vector<int> visibleViews;
+    visibleViews.reserve(std::min(NV, kMaxPairViewsPerPoint));
+
+    for (size_t pointIndex = 0; pointIndex < pointCount; ++pointIndex)
+    {
+        visibleViews.clear();
+        const auto &point = m_sparse.points[pointIndex];
+        for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
+        {
+            if (!isMvsSparsePointVisibleInView(m_views[viewIdx], point))
+            {
+                continue;
+            }
+
+            m_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices.push_back(pointIndex);
+            const size_t word = pointIndex / 64;
+            const size_t bit = pointIndex % 64;
+            m_visibilityBits[static_cast<size_t>(viewIdx) * m_visibilityWordCount + word] |= (uint64_t{1} << bit);
+            visibleViews.push_back(viewIdx);
+        }
+
+        if (visibleViews.size() < 2)
+        {
+            continue;
+        }
+
+        std::vector<int> pairViews;
+        if (static_cast<int>(visibleViews.size()) <= kMaxPairViewsPerPoint)
+        {
+            pairViews = visibleViews;
+        }
+        else
+        {
+            pairViews.reserve(kMaxPairViewsPerPoint);
+            for (int sample = 0; sample < kMaxPairViewsPerPoint; ++sample)
+            {
+                const size_t idx = static_cast<size_t>(sample) * visibleViews.size()
+                                   / static_cast<size_t>(kMaxPairViewsPerPoint);
+                pairViews.push_back(visibleViews[std::min(idx, visibleViews.size() - 1)]);
+            }
+        }
+
+        for (size_t a = 0; a < pairViews.size(); ++a)
+        {
+            for (size_t b = a + 1; b < pairViews.size(); ++b)
+            {
+                const int ia = pairViews[a];
+                const int ib = pairViews[b];
+                ++m_pairCommonCounts[static_cast<size_t>(ia) * NV + ib];
+                ++m_pairCommonCounts[static_cast<size_t>(ib) * NV + ia];
+            }
+        }
+    }
+
+    m_frameCachesReady = true;
+
+    auto sampledMedianAngle = [this, NV](int refIdx, int sourceIdx) -> float
+    {
+        if (refIdx < 0 || refIdx >= NV || sourceIdx < 0 || sourceIdx >= NV)
+        {
+            return 0.f;
+        }
+
+        constexpr size_t kMaxAngleSamples = 2048;
+        std::vector<float> angles;
+        angles.reserve(kMaxAngleSamples);
+        for (size_t pointIndex : m_frameCaches[static_cast<size_t>(refIdx)].visiblePointIndices)
+        {
+            if (!isSparsePointVisibleInFrame(sourceIdx, pointIndex))
+            {
+                continue;
+            }
+            angles.push_back(mvsTriangulationAngleDeg(m_views[refIdx],
+                                                       m_views[sourceIdx],
+                                                       m_sparse.points[pointIndex]));
+            if (angles.size() >= kMaxAngleSamples)
+            {
+                break;
+            }
+        }
+
+        if (angles.empty())
+        {
+            return 0.f;
+        }
+
+        const auto mid = angles.begin() + static_cast<long>(angles.size() / 2);
+        std::nth_element(angles.begin(), mid, angles.end());
+        return *mid;
+    };
+
+    for (int refIdx = 0; refIdx < NV; ++refIdx)
+    {
+        std::vector<MvsSourceViewScore> scores;
+        scores.reserve(static_cast<size_t>(std::max(0, NV - 1)));
+        for (int sourceIdx = 0; sourceIdx < NV; ++sourceIdx)
+        {
+            if (sourceIdx == refIdx)
+            {
+                continue;
+            }
+
+            const int common = m_pairCommonCounts[static_cast<size_t>(refIdx) * NV + sourceIdx];
+            if (common <= 0)
+            {
+                continue;
+            }
+
+            const float medianAngle = sampledMedianAngle(refIdx, sourceIdx);
+            const float angleWeight =
+                medianAngle < 0.2f ? 0.25f :
+                medianAngle > 35.0f ? 0.50f :
+                1.0f;
+            const float proximityPenalty = 0.001f * static_cast<float>(std::abs(sourceIdx - refIdx));
+
+            MvsSourceViewScore score;
+            score.viewIndex = sourceIdx;
+            score.commonVisiblePoints = common;
+            score.medianTriangulationAngleDeg = medianAngle;
+            score.score = static_cast<float>(common) * angleWeight - proximityPenalty;
+            scores.push_back(score);
+        }
+
+        std::sort(scores.begin(), scores.end(), [](const MvsSourceViewScore &a, const MvsSourceViewScore &b)
+        {
+            if (a.score != b.score)
+            {
+                return a.score > b.score;
+            }
+            if (a.commonVisiblePoints != b.commonVisiblePoints)
+            {
+                return a.commonVisiblePoints > b.commonVisiblePoints;
+            }
+            return a.viewIndex < b.viewIndex;
+        });
+
+        auto &sources = m_frameCaches[static_cast<size_t>(refIdx)].sourceViewIndices;
+        sources.reserve(static_cast<size_t>(std::min(NV - 1, std::max(1, m_config.numSourceViews))));
+        for (const auto &score : scores)
+        {
+            if (score.score <= 0.f)
+            {
+                continue;
+            }
+            sources.push_back(score.viewIndex);
+            if (static_cast<int>(sources.size()) >= std::max(1, m_config.numSourceViews))
+            {
+                break;
+            }
+        }
+
+        if (sources.empty())
+        {
+            sources = nearestMvsSourceViewIndices(NV, refIdx, std::max(1, m_config.numSourceViews));
+        }
+    }
+
+    LOG_INFO(QStringLiteral("[MVS] MVS 可见性缓存完成: views=%1 points=%2 elapsed=%3 ms")
+                 .arg(NV)
+                 .arg(static_cast<qulonglong>(pointCount))
+                 .arg(elapsedMs(start, Clock::now()), 0, 'f', 1));
+}
+
+std::vector<int> DepthMapGenerator::sourceViewIndicesForFrame(int refIdx, int maxSources) const
+{
+    if (m_frameCachesReady
+        && refIdx >= 0
+        && refIdx < static_cast<int>(m_frameCaches.size())
+        && maxSources > 0)
+    {
+        const auto &cached = m_frameCaches[static_cast<size_t>(refIdx)].sourceViewIndices;
+        if (!cached.empty())
+        {
+            const int count = std::min(maxSources, static_cast<int>(cached.size()));
+            return std::vector<int>(cached.begin(), cached.begin() + count);
+        }
+    }
+
+    return selectMvsSourceViewIndices(m_views, m_sparse, refIdx, maxSources);
+}
+
+std::vector<size_t> DepthMapGenerator::visibleSparsePointIndicesForFrame(
+    int refIdx,
+    const std::vector<int> &sourceIndices,
+    int minSourceViews) const
+{
+    if (!m_frameCachesReady
+        || refIdx < 0
+        || refIdx >= static_cast<int>(m_frameCaches.size()))
+    {
+        return collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, sourceIndices, minSourceViews);
+    }
+
+    const auto &refVisible = m_frameCaches[static_cast<size_t>(refIdx)].visiblePointIndices;
+    if (sourceIndices.empty() || minSourceViews <= 0)
+    {
+        return refVisible;
+    }
+
+    std::vector<size_t> filtered;
+    filtered.reserve(refVisible.size());
+    for (size_t pointIndex : refVisible)
+    {
+        int sourceVisible = 0;
+        for (int sourceIdx : sourceIndices)
+        {
+            if (sourceIdx < 0 || sourceIdx >= static_cast<int>(m_views.size()) || sourceIdx == refIdx)
+            {
+                continue;
+            }
+            if (isSparsePointVisibleInFrame(sourceIdx, pointIndex))
+            {
+                ++sourceVisible;
+                if (sourceVisible >= minSourceViews)
+                {
+                    filtered.push_back(pointIndex);
+                    break;
+                }
+            }
+        }
+    }
+    return filtered;
+}
+
 // =============================================================================
 // 预加载所有图像到灰度缓存，避免逐帧重复从磁盘读取
 // =============================================================================
@@ -458,79 +967,112 @@ void DepthMapGenerator::preloadImages()
     const int NV = static_cast<int>(m_views.size());
     m_grayCache.resize(NV);
     m_contentMasks.resize(NV);
-    for (int i = 0; i < NV; ++i)
+
+    const int workerCount = preloadImagesWorkerCount(NV, m_config.cpuWorkerCount);
+    fprintf(stderr, "[MVS] preloadImages(): workers=%d views=%d\n", workerCount, NV);
+    if (workerCount <= 0)
     {
-        m_grayCache[i] = cv::imread(m_views[i].imagePath, cv::IMREAD_GRAYSCALE);
-        if (m_grayCache[i].empty())
-        {
-            LOG_WARN(QStringLiteral("[MVS] 警告: 无法读取图像 %1: %2").arg(i).arg(QString::fromStdString(m_views[i].imagePath)));
-            continue;
-        }
+        return;
+    }
 
-        // ── 在 CLAHE 增强之前计算内容区域掩码 ─────────────────────────
-        // 关键：必须在原始图像上计算暗区掩码！
-        // gamma(0.4) 会将 gray=3 提升到 37，gray=5 提升到 46，
-        // 使得本应被屏蔽的黑边像素通过暗区阈值，
-        // 导致 PatchMatch 在无纹理黑边区域生成大量噪声深度。
+    std::atomic<int> nextImage{0};
+    auto preloadOneImage = [this, NV, &nextImage]()
+    {
+        for (;;)
         {
-            float coverage = 0.f;
-            double otsuThresh = 0.0;
-            int adaptiveThresh = 0;
-            m_contentMasks[i] = buildContentMask(m_grayCache[i], &coverage, &otsuThresh, &adaptiveThresh);
-
-            const int totalPx = m_grayCache[i].rows * m_grayCache[i].cols;
-            const int contentPx = static_cast<int>(std::round(coverage * totalPx));
-            if (m_contentMasks[i].empty())
+            const int i = nextImage.fetch_add(1);
+            if (i >= NV)
             {
-                fprintf(stderr,
-                        "[MVS] 图像 %d: 内容掩码覆盖 %.1f%%，自动跳过内容掩码过滤 (Otsu=%.0f adaptiveThresh=%d)\n",
-                        i,
-                        coverage * 100.0f,
-                        otsuThresh,
-                        adaptiveThresh);
+                break;
+            }
+
+            m_grayCache[i] = cv::imread(m_views[i].imagePath, cv::IMREAD_GRAYSCALE);
+            if (m_grayCache[i].empty())
+            {
+                LOG_WARN(QStringLiteral("[MVS] 警告: 无法读取图像 %1: %2").arg(i).arg(QString::fromStdString(m_views[i].imagePath)));
+                continue;
+            }
+
+            // ── 在 CLAHE 增强之前计算内容区域掩码 ─────────────────────────
+            // 关键：必须在原始图像上计算暗区掩码！
+            // gamma(0.4) 会将 gray=3 提升到 37，gray=5 提升到 46，
+            // 使得本应被屏蔽的黑边像素通过暗区阈值，
+            // 导致 PatchMatch 在无纹理黑边区域生成大量噪声深度。
+            {
+                float coverage = 0.f;
+                double otsuThresh = 0.0;
+                int adaptiveThresh = 0;
+                m_contentMasks[i] = buildContentMask(m_grayCache[i], &coverage, &otsuThresh, &adaptiveThresh);
+
+                const int totalPx = m_grayCache[i].rows * m_grayCache[i].cols;
+                const int contentPx = static_cast<int>(std::round(coverage * totalPx));
+                if (m_contentMasks[i].empty())
+                {
+                    fprintf(stderr,
+                            "[MVS] 图像 %d: 内容掩码覆盖 %.1f%%，自动跳过内容掩码过滤 (Otsu=%.0f adaptiveThresh=%d)\n",
+                            i,
+                            coverage * 100.0f,
+                            otsuThresh,
+                            adaptiveThresh);
+                }
+                else
+                {
+                    fprintf(stderr, "[MVS] 图像 %d: 内容掩码 (Otsu=%.0f adaptiveThresh=%d): %d/%d (%.1f%%)\n",
+                            i, otsuThresh, adaptiveThresh, contentPx, totalPx, coverage * 100.0f);
+                }
+            }
+
+            // ── 自适应对比度增强 (CLAHE) ──────────────────────────────────
+            // 暗场/低对比度图像（均值 < 40）的像素方差极小，NCC 分母接近 0，
+            // 导致 PatchMatch 无法区分正确/错误深度假设 → 全图噪声。
+            // CLAHE 局部均衡化可在不影响已有纹理的前提下大幅提升暗区对比度。
+            double imgMean = cv::mean(m_grayCache[i])[0];
+            if (imgMean < 80.0)
+            {
+                cv::Mat enhanced;
+                if (imgMean < 30.0)
+                {
+                    // 极暗图像（航空影像常见）：先做 gamma 校正提升暗区可见度，
+                    // 再用高 clipLimit CLAHE 进一步增强局部对比度。
+                    // gamma=0.4 将 [0,255] 非线性映射，使暗部细节显现。
+                    cv::Mat floatImg;
+                    m_grayCache[i].convertTo(floatImg, CV_32F, 1.0 / 255.0);
+                    cv::pow(floatImg, 0.4, floatImg);
+                    floatImg.convertTo(enhanced, CV_8U, 255.0);
+                    auto clahe = cv::createCLAHE(8.0, cv::Size(8, 8));
+                    clahe->apply(enhanced, enhanced);
+                }
+                else
+                {
+                    // 中等暗度：标准 CLAHE
+                    auto clahe = cv::createCLAHE(4.0, cv::Size(8, 8));
+                    clahe->apply(m_grayCache[i], enhanced);
+                }
+                double newMean = cv::mean(enhanced)[0];
+                fprintf(stderr, "[MVS] 图像 %d: 低对比度 (mean=%.1f)，应用 CLAHE → mean=%.1f\n",
+                        i, imgMean, newMean);
+                m_grayCache[i] = enhanced;
             }
             else
             {
-                fprintf(stderr, "[MVS] 图像 %d: 内容掩码 (Otsu=%.0f adaptiveThresh=%d): %d/%d (%.1f%%)\n",
-                        i, otsuThresh, adaptiveThresh, contentPx, totalPx, coverage * 100.0f);
+                fprintf(stderr, "[MVS] 预加载图像 %d/%d: %dx%d (mean=%.1f)\n",
+                        i+1, NV, m_grayCache[i].cols, m_grayCache[i].rows, imgMean);
             }
         }
+    };
 
-        // ── 自适应对比度增强 (CLAHE) ──────────────────────────────────
-        // 暗场/低对比度图像（均值 < 40）的像素方差极小，NCC 分母接近 0，
-        // 导致 PatchMatch 无法区分正确/错误深度假设 → 全图噪声。
-        // CLAHE 局部均衡化可在不影响已有纹理的前提下大幅提升暗区对比度。
-        double imgMean = cv::mean(m_grayCache[i])[0];
-        if (imgMean < 80.0)
+    std::vector<std::thread> preloadWorkers;
+    preloadWorkers.reserve(static_cast<size_t>(workerCount));
+    for (int workerIndex = 0; workerIndex < workerCount; ++workerIndex)
+    {
+        preloadWorkers.emplace_back(preloadOneImage);
+    }
+
+    for (std::thread &worker : preloadWorkers)
+    {
+        if (worker.joinable())
         {
-            cv::Mat enhanced;
-            if (imgMean < 30.0)
-            {
-                // 极暗图像（航空影像常见）：先做 gamma 校正提升暗区可见度，
-                // 再用高 clipLimit CLAHE 进一步增强局部对比度。
-                // gamma=0.4 将 [0,255] 非线性映射，使暗部细节显现。
-                cv::Mat floatImg;
-                m_grayCache[i].convertTo(floatImg, CV_32F, 1.0 / 255.0);
-                cv::pow(floatImg, 0.4, floatImg);
-                floatImg.convertTo(enhanced, CV_8U, 255.0);
-                auto clahe = cv::createCLAHE(8.0, cv::Size(8, 8));
-                clahe->apply(enhanced, enhanced);
-            }
-            else
-            {
-                // 中等暗度：标准 CLAHE
-                auto clahe = cv::createCLAHE(4.0, cv::Size(8, 8));
-                clahe->apply(m_grayCache[i], enhanced);
-            }
-            double newMean = cv::mean(enhanced)[0];
-            fprintf(stderr, "[MVS] 图像 %d: 低对比度 (mean=%.1f)，应用 CLAHE → mean=%.1f\n",
-                    i, imgMean, newMean);
-            m_grayCache[i] = enhanced;
-        }
-        else
-        {
-            fprintf(stderr, "[MVS] 预加载图像 %d/%d: %dx%d (mean=%.1f)\n",
-                    i+1, NV, m_grayCache[i].cols, m_grayCache[i].rows, imgMean);
+            worker.join();
         }
     }
 }
@@ -552,20 +1094,27 @@ bool DepthMapGenerator::estimateDepthRange(int refIdx,
                                            float &zFar,
                                            const std::vector<int> &sourceIndices) const
 {
-    const CameraView &ref = m_views[refIdx];
-    PositiveDepthCameraModel cam = ref.positiveDepthModel();
-
     const int minSourceViews = sourceIndices.empty() ? 0 : 1;
     std::vector<size_t> visiblePointIndices =
-        collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, sourceIndices, minSourceViews);
+        visibleSparsePointIndicesForFrame(refIdx, sourceIndices, minSourceViews);
     if (visiblePointIndices.size() < 5 && minSourceViews > 0)
     {
-        visiblePointIndices =
-            collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, {}, 0);
+        visiblePointIndices = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
         fprintf(stderr,
                 "[MVS] 帧 %d: 共视稀疏点不足，深度范围回退到参考帧可见点 (%zu)\n",
                 refIdx, visiblePointIndices.size());
     }
+    return estimateDepthRangeFromVisiblePoints(refIdx, visiblePointIndices, zNear, zFar);
+}
+
+bool DepthMapGenerator::estimateDepthRangeFromVisiblePoints(
+    int refIdx,
+    const std::vector<size_t> &visiblePointIndices,
+    float &zNear,
+    float &zFar) const
+{
+    const CameraView &ref = m_views[refIdx];
+    PositiveDepthCameraModel cam = ref.positiveDepthModel();
 
     std::vector<float> depths;
     depths.reserve(visiblePointIndices.size());
@@ -660,22 +1209,51 @@ cv::Mat DepthMapGenerator::buildHintDepth(int refIdx,
                                           int H,
                                           const std::vector<int> &sourceIndices) const
 {
-    if (m_sparse.points.empty()) return cv::Mat();
-
-    const CameraView &ref = m_views[refIdx];
-    PositiveDepthCameraModel cam = ref.positiveDepthModel();
-
     const int minSourceViews = sourceIndices.empty() ? 0 : 1;
     std::vector<size_t> visiblePointIndices =
-        collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, sourceIndices, minSourceViews);
+        visibleSparsePointIndicesForFrame(refIdx, sourceIndices, minSourceViews);
     if (visiblePointIndices.empty() && minSourceViews > 0)
     {
-        visiblePointIndices =
-            collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, {}, 0);
+        visiblePointIndices = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
         fprintf(stderr,
                 "[Hint] 帧 %d: 共视 hint 点为空，回退到参考帧可见点 (%zu)\n",
                 refIdx, visiblePointIndices.size());
     }
+
+    return buildHintDepthFromVisiblePoints(refIdx, W, H, visiblePointIndices);
+}
+
+cv::Mat DepthMapGenerator::buildHintDepthFromVisiblePoints(
+    int refIdx,
+    int W,
+    int H,
+    const std::vector<size_t> &visiblePointIndices) const
+{
+    if (refIdx < 0 || refIdx >= static_cast<int>(m_views.size()))
+    {
+        return cv::Mat();
+    }
+
+    return buildHintDepthForCamera(refIdx,
+                                   m_views[refIdx].positiveDepthModel(),
+                                   W,
+                                   H,
+                                   visiblePointIndices);
+}
+
+cv::Mat DepthMapGenerator::buildHintDepthForCamera(
+    int refIdx,
+    const PositiveDepthCameraModel &camera,
+    int W,
+    int H,
+    const std::vector<size_t> &visiblePointIndices) const
+{
+    if (m_sparse.points.empty() || W <= 0 || H <= 0 || !camera.valid())
+    {
+        return cv::Mat();
+    }
+
+    PositiveDepthCameraModel cam = camera;
 
     // 先计算深度的 IQR fence，过滤离群稀疏点的深度提示
     std::vector<float> allZc;
@@ -727,6 +1305,15 @@ cv::Mat DepthMapGenerator::buildHintDepth(int refIdx,
     //   若 hint 覆盖了距离真实深度很远的区域，PatchMatch 将无法逃脱。
     // 超出 maxHintRadius 的像素保持 hint=0 → GPU 用全范围随机初始化。
     const int seedHintCnt = cv::countNonZero(hint > 0);
+    if (seedHintCnt <= 0)
+    {
+        fprintf(stderr,
+                "[Hint] 帧 %d: 可见稀疏点=%zu 没有可用 hint seed，跳过 hint 传播\n",
+                refIdx,
+                visiblePointIndices.size());
+        return cv::Mat();
+    }
+
     const int adaptiveHintRadius = seedHintCnt > 0
         ? std::clamp(static_cast<int>(std::sqrt(static_cast<float>(W * H) / seedHintCnt) * 0.5f), 16, 48)
         : 0;
@@ -931,6 +1518,141 @@ cv::Mat DepthMapGenerator::buildSparseSupportMask(const std::vector<CameraView> 
     return support;
 }
 
+cv::Mat DepthMapGenerator::buildSparseSupportMaskFromVisiblePoints(
+    int refIdx,
+    int W,
+    int H,
+    const std::vector<size_t> &visiblePointIndices) const
+{
+    if (refIdx < 0 || refIdx >= static_cast<int>(m_views.size()))
+    {
+        return cv::Mat();
+    }
+
+    return buildSparseSupportMaskForCamera(refIdx,
+                                           m_views[refIdx].positiveDepthModel(),
+                                           W,
+                                           H,
+                                           visiblePointIndices);
+}
+
+cv::Mat DepthMapGenerator::buildSparseSupportMaskForCamera(
+    int refIdx,
+    const PositiveDepthCameraModel &camera,
+    int W,
+    int H,
+    const std::vector<size_t> &visiblePointIndices) const
+{
+    if (W <= 0 || H <= 0 || refIdx < 0 || refIdx >= static_cast<int>(m_views.size()) || m_sparse.points.size() < 20)
+    {
+        return cv::Mat();
+    }
+
+    PositiveDepthCameraModel cam = camera;
+    if (!cam.valid() || visiblePointIndices.size() < 20)
+    {
+        return cv::Mat();
+    }
+
+    std::vector<float> depths;
+    depths.reserve(visiblePointIndices.size());
+    for (size_t pointIndex : visiblePointIndices)
+    {
+        if (pointIndex >= m_sparse.points.size())
+        {
+            continue;
+        }
+        const auto &pt = m_sparse.points[pointIndex];
+        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
+        if (z > 0.f && std::isfinite(z))
+        {
+            depths.push_back(z);
+        }
+    }
+    if (depths.size() < 20)
+    {
+        return cv::Mat();
+    }
+
+    std::sort(depths.begin(), depths.end());
+    const size_t n = depths.size();
+    const float q1 = depths[n / 4];
+    const float q3 = depths[n * 3 / 4];
+    const float iqr = q3 - q1;
+    const float margin = std::max(1e-4f, 1.5f * iqr);
+    const float depthLo = q1 - margin;
+    const float depthHi = q3 + margin;
+
+    cv::Mat seed(H, W, CV_8U, cv::Scalar(0));
+    int projectedSeeds = 0;
+    for (size_t pointIndex : visiblePointIndices)
+    {
+        if (pointIndex >= m_sparse.points.size())
+        {
+            continue;
+        }
+        const auto &pt = m_sparse.points[pointIndex];
+        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
+        if (z <= 0.f || z < depthLo || z > depthHi)
+        {
+            continue;
+        }
+
+        float u = 0.f;
+        float v = 0.f;
+        if (!cam.project(pt[0], pt[1], pt[2], u, v))
+        {
+            continue;
+        }
+
+        const int iu = static_cast<int>(std::round(u));
+        const int iv = static_cast<int>(std::round(v));
+        if (iu < 0 || iu >= W || iv < 0 || iv >= H)
+        {
+            continue;
+        }
+
+        seed.at<uint8_t>(iv, iu) = 255;
+        ++projectedSeeds;
+    }
+
+    const int seedPixels = cv::countNonZero(seed);
+    if (seedPixels < 10)
+    {
+        return cv::Mat();
+    }
+
+    const int maxDim = std::max(W, H);
+    const int radius = maxDim < 512
+        ? std::clamp(maxDim / 8, 8, 48)
+        : (maxDim < 1200
+            ? std::clamp(maxDim / 16, 32, 64)
+            : std::clamp(maxDim / 48, 48, 128));
+    cv::Mat support;
+    const cv::Mat kernel = cv::getStructuringElement(
+        cv::MORPH_ELLIPSE,
+        cv::Size(radius * 2 + 1, radius * 2 + 1));
+    cv::dilate(seed, support, kernel);
+
+    const int supportPixels = cv::countNonZero(support);
+    const float coverage = static_cast<float>(supportPixels) / static_cast<float>(W * H);
+    if (coverage < 0.03f || coverage > 0.95f)
+    {
+        return cv::Mat();
+    }
+
+    fprintf(stderr,
+            "[MVS] 帧 %d: 稀疏支撑掩码 seed=%d/%d radius=%d coverage=%d/%d (%.1f%%)\n",
+            refIdx,
+            seedPixels,
+            projectedSeeds,
+            radius,
+            supportPixels,
+            W * H,
+            coverage * 100.0f);
+    return support;
+}
+
 // =============================================================================
 DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthGenConfig *configOverride)
 {
@@ -940,6 +1662,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     result.success = false;
 
     const DepthGenConfig &config = configOverride ? *configOverride : m_config;
+    FrameTiming timing;
+    const auto totalStart = Clock::now();
+    auto stageStart = totalStart;
 
     const CameraView &refView = m_views[refIdx];
 
@@ -964,7 +1689,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     std::vector<PositiveDepthCameraModel> srcCams;
     std::vector<int> sourceIndices;
 
-    const std::vector<int> selectedSources = selectMvsSourceViewIndices(m_views, m_sparse, refIdx, numSrc);
+    const std::vector<int> selectedSources = sourceViewIndicesForFrame(refIdx, numSrc);
     for (int si : selectedSources)
     {
         if (si < 0 || si >= NV || si == refIdx)
@@ -987,6 +1712,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     }
 
     if (srcGrays.empty()) {
+        timing.sourceMs = elapsedMs(stageStart, Clock::now());
         result.errorMsg = "没有可用的源帧";
         return result;
     }
@@ -1004,6 +1730,21 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         }
         fprintf(stderr, "[MVS] 帧 %d: 共视评分选择源帧 [%s]\n", refIdx, oss.str().c_str());
     }
+    timing.sourceMs = elapsedMs(stageStart, Clock::now());
+
+    const int minSourceViews = sourceIndices.empty() ? 0 : 1;
+    const std::vector<size_t> visibleSparsePointIndices = [this, refIdx, &sourceIndices, minSourceViews]()
+    {
+        std::vector<size_t> points = visibleSparsePointIndicesForFrame(refIdx, sourceIndices, minSourceViews);
+        if (points.empty() && minSourceViews > 0)
+        {
+            points = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
+            fprintf(stderr,
+                    "[MVS] 帧 %d: 共视可见稀疏点为空，回退到参考帧可见点 (%zu)\n",
+                    refIdx, points.size());
+        }
+        return points;
+    }();
 
     // 自适应置信度阈值：源视图越少，NCC 方差越大，需适当降低阈值
     PatchMatchConfig pmCfg = config.patchMatch;
@@ -1028,13 +1769,19 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             refIdx, refCam.C[0], refCam.C[1], refCam.C[2]);
 
     // 深度范围
+    stageStart = Clock::now();
     float zNear, zFar;
-    estimateDepthRange(refIdx, zNear, zFar, sourceIndices);
+    std::vector<size_t> depthRangeVisiblePoints = visibleSparsePointIndices;
+    if (depthRangeVisiblePoints.size() < 5 && minSourceViews > 0)
+    {
+        depthRangeVisiblePoints = visibleSparsePointIndicesForFrame(refIdx, {}, 0);
+        fprintf(stderr,
+                "[MVS] 帧 %d: 共视稀疏点不足，深度范围回退到参考帧可见点 (%zu)\n",
+                refIdx, depthRangeVisiblePoints.size());
+    }
+    estimateDepthRangeFromVisiblePoints(refIdx, depthRangeVisiblePoints, zNear, zFar);
     fprintf(stderr, "[MVS] 帧 %d: zNear=%.4f  zFar=%.4f\n", refIdx, zNear, zFar);
-
-    // 提示深度
-    cv::Mat hintDepth = buildHintDepth(refIdx, W, H, sourceIndices);
-    cv::Mat sparseSupportMask = buildSparseSupportMask(m_views, m_sparse, refIdx, W, H, sourceIndices);
+    timing.rangeMs = elapsedMs(stageStart, Clock::now());
 
     // =========================================================================
     // ★ 极线校正（仅双目立体对时启用）
@@ -1049,6 +1796,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     PositiveDepthCameraModel workRefCam = refCam;
     std::vector<PositiveDepthCameraModel> workSrcCams = srcCams;
 
+    stageStart = Clock::now();
     if (srcGrays.size() == 1)
     {
         int srcIdx = sourceIndices.empty() ? -1 : sourceIndices.front();
@@ -1087,6 +1835,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                     refIdx, rectErr.c_str());
         }
     }
+    timing.rectifyMs = elapsedMs(stageStart, Clock::now());
 
     // =========================================================================
     // ★ 多尺度 PatchMatch（粗到精）
@@ -1097,9 +1846,30 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     // =========================================================================
     cv::Mat depthMap, confMap;
     std::string errMsg;
+    PatchMatchConfig coarseCfg = makeCoarsePatchMatchConfig(pmCfg, useRectified);
+
+    // 提示深度/支撑掩码：按 PatchMatch 实际工作尺寸生成，避免先生成全分辨率再缩小。
+    stageStart = Clock::now();
+    const cv::Size coarseHintSize = patchMatchWorkSize(workRefImg, coarseCfg);
+    const PositiveDepthCameraModel coarseHintCam =
+        scaleCameraForImageSize(workRefCam, workRefImg.size(), coarseHintSize);
+    cv::Mat coarseHint = buildHintDepthForCamera(refIdx,
+                                                 coarseHintCam,
+                                                 coarseHintSize.width,
+                                                 coarseHintSize.height,
+                                                 visibleSparsePointIndices);
+    const cv::Size supportMaskSize = patchMatchWorkSize(refImg, pmCfg);
+    const PositiveDepthCameraModel supportMaskCam =
+        scaleCameraForImageSize(refCam, cv::Size(W, H), supportMaskSize);
+    cv::Mat sparseSupportMask = buildSparseSupportMaskForCamera(refIdx,
+                                                                supportMaskCam,
+                                                                supportMaskSize.width,
+                                                                supportMaskSize.height,
+                                                                visibleSparsePointIndices);
+    timing.hintMs = elapsedMs(stageStart, Clock::now());
 
     // ── Pass 1: 粗分辨率 ────────────────────────────────────────────────
-    PatchMatchConfig coarseCfg = makeCoarsePatchMatchConfig(pmCfg, useRectified);
+    stageStart = Clock::now();
     fprintf(stderr,
             "[MVS] 帧 %d: 粗层 PatchMatch ds=%d iters=%d patch=%d parallelSweep=%d\n",
             refIdx,
@@ -1115,7 +1885,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         workRefImg, workSrcGrays, workRefCam, workSrcCams,
         zNear, zFar, coarseCfg,
         coarseDepth, &coarseConf, &errMsg,
-        hintDepth.empty() ? nullptr : &hintDepth);
+        coarseHint.empty() ? nullptr : &coarseHint);
 
     if (coarseOk) {
         int coarseValid = cv::countNonZero(coarseDepth > 0);
@@ -1123,16 +1893,29 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                 refIdx, coarseCfg.downsampleFactor, coarseValid, W*H,
                 100.f * coarseValid / (W*H));
 
-        // 合并 hint：粗分辨率结果 + 稀疏点（稀疏点更精确，优先保留）
-        cv::Mat fineHint = coarseDepth.clone();
-        if (!hintDepth.empty()) {
-            hintDepth.copyTo(fineHint, hintDepth > 0);
+        // 合并 hint：粗层结果 + 精层稀疏点（稀疏点更精确，优先保留）。
+        // fineHint 直接保持在精层工作尺寸，PatchMatch 入口可直接复用。
+        PatchMatchConfig fineCfg = makeFinePatchMatchConfig(pmCfg, useRectified, 0.0f);
+        const cv::Size fineHintSize = patchMatchWorkSize(workRefImg, fineCfg);
+        cv::Mat fineHint;
+        cv::resize(coarseDepth, fineHint, fineHintSize, 0, 0, cv::INTER_NEAREST);
+        const PositiveDepthCameraModel fineHintCam =
+            scaleCameraForImageSize(workRefCam, workRefImg.size(), fineHintSize);
+        cv::Mat fineSparseHint = buildHintDepthForCamera(refIdx,
+                                                         fineHintCam,
+                                                         fineHintSize.width,
+                                                         fineHintSize.height,
+                                                         visibleSparsePointIndices);
+        if (!fineSparseHint.empty())
+        {
+            fineSparseHint.copyTo(fineHint, fineSparseHint > 0);
         }
 
         // ── Pass 2: 精细分辨率 ──────────────────────────────────────
         const int hintValid = cv::countNonZero(fineHint > 0);
-        const float hintCoverage = static_cast<float>(hintValid) / std::max(1, W * H);
-        PatchMatchConfig fineCfg = makeFinePatchMatchConfig(pmCfg, useRectified, hintCoverage);
+        const float hintCoverage =
+            static_cast<float>(hintValid) / std::max(1, fineHint.rows * fineHint.cols);
+        fineCfg = makeFinePatchMatchConfig(pmCfg, useRectified, hintCoverage);
         fprintf(stderr,
                 "[MVS] 帧 %d: 精细层 PatchMatch ds=%d iters=%d patch=%d hintCoverage=%.1f%% parallelSweep=%d\n",
                 refIdx,
@@ -1165,7 +1948,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             workRefImg, workSrcGrays, workRefCam, workSrcCams,
             zNear, zFar, fallbackCfg,
             depthMap, &confMap, &errMsg,
-            hintDepth.empty() ? nullptr : &hintDepth);
+            coarseHint.empty() ? nullptr : &coarseHint);
         if (!ok) {
             result.errorMsg = errMsg;
             return result;
@@ -1182,11 +1965,13 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                 confMap, rectPair, W, H);
         fprintf(stderr, "[MVS] 帧 %d: 深度图已从校正空间映射回原始空间\n", refIdx);
     }
+    timing.patchmatchMs = elapsedMs(stageStart, Clock::now());
 
     // ── 暗区掩码：使用 preloadImages() 中基于原始图像计算的内容掩码 ──────
     // 必须使用 CLAHE 增强前的掩码！gamma(0.4) 将黑边 gray=3 提升到 37,
     // 使得基于增强后图像的暗区阈值失效，导致 PatchMatch 在无纹理黑边
     // 区域产生大量噪声深度（如 44% 有效像素 vs 实际仅 10% 内容区域）。
+    stageStart = Clock::now();
     {
         cv::Mat brightMask;
         const bool hasPreloadedMaskSlot = refIdx >= 0 && refIdx < static_cast<int>(m_contentMasks.size());
@@ -1296,6 +2081,17 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     int validCnt = cv::countNonZero(depthMap > 0);
     fprintf(stderr, "[MVS] 帧 %d: PatchMatch 完成, 有效深度像素=%d/%d (%.1f%%)\n",
             refIdx, validCnt, W*H, 100.f * validCnt / (W*H));
+    timing.filterMs = elapsedMs(stageStart, Clock::now());
+    timing.totalMs = elapsedMs(totalStart, Clock::now());
+    LOG_INFO(QStringLiteral("[MVS] 帧 %1 耗时统计: source=%2 ms range=%3 ms hint=%4 ms rectify=%5 ms patchmatch=%6 ms filter=%7 ms total=%8 ms")
+                 .arg(refIdx)
+                 .arg(timing.sourceMs, 0, 'f', 1)
+                 .arg(timing.rangeMs, 0, 'f', 1)
+                 .arg(timing.hintMs, 0, 'f', 1)
+                 .arg(timing.rectifyMs, 0, 'f', 1)
+                 .arg(timing.patchmatchMs, 0, 'f', 1)
+                 .arg(timing.filterMs, 0, 'f', 1)
+                 .arg(timing.totalMs, 0, 'f', 1));
 
     result.depthMap   = QSharedPointer<cv::Mat>::create(depthMap);
     result.confidence = QSharedPointer<cv::Mat>::create(confMap);
@@ -1525,6 +2321,86 @@ void DepthMapGenerator::crossCheckDepthConsistency()
     }
 }
 
+bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
+                                                const DepthFrameResult &result,
+                                                const QString &stageLabel)
+{
+    if (frameIndex < 0 ||
+        frameIndex >= static_cast<int>(m_views.size()) ||
+        !result.success ||
+        !result.depthMap ||
+        result.depthMap->empty())
+    {
+        return true;
+    }
+
+    const bool savePreviewPng = !m_outputDir.empty();
+    const bool saveRawDepth = m_config.saveIntermediateDepthMaps && !m_config.intermediateDir.empty();
+    if (!savePreviewPng && !saveRawDepth)
+    {
+        return true;
+    }
+
+    std::string saveErr;
+    bool previewSaved = !savePreviewPng;
+    if (savePreviewPng)
+    {
+        const std::string pngPath = m_outputDir + "/depth_" + std::to_string(frameIndex) + ".png";
+        if (!saveDepthPreviewPng(pngPath, *result.depthMap, &saveErr))
+        {
+            LOG_WARN(QStringLiteral("[MVS] 保存%1深度预览失败: %2")
+                         .arg(stageLabel, QString::fromStdString(saveErr)));
+            emit errorOccurred(QString::fromStdString(saveErr));
+            return false;
+        }
+
+        previewSaved = true;
+        LOG_INFO(QStringLiteral("[MVS] 帧 %1 %2深度预览已保存: %3 (%4x%5)")
+                     .arg(frameIndex)
+                     .arg(stageLabel)
+                     .arg(QString::fromStdString(pngPath))
+                     .arg(result.depthMap->cols)
+                     .arg(result.depthMap->rows));
+    }
+
+    bool rawSaved = true;
+    if (saveRawDepth)
+    {
+        const std::string depthPath =
+            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + ".yml.gz";
+        if (!writeCvMatStorage(depthPath, *result.depthMap, &saveErr))
+        {
+            rawSaved = false;
+            LOG_WARN(QStringLiteral("[MVS] 保存%1原始深度失败: %2")
+                         .arg(stageLabel, QString::fromStdString(saveErr)));
+            emit errorOccurred(QString::fromStdString(saveErr));
+        }
+    }
+
+    if (saveRawDepth && result.confidence && !result.confidence->empty())
+    {
+        const std::string confPath =
+            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + "_conf.yml.gz";
+        if (!writeCvMatStorage(confPath, *result.confidence, &saveErr))
+        {
+            LOG_WARN(QStringLiteral("[MVS] 保存%1置信图失败: %2")
+                         .arg(stageLabel, QString::fromStdString(saveErr)));
+        }
+    }
+
+    if (previewSaved && rawSaved && savePreviewPng)
+    {
+        const std::string pngPath = m_outputDir + "/depth_" + std::to_string(frameIndex) + ".png";
+        emit depthMapSaved(
+            QString::fromStdString(pngPath),
+            result.depthMap->cols,
+            result.depthMap->rows,
+            QString::fromStdString(m_views[frameIndex].imagePath));
+    }
+
+    return previewSaved && rawSaved;
+}
+
 // =============================================================================
 void DepthMapGenerator::runInBackground()
 {
@@ -1541,6 +2417,8 @@ void DepthMapGenerator::runInBackground()
     // ── 预加载所有图像（一次性磁盘 I/O，后续全从内存读取）────────────────────
     emit progressChanged(QString("预加载 %1 张图像...").arg(NV), 0.f);
     preloadImages();
+    emit progressChanged(QStringLiteral("预计算 MVS 可见性..."), 0.02f);
+    prepareFrameCaches();
     m_depthFrames.resize(NV);
 
     // ── 阶段一：优先级队列并行估计深度图（GPU 优先高价值帧，CPU 处理其余帧）────
@@ -1557,7 +2435,6 @@ void DepthMapGenerator::runInBackground()
     std::atomic<int> activeGpuTasks{0};
     std::atomic<int> activeCpuTasks{0};
     std::atomic<bool> anyFailure{false};
-    std::mutex saveMutex;
     std::mutex taskMutex;
 
     struct FramePriority
@@ -1655,6 +2532,14 @@ void DepthMapGenerator::runInBackground()
                      .arg(gpuFrameWorkers));
     }
 
+    DepthFrameArtifactSaveQueue saveQueue([this](
+                                              int frameIndex,
+                                              const DepthFrameResult &result,
+                                              const QString &stageLabel)
+    {
+        return saveDepthFrameArtifacts(frameIndex, result, stageLabel);
+    });
+
     auto emitDepthProgress = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &taskMutex, &gpuQueue, &cpuQueue](
                                  const QString &workerTag,
                                  int frameIndex,
@@ -1698,7 +2583,7 @@ void DepthMapGenerator::runInBackground()
     };
 
     auto workerFunc = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &anyFailure,
-                       &saveMutex, &taskMutex, &gpuQueue, &cpuQueue, &emitDepthProgress](bool useGpu) {
+                       &taskMutex, &gpuQueue, &cpuQueue, &emitDepthProgress, &saveQueue](bool useGpu) {
         DepthGenConfig workerConfig = m_config;
         workerConfig.patchMatch.useCuda = useGpu;
         const QString workerTag = useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU");
@@ -1780,40 +2665,7 @@ void DepthMapGenerator::runInBackground()
                              .arg(elapsedMs, 0, 'f', 1)
                              .arg(depthWidth)
                              .arg(depthHeight));
-            }
-
-            if (res.success && res.depthMap && !res.depthMap->empty() && !m_outputDir.empty())
-            {
-                std::lock_guard<std::mutex> guard(saveMutex);
-                const cv::Mat &dm = *res.depthMap;
-                double dMin, dMax;
-                cv::Mat validMask = dm > 0;
-                cv::minMaxLoc(dm, &dMin, &dMax, nullptr, nullptr, validMask);
-                cv::Mat vis;
-                if (dMax > dMin)
-                {
-                    dm.convertTo(vis, CV_8U, 255.0 / (dMax - dMin), -255.0 * dMin / (dMax - dMin));
-                }
-                else
-                {
-                    vis = cv::Mat::zeros(dm.size(), CV_8U);
-                }
-                vis.setTo(0, dm <= 0);
-                cv::Mat colorVis;
-                cv::applyColorMap(vis, colorVis, cv::COLORMAP_TURBO);
-                colorVis.setTo(cv::Scalar(0, 0, 0), dm <= 0);
-
-                std::string pngPath = m_outputDir + "/depth_" + std::to_string(i) + ".png";
-                cv::imwrite(pngPath, colorVis);
-                LOG_INFO(QStringLiteral("[MVS] 帧 %1 深度图已保存: %2 (%3x%4)")
-                         .arg(i)
-                         .arg(QString::fromStdString(pngPath))
-                         .arg(dm.cols)
-                         .arg(dm.rows));
-                emit depthMapSaved(
-                    QString::fromStdString(pngPath),
-                    dm.cols, dm.rows,
-                    QString::fromStdString(m_views[i].imagePath));
+                saveQueue.enqueue(i, res, QStringLiteral("初始"));
             }
 
             emit depthMapReady(res);
@@ -1851,15 +2703,21 @@ void DepthMapGenerator::runInBackground()
         }
     }
 
-    allOk = !anyFailure.load();
+    saveQueue.waitUntilIdle();
+    if (saveQueue.failed())
+    {
+        anyFailure = true;
+    }
 
     // 释放图像缓存（深度估计完毕后不再需要）
     m_grayCache.clear();
     m_grayCache.shrink_to_fit();
     m_contentMasks.clear();
     m_contentMasks.shrink_to_fit();
+    clearFrameCaches();
 
     if (m_cancelled) {
+        saveQueue.stop();
         emit finished(false);
         return;
     }
@@ -1871,35 +2729,24 @@ void DepthMapGenerator::runInBackground()
         crossCheckDepthConsistency();
     }
 
-    if (m_config.saveIntermediateDepthMaps && !m_config.intermediateDir.empty())
+    const bool savePreviewPng = !m_outputDir.empty();
+    const bool saveRawDepth = m_config.saveIntermediateDepthMaps && !m_config.intermediateDir.empty();
+    if (savePreviewPng || saveRawDepth)
     {
         for (int i = 0; i < NV; ++i)
         {
             const DepthFrameResult &res = m_depthFrames[i];
-            if (!res.success || !res.depthMap || res.depthMap->empty())
-            {
-                continue;
-            }
-
-            const std::string depthPath = m_config.intermediateDir + "/depth_" + std::to_string(i) + ".yml.gz";
-            std::string saveErr;
-            if (!writeCvMatStorage(depthPath, *res.depthMap, &saveErr))
-            {
-                LOG_WARN(QStringLiteral("[MVS] 保存原始深度失败: %1")
-                             .arg(QString::fromStdString(saveErr)));
-            }
-
-            if (res.confidence && !res.confidence->empty())
-            {
-                const std::string confPath = m_config.intermediateDir + "/depth_" + std::to_string(i) + "_conf.yml.gz";
-                if (!writeCvMatStorage(confPath, *res.confidence, &saveErr))
-                {
-                    LOG_WARN(QStringLiteral("[MVS] 保存置信图失败: %1")
-                                 .arg(QString::fromStdString(saveErr)));
-                }
-            }
+            saveQueue.enqueue(i, res, QStringLiteral("过滤后"));
+        }
+        saveQueue.waitUntilIdle();
+        if (saveQueue.failed())
+        {
+            anyFailure = true;
         }
     }
+    saveQueue.stop();
+
+    allOk = !anyFailure.load();
 
     if (!m_config.runFusion)
     {

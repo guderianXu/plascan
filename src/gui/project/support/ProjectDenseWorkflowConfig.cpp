@@ -62,6 +62,8 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.minConsistentViews = settings.value(QStringLiteral("minConsistentViews")).toInt(2);
     parsed.depthConsistency = static_cast<float>(settings.value(QStringLiteral("depthConsistency")).toDouble(2.0));
     parsed.maxReprojError = static_cast<float>(settings.value(QStringLiteral("maxReprojError")).toDouble(2.0));
+    parsed.processingDevice = processingDeviceFromString(
+        settings.value(QStringLiteral("processingDevice")).toString(QStringLiteral("auto")));
     parsed.pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
     return parsed;
 }

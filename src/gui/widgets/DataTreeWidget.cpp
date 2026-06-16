@@ -21,6 +21,70 @@
 // - 将每个资源作为一行显示，列为：名称 / 路径 / 存储方式（internal/reference）
 // - 右键菜单提供打开 / 在文件管理器中显示 / 打包 / 移除等操作（只发出信号，由上层处理）
 
+namespace
+{
+
+QString depthResultKind(const QJsonObject &record)
+{
+    const QString explicitKind = record.value(QStringLiteral("result_type")).toString();
+    if (!explicitKind.isEmpty())
+    {
+        return explicitKind;
+    }
+
+    if (!record.value(QStringLiteral("raw_depth_path")).toString().isEmpty() ||
+        !record.value(QStringLiteral("ref_image")).toString().isEmpty())
+    {
+        return QStringLiteral("mvs_depth");
+    }
+
+    return QStringLiteral("legacy_preview");
+}
+
+int mvsDepthResultCount(const QJsonArray &depthResults)
+{
+    int count = 0;
+    for (const QJsonValue &value : depthResults)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+        if (depthResultKind(value.toObject()) == QStringLiteral("mvs_depth"))
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+bool isTreeResultKey(const QString &key)
+{
+    return key == QStringLiteral("ipfind_results")
+        || key == QStringLiteral("ipmatch_results")
+        || key == QStringLiteral("observation_network_results")
+        || key == QStringLiteral("aerial_triangulation_results")
+        || key == QStringLiteral("depth_map_results")
+        || key == QStringLiteral("dense_cloud_results")
+        || key == QStringLiteral("model_results")
+        || key == QStringLiteral("dem_results")
+        || key == QStringLiteral("ortho_results");
+}
+
+bool hasTreeResultKeys(const QJsonObject &meta)
+{
+    for (auto it = meta.constBegin(); it != meta.constEnd(); ++it)
+    {
+        if (isTreeResultKey(it.key()))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+} // namespace
+
 DataTreeWidget::DataTreeWidget(QWidget *parent)
     : QWidget(parent)
 {
@@ -98,8 +162,9 @@ void DataTreeWidget::loadFromJson(const QJsonObject &meta)
 
     // 支持两种结构：根对象的 "images" 或嵌套在 "project_files" 中的 "images"。
     // 如果 meta 明确包含 images（即使为空数组），我们应该以该值为准并更新视图。
-    bool hasImagesKey = meta.contains(QStringLiteral("images"));
-    QJsonArray images = meta.value("images").toArray();
+    QJsonObject normalized = normalizeMeta(meta);
+    bool hasImagesKey = normalized.contains(QStringLiteral("images"));
+    QJsonArray images = normalized.value("images").toArray();
     if (!hasImagesKey && meta.value(QStringLiteral("project_files")).isObject())
     {
         QJsonObject pf = meta.value(QStringLiteral("project_files")).toObject();
@@ -109,12 +174,32 @@ void DataTreeWidget::loadFromJson(const QJsonObject &meta)
         }
     }
 
-    // 如果 meta 中没有 images 字段（也没有 project_files.images），则视为非资源更新，忽略。
-    if (!hasImagesKey) return;
+    if (!hasImagesKey)
+    {
+        const QJsonObject projectFiles = meta.value(QStringLiteral("project_files")).toObject();
+        const QJsonObject resultSource = projectFiles.isEmpty() ? meta : projectFiles;
+        if (!hasTreeResultKeys(resultSource))
+        {
+            return;
+        }
+
+        normalized = normalizeMeta(m_lastMeta);
+        if (normalized.isEmpty())
+        {
+            normalized.insert(QStringLiteral("images"), QJsonArray());
+        }
+        for (auto it = resultSource.constBegin(); it != resultSource.constEnd(); ++it)
+        {
+            if (isTreeResultKey(it.key()))
+            {
+                normalized.insert(it.key(), it.value());
+            }
+        }
+    }
 
     // 无论 images 是否为空，只要 meta 明确提供了 images，我们就清空并重建模型（允许清空列表）。
-    m_lastMeta = meta;
-    populateFromMeta(meta);
+    m_lastMeta = normalized;
+    populateFromMeta(normalized);
 }
 
 void DataTreeWidget::addTransientModel(const QString &modelPath)
@@ -159,13 +244,24 @@ void DataTreeWidget::clearTransientResources()
 
 QJsonObject DataTreeWidget::normalizeMeta(const QJsonObject &meta) const
 {
-    if (meta.contains(QStringLiteral("images"))) {
-        return meta;
+    QJsonObject normalized;
+    if (meta.value(QStringLiteral("project_files")).isObject())
+    {
+        normalized = meta.value(QStringLiteral("project_files")).toObject();
     }
-    if (meta.value(QStringLiteral("project_files")).isObject()) {
-        return meta.value(QStringLiteral("project_files")).toObject();
+    else
+    {
+        normalized = meta;
     }
-    return QJsonObject();
+
+    for (auto it = meta.constBegin(); it != meta.constEnd(); ++it)
+    {
+        if (isTreeResultKey(it.key()))
+        {
+            normalized.insert(it.key(), it.value());
+        }
+    }
+    return normalized;
 }
 
 QStandardItem *DataTreeWidget::createSection(const QString &title, int count)
@@ -276,7 +372,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     auto *photos    = createSection(QStringLiteral("照片"),    images.size());
     auto *obsNet    = createSection(QStringLiteral("观测网络"), obsNetResults.size());
     auto *matches   = createSection(QStringLiteral("连接点"),  matchesCount);
-    auto *depthMaps = createSection(QStringLiteral("深度图"),  depthResults.size());
+    auto *depthMaps = createSection(QStringLiteral("深度图"),  mvsDepthResultCount(depthResults));
     auto *denseCloud= createSection(QStringLiteral("稠密点云"),denseCount);
     auto *model3d   = createSection(QStringLiteral("3D模型"),  modelCount);
     auto *dem       = createSection(QStringLiteral("DEM"),      demResults.size());
@@ -395,14 +491,17 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     for (const QJsonValue &v : depthResults) {
         if (!v.isObject()) continue;
         const QJsonObject obj = v.toObject();
-        const QString path = obj.value(QStringLiteral("depth_png")).toString();
-        if (path.isEmpty()) continue;
-        QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
-        const int gw = obj.value(QStringLiteral("grid_width")).toInt(-1);
-        const int gh = obj.value(QStringLiteral("grid_height")).toInt(-1);
-        if (gw > 0 && gh > 0)
-            name = QStringLiteral("%1  [%2x%3]").arg(name).arg(gw).arg(gh);
-        appendItemRow(depthMaps, name, path, QStringLiteral("generated"));
+        if (depthResultKind(obj) == QStringLiteral("mvs_depth"))
+        {
+            const QString path = obj.value(QStringLiteral("depth_png")).toString();
+            if (path.isEmpty()) continue;
+            QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
+            const int gw = obj.value(QStringLiteral("grid_width")).toInt(-1);
+            const int gh = obj.value(QStringLiteral("grid_height")).toInt(-1);
+            if (gw > 0 && gh > 0)
+                name = QStringLiteral("%1  [%2x%3]").arg(name).arg(gw).arg(gh);
+            appendItemRow(depthMaps, name, path, QStringLiteral("generated"));
+        }
     }
 
     // ── 稠密点云 ──────────────────────────────────────────────────────────
@@ -429,6 +528,15 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         const QString typ = obj.value(QStringLiteral("dem_type")).toString();
         if (!typ.isEmpty()) name = QStringLiteral("%1  [%2]").arg(name, typ);
         appendItemRow(dem, name, path, QStringLiteral("generated"));
+        const QString previewPath = obj.value(QStringLiteral("depth_preview_png")).toString();
+        if (!previewPath.isEmpty())
+        {
+            QString previewName = QFileInfo(previewPath).fileName().isEmpty()
+                ? previewPath
+                : QFileInfo(previewPath).fileName();
+            previewName = QStringLiteral("预览 %1").arg(previewName);
+            appendItemRow(dem, previewName, previewPath, QStringLiteral("generated"));
+        }
     }
 
     // ── 正射影像 ──────────────────────────────────────────────────────────

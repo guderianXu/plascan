@@ -38,6 +38,8 @@ struct FusionFrameBuildResult
 
 QString rawDepthStoragePath(const QString &pngPath);
 QString rawConfidenceStoragePath(const QString &pngPath);
+bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence = false);
+bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireConfidence = false);
 
 StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projectMeta);
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
