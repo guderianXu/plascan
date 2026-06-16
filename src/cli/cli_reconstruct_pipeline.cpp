@@ -622,7 +622,7 @@ void reportPlaPointDevice(const std::function<void(const QString &, int)> &progr
     {
         progress(message, percent);
     }
-    std::fprintf(stdout, "%s\n", message.toLocal8Bit().constData());
+    std::fprintf(stdout, "%s\n", qUtf8Printable(message));
     std::fflush(stdout);
 }
 

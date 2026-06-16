@@ -11,6 +11,7 @@
 
 #include "Camera.h"
 #include "PositiveDepthCameraModel.h"
+#include <filesystem>
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -138,7 +139,7 @@ Camera Camera::scaledIntrinsics(double scaleX, double scaleY) const
  */
 bool Camera::loadFromFile(const std::string &path)
 {
-    std::ifstream ifs(path);
+    std::ifstream ifs(std::filesystem::u8path(path));
     if (!ifs)
     {
         return false;

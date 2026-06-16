@@ -1653,6 +1653,80 @@ cv::Mat DepthMapGenerator::buildSparseSupportMaskForCamera(
     return support;
 }
 
+void DepthMapGenerator::applySparseSupportPrior(cv::Mat &depthMap,
+                                                cv::Mat &confidenceMap,
+                                                const cv::Mat &supportMask,
+                                                int refIdx)
+{
+    if (depthMap.empty() || supportMask.empty())
+    {
+        return;
+    }
+
+    cv::Mat support;
+    if (supportMask.type() == CV_8U)
+    {
+        support = supportMask;
+    }
+    else
+    {
+        supportMask.convertTo(support, CV_8U);
+    }
+
+    if (support.size() != depthMap.size())
+    {
+        cv::resize(support, support, depthMap.size(), 0, 0, cv::INTER_NEAREST);
+    }
+
+    const cv::Mat validDepth = depthMap > 0;
+    const int beforeValid = cv::countNonZero(validDepth);
+    if (beforeValid <= 0)
+    {
+        return;
+    }
+
+    cv::Mat unsupportedMask;
+    cv::bitwise_and(validDepth, support == 0, unsupportedMask);
+    const int unsupportedValid = cv::countNonZero(unsupportedMask);
+    if (unsupportedValid <= 0)
+    {
+        return;
+    }
+
+    if (confidenceMap.empty() ||
+        confidenceMap.size() != depthMap.size() ||
+        confidenceMap.type() != CV_32F)
+    {
+        fprintf(stderr,
+                "[MVS] 帧 %d: 稀疏支撑软约束 support外=%d/%d，置信图不可用，深度保持不变\n",
+                refIdx,
+                unsupportedValid,
+                beforeValid);
+        return;
+    }
+
+    constexpr float kUnsupportedConfidenceScale = 0.75f;
+    for (int y = 0; y < confidenceMap.rows; ++y)
+    {
+        float *confRow = confidenceMap.ptr<float>(y);
+        const uint8_t *maskRow = unsupportedMask.ptr<uint8_t>(y);
+        for (int x = 0; x < confidenceMap.cols; ++x)
+        {
+            if (maskRow[x] != 0)
+            {
+                confRow[x] *= kUnsupportedConfidenceScale;
+            }
+        }
+    }
+
+    fprintf(stderr,
+            "[MVS] 帧 %d: 稀疏支撑软约束 support外=%d/%d，置信度缩放 %.2f，深度保持不变\n",
+            refIdx,
+            unsupportedValid,
+            beforeValid,
+            kUnsupportedConfidenceScale);
+}
+
 // =============================================================================
 DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthGenConfig *configOverride)
 {
@@ -2039,42 +2113,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             cv::resize(supportMask, supportMask, depthMap.size(), 0, 0, cv::INTER_NEAREST);
         }
 
-        const int beforeSupport = cv::countNonZero(depthMap > 0);
-        cv::Mat depthBackup = depthMap.clone();
-        cv::Mat confBackup;
-        if (!confMap.empty())
-        {
-            confBackup = confMap.clone();
-        }
-
-        depthMap.setTo(0, supportMask == 0);
-        if (!confMap.empty())
-        {
-            confMap.setTo(0, supportMask == 0);
-        }
-
-        const int afterSupport = cv::countNonZero(depthMap > 0);
-        if (beforeSupport > 100 && afterSupport < beforeSupport / 20)
-        {
-            depthMap = depthBackup;
-            if (!confBackup.empty())
-            {
-                confMap = confBackup;
-            }
-            fprintf(stderr,
-                    "[MVS] 帧 %d: 稀疏支撑过滤过强 %d→%d，已回退\n",
-                    refIdx,
-                    beforeSupport,
-                    afterSupport);
-        }
-        else if (afterSupport < beforeSupport)
-        {
-            fprintf(stderr,
-                    "[MVS] 帧 %d: 稀疏支撑过滤 %d→%d 有效像素\n",
-                    refIdx,
-                    beforeSupport,
-                    afterSupport);
-        }
+        applySparseSupportPrior(depthMap, confMap, supportMask, refIdx);
     }
 
     // 统计

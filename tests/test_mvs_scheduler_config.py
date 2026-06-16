@@ -110,6 +110,16 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("patchmatch=", scheduler)
         self.assertIn("filter=", scheduler)
 
+    def test_sparse_support_is_soft_prior_not_hard_depth_clip(self):
+        header = self.read("src/core/mvs/DepthMapGenerator.h")
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("applySparseSupportPrior", header)
+        self.assertIn("applySparseSupportPrior(depthMap, confMap, supportMask, refIdx)", scheduler)
+        self.assertNotIn("depthMap.setTo(0, supportMask == 0)", scheduler)
+        self.assertNotIn("confMap.setTo(0, supportMask == 0)", scheduler)
+        self.assertIn("稀疏支撑软约束", scheduler)
+
     def test_cuda_scheduler_defaults_to_one_frame_worker(self):
         config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
         self.assertIn("autoGpuFrameWorkers", config_cpp)

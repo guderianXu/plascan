@@ -120,6 +120,12 @@ public:
                                     double *otsuThreshold = nullptr,
                                     int *adaptiveThreshold = nullptr);
 
+    /// 稀疏点支撑只作为置信度软先验，不直接删除 PatchMatch 深度像素
+    static void applySparseSupportPrior(cv::Mat &depthMap,
+                                        cv::Mat &confidenceMap,
+                                        const cv::Mat &supportMask,
+                                        int refIdx);
+
     /// CUDA PatchMatch 显存不足后的下一次重试配置
     static PatchMatchConfig nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,
                                                           int imageWidth,

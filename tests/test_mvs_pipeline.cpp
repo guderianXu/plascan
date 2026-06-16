@@ -325,6 +325,27 @@ TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
     EXPECT_LT(coverage, 0.90f);
 }
 
+TEST(MvsPipelineTest, SparseSupportPriorKeepsDepthAndSoftensConfidence)
+{
+    cv::Mat depth(3, 3, CV_32F, cv::Scalar(12.0f));
+    cv::Mat confidence(3, 3, CV_32F, cv::Scalar(0.8f));
+    cv::Mat support(3, 3, CV_8U, cv::Scalar(0));
+    support.at<uint8_t>(1, 1) = 255;
+
+    const int beforeValid = cv::countNonZero(depth > 0);
+
+    xjw::mvs::DepthMapGenerator::applySparseSupportPrior(depth, confidence, support, 0);
+
+    EXPECT_EQ(cv::countNonZero(depth > 0), beforeValid)
+        << "Sparse support must not hard-clip PatchMatch depth pixels.";
+    EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 12.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(1, 1), 12.0f);
+
+    EXPECT_FLOAT_EQ(confidence.at<float>(1, 1), 0.8f);
+    EXPECT_GT(confidence.at<float>(0, 0), 0.0f);
+    EXPECT_LT(confidence.at<float>(0, 0), 0.8f);
+}
+
 TEST(MvsPipelineTest, ContentMaskSkipsNearlyFullAerialFrame)
 {
     cv::Mat gray(120, 200, CV_8U, cv::Scalar(122));

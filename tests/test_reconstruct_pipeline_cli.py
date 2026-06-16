@@ -19,6 +19,8 @@ def write_camera(path: Path) -> None:
         "\n".join(
             [
                 "VERSION_3",
+                "PINHOLE",
+                "TSAI",
                 "fu = 100",
                 "fv = 100",
                 "cu = 50",
@@ -48,6 +50,12 @@ class ReconstructPipelineCliTest(unittest.TestCase):
             stderr=subprocess.PIPE,
             check=False,
         )
+
+    def test_plapoint_progress_uses_utf8_console_output(self):
+        source = (REPO_ROOT / "src" / "cli" / "cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
+
+        self.assertNotIn("message.toLocal8Bit()", source)
+        self.assertIn("qUtf8Printable(message)", source)
 
     def test_non_empty_output_dir_requires_force(self):
         with tempfile.TemporaryDirectory() as tmp:
