@@ -98,6 +98,19 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("buildHintDepthForCamera(refIdx,\n                                                 coarseHintCam", scheduler)
         self.assertNotIn("buildHintDepthForCamera(refIdx,\n                                                         fineHintCam", scheduler)
 
+    def test_projected_sparse_sample_depth_iqr_uses_bounded_quantile_sampling(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        start = scheduler.index(
+            "std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSparseDepthSamples")
+        end = scheduler.index("cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples", start)
+        block = scheduler[start:end]
+
+        self.assertIn("kMaxProjectedDepthQuantileSamples", scheduler)
+        self.assertIn("depthQuantileSamples", block)
+        self.assertIn("std::nth_element", block)
+        self.assertNotIn("std::sort(allZc", block)
+        self.assertNotIn("allZc.reserve(visiblePointIndices.size())", block)
+
     def test_fine_sparse_hint_uses_seed_overlay_without_full_propagation(self):
         header = self.read("src/core/mvs/DepthMapGenerator.h")
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")

@@ -34,6 +34,7 @@ namespace
 
 constexpr float kSkipContentMaskCoverage = 0.985f;
 constexpr std::size_t kMaxInlineDenseFilterPoints = 500000;
+constexpr std::size_t kMaxProjectedDepthQuantileSamples = 8192;
 
 using Clock = std::chrono::steady_clock;
 
@@ -1248,8 +1249,13 @@ std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSpars
     }
 
     const PositiveDepthCameraModel &cam = camera;
-    std::vector<float> allZc;
-    allZc.reserve(visiblePointIndices.size());
+    std::vector<float> depthQuantileSamples;
+    depthQuantileSamples.reserve(std::min(visiblePointIndices.size(), kMaxProjectedDepthQuantileSamples));
+    const size_t quantileSampleStride = visiblePointIndices.size() > kMaxProjectedDepthQuantileSamples
+        ? (visiblePointIndices.size() + kMaxProjectedDepthQuantileSamples - 1)
+              / kMaxProjectedDepthQuantileSamples
+        : 1;
+    size_t validDepthOrdinal = 0;
     for (size_t pointIndex : visiblePointIndices)
     {
         if (pointIndex >= sparse.points.size())
@@ -1260,15 +1266,27 @@ std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSpars
         float Zc = cam.R_cw[6]*pt[0] + cam.R_cw[7]*pt[1] + cam.R_cw[8]*pt[2] + cam.T[2];
         if (Zc > 0.f && std::isfinite(Zc))
         {
-            allZc.push_back(Zc);
+            if ((validDepthOrdinal % quantileSampleStride) == 0
+                && depthQuantileSamples.size() < kMaxProjectedDepthQuantileSamples)
+            {
+                depthQuantileSamples.push_back(Zc);
+            }
+            ++validDepthOrdinal;
         }
     }
     float depthLo = 0.f, depthHi = 1e30f;
-    if (allZc.size() >= 4)
+    if (depthQuantileSamples.size() >= 4)
     {
-        std::sort(allZc.begin(), allZc.end());
-        float Q1 = allZc[allZc.size() / 4];
-        float Q3 = allZc[allZc.size() * 3 / 4];
+        auto q1It = depthQuantileSamples.begin()
+            + static_cast<std::ptrdiff_t>(depthQuantileSamples.size() / 4);
+        std::nth_element(depthQuantileSamples.begin(), q1It, depthQuantileSamples.end());
+        const float Q1 = *q1It;
+
+        auto q3It = depthQuantileSamples.begin()
+            + static_cast<std::ptrdiff_t>(depthQuantileSamples.size() * 3 / 4);
+        std::nth_element(depthQuantileSamples.begin(), q3It, depthQuantileSamples.end());
+        const float Q3 = *q3It;
+
         float IQR = Q3 - Q1;
         depthLo = Q1 - 1.5f * IQR;
         depthHi = Q3 + 1.5f * IQR;
