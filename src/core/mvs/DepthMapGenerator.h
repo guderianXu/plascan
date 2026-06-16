@@ -114,6 +114,28 @@ public:
                                           int H,
                                           const std::vector<int> &sourceIndices = {});
 
+    /// 将同一帧可见稀疏点投影一次，供 hint 与支撑掩码在不同工作分辨率复用
+    static std::vector<ProjectedSparseDepthSample> collectProjectedSparseDepthSamples(
+        const SparseCloud &sparse,
+        const PositiveDepthCameraModel &camera,
+        int imageWidth,
+        int imageHeight,
+        const std::vector<size_t> &visiblePointIndices);
+
+    /// 基于已投影样本生成 PatchMatch hint 深度图
+    static cv::Mat buildHintDepthFromProjectedSamples(
+        int refIdx,
+        int W,
+        int H,
+        const std::vector<ProjectedSparseDepthSample> &samples);
+
+    /// 基于已投影样本生成稀疏支撑掩码，避免重复投影同一批稀疏点
+    static cv::Mat buildSparseSupportMaskFromProjectedSamples(
+        int refIdx,
+        int W,
+        int H,
+        const std::vector<ProjectedSparseDepthSample> &samples);
+
     /// 基于原始灰度图生成内容区域掩码；近似全图有效时返回空 Mat 表示跳过过滤
     static cv::Mat buildContentMask(const cv::Mat &gray,
                                     float *coverage = nullptr,

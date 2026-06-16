@@ -325,6 +325,60 @@ TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
     EXPECT_LT(coverage, 0.90f);
 }
 
+TEST(MvsPipelineTest, ProjectedSparseSamplesFeedHintAndSupportReuse)
+{
+    constexpr int W = 120;
+    constexpr int H = 90;
+    constexpr double FOCAL = 80.0;
+    constexpr float Z = 10.0f;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C[3] = {0,0,0};
+
+    xjw::mvs::CameraView view;
+    view.imageWidth = W;
+    view.imageHeight = H;
+    view.camera.setIntrinsics(FOCAL, FOCAL, W * 0.5, H * 0.5);
+    view.camera.setPose(
+        std::array<double, 9>{I[0], I[1], I[2], I[3], I[4], I[5], I[6], I[7], I[8]},
+        std::array<double, 3>{C[0], C[1], C[2]});
+    view.camera.setAxisDirections(1, 1);
+    view.camera.setDepthAxisFlipped(false);
+
+    xjw::mvs::SparseCloud sparse;
+    std::vector<size_t> indices;
+    for (int py = 36; py <= 54; py += 6)
+    {
+        for (int px = 45; px <= 75; px += 6)
+        {
+            const float x = static_cast<float>((px - W * 0.5) * Z / FOCAL);
+            const float y = static_cast<float>((py - H * 0.5) * Z / FOCAL);
+            indices.push_back(sparse.points.size());
+            sparse.points.push_back({x, y, Z});
+        }
+    }
+    indices.push_back(sparse.points.size());
+    sparse.points.push_back({0.0f, 0.0f, Z * 8.0f});
+
+    const std::vector<xjw::mvs::ProjectedSparseDepthSample> samples =
+        xjw::mvs::DepthMapGenerator::collectProjectedSparseDepthSamples(
+            sparse, view.positiveDepthModel(), W, H, indices);
+
+    EXPECT_EQ(samples.size(), indices.size() - 1)
+        << "The depth outlier should be excluded once before building hint/support rasters.";
+
+    const cv::Mat hint = xjw::mvs::DepthMapGenerator::buildHintDepthFromProjectedSamples(
+        0, W / 2, H / 2, samples);
+    const cv::Mat support = xjw::mvs::DepthMapGenerator::buildSparseSupportMaskFromProjectedSamples(
+        0, W, H, samples);
+
+    ASSERT_FALSE(hint.empty());
+    ASSERT_FALSE(support.empty());
+    EXPECT_GT(cv::countNonZero(hint > 0), 0);
+    EXPECT_GT(cv::countNonZero(support(cv::Rect(35, 25, 50, 40))), 0);
+    EXPECT_EQ(support.at<uint8_t>(5, 5), 0);
+}
+
 TEST(MvsPipelineTest, SparseSupportPriorKeepsDepthAndSoftensConfidence)
 {
     cv::Mat depth(3, 3, CV_32F, cv::Scalar(12.0f));

@@ -339,26 +339,6 @@ cv::Size patchMatchWorkSize(const cv::Mat &image, const PatchMatchConfig &config
     return cv::Size(std::max(1, image.cols / ds), std::max(1, image.rows / ds));
 }
 
-PositiveDepthCameraModel scaleCameraForImageSize(const PositiveDepthCameraModel &camera,
-                                                 const cv::Size &sourceSize,
-                                                 const cv::Size &targetSize)
-{
-    PositiveDepthCameraModel scaled = camera;
-    if (sourceSize.width <= 0 || sourceSize.height <= 0
-        || targetSize.width <= 0 || targetSize.height <= 0)
-    {
-        return scaled;
-    }
-
-    const float sx = static_cast<float>(targetSize.width) / static_cast<float>(sourceSize.width);
-    const float sy = static_cast<float>(targetSize.height) / static_cast<float>(sourceSize.height);
-    scaled.fx *= sx;
-    scaled.fy *= sy;
-    scaled.cx *= sx;
-    scaled.cy *= sy;
-    return scaled;
-}
-
 std::vector<int> consistencySourceIndicesForFrame(const std::vector<DepthFrameResult> &frames,
                                                   int refIdx,
                                                   int viewCount)
@@ -1248,24 +1228,43 @@ cv::Mat DepthMapGenerator::buildHintDepthForCamera(
     int H,
     const std::vector<size_t> &visiblePointIndices) const
 {
-    if (m_sparse.points.empty() || W <= 0 || H <= 0 || !camera.valid())
+    const std::vector<ProjectedSparseDepthSample> samples =
+        collectProjectedSparseDepthSamples(m_sparse, camera, W, H, visiblePointIndices);
+    return buildHintDepthFromProjectedSamples(refIdx, W, H, samples);
+}
+
+std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSparseDepthSamples(
+    const SparseCloud &sparse,
+    const PositiveDepthCameraModel &camera,
+    int imageWidth,
+    int imageHeight,
+    const std::vector<size_t> &visiblePointIndices)
+{
+    std::vector<ProjectedSparseDepthSample> samples;
+    if (sparse.points.empty() || imageWidth <= 0 || imageHeight <= 0 || !camera.valid())
     {
-        return cv::Mat();
+        return samples;
     }
 
-    PositiveDepthCameraModel cam = camera;
-
-    // 先计算深度的 IQR fence，过滤离群稀疏点的深度提示
+    const PositiveDepthCameraModel &cam = camera;
     std::vector<float> allZc;
     allZc.reserve(visiblePointIndices.size());
-    for (size_t pointIndex : visiblePointIndices) {
-        if (pointIndex >= m_sparse.points.size()) continue;
-        const auto &pt = m_sparse.points[pointIndex];
+    for (size_t pointIndex : visiblePointIndices)
+    {
+        if (pointIndex >= sparse.points.size())
+        {
+            continue;
+        }
+        const auto &pt = sparse.points[pointIndex];
         float Zc = cam.R_cw[6]*pt[0] + cam.R_cw[7]*pt[1] + cam.R_cw[8]*pt[2] + cam.T[2];
-        if (Zc > 0.f) allZc.push_back(Zc);
+        if (Zc > 0.f && std::isfinite(Zc))
+        {
+            allZc.push_back(Zc);
+        }
     }
     float depthLo = 0.f, depthHi = 1e30f;
-    if (allZc.size() >= 4) {
+    if (allZc.size() >= 4)
+    {
         std::sort(allZc.begin(), allZc.end());
         float Q1 = allZc[allZc.size() / 4];
         float Q3 = allZc[allZc.size() * 3 / 4];
@@ -1274,27 +1273,77 @@ cv::Mat DepthMapGenerator::buildHintDepthForCamera(
         depthHi = Q3 + 1.5f * IQR;
     }
 
-    cv::Mat hint(H, W, CV_32F, cv::Scalar(0.f));
-
-    // 第一步：将稀疏点投影到 hint 图，每点周围 ±3px 小区域赋深度
-    for (size_t pointIndex : visiblePointIndices) {
-        if (pointIndex >= m_sparse.points.size()) continue;
-        const auto &pt = m_sparse.points[pointIndex];
+    samples.reserve(visiblePointIndices.size());
+    for (size_t pointIndex : visiblePointIndices)
+    {
+        if (pointIndex >= sparse.points.size())
+        {
+            continue;
+        }
+        const auto &pt = sparse.points[pointIndex];
         float u, v;
-        if (!cam.project(pt[0], pt[1], pt[2], u, v)) continue;
-        int iu = static_cast<int>(std::round(u));
-        int iv = static_cast<int>(std::round(v));
-        if (iu < 0 || iu >= W || iv < 0 || iv >= H) continue;
+        if (!cam.project(pt[0], pt[1], pt[2], u, v))
+        {
+            continue;
+        }
+        if (u < 0.0f || u >= static_cast<float>(imageWidth) ||
+            v < 0.0f || v >= static_cast<float>(imageHeight))
+        {
+            continue;
+        }
 
         float Zc = cam.R_cw[6]*pt[0] + cam.R_cw[7]*pt[1] + cam.R_cw[8]*pt[2] + cam.T[2];
-        if (Zc <= 0.f || Zc < depthLo || Zc > depthHi) continue;
+        if (Zc <= 0.f || Zc < depthLo || Zc > depthHi || !std::isfinite(Zc))
+        {
+            continue;
+        }
 
-        for (int dv = -3; dv <= 3; ++dv) {
-            for (int du = -3; du <= 3; ++du) {
+        ProjectedSparseDepthSample sample;
+        sample.uNorm = u / static_cast<float>(imageWidth);
+        sample.vNorm = v / static_cast<float>(imageHeight);
+        sample.depth = Zc;
+        samples.push_back(sample);
+    }
+
+    return samples;
+}
+
+cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples(
+    int refIdx,
+    int W,
+    int H,
+    const std::vector<ProjectedSparseDepthSample> &samples)
+{
+    if (samples.empty() || W <= 0 || H <= 0)
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat hint(H, W, CV_32F, cv::Scalar(0.f));
+
+    for (const ProjectedSparseDepthSample &sample : samples)
+    {
+        const int iu = static_cast<int>(std::round(sample.uNorm * static_cast<float>(W)));
+        const int iv = static_cast<int>(std::round(sample.vNorm * static_cast<float>(H)));
+        if (iu < 0 || iu >= W || iv < 0 || iv >= H || sample.depth <= 0.0f)
+        {
+            continue;
+        }
+
+        for (int dv = -3; dv <= 3; ++dv)
+        {
+            for (int du = -3; du <= 3; ++du)
+            {
                 int nu = iu+du, nv = iv+dv;
-                if (nu<0||nu>=W||nv<0||nv>=H) continue;
+                if (nu<0||nu>=W||nv<0||nv>=H)
+                {
+                    continue;
+                }
                 float &h = hint.at<float>(nv, nu);
-                if (h == 0.f || Zc < h) h = Zc;
+                if (h == 0.f || sample.depth < h)
+                {
+                    h = sample.depth;
+                }
             }
         }
     }
@@ -1310,7 +1359,7 @@ cv::Mat DepthMapGenerator::buildHintDepthForCamera(
         fprintf(stderr,
                 "[Hint] 帧 %d: 可见稀疏点=%zu 没有可用 hint seed，跳过 hint 传播\n",
                 refIdx,
-                visiblePointIndices.size());
+                samples.size());
         return cv::Mat();
     }
 
@@ -1383,7 +1432,7 @@ cv::Mat DepthMapGenerator::buildHintDepthForCamera(
     int hintCnt = cv::countNonZero(hint > 0);
     fprintf(stderr,
             "[Hint] 帧 %d: 可见稀疏点=%zu seedPixels=%d radius=%d hint覆盖=%d/%d (%.1f%%)\n",
-            refIdx, visiblePointIndices.size(), seedHintCnt, maxHintRadius,
+            refIdx, samples.size(), seedHintCnt, maxHintRadius,
             hintCnt, W*H, 100.f*hintCnt/(W*H));
     return hint;
 }
@@ -1419,60 +1468,29 @@ cv::Mat DepthMapGenerator::buildSparseSupportMask(const std::vector<CameraView> 
         return cv::Mat();
     }
 
-    std::vector<float> depths;
-    depths.reserve(visiblePointIndices.size());
-    for (size_t pointIndex : visiblePointIndices)
-    {
-        if (pointIndex >= sparse.points.size())
-        {
-            continue;
-        }
-        const auto &pt = sparse.points[pointIndex];
-        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
-        if (z > 0.f && std::isfinite(z))
-        {
-            depths.push_back(z);
-        }
-    }
-    if (depths.size() < 20)
+    const std::vector<ProjectedSparseDepthSample> samples =
+        collectProjectedSparseDepthSamples(sparse, cam, W, H, visiblePointIndices);
+    return buildSparseSupportMaskFromProjectedSamples(refIdx, W, H, samples);
+}
+
+cv::Mat DepthMapGenerator::buildSparseSupportMaskFromProjectedSamples(
+    int refIdx,
+    int W,
+    int H,
+    const std::vector<ProjectedSparseDepthSample> &samples)
+{
+    if (W <= 0 || H <= 0 || samples.size() < 20)
     {
         return cv::Mat();
     }
 
-    std::sort(depths.begin(), depths.end());
-    const size_t n = depths.size();
-    const float q1 = depths[n / 4];
-    const float q3 = depths[n * 3 / 4];
-    const float iqr = q3 - q1;
-    const float margin = std::max(1e-4f, 1.5f * iqr);
-    const float depthLo = q1 - margin;
-    const float depthHi = q3 + margin;
-
     cv::Mat seed(H, W, CV_8U, cv::Scalar(0));
     int projectedSeeds = 0;
-    for (size_t pointIndex : visiblePointIndices)
+    for (const ProjectedSparseDepthSample &sample : samples)
     {
-        if (pointIndex >= sparse.points.size())
-        {
-            continue;
-        }
-        const auto &pt = sparse.points[pointIndex];
-        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
-        if (z <= 0.f || z < depthLo || z > depthHi)
-        {
-            continue;
-        }
-
-        float u = 0.f;
-        float v = 0.f;
-        if (!cam.project(pt[0], pt[1], pt[2], u, v))
-        {
-            continue;
-        }
-
-        const int iu = static_cast<int>(std::round(u));
-        const int iv = static_cast<int>(std::round(v));
-        if (iu < 0 || iu >= W || iv < 0 || iv >= H)
+        const int iu = static_cast<int>(std::round(sample.uNorm * static_cast<float>(W)));
+        const int iv = static_cast<int>(std::round(sample.vNorm * static_cast<float>(H)));
+        if (iu < 0 || iu >= W || iv < 0 || iv >= H || sample.depth <= 0.0f)
         {
             continue;
         }
@@ -1554,103 +1572,9 @@ cv::Mat DepthMapGenerator::buildSparseSupportMaskForCamera(
         return cv::Mat();
     }
 
-    std::vector<float> depths;
-    depths.reserve(visiblePointIndices.size());
-    for (size_t pointIndex : visiblePointIndices)
-    {
-        if (pointIndex >= m_sparse.points.size())
-        {
-            continue;
-        }
-        const auto &pt = m_sparse.points[pointIndex];
-        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
-        if (z > 0.f && std::isfinite(z))
-        {
-            depths.push_back(z);
-        }
-    }
-    if (depths.size() < 20)
-    {
-        return cv::Mat();
-    }
-
-    std::sort(depths.begin(), depths.end());
-    const size_t n = depths.size();
-    const float q1 = depths[n / 4];
-    const float q3 = depths[n * 3 / 4];
-    const float iqr = q3 - q1;
-    const float margin = std::max(1e-4f, 1.5f * iqr);
-    const float depthLo = q1 - margin;
-    const float depthHi = q3 + margin;
-
-    cv::Mat seed(H, W, CV_8U, cv::Scalar(0));
-    int projectedSeeds = 0;
-    for (size_t pointIndex : visiblePointIndices)
-    {
-        if (pointIndex >= m_sparse.points.size())
-        {
-            continue;
-        }
-        const auto &pt = m_sparse.points[pointIndex];
-        const float z = cam.R_cw[6] * pt[0] + cam.R_cw[7] * pt[1] + cam.R_cw[8] * pt[2] + cam.T[2];
-        if (z <= 0.f || z < depthLo || z > depthHi)
-        {
-            continue;
-        }
-
-        float u = 0.f;
-        float v = 0.f;
-        if (!cam.project(pt[0], pt[1], pt[2], u, v))
-        {
-            continue;
-        }
-
-        const int iu = static_cast<int>(std::round(u));
-        const int iv = static_cast<int>(std::round(v));
-        if (iu < 0 || iu >= W || iv < 0 || iv >= H)
-        {
-            continue;
-        }
-
-        seed.at<uint8_t>(iv, iu) = 255;
-        ++projectedSeeds;
-    }
-
-    const int seedPixels = cv::countNonZero(seed);
-    if (seedPixels < 10)
-    {
-        return cv::Mat();
-    }
-
-    const int maxDim = std::max(W, H);
-    const int radius = maxDim < 512
-        ? std::clamp(maxDim / 8, 8, 48)
-        : (maxDim < 1200
-            ? std::clamp(maxDim / 16, 32, 64)
-            : std::clamp(maxDim / 48, 48, 128));
-    cv::Mat support;
-    const cv::Mat kernel = cv::getStructuringElement(
-        cv::MORPH_ELLIPSE,
-        cv::Size(radius * 2 + 1, radius * 2 + 1));
-    cv::dilate(seed, support, kernel);
-
-    const int supportPixels = cv::countNonZero(support);
-    const float coverage = static_cast<float>(supportPixels) / static_cast<float>(W * H);
-    if (coverage < 0.03f || coverage > 0.95f)
-    {
-        return cv::Mat();
-    }
-
-    fprintf(stderr,
-            "[MVS] 帧 %d: 稀疏支撑掩码 seed=%d/%d radius=%d coverage=%d/%d (%.1f%%)\n",
-            refIdx,
-            seedPixels,
-            projectedSeeds,
-            radius,
-            supportPixels,
-            W * H,
-            coverage * 100.0f);
-    return support;
+    const std::vector<ProjectedSparseDepthSample> samples =
+        collectProjectedSparseDepthSamples(m_sparse, cam, W, H, visiblePointIndices);
+    return buildSparseSupportMaskFromProjectedSamples(refIdx, W, H, samples);
 }
 
 void DepthMapGenerator::applySparseSupportPrior(cv::Mat &depthMap,
@@ -2118,22 +2042,30 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
     // 提示深度/支撑掩码：按 PatchMatch 实际工作尺寸生成，避免先生成全分辨率再缩小。
     stageStart = Clock::now();
+    const std::vector<ProjectedSparseDepthSample> workRefSparseSamples =
+        collectProjectedSparseDepthSamples(m_sparse,
+                                           workRefCam,
+                                           workRefImg.cols,
+                                           workRefImg.rows,
+                                           visibleSparsePointIndices);
     const cv::Size coarseHintSize = patchMatchWorkSize(workRefImg, coarseCfg);
-    const PositiveDepthCameraModel coarseHintCam =
-        scaleCameraForImageSize(workRefCam, workRefImg.size(), coarseHintSize);
-    cv::Mat coarseHint = buildHintDepthForCamera(refIdx,
-                                                 coarseHintCam,
-                                                 coarseHintSize.width,
-                                                 coarseHintSize.height,
-                                                 visibleSparsePointIndices);
+    cv::Mat coarseHint = buildHintDepthFromProjectedSamples(refIdx,
+                                                            coarseHintSize.width,
+                                                            coarseHintSize.height,
+                                                            workRefSparseSamples);
     const cv::Size supportMaskSize = patchMatchWorkSize(refImg, pmCfg);
-    const PositiveDepthCameraModel supportMaskCam =
-        scaleCameraForImageSize(refCam, cv::Size(W, H), supportMaskSize);
-    cv::Mat sparseSupportMask = buildSparseSupportMaskForCamera(refIdx,
-                                                                supportMaskCam,
-                                                                supportMaskSize.width,
-                                                                supportMaskSize.height,
-                                                                visibleSparsePointIndices);
+    std::vector<ProjectedSparseDepthSample> rectifiedSupportSamples;
+    const std::vector<ProjectedSparseDepthSample> *supportSamples = &workRefSparseSamples;
+    if (useRectified)
+    {
+        rectifiedSupportSamples =
+            collectProjectedSparseDepthSamples(m_sparse, refCam, W, H, visibleSparsePointIndices);
+        supportSamples = &rectifiedSupportSamples;
+    }
+    cv::Mat sparseSupportMask = buildSparseSupportMaskFromProjectedSamples(refIdx,
+                                                                           supportMaskSize.width,
+                                                                           supportMaskSize.height,
+                                                                           *supportSamples);
     timing.hintMs = elapsedMs(stageStart, Clock::now());
 
     // ── Pass 1: 粗分辨率 ────────────────────────────────────────────────
@@ -2167,13 +2099,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         const cv::Size fineHintSize = patchMatchWorkSize(workRefImg, fineCfg);
         cv::Mat fineHint;
         cv::resize(coarseDepth, fineHint, fineHintSize, 0, 0, cv::INTER_NEAREST);
-        const PositiveDepthCameraModel fineHintCam =
-            scaleCameraForImageSize(workRefCam, workRefImg.size(), fineHintSize);
-        cv::Mat fineSparseHint = buildHintDepthForCamera(refIdx,
-                                                         fineHintCam,
-                                                         fineHintSize.width,
-                                                         fineHintSize.height,
-                                                         visibleSparsePointIndices);
+        cv::Mat fineSparseHint = buildHintDepthFromProjectedSamples(refIdx,
+                                                                    fineHintSize.width,
+                                                                    fineHintSize.height,
+                                                                    workRefSparseSamples);
         if (!fineSparseHint.empty())
         {
             fineSparseHint.copyTo(fineHint, fineSparseHint > 0);

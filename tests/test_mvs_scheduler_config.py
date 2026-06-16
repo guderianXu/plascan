@@ -75,18 +75,28 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
         self.assertIn("patchMatchWorkSize", scheduler)
-        self.assertIn("scaleCameraForImageSize", scheduler)
-        self.assertIn("buildHintDepthForCamera", scheduler)
+        self.assertIn("collectProjectedSparseDepthSamples", scheduler)
+        self.assertIn("buildHintDepthFromProjectedSamples", scheduler)
         self.assertIn("const cv::Size coarseHintSize = patchMatchWorkSize(workRefImg, coarseCfg);", scheduler)
         self.assertIn("const cv::Size fineHintSize = patchMatchWorkSize(workRefImg, fineCfg);", scheduler)
-        self.assertIn("coarseHintCam", scheduler)
         self.assertIn("coarseHintSize.width", scheduler)
         self.assertIn("coarseHintSize.height", scheduler)
-        self.assertIn("fineHintCam", scheduler)
         self.assertIn("fineHintSize.width", scheduler)
         self.assertIn("fineHintSize.height", scheduler)
         self.assertNotIn("cv::Mat hintDepth = buildHintDepthFromVisiblePoints(refIdx, W, H, visibleSparsePointIndices);",
                          scheduler)
+
+    def test_depth_frame_reuses_projected_sparse_samples_for_hint_and_support(self):
+        header = self.read("src/core/mvs/DepthMapGenerator.h")
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("ProjectedSparseDepthSample", header)
+        self.assertIn("collectProjectedSparseDepthSamples", scheduler)
+        self.assertIn("workRefSparseSamples", scheduler)
+        self.assertIn("buildHintDepthFromProjectedSamples(refIdx", scheduler)
+        self.assertIn("buildSparseSupportMaskFromProjectedSamples(refIdx", scheduler)
+        self.assertNotIn("buildHintDepthForCamera(refIdx,\n                                                 coarseHintCam", scheduler)
+        self.assertNotIn("buildHintDepthForCamera(refIdx,\n                                                         fineHintCam", scheduler)
 
     def test_patchmatch_accepts_prescaled_hint_without_extra_resize(self):
         cuda = self.read("src/core/mvs/PatchMatchCUDA.cu")
