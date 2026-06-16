@@ -1727,6 +1727,93 @@ void DepthMapGenerator::applySparseSupportPrior(cv::Mat &depthMap,
             kUnsupportedConfidenceScale);
 }
 
+int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
+                                                cv::Mat &confidenceMap,
+                                                int kernelSize,
+                                                float relDepthThreshold,
+                                                float maxRemovalRatio,
+                                                int refIdx)
+{
+    if (depthMap.empty() || depthMap.type() != CV_32F)
+    {
+        return 0;
+    }
+    if (kernelSize < 3 || relDepthThreshold <= 0.0f || maxRemovalRatio <= 0.0f)
+    {
+        return 0;
+    }
+
+    const cv::Mat validMask = depthMap > 0.0f;
+    const int validBefore = cv::countNonZero(validMask);
+    if (validBefore <= 0)
+    {
+        return 0;
+    }
+
+    const int medianKernel = std::clamp(kernelSize | 1, 3, 5);
+    cv::Mat localMedian;
+    cv::medianBlur(depthMap, localMedian, medianKernel);
+
+    cv::Mat outlierMask = cv::Mat::zeros(depthMap.size(), CV_8U);
+    for (int y = 0; y < depthMap.rows; ++y)
+    {
+        const float *depthRow = depthMap.ptr<float>(y);
+        const float *medianRow = localMedian.ptr<float>(y);
+        uint8_t *maskRow = outlierMask.ptr<uint8_t>(y);
+        for (int x = 0; x < depthMap.cols; ++x)
+        {
+            const float depth = depthRow[x];
+            const float medianDepth = medianRow[x];
+            if (depth <= 0.0f || medianDepth <= 0.0f)
+            {
+                continue;
+            }
+
+            const float relDiff = std::fabs(depth - medianDepth) / std::max(medianDepth, 1e-6f);
+            if (relDiff > relDepthThreshold)
+            {
+                maskRow[x] = 255;
+            }
+        }
+    }
+
+    const int candidateCount = cv::countNonZero(outlierMask);
+    if (candidateCount <= 0)
+    {
+        return 0;
+    }
+
+    const float removalRatio = static_cast<float>(candidateCount) / static_cast<float>(validBefore);
+    if (removalRatio > maxRemovalRatio)
+    {
+        fprintf(stderr,
+                "[MVS] 帧 %d: 局部深度离群过滤候选过多 %d/%d (%.1f%% > %.1f%%)，已跳过\n",
+                refIdx,
+                candidateCount,
+                validBefore,
+                removalRatio * 100.0f,
+                maxRemovalRatio * 100.0f);
+        return 0;
+    }
+
+    depthMap.setTo(0.0f, outlierMask);
+    if (!confidenceMap.empty() &&
+        confidenceMap.size() == depthMap.size() &&
+        confidenceMap.type() == CV_32F)
+    {
+        confidenceMap.setTo(0.0f, outlierMask);
+    }
+
+    fprintf(stderr,
+            "[MVS] 帧 %d: 局部深度离群过滤移除 %d/%d 像素 (kernel=%d rel=%.2f)\n",
+            refIdx,
+            candidateCount,
+            validBefore,
+            medianKernel,
+            relDepthThreshold);
+    return candidateCount;
+}
+
 // =============================================================================
 DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthGenConfig *configOverride)
 {
@@ -2163,9 +2250,11 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
     }
 
     cv::Mat filteredDepth = rawDepth.clone();
+    cv::Mat filteredConfidence = res.confidence ? res.confidence->clone() : cv::Mat();
 
-    if (res.confidence && !res.confidence->empty()) {
-        const cv::Mat &conf = *res.confidence;
+    if (!filteredConfidence.empty())
+    {
+        const cv::Mat &conf = filteredConfidence;
         // 先统计置信度分布（用于诊断）
         double cMin, cMax;
         cv::minMaxLoc(conf, &cMin, &cMax);
@@ -2177,8 +2266,12 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
             const float *pd = rawDepth.ptr<float>(v);
             const float *pc = conf.ptr<float>(v);
             float       *pf = filteredDepth.ptr<float>(v);
-            for (int u = 0; u < rawDepth.cols; ++u) {
-                if (pc[u] < confThresh) pf[u] = 0.f;
+            for (int u = 0; u < rawDepth.cols; ++u)
+            {
+                if (pc[u] < confThresh)
+                {
+                    pf[u] = 0.f;
+                }
             }
         }
         int validBefore = cv::countNonZero(rawDepth > 0);
@@ -2187,14 +2280,26 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
                 res.imageIndex, validBefore, validAfter, confThresh);
 
         // 如果过滤后像素太少，自动回退为不过滤
-        if (validAfter < validBefore / 20) { // 保留不足 5%
+        if (validAfter < validBefore / 20)
+        {
+            // 保留不足 5%
             fprintf(stderr, "[MVS] 帧%d 置信度过滤后像素太少，回退为不过滤\n", res.imageIndex);
             filteredDepth = rawDepth.clone();
         }
     }
 
+    if (m_config.fusion.enableLocalDepthOutlierFilter)
+    {
+        removeLocalDepthOutliers(filteredDepth,
+                                 filteredConfidence,
+                                 m_config.fusion.localDepthOutlierKernelSize,
+                                 m_config.fusion.localDepthOutlierRelThresh,
+                                 m_config.fusion.maxLocalDepthOutlierRemovalRatio,
+                                 res.imageIndex);
+    }
+
     frame.depthMap   = filteredDepth;
-    frame.confidence = res.confidence ? *res.confidence : cv::Mat();
+    frame.confidence = filteredConfidence;
     return frame;
 }
 

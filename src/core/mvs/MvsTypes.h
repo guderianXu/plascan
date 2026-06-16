@@ -79,6 +79,10 @@ struct FusionConfig
     bool  doInpaint          = true;   ///< 对小洞做 inpaint（填补）
     float inpaintRadiusFactor= 3.0f;
     int   inpaintRadius      = 5;      ///< inpaint 搜索半径（像素），加大→填补更多小洞
+    bool  enableLocalDepthOutlierFilter = true;  ///< 融合前剔除局部中值不一致的深度突刺
+    int   localDepthOutlierKernelSize = 3;       ///< 局部中值窗口，必须为奇数
+    float localDepthOutlierRelThresh = 0.25f;    ///< 与局部中值的相对深度差超过该值时视为离群
+    float maxLocalDepthOutlierRemovalRatio = 0.20f; ///< 单帧最多允许移除比例，超过则回退
 };
 
 // =============================================================================

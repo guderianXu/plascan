@@ -126,6 +126,14 @@ public:
                                         const cv::Mat &supportMask,
                                         int refIdx);
 
+    /// 融合前基于局部中值剔除孤立深度突刺，并同步清零对应置信度
+    static int removeLocalDepthOutliers(cv::Mat &depthMap,
+                                        cv::Mat &confidenceMap,
+                                        int kernelSize,
+                                        float relDepthThreshold,
+                                        float maxRemovalRatio,
+                                        int refIdx);
+
     /// CUDA PatchMatch 显存不足后的下一次重试配置
     static PatchMatchConfig nextCudaRetryPatchMatchConfig(const PatchMatchConfig &config,
                                                           int imageWidth,

@@ -120,6 +120,16 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("confMap.setTo(0, supportMask == 0)", scheduler)
         self.assertIn("稀疏支撑软约束", scheduler)
 
+    def test_fusion_frame_applies_local_depth_outlier_filter(self):
+        mvs_types = self.read("src/core/mvs/MvsTypes.h")
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("removeLocalDepthOutliers", scheduler)
+        self.assertIn("removeLocalDepthOutliers(filteredDepth", scheduler)
+        self.assertIn("enableLocalDepthOutlierFilter", mvs_types)
+        self.assertIn("localDepthOutlierRelThresh", mvs_types)
+        self.assertIn("maxLocalDepthOutlierRemovalRatio", mvs_types)
+
     def test_cuda_scheduler_defaults_to_one_frame_worker(self):
         config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
         self.assertIn("autoGpuFrameWorkers", config_cpp)

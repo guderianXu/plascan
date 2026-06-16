@@ -346,6 +346,41 @@ TEST(MvsPipelineTest, SparseSupportPriorKeepsDepthAndSoftensConfidence)
     EXPECT_LT(confidence.at<float>(0, 0), 0.8f);
 }
 
+TEST(MvsPipelineTest, LocalDepthOutlierFilterRemovesIsolatedDepthSpike)
+{
+    cv::Mat depth(7, 7, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(7, 7, CV_32F, cv::Scalar(0.9f));
+    depth.at<float>(3, 3) = 30.0f;
+
+    const int removed = xjw::mvs::DepthMapGenerator::removeLocalDepthOutliers(
+        depth, confidence, 3, 0.25f, 0.50f, 0);
+
+    EXPECT_EQ(removed, 1);
+    EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);
+    EXPECT_FLOAT_EQ(confidence.at<float>(3, 3), 0.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(3, 2), 10.0f);
+}
+
+TEST(MvsPipelineTest, LocalDepthOutlierFilterPreservesSmoothSlope)
+{
+    cv::Mat depth(7, 7, CV_32F);
+    cv::Mat confidence(7, 7, CV_32F, cv::Scalar(0.9f));
+    for (int y = 0; y < depth.rows; ++y)
+    {
+        for (int x = 0; x < depth.cols; ++x)
+        {
+            depth.at<float>(y, x) = 10.0f + 0.10f * static_cast<float>(x) + 0.05f * static_cast<float>(y);
+        }
+    }
+
+    const int beforeValid = cv::countNonZero(depth > 0);
+    const int removed = xjw::mvs::DepthMapGenerator::removeLocalDepthOutliers(
+        depth, confidence, 3, 0.25f, 0.50f, 0);
+
+    EXPECT_EQ(removed, 0);
+    EXPECT_EQ(cv::countNonZero(depth > 0), beforeValid);
+}
+
 TEST(MvsPipelineTest, ContentMaskSkipsNearlyFullAerialFrame)
 {
     cv::Mat gray(120, 200, CV_8U, cv::Scalar(122));
