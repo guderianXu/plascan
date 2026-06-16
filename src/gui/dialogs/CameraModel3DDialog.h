@@ -91,6 +91,10 @@ public:
     void setShowGizmo(bool show);
     /// 查询当前操控球是否可见
     bool isGizmoVisible() const { return m_showGizmo; }
+    /// 设置是否显示相机光心、视锥体和文件名标签
+    void setShowCameras(bool show);
+    /// 查询当前相机覆盖层是否可见
+    bool areCamerasVisible() const { return m_showCameras; }
 
 signals:
     void manualPruneModeChanged(bool enabled);
@@ -258,6 +262,7 @@ private:
     QVector3D  m_arcballPressVector;  // 按下时球面坐标向量
     QQuaternion m_viewRotAtPress;     // 按下时的视图旋转快照
     bool m_showGizmo = true;                       // 操控球是否可见（默认可见）
+    bool m_showCameras = true;                      // 相机光心、视锥体和标签是否可见（默认可见）
     bool m_manualPruneMode = false;
     bool m_manualSelecting = false;
     QPoint m_manualSelectStart;

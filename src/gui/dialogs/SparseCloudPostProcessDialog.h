@@ -9,6 +9,7 @@ class QComboBox;
 class QDoubleSpinBox;
 class QGroupBox;
 class QLabel;
+class QLineEdit;
 class QPushButton;
 class QSpinBox;
 
@@ -32,13 +33,21 @@ private:
     void onRun();
     void applyPendingSourceSelection();
     void updateStatsLabel();
+    void updateSourceModeUi();
+    void updateRunButtonState();
+    void browseExternalPly();
+    bool usingExternalPly() const;
     QJsonObject collectSettings() const;
 
     // 输入源
+    QComboBox  *m_sourceModeCombo = nullptr;
     QComboBox  *m_sourceCombo      = nullptr;
+    QLineEdit  *m_externalPathEdit = nullptr;
+    QPushButton *m_browseExternalButton = nullptr;
     QLabel     *m_statsLabel       = nullptr;
     QJsonArray  m_availableResults;
     int         m_pendingSourceIdx = -1;
+    bool        m_programmaticUpdate = false;
 
     // 点级滤波
     QCheckBox      *m_reprojCheck      = nullptr;

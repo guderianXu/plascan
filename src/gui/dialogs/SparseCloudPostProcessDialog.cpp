@@ -7,9 +7,14 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QDoubleSpinBox>
+#include <QDir>
+#include <QFileDialog>
 #include <QFileInfo>
+#include <QFormLayout>
 #include <QGroupBox>
+#include <QHBoxLayout>
 #include <QLabel>
+#include <QLineEdit>
 #include <QPushButton>
 #include <QSpinBox>
 
@@ -35,7 +40,36 @@ void SparseCloudPostProcessDialog::setupUi()
     Ui::SparseCloudPostProcessDialog ui;
     ui.setupUi(this);
 
+    m_sourceModeCombo = new QComboBox(this);
+    m_sourceModeCombo->setObjectName(QStringLiteral("m_sourceModeCombo"));
+    m_sourceModeCombo->addItem(tr("项目结果"), QStringLiteral("project_result"));
+    m_sourceModeCombo->addItem(tr("外部 PLY 点云"), QStringLiteral("external_ply"));
+
     m_sourceCombo = ui.m_sourceCombo;
+    auto *sourceLabel = findChild<QLabel *>(QStringLiteral("sourceLabel"));
+    if (sourceLabel)
+    {
+        sourceLabel->setText(tr("项目结果:"));
+    }
+
+    m_externalPathEdit = new QLineEdit(this);
+    m_externalPathEdit->setObjectName(QStringLiteral("m_externalPathEdit"));
+    m_externalPathEdit->setPlaceholderText(tr("选择 .ply 稀疏点云文件"));
+    m_externalPathEdit->setToolTip(tr("外部 PLY 不包含 BA 质量字段时，仅执行几何/空间类过滤。"));
+    m_browseExternalButton = new QPushButton(tr("浏览..."), this);
+    m_browseExternalButton->setObjectName(QStringLiteral("m_browseExternalButton"));
+    auto *externalPathWidget = new QWidget(this);
+    auto *externalPathLayout = new QHBoxLayout(externalPathWidget);
+    externalPathLayout->setContentsMargins(0, 0, 0, 0);
+    externalPathLayout->addWidget(m_externalPathEdit, 1);
+    externalPathLayout->addWidget(m_browseExternalButton);
+
+    if (auto *sourceForm = findChild<QFormLayout *>(QStringLiteral("sourceForm")))
+    {
+        sourceForm->insertRow(0, tr("输入来源:"), m_sourceModeCombo);
+        sourceForm->insertRow(2, tr("外部 PLY:"), externalPathWidget);
+    }
+
     m_statsLabel = ui.m_statsLabel;
     m_refineGroup = ui.m_refineGroup;
     m_spatialGroup = ui.m_spatialGroup;
@@ -86,7 +120,15 @@ void SparseCloudPostProcessDialog::setupUi()
 
     connect(m_sourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &SparseCloudPostProcessDialog::updateStatsLabel);
+    connect(m_sourceModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &SparseCloudPostProcessDialog::updateSourceModeUi);
+    connect(m_externalPathEdit, &QLineEdit::textChanged,
+            this, &SparseCloudPostProcessDialog::updateRunButtonState);
+    connect(m_browseExternalButton, &QPushButton::clicked,
+            this, &SparseCloudPostProcessDialog::browseExternalPly);
     connect(m_sourceCombo,       QOverload<int>::of(&QComboBox::currentIndexChanged),    this, changed);
+    connect(m_sourceModeCombo,   QOverload<int>::of(&QComboBox::currentIndexChanged),    this, changed);
+    connect(m_externalPathEdit,  &QLineEdit::textChanged,                                this, changed);
     connect(m_reprojCheck,       &QCheckBox::toggled,                                    this, changed);
     connect(m_reprojSpin,        QOverload<double>::of(&QDoubleSpinBox::valueChanged),   this, changed);
     connect(m_trackCheck,        &QCheckBox::toggled,                                    this, changed);
@@ -113,6 +155,8 @@ void SparseCloudPostProcessDialog::setupUi()
 
     connect(ui.buttonBox, &QDialogButtonBox::accepted, this, &SparseCloudPostProcessDialog::onRun);
     connect(ui.buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
+
+    updateSourceModeUi();
 }
 
 // ---------------------------------------------------------------------------
@@ -126,6 +170,7 @@ void SparseCloudPostProcessDialog::setAvailableSparseClouds(const QJsonArray &re
         return;
     }
 
+    m_programmaticUpdate = true;
     QJsonArray filteredResults;
     m_sourceCombo->clear();
     for (const QJsonValue &value : results)
@@ -143,20 +188,33 @@ void SparseCloudPostProcessDialog::setAvailableSparseClouds(const QJsonArray &re
     }
     m_availableResults = filteredResults;
 
-    if (m_runButton)
-    {
-        m_runButton->setEnabled(m_sourceCombo->count() > 0);
-    }
     applyPendingSourceSelection();
     if (m_sourceCombo->count() > 0 && m_sourceCombo->currentIndex() < 0)
     {
         m_sourceCombo->setCurrentIndex(m_sourceCombo->count() - 1);
     }
+    m_programmaticUpdate = false;
     updateStatsLabel();
+    updateRunButtonState();
 }
 
 void SparseCloudPostProcessDialog::applySettings(const QJsonObject &settings)
 {
+    m_programmaticUpdate = true;
+    const QString sourceKind = settings.value(QStringLiteral("sourceKind")).toString();
+    if (!sourceKind.isEmpty() && m_sourceModeCombo)
+    {
+        const int modeIndex = m_sourceModeCombo->findData(sourceKind);
+        if (modeIndex >= 0)
+        {
+            m_sourceModeCombo->setCurrentIndex(modeIndex);
+        }
+    }
+    if (m_externalPathEdit && settings.contains(QStringLiteral("externalSparseCloudPath")))
+    {
+        m_externalPathEdit->setText(settings.value(QStringLiteral("externalSparseCloudPath")).toString());
+    }
+
     m_pendingSourceIdx = settings.value(QStringLiteral("sourceAtIndex")).toInt(-1);
     applyPendingSourceSelection();
 
@@ -212,6 +270,9 @@ void SparseCloudPostProcessDialog::applySettings(const QJsonObject &settings)
         m_reprojStdMulSpin->setValue(settings.value(QStringLiteral("localReprojStdMul")).toDouble());
     if (settings.contains(QStringLiteral("deduplicationRadius")))
         m_dedupRadiusSpin->setValue(settings.value(QStringLiteral("deduplicationRadius")).toDouble());
+
+    m_programmaticUpdate = false;
+    updateSourceModeUi();
 }
 
 // ---------------------------------------------------------------------------
@@ -222,6 +283,15 @@ void SparseCloudPostProcessDialog::updateStatsLabel()
 {
     if (!m_statsLabel)
         return;
+    if (usingExternalPly())
+    {
+        const QString path = m_externalPathEdit ? m_externalPathEdit->text().trimmed() : QString();
+        m_statsLabel->setText(path.isEmpty()
+            ? tr("外部 PLY 将按纯几何点云处理，不使用 BA 重投影误差、轨迹长度和三角化角度。")
+            : tr("外部 PLY: %1").arg(path));
+        return;
+    }
+
     const int comboIdx = m_sourceCombo ? m_sourceCombo->currentIndex() : -1;
     if (comboIdx < 0 || comboIdx >= m_availableResults.size())
     {
@@ -229,7 +299,12 @@ void SparseCloudPostProcessDialog::updateStatsLabel()
         return;
     }
     const QJsonObject item = m_availableResults.at(comboIdx).toObject();
-    const int pts = item.value(QStringLiteral("sparse_point_count")).toInt(0);
+    int pts = item.value(QStringLiteral("sparse_point_count")).toInt(0);
+    if (pts <= 0)
+    {
+        pts = item.value(QStringLiteral("point_count")).toInt(
+            item.value(QStringLiteral("quality")).toObject().value(QStringLiteral("point_count")).toInt(0));
+    }
     const QString opName = item.value(QStringLiteral("operation_display_name")).toString();
     const QJsonObject summary = item.value(QStringLiteral("operation_summary")).toObject();
 
@@ -248,6 +323,73 @@ void SparseCloudPostProcessDialog::updateStatsLabel()
                          .arg(100.0 * rem / inp, 0, 'f', 1);
     }
     m_statsLabel->setText(parts.join(QStringLiteral("  |  ")));
+}
+
+bool SparseCloudPostProcessDialog::usingExternalPly() const
+{
+    return m_sourceModeCombo &&
+           m_sourceModeCombo->currentData().toString() == QLatin1String("external_ply");
+}
+
+void SparseCloudPostProcessDialog::updateRunButtonState()
+{
+    if (!m_runButton)
+    {
+        return;
+    }
+
+    if (usingExternalPly())
+    {
+        const QString path = m_externalPathEdit ? m_externalPathEdit->text().trimmed() : QString();
+        m_runButton->setEnabled(!path.isEmpty() && QFileInfo::exists(path));
+    }
+    else
+    {
+        m_runButton->setEnabled(m_sourceCombo && m_sourceCombo->count() > 0);
+    }
+}
+
+void SparseCloudPostProcessDialog::updateSourceModeUi()
+{
+    const bool external = usingExternalPly();
+    if (m_sourceCombo)
+    {
+        m_sourceCombo->setEnabled(!external);
+    }
+    if (m_externalPathEdit)
+    {
+        m_externalPathEdit->setEnabled(external);
+    }
+    if (m_browseExternalButton)
+    {
+        m_browseExternalButton->setEnabled(external);
+    }
+
+    const bool hasQualityMetrics = !external;
+    if (m_reprojCheck) m_reprojCheck->setEnabled(hasQualityMetrics);
+    if (m_reprojSpin) m_reprojSpin->setEnabled(hasQualityMetrics && m_reprojCheck->isChecked());
+    if (m_trackCheck) m_trackCheck->setEnabled(hasQualityMetrics);
+    if (m_trackSpin) m_trackSpin->setEnabled(hasQualityMetrics && m_trackCheck->isChecked());
+    if (m_angleCheck) m_angleCheck->setEnabled(hasQualityMetrics);
+    if (m_angleSpin) m_angleSpin->setEnabled(hasQualityMetrics && m_angleCheck->isChecked());
+    if (m_localReprojCheck) m_localReprojCheck->setEnabled(hasQualityMetrics);
+    if (m_reprojStdMulSpin) m_reprojStdMulSpin->setEnabled(hasQualityMetrics && m_localReprojCheck->isChecked());
+
+    updateStatsLabel();
+    updateRunButtonState();
+}
+
+void SparseCloudPostProcessDialog::browseExternalPly()
+{
+    const QString startDir = QFileInfo(m_externalPathEdit ? m_externalPathEdit->text() : QString()).absolutePath();
+    const QString path = QFileDialog::getOpenFileName(this,
+                                                      tr("选择外部 PLY 稀疏点云"),
+                                                      startDir,
+                                                      tr("PLY 点云 (*.ply);;所有文件 (*.*)"));
+    if (!path.isEmpty() && m_externalPathEdit)
+    {
+        m_externalPathEdit->setText(QDir::cleanPath(path));
+    }
 }
 
 void SparseCloudPostProcessDialog::applyPendingSourceSelection()
@@ -288,17 +430,25 @@ QJsonObject SparseCloudPostProcessDialog::collectSettings() const
     }
 
     QJsonObject s;
+    const bool external = usingExternalPly();
+    const bool hasQualityMetrics = !external;
+    s[QStringLiteral("sourceKind")] = external ? QStringLiteral("external_ply")
+                                               : QStringLiteral("project_result");
+    s[QStringLiteral("externalSparseCloudPath")] =
+        (external && m_externalPathEdit)
+            ? QDir::cleanPath(m_externalPathEdit->text().trimmed())
+            : QString();
     s[QStringLiteral("sourceAtIndex")] = (m_sourceCombo && m_sourceCombo->currentIndex() >= 0)
-                                             ? m_sourceCombo->currentData().toInt()
+                                             ? (external ? -1 : m_sourceCombo->currentData().toInt())
                                              : -1;
     s[QStringLiteral("mode")] = mode;
 
     // 点级滤波（所有后端通用）
-    s[QStringLiteral("filterByReprojError")]  = m_reprojCheck->isChecked();
+    s[QStringLiteral("filterByReprojError")]  = hasQualityMetrics && m_reprojCheck->isChecked();
     s[QStringLiteral("maxReprojError")]       = m_reprojSpin->value();
-    s[QStringLiteral("filterByTrackLen")]     = m_trackCheck->isChecked();
+    s[QStringLiteral("filterByTrackLen")]     = hasQualityMetrics && m_trackCheck->isChecked();
     s[QStringLiteral("minTrackLen")]          = m_trackSpin->value();
-    s[QStringLiteral("filterByTriAngle")]     = m_angleCheck->isChecked();
+    s[QStringLiteral("filterByTriAngle")]     = hasQualityMetrics && m_angleCheck->isChecked();
     s[QStringLiteral("minTriAngleDeg")]       = m_angleSpin->value();
     s[QStringLiteral("filterByStatistical")]  = m_statCheck->isChecked();
     s[QStringLiteral("statK")]                = m_statKSpin->value();
@@ -323,7 +473,7 @@ QJsonObject SparseCloudPostProcessDialog::collectSettings() const
     s[QStringLiteral("enableSpatialCleanup")] = enableSpatial;
     s[QStringLiteral("voxelSize")]            = m_voxelSizeSpin->value();
     s[QStringLiteral("minVoxelPoints")]       = m_minVoxelPtsSpin->value();
-    s[QStringLiteral("localReprojFilter")]    = m_localReprojCheck->isChecked();
+    s[QStringLiteral("localReprojFilter")]    = hasQualityMetrics && m_localReprojCheck->isChecked();
     s[QStringLiteral("localReprojStdMul")]    = m_reprojStdMulSpin->value();
     s[QStringLiteral("deduplicationRadius")]  = m_dedupRadiusSpin->value();
 
@@ -332,6 +482,10 @@ QJsonObject SparseCloudPostProcessDialog::collectSettings() const
 
 void SparseCloudPostProcessDialog::onAnyChanged()
 {
+    if (m_programmaticUpdate)
+    {
+        return;
+    }
     emit settingsChanged(collectSettings());
 }
 

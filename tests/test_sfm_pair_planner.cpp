@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "SfmMatchDiagnostics.h"
 #include "SfmPairPlanner.h"
 
 #include <QDir>
@@ -256,4 +257,36 @@ TEST(SfmPairPlannerTest, MissingCameraPathsKeepAllPairs)
     EXPECT_FALSE(plan.autoRestricted);
     EXPECT_TRUE(plan.allowedPairKeys.isEmpty());
     EXPECT_EQ(plan.allPairCount, 300);
+}
+
+TEST(SfmMatchDiagnosticsTest, SeparatesCandidateGraphFromActualMatchGraph)
+{
+    const QVector<int> imageIds = {0, 1, 2, 3, 4, 5, 6, 7};
+    const QVector<xjw::gui::SfmMatchDiagnosticPair> pairs = {
+        {0, 1, 120, true, false},
+        {1, 2, 115, true, false},
+        {2, 3, 98, true, false},
+        {3, 4, 0, true, true},
+        {4, 5, 101, true, false},
+        {5, 6, 99, true, false},
+        {6, 7, 104, true, false},
+        {1, 6, 0, true, true},
+    };
+
+    const xjw::gui::SfmMatchDiagnostics diagnostics =
+        xjw::gui::analyzeSfmMatchDiagnostics(imageIds, pairs);
+
+    EXPECT_EQ(diagnostics.totalPairs, 8);
+    EXPECT_EQ(diagnostics.actualMatchPairs, 6);
+    EXPECT_EQ(diagnostics.noMatchCacheSkippedPairs, 2);
+    EXPECT_EQ(diagnostics.pendingPairs, 0);
+    EXPECT_EQ(diagnostics.emptyLoadedPairs, 0);
+
+    EXPECT_EQ(diagnostics.candidateGraph.componentCount, 1);
+    EXPECT_EQ(diagnostics.candidateGraph.largestComponentSize, 8);
+    EXPECT_EQ(diagnostics.actualMatchGraph.componentCount, 2);
+    EXPECT_EQ(diagnostics.actualMatchGraph.largestComponentSize, 4);
+    ASSERT_GE(diagnostics.actualMatchGraph.componentSizes.size(), 2);
+    EXPECT_EQ(diagnostics.actualMatchGraph.componentSizes.at(0), 4);
+    EXPECT_EQ(diagnostics.actualMatchGraph.componentSizes.at(1), 4);
 }

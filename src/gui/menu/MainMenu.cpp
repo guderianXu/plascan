@@ -58,6 +58,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     {
         m_fileMenu = findNamedChild<QMenu>(m_mainWindow, "menuProject");
         m_recentMenu = findNamedChild<QMenu>(m_mainWindow, "menuRecentProjects");
+        auto *viewMenu = findNamedChild<QMenu>(m_mainWindow, "menuView");
         auto *windowMenu = findNamedChild<QMenu>(m_mainWindow, "menuWindow");
         auto *toolsMenu = findNamedChild<QMenu>(m_mainWindow, "menuTools");
 
@@ -72,6 +73,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_zoomOutAct = findNamedChild<QAction>(m_mainWindow, "actionZoomOut");
         m_resetViewAct = findNamedChild<QAction>(m_mainWindow, "actionResetView");
         m_toggleGizmoAct = findNamedChild<QAction>(m_mainWindow, "actionToggleGizmo");
+        m_toggleCamerasAct = findNamedChild<QAction>(m_mainWindow, "actionToggleCameras");
         m_featureVisualizationAct = findNamedChild<QAction>(m_mainWindow, "actionFeatureVisualization");
         m_toggleLogAct = findNamedChild<QAction>(m_mainWindow, "actionToggleLog");
         m_featureInfoAct = findNamedChild<QAction>(m_mainWindow, "actionFeatureInfo");
@@ -106,6 +108,35 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_viewMatchesAct = findNamedChild<QAction>(m_mainWindow, "actionViewMatches");
         m_viewWorkflowReportAct = findNamedChild<QAction>(m_mainWindow, "actionViewWorkflowReport");
         m_cameraConvertAct = findNamedChild<QAction>(m_mainWindow, "actionCameraConvert");
+        if (!m_toggleCamerasAct)
+        {
+            QObject *actionParent = viewMenu
+                ? static_cast<QObject *>(viewMenu)
+                : static_cast<QObject *>(m_mainWindow);
+            m_toggleCamerasAct = new QAction(tr("显示相机"), actionParent);
+            m_toggleCamerasAct->setObjectName(QStringLiteral("actionToggleCameras"));
+            m_toggleCamerasAct->setCheckable(true);
+            m_toggleCamerasAct->setChecked(true);
+            m_toggleCamerasAct->setToolTip(tr("显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签"));
+            if (viewMenu)
+            {
+                QAction *before = m_featureVisualizationAct ? m_featureVisualizationAct : nullptr;
+                if (before)
+                {
+                    viewMenu->insertAction(before, m_toggleCamerasAct);
+                }
+                else
+                {
+                    viewMenu->addAction(m_toggleCamerasAct);
+                }
+            }
+        }
+        else
+        {
+            m_toggleCamerasAct->setCheckable(true);
+            m_toggleCamerasAct->setChecked(true);
+            m_toggleCamerasAct->setToolTip(tr("显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签"));
+        }
         if (!m_cameraConvertAct)
         {
             QObject *actionParent = toolsMenu
@@ -220,6 +251,12 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     m_toggleGizmoAct->setChecked(true);  // 默认显示
     m_toggleGizmoAct->setToolTip(tr("显示或隐藏 3D 视图中的旋转操控球"));
     viewMenu->addAction(m_toggleGizmoAct);
+    m_toggleCamerasAct = new QAction(tr("显示相机"), viewMenu);
+    m_toggleCamerasAct->setObjectName(QStringLiteral("actionToggleCameras"));
+    m_toggleCamerasAct->setCheckable(true);
+    m_toggleCamerasAct->setChecked(true);
+    m_toggleCamerasAct->setToolTip(tr("显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签"));
+    viewMenu->addAction(m_toggleCamerasAct);
     viewMenu->addSeparator();
     // 特征点可视化设置对话框入口
     m_featureVisualizationAct = viewMenu->addAction(tr("特征点 可视化设置..."));
@@ -426,6 +463,7 @@ QAction *MainMenu::zoomInAction() const    { return m_zoomInAct; }
 QAction *MainMenu::zoomOutAction() const   { return m_zoomOutAct; }
 QAction *MainMenu::resetViewAction() const { return m_resetViewAct; }
 QAction *MainMenu::toggleGizmoAction() const { return m_toggleGizmoAct; }
+QAction *MainMenu::toggleCamerasAction() const { return m_toggleCamerasAct; }
 
 QAction *MainMenu::addPhotoAction() const       { return m_addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return m_addFolderAct; }

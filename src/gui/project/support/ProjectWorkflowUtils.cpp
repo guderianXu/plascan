@@ -4,15 +4,114 @@
 #include "project/SparseResultQuality.h"
 #include "TerrainPipeline.h"
 
+#include <plapoint/io/ply_io.h>
+
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonDocument>
 
+#include <cstdint>
+#include <exception>
+#include <utility>
+
 namespace xjw::gui::project {
 
 namespace {
+
+std::uint8_t colorByteFromJson(const QJsonValue &value)
+{
+    const int channel = value.toInt(255);
+    if (channel < 0)
+    {
+        return 0;
+    }
+    if (channel > 255)
+    {
+        return 255;
+    }
+    return static_cast<std::uint8_t>(channel);
+}
+
+bool applyColorArray(const QJsonArray &array,
+                     xjw::SparsePointCloudPoint *point)
+{
+    if (!point || array.size() < 3)
+    {
+        return false;
+    }
+
+    point->hasColor = true;
+    point->red = colorByteFromJson(array.at(0));
+    point->green = colorByteFromJson(array.at(1));
+    point->blue = colorByteFromJson(array.at(2));
+    return true;
+}
+
+bool hasAnyPointColor(const std::vector<xjw::SparsePointCloudPoint> &points)
+{
+    for (const xjw::SparsePointCloudPoint &point : points)
+    {
+        if (point.hasColor)
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+void copyColorsFromPlyCloud(const plapoint::PointCloud<float, plamatrix::Device::CPU> &cloud,
+                            std::vector<xjw::SparsePointCloudPoint> *points)
+{
+    if (!points || !cloud.hasColors() || cloud.size() != points->size())
+    {
+        return;
+    }
+
+    const auto *colors = cloud.colors();
+    if (!colors)
+    {
+        return;
+    }
+
+    for (std::size_t i = 0; i < points->size(); ++i)
+    {
+        xjw::SparsePointCloudPoint &point = (*points)[i];
+        if (point.hasColor)
+        {
+            continue;
+        }
+
+        const auto row = static_cast<plamatrix::Index>(i);
+        point.hasColor = true;
+        point.red = colors->getValue(row, 0);
+        point.green = colors->getValue(row, 1);
+        point.blue = colors->getValue(row, 2);
+    }
+}
+
+void copyColorsFromSourcePly(const QString &path,
+                             std::vector<xjw::SparsePointCloudPoint> *points)
+{
+    if (!points || points->empty() || path.isEmpty() || !QFileInfo::exists(path))
+    {
+        return;
+    }
+
+    try
+    {
+        const auto cloud = plapoint::io::readPly<float>(path.toStdString());
+        if (cloud)
+        {
+            copyColorsFromPlyCloud(*cloud, points);
+        }
+    }
+    catch (const std::exception &)
+    {
+        // 颜色补全是向后兼容路径；sidecar 本身仍可独立驱动后处理。
+    }
+}
 
 bool loadJsonObjectFile(const QString &path,
                         QJsonObject *object,
@@ -73,9 +172,162 @@ std::vector<xjw::SparsePointCloudPoint> sparsePointsFromJson(const QJsonArray &p
             pointObj.value(QStringLiteral("rms_after")).toDouble());
         point.minTriAngleDeg = pointObj.value(QStringLiteral("min_tri_angle_deg")).toDouble();
         point.trackLen = pointObj.value(QStringLiteral("track_len")).toInt(0);
+        if (!applyColorArray(pointObj.value(QStringLiteral("color_rgb")).toArray(), &point))
+        {
+            if (!applyColorArray(pointObj.value(QStringLiteral("rgb")).toArray(), &point))
+            {
+                applyColorArray(pointObj.value(QStringLiteral("color")).toArray(), &point);
+            }
+        }
         points.push_back(point);
     }
     return points;
+}
+
+bool isExternalPlySource(const SparsePointContext &context,
+                         const QJsonObject &settings)
+{
+    const QString sourceKind = settings.value(QStringLiteral("sourceKind")).toString();
+    if (sourceKind == QLatin1String("external_ply"))
+    {
+        return true;
+    }
+    if (sourceKind == QLatin1String("project_result"))
+    {
+        return false;
+    }
+
+    const QString externalPath =
+        settings.value(QStringLiteral("externalSparseCloudPath")).toString().trimmed();
+    return !externalPath.isEmpty() ||
+           (context.sidecarPath.isEmpty() && !context.sparseCloudPath.isEmpty());
+}
+
+QString externalPlySourcePath(const SparsePointContext &context,
+                              const QJsonObject &settings)
+{
+    QString path = settings.value(QStringLiteral("externalSparseCloudPath")).toString().trimmed();
+    if (path.isEmpty())
+    {
+        path = context.sparseCloudPath;
+    }
+    return QDir::cleanPath(path);
+}
+
+bool loadSparsePointsFromPly(const QString &path,
+                             std::vector<xjw::SparsePointCloudPoint> *points,
+                             QString *errorMessage)
+{
+    if (!points)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("内部错误：缺少点云输出对象");
+        }
+        return false;
+    }
+    if (path.isEmpty() || !QFileInfo::exists(path))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("外部 PLY 点云不存在: %1").arg(path);
+        }
+        return false;
+    }
+
+    try
+    {
+        const auto cloud = plapoint::io::readPly<float>(path.toStdString());
+        if (!cloud || cloud->size() == 0)
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("外部 PLY 点云为空: %1").arg(path);
+            }
+            return false;
+        }
+
+        points->clear();
+        points->reserve(cloud->size());
+        const auto &matrix = cloud->points();
+        const bool hasColors = cloud->hasColors() && cloud->colors();
+        for (std::size_t i = 0; i < cloud->size(); ++i)
+        {
+            const auto row = static_cast<plamatrix::Index>(i);
+            xjw::SparsePointCloudPoint point;
+            point.x = matrix.getValue(row, 0);
+            point.y = matrix.getValue(row, 1);
+            point.z = matrix.getValue(row, 2);
+            point.rmsReprojPx = 0.0;
+            point.minTriAngleDeg = 0.0;
+            point.trackLen = 0;
+            if (hasColors)
+            {
+                const auto *colors = cloud->colors();
+                point.hasColor = true;
+                point.red = colors->getValue(row, 0);
+                point.green = colors->getValue(row, 1);
+                point.blue = colors->getValue(row, 2);
+            }
+            points->push_back(point);
+        }
+        return true;
+    }
+    catch (const std::exception &ex)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("读取外部 PLY 点云失败: %1 (%2)")
+                                .arg(path, QString::fromStdString(ex.what()));
+        }
+        return false;
+    }
+}
+
+bool loadSparsePointSource(const SparsePointContext &context,
+                           const QJsonObject &settings,
+                           QJsonObject *sourceRoot,
+                           std::vector<xjw::SparsePointCloudPoint> *points,
+                           QString *errorMessage)
+{
+    if (!sourceRoot || !points)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("内部错误：缺少稀疏点输入对象");
+        }
+        return false;
+    }
+
+    if (isExternalPlySource(context, settings))
+    {
+        const QString path = externalPlySourcePath(context, settings);
+        if (!loadSparsePointsFromPly(path, points, errorMessage))
+        {
+            return false;
+        }
+
+        QJsonObject root;
+        root[QStringLiteral("source_kind")] = QStringLiteral("external_ply");
+        root[QStringLiteral("source_ply")] = path;
+        root[QStringLiteral("quality_metrics_available")] = false;
+        root[QStringLiteral("point_count")] = static_cast<int>(points->size());
+        *sourceRoot = root;
+        return true;
+    }
+
+    if (!loadJsonObjectFile(context.sidecarPath, sourceRoot, errorMessage))
+    {
+        return false;
+    }
+
+    *points = sparsePointsFromJson(sourceRoot->value(QStringLiteral("points")).toArray());
+    copyColorsFromSourcePly(context.sparseCloudPath, points);
+    if (!sourceRoot->contains(QStringLiteral("quality_metrics_available")))
+    {
+        (*sourceRoot)[QStringLiteral("quality_metrics_available")] = true;
+    }
+    return true;
 }
 
 QJsonArray sparsePointsToJson(const std::vector<xjw::SparsePointCloudPoint> &points)
@@ -92,6 +344,14 @@ QJsonArray sparsePointsToJson(const std::vector<xjw::SparsePointCloudPoint> &poi
         object[QStringLiteral("rms_reproj_px")] = point.rmsReprojPx;
         object[QStringLiteral("min_tri_angle_deg")] = point.minTriAngleDeg;
         object[QStringLiteral("track_len")] = point.trackLen;
+        if (point.hasColor)
+        {
+            object[QStringLiteral("color_rgb")] = QJsonArray{
+                static_cast<int>(point.red),
+                static_cast<int>(point.green),
+                static_cast<int>(point.blue)
+            };
+        }
         array.append(object);
     }
     return array;
@@ -101,37 +361,44 @@ bool writeSparsePointCloudPly(const QString &path,
                               const std::vector<xjw::SparsePointCloudPoint> &points,
                               QString *errorMessage = nullptr)
 {
-    QFile file(path);
-    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    try
+    {
+        using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> matrix(points.size(), 3);
+        const bool writeColors = hasAnyPointColor(points);
+        plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(points.size(), 3);
+        for (std::size_t i = 0; i < points.size(); ++i)
+        {
+            const auto row = static_cast<plamatrix::Index>(i);
+            const xjw::SparsePointCloudPoint &point = points[i];
+            matrix(row, 0) = static_cast<float>(point.x);
+            matrix(row, 1) = static_cast<float>(point.y);
+            matrix(row, 2) = static_cast<float>(point.z);
+            if (writeColors)
+            {
+                colors(row, 0) = point.hasColor ? point.red : 255;
+                colors(row, 1) = point.hasColor ? point.green : 255;
+                colors(row, 2) = point.hasColor ? point.blue : 255;
+            }
+        }
+
+        PlaCloud cloud(std::move(matrix));
+        if (writeColors)
+        {
+            cloud.setColors(std::move(colors));
+        }
+        plapoint::io::writePly<float>(path.toStdString(), cloud, plapoint::io::PlyFormat::ASCII);
+        return true;
+    }
+    catch (const std::exception &ex)
     {
         if (errorMessage)
         {
-            *errorMessage = QStringLiteral("无法写入稀疏点云文件: %1").arg(path);
+            *errorMessage = QStringLiteral("无法写入稀疏点云文件: %1 (%2)")
+                                .arg(path, QString::fromStdString(ex.what()));
         }
         return false;
     }
-
-    QByteArray header;
-    header += "ply\n";
-    header += "format ascii 1.0\n";
-    header += "comment generated by plascan sparse point processor\n";
-    header += QStringLiteral("element vertex %1\n").arg(points.size()).toUtf8();
-    header += "property float x\n";
-    header += "property float y\n";
-    header += "property float z\n";
-    header += "end_header\n";
-    file.write(header);
-
-    for (const xjw::SparsePointCloudPoint &point : points)
-    {
-        file.write(QStringLiteral("%1 %2 %3\n")
-                       .arg(point.x, 0, 'f', 6)
-                       .arg(point.y, 0, 'f', 6)
-                       .arg(point.z, 0, 'f', 6)
-                       .toUtf8());
-    }
-    file.close();
-    return true;
 }
 
 QJsonObject makeSparsePointSidecar(QJsonObject sourceRoot,
@@ -412,12 +679,11 @@ bool runSparsePointOutlierRemoval(const SparsePointContext &context,
     }
 
     QJsonObject sourceRoot;
-    if (!loadJsonObjectFile(context.sidecarPath, &sourceRoot, errorMessage))
+    std::vector<xjw::SparsePointCloudPoint> points;
+    if (!loadSparsePointSource(context, settings, &sourceRoot, &points, errorMessage))
     {
         return false;
     }
-
-    std::vector<xjw::SparsePointCloudPoint> points = sparsePointsFromJson(sourceRoot.value(QStringLiteral("points")).toArray());
     if (points.empty())
     {
         if (errorMessage)
@@ -428,15 +694,20 @@ bool runSparsePointOutlierRemoval(const SparsePointContext &context,
     }
 
     const int inputCount = static_cast<int>(points.size());
+    const bool qualityMetricsAvailable =
+        sourceRoot.value(QStringLiteral("quality_metrics_available")).toBool(true);
     QJsonObject summary;
     summary[QStringLiteral("input_points")] = inputCount;
 
     xjw::SparsePointCloudFilterOptions options;
-    options.filterByReprojError = settings.value(QStringLiteral("filterByReprojError")).toBool();
+    options.filterByReprojError = qualityMetricsAvailable &&
+                                  settings.value(QStringLiteral("filterByReprojError")).toBool();
     options.maxReprojError = settings.value(QStringLiteral("maxReprojError")).toDouble(2.5);
-    options.filterByTrackLen = settings.value(QStringLiteral("filterByTrackLen")).toBool();
+    options.filterByTrackLen = qualityMetricsAvailable &&
+                               settings.value(QStringLiteral("filterByTrackLen")).toBool();
     options.minTrackLen = settings.value(QStringLiteral("minTrackLen")).toInt(3);
-    options.filterByTriAngle = settings.value(QStringLiteral("filterByTriAngle")).toBool();
+    options.filterByTriAngle = qualityMetricsAvailable &&
+                               settings.value(QStringLiteral("filterByTriAngle")).toBool();
     options.minTriAngleDeg = settings.value(QStringLiteral("minTriAngleDeg")).toDouble(2.0);
     options.filterByStatistical = settings.value(QStringLiteral("filterByStatistical")).toBool();
     options.statK = settings.value(QStringLiteral("statK")).toInt(16);
@@ -500,6 +771,11 @@ bool runSparsePointOutlierRemoval(const SparsePointContext &context,
     result->extraRecord[QStringLiteral("source")] = QStringLiteral("sparse_outlier_removal");
     result->extraRecord[QStringLiteral("operation")] = QStringLiteral("outlier_removal");
     result->extraRecord[QStringLiteral("source_result_index")] = context.sourceResultIndex;
+    if (sourceRoot.value(QStringLiteral("source_kind")).toString() == QLatin1String("external_ply"))
+    {
+        result->extraRecord[QStringLiteral("source_ply")] =
+            sourceRoot.value(QStringLiteral("source_ply")).toString();
+    }
     result->extraRecord[QStringLiteral("operation_settings")] = settings;
     result->extraRecord[QStringLiteral("operation_summary")] = summary;
     return true;
@@ -521,13 +797,11 @@ bool runSparsePointLocalOptim(const SparsePointContext &context,
     }
 
     QJsonObject sourceRoot;
-    if (!loadJsonObjectFile(context.sidecarPath, &sourceRoot, errorMessage))
+    std::vector<xjw::SparsePointCloudPoint> points;
+    if (!loadSparsePointSource(context, settings, &sourceRoot, &points, errorMessage))
     {
         return false;
     }
-
-    std::vector<xjw::SparsePointCloudPoint> points =
-        sparsePointsFromJson(sourceRoot.value(QStringLiteral("points")).toArray());
     if (points.empty())
     {
         if (errorMessage)
@@ -538,11 +812,14 @@ bool runSparsePointLocalOptim(const SparsePointContext &context,
     }
 
     const int inputCount = static_cast<int>(points.size());
+    const bool qualityMetricsAvailable =
+        sourceRoot.value(QStringLiteral("quality_metrics_available")).toBool(true);
 
     xjw::SparseCloudLocalOptimOptions options;
     options.voxelSize = settings.value(QStringLiteral("voxelSize")).toDouble(0.0);
     options.minVoxelPoints = settings.value(QStringLiteral("minVoxelPoints")).toInt(2);
-    options.localReprojFilter = settings.value(QStringLiteral("localReprojFilter")).toBool(true);
+    options.localReprojFilter = qualityMetricsAvailable &&
+                                settings.value(QStringLiteral("localReprojFilter")).toBool(true);
     options.localReprojStdMul = settings.value(QStringLiteral("localReprojStdMul")).toDouble(2.5);
     options.deduplicationRadius = settings.value(QStringLiteral("deduplicationRadius")).toDouble(-1.0);
 
@@ -598,6 +875,11 @@ bool runSparsePointLocalOptim(const SparsePointContext &context,
     result->extraRecord[QStringLiteral("source")] = QStringLiteral("sparse_spatial_cleanup");
     result->extraRecord[QStringLiteral("operation")] = QStringLiteral("spatial_cleanup");
     result->extraRecord[QStringLiteral("source_result_index")] = context.sourceResultIndex;
+    if (sourceRoot.value(QStringLiteral("source_kind")).toString() == QLatin1String("external_ply"))
+    {
+        result->extraRecord[QStringLiteral("source_ply")] =
+            sourceRoot.value(QStringLiteral("source_ply")).toString();
+    }
     result->extraRecord[QStringLiteral("operation_settings")] = settings;
     result->extraRecord[QStringLiteral("operation_summary")] = summary;
     return true;
@@ -619,13 +901,11 @@ bool runSparsePointRefine(const SparsePointContext &context,
     }
 
     QJsonObject sourceRoot;
-    if (!loadJsonObjectFile(context.sidecarPath, &sourceRoot, errorMessage))
+    std::vector<xjw::SparsePointCloudPoint> basePoints;
+    if (!loadSparsePointSource(context, settings, &sourceRoot, &basePoints, errorMessage))
     {
         return false;
     }
-
-    const std::vector<xjw::SparsePointCloudPoint> basePoints =
-        sparsePointsFromJson(sourceRoot.value(QStringLiteral("points")).toArray());
     if (basePoints.empty())
     {
         if (errorMessage)
@@ -634,13 +914,18 @@ bool runSparsePointRefine(const SparsePointContext &context,
         }
         return false;
     }
+    const bool qualityMetricsAvailable =
+        sourceRoot.value(QStringLiteral("quality_metrics_available")).toBool(true);
 
     xjw::SparsePointCloudOptimizeOptions options;
-    options.filterOptions.filterByReprojError = settings.value(QStringLiteral("filterByReprojError")).toBool(true);
+    options.filterOptions.filterByReprojError =
+        qualityMetricsAvailable && settings.value(QStringLiteral("filterByReprojError")).toBool(true);
     options.filterOptions.maxReprojError = settings.value(QStringLiteral("maxReprojError")).toDouble(4.0);
-    options.filterOptions.filterByTrackLen = settings.value(QStringLiteral("filterByTrackLen")).toBool(true);
+    options.filterOptions.filterByTrackLen =
+        qualityMetricsAvailable && settings.value(QStringLiteral("filterByTrackLen")).toBool(true);
     options.filterOptions.minTrackLen = settings.value(QStringLiteral("minTrackLen")).toInt(3);
-    options.filterOptions.filterByTriAngle = settings.value(QStringLiteral("filterByTriAngle")).toBool(true);
+    options.filterOptions.filterByTriAngle =
+        qualityMetricsAvailable && settings.value(QStringLiteral("filterByTriAngle")).toBool(true);
     options.filterOptions.minTriAngleDeg = settings.value(QStringLiteral("minTriAngleDeg")).toDouble(
         settings.value(QStringLiteral("minAngle")).toDouble(2.0));
     options.filterOptions.filterByStatistical = settings.value(QStringLiteral("filterByStatistical")).toBool(true);
@@ -659,7 +944,8 @@ bool runSparsePointRefine(const SparsePointContext &context,
     options.enableSpatialCleanup = settings.value(QStringLiteral("enableSpatialCleanup")).toBool(false);
     options.spatialCleanupOptions.voxelSize = settings.value(QStringLiteral("voxelSize")).toDouble(0.0);
     options.spatialCleanupOptions.minVoxelPoints = settings.value(QStringLiteral("minVoxelPoints")).toInt(2);
-    options.spatialCleanupOptions.localReprojFilter = settings.value(QStringLiteral("localReprojFilter")).toBool(true);
+    options.spatialCleanupOptions.localReprojFilter =
+        qualityMetricsAvailable && settings.value(QStringLiteral("localReprojFilter")).toBool(true);
     options.spatialCleanupOptions.localReprojStdMul = settings.value(QStringLiteral("localReprojStdMul")).toDouble(2.5);
     options.spatialCleanupOptions.deduplicationRadius = settings.value(QStringLiteral("deduplicationRadius")).toDouble(-1.0);
 
@@ -735,6 +1021,11 @@ bool runSparsePointRefine(const SparsePointContext &context,
     result->extraRecord[QStringLiteral("source")] = QStringLiteral("sparse_cloud_refine");
     result->extraRecord[QStringLiteral("operation")] = QStringLiteral("sparse_refine");
     result->extraRecord[QStringLiteral("source_result_index")] = context.sourceResultIndex;
+    if (sourceRoot.value(QStringLiteral("source_kind")).toString() == QLatin1String("external_ply"))
+    {
+        result->extraRecord[QStringLiteral("source_ply")] =
+            sourceRoot.value(QStringLiteral("source_ply")).toString();
+    }
     result->extraRecord[QStringLiteral("operation_settings")] = settings;
     result->extraRecord[QStringLiteral("operation_summary")] = summary;
     return true;
@@ -748,21 +1039,43 @@ QJsonArray summarizeAtResults(const QJsonObject &meta)
     {
         const QJsonObject at = atArray.at(i).toObject();
         const QJsonObject files = at.value(QStringLiteral("files")).toObject();
+        const QJsonObject quality = at.value(QStringLiteral("quality")).toObject();
+        int sparsePointCount = at.value(QStringLiteral("sparse_point_count")).toInt(0);
+        if (sparsePointCount <= 0)
+        {
+            sparsePointCount = at.value(QStringLiteral("point_count")).toInt(
+                quality.value(QStringLiteral("point_count")).toInt(0));
+        }
+
         QJsonObject item;
         item[QStringLiteral("index")] = i;
         item[QStringLiteral("created_at")] = at.value(QStringLiteral("created_at")).toString();
         item[QStringLiteral("output_dir")] = at.value(QStringLiteral("output_dir")).toString();
-        item[QStringLiteral("sparse_point_count")] = at.value(QStringLiteral("sparse_point_count")).toInt(0);
+        item[QStringLiteral("sparse_point_count")] = sparsePointCount;
+        item[QStringLiteral("point_count")] = sparsePointCount;
         const QJsonArray selImgs = at.value(QStringLiteral("selected_images")).toArray();
         item[QStringLiteral("image_count")] = selImgs.size();
         item[QStringLiteral("image0")] = selImgs.isEmpty() ? QString() : selImgs.first().toString();
         item[QStringLiteral("image1")] = selImgs.size() > 1 ? selImgs.last().toString() : QString();
         item[QStringLiteral("sparse_cloud_xyz")] = files.value(QStringLiteral("sparse_cloud_xyz")).toString();
+        item[QStringLiteral("sparse_cloud_points_json")] =
+            files.value(QStringLiteral("sparse_cloud_points_json")).toString();
         item[QStringLiteral("operation")] = at.value(QStringLiteral("operation")).toString(QStringLiteral("triangulation"));
         item[QStringLiteral("operation_display_name")] = at.value(QStringLiteral("operation_display_name")).toString(
             sparseOperationDisplayName(item.value(QStringLiteral("operation")).toString()));
         item[QStringLiteral("source_result_index")] = at.value(QStringLiteral("source_result_index")).toInt(-1);
         item[QStringLiteral("is_latest")] = (i == atArray.size() - 1);
+        if (!quality.isEmpty())
+        {
+            item[QStringLiteral("quality")] = quality;
+            for (auto it = quality.begin(); it != quality.end(); ++it)
+            {
+                if (!item.contains(it.key()))
+                {
+                    item[it.key()] = it.value();
+                }
+            }
+        }
         if (at.contains(QStringLiteral("operation_summary")))
         {
             item[QStringLiteral("operation_summary")] = at.value(QStringLiteral("operation_summary"));
@@ -771,9 +1084,9 @@ QJsonArray summarizeAtResults(const QJsonObject &meta)
         const QString opLabel = sparseOperationDisplayName(item.value(QStringLiteral("operation")).toString());
         const QString dirName = QFileInfo(item.value(QStringLiteral("output_dir")).toString()).fileName();
         QString displayName = QStringLiteral("#%1 %2").arg(i).arg(opLabel);
-        if (item.value(QStringLiteral("sparse_point_count")).toInt(0) > 0)
+        if (sparsePointCount > 0)
         {
-            displayName += QStringLiteral("  [%1 点]").arg(item.value(QStringLiteral("sparse_point_count")).toInt());
+            displayName += QStringLiteral("  [%1 点]").arg(sparsePointCount);
         }
         if (!dirName.isEmpty())
         {

@@ -64,6 +64,16 @@ struct SyntheticPoint {
     double x, y, z;
 };
 
+double centerDistance(const Camera &a, const Camera &b)
+{
+    const auto ca = a.cameraCenter();
+    const auto cb = b.cameraCenter();
+    const double dx = ca[0] - cb[0];
+    const double dy = ca[1] - cb[1];
+    const double dz = ca[2] - cb[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 /// 生成 N 个在两个相机前方的随机 3D 点
 std::vector<SyntheticPoint> generatePoints(int n, double cx, double cy, double cz,
                                            double spread, unsigned seed = 42)
@@ -322,7 +332,7 @@ TEST_F(SfmInitTest, LoadCameraFromTsaiFile)
     // 关键：不崩溃
 }
 
-TEST_F(SfmInitTest, KnownCameraPoseModeRegistersAllImagesAndPreservesPoses)
+TEST_F(SfmInitTest, KnownCameraPoseModeRegistersAllImagesAndRunsStableBA)
 {
     opts.useKnownCameraPoses = true;
     opts.triangulatorOptions.minTriAngle = 0.1;
@@ -360,15 +370,64 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRegistersAllImagesAndPreservesPoses)
     ASSERT_NE(result.reconstruction, nullptr);
     EXPECT_EQ(result.numRegisteredImages, 3);
     EXPECT_GT(result.numPoints3D, 50);
+    EXPECT_GT(result.baTracksTotal, 0);
+    EXPECT_GT(result.baTracksOptimized, 0);
 
     for (ImageId imageId = 0; imageId < 3; ++imageId)
     {
-        const auto expectedCenter = cameras[imageId].cameraCenter();
-        const auto actualCenter = result.reconstruction->camera(imageId).cameraCenter();
-        EXPECT_NEAR(actualCenter[0], expectedCenter[0], 1e-9);
-        EXPECT_NEAR(actualCenter[1], expectedCenter[1], 1e-9);
-        EXPECT_NEAR(actualCenter[2], expectedCenter[2], 1e-9);
+        EXPECT_LT(centerDistance(result.reconstruction->camera(imageId), cameras[imageId]), 1e-3);
     }
+}
+
+TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
+{
+    opts.useKnownCameraPoses = true;
+    opts.triangulatorOptions.minTriAngle = 0.1;
+    opts.triangulatorOptions.maxReprojError = 5.0;
+    opts.triangulatorOptions.continueMaxReprojError = 5.0;
+    opts.triangulatorOptions.completeMaxReprojError = 5.0;
+    opts.filterMaxReprojError = 5.0;
+    opts.filterMinTriAngle = 0.1;
+    opts.baOptions.maxIterations = 6;
+    opts.baOptions.maxPointIterations = 6;
+    opts.baOptions.maxCameraIterations = 6;
+    opts.baOptions.filterMaxReprojError = 5.0;
+
+    const std::vector<Camera> trueCameras = {
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+        makeCamera(4.0, 0.0, 0.0),
+    };
+    std::vector<Camera> inputCameras = trueCameras;
+    inputCameras[1] = makeCamera(2.18, 0.0, 0.0);
+
+    const auto points = generatePoints(120, 2.0, 0.0, 70.0, 1.5, 37);
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    std::vector<FeatureMatch> matches01;
+    std::vector<FeatureMatch> matches12;
+    std::vector<FeatureMatch> matches02;
+    buildKnownPoseTracks(trueCameras, points, keypoints, matches01, matches12, matches02);
+    ASSERT_GT(matches01.size(), 50u);
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "known_pose_ba_0.png", inputCameras[0], keypoints[0]);
+    sfm.addImageWithCamera(1, "known_pose_ba_1.png", inputCameras[1], keypoints[1]);
+    sfm.addImageWithCamera(2, "known_pose_ba_2.png", inputCameras[2], keypoints[2]);
+    sfm.addMatches(0, 1, matches01);
+    sfm.addMatches(1, 2, matches12);
+    sfm.addMatches(0, 2, matches02);
+
+    const auto result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    ASSERT_NE(result.reconstruction, nullptr);
+    EXPECT_GT(result.baTracksTotal, 0);
+    EXPECT_GT(result.baTracksOptimized, 0);
+    EXPECT_GT(result.baRmsBefore, result.baRmsAfter);
+
+    const Camera &refinedCamera = result.reconstruction->camera(1);
+    EXPECT_LT(centerDistance(refinedCamera, trueCameras[1]),
+              centerDistance(inputCameras[1], trueCameras[1]));
 }
 
 TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAllTwoViewOutputWhenMultiViewTracksExist)

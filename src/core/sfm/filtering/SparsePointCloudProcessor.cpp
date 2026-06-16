@@ -87,6 +87,25 @@ std::vector<NeighborList> buildKnnCache(const TreeAndCloud &tc, int k)
     return knnCache;
 }
 
+double medianValue(std::vector<double> values)
+{
+    if (values.empty())
+    {
+        return 0.0;
+    }
+
+    const auto mid = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2);
+    std::nth_element(values.begin(), mid, values.end());
+    double median = *mid;
+    if (values.size() % 2 == 0)
+    {
+        const auto lowerMid = values.begin() + static_cast<std::ptrdiff_t>(values.size() / 2 - 1);
+        std::nth_element(values.begin(), lowerMid, values.end());
+        median = 0.5 * (median + *lowerMid);
+    }
+    return median;
+}
+
 int filterByMaxReprojError(std::vector<SparsePointCloudPoint> *points,
                            double maxReprojError)
 {
@@ -184,20 +203,65 @@ std::vector<bool> computeStatisticalKeepMask(const std::vector<SparsePointCloudP
         return keep;
     }
 
-    auto cloud = buildPlaCloud(points);
-    std::vector<int> removed_indices;
-    plapoint::statisticalOutlierRemoval(
-        cloud, k, stdDevMul, processingDevice, &removed_indices);
-    for (int index : removed_indices)
+    (void)processingDevice;
+
+    const TreeAndCloud tc = buildTree(points);
+    const int actualK = std::min<int>(k, static_cast<int>(points.size()) - 1);
+    const std::vector<NeighborList> knnCache = buildKnnCache(tc, actualK);
+    std::vector<double> meanDistances;
+    meanDistances.reserve(points.size());
+    for (const NeighborList &neighbors : knnCache)
     {
-        if (index >= 0 && static_cast<std::size_t>(index) < keep.size())
+        if (neighbors.empty())
         {
-            keep[static_cast<std::size_t>(index)] = false;
+            meanDistances.push_back(0.0);
+            continue;
+        }
+
+        double sum = 0.0;
+        for (const Neighbor &neighbor : neighbors)
+        {
+            sum += std::sqrt(neighbor.distanceSquared);
+        }
+        meanDistances.push_back(sum / static_cast<double>(neighbors.size()));
+    }
+
+    const double medianDistance = medianValue(meanDistances);
+    std::vector<double> absDeviations;
+    absDeviations.reserve(meanDistances.size());
+    for (double distance : meanDistances)
+    {
+        absDeviations.push_back(std::abs(distance - medianDistance));
+    }
+
+    double robustScale = 1.4826 * medianValue(absDeviations);
+    if (robustScale <= 1e-12)
+    {
+        std::vector<double> positiveDeviations;
+        positiveDeviations.reserve(absDeviations.size());
+        for (double deviation : absDeviations)
+        {
+            if (deviation > 1e-12)
+            {
+                positiveDeviations.push_back(deviation);
+            }
+        }
+        robustScale = positiveDeviations.empty() ? 0.0 : 1.4826 * medianValue(positiveDeviations);
+    }
+
+    const double threshold = medianDistance + std::max(0.0, stdDevMul) * robustScale;
+    int removedCount = 0;
+    for (std::size_t i = 0; i < meanDistances.size(); ++i)
+    {
+        if (robustScale > 1e-12 && meanDistances[i] > threshold)
+        {
+            keep[i] = false;
+            ++removedCount;
         }
     }
     if (removed)
     {
-        *removed = static_cast<int>(removed_indices.size());
+        *removed = removedCount;
     }
 
     return keep;

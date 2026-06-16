@@ -117,6 +117,7 @@
     <addaction name="actionResetView"/>
     <addaction name="separator"/>
     <addaction name="actionToggleGizmo"/>
+    <addaction name="actionToggleCameras"/>
     <addaction name="separator"/>
     <addaction name="actionFeatureVisualization"/>
     <addaction name="separator"/>
@@ -320,6 +321,20 @@
    </property>
    <property name="toolTip">
     <string>显示或隐藏 3D 视图中的旋转操控球</string>
+   </property>
+  </action>
+  <action name="actionToggleCameras">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>显示相机</string>
+   </property>
+   <property name="toolTip">
+    <string>显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签</string>
    </property>
   </action>
   <action name="actionFeatureVisualization">

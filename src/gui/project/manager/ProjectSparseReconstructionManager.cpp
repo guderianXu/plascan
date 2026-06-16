@@ -13,6 +13,7 @@
 
 #include <QDateTime>
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QMessageBox>
 #include <QMetaObject>
@@ -228,15 +229,33 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
         return;
     }
 
-    const auto contextResult = resolveSparsePointContextResult(
-        m_owner->currentMeta(),
-        settings.value(QStringLiteral("sourceAtIndex")).toInt(-1));
-    if (!contextResult.status.ok)
+    SparsePointContext context;
+    if (settings.value(QStringLiteral("sourceKind")).toString() == QLatin1String("external_ply"))
     {
-        QMessageBox::warning(m_parentWidget, spec.title, contextResult.status.errorMessage);
-        return;
+        const QString path = QDir::cleanPath(
+            settings.value(QStringLiteral("externalSparseCloudPath")).toString().trimmed());
+        if (path.isEmpty() || !QFileInfo::exists(path))
+        {
+            QMessageBox::warning(m_parentWidget,
+                                 spec.title,
+                                 QStringLiteral("外部 PLY 点云不存在: %1").arg(path));
+            return;
+        }
+        context.sourceResultIndex = -1;
+        context.sparseCloudPath = path;
     }
-    const SparsePointContext context = contextResult.context;
+    else
+    {
+        const auto contextResult = resolveSparsePointContextResult(
+            m_owner->currentMeta(),
+            settings.value(QStringLiteral("sourceAtIndex")).toInt(-1));
+        if (!contextResult.status.ok)
+        {
+            QMessageBox::warning(m_parentWidget, spec.title, contextResult.status.errorMessage);
+            return;
+        }
+        context = contextResult.context;
+    }
 
     const QString assetsDir = ProjectIO::projectAssetsDir(m_owner->currentProjectPath());
     const QString outputDir = QDir(assetsDir).filePath(

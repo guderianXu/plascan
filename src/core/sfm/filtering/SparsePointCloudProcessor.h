@@ -2,6 +2,7 @@
 
 #include <plapoint/filters/preprocessing.h>
 
+#include <cstdint>
 #include <vector>
 
 namespace xjw 
@@ -15,6 +16,10 @@ struct SparsePointCloudPoint
     double rmsReprojPx = 0.0;
     double minTriAngleDeg = 0.0;
     int trackLen = 0;
+    bool hasColor = false;
+    std::uint8_t red = 255;
+    std::uint8_t green = 255;
+    std::uint8_t blue = 255;
 };
 
 struct SparsePointCloudFilterOptions 

@@ -23,6 +23,7 @@
 // ── 项目 / 服务头文件 ──────────────────────────────────────────────────────
 #include "SFMService.h"
 #include "SfmPairPlanner.h"
+#include "SfmMatchDiagnostics.h"
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "Logger.h"
@@ -1128,7 +1129,81 @@ struct PairMatchData
     ImageId idB = 0;
     std::vector<FeatureMatch> matches;
     bool loaded = false;
+    bool skippedByNoMatchCache = false;
 };
+
+QVector<int> makeSfmDiagnosticImageIds(const QVector<ImageId> &validIds)
+{
+    QVector<int> imageIds;
+    imageIds.reserve(validIds.size());
+    for (const ImageId id : validIds)
+    {
+        imageIds.append(static_cast<int>(id));
+    }
+    return imageIds;
+}
+
+QVector<SfmMatchDiagnosticPair> makeSfmDiagnosticPairs(const QVector<PairMatchData> &pairs)
+{
+    QVector<SfmMatchDiagnosticPair> diagnosticPairs;
+    diagnosticPairs.reserve(pairs.size());
+    for (const PairMatchData &pair : pairs)
+    {
+        SfmMatchDiagnosticPair diagnosticPair;
+        diagnosticPair.imageA = static_cast<int>(pair.idA);
+        diagnosticPair.imageB = static_cast<int>(pair.idB);
+        diagnosticPair.matchCount = static_cast<int>(pair.matches.size());
+        diagnosticPair.loaded = pair.loaded;
+        diagnosticPair.skippedByNoMatchCache = pair.skippedByNoMatchCache;
+        diagnosticPairs.append(diagnosticPair);
+    }
+    return diagnosticPairs;
+}
+
+QString formatSfmGraphSummary(const SfmMatchGraphStats &stats)
+{
+    return QStringLiteral("图像=%1, 边=%2, 分量=%3, 最大分量=%4, 孤立=%5, Top=%6")
+        .arg(stats.nodeCount)
+        .arg(stats.edgeCount)
+        .arg(stats.componentCount)
+        .arg(stats.largestComponentSize)
+        .arg(stats.isolatedNodeCount)
+        .arg(formatSfmComponentSizes(stats.componentSizes));
+}
+
+void logSfmMatchDiagnostics(const QString &label,
+                            const QVector<ImageId> &validIds,
+                            const QVector<PairMatchData> &pairs)
+{
+    const SfmMatchDiagnostics diagnostics =
+        analyzeSfmMatchDiagnostics(makeSfmDiagnosticImageIds(validIds), makeSfmDiagnosticPairs(pairs));
+
+    LOG_INFO(QStringLiteral("  %1配对诊断: 候选=%2, 实际有效匹配=%3, no_match无匹配=%4, 待生成=%5, 空匹配缓存=%6")
+        .arg(label)
+        .arg(diagnostics.totalPairs)
+        .arg(diagnostics.actualMatchPairs)
+        .arg(diagnostics.noMatchCacheSkippedPairs)
+        .arg(diagnostics.pendingPairs)
+        .arg(diagnostics.emptyLoadedPairs));
+    LOG_INFO(QStringLiteral("  %1候选图: %2")
+        .arg(label, formatSfmGraphSummary(diagnostics.candidateGraph)));
+    LOG_INFO(QStringLiteral("  %1实际匹配图: %2")
+        .arg(label, formatSfmGraphSummary(diagnostics.actualMatchGraph)));
+
+    if (diagnostics.actualMatchGraph.nodeCount > 0 &&
+        diagnostics.actualMatchGraph.componentCount > 1)
+    {
+        const double largestRatio =
+            100.0 * static_cast<double>(diagnostics.actualMatchGraph.largestComponentSize) /
+            static_cast<double>(diagnostics.actualMatchGraph.nodeCount);
+        LOG_WARN(QStringLiteral("  %1实际匹配图不连通: 最大分量 %2/%3 (%4%)；增量 SfM 只能从初始分量向外注册，"
+                                "请检查 no_match_pairs.json、匹配阈值或重叠配对结果")
+            .arg(label)
+            .arg(diagnostics.actualMatchGraph.largestComponentSize)
+            .arg(diagnostics.actualMatchGraph.nodeCount)
+            .arg(largestRatio, 0, 'f', 1));
+    }
+}
 
 bool resolveIndexedSidecarOrder(const QJsonObject &sidecar,
                                 const QString &imagePathA,
@@ -1600,6 +1675,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             }
             LOG_INFO(QStringLiteral("  已加载 no_match_pairs.json: %1 条无匹配记录")
                 .arg(noMatchSet.size() / 2));
+            if (noMatchFileMtime.isValid())
+            {
+                LOG_INFO(QStringLiteral("  no_match_pairs.json 修改时间: %1")
+                    .arg(noMatchFileMtime.toString(Qt::ISODateWithMs)));
+            }
         }
     }
 
@@ -2018,7 +2098,10 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                         QFileInfo(featureFilePaths[idB]).lastModified() > noMatchFileMtime)
                         featureNewer = true;
                     if (!featureNewer)
+                    {
                         pd.loaded = true;   // 已知无匹配且特征未更新，跳过
+                        pd.skippedByNoMatchCache = true;
+                    }
                 }
             }
 
@@ -2095,10 +2178,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     reportProgress(QStringLiteral("匹配候选对: %1 对，需生成 %2 对")
         .arg(allPairs.size())
         .arg(missingPairIndices.size()), 35);
-    LOG_INFO(QStringLiteral("  总配对: %1, 已有匹配: %2, 需生成: %3")
+    LOG_INFO(QStringLiteral("  总配对: %1, 已处理(含有效匹配/负缓存): %2, 需生成: %3")
         .arg(allPairs.size())
         .arg(allPairs.size() - missingPairIndices.size())
         .arg(missingPairIndices.size()));
+    logSfmMatchDiagnostics(QStringLiteral("预检查"), validIds, allPairs);
     if (metaFoundPathCount > 0)
     {
         LOG_INFO(QStringLiteral("  元数据命中: %1 对(含基名兜底 %2), 读取成功: %3 对")
@@ -2329,7 +2413,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                             fpr.imagePath1 = idToPath.value(idB);
                             result.failedPairs.append(fpr);
                         }
-                        // pd.loaded 保持 false，不写任何文件
+                        pd.loaded = true;
+                        pd.skippedByNoMatchCache = true;
                         continue;
                     }
 
@@ -2522,6 +2607,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         LOG_INFO(QStringLiteral("  自动补匹配已禁用，跳过 %1 对缺失配对").arg(missingPairIndices.size()));
     }
 
+    logSfmMatchDiagnostics(QStringLiteral("匹配完成"), validIds, allPairs);
+
     // 2b. 统计有效匹配
     int loadedMatches = 0;
     for (const auto &pd : allPairs) 
@@ -2568,6 +2655,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     sfmOpts.initMinNumInliers = presets.initMinNumInliers;
     sfmOpts.localBAInterval   = presets.localBAInterval;
     sfmOpts.globalBAInterval  = presets.globalBAInterval;
+    sfmOpts.baOptions.cancelFlag = opts.cancelFlag;
 
     // 根据精度等级调整过滤参数：高精度/最高精度更严格
     if (opts.quality >= 2) 
@@ -2635,7 +2723,32 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             }
         }
     }
-    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles;
+    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras;
+    if (sfmOpts.useKnownCameraPoses)
+    {
+        sfmOpts.baOptions.progressCallback =
+            [&reportProgress, &isCancelled](int currentIteration,
+                                            int maxIterations,
+                                            double avgRms,
+                                            int validPoints) -> bool
+            {
+                if (isCancelled())
+                {
+                    return false;
+                }
+
+                const int safeMaxIterations = std::max(1, maxIterations);
+                const int clampedIteration = std::max(0, std::min(currentIteration, safeMaxIterations));
+                const int pct = 80 + static_cast<int>(10.0 * clampedIteration / safeMaxIterations);
+                reportProgress(QStringLiteral("正在进行光束法平差... %1/%2 RMS=%3 有效点=%4")
+                                   .arg(currentIteration)
+                                   .arg(maxIterations)
+                                   .arg(avgRms, 0, 'f', 3)
+                                   .arg(validPoints),
+                               pct);
+                return true;
+            };
+    }
 
     IncrementalSfm sfm(sfmOpts);
 
@@ -2645,16 +2758,18 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             .arg(opts.cameraPaths.size()));
         if (hasCompleteCameraFiles)
         {
-            LOG_INFO(QStringLiteral("  使用 .tsai 已知外参模式：固定相机位姿并直接三角化"));
+            LOG_INFO(QStringLiteral("  使用 .tsai 已知外参初值模式：相机位姿参与全局 BA 微调"));
         }
         else
         {
-            LOG_WARN(QStringLiteral("  相机文件列表不完整，回退到增量 SfM 估计位姿"));
+            LOG_WARN(hasCompleteProjectMetaCameras
+                ? QStringLiteral("  相机文件列表不完整，将使用项目元数据已知外参模式")
+                : QStringLiteral("  相机文件列表不完整，回退到增量 SfM 估计位姿"));
         }
     } 
     if (hasCompleteProjectMetaCameras)
     {
-        LOG_INFO(QStringLiteral("  使用项目元数据相机初值：增量 SfM + BA，允许位姿调整 (%1/%2)")
+        LOG_INFO(QStringLiteral("  使用项目元数据已知外参初值模式：相机位姿参与全局 BA 微调 (%1/%2)")
             .arg(projectMetaKnownCameraCount)
             .arg(opts.images.size()));
     }

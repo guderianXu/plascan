@@ -94,6 +94,9 @@ public:
     /** @brief 返回"显示操控球"切换动作（可检查状态）。 */
     QAction *toggleGizmoAction() const;
 
+    /** @brief 返回"显示相机"切换动作（可检查状态）。 */
+    QAction *toggleCamerasAction() const;
+
     // ==== 工作流程菜单动作 ====
 
     /** @brief 返回"添加照片"动作。 */
@@ -206,6 +209,7 @@ private:
     QAction *m_zoomOutAct{};   ///< 缩小视图
     QAction *m_resetViewAct{}; ///< 重置视图到原始比例
     QAction *m_toggleGizmoAct{}; ///< 显示/隐藏操控球
+    QAction *m_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
     QAction *m_featureInfoAct{}; ///< 兴趣点信息面板开关
 
     // ---- 面板开关动作 ----

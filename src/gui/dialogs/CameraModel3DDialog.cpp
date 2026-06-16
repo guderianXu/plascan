@@ -133,6 +133,15 @@ void CameraSceneWidget::setShowGizmo(bool show)
     }
 }
 
+void CameraSceneWidget::setShowCameras(bool show)
+{
+    if (m_showCameras != show)
+    {
+        m_showCameras = show;
+        update();
+    }
+}
+
 // 取消未完成的加载（递增 generation 令旧回调自行失效）
 void CameraSceneWidget::cancelPendingLoad()
 {
@@ -1127,27 +1136,6 @@ void CameraSceneWidget::drawOverlay()
     QPainter painter(this);
     painter.setRenderHint(QPainter::Antialiasing, true);
 
-    const float frustumBase = cameraFrustumBase();
-    const int labelBudget = maxVisibleCameraLabels();
-    const int cameraCount = static_cast<int>(m_poses.size());
-    const bool drawAllCameraLabels = m_poses.size() <= maxVisibleCameraLabels();
-    const int cameraLabelStride = drawAllCameraLabels
-        ? 1
-        : qMax(1, static_cast<int>(std::ceil(double(cameraCount) / double(qMax(1, labelBudget)))));
-    const QColor frustumColor = cameraCount > 200
-        ? QColor(180, 130, 50, 105)
-        : QColor(180, 130, 50, 210);
-    const qreal frustumLineWidth = cameraCount > 200 ? 0.8 : 1.5;
-    auto drawLine3D = [&](const QVector3D &a, const QVector3D &b, const QPen &pen) {
-        bool okA = false;
-        bool okB = false;
-        const QPointF pa = projectToScreen(a, &okA);
-        const QPointF pb = projectToScreen(b, &okB);
-        if (!okA || !okB) return;
-        painter.setPen(pen);
-        painter.drawLine(pa, pb);
-    };
-
     const QPointF center2d = manipCenterScreen();
     const qreal radiusPx = manipRadiusPx();
 
@@ -1199,46 +1187,73 @@ void CameraSceneWidget::drawOverlay()
     drawGreatCircle(HoverAxis::Z, QColor(110, 170, 255, 52));
     } // end if (m_showGizmo)
 
-    if (m_poses.isEmpty()) {
-        painter.setPen(QColor(120, 120, 120));
-        painter.drawText(rect(), Qt::AlignCenter, tr("暂无相机参数，显示默认模型球"));
-    }
-
-    painter.setBrush(QColor(220, 100, 40));
-    painter.setPen(Qt::NoPen);
-    for (qsizetype poseIndex = 0; poseIndex < m_poses.size(); ++poseIndex) {
-        const CameraPose &pose = m_poses.at(poseIndex);
-        bool ok = false;
-        const QPointF pc = projectToScreen(pose.center, &ok);
-        if (!ok) continue;
-        painter.drawEllipse(pc, 4.5, 4.5);
-
-        const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
-        const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
-        const QVector3D forward(pose.rotation(0, 2), pose.rotation(1, 2), pose.rotation(2, 2));
-        const float base = frustumBase;
-        const QVector3D fc = pose.center + forward * (base * 2.2f);
-        const QVector3D p1 = fc + right * base + up * base;
-        const QVector3D p2 = fc - right * base + up * base;
-        const QVector3D p3 = fc - right * base - up * base;
-        const QVector3D p4 = fc + right * base - up * base;
-        const QPen frustumPen(frustumColor, frustumLineWidth);
-        drawLine3D(pose.center, p1, frustumPen);
-        drawLine3D(pose.center, p2, frustumPen);
-        drawLine3D(pose.center, p3, frustumPen);
-        drawLine3D(pose.center, p4, frustumPen);
-        drawLine3D(p1, p2, frustumPen);
-        drawLine3D(p2, p3, frustumPen);
-        drawLine3D(p3, p4, frustumPen);
-        drawLine3D(p4, p1, frustumPen);
-        const bool drawCameraLabel = drawAllCameraLabels
-            || (poseIndex == 0)
-            || (poseIndex == m_poses.size() - 1)
-            || (static_cast<int>(poseIndex) % cameraLabelStride == 0);
-        if (drawCameraLabel)
+    if (m_showCameras)
+    {
+        const float frustumBase = cameraFrustumBase();
+        const int labelBudget = maxVisibleCameraLabels();
+        const int cameraCount = static_cast<int>(m_poses.size());
+        const bool drawAllCameraLabels = m_poses.size() <= maxVisibleCameraLabels();
+        const int cameraLabelStride = drawAllCameraLabels
+            ? 1
+            : qMax(1, static_cast<int>(std::ceil(double(cameraCount) / double(qMax(1, labelBudget)))));
+        const QColor frustumColor = cameraCount > 200
+            ? QColor(180, 130, 50, 105)
+            : QColor(180, 130, 50, 210);
+        const qreal frustumLineWidth = cameraCount > 200 ? 0.8 : 1.5;
+        auto drawLine3D = [&](const QVector3D &a, const QVector3D &b, const QPen &pen)
         {
-            painter.setPen(drawAllCameraLabels ? QColor(60, 60, 60) : QColor(45, 45, 45, 170));
-            painter.drawText(pc + QPointF(7.0, -7.0), QFileInfo(pose.name).fileName());
+            bool okA = false;
+            bool okB = false;
+            const QPointF pa = projectToScreen(a, &okA);
+            const QPointF pb = projectToScreen(b, &okB);
+            if (!okA || !okB) return;
+            painter.setPen(pen);
+            painter.drawLine(pa, pb);
+        };
+
+        if (m_poses.isEmpty())
+        {
+            painter.setPen(QColor(120, 120, 120));
+            painter.drawText(rect(), Qt::AlignCenter, tr("暂无相机参数，显示默认模型球"));
+        }
+
+        painter.setBrush(QColor(220, 100, 40));
+        painter.setPen(Qt::NoPen);
+        for (qsizetype poseIndex = 0; poseIndex < m_poses.size(); ++poseIndex)
+        {
+            const CameraPose &pose = m_poses.at(poseIndex);
+            bool ok = false;
+            const QPointF pc = projectToScreen(pose.center, &ok);
+            if (!ok) continue;
+            painter.drawEllipse(pc, 4.5, 4.5);
+
+            const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
+            const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
+            const QVector3D forward(pose.rotation(0, 2), pose.rotation(1, 2), pose.rotation(2, 2));
+            const float base = frustumBase;
+            const QVector3D fc = pose.center + forward * (base * 2.2f);
+            const QVector3D p1 = fc + right * base + up * base;
+            const QVector3D p2 = fc - right * base + up * base;
+            const QVector3D p3 = fc - right * base - up * base;
+            const QVector3D p4 = fc + right * base - up * base;
+            const QPen frustumPen(frustumColor, frustumLineWidth);
+            drawLine3D(pose.center, p1, frustumPen);
+            drawLine3D(pose.center, p2, frustumPen);
+            drawLine3D(pose.center, p3, frustumPen);
+            drawLine3D(pose.center, p4, frustumPen);
+            drawLine3D(p1, p2, frustumPen);
+            drawLine3D(p2, p3, frustumPen);
+            drawLine3D(p3, p4, frustumPen);
+            drawLine3D(p4, p1, frustumPen);
+            const bool drawCameraLabel = drawAllCameraLabels
+                || (poseIndex == 0)
+                || (poseIndex == m_poses.size() - 1)
+                || (static_cast<int>(poseIndex) % cameraLabelStride == 0);
+            if (drawCameraLabel)
+            {
+                painter.setPen(drawAllCameraLabels ? QColor(60, 60, 60) : QColor(45, 45, 45, 170));
+                painter.drawText(pc + QPointF(7.0, -7.0), QFileInfo(pose.name).fileName());
+            }
         }
     }
 

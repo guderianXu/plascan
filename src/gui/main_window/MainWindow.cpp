@@ -231,6 +231,11 @@ void MainWindow::setupMenuConnections()
         connect(m_mainMenu->toggleGizmoAction(), &QAction::toggled,
                 m_workspaceCenter->modelView(), &CameraSceneWidget::setShowGizmo);
     }
+    if (m_mainMenu->toggleCamerasAction() && m_workspaceCenter && m_workspaceCenter->modelView())
+    {
+        connect(m_mainMenu->toggleCamerasAction(), &QAction::toggled,
+                m_workspaceCenter->modelView(), &CameraSceneWidget::setShowCameras);
+    }
 
     if (m_mainMenu->manualPointCloudPruneAction())
     {

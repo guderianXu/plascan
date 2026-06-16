@@ -272,8 +272,22 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
         return result;
     }
 
+    Logger::instance()->infof(
+        "[SFM] Incremental run started: images=%d, useKnownCameraPoses=%s, initMinMatches=%d, "
+        "initMinInliers=%d, initMinTriAngle=%.3f, pnpMinInliers=%d, pnpMaxReproj=%.3f",
+        totalImages,
+        _sfmOptions.useKnownCameraPoses ? "true" : "false",
+        _sfmOptions.initMinNumMatches,
+        _sfmOptions.initMinNumInliers,
+        _sfmOptions.initMinTriAngle,
+        _sfmOptions.pnpOptions.minNumInliers,
+        _sfmOptions.pnpOptions.maxReprojError);
+
     // ---- 步骤 0：构建对应关系图 ----
     _correspondenceGraph.buildCorrespondences();
+    Logger::instance()->infof("[SFM] Correspondence graph ready: images=%zu, imagePairs=%zu",
+                              _correspondenceGraph.numImages(),
+                              _correspondenceGraph.numImagePairs());
 
     if (!reportProgress(0, totalImages, "Building correspondence graph...", progressCb))
         return result;
@@ -339,6 +353,14 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
         ImageId nextId = selectNextImage();
         if (nextId == kInvalidImageId)
         {
+            Logger::instance()->warnf(
+                "[SFM] Registration stopped: no selectable next image (registered=%d/%d, points=%zu, "
+                "permanentlyFailed=%zu, minPnPInliers=%d)",
+                regCount,
+                totalImages,
+                _reconstruction->numPoints3D(),
+                _permanentlyFailedImages.size(),
+                _sfmOptions.pnpOptions.minNumInliers);
             break; // 无更多可注册图像
         }
 
@@ -346,6 +368,9 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
         {
             int &failCount = _registerFailCount[nextId];
             ++failCount;
+            Logger::instance()->warnf("[SFM] Image %u registration failed: %s",
+                                      nextId,
+                                      _lastErrorMessage.empty() ? "unknown error" : _lastErrorMessage.c_str());
             // 区分暂时失败（无足够 3D-2D 点）和永久失败（相机文件缺失等）
             // 超过 5 次仍无法注册视为永久失败，不再尝试
             const int kMaxRetries = 5;
@@ -641,11 +666,42 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     const int shortTrackFiltered = triangulator.filterShortTracks(_sfmOptions.filterMinTrackLen);
     triangulator.recomputeReprojErrors();
 
+    int baRetriangulated = 0;
+    int baCompletedObservations = 0;
+    int baFilteredPoints = 0;
+    int baShortTrackFiltered = 0;
+    if (_reconstruction->numRegisteredImages() >= 2 && _reconstruction->numPoints3D() > 0)
+    {
+        Logger::instance()->infof("[SFM] Known-pose global BA: tracks=%zu cameras=%zu",
+                                  _reconstruction->numPoints3D(),
+                                  _reconstruction->numRegisteredImages());
+        if (!reportProgress(totalImages, totalImages, "Running known-pose bundle adjustment...", progressCb))
+        {
+            result.summary = "Known camera pose reconstruction aborted before bundle adjustment";
+            return result;
+        }
+
+        runBundleAdjust(false);
+
+        Triangulator baTriangulator(*_reconstruction, _correspondenceGraph);
+        baRetriangulated = baTriangulator.retriangulatePoints(triangulationPolicy.triangulatorOptions.maxReprojError);
+        baCompletedObservations = baTriangulator.completeTracks(triangulationPolicy.triangulatorOptions);
+        baFilteredPoints = baTriangulator.filterPoints(_sfmOptions.filterMaxReprojError,
+                                                       triangulationPolicy.filterMinTriAngle);
+        baShortTrackFiltered = baTriangulator.filterShortTracks(_sfmOptions.filterMinTrackLen);
+        baTriangulator.recomputeReprojErrors();
+    }
+
     result.numRegisteredImages = static_cast<int>(_reconstruction->numRegisteredImages());
     result.numPoints3D = static_cast<int>(_reconstruction->numPoints3D());
     result.meanReprojError = _reconstruction->meanReprojError();
     result.reconstruction = _reconstruction;
     result.summary = _reconstruction->summary();
+    result.baRmsBefore = _lastGlobalBARmsBefore;
+    result.baRmsAfter = _lastGlobalBARmsAfter;
+    result.baTracksTotal = _lastGlobalBATracksTotal;
+    result.baTracksOptimized = _lastGlobalBATracksOptimized;
+    result.baTracksFiltered = _lastGlobalBATracksFiltered;
 
     int finalLongTrackCount = 0;
     int finalTwoViewTrackCount = 0;
@@ -690,8 +746,9 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
 
     Logger::instance()->infof(
         "[SFM] Known-pose reconstruction: registered=%d/%d created=%d continued=%d completed=%d "
-        "filtered=%d shortTrackFiltered=%d points=%d finalLongTracks=%d finalTwoViewTracks=%d "
-        "finalTwoViewRatio=%.4f",
+        "filtered=%d shortTrackFiltered=%d baTracks=%d baOptimized=%d baRms=%.4f->%.4f "
+        "baRetriangulated=%d baCompleted=%d baFiltered=%d baShortTrackFiltered=%d points=%d "
+        "finalLongTracks=%d finalTwoViewTracks=%d finalTwoViewRatio=%.4f",
         result.numRegisteredImages,
         totalImages,
         createdPoints,
@@ -699,6 +756,14 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
         completedObservations,
         filteredPoints,
         shortTrackFiltered,
+        result.baTracksTotal,
+        result.baTracksOptimized,
+        result.baRmsBefore,
+        result.baRmsAfter,
+        baRetriangulated,
+        baCompletedObservations,
+        baFilteredPoints,
+        baShortTrackFiltered,
         result.numPoints3D,
         finalLongTrackCount,
         finalTwoViewTrackCount,
@@ -1228,9 +1293,23 @@ ImageId IncrementalSfm::selectNextImage() const
     // 至少需要若干可见三维点才值得注册
     if (bestVisible < static_cast<size_t>(_sfmOptions.pnpOptions.minNumInliers))
     {
+        Logger::instance()->warnf(
+            "[SFM] selectNextImage rejected all candidates: bestId=%u, bestVisible=%zu, minPnPInliers=%d, "
+            "registered=%zu/%zu, points=%zu, permanentlyFailed=%zu",
+            bestId,
+            bestVisible,
+            _sfmOptions.pnpOptions.minNumInliers,
+            _reconstruction->numRegisteredImages(),
+            _reconstruction->numImages(),
+            _reconstruction->numPoints3D(),
+            _permanentlyFailedImages.size());
         return kInvalidImageId;
     }
 
+    Logger::instance()->infof("[SFM] selectNextImage: id=%u, visible3D=%zu, minPnPInliers=%d",
+                              bestId,
+                              bestVisible,
+                              _sfmOptions.pnpOptions.minNumInliers);
     return bestId;
 }
 
@@ -1244,6 +1323,7 @@ bool IncrementalSfm::registerImage(ImageId imageId)
     Camera cam;
     if (!getCamera(imageId, cam))
     {
+        _lastErrorMessage = "getCamera(" + std::to_string(imageId) + ") failed";
         return false;
     }
 
@@ -1290,14 +1370,35 @@ bool IncrementalSfm::registerImage(ImageId imageId)
     }
 
     if (static_cast<int>(worldPts.size()) < _sfmOptions.pnpOptions.minNumInliers)
+    {
+        std::ostringstream oss;
+        oss << "not enough 2D-3D observations for PnP: observations=" << worldPts.size()
+            << ", minPnPInliers=" << _sfmOptions.pnpOptions.minNumInliers
+            << ", connectedNeighbors=" << neighbors.size();
+        _lastErrorMessage = oss.str();
         return false;
+    }
 
     // PnP 求解
     auto pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, _sfmOptions.pnpOptions);
     if (!pnpResult.success)
     {
+        std::ostringstream oss;
+        oss << "PnP failed: observations=" << worldPts.size()
+            << ", inliers=" << pnpResult.numInliers
+            << ", inlierRatio=" << pnpResult.inlierRatio
+            << ", minPnPInliers=" << _sfmOptions.pnpOptions.minNumInliers
+            << ", minInlierRatio=" << _sfmOptions.pnpOptions.minInlierRatio
+            << ", maxReprojError=" << _sfmOptions.pnpOptions.maxReprojError;
+        _lastErrorMessage = oss.str();
         return false;
     }
+
+    Logger::instance()->infof("[SFM] Image %u PnP success: observations=%zu, inliers=%d, inlierRatio=%.3f",
+                              imageId,
+                              worldPts.size(),
+                              pnpResult.numInliers,
+                              pnpResult.inlierRatio);
 
     // 应用 PnP 结果更新相机外参
     cam.setPose(pnpResult.R, pnpResult.C);

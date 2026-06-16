@@ -180,6 +180,92 @@ void writeMinimalTsai(const QString &path, double fu, double cx)
     out << "R = 1 0 0 0 1 0 0 0 1\n";
 }
 
+void writeMinimalPointCloudPly(const QString &path,
+                               const std::vector<std::array<double, 3>> &points)
+{
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream out(&file);
+    out << "ply\n"
+        << "format ascii 1.0\n"
+        << "element vertex " << points.size() << "\n"
+        << "property float x\n"
+        << "property float y\n"
+        << "property float z\n"
+        << "end_header\n";
+    for (const auto &point : points)
+    {
+        out << QString::number(point[0], 'f', 6) << ' '
+            << QString::number(point[1], 'f', 6) << ' '
+            << QString::number(point[2], 'f', 6) << '\n';
+    }
+}
+
+void writeMinimalColoredPointCloudPly(const QString &path,
+                                      const std::vector<std::array<double, 3>> &points,
+                                      const std::vector<std::array<int, 3>> &colors)
+{
+    ASSERT_EQ(points.size(), colors.size());
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    QTextStream out(&file);
+    out << "ply\n"
+        << "format ascii 1.0\n"
+        << "element vertex " << points.size() << "\n"
+        << "property float x\n"
+        << "property float y\n"
+        << "property float z\n"
+        << "property uchar red\n"
+        << "property uchar green\n"
+        << "property uchar blue\n"
+        << "end_header\n";
+    for (std::size_t i = 0; i < points.size(); ++i)
+    {
+        const auto &point = points[i];
+        const auto &color = colors[i];
+        out << QString::number(point[0], 'f', 6) << ' '
+            << QString::number(point[1], 'f', 6) << ' '
+            << QString::number(point[2], 'f', 6) << ' '
+            << color[0] << ' '
+            << color[1] << ' '
+            << color[2] << '\n';
+    }
+}
+
+void writeMinimalSparseSidecar(const QString &path,
+                               const std::vector<int> &trackLens)
+{
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+
+    QJsonArray points;
+    for (int i = 0; i < static_cast<int>(trackLens.size()); ++i)
+    {
+        QJsonArray xyz;
+        xyz.append(static_cast<double>(i));
+        xyz.append(0.0);
+        xyz.append(0.0);
+
+        QJsonObject point;
+        point[QStringLiteral("point_xyz")] = xyz;
+        point[QStringLiteral("rms_reproj_px")] = 0.5;
+        point[QStringLiteral("min_tri_angle_deg")] = 3.0;
+        point[QStringLiteral("track_len")] = trackLens[static_cast<std::size_t>(i)];
+        points.append(point);
+    }
+
+    QJsonObject root;
+    root[QStringLiteral("quality_metrics_available")] = true;
+    root[QStringLiteral("point_count")] = static_cast<int>(trackLens.size());
+    root[QStringLiteral("points")] = points;
+
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write(QJsonDocument(root).toJson());
+    file.close();
+}
+
 TEST(ProjectCameraImportServiceTest, BatchImportRecordsActualTsaiSourceFileInCameraMeta)
 {
     QTemporaryDir tempDir;
@@ -750,6 +836,81 @@ TEST(SparseCloudPostProcessDialogTest, FiltersPreviewRecordsAndKeepsSettingsAlig
     EXPECT_TRUE(statsLabel->text().contains(QStringLiteral("稀疏云后处理")));
 }
 
+TEST(SparseCloudPostProcessDialogTest, AcceptsSummarizedFormalSfmRecordsUsingPointCount)
+{
+    const QJsonObject quality{
+        {QStringLiteral("result_kind"), xjw::gui::project::kSparseResultKindSfmSparseReconstruction},
+        {QStringLiteral("ba_applied"), true},
+        {QStringLiteral("camera_count"), 444},
+        {QStringLiteral("registered_image_count"), 444},
+        {QStringLiteral("input_image_count"), 444},
+        {QStringLiteral("point_count"), 588257},
+        {QStringLiteral("two_view_ratio"), 0.6851767169791435},
+        {QStringLiteral("median_track_len"), 3},
+        {QStringLiteral("mean_reproj_px"), 0.8},
+        {QStringLiteral("median_reproj_px"), 0.7}
+    };
+    const QJsonObject formalRecord{
+        {QStringLiteral("operation"), QStringLiteral("workflow_aerial_triangulation")},
+        {QStringLiteral("operation_display_name"), QStringLiteral("稀疏点云")},
+        {QStringLiteral("point_count"), 588257},
+        {QStringLiteral("camera_count"), 444},
+        {QStringLiteral("ba_applied"), true},
+        {QStringLiteral("quality"), quality},
+        {QStringLiteral("files"), QJsonObject{
+            {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("E:/tmp/sfm_sparse.ply")},
+            {QStringLiteral("sparse_cloud_points_json"), QStringLiteral("E:/tmp/sfm_sparse_points.json")}
+        }},
+        {QStringLiteral("selected_images"), QJsonArray{
+            QStringLiteral("image_0002.JPG"),
+            QStringLiteral("image_0445.JPG")
+        }}
+    };
+    const QJsonArray summary = xjw::gui::project::summarizeAtResults(
+        QJsonObject{{QStringLiteral("aerial_triangulation_results"), QJsonArray{formalRecord}}});
+    ASSERT_EQ(summary.size(), 1);
+    EXPECT_EQ(summary.at(0).toObject().value(QStringLiteral("sparse_point_count")).toInt(), 588257);
+    EXPECT_TRUE(xjw::gui::project::isProductionSparseResult(summary.at(0).toObject()));
+
+    SparseCloudPostProcessDialog dialog;
+    auto *sourceCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_sourceCombo"));
+    auto *statsLabel = dialog.findChild<QLabel *>(QStringLiteral("m_statsLabel"));
+    auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+    ASSERT_NE(sourceCombo, nullptr);
+    ASSERT_NE(statsLabel, nullptr);
+    ASSERT_NE(buttonBox, nullptr);
+    QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok);
+    ASSERT_NE(okButton, nullptr);
+
+    dialog.setAvailableSparseClouds(summary);
+
+    ASSERT_EQ(sourceCombo->count(), 1);
+    EXPECT_TRUE(okButton->isEnabled());
+    EXPECT_TRUE(statsLabel->text().contains(QStringLiteral("588257 个三维点")));
+    EXPECT_TRUE(statsLabel->text().contains(QStringLiteral("稀疏点云")));
+}
+
+TEST(SparseCloudPostProcessDialogTest, PopulatingSourcesDoesNotEmitSettingsChanged)
+{
+    const QJsonObject sfmQuality = xjw::gui::project::buildSparseQualityMetadata(
+        productionSparsePoints(),
+        3,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction);
+    const QJsonObject sfmRecord = sparseResultRecord(21,
+                                                     QStringLiteral("sfm-init"),
+                                                     QStringLiteral("workflow_aerial_triangulation"),
+                                                     QStringLiteral("空中三角测量"),
+                                                     420,
+                                                     sfmQuality);
+
+    SparseCloudPostProcessDialog dialog;
+    QSignalSpy settingsSpy(&dialog, &SparseCloudPostProcessDialog::settingsChanged);
+    dialog.setAvailableSparseClouds(QJsonArray{sfmRecord});
+
+    EXPECT_EQ(settingsSpy.count(), 0);
+}
+
 TEST(SparseCloudPostProcessDialogTest, DisablesRunWhenOnlyPreviewSparseInputsExist)
 {
     const QJsonObject previewQuality = xjw::gui::project::buildSparseQualityMetadata(
@@ -800,6 +961,202 @@ TEST(SparseCloudPostProcessDialogTest, DisablesRunWhenOnlyPreviewSparseInputsExi
     EXPECT_EQ(changedSettings.value(QStringLiteral("sourceAtIndex")).toInt(0), -1);
 }
 
+TEST(SparseCloudPostProcessDialogTest, EmitsExternalPlyInputSettingsAndDisablesQualityFilters)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString plyPath = QDir(tempDir.path()).filePath(QStringLiteral("external_sparse.ply"));
+    writeMinimalPointCloudPly(plyPath, {
+        {0.0, 0.0, 0.0},
+        {0.1, 0.0, 0.0},
+        {0.2, 0.0, 0.0}
+    });
+
+    SparseCloudPostProcessDialog dialog;
+    auto *sourceModeCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_sourceModeCombo"));
+    auto *externalPathEdit = dialog.findChild<QLineEdit *>(QStringLiteral("m_externalPathEdit"));
+    auto *buttonBox = dialog.findChild<QDialogButtonBox *>();
+    ASSERT_NE(sourceModeCombo, nullptr);
+    ASSERT_NE(externalPathEdit, nullptr);
+    ASSERT_NE(buttonBox, nullptr);
+    QPushButton *okButton = buttonBox->button(QDialogButtonBox::Ok);
+    ASSERT_NE(okButton, nullptr);
+
+    const int externalIndex = sourceModeCombo->findData(QStringLiteral("external_ply"));
+    ASSERT_GE(externalIndex, 0);
+    sourceModeCombo->setCurrentIndex(externalIndex);
+    externalPathEdit->setText(plyPath);
+
+    QJsonObject runSettings;
+    QObject::connect(&dialog,
+                     &SparseCloudPostProcessDialog::runRequested,
+                     [&runSettings](const QJsonObject &settings)
+                     {
+                         runSettings = settings;
+                     });
+    okButton->click();
+
+    EXPECT_EQ(runSettings.value(QStringLiteral("sourceKind")).toString(), QStringLiteral("external_ply"));
+    EXPECT_EQ(QDir::cleanPath(runSettings.value(QStringLiteral("externalSparseCloudPath")).toString()),
+              QDir::cleanPath(plyPath));
+    EXPECT_EQ(runSettings.value(QStringLiteral("sourceAtIndex")).toInt(0), -1);
+    EXPECT_FALSE(runSettings.value(QStringLiteral("filterByReprojError")).toBool(true));
+    EXPECT_FALSE(runSettings.value(QStringLiteral("filterByTrackLen")).toBool(true));
+    EXPECT_FALSE(runSettings.value(QStringLiteral("filterByTriAngle")).toBool(true));
+    EXPECT_FALSE(runSettings.value(QStringLiteral("localReprojFilter")).toBool(true));
+}
+
+TEST(SparsePointWorkflowUtilsTest, LocalOptimAcceptsExternalPlyWithoutSidecar)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString plyPath = QDir(tempDir.path()).filePath(QStringLiteral("external_sparse.ply"));
+    writeMinimalPointCloudPly(plyPath, {
+        {0.00, 0.0, 0.0},
+        {0.02, 0.0, 0.0},
+        {0.04, 0.0, 0.0},
+        {5.00, 5.0, 5.0}
+    });
+
+    xjw::gui::project::SparsePointContext context;
+    context.sparseCloudPath = plyPath;
+
+    QJsonObject settings;
+    settings[QStringLiteral("sourceKind")] = QStringLiteral("external_ply");
+    settings[QStringLiteral("externalSparseCloudPath")] = plyPath;
+    settings[QStringLiteral("voxelSize")] = 0.2;
+    settings[QStringLiteral("minVoxelPoints")] = 2;
+    settings[QStringLiteral("localReprojFilter")] = true;
+
+    xjw::gui::project::SparsePointOperationResult result;
+    QString errorMessage;
+    const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out"));
+    EXPECT_TRUE(xjw::gui::project::runSparsePointLocalOptim(context,
+                                                           settings,
+                                                           outputDir,
+                                                           &result,
+                                                           &errorMessage))
+        << errorMessage.toStdString();
+
+    EXPECT_EQ(result.inputCount, 4);
+    EXPECT_EQ(result.outputCount, 3);
+    EXPECT_TRUE(QFileInfo::exists(result.sparseCloudPath));
+    EXPECT_TRUE(QFileInfo::exists(result.sidecarPath));
+
+    QFile sidecarFile(result.sidecarPath);
+    ASSERT_TRUE(sidecarFile.open(QIODevice::ReadOnly));
+    const QJsonObject sidecar = QJsonDocument::fromJson(sidecarFile.readAll()).object();
+    EXPECT_EQ(sidecar.value(QStringLiteral("point_count")).toInt(), 3);
+    EXPECT_EQ(QDir::cleanPath(sidecar.value(QStringLiteral("source_ply")).toString()),
+              QDir::cleanPath(plyPath));
+    EXPECT_FALSE(sidecar.value(QStringLiteral("quality_metrics_available")).toBool(true));
+}
+
+TEST(SparsePointWorkflowUtilsTest, ProjectResultModeUsesSidecarWhenExternalPathSettingIsEmpty)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sourcePlyPath = QDir(tempDir.path()).filePath(QStringLiteral("source_sparse.ply"));
+    const QString sidecarPath = QDir(tempDir.path()).filePath(QStringLiteral("sparse_cloud_points.json"));
+    writeMinimalPointCloudPly(sourcePlyPath, {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {2.0, 0.0, 0.0}
+    });
+    writeMinimalSparseSidecar(sidecarPath, {1, 3, 4});
+
+    xjw::gui::project::SparsePointContext context;
+    context.sparseCloudPath = sourcePlyPath;
+    context.sidecarPath = sidecarPath;
+
+    QJsonObject settings;
+    settings[QStringLiteral("sourceKind")] = QStringLiteral("project_result");
+    settings[QStringLiteral("externalSparseCloudPath")] = QString();
+    settings[QStringLiteral("filterByReprojError")] = false;
+    settings[QStringLiteral("filterByTrackLen")] = true;
+    settings[QStringLiteral("minTrackLen")] = 3;
+    settings[QStringLiteral("filterByTriAngle")] = false;
+    settings[QStringLiteral("filterByStatistical")] = false;
+    settings[QStringLiteral("filterByDensity")] = false;
+
+    xjw::gui::project::SparsePointOperationResult result;
+    QString errorMessage;
+    const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out_project"));
+    EXPECT_TRUE(xjw::gui::project::runSparsePointOutlierRemoval(context,
+                                                               settings,
+                                                               outputDir,
+                                                               &result,
+                                                               &errorMessage))
+        << errorMessage.toStdString();
+
+    EXPECT_EQ(result.inputCount, 3);
+    EXPECT_EQ(result.outputCount, 2);
+
+    QFile sidecarFile(result.sidecarPath);
+    ASSERT_TRUE(sidecarFile.open(QIODevice::ReadOnly));
+    const QJsonObject sidecar = QJsonDocument::fromJson(sidecarFile.readAll()).object();
+    EXPECT_EQ(sidecar.value(QStringLiteral("point_count")).toInt(), 2);
+    EXPECT_TRUE(sidecar.value(QStringLiteral("quality_metrics_available")).toBool(false));
+    EXPECT_FALSE(sidecar.contains(QStringLiteral("source_ply")));
+}
+
+TEST(SparsePointWorkflowUtilsTest, OutlierRemovalPreservesSourcePlyRgbWhenSidecarHasNoColors)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sourcePlyPath = QDir(tempDir.path()).filePath(QStringLiteral("colored_sparse.ply"));
+    const QString sidecarPath = QDir(tempDir.path()).filePath(QStringLiteral("sparse_cloud_points.json"));
+    writeMinimalColoredPointCloudPly(sourcePlyPath,
+                                     {
+                                         {0.0, 0.0, 0.0},
+                                         {1.0, 0.0, 0.0},
+                                         {2.0, 0.0, 0.0}
+                                     },
+                                     {
+                                         {10, 20, 30},
+                                         {40, 50, 60},
+                                         {70, 80, 90}
+                                     });
+    writeMinimalSparseSidecar(sidecarPath, {1, 3, 4});
+
+    xjw::gui::project::SparsePointContext context;
+    context.sparseCloudPath = sourcePlyPath;
+    context.sidecarPath = sidecarPath;
+
+    QJsonObject settings;
+    settings[QStringLiteral("sourceKind")] = QStringLiteral("project_result");
+    settings[QStringLiteral("externalSparseCloudPath")] = QString();
+    settings[QStringLiteral("filterByReprojError")] = false;
+    settings[QStringLiteral("filterByTrackLen")] = true;
+    settings[QStringLiteral("minTrackLen")] = 3;
+    settings[QStringLiteral("filterByTriAngle")] = false;
+    settings[QStringLiteral("filterByStatistical")] = false;
+    settings[QStringLiteral("filterByDensity")] = false;
+
+    xjw::gui::project::SparsePointOperationResult result;
+    QString errorMessage;
+    const QString outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out_colored"));
+    ASSERT_TRUE(xjw::gui::project::runSparsePointOutlierRemoval(context,
+                                                               settings,
+                                                               outputDir,
+                                                               &result,
+                                                               &errorMessage))
+        << errorMessage.toStdString();
+
+    EXPECT_EQ(result.inputCount, 3);
+    EXPECT_EQ(result.outputCount, 2);
+    auto outputCloud = plapoint::io::readPly<float>(result.sparseCloudPath.toStdString());
+    ASSERT_TRUE(outputCloud != nullptr);
+    ASSERT_EQ(outputCloud->size(), 2u);
+    ASSERT_TRUE(outputCloud->hasColors());
+    EXPECT_EQ(outputCloud->colors()->getValue(0, 0), 40);
+    EXPECT_EQ(outputCloud->colors()->getValue(0, 1), 50);
+    EXPECT_EQ(outputCloud->colors()->getValue(0, 2), 60);
+    EXPECT_EQ(outputCloud->colors()->getValue(1, 0), 70);
+    EXPECT_EQ(outputCloud->colors()->getValue(1, 1), 80);
+    EXPECT_EQ(outputCloud->colors()->getValue(1, 2), 90);
+}
+
 TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
 {
     QMainWindow window;
@@ -820,6 +1177,40 @@ TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
         }
     }
     EXPECT_TRUE(foundInToolsMenu);
+}
+
+TEST(MainMenuTest, ViewMenuExposesCheckedCameraVisibilityAction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.toggleCamerasAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_EQ(action->text(), QStringLiteral("显示相机"));
+    EXPECT_TRUE(action->isCheckable());
+    EXPECT_TRUE(action->isChecked());
+
+    QMenu *viewMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("视图"));
+    ASSERT_NE(viewMenu, nullptr);
+    EXPECT_TRUE(viewMenu->actions().contains(action));
+}
+
+TEST(CameraSceneWidgetTest, CameraVisibilityToggleIsExposedAndGuardsCameraOverlayOnly)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("void setShowCameras(bool show)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool areCamerasVisible() const")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool m_showCameras = true")));
+    EXPECT_TRUE(source.contains(QStringLiteral("void CameraSceneWidget::setShowCameras(bool show)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("if (m_showCameras)")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCamerasAction()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameras")));
 }
 
 TEST(MainMenuTest, TriangulationActionNamesPairwisePreviewCloud)
@@ -1828,19 +2219,22 @@ TEST(SfmServicePairPlanningTest, ProjectMetaCamerasEnableBoundedPairPlanning)
     EXPECT_TRUE(source.contains(QStringLiteral("pairKey.split(QStringLiteral(\"\\n\"))")));
 }
 
-TEST(SfmServiceKnownPoseModeTest, ProjectMetaCamerasStayIncrementalSfmPriors)
+TEST(SfmServiceKnownPoseModeTest, CompleteProjectMetaCamerasEnableKnownPoseMode)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("hasCompleteProjectMetaCameras")));
-    EXPECT_TRUE(source.contains(QStringLiteral("sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles")));
-    EXPECT_FALSE(source.contains(QStringLiteral(
+    EXPECT_TRUE(source.contains(QStringLiteral(
         "sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras")));
     EXPECT_TRUE(source.contains(QStringLiteral("projectImageMetaByPath(opts.projectMeta, true)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("使用项目元数据相机初值")));
-    EXPECT_FALSE(source.contains(QStringLiteral("使用项目元数据已知外参模式")));
+    EXPECT_TRUE(source.contains(QStringLiteral("使用项目元数据已知外参初值模式")));
+    EXPECT_TRUE(source.contains(QStringLiteral("相机位姿参与全局 BA 微调")));
+    EXPECT_FALSE(source.contains(QStringLiteral("固定相机位姿并直接三角化")));
     EXPECT_TRUE(source.contains(QStringLiteral("const bool baApplied = sfmResult.baTracksTotal > 0")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sfmOpts.baOptions.cancelFlag = opts.cancelFlag")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sfmOpts.baOptions.progressCallback")));
+    EXPECT_TRUE(source.contains(QStringLiteral("正在进行光束法平差")));
 }
 
 TEST(MainWindowProgressTest, FeatureMatchProgressExpandsAllFeatureModeAndClampsDisplay)

@@ -57,6 +57,38 @@ TEST(SparsePointCloudProcessorTest, OptimizeCanAppendSpatialCleanup)
     EXPECT_EQ(result.rounds.front().filterStats.outputPoints, 4);
 }
 
+TEST(SparsePointCloudProcessorTest, StatisticalFilterUsesRobustThresholdWhenExtremeOutlierInflatesStddev)
+{
+    std::vector<SparsePointCloudPoint> points = {
+        makePoint(0.0,   0.0, 0.0, 0.0, 0.0, 0),
+        makePoint(1.0,   0.0, 0.0, 0.0, 0.0, 0),
+        makePoint(2.0,   0.0, 0.0, 0.0, 0.0, 0),
+        makePoint(3.0,   0.0, 0.0, 0.0, 0.0, 0),
+        makePoint(4.0,   0.0, 0.0, 0.0, 0.0, 0),
+        makePoint(100.0, 0.0, 0.0, 0.0, 0.0, 0)
+    };
+
+    SparsePointCloudFilterOptions options;
+    options.filterByReprojError = false;
+    options.filterByTrackLen = false;
+    options.filterByTriAngle = false;
+    options.filterByStatistical = true;
+    options.statK = 2;
+    options.statStdDevMul = 2.5;
+    options.filterByDensity = false;
+    options.processingDevice = plapoint::ProcessingDevice::CPU;
+
+    const SparsePointCloudFilterStats stats = SparsePointCloudProcessor::filter(&points, options);
+
+    EXPECT_EQ(stats.inputPoints, 6);
+    EXPECT_EQ(stats.removedByStatistical, 1);
+    ASSERT_EQ(points.size(), 5u);
+    for (const SparsePointCloudPoint &point : points)
+    {
+        EXPECT_LT(point.x, 50.0);
+    }
+}
+
 TEST(SparsePointCloudProcessorTest, RefineMatchesOptimizeWrapper)
 {
     std::vector<SparsePointCloudPoint> points = {
