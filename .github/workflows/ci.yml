@@ -41,7 +41,7 @@ jobs:
             libgdal-dev \
             libtiff-dev \
             libzip-dev \
-            libzip-tools \
+            zipcmp \
             libgtest-dev \
             libgmock-dev \
             libomp-dev
