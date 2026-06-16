@@ -17,7 +17,9 @@
 #include "AlgorithmCompat.h"
 #include "lightglue/LightGlueMatcher.h"
 #include <opencv2/opencv.hpp>
+#if defined(PLASCAN_TORCH_HAS_CUDA)
 #include <c10/cuda/CUDACachingAllocator.h>
+#endif
 #include <torch/torch.h>
 
 // ── 项目 / 服务头文件 ──────────────────────────────────────────────────────
@@ -965,6 +967,7 @@ bool isCudaOutOfMemoryError(const std::exception &error)
 
 void clearTorchCudaCache()
 {
+#if defined(PLASCAN_TORCH_HAS_CUDA)
     if (!torch::cuda::is_available())
     {
         return;
@@ -977,6 +980,9 @@ void clearTorchCudaCache()
     {
         // 清理缓存只是 OOM 后的辅助动作，失败时不要遮蔽原始错误。
     }
+#else
+    // CPU-only LibTorch does not ship c10 CUDA allocator symbols.
+#endif
 }
 
 int alignFeatureRetryDim(int value)

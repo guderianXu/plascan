@@ -5,34 +5,28 @@
 
 **行星表面摄影测量处理系统** — 从多视角影像生成高精度三维模型。
 
-## 实测性能
-
-*4608×3456 纳卫星全色影像, NVIDIA RTX 4060 (8GB)*
-
-| 提取器 | 匹配器 | 匹配点数 | 提取 | 匹配 | 总计 | 方式 |
-|--------|--------|---------|------|------|------|------|
-| — | **LoFTR** (端到端) | **10,902** | — | 0.8s | 0.8s | GPU |
-| DISK | NN (mutual) | 1,308 | 0.3s | 0.1s | 0.4s | GPU |
-| SuperPoint | SuperGlue | 508 | 1.9s | 0.9s | 2.8s | GPU |
-| SuperPoint | LightGlue | 463 | 1.9s | 0.8s | 2.7s | GPU |
-| SuperPoint | BF (L2) | 267 | 1.9s | 0.3s | 2.2s | CPU |
-| SIFT | BF (L2) | 230 | 2.7s | <0.1s | 2.7s | CPU |
-| ORB | BF (Hamming) | 135 | 0.1s | <0.1s | 0.1s | CPU |
-
 ## 快速开始
 
 ### 依赖
 
-- C++17 编译器 (GCC 11+ / Clang 15+)
-- CMake ≥ 3.18
-- CUDA Toolkit (可选，GPU 加速)
-- Qt6, OpenCV, LibTorch, GDAL, libtiff, libzip, OpenMP, GTest
+- C++17 编译器：MSVC 2022、GCC 11+ 或 Clang 15+。
+- CMake 3.25+ 和 Ninja。
+- Qt6、OpenCV 4、LibTorch、GDAL、libtiff、libzip、OpenMP、GTest。
+- CUDA Toolkit 可选；启用后用于深度学习特征、匹配、MVS 和 dense match 加速。
+- Python 3.10+ 可选；用于模型导出、数据准备和脚本化验证。
 
 ### 克隆并构建
+
+源码需要递归拉取 `plapoint` 和 `plamatrix` 两个 submodule：
 
 ```bash
 git clone --recurse-submodules https://github.com/guderianXu/plascan.git
 cd plascan
+```
+
+系统已经安装好依赖时，可直接配置本机构建目录：
+
+```bash
 mkdir build && cd build
 cmake .. -DBUILD_TESTS=ON
 cmake --build . -j$(nproc)
@@ -43,7 +37,7 @@ ctest --output-on-failure
 
 ### vcpkg / CPack 跨平台构建
 
-项目提供 `vcpkg.json` 和 `CMakePresets.json`，用于统一 Windows/Linux 的依赖解析、构建、测试和打包。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖；LibTorch 和 CUDA 仍通过外部安装路径提供，避免把深度学习运行环境绑死在 vcpkg 里。
+推荐新环境优先使用 `vcpkg.json` 和 `CMakePresets.json`。vcpkg 负责 Qt6、OpenCV 4、GDAL、libtiff、libzip、GTest 等通用依赖；LibTorch 和 CUDA 通过外部安装路径提供，这样 CPU-only CI、Windows CUDA 工作站和 Linux 服务器可以共用同一套源码。
 
 Linux:
 
@@ -66,6 +60,8 @@ cmake --build --preset windows-vcpkg-release
 ctest --preset windows-vcpkg-release
 cpack --preset windows-vcpkg-release
 ```
+
+Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。打包后的 GUI 需要 Qt platform plugins 和 vcpkg/LibTorch 运行时 DLL；`PLASCAN_BUNDLE_RUNTIME=ON` 时 CMake install/CPack 会尽量随包收集这些依赖。
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 
@@ -98,7 +94,7 @@ python scripts/env/setup_libtorch.py --device cuda --version 2.7.1 --cuda-wheel 
 python scripts/env/configure_with_env.py --build-type release --build --test --package
 ```
 
-Windows PowerShell 使用同一套脚本，只把路径换成 Windows 路径：
+Windows PowerShell 使用同一套脚本，只把路径换成 Windows 路径。CUDA 路径可指向完整 Toolkit，也可配合已经下载好的 CUDA LibTorch 使用：
 
 ```powershell
 python scripts\env\setup_vcpkg.py --root C:\src\vcpkg --clone --install --triplet x64-windows
@@ -292,15 +288,16 @@ python scripts/export_models.py --loftr --roma      # LoFTR + RoMa
 
 ## 平台支持
 
-| 功能 | Linux (NVIDIA) | macOS (Apple Silicon) |
-|------|:---:|:---:|
-| CUDA 加速 | ✅ | ❌ (MPS via PyTorch) |
-| dense_match MGM/SGM | CUDA + CPU | CPU only |
-| SuperPoint/DISK/ALIKED | CUDA + CPU | CPU |
-| SIFT/ORB/AKAZE | CPU | CPU |
-| 全部 CLI 工具 | ✅ | ✅ |
-| Qt6 GUI | ✅ | ✅ |
-| Docker 构建 | ✅ | — |
+| 功能 | Windows (NVIDIA) | Linux (NVIDIA) | macOS (Apple Silicon) |
+|------|:---:|:---:|:---:|
+| CUDA 加速 | ✅ | ✅ | ❌ (MPS via PyTorch) |
+| dense_match MGM/SGM | CUDA + CPU | CUDA + CPU | CPU only |
+| SuperPoint/DISK/ALIKED | CUDA + CPU | CUDA + CPU | CPU |
+| SIFT/ORB/AKAZE | CPU | CPU | CPU |
+| 全部 CLI 工具 | ✅ | ✅ | ✅ |
+| Qt6 GUI | ✅ | ✅ | ✅ |
+| CPack 打包 | ZIP | TGZ/DEB | TGZ |
+| Docker 构建 | — | ✅ | — |
 
 ## 开发
 

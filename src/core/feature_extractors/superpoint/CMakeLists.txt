@@ -44,7 +44,7 @@ endif()
 
 add_library(superpoint STATIC ${SUPERPOINT_SOURCES})
 
-if(CMAKE_CUDA_COMPILER)
+if(PLASCAN_TORCH_HAS_CUDA)
     target_compile_definitions(superpoint PRIVATE USE_CUDA=1)
 endif()
 
