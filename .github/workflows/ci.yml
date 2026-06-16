@@ -83,5 +83,14 @@ jobs:
 
       - name: Test
         run: |
-          QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure \
-            -E 'TerrainDemDomTest\.TerrainPipelineGeneratesDemDomFromDirectory'
+          set -o pipefail
+          if ! QT_QPA_PLATFORM=offscreen ctest --test-dir build --output-on-failure \
+            -E 'TerrainDemDomTest\.TerrainPipelineGeneratesDemDomFromDirectory' 2>&1 | tee test.log; then
+            filtered_msg="$(grep -Ei 'failed|failure|error|exception|segmentation|timeout|not run|[0-9]+% tests passed' test.log | tail -n 120 || true)"
+            if [ -z "$filtered_msg" ]; then
+              filtered_msg="$(tail -n 80 test.log)"
+            fi
+            tail_msg="$(printf '%s' "$filtered_msg" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            echo "::error title=CTest failed::$tail_msg"
+            exit 1
+          fi
