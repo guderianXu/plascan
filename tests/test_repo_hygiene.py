@@ -64,6 +64,29 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("$vsDevPathValue", text)
         self.assertIn("-ieq \"Path\"", text)
 
+    def test_laser_photogrammetry_dataset_notes_capture_future_ba_inputs(self):
+        doc_path = ROOT / "docs" / "design" / "LASER_PHOTOGRAMMETRY_DATASETS.md"
+
+        self.assertTrue(doc_path.exists(), "Laser/photogrammetry dataset research notes are missing")
+        text = doc_path.read_text(encoding="utf-8")
+
+        required_terms = [
+            "MUN-FRL",
+            "Hessigheim 3D",
+            "NTU VIRAL",
+            "LiDAR",
+            "UAV",
+            "license",
+            "Bundle Adjustment",
+            "control points",
+            "point cloud fusion",
+        ]
+        for term in required_terms:
+            with self.subTest(term=term):
+                self.assertIn(term, text)
+
+        self.assertGreaterEqual(text.count("|"), 40, "Dataset notes should include a structured comparison table")
+
 
 if __name__ == "__main__":
     unittest.main()
