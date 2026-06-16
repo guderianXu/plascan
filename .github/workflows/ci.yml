@@ -72,7 +72,11 @@ jobs:
         run: |
           set -o pipefail
           if ! cmake --build build --parallel 2 2>&1 | tee build.log; then
-            tail_msg="$(tail -n 120 build.log | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
+            filtered_msg="$(grep -Ei 'FAILED:|fatal error:|error:|undefined reference|collect2:|ld returned|ninja: build stopped|No such file' build.log | tail -n 80 || true)"
+            if [ -z "$filtered_msg" ]; then
+              filtered_msg="$(tail -n 60 build.log)"
+            fi
+            tail_msg="$(printf '%s' "$filtered_msg" | sed ':a;N;$!ba;s/%/%25/g;s/\r/%0D/g;s/\n/%0A/g')"
             echo "::error title=CMake build failed::$tail_msg"
             exit 1
           fi
