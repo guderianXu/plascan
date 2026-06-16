@@ -57,6 +57,15 @@ class ReconstructPipelineCliTest(unittest.TestCase):
         self.assertNotIn("message.toLocal8Bit()", source)
         self.assertIn("qUtf8Printable(message)", source)
 
+    def test_large_dense_pipeline_caps_plapoint_refine_input_and_avoids_second_sor(self):
+        source = (REPO_ROOT / "src" / "cli" / "cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
+
+        self.assertIn("constexpr std::size_t kMaxRefineInputPoints = 250000;", source)
+        self.assertIn("constexpr int kMaxPasses = 6;", source)
+        self.assertIn("targetPoints=%zu", source)
+        self.assertNotIn("离群点二次清理", source)
+        self.assertNotIn("strictSorReport", source)
+
     def test_non_empty_output_dir_requires_force(self):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

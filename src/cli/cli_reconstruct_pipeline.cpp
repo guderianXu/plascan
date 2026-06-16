@@ -948,7 +948,7 @@ FusedVoxelDownsampleResult voxelDownsampleFusedPointsToTarget(
     result.points = voxelDownsampleFusedPoints(cloud, result.leafSize);
     result.passes = 1;
 
-    constexpr int kMaxPasses = 4;
+    constexpr int kMaxPasses = 6;
     while (result.points.size() > targetPoints && result.passes < kMaxPasses)
     {
         const double ratio = static_cast<double>(result.points.size())
@@ -1060,25 +1060,6 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
             reportPlaPointDevice(progress, QStringLiteral("半径离群点移除"),
                                  radiusReport, beforeRadius, cloud.size(), 37);
 
-            const auto afterRadius = cloud.size();
-            const bool largeCloud = beforeSor > 200000;
-            const bool weakRemoval = (beforeSor > 0)
-                && (static_cast<double>(beforeSor - afterRadius) / static_cast<double>(beforeSor) < 0.02);
-            if (largeCloud && weakRemoval)
-            {
-                const double stricterStdDev = std::clamp(request.sorStdDev - 0.3, 0.8, request.sorStdDev);
-                const int stricterK = std::clamp(request.sorK + 6, request.sorK, 96);
-                if (progress) progress(QStringLiteral("离群点二次清理..."), 42);
-                const auto beforeStrictSor = cloud.size();
-                plapoint::ProcessingReport strictSorReport;
-                cloud = sorFilter(cloud,
-                                  stricterK,
-                                  static_cast<float>(stricterStdDev),
-                                  request.processingDevice,
-                                  &strictSorReport);
-                reportPlaPointDevice(progress, QStringLiteral("离群点二次清理"),
-                                     strictSorReport, beforeStrictSor, cloud.size(), 44);
-            }
         }
     }
 
@@ -1760,7 +1741,7 @@ int main(int argc, char *argv[])
         else
         {
             constexpr std::size_t kLargeCloudPreVoxelThreshold = 2000000;
-            constexpr std::size_t kMaxRefineInputPoints = 600000;
+            constexpr std::size_t kMaxRefineInputPoints = 250000;
             std::vector<xjw::mvs::FusedPoint> preAggregatedFusedCloud;
             const std::vector<xjw::mvs::FusedPoint> *refineFusedCloud = &fusedCloud;
             bool preAggregatedBeforePlaPoint = false;
