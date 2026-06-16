@@ -35,6 +35,9 @@
 
 #include <algorithm>
 #include <cmath>
+#include <functional>
+#include <limits>
+#include <memory>
 
 #include <opencv2/imgcodecs.hpp>
 
@@ -204,6 +207,9 @@ void upsertExistingDepthRecords(ProjectData *projectData,
 
 using PlaPC = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
+constexpr std::size_t kMaxDenseRefineFilterInputPoints = 250000;
+constexpr int kMaxDenseRefinePreconditionPasses = 6;
+
 PlaPC densePointsToPointCloud(const std::vector<xjw::mvs::DensePoint> &cloud)
 {
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(cloud.size(), 3);
@@ -364,6 +370,80 @@ void logPlaPointReport(const QString &stage,
     LOG_INFO(message);
 }
 
+struct PointCloudBounds
+{
+    bool valid = false;
+    double minX = std::numeric_limits<double>::infinity();
+    double minY = std::numeric_limits<double>::infinity();
+    double minZ = std::numeric_limits<double>::infinity();
+    double maxX = -std::numeric_limits<double>::infinity();
+    double maxY = -std::numeric_limits<double>::infinity();
+    double maxZ = -std::numeric_limits<double>::infinity();
+};
+
+PointCloudBounds computePointCloudBounds(const PlaPC &cloud)
+{
+    PointCloudBounds bounds;
+    for (std::size_t i = 0; i < cloud.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        const double x = static_cast<double>(cloud.points()(row, 0));
+        const double y = static_cast<double>(cloud.points()(row, 1));
+        const double z = static_cast<double>(cloud.points()(row, 2));
+        if (!std::isfinite(x) || !std::isfinite(y) || !std::isfinite(z))
+        {
+            continue;
+        }
+
+        bounds.valid = true;
+        bounds.minX = std::min(bounds.minX, x);
+        bounds.minY = std::min(bounds.minY, y);
+        bounds.minZ = std::min(bounds.minZ, z);
+        bounds.maxX = std::max(bounds.maxX, x);
+        bounds.maxY = std::max(bounds.maxY, y);
+        bounds.maxZ = std::max(bounds.maxZ, z);
+    }
+    return bounds;
+}
+
+float estimateDenseRefinePreconditionLeafSize(const PlaPC &cloud, std::size_t targetPoints)
+{
+    const PointCloudBounds bounds = computePointCloudBounds(cloud);
+    if (!bounds.valid || targetPoints == 0)
+    {
+        return 0.005f;
+    }
+
+    const double dx = std::max(0.0, bounds.maxX - bounds.minX);
+    const double dy = std::max(0.0, bounds.maxY - bounds.minY);
+    const double dz = std::max(0.0, bounds.maxZ - bounds.minZ);
+    const double diag = std::sqrt(dx * dx + dy * dy + dz * dz);
+    const double largestArea = std::max(dx * dy, std::max(dx * dz, dy * dz));
+
+    double leafSize = 0.005;
+    if (largestArea > 1e-12)
+    {
+        leafSize = std::sqrt(largestArea / static_cast<double>(targetPoints)) * 0.85;
+    }
+    else if (diag > 1e-9)
+    {
+        leafSize = diag / std::cbrt(static_cast<double>(targetPoints)) * 0.5;
+    }
+
+    if (diag > 1e-9)
+    {
+        const double minLeaf = std::max(diag * 0.00002, 1e-5);
+        const double maxLeaf = std::max(minLeaf * 2.0, diag * 0.05);
+        leafSize = std::clamp(leafSize, minLeaf, maxLeaf);
+    }
+
+    if (!std::isfinite(leafSize) || leafSize <= 0.0)
+    {
+        return 0.005f;
+    }
+    return static_cast<float>(leafSize);
+}
+
 PlaPC sorFilter(const PlaPC &cloud,
                 int k,
                 float stdRatio,
@@ -425,6 +505,91 @@ PlaPC voxelDownsample(const PlaPC &cloud,
     }
 
     return plapoint::voxelDownsample(cloud, leafSize, processingDevice, report);
+}
+
+struct DenseRefinePreconditionStats
+{
+    bool applied = false;
+    bool consumedRequestedVoxel = false;
+    float leafSize = 0.0f;
+    int passes = 0;
+};
+
+DenseRefinePreconditionStats preconditionDenseRefineCloudForFilters(
+    PlaPC *cloud,
+    const xjw::gui::project::DenseRefineSettings &request,
+    const std::function<void(const QString &, int)> &progress)
+{
+    DenseRefinePreconditionStats stats;
+    if (!cloud || cloud->size() <= kMaxDenseRefineFilterInputPoints)
+    {
+        return stats;
+    }
+    if (!request.sorEnabled && !request.normalsEnabled)
+    {
+        return stats;
+    }
+
+    stats.consumedRequestedVoxel = request.voxelEnabled && request.voxelSize > 0.0;
+    float leafSize = stats.consumedRequestedVoxel
+        ? static_cast<float>(request.voxelSize)
+        : estimateDenseRefinePreconditionLeafSize(*cloud, kMaxDenseRefineFilterInputPoints);
+    if (!std::isfinite(static_cast<double>(leafSize)) || leafSize <= 0.0f)
+    {
+        leafSize = 0.005f;
+    }
+
+    if (progress)
+    {
+        progress(QStringLiteral("点云过大，先进行预降采样..."), 10);
+    }
+    LOG_INFO(QStringLiteral("[DenseRefine] 点云过大，先进行预降采样: input=%1 targetPoints=%2 initialLeaf=%3")
+                 .arg(cloud->size())
+                 .arg(kMaxDenseRefineFilterInputPoints)
+                 .arg(leafSize, 0, 'g', 6));
+
+    while (cloud->size() > kMaxDenseRefineFilterInputPoints
+           && stats.passes < kMaxDenseRefinePreconditionPasses)
+    {
+        const auto beforeVoxel = cloud->size();
+        plapoint::ProcessingReport voxelReport;
+        *cloud = voxelDownsample(*cloud, leafSize, request.processingDevice, &voxelReport);
+        ++stats.passes;
+        stats.applied = true;
+        stats.leafSize = leafSize;
+        logPlaPointReport(QStringLiteral("大点云预降采样"), voxelReport, beforeVoxel, cloud->size());
+
+        if (cloud->size() <= kMaxDenseRefineFilterInputPoints || cloud->size() == 0)
+        {
+            break;
+        }
+
+        const double ratio = static_cast<double>(cloud->size())
+            / static_cast<double>(kMaxDenseRefineFilterInputPoints);
+        float nextLeafSize = static_cast<float>(static_cast<double>(leafSize)
+            * std::sqrt(std::max(1.0, ratio)) * 1.05);
+        if (!(nextLeafSize > leafSize))
+        {
+            nextLeafSize = leafSize * 2.0f;
+        }
+        leafSize = nextLeafSize;
+
+        if (progress)
+        {
+            progress(QStringLiteral("点云过大，继续预降采样..."),
+                     std::min(18, 10 + stats.passes * 2));
+        }
+    }
+
+    if (stats.applied)
+    {
+        LOG_INFO(QStringLiteral("[DenseRefine] 大点云预降采样完成: output=%1 leaf=%2 passes=%3 targetPoints=%4")
+                     .arg(cloud->size())
+                     .arg(stats.leafSize, 0, 'g', 6)
+                     .arg(stats.passes)
+                     .arg(kMaxDenseRefineFilterInputPoints));
+    }
+    return stats;
 }
 
 plamatrix::DenseMatrix<float, plamatrix::Device::CPU> estimateNormals(
@@ -1097,6 +1262,14 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             return;
         }
 
+        const auto postProgress = [this](const QString &message, int progressValue) {
+            QMetaObject::invokeMethod(this, [this, message, progressValue]() {
+                emit mvsProgressChanged(message, progressValue);
+            }, Qt::QueuedConnection);
+        };
+        const DenseRefinePreconditionStats precondition =
+            preconditionDenseRefineCloudForFilters(&cloud, request, postProgress);
+
         if (request.sorEnabled)
         {
             QMetaObject::invokeMethod(this, [this]() {
@@ -1161,7 +1334,7 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
 
             }
         }
-        if (request.voxelEnabled && request.voxelSize > 0.0)
+        if (request.voxelEnabled && request.voxelSize > 0.0 && !precondition.consumedRequestedVoxel)
         {
             QMetaObject::invokeMethod(this, [this]() {
                 emit mvsProgressChanged(QStringLiteral("体素下采样..."), 50);

@@ -326,6 +326,20 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("离群点二次清理", manager)
         self.assertNotIn("strictSorReport", manager)
 
+    def test_gui_dense_cloud_refine_preconditions_large_clouds_before_expensive_filters(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+        refine_start = manager.index("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync")
+        refine_body = manager[refine_start:]
+
+        self.assertIn("kMaxDenseRefineFilterInputPoints", manager)
+        self.assertIn("preconditionDenseRefineCloudForFilters", manager)
+        self.assertIn("点云过大，先进行预降采样", manager)
+        self.assertLess(refine_body.index("preconditionDenseRefineCloudForFilters"),
+                        refine_body.index("sorFilter(cloud"))
+        self.assertLess(refine_body.index("preconditionDenseRefineCloudForFilters"),
+                        refine_body.index("estimateNormals(cloud"))
+        self.assertIn("!precondition.consumedRequestedVoxel", refine_body)
+
 
 if __name__ == "__main__":
     unittest.main()
