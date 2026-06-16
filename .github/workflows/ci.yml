@@ -42,6 +42,8 @@ jobs:
             libtiff-dev \
             libzip-dev \
             zipcmp \
+            zipmerge \
+            ziptool \
             libgtest-dev \
             libgmock-dev \
             libomp-dev
