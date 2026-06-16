@@ -310,6 +310,14 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("#pragma omp parallel for", preprocessor)
         self.assertNotIn("distances.reserve(cloud.size());", preprocessor)
 
+    def test_depth_generator_skips_inline_dense_filters_for_large_clouds(self):
+        generator = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("kMaxInlineDenseFilterPoints", generator)
+        self.assertIn("initialCount <= kMaxInlineDenseFilterPoints", generator)
+        self.assertIn("跳过内联稠密点云过滤", generator)
+        self.assertNotIn("\"SOR-2\"", generator)
+
 
 if __name__ == "__main__":
     unittest.main()

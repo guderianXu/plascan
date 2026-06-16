@@ -33,6 +33,7 @@ namespace
 {
 
 constexpr float kSkipContentMaskCoverage = 0.985f;
+constexpr std::size_t kMaxInlineDenseFilterPoints = 500000;
 
 using Clock = std::chrono::steady_clock;
 
@@ -3004,81 +3005,89 @@ void DepthMapGenerator::runInBackground()
         emit progressChanged("离群点过滤...", 0.90f);
 
         const std::size_t initialCount = cloud.size();
-        const float maxStageRemovalRatio = 0.45f;
-        const float minOverallRetentionRatio = (initialCount > 500000) ? 0.50f : 0.40f;
-
-        auto applyFilterWithGuard = [&](const char *stageName, auto &&filterOp)
+        if (initialCount <= kMaxInlineDenseFilterPoints)
         {
-            if (cloud.size() < 100)
+            const float maxStageRemovalRatio = 0.45f;
+            const float minOverallRetentionRatio = 0.40f;
+
+            auto applyFilterWithGuard = [&](const char *stageName, auto &&filterOp)
             {
-                return;
-            }
+                if (cloud.size() < 100)
+                {
+                    return;
+                }
 
-            const std::size_t beforeCount = cloud.size();
-            std::vector<DensePoint> filtered = filterOp(cloud);
-            if (filtered.empty())
-            {
-                fprintf(stderr, "[MVS] %s 结果为空，跳过该阶段以保护点云\n", stageName);
-                return;
-            }
+                const std::size_t beforeCount = cloud.size();
+                std::vector<DensePoint> filtered = filterOp(cloud);
+                if (filtered.empty())
+                {
+                    fprintf(stderr, "[MVS] %s 结果为空，跳过该阶段以保护点云\n", stageName);
+                    return;
+                }
 
-            const float stageRemovedRatio = static_cast<float>(beforeCount - filtered.size())
-                                            / static_cast<float>(beforeCount);
-            const float overallRetentionRatio = static_cast<float>(filtered.size())
-                                              / static_cast<float>(initialCount);
+                const float stageRemovedRatio = static_cast<float>(beforeCount - filtered.size())
+                                                / static_cast<float>(beforeCount);
+                const float overallRetentionRatio = static_cast<float>(filtered.size())
+                                                  / static_cast<float>(initialCount);
 
-            if (stageRemovedRatio > maxStageRemovalRatio || overallRetentionRatio < minOverallRetentionRatio)
-            {
-                fprintf(stderr,
-                        "[MVS] %s 触发过滤护栏: stageRemoved=%.1f%%(上限%.1f%%), overallRetention=%.1f%%(下限%.1f%%)，保留上一阶段结果\n",
-                        stageName,
-                        stageRemovedRatio * 100.0f,
-                        maxStageRemovalRatio * 100.0f,
-                        overallRetentionRatio * 100.0f,
-                        minOverallRetentionRatio * 100.0f);
-                return;
-            }
+                if (stageRemovedRatio > maxStageRemovalRatio || overallRetentionRatio < minOverallRetentionRatio)
+                {
+                    fprintf(stderr,
+                            "[MVS] %s 触发过滤护栏: stageRemoved=%.1f%%(上限%.1f%%), overallRetention=%.1f%%(下限%.1f%%)，保留上一阶段结果\n",
+                            stageName,
+                            stageRemovedRatio * 100.0f,
+                            maxStageRemovalRatio * 100.0f,
+                            overallRetentionRatio * 100.0f,
+                            minOverallRetentionRatio * 100.0f);
+                    return;
+                }
 
-            cloud.swap(filtered);
-        };
+                cloud.swap(filtered);
+            };
 
-        const plapoint::ProcessingDevice pointFilterDevice =
-            m_config.patchMatch.useCuda ? plapoint::ProcessingDevice::Auto : plapoint::ProcessingDevice::CPU;
+            const plapoint::ProcessingDevice pointFilterDevice =
+                m_config.patchMatch.useCuda ? plapoint::ProcessingDevice::Auto : plapoint::ProcessingDevice::CPU;
 
-        // 第 1 遍：统计离群点过滤（SOR）— 移除 kNN 距离异常的点
-        applyFilterWithGuard("SOR-1", [pointFilterDevice](const std::vector<DensePoint> &inputCloud) {
-            return DenseCloudBuilder::statisticalOutlierRemoval(inputCloud, 30, 1.2f, pointFilterDevice);
-        });
-
-        // 第 2 遍：半径过滤 — 基于点云密度估算搜索半径
-        if (cloud.size() > 100)
-        {
-            // 估算平均点间距来确定半径
-            float minX=cloud[0].x, maxX=cloud[0].x;
-            float minY=cloud[0].y, maxY=cloud[0].y;
-            float minZ=cloud[0].z, maxZ=cloud[0].z;
-            for (const auto &p : cloud) {
-                minX=std::min(minX,p.x); maxX=std::max(maxX,p.x);
-                minY=std::min(minY,p.y); maxY=std::max(maxY,p.y);
-                minZ=std::min(minZ,p.z); maxZ=std::max(maxZ,p.z);
-            }
-            float volume = (maxX-minX) * (maxY-minY) * (maxZ-minZ);
-            volume = std::max(volume, 1e-12f);
-            float avgSpacing = std::cbrt(volume / (float)cloud.size());
-            float searchRadius = std::max(avgSpacing * 4.0f, 1e-4f); // 4 倍平均间距内至少要有邻居
-            applyFilterWithGuard("RadiusOR", [searchRadius, pointFilterDevice](const std::vector<DensePoint> &inputCloud) {
-                return DenseCloudBuilder::radiusOutlierRemoval(inputCloud, searchRadius, 5, pointFilterDevice);
+            // 第 1 遍：统计离群点过滤（SOR）— 移除 kNN 距离异常的点
+            applyFilterWithGuard("SOR-1", [pointFilterDevice](const std::vector<DensePoint> &inputCloud) {
+                return DenseCloudBuilder::statisticalOutlierRemoval(inputCloud, 30, 1.2f, pointFilterDevice);
             });
 
-            // 第 3 遍：再做一轮 SOR 清除残余离群
-            if (cloud.size() > 100) {
-                applyFilterWithGuard("SOR-2", [pointFilterDevice](const std::vector<DensePoint> &inputCloud) {
-                    return DenseCloudBuilder::statisticalOutlierRemoval(inputCloud, 20, 1.5f, pointFilterDevice);
+            // 第 2 遍：半径过滤 — 基于点云密度估算搜索半径
+            if (cloud.size() > 100)
+            {
+                float minX = cloud[0].x, maxX = cloud[0].x;
+                float minY = cloud[0].y, maxY = cloud[0].y;
+                float minZ = cloud[0].z, maxZ = cloud[0].z;
+                for (const auto &p : cloud)
+                {
+                    minX = std::min(minX, p.x);
+                    maxX = std::max(maxX, p.x);
+                    minY = std::min(minY, p.y);
+                    maxY = std::max(maxY, p.y);
+                    minZ = std::min(minZ, p.z);
+                    maxZ = std::max(maxZ, p.z);
+                }
+                float volume = (maxX - minX) * (maxY - minY) * (maxZ - minZ);
+                volume = std::max(volume, 1e-12f);
+                const float avgSpacing = std::cbrt(volume / static_cast<float>(cloud.size()));
+                const float searchRadius = std::max(avgSpacing * 4.0f, 1e-4f);
+                applyFilterWithGuard("RadiusOR", [searchRadius, pointFilterDevice](
+                                         const std::vector<DensePoint> &inputCloud) {
+                    return DenseCloudBuilder::radiusOutlierRemoval(inputCloud, searchRadius, 5, pointFilterDevice);
                 });
             }
-        }
 
-        fprintf(stderr, "[MVS] 过滤后剩余: %d 个稠密点\n", (int)cloud.size());
+            fprintf(stderr, "[MVS] 过滤后剩余: %d 个稠密点\n", (int)cloud.size());
+        }
+        else
+        {
+            fprintf(stderr,
+                    "[MVS] 跳过内联稠密点云过滤: points=%zu limit=%zu，保留完整融合点云；"
+                    "如需清理请运行稠密点云后处理/精炼\n",
+                    initialCount,
+                    kMaxInlineDenseFilterPoints);
+        }
     }
 
     emit pointCloudReady(cloud);
