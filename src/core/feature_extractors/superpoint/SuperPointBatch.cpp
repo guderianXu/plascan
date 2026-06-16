@@ -79,11 +79,19 @@ std::vector<FeatureOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& i
                 auto g = t.squeeze(0).squeeze(0).to(torch::kCPU);
                 batch_grays.push_back(g);
             }
-            // 在 CPU 上拼接小 tensor，然后通过 pin_memory + 非阵塞传到设备
-            // pin_memory 使 DMA 传输更快，non_blocking=true 与后续计算交叠
+            // 在 CPU 上拼接小 tensor。只有 CUDA 路径才使用 pinned memory；
+            // CPU-only LibTorch 没有 accelerator，调用 pin_memory() 会直接抛异常。
             auto batch_cpu = torch::cat(batch_tensors, 0); // [B,1,H,W] on CPU
-            auto batch_pinned = batch_cpu.pin_memory();
-            auto batch_input = batch_pinned.to(config_.device, /*non_blocking=*/true);
+            torch::Tensor batch_input;
+            if (config_.device.is_cuda())
+            {
+                auto batch_pinned = batch_cpu.pin_memory();
+                batch_input = batch_pinned.to(config_.device, /*non_blocking=*/true);
+            }
+            else
+            {
+                batch_input = batch_cpu.to(config_.device);
+            }
 
             // 批量 orig_wh: [B,2] 每行 [W,H]
             int bw = g.first.first, bh = g.first.second;
