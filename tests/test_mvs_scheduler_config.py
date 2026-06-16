@@ -318,6 +318,14 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("跳过内联稠密点云过滤", generator)
         self.assertNotIn("\"SOR-2\"", generator)
 
+    def test_dense_cloud_refine_avoids_second_strict_sor_pass(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        self.assertIn("统计离群点移除 (SOR)", manager)
+        self.assertIn("半径离群点移除", manager)
+        self.assertNotIn("离群点二次清理", manager)
+        self.assertNotIn("strictSorReport", manager)
+
 
 if __name__ == "__main__":
     unittest.main()

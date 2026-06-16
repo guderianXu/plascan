@@ -1159,26 +1159,6 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                                      &radiusReport);
                 logPlaPointReport(QStringLiteral("半径离群点移除"), radiusReport, beforeRadius, cloud.size());
 
-                const auto afterRadius = cloud.size();
-                const bool largeCloud = beforeSor > 200000;
-                const bool weakRemoval = (beforeSor > 0)
-                    && (static_cast<double>(beforeSor - afterRadius) / static_cast<double>(beforeSor) < 0.02);
-                if (largeCloud && weakRemoval)
-                {
-                    const double stricterStdDev = std::clamp(request.sorStdDev - 0.3, 0.8, request.sorStdDev);
-                    const int stricterK = std::clamp(request.sorK + 6, request.sorK, 96);
-                    QMetaObject::invokeMethod(this, [this]() {
-                        emit mvsProgressChanged(QStringLiteral("离群点二次清理..."), 42);
-                    }, Qt::QueuedConnection);
-                    const auto beforeStrictSor = cloud.size();
-                    plapoint::ProcessingReport strictSorReport;
-                    cloud = sorFilter(cloud,
-                                      stricterK,
-                                      static_cast<float>(stricterStdDev),
-                                      request.processingDevice,
-                                      &strictSorReport);
-                    logPlaPointReport(QStringLiteral("离群点二次清理"), strictSorReport, beforeStrictSor, cloud.size());
-                }
             }
         }
         if (request.voxelEnabled && request.voxelSize > 0.0)
