@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Download curated photogrammetry benchmark datasets for PlaScan tests."""
+"""Download curated photogrammetry and LiDAR-adjacent benchmark datasets for PlaScan tests."""
 
 from __future__ import annotations
 
@@ -41,6 +41,7 @@ class Dataset:
     license_note: str
     description: str
     resources: tuple[Resource, ...]
+    workflow_tags: tuple[str, ...] = ()
 
 
 DATASETS: dict[str, Dataset] = {
@@ -221,6 +222,168 @@ DATASETS: dict[str, Dataset] = {
             ),
         ),
     ),
+    "h3d_hessigheim_uav_lidar": Dataset(
+        dataset_id="h3d_hessigheim_uav_lidar",
+        title="Hessigheim 3D (H3D) UAV LiDAR and MVS",
+        category="uav_lidar_fusion",
+        source_url="https://ifpwww.ifp.uni-stuttgart.de/benchmark/hessigheim/default.aspx",
+        license_note="Institute for Photogrammetry, University of Stuttgart benchmark；下载需订阅/注册，许可和再分发限制需人工确认。",
+        description="UAV 同平台采集的高密度 LiDAR、影像和纹理网格，适合验证影像重建点云与 LiDAR 点云融合和精度检查。",
+        resources=(
+            Resource(
+                filename="H3D_official_download",
+                manual_url="https://ifpwww.ifp.uni-stuttgart.de/benchmark/hessigheim/default.aspx",
+                size_hint="UAV LiDAR about 800 pts/m^2; multi-epoch benchmark",
+                large=True,
+                note="官方页面通过 Subscribe & Download Data 提供下载入口；下载前确认许可和坐标/相机数据内容。",
+            ),
+        ),
+        workflow_tags=("ba_constraint_candidate", "lidar_fusion_validation"),
+    ),
+    "mun_frl_vil": Dataset(
+        dataset_id="mun_frl_vil",
+        title="MUN-FRL Visual-Inertial-LiDAR Dataset",
+        category="aerial_vil_lidar",
+        source_url="https://mun-frl-vil-dataset.readthedocs.io/en/latest/",
+        license_note="原始数据和标定文件为 CC BY 4.0；论文许可另有说明，使用时需引用原论文。",
+        description="直升机和 DJI M600 平台的同步相机、LiDAR、IMU、RTK/PPK GNSS 与标定，适合激光点/轨迹参与 BA 的近期原型测试。",
+        resources=(
+            Resource(
+                filename="MUN_FRL_official_downloads",
+                manual_url="https://mun-frl-vil-dataset.readthedocs.io/en/latest/",
+                size_hint="sequences about 27-90 GB; workshop bags about 3.55-6 GB",
+                large=True,
+                note="官方表格提供 Google Drive 链接；优先选择 lighthouse 或 workshop bag 做小规模验证。",
+            ),
+        ),
+        workflow_tags=("ba_constraint_candidate", "lidar_fusion_validation"),
+    ),
+    "ntu_viral": Dataset(
+        dataset_id="ntu_viral",
+        title="NTU VIRAL UAV Visual-Inertial-Ranging-LiDAR",
+        category="uav_multi_sensor_lidar",
+        source_url="https://ntu-aris.github.io/ntu_viral_dataset/",
+        license_note="CC BY-NC-SA 4.0，仅非商业学术使用；商业用途需联系数据集作者。",
+        description="UAV 双 3D LiDAR、双同步相机、IMU、UWB 和 ground truth，适合测试相机-LiDAR 外参、轨迹先验和激光约束。",
+        resources=(
+            Resource(
+                filename="NTU_VIRAL_official_downloads",
+                manual_url="https://ntu-aris.github.io/ntu_viral_dataset/",
+                size_hint="sequences about 4-9.4 GB; calibration data about 49 MB to 0.96 GB",
+                large=True,
+                note="官方提醒 ground truth 位于 prism，和 IMU 存在 0.4 m offset；使用前必须处理该偏移。",
+            ),
+        ),
+        workflow_tags=("ba_constraint_candidate", "lidar_fusion_validation"),
+    ),
+    "ustc_flicar": Dataset(
+        dataset_id="ustc_flicar",
+        title="USTC FLICAR Lidar-Inertial-Camera Dataset",
+        category="aerial_work_robot_lidar",
+        source_url="https://ustc-flicar.github.io/",
+        license_note="已公开主页和下载入口，但未在已核验页面看到明确许可；需要人工确认。",
+        description="高空作业平台采集的多 LiDAR、相机、IMU 和激光跟踪仪真值，适合高精度轨迹和多传感器约束研究。",
+        resources=(
+            Resource(
+                filename="USTC_FLICAR_official_downloads",
+                manual_url="https://ustc-flicar.github.io/datasets/",
+                size_hint="aerial sequences about 25.5-121.1 GB",
+                large=True,
+                note="平台不是无人机而是升降臂/高空作业机器人；下载前确认许可、坐标系和标定文件。",
+            ),
+        ),
+        workflow_tags=("ba_constraint_candidate", "lidar_fusion_validation"),
+    ),
+    "urbanscene3d": Dataset(
+        dataset_id="urbanscene3d",
+        title="UrbanScene3D",
+        category="large_scale_aerial_lidar",
+        source_url="https://vcc.tech/UrbanScene3D",
+        license_note="公开页面声明仅限非商业用途，需引用论文，不允许传播数据或修改版本。",
+        description="大规模城市高分影像、LiDAR scans、合成/真实城市场景和模拟器，适合航测路径规划、重建和点云验证。",
+        resources=(
+            Resource(
+                filename="UrbanScene3D_official_downloads",
+                manual_url="https://vcc.tech/UrbanScene3D",
+                size_hint="about 1.43 TB; 128k+ images; 16 scenes",
+                large=True,
+                note="体量很大且非商业限制严格；建议只选单场景或 proxy/camera 数据做离线试验。",
+            ),
+        ),
+        workflow_tags=("lidar_fusion_validation",),
+    ),
+    "dublincity_lidar_aerial": Dataset(
+        dataset_id="dublincity_lidar_aerial",
+        title="DublinCity Annotated LiDAR and Aerial Images",
+        category="airborne_lidar_aerial",
+        source_url="https://v-sense.scss.tcd.ie/dublincity/",
+        license_note="学术研究需引用论文；商业应用需联系作者/团队。",
+        description="Dublin 市区航空 LiDAR、垂直/倾斜航空影像和标注点云，适合城市尺度影像重建点云与 ALS 对比。",
+        resources=(
+            Resource(
+                filename="DublinCity_official_downloads",
+                manual_url="https://v-sense.scss.tcd.ie/dublincity/",
+                size_hint="about 5.6 km^2 scanned; about 260M labeled points from 1.4B raw points",
+                large=True,
+                note="原始 LiDAR 和航空影像位于 NYU 数据仓库；相机外方位、影像块组织需要下载后确认。",
+            ),
+        ),
+        workflow_tags=("lidar_fusion_validation",),
+    ),
+    "isprs_vaihingen_3d_semantic": Dataset(
+        dataset_id="isprs_vaihingen_3d_semantic",
+        title="ISPRS Vaihingen 3D Semantic Labeling",
+        category="airborne_lidar_point_cloud",
+        source_url="https://www.isprs.org/resources/datasets/benchmarks/UrbanSemLab/3d-semantic-labeling.aspx",
+        license_note="ISPRS benchmark；页面提供数据和条款入口，具体使用限制需按 terms of use 人工确认。",
+        description="Vaihingen ALS 点云、反射强度/回波信息和语义标签，适合点云分类、融合后质量检查和空间精度抽检。",
+        resources=(
+            Resource(
+                filename="ISPRS_Vaihingen_3D_official_download",
+                manual_url="https://www.isprs.org/resources/datasets/benchmarks/UrbanSemLab/3d-semantic-labeling.aspx",
+                size_hint="two ALS areas; ASCII XYZ plus reflectance and return count",
+                large=True,
+                note="主要是 ALS 点云，不是完整相机-LiDAR同步航测包；适合验证点云产品而非 BA。",
+            ),
+        ),
+        workflow_tags=("lidar_fusion_validation",),
+    ),
+    "usgs_3dep_naip_pairing": Dataset(
+        dataset_id="usgs_3dep_naip_pairing",
+        title="USGS 3DEP LiDAR paired with USDA NAIP imagery",
+        category="public_aerial_lidar_catalog",
+        source_url="https://www.usgs.gov/3d-elevation-program",
+        license_note="USGS 3DEP 产品官方声明免费且无使用限制；NAIP 影像使用限制需按 USDA/数据门户条款逐项确认。",
+        description="美国公开航空 LiDAR 和航空正射影像目录，适合选择同一区域进行 DOM/DSM、点云融合和精度验证。",
+        resources=(
+            Resource(
+                filename="USGS_3DEP_NAIP_manual_selection",
+                manual_url="https://www.usgs.gov/3d-elevation-program",
+                size_hint="area-dependent; nationwide catalog",
+                large=True,
+                note="不是单一 benchmark；需要人工选定区域、年份、坐标系和 NAIP 影像匹配关系。",
+            ),
+        ),
+        workflow_tags=("lidar_fusion_validation",),
+    ),
+    "kitti_raw_lidar_camera": Dataset(
+        dataset_id="kitti_raw_lidar_camera",
+        title="KITTI Raw Camera and Velodyne LiDAR",
+        category="ground_mobile_lidar_camera",
+        source_url="https://www.cvlibs.net/datasets/kitti/raw_data.php",
+        license_note="CC BY-NC-SA 3.0，非商业用途；使用时需引用 KITTI 论文和遵守条款。",
+        description="车载相机、Velodyne LiDAR、GPS/IMU 和标定，适合调试相机-LiDAR投影、外参和点到射线约束的基础算法。",
+        resources=(
+            Resource(
+                filename="KITTI_raw_official_downloads",
+                manual_url="https://www.cvlibs.net/datasets/kitti/raw_data.php",
+                size_hint="sequence-dependent",
+                large=True,
+                note="地面车载数据，不代表 UAV/航空摄影测量；动态物体较多，适合算法单元验证。",
+            ),
+        ),
+        workflow_tags=("ba_constraint_candidate", "lidar_fusion_validation"),
+    ),
     "agisoft_depth_images": Dataset(
         dataset_id="agisoft_depth_images",
         title="Agisoft Depth Images",
@@ -273,13 +436,14 @@ DATASETS: dict[str, Dataset] = {
 
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser = argparse.ArgumentParser(
-        description="Download curated photogrammetry datasets into PlaScan testData.",
+        description="Download curated photogrammetry and LiDAR-adjacent datasets into PlaScan testData.",
         formatter_class=argparse.ArgumentDefaultsHelpFormatter,
     )
     parser.add_argument("--target-root", type=Path, default=DEFAULT_TARGET_ROOT, help="download destination root")
     parser.add_argument("--list", action="store_true", help="list available datasets and exit")
     parser.add_argument("--dataset", action="append", default=[], help="dataset id to download; repeatable")
     parser.add_argument("--category", action="append", default=[], help="category to download; repeatable")
+    parser.add_argument("--workflow-tag", action="append", default=[], help="workflow tag to download; repeatable")
     parser.add_argument("--all", action="store_true", help="select all datasets")
     parser.add_argument("--include-large", action="store_true", help="include resources marked as large")
     parser.add_argument("--dry-run", action="store_true", help="write manifests but do not download archives")
@@ -290,9 +454,15 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def select_datasets(dataset_ids: Iterable[str], categories: Iterable[str], include_all: bool) -> list[Dataset]:
+def select_datasets(
+    dataset_ids: Iterable[str],
+    categories: Iterable[str],
+    workflow_tags: Iterable[str],
+    include_all: bool,
+) -> list[Dataset]:
     dataset_id_set = set(dataset_ids)
     category_set = set(categories)
+    workflow_tag_set = set(workflow_tags)
 
     unknown_ids = sorted(dataset_id_set.difference(DATASETS.keys()))
     if unknown_ids:
@@ -303,9 +473,19 @@ def select_datasets(dataset_ids: Iterable[str], categories: Iterable[str], inclu
     if unknown_categories:
         raise ValueError(f"Unknown category/categories: {', '.join(unknown_categories)}")
 
+    known_workflow_tags = {tag for dataset in DATASETS.values() for tag in dataset.workflow_tags}
+    unknown_workflow_tags = sorted(workflow_tag_set.difference(known_workflow_tags))
+    if unknown_workflow_tags:
+        raise ValueError(f"Unknown workflow tag(s): {', '.join(unknown_workflow_tags)}")
+
     selected: list[Dataset] = []
     for dataset in DATASETS.values():
-        if include_all or dataset.dataset_id in dataset_id_set or dataset.category in category_set:
+        if (
+            include_all
+            or dataset.dataset_id in dataset_id_set
+            or dataset.category in category_set
+            or workflow_tag_set.intersection(dataset.workflow_tags)
+        ):
             selected.append(dataset)
     return selected
 
@@ -319,6 +499,7 @@ def list_datasets(target_root: Path = DEFAULT_TARGET_ROOT) -> None:
             flags.append("large")
         if any(resource.manual_url and not resource.url for resource in dataset.resources):
             flags.append("manual")
+        flags.extend(dataset.workflow_tags)
         flag_text = f" [{' '.join(flags)}]" if flags else ""
         print(f"  {dataset.dataset_id:32s} {dataset.category:22s} {dataset.title}{flag_text}")
 
@@ -347,6 +528,7 @@ def write_manifest(
         "description": dataset.description,
         "mode": mode,
         "generated_at": datetime.now(timezone.utc).isoformat(),
+        "workflow_tags": list(dataset.workflow_tags),
         "resources": resource_entries,
     }
     (dataset_dir / "manifest.json").write_text(
@@ -556,12 +738,12 @@ def download_dataset(
 def main(argv: list[str] | None = None) -> int:
     args = parse_args(argv)
 
-    if args.list or not (args.all or args.dataset or args.category):
+    if args.list or not (args.all or args.dataset or args.category or args.workflow_tag):
         list_datasets(args.target_root)
         return 0
 
     try:
-        selected = select_datasets(args.dataset, args.category, args.all)
+        selected = select_datasets(args.dataset, args.category, args.workflow_tag, args.all)
     except ValueError as exc:
         print(str(exc), file=sys.stderr)
         return 2

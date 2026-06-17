@@ -48,6 +48,7 @@ class DownloadPhotogrammetryTestDataTest(unittest.TestCase):
         selected = downloader.select_datasets(
             dataset_ids=["colmap_south_building"],
             categories=["planetary_stereo"],
+            workflow_tags=[],
             include_all=False,
         )
         selected_ids = {dataset.dataset_id for dataset in selected}
@@ -56,8 +57,42 @@ class DownloadPhotogrammetryTestDataTest(unittest.TestCase):
         self.assertIn("asp_lronac_csm_example", selected_ids)
         self.assertNotIn("middlebury_temple_sparse_ring", selected_ids)
 
-        all_selected = downloader.select_datasets([], [], include_all=True)
+        all_selected = downloader.select_datasets([], [], [], include_all=True)
         self.assertEqual(len(all_selected), len(downloader.DATASETS))
+
+    def test_selection_supports_lidar_workflow_tags(self):
+        selected = downloader.select_datasets(
+            dataset_ids=[],
+            categories=[],
+            workflow_tags=["ba_constraint_candidate"],
+            include_all=False,
+        )
+        selected_ids = {dataset.dataset_id for dataset in selected}
+
+        self.assertIn("mun_frl_vil", selected_ids)
+        self.assertIn("h3d_hessigheim_uav_lidar", selected_ids)
+        self.assertIn("kitti_raw_lidar_camera", selected_ids)
+        self.assertNotIn("urbanscene3d", selected_ids)
+        self.assertGreaterEqual(len(selected_ids), 4)
+
+    def test_workflow_tag_selection_writes_manual_manifest(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            target_root = Path(tmp) / "downloads"
+            exit_code = downloader.main([
+                "--target-root",
+                str(target_root),
+                "--workflow-tag",
+                "ba_constraint_candidate",
+                "--dry-run",
+            ])
+
+            manifest = target_root / "mun_frl_vil" / "manifest.json"
+            manual = target_root / "mun_frl_vil" / "MANUAL_DOWNLOAD.txt"
+            self.assertEqual(exit_code, 0)
+            self.assertTrue(manifest.exists())
+            self.assertTrue(manual.exists())
+            text = manifest.read_text(encoding="utf-8")
+            self.assertIn("ba_constraint_candidate", text)
 
     def test_list_command_prints_catalog_without_creating_files(self):
         with tempfile.TemporaryDirectory() as tmp:
