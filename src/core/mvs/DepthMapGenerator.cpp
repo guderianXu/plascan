@@ -2262,7 +2262,8 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                                                             coarseHintSize.width,
                                                             coarseHintSize.height,
                                                             workRefSparseSamples);
-    const cv::Size supportMaskSize = patchMatchWorkSize(refImg, pmCfg);
+    PatchMatchConfig supportMaskCfg = makeFinePatchMatchConfig(pmCfg, useRectified, 0.0f);
+    const cv::Size supportMaskSize = patchMatchWorkSize(refImg, supportMaskCfg);
     std::vector<ProjectedSparseDepthSample> rectifiedSupportSamples;
     const std::vector<ProjectedSparseDepthSample> *supportSamples = &workRefSparseSamples;
     if (useRectified)
