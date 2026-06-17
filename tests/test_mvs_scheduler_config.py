@@ -62,6 +62,21 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("visibleSparsePointIndicesForFrame", scheduler)
         self.assertNotIn("selectMvsSourceViewIndices(m_views, m_sparse, refIdx, numSrc)", scheduler)
 
+    def test_depth_scheduler_caches_selected_source_shared_sparse_points(self):
+        header = self.read("src/core/mvs/DepthMapGenerator.h")
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        visible_start = scheduler.index("std::vector<size_t> DepthMapGenerator::visibleSparsePointIndicesForFrame")
+        visible_end = scheduler.index("// =============================================================================", visible_start)
+        visible_block = scheduler[visible_start:visible_end]
+
+        self.assertIn("sourceSharedPointIndices", header)
+        self.assertIn("sourceSharedPointIndices.reserve", scheduler)
+        self.assertIn("sourceSharedPointIndices.push_back", scheduler)
+        self.assertIn("sourceIndicesMatchCachedPrefix", scheduler)
+        self.assertIn("return cache.sourceSharedPointIndices;", visible_block)
+        self.assertLess(visible_block.index("return cache.sourceSharedPointIndices;"),
+                        visible_block.index("std::vector<size_t> filtered;"))
+
     def test_depth_frame_reuses_visible_sparse_points_for_range_hint_and_support(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 

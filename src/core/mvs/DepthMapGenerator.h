@@ -194,6 +194,7 @@ private:
     struct FrameMvsCache
     {
         std::vector<size_t> visiblePointIndices;
+        std::vector<size_t> sourceSharedPointIndices;
         std::vector<int> sourceViewIndices;
     };
 

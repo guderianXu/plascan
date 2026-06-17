@@ -872,6 +872,24 @@ void DepthMapGenerator::prepareFrameCaches()
         {
             sources = nearestMvsSourceViewIndices(NV, refIdx, std::max(1, m_config.numSourceViews));
         }
+
+        auto &cache = m_frameCaches[static_cast<size_t>(refIdx)];
+        cache.sourceSharedPointIndices.reserve(cache.visiblePointIndices.size());
+        for (size_t pointIndex : cache.visiblePointIndices)
+        {
+            for (int sourceIdx : cache.sourceViewIndices)
+            {
+                if (sourceIdx < 0 || sourceIdx >= NV || sourceIdx == refIdx)
+                {
+                    continue;
+                }
+                if (isSparsePointVisibleInFrame(sourceIdx, pointIndex))
+                {
+                    cache.sourceSharedPointIndices.push_back(pointIndex);
+                    break;
+                }
+            }
+        }
     }
 
     LOG_INFO(QStringLiteral("[MVS] MVS 可见性缓存完成: views=%1 points=%2 elapsed=%3 ms")
@@ -910,10 +928,26 @@ std::vector<size_t> DepthMapGenerator::visibleSparsePointIndicesForFrame(
         return collectMvsVisibleSparsePointIndices(m_views, m_sparse, refIdx, sourceIndices, minSourceViews);
     }
 
-    const auto &refVisible = m_frameCaches[static_cast<size_t>(refIdx)].visiblePointIndices;
+    const auto &cache = m_frameCaches[static_cast<size_t>(refIdx)];
+    const auto &refVisible = cache.visiblePointIndices;
     if (sourceIndices.empty() || minSourceViews <= 0)
     {
         return refVisible;
+    }
+
+    auto sourceIndicesMatchCachedPrefix = [&cache, &sourceIndices]()
+    {
+        if (sourceIndices.size() != cache.sourceViewIndices.size())
+        {
+            return false;
+        }
+        return std::equal(sourceIndices.begin(),
+                          sourceIndices.end(),
+                          cache.sourceViewIndices.begin());
+    };
+    if (minSourceViews <= 1 && sourceIndicesMatchCachedPrefix())
+    {
+        return cache.sourceSharedPointIndices;
     }
 
     std::vector<size_t> filtered;
