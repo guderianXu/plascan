@@ -126,6 +126,18 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("fineSparseSeedHint.copyTo(fineHint", fine_block)
         self.assertNotIn("buildHintDepthFromProjectedSamples(refIdx", fine_block)
 
+    def test_coarse_sparse_hint_uses_distance_transform_propagation(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        hint_start = scheduler.index("cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples")
+        hint_end = scheduler.index("cv::Mat DepthMapGenerator::buildSparseSeedDepthFromProjectedSamples")
+        hint_body = scheduler[hint_start:hint_end]
+
+        self.assertIn("cv::distanceTransform", hint_body)
+        self.assertIn("DIST_LABEL_PIXEL", hint_body)
+        self.assertIn("maxHintRadius", hint_body)
+        self.assertNotIn("cv::Mat distMap", hint_body)
+        self.assertNotIn("INT_MAX / 2", hint_body)
+
     def test_patchmatch_accepts_prescaled_hint_without_extra_resize(self):
         cuda = self.read("src/core/mvs/PatchMatchCUDA.cu")
 

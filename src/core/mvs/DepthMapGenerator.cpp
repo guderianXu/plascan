@@ -1363,66 +1363,70 @@ cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples(
         ? std::clamp(static_cast<int>(std::sqrt(static_cast<float>(W * H) / seedHintCnt) * 0.5f), 16, 48)
         : 0;
     const int maxHintRadius = adaptiveHintRadius;
-    // BFS 限距离膨胀：每步把所有"边界上有 hint 且邻居无 hint"的像素填充
+    // 距离变换限距离膨胀：用 OpenCV 的优化扫描求每个像素最近的稀疏 seed，
+    // 避免手写多轮 at<> 全图扫描。只在 maxHintRadius 内传播，远处仍保留 0。
     {
-        // distMap: 到最近稀疏种子的曼哈顿（棋盘）距离近似（使用 2 次线性扫描）
-        cv::Mat distMap(H, W, CV_32S, cv::Scalar(INT_MAX / 2));
-        // 初始化种子
+        cv::Mat seedDistanceMask(H, W, CV_8U, cv::Scalar(255));
+        seedDistanceMask.setTo(0, hint > 0);
+
+        cv::Mat distanceMap;
+        cv::Mat nearestSeedLabels;
+        cv::distanceTransform(seedDistanceMask,
+                              distanceMap,
+                              nearestSeedLabels,
+                              cv::DIST_L1,
+                              3,
+                              cv::DIST_LABEL_PIXEL);
+
+        double maxLabelValue = 0.0;
+        cv::minMaxLoc(nearestSeedLabels, nullptr, &maxLabelValue);
+        std::vector<float> labelDepths(static_cast<size_t>(std::max(0.0, maxLabelValue)) + 1, 0.0f);
         for (int row = 0; row < H; ++row)
+        {
+            const float *hintRow = hint.ptr<float>(row);
+            const int *labelRow = nearestSeedLabels.ptr<int>(row);
             for (int col = 0; col < W; ++col)
-                if (hint.at<float>(row, col) > 0)
-                    distMap.at<int>(row, col) = 0;
-        // 正向扫描（左上→右下）
-        for (int row = 0; row < H; ++row) {
-            for (int col = 0; col < W; ++col) {
-                int &d = distMap.at<int>(row, col);
-                if (row > 0) d = std::min(d, distMap.at<int>(row-1, col) + 1);
-                if (col > 0) d = std::min(d, distMap.at<int>(row, col-1) + 1);
-            }
-        }
-        // 反向扫描（右下→左上）
-        for (int row = H-1; row >= 0; --row) {
-            for (int col = W-1; col >= 0; --col) {
-                int &d = distMap.at<int>(row, col);
-                if (row < H-1) d = std::min(d, distMap.at<int>(row+1, col) + 1);
-                if (col < W-1) d = std::min(d, distMap.at<int>(row, col+1) + 1);
-            }
-        }
-        // BFS 传播：在 distMap 限制内，将最近稀疏点深度写入 hint（近似最近邻）
-        // 只填充距离 <= maxHintRadius 且原本为 0 的像素
-        // 思路：再做一次双向扫描，但只在接受范围内传播
-        cv::Mat hintDilated = hint.clone();
-        for (int row = 0; row < H; ++row) {
-            for (int col = 0; col < W; ++col) {
-                if (distMap.at<int>(row, col) <= maxHintRadius && hintDilated.at<float>(row, col) == 0) {
-                    // 从上方或左方最近的已填充像素传播
-                    float v = 0.f;
-                    if (row > 0 && hintDilated.at<float>(row-1, col) > 0
-                        && distMap.at<int>(row-1, col) < distMap.at<int>(row, col))
-                        v = hintDilated.at<float>(row-1, col);
-                    if (col > 0 && hintDilated.at<float>(row, col-1) > 0
-                        && distMap.at<int>(row, col-1) < distMap.at<int>(row, col))
-                        v = hintDilated.at<float>(row, col-1);
-                    hintDilated.at<float>(row, col) = v;
+            {
+                const float depth = hintRow[col];
+                const int label = labelRow[col];
+                if (depth <= 0.0f || label <= 0)
+                {
+                    continue;
+                }
+
+                float &labelDepth = labelDepths[static_cast<size_t>(label)];
+                if (labelDepth == 0.0f || depth < labelDepth)
+                {
+                    labelDepth = depth;
                 }
             }
         }
-        for (int row = H-1; row >= 0; --row) {
-            for (int col = W-1; col >= 0; --col) {
-                if (distMap.at<int>(row, col) <= maxHintRadius && hintDilated.at<float>(row, col) == 0) {
-                    float v = 0.f;
-                    if (row < H-1 && hintDilated.at<float>(row+1, col) > 0
-                        && distMap.at<int>(row+1, col) < distMap.at<int>(row, col))
-                        v = hintDilated.at<float>(row+1, col);
-                    if (col < W-1 && hintDilated.at<float>(row, col+1) > 0
-                        && distMap.at<int>(row, col+1) < distMap.at<int>(row, col))
-                        v = hintDilated.at<float>(row, col+1);
-                    if (hintDilated.at<float>(row, col) == 0) hintDilated.at<float>(row, col) = v;
+
+        for (int row = 0; row < H; ++row)
+        {
+            float *hintRow = hint.ptr<float>(row);
+            const float *distanceRow = distanceMap.ptr<float>(row);
+            const int *labelRow = nearestSeedLabels.ptr<int>(row);
+            for (int col = 0; col < W; ++col)
+            {
+                if (hintRow[col] > 0.0f || distanceRow[col] > static_cast<float>(maxHintRadius))
+                {
+                    continue;
+                }
+
+                const int label = labelRow[col];
+                if (label <= 0 || static_cast<size_t>(label) >= labelDepths.size())
+                {
+                    continue;
+                }
+
+                const float depth = labelDepths[static_cast<size_t>(label)];
+                if (depth > 0.0f)
+                {
+                    hintRow[col] = depth;
                 }
             }
         }
-        // 只把扩散结果写入原来为 0 的像素（不覆盖已有稀疏点深度）
-        hintDilated.copyTo(hint, hint == 0);
     }
 
     int hintCnt = cv::countNonZero(hint > 0);
