@@ -23,6 +23,7 @@
 #include <sstream>
 #include <cctype>
 #include <functional>
+#include <limits>
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -902,8 +903,9 @@ void DepthMapGenerator::prepareFrameCaches()
 
     for (int refIdx = 0; refIdx < NV; ++refIdx)
     {
-        std::vector<MvsSourceViewScore> scores;
-        scores.reserve(static_cast<size_t>(std::max(0, NV - 1)));
+        const int desiredSourceCount = std::max(1, m_config.numSourceViews);
+        std::vector<MvsSourceViewScore> rankedSourceCandidates;
+        rankedSourceCandidates.reserve(static_cast<size_t>(std::max(0, NV - 1)));
         for (int sourceIdx = 0; sourceIdx < NV; ++sourceIdx)
         {
             if (sourceIdx == refIdx)
@@ -917,22 +919,26 @@ void DepthMapGenerator::prepareFrameCaches()
                 continue;
             }
 
-            const float medianAngle = sampledMedianAngle(refIdx, sourceIdx);
-            const float angleWeight =
-                medianAngle < 0.2f ? 0.25f :
-                medianAngle > 35.0f ? 0.50f :
-                1.0f;
-            const float proximityPenalty = 0.001f * static_cast<float>(std::abs(sourceIdx - refIdx));
-
-            MvsSourceViewScore score;
-            score.viewIndex = sourceIdx;
-            score.commonVisiblePoints = common;
-            score.medianTriangulationAngleDeg = medianAngle;
-            score.score = static_cast<float>(common) * angleWeight - proximityPenalty;
-            scores.push_back(score);
+            MvsSourceViewScore candidate;
+            candidate.viewIndex = sourceIdx;
+            candidate.commonVisiblePoints = common;
+            candidate.medianTriangulationAngleDeg = 0.f;
+            candidate.score = static_cast<float>(common);
+            rankedSourceCandidates.push_back(candidate);
         }
 
-        std::sort(scores.begin(), scores.end(), [](const MvsSourceViewScore &a, const MvsSourceViewScore &b)
+        std::sort(rankedSourceCandidates.begin(),
+                  rankedSourceCandidates.end(),
+                  [](const MvsSourceViewScore &a, const MvsSourceViewScore &b)
+        {
+            if (a.commonVisiblePoints != b.commonVisiblePoints)
+            {
+                return a.commonVisiblePoints > b.commonVisiblePoints;
+            }
+            return a.viewIndex < b.viewIndex;
+        });
+
+        auto compareSourceScores = [](const MvsSourceViewScore &a, const MvsSourceViewScore &b)
         {
             if (a.score != b.score)
             {
@@ -943,10 +949,44 @@ void DepthMapGenerator::prepareFrameCaches()
                 return a.commonVisiblePoints > b.commonVisiblePoints;
             }
             return a.viewIndex < b.viewIndex;
-        });
+        };
+
+        std::vector<MvsSourceViewScore> scores;
+        scores.reserve(rankedSourceCandidates.size());
+        for (const MvsSourceViewScore &candidate : rankedSourceCandidates)
+        {
+            const float currentSourceScoreCutoff =
+                scores.size() >= static_cast<size_t>(desiredSourceCount)
+                    ? scores[static_cast<size_t>(desiredSourceCount - 1)].score
+                    : -std::numeric_limits<float>::infinity();
+
+            if (scores.size() >= static_cast<size_t>(desiredSourceCount)
+                && candidate.commonVisiblePoints <= currentSourceScoreCutoff)
+            {
+                // remaining candidates are sorted by common count; angle weights never raise a score above common.
+                break;
+            }
+
+            const float medianAngle = sampledMedianAngle(refIdx, candidate.viewIndex);
+            const float angleWeight =
+                medianAngle < 0.2f ? 0.25f :
+                medianAngle > 35.0f ? 0.50f :
+                1.0f;
+            const float proximityPenalty = 0.001f * static_cast<float>(std::abs(candidate.viewIndex - refIdx));
+
+            MvsSourceViewScore score;
+            score.viewIndex = candidate.viewIndex;
+            score.commonVisiblePoints = candidate.commonVisiblePoints;
+            score.medianTriangulationAngleDeg = medianAngle;
+            score.score = static_cast<float>(candidate.commonVisiblePoints) * angleWeight - proximityPenalty;
+            scores.push_back(score);
+            std::sort(scores.begin(), scores.end(), compareSourceScores);
+        }
+
+        std::sort(scores.begin(), scores.end(), compareSourceScores);
 
         auto &sources = m_frameCaches[static_cast<size_t>(refIdx)].sourceViewIndices;
-        sources.reserve(static_cast<size_t>(std::min(NV - 1, std::max(1, m_config.numSourceViews))));
+        sources.reserve(static_cast<size_t>(std::min(NV - 1, desiredSourceCount)));
         for (const auto &score : scores)
         {
             if (score.score <= 0.f)
@@ -954,7 +994,7 @@ void DepthMapGenerator::prepareFrameCaches()
                 continue;
             }
             sources.push_back(score.viewIndex);
-            if (static_cast<int>(sources.size()) >= std::max(1, m_config.numSourceViews))
+            if (static_cast<int>(sources.size()) >= desiredSourceCount)
             {
                 break;
             }
@@ -962,7 +1002,7 @@ void DepthMapGenerator::prepareFrameCaches()
 
         if (sources.empty())
         {
-            sources = nearestMvsSourceViewIndices(NV, refIdx, std::max(1, m_config.numSourceViews));
+            sources = nearestMvsSourceViewIndices(NV, refIdx, desiredSourceCount);
         }
 
         auto &cache = m_frameCaches[static_cast<size_t>(refIdx)];

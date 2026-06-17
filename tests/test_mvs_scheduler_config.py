@@ -94,6 +94,20 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("m_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices.push_back(pointIndex);",
                          block)
 
+    def test_source_view_scoring_short_circuits_angle_sampling_when_top_sources_are_proven(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        start = scheduler.index("void DepthMapGenerator::prepareFrameCaches()")
+        end = scheduler.index("std::vector<int> DepthMapGenerator::sourceViewIndicesForFrame", start)
+        block = scheduler[start:end]
+
+        self.assertIn("rankedSourceCandidates", block)
+        self.assertIn("desiredSourceCount", block)
+        self.assertIn("currentSourceScoreCutoff", block)
+        self.assertIn("remaining candidates are sorted by common count", block)
+        self.assertIn("candidate.commonVisiblePoints <= currentSourceScoreCutoff", block)
+        self.assertLess(block.index("candidate.commonVisiblePoints <= currentSourceScoreCutoff"),
+                        block.index("sampledMedianAngle(refIdx, candidate.viewIndex)"))
+
     def test_depth_frame_reuses_visible_sparse_points_for_range_hint_and_support(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
