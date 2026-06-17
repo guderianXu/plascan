@@ -2,6 +2,40 @@
 
 本文件按版本倒序记录用户可感知的主要变更。详细验证记录见 `docs/releases/`。
 
+## v1.1.2 - 2026-06-17
+
+### 新增
+
+- 新增 LiDAR / 激光点摄影测量数据集整理文档，覆盖 MUN-FRL、UseGeo、H3D、MARS-LVIG、UAVScenes、NTU VIRAL、DublinCity、DFC 2019 / US3D、ETH3D 等候选数据，用于后续激光点参与 BA、相机-LiDAR 外参验证、MVS/DEM/DOM 质量检查。
+- 扩展摄影测量测试数据下载器，增加 `workflow_tags` 和 `--workflow-tag` 选择能力，可按 `ba_constraint_candidate`、`lidar_fusion_validation` 等用途筛选 LiDAR 相邻数据集并生成手动下载 manifest。
+
+### 优化
+
+- 优化 MVS 深度图估计的 CPU 前处理链路：缓存源帧共视稀疏点、并行构建可见性缓存、源帧角度打分提前停止，减少大规模航测数据在进入 CUDA PatchMatch 前的等待时间。
+- 优化稀疏 hint 构建：投影稀疏样本只做单次可见点遍历，深度分位采样有界，粗层 hint 使用 OpenCV distance transform 限距离传播，精层仅叠加 seed，避免全图传播把错误深度强行铺满。
+- 优化 MVS 支撑掩码与 dense refine：稀疏支撑改为软约束，支撑掩码按精层 PatchMatch 工作尺寸生成，大点云 refine 对输入和内联过滤做上限保护，避免 GUI/CLI 在百万级点云上长时间阻塞。
+- 优化 CUDA 灰度图处理路径，避免重复 reference resize，并保留 GPU 灰度图缓存命中统计，便于观察 GPU 利用率不连续时是否被上传/缩放拖慢。
+
+### 修复
+
+- 修复 MVS 后处理中过强稀疏支撑裁剪可能导致有效深度被硬清空的问题，改为置信度软缩放并保留深度。
+- 修复深度图局部离群噪点缺少后处理保护的问题，增加局部深度离群过滤和阶段耗时统计，便于定位 `source/range/hint/patchmatch/filter` 瓶颈。
+- 修复大规模 dense refine 连续执行第二轮 SOR 或内联大点云过滤导致的卡顿风险。
+
+### 验证
+
+- `python -m unittest tests.test_mvs_scheduler_config tests.test_reconstruct_pipeline_cli tests.test_repo_hygiene tests.test_download_photogrammetry_testdata` 通过，65 个测试，3 个跳过。
+- `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，使用 Windows 原生 MSVC/Ninja、CUDA 13.1、libtorch-cu130 和 `build\windows-vcpkg-cuda-release`。
+- `build\windows-vcpkg-cuda-release\tests\test_mvs_pipeline.exe --gtest_brief=1` 通过，17/17。
+- `build\windows-vcpkg-cuda-release\tests\test_mvs_types.exe --gtest_brief=1` 通过，16/16。
+- `build\windows-vcpkg-cuda-release\tests\test_gui_project_utils.exe --gtest_brief=1` 通过，133/133。
+- GitHub Actions `build-test` 作为远端门禁；`v1.1.2` 发布提交和 tag 推送后需以 Actions 结果为准。
+
+### 已知问题
+
+- 本轮重点为 MVS/CUDA 前处理与数据集准备，未重新运行 agisoft aerial GCP 444 张完整 MVS/mesh/DEM/DOM 长时流水线。
+- CI 仍暂时排除历史已知失败 `TerrainDemDomTest.TerrainPipelineGeneratesDemDomFromDirectory`；该测试可能出现 `dom_png not found`，后续应单独修复 Terrain/DEM/DOM 输出登记或测试数据。
+
 ## v1.1.1 - 2026-06-16
 
 ### 优化
