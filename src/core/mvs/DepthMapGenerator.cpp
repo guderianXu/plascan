@@ -23,6 +23,9 @@
 #include <sstream>
 #include <cctype>
 #include <functional>
+#ifdef _OPENMP
+#include <omp.h>
+#endif
 
 namespace xjw
 {
@@ -717,59 +720,148 @@ void DepthMapGenerator::prepareFrameCaches()
 
     const auto start = Clock::now();
     constexpr int kMaxPairViewsPerPoint = 32;
-    std::vector<int> visibleViews;
-    visibleViews.reserve(std::min(NV, kMaxPairViewsPerPoint));
+    constexpr size_t kParallelVisibilityPointThreshold = 20000;
 
-    for (size_t pointIndex = 0; pointIndex < pointCount; ++pointIndex)
+    struct VisibilityCacheShard
     {
-        visibleViews.clear();
-        const auto &point = m_sparse.points[pointIndex];
-        for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
+        explicit VisibilityCacheShard(int viewCount)
+            : visiblePointIndicesByView(static_cast<size_t>(std::max(0, viewCount)))
+            , pairCommonCounts(static_cast<size_t>(std::max(0, viewCount))
+                                   * static_cast<size_t>(std::max(0, viewCount)),
+                               0)
         {
-            if (!isMvsSparsePointVisibleInView(m_views[viewIdx], point))
+        }
+
+        std::vector<std::vector<size_t>> visiblePointIndicesByView;
+        std::vector<int> pairCommonCounts;
+    };
+
+    int visibilityWorkerCount = 1;
+#ifdef _OPENMP
+    {
+        const int hwThreads = static_cast<int>(std::max(1u, std::thread::hardware_concurrency()));
+        const int requested = std::max(1, m_config.cpuWorkerCount);
+        visibilityWorkerCount = pointCount >= kParallelVisibilityPointThreshold && NV > 1
+            ? std::clamp(std::min(requested, hwThreads), 1, 16)
+            : 1;
+    }
+#endif
+
+    std::vector<VisibilityCacheShard> visibilityShards;
+    visibilityShards.reserve(static_cast<size_t>(visibilityWorkerCount));
+    for (int workerIndex = 0; workerIndex < visibilityWorkerCount; ++workerIndex)
+    {
+        visibilityShards.emplace_back(NV);
+    }
+
+#pragma omp parallel num_threads(visibilityWorkerCount) if(visibilityWorkerCount > 1)
+    {
+        int workerIndex = 0;
+#ifdef _OPENMP
+        workerIndex = omp_get_thread_num();
+#endif
+        VisibilityCacheShard &shard = visibilityShards[static_cast<size_t>(workerIndex)];
+        std::vector<int> visibleViews;
+        visibleViews.reserve(std::min(NV, kMaxPairViewsPerPoint));
+        std::vector<int> pairViews;
+        pairViews.reserve(kMaxPairViewsPerPoint);
+
+#pragma omp for schedule(static)
+        for (long long pointIndexSigned = 0; pointIndexSigned < static_cast<long long>(pointCount); ++pointIndexSigned)
+        {
+            const size_t pointIndex = static_cast<size_t>(pointIndexSigned);
+            visibleViews.clear();
+            const auto &point = m_sparse.points[pointIndex];
+            for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
+            {
+                if (!isMvsSparsePointVisibleInView(m_views[viewIdx], point))
+                {
+                    continue;
+                }
+
+                shard.visiblePointIndicesByView[static_cast<size_t>(viewIdx)].push_back(pointIndex);
+                visibleViews.push_back(viewIdx);
+            }
+
+            if (visibleViews.size() < 2)
             {
                 continue;
             }
 
-            m_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices.push_back(pointIndex);
-            const size_t word = pointIndex / 64;
-            const size_t bit = pointIndex % 64;
-            m_visibilityBits[static_cast<size_t>(viewIdx) * m_visibilityWordCount + word] |= (uint64_t{1} << bit);
-            visibleViews.push_back(viewIdx);
-        }
-
-        if (visibleViews.size() < 2)
-        {
-            continue;
-        }
-
-        std::vector<int> pairViews;
-        if (static_cast<int>(visibleViews.size()) <= kMaxPairViewsPerPoint)
-        {
-            pairViews = visibleViews;
-        }
-        else
-        {
-            pairViews.reserve(kMaxPairViewsPerPoint);
-            for (int sample = 0; sample < kMaxPairViewsPerPoint; ++sample)
+            pairViews.clear();
+            if (static_cast<int>(visibleViews.size()) <= kMaxPairViewsPerPoint)
             {
-                const size_t idx = static_cast<size_t>(sample) * visibleViews.size()
-                                   / static_cast<size_t>(kMaxPairViewsPerPoint);
-                pairViews.push_back(visibleViews[std::min(idx, visibleViews.size() - 1)]);
+                pairViews.assign(visibleViews.begin(), visibleViews.end());
             }
-        }
-
-        for (size_t a = 0; a < pairViews.size(); ++a)
-        {
-            for (size_t b = a + 1; b < pairViews.size(); ++b)
+            else
             {
-                const int ia = pairViews[a];
-                const int ib = pairViews[b];
-                ++m_pairCommonCounts[static_cast<size_t>(ia) * NV + ib];
-                ++m_pairCommonCounts[static_cast<size_t>(ib) * NV + ia];
+                for (int sample = 0; sample < kMaxPairViewsPerPoint; ++sample)
+                {
+                    const size_t idx = static_cast<size_t>(sample) * visibleViews.size()
+                                       / static_cast<size_t>(kMaxPairViewsPerPoint);
+                    pairViews.push_back(visibleViews[std::min(idx, visibleViews.size() - 1)]);
+                }
+            }
+
+            for (size_t a = 0; a < pairViews.size(); ++a)
+            {
+                for (size_t b = a + 1; b < pairViews.size(); ++b)
+                {
+                    const int ia = pairViews[a];
+                    const int ib = pairViews[b];
+                    ++shard.pairCommonCounts[static_cast<size_t>(ia) * NV + ib];
+                    ++shard.pairCommonCounts[static_cast<size_t>(ib) * NV + ia];
+                }
             }
         }
     }
+
+    auto mergeVisibilityCacheShards = [&]()
+    {
+        for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
+        {
+            size_t visibleCount = 0;
+            for (const VisibilityCacheShard &shard : visibilityShards)
+            {
+                visibleCount += shard.visiblePointIndicesByView[static_cast<size_t>(viewIdx)].size();
+            }
+
+            auto &visible = m_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices;
+            visible.reserve(visibleCount);
+            for (const VisibilityCacheShard &shard : visibilityShards)
+            {
+                const auto &localVisible = shard.visiblePointIndicesByView[static_cast<size_t>(viewIdx)];
+                visible.insert(visible.end(), localVisible.begin(), localVisible.end());
+            }
+        }
+
+        for (VisibilityCacheShard &shard : visibilityShards)
+        {
+            for (size_t idx = 0; idx < m_pairCommonCounts.size(); ++idx)
+            {
+                m_pairCommonCounts[idx] += shard.pairCommonCounts[idx];
+            }
+        }
+    };
+    mergeVisibilityCacheShards();
+
+    auto buildVisibilityBitsFromFrameCaches = [&]()
+    {
+        const bool parallelBuildVisibilityBits = NV > 8 && pointCount >= kParallelVisibilityPointThreshold;
+#pragma omp parallel for schedule(static) if(parallelBuildVisibilityBits)
+        for (int viewIdx = 0; viewIdx < NV; ++viewIdx)
+        {
+            const auto &visible = m_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices;
+            const size_t viewOffset = static_cast<size_t>(viewIdx) * m_visibilityWordCount;
+            for (size_t pointIndex : visible)
+            {
+                const size_t word = pointIndex / 64;
+                const size_t bit = pointIndex % 64;
+                m_visibilityBits[viewOffset + word] |= (uint64_t{1} << bit);
+            }
+        }
+    };
+    buildVisibilityBitsFromFrameCaches();
 
     m_frameCachesReady = true;
 

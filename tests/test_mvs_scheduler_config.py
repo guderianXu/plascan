@@ -77,6 +77,23 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertLess(visible_block.index("return cache.sourceSharedPointIndices;"),
                         visible_block.index("std::vector<size_t> filtered;"))
 
+    def test_frame_cache_visibility_scan_uses_parallel_shards(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        start = scheduler.index("void DepthMapGenerator::prepareFrameCaches()")
+        end = scheduler.index("std::vector<int> DepthMapGenerator::sourceViewIndicesForFrame", start)
+        block = scheduler[start:end]
+
+        self.assertIn("VisibilityCacheShard", block)
+        self.assertIn("visibilityWorkerCount", block)
+        self.assertIn("#pragma omp parallel", block)
+        self.assertIn("#pragma omp for", block)
+        self.assertIn("shard.visiblePointIndicesByView", block)
+        self.assertIn("shard.pairCommonCounts", block)
+        self.assertIn("mergeVisibilityCacheShards", block)
+        self.assertIn("buildVisibilityBitsFromFrameCaches", block)
+        self.assertNotIn("m_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices.push_back(pointIndex);",
+                         block)
+
     def test_depth_frame_reuses_visible_sparse_points_for_range_hint_and_support(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
