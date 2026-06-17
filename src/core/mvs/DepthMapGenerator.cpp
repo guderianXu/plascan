@@ -1249,6 +1249,8 @@ std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSpars
     }
 
     const PositiveDepthCameraModel &cam = camera;
+    std::vector<ProjectedSparseDepthSample> projectedCandidates;
+    projectedCandidates.reserve(visiblePointIndices.size());
     std::vector<float> depthQuantileSamples;
     depthQuantileSamples.reserve(std::min(visiblePointIndices.size(), kMaxProjectedDepthQuantileSamples));
     const size_t quantileSampleStride = visiblePointIndices.size() > kMaxProjectedDepthQuantileSamples
@@ -1263,17 +1265,33 @@ std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSpars
             continue;
         }
         const auto &pt = sparse.points[pointIndex];
-        float Zc = cam.R_cw[6]*pt[0] + cam.R_cw[7]*pt[1] + cam.R_cw[8]*pt[2] + cam.T[2];
-        if (Zc > 0.f && std::isfinite(Zc))
+        float u = 0.0f;
+        float v = 0.0f;
+        float depth = 0.0f;
+        if (!cam.projectWithDepth(pt[0], pt[1], pt[2], u, v, depth)
+            || !std::isfinite(depth)
+            || u < 0.0f
+            || u >= static_cast<float>(imageWidth)
+            || v < 0.0f
+            || v >= static_cast<float>(imageHeight))
         {
-            if ((validDepthOrdinal % quantileSampleStride) == 0
-                && depthQuantileSamples.size() < kMaxProjectedDepthQuantileSamples)
-            {
-                depthQuantileSamples.push_back(Zc);
-            }
-            ++validDepthOrdinal;
+            continue;
         }
+
+        ProjectedSparseDepthSample candidate;
+        candidate.uNorm = u / static_cast<float>(imageWidth);
+        candidate.vNorm = v / static_cast<float>(imageHeight);
+        candidate.depth = depth;
+        projectedCandidates.push_back(candidate);
+
+        if ((validDepthOrdinal % quantileSampleStride) == 0
+            && depthQuantileSamples.size() < kMaxProjectedDepthQuantileSamples)
+        {
+            depthQuantileSamples.push_back(candidate.depth);
+        }
+        ++validDepthOrdinal;
     }
+
     float depthLo = 0.f, depthHi = 1e30f;
     if (depthQuantileSamples.size() >= 4)
     {
@@ -1292,36 +1310,15 @@ std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSpars
         depthHi = Q3 + 1.5f * IQR;
     }
 
-    samples.reserve(visiblePointIndices.size());
-    for (size_t pointIndex : visiblePointIndices)
+    samples.reserve(projectedCandidates.size());
+    for (const ProjectedSparseDepthSample &candidate : projectedCandidates)
     {
-        if (pointIndex >= sparse.points.size())
-        {
-            continue;
-        }
-        const auto &pt = sparse.points[pointIndex];
-        float u, v;
-        if (!cam.project(pt[0], pt[1], pt[2], u, v))
-        {
-            continue;
-        }
-        if (u < 0.0f || u >= static_cast<float>(imageWidth) ||
-            v < 0.0f || v >= static_cast<float>(imageHeight))
+        if (candidate.depth < depthLo || candidate.depth > depthHi || !std::isfinite(candidate.depth))
         {
             continue;
         }
 
-        float Zc = cam.R_cw[6]*pt[0] + cam.R_cw[7]*pt[1] + cam.R_cw[8]*pt[2] + cam.T[2];
-        if (Zc <= 0.f || Zc < depthLo || Zc > depthHi || !std::isfinite(Zc))
-        {
-            continue;
-        }
-
-        ProjectedSparseDepthSample sample;
-        sample.uNorm = u / static_cast<float>(imageWidth);
-        sample.vNorm = v / static_cast<float>(imageHeight);
-        sample.depth = Zc;
-        samples.push_back(sample);
+        samples.push_back(candidate);
     }
 
     return samples;

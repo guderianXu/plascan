@@ -51,6 +51,8 @@ public:
 
     bool valid() const;
     bool project(float worldX, float worldY, float worldZ, float &pixelX, float &pixelY) const;
+    bool projectWithDepth(float worldX, float worldY, float worldZ,
+                          float &pixelX, float &pixelY, float &depth) const;
     void unproject(float pixelX, float pixelY, float depth,
                    float &worldX, float &worldY, float &worldZ) const;
     void setPixelTransform(const std::array<double, 9> &transform,

@@ -99,6 +99,13 @@ bool PositiveDepthCameraModel::valid() const
 bool PositiveDepthCameraModel::project(float worldX, float worldY, float worldZ,
                                        float &pixelX, float &pixelY) const
 {
+    float depth = 0.0f;
+    return projectWithDepth(worldX, worldY, worldZ, pixelX, pixelY, depth);
+}
+
+bool PositiveDepthCameraModel::projectWithDepth(float worldX, float worldY, float worldZ,
+                                                float &pixelX, float &pixelY, float &depth) const
+{
     const float cameraX = rotationWorldToCamera[0] * worldX
                         + rotationWorldToCamera[1] * worldY
                         + rotationWorldToCamera[2] * worldZ
@@ -111,6 +118,7 @@ bool PositiveDepthCameraModel::project(float worldX, float worldY, float worldZ,
                         + rotationWorldToCamera[7] * worldY
                         + rotationWorldToCamera[8] * worldZ
                         + translationWorldToCamera[2];
+    depth = cameraZ;
     if (cameraZ < 1e-6f)
     {
         return false;

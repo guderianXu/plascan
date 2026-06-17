@@ -111,6 +111,28 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("std::sort(allZc", block)
         self.assertNotIn("allZc.reserve(visiblePointIndices.size())", block)
 
+    def test_projected_sparse_samples_are_collected_in_single_visible_point_pass(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        start = scheduler.index(
+            "std::vector<ProjectedSparseDepthSample> DepthMapGenerator::collectProjectedSparseDepthSamples")
+        end = scheduler.index("cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples", start)
+        block = scheduler[start:end]
+
+        self.assertEqual(block.count("for (size_t pointIndex : visiblePointIndices)"), 1)
+        self.assertIn("projectedCandidates", block)
+        self.assertIn("cam.projectWithDepth", block)
+        self.assertIn("candidate.depth", block)
+        self.assertNotIn("float Zc = cam.R_cw[6]*pt[0]", block)
+        self.assertNotIn("cam.project(pt[0]", block)
+
+    def test_positive_depth_camera_can_project_and_return_depth_once(self):
+        header = self.read("src/core/camera/PositiveDepthCameraModel.h")
+        source = self.read("src/core/camera/PositiveDepthCameraModel.cpp")
+
+        self.assertIn("projectWithDepth", header)
+        self.assertIn("PositiveDepthCameraModel::projectWithDepth", source)
+        self.assertIn("return projectWithDepth", source)
+
     def test_fine_sparse_hint_uses_seed_overlay_without_full_propagation(self):
         header = self.read("src/core/mvs/DepthMapGenerator.h")
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
