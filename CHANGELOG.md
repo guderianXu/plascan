@@ -4,7 +4,7 @@
 
 ## v1.1.2 - 2026-06-17
 
-> 2026-06-18 补充：新增 MVS 深度图内存自适应保护，代码已进入 `main`；既有 `v1.1.2` tag 未强制重写。
+> 2026-06-18 补充：新增 MVS 深度图内存自适应保护、快速二进制深度产物保存和 GUI CUDA 帧流水线自适应，代码已进入 `main`；既有 `v1.1.2` tag 未强制重写。
 
 ### 新增
 
@@ -19,6 +19,9 @@
 - 优化 CUDA 灰度图处理路径，避免重复 reference resize，并保留 GPU 灰度图缓存命中统计，便于观察 GPU 利用率不连续时是否被上传/缩放拖慢。
 - 优化 MVS 深度图缓存策略：根据系统物理内存和可用内存自动决定 full-res 深度图是否常驻内存，内存充足时保留空间换时间，内存不足或运行时压力升高时切换为流式保存并释放已缓存深度图。
 - 优化深度图预览/中间结果保存队列，限制后台 full-res 深度帧积压数量，避免保存线程落后时继续放大内存峰值。
+- 优化 MVS 深度图产物保存：原始 depth/confidence 从 OpenCV `.yml.gz` 改为 PlaScan 二进制 `.bin`，减少每帧 CPU 压缩/文本序列化耗时，并保留旧 `.yml.gz` 读取兼容。
+- 优化深度图预览图保存：预览 PNG 默认限制最长边 2048，避免每帧额外写入 6000x4000 全尺寸伪彩图拖慢 GPU 流水线。
+- 优化 GUI 手动深度估计默认调度：线程数足够时自动使用 2 个 CUDA frame workers，让 GPU 帧任务和 CPU/IO 后处理更容易形成流水线。
 
 ### 修复
 
@@ -33,9 +36,9 @@
 - `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，使用 Windows 原生 MSVC/Ninja、CUDA 13.1、libtorch-cu130 和 `build\windows-vcpkg-cuda-release`。
 - `build\windows-vcpkg-cuda-release\tests\test_mvs_pipeline.exe --gtest_brief=1` 通过，17/17。
 - `build\windows-vcpkg-cuda-release\tests\test_mvs_types.exe --gtest_brief=1` 通过，16/16。
-- `build\windows-vcpkg-cuda-release\tests\test_gui_project_utils.exe --gtest_brief=1` 通过，133/133。
-- `python -m unittest tests.test_mvs_scheduler_config` 通过，46/46。
-- `python -m unittest tests.test_mvs_scheduler_config tests.test_reconstruct_pipeline_cli tests.test_three_d_reconstruction_cli` 通过，59 个测试，3 个跳过。
+- `build\windows-vcpkg-cuda-release\tests\test_gui_project_utils.exe --gtest_brief=1` 通过，135/135。
+- `python -m unittest tests.test_mvs_scheduler_config` 通过，48/48。
+- `python -m unittest tests.test_mvs_scheduler_config tests.test_reconstruct_pipeline_cli tests.test_three_d_reconstruction_cli` 通过，61 个测试，3 个跳过。
 - GitHub Actions `build-test` 作为远端门禁；`v1.1.2` 发布提交和 tag 推送后需以 Actions 结果为准。
 
 ### 已知问题
