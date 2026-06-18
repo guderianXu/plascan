@@ -24,6 +24,13 @@
 #include <cctype>
 #include <functional>
 #include <limits>
+#include <fstream>
+#ifdef _WIN32
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 #ifdef _OPENMP
 #include <omp.h>
 #endif
@@ -39,6 +46,7 @@ namespace
 constexpr float kSkipContentMaskCoverage = 0.985f;
 constexpr std::size_t kMaxInlineDenseFilterPoints = 500000;
 constexpr std::size_t kMaxProjectedDepthQuantileSamples = 8192;
+constexpr uint64_t kBytesPerGiB = 1024ull * 1024ull * 1024ull;
 
 using Clock = std::chrono::steady_clock;
 
@@ -58,6 +66,202 @@ struct FrameTiming
     double totalMs = 0.0;
 };
 
+struct SystemMemorySnapshot
+{
+    uint64_t totalPhysicalBytes = 0;
+    uint64_t availablePhysicalBytes = 0;
+    bool valid = false;
+};
+
+double bytesToGiB(uint64_t bytes)
+{
+    return static_cast<double>(bytes) / static_cast<double>(kBytesPerGiB);
+}
+
+SystemMemorySnapshot querySystemMemorySnapshot()
+{
+    SystemMemorySnapshot snapshot;
+#ifdef _WIN32
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+    {
+        snapshot.totalPhysicalBytes = static_cast<uint64_t>(status.ullTotalPhys);
+        snapshot.availablePhysicalBytes = static_cast<uint64_t>(status.ullAvailPhys);
+        snapshot.valid = snapshot.totalPhysicalBytes > 0 && snapshot.availablePhysicalBytes > 0;
+    }
+#elif defined(__linux__)
+    std::ifstream meminfo("/proc/meminfo");
+    std::string key;
+    uint64_t valueKb = 0;
+    std::string unit;
+    uint64_t totalKb = 0;
+    uint64_t availableKb = 0;
+    while (meminfo >> key >> valueKb >> unit)
+    {
+        if (key == "MemTotal:")
+        {
+            totalKb = valueKb;
+        }
+        else if (key == "MemAvailable:")
+        {
+            availableKb = valueKb;
+        }
+    }
+    if (totalKb > 0 && availableKb > 0)
+    {
+        snapshot.totalPhysicalBytes = totalKb * 1024ull;
+        snapshot.availablePhysicalBytes = availableKb * 1024ull;
+        snapshot.valid = true;
+    }
+#endif
+    return snapshot;
+}
+
+uint64_t depthFramePixelStorageBytes(int width, int height)
+{
+    if (width <= 0 || height <= 0)
+    {
+        return 0;
+    }
+
+    const uint64_t pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
+    return pixels * sizeof(float) * 2ull; // depth + confidence
+}
+
+uint64_t estimateDepthFrameCacheBytes(const std::vector<CameraView> &views)
+{
+    uint64_t total = 0;
+    for (const CameraView &view : views)
+    {
+        const uint64_t frameBytes = depthFramePixelStorageBytes(view.imageWidth, view.imageHeight);
+        if (std::numeric_limits<uint64_t>::max() - total < frameBytes)
+        {
+            return std::numeric_limits<uint64_t>::max();
+        }
+        total += frameBytes;
+    }
+    return total;
+}
+
+uint64_t largestDepthFrameBytes(const std::vector<CameraView> &views)
+{
+    uint64_t largest = 0;
+    for (const CameraView &view : views)
+    {
+        largest = std::max(largest, depthFramePixelStorageBytes(view.imageWidth, view.imageHeight));
+    }
+    return largest;
+}
+
+uint64_t retainedDepthMemoryBudgetBytes(const SystemMemorySnapshot &snapshot, const DepthGenConfig &config)
+{
+    if (!snapshot.valid)
+    {
+        return 0;
+    }
+
+    const double fraction = std::clamp(static_cast<double>(config.maxDepthCacheRamFraction), 0.10, 0.90);
+    const uint64_t totalBudget = static_cast<uint64_t>(
+        static_cast<double>(snapshot.totalPhysicalBytes) * fraction);
+    const uint64_t availableBudget = snapshot.availablePhysicalBytes > config.minFreeRamBytes
+        ? snapshot.availablePhysicalBytes - config.minFreeRamBytes
+        : 0ull;
+    return std::min(totalBudget, availableBudget);
+}
+
+bool shouldRetainAllDepthFramesInMemory(const std::vector<CameraView> &views,
+                                        const DepthGenConfig &config,
+                                        const SystemMemorySnapshot &snapshot,
+                                        QString *reason)
+{
+    if (!config.adaptiveDepthCacheMemory)
+    {
+        if (reason)
+        {
+            *reason = QStringLiteral("adaptiveDepthCacheMemory=false");
+        }
+        return true;
+    }
+
+    const uint64_t requiredBytes = estimateDepthFrameCacheBytes(views);
+    if (requiredBytes == 0)
+    {
+        if (reason)
+        {
+            *reason = QStringLiteral("无有效影像尺寸");
+        }
+        return true;
+    }
+    if (!snapshot.valid)
+    {
+        if (reason)
+        {
+            *reason = QStringLiteral("无法读取系统内存，采用保守流式模式");
+        }
+        return false;
+    }
+
+    const uint64_t budgetBytes = retainedDepthMemoryBudgetBytes(snapshot, config);
+    if (requiredBytes <= budgetBytes)
+    {
+        if (reason)
+        {
+            *reason = QStringLiteral("预计缓存 %1 GiB <= 内存预算 %2 GiB")
+                          .arg(bytesToGiB(requiredBytes), 0, 'f', 2)
+                          .arg(bytesToGiB(budgetBytes), 0, 'f', 2);
+        }
+        return true;
+    }
+
+    if (reason)
+    {
+        *reason = QStringLiteral("预计缓存 %1 GiB > 内存预算 %2 GiB")
+                      .arg(bytesToGiB(requiredBytes), 0, 'f', 2)
+                      .arg(bytesToGiB(budgetBytes), 0, 'f', 2);
+    }
+    return false;
+}
+
+bool memoryPressureRequiresStreaming(const DepthGenConfig &config,
+                                     const SystemMemorySnapshot &snapshot,
+                                     uint64_t largestFrameBytes)
+{
+    if (!config.adaptiveDepthCacheMemory || !snapshot.valid)
+    {
+        return false;
+    }
+
+    const uint64_t transientReserve =
+        std::max<uint64_t>(config.minFreeRamBytes, largestFrameBytes * 4ull);
+    return snapshot.availablePhysicalBytes < transientReserve;
+}
+
+void releaseStoredDepthFramePixelStorage(std::vector<DepthFrameResult> &frames)
+{
+    for (DepthFrameResult &frame : frames)
+    {
+        frame.releasePixelStorage();
+    }
+}
+
+size_t adaptiveSaveQueueCapacity(const SystemMemorySnapshot &snapshot,
+                                 const DepthGenConfig &config,
+                                 uint64_t largestFrameBytes)
+{
+    if (!config.adaptiveDepthCacheMemory || !snapshot.valid || largestFrameBytes == 0)
+    {
+        return 2;
+    }
+
+    const uint64_t budgetBytes = retainedDepthMemoryBudgetBytes(snapshot, config);
+    if (budgetBytes >= largestFrameBytes * 8ull)
+    {
+        return 4;
+    }
+    return 2;
+}
+
 int preloadImagesWorkerCount(int viewCount, int requestedThreads)
 {
     if (viewCount <= 1)
@@ -75,8 +279,9 @@ class DepthFrameArtifactSaveQueue
 public:
     using SaveFn = std::function<bool(int, const DepthFrameResult &, const QString &)>;
 
-    explicit DepthFrameArtifactSaveQueue(SaveFn saveFn)
+    explicit DepthFrameArtifactSaveQueue(SaveFn saveFn, size_t maxBufferedTasks = 2)
         : m_saveFn(std::move(saveFn))
+        , m_maxBufferedTasks(std::max<size_t>(1, maxBufferedTasks))
         , m_worker(&DepthFrameArtifactSaveQueue::run, this)
     {
     }
@@ -89,7 +294,10 @@ public:
     void enqueue(int frameIndex, const DepthFrameResult &result, const QString &stageLabel)
     {
         {
-            std::lock_guard<std::mutex> lock(m_mutex);
+            std::unique_lock<std::mutex> lock(m_mutex);
+            m_capacityCv.wait(lock, [this]() {
+                return m_stopping || m_tasks.size() < m_maxBufferedTasks;
+            });
             if (m_stopping)
             {
                 return;
@@ -113,6 +321,7 @@ public:
             std::lock_guard<std::mutex> lock(m_mutex);
             m_stopping = true;
         }
+        m_capacityCv.notify_all();
         m_cv.notify_all();
         if (m_worker.joinable())
         {
@@ -156,6 +365,7 @@ private:
                 task = m_tasks.front();
                 m_tasks.pop_front();
                 ++m_activeTasks;
+                m_capacityCv.notify_one();
             }
 
             if (!m_saveFn(task.frameIndex, task.result, task.stageLabel))
@@ -179,6 +389,7 @@ private:
             {
                 m_idleCv.notify_all();
             }
+            m_capacityCv.notify_all();
         }
     }
 
@@ -186,9 +397,11 @@ private:
     std::deque<SaveTask> m_tasks;
     mutable std::mutex m_mutex;
     std::condition_variable m_cv;
+    std::condition_variable m_capacityCv;
     std::condition_variable m_idleCv;
     std::thread m_worker;
     std::atomic<bool> m_failed{false};
+    size_t m_maxBufferedTasks = 1;
     bool m_stopping = false;
     int m_activeTasks = 0;
 };
@@ -2758,6 +2971,41 @@ void DepthMapGenerator::runInBackground()
     emit progressChanged(QStringLiteral("预计算 MVS 可见性..."), 0.02f);
     prepareFrameCaches();
     m_depthFrames.resize(NV);
+    const bool savePreviewPng = !m_outputDir.empty();
+    const bool saveRawDepth = m_config.saveIntermediateDepthMaps && !m_config.intermediateDir.empty();
+    const SystemMemorySnapshot initialMemory = querySystemMemorySnapshot();
+    const uint64_t estimatedDepthCacheBytes = estimateDepthFrameCacheBytes(m_views);
+    const uint64_t largestFrameBytes = largestDepthFrameBytes(m_views);
+    QString memoryPolicyReason;
+    bool retainDepthFrames = shouldRetainAllDepthFramesInMemory(m_views, m_config, initialMemory, &memoryPolicyReason);
+
+    if (m_config.runFusion && !retainDepthFrames)
+    {
+        const QString msg = QStringLiteral(
+            "系统内存不足，无法在单次任务中保留全部 full-res 深度图用于内存融合；"
+            "请先生成深度图，再运行“深度图融合”。原因：%1").arg(memoryPolicyReason);
+        LOG_WARN(QStringLiteral("[MVS] %1").arg(msg));
+        emit errorOccurred(msg);
+        clearFrameCaches();
+        emit finished(false);
+        return;
+    }
+
+    std::atomic<bool> keepDepthFramesInMemory{retainDepthFrames};
+    std::mutex depthFramesMutex;
+
+    LOG_INFO(QStringLiteral("[MVS] 深度图内存策略: mode=%1 estimatedCache=%2 GiB total=%3 GiB available=%4 GiB reserve=%5 GiB maxFraction=%6 reason=%7")
+                 .arg(retainDepthFrames ? QStringLiteral("cache") : QStringLiteral("stream"))
+                 .arg(bytesToGiB(estimatedDepthCacheBytes), 0, 'f', 2)
+                 .arg(initialMemory.valid ? bytesToGiB(initialMemory.totalPhysicalBytes) : 0.0, 0, 'f', 2)
+                 .arg(initialMemory.valid ? bytesToGiB(initialMemory.availablePhysicalBytes) : 0.0, 0, 'f', 2)
+                 .arg(bytesToGiB(m_config.minFreeRamBytes), 0, 'f', 2)
+                 .arg(static_cast<double>(m_config.maxDepthCacheRamFraction), 0, 'f', 2)
+                 .arg(memoryPolicyReason));
+    if (!keepDepthFramesInMemory.load())
+    {
+        LOG_INFO(QStringLiteral("[MVS] 深度图估计采用流式保存模式：保存后释放全分辨率深度/置信图"));
+    }
 
     // ── 阶段一：优先级队列并行估计深度图（GPU 优先高价值帧，CPU 处理其余帧）────
     int skippedFrames = 0;
@@ -2870,13 +3118,14 @@ void DepthMapGenerator::runInBackground()
                      .arg(gpuFrameWorkers));
     }
 
-    DepthFrameArtifactSaveQueue saveQueue([this](
-                                              int frameIndex,
-                                              const DepthFrameResult &result,
-                                              const QString &stageLabel)
-    {
-        return saveDepthFrameArtifacts(frameIndex, result, stageLabel);
-    });
+    const size_t maxBufferedSaveTasks =
+        adaptiveSaveQueueCapacity(initialMemory, m_config, largestFrameBytes);
+    DepthFrameArtifactSaveQueue saveQueue(
+        [this](int frameIndex, const DepthFrameResult &result, const QString &stageLabel)
+        {
+            return saveDepthFrameArtifacts(frameIndex, result, stageLabel);
+        },
+        maxBufferedSaveTasks);
 
     auto emitDepthProgress = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &taskMutex, &gpuQueue, &cpuQueue](
                                  const QString &workerTag,
@@ -2920,8 +3169,20 @@ void DepthMapGenerator::runInBackground()
         emit progressChanged(stage, ratio);
     };
 
-    auto workerFunc = [this, NV, &completedTasks, &activeGpuTasks, &activeCpuTasks, &anyFailure,
-                       &taskMutex, &gpuQueue, &cpuQueue, &emitDepthProgress, &saveQueue](bool useGpu) {
+    auto workerFunc = [this,
+                       NV,
+                       largestFrameBytes,
+                       &keepDepthFramesInMemory,
+                       &depthFramesMutex,
+                       &completedTasks,
+                       &activeGpuTasks,
+                       &activeCpuTasks,
+                       &anyFailure,
+                       &taskMutex,
+                       &gpuQueue,
+                       &cpuQueue,
+                       &emitDepthProgress,
+                       &saveQueue](bool useGpu) {
         DepthGenConfig workerConfig = m_config;
         workerConfig.patchMatch.useCuda = useGpu;
         const QString workerTag = useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU");
@@ -2980,7 +3241,15 @@ void DepthMapGenerator::runInBackground()
                          .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU")));
 
             DepthFrameResult res = computeDepthForView(i, &workerConfig);
-            m_depthFrames[i] = res;
+            DepthFrameResult storedResult = res;
+            if (!keepDepthFramesInMemory.load())
+            {
+                storedResult.releasePixelStorage();
+            }
+            {
+                std::lock_guard<std::mutex> lock(depthFramesMutex);
+                m_depthFrames[i] = storedResult;
+            }
             const auto frameEnd = std::chrono::steady_clock::now();
             const double elapsedMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
 
@@ -3004,9 +3273,25 @@ void DepthMapGenerator::runInBackground()
                              .arg(depthWidth)
                              .arg(depthHeight));
                 saveQueue.enqueue(i, res, QStringLiteral("初始"));
+
+                if (keepDepthFramesInMemory.load() &&
+                    memoryPressureRequiresStreaming(m_config, querySystemMemorySnapshot(), largestFrameBytes))
+                {
+                    bool expected = true;
+                    if (keepDepthFramesInMemory.compare_exchange_strong(expected, false))
+                    {
+                        LOG_WARN(QStringLiteral("[MVS] 内存压力升高，切换为流式保存并释放已缓存深度图；后续将跳过需要全量深度常驻的一致性检查"));
+                        std::lock_guard<std::mutex> lock(depthFramesMutex);
+                        releaseStoredDepthFramePixelStorage(m_depthFrames);
+                    }
+                }
             }
 
             emit depthMapReady(res);
+            if (!keepDepthFramesInMemory.load())
+            {
+                res.releasePixelStorage();
+            }
             const int done = completedTasks.fetch_add(1) + 1;
             if (useGpu)
             {
@@ -3062,14 +3347,16 @@ void DepthMapGenerator::runInBackground()
 
     // ── 阶段 1.5：双视图深度图左右一致性检查 ────────────────────────────────
     // 在融合前剔除 PatchMatch 产生的幽灵深度（两视图深度互不一致的像素）
-    if (NV >= 2) {
+    if (keepDepthFramesInMemory.load() && NV >= 2) {
         emit progressChanged("深度一致性检查...", static_cast<float>(NV) / (NV + 3));
         crossCheckDepthConsistency();
     }
+    else if (!keepDepthFramesInMemory.load() && NV >= 2)
+    {
+        LOG_INFO(QStringLiteral("[MVS] 已保存原始深度图并释放内存，跳过需要全量深度常驻的一致性检查"));
+    }
 
-    const bool savePreviewPng = !m_outputDir.empty();
-    const bool saveRawDepth = m_config.saveIntermediateDepthMaps && !m_config.intermediateDir.empty();
-    if (savePreviewPng || saveRawDepth)
+    if (keepDepthFramesInMemory.load() && (savePreviewPng || saveRawDepth))
     {
         for (int i = 0; i < NV; ++i)
         {
@@ -3085,6 +3372,17 @@ void DepthMapGenerator::runInBackground()
     saveQueue.stop();
 
     allOk = !anyFailure.load();
+
+    if (m_config.runFusion && !keepDepthFramesInMemory.load())
+    {
+        const QString msg = QStringLiteral(
+            "内存压力已触发流式深度图保存，无法继续本次内存融合；"
+            "请使用已保存的深度图运行“深度图融合”阶段。");
+        LOG_WARN(QStringLiteral("[MVS] %1").arg(msg));
+        emit errorOccurred(msg);
+        emit finished(false);
+        return;
+    }
 
     if (!m_config.runFusion)
     {

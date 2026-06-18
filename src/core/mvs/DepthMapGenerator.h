@@ -44,6 +44,12 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
     bool success = false;
     std::string errorMsg;
+
+    void releasePixelStorage()
+    {
+        depthMap.clear();
+        confidence.clear();
+    }
 };
 
 class DepthMapGenerator : public QObject

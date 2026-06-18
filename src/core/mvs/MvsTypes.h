@@ -20,6 +20,7 @@
 #include <cmath>
 #include <cstring>
 #include <functional>
+#include <cstdint>
 
 #include "camera/Camera.h"
 
@@ -139,6 +140,9 @@ struct DepthGenConfig
     bool  runFusion             = true;
     bool  saveIntermediateDepthMaps = false;
     std::string intermediateDir = "";
+    bool  adaptiveDepthCacheMemory = true;      ///< 根据系统内存自动决定是否常驻 full-res 深度帧
+    float maxDepthCacheRamFraction = 0.60f;     ///< full-res 深度帧缓存最多使用物理内存比例
+    uint64_t minFreeRamBytes = 2ull * 1024ull * 1024ull * 1024ull; ///< 运行时保留给系统/临时 Mat 的空闲内存
 };
 
 // =============================================================================

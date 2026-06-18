@@ -41,6 +41,51 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("saveQueue.stop()", scheduler)
         self.assertNotIn("if (!saveDepthFrameArtifacts(i, res, QStringLiteral(\"初始\")))", scheduler)
 
+    def test_depth_only_scheduler_releases_saved_full_resolution_frames(self):
+        header = self.read("src/core/mvs/DepthMapGenerator.h")
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("void releasePixelStorage()", header)
+        self.assertIn("shouldRetainAllDepthFramesInMemory", scheduler)
+        self.assertIn("std::atomic<bool> keepDepthFramesInMemory", scheduler)
+        self.assertIn("DepthFrameResult storedResult = res;", scheduler)
+        self.assertIn("if (!keepDepthFramesInMemory.load())", scheduler)
+        self.assertIn("storedResult.releasePixelStorage();", scheduler)
+        self.assertIn("m_depthFrames[i] = storedResult;", scheduler)
+        self.assertNotIn("m_depthFrames[i] = res;", scheduler)
+        self.assertIn("if (keepDepthFramesInMemory.load() && NV >= 2)", scheduler)
+
+    def test_depth_cache_retention_is_budgeted_from_system_memory(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("SystemMemorySnapshot", scheduler)
+        self.assertIn("querySystemMemorySnapshot", scheduler)
+        self.assertIn("estimateDepthFrameCacheBytes", scheduler)
+        self.assertIn("retainedDepthMemoryBudgetBytes", scheduler)
+        self.assertIn("m_config.maxDepthCacheRamFraction", scheduler)
+        self.assertIn("m_config.minFreeRamBytes", scheduler)
+        self.assertIn("深度图内存策略", scheduler)
+
+    def test_depth_scheduler_switches_to_streaming_when_memory_pressure_rises(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("memoryPressureRequiresStreaming", scheduler)
+        self.assertIn("keepDepthFramesInMemory.compare_exchange_strong", scheduler)
+        self.assertIn("releaseStoredDepthFramePixelStorage", scheduler)
+        self.assertIn("内存压力升高，切换为流式保存", scheduler)
+        self.assertIn("无法继续本次内存融合", scheduler)
+
+    def test_depth_artifact_save_queue_bounds_full_resolution_backlog(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        queue_start = scheduler.index("class DepthFrameArtifactSaveQueue")
+        queue_end = scheduler.index("// =============================================================================", queue_start)
+        queue_block = scheduler[queue_start:queue_end]
+
+        self.assertIn("maxBufferedTasks", queue_block)
+        self.assertIn("m_capacityCv.wait", queue_block)
+        self.assertIn("m_tasks.size() < m_maxBufferedTasks", queue_block)
+        self.assertIn("m_capacityCv.notify_one()", queue_block)
+
     def test_preload_images_runs_with_bounded_parallel_workers(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
