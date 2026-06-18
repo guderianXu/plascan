@@ -316,6 +316,22 @@ public:
         });
     }
 
+    void cancel()
+    {
+        {
+            std::lock_guard<std::mutex> lock(m_mutex);
+            m_dropPendingTasks = true;
+            m_stopping = true;
+            m_tasks.clear();
+            if (m_activeTasks == 0)
+            {
+                m_idleCv.notify_all();
+            }
+        }
+        m_capacityCv.notify_all();
+        m_cv.notify_all();
+    }
+
     void stop()
     {
         {
@@ -356,6 +372,20 @@ private:
 
                 if (m_tasks.empty())
                 {
+                    if (m_stopping)
+                    {
+                        break;
+                    }
+                    continue;
+                }
+
+                if (m_dropPendingTasks)
+                {
+                    m_tasks.clear();
+                    if (m_activeTasks == 0)
+                    {
+                        m_idleCv.notify_all();
+                    }
                     if (m_stopping)
                     {
                         break;
@@ -404,6 +434,7 @@ private:
     std::atomic<bool> m_failed{false};
     size_t m_maxBufferedTasks = 1;
     bool m_stopping = false;
+    bool m_dropPendingTasks = false;
     int m_activeTasks = 0;
 };
 
@@ -1350,6 +1381,11 @@ void DepthMapGenerator::preloadImages()
     {
         for (;;)
         {
+            if (m_cancelled.load())
+            {
+                break;
+            }
+
             const int i = nextImage.fetch_add(1);
             if (i >= NV)
             {
@@ -2732,6 +2768,10 @@ void DepthMapGenerator::crossCheckDepthConsistency()
 {
     const int NV = static_cast<int>(m_views.size());
     if (NV < 2) return;
+    if (m_cancelled.load())
+    {
+        return;
+    }
 
     // 相对深度误差阈值：少视图放宽至 25%，多视图 5%
     const float relThresh = (NV <= 2) ? 0.25f : 0.05f;
@@ -2741,6 +2781,10 @@ void DepthMapGenerator::crossCheckDepthConsistency()
     std::vector<cv::Mat> origDepths(NV);
     for (int i = 0; i < NV; ++i)
     {
+        if (m_cancelled.load())
+        {
+            return;
+        }
         if (m_depthFrames[i].success && m_depthFrames[i].depthMap)
         {
             origDepths[i] = m_depthFrames[i].depthMap->clone();
@@ -2749,6 +2793,10 @@ void DepthMapGenerator::crossCheckDepthConsistency()
 
     for (int i = 0; i < NV; ++i)
     {
+        if (m_cancelled.load())
+        {
+            return;
+        }
         if (!m_depthFrames[i].success || !m_depthFrames[i].depthMap)
         {
             continue;
@@ -2769,6 +2817,10 @@ void DepthMapGenerator::crossCheckDepthConsistency()
 
         for (int j : consistencySources)
         {
+            if (m_cancelled.load())
+            {
+                return;
+            }
             if (j == i)
             {
                 continue;
@@ -2782,10 +2834,18 @@ void DepthMapGenerator::crossCheckDepthConsistency()
 
             parallelForRows(depthI.rows, rowWorkers, [&](int v)
             {
+                if (m_cancelled.load())
+                {
+                    return;
+                }
                 const float *pdi = depthI.ptr<float>(v);
                 uint8_t     *pMask = consistentMask.ptr<uint8_t>(v);
                 for (int u = 0; u < depthI.cols; ++u)
                 {
+                    if (m_cancelled.load())
+                    {
+                        return;
+                    }
                     float di = pdi[u];
                     if (di <= 0.f)
                     {
@@ -2995,8 +3055,22 @@ void DepthMapGenerator::runInBackground()
     // ── 预加载所有图像（一次性磁盘 I/O，后续全从内存读取）────────────────────
     emit progressChanged(QString("预加载 %1 张图像...").arg(NV), 0.f);
     preloadImages();
+    if (m_cancelled.load())
+    {
+        clearFrameCaches();
+        emit finished(false);
+        return;
+    }
+
     emit progressChanged(QStringLiteral("预计算 MVS 可见性..."), 0.02f);
     prepareFrameCaches();
+    if (m_cancelled.load())
+    {
+        clearFrameCaches();
+        emit finished(false);
+        return;
+    }
+
     m_depthFrames.resize(NV);
     const bool savePreviewPng = !m_outputDir.empty();
     const bool saveRawDepth = m_config.saveIntermediateDepthMaps && !m_config.intermediateDir.empty();
@@ -3268,6 +3342,21 @@ void DepthMapGenerator::runInBackground()
                          .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU")));
 
             DepthFrameResult res = computeDepthForView(i, &workerConfig);
+            if (m_cancelled.load())
+            {
+                LOG_INFO(QStringLiteral("[MVS] 帧 %1 收到取消请求，跳过结果保存").arg(i));
+                if (useGpu)
+                {
+                    activeGpuTasks.fetch_sub(1);
+                }
+                else
+                {
+                    activeCpuTasks.fetch_sub(1);
+                }
+                emitDepthProgress(workerTag, i, false);
+                break;
+            }
+
             DepthFrameResult storedResult = res;
             if (!keepDepthFramesInMemory.load())
             {
@@ -3353,6 +3442,19 @@ void DepthMapGenerator::runInBackground()
         }
     }
 
+    if (m_cancelled.load())
+    {
+        saveQueue.cancel();
+        saveQueue.stop();
+        m_grayCache.clear();
+        m_grayCache.shrink_to_fit();
+        m_contentMasks.clear();
+        m_contentMasks.shrink_to_fit();
+        clearFrameCaches();
+        emit finished(false);
+        return;
+    }
+
     saveQueue.waitUntilIdle();
     if (saveQueue.failed())
     {
@@ -3366,17 +3468,18 @@ void DepthMapGenerator::runInBackground()
     m_contentMasks.shrink_to_fit();
     clearFrameCaches();
 
-    if (m_cancelled) {
-        saveQueue.stop();
-        emit finished(false);
-        return;
-    }
-
     // ── 阶段 1.5：双视图深度图左右一致性检查 ────────────────────────────────
     // 在融合前剔除 PatchMatch 产生的幽灵深度（两视图深度互不一致的像素）
     if (keepDepthFramesInMemory.load() && NV >= 2) {
         emit progressChanged("深度一致性检查...", static_cast<float>(NV) / (NV + 3));
         crossCheckDepthConsistency();
+        if (m_cancelled.load())
+        {
+            saveQueue.cancel();
+            saveQueue.stop();
+            emit finished(false);
+            return;
+        }
     }
     else if (!keepDepthFramesInMemory.load() && NV >= 2)
     {
@@ -3387,6 +3490,13 @@ void DepthMapGenerator::runInBackground()
     {
         for (int i = 0; i < NV; ++i)
         {
+            if (m_cancelled.load())
+            {
+                saveQueue.cancel();
+                saveQueue.stop();
+                emit finished(false);
+                return;
+            }
             const DepthFrameResult &res = m_depthFrames[i];
             saveQueue.enqueue(i, res, QStringLiteral("过滤后"));
         }

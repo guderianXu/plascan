@@ -813,6 +813,11 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                 sparse = ppRes.cloud;
             }
         }
+        if (gen->isCancelled())
+        {
+            QMetaObject::invokeMethod(gen, "finished", Qt::QueuedConnection, Q_ARG(bool, false));
+            return;
+        }
         gen->setSparseCloud(sparse);
         QMetaObject::invokeMethod(gen, "start", Qt::QueuedConnection);
     });
@@ -1218,6 +1223,11 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             {
                 sparse = ppRes.cloud;
             }
+        }
+        if (gen->isCancelled())
+        {
+            QMetaObject::invokeMethod(gen, "finished", Qt::QueuedConnection, Q_ARG(bool, false));
+            return;
         }
         gen->setSparseCloud(sparse);
         QMetaObject::invokeMethod(gen, "start", Qt::QueuedConnection);

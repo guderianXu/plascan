@@ -86,6 +86,44 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("m_tasks.size() < m_maxBufferedTasks", queue_block)
         self.assertIn("m_capacityCv.notify_one()", queue_block)
 
+    def test_depth_cancel_drains_pending_save_queue_before_waiting_for_idle(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        queue_start = scheduler.index("class DepthFrameArtifactSaveQueue")
+        queue_end = scheduler.index("// =============================================================================", queue_start)
+        queue_block = scheduler[queue_start:queue_end]
+
+        self.assertIn("void cancel()", queue_block)
+        self.assertIn("m_dropPendingTasks", queue_block)
+        self.assertIn("m_tasks.clear()", queue_block)
+
+        join_pos = scheduler.index("for (std::thread &worker : workers)")
+        cleanup_pos = scheduler.index("// 释放图像缓存", join_pos)
+        post_worker_block = scheduler[join_pos:cleanup_pos]
+        self.assertIn("if (m_cancelled.load())", post_worker_block)
+        self.assertLess(post_worker_block.index("if (m_cancelled.load())"),
+                        post_worker_block.index("saveQueue.waitUntilIdle()"))
+        self.assertIn("saveQueue.cancel()", post_worker_block)
+
+    def test_depth_postprocess_stages_poll_cancel_before_more_work(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        cross_start = scheduler.index("void DepthMapGenerator::crossCheckDepthConsistency()")
+        cross_end = scheduler.index("bool DepthMapGenerator::saveDepthFrameArtifacts", cross_start)
+        cross_block = scheduler[cross_start:cross_end]
+
+        self.assertIn("if (m_cancelled.load())", cross_block)
+
+        filtered_save_pos = scheduler.index("saveQueue.enqueue(i, res, QStringLiteral(\"过滤后\"))")
+        filtered_block = scheduler[filtered_save_pos - 400:filtered_save_pos + 200]
+        self.assertIn("if (m_cancelled.load())", filtered_block)
+
+    def test_dense_sparse_preload_respects_cancel_before_starting_mvs(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        self.assertGreaterEqual(manager.count("if (gen->isCancelled())"), 2)
+        self.assertGreaterEqual(manager.count("return;"), 2)
+        self.assertGreaterEqual(manager.count('QMetaObject::invokeMethod(gen, "finished"'), 2)
+        self.assertIn("Q_ARG(bool, false)", manager)
+
     def test_depth_artifact_saving_uses_fast_binary_and_timing_logs(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
