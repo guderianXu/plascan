@@ -7,6 +7,7 @@
 #include "cli_common.h"
 
 #include "Camera.h"
+#include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "Logger.h"
@@ -1091,27 +1092,13 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
 
 bool loadCvMatStorage(const QString &path, cv::Mat *matrix, QString *error)
 {
-    if (!matrix)
+    const xjw::common::OperationResult result =
+        xjw::core::project::loadDepthMatStorage(path, matrix);
+    if (!result.ok && error)
     {
-        if (error) *error = QStringLiteral("内部错误：矩阵输出为空");
-        return false;
+        *error = result.errorMessage;
     }
-
-    cv::FileStorage storage(path.toStdString(), cv::FileStorage::READ);
-    if (!storage.isOpened())
-    {
-        if (error) *error = QStringLiteral("无法读取矩阵文件: %1").arg(path);
-        return false;
-    }
-
-    storage[QStringLiteral("mat").toStdString()] >> *matrix;
-    storage.release();
-    if (matrix->empty())
-    {
-        if (error) *error = QStringLiteral("矩阵文件内容为空: %1").arg(path);
-        return false;
-    }
-    return true;
+    return result.ok;
 }
 
 bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
@@ -1132,7 +1119,12 @@ bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
 
     for (std::size_t index = 0; index < views.size(); ++index)
     {
-        const QString depthPath = dir.filePath(QStringLiteral("depth_%1.yml.gz").arg(index));
+        const QString depthPngPath = dir.filePath(QStringLiteral("depth_%1.png").arg(index));
+        QString depthPath = xjw::core::project::rawDepthStoragePath(depthPngPath);
+        if (!QFileInfo::exists(depthPath))
+        {
+            depthPath = dir.filePath(QStringLiteral("depth_%1.yml.gz").arg(index));
+        }
         cv::Mat depth;
         if (!loadCvMatStorage(depthPath, &depth, error))
         {
@@ -1140,7 +1132,11 @@ bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
         }
 
         cv::Mat confidence;
-        const QString confPath = dir.filePath(QStringLiteral("depth_%1_conf.yml.gz").arg(index));
+        QString confPath = xjw::core::project::rawConfidenceStoragePath(depthPngPath);
+        if (!QFileInfo::exists(confPath))
+        {
+            confPath = dir.filePath(QStringLiteral("depth_%1_conf.yml.gz").arg(index));
+        }
         if (QFileInfo::exists(confPath))
         {
             QString confError;

@@ -10,6 +10,11 @@
 
 #include <vector>
 
+namespace cv
+{
+class Mat;
+}
+
 namespace xjw::core::project
 {
 
@@ -38,6 +43,8 @@ struct FusionFrameBuildResult
 
 QString rawDepthStoragePath(const QString &pngPath);
 QString rawConfidenceStoragePath(const QString &pngPath);
+xjw::common::OperationResult loadDepthMatStorage(const QString &path, cv::Mat *matrix);
+xjw::common::OperationResult writeDepthMatStorage(const QString &path, const cv::Mat &matrix);
 bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence = false);
 bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireConfidence = false);
 

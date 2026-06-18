@@ -26,9 +26,10 @@ plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
 
 int autoGpuFrameWorkers(int threads, int viewCount)
 {
-    Q_UNUSED(threads);
-    Q_UNUSED(viewCount);
-    return 1;
+    const int maxByViews = std::max(1, viewCount);
+    const int maxGpuWorkers = std::min(2, maxByViews);
+    const int desired = threads >= 8 ? 2 : 1;
+    return std::clamp(desired, 1, maxGpuWorkers);
 }
 
 int autoCpuFrameWorkers(int threads, int viewCount)

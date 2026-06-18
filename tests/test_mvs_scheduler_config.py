@@ -86,6 +86,24 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("m_tasks.size() < m_maxBufferedTasks", queue_block)
         self.assertIn("m_capacityCv.notify_one()", queue_block)
 
+    def test_depth_artifact_saving_uses_fast_binary_and_timing_logs(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("writeFastDepthMatStorage", scheduler)
+        self.assertIn("saveDepthPreviewPng", scheduler)
+        self.assertIn("maxPreviewDimension", scheduler)
+        self.assertIn("保存%1深度产物耗时", scheduler)
+        self.assertNotIn("FileStorage storage(path, cv::FileStorage::WRITE)", scheduler)
+        self.assertNotIn(".yml.gz", scheduler)
+
+    def test_manual_depth_estimation_can_auto_pipeline_two_cuda_frames(self):
+        config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
+
+        self.assertIn("autoGpuFrameWorkers", config_cpp)
+        self.assertIn("settings.gpuFrameWorkers", config_cpp)
+        self.assertNotIn("return 1;", config_cpp)
+        self.assertIn("return std::clamp", config_cpp)
+
     def test_preload_images_runs_with_bounded_parallel_workers(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
@@ -326,12 +344,15 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("postprocessFusionDepthMap", cli)
         self.assertIn("depth_postprocess", cli)
         self.assertIn("local_depth_outlier_removed", cli)
+        self.assertIn("rawDepthStoragePath(depthPngPath)", cli)
+        self.assertIn("loadDepthMatStorage", cli)
 
-    def test_cuda_scheduler_defaults_to_one_frame_worker(self):
+    def test_cuda_scheduler_defaults_can_pipeline_two_frame_workers(self):
         config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
         self.assertIn("autoGpuFrameWorkers", config_cpp)
-        self.assertIn("return 1;", config_cpp)
-        self.assertNotIn("threads / 4), 1, maxGpuWorkers", config_cpp)
+        self.assertIn("const int desired = threads >= 8 ? 2 : 1;", config_cpp)
+        self.assertIn("return std::clamp(desired, 1, maxGpuWorkers);", config_cpp)
+        self.assertNotIn("Q_UNUSED(threads)", config_cpp)
 
     def test_two_view_dense_config_does_not_force_full_resolution_or_32_iterations(self):
         config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")

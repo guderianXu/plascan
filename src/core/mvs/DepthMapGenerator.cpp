@@ -5,6 +5,7 @@
 
 #include "DepthMapGenerator.h"
 #include "DenseCloudBuilder.h"
+#include "DepthFrameUtils.h"
 #include "EpipolarRectifier.h"
 #include "MvsViewSelection.h"
 #include "Logger.h"
@@ -406,20 +407,19 @@ private:
     int m_activeTasks = 0;
 };
 
-bool writeCvMatStorage(const std::string &path, const cv::Mat &matrix, std::string *errorMsg)
+bool writeFastDepthMatStorage(const std::string &path, const cv::Mat &matrix, std::string *errorMsg)
 {
-    cv::FileStorage storage(path, cv::FileStorage::WRITE);
-    if (!storage.isOpened())
+    const xjw::common::OperationResult result =
+        xjw::core::project::writeDepthMatStorage(QString::fromStdString(path), matrix);
+    if (!result.ok)
     {
         if (errorMsg)
         {
-            *errorMsg = "无法写入矩阵文件: " + path;
+            *errorMsg = result.errorMessage.toStdString();
         }
         return false;
     }
 
-    storage << "mat" << matrix;
-    storage.release();
     return true;
 }
 
@@ -443,23 +443,32 @@ bool saveDepthPreviewPng(const std::string &path, const cv::Mat &depthMap, std::
         return false;
     }
 
-    const cv::Mat validMask = depthMap > 0;
-    cv::Mat vis = cv::Mat::zeros(depthMap.size(), CV_8U);
+    const int maxPreviewDimension = 2048;
+    cv::Mat previewDepth = depthMap;
+    const int maxDim = std::max(depthMap.cols, depthMap.rows);
+    if (maxDim > maxPreviewDimension)
+    {
+        const double scale = static_cast<double>(maxPreviewDimension) / static_cast<double>(maxDim);
+        cv::resize(depthMap, previewDepth, cv::Size(), scale, scale, cv::INTER_NEAREST);
+    }
+
+    const cv::Mat validMask = previewDepth > 0;
+    cv::Mat vis = cv::Mat::zeros(previewDepth.size(), CV_8U);
     if (cv::countNonZero(validMask) > 0)
     {
         double dMin = 0.0;
         double dMax = 0.0;
-        cv::minMaxLoc(depthMap, &dMin, &dMax, nullptr, nullptr, validMask);
+        cv::minMaxLoc(previewDepth, &dMin, &dMax, nullptr, nullptr, validMask);
         if (dMax > dMin)
         {
-            depthMap.convertTo(vis, CV_8U, 255.0 / (dMax - dMin), -255.0 * dMin / (dMax - dMin));
+            previewDepth.convertTo(vis, CV_8U, 255.0 / (dMax - dMin), -255.0 * dMin / (dMax - dMin));
         }
     }
-    vis.setTo(0, depthMap <= 0);
+    vis.setTo(0, previewDepth <= 0);
 
     cv::Mat colorVis;
     cv::applyColorMap(vis, colorVis, cv::COLORMAP_TURBO);
-    colorVis.setTo(cv::Scalar(0, 0, 0), depthMap <= 0);
+    colorVis.setTo(cv::Scalar(0, 0, 0), previewDepth <= 0);
 
     if (!cv::imwrite(path, colorVis))
     {
@@ -2893,9 +2902,12 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     }
 
     std::string saveErr;
+    const auto saveStart = Clock::now();
     bool previewSaved = !savePreviewPng;
+    double previewMs = 0.0;
     if (savePreviewPng)
     {
+        const auto previewStart = Clock::now();
         const std::string pngPath = m_outputDir + "/depth_" + std::to_string(frameIndex) + ".png";
         if (!saveDepthPreviewPng(pngPath, *result.depthMap, &saveErr))
         {
@@ -2905,6 +2917,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             return false;
         }
 
+        previewMs = elapsedMs(previewStart, Clock::now());
         previewSaved = true;
         LOG_INFO(QStringLiteral("[MVS] 帧 %1 %2深度预览已保存: %3 (%4x%5)")
                      .arg(frameIndex)
@@ -2915,29 +2928,43 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     }
 
     bool rawSaved = true;
+    double rawMs = 0.0;
     if (saveRawDepth)
     {
+        const auto rawStart = Clock::now();
         const std::string depthPath =
-            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + ".yml.gz";
-        if (!writeCvMatStorage(depthPath, *result.depthMap, &saveErr))
+            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + ".bin";
+        if (!writeFastDepthMatStorage(depthPath, *result.depthMap, &saveErr))
         {
             rawSaved = false;
             LOG_WARN(QStringLiteral("[MVS] 保存%1原始深度失败: %2")
-                         .arg(stageLabel, QString::fromStdString(saveErr)));
+                             .arg(stageLabel, QString::fromStdString(saveErr)));
             emit errorOccurred(QString::fromStdString(saveErr));
         }
+        rawMs = elapsedMs(rawStart, Clock::now());
     }
 
+    double confidenceMs = 0.0;
     if (saveRawDepth && result.confidence && !result.confidence->empty())
     {
+        const auto confidenceStart = Clock::now();
         const std::string confPath =
-            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + "_conf.yml.gz";
-        if (!writeCvMatStorage(confPath, *result.confidence, &saveErr))
+            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + "_conf.bin";
+        if (!writeFastDepthMatStorage(confPath, *result.confidence, &saveErr))
         {
             LOG_WARN(QStringLiteral("[MVS] 保存%1置信图失败: %2")
                          .arg(stageLabel, QString::fromStdString(saveErr)));
         }
+        confidenceMs = elapsedMs(confidenceStart, Clock::now());
     }
+
+    LOG_INFO(QStringLiteral("[MVS] 保存%1深度产物耗时: frame=%2 preview=%3 ms raw=%4 ms confidence=%5 ms total=%6 ms")
+                 .arg(stageLabel)
+                 .arg(frameIndex)
+                 .arg(previewMs, 0, 'f', 1)
+                 .arg(rawMs, 0, 'f', 1)
+                 .arg(confidenceMs, 0, 'f', 1)
+                 .arg(elapsedMs(saveStart, Clock::now()), 0, 'f', 1));
 
     if (previewSaved && rawSaved && savePreviewPng)
     {
