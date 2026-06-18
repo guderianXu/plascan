@@ -60,6 +60,13 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
     message(WARNING "plascan_core bundle_adjust target not available - 光束法平差功能将不可用")
   endif()
 
+  if(TARGET lidar)
+    message(STATUS "plascan_gui: linking against lidar target")
+    target_link_libraries(plascan_gui PRIVATE lidar)
+  else()
+    message(WARNING "plascan_core lidar target not available - LiDAR 辅助平差功能将不可用")
+  endif()
+
   if(TARGET plapoint::plapoint)
     message(STATUS "plascan_gui: linking against plapoint::plapoint")
     target_link_libraries(plascan_gui PRIVATE plapoint::plapoint)

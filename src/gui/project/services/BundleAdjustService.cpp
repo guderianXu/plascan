@@ -9,6 +9,8 @@
 
 #include "Camera.h"
 #include "BundleAdjust.h"
+#include "LaserConstraintAssociation.h"
+#include "LaserConstraintMap.h"
 #include "Logger.h"
 #include "ProjectSupportUtils.h"
 
@@ -174,11 +176,53 @@ BaServiceResult BundleAdjustService::run(
         return result;
     }
 
+    // ── LiDAR 点到面约束预处理 ────────────────────────────────────────────
+    xjw::BAOptions baOptions = opts.baOpt;
+    xjw::lidar::LaserAssociationSummary laserAssociationSummary;
+    int laserMapSampleCount = 0;
+    if (opts.enableLaserConstraints)
+    {
+        if (opts.laserConstraintCloudPath.trimmed().isEmpty())
+        {
+            result.errorMessage = QStringLiteral("LiDAR 约束点云路径未指定");
+            return result;
+        }
+        if (!QFileInfo::exists(opts.laserConstraintCloudPath))
+        {
+            result.errorMessage = QStringLiteral("LiDAR 约束点云不存在: %1").arg(opts.laserConstraintCloudPath);
+            return result;
+        }
+
+        xjw::lidar::LaserConstraintMapOptions mapOptions;
+        mapOptions.maxCurvature = opts.laserMaxCurvature;
+        mapOptions.voxelSizeMeters = opts.laserVoxelSizeMeters;
+        mapOptions.maxSamples = opts.laserMaxSamples;
+
+        xjw::lidar::LaserConstraintMap laserMap;
+        std::string laserError;
+        if (!laserMap.loadPly(opts.laserConstraintCloudPath.toStdString(), mapOptions, &laserError))
+        {
+            result.errorMessage = QStringLiteral("读取 LiDAR 约束点云失败: %1")
+                                      .arg(QString::fromStdString(laserError));
+            return result;
+        }
+        laserMapSampleCount = static_cast<int>(laserMap.size());
+
+        xjw::lidar::LaserAssociationOptions associationOptions;
+        associationOptions.maxDistanceMeters = opts.laserAssociationMaxDistanceMeters;
+        associationOptions.weight = opts.laserWeight;
+        laserAssociationSummary = xjw::lidar::attachLaserPlaneConstraints(laserMap, &tracks, associationOptions);
+
+        baOptions.enableLaserPlaneConstraints = true;
+        baOptions.laserPlaneWeight = opts.laserWeight;
+        baOptions.laserHuberDeltaMeters = opts.laserHuberDeltaMeters;
+    }
+
     // ── 执行光束法平差 ─────────────────────────────────────────────────────
     // xjw::BundleAdjust::optimizePoints 内部使用 Levenberg-Marquardt 算法，
     // 对所有相机与所有点交替迭代，最小化重投影误差的 Huber 加权和。
-    const xjw::BAResult baResult = xjw::BundleAdjust::optimizePoints(cameras, tracks, opts.baOpt);
-    if (opts.baOpt.cancelFlag && opts.baOpt.cancelFlag->load())
+    const xjw::BAResult baResult = xjw::BundleAdjust::optimizePoints(cameras, tracks, baOptions);
+    if (baOptions.cancelFlag && baOptions.cancelFlag->load())
     {
         result.errorMessage = QStringLiteral("用户取消了光束法平差");
         return result;
@@ -220,7 +264,33 @@ BaServiceResult BundleAdjustService::run(
         optObj[QStringLiteral("finite_diff_eps")]       = opts.baOpt.finiteDiffEps;
         optObj[QStringLiteral("damping")]               = opts.baOpt.damping;
         optObj[QStringLiteral("step_tolerance")]        = opts.baOpt.stepTolerance;
+        optObj[QStringLiteral("enable_laser_constraints")] = opts.enableLaserConstraints;
+        optObj[QStringLiteral("laser_constraint_cloud_path")] = opts.laserConstraintCloudPath;
+        optObj[QStringLiteral("laser_association_max_distance_m")] = opts.laserAssociationMaxDistanceMeters;
+        optObj[QStringLiteral("laser_voxel_size_m")] = opts.laserVoxelSizeMeters;
+        optObj[QStringLiteral("laser_max_curvature")] = opts.laserMaxCurvature;
+        optObj[QStringLiteral("laser_max_samples")] = opts.laserMaxSamples;
+        optObj[QStringLiteral("laser_weight")] = opts.laserWeight;
+        optObj[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
         saveObj[QStringLiteral("options")] = optObj;
+    }
+
+    if (opts.enableLaserConstraints)
+    {
+        QJsonObject laserSummary;
+        laserSummary[QStringLiteral("enabled")] = true;
+        laserSummary[QStringLiteral("cloud_path")] = opts.laserConstraintCloudPath;
+        laserSummary[QStringLiteral("map_sample_count")] = laserMapSampleCount;
+        laserSummary[QStringLiteral("total_tracks")] = laserAssociationSummary.totalTracks;
+        laserSummary[QStringLiteral("associated_tracks")] = laserAssociationSummary.associatedTracks;
+        laserSummary[QStringLiteral("rejected_by_distance")] = laserAssociationSummary.rejectedByDistance;
+        laserSummary[QStringLiteral("rejected_invalid_track")] = laserAssociationSummary.rejectedInvalidTrack;
+        laserSummary[QStringLiteral("laser_constraint_count")] = baResult.laserConstraintCount;
+        laserSummary[QStringLiteral("laser_rms_before_m")] = baResult.laserRmsBeforeMeters;
+        laserSummary[QStringLiteral("laser_rms_after_m")] = baResult.laserRmsAfterMeters;
+        laserSummary[QStringLiteral("laser_median_before_m")] = baResult.laserMedianBeforeMeters;
+        laserSummary[QStringLiteral("laser_median_after_m")] = baResult.laserMedianAfterMeters;
+        saveObj[QStringLiteral("laser_constraints_summary")] = laserSummary;
     }
 
     // ── 点位精度统计写入 JSON 数组 ─────────────────────────────────────────

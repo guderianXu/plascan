@@ -57,6 +57,50 @@ if(TARGET superglue_matcher)
         "${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition;${CMAKE_SOURCE_DIR}/src/core/feature_match/loftr;${CMAKE_SOURCE_DIR}/src/core/feature_match;${CMAKE_SOURCE_DIR}/src/core/feature_extractors")
 endif()
 
+# ── 光束法平差：可选 LiDAR 点到面约束与 A/B 对比 ──
+if(TARGET sfm AND TARGET bundle_adjust AND TARGET lidar)
+    add_executable(bundle_adjust_cli
+        cli_bundle_adjust.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/services/BundleAdjustService.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
+    )
+    target_link_libraries(bundle_adjust_cli PRIVATE
+        sfm
+        bundle_adjust
+        lidar
+        camera
+        intersection
+        plascan_common_log
+        plascan_common_project
+        Qt6::Core
+        Qt6::Gui
+        ${PLASCAN_LIBZIP_TARGET}
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(bundle_adjust_cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/common
+        ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+        ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/intersection
+        ${CMAKE_SOURCE_DIR}/src/core/lidar
+        ${CMAKE_SOURCE_DIR}/src/core/sfm
+        ${CMAKE_SOURCE_DIR}/src/gui/project/archive
+        ${CMAKE_SOURCE_DIR}/src/gui/project/data
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io
+        ${CMAKE_SOURCE_DIR}/src/gui/project/services
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    set_target_properties(bundle_adjust_cli PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        BUILD_RPATH_USE_ORIGIN TRUE
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+endif()
+
 # ── GUI 等价一键重建：SFM -> MVS -> Mesh -> DEM/DOM ──
 if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing AND TARGET terrain)
     add_executable(reconstruct_pipeline_cli

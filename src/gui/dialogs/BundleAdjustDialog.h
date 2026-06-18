@@ -37,9 +37,11 @@ signals:
 
 private slots:
     void onChooseOutputDir();
+    void onChooseLaserConstraintCloud();
     void onRun();
     void onApplyResult();
     void onDiscardResult();
+    void updateLaserControls();
     void emitSettingsNow();
 
 private:
@@ -61,6 +63,16 @@ private:
     QDoubleSpinBox *m_stepTolSpin = nullptr;
     QCheckBox *m_refinePoseCheck = nullptr;
     QCheckBox *m_dryRunCheck = nullptr;
+
+    QCheckBox *m_enableLaserConstraintsCheck = nullptr;
+    QLineEdit *m_laserConstraintCloudEdit = nullptr;
+    QToolButton *m_chooseLaserConstraintCloudBtn = nullptr;
+    QDoubleSpinBox *m_laserAssociationMaxDistanceSpin = nullptr;
+    QDoubleSpinBox *m_laserVoxelSizeSpin = nullptr;
+    QDoubleSpinBox *m_laserMaxCurvatureSpin = nullptr;
+    QSpinBox *m_laserMaxSamplesSpin = nullptr;
+    QDoubleSpinBox *m_laserWeightSpin = nullptr;
+    QDoubleSpinBox *m_laserHuberDeltaSpin = nullptr;
 
     // 调试参数：控制输出哪些文件与可视化评估图。
     QCheckBox *m_exportTsaiCheck = nullptr;

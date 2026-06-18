@@ -208,6 +208,116 @@ target_include_directories(test_overlap_analyzer PRIVATE
 gtest_discover_tests(test_overlap_analyzer)
 
 # ==============================================================================
+# test_lidar_constraint_map — LiDAR 平面约束地图读取与索引
+# ==============================================================================
+add_executable(test_lidar_constraint_map test_lidar_constraint_map.cpp)
+target_link_libraries(test_lidar_constraint_map PRIVATE
+    lidar
+    GTest::gtest_main
+)
+target_include_directories(test_lidar_constraint_map PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/lidar
+    ${CMAKE_SOURCE_DIR}/src/core/overlap
+)
+gtest_discover_tests(test_lidar_constraint_map)
+
+# ==============================================================================
+# test_lidar_constraint_association — BA track 与 LiDAR 平面约束关联
+# ==============================================================================
+add_executable(test_lidar_constraint_association test_lidar_constraint_association.cpp)
+target_link_libraries(test_lidar_constraint_association PRIVATE
+    lidar
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_lidar_constraint_association PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/lidar
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_lidar_constraint_association)
+
+# ==============================================================================
+# test_bundle_adjust_lidar_constraints — BA LiDAR 点到面残差
+# ==============================================================================
+add_executable(test_bundle_adjust_lidar_constraints test_bundle_adjust_lidar_constraints.cpp)
+target_link_libraries(test_bundle_adjust_lidar_constraints PRIVATE
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_lidar_constraints PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_bundle_adjust_lidar_constraints)
+
+# ==============================================================================
+# test_bundle_adjust_service_lidar — 服务层 LiDAR 约束接入与 JSON 输出
+# ==============================================================================
+add_executable(test_bundle_adjust_service_lidar
+    test_bundle_adjust_service_lidar.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services/BundleAdjustService.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
+)
+target_link_libraries(test_bundle_adjust_service_lidar PRIVATE
+    lidar
+    bundle_adjust
+    camera
+    Qt6::Core
+    Qt6::Gui
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_service_lidar PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io
+    ${CMAKE_SOURCE_DIR}/src/core/lidar
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/common/log
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_bundle_adjust_service_lidar)
+
+set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
+    "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
+
+# ==============================================================================
+# test_bundle_adjust_dialog_lidar — GUI LiDAR 约束参数入口
+# ==============================================================================
+add_executable(test_bundle_adjust_dialog_lidar
+    test_bundle_adjust_dialog_lidar.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
+)
+set_target_properties(test_bundle_adjust_dialog_lidar PROPERTIES
+    AUTOMOC ON
+    AUTOUIC ON
+)
+target_link_libraries(test_bundle_adjust_dialog_lidar PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Test
+    Qt6::Widgets
+    GTest::gtest
+)
+target_compile_definitions(test_bundle_adjust_dialog_lidar PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+target_include_directories(test_bundle_adjust_dialog_lidar PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+)
+gtest_discover_tests(test_bundle_adjust_dialog_lidar
+    DISCOVERY_TIMEOUT 60
+    PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+
+# ==============================================================================
 # test_project_data — ProjectData 持久化契约与 core/results 分域
 # ==============================================================================
 add_executable(test_project_data
@@ -423,6 +533,30 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
+        NAME ValidateLidarBaInputsTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_validate_lidar_ba_inputs
+    )
+    set_tests_properties(ValidateLidarBaInputsTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME PrepareLidarBaAbBenchmarkTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_lidar_ba_ab_benchmark
+    )
+    set_tests_properties(PrepareLidarBaAbBenchmarkTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME CompareLidarBaAbResultsTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_compare_lidar_ba_ab_results
+    )
+    set_tests_properties(CompareLidarBaAbResultsTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
         NAME MvsSchedulerConfigTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_mvs_scheduler_config
     )
@@ -491,6 +625,44 @@ if(Python3_Interpreter_FOUND)
             ENVIRONMENT "PLASCAN_CAMERA_CONVERT_CLI=$<TARGET_FILE:camera_convert_cli>"
         )
     endif()
+
+    if(TARGET bundle_adjust_cli)
+        add_test(
+            NAME BundleAdjustCliTest
+            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_bundle_adjust_cli
+        )
+        set_tests_properties(BundleAdjustCliTest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT "PLASCAN_BUNDLE_ADJUST_CLI=$<TARGET_FILE:bundle_adjust_cli>"
+        )
+    endif()
+
+    if(TARGET feature_match_cli)
+        add_test(
+            NAME FeatureMatchCliSidecarTest
+            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_feature_match_cli_sidecar
+        )
+        set_tests_properties(FeatureMatchCliSidecarTest PROPERTIES
+            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+            ENVIRONMENT "PLASCAN_FEATURE_MATCH_CLI=$<TARGET_FILE:feature_match_cli>"
+        )
+    endif()
+
+    add_test(
+        NAME PrepareMunFrlLidarBaProjectTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_prepare_mun_frl_lidar_ba_project
+    )
+    set_tests_properties(PrepareMunFrlLidarBaProjectTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME EstimateLidarNormalsTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_estimate_lidar_normals
+    )
+    set_tests_properties(EstimateLidarNormalsTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
 endif()
 
 if(TARGET triangulate_cli)

@@ -668,6 +668,28 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.exportCameraCsv   = extraSettings.value(QStringLiteral("export_camera_csv")).toBool(true);
     opts.exportRunJson     = extraSettings.value(QStringLiteral("export_run_json")).toBool(true);
     opts.exportEvalPlot    = extraSettings.value(QStringLiteral("export_eval_plot")).toBool(true);
+    opts.enableLaserConstraints = extraSettings.value(QStringLiteral("enable_laser_constraints")).toBool(false);
+    opts.laserConstraintCloudPath = extraSettings.value(QStringLiteral("laser_constraint_cloud_path")).toString().trimmed();
+    opts.laserAssociationMaxDistanceMeters = qMax(
+        0.0,
+        extraSettings.value(QStringLiteral("laser_association_max_distance_m")).toDouble(1.0));
+    opts.laserVoxelSizeMeters = qMax(
+        0.0,
+        extraSettings.value(QStringLiteral("laser_voxel_size_m")).toDouble(0.0));
+    opts.laserMaxCurvature = qBound(
+        0.0,
+        extraSettings.value(QStringLiteral("laser_max_curvature")).toDouble(0.2),
+        1.0);
+    opts.laserMaxSamples = qBound(
+        1,
+        extraSettings.value(QStringLiteral("laser_max_samples")).toInt(500000),
+        10000000);
+    opts.laserWeight = qMax(
+        0.0,
+        extraSettings.value(QStringLiteral("laser_weight")).toDouble(1.0));
+    opts.laserHuberDeltaMeters = qMax(
+        1e-9,
+        extraSettings.value(QStringLiteral("laser_huber_delta_m")).toDouble(0.2));
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     setAtCancelFlag(cancelFlag);

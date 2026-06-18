@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-06-13。
+行星表面摄影测量处理系统。最后更新: 2026-06-18。
 
 ## 顶层目录
 
@@ -8,7 +8,7 @@
 plascan/
 ├── src/            # 所有源代码
 │   ├── common/     # 通用工具库 (日志, 数学, 空间索引)
-│   ├── core/       # 核心算法库 (相机, 特征, 匹配, SfM, MVS, 网格, 地形, 密集匹配)
+│   ├── core/       # 核心算法库 (相机, 特征, 匹配, SfM, MVS, LiDAR, 网格, 地形, 密集匹配)
 │   └── gui/        # Qt6 图形界面
 ├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
 ├── 3rdparty/       # 第三方库源码 (LightGlue)
@@ -112,7 +112,12 @@ core/
 │   └── GroundBackProjector.h/cpp  # 地面投影
 │
 ├── bundle_adjust/              # 光束法平差
-│   └── BundleAdjust.h/cpp      # Ceres BA 优化
+│   └── BundleAdjust.h/cpp      # BA 优化，可选 LiDAR 点到面软约束
+│
+├── lidar/                      # LiDAR / 激光点约束
+│   ├── LaserConstraintTypes.h  # 点到面约束、地图采样和关联统计类型
+│   ├── LaserConstraintMap.h/cpp # PLY 点云读取、法线/曲率筛选、最近平面查询
+│   └── LaserConstraintAssociation.h/cpp # BA track 与 LiDAR 平面约束关联
 │
 ├── sfm/                        # Structure-from-Motion
 │   ├── common/SfmTypes.h       # SfM 公共类型
@@ -402,6 +407,7 @@ cli/
 ├── cli_reconstruct_pipeline.cpp # GUI 等价一键重建 / 三维重建 CLI
 ├── cli_feature_extract.cpp   # 特征提取 CLI (8 种算法, 工厂模式)
 ├── cli_feature_match.cpp     # 特征匹配 CLI (工厂模式, 自动检测算法)
+├── cli_bundle_adjust.cpp      # 光束法平差 CLI (支持 LiDAR 约束和 A/B 对比)
 └── tests/                    # CLI 端到端测试脚本
 ```
 
@@ -419,13 +425,14 @@ cli/
 ```
 阶段 1: 稀疏重建 (GUI 完成)
   ├─ 特征提取 (SuperPoint/DISK/ALIKED/...) → .sp/.dsk/.alk/... 文件
-  ├─ 特征匹配 (SuperGlue/LightGlue/BF/FLANN) → .match 文件
+  ├─ 特征匹配 (SuperGlue/LightGlue/BF/FLANN) → .match 文件 + .match.json sidecar
   └─ 光束法平差 / 增量SfM           → 精化相机 + 稀疏点云
-     (以上由 SFMService 编排, 暂通过 GUI 调用; sfm_cli 待 headless SFMService)
+     (GUI 由 SFMService 编排；bundle_adjust_cli 可在已有项目和 match sidecar 上做 headless BA/A-B)
 
 阶段 2: 密集重建 (CLI 可用)
   ├─ feature_extract_cli  特征提取    → .sp/.dsk/.alk 等
-  ├─ feature_match_cli    特征匹配    → .match 文件
+  ├─ feature_match_cli    特征匹配    → .match 文件 + .match.json sidecar
+  ├─ bundle_adjust_cli    光束法平差  → ba_run_summary.json / A-B 对比 JSON
   ├─ rectify_cli          极线校正    → 校正影像对 + 单应矩阵 .xml
   ├─ dense_match_cli      密集匹配    → 视差图 .tif
   └─ triangulate_cli      视差三角化  → 密集点云 .ply

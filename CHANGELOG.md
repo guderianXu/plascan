@@ -2,6 +2,43 @@
 
 本文件按版本倒序记录用户可感知的主要变更。详细验证记录见 `docs/releases/`。
 
+## v1.1.3 - 2026-06-18
+
+### 新增
+
+- 新增 LiDAR / 激光点点到面约束模块，支持读取带法线 PLY、曲率筛选、体素采样、最近平面查询，以及把 BA track 关联到 LiDAR 平面约束。
+- 新增 `bundle_adjust_cli`，可对 `.plascan` 项目执行 headless BA，支持 `--laser-cloud`、LiDAR 关联距离/权重参数、`--ab-compare` 基线/激光约束 A-B 对比和 JSON/CSV/tsai 输出。
+- 新增 `feature_match_cli` BA sidecar 输出，传统 BF/FLANN 匹配会同步生成 `.match.json`，包含匹配点坐标、特征索引和匹配分数，供多视 track 构建和 BA CLI 使用。
+- 新增 MUN-FRL LiDAR BA 数据准备脚本、LiDAR 法线估计脚本、输入校验脚本和 A-B 结果比较脚本，支持从公开多传感器数据构造近期激光约束测试集。
+- GUI 光束法平差对话框新增 LiDAR 约束参数，ProjectManager/BundleAdjustService 能把激光点云路径、关联半径、曲率阈值、权重和 Huber 阈值传入 BA 服务。
+
+### 优化
+
+- `prepare_mun_frl_lidar_ba_project.py` 支持 `--tf-static --camera-frame --body-frame`，会把 ROS 风格 `T_parent_child` 静态外参与 odometry 的 `world -> body` 位姿合成为 PlaScan 约定的 `world -> camera` 位姿。
+- `compare_lidar_ba_ab_results.py` 增加固定口径评估，报告共同有效 track RMS、相机中心/旋转漂移、LiDAR 约束数量和 LiDAR 点到面 RMS/median，避免只看全局 RMS 误判效果。
+- `testData/README.md` 补充 MUN-FRL lighthouse 从影像/匹配/轨迹/LiDAR 到 `.plascan`、法线估计和 BA A-B 对比的完整命令链。
+
+### 修复
+
+- 修复 headless BA CLI 默认导出评估图时可能依赖 GUI/图表环境的问题，默认关闭评估图导出，并提供 `--export-eval-plot` 显式开启。
+- 修复 MUN-FRL `cloud_registered` 样例 PLY 虽有 normal 字段但法线全为 0 导致 LiDAR constraint map 无有效平面样本的问题，通过法线估计预处理生成可用点到面约束点云。
+
+### 验证
+
+- `python -m unittest tests.test_prepare_mun_frl_lidar_ba_project tests.test_compare_lidar_ba_ab_results tests.test_estimate_lidar_normals tests.test_bundle_adjust_cli tests.test_feature_match_cli_sidecar` 通过，11 个测试，其中未设置 CLI 环境变量时 2 个跳过。
+- 设置 `PLASCAN_FEATURE_MATCH_CLI` 和 `PLASCAN_BUNDLE_ADJUST_CLI` 后，`python -m unittest tests.test_bundle_adjust_cli tests.test_feature_match_cli_sidecar tests.test_prepare_mun_frl_lidar_ba_project tests.test_compare_lidar_ba_ab_results` 通过，10/10。
+- `python -m py_compile testData\prepare_mun_frl_lidar_ba_project.py testData\compare_lidar_ba_ab_results.py testData\estimate_lidar_normals.py` 通过。
+- `ctest --test-dir build\windows-vcpkg-cuda-release --output-on-failure -R "lidar|Lidar|Laser|BundleAdjustCliTest|FeatureMatchCliSidecarTest|PrepareMunFrlLidarBaProjectTest|CompareLidarBaAbResultsTest|EstimateLidarNormalsTest"` 通过，19/19。
+- MUN-FRL lighthouse 20 张图窗口生成 `mun_frl_lidar_ba_tf.plascan`，BA dry-run 输入为 `cameras=20 tracks=3689 sidecar_v2_pairs=230822 multiview_tracks=3689`。
+- MUN-FRL A-B 诊断：`imu_link` body frame 的影像基线约 `0.533 px`，但 3-5 m LiDAR 约束会增大 LiDAR 点到面残差；`velodyne` body frame 可降低 LiDAR 残差但影像基线约 `1.126 px`，因此该样例目前作为 smoke/诊断集，不作为最终精度提升证明。
+
+### 已知问题
+
+- MUN-FRL `lio_body`、`imu_link`、`velodyne` 与相机 frame 的语义仍需进一步核实；当前 LiDAR BA 已能参与优化，但公开样例上的精度提升结论需要更可靠的跨传感器坐标链或更合适的数据切片。
+- 本版本没有重新跑 agisoft aerial GCP 444 张完整 MVS/mesh/DEM/DOM 长时流水线。
+- CI 仍暂时排除历史已知失败 `TerrainDemDomTest.TerrainPipelineGeneratesDemDomFromDirectory`，该测试可能出现 `dom_png not found`。
+- GitHub Actions `build-test` 作为远端门禁；`v1.1.3` 发布提交和 tag 推送后需以 Actions 结果为准。
+
 ## v1.1.2 - 2026-06-17
 
 > 2026-06-18 补充：新增 MVS 深度图内存自适应保护、快速二进制深度产物保存和 GUI CUDA 帧流水线自适应，代码已进入 `main`；既有 `v1.1.2` tag 未强制重写。

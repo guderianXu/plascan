@@ -55,6 +55,7 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/core/intersection
   ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
   ${CMAKE_SOURCE_DIR}/src/core/camera
+  ${CMAKE_SOURCE_DIR}/src/core/lidar
   ${CMAKE_SOURCE_DIR}/src/core/overlap
   ${CMAKE_SOURCE_DIR}/src/core/terrain
   ${CMAKE_SOURCE_DIR}/src/core/sfm

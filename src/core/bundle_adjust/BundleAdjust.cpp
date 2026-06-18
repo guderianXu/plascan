@@ -189,6 +189,110 @@ double computeTrackRms(const std::vector<Camera> &cams, const BATrack &track, co
     return std::sqrt(sum2 / static_cast<double>(cnt));
 }
 
+double laserSignedDistance(const BALaserPlaneConstraint &constraint, const std::array<double, 3> &X)
+{
+    return (X[0] - constraint.point[0]) * constraint.normal[0]
+        + (X[1] - constraint.point[1]) * constraint.normal[1]
+        + (X[2] - constraint.point[2]) * constraint.normal[2];
+}
+
+double computeTrackLaserRms(const BATrack &track, const std::array<double, 3> &X)
+{
+    if (track.laserPlaneConstraints.empty())
+    {
+        return 0.0;
+    }
+
+    double sum2 = 0.0;
+    int count = 0;
+    for (const BALaserPlaneConstraint &constraint : track.laserPlaneConstraints)
+    {
+        const double distance = laserSignedDistance(constraint, X);
+        if (!std::isfinite(distance))
+        {
+            continue;
+        }
+        sum2 += distance * distance;
+        ++count;
+    }
+    return count > 0 ? std::sqrt(sum2 / static_cast<double>(count)) : 0.0;
+}
+
+double computeTrackAcceptanceCost(const std::vector<Camera> &cams,
+                                  const BATrack &track,
+                                  const std::array<double, 3> &X,
+                                  const BAOptions &opt)
+{
+    double cost = computeTrackRms(cams, track, X);
+    if (!std::isfinite(cost))
+    {
+        cost = 0.0;
+    }
+    if (opt.enableLaserPlaneConstraints && !track.laserPlaneConstraints.empty())
+    {
+        cost += std::max(0.0, opt.laserPlaneWeight) * computeTrackLaserRms(track, X);
+    }
+    return cost;
+}
+
+struct LaserDistanceStats
+{
+    int count = 0;
+    double rms = 0.0;
+    double median = 0.0;
+};
+
+LaserDistanceStats computeLaserStatsForPoints(const std::vector<BATrack> &tracks,
+                                              const std::vector<BARefinedPoint> *points)
+{
+    LaserDistanceStats stats;
+    std::vector<double> distances;
+
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
+    {
+        const BATrack &track = tracks[trackIndex];
+        std::array<double, 3> X = track.initialPoint;
+        if (points)
+        {
+            if (trackIndex >= points->size() || !(*points)[trackIndex].valid)
+            {
+                continue;
+            }
+            X = (*points)[trackIndex].point;
+        }
+
+        for (const BALaserPlaneConstraint &constraint : track.laserPlaneConstraints)
+        {
+            const double distance = std::abs(laserSignedDistance(constraint, X));
+            if (!std::isfinite(distance))
+            {
+                continue;
+            }
+            distances.push_back(distance);
+        }
+    }
+
+    stats.count = static_cast<int>(distances.size());
+    if (distances.empty())
+    {
+        return stats;
+    }
+
+    double sum2 = 0.0;
+    for (double distance : distances)
+    {
+        sum2 += distance * distance;
+    }
+    stats.rms = std::sqrt(sum2 / static_cast<double>(distances.size()));
+
+    std::sort(distances.begin(), distances.end());
+    const std::size_t middle = distances.size() / 2;
+    stats.median = (distances.size() % 2 == 0)
+        ? 0.5 * (distances[middle - 1] + distances[middle])
+        : distances[middle];
+    return stats;
+}
+
 /**
  * @brief 对单条轨迹优化三维点坐标（固定所有相机）。
  *
@@ -209,7 +313,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams, const BATrack &
 
     out.rmsBefore = computeTrackRms(cams, track, out.point);
     std::array<double, 3> X = out.point;
-    double currentCost = out.rmsBefore;
+    double currentCost = computeTrackAcceptanceCost(cams, track, X, opt);
     double lambda = opt.damping;  // 自适应 LM 阻尼
 
     for (int iter = 0; iter < std::max(1, opt.maxPointIterations); ++iter)
@@ -263,6 +367,36 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams, const BATrack &
             ++used;
         }
 
+        if (opt.enableLaserPlaneConstraints && !track.laserPlaneConstraints.empty())
+        {
+            for (const BALaserPlaneConstraint &constraint : track.laserPlaneConstraints)
+            {
+                const double r = laserSignedDistance(constraint, X);
+                if (!std::isfinite(r))
+                {
+                    continue;
+                }
+
+                const double robustWeight = huberWeight(std::abs(r), opt.laserHuberDeltaMeters);
+                const double w = robustWeight * std::max(0.0, opt.laserPlaneWeight)
+                    * std::max(0.0, constraint.weight);
+                if (!(w > 0.0))
+                {
+                    continue;
+                }
+
+                const double J[3] = {constraint.normal[0], constraint.normal[1], constraint.normal[2]};
+                for (int a = 0; a < 3; ++a)
+                {
+                    for (int b = 0; b < 3; ++b)
+                    {
+                        H[a * 3 + b] += w * J[a] * J[b];
+                    }
+                    g[a] += w * J[a] * r;
+                }
+            }
+        }
+
         if (used < 2)
         {
             break;
@@ -283,10 +417,10 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams, const BATrack &
 
         // 候选点
         std::array<double, 3> Xnew = {X[0] + dx[0], X[1] + dx[1], X[2] + dx[2]};
-        double newCost = computeTrackRms(cams, track, Xnew);
+        double newCost = computeTrackAcceptanceCost(cams, track, Xnew, opt);
 
         // 步长接受检查：仅当 cost 减小（或首次有限cost）时接受步长
-        if (std::isfinite(newCost) && (newCost < currentCost || !std::isfinite(currentCost)))
+        if (std::isfinite(newCost) && (newCost < currentCost + 1e-12 || !std::isfinite(currentCost)))
         {
             X = Xnew;
             currentCost = newCost;
@@ -488,6 +622,14 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     if (cameras.empty() || tracks.empty()) return result;
     if (isCancelled(options)) return result;
 
+    if (options.enableLaserPlaneConstraints)
+    {
+        const LaserDistanceStats beforeLaser = computeLaserStatsForPoints(tracks, nullptr);
+        result.laserConstraintCount = beforeLaser.count;
+        result.laserRmsBeforeMeters = beforeLaser.rms;
+        result.laserMedianBeforeMeters = beforeLaser.median;
+    }
+
     // 配置 OpenMP 线程数
 #ifdef _OPENMP
     if (options.numThreads > 0)
@@ -648,6 +790,14 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
 
     result.meanRmsBefore = (cntBefore > 0) ? (sumBefore / cntBefore) : 0.0;
     result.meanRmsAfter  = (cntAfter  > 0) ? (sumAfter  / cntAfter)  : 0.0;
+
+    if (options.enableLaserPlaneConstraints)
+    {
+        const LaserDistanceStats afterLaser = computeLaserStatsForPoints(tracks, &result.points);
+        result.laserConstraintCount = afterLaser.count;
+        result.laserRmsAfterMeters = afterLaser.rms;
+        result.laserMedianAfterMeters = afterLaser.median;
+    }
     return result;
 }
 

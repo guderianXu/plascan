@@ -329,6 +329,215 @@
     </widget>
    </item>
    <item>
+    <widget class="QGroupBox" name="laserGroup">
+     <property name="title">
+      <string>LiDAR 激光点约束</string>
+     </property>
+     <layout class="QFormLayout" name="laserForm">
+      <item row="0" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_enableLaserConstraintsCheck">
+        <property name="toolTip">
+         <string>开启后，将稀疏重建点与 LiDAR 平面样本做近邻关联，并在平差中加入点到面软约束。</string>
+        </property>
+        <property name="text">
+         <string>启用 LiDAR 点到面约束</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="laserConstraintCloudLabel">
+        <property name="text">
+         <string>约束点云</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <layout class="QHBoxLayout" name="laserConstraintCloudLayout">
+        <item>
+         <widget class="QLineEdit" name="m_laserConstraintCloudEdit">
+          <property name="placeholderText">
+           <string>请选择带法线/曲率的 LiDAR PLY 点云</string>
+          </property>
+          <property name="toolTip">
+           <string>当前支持包含 x/y/z、normal_x/normal_y/normal_z 或 nx/ny/nz 的 PLY 文件。</string>
+          </property>
+         </widget>
+        </item>
+        <item>
+         <widget class="QToolButton" name="chooseLaserConstraintCloudBtn">
+          <property name="text">
+           <string>选择...</string>
+          </property>
+         </widget>
+        </item>
+       </layout>
+      </item>
+      <item row="2" column="0">
+       <widget class="QLabel" name="laserAssociationMaxDistanceLabel">
+        <property name="text">
+         <string>最大关联距离</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="1">
+       <widget class="QDoubleSpinBox" name="m_laserAssociationMaxDistanceSpin">
+        <property name="toolTip">
+         <string>稀疏点到最近 LiDAR 平面样本的最大距离，超过则不加入约束。</string>
+        </property>
+        <property name="suffix">
+         <string> m</string>
+        </property>
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="0">
+       <widget class="QLabel" name="laserVoxelSizeLabel">
+        <property name="text">
+         <string>体素抽稀</string>
+        </property>
+       </widget>
+      </item>
+      <item row="3" column="1">
+       <widget class="QDoubleSpinBox" name="m_laserVoxelSizeSpin">
+        <property name="toolTip">
+         <string>大于 0 时按该体素尺寸抽稀 LiDAR 平面样本；0 表示不抽稀。</string>
+        </property>
+        <property name="suffix">
+         <string> m</string>
+        </property>
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="maximum">
+         <double>100.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.010000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="0">
+       <widget class="QLabel" name="laserMaxCurvatureLabel">
+        <property name="text">
+         <string>最大曲率</string>
+        </property>
+       </widget>
+      </item>
+      <item row="4" column="1">
+       <widget class="QDoubleSpinBox" name="m_laserMaxCurvatureSpin">
+        <property name="toolTip">
+         <string>仅使用曲率不大于该阈值的 LiDAR 平面样本。</string>
+        </property>
+        <property name="decimals">
+         <number>4</number>
+        </property>
+        <property name="maximum">
+         <double>1.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.010000000000000</double>
+        </property>
+        <property name="value">
+         <double>0.200000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="0">
+       <widget class="QLabel" name="laserMaxSamplesLabel">
+        <property name="text">
+         <string>样本上限</string>
+        </property>
+       </widget>
+      </item>
+      <item row="5" column="1">
+       <widget class="QSpinBox" name="m_laserMaxSamplesSpin">
+        <property name="toolTip">
+         <string>最多加载的 LiDAR 平面样本数量，用于控制内存与近邻索引耗时。</string>
+        </property>
+        <property name="minimum">
+         <number>1</number>
+        </property>
+        <property name="maximum">
+         <number>10000000</number>
+        </property>
+        <property name="value">
+         <number>500000</number>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="0">
+       <widget class="QLabel" name="laserWeightLabel">
+        <property name="text">
+         <string>约束权重</string>
+        </property>
+       </widget>
+      </item>
+      <item row="6" column="1">
+       <widget class="QDoubleSpinBox" name="m_laserWeightSpin">
+        <property name="toolTip">
+         <string>LiDAR 点到面残差的全局权重；先从 1.0 开始调试。</string>
+        </property>
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="maximum">
+         <double>100000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.100000000000000</double>
+        </property>
+        <property name="value">
+         <double>1.000000000000000</double>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0">
+       <widget class="QLabel" name="laserHuberDeltaLabel">
+        <property name="text">
+         <string>LiDAR Huber δ</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="1">
+       <widget class="QDoubleSpinBox" name="m_laserHuberDeltaSpin">
+        <property name="toolTip">
+         <string>LiDAR 点到面残差的鲁棒阈值，单位为米。</string>
+        </property>
+        <property name="suffix">
+         <string> m</string>
+        </property>
+        <property name="decimals">
+         <number>3</number>
+        </property>
+        <property name="minimum">
+         <double>0.001000000000000</double>
+        </property>
+        <property name="maximum">
+         <double>1000.000000000000000</double>
+        </property>
+        <property name="singleStep">
+         <double>0.010000000000000</double>
+        </property>
+        <property name="value">
+         <double>0.200000000000000</double>
+        </property>
+       </widget>
+      </item>
+     </layout>
+    </widget>
+   </item>
+   <item>
     <widget class="QGroupBox" name="systemGroup">
      <property name="title">
       <string>系统参数（并发/资源）</string>

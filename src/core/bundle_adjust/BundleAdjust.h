@@ -34,6 +34,18 @@ struct BAObservation
 };
 
 /**
+ * @brief LiDAR 局部平面约束：约束 BA 三维点靠近激光点云中的局部平面。
+ */
+struct BALaserPlaneConstraint
+{
+    std::array<double, 3> point{{0.0, 0.0, 0.0}};
+    std::array<double, 3> normal{{0.0, 0.0, 1.0}};
+    double weight = 1.0;
+    double initialSignedDistance = 0.0;
+    int sourceFrameIndex = -1;
+};
+
+/**
  * @brief 轨迹：一个三维点及其在多幅图像中的观测集合。
  *
  * 轨迹表示多相机共观的同一个物方点，是光束法平差的核心数据单元。
@@ -43,6 +55,7 @@ struct BATrack
 {
     std::array<double, 3> initialPoint{{0.0, 0.0, 0.0}}; ///< 三维点的初始坐标（优化起始值）
     std::vector<BAObservation> observations;              ///< 所有相机中对该点的观测列表
+    std::vector<BALaserPlaneConstraint> laserPlaneConstraints; ///< 可选 LiDAR 点到面软约束
 };
 
 /**
@@ -59,6 +72,11 @@ struct BAOptions
     double finiteDiffEps = 1e-6;   ///< 有限差分步长（中央差分: ±eps），用于近似雅可比
     double damping = 1e-3;         ///< Levenberg-Marquardt 初始阻尼因子（自适应调整）
     double stepTolerance = 1e-8;   ///< 收敛判断阈值：步长小于此值则认为已收敛
+
+    // ── LiDAR 点到面软约束 ────────────────────────────────────────────────
+    bool enableLaserPlaneConstraints = false; ///< 是否启用 BATrack 上挂载的 LiDAR 点到面约束
+    double laserPlaneWeight = 1.0;            ///< LiDAR 残差全局权重，单位相当于 1/m
+    double laserHuberDeltaMeters = 0.2;       ///< LiDAR 点到面 Huber 阈值（米）
 
     // ── Gauge 固定 ──────────────────────────────────────────────────────────
     /// 固定这些索引对应的相机位姿（不参与 camera 优化阶段）。
@@ -111,6 +129,12 @@ struct BAResult
     double meanRmsBefore = 0.0; ///< 优化前所有轩迹重投影 RMS 的均値
     double meanRmsAfter = 0.0;  ///< 优化后所有轨迹重投影 RMS 的均値
     int refinedCameraCount = 0; ///< 最后一轮中实际被更新的相机数量
+
+    int laserConstraintCount = 0;          ///< 参与统计/优化的 LiDAR 点到面约束数量
+    double laserRmsBeforeMeters = 0.0;     ///< 优化前 LiDAR 点到面 RMS（米）
+    double laserRmsAfterMeters = 0.0;      ///< 优化后 LiDAR 点到面 RMS（米）
+    double laserMedianBeforeMeters = 0.0;  ///< 优化前 LiDAR 点到面绝对距离中位数（米）
+    double laserMedianAfterMeters = 0.0;   ///< 优化后 LiDAR 点到面绝对距离中位数（米）
 
     std::vector<BARefinedPoint> points;   ///< 每条轨迹对应的点优化结果（与输入 tracks 索引一一对应）
     std::vector<Camera> refinedCameras;   ///< 优化后的相机列表（与输入 cameras 長度相同）

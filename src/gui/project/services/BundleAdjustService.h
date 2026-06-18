@@ -42,6 +42,16 @@ struct BaServiceOptions
     QStringList         selectedImages;     ///< 用户选中的全部影像路径（用于输出 JSON）
     QMap<QString, QJsonObject> beforeCamMeta; ///< 平差前各影像的相机 JSON，用于度量位移
 
+    // ── LiDAR 点到面软约束 ────────────────────────────────────────────────
+    bool                enableLaserConstraints = false; ///< 是否从 LiDAR 点云生成 BA 点到面约束
+    QString             laserConstraintCloudPath;       ///< 带法向/曲率字段的 LiDAR PLY
+    double              laserAssociationMaxDistanceMeters = 1.0; ///< track 到 LiDAR 平面最大关联距离
+    double              laserVoxelSizeMeters = 0.0;     ///< LiDAR 约束点云体素降采样尺寸；0 表示关闭
+    double              laserMaxCurvature = 0.2;        ///< 允许参与约束的最大曲率
+    int                 laserMaxSamples = 500000;       ///< LiDAR map 最大采样数，防止 BA 前处理过慢
+    double              laserWeight = 1.0;              ///< LiDAR 残差权重
+    double              laserHuberDeltaMeters = 0.2;    ///< LiDAR 残差 Huber 阈值（米）
+
     // ── 输出目录 ───────────────────────────────────────────────────────────
     QString             outputDir;          ///< 所有输出文件的根目录
 

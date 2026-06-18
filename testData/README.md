@@ -35,6 +35,123 @@ Use tags in the `--list` output as quick guidance:
 - `lidar_fusion_validation`: suitable for comparing/fusing PlaScan image-based point clouds, DSM/DEM, or meshes
   against LiDAR/laser-scan reference data.
 
+## Validate LiDAR inputs for laser-constrained BA
+
+After extracting the MUN-FRL lighthouse sample, use `validate_lidar_ba_inputs.py` to check whether the generated
+PLY streams can be used directly by the current LiDAR point-to-plane BA prototype:
+
+```bash
+python testData/validate_lidar_ba_inputs.py \
+  --dataset-root testData/photogrammetry_benchmarks/mun_frl_vil/lighthouse_benchmarking_bag/extracted \
+  --summary-json build/mun_frl_lidar_ba_summary.json
+```
+
+The script only reads PLY headers. It reports which stream contains `x/y/z` plus normals and is therefore suitable
+for the current `enable_laser_constraints` BA option. For the extracted MUN-FRL sample, `lidar/cloud_registered`
+is the intended first BA constraint stream; `lidar/velodyne_points` is useful for later raw LiDAR fusion or
+sensor-level constraints but needs normal estimation before point-to-plane BA.
+
+The current GUI/service path accepts one PLY file at a time. Start with the recommended
+`ba_constraint_cloud_path` from the JSON summary for smoke tests; merging or windowing per-frame LiDAR PLYs is a
+follow-up preprocessing step.
+
+Prepare a small real-data A/B benchmark manifest for comparing ordinary BA with LiDAR-constrained BA:
+
+```bash
+python testData/prepare_lidar_ba_ab_benchmark.py \
+  --dataset-root testData/photogrammetry_benchmarks/mun_frl_vil/lighthouse_benchmarking_bag/extracted \
+  --output-dir build/mun_frl_lidar_ba_ab_benchmark \
+  --start-index 5 \
+  --window-size 20 \
+  --max-abs-dt-ms 100 \
+  --merge-lidar
+```
+
+This writes `benchmark_plan.json`, `images.lis`, and `lidar_clouds.lis`. On the current extracted sample, the default
+window selects 20 images and 10 unique `lidar/cloud_registered` PLY files. With `--merge-lidar`, those frames are
+merged into `merged_lidar_cloud.ply`, and the LiDAR BA option `laser_constraint_cloud_path` is pointed at that merged
+PLY.
+
+The extracted MUN-FRL `cloud_registered` PLY files contain normal fields, but the observed sample has zero normals.
+Estimate usable point-to-plane normals before running LiDAR-constrained BA:
+
+```bash
+python testData/estimate_lidar_normals.py \
+  --input build/mun_frl_lidar_ba_ab_benchmark/merged_lidar_cloud.ply \
+  --output build/mun_frl_lidar_ba_ab_benchmark/merged_lidar_cloud_normals.ply \
+  --k-neighbors 16 \
+  --summary-json build/mun_frl_lidar_ba_ab_benchmark/merged_lidar_cloud_normals_summary.json
+```
+
+For an end-to-end CLI BA smoke test, first run `feature_match_cli` on the selected window. The CLI writes the legacy
+binary `.match` file and a `.match.json` sidecar containing matched feature indices and image points; the sidecar is
+what the BA project builder uses to assemble multi-view tracks.
+
+Then package a temporary PlaScan project from the benchmark manifest, ROS camera info, odometry, and match sidecars:
+
+```bash
+python testData/prepare_mun_frl_lidar_ba_project.py \
+  --benchmark-plan build/mun_frl_lidar_ba_ab_benchmark/benchmark_plan.json \
+  --camera-info testData/photogrammetry_benchmarks/mun_frl_vil/lighthouse_benchmarking_bag/extracted/camera/camera_info_first.yaml \
+  --trajectory testData/photogrammetry_benchmarks/mun_frl_vil/lighthouse_benchmarking_bag/extracted/trajectory/odometry.csv \
+  --tf-static testData/photogrammetry_benchmarks/mun_frl_vil/lighthouse_benchmarking_bag/extracted/tf/tf_static_unique.csv \
+  --camera-frame camera \
+  --body-frame imu_link \
+  --matches-dir build/mun_frl_lidar_ba_ab_benchmark/cli_match_run/matches.sift \
+  --output-dir build/mun_frl_lidar_ba_ab_project \
+  --project-name mun_frl_lidar_ba
+```
+
+`--tf-static` applies the ROS-style static transform chain to convert odometry body poses into camera poses before
+writing PlaScan camera JSON. The extracted lighthouse sample has odometry `camera_init -> lio_body` and static
+transforms including `camera -> imu_link` and `camera -> velodyne`. Current smoke-test evidence favors
+`--body-frame imu_link` for image BA geometry, while `--body-frame velodyne` is useful as a diagnostic because it
+can reduce LiDAR residuals at the cost of a worse image-only baseline.
+
+Run ordinary BA versus LiDAR-constrained BA with the standalone CLI:
+
+```bash
+build/bin/bundle_adjust_cli \
+  build/mun_frl_lidar_ba_ab_project/mun_frl_lidar_ba.plascan \
+  --output-dir build/mun_frl_lidar_ba_ab_project/ba_ab_run_laser5m \
+  --laser-cloud build/mun_frl_lidar_ba_ab_benchmark/merged_lidar_cloud_normals.ply \
+  --ab-compare \
+  --laser-max-distance 5 \
+  --max-iterations 5 \
+  --max-point-iterations 8 \
+  --max-camera-iterations 3 \
+  --threads 8 \
+  --force
+```
+
+The first MUN-FRL smoke run is useful for exercising the data path, not for final accuracy claims. The default
+`--laser-max-distance 1` rejected all tracks in the current 20-image window; `--laser-max-distance 3..5` produces
+non-zero associations. Because the camera/LiDAR frame preparation is still approximate, compare reprojection RMS,
+optimized track count, LiDAR residuals, and associated constraint count together.
+
+After two BA runs produce JSON summaries, compare them with the fixed-scope evaluation helper:
+
+```bash
+python testData/compare_lidar_ba_ab_results.py \
+  --baseline-json build/mun_frl_lidar_ba_ab_project/ba_ab_run_laser5m/baseline/ba_run_summary.json \
+  --lidar-json build/mun_frl_lidar_ba_ab_project/ba_ab_run_laser5m/laser/ba_run_summary.json \
+  --output-json build/mun_frl_lidar_ba_ab_project/ba_ab_run_laser5m/fixed_comparison.json \
+  --output-md build/mun_frl_lidar_ba_ab_project/ba_ab_run_laser5m/fixed_comparison.md
+```
+
+The comparison report focuses on global reprojection RMS, optimized track count, common-valid-track RMS, LiDAR
+point-to-plane RMS/median, associated LiDAR constraint count, and refined-camera center/rotation drift. On the current
+20-image lighthouse smoke window with estimated normals:
+
+| Pose chain | Laser radius | Result |
+|---|---:|---|
+| `camera_init -> lio_body` plus `camera -> imu_link` inverse | 1 m | 0 associated tracks; only validates no-LiDAR baseline |
+| `camera_init -> lio_body` plus `camera -> imu_link` inverse | 3-5 m | image-only baseline is strong (`~0.533 px`), but LiDAR RMS increases after BA |
+| `camera_init -> lio_body` plus `camera -> velodyne` inverse | 3-5 m | LiDAR RMS decreases, but image-only baseline is weaker (`~1.126 px`) |
+
+Treat these as diagnostics. A final accuracy test still needs a better-confirmed `lio_body` to camera/LiDAR frame
+definition, or a dataset slice with independently verified camera-LiDAR extrinsics in the same map frame.
+
 Candidate table, checked against official or dataset homepages on 2026-06-17:
 
 | Dataset | Data types | Scale | Homepage / entry | License / restrictions | PlaScan use | Risks / notes |

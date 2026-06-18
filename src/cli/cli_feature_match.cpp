@@ -12,6 +12,92 @@
 #include <QString>
 #include <QFile>
 #include <QDataStream>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
+
+namespace
+{
+
+QJsonArray makePointArray(double x, double y)
+{
+    QJsonArray point;
+    point.append(x);
+    point.append(y);
+    return point;
+}
+
+void writeIndexedSidecar(const std::string &outPath,
+                         const std::string &sp1,
+                         const std::string &sp2,
+                         const QString &imageName0,
+                         const QString &imageName1,
+                         const xjw::feature_extractors::FeatureData &fd0,
+                         const xjw::feature_extractors::FeatureData &fd1,
+                         const xjw::feature_match::MatchResult &matchResult,
+                         const QString &featureAlgorithm,
+                         const QString &matchAlgorithm,
+                         float matchThreshold)
+{
+    QJsonArray points0;
+    QJsonArray points1;
+    QJsonArray indices0;
+    QJsonArray indices1;
+    QJsonArray scores;
+
+    for (size_t i = 0; i < matchResult.matches0.size(); ++i)
+    {
+        const int idx1 = matchResult.matches0[i];
+        if (idx1 < 0 ||
+            i >= fd0.keypoints.size() ||
+            idx1 >= static_cast<int>(fd1.keypoints.size()))
+        {
+            continue;
+        }
+
+        indices0.append(static_cast<int>(i));
+        indices1.append(idx1);
+        points0.append(makePointArray(fd0.keypoints[i].pt.x, fd0.keypoints[i].pt.y));
+        points1.append(makePointArray(fd1.keypoints[static_cast<size_t>(idx1)].pt.x,
+                                      fd1.keypoints[static_cast<size_t>(idx1)].pt.y));
+
+        const float score = i < matchResult.matchingScores0.size()
+            ? matchResult.matchingScores0[i]
+            : 1.0f;
+        scores.append(static_cast<double>(score));
+    }
+
+    QJsonObject sidecar;
+    sidecar[QStringLiteral("match_file")] = QString::fromStdString(outPath);
+    sidecar[QStringLiteral("image0_name")] = imageName0;
+    sidecar[QStringLiteral("image1_name")] = imageName1;
+    sidecar[QStringLiteral("image0_path")] = imageName0;
+    sidecar[QStringLiteral("image1_path")] = imageName1;
+    sidecar[QStringLiteral("feature0_path")] = QString::fromStdString(sp1);
+    sidecar[QStringLiteral("feature1_path")] = QString::fromStdString(sp2);
+    sidecar[QStringLiteral("sp0_path")] = QString::fromStdString(sp1);
+    sidecar[QStringLiteral("sp1_path")] = QString::fromStdString(sp2);
+    sidecar[QStringLiteral("feature_algorithm")] = featureAlgorithm;
+    sidecar[QStringLiteral("match_algorithm")] = matchAlgorithm;
+    sidecar[QStringLiteral("feature_format_version")] = 2;
+    sidecar[QStringLiteral("num_matches")] = indices0.size();
+    sidecar[QStringLiteral("match_threshold")] = static_cast<double>(matchThreshold);
+    sidecar[QStringLiteral("matched_points0")] = points0;
+    sidecar[QStringLiteral("matched_points1")] = points1;
+    sidecar[QStringLiteral("matched_indices0")] = indices0;
+    sidecar[QStringLiteral("matched_indices1")] = indices1;
+    sidecar[QStringLiteral("matched_scores")] = scores;
+
+    QFile sidecarFile(QString::fromStdString(outPath) + QStringLiteral(".json"));
+    if (!sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        cli::fatal("无法写入 sidecar: " + outPath + ".json", cli::EXIT_IO_ERR);
+    }
+    sidecarFile.write(QJsonDocument(sidecar).toJson(QJsonDocument::Compact));
+    sidecarFile.close();
+}
+
+} // namespace
 
 // 根据文件后缀自动选择匹配器
 static std::string autoMatcher(const std::string &spPath)
@@ -147,6 +233,17 @@ int main(int argc, char *argv[])
                << fd1.keypoints[m1].pt.x << fd1.keypoints[m1].pt.y;
         }
         f.close();
+        writeIndexedSidecar(outPath,
+                            sp1,
+                            sp2,
+                            n1,
+                            n2,
+                            fd0,
+                            fd1,
+                            mr,
+                            QString::fromStdString(FeatureFileIO::peekAlgorithm(QString::fromStdString(sp1))),
+                            QString::fromStdString(tc.algorithmName),
+                            matchThresh);
         fprintf(stdout, "匹配完成: %d 点 -> %s\n", count, outPath.c_str());
     }
     else

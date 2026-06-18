@@ -55,6 +55,15 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
         m_stepTolSpin = ui.m_stepTolSpin;
         m_refinePoseCheck = ui.m_refinePoseCheck;
         m_dryRunCheck = ui.m_dryRunCheck;
+        m_enableLaserConstraintsCheck = ui.m_enableLaserConstraintsCheck;
+        m_laserConstraintCloudEdit = ui.m_laserConstraintCloudEdit;
+        m_chooseLaserConstraintCloudBtn = ui.chooseLaserConstraintCloudBtn;
+        m_laserAssociationMaxDistanceSpin = ui.m_laserAssociationMaxDistanceSpin;
+        m_laserVoxelSizeSpin = ui.m_laserVoxelSizeSpin;
+        m_laserMaxCurvatureSpin = ui.m_laserMaxCurvatureSpin;
+        m_laserMaxSamplesSpin = ui.m_laserMaxSamplesSpin;
+        m_laserWeightSpin = ui.m_laserWeightSpin;
+        m_laserHuberDeltaSpin = ui.m_laserHuberDeltaSpin;
         m_exportTsaiCheck = ui.m_exportTsaiCheck;
         m_exportSummaryTxtCheck = ui.m_exportSummaryTxtCheck;
         m_exportPointsCsvCheck = ui.m_exportPointsCsvCheck;
@@ -76,6 +85,10 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
         m_resultCameraTable->horizontalHeader()->setStretchLastSection(true);
 
         connect(ui.chooseOutputBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onChooseOutputDir);
+        connect(m_chooseLaserConstraintCloudBtn,
+                &QToolButton::clicked,
+                this,
+                &BundleAdjustDialog::onChooseLaserConstraintCloud);
         connect(ui.runBtn, &QPushButton::clicked, this, &BundleAdjustDialog::onRun);
         connect(ui.closeBtn, &QPushButton::clicked, this, &BundleAdjustDialog::reject);
         connect(ui.restoreBtn, &QPushButton::clicked, this, &BundleAdjustDialog::requestRestore);
@@ -97,6 +110,33 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
         connect(m_stepTolSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
         connect(m_refinePoseCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
         connect(m_dryRunCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_enableLaserConstraintsCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_enableLaserConstraintsCheck, &QCheckBox::toggled, this, &BundleAdjustDialog::updateLaserControls);
+        connect(m_laserConstraintCloudEdit, &QLineEdit::textChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(m_laserAssociationMaxDistanceSpin,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this,
+                &BundleAdjustDialog::emitSettingsNow);
+        connect(m_laserVoxelSizeSpin,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this,
+                &BundleAdjustDialog::emitSettingsNow);
+        connect(m_laserMaxCurvatureSpin,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this,
+                &BundleAdjustDialog::emitSettingsNow);
+        connect(m_laserMaxSamplesSpin,
+                QOverload<int>::of(&QSpinBox::valueChanged),
+                this,
+                &BundleAdjustDialog::emitSettingsNow);
+        connect(m_laserWeightSpin,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this,
+                &BundleAdjustDialog::emitSettingsNow);
+        connect(m_laserHuberDeltaSpin,
+                QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+                this,
+                &BundleAdjustDialog::emitSettingsNow);
         connect(m_exportTsaiCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
         connect(m_exportSummaryTxtCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
         connect(m_exportPointsCsvCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
@@ -104,6 +144,7 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
         connect(m_exportRunJsonCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
         connect(m_exportEvalPlotCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
 
+        updateLaserControls();
         updateResultButtons();
     }
 }
@@ -156,6 +197,14 @@ void BundleAdjustDialog::applySettings(const QJsonObject &settings)
     if (settings.contains(QStringLiteral("step_tolerance"))) m_stepTolSpin->setValue(settings.value(QStringLiteral("step_tolerance")).toDouble());
     if (settings.contains(QStringLiteral("refine_camera_pose"))) m_refinePoseCheck->setChecked(settings.value(QStringLiteral("refine_camera_pose")).toBool());
     if (settings.contains(QStringLiteral("dry_run"))) m_dryRunCheck->setChecked(settings.value(QStringLiteral("dry_run")).toBool());
+    if (settings.contains(QStringLiteral("enable_laser_constraints"))) m_enableLaserConstraintsCheck->setChecked(settings.value(QStringLiteral("enable_laser_constraints")).toBool());
+    if (settings.contains(QStringLiteral("laser_constraint_cloud_path"))) m_laserConstraintCloudEdit->setText(settings.value(QStringLiteral("laser_constraint_cloud_path")).toString());
+    if (settings.contains(QStringLiteral("laser_association_max_distance_m"))) m_laserAssociationMaxDistanceSpin->setValue(settings.value(QStringLiteral("laser_association_max_distance_m")).toDouble());
+    if (settings.contains(QStringLiteral("laser_voxel_size_m"))) m_laserVoxelSizeSpin->setValue(settings.value(QStringLiteral("laser_voxel_size_m")).toDouble());
+    if (settings.contains(QStringLiteral("laser_max_curvature"))) m_laserMaxCurvatureSpin->setValue(settings.value(QStringLiteral("laser_max_curvature")).toDouble());
+    if (settings.contains(QStringLiteral("laser_max_samples"))) m_laserMaxSamplesSpin->setValue(settings.value(QStringLiteral("laser_max_samples")).toInt());
+    if (settings.contains(QStringLiteral("laser_weight"))) m_laserWeightSpin->setValue(settings.value(QStringLiteral("laser_weight")).toDouble());
+    if (settings.contains(QStringLiteral("laser_huber_delta_m"))) m_laserHuberDeltaSpin->setValue(settings.value(QStringLiteral("laser_huber_delta_m")).toDouble());
     if (settings.contains(QStringLiteral("export_tsai"))) m_exportTsaiCheck->setChecked(settings.value(QStringLiteral("export_tsai")).toBool());
     if (settings.contains(QStringLiteral("export_summary_txt"))) m_exportSummaryTxtCheck->setChecked(settings.value(QStringLiteral("export_summary_txt")).toBool());
     if (settings.contains(QStringLiteral("export_points_csv"))) m_exportPointsCsvCheck->setChecked(settings.value(QStringLiteral("export_points_csv")).toBool());
@@ -175,6 +224,8 @@ void BundleAdjustDialog::applySettings(const QJsonObject &settings)
             }
         }
     }
+
+    updateLaserControls();
 }
 
 void BundleAdjustDialog::onChooseOutputDir()
@@ -183,6 +234,19 @@ void BundleAdjustDialog::onChooseOutputDir()
                                                              QStringLiteral("选择光束法平差输出目录"),
                                                              m_outputDirEdit->text().trimmed());
     if (!outDir.isEmpty()) m_outputDirEdit->setText(outDir);
+}
+
+void BundleAdjustDialog::onChooseLaserConstraintCloud()
+{
+    const QString cloudPath = QFileDialog::getOpenFileName(
+        this,
+        QStringLiteral("选择 LiDAR 约束点云"),
+        m_laserConstraintCloudEdit->text().trimmed(),
+        QStringLiteral("PLY 点云 (*.ply);;所有文件 (*)"));
+    if (!cloudPath.isEmpty())
+    {
+        m_laserConstraintCloudEdit->setText(cloudPath);
+    }
 }
 
 QStringList BundleAdjustDialog::selectedImages() const
@@ -210,6 +274,14 @@ void BundleAdjustDialog::onRun()
         return;
     }
 
+    const bool enableLaserConstraints = m_enableLaserConstraintsCheck->isChecked();
+    const QString laserCloudPath = m_laserConstraintCloudEdit->text().trimmed();
+    if (enableLaserConstraints && laserCloudPath.isEmpty())
+    {
+        QMessageBox::warning(this, QStringLiteral("参数错误"), QStringLiteral("请指定 LiDAR 约束点云 PLY 文件。"));
+        return;
+    }
+
     // 清空上一轮结果状态，避免误操作保留旧结果。
     m_hasPendingResult = false;
     updateResultButtons();
@@ -225,6 +297,14 @@ void BundleAdjustDialog::onRun()
     options[QStringLiteral("finite_diff_eps")] = m_finiteDiffSpin->value();
     options[QStringLiteral("step_tolerance")] = m_stepTolSpin->value();
     options[QStringLiteral("refine_camera_pose")] = m_refinePoseCheck->isChecked();
+    options[QStringLiteral("enable_laser_constraints")] = enableLaserConstraints;
+    options[QStringLiteral("laser_constraint_cloud_path")] = laserCloudPath;
+    options[QStringLiteral("laser_association_max_distance_m")] = m_laserAssociationMaxDistanceSpin->value();
+    options[QStringLiteral("laser_voxel_size_m")] = m_laserVoxelSizeSpin->value();
+    options[QStringLiteral("laser_max_curvature")] = m_laserMaxCurvatureSpin->value();
+    options[QStringLiteral("laser_max_samples")] = m_laserMaxSamplesSpin->value();
+    options[QStringLiteral("laser_weight")] = m_laserWeightSpin->value();
+    options[QStringLiteral("laser_huber_delta_m")] = m_laserHuberDeltaSpin->value();
     options[QStringLiteral("export_tsai")] = m_exportTsaiCheck->isChecked();
     options[QStringLiteral("export_summary_txt")] = m_exportSummaryTxtCheck->isChecked();
     options[QStringLiteral("export_points_csv")] = m_exportPointsCsvCheck->isChecked();
@@ -313,6 +393,28 @@ void BundleAdjustDialog::updateResultButtons()
     if (m_discardResultBtn) m_discardResultBtn->setEnabled(m_hasPendingResult);
 }
 
+void BundleAdjustDialog::updateLaserControls()
+{
+    const bool enabled = m_enableLaserConstraintsCheck && m_enableLaserConstraintsCheck->isChecked();
+    const QList<QWidget *> widgets = {
+        m_laserConstraintCloudEdit,
+        m_chooseLaserConstraintCloudBtn,
+        m_laserAssociationMaxDistanceSpin,
+        m_laserVoxelSizeSpin,
+        m_laserMaxCurvatureSpin,
+        m_laserMaxSamplesSpin,
+        m_laserWeightSpin,
+        m_laserHuberDeltaSpin
+    };
+    for (QWidget *widget : widgets)
+    {
+        if (widget)
+        {
+            widget->setEnabled(enabled);
+        }
+    }
+}
+
 void BundleAdjustDialog::emitSettingsNow()
 {
     QJsonObject settings;
@@ -330,6 +432,14 @@ void BundleAdjustDialog::emitSettingsNow()
     settings[QStringLiteral("step_tolerance")] = m_stepTolSpin->value();
     settings[QStringLiteral("refine_camera_pose")] = m_refinePoseCheck->isChecked();
     settings[QStringLiteral("dry_run")] = m_dryRunCheck->isChecked();
+    settings[QStringLiteral("enable_laser_constraints")] = m_enableLaserConstraintsCheck->isChecked();
+    settings[QStringLiteral("laser_constraint_cloud_path")] = m_laserConstraintCloudEdit->text().trimmed();
+    settings[QStringLiteral("laser_association_max_distance_m")] = m_laserAssociationMaxDistanceSpin->value();
+    settings[QStringLiteral("laser_voxel_size_m")] = m_laserVoxelSizeSpin->value();
+    settings[QStringLiteral("laser_max_curvature")] = m_laserMaxCurvatureSpin->value();
+    settings[QStringLiteral("laser_max_samples")] = m_laserMaxSamplesSpin->value();
+    settings[QStringLiteral("laser_weight")] = m_laserWeightSpin->value();
+    settings[QStringLiteral("laser_huber_delta_m")] = m_laserHuberDeltaSpin->value();
     settings[QStringLiteral("export_tsai")] = m_exportTsaiCheck->isChecked();
     settings[QStringLiteral("export_summary_txt")] = m_exportSummaryTxtCheck->isChecked();
     settings[QStringLiteral("export_points_csv")] = m_exportPointsCsvCheck->isChecked();
