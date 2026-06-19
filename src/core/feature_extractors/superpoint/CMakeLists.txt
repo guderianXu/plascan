@@ -83,6 +83,8 @@ if(BUILD_TESTS)
         )
         target_compile_definitions(test_superpoint PRIVATE
             TEST_DATA_DIR="${CMAKE_SOURCE_DIR}/testData"
+            TESTDATA_DIR="${CMAKE_SOURCE_DIR}/src/core/feature_extractors/testdata"
+            MODEL_DIR="${CMAKE_SOURCE_DIR}/resources/models"
         )
         set_target_properties(test_superpoint PROPERTIES
             BUILD_RPATH_USE_ORIGIN TRUE

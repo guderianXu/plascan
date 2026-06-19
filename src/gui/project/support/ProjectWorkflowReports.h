@@ -6,6 +6,8 @@
 #include <QString>
 #include <QStringList>
 
+class ProjectData;
+
 namespace xjw::gui::project {
 
 struct BundleAdjustSparseCloudExport
@@ -15,6 +17,15 @@ struct BundleAdjustSparseCloudExport
     QString sparseCloudPath;
     int pointCount = 0;
     QJsonObject extraRecord;
+    QString errorMessage;
+};
+
+struct ReconstructionQualityProjectReportResult
+{
+    bool saved = false;
+    QString jsonPath;
+    QString csvPath;
+    QJsonObject record;
     QString errorMessage;
 };
 
@@ -43,5 +54,9 @@ bool writeLatestAndAppendHistoryReport(const QString &reportsDir,
                                        const QString &latestFileName,
                                        const QString &historyFileName,
                                        const QJsonObject &report);
+
+ReconstructionQualityProjectReportResult writeReconstructionQualityProjectReport(
+    ProjectData *projectData,
+    const QString &baseName = QStringLiteral("reconstruction_quality_report"));
 
 } // namespace xjw::gui::project

@@ -31,8 +31,11 @@ set(GUI_SOURCES
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
+  project/support/ProjectDashboardSummary.cpp
   project/support/ProjectDenseWorkflowConfig.cpp
   project/support/ProjectMetadataOperations.cpp
+  project/support/ProjectReferenceDatasets.cpp
+  project/support/ProjectReferenceTerrainBa.cpp
   project/support/ProjectResultRecords.cpp
   project/support/ProjectSfmWorkflow.cpp
   project/support/ProjectSparseWorkflow.cpp
@@ -52,6 +55,7 @@ set(GUI_SOURCES
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
   widgets/DataTreeWidget.ui
+  widgets/ProjectDashboardWidget.cpp
   widgets/ReferencePanelWidget.cpp
   widgets/WindowPanel.cpp
   widgets/WindowPanel.ui
@@ -134,9 +138,12 @@ set(GUI_HEADERS
   project/support/ProjectBundleAdjustExecution.h
   project/support/ProjectBundleAdjustWorkflow.h
   project/support/ProjectCameraInitialization.h
+  project/support/ProjectDashboardSummary.h
   project/support/ProjectDepthFrameUtils.h
   project/support/ProjectDenseWorkflowConfig.h
   project/support/ProjectMetadataOperations.h
+  project/support/ProjectReferenceDatasets.h
+  project/support/ProjectReferenceTerrainBa.h
   project/support/ProjectResultRecords.h
   project/support/ProjectSfmWorkflow.h
   project/support/ProjectSparseWorkflow.h
@@ -157,6 +164,7 @@ set(GUI_HEADERS
   views/LayerRenderer.h
   widgets/CanvasWidget.h
   widgets/DataTreeWidget.h
+  widgets/ProjectDashboardWidget.h
   widgets/ReferencePanelWidget.h
   widgets/WindowPanel.h
   widgets/ImageViewWidget.h
@@ -210,8 +218,11 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
+  project/support/ProjectDashboardSummary.cpp
   project/support/ProjectDenseWorkflowConfig.cpp
   project/support/ProjectMetadataOperations.cpp
+  project/support/ProjectReferenceDatasets.cpp
+  project/support/ProjectReferenceTerrainBa.cpp
   project/support/ProjectResultRecords.cpp
   project/support/ProjectSfmWorkflow.cpp
   project/support/ProjectSparseWorkflow.cpp

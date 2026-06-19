@@ -1613,6 +1613,12 @@ bool PatchMatchDepthEstimator::estimateGPU(
     float perturbation = 1.0f;
     for (int iter = 0; iter < config.numIterations; ++iter) 
     {
+        if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
+        {
+            if (errorMsg) *errorMsg = "PatchMatch cancelled";
+            return false;
+        }
+
         unsigned long long baseSeed = (unsigned long long)(iter + 1) * 999983ULL;
 
         if (config.cudaUseParallelSweep)
@@ -1675,6 +1681,21 @@ bool PatchMatchDepthEstimator::estimateGPU(
         }
 
         perturbation = fmaxf(perturbation * 0.5f, 0.02f);
+        if (config.cancelFlag)
+        {
+            CUDA_CHECK(cudaDeviceSynchronize());
+            if (config.cancelFlag->load(std::memory_order_relaxed))
+            {
+                if (errorMsg) *errorMsg = "PatchMatch cancelled";
+                return false;
+            }
+        }
+    }
+
+    if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
+    {
+        if (errorMsg) *errorMsg = "PatchMatch cancelled";
+        return false;
     }
 
     // ── 置信度过滤 ────────────────────────────────────────────────
@@ -1771,7 +1792,7 @@ bool PatchMatchDepthEstimator::estimateCPU(
     const PatchMatchConfig       &config,
     cv::Mat                      &depthOut,
     cv::Mat                      *confOut,
-    std::string                  */*errorMsg*/,
+    std::string                  *errorMsg,
     const cv::Mat                *hintDepth)
 {
     const int refW = refGray.cols;
@@ -2027,6 +2048,12 @@ bool PatchMatchDepthEstimator::estimateCPU(
     float perturbation = 1.0f;
     for (int iter = 0; iter < config.numIterations; ++iter)
     {
+        if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
+        {
+            if (errorMsg) *errorMsg = "PatchMatch cancelled";
+            return false;
+        }
+
         const unsigned long long baseSeed = static_cast<unsigned long long>(iter + 1) * 999983ULL;
         runColumnSweep(true, baseSeed, perturbation);
         runColumnSweep(false, baseSeed + 111111ULL, perturbation);
@@ -2141,6 +2168,11 @@ bool PatchMatchDepthEstimator::estimate(
                         zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth))
         {
             return true;
+        }
+        if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
+        {
+            if (errorMsg && errorMsg->empty()) *errorMsg = "PatchMatch cancelled";
+            return false;
         }
         if (!config.cudaFallbackToCpu)
         {

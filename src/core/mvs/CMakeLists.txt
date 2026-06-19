@@ -17,6 +17,8 @@ endif()
 set(MVS_CXX_SOURCES
     DepthMapFusion.cpp
     DepthFrameUtils.cpp
+    MvsSourcePlanner.cpp
+    MvsWorkspaceManifest.cpp
     DenseCloudBuilder.cpp
     DepthMapGenerator.cpp
     EpipolarRectifier.cpp
@@ -35,7 +37,9 @@ set(MVS_CXX_SOURCES
 
 set(MVS_HEADERS
     MvsTypes.h
+    MvsSourcePlanner.h
     MvsViewSelection.h
+    MvsWorkspaceManifest.h
     PatchMatchCUDA.h
     DepthMapFusion.h
     DepthFrameUtils.h
@@ -139,5 +143,33 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/camera
         )
         gtest_discover_tests(test_mvs_rectifier_unit)
+
+        add_executable(test_mvs_workspace_manifest
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_workspace_manifest.cpp
+        )
+        target_link_libraries(test_mvs_workspace_manifest PRIVATE
+            mvs
+            GTest::gtest_main
+            Qt6::Core
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_workspace_manifest PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_workspace_manifest)
+
+        add_executable(test_mvs_source_planner
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_source_planner.cpp
+        )
+        target_link_libraries(test_mvs_source_planner PRIVATE
+            mvs
+            GTest::gtest_main
+            Qt6::Core
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_source_planner PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_source_planner)
     endif()
 endif()

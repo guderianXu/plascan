@@ -31,6 +31,12 @@ public:
                               DemGridData *demGrid,
                               QString *errorMsg = nullptr);
 
+    /** @brief 写出 DEM 的误差、点数、置信度和覆盖率质量栅格。 */
+    static bool writeDemQualityRasters(const DemGridData &demGrid,
+                                       const QString &outputDir,
+                                       DemQualityArtifacts *artifacts,
+                                       QString *errorMsg = nullptr);
+
     /** @brief 写出栅格补密后的 XYZ 点云。 */
     static bool writeDenseCloudXyz(const PlaPointCloud &denseCloud,
                                    const QString &outputPath,

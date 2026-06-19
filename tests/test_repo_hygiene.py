@@ -93,28 +93,72 @@ class RepoHygieneTest(unittest.TestCase):
 
         self.assertGreaterEqual(text.count("|"), 40, "Dataset notes should include a structured comparison table")
 
-    def test_release_1_1_4_metadata_is_synchronized(self):
+    def test_release_1_1_5_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         core_cmake = (ROOT / "src" / "core" / "CMakeLists.txt").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        release_doc = ROOT / "docs" / "releases" / "v1.1.4.md"
+        release_doc = ROOT / "docs" / "releases" / "v1.1.5.md"
 
-        self.assertIn("project(PlaScan VERSION 1.1.4", root_cmake)
-        self.assertIn("project(PlaScanCore VERSION 1.1.4", core_cmake)
-        self.assertIn("## v1.1.4 - 2026-06-19", changelog)
-        self.assertTrue(release_doc.exists(), "v1.1.4 release notes are missing")
+        self.assertIn("project(PlaScan VERSION 1.1.5", root_cmake)
+        self.assertIn("project(PlaScanCore VERSION 1.1.5", core_cmake)
+        self.assertIn("## v1.1.5 - 2026-06-19", changelog)
+        self.assertTrue(release_doc.exists(), "v1.1.5 release notes are missing")
 
         release_text = release_doc.read_text(encoding="utf-8")
         for required in [
             "MVS",
             "CUDA",
             "LiDAR",
-            "test_mvs_scheduler_config",
+            "test_gui_project_utils",
             "GitHub Actions",
-            "v1.1.4",
+            "v1.1.5",
         ]:
             with self.subTest(required=required):
                 self.assertIn(required, release_text)
+
+    def test_reconstruction_stage_docs_cover_new_pipeline_modules(self):
+        docs_to_terms = {
+            ROOT / "README.md": [
+                "MvsWorkspaceManifest",
+                "MvsSourcePlanner",
+                "TerrainProductManifest",
+                "ReferenceTerrainPrior",
+                "Windows CUDA",
+                "libtorch-cu130",
+            ],
+            ROOT / "src" / "core" / "mvs" / "README.md": [
+                "MvsWorkspaceManifest",
+                "MvsSourcePlanner",
+                "source plan",
+                "valid mask",
+                "confidence",
+                "streaming fusion",
+                "cancel",
+            ],
+            ROOT / "src" / "core" / "terrain" / "README.md": [
+                "DemGridAggregator",
+                "TerrainProductManifest",
+                "DemMosaic",
+                "dem_error.tif",
+                "dem_count.tif",
+                "dem_confidence.tif",
+                "dem_coverage.tif",
+            ],
+            ROOT / "docs" / "PROJECT_ARCHITECTURE.md": [
+                "MvsWorkspaceManifest",
+                "MvsSourcePlanner",
+                "TerrainProductManifest",
+                "ReconstructionQualityReport",
+                "ReferenceTerrainPrior",
+            ],
+        }
+
+        for path, required_terms in docs_to_terms.items():
+            with self.subTest(path=str(path.relative_to(ROOT))):
+                self.assertTrue(path.exists(), f"{path.relative_to(ROOT)} is missing")
+                text = path.read_text(encoding="utf-8")
+                for term in required_terms:
+                    self.assertIn(term, text)
 
 
 if __name__ == "__main__":

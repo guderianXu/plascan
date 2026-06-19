@@ -142,7 +142,8 @@ python -m py_compile scripts/extract_features.py
   git push origin v0.2.1-alpha.1
   ```
   不要每个 commit 都打 tag；完成用户可感知的一组功能、优化或修复后再打 tag。
-- GitHub Release 说明按固定结构编写：新增、优化、修复、验证、已知问题。验证项要写具体命令和通过/失败结果。
+- 推送版本 tag 后必须创建或更新同名 GitHub Release，不能只保留 GitHub Tags 页面里的默认短说明。Release 正文必须让用户直接看懂这个版本更新了什么，至少包含：新增、优化、修复、验证、已知问题；没有对应内容时写“无”或“未发现”，不要留空。
+- GitHub Release 说明按固定结构编写：新增、优化、修复、验证、已知问题。验证项要写具体命令和通过/失败结果；若使用 `gh release create/edit`，正文优先来自 `docs/releases/vX.Y.Z*.md` 或同步内容，避免只写 `PlaScan vX.Y.Z`。
 - 若修改了版本、tag 或 Release 内容，同步维护 `CHANGELOG.md` 和 `docs/releases/` 下的对应版本文档；没有相关文件时应先创建。
 - commit 前必须重新检查 `git status --short`，确认提交内容只包含当前任务相关文件。
 - 若需要 commit，Git 作者信息使用：

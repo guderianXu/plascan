@@ -1,0 +1,232 @@
+#include "MvsWorkspaceManifest.h"
+#include "DepthMapGenerator.h"
+#include "MvsTypes.h"
+
+#include <gtest/gtest.h>
+
+#include <QDir>
+#include <QFile>
+#include <QJsonObject>
+#include <QTemporaryDir>
+
+using xjw::mvs::MvsDepthFrameRecord;
+using xjw::mvs::MvsWorkspaceManifest;
+using xjw::mvs::DepthMapGenerator;
+
+namespace
+{
+MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &status)
+{
+    MvsDepthFrameRecord record;
+    record.refIndex = index;
+    record.refImage = name;
+    record.status = status;
+    record.device = QStringLiteral("GPU");
+    record.depthPng = QStringLiteral("depth_%1.png").arg(index, 3, 10, QLatin1Char('0'));
+    record.rawDepthPath = QStringLiteral("depth_%1.bin").arg(index, 3, 10, QLatin1Char('0'));
+    record.rawConfidencePath = QStringLiteral("confidence_%1.bin").arg(index, 3, 10, QLatin1Char('0'));
+    record.validMaskPath = QStringLiteral("mask_%1.png").arg(index, 3, 10, QLatin1Char('0'));
+    record.gridWidth = 6000;
+    record.gridHeight = 4000;
+    record.elapsedMs = 1000 + index;
+    record.configHash = QStringLiteral("cfg-a");
+    record.sourceImages = {QStringLiteral("source_a.jpg"), QStringLiteral("source_b.jpg")};
+    QJsonObject source_plan_entry;
+    source_plan_entry.insert(QStringLiteral("view_index"), 7);
+    source_plan_entry.insert(QStringLiteral("source_image"), QStringLiteral("source_a.jpg"));
+    source_plan_entry.insert(QStringLiteral("shared_tracks"), 42);
+    source_plan_entry.insert(QStringLiteral("geometric_inliers"), 39);
+    source_plan_entry.insert(QStringLiteral("score"), 123.0);
+    record.sourcePlan.append(source_plan_entry);
+    return record;
+}
+
+void touchFile(const QString &path)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("x");
+}
+}
+
+TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString manifestPath = QDir(tempDir.path()).filePath(QStringLiteral("mvs_manifest.json"));
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.upsertFrame(makeRecord(2, QStringLiteral("image_002.jpg"), QStringLiteral("completed")));
+
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
+
+    MvsWorkspaceManifest loaded;
+    ASSERT_TRUE(loaded.load(manifestPath, &error)) << error.toStdString();
+    ASSERT_EQ(loaded.frames().size(), 1);
+    EXPECT_EQ(loaded.frames().front().refImage, QStringLiteral("image_002.jpg"));
+    EXPECT_EQ(loaded.frames().front().rawConfidencePath, QStringLiteral("confidence_002.bin"));
+    EXPECT_EQ(loaded.frames().front().gridWidth, 6000);
+    EXPECT_EQ(loaded.frames().front().gridHeight, 4000);
+    EXPECT_EQ(loaded.configHash(), QStringLiteral("cfg-a"));
+    ASSERT_EQ(loaded.frames().front().sourcePlan.size(), 1);
+    EXPECT_EQ(loaded.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("shared_tracks")).toInt(), 42);
+}
+
+TEST(MvsWorkspaceManifest, SortsCompletedFramesByNaturalFileName)
+{
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.upsertFrame(makeRecord(10, QStringLiteral("depth_010.png"), QStringLiteral("completed")));
+    manifest.upsertFrame(makeRecord(1, QStringLiteral("depth_001.png"), QStringLiteral("failed")));
+    manifest.upsertFrame(makeRecord(2, QStringLiteral("depth_002.png"), QStringLiteral("completed")));
+
+    const auto sorted = manifest.completedFramesSortedByName();
+    ASSERT_EQ(sorted.size(), 2);
+    EXPECT_EQ(sorted[0].refImage, QStringLiteral("depth_002.png"));
+    EXPECT_EQ(sorted[1].refImage, QStringLiteral("depth_010.png"));
+}
+
+TEST(MvsWorkspaceManifest, UpdatesFailedFrameAndInvalidatesConfigMismatch)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.upsertFrame(makeRecord(3, QStringLiteral("image_003.jpg"), QStringLiteral("running")));
+    manifest.markFailed(3, QStringLiteral("cuda out of memory"));
+
+    ASSERT_EQ(manifest.frames().size(), 1);
+    EXPECT_EQ(manifest.frames().front().status, QStringLiteral("failed"));
+    EXPECT_EQ(manifest.frames().front().error, QStringLiteral("cuda out of memory"));
+
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-a")) == false);
+
+    MvsDepthFrameRecord completed = makeRecord(3, QStringLiteral("image_003.jpg"), QStringLiteral("completed"));
+    completed.depthPng = QDir(tempDir.path()).filePath(QStringLiteral("depth_003.png"));
+    completed.rawDepthPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_003.bin"));
+    touchFile(completed.depthPng);
+    touchFile(completed.rawDepthPath);
+    manifest.markCompleted(completed);
+    EXPECT_TRUE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-a")));
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(3, QStringLiteral("cfg-b")));
+}
+
+TEST(MvsWorkspaceManifest, CompletedFrameUpdatePreservesExistingSourcePlan)
+{
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+
+    MvsDepthFrameRecord initial = makeRecord(5, QStringLiteral("image_005.jpg"), QStringLiteral("completed"));
+    ASSERT_EQ(initial.sourcePlan.size(), 1);
+    manifest.markCompleted(initial);
+
+    MvsDepthFrameRecord filtered = initial;
+    filtered.depthPng = QStringLiteral("filtered_depth_005.png");
+    filtered.sourcePlan = QJsonArray();
+    manifest.markCompleted(filtered);
+
+    ASSERT_EQ(manifest.frames().size(), 1);
+    EXPECT_EQ(manifest.frames().front().depthPng, QStringLiteral("filtered_depth_005.png"));
+    ASSERT_EQ(manifest.frames().front().sourcePlan.size(), 1)
+        << "Filtered depth artifact updates must not erase the source plan needed for reproducible MVS fusion";
+    EXPECT_EQ(manifest.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("view_index")).toInt(), 7);
+}
+
+TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)
+{
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.markCompleted(makeRecord(4, QStringLiteral("image_004.jpg"), QStringLiteral("completed")));
+
+    EXPECT_FALSE(manifest.hasReusableCompletedFrame(4, QStringLiteral("cfg-a")));
+}
+
+TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
+{
+    xjw::mvs::DepthGenConfig config;
+    config.patchMatch.numIterations = 6;
+    config.patchMatch.downsampleFactor = 2;
+    config.patchMatch.confidenceThresh = 0.25f;
+    config.fusion.minConsistentViews = 2;
+    config.numSourceViews = 4;
+
+    const QString hashA = xjw::mvs::makeMvsDepthConfigHash(config, 444);
+    const QString hashB = xjw::mvs::makeMvsDepthConfigHash(config, 444);
+    EXPECT_FALSE(hashA.isEmpty());
+    EXPECT_EQ(hashA, hashB);
+
+    config.patchMatch.downsampleFactor = 4;
+    const QString hashC = xjw::mvs::makeMvsDepthConfigHash(config, 444);
+    EXPECT_NE(hashA, hashC);
+}
+
+TEST(MvsDepthPostprocess, RemovesIsolatedDepthSpikeAndConfidence)
+{
+    cv::Mat depth(9, 9, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(9, 9, CV_32F, cv::Scalar(1.0f));
+    depth.at<float>(4, 4) = 100.0f;
+
+    const int removed = DepthMapGenerator::removeLocalDepthOutliers(
+        depth,
+        confidence,
+        3,
+        0.25f,
+        0.20f,
+        4);
+
+    EXPECT_EQ(removed, 1);
+    EXPECT_EQ(depth.at<float>(4, 4), 0.0f);
+    EXPECT_EQ(confidence.at<float>(4, 4), 0.0f);
+    EXPECT_EQ(depth.at<float>(4, 3), 10.0f);
+}
+
+TEST(MvsDepthPostprocess, RemovesSmallConnectedDepthComponentAndConfidence)
+{
+    cv::Mat depth(12, 12, CV_32F, cv::Scalar(0.0f));
+    cv::Mat confidence(12, 12, CV_32F, cv::Scalar(0.0f));
+    depth(cv::Rect(3, 3, 6, 6)).setTo(10.0f);
+    confidence(cv::Rect(3, 3, 6, 6)).setTo(1.0f);
+    depth(cv::Rect(0, 0, 2, 2)).setTo(9.0f);
+    confidence(cv::Rect(0, 0, 2, 2)).setTo(0.8f);
+
+    const int removed = DepthMapGenerator::removeSmallDepthComponents(
+        depth,
+        confidence,
+        8,
+        0.20f,
+        5);
+
+    EXPECT_EQ(removed, 4);
+    EXPECT_EQ(depth.at<float>(0, 0), 0.0f);
+    EXPECT_EQ(confidence.at<float>(0, 0), 0.0f);
+    EXPECT_EQ(depth.at<float>(5, 5), 10.0f);
+    EXPECT_EQ(confidence.at<float>(5, 5), 1.0f);
+}
+
+TEST(MvsDepthPostprocess, PostprocessReportsSmallComponentRemoval)
+{
+    cv::Mat depth(12, 12, CV_32F, cv::Scalar(0.0f));
+    cv::Mat confidence(12, 12, CV_32F, cv::Scalar(1.0f));
+    depth(cv::Rect(3, 3, 6, 6)).setTo(10.0f);
+    depth(cv::Rect(0, 0, 2, 2)).setTo(9.0f);
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.0f;
+    config.enableLocalDepthOutlierFilter = false;
+    config.enableSpeckleFilter = true;
+    config.minSpeckleComponentArea = 8;
+
+    const auto stats = DepthMapGenerator::postprocessFusionDepthMap(
+        depth,
+        confidence,
+        config,
+        6,
+        4);
+
+    EXPECT_EQ(stats.smallComponentRemoved, 4);
+    EXPECT_EQ(stats.validAfterPostprocess, 36);
+}

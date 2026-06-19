@@ -2,6 +2,7 @@
 
 #include "PlascanArchive.h"
 #include "ProjectFilesManager.h"
+#include "ProjectReferenceTerrainBa.h"
 
 #include <QJsonDocument>
 
@@ -63,6 +64,15 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
     result.beforeCamMeta = baInput.beforeCamMeta;
     options.imagePathByIndex = baInput.imagePathByIndex;
     options.beforeCamMeta = baInput.beforeCamMeta;
+
+    const ReferenceTerrainBaApplyResult terrainPriorResult =
+        applyReferenceTerrainPriorToBundleAdjust(&baInput.tracks, &options);
+    if (!terrainPriorResult.success)
+    {
+        result.serviceResult.errorMessage = terrainPriorResult.errorMessage;
+        return result;
+    }
+
     result.serviceResult = xjw::gui::BundleAdjustService::run(baInput.cameras,
                                                               baInput.tracks,
                                                               options);

@@ -21,6 +21,7 @@
 #include <cstring>
 #include <functional>
 #include <cstdint>
+#include <atomic>
 
 #include "camera/Camera.h"
 
@@ -64,6 +65,7 @@ struct PatchMatchConfig
     bool  epipolarRectified    = false;  ///< 图像已极线校正，偏向水平传播
     bool  cudaUseParallelSweep = true;   ///< CUDA 使用棋盘格像素级并行传播；false 时回退传统行列 sweep
     bool  cudaFallbackToCpu    = true;   ///< CUDA 失败时是否由估计器内部直接回退 CPU
+    const std::atomic_bool *cancelFlag = nullptr; ///< 非拥有取消标志；用于长 PatchMatch 循环协作退出
 };
 
 // =============================================================================
@@ -84,6 +86,9 @@ struct FusionConfig
     int   localDepthOutlierKernelSize = 3;       ///< 局部中值窗口，必须为奇数
     float localDepthOutlierRelThresh = 0.25f;    ///< 与局部中值的相对深度差超过该值时视为离群
     float maxLocalDepthOutlierRemovalRatio = 0.20f; ///< 单帧最多允许移除比例，超过则回退
+    bool  enableSpeckleFilter = true;            ///< 是否剔除孤立小连通域深度斑点
+    int   minSpeckleComponentArea = 16;          ///< 小于该面积的有效深度连通域视为 speckle
+    float maxSpeckleRemovalRatio = 0.20f;        ///< 单帧 speckle 最多允许移除比例，超过则回退
 };
 
 // =============================================================================
@@ -95,6 +100,10 @@ struct DepthPostProcessStats
     int validAfterConfidenceFilter = 0;   ///< 置信度过滤后有效深度像素数
     int confidenceRemoved = 0;            ///< 置信度过滤移除像素数
     int localDepthOutlierRemoved = 0;     ///< 局部深度离群过滤移除像素数
+    int smallComponentRemoved = 0;        ///< 小连通域 speckle 过滤移除像素数
+    int speckleRemoved = 0;               ///< speckle 过滤移除像素数（对外报告字段）
+    int edgeConfidenceRemoved = 0;        ///< 边缘/低纹理置信度过滤移除像素数
+    int geomConsistencyRemoved = 0;       ///< 多视几何一致性过滤移除像素数
     int validAfterPostprocess = 0;        ///< 所有后处理后有效深度像素数
     float effectiveConfidenceThreshold = 0.0f; ///< 实际使用的融合前置信度阈值
 };
@@ -108,9 +117,11 @@ struct FusionFrameInput
     cv::Mat   normalMap;   ///< CV_32FC3, 法线（相机坐标系），可为空
     cv::Mat   confidence;  ///< CV_32F, [0,1]，可为空
     PositiveDepthCameraModel cameraModel;  ///< 正深度相机模型
+    int       viewIndex = -1; ///< 原始 CameraView 下标，用于将 source plan 重映射到融合帧下标
     int       imgW = 0;
     int       imgH = 0;
     std::string imagePath; ///< 原始彩色图像路径（用于取色）
+    std::vector<int> sourceImageIndices; ///< MVS source plan 指定的重叠影像索引；为空时回退相机中心近邻
     DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
 };
 

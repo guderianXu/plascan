@@ -5,15 +5,37 @@
 #include <torch/torch.h>
 
 #include <filesystem>
+#include <string>
+#include <vector>
 
 namespace fs = std::filesystem;
+
+#ifndef MODEL_DIR
+#define MODEL_DIR ""
+#endif
+
+#ifndef TESTDATA_DIR
+#define TESTDATA_DIR ""
+#endif
 
 namespace
 {
 
+void appendCandidate(std::vector<std::string> &candidates, const std::string &directory, const std::string &filename)
+{
+    if (!directory.empty())
+        candidates.push_back((fs::path(directory) / filename).string());
+}
+
 std::string findModelPath()
 {
-    std::vector<std::string> candidates = {
+    std::vector<std::string> candidates;
+    appendCandidate(candidates, MODEL_DIR, "superpoint_extractor_cpu.pt");
+    appendCandidate(candidates, MODEL_DIR, "superpoint_extractor_cpu.torchscript");
+
+    const std::vector<std::string> relative_candidates = {
+        "resources/models/superpoint_extractor_cpu.pt",
+        "resources/models/superpoint_extractor_cpu.torchscript",
         "../resources/models/superpoint_extractor_cpu.pt",
         "../../resources/models/superpoint_extractor_cpu.pt",
         "../../../resources/models/superpoint_extractor_cpu.pt",
@@ -21,6 +43,8 @@ std::string findModelPath()
         "../../../../../resources/models/superpoint_extractor_cpu.pt",
         "../../../../../../resources/models/superpoint_extractor_cpu.pt",
     };
+    candidates.insert(candidates.end(), relative_candidates.begin(), relative_candidates.end());
+
     for (const auto &p : candidates)
         if (fs::exists(p)) return p;
     return "";
@@ -29,7 +53,11 @@ std::string findModelPath()
 cv::Mat loadTestImage()
 {
     // 从多层 CWD 回退查找真实测试影像
-    std::vector<std::string> candidates = {
+    std::vector<std::string> candidates;
+    appendCandidate(candidates, TESTDATA_DIR, "1.tif");
+
+    const std::vector<std::string> relative_candidates = {
+        "src/core/feature_extractors/testdata/1.tif",
         "../src/core/feature_extractors/testdata/1.tif",
         "../../src/core/feature_extractors/testdata/1.tif",
         "../../../src/core/feature_extractors/testdata/1.tif",
@@ -37,6 +65,8 @@ cv::Mat loadTestImage()
         "../../../../../src/core/feature_extractors/testdata/1.tif",
         "../../../../../../src/core/feature_extractors/testdata/1.tif",
     };
+    candidates.insert(candidates.end(), relative_candidates.begin(), relative_candidates.end());
+
     for (const auto &p : candidates)
         if (fs::exists(p))
             return cv::imread(p, cv::IMREAD_GRAYSCALE);

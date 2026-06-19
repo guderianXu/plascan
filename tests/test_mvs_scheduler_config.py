@@ -121,6 +121,17 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("std::vector<cv::Mat> colorImages(NF)", fusion)
         self.assertNotIn("colorImages[fi] = cv::imread", fusion)
 
+    def test_sfm_sparse_export_batches_color_sampling_by_image(self):
+        service = self.read("src/core/pipeline/SFMService.cpp")
+
+        self.assertIn("struct SparseExportColorRequest", service)
+        self.assertIn("sampleSparseExportColorsByImage", service)
+        self.assertIn("colorRequestsByImage", service)
+        self.assertIn("std::vector<unsigned char> colorFilled", service)
+        self.assertNotIn("SparseExportColorCache", service)
+        self.assertNotIn("QMap<ImageId, cv::Mat> imgColorCache", service)
+        self.assertNotIn("colorCache.get", service)
+
     def test_depth_fusion_can_limit_fusion_to_streaming_reference_frame(self):
         header = self.read("src/core/mvs/DepthMapFusion.h")
         fusion = self.read("src/core/mvs/DepthMapFusion.cpp")
@@ -456,6 +467,9 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("postprocessFusionDepthMap", cli)
         self.assertIn("depth_postprocess", cli)
         self.assertIn("local_depth_outlier_removed", cli)
+        self.assertIn("speckle_removed", cli)
+        self.assertIn("edge_confidence_removed", cli)
+        self.assertIn("geom_consistency_removed", cli)
         self.assertIn("rawDepthStoragePath(depthPngPath)", cli)
         self.assertIn("loadDepthMatStorage", cli)
 
@@ -485,6 +499,19 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn('denseReport[QStringLiteral("depth_maps")] = depthArtifacts;', cli)
         self.assertIn('denseReport[QStringLiteral("mvs_settings")]', cli)
         self.assertIn('denseReport[QStringLiteral("mvs_depth_config")]', cli)
+
+    def test_reconstruct_pipeline_cli_can_stop_after_mvs_depth_maps(self):
+        cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
+
+        self.assertIn("bool mvsDepthOnly = false;", cli)
+        self.assertIn("--mvs-depth-only", cli)
+        self.assertIn('denseReport[QStringLiteral("status")] = QStringLiteral("depth_only");', cli)
+        self.assertIn('report[QStringLiteral("stop_stage")] = QStringLiteral("mvs_depth");', cli)
+        self.assertIn('markSkippedStage(QStringLiteral("mvs_fusion"), depthOnlyReason);', cli)
+        self.assertIn('markSkippedStage(QStringLiteral("mesh"), depthOnlyReason);', cli)
+        self.assertIn('markSkippedStage(QStringLiteral("terrain"), depthOnlyReason);', cli)
+        self.assertIn("const int depthMapCount = static_cast<int>(depthArtifacts.size());", cli)
+        self.assertIn('std::fprintf(stdout, "depth_maps=%d\\n", depthMapCount);', cli)
 
     def test_reconstruct_pipeline_cli_streams_depth_fusion_windows(self):
         cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
@@ -639,8 +666,12 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         model = self.read("src/gui/project/manager/ProjectModelManager.cpp")
         tree = self.read("src/gui/widgets/DataTreeWidget.cpp")
 
-        self.assertNotIn("depth_map_results", terrain)
+        self.assertNotIn(
+            'upsertMetaArrayRecordByPath(&metaUpdated, QStringLiteral("depth_map_results")',
+            terrain,
+        )
         self.assertNotIn("depth_map_results", model)
+        self.assertIn("collectLatestStoredDepthFrames", terrain)
         self.assertIn('depthResultKind(obj) == QStringLiteral("mvs_depth")', tree)
         self.assertIn("depth_preview_png", tree)
 
@@ -709,6 +740,18 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("parsed.processingDevice = processingDeviceFromString", dense_parse)
         self.assertEqual(manager.count("SparseCloudPreprocessor pp(request.processingDevice);"), 2)
         self.assertNotIn("SparseCloudPreprocessor pp;", manager)
+
+    def test_dense_cloud_dialog_advanced_mvs_settings_reach_depth_config(self):
+        config_h = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.h")
+        config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
+
+        self.assertIn("bool geomConsistency", config_h)
+        self.assertIn("int speckleMinArea", config_h)
+        self.assertIn('settings.value(QStringLiteral("geomConsistency")).toBool(true)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("speckleMinArea")).toInt(16)', config_cpp)
+        self.assertIn("config.patchMatch.geomConsistency = settings.geomConsistency", config_cpp)
+        self.assertIn("config.fusion.minSpeckleComponentArea", config_cpp)
+        self.assertIn("config.fusion.enableSpeckleFilter", config_cpp)
 
     def test_sparse_cloud_preprocessor_samples_spacing_and_parallelizes_linear_passes(self):
         preprocessor = self.read("src/core/mvs/SparseCloudPreprocessor.cpp")

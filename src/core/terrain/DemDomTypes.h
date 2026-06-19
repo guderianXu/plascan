@@ -53,7 +53,13 @@ struct DemGenerationOptions
     {
         Mean,
         Min,
-        Max
+        Max,
+        WeightedAverage,
+        Median,
+        StdDev,
+        Count,
+        Nmad,
+        Percentile80
     };
 
     double gridResolution = 0.0;
@@ -103,11 +109,17 @@ struct DemGridData
     cv::Mat color;       ///< RGB 顶点颜色 (CV_8UC3)，可选
     cv::Mat validMask;
     cv::Mat triangulationError; ///< 三角化误差 (CV_32FC1)，可选
+    cv::Mat pointCount;  ///< 每个 DEM 单元的输入点数量 (CV_32SC1)，可选
+    cv::Mat confidence;  ///< 每个 DEM 单元的平均置信度 (CV_32FC1)，可选
+    cv::Mat coverageMask; ///< 与 validMask 同尺寸的覆盖率掩码 (CV_8UC1)，可选
     DemProjectionParameters projection;
 
     bool hasWorldXY() const { return !worldX.empty() && !worldY.empty(); }
     bool hasColor() const { return !color.empty() && color.rows == height && color.cols == width && color.type() == CV_8UC3; }
     bool hasTriangulationError() const { return !triangulationError.empty(); }
+    bool hasPointCount() const { return !pointCount.empty() && pointCount.rows == height && pointCount.cols == width; }
+    bool hasConfidence() const { return !confidence.empty() && confidence.rows == height && confidence.cols == width; }
+    bool hasCoverageMask() const { return !coverageMask.empty() && coverageMask.rows == height && coverageMask.cols == width; }
 
     bool isValid() const
     {
@@ -130,6 +142,17 @@ struct DemArtifacts
     int densePointCount = 0;
     int meshVertexCount = 0;
     int meshFaceCount = 0;
+};
+
+/**
+ * @brief DEM 质量栅格产物。
+ */
+struct DemQualityArtifacts
+{
+    QString errorPath;
+    QString countPath;
+    QString confidencePath;
+    QString coveragePath;
 };
 
 /**

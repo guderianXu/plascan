@@ -28,6 +28,7 @@ set(SFM_SOURCES
     # ---- 流水线 ----
     pipeline/IncrementalSfm.cpp
     BaInputBuilder.cpp
+    ReferenceTerrainPrior.cpp
     TriangulationService.cpp
 
     # ---- 点云过滤 ----
@@ -46,6 +47,7 @@ set(SFM_HEADERS
     triangulation/InitialSparsePointCloudTriangulator.h
     pipeline/IncrementalSfm.h
     BaInputBuilder.h
+    ReferenceTerrainPrior.h
     TriangulationService.h
     filtering/SfmPointCloudFilter.h
     filtering/SparsePointCloudProcessor.h

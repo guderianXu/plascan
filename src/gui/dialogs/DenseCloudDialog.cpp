@@ -52,6 +52,11 @@ void DenseCloudDialog::setupUi()
     m_maxDepthSpin = form.m_maxDepthSpin;
     m_minConfSpin = form.m_minConfSpin;
     m_multiViewCheck = form.m_multiViewCheck;
+    m_minConsistentViewsSpin = form.m_minConsistentViewsSpin;
+    m_geomConsistencyCheck = form.m_geomConsistencyCheck;
+    m_maxReprojErrorSpin = form.m_maxReprojErrorSpin;
+    m_speckleMinAreaSpin = form.m_speckleMinAreaSpin;
+    m_fusionMaxImageDimSpin = form.m_fusionMaxImageDimSpin;
     m_colorsCheck = form.m_colorsCheck;
     m_normalsCheck = form.m_normalsCheck;
     m_normalKnnSpin = form.m_normalKnnSpin;
@@ -164,6 +169,11 @@ void DenseCloudDialog::onPresetChanged(int index)
         m_blockSizeSpin->setValue(11);
         m_uniquenessSpin->setValue(5);
         m_speckleSizeSpin->setValue(50);
+        m_minConsistentViewsSpin->setValue(2);
+        m_geomConsistencyCheck->setChecked(true);
+        m_maxReprojErrorSpin->setValue(2.0);
+        m_speckleMinAreaSpin->setValue(16);
+        m_fusionMaxImageDimSpin->setValue(2048);
         m_fullDpCheck->setChecked(false);
         m_wlsFilterCheck->setChecked(false);
         m_normalsCheck->setChecked(false);
@@ -173,6 +183,11 @@ void DenseCloudDialog::onPresetChanged(int index)
         m_blockSizeSpin->setValue(7);
         m_uniquenessSpin->setValue(15);
         m_speckleSizeSpin->setValue(150);
+        m_minConsistentViewsSpin->setValue(3);
+        m_geomConsistencyCheck->setChecked(true);
+        m_maxReprojErrorSpin->setValue(1.5);
+        m_speckleMinAreaSpin->setValue(24);
+        m_fusionMaxImageDimSpin->setValue(2048);
         m_fullDpCheck->setChecked(true);
         m_wlsFilterCheck->setChecked(true);
         m_normalsCheck->setChecked(true);
@@ -181,6 +196,11 @@ void DenseCloudDialog::onPresetChanged(int index)
         m_blockSizeSpin->setValue(9);
         m_uniquenessSpin->setValue(10);
         m_speckleSizeSpin->setValue(100);
+        m_minConsistentViewsSpin->setValue(2);
+        m_geomConsistencyCheck->setChecked(true);
+        m_maxReprojErrorSpin->setValue(2.0);
+        m_speckleMinAreaSpin->setValue(16);
+        m_fusionMaxImageDimSpin->setValue(2048);
         m_fullDpCheck->setChecked(true);
         m_wlsFilterCheck->setChecked(true);
         m_normalsCheck->setChecked(true);
@@ -215,6 +235,11 @@ QJsonObject DenseCloudDialog::collectSettings() const
 
     // Cloud
     s["min_confidence"]    = m_minConfSpin->value();
+    s["minConsistentViews"] = m_minConsistentViewsSpin->value();
+    s["geomConsistency"]   = m_geomConsistencyCheck->isChecked();
+    s["maxReprojError"]    = m_maxReprojErrorSpin->value();
+    s["speckleMinArea"]    = m_speckleMinAreaSpin->value();
+    s["fusionMaxImageDim"] = m_fusionMaxImageDimSpin->value();
     s["multi_view_fusion"] = m_multiViewCheck->isChecked();
     s["output_colors"]     = m_colorsCheck->isChecked();
     s["output_normals"]    = m_normalsCheck->isChecked();
@@ -257,6 +282,11 @@ void DenseCloudDialog::applySettings(const QJsonObject &s)
     if (s.contains("min_depth"))        m_minDepthSpin->setValue(s["min_depth"].toDouble(0.01));
     if (s.contains("max_depth"))        m_maxDepthSpin->setValue(s["max_depth"].toDouble(1e5));
     if (s.contains("min_confidence"))   m_minConfSpin->setValue(s["min_confidence"].toDouble(0.1));
+    if (s.contains("minConsistentViews")) m_minConsistentViewsSpin->setValue(s["minConsistentViews"].toInt(2));
+    if (s.contains("geomConsistency"))  m_geomConsistencyCheck->setChecked(s["geomConsistency"].toBool(true));
+    if (s.contains("maxReprojError"))   m_maxReprojErrorSpin->setValue(s["maxReprojError"].toDouble(2.0));
+    if (s.contains("speckleMinArea"))   m_speckleMinAreaSpin->setValue(s["speckleMinArea"].toInt(16));
+    if (s.contains("fusionMaxImageDim")) m_fusionMaxImageDimSpin->setValue(s["fusionMaxImageDim"].toInt(2048));
     if (s.contains("multi_view_fusion")) m_multiViewCheck->setChecked(s["multi_view_fusion"].toBool(true));
     if (s.contains("output_colors"))    m_colorsCheck->setChecked(s["output_colors"].toBool(true));
     if (s.contains("output_normals"))   m_normalsCheck->setChecked(s["output_normals"].toBool(true));

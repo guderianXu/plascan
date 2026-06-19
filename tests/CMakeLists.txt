@@ -255,6 +255,23 @@ target_include_directories(test_bundle_adjust_lidar_constraints PRIVATE
 gtest_discover_tests(test_bundle_adjust_lidar_constraints)
 
 # ==============================================================================
+# test_reference_terrain_prior — DEM/LiDAR height surface soft priors for BA
+# ==============================================================================
+add_executable(test_reference_terrain_prior test_reference_terrain_prior.cpp)
+target_link_libraries(test_reference_terrain_prior PRIVATE
+    sfm
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_reference_terrain_prior PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_reference_terrain_prior)
+
+# ==============================================================================
 # test_bundle_adjust_service_lidar — 服务层 LiDAR 约束接入与 JSON 输出
 # ==============================================================================
 add_executable(test_bundle_adjust_service_lidar
@@ -377,8 +394,11 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDashboardSummary.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceDatasets.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceTerrainBa.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
@@ -388,6 +408,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WindowPanel.cpp
 )
@@ -401,6 +422,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     camera
     intersection
     bundle_adjust
+    qc
     terrain
     Qt6::Core
     Qt6::Gui
@@ -431,6 +453,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/feature_match
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/qc
     ${CMAKE_SOURCE_DIR}/src/core/terrain
     ${CMAKE_SOURCE_DIR}/src/core/mvs
     ${CMAKE_SOURCE_DIR}/src/core/pipeline

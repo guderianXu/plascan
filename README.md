@@ -65,6 +65,10 @@ Windows 构建使用原生 MSVC/Ninja/PowerShell，不需要 WSL。打包后的 
 
 当前 manifest 使用 vcpkg 中可用的 OpenCV 4.x port。后续 vcpkg 正式提供 OpenCV 5 后，优先通过更新 `builtin-baseline`、OpenCV feature 列表和现有 `OpenCvCompat` 兼容测试切换。
 
+Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.ps1`。脚本会把主构建目录收敛到
+`build/windows-vcpkg-cuda-release`，并使用该目录自己的 `vcpkg_installed`、CUDA 13.1 和
+`build/env/libtorch-cu130/libtorch`，避免旧 CPU LibTorch 或其它 build cache 混入运行时 PATH。
+
 ### Python / LibTorch 环境脚本
 
 `scripts/env/` 集中管理 Python 和 LibTorch 相关的本机环境准备脚本。默认输出到 `build/env/`，不会把下载的大包和机器本地路径写进源码目录。
@@ -115,6 +119,15 @@ GUI 的 `工作流程` 菜单提供三个互相独立的工程入口：
 
 这三个入口的 UI 契约由 `test_gui_project_utils` 覆盖，避免后续改动把 DEM/DOM 错误耦合进三维重建流程。
 
+### 重建链路状态
+
+当前重建链路按四个阶段维护：
+
+- MVS 稳定性：`MvsWorkspaceManifest` 记录每帧深度图状态、输入/输出路径、device、耗时、错误和配置 hash。深度图完成后写入项目 metadata，GUI 目录树按文件名自然排序刷新。
+- MVS 质量：`MvsSourcePlanner` 基于 shared tracks、几何内点、三角角、覆盖率、baseline 和序列距离规划 source view。深度图同时输出 preview、raw depth、confidence 和 valid mask，融合阶段使用同一份 source plan。
+- Terrain 产品：`TerrainProductManifest` 记录 DEM/DOM、error、count、confidence 和 coverage 栅格。DEM/DOM 不再只是临时图，而是带质量 artifact 的 terrain product chain。
+- 参考地形/QC：`ReconstructionQualityReport`、`PointCloudAlignment`、`DemDifference` 和 `ReferenceTerrainPrior` 支持外部 DEM/LiDAR 后验检查、点云/DEM 误差报告，以及 BA soft prior。
+
 ### CLI 一键重建
 
 输入 `.lis` 文件每行是一组影像和相机文件，支持空格或逗号分隔：
@@ -155,6 +168,7 @@ build/bin/three_d_reconstruction_cli path/to/input.lis \
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
 
 调试和 benchmark 时可分阶段运行：`--stop-after-sfm` 只生成稀疏结果，`--skip-mvs` 在 SfM 后写报告并跳过后续阶段，
+`--mvs-depth-only` 只生成 MVS 深度图、raw depth、confidence、valid mask 和 manifest，并在融合、网格和 terrain 前停止；
 `--skip-mesh` 则保留 MVS 稠密点云但不生成网格。
 
 批量测试 `testData/photogrammetry_benchmarks` 中已转换为 PlaScan 输入的数据：
@@ -206,11 +220,12 @@ src/
 │   │   ├── lightglue/         # LightGlue (GNN)
 │   │   ├── loftr/             # LoFTR (端到端密集)
 │   │   └── tradition/         # BF / FLANN (OpenCV)
-│   ├── sfm/                   # 增量式 SfM + 光束法平差 (Ceres)
-│   ├── mvs/                   # PatchMatch 深度图 + 融合
+│   ├── sfm/                   # 增量式 SfM + 光束法平差, ReferenceTerrainPrior
+│   ├── mvs/                   # PatchMatch 深度图, MvsWorkspaceManifest, MvsSourcePlanner, 融合
 │   ├── dense_match/           # MGM/SGM 密集立体匹配 (自研 CUDA)
 │   ├── mesh/                  # Poisson 表面重建 + 纹理映射
-│   ├── terrain/               # DEM + DOM 正射影像
+│   ├── terrain/               # DEM/DOM, TerrainProductManifest, DemGridAggregator, DemMosaic
+│   ├── qc/                    # ReconstructionQualityReport, PointCloudAlignment, DemDifference
 │   ├── overlap/               # 影像重叠度分析
 │   ├── intersection/          # 前方交汇精度检验
 │   └── pipeline/              # SfM 服务层

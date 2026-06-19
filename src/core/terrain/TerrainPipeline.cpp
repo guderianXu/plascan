@@ -42,6 +42,18 @@ xjw::DemRasterFormat parseDemRasterFormat(const QString &demType)
     return xjw::DemRasterFormat::Float32Tiff;
 }
 
+void appendQualityArtifacts(QJsonObject *output, const xjw::DemQualityArtifacts &artifacts)
+{
+    if (!output)
+    {
+        return;
+    }
+    output->insert(QStringLiteral("error_path"), artifacts.errorPath);
+    output->insert(QStringLiteral("count_path"), artifacts.countPath);
+    output->insert(QStringLiteral("confidence_path"), artifacts.confidencePath);
+    output->insert(QStringLiteral("coverage_path"), artifacts.coveragePath);
+}
+
 QString normalizePathForOrtho(const QString &path)
 {
     return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
@@ -526,6 +538,12 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
         return false;
     }
 
+    DemQualityArtifacts qualityArtifacts;
+    if (!DemDomIO::writeDemQualityRasters(demGrid, productsDir, &qualityArtifacts, errorMsg))
+    {
+        return false;
+    }
+
     int densePointCount = 0;
     if (generateDenseCloud && denseCloud.size() > 0)
     {
@@ -573,6 +591,7 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
         output[QStringLiteral("grid_min_y")] = demGrid.minY;
         output[QStringLiteral("depth_png")] = depthPng;
         output[QStringLiteral("dem_tif")] = demTif;
+        appendQualityArtifacts(&output, qualityArtifacts);
         output[QStringLiteral("dense_cloud_xyz")] = generateDenseCloud ? denseXyz : QString();
         output[QStringLiteral("dense_point_count")] = densePointCount;
         output[QStringLiteral("mesh_ply")] = faceCount > 0 ? meshPly : QString();
@@ -1290,6 +1309,10 @@ bool TerrainPipeline::generateDemFromDepthMaps(const std::vector<cv::Mat> &depth
     if (!DemDomIO::writeDemPreviewPng(demGrid, depthPng, errorMsg))
         return false;
 
+    DemQualityArtifacts qualityArtifacts;
+    if (!DemDomIO::writeDemQualityRasters(demGrid, productsDir, &qualityArtifacts, errorMsg))
+        return false;
+
     // Write dense point cloud PLY if XYZ data is available
     QString plyPath;
     int plyPointCount = 0;
@@ -1305,6 +1328,7 @@ bool TerrainPipeline::generateDemFromDepthMaps(const std::vector<cv::Mat> &depth
         output[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
         output[QStringLiteral("dem_tif")] = demTif;
         output[QStringLiteral("depth_png")] = depthPng;
+        appendQualityArtifacts(&output, qualityArtifacts);
         if (!plyPath.isEmpty())
         {
             output[QStringLiteral("dense_cloud_ply")] = plyPath;

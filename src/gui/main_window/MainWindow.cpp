@@ -46,6 +46,7 @@
 #include "ProjectManager.h"
 #include "ProjectIO.h"
 #include "ProjectData.h"
+#include "ProjectDashboardWidget.h"
 #include "AppConfigManager.h"
 #include "DialogSettingStore.h"
 #include "DialogSettingKeys.h"
@@ -154,6 +155,7 @@ void MainWindow::setupUi()
 
     m_mainSplitter = m_ui->mainSplitter;
     m_leftTabs = m_ui->leftTabs;
+    m_dashboard = m_ui->dashboardWidget;
     m_dataTree = m_ui->dataTree;
     m_referencePanel = m_ui->referencePanel;
     m_workspaceCenter = m_ui->workspaceCenter;
@@ -422,6 +424,21 @@ void MainWindow::setupProjectManager()
             {
                 connect(m_mainMenu->cameraConvertAction(), &QAction::triggered,
                         m_menuWorkflowController, &MenuWorkflowController::openCameraConvertDialog);
+            }
+            if (m_mainMenu->importReferenceDatasetAction())
+            {
+                connect(m_mainMenu->importReferenceDatasetAction(), &QAction::triggered,
+                        m_projectManager, &ProjectManager::importReferenceDataset);
+            }
+            if (m_mainMenu->referenceQualityCheckAction())
+            {
+                connect(m_mainMenu->referenceQualityCheckAction(), &QAction::triggered,
+                        m_projectManager, &ProjectManager::runReferenceQualityCheck);
+            }
+            if (m_mainMenu->referenceTerrainBundleAdjustAction())
+            {
+                connect(m_mainMenu->referenceTerrainBundleAdjustAction(), &QAction::triggered,
+                        m_projectManager, &ProjectManager::prepareReferenceTerrainBundleAdjust);
             }
         }
 
@@ -702,6 +719,10 @@ void MainWindow::setupProjectManager()
         {
             m_dataTree->loadFromJson(m_projectManager->currentMeta());
         }
+        if (m_dashboard)
+        {
+            m_dashboard->loadFromJson(m_projectManager->currentMeta());
+        }
         if (m_referencePanel)
         {
             m_referencePanel->loadFromJson(m_projectManager->currentMeta());
@@ -713,11 +734,16 @@ void MainWindow::setupProjectManager()
         {
             m_dataTree->loadFromJson(m_projectManager->currentMeta());
         }
+        if (m_dashboard)
+        {
+            m_dashboard->loadFromJson(m_projectManager->currentMeta());
+        }
         if (m_referencePanel)
         {
             m_referencePanel->loadFromJson(m_projectManager->currentMeta());
         }
     });
+    connect(m_projectManager, &ProjectManager::projectMetadataChanged, m_dashboard, &ProjectDashboardWidget::loadFromJson);
     connect(m_projectManager, &ProjectManager::projectMetadataChanged, m_dataTree, &DataTreeWidget::loadFromJson);
     connect(m_projectManager, &ProjectManager::projectMetadataChanged, m_referencePanel, &ReferencePanelWidget::loadFromJson);
 
@@ -969,6 +995,8 @@ void MainWindow::setupProjectManager()
         {
             widget->setCancellingText(cancellingText);
         }
+        connect(widget, &TaskStatusWidget::cancelRequested,
+                this, &MainWindow::refreshDashboardTaskSnapshots);
         statusBar()->addPermanentWidget(widget);
         return widget;
     };
@@ -1046,6 +1074,45 @@ void MainWindow::setupProjectManager()
             this, &MainWindow::onObsNetProgress);
     connect(m_projectManager, &ProjectManager::obsNetProgressFinished,
             this, &MainWindow::onObsNetFinished);
+
+    refreshDashboardTaskSnapshots();
+}
+
+void MainWindow::refreshDashboardTaskSnapshots()
+{
+    if (!m_dashboard)
+    {
+        return;
+    }
+
+    QJsonArray tasks;
+    auto appendTask = [&tasks](const QString &name, const TaskStatusWidget *widget)
+    {
+        if (!widget || (!widget->isActive() && !widget->isCancelling()))
+        {
+            return;
+        }
+
+        QJsonObject record;
+        record[QStringLiteral("name")] = name;
+        record[QStringLiteral("status_text")] = widget->statusText();
+        record[QStringLiteral("active")] = widget->isActive();
+        record[QStringLiteral("cancelling")] = widget->isCancelling();
+        record[QStringLiteral("progress_value")] = widget->progressValue();
+        record[QStringLiteral("progress_maximum")] = widget->progressMaximum();
+        tasks.append(record);
+    };
+
+    appendTask(tr("MVS/稠密重建"), m_mvsTaskStatus);
+    appendTask(tr("网格重建"), m_meshTaskStatus);
+    appendTask(tr("空三/光束法平差"), m_atTaskStatus);
+    appendTask(tr("特征匹配"), m_sgTaskStatus);
+    appendTask(tr("特征提取"), m_spTaskStatus);
+    appendTask(tr("密集匹配"), m_dmTaskStatus);
+    appendTask(tr("重叠对获取"), m_overlapTaskStatus);
+    appendTask(tr("观测网络"), m_obsNetTaskStatus);
+
+    m_dashboard->setTaskSnapshots(tasks);
 }
 
 bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMessage) const
@@ -1199,6 +1266,7 @@ void MainWindow::onMvsProgress(const QString &stage, int percent)
         m_mvsTaskStatus->begin(stage, 0, 100);
     }
     m_mvsTaskStatus->updateProgress(stage, percent);
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());   // 清空普通消息，让 permanent widget 露出
 }
 
@@ -1209,6 +1277,7 @@ void MainWindow::onMvsFinished(bool success)
         return;
     }
     m_mvsTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("稠密重建完成") : tr("稠密重建已取消或失败"), 4000);
 }
@@ -1228,6 +1297,7 @@ void MainWindow::onMeshProgress(const QString &stage, int percent)
         m_meshTaskStatus->begin(stage, 0, 100);
     }
     m_meshTaskStatus->updateProgress(stage, percent);
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
@@ -1238,6 +1308,7 @@ void MainWindow::onMeshFinished(bool success)
         return;
     }
     m_meshTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("网格重建完成") : tr("网格重建失败"), 4000);
 }
@@ -1263,6 +1334,7 @@ void MainWindow::onAtProgress(const QString &stage, int percent)
         m_atTaskStatus->begin(statusText, 0, 100);
     }
     m_atTaskStatus->updateProgress(statusText, percent);
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());   // 清空普通消息，让 permanent widget 露出
 }
 
@@ -1273,6 +1345,7 @@ void MainWindow::onAtFinished(bool success)
         return;
     }
     m_atTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("空三/光束法平差完成") : tr("空三/光束法平差已取消或失败"), 4000);
 }
@@ -1301,6 +1374,7 @@ void MainWindow::onObsNetProgress(const QString &stage, int percent)
         m_obsNetTaskStatus->begin(statusText, 0, 100);
     }
     m_obsNetTaskStatus->updateProgress(statusText, percent);
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
@@ -1311,6 +1385,7 @@ void MainWindow::onObsNetFinished(bool success)
         return;
     }
     m_obsNetTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("观测网络构建完成") : tr("观测网络构建失败"), 4000);
 }
@@ -1322,6 +1397,7 @@ void MainWindow::showSgProgress(int total)
         return;
     }
     m_sgTaskStatus->begin(tr("特征匹配 0/%1").arg(total), 0, total);
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
@@ -1335,6 +1411,7 @@ void MainWindow::updateSgProgress(int done)
     const int clampedDone = std::clamp(done, 0, total);
     m_sgTaskStatus->updateProgress(
         tr("特征匹配 %1/%2").arg(clampedDone).arg(total), clampedDone);
+    refreshDashboardTaskSnapshots();
 }
 
 void MainWindow::hideSgProgress(bool ok)
@@ -1344,6 +1421,7 @@ void MainWindow::hideSgProgress(bool ok)
         return;
     }
     m_sgTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(ok ? tr("匹配完成") : tr("匹配已取消"), 4000);
 }
 
@@ -1354,6 +1432,7 @@ void MainWindow::showDmProgress(int total)
         return;
     }
     m_dmTaskStatus->begin(tr("密集匹配 0/%1").arg(total), 0, total);
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
@@ -1367,6 +1446,7 @@ void MainWindow::updateDmProgress(int done)
     const int clampedDone = std::clamp(done, 0, total);
     m_dmTaskStatus->updateProgress(
         tr("密集匹配 %1/%2").arg(clampedDone).arg(total), clampedDone);
+    refreshDashboardTaskSnapshots();
 }
 
 void MainWindow::hideDmProgress(bool ok)
@@ -1376,6 +1456,7 @@ void MainWindow::hideDmProgress(bool ok)
         return;
     }
     m_dmTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(ok ? tr("密集匹配完成") : tr("密集匹配已取消"), 4000);
 }
 
@@ -1393,6 +1474,7 @@ void MainWindow::onOverlapProgress(const QString &stage, int percent)
         m_overlapTaskStatus->begin(statusText, 0, 100);
     }
     m_overlapTaskStatus->updateProgress(statusText, std::clamp(percent, 0, 100));
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
@@ -1403,6 +1485,7 @@ void MainWindow::onOverlapFinished(bool success)
         return;
     }
     m_overlapTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(success ? tr("重叠对获取完成") : tr("重叠对获取已取消或失败"), 4000);
 }
 
@@ -1417,6 +1500,7 @@ void MainWindow::showSpProgress(int total)
         return;
     }
     m_spTaskStatus->begin(tr("特征提取 0/%1").arg(total), 0, total);
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
@@ -1430,6 +1514,7 @@ void MainWindow::updateSpProgress(int done)
     const int clampedDone = std::clamp(done, 0, total);
     m_spTaskStatus->updateProgress(
         tr("特征提取 %1/%2").arg(clampedDone).arg(total), clampedDone);
+    refreshDashboardTaskSnapshots();
 }
 
 void MainWindow::hideSpProgress(bool ok)
@@ -1439,6 +1524,7 @@ void MainWindow::hideSpProgress(bool ok)
         return;
     }
     m_spTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
     statusBar()->showMessage(ok ? tr("特征提取完成") : tr("特征提取已取消"), 4000);
 }
 
@@ -1644,6 +1730,8 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     }
     if (m_projectManager && m_dataTree)
         m_dataTree->loadFromJson(m_projectManager->currentMeta());
+    if (m_projectManager && m_dashboard)
+        m_dashboard->loadFromJson(m_projectManager->currentMeta());
     if (m_projectManager && m_workspaceCenter)
         m_workspaceCenter->setProjectMeta(m_projectManager->currentMeta());
 

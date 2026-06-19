@@ -264,6 +264,32 @@ void DepthMapFusion::computeOverlappingImages(
 
     for (int fi = 0; fi < NF; ++fi)
     {
+        if (!frames[fi].sourceImageIndices.empty())
+        {
+            overlapping[fi].reserve(std::min(m_config.checkNumImages,
+                                             static_cast<int>(frames[fi].sourceImageIndices.size())));
+            for (int sourceIdx : frames[fi].sourceImageIndices)
+            {
+                if (sourceIdx < 0 || sourceIdx >= NF || sourceIdx == fi)
+                {
+                    continue;
+                }
+                if (std::find(overlapping[fi].begin(), overlapping[fi].end(), sourceIdx) != overlapping[fi].end())
+                {
+                    continue;
+                }
+                overlapping[fi].push_back(sourceIdx);
+                if (static_cast<int>(overlapping[fi].size()) >= m_config.checkNumImages)
+                {
+                    break;
+                }
+            }
+            if (!overlapping[fi].empty())
+            {
+                continue;
+            }
+        }
+
         // 计算到所有其他帧的距离，取最近的 checkNumImages 个
         struct OverlapInfo
         {
@@ -1095,6 +1121,9 @@ bool DepthMapFusion::fuse(
     MvsProgressCallback                  progressCb,
     std::string                         *errorMsg)
 {
+    fusedPoints.clear();
+    m_filteredDepths.clear();
+
     if (frames.empty())
     {
         if (errorMsg)
@@ -1329,6 +1358,8 @@ bool DepthMapFusion::fuse(
     MvsProgressCallback                  progressCb,
     std::string                         *errorMsg)
 {
+    densePoints.clear();
+
     std::vector<FusedPoint> fusedPts;
     if (!fuse(frames, fusedPts, progressCb, errorMsg))
         return false;

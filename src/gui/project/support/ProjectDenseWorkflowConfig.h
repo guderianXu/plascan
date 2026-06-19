@@ -25,8 +25,10 @@ struct DenseGenerationSettings
     float fusionMinConfidence = 0.20f;
     int fusionMaxImageDim = 2048; // 0 表示融合阶段使用深度图原始尺寸
     int minConsistentViews = 2;
+    bool geomConsistency = true;
     float depthConsistency = 2.0f;
     float maxReprojError = 2.0f;
+    int speckleMinArea = 16;
     plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
     bool pipelineMode = false;  // 流水线模式：跳过所有交互对话框
 };

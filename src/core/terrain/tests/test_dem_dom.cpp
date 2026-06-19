@@ -5,6 +5,7 @@
 #include "DomGenerator.h"
 #include "ObjMtlLoader.h"
 #include "TerrainPipeline.h"
+#include "Camera.h"
 
 #include <filesystem>
 #include <fstream>
@@ -231,6 +232,19 @@ protected:
         cv::Scalar stdDev;
         cv::meanStdDev(laplacian, meanValue, stdDev);
         return stdDev[0] * stdDev[0];
+    }
+
+    static Camera makeDepthDemCamera(double tx)
+    {
+        Camera camera;
+        camera.setIntrinsics(16.0, 16.0, 4.0, 4.0);
+        const std::array<double, 9> rotation{
+            1.0, 0.0, 0.0,
+            0.0, 1.0, 0.0,
+            0.0, 0.0, 1.0};
+        const std::array<double, 3> center{tx, 0.0, 0.0};
+        camera.setPose(rotation, center);
+        return camera;
     }
 
 protected:
@@ -515,6 +529,28 @@ TEST_F(TerrainDemDomTest, DomGeneratorSharpnessWeightingImprovesDetailRetention)
     EXPECT_GT(laplacianVariance(weightedDom), laplacianVariance(averageDom));
 }
 
+TEST_F(TerrainDemDomTest, DomGeneratorRejectsEmptyDemCoverage)
+{
+    DemGridData demGrid;
+    demGrid.width = 16;
+    demGrid.height = 16;
+    demGrid.stepX = 0.5;
+    demGrid.stepY = 0.5;
+    demGrid.elevation = cv::Mat(demGrid.height, demGrid.width, CV_32F, cv::Scalar(10.0f));
+    demGrid.validMask = cv::Mat(demGrid.height, demGrid.width, CV_8U, cv::Scalar(0));
+
+    const fs::path imagePath = writeImage("empty_coverage_dom.png", cv::Scalar(20, 80, 160));
+
+    cv::Mat domImage;
+    QString error;
+    EXPECT_FALSE(DomGenerator::generateFromImages(demGrid,
+                                                  QStringList{QString::fromStdString(imagePath.string())},
+                                                  DomGenerationOptions{},
+                                                  &domImage,
+                                                  &error));
+    EXPECT_TRUE(error.contains(QStringLiteral("覆盖")));
+}
+
 TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDomFromDemAndImages)
 {
     const fs::path objPath = writeObjPointCloud();
@@ -548,6 +584,31 @@ TEST_F(TerrainDemDomTest, TerrainPipelineGeneratesDomFromDemAndImages)
     EXPECT_TRUE(fs::exists(domPath));
     EXPECT_GT(domResult.value(QStringLiteral("width")).toInt(), 0);
     EXPECT_GT(domResult.value(QStringLiteral("height")).toInt(), 0);
+}
+
+TEST_F(TerrainDemDomTest, TerrainPipelineDepthDemWritesQualityProductPaths)
+{
+    std::vector<cv::Mat> depthMaps{
+        cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f)),
+        cv::Mat(8, 8, CV_32FC1, cv::Scalar(10.0f))};
+    std::vector<Camera> cameras{
+        makeDepthDemCamera(0.0),
+        makeDepthDemCamera(0.05)};
+
+    const fs::path outputDir = _tempDir / "depth_dem_quality_output";
+
+    QJsonObject result;
+    QString error;
+    ASSERT_TRUE(TerrainPipeline::generateDemFromDepthMaps(depthMaps,
+                                                          cameras,
+                                                          QString::fromStdString(outputDir.string()),
+                                                          &result,
+                                                          &error))
+        << error.toStdString();
+
+    const QString errorPath = result.value(QStringLiteral("error_path")).toString();
+    ASSERT_FALSE(errorPath.isEmpty());
+    EXPECT_TRUE(fs::exists(errorPath.toStdString())) << errorPath.toStdString();
 }
 
 // ===========================================================================

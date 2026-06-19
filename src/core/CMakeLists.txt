@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PlaScanCore VERSION 1.1.4 LANGUAGES CXX)
+project(PlaScanCore VERSION 1.1.5 LANGUAGES CXX)
 
 message(STATUS "plascan_core: relying on vcpkg/conda/system CMAKE_PREFIX_PATH for LibTorch")
 
@@ -19,6 +19,7 @@ plascan_core_add_optional_module(intersection "Intersection")
 plascan_core_add_optional_module(bundle_adjust "BundleAdjust")
 plascan_core_add_optional_module(overlap "Overlap")
 plascan_core_add_optional_module(lidar "LiDAR")
+plascan_core_add_optional_module(qc "QualityControl")
 plascan_core_add_optional_module(terrain "Terrain")
 plascan_core_add_optional_module(sfm "SfM")
 plascan_core_add_optional_module(mvs "MVS")

@@ -69,7 +69,9 @@ bool isTreeResultKey(const QString &key)
         || key == QStringLiteral("dense_cloud_results")
         || key == QStringLiteral("model_results")
         || key == QStringLiteral("dem_results")
-        || key == QStringLiteral("ortho_results");
+        || key == QStringLiteral("ortho_results")
+        || key == QStringLiteral("report_results")
+        || key == QStringLiteral("reference_datasets");
 }
 
 bool hasTreeResultKeys(const QJsonObject &meta)
@@ -147,6 +149,62 @@ int compareNaturalText(QString lhs, QString rhs)
         return 0;
     }
     return li == ln ? -1 : 1;
+}
+
+QString referenceDatasetPath(const QJsonObject &record)
+{
+    QString path = record.value(QStringLiteral("path")).toString();
+    if (path.isEmpty()) path = record.value(QStringLiteral("file_path")).toString();
+    if (path.isEmpty()) path = record.value(QStringLiteral("dem_path")).toString();
+    if (path.isEmpty()) path = record.value(QStringLiteral("lidar_path")).toString();
+    if (path.isEmpty()) path = record.value(QStringLiteral("cloud_path")).toString();
+    return path;
+}
+
+QString referenceDatasetTypeLabel(QString type)
+{
+    type = type.trimmed().toLower();
+    if (type == QStringLiteral("dem") || type == QStringLiteral("reference_dem"))
+    {
+        return QStringLiteral("DEM");
+    }
+    if (type == QStringLiteral("lidar") || type == QStringLiteral("las") || type == QStringLiteral("laz") ||
+        type == QStringLiteral("copc") || type == QStringLiteral("reference_lidar"))
+    {
+        return QStringLiteral("LiDAR");
+    }
+    if (type == QStringLiteral("point_cloud") || type == QStringLiteral("cloud"))
+    {
+        return QStringLiteral("点云");
+    }
+    if (type.isEmpty())
+    {
+        return QStringLiteral("参考");
+    }
+    return type;
+}
+
+QString referenceDatasetRoleLabel(QString role)
+{
+    role = role.trimmed().toLower();
+    if (role == QStringLiteral("validation") || role == QStringLiteral("quality_check"))
+    {
+        return QStringLiteral("精度检查");
+    }
+    if (role == QStringLiteral("ba_prior") || role == QStringLiteral("bundle_adjustment") ||
+        role == QStringLiteral("reference_prior"))
+    {
+        return QStringLiteral("BA约束");
+    }
+    if (role == QStringLiteral("alignment") || role == QStringLiteral("registration"))
+    {
+        return QStringLiteral("配准");
+    }
+    if (role.isEmpty())
+    {
+        return QString();
+    }
+    return role;
 }
 
 } // namespace
@@ -449,6 +507,8 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     QJsonArray demResults = normalized.value("dem_results").toArray();
     QJsonArray orthoResults = normalized.value("ortho_results").toArray();
     QJsonArray obsNetResults = normalized.value("observation_network_results").toArray();
+    QJsonArray reportResults = normalized.value("report_results").toArray();
+    QJsonArray referenceDatasets = normalized.value("reference_datasets").toArray();
 
     // 最近一次 AT 的总稀疏点数（用于"连接点"括号里显示）
     int totalSparsePoints = -1;
@@ -502,6 +562,8 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     auto *model3d   = createSection(QStringLiteral("3D模型"),  modelCount);
     auto *dem       = createSection(QStringLiteral("DEM"),      demResults.size());
     auto *ortho     = createSection(QStringLiteral("正射影像"),orthoResults.size());
+    auto *references= createSection(QStringLiteral("参考数据"), referenceDatasets.size());
+    auto *reports   = createSection(QStringLiteral("报告"),     reportResults.size());
 
     Q_UNUSED(ipfindResults);
     Q_UNUSED(ipmatchResults);
@@ -657,13 +719,16 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     for (const QJsonValue &v : demResults) {
         if (!v.isObject()) continue;
         const QJsonObject obj = v.toObject();
-        const QString path = obj.value(QStringLiteral("dem_tif")).toString();
+        QString path = obj.value(QStringLiteral("dem_tif")).toString();
+        if (path.isEmpty()) path = obj.value(QStringLiteral("dem_path")).toString();
         if (path.isEmpty()) continue;
         QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
         const QString typ = obj.value(QStringLiteral("dem_type")).toString();
         if (!typ.isEmpty()) name = QStringLiteral("%1  [%2]").arg(name, typ);
         appendItemRow(dem, name, path, QStringLiteral("generated"));
-        const QString previewPath = obj.value(QStringLiteral("depth_preview_png")).toString();
+        QString previewPath = obj.value(QStringLiteral("depth_preview_png")).toString();
+        if (previewPath.isEmpty()) previewPath = obj.value(QStringLiteral("preview_path")).toString();
+        if (previewPath.isEmpty()) previewPath = obj.value(QStringLiteral("depth_png")).toString();
         if (!previewPath.isEmpty())
         {
             QString previewName = QFileInfo(previewPath).fileName().isEmpty()
@@ -672,6 +737,23 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
             previewName = QStringLiteral("预览 %1").arg(previewName);
             appendItemRow(dem, previewName, previewPath, QStringLiteral("generated"));
         }
+        const auto appendQualityRaster = [&](const QString &key, const QString &label)
+        {
+            const QString qualityPath = obj.value(key).toString();
+            if (qualityPath.isEmpty())
+            {
+                return;
+            }
+            QString qualityName = QFileInfo(qualityPath).fileName().isEmpty()
+                ? qualityPath
+                : QFileInfo(qualityPath).fileName();
+            qualityName = QStringLiteral("%1 %2").arg(label, qualityName);
+            appendItemRow(dem, qualityName, qualityPath, QStringLiteral("generated"));
+        };
+        appendQualityRaster(QStringLiteral("error_path"), QStringLiteral("误差"));
+        appendQualityRaster(QStringLiteral("count_path"), QStringLiteral("点数"));
+        appendQualityRaster(QStringLiteral("confidence_path"), QStringLiteral("置信度"));
+        appendQualityRaster(QStringLiteral("coverage_path"), QStringLiteral("覆盖率"));
     }
 
     // ── 正射影像 ──────────────────────────────────────────────────────────
@@ -682,6 +764,46 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         if (path.isEmpty()) continue;
         QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
         appendItemRow(ortho, name, path, QStringLiteral("generated"));
+    }
+
+    // ── 报告 ─────────────────────────────────────────────────────────────
+    for (const QJsonValue &v : reportResults) {
+        if (!v.isObject()) continue;
+        const QJsonObject obj = v.toObject();
+        QString path = obj.value(QStringLiteral("path")).toString();
+        if (path.isEmpty()) path = obj.value(QStringLiteral("json_path")).toString();
+        if (path.isEmpty()) path = obj.value(QStringLiteral("report_path")).toString();
+        if (path.isEmpty()) continue;
+        QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
+        const QString type = obj.value(QStringLiteral("type")).toString();
+        if (!type.isEmpty())
+        {
+            name += QStringLiteral("  [%1]").arg(type);
+        }
+        appendItemRow(reports, name, path, QStringLiteral("generated"));
+    }
+
+    // ── 参考数据（外部 DEM/LiDAR/点云，不默认复制进项目）────────────────
+    for (const QJsonValue &v : referenceDatasets) {
+        if (!v.isObject()) continue;
+        const QJsonObject obj = v.toObject();
+        const QString path = referenceDatasetPath(obj);
+        if (path.isEmpty()) continue;
+
+        QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
+        const QString typeLabel = referenceDatasetTypeLabel(obj.value(QStringLiteral("type")).toString());
+        if (!typeLabel.isEmpty())
+        {
+            name += QStringLiteral("  [%1]").arg(typeLabel);
+        }
+        const QString roleLabel = referenceDatasetRoleLabel(obj.value(QStringLiteral("role")).toString());
+        if (!roleLabel.isEmpty())
+        {
+            name += QStringLiteral(" [%1]").arg(roleLabel);
+        }
+
+        const QString storage = obj.value(QStringLiteral("storage")).toString(QStringLiteral("reference"));
+        appendItemRow(references, name, path, storage);
     }
 
     for (int i = 0; i < m_model->rowCount(); ++i)

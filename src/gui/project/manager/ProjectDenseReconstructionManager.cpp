@@ -1052,6 +1052,10 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                                   depthResult);
     });
     connect(gen, &DepthMapGenerator::finished, this, [this](bool success) {
+        if (success && m_owner)
+        {
+            m_owner->refreshReconstructionQualityReport();
+        }
         emit mvsProgressFinished(success);
         QMessageBox::information(m_parentWidget,
                                  QStringLiteral("深度图估计"),
@@ -1540,6 +1544,10 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), plyPath, static_cast<int>(cloud.size())));
+            if (m_owner)
+            {
+                m_owner->refreshReconstructionQualityReport();
+            }
         }
         else
         {
@@ -1842,6 +1850,10 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
+            if (m_owner)
+            {
+                m_owner->refreshReconstructionQualityReport();
+            }
             emit mvsProgressFinished(true);
             if (!pipelineMode)
             {

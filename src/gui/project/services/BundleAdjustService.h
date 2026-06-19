@@ -53,6 +53,14 @@ struct BaServiceOptions
     double              laserWeight = 1.0;              ///< LiDAR 残差权重
     double              laserHuberDeltaMeters = 0.2;    ///< LiDAR 残差 Huber 阈值（米）
 
+    // ── 参考 DEM/LiDAR 高程面软约束 ──────────────────────────────────────
+    bool                enableReferenceTerrainPrior = false; ///< 是否将参考 DEM 作为 BA 高程软约束
+    QString             referenceTerrainDemPath;             ///< 参考 DEM GeoTIFF 路径
+    double              referenceTerrainSigmaMeters = 1.0;   ///< 高程软约束标准差
+    double              referenceTerrainMaxAssociationDistanceMeters = 2.0; ///< track 到参考面最大距离
+    double              referenceTerrainHuberDeltaMeters = 0.5; ///< 高程残差 Huber 阈值
+    QJsonObject         referenceTerrainPriorSummary;         ///< 执行层注入参考地形 prior 后的统计
+
     // ── 输出目录 ───────────────────────────────────────────────────────────
     QString             outputDir;          ///< 所有输出文件的根目录
 
