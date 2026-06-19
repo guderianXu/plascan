@@ -27,6 +27,7 @@
 - 修复融合阶段下采样 depth 后颜色仍按原图尺寸采样，可能导致稠密点颜色错位或丢失的问题。
 - 修复深度图局部红色孤立噪点缺少统计和过滤记录的问题，输出 confidence/local outlier 移除数量。
 - 修复稀疏重建报告对候选匹配、实际匹配和几何验证失败混在一起导致问题难以定位的问题。
+- 修复 Linux CI 在 Build 阶段执行 Qt GUI 测试 discovery 时没有 offscreen 环境，导致 `test_bundle_adjust_dialog_lidar` 构建失败的问题。
 
 ### 验证
 
@@ -34,6 +35,7 @@
 - `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Target reconstruct_pipeline_cli -Jobs 8` 通过。
 - `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过。
 - `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -RunTests -CTestRegex 'Sfm|Feature|Match|Mvs|Gui|Lidar|Bundle' -Jobs 8` 通过，172/172；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled。
+- `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Target test_bundle_adjust_dialog_lidar -RunTests -CTestRegex 'BundleAdjustDialogLidar|ProjectManagerBundleAdjustLidar' -Jobs 8` 通过，3/3。
 - aerial GCP 8 帧 MVS 回归通过：`status=ok`，输出 `depth_0.png` 到 `depth_7.png`、`dense_cloud.ply` 1,240,093 点、`dense_cloud_refined.ply` 1,193,941 点；MVS 阶段约 429.8 秒，总流程约 998.0 秒。
 
 ### 已知问题

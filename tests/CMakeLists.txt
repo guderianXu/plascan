@@ -314,6 +314,7 @@ target_include_directories(test_bundle_adjust_dialog_lidar PRIVATE
 )
 gtest_discover_tests(test_bundle_adjust_dialog_lidar
     DISCOVERY_TIMEOUT 60
+    DISCOVERY_MODE PRE_TEST
     PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
@@ -440,6 +441,7 @@ set(PLASCAN_QT_PLATFORM_PLUGIN_PATH
     "${CMAKE_BINARY_DIR}/vcpkg_installed/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
 gtest_discover_tests(test_gui_project_utils
     DISCOVERY_TIMEOUT 60
+    DISCOVERY_MODE PRE_TEST
     PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
