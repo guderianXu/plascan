@@ -20,7 +20,7 @@
 | Stage 2: source planning / depth quality / fusion robustness | `MvsSourcePlanner` 已接入深度估计和融合，深度后处理包含 confidence、valid mask、speckle 和一致性过滤；DenseCloudDialog 已暴露高级 MVS 参数且默认值不改变既有行为。 | Implemented and focused-tested. First-20-frame visual overlap quality has smoke evidence, but not a formal visual oracle. |
 | Stage 3: DEM/DOM terrain product chain | `DemGridAggregator`、`TerrainProductManifest`、`DemMosaic`、DEM quality rasters、DOM 空覆盖保护和 GUI terrain quality 节点已有实现；`src/core/terrain/README.md` 与架构文档已补齐。 | Implemented and focused-tested. 0.5 scale smoke 已产出 DEM/DOM；full 444-image mesh/DEM/DOM 长链已通过。 |
 | Stage 4: DEM/LiDAR reference validation and BA soft priors | `ReconstructionQualityReport`、`PointCloudAlignment`、`DemDifference`、`ReferenceTerrainPrior`、参考 DEM/LiDAR GUI 工作流和 LiDAR 点到面 BA soft prior 已实现。MUN-FRL real-data A/B quality gate 通过。 | Implemented and focused-tested with real LiDAR BA smoke. Public sample frame semantics remain a dataset-specific risk. |
-| Stage 5: cross-stage verification / docs / release readiness | 全量 CTest 已通过 467/467；0.2 scale 与 0.5 scale agisoft aerial GCP smoke 均 `status=ok`；完整 444 输入的全帧 `--mvs-depth-only --mvs-max-frames 444` 验证通过，444/444 manifest frames 完成且 artifact/source_plan 无缺失；完整 444 输入的 MVS/mesh/DEM/DOM 长链也已通过，生成 dense cloud、refined dense cloud、textured OBJ、DEM 和 DOM；`source_plan` 保留修复已由 MVS manifest 单测、12-image depth-only 回归和 444-image 回归覆盖；SfM 稀疏点云导出已改为按影像批量颜色采样，并由 444-image SFM/depth/full-chain 命令行验证覆盖；`CHANGELOG.md`、`docs/releases/v1.1.5.md`、`docs/PROJECT_ARCHITECTURE.md`、MVS/terrain README 已同步；`v1.1.5` annotated tag、GitHub Release 和 GitHub Actions main/tag `build-test` 门禁均已完成。 | Complete. Local and remote release evidence verified. |
+| Stage 5: cross-stage verification / docs / release readiness | 全量 CTest 已通过 467/467；0.2 scale 与 0.5 scale agisoft aerial GCP smoke 均 `status=ok`；完整 444 输入的全帧 `--mvs-depth-only --mvs-max-frames 444` 验证通过，444/444 manifest frames 完成且 artifact/source_plan 无缺失；完整 444 输入的 MVS/mesh/DEM/DOM 长链也已通过，生成 dense cloud、refined dense cloud、textured OBJ、DEM 和 DOM；`source_plan` 保留修复已由 MVS manifest 单测、12-image depth-only 回归和 444-image 回归覆盖；SfM 稀疏点云导出已改为按影像批量颜色采样，并由 444-image SFM/depth/full-chain 命令行验证覆盖；`CHANGELOG.md`、`docs/releases/v1.1.5.md`、`docs/PROJECT_ARCHITECTURE.md`、MVS/terrain README 已同步；`v1.1.5` annotated tag 解引用到 release commit `88d16f3ad7f4a844e0e225e8c6d11e8ab675e753`，GitHub Release 和 GitHub Actions main/tag `build-test` 门禁均已完成。 | Complete. Local and remote release evidence verified. |
 
 Key verified artifacts:
 - `E:/code/plascan/build/agisoft_aerial_mvs_dem_dom_scale05_codex_20260620_010303/pipeline/report.json`: `status=ok`, 12/12 registered, 4 MVS frames, 1,281,149 dense points, 1,224,829 refined points, DEM/DOM written.
@@ -85,9 +85,9 @@ The strongest local evidence is:
   MVS elapsed 149.543 s, total elapsed 420.977 s, and GPU gray cache usage peaking around 2.03/6.00 GB at
   `E:/code/plascan/build/agisoft_aerial_mvs_depth_only_444_batched_retry_codex_20260620_022910/pipeline`.
 
-Remote release evidence is now complete: the `v1.1.5` annotated tag is pushed, GitHub Release `PlaScan v1.1.5`
-is published, and GitHub Actions `CI / build-test` passed on both the main run `27847059348` and the tag run
-`27847075291`.
+Remote release evidence is now complete: the `v1.1.5` annotated tag is pushed and resolves to release commit
+`88d16f3ad7f4a844e0e225e8c6d11e8ab675e753`, GitHub Release `PlaScan v1.1.5` is published, and GitHub Actions
+`CI / build-test` passed on both the main run `27847833504` and the tag run `27847913501`.
 
 ## Four-Stage Execution Blueprint
 

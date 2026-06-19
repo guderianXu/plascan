@@ -69,8 +69,8 @@
 - `python -m pytest tests\test_repo_hygiene.py::RepoHygieneTest::test_reconstruction_stage_docs_cover_new_pipeline_modules -q` 先失败后通过，验证 README、MVS/terrain README 与架构文档覆盖四阶段新增模块。
 - `python -m pytest tests\test_repo_hygiene.py -q` 通过，9 项测试和 27 个 subtest 全部通过。
 - 带 vcpkg、LibTorch 和 CUDA 运行时 PATH 的全量 CTest 通过，467/467；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 保持 disabled。
-- `v1.1.5` annotated tag 已推送到 GitHub，解引用到 `424af961b18fe08af36788c77a75c98379b37ee0`；GitHub Release 已创建为 `PlaScan v1.1.5`。
-- GitHub Actions `CI / build-test` 已通过：main run `27847059348` 成功，tag run `27847075291` 成功。
+- `v1.1.5` annotated tag 已推送到 GitHub，解引用到 release commit `88d16f3ad7f4a844e0e225e8c6d11e8ab675e753`；GitHub Release 已创建为 `PlaScan v1.1.5`。
+- GitHub Actions `CI / build-test` 已通过：release commit 的 main run `27847833504` 成功，tag run `27847913501` 成功。
 
 ### 已知问题
 
