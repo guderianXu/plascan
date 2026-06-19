@@ -1,5 +1,5 @@
 cmake_minimum_required(VERSION 3.16)
-project(PlaScanCore VERSION 1.1.2 LANGUAGES CXX)
+project(PlaScanCore VERSION 1.1.4 LANGUAGES CXX)
 
 message(STATUS "plascan_core: relying on vcpkg/conda/system CMAKE_PREFIX_PATH for LibTorch")
 

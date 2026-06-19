@@ -93,25 +93,25 @@ class RepoHygieneTest(unittest.TestCase):
 
         self.assertGreaterEqual(text.count("|"), 40, "Dataset notes should include a structured comparison table")
 
-    def test_release_1_1_2_metadata_is_synchronized(self):
+    def test_release_1_1_4_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         core_cmake = (ROOT / "src" / "core" / "CMakeLists.txt").read_text(encoding="utf-8")
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
-        release_doc = ROOT / "docs" / "releases" / "v1.1.2.md"
+        release_doc = ROOT / "docs" / "releases" / "v1.1.4.md"
 
-        self.assertIn("project(PlaScan VERSION 1.1.2", root_cmake)
-        self.assertIn("project(PlaScanCore VERSION 1.1.2", core_cmake)
-        self.assertIn("## v1.1.2 - 2026-06-17", changelog)
-        self.assertTrue(release_doc.exists(), "v1.1.2 release notes are missing")
+        self.assertIn("project(PlaScan VERSION 1.1.4", root_cmake)
+        self.assertIn("project(PlaScanCore VERSION 1.1.4", core_cmake)
+        self.assertIn("## v1.1.4 - 2026-06-19", changelog)
+        self.assertTrue(release_doc.exists(), "v1.1.4 release notes are missing")
 
         release_text = release_doc.read_text(encoding="utf-8")
         for required in [
             "MVS",
             "CUDA",
             "LiDAR",
-            "test_mvs_pipeline",
+            "test_mvs_scheduler_config",
             "GitHub Actions",
-            "v1.1.2",
+            "v1.1.4",
         ]:
             with self.subTest(required=required):
                 self.assertIn(required, release_text)

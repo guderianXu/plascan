@@ -12,7 +12,6 @@
 #include <QJsonArray>
 #include <QFileInfo>
 #include <QDir>
-#include <QCollator>
 #include <QMessageBox>
 #include <QImageReader>
 #include <QStyle>
@@ -83,6 +82,71 @@ bool hasTreeResultKeys(const QJsonObject &meta)
         }
     }
     return false;
+}
+
+int compareNaturalText(QString lhs, QString rhs)
+{
+    int li = 0;
+    int ri = 0;
+    const int ln = lhs.size();
+    const int rn = rhs.size();
+
+    while (li < ln && ri < rn)
+    {
+        const QChar lc = lhs.at(li);
+        const QChar rc = rhs.at(ri);
+        if (lc.isDigit() && rc.isDigit())
+        {
+            const int lhsStart = li;
+            const int rhsStart = ri;
+            while (li < ln && lhs.at(li).isDigit()) ++li;
+            while (ri < rn && rhs.at(ri).isDigit()) ++ri;
+
+            int lhsSig = lhsStart;
+            int rhsSig = rhsStart;
+            while (lhsSig + 1 < li && lhs.at(lhsSig) == QLatin1Char('0')) ++lhsSig;
+            while (rhsSig + 1 < ri && rhs.at(rhsSig) == QLatin1Char('0')) ++rhsSig;
+
+            const int lhsDigits = li - lhsSig;
+            const int rhsDigits = ri - rhsSig;
+            if (lhsDigits != rhsDigits)
+            {
+                return lhsDigits < rhsDigits ? -1 : 1;
+            }
+            for (int offset = 0; offset < lhsDigits; ++offset)
+            {
+                const int ld = lhs.at(lhsSig + offset).digitValue();
+                const int rd = rhs.at(rhsSig + offset).digitValue();
+                if (ld != rd)
+                {
+                    return ld < rd ? -1 : 1;
+                }
+            }
+
+            const int lhsRun = li - lhsStart;
+            const int rhsRun = ri - rhsStart;
+            if (lhsRun != rhsRun)
+            {
+                return lhsRun < rhsRun ? -1 : 1;
+            }
+            continue;
+        }
+
+        const QChar lf = lc.toCaseFolded();
+        const QChar rf = rc.toCaseFolded();
+        if (lf != rf)
+        {
+            return lf.unicode() < rf.unicode() ? -1 : 1;
+        }
+        ++li;
+        ++ri;
+    }
+
+    if (li == ln && ri == rn)
+    {
+        return 0;
+    }
+    return li == ln ? -1 : 1;
 }
 
 } // namespace
@@ -330,19 +394,15 @@ void DataTreeWidget::sortSectionChildrenByFileName(QStandardItem *section)
         rows.push_back({items, fileNameKey, displayName, row});
     }
 
-    QCollator collator;
-    collator.setNumericMode(true);
-    collator.setCaseSensitivity(Qt::CaseInsensitive);
-
-    std::stable_sort(rows.begin(), rows.end(), [&collator](const Row &lhs, const Row &rhs)
+    std::stable_sort(rows.begin(), rows.end(), [](const Row &lhs, const Row &rhs)
     {
-        int cmp = collator.compare(lhs.fileNameKey, rhs.fileNameKey);
+        int cmp = compareNaturalText(lhs.fileNameKey, rhs.fileNameKey);
         if (cmp != 0)
         {
             return cmp < 0;
         }
 
-        cmp = collator.compare(lhs.displayName, rhs.displayName);
+        cmp = compareNaturalText(lhs.displayName, rhs.displayName);
         if (cmp != 0)
         {
             return cmp < 0;
