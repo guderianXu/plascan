@@ -1264,13 +1264,27 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
         {
             QJsonObject report;
             report[QStringLiteral("type")] = QStringLiteral("aerial_triangulation_sfm");
+            report[QStringLiteral("mode")] = QStringLiteral("sfm");
+            report[QStringLiteral("source")] = QStringLiteral("workflow_aerial_triangulation");
             report[QStringLiteral("timestamp")] = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
             report[QStringLiteral("num_images")] = sfmImages.size();
             report[QStringLiteral("num_registered")] = result.numRegisteredImages;
             report[QStringLiteral("num_points_3d")] = result.numPoints3D;
             report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
+            report[QStringLiteral("ba_rms_before")] = result.baRmsBefore;
+            report[QStringLiteral("ba_rms_after")] = result.baRmsAfter;
+            report[QStringLiteral("ba_tracks_total")] = result.baTracksTotal;
+            report[QStringLiteral("ba_tracks_optimized")] = result.baTracksOptimized;
+            report[QStringLiteral("ba_tracks_filtered")] = result.baTracksFiltered;
+            report[QStringLiteral("duration_s")] = result.durationSeconds;
             report[QStringLiteral("output_dir")] = sfmOutputDir;
             report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
+            report[QStringLiteral("per_camera")] = result.perCameraResiduals;
+            report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
+            writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
+                                              QStringLiteral("at_report.json"),
+                                              QStringLiteral("at_report_history.json"),
+                                              report);
             writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
                                               QStringLiteral("aerial_triangulation_sfm_report.json"),
                                               QStringLiteral("aerial_triangulation_sfm_report_history.json"),
@@ -1365,13 +1379,27 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
         {
             QJsonObject report;
             report[QStringLiteral("type")] = QStringLiteral("three_d_reconstruction_sfm");
+            report[QStringLiteral("mode")] = QStringLiteral("sfm");
+            report[QStringLiteral("source")] = QStringLiteral("three_d_reconstruction_sfm");
             report[QStringLiteral("timestamp")] = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
             report[QStringLiteral("num_images")] = sfmImages.size();
             report[QStringLiteral("num_registered")] = result.numRegisteredImages;
             report[QStringLiteral("num_points_3d")] = result.numPoints3D;
             report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
+            report[QStringLiteral("ba_rms_before")] = result.baRmsBefore;
+            report[QStringLiteral("ba_rms_after")] = result.baRmsAfter;
+            report[QStringLiteral("ba_tracks_total")] = result.baTracksTotal;
+            report[QStringLiteral("ba_tracks_optimized")] = result.baTracksOptimized;
+            report[QStringLiteral("ba_tracks_filtered")] = result.baTracksFiltered;
+            report[QStringLiteral("duration_s")] = result.durationSeconds;
             report[QStringLiteral("output_dir")] = sfmOutputDir;
             report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
+            report[QStringLiteral("per_camera")] = result.perCameraResiduals;
+            report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
+            writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
+                                              QStringLiteral("at_report.json"),
+                                              QStringLiteral("at_report_history.json"),
+                                              report);
             writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
                                               QStringLiteral("three_d_reconstruction_sfm_report.json"),
                                               QStringLiteral("three_d_reconstruction_sfm_report_history.json"),

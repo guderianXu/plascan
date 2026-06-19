@@ -48,7 +48,40 @@ class CompareLidarBaAbResultsTest(unittest.TestCase):
         self.assertAlmostEqual(comparison["deltas"]["laser_rms_reduction_m"], 0.57)
         self.assertAlmostEqual(comparison["deltas"]["laser_rms_reduction_percent"], 76.0)
         self.assertEqual(comparison["lidar"]["associated_tracks"], 42)
+        self.assertTrue(comparison["quality_gate"]["passed"])
+        self.assertEqual(comparison["quality_gate"]["failure_codes"], [])
         self.assertIn("LiDAR", comparison["verdict"])
+
+    def test_compare_summaries_fails_quality_gate_for_regressed_lidar_ba(self):
+        baseline = {
+            "track_count": 100,
+            "optimized_count": 95,
+            "mean_rms_before": 1.8,
+            "mean_rms_after": 1.0,
+        }
+        lidar = {
+            "track_count": 100,
+            "optimized_count": 80,
+            "mean_rms_before": 1.8,
+            "mean_rms_after": 1.5,
+            "laser_constraints_summary": {
+                "enabled": True,
+                "associated_tracks": 0,
+                "laser_constraint_count": 0,
+                "laser_rms_before_m": 0.75,
+                "laser_rms_after_m": 0.90,
+            },
+        }
+
+        comparison = comparator.compare_summaries(baseline, lidar)
+
+        gate = comparison["quality_gate"]
+        self.assertFalse(gate["passed"])
+        self.assertIn("no_laser_constraints", gate["failure_codes"])
+        self.assertIn("laser_rms_not_reduced", gate["failure_codes"])
+        self.assertIn("reprojection_rms_regressed", gate["failure_codes"])
+        self.assertIn("optimized_tracks_dropped", gate["failure_codes"])
+        self.assertGreater(gate["metrics"]["reprojection_rms_regression_px"], 0.25)
 
     def test_compare_summaries_reports_common_tracks_and_camera_pose_deltas(self):
         baseline = {
@@ -153,7 +186,57 @@ class CompareLidarBaAbResultsTest(unittest.TestCase):
             self.assertEqual(exit_code, 0)
             comparison = json.loads(out_json.read_text(encoding="utf-8"))
             self.assertAlmostEqual(comparison["deltas"]["laser_rms_reduction_m"], 0.8)
+            self.assertTrue(comparison["quality_gate"]["passed"])
             self.assertIn("LiDAR BA A/B Comparison", out_md.read_text(encoding="utf-8"))
+
+    def test_main_returns_nonzero_when_quality_gate_fails_and_flag_is_set(self):
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            baseline_path = root / "baseline.json"
+            lidar_path = root / "lidar.json"
+            out_json = root / "comparison.json"
+            baseline_path.write_text(
+                json.dumps({
+                    "track_count": 10,
+                    "optimized_count": 10,
+                    "mean_rms_before": 2.0,
+                    "mean_rms_after": 1.0,
+                }),
+                encoding="utf-8",
+            )
+            lidar_path.write_text(
+                json.dumps({
+                    "track_count": 10,
+                    "optimized_count": 8,
+                    "mean_rms_before": 2.0,
+                    "mean_rms_after": 1.6,
+                    "laser_constraints_summary": {
+                        "enabled": True,
+                        "associated_tracks": 0,
+                        "laser_constraint_count": 0,
+                        "laser_rms_before_m": 1.0,
+                        "laser_rms_after_m": 1.2,
+                    },
+                }),
+                encoding="utf-8",
+            )
+
+            stderr = io.StringIO()
+            with contextlib.redirect_stderr(stderr):
+                exit_code = comparator.main([
+                    "--baseline-json",
+                    str(baseline_path),
+                    "--lidar-json",
+                    str(lidar_path),
+                    "--output-json",
+                    str(out_json),
+                    "--fail-on-quality-gate",
+                ])
+
+            self.assertEqual(exit_code, 2)
+            comparison = json.loads(out_json.read_text(encoding="utf-8"))
+            self.assertFalse(comparison["quality_gate"]["passed"])
+            self.assertIn("quality gate failed", stderr.getvalue())
 
 
 if __name__ == "__main__":

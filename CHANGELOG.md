@@ -2,6 +2,47 @@
 
 本文件按版本倒序记录用户可感知的主要变更。详细验证记录见 `docs/releases/`。
 
+## v1.1.4 - 2026-06-19
+
+### 新增
+
+- `reconstruct_pipeline_cli` 新增 MVS 调试与资源控制参数，支持限制深度估计帧数、MVS 分辨率、迭代次数、置信度阈值、GPU/CPU frame worker 数，以及融合阶段最大图像边长。
+- MVS 报告扩展记录深度图产物、源影像、mask/raw depth/raw confidence、深度后处理统计、融合降采样参数和实际设备信息，便于定位 GUI/CLI 的密集重建问题。
+- GUI 密集重建目录树消费项目 metadata，深度图、稠密点云等结果按文件名自然排序并随任务增量刷新。
+- SfM 报告增加候选 pair plan、实际匹配图、连通分量、pending/failed/skipped pair、注册影像与质量统计，便于排查只注册少量影像的问题。
+
+### 优化
+
+- MVS 融合改为有界流式窗口，融合阶段可把 6000x4000 depth/confidence 下采样到默认最长边 2048，保留相机内参缩放和颜色采样一致性，显著降低大航测数据内存峰值。
+- 对已完成置信度/局部离群过滤的深度图增加快速反投影融合路径，避免每个流式窗口再做昂贵的全量多视 BFS 检查，8 帧 aerial GCP 回归中单批融合约 0.7 秒。
+- 流式融合加入点数阈值预聚合，点数接近内存上限前先做 voxel 预聚合，避免长时间运行到后半程才被系统杀死。
+- MVS 深度图加载、预取、保存队列、取消检查和后处理日志继续收敛，GUI 点击取消后能更早中断排队保存和后续处理。
+- 已知外参进入 BA 时改为 soft pose prior，外参不再默认完全固定；支持位置/旋转 sigma、Huber 和 LiDAR 质量权重参与 BA。
+- GUI 特征匹配和空三流程复用更一致的 pair planning 逻辑，大项目优先使用序列窗口、相机中心邻域和已知重叠对，避免默认退回 N² 全匹配。
+
+### 修复
+
+- 修复深度图估计完成后目录树不显示深度图、结果顺序不稳定的问题。
+- 修复 MVS 大数据融合阶段把所有深度图和颜色图长期常驻内存导致内存持续上涨的问题。
+- 修复融合阶段下采样 depth 后颜色仍按原图尺寸采样，可能导致稠密点颜色错位或丢失的问题。
+- 修复深度图局部红色孤立噪点缺少统计和过滤记录的问题，输出 confidence/local outlier 移除数量。
+- 修复稀疏重建报告对候选匹配、实际匹配和几何验证失败混在一起导致问题难以定位的问题。
+
+### 验证
+
+- `python -m pytest tests\test_mvs_scheduler_config.py -q` 通过，69/69。
+- `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Target reconstruct_pipeline_cli -Jobs 8` 通过。
+- `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过。
+- `scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -RunTests -CTestRegex 'Sfm|Feature|Match|Mvs|Gui|Lidar|Bundle' -Jobs 8` 通过，172/172；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled。
+- aerial GCP 8 帧 MVS 回归通过：`status=ok`，输出 `depth_0.png` 到 `depth_7.png`、`dense_cloud.ply` 1,240,093 点、`dense_cloud_refined.ply` 1,193,941 点；MVS 阶段约 429.8 秒，总流程约 998.0 秒。
+
+### 已知问题
+
+- 本版本验证了 aerial GCP 的 8 帧受控 MVS 回归，没有重新跑完 444 张完整 mesh/DEM/DOM 长链；完整长链仍建议作为后续夜间回归。
+- MVS 后处理法向量估计在百万级点云上仍是明显耗时点，已不再导致本次回归崩溃，但后续可以继续做分块/可选法线输出优化。
+- CI 仍暂时排除历史已知失败 `TerrainDemDomTest.TerrainPipelineGeneratesDemDomFromDirectory`；该测试可能出现 `dom_png not found`。
+- GitHub Actions `build-test` 是远端门禁；`v1.1.4` tag 推送后以 Actions 结果为准。
+
 ## v1.1.3 - 2026-06-18
 
 ### 新增

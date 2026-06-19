@@ -60,6 +60,9 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.useCuda = settings.value(QStringLiteral("cuda")).toBool(true);
     parsed.fusionMinConfidence = static_cast<float>(
         settings.value(QStringLiteral("minConfidence")).toDouble(parsed.patchMatchConfidence));
+    parsed.fusionMaxImageDim = std::max(0,
+        settings.value(QStringLiteral("fusion_max_image_dim")).toInt(
+            settings.value(QStringLiteral("fusionMaxImageDim")).toInt(2048)));
     parsed.minConsistentViews = settings.value(QStringLiteral("minConsistentViews")).toInt(2);
     parsed.depthConsistency = static_cast<float>(settings.value(QStringLiteral("depthConsistency")).toDouble(2.0));
     parsed.maxReprojError = static_cast<float>(settings.value(QStringLiteral("maxReprojError")).toDouble(2.0));

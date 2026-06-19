@@ -8,10 +8,12 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstring>
 #include <limits>
 
 #include <opencv2/core.hpp>
+#include <opencv2/imgproc.hpp>
 
 namespace xjw::core::project
 {
@@ -339,10 +341,71 @@ StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projec
     return result;
 }
 
+xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(
+    const xjw::mvs::PositiveDepthCameraModel &camera,
+    double scaleX,
+    double scaleY)
+{
+    xjw::mvs::PositiveDepthCameraModel scaled = camera;
+    scaled.fx *= static_cast<float>(scaleX);
+    scaled.fy *= static_cast<float>(scaleY);
+    scaled.cx *= static_cast<float>(scaleX);
+    scaled.cy *= static_cast<float>(scaleY);
+    return scaled;
+}
+
+bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
+                                          int fusionMaxImageDim)
+{
+    if (!frame || frame->depthMap.empty() || fusionMaxImageDim <= 0)
+    {
+        return false;
+    }
+
+    const int oldWidth = frame->depthMap.cols;
+    const int oldHeight = frame->depthMap.rows;
+    const int oldMaxSide = std::max(oldWidth, oldHeight);
+    if (oldWidth <= 0 || oldHeight <= 0 || oldMaxSide <= fusionMaxImageDim)
+    {
+        frame->imgW = oldWidth;
+        frame->imgH = oldHeight;
+        return false;
+    }
+
+    const double scale = static_cast<double>(fusionMaxImageDim) / static_cast<double>(oldMaxSide);
+    const cv::Size targetSize(std::max(1, static_cast<int>(std::round(oldWidth * scale))),
+                              std::max(1, static_cast<int>(std::round(oldHeight * scale))));
+    if (targetSize.width == oldWidth && targetSize.height == oldHeight)
+    {
+        frame->imgW = oldWidth;
+        frame->imgH = oldHeight;
+        return false;
+    }
+
+    cv::Mat resizedDepth;
+    cv::resize(frame->depthMap, resizedDepth, targetSize, 0.0, 0.0, cv::INTER_NEAREST);
+    frame->depthMap = std::move(resizedDepth);
+
+    if (!frame->confidence.empty())
+    {
+        cv::Mat resizedConfidence;
+        cv::resize(frame->confidence, resizedConfidence, targetSize, 0.0, 0.0, cv::INTER_AREA);
+        frame->confidence = std::move(resizedConfidence);
+    }
+
+    const double scaleX = static_cast<double>(targetSize.width) / static_cast<double>(oldWidth);
+    const double scaleY = static_cast<double>(targetSize.height) / static_cast<double>(oldHeight);
+    frame->cameraModel = scalePositiveDepthCameraModel(frame->cameraModel, scaleX, scaleY);
+    frame->imgW = targetSize.width;
+    frame->imgH = targetSize.height;
+    return true;
+}
+
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
                                               const xjw::Camera &camera,
                                               float confidenceThreshold,
-                                              int viewCount)
+                                              int viewCount,
+                                              int fusionMaxImageDim)
 {
     FusionFrameBuildResult result;
     result.frame.cameraModel = camera.toPositiveDepthModel();
@@ -357,39 +420,39 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
         return result;
     }
 
-    const QString rawConfidencePath = resolveExistingRawConfidencePath(stored.depthPng, stored.rawConfidencePath);
-    if (!rawConfidencePath.isEmpty())
+    const float effectiveThreshold = (viewCount <= 2) ? 0.0f : confidenceThreshold;
+    const bool shouldLoadConfidence = effectiveThreshold > 0.0f;
+    if (shouldLoadConfidence)
     {
-        (void)loadDepthMatStorage(rawConfidencePath, &result.frame.confidence);
+        const QString rawConfidencePath = resolveExistingRawConfidencePath(stored.depthPng, stored.rawConfidencePath);
+        if (!rawConfidencePath.isEmpty())
+        {
+            (void)loadDepthMatStorage(rawConfidencePath, &result.frame.confidence);
+        }
     }
 
-    if (!result.frame.confidence.empty())
+    if (shouldLoadConfidence &&
+        !result.frame.confidence.empty() &&
+        result.frame.confidence.size() == result.frame.depthMap.size() &&
+        result.frame.confidence.type() == CV_32F &&
+        result.frame.depthMap.type() == CV_32F)
     {
-        float effectiveThreshold = confidenceThreshold;
-        if (viewCount <= 2)
+        for (int row = 0; row < result.frame.depthMap.rows; ++row)
         {
-            effectiveThreshold = 0.0f;
-        }
-
-        if (effectiveThreshold > 0.0f)
-        {
-            cv::Mat filteredDepth = result.frame.depthMap.clone();
-            for (int row = 0; row < filteredDepth.rows; ++row)
+            float *depthRow = result.frame.depthMap.ptr<float>(row);
+            const float *confRow = result.frame.confidence.ptr<float>(row);
+            for (int col = 0; col < result.frame.depthMap.cols; ++col)
             {
-                float *depthRow = filteredDepth.ptr<float>(row);
-                const float *confRow = result.frame.confidence.ptr<float>(row);
-                for (int col = 0; col < filteredDepth.cols; ++col)
+                if (confRow[col] < effectiveThreshold)
                 {
-                    if (confRow[col] < effectiveThreshold)
-                    {
-                        depthRow[col] = 0.0f;
-                    }
+                    depthRow[col] = 0.0f;
                 }
             }
-            result.frame.depthMap = std::move(filteredDepth);
         }
     }
 
+    downsampleFusionFrameForMaxDimension(&result.frame, fusionMaxImageDim);
+    result.frame.confidence.release();
     result.frame.imgW = result.frame.depthMap.cols;
     result.frame.imgH = result.frame.depthMap.rows;
     result.status = {true, QString()};

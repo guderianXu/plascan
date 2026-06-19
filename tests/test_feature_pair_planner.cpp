@@ -4,6 +4,9 @@
 
 #include <QStringList>
 
+#include <array>
+#include <vector>
+
 using xjw::gui::FeaturePairPlannerOptions;
 using xjw::gui::planFeatureMatchPairs;
 
@@ -46,4 +49,57 @@ TEST(FeaturePairPlannerTest, LargeImageSetUsesSequentialWindow)
     EXPECT_TRUE(pairs.contains(QStringLiteral("image_000__image_004")));
     EXPECT_FALSE(pairs.contains(QStringLiteral("image_000__image_005")));
     EXPECT_FALSE(pairs.contains(QStringLiteral("image_000__image_099")));
+}
+
+TEST(FeaturePairPlannerTest, LargeImageSetUsesKnownCameraSpatialNeighbors)
+{
+    FeaturePairPlannerOptions options;
+    options.exhaustiveMaxImages = 10;
+    options.sequentialWindow = 3;
+    options.spatialNeighborCount = 2;
+
+    std::vector<std::array<double, 3>> centers;
+    centers.reserve(25);
+    for (int i = 0; i < 25; ++i)
+    {
+        centers.push_back({1000.0 * double(i), 0.0, 100.0});
+    }
+    centers[20] = {5.0, 0.0, 100.0};
+    options.knownCameraCenters = centers;
+
+    const QStringList pairs = planFeatureMatchPairs(numberedImages(25), options);
+
+    EXPECT_TRUE(pairs.contains(QStringLiteral("image_000__image_003")));
+    EXPECT_TRUE(pairs.contains(QStringLiteral("image_000__image_020")));
+    EXPECT_FALSE(pairs.contains(QStringLiteral("image_000__image_004")));
+}
+
+TEST(FeaturePairPlannerTest, ExplicitOverlapPairsTakePriority)
+{
+    FeaturePairPlannerOptions options;
+    options.exhaustiveMaxImages = 10;
+    options.sequentialWindow = 3;
+    options.spatialNeighborCount = 2;
+    options.knownCameraOverlapPairs = {
+        {0, 1},
+        {0, 3},
+        {10, 20},
+    };
+
+    std::vector<std::array<double, 3>> centers;
+    centers.reserve(25);
+    for (int i = 0; i < 25; ++i)
+    {
+        centers.push_back({1000.0 * double(i), 0.0, 100.0});
+    }
+    centers[20] = {5.0, 0.0, 100.0};
+    options.knownCameraCenters = centers;
+
+    const QStringList pairs = planFeatureMatchPairs(numberedImages(25), options);
+
+    EXPECT_EQ(pairs.size(), 3);
+    EXPECT_TRUE(pairs.contains(QStringLiteral("image_000__image_001")));
+    EXPECT_TRUE(pairs.contains(QStringLiteral("image_000__image_003")));
+    EXPECT_TRUE(pairs.contains(QStringLiteral("image_010__image_020")));
+    EXPECT_FALSE(pairs.contains(QStringLiteral("image_000__image_020")));
 }

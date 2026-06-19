@@ -88,3 +88,52 @@ TEST(LaserConstraintAssociationTest, ClearsStaleConstraintsBeforeAssociating)
     ASSERT_EQ(tracks[0].laserPlaneConstraints.size(), 1u);
     EXPECT_NEAR(tracks[0].laserPlaneConstraints.front().point[0], 0.0, 1e-12);
 }
+
+TEST(LaserConstraintAssociationTest, QualityWeightingWeakensRiskyPlaneConstraints)
+{
+    std::vector<xjw::lidar::LaserPlaneSample> samples;
+
+    xjw::lidar::LaserPlaneSample good;
+    good.point = {{0.0, 0.0, 10.0}};
+    good.normal = {{0.0, 0.0, 1.0}};
+    good.curvature = 0.02;
+    samples.push_back(good);
+
+    xjw::lidar::LaserPlaneSample risky;
+    risky.point = {{5.0, 0.0, 10.0}};
+    risky.normal = {{0.0, 0.0, 1.0}};
+    risky.curvature = 0.18;
+    samples.push_back(risky);
+
+    xjw::lidar::LaserConstraintMapOptions mapOptions;
+    mapOptions.maxSamples = 100;
+    mapOptions.maxCurvature = 0.2;
+
+    xjw::lidar::LaserConstraintMap map;
+    std::string error;
+    ASSERT_TRUE(map.build(samples, mapOptions, &error)) << error;
+
+    xjw::BATrack goodTrack;
+    goodTrack.initialPoint = {{0.0, 0.0, 10.05}};
+
+    xjw::BATrack riskyTrack;
+    riskyTrack.initialPoint = {{5.45, 0.0, 10.0}};
+
+    std::vector<xjw::BATrack> tracks{goodTrack, riskyTrack};
+
+    xjw::lidar::LaserAssociationOptions options;
+    options.maxDistanceMeters = 0.5;
+    options.weight = 2.0;
+    options.enableQualityWeighting = true;
+    options.maxCurvatureForWeighting = 0.2;
+    options.minQualityWeight = 0.05;
+
+    const xjw::lidar::LaserAssociationSummary summary =
+        xjw::lidar::attachLaserPlaneConstraints(map, &tracks, options);
+
+    EXPECT_EQ(summary.associatedTracks, 2);
+    ASSERT_EQ(tracks[0].laserPlaneConstraints.size(), 1u);
+    ASSERT_EQ(tracks[1].laserPlaneConstraints.size(), 1u);
+    EXPECT_NEAR(tracks[0].laserPlaneConstraints.front().weight, 1.62, 1e-12);
+    EXPECT_NEAR(tracks[1].laserPlaneConstraints.front().weight, 0.10, 1e-12);
+}

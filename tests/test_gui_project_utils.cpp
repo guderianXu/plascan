@@ -757,8 +757,8 @@ TEST(DenseDepthCameraLookupTest, MvsCameraLookupUsesNormalizedImageKeys)
 
     EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(camMap, imgPath")))
         << "Dense estimation should query cameras with the same normalized key used by ProjectManager.";
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(camMap, stored.refImage")))
-        << "Stored-depth fusion should normalize ref_image before camera lookup.";
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(m_camMap, m_records[index].refImage")))
+        << "Stored-depth fusion cache should normalize ref_image before camera lookup.";
     EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(imgPath)")));
     EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(stored.refImage)")));
 }
@@ -2427,6 +2427,22 @@ TEST(SfmServiceKnownPoseModeTest, CompleteProjectMetaCamerasEnableKnownPoseMode)
     EXPECT_TRUE(source.contains(QStringLiteral("sfmOpts.baOptions.cancelFlag = opts.cancelFlag")));
     EXPECT_TRUE(source.contains(QStringLiteral("sfmOpts.baOptions.progressCallback")));
     EXPECT_TRUE(source.contains(QStringLiteral("正在进行光束法平差")));
+
+    const QString incremental = readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfm.cpp"));
+    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
+    const QString baCore = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.cpp"));
+    ASSERT_FALSE(incremental.isEmpty());
+    ASSERT_FALSE(baHeader.isEmpty());
+    ASSERT_FALSE(baCore.isEmpty());
+    EXPECT_TRUE(incremental.contains(QStringLiteral("baOpt.cameraPosePriors")));
+    EXPECT_TRUE(incremental.contains(QStringLiteral("buildCameraPosePriorsFromInputCameras")));
+    EXPECT_TRUE(incremental.contains(QStringLiteral("alignReconstructionToKnownPosePriors")));
+    EXPECT_TRUE(incremental.contains(QStringLiteral("Known-pose Sim3/RANSAC alignment before BA")));
+    EXPECT_TRUE(incremental.contains(QStringLiteral("prior.cameraToWorldRotation = inputCamera.cameraToWorldRotation()")));
+    EXPECT_TRUE(baHeader.contains(QStringLiteral("struct BACameraPosePrior")));
+    EXPECT_TRUE(baHeader.contains(QStringLiteral("cameraPosePriorHuberDelta")));
+    EXPECT_TRUE(baCore.contains(QStringLiteral("cameraPosePriorResidual")));
+    EXPECT_TRUE(baCore.contains(QStringLiteral("huberWeight(residualNorm, opt.cameraPosePriorHuberDelta)")));
 }
 
 TEST(MainWindowProgressTest, FeatureMatchProgressExpandsAllFeatureModeAndClampsDisplay)
@@ -3088,9 +3104,12 @@ TEST(SfmSparseResultMetadataTest, SfmServicePublishesProductionQualityRecord)
 
     EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject qualityMetadata")));
     EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject resultRecordExtra")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject sfmDiagnostics")));
     EXPECT_TRUE(service.contains(QStringLiteral("kSparseResultKindSfmSparseReconstruction")));
     EXPECT_TRUE(service.contains(QStringLiteral("result.qualityMetadata")));
     EXPECT_TRUE(service.contains(QStringLiteral("result.resultRecordExtra")));
+    EXPECT_TRUE(service.contains(QStringLiteral("sfm_diagnostics")));
+    EXPECT_TRUE(service.contains(QStringLiteral("triangulation_angle_deg")));
     EXPECT_TRUE(workflow.contains(QStringLiteral("result.resultRecordExtra")));
 }
 
@@ -3100,6 +3119,8 @@ TEST(SfmSparseResultMetadataTest, OneClickWorkflowPreservesProductionQualityReco
     ASSERT_FALSE(controller.isEmpty());
 
     EXPECT_TRUE(controller.contains(QStringLiteral("result.resultRecordExtra")));
+    EXPECT_TRUE(controller.contains(QStringLiteral("result.sfmDiagnostics")));
+    EXPECT_TRUE(controller.contains(QStringLiteral("at_report.json")));
 }
 
 TEST(BundleAdjustSparseResultMetadataTest, ExportedSparseCloudCarriesFormalQualityMetadata)
@@ -3434,6 +3455,71 @@ TEST(DataTreeWidgetTest, ResultOnlyMetadataUpdateRefreshesDepthMapSection)
     ASSERT_EQ(depthSection->rowCount(), 1);
     EXPECT_EQ(depthSection->child(0, 0)->text(), QStringLiteral("depth_0.png  [6000x4000]"));
     EXPECT_EQ(depthSection->child(0, 1)->text(), QStringLiteral("/tmp/mvs_output/depth_0.png"));
+}
+
+TEST(DataTreeWidgetTest, ResourceRowsAreSortedByFileNameAscending)
+{
+    DataTreeWidget tree;
+
+    QJsonArray images;
+    for (const QString &path : {
+             QStringLiteral("/tmp/images/image_010.jpg"),
+             QStringLiteral("/tmp/images/image_002.jpg"),
+             QStringLiteral("/tmp/images/image_001.jpg")})
+    {
+        QJsonObject image;
+        image[QStringLiteral("path")] = path;
+        image[QStringLiteral("storage")] = QStringLiteral("reference");
+        images.append(image);
+    }
+
+    QJsonArray depthResults;
+    for (const QString &path : {
+             QStringLiteral("/tmp/mvs_output/depth_10.png"),
+             QStringLiteral("/tmp/mvs_output/depth_2.png")})
+    {
+        QJsonObject depthRecord;
+        depthRecord[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
+        depthRecord[QStringLiteral("depth_png")] = path;
+        depthRecord[QStringLiteral("raw_depth_path")] = path + QStringLiteral(".yml.gz");
+        depthResults.append(depthRecord);
+    }
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = images;
+    meta[QStringLiteral("depth_map_results")] = depthResults;
+    tree.loadFromJson(meta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    auto findSection = [model](const QString &prefix) -> QStandardItem *
+    {
+        for (int row = 0; row < model->rowCount(); ++row)
+        {
+            QStandardItem *item = model->item(row, 0);
+            if (item && item->text().startsWith(prefix))
+            {
+                return item;
+            }
+        }
+        return nullptr;
+    };
+
+    QStandardItem *photoSection = findSection(QStringLiteral("照片 (3)"));
+    ASSERT_NE(photoSection, nullptr);
+    ASSERT_EQ(photoSection->rowCount(), 3);
+    EXPECT_EQ(photoSection->child(0, 0)->text(), QStringLiteral("image_001.jpg"));
+    EXPECT_EQ(photoSection->child(1, 0)->text(), QStringLiteral("image_002.jpg"));
+    EXPECT_EQ(photoSection->child(2, 0)->text(), QStringLiteral("image_010.jpg"));
+
+    QStandardItem *depthSection = findSection(QStringLiteral("深度图 (2)"));
+    ASSERT_NE(depthSection, nullptr);
+    ASSERT_EQ(depthSection->rowCount(), 2);
+    EXPECT_EQ(depthSection->child(0, 0)->text(), QStringLiteral("depth_2.png"));
+    EXPECT_EQ(depthSection->child(1, 0)->text(), QStringLiteral("depth_10.png"));
 }
 
 TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)

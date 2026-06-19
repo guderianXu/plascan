@@ -476,14 +476,24 @@
         </property>
        </widget>
       </item>
-      <item row="6" column="0">
+      <item row="6" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_laserMissingNormalsAsHeightPlanesCheck">
+        <property name="toolTip">
+         <string>仅在输入 PLY 缺少 normal_x/normal_y/normal_z 时使用；会把每个 XYZ 点解释为法向为 Z 轴的水平高度面。</string>
+        </property>
+        <property name="text">
+         <string>无 normal 的 XYZ 点按水平高度面使用</string>
+        </property>
+       </widget>
+      </item>
+      <item row="7" column="0">
        <widget class="QLabel" name="laserWeightLabel">
         <property name="text">
          <string>约束权重</string>
         </property>
        </widget>
       </item>
-      <item row="6" column="1">
+      <item row="7" column="1">
        <widget class="QDoubleSpinBox" name="m_laserWeightSpin">
         <property name="toolTip">
          <string>LiDAR 点到面残差的全局权重；先从 1.0 开始调试。</string>
@@ -502,14 +512,14 @@
         </property>
        </widget>
       </item>
-      <item row="7" column="0">
+      <item row="8" column="0">
        <widget class="QLabel" name="laserHuberDeltaLabel">
         <property name="text">
          <string>LiDAR Huber δ</string>
         </property>
        </widget>
       </item>
-      <item row="7" column="1">
+      <item row="8" column="1">
        <widget class="QDoubleSpinBox" name="m_laserHuberDeltaSpin">
         <property name="toolTip">
          <string>LiDAR 点到面残差的鲁棒阈值，单位为米。</string>

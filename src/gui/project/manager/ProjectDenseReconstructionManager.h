@@ -4,6 +4,9 @@
 #include <QJsonObject>
 #include <QPointer>
 
+#include <atomic>
+#include <memory>
+
 class QWidget;
 class ProjectData;
 class ProjectManager;
@@ -31,9 +34,12 @@ signals:
 private:
     bool ensureProjectOpen(const QString &message,
                            const QString &title) const;
+    std::shared_ptr<std::atomic_bool> createActiveMvsCancelFlag();
+    void clearActiveMvsCancelFlag(const std::shared_ptr<std::atomic_bool> &cancelFlag);
 
     ProjectManager *m_owner = nullptr;
     ProjectData *m_projectData = nullptr;
     QWidget *m_parentWidget = nullptr;
     QPointer<QObject> m_activeMvsGenerator;
+    std::shared_ptr<std::atomic_bool> m_activeMvsCancelFlag;
 };

@@ -25,8 +25,15 @@ class BundleAdjustCliTest(unittest.TestCase):
         self.assertTrue(source_path.exists(), f"missing {source_path}")
         source = source_path.read_text(encoding="utf-8")
         self.assertIn("--laser-cloud", source)
+        self.assertIn("--laser-missing-normals-as-height-planes", source)
+        self.assertIn("options.laserUseMissingNormalsAsHeightPlanes", source)
         self.assertIn("--ab-compare", source)
         self.assertIn("ba_ab_compare.json", source)
+        self.assertIn("quality_gate", source)
+        self.assertIn("reprojection_rms_regressed", source)
+        self.assertIn("--fail-on-quality-gate", source)
+        self.assertIn("failOnQualityGate", source)
+        self.assertIn("cli::EXIT_ALGO_ERR", source)
 
     def test_cli_disables_eval_plot_by_default_for_headless_runs(self):
         source = (REPO_ROOT / "src" / "cli" / "cli_bundle_adjust.cpp").read_text(encoding="utf-8")

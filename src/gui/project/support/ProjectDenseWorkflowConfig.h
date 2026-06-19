@@ -23,6 +23,7 @@ struct DenseGenerationSettings
     float patchMatchConfidence = 0.20f;
     bool useCuda = true;
     float fusionMinConfidence = 0.20f;
+    int fusionMaxImageDim = 2048; // 0 表示融合阶段使用深度图原始尺寸
     int minConsistentViews = 2;
     float depthConsistency = 2.0f;
     float maxReprojError = 2.0f;

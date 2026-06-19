@@ -66,6 +66,80 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("m_config.minFreeRamBytes", scheduler)
         self.assertIn("深度图内存策略", scheduler)
 
+    def test_depth_cache_unknown_dimensions_use_streaming_not_cache(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn("refreshViewImageDimensionsFromCache", scheduler)
+        self.assertIn("refreshViewImageDimensionsFromCache();", scheduler)
+        self.assertIn("无有效影像尺寸，采用保守流式模式", scheduler)
+        self.assertNotIn('QStringLiteral("无有效影像尺寸");\n        }\n        return true;', scheduler)
+
+    def test_gui_mvs_views_populate_image_dimensions_before_memory_policy(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        self.assertIn("applyImageSizeToMvsView", manager)
+        self.assertGreaterEqual(manager.count("applyImageSizeToMvsView(imgPath, &view)"), 2)
+        self.assertNotIn("cv::imread(imagePath.toStdString()", manager)
+        self.assertNotIn("view.imageWidth = 0;", manager)
+        self.assertNotIn("view.imageHeight = 0;", manager)
+
+    def test_stored_depth_batch_load_filters_confidence_in_place_and_drops_confidence(self):
+        helper = self.read("src/core/mvs/DepthFrameUtils.cpp")
+
+        self.assertIn("const bool shouldLoadConfidence", helper)
+        self.assertIn("result.frame.confidence.release();", helper)
+        self.assertNotIn("cv::Mat filteredDepth = result.frame.depthMap.clone();", helper)
+
+    def test_fusion_frame_builder_drops_confidence_after_postprocess(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        start = scheduler.index("FusionFrameInput DepthMapGenerator::buildFusionFrame")
+        end = scheduler.index("void DepthMapGenerator::crossCheckDepthConsistency")
+        body = scheduler[start:end]
+
+        self.assertIn("frame.confidence.release();", body)
+
+    def test_gui_depth_batch_loading_reports_incremental_progress(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        fuse_start = manager.index("void ProjectDenseReconstructionManager::startFuseDepthMapsAsync")
+        refine_start = manager.index("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync")
+        fuse_body = manager[fuse_start:refine_start]
+
+        self.assertIn("正在加载深度图 %1/%2", fuse_body)
+        self.assertIn("流式深度图融合 %1/%2", fuse_body)
+        self.assertIn("mvsProgressChanged", fuse_body)
+
+    def test_depth_fusion_uses_lazy_color_lru_cache(self):
+        header = self.read("src/core/mvs/DepthMapFusion.h")
+        fusion = self.read("src/core/mvs/DepthMapFusion.cpp")
+
+        self.assertIn("bool  useColor", header)
+        self.assertIn("int   colorCacheCapacity", header)
+        self.assertIn("class ColorImageCache", fusion)
+        self.assertIn("ColorImageCache colorCache", fusion)
+        self.assertIn("colorCache.get", fusion)
+        self.assertNotIn("std::vector<cv::Mat> colorImages(NF)", fusion)
+        self.assertNotIn("colorImages[fi] = cv::imread", fusion)
+
+    def test_depth_fusion_can_limit_fusion_to_streaming_reference_frame(self):
+        header = self.read("src/core/mvs/DepthMapFusion.h")
+        fusion = self.read("src/core/mvs/DepthMapFusion.cpp")
+
+        self.assertIn("bool  fuseOnlyFirstFrame", header)
+        self.assertIn("const int fusionStartFrame", fusion)
+        self.assertIn("const int fusionEndFrame", fusion)
+
+    def test_gui_depth_fusion_streams_neighbor_windows_with_lru_depth_cache(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        self.assertIn("class DepthFrameLruCache", manager)
+        self.assertIn("nearestFusionWindowIndices", manager)
+        self.assertIn("streamFusionWindowSize", manager)
+        self.assertIn("depthFrameCache.get", manager)
+        self.assertIn("fusionCfg.fuseOnlyFirstFrame = true", manager)
+        self.assertIn("流式深度图融合", manager)
+        self.assertNotIn("frames.reserve(storedFrames.size());\n        for (const auto &stored : storedFrames)", manager)
+
     def test_depth_scheduler_switches_to_streaming_when_memory_pressure_rises(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
 
@@ -385,6 +459,87 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("rawDepthStoragePath(depthPngPath)", cli)
         self.assertIn("loadDepthMatStorage", cli)
 
+    def test_reconstruct_pipeline_cli_exposes_mvs_regression_controls(self):
+        cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
+
+        self.assertIn("--mvs-res-scale", cli)
+        self.assertIn("--mvs-iterations", cli)
+        self.assertIn("--mvs-confidence", cli)
+        self.assertIn("--mvs-gpu-frame-workers", cli)
+        self.assertIn("--mvs-cpu-frame-workers", cli)
+        self.assertIn("--mvs-max-frames", cli)
+        self.assertIn("denseSettings.resScale = mvsResScale;", cli)
+        self.assertIn("denseSettings.iterations = mvsIterations;", cli)
+        self.assertIn("denseSettings.patchMatchConfidence = mvsConfidence;", cli)
+        self.assertIn("denseSettings.fusionMinConfidence = mvsFusionConfidence;", cli)
+        self.assertIn("denseSettings.gpuFrameWorkers = mvsGpuFrameWorkers;", cli)
+        self.assertIn("denseSettings.cpuFrameWorkers = mvsCpuFrameWorkers;", cli)
+        self.assertIn("limitMvsInputsForRegression", cli)
+
+    def test_reconstruct_pipeline_cli_records_depth_artifacts_and_mvs_settings(self):
+        cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
+
+        self.assertIn("QJsonArray depthArtifacts;", cli)
+        self.assertIn("&xjw::mvs::DepthMapGenerator::depthMapArtifactSaved", cli)
+        self.assertIn("depthArtifacts.append(artifact)", cli)
+        self.assertIn('denseReport[QStringLiteral("depth_maps")] = depthArtifacts;', cli)
+        self.assertIn('denseReport[QStringLiteral("mvs_settings")]', cli)
+        self.assertIn('denseReport[QStringLiteral("mvs_depth_config")]', cli)
+
+    def test_reconstruct_pipeline_cli_streams_depth_fusion_windows(self):
+        cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
+
+        self.assertIn("streamingFusionWindowIndices", cli)
+        self.assertIn("fuseDepthMapsStreamingFromDisk", cli)
+        self.assertIn("fusionCfg.fuseOnlyFirstFrame = true", cli)
+        self.assertIn("流式深度图融合", cli)
+        self.assertIn("voxelDownsampleFusedPointsToTarget", cli)
+        self.assertNotIn("loadFusionFramesFromDepthMaps(mvsDir,\n                                           views,", cli)
+
+    def test_reconstruct_pipeline_cli_downsamples_fusion_frames(self):
+        cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
+        helper = self.read("src/core/mvs/DepthFrameUtils.cpp")
+
+        self.assertIn("--mvs-fusion-max-image-dim", cli)
+        self.assertIn("mvsFusionMaxImageDim", cli)
+        self.assertIn("scalePositiveDepthCameraModel", helper)
+        self.assertIn("downsampleFusionFrameForMaxDimension", helper)
+        self.assertIn("loadFusionFrameFromDepthMap(", cli)
+        self.assertIn("fusionMaxImageDim", cli)
+        self.assertIn('settings[QStringLiteral("fusion_max_image_dim")]', cli)
+        self.assertIn("cv::resize(frame->depthMap", helper)
+        self.assertIn("cv::resize(frame->confidence", helper)
+
+    def test_depth_fusion_resizes_color_cache_to_frame_grid(self):
+        fusion = self.read("src/core/mvs/DepthMapFusion.cpp")
+
+        self.assertIn("m_frames[frameIdx].imgW", fusion)
+        self.assertIn("m_frames[frameIdx].imgH", fusion)
+        self.assertIn("cv::resize(image, image", fusion)
+
+    def test_streaming_depth_fusion_uses_prefiltered_fast_path(self):
+        header = self.read("src/core/mvs/DepthMapFusion.h")
+        fusion = self.read("src/core/mvs/DepthMapFusion.cpp")
+
+        self.assertIn("fuseFirstFrameObservationsFast", header)
+        self.assertIn("fuseFirstFrameObservationsFast", fusion)
+        self.assertIn("使用已过滤深度图快速反投影", fusion)
+        self.assertIn("m_config.fuseOnlyFirstFrame", fusion)
+        self.assertIn("resolveFusionWorkerCount", fusion)
+
+    def test_gui_streaming_depth_fusion_downsamples_stored_frames(self):
+        header = self.read("src/core/mvs/DepthFrameUtils.h")
+        helper = self.read("src/core/mvs/DepthFrameUtils.cpp")
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        self.assertIn("int fusionMaxImageDim", header)
+        self.assertIn("scalePositiveDepthCameraModel", helper)
+        self.assertIn("downsampleFusionFrameForMaxDimension", helper)
+        self.assertIn("fusionMaxImageDim", manager)
+        self.assertIn("m_fusionMaxImageDim", manager)
+        self.assertIn("request.fusionMaxImageDim", manager)
+        self.assertIn("m_fusionMaxImageDim)", manager)
+
     def test_cuda_scheduler_defaults_can_pipeline_two_frame_workers(self):
         config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
         self.assertIn("autoGpuFrameWorkers", config_cpp)
@@ -434,13 +589,43 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("saveDepthFrameArtifacts", generator)
         self.assertGreater(signal_pos, 0)
 
+    def test_depth_artifact_metadata_records_sources_device_and_mask(self):
+        header = self.read("src/core/mvs/DepthMapGenerator.h")
+        generator = self.read("src/core/mvs/DepthMapGenerator.cpp")
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+        tree = self.read("src/gui/widgets/DataTreeWidget.cpp")
+
+        self.assertIn("void depthMapArtifactSaved(QJsonObject artifact)", header)
+        self.assertIn('artifact[QStringLiteral("source_images")]', generator)
+        self.assertIn('artifact[QStringLiteral("source_indices")]', generator)
+        self.assertIn('artifact[QStringLiteral("valid_mask_path")]', generator)
+        self.assertIn('artifact[QStringLiteral("device")]', generator)
+        self.assertIn('artifact[QStringLiteral("elapsed_ms")]', generator)
+        self.assertIn("emit depthMapArtifactSaved(artifact)", generator)
+
+        self.assertIn("makeProjectDepthRecordFromArtifact", manager)
+        self.assertIn("&DepthMapGenerator::depthMapArtifactSaved", manager)
+        self.assertIn('depthResult[QStringLiteral("mvs_output_dir")]', manager)
+
+        self.assertIn('obj.value(QStringLiteral("device")).toString()', tree)
+
+    def test_depth_estimation_checks_cancel_between_expensive_stages(self):
+        generator = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        self.assertIn('cancelled("深度范围估计后")', generator)
+        self.assertIn('cancelled("极线校正后")', generator)
+        self.assertIn('cancelled("构建深度 hint 后")', generator)
+        self.assertIn('cancelled("粗层 PatchMatch 后")', generator)
+        self.assertIn('cancelled("精细层 PatchMatch 后")', generator)
+        self.assertIn('cancelled("深度后处理后")', generator)
+
     def test_depth_reuse_requires_raw_artifacts_and_normalized_camera_lookup(self):
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
         depth_utils = self.read("src/core/mvs/DepthFrameUtils.cpp")
 
         self.assertIn("depthFrameArtifactsExist(pngPath)", manager)
         self.assertIn("cameraForImagePath(camMap, imgPath", manager)
-        self.assertIn("cameraForImagePath(camMap, stored.refImage", manager)
+        self.assertIn("cameraForImagePath(m_camMap, m_records[index].refImage", manager)
         self.assertNotIn("camMap.value(imgPath)", manager)
         self.assertNotIn("camMap.value(stored.refImage)", manager)
 
@@ -548,6 +733,36 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("半径离群点移除", manager)
         self.assertNotIn("离群点二次清理", manager)
         self.assertNotIn("strictSorReport", manager)
+
+    def test_gui_mvs_cancel_reaches_fusion_and_refine_workers(self):
+        header = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.h")
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        self.assertIn("std::shared_ptr<std::atomic_bool> m_activeMvsCancelFlag", header)
+        self.assertIn("createActiveMvsCancelFlag", header)
+        self.assertIn("clearActiveMvsCancelFlag", header)
+
+        cancel_start = manager.index("void ProjectDenseReconstructionManager::cancelMvs()")
+        cancel_body = manager[cancel_start:]
+        self.assertIn("m_activeMvsCancelFlag->store(true", cancel_body)
+        self.assertIn("gen->requestCancel()", cancel_body)
+
+        fuse_start = manager.index("void ProjectDenseReconstructionManager::startFuseDepthMapsAsync")
+        refine_start = manager.index("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync")
+        fuse_body = manager[fuse_start:refine_start]
+        refine_body = manager[refine_start:]
+
+        self.assertIn("const auto cancelFlag = createActiveMvsCancelFlag();", fuse_body)
+        self.assertIn("cancelFlag", fuse_body)
+        self.assertIn("cancelFlag->load", fuse_body)
+        self.assertIn("深度图融合已取消", fuse_body)
+        self.assertIn("clearActiveMvsCancelFlag(cancelFlag)", fuse_body)
+
+        self.assertIn("const auto cancelFlag = createActiveMvsCancelFlag();", refine_body)
+        self.assertIn("cancelFlag", refine_body)
+        self.assertIn("cancelFlag->load", refine_body)
+        self.assertIn("密集点云后处理已取消", refine_body)
+        self.assertIn("clearActiveMvsCancelFlag(cancelFlag)", refine_body)
 
     def test_gui_dense_cloud_refine_preconditions_large_clouds_before_expensive_filters(self):
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")

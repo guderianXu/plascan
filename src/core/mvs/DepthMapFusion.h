@@ -12,8 +12,10 @@
 
 #include "MvsTypes.h"
 #include <opencv2/core.hpp>
+#include <atomic>
 #include <string>
 #include <functional>
+#include <memory>
 #include <vector>
 
 namespace xjw
@@ -33,9 +35,13 @@ struct StereoFusionConfig
     float maxNormalError     = 10.0f;  ///< 最大法线角度差（度）
     int   checkNumImages     = 50;     ///< 传递检查的重叠图像数目
     int   workerCount        = 0;      ///< CPU 融合线程数；0 表示按硬件自动选择
+    bool  useColor           = true;   ///< 是否按原图给融合点赋色
+    int   colorCacheCapacity = 4;      ///< 原图懒加载 LRU 缓存容量
+    bool  fuseOnlyFirstFrame = false;  ///< 流式窗口模式：只从窗口首帧产生点
     bool  useBoundingBox     = false;  ///< 是否裁剪到指定包围盒
     float bboxMin[3]         = {-1e9f, -1e9f, -1e9f};
     float bboxMax[3]         = { 1e9f,  1e9f,  1e9f};
+    std::shared_ptr<std::atomic_bool> cancelFlag; ///< 外部取消标志；置位后融合尽快返回 false
 };
 
 // =============================================================================
@@ -126,7 +132,7 @@ private:
                    const std::vector<FusionFrameInput> &frames,
                    const std::vector<FrameGeometry> &geom,
                    const std::vector<std::vector<int>> &overlapping,
-                   const std::vector<cv::Mat> &colorImages,
+                   const std::function<cv::Mat(int)> &colorProvider,
                    std::vector<std::vector<char>> &fusedMask,
                    FusedPoint &outPoint);
 
@@ -134,7 +140,15 @@ private:
     bool fuseTwoViewSingleObservationFast(
         const std::vector<FusionFrameInput> &frames,
         const std::vector<FrameGeometry> &geom,
-        const std::vector<cv::Mat> &colorImages,
+        const std::function<cv::Mat(int)> &colorProvider,
+        std::vector<FusedPoint> &fusedPoints,
+        MvsProgressCallback progressCb);
+
+    /// 流式窗口模式：深度图已在估计阶段完成一致性过滤，直接并行反投影首帧有效像素
+    bool fuseFirstFrameObservationsFast(
+        const std::vector<FusionFrameInput> &frames,
+        const std::vector<FrameGeometry> &geom,
+        const std::function<cv::Mat(int)> &colorProvider,
         std::vector<FusedPoint> &fusedPoints,
         MvsProgressCallback progressCb);
 

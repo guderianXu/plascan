@@ -12,9 +12,11 @@
 #include <QJsonArray>
 #include <QFileInfo>
 #include <QDir>
+#include <QCollator>
 #include <QMessageBox>
 #include <QImageReader>
 #include <QStyle>
+#include <QVector>
 
 // DataTreeWidget 的实现：
 // - 只消费 ProjectData/ProjectManager 提供的内存元数据快照
@@ -292,6 +294,69 @@ void DataTreeWidget::appendItemRow(QStandardItem *parent, const QString &name, c
     parent->appendRow({nameItem, pathItem, storageItem});
 }
 
+void DataTreeWidget::sortSectionChildrenByFileName(QStandardItem *section)
+{
+    if (!section || section->rowCount() < 2)
+    {
+        return;
+    }
+
+    struct Row
+    {
+        QList<QStandardItem *> items;
+        QString fileNameKey;
+        QString displayName;
+        int originalRow = 0;
+    };
+
+    QVector<Row> rows;
+    rows.reserve(section->rowCount());
+    const int rowCount = section->rowCount();
+    for (int row = 0; row < rowCount; ++row)
+    {
+        QList<QStandardItem *> items = section->takeRow(0);
+        if (items.isEmpty())
+        {
+            continue;
+        }
+
+        const QString displayName = items.at(0) ? items.at(0)->text() : QString();
+        const QString path = items.size() > 1 && items.at(1) ? items.at(1)->text() : QString();
+        QString fileNameKey = QFileInfo(path).fileName();
+        if (fileNameKey.isEmpty())
+        {
+            fileNameKey = displayName;
+        }
+        rows.push_back({items, fileNameKey, displayName, row});
+    }
+
+    QCollator collator;
+    collator.setNumericMode(true);
+    collator.setCaseSensitivity(Qt::CaseInsensitive);
+
+    std::stable_sort(rows.begin(), rows.end(), [&collator](const Row &lhs, const Row &rhs)
+    {
+        int cmp = collator.compare(lhs.fileNameKey, rhs.fileNameKey);
+        if (cmp != 0)
+        {
+            return cmp < 0;
+        }
+
+        cmp = collator.compare(lhs.displayName, rhs.displayName);
+        if (cmp != 0)
+        {
+            return cmp < 0;
+        }
+
+        return lhs.originalRow < rhs.originalRow;
+    });
+
+    for (const Row &row : rows)
+    {
+        section->appendRow(row.items);
+    }
+}
+
 QString DataTreeWidget::resolveResourcePath(const QString &resourcePath) const
 {
     const QString trimmedPath = resourcePath.trimmed();
@@ -500,6 +565,16 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
             const int gh = obj.value(QStringLiteral("grid_height")).toInt(-1);
             if (gw > 0 && gh > 0)
                 name = QStringLiteral("%1  [%2x%3]").arg(name).arg(gw).arg(gh);
+            const QString device = obj.value(QStringLiteral("device")).toString();
+            if (!device.isEmpty() && device != QStringLiteral("unknown"))
+            {
+                name += QStringLiteral("  [%1]").arg(device);
+            }
+            const QString status = obj.value(QStringLiteral("status")).toString();
+            if (!status.isEmpty() && status != QStringLiteral("completed"))
+            {
+                name += QStringLiteral("  [%1]").arg(status);
+            }
             appendItemRow(depthMaps, name, path, QStringLiteral("generated"));
         }
     }
@@ -547,6 +622,11 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         if (path.isEmpty()) continue;
         QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
         appendItemRow(ortho, name, path, QStringLiteral("generated"));
+    }
+
+    for (int i = 0; i < m_model->rowCount(); ++i)
+    {
+        sortSectionChildrenByFileName(m_model->item(i, 0));
     }
     
     // ── 恢复展开状态 ──────────────────────────────────────────────────────

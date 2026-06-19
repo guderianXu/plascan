@@ -71,6 +71,7 @@ private:
     QDoubleSpinBox *m_laserVoxelSizeSpin = nullptr;
     QDoubleSpinBox *m_laserMaxCurvatureSpin = nullptr;
     QSpinBox *m_laserMaxSamplesSpin = nullptr;
+    QCheckBox *m_laserMissingNormalsAsHeightPlanesCheck = nullptr;
     QDoubleSpinBox *m_laserWeightSpin = nullptr;
     QDoubleSpinBox *m_laserHuberDeltaSpin = nullptr;
 

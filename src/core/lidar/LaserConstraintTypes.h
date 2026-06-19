@@ -20,6 +20,7 @@ struct LaserConstraintMapOptions
     double maxCurvature = 0.2;
     double voxelSizeMeters = 0.0;
     int maxSamples = 500000;
+    bool useMissingNormalsAsHeightPlanes = false;
 };
 
 } // namespace lidar

@@ -49,6 +49,7 @@ struct BaServiceOptions
     double              laserVoxelSizeMeters = 0.0;     ///< LiDAR 约束点云体素降采样尺寸；0 表示关闭
     double              laserMaxCurvature = 0.2;        ///< 允许参与约束的最大曲率
     int                 laserMaxSamples = 500000;       ///< LiDAR map 最大采样数，防止 BA 前处理过慢
+    bool                laserUseMissingNormalsAsHeightPlanes = false; ///< 将无 normal 的 XYZ 点按水平高度面解释
     double              laserWeight = 1.0;              ///< LiDAR 残差权重
     double              laserHuberDeltaMeters = 0.2;    ///< LiDAR 残差 Huber 阈值（米）
 

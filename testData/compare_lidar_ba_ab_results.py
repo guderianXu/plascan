@@ -11,6 +11,12 @@ from pathlib import Path
 from typing import Any
 
 
+MAX_REPROJECTION_RMS_REGRESSION_PX = 0.25
+MAX_REPROJECTION_RMS_REGRESSION_PERCENT = 10.0
+MAX_OPTIMIZED_TRACK_DROP_PERCENT = 5.0
+QUALITY_GATE_EPSILON = 1e-9
+
+
 def as_float(obj: dict[str, Any], key: str, default: float = 0.0) -> float:
     value = obj.get(key, default)
     try:
@@ -31,6 +37,12 @@ def percent_reduction(before: float, after: float) -> float:
     if before <= 0.0:
         return 0.0
     return (before - after) * 100.0 / before
+
+
+def percent_increase(before: float, after: float) -> float:
+    if before <= 0.0:
+        return 0.0 if after <= before else 100.0
+    return max(0.0, (after - before) * 100.0 / before)
 
 
 def mean(values: list[float]) -> float:
@@ -154,6 +166,65 @@ def camera_pose_delta_metrics(baseline: dict[str, Any], lidar: dict[str, Any]) -
     }
 
 
+def build_quality_gate(
+    baseline: dict[str, Any],
+    lidar: dict[str, Any],
+    laser_summary: dict[str, Any],
+    baseline_after: float,
+    lidar_after: float,
+    laser_reduction: float,
+) -> dict[str, Any]:
+    associated_tracks = as_int(laser_summary, "associated_tracks")
+    laser_constraint_count = as_int(laser_summary, "laser_constraint_count")
+    baseline_optimized = as_int(baseline, "optimized_count")
+    lidar_optimized = as_int(lidar, "optimized_count")
+
+    reprojection_regression_px = max(0.0, lidar_after - baseline_after)
+    reprojection_regression_percent = percent_increase(baseline_after, lidar_after)
+    optimized_track_drop = max(0, baseline_optimized - lidar_optimized)
+    optimized_track_drop_percent = (
+        optimized_track_drop * 100.0 / baseline_optimized
+        if baseline_optimized > 0
+        else 0.0
+    )
+
+    failure_codes: list[str] = []
+    failure_reasons: list[str] = []
+    if laser_constraint_count <= 0 or associated_tracks <= 0:
+        failure_codes.append("no_laser_constraints")
+        failure_reasons.append("LiDAR BA did not keep any active laser constraints.")
+    if laser_reduction <= 0.0:
+        failure_codes.append("laser_rms_not_reduced")
+        failure_reasons.append("LiDAR point-to-plane RMS did not decrease.")
+    if (
+        reprojection_regression_px > MAX_REPROJECTION_RMS_REGRESSION_PX + QUALITY_GATE_EPSILON
+        or reprojection_regression_percent > MAX_REPROJECTION_RMS_REGRESSION_PERCENT + QUALITY_GATE_EPSILON
+    ):
+        failure_codes.append("reprojection_rms_regressed")
+        failure_reasons.append("LiDAR BA increased reprojection RMS beyond the acceptance threshold.")
+    if optimized_track_drop_percent > MAX_OPTIMIZED_TRACK_DROP_PERCENT + QUALITY_GATE_EPSILON:
+        failure_codes.append("optimized_tracks_dropped")
+        failure_reasons.append("LiDAR BA optimized materially fewer tracks than the baseline run.")
+
+    return {
+        "passed": not failure_codes,
+        "status": "pass" if not failure_codes else "fail",
+        "failure_codes": failure_codes,
+        "failure_reasons": failure_reasons,
+        "thresholds": {
+            "max_reprojection_rms_regression_px": MAX_REPROJECTION_RMS_REGRESSION_PX,
+            "max_reprojection_rms_regression_percent": MAX_REPROJECTION_RMS_REGRESSION_PERCENT,
+            "max_optimized_track_drop_percent": MAX_OPTIMIZED_TRACK_DROP_PERCENT,
+        },
+        "metrics": {
+            "reprojection_rms_regression_px": reprojection_regression_px,
+            "reprojection_rms_regression_percent": reprojection_regression_percent,
+            "optimized_track_drop": optimized_track_drop,
+            "optimized_track_drop_percent": optimized_track_drop_percent,
+        },
+    }
+
+
 def compare_summaries(baseline: dict[str, Any], lidar: dict[str, Any]) -> dict[str, Any]:
     laser_summary = lidar.get("laser_constraints_summary") or {}
     baseline_after = as_float(baseline, "mean_rms_after")
@@ -163,6 +234,14 @@ def compare_summaries(baseline: dict[str, Any], lidar: dict[str, Any]) -> dict[s
     laser_reduction = laser_before - laser_after
     associated_tracks = as_int(laser_summary, "associated_tracks")
     laser_constraint_count = as_int(laser_summary, "laser_constraint_count")
+    quality_gate = build_quality_gate(
+        baseline,
+        lidar,
+        laser_summary,
+        baseline_after,
+        lidar_after,
+        laser_reduction,
+    )
 
     if laser_constraint_count <= 0:
         verdict = "LiDAR BA did not report active laser constraints; inspect input association and options."
@@ -198,6 +277,7 @@ def compare_summaries(baseline: dict[str, Any], lidar: dict[str, Any]) -> dict[s
         },
         "common_tracks": common_track_metrics(baseline, lidar),
         "camera_pose_delta": camera_pose_delta_metrics(baseline, lidar),
+        "quality_gate": quality_gate,
         "verdict": verdict,
     }
 
@@ -216,8 +296,12 @@ def write_markdown_report(comparison: dict[str, Any], output_path: Path) -> None
     deltas = comparison["deltas"]
     common_tracks = comparison["common_tracks"]
     camera_delta = comparison["camera_pose_delta"]
+    quality_gate = comparison["quality_gate"]
     lines = [
         "# LiDAR BA A/B Comparison",
+        "",
+        f"Quality gate: {quality_gate['status'].upper()}",
+        "",
         "",
         "| Metric | Baseline BA | LiDAR BA | Delta |",
         "|---|---:|---:|---:|",
@@ -263,6 +347,10 @@ def write_markdown_report(comparison: dict[str, Any], output_path: Path) -> None
         f"Verdict: {comparison['verdict']}",
         "",
     ]
+    if quality_gate["failure_reasons"]:
+        lines.extend(["Quality gate failures:", ""])
+        lines.extend(f"- {reason}" for reason in quality_gate["failure_reasons"])
+        lines.append("")
     output_path.parent.mkdir(parents=True, exist_ok=True)
     output_path.write_text("\n".join(lines), encoding="utf-8")
 
@@ -276,6 +364,11 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     parser.add_argument("--lidar-json", type=Path, required=True, help="LiDAR-constrained BA summary JSON")
     parser.add_argument("--output-json", type=Path, required=True, help="comparison JSON output")
     parser.add_argument("--output-md", type=Path, help="optional Markdown report output")
+    parser.add_argument(
+        "--fail-on-quality-gate",
+        action="store_true",
+        help="return a non-zero exit code when the LiDAR BA quality gate fails",
+    )
     return parser.parse_args(argv)
 
 
@@ -294,6 +387,9 @@ def main(argv: list[str] | None = None) -> int:
     print(f"wrote: {args.output_json}")
     if args.output_md:
         print(f"wrote: {args.output_md}")
+    if args.fail_on_quality_gate and not comparison["quality_gate"]["passed"]:
+        print("quality gate failed: LiDAR BA result should not be accepted automatically", file=sys.stderr)
+        return 2
     return 0
 
 

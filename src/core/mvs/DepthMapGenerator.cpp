@@ -10,6 +10,8 @@
 #include "MvsViewSelection.h"
 #include "Logger.h"
 #include <QtConcurrent/QtConcurrent>
+#include <QJsonArray>
+#include <QJsonObject>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <cmath>
@@ -190,9 +192,9 @@ bool shouldRetainAllDepthFramesInMemory(const std::vector<CameraView> &views,
     {
         if (reason)
         {
-            *reason = QStringLiteral("无有效影像尺寸");
+            *reason = QStringLiteral("无有效影像尺寸，采用保守流式模式");
         }
-        return true;
+        return false;
     }
     if (!snapshot.valid)
     {
@@ -1483,6 +1485,29 @@ void DepthMapGenerator::preloadImages()
     }
 }
 
+void DepthMapGenerator::refreshViewImageDimensionsFromCache()
+{
+    int updatedCount = 0;
+    const int count = std::min(static_cast<int>(m_views.size()), static_cast<int>(m_grayCache.size()));
+    for (int i = 0; i < count; ++i)
+    {
+        CameraView &view = m_views[static_cast<size_t>(i)];
+        const cv::Mat &image = m_grayCache[static_cast<size_t>(i)];
+        if ((view.imageWidth <= 0 || view.imageHeight <= 0) && !image.empty())
+        {
+            view.imageWidth = image.cols;
+            view.imageHeight = image.rows;
+            ++updatedCount;
+        }
+    }
+
+    if (updatedCount > 0)
+    {
+        LOG_INFO(QStringLiteral("[MVS] 已从预加载图像补齐 %1 个视图尺寸，用于深度图内存预算")
+                     .arg(updatedCount));
+    }
+}
+
 // =============================================================================
 void DepthMapGenerator::start()
 {
@@ -2324,8 +2349,21 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     FrameTiming timing;
     const auto totalStart = Clock::now();
     auto stageStart = totalStart;
+    const auto cancelled = [this, &result](const char *stage) -> bool
+    {
+        if (!m_cancelled.load())
+        {
+            return false;
+        }
+        result.errorMsg = std::string("深度估计已取消: ") + stage;
+        return true;
+    };
 
     const CameraView &refView = m_views[refIdx];
+    if (cancelled("读取参考影像前"))
+    {
+        return result;
+    }
 
     // 使用预加载的灰度图缓存（无磁盘 I/O）
     cv::Mat refImg;
@@ -2336,6 +2374,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     }
     if (refImg.empty()) {
         result.errorMsg = "无法读取参考帧图像: " + refView.imagePath;
+        return result;
+    }
+    if (cancelled("读取参考影像后"))
+    {
         return result;
     }
     const int W = refImg.cols, H = refImg.rows;
@@ -2373,6 +2415,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     if (srcGrays.empty()) {
         timing.sourceMs = elapsedMs(stageStart, Clock::now());
         result.errorMsg = "没有可用的源帧";
+        return result;
+    }
+    if (cancelled("选择源视图后"))
+    {
         return result;
     }
     result.sourceViewIndices = sourceIndices;
@@ -2441,6 +2487,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     estimateDepthRangeFromVisiblePoints(refIdx, depthRangeVisiblePoints, zNear, zFar);
     fprintf(stderr, "[MVS] 帧 %d: zNear=%.4f  zFar=%.4f\n", refIdx, zNear, zFar);
     timing.rangeMs = elapsedMs(stageStart, Clock::now());
+    if (cancelled("深度范围估计后"))
+    {
+        return result;
+    }
 
     // =========================================================================
     // ★ 极线校正（仅双目立体对时启用）
@@ -2495,6 +2545,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         }
     }
     timing.rectifyMs = elapsedMs(stageStart, Clock::now());
+    if (cancelled("极线校正后"))
+    {
+        return result;
+    }
 
     // =========================================================================
     // ★ 多尺度 PatchMatch（粗到精）
@@ -2535,6 +2589,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                                                                            supportMaskSize.height,
                                                                            *supportSamples);
     timing.hintMs = elapsedMs(stageStart, Clock::now());
+    if (cancelled("构建深度 hint 后"))
+    {
+        return result;
+    }
 
     // ── Pass 1: 粗分辨率 ────────────────────────────────────────────────
     stageStart = Clock::now();
@@ -2554,6 +2612,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         zNear, zFar, coarseCfg,
         coarseDepth, &coarseConf, &errMsg,
         coarseHint.empty() ? nullptr : &coarseHint);
+    if (cancelled("粗层 PatchMatch 后"))
+    {
+        return result;
+    }
 
     if (coarseOk) {
         int coarseValid = cv::countNonZero(coarseDepth > 0);
@@ -2597,6 +2659,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             zNear, zFar, fineCfg,
             depthMap, &confMap, &errMsg,
             &fineHint);
+        if (cancelled("精细层 PatchMatch 后"))
+        {
+            return result;
+        }
 
         if (!fineOk) {
             depthMap = coarseDepth;
@@ -2614,6 +2680,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             zNear, zFar, fallbackCfg,
             depthMap, &confMap, &errMsg,
             coarseHint.empty() ? nullptr : &coarseHint);
+        if (cancelled("单尺度 PatchMatch 后"))
+        {
+            return result;
+        }
         if (!ok) {
             result.errorMsg = errMsg;
             return result;
@@ -2631,6 +2701,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         fprintf(stderr, "[MVS] 帧 %d: 深度图已从校正空间映射回原始空间\n", refIdx);
     }
     timing.patchmatchMs = elapsedMs(stageStart, Clock::now());
+    if (cancelled("深度图反变换后"))
+    {
+        return result;
+    }
 
     // ── 暗区掩码：使用 preloadImages() 中基于原始图像计算的内容掩码 ──────
     // 必须使用 CLAHE 增强前的掩码！gamma(0.4) 将黑边 gray=3 提升到 37,
@@ -2706,6 +2780,10 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
         applySparseSupportPrior(depthMap, confMap, supportMask, refIdx);
     }
+    if (cancelled("深度后处理后"))
+    {
+        return result;
+    }
 
     // 统计
     int validCnt = cv::countNonZero(depthMap > 0);
@@ -2752,6 +2830,7 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
 
     frame.depthMap   = filteredDepth;
     frame.confidence = filteredConfidence;
+    frame.confidence.release();
     return frame;
 }
 
@@ -2963,12 +3042,18 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
 
     std::string saveErr;
     const auto saveStart = Clock::now();
+    const std::string pngPath = m_outputDir + "/depth_" + std::to_string(frameIndex) + ".png";
+    const std::string rawDepthPath =
+        m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + ".bin";
+    const std::string rawConfidencePath =
+        m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + "_conf.bin";
+    const std::string validMaskPath =
+        m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + "_mask.png";
     bool previewSaved = !savePreviewPng;
     double previewMs = 0.0;
     if (savePreviewPng)
     {
         const auto previewStart = Clock::now();
-        const std::string pngPath = m_outputDir + "/depth_" + std::to_string(frameIndex) + ".png";
         if (!saveDepthPreviewPng(pngPath, *result.depthMap, &saveErr))
         {
             LOG_WARN(QStringLiteral("[MVS] 保存%1深度预览失败: %2")
@@ -2992,9 +3077,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     if (saveRawDepth)
     {
         const auto rawStart = Clock::now();
-        const std::string depthPath =
-            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + ".bin";
-        if (!writeFastDepthMatStorage(depthPath, *result.depthMap, &saveErr))
+        if (!writeFastDepthMatStorage(rawDepthPath, *result.depthMap, &saveErr))
         {
             rawSaved = false;
             LOG_WARN(QStringLiteral("[MVS] 保存%1原始深度失败: %2")
@@ -3005,35 +3088,86 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
     }
 
     double confidenceMs = 0.0;
+    bool confidenceSaved = false;
     if (saveRawDepth && result.confidence && !result.confidence->empty())
     {
         const auto confidenceStart = Clock::now();
-        const std::string confPath =
-            m_config.intermediateDir + "/depth_" + std::to_string(frameIndex) + "_conf.bin";
-        if (!writeFastDepthMatStorage(confPath, *result.confidence, &saveErr))
+        if (!writeFastDepthMatStorage(rawConfidencePath, *result.confidence, &saveErr))
         {
             LOG_WARN(QStringLiteral("[MVS] 保存%1置信图失败: %2")
                          .arg(stageLabel, QString::fromStdString(saveErr)));
         }
+        else
+        {
+            confidenceSaved = true;
+        }
         confidenceMs = elapsedMs(confidenceStart, Clock::now());
     }
 
-    LOG_INFO(QStringLiteral("[MVS] 保存%1深度产物耗时: frame=%2 preview=%3 ms raw=%4 ms confidence=%5 ms total=%6 ms")
+    bool maskSaved = false;
+    double maskMs = 0.0;
+    if (saveRawDepth)
+    {
+        const auto maskStart = Clock::now();
+        cv::Mat validMask = (*result.depthMap > 0.0f);
+        if (!validMask.empty())
+        {
+            maskSaved = cv::imwrite(validMaskPath, validMask);
+            if (!maskSaved)
+            {
+                LOG_WARN(QStringLiteral("[MVS] 保存%1有效掩码失败: %2")
+                             .arg(stageLabel, QString::fromStdString(validMaskPath)));
+            }
+        }
+        maskMs = elapsedMs(maskStart, Clock::now());
+    }
+
+    LOG_INFO(QStringLiteral("[MVS] 保存%1深度产物耗时: frame=%2 preview=%3 ms raw=%4 ms confidence=%5 ms mask=%6 ms total=%7 ms")
                  .arg(stageLabel)
                  .arg(frameIndex)
                  .arg(previewMs, 0, 'f', 1)
                  .arg(rawMs, 0, 'f', 1)
                  .arg(confidenceMs, 0, 'f', 1)
+                 .arg(maskMs, 0, 'f', 1)
                  .arg(elapsedMs(saveStart, Clock::now()), 0, 'f', 1));
 
     if (previewSaved && rawSaved && savePreviewPng)
     {
-        const std::string pngPath = m_outputDir + "/depth_" + std::to_string(frameIndex) + ".png";
         emit depthMapSaved(
             QString::fromStdString(pngPath),
             result.depthMap->cols,
             result.depthMap->rows,
             QString::fromStdString(m_views[frameIndex].imagePath));
+
+        QJsonArray sourceImages;
+        QJsonArray sourceIndices;
+        for (const int sourceIndex : result.sourceViewIndices)
+        {
+            if (sourceIndex < 0 || sourceIndex >= static_cast<int>(m_views.size()))
+            {
+                continue;
+            }
+            sourceIndices.append(sourceIndex);
+            sourceImages.append(QString::fromStdString(m_views[sourceIndex].imagePath));
+        }
+
+        QJsonObject artifact;
+        artifact[QStringLiteral("depth_png")] = QString::fromStdString(pngPath);
+        artifact[QStringLiteral("raw_depth_path")] = saveRawDepth ? QString::fromStdString(rawDepthPath) : QString();
+        artifact[QStringLiteral("raw_confidence_path")] =
+            confidenceSaved ? QString::fromStdString(rawConfidencePath) : QString();
+        artifact[QStringLiteral("valid_mask_path")] = maskSaved ? QString::fromStdString(validMaskPath) : QString();
+        artifact[QStringLiteral("ref_image")] = QString::fromStdString(m_views[frameIndex].imagePath);
+        artifact[QStringLiteral("source_images")] = sourceImages;
+        artifact[QStringLiteral("source_indices")] = sourceIndices;
+        artifact[QStringLiteral("status")] = QStringLiteral("completed");
+        artifact[QStringLiteral("stage")] = stageLabel;
+        artifact[QStringLiteral("device")] = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
+        artifact[QStringLiteral("elapsed_ms")] = result.elapsedMs;
+        artifact[QStringLiteral("grid_width")] = result.depthMap->cols;
+        artifact[QStringLiteral("grid_height")] = result.depthMap->rows;
+        artifact[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
+        emit depthMapArtifactSaved(artifact);
     }
 
     return previewSaved && rawSaved;
@@ -3055,6 +3189,7 @@ void DepthMapGenerator::runInBackground()
     // ── 预加载所有图像（一次性磁盘 I/O，后续全从内存读取）────────────────────
     emit progressChanged(QString("预加载 %1 张图像...").arg(NV), 0.f);
     preloadImages();
+    refreshViewImageDimensionsFromCache();
     if (m_cancelled.load())
     {
         clearFrameCaches();
@@ -3357,6 +3492,11 @@ void DepthMapGenerator::runInBackground()
                 break;
             }
 
+            const auto frameEnd = std::chrono::steady_clock::now();
+            const double elapsedMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
+            res.device = useGpu ? "GPU" : "CPU";
+            res.elapsedMs = elapsedMs;
+
             DepthFrameResult storedResult = res;
             if (!keepDepthFramesInMemory.load())
             {
@@ -3366,8 +3506,6 @@ void DepthMapGenerator::runInBackground()
                 std::lock_guard<std::mutex> lock(depthFramesMutex);
                 m_depthFrames[i] = storedResult;
             }
-            const auto frameEnd = std::chrono::steady_clock::now();
-            const double elapsedMs = std::chrono::duration<double, std::milli>(frameEnd - frameStart).count();
 
             if (!res.success)
             {

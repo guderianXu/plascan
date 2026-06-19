@@ -61,6 +61,7 @@ private:
     QJsonObject normalizeMeta(const QJsonObject &meta) const;
     QStandardItem *createSection(const QString &title, int count);
     void appendItemRow(QStandardItem *parent, const QString &name, const QString &path, const QString &storage);
+    void sortSectionChildrenByFileName(QStandardItem *section);
     QString resolveResourcePath(const QString &resourcePath) const;
 
     QTreeView *m_view{};

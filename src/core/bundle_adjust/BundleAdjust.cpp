@@ -75,6 +75,98 @@ bool projectPoint(const Camera &cam, const std::array<double, 3> &X, double uv[2
     return cam.projectWorldPoint(world, uv);
 }
 
+std::array<double, 9> relativeRotationCurrentToPrior(const std::array<double, 9> &current,
+                                                     const std::array<double, 9> &prior)
+{
+    std::array<double, 9> relative{};
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            double sum = 0.0;
+            for (int k = 0; k < 3; ++k)
+            {
+                sum += current[r * 3 + k] * prior[c * 3 + k];
+            }
+            relative[r * 3 + c] = sum;
+        }
+    }
+    return relative;
+}
+
+std::array<double, 3> rotationLogVector(const std::array<double, 9> &rotation)
+{
+    const double trace = rotation[0] + rotation[4] + rotation[8];
+    const double cosAngle = std::clamp(0.5 * (trace - 1.0), -1.0, 1.0);
+    const double angle = std::acos(cosAngle);
+    const std::array<double, 3> vee{{
+        rotation[7] - rotation[5],
+        rotation[2] - rotation[6],
+        rotation[3] - rotation[1],
+    }};
+
+    if (angle < 1e-10)
+    {
+        return {{0.5 * vee[0], 0.5 * vee[1], 0.5 * vee[2]}};
+    }
+
+    const double sinAngle = std::sin(angle);
+    if (std::abs(sinAngle) < 1e-10)
+    {
+        return {{0.0, 0.0, 0.0}};
+    }
+
+    const double scale = angle / (2.0 * sinAngle);
+    return {{scale * vee[0], scale * vee[1], scale * vee[2]}};
+}
+
+const BACameraPosePrior *cameraPosePriorForIndex(const BAOptions &opt, int cameraIndex)
+{
+    if (cameraIndex < 0 || cameraIndex >= static_cast<int>(opt.cameraPosePriors.size()))
+    {
+        return nullptr;
+    }
+    const BACameraPosePrior &prior = opt.cameraPosePriors[static_cast<size_t>(cameraIndex)];
+    return prior.enabled ? &prior : nullptr;
+}
+
+std::array<double, 6> cameraPosePriorResidual(const Camera &cam,
+                                              const BACameraPosePrior &prior)
+{
+    std::array<double, 6> residual{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
+    const double rotationSigmaRad = prior.rotationSigmaDegrees * M_PI / 180.0;
+    if (rotationSigmaRad > 1e-12)
+    {
+        const auto relativeRotation =
+            relativeRotationCurrentToPrior(cam.cameraToWorldRotation(), prior.cameraToWorldRotation);
+        const auto rotationResidual = rotationLogVector(relativeRotation);
+        residual[0] = rotationResidual[0] / rotationSigmaRad;
+        residual[1] = rotationResidual[1] / rotationSigmaRad;
+        residual[2] = rotationResidual[2] / rotationSigmaRad;
+    }
+
+    if (prior.positionSigmaMeters > 1e-12)
+    {
+        const auto center = cam.cameraCenter();
+        residual[3] = (center[0] - prior.cameraCenter[0]) / prior.positionSigmaMeters;
+        residual[4] = (center[1] - prior.cameraCenter[1]) / prior.positionSigmaMeters;
+        residual[5] = (center[2] - prior.cameraCenter[2]) / prior.positionSigmaMeters;
+    }
+    return residual;
+}
+
+double cameraPosePriorResidualNorm(const Camera &cam,
+                                   const BACameraPosePrior &prior)
+{
+    const auto residual = cameraPosePriorResidual(cam, prior);
+    double sum2 = 0.0;
+    for (const double value : residual)
+    {
+        sum2 += value * value;
+    }
+    return std::sqrt(sum2);
+}
+
 /**
  * @brief 自实现带部分主元高斯-约尔当消元，求解小型线性系统 Ax = b。
  *
@@ -461,7 +553,8 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams, const BATrack &
 /// @brief 计算单台相机在所有观测上的重投影 RMS。
 static double computeCameraCost(const Camera &cam, int cameraIndex,
                                const std::vector<BATrack> &tracks,
-                               const std::vector<BARefinedPoint> &points)
+                               const std::vector<BARefinedPoint> &points,
+                               const BAOptions &opt)
 {
     double sum2 = 0.0;
     int cnt = 0;
@@ -474,6 +567,19 @@ static double computeCameraCost(const Camera &cam, int cameraIndex,
             double du = uv[0] - obs.u, dv = uv[1] - obs.v;
             sum2 += du * du + dv * dv;
             cnt += 2;
+        }
+    }
+
+    if (const BACameraPosePrior *prior = cameraPosePriorForIndex(opt, cameraIndex))
+    {
+        const auto residual = cameraPosePriorResidual(cam, *prior);
+        const double norm = cameraPosePriorResidualNorm(cam, *prior);
+        const double w = std::max(0.0, opt.cameraPosePriorWeight)
+            * huberWeight(norm, opt.cameraPosePriorHuberDelta);
+        for (const double value : residual)
+        {
+            sum2 += w * value * value;
+            ++cnt;
         }
     }
     return (cnt > 0) ? std::sqrt(sum2 / cnt) : 0.0;
@@ -489,7 +595,7 @@ bool optimizeOneCamera(Camera *cam,
 
     bool anyUpdated = false;
     double lambda = opt.damping;  // 自适应 LM 阻尼
-    double currentCost = computeCameraCost(*cam, cameraIndex, tracks, points);
+    double currentCost = computeCameraCost(*cam, cameraIndex, tracks, points, opt);
     const double eps = std::max(opt.finiteDiffEps, 1e-7);
 
     for (int iter = 0; iter < std::max(1, opt.maxCameraIterations); ++iter) {
@@ -539,6 +645,56 @@ bool optimizeOneCamera(Camera *cam,
             }
         }
 
+        if (const BACameraPosePrior *prior = cameraPosePriorForIndex(opt, cameraIndex))
+        {
+            const auto residual = cameraPosePriorResidual(*cam, *prior);
+            const double residualNorm = cameraPosePriorResidualNorm(*cam, *prior);
+            const double w = std::max(0.0, opt.cameraPosePriorWeight)
+                * huberWeight(residualNorm, opt.cameraPosePriorHuberDelta);
+
+            if (w > 0.0)
+            {
+                double J[6][6] = {};
+                for (int k = 0; k < 6; ++k)
+                {
+                    Camera tmpP = *cam;
+                    Camera tmpM = *cam;
+                    double deltaP[6] = {0, 0, 0, 0, 0, 0};
+                    double deltaM[6] = {0, 0, 0, 0, 0, 0};
+                    deltaP[k] = +eps;
+                    deltaM[k] = -eps;
+                    tmpP.applyDeltaPose(deltaP);
+                    tmpM.applyDeltaPose(deltaM);
+                    const auto rp = cameraPosePriorResidual(tmpP, *prior);
+                    const auto rm = cameraPosePriorResidual(tmpM, *prior);
+                    for (int row = 0; row < 6; ++row)
+                    {
+                        J[row][k] = (rp[static_cast<size_t>(row)] - rm[static_cast<size_t>(row)]) / (2.0 * eps);
+                    }
+                }
+
+                for (int a = 0; a < 6; ++a)
+                {
+                    for (int b = 0; b < 6; ++b)
+                    {
+                        double value = 0.0;
+                        for (int row = 0; row < 6; ++row)
+                        {
+                            value += J[row][a] * J[row][b];
+                        }
+                        H[a * 6 + b] += w * value;
+                    }
+                    double grad = 0.0;
+                    for (int row = 0; row < 6; ++row)
+                    {
+                        grad += J[row][a] * residual[static_cast<size_t>(row)];
+                    }
+                    g[a] += w * grad;
+                }
+                used += 3;
+            }
+        }
+
         if (used < 3) break;
 
         // LM 阻尼：加 lambda * diag(H)
@@ -556,7 +712,7 @@ bool optimizeOneCamera(Camera *cam,
         double delta[6] = {dx[0], dx[1], dx[2], dx[3], dx[4], dx[5]};
         tmpCam.applyDeltaPose(delta);
 
-        double newCost = computeCameraCost(tmpCam, cameraIndex, tracks, points);
+        double newCost = computeCameraCost(tmpCam, cameraIndex, tracks, points, opt);
 
         // 步长接受检查
         if (std::isfinite(newCost) && (newCost < currentCost + 1e-12 || !std::isfinite(currentCost))) {

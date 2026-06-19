@@ -14,6 +14,9 @@ struct LaserAssociationOptions
 {
     double maxDistanceMeters = 1.0;
     double weight = 1.0;
+    bool enableQualityWeighting = false;
+    double maxCurvatureForWeighting = 0.2;
+    double minQualityWeight = 0.05;
 };
 
 struct LaserAssociationSummary

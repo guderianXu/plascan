@@ -684,6 +684,8 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         1,
         extraSettings.value(QStringLiteral("laser_max_samples")).toInt(500000),
         10000000);
+    opts.laserUseMissingNormalsAsHeightPlanes =
+        extraSettings.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool(false);
     opts.laserWeight = qMax(
         0.0,
         extraSettings.value(QStringLiteral("laser_weight")).toDouble(1.0));

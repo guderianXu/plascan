@@ -108,6 +108,35 @@ TEST(LaserConstraintMapTest, LoadsAsciiPlyAndFiltersInvalidPlaneSamples)
     EXPECT_NEAR(distance, std::sqrt(0.05 * 0.05 + 0.20 * 0.20), 1e-12);
 }
 
+TEST(LaserConstraintMapTest, LoadsAsciiPlyWithoutNormalsAsHeightPlanesWhenExplicitlyEnabled)
+{
+    const auto path = tempPath("plascan_lidar_ascii_height_plane_test.ply");
+    writeTextFile(path,
+                  "ply\n"
+                  "format ascii 1.0\n"
+                  "element vertex 2\n"
+                  "property float x\n"
+                  "property float y\n"
+                  "property float z\n"
+                  "end_header\n"
+                  "0 0 12.5\n"
+                  "2 0 13.0\n");
+
+    xjw::lidar::LaserConstraintMapOptions options;
+    options.voxelSizeMeters = 0.0;
+    options.useMissingNormalsAsHeightPlanes = true;
+
+    xjw::lidar::LaserConstraintMap map;
+    std::string error;
+    ASSERT_TRUE(map.loadPly(path.string(), options, &error)) << error;
+
+    ASSERT_EQ(map.size(), 2u);
+    EXPECT_NEAR(map.samples().front().normal[0], 0.0, 1e-12);
+    EXPECT_NEAR(map.samples().front().normal[1], 0.0, 1e-12);
+    EXPECT_NEAR(map.samples().front().normal[2], 1.0, 1e-12);
+    EXPECT_NEAR(map.samples().front().curvature, 0.0, 1e-12);
+}
+
 TEST(LaserConstraintMapTest, VoxelDownsampleKeepsOneAveragedPlanePerCell)
 {
     const auto path = tempPath("plascan_lidar_voxel_test.ply");

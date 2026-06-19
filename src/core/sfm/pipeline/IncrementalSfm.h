@@ -272,6 +272,14 @@ class IncrementalSfm
      */
     bool getCamera(ImageId imageId, Camera &cam) const;
 
+    std::vector<BACameraPosePrior> buildCameraPosePriorsFromInputCameras(
+        const std::vector<ImageId> &imageIds) const;
+
+    void alignReconstructionToKnownPosePriors(const std::vector<ImageId> &imageIds,
+                                              std::vector<Camera> *baCameras);
+
+    void refineKnownCameraPosesWithPnp();
+
     /**
      * @brief 使用输入相机外参执行固定相机位姿三角化。
      *

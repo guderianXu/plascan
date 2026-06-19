@@ -55,6 +55,7 @@
 #include <array>
 #include <atomic>
 #include <cmath>
+#include <limits>
 #include <mutex>
 #include <stdexcept>
 #include <thread>
@@ -1175,6 +1176,287 @@ QString formatSfmGraphSummary(const SfmMatchGraphStats &stats)
         .arg(stats.largestComponentSize)
         .arg(stats.isolatedNodeCount)
         .arg(formatSfmComponentSizes(stats.componentSizes));
+}
+
+QJsonArray intVectorToJsonArray(const QVector<int> &values)
+{
+    QJsonArray array;
+    for (const int value : values)
+    {
+        array.append(value);
+    }
+    return array;
+}
+
+QJsonObject sfmGraphStatsToJson(const SfmMatchGraphStats &stats)
+{
+    QJsonObject object;
+    object[QStringLiteral("node_count")] = stats.nodeCount;
+    object[QStringLiteral("edge_count")] = stats.edgeCount;
+    object[QStringLiteral("component_count")] = stats.componentCount;
+    object[QStringLiteral("largest_component_size")] = stats.largestComponentSize;
+    object[QStringLiteral("isolated_node_count")] = stats.isolatedNodeCount;
+    object[QStringLiteral("component_sizes")] = intVectorToJsonArray(stats.componentSizes);
+    object[QStringLiteral("summary")] = formatSfmGraphSummary(stats);
+    return object;
+}
+
+QStringList sfmPairPlanSourceTypes(const SfmPairPlan &pairPlan)
+{
+    QStringList sourceTypes;
+    if (pairPlan.usedCameraOverlapPairs)
+    {
+        sourceTypes.append(QStringLiteral("known_camera_overlap"));
+    }
+    if (pairPlan.usedSpatialCameraCenters)
+    {
+        sourceTypes.append(QStringLiteral("known_camera_spatial_neighbors"));
+    }
+    if (pairPlan.knownCameraPairWindow > 0)
+    {
+        sourceTypes.append(QStringLiteral("sequence_window"));
+    }
+    if (!pairPlan.restrictPairs)
+    {
+        sourceTypes.append(QStringLiteral("exhaustive"));
+    }
+    if (sourceTypes.isEmpty())
+    {
+        sourceTypes.append(pairPlan.autoRestricted
+            ? QStringLiteral("auto_restricted")
+            : QStringLiteral("manual_restricted"));
+    }
+    return sourceTypes;
+}
+
+QJsonObject sfmPairPlanToJson(const SfmPairPlan &pairPlan)
+{
+    QJsonObject object;
+    object[QStringLiteral("restrict_pairs")] = pairPlan.restrictPairs;
+    object[QStringLiteral("auto_restricted")] = pairPlan.autoRestricted;
+    object[QStringLiteral("all_pair_count")] = pairPlan.allPairCount;
+    object[QStringLiteral("planned_pair_count")] =
+        pairPlan.restrictPairs ? pairPlan.allowedPairKeys.size() : pairPlan.allPairCount;
+    object[QStringLiteral("known_camera_pair_window")] = pairPlan.knownCameraPairWindow;
+    object[QStringLiteral("known_camera_spatial_neighbor_count")] = pairPlan.knownCameraSpatialNeighborCount;
+    object[QStringLiteral("known_camera_overlap_pair_count")] = pairPlan.knownCameraOverlapPairCount;
+    object[QStringLiteral("used_camera_overlap_pairs")] = pairPlan.usedCameraOverlapPairs;
+    object[QStringLiteral("used_spatial_camera_centers")] = pairPlan.usedSpatialCameraCenters;
+    object[QStringLiteral("source_types")] = QJsonArray::fromStringList(sfmPairPlanSourceTypes(pairPlan));
+    return object;
+}
+
+QString sfmPairStatus(const PairMatchData &pair, const QSet<QString> &failedPairKeys)
+{
+    const QString pairKey = QString::number(pair.idA) + QStringLiteral("\n") + QString::number(pair.idB);
+    if (failedPairKeys.contains(pairKey))
+    {
+        return QStringLiteral("failed_geometric_verification");
+    }
+    if (pair.skippedByNoMatchCache)
+    {
+        return QStringLiteral("skipped_no_match_cache");
+    }
+    if (!pair.loaded)
+    {
+        return QStringLiteral("pending");
+    }
+    if (pair.matches.empty())
+    {
+        return QStringLiteral("empty_loaded_match");
+    }
+    return QStringLiteral("matched");
+}
+
+QJsonObject sfmPairToJson(const PairMatchData &pair,
+                          const QMap<ImageId, QString> &idToPath,
+                          const QSet<QString> &failedPairKeys,
+                          const QStringList &sourceTypes)
+{
+    QJsonObject object;
+    const QString imageA = idToPath.value(pair.idA);
+    const QString imageB = idToPath.value(pair.idB);
+    object[QStringLiteral("image_a")] = imageA;
+    object[QStringLiteral("image_b")] = imageB;
+    object[QStringLiteral("pair_key")] = canonicalPairKey(imageA, imageB);
+    object[QStringLiteral("source_types")] = QJsonArray::fromStringList(sourceTypes);
+    object[QStringLiteral("status")] = sfmPairStatus(pair, failedPairKeys);
+    object[QStringLiteral("match_count")] = static_cast<int>(pair.matches.size());
+    object[QStringLiteral("geometric_inlier_count")] = static_cast<int>(pair.matches.size());
+    object[QStringLiteral("loaded")] = pair.loaded;
+    object[QStringLiteral("skipped_by_no_match_cache")] = pair.skippedByNoMatchCache;
+    if (object.value(QStringLiteral("status")).toString() == QLatin1String("failed_geometric_verification"))
+    {
+        object[QStringLiteral("failure_reason")] = QStringLiteral("geometric_inliers_below_threshold");
+    }
+    else if (pair.skippedByNoMatchCache)
+    {
+        object[QStringLiteral("failure_reason")] = QStringLiteral("cached_no_match_pair");
+    }
+    else if (!pair.loaded)
+    {
+        object[QStringLiteral("failure_reason")] = QStringLiteral("match_file_missing_or_not_generated");
+    }
+    else if (pair.matches.empty())
+    {
+        object[QStringLiteral("failure_reason")] = QStringLiteral("loaded_match_file_empty");
+    }
+    return object;
+}
+
+QJsonObject buildSfmPairDiagnosticsJson(const QString &label,
+                                        const QVector<ImageId> &validIds,
+                                        const QVector<PairMatchData> &pairs,
+                                        const SfmPairPlan &pairPlan,
+                                        const QMap<ImageId, QString> &idToPath,
+                                        const QVector<FailedPairRecord> &failedPairs)
+{
+    constexpr int kPairSampleLimit = 500;
+    QSet<QString> failedPairKeysByPath;
+    for (const FailedPairRecord &failedPair : failedPairs)
+    {
+        const QString pairKey = canonicalPairKey(failedPair.imagePath0, failedPair.imagePath1);
+        if (!pairKey.isEmpty())
+        {
+            failedPairKeysByPath.insert(pairKey);
+        }
+    }
+
+    QSet<QString> failedPairKeysById;
+    for (const PairMatchData &pair : pairs)
+    {
+        const QString pathKey = canonicalPairKey(idToPath.value(pair.idA), idToPath.value(pair.idB));
+        if (failedPairKeysByPath.contains(pathKey))
+        {
+            failedPairKeysById.insert(QString::number(pair.idA) + QStringLiteral("\n") + QString::number(pair.idB));
+        }
+    }
+
+    const SfmMatchDiagnostics diagnostics =
+        analyzeSfmMatchDiagnostics(makeSfmDiagnosticImageIds(validIds), makeSfmDiagnosticPairs(pairs));
+
+    QJsonObject object;
+    object[QStringLiteral("label")] = label;
+    object[QStringLiteral("pair_plan")] = sfmPairPlanToJson(pairPlan);
+    object[QStringLiteral("total_pairs")] = diagnostics.totalPairs;
+    object[QStringLiteral("actual_match_pairs")] = diagnostics.actualMatchPairs;
+    object[QStringLiteral("no_match_cache_skipped_pairs")] = diagnostics.noMatchCacheSkippedPairs;
+    object[QStringLiteral("pending_pairs")] = diagnostics.pendingPairs;
+    object[QStringLiteral("empty_loaded_pairs")] = diagnostics.emptyLoadedPairs;
+    object[QStringLiteral("failed_pairs")] = failedPairs.size();
+    object[QStringLiteral("candidate_graph")] = sfmGraphStatsToJson(diagnostics.candidateGraph);
+    object[QStringLiteral("actual_match_graph")] = sfmGraphStatsToJson(diagnostics.actualMatchGraph);
+
+    QJsonArray pairSamples;
+    QJsonArray failedPairSamples;
+    QJsonArray pendingPairSamples;
+    QJsonArray skippedPairSamples;
+    const QStringList sourceTypes = sfmPairPlanSourceTypes(pairPlan);
+    for (const PairMatchData &pair : pairs)
+    {
+        const QJsonObject pairObject = sfmPairToJson(pair, idToPath, failedPairKeysById, sourceTypes);
+        const QString status = pairObject.value(QStringLiteral("status")).toString();
+        if (pairSamples.size() < kPairSampleLimit)
+        {
+            pairSamples.append(pairObject);
+        }
+        if (status == QLatin1String("failed_geometric_verification") && failedPairSamples.size() < kPairSampleLimit)
+        {
+            failedPairSamples.append(pairObject);
+        }
+        else if (status == QLatin1String("pending") && pendingPairSamples.size() < kPairSampleLimit)
+        {
+            pendingPairSamples.append(pairObject);
+        }
+        else if (status == QLatin1String("skipped_no_match_cache") && skippedPairSamples.size() < kPairSampleLimit)
+        {
+            skippedPairSamples.append(pairObject);
+        }
+    }
+    object[QStringLiteral("pair_samples")] = pairSamples;
+    object[QStringLiteral("failed_pair_samples")] = failedPairSamples;
+    object[QStringLiteral("pending_pair_samples")] = pendingPairSamples;
+    object[QStringLiteral("skipped_pair_samples")] = skippedPairSamples;
+    object[QStringLiteral("pair_sample_limit")] = kPairSampleLimit;
+    object[QStringLiteral("pair_samples_truncated")] = pairs.size() > kPairSampleLimit;
+    return object;
+}
+
+struct NumericSummary
+{
+    int count = 0;
+    double sum = 0.0;
+    double minValue = std::numeric_limits<double>::infinity();
+    double maxValue = -std::numeric_limits<double>::infinity();
+
+    void add(double value)
+    {
+        if (!std::isfinite(value))
+        {
+            return;
+        }
+        ++count;
+        sum += value;
+        minValue = std::min(minValue, value);
+        maxValue = std::max(maxValue, value);
+    }
+
+    QJsonObject toJson(const QString &unit) const
+    {
+        QJsonObject object;
+        object[QStringLiteral("count")] = count;
+        object[QStringLiteral("unit")] = unit;
+        if (count > 0)
+        {
+            object[QStringLiteral("mean")] = sum / static_cast<double>(count);
+            object[QStringLiteral("min")] = minValue;
+            object[QStringLiteral("max")] = maxValue;
+        }
+        return object;
+    }
+};
+
+double computeTrackMaxTriangulationAngleDeg(const SfmReconstruction &reconstruction,
+                                            const ScenePoint3D &point)
+{
+    double maxAngle = 0.0;
+    const auto &observations = point.track.elements;
+    for (std::size_t i = 0; i < observations.size(); ++i)
+    {
+        if (!reconstruction.hasCamera(observations[i].imageId))
+        {
+            continue;
+        }
+        const auto centerI = reconstruction.camera(observations[i].imageId).cameraCenter();
+        for (std::size_t j = i + 1; j < observations.size(); ++j)
+        {
+            if (!reconstruction.hasCamera(observations[j].imageId))
+            {
+                continue;
+            }
+            const auto centerJ = reconstruction.camera(observations[j].imageId).cameraCenter();
+            const double rayI[3] = {
+                point.xyz[0] - centerI[0],
+                point.xyz[1] - centerI[1],
+                point.xyz[2] - centerI[2],
+            };
+            const double rayJ[3] = {
+                point.xyz[0] - centerJ[0],
+                point.xyz[1] - centerJ[1],
+                point.xyz[2] - centerJ[2],
+            };
+            const double lenI = std::sqrt(rayI[0] * rayI[0] + rayI[1] * rayI[1] + rayI[2] * rayI[2]);
+            const double lenJ = std::sqrt(rayJ[0] * rayJ[0] + rayJ[1] * rayJ[1] + rayJ[2] * rayJ[2]);
+            if (lenI <= 1e-9 || lenJ <= 1e-9)
+            {
+                continue;
+            }
+            double cosAngle = (rayI[0] * rayJ[0] + rayI[1] * rayJ[1] + rayI[2] * rayJ[2]) / (lenI * lenJ);
+            cosAngle = std::clamp(cosAngle, -1.0, 1.0);
+            maxAngle = std::max(maxAngle, std::acos(cosAngle) * 180.0 / M_PI);
+        }
+    }
+    return maxAngle;
 }
 
 void logSfmMatchDiagnostics(const QString &label,
@@ -2614,6 +2896,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     }
 
     logSfmMatchDiagnostics(QStringLiteral("匹配完成"), validIds, allPairs);
+    result.sfmDiagnostics = buildSfmPairDiagnosticsJson(QStringLiteral("匹配完成"),
+                                                        validIds,
+                                                        allPairs,
+                                                        pairPlan,
+                                                        idToPath,
+                                                        result.failedPairs);
 
     // 2b. 统计有效匹配
     int loadedMatches = 0;
@@ -3029,6 +3317,66 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             }
         }
 
+        QMap<Point3DId, double> triangulationAngleByPoint;
+        {
+            NumericSummary trackLengthStats;
+            NumericSummary reprojErrorStats;
+            NumericSummary triAngleStats;
+            QJsonObject trackLengthHistogram;
+            int twoViewTrackCount = 0;
+            int multiViewTrackCount = 0;
+
+            for (Point3DId pid : recon->allPoint3DIds())
+            {
+                if (!recon->hasPoint3D(pid))
+                {
+                    continue;
+                }
+                const auto &pt = recon->point3D(pid);
+                const int trackLen = static_cast<int>(pt.track.length());
+                const double triAngle = computeTrackMaxTriangulationAngleDeg(*recon, pt);
+                triangulationAngleByPoint.insert(pid, triAngle);
+
+                trackLengthStats.add(trackLen);
+                reprojErrorStats.add(pt.error);
+                triAngleStats.add(triAngle);
+                const QString histKey = QString::number(trackLen);
+                trackLengthHistogram[histKey] = trackLengthHistogram.value(histKey).toInt() + 1;
+                if (trackLen == 2)
+                {
+                    ++twoViewTrackCount;
+                }
+                else if (trackLen >= 3)
+                {
+                    ++multiViewTrackCount;
+                }
+            }
+
+            QJsonObject sparseQuality;
+            sparseQuality[QStringLiteral("registered_image_count")] = result.numRegisteredImages;
+            sparseQuality[QStringLiteral("total_image_count")] = opts.images.size();
+            sparseQuality[QStringLiteral("point_count")] = result.numPoints3D;
+            sparseQuality[QStringLiteral("mean_reprojection_error_px")] = result.meanReprojError;
+            sparseQuality[QStringLiteral("track_length")] = trackLengthStats.toJson(QStringLiteral("observations"));
+            sparseQuality[QStringLiteral("track_length_histogram")] = trackLengthHistogram;
+            sparseQuality[QStringLiteral("two_view_track_count")] = twoViewTrackCount;
+            sparseQuality[QStringLiteral("multi_view_track_count")] = multiViewTrackCount;
+            sparseQuality[QStringLiteral("reprojection_error")] = reprojErrorStats.toJson(QStringLiteral("px"));
+            sparseQuality[QStringLiteral("triangulation_angle")] = triAngleStats.toJson(QStringLiteral("deg"));
+
+            QJsonObject baSummary;
+            baSummary[QStringLiteral("rms_before_px")] = result.baRmsBefore;
+            baSummary[QStringLiteral("rms_after_px")] = result.baRmsAfter;
+            baSummary[QStringLiteral("tracks_total")] = result.baTracksTotal;
+            baSummary[QStringLiteral("tracks_optimized")] = result.baTracksOptimized;
+            baSummary[QStringLiteral("tracks_filtered")] = result.baTracksFiltered;
+
+            QJsonObject diagnostics = result.sfmDiagnostics;
+            diagnostics[QStringLiteral("sparse_quality")] = sparseQuality;
+            diagnostics[QStringLiteral("ba_summary")] = baSummary;
+            result.sfmDiagnostics = diagnostics;
+        }
+
         // 4b. 导出稀疏点云（使用 plapoint::PointCloud 写 PLY 二进制）
         if (!outDir.isEmpty()) {
             const QString plyPath = QDir(outDir).filePath(QStringLiteral("sfm_sparse.ply"));
@@ -3086,7 +3434,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 QJsonObject pointObject;
                 pointObject[QStringLiteral("track_len")] = static_cast<int>(pt.track.length());
                 pointObject[QStringLiteral("rms_reproj_px")] = pt.error;
-                pointObject[QStringLiteral("min_tri_angle_deg")] = 0.0;
+                pointObject[QStringLiteral("triangulation_angle_deg")] = triangulationAngleByPoint.value(pid, 0.0);
+                pointObject[QStringLiteral("min_tri_angle_deg")] = triangulationAngleByPoint.value(pid, 0.0);
                 pointObject[QStringLiteral("point_xyz")] = QJsonArray{pt.xyz[0], pt.xyz[1], pt.xyz[2]};
                 pointsForQuality.append(pointObject);
             }
@@ -3125,6 +3474,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     QJsonObject{{QStringLiteral("points"), pointsForQuality},
                                 {QStringLiteral("operation"), QStringLiteral("workflow_aerial_triangulation")}},
                     result.qualityMetadata);
+                sidecarRoot[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
                 QFile sidecarFile(sidecarPath);
                 if (sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
                 {
@@ -3143,6 +3493,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                                 {QStringLiteral("source"), QStringLiteral("workflow_aerial_triangulation")},
                                 {QStringLiteral("operation"), QStringLiteral("workflow_aerial_triangulation")}},
                     result.qualityMetadata);
+                result.resultRecordExtra[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
                 LOG_INFO(QStringLiteral("SFM: 稀疏点云已保存 %1 个点（原始 %2 个）→ %3")
                     .arg(static_cast<int>(N)).arg(static_cast<int>(ptIds.size())).arg(plyPath));
             }

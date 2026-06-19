@@ -608,6 +608,49 @@ QWidget *WorkflowReportDialog::buildAtReportPage(const QJsonObject &r)
                                        QColor(140, 100, 200)));
     vl->addLayout(cards1);
 
+    const QJsonObject sfmDiag = r.value(QStringLiteral("sfm_diagnostics")).toObject();
+    if (!sfmDiag.isEmpty()) {
+        vl->addWidget(makeSeparator());
+
+        auto *diagBox = new QGroupBox(tr("匹配与注册诊断"));
+        diagBox->setStyleSheet(
+            "QGroupBox{background:white;border-radius:4px;border:1px solid #ddd;"
+            "font-weight:bold;padding-top:8px;}"
+            "QGroupBox::title{subcontrol-origin:margin;left:10px;}");
+        auto *diagLayout = new QGridLayout(diagBox);
+        diagLayout->setSpacing(8);
+
+        const QJsonObject candidateGraph = sfmDiag.value(QStringLiteral("candidate_graph")).toObject();
+        const QJsonObject actualGraph = sfmDiag.value(QStringLiteral("actual_match_graph")).toObject();
+        const QJsonObject sparseQuality = sfmDiag.value(QStringLiteral("sparse_quality")).toObject();
+        const QJsonObject pairPlan = sfmDiag.value(QStringLiteral("pair_plan")).toObject();
+        const QJsonArray sourceTypes = pairPlan.value(QStringLiteral("source_types")).toArray();
+        QStringList sourceLabels;
+        for (const QJsonValue &value : sourceTypes) sourceLabels.append(value.toString());
+
+        auto addDiag = [&](int row, int col, const QString &key, const QString &value) {
+            diagLayout->addWidget(makeKVLabel(key, value), row, col);
+        };
+        addDiag(0, 0, tr("候选对:"), fmtInt(sfmDiag.value(QStringLiteral("total_pairs")).toInt()));
+        addDiag(0, 1, tr("有效匹配对:"), fmtInt(sfmDiag.value(QStringLiteral("actual_match_pairs")).toInt()));
+        addDiag(1, 0, tr("待生成/缺失:"), fmtInt(sfmDiag.value(QStringLiteral("pending_pairs")).toInt()));
+        addDiag(1, 1, tr("无匹配负缓存:"), fmtInt(sfmDiag.value(QStringLiteral("no_match_cache_skipped_pairs")).toInt()));
+        addDiag(2, 0, tr("候选图分量:"), fmtInt(candidateGraph.value(QStringLiteral("component_count")).toInt()));
+        addDiag(2, 1, tr("匹配图分量:"), fmtInt(actualGraph.value(QStringLiteral("component_count")).toInt()));
+        addDiag(3, 0, tr("最大匹配分量:"), QStringLiteral("%1 / %2")
+                .arg(actualGraph.value(QStringLiteral("largest_component_size")).toInt())
+                .arg(actualGraph.value(QStringLiteral("node_count")).toInt()));
+        addDiag(3, 1, tr("配对来源:"), sourceLabels.isEmpty() ? QStringLiteral("—") : sourceLabels.join(QStringLiteral(", ")));
+
+        const QJsonObject triAngle = sparseQuality.value(QStringLiteral("triangulation_angle")).toObject();
+        if (!triAngle.isEmpty()) {
+            addDiag(4, 0, tr("平均三角角:"), QStringLiteral("%1°").arg(fmtNum(triAngle.value(QStringLiteral("mean")).toDouble(), 3)));
+            addDiag(4, 1, tr("多视 track:"), fmtInt(sparseQuality.value(QStringLiteral("multi_view_track_count")).toInt()));
+        }
+
+        vl->addWidget(diagBox);
+    }
+
     // ── 注册率弧形图 + BA 误差改善图 ─────────────────────────────────────
     auto *chartsRow = new QHBoxLayout;
     chartsRow->setSpacing(12);

@@ -24,12 +24,18 @@
 #include <QTextStream>
 
 #include <algorithm>
+#include <cmath>
 #include <cstdio>
 #include <string>
 #include <vector>
 
 namespace
 {
+
+constexpr double kMaxReprojectionRmsRegressionPx = 0.25;
+constexpr double kMaxReprojectionRmsRegressionPercent = 10.0;
+constexpr double kMaxOptimizedTrackDropPercent = 5.0;
+constexpr double kQualityGateEpsilon = 1e-9;
 
 QString toQString(const std::string &value)
 {
@@ -167,6 +173,7 @@ xjw::gui::BaServiceOptions makeServiceOptions(const QStringList &selectedImages,
                                               double laserVoxelSize,
                                               double laserMaxCurvature,
                                               int laserMaxSamples,
+                                              bool laserUseMissingNormalsAsHeightPlanes,
                                               double laserWeight,
                                               double laserHuberDelta,
                                               bool exportEvalPlot)
@@ -183,6 +190,7 @@ xjw::gui::BaServiceOptions makeServiceOptions(const QStringList &selectedImages,
     options.laserVoxelSizeMeters = laserVoxelSize;
     options.laserMaxCurvature = laserMaxCurvature;
     options.laserMaxSamples = laserMaxSamples;
+    options.laserUseMissingNormalsAsHeightPlanes = laserUseMissingNormalsAsHeightPlanes;
     options.laserWeight = laserWeight;
     options.laserHuberDeltaMeters = laserHuberDelta;
     options.exportEvalPlot = exportEvalPlot;
@@ -219,6 +227,95 @@ double jsonDouble(const QJsonObject &object, const QString &key)
     return object.value(key).toDouble(0.0);
 }
 
+int jsonInt(const QJsonObject &object, const QString &key)
+{
+    return object.value(key).toInt(0);
+}
+
+double percentIncrease(double before, double after)
+{
+    if (!(before > 0.0))
+    {
+        return after > before ? 100.0 : 0.0;
+    }
+    return std::max(0.0, (after - before) * 100.0 / before);
+}
+
+QJsonObject buildQualityGate(const QJsonObject &baseObj, const QJsonObject &laserObj)
+{
+    const QJsonObject laserSummary =
+        laserObj.value(QStringLiteral("laser_constraints_summary")).toObject();
+    const double baselineAfter = jsonDouble(baseObj, QStringLiteral("mean_rms_after"));
+    const double laserAfter = jsonDouble(laserObj, QStringLiteral("mean_rms_after"));
+    const double laserBeforeMeters = jsonDouble(laserSummary, QStringLiteral("laser_rms_before_m"));
+    const double laserAfterMeters = jsonDouble(laserSummary, QStringLiteral("laser_rms_after_m"));
+    const double laserReductionMeters = laserBeforeMeters - laserAfterMeters;
+    const int associatedTracks = jsonInt(laserSummary, QStringLiteral("associated_tracks"));
+    const int laserConstraintCount = jsonInt(laserSummary, QStringLiteral("laser_constraint_count"));
+    const int baselineOptimized = jsonInt(baseObj, QStringLiteral("optimized_count"));
+    const int laserOptimized = jsonInt(laserObj, QStringLiteral("optimized_count"));
+
+    const double reprojectionRegressionPx = std::max(0.0, laserAfter - baselineAfter);
+    const double reprojectionRegressionPercent = percentIncrease(baselineAfter, laserAfter);
+    const int optimizedTrackDrop = std::max(0, baselineOptimized - laserOptimized);
+    const double optimizedTrackDropPercent = baselineOptimized > 0
+        ? static_cast<double>(optimizedTrackDrop) * 100.0 / static_cast<double>(baselineOptimized)
+        : 0.0;
+
+    QJsonArray failureCodes;
+    QJsonArray failureReasons;
+    auto appendFailure = [&failureCodes, &failureReasons](const QString &code, const QString &reason)
+    {
+        failureCodes.append(code);
+        failureReasons.append(reason);
+    };
+
+    if (laserConstraintCount <= 0 || associatedTracks <= 0)
+    {
+        appendFailure(QStringLiteral("no_laser_constraints"),
+                      QStringLiteral("LiDAR BA did not keep any active laser constraints."));
+    }
+    if (laserReductionMeters <= 0.0)
+    {
+        appendFailure(QStringLiteral("laser_rms_not_reduced"),
+                      QStringLiteral("LiDAR point-to-plane RMS did not decrease."));
+    }
+    if (reprojectionRegressionPx > kMaxReprojectionRmsRegressionPx + kQualityGateEpsilon
+        || reprojectionRegressionPercent > kMaxReprojectionRmsRegressionPercent + kQualityGateEpsilon)
+    {
+        appendFailure(QStringLiteral("reprojection_rms_regressed"),
+                      QStringLiteral("LiDAR BA increased reprojection RMS beyond the acceptance threshold."));
+    }
+    if (optimizedTrackDropPercent > kMaxOptimizedTrackDropPercent + kQualityGateEpsilon)
+    {
+        appendFailure(QStringLiteral("optimized_tracks_dropped"),
+                      QStringLiteral("LiDAR BA optimized materially fewer tracks than the baseline run."));
+    }
+
+    QJsonObject thresholds;
+    thresholds[QStringLiteral("max_reprojection_rms_regression_px")] = kMaxReprojectionRmsRegressionPx;
+    thresholds[QStringLiteral("max_reprojection_rms_regression_percent")] =
+        kMaxReprojectionRmsRegressionPercent;
+    thresholds[QStringLiteral("max_optimized_track_drop_percent")] = kMaxOptimizedTrackDropPercent;
+
+    QJsonObject metrics;
+    metrics[QStringLiteral("reprojection_rms_regression_px")] = reprojectionRegressionPx;
+    metrics[QStringLiteral("reprojection_rms_regression_percent")] = reprojectionRegressionPercent;
+    metrics[QStringLiteral("optimized_track_drop")] = optimizedTrackDrop;
+    metrics[QStringLiteral("optimized_track_drop_percent")] = optimizedTrackDropPercent;
+
+    QJsonObject gate;
+    gate[QStringLiteral("passed")] = failureCodes.isEmpty();
+    gate[QStringLiteral("status")] = failureCodes.isEmpty()
+        ? QStringLiteral("pass")
+        : QStringLiteral("fail");
+    gate[QStringLiteral("failure_codes")] = failureCodes;
+    gate[QStringLiteral("failure_reasons")] = failureReasons;
+    gate[QStringLiteral("thresholds")] = thresholds;
+    gate[QStringLiteral("metrics")] = metrics;
+    return gate;
+}
+
 QJsonObject buildCompareJson(const QString &outputDir,
                              const xjw::gui::BaServiceResult &baseline,
                              const xjw::gui::BaServiceResult &laser)
@@ -245,6 +342,7 @@ QJsonObject buildCompareJson(const QString &outputDir,
         jsonDouble(laserObj, QStringLiteral("mean_rms_after")) - jsonDouble(baseObj, QStringLiteral("mean_rms_after"));
     compare[QStringLiteral("laser_constraints_summary")] =
         laserObj.value(QStringLiteral("laser_constraints_summary")).toObject();
+    compare[QStringLiteral("quality_gate")] = buildQualityGate(baseObj, laserObj);
     return compare;
 }
 
@@ -301,6 +399,8 @@ int main(int argc, char *argv[])
     bool force = false;
     bool abCompare = false;
     bool exportEvalPlot = false;
+    bool failOnQualityGate = false;
+    bool laserUseMissingNormalsAsHeightPlanes = false;
 
     double laserMaxDistance = 1.0;
     double laserVoxelSize = 0.0;
@@ -329,6 +429,9 @@ int main(int argc, char *argv[])
     app.add_flag("--export-eval-plot", exportEvalPlot, "导出 BA 评估 PNG；无头命令行默认关闭");
 
     app.add_option("--laser-cloud", laserCloudRaw, "带 normal_x/normal_y/normal_z 的 LiDAR PLY 点云");
+    app.add_flag("--laser-missing-normals-as-height-planes",
+                 laserUseMissingNormalsAsHeightPlanes,
+                 "将无 normal 字段的 LiDAR XYZ PLY 按水平高度面约束使用");
     app.add_option("--laser-max-distance", laserMaxDistance, "track 到 LiDAR 平面最大关联距离（米）");
     app.add_option("--laser-voxel-size", laserVoxelSize, "LiDAR 点云体素降采样尺寸（米），0 表示关闭");
     app.add_option("--laser-max-curvature", laserMaxCurvature, "允许参与约束的最大曲率");
@@ -336,6 +439,9 @@ int main(int argc, char *argv[])
     app.add_option("--laser-weight", laserWeight, "LiDAR 点到面残差权重");
     app.add_option("--laser-huber-delta", laserHuberDelta, "LiDAR 残差 Huber 阈值（米）");
     app.add_flag("--ab-compare", abCompare, "一次性运行 baseline 与 LiDAR BA，并写 ba_ab_compare.json");
+    app.add_flag("--fail-on-quality-gate",
+                 failOnQualityGate,
+                 "仅在 --ab-compare 下生效；LiDAR BA 质量门禁失败时写出对比 JSON 后返回非零");
 
     CLI11_PARSE(app, argc, argv);
 
@@ -398,7 +504,7 @@ int main(int argc, char *argv[])
         xjw::gui::BaServiceOptions baselineOptions = makeServiceOptions(
             selectedImages, baselineDir, threads, dryRun, baOptions,
             false, QString(), laserMaxDistance, laserVoxelSize, laserMaxCurvature,
-            laserMaxSamples, laserWeight, laserHuberDelta, exportEvalPlot);
+            laserMaxSamples, false, laserWeight, laserHuberDelta, exportEvalPlot);
         const xjw::gui::BaServiceResult baseline = runOneBa(
             baInput.cameras, baInput.tracks, baInput, baselineOptions);
         if (!baseline.success)
@@ -410,7 +516,11 @@ int main(int argc, char *argv[])
         xjw::gui::BaServiceOptions laserOptions = makeServiceOptions(
             selectedImages, laserDir, threads, dryRun, baOptions,
             true, laserCloud, laserMaxDistance, laserVoxelSize, laserMaxCurvature,
-            laserMaxSamples, laserWeight, laserHuberDelta, exportEvalPlot);
+            laserMaxSamples,
+            laserUseMissingNormalsAsHeightPlanes,
+            laserWeight,
+            laserHuberDelta,
+            exportEvalPlot);
         const xjw::gui::BaServiceResult laser = runOneBa(
             baInput.cameras, baInput.tracks, baInput, laserOptions);
         if (!laser.success)
@@ -420,15 +530,26 @@ int main(int argc, char *argv[])
         printRunSummary(QStringLiteral("laser"), laser);
 
         const QString comparePath = QDir(outputDir).filePath(QStringLiteral("ba_ab_compare.json"));
-        writeJsonFile(comparePath, buildCompareJson(outputDir, baseline, laser));
+        const QJsonObject compareJson = buildCompareJson(outputDir, baseline, laser);
+        writeJsonFile(comparePath, compareJson);
         printUtf8(stdout, QStringLiteral("A/B 对比已写入: %1").arg(comparePath));
+        if (failOnQualityGate
+            && !compareJson.value(QStringLiteral("quality_gate")).toObject().value(QStringLiteral("passed")).toBool(false))
+        {
+            printUtf8(stderr, QStringLiteral("错误: LiDAR BA 质量门禁失败，详情见: %1").arg(comparePath));
+            return cli::EXIT_ALGO_ERR;
+        }
         return cli::EXIT_OK;
     }
 
     xjw::gui::BaServiceOptions options = makeServiceOptions(
         selectedImages, outputDir, threads, dryRun, baOptions,
         enableLaser, laserCloud, laserMaxDistance, laserVoxelSize, laserMaxCurvature,
-        laserMaxSamples, laserWeight, laserHuberDelta, exportEvalPlot);
+        laserMaxSamples,
+        laserUseMissingNormalsAsHeightPlanes,
+        laserWeight,
+        laserHuberDelta,
+        exportEvalPlot);
     const xjw::gui::BaServiceResult result = runOneBa(baInput.cameras, baInput.tracks, baInput, options);
     if (!result.success)
     {

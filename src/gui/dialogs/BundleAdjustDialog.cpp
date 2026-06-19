@@ -62,6 +62,7 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
         m_laserVoxelSizeSpin = ui.m_laserVoxelSizeSpin;
         m_laserMaxCurvatureSpin = ui.m_laserMaxCurvatureSpin;
         m_laserMaxSamplesSpin = ui.m_laserMaxSamplesSpin;
+        m_laserMissingNormalsAsHeightPlanesCheck = ui.m_laserMissingNormalsAsHeightPlanesCheck;
         m_laserWeightSpin = ui.m_laserWeightSpin;
         m_laserHuberDeltaSpin = ui.m_laserHuberDeltaSpin;
         m_exportTsaiCheck = ui.m_exportTsaiCheck;
@@ -127,6 +128,10 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
                 &BundleAdjustDialog::emitSettingsNow);
         connect(m_laserMaxSamplesSpin,
                 QOverload<int>::of(&QSpinBox::valueChanged),
+                this,
+                &BundleAdjustDialog::emitSettingsNow);
+        connect(m_laserMissingNormalsAsHeightPlanesCheck,
+                &QCheckBox::stateChanged,
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
         connect(m_laserWeightSpin,
@@ -203,6 +208,7 @@ void BundleAdjustDialog::applySettings(const QJsonObject &settings)
     if (settings.contains(QStringLiteral("laser_voxel_size_m"))) m_laserVoxelSizeSpin->setValue(settings.value(QStringLiteral("laser_voxel_size_m")).toDouble());
     if (settings.contains(QStringLiteral("laser_max_curvature"))) m_laserMaxCurvatureSpin->setValue(settings.value(QStringLiteral("laser_max_curvature")).toDouble());
     if (settings.contains(QStringLiteral("laser_max_samples"))) m_laserMaxSamplesSpin->setValue(settings.value(QStringLiteral("laser_max_samples")).toInt());
+    if (settings.contains(QStringLiteral("laser_missing_normals_as_height_planes"))) m_laserMissingNormalsAsHeightPlanesCheck->setChecked(settings.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool());
     if (settings.contains(QStringLiteral("laser_weight"))) m_laserWeightSpin->setValue(settings.value(QStringLiteral("laser_weight")).toDouble());
     if (settings.contains(QStringLiteral("laser_huber_delta_m"))) m_laserHuberDeltaSpin->setValue(settings.value(QStringLiteral("laser_huber_delta_m")).toDouble());
     if (settings.contains(QStringLiteral("export_tsai"))) m_exportTsaiCheck->setChecked(settings.value(QStringLiteral("export_tsai")).toBool());
@@ -303,6 +309,8 @@ void BundleAdjustDialog::onRun()
     options[QStringLiteral("laser_voxel_size_m")] = m_laserVoxelSizeSpin->value();
     options[QStringLiteral("laser_max_curvature")] = m_laserMaxCurvatureSpin->value();
     options[QStringLiteral("laser_max_samples")] = m_laserMaxSamplesSpin->value();
+    options[QStringLiteral("laser_missing_normals_as_height_planes")] =
+        m_laserMissingNormalsAsHeightPlanesCheck->isChecked();
     options[QStringLiteral("laser_weight")] = m_laserWeightSpin->value();
     options[QStringLiteral("laser_huber_delta_m")] = m_laserHuberDeltaSpin->value();
     options[QStringLiteral("export_tsai")] = m_exportTsaiCheck->isChecked();
@@ -403,6 +411,7 @@ void BundleAdjustDialog::updateLaserControls()
         m_laserVoxelSizeSpin,
         m_laserMaxCurvatureSpin,
         m_laserMaxSamplesSpin,
+        m_laserMissingNormalsAsHeightPlanesCheck,
         m_laserWeightSpin,
         m_laserHuberDeltaSpin
     };
@@ -438,6 +447,8 @@ void BundleAdjustDialog::emitSettingsNow()
     settings[QStringLiteral("laser_voxel_size_m")] = m_laserVoxelSizeSpin->value();
     settings[QStringLiteral("laser_max_curvature")] = m_laserMaxCurvatureSpin->value();
     settings[QStringLiteral("laser_max_samples")] = m_laserMaxSamplesSpin->value();
+    settings[QStringLiteral("laser_missing_normals_as_height_planes")] =
+        m_laserMissingNormalsAsHeightPlanesCheck->isChecked();
     settings[QStringLiteral("laser_weight")] = m_laserWeightSpin->value();
     settings[QStringLiteral("laser_huber_delta_m")] = m_laserHuberDeltaSpin->value();
     settings[QStringLiteral("export_tsai")] = m_exportTsaiCheck->isChecked();

@@ -197,6 +197,7 @@ BaServiceResult BundleAdjustService::run(
         mapOptions.maxCurvature = opts.laserMaxCurvature;
         mapOptions.voxelSizeMeters = opts.laserVoxelSizeMeters;
         mapOptions.maxSamples = opts.laserMaxSamples;
+        mapOptions.useMissingNormalsAsHeightPlanes = opts.laserUseMissingNormalsAsHeightPlanes;
 
         xjw::lidar::LaserConstraintMap laserMap;
         std::string laserError;
@@ -210,7 +211,10 @@ BaServiceResult BundleAdjustService::run(
 
         xjw::lidar::LaserAssociationOptions associationOptions;
         associationOptions.maxDistanceMeters = opts.laserAssociationMaxDistanceMeters;
-        associationOptions.weight = opts.laserWeight;
+        associationOptions.weight = 1.0;
+        associationOptions.enableQualityWeighting = true;
+        associationOptions.maxCurvatureForWeighting = opts.laserMaxCurvature;
+        associationOptions.minQualityWeight = 0.05;
         laserAssociationSummary = xjw::lidar::attachLaserPlaneConstraints(laserMap, &tracks, associationOptions);
 
         baOptions.enableLaserPlaneConstraints = true;
@@ -270,6 +274,8 @@ BaServiceResult BundleAdjustService::run(
         optObj[QStringLiteral("laser_voxel_size_m")] = opts.laserVoxelSizeMeters;
         optObj[QStringLiteral("laser_max_curvature")] = opts.laserMaxCurvature;
         optObj[QStringLiteral("laser_max_samples")] = opts.laserMaxSamples;
+        optObj[QStringLiteral("laser_missing_normals_as_height_planes")] =
+            opts.laserUseMissingNormalsAsHeightPlanes;
         optObj[QStringLiteral("laser_weight")] = opts.laserWeight;
         optObj[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
         saveObj[QStringLiteral("options")] = optObj;
@@ -280,6 +286,8 @@ BaServiceResult BundleAdjustService::run(
         QJsonObject laserSummary;
         laserSummary[QStringLiteral("enabled")] = true;
         laserSummary[QStringLiteral("cloud_path")] = opts.laserConstraintCloudPath;
+        laserSummary[QStringLiteral("missing_normals_as_height_planes")] =
+            opts.laserUseMissingNormalsAsHeightPlanes;
         laserSummary[QStringLiteral("map_sample_count")] = laserMapSampleCount;
         laserSummary[QStringLiteral("total_tracks")] = laserAssociationSummary.totalTracks;
         laserSummary[QStringLiteral("associated_tracks")] = laserAssociationSummary.associatedTracks;

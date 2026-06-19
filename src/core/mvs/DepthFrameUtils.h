@@ -49,9 +49,16 @@ bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence = f
 bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireConfidence = false);
 
 StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projectMeta);
+xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(
+    const xjw::mvs::PositiveDepthCameraModel &camera,
+    double scaleX,
+    double scaleY);
+bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
+                                          int fusionMaxImageDim);
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
                                               const xjw::Camera &camera,
                                               float confidenceThreshold,
-                                              int viewCount);
+                                              int viewCount,
+                                              int fusionMaxImageDim = 0);
 
 } // namespace xjw::core::project

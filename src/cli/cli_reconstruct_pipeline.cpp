@@ -42,6 +42,7 @@
 
 #include <opencv2/core.hpp>
 #include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <algorithm>
 #include <chrono>
@@ -49,6 +50,7 @@
 #include <cmath>
 #include <cstdio>
 #include <functional>
+#include <iterator>
 #include <limits>
 #include <memory>
 #include <unordered_map>
@@ -1101,9 +1103,90 @@ bool loadCvMatStorage(const QString &path, cv::Mat *matrix, QString *error)
     return result.ok;
 }
 
+bool loadFusionFrameFromDepthMap(const QString &mvsDir,
+                                 const std::vector<xjw::mvs::CameraView> &views,
+                                 const xjw::mvs::FusionConfig &fusionConfig,
+                                 int frameIndex,
+                                 int fusionMaxImageDim,
+                                 xjw::mvs::FusionFrameInput *frame,
+                                 QString *error)
+{
+    if (!frame)
+    {
+        if (error) *error = QStringLiteral("内部错误：融合帧输出为空");
+        return false;
+    }
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(views.size()))
+    {
+        if (error) *error = QStringLiteral("融合帧索引越界: %1").arg(frameIndex);
+        return false;
+    }
+
+    const QDir dir(mvsDir);
+    const QString depthPngPath = dir.filePath(QStringLiteral("depth_%1.png").arg(frameIndex));
+    QString depthPath = xjw::core::project::rawDepthStoragePath(depthPngPath);
+    if (!QFileInfo::exists(depthPath))
+    {
+        depthPath = dir.filePath(QStringLiteral("depth_%1.yml.gz").arg(frameIndex));
+    }
+
+    cv::Mat depth;
+    if (!loadCvMatStorage(depthPath, &depth, error))
+    {
+        return false;
+    }
+
+    cv::Mat confidence;
+    QString confPath = xjw::core::project::rawConfidenceStoragePath(depthPngPath);
+    if (!QFileInfo::exists(confPath))
+    {
+        confPath = dir.filePath(QStringLiteral("depth_%1_conf.yml.gz").arg(frameIndex));
+    }
+    if (QFileInfo::exists(confPath))
+    {
+        QString confError;
+        if (!loadCvMatStorage(confPath, &confidence, &confError))
+        {
+            std::fprintf(stderr, "  [MVS] 置信图读取失败，继续使用深度图: %s\n", qUtf8Printable(confError));
+        }
+    }
+
+    frame->cameraModel = views[static_cast<std::size_t>(frameIndex)].positiveDepthModel();
+    frame->imgW = depth.cols;
+    frame->imgH = depth.rows;
+    frame->imagePath = views[static_cast<std::size_t>(frameIndex)].imagePath;
+    frame->depthMap = std::move(depth);
+    frame->confidence = std::move(confidence);
+    const bool downsampled = xjw::core::project::downsampleFusionFrameForMaxDimension(
+        frame,
+        fusionMaxImageDim);
+    if (downsampled)
+    {
+        std::fprintf(stdout,
+                     "  [MVS] 融合帧 %d 降采样到 %dx%d (maxDim=%d)\n",
+                     frameIndex,
+                     frame->imgW,
+                     frame->imgH,
+                     fusionMaxImageDim);
+        std::fflush(stdout);
+    }
+
+    const xjw::mvs::DepthPostProcessStats postprocessStats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+            frame->depthMap,
+            frame->confidence,
+            fusionConfig,
+            frameIndex,
+            static_cast<int>(views.size()));
+
+    frame->depthPostprocess = postprocessStats;
+    return true;
+}
+
 bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
                                    const std::vector<xjw::mvs::CameraView> &views,
                                    const xjw::mvs::FusionConfig &fusionConfig,
+                                   int fusionMaxImageDim,
                                    std::vector<xjw::mvs::FusionFrameInput> *frames,
                                    QString *error)
 {
@@ -1115,56 +1198,205 @@ bool loadFusionFramesFromDepthMaps(const QString &mvsDir,
 
     frames->clear();
     frames->reserve(views.size());
-    const QDir dir(mvsDir);
 
     for (std::size_t index = 0; index < views.size(); ++index)
     {
-        const QString depthPngPath = dir.filePath(QStringLiteral("depth_%1.png").arg(index));
-        QString depthPath = xjw::core::project::rawDepthStoragePath(depthPngPath);
-        if (!QFileInfo::exists(depthPath))
-        {
-            depthPath = dir.filePath(QStringLiteral("depth_%1.yml.gz").arg(index));
-        }
-        cv::Mat depth;
-        if (!loadCvMatStorage(depthPath, &depth, error))
+        xjw::mvs::FusionFrameInput frame;
+        if (!loadFusionFrameFromDepthMap(mvsDir,
+                                         views,
+                                         fusionConfig,
+                                         static_cast<int>(index),
+                                         fusionMaxImageDim,
+                                         &frame,
+                                         error))
         {
             return false;
         }
-
-        cv::Mat confidence;
-        QString confPath = xjw::core::project::rawConfidenceStoragePath(depthPngPath);
-        if (!QFileInfo::exists(confPath))
-        {
-            confPath = dir.filePath(QStringLiteral("depth_%1_conf.yml.gz").arg(index));
-        }
-        if (QFileInfo::exists(confPath))
-        {
-            QString confError;
-            if (!loadCvMatStorage(confPath, &confidence, &confError))
-            {
-                std::fprintf(stderr, "  [MVS] 置信图读取失败，继续使用深度图: %s\n", qUtf8Printable(confError));
-            }
-        }
-
-        const xjw::mvs::DepthPostProcessStats postprocessStats =
-            xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
-                depth,
-                confidence,
-                fusionConfig,
-                static_cast<int>(index),
-                static_cast<int>(views.size()));
-
-        xjw::mvs::FusionFrameInput frame;
-        frame.cameraModel = views[index].positiveDepthModel();
-        frame.imgW = depth.cols;
-        frame.imgH = depth.rows;
-        frame.imagePath = views[index].imagePath;
-        frame.depthMap = std::move(depth);
-        frame.confidence = std::move(confidence);
-        frame.depthPostprocess = postprocessStats;
         frames->push_back(std::move(frame));
     }
 
+    return true;
+}
+
+std::vector<int> streamingFusionWindowIndices(int refIndex, int frameCount, int neighborCount)
+{
+    std::vector<int> indices;
+    if (refIndex < 0 || refIndex >= frameCount || frameCount <= 0)
+    {
+        return indices;
+    }
+
+    indices.push_back(refIndex);
+    const int maxNeighbors = std::min(std::max(1, neighborCount), frameCount - 1);
+    for (int offset = 1; static_cast<int>(indices.size()) < maxNeighbors + 1; ++offset)
+    {
+        const int left = refIndex - offset;
+        if (left >= 0)
+        {
+            indices.push_back(left);
+            if (static_cast<int>(indices.size()) >= maxNeighbors + 1)
+            {
+                break;
+            }
+        }
+
+        const int right = refIndex + offset;
+        if (right < frameCount)
+        {
+            indices.push_back(right);
+        }
+
+        if (left < 0 && right >= frameCount)
+        {
+            break;
+        }
+    }
+    return indices;
+}
+
+bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
+                                    const std::vector<xjw::mvs::CameraView> &views,
+                                    const xjw::gui::project::DenseGenerationSettings &denseSettings,
+                                    const xjw::mvs::DepthGenConfig &depthConfig,
+                                    std::vector<xjw::mvs::FusedPoint> *fusedCloud,
+                                    std::vector<xjw::mvs::DepthPostProcessStats> *depthPostprocessStats,
+                                    QString *error)
+{
+    if (!fusedCloud || !depthPostprocessStats)
+    {
+        if (error) *error = QStringLiteral("内部错误：MVS 流式融合输出为空");
+        return false;
+    }
+
+    fusedCloud->clear();
+    depthPostprocessStats->clear();
+    const int frameCount = static_cast<int>(views.size());
+    if (frameCount < 2)
+    {
+        if (error) *error = QStringLiteral("MVS 深度图融合至少需要 2 帧");
+        return false;
+    }
+
+    constexpr std::size_t kStreamingFusionPreVoxelThreshold = 2000000;
+    constexpr std::size_t kStreamingFusionTargetPoints = 1000000;
+    const int neighborCount = std::min(frameCount - 1, std::clamp(std::max(4, denseSettings.minViews * 3), 2, 16));
+    fusedCloud->reserve(std::min<std::size_t>(kStreamingFusionTargetPoints, 200000));
+
+    std::fprintf(stdout,
+                 "  [MVS  70%%] 流式深度图融合: frames=%d neighborWindow=%d\n",
+                 frameCount,
+                 neighborCount);
+    std::fflush(stdout);
+
+    for (int refIndex = 0; refIndex < frameCount; ++refIndex)
+    {
+        const auto windowStart = std::chrono::steady_clock::now();
+        const std::vector<int> windowIndices = streamingFusionWindowIndices(refIndex, frameCount, neighborCount);
+        std::vector<xjw::mvs::FusionFrameInput> frames;
+        frames.reserve(windowIndices.size());
+        for (const int frameIndex : windowIndices)
+        {
+            xjw::mvs::FusionFrameInput frame;
+            if (!loadFusionFrameFromDepthMap(mvsDir,
+                                             views,
+                                             depthConfig.fusion,
+                                             frameIndex,
+                                             denseSettings.fusionMaxImageDim,
+                                             &frame,
+                                             error))
+            {
+                return false;
+            }
+            frames.push_back(std::move(frame));
+        }
+
+        if (frames.size() < 2)
+        {
+            continue;
+        }
+
+        depthPostprocessStats->push_back(frames.front().depthPostprocess);
+
+        xjw::mvs::StereoFusionConfig fusionCfg;
+        fusionCfg.minNumPixels = std::max(1, denseSettings.minConsistentViews);
+        fusionCfg.maxReprojError = denseSettings.depthConsistency;
+        fusionCfg.maxDepthError = 0.05f;
+        fusionCfg.checkNumImages = std::min(neighborCount, static_cast<int>(frames.size()) - 1);
+        fusionCfg.workerCount = std::max(1, denseSettings.threads);
+        fusionCfg.useColor = true;
+        fusionCfg.colorCacheCapacity = 2;
+        fusionCfg.fuseOnlyFirstFrame = true;
+        if (frames.size() <= 2)
+        {
+            fusionCfg.minNumPixels = 1;
+            fusionCfg.maxDepthError = std::max(fusionCfg.maxDepthError, 0.08f);
+            fusionCfg.maxReprojError = std::max(fusionCfg.maxReprojError, 3.0f);
+        }
+
+        xjw::mvs::DepthMapFusion fusion(fusionCfg);
+        std::vector<xjw::mvs::FusedPoint> batchPoints;
+        std::string fuseErr;
+        const bool ok = fusion.fuse(frames,
+                                    batchPoints,
+                                    [refIndex, frameCount](const std::string &stage, float ratio) {
+                                        std::fprintf(stdout,
+                                                     "  [MVS %3d%%] 流式深度图融合 %d/%d: %s\n",
+                                                     70 + static_cast<int>(
+                                                              ((static_cast<float>(refIndex) + ratio) /
+                                                               static_cast<float>(std::max(1, frameCount))) * 20.0f),
+                                                     refIndex + 1,
+                                                     frameCount,
+                                                     stage.c_str());
+                                        std::fflush(stdout);
+                                    },
+                                    &fuseErr);
+        if (!ok)
+        {
+            if (error) *error = QString::fromStdString(fuseErr);
+            return false;
+        }
+
+        fusedCloud->insert(fusedCloud->end(),
+                           std::make_move_iterator(batchPoints.begin()),
+                           std::make_move_iterator(batchPoints.end()));
+
+        if (fusedCloud->size() > kStreamingFusionPreVoxelThreshold)
+        {
+            const float leaf = adaptivePreSorVoxelSize(*fusedCloud, 0.005f);
+            const auto before = fusedCloud->size();
+            FusedVoxelDownsampleResult downsample =
+                voxelDownsampleFusedPointsToTarget(*fusedCloud, leaf, kStreamingFusionTargetPoints);
+            if (!downsample.points.empty())
+            {
+                *fusedCloud = std::move(downsample.points);
+                std::fprintf(stdout,
+                             "  [MVS  90%%] 流式融合预聚合 leaf=%.6f passes=%d points=%zu->%zu\n",
+                             downsample.leafSize,
+                             downsample.passes,
+                             before,
+                             fusedCloud->size());
+                std::fflush(stdout);
+            }
+        }
+
+        const double elapsedMs = std::chrono::duration<double, std::milli>(
+            std::chrono::steady_clock::now() - windowStart).count();
+        std::fprintf(stdout,
+                     "  [MVS %3d%%] 流式深度图融合批次 %d/%d window=%zu points=%zu elapsed=%.1f ms\n",
+                     70 + ((refIndex + 1) * 20) / std::max(1, frameCount),
+                     refIndex + 1,
+                     frameCount,
+                     frames.size(),
+                     fusedCloud->size(),
+                     elapsedMs);
+        std::fflush(stdout);
+    }
+
+    if (fusedCloud->empty())
+    {
+        if (error) *error = QStringLiteral("MVS 流式融合没有生成有效稠密点");
+        return false;
+    }
     return true;
 }
 
@@ -1205,6 +1437,123 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
         {QStringLiteral("local_depth_outlier_removed"), static_cast<double>(localDepthOutlierRemoved)},
         {QStringLiteral("valid_after"), static_cast<double>(validAfter)},
         {QStringLiteral("per_frame"), perFrame}
+    };
+}
+
+QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostProcessStats> &statsByFrame)
+{
+    qint64 validBefore = 0;
+    qint64 validAfterConfidence = 0;
+    qint64 confidenceRemoved = 0;
+    qint64 localDepthOutlierRemoved = 0;
+    qint64 validAfter = 0;
+    QJsonArray perFrame;
+
+    for (std::size_t index = 0; index < statsByFrame.size(); ++index)
+    {
+        const xjw::mvs::DepthPostProcessStats &stats = statsByFrame[index];
+        validBefore += stats.validBeforePostprocess;
+        validAfterConfidence += stats.validAfterConfidenceFilter;
+        confidenceRemoved += stats.confidenceRemoved;
+        localDepthOutlierRemoved += stats.localDepthOutlierRemoved;
+        validAfter += stats.validAfterPostprocess;
+
+        perFrame.append(QJsonObject{
+            {QStringLiteral("index"), static_cast<int>(index)},
+            {QStringLiteral("valid_before"), stats.validBeforePostprocess},
+            {QStringLiteral("valid_after_confidence"), stats.validAfterConfidenceFilter},
+            {QStringLiteral("confidence_removed"), stats.confidenceRemoved},
+            {QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved},
+            {QStringLiteral("valid_after"), stats.validAfterPostprocess},
+            {QStringLiteral("effective_confidence_threshold"), stats.effectiveConfidenceThreshold}
+        });
+    }
+
+    return QJsonObject{
+        {QStringLiteral("frames"), static_cast<int>(statsByFrame.size())},
+        {QStringLiteral("valid_before"), static_cast<double>(validBefore)},
+        {QStringLiteral("valid_after_confidence"), static_cast<double>(validAfterConfidence)},
+        {QStringLiteral("confidence_removed"), static_cast<double>(confidenceRemoved)},
+        {QStringLiteral("local_depth_outlier_removed"), static_cast<double>(localDepthOutlierRemoved)},
+        {QStringLiteral("valid_after"), static_cast<double>(validAfter)},
+        {QStringLiteral("per_frame"), perFrame}
+    };
+}
+
+void limitMvsInputsForRegression(std::vector<xjw::mvs::CameraView> *views,
+                                 QStringList *registeredImagePaths,
+                                 QJsonArray *imageMetaArray,
+                                 int maxFrames)
+{
+    if (!views || !registeredImagePaths || !imageMetaArray || maxFrames <= 0)
+    {
+        return;
+    }
+
+    const int limit = std::max(2, maxFrames);
+    if (static_cast<int>(views->size()) <= limit)
+    {
+        return;
+    }
+
+    views->resize(static_cast<std::size_t>(limit));
+    while (registeredImagePaths->size() > limit)
+    {
+        registeredImagePaths->removeLast();
+    }
+
+    QJsonArray limited;
+    const int metaCount = std::min(limit, static_cast<int>(imageMetaArray->size()));
+    for (int index = 0; index < metaCount; ++index)
+    {
+        limited.append(imageMetaArray->at(index));
+    }
+    *imageMetaArray = limited;
+}
+
+QJsonObject mvsSettingsToJson(const xjw::gui::project::DenseGenerationSettings &denseSettings,
+                              int requestedMaxFrames,
+                              int mvsInputFrames,
+                              int registeredImageCount)
+{
+    QJsonObject settings{
+        {QStringLiteral("res_scale"), denseSettings.resScale},
+        {QStringLiteral("iterations"), denseSettings.iterations},
+        {QStringLiteral("threads"), denseSettings.threads},
+        {QStringLiteral("gpu_frame_workers"), denseSettings.gpuFrameWorkers},
+        {QStringLiteral("cpu_frame_workers"), denseSettings.cpuFrameWorkers},
+        {QStringLiteral("patch_size"), denseSettings.patchSize},
+        {QStringLiteral("min_views"), denseSettings.minViews},
+        {QStringLiteral("patchmatch_confidence"), denseSettings.patchMatchConfidence},
+        {QStringLiteral("fusion_min_confidence"), denseSettings.fusionMinConfidence},
+        {QStringLiteral("min_consistent_views"), denseSettings.minConsistentViews},
+        {QStringLiteral("depth_consistency"), denseSettings.depthConsistency},
+        {QStringLiteral("max_reproj_error"), denseSettings.maxReprojError},
+        {QStringLiteral("use_cuda"), denseSettings.useCuda},
+        {QStringLiteral("requested_max_frames"), requestedMaxFrames},
+        {QStringLiteral("mvs_input_frames"), mvsInputFrames},
+        {QStringLiteral("registered_image_count"), registeredImageCount}
+    };
+    settings[QStringLiteral("fusion_max_image_dim")] = denseSettings.fusionMaxImageDim;
+    return settings;
+}
+
+QJsonObject mvsDepthConfigToJson(const xjw::mvs::DepthGenConfig &config)
+{
+    return QJsonObject{
+        {QStringLiteral("num_source_views"), config.numSourceViews},
+        {QStringLiteral("gpu_frame_worker_count"), config.gpuFrameWorkerCount},
+        {QStringLiteral("cpu_frame_worker_count"), config.cpuFrameWorkerCount},
+        {QStringLiteral("cpu_worker_count"), config.cpuWorkerCount},
+        {QStringLiteral("downsample_factor"), config.patchMatch.downsampleFactor},
+        {QStringLiteral("patchmatch_iterations"), config.patchMatch.numIterations},
+        {QStringLiteral("patch_half"), config.patchMatch.patchHalf},
+        {QStringLiteral("patchmatch_confidence"), config.patchMatch.confidenceThresh},
+        {QStringLiteral("fusion_confidence"), config.fusion.confidenceThresh},
+        {QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews},
+        {QStringLiteral("adaptive_depth_cache_memory"), config.adaptiveDepthCacheMemory},
+        {QStringLiteral("max_depth_cache_ram_fraction"), config.maxDepthCacheRamFraction},
+        {QStringLiteral("min_free_ram_bytes"), static_cast<double>(config.minFreeRamBytes)}
     };
 }
 
@@ -1291,6 +1640,14 @@ int main(int argc, char *argv[])
     int threads = 8;
     int cudaParallelPairs = 1;
     int featureMaxImageDim = 0;
+    double mvsResScale = 0.5;
+    int mvsIterations = 6;
+    double mvsConfidence = 0.20;
+    double mvsFusionConfidence = 0.50;
+    int mvsGpuFrameWorkers = 0;
+    int mvsCpuFrameWorkers = 0;
+    int mvsMaxFrames = 0;
+    int mvsFusionMaxImageDim = 2048;
 #ifndef PLASCAN_THREE_D_ONLY
     double demResolution = 0.0;
 #endif
@@ -1316,6 +1673,19 @@ int main(int argc, char *argv[])
     app.add_option("--cuda-parallel-pairs", cudaParallelPairs, "LightGlue CUDA parallel pair count");
     app.add_option("--feature-max-image-dim", featureMaxImageDim,
                    "deep feature max image side; 0 uses auto/adaptive quality preset, negative starts unbounded");
+    app.add_option("--mvs-res-scale", mvsResScale,
+                   "MVS depth resolution scale, e.g. 0.5 for half resolution");
+    app.add_option("--mvs-iterations", mvsIterations, "MVS PatchMatch iterations");
+    app.add_option("--mvs-confidence", mvsConfidence, "MVS PatchMatch confidence threshold");
+    app.add_option("--mvs-fusion-confidence", mvsFusionConfidence, "MVS fusion confidence threshold");
+    app.add_option("--mvs-gpu-frame-workers", mvsGpuFrameWorkers,
+                   "MVS CUDA frame workers; 0 chooses automatically");
+    app.add_option("--mvs-cpu-frame-workers", mvsCpuFrameWorkers,
+                   "MVS CPU frame workers; 0 chooses automatically");
+    app.add_option("--mvs-max-frames", mvsMaxFrames,
+                   "limit MVS to first N registered frames for regression/debug runs; 0 uses all");
+    app.add_option("--mvs-fusion-max-image-dim", mvsFusionMaxImageDim,
+                   "max image side used during depth-map fusion; 0 keeps full resolution");
 #ifndef PLASCAN_THREE_D_ONLY
     app.add_option("--dem-resolution", demResolution, "DEM/DOM resolution; 0 lets TerrainPipeline choose");
 #endif
@@ -1340,6 +1710,14 @@ int main(int argc, char *argv[])
     {
         skipModel = true;
     }
+    mvsResScale = std::clamp(mvsResScale, 0.05, 1.0);
+    mvsIterations = std::max(1, mvsIterations);
+    mvsConfidence = std::clamp(mvsConfidence, 0.0, 1.0);
+    mvsFusionConfidence = std::clamp(mvsFusionConfidence, 0.0, 1.0);
+    mvsGpuFrameWorkers = std::max(0, mvsGpuFrameWorkers);
+    mvsCpuFrameWorkers = std::max(0, mvsCpuFrameWorkers);
+    mvsMaxFrames = std::max(0, mvsMaxFrames);
+    mvsFusionMaxImageDim = std::max(0, mvsFusionMaxImageDim);
 
     const QString listPath = cleanAbsolutePath(QString::fromStdString(listPathArg));
     const QString outputDir = cleanAbsolutePath(QString::fromStdString(outputDirArg));
@@ -1551,6 +1929,7 @@ int main(int argc, char *argv[])
     }
     sfmJson[QStringLiteral("registered_image_paths")] = QJsonArray::fromStringList(registeredImagePaths);
     report[QStringLiteral("sfm")] = sfmJson;
+    const int originalRegisteredImageCount = registeredImagePaths.size();
 
     QJsonArray imageMetaArray;
     std::vector<xjw::mvs::CameraView> views;
@@ -1580,6 +1959,14 @@ int main(int argc, char *argv[])
             {QStringLiteral("camera"), cameraToJson(camera)}
         });
     }
+    limitMvsInputsForRegression(&views, &registeredImagePaths, &imageMetaArray, mvsMaxFrames);
+    sfmJson[QStringLiteral("mvs_image_paths")] = QJsonArray::fromStringList(registeredImagePaths);
+    sfmJson[QStringLiteral("mvs_input_images")] = registeredImagePaths.size();
+    if (mvsMaxFrames > 0)
+    {
+        sfmJson[QStringLiteral("mvs_max_frames")] = mvsMaxFrames;
+    }
+    report[QStringLiteral("sfm")] = sfmJson;
     projectMeta[QStringLiteral("images")] = imageMetaArray;
 
     if (views.size() < static_cast<size_t>(kMinimumRegisteredImagesForDenseWorkflow))
@@ -1644,12 +2031,18 @@ int main(int argc, char *argv[])
     denseSettings.threads = std::max(1, threads);
     denseSettings.useCuda = (device == "cuda" || device == "auto");
     denseSettings.pipelineMode = true;
+    denseSettings.resScale = mvsResScale;
+    denseSettings.iterations = mvsIterations;
+    denseSettings.patchMatchConfidence = mvsConfidence;
+    denseSettings.fusionMinConfidence = mvsFusionConfidence;
+    denseSettings.gpuFrameWorkers = mvsGpuFrameWorkers;
+    denseSettings.cpuFrameWorkers = mvsCpuFrameWorkers;
+    denseSettings.fusionMaxImageDim = mvsFusionMaxImageDim;
     const int denseMinViewCount = std::clamp(static_cast<int>(views.size()),
                                              kMinimumRegisteredImagesForDenseWorkflow,
                                              3);
     denseSettings.minViews = denseMinViewCount;
     denseSettings.minConsistentViews = denseMinViewCount;
-    denseSettings.fusionMinConfidence = 0.50f;
     denseSettings.depthConsistency = 1.0f;
     xjw::mvs::DepthGenConfig depthConfig =
         xjw::gui::project::buildDepthGenConfig(denseSettings, static_cast<int>(views.size()));
@@ -1666,6 +2059,7 @@ int main(int argc, char *argv[])
     QEventLoop loop;
     bool depthOk = false;
     QString mvsError;
+    QJsonArray depthArtifacts;
     QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::progressChanged, &loop,
                      [](const QString &stage, float ratio) {
         std::fprintf(stdout, "  [MVS %3d%%] %s\n", static_cast<int>(ratio * 100.0f), qUtf8Printable(stage));
@@ -1676,6 +2070,10 @@ int main(int argc, char *argv[])
         mvsError = message;
         std::fprintf(stderr, "  [MVS] %s\n", qUtf8Printable(message));
     });
+    QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::depthMapArtifactSaved, &loop,
+                     [&depthArtifacts](const QJsonObject &artifact) {
+        depthArtifacts.append(artifact);
+    });
     QObject::connect(&generator, &xjw::mvs::DepthMapGenerator::finished, &loop,
                      [&loop, &depthOk](bool success) {
         depthOk = success;
@@ -1684,7 +2082,8 @@ int main(int argc, char *argv[])
     QTimer::singleShot(0, &generator, &xjw::mvs::DepthMapGenerator::start);
     loop.exec();
 
-    std::vector<xjw::mvs::FusionFrameInput> fusionFrames;
+    std::vector<xjw::mvs::DepthPostProcessStats> depthPostprocessStats;
+    std::vector<xjw::mvs::FusedPoint> fusedCloud;
     bool mvsOk = depthOk;
     QString denseCloudPathForReport;
     QString refinedCloudPathForModel;
@@ -1692,11 +2091,13 @@ int main(int argc, char *argv[])
     int refinedPointCount = 0;
     if (mvsOk)
     {
-        if (!loadFusionFramesFromDepthMaps(mvsDir,
-                                           views,
-                                           depthConfig.fusion,
-                                           &fusionFrames,
-                                           &error))
+        if (!fuseDepthMapsStreamingFromDisk(mvsDir,
+                                            views,
+                                            denseSettings,
+                                            depthConfig,
+                                            &fusedCloud,
+                                            &depthPostprocessStats,
+                                            &error))
         {
             mvsOk = false;
             mvsError = error;
@@ -1704,38 +2105,6 @@ int main(int argc, char *argv[])
     }
     if (mvsOk)
     {
-        xjw::mvs::StereoFusionConfig fusionCfg;
-        fusionCfg.minNumPixels = std::max(1, denseSettings.minConsistentViews);
-        fusionCfg.maxReprojError = denseSettings.depthConsistency;
-        fusionCfg.maxDepthError = 0.05f;
-        fusionCfg.checkNumImages = std::min(50, static_cast<int>(fusionFrames.size()));
-        fusionCfg.workerCount = std::max(1, threads);
-        if (fusionFrames.size() <= 2)
-        {
-            fusionCfg.minNumPixels = 1;
-            fusionCfg.maxDepthError = std::max(fusionCfg.maxDepthError, 0.08f);
-            fusionCfg.maxReprojError = std::max(fusionCfg.maxReprojError, 3.0f);
-        }
-
-        xjw::mvs::DepthMapFusion fusion(fusionCfg);
-        std::string fuseError;
-        std::vector<xjw::mvs::FusedPoint> fusedCloud;
-        mvsOk = fusion.fuse(fusionFrames,
-                            fusedCloud,
-                            [](const std::string &stage, float ratio) {
-                                std::fprintf(stdout,
-                                             "  [MVS %3d%%] %s\n",
-                                             70 + static_cast<int>(ratio * 25.0f),
-                                             stage.c_str());
-                                std::fflush(stdout);
-                            },
-                            &fuseError);
-        if (!mvsOk)
-        {
-            mvsError = QString::fromStdString(fuseError);
-        }
-        else
-        {
             constexpr std::size_t kLargeCloudPreVoxelThreshold = 2000000;
             constexpr std::size_t kMaxRefineInputPoints = 250000;
             std::vector<xjw::mvs::FusedPoint> preAggregatedFusedCloud;
@@ -1872,7 +2241,6 @@ int main(int argc, char *argv[])
                     refinedPointCount = static_cast<int>(refinedCloud.size());
                 }
             }
-        }
     }
 
     if (!mvsOk
@@ -1899,7 +2267,13 @@ int main(int argc, char *argv[])
         {QStringLiteral("has_rgb"), true},
         {QStringLiteral("has_normals"), true}
     };
-    denseReport[QStringLiteral("depth_postprocess")] = depthPostprocessStatsToJson(fusionFrames);
+    denseReport[QStringLiteral("depth_postprocess")] = depthPostprocessStatsToJson(depthPostprocessStats);
+    denseReport[QStringLiteral("depth_maps")] = depthArtifacts;
+    denseReport[QStringLiteral("mvs_settings")] = mvsSettingsToJson(denseSettings,
+                                                                    mvsMaxFrames,
+                                                                    static_cast<int>(views.size()),
+                                                                    originalRegisteredImageCount);
+    denseReport[QStringLiteral("mvs_depth_config")] = mvsDepthConfigToJson(depthConfig);
     report[QStringLiteral("dense")] = denseReport;
     mvsElapsedMs = recordTiming(QStringLiteral("mvs_elapsed_ms"), mvsStart);
 

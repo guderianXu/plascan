@@ -20,6 +20,7 @@
 #include <QString>
 #include <QSharedPointer>
 #include <QMetaType>
+#include <QJsonObject>
 #include <opencv2/core.hpp>
 #include <memory>
 #include <vector>
@@ -43,6 +44,8 @@ struct DepthFrameResult
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
     bool success = false;
+    double elapsedMs = 0.0;               ///< 单帧深度估计耗时，不含异步写盘
+    std::string device;                   ///< 实际调度设备：GPU/CPU
     std::string errorMsg;
 
     void releasePixelStorage()
@@ -187,6 +190,8 @@ signals:
     void depthMapReady(DepthFrameResult result);
     /// 每帧深度图保存为 PNG 后发出（path, width, height, refImagePath）
     void depthMapSaved(QString pngPath, int width, int height, QString refImagePath);
+    /// 每帧深度图全部产物保存后发出结构化元数据，供项目树增量刷新
+    void depthMapArtifactSaved(QJsonObject artifact);
     /// 点云生成完毕
     void pointCloudReady(std::vector<DensePoint> cloud);
     /// 进度更新
@@ -267,6 +272,7 @@ private:
 
     /// 预加载所有图像到内存，避免逐帧重复磁盘读取
     void preloadImages();
+    void refreshViewImageDimensionsFromCache();
 
     std::vector<CameraView> m_views;
     SparseCloud m_sparse;

@@ -61,6 +61,8 @@ TEST(BundleAdjustDialogLidarTest, EmitsLaserConstraintOptionsWhenRun)
     auto *voxelSizeSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserVoxelSizeSpin"));
     auto *maxCurvatureSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserMaxCurvatureSpin"));
     auto *maxSamplesSpin = findRequiredChild<QSpinBox>(dialog, QStringLiteral("m_laserMaxSamplesSpin"));
+    auto *missingNormalsCheck = findRequiredChild<QCheckBox>(
+        dialog, QStringLiteral("m_laserMissingNormalsAsHeightPlanesCheck"));
     auto *weightSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserWeightSpin"));
     auto *laserHuberSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserHuberDeltaSpin"));
     auto *runButton = dialog.findChild<QPushButton *>(QStringLiteral("runBtn"));
@@ -72,6 +74,7 @@ TEST(BundleAdjustDialogLidarTest, EmitsLaserConstraintOptionsWhenRun)
     ASSERT_NE(voxelSizeSpin, nullptr);
     ASSERT_NE(maxCurvatureSpin, nullptr);
     ASSERT_NE(maxSamplesSpin, nullptr);
+    ASSERT_NE(missingNormalsCheck, nullptr);
     ASSERT_NE(weightSpin, nullptr);
     ASSERT_NE(laserHuberSpin, nullptr);
 
@@ -81,6 +84,7 @@ TEST(BundleAdjustDialogLidarTest, EmitsLaserConstraintOptionsWhenRun)
     voxelSizeSpin->setValue(0.08);
     maxCurvatureSpin->setValue(0.12);
     maxSamplesSpin->setValue(12345);
+    missingNormalsCheck->setChecked(true);
     weightSpin->setValue(4.5);
     laserHuberSpin->setValue(0.35);
 
@@ -101,6 +105,7 @@ TEST(BundleAdjustDialogLidarTest, EmitsLaserConstraintOptionsWhenRun)
     EXPECT_DOUBLE_EQ(options.value(QStringLiteral("laser_voxel_size_m")).toDouble(), 0.08);
     EXPECT_DOUBLE_EQ(options.value(QStringLiteral("laser_max_curvature")).toDouble(), 0.12);
     EXPECT_EQ(options.value(QStringLiteral("laser_max_samples")).toInt(), 12345);
+    EXPECT_TRUE(options.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool());
     EXPECT_DOUBLE_EQ(options.value(QStringLiteral("laser_weight")).toDouble(), 4.5);
     EXPECT_DOUBLE_EQ(options.value(QStringLiteral("laser_huber_delta_m")).toDouble(), 0.35);
 }
@@ -116,6 +121,8 @@ TEST(BundleAdjustDialogLidarTest, PersistsLaserConstraintSettings)
     auto *voxelSizeSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserVoxelSizeSpin"));
     auto *maxCurvatureSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserMaxCurvatureSpin"));
     auto *maxSamplesSpin = findRequiredChild<QSpinBox>(dialog, QStringLiteral("m_laserMaxSamplesSpin"));
+    auto *missingNormalsCheck = findRequiredChild<QCheckBox>(
+        dialog, QStringLiteral("m_laserMissingNormalsAsHeightPlanesCheck"));
     auto *weightSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserWeightSpin"));
     auto *laserHuberSpin = findRequiredChild<QDoubleSpinBox>(dialog, QStringLiteral("m_laserHuberDeltaSpin"));
 
@@ -125,6 +132,7 @@ TEST(BundleAdjustDialogLidarTest, PersistsLaserConstraintSettings)
     ASSERT_NE(voxelSizeSpin, nullptr);
     ASSERT_NE(maxCurvatureSpin, nullptr);
     ASSERT_NE(maxSamplesSpin, nullptr);
+    ASSERT_NE(missingNormalsCheck, nullptr);
     ASSERT_NE(weightSpin, nullptr);
     ASSERT_NE(laserHuberSpin, nullptr);
 
@@ -135,6 +143,7 @@ TEST(BundleAdjustDialogLidarTest, PersistsLaserConstraintSettings)
     settings[QStringLiteral("laser_voxel_size_m")] = 0.15;
     settings[QStringLiteral("laser_max_curvature")] = 0.18;
     settings[QStringLiteral("laser_max_samples")] = 25000;
+    settings[QStringLiteral("laser_missing_normals_as_height_planes")] = true;
     settings[QStringLiteral("laser_weight")] = 3.25;
     settings[QStringLiteral("laser_huber_delta_m")] = 0.45;
     dialog.applySettings(settings);
@@ -145,6 +154,7 @@ TEST(BundleAdjustDialogLidarTest, PersistsLaserConstraintSettings)
     EXPECT_DOUBLE_EQ(voxelSizeSpin->value(), 0.15);
     EXPECT_DOUBLE_EQ(maxCurvatureSpin->value(), 0.18);
     EXPECT_EQ(maxSamplesSpin->value(), 25000);
+    EXPECT_TRUE(missingNormalsCheck->isChecked());
     EXPECT_DOUBLE_EQ(weightSpin->value(), 3.25);
     EXPECT_DOUBLE_EQ(laserHuberSpin->value(), 0.45);
 
@@ -160,6 +170,7 @@ TEST(BundleAdjustDialogLidarTest, PersistsLaserConstraintSettings)
     EXPECT_DOUBLE_EQ(emitted.value(QStringLiteral("laser_voxel_size_m")).toDouble(), 0.15);
     EXPECT_DOUBLE_EQ(emitted.value(QStringLiteral("laser_max_curvature")).toDouble(), 0.18);
     EXPECT_EQ(emitted.value(QStringLiteral("laser_max_samples")).toInt(), 25000);
+    EXPECT_TRUE(emitted.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool());
     EXPECT_DOUBLE_EQ(emitted.value(QStringLiteral("laser_weight")).toDouble(), 6.75);
     EXPECT_DOUBLE_EQ(emitted.value(QStringLiteral("laser_huber_delta_m")).toDouble(), 0.45);
 }
@@ -180,6 +191,8 @@ TEST(ProjectManagerBundleAdjustLidarTest, MapsLaserSettingsToBundleAdjustService
     EXPECT_TRUE(source.contains(QStringLiteral("laser_max_curvature")));
     EXPECT_TRUE(source.contains(QStringLiteral("opts.laserMaxSamples")));
     EXPECT_TRUE(source.contains(QStringLiteral("laser_max_samples")));
+    EXPECT_TRUE(source.contains(QStringLiteral("opts.laserUseMissingNormalsAsHeightPlanes")));
+    EXPECT_TRUE(source.contains(QStringLiteral("laser_missing_normals_as_height_planes")));
     EXPECT_TRUE(source.contains(QStringLiteral("opts.laserWeight")));
     EXPECT_TRUE(source.contains(QStringLiteral("laser_weight")));
     EXPECT_TRUE(source.contains(QStringLiteral("opts.laserHuberDeltaMeters")));

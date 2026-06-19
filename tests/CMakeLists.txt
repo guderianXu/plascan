@@ -159,6 +159,7 @@ target_link_libraries(test_feature_pair_planner PRIVATE
 )
 target_include_directories(test_feature_pair_planner PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_feature_pair_planner)
 
@@ -431,6 +432,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/terrain
     ${CMAKE_SOURCE_DIR}/src/core/mvs
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
     ${CMAKE_SOURCE_DIR}/src/core
     ${OpenCV_INCLUDE_DIRS}
 )

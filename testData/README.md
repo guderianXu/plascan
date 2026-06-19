@@ -83,6 +83,29 @@ python testData/estimate_lidar_normals.py \
   --summary-json build/mun_frl_lidar_ba_ab_benchmark/merged_lidar_cloud_normals_summary.json
 ```
 
+If the external reference is a DEM/DSM rather than a point cloud with normals, convert an ESRI ASCII Grid (`.asc`)
+into an XYZ-only PLY and use PlaScan's explicit height-plane mode:
+
+```bash
+python testData/dem_grid_to_height_ply.py \
+  --input path/to/reference_dem.asc \
+  --output build/lidar_height_constraints/reference_dem_height_planes.ply \
+  --summary-json build/lidar_height_constraints/reference_dem_height_planes_summary.json
+
+build/bin/bundle_adjust_cli \
+  path/to/project.plascan \
+  --output-dir build/ba_with_dem_height_planes \
+  --laser-cloud build/lidar_height_constraints/reference_dem_height_planes.ply \
+  --laser-missing-normals-as-height-planes \
+  --ab-compare \
+  --fail-on-quality-gate \
+  --force
+```
+
+The converter writes only `x/y/z` vertices. It does not reproject or change CRS; the DEM/DSM grid coordinates must
+already be in the same world/map frame as the PlaScan sparse points and cameras. This mirrors the conservative first
+step of using external heights as soft BA constraints before adding full raster sampling or map-projection support.
+
 For an end-to-end CLI BA smoke test, first run `feature_match_cli` on the selected window. The CLI writes the legacy
 binary `.match` file and a `.match.json` sidecar containing matched feature indices and image points; the sidecar is
 what the BA project builder uses to assemble multi-view tracks.
@@ -151,6 +174,32 @@ point-to-plane RMS/median, associated LiDAR constraint count, and refined-camera
 
 Treat these as diagnostics. A final accuracy test still needs a better-confirmed `lio_body` to camera/LiDAR frame
 definition, or a dataset slice with independently verified camera-LiDAR extrinsics in the same map frame.
+
+For ASP-style final geometry validation, compare a PlaScan image-derived point cloud against a LiDAR/reference point
+cloud with nearest-neighbor distance metrics:
+
+```bash
+python testData/compare_point_cloud_to_lidar.py \
+  --source build/plascan_dense_or_sparse_cloud.ply \
+  --reference build/lidar_reference_sample.ply \
+  --output-json build/plascan_vs_lidar_quality.json \
+  --nearest-neighbor-method auto \
+  --max-rmse-m 0.50 \
+  --max-p95-m 1.00 \
+  --coverage-radius-m 1.00 \
+  --min-reference-coverage-percent 75 \
+  --fail-on-quality-gate
+```
+
+This first helper reads ASCII PLY files with `x/y/z` vertices and simple `.csv`, `.txt`, or `.xyz` point files whose
+first three columns are `x y z`. Extra PLY fields such as intensity or classification are ignored, and one text header
+row is tolerated. It uses exact nearest-neighbor distances from PlaScan points to the reference points, so use it on
+small benchmark clouds or pre-windowed/downsampled LiDAR samples; large LAS/LAZ/COPC files should first be clipped or
+converted by an external point-cloud tool. The JSON report includes source-to-reference mean, RMSE, median, p95, max,
+plus reference LiDAR coverage within `--coverage-radius-m`. Use the coverage gate to catch partial overlap cases where
+the reconstruction is close only to a small subset of the reference cloud. `--nearest-neighbor-method auto` keeps
+small comparisons on the brute-force path and uses the built-in exact KD-tree path for larger reference samples; set
+`brute` or `kd-tree` explicitly when debugging metric differences.
 
 Candidate table, checked against official or dataset homepages on 2026-06-17:
 

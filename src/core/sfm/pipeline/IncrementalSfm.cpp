@@ -200,6 +200,254 @@ bool knownPoseMatchPassesGeometry(const SfmReconstruction &reconstruction,
            triResult.reproj_error_rms <= options.maxReprojError;
 }
 
+struct SimilarityTransform3d
+{
+    bool valid = false;
+    double scale = 1.0;
+    std::array<double, 9> rotation{{1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0}};
+    std::array<double, 3> translation{{0.0, 0.0, 0.0}};
+    int inlierCount = 0;
+    double rmse = 0.0;
+};
+
+std::array<double, 3> transformPoint(const SimilarityTransform3d &transform,
+                                     const std::array<double, 3> &point)
+{
+    std::array<double, 3> out{};
+    for (int r = 0; r < 3; ++r)
+    {
+        out[static_cast<size_t>(r)] = transform.translation[static_cast<size_t>(r)];
+        for (int c = 0; c < 3; ++c)
+        {
+            out[static_cast<size_t>(r)] +=
+                transform.scale *
+                transform.rotation[static_cast<size_t>(r * 3 + c)] *
+                point[static_cast<size_t>(c)];
+        }
+    }
+    return out;
+}
+
+std::array<double, 9> multiplyRotation(const std::array<double, 9> &left,
+                                       const std::array<double, 9> &right)
+{
+    std::array<double, 9> result{};
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            double value = 0.0;
+            for (int k = 0; k < 3; ++k)
+            {
+                value += left[static_cast<size_t>(r * 3 + k)] *
+                         right[static_cast<size_t>(k * 3 + c)];
+            }
+            result[static_cast<size_t>(r * 3 + c)] = value;
+        }
+    }
+    return result;
+}
+
+double pointDistance(const std::array<double, 3> &a,
+                     const std::array<double, 3> &b)
+{
+    const double dx = a[0] - b[0];
+    const double dy = a[1] - b[1];
+    const double dz = a[2] - b[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+double centerExtent(const std::vector<std::array<double, 3>> &points)
+{
+    double extent = 0.0;
+    for (size_t i = 0; i < points.size(); ++i)
+    {
+        for (size_t j = i + 1; j < points.size(); ++j)
+        {
+            extent = std::max(extent, pointDistance(points[i], points[j]));
+        }
+    }
+    return extent;
+}
+
+SimilarityTransform3d estimateSimilarityUmeyama(const std::vector<std::array<double, 3>> &source,
+                                                const std::vector<std::array<double, 3>> &target)
+{
+    SimilarityTransform3d transform;
+    if (source.size() != target.size() || source.size() < 3)
+    {
+        return transform;
+    }
+
+    std::array<double, 3> sourceMean{{0.0, 0.0, 0.0}};
+    std::array<double, 3> targetMean{{0.0, 0.0, 0.0}};
+    for (size_t i = 0; i < source.size(); ++i)
+    {
+        for (int k = 0; k < 3; ++k)
+        {
+            sourceMean[static_cast<size_t>(k)] += source[i][static_cast<size_t>(k)];
+            targetMean[static_cast<size_t>(k)] += target[i][static_cast<size_t>(k)];
+        }
+    }
+    for (int k = 0; k < 3; ++k)
+    {
+        sourceMean[static_cast<size_t>(k)] /= static_cast<double>(source.size());
+        targetMean[static_cast<size_t>(k)] /= static_cast<double>(target.size());
+    }
+
+    cv::Mat covariance = cv::Mat::zeros(3, 3, CV_64F);
+    double sourceVariance = 0.0;
+    for (size_t i = 0; i < source.size(); ++i)
+    {
+        std::array<double, 3> srcCentered{};
+        std::array<double, 3> dstCentered{};
+        for (int k = 0; k < 3; ++k)
+        {
+            srcCentered[static_cast<size_t>(k)] =
+                source[i][static_cast<size_t>(k)] - sourceMean[static_cast<size_t>(k)];
+            dstCentered[static_cast<size_t>(k)] =
+                target[i][static_cast<size_t>(k)] - targetMean[static_cast<size_t>(k)];
+            sourceVariance += srcCentered[static_cast<size_t>(k)] * srcCentered[static_cast<size_t>(k)];
+        }
+
+        for (int r = 0; r < 3; ++r)
+        {
+            for (int c = 0; c < 3; ++c)
+            {
+                covariance.at<double>(r, c) +=
+                    dstCentered[static_cast<size_t>(r)] * srcCentered[static_cast<size_t>(c)];
+            }
+        }
+    }
+
+    sourceVariance /= static_cast<double>(source.size());
+    if (!(sourceVariance > 1e-18))
+    {
+        return transform;
+    }
+    covariance /= static_cast<double>(source.size());
+
+    cv::SVD svd(covariance, cv::SVD::FULL_UV);
+    cv::Mat sign = cv::Mat::eye(3, 3, CV_64F);
+    cv::Mat rotation = svd.u * svd.vt;
+    if (cv::determinant(rotation) < 0.0)
+    {
+        sign.at<double>(2, 2) = -1.0;
+        rotation = svd.u * sign * svd.vt;
+    }
+
+    double scaleNumerator = 0.0;
+    for (int i = 0; i < 3; ++i)
+    {
+        scaleNumerator += svd.w.at<double>(i) * sign.at<double>(i, i);
+    }
+    const double scale = scaleNumerator / sourceVariance;
+    if (!(scale > 0.0) || !std::isfinite(scale))
+    {
+        return transform;
+    }
+
+    transform.valid = true;
+    transform.scale = scale;
+    for (int r = 0; r < 3; ++r)
+    {
+        for (int c = 0; c < 3; ++c)
+        {
+            transform.rotation[static_cast<size_t>(r * 3 + c)] = rotation.at<double>(r, c);
+        }
+    }
+
+    const auto mappedSourceMean = transformPoint(transform, sourceMean);
+    for (int k = 0; k < 3; ++k)
+    {
+        transform.translation[static_cast<size_t>(k)] +=
+            targetMean[static_cast<size_t>(k)] - mappedSourceMean[static_cast<size_t>(k)];
+    }
+
+    double sum2 = 0.0;
+    for (size_t i = 0; i < source.size(); ++i)
+    {
+        const double residual = pointDistance(transformPoint(transform, source[i]), target[i]);
+        sum2 += residual * residual;
+    }
+    transform.inlierCount = static_cast<int>(source.size());
+    transform.rmse = std::sqrt(sum2 / static_cast<double>(source.size()));
+    return transform;
+}
+
+SimilarityTransform3d estimateRobustCameraCenterSimilarity(
+    const std::vector<std::array<double, 3>> &source,
+    const std::vector<std::array<double, 3>> &target)
+{
+    SimilarityTransform3d best;
+    if (source.size() != target.size() || source.size() < 3)
+    {
+        return best;
+    }
+
+    const double extent = std::max(centerExtent(source), centerExtent(target));
+    const double inlierThreshold = std::max(1e-4, extent * 0.03);
+    constexpr int maxSamples = 256;
+    int sampleCount = 0;
+
+    for (size_t i = 0; i + 2 < source.size() && sampleCount < maxSamples; ++i)
+    {
+        for (size_t j = i + 1; j + 1 < source.size() && sampleCount < maxSamples; ++j)
+        {
+            for (size_t k = j + 1; k < source.size() && sampleCount < maxSamples; ++k)
+            {
+                ++sampleCount;
+                std::vector<std::array<double, 3>> sampleSource{source[i], source[j], source[k]};
+                std::vector<std::array<double, 3>> sampleTarget{target[i], target[j], target[k]};
+                const SimilarityTransform3d candidate = estimateSimilarityUmeyama(sampleSource, sampleTarget);
+                if (!candidate.valid)
+                {
+                    continue;
+                }
+
+                std::vector<std::array<double, 3>> inlierSource;
+                std::vector<std::array<double, 3>> inlierTarget;
+                inlierSource.reserve(source.size());
+                inlierTarget.reserve(target.size());
+                double sum2 = 0.0;
+                for (size_t idx = 0; idx < source.size(); ++idx)
+                {
+                    const double residual = pointDistance(transformPoint(candidate, source[idx]), target[idx]);
+                    if (residual <= inlierThreshold)
+                    {
+                        inlierSource.push_back(source[idx]);
+                        inlierTarget.push_back(target[idx]);
+                        sum2 += residual * residual;
+                    }
+                }
+
+                if (inlierSource.size() < 3)
+                {
+                    continue;
+                }
+
+                const double rmse = std::sqrt(sum2 / static_cast<double>(inlierSource.size()));
+                if (!best.valid ||
+                    inlierSource.size() > static_cast<size_t>(best.inlierCount) ||
+                    (inlierSource.size() == static_cast<size_t>(best.inlierCount) && rmse < best.rmse))
+                {
+                    best = estimateSimilarityUmeyama(inlierSource, inlierTarget);
+                    best.inlierCount = static_cast<int>(inlierSource.size());
+                    best.rmse = rmse;
+                }
+            }
+        }
+    }
+
+    if (!best.valid)
+    {
+        best = estimateSimilarityUmeyama(source, target);
+    }
+    return best;
+}
+
 } // namespace
 
 // ============================================================
@@ -681,6 +929,7 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
             return result;
         }
 
+        refineKnownCameraPosesWithPnp();
         runBundleAdjust(false);
 
         Triangulator baTriangulator(*_reconstruction, _correspondenceGraph);
@@ -836,6 +1085,210 @@ bool IncrementalSfm::getCamera(ImageId imageId, Camera &cam) const
         return loadCamera(cit->second, cam);
     }
     return false;
+}
+
+std::vector<BACameraPosePrior> IncrementalSfm::buildCameraPosePriorsFromInputCameras(
+    const std::vector<ImageId> &imageIds) const
+{
+    std::vector<Camera> inputCameras;
+    inputCameras.reserve(imageIds.size());
+    std::vector<std::array<double, 3>> inputCenters;
+    inputCenters.reserve(imageIds.size());
+    for (ImageId imageId : imageIds)
+    {
+        Camera inputCamera;
+        if (getCamera(imageId, inputCamera))
+        {
+            inputCenters.push_back(inputCamera.cameraCenter());
+        }
+        inputCameras.push_back(inputCamera);
+    }
+
+    const double inputExtent = centerExtent(inputCenters);
+    const double adaptivePositionSigmaMeters = std::max(0.25, inputExtent * 0.01);
+
+    std::vector<BACameraPosePrior> priors;
+    priors.reserve(imageIds.size());
+    for (size_t i = 0; i < imageIds.size(); ++i)
+    {
+        BACameraPosePrior prior;
+        const Camera &inputCamera = inputCameras[i];
+        if (inputCamera.isValid())
+        {
+            prior.enabled = true;
+            prior.cameraToWorldRotation = inputCamera.cameraToWorldRotation();
+            prior.cameraCenter = inputCamera.cameraCenter();
+            prior.positionSigmaMeters = std::max(1e-6, adaptivePositionSigmaMeters);
+            prior.rotationSigmaDegrees = std::max(1e-6, prior.rotationSigmaDegrees);
+        }
+        priors.push_back(prior);
+    }
+    return priors;
+}
+
+void IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<ImageId> &imageIds,
+                                                          std::vector<Camera> *baCameras)
+{
+    if (!baCameras || imageIds.size() != baCameras->size() || imageIds.size() < 3)
+    {
+        return;
+    }
+
+    std::vector<std::array<double, 3>> currentCenters;
+    std::vector<std::array<double, 3>> inputCenters;
+    currentCenters.reserve(imageIds.size());
+    inputCenters.reserve(imageIds.size());
+    for (size_t i = 0; i < imageIds.size(); ++i)
+    {
+        Camera inputCamera;
+        if (!getCamera(imageIds[i], inputCamera))
+        {
+            continue;
+        }
+        currentCenters.push_back((*baCameras)[i].cameraCenter());
+        inputCenters.push_back(inputCamera.cameraCenter());
+    }
+
+    if (currentCenters.size() < 3)
+    {
+        return;
+    }
+
+    const SimilarityTransform3d transform = estimateRobustCameraCenterSimilarity(currentCenters, inputCenters);
+    if (!transform.valid || transform.inlierCount < 3)
+    {
+        Logger::instance()->warnf("[SFM] Known-pose Sim3 alignment skipped: insufficient robust camera-center inliers");
+        return;
+    }
+
+    for (ImageId imageId : _reconstruction->registeredImageIds())
+    {
+        if (!_reconstruction->hasCamera(imageId))
+        {
+            continue;
+        }
+        Camera &camera = _reconstruction->camera(imageId);
+        camera.setPose(multiplyRotation(transform.rotation, camera.cameraToWorldRotation()),
+                       transformPoint(transform, camera.cameraCenter()));
+    }
+
+    for (Point3DId pointId : _reconstruction->allPoint3DIds())
+    {
+        if (!_reconstruction->hasPoint3D(pointId))
+        {
+            continue;
+        }
+        _reconstruction->point3D(pointId).xyz =
+            transformPoint(transform, _reconstruction->point3D(pointId).xyz);
+    }
+
+    for (size_t i = 0; i < imageIds.size(); ++i)
+    {
+        if (_reconstruction->hasCamera(imageIds[i]))
+        {
+            (*baCameras)[i] = _reconstruction->camera(imageIds[i]);
+        }
+    }
+
+    Logger::instance()->infof(
+        "[SFM] Known-pose Sim3/RANSAC alignment before BA: cameras=%zu inliers=%d scale=%.9f rmse=%.6f",
+        currentCenters.size(),
+        transform.inlierCount,
+        transform.scale,
+        transform.rmse);
+}
+
+void IncrementalSfm::refineKnownCameraPosesWithPnp()
+{
+    if (!_sfmOptions.useKnownCameraPoses || !_reconstruction)
+    {
+        return;
+    }
+
+    const std::vector<ImageId> imageIds = _reconstruction->registeredImageIds();
+    for (ImageId imageId : imageIds)
+    {
+        if (!_reconstruction->hasCamera(imageId) || !_reconstruction->hasImage(imageId))
+        {
+            continue;
+        }
+
+        std::vector<std::array<double, 3>> worldPoints;
+        std::vector<std::array<double, 2>> imagePoints;
+        const ImageData &image = _reconstruction->image(imageId);
+        for (Point3DId pointId : _reconstruction->allPoint3DIds())
+        {
+            if (!_reconstruction->hasPoint3D(pointId))
+            {
+                continue;
+            }
+
+            const ScenePoint3D &point = _reconstruction->point3D(pointId);
+            for (const TrackElement &element : point.track.elements)
+            {
+                if (element.imageId != imageId || element.featureIdx >= image.keypoints.size())
+                {
+                    continue;
+                }
+
+                const FeatureKeypoint &keypoint = image.keypoints[element.featureIdx];
+                worldPoints.push_back(point.xyz);
+                imagePoints.push_back({{static_cast<double>(keypoint.x), static_cast<double>(keypoint.y)}});
+                break;
+            }
+        }
+
+        if (static_cast<int>(worldPoints.size()) < std::max(6, _sfmOptions.pnpOptions.minNumInliers))
+        {
+            continue;
+        }
+
+        PnpOptions pnpOptions = _sfmOptions.pnpOptions;
+        pnpOptions.maxReprojError = std::max(pnpOptions.maxReprojError, _sfmOptions.filterMaxReprojError * 2.0);
+        pnpOptions.minNumInliers = std::min(pnpOptions.minNumInliers, static_cast<int>(worldPoints.size()));
+        pnpOptions.minInlierRatio = std::min(pnpOptions.minInlierRatio, 0.10);
+
+        const Camera before = _reconstruction->camera(imageId);
+        const PnpResult pnp = PnpSolver::solveWithCamera(worldPoints, imagePoints, before, pnpOptions);
+        if (!pnp.success)
+        {
+            continue;
+        }
+
+        Camera inputCamera;
+        const double inputExtent = [&]()
+        {
+            std::vector<std::array<double, 3>> centers;
+            for (ImageId id : imageIds)
+            {
+                Camera cam;
+                if (getCamera(id, cam))
+                {
+                    centers.push_back(cam.cameraCenter());
+                }
+            }
+            return centerExtent(centers);
+        }();
+        const double maxAcceptedMove = std::max(0.5, inputExtent * 0.05);
+        Camera candidate = before;
+        candidate.setPose(pnp.R, pnp.C);
+        if (getCamera(imageId, inputCamera) &&
+            pointDistance(candidate.cameraCenter(), inputCamera.cameraCenter()) > maxAcceptedMove)
+        {
+            Logger::instance()->warnf(
+                "[SFM] Known-pose PnP refinement rejected for image %u: move from prior %.3f > %.3f",
+                imageId,
+                pointDistance(candidate.cameraCenter(), inputCamera.cameraCenter()),
+                maxAcceptedMove);
+            continue;
+        }
+
+        _reconstruction->camera(imageId) = candidate;
+        Logger::instance()->infof("[SFM] Known-pose PnP refinement accepted: image=%u inliers=%d/%zu",
+                                  imageId,
+                                  pnp.numInliers,
+                                  worldPoints.size());
+    }
 }
 
 // ============================================================
@@ -1452,6 +1905,11 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         baCameras.push_back(_reconstruction->camera(baImageIds[i]));
     }
 
+    if (_sfmOptions.useKnownCameraPoses && !localOnly)
+    {
+        alignReconstructionToKnownPosePriors(baImageIds, &baCameras);
+    }
+
     // 收集轨迹（同时记录 trackIdx → Point3DId 的映射，用于回写和过滤）
     std::vector<BATrack> baTracks;
     std::vector<Point3DId> trackToPid; // 与 baTracks 索引对应
@@ -1497,6 +1955,11 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     //   - 全局 BA 固定 index=0 的相机（gauge 固定，消除坐标系漂移）
     //   - 局部 BA 不固定（局部块坐标由全局约束）
     BAOptions baOpt = _sfmOptions.baOptions;
+    if (_sfmOptions.useKnownCameraPoses && baOpt.cameraPosePriors.empty())
+    {
+        baOpt.cameraPosePriors = buildCameraPosePriorsFromInputCameras(baImageIds);
+        baOpt.refineCameraPose = false;
+    }
     if (!localOnly && !baImageIds.empty())
     {
         baOpt.fixedCameraIndices = {0}; // gauge: 第一个相机位姿保持不变

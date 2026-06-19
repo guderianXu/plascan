@@ -46,6 +46,20 @@ struct BALaserPlaneConstraint
 };
 
 /**
+ * @brief 相机位姿软先验：用于已知外参不完全可靠时约束 BA 不发生无意义漂移。
+ */
+struct BACameraPosePrior
+{
+    bool enabled = false;
+    std::array<double, 9> cameraToWorldRotation{{1.0, 0.0, 0.0,
+                                                 0.0, 1.0, 0.0,
+                                                 0.0, 0.0, 1.0}};
+    std::array<double, 3> cameraCenter{{0.0, 0.0, 0.0}};
+    double positionSigmaMeters = 1.0;
+    double rotationSigmaDegrees = 2.0;
+};
+
+/**
  * @brief 轨迹：一个三维点及其在多幅图像中的观测集合。
  *
  * 轨迹表示多相机共观的同一个物方点，是光束法平差的核心数据单元。
@@ -77,6 +91,11 @@ struct BAOptions
     bool enableLaserPlaneConstraints = false; ///< 是否启用 BATrack 上挂载的 LiDAR 点到面约束
     double laserPlaneWeight = 1.0;            ///< LiDAR 残差全局权重，单位相当于 1/m
     double laserHuberDeltaMeters = 0.2;       ///< LiDAR 点到面 Huber 阈值（米）
+
+    // ── 相机位姿软先验 ───────────────────────────────────────────────────
+    std::vector<BACameraPosePrior> cameraPosePriors; ///< 与 cameras 同序的可选外参软先验
+    double cameraPosePriorWeight = 1000.0;           ///< 位姿先验整体权重
+    double cameraPosePriorHuberDelta = 3.0;          ///< 位姿先验 Huber 阈值（归一化残差）
 
     // ── Gauge 固定 ──────────────────────────────────────────────────────────
     /// 固定这些索引对应的相机位姿（不参与 camera 优化阶段）。

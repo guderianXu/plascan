@@ -205,6 +205,9 @@ struct SFMServiceResult
     /// 追加到 aerial_triangulation_results 的附加字段。
     QJsonObject resultRecordExtra;
 
+    /// SfM 配对、匹配图、注册质量与点云质量诊断，供日志、项目记录和报告窗口复盘。
+    QJsonObject sfmDiagnostics;
+
     // ── 光束法平差统计（供报告使用） ──────────────────────────────────────
     double  baRmsBefore        = 0.0;  ///< BA 优化前平均重投影 RMS（px）
     double  baRmsAfter         = 0.0;  ///< BA 优化后平均重投影 RMS（px）

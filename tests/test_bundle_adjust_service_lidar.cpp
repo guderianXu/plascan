@@ -54,6 +54,22 @@ QString writeLaserPlanePly(const QString &dir)
     return path;
 }
 
+QString writeLaserHeightPly(const QString &dir)
+{
+    const QString path = QDir(dir).filePath(QStringLiteral("laser_height_xyz.ply"));
+    std::ofstream out(path.toStdString(), std::ios::binary | std::ios::trunc);
+    EXPECT_TRUE(out.good());
+    out << "ply\n"
+        << "format ascii 1.0\n"
+        << "element vertex 1\n"
+        << "property float x\n"
+        << "property float y\n"
+        << "property float z\n"
+        << "end_header\n"
+        << "0 0 10\n";
+    return path;
+}
+
 } // namespace
 
 TEST(BundleAdjustServiceLidarTest, RunLoadsLaserCloudAndWritesLaserSummary)
@@ -88,6 +104,75 @@ TEST(BundleAdjustServiceLidarTest, RunLoadsLaserCloudAndWritesLaserSummary)
     EXPECT_EQ(summary.value(QStringLiteral("laser_constraint_count")).toInt(), 1);
     EXPECT_NEAR(summary.value(QStringLiteral("laser_rms_before_m")).toDouble(), 2.0, 1e-9);
     EXPECT_LT(summary.value(QStringLiteral("laser_rms_after_m")).toDouble(), 0.05);
+}
+
+TEST(BundleAdjustServiceLidarTest, RunAppliesQualityWeightWithoutMultiplyingUserLaserWeight)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.exportTsai = false;
+    options.exportEvalPlot = false;
+    options.enableLaserConstraints = true;
+    options.laserConstraintCloudPath = writeLaserPlanePly(tempDir.path());
+    options.laserAssociationMaxDistanceMeters = 3.0;
+    options.laserWeight = 7.0;
+    options.laserHuberDeltaMeters = 10.0;
+    options.baOpt.refineCameraPose = false;
+    options.baOpt.enablePointFilter = false;
+    options.baOpt.maxIterations = 1;
+
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+    ASSERT_EQ(tracks.size(), 1u);
+    ASSERT_EQ(tracks.front().laserPlaneConstraints.size(), 1u);
+    EXPECT_NEAR(tracks.front().laserPlaneConstraints.front().weight, 0.3, 1e-12);
+
+    const QJsonObject optionsJson = result.resultJson.value(QStringLiteral("options")).toObject();
+    EXPECT_DOUBLE_EQ(optionsJson.value(QStringLiteral("laser_weight")).toDouble(), 7.0);
+}
+
+TEST(BundleAdjustServiceLidarTest, RunUsesXyzLaserCloudAsHeightPlanesWhenExplicitlyEnabled)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.exportTsai = false;
+    options.exportEvalPlot = false;
+    options.enableLaserConstraints = true;
+    options.laserConstraintCloudPath = writeLaserHeightPly(tempDir.path());
+    options.laserAssociationMaxDistanceMeters = 3.0;
+    options.laserUseMissingNormalsAsHeightPlanes = true;
+    options.laserWeight = 5.0;
+    options.laserHuberDeltaMeters = 10.0;
+    options.baOpt.refineCameraPose = false;
+    options.baOpt.enablePointFilter = false;
+    options.baOpt.maxIterations = 4;
+
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+    const QJsonObject summary = result.resultJson.value(QStringLiteral("laser_constraints_summary")).toObject();
+    EXPECT_EQ(summary.value(QStringLiteral("map_sample_count")).toInt(), 1);
+    EXPECT_EQ(summary.value(QStringLiteral("laser_constraint_count")).toInt(), 1);
+    EXPECT_NEAR(summary.value(QStringLiteral("laser_rms_before_m")).toDouble(), 2.0, 1e-9);
+    EXPECT_LT(summary.value(QStringLiteral("laser_rms_after_m")).toDouble(), 0.05);
+
+    const QJsonObject optionsJson = result.resultJson.value(QStringLiteral("options")).toObject();
+    EXPECT_TRUE(optionsJson.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool());
 }
 
 TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)

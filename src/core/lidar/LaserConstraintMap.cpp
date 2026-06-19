@@ -278,7 +278,7 @@ bool makeSample(const PropertyValues &values,
     }
 
     const std::array<double, 3> point{{values.x, values.y, values.z}};
-    const std::array<double, 3> normal{{values.normalX, values.normalY, values.normalZ}};
+    std::array<double, 3> normal{{values.normalX, values.normalY, values.normalZ}};
     for (double value : point)
     {
         if (!std::isfinite(value))
@@ -286,12 +286,22 @@ bool makeSample(const PropertyValues &values,
             return false;
         }
     }
+    bool normalIsMissing = false;
     for (double value : normal)
     {
         if (!std::isfinite(value))
         {
+            normalIsMissing = true;
+            break;
+        }
+    }
+    if (normalIsMissing)
+    {
+        if (!options.useMissingNormalsAsHeightPlanes)
+        {
             return false;
         }
+        normal = {{0.0, 0.0, 1.0}};
     }
     if (options.maxCurvature >= 0.0 && values.curvature > options.maxCurvature)
     {
