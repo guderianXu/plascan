@@ -81,6 +81,11 @@ private:
     QCheckBox    *m_normalsCheck      = nullptr;  ///< 估计法向量
     QCheckBox    *m_colorsCheck       = nullptr;  ///< 采样颜色
     QCheckBox    *m_multiViewCheck    = nullptr;  ///< 多视图一致性融合
+    QSpinBox     *m_minConsistentViewsSpin = nullptr;  ///< 最小一致视图数
+    QCheckBox    *m_geomConsistencyCheck = nullptr;     ///< 几何一致性过滤
+    QDoubleSpinBox *m_maxReprojErrorSpin = nullptr;     ///< 最大重投影误差
+    QSpinBox     *m_speckleMinAreaSpin = nullptr;       ///< 小连通域过滤阈值
+    QSpinBox     *m_fusionMaxImageDimSpin = nullptr;    ///< 融合最长边
     QSpinBox     *m_normalKnnSpin     = nullptr;  ///< 法向量 KNN
 
     // ---- 网格重建（可选） ----

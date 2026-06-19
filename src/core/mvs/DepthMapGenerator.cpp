@@ -7,9 +7,13 @@
 #include "DenseCloudBuilder.h"
 #include "DepthFrameUtils.h"
 #include "EpipolarRectifier.h"
+#include "MvsSourcePlanner.h"
 #include "MvsViewSelection.h"
 #include "Logger.h"
 #include <QtConcurrent/QtConcurrent>
+#include <QDir>
+#include <QFile>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <opencv2/imgcodecs.hpp>
@@ -515,6 +519,25 @@ bool saveDepthPreviewPng(const std::string &path, const cv::Mat &depthMap, std::
     return true;
 }
 
+QString manifestPathForOutput(const DepthGenConfig &config, const std::string &outputDir)
+{
+    QString dir;
+    if (!config.intermediateDir.empty())
+    {
+        dir = QString::fromStdString(config.intermediateDir);
+    }
+    else if (!outputDir.empty())
+    {
+        dir = QString::fromStdString(outputDir);
+    }
+
+    if (dir.trimmed().isEmpty())
+    {
+        return {};
+    }
+    return QDir(dir).filePath(QStringLiteral("mvs_manifest.json"));
+}
+
 template <typename Fn>
 void parallelForRows(int rowCount, int workerCount, Fn &&fn)
 {
@@ -719,6 +742,15 @@ bool estimatePatchMatchWithAdaptiveCuda(
         }
 
         lastCudaError = attemptError;
+        if (config.cancelFlag && config.cancelFlag->load(std::memory_order_relaxed))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = attemptError.empty() ? std::string("PatchMatch cancelled") : attemptError;
+            }
+            return false;
+        }
+
         PatchMatchDepthEstimator::cleanupGpuImageCache();
 
         if (!isCudaMemoryFailure(attemptError) || attemptConfig.downsampleFactor >= 12)
@@ -921,6 +953,157 @@ void DepthMapGenerator::setSkippedFrameIndices(const std::vector<int> &indices)
         {
             m_skipFrameMask[static_cast<size_t>(index)] = 1;
         }
+    }
+}
+
+void DepthMapGenerator::initializeWorkspaceManifest()
+{
+    std::vector<QJsonObject> reusableArtifacts;
+    int manifestSkipCount = 0;
+    QString manifestPathForLog;
+    QString depthConfigHashForLog;
+
+    {
+        std::lock_guard<std::mutex> lock(m_workspaceManifestMutex);
+        m_workspaceManifestPath = manifestPathForOutput(m_config, m_outputDir);
+        m_depthConfigHash = makeMvsDepthConfigHash(m_config, static_cast<int>(m_views.size()));
+        manifestPathForLog = m_workspaceManifestPath;
+        depthConfigHashForLog = m_depthConfigHash;
+        m_workspaceManifest.clear();
+        m_workspaceManifest.setConfigHash(m_depthConfigHash);
+
+        if (m_workspaceManifestPath.isEmpty())
+        {
+            return;
+        }
+
+        QString error;
+        if (QFile::exists(m_workspaceManifestPath))
+        {
+            MvsWorkspaceManifest loaded;
+            if (loaded.load(m_workspaceManifestPath, &error))
+            {
+                if (loaded.configHash() == m_depthConfigHash)
+                {
+                    m_workspaceManifest = loaded;
+                }
+                else
+                {
+                    LOG_INFO(QStringLiteral("[MVS] 深度图 manifest 参数已变化，旧记录不复用: %1")
+                                 .arg(QDir::toNativeSeparators(m_workspaceManifestPath)));
+                }
+            }
+            else
+            {
+                LOG_WARN(QStringLiteral("[MVS] 读取深度图 manifest 失败，将重建: %1 error=%2")
+                             .arg(QDir::toNativeSeparators(m_workspaceManifestPath), error));
+            }
+        }
+
+        m_workspaceManifest.setConfigHash(m_depthConfigHash);
+        if (m_skipFrameMask.size() != m_views.size())
+        {
+            m_skipFrameMask.assign(m_views.size(), 0);
+        }
+        for (int i = 0; i < static_cast<int>(m_views.size()); ++i)
+        {
+            if (m_workspaceManifest.hasReusableCompletedFrame(i, m_depthConfigHash))
+            {
+                m_skipFrameMask[static_cast<size_t>(i)] = 1;
+                ++manifestSkipCount;
+
+                for (const MvsDepthFrameRecord &record : m_workspaceManifest.frames())
+                {
+                    if (record.refIndex == i)
+                    {
+                        QJsonObject artifact = record.toJson();
+                        artifact[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
+                        artifact[QStringLiteral("manifest_path")] = m_workspaceManifestPath;
+                        reusableArtifacts.push_back(artifact);
+                        break;
+                    }
+                }
+            }
+        }
+
+        LOG_INFO(QStringLiteral("[MVS] 深度图 manifest: path=%1 config=%2 reusable=%3")
+                     .arg(QDir::toNativeSeparators(m_workspaceManifestPath))
+                     .arg(m_depthConfigHash.left(12))
+                     .arg(manifestSkipCount));
+
+        if (manifestSkipCount > 0 && m_config.runFusion)
+        {
+            LOG_WARN(QStringLiteral(
+                "[MVS] 检测到 %1 个可复用深度帧，本次自动切换为深度图续跑模式；"
+                "完成后请使用已保存深度图运行融合，避免只融合本次新计算的子集。")
+                         .arg(manifestSkipCount));
+            m_config.runFusion = false;
+        }
+    }
+
+    for (const QJsonObject &artifact : reusableArtifacts)
+    {
+        emit depthMapArtifactSaved(artifact);
+    }
+    if (!reusableArtifacts.empty())
+    {
+        LOG_INFO(QStringLiteral("[MVS] 已从 manifest 回灌 %1 个深度图记录到项目元数据: %2 config=%3")
+                     .arg(static_cast<int>(reusableArtifacts.size()))
+                     .arg(QDir::toNativeSeparators(manifestPathForLog))
+                     .arg(depthConfigHashForLog.left(12)));
+    }
+}
+
+bool DepthMapGenerator::persistWorkspaceManifest(QString *errorMsg)
+{
+    if (m_workspaceManifestPath.isEmpty())
+    {
+        return true;
+    }
+    return m_workspaceManifest.saveAtomic(m_workspaceManifestPath, errorMsg);
+}
+
+void DepthMapGenerator::markManifestFrameRunning(int frameIndex)
+{
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(m_views.size()))
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(m_workspaceManifestMutex);
+    if (m_workspaceManifestPath.isEmpty())
+    {
+        return;
+    }
+
+    m_workspaceManifest.markRunning(frameIndex,
+                                    QString::fromStdString(m_views[frameIndex].imagePath),
+                                    m_depthConfigHash);
+    QString error;
+    if (!persistWorkspaceManifest(&error))
+    {
+        LOG_WARN(QStringLiteral("[MVS] 写入运行中 manifest 失败: %1").arg(error));
+    }
+}
+
+void DepthMapGenerator::markManifestFrameFailed(int frameIndex, const QString &error)
+{
+    if (frameIndex < 0 || frameIndex >= static_cast<int>(m_views.size()))
+    {
+        return;
+    }
+
+    std::lock_guard<std::mutex> lock(m_workspaceManifestMutex);
+    if (m_workspaceManifestPath.isEmpty())
+    {
+        return;
+    }
+
+    m_workspaceManifest.markFailed(frameIndex, error);
+    QString saveError;
+    if (!persistWorkspaceManifest(&saveError))
+    {
+        LOG_WARN(QStringLiteral("[MVS] 写入失败 manifest 失败: %1").arg(saveError));
     }
 }
 
@@ -1159,7 +1342,25 @@ void DepthMapGenerator::prepareFrameCaches()
     for (int refIdx = 0; refIdx < NV; ++refIdx)
     {
         const int desiredSourceCount = std::max(1, m_config.numSourceViews);
-        std::vector<MvsSourceViewScore> rankedSourceCandidates;
+        const size_t refVisibleCount =
+            m_frameCaches[static_cast<size_t>(refIdx)].visiblePointIndices.size();
+
+        MvsSourcePlannerOptions plannerOptions;
+        plannerOptions.refIndex = refIdx;
+        plannerOptions.viewCount = NV;
+        plannerOptions.maxSources = desiredSourceCount;
+        plannerOptions.rejectAngleOutliers = true;
+        plannerOptions.minTriangulationAngleDeg = 0.2f;
+        plannerOptions.maxTriangulationAngleDeg = 70.0f;
+
+        struct RankedSourceCandidate
+        {
+            int viewIndex = -1;
+            int commonVisiblePoints = 0;
+            int sequenceDistance = 0;
+        };
+
+        std::vector<RankedSourceCandidate> rankedSourceCandidates;
         rankedSourceCandidates.reserve(static_cast<size_t>(std::max(0, NV - 1)));
         for (int sourceIdx = 0; sourceIdx < NV; ++sourceIdx)
         {
@@ -1174,75 +1375,68 @@ void DepthMapGenerator::prepareFrameCaches()
                 continue;
             }
 
-            MvsSourceViewScore candidate;
-            candidate.viewIndex = sourceIdx;
-            candidate.commonVisiblePoints = common;
-            candidate.medianTriangulationAngleDeg = 0.f;
-            candidate.score = static_cast<float>(common);
-            rankedSourceCandidates.push_back(candidate);
+            rankedSourceCandidates.push_back({sourceIdx, common, std::abs(sourceIdx - refIdx)});
         }
 
         std::sort(rankedSourceCandidates.begin(),
                   rankedSourceCandidates.end(),
-                  [](const MvsSourceViewScore &a, const MvsSourceViewScore &b)
-        {
-            if (a.commonVisiblePoints != b.commonVisiblePoints)
-            {
-                return a.commonVisiblePoints > b.commonVisiblePoints;
-            }
-            return a.viewIndex < b.viewIndex;
-        });
+                  [](const RankedSourceCandidate &a, const RankedSourceCandidate &b)
+                  {
+                      if (a.commonVisiblePoints != b.commonVisiblePoints)
+                      {
+                          return a.commonVisiblePoints > b.commonVisiblePoints;
+                      }
+                      if (a.sequenceDistance != b.sequenceDistance)
+                      {
+                          return a.sequenceDistance < b.sequenceDistance;
+                      }
+                      return a.viewIndex < b.viewIndex;
+                  });
 
-        auto compareSourceScores = [](const MvsSourceViewScore &a, const MvsSourceViewScore &b)
+        std::vector<MvsSourceCandidate> candidates;
+        candidates.reserve(rankedSourceCandidates.size());
+        int provenSourceCount = 0;
+        int currentSourceScoreCutoff = -1;
+        for (const RankedSourceCandidate &candidate : rankedSourceCandidates)
         {
-            if (a.score != b.score)
-            {
-                return a.score > b.score;
-            }
-            if (a.commonVisiblePoints != b.commonVisiblePoints)
-            {
-                return a.commonVisiblePoints > b.commonVisiblePoints;
-            }
-            return a.viewIndex < b.viewIndex;
-        };
-
-        std::vector<MvsSourceViewScore> scores;
-        scores.reserve(rankedSourceCandidates.size());
-        for (const MvsSourceViewScore &candidate : rankedSourceCandidates)
-        {
-            const float currentSourceScoreCutoff =
-                scores.size() >= static_cast<size_t>(desiredSourceCount)
-                    ? scores[static_cast<size_t>(desiredSourceCount - 1)].score
-                    : -std::numeric_limits<float>::infinity();
-
-            if (scores.size() >= static_cast<size_t>(desiredSourceCount)
+            // remaining candidates are sorted by common count; once enough stronger sources are proven,
+            // avoid spending more time sampling triangulation angles for weaker candidates.
+            if (provenSourceCount >= desiredSourceCount
                 && candidate.commonVisiblePoints <= currentSourceScoreCutoff)
             {
-                // remaining candidates are sorted by common count; angle weights never raise a score above common.
                 break;
             }
 
             const float medianAngle = sampledMedianAngle(refIdx, candidate.viewIndex);
-            const float angleWeight =
-                medianAngle < 0.2f ? 0.25f :
-                medianAngle > 35.0f ? 0.50f :
-                1.0f;
-            const float proximityPenalty = 0.001f * static_cast<float>(std::abs(candidate.viewIndex - refIdx));
-
-            MvsSourceViewScore score;
-            score.viewIndex = candidate.viewIndex;
-            score.commonVisiblePoints = candidate.commonVisiblePoints;
-            score.medianTriangulationAngleDeg = medianAngle;
-            score.score = static_cast<float>(candidate.commonVisiblePoints) * angleWeight - proximityPenalty;
-            scores.push_back(score);
-            std::sort(scores.begin(), scores.end(), compareSourceScores);
+            MvsSourceCandidate sourceCandidate;
+            sourceCandidate.viewIndex = candidate.viewIndex;
+            sourceCandidate.sharedTracks = candidate.commonVisiblePoints;
+            sourceCandidate.geometricInliers = candidate.commonVisiblePoints;
+            sourceCandidate.medianTriangulationAngleDeg = medianAngle;
+            sourceCandidate.coverageScore = refVisibleCount > 0
+                ? std::clamp(static_cast<float>(candidate.commonVisiblePoints) / static_cast<float>(refVisibleCount), 0.0f, 1.0f)
+                : 0.0f;
+            sourceCandidate.baselineScore = std::clamp(medianAngle / 20.0f, 0.0f, 1.0f);
+            sourceCandidate.sequenceDistance = candidate.sequenceDistance;
+            sourceCandidate.knownOverlap = true;
+            candidates.push_back(sourceCandidate);
+            if (medianAngle >= plannerOptions.minTriangulationAngleDeg
+                && medianAngle <= plannerOptions.maxTriangulationAngleDeg)
+            {
+                ++provenSourceCount;
+                if (provenSourceCount >= desiredSourceCount)
+                {
+                    currentSourceScoreCutoff = candidate.commonVisiblePoints;
+                }
+            }
         }
 
-        std::sort(scores.begin(), scores.end(), compareSourceScores);
+        const MvsSourcePlan sourcePlan = planMvsSourceViews(candidates, plannerOptions);
 
         auto &sources = m_frameCaches[static_cast<size_t>(refIdx)].sourceViewIndices;
+        m_frameCaches[static_cast<size_t>(refIdx)].sourceViewScores = sourcePlan.selected;
         sources.reserve(static_cast<size_t>(std::min(NV - 1, desiredSourceCount)));
-        for (const auto &score : scores)
+        for (const auto &score : sourcePlan.selected)
         {
             if (score.score <= 0.f)
             {
@@ -1257,7 +1451,12 @@ void DepthMapGenerator::prepareFrameCaches()
 
         if (sources.empty())
         {
-            sources = nearestMvsSourceViewIndices(NV, refIdx, desiredSourceCount);
+            const MvsSourcePlan fallbackPlan = planMvsSourceViews({}, plannerOptions);
+            m_frameCaches[static_cast<size_t>(refIdx)].sourceViewScores = fallbackPlan.selected;
+            for (const auto &entry : fallbackPlan.selected)
+            {
+                sources.push_back(entry.viewIndex);
+            }
         }
 
         auto &cache = m_frameCaches[static_cast<size_t>(refIdx)];
@@ -2230,6 +2429,88 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
     return candidateCount;
 }
 
+int DepthMapGenerator::removeSmallDepthComponents(cv::Mat &depthMap,
+                                                  cv::Mat &confidenceMap,
+                                                  int minComponentArea,
+                                                  float maxRemovalRatio,
+                                                  int refIdx)
+{
+    if (depthMap.empty() || depthMap.type() != CV_32F)
+    {
+        return 0;
+    }
+    if (minComponentArea <= 1 || maxRemovalRatio <= 0.0f)
+    {
+        return 0;
+    }
+
+    const cv::Mat validMask = depthMap > 0.0f;
+    const int validBefore = cv::countNonZero(validMask);
+    if (validBefore <= 0)
+    {
+        return 0;
+    }
+
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int componentCount = cv::connectedComponentsWithStats(
+        validMask,
+        labels,
+        stats,
+        centroids,
+        8,
+        CV_32S);
+
+    cv::Mat removeMask = cv::Mat::zeros(depthMap.size(), CV_8U);
+    int candidateCount = 0;
+    for (int label = 1; label < componentCount; ++label)
+    {
+        const int area = stats.at<int>(label, cv::CC_STAT_AREA);
+        if (area <= 0 || area >= minComponentArea)
+        {
+            continue;
+        }
+
+        candidateCount += area;
+        removeMask.setTo(255, labels == label);
+    }
+
+    if (candidateCount <= 0)
+    {
+        return 0;
+    }
+
+    const float removalRatio = static_cast<float>(candidateCount) / static_cast<float>(validBefore);
+    if (removalRatio > maxRemovalRatio)
+    {
+        fprintf(stderr,
+                "[MVS] 帧 %d: 小连通域 speckle 候选过多 %d/%d (%.1f%% > %.1f%%)，已跳过\n",
+                refIdx,
+                candidateCount,
+                validBefore,
+                removalRatio * 100.0f,
+                maxRemovalRatio * 100.0f);
+        return 0;
+    }
+
+    depthMap.setTo(0.0f, removeMask);
+    if (!confidenceMap.empty() &&
+        confidenceMap.size() == depthMap.size() &&
+        confidenceMap.type() == CV_32F)
+    {
+        confidenceMap.setTo(0.0f, removeMask);
+    }
+
+    fprintf(stderr,
+            "[MVS] 帧 %d: 小连通域 speckle 过滤移除 %d/%d 像素 (min_area=%d)\n",
+            refIdx,
+            candidateCount,
+            validBefore,
+            minComponentArea);
+    return candidateCount;
+}
+
 DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &depthMap,
                                                                     cv::Mat &confidenceMap,
                                                                     const FusionConfig &config,
@@ -2322,16 +2603,30 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
             refIdx);
     }
 
+    if (config.enableSpeckleFilter)
+    {
+        stats.smallComponentRemoved = removeSmallDepthComponents(
+            depthMap,
+            confidenceMap,
+            config.minSpeckleComponentArea,
+            config.maxSpeckleRemovalRatio,
+            refIdx);
+        stats.speckleRemoved = stats.smallComponentRemoved;
+    }
+
     stats.validAfterPostprocess = cv::countNonZero(depthMap > 0.0f);
-    if (stats.confidenceRemoved > 0 || stats.localDepthOutlierRemoved > 0)
+    if (stats.confidenceRemoved > 0
+        || stats.localDepthOutlierRemoved > 0
+        || stats.smallComponentRemoved > 0)
     {
         fprintf(stderr,
-                "[MVS] 帧%d 深度后处理: before=%d after_conf=%d conf_removed=%d local_removed=%d after=%d\n",
+                "[MVS] 帧%d 深度后处理: before=%d after_conf=%d conf_removed=%d local_removed=%d speckle_removed=%d after=%d\n",
                 refIdx,
                 stats.validBeforePostprocess,
                 stats.validAfterConfidenceFilter,
                 stats.confidenceRemoved,
                 stats.localDepthOutlierRemoved,
+                stats.speckleRemoved,
                 stats.validAfterPostprocess);
     }
     return stats;
@@ -2434,6 +2729,45 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
             oss << sourceIndices[k];
         }
         fprintf(stderr, "[MVS] 帧 %d: 共视评分选择源帧 [%s]\n", refIdx, oss.str().c_str());
+
+        if (m_frameCachesReady &&
+            refIdx >= 0 &&
+            refIdx < static_cast<int>(m_frameCaches.size()) &&
+            !m_frameCaches[static_cast<size_t>(refIdx)].sourceViewScores.empty())
+        {
+            std::ostringstream details;
+            int detailCount = 0;
+            const auto &scores = m_frameCaches[static_cast<size_t>(refIdx)].sourceViewScores;
+            for (int sourceIndex : sourceIndices)
+            {
+                const auto it = std::find_if(scores.begin(), scores.end(),
+                                             [sourceIndex](const MvsSourcePlanEntry &score)
+                                             {
+                                                 return score.viewIndex == sourceIndex;
+                                             });
+                if (it == scores.end())
+                {
+                    continue;
+                }
+                if (detailCount > 0)
+                {
+                    details << "; ";
+                }
+                details << it->viewIndex
+                        << "(tracks=" << it->sharedTracks
+                        << ",inliers=" << it->geometricInliers
+                        << ",angle=" << it->medianTriangulationAngleDeg
+                        << ",coverage=" << it->coverageScore
+                        << ",score=" << it->score << ")";
+                ++detailCount;
+            }
+            if (detailCount > 0)
+            {
+                LOG_INFO(QStringLiteral("[MVS] 帧 %1 source 诊断: %2")
+                             .arg(refIdx)
+                             .arg(QString::fromStdString(details.str())));
+            }
+        }
     }
     timing.sourceMs = elapsedMs(stageStart, Clock::now());
 
@@ -2780,6 +3114,24 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
         applySparseSupportPrior(depthMap, confMap, supportMask, refIdx);
     }
+
+    if (config.fusion.enableLocalDepthOutlierFilter)
+    {
+        const int previewOutliers = removeLocalDepthOutliers(
+            depthMap,
+            confMap,
+            config.fusion.localDepthOutlierKernelSize,
+            config.fusion.localDepthOutlierRelThresh,
+            config.fusion.maxLocalDepthOutlierRemovalRatio,
+            refIdx);
+        if (previewOutliers > 0)
+        {
+            fprintf(stderr,
+                    "[MVS] 帧 %d: 输出前局部深度突刺过滤移除 %d 像素\n",
+                    refIdx,
+                    previewOutliers);
+        }
+    }
     if (cancelled("深度后处理后"))
     {
         return result;
@@ -2812,6 +3164,8 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
 {
     FusionFrameInput frame;
     frame.cameraModel = m_views[res.refViewIdx].positiveDepthModel();
+    frame.viewIndex = res.refViewIdx;
+    frame.sourceImageIndices = res.sourceViewIndices;
     frame.imgW = res.depthMap ? res.depthMap->cols : 0;
     frame.imgH = res.depthMap ? res.depthMap->rows : 0;
     frame.imagePath = m_views[res.refViewIdx].imagePath;
@@ -3059,6 +3413,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             LOG_WARN(QStringLiteral("[MVS] 保存%1深度预览失败: %2")
                          .arg(stageLabel, QString::fromStdString(saveErr)));
             emit errorOccurred(QString::fromStdString(saveErr));
+            markManifestFrameFailed(frameIndex, QString::fromStdString(saveErr));
             return false;
         }
 
@@ -3083,6 +3438,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             LOG_WARN(QStringLiteral("[MVS] 保存%1原始深度失败: %2")
                              .arg(stageLabel, QString::fromStdString(saveErr)));
             emit errorOccurred(QString::fromStdString(saveErr));
+            markManifestFrameFailed(frameIndex, QString::fromStdString(saveErr));
         }
         rawMs = elapsedMs(rawStart, Clock::now());
     }
@@ -3141,6 +3497,12 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
 
         QJsonArray sourceImages;
         QJsonArray sourceIndices;
+        QJsonArray sourcePlan;
+        QStringList sourceImageList;
+        const bool hasSourceScoreCache =
+            frameIndex >= 0
+            && frameIndex < static_cast<int>(m_frameCaches.size())
+            && !m_frameCaches[static_cast<size_t>(frameIndex)].sourceViewScores.empty();
         for (const int sourceIndex : result.sourceViewIndices)
         {
             if (sourceIndex < 0 || sourceIndex >= static_cast<int>(m_views.size()))
@@ -3148,10 +3510,29 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
                 continue;
             }
             sourceIndices.append(sourceIndex);
-            sourceImages.append(QString::fromStdString(m_views[sourceIndex].imagePath));
+            const QString sourceImage = QString::fromStdString(m_views[sourceIndex].imagePath);
+            sourceImages.append(sourceImage);
+            sourceImageList.append(sourceImage);
+            if (hasSourceScoreCache)
+            {
+                const auto &scores = m_frameCaches[static_cast<size_t>(frameIndex)].sourceViewScores;
+                const auto it = std::find_if(scores.begin(),
+                                             scores.end(),
+                                             [sourceIndex](const MvsSourcePlanEntry &entry)
+                                             {
+                                                 return entry.viewIndex == sourceIndex;
+                                             });
+                if (it != scores.end())
+                {
+                    QJsonObject sourcePlanEntry = mvsSourcePlanEntryToJson(*it);
+                    sourcePlanEntry.insert(QStringLiteral("source_image"), sourceImage);
+                    sourcePlan.append(sourcePlanEntry);
+                }
+            }
         }
 
         QJsonObject artifact;
+        artifact[QStringLiteral("ref_index")] = frameIndex;
         artifact[QStringLiteral("depth_png")] = QString::fromStdString(pngPath);
         artifact[QStringLiteral("raw_depth_path")] = saveRawDepth ? QString::fromStdString(rawDepthPath) : QString();
         artifact[QStringLiteral("raw_confidence_path")] =
@@ -3160,6 +3541,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("ref_image")] = QString::fromStdString(m_views[frameIndex].imagePath);
         artifact[QStringLiteral("source_images")] = sourceImages;
         artifact[QStringLiteral("source_indices")] = sourceIndices;
+        artifact[QStringLiteral("source_plan")] = sourcePlan;
         artifact[QStringLiteral("status")] = QStringLiteral("completed");
         artifact[QStringLiteral("stage")] = stageLabel;
         artifact[QStringLiteral("device")] = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
@@ -3167,6 +3549,36 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("grid_width")] = result.depthMap->cols;
         artifact[QStringLiteral("grid_height")] = result.depthMap->rows;
         artifact[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
+        artifact[QStringLiteral("config_hash")] = m_depthConfigHash;
+        artifact[QStringLiteral("manifest_path")] = m_workspaceManifestPath;
+
+        MvsDepthFrameRecord record;
+        record.refIndex = frameIndex;
+        record.refImage = QString::fromStdString(m_views[frameIndex].imagePath);
+        record.sourceImages = sourceImageList;
+        record.sourcePlan = sourcePlan;
+        record.status = QStringLiteral("completed");
+        record.device = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
+        record.depthPng = QString::fromStdString(pngPath);
+        record.rawDepthPath = saveRawDepth ? QString::fromStdString(rawDepthPath) : QString();
+        record.rawConfidencePath = confidenceSaved ? QString::fromStdString(rawConfidencePath) : QString();
+        record.validMaskPath = maskSaved ? QString::fromStdString(validMaskPath) : QString();
+        record.gridWidth = result.depthMap->cols;
+        record.gridHeight = result.depthMap->rows;
+        record.elapsedMs = static_cast<qint64>(std::llround(result.elapsedMs));
+        record.configHash = m_depthConfigHash;
+
+        {
+            std::lock_guard<std::mutex> lock(m_workspaceManifestMutex);
+            m_workspaceManifest.markCompleted(record);
+            QString manifestError;
+            if (!persistWorkspaceManifest(&manifestError))
+            {
+                LOG_WARN(QStringLiteral("[MVS] 写入完成 manifest 失败: %1").arg(manifestError));
+                emit errorOccurred(manifestError);
+                return false;
+            }
+        }
         emit depthMapArtifactSaved(artifact);
     }
 
@@ -3185,6 +3597,8 @@ void DepthMapGenerator::runInBackground()
         emit finished(false);
         return;
     }
+
+    initializeWorkspaceManifest();
 
     // ── 预加载所有图像（一次性磁盘 I/O，后续全从内存读取）────────────────────
     emit progressChanged(QString("预加载 %1 张图像...").arg(NV), 0.f);
@@ -3218,13 +3632,11 @@ void DepthMapGenerator::runInBackground()
     if (m_config.runFusion && !retainDepthFrames)
     {
         const QString msg = QStringLiteral(
-            "系统内存不足，无法在单次任务中保留全部 full-res 深度图用于内存融合；"
-            "请先生成深度图，再运行“深度图融合”。原因：%1").arg(memoryPolicyReason);
+            "系统内存不足以在单次任务中保留全部 full-res 深度图用于内存融合，"
+            "本次自动切换为“仅生成/续跑深度图”；完成后请运行“深度图融合”。原因：%1")
+                                .arg(memoryPolicyReason);
         LOG_WARN(QStringLiteral("[MVS] %1").arg(msg));
-        emit errorOccurred(msg);
-        clearFrameCaches();
-        emit finished(false);
-        return;
+        m_config.runFusion = false;
     }
 
     std::atomic<bool> keepDepthFramesInMemory{retainDepthFrames};
@@ -3421,6 +3833,7 @@ void DepthMapGenerator::runInBackground()
                        &saveQueue](bool useGpu) {
         DepthGenConfig workerConfig = m_config;
         workerConfig.patchMatch.useCuda = useGpu;
+        workerConfig.patchMatch.cancelFlag = &m_cancelled;
         const QString workerTag = useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU");
 
         while (!m_cancelled)
@@ -3475,6 +3888,7 @@ void DepthMapGenerator::runInBackground()
             LOG_INFO(QStringLiteral("[MVS] 帧 %1 开始深度估计: device=%2")
                          .arg(i)
                          .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU")));
+            markManifestFrameRunning(i);
 
             DepthFrameResult res = computeDepthForView(i, &workerConfig);
             if (m_cancelled.load())
@@ -3514,6 +3928,7 @@ void DepthMapGenerator::runInBackground()
                              .arg(useGpu ? QStringLiteral("GPU") : QStringLiteral("CPU"))
                              .arg(elapsedMs, 0, 'f', 1)
                              .arg(QString::fromStdString(res.errorMsg)));
+                markManifestFrameFailed(i, QString::fromStdString(res.errorMsg));
                 anyFailure = true;
             }
             else
@@ -3651,12 +4066,10 @@ void DepthMapGenerator::runInBackground()
     if (m_config.runFusion && !keepDepthFramesInMemory.load())
     {
         const QString msg = QStringLiteral(
-            "内存压力已触发流式深度图保存，无法继续本次内存融合；"
+            "内存压力已触发流式深度图保存，无法继续本次内存融合，自动跳过内存融合；"
             "请使用已保存的深度图运行“深度图融合”阶段。");
         LOG_WARN(QStringLiteral("[MVS] %1").arg(msg));
-        emit errorOccurred(msg);
-        emit finished(false);
-        return;
+        m_config.runFusion = false;
     }
 
     if (!m_config.runFusion)
@@ -3679,6 +4092,29 @@ void DepthMapGenerator::runInBackground()
         emit errorOccurred("没有有效的深度帧，融合失败");
         emit finished(false);
         return;
+    }
+
+    for (auto &frame : frames)
+    {
+        if (frame.sourceImageIndices.empty())
+        {
+            continue;
+        }
+
+        std::vector<int> remappedSources;
+        remappedSources.reserve(frame.sourceImageIndices.size());
+        for (int sourceViewIndex : frame.sourceImageIndices)
+        {
+            for (int frameIndex = 0; frameIndex < static_cast<int>(frames.size()); ++frameIndex)
+            {
+                if (frames[static_cast<size_t>(frameIndex)].viewIndex == sourceViewIndex)
+                {
+                    remappedSources.push_back(frameIndex);
+                    break;
+                }
+            }
+        }
+        frame.sourceImageIndices = std::move(remappedSources);
     }
 
     fprintf(stderr, "[MVS] COLMAP BFS 融合: %d 帧参与\n", (int)frames.size());

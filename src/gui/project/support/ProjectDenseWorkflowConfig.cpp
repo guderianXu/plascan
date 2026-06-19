@@ -64,8 +64,10 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
         settings.value(QStringLiteral("fusion_max_image_dim")).toInt(
             settings.value(QStringLiteral("fusionMaxImageDim")).toInt(2048)));
     parsed.minConsistentViews = settings.value(QStringLiteral("minConsistentViews")).toInt(2);
+    parsed.geomConsistency = settings.value(QStringLiteral("geomConsistency")).toBool(true);
     parsed.depthConsistency = static_cast<float>(settings.value(QStringLiteral("depthConsistency")).toDouble(2.0));
     parsed.maxReprojError = static_cast<float>(settings.value(QStringLiteral("maxReprojError")).toDouble(2.0));
+    parsed.speckleMinArea = std::max(0, settings.value(QStringLiteral("speckleMinArea")).toInt(16));
     parsed.processingDevice = processingDeviceFromString(
         settings.value(QStringLiteral("processingDevice")).toString(QStringLiteral("auto")));
     parsed.pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
@@ -102,11 +104,14 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     config.patchMatch.confidenceThresh = settings.patchMatchConfidence;
     config.patchMatch.useCuda = settings.useCuda;
     config.patchMatch.downsampleFactor = std::max(1, static_cast<int>(std::round(1.0 / settings.resScale)));
+    config.patchMatch.geomConsistency = settings.geomConsistency;
     config.patchMatch.geomConsistencyMaxErr = settings.maxReprojError;
     config.fusion.confidenceThresh = settings.fusionMinConfidence;
     config.fusion.minConsistentViews = std::max(1, settings.minConsistentViews);
     config.fusion.relDepthThresh = 0.05f;
     config.fusion.pixelThresh = settings.depthConsistency;
+    config.fusion.enableSpeckleFilter = settings.speckleMinArea > 0;
+    config.fusion.minSpeckleComponentArea = std::max(0, settings.speckleMinArea);
 
     if (viewCount <= 2)
     {

@@ -64,6 +64,12 @@ int selectResizeInterpolation(const cv::Size &source, const cv::Size &target)
     return cv::INTER_AREA;
 }
 
+bool hasDemCoverage(const DemGridData &demGrid)
+{
+    const cv::Mat &mask = demGrid.hasCoverageMask() ? demGrid.coverageMask : demGrid.validMask;
+    return !mask.empty() && cv::countNonZero(mask) > 0;
+}
+
 } // namespace
 
 bool DomGenerator::generateFromImages(const DemGridData &demGrid,
@@ -86,6 +92,15 @@ bool DomGenerator::generateFromImages(const DemGridData &demGrid,
         if (errorMsg)
         {
             *errorMsg = QStringLiteral("DEM 栅格无效，无法生成 DOM");
+        }
+        return false;
+    }
+
+    if (!hasDemCoverage(demGrid))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 覆盖为空，无法生成 DOM");
         }
         return false;
     }
@@ -325,6 +340,15 @@ bool DomGenerator::generateFromTexturedMesh(const TerrainMeshInput &input,
         if (errorMsg)
         {
             *errorMsg = QStringLiteral("DEM 栅格无效，无法生成 DOM");
+        }
+        return false;
+    }
+
+    if (!hasDemCoverage(demGrid))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 覆盖为空，无法生成 DOM");
         }
         return false;
     }

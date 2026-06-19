@@ -14,6 +14,9 @@
 #include "DepthMapFusion.h"
 #include "DenseCloudBuilder.h"
 #include "DensePointCloudCUDA.h"
+#include "MvsSourcePlanner.h"
+#include "MvsViewSelection.h"
+#include "MvsWorkspaceManifest.h"
 #include "SparseCloudPreprocessor.h"
 
 #include <QObject>
@@ -173,6 +176,13 @@ public:
                                         float maxRemovalRatio,
                                         int refIdx);
 
+    /// 融合前剔除孤立小连通域深度斑点，并同步清零对应置信度
+    static int removeSmallDepthComponents(cv::Mat &depthMap,
+                                          cv::Mat &confidenceMap,
+                                          int minComponentArea,
+                                          float maxRemovalRatio,
+                                          int refIdx);
+
     /// 融合前统一后处理深度图，并返回置信度/局部离群过滤统计
     static DepthPostProcessStats postprocessFusionDepthMap(cv::Mat &depthMap,
                                                            cv::Mat &confidenceMap,
@@ -207,6 +217,7 @@ private:
         std::vector<size_t> visiblePointIndices;
         std::vector<size_t> sourceSharedPointIndices;
         std::vector<int> sourceViewIndices;
+        std::vector<MvsSourcePlanEntry> sourceViewScores;
     };
 
     /// 在 QtConcurrent 线程中运行的主函数
@@ -269,6 +280,10 @@ private:
     bool saveDepthFrameArtifacts(int frameIndex,
                                  const DepthFrameResult &result,
                                  const QString &stageLabel);
+    void initializeWorkspaceManifest();
+    void markManifestFrameRunning(int frameIndex);
+    void markManifestFrameFailed(int frameIndex, const QString &error);
+    bool persistWorkspaceManifest(QString *errorMsg = nullptr);
 
     /// 预加载所有图像到内存，避免逐帧重复磁盘读取
     void preloadImages();
@@ -298,6 +313,11 @@ private:
     std::vector<int> m_pairCommonCounts;
     size_t m_visibilityWordCount = 0;
     bool m_frameCachesReady = false;
+
+    QString m_workspaceManifestPath;
+    QString m_depthConfigHash;
+    MvsWorkspaceManifest m_workspaceManifest;
+    std::mutex m_workspaceManifestMutex;
 
 public:
     /// 融合完可获取每帧一致性过滤的深度图（返回副本，线程安全）

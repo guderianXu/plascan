@@ -179,6 +179,151 @@ PlaPointCloud pointCloudFromDemGrid(const DemGridData &demGrid)
     return cloud;
 }
 
+bool writeSingleBandQualityRaster(const DemGridData &demGrid,
+                                  const cv::Mat &source,
+                                  const QString &outputPath,
+                                  GDALDataType dataType,
+                                  double noDataValue,
+                                  QString *errorMsg)
+{
+    if (source.empty())
+    {
+        return true;
+    }
+    if (source.rows != demGrid.height || source.cols != demGrid.width)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 质量栅格尺寸不一致: %1").arg(outputPath);
+        }
+        return false;
+    }
+
+    ensureGdalRegistered();
+    QDir().mkpath(QFileInfo(outputPath).absolutePath());
+
+    GDALDriver *driver = GetGDALDriverManager()->GetDriverByName("GTiff");
+    if (!driver)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL GTiff driver 不可用");
+        }
+        return false;
+    }
+
+    char **createOptions = nullptr;
+    createOptions = CSLSetNameValue(createOptions, "COMPRESS", "LZW");
+    createOptions = CSLSetNameValue(createOptions, "TILED", "YES");
+    GDALDataset *dataset = driver->Create(outputPath.toStdString().c_str(),
+                                          demGrid.width,
+                                          demGrid.height,
+                                          1,
+                                          dataType,
+                                          createOptions);
+    CSLDestroy(createOptions);
+    if (!dataset)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL 创建 DEM 质量栅格失败: %1").arg(outputPath);
+        }
+        return false;
+    }
+
+    double geoTransform[6]{
+        demGrid.minX - demGrid.stepX * 0.5,
+        demGrid.stepX,
+        0.0,
+        demMaxY(demGrid) + demGrid.stepY * 0.5,
+        0.0,
+        -demGrid.stepY};
+    dataset->SetGeoTransform(geoTransform);
+    if (!demGrid.projection.projectionWkt.isEmpty())
+    {
+        dataset->SetProjection(demGrid.projection.projectionWkt.toStdString().c_str());
+    }
+
+    GDALRasterBand *band = dataset->GetRasterBand(1);
+    if (!band)
+    {
+        GDALClose(dataset);
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL DEM 质量栅格波段创建失败: %1").arg(outputPath);
+        }
+        return false;
+    }
+    band->SetNoDataValue(noDataValue);
+
+    cv::Mat raster;
+    if (dataType == GDT_Float32)
+    {
+        source.convertTo(raster, CV_32F);
+        for (int row = 0; row < demGrid.height; ++row)
+        {
+            for (int col = 0; col < demGrid.width; ++col)
+            {
+                if (demGrid.validMask.at<uchar>(row, col) == 0)
+                {
+                    raster.at<float>(row, col) = static_cast<float>(noDataValue);
+                }
+            }
+        }
+    }
+    else if (dataType == GDT_Int32)
+    {
+        source.convertTo(raster, CV_32S);
+        for (int row = 0; row < demGrid.height; ++row)
+        {
+            for (int col = 0; col < demGrid.width; ++col)
+            {
+                if (demGrid.validMask.at<uchar>(row, col) == 0)
+                {
+                    raster.at<int>(row, col) = static_cast<int>(noDataValue);
+                }
+            }
+        }
+    }
+    else
+    {
+        source.convertTo(raster, CV_8U);
+        for (int row = 0; row < demGrid.height; ++row)
+        {
+            for (int col = 0; col < demGrid.width; ++col)
+            {
+                if (demGrid.validMask.at<uchar>(row, col) == 0)
+                {
+                    raster.at<uchar>(row, col) = static_cast<uchar>(noDataValue);
+                }
+            }
+        }
+    }
+
+    cv::Mat writeRaster = flipForRasterWrite(raster);
+    const CPLErr error = band->RasterIO(GF_Write,
+                                        0,
+                                        0,
+                                        demGrid.width,
+                                        demGrid.height,
+                                        writeRaster.data,
+                                        demGrid.width,
+                                        demGrid.height,
+                                        dataType,
+                                        0,
+                                        0);
+    GDALClose(dataset);
+    if (error != CE_None)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("GDAL 写出 DEM 质量栅格失败: %1").arg(outputPath);
+        }
+        return false;
+    }
+    return true;
+}
+
 } // namespace
 
 bool DemDomIO::writeDemPreviewPng(const DemGridData &demGrid,
@@ -652,6 +797,85 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
     }
 
     GDALClose(dataset);
+    return true;
+}
+
+bool DemDomIO::writeDemQualityRasters(const DemGridData &demGrid,
+                                      const QString &outputDir,
+                                      DemQualityArtifacts *artifacts,
+                                      QString *errorMsg)
+{
+    if (artifacts)
+    {
+        *artifacts = DemQualityArtifacts();
+    }
+    if (!demGrid.isValid())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("DEM 栅格无效，无法写出质量栅格");
+        }
+        return false;
+    }
+    if (!QDir().mkpath(outputDir))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("无法创建 DEM 质量栅格输出目录: %1").arg(outputDir);
+        }
+        return false;
+    }
+
+    const QDir dir(outputDir);
+    if (demGrid.hasTriangulationError())
+    {
+        const QString path = dir.filePath(QStringLiteral("dem_error.tif"));
+        if (!writeSingleBandQualityRaster(demGrid, demGrid.triangulationError, path, GDT_Float32, -9999.0, errorMsg))
+        {
+            return false;
+        }
+        if (artifacts)
+        {
+            artifacts->errorPath = path;
+        }
+    }
+    if (demGrid.hasPointCount())
+    {
+        const QString path = dir.filePath(QStringLiteral("dem_count.tif"));
+        if (!writeSingleBandQualityRaster(demGrid, demGrid.pointCount, path, GDT_Int32, 0.0, errorMsg))
+        {
+            return false;
+        }
+        if (artifacts)
+        {
+            artifacts->countPath = path;
+        }
+    }
+    if (demGrid.hasConfidence())
+    {
+        const QString path = dir.filePath(QStringLiteral("dem_confidence.tif"));
+        if (!writeSingleBandQualityRaster(demGrid, demGrid.confidence, path, GDT_Float32, -1.0, errorMsg))
+        {
+            return false;
+        }
+        if (artifacts)
+        {
+            artifacts->confidencePath = path;
+        }
+    }
+    if (demGrid.hasCoverageMask())
+    {
+        const QString path = dir.filePath(QStringLiteral("dem_coverage.tif"));
+        if (!writeSingleBandQualityRaster(demGrid, demGrid.coverageMask, path, GDT_Byte, 0.0, errorMsg))
+        {
+            return false;
+        }
+        if (artifacts)
+        {
+            artifacts->coveragePath = path;
+        }
+    }
+
     return true;
 }
 

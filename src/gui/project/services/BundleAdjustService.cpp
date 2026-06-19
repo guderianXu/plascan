@@ -278,7 +278,21 @@ BaServiceResult BundleAdjustService::run(
             opts.laserUseMissingNormalsAsHeightPlanes;
         optObj[QStringLiteral("laser_weight")] = opts.laserWeight;
         optObj[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
+        optObj[QStringLiteral("enable_reference_terrain_prior")] = opts.enableReferenceTerrainPrior;
+        optObj[QStringLiteral("reference_terrain_dem_path")] = opts.referenceTerrainDemPath;
+        optObj[QStringLiteral("reference_terrain_sigma_m")] = opts.referenceTerrainSigmaMeters;
+        optObj[QStringLiteral("reference_terrain_max_association_distance_m")] =
+            opts.referenceTerrainMaxAssociationDistanceMeters;
+        optObj[QStringLiteral("reference_terrain_huber_delta_m")] = opts.referenceTerrainHuberDeltaMeters;
         saveObj[QStringLiteral("options")] = optObj;
+    }
+
+    if (opts.enableReferenceTerrainPrior || !opts.referenceTerrainPriorSummary.isEmpty())
+    {
+        saveObj[QStringLiteral("reference_terrain_prior_summary")] =
+            opts.referenceTerrainPriorSummary.isEmpty()
+                ? QJsonObject{{QStringLiteral("enabled"), opts.enableReferenceTerrainPrior}}
+                : opts.referenceTerrainPriorSummary;
     }
 
     if (opts.enableLaserConstraints)

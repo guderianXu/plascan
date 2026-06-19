@@ -29,6 +29,7 @@
 #include "ProjectSparseWorkflow.h"
 #include "ProjectTriangulationService.h"
 #include "ProjectResultRecords.h"
+#include "ProjectReferenceDatasets.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectWorkflowReports.h"
 #include "Logger.h"
@@ -49,8 +50,10 @@
 
 #include <QMessageBox>
 #include <QDir>
+#include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QThread>
 #include <cmath>
 #include <QFile>
 #include <QSet>
@@ -123,16 +126,69 @@ using xjw::gui::project::writeBundleAdjustReport;
 namespace
 {
 
-// 统一 UTC 时间戳格式，避免各流程写入格式不一致。
-QString utcNowIso()
-{
-    return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
-}
-
 QString imageLabel(const QString &path)
 {
     const QFileInfo fi(path);
     return fi.fileName().isEmpty() ? path : fi.fileName();
+}
+
+bool isBaPriorRole(const QString &role)
+{
+    const QString normalized = role.toLower();
+    return normalized == QLatin1String("ba_prior")
+        || normalized == QLatin1String("bundle_adjustment")
+        || normalized == QLatin1String("reference_prior");
+}
+
+QString firstReferenceDemPriorPath(const QJsonObject &meta)
+{
+    const QJsonArray references = meta.value(QStringLiteral("reference_datasets")).toArray();
+    for (const QJsonValue &value : references)
+    {
+        const QJsonObject reference = value.toObject();
+        if (!isBaPriorRole(reference.value(QStringLiteral("role")).toString()))
+        {
+            continue;
+        }
+
+        const QString type = reference.value(QStringLiteral("type")).toString().toLower();
+        const QString path = reference.value(QStringLiteral("path")).toString().trimmed();
+        if ((type == QLatin1String("dem") || type == QLatin1String("reference_dem")) && !path.isEmpty())
+        {
+            return path;
+        }
+    }
+    return QString();
+}
+
+QString firstReferenceLaserPriorPath(const QJsonObject &meta)
+{
+    const QJsonArray references = meta.value(QStringLiteral("reference_datasets")).toArray();
+    for (const QJsonValue &value : references)
+    {
+        const QJsonObject reference = value.toObject();
+        if (!isBaPriorRole(reference.value(QStringLiteral("role")).toString()))
+        {
+            continue;
+        }
+
+        const QString type = reference.value(QStringLiteral("type")).toString().toLower();
+        const QString path = reference.value(QStringLiteral("path")).toString().trimmed();
+        if (path.isEmpty())
+        {
+            continue;
+        }
+
+        const QString suffix = QFileInfo(path).suffix().toLower();
+        const bool laserType = type == QLatin1String("lidar")
+            || type == QLatin1String("reference_lidar")
+            || type == QLatin1String("point_cloud");
+        if (laserType && suffix == QLatin1String("ply"))
+        {
+            return path;
+        }
+    }
+    return QString();
 }
 
 void appendMetaArrayRecord(QJsonObject *meta,
@@ -445,6 +501,214 @@ void ProjectManager::removeResources(const QStringList &resourcePaths)
     }
 }
 
+void ProjectManager::importReferenceDataset()
+{
+    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再导入参考 DEM/LiDAR。")))
+    {
+        return;
+    }
+
+    const QString selected = QFileDialog::getOpenFileName(
+        m_parent,
+        QStringLiteral("导入参考 DEM/LiDAR"),
+        getLastUsedDir(QStringLiteral("reference_dataset")),
+        QStringLiteral("参考地形/点云 (*.tif *.tiff *.vrt *.las *.laz *.copc *.ply *.xyz *.csv);;"
+                       "DEM (*.tif *.tiff *.vrt);;"
+                       "LiDAR (*.las *.laz *.copc);;"
+                       "点云 (*.ply *.xyz *.csv);;"
+                       "所有文件 (*)"));
+    if (selected.isEmpty())
+    {
+        return;
+    }
+
+    saveLastUsedDir(QStringLiteral("reference_dataset"), QFileInfo(selected).absolutePath());
+
+    QString error;
+    if (!registerReferenceDataset(selected, QString(), QStringLiteral("validation"), &error))
+    {
+        showWarning(error.isEmpty() ? QStringLiteral("导入参考数据失败。") : error,
+                    QStringLiteral("导入参考 DEM/LiDAR"));
+        return;
+    }
+
+    LOG_INFO(QStringLiteral("参考数据已导入: %1").arg(QFileInfo(selected).fileName()));
+}
+
+bool ProjectManager::registerReferenceDataset(const QString &path,
+                                              const QString &type,
+                                              const QString &role,
+                                              QString *errorMsg)
+{
+    return xjw::gui::project::registerReferenceDataset(m_projectData, path, type, role, errorMsg);
+}
+
+void ProjectManager::runReferenceQualityCheck()
+{
+    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再执行点云/DEM 精度检查。")))
+    {
+        return;
+    }
+
+    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(m_projectData);
+    if (!result.saved)
+    {
+        showWarning(result.errorMessage.isEmpty()
+                        ? QStringLiteral("生成点云/DEM 精度检查报告失败。")
+                        : result.errorMessage,
+                    QStringLiteral("点云/DEM 精度检查"));
+        return;
+    }
+
+    const QString status = result.record.value(QStringLiteral("comparison_available")).toBool()
+        ? QStringLiteral("已找到可检查的参考数据与项目成果。")
+        : QStringLiteral("报告已生成，但当前缺少参考数据或可比较的项目成果。");
+    LOG_INFO(QStringLiteral("参考数据精度检查报告已生成: %1").arg(result.jsonPath));
+    QMessageBox::information(m_parent,
+                             QStringLiteral("点云/DEM 精度检查"),
+                             QStringLiteral("%1\nJSON: %2\nCSV: %3")
+                                 .arg(status, result.jsonPath, result.csvPath));
+}
+
+void ProjectManager::prepareReferenceTerrainBundleAdjust()
+{
+    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再使用参考地形约束重新平差。")))
+    {
+        return;
+    }
+
+    const auto result = xjw::gui::project::writeReferenceTerrainPriorPreflightReport(m_projectData);
+    if (!result.saved)
+    {
+        showWarning(result.errorMessage.isEmpty()
+                        ? QStringLiteral("生成参考地形平差前置检查报告失败。")
+                        : result.errorMessage,
+                    QStringLiteral("参考地形约束重新平差"));
+        return;
+    }
+
+    const bool ready = result.record.value(QStringLiteral("ready")).toBool();
+    const QString status = result.record.value(QStringLiteral("status")).toString();
+    LOG_INFO(QStringLiteral("参考地形平差前置检查报告已生成: %1 ready=%2")
+             .arg(result.jsonPath)
+             .arg(ready));
+    if (!ready)
+    {
+        QMessageBox::information(m_parent,
+                                 QStringLiteral("参考地形约束重新平差"),
+                                 QStringLiteral("前置检查未通过：%1。\n请先导入 role=ba_prior 的参考 DEM/LiDAR，并完成正式空三。\nJSON: %2\nCSV: %3")
+                                     .arg(status, result.jsonPath, result.csvPath));
+        return;
+    }
+
+    const QJsonObject meta = m_projectData->metadata();
+    const QString demPriorPath = firstReferenceDemPriorPath(meta);
+    const QString laserPriorPath = firstReferenceLaserPriorPath(meta);
+    if (demPriorPath.isEmpty() && laserPriorPath.isEmpty())
+    {
+        QMessageBox::information(m_parent,
+                                 QStringLiteral("参考地形约束重新平差"),
+                                 QStringLiteral("前置检查通过，但未找到可直接用于 BA 的参考数据。\n"
+                                                "请导入 role=ba_prior 的 DEM（GeoTIFF/VRT），或带 LiDAR/点云类型的 PLY 文件。\n"
+                                                "JSON: %1\nCSV: %2")
+                                     .arg(result.jsonPath, result.csvPath));
+        return;
+    }
+
+    const QStringList images = getAllImages();
+    if (images.size() < 2)
+    {
+        QMessageBox::warning(m_parent,
+                             QStringLiteral("参考地形约束重新平差"),
+                             QStringLiteral("项目影像少于 2 张，无法执行 BA。"));
+        return;
+    }
+
+    const QString assetsDir = ProjectIO::projectAssetsDir(currentProjectPath());
+    const QString outputDir = QDir(assetsDir).filePath(
+        QStringLiteral("bundle_adjust/%1_%2")
+            .arg(demPriorPath.isEmpty()
+                     ? QStringLiteral("reference_laser")
+                     : QStringLiteral("reference_terrain"))
+            .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_hhmmss"))));
+
+    const QString prompt = demPriorPath.isEmpty()
+        ? QStringLiteral("将使用 LiDAR/点云 PLY 作为 BA 点到面 soft prior 重新平差。\n\n"
+                         "参考点云: %1\n"
+                         "无 normal 字段时: 按水平地形面约束使用\n"
+                         "影像数量: %2\n"
+                         "输出目录: %3\n\n"
+                         "继续执行？")
+              .arg(laserPriorPath)
+              .arg(images.size())
+              .arg(outputDir)
+        : QStringLiteral("将使用参考 DEM 作为 BA 高程 soft prior 重新平差。\n\n"
+                         "参考 DEM: %1\n"
+                         "影像数量: %2\n"
+                         "输出目录: %3\n\n"
+                         "继续执行？")
+              .arg(demPriorPath)
+              .arg(images.size())
+              .arg(outputDir);
+
+    const QMessageBox::StandardButton choice = QMessageBox::question(
+        m_parent,
+        QStringLiteral("参考地形约束重新平差"),
+        prompt,
+        QMessageBox::Yes | QMessageBox::No,
+        QMessageBox::Yes);
+    if (choice != QMessageBox::Yes)
+    {
+        return;
+    }
+
+    QJsonObject extra;
+    if (demPriorPath.isEmpty())
+    {
+        extra[QStringLiteral("enable_laser_constraints")] = true;
+        extra[QStringLiteral("laser_constraint_cloud_path")] = laserPriorPath;
+        extra[QStringLiteral("laser_association_max_distance_m")] = 1.0;
+        extra[QStringLiteral("laser_voxel_size_m")] = 0.0;
+        extra[QStringLiteral("laser_max_curvature")] = 0.2;
+        extra[QStringLiteral("laser_max_samples")] = 500000;
+        extra[QStringLiteral("laser_missing_normals_as_height_planes")] = true;
+        extra[QStringLiteral("laser_weight")] = 1.0;
+        extra[QStringLiteral("laser_huber_delta_m")] =
+            result.record.value(QStringLiteral("recommended_huber_delta_m")).toDouble(0.5);
+    }
+    else
+    {
+        extra[QStringLiteral("enable_reference_terrain_prior")] = true;
+        extra[QStringLiteral("reference_terrain_dem_path")] = demPriorPath;
+        extra[QStringLiteral("reference_terrain_sigma_m")] =
+            result.record.value(QStringLiteral("recommended_sigma_m")).toDouble(1.0);
+        extra[QStringLiteral("reference_terrain_huber_delta_m")] =
+            result.record.value(QStringLiteral("recommended_huber_delta_m")).toDouble(0.5);
+        extra[QStringLiteral("reference_terrain_max_association_distance_m")] = 2.0;
+    }
+    extra[QStringLiteral("refine_camera_pose")] = true;
+    extra[QStringLiteral("export_run_json")] = true;
+    extra[QStringLiteral("export_summary_txt")] = true;
+    extra[QStringLiteral("export_camera_csv")] = true;
+    extra[QStringLiteral("export_points_csv")] = true;
+
+    if (demPriorPath.isEmpty())
+    {
+        LOG_INFO(QStringLiteral("LiDAR 点到面 BA soft prior 启动: cloud=%1 images=%2 output=%3")
+                 .arg(laserPriorPath)
+                 .arg(images.size())
+                 .arg(outputDir));
+    }
+    else
+    {
+        LOG_INFO(QStringLiteral("参考地形 BA soft prior 启动: dem=%1 images=%2 output=%3")
+                 .arg(demPriorPath)
+                 .arg(images.size())
+                 .arg(outputDir));
+    }
+    startBundleAdjustAsync(images, outputDir, qMax(1, QThread::idealThreadCount()), false, extra);
+}
+
 void ProjectManager::deleteGeneratedData(const QString &section, const QStringList &resourcePaths)
 {
     if (!m_projectData || resourcePaths.isEmpty())
@@ -596,6 +860,21 @@ void ProjectManager::writeMetadataToTempAsync(const QJsonObject &meta, bool mark
     }
 }
 
+void ProjectManager::refreshReconstructionQualityReport()
+{
+    if (!m_projectData || !m_projectData->hasProject())
+    {
+        return;
+    }
+
+    const auto reportResult =
+        xjw::gui::project::writeReconstructionQualityProjectReport(m_projectData);
+    if (!reportResult.saved && !reportResult.errorMessage.isEmpty())
+    {
+        LOG_WARN(QStringLiteral("重建质量报告刷新失败: %1").arg(reportResult.errorMessage));
+    }
+}
+
 void ProjectManager::appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings)
 {
     if (m_projectData) {
@@ -692,6 +971,19 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.laserHuberDeltaMeters = qMax(
         1e-9,
         extraSettings.value(QStringLiteral("laser_huber_delta_m")).toDouble(0.2));
+    opts.enableReferenceTerrainPrior =
+        extraSettings.value(QStringLiteral("enable_reference_terrain_prior")).toBool(false);
+    opts.referenceTerrainDemPath =
+        extraSettings.value(QStringLiteral("reference_terrain_dem_path")).toString().trimmed();
+    opts.referenceTerrainSigmaMeters = qMax(
+        1e-9,
+        extraSettings.value(QStringLiteral("reference_terrain_sigma_m")).toDouble(1.0));
+    opts.referenceTerrainMaxAssociationDistanceMeters = qMax(
+        0.0,
+        extraSettings.value(QStringLiteral("reference_terrain_max_association_distance_m")).toDouble(2.0));
+    opts.referenceTerrainHuberDeltaMeters = qMax(
+        1e-9,
+        extraSettings.value(QStringLiteral("reference_terrain_huber_delta_m")).toDouble(0.5));
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     setAtCancelFlag(cancelFlag);
@@ -1191,6 +1483,7 @@ void ProjectManager::appendAtResult(const QString &sparseCloudPath,
                                       outputDir,
                                       extraRecord,
                                       replaceIndex);
+    refreshReconstructionQualityReport();
 }
 
 void ProjectManager::appendObsNetResult(int nodeCount,

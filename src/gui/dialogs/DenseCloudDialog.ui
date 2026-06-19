@@ -418,7 +418,133 @@
             </property>
            </widget>
           </item>
-          <item row="2" column="0" colspan="2">
+          <item row="2" column="0">
+           <widget class="QLabel" name="minConsistentViewsLabel">
+            <property name="text">
+             <string>最小一致视图数:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_minConsistentViewsSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="2" column="1">
+           <widget class="QSpinBox" name="m_minConsistentViewsSpin">
+            <property name="toolTip">
+             <string>融合时一个深度像素至少需要多少个源视图支持。值越高飞点越少，但覆盖率会下降。</string>
+            </property>
+            <property name="minimum">
+             <number>1</number>
+            </property>
+            <property name="maximum">
+             <number>8</number>
+            </property>
+            <property name="value">
+             <number>2</number>
+            </property>
+           </widget>
+          </item>
+          <item row="3" column="0" colspan="2">
+           <widget class="QCheckBox" name="m_geomConsistencyCheck">
+            <property name="toolTip">
+             <string>启用多视几何一致性检查；关闭后覆盖率可能增加，但飞点风险更高。</string>
+            </property>
+            <property name="text">
+             <string>启用几何一致性过滤</string>
+            </property>
+            <property name="checked">
+             <bool>true</bool>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="0">
+           <widget class="QLabel" name="maxReprojErrorLabel">
+            <property name="text">
+             <string>最大重投影误差:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_maxReprojErrorSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="4" column="1">
+           <widget class="QDoubleSpinBox" name="m_maxReprojErrorSpin">
+            <property name="toolTip">
+             <string>几何一致性检查允许的最大像素误差。</string>
+            </property>
+            <property name="decimals">
+             <number>2</number>
+            </property>
+            <property name="minimum">
+             <double>0.100000000000000</double>
+            </property>
+            <property name="maximum">
+             <double>20.000000000000000</double>
+            </property>
+            <property name="singleStep">
+             <double>0.250000000000000</double>
+            </property>
+            <property name="value">
+             <double>2.000000000000000</double>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="0">
+           <widget class="QLabel" name="speckleMinAreaLabel">
+            <property name="text">
+             <string>孤立噪点面积阈值:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_speckleMinAreaSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="5" column="1">
+           <widget class="QSpinBox" name="m_speckleMinAreaSpin">
+            <property name="toolTip">
+             <string>过滤小于该像素面积的孤立有效深度连通域；0 表示关闭小连通域过滤。</string>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>10000</number>
+            </property>
+            <property name="value">
+             <number>16</number>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="0">
+           <widget class="QLabel" name="fusionMaxImageDimLabel">
+            <property name="text">
+             <string>融合最长边:</string>
+            </property>
+            <property name="buddy">
+             <cstring>m_fusionMaxImageDimSpin</cstring>
+            </property>
+           </widget>
+          </item>
+          <item row="6" column="1">
+           <widget class="QSpinBox" name="m_fusionMaxImageDimSpin">
+            <property name="toolTip">
+             <string>融合阶段使用的深度图最长边。0 表示使用原始尺寸；较小值可显著降低内存和耗时。</string>
+            </property>
+            <property name="minimum">
+             <number>0</number>
+            </property>
+            <property name="maximum">
+             <number>12000</number>
+            </property>
+            <property name="singleStep">
+             <number>256</number>
+            </property>
+            <property name="value">
+             <number>2048</number>
+            </property>
+           </widget>
+          </item>
+          <item row="7" column="0" colspan="2">
            <widget class="QCheckBox" name="m_colorsCheck">
             <property name="text">
              <string>从影像采样颜色（RGB 点云）</string>
@@ -428,7 +554,7 @@
             </property>
            </widget>
           </item>
-          <item row="3" column="0" colspan="2">
+          <item row="8" column="0" colspan="2">
            <widget class="QCheckBox" name="m_normalsCheck">
             <property name="text">
              <string>估计点云法向量（Poisson 重建必须开启）</string>
@@ -438,7 +564,7 @@
             </property>
            </widget>
           </item>
-          <item row="4" column="0">
+          <item row="9" column="0">
            <widget class="QLabel" name="normalKnnLabel">
             <property name="text">
              <string>法向量 KNN 邻域:</string>
@@ -448,7 +574,7 @@
             </property>
            </widget>
           </item>
-          <item row="4" column="1">
+          <item row="9" column="1">
            <widget class="QSpinBox" name="m_normalKnnSpin">
             <property name="minimum">
              <number>8</number>

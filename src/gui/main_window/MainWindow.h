@@ -40,6 +40,7 @@ class QDockWidget;
 class QToolButton;
 class QListWidget;
 class QTabWidget;
+class ProjectDashboardWidget;
 class ReferencePanelWidget;
 class WorkspaceCenterWidget;
 class DialogSettingStore;
@@ -71,6 +72,7 @@ private:
     void setupBottomPanel();      // 初始化底部 Dock 标题栏的日志切换按钮
     void setupMenuConnections();  // 将菜单/工具栏 QAction 信号连接到对应的槽
     void setupProjectManager();   // 创建所有业务对象（ProjectManager 等）并完成全局信号/槽连接
+    void refreshDashboardTaskSnapshots(); // 将状态栏任务快照同步到只读概览页
 
     // ---- UI 设置持久化辅助 ----
     // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
@@ -91,6 +93,7 @@ private:
     Ui::MainWindow*  m_ui{};                           // Qt Designer 生成的主窗口静态布局
     QSplitter*        m_mainSplitter{};                 // 左右主分割器（左=数据树选项卡, 右=工作区）
     QTabWidget*       m_leftTabs{};                     // 左侧选项卡容器（工作区 | 参考）
+    ProjectDashboardWidget* m_dashboard{};              // 项目概览与工作流状态（只读）
     DataTreeWidget*   m_dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）
     ReferencePanelWidget* m_referencePanel{};           // 参考面板（相机参数外参导入）
     WorkspaceCenterWidget* m_workspaceCenter{};         // 中央工作区（影像画布 + 三维模型视图）

@@ -149,6 +149,17 @@ public slots:
     void removeResource(const QString &resourcePath);
     // 批量移除资源引用
     void removeResources(const QStringList &resourcePaths);
+    // 以外部引用方式导入 DEM/LiDAR/点云参考数据，默认用于精度检查。
+    void importReferenceDataset();
+    // 生成参考 DEM/LiDAR 与当前项目成果的精度检查准备报告。
+    void runReferenceQualityCheck();
+    // 生成参考地形软约束 BA 前置检查报告；真正 BA 只在检查通过后进入后续流程。
+    void prepareReferenceTerrainBundleAdjust();
+    // 将参考数据记录写入 project_results.json/reference_datasets；按 path 去重。
+    bool registerReferenceDataset(const QString &path,
+                                  const QString &type = QString(),
+                                  const QString &role = QStringLiteral("validation"),
+                                  QString *errorMsg = nullptr);
     // 删除非照片生成数据（删除元数据记录及关联生成文件）
     void deleteGeneratedData(const QString &section, const QStringList &resourcePaths);
     // 将外部资源打包进 .plascan 归档（功能待完善）
@@ -327,6 +338,8 @@ public slots:
     void discardTemporaryMeta();                        // 删除临时缓存文件
     // 更新内存元数据并异步写入临时缓存（线程安全，适合在后台任务完成时调用）
     void writeMetadataToTempAsync(const QJsonObject &meta, bool markDirty = true);
+    // 刷新重建质量报告，并将报告注册到工作区目录树。
+    void refreshReconstructionQualityReport();
     // 为指定影像列表中每张影像加载对应的 xjw::Camera 对象；
     // hasCamerasForAll 出参为 true 表示列表中每张影像均有有效相机参数。
     // 返回值： 影像路径 → Camera 的映射（已成功解析的影像）

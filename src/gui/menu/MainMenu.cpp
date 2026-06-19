@@ -108,6 +108,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_viewMatchesAct = findNamedChild<QAction>(m_mainWindow, "actionViewMatches");
         m_viewWorkflowReportAct = findNamedChild<QAction>(m_mainWindow, "actionViewWorkflowReport");
         m_cameraConvertAct = findNamedChild<QAction>(m_mainWindow, "actionCameraConvert");
+        m_importReferenceDatasetAct = findNamedChild<QAction>(m_mainWindow, "actionImportReferenceDataset");
+        m_referenceQualityCheckAct = findNamedChild<QAction>(m_mainWindow, "actionReferenceQualityCheck");
+        m_referenceTerrainBundleAdjustAct = findNamedChild<QAction>(m_mainWindow, "actionReferenceTerrainBundleAdjust");
         if (!m_toggleCamerasAct)
         {
             QObject *actionParent = viewMenu
@@ -155,6 +158,66 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 else
                 {
                     toolsMenu->addAction(m_cameraConvertAct);
+                }
+            }
+        }
+        if (!m_importReferenceDatasetAct)
+        {
+            QObject *actionParent = toolsMenu
+                ? static_cast<QObject *>(toolsMenu)
+                : static_cast<QObject *>(m_mainWindow);
+            m_importReferenceDatasetAct = new QAction(tr("导入参考 DEM/LiDAR..."), actionParent);
+            m_importReferenceDatasetAct->setObjectName(QStringLiteral("actionImportReferenceDataset"));
+            m_importReferenceDatasetAct->setToolTip(tr("以外部引用方式导入 DEM、LAS/LAZ/COPC 或点云文件，用于精度检查和后续软约束"));
+            if (toolsMenu)
+            {
+                if (m_viewWorkflowReportAct)
+                {
+                    toolsMenu->insertAction(m_viewWorkflowReportAct, m_importReferenceDatasetAct);
+                }
+                else
+                {
+                    toolsMenu->addAction(m_importReferenceDatasetAct);
+                }
+            }
+        }
+        if (!m_referenceQualityCheckAct)
+        {
+            QObject *actionParent = toolsMenu
+                ? static_cast<QObject *>(toolsMenu)
+                : static_cast<QObject *>(m_mainWindow);
+            m_referenceQualityCheckAct = new QAction(tr("点云/DEM 精度检查..."), actionParent);
+            m_referenceQualityCheckAct->setObjectName(QStringLiteral("actionReferenceQualityCheck"));
+            m_referenceQualityCheckAct->setToolTip(tr("根据已导入参考 DEM/LiDAR 和当前 DEM/点云成果生成精度检查报告"));
+            if (toolsMenu)
+            {
+                if (m_viewWorkflowReportAct)
+                {
+                    toolsMenu->insertAction(m_viewWorkflowReportAct, m_referenceQualityCheckAct);
+                }
+                else
+                {
+                    toolsMenu->addAction(m_referenceQualityCheckAct);
+                }
+            }
+        }
+        if (!m_referenceTerrainBundleAdjustAct)
+        {
+            QObject *actionParent = toolsMenu
+                ? static_cast<QObject *>(toolsMenu)
+                : static_cast<QObject *>(m_mainWindow);
+            m_referenceTerrainBundleAdjustAct = new QAction(tr("参考地形约束重新平差..."), actionParent);
+            m_referenceTerrainBundleAdjustAct->setObjectName(QStringLiteral("actionReferenceTerrainBundleAdjust"));
+            m_referenceTerrainBundleAdjustAct->setToolTip(tr("检查参考 DEM/LiDAR 是否可作为 BA 软约束，并生成前置检查报告"));
+            if (toolsMenu)
+            {
+                if (m_viewWorkflowReportAct)
+                {
+                    toolsMenu->insertAction(m_viewWorkflowReportAct, m_referenceTerrainBundleAdjustAct);
+                }
+                else
+                {
+                    toolsMenu->addAction(m_referenceTerrainBundleAdjustAct);
                 }
             }
         }
@@ -337,6 +400,17 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     toolsMenu->addSeparator();
     m_cameraConvertAct = toolsMenu->addAction(tr("相机格式转换..."));
 
+    // 参考数据：外部 DEM/LiDAR 只登记引用，用于精度检查和后续 BA 软约束
+    m_importReferenceDatasetAct = toolsMenu->addAction(tr("导入参考 DEM/LiDAR..."));
+    m_importReferenceDatasetAct->setObjectName(QStringLiteral("actionImportReferenceDataset"));
+    m_importReferenceDatasetAct->setToolTip(tr("以外部引用方式导入 DEM、LAS/LAZ/COPC 或点云文件，用于精度检查和后续软约束"));
+    m_referenceQualityCheckAct = toolsMenu->addAction(tr("点云/DEM 精度检查..."));
+    m_referenceQualityCheckAct->setObjectName(QStringLiteral("actionReferenceQualityCheck"));
+    m_referenceQualityCheckAct->setToolTip(tr("根据已导入参考 DEM/LiDAR 和当前 DEM/点云成果生成精度检查报告"));
+    m_referenceTerrainBundleAdjustAct = toolsMenu->addAction(tr("参考地形约束重新平差..."));
+    m_referenceTerrainBundleAdjustAct->setObjectName(QStringLiteral("actionReferenceTerrainBundleAdjust"));
+    m_referenceTerrainBundleAdjustAct->setToolTip(tr("检查参考 DEM/LiDAR 是否可作为 BA 软约束，并生成前置检查报告"));
+
     // 报告：查看各工作流程的历史统计报告
     toolsMenu->addSeparator();
     m_viewWorkflowReportAct = toolsMenu->addAction(tr("查看工作流程报告..."));
@@ -482,6 +556,9 @@ QAction *MainMenu::generateOrthoAction() const  { return m_generateOrthoAct; }
 QAction *MainMenu::viewWorkflowReportAction() const         { return m_viewWorkflowReportAct; }
 QAction *MainMenu::manualPointCloudPruneAction() const      { return m_manualPointCloudPruneAct; }
 QAction *MainMenu::cameraConvertAction() const              { return m_cameraConvertAct; }
+QAction *MainMenu::importReferenceDatasetAction() const     { return m_importReferenceDatasetAct; }
+QAction *MainMenu::referenceQualityCheckAction() const      { return m_referenceQualityCheckAct; }
+QAction *MainMenu::referenceTerrainBundleAdjustAction() const { return m_referenceTerrainBundleAdjustAct; }
 
 QAction *MainMenu::buildObsNetworkAction() const     { return m_buildObsNetworkAct; }
 QAction *MainMenu::initCameraPoseAction() const      { return m_initCameraPoseAct; }

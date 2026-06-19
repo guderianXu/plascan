@@ -1,5 +1,8 @@
 add_library(terrain STATIC
     TerrainPipeline.cpp
+    DemGridAggregator.cpp
+    DemMosaic.cpp
+    TerrainProductManifest.cpp
     DemGenerator.cpp
     DemGeneratorFromDepth.cpp
     DomGenerator.cpp
@@ -65,6 +68,73 @@ if(BUILD_TESTS)
     )
 
     gtest_discover_tests(test_terrain_dem_dom)
+
+    add_executable(test_dem_grid_aggregator
+        tests/test_dem_grid_aggregator.cpp
+    )
+
+    target_link_libraries(test_dem_grid_aggregator PRIVATE
+        terrain
+        Qt6::Core
+        ${OpenCV_LIBS}
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_dem_grid_aggregator PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    gtest_discover_tests(test_dem_grid_aggregator)
+
+    add_executable(test_dem_mosaic
+        tests/test_dem_mosaic.cpp
+    )
+
+    target_link_libraries(test_dem_mosaic PRIVATE
+        terrain
+        Qt6::Core
+        ${OpenCV_LIBS}
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_dem_mosaic PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    gtest_discover_tests(test_dem_mosaic)
+
+    add_executable(test_terrain_product_manifest
+        tests/test_terrain_product_manifest.cpp
+    )
+
+    target_link_libraries(test_terrain_product_manifest PRIVATE
+        terrain
+        Qt6::Core
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_terrain_product_manifest PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    gtest_discover_tests(test_terrain_product_manifest)
+
+    add_executable(test_dem_quality_rasters
+        tests/test_dem_quality_rasters.cpp
+    )
+
+    target_link_libraries(test_dem_quality_rasters PRIVATE
+        terrain
+        Qt6::Core
+        ${OpenCV_LIBS}
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_dem_quality_rasters PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    gtest_discover_tests(test_dem_quality_rasters)
 
     # terrain_stereo_test / stereo_pipeline_test / stereo_pipeline_benchmark
     # require the old pointcloud module which has been removed.

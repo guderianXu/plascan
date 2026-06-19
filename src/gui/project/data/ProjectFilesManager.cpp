@@ -20,7 +20,9 @@
 //       "dense_cloud_results":    [...],
 //       "model_results":          [...],
 //       "dem_results":            [...],
-//       "ortho_results":          [...]
+//       "ortho_results":          [...],
+//       "report_results":         [...],
+//       "reference_datasets":     [...]
 //     }
 //
 //   旧格式兼容：读取时若 record 含 "settings" 字段则按旧格式解析，写入时统一精简格式。
@@ -49,7 +51,9 @@ bool ProjectFilesManager::isResultKey(const QString &key)
         || key == QLatin1String("dense_cloud_results")
         || key == QLatin1String("model_results")
         || key == QLatin1String("dem_results")
-        || key == QLatin1String("ortho_results");
+        || key == QLatin1String("ortho_results")
+        || key == QLatin1String("report_results")
+        || key == QLatin1String("reference_datasets");
 }
 
 // ── 默认结构 ─────────────────────────────────────────────────────────────────

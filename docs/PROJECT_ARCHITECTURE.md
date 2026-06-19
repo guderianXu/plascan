@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-06-18。
+行星表面摄影测量处理系统。最后更新: 2026-06-20。
 
 ## 顶层目录
 
@@ -133,15 +133,18 @@ core/
 │   ├── filtering/
 │   │   ├── SfmPointCloudFilter.h/cpp       # 点云过滤
 │   │   └── SparsePointCloudProcessor.h/cpp # 稀疏点云后处理
+│   ├── ReferenceTerrainPrior.h/cpp # 参考 DEM/LiDAR 局部地形面作为 BA soft prior
 │   ├── BaInputBuilder.h/cpp    # BA 输入构建器
 │   └── TriangulationService.h/cpp  # 三角化服务
 │
-├── mvs/                        # Multi-View Stereo (旧管线, 将逐步替换)
+├── mvs/                        # Multi-View Stereo：深度图 manifest、source planning、流式融合
 │   ├── MvsTypes.h              # MVS 公共类型
+│   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、配置 hash 和 source plan
+│   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源
 │   ├── PatchMatchCUDA.cu/h     # PatchMatch CUDA 实现
 │   ├── PatchMatchNoCUDA.cpp    # PatchMatch CPU 回退
-│   ├── DepthMapGenerator.h/cpp # 深度图估计 (调用 PatchMatch)
-│   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云
+│   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/valid mask 写盘
+│   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
 │   ├── DepthFrameUtils.h/cpp   # 深度帧工具
 │   ├── EpipolarRectifier.h/cpp # 极线校正
 │   ├── DisparityFilter.h/cpp   # 视差滤波
@@ -183,22 +186,33 @@ core/
 │   ├── MeshIO.cpp              # 网格文件 I/O
 │   ├── TextureMapper.h/cpp     # 纹理映射
 │   ├── ModelWorkflowService.h/cpp  # 模型工作流服务
-├── terrain/                    # 地形产品 (DEM/DOM)
+├── terrain/                    # 地形产品 (DEM/DOM) 和质量栅格
 │   ├── DemDomTypes.h           # DEM/DOM 类型
+│   ├── DemGridAggregator.h/cpp # mean/median/NMAD/P80/count/confidence/error weighted 聚合
+│   ├── DemMosaic.h/cpp         # 多 tile DEM mosaic 与按质量融合
+│   ├── TerrainProductManifest.h/cpp # DEM/DOM/error/count/confidence/coverage 产品记录
 │   ├── DemGenerator.h/cpp      # DEM 生成
 │   ├── DemGeneratorFromDepth.cpp  # 从深度图生成 DEM
 │   ├── DomGenerator.h/cpp      # DOM 正射影像生成
-│   ├── DemDomIO.h/cpp          # DEM/DOM I/O
+│   ├── DemDomIO.h/cpp          # DEM/DOM 和 dem_error/count/confidence/coverage I/O
 │   ├── TerrainPipeline.h/cpp   # 地形流水线 (主入口)
 │   ├── projection/
 │   │   └── AsteroidProjection.h/cpp  # 小行星投影
 │   └── tests/ (5 个测试)
+│
+├── qc/                         # 重建质量检查和外部参考验证
+│   ├── ReconstructionQualityReport.h/cpp # 注册影像、track、重投影、MVS/DEM 覆盖率报告
+│   ├── PointCloudAlignment.h/cpp # 点云 Sim3 / 最近邻平移配准与 beg/end error CSV
+│   └── DemDifference.h/cpp     # DEM 差分、绝对差分和统计报告
 │
 └── pipeline/                   # 核心流水线桥接 (GUI 可调用)
     ├── FeatureMatchRunner.h/cpp  # 特征匹配异步执行器
     ├── SfmPairPlanner.h        # 已知相机序列的 SfM 匹配配对规划
     └── SFMService.h/cpp         # SfM 异步服务
 ```
+
+`sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
+不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
 
 ---
 

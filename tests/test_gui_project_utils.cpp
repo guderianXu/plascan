@@ -8,6 +8,10 @@
 #include "ProjectCameraImportService.h"
 #include "ProjectData.h"
 #include "ProjectDepthFrameUtils.h"
+#include "ProjectFilesManager.h"
+#include "ProjectDashboardSummary.h"
+#include "ProjectReferenceDatasets.h"
+#include "ProjectReferenceTerrainBa.h"
 #include "ProjectSupportUtils.h"
 #include "ProjectTriangulationService.h"
 #include "ProjectWorkflowReports.h"
@@ -22,10 +26,12 @@
 #include "BundleAdjustDialog.h"
 #include "ModelDropSupport.h"
 #include "DataTreeWidget.h"
+#include "ProjectDashboardWidget.h"
 #include "MainMenu.h"
 #include "TaskStatusWidget.h"
 
 #include "Camera.h"
+#include "DemDomIO.h"
 
 #include <plapoint/io/ply_io.h>
 
@@ -59,8 +65,12 @@
 #include <QUrl>
 #include <QStandardItemModel>
 #include <QSignalSpy>
+#include <QTableWidget>
+#include <QtEndian>
 
 #include <array>
+#include <cmath>
+#include <cstring>
 #include <vector>
 
 namespace {
@@ -201,6 +211,79 @@ void writeMinimalPointCloudPly(const QString &path,
             << QString::number(point[1], 'f', 6) << ' '
             << QString::number(point[2], 'f', 6) << '\n';
     }
+}
+
+void putU16Le(QByteArray *bytes, qsizetype offset, quint16 value)
+{
+    ASSERT_TRUE(bytes);
+    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+    qToLittleEndian<quint16>(value, reinterpret_cast<uchar *>(bytes->data() + offset));
+}
+
+void putU32Le(QByteArray *bytes, qsizetype offset, quint32 value)
+{
+    ASSERT_TRUE(bytes);
+    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+    qToLittleEndian<quint32>(value, reinterpret_cast<uchar *>(bytes->data() + offset));
+}
+
+void putI32Le(QByteArray *bytes, qsizetype offset, qint32 value)
+{
+    ASSERT_TRUE(bytes);
+    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+    qToLittleEndian<qint32>(value, reinterpret_cast<uchar *>(bytes->data() + offset));
+}
+
+void putF64Le(QByteArray *bytes, qsizetype offset, double value)
+{
+    ASSERT_TRUE(bytes);
+    ASSERT_LE(offset + static_cast<qsizetype>(sizeof(value)), bytes->size());
+    quint64 raw = 0;
+    std::memcpy(&raw, &value, sizeof(value));
+    qToLittleEndian<quint64>(raw, reinterpret_cast<uchar *>(bytes->data() + offset));
+}
+
+void writeMinimalPointCloudLas(const QString &path,
+                               const std::vector<std::array<double, 3>> &points)
+{
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(path).absolutePath()));
+
+    constexpr qsizetype headerSize = 227;
+    constexpr qsizetype pointRecordLength = 20;
+    constexpr double scale = 0.001;
+
+    QByteArray bytes(headerSize, '\0');
+    bytes[0] = 'L';
+    bytes[1] = 'A';
+    bytes[2] = 'S';
+    bytes[3] = 'F';
+    bytes[24] = 1;
+    bytes[25] = 2;
+    putU16Le(&bytes, 94, static_cast<quint16>(headerSize));
+    putU32Le(&bytes, 96, static_cast<quint32>(headerSize));
+    putU32Le(&bytes, 100, 0);
+    bytes[104] = 0;
+    putU16Le(&bytes, 105, static_cast<quint16>(pointRecordLength));
+    putU32Le(&bytes, 107, static_cast<quint32>(points.size()));
+    putF64Le(&bytes, 131, scale);
+    putF64Le(&bytes, 139, scale);
+    putF64Le(&bytes, 147, scale);
+    putF64Le(&bytes, 155, 0.0);
+    putF64Le(&bytes, 163, 0.0);
+    putF64Le(&bytes, 171, 0.0);
+
+    for (const auto &point : points)
+    {
+        QByteArray record(pointRecordLength, '\0');
+        putI32Le(&record, 0, static_cast<qint32>(std::llround(point[0] / scale)));
+        putI32Le(&record, 4, static_cast<qint32>(std::llround(point[1] / scale)));
+        putI32Le(&record, 8, static_cast<qint32>(std::llround(point[2] / scale)));
+        bytes.append(record);
+    }
+
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    ASSERT_EQ(file.write(bytes), bytes.size());
 }
 
 void writeMinimalColoredPointCloudPly(const QString &path,
@@ -483,6 +566,118 @@ TEST(ProjectSupportUtilsTest, CollectMatchedPairsUsesFilenameWithSuffix)
 
     EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("1.jpg"), QStringLiteral("2.png"))));
     EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("1.jpg"), QStringLiteral("3.tif"))));
+}
+
+TEST(ProjectDashboardSummaryTest, EmptyMetadataShowsMissingReadOnlyWorkflow)
+{
+    const QJsonObject meta;
+    const auto summary = xjw::gui::project::buildProjectDashboardSummary(meta);
+
+    EXPECT_EQ(summary.imageCount, 0);
+    EXPECT_EQ(summary.cameraCount, 0);
+    EXPECT_EQ(summary.reportResultCount, 0);
+    EXPECT_EQ(summary.referenceDatasetCount, 0);
+    EXPECT_GE(summary.workflowSteps.size(), 8);
+
+    xjw::gui::project::ProjectDashboardStep step;
+    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("images"), &step));
+    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Missing);
+    EXPECT_TRUE(step.detail.contains(QStringLiteral("导入")));
+
+    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("reference_lidar"), &step));
+    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Missing);
+}
+
+TEST(ProjectDashboardSummaryTest, SummarizesWorkflowReportsAndReferenceDatasets)
+{
+    QJsonArray images;
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_001.tif")},
+                              {QStringLiteral("camera"), QJsonObject{{QStringLiteral("fu"), 1000.0}}}});
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_002.tif")},
+                              {QStringLiteral("camera"), QJsonObject{{QStringLiteral("fu"), 1000.0}}}});
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_003.tif")}});
+
+    QJsonObject meta;
+    meta[QStringLiteral("project_files")] = QJsonObject{{QStringLiteral("images"), images}};
+    meta[QStringLiteral("ipfind_results")] = QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("ip.json")}}};
+    meta[QStringLiteral("ipmatch_results")] = QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("matches.json")}}};
+    meta[QStringLiteral("aerial_triangulation_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("sparse_point_count"), 1200}}};
+    meta[QStringLiteral("bundle_adjust_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("mean_rms_after"), 0.8}}};
+    meta[QStringLiteral("depth_map_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("result_type"), QStringLiteral("mvs_depth")}},
+                   QJsonObject{{QStringLiteral("result_type"), QStringLiteral("legacy_preview")}}};
+    meta[QStringLiteral("dense_cloud_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("point_count"), 54000}}};
+    meta[QStringLiteral("model_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("model_ply"), QStringLiteral("mesh.ply")}}};
+    meta[QStringLiteral("dem_results")] = QJsonArray{QJsonObject{{QStringLiteral("dem_tif"), QStringLiteral("dem.tif")}}};
+    meta[QStringLiteral("ortho_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("output_path"), QStringLiteral("dom.tif")}}};
+    meta[QStringLiteral("reference_datasets")] =
+        QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("scan.las")},
+                               {QStringLiteral("type"), QStringLiteral("lidar")},
+                               {QStringLiteral("role"), QStringLiteral("ba_prior")}},
+                   QJsonObject{{QStringLiteral("path"), QStringLiteral("check.xyz")},
+                               {QStringLiteral("type"), QStringLiteral("point_cloud")},
+                               {QStringLiteral("role"), QStringLiteral("validation")}},
+                   QJsonObject{{QStringLiteral("path"), QStringLiteral("ref_dem.tif")},
+                               {QStringLiteral("type"), QStringLiteral("dem")},
+                               {QStringLiteral("role"), QStringLiteral("validation")}}};
+    meta[QStringLiteral("report_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("reconstruction_quality")},
+                               {QStringLiteral("path"), QStringLiteral("quality.json")}},
+                   QJsonObject{{QStringLiteral("type"), QStringLiteral("reference_quality")},
+                               {QStringLiteral("path"), QStringLiteral("reference_quality.json")}},
+                   QJsonObject{{QStringLiteral("type"), QStringLiteral("other")},
+                               {QStringLiteral("path"), QStringLiteral("other.json")}}};
+
+    const auto summary = xjw::gui::project::buildProjectDashboardSummary(meta);
+
+    EXPECT_EQ(summary.imageCount, 3);
+    EXPECT_EQ(summary.cameraCount, 2);
+    EXPECT_EQ(summary.featureResultCount, 1);
+    EXPECT_EQ(summary.matchResultCount, 1);
+    EXPECT_EQ(summary.sparseResultCount, 1);
+    EXPECT_EQ(summary.bundleAdjustResultCount, 1);
+    EXPECT_EQ(summary.depthMapResultCount, 1);
+    EXPECT_EQ(summary.denseCloudResultCount, 1);
+    EXPECT_EQ(summary.modelResultCount, 1);
+    EXPECT_EQ(summary.demResultCount, 1);
+    EXPECT_EQ(summary.orthoResultCount, 1);
+    EXPECT_EQ(summary.referenceDatasetCount, 3);
+    EXPECT_EQ(summary.lidarReferenceCount, 1);
+    EXPECT_EQ(summary.pointCloudReferenceCount, 1);
+    EXPECT_EQ(summary.baPriorReferenceCount, 1);
+    EXPECT_EQ(summary.reportResultCount, 3);
+    EXPECT_EQ(summary.qualityReportCount, 2);
+    EXPECT_EQ(summary.qualityReports.size(), 2);
+
+    xjw::gui::project::ProjectDashboardStep step;
+    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("sparse_ba"), &step));
+    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Complete);
+    EXPECT_TRUE(step.detail.contains(QStringLiteral("BA")));
+
+    ASSERT_TRUE(xjw::gui::project::projectDashboardStepById(summary, QStringLiteral("reference_lidar"), &step));
+    EXPECT_EQ(step.state, xjw::gui::project::ProjectDashboardStepState::Complete);
+    EXPECT_TRUE(step.detail.contains(QStringLiteral("BA约束")));
+}
+
+TEST(ProjectDashboardSummaryTest, DoesNotMutateInputMetadata)
+{
+    QJsonObject meta;
+    meta[QStringLiteral("images")] =
+        QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_001.tif")}}};
+    meta[QStringLiteral("reference_datasets")] =
+        QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("scan.las")},
+                               {QStringLiteral("type"), QStringLiteral("lidar")}}};
+    const QByteArray before = QJsonDocument(meta).toJson(QJsonDocument::Compact);
+
+    const auto summary = xjw::gui::project::buildProjectDashboardSummary(meta);
+
+    EXPECT_EQ(summary.imageCount, 1);
+    EXPECT_EQ(QJsonDocument(meta).toJson(QJsonDocument::Compact), before);
 }
 
 TEST(ProjectSupportUtilsTest, CameraJsonRoundTripPreservesUnitsAndDepthDirection)
@@ -774,8 +969,11 @@ TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
     ASSERT_FALSE(modelSource.isEmpty());
     ASSERT_FALSE(treeSource.isEmpty());
 
-    EXPECT_FALSE(terrainSource.contains(QStringLiteral("depth_map_results")))
+    EXPECT_FALSE(terrainSource.contains(
+        QStringLiteral("upsertMetaArrayRecordByPath(&metaUpdated, QStringLiteral(\"depth_map_results\")")))
         << "DEM product previews should be stored on dem_results.depth_preview_png, not as MVS depth maps.";
+    EXPECT_TRUE(terrainSource.contains(QStringLiteral("collectLatestStoredDepthFrames")))
+        << "DEM generation may read MVS depth_map_results as input, but must not write DEM previews there.";
     EXPECT_FALSE(modelSource.contains(QStringLiteral("depth_map_results")))
         << "Model/terrain previews should not be inserted into the MVS depth map result list.";
     EXPECT_TRUE(treeSource.contains(QStringLiteral("depthResultKind(obj) == QStringLiteral(\"mvs_depth\")")))
@@ -1371,6 +1569,59 @@ TEST(MainMenuTest, ToolsMenuExposesCameraConversionAction)
     EXPECT_TRUE(foundInToolsMenu);
 }
 
+TEST(MainMenuTest, ToolsMenuExposesReferenceDatasetImportAction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.importReferenceDatasetAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->text().contains(QStringLiteral("导入参考 DEM/LiDAR")));
+    EXPECT_EQ(action->objectName(), QStringLiteral("actionImportReferenceDataset"));
+
+    bool foundInToolsMenu = false;
+    const QList<QMenu *> menus = window.menuBar()->findChildren<QMenu *>();
+    for (QMenu *candidate : menus)
+    {
+        if (candidate && candidate->title() == QStringLiteral("工具"))
+        {
+            foundInToolsMenu = candidate->actions().contains(action);
+            break;
+        }
+    }
+    EXPECT_TRUE(foundInToolsMenu);
+}
+
+TEST(MainMenuTest, ToolsMenuExposesReferenceQualityCheckAction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.referenceQualityCheckAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->text().contains(QStringLiteral("点云/DEM 精度检查")));
+    EXPECT_EQ(action->objectName(), QStringLiteral("actionReferenceQualityCheck"));
+
+    QMenu *toolsMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("工具"));
+    ASSERT_NE(toolsMenu, nullptr);
+    EXPECT_TRUE(toolsMenu->actions().contains(action));
+}
+
+TEST(MainMenuTest, ToolsMenuExposesReferenceTerrainBundleAdjustAction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.referenceTerrainBundleAdjustAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->text().contains(QStringLiteral("参考地形约束重新平差")));
+    EXPECT_EQ(action->objectName(), QStringLiteral("actionReferenceTerrainBundleAdjust"));
+
+    QMenu *toolsMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("工具"));
+    ASSERT_NE(toolsMenu, nullptr);
+    EXPECT_TRUE(toolsMenu->actions().contains(action));
+}
+
 TEST(MainMenuTest, ViewMenuExposesCheckedCameraVisibilityAction)
 {
     QMainWindow window;
@@ -1403,6 +1654,19 @@ TEST(CameraSceneWidgetTest, CameraVisibilityToggleIsExposedAndGuardsCameraOverla
     EXPECT_TRUE(source.contains(QStringLiteral("if (m_showCameras)")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCamerasAction()")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameras")));
+}
+
+TEST(MainWindowTest, ReferenceDatasetActionsConnectToProjectManager)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("importReferenceDatasetAction()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::importReferenceDataset")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceQualityCheckAction()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::runReferenceQualityCheck")));
+    EXPECT_TRUE(source.contains(QStringLiteral("referenceTerrainBundleAdjustAction()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::prepareReferenceTerrainBundleAdjust")));
 }
 
 TEST(MainMenuTest, TriangulationActionNamesPairwisePreviewCloud)
@@ -2021,6 +2285,40 @@ TEST(ThreeDReconstructionDialogTest, AerialTriangulationModeUsesSparseOnlyLabels
               QStringLiteral("three_d_reconstruction"));
 }
 
+TEST(DenseCloudDialogTest, ExposesAdvancedMvsQualitySettingsWithoutChangingDefaults)
+{
+    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudDialog.ui"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudDialog.cpp"));
+    ASSERT_FALSE(ui.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_minConsistentViewsSpin")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_geomConsistencyCheck")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_maxReprojErrorSpin")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_speckleMinAreaSpin")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_fusionMaxImageDimSpin")));
+
+    EXPECT_TRUE(header.contains(QStringLiteral("m_minConsistentViewsSpin")));
+    EXPECT_TRUE(header.contains(QStringLiteral("m_geomConsistencyCheck")));
+    EXPECT_TRUE(header.contains(QStringLiteral("m_maxReprojErrorSpin")));
+    EXPECT_TRUE(header.contains(QStringLiteral("m_speckleMinAreaSpin")));
+    EXPECT_TRUE(header.contains(QStringLiteral("m_fusionMaxImageDimSpin")));
+
+    EXPECT_TRUE(source.contains(QStringLiteral("s[\"minConsistentViews\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s[\"geomConsistency\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s[\"maxReprojError\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s[\"speckleMinArea\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s[\"fusionMaxImageDim\"]")));
+
+    EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"minConsistentViews\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"geomConsistency\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"maxReprojError\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"speckleMinArea\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"fusionMaxImageDim\")")));
+}
+
 TEST(BundleAdjustDialogTest, KeepsActionButtonsOutsideScrollableParameterArea)
 {
     BundleAdjustDialog dialog;
@@ -2187,6 +2485,258 @@ TEST(TaskStatusWidgetTest, ShowsProgressAndPreservesCancellingState)
     EXPECT_FALSE(widget.isActive());
     EXPECT_FALSE(widget.isCancelling());
     EXPECT_EQ(cancelButton->text(), QStringLiteral("取消"));
+}
+
+TEST(ProjectDashboardWidgetTest, LoadsMetadataIntoReadOnlyWorkflowAndReferenceSummary)
+{
+    ProjectDashboardWidget widget;
+
+    QJsonArray images;
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_001.tif")},
+                              {QStringLiteral("camera"), QJsonObject{{QStringLiteral("fu"), 1000.0}}}});
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("E:/data/img_002.tif")}});
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = images;
+    meta[QStringLiteral("ipfind_results")] = QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("ip.json")}}};
+    meta[QStringLiteral("reference_datasets")] =
+        QJsonArray{QJsonObject{{QStringLiteral("path"), QStringLiteral("scan.las")},
+                               {QStringLiteral("type"), QStringLiteral("lidar")},
+                               {QStringLiteral("role"), QStringLiteral("ba_prior")}}};
+    meta[QStringLiteral("report_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("reference_quality")},
+                               {QStringLiteral("path"), QStringLiteral("reference_quality.json")}}};
+
+    widget.loadFromJson(meta);
+
+    auto *summaryLabel = widget.findChild<QLabel *>(QStringLiteral("dashboardSummaryLabel"));
+    ASSERT_NE(summaryLabel, nullptr);
+    EXPECT_TRUE(summaryLabel->text().contains(QStringLiteral("影像 2")));
+    EXPECT_TRUE(summaryLabel->text().contains(QStringLiteral("相机 1/2")));
+
+    auto *referenceLabel = widget.findChild<QLabel *>(QStringLiteral("dashboardReferenceLabel"));
+    ASSERT_NE(referenceLabel, nullptr);
+    EXPECT_TRUE(referenceLabel->text().contains(QStringLiteral("LiDAR 1")));
+    EXPECT_TRUE(referenceLabel->text().contains(QStringLiteral("BA约束 1")));
+
+    auto *referenceTable = widget.findChild<QTableWidget *>(QStringLiteral("dashboardReferenceTable"));
+    ASSERT_NE(referenceTable, nullptr);
+    EXPECT_EQ(referenceTable->rowCount(), 1);
+    EXPECT_EQ(referenceTable->editTriggers(), QAbstractItemView::NoEditTriggers);
+    EXPECT_TRUE(referenceTable->item(0, 0)->text().contains(QStringLiteral("LiDAR")));
+    EXPECT_TRUE(referenceTable->item(0, 1)->text().contains(QStringLiteral("BA约束")));
+
+    auto *workflowTable = widget.findChild<QTableWidget *>(QStringLiteral("dashboardWorkflowTable"));
+    ASSERT_NE(workflowTable, nullptr);
+    EXPECT_GE(workflowTable->rowCount(), 8);
+    EXPECT_EQ(workflowTable->editTriggers(), QAbstractItemView::NoEditTriggers);
+
+    bool foundReferenceStep = false;
+    for (int row = 0; row < workflowTable->rowCount(); ++row)
+    {
+        const QTableWidgetItem *stageItem = workflowTable->item(row, 1);
+        const QTableWidgetItem *detailItem = workflowTable->item(row, 2);
+        if (stageItem && stageItem->text().contains(QStringLiteral("LiDAR")))
+        {
+            foundReferenceStep = true;
+            ASSERT_NE(detailItem, nullptr);
+            EXPECT_TRUE(detailItem->text().contains(QStringLiteral("BA约束")));
+        }
+    }
+    EXPECT_TRUE(foundReferenceStep);
+
+    auto *reportTable = widget.findChild<QTableWidget *>(QStringLiteral("dashboardReportTable"));
+    ASSERT_NE(reportTable, nullptr);
+    EXPECT_EQ(reportTable->rowCount(), 1);
+    EXPECT_EQ(reportTable->editTriggers(), QAbstractItemView::NoEditTriggers);
+}
+
+TEST(ProjectDashboardWidgetTest, MainWindowUiExposesOverviewTab)
+{
+    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.ui"));
+    ASSERT_FALSE(ui.isEmpty());
+
+    EXPECT_TRUE(ui.contains(QStringLiteral("ProjectDashboardWidget")));
+    EXPECT_TRUE(ui.contains(QStringLiteral("<string>概览</string>")));
+}
+
+TEST(ProjectDashboardWidgetTest, MainWindowRefreshesDashboardFromProjectMetadata)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectDashboardWidget")));
+    EXPECT_TRUE(source.contains(QStringLiteral("m_dashboard")));
+    EXPECT_TRUE(source.contains(QStringLiteral("ProjectDashboardWidget::loadFromJson")));
+    EXPECT_TRUE(source.contains(QStringLiteral("projectMetadataChanged, m_dashboard")));
+}
+
+TEST(ProjectDashboardWidgetTest, ShowsQualityMetricsFromRegisteredReports)
+{
+    ProjectDashboardWidget widget;
+
+    QJsonObject meta;
+    meta[QStringLiteral("report_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("reconstruction_quality")},
+                               {QStringLiteral("path"), QStringLiteral("quality.json")},
+                               {QStringLiteral("total_image_count"), 12},
+                               {QStringLiteral("registered_image_count"), 10},
+                               {QStringLiteral("sparse_point_count"), 4200},
+                               {QStringLiteral("dense_point_count"), 90000},
+                               {QStringLiteral("mvs_valid_coverage"), 0.82},
+                               {QStringLiteral("dem_coverage"), 0.76}}};
+
+    widget.loadFromJson(meta);
+
+    auto *qualityTable = widget.findChild<QTableWidget *>(QStringLiteral("dashboardQualityTable"));
+    ASSERT_NE(qualityTable, nullptr);
+    EXPECT_EQ(qualityTable->editTriggers(), QAbstractItemView::NoEditTriggers);
+    EXPECT_GE(qualityTable->rowCount(), 4);
+
+    bool foundMvsCoverage = false;
+    bool foundSparsePoints = false;
+    for (int row = 0; row < qualityTable->rowCount(); ++row)
+    {
+        const QTableWidgetItem *metricItem = qualityTable->item(row, 0);
+        const QTableWidgetItem *valueItem = qualityTable->item(row, 1);
+        ASSERT_NE(metricItem, nullptr);
+        ASSERT_NE(valueItem, nullptr);
+        if (metricItem->text().contains(QStringLiteral("MVS覆盖")))
+        {
+            foundMvsCoverage = true;
+            EXPECT_TRUE(valueItem->text().contains(QStringLiteral("82")));
+        }
+        if (metricItem->text().contains(QStringLiteral("稀疏点")))
+        {
+            foundSparsePoints = true;
+            EXPECT_TRUE(valueItem->text().contains(QStringLiteral("4200")));
+        }
+    }
+    EXPECT_TRUE(foundMvsCoverage);
+    EXPECT_TRUE(foundSparsePoints);
+}
+
+TEST(ProjectDashboardWidgetTest, ShowsReferenceQualityAlertsAndErrorMetricsReadOnly)
+{
+    ProjectDashboardWidget widget;
+
+    QJsonObject meta;
+    meta[QStringLiteral("report_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("type"), QStringLiteral("reference_quality")},
+                               {QStringLiteral("path"), QStringLiteral("reference_quality.json")},
+                               {QStringLiteral("status"), QStringLiteral("missing_project_products")},
+                               {QStringLiteral("comparison_available"), false},
+                               {QStringLiteral("rmse_m"), 0.184},
+                               {QStringLiteral("p95_distance_m"), 0.420}},
+                   QJsonObject{{QStringLiteral("type"), QStringLiteral("reference_terrain_prior_preflight")},
+                               {QStringLiteral("path"), QStringLiteral("reference_prior.json")},
+                               {QStringLiteral("ready"), false},
+                               {QStringLiteral("status"), QStringLiteral("missing_aerial_triangulation")},
+                               {QStringLiteral("ba_prior_reference_count"), 1}},
+                   QJsonObject{{QStringLiteral("type"), QStringLiteral("reconstruction_quality")},
+                               {QStringLiteral("path"), QStringLiteral("quality.json")},
+                               {QStringLiteral("total_image_count"), 10},
+                               {QStringLiteral("registered_image_count"), 7},
+                               {QStringLiteral("mvs_valid_coverage"), 0.55},
+                               {QStringLiteral("dem_coverage"), 0.41}}};
+
+    widget.loadFromJson(meta);
+
+    auto *alertTable = widget.findChild<QTableWidget *>(QStringLiteral("dashboardQualityAlertTable"));
+    ASSERT_NE(alertTable, nullptr);
+    EXPECT_EQ(alertTable->editTriggers(), QAbstractItemView::NoEditTriggers);
+    EXPECT_GE(alertTable->rowCount(), 4);
+
+    bool foundReferenceBlocker = false;
+    bool foundTerrainPriorBlocker = false;
+    bool foundRmseMetric = false;
+    bool foundCoverageWarning = false;
+    for (int row = 0; row < alertTable->rowCount(); ++row)
+    {
+        const QTableWidgetItem *levelItem = alertTable->item(row, 0);
+        const QTableWidgetItem *sourceItem = alertTable->item(row, 1);
+        const QTableWidgetItem *detailItem = alertTable->item(row, 2);
+        ASSERT_NE(levelItem, nullptr);
+        ASSERT_NE(sourceItem, nullptr);
+        ASSERT_NE(detailItem, nullptr);
+
+        if (sourceItem->text().contains(QStringLiteral("参考数据质检"))
+            && detailItem->text().contains(QStringLiteral("missing_project_products")))
+        {
+            foundReferenceBlocker = true;
+            EXPECT_TRUE(levelItem->text().contains(QStringLiteral("阻塞")));
+        }
+        if (sourceItem->text().contains(QStringLiteral("参考地形平差"))
+            && detailItem->text().contains(QStringLiteral("missing_aerial_triangulation")))
+        {
+            foundTerrainPriorBlocker = true;
+            EXPECT_TRUE(levelItem->text().contains(QStringLiteral("阻塞")));
+        }
+        if (detailItem->text().contains(QStringLiteral("RMSE"))
+            && detailItem->text().contains(QStringLiteral("0.184")))
+        {
+            foundRmseMetric = true;
+        }
+        if (sourceItem->text().contains(QStringLiteral("重建质量"))
+            && detailItem->text().contains(QStringLiteral("MVS覆盖")))
+        {
+            foundCoverageWarning = true;
+            EXPECT_TRUE(levelItem->text().contains(QStringLiteral("注意")));
+        }
+    }
+
+    EXPECT_TRUE(foundReferenceBlocker);
+    EXPECT_TRUE(foundTerrainPriorBlocker);
+    EXPECT_TRUE(foundRmseMetric);
+    EXPECT_TRUE(foundCoverageWarning);
+}
+
+TEST(ProjectDashboardWidgetTest, ShowsReadOnlyRunningTaskSnapshots)
+{
+    ProjectDashboardWidget widget;
+
+    QJsonArray tasks;
+    tasks.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("MVS/稠密重建")},
+                             {QStringLiteral("status_text"), QStringLiteral("正在估计深度图")},
+                             {QStringLiteral("active"), true},
+                             {QStringLiteral("cancelling"), false},
+                             {QStringLiteral("progress_value"), 32},
+                             {QStringLiteral("progress_maximum"), 100}});
+    tasks.append(QJsonObject{{QStringLiteral("name"), QStringLiteral("空三/BA")},
+                             {QStringLiteral("status_text"), QStringLiteral("等待")},
+                             {QStringLiteral("active"), false},
+                             {QStringLiteral("progress_value"), 0},
+                             {QStringLiteral("progress_maximum"), 100}});
+
+    widget.setTaskSnapshots(tasks);
+
+    auto *taskLabel = widget.findChild<QLabel *>(QStringLiteral("dashboardTaskLabel"));
+    ASSERT_NE(taskLabel, nullptr);
+    EXPECT_TRUE(taskLabel->text().contains(QStringLiteral("当前运行任务 1")));
+    EXPECT_TRUE(taskLabel->text().contains(QStringLiteral("只读")));
+
+    auto *taskTable = widget.findChild<QTableWidget *>(QStringLiteral("dashboardTaskTable"));
+    ASSERT_NE(taskTable, nullptr);
+    EXPECT_EQ(taskTable->editTriggers(), QAbstractItemView::NoEditTriggers);
+    ASSERT_EQ(taskTable->rowCount(), 1);
+    EXPECT_TRUE(taskTable->item(0, 0)->text().contains(QStringLiteral("MVS")));
+    EXPECT_TRUE(taskTable->item(0, 1)->text().contains(QStringLiteral("正在估计深度图")));
+    EXPECT_TRUE(taskTable->item(0, 2)->text().contains(QStringLiteral("32/100")));
+}
+
+TEST(ProjectDashboardWidgetTest, MainWindowMirrorsTaskStatusSnapshotsReadOnly)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("refreshDashboardTaskSnapshots")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setTaskSnapshots")));
+    EXPECT_TRUE(source.contains(QStringLiteral("TaskStatusWidget *widget")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cancelRequested")));
 }
 
 TEST(MenuWorkflowControllerTest, DenseStageAdvancesOnMvsSuccessWithoutRequiringChangedOutputPath)
@@ -3520,6 +4070,745 @@ TEST(DataTreeWidgetTest, ResourceRowsAreSortedByFileNameAscending)
     ASSERT_EQ(depthSection->rowCount(), 2);
     EXPECT_EQ(depthSection->child(0, 0)->text(), QStringLiteral("depth_2.png"));
     EXPECT_EQ(depthSection->child(1, 0)->text(), QStringLiteral("depth_10.png"));
+}
+
+TEST(DataTreeWidgetTest, DemSectionShowsQualityRasterProducts)
+{
+    DataTreeWidget tree;
+
+    QJsonObject demRecord;
+    demRecord[QStringLiteral("dem_tif")] = QStringLiteral("/tmp/terrain/products/dem.tif");
+    demRecord[QStringLiteral("depth_preview_png")] = QStringLiteral("/tmp/terrain/products/depth_map.png");
+    demRecord[QStringLiteral("error_path")] = QStringLiteral("/tmp/terrain/products/dem_error.tif");
+    demRecord[QStringLiteral("count_path")] = QStringLiteral("/tmp/terrain/products/dem_count.tif");
+    demRecord[QStringLiteral("confidence_path")] = QStringLiteral("/tmp/terrain/products/dem_confidence.tif");
+    demRecord[QStringLiteral("coverage_path")] = QStringLiteral("/tmp/terrain/products/dem_coverage.tif");
+
+    QJsonArray demResults;
+    demResults.append(demRecord);
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray();
+    meta[QStringLiteral("dem_results")] = demResults;
+    tree.loadFromJson(meta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    QStandardItem *demSection = nullptr;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("DEM (1)")))
+        {
+            demSection = item;
+            break;
+        }
+    }
+
+    ASSERT_NE(demSection, nullptr);
+    ASSERT_EQ(demSection->rowCount(), 6);
+    QSet<QString> paths;
+    for (int row = 0; row < demSection->rowCount(); ++row)
+    {
+        paths.insert(demSection->child(row, 1)->text());
+    }
+    EXPECT_TRUE(paths.contains(QStringLiteral("/tmp/terrain/products/dem.tif")));
+    EXPECT_TRUE(paths.contains(QStringLiteral("/tmp/terrain/products/depth_map.png")));
+    EXPECT_TRUE(paths.contains(QStringLiteral("/tmp/terrain/products/dem_count.tif")));
+    EXPECT_TRUE(paths.contains(QStringLiteral("/tmp/terrain/products/dem_confidence.tif")));
+    EXPECT_TRUE(paths.contains(QStringLiteral("/tmp/terrain/products/dem_coverage.tif")));
+    EXPECT_TRUE(paths.contains(QStringLiteral("/tmp/terrain/products/dem_error.tif")));
+}
+
+TEST(DataTreeWidgetTest, ReportResultsAppearAndSortByFileName)
+{
+    DataTreeWidget tree;
+
+    QJsonArray reports;
+    for (const QString &path : {
+             QStringLiteral("/tmp/reports/quality_10.json"),
+             QStringLiteral("/tmp/reports/quality_2.json")})
+    {
+        QJsonObject report;
+        report[QStringLiteral("type")] = QStringLiteral("reconstruction_quality");
+        report[QStringLiteral("path")] = path;
+        reports.append(report);
+    }
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray();
+    meta[QStringLiteral("report_results")] = reports;
+    tree.loadFromJson(meta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    QStandardItem *reportSection = nullptr;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("报告 (2)")))
+        {
+            reportSection = item;
+            break;
+        }
+    }
+
+    ASSERT_NE(reportSection, nullptr);
+    ASSERT_EQ(reportSection->rowCount(), 2);
+    EXPECT_EQ(reportSection->child(0, 0)->text(), QStringLiteral("quality_2.json  [reconstruction_quality]"));
+    EXPECT_EQ(reportSection->child(1, 0)->text(), QStringLiteral("quality_10.json  [reconstruction_quality]"));
+}
+
+TEST(DataTreeWidgetTest, ReferenceDatasetsAppearAndSortByFileName)
+{
+    DataTreeWidget tree;
+
+    QJsonArray references;
+    {
+        QJsonObject reference;
+        reference[QStringLiteral("type")] = QStringLiteral("lidar");
+        reference[QStringLiteral("role")] = QStringLiteral("validation");
+        reference[QStringLiteral("path")] = QStringLiteral("/tmp/reference/lidar_10.laz");
+        references.append(reference);
+    }
+    {
+        QJsonObject reference;
+        reference[QStringLiteral("type")] = QStringLiteral("dem");
+        reference[QStringLiteral("role")] = QStringLiteral("ba_prior");
+        reference[QStringLiteral("path")] = QStringLiteral("/tmp/reference/dem_2.tif");
+        references.append(reference);
+    }
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray();
+    meta[QStringLiteral("reference_datasets")] = references;
+    tree.loadFromJson(meta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    QStandardItem *referenceSection = nullptr;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item && item->text().startsWith(QStringLiteral("参考数据 (2)")))
+        {
+            referenceSection = item;
+            break;
+        }
+    }
+
+    ASSERT_NE(referenceSection, nullptr);
+    ASSERT_EQ(referenceSection->rowCount(), 2);
+    EXPECT_EQ(referenceSection->child(0, 0)->text(), QStringLiteral("dem_2.tif  [DEM] [BA约束]"));
+    EXPECT_EQ(referenceSection->child(0, 1)->text(), QStringLiteral("/tmp/reference/dem_2.tif"));
+    EXPECT_EQ(referenceSection->child(1, 0)->text(), QStringLiteral("lidar_10.laz  [LiDAR] [精度检查]"));
+    EXPECT_EQ(referenceSection->child(1, 1)->text(), QStringLiteral("/tmp/reference/lidar_10.laz"));
+}
+
+TEST(ProjectFilesManagerTest, ReportResultsAreStoredAsProjectResults)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectFilesManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("report_results")));
+}
+
+TEST(ProjectFilesManagerTest, ReferenceDatasetsAreStoredAsProjectResults)
+{
+    ProjectFilesManager files;
+
+    QJsonObject image;
+    image[QStringLiteral("path")] = QStringLiteral("/tmp/images/img_001.jpg");
+
+    QJsonObject reference;
+    reference[QStringLiteral("type")] = QStringLiteral("dem");
+    reference[QStringLiteral("role")] = QStringLiteral("validation");
+    reference[QStringLiteral("path")] = QStringLiteral("/tmp/reference/dem_001.tif");
+
+    QJsonObject legacyMeta;
+    legacyMeta[QStringLiteral("images")] = QJsonArray{image};
+    legacyMeta[QStringLiteral("reference_datasets")] = QJsonArray{reference};
+
+    EXPECT_TRUE(ProjectFilesManager::isResultKey(QStringLiteral("reference_datasets")));
+
+    files.setData(legacyMeta);
+
+    EXPECT_FALSE(files.coreData().contains(QStringLiteral("reference_datasets")));
+    ASSERT_TRUE(files.resultsData().contains(QStringLiteral("reference_datasets")));
+    EXPECT_EQ(files.resultsData().value(QStringLiteral("reference_datasets")).toArray().size(), 1);
+    EXPECT_EQ(files.data().value(QStringLiteral("reference_datasets")).toArray().at(0).toObject()
+                  .value(QStringLiteral("path")).toString(),
+              QStringLiteral("/tmp/reference/dem_001.tif"));
+}
+
+TEST(ProjectReferenceDatasetsTest, RegisterReferenceDatasetUpsertsByPath)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_project.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("reference_project")));
+
+    const QString referencePath = QDir(tempDir.path()).filePath(QStringLiteral("dem_001.tif"));
+    QFile referenceFile(referencePath);
+    ASSERT_TRUE(referenceFile.open(QIODevice::WriteOnly));
+    referenceFile.write("dem");
+    referenceFile.close();
+
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referencePath,
+                                                            QStringLiteral("dem"),
+                                                            QStringLiteral("validation"),
+                                                            &error)) << error.toStdString();
+
+    QJsonArray references = projectData.metadata().value(QStringLiteral("reference_datasets")).toArray();
+    ASSERT_EQ(references.size(), 1);
+    QJsonObject record = references.at(0).toObject();
+    EXPECT_EQ(record.value(QStringLiteral("path")).toString(), QFileInfo(referencePath).absoluteFilePath());
+    EXPECT_EQ(record.value(QStringLiteral("type")).toString(), QStringLiteral("dem"));
+    EXPECT_EQ(record.value(QStringLiteral("role")).toString(), QStringLiteral("validation"));
+    EXPECT_EQ(record.value(QStringLiteral("storage")).toString(), QStringLiteral("reference"));
+    EXPECT_TRUE(record.contains(QStringLiteral("created_at")));
+
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referencePath,
+                                                            QStringLiteral("dem"),
+                                                            QStringLiteral("ba_prior"),
+                                                            &error)) << error.toStdString();
+
+    references = projectData.metadata().value(QStringLiteral("reference_datasets")).toArray();
+    ASSERT_EQ(references.size(), 1);
+    record = references.at(0).toObject();
+    EXPECT_EQ(record.value(QStringLiteral("role")).toString(), QStringLiteral("ba_prior"));
+}
+
+TEST(ProjectReferenceDatasetsTest, QualityReportRegistersReferenceReadiness)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_quality.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("reference_quality")));
+
+    const QString referenceDemPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_dem.tif"));
+    QFile referenceDem(referenceDemPath);
+    ASSERT_TRUE(referenceDem.open(QIODevice::WriteOnly));
+    referenceDem.write("dem");
+    referenceDem.close();
+
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referenceDemPath,
+                                                            QStringLiteral("dem"),
+                                                            QStringLiteral("validation"),
+                                                            &error)) << error.toStdString();
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dem_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), QDir(tempDir.path()).filePath(QStringLiteral("candidate_dem.tif"))},
+                    {QStringLiteral("coverage_ratio"), 0.72}}
+    };
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud.ply"))},
+                    {QStringLiteral("point_count"), 1200}}
+    };
+    projectData.updateMetadata(meta, true);
+
+    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+        &projectData,
+        QStringLiteral("reference_quality_test"));
+
+    ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
+    EXPECT_TRUE(QFile::exists(result.jsonPath));
+    EXPECT_TRUE(QFile::exists(result.csvPath));
+    EXPECT_EQ(result.record.value(QStringLiteral("type")).toString(), QStringLiteral("reference_quality"));
+    EXPECT_EQ(result.record.value(QStringLiteral("reference_count")).toInt(), 1);
+    EXPECT_TRUE(result.record.value(QStringLiteral("comparison_available")).toBool());
+
+    const QJsonArray reports = projectData.metadata().value(QStringLiteral("report_results")).toArray();
+    ASSERT_EQ(reports.size(), 1);
+    const QJsonObject reportRecord = reports.at(0).toObject();
+    EXPECT_EQ(reportRecord.value(QStringLiteral("path")).toString(), result.jsonPath);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("csv_path")).toString(), result.csvPath);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("type")).toString(), QStringLiteral("reference_quality"));
+}
+
+TEST(ProjectReferenceDatasetsTest, QualityReportComputesSameGridDemDifferenceMetrics)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_quality_dem_diff.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("reference_quality_dem_diff")));
+
+    xjw::DemGridData referenceDem;
+    referenceDem.width = 2;
+    referenceDem.height = 2;
+    referenceDem.minX = 0.0;
+    referenceDem.minY = 0.0;
+    referenceDem.stepX = 1.0;
+    referenceDem.stepY = 1.0;
+    referenceDem.elevation = cv::Mat(referenceDem.height, referenceDem.width, CV_32FC1);
+    referenceDem.validMask = cv::Mat(referenceDem.height, referenceDem.width, CV_8UC1, cv::Scalar(255));
+    referenceDem.elevation.at<float>(0, 0) = 10.0f;
+    referenceDem.elevation.at<float>(0, 1) = 11.0f;
+    referenceDem.elevation.at<float>(1, 0) = 12.0f;
+    referenceDem.elevation.at<float>(1, 1) = 13.0f;
+
+    xjw::DemGridData candidateDem = referenceDem;
+    candidateDem.elevation = cv::Mat(referenceDem.height, referenceDem.width, CV_32FC1);
+    candidateDem.elevation.at<float>(0, 0) = 11.0f;
+    candidateDem.elevation.at<float>(0, 1) = 10.0f;
+    candidateDem.elevation.at<float>(1, 0) = 15.0f;
+    candidateDem.elevation.at<float>(1, 1) = 13.0f;
+    candidateDem.validMask = cv::Mat(candidateDem.height, candidateDem.width, CV_8UC1, cv::Scalar(255));
+
+    const QString referenceDemPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_dem.tif"));
+    const QString candidateDemPath = QDir(tempDir.path()).filePath(QStringLiteral("candidate_dem.tif"));
+    QString ioError;
+    ASSERT_TRUE(xjw::DemDomIO::writeDemRaster(referenceDem,
+                                              referenceDemPath,
+                                              xjw::DemRasterFormat::Float32Tiff,
+                                              &ioError)) << ioError.toStdString();
+    ASSERT_TRUE(xjw::DemDomIO::writeDemRaster(candidateDem,
+                                              candidateDemPath,
+                                              xjw::DemRasterFormat::Float32Tiff,
+                                              &ioError)) << ioError.toStdString();
+
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referenceDemPath,
+                                                            QStringLiteral("dem"),
+                                                            QStringLiteral("validation"),
+                                                            &error)) << error.toStdString();
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dem_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), candidateDemPath},
+                    {QStringLiteral("coverage_ratio"), 1.0}}
+    };
+    projectData.updateMetadata(meta, true);
+
+    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+        &projectData,
+        QStringLiteral("reference_quality_dem_diff_test"));
+
+    ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
+    EXPECT_TRUE(result.record.value(QStringLiteral("comparison_available")).toBool());
+    EXPECT_EQ(result.record.value(QStringLiteral("dem_valid_count")).toInt(), 4);
+    EXPECT_NEAR(result.record.value(QStringLiteral("dem_mean_error_m")).toDouble(), 0.75, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("dem_rmse_m")).toDouble(), std::sqrt(11.0 / 4.0), 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("dem_p95_m")).toDouble(), 3.0, 1e-9);
+
+    const QJsonArray reports = projectData.metadata().value(QStringLiteral("report_results")).toArray();
+    ASSERT_EQ(reports.size(), 1);
+    const QJsonObject reportRecord = reports.at(0).toObject();
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("dem_rmse_m")).toDouble(), std::sqrt(11.0 / 4.0), 1e-9);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("rmse_m")).toDouble(), std::sqrt(11.0 / 4.0), 1e-9);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("p95_distance_m")).toDouble(), 3.0, 1e-9);
+
+    const QString differencePath = reportRecord.value(QStringLiteral("dem_difference_path")).toString();
+    const QString absDifferencePath = reportRecord.value(QStringLiteral("dem_abs_difference_path")).toString();
+    EXPECT_TRUE(QFileInfo::exists(differencePath)) << differencePath.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(absDifferencePath)) << absDifferencePath.toStdString();
+
+    xjw::DemGridData diffGrid;
+    ASSERT_TRUE(xjw::DemDomIO::readDemRaster(differencePath, &diffGrid, &ioError)) << ioError.toStdString();
+    ASSERT_EQ(diffGrid.width, 2);
+    ASSERT_EQ(diffGrid.height, 2);
+    EXPECT_NEAR(diffGrid.elevation.at<float>(0, 0), 1.0f, 1e-6f);
+    EXPECT_NEAR(diffGrid.elevation.at<float>(0, 1), -1.0f, 1e-6f);
+    EXPECT_NEAR(diffGrid.elevation.at<float>(1, 0), 3.0f, 1e-6f);
+    EXPECT_NEAR(diffGrid.elevation.at<float>(1, 1), 0.0f, 1e-6f);
+}
+
+TEST(ProjectReferenceDatasetsTest, QualityReportComputesPairedPointCloudAlignmentMetrics)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_quality_cloud_diff.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("reference_quality_cloud_diff")));
+
+    const QString candidateCloudPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud.ply"));
+    const QString referenceCloudPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_cloud.ply"));
+    writeMinimalPointCloudPly(candidateCloudPath, {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 2.0, 0.0},
+        {0.0, 0.0, 3.0}
+    });
+    writeMinimalPointCloudPly(referenceCloudPath, {
+        {10.0, -4.0, 1.5},
+        {12.0, -4.0, 1.5},
+        {10.0, 0.0, 1.5},
+        {10.0, -4.0, 7.5}
+    });
+
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referenceCloudPath,
+                                                            QStringLiteral("point_cloud"),
+                                                            QStringLiteral("validation"),
+                                                            &error)) << error.toStdString();
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), candidateCloudPath},
+                    {QStringLiteral("point_count"), 4}}
+    };
+    projectData.updateMetadata(meta, true);
+
+    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+        &projectData,
+        QStringLiteral("reference_quality_cloud_diff_test"));
+
+    ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
+    EXPECT_TRUE(result.record.value(QStringLiteral("comparison_available")).toBool());
+    EXPECT_EQ(result.record.value(QStringLiteral("cloud_pair_count")).toInt(), 4);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_scale")).toDouble(), 2.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_rmse_before_m")).toDouble(), std::sqrt(125.0), 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_rmse_m")).toDouble(), 0.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_p95_m")).toDouble(), 0.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("rmse_m")).toDouble(), 0.0, 1e-9);
+
+    const QJsonArray reports = projectData.metadata().value(QStringLiteral("report_results")).toArray();
+    ASSERT_EQ(reports.size(), 1);
+    const QJsonObject reportRecord = reports.at(0).toObject();
+    EXPECT_EQ(reportRecord.value(QStringLiteral("cloud_pair_count")).toInt(), 4);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("cloud_rmse_before_m")).toDouble(), std::sqrt(125.0), 1e-9);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("cloud_rmse_m")).toDouble(), 0.0, 1e-9);
+
+    const QString begErrorsPath = reportRecord.value(QStringLiteral("cloud_beg_errors_csv_path")).toString();
+    const QString endErrorsPath = reportRecord.value(QStringLiteral("cloud_end_errors_csv_path")).toString();
+    const QString transformPath = reportRecord.value(QStringLiteral("cloud_transform_json_path")).toString();
+    EXPECT_TRUE(QFileInfo::exists(begErrorsPath)) << begErrorsPath.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(endErrorsPath)) << endErrorsPath.toStdString();
+    EXPECT_TRUE(QFileInfo::exists(transformPath)) << transformPath.toStdString();
+
+    QFile transformFile(transformPath);
+    ASSERT_TRUE(transformFile.open(QIODevice::ReadOnly));
+    const QJsonObject transformJson = QJsonDocument::fromJson(transformFile.readAll()).object();
+    EXPECT_NEAR(transformJson.value(QStringLiteral("scale")).toDouble(), 2.0, 1e-9);
+    EXPECT_NEAR(transformJson.value(QStringLiteral("translation")).toObject().value(QStringLiteral("x")).toDouble(), 10.0, 1e-9);
+}
+
+TEST(ProjectReferenceDatasetsTest, QualityReportReadsUncompressedLasReferenceCloud)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_quality_las_diff.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("reference_quality_las_diff")));
+
+    const QString candidateCloudPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud.ply"));
+    const QString referenceCloudPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_cloud.las"));
+    writeMinimalPointCloudPly(candidateCloudPath, {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 2.0, 0.0},
+        {0.0, 0.0, 3.0}
+    });
+    writeMinimalPointCloudLas(referenceCloudPath, {
+        {10.0, -4.0, 1.5},
+        {12.0, -4.0, 1.5},
+        {10.0, 0.0, 1.5},
+        {10.0, -4.0, 7.5}
+    });
+
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referenceCloudPath,
+                                                            QStringLiteral("lidar"),
+                                                            QStringLiteral("validation"),
+                                                            &error)) << error.toStdString();
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), candidateCloudPath},
+                    {QStringLiteral("point_count"), 4}}
+    };
+    projectData.updateMetadata(meta, true);
+
+    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+        &projectData,
+        QStringLiteral("reference_quality_las_diff_test"));
+
+    ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
+    EXPECT_TRUE(result.record.value(QStringLiteral("comparison_available")).toBool());
+    EXPECT_EQ(result.record.value(QStringLiteral("cloud_pair_count")).toInt(), 4);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_scale")).toDouble(), 2.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_rmse_before_m")).toDouble(), std::sqrt(125.0), 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_rmse_m")).toDouble(), 0.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_p95_m")).toDouble(), 0.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("rmse_m")).toDouble(), 0.0, 1e-9);
+
+    const QJsonArray reports = projectData.metadata().value(QStringLiteral("report_results")).toArray();
+    ASSERT_EQ(reports.size(), 1);
+    const QJsonObject reportRecord = reports.at(0).toObject();
+    EXPECT_TRUE(reportRecord.value(QStringLiteral("cloud_difference_available")).toBool());
+    EXPECT_EQ(reportRecord.value(QStringLiteral("cloud_pair_count")).toInt(), 4);
+}
+
+TEST(ProjectReferenceDatasetsTest, QualityReportAlignsUnpairedReferenceCloudByNearestNeighbor)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_quality_unpaired_cloud.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("reference_quality_unpaired_cloud")));
+
+    const QString candidateCloudPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud.ply"));
+    const QString referenceCloudPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_cloud.ply"));
+    writeMinimalPointCloudPly(candidateCloudPath, {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 2.0, 0.0},
+        {0.0, 0.0, 3.0}
+    });
+    writeMinimalPointCloudPly(referenceCloudPath, {
+        {10.0, -4.0, 1.5},
+        {11.0, -4.0, 1.5},
+        {10.0, -2.0, 1.5},
+        {10.0, -4.0, 4.5},
+        {30.0, 20.0, 10.0},
+        {-15.0, 8.0, 2.0}
+    });
+
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referenceCloudPath,
+                                                            QStringLiteral("point_cloud"),
+                                                            QStringLiteral("validation"),
+                                                            &error)) << error.toStdString();
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), candidateCloudPath},
+                    {QStringLiteral("point_count"), 4}}
+    };
+    projectData.updateMetadata(meta, true);
+
+    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(
+        &projectData,
+        QStringLiteral("reference_quality_unpaired_cloud_test"));
+
+    ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
+    EXPECT_TRUE(result.record.value(QStringLiteral("cloud_difference_available")).toBool());
+    EXPECT_EQ(result.record.value(QStringLiteral("cloud_alignment_method")).toString(),
+              QStringLiteral("nearest_neighbor_translation"));
+    EXPECT_EQ(result.record.value(QStringLiteral("cloud_pair_count")).toInt(), 4);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_scale")).toDouble(), 1.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_tx_m")).toDouble(), 10.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_ty_m")).toDouble(), -4.0, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_tz_m")).toDouble(), 1.5, 1e-9);
+    EXPECT_NEAR(result.record.value(QStringLiteral("cloud_rmse_m")).toDouble(), 0.0, 1e-9);
+
+    EXPECT_TRUE(QFileInfo::exists(result.record.value(QStringLiteral("cloud_beg_errors_csv_path")).toString()));
+    EXPECT_TRUE(QFileInfo::exists(result.record.value(QStringLiteral("cloud_end_errors_csv_path")).toString()));
+    EXPECT_TRUE(QFileInfo::exists(result.record.value(QStringLiteral("cloud_transform_json_path")).toString()));
+}
+
+TEST(ProjectReferenceDatasetsTest, TerrainPriorPreflightReportsBundleAdjustReadiness)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_prior.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("reference_prior")));
+
+    const QString referenceDemPath = QDir(tempDir.path()).filePath(QStringLiteral("reference_dem.tif"));
+    QFile referenceDem(referenceDemPath);
+    ASSERT_TRUE(referenceDem.open(QIODevice::WriteOnly));
+    referenceDem.write("dem");
+    referenceDem.close();
+
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::registerReferenceDataset(&projectData,
+                                                            referenceDemPath,
+                                                            QStringLiteral("dem"),
+                                                            QStringLiteral("ba_prior"),
+                                                            &error)) << error.toStdString();
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), QDir(tempDir.path()).filePath(QStringLiteral("sparse_cloud.ply"))},
+                    {QStringLiteral("sparse_point_count"), 42}}
+    };
+    projectData.updateMetadata(meta, true);
+
+    const auto result = xjw::gui::project::writeReferenceTerrainPriorPreflightReport(
+        &projectData,
+        QStringLiteral("reference_prior_preflight_test"));
+
+    ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
+    EXPECT_TRUE(QFile::exists(result.jsonPath));
+    EXPECT_TRUE(QFile::exists(result.csvPath));
+    EXPECT_EQ(result.record.value(QStringLiteral("type")).toString(),
+              QStringLiteral("reference_terrain_prior_preflight"));
+    EXPECT_TRUE(result.record.value(QStringLiteral("ready")).toBool());
+    EXPECT_EQ(result.record.value(QStringLiteral("ba_prior_reference_count")).toInt(), 1);
+
+    const QJsonArray reports = projectData.metadata().value(QStringLiteral("report_results")).toArray();
+    ASSERT_EQ(reports.size(), 1);
+    EXPECT_EQ(reports.at(0).toObject().value(QStringLiteral("path")).toString(), result.jsonPath);
+}
+
+TEST(ProjectReferenceTerrainBaTest, AppliesReferenceDemAsBundleAdjustSoftPrior)
+{
+    QTemporaryDir tmp;
+    ASSERT_TRUE(tmp.isValid());
+
+    xjw::DemGridData dem;
+    dem.width = 3;
+    dem.height = 3;
+    dem.minX = 0.0;
+    dem.minY = 0.0;
+    dem.stepX = 1.0;
+    dem.stepY = 1.0;
+    dem.elevation = cv::Mat(dem.height, dem.width, CV_32FC1, cv::Scalar(5.0f));
+    dem.validMask = cv::Mat(dem.height, dem.width, CV_8UC1, cv::Scalar(255));
+
+    const QString demPath = tmp.filePath(QStringLiteral("reference_dem.tif"));
+    QString ioError;
+    ASSERT_TRUE(xjw::DemDomIO::writeDemRaster(dem, demPath, xjw::DemRasterFormat::Float32Tiff, &ioError))
+        << ioError.toStdString();
+
+    std::vector<xjw::BATrack> tracks(2);
+    tracks[0].initialPoint = {{1.0, 1.0, 5.1}};
+    tracks[1].initialPoint = {{1.0, 1.0, 8.0}};
+
+    xjw::gui::BaServiceOptions options;
+    options.enableReferenceTerrainPrior = true;
+    options.referenceTerrainDemPath = demPath;
+    options.referenceTerrainSigmaMeters = 0.25;
+    options.referenceTerrainMaxAssociationDistanceMeters = 0.5;
+    options.referenceTerrainHuberDeltaMeters = 0.3;
+
+    const auto result = xjw::gui::project::applyReferenceTerrainPriorToBundleAdjust(&tracks, &options);
+
+    EXPECT_TRUE(result.success) << result.errorMessage.toStdString();
+    EXPECT_TRUE(result.summary.value(QStringLiteral("enabled")).toBool());
+    EXPECT_EQ(result.summary.value(QStringLiteral("source_type")).toString(), QStringLiteral("DEM"));
+    EXPECT_EQ(result.summary.value(QStringLiteral("input_tracks")).toInt(), 2);
+    EXPECT_EQ(result.summary.value(QStringLiteral("associated_tracks")).toInt(), 1);
+    EXPECT_EQ(result.summary.value(QStringLiteral("rejected_by_distance")).toInt(), 1);
+    EXPECT_TRUE(options.baOpt.enableLaserPlaneConstraints);
+    EXPECT_NEAR(options.baOpt.laserPlaneWeight, 4.0, 1e-9);
+    ASSERT_EQ(tracks[0].laserPlaneConstraints.size(), 1);
+    EXPECT_TRUE(tracks[1].laserPlaneConstraints.empty());
+}
+
+TEST(ProjectReferenceTerrainBaTest, MenuWorkflowStartsBundleAdjustWithReferenceTerrainSettings)
+{
+    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(managerSource.isEmpty());
+
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("void ProjectManager::prepareReferenceTerrainBundleAdjust()")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("firstReferenceDemPriorPath")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("firstReferenceLaserPriorPath")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("enable_reference_terrain_prior")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("reference_terrain_dem_path")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("enable_laser_constraints")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("laser_constraint_cloud_path")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("laser_missing_normals_as_height_planes")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("startBundleAdjustAsync(images, outputDir")));
+}
+
+TEST(ProjectWorkflowReportsTest, ReconstructionQualityReportIsRegisteredInProjectMetadata)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("quality_project.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("quality_project")));
+
+    QJsonObject sparseQuality;
+    sparseQuality[QStringLiteral("registered_image_count")] = 1;
+    sparseQuality[QStringLiteral("total_image_count")] = 2;
+    sparseQuality[QStringLiteral("point_count")] = 42;
+
+    QJsonObject sfmDiagnostics;
+    sfmDiagnostics[QStringLiteral("sparse_quality")] = sparseQuality;
+
+    QJsonObject atRecord;
+    atRecord[QStringLiteral("path")] = QStringLiteral("/tmp/sparse.ply");
+    atRecord[QStringLiteral("sfm_diagnostics")] = sfmDiagnostics;
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/img_001.jpg")},
+                    {QStringLiteral("registered"), true}},
+        QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/img_002.jpg")},
+                    {QStringLiteral("registered"), false}}
+    };
+    meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{atRecord};
+    meta[QStringLiteral("depth_map_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("status"), QStringLiteral("completed")},
+                    {QStringLiteral("valid_ratio"), 0.5}}
+    };
+    meta[QStringLiteral("dem_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("coverage_ratio"), 0.75}}
+    };
+    projectData.updateMetadata(meta, true);
+
+    const auto result = xjw::gui::project::writeReconstructionQualityProjectReport(
+        &projectData,
+        QStringLiteral("quality_stage4"));
+
+    ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
+    EXPECT_TRUE(QFile::exists(result.jsonPath));
+    EXPECT_TRUE(QFile::exists(result.csvPath));
+
+    const QJsonArray reports = projectData.metadata().value(QStringLiteral("report_results")).toArray();
+    ASSERT_EQ(reports.size(), 1);
+    const QJsonObject reportRecord = reports.at(0).toObject();
+    EXPECT_EQ(reportRecord.value(QStringLiteral("path")).toString(), result.jsonPath);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("csv_path")).toString(), result.csvPath);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("type")).toString(), QStringLiteral("reconstruction_quality"));
+    EXPECT_EQ(reportRecord.value(QStringLiteral("registered_image_count")).toInt(), 1);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("mvs_valid_coverage")).toDouble(), 0.5, 1e-9);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("dem_coverage")).toDouble(), 0.75, 1e-9);
+}
+
+TEST(ProjectManagerQualityReportTest, PipelineStageBoundariesRefreshReconstructionQualityReport)
+{
+    const QString managerHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString denseSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    const QString terrainSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(managerHeader.isEmpty());
+    ASSERT_FALSE(managerSource.isEmpty());
+    ASSERT_FALSE(denseSource.isEmpty());
+    ASSERT_FALSE(terrainSource.isEmpty());
+
+    EXPECT_TRUE(managerHeader.contains(QStringLiteral("refreshReconstructionQualityReport")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("writeReconstructionQualityProjectReport")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("ProjectManager::refreshReconstructionQualityReport")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("refreshReconstructionQualityReport();")));
+    EXPECT_TRUE(denseSource.contains(QStringLiteral("m_owner->refreshReconstructionQualityReport()")));
+    EXPECT_TRUE(terrainSource.contains(QStringLiteral("m_owner->refreshReconstructionQualityReport()")));
 }
 
 TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)

@@ -1406,6 +1406,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
     qint64 validAfterConfidence = 0;
     qint64 confidenceRemoved = 0;
     qint64 localDepthOutlierRemoved = 0;
+    qint64 speckleRemoved = 0;
+    qint64 edgeConfidenceRemoved = 0;
+    qint64 geomConsistencyRemoved = 0;
     qint64 validAfter = 0;
     QJsonArray perFrame;
 
@@ -1416,6 +1419,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
         validAfterConfidence += stats.validAfterConfidenceFilter;
         confidenceRemoved += stats.confidenceRemoved;
         localDepthOutlierRemoved += stats.localDepthOutlierRemoved;
+        speckleRemoved += stats.speckleRemoved;
+        edgeConfidenceRemoved += stats.edgeConfidenceRemoved;
+        geomConsistencyRemoved += stats.geomConsistencyRemoved;
         validAfter += stats.validAfterPostprocess;
 
         perFrame.append(QJsonObject{
@@ -1424,6 +1430,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
             {QStringLiteral("valid_after_confidence"), stats.validAfterConfidenceFilter},
             {QStringLiteral("confidence_removed"), stats.confidenceRemoved},
             {QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved},
+            {QStringLiteral("speckle_removed"), stats.speckleRemoved},
+            {QStringLiteral("edge_confidence_removed"), stats.edgeConfidenceRemoved},
+            {QStringLiteral("geom_consistency_removed"), stats.geomConsistencyRemoved},
             {QStringLiteral("valid_after"), stats.validAfterPostprocess},
             {QStringLiteral("effective_confidence_threshold"), stats.effectiveConfidenceThreshold}
         });
@@ -1435,6 +1444,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::FusionFrameI
         {QStringLiteral("valid_after_confidence"), static_cast<double>(validAfterConfidence)},
         {QStringLiteral("confidence_removed"), static_cast<double>(confidenceRemoved)},
         {QStringLiteral("local_depth_outlier_removed"), static_cast<double>(localDepthOutlierRemoved)},
+        {QStringLiteral("speckle_removed"), static_cast<double>(speckleRemoved)},
+        {QStringLiteral("edge_confidence_removed"), static_cast<double>(edgeConfidenceRemoved)},
+        {QStringLiteral("geom_consistency_removed"), static_cast<double>(geomConsistencyRemoved)},
         {QStringLiteral("valid_after"), static_cast<double>(validAfter)},
         {QStringLiteral("per_frame"), perFrame}
     };
@@ -1446,6 +1458,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
     qint64 validAfterConfidence = 0;
     qint64 confidenceRemoved = 0;
     qint64 localDepthOutlierRemoved = 0;
+    qint64 speckleRemoved = 0;
+    qint64 edgeConfidenceRemoved = 0;
+    qint64 geomConsistencyRemoved = 0;
     qint64 validAfter = 0;
     QJsonArray perFrame;
 
@@ -1456,6 +1471,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
         validAfterConfidence += stats.validAfterConfidenceFilter;
         confidenceRemoved += stats.confidenceRemoved;
         localDepthOutlierRemoved += stats.localDepthOutlierRemoved;
+        speckleRemoved += stats.speckleRemoved;
+        edgeConfidenceRemoved += stats.edgeConfidenceRemoved;
+        geomConsistencyRemoved += stats.geomConsistencyRemoved;
         validAfter += stats.validAfterPostprocess;
 
         perFrame.append(QJsonObject{
@@ -1464,6 +1482,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
             {QStringLiteral("valid_after_confidence"), stats.validAfterConfidenceFilter},
             {QStringLiteral("confidence_removed"), stats.confidenceRemoved},
             {QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved},
+            {QStringLiteral("speckle_removed"), stats.speckleRemoved},
+            {QStringLiteral("edge_confidence_removed"), stats.edgeConfidenceRemoved},
+            {QStringLiteral("geom_consistency_removed"), stats.geomConsistencyRemoved},
             {QStringLiteral("valid_after"), stats.validAfterPostprocess},
             {QStringLiteral("effective_confidence_threshold"), stats.effectiveConfidenceThreshold}
         });
@@ -1475,6 +1496,9 @@ QJsonObject depthPostprocessStatsToJson(const std::vector<xjw::mvs::DepthPostPro
         {QStringLiteral("valid_after_confidence"), static_cast<double>(validAfterConfidence)},
         {QStringLiteral("confidence_removed"), static_cast<double>(confidenceRemoved)},
         {QStringLiteral("local_depth_outlier_removed"), static_cast<double>(localDepthOutlierRemoved)},
+        {QStringLiteral("speckle_removed"), static_cast<double>(speckleRemoved)},
+        {QStringLiteral("edge_confidence_removed"), static_cast<double>(edgeConfidenceRemoved)},
+        {QStringLiteral("geom_consistency_removed"), static_cast<double>(geomConsistencyRemoved)},
         {QStringLiteral("valid_after"), static_cast<double>(validAfter)},
         {QStringLiteral("per_frame"), perFrame}
     };
@@ -1656,6 +1680,7 @@ int main(int argc, char *argv[])
     bool skipMesh = false;
     bool stopAfterSfm = false;
     bool skipMvs = false;
+    bool mvsDepthOnly = false;
 #ifdef PLASCAN_THREE_D_ONLY
     bool skipTerrain = true;
 #else
@@ -1692,6 +1717,8 @@ int main(int argc, char *argv[])
     app.add_option("--mesh-resolution", meshResolution, "mesh reconstruction grid resolution");
     app.add_flag("--stop-after-sfm", stopAfterSfm, "run SFM only, write report, then stop before MVS");
     app.add_flag("--skip-mvs", skipMvs, "skip MVS and downstream mesh/terrain stages after SFM");
+    app.add_flag("--mvs-depth-only", mvsDepthOnly,
+                 "run MVS depth-map estimation only, then skip fusion, mesh, and terrain");
     app.add_flag("--skip-mesh", skipMesh, "skip mesh reconstruction after MVS dense cloud generation");
 #ifndef PLASCAN_THREE_D_ONLY
     app.add_flag("--skip-model", skipModel, "skip mesh reconstruction");
@@ -2089,6 +2116,68 @@ int main(int argc, char *argv[])
     QString refinedCloudPathForModel;
     int densePointCount = 0;
     int refinedPointCount = 0;
+    if (mvsOk && mvsDepthOnly)
+    {
+        const QString depthOnlyReason = QStringLiteral("用户请求只生成 MVS 深度图");
+        QJsonObject denseReport;
+        denseReport[QStringLiteral("status")] = QStringLiteral("depth_only");
+        denseReport[QStringLiteral("depth_maps")] = depthArtifacts;
+        denseReport[QStringLiteral("depth_postprocess")] = depthPostprocessStatsToJson(depthPostprocessStats);
+        denseReport[QStringLiteral("points")] = 0;
+        denseReport[QStringLiteral("refined_points")] = 0;
+        denseReport[QStringLiteral("mvs_settings")] = mvsSettingsToJson(denseSettings,
+                                                                        mvsMaxFrames,
+                                                                        static_cast<int>(views.size()),
+                                                                        originalRegisteredImageCount);
+        denseReport[QStringLiteral("mvs_depth_config")] = mvsDepthConfigToJson(depthConfig);
+        report[QStringLiteral("dense")] = denseReport;
+        report[QStringLiteral("status")] = QStringLiteral("ok");
+        report[QStringLiteral("stop_stage")] = QStringLiteral("mvs_depth");
+        report[QStringLiteral("model")] = QJsonObject{
+            {QStringLiteral("status"), QStringLiteral("skipped")},
+            {QStringLiteral("reason"), depthOnlyReason}
+        };
+#ifndef PLASCAN_THREE_D_ONLY
+        report[QStringLiteral("terrain")] = QJsonObject{
+            {QStringLiteral("status"), QStringLiteral("skipped")},
+            {QStringLiteral("reason"), depthOnlyReason}
+        };
+#endif
+        markSkippedStage(QStringLiteral("mvs_fusion"), depthOnlyReason);
+        markSkippedStage(QStringLiteral("mesh"), depthOnlyReason);
+#ifndef PLASCAN_THREE_D_ONLY
+        markSkippedStage(QStringLiteral("terrain"), depthOnlyReason);
+#endif
+        mvsElapsedMs = recordTiming(QStringLiteral("mvs_elapsed_ms"), mvsStart);
+        timings[QStringLiteral("mesh_elapsed_ms")] = 0.0;
+#ifndef PLASCAN_THREE_D_ONLY
+        timings[QStringLiteral("terrain_elapsed_ms")] = 0.0;
+#endif
+        const double totalElapsedMs = recordTiming(QStringLiteral("total_elapsed_ms"), pipelineStart);
+        report[QStringLiteral("timings")] = timings;
+
+        QJsonObject finalReport;
+        if (!writeFinalReport(&finalReport))
+        {
+            return cli::EXIT_IO_ERR;
+        }
+        const int depthMapCount = static_cast<int>(depthArtifacts.size());
+        std::fprintf(stdout, "status=ok\n");
+        std::fprintf(stdout, "output_dir=%s\n", qUtf8Printable(outputDir));
+        std::fprintf(stdout, "sparse_cloud=%s\n", qUtf8Printable(sfmResult.sparseCloudPath));
+        std::fprintf(stdout, "depth_maps=%d\n", depthMapCount);
+        std::fprintf(stdout, "skipped_mvs_fusion=%s\n", qUtf8Printable(depthOnlyReason));
+        std::fprintf(stdout, "elapsed_total=%.3fs\n", totalElapsedMs / 1000.0);
+        std::fprintf(stdout, "elapsed_sfm=%.3fs\n", sfmElapsedMs / 1000.0);
+        std::fprintf(stdout, "elapsed_sparse_preprocess=%.3fs\n", sparsePreprocessElapsedMs / 1000.0);
+        std::fprintf(stdout, "elapsed_mvs=%.3fs\n", mvsElapsedMs / 1000.0);
+        std::fprintf(stdout, "elapsed_mesh=0.000s\n");
+#ifndef PLASCAN_THREE_D_ONLY
+        std::fprintf(stdout, "elapsed_terrain=0.000s\n");
+#endif
+        std::fprintf(stdout, "report=%s\n", qUtf8Printable(finalReport.value(QStringLiteral("report_json")).toString()));
+        return cli::EXIT_OK;
+    }
     if (mvsOk)
     {
         if (!fuseDepthMapsStreamingFromDisk(mvsDir,

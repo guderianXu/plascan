@@ -186,6 +186,38 @@ TEST(MvsPipelineTest, DepthMapFusionTwoFrames)
         << "DepthMapFusion should produce at least one fused point";
 }
 
+TEST(MvsPipelineTest, DepthMapFusionCancelBeforeWorkClearsStaleOutput)
+{
+    constexpr int W = 16;
+    constexpr int H = 12;
+    constexpr float DEPTH_VAL = 8.0f;
+    constexpr double FOCAL = 40.0;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C0[3] = {0,0,0};
+
+    xjw::mvs::FusionFrameInput frame;
+    frame.depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
+    frame.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    frame.imgW = W;
+    frame.imgH = H;
+
+    auto cancelFlag = std::make_shared<std::atomic_bool>(true);
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.cancelFlag = cancelFlag;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts(1);
+    pts.front().x = 123.0f;
+    std::string err;
+
+    const bool ok = fusion.fuse({frame}, pts, nullptr, &err);
+
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(err.find("取消") != std::string::npos);
+    EXPECT_TRUE(pts.empty()) << "Cancelled fusion must not leave stale points from a previous run";
+}
+
 TEST(MvsPipelineTest, DepthMapFusionTwoViewSingleObservationUsesFastParallelPath)
 {
     constexpr int W = 32, H = 24;
@@ -281,6 +313,52 @@ TEST(MvsPipelineTest, DepthMapFusionFilteredDepthsIncludeAllAcceptedObservations
         EXPECT_EQ(cv::countNonZero(filteredDepths[frameIndex] > 0), validPixels)
             << "Accepted source observations should be visible in filtered depth frame " << frameIndex;
     }
+}
+
+TEST(MvsPipelineTest, DepthMapFusionUsesPlannedSourceImagesBeforeNearestCenters)
+{
+    constexpr int W = 24;
+    constexpr int H = 18;
+    constexpr float DEPTH_VAL = 8.0f;
+    constexpr double FOCAL = 40.0;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C0[3] = {0,0,0};
+    const double C1[3] = {0.1,0,0};
+    const double C2[3] = {0.2,0,0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(3);
+    frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
+    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    frames[0].imgW = W;
+    frames[0].imgH = H;
+    frames[0].sourceImageIndices = {2};
+
+    frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(0.0f));
+    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
+    frames[1].imgW = W;
+    frames[1].imgH = H;
+
+    frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
+    frames[2].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C2);
+    frames[2].imgW = W;
+    frames[2].imgH = H;
+    frames[2].sourceImageIndices = {0};
+
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.minNumPixels = 2;
+    fcfg.checkNumImages = 1;
+    fcfg.maxReprojError = 100.0f;
+    fcfg.maxDepthError = 1.0f;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts;
+    std::string err;
+    const bool ok = fusion.fuse(frames, pts, nullptr, &err);
+
+    ASSERT_TRUE(ok) << err;
+    EXPECT_GT(static_cast<int>(pts.size()), 0)
+        << "Fusion should prefer planned source image 2 over nearest invalid image 1.";
 }
 
 TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
@@ -478,6 +556,9 @@ TEST(MvsPipelineTest, FusionDepthPostprocessReportsConfidenceAndLocalOutliers)
     EXPECT_EQ(stats.validAfterConfidenceFilter, 48);
     EXPECT_EQ(stats.confidenceRemoved, 1);
     EXPECT_EQ(stats.localDepthOutlierRemoved, 1);
+    EXPECT_EQ(stats.speckleRemoved, 0);
+    EXPECT_EQ(stats.edgeConfidenceRemoved, 0);
+    EXPECT_EQ(stats.geomConsistencyRemoved, 0);
     EXPECT_EQ(stats.validAfterPostprocess, 47);
     EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 0.0f);
     EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);

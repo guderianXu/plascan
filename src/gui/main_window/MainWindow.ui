@@ -54,6 +54,11 @@
        <property name="currentIndex">
         <number>0</number>
        </property>
+       <widget class="ProjectDashboardWidget" name="dashboardWidget">
+        <attribute name="title">
+         <string>概览</string>
+        </attribute>
+       </widget>
        <widget class="DataTreeWidget" name="dataTree">
         <attribute name="title">
          <string>工作区</string>
@@ -521,6 +526,11 @@
   </action>
  </widget>
  <customwidgets>
+  <customwidget>
+   <class>ProjectDashboardWidget</class>
+   <extends>QWidget</extends>
+   <header>ProjectDashboardWidget.h</header>
+  </customwidget>
   <customwidget>
    <class>DataTreeWidget</class>
    <extends>QWidget</extends>

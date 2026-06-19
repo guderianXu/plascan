@@ -2,6 +2,80 @@
 
 本文件按版本倒序记录用户可感知的主要变更。详细验证记录见 `docs/releases/`。
 
+## v1.1.5 - 2026-06-19
+
+### 新增
+
+- 当前开发和发版目标统一同步到 `v1.1.5`，包括根项目版本、core 项目版本、Release 文档和版本一致性测试。
+- 新增四阶段重建链路优化计划，覆盖 MVS workspace/取消/内存、MVS 选源和深度质量、DEM/DOM 正式产品链、DEM/LiDAR 参考验证与 BA soft prior。
+- 新增 GitHub Release 说明要求：推送 tag 后必须创建或更新同名 Release，正文必须写清新增、优化、修复、验证和已知问题，不能只写 `PlaScan vX.Y.Z`。
+- 参考 DEM 已接入 BA soft prior 执行链路，GUI 可从参考数据预检进入参考地形平差，并在 BA 报告中记录参考地形约束摘要。
+- 参考地形平差 GUI 入口现在可在没有 DEM、但存在 role=ba_prior 的 PLY LiDAR/点云时，显式启动 LiDAR 点到面 BA soft prior。
+- 参考数据精度检查现在会落地可追溯 artifact：DEM 差分 GeoTIFF、DEM 绝对差分 GeoTIFF、点云配准前/后误差 CSV 和 Sim3 transform JSON。
+- 参考点云精度检查支持非配对点云：当重建点云和 LiDAR/参考点云点数不一致时，自动使用最近邻平移配准并输出同样的误差 CSV、transform JSON 和 RMSE/P95 指标。
+- 新增 `src/core/mvs/README.md` 和 `src/core/terrain/README.md`，记录 MVS manifest/source planning/streaming fusion 与 DEM/DOM terrain product chain。
+- `reconstruct_pipeline_cli` 新增 `--mvs-depth-only`，可只跑 MVS 深度图估计并写出 depth/raw/confidence/mask/manifest，用于大航测数据的显存、取消和恢复验证，且不会进入融合、网格或 terrain 阶段。
+- `README.md` 增加 Windows CUDA 固定构建入口、`libtorch-cu130` 运行时说明和四阶段重建链路状态摘要。
+
+### 优化
+
+- 后续 `v1.1.5` Release 正文优先从 `docs/releases/v1.1.5.md` 或同步内容生成，方便用户在 GitHub Release 页面直接看到版本更新内容。
+- `docs/PROJECT_ARCHITECTURE.md` 已同步 MVS workspace manifest、MVS source planner、terrain product manifest、DEM mosaic、QC report 和 ReferenceTerrainPrior 模块边界。
+- 四阶段计划的推荐里程碑统一改为 `v1.1.5-alpha.1`、`v1.1.5-alpha.2`、`v1.1.5-alpha.3` 和 `v1.1.5`，避免继续引用旧的 `v1.1.2` 目标版本。
+- BA 参考地形约束使用 sigma、最大关联距离和 Huber delta 作为可诊断软约束，不默认把参考高程当作硬约束。
+- 参考 DEM/LiDAR 质量报告不再只有摘要指标，报告 metadata 会记录配套 artifact 的绝对路径，方便 GUI 和后续报告窗口直接打开。
+- 点云质量报告会记录 `cloud_alignment_method`，区分 `paired_similarity` 与 `nearest_neighbor_translation`，避免用户误以为所有点云都必须逐点配对。
+- 稠密点云 GUI 现在暴露最小一致视图数、几何一致性过滤、最大重投影误差、孤立噪点面积阈值和融合最长边，并保持既有默认值不变。
+- 深度图融合在新任务开始时会清空上一轮输出点和过滤深度缓存；如果用户在融合开始前或早期取消，不会把旧点云/旧过滤深度暴露给上层当作有效结果。
+
+### 修复
+
+- 修正仓库版本一致性检查仍固定到 `v1.1.4` 的问题，版本 hygiene 测试改为检查 `v1.1.5`。
+- 修正发版流程示例仍使用旧版本号的问题，示例 tag 更新为 `v1.1.5`。
+- 修正 SuperPoint 单测只用相对路径查找模型和测试影像，导致仓库根目录或 CTest 工作目录下找不到已存在模型的问题。
+- 修正深度图融合收到取消时可能保留调用方复用输出数组里的旧点的问题，避免 GUI/CLI 取消后误读 stale fused points。
+- 修正同一 MVS 帧写入过滤后深度产物时，空 `source_plan` 会覆盖初始深度产物已记录 source planning 依据的问题；manifest 更新现在会保留已有非空 `source_plan`。
+- 修正 SfM 稀疏点云导出颜色采样在完整航测数据上按点反复读大图、或长期缓存过多彩色图像的问题；现在先按影像分组收集采样请求，每张影像只加载一次并批量填充点云颜色。
+
+### 验证
+
+- `scripts\build_win\build_windows_cuda.ps1 -Target test_gui_project_utils -RunTests -CTestRegex "ReferenceDataset|ReferenceDatasets|ReferenceQualityCheck|ReferenceTerrain|MainWindowTest\.ReferenceDatasetActionsConnectToProjectManager" -Jobs 8` 通过，12/12。
+- `scripts\build_win\build_windows_cuda.ps1 -Target test_gui_project_utils -RunTests -CTestRegex "QualityReportComputesSameGridDemDifferenceMetrics|QualityReportComputesPairedPointCloudAlignmentMetrics" -Jobs 8` 通过，2/2，验证 DEM 差分栅格和点云配准 artifact 写盘。
+- `scripts\build_win\build_windows_cuda.ps1 -Target test_gui_project_utils -RunTests -CTestRegex "AlignsUnpairedCloudsWithNearestNeighborTranslation|QualityReportAlignsUnpairedReferenceCloudByNearestNeighbor|PointCloudAlignment" -Jobs 8` 通过，4/4，验证 paired 与非配对最近邻点云报告链路。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "ReferenceDataset|ReferenceDatasets|ReferenceQualityCheck|ReferenceTerrain|ProjectReferenceTerrainBa|PointCloudAlignment|DemDifference|QualityReport" --output-on-failure` 通过，28/28。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -R "ProjectReferenceTerrainBa|ProjectReferenceDatasetsTest\.TerrainPriorPreflightReportsBundleAdjustReadiness|BundleAdjustServiceLidar|BundleAdjustLidar" --output-on-failure` 通过，10/10，验证 GUI 入口、服务层和核心 LiDAR 点到面约束链路。
+- `scripts\build_win\build_windows_cuda.ps1 -Target test_mvs_pipeline -RunTests -CTestRegex "DepthMapFusionCancelBeforeWorkClearsStaleOutput" -Jobs 8` 先失败后通过，验证取消前已有旧 fused points 时会被清空。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsWorkspaceManifest|MvsSourcePlanner|MvsDepthPostprocess|MvsPipelineTest|DataTreeWidgetTest|BundleAdjustServiceLidar|LaserConstraint|ReferenceTerrain|ReferenceDataset|QualityReport|PointCloudAlignment|DemDifference" --output-on-failure` 通过，79/79。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsSourcePlanner|MvsDepthPostprocess|DenseCloudDialog|DepthMapFusion|MvsPipelineTest|DepthMapPersistence|DepthFrameUtils|DenseDepth|DataTreeWidgetTest\.ResultOnlyMetadataUpdateRefreshesDepthMapSection" --output-on-failure` 通过，35/35，验证 Stage 2 source planning、深度质量、融合取消和 GUI 高级 MVS 参数。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainDemDom|DemGridAggregator|DemMosaic|TerrainProductManifest|DemQualityRasters|DataTreeWidgetTest\.DemSectionShowsQualityRasterProducts" --output-on-failure` 通过，28/28，验证 Stage 3 DEM/DOM 产品链、质量栅格、mosaic、terrain manifest 和 GUI DEM 质量节点。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "Mvs|Depth|Fusion|Terrain|Dem|Dom|Sfm|Bundle|Quality|GuiProject|DataTree" --output-on-failure` 通过，209/209，验证四阶段相关 MVS、SFM/BA、terrain、QC 和 GUI metadata/data tree 回归可一起通过。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsWorkspaceManifest|MvsSourcePlanner|DepthMapPersistence|DepthFrameUtils|MvsPipelineTest" --output-on-failure` 通过，34/34；其中 `MvsWorkspaceManifest.CompletedFrameUpdatePreservesExistingSourcePlan` 先失败后通过，验证过滤后 depth 更新不再抹掉 `source_plan`。
+- MUN-FRL 20 帧 real-data `bundle_adjust_cli --ab-compare --laser-cloud ... --fail-on-quality-gate` 通过，输出 `build/mun_frl_lidar_ba_ab_project_tf_velodyne/ba_ab_run_codex_20260620_003746`；LiDAR 点到面 RMS 从 1.0371 m 降到 0.9297 m，重投影 RMS 从 1.1258 px 降到 1.1154 px，quality gate 通过。
+- agisoft aerial GCP 12 张航空影像受控 MVS/DEM/DOM smoke 通过，输出 `build/agisoft_aerial_mvs_dem_dom_codex_20260620_004632/pipeline`；12/12 注册，MVS 限 4 帧，生成 4 组 depth/raw/confidence/mask，融合 626,240 点、精化 606,131 点，并生成 `terrain/products/dem.tif` 与 `terrain/products/dom.png`。
+- agisoft aerial GCP 12 张航空影像 0.5 scale 受控 MVS/DEM/DOM smoke 通过，输出 `build/agisoft_aerial_mvs_dem_dom_scale05_codex_20260620_010303/pipeline`；12/12 注册，SfM 1,259 点，平均重投影误差 0.8472 px，MVS 限 4 帧，生成 4 组 depth/raw/confidence/mask，融合 1,281,149 点、精化 1,224,829 点，并生成 8x8 `terrain/products/dem.tif` 与 `terrain/products/dom.png`，总耗时 322.390 s。
+- agisoft aerial GCP 12 张航空影像 `--mvs-depth-only` smoke 通过，输出 `build/agisoft_aerial_mvs_depth_only_codex_20260620_012051/pipeline`；报告 `status=ok`、`stop_stage=mvs_depth`、`dense.status=depth_only`，生成 4 条 depth artifact 记录，没有写出融合点云、网格或 terrain 产品。
+- agisoft aerial GCP 12 张航空影像 `--mvs-depth-only` source-plan 回归通过，输出 `build/agisoft_aerial_mvs_depth_only_12_codex_20260620_021000/pipeline`；12/12 注册，4/4 个 MVS manifest frame 完成，raw depth、confidence、valid mask 和 `source_plan` 均完整保留，报告 `status=ok`、`stop_stage=mvs_depth`。
+- agisoft aerial GCP 完整 444 张输入的 post-fix `--mvs-depth-only --mvs-max-frames 8` 验证通过，输出 `build/agisoft_aerial_mvs_depth_only_444_postfix_codex_20260620_022500/pipeline`；444/444 注册，SfM 57,383 点，平均重投影误差约 0.87 px，8/8 个 MVS manifest frame 完成，raw depth、confidence、valid mask 和 `source_plan` 均完整保留，MVS 阶段 5.340 s，总流程 280.006 s。
+- agisoft aerial GCP 完整 444 张输入的 `--mvs-depth-only --mvs-max-frames 50` 验证通过，输出 `build/agisoft_aerial_mvs_depth_only_50_codex_20260620_012819/pipeline`；444/444 注册，SfM 57,379 点，平均重投影误差 0.8661 px，50/50 个 MVS manifest frame 完成且无缺失 artifact，报告 `stop_stage=mvs_depth`，未进入融合、网格或 terrain 阶段。
+- agisoft aerial GCP 完整 444 张输入的 `--mvs-depth-only --mvs-max-frames 150` 验证通过，输出 `build/agisoft_aerial_mvs_depth_only_150_codex_20260620_013608/pipeline`；444/444 注册，SfM 57,403 点，平均重投影误差 0.8661 px，150/150 个 MVS manifest frame 完成且无缺失 artifact，MVS 阶段 128.684 s，总流程 400.586 s，GPU gray cache usage 约 3.7-686.6 MB。
+- agisoft aerial GCP 完整 444 张输入的全帧 `--mvs-depth-only --mvs-max-frames 444` 验证通过，输出 `build/agisoft_aerial_mvs_depth_only_444_batched_retry_codex_20260620_022910/pipeline`；命令退出码 0，报告 `status=ok`、`stop_stage=mvs_depth`，444/444 注册，SfM 57,362 点，平均重投影误差 0.8664 px，444/444 个 MVS manifest frame 完成且 `source_plan` 无缺失；MVS 目录写出 444 组 depth preview/raw depth/raw confidence/valid mask，MVS 阶段 149.543 s，总流程 420.977 s，GPU gray cache usage 最高约 2.03/6.00 GB，未进入融合、网格或 terrain 阶段。
+- agisoft aerial GCP 完整 444 张输入的完整 MVS/mesh/DEM/DOM 长链验证通过，复用同一输出目录 `build/agisoft_aerial_mvs_depth_only_444_batched_retry_codex_20260620_022910/pipeline`；命令退出码 0，444/444 注册，SfM 57,362 点，MVS 444/444 帧完成，稠密点云 1,895,106 点、精化点云 1,847,925 点，生成 `model/products/textured_model.obj`、`terrain/products/dem.tif` 和 `terrain/products/dom.png`；总耗时 5686.447 s，其中 MVS 3416.110 s、mesh 2043.480 s、terrain 45.984 s。
+- `scripts\build_win\build_windows_cuda.ps1 -Target test_gui_project_utils -RunTests -CTestRegex "ReferenceTerrain|ProjectReferenceTerrainBa|ProjectReferenceDatasets" -Jobs 8` 通过，10/10。
+- `scripts\build_win\build_windows_cuda.ps1 -Target test_gui_project_utils -RunTests -CTestRegex "MvsWorkspace|MvsSourcePlanner|TerrainProductManifest|DemGridAggregator|DemMosaic|DemDifference|PointCloudAlignment|ReconstructionQualityReport|ReferenceTerrain|ProjectReferenceTerrainBa" -Jobs 8` 通过，33/33。
+- `scripts\build_win\build_windows_cuda.ps1 -Target reconstruct_pipeline_cli -BuildOnly -Jobs 8` 通过。
+- `scripts\build_win\build_windows_cuda.ps1 -Target plascan_gui -BuildOnly -Jobs 8` 通过。
+- `python -m pytest tests\test_mvs_scheduler_config.py -q` 通过，72/72；验证 DenseCloudDialog 高级 MVS 参数会进入 `DepthGenConfig`，并覆盖 `--mvs-depth-only` 报告、跳过阶段语义和 SfM 稀疏导出批量颜色采样。
+- `scripts\build_win\build_windows_cuda.ps1 -Target test_gui_project_utils -RunTests -CTestRegex "DenseCloudDialog|DenseCloudRefine" -Jobs 8` 通过，3/3。
+- `python -m pytest tests\test_repo_hygiene.py::RepoHygieneTest::test_reconstruction_stage_docs_cover_new_pipeline_modules -q` 先失败后通过，验证 README、MVS/terrain README 与架构文档覆盖四阶段新增模块。
+- `python -m pytest tests\test_repo_hygiene.py -q` 通过，9 项测试和 27 个 subtest 全部通过。
+- 带 vcpkg、LibTorch 和 CUDA 运行时 PATH 的全量 CTest 通过，467/467；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 保持 disabled。
+
+### 已知问题
+
+- agisoft aerial GCP 444 张完整 MVS/mesh/DEM/DOM 长链已通过，但 mesh/terrain 交接阶段观察到一次约 26.5 GB 的私有内存峰值；后续仍应把该峰值纳入内存自适应/分块网格化优化。
+- agisoft aerial GCP 0.2 scale smoke 的法向量估计阶段出现过 `BLAS : Bad memory unallocation!` 非致命警告，进程最终 `status=ok` 且 DEM/DOM 写盘成功；0.5 scale smoke 本次未复现该警告，后续可单独跟踪 BLAS/法线估计释放路径。
+- `v1.1.5` tag 和 GitHub Release 尚未在本条目中声明已推送；推送时必须按 `AGENTS.md` 写完整 Release 说明。
+
 ## v1.1.4 - 2026-06-19
 
 ### 新增

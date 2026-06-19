@@ -96,6 +96,76 @@ bool shouldReportIndexedProgress(int doneCount, int totalCount, int maxReports =
     return (doneCount % stride) == 0;
 }
 
+struct SparseExportColorRequest
+{
+    std::size_t pointIndex = 0;
+    FeatureIdx featureIdx = 0;
+};
+
+void sampleSparseExportColorsByImage(
+    const QMap<ImageId, std::vector<SparseExportColorRequest>> &colorRequestsByImage,
+    const QMap<ImageId, std::vector<cv::KeyPoint>> &kptPositions,
+    const QMap<ImageId, QString> &idToPath,
+    std::vector<uint8_t> *colorsData)
+{
+    if (colorsData == nullptr || colorsData->empty())
+    {
+        return;
+    }
+
+    const std::size_t pointCount = colorsData->size() / 3;
+    std::vector<unsigned char> colorFilled(pointCount, 0);
+
+    for (auto requestIt = colorRequestsByImage.constBegin(); requestIt != colorRequestsByImage.constEnd(); ++requestIt)
+    {
+        const ImageId imageId = requestIt.key();
+        const QString imagePath = idToPath.value(imageId);
+        if (imagePath.isEmpty())
+        {
+            continue;
+        }
+
+        auto kptIt = kptPositions.find(imageId);
+        if (kptIt == kptPositions.end())
+        {
+            continue;
+        }
+
+        const cv::Mat image = cv::imread(imagePath.toStdString(), cv::IMREAD_COLOR);
+        if (image.empty())
+        {
+            continue;
+        }
+
+        const auto &kpts = kptIt.value();
+        for (const SparseExportColorRequest &request : requestIt.value())
+        {
+            if (request.pointIndex >= pointCount || colorFilled[request.pointIndex] != 0)
+            {
+                continue;
+            }
+            if (request.featureIdx >= static_cast<FeatureIdx>(kpts.size()))
+            {
+                continue;
+            }
+
+            const int px = static_cast<int>(std::round(kpts[request.featureIdx].pt.x));
+            const int py = static_cast<int>(std::round(kpts[request.featureIdx].pt.y));
+            if (px < 0 || px >= image.cols || py < 0 || py >= image.rows)
+            {
+                continue;
+            }
+
+            const cv::Vec3b &pix = image.at<cv::Vec3b>(py, px);
+            const std::size_t colorBase = request.pointIndex * 3;
+            (*colorsData)[colorBase] = pix[2];
+            (*colorsData)[colorBase + 1] = pix[1];
+            (*colorsData)[colorBase + 2] = pix[0];
+            colorFilled[request.pointIndex] = 1;
+        }
+    }
+}
+
 QString canonicalPairKey(const QString &pathA, const QString &pathB)
 {
     const QString normA = normalizePath(pathA);
@@ -3278,15 +3348,18 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         const auto *recon = sfmResult.reconstruction.get();
 
         // 4a. 收集相机参数更新
+        LOG_INFO(QStringLiteral("SFM: 开始收集相机更新和质量统计"));
         for (auto it = imageIdMap.constBegin(); it != imageIdMap.constEnd(); ++it) {
             const ImageId id = it.value();
             if (!recon->isRegistered(id)) continue;
             const Camera &cam = recon->camera(id);
             result.pendingCamUpdates.insert(it.key(), cameraToJson(cam));
         }
+        LOG_INFO(QStringLiteral("SFM: 相机更新收集完成 %1 项").arg(result.pendingCamUpdates.size()));
 
         // 4a-2. 收集逐相机残差（供报告使用，一次遍历所有三维点）
         {
+            LOG_INFO(QStringLiteral("SFM: 开始统计逐相机残差"));
             // 先统计每相机的误差累计
             std::unordered_map<ImageId, std::pair<double,int>> camErr;  // id → (sumErr, count)
             for (Point3DId pid : recon->allPoint3DIds()) {
@@ -3315,10 +3388,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 camObj["residual_px"] = res;
                 result.perCameraResiduals.append(camObj);
             }
+            LOG_INFO(QStringLiteral("SFM: 逐相机残差统计完成 %1 项").arg(result.perCameraResiduals.size()));
         }
 
         QMap<Point3DId, double> triangulationAngleByPoint;
         {
+            LOG_INFO(QStringLiteral("SFM: 开始统计稀疏质量指标"));
             NumericSummary trackLengthStats;
             NumericSummary reprojErrorStats;
             NumericSummary triAngleStats;
@@ -3375,10 +3450,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             diagnostics[QStringLiteral("sparse_quality")] = sparseQuality;
             diagnostics[QStringLiteral("ba_summary")] = baSummary;
             result.sfmDiagnostics = diagnostics;
+            LOG_INFO(QStringLiteral("SFM: 稀疏质量指标统计完成 %1 个点").arg(triangulationAngleByPoint.size()));
         }
 
         // 4b. 导出稀疏点云（使用 plapoint::PointCloud 写 PLY 二进制）
         if (!outDir.isEmpty()) {
+            LOG_INFO(QStringLiteral("SFM: 开始导出稀疏点云和质量 sidecar"));
             const QString plyPath = QDir(outDir).filePath(QStringLiteral("sfm_sparse.ply"));
             const auto ptIds = recon->allPoint3DIds();
 
@@ -3388,8 +3465,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             ptsData.reserve(ptIds.size() * 3);
             colorsData.reserve(ptIds.size() * 3);
 
-            // 懒加载彩色图像用于颜色采样（每幅图像只加载一次）
-            QMap<ImageId, cv::Mat> imgColorCache;
+            QMap<ImageId, std::vector<SparseExportColorRequest>> colorRequestsByImage;
 
             for (Point3DId pid : ptIds) {
                 if (!recon->hasPoint3D(pid)) continue;
@@ -3398,38 +3474,21 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 if (pt.error > 4.0) continue;
                 if (pt.track.length() < 2) continue;
 
-                // 从轨迹元素采样像素颜色
-                uint8_t cr = 128, cg = 128, cb = 128;  // 默认中灰
+                const std::size_t outputPointIndex = ptsData.size() / 3;
                 for (const auto &elem : pt.track.elements) {
                     auto kptIt = kptPositions.find(elem.imageId);
                     if (kptIt == kptPositions.end()) continue;
                     const auto &kpts = kptIt.value();
                     if (elem.featureIdx >= static_cast<FeatureIdx>(kpts.size())) continue;
-
-                    // 懒加载彩色图像
-                    if (!imgColorCache.contains(elem.imageId)) {
-                        const QString imgPath = idToPath.value(elem.imageId);
-                        if (!imgPath.isEmpty())
-                            imgColorCache[elem.imageId] = cv::imread(imgPath.toStdString(), cv::IMREAD_COLOR);
-                    }
-                    const cv::Mat &img = imgColorCache.value(elem.imageId);
-                    if (img.empty()) continue;
-
-                    const int px = static_cast<int>(std::round(kpts[elem.featureIdx].pt.x));
-                    const int py = static_cast<int>(std::round(kpts[elem.featureIdx].pt.y));
-                    if (px >= 0 && px < img.cols && py >= 0 && py < img.rows) {
-                        const cv::Vec3b &pix = img.at<cv::Vec3b>(py, px);
-                        cb = pix[0]; cg = pix[1]; cr = pix[2];  // OpenCV BGR 顺序
-                        break;
-                    }
+                    colorRequestsByImage[elem.imageId].push_back({outputPointIndex, elem.featureIdx});
                 }
 
                 ptsData.push_back(static_cast<float>(pt.xyz[0]));
                 ptsData.push_back(static_cast<float>(pt.xyz[1]));
                 ptsData.push_back(static_cast<float>(pt.xyz[2]));
-                colorsData.push_back(cr);
-                colorsData.push_back(cg);
-                colorsData.push_back(cb);
+                colorsData.push_back(128);
+                colorsData.push_back(128);
+                colorsData.push_back(128);
 
                 QJsonObject pointObject;
                 pointObject[QStringLiteral("track_len")] = static_cast<int>(pt.track.length());
@@ -3440,7 +3499,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 pointsForQuality.append(pointObject);
             }
 
+            sampleSparseExportColorsByImage(colorRequestsByImage, kptPositions, idToPath, &colorsData);
+
             const size_t N = ptsData.size() / 3;
+            LOG_INFO(QStringLiteral("SFM: 稀疏点云颜色采样完成 %1/%2 个点")
+                .arg(static_cast<int>(N)).arg(static_cast<int>(ptIds.size())));
             plamatrix::DenseMatrix<float, plamatrix::Device::CPU> pts(N, 3);
             plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(N, 3);
             for (size_t i = 0; i < N; ++i)
@@ -3451,12 +3514,14 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     colors(i, c) = colorsData[i * 3 + c];
                 }
             }
+            LOG_INFO(QStringLiteral("SFM: 稀疏点云矩阵填充完成 %1 个点").arg(static_cast<int>(N)));
 
             plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(pts));
             cloud.setColors(std::move(colors));
 
             try
             {
+                LOG_INFO(QStringLiteral("SFM: 开始写出稀疏 PLY → %1").arg(plyPath));
                 plapoint::io::writePly<float>(plyPath.toStdString(), cloud, plapoint::io::PlyFormat::BinaryLE);
                 result.sparseCloudPath = plyPath;
                 const bool baApplied = sfmResult.baTracksTotal > 0 || sfmResult.baTracksOptimized > 0;

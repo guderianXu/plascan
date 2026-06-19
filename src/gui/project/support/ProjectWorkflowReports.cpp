@@ -1,6 +1,9 @@
 #include "ProjectWorkflowReports.h"
 
+#include "ProjectData.h"
+#include "ProjectIO.h"
 #include "project/SparseResultQuality.h"
+#include "ReconstructionQualityReport.h"
 
 #include <QDateTime>
 #include <QDir>
@@ -320,6 +323,65 @@ bool writeLatestAndAppendHistoryReport(const QString &reportsDir,
     historyFile.write(QJsonDocument(history).toJson(QJsonDocument::Indented));
     historyFile.close();
     return true;
+}
+
+ReconstructionQualityProjectReportResult writeReconstructionQualityProjectReport(
+    ProjectData *projectData,
+    const QString &baseName)
+{
+    ReconstructionQualityProjectReportResult result;
+    if (!projectData || !projectData->hasProject())
+    {
+        result.errorMessage = QStringLiteral("项目未打开，无法生成重建质量报告");
+        return result;
+    }
+
+    const QString assetsDir = ProjectIO::projectAssetsDir(projectData->currentProjectPath());
+    if (assetsDir.isEmpty())
+    {
+        result.errorMessage = QStringLiteral("无法解析项目 assets 目录");
+        return result;
+    }
+
+    const QString reportsDir = QDir(assetsDir).filePath(QStringLiteral("reports"));
+    const auto writeResult = xjw::qc::ReconstructionQualityReport::writeFromProjectMeta(
+        projectData->metadata(),
+        reportsDir,
+        baseName);
+    if (!writeResult.ok)
+    {
+        result.errorMessage = writeResult.error;
+        return result;
+    }
+
+    QJsonObject record;
+    record[QStringLiteral("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    record[QStringLiteral("type")] = QStringLiteral("reconstruction_quality");
+    record[QStringLiteral("path")] = writeResult.jsonPath;
+    record[QStringLiteral("json_path")] = writeResult.jsonPath;
+    record[QStringLiteral("csv_path")] = writeResult.csvPath;
+    record[QStringLiteral("total_image_count")] = writeResult.report.value(QStringLiteral("total_image_count"));
+    record[QStringLiteral("registered_image_count")] =
+        writeResult.report.value(QStringLiteral("registered_image_count"));
+    record[QStringLiteral("sparse_point_count")] = writeResult.report.value(QStringLiteral("sparse_point_count"));
+    record[QStringLiteral("dense_point_count")] = writeResult.report.value(QStringLiteral("dense_point_count"));
+    record[QStringLiteral("mvs_valid_coverage")] = writeResult.report.value(QStringLiteral("mvs_valid_coverage"));
+    record[QStringLiteral("dem_coverage")] = writeResult.report.value(QStringLiteral("dem_coverage"));
+
+    if (!projectData->upsertResultRecordByPath(QStringLiteral("report_results"),
+                                               QStringLiteral("path"),
+                                               record,
+                                               true))
+    {
+        result.errorMessage = QStringLiteral("质量报告已写出，但写入项目 metadata 失败");
+        return result;
+    }
+
+    result.saved = true;
+    result.jsonPath = writeResult.jsonPath;
+    result.csvPath = writeResult.csvPath;
+    result.record = record;
+    return result;
 }
 
 } // namespace xjw::gui::project

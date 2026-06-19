@@ -29,9 +29,17 @@ class FullPipelineEntrypointTest(unittest.TestCase):
         with mock.patch.object(Path, "resolve", lambda self: self):
             cmd = pipeline.build_command(args)
 
-        self.assertEqual(cmd[0], "/tmp/plascan-build/bin/reconstruct_pipeline_cli")
+        expected_build_dir = Path("/tmp/plascan-build")
+        if not expected_build_dir.is_absolute():
+            expected_build_dir = pipeline.repo_root() / expected_build_dir
+        expected_tool = expected_build_dir / "bin" / "reconstruct_pipeline_cli"
+        expected_output_dir = Path("/tmp/out")
+        if not expected_output_dir.is_absolute():
+            expected_output_dir = Path.cwd() / expected_output_dir
+
+        self.assertEqual(Path(cmd[0]), expected_tool)
         self.assertIn("--output-dir", cmd)
-        self.assertIn("/tmp/out", cmd)
+        self.assertIn(str(expected_output_dir), cmd)
         self.assertNotIn("dense_match_cli", " ".join(cmd))
         self.assertNotIn("triangulate_cli", " ".join(cmd))
 
