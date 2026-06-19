@@ -69,12 +69,13 @@
 - `python -m pytest tests\test_repo_hygiene.py::RepoHygieneTest::test_reconstruction_stage_docs_cover_new_pipeline_modules -q` 先失败后通过，验证 README、MVS/terrain README 与架构文档覆盖四阶段新增模块。
 - `python -m pytest tests\test_repo_hygiene.py -q` 通过，9 项测试和 27 个 subtest 全部通过。
 - 带 vcpkg、LibTorch 和 CUDA 运行时 PATH 的全量 CTest 通过，467/467；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 保持 disabled。
+- `v1.1.5` annotated tag 已推送到 GitHub，解引用到 `424af961b18fe08af36788c77a75c98379b37ee0`；GitHub Release 已创建为 `PlaScan v1.1.5`。
+- GitHub Actions `CI / build-test` 已通过：main run `27847059348` 成功，tag run `27847075291` 成功。
 
 ### 已知问题
 
 - agisoft aerial GCP 444 张完整 MVS/mesh/DEM/DOM 长链已通过，但 mesh/terrain 交接阶段观察到一次约 26.5 GB 的私有内存峰值；后续仍应把该峰值纳入内存自适应/分块网格化优化。
 - agisoft aerial GCP 0.2 scale smoke 的法向量估计阶段出现过 `BLAS : Bad memory unallocation!` 非致命警告，进程最终 `status=ok` 且 DEM/DOM 写盘成功；0.5 scale smoke 本次未复现该警告，后续可单独跟踪 BLAS/法线估计释放路径。
-- `v1.1.5` tag 和 GitHub Release 尚未在本条目中声明已推送；推送时必须按 `AGENTS.md` 写完整 Release 说明。
 
 ## v1.1.4 - 2026-06-19
 
