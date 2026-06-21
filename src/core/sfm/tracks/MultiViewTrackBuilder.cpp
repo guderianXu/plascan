@@ -143,6 +143,9 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
         return leftEdge.insertionOrder < rightEdge.insertionOrder;
     });
 
+    std::vector<double> edgeScoreSumByRoot(keys.size(), 0.0);
+    std::vector<int> edgeScoreCountByRoot(keys.size(), 0);
+
     for (int edgeIndex : order)
     {
         const auto [leftIndex, rightIndex] = indexedEdges[static_cast<size_t>(edgeIndex)];
@@ -174,6 +177,19 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
 
         int mergedRoot = leftRoot;
         const int newRoot = disjointSet.addMergedRoot(leftRoot, rightRoot, &mergedRoot);
+        if (newRoot != mergedRoot)
+        {
+            edgeScoreSumByRoot[static_cast<size_t>(newRoot)] +=
+                edgeScoreSumByRoot[static_cast<size_t>(mergedRoot)];
+            edgeScoreCountByRoot[static_cast<size_t>(newRoot)] +=
+                edgeScoreCountByRoot[static_cast<size_t>(mergedRoot)];
+            edgeScoreSumByRoot[static_cast<size_t>(mergedRoot)] = 0.0;
+            edgeScoreCountByRoot[static_cast<size_t>(mergedRoot)] = 0;
+        }
+        edgeScoreSumByRoot[static_cast<size_t>(newRoot)] +=
+            std::max(0.0f, m_edges[static_cast<size_t>(edgeIndex)].score);
+        ++edgeScoreCountByRoot[static_cast<size_t>(newRoot)];
+
         auto &newFeatures = featureByImageByRoot[static_cast<size_t>(newRoot)];
         auto &oldFeatures = featureByImageByRoot[static_cast<size_t>(mergedRoot)];
         if (newRoot != mergedRoot)
@@ -223,10 +239,21 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
         {
             track.elements.push_back(TrackElement{observation.imageId, observation.featureIdx});
         }
+        const int scoreCount = edgeScoreCountByRoot[static_cast<size_t>(entry.first)];
+        track.confidence = scoreCount > 0
+            ? edgeScoreSumByRoot[static_cast<size_t>(entry.first)] / static_cast<double>(scoreCount)
+            : 1.0;
 
         ++result.acceptedComponents;
         ++result.trackLengthHistogram[static_cast<int>(track.length())];
+        result.meanTrackConfidence += track.confidence;
+        result.trackConfidenceScores.push_back(track.confidence);
         result.tracks.push_back(std::move(track));
+    }
+    if (!result.trackConfidenceScores.empty())
+    {
+        result.meanTrackConfidence /=
+            static_cast<double>(result.trackConfidenceScores.size());
     }
 
     return result;

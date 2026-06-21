@@ -60,6 +60,11 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("ref_image"), refImage);
     object.insert(QStringLiteral("source_images"), stringListToJsonArray(sourceImages));
     object.insert(QStringLiteral("source_plan"), sourcePlan);
+    object.insert(QStringLiteral("source_view_count"), sourceViewCount);
+    object.insert(QStringLiteral("source_quality_mean"), meanSourceQualityScore);
+    object.insert(QStringLiteral("source_quality_min"), minSourceQualityScore);
+    object.insert(QStringLiteral("depth_confidence_mean"), meanDepthConfidence);
+    object.insert(QStringLiteral("valid_pixel_count"), validPixelCount);
     object.insert(QStringLiteral("status"), status);
     object.insert(QStringLiteral("device"), device);
     object.insert(QStringLiteral("depth_png"), depthPng);
@@ -81,6 +86,11 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.refImage = object.value(QStringLiteral("ref_image")).toString();
     record.sourceImages = jsonArrayToStringList(object.value(QStringLiteral("source_images")).toArray());
     record.sourcePlan = object.value(QStringLiteral("source_plan")).toArray();
+    record.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(0);
+    record.meanSourceQualityScore = object.value(QStringLiteral("source_quality_mean")).toDouble(0.0);
+    record.minSourceQualityScore = object.value(QStringLiteral("source_quality_min")).toDouble(0.0);
+    record.meanDepthConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(0.0);
+    record.validPixelCount = object.value(QStringLiteral("valid_pixel_count")).toInt(0);
     record.status = object.value(QStringLiteral("status")).toString();
     record.device = object.value(QStringLiteral("device")).toString();
     record.depthPng = object.value(QStringLiteral("depth_png")).toString();
@@ -249,6 +259,17 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     if (completed.sourcePlan.isEmpty() && index >= 0)
     {
         completed.sourcePlan = m_frames[index].sourcePlan;
+    }
+    if (completed.sourceViewCount <= 0 && index >= 0)
+    {
+        completed.sourceViewCount = m_frames[index].sourceViewCount;
+        completed.meanSourceQualityScore = m_frames[index].meanSourceQualityScore;
+        completed.minSourceQualityScore = m_frames[index].minSourceQualityScore;
+    }
+    if (completed.validPixelCount <= 0 && index >= 0)
+    {
+        completed.validPixelCount = m_frames[index].validPixelCount;
+        completed.meanDepthConfidence = m_frames[index].meanDepthConfidence;
     }
     completed.status = QStringLiteral("completed");
     completed.error.clear();

@@ -36,6 +36,7 @@ class QOpenGLFunctions_4_3_Core;
 class ProjectManager;
 class QWidget;
 class QLabel;
+class QPainter;
 
 // =============================================================================
 // CameraSceneWidget
@@ -97,6 +98,7 @@ public:
     bool areCamerasVisible() const { return m_showCameras; }
 
 signals:
+    void plyLoadProgressChanged(int generation, int percent, const QString &statusText);
     void manualPruneModeChanged(bool enabled);
     void manualPruneApplied(int removedCount, int remainingCount);
     void manualPruneUndone(int restoredCount);
@@ -190,6 +192,7 @@ private:
     //   - 世界原点标记
     //   - 右下角坐标轴指示器和欧拉角文字
     void drawOverlay();
+    void drawPlyLoadProgressOverlay(QPainter &painter);
 
     // 将点云/模型/包围盒数据上传到 GPU（VBO/VAO），在 paintGL 中按需调用
     void uploadGpuData();
@@ -248,6 +251,8 @@ private:
     // 异步加载状态
     bool   m_loading      = false;
     int    m_loadGen      = 0;    ///< 每次发起新加载时递增，用于丢弃过期回调
+    int    m_plyLoadProgressPercent = -1;
+    QString m_plyLoadProgressText;
     bool m_preferModelPointRender = false;
     QQuaternion m_viewRot;                     // 当前视图旋转四元数
     float m_zoomScale = 1.0f;                  // 当前缩放系数（影响相机到场景中心的距离）

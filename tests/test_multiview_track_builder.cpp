@@ -77,6 +77,21 @@ TEST(MultiViewTrackBuilderTest, PrefersHighConfidenceEdgesWhenResolvingConflicts
     EXPECT_EQ(result.trackLengthHistogram.at(3), 1);
 }
 
+TEST(MultiViewTrackBuilderTest, PublishesTrackConfidenceFromAcceptedEdgeScores)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.addMatchPair(0, 1, {{10, 20, 0.90f}});
+    builder.addMatchPair(1, 2, {{20, 30, 0.70f}});
+
+    const xjw::MultiViewTrackBuildResult result = builder.build();
+
+    ASSERT_EQ(result.tracks.size(), 1);
+    ASSERT_EQ(result.trackConfidenceScores.size(), 1);
+    EXPECT_NEAR(result.tracks.front().confidence, 0.80, 1e-6);
+    EXPECT_NEAR(result.trackConfidenceScores.front(), 0.80, 1e-6);
+    EXPECT_NEAR(result.meanTrackConfidence, 0.80, 1e-6);
+}
+
 TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 {
     const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);

@@ -136,6 +136,45 @@ TEST(MvsWorkspaceManifest, CompletedFrameUpdatePreservesExistingSourcePlan)
     EXPECT_EQ(manifest.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("view_index")).toInt(), 7);
 }
 
+TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString manifestPath = QDir(tempDir.path()).filePath(QStringLiteral("mvs_manifest.json"));
+
+    MvsDepthFrameRecord record = makeRecord(6, QStringLiteral("image_006.jpg"), QStringLiteral("completed"));
+    record.sourceViewCount = 2;
+    record.meanSourceQualityScore = 0.72;
+    record.minSourceQualityScore = 0.43;
+    record.meanDepthConfidence = 0.81;
+    record.validPixelCount = 123456;
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.markCompleted(record);
+
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
+
+    MvsWorkspaceManifest loaded;
+    ASSERT_TRUE(loaded.load(manifestPath, &error)) << error.toStdString();
+    ASSERT_EQ(loaded.frames().size(), 1);
+    const MvsDepthFrameRecord &loadedRecord = loaded.frames().front();
+    EXPECT_EQ(loadedRecord.sourceViewCount, 2);
+    EXPECT_DOUBLE_EQ(loadedRecord.meanSourceQualityScore, 0.72);
+    EXPECT_DOUBLE_EQ(loadedRecord.minSourceQualityScore, 0.43);
+    EXPECT_DOUBLE_EQ(loadedRecord.meanDepthConfidence, 0.81);
+    EXPECT_EQ(loadedRecord.validPixelCount, 123456);
+
+    const QJsonObject json = loadedRecord.toJson();
+    EXPECT_EQ(json.value(QStringLiteral("source_view_count")).toInt(), 2);
+    EXPECT_DOUBLE_EQ(json.value(QStringLiteral("source_quality_mean")).toDouble(), 0.72);
+    EXPECT_DOUBLE_EQ(json.value(QStringLiteral("source_quality_min")).toDouble(), 0.43);
+    EXPECT_DOUBLE_EQ(json.value(QStringLiteral("depth_confidence_mean")).toDouble(), 0.81);
+    EXPECT_EQ(json.value(QStringLiteral("valid_pixel_count")).toInt(), 123456);
+}
+
 TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)
 {
     MvsWorkspaceManifest manifest;

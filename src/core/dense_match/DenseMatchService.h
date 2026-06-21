@@ -19,6 +19,8 @@ public:
                               const std::string &filepath);
 
 private:
+    DisparityResult computeRawDisparity(const cv::Mat &left, const cv::Mat &right) const;
+
     DenseMatchConfig m_cfg;
     cv::Mat m_left, m_right;
 };

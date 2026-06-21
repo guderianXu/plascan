@@ -101,23 +101,23 @@ def runAutomaticPipeline(images, cameras, outputDir):
     
     # 2. 特征提取
     if not status.hasFeatures:
-        features = runSuperPoint(images)
+        features = runFeatureExtraction(images)
     else:
         features = status.featuresPath
         if askUserReuseData("特征点"):
             # 复用
         else:
-            features = runSuperPoint(images)
+            features = runFeatureExtraction(images)
     
     # 3. 特征匹配
     if not status.hasMatches:
-        matches = runSuperGlue(features)
+        matches = runFeatureMatching(features)
     else:
         matches = status.matchesPath
         if askUserReuseData("匹配结果"):
             # 复用
         else:
-            matches = runSuperGlue(features)
+            matches = runFeatureMatching(features)
     
     # 4. 三角化
     if not status.hasSparseCloud:
@@ -216,8 +216,8 @@ ProjectManager::startFullDemPipelineAsync()
 ProjectTerrainProductsManager::startFullDemPipelineAsync()
   ↓
   1. detectPipelineStatus()
-  2. runSuperPoint() [if needed]
-  3. runSuperGlue() [if needed]
+  2. runFeatureExtraction() [if needed]
+  3. runFeatureMatching() [if needed]
   4. runTriangulation() [if needed]
   5. runMVS() [if needed]
   6. runDemGeneration()
@@ -264,15 +264,15 @@ MainWindow 状态栏更新
 使用 Qt 信号槽机制串联异步任务：
 
 ```cpp
-connect(superPointRunner, &SuperPointRunner::finished,
+connect(featureExtractionRunner, &FeatureExtractionRunner::finished,
         this, [this]() {
-    // SuperPoint 完成，启动 SuperGlue
-    startSuperGlue();
+    // 特征提取完成，启动特征匹配
+    startFeatureMatching();
 });
 
-connect(superGlueRunner, &SuperGlueRunner::finished,
+connect(featureMatchRunner, &FeatureMatchRunner::finished,
         this, [this]() {
-    // SuperGlue 完成，启动三角化
+    // 特征匹配完成，启动三角化
     startTriangulation();
 });
 

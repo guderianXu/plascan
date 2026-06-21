@@ -40,6 +40,7 @@
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QTextStream>
@@ -50,6 +51,7 @@
 #include <QProcess>
 #include <QSet>
 #include <QStandardPaths>
+#include <QStringConverter>
 
 #include <algorithm>
 #include <array>
@@ -245,6 +247,12 @@ QString canonicalNamePairKey(const QString &nameA, const QString &nameB)
     return (a < b) ? (a + QStringLiteral("\n") + b) : (b + QStringLiteral("\n") + a);
 }
 
+std::array<double, 3> cameraViewingDirection(const Camera &camera)
+{
+    const auto rotation = camera.cameraToWorldRotation();
+    return {rotation[2], rotation[5], rotation[8]};
+}
+
 std::vector<std::array<double, 3>> loadKnownCameraCentersFromPaths(const QStringList &images,
                                                                    const QStringList &cameraPaths,
                                                                    QString *errorMessage)
@@ -288,6 +296,51 @@ std::vector<std::array<double, 3>> loadKnownCameraCentersFromPaths(const QString
     }
 
     return centers;
+}
+
+std::vector<std::array<double, 3>> loadKnownCameraViewingDirectionsFromPaths(const QStringList &images,
+                                                                            const QStringList &cameraPaths,
+                                                                            QString *errorMessage)
+{
+    std::vector<std::array<double, 3>> directions;
+    if (images.isEmpty() || cameraPaths.size() != images.size())
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("影像数量和相机文件数量不一致");
+        }
+        return directions;
+    }
+
+    directions.reserve(static_cast<std::size_t>(cameraPaths.size()));
+    for (int i = 0; i < cameraPaths.size(); ++i)
+    {
+        const QString cameraPath = cameraPaths.at(i).trimmed();
+        if (cameraPath.isEmpty())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("第 %1 张影像缺少相机文件: %2").arg(i + 1).arg(images.value(i));
+            }
+            directions.clear();
+            return directions;
+        }
+
+        Camera camera;
+        if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("无法读取相机文件: %1").arg(cameraPath);
+            }
+            directions.clear();
+            return directions;
+        }
+
+        directions.push_back(cameraViewingDirection(camera));
+    }
+
+    return directions;
 }
 
 std::vector<std::array<double, 3>> loadKnownCameraCentersFromProjectMeta(const QStringList &images,
@@ -337,6 +390,55 @@ std::vector<std::array<double, 3>> loadKnownCameraCentersFromProjectMeta(const Q
         *matchedCount = matched;
     }
     return centers;
+}
+
+std::vector<std::array<double, 3>> loadKnownCameraViewingDirectionsFromProjectMeta(const QStringList &images,
+                                                                                  const QJsonObject &projectMeta,
+                                                                                  int *matchedCount)
+{
+    std::vector<std::array<double, 3>> directions;
+    if (matchedCount)
+    {
+        *matchedCount = 0;
+    }
+    if (images.isEmpty() || projectMeta.isEmpty())
+    {
+        return directions;
+    }
+
+    const QMap<QString, QJsonObject> imageMetaByPath =
+        xjw::gui::project::projectImageMetaByPath(projectMeta, true);
+    if (imageMetaByPath.isEmpty())
+    {
+        return directions;
+    }
+
+    directions.reserve(static_cast<std::size_t>(images.size()));
+    int matched = 0;
+    for (const QString &imagePath : images)
+    {
+        const QString normalizedImagePath = xjw::gui::project::normalizePath(imagePath);
+        const QJsonObject imageMeta = imageMetaByPath.value(normalizedImagePath);
+        Camera camera;
+        if (imageMeta.isEmpty() || !xjw::gui::project::imageCameraFromEntry(imageMeta, &camera) || !camera.isValid())
+        {
+            directions.clear();
+            if (matchedCount)
+            {
+                *matchedCount = matched;
+            }
+            return directions;
+        }
+
+        directions.push_back(cameraViewingDirection(camera));
+        ++matched;
+    }
+
+    if (matchedCount)
+    {
+        *matchedCount = matched;
+    }
+    return directions;
 }
 
 std::vector<std::array<int, 2>> loadKnownCameraOverlapPairsFromPaths(const QStringList &images,
@@ -1301,6 +1403,7 @@ QStringList sfmPairPlanSourceTypes(const SfmPairPlan &pairPlan)
 
 QJsonObject sfmPairPlanToJson(const SfmPairPlan &pairPlan)
 {
+    constexpr int kCandidateSampleLimit = 500;
     QJsonObject object;
     object[QStringLiteral("restrict_pairs")] = pairPlan.restrictPairs;
     object[QStringLiteral("auto_restricted")] = pairPlan.autoRestricted;
@@ -1313,7 +1416,70 @@ QJsonObject sfmPairPlanToJson(const SfmPairPlan &pairPlan)
     object[QStringLiteral("used_camera_overlap_pairs")] = pairPlan.usedCameraOverlapPairs;
     object[QStringLiteral("used_spatial_camera_centers")] = pairPlan.usedSpatialCameraCenters;
     object[QStringLiteral("source_types")] = QJsonArray::fromStringList(sfmPairPlanSourceTypes(pairPlan));
+    object[QStringLiteral("candidate_count")] = static_cast<int>(pairPlan.pairCandidates.size());
+    object[QStringLiteral("candidate_sample_limit")] = kCandidateSampleLimit;
+    object[QStringLiteral("candidate_samples_truncated")] =
+        static_cast<int>(pairPlan.pairCandidates.size()) > kCandidateSampleLimit;
+
+    QJsonArray candidateSamples;
+    QJsonObject sourceTypeCounts;
+    for (const SfmPairCandidate &candidate : pairPlan.pairCandidates)
+    {
+        for (const QString &sourceType : candidate.sourceTypes)
+        {
+            if (!sourceType.isEmpty())
+            {
+                sourceTypeCounts[sourceType] = sourceTypeCounts.value(sourceType).toInt() + 1;
+            }
+        }
+
+        if (candidateSamples.size() >= kCandidateSampleLimit)
+        {
+            continue;
+        }
+
+        QJsonObject candidateObject;
+        candidateObject[QStringLiteral("pair_key")] = candidate.pairKey;
+        candidateObject[QStringLiteral("image_index_a")] = candidate.indexA;
+        candidateObject[QStringLiteral("image_index_b")] = candidate.indexB;
+        candidateObject[QStringLiteral("source_types")] = QJsonArray::fromStringList(candidate.sourceTypes);
+        candidateObject[QStringLiteral("priority_score")] = candidate.priorityScore;
+        candidateObject[QStringLiteral("overlap_score")] = candidate.overlapScore;
+        candidateObject[QStringLiteral("sequence_score")] = candidate.sequenceScore;
+        candidateObject[QStringLiteral("spatial_score")] = candidate.spatialScore;
+        candidateObject[QStringLiteral("baseline_score")] = candidate.baselineScore;
+        candidateObject[QStringLiteral("orientation_score")] = candidate.orientationScore;
+        if (candidate.sequenceDistance > 0)
+        {
+            candidateObject[QStringLiteral("sequence_distance")] = candidate.sequenceDistance;
+        }
+        if (candidate.centerDistance >= 0.0)
+        {
+            candidateObject[QStringLiteral("center_distance")] = candidate.centerDistance;
+        }
+        if (candidate.orientationAngleDeg >= 0.0)
+        {
+            candidateObject[QStringLiteral("orientation_angle_deg")] = candidate.orientationAngleDeg;
+        }
+        candidateSamples.append(candidateObject);
+    }
+    object[QStringLiteral("source_type_counts")] = sourceTypeCounts;
+    object[QStringLiteral("candidate_samples")] = candidateSamples;
     return object;
+}
+
+QHash<QString, SfmPairCandidate> sfmPairCandidateByKey(const SfmPairPlan &pairPlan)
+{
+    QHash<QString, SfmPairCandidate> candidates;
+    candidates.reserve(static_cast<int>(pairPlan.pairCandidates.size()));
+    for (const SfmPairCandidate &candidate : pairPlan.pairCandidates)
+    {
+        if (!candidate.pairKey.isEmpty())
+        {
+            candidates.insert(candidate.pairKey, candidate);
+        }
+    }
+    return candidates;
 }
 
 QString sfmPairStatus(const PairMatchData &pair, const QSet<QString> &failedPairKeys)
@@ -1341,7 +1507,8 @@ QString sfmPairStatus(const PairMatchData &pair, const QSet<QString> &failedPair
 QJsonObject sfmPairToJson(const PairMatchData &pair,
                           const QMap<ImageId, QString> &idToPath,
                           const QSet<QString> &failedPairKeys,
-                          const QStringList &sourceTypes)
+                          const QStringList &fallbackSourceTypes,
+                          const SfmPairCandidate *candidate)
 {
     QJsonObject object;
     const QString imageA = idToPath.value(pair.idA);
@@ -1349,7 +1516,30 @@ QJsonObject sfmPairToJson(const PairMatchData &pair,
     object[QStringLiteral("image_a")] = imageA;
     object[QStringLiteral("image_b")] = imageB;
     object[QStringLiteral("pair_key")] = canonicalPairKey(imageA, imageB);
+    const QStringList sourceTypes =
+        (candidate && !candidate->sourceTypes.isEmpty()) ? candidate->sourceTypes : fallbackSourceTypes;
     object[QStringLiteral("source_types")] = QJsonArray::fromStringList(sourceTypes);
+    if (candidate)
+    {
+        object[QStringLiteral("priority_score")] = candidate->priorityScore;
+        object[QStringLiteral("overlap_score")] = candidate->overlapScore;
+        object[QStringLiteral("sequence_score")] = candidate->sequenceScore;
+        object[QStringLiteral("spatial_score")] = candidate->spatialScore;
+        object[QStringLiteral("baseline_score")] = candidate->baselineScore;
+        object[QStringLiteral("orientation_score")] = candidate->orientationScore;
+        if (candidate->sequenceDistance > 0)
+        {
+            object[QStringLiteral("sequence_distance")] = candidate->sequenceDistance;
+        }
+        if (candidate->centerDistance >= 0.0)
+        {
+            object[QStringLiteral("center_distance")] = candidate->centerDistance;
+        }
+        if (candidate->orientationAngleDeg >= 0.0)
+        {
+            object[QStringLiteral("orientation_angle_deg")] = candidate->orientationAngleDeg;
+        }
+    }
     object[QStringLiteral("status")] = sfmPairStatus(pair, failedPairKeys);
     object[QStringLiteral("match_count")] = static_cast<int>(pair.matches.size());
     object[QStringLiteral("geometric_inlier_count")] = static_cast<int>(pair.matches.size());
@@ -1422,9 +1612,15 @@ QJsonObject buildSfmPairDiagnosticsJson(const QString &label,
     QJsonArray pendingPairSamples;
     QJsonArray skippedPairSamples;
     const QStringList sourceTypes = sfmPairPlanSourceTypes(pairPlan);
+    const QHash<QString, SfmPairCandidate> candidatesByKey = sfmPairCandidateByKey(pairPlan);
     for (const PairMatchData &pair : pairs)
     {
-        const QJsonObject pairObject = sfmPairToJson(pair, idToPath, failedPairKeysById, sourceTypes);
+        const QString pairKey = canonicalPairKey(idToPath.value(pair.idA), idToPath.value(pair.idB));
+        const auto candidateIt = candidatesByKey.constFind(pairKey);
+        const SfmPairCandidate *candidate =
+            candidateIt == candidatesByKey.constEnd() ? nullptr : &candidateIt.value();
+        const QJsonObject pairObject =
+            sfmPairToJson(pair, idToPath, failedPairKeysById, sourceTypes, candidate);
         const QString status = pairObject.value(QStringLiteral("status")).toString();
         if (pairSamples.size() < kPairSampleLimit)
         {
@@ -1450,6 +1646,181 @@ QJsonObject buildSfmPairDiagnosticsJson(const QString &label,
     object[QStringLiteral("pair_sample_limit")] = kPairSampleLimit;
     object[QStringLiteral("pair_samples_truncated")] = pairs.size() > kPairSampleLimit;
     return object;
+}
+
+QJsonObject sfmGuidedMatchPlanToJson(const SfmGuidedMatchPlan &plan,
+                                     const QMap<ImageId, QString> &idToPath)
+{
+    constexpr int kCandidateSampleLimit = 500;
+    QJsonObject object;
+    object[QStringLiteral("guided_match_candidate_count")] = plan.candidates.size();
+    object[QStringLiteral("seed_pair_count")] = plan.seedPairCount;
+    object[QStringLiteral("skipped_healthy_pairs")] = plan.skippedHealthyPairs;
+    object[QStringLiteral("skipped_unregistered_pairs")] = plan.skippedUnregisteredPairs;
+    object[QStringLiteral("candidate_sample_limit")] = kCandidateSampleLimit;
+    object[QStringLiteral("candidate_samples_truncated")] = plan.candidates.size() > kCandidateSampleLimit;
+
+    QJsonArray samples;
+    for (const SfmGuidedMatchCandidate &candidate : plan.candidates)
+    {
+        if (samples.size() >= kCandidateSampleLimit)
+        {
+            break;
+        }
+
+        QJsonObject row;
+        row[QStringLiteral("image_a")] = idToPath.value(static_cast<ImageId>(candidate.imageA));
+        row[QStringLiteral("image_b")] = idToPath.value(static_cast<ImageId>(candidate.imageB));
+        row[QStringLiteral("image_index_a")] = candidate.imageA;
+        row[QStringLiteral("image_index_b")] = candidate.imageB;
+        row[QStringLiteral("match_count")] = candidate.matchCount;
+        row[QStringLiteral("reason")] = candidate.reason;
+        row[QStringLiteral("priority_score")] = candidate.priorityScore;
+        row[QStringLiteral("can_use_epipolar_band")] = candidate.canUseEpipolarBand;
+        samples.append(row);
+    }
+    object[QStringLiteral("candidate_samples")] = samples;
+    return object;
+}
+
+QString csvEscape(const QString &value)
+{
+    QString escaped = value;
+    escaped.replace(QStringLiteral("\""), QStringLiteral("\"\""));
+    if (escaped.contains(QLatin1Char(',')) ||
+        escaped.contains(QLatin1Char('\n')) ||
+        escaped.contains(QLatin1Char('\r')) ||
+        escaped.contains(QLatin1Char('"')))
+    {
+        return QStringLiteral("\"%1\"").arg(escaped);
+    }
+    return escaped;
+}
+
+QStringList jsonStringArrayToStringList(const QJsonArray &array)
+{
+    QStringList result;
+    for (const QJsonValue &value : array)
+    {
+        const QString text = value.toString();
+        if (!text.isEmpty())
+        {
+            result.append(text);
+        }
+    }
+    return result;
+}
+
+QJsonObject writeSfmMatchingQualityReports(const QString &assetsDir,
+                                           const QJsonObject &diagnostics,
+                                           const QVector<PairMatchData> &pairs,
+                                           const SfmPairPlan &pairPlan,
+                                           const QMap<ImageId, QString> &idToPath,
+                                           const QVector<FailedPairRecord> &failedPairs)
+{
+    QJsonObject result;
+    if (assetsDir.isEmpty() || diagnostics.isEmpty())
+    {
+        return result;
+    }
+
+    const QString reportsDir = QDir(assetsDir).filePath(QStringLiteral("reports"));
+    QDir().mkpath(reportsDir);
+    const QString jsonPath = QDir(reportsDir).filePath(QStringLiteral("matching_quality_report.json"));
+    const QString csvPath = QDir(reportsDir).filePath(QStringLiteral("matching_quality_report.csv"));
+
+    QJsonObject jsonReport = diagnostics;
+    jsonReport[QStringLiteral("report_type")] = QStringLiteral("matching_quality_report");
+    jsonReport[QStringLiteral("csv_path")] = csvPath;
+    jsonReport[QStringLiteral("json_path")] = jsonPath;
+
+    QFile jsonFile(jsonPath);
+    if (jsonFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        jsonFile.write(QJsonDocument(jsonReport).toJson(QJsonDocument::Indented));
+        jsonFile.close();
+        result[QStringLiteral("json_path")] = jsonPath;
+    }
+    else
+    {
+        LOG_WARN(QStringLiteral("SFM: 写出匹配质量 JSON 失败 → %1").arg(jsonPath));
+    }
+
+    QSet<QString> failedPairKeysByPath;
+    for (const FailedPairRecord &failedPair : failedPairs)
+    {
+        const QString pairKey = canonicalPairKey(failedPair.imagePath0, failedPair.imagePath1);
+        if (!pairKey.isEmpty())
+        {
+            failedPairKeysByPath.insert(pairKey);
+        }
+    }
+
+    QSet<QString> failedPairKeysById;
+    for (const PairMatchData &pair : pairs)
+    {
+        const QString pathKey = canonicalPairKey(idToPath.value(pair.idA), idToPath.value(pair.idB));
+        if (failedPairKeysByPath.contains(pathKey))
+        {
+            failedPairKeysById.insert(QString::number(pair.idA) + QStringLiteral("\n") + QString::number(pair.idB));
+        }
+    }
+
+    const QHash<QString, SfmPairCandidate> candidatesByKey = sfmPairCandidateByKey(pairPlan);
+    const QStringList fallbackSourceTypes = sfmPairPlanSourceTypes(pairPlan);
+
+    QFile csvFile(csvPath);
+    if (csvFile.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text))
+    {
+        QTextStream stream(&csvFile);
+        stream.setEncoding(QStringConverter::Utf8);
+        stream << "pair_key,image_a,image_b,status,match_count,geometric_inlier_count,loaded,"
+                  "skipped_by_no_match_cache,source_types,priority_score,overlap_score,sequence_score,"
+                  "spatial_score,baseline_score,orientation_score,sequence_distance,center_distance,"
+                  "orientation_angle_deg,failure_reason\n";
+
+        for (const PairMatchData &pair : pairs)
+        {
+            const QString imageA = idToPath.value(pair.idA);
+            const QString imageB = idToPath.value(pair.idB);
+            const QString pairKey = canonicalPairKey(imageA, imageB);
+            const auto candidateIt = candidatesByKey.constFind(pairKey);
+            const SfmPairCandidate *candidate =
+                candidateIt == candidatesByKey.constEnd() ? nullptr : &candidateIt.value();
+            const QJsonObject row =
+                sfmPairToJson(pair, idToPath, failedPairKeysById, fallbackSourceTypes, candidate);
+            const QStringList sourceTypes =
+                jsonStringArrayToStringList(row.value(QStringLiteral("source_types")).toArray());
+
+            stream << csvEscape(row.value(QStringLiteral("pair_key")).toString()) << ','
+                   << csvEscape(row.value(QStringLiteral("image_a")).toString()) << ','
+                   << csvEscape(row.value(QStringLiteral("image_b")).toString()) << ','
+                   << csvEscape(row.value(QStringLiteral("status")).toString()) << ','
+                   << row.value(QStringLiteral("match_count")).toInt() << ','
+                   << row.value(QStringLiteral("geometric_inlier_count")).toInt() << ','
+                   << (row.value(QStringLiteral("loaded")).toBool() ? 1 : 0) << ','
+                   << (row.value(QStringLiteral("skipped_by_no_match_cache")).toBool() ? 1 : 0) << ','
+                   << csvEscape(sourceTypes.join(QStringLiteral("|"))) << ','
+                   << row.value(QStringLiteral("priority_score")).toDouble(0.0) << ','
+                   << row.value(QStringLiteral("overlap_score")).toDouble(0.0) << ','
+                   << row.value(QStringLiteral("sequence_score")).toDouble(0.0) << ','
+                   << row.value(QStringLiteral("spatial_score")).toDouble(0.0) << ','
+                   << row.value(QStringLiteral("baseline_score")).toDouble(0.0) << ','
+                   << row.value(QStringLiteral("orientation_score")).toDouble(0.0) << ','
+                   << row.value(QStringLiteral("sequence_distance")).toInt(0) << ','
+                   << row.value(QStringLiteral("center_distance")).toDouble(-1.0) << ','
+                   << row.value(QStringLiteral("orientation_angle_deg")).toDouble(-1.0) << ','
+                   << csvEscape(row.value(QStringLiteral("failure_reason")).toString()) << '\n';
+        }
+        csvFile.close();
+        result[QStringLiteral("csv_path")] = csvPath;
+    }
+    else
+    {
+        LOG_WARN(QStringLiteral("SFM: 写出匹配质量 CSV 失败 → %1").arg(csvPath));
+    }
+
+    return result;
 }
 
 struct NumericSummary
@@ -2051,6 +2422,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     int projectMetaCameraCenterCount = 0;
     const std::vector<std::array<double, 3>> projectMetaCameraCenters =
         loadKnownCameraCentersFromProjectMeta(opts.images, opts.projectMeta, &projectMetaCameraCenterCount);
+    int projectMetaViewingDirectionCount = 0;
+    const std::vector<std::array<double, 3>> projectMetaViewingDirections =
+        loadKnownCameraViewingDirectionsFromProjectMeta(opts.images,
+                                                        opts.projectMeta,
+                                                        &projectMetaViewingDirectionCount);
     const bool hasCameraPathRestrictionInputs = hasCompleteCameraPathList(opts.images, opts.cameraPaths);
     const bool hasProjectMetaCameraCenters =
         hasCompleteKnownCameraCenters(static_cast<int>(opts.images.size()), projectMetaCameraCenters);
@@ -2092,20 +2468,37 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         if (hasCameraPathRestrictionInputs)
         {
             QString knownCameraCenterError;
+            QString knownCameraDirectionError;
             pairPlanOptions.knownCameraCenters = loadKnownCameraCentersFromPaths(opts.images,
                                                                                  opts.cameraPaths,
                                                                                  &knownCameraCenterError);
+            pairPlanOptions.knownCameraViewingDirections =
+                loadKnownCameraViewingDirectionsFromPaths(opts.images,
+                                                          opts.cameraPaths,
+                                                          &knownCameraDirectionError);
             if (pairPlanOptions.knownCameraCenters.empty())
             {
                 LOG_WARN(QStringLiteral("  已知相机空间配对不可用，将回退顺序邻域: %1").arg(knownCameraCenterError));
+            }
+            if (pairPlanOptions.knownCameraViewingDirections.empty())
+            {
+                LOG_WARN(QStringLiteral("  已知相机视线方向评分不可用，将只使用中心距离/顺序评分: %1")
+                    .arg(knownCameraDirectionError));
             }
         }
         else if (hasProjectMetaCameraCenters)
         {
             pairPlanOptions.knownCameraCenters = projectMetaCameraCenters;
+            pairPlanOptions.knownCameraViewingDirections = projectMetaViewingDirections;
             LOG_INFO(QStringLiteral("  从项目元数据读取相机中心用于配对裁剪: %1/%2")
                 .arg(projectMetaCameraCenterCount)
                 .arg(opts.images.size()));
+            if (!projectMetaViewingDirections.empty())
+            {
+                LOG_INFO(QStringLiteral("  从项目元数据读取相机视线方向用于配对评分: %1/%2")
+                    .arg(projectMetaViewingDirectionCount)
+                    .arg(opts.images.size()));
+            }
         }
     }
 
@@ -2972,6 +3365,22 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                                                         pairPlan,
                                                         idToPath,
                                                         result.failedPairs);
+    const QJsonObject matchingQualityReportFiles =
+        writeSfmMatchingQualityReports(assetsDir,
+                                       result.sfmDiagnostics,
+                                       allPairs,
+                                       pairPlan,
+                                       idToPath,
+                                       result.failedPairs);
+    if (!matchingQualityReportFiles.isEmpty())
+    {
+        QJsonObject diagnostics = result.sfmDiagnostics;
+        diagnostics[QStringLiteral("matching_quality_report")] = matchingQualityReportFiles;
+        result.sfmDiagnostics = diagnostics;
+        LOG_INFO(QStringLiteral("  匹配质量报告: JSON=%1 CSV=%2")
+            .arg(matchingQualityReportFiles.value(QStringLiteral("json_path")).toString(),
+                 matchingQualityReportFiles.value(QStringLiteral("csv_path")).toString()));
+    }
 
     // 2b. 统计有效匹配
     int loadedMatches = 0;
@@ -3356,6 +3765,32 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             result.pendingCamUpdates.insert(it.key(), cameraToJson(cam));
         }
         LOG_INFO(QStringLiteral("SFM: 相机更新收集完成 %1 项").arg(result.pendingCamUpdates.size()));
+
+        {
+            SfmGuidedMatchPlannerOptions guidedOptions;
+            guidedOptions.minSeedMatches = presets.initMinNumMatches;
+            guidedOptions.maxHealthyMatches = presets.minInliers;
+            guidedOptions.maxCandidates = 2000;
+            for (const ImageId id : validIds)
+            {
+                if (recon->isRegistered(id))
+                {
+                    guidedOptions.registeredImageIds.insert(static_cast<int>(id));
+                }
+            }
+
+            const SfmGuidedMatchPlan guidedPlan =
+                planSfmGuidedMatching(makeSfmDiagnosticImageIds(validIds),
+                                      makeSfmDiagnosticPairs(allPairs),
+                                      guidedOptions);
+            QJsonObject diagnostics = result.sfmDiagnostics;
+            diagnostics[QStringLiteral("guided_matching")] = sfmGuidedMatchPlanToJson(guidedPlan, idToPath);
+            result.sfmDiagnostics = diagnostics;
+            LOG_INFO(QStringLiteral("SFM: Guided matching 候选 %1 对，种子匹配 %2 对，未注册跳过 %3 对")
+                .arg(guidedPlan.candidates.size())
+                .arg(guidedPlan.seedPairCount)
+                .arg(guidedPlan.skippedUnregisteredPairs));
+        }
 
         // 4a-2. 收集逐相机残差（供报告使用，一次遍历所有三维点）
         {

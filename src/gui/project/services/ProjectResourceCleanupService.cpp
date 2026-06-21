@@ -114,6 +114,7 @@ void collectSectionRecordArtifacts(const QString &section,
         appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("depth_png")).toString()));
         appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("raw_depth_path")).toString()));
         appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("raw_confidence_path")).toString()));
+        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("valid_mask_path")).toString()));
         return;
     }
 

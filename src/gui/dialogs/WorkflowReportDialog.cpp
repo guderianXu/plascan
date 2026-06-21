@@ -625,8 +625,16 @@ QWidget *WorkflowReportDialog::buildAtReportPage(const QJsonObject &r)
         const QJsonObject sparseQuality = sfmDiag.value(QStringLiteral("sparse_quality")).toObject();
         const QJsonObject pairPlan = sfmDiag.value(QStringLiteral("pair_plan")).toObject();
         const QJsonArray sourceTypes = pairPlan.value(QStringLiteral("source_types")).toArray();
+        const QJsonObject sourceTypeCounts = pairPlan.value(QStringLiteral("source_type_counts")).toObject();
         QStringList sourceLabels;
-        for (const QJsonValue &value : sourceTypes) sourceLabels.append(value.toString());
+        for (const QJsonValue &value : sourceTypes) {
+            const QString sourceType = value.toString();
+            if (sourceType.isEmpty()) continue;
+            const int sourceCount = sourceTypeCounts.value(sourceType).toInt(-1);
+            sourceLabels.append(sourceCount >= 0
+                ? QStringLiteral("%1(%2)").arg(sourceType).arg(sourceCount)
+                : sourceType);
+        }
 
         auto addDiag = [&](int row, int col, const QString &key, const QString &value) {
             diagLayout->addWidget(makeKVLabel(key, value), row, col);
@@ -640,12 +648,16 @@ QWidget *WorkflowReportDialog::buildAtReportPage(const QJsonObject &r)
         addDiag(3, 0, tr("最大匹配分量:"), QStringLiteral("%1 / %2")
                 .arg(actualGraph.value(QStringLiteral("largest_component_size")).toInt())
                 .arg(actualGraph.value(QStringLiteral("node_count")).toInt()));
-        addDiag(3, 1, tr("配对来源:"), sourceLabels.isEmpty() ? QStringLiteral("—") : sourceLabels.join(QStringLiteral(", ")));
+        addDiag(3, 1, tr("规划候选:"), QStringLiteral("%1 / %2")
+                .arg(pairPlan.value(QStringLiteral("candidate_count")).toInt(
+                    pairPlan.value(QStringLiteral("planned_pair_count")).toInt()))
+                .arg(pairPlan.value(QStringLiteral("all_pair_count")).toInt()));
+        addDiag(4, 0, tr("配对来源:"), sourceLabels.isEmpty() ? QStringLiteral("—") : sourceLabels.join(QStringLiteral(", ")));
 
         const QJsonObject triAngle = sparseQuality.value(QStringLiteral("triangulation_angle")).toObject();
         if (!triAngle.isEmpty()) {
-            addDiag(4, 0, tr("平均三角角:"), QStringLiteral("%1°").arg(fmtNum(triAngle.value(QStringLiteral("mean")).toDouble(), 3)));
-            addDiag(4, 1, tr("多视 track:"), fmtInt(sparseQuality.value(QStringLiteral("multi_view_track_count")).toInt()));
+            addDiag(5, 0, tr("平均三角角:"), QStringLiteral("%1°").arg(fmtNum(triAngle.value(QStringLiteral("mean")).toDouble(), 3)));
+            addDiag(5, 1, tr("多视 track:"), fmtInt(sparseQuality.value(QStringLiteral("multi_view_track_count")).toInt()));
         }
 
         vl->addWidget(diagBox);

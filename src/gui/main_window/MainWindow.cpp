@@ -393,7 +393,7 @@ void MainWindow::setupProjectManager()
             if (m_mainMenu->featureVisualizationAction())
             {
                 connect(m_mainMenu->featureVisualizationAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openSuperPointVisualizationDialog);
+                        m_menuWorkflowController, &MenuWorkflowController::openFeaturePointVisualizationDialog);
             }
             if (m_mainMenu->threeDReconstructionAction())
             {
@@ -491,13 +491,13 @@ void MainWindow::setupProjectManager()
                     dlg->setAvailableFeatureSuffixes(projectSuffixes);
                 }
 
-                // 懒初始化 SuperGlue 记忆化设置管理器
-                if (!m_sgSetting)
+                // 懒初始化特征匹配记忆化设置管理器
+                if (!m_featureMatchingSetting)
                 {
-                    m_sgSetting = new DialogSettingStore(DialogSettingKeys::SuperGlue, this);
+                    m_featureMatchingSetting = new DialogSettingStore(DialogSettingKeys::FeatureMatching, this);
                 }
-                m_sgSetting->setProjectPath(m_projectManager->currentProjectPath());
-                const QJsonObject saved = m_sgSetting->load();
+                m_featureMatchingSetting->setProjectPath(m_projectManager->currentProjectPath());
+                const QJsonObject saved = m_featureMatchingSetting->load();
                 if (!saved.isEmpty())
                 {
                     dlg->applySettings(saved);
@@ -515,9 +515,9 @@ void MainWindow::setupProjectManager()
                 // 实时保存参数到项目配置（通过 DialogSettingStore）
                 connect(dlg, &FeatureMatchingDialog::settingsChanged, this, [this](const QJsonObject &s)
                 {
-                    if (m_sgSetting)
+                    if (m_featureMatchingSetting)
                     {
-                        m_sgSetting->save(s);
+                        m_featureMatchingSetting->save(s);
                     }
                 });
 
@@ -541,7 +541,7 @@ void MainWindow::setupProjectManager()
                     // 在后台线程执行匹配，避免界面卡死
                     LOG_INFO("%s", qUtf8Printable(QString("开始在后台线程执行 %1 匹配...").arg(algorithm)));
 
-                    // 在状态栏展示 SuperGlue 匹配进度
+                    // 在状态栏展示特征匹配进度
                     auto cancelFlag    = std::make_shared<std::atomic<bool>>(false);
                     auto progressCount = std::make_shared<std::atomic<int>>(0);
                     int total = imagePairs.size();
@@ -1039,14 +1039,14 @@ void MainWindow::setupProjectManager()
     connect(m_projectManager, &ProjectManager::atProgressFinished,
             this, &MainWindow::onAtFinished);
 
-    // ── SuperGlue 连接点匹配状态栏进度条 ────────────────────────────
+    // ── 特征匹配状态栏进度条 ────────────────────────────
     m_sgTaskStatus = createTaskStatus(180, true, tr("正在取消特征匹配..."));
     connect(m_sgTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
         emit sgCancelRequested();
     });
 
-    // ── SuperPoint 特征点提取状态栏进度条 ──────────────────────────
+    // ── 特征点提取状态栏进度条 ──────────────────────────
     m_spTaskStatus = createTaskStatus(180, true, tr("正在取消特征提取..."));
     connect(m_spTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
@@ -1490,7 +1490,7 @@ void MainWindow::onOverlapFinished(bool success)
 }
 
 // ============================================================
-//  SuperPoint 状态栏进度条 slots
+//  特征提取状态栏进度条 slots
 // ============================================================
 
 void MainWindow::showSpProgress(int total)
@@ -1752,11 +1752,11 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
         m_uiSetting = new DialogSettingStore(DialogSettingKeys::MainWindowUi, this);
     }
     m_uiSetting->setProjectPath(plascanPath);
-    if (!m_sgSetting)
+    if (!m_featureMatchingSetting)
     {
-        m_sgSetting = new DialogSettingStore(DialogSettingKeys::SuperGlue, this);
+        m_featureMatchingSetting = new DialogSettingStore(DialogSettingKeys::FeatureMatching, this);
     }
-    m_sgSetting->setProjectPath(plascanPath);
+    m_featureMatchingSetting->setProjectPath(plascanPath);
 
     QJsonObject ui = m_uiSetting->load();
     // 向后兼容：若新文件中无数据，尝试从旧 project_config.json 读取

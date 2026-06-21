@@ -62,6 +62,15 @@ inline double huberWeight(double residualNorm, double delta)
     return delta / std::max(residualNorm, 1e-12);
 }
 
+inline double observationWeight(const BAObservation &observation)
+{
+    if (!std::isfinite(observation.weight))
+    {
+        return 1.0;
+    }
+    return std::max(0.0, observation.weight);
+}
+
 /**
  * @brief 封装 Camera::project，将 std::array<double,3> 格式的三维点投影到图像坐标。
  * @param cam  相机对象
@@ -274,7 +283,8 @@ double computeTrackRms(const std::vector<Camera> &cams, const BATrack &track, co
         if (!projectPoint(cams[obs.cameraIndex], X, uv)) continue;
         const double du = uv[0] - obs.u;
         const double dv = uv[1] - obs.v;
-        sum2 += du * du + dv * dv;
+        const double w = observationWeight(obs);
+        sum2 += w * (du * du + dv * dv);
         cnt += 2;
     }
     if (cnt <= 0) return std::numeric_limits<double>::quiet_NaN();
@@ -429,7 +439,12 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams, const BATrack &
             }
 
             const double r[2] = {uv[0] - obs.u, uv[1] - obs.v};
-            const double w = huberWeight(std::sqrt(r[0] * r[0] + r[1] * r[1]), opt.huberDelta);
+            const double w = observationWeight(obs)
+                * huberWeight(std::sqrt(r[0] * r[0] + r[1] * r[1]), opt.huberDelta);
+            if (!(w > 0.0))
+            {
+                continue;
+            }
 
             // 对三维点坐标 (X,Y,Z) 做中央差分，近似雅可比 (精度 O(h²))。
             double J[2][3] = {{0.0, 0.0, 0.0}, {0.0, 0.0, 0.0}};
@@ -565,7 +580,8 @@ static double computeCameraCost(const Camera &cam, int cameraIndex,
             double uv[2];
             if (!projectPoint(cam, points[ti].point, uv)) continue;
             double du = uv[0] - obs.u, dv = uv[1] - obs.v;
-            sum2 += du * du + dv * dv;
+            const double w = observationWeight(obs);
+            sum2 += w * (du * du + dv * dv);
             cnt += 2;
         }
     }
@@ -615,7 +631,12 @@ bool optimizeOneCamera(Camera *cam,
                 if (!projectPoint(*cam, pt.point, uv)) continue;
 
                 const double r[2] = {uv[0] - obs.u, uv[1] - obs.v};
-                const double w = huberWeight(std::sqrt(r[0] * r[0] + r[1] * r[1]), opt.huberDelta);
+                const double w = observationWeight(obs)
+                    * huberWeight(std::sqrt(r[0] * r[0] + r[1] * r[1]), opt.huberDelta);
+                if (!(w > 0.0))
+                {
+                    continue;
+                }
 
                 // 对 [rx, ry, rz, tx, ty, tz] 做中央差分，构造 2x6 雅可比（精度 O(h²)）。
                 double J[2][6] = {{0,0,0,0,0,0},{0,0,0,0,0,0}};

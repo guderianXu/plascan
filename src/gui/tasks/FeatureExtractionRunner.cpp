@@ -7,7 +7,7 @@
 #include <opencv2/opencv.hpp>
 #include <torch/torch.h>
 
-#include "SuperPointRunner.h"
+#include "FeatureExtractionRunner.h"
 #include "Logger.h"
 #include "ProjectIO.h"
 #include "ProjectManager.h"
@@ -26,6 +26,27 @@ QString normalizedFeatureAlgorithm(const QJsonObject &config)
     const std::string normalized = xjw::feature_extractors::TraditionalFeatureExtractor::normalizeAlgorithmName(
         config.value("feature_algorithm").toString("superpoint").toStdString());
     return QString::fromStdString(normalized);
+}
+
+int maxKeypointsFromConfig(const QJsonObject &config)
+{
+    if (config.contains(QStringLiteral("max_num_keypoints")))
+    {
+        return config.value(QStringLiteral("max_num_keypoints")).toInt(-1);
+    }
+    return config.value(QStringLiteral("max_keypoints")).toInt(-1);
+}
+
+bool useCudaFromConfig(const QJsonObject &config)
+{
+    if (config.contains(QStringLiteral("use_cuda")))
+    {
+        return config.value(QStringLiteral("use_cuda")).toBool(false);
+    }
+
+    const QString deviceString = config.value(QStringLiteral("device")).toString(QStringLiteral("CPU"));
+    const QString lowerDevice = deviceString.toLower();
+    return lowerDevice == QStringLiteral("cuda") || lowerDevice == QStringLiteral("gpu");
 }
 
 QString findModelFile(const QString &modelName)
@@ -122,14 +143,14 @@ QString resolveExtractorModelPath(const QString &algorithm, bool useCuda, const 
 
 } // namespace
 
-bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs, ProjectManager *projectManager)
+bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &inputs, ProjectManager *projectManager)
 {
     std::atomic<bool> neverCancel{false};
     std::atomic<int> dummy{0};
     return run(config, inputs, projectManager, neverCancel, dummy);
 }
 
-bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
+bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &inputs,
                             ProjectManager *projectManager, std::atomic<bool> &cancelFlag,
                             std::atomic<int> &progressCount)
 {
@@ -160,7 +181,7 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
     SuperPointConfig spConfig;
     spConfig.nms_radius = config["nms_radius"].toInt(4);
     spConfig.detection_threshold = static_cast<float>(config["detection_threshold"].toDouble(0.005));
-    spConfig.max_num_keypoints = config["max_num_keypoints"].toInt(-1);
+    spConfig.max_num_keypoints = maxKeypointsFromConfig(config);
     spConfig.remove_borders = config["remove_borders"].toInt(4);
     spConfig.grayscale_min = static_cast<float>(config["grayscale_min"].toDouble(5.0 / 255.0));
     spConfig.grayscale_max = static_cast<float>(config["grayscale_max"].toDouble(1.0));
@@ -172,8 +193,7 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
     spConfig.neighborhood_threshold = static_cast<float>(config["neighborhood_threshold"].toDouble(0.05));
     
     // 设备选择
-    QString deviceStr = config["device"].toString("CPU");
-    if (deviceStr == "CUDA") 
+    if (useCudaFromConfig(config))
     {
         if (torch::cuda::is_available()) 
         {
@@ -262,7 +282,7 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
 
             ExtractorConfig extractorCfg;
             extractorCfg.modelPath = modelPath.toStdString();
-            extractorCfg.maxKeypoints = config["max_num_keypoints"].toInt(-1);
+            extractorCfg.maxKeypoints = maxKeypointsFromConfig(config);
             extractorCfg.detThreshold = static_cast<float>(config["detection_threshold"].toDouble(0.0));
             extractorCfg.nmsRadius = spConfig.nms_radius;
             extractorCfg.removeBorder = spConfig.remove_borders;
@@ -425,7 +445,7 @@ bool SuperPointRunner::run(const QJsonObject &config, const QStringList &inputs,
     }
     catch (const std::exception &e)
     {
-        LOG_ERROR("%s", qUtf8Printable(QString("SuperPoint 初始化失败: %1")
+        LOG_ERROR("%s", qUtf8Printable(QString("特征提取初始化失败: %1")
             .arg(QString::fromStdString(e.what()))));
         return false;
     }

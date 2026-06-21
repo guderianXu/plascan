@@ -2,6 +2,7 @@
 
 #include <gtest/gtest.h>
 
+using xjw::mvs::mvsSourcePlanEntryToJson;
 using xjw::mvs::MvsSourceCandidate;
 using xjw::mvs::MvsSourcePlannerOptions;
 using xjw::mvs::MvsSourceRejectReason;
@@ -132,4 +133,26 @@ TEST(MvsSourcePlanner, AllowsKnownOverlapPairsWithWeakGeometryAfterStrongPairs)
     EXPECT_EQ(plan.selected[0].viewIndex, 3);
     EXPECT_EQ(plan.selected[1].viewIndex, 2);
     EXPECT_FALSE(plan.usedSequenceFallback);
+}
+
+TEST(MvsSourcePlanner, PublishesNormalizedSourceQualityScore)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 2;
+
+    const auto plan = planMvsSourceViews({
+        candidate(3, 120, 110, 8.0f, 0.8f, 0.7f, true),
+        candidate(5, 20, 12, 7.0f, 0.2f, 0.3f, false),
+    }, options);
+
+    ASSERT_EQ(plan.selected.size(), 2u);
+    EXPECT_GT(plan.selected[0].sourceQualityScore, plan.selected[1].sourceQualityScore);
+    EXPECT_GT(plan.selected[0].sourceQualityScore, 0.0f);
+    EXPECT_LE(plan.selected[0].sourceQualityScore, 1.0f);
+
+    const QJsonObject json = mvsSourcePlanEntryToJson(plan.selected[0]);
+    EXPECT_TRUE(json.contains(QStringLiteral("source_quality_score")));
+    EXPECT_GT(json.value(QStringLiteral("source_quality_score")).toDouble(), 0.0);
 }

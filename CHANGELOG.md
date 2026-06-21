@@ -2,6 +2,45 @@
 
 本文件按版本倒序记录用户可感知的主要变更。详细验证记录见 `docs/releases/`。
 
+## v1.1.6 - 2026-06-21
+
+### 新增
+
+- 当前发布目标同步到 `v1.1.6`，包括根项目版本、core 项目版本、Release 文档和版本一致性测试。
+- SfM 匹配链路新增 guided matching v1 诊断字段，记录候选 pair 来源、优先级、guided eligibility、epipolar band 和跳过/失败原因，便于排查航测数据注册率不足。
+- 多视 track 新增置信度和来源统计，BA observation 可使用 track length、feature scale、feature score 和 matcher/source confidence 做质量感知加权。
+- MVS manifest 扩展记录 source view 数量、source quality score、平均 depth confidence 和有效像素数，为后续深度图质量报告、目录树增量刷新和 MVS 调参提供稳定 metadata。
+- GUI 特征点可视化与特征提取 runner 改为通用命名，移除旧的 `SuperPoint*` / `SuperGlue*` GUI 接口，避免用户误以为当前流程仍绑定某个旧算法。
+
+### 优化
+
+- 匹配/空三报告更清晰地区分候选图、实际匹配图、几何验证、guided rematching 和 BA 输入质量，减少“点很多但空三失败”时的排查成本。
+- MVS source planning 现在把 shared tracks、几何内点、基线和重叠质量汇总成可记录的 source quality score，深度图结果不再只靠输出目录扫描判断状态。
+- 网格/密集点云相关流程继续向流式、分块和可诊断方向收敛，降低大航测数据在 PLY/mesh 阶段出现 `bad allocation` 时的定位难度。
+- Windows CUDA 构建与运行说明继续收敛到固定构建目录、固定 `libtorch-cu130` 和 CUDA 13.1 运行时环境。
+
+### 修复
+
+- 修正 Windows 上 `DenseMatchIntegrationTest.SaveAndReloadDisparity` 使用硬编码 `/tmp/test_disparity.tif`，导致没有 `/tmp` 目录时保存视差失败的问题。
+- 修正 MVS depth artifact 后续更新可能覆盖已有非空 source plan 的问题，确保 filtered depth 和 manifest 更新仍保留原始选源依据。
+- 修正旧 `SuperPointRunner`、`SuperGlueRunner`、`SuperPointVisualizationDialog` 命名残留导致的接口混乱，相关 GUI 入口改用通用特征提取/可视化命名。
+- 修正部分 GUI 匹配查看、影像加载和密集点云/模型 metadata 刷新路径中状态提示不够明确的问题，失败时更容易定位到图像路径、PLY 规模或运行时依赖。
+
+### 验证
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_win\build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过；脚本注入 VS Dev、CUDA 13.1、`libtorch-cu130` 和 vcpkg 环境，构建系统报告 `ninja: no work to do`。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File scripts\build_win\build_windows_cuda.ps1 -BuildOnly -RunTests -CTestRegex "Mvs|Sfm|Feature|Match|Bundle|Lidar|Gui" -Jobs 8` 通过，208/208；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 保持 disabled。
+- `python -m pytest tests\test_repo_hygiene.py -q` 通过，9 项测试和 27 个 subtest 全部通过。
+- `python -m pytest tests\test_gui_algorithm_alignment.py -q` 通过，7/7。
+- `DenseMatchIntegrationTest.SaveAndReloadDisparity` 在 Windows 临时目录修复后通过。
+- 覆盖过的关键测试包含 `test_gui_project_utils`、`test_mvs_source_planner`、`test_mvs_workspace_manifest`、`test_sfm_pair_planner`、`test_multiview_track_builder` 和 `test_sfm_pipeline`。
+- GitHub Actions 会在 `main` 和 `v1.1.6` 推送后触发，远端 CI 结果以 GitHub Actions 页面为准；Release 正文同步记录本地验证结果和已知风险。
+
+### 已知问题
+
+- `PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 仍是 disabled benchmark，本版本未把它纳入通过项。
+- 本次发布前重点复跑了 MVS/SfM/Feature/Match/Bundle/LiDAR/Gui 相关 208 项回归；完整长链大数据验证仍建议在夜间任务中继续跟踪内存峰值、mesh 平滑质量和 DEM/DOM 质量。
+
 ## v1.1.5 - 2026-06-19
 
 ### 新增

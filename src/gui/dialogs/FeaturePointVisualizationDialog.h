@@ -1,5 +1,5 @@
 // =============================================================================
-// 文件: SuperPointVisualizationDialog.h
+// 文件: FeaturePointVisualizationDialog.h
 // 功能: 特征点可视化配置对话框声明
 // 职责:
 //   - 提供特征点文件后缀切换（.sp / .dsk / .alk / ...）
@@ -26,24 +26,24 @@ class QGroupBox;
 class QComboBox;
 
 // =============================================================================
-// SuperPointVisualizationDialog — 特征点可视化参数配置对话框
+// FeaturePointVisualizationDialog — 特征点可视化参数配置对话框
 //
 // 典型用法：
-//   auto *dlg = new SuperPointVisualizationDialog(suffixes, this);
+//   auto *dlg = new FeaturePointVisualizationDialog(suffixes, this);
 //   dlg->setCurrentSuffix(currentSuffix);
-//   connect(dlg, &SuperPointVisualizationDialog::displayOptionsChanged,
+//   connect(dlg, &FeaturePointVisualizationDialog::displayOptionsChanged,
 //           layerRenderer, &LayerRenderer::setDisplayOptions);
-//   connect(dlg, &SuperPointVisualizationDialog::featureSuffixChanged,
+//   connect(dlg, &FeaturePointVisualizationDialog::featureSuffixChanged,
 //           canvasWidget, &CanvasWidget::setActiveFeatureSuffix);
 //   dlg->show(); // 非模态，参数修改实时预览
 // =============================================================================
-class SuperPointVisualizationDialog : public QDialog
+class FeaturePointVisualizationDialog : public QDialog
 {
     Q_OBJECT
 public:
-    explicit SuperPointVisualizationDialog(const QStringList &availableSuffixes,
-                                           QWidget *parent = nullptr);
-    ~SuperPointVisualizationDialog() override;
+    explicit FeaturePointVisualizationDialog(const QStringList &availableSuffixes,
+                                             QWidget *parent = nullptr);
+    ~FeaturePointVisualizationDialog() override;
 
     LayerRenderer::FeatureDisplayOptions getDisplayOptions() const;
     void setDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts);

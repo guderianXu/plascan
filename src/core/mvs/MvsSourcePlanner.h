@@ -43,6 +43,7 @@ struct MvsSourcePlanEntry
     bool knownOverlap = false;
     bool sequenceFallback = false;
     float score = 0.0f;
+    float sourceQualityScore = 0.0f;
 };
 
 struct MvsSourceRejectedCandidate

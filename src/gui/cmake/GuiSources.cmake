@@ -50,7 +50,7 @@ set(GUI_SOURCES
   project/manager/ProjectSparseReconstructionManager.cpp
   project/manager/ProjectTerrainProductsManager.cpp
   project/manager/ProjectCameraSetupManager.cpp
-  tasks/SuperPointRunner.cpp
+  tasks/FeatureExtractionRunner.cpp
   views/LayerRenderer.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
@@ -81,7 +81,7 @@ set(GUI_SOURCES
   dialogs/FeaturePairPlanner.cpp
   dialogs/VocabularyOverlapDialog.cpp
   dialogs/VocabularyOverlapDialog.ui
-  dialogs/SuperPointVisualizationDialog.cpp
+  dialogs/FeaturePointVisualizationDialog.cpp
   dialogs/FeatureMatchingDialog.cpp
   dialogs/ForwardIntersectionCheckDialog.cpp
   dialogs/ForwardIntersectionResultsDialog.cpp
@@ -158,8 +158,7 @@ set(GUI_HEADERS
   project/manager/ProjectSparseReconstructionManager.h
   project/manager/ProjectTerrainProductsManager.h
   project/manager/ProjectCameraSetupManager.h
-  tasks/SuperPointRunner.h
-  tasks/SuperGlueRunner.h
+  tasks/FeatureExtractionRunner.h
   tasks/SFMService.h
   views/LayerRenderer.h
   widgets/CanvasWidget.h
@@ -185,7 +184,7 @@ set(GUI_HEADERS
   dialogs/FeatureExtractionDialog.h
   dialogs/FeaturePairPlanner.h
   dialogs/VocabularyOverlapDialog.h
-  dialogs/SuperPointVisualizationDialog.h
+  dialogs/FeaturePointVisualizationDialog.h
   dialogs/FeatureMatchingDialog.h
   dialogs/ForwardIntersectionCheckDialog.h
   dialogs/ForwardIntersectionResultsDialog.h
@@ -240,7 +239,7 @@ set(GUI_PROJECT_SOURCES
 )
 
 set(GUI_TASK_SOURCES
-  tasks/SuperPointRunner.cpp
+  tasks/FeatureExtractionRunner.cpp
   ../core/pipeline/FeatureMatchRunner.cpp
   ../core/pipeline/SFMService.cpp
 )
@@ -258,7 +257,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/FeaturePairPlanner.cpp
   dialogs/VocabularyOverlapDialog.cpp
   dialogs/VocabularyOverlapDialog.ui
-  dialogs/SuperPointVisualizationDialog.cpp
+  dialogs/FeaturePointVisualizationDialog.cpp
   dialogs/FeatureMatchingDialog.cpp
   dialogs/ForwardIntersectionCheckDialog.cpp
   dialogs/ForwardIntersectionResultsDialog.cpp

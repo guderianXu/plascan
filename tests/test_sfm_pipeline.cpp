@@ -801,6 +801,56 @@ TEST_F(BAFilterTest, HuberDeltaSensitivity)
         << "Smaller Huber delta should provide comparable or better RMS with outliers";
 }
 
+TEST_F(BAFilterTest, ObservationWeightsReduceInfluenceOfLowConfidenceOutlier)
+{
+    const std::vector<Camera> cameras = {
+        makeCamera(-8.0, 0.0, 0.0),
+        makeCamera(8.0, 0.0, 0.0),
+        makeCamera(0.0, 8.0, 0.0),
+    };
+    const std::array<double, 3> truth{{0.5, 0.2, 42.0}};
+
+    double u0 = 0.0, v0 = 0.0;
+    double u1 = 0.0, v1 = 0.0;
+    double u2 = 0.0, v2 = 0.0;
+    ASSERT_TRUE(projectPoint(cameras[0], truth[0], truth[1], truth[2], u0, v0));
+    ASSERT_TRUE(projectPoint(cameras[1], truth[0], truth[1], truth[2], u1, v1));
+    ASSERT_TRUE(projectPoint(cameras[2], truth[0], truth[1], truth[2], u2, v2));
+
+    BATrack equalWeightTrack;
+    equalWeightTrack.initialPoint = {{truth[0] + 3.0, truth[1] - 2.0, truth[2] + 5.0}};
+    equalWeightTrack.observations.push_back({0, u0, v0, 1.0});
+    equalWeightTrack.observations.push_back({1, u1, v1, 1.0});
+    equalWeightTrack.observations.push_back({2, u2 + 80.0, v2 - 60.0, 1.0});
+
+    BATrack weightedTrack = equalWeightTrack;
+    weightedTrack.observations[2].weight = 0.01;
+
+    BAOptions options;
+    options.refineCameraPose = false;
+    options.enablePointFilter = false;
+    options.huberDelta = 1000.0;
+    options.maxIterations = 8;
+    options.maxPointIterations = 20;
+
+    const BAResult equalResult = BundleAdjust::optimizePoints(cameras, {equalWeightTrack}, options);
+    const BAResult weightedResult = BundleAdjust::optimizePoints(cameras, {weightedTrack}, options);
+    ASSERT_EQ(equalResult.points.size(), 1);
+    ASSERT_EQ(weightedResult.points.size(), 1);
+    ASSERT_TRUE(equalResult.points.front().valid);
+    ASSERT_TRUE(weightedResult.points.front().valid);
+
+    auto distanceToTruth = [&](const std::array<double, 3> &point) {
+        const double dx = point[0] - truth[0];
+        const double dy = point[1] - truth[1];
+        const double dz = point[2] - truth[2];
+        return std::sqrt(dx * dx + dy * dy + dz * dz);
+    };
+
+    EXPECT_LT(distanceToTruth(weightedResult.points.front().point),
+              distanceToTruth(equalResult.points.front().point));
+}
+
 // ═══════════════════════════════════════════════════════════════
 // 测试组 4：SFM 管线完整流程
 // ═══════════════════════════════════════════════════════════════

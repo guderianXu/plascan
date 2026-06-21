@@ -272,6 +272,7 @@ function Sync-QtRuntime
     )
 
     $qtPlatformsRoot = Join-Path $TripletRoot "Qt6\plugins\platforms"
+    $qtImageFormatsRoot = Join-Path $TripletRoot "Qt6\plugins\imageformats"
     if (-not (Test-Path -LiteralPath $qtPlatformsRoot))
     {
         return
@@ -292,6 +293,22 @@ function Sync-QtRuntime
         if (Test-Path -LiteralPath $minimalPlugin)
         {
             Copy-Item -LiteralPath $minimalPlugin -Destination $platformDir -Force
+        }
+
+        if (Test-Path -LiteralPath $qtImageFormatsRoot)
+        {
+            $imageFormatsDir = Join-Path $dir "imageformats"
+            New-Item -ItemType Directory -Force -Path $imageFormatsDir | Out-Null
+            Get-ChildItem -LiteralPath $qtImageFormatsRoot -Force -File -Filter "q*.dll" -ErrorAction SilentlyContinue |
+                ForEach-Object {
+                    Copy-Item -LiteralPath $_.FullName -Destination $imageFormatsDir -Force
+                }
+
+            $qjpegPlugin = Join-Path $qtImageFormatsRoot "qjpeg.dll"
+            if (Test-Path -LiteralPath $qjpegPlugin)
+            {
+                Copy-Item -LiteralPath $qjpegPlugin -Destination $imageFormatsDir -Force
+            }
         }
     }
 }

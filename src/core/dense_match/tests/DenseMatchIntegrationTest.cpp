@@ -5,6 +5,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <cstdio>
+#include <filesystem>
 
 using namespace xjw::dense_match;
 
@@ -92,10 +93,11 @@ TEST_F(DenseMatchIntegrationTest, SaveAndReloadDisparity)
     DenseMatchService service(cfg);
     auto result = service.process(left, right);
 
-    const char *tmpFile = "/tmp/test_disparity.tif";
-    ASSERT_TRUE(DenseMatchService::saveDisparity(result, tmpFile));
+    const std::filesystem::path tmpFile =
+        std::filesystem::temp_directory_path() / "plascan_test_disparity.tif";
+    ASSERT_TRUE(DenseMatchService::saveDisparity(result, tmpFile.string()));
 
-    cv::Mat reloaded = cv::imread(tmpFile, cv::IMREAD_UNCHANGED);
+    cv::Mat reloaded = cv::imread(tmpFile.string(), cv::IMREAD_UNCHANGED);
     ASSERT_FALSE(reloaded.empty());
 
     double maxDiff = 0;
@@ -109,5 +111,5 @@ TEST_F(DenseMatchIntegrationTest, SaveAndReloadDisparity)
     }
     EXPECT_LT(maxDiff, 0.5);
 
-    std::remove(tmpFile);
+    std::filesystem::remove(tmpFile);
 }

@@ -105,7 +105,7 @@ public:
     /** @brief 返回"添加文件夹"动作（批量导入目录内的所有图片）。 */
     QAction *addFolderAction() const;
 
-    /** @brief 返回"特征点查找"（SuperPoint 特征检测）动作。 */
+    /** @brief 返回"特征点查找"（通用特征检测）动作。 */
     QAction *detectFeaturesAction() const;
 
     /** @brief 返回"获取重叠对"动作。 */
@@ -114,7 +114,7 @@ public:
     /** @brief 返回"特征点可视化设置"对话框动作。 */
     QAction *featureVisualizationAction() const;
 
-    /** @brief 返回"创建连接点"（SuperGlue 特征匹配）动作。 */
+    /** @brief 返回"创建连接点"（通用特征匹配）动作。 */
     QAction *matchFeaturesAction() const;
 
     /** @brief 返回"查看匹配"（匹配结果可视化）动作。 */
@@ -221,10 +221,10 @@ private:
     // ---- 工作流程菜单动作 ----
     QAction *m_addPhotoAct{};            ///< 添加单张照片
     QAction *m_addFolderAct{};           ///< 批量添加文件夹中的图片
-    QAction *m_detectFeaturesAct{};      ///< 特征点检测（SuperPoint）
+    QAction *m_detectFeaturesAct{};      ///< 特征点检测
     QAction *m_vocabularyOverlapAct{};   ///< 基于特征词汇预获取重叠影像对
     QAction *m_featureVisualizationAct{};///< 特征点可视化设置对话框
-    QAction *m_matchFeaturesAct{};       ///< 特征点匹配（SuperGlue）生成连接点
+    QAction *m_matchFeaturesAct{};       ///< 特征点匹配生成连接点
     QAction *m_viewMatchesAct{};         ///< 查看匹配结果
     QAction *m_denseMatchAct{};          ///< 密集匹配
     QAction *m_threeDReconstructionAct{}; ///< 三维重建（一键完整建模）

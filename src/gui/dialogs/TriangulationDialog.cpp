@@ -7,6 +7,7 @@
 #include <QCheckBox>
 #include <QPushButton>
 #include <QLabel>
+#include <QFormLayout>
 #include <cmath>
 
 TriangulationDialog::TriangulationDialog(QWidget *parent)
@@ -32,6 +33,26 @@ TriangulationDialog::TriangulationDialog(QWidget *parent)
     m_suggestBtn           = form.m_suggestBtn;
     m_suggestLabel         = form.m_suggestLabel;
 
+    auto hideUnsupportedField = [](QWidget *widget)
+    {
+        if (!widget || !widget->parentWidget())
+        {
+            return;
+        }
+        if (auto *layout = qobject_cast<QFormLayout *>(widget->parentWidget()->layout()))
+        {
+            if (auto *label = layout->labelForField(widget))
+            {
+                label->hide();
+            }
+        }
+        widget->hide();
+    };
+    hideUnsupportedField(m_depthStabSpin);
+    hideUnsupportedField(m_filterModeCombo);
+    hideUnsupportedField(m_maxReprojErrSpin);
+    hideUnsupportedField(m_minAngleFiltSpin);
+
     connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &TriangulationDialog::onPresetChanged);
     connect(m_suggestBtn, &QPushButton::clicked,
@@ -42,8 +63,6 @@ TriangulationDialog::TriangulationDialog(QWidget *parent)
     connect(m_reprojThreshSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
     connect(m_minObsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
     connect(m_ignoreTwoViewCheck, &QCheckBox::toggled, this, changed);
-    connect(m_depthStabSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
-    connect(m_filterModeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
     connect(m_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
     connect(m_overwriteResultCheck, &QCheckBox::toggled, this, changed);
 
@@ -100,10 +119,6 @@ QJsonObject TriangulationDialog::collectSettings() const
     o["reprojThreshold"] = m_reprojThreshSpin->value();
     o["minObservations"] = m_minObsSpin->value();
     o["ignoreTwoView"]   = m_ignoreTwoViewCheck->isChecked();
-    o["depthStability"]  = m_depthStabSpin->value();
-    o["filterMode"]      = m_filterModeCombo->currentText();
-    o["maxReprojError"]  = m_maxReprojErrSpin->value();
-    o["minAngleFilter"]  = m_minAngleFiltSpin->value();
     o["minTrackLen"]     = m_minTrackLenSpin->value();
     o["threads"]         = m_threadsSpin->value();
     o["overwriteExistingResult"] = m_overwriteResultCheck->isChecked();
@@ -116,14 +131,6 @@ void TriangulationDialog::applySettings(const QJsonObject &s)
     if (s.contains("reprojThreshold")) m_reprojThreshSpin->setValue(s["reprojThreshold"].toDouble());
     if (s.contains("minObservations")) m_minObsSpin->setValue(s["minObservations"].toInt());
     if (s.contains("ignoreTwoView"))   m_ignoreTwoViewCheck->setChecked(s["ignoreTwoView"].toBool());
-    if (s.contains("depthStability"))  m_depthStabSpin->setValue(s["depthStability"].toDouble());
-    if (s.contains("filterMode"))
-    {
-        int i = m_filterModeCombo->findText(s["filterMode"].toString());
-        if (i >= 0) m_filterModeCombo->setCurrentIndex(i);
-    }
-    if (s.contains("maxReprojError"))  m_maxReprojErrSpin->setValue(s["maxReprojError"].toDouble());
-    if (s.contains("minAngleFilter"))  m_minAngleFiltSpin->setValue(s["minAngleFilter"].toDouble());
     if (s.contains("minTrackLen"))     m_minTrackLenSpin->setValue(s["minTrackLen"].toInt());
     if (s.contains("threads"))         m_threadsSpin->setValue(s["threads"].toInt());
     if (s.contains("overwriteExistingResult")) m_overwriteResultCheck->setChecked(s["overwriteExistingResult"].toBool());

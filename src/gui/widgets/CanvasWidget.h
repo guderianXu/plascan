@@ -71,7 +71,7 @@ signals:
     void activeImageChanged(const QString &imagePath);
 
 private:
-    // 启动异步加载 .sp (SuperPoint) 的通用方法（在主线程调度后台任务）
+    // 启动异步加载特征文件的通用方法（在主线程调度后台任务）
     void startSpLoadForImage(const QString &imagePath);
 
 protected:

@@ -95,6 +95,99 @@ TEST(SfmPairPlannerTest, KnownCameraCentersAddSpatialNeighborsOutsideSequenceWin
     EXPECT_FALSE(keys.contains(xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(4))));
 }
 
+TEST(SfmPairPlannerTest, PairPlanRecordsPerPairSourcesAndPriority)
+{
+    xjw::gui::SfmPairPlannerOptions options;
+    options.autoRestrictKnownCameraPairs = true;
+    options.knownCameraPairWindow = 3;
+    options.knownCameraAllPairsMaxImages = 20;
+    options.knownCameraSpatialNeighborCount = 2;
+
+    std::vector<std::array<double, 3>> centers;
+    centers.reserve(25);
+    for (int i = 0; i < 25; ++i)
+    {
+        centers.push_back({1000.0 * double(i), 0.0, 100.0});
+    }
+    centers[20] = {5.0, 0.0, 100.0};
+    options.knownCameraCenters = centers;
+
+    const xjw::gui::SfmPairPlan plan =
+        xjw::gui::planSfmMatchPairs(imagePaths(25), cameraPaths(25), options);
+
+    ASSERT_EQ(plan.pairCandidates.size(), plan.allowedPairKeys.size());
+
+    const QString sequenceKey = xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(3));
+    const QString spatialKey = xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(20));
+    const auto sequenceIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
+                                         [&](const xjw::gui::SfmPairCandidate &candidate) {
+                                             return candidate.pairKey == sequenceKey;
+                                         });
+    const auto spatialIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
+                                        [&](const xjw::gui::SfmPairCandidate &candidate) {
+                                            return candidate.pairKey == spatialKey;
+                                        });
+    ASSERT_NE(sequenceIt, plan.pairCandidates.end());
+    ASSERT_NE(spatialIt, plan.pairCandidates.end());
+
+    EXPECT_TRUE(sequenceIt->sourceTypes.contains(QStringLiteral("sequence_window")));
+    EXPECT_EQ(sequenceIt->sequenceDistance, 3);
+    EXPECT_GT(sequenceIt->sequenceScore, 0.0);
+    EXPECT_GT(sequenceIt->priorityScore, 0.0);
+
+    EXPECT_TRUE(spatialIt->sourceTypes.contains(QStringLiteral("known_camera_spatial_neighbors")));
+    EXPECT_GT(spatialIt->spatialScore, 0.0);
+    EXPECT_GE(spatialIt->centerDistance, 0.0);
+    EXPECT_GT(spatialIt->priorityScore, 0.0);
+}
+
+TEST(SfmPairPlannerTest, PairPlanUsesViewingDirectionAndBaselineScoresForSpatialPriority)
+{
+    xjw::gui::SfmPairPlannerOptions options;
+    options.autoRestrictKnownCameraPairs = true;
+    options.knownCameraPairWindow = 3;
+    options.knownCameraAllPairsMaxImages = 2;
+    options.knownCameraSpatialNeighborCount = 3;
+
+    std::vector<std::array<double, 3>> centers;
+    centers.reserve(8);
+    for (int i = 0; i < 8; ++i)
+    {
+        centers.push_back({100.0 * double(i), 0.0, 100.0});
+    }
+    centers[2] = {1.0, 0.0, 100.0};
+    centers[3] = {2.0, 0.0, 100.0};
+    options.knownCameraCenters = centers;
+
+    std::vector<std::array<double, 3>> viewDirs(8, {0.0, 0.0, -1.0});
+    viewDirs[2] = {0.0, 0.0, 1.0};   // close, but opposite looking direction
+    viewDirs[3] = {0.0, 0.0, -1.0};  // farther, but consistent nadir direction
+    options.knownCameraViewingDirections = viewDirs;
+
+    const xjw::gui::SfmPairPlan plan =
+        xjw::gui::planSfmMatchPairs(imagePaths(8), cameraPaths(8), options);
+
+    const QString oppositeKey = xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(2));
+    const QString alignedKey = xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(3));
+    const auto oppositeIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
+                                         [&](const xjw::gui::SfmPairCandidate &candidate) {
+                                             return candidate.pairKey == oppositeKey;
+                                         });
+    const auto alignedIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
+                                        [&](const xjw::gui::SfmPairCandidate &candidate) {
+                                            return candidate.pairKey == alignedKey;
+                                        });
+
+    ASSERT_NE(oppositeIt, plan.pairCandidates.end());
+    ASSERT_NE(alignedIt, plan.pairCandidates.end());
+
+    EXPECT_GT(alignedIt->orientationScore, oppositeIt->orientationScore);
+    EXPECT_LT(alignedIt->orientationAngleDeg, oppositeIt->orientationAngleDeg);
+    EXPECT_GT(alignedIt->baselineScore, 0.0);
+    EXPECT_GT(oppositeIt->baselineScore, 0.0);
+    EXPECT_GT(alignedIt->priorityScore, oppositeIt->priorityScore);
+}
+
 TEST(SfmPairPlannerTest, KnownCameraCentersWithoutCameraFilesStillRestrictLargeProject)
 {
     xjw::gui::SfmPairPlannerOptions options;
@@ -289,4 +382,42 @@ TEST(SfmMatchDiagnosticsTest, SeparatesCandidateGraphFromActualMatchGraph)
     ASSERT_GE(diagnostics.actualMatchGraph.componentSizes.size(), 2);
     EXPECT_EQ(diagnostics.actualMatchGraph.componentSizes.at(0), 4);
     EXPECT_EQ(diagnostics.actualMatchGraph.componentSizes.at(1), 4);
+}
+
+TEST(SfmGuidedMatchPlannerTest, PrioritizesRegisteredWeakOverlapPairsForEpipolarRematching)
+{
+    const QVector<int> imageIds = {0, 1, 2, 3, 4};
+    const QVector<xjw::gui::SfmMatchDiagnosticPair> pairs = {
+        {0, 1, 240, true, false},
+        {1, 2, 18, true, false},
+        {2, 3, 0, true, true},
+        {3, 4, 0, false, false},
+        {0, 4, 160, true, false},
+    };
+
+    xjw::gui::SfmGuidedMatchPlannerOptions options;
+    options.minSeedMatches = 80;
+    options.maxHealthyMatches = 60;
+    options.maxCandidates = 8;
+    options.registeredImageIds = {0, 1, 2, 3};
+
+    const xjw::gui::SfmGuidedMatchPlan plan =
+        xjw::gui::planSfmGuidedMatching(imageIds, pairs, options);
+
+    ASSERT_EQ(plan.candidates.size(), 2);
+    EXPECT_EQ(plan.seedPairCount, 2);
+    EXPECT_EQ(plan.skippedUnregisteredPairs, 1);
+
+    const xjw::gui::SfmGuidedMatchCandidate &first = plan.candidates.front();
+    EXPECT_EQ(first.imageA, 2);
+    EXPECT_EQ(first.imageB, 3);
+    EXPECT_EQ(first.reason, QStringLiteral("skipped_no_match_cache"));
+    EXPECT_TRUE(first.canUseEpipolarBand);
+    EXPECT_GT(first.priorityScore, plan.candidates.back().priorityScore);
+
+    const xjw::gui::SfmGuidedMatchCandidate &second = plan.candidates.back();
+    EXPECT_EQ(second.imageA, 1);
+    EXPECT_EQ(second.imageB, 2);
+    EXPECT_EQ(second.reason, QStringLiteral("weak_geometric_inliers"));
+    EXPECT_TRUE(second.canUseEpipolarBand);
 }

@@ -207,12 +207,16 @@ core/
 │
 └── pipeline/                   # 核心流水线桥接 (GUI 可调用)
     ├── FeatureMatchRunner.h/cpp  # 特征匹配异步执行器
-    ├── SfmPairPlanner.h        # 已知相机序列的 SfM 匹配配对规划
+    ├── SfmPairPlanner.h        # SfM 匹配候选规划：足迹重叠/空间邻域/序列窗口/手工配对 + priority
     └── SFMService.h/cpp         # SfM 异步服务
 ```
 
 `sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
 不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
+
+`pipeline/SFMService.cpp` 在匹配阶段写出 `assets/reports/matching_quality_report.json` 和
+`assets/reports/matching_quality_report.csv`。报告记录候选图/实际匹配图连通性、pair 来源统计、优先级、pending/failed/skipped
+状态和失败原因，作为后续 guided rematching、track 优化和 Metashape/ASP/Colmap 对比的基线输入。
 
 ---
 
@@ -261,7 +265,7 @@ gui/
 │   ├── ModelExportDialog.h/cpp              # 模型导出
 │   ├── OverlapAnalysisDialog.h/cpp          # 重叠度分析
 │   ├── VocabularyOverlapDialog.h/cpp/ui     # 基于特征词汇获取重叠对
-│   ├── SuperPointVisualizationDialog.h/cpp  # 特征点可视化
+│   ├── FeaturePointVisualizationDialog.h/cpp  # 特征点可视化
 │   ├── SimplePointCloudDialog.h/cpp         # 简单点云查看
 │   ├── StereoProcessingDialog.h/cpp         # 立体重建
 │   ├── MVSProgressDialog.h/cpp              # MVS 进度
@@ -319,8 +323,8 @@ gui/
 │       └── ProjectWorkflowReports.h/cpp             # 工作流报告
 │
 ├── tasks/                      # 异步任务执行器
-│   ├── SuperPointRunner.h/cpp  # SuperPoint 异步执行
-│   ├── SuperGlueRunner.h/cpp   # SuperGlue 异步执行
+│   ├── FeatureExtractionRunner.h/cpp  # 特征提取异步执行
+│   ├── ../core/pipeline/FeatureMatchRunner.h/cpp  # 特征匹配异步执行
 │   └── SFMService.h/cpp        # SfM 异步服务
 │
 ├── views/

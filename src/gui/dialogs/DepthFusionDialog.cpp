@@ -26,6 +26,12 @@ DepthFusionDialog::DepthFusionDialog(QWidget *parent)
     m_threadsSpin        = form.m_threadsSpin;
     m_cudaCheck          = form.m_cudaCheck;
     m_infoLabel          = form.m_infoLabel;
+    if (m_cudaCheck)
+    {
+        m_cudaCheck->setChecked(false);
+        m_cudaCheck->setEnabled(false);
+        m_cudaCheck->hide();
+    }
 
     auto changed = [this]() { emitSettingsNow(); };
     connect(m_fusionMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
@@ -37,7 +43,6 @@ DepthFusionDialog::DepthFusionDialog(QWidget *parent)
     connect(m_maxReprojSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
     connect(m_colorCheck, &QCheckBox::toggled, this, changed);
     connect(m_normalCheck, &QCheckBox::toggled, this, changed);
-    connect(m_cudaCheck, &QCheckBox::toggled, this, changed);
     connect(m_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
 
     connect(form.m_runBtn, &QPushButton::clicked, this, &DepthFusionDialog::onRun);
@@ -56,7 +61,6 @@ QJsonObject DepthFusionDialog::collectSettings() const
     o["maxReprojError"]     = m_maxReprojSpin->value();
     o["keepColor"]          = m_colorCheck->isChecked();
     o["keepNormals"]        = m_normalCheck->isChecked();
-    o["cuda"]               = m_cudaCheck->isChecked();
     o["threads"]            = m_threadsSpin->value();
     return o;
 }
@@ -76,7 +80,6 @@ void DepthFusionDialog::applySettings(const QJsonObject &s)
     if (s.contains("maxReprojError"))     m_maxReprojSpin->setValue(s["maxReprojError"].toDouble());
     if (s.contains("keepColor"))          m_colorCheck->setChecked(s["keepColor"].toBool());
     if (s.contains("keepNormals"))        m_normalCheck->setChecked(s["keepNormals"].toBool());
-    if (s.contains("cuda"))               m_cudaCheck->setChecked(s["cuda"].toBool());
     if (s.contains("threads"))            m_threadsSpin->setValue(s["threads"].toInt());
 }
 

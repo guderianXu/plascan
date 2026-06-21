@@ -31,6 +31,7 @@ struct BAObservation
     int cameraIndex = -1; ///< 观测所属相机的索引（对应 cameras 向量下标）
     double u = 0.0;       ///< 相机像平面上的 u（列）坐标（像素）
     double v = 0.0;       ///< 相机像平面上的 v（行）坐标（像素）
+    double weight = 1.0;  ///< 观测置信权重，通常来自特征尺度、匹配分数或 track confidence
 };
 
 /**

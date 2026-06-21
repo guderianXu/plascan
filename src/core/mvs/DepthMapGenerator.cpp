@@ -80,6 +80,19 @@ struct SystemMemorySnapshot
     bool valid = false;
 };
 
+struct SourceQualitySummary
+{
+    int sourceViewCount = 0;
+    double meanQuality = 0.0;
+    double minQuality = 0.0;
+};
+
+struct DepthConfidenceSummary
+{
+    int validPixelCount = 0;
+    double meanConfidence = 0.0;
+};
+
 double bytesToGiB(uint64_t bytes)
 {
     return static_cast<double>(bytes) / static_cast<double>(kBytesPerGiB);
@@ -134,6 +147,66 @@ uint64_t depthFramePixelStorageBytes(int width, int height)
 
     const uint64_t pixels = static_cast<uint64_t>(width) * static_cast<uint64_t>(height);
     return pixels * sizeof(float) * 2ull; // depth + confidence
+}
+
+SourceQualitySummary summarizeSourceQuality(const QJsonArray &sourcePlan,
+                                             int fallbackSourceViewCount)
+{
+    SourceQualitySummary summary;
+    summary.sourceViewCount = std::max(0, fallbackSourceViewCount);
+
+    double qualitySum = 0.0;
+    double minQuality = std::numeric_limits<double>::max();
+    int qualityCount = 0;
+    for (const QJsonValue &value : sourcePlan)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+
+        const QJsonValue qualityValue = value.toObject().value(QStringLiteral("source_quality_score"));
+        if (!qualityValue.isDouble())
+        {
+            continue;
+        }
+
+        const double quality = std::clamp(qualityValue.toDouble(), 0.0, 1.0);
+        qualitySum += quality;
+        minQuality = std::min(minQuality, quality);
+        ++qualityCount;
+    }
+
+    if (qualityCount > 0)
+    {
+        summary.meanQuality = qualitySum / static_cast<double>(qualityCount);
+        summary.minQuality = minQuality;
+    }
+    return summary;
+}
+
+DepthConfidenceSummary summarizeDepthConfidence(const cv::Mat &depthMap,
+                                                const cv::Mat *confidenceMap)
+{
+    DepthConfidenceSummary summary;
+    if (depthMap.empty() || depthMap.type() != CV_32F)
+    {
+        return summary;
+    }
+
+    const cv::Mat validMask = depthMap > 0.0f;
+    summary.validPixelCount = cv::countNonZero(validMask);
+    if (summary.validPixelCount <= 0 ||
+        !confidenceMap ||
+        confidenceMap->empty() ||
+        confidenceMap->size() != depthMap.size() ||
+        confidenceMap->type() != CV_32F)
+    {
+        return summary;
+    }
+
+    summary.meanConfidence = std::clamp(cv::mean(*confidenceMap, validMask)[0], 0.0, 1.0);
+    return summary;
 }
 
 uint64_t estimateDepthFrameCacheBytes(const std::vector<CameraView> &views)
@@ -3531,6 +3604,14 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             }
         }
 
+        const SourceQualitySummary sourceQualitySummary =
+            summarizeSourceQuality(sourcePlan, sourceImageList.size());
+        const cv::Mat *confidenceMap = (result.confidence && !result.confidence->empty())
+            ? result.confidence.data()
+            : nullptr;
+        const DepthConfidenceSummary depthConfidenceSummary =
+            summarizeDepthConfidence(*result.depthMap, confidenceMap);
+
         QJsonObject artifact;
         artifact[QStringLiteral("ref_index")] = frameIndex;
         artifact[QStringLiteral("depth_png")] = QString::fromStdString(pngPath);
@@ -3542,6 +3623,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("source_images")] = sourceImages;
         artifact[QStringLiteral("source_indices")] = sourceIndices;
         artifact[QStringLiteral("source_plan")] = sourcePlan;
+        artifact[QStringLiteral("source_view_count")] = sourceQualitySummary.sourceViewCount;
+        artifact[QStringLiteral("source_quality_mean")] = sourceQualitySummary.meanQuality;
+        artifact[QStringLiteral("source_quality_min")] = sourceQualitySummary.minQuality;
+        artifact[QStringLiteral("depth_confidence_mean")] = depthConfidenceSummary.meanConfidence;
+        artifact[QStringLiteral("valid_pixel_count")] = depthConfidenceSummary.validPixelCount;
         artifact[QStringLiteral("status")] = QStringLiteral("completed");
         artifact[QStringLiteral("stage")] = stageLabel;
         artifact[QStringLiteral("device")] = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
@@ -3557,6 +3643,11 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.refImage = QString::fromStdString(m_views[frameIndex].imagePath);
         record.sourceImages = sourceImageList;
         record.sourcePlan = sourcePlan;
+        record.sourceViewCount = sourceQualitySummary.sourceViewCount;
+        record.meanSourceQualityScore = sourceQualitySummary.meanQuality;
+        record.minSourceQualityScore = sourceQualitySummary.minQuality;
+        record.meanDepthConfidence = depthConfidenceSummary.meanConfidence;
+        record.validPixelCount = depthConfidenceSummary.validPixelCount;
         record.status = QStringLiteral("completed");
         record.device = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
         record.depthPng = QString::fromStdString(pngPath);

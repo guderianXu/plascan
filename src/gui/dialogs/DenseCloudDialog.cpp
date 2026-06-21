@@ -17,6 +17,7 @@
 #include <QProgressBar>
 #include <QPushButton>
 #include <QSpinBox>
+#include <QTabWidget>
 #include <QTextEdit>
 
 DenseCloudDialog::DenseCloudDialog(ProjectManager *projectManager, QWidget *parent)
@@ -76,6 +77,16 @@ void DenseCloudDialog::setupUi()
 
     m_meshMethodCombo->setItemData(0, QStringLiteral("voxel_poisson"));
     m_meshMethodCombo->setItemData(1, QStringLiteral("ball_pivoting"));
+
+    if (form.denseTabs && form.sgbmTab)
+    {
+        const int sgbmTabIndex = form.denseTabs->indexOf(form.sgbmTab);
+        if (sgbmTabIndex >= 0)
+        {
+            form.denseTabs->removeTab(sgbmTabIndex);
+        }
+        form.sgbmTab->setVisible(false);
+    }
 
     // 填充 AT 结果列表
     if (m_projectManager) 
@@ -223,15 +234,27 @@ QJsonObject DenseCloudDialog::collectSettings() const
     s["output_dir"]        = m_outputDirEdit->text();
     s["preset"]            = m_presetCombo->currentData().toString();
 
-    // SGBM
-    s["num_disparities"]   = m_numDispSpin->value();
-    s["block_size"]        = m_blockSizeSpin->value();
-    s["uniqueness_ratio"]  = m_uniquenessSpin->value();
-    s["speckle_window_size"] = m_speckleSizeSpin->value();
-    s["use_full_dp"]       = m_fullDpCheck->isChecked();
-    s["use_wls_filter"]    = m_wlsFilterCheck->isChecked();
-    s["min_depth"]         = m_minDepthSpin->value();
-    s["max_depth"]         = m_maxDepthSpin->value();
+    const QString preset = s["preset"].toString(QStringLiteral("standard"));
+    if (preset == QStringLiteral("fast"))
+    {
+        s["resScale"] = 0.25;
+        s["iterations"] = 4;
+    }
+    else if (preset == QStringLiteral("quality"))
+    {
+        s["resScale"] = 0.5;
+        s["iterations"] = 10;
+    }
+    else
+    {
+        s["resScale"] = 0.5;
+        s["iterations"] = 6;
+    }
+    s["patchSize"] = 11;
+    s["minViews"] = m_minConsistentViewsSpin->value();
+    s["confidence"] = m_minConfSpin->value();
+    s["minConfidence"] = m_minConfSpin->value();
+    s["cuda"] = true;
 
     // Cloud
     s["min_confidence"]    = m_minConfSpin->value();

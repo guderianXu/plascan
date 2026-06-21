@@ -14,6 +14,10 @@ DisparityResult DisparityValidator::validate(const cv::Mat &disparity,
     DisparityResult result;
     result.disparity = disparity.clone();
     result.confidence = confidence.clone();
+    if (result.disparity.empty())
+    {
+        return result;
+    }
 
     if (m_cfg.medianFilterSize > 0)
         result.disparity = medianFilter(result.disparity, m_cfg.medianFilterSize);

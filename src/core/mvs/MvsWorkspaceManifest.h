@@ -17,6 +17,11 @@ struct MvsDepthFrameRecord
     QString refImage;
     QStringList sourceImages;
     QJsonArray sourcePlan;
+    int sourceViewCount = 0;
+    double meanSourceQualityScore = 0.0;
+    double minSourceQualityScore = 0.0;
+    double meanDepthConfidence = 0.0;
+    int validPixelCount = 0;
     QString status;
     QString device;
     QString depthPng;

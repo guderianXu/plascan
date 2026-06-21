@@ -91,6 +91,24 @@ float computeScore(const MvsSourcePlanEntry &entry,
         - sequencePenalty;
 }
 
+float computeSourceQualityScore(const MvsSourcePlanEntry &entry,
+                                const MvsSourcePlannerOptions &options)
+{
+    const int evidence = std::max(entry.sharedTracks, entry.geometricInliers);
+    const float evidenceScore = evidence > 0
+        ? 1.0f - std::exp(-static_cast<float>(evidence) / 80.0f)
+        : (entry.knownOverlap ? 0.20f : 0.0f);
+    const float angleScore = angleWeight(entry, options);
+    const float overlapScore = entry.knownOverlap ? 1.0f : 0.0f;
+    return std::clamp(0.45f * evidenceScore +
+                          0.20f * entry.coverageScore +
+                          0.15f * entry.baselineScore +
+                          0.15f * angleScore +
+                          0.05f * overlapScore,
+                      0.0f,
+                      1.0f);
+}
+
 bool sourceEntryLess(const MvsSourcePlanEntry &lhs,
                      const MvsSourcePlanEntry &rhs)
 {
@@ -141,6 +159,7 @@ std::vector<MvsSourcePlanEntry> sequenceFallbackEntries(const MvsSourcePlannerOp
             entry.sequenceDistance = delta;
             entry.sequenceFallback = true;
             entry.score = -static_cast<float>(delta);
+            entry.sourceQualityScore = std::clamp(0.10f / static_cast<float>(delta), 0.0f, 1.0f);
             entries.push_back(entry);
             if (static_cast<int>(entries.size()) >= options.maxSources)
             {
@@ -185,6 +204,7 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
         }
 
         entry.score = computeScore(entry, options);
+        entry.sourceQualityScore = computeSourceQualityScore(entry, options);
         if (!std::isfinite(entry.score) || entry.score <= 0.0f)
         {
             plan.rejected.push_back({entry, MvsSourceRejectReason::NoEvidence});
@@ -242,6 +262,7 @@ QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)
     object.insert(QStringLiteral("known_overlap"), entry.knownOverlap);
     object.insert(QStringLiteral("sequence_fallback"), entry.sequenceFallback);
     object.insert(QStringLiteral("score"), entry.score);
+    object.insert(QStringLiteral("source_quality_score"), entry.sourceQualityScore);
     return object;
 }
 

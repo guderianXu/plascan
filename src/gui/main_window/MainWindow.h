@@ -118,7 +118,7 @@ public:
     TaskStatusWidget* m_obsNetTaskStatus{};              // 观测网络状态栏任务状态
     QDockWidget*      m_logDock{};                      // 底部日志 Dock 窗口容器
     QToolButton*      m_logBtn{};                       // 标题栏中的「日志」可选中切换按钮
-    DialogSettingStore*   m_sgSetting{};                // SuperGlue 对话框记忆化设置
+    DialogSettingStore*   m_featureMatchingSetting{};   // 特征匹配对话框记忆化设置
     DialogSettingStore*   m_uiSetting{};                // 主窗口 UI 状态记忆化设置
     
     QString           m_lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
@@ -171,11 +171,11 @@ signals:
     void overlapCancelRequested();
 
 public slots:
-    // SuperPoint 状态栏进度（由 MenuWorkflowController 调用）
+    // 特征提取状态栏进度（由 MenuWorkflowController 调用）
     void showSpProgress(int total);
     void updateSpProgress(int done);
     void hideSpProgress(bool ok);
-    // SuperGlue 状态栏进度（内部使用，也可外部调用）
+    // 特征匹配状态栏进度（内部使用，也可外部调用）
     void showSgProgress(int total);
     void updateSgProgress(int done);
     void hideSgProgress(bool ok);

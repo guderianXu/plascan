@@ -9,7 +9,7 @@
 #include "ProjectSupportUtils.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectCameraImportService.h"
-#include "SuperPointRunner.h"
+#include "FeatureExtractionRunner.h"
 #include "FeatureMatchRunner.h"
 #include "Logger.h"
 #include "Camera.h"
@@ -51,6 +51,42 @@ struct DirectDepthDemInput
     int availableFrameCount = 0;
     int loadedFrameCount = 0;
 };
+
+QString canonicalFeatureAlgorithmFromMatcher(const QString &matcher)
+{
+    const QString lower = matcher.toLower();
+    if (lower.contains(QStringLiteral("aliked")))
+    {
+        return QStringLiteral("aliked");
+    }
+    if (lower.contains(QStringLiteral("disk")))
+    {
+        return QStringLiteral("disk");
+    }
+    if (lower.contains(QStringLiteral("sift")))
+    {
+        return QStringLiteral("sift");
+    }
+    if (lower.contains(QStringLiteral("orb")))
+    {
+        return QStringLiteral("orb");
+    }
+    return QStringLiteral("superpoint");
+}
+
+QString canonicalMatchAlgorithmFromMatcher(const QString &matcher)
+{
+    const QString lower = matcher.toLower();
+    if (lower.contains(QStringLiteral("superglue")))
+    {
+        return QStringLiteral("superglue");
+    }
+    if (lower.contains(QStringLiteral("loftr")))
+    {
+        return QStringLiteral("loftr");
+    }
+    return QStringLiteral("lightglue");
+}
 
 bool cameraForTerrainImagePath(const QMap<QString, xjw::Camera> &camMap,
                                const QString &imagePath,
@@ -401,20 +437,11 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
     for (int i = 0; i < camFilesArr.size(); ++i)
         ctx.cameraPaths << camFilesArr.at(i).toString();
     ctx.outputDir = outputDir;
-    ctx.featureAlgorithm = pipelineSettings.value(QStringLiteral("matcher")).toString(QStringLiteral("disk_lightglue"));
-    ctx.matchAlgorithm = QStringLiteral("lightglue");
+    const QString matcher = pipelineSettings.value(QStringLiteral("matcher")).toString(QStringLiteral("disk_lightglue"));
+    ctx.featureAlgorithm = canonicalFeatureAlgorithmFromMatcher(matcher);
+    ctx.matchAlgorithm = canonicalMatchAlgorithmFromMatcher(matcher);
     ctx.demResolution = pipelineSettings.value(QStringLiteral("dem_resolution")).toDouble(0.0);
     ctx.demType = pipelineSettings.value(QStringLiteral("dem_type")).toString(QStringLiteral("float32"));
-
-    // 从 matcher 字段解析特征算法
-    if (ctx.featureAlgorithm.contains(QStringLiteral("disk"), Qt::CaseInsensitive))
-    {
-        ctx.featureAlgorithm = QStringLiteral("disk");
-    }
-    else
-    {
-        ctx.featureAlgorithm = QStringLiteral("superpoint");
-    }
 
     // 启动后台流水线（步骤1-2同步，步骤3-5通过信号链在主线程驱动）
     // demPipelineFinished 由信号链末端（DEM完成或失败）发出，不在此处发出
@@ -646,7 +673,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     LOG_INFO(QStringLiteral("[DEM流水线] 特征算法: %1 | 匹配算法: %2").arg(ctx.featureAlgorithm, ctx.matchAlgorithm));
     LOG_INFO(QStringLiteral("[DEM流水线] 输出目录: %1").arg(ctx.outputDir.isEmpty() ? QStringLiteral("(自动)") : ctx.outputDir));
 
-    // 步骤 1: 特征提取（在后台线程同步执行，SuperPointRunner::run 是纯同步的）
+    // 步骤 1: 特征提取（在后台线程同步执行，FeatureExtractionRunner::run 是纯同步的）
     LOG_INFO(QStringLiteral("[DEM流水线] ── 步骤 1/5: 特征提取 (%1) ──").arg(ctx.featureAlgorithm));
     emit demPipelineProgressChanged(QStringLiteral("特征提取"), 0);
 
@@ -655,13 +682,14 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
 
     QJsonObject featureConfig;
     featureConfig[QStringLiteral("feature_algorithm")] = ctx.featureAlgorithm;
-    featureConfig[QStringLiteral("device")] = QStringLiteral("cuda");
-    featureConfig[QStringLiteral("max_keypoints")] = 2048;
+    featureConfig[QStringLiteral("device")] = QStringLiteral("CUDA");
+    featureConfig[QStringLiteral("use_cuda")] = true;
+    featureConfig[QStringLiteral("max_num_keypoints")] = 2048;
 
-    const bool featureOk = SuperPointRunner::run(featureConfig, ctx.images, m_owner, cancelFlag, progressCount);
+    const bool featureOk = FeatureExtractionRunner::run(featureConfig, ctx.images, m_owner, cancelFlag, progressCount);
     if (!featureOk)
     {
-        LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 特征提取失败（SuperPointRunner::run 返回 false）"));
+        LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 特征提取失败（FeatureExtractionRunner::run 返回 false）"));
         QMetaObject::invokeMethod(m_parentWidget, [this]() {
             QMessageBox::warning(m_parentWidget, QStringLiteral("创建相对 DEM"), QStringLiteral("特征提取失败，流水线中止。"));
         }, Qt::QueuedConnection);
@@ -682,8 +710,8 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
 
     QJsonObject matchConfig;
     matchConfig[QStringLiteral("match_algorithm")] = ctx.matchAlgorithm;
-    matchConfig[QStringLiteral("device")] = QStringLiteral("cuda");
-    matchConfig[QStringLiteral("outlier_filter")] = QStringLiteral("fundamental_ransac");
+    matchConfig[QStringLiteral("use_cuda")] = true;
+    matchConfig[QStringLiteral("outlier_method")] = QStringLiteral("fundamental_ransac");
 
     progressCount.store(0);
     FeatureMatchRunner::run(matchConfig, imagePairs, m_owner, cancelFlag, progressCount);

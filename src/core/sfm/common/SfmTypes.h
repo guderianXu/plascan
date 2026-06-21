@@ -110,6 +110,7 @@ struct TrackElement {
  */
 struct Track {
     std::vector<TrackElement> elements;  ///< 观测元素列表
+    double confidence = 1.0;             ///< 由匹配边分数聚合得到的轨迹置信度
 
     /// 轨迹长度（观测数）
     std::size_t length() const { return elements.size(); }

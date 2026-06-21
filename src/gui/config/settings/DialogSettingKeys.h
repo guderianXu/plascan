@@ -4,8 +4,8 @@
 
 namespace DialogSettingKeys {
 
-inline const QString SuperPoint = QStringLiteral("superpoint");
-inline const QString SuperPointVisualization = QStringLiteral("superpoint_visualization");
+inline const QString FeatureExtraction = QStringLiteral("feature_extraction");
+inline const QString FeaturePointVisualization = QStringLiteral("feature_point_visualization");
 inline const QString BundleAdjust = QStringLiteral("bundle_adjust");
 inline const QString AerialTriangulation = QStringLiteral("aerial_triangulation");
 inline const QString ThreeDReconstruction = QStringLiteral("three_d_reconstruction");
@@ -13,7 +13,7 @@ inline const QString CreateDem = QStringLiteral("create_dem");
 inline const QString MapProject = QStringLiteral("mapproject");
 inline const QString DenseCloud = QStringLiteral("dense_cloud");
 inline const QString MatchViewer = QStringLiteral("match_viewer");
-inline const QString SuperGlue = QStringLiteral("superglue");
+inline const QString FeatureMatching = QStringLiteral("feature_matching");
 inline const QString VocabularyOverlap = QStringLiteral("vocabulary_overlap");
 inline const QString MainWindowUi = QStringLiteral("main_window_ui");
 

@@ -314,6 +314,42 @@ QSet<int> collectExistingDepthFrameIndices(const QString &outputDir, int expecte
     return indices;
 }
 
+QString validMaskStoragePath(const QString &pngPath)
+{
+    const QFileInfo info(pngPath);
+    return QDir(info.absolutePath()).filePath(QStringLiteral("%1_mask.png").arg(info.completeBaseName()));
+}
+
+QJsonObject existingDepthRecordForPath(const QJsonObject &meta, const QString &pngPath)
+{
+    const QString target = QDir::cleanPath(pngPath);
+    const QJsonArray records = meta.value(QStringLiteral("depth_map_results")).toArray();
+    for (const QJsonValue &value : records)
+    {
+        const QJsonObject record = value.toObject();
+        const QString existing = QDir::cleanPath(record.value(QStringLiteral("depth_png")).toString());
+        if (!existing.isEmpty() && existing == target)
+        {
+            return record;
+        }
+    }
+    return {};
+}
+
+void setDepthRecordDefault(QJsonObject *record, const QString &key, const QJsonValue &value)
+{
+    if (!record)
+    {
+        return;
+    }
+
+    const QJsonValue current = record->value(key);
+    if (current.isUndefined() || current.isNull() || (current.isString() && current.toString().isEmpty()))
+    {
+        (*record)[key] = value;
+    }
+}
+
 ExistingDepthAction askExistingDepthAction(QWidget *parent,
                                            int existingCount,
                                            int totalCount,
@@ -354,9 +390,11 @@ void removeDepthArtifactsForIndices(const QString &outputDir, const QSet<int> &i
         const QString pngPath = QDir(outputDir).filePath(QStringLiteral("depth_%1.png").arg(index));
         const QString rawPath = rawDepthStoragePath(pngPath);
         const QString confPath = rawConfidenceStoragePath(pngPath);
+        const QString maskPath = validMaskStoragePath(pngPath);
         QFile::remove(pngPath);
         QFile::remove(rawPath);
         QFile::remove(confPath);
+        QFile::remove(maskPath);
     }
 }
 
@@ -387,16 +425,26 @@ void upsertExistingDepthRecords(ProjectData *projectData,
             continue;
         }
 
-        QJsonObject depthResult = makeDepthResultRecord(utcNowIso(),
-                                                        pngPath,
-                                                        0,
-                                                        0,
-                                                        sparseXyz,
-                                                        selectedImages.at(index));
-        depthResult[QStringLiteral("raw_depth_path")] = rawDepthStoragePath(pngPath);
-        depthResult[QStringLiteral("raw_confidence_path")] = rawConfidenceStoragePath(pngPath);
-        depthResult[QStringLiteral("mvs_output_dir")] = outputDir;
-        depthResult[QStringLiteral("status")] = QStringLiteral("completed");
+        QJsonObject depthResult = existingDepthRecordForPath(meta, pngPath);
+        if (depthResult.isEmpty())
+        {
+            depthResult = makeDepthResultRecord(utcNowIso(),
+                                                pngPath,
+                                                0,
+                                                0,
+                                                sparseXyz,
+                                                selectedImages.at(index));
+        }
+        setDepthRecordDefault(&depthResult, QStringLiteral("created_at"), utcNowIso());
+        depthResult[QStringLiteral("depth_png")] = pngPath;
+        setDepthRecordDefault(&depthResult, QStringLiteral("result_type"), QStringLiteral("mvs_depth"));
+        setDepthRecordDefault(&depthResult, QStringLiteral("source_sparse_cloud"), sparseXyz);
+        setDepthRecordDefault(&depthResult, QStringLiteral("ref_image"), selectedImages.at(index));
+        setDepthRecordDefault(&depthResult, QStringLiteral("raw_depth_path"), rawDepthStoragePath(pngPath));
+        setDepthRecordDefault(&depthResult, QStringLiteral("raw_confidence_path"), rawConfidenceStoragePath(pngPath));
+        setDepthRecordDefault(&depthResult, QStringLiteral("valid_mask_path"), validMaskStoragePath(pngPath));
+        setDepthRecordDefault(&depthResult, QStringLiteral("mvs_output_dir"), outputDir);
+        setDepthRecordDefault(&depthResult, QStringLiteral("status"), QStringLiteral("completed"));
         upsertMetaArrayRecordByPath(&meta,
                                     QStringLiteral("depth_map_results"),
                                     QStringLiteral("depth_png"),
@@ -438,6 +486,10 @@ QJsonObject makeProjectDepthRecordFromArtifact(const QJsonObject &artifact,
     if (depthResult.value(QStringLiteral("raw_confidence_path")).toString().isEmpty())
     {
         depthResult[QStringLiteral("raw_confidence_path")] = rawConfidenceStoragePath(pngPath);
+    }
+    if (depthResult.value(QStringLiteral("valid_mask_path")).toString().isEmpty())
+    {
+        depthResult[QStringLiteral("valid_mask_path")] = validMaskStoragePath(pngPath);
     }
     if (depthResult.value(QStringLiteral("mvs_output_dir")).toString().isEmpty())
     {

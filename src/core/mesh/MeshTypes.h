@@ -55,6 +55,12 @@ struct ReconstructionConfig
     float poissonTrim      = 9.5f;
     int   poissonThreads   = -1;
     int   simplifyTargetFaces = 18000;
+    int   maxInputPointsForMeshing = 30000000;
+    int   streamingThreads = 0;
+    int   streamingChunkBytes = 64 * 1024 * 1024;
+    int   streamingTileCount = 0;
+    int   streamingTileOverlapCells = 2;
+    float streamingCellMaxStdDev = 0.0f; // <=0 表示按网格步长自动判断竖向毛刺
     int   kNormals         = 12;
     int   kImplicit        = 10;
     float padding          = 0.05f;

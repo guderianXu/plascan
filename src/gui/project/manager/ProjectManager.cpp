@@ -367,6 +367,8 @@ void ProjectManager::startDenseMatchAsyncWithProgress(
     const int p2             = settings.value(QStringLiteral("p2")).toInt(32);
     const int directions     = settings.value(QStringLiteral("directions")).toInt(8);
     const int pyramid        = settings.value(QStringLiteral("pyramid")).toInt(2);
+    const double lrThreshold = settings.value(QStringLiteral("lr_threshold")).toDouble(1.0);
+    const int medianFilter   = settings.value(QStringLiteral("median_filter")).toInt(3);
     const int numThreads     = settings.value(QStringLiteral("threads")).toInt(4);
 
     LOG_INFO(QStringLiteral("密集匹配: %1 个匹配对, 算法=%2 代价=%3 CUDA=%4 视差=[%5,%6] 线程=%7")
@@ -407,6 +409,9 @@ void ProjectManager::startDenseMatchAsyncWithProgress(
         cfg.p2              = p2;
         cfg.sgmDirections   = directions;
         cfg.pyramidLevels   = pyramid;
+        cfg.lrCheckThreshold = static_cast<float>(lrThreshold);
+        cfg.medianFilterSize = medianFilter;
+        cfg.enableLRCheck   = lrThreshold > 0.0;
         cfg.numThreads      = numThreads;
         cfg.leftImagePath   = imgA.toStdString();
         cfg.rightImagePath  = imgB.toStdString();
@@ -930,16 +935,16 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.dryRun           = dryRun;
     opts.threads          = threads;
     opts.baOpt.maxIterations       = qBound(3,  extraSettings.value(QStringLiteral("max_iterations")).toInt(20),  200);
-    opts.baOpt.maxPointIterations  = qBound(1,  extraSettings.value(QStringLiteral("max_point_iterations")).toInt(8), 100);
-    opts.baOpt.maxCameraIterations = qBound(1,  extraSettings.value(QStringLiteral("max_camera_iterations")).toInt(5), 100);
+    opts.baOpt.maxPointIterations  = qBound(1,  extraSettings.value(QStringLiteral("max_point_iterations")).toInt(12), 100);
+    opts.baOpt.maxCameraIterations = qBound(1,  extraSettings.value(QStringLiteral("max_camera_iterations")).toInt(10), 100);
     opts.baOpt.refineCameraPose    = extraSettings.value(QStringLiteral("refine_camera_pose")).toBool(true);
     opts.baOpt.huberDelta          = extraSettings.value(QStringLiteral("huber_delta")).toDouble(3.0);
-    opts.baOpt.finiteDiffEps       = extraSettings.value(QStringLiteral("finite_diff_eps")).toDouble(1e-4);
-    opts.baOpt.damping             = extraSettings.value(QStringLiteral("damping")).toDouble(1e-6);
-    opts.baOpt.stepTolerance       = extraSettings.value(QStringLiteral("step_tolerance")).toDouble(1e-6);
+    opts.baOpt.finiteDiffEps       = extraSettings.value(QStringLiteral("finite_diff_eps")).toDouble(1e-6);
+    opts.baOpt.damping             = extraSettings.value(QStringLiteral("damping")).toDouble(1e-3);
+    opts.baOpt.stepTolerance       = extraSettings.value(QStringLiteral("step_tolerance")).toDouble(1e-8);
     opts.baOpt.numThreads          = threads;
     opts.baOpt.enablePointFilter    = true;
-    opts.baOpt.filterMaxReprojError = extraSettings.value(QStringLiteral("filter_max_reproj_error")).toDouble(8.0);
+    opts.baOpt.filterMaxReprojError = extraSettings.value(QStringLiteral("filter_max_reproj_error")).toDouble(2.5);
     opts.baOpt.filterSigmaFactor   = extraSettings.value(QStringLiteral("filter_sigma_factor")).toDouble(3.0);
     opts.exportTsai        = extraSettings.value(QStringLiteral("export_tsai")).toBool(true);
     opts.exportSummaryTxt  = extraSettings.value(QStringLiteral("export_summary_txt")).toBool(true);

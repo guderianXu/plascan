@@ -449,7 +449,7 @@ void CanvasWidget::setShowInterestPoints(bool show)
 
     if (m_showInterestPoints && !m_currentImagePath.trimmed().isEmpty())
     {
-        // 异步加载当前影像的 .sp (SuperPoint)
+        // 异步加载当前影像的特征文件
         m_layerRenderer->clearFeatureLayers();
         startSpLoadForImage(m_currentImagePath);
     }

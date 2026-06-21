@@ -9,8 +9,8 @@
 
 #include "FeatureExtractionDialog.h"
 #include "VocabularyOverlapDialog.h"
-#include "SuperPointRunner.h"
-#include "SuperPointVisualizationDialog.h"
+#include "FeatureExtractionRunner.h"
+#include "FeaturePointVisualizationDialog.h"
 #include "CanvasWidget.h"
 #include "MainWindow.h"
 #include "MatchPairSelectorDialog.h"
@@ -91,6 +91,19 @@ float normalizedFeatureGrayscaleMin(const QJsonObject &settings)
     return static_cast<float>(std::clamp(value, 0.0, 1.0));
 }
 
+int sfmQualityLevelFromWorkflowQuality(const QString &quality)
+{
+    if (quality == QStringLiteral("fast"))
+    {
+        return 0;
+    }
+    if (quality == QStringLiteral("quality"))
+    {
+        return 2;
+    }
+    return 1;
+}
+
 /// 将最新报告写入 latest 文件，并把同一份报告追加到历史数组文件中。
 bool writeLatestAndAppendHistoryReport(const QString &reportsDir,
                                        const QString &latestFileName,
@@ -134,7 +147,7 @@ bool writeLatestAndAppendHistoryReport(const QString &reportsDir,
     return true;
 }
 
-/// 从 SuperGlue 对话框设置中读取已生成的配对约束，并检测其是否覆盖当前选图。
+/// 从特征匹配对话框设置中读取已生成的配对约束，并检测其是否覆盖当前选图。
 QStringList loadGeneratedPairConstraints(const QString &projectPath,
                                          const QJsonObject &projectMeta,
                                          const QStringList &selectedImages,
@@ -154,7 +167,7 @@ QStringList loadGeneratedPairConstraints(const QString &projectPath,
         return {};
     }
 
-    DialogSettingStore store(DialogSettingKeys::SuperGlue, nullptr);
+    DialogSettingStore store(DialogSettingKeys::FeatureMatching, nullptr);
     store.setProjectPath(projectPath);
     const QJsonObject saved = store.load();
     const QJsonArray generatedPairs = saved.value(QStringLiteral("generated_pairs")).toArray();
@@ -523,14 +536,14 @@ void MenuWorkflowController::openFeatureExtractionDialog()
 
     if (m_projectManager)
     {
-        if (!m_spSetting)
+        if (!m_featureExtractionSetting)
         {
-            m_spSetting = new DialogSettingStore(DialogSettingKeys::SuperPoint, this);
+            m_featureExtractionSetting = new DialogSettingStore(DialogSettingKeys::FeatureExtraction, this);
         }
-        m_spSetting->setProjectPath(m_projectManager->currentProjectPath());
+        m_featureExtractionSetting->setProjectPath(m_projectManager->currentProjectPath());
 
         // 从 project_dialog.json 加载之前保存的设置
-        const QJsonObject saved = m_spSetting->load();
+        const QJsonObject saved = m_featureExtractionSetting->load();
         if (!saved.isEmpty())
         {
             dlg->applySettings(saved);
@@ -560,9 +573,9 @@ void MenuWorkflowController::openFeatureExtractionDialog()
     // 连接设置变更信号，实时保存到 project_dialog.json
     connect(dlg, &FeatureExtractionDialog::settingsChanged, this, [this](const QJsonObject &s)
     {
-        if (m_spSetting)
+        if (m_featureExtractionSetting)
         {
-            m_spSetting->save(s);
+            m_featureExtractionSetting->save(s);
         }
     });
 
@@ -576,7 +589,7 @@ void MenuWorkflowController::openFeatureExtractionDialog()
             return;
         }
 
-        runSuperPointExtraction(config, inputs);
+        runFeatureExtraction(config, inputs);
     });
 
     dlg->exec();
@@ -645,7 +658,7 @@ void MenuWorkflowController::openVocabularyOverlapDialog()
             return;
         }
 
-        DialogSettingStore matchStore(DialogSettingKeys::SuperGlue, this);
+        DialogSettingStore matchStore(DialogSettingKeys::FeatureMatching, this);
         matchStore.setProjectPath(m_projectManager->currentProjectPath());
 
         QJsonObject matchingSettings = matchStore.load();
@@ -663,7 +676,7 @@ void MenuWorkflowController::openVocabularyOverlapDialog()
     dlg->exec();
 }
 
-void MenuWorkflowController::openSuperPointVisualizationDialog()
+void MenuWorkflowController::openFeaturePointVisualizationDialog()
 {
     if (!m_mainWindow)
     {
@@ -687,12 +700,13 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
     QJsonObject sv;
     if (m_projectManager)
     {
-        if (!m_spVisSetting)
+        if (!m_featurePointVisualizationSetting)
         {
-            m_spVisSetting = new DialogSettingStore(DialogSettingKeys::SuperPointVisualization, this);
+            m_featurePointVisualizationSetting =
+                new DialogSettingStore(DialogSettingKeys::FeaturePointVisualization, this);
         }
-        m_spVisSetting->setProjectPath(m_projectManager->currentProjectPath());
-        sv = m_spVisSetting->load();
+        m_featurePointVisualizationSetting->setProjectPath(m_projectManager->currentProjectPath());
+        sv = m_featurePointVisualizationSetting->load();
 
         const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
         if (!savedSuffix.isEmpty())
@@ -701,7 +715,7 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
         }
     }
 
-    auto *dlg = new SuperPointVisualizationDialog(availableSuffixes, m_mainWindow);
+    auto *dlg = new FeaturePointVisualizationDialog(availableSuffixes, m_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     if (!currentSuffix.isEmpty())
     {
@@ -716,15 +730,15 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
     // 切换特征文件后缀 → CanvasWidget 重新加载
     if (canvas)
     {
-        connect(dlg, &SuperPointVisualizationDialog::featureSuffixChanged,
+        connect(dlg, &FeaturePointVisualizationDialog::featureSuffixChanged,
                 this, [this, canvas](const QString &suffix)
         {
             canvas->setActiveFeatureSuffix(suffix);
-            if (m_spVisSetting)
+            if (m_featurePointVisualizationSetting)
             {
-                QJsonObject sv = m_spVisSetting->load();
+                QJsonObject sv = m_featurePointVisualizationSetting->load();
                 sv[QStringLiteral("feature_suffix")] = suffix;
-                m_spVisSetting->save(sv);
+                m_featurePointVisualizationSetting->save(sv);
             }
         });
     }
@@ -767,14 +781,14 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
     }
 
     // 连接实时更新信号
-    connect(dlg, &SuperPointVisualizationDialog::displayOptionsChanged, this,
+    connect(dlg, &FeaturePointVisualizationDialog::displayOptionsChanged, this,
         [this, dlg](const LayerRenderer::FeatureDisplayOptions &opts)
         {
             // 发送信号给MainWindow应用到CanvasWidget
             emit requestApplyFeatureDisplayOptions(opts);
 
             // 保存到 project_dialog.json
-            if (m_spVisSetting)
+            if (m_featurePointVisualizationSetting)
             {
                 QJsonObject sv;
                 sv["showPoints"] = opts.showPoints;
@@ -792,7 +806,7 @@ void MenuWorkflowController::openSuperPointVisualizationDialog()
                 sv["scaleColor"] = colorToJson(opts.scaleColor);
                 sv["orientColor"] = colorToJson(opts.orientColor);
 
-                m_spVisSetting->save(sv);
+                m_featurePointVisualizationSetting->save(sv);
             }
         });
 
@@ -807,12 +821,13 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     }
 
     // 优先从 project_dialog.json 加载
-    if (!m_spVisSetting)
+    if (!m_featurePointVisualizationSetting)
     {
-        m_spVisSetting = new DialogSettingStore(DialogSettingKeys::SuperPointVisualization, this);
+        m_featurePointVisualizationSetting =
+            new DialogSettingStore(DialogSettingKeys::FeaturePointVisualization, this);
     }
-    m_spVisSetting->setProjectPath(m_projectManager->currentProjectPath());
-    QJsonObject sv = m_spVisSetting->load();
+    m_featurePointVisualizationSetting->setProjectPath(m_projectManager->currentProjectPath());
+    QJsonObject sv = m_featurePointVisualizationSetting->load();
 
     // 兼容旧版本：若新文件中无数据则尝试从传入的旧 ui 设置中读取
     if (sv.isEmpty() && ui.contains(QStringLiteral("superpoint_visualization")))
@@ -1100,14 +1115,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
     }
 
     const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
-    if (quality == QStringLiteral("fast"))
-    {
-        opts.quality = 1;
-    }
-    else
-    {
-        opts.quality = 3;
-    }
+    opts.quality = sfmQualityLevelFromWorkflowQuality(quality);
 
     QPointer<ProjectManager> pmGuard(pm);
     opts.progressFn = [pmGuard](const QString &stage, int percent) {
@@ -1339,14 +1347,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
         : std::clamp(std::max(1, workflowThreads / 4), 1, 2);
 
     const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
-    if (quality == QStringLiteral("fast"))
-    {
-        opts.quality = 1;
-    }
-    else
-    {
-        opts.quality = 3;
-    }
+    opts.quality = sfmQualityLevelFromWorkflowQuality(quality);
 
     opts.progressFn = [pm](const QString &stage, int percent) {
         QMetaObject::invokeMethod(pm, [pm, stage, percent]() {
@@ -1810,7 +1811,7 @@ void MenuWorkflowController::openMapProjectDialog()
     dlg->exec();
 }
 
-void MenuWorkflowController::runSuperPointExtraction(const QJsonObject &config, const QStringList &inputs)
+void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, const QStringList &inputs)
 {
     const QString featureAlgorithm = config.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("disk")).toUpper();
     LOG_INFO(QStringLiteral("开始在后台线程执行 %1 特征提取...").arg(featureAlgorithm));
@@ -1868,7 +1869,7 @@ void MenuWorkflowController::runSuperPointExtraction(const QJsonObject &config, 
     watcher->setFuture(QtConcurrent::run(
         [config, inputs, pm = m_projectManager, cancelFlag, progressCount]() -> bool
         {
-            return SuperPointRunner::run(config, inputs, pm, *cancelFlag, *progressCount);
+            return FeatureExtractionRunner::run(config, inputs, pm, *cancelFlag, *progressCount);
         }));
 }
 

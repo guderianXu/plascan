@@ -49,23 +49,7 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
 #endif
 
     auto t0 = std::chrono::steady_clock::now();
-    DisparityResult result;
-
-    if (m_cfg.algorithm == StereoAlgorithm::BlockMatch)
-    {
-        BlockMatcher bm(m_cfg);
-        result = bm.compute(left, right);
-    }
-    else if (m_cfg.algorithm == StereoAlgorithm::OpenCV_SGBM)
-    {
-        OpenCVSgbmWrapper sgbm(m_cfg);
-        result = sgbm.compute(left, right);
-    }
-    else
-    {
-        SgmMatcher sgm(m_cfg);
-        result = sgm.compute(left, right);
-    }
+    DisparityResult result = computeRawDisparity(left, right);
 
     auto t1 = std::chrono::steady_clock::now();
     fprintf(stdout, "[DenseMatch] matching: %.0f ms\n",
@@ -73,6 +57,23 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
 
     DisparityValidator validator(m_cfg);
     result = validator.validate(result.disparity, result.confidence);
+    if (m_cfg.enableLRCheck && m_cfg.lrCheckThreshold > 0.0f && !result.disparity.empty())
+    {
+        DisparityResult reverse = computeRawDisparity(right, left);
+        reverse = validator.validate(reverse.disparity, reverse.confidence);
+        if (!reverse.disparity.empty() && reverse.disparity.size() == result.disparity.size())
+        {
+            const cv::Mat lrMask = validator.checkLRConsistency(result.disparity, reverse.disparity);
+            if (result.validMask.empty())
+            {
+                result.validMask = lrMask;
+            }
+            else
+            {
+                cv::bitwise_and(result.validMask, lrMask, result.validMask);
+            }
+        }
+    }
     validator.applyImageSupportMask(result, left, right);
 
     auto t2 = std::chrono::steady_clock::now();
@@ -81,6 +82,23 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
             std::chrono::duration<double, std::milli>(t2 - t0).count());
 
     return result;
+}
+
+DisparityResult DenseMatchService::computeRawDisparity(const cv::Mat &left, const cv::Mat &right) const
+{
+    if (m_cfg.algorithm == StereoAlgorithm::BlockMatch)
+    {
+        BlockMatcher bm(m_cfg);
+        return bm.compute(left, right);
+    }
+    if (m_cfg.algorithm == StereoAlgorithm::OpenCV_SGBM)
+    {
+        OpenCVSgbmWrapper sgbm(m_cfg);
+        return sgbm.compute(left, right);
+    }
+
+    SgmMatcher sgm(m_cfg);
+    return sgm.compute(left, right);
 }
 
 bool DenseMatchService::saveDisparity(const DisparityResult &result,

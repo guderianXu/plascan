@@ -476,6 +476,19 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 cfg.downsampleVoxelScale = 0.8f;
                 cfg.simplifyTargetFaces = 28000;
             }
+
+            const bool decimate = settings.value(QStringLiteral("decimate")).toBool(false);
+            if (decimate)
+            {
+                const double decimateRatio = std::clamp(
+                    settings.value(QStringLiteral("decimateRatio")).toDouble(0.5),
+                    0.05,
+                    1.0);
+                cfg.simplifyTargetFaces = std::max(1000, static_cast<int>(std::lround(cfg.simplifyTargetFaces * decimateRatio)));
+                cfg.enableDownsample = true;
+                cfg.voxelSimplifyFactor = std::max(cfg.voxelSimplifyFactor,
+                                                   static_cast<float>(1.0 / decimateRatio));
+            }
             cfg.verbose = false;
 
             xjw::mesh::workflow::MeshBuildRequest request;

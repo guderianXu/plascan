@@ -80,6 +80,7 @@ signals:
     void matchPointClicked(int index, const QPointF &scenePos);
     // 视图被右键点击（场景坐标）
     void viewRightClicked(const QPointF &scenePos);
+    void imageLoadFailed(const QString &imagePath, const QString &message);
 
 protected:
     // 滚轮缩放

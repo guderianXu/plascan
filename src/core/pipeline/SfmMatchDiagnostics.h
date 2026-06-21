@@ -45,6 +45,32 @@ struct SfmMatchDiagnostics
     SfmMatchGraphStats actualMatchGraph;
 };
 
+struct SfmGuidedMatchPlannerOptions
+{
+    QSet<int> registeredImageIds;
+    int minSeedMatches = 80;
+    int maxHealthyMatches = 60;
+    int maxCandidates = 2000;
+};
+
+struct SfmGuidedMatchCandidate
+{
+    int imageA = -1;
+    int imageB = -1;
+    int matchCount = 0;
+    QString reason;
+    double priorityScore = 0.0;
+    bool canUseEpipolarBand = false;
+};
+
+struct SfmGuidedMatchPlan
+{
+    QVector<SfmGuidedMatchCandidate> candidates;
+    int seedPairCount = 0;
+    int skippedHealthyPairs = 0;
+    int skippedUnregisteredPairs = 0;
+};
+
 inline SfmMatchGraphStats analyzeSfmMatchGraph(const QVector<int> &imageIds,
                                                const QVector<QPair<int, int>> &edges)
 {
@@ -166,6 +192,94 @@ inline SfmMatchDiagnostics analyzeSfmMatchDiagnostics(const QVector<int> &imageI
     diagnostics.candidateGraph = analyzeSfmMatchGraph(imageIds, candidateEdges);
     diagnostics.actualMatchGraph = analyzeSfmMatchGraph(imageIds, actualEdges);
     return diagnostics;
+}
+
+inline bool sfmGuidedMatchingHasRegisteredPose(const SfmGuidedMatchPlannerOptions &options, int imageId)
+{
+    return options.registeredImageIds.isEmpty() || options.registeredImageIds.contains(imageId);
+}
+
+inline SfmGuidedMatchPlan planSfmGuidedMatching(const QVector<int> &imageIds,
+                                                const QVector<SfmMatchDiagnosticPair> &pairs,
+                                                const SfmGuidedMatchPlannerOptions &options)
+{
+    Q_UNUSED(imageIds);
+
+    SfmGuidedMatchPlan plan;
+    const int minSeedMatches = std::max(1, options.minSeedMatches);
+    const int maxHealthyMatches = std::max(0, options.maxHealthyMatches);
+    const int maxCandidates = std::max(0, options.maxCandidates);
+
+    for (const SfmMatchDiagnosticPair &pair : pairs)
+    {
+        if (pair.loaded && !pair.skippedByNoMatchCache && pair.matchCount >= minSeedMatches)
+        {
+            ++plan.seedPairCount;
+            ++plan.skippedHealthyPairs;
+            continue;
+        }
+
+        if (!sfmGuidedMatchingHasRegisteredPose(options, pair.imageA) ||
+            !sfmGuidedMatchingHasRegisteredPose(options, pair.imageB))
+        {
+            ++plan.skippedUnregisteredPairs;
+            continue;
+        }
+
+        SfmGuidedMatchCandidate candidate;
+        candidate.imageA = pair.imageA;
+        candidate.imageB = pair.imageB;
+        candidate.matchCount = pair.matchCount;
+        candidate.canUseEpipolarBand = true;
+
+        if (pair.skippedByNoMatchCache)
+        {
+            candidate.reason = QStringLiteral("skipped_no_match_cache");
+            candidate.priorityScore = 200.0;
+        }
+        else if (!pair.loaded)
+        {
+            candidate.reason = QStringLiteral("pending_match_file");
+            candidate.priorityScore = 120.0;
+        }
+        else if (pair.matchCount <= maxHealthyMatches)
+        {
+            candidate.reason = QStringLiteral("weak_geometric_inliers");
+            candidate.priorityScore = 160.0 - static_cast<double>(std::max(0, pair.matchCount));
+        }
+        else
+        {
+            ++plan.skippedHealthyPairs;
+            continue;
+        }
+
+        plan.candidates.append(candidate);
+    }
+
+    std::sort(plan.candidates.begin(), plan.candidates.end(),
+              [](const SfmGuidedMatchCandidate &lhs, const SfmGuidedMatchCandidate &rhs)
+    {
+        if (lhs.priorityScore != rhs.priorityScore)
+        {
+            return lhs.priorityScore > rhs.priorityScore;
+        }
+        if (lhs.imageA != rhs.imageA)
+        {
+            return lhs.imageA < rhs.imageA;
+        }
+        return lhs.imageB < rhs.imageB;
+    });
+
+    if (maxCandidates > 0 && plan.candidates.size() > maxCandidates)
+    {
+        plan.candidates.resize(maxCandidates);
+    }
+    else if (maxCandidates == 0)
+    {
+        plan.candidates.clear();
+    }
+
+    return plan;
 }
 
 inline QString formatSfmComponentSizes(const QVector<int> &componentSizes, int maxCount = 8)

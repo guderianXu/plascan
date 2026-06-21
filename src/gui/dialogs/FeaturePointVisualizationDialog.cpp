@@ -1,6 +1,6 @@
 // =============================================================================
-// 文件: SuperPointVisualizationDialog.cpp
-// 功能: SuperPoint 特征点可视化配置对话框实现
+// 文件: FeaturePointVisualizationDialog.cpp
+// 功能: 特征点可视化配置对话框实现
 // 职责:
 //   - setupUi()         : 构建所有控件和分组布局
 //   - setupConnections(): 连接控件变化信号到更新/颜色选择槽
@@ -9,11 +9,11 @@
 //   - onResetDefaults() : 将所有控件恢复为内置默认值
 //   - updatePreview()   : 根据控件状态生成预览区文字描述
 // =============================================================================
-// SuperPoint 特征点可视化配置对话框实现
+// 特征点可视化配置对话框实现
 
-#include "SuperPointVisualizationDialog.h"
+#include "FeaturePointVisualizationDialog.h"
 
-#include "ui_SuperPointVisualizationDialog.h"
+#include "ui_FeaturePointVisualizationDialog.h"
 
 #include <QCheckBox>
 #include <QSpinBox>
@@ -24,8 +24,8 @@
 #include <QComboBox>
 #include <QColorDialog>
 
-SuperPointVisualizationDialog::SuperPointVisualizationDialog(const QStringList &availableSuffixes,
-                                                           QWidget *parent)
+FeaturePointVisualizationDialog::FeaturePointVisualizationDialog(const QStringList &availableSuffixes,
+                                                                 QWidget *parent)
     : QDialog(parent)
 {
     setupUi();
@@ -36,21 +36,21 @@ SuperPointVisualizationDialog::SuperPointVisualizationDialog(const QStringList &
     setupConnections();
 }
 
-SuperPointVisualizationDialog::~SuperPointVisualizationDialog() = default;
+FeaturePointVisualizationDialog::~FeaturePointVisualizationDialog() = default;
 
-QString SuperPointVisualizationDialog::currentSuffix() const
+QString FeaturePointVisualizationDialog::currentSuffix() const
 {
     return m_suffixCombo->currentText();
 }
 
-void SuperPointVisualizationDialog::setCurrentSuffix(const QString &suffix)
+void FeaturePointVisualizationDialog::setCurrentSuffix(const QString &suffix)
 {
     const int idx = m_suffixCombo->findText(suffix);
     if (idx >= 0)
         m_suffixCombo->setCurrentIndex(idx);
 }
 
-void SuperPointVisualizationDialog::setAvailableSuffixes(const QStringList &suffixes)
+void FeaturePointVisualizationDialog::setAvailableSuffixes(const QStringList &suffixes)
 {
     const QString current = m_suffixCombo->currentText();
     m_suffixCombo->blockSignals(true);
@@ -70,9 +70,9 @@ void SuperPointVisualizationDialog::setAvailableSuffixes(const QStringList &suff
 //   4. 显示过滤组  —— 最大显示数量、高分优先复选框
 //   5. 预览区      —— 文字描述标签
 //   6. 底部按钮    —— 恢复默认 | 应用 | 关闭
-void SuperPointVisualizationDialog::setupUi()
+void FeaturePointVisualizationDialog::setupUi()
 {
-    Ui::SuperPointVisualizationDialog ui;
+    Ui::FeaturePointVisualizationDialog ui;
     ui.setupUi(this);
 
     m_suffixCombo = ui.m_suffixCombo;
@@ -108,7 +108,7 @@ void SuperPointVisualizationDialog::setupUi()
 // 变化信号 → updatePreview() : 实时更新预览文字（不触发外部重绘）
 // 颜色按钮 → lambda          : 弹出颜色对话框、更新缓存色和按钮背景
 // 底部按钮 → 对应槽函数
-void SuperPointVisualizationDialog::setupConnections()
+void FeaturePointVisualizationDialog::setupConnections()
 {
     // 特征文件后缀切换 → 通知外部
     connect(m_suffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -117,18 +117,18 @@ void SuperPointVisualizationDialog::setupConnections()
     });
 
     // 显示选项变化 → 实时刷新预览文字
-    connect(m_showPointsChk, &QCheckBox::toggled, this, &SuperPointVisualizationDialog::updatePreview);
-    connect(m_showScaleChk, &QCheckBox::toggled, this, &SuperPointVisualizationDialog::updatePreview);
-    connect(m_showOrientationChk, &QCheckBox::toggled, this, &SuperPointVisualizationDialog::updatePreview);
-    connect(m_useFillChk, &QCheckBox::toggled, this, &SuperPointVisualizationDialog::updatePreview);
+    connect(m_showPointsChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(m_showScaleChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(m_showOrientationChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(m_useFillChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
     
     // 样式变化
     connect(m_markerShapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), 
-            this, &SuperPointVisualizationDialog::updatePreview);
+            this, &FeaturePointVisualizationDialog::updatePreview);
     connect(m_pointSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &SuperPointVisualizationDialog::updatePreview);
+            this, &FeaturePointVisualizationDialog::updatePreview);
     connect(m_scaleMultiplierSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
-            this, &SuperPointVisualizationDialog::updatePreview);
+            this, &FeaturePointVisualizationDialog::updatePreview);
     connect(m_opacitySlider, &QSlider::valueChanged, this, [this](int value) {
         m_opacityLabel->setText(QString::number(value));
         updatePreview();
@@ -167,13 +167,13 @@ void SuperPointVisualizationDialog::setupConnections()
     
     // 过滤变化
     connect(m_maxDisplaySpin, QOverload<int>::of(&QSpinBox::valueChanged),
-            this, &SuperPointVisualizationDialog::updatePreview);
-    connect(m_showTopScoresChk, &QCheckBox::toggled, this, &SuperPointVisualizationDialog::updatePreview);
+            this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(m_showTopScoresChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
     
     // 按钮
-    connect(m_applyBtn, &QPushButton::clicked, this, &SuperPointVisualizationDialog::onApply);
-    connect(m_closeBtn, &QPushButton::clicked, this, &SuperPointVisualizationDialog::onClose);
-    connect(m_resetBtn, &QPushButton::clicked, this, &SuperPointVisualizationDialog::onResetDefaults);
+    connect(m_applyBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onApply);
+    connect(m_closeBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onClose);
+    connect(m_resetBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onResetDefaults);
 }
 
 // getDisplayOptions: 将当前控件状态序列化为 FeatureDisplayOptions 结构体
@@ -182,7 +182,7 @@ void SuperPointVisualizationDialog::setupConnections()
 //   下拉框 index 1 → "circle"  (空心/实心圆形)
 //   下拉框 index 2 → "cross"   (45° 叉号)
 //   下拉框 index 3 (默认) → "plus" (十字加号)
-LayerRenderer::FeatureDisplayOptions SuperPointVisualizationDialog::getDisplayOptions() const
+LayerRenderer::FeatureDisplayOptions FeaturePointVisualizationDialog::getDisplayOptions() const
 {
     LayerRenderer::FeatureDisplayOptions opts;
     
@@ -215,7 +215,7 @@ LayerRenderer::FeatureDisplayOptions SuperPointVisualizationDialog::getDisplayOp
 // setDisplayOptions: 将外部传入的 FeatureDisplayOptions 反序列化回各控件
 // 同时更新颜色按钮的背景色样式表，以直观展示当前颜色
 // markerShape 字符串映射关系与 getDisplayOptions() 对称
-void SuperPointVisualizationDialog::setDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts)
+void FeaturePointVisualizationDialog::setDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts)
 {
     m_showPointsChk->setChecked(opts.showPoints);
     m_showScaleChk->setChecked(opts.showScale);
@@ -250,13 +250,13 @@ void SuperPointVisualizationDialog::setDisplayOptions(const LayerRenderer::Featu
 }
 
 // onApply: 点击"应用"按钮时触发，将当前控件参数通过信号发出
-void SuperPointVisualizationDialog::onApply()
+void FeaturePointVisualizationDialog::onApply()
 {
     emitCurrentOptions();
 }
 
 // onClose: 点击"关闭"按钮时触发，调用 accept() 关闭对话框
-void SuperPointVisualizationDialog::onClose()
+void FeaturePointVisualizationDialog::onClose()
 {
     accept();
 }
@@ -265,7 +265,7 @@ void SuperPointVisualizationDialog::onClose()
 // 默认配置：仅显示点（1px 十字）、透明度180/255、
 //           点颜色蓝(0,120,255)、尺度圈亮黄(255,255,0)、方向箭头红(255,0,0)
 //           最大显示0（全部）、优先高分开启
-void SuperPointVisualizationDialog::onResetDefaults()
+void FeaturePointVisualizationDialog::onResetDefaults()
 {
     // 恢复默认值
     m_showPointsChk->setChecked(true);
@@ -297,7 +297,7 @@ void SuperPointVisualizationDialog::onResetDefaults()
 
 // updatePreview: 根据当前控件状态合成预览区文字描述（不发出外部信号）
 // 拼接启用的显示项名称，若有数量限制则附加说明，若全部关闭显示"无显示内容"
-void SuperPointVisualizationDialog::updatePreview()
+void FeaturePointVisualizationDialog::updatePreview()
 {
     // 拼接当前启用的显示项名称
     QString desc;
@@ -316,7 +316,7 @@ void SuperPointVisualizationDialog::updatePreview()
 
 // emitCurrentOptions: 收集当前选项并通过 displayOptionsChanged 信号通知外部
 // 外部（LayerRenderer）收到信号后立即按新参数重绘特征点覆盖层
-void SuperPointVisualizationDialog::emitCurrentOptions()
+void FeaturePointVisualizationDialog::emitCurrentOptions()
 {
     emit displayOptionsChanged(getDisplayOptions());
 }

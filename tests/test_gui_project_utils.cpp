@@ -2018,7 +2018,7 @@ TEST(FeatureExtractionDialogTest, GrayscaleThresholdUsesPixelValuesAndEmitsNorma
 
 TEST(FeatureExtractionDialogTest, NativeFeatureRunnerReceivesGrayscaleRange)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/SuperPointRunner.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/FeatureExtractionRunner.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("extractorCfg.grayscaleMin = spConfig.grayscale_min")));
@@ -3134,8 +3134,8 @@ TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
     const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
     const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
     const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
-    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.cpp"));
-    const QString dialogUi = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.ui"));
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.cpp"));
+    const QString dialogUi = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.ui"));
     ASSERT_FALSE(rendererHeader.isEmpty());
     ASSERT_FALSE(rendererSource.isEmpty());
     ASSERT_FALSE(uiDefaults.isEmpty());
@@ -3159,8 +3159,8 @@ TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
 {
     const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
     const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
-    const QString dialogHeader = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.h"));
-    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SuperPointVisualizationDialog.cpp"));
+    const QString dialogHeader = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.h"));
+    const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.cpp"));
     ASSERT_FALSE(rendererHeader.isEmpty());
     ASSERT_FALSE(uiDefaults.isEmpty());
     ASSERT_FALSE(dialogHeader.isEmpty());
@@ -3351,9 +3351,9 @@ TEST(CreateDemDialogTest, OpenCreateDemDialogRequiresProjectManagerBeforeShowing
     EXPECT_LT(warningIndex, newDialogIndex);
 }
 
-TEST(SuperPointRunnerTest, DiskAndAlikedUseNativeTorchscriptExtractor)
+TEST(FeatureExtractionRunnerTest, DiskAndAlikedUseNativeTorchscriptExtractor)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/SuperPointRunner.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/FeatureExtractionRunner.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("ExtractorFactory.h")));
@@ -3363,13 +3363,49 @@ TEST(SuperPointRunnerTest, DiskAndAlikedUseNativeTorchscriptExtractor)
     EXPECT_FALSE(source.contains(QStringLiteral("runPythonExtractor")));
 }
 
-TEST(SuperPointRunnerTest, FeatureExtractionLogUsesSelectedAlgorithmName)
+TEST(FeatureExtractionRunnerTest, FeatureExtractionLogUsesSelectedAlgorithmName)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_FALSE(source.contains(QStringLiteral("开始在后台线程执行 SuperPoint...")));
     EXPECT_TRUE(source.contains(QStringLiteral("开始在后台线程执行 %1 特征提取")));
+}
+
+TEST(FeatureNamingCleanupTest, GuiOrchestrationDoesNotExposeLegacyAlgorithmSpecificInterfaces)
+{
+    const QString guiSources = readProjectSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    const QString controllerHeader = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    const QString controllerSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString terrainSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    const QString settingKeys = readProjectSourceFile(QStringLiteral("src/gui/config/settings/DialogSettingKeys.h"));
+    ASSERT_FALSE(guiSources.isEmpty());
+    ASSERT_FALSE(controllerHeader.isEmpty());
+    ASSERT_FALSE(controllerSource.isEmpty());
+    ASSERT_FALSE(terrainSource.isEmpty());
+    ASSERT_FALSE(settingKeys.isEmpty());
+
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("tasks/FeatureExtractionRunner.cpp")));
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("tasks/FeatureExtractionRunner.h")));
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("dialogs/FeaturePointVisualizationDialog.cpp")));
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("dialogs/FeaturePointVisualizationDialog.h")));
+    EXPECT_TRUE(controllerHeader.contains(QStringLiteral("openFeaturePointVisualizationDialog")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("FeatureExtractionRunner::run")));
+    EXPECT_TRUE(terrainSource.contains(QStringLiteral("FeatureExtractionRunner::run")));
+    EXPECT_TRUE(settingKeys.contains(QStringLiteral("FeatureExtraction")));
+    EXPECT_TRUE(settingKeys.contains(QStringLiteral("FeatureMatching")));
+    EXPECT_TRUE(settingKeys.contains(QStringLiteral("FeaturePointVisualization")));
+
+    EXPECT_FALSE(guiSources.contains(QStringLiteral("SuperPointRunner")));
+    EXPECT_FALSE(guiSources.contains(QStringLiteral("SuperGlueRunner")));
+    EXPECT_FALSE(guiSources.contains(QStringLiteral("SuperPointVisualizationDialog")));
+    EXPECT_FALSE(controllerHeader.contains(QStringLiteral("SuperPointVisualizationDialog")));
+    EXPECT_FALSE(controllerSource.contains(QStringLiteral("SuperPointRunner")));
+    EXPECT_FALSE(controllerSource.contains(QStringLiteral("SuperPointVisualizationDialog")));
+    EXPECT_FALSE(terrainSource.contains(QStringLiteral("SuperPointRunner")));
+    EXPECT_FALSE(settingKeys.contains(QStringLiteral("SuperPoint")));
+    EXPECT_FALSE(settingKeys.contains(QStringLiteral("SuperGlue")));
 }
 
 TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
@@ -3663,6 +3699,76 @@ TEST(SfmSparseResultMetadataTest, SfmServicePublishesProductionQualityRecord)
     EXPECT_TRUE(workflow.contains(QStringLiteral("result.resultRecordExtra")));
 }
 
+TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishPerPairCandidateMetadata)
+{
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString planner = readProjectSourceFile(QStringLiteral("src/core/pipeline/SfmPairPlanner.h"));
+    ASSERT_FALSE(service.isEmpty());
+    ASSERT_FALSE(planner.isEmpty());
+
+    EXPECT_TRUE(planner.contains(QStringLiteral("struct SfmPairCandidate")));
+    EXPECT_TRUE(planner.contains(QStringLiteral("priorityScore")));
+    EXPECT_TRUE(planner.contains(QStringLiteral("baselineScore")));
+    EXPECT_TRUE(planner.contains(QStringLiteral("orientationScore")));
+    EXPECT_TRUE(planner.contains(QStringLiteral("sequenceDistance")));
+    EXPECT_TRUE(planner.contains(QStringLiteral("centerDistance")));
+    EXPECT_TRUE(planner.contains(QStringLiteral("orientationAngleDeg")));
+
+    EXPECT_TRUE(service.contains(QStringLiteral("sfmPairCandidateByKey")));
+    EXPECT_TRUE(service.contains(QStringLiteral("loadKnownCameraViewingDirectionsFromPaths")));
+    EXPECT_TRUE(service.contains(QStringLiteral("candidate_samples")));
+    EXPECT_TRUE(service.contains(QStringLiteral("source_type_counts")));
+    EXPECT_TRUE(service.contains(QStringLiteral("matching_quality_report.json")));
+    EXPECT_TRUE(service.contains(QStringLiteral("matching_quality_report.csv")));
+    EXPECT_TRUE(service.contains(QStringLiteral("matching_quality_report")));
+    EXPECT_TRUE(service.contains(QStringLiteral("priority_score")));
+    EXPECT_TRUE(service.contains(QStringLiteral("baseline_score")));
+    EXPECT_TRUE(service.contains(QStringLiteral("orientation_score")));
+    EXPECT_TRUE(service.contains(QStringLiteral("sequence_distance")));
+    EXPECT_TRUE(service.contains(QStringLiteral("center_distance")));
+    EXPECT_TRUE(service.contains(QStringLiteral("orientation_angle_deg")));
+    EXPECT_FALSE(service.contains(
+        QStringLiteral("sfmPairToJson(pair, idToPath, failedPairKeysById, sourceTypes);")));
+}
+
+TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishGuidedMatchingPlan)
+{
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString diagnostics = readProjectSourceFile(QStringLiteral("src/core/pipeline/SfmMatchDiagnostics.h"));
+    ASSERT_FALSE(service.isEmpty());
+    ASSERT_FALSE(diagnostics.isEmpty());
+
+    EXPECT_TRUE(diagnostics.contains(QStringLiteral("SfmGuidedMatchPlannerOptions")));
+    EXPECT_TRUE(diagnostics.contains(QStringLiteral("SfmGuidedMatchCandidate")));
+    EXPECT_TRUE(diagnostics.contains(QStringLiteral("planSfmGuidedMatching")));
+
+    EXPECT_TRUE(service.contains(QStringLiteral("guided_matching")));
+    EXPECT_TRUE(service.contains(QStringLiteral("guided_match_candidate_count")));
+    EXPECT_TRUE(service.contains(QStringLiteral("seed_pair_count")));
+    EXPECT_TRUE(service.contains(QStringLiteral("can_use_epipolar_band")));
+    EXPECT_TRUE(service.contains(QStringLiteral("planSfmGuidedMatching")));
+}
+
+TEST(SfmSparseResultMetadataTest, ScaleAwareBaConsumesTrackConfidenceWeights)
+{
+    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
+    const QString baSource = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.cpp"));
+    const QString baInputBuilder = readProjectSourceFile(QStringLiteral("src/core/sfm/BaInputBuilder.cpp"));
+    const QString incrementalSfm = readProjectSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfm.cpp"));
+    ASSERT_FALSE(baHeader.isEmpty());
+    ASSERT_FALSE(baSource.isEmpty());
+    ASSERT_FALSE(baInputBuilder.isEmpty());
+    ASSERT_FALSE(incrementalSfm.isEmpty());
+
+    EXPECT_TRUE(baHeader.contains(QStringLiteral("double weight")));
+    EXPECT_TRUE(baSource.contains(QStringLiteral("observationWeight")));
+    EXPECT_TRUE(baSource.contains(QStringLiteral("observationWeight(obs)")));
+    EXPECT_TRUE(baInputBuilder.contains(QStringLiteral("track.confidence")));
+    EXPECT_TRUE(baInputBuilder.contains(QStringLiteral("baObservation.weight")));
+    EXPECT_TRUE(incrementalSfm.contains(QStringLiteral("pt.track.confidence")));
+    EXPECT_TRUE(incrementalSfm.contains(QStringLiteral("obs.weight")));
+}
+
 TEST(SfmSparseResultMetadataTest, OneClickWorkflowPreservesProductionQualityRecord)
 {
     const QString controller = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
@@ -3888,6 +3994,59 @@ TEST(MatchViewerEmptyMatchTest, CanOpenImagePairWithoutSparseMatchFile)
     EXPECT_TRUE(viewerSource.contains(QStringLiteral("matchFile.trimmed().isEmpty()")));
     EXPECT_TRUE(viewerSource.contains(QStringLiteral("QVector<QPointF>{}, QVector<QPointF>{}")));
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("尚未生成匹配")));
+}
+
+TEST(MatchViewerVisualizationTest, ImageDisplayKeepsRawPixelOrientationForMatchCoordinates)
+{
+    const QString imageViewSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
+    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    ASSERT_FALSE(imageViewSource.isEmpty());
+    ASSERT_FALSE(rendererSource.isEmpty());
+
+    EXPECT_TRUE(imageViewSource.contains(QStringLiteral("LayerRenderer::loadImageForDisplay(imagePath, QString())")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("setAutoTransform(false)")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("setAutoTransform(true)")));
+}
+
+TEST(MatchViewerVisualizationTest, UsesSharedDisplayLoaderAndReportsAsyncImageFailures)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
+    const QString dualSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(dualSource.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("imageLoadFailed")));
+    EXPECT_TRUE(source.contains(QStringLiteral("LayerRenderer::loadImageForDisplay(imagePath, QString())")));
+    EXPECT_TRUE(source.contains(QStringLiteral("emit imageLoadFailed(imagePath")));
+    EXPECT_TRUE(dualSource.contains(QStringLiteral("&ImageViewWidget::imageLoadFailed")));
+    EXPECT_TRUE(dualSource.contains(QStringLiteral("emit loadFailed(message)")));
+}
+
+TEST(ImageDisplayDecodeTest, FallsBackToOpenCvByteDecodeWhenQtImagePluginCannotRead)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QFile imageFile(path)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cv::imdecode")));
+    EXPECT_TRUE(source.contains(QStringLiteral("cv::IMREAD_UNCHANGED")));
+}
+
+TEST(WindowsBuildScriptTest, SyncsQtImageFormatPluginsForDirectBinRuns)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("scripts/build_win/build_windows_cuda.ps1"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int syncIndex = source.indexOf(QStringLiteral("function Sync-QtRuntime"));
+    const int nextIndex = source.indexOf(QStringLiteral("function Sync-TorchRuntime"), syncIndex);
+    ASSERT_GE(syncIndex, 0);
+    ASSERT_GT(nextIndex, syncIndex);
+    const QString syncBlock = source.mid(syncIndex, nextIndex - syncIndex);
+
+    EXPECT_TRUE(syncBlock.contains(QStringLiteral("imageformats")));
+    EXPECT_TRUE(syncBlock.contains(QStringLiteral("qjpeg")));
 }
 
 TEST(ModelDropSupportTest, AcceptsStandaloneModelAndPointCloudFiles)
@@ -4933,6 +5092,32 @@ TEST(CameraModel3DDialogTest, UsesCameraToWorldRotationWithoutTransposeForFrustu
     EXPECT_TRUE(combined.contains(QStringLiteral("pose.rotation = rot;")));
 }
 
+TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsAsBoundedStreamingPreview)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("kDefaultPreviewPlyVertices = 3'000'000")));
+    EXPECT_TRUE(source.contains(QStringLiteral("kMaxPreviewPlyVertices = 5'000'000")));
+    EXPECT_TRUE(source.contains(QStringLiteral("availableSystemMemoryBytes")));
+    EXPECT_TRUE(source.contains(QStringLiteral("choosePreviewPlyVertexLimit")));
+    EXPECT_TRUE(source.contains(QStringLiteral("kMaxPreviewPlyVertices")));
+    EXPECT_TRUE(source.contains(QStringLiteral("parsePlyPreviewHeader")));
+    EXPECT_TRUE(source.contains(QStringLiteral("readBinaryPlyPreview")));
+    EXPECT_TRUE(source.contains(QStringLiteral("faceCount")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PlyPreviewProgressCallback")));
+    EXPECT_TRUE(source.contains(QStringLiteral("emit plyLoadProgressChanged")));
+    EXPECT_TRUE(source.contains(QStringLiteral("drawPlyLoadProgressOverlay")));
+    EXPECT_TRUE(source.contains(QStringLiteral("m_plyLoadProgressPercent")));
+    EXPECT_TRUE(source.contains(QStringLiteral("preview.header.vertexCount > kMaxDirectPlyVertices")));
+    EXPECT_TRUE(source.contains(QStringLiteral("preview.header.faceCount == 0")));
+    EXPECT_TRUE(source.contains(QStringLiteral("file.seek(recordOffset + static_cast<qint64>(i) * preview.header.vertexStride)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("[3D] PLY 过大，使用预览抽样")));
+    EXPECT_TRUE(header.contains(QStringLiteral("plyLoadProgressChanged")));
+}
+
 TEST(DenseCloudRefineTest, ReportsPlaPointProcessingDeviceForGui)
 {
     const QString guiSource = readProjectSourceFile(
@@ -5175,7 +5360,7 @@ TEST(MenuWorkflowControllerTest, VocabularyOverlapAppliesGeneratedPairsToFeature
 
     EXPECT_TRUE(source.contains(QStringLiteral("VocabularyOverlapDialog")));
     EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::VocabularyOverlap")));
-    EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::SuperGlue")));
+    EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::FeatureMatching")));
     EXPECT_TRUE(source.contains(QStringLiteral("generated_pairs")));
 }
 

@@ -12,6 +12,7 @@
 #include <opencv2/imgcodecs.hpp>
 #include <cmath>
 #include <algorithm>
+#include <array>
 #include <numeric>
 #include <cstdio>
 #include <queue>
@@ -967,8 +968,40 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
     const cv::Mat colorImage = colorProvider ? colorProvider(fi) : cv::Mat();
     const bool hasColor = !colorImage.empty();
     const bool hasNormals = !frames[fi].normalMap.empty();
-    const float *invR = geom[fi].invR;
     std::atomic<int> nextRow{0};
+    const int requiredObservations = std::max(1, m_config.minNumPixels);
+    const bool requireNeighborAgreement = requiredObservations > 1 && frames.size() > 1;
+    const float maxReprojSq = m_config.maxReprojError * m_config.maxReprojError;
+    const float cosMaxNormErr = std::cos(m_config.maxNormalError * static_cast<float>(M_PI) / 180.0f);
+
+    std::vector<int> neighborFrames;
+    neighborFrames.reserve(frames.size() > 0 ? frames.size() - 1 : 0);
+    if (requireNeighborAgreement && !frames[fi].sourceImageIndices.empty())
+    {
+        for (int plannedViewIndex : frames[fi].sourceImageIndices)
+        {
+            for (int localIndex = 1; localIndex < static_cast<int>(frames.size()); ++localIndex)
+            {
+                if (frames[localIndex].viewIndex == plannedViewIndex)
+                {
+                    neighborFrames.push_back(localIndex);
+                    break;
+                }
+            }
+        }
+    }
+    if (requireNeighborAgreement && neighborFrames.empty())
+    {
+        for (int localIndex = 1; localIndex < static_cast<int>(frames.size()); ++localIndex)
+        {
+            neighborFrames.push_back(localIndex);
+        }
+    }
+    if (requireNeighborAgreement && m_config.checkNumImages > 0 &&
+        static_cast<int>(neighborFrames.size()) > m_config.checkNumImages)
+    {
+        neighborFrames.resize(static_cast<std::size_t>(m_config.checkNumImages));
+    }
 
     const int validCount = cv::countNonZero(frames[fi].depthMap > 0);
     fusedPoints.clear();
@@ -977,11 +1010,45 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
     m_filteredDepths[fi] = cv::Mat::zeros(H, W, CV_32F);
 
     fprintf(stderr,
-            "[StereoFusion] 使用已过滤深度图快速反投影: frame=0 size=%dx%d valid=%d workers=%d\n",
+            "[StereoFusion] 使用已过滤深度图快速反投影: frame=0 size=%dx%d valid=%d workers=%d minNumPixels=%d neighbors=%d\n",
             W,
             H,
             validCount,
-            workerCount);
+            workerCount,
+            requiredObservations,
+            static_cast<int>(neighborFrames.size()));
+
+    auto readWorldNormal = [&](int frameIdx, int row, int col, float &nx, float &ny, float &nz) {
+        if (frameIdx < 0 || frameIdx >= static_cast<int>(frames.size()) ||
+            frames[frameIdx].normalMap.empty())
+        {
+            return false;
+        }
+        const cv::Vec3f &normal = frames[frameIdx].normalMap.at<cv::Vec3f>(row, col);
+        const float *frameInvR = geom[frameIdx].invR;
+        nx = frameInvR[0] * normal[0] + frameInvR[1] * normal[1] + frameInvR[2] * normal[2];
+        ny = frameInvR[3] * normal[0] + frameInvR[4] * normal[1] + frameInvR[5] * normal[2];
+        nz = frameInvR[6] * normal[0] + frameInvR[7] * normal[1] + frameInvR[8] * normal[2];
+        const float normLen = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (normLen <= 1e-6f)
+        {
+            nx = 0.0f;
+            ny = 0.0f;
+            nz = 0.0f;
+            return false;
+        }
+        nx /= normLen;
+        ny /= normLen;
+        nz /= normLen;
+        return true;
+    };
+
+    auto medianArray = [](std::array<float, 64> values, int count) {
+        count = std::clamp(count, 1, static_cast<int>(values.size()));
+        const int mid = count / 2;
+        std::nth_element(values.begin(), values.begin() + mid, values.begin() + count);
+        return values[static_cast<std::size_t>(mid)];
+    };
 
     std::vector<std::vector<FusedPoint>> workerOutputs(static_cast<std::size_t>(workerCount));
     std::vector<std::thread> threads;
@@ -1036,19 +1103,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
 
                     if (hasNormals)
                     {
-                        const cv::Vec3f &normal = frames[fi].normalMap.at<cv::Vec3f>(row, col);
-                        point.nx = invR[0] * normal[0] + invR[1] * normal[1] + invR[2] * normal[2];
-                        point.ny = invR[3] * normal[0] + invR[4] * normal[1] + invR[5] * normal[2];
-                        point.nz = invR[6] * normal[0] + invR[7] * normal[1] + invR[8] * normal[2];
-                        const float normLen = std::sqrt(point.nx * point.nx +
-                                                        point.ny * point.ny +
-                                                        point.nz * point.nz);
-                        if (normLen > 1e-6f)
-                        {
-                            point.nx /= normLen;
-                            point.ny /= normLen;
-                            point.nz /= normLen;
-                        }
+                        (void)readWorldNormal(fi, row, col, point.nx, point.ny, point.nz);
                     }
 
                     point.r = 128;
@@ -1069,6 +1124,139 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                             point.r = gray;
                             point.g = gray;
                             point.b = gray;
+                        }
+                    }
+
+                    if (requireNeighborAgreement)
+                    {
+                        constexpr int kMaxObservations = 64;
+                        std::array<float, kMaxObservations> xs{};
+                        std::array<float, kMaxObservations> ys{};
+                        std::array<float, kMaxObservations> zs{};
+                        std::array<float, kMaxObservations> nxs{};
+                        std::array<float, kMaxObservations> nys{};
+                        std::array<float, kMaxObservations> nzs{};
+                        int observationCount = 1;
+                        int normalCount = 0;
+                        xs[0] = point.x;
+                        ys[0] = point.y;
+                        zs[0] = point.z;
+                        if (hasNormals)
+                        {
+                            nxs[0] = point.nx;
+                            nys[0] = point.ny;
+                            nzs[0] = point.nz;
+                            normalCount = 1;
+                        }
+
+                        for (int otherFrame : neighborFrames)
+                        {
+                            if (observationCount >= kMaxObservations)
+                            {
+                                break;
+                            }
+                            const FrameGeometry &otherGeom = geom[otherFrame];
+                            float uOther = 0.0f;
+                            float vOther = 0.0f;
+                            if (!otherGeom.cameraModel.project(point.x, point.y, point.z, uOther, vOther))
+                            {
+                                continue;
+                            }
+
+                            const int otherCol = static_cast<int>(std::round(uOther));
+                            const int otherRow = static_cast<int>(std::round(vOther));
+                            if (otherRow < 0 || otherRow >= otherGeom.H ||
+                                otherCol < 0 || otherCol >= otherGeom.W)
+                            {
+                                continue;
+                            }
+                            const float du = uOther - static_cast<float>(otherCol);
+                            const float dv = vOther - static_cast<float>(otherRow);
+                            if (du * du + dv * dv > maxReprojSq)
+                            {
+                                continue;
+                            }
+
+                            const float otherDepth =
+                                frames[otherFrame].depthMap.at<float>(otherRow, otherCol);
+                            const float expectedDepth =
+                                otherGeom.cameraModel.R_cw[6] * point.x +
+                                otherGeom.cameraModel.R_cw[7] * point.y +
+                                otherGeom.cameraModel.R_cw[8] * point.z +
+                                otherGeom.cameraModel.T[2];
+                            if (otherDepth <= 0.0f || expectedDepth <= 0.0f ||
+                                std::fabs(otherDepth - expectedDepth) / expectedDepth > m_config.maxDepthError)
+                            {
+                                continue;
+                            }
+
+                            float otherNx = 0.0f;
+                            float otherNy = 0.0f;
+                            float otherNz = 0.0f;
+                            const bool hasOtherNormal =
+                                readWorldNormal(otherFrame, otherRow, otherCol, otherNx, otherNy, otherNz);
+                            if (hasNormals && hasOtherNormal)
+                            {
+                                const float cosAngle =
+                                    point.nx * otherNx + point.ny * otherNy + point.nz * otherNz;
+                                if (cosAngle < cosMaxNormErr)
+                                {
+                                    continue;
+                                }
+                            }
+
+                            float otherX = 0.0f;
+                            float otherY = 0.0f;
+                            float otherZ = 0.0f;
+                            otherGeom.cameraModel.unproject(
+                                static_cast<float>(otherCol),
+                                static_cast<float>(otherRow),
+                                otherDepth,
+                                otherX,
+                                otherY,
+                                otherZ);
+                            if (m_config.useBoundingBox &&
+                                (otherX < m_config.bboxMin[0] || otherX > m_config.bboxMax[0] ||
+                                 otherY < m_config.bboxMin[1] || otherY > m_config.bboxMax[1] ||
+                                 otherZ < m_config.bboxMin[2] || otherZ > m_config.bboxMax[2]))
+                            {
+                                continue;
+                            }
+
+                            const int obs = observationCount++;
+                            xs[static_cast<std::size_t>(obs)] = otherX;
+                            ys[static_cast<std::size_t>(obs)] = otherY;
+                            zs[static_cast<std::size_t>(obs)] = otherZ;
+                            if (hasOtherNormal && normalCount < kMaxObservations)
+                            {
+                                nxs[static_cast<std::size_t>(normalCount)] = otherNx;
+                                nys[static_cast<std::size_t>(normalCount)] = otherNy;
+                                nzs[static_cast<std::size_t>(normalCount)] = otherNz;
+                                ++normalCount;
+                            }
+                        }
+
+                        if (observationCount < requiredObservations)
+                        {
+                            continue;
+                        }
+
+                        point.x = medianArray(xs, observationCount);
+                        point.y = medianArray(ys, observationCount);
+                        point.z = medianArray(zs, observationCount);
+                        if (normalCount > 0)
+                        {
+                            point.nx = medianArray(nxs, normalCount);
+                            point.ny = medianArray(nys, normalCount);
+                            point.nz = medianArray(nzs, normalCount);
+                            const float normLen =
+                                std::sqrt(point.nx * point.nx + point.ny * point.ny + point.nz * point.nz);
+                            if (normLen > 1e-6f)
+                            {
+                                point.nx /= normLen;
+                                point.ny /= normLen;
+                                point.nz /= normLen;
+                            }
                         }
                     }
 

@@ -10,6 +10,7 @@
 #include <QPointF>
 #include <QSet>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 #include <map>
@@ -227,11 +228,12 @@ xjw::BATrack makeBaTrackFromIndexedTrack(
 
     for (const IndexedObservation &observation : observations)
     {
-        baTrack.observations.push_back(xjw::BAObservation{
-            observation.cameraIndex,
-            observation.uv.x(),
-            observation.uv.y()
-        });
+        xjw::BAObservation baObservation;
+        baObservation.cameraIndex = observation.cameraIndex;
+        baObservation.u = observation.uv.x();
+        baObservation.v = observation.uv.y();
+        baObservation.weight = track.confidence;
+        baTrack.observations.push_back(baObservation);
     }
 
     return baTrack;
@@ -450,6 +452,9 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
             }
 
             xjw::BATrack track;
+            const double observationWeight = hasMatchScores
+                ? std::clamp(matchedScores.at(pointIndex).toDouble(1.0), 0.0, 1.0)
+                : 1.0;
             const PairIntersectionCandidate init = triangulatePairWithDirectionFallback(cameraA, uvA, cameraB, uvB);
             if (init.valid)
             {
@@ -466,8 +471,8 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
                 }};
             }
 
-            track.observations.push_back(xjw::BAObservation{indexA, uvA.x(), uvA.y()});
-            track.observations.push_back(xjw::BAObservation{indexB, uvB.x(), uvB.y()});
+            track.observations.push_back(xjw::BAObservation{indexA, uvA.x(), uvA.y(), observationWeight});
+            track.observations.push_back(xjw::BAObservation{indexB, uvB.x(), uvB.y(), observationWeight});
             result->tracks.push_back(std::move(track));
         }
 

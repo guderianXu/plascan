@@ -36,19 +36,38 @@
 #include <QtConcurrent/QtConcurrent>
 #include <QFuture>
 #include <QFutureWatcher>
+#include <QFile>
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QPointer>
+#include <QRegularExpression>
+#include <QStringList>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
+#include <cstring>
+#include <functional>
 #include <limits>
 #include <plapoint/io/xyz_io.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/obj_io.h>
 
+#ifdef Q_OS_WIN
+#include <windows.h>
+#endif
+
 namespace
 {
+
+constexpr quint64 kMaxDirectPlyVertices = 2'000'000;
+constexpr quint64 kMinPreviewPlyVertices = 1'000'000;
+constexpr quint64 kDefaultPreviewPlyVertices = 3'000'000;
+constexpr quint64 kMaxPreviewPlyVertices = 5'000'000;
+constexpr quint64 kPreviewMemoryReserveBytes = 2ull * 1024ull * 1024ull * 1024ull;
+constexpr quint64 kEstimatedPreviewBytesPerVertex = 128;
+
+using PlyPreviewProgressCallback = std::function<void(int, const QString &)>;
 
 RenderCloud cloneRenderCloud(const RenderCloud &src)
 {
@@ -93,6 +112,428 @@ RenderCloud cloneRenderCloud(const RenderCloud &src)
     return dst;
 }
 
+enum class PlyScalarType
+{
+    Invalid,
+    Int8,
+    UInt8,
+    Int16,
+    UInt16,
+    Int32,
+    UInt32,
+    Float32,
+    Float64
+};
+
+struct PlyPreviewProperty
+{
+    QString name;
+    PlyScalarType type = PlyScalarType::Invalid;
+    int offset = 0;
+    int size = 0;
+};
+
+struct PlyPreviewHeader
+{
+    bool valid = false;
+    bool binaryLittleEndian = false;
+    quint64 vertexCount = 0;
+    quint64 faceCount = 0;
+    qint64 dataStartOffset = 0;
+    int vertexStride = 0;
+    int xProperty = -1;
+    int yProperty = -1;
+    int zProperty = -1;
+    int redProperty = -1;
+    int greenProperty = -1;
+    int blueProperty = -1;
+    QVector<PlyPreviewProperty> properties;
+};
+
+struct PlyPreviewResult
+{
+    PlyPreviewHeader header;
+    std::shared_ptr<RenderCloud> cloud;
+    QString error;
+};
+
+PlyScalarType plyScalarTypeFromName(const QString &name)
+{
+    const QString lower = name.toLower();
+    if (lower == QLatin1String("char") || lower == QLatin1String("int8"))
+        return PlyScalarType::Int8;
+    if (lower == QLatin1String("uchar")
+        || lower == QLatin1String("uint8")
+        || lower == QLatin1String("unsigned_char"))
+        return PlyScalarType::UInt8;
+    if (lower == QLatin1String("short") || lower == QLatin1String("int16"))
+        return PlyScalarType::Int16;
+    if (lower == QLatin1String("ushort")
+        || lower == QLatin1String("uint16")
+        || lower == QLatin1String("unsigned_short"))
+        return PlyScalarType::UInt16;
+    if (lower == QLatin1String("int") || lower == QLatin1String("int32"))
+        return PlyScalarType::Int32;
+    if (lower == QLatin1String("uint")
+        || lower == QLatin1String("uint32")
+        || lower == QLatin1String("unsigned_int"))
+        return PlyScalarType::UInt32;
+    if (lower == QLatin1String("float") || lower == QLatin1String("float32"))
+        return PlyScalarType::Float32;
+    if (lower == QLatin1String("double") || lower == QLatin1String("float64"))
+        return PlyScalarType::Float64;
+    return PlyScalarType::Invalid;
+}
+
+int plyScalarTypeSize(PlyScalarType type)
+{
+    switch (type)
+    {
+    case PlyScalarType::Int8:
+    case PlyScalarType::UInt8:
+        return 1;
+    case PlyScalarType::Int16:
+    case PlyScalarType::UInt16:
+        return 2;
+    case PlyScalarType::Int32:
+    case PlyScalarType::UInt32:
+    case PlyScalarType::Float32:
+        return 4;
+    case PlyScalarType::Float64:
+        return 8;
+    default:
+        return 0;
+    }
+}
+
+quint64 availableSystemMemoryBytes()
+{
+#ifdef Q_OS_WIN
+    MEMORYSTATUSEX status;
+    status.dwLength = sizeof(status);
+    if (GlobalMemoryStatusEx(&status))
+    {
+        return static_cast<quint64>(status.ullAvailPhys);
+    }
+#endif
+    return 0;
+}
+
+quint64 choosePreviewPlyVertexLimit()
+{
+    const quint64 available = availableSystemMemoryBytes();
+    if (available == 0)
+    {
+        return kDefaultPreviewPlyVertices;
+    }
+
+    if (available >= kPreviewMemoryReserveBytes + kMaxPreviewPlyVertices * kEstimatedPreviewBytesPerVertex)
+    {
+        return kMaxPreviewPlyVertices;
+    }
+    if (available >= kPreviewMemoryReserveBytes + kDefaultPreviewPlyVertices * kEstimatedPreviewBytesPerVertex)
+    {
+        return kDefaultPreviewPlyVertices;
+    }
+    if (available > kPreviewMemoryReserveBytes)
+    {
+        const quint64 budget = (available - kPreviewMemoryReserveBytes) / kEstimatedPreviewBytesPerVertex;
+        return qBound(kMinPreviewPlyVertices, budget, kDefaultPreviewPlyVertices);
+    }
+
+    return kMinPreviewPlyVertices;
+}
+
+bool parsePlyPreviewHeader(const QString &plyPath, PlyPreviewHeader *header, QString *error)
+{
+    if (!header)
+    {
+        return false;
+    }
+
+    *header = PlyPreviewHeader();
+    QFile file(plyPath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (error) *error = QStringLiteral("无法打开 PLY 文件: %1").arg(plyPath);
+        return false;
+    }
+
+    const QByteArray magic = file.readLine();
+    if (magic.trimmed() != QByteArrayLiteral("ply"))
+    {
+        if (error) *error = QStringLiteral("不是有效的 PLY 文件: %1").arg(plyPath);
+        return false;
+    }
+
+    bool inVertexElement = false;
+    while (!file.atEnd())
+    {
+        const QByteArray rawLine = file.readLine();
+        const QString line = QString::fromLatin1(rawLine).trimmed();
+        if (line == QLatin1String("end_header"))
+        {
+            header->dataStartOffset = file.pos();
+            break;
+        }
+
+        const QStringList parts = line.split(QRegularExpression(QStringLiteral("\\s+")), Qt::SkipEmptyParts);
+        if (parts.isEmpty())
+        {
+            continue;
+        }
+
+        if (parts.size() >= 2 && parts[0] == QLatin1String("format"))
+        {
+            header->binaryLittleEndian = parts[1] == QLatin1String("binary_little_endian");
+            continue;
+        }
+
+        if (parts.size() >= 3 && parts[0] == QLatin1String("element"))
+        {
+            inVertexElement = parts[1] == QLatin1String("vertex");
+            if (inVertexElement)
+            {
+                bool ok = false;
+                header->vertexCount = parts[2].toULongLong(&ok);
+                if (!ok)
+                {
+                    if (error) *error = QStringLiteral("PLY 顶点数量无效: %1").arg(parts[2]);
+                    return false;
+                }
+            }
+            else if (parts[1] == QLatin1String("face"))
+            {
+                bool ok = false;
+                header->faceCount = parts[2].toULongLong(&ok);
+                if (!ok)
+                {
+                    if (error) *error = QStringLiteral("PLY 面片数量无效: %1").arg(parts[2]);
+                    return false;
+                }
+            }
+            continue;
+        }
+
+        if (inVertexElement && parts.size() >= 3 && parts[0] == QLatin1String("property"))
+        {
+            if (parts[1] == QLatin1String("list"))
+            {
+                if (error) *error = QStringLiteral("暂不支持顶点元素中的 list property");
+                return false;
+            }
+
+            PlyPreviewProperty property;
+            property.type = plyScalarTypeFromName(parts[1]);
+            property.size = plyScalarTypeSize(property.type);
+            property.name = parts[2].toLower();
+            property.offset = header->vertexStride;
+            if (property.size <= 0)
+            {
+                if (error) *error = QStringLiteral("不支持的 PLY 属性类型: %1").arg(parts[1]);
+                return false;
+            }
+
+            const int index = header->properties.size();
+            if (property.name == QLatin1String("x")) header->xProperty = index;
+            else if (property.name == QLatin1String("y")) header->yProperty = index;
+            else if (property.name == QLatin1String("z")) header->zProperty = index;
+            else if (property.name == QLatin1String("red") || property.name == QLatin1String("r"))
+                header->redProperty = index;
+            else if (property.name == QLatin1String("green") || property.name == QLatin1String("g"))
+                header->greenProperty = index;
+            else if (property.name == QLatin1String("blue") || property.name == QLatin1String("b"))
+                header->blueProperty = index;
+
+            header->properties.push_back(property);
+            header->vertexStride += property.size;
+        }
+    }
+
+    header->valid = header->dataStartOffset > 0
+        && header->binaryLittleEndian
+        && header->vertexCount > 0
+        && header->vertexStride > 0
+        && header->xProperty >= 0
+        && header->yProperty >= 0
+        && header->zProperty >= 0;
+
+    if (!header->valid && error)
+    {
+        *error = QStringLiteral("PLY 头缺少二进制小端顶点 XYZ 信息");
+    }
+    return header->valid;
+}
+
+template <typename T>
+T readUnalignedValue(const QByteArray &record, int offset)
+{
+    T value{};
+    std::memcpy(&value, record.constData() + offset, sizeof(T));
+    return value;
+}
+
+double readPlyScalarAsDouble(const QByteArray &record, const PlyPreviewProperty &property)
+{
+    switch (property.type)
+    {
+    case PlyScalarType::Int8:    return readUnalignedValue<qint8>(record, property.offset);
+    case PlyScalarType::UInt8:   return readUnalignedValue<quint8>(record, property.offset);
+    case PlyScalarType::Int16:   return readUnalignedValue<qint16>(record, property.offset);
+    case PlyScalarType::UInt16:  return readUnalignedValue<quint16>(record, property.offset);
+    case PlyScalarType::Int32:   return readUnalignedValue<qint32>(record, property.offset);
+    case PlyScalarType::UInt32:  return readUnalignedValue<quint32>(record, property.offset);
+    case PlyScalarType::Float32: return readUnalignedValue<float>(record, property.offset);
+    case PlyScalarType::Float64: return readUnalignedValue<double>(record, property.offset);
+    default:                     return 0.0;
+    }
+}
+
+quint8 readPlyColorAsByte(const QByteArray &record, const PlyPreviewProperty &property)
+{
+    if (property.type == PlyScalarType::UInt8)
+    {
+        return readUnalignedValue<quint8>(record, property.offset);
+    }
+
+    const double raw = readPlyScalarAsDouble(record, property);
+    const double scaled = raw <= 1.0 ? raw * 255.0 : raw;
+    return static_cast<quint8>(qBound(0, static_cast<int>(std::lround(scaled)), 255));
+}
+
+PlyPreviewResult readBinaryPlyPreview(const QString &plyPath,
+                                      const PlyPreviewProgressCallback &progress = PlyPreviewProgressCallback())
+{
+    PlyPreviewResult preview;
+    auto reportProgress = [&](int percent, const QString &statusText)
+    {
+        if (progress)
+        {
+            progress(qBound(0, percent, 100), statusText);
+        }
+    };
+
+    reportProgress(1, QStringLiteral("正在解析 PLY 头..."));
+    if (!parsePlyPreviewHeader(plyPath, &preview.header, &preview.error))
+    {
+        return preview;
+    }
+
+    if (preview.header.vertexCount <= kMaxDirectPlyVertices || preview.header.faceCount > 0)
+    {
+        return preview;
+    }
+
+    const quint64 previewVertexLimit = choosePreviewPlyVertexLimit();
+    QFile file(plyPath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        preview.error = QStringLiteral("无法打开 PLY 文件: %1").arg(plyPath);
+        return preview;
+    }
+
+    const quint64 sampleStride = qMax<quint64>(
+        1,
+        (preview.header.vertexCount + previewVertexLimit - 1) / previewVertexLimit);
+    const quint64 sampleCount = qMin<quint64>(
+        previewVertexLimit,
+        (preview.header.vertexCount + sampleStride - 1) / sampleStride);
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(
+        static_cast<plamatrix::Index>(sampleCount), 3);
+    const bool hasColors = preview.header.redProperty >= 0
+        && preview.header.greenProperty >= 0
+        && preview.header.blueProperty >= 0;
+    plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> colors(
+        static_cast<plamatrix::Index>(sampleCount), 3);
+
+    const qint64 recordOffset = preview.header.dataStartOffset;
+    quint64 outIndex = 0;
+    int lastProgressPercent = -1;
+    reportProgress(3, QStringLiteral("正在抽样密集点云预览..."));
+    for (quint64 i = 0; i < preview.header.vertexCount && outIndex < sampleCount; i += sampleStride)
+    {
+        if (!file.seek(recordOffset + static_cast<qint64>(i) * preview.header.vertexStride))
+        {
+            break;
+        }
+
+        const QByteArray record = file.read(preview.header.vertexStride);
+        if (record.size() != preview.header.vertexStride)
+        {
+            break;
+        }
+
+        const auto row = static_cast<plamatrix::Index>(outIndex);
+        points(row, 0) = static_cast<float>(
+            readPlyScalarAsDouble(record, preview.header.properties[preview.header.xProperty]));
+        points(row, 1) = static_cast<float>(
+            readPlyScalarAsDouble(record, preview.header.properties[preview.header.yProperty]));
+        points(row, 2) = static_cast<float>(
+            readPlyScalarAsDouble(record, preview.header.properties[preview.header.zProperty]));
+
+        if (hasColors)
+        {
+            colors(row, 0) = readPlyColorAsByte(record, preview.header.properties[preview.header.redProperty]);
+            colors(row, 1) = readPlyColorAsByte(record, preview.header.properties[preview.header.greenProperty]);
+            colors(row, 2) = readPlyColorAsByte(record, preview.header.properties[preview.header.blueProperty]);
+        }
+        ++outIndex;
+
+        if ((outIndex & 0x3ffu) == 0 || outIndex == sampleCount)
+        {
+            const int percent = 3 + static_cast<int>((outIndex * 92) / qMax<quint64>(1, sampleCount));
+            if (percent != lastProgressPercent)
+            {
+                lastProgressPercent = percent;
+                reportProgress(percent,
+                               QStringLiteral("正在加载密集点云预览 %1/%2 点")
+                                   .arg(outIndex)
+                                   .arg(sampleCount));
+            }
+        }
+    }
+
+    if (outIndex == 0)
+    {
+        preview.error = QStringLiteral("PLY 预览抽样没有读到有效顶点");
+        return preview;
+    }
+
+    if (outIndex < sampleCount)
+    {
+        plamatrix::DenseMatrix<float, plamatrix::Device::CPU> trimmedPoints(
+            static_cast<plamatrix::Index>(outIndex), 3);
+        plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> trimmedColors(
+            static_cast<plamatrix::Index>(outIndex), 3);
+        for (quint64 i = 0; i < outIndex; ++i)
+        {
+            const auto row = static_cast<plamatrix::Index>(i);
+            for (int c = 0; c < 3; ++c)
+            {
+                trimmedPoints(row, c) = points(row, c);
+                if (hasColors)
+                {
+                    trimmedColors(row, c) = colors(row, c);
+                }
+            }
+        }
+        points = std::move(trimmedPoints);
+        if (hasColors)
+        {
+            colors = std::move(trimmedColors);
+        }
+    }
+
+    preview.cloud = std::make_shared<RenderCloud>(std::move(points));
+    if (hasColors)
+    {
+        preview.cloud->setColors(std::move(colors));
+    }
+    reportProgress(96, QStringLiteral("正在上传密集点云预览..."));
+    return preview;
+}
+
 } // namespace
 
 // 构造函数：设置最小尺寸，启用鼠标追踪（悬停检测需要），
@@ -113,6 +554,19 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     m_viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
     setFocusPolicy(Qt::StrongFocus);
     updateCursor();
+
+    connect(this, &CameraSceneWidget::plyLoadProgressChanged,
+            this, [this](int generation, int percent, const QString &statusText)
+    {
+        if (generation != m_loadGen)
+        {
+            return;
+        }
+        m_loading = percent < 100;
+        m_plyLoadProgressPercent = qBound(0, percent, 100);
+        m_plyLoadProgressText = statusText;
+        update();
+    }, Qt::QueuedConnection);
 }
 
 // 设置要渲染的相机姿态列表。
@@ -146,6 +600,9 @@ void CameraSceneWidget::setShowCameras(bool show)
 void CameraSceneWidget::cancelPendingLoad()
 {
     ++m_loadGen;
+    m_loading = false;
+    m_plyLoadProgressPercent = -1;
+    m_plyLoadProgressText.clear();
 }
 
 // 标记缓存脏 + 重算（在加载完成后或场景数据变更后调用）
@@ -313,9 +770,14 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
     m_preferModelPointRender = true;
     m_cacheDirty = true;
     m_gpuDirty   = true;
+    m_loading = true;
+    m_plyLoadProgressPercent = 0;
+    m_plyLoadProgressText = QStringLiteral("正在加载密集点云...");
+    update();
     LOG_INFO(QStringLiteral("[3D] 正在加载模型: %1").arg(plyPath));
 
     const int gen = m_loadGen;
+    emit plyLoadProgressChanged(gen, 0, m_plyLoadProgressText);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
             this, [this, watcher, gen]()
@@ -325,6 +787,24 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
             auto result = watcher->result();
             if (result) m_cloud = std::move(*result);
             m_preferModelPointRender = !m_cloud.hasFaces();
+            if (!m_cloud.hasFaces())
+            {
+                if (m_cloud.size() >= 3'000'000)
+                {
+                    m_modelPointSize = 1.1f;
+                }
+                else if (m_cloud.size() >= 1'000'000)
+                {
+                    m_modelPointSize = 1.4f;
+                }
+                else
+                {
+                    m_modelPointSize = 3.5f;
+                }
+            }
+            m_loading = false;
+            m_plyLoadProgressPercent = -1;
+            m_plyLoadProgressText.clear();
             LOG_INFO(QStringLiteral("[3D] 模型加载完成，共 %1 顶点 / %2 面%3")
                      .arg(m_cloud.size())
                      .arg(m_cloud.hasFaces() ? static_cast<int>(m_cloud.faces()->rows()) : 0)
@@ -336,16 +816,54 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
         }
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([plyPath]() -> std::shared_ptr<RenderCloud>
+    QPointer<CameraSceneWidget> self(this);
+    watcher->setFuture(QtConcurrent::run([plyPath, self, gen]() -> std::shared_ptr<RenderCloud>
     {
+        auto reportProgress = [self, gen](int percent, const QString &statusText)
+        {
+            if (self)
+            {
+                emit self->plyLoadProgressChanged(gen, percent, statusText);
+            }
+        };
+
         try
         {
+            const PlyPreviewResult preview = readBinaryPlyPreview(plyPath, reportProgress);
+            if (preview.header.vertexCount > kMaxDirectPlyVertices && preview.header.faceCount == 0)
+            {
+                if (preview.header.valid && preview.cloud)
+                {
+                    LOG_INFO(QStringLiteral("[3D] PLY 过大，使用预览抽样: 原始 %1 点，显示 %2 点，抽样步长 %3")
+                                 .arg(preview.header.vertexCount)
+                                 .arg(preview.cloud->size())
+                                 .arg(qMax<quint64>(
+                                     1,
+                                     (preview.header.vertexCount + preview.cloud->size() - 1)
+                                         / qMax<quint64>(1, preview.cloud->size()))));
+                    return preview.cloud;
+                }
+                LOG_ERROR(QStringLiteral("[3D] PLY 文件过大，无法安全完整加载；预览加载失败: %1")
+                              .arg(preview.error));
+                return nullptr;
+            }
+            if (preview.header.vertexCount > kMaxDirectPlyVertices && preview.header.faceCount > 0)
+            {
+                reportProgress(5,
+                               QStringLiteral("正在完整加载 PLY 网格 (%1 顶点 / %2 面)...")
+                                   .arg(preview.header.vertexCount)
+                                   .arg(preview.header.faceCount));
+                LOG_INFO(QStringLiteral("[3D] PLY 网格较大，保留面片完整加载: %1 顶点 / %2 面")
+                             .arg(preview.header.vertexCount)
+                             .arg(preview.header.faceCount));
+            }
             return plapoint::io::readPly<float>(plyPath.toStdString());
         }
         catch (const std::exception &e)
         {
             LOG_ERROR(QStringLiteral("[3D] PLY 加载失败: %1").arg(QString::fromStdString(e.what())));
         }
+        reportProgress(100, QStringLiteral("密集点云加载失败"));
         return nullptr;
     }));
 }
@@ -1113,7 +1631,7 @@ void CameraSceneWidget::paintGL()
 
     // ── 模型顶点（无面片时作为点云）──────────────────────────────────────
     if (m_modelPtCount > 0) {
-        drawOpaquePointSet(m_modelPtVao, m_modelPtCount, qMax(m_modelPointSize, 4.0f));
+        drawOpaquePointSet(m_modelPtVao, m_modelPtCount, m_modelPointSize);
     }
 
     // ── 包围盒线框 ────────────────────────────────────────────────────────
@@ -1327,6 +1845,55 @@ void CameraSceneWidget::drawOverlay()
                          tr("手动剔除模式：右键框选高亮，前进侧键删除，Ctrl+Z 撤销（已选 %1）")
                              .arg(static_cast<int>(m_manualPreviewIndices.size())));
     }
+
+    drawPlyLoadProgressOverlay(painter);
+}
+
+void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
+{
+    if (!m_loading || m_plyLoadProgressPercent < 0)
+    {
+        return;
+    }
+
+    const int panelWidth = qMin(width() - 48, 520);
+    if (panelWidth <= 160 || height() <= 100)
+    {
+        return;
+    }
+
+    const QRectF panel(24.0, height() - 72.0, panelWidth, 48.0);
+    const QRectF bar(panel.left() + 16.0, panel.bottom() - 16.0, panel.width() - 32.0, 6.0);
+    const qreal fillWidth = bar.width() * qBound(0, m_plyLoadProgressPercent, 100) / 100.0;
+
+    painter.save();
+    painter.setPen(QPen(QColor(70, 82, 96, 160), 1.0));
+    painter.setBrush(QColor(250, 252, 255, 235));
+    painter.drawRoundedRect(panel, 6.0, 6.0);
+
+    painter.setPen(QColor(34, 48, 68));
+    const QString title = m_plyLoadProgressText.isEmpty()
+        ? tr("正在加载密集点云...")
+        : m_plyLoadProgressText;
+    painter.drawText(QRectF(panel.left() + 16.0,
+                            panel.top() + 8.0,
+                            panel.width() - 96.0,
+                            20.0),
+                     Qt::AlignVCenter | Qt::AlignLeft,
+                     title);
+    painter.drawText(QRectF(panel.right() - 70.0,
+                            panel.top() + 8.0,
+                            54.0,
+                            20.0),
+                     Qt::AlignVCenter | Qt::AlignRight,
+                     QStringLiteral("%1%").arg(qBound(0, m_plyLoadProgressPercent, 100)));
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(218, 226, 238));
+    painter.drawRoundedRect(bar, 3.0, 3.0);
+    painter.setBrush(QColor(36, 115, 218));
+    painter.drawRoundedRect(QRectF(bar.left(), bar.top(), fillWidth, bar.height()), 3.0, 3.0);
+    painter.restore();
 }
 
 bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMessage)

@@ -361,6 +361,15 @@ void DualImageViewer::connectSignals()
             this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
     connect(m_rightView, &ImageViewWidget::viewTransformChanged,
             this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
+
+    auto forwardImageLoadFailure = [this](const QString &, const QString &message)
+    {
+        emit loadFailed(message);
+    };
+    connect(m_leftView, &ImageViewWidget::imageLoadFailed,
+            this, forwardImageLoadFailure, Qt::QueuedConnection);
+    connect(m_rightView, &ImageViewWidget::imageLoadFailed,
+            this, forwardImageLoadFailure, Qt::QueuedConnection);
 }
 
 bool DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
@@ -563,7 +572,7 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
         QString assetsDir = QDir(matchDir).filePath("..");
         QString projectRoot = QDir(assetsDir).filePath("..");
 
-        // 优先读取与 .match 同名的 sidecar json（由 SuperGlueRunner 写入）
+        // 优先读取与 .match 同名的 sidecar json（由 FeatureMatchRunner 写入）
         QString sp0Path;
         QString sp1Path;
         const QString sidecarPath = matchFile + ".json";

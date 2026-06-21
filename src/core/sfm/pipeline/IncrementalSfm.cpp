@@ -1937,6 +1937,7 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
             obs.cameraIndex = idxIt->second;
             obs.u = img.keypoints[elem.featureIdx].x;
             obs.v = img.keypoints[elem.featureIdx].y;
+            obs.weight = pt.track.confidence;
             track.observations.push_back(obs);
         }
 

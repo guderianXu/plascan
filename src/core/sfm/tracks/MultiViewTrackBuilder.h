@@ -17,6 +17,8 @@ struct MultiViewTrackBuildResult
     int rejectedConflictComponents = 0;
     int rejectedConflictEdges = 0;
     std::map<int, int> trackLengthHistogram;
+    std::vector<double> trackConfidenceScores;
+    double meanTrackConfidence = 0.0;
 };
 
 class MultiViewTrackBuilder

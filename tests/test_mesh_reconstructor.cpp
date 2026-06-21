@@ -15,6 +15,7 @@
 #include <cstdint>
 #include <filesystem>
 #include <fstream>
+#include <limits>
 #include <sstream>
 #include <string>
 #include <vector>
@@ -95,6 +96,86 @@ std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::pa
     return plyPath;
 }
 
+std::filesystem::path writeDenseGridPointCloud(const std::filesystem::path &root)
+{
+    namespace fs = std::filesystem;
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path plyPath = root / "dense_grid.ply";
+
+    constexpr int N = 32;
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(N * N, 3);
+    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(N * N, 3);
+    for (int y = 0; y < N; ++y)
+    {
+        for (int x = 0; x < N; ++x)
+        {
+            const int row = y * N + x;
+            const float fx = static_cast<float>(x) / static_cast<float>(N - 1);
+            const float fy = static_cast<float>(y) / static_cast<float>(N - 1);
+            points(row, 0) = fx;
+            points(row, 1) = fy;
+            points(row, 2) = 0.04f * std::sin(fx * 8.0f) + 0.03f * std::cos(fy * 6.0f);
+            colors(row, 0) = static_cast<std::uint8_t>(50 + x * 4);
+            colors(row, 1) = static_cast<std::uint8_t>(80 + y * 4);
+            colors(row, 2) = 160;
+        }
+    }
+
+    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    cloud.setColors(std::move(colors));
+    plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
+    return plyPath;
+}
+
+std::filesystem::path writeFlatGridPointCloudWithSparseVerticalSpikes(const std::filesystem::path &root)
+{
+    namespace fs = std::filesystem;
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path plyPath = root / "flat_grid_with_spikes.ply";
+
+    constexpr int N = 24;
+    constexpr int baseSamples = 5;
+    constexpr int spikeSamples = 1;
+    constexpr int perCellSamples = baseSamples + spikeSamples;
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(N * N * perCellSamples, 3);
+    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(N * N * perCellSamples, 3);
+
+    int row = 0;
+    for (int y = 0; y < N; ++y)
+    {
+        for (int x = 0; x < N; ++x)
+        {
+            const float fx = static_cast<float>(x) / static_cast<float>(N - 1);
+            const float fy = static_cast<float>(y) / static_cast<float>(N - 1);
+            for (int sample = 0; sample < baseSamples; ++sample)
+            {
+                points(row, 0) = fx + 0.0002f * static_cast<float>(sample);
+                points(row, 1) = fy;
+                points(row, 2) = 0.0f;
+                colors(row, 0) = 80;
+                colors(row, 1) = 160;
+                colors(row, 2) = 80;
+                ++row;
+            }
+            const bool hasSpike = (x % 6 == 0) && (y % 6 == 0);
+            points(row, 0) = fx;
+            points(row, 1) = fy;
+            points(row, 2) = hasSpike ? 4.0f : 0.0f;
+            colors(row, 0) = 220;
+            colors(row, 1) = 80;
+            colors(row, 2) = 80;
+            ++row;
+        }
+    }
+
+    plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
+    cloud.setColors(std::move(colors));
+    plapoint::io::writePly<float>(plyPath.string(), cloud, plapoint::io::PlyFormat::BinaryLE);
+    return plyPath;
+}
+
 xjw::mesh::ReconstructionConfig fallbackMeshConfig()
 {
     xjw::mesh::ReconstructionConfig config;
@@ -111,6 +192,83 @@ xjw::mesh::ReconstructionConfig fallbackMeshConfig()
 }
 
 } // namespace
+
+TEST(MeshReconstructorTest, UsesStreamingHeightGridForOversizedPly)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_streaming_input_cap_test";
+    const fs::path plyPath = writeDenseGridPointCloud(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.forcePoisson = false;
+    config.resolution = 32;
+    config.maxInputPointsForMeshing = 300;
+    config.streamingThreads = 3;
+    config.streamingChunkBytes = 256;
+    std::vector<std::string> progressMessages;
+    config.progressFn = [&](const std::string &stage, float) {
+        progressMessages.push_back(stage);
+    };
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_EQ(algorithmUsed, "streaming_tiled_height_grid");
+    EXPECT_GT(mesh.faceCount(), 0);
+    const auto streamed = std::find_if(progressMessages.begin(), progressMessages.end(), [](const std::string &msg) {
+        return msg.find("并行分块") != std::string::npos &&
+               msg.find("1024") != std::string::npos &&
+               msg.find("3") != std::string::npos;
+    });
+    EXPECT_NE(streamed, progressMessages.end());
+    const auto tiled = std::find_if(progressMessages.begin(), progressMessages.end(), [](const std::string &msg) {
+        return msg.find("瓦片") != std::string::npos &&
+               msg.find("2x2") != std::string::npos;
+    });
+    EXPECT_NE(tiled, progressMessages.end());
+}
+
+TEST(MeshReconstructorTest, StreamingHeightGridSuppressesSparseVerticalSpikes)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_streaming_spike_test";
+    const fs::path plyPath = writeFlatGridPointCloudWithSparseVerticalSpikes(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.forcePoisson = false;
+    config.resolution = 32;
+    config.maxInputPointsForMeshing = 300;
+    config.streamingThreads = 2;
+    config.streamingChunkBytes = 512;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    ASSERT_FALSE(mesh.vertices.empty());
+    EXPECT_EQ(algorithmUsed, "streaming_tiled_height_grid");
+
+    float maxZ = -std::numeric_limits<float>::max();
+    for (const auto &vertex : mesh.vertices)
+    {
+        maxZ = std::max(maxZ, vertex.z);
+    }
+    EXPECT_LT(maxZ, 0.4f)
+        << "Sparse vertical outliers should not become visible terrain spikes.";
+}
 
 TEST(MeshReconstructorTest, ForcePoissonUsesInputNormalsWhenPresent)
 {

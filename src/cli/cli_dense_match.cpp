@@ -113,6 +113,7 @@ int main(int argc, char *argv[])
     cfg.numThreads       = threads;
     cfg.lrCheckThreshold = lrThresh;
     cfg.medianFilterSize = medianFilter;
+    cfg.enableLRCheck = lrThresh > 0.0f;
     cfg.leftImagePath    = imgL;
     cfg.rightImagePath   = imgR;
     cfg.outputDisparityPath = outPath;

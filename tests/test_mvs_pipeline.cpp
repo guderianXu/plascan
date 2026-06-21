@@ -267,6 +267,43 @@ TEST(MvsPipelineTest, DepthMapFusionTwoViewSingleObservationUsesFastParallelPath
     }));
 }
 
+TEST(MvsPipelineTest, StreamingFirstFrameFusionRejectsDepthsWithoutNeighborAgreement)
+{
+    constexpr int W = 16;
+    constexpr int H = 12;
+    constexpr double FOCAL = 40.0;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C[3] = {0,0,0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(2);
+    frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
+    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].imgW = W;
+    frames[0].imgH = H;
+
+    frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
+    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].imgW = W;
+    frames[1].imgH = H;
+
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.fuseOnlyFirstFrame = true;
+    fcfg.minNumPixels = 2;
+    fcfg.checkNumImages = 1;
+    fcfg.maxReprojError = 0.5f;
+    fcfg.maxDepthError = 0.01f;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts;
+    std::string err;
+    const bool ok = fusion.fuse(frames, pts, nullptr, &err);
+
+    ASSERT_TRUE(ok) << err;
+    EXPECT_TRUE(pts.empty())
+        << "Streaming fusion must not directly back-project first-frame depths when neighbors disagree.";
+}
+
 TEST(MvsPipelineTest, DepthMapFusionFilteredDepthsIncludeAllAcceptedObservations)
 {
     constexpr int W = 24;

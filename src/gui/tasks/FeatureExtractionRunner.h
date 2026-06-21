@@ -6,9 +6,9 @@
 
 class ProjectManager;
 
-// SuperPointRunner: 执行 SuperPoint 特征提取（隔离 LibTorch 依赖）
+// FeatureExtractionRunner: 执行通用特征提取（隔离 LibTorch 依赖）
 // 目的：避免 Qt 和 LibTorch 的宏冲突
-class SuperPointRunner
+class FeatureExtractionRunner
 {
 public:
     /// 返回 true 表示至少有一张图像处理成功

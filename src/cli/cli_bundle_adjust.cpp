@@ -387,13 +387,13 @@ int main(int argc, char *argv[])
     int minMatches = 15;
     int threads = 4;
     int maxIterations = 20;
-    int maxPointIterations = 20;
-    int maxCameraIterations = 5;
+    int maxPointIterations = 12;
+    int maxCameraIterations = 10;
     int chunkSize = 20000;
     double huberDelta = 3.0;
     double damping = 1e-3;
     double finiteDiffEps = 1e-6;
-    double stepTolerance = 1e-6;
+    double stepTolerance = 1e-8;
     bool refinePose = true;
     bool dryRun = false;
     bool force = false;

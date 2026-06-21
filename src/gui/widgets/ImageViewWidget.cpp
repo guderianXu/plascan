@@ -1,6 +1,7 @@
 #include "ImageViewWidget.h"
 
 #include "ui_ImageViewWidget.h"
+#include "LayerRenderer.h"
 
 #include <QGraphicsView>
 #include <QGraphicsScene>
@@ -67,9 +68,7 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
 
     QFuture<QImage> future = QtConcurrent::run(
         [imagePath]() -> QImage {
-            QImageReader r(imagePath);
-            r.setAutoTransform(true);
-            return r.read();
+            return LayerRenderer::loadImageForDisplay(imagePath, QString());
         });
 
     // 挂监听器，解码完成后切回主线程更新视图
@@ -80,7 +79,10 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
         if (m_imagePath != imagePath) return; // 图像已被其他请求替换
 
         const QImage img = watcher->result();
-        if (img.isNull()) return;
+        if (img.isNull()) {
+            emit imageLoadFailed(imagePath, tr("无法加载图像：%1").arg(imagePath));
+            return;
+        }
 
         if (m_imageItem) {
             m_scene->removeItem(m_imageItem);

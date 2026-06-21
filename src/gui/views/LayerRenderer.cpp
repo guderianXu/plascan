@@ -62,6 +62,7 @@
 #include <QPainter>
 #include <QGraphicsPixmapItem>
 
+#include <cstring>
 
 
 // 16 位灰度影像的简单显示映射：
@@ -383,6 +384,87 @@ static QString hexSha1(const QByteArray &data)
     return QString::fromLatin1(QCryptographicHash::hash(data, QCryptographicHash::Sha1).toHex());
 }
 
+static QImage imageFromOpenCvMat(const cv::Mat &mat)
+{
+    if (mat.empty())
+    {
+        return QImage();
+    }
+
+    cv::Mat displayMat;
+    if (mat.depth() != CV_8U)
+    {
+        cv::Mat grayOrColor;
+        const int channels = mat.channels();
+        if (channels == 1 || channels == 3 || channels == 4)
+        {
+            cv::normalize(mat, grayOrColor, 0, 255, cv::NORM_MINMAX, CV_8U);
+            displayMat = grayOrColor;
+        }
+        else
+        {
+            return QImage();
+        }
+    }
+    else
+    {
+        displayMat = mat;
+    }
+
+    if (displayMat.channels() == 1)
+    {
+        return QImage(displayMat.data,
+                      displayMat.cols,
+                      displayMat.rows,
+                      static_cast<int>(displayMat.step),
+                      QImage::Format_Grayscale8).copy();
+    }
+
+    cv::Mat converted;
+    if (displayMat.channels() == 3)
+    {
+        cv::cvtColor(displayMat, converted, cv::COLOR_BGR2RGB);
+        return QImage(converted.data,
+                      converted.cols,
+                      converted.rows,
+                      static_cast<int>(converted.step),
+                      QImage::Format_RGB888).copy();
+    }
+    if (displayMat.channels() == 4)
+    {
+        cv::cvtColor(displayMat, converted, cv::COLOR_BGRA2RGBA);
+        return QImage(converted.data,
+                      converted.cols,
+                      converted.rows,
+                      static_cast<int>(converted.step),
+                      QImage::Format_RGBA8888).copy();
+    }
+
+    return QImage();
+}
+
+static QImage loadImageWithOpenCvByteDecode(const QString &path)
+{
+    QFile imageFile(path);
+    if (!imageFile.open(QIODevice::ReadOnly))
+    {
+        return QImage();
+    }
+
+    const QByteArray bytes = imageFile.readAll();
+    if (bytes.isEmpty())
+    {
+        return QImage();
+    }
+
+    std::vector<uchar> encoded;
+    encoded.resize(static_cast<size_t>(bytes.size()));
+    std::memcpy(encoded.data(), bytes.constData(), static_cast<size_t>(bytes.size()));
+
+    const cv::Mat decoded = cv::imdecode(encoded, cv::IMREAD_UNCHANGED);
+    return imageFromOpenCvMat(decoded);
+}
+
 // 生成 8-bit 缓存路径：
 // - 若已打开项目：写入 <projectRoot>/.plascan_tmp/converted_images/
 // - 否则回退：与输入同目录、同文件名追加 _8。
@@ -641,6 +723,7 @@ QImage LayerRenderer::loadImageForDisplay(const QString &path, const QString &pl
 {
     QImage img;
     QImageReader reader(path);
+    reader.setAutoTransform(false);
     if (reader.canRead())
     {
         img = reader.read();
@@ -656,6 +739,10 @@ QImage LayerRenderer::loadImageForDisplay(const QString &path, const QString &pl
                 img = mapped;
             }
         }
+    }
+    if (img.isNull())
+    {
+        img = loadImageWithOpenCvByteDecode(path);
     }
     if (img.isNull())
     {

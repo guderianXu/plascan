@@ -3,7 +3,7 @@
 // 模块: main_window
 // 说明:
 //   菜单业务流程控制器。处理所有菜单/工具栏动作被触发后的业务逻辑：
-//   - 弹出对应的参数配置对话框（SuperPoint/SuperGlue/BA/AT等）
+//   - 弹出对应的参数配置对话框（特征提取/特征匹配/BA/AT 等）
 //   - 从项目 UI 设置中记忆化加载/保存对话框参数（JSON持久化）
 //   - 准备输入数据（影像列表、输出目录等）并发起后台任务
 //   - 通过信号将特征点可视化选项同步到 CanvasWidget
@@ -35,9 +35,9 @@ class MenuWorkflowController : public QObject
 
 public:
     /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
-    DialogSettingStore *m_spSetting = nullptr;
+    DialogSettingStore *m_featureExtractionSetting = nullptr;
     DialogSettingStore *m_vocabOverlapSetting = nullptr;
-    DialogSettingStore *m_spVisSetting = nullptr;
+    DialogSettingStore *m_featurePointVisualizationSetting = nullptr;
     DialogSettingStore *m_baSetting = nullptr;
     DialogSettingStore *m_mapSetting = nullptr;
     DialogSettingStore *m_dcSetting = nullptr;
@@ -61,10 +61,10 @@ public slots:
     void openVocabularyOverlapDialog();
 
     /// 打开特征点渲染选项对话框，并支持实时预览。
-    void openSuperPointVisualizationDialog();
+    void openFeaturePointVisualizationDialog();
 
     /// 从项目 UI 设置中恢复特征点显示选项，并转发给画布层。
-    /// @param ui 项目级 UI 设置 JSON，包含 superpoint_visualization 配置。
+    /// @param ui 项目级 UI 设置 JSON，包含 feature_point_visualization 配置。
     void applySavedFeatureDisplayOptions(const QJsonObject &ui);
 
     /// 打开一键三维重建对话框。
@@ -116,10 +116,10 @@ private:
                                                                   const QString &projectPath);
     bool confirmAutoFillMissingSparseInputs(const SparsePrerequisiteSummary &summary) const;
 
-    /// 在后台线程中启动 SuperPoint 特征提取任务。
+    /// 在后台线程中启动特征提取任务。
     /// @param config 配置参数 JSON，如设备、阈值和输出目录。
     /// @param inputs 待处理的影像路径列表。
-    void runSuperPointExtraction(const QJsonObject &config, const QStringList &inputs);
+    void runFeatureExtraction(const QJsonObject &config, const QStringList &inputs);
 
     void startAerialTriangulationWorkflow(const QJsonObject &settings);
     void launchAerialTriangulationSfm(const QJsonObject &settings,
