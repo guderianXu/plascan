@@ -2,7 +2,7 @@
 
 #include "LaserConstraintTypes.h"
 
-#include "KDTree2D.h"
+#include <plapoint/search/spatial_kdtree.h>
 
 #include <array>
 #include <string>
@@ -47,7 +47,7 @@ private:
     void rebuildIndex();
 
     std::vector<LaserPlaneSample> m_samples;
-    xjw::common::spatial::KDTree<3, double> m_index;
+    plapoint::search::SpatialKdTree<3, double> m_index;
 };
 
 } // namespace lidar

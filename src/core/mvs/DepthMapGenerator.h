@@ -41,7 +41,6 @@ namespace mvs
 struct DepthFrameResult
 {
     int refViewIdx = -1;  ///< 参考帧在 views 数组中的下标
-    int imageIndex = -1;  ///< 向后兼容别名 = refViewIdx
     bool depthFlippedZ = false;
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
@@ -65,11 +64,6 @@ class DepthMapGenerator : public QObject
 public:
     explicit DepthMapGenerator(QObject *parent = nullptr);
 
-    /// 向后兼容构造函数
-    DepthMapGenerator(const std::vector<CameraView> &views,
-                      const PreprocessResult        &ppResult,
-                      const DepthGenConfig          &config,
-                      QObject                       *parent = nullptr);
     ~DepthMapGenerator() override;
 
     /// 设置输入数据

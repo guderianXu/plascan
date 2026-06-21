@@ -658,9 +658,9 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
                 return;
             }
 
-            for (const auto &sp : result.newSpFiles)
+            for (const auto &sp : result.newFeatureFiles)
             {
-                m_owner->appendIpfindResult(sp.imagePath, sp.spPath, QJsonObject());
+                m_owner->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
             }
             for (const auto &mr : result.newMatchFiles)
             {

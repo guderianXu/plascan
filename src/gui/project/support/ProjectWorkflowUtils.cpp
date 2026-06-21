@@ -440,7 +440,7 @@ QString sparseOperationDisplayName(const QString &operation)
     {
         return QStringLiteral("平差稀疏点云");
     }
-    if (operation == QLatin1String("local_optim") || operation == QLatin1String("spatial_cleanup"))
+    if (operation == QLatin1String("spatial_cleanup"))
     {
         return QStringLiteral("空间清理点云");
     }

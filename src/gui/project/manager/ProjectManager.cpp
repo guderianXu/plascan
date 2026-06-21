@@ -36,7 +36,6 @@
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
 #include "Camera.h"
-#include "MVSPipeline.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "SparseCloudPreprocessor.h"

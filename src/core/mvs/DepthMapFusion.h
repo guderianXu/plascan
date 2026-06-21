@@ -83,12 +83,6 @@ public:
               MvsProgressCallback                  progressCb = nullptr,
               std::string                         *errorMsg   = nullptr);
 
-    /// 兼容旧接口：输出 DensePoint（无法线）
-    bool fuse(const std::vector<FusionFrameInput> &frames,
-              std::vector<DensePoint>             &densePoints,
-              MvsProgressCallback                  progressCb = nullptr,
-              std::string                         *errorMsg   = nullptr);
-
     /// 辅助：获取每帧一致性过滤后的深度图（通过 fuse() 后可用）
     const std::vector<cv::Mat> &filteredDepths() const
     {

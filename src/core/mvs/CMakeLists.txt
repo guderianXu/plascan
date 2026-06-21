@@ -24,7 +24,6 @@ set(MVS_CXX_SOURCES
     EpipolarRectifier.cpp
     SparseCloudValidator.cpp
     SparseCloudPreprocessor.cpp
-    DensePointCloudGenerator.cpp
     SubpixelRefiner.cpp
     DisparityFilter.cpp
     DisparityTriangulator.cpp
@@ -49,8 +48,6 @@ set(MVS_HEADERS
     EpipolarRectifier.h
     SparseCloudValidator.h
     SparseCloudPreprocessor.h
-    DensePointCloudGenerator.h
-    MVSPipeline.h
     SubpixelRefiner.h
     DisparityFilter.h
     DisparityTriangulator.h

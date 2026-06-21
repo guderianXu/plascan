@@ -64,6 +64,33 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("$vsDevPathValue", text)
         self.assertIn("-ieq \"Path\"", text)
 
+    def test_libtorch_cuda_arches_are_not_set_before_torch_package_loads(self):
+        cmake_path = ROOT / "cmake" / "PlascanPackages.cmake"
+        text = cmake_path.read_text(encoding="utf-8")
+        torch_find = text.index("find_package(Torch REQUIRED)")
+
+        before_torch = text[:torch_find]
+        after_torch = text[torch_find:]
+
+        self.assertIn("TORCH_CUDA_ARCH_LIST", before_torch)
+        self.assertNotRegex(before_torch, r"(?m)^\s*set\s*\(\s*CMAKE_CUDA_ARCHITECTURES\b")
+        self.assertRegex(after_torch, r"(?m)^\s*set\s*\(\s*CMAKE_CUDA_ARCHITECTURES\b")
+        self.assertIn("kineto", text)
+        self.assertIn("kineto_LIBRARY", text)
+        self.assertIn("optional profiler backend skipped", text)
+
+    def test_plapoint_cuda_warning_sentinels_use_typed_infinity(self):
+        knn_source = (ROOT / "3rdparty" / "plapoint" / "src" / "knn_gpu.cu").read_text(encoding="utf-8")
+        icp_source = (ROOT / "3rdparty" / "plapoint" / "src" / "icp_gpu.cu").read_text(encoding="utf-8")
+
+        self.assertNotIn("HUGE_VAL", knn_source)
+        self.assertNotRegex(icp_source, r"\bINFINITY\b")
+        self.assertIn("std::numeric_limits<double>::infinity()", knn_source)
+        self.assertIn("std::numeric_limits<double>::infinity()", icp_source)
+        self.assertIn("markSharedTransformMaybeUnused", icp_source)
+        self.assertIn("(void)min_z;", icp_source)
+        self.assertIn("(void)max_z;", icp_source)
+
     def test_laser_photogrammetry_dataset_notes_capture_future_ba_inputs(self):
         doc_path = ROOT / "docs" / "design" / "LASER_PHOTOGRAMMETRY_DATASETS.md"
 

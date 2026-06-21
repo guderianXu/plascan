@@ -75,8 +75,6 @@ struct SFMServiceOptions
     QString             featureAlgorithm = QStringLiteral("disk");
     /// 一键空三默认特征匹配算法。默认 LightGlue，不再使用 SuperGlue。
     QString             matchAlgorithm = QStringLiteral("lightglue");
-    /// 旧 SuperGlue 模型类型配置，仅保留兼容旧调用方。
-    QString             sgModelType = "outdoor";
 
     /// CUDA 模式下并行处理的影像对数（每对独立持有一个 Matcher 实例）
     /// 默认: 1（串行）；增大前确认 GPU 显存充裕（每实例约占 200-400 MB）
@@ -154,7 +152,7 @@ struct SFMServiceOptions
 struct SpFileRecord
 {
     QString imagePath;              ///< 原始影像路径
-    QString spPath;                 ///< 生成的特征文件路径（字段名保留兼容旧调用方）
+    QString featurePath;            ///< 生成的特征文件路径
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
@@ -219,7 +217,7 @@ struct SFMServiceResult
     QJsonArray perCameraResiduals;
 
     // ── 自动生成的中间文件记录（供调用方更新项目元数据）───────────────────
-    QVector<SpFileRecord>    newSpFiles;     ///< 自动提取的特征文件（字段名保留兼容旧调用方）
+    QVector<SpFileRecord>    newFeatureFiles; ///< 自动提取的特征文件
     QVector<MatchFileRecord> newMatchFiles;  ///< 自动生成的匹配文件
 
     /// 本次运行中内点数不足（无有效匹配）的影像对

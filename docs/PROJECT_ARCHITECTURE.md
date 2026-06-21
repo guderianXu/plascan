@@ -150,14 +150,12 @@ core/
 │   ├── DisparityFilter.h/cpp   # 视差滤波
 │   ├── DisparityTriangulator.h/cpp  # 视差三角化
 │   ├── DensePointCloudCUDA.cu  # 密集点云 CUDA
-│   ├── DensePointCloudGenerator.h/cpp  # 密集点云生成
-│   ├── DenseCloudBuilder.h/cpp # 密集云构建器
+│   ├── DenseCloudBuilder.h/cpp # 密集云构建器与点云过滤
 │   ├── SparseCloudPreprocessor.h/cpp  # 稀疏云预处理
 │   ├── SparseCloudValidator.h/cpp     # 稀疏云验证
 │   ├── StereoDenseCloudPipeline.h/cpp # 立体密集云流水线 (主入口)
 │   ├── StereoDenseCloudPipelineOutput.h/cpp  # 流水线输出
 │   ├── StereoDenseCloudPipelinePaths.h/cpp   # 流水线路径管理
-│   ├── MVSPipeline.h           # MVS 流水线接口
 │   ├── PointCloudTifIO.h/cpp   # 点云 TIFF I/O
 │   ├── AspPointCloudMetrics.h/cpp  # ASP 兼容点云指标
 │   └── EpipolarRectifier_tests.cpp
@@ -314,7 +312,6 @@ gui/
 │       ├── ProjectBundleAdjustWorkflow.h/cpp        # BA 工作流
 │       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
 │       ├── ProjectDenseWorkflowConfig.h/cpp         # 密集工作流配置
-│       ├── ProjectDepthFrameUtils.h/cpp             # 深度帧工具
 │       ├── ProjectMetadataOperations.h/cpp          # 元数据操作
 │       ├── ProjectResultRecords.h/cpp               # 结果记录
 │       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流

@@ -1537,32 +1537,5 @@ bool DepthMapFusion::fuse(
     return true;
 }
 
-// =============================================================================
-// 兼容旧接口：输出 DensePoint
-// =============================================================================
-bool DepthMapFusion::fuse(
-    const std::vector<FusionFrameInput> &frames,
-    std::vector<DensePoint>             &densePoints,
-    MvsProgressCallback                  progressCb,
-    std::string                         *errorMsg)
-{
-    densePoints.clear();
-
-    std::vector<FusedPoint> fusedPts;
-    if (!fuse(frames, fusedPts, progressCb, errorMsg))
-        return false;
-
-    densePoints.resize(fusedPts.size());
-    for (size_t i = 0; i < fusedPts.size(); ++i) {
-        densePoints[i].x = fusedPts[i].x;
-        densePoints[i].y = fusedPts[i].y;
-        densePoints[i].z = fusedPts[i].z;
-        densePoints[i].r = fusedPts[i].r;
-        densePoints[i].g = fusedPts[i].g;
-        densePoints[i].b = fusedPts[i].b;
-    }
-    return true;
-}
-
 } // namespace mvs
 } // namespace xjw

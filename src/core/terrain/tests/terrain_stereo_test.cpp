@@ -7,6 +7,7 @@
 #include "DemDomTypes.h"
 #include "DemGenerator.h"
 #include "DenseCloudBuilder.h"
+#include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "MvsTypes.h"
@@ -162,15 +163,16 @@ int main(int argc, char *argv[])
         printSeparator("Loading Existing Depth Maps (--skip-mvs)");
         for (int i = 0; i < 2; ++i)
         {
-            QString path = QString("%1/depth_%2.yml.gz").arg(OUTPUT_DIR).arg(i);
-            cv::FileStorage fs(path.toStdString(), cv::FileStorage::READ);
-            if (!fs.isOpened())
+            const QString pngPath = QString("%1/depth_%2.png").arg(OUTPUT_DIR).arg(i);
+            const QString path = xjw::core::project::rawDepthStoragePath(pngPath);
+            cv::Mat dm;
+            const xjw::common::OperationResult loadResult =
+                xjw::core::project::loadDepthMatStorage(path, &dm);
+            if (!loadResult.ok)
             {
-                fprintf(stderr, "Cannot open %s\n", path.toUtf8().constData());
+                fprintf(stderr, "%s\n", loadResult.errorMessage.toUtf8().constData());
                 return 1;
             }
-            cv::Mat dm;
-            fs.getFirstTopLevelNode() >> dm;
             filteredDepths.push_back(dm);
             int validPx = cv::countNonZero(dm > 0);
             printf("  Loaded depth_%d: %dx%d, valid=%d (%.1f%%)\n",
@@ -505,4 +507,3 @@ int main(int argc, char *argv[])
 
     return 0;
 }
-

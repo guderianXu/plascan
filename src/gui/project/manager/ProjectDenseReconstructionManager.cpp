@@ -3,7 +3,7 @@
 #include "ProjectManager.h"
 #include "ProjectData.h"
 #include "ProjectDenseWorkflowConfig.h"
-#include "ProjectDepthFrameUtils.h"
+#include "DepthFrameUtils.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectSupportUtils.h"
@@ -51,17 +51,17 @@ using xjw::gui::project::findLatestProductionAtResultIndex;
 using xjw::gui::project::makeDenseResultRecord;
 using xjw::gui::project::makeDepthResultRecord;
 using xjw::gui::project::sparseResultBlockingReason;
-using xjw::gui::project::buildStoredFusionFrame;
-using xjw::gui::project::collectLatestStoredDepthFrames;
-using xjw::gui::project::depthFrameArtifactsExist;
-using xjw::gui::project::FusionFrameBuildResult;
+using xjw::core::project::buildStoredFusionFrame;
+using xjw::core::project::collectLatestStoredDepthFrames;
+using xjw::core::project::depthFrameArtifactsExist;
+using xjw::core::project::FusionFrameBuildResult;
 using xjw::gui::project::normalizePath;
 using xjw::gui::project::persistProjectMeta;
-using xjw::gui::project::rawConfidenceStoragePath;
-using xjw::gui::project::rawDepthStoragePath;
+using xjw::core::project::rawConfidenceStoragePath;
+using xjw::core::project::rawDepthStoragePath;
 using xjw::gui::project::resolveLatestDenseCloudPath;
 using xjw::gui::project::resolveProjectOutputDir;
-using xjw::gui::project::StoredDepthFrameRecord;
+using xjw::core::project::StoredDepthFrameRecord;
 using xjw::gui::project::upsertMetaArrayRecordByPath;
 using xjw::gui::project::upsertProjectRecordByPath;
 

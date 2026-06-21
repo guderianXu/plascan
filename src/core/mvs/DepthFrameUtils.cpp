@@ -35,18 +35,6 @@ struct FastDepthMatHeader
     quint64 dataBytes = 0;
 };
 
-QString legacyRawDepthStoragePath(const QString &pngPath)
-{
-    const QFileInfo info(pngPath);
-    return info.dir().filePath(info.completeBaseName() + QStringLiteral(".yml.gz"));
-}
-
-QString legacyRawConfidenceStoragePath(const QString &pngPath)
-{
-    const QFileInfo info(pngPath);
-    return info.dir().filePath(info.completeBaseName() + QStringLiteral("_conf.yml.gz"));
-}
-
 QString firstExistingPath(const QStringList &paths)
 {
     for (const QString &path : paths)
@@ -63,8 +51,7 @@ QString resolveExistingRawDepthPath(const QString &pngPath, const QString &prefe
 {
     return firstExistingPath({
         preferredPath,
-        rawDepthStoragePath(pngPath),
-        legacyRawDepthStoragePath(pngPath)
+        rawDepthStoragePath(pngPath)
     });
 }
 
@@ -72,32 +59,8 @@ QString resolveExistingRawConfidencePath(const QString &pngPath, const QString &
 {
     return firstExistingPath({
         preferredPath,
-        rawConfidenceStoragePath(pngPath),
-        legacyRawConfidenceStoragePath(pngPath)
+        rawConfidenceStoragePath(pngPath)
     });
-}
-
-xjw::common::OperationResult loadLegacyCvMatStorage(const QString &path, cv::Mat *matrix)
-{
-    if (!matrix)
-    {
-        return {false, QStringLiteral("内部错误：矩阵输出参数无效")};
-    }
-
-    cv::FileStorage storage(path.toStdString(), cv::FileStorage::READ);
-    if (!storage.isOpened())
-    {
-        return {false, QStringLiteral("无法读取矩阵文件：%1").arg(path)};
-    }
-
-    storage["mat"] >> *matrix;
-    storage.release();
-    if (matrix->empty())
-    {
-        return {false, QStringLiteral("矩阵文件内容为空：%1").arg(path)};
-    }
-
-    return {true, QString()};
 }
 
 xjw::common::OperationResult loadFastDepthMatStorage(const QString &path, cv::Mat *matrix)
@@ -176,11 +139,11 @@ QString rawConfidenceStoragePath(const QString &pngPath)
 
 xjw::common::OperationResult loadDepthMatStorage(const QString &path, cv::Mat *matrix)
 {
-    if (path.endsWith(QStringLiteral(".bin"), Qt::CaseInsensitive))
+    if (!path.endsWith(QStringLiteral(".bin"), Qt::CaseInsensitive))
     {
-        return loadFastDepthMatStorage(path, matrix);
+        return {false, QStringLiteral("不支持的深度矩阵格式：%1").arg(path)};
     }
-    return loadLegacyCvMatStorage(path, matrix);
+    return loadFastDepthMatStorage(path, matrix);
 }
 
 xjw::common::OperationResult writeDepthMatStorage(const QString &path, const cv::Mat &matrix)

@@ -1178,9 +1178,9 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
         }
 
         const bool wasCanceled = cancelFlag->load(std::memory_order_relaxed);
-        for (const auto &sp : result.newSpFiles)
+        for (const auto &sp : result.newFeatureFiles)
         {
-            pmGuard->appendIpfindResult(sp.imagePath, sp.spPath, QJsonObject());
+            pmGuard->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
         }
         for (const auto &match : result.newMatchFiles)
         {
@@ -1408,9 +1408,9 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
         }
 
         QMetaObject::invokeMethod(pm, [self, pm, result = std::move(result), runSettings, sfmImages, sfmOutputDir]() mutable {
-            for (const auto &sp : result.newSpFiles)
+            for (const auto &sp : result.newFeatureFiles)
             {
-                pm->appendIpfindResult(sp.imagePath, sp.spPath, QJsonObject());
+                pm->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
             }
             for (const auto &match : result.newMatchFiles)
             {

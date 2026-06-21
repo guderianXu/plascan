@@ -12,7 +12,7 @@
 // ============================================================
 
 #include "Camera.h"
-#include "KDTree2D.h"
+#include <plapoint/search/spatial_kdtree.h>
 
 #include <array>
 #include <string>
@@ -36,7 +36,7 @@ struct ReferenceSphereSurface
 // 类：DemSurface
 // 描述：数字高程模型（DEM）的轻量封装。
 //   - 从 XYZ 格式点云文件中加载地面高程数据
-//   - 内部使用 common/spatial/KDTree2D 建立空间索引以支持快速最近邻高程查询
+//   - 内部使用 PlaPoint SpatialKdTree 建立空间索引以支持快速最近邻高程查询
 //   - 提供均值高程作为缺省/初始值使用
 // 坐标系说明：XY 为水平坐标（如 UTM 东北向），Z 为高程（通常为 CGCS2000 或 WGS84 椭球高）
 // ============================================================
@@ -62,11 +62,13 @@ private:
     // 原始 XYZ 三维点集合
     std::vector<std::array<double, 3>> m_points;
 
+    using DemKdTree2D = plapoint::search::SpatialKdTree<2, double>;
+
     // 对应 2D 平面点（仅含 XY 坐标+索引），用于构建 KD 树
-    std::vector<common::spatial::KDPoint2D> m_xyPoints;
+    std::vector<DemKdTree2D::Point> m_xyPoints;
 
     // 2D KD 树空间索引，加速水平方向最近邻查询
-    common::spatial::KDTree2D m_index;
+    DemKdTree2D m_index;
 
     // 所有点的 Z 均值，作为 DEM 整体高程的近似估计
     double m_meanHeight = 0.0;

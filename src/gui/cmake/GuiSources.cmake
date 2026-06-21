@@ -139,7 +139,6 @@ set(GUI_HEADERS
   project/support/ProjectBundleAdjustWorkflow.h
   project/support/ProjectCameraInitialization.h
   project/support/ProjectDashboardSummary.h
-  project/support/ProjectDepthFrameUtils.h
   project/support/ProjectDenseWorkflowConfig.h
   project/support/ProjectMetadataOperations.h
   project/support/ProjectReferenceDatasets.h

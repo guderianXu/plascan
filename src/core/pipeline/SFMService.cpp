@@ -2309,7 +2309,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 fc.imgW     = image.cols;
 
                 // 记录新生成的文件
-                result.newSpFiles.append({imgPath, featurePath});
+                result.newFeatureFiles.append({imgPath, featurePath});
                 ++featureDoneCount;
             }
         }

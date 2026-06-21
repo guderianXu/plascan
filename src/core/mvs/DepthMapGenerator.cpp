@@ -977,23 +977,6 @@ DepthMapGenerator::DepthMapGenerator(QObject *parent)
     qRegisterMetaType<std::vector<DensePoint>>("std::vector<DensePoint>");
 }
 
-/**
- * @brief 使用输入视图、稀疏点云与配置构造深度图生成器。
- */
-DepthMapGenerator::DepthMapGenerator(const std::vector<CameraView> &views,
-                                     const PreprocessResult        &ppResult,
-                                     const DepthGenConfig          &config,
-                                     QObject                       *parent)
-    : QObject(parent)
-    , m_views(views)
-    , m_sparse(ppResult.cloud)
-    , m_config(config)
-{
-    qRegisterMetaType<DepthFrameResult>("DepthFrameResult");
-    qRegisterMetaType<QSharedPointer<cv::Mat>>("QSharedPointer<cv::Mat>");
-    qRegisterMetaType<std::vector<DensePoint>>("std::vector<DensePoint>");
-}
-
 DepthMapGenerator::~DepthMapGenerator()
 {
 }
@@ -2710,7 +2693,6 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 {
     DepthFrameResult result;
     result.refViewIdx = refIdx;
-    result.imageIndex = refIdx;
     result.success = false;
 
     const DepthGenConfig &config = configOverride ? *configOverride : m_config;
@@ -3252,7 +3234,7 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
     frame.depthPostprocess = postprocessFusionDepthMap(filteredDepth,
                                                        filteredConfidence,
                                                        m_config.fusion,
-                                                       res.imageIndex,
+                                                       res.refViewIdx,
                                                        static_cast<int>(m_views.size()));
 
     frame.depthMap   = filteredDepth;
@@ -4270,10 +4252,10 @@ void DepthMapGenerator::runInBackground()
     }
 
     DepthMapFusion fusion(fusionCfg);
-    std::vector<DensePoint> cloud;
+    std::vector<FusedPoint> fusedPoints;
     std::string fuseErr;
 
-    bool fuseOk = fusion.fuse(frames, cloud,
+    bool fuseOk = fusion.fuse(frames, fusedPoints,
         [this, NV](const std::string &msg, float ratio)
         {
             emit progressChanged(
@@ -4288,6 +4270,15 @@ void DepthMapGenerator::runInBackground()
         emit errorOccurred(QString::fromStdString(fuseErr));
         emit finished(false);
         return;
+    }
+
+    std::vector<DensePoint> cloud;
+    cloud.reserve(fusedPoints.size());
+    for (const FusedPoint &point : fusedPoints)
+    {
+        cloud.push_back(DensePoint{
+            point.x, point.y, point.z,
+            point.r, point.g, point.b});
     }
 
     // 保存每帧一致性过滤深度图（加锁，防止 GUI 线程并发读取）

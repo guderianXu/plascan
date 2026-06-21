@@ -7,7 +7,7 @@
 #include "ProjectIO.h"
 #include "ProjectCameraImportService.h"
 #include "ProjectData.h"
-#include "ProjectDepthFrameUtils.h"
+#include "DepthFrameUtils.h"
 #include "ProjectFilesManager.h"
 #include "ProjectDashboardSummary.h"
 #include "ProjectReferenceDatasets.h"
@@ -829,45 +829,45 @@ TEST(ProjectSupportUtilsTest, ListsOnlyFeatureSuffixesPresentInProject)
     EXPECT_EQ(suffixes, QStringList{QStringLiteral(".dsk")});
 }
 
-TEST(ProjectDepthFrameUtilsTest, ExistingFrameArtifactsRequirePreviewAndRawDepth)
+TEST(DepthFrameUtilsTest, ExistingFrameArtifactsRequirePreviewAndRawDepth)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
     const QString pngPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_0.png"));
-    EXPECT_FALSE(xjw::gui::project::depthFrameArtifactsExist(pngPath));
+    EXPECT_FALSE(xjw::core::project::depthFrameArtifactsExist(pngPath));
 
     QFile pngFile(pngPath);
     ASSERT_TRUE(pngFile.open(QIODevice::WriteOnly));
     pngFile.write("png");
     pngFile.close();
 
-    EXPECT_FALSE(xjw::gui::project::depthFrameArtifactsExist(pngPath));
+    EXPECT_FALSE(xjw::core::project::depthFrameArtifactsExist(pngPath));
 
-    QFile rawFile(xjw::gui::project::rawDepthStoragePath(pngPath));
+    QFile rawFile(xjw::core::project::rawDepthStoragePath(pngPath));
     ASSERT_TRUE(rawFile.open(QIODevice::WriteOnly));
     rawFile.write("raw");
     rawFile.close();
 
-    EXPECT_TRUE(xjw::gui::project::depthFrameArtifactsExist(pngPath));
-    EXPECT_FALSE(xjw::gui::project::depthFrameArtifactsExist(pngPath, true));
+    EXPECT_TRUE(xjw::core::project::depthFrameArtifactsExist(pngPath));
+    EXPECT_FALSE(xjw::core::project::depthFrameArtifactsExist(pngPath, true));
 
-    QFile confidenceFile(xjw::gui::project::rawConfidenceStoragePath(pngPath));
+    QFile confidenceFile(xjw::core::project::rawConfidenceStoragePath(pngPath));
     ASSERT_TRUE(confidenceFile.open(QIODevice::WriteOnly));
     confidenceFile.write("confidence");
     confidenceFile.close();
 
-    EXPECT_TRUE(xjw::gui::project::depthFrameArtifactsExist(pngPath, true));
+    EXPECT_TRUE(xjw::core::project::depthFrameArtifactsExist(pngPath, true));
 }
 
-TEST(ProjectDepthFrameUtilsTest, FastBinaryDepthArtifactsKeepLegacyYamlCompatibility)
+TEST(DepthFrameUtilsTest, FastBinaryDepthArtifactsIgnoreLegacyYamlFiles)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
 
     const QString pngPath = QDir(tempDir.path()).filePath(QStringLiteral("depth_3.png"));
-    EXPECT_TRUE(xjw::gui::project::rawDepthStoragePath(pngPath).endsWith(QStringLiteral(".bin")));
-    EXPECT_TRUE(xjw::gui::project::rawConfidenceStoragePath(pngPath).endsWith(QStringLiteral("_conf.bin")));
+    EXPECT_TRUE(xjw::core::project::rawDepthStoragePath(pngPath).endsWith(QStringLiteral(".bin")));
+    EXPECT_TRUE(xjw::core::project::rawConfidenceStoragePath(pngPath).endsWith(QStringLiteral("_conf.bin")));
 
     QFile pngFile(pngPath);
     ASSERT_TRUE(pngFile.open(QIODevice::WriteOnly));
@@ -879,18 +879,33 @@ TEST(ProjectDepthFrameUtilsTest, FastBinaryDepthArtifactsKeepLegacyYamlCompatibi
     legacyRawFile.write("legacy-depth");
     legacyRawFile.close();
 
-    EXPECT_TRUE(xjw::gui::project::depthFrameArtifactsExist(pngPath));
-    EXPECT_FALSE(xjw::gui::project::depthFrameArtifactsExist(pngPath, true));
+    EXPECT_FALSE(xjw::core::project::depthFrameArtifactsExist(pngPath));
+    EXPECT_FALSE(xjw::core::project::depthFrameArtifactsExist(pngPath, true));
 
     QFile legacyConfidenceFile(QDir(tempDir.path()).filePath(QStringLiteral("depth_3_conf.yml.gz")));
     ASSERT_TRUE(legacyConfidenceFile.open(QIODevice::WriteOnly));
     legacyConfidenceFile.write("legacy-confidence");
     legacyConfidenceFile.close();
 
-    EXPECT_TRUE(xjw::gui::project::depthFrameArtifactsExist(pngPath, true));
+    EXPECT_FALSE(xjw::core::project::depthFrameArtifactsExist(pngPath, true));
+
+    QFile rawFile(xjw::core::project::rawDepthStoragePath(pngPath));
+    ASSERT_TRUE(rawFile.open(QIODevice::WriteOnly));
+    rawFile.write("raw");
+    rawFile.close();
+
+    EXPECT_TRUE(xjw::core::project::depthFrameArtifactsExist(pngPath));
+    EXPECT_FALSE(xjw::core::project::depthFrameArtifactsExist(pngPath, true));
+
+    QFile confidenceFile(xjw::core::project::rawConfidenceStoragePath(pngPath));
+    ASSERT_TRUE(confidenceFile.open(QIODevice::WriteOnly));
+    confidenceFile.write("confidence");
+    confidenceFile.close();
+
+    EXPECT_TRUE(xjw::core::project::depthFrameArtifactsExist(pngPath, true));
 }
 
-TEST(ProjectDepthFrameUtilsTest, StoredDepthCollectionResolvesLegacyYamlFallback)
+TEST(DepthFrameUtilsTest, StoredDepthCollectionRequiresCurrentBinaryDepth)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -910,15 +925,24 @@ TEST(ProjectDepthFrameUtilsTest, StoredDepthCollectionResolvesLegacyYamlFallback
     QJsonObject record;
     record[QStringLiteral("ref_image")] = QStringLiteral("image_5.jpg");
     record[QStringLiteral("depth_png")] = pngPath;
-    record[QStringLiteral("raw_depth_path")] = xjw::gui::project::rawDepthStoragePath(pngPath);
+    record[QStringLiteral("raw_depth_path")] = xjw::core::project::rawDepthStoragePath(pngPath);
 
     QJsonObject meta;
     meta[QStringLiteral("depth_map_results")] = QJsonArray{record};
 
-    const auto result = xjw::gui::project::collectLatestStoredDepthFrames(meta);
-    ASSERT_TRUE(result.status.ok) << result.status.errorMessage.toStdString();
-    ASSERT_EQ(result.frames.size(), 1u);
-    EXPECT_EQ(result.frames.front().rawDepthPath, legacyRawPath);
+    const auto result = xjw::core::project::collectLatestStoredDepthFrames(meta);
+    EXPECT_FALSE(result.status.ok);
+    EXPECT_TRUE(result.frames.empty());
+
+    QFile rawFile(xjw::core::project::rawDepthStoragePath(pngPath));
+    ASSERT_TRUE(rawFile.open(QIODevice::WriteOnly));
+    rawFile.write("raw");
+    rawFile.close();
+
+    const auto refreshedResult = xjw::core::project::collectLatestStoredDepthFrames(meta);
+    ASSERT_TRUE(refreshedResult.status.ok) << refreshedResult.status.errorMessage.toStdString();
+    ASSERT_EQ(refreshedResult.frames.size(), 1u);
+    EXPECT_EQ(refreshedResult.frames.front().rawDepthPath, xjw::core::project::rawDepthStoragePath(pngPath));
 }
 
 TEST(DenseDepthReuseTest, ExistingDepthReuseRequiresRawDepthArtifact)
@@ -4132,7 +4156,7 @@ TEST(DataTreeWidgetTest, ResultOnlyMetadataUpdateRefreshesDepthMapSection)
     QJsonObject depthRecord;
     depthRecord[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
     depthRecord[QStringLiteral("depth_png")] = QStringLiteral("/tmp/mvs_output/depth_0.png");
-    depthRecord[QStringLiteral("raw_depth_path")] = QStringLiteral("/tmp/mvs_output/depth_0.yml.gz");
+    depthRecord[QStringLiteral("raw_depth_path")] = QStringLiteral("/tmp/mvs_output/depth_0.bin");
     depthRecord[QStringLiteral("ref_image")] = QStringLiteral("/tmp/ref_image_001.jpg");
     depthRecord[QStringLiteral("grid_width")] = 6000;
     depthRecord[QStringLiteral("grid_height")] = 4000;
@@ -4190,7 +4214,7 @@ TEST(DataTreeWidgetTest, ResourceRowsAreSortedByFileNameAscending)
         QJsonObject depthRecord;
         depthRecord[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
         depthRecord[QStringLiteral("depth_png")] = path;
-        depthRecord[QStringLiteral("raw_depth_path")] = path + QStringLiteral(".yml.gz");
+        depthRecord[QStringLiteral("raw_depth_path")] = xjw::core::project::rawDepthStoragePath(path);
         depthResults.append(depthRecord);
     }
 

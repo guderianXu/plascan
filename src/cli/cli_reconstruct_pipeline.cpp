@@ -1124,11 +1124,7 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
 
     const QDir dir(mvsDir);
     const QString depthPngPath = dir.filePath(QStringLiteral("depth_%1.png").arg(frameIndex));
-    QString depthPath = xjw::core::project::rawDepthStoragePath(depthPngPath);
-    if (!QFileInfo::exists(depthPath))
-    {
-        depthPath = dir.filePath(QStringLiteral("depth_%1.yml.gz").arg(frameIndex));
-    }
+    const QString depthPath = xjw::core::project::rawDepthStoragePath(depthPngPath);
 
     cv::Mat depth;
     if (!loadCvMatStorage(depthPath, &depth, error))
@@ -1137,11 +1133,7 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
     }
 
     cv::Mat confidence;
-    QString confPath = xjw::core::project::rawConfidenceStoragePath(depthPngPath);
-    if (!QFileInfo::exists(confPath))
-    {
-        confPath = dir.filePath(QStringLiteral("depth_%1_conf.yml.gz").arg(frameIndex));
-    }
+    const QString confPath = xjw::core::project::rawConfidenceStoragePath(depthPngPath);
     if (QFileInfo::exists(confPath))
     {
         QString confError;

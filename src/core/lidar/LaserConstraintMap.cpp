@@ -540,11 +540,13 @@ bool LaserConstraintMap::nearestPlane(const std::array<double, 3> &query,
 
 void LaserConstraintMap::rebuildIndex()
 {
-    std::vector<xjw::common::spatial::KDPoint<3, double>> points;
+    using LaserKdTree3D = plapoint::search::SpatialKdTree<3, double>;
+
+    std::vector<LaserKdTree3D::Point> points;
     points.reserve(m_samples.size());
     for (std::size_t i = 0; i < m_samples.size(); ++i)
     {
-        points.push_back(xjw::common::spatial::KDPoint<3, double>{
+        points.push_back(LaserKdTree3D::Point{
             m_samples[i].point,
             static_cast<int>(i)});
     }

@@ -2,7 +2,7 @@
 
 #include "ProjectManager.h"
 #include "ProjectData.h"
-#include "ProjectDepthFrameUtils.h"
+#include "DepthFrameUtils.h"
 #include "ProjectIO.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
@@ -30,8 +30,8 @@
 
 using xjw::gui::project::makeDemResultRecord;
 using xjw::gui::project::makeOrthoResultRecord;
-using xjw::gui::project::collectLatestStoredDepthFrames;
-using xjw::gui::project::loadDepthMatStorage;
+using xjw::core::project::collectLatestStoredDepthFrames;
+using xjw::core::project::loadDepthMatStorage;
 using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::findLatestProductionAtResultIndex;
 using xjw::gui::project::resolveProjectOutputDir;

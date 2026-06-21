@@ -177,7 +177,7 @@ TEST(MvsPipelineTest, DepthMapFusionTwoFrames)
     fcfg.maxDepthError  = 0.10f;
 
     xjw::mvs::DepthMapFusion fusion(fcfg);
-    std::vector<xjw::mvs::DensePoint> pts;
+    std::vector<xjw::mvs::FusedPoint> pts;
     std::string err;
     bool ok = fusion.fuse({fr0, fr1}, pts, nullptr, &err);
 

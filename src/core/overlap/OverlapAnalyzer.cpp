@@ -21,7 +21,7 @@
 //   score = 0.0 表示距离恰好等于阈值（临界无重叠）
 // ============================================================
 
-#include "KDTree2D.h"
+#include <plapoint/search/spatial_kdtree.h>
 
 #include <algorithm>
 #include <cmath>
@@ -455,18 +455,19 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
                                                                           useSphere ? &sphere : nullptr,
                                                                           sphereCenterMode);
 
+    using CenterKdTree2D = plapoint::search::SpatialKdTree<2, double>;
+
     // 用于构建 KD 树的 2D 地面中心点集
-    std::vector<common::spatial::KDPoint2D> centerPts;
+    std::vector<CenterKdTree2D::Point> centerPts;
     centerPts.reserve(images.size());
     for (size_t i = 0; i < projectedCenters.size(); ++i)
     {
-        centerPts.push_back(common::spatial::KDPoint2D{projectedCenters[i].x,
-                                                       projectedCenters[i].y,
-                                                       static_cast<int>(i)});
+        centerPts.push_back(CenterKdTree2D::Point{{projectedCenters[i].x, projectedCenters[i].y},
+                                                  static_cast<int>(i)});
     }
 
     // ---- Step 3：构建 KD 树，用于快速邻域搜索 ----
-    common::spatial::KDTree2D tree(centerPts);
+    CenterKdTree2D tree(centerPts);
 
     // ---- Step 4：遍历所有影像，寻找重叠对 ----
     for (size_t i = 0; i < images.size(); ++i)
@@ -476,7 +477,9 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
         const double searchRadius = kNeighbor * result->footprintRadii[i] * 2.5;
 
         // KD 树半径搜索：返回搜索范围内所有影像的索引
-        std::vector<int> nearby = tree.radiusSearch(projectedCenters[i].x, projectedCenters[i].y, searchRadius);
+        std::vector<int> nearby =
+            tree.radiusSearch(CenterKdTree2D::CoordinateArray{projectedCenters[i].x, projectedCenters[i].y},
+                              searchRadius);
 
         for (int j : nearby)
         {

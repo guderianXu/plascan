@@ -93,7 +93,7 @@ bool DemSurface::loadFromXYZ(const std::string &path, std::string *errorMsg)
     double sumZ = 0.0;
     for (size_t i = 0; i < m_points.size(); ++i) {
         // 将 3D 点压缩为 2D 点（附原始下标），用于 KD 树水平查询
-        m_xyPoints.push_back(common::spatial::KDPoint2D{m_points[i][0], m_points[i][1], static_cast<int>(i)});
+        m_xyPoints.push_back(DemKdTree2D::Point{{m_points[i][0], m_points[i][1]}, static_cast<int>(i)});
         sumZ += m_points[i][2];
     }
 
@@ -106,13 +106,13 @@ bool DemSurface::loadFromXYZ(const std::string &path, std::string *errorMsg)
 }
 
 // 在 (x,y) 处查询最近邻高程：通过 KD 树找到平面最近点，返回其 Z 值
-// idx 是 common::spatial::KDPoint2D::index，即 m_points 中的原始下标
+// idx 是 PlaPoint KDTree 点的 payload，即 m_points 中的原始下标
 bool DemSurface::sampleHeight(double x, double y, double *z, double *xyDistance) const
 {
     if (!z || m_index.empty()) return false;
     double dist = 0.0;
-    // KD 树最近邻查询：返回 common::spatial::KDPoint2D::index（即 m_points 的下标），dist 为水平距离
-    const int idx = m_index.nearest(x, y, &dist);
+    // KD 树最近邻查询：返回 PlaPoint KDTree 点的 payload（即 m_points 的下标），dist 为水平距离
+    const int idx = m_index.nearest(DemKdTree2D::CoordinateArray{x, y}, &dist);
     if (idx < 0 || idx >= static_cast<int>(m_points.size())) return false;
     *z = m_points[static_cast<size_t>(idx)][2]; // 取对应点的高程 Z
     if (xyDistance) *xyDistance = dist;          // 可选：返回水平距离（评估外推精度）

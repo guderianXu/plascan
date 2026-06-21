@@ -37,12 +37,12 @@ if(NOT PLASCAN_APPLE_SILICON)
   if(NOT DEFINED PLASCAN_CUDA_ARCHITECTURES)
     set(PLASCAN_CUDA_ARCHITECTURES "75;86;89" CACHE STRING "Target CUDA architectures")
   endif()
-  set(CMAKE_CUDA_ARCHITECTURES ${PLASCAN_CUDA_ARCHITECTURES})
   # 防止 Caffe2 自动检测, 避免 nvcc 13.1 不支持的 compute_50
   # TORCH_CUDA_ARCH_LIST 格式为 "7.5;8.6;8.9" (带小数点)
   set(TORCH_CUDA_ARCH_LIST "7.5;8.6;8.9" CACHE STRING "Torch CUDA architectures")
-  set(ENV{TORCH_CUDA_ARCH_LIST} "7.5;8.6;8.9")
-  message(STATUS "plascan: CUDA architectures set to ${CMAKE_CUDA_ARCHITECTURES}")
+  set(ENV{TORCH_CUDA_ARCH_LIST} "${TORCH_CUDA_ARCH_LIST}")
+  unset(CMAKE_CUDA_ARCHITECTURES)
+  message(STATUS "plascan: Torch CUDA arch list set to ${TORCH_CUDA_ARCH_LIST}")
 else()
   message(STATUS "plascan: Apple Silicon — skipping CUDA, using MPS acceleration")
 endif()
@@ -58,8 +58,48 @@ if(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH AND DEFINED ENV{CONDA_PREFIX} AND NOT APP
   message(STATUS "plascan: Using system linker")
 endif()
 
+set(_PLASCAN_SUPPRESS_TORCH_OPTIONAL_WARNINGS OFF)
+if(DEFINED Torch_DIR)
+  get_filename_component(_PLASCAN_TORCH_ROOT "${Torch_DIR}/../../.." ABSOLUTE)
+  if(NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/kineto.lib"
+      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/kineto.dll"
+      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/libkineto.a"
+      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/libkineto.so"
+      AND NOT EXISTS "${_PLASCAN_TORCH_ROOT}/lib/libkineto.dylib")
+    set(_PLASCAN_SUPPRESS_TORCH_OPTIONAL_WARNINGS ON)
+  endif()
+endif()
+
+if(_PLASCAN_SUPPRESS_TORCH_OPTIONAL_WARNINGS)
+  set(_PLASCAN_TORCH_KINETO_PLACEHOLDER "")
+  foreach(_PLASCAN_TORCH_BASE_LIB torch torch_cpu c10)
+    foreach(_PLASCAN_TORCH_LIB_SUFFIX .lib .dll .so .dylib .a)
+      if(NOT _PLASCAN_TORCH_KINETO_PLACEHOLDER
+          AND EXISTS "${_PLASCAN_TORCH_ROOT}/lib/${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
+        set(_PLASCAN_TORCH_KINETO_PLACEHOLDER
+          "${_PLASCAN_TORCH_ROOT}/lib/${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
+      endif()
+      if(NOT _PLASCAN_TORCH_KINETO_PLACEHOLDER
+          AND EXISTS "${_PLASCAN_TORCH_ROOT}/lib/lib${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
+        set(_PLASCAN_TORCH_KINETO_PLACEHOLDER
+          "${_PLASCAN_TORCH_ROOT}/lib/lib${_PLASCAN_TORCH_BASE_LIB}${_PLASCAN_TORCH_LIB_SUFFIX}")
+      endif()
+    endforeach()
+  endforeach()
+  if(_PLASCAN_TORCH_KINETO_PLACEHOLDER)
+    set(kineto_LIBRARY "${_PLASCAN_TORCH_KINETO_PLACEHOLDER}" CACHE FILEPATH
+      "Optional LibTorch kineto placeholder when the runtime does not ship profiler libraries" FORCE)
+    message(STATUS "plascan: LibTorch kineto library not present; optional profiler backend skipped")
+  endif()
+endif()
+
 find_package(Torch REQUIRED)
 message(STATUS "plascan: found LibTorch")
+
+if(NOT PLASCAN_APPLE_SILICON)
+  set(CMAKE_CUDA_ARCHITECTURES ${PLASCAN_CUDA_ARCHITECTURES})
+  message(STATUS "plascan: CUDA architectures set to ${CMAKE_CUDA_ARCHITECTURES}")
+endif()
 
 if(DEFINED CAFFE2_USE_CUDA AND CAFFE2_USE_CUDA)
   set(PLASCAN_TORCH_HAS_CUDA ON CACHE BOOL "LibTorch has CUDA headers and libraries" FORCE)
