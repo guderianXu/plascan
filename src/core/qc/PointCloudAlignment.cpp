@@ -1,5 +1,7 @@
 #include "PointCloudAlignment.h"
 
+#include <plapoint/search/spatial_kdtree.h>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -10,6 +12,8 @@ namespace xjw::qc
 
 namespace
 {
+
+using AlignmentKdTree = plapoint::search::SpatialKdTree<3, double>;
 
 Point3D operator+(const Point3D &a, const Point3D &b)
 {
@@ -100,24 +104,34 @@ ErrorSummary summarizeErrors(std::vector<double> values)
     return summary;
 }
 
-Point3D nearestPoint(const std::vector<Point3D> &points, const Point3D &query)
+AlignmentKdTree buildAlignmentTree(const std::vector<Point3D> &points)
 {
-    Point3D best;
-    double bestDistance = std::numeric_limits<double>::infinity();
-    for (const Point3D &point : points)
+    std::vector<AlignmentKdTree::Point> treePoints;
+    treePoints.reserve(points.size());
+    for (std::size_t index = 0; index < points.size(); ++index)
     {
-        const double d2 = squaredNorm(point - query);
-        if (d2 < bestDistance)
-        {
-            bestDistance = d2;
-            best = point;
-        }
+        const Point3D &point = points[index];
+        treePoints.push_back(AlignmentKdTree::Point{{point.x, point.y, point.z}, static_cast<int>(index)});
     }
-    return best;
+
+    return AlignmentKdTree(treePoints);
+}
+
+Point3D nearestPoint(const std::vector<Point3D> &points,
+                     const AlignmentKdTree &tree,
+                     const Point3D &query)
+{
+    const int index = tree.nearest({query.x, query.y, query.z});
+    if (index < 0 || index >= static_cast<int>(points.size()))
+    {
+        return {};
+    }
+    return points[static_cast<std::size_t>(index)];
 }
 
 std::vector<double> nearestNeighborErrors(const std::vector<Point3D> &source,
                                           const std::vector<Point3D> &reference,
+                                          const AlignmentKdTree &referenceTree,
                                           const SimilarityTransform *transform)
 {
     std::vector<double> errors;
@@ -125,7 +139,7 @@ std::vector<double> nearestNeighborErrors(const std::vector<Point3D> &source,
     for (const Point3D &point : source)
     {
         const Point3D aligned = transform ? PointCloudAlignment::apply(*transform, point) : point;
-        errors.push_back(distance(aligned, nearestPoint(reference, aligned)));
+        errors.push_back(distance(aligned, nearestPoint(reference, referenceTree, aligned)));
     }
     return errors;
 }
@@ -204,6 +218,7 @@ PointCloudAlignmentResult PointCloudAlignment::alignNearestNeighborTranslation(c
 
     SimilarityTransform transform;
     transform.scale = 1.0;
+    const AlignmentKdTree referenceTree = buildAlignmentTree(reference);
 
     const int iterations = std::max(1, maxIterations);
     for (int iter = 0; iter < iterations; ++iter)
@@ -218,7 +233,7 @@ PointCloudAlignmentResult PointCloudAlignment::alignNearestNeighborTranslation(c
         for (const Point3D &point : source)
         {
             const Point3D aligned = apply(transform, point);
-            const Point3D nearest = nearestPoint(reference, aligned);
+            const Point3D nearest = nearestPoint(reference, referenceTree, aligned);
             dx.push_back(nearest.x - aligned.x);
             dy.push_back(nearest.y - aligned.y);
             dz.push_back(nearest.z - aligned.z);
@@ -234,8 +249,8 @@ PointCloudAlignmentResult PointCloudAlignment::alignNearestNeighborTranslation(c
 
     result.transform = transform;
     result.pairCount = static_cast<int>(source.size());
-    result.before = summarizeErrors(nearestNeighborErrors(source, reference, nullptr));
-    result.after = summarizeErrors(nearestNeighborErrors(source, reference, &result.transform));
+    result.before = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, nullptr));
+    result.after = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, &result.transform));
     result.success = true;
     return result;
 }

@@ -13,13 +13,11 @@
 #include <array>
 #include <cmath>
 #include <cstdint>
-#include <cstring>
 #include <exception>
 #include <fstream>
 #include <limits>
 #include <new>
 #include <numeric>
-#include <sstream>
 #include <string>
 #include <thread>
 #include <utility>
@@ -34,297 +32,90 @@ namespace
 {
 
 using PlaPointCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+using PlyHeader = plapoint::io::PlyVertexStreamHeader;
+using PlyVertexChunk = plapoint::io::PlyVertexChunk;
 
-enum class PlyScalarType
+std::string localizePlyStreamError(const std::string &error)
 {
-    Invalid,
-    Int8,
-    UInt8,
-    Int16,
-    UInt16,
-    Int32,
-    UInt32,
-    Float32,
-    Float64
-};
-
-struct PlyProperty
-{
-    std::string name;
-    PlyScalarType type = PlyScalarType::Invalid;
-    int offset = 0;
-    int size = 0;
-};
-
-struct PlyHeader
-{
-    bool valid = false;
-    bool binaryLittleEndian = false;
-    std::uint64_t vertexCount = 0;
-    std::streamoff dataStartOffset = 0;
-    int vertexStride = 0;
-    int xProperty = -1;
-    int yProperty = -1;
-    int zProperty = -1;
-    int redProperty = -1;
-    int greenProperty = -1;
-    int blueProperty = -1;
-    int nxProperty = -1;
-    int nyProperty = -1;
-    int nzProperty = -1;
-    std::vector<PlyProperty> properties;
-};
-
-PlyScalarType plyScalarTypeFromName(const std::string &name)
-{
-    if (name == "char" || name == "int8")
-        return PlyScalarType::Int8;
-    if (name == "uchar" || name == "uint8" || name == "unsigned_char")
-        return PlyScalarType::UInt8;
-    if (name == "short" || name == "int16")
-        return PlyScalarType::Int16;
-    if (name == "ushort" || name == "uint16" || name == "unsigned_short")
-        return PlyScalarType::UInt16;
-    if (name == "int" || name == "int32")
-        return PlyScalarType::Int32;
-    if (name == "uint" || name == "uint32" || name == "unsigned_int")
-        return PlyScalarType::UInt32;
-    if (name == "float" || name == "float32")
-        return PlyScalarType::Float32;
-    if (name == "double" || name == "float64")
-        return PlyScalarType::Float64;
-    return PlyScalarType::Invalid;
-}
-
-int plyScalarTypeSize(PlyScalarType type)
-{
-    switch (type)
+    if (error.find("Cannot open") != std::string::npos)
     {
-    case PlyScalarType::Int8:
-    case PlyScalarType::UInt8:
-        return 1;
-    case PlyScalarType::Int16:
-    case PlyScalarType::UInt16:
-        return 2;
-    case PlyScalarType::Int32:
-    case PlyScalarType::UInt32:
-    case PlyScalarType::Float32:
-        return 4;
-    case PlyScalarType::Float64:
-        return 8;
-    default:
-        return 0;
+        return "无法打开 PLY 文件";
     }
+    if (error.find("Not a PLY file") != std::string::npos ||
+        error.find("missing magic header") != std::string::npos)
+    {
+        return "不是有效的 PLY 文件";
+    }
+    if (error.find("Only binary_little_endian") != std::string::npos)
+    {
+        return "仅支持 binary_little_endian PLY 的流式读取";
+    }
+    if (error.find("end_header") != std::string::npos)
+    {
+        return "PLY 头缺少 end_header";
+    }
+    if (error.find("positive vertex count") != std::string::npos)
+    {
+        return "PLY 头缺少有效顶点数量";
+    }
+    if (error.find("no scalar properties") != std::string::npos)
+    {
+        return "PLY 顶点属性为空";
+    }
+    if (error.find("x, y, and z") != std::string::npos)
+    {
+        return "PLY 顶点缺少 x/y/z 坐标属性";
+    }
+    if (error.find("list properties") != std::string::npos)
+    {
+        return "暂不支持顶点元素中的 list property";
+    }
+    if (error.find("Unsupported PLY vertex property type") != std::string::npos)
+    {
+        return "不支持的 PLY 顶点属性类型";
+    }
+    return "PLY 流式读取失败: " + error;
 }
 
 bool parseBinaryPlyHeader(const std::string &cloudPath, PlyHeader *header, std::string *errorMsg)
 {
-    if (!header)
+    std::string streamError;
+    const bool ok = plapoint::io::parseBinaryPlyVertexStreamHeader(cloudPath, header, &streamError);
+    if (!ok && errorMsg)
     {
-        return false;
+        *errorMsg = localizePlyStreamError(streamError);
     }
-
-    *header = PlyHeader{};
-    std::ifstream file(cloudPath, std::ios::binary);
-    if (!file)
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "无法打开 PLY 文件";
-        }
-        return false;
-    }
-
-    std::string line;
-    if (!std::getline(file, line) || line != "ply")
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "不是有效的 PLY 文件";
-        }
-        return false;
-    }
-
-    bool inVertexElement = false;
-    while (std::getline(file, line))
-    {
-        if (!line.empty() && line.back() == '\r')
-        {
-            line.pop_back();
-        }
-        if (line == "end_header")
-        {
-            header->dataStartOffset = file.tellg();
-            break;
-        }
-
-        std::istringstream iss(line);
-        std::string first;
-        iss >> first;
-        if (first == "format")
-        {
-            std::string format;
-            iss >> format;
-            header->binaryLittleEndian = format == "binary_little_endian";
-        }
-        else if (first == "element")
-        {
-            std::string elementName;
-            iss >> elementName;
-            inVertexElement = elementName == "vertex";
-            if (inVertexElement)
-            {
-                iss >> header->vertexCount;
-            }
-        }
-        else if (inVertexElement && first == "property")
-        {
-            std::string typeName;
-            std::string propertyName;
-            iss >> typeName;
-            if (typeName == "list")
-            {
-                if (errorMsg)
-                {
-                    *errorMsg = "暂不支持顶点元素中的 list property";
-                }
-                return false;
-            }
-            iss >> propertyName;
-
-            PlyProperty property;
-            property.name = propertyName;
-            property.type = plyScalarTypeFromName(typeName);
-            property.size = plyScalarTypeSize(property.type);
-            property.offset = header->vertexStride;
-            if (property.size <= 0)
-            {
-                if (errorMsg)
-                {
-                    *errorMsg = "不支持的 PLY 属性类型: " + typeName;
-                }
-                return false;
-            }
-
-            const int index = static_cast<int>(header->properties.size());
-            if (propertyName == "x") header->xProperty = index;
-            else if (propertyName == "y") header->yProperty = index;
-            else if (propertyName == "z") header->zProperty = index;
-            else if (propertyName == "red" || propertyName == "r") header->redProperty = index;
-            else if (propertyName == "green" || propertyName == "g") header->greenProperty = index;
-            else if (propertyName == "blue" || propertyName == "b") header->blueProperty = index;
-            else if (propertyName == "nx") header->nxProperty = index;
-            else if (propertyName == "ny") header->nyProperty = index;
-            else if (propertyName == "nz") header->nzProperty = index;
-
-            header->properties.push_back(property);
-            header->vertexStride += property.size;
-        }
-    }
-
-    header->valid = header->binaryLittleEndian
-        && header->dataStartOffset > 0
-        && header->vertexCount > 0
-        && header->vertexStride > 0
-        && header->xProperty >= 0
-        && header->yProperty >= 0
-        && header->zProperty >= 0;
-    if (!header->valid && errorMsg)
-    {
-        if (!header->binaryLittleEndian)
-        {
-            *errorMsg = "仅支持 binary_little_endian PLY 的流式抽样";
-        }
-        else if (header->dataStartOffset <= 0)
-        {
-            *errorMsg = "PLY 头缺少 end_header";
-        }
-        else if (header->vertexCount == 0)
-        {
-            *errorMsg = "PLY 头缺少有效顶点数量";
-        }
-        else if (header->vertexStride <= 0)
-        {
-            *errorMsg = "PLY 顶点属性为空";
-        }
-        else
-        {
-            *errorMsg = "PLY 顶点缺少 x/y/z 坐标属性";
-        }
-    }
-    return header->valid;
+    return ok;
 }
 
-template <typename T>
-T readUnalignedValue(const std::vector<char> &record, int offset)
+detail::PointXYZRGB toPointXYZRGB(const plapoint::io::PlyVertexPoint &source)
 {
-    T value{};
-    std::memcpy(&value, record.data() + offset, sizeof(T));
-    return value;
-}
-
-template <typename T>
-T readUnalignedValue(const char *record, int offset)
-{
-    T value{};
-    std::memcpy(&value, record + offset, sizeof(T));
-    return value;
-}
-
-double readPlyScalarAsDouble(const std::vector<char> &record, const PlyProperty &property)
-{
-    switch (property.type)
+    detail::PointXYZRGB point;
+    point.x = source.x;
+    point.y = source.y;
+    point.z = source.z;
+    point.r = source.r;
+    point.g = source.g;
+    point.b = source.b;
+    if (source.hasNormal)
     {
-    case PlyScalarType::Int8:    return readUnalignedValue<std::int8_t>(record, property.offset);
-    case PlyScalarType::UInt8:   return readUnalignedValue<std::uint8_t>(record, property.offset);
-    case PlyScalarType::Int16:   return readUnalignedValue<std::int16_t>(record, property.offset);
-    case PlyScalarType::UInt16:  return readUnalignedValue<std::uint16_t>(record, property.offset);
-    case PlyScalarType::Int32:   return readUnalignedValue<std::int32_t>(record, property.offset);
-    case PlyScalarType::UInt32:  return readUnalignedValue<std::uint32_t>(record, property.offset);
-    case PlyScalarType::Float32: return readUnalignedValue<float>(record, property.offset);
-    case PlyScalarType::Float64: return readUnalignedValue<double>(record, property.offset);
-    default:                     return 0.0;
+        point.hasNormal = true;
+        point.nx = source.nx;
+        point.ny = source.ny;
+        point.nz = source.nz;
     }
+    return point;
 }
 
-double readPlyScalarAsDouble(const char *record, const PlyProperty &property)
+std::vector<detail::PointXYZRGB> toPointXYZRGB(const std::vector<plapoint::io::PlyVertexPoint> &source)
 {
-    switch (property.type)
+    std::vector<detail::PointXYZRGB> points;
+    points.reserve(source.size());
+    for (const plapoint::io::PlyVertexPoint &point : source)
     {
-    case PlyScalarType::Int8:    return readUnalignedValue<std::int8_t>(record, property.offset);
-    case PlyScalarType::UInt8:   return readUnalignedValue<std::uint8_t>(record, property.offset);
-    case PlyScalarType::Int16:   return readUnalignedValue<std::int16_t>(record, property.offset);
-    case PlyScalarType::UInt16:  return readUnalignedValue<std::uint16_t>(record, property.offset);
-    case PlyScalarType::Int32:   return readUnalignedValue<std::int32_t>(record, property.offset);
-    case PlyScalarType::UInt32:  return readUnalignedValue<std::uint32_t>(record, property.offset);
-    case PlyScalarType::Float32: return readUnalignedValue<float>(record, property.offset);
-    case PlyScalarType::Float64: return readUnalignedValue<double>(record, property.offset);
-    default:                     return 0.0;
+        points.push_back(toPointXYZRGB(point));
     }
-}
-
-std::uint8_t readPlyColorAsByte(const std::vector<char> &record, const PlyProperty &property)
-{
-    if (property.type == PlyScalarType::UInt8)
-    {
-        return readUnalignedValue<std::uint8_t>(record, property.offset);
-    }
-
-    const double raw = readPlyScalarAsDouble(record, property);
-    const double scaled = raw <= 1.0 ? raw * 255.0 : raw;
-    return static_cast<std::uint8_t>(std::clamp(static_cast<int>(std::lround(scaled)), 0, 255));
-}
-
-std::uint8_t readPlyColorAsByte(const char *record, const PlyProperty &property)
-{
-    if (property.type == PlyScalarType::UInt8)
-    {
-        return readUnalignedValue<std::uint8_t>(record, property.offset);
-    }
-
-    const double raw = readPlyScalarAsDouble(record, property);
-    const double scaled = raw <= 1.0 ? raw * 255.0 : raw;
-    return static_cast<std::uint8_t>(std::clamp(static_cast<int>(std::lround(scaled)), 0, 255));
+    return points;
 }
 
 std::vector<detail::PointXYZRGB> sampleBinaryPlyForMeshing(const std::string &cloudPath,
@@ -332,62 +123,15 @@ std::vector<detail::PointXYZRGB> sampleBinaryPlyForMeshing(const std::string &cl
                                                            int maxPoints,
                                                            std::string *errorMsg)
 {
-    std::ifstream file(cloudPath, std::ios::binary);
-    if (!file)
+    std::string streamError;
+    const auto sampled = plapoint::io::sampleBinaryPlyVertices(cloudPath, header, maxPoints, &streamError);
+    if (sampled.empty() && errorMsg)
     {
-        if (errorMsg)
-        {
-            *errorMsg = "无法打开 PLY 文件";
-        }
-        return {};
+        *errorMsg = streamError.empty()
+            ? "PLY 流式抽样没有读到有效顶点"
+            : ("PLY 流式抽样失败: " + localizePlyStreamError(streamError));
     }
-
-    const std::uint64_t cap = static_cast<std::uint64_t>(std::max(1, maxPoints));
-    const std::uint64_t sampleStride = std::max<std::uint64_t>(1, (header.vertexCount + cap - 1) / cap);
-    const std::uint64_t sampleCount = std::min<std::uint64_t>(cap,
-        (header.vertexCount + sampleStride - 1) / sampleStride);
-    const bool hasColors = header.redProperty >= 0 && header.greenProperty >= 0 && header.blueProperty >= 0;
-    const bool hasNormals = header.nxProperty >= 0 && header.nyProperty >= 0 && header.nzProperty >= 0;
-
-    std::vector<detail::PointXYZRGB> points;
-    points.reserve(static_cast<std::size_t>(sampleCount));
-    std::vector<char> record(static_cast<std::size_t>(header.vertexStride));
-
-    for (std::uint64_t i = 0; i < header.vertexCount && points.size() < sampleCount; i += sampleStride)
-    {
-        const std::streamoff offset = header.dataStartOffset
-            + static_cast<std::streamoff>(i * static_cast<std::uint64_t>(header.vertexStride));
-        file.seekg(offset, std::ios::beg);
-        if (!file.read(record.data(), header.vertexStride))
-        {
-            break;
-        }
-
-        detail::PointXYZRGB point;
-        point.x = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.xProperty]));
-        point.y = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.yProperty]));
-        point.z = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.zProperty]));
-        if (hasColors)
-        {
-            point.r = readPlyColorAsByte(record, header.properties[header.redProperty]);
-            point.g = readPlyColorAsByte(record, header.properties[header.greenProperty]);
-            point.b = readPlyColorAsByte(record, header.properties[header.blueProperty]);
-        }
-        if (hasNormals)
-        {
-            point.hasNormal = true;
-            point.nx = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nxProperty]));
-            point.ny = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nyProperty]));
-            point.nz = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nzProperty]));
-        }
-        points.push_back(point);
-    }
-
-    if (points.empty() && errorMsg)
-    {
-        *errorMsg = "PLY 流式抽样没有读到有效顶点";
-    }
-    return points;
+    return toPointXYZRGB(sampled);
 }
 
 struct StreamingBounds
@@ -420,12 +164,6 @@ struct StreamingTile
     StreamingBounds bounds;
 };
 
-struct PlyVertexChunk
-{
-    std::uint64_t startVertex = 0;
-    std::uint64_t vertexCount = 0;
-};
-
 int resolveStreamingThreadCount(const ReconstructionConfig &config)
 {
     if (config.streamingThreads > 0)
@@ -441,28 +179,11 @@ int resolveStreamingThreadCount(const ReconstructionConfig &config)
     return std::clamp(static_cast<int>(hardwareThreads), 1, 16);
 }
 
-std::uint64_t resolveChunkVertexCount(const PlyHeader &header,
-                                      const ReconstructionConfig &config)
-{
-    const int chunkBytes = std::clamp(config.streamingChunkBytes, 256, 512 * 1024 * 1024);
-    return std::max<std::uint64_t>(1,
-        static_cast<std::uint64_t>(chunkBytes) / static_cast<std::uint64_t>(std::max(1, header.vertexStride)));
-}
-
 std::vector<PlyVertexChunk> makePlyVertexChunks(const PlyHeader &header,
                                                 const ReconstructionConfig &config)
 {
-    const std::uint64_t chunkVertices = resolveChunkVertexCount(header, config);
-    std::vector<PlyVertexChunk> chunks;
-    chunks.reserve(static_cast<std::size_t>((header.vertexCount + chunkVertices - 1) / chunkVertices));
-    for (std::uint64_t start = 0; start < header.vertexCount; start += chunkVertices)
-    {
-        PlyVertexChunk chunk;
-        chunk.startVertex = start;
-        chunk.vertexCount = std::min(chunkVertices, header.vertexCount - start);
-        chunks.push_back(chunk);
-    }
-    return chunks;
+    const int chunkBytes = std::clamp(config.streamingChunkBytes, 256, 512 * 1024 * 1024);
+    return plapoint::io::makePlyVertexChunks(header, chunkBytes);
 }
 
 int resolveStreamingTileSide(const PlyHeader &header,
@@ -539,56 +260,10 @@ std::vector<StreamingTile> makeStreamingTiles(const StreamingBounds &globalBound
     return tiles;
 }
 
-detail::PointXYZRGB readPointFromPlyRecord(const std::vector<char> &record,
-                                           const PlyHeader &header)
-{
-    const bool hasColors = header.redProperty >= 0 && header.greenProperty >= 0 && header.blueProperty >= 0;
-    const bool hasNormals = header.nxProperty >= 0 && header.nyProperty >= 0 && header.nzProperty >= 0;
-
-    detail::PointXYZRGB point;
-    point.x = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.xProperty]));
-    point.y = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.yProperty]));
-    point.z = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.zProperty]));
-    if (hasColors)
-    {
-        point.r = readPlyColorAsByte(record, header.properties[header.redProperty]);
-        point.g = readPlyColorAsByte(record, header.properties[header.greenProperty]);
-        point.b = readPlyColorAsByte(record, header.properties[header.blueProperty]);
-    }
-    if (hasNormals)
-    {
-        point.hasNormal = true;
-        point.nx = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nxProperty]));
-        point.ny = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nyProperty]));
-        point.nz = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nzProperty]));
-    }
-    return point;
-}
-
 detail::PointXYZRGB readPointFromPlyRecord(const char *record,
                                            const PlyHeader &header)
 {
-    const bool hasColors = header.redProperty >= 0 && header.greenProperty >= 0 && header.blueProperty >= 0;
-    const bool hasNormals = header.nxProperty >= 0 && header.nyProperty >= 0 && header.nzProperty >= 0;
-
-    detail::PointXYZRGB point;
-    point.x = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.xProperty]));
-    point.y = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.yProperty]));
-    point.z = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.zProperty]));
-    if (hasColors)
-    {
-        point.r = readPlyColorAsByte(record, header.properties[header.redProperty]);
-        point.g = readPlyColorAsByte(record, header.properties[header.greenProperty]);
-        point.b = readPlyColorAsByte(record, header.properties[header.blueProperty]);
-    }
-    if (hasNormals)
-    {
-        point.hasNormal = true;
-        point.nx = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nxProperty]));
-        point.ny = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nyProperty]));
-        point.nz = static_cast<float>(readPlyScalarAsDouble(record, header.properties[header.nzProperty]));
-    }
-    return point;
+    return toPointXYZRGB(plapoint::io::readPlyVertexPoint(record, header));
 }
 
 bool isFinitePoint(const detail::PointXYZRGB &point)
@@ -614,62 +289,15 @@ bool readPlyChunkFromStream(std::ifstream &file,
                             std::vector<char> *buffer,
                             std::string *errorMsg)
 {
-    if (!buffer)
+    std::string streamError;
+    const bool ok = plapoint::io::readPlyVertexChunk(file, header, chunk, buffer, &streamError);
+    if (!ok && errorMsg)
     {
-        return false;
+        *errorMsg = streamError.empty()
+            ? "读取 PLY 顶点分块失败"
+            : ("读取 PLY 顶点分块失败: " + localizePlyStreamError(streamError));
     }
-
-    const std::uint64_t stride = static_cast<std::uint64_t>(std::max(1, header.vertexStride));
-    const std::uint64_t bytes = chunk.vertexCount * stride;
-    if (bytes == 0)
-    {
-        buffer->clear();
-        return true;
-    }
-    if (bytes > static_cast<std::uint64_t>(std::numeric_limits<std::streamsize>::max()))
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "PLY 分块过大，无法一次读取";
-        }
-        return false;
-    }
-
-    try
-    {
-        buffer->resize(static_cast<std::size_t>(bytes));
-    }
-    catch (const std::bad_alloc &)
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "PLY 分块缓冲区分配失败";
-        }
-        return false;
-    }
-
-    const std::uint64_t offsetBytes = chunk.startVertex * stride;
-    const std::streamoff offset = header.dataStartOffset + static_cast<std::streamoff>(offsetBytes);
-    file.clear();
-    file.seekg(offset, std::ios::beg);
-    if (!file)
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "定位 PLY 顶点分块失败";
-        }
-        return false;
-    }
-
-    if (!file.read(buffer->data(), static_cast<std::streamsize>(buffer->size())))
-    {
-        if (errorMsg)
-        {
-            *errorMsg = "读取 PLY 顶点分块失败";
-        }
-        return false;
-    }
-    return true;
+    return ok;
 }
 
 void mergeStreamingBounds(const StreamingBounds &src,

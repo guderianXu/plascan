@@ -9,6 +9,7 @@ target_include_directories(qc PUBLIC
 )
 
 target_link_libraries(qc PUBLIC
+    plapoint::plapoint
     Qt6::Core
 )
 

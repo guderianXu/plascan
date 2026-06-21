@@ -12,4 +12,5 @@ target_include_directories(lidar PUBLIC
 
 target_link_libraries(lidar PUBLIC
     bundle_adjust
+    plapoint::plapoint
 )
