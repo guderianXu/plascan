@@ -1243,6 +1243,44 @@ TEST(GuiAsyncLifetimeTest, DepthMapSparsePreloadWorkersGuardGeneratorLifetime)
     }
 }
 
+TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int meshStart = source.indexOf(
+        QStringLiteral("void ProjectModelManager::startMeshReconstructionAsync"));
+    ASSERT_GE(meshStart, 0);
+    const int textureStart = source.indexOf(
+        QStringLiteral("void ProjectModelManager::startTextureMappingAsync"), meshStart);
+    ASSERT_GT(textureStart, meshStart);
+    const int finalizerStart = source.indexOf(
+        QStringLiteral("void ProjectModelManager::finalizeModelGenerationSuccess"), textureStart);
+    ASSERT_GT(finalizerStart, textureStart);
+    const QString meshBlock = source.mid(meshStart, textureStart - meshStart);
+    const QString textureBlock = source.mid(textureStart, finalizerStart - textureStart);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
+    EXPECT_TRUE(source.contains(QStringLiteral("makeProgressReporter(QPointer<ProjectModelManager> manager)")))
+        << "Background mesh workflow progress must post through a guarded manager pointer.";
+    EXPECT_FALSE(source.contains(QStringLiteral("makeProgressReporter(this)")));
+
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("QPointer<ProjectModelManager> self(this)")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, denseCloudPath, outputRoot, settings]() -> ModelTaskResult")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, denseCloudPath, settings](const ModelTaskResult &task)")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, denseCloudPath, settings](const QJsonObject &taskResult)")));
+    EXPECT_FALSE(meshBlock.contains(QStringLiteral("[this, denseCloudPath, outputRoot, settings]")));
+    EXPECT_FALSE(meshBlock.contains(QStringLiteral("[this, denseCloudPath, settings]")));
+
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("QPointer<ProjectModelManager> self(this)")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, meshPath, productsDir, settings]() -> ModelTaskResult")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, meshPath, baseRecord](const ModelTaskResult &task)")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, meshPath, baseRecord](const QJsonObject &taskResult)")));
+    EXPECT_FALSE(textureBlock.contains(QStringLiteral("[this, meshPath, productsDir, settings]")));
+    EXPECT_FALSE(textureBlock.contains(QStringLiteral("[this, meshPath, baseRecord]")));
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));

@@ -16,6 +16,7 @@
 #include <QFutureWatcher>
 #include <QMessageBox>
 #include <QMetaObject>
+#include <QPointer>
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
@@ -68,12 +69,20 @@ void showTaskFailure(QWidget *parentWidget,
 
 void mergeJsonObject(QJsonObject *target, const QJsonObject &source);
 
-auto makeProgressReporter(ProjectModelManager *manager)
+auto makeProgressReporter(QPointer<ProjectModelManager> manager)
 {
     return [manager](const QString &stage, int percent) 
     {
-        QMetaObject::invokeMethod(manager, [manager, stage, percent]() 
+        if (!manager)
         {
+            return;
+        }
+        QMetaObject::invokeMethod(manager.data(), [manager, stage, percent]()
+        {
+            if (!manager)
+            {
+                return;
+            }
             emit manager->meshProgressChanged(stage, percent);
         }, Qt::QueuedConnection);
     };
@@ -92,7 +101,7 @@ void applyWorkflowResult(ModelTaskResult *task,
     task->result = workflowResult.payload;
 }
 
-ModelTaskResult runGenerateModelTask(ProjectModelManager *manager,
+ModelTaskResult runGenerateModelTask(QPointer<ProjectModelManager> manager,
                                      const GenerateModelTaskInput &input)
 {
     ModelTaskResult task;
@@ -393,10 +402,16 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     const QString outputRoot = QFileInfo(denseCloudPath).absolutePath();
 
     emit meshProgressChanged(tr("正在初始化网格重建..."), 0);
+    QPointer<ProjectModelManager> self(this);
     runModelAsyncTask(
         this,
-        [this, denseCloudPath, outputRoot, settings]() -> ModelTaskResult {
+        [self, denseCloudPath, outputRoot, settings]() -> ModelTaskResult {
             ModelTaskResult task;
+            if (!self)
+            {
+                task.errMsg = QStringLiteral("网格重建已取消：项目窗口已关闭");
+                return task;
+            }
 
             xjw::mesh::ReconstructionConfig cfg;
             cfg.resolution = xjw::mesh::workflow::meshResolutionFromSettings(settings);
@@ -497,27 +512,35 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             request.reconstruction = cfg;
             request.exportObj = xjw::mesh::workflow::exportObjRequested(settings);
             request.texture = xjw::mesh::workflow::defaultTextureConfig();
-            request.progress = makeProgressReporter(this);
+            request.progress = makeProgressReporter(self);
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [this, denseCloudPath, settings](const ModelTaskResult &task) {
-            emit meshProgressFinished(task.ok);
-            handleTaskResult(m_parentWidget,
+        [self, denseCloudPath, settings](const ModelTaskResult &task) {
+            if (!self)
+            {
+                return;
+            }
+            emit self->meshProgressFinished(task.ok);
+            handleTaskResult(self->m_parentWidget,
                              QStringLiteral("网格重建"),
                              QStringLiteral("网格重建失败"),
                              task,
-                             [this, denseCloudPath, settings](const QJsonObject &taskResult) {
+                             [self, denseCloudPath, settings](const QJsonObject &taskResult) {
+                if (!self)
+                {
+                    return;
+                }
                 const QJsonObject modelRecord = buildMeshReconstructionRecord(taskResult,
                                                                                denseCloudPath,
                                                                                settings);
-                persistModelResult(m_projectData, modelRecord);
+                persistModelResult(self->m_projectData, modelRecord);
                 if (!settings.value(QStringLiteral("pipeline_mode")).toBool(false))
                 {
-                    QMessageBox::information(m_parentWidget,
+                    QMessageBox::information(self->m_parentWidget,
                                              QStringLiteral("网格重建"),
                                              meshReconstructionSuccessMessage(taskResult));
                 }
@@ -561,34 +584,48 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
     const QString productsDir = QFileInfo(meshPath).absolutePath();
 
     emit meshProgressChanged(tr("正在初始化纹理映射..."), 0);
+    QPointer<ProjectModelManager> self(this);
     runModelAsyncTask(
         this,
-        [this, meshPath, productsDir, settings]() -> ModelTaskResult {
+        [self, meshPath, productsDir, settings]() -> ModelTaskResult {
             ModelTaskResult task;
+            if (!self)
+            {
+                task.errMsg = QStringLiteral("纹理映射已取消：项目窗口已关闭");
+                return task;
+            }
 
             xjw::mesh::workflow::TextureBuildRequest request;
             request.meshPath = meshPath;
             request.outputDir = productsDir;
             request.texture = xjw::mesh::workflow::textureConfigFromSettings(settings);
-            request.progress = makeProgressReporter(this);
+            request.progress = makeProgressReporter(self);
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildTextureOnly(request);
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [this, meshPath, baseRecord](const ModelTaskResult &task) {
-            emit meshProgressFinished(task.ok);
-            handleTaskResult(m_parentWidget,
+        [self, meshPath, baseRecord](const ModelTaskResult &task) {
+            if (!self)
+            {
+                return;
+            }
+            emit self->meshProgressFinished(task.ok);
+            handleTaskResult(self->m_parentWidget,
                              QStringLiteral("纹理映射"),
                              QStringLiteral("纹理映射失败"),
                              task,
-                             [this, meshPath, baseRecord](const QJsonObject &taskResult) {
+                             [self, meshPath, baseRecord](const QJsonObject &taskResult) {
+                if (!self)
+                {
+                    return;
+                }
                 const QJsonObject modelRecord = buildTextureMappingRecord(baseRecord,
                                                                            taskResult,
                                                                            meshPath);
-                persistModelResult(m_projectData, modelRecord);
-                QMessageBox::information(m_parentWidget,
+                persistModelResult(self->m_projectData, modelRecord);
+                QMessageBox::information(self->m_parentWidget,
                                          QStringLiteral("纹理映射"),
                                          textureMappingSuccessMessage(taskResult));
             });
