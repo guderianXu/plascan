@@ -1093,6 +1093,26 @@ TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
         << "runDemProductsOrWarn shows QMessageBox and must stay on the GUI thread.";
 }
 
+TEST(TerrainPipelineAsyncTest, StereoPoint2DemRunsOffGuiThread)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startFullDemPipelineAsync"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "The legacy stereo-to-DEM Async entry point should also keep DEM/DOM IO off the GUI thread.";
+    EXPECT_TRUE(block.contains(QStringLiteral("runDemProducts(resolvedDenseCloud")))
+        << "The worker should call the non-UI terrain function and report errors after returning to the GUI thread.";
+    EXPECT_FALSE(block.contains(QStringLiteral("runDemProductsOrWarn")))
+        << "The Async entry point must not call the QMessageBox wrapper directly.";
+}
+
 TEST(GuiAsyncLifetimeTest, TerrainAndDenseBackgroundCallbacksUseQPointerGuards)
 {
     const QString terrainSource = readProjectSourceFile(

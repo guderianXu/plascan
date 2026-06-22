@@ -452,16 +452,13 @@ void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringLi
                                                                  const QString &tSrs)
 {
     Q_UNUSED(threads);
-    Q_UNUSED(genPointCloud);
     Q_UNUSED(tSrs);
-    Q_UNUSED(images);
 
     if (!ensureProjectOpen())
     {
         return;
     }
 
-    QJsonObject meta = m_projectData->metadata();
     QString denseCloudPath;
     QString denseError;
     if (!resolveLatestDenseCloudPath(m_projectData, &denseCloudPath, &denseError))
@@ -475,53 +472,106 @@ void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringLi
         return;
     }
 
-    QString outDir = resolveProjectOutputDir(m_owner->currentProjectPath(),
+    const QString projectPath = m_owner ? m_owner->currentProjectPath() : QString();
+    QString outDir = resolveProjectOutputDir(projectPath,
                                              outputDir.trimmed(),
                                              QStringLiteral("assets/dem/relative_dem"));
 
-    QJsonObject terrainResult;
-    if (!runDemProductsOrWarn(denseCloudPath,
-                              outDir,
-                              demResolution,
-                              demType,
-                              false,
-                              QStringLiteral("创建相对 DEM"),
-                              &terrainResult))
+    emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 5);
+
+    const QString resolvedDenseCloud = denseCloudPath;
+    QPointer<ProjectTerrainProductsManager> self(this);
+    auto demWork = [self,
+                    resolvedDenseCloud,
+                    outDir,
+                    demResolution,
+                    demType,
+                    genPointCloud,
+                    images,
+                    projectPath]()
     {
-        return;
-    }
+        const auto terrainRun = runDemProducts(resolvedDenseCloud,
+                                               outDir,
+                                               demResolution,
+                                               demType,
+                                               genPointCloud);
+        if (!self)
+        {
+            return;
+        }
 
-    QJsonObject demResult = makeDemResultRecord(
-        terrainResult.value(QStringLiteral("created_at")).toString(),
-        outDir,
-        QString(),
-        terrainResult.value(QStringLiteral("dem_tif")).toString(),
-        demType,
-        demResolution,
-        QString(),
-        images);
-    demResult[QStringLiteral("source_dense_cloud")] = denseCloudPath;
-    demResult[QStringLiteral("dem_reference")] = QStringLiteral("relative");
-    demResult[QStringLiteral("depth_preview_png")] = terrainResult.value(QStringLiteral("depth_png")).toString();
-    demResult[QStringLiteral("relative_z_offset")] = terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
-    upsertMetaArrayRecordByPath(&meta,
-                                QStringLiteral("dem_results"),
-                                QStringLiteral("dem_tif"),
-                                demResult);
+        QMetaObject::invokeMethod(self.data(),
+            [self,
+             terrainRun,
+             resolvedDenseCloud,
+             outDir,
+             demResolution,
+             demType,
+             images,
+             projectPath]()
+            {
+                if (!self)
+                {
+                    return;
+                }
+                if (!self->m_owner ||
+                    !self->m_projectData ||
+                    self->m_owner->currentProjectPath() != projectPath)
+                {
+                    return;
+                }
 
-    persistProjectMeta(m_projectData, meta, true);
-    if (m_owner)
-    {
-        m_owner->refreshReconstructionQualityReport();
-    }
+                if (!terrainRun.ok)
+                {
+                    QMessageBox::warning(self->m_parentWidget,
+                                         QStringLiteral("创建相对 DEM"),
+                                         QStringLiteral("处理失败：%1").arg(terrainRun.error));
+                    emit self->demPipelineFinished(false, terrainRun.error);
+                    return;
+                }
 
-    QMessageBox::information(m_parentWidget,
-                             QStringLiteral("创建相对 DEM"),
-                             QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
-                                 .arg(terrainResult.value(QStringLiteral("dem_tif")).toString())
-                                 .arg(terrainResult.value(QStringLiteral("depth_png")).toString())
-                                 .arg(denseCloudPath)
-                                 .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
+                QJsonObject meta = self->m_projectData->metadata();
+                const QJsonObject terrainResult = terrainRun.payload;
+                QJsonObject demResult = makeDemResultRecord(
+                    terrainResult.value(QStringLiteral("created_at")).toString(),
+                    outDir,
+                    QString(),
+                    terrainResult.value(QStringLiteral("dem_tif")).toString(),
+                    demType,
+                    demResolution,
+                    QString(),
+                    images);
+                demResult[QStringLiteral("source_dense_cloud")] = resolvedDenseCloud;
+                demResult[QStringLiteral("dem_reference")] = QStringLiteral("relative");
+                demResult[QStringLiteral("depth_preview_png")] =
+                    terrainResult.value(QStringLiteral("depth_png")).toString();
+                demResult[QStringLiteral("relative_z_offset")] =
+                    terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
+                upsertMetaArrayRecordByPath(&meta,
+                                            QStringLiteral("dem_results"),
+                                            QStringLiteral("dem_tif"),
+                                            demResult);
+
+                persistProjectMeta(self->m_projectData, meta, true);
+                self->m_owner->refreshReconstructionQualityReport();
+
+                emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+                emit self->demPipelineFinished(true, QStringLiteral("DEM 生成完成"));
+                QMessageBox::information(
+                    self->m_parentWidget,
+                    QStringLiteral("创建相对 DEM"),
+                    QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
+                        .arg(terrainResult.value(QStringLiteral("dem_tif")).toString())
+                        .arg(terrainResult.value(QStringLiteral("depth_png")).toString())
+                        .arg(resolvedDenseCloud)
+                        .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
+            },
+            Qt::QueuedConnection);
+    };
+
+    xjw::gui::tasks::runGuarded(this,
+                                std::move(demWork),
+                                [](ProjectTerrainProductsManager *) {});
 }
 
 void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList &images,
