@@ -1,5 +1,10 @@
 #include "compat/QtTorchMacroGuard.h"
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "SuperPoint.h"
 #include "FeatureFileIO.h"
 #include "ExtractorFactory.h"
@@ -450,3 +455,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
         return false;
     }
 }
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

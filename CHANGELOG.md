@@ -41,9 +41,14 @@
 ### 优化
 
 - 密集匹配执行逻辑从 `ProjectManager`/`ReconstructionWorkflowController` 拆到 `DenseMatchRunner`，workflow controller 的 `QtConcurrent` worker 不再捕获 `this`，也不再依赖 GUI manager 生命周期。
+- `FeatureExtractionRunner` 和 `FeatureMatchRunner` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被第三方头文件窄化警告刷屏。
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest.TorchRunnerWarningsStayLocalToRunnerTranslationUnits" --output-on-failure` 先失败后通过，验证 Torch runner 内有局部 C4267 warning guard。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `FeatureExtractionRunner.cpp` 和 `FeatureMatchRunner.cpp`，构建日志未再出现这两个编译单元的 `warning C4267`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest|DenseMatchRunnerTest|DenseMatchCancelTest" --output-on-failure` 通过，5/5。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，535/535；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译并链接 `plascan_gui`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DenseMatchRunnerTest.DenseMatchWorkerDoesNotCaptureWorkflowControllerThis" --output-on-failure` 通过，1/1。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DenseMatch|FeatureNamingCleanupTest.ProjectManagerDoesNotIncludeLegacyTorchAlgorithmHeaders" --output-on-failure` 通过，8/8。

@@ -1,5 +1,10 @@
 #include "compat/QtTorchMacroGuard.h"
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "SuperGlueMatcher.h"
 #include "lightglue/LightGlueMatcher.h"
 #include "SuperGlueMatchIO.h"
@@ -1087,3 +1092,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             .arg(matchAlgorithm).arg(QString::fromStdString(e.what()))));
     }
 }
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

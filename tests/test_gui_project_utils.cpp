@@ -4013,6 +4013,25 @@ TEST(FeatureNamingCleanupTest, ProjectManagerDoesNotIncludeLegacyTorchAlgorithmH
     EXPECT_FALSE(managerSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
 }
 
+TEST(FeatureNamingCleanupTest, TorchRunnerWarningsStayLocalToRunnerTranslationUnits)
+{
+    const QString extractionRunner =
+        readProjectSourceFile(QStringLiteral("src/gui/tasks/FeatureExtractionRunner.cpp"));
+    const QString matchRunner =
+        readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"));
+    ASSERT_FALSE(extractionRunner.isEmpty());
+    ASSERT_FALSE(matchRunner.isEmpty());
+
+    for (const QString &source : {extractionRunner, matchRunner})
+    {
+        EXPECT_TRUE(source.contains(QStringLiteral("#include \"compat/QtTorchMacroGuard.h\"")));
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(push)")));
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(disable: 4267)")))
+            << "LibTorch emits MSVC C4267 from external templates; keep the suppression local to Torch runners.";
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)")));
+    }
+}
+
 TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
