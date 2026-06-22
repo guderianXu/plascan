@@ -60,21 +60,6 @@ private:
 
     bool ensureProjectOpen(const QString &message = QStringLiteral("请先打开项目"),
                            const QString &title = QStringLiteral("提示")) const;
-    bool runDemProductsOrWarn(const QString &sparsePath,
-                              const QString &outputDir,
-                              double demResolution,
-                              const QString &demType,
-                              bool genPointCloud,
-                              const QString &title,
-                              QJsonObject *result) const;
-    bool runOrthoProductOrWarn(const QStringList &images,
-                               const QString &demPath,
-                               const QString &outputPath,
-                               double resolution,
-                               const QJsonObject &projectMeta,
-                               const QString &title,
-                               QJsonObject *result) const;
-
     void runFullDemPipelineInBackground(const DemPipelineContext &ctx);
 
     ProjectManager *m_owner = nullptr;

@@ -1133,6 +1133,21 @@ TEST(TerrainPipelineAsyncTest, MapProjectRunsOffGuiThread)
         << "The Async entry point must not call the QMessageBox wrapper directly.";
 }
 
+TEST(TerrainPipelineAsyncTest, TerrainProductsManagerDropsBlockingUiWrappers)
+{
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_FALSE(header.contains(QStringLiteral("runDemProductsOrWarn")));
+    EXPECT_FALSE(header.contains(QStringLiteral("runOrthoProductOrWarn")));
+    EXPECT_FALSE(source.contains(QStringLiteral("ProjectTerrainProductsManager::runDemProductsOrWarn")));
+    EXPECT_FALSE(source.contains(QStringLiteral("ProjectTerrainProductsManager::runOrthoProductOrWarn")));
+}
+
 TEST(GuiAsyncLifetimeTest, TerrainAndDenseBackgroundCallbacksUseQPointerGuards)
 {
     const QString terrainSource = readProjectSourceFile(

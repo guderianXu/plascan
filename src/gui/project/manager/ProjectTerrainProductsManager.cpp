@@ -393,56 +393,6 @@ bool ProjectTerrainProductsManager::ensureProjectOpen(const QString &message,
     return false;
 }
 
-bool ProjectTerrainProductsManager::runDemProductsOrWarn(const QString &sparsePath,
-                                                         const QString &outputDir,
-                                                         double demResolution,
-                                                         const QString &demType,
-                                                         bool genPointCloud,
-                                                         const QString &title,
-                                                         QJsonObject *result) const
-{
-    const auto terrainRun = runDemProducts(sparsePath,
-                                           outputDir,
-                                           demResolution,
-                                           demType,
-                                           genPointCloud);
-    if (!terrainRun.ok)
-    {
-        QMessageBox::warning(m_parentWidget,
-                             title,
-                             QStringLiteral("处理失败：%1").arg(terrainRun.error));
-        return false;
-    }
-    if (result)
-    {
-        *result = terrainRun.payload;
-    }
-    return true;
-}
-
-bool ProjectTerrainProductsManager::runOrthoProductOrWarn(const QStringList &images,
-                                                          const QString &demPath,
-                                                          const QString &outputPath,
-                                                          double resolution,
-                                                          const QJsonObject &projectMeta,
-                                                          const QString &title,
-                                                          QJsonObject *result) const
-{
-    const auto orthoRun = runOrthoProduct(images, demPath, outputPath, resolution, projectMeta);
-    if (!orthoRun.ok)
-    {
-        QMessageBox::warning(m_parentWidget,
-                             title,
-                             QStringLiteral("处理失败：%1").arg(orthoRun.error));
-        return false;
-    }
-    if (result)
-    {
-        *result = orthoRun.payload;
-    }
-    return true;
-}
-
 void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringList &images,
                                                                  const QString &outputDir,
                                                                  int threads,
