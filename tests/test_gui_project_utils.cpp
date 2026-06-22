@@ -3077,10 +3077,10 @@ TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThrea
     ASSERT_GT(launchStart, sparseStart);
     const QString startBody = source.mid(sparseStart, launchStart - sparseStart);
 
-    EXPECT_TRUE(startBody.contains(QStringLiteral("QFutureWatcher<SparsePrerequisiteSummary>")));
-    EXPECT_TRUE(startBody.contains(QStringLiteral("watcher->setFuture(QtConcurrent::run")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
     EXPECT_TRUE(startBody.contains(QStringLiteral("summarizeSparsePrerequisites(images, projectMeta, projectPath)")));
-    const int preflightLaunch = startBody.indexOf(QStringLiteral("watcher->setFuture(QtConcurrent::run"));
+    EXPECT_FALSE(startBody.contains(QStringLiteral("QFutureWatcher<SparsePrerequisiteSummary>")));
+    const int preflightLaunch = startBody.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"));
     ASSERT_GE(preflightLaunch, 0);
     EXPECT_FALSE(startBody.left(preflightLaunch).contains(QStringLiteral("summarizeSparsePrerequisites(")));
 

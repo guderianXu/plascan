@@ -1068,44 +1068,43 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
 
     emit pm->atProgressChanged(QStringLiteral("空中三角测量: 检查上游数据..."), 0);
 
-    auto *watcher = new QFutureWatcher<SparsePrerequisiteSummary>(this);
-    QPointer<MenuWorkflowController> self(this);
     QPointer<ProjectManager> pmGuard(pm);
-    connect(watcher, &QFutureWatcher<SparsePrerequisiteSummary>::finished, this,
-            [self, pmGuard, watcher, runSettings, images, projectPath, projectMeta, outputRoot]() {
-        const SparsePrerequisiteSummary prereq = watcher->result();
-        watcher->deleteLater();
-
-        if (!self || !pmGuard)
+    xjw::gui::tasks::runGuarded(
+        this,
+        [images, projectMeta, projectPath]()
         {
-            return;
-        }
-        if (pmGuard->currentProjectPath() != projectPath)
+            return MenuWorkflowController::summarizeSparsePrerequisites(images, projectMeta, projectPath);
+        },
+        [pmGuard, runSettings, images, projectPath, projectMeta, outputRoot](
+            MenuWorkflowController *controller, const SparsePrerequisiteSummary &prereq)
         {
-            emit pmGuard->atProgressFinished(false);
-            QMessageBox::warning(self->m_mainWindow,
-                                 QStringLiteral("空中三角测量"),
-                                 QStringLiteral("项目已切换，本次空三启动已取消。"));
-            return;
-        }
+            if (!pmGuard)
+            {
+                return;
+            }
+            if (pmGuard->currentProjectPath() != projectPath)
+            {
+                emit pmGuard->atProgressFinished(false);
+                QMessageBox::warning(controller->m_mainWindow,
+                                     QStringLiteral("空中三角测量"),
+                                     QStringLiteral("项目已切换，本次空三启动已取消。"));
+                return;
+            }
 
-        const bool autoFillMissing = self->confirmAutoFillMissingSparseInputs(prereq);
-        if (!autoFillMissing && !prereq.missingMessages.isEmpty())
-        {
-            emit pmGuard->atProgressFinished(false);
-            return;
-        }
+            const bool autoFillMissing = controller->confirmAutoFillMissingSparseInputs(prereq);
+            if (!autoFillMissing && !prereq.missingMessages.isEmpty())
+            {
+                emit pmGuard->atProgressFinished(false);
+                return;
+            }
 
-        self->launchAerialTriangulationSfm(runSettings,
-                                           images,
-                                           projectPath,
-                                           projectMeta,
-                                           outputRoot,
-                                           autoFillMissing);
-    });
-    watcher->setFuture(QtConcurrent::run([images, projectMeta, projectPath]() {
-        return MenuWorkflowController::summarizeSparsePrerequisites(images, projectMeta, projectPath);
-    }));
+            controller->launchAerialTriangulationSfm(runSettings,
+                                                     images,
+                                                     projectPath,
+                                                     projectMeta,
+                                                     outputRoot,
+                                                     autoFillMissing);
+        });
 }
 
 void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &settings,
