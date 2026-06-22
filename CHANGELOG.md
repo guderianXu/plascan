@@ -17,6 +17,7 @@
 - `GuiTaskRunner::runGuarded` 在后台任务真正开始前先检查 GUI owner 是否仍然有效，并把完整 DEM 自动流水线入口纳入该 runner，降低关闭项目/窗口后启动长任务的风险。
 - DEM 自动流水线在启动 MVS 前记录已有密集点云数量，完成后只扫描本次新增且文件真实存在的 dense cloud 记录，并用共享连接状态统一清理 metadata/MVS 信号，避免误用旧点云或泄漏连接句柄。
 - 光束法平差核心优化进度回调改用 `QPointer<ProjectManager>` 守护，避免后台 BA 迭代中关闭项目或窗口后继续向已销毁的 `ProjectManager` 投递进度事件。
+- 深度图估计入口的进度、深度图 artifact 登记和完成回调改用 `QPointer<ProjectDenseReconstructionManager>` 守护，降低 MVS 运行中关闭项目/窗口后的悬挂回调风险。
 - 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
 
 ### 验证

@@ -1084,38 +1084,52 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     gen->setConfig(genCfg);
     gen->setOutputDir(mvsOutDir.toStdString());
 
+    QPointer<ProjectDenseReconstructionManager> self(this);
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
-                     [this](const QString &stage, float ratio) {
-        emit mvsProgressChanged(stage, static_cast<int>(ratio * 100));
+                     [self](const QString &stage, float ratio) {
+        if (!self)
+        {
+            return;
+        }
+        emit self->mvsProgressChanged(stage, static_cast<int>(ratio * 100));
     });
     connect(gen, &DepthMapGenerator::errorOccurred, this, [](const QString &msg) {
         qWarning() << "[MVS] 错误:" << msg;
     });
     connect(gen, &DepthMapGenerator::depthMapArtifactSaved, this,
-            [this, sparseXyz, mvsOutDir](const QJsonObject &artifact) {
+            [self, sparseXyz, mvsOutDir](const QJsonObject &artifact) {
+        if (!self)
+        {
+            return;
+        }
         const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(artifact, sparseXyz, mvsOutDir);
         if (depthResult.isEmpty())
         {
             return;
         }
-        upsertProjectRecordByPath(m_projectData,
+        upsertProjectRecordByPath(self->m_projectData,
                                   QStringLiteral("depth_map_results"),
                                   QStringLiteral("depth_png"),
                                   depthResult);
     });
-    connect(gen, &DepthMapGenerator::finished, this, [this](bool success) {
-        if (success && m_owner)
+    connect(gen, &DepthMapGenerator::finished, this, [self](bool success) {
+        if (!self)
         {
-            m_owner->refreshReconstructionQualityReport();
+            return;
         }
-        emit mvsProgressFinished(success);
-        QMessageBox::information(m_parentWidget,
+        if (success && self->m_owner)
+        {
+            self->m_owner->refreshReconstructionQualityReport();
+        }
+        emit self->mvsProgressFinished(success);
+        QMessageBox::information(self->m_parentWidget,
                                  QStringLiteral("深度图估计"),
                                  success ? QStringLiteral("深度图估计完成。")
                                          : QStringLiteral("深度图估计失败或被取消。"));
-        if (m_activeMvsGenerator)
+        if (self->m_activeMvsGenerator)
         {
-            m_activeMvsGenerator->deleteLater();
+            self->m_activeMvsGenerator->deleteLater();
+            self->m_activeMvsGenerator = nullptr;
         }
     });
 
