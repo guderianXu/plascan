@@ -494,6 +494,7 @@ gtest_discover_tests(test_gui_project_utils
 
 add_executable(test_layer_renderer_batched_overlay
     test_layer_renderer_batched_overlay.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp

@@ -52,6 +52,7 @@ set(GUI_SOURCES
   project/manager/ProjectTerrainProductsManager.cpp
   project/manager/ProjectCameraSetupManager.cpp
   tasks/FeatureExtractionRunner.cpp
+  views/LayerImageLoader.cpp
   views/LayerRenderer.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
@@ -163,6 +164,7 @@ set(GUI_HEADERS
   tasks/FeatureExtractionRunner.h
   tasks/GuiTaskRunner.h
   tasks/SFMService.h
+  views/LayerImageLoader.h
   views/LayerRenderer.h
   widgets/CanvasWidget.h
   widgets/DataTreeWidget.h

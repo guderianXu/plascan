@@ -3959,6 +3959,29 @@ TEST(CanvasWidgetResponsivenessTest, ImageSwitchUsesBackgroundLoadAndIgnoresStal
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("QPixmap::fromImage(image)")));
 }
 
+TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesImageLoadingToDedicatedLoader)
+{
+    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString loaderHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerImageLoader.h"));
+    const QString loaderSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerImageLoader.cpp"));
+    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(loaderHeader.isEmpty());
+    ASSERT_FALSE(loaderSource.isEmpty());
+
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerImageLoader.h\"")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("return xjw::gui::views::loadImageForDisplay(path, plascanPath)")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("convertTo8BitGeoTiff_GDAL")))
+        << "Image conversion/cache logic should stay out of the scene renderer.";
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("needsConvertTo8Bit_GDAL")))
+        << "Image conversion/cache logic should stay out of the scene renderer.";
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("loadImageWithOpenCvByteDecode")))
+        << "Image decoding fallback should stay in the image loader.";
+
+    EXPECT_TRUE(loaderHeader.contains(QStringLiteral("QImage loadImageForDisplay")));
+    EXPECT_TRUE(loaderSource.contains(QStringLiteral("convertTo8BitGeoTiff_GDAL")));
+    EXPECT_TRUE(loaderSource.contains(QStringLiteral("loadImageWithOpenCvByteDecode")));
+}
+
 TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
@@ -4570,13 +4593,13 @@ TEST(MatchViewerEmptyMatchTest, CanOpenImagePairWithoutSparseMatchFile)
 TEST(MatchViewerVisualizationTest, ImageDisplayKeepsRawPixelOrientationForMatchCoordinates)
 {
     const QString imageViewSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
-    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString loaderSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerImageLoader.cpp"));
     ASSERT_FALSE(imageViewSource.isEmpty());
-    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(loaderSource.isEmpty());
 
     EXPECT_TRUE(imageViewSource.contains(QStringLiteral("LayerRenderer::loadImageForDisplay(imagePath, QString())")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("setAutoTransform(false)")));
-    EXPECT_FALSE(rendererSource.contains(QStringLiteral("setAutoTransform(true)")));
+    EXPECT_TRUE(loaderSource.contains(QStringLiteral("setAutoTransform(false)")));
+    EXPECT_FALSE(loaderSource.contains(QStringLiteral("setAutoTransform(true)")));
 }
 
 TEST(MatchViewerVisualizationTest, UsesSharedDisplayLoaderAndReportsAsyncImageFailures)
@@ -4597,7 +4620,7 @@ TEST(MatchViewerVisualizationTest, UsesSharedDisplayLoaderAndReportsAsyncImageFa
 
 TEST(ImageDisplayDecodeTest, FallsBackToOpenCvByteDecodeWhenQtImagePluginCannotRead)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/LayerImageLoader.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("QFile imageFile(path)")));
