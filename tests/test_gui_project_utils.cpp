@@ -1178,6 +1178,25 @@ TEST(GuiAsyncLifetimeTest, BundleAdjustProgressCallbackUsesQPointerGuard)
         << "Queued BA progress updates must target baProgressSelf.data(), not a raw this alias.";
 }
 
+TEST(GuiAsyncLifetimeTest, BundleAdjustUsesGuardedTaskRunner)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectManager::startBundleAdjustAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ProjectManager::startGenerateModelAsync"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "Bundle-adjust background execution should use the shared guarded task runner.";
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectManager> self(this)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run(")))
+        << "Open-coded QtConcurrent lacks the shared owner check before work starts.";
+}
+
 TEST(GuiAsyncLifetimeTest, EstimateDepthMapCallbacksUseQPointerGuard)
 {
     const QString source = readProjectSourceFile(

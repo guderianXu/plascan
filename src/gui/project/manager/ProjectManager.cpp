@@ -34,6 +34,7 @@
 #include "ProjectWorkflowUtils.h"
 #include "ProjectWorkflowReports.h"
 #include "SurveyControlDialog.h"
+#include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
@@ -68,7 +69,6 @@
 #include <QPen>
 #include <QRegularExpression>
 #include <QColor>
-#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 #include <array>
@@ -1090,9 +1090,10 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
 
     QPointer<ProjectManager> self(this);
 
-(void)QtConcurrent::run(
-        [self, coreData, plascanPath, images, minMatches,
-         cancelFlag, opts = std::move(opts), isDryRun = dryRun]() mutable
+xjw::gui::tasks::runGuarded(
+    this,
+    [self, coreData, plascanPath, images, minMatches,
+     cancelFlag, opts = std::move(opts), isDryRun = dryRun]() mutable
     {
         auto finishTask = [self, cancelFlag](bool success)
         {
@@ -1244,7 +1245,8 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
                 emit self->atProgressFinished(baResult.success);
             },
             Qt::QueuedConnection);
-    });
+    },
+    [](ProjectManager *) {});
 }
 
 // ==============================================================================
