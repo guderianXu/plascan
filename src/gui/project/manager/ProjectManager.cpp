@@ -1,11 +1,3 @@
-// 必须在任何Qt头文件之前引入LibTorch相关头，避免 Qt 宏（slots/signals/emit）与 LibTorch 冲突
-#include "compat/QtTorchMacroGuard.h"
-
-#include "SuperPoint.h"
-#include "FeatureFileIO.h"
-#include "SuperGlueMatcher.h"
-#include "SuperGlueMatchIO.h"
-
 #include "ProjectManager.h"
 #include "ProjectReconstructionManager.h"
 #include "ProjectTerrainProductsManager.h"

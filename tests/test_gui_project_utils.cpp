@@ -3977,6 +3977,20 @@ TEST(FeatureNamingCleanupTest, GuiOrchestrationDoesNotExposeLegacyAlgorithmSpeci
     EXPECT_FALSE(settingKeys.contains(QStringLiteral("SuperGlue")));
 }
 
+TEST(FeatureNamingCleanupTest, ProjectManagerDoesNotIncludeLegacyTorchAlgorithmHeaders)
+{
+    const QString managerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(managerSource.isEmpty());
+
+    EXPECT_FALSE(managerSource.contains(QStringLiteral("#include \"compat/QtTorchMacroGuard.h\"")))
+        << "ProjectManager should not include Torch headers directly; keep LibTorch warning guards in narrow workers.";
+    EXPECT_FALSE(managerSource.contains(QStringLiteral("#include \"SuperPoint.h\"")));
+    EXPECT_FALSE(managerSource.contains(QStringLiteral("#include \"SuperGlueMatcher.h\"")));
+    EXPECT_FALSE(managerSource.contains(QStringLiteral("#include \"SuperGlueMatchIO.h\"")));
+    EXPECT_FALSE(managerSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
+}
+
 TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
