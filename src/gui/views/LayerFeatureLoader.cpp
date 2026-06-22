@@ -42,6 +42,29 @@
 namespace xjw::gui::views
 {
 
+std::vector<cv::KeyPoint> loadFeatureKeypointsFromFile(const QString &featurePath)
+{
+    if (featurePath.isEmpty())
+    {
+        return {};
+    }
+
+    QString imageName;
+    FeatureOutput output;
+    if (!FeatureFileIO::read(featurePath, imageName, output))
+    {
+        qWarning() << "Failed to read feature file:" << featurePath;
+        return {};
+    }
+
+    for (size_t i = 0; i < output.keypoints.size() && i < output.scores.size(); ++i)
+    {
+        output.keypoints[i].response = output.scores[i];
+    }
+
+    return std::move(output.keypoints);
+}
+
 std::vector<cv::KeyPoint> loadFeatureKeypointsForImage(const QString &plascanPath,
                                                        const QString &imagePath)
 {
@@ -52,20 +75,7 @@ std::vector<cv::KeyPoint> loadFeatureKeypointsForImage(const QString &plascanPat
         return {};
     }
 
-    QString imageName;
-    FeatureOutput output;
-    if (!FeatureFileIO::read(featurePath, imageName, output))
-    {
-        qWarning() << "Failed to read .sp file:" << featurePath;
-        return {};
-    }
-
-    for (size_t i = 0; i < output.keypoints.size() && i < output.scores.size(); ++i)
-    {
-        output.keypoints[i].response = output.scores[i];
-    }
-
-    return std::move(output.keypoints);
+    return loadFeatureKeypointsFromFile(featurePath);
 }
 
 } // namespace xjw::gui::views

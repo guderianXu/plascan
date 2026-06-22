@@ -1,44 +1,16 @@
 #include "CanvasWidget.h"
 
+#include "LayerFeatureLoader.h"
 #include "LayerRenderer.h"
 #include "ProjectIO.h"
-#include "FeatureFileIO.h"
-
-// 为避免Qt的宏（slots, signals, emit）与LibTorch头文件冲突，
-// 在包含SuperPoint.h之前暂时undef这些宏，之后再恢复
-#ifdef slots
-  #undef slots
-  #define NEED_RESTORE_SLOTS
-#endif
-#ifdef signals
-  #undef signals
-  #define NEED_RESTORE_SIGNALS
-#endif
-#ifdef emit
-  #undef emit
-  #define NEED_RESTORE_EMIT
-#endif
-
-#include "SuperPoint.h"
-
-// 恢复Qt宏
-#ifdef NEED_RESTORE_SLOTS
-  #define slots Q_SLOTS
-  #undef NEED_RESTORE_SLOTS
-#endif
-#ifdef NEED_RESTORE_SIGNALS
-  #define signals Q_SIGNALS
-  #undef NEED_RESTORE_SIGNALS
-#endif
-#ifdef NEED_RESTORE_EMIT
-  #define emit Q_EMIT
-  #undef NEED_RESTORE_EMIT
-#endif
 
 #include <QtConcurrent>
 #include <QFuture>
 #include <QFutureWatcher>
+#include <QPointer>
 
+#include <opencv2/imgcodecs.hpp>
+#include <opencv2/imgproc.hpp>
 
 #include <QGraphicsScene>
 #include <QDir>
@@ -75,28 +47,7 @@ CanvasWidget::CanvasWidget(QWidget *parent)
     setResizeAnchor(QGraphicsView::AnchorUnderMouse);
 
     // 鼠标/交互将在后续扩展中实现
-    // 初始化 watcher
-    m_spWatcher = new QFutureWatcher<std::vector<cv::KeyPoint>>(this);
-    connect(m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished, this, [this]() {
-        if (!m_spWatcher) return;
-        // 获取结果并在主线程通过 LayerRenderer 绘制；同时更新缓存并发出信号
-        std::vector<cv::KeyPoint> kps = m_spWatcher->result();
-        const QString imagePath = m_lastRequestedSpPath;
-        const bool isCurrentImage = QDir::cleanPath(imagePath) == QDir::cleanPath(m_currentImagePath);
-        if (!imagePath.trimmed().isEmpty()) {
-            QFileInfo fi(imagePath);
-            const QString key = imagePath + m_lastRequestedSpSuffix;
-            m_spCache[key] = std::make_pair(fi.lastModified(), kps);
-        }
-        if (isCurrentImage && m_layerRenderer) {
-            // 重新应用当前显示设置，确保使用 UI 中的参数
-            m_layerRenderer->setFeatureDisplayOptions(m_currentFeatureOpts);
-            m_layerRenderer->clearFeatureLayers();
-            if (!kps.empty()) m_layerRenderer->addFeatureItems(kps);
-        }
-        // 发出信号以便主窗体更新状态栏 / 面板
-        emit featuresLoaded(imagePath, static_cast<int>(kps.size()));
-    });
+    // 特征点加载 watcher 在每次请求时创建，并用 generation guard 丢弃过期结果。
 }
 
 void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts)
@@ -467,6 +418,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     const QString activeSuffix = m_activeFeatureSuffix;
     const QString projectPath = property("currentProjectPath").toString();
     const bool shouldEstimateOrientation = m_currentFeatureOpts.showOrientation;
+    const int gen = ++m_featureLoadGen;
     // 检查缓存 (key 含 suffix)
     QFileInfo fiCheck(imagePathCopy);
     const QString cacheKey = imagePathCopy + activeSuffix;
@@ -499,18 +451,10 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
 
         // 读取特征文件 (支持所有提取器类型)
-        QString imageName;
-        FeatureOutput output;
-        if (!FeatureFileIO::read(spFile, imageName, output)) {
+        std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
+        if (keypoints.empty()) {
             LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read feature file %1").arg(spFile));
             return empty;
-        }
-
-        // 将score存储到KeyPoint的response字段
-        if (output.keypoints.size() == output.scores.size()) {
-            for (size_t i = 0; i < output.keypoints.size(); ++i) {
-                output.keypoints[i].response = output.scores[i];
-            }
         }
 
         if (shouldEstimateOrientation)
@@ -523,7 +467,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
                     cv::Mat gx, gy;
                     cv::Sobel(img, gx, CV_32F, 1, 0, 3);
                     cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                    for (auto &kp : output.keypoints) {
+                    for (auto &kp : keypoints) {
                         int x = static_cast<int>(std::round(kp.pt.x));
                         int y = static_cast<int>(std::round(kp.pt.y));
                         if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
@@ -546,15 +490,62 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
             }
         }
 
-        LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2").arg(static_cast<int>(output.keypoints.size())).arg(spFile));
-        return output.keypoints;
+        LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2").arg(static_cast<int>(keypoints.size())).arg(spFile));
+        return keypoints;
     });
 
-    // 取消上一个 watcher（如果有）并启动新 watcher
-    if (m_spWatcher->isRunning()) m_spWatcher->cancel();
-    m_lastRequestedSpPath = imagePathCopy;
-    m_lastRequestedSpSuffix = activeSuffix;
-    m_spWatcher->setFuture(future);
+    // 取消上一个 watcher（如果有）并启动新 watcher。QtConcurrent 任务可能已经在运行，
+    // 因此完成回调仍需依赖 generation 判断来丢弃旧结果。
+    if (m_spWatcher && m_spWatcher->isRunning())
+    {
+        m_spWatcher->cancel();
+    }
+
+    QPointer<CanvasWidget> self(this);
+    auto *watcher = new QFutureWatcher<std::vector<cv::KeyPoint>>(this);
+    m_spWatcher = watcher;
+    connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,
+            this, [self, watcher, imagePathCopy, activeSuffix, gen]()
+    {
+        if (!self)
+        {
+            watcher->deleteLater();
+            return;
+        }
+
+        std::vector<cv::KeyPoint> kps = watcher->result();
+        if (watcher == self->m_spWatcher)
+        {
+            self->m_spWatcher = nullptr;
+        }
+        watcher->deleteLater();
+
+        if (gen != self->m_featureLoadGen)
+        {
+            return;
+        }
+
+        const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->m_currentImagePath);
+        if (!imagePathCopy.trimmed().isEmpty())
+        {
+            QFileInfo fi(imagePathCopy);
+            const QString key = imagePathCopy + activeSuffix;
+            self->m_spCache[key] = std::make_pair(fi.lastModified(), kps);
+        }
+        if (isCurrentImage && self->m_layerRenderer)
+        {
+            // 重新应用当前显示设置，确保使用 UI 中的参数
+            self->m_layerRenderer->setFeatureDisplayOptions(self->m_currentFeatureOpts);
+            self->m_layerRenderer->clearFeatureLayers();
+            if (!kps.empty())
+            {
+                self->m_layerRenderer->addFeatureItems(kps);
+            }
+        }
+        // 发出信号以便主窗体更新状态栏 / 面板
+        emit self->featuresLoaded(imagePathCopy, static_cast<int>(kps.size()));
+    });
+    watcher->setFuture(future);
 }
 
 void CanvasWidget::reloadInterestPoints(const QString &imagePath)
@@ -607,20 +598,12 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
         return;
     }
 
-    QString imageName;
-    FeatureOutput output;
-    if (!FeatureFileIO::read(spFile, imageName, output)) {
+    std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
+    if (keypoints.empty()) {
         LOG_WARN(QStringLiteral("immediateReloadInterestPoints: failed to read .sp file %1").arg(spFile));
         if (isCurrentImage && m_layerRenderer) m_layerRenderer->clearFeatureLayers();
         emit featuresLoaded(imagePath, 0);
         return;
-    }
-
-    // 将 score 存储到 KeyPoint.response 字段
-    if (output.keypoints.size() == output.scores.size()) {
-        for (size_t i = 0; i < output.keypoints.size(); ++i) {
-            output.keypoints[i].response = output.scores[i];
-        }
     }
 
     if (m_currentFeatureOpts.showOrientation)
@@ -633,7 +616,7 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
                 cv::Mat gx, gy;
                 cv::Sobel(img, gx, CV_32F, 1, 0, 3);
                 cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                for (auto &kp : output.keypoints) {
+                for (auto &kp : keypoints) {
                     int x = static_cast<int>(std::round(kp.pt.x));
                     int y = static_cast<int>(std::round(kp.pt.y));
                     if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
@@ -658,7 +641,7 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
 
     // 更新 cache (key 含 suffix, 支持多提取器)
     QFileInfo fi(imagePath);
-    m_spCache[imagePath + m_activeFeatureSuffix] = std::make_pair(fi.lastModified(), output.keypoints);
+    m_spCache[imagePath + m_activeFeatureSuffix] = std::make_pair(fi.lastModified(), keypoints);
 
     // 仅当刷新的是“当前显示的影像”时才更新场景，避免处理批量图像时最后一张覆盖当前视图。
     if (isCurrentImage && m_layerRenderer) {
@@ -667,12 +650,12 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
             m_layerRenderer->clearFeatureLayers();
         } else {
             m_layerRenderer->clearFeatureLayers();
-            if (!output.keypoints.empty()) m_layerRenderer->addFeatureItems(output.keypoints);
+            if (!keypoints.empty()) m_layerRenderer->addFeatureItems(keypoints);
         }
     }
 
-    LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: loaded %1 keypoints from %2").arg(static_cast<int>(output.keypoints.size())).arg(spFile));
-    emit featuresLoaded(imagePath, static_cast<int>(output.keypoints.size()));
+    LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: loaded %1 keypoints from %2").arg(static_cast<int>(keypoints.size())).arg(spFile));
+    emit featuresLoaded(imagePath, static_cast<int>(keypoints.size()));
 }
 
 QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString &imagePath) const

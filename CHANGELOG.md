@@ -36,6 +36,7 @@
 - `LayerRenderer` 的特征文件查找、`FeatureFileIO` 解码和 score 回填逻辑拆到 `LayerFeatureLoader`，让渲染器不再直接包含 `FeatureOutput`/LibTorch 相关头文件，并把 MSVC C4267 外部模板 warning 限定在 loader 内部。
 - `LayerRenderer` 的匹配拼接 debug PNG 输出、scene item 类型诊断和 SHA1 文件命名拆到 `LayerStitchedDebug`，渲染类不再直接负责调试图写盘和场景项日志。
 - `ProjectManager.cpp` 移除未使用的 `SuperPoint`/`SuperGlue`/`FeatureFileIO` 旧算法头和 `QtTorchMacroGuard`，避免主项目 manager 编译单元引入 LibTorch 头导致 MSVC C4267 外部模板 warning。
+- 新增项目级 `.clang-format`，固定 C++17、4 空格、Allman 花括号、120 列和禁止 tab 等格式基线；当前不对全仓做机械格式化，后续改动按该配置逐步收敛。
 - 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
 
 ### 优化
@@ -46,9 +47,16 @@
 - 观测网络构建后台任务改用 `QPointer<ProjectManager>` 和项目路径 guard 回写进度、结果和完成信号，避免用户关闭项目或切换工程后旧任务写回当前项目。
 - `FeatureMatchRunner` 公共入口改为接收 `QPointer<ProjectManager>`，手动匹配和 DEM 自动流水线匹配步骤不再把裸 `ProjectManager*` 捕进后台 worker；匹配结果写回时会重新检查项目仍然有效且路径未切换。
 - 3D 视图 PLY 异步加载的进度回报改为通过 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` 回到 `CameraSceneWidget` 所在线程，避免后台加载线程直接通过 GUI 对象发射进度信号。
+- CanvasWidget 特征点异步加载改为按请求创建 watcher，并用 generation guard 丢弃旧影像/旧后缀的迟到结果，避免切换影像后旧特征点覆盖当前画布。
+- CanvasWidget 不再直接包含 `SuperPoint`、`FeatureOutput` 或 `FeatureFileIO`，改为复用 `LayerFeatureLoader::loadFeatureKeypointsFromFile()`；视图层只消费 `cv::KeyPoint`，LibTorch/ATen 头文件和 MSVC C4267 warning 继续隔离在 feature loader/runner 编译单元内。
 
 ### 验证
 
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具测试。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|CanvasWidgetDoesNotIncludeTorchExtractorHeaders|LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader" --output-on-failure` 通过，3/3。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CanvasWidget.cpp`、`LayerFeatureLoader.cpp`、`LayerRenderer.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|FeatureNamingCleanup|CanvasWidgetResponsiveness|LayerRenderer" --output-on-failure` 通过，29/29。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，540/540；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetimeTest.CameraSceneAsyncLoadCallbacksUseQPointerGuards" --output-on-failure` 先失败后通过，验证 PLY 加载 worker 不再直接从后台线程 emit GUI 进度信号。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CameraModel3DDialog.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|CameraModel3DDialog|ProjectModel|MeshReconstructor|TextureMapper" --output-on-failure` 通过，29/29。

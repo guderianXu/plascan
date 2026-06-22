@@ -1598,6 +1598,49 @@ TEST(GuiAsyncLifetimeTest, FeatureMatchRunnerUsesGuardedProjectManagerCallbacks)
     EXPECT_FALSE(mainBlock.contains(QStringLiteral("pm = m_projectManager")));
 }
 
+TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void CanvasWidget::startSpLoadForImage"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void CanvasWidget::reloadInterestPoints"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(header.contains(QStringLiteral("int m_featureLoadGen{0}")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
+    EXPECT_TRUE(block.contains(QStringLiteral("const int gen = ++m_featureLoadGen")));
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, imagePathCopy, activeSuffix, gen]()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("gen != self->m_featureLoadGen")))
+        << "Late feature-load completions from an older image/suffix must not update the current canvas.";
+    EXPECT_TRUE(block.contains(QStringLiteral("const QString key = imagePathCopy + activeSuffix")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpPath")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpSuffix")));
+    EXPECT_FALSE(source.contains(QStringLiteral("connect(m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished")));
+}
+
+TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_FALSE(source.contains(QStringLiteral("#include \"SuperPoint.h\"")))
+        << "CanvasWidget only reads serialized features and should not pull LibTorch extractor headers into the view.";
+    EXPECT_FALSE(source.contains(QStringLiteral("QtTorchMacroGuard")));
+    EXPECT_FALSE(source.contains(QStringLiteral("NEED_RESTORE_SLOTS")));
+    EXPECT_FALSE(source.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
+    EXPECT_FALSE(source.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("loadFeatureKeypointsFromFile")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgcodecs.hpp>")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgproc.hpp>")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
@@ -4234,8 +4277,10 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesFeatureFileLoadingToD
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("FeatureFileIO::read")))
         << "Feature file decoding should stay out of the scene renderer.";
 
+    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadFeatureKeypointsFromFile")));
     EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadFeatureKeypointsForImage")));
     EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ProjectIO::findFeatureForImage")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("loadFeatureKeypointsFromFile(featurePath)")));
     EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("FeatureFileIO::read")));
     EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("output.keypoints[i].response = output.scores[i]")));
     EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("#pragma warning(disable: 4267)")))
@@ -4269,12 +4314,16 @@ TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int finishedIndex = source.indexOf(QStringLiteral("m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished"));
+    const int finishedIndex =
+        source.indexOf(QStringLiteral("connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished"));
     ASSERT_GE(finishedIndex, 0);
-    const QString finishedBlock = source.mid(finishedIndex, 1800);
+    const QString finishedBlock = source.mid(finishedIndex, 2200);
 
-    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("QDir::cleanPath(imagePath) == QDir::cleanPath(m_currentImagePath)")));
-    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && m_layerRenderer)")));
+    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("gen != self->m_featureLoadGen")))
+        << "Late completions must be dropped after another image/suffix request starts.";
+    EXPECT_TRUE(finishedBlock.contains(
+        QStringLiteral("QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->m_currentImagePath)")));
+    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && self->m_layerRenderer)")));
 }
 
 TEST(CanvasWidgetResponsivenessTest, FeatureLoadEstimatesOrientationOnlyWhenDisplayed)
