@@ -31,6 +31,7 @@
 - `LayerRenderer` 的影像读取、OpenCV/GDAL fallback 和 8-bit 缓存逻辑拆到 `LayerImageLoader`，渲染类只保留场景图层、特征点和匹配线绘制职责，降低后续维护成本。
 - `LayerRenderer` 的特征点覆盖层和匹配线 item 构造逻辑继续拆到 `LayerOverlayItems`，渲染类只负责把 overlay item 加入/移出 scene，便于后续独立优化特征点绘制和匹配查看器显示。
 - `LayerRenderer` 的特征文件查找、`FeatureFileIO` 解码和 score 回填逻辑拆到 `LayerFeatureLoader`，让渲染器不再直接包含 `FeatureOutput`/LibTorch 相关头文件，并把 MSVC C4267 外部模板 warning 限定在 loader 内部。
+- `LayerRenderer` 的匹配拼接 debug PNG 输出、scene item 类型诊断和 SHA1 文件命名拆到 `LayerStitchedDebug`，渲染类不再直接负责调试图写盘和场景项日志。
 - 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
 
 ### 验证
@@ -55,9 +56,10 @@
 - `python -m pytest tests/test_repo_hygiene.py -q` 通过，11/11，27 个 subtest 通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，固定 Windows CUDA 主构建目录无需增量编译。
-- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，528/528；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，529/529；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "test_layer_renderer_batched_overlay|CanvasWidgetResponsivenessTest.LayerRendererDelegatesOverlayDrawingToDedicatedItems" --output-on-failure` 通过，2/2。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasWidgetResponsivenessTest.LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader|test_layer_renderer_batched_overlay" --output-on-failure` 通过，2/2。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasWidgetResponsivenessTest.LayerRendererDelegatesStitchedPairDebugOutput|test_layer_renderer_batched_overlay" --output-on-failure` 通过，2/2。
 
 ## v1.1.6 - 2026-06-21
 

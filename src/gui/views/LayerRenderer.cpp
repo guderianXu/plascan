@@ -2,6 +2,7 @@
 #include "LayerFeatureLoader.h"
 #include "LayerImageLoader.h"
 #include "LayerOverlayItems.h"
+#include "LayerStitchedDebug.h"
 #include "Logger.h"
 
 #include <opencv2/core/types.hpp>
@@ -10,23 +11,10 @@
 #include <QGraphicsPixmapItem>
 #include <QImage>
 #include <QPixmap>
-#include <QDir>
-#include <QFileInfo>
-#include <QCryptographicHash>
-#include <algorithm>
 
-#include <QGraphicsEllipseItem>
 #include <QGraphicsItem>
-#include <QGraphicsLineItem>
 #include <QVector>
 #include <QPointF>
-#include <QPainter>
-#include <QGraphicsPixmapItem>
-
-static QString hexSha1(const QByteArray &data)
-{
-    return QString::fromLatin1(QCryptographicHash::hash(data, QCryptographicHash::Sha1).toHex());
-}
 
 LayerRenderer::LayerRenderer(QGraphicsScene *scene, QObject *parent)
     : QObject(parent)
@@ -173,61 +161,7 @@ bool LayerRenderer::addStitchedImagePair(const QString &pathA, const QString &pa
     if (outA) *outA = itemA;
     if (outB) *outB = itemB;
 
-    // Debug: save a stitched composite image to disk for inspection and log scene items
-    try {
-        const int wa = itemA->pixmap().width();
-        const int ha = itemA->pixmap().height();
-        const int wb = itemB->pixmap().width();
-        const int hb = itemB->pixmap().height();
-        const int h = std::max(ha, hb);
-        const int w = wa + gap + wb;
-
-        QImage out(w, h, QImage::Format_ARGB32);
-        out.fill(Qt::transparent);
-        QPainter p(&out);
-        p.drawPixmap(0, 0, itemA->pixmap());
-        p.drawPixmap(wa + gap, 0, itemB->pixmap());
-        p.end();
-
-        // determine debug output directory
-        QString debugDir;
-        if (!m_currentProjectPath.trimmed().isEmpty()) {
-            const QString projectRoot = QFileInfo(m_currentProjectPath).absolutePath();
-            QDir d(projectRoot);
-            debugDir = d.filePath(QStringLiteral(".plascan_tmp/debug"));
-        } else {
-            debugDir = QFileInfo(pathA).absolutePath() + QDir::separator() + QStringLiteral("plascan_debug");
-        }
-        QDir dd(debugDir);
-        dd.mkpath(QStringLiteral("."));
-
-        QByteArray key = (pathA + QStringLiteral("|") + pathB + QStringLiteral("|") + QString::number(wa) + QStringLiteral("x") + QString::number(ha) + QStringLiteral("|") + QString::number(wb) + QStringLiteral("x") + QString::number(hb)).toUtf8();
-        const QString fname = dd.filePath(hexSha1(key) + QStringLiteral("_stitched.png"));
-        if (out.save(fname)) {
-            LOG_DEBUG(QStringLiteral("addStitchedImagePair: wrote debug stitched image %1").arg(fname));
-        } else {
-            LOG_WARN(QStringLiteral("addStitchedImagePair: failed to write debug stitched image %1").arg(fname));
-        }
-
-        // Log each item in the scene to find any with abnormal bounds
-        if (m_scene) {
-            const auto items = m_scene->items();
-            LOG_DEBUG(QStringLiteral("addStitchedImagePair: scene has %1 items").arg(items.size()));
-            for (int ii = 0; ii < items.size(); ++ii) {
-                QGraphicsItem *it = items.at(ii);
-                if (!it) continue;
-                QRectF br = it->boundingRect();
-                QPointF pos = it->pos();
-                QString typeName = QStringLiteral("unknown");
-                if (qgraphicsitem_cast<QGraphicsPixmapItem*>(it)) typeName = QStringLiteral("pixmap");
-                else if (qgraphicsitem_cast<QGraphicsEllipseItem*>(it)) typeName = QStringLiteral("ellipse");
-                else if (qgraphicsitem_cast<QGraphicsLineItem*>(it)) typeName = QStringLiteral("line");
-                LOG_DEBUG(QStringLiteral("addStitchedImagePair: item[%1] type=%2 pos=(%3,%4) bound=(%5,%6,%7,%8)").arg(ii).arg(typeName).arg(pos.x()).arg(pos.y()).arg(br.x()).arg(br.y()).arg(br.width()).arg(br.height()));
-            }
-        }
-    } catch (...) {
-        LOG_WARN(QStringLiteral("addStitchedImagePair: exception while writing debug stitched image or logging items"));
-    }
+    xjw::gui::views::recordStitchedImagePairDebug(m_scene, m_currentProjectPath, pathA, pathB, itemA, itemB, gap);
     return true;
 }
 

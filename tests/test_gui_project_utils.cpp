@@ -4036,6 +4036,28 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesFeatureFileLoadingToD
         << "LibTorch emits MSVC C4267 from external templates; keep it local to the feature loader.";
 }
 
+TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesStitchedPairDebugOutput)
+{
+    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString debugHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerStitchedDebug.h"));
+    const QString debugSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerStitchedDebug.cpp"));
+    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(debugHeader.isEmpty());
+    ASSERT_FALSE(debugSource.isEmpty());
+
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerStitchedDebug.h\"")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("recordStitchedImagePairDebug(")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("QCryptographicHash")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("hexSha1")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("wrote debug stitched image")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("qgraphicsitem_cast")));
+
+    EXPECT_TRUE(debugHeader.contains(QStringLiteral("recordStitchedImagePairDebug")));
+    EXPECT_TRUE(debugSource.contains(QStringLiteral("QCryptographicHash::hash")));
+    EXPECT_TRUE(debugSource.contains(QStringLiteral("wrote debug stitched image")));
+    EXPECT_TRUE(debugSource.contains(QStringLiteral("qgraphicsitem_cast<QGraphicsPixmapItem")));
+}
+
 TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));

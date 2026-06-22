@@ -56,6 +56,7 @@ set(GUI_SOURCES
   views/LayerImageLoader.cpp
   views/LayerOverlayItems.cpp
   views/LayerRenderer.cpp
+  views/LayerStitchedDebug.cpp
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
   widgets/DataTreeWidget.ui
@@ -170,6 +171,7 @@ set(GUI_HEADERS
   views/LayerImageLoader.h
   views/LayerOverlayItems.h
   views/LayerRenderer.h
+  views/LayerStitchedDebug.h
   widgets/CanvasWidget.h
   widgets/DataTreeWidget.h
   widgets/ProjectDashboardWidget.h
