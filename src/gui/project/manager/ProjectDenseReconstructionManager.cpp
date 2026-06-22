@@ -1645,27 +1645,40 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     gen->setConfig(genCfg);
     gen->setOutputDir(mvsOutDir.toStdString());
 
+    QPointer<ProjectDenseReconstructionManager> self(this);
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
-                     [this](const QString &stage, float ratio) {
-        emit mvsProgressChanged(stage, static_cast<int>(ratio * 100));
+                     [self](const QString &stage, float ratio) {
+        if (!self)
+        {
+            return;
+        }
+        emit self->mvsProgressChanged(stage, static_cast<int>(ratio * 100));
     });
     connect(gen, &DepthMapGenerator::errorOccurred, this, [](const QString &msg) {
         qWarning() << "[MVS] 错误:" << msg;
     });
     connect(gen, &DepthMapGenerator::depthMapArtifactSaved, this,
-            [this, sparseXyz, mvsOutDir](const QJsonObject &artifact) {
+            [self, sparseXyz, mvsOutDir](const QJsonObject &artifact) {
+        if (!self)
+        {
+            return;
+        }
         const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(artifact, sparseXyz, mvsOutDir);
         if (depthResult.isEmpty())
         {
             return;
         }
-        upsertProjectRecordByPath(m_projectData,
+        upsertProjectRecordByPath(self->m_projectData,
                                   QStringLiteral("depth_map_results"),
                                   QStringLiteral("depth_png"),
                                   depthResult);
     });
     connect(gen, &DepthMapGenerator::pointCloudReady, this,
-            [this, mvsOutDir](const std::vector<DensePoint> &cloud) {
+            [self, mvsOutDir](const std::vector<DensePoint> &cloud) {
+        if (!self)
+        {
+            return;
+        }
         if ((cloud.size() == 0))
         {
             return;
@@ -1675,13 +1688,13 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         QString saveErr;
         if (writePointCloudPly(plyPath, pointCloud, false, &saveErr))
         {
-            upsertProjectRecordByPath(m_projectData,
+            upsertProjectRecordByPath(self->m_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), plyPath, static_cast<int>(cloud.size())));
-            if (m_owner)
+            if (self->m_owner)
             {
-                m_owner->refreshReconstructionQualityReport();
+                self->m_owner->refreshReconstructionQualityReport();
             }
         }
         else
@@ -1692,7 +1705,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     connect(gen,
             &DepthMapGenerator::finished,
             this,
-            [self = QPointer<ProjectDenseReconstructionManager>(this), settings, continueMissingMode](bool success)
+            [self, settings, continueMissingMode](bool success)
     {
         if (!self)
         {

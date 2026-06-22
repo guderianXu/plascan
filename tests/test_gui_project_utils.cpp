@@ -1178,6 +1178,36 @@ TEST(GuiAsyncLifetimeTest, EstimateDepthMapCallbacksUseQPointerGuard)
     EXPECT_FALSE(block.contains(QStringLiteral("[this](bool success)")));
 }
 
+TEST(GuiAsyncLifetimeTest, GenerateDenseCloudCallbacksUseQPointerGuard)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(
+        QStringLiteral("void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(
+        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")))
+        << "Dense-cloud generation callbacks must share a guarded manager pointer.";
+    EXPECT_TRUE(block.contains(QStringLiteral("[self](const QString &stage, float ratio)")))
+        << "Progress callbacks should not capture raw this.";
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, sparseXyz, mvsOutDir](const QJsonObject &artifact)")))
+        << "Artifact callbacks should not capture raw this.";
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, mvsOutDir](const std::vector<DensePoint> &cloud)")))
+        << "Point cloud callbacks should not capture raw this.";
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, settings, continueMissingMode](bool success)")))
+        << "Finished callbacks should reuse the guarded pointer.";
+    EXPECT_FALSE(block.contains(QStringLiteral("[this](const QString &stage, float ratio)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[this, sparseXyz, mvsOutDir]")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[this, mvsOutDir]")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[self = QPointer<ProjectDenseReconstructionManager>(this)")));
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
