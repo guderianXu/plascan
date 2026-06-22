@@ -1064,6 +1064,47 @@ TEST(GuiAsyncLifetimeTest, TerrainAndDenseBackgroundCallbacksUseQPointerGuards)
     EXPECT_TRUE(managerSource.contains(QStringLiteral("QPointer<ProjectManager> self(this)")));
 }
 
+TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
+{
+    const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
+    const QString cameraSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectCameraSetupManager.cpp"));
+    ASSERT_FALSE(runnerSource.isEmpty());
+    ASSERT_FALSE(cameraSource.isEmpty());
+
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("runGuarded")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("postGuarded")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("QPointer<Owner>")));
+
+    EXPECT_TRUE(cameraSource.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
+    EXPECT_TRUE(cameraSource.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
+    EXPECT_TRUE(cameraSource.contains(QStringLiteral("xjw::gui::tasks::postGuarded")));
+    EXPECT_FALSE(cameraSource.contains(QStringLiteral("QtConcurrent::run([self, opts")))
+        << "Camera SFM initialization should use the shared guarded runner instead of open-coded QtConcurrent.";
+}
+
+TEST(GuiAsyncLifetimeTest, ThreeDReconstructionSfmUsesGuardedTaskRunner)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void MenuWorkflowController::startThreeDReconstructionWorkflow"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void MenuWorkflowController::startThreeDReconstructionDenseStage"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::postGuarded")));
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(pm)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("currentProjectPath() != projectPath")))
+        << "Three-dimensional reconstruction must not write SFM output back after the project has changed.";
+    EXPECT_FALSE(block.contains(QStringLiteral("QtConcurrent::run([self, pm")))
+        << "The SFM worker should not capture ProjectManager directly.";
+    EXPECT_FALSE(block.contains(QStringLiteral("QMetaObject::invokeMethod(pm, [pm")))
+        << "Queued callbacks should use QPointer guarded posting.";
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

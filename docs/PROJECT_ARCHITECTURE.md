@@ -325,6 +325,7 @@ gui/
 │
 ├── tasks/                      # 异步任务执行器
 │   ├── FeatureExtractionRunner.h/cpp  # 特征提取异步执行
+│   ├── GuiTaskRunner.h         # GUI 后台任务生命周期守护：runGuarded/postGuarded
 │   ├── ../core/pipeline/FeatureMatchRunner.h/cpp  # 特征匹配异步执行
 │   └── SFMService.h/cpp        # SfM 异步服务
 │

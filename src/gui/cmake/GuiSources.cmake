@@ -161,6 +161,7 @@ set(GUI_HEADERS
   project/manager/ProjectTerrainProductsManager.h
   project/manager/ProjectCameraSetupManager.h
   tasks/FeatureExtractionRunner.h
+  tasks/GuiTaskRunner.h
   tasks/SFMService.h
   views/LayerRenderer.h
   widgets/CanvasWidget.h

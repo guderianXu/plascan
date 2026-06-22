@@ -6,6 +6,7 @@
 #include "ProjectCameraImportService.h"
 #include "ProjectCameraInitialization.h"
 #include "ProjectSfmWorkflow.h"
+#include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "SFMService.h"
 
@@ -18,7 +19,6 @@
 #include <QSet>
 #include <QSize>
 #include <QDateTime>
-#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 #include <atomic>
@@ -616,14 +616,10 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         {
             return;
         }
-        QMetaObject::invokeMethod(self.data(), [self, stage, pct]()
+        xjw::gui::tasks::postGuarded(self.data(), [stage, pct](ProjectCameraSetupManager *manager)
         {
-            if (!self)
-            {
-                return;
-            }
-            emit self->atProgressChanged(stage, pct);
-        }, Qt::QueuedConnection);
+            emit manager->atProgressChanged(stage, pct);
+        });
     };
 
     opts.pairMatchedFn = [self](const QString &img0, const QString &img1,
@@ -633,14 +629,11 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         {
             return;
         }
-        QMetaObject::invokeMethod(self.data(), [self, img0, img1, matchPath, numMatches]()
+        xjw::gui::tasks::postGuarded(self.data(),
+                                     [img0, img1, matchPath, numMatches](ProjectCameraSetupManager *manager)
         {
-            if (!self)
-            {
-                return;
-            }
-            emit self->matchPairReady(img0, img1, matchPath, numMatches);
-        }, Qt::QueuedConnection);
+            emit manager->matchPairReady(img0, img1, matchPath, numMatches);
+        });
     };
 
     const QSet<QString> targetSet = [&]()
@@ -655,30 +648,28 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
 
     emit atProgressChanged(QStringLiteral("启动初始化相机位姿..."), 0);
 
-    (void)QtConcurrent::run([self, opts, outputDir, allImages, targetSet, existing,
-                           overwriteExisting, preparedCount, keptExistingCount,
-                           invalidSizeCount, exifCount, fallbackCount]()
-    {
-        xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(opts);
-
-        if (!self)
+    xjw::gui::tasks::runGuarded(
+        this,
+        [opts]() mutable
         {
-            return;
-        }
-        QMetaObject::invokeMethod(self.data(), [self, result = std::move(result), outputDir, allImages,
-                                         targetSet, existing, overwriteExisting,
-                                         preparedCount, keptExistingCount,
-                                         invalidSizeCount, exifCount, fallbackCount]() mutable
+            return xjw::gui::SFMService::run(opts);
+        },
+        [outputDir,
+         allImages,
+         targetSet,
+         existing,
+         overwriteExisting,
+         preparedCount,
+         keptExistingCount,
+         invalidSizeCount,
+         exifCount,
+         fallbackCount](ProjectCameraSetupManager *manager, xjw::gui::SFMServiceResult result) mutable
         {
-            if (!self)
-            {
-                return;
-            }
             if (!result.success)
             {
-                emit self->atProgressFinished(false);
+                emit manager->atProgressFinished(false);
                 QMessageBox::warning(
-                    self->m_parentWidget,
+                    manager->m_parentWidget,
                     QStringLiteral("初始化相机位姿"),
                     result.errorMessage.isEmpty() ? QStringLiteral("相对定向 / SFM 初始化失败") : result.errorMessage);
                 return;
@@ -686,14 +677,14 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
 
             for (const auto &sp : result.newFeatureFiles)
             {
-                self->m_owner->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
+                manager->m_owner->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
             }
             for (const auto &mr : result.newMatchFiles)
             {
-                self->m_owner->appendIpmatchResult(QStringList{mr.matchPath}, mr.settings);
+                manager->m_owner->appendIpmatchResult(QStringList{mr.matchPath}, mr.settings);
             }
 
-            const InitPoseFinalizeResult finalizeResult = finalizeInitializedCameraPoses(self->m_projectData,
+            const InitPoseFinalizeResult finalizeResult = finalizeInitializedCameraPoses(manager->m_projectData,
                                                                                         result,
                                                                                         targetSet,
                                                                                         existing,
@@ -702,8 +693,8 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
                                                                                         outputDir);
             if (!finalizeResult.success)
             {
-                emit self->atProgressFinished(false);
-                QMessageBox::critical(self->m_parentWidget,
+                emit manager->atProgressFinished(false);
+                QMessageBox::critical(manager->m_parentWidget,
                                       QStringLiteral("初始化相机位姿"),
                                       finalizeResult.errorMessage);
                 return;
@@ -714,9 +705,9 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
                 .arg(result.numPoints3D)
                 .arg(finalizeResult.updatedCameraCount));
 
-            emit self->atProgressFinished(true);
+            emit manager->atProgressFinished(true);
             QMessageBox::information(
-                self->m_parentWidget,
+                manager->m_parentWidget,
                 QStringLiteral("初始化相机位姿"),
                 QStringLiteral("初始化完成。注册影像: %1，三维点: %2，回写相机: %3。\n"
                                "内参初值准备: %4，保留已有相机: %5，尺寸失败: %6，EXIF 成功: %7，默认焦距回退: %8。")
@@ -728,8 +719,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
                     .arg(invalidSizeCount)
                     .arg(exifCount)
                     .arg(fallbackCount));
-        }, Qt::QueuedConnection);
-    });
+        });
 
     return true;
 }

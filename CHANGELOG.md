@@ -13,6 +13,7 @@
 - GUI 项目 `report_results` 摘要同步写入控制点、检查点和比例尺数量/RMSE，目录树或报告窗口后续可直接消费这些 metadata。
 - 光束法平差新增比例尺/标尺软约束，`BaInputBuilder` 可把 `survey_control.scale_bars` 映射为两条控制点 track 之间的距离约束，并在 BA JSON 中输出 `scale_bar_constraints_summary`。
 - Windows CTest 新增 `PlascanTestRuntime.cmake`，为 SuperPoint/DISK/ALIKED 等 Torch 测试自动补齐 LibTorch、CUDA 和 vcpkg 运行时 PATH，避免测试目录缺 DLL 时出现 `0xc0000135`。
+- GUI 新增 `GuiTaskRunner`，提供 `runGuarded/postGuarded` 生命周期守护后台任务入口，首批迁移相机 SFM 初始化和三维重建空三流程，减少关闭项目、切换工程或窗口销毁后后台回调访问已释放对象的风险。
 - 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
 
 ### 验证
@@ -24,7 +25,8 @@
 - `C:/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/ctest.exe --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "SurveyControl|ReconstructionQualityReport|QualityReport|ReferenceDatasetActionsConnectToProjectManager" --output-on-failure` 通过，17/17。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "BundleAdjust(Lidar|ControlPoint|ScaleBar)ConstraintTest|BaInputBuilderSurveyControl|BundleAdjustServiceLidarTest\\.RunWrites(ScaleBar|ControlPoint)ConstraintSummary|SfmSparseResultMetadataTest\\.BundleAdjustAutoEnablesSurveyControlConstraints|BundleAdjustCliTest" --output-on-failure` 通过，11/11。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "SuperPointTest|DiskExtractorTest|AlikedExtractorTest" --output-on-failure` 通过，13/13。
-- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，509/509；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，511/511；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|InitCameraPose|SfmServiceKnownPoseMode|SfmServicePairPlanning|AerialTriangulationWorkflow" --output-on-failure` 通过，14/14。
 - `python -m pytest tests/test_repo_hygiene.py -q` 通过，11/11，27 个 subtest 通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过。
 

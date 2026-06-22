@@ -10,6 +10,7 @@
 #include "FeatureExtractionDialog.h"
 #include "VocabularyOverlapDialog.h"
 #include "FeatureExtractionRunner.h"
+#include "GuiTaskRunner.h"
 #include "FeaturePointVisualizationDialog.h"
 #include "CanvasWidget.h"
 #include "MainWindow.h"
@@ -1397,18 +1398,28 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
     opts.quality = sfmQualityLevelFromWorkflowQuality(quality);
 
-    opts.progressFn = [pm](const QString &stage, int percent) {
-        QMetaObject::invokeMethod(pm, [pm, stage, percent]() {
-            emit pm->atProgressChanged(QStringLiteral("三维重建/空三: %1").arg(stage), percent);
-        }, Qt::QueuedConnection);
+    QPointer<ProjectManager> pmGuard(pm);
+    opts.progressFn = [pmGuard](const QString &stage, int percent) {
+        if (!pmGuard)
+        {
+            return;
+        }
+        xjw::gui::tasks::postGuarded(pmGuard.data(), [stage, percent](ProjectManager *manager) {
+            emit manager->atProgressChanged(QStringLiteral("三维重建/空三: %1").arg(stage), percent);
+        });
     };
-    opts.pairMatchedFn = [pm](const QString &img0,
-                              const QString &img1,
-                              const QString &matchPath,
-                              int numMatches) {
-        QMetaObject::invokeMethod(pm, [pm, img0, img1, matchPath, numMatches]() {
-            emit pm->matchPairReady(img0, img1, matchPath, numMatches);
-        }, Qt::QueuedConnection);
+    opts.pairMatchedFn = [pmGuard](const QString &img0,
+                                   const QString &img1,
+                                   const QString &matchPath,
+                                   int numMatches) {
+        if (!pmGuard)
+        {
+            return;
+        }
+        xjw::gui::tasks::postGuarded(pmGuard.data(),
+                                     [img0, img1, matchPath, numMatches](ProjectManager *manager) {
+            emit manager->matchPairReady(img0, img1, matchPath, numMatches);
+        });
     };
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
@@ -1417,59 +1428,82 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
 
     emit pm->atProgressChanged(QStringLiteral("三维重建: 启动空中三角测量..."), 0);
 
-    QPointer<MenuWorkflowController> self(this);
     const QStringList sfmImages = images;
     const QString sfmOutputDir = opts.outputDir;
-    const QString assetsDir = ProjectIO::projectAssetsDir(pm->currentProjectPath());
-    (void)QtConcurrent::run([self, pm, opts, runSettings, sfmImages, sfmOutputDir, assetsDir]() {
-        xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(opts);
+    const QString projectPath = pm->currentProjectPath();
+    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+    xjw::gui::tasks::runGuarded(
+        this,
+        [runOpts = std::move(opts), sfmImages, sfmOutputDir, assetsDir]() mutable {
+            xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(runOpts);
 
-        if (result.success && !assetsDir.isEmpty())
-        {
-            QJsonObject report;
-            report[QStringLiteral("type")] = QStringLiteral("three_d_reconstruction_sfm");
-            report[QStringLiteral("mode")] = QStringLiteral("sfm");
-            report[QStringLiteral("source")] = QStringLiteral("three_d_reconstruction_sfm");
-            report[QStringLiteral("timestamp")] = QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
-            report[QStringLiteral("num_images")] = sfmImages.size();
-            report[QStringLiteral("num_registered")] = result.numRegisteredImages;
-            report[QStringLiteral("num_points_3d")] = result.numPoints3D;
-            report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
-            report[QStringLiteral("ba_rms_before")] = result.baRmsBefore;
-            report[QStringLiteral("ba_rms_after")] = result.baRmsAfter;
-            report[QStringLiteral("ba_tracks_total")] = result.baTracksTotal;
-            report[QStringLiteral("ba_tracks_optimized")] = result.baTracksOptimized;
-            report[QStringLiteral("ba_tracks_filtered")] = result.baTracksFiltered;
-            report[QStringLiteral("duration_s")] = result.durationSeconds;
-            report[QStringLiteral("output_dir")] = sfmOutputDir;
-            report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
-            report[QStringLiteral("per_camera")] = result.perCameraResiduals;
-            report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
-            writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
-                                              QStringLiteral("at_report.json"),
-                                              QStringLiteral("at_report_history.json"),
-                                              report);
-            writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
-                                              QStringLiteral("three_d_reconstruction_sfm_report.json"),
-                                              QStringLiteral("three_d_reconstruction_sfm_report_history.json"),
-                                              report);
-        }
+            if (result.success && !assetsDir.isEmpty())
+            {
+                QJsonObject report;
+                report[QStringLiteral("type")] = QStringLiteral("three_d_reconstruction_sfm");
+                report[QStringLiteral("mode")] = QStringLiteral("sfm");
+                report[QStringLiteral("source")] = QStringLiteral("three_d_reconstruction_sfm");
+                report[QStringLiteral("timestamp")] =
+                    QDateTime::currentDateTime().toString(QStringLiteral("yyyy-MM-dd HH:mm:ss"));
+                report[QStringLiteral("num_images")] = sfmImages.size();
+                report[QStringLiteral("num_registered")] = result.numRegisteredImages;
+                report[QStringLiteral("num_points_3d")] = result.numPoints3D;
+                report[QStringLiteral("mean_reproj_error_px")] = result.meanReprojError;
+                report[QStringLiteral("ba_rms_before")] = result.baRmsBefore;
+                report[QStringLiteral("ba_rms_after")] = result.baRmsAfter;
+                report[QStringLiteral("ba_tracks_total")] = result.baTracksTotal;
+                report[QStringLiteral("ba_tracks_optimized")] = result.baTracksOptimized;
+                report[QStringLiteral("ba_tracks_filtered")] = result.baTracksFiltered;
+                report[QStringLiteral("duration_s")] = result.durationSeconds;
+                report[QStringLiteral("output_dir")] = sfmOutputDir;
+                report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
+                report[QStringLiteral("per_camera")] = result.perCameraResiduals;
+                report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
+                writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
+                                                  QStringLiteral("at_report.json"),
+                                                  QStringLiteral("at_report_history.json"),
+                                                  report);
+                writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
+                                                  QStringLiteral("three_d_reconstruction_sfm_report.json"),
+                                                  QStringLiteral("three_d_reconstruction_sfm_report_history.json"),
+                                                  report);
+            }
+            return result;
+        },
+        [pmGuard,
+         cancelFlag,
+         projectPath,
+         runSettings,
+         sfmImages,
+         sfmOutputDir](MenuWorkflowController *controller, xjw::gui::SFMServiceResult result) mutable {
+            if (!pmGuard)
+            {
+                return;
+            }
+            pmGuard->clearAtCancelFlag(cancelFlag);
+            if (pmGuard->currentProjectPath() != projectPath)
+            {
+                emit pmGuard->atProgressFinished(false);
+                QMessageBox::warning(controller->m_mainWindow,
+                                     QStringLiteral("三维重建"),
+                                     QStringLiteral("项目已切换，本次三维重建空三结果未写回。"));
+                return;
+            }
 
-        QMetaObject::invokeMethod(pm, [self, pm, result = std::move(result), runSettings, sfmImages, sfmOutputDir]() mutable {
             for (const auto &sp : result.newFeatureFiles)
             {
-                pm->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
+                pmGuard->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
             }
             for (const auto &match : result.newMatchFiles)
             {
-                pm->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
+                pmGuard->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
             }
 
             if (!result.pendingCamUpdates.isEmpty())
             {
                 int updated = 0;
                 QString err;
-                if (!pm->setImageCameras(result.pendingCamUpdates, &updated, &err))
+                if (!pmGuard->setImageCameras(result.pendingCamUpdates, &updated, &err))
                 {
                     LOG_WARN(QStringLiteral("三维重建: SFM 相机写回失败: %1").arg(err));
                 }
@@ -1506,23 +1540,23 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
 
                 QJsonObject resultRecordExtra = result.resultRecordExtra;
                 resultRecordExtra[QStringLiteral("source")] = QStringLiteral("three_d_reconstruction");
-                sfmAtIndex = pm->currentMeta()
+                sfmAtIndex = pmGuard->currentMeta()
                                  .value(QStringLiteral("aerial_triangulation_results"))
                                  .toArray()
                                  .size();
-                pm->appendAtResult(result.sparseCloudPath,
-                                   result.numPoints3D,
-                                   registeredImages,
-                                   sfmOutputDir,
-                                   resultRecordExtra);
+                pmGuard->appendAtResult(result.sparseCloudPath,
+                                        result.numPoints3D,
+                                        registeredImages,
+                                        sfmOutputDir,
+                                        resultRecordExtra);
                 currentSfmIsProduction = xjw::gui::project::isProductionSparseResult(resultRecordExtra);
                 currentSfmBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
             }
 
-            emit pm->atProgressFinished(result.success);
+            emit pmGuard->atProgressFinished(result.success);
             if (!result.success)
             {
-                QMessageBox::warning(nullptr,
+                QMessageBox::warning(controller->m_mainWindow,
                                      QStringLiteral("三维重建"),
                                      result.errorMessage.isEmpty()
                                          ? QStringLiteral("空中三角测量失败。")
@@ -1532,7 +1566,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
 
             if (!currentSfmIsProduction)
             {
-                QMessageBox::warning(nullptr,
+                QMessageBox::warning(controller->m_mainWindow,
                                      QStringLiteral("三维重建"),
                                      currentSfmBlockingReason.isEmpty()
                                          ? QStringLiteral("当前 SFM 稀疏点云质量不足，已停止后续 MVS 流程。")
@@ -1540,15 +1574,11 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                 return;
             }
 
-            if (self)
-            {
-                QJsonObject denseRunSettings = runSettings;
-                denseRunSettings[QStringLiteral("registered_image_count")] = registeredImageCount;
-                denseRunSettings[QStringLiteral("sfm_at_index")] = sfmAtIndex;
-                self->startThreeDReconstructionDenseStage(denseRunSettings);
-            }
-        }, Qt::QueuedConnection);
-    });
+            QJsonObject denseRunSettings = runSettings;
+            denseRunSettings[QStringLiteral("registered_image_count")] = registeredImageCount;
+            denseRunSettings[QStringLiteral("sfm_at_index")] = sfmAtIndex;
+            controller->startThreeDReconstructionDenseStage(denseRunSettings);
+        });
 }
 
 void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObject &settings)
