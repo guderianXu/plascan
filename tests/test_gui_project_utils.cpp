@@ -3090,10 +3090,11 @@ TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThrea
     ASSERT_GT(threeDStart, launchStart);
     const QString launchBody = source.mid(launchStart, threeDStart - launchStart);
 
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("QFutureWatcher<xjw::gui::SFMServiceResult>")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("watcher->setFuture(QtConcurrent::run")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::tasks::postGuarded")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::SFMService::run(runOpts)")));
-    const int sfmLaunch = launchBody.indexOf(QStringLiteral("watcher->setFuture(QtConcurrent::run"));
+    EXPECT_FALSE(launchBody.contains(QStringLiteral("QFutureWatcher<xjw::gui::SFMServiceResult>")));
+    const int sfmLaunch = launchBody.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"));
     ASSERT_GE(sfmLaunch, 0);
     EXPECT_FALSE(launchBody.left(sfmLaunch).contains(QStringLiteral("SFMService::run")));
 }
