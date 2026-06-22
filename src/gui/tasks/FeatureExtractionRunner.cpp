@@ -20,6 +20,7 @@
 #include <QFileInfo>
 #include <QFile>
 #include <QCoreApplication>
+#include <QMetaObject>
 
 #include <memory>
 
@@ -150,6 +151,12 @@ QString resolveExtractorModelPath(const QString &algorithm, bool useCuda, const 
 
 bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &inputs, ProjectManager *projectManager)
 {
+    return run(config, inputs, QPointer<ProjectManager>(projectManager));
+}
+
+bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &inputs,
+                                  QPointer<ProjectManager> projectManager)
+{
     std::atomic<bool> neverCancel{false};
     std::atomic<int> dummy{0};
     return run(config, inputs, projectManager, neverCancel, dummy);
@@ -157,6 +164,13 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
 
 bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &inputs,
                             ProjectManager *projectManager, std::atomic<bool> &cancelFlag,
+                            std::atomic<int> &progressCount)
+{
+    return run(config, inputs, QPointer<ProjectManager>(projectManager), cancelFlag, progressCount);
+}
+
+bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &inputs,
+                            QPointer<ProjectManager> projectManager, std::atomic<bool> &cancelFlag,
                             std::atomic<int> &progressCount)
 {
     const QString featureAlgorithm = normalizedFeatureAlgorithm(config);
@@ -169,7 +183,13 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
     
     // 创建输出目录
     QString outputDir = config["output_dir"].toString();
-    if (outputDir.isEmpty()) {
+    if (outputDir.isEmpty())
+    {
+        if (!projectManager)
+        {
+            LOG_ERROR("%s", qUtf8Printable(QString("特征提取缺少输出目录，且项目已关闭或 ProjectManager 不可用")));
+            return false;
+        }
         const QString assetsDir = ProjectIO::projectAssetsDir(projectManager->currentProjectPath());
         outputDir = QDir(assetsDir).filePath(QStringLiteral("ip"));
     }
@@ -420,9 +440,16 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
                     if (projectManager) 
                     {
                         // 使用主线程进行元数据更新，避免并发写入问题
-                        QMetaObject::invokeMethod(projectManager, "appendIpfindResult",
-                                                  Qt::QueuedConnection,
-                                                  Q_ARG(QString, imagePath), Q_ARG(QString, outputPath), Q_ARG(QJsonObject, config));
+                        QMetaObject::invokeMethod(projectManager.data(),
+                                                  [projectManager, imagePath, outputPath, config]()
+                        {
+                            if (!projectManager)
+                            {
+                                return;
+                            }
+                            projectManager->appendIpfindResult(imagePath, outputPath, config);
+                        },
+                        Qt::QueuedConnection);
                     }
                 } 
                 else 

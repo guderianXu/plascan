@@ -1938,10 +1938,11 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
         watcher->deleteLater();
     });
 
+    QPointer<ProjectManager> pmGuard(m_projectManager);
     watcher->setFuture(QtConcurrent::run(
-        [config, inputs, pm = m_projectManager, cancelFlag, progressCount]() -> bool
+        [config, inputs, pmGuard, cancelFlag, progressCount]() -> bool
         {
-            return FeatureExtractionRunner::run(config, inputs, pm, *cancelFlag, *progressCount);
+            return FeatureExtractionRunner::run(config, inputs, pmGuard, *cancelFlag, *progressCount);
         }));
 }
 

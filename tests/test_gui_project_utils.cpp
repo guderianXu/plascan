@@ -1502,6 +1502,46 @@ TEST(GuiAsyncLifetimeTest, ThreeDReconstructionSfmUsesGuardedTaskRunner)
         << "Queued callbacks should use QPointer guarded posting.";
 }
 
+TEST(GuiAsyncLifetimeTest, FeatureExtractionRunnerUsesGuardedProjectManagerCallbacks)
+{
+    const QString menuSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString terrainSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    const QString runnerHeader = readProjectSourceFile(QStringLiteral("src/gui/tasks/FeatureExtractionRunner.h"));
+    const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/FeatureExtractionRunner.cpp"));
+    ASSERT_FALSE(menuSource.isEmpty());
+    ASSERT_FALSE(terrainSource.isEmpty());
+    ASSERT_FALSE(runnerHeader.isEmpty());
+    ASSERT_FALSE(runnerSource.isEmpty());
+
+    const int menuStart = menuSource.indexOf(QStringLiteral("void MenuWorkflowController::runFeatureExtraction"));
+    ASSERT_GE(menuStart, 0);
+    const int menuEnd = menuSource.indexOf(QStringLiteral("void MenuWorkflowController::openWorkflowReportDialog"), menuStart);
+    ASSERT_GT(menuEnd, menuStart);
+    const QString menuBlock = menuSource.mid(menuStart, menuEnd - menuStart);
+
+    const int terrainStart = terrainSource.indexOf(
+        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
+    ASSERT_GE(terrainStart, 0);
+    const int terrainEnd = terrainSource.indexOf(
+        QStringLiteral("// 步骤 2: 特征匹配"), terrainStart);
+    ASSERT_GT(terrainEnd, terrainStart);
+    const QString terrainBlock = terrainSource.mid(terrainStart, terrainEnd - terrainStart);
+
+    EXPECT_TRUE(runnerHeader.contains(QStringLiteral("QPointer<ProjectManager> projectManager")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("QPointer<ProjectManager> projectManager")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("QMetaObject::invokeMethod(projectManager.data()")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("[projectManager, imagePath, outputPath, config]()")));
+    EXPECT_FALSE(runnerSource.contains(QStringLiteral("QMetaObject::invokeMethod(projectManager, \"appendIpfindResult\"")));
+
+    EXPECT_TRUE(menuBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(m_projectManager)")));
+    EXPECT_TRUE(menuBlock.contains(QStringLiteral("FeatureExtractionRunner::run(config, inputs, pmGuard")));
+    EXPECT_FALSE(menuBlock.contains(QStringLiteral("pm = m_projectManager")));
+
+    EXPECT_TRUE(terrainBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(m_owner)")));
+    EXPECT_TRUE(terrainBlock.contains(QStringLiteral("FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

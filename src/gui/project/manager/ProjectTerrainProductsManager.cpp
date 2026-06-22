@@ -955,7 +955,8 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     featureConfig[QStringLiteral("use_cuda")] = true;
     featureConfig[QStringLiteral("max_num_keypoints")] = 2048;
 
-    const bool featureOk = FeatureExtractionRunner::run(featureConfig, ctx.images, m_owner, cancelFlag, progressCount);
+    QPointer<ProjectManager> ownerGuard(m_owner);
+    const bool featureOk = FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard, cancelFlag, progressCount);
     if (!featureOk)
     {
         LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 特征提取失败（FeatureExtractionRunner::run 返回 false）"));
