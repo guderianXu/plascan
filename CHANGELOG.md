@@ -19,6 +19,7 @@
 - DEM 自动流水线在 MVS 新增 dense cloud 后，会把深度图直接 DEM 和点云回退 DEM 生成放入 `GuiTaskRunner::runGuarded` 后台任务；metadata 回调只做新增结果筛选和轻量请求准备，减少大数据 DEM/DOM IO 与栅格生成卡住 GUI 的风险。
 - 手动“从密集点云创建相对 DEM”入口改用 `GuiTaskRunner::runGuarded` 启动 DEM/DOM IO 与栅格生成，避免关闭项目/窗口后 open-coded `QtConcurrent` 仍启动地形产品任务。
 - 旧的 stereo/point2dem 相对 DEM 入口也改用 `GuiTaskRunner::runGuarded` 后台执行 DEM/DOM IO 与栅格生成，不再在 Async 接口里直接调用带弹窗的同步 wrapper。
+- “生成正射影像”入口改用 `GuiTaskRunner::runGuarded` 后台执行 DOM/ortho IO 与栅格生成，主线程只负责参数检查、结果登记和提示，避免大 DEM/影像生成正射时卡住 GUI。
 - 光束法平差核心优化进度回调改用 `QPointer<ProjectManager>` 守护，避免后台 BA 迭代中关闭项目或窗口后继续向已销毁的 `ProjectManager` 投递进度事件。
 - 深度图估计入口的进度、深度图 artifact 登记和完成回调改用 `QPointer<ProjectDenseReconstructionManager>` 守护，降低 MVS 运行中关闭项目/窗口后的悬挂回调风险。
 - 稠密点云生成入口的进度、深度图 artifact、点云保存和完成回调统一复用 `QPointer<ProjectDenseReconstructionManager>`，继续收敛 MVS 长任务关闭/切换工程时的生命周期风险。
@@ -47,6 +48,7 @@
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，重新编译 `CameraModel3DDialog.cpp` 并链接 `plascan_gui`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipelineAsync|GuiAsyncLifetime|TerrainDemDom|TerrainProductManifest" --output-on-failure` 通过，36/36。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipelineAsyncTest\\.(StereoPoint2DemRunsOffGuiThread|DenseCloudDemRunsOffGuiThread|AutoDemGenerationRunsOffGuiThreadAfterMvs)|GuiAsyncLifetimeTest\\.TerrainAndDenseBackgroundCallbacksUseQPointerGuards" --output-on-failure` 通过，4/4。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipelineAsyncTest\\.(MapProjectRunsOffGuiThread|StereoPoint2DemRunsOffGuiThread|DenseCloudDemRunsOffGuiThread|AutoDemGenerationRunsOffGuiThreadAfterMvs)|GuiAsyncLifetimeTest\\.TerrainAndDenseBackgroundCallbacksUseQPointerGuards" --output-on-failure` 通过，5/5。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "ProjectTriangulationUiTest|GuiAsyncLifetime|AerialTriangulationWorkflow|SparseCloudPostProcess|TerrainPipelineAsync" --output-on-failure` 通过，33/33。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectSparseReconstructionManager.cpp` 并链接 `plascan_gui`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipelineAsync|GuiAsyncLifetime" --output-on-failure` 通过，15/15。
@@ -58,7 +60,7 @@
 - `python -m pytest tests/test_repo_hygiene.py -q` 通过，11/11，27 个 subtest 通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，固定 Windows CUDA 主构建目录无需增量编译。
-- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，530/530；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，531/531；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "test_layer_renderer_batched_overlay|CanvasWidgetResponsivenessTest.LayerRendererDelegatesOverlayDrawingToDedicatedItems" --output-on-failure` 通过，2/2。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasWidgetResponsivenessTest.LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader|test_layer_renderer_batched_overlay" --output-on-failure` 通过，2/2。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasWidgetResponsivenessTest.LayerRendererDelegatesStitchedPairDebugOutput|test_layer_renderer_batched_overlay" --output-on-failure` 通过，2/2。

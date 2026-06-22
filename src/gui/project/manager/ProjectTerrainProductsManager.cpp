@@ -881,54 +881,105 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
 
     const double requestedResolution = resolution > 0.0 ? resolution : 0.0;
 
-    QJsonObject orthoResult;
-    if (!runOrthoProductOrWarn(sourceImages,
-                               resolvedDem,
-                               out,
-                               requestedResolution,
-                               meta,
-                               QStringLiteral("生成正射影像"),
-                               &orthoResult))
-    {
-        return;
-    }
+    const QString projectPath = m_owner ? m_owner->currentProjectPath() : QString();
+    emit demPipelineProgressChanged(QStringLiteral("正射影像生成"), 5);
 
-    const double effectiveResolution = orthoResult.value(QStringLiteral("output_resolution"))
-                                           .toDouble(requestedResolution > 0.0 ? requestedResolution : 1.0);
-
-    QJsonObject record = makeOrthoResultRecord(
-        orthoResult.value(QStringLiteral("created_at")).toString(),
-        resolvedDem,
-        orthoResult.value(QStringLiteral("output_path")).toString(),
-        orthoResult.value(QStringLiteral("source_image_count")).toInt(),
-        sourceImages,
-        true,
-        effectiveResolution);
-    record[QStringLiteral("dom_georeferenced")] = orthoResult.value(QStringLiteral("dom_georeferenced")).toBool(false);
-    record[QStringLiteral("projection_wkt_present")] =
-        orthoResult.value(QStringLiteral("projection_wkt_present")).toBool(false);
-    if (!matchedDemRecord.isEmpty())
+    QPointer<ProjectTerrainProductsManager> self(this);
+    auto orthoWork = [self,
+                      sourceImages,
+                      resolvedDem,
+                      out,
+                      requestedResolution,
+                      projectMeta = meta,
+                      matchedDemRecord,
+                      projectPath]()
     {
-        record[QStringLiteral("dem_reference")] = matchedDemRecord.value(QStringLiteral("dem_reference")).toString();
-    }
-    upsertMetaArrayRecordByPath(&meta,
-                                QStringLiteral("ortho_results"),
-                                QStringLiteral("output_path"),
-                                record);
-    persistProjectMeta(m_projectData, meta, true);
-    if (m_owner)
-    {
-        m_owner->refreshReconstructionQualityReport();
-    }
+        const auto orthoRun = runOrthoProduct(sourceImages,
+                                              resolvedDem,
+                                              out,
+                                              requestedResolution,
+                                              projectMeta);
+        if (!self)
+        {
+            return;
+        }
 
-    QMessageBox::information(m_parentWidget,
-                             QStringLiteral("生成正射影像"),
-                             QStringLiteral("正射影像已生成：\n%1\n分辨率: %2 m/px\n与 DEM 投影一致: %3")
-                                 .arg(record.value(QStringLiteral("output_path")).toString())
-                                 .arg(record.value(QStringLiteral("resolution")).toDouble(), 0, 'f', 3)
-                                 .arg(record.value(QStringLiteral("dom_georeferenced")).toBool(false)
-                                          ? QStringLiteral("是")
-                                          : QStringLiteral("否")));
+        QMetaObject::invokeMethod(self.data(),
+            [self,
+             orthoRun,
+             sourceImages,
+             resolvedDem,
+             requestedResolution,
+             matchedDemRecord,
+             projectPath]()
+            {
+                if (!self)
+                {
+                    return;
+                }
+                if (!self->m_owner ||
+                    !self->m_projectData ||
+                    self->m_owner->currentProjectPath() != projectPath)
+                {
+                    return;
+                }
+
+                if (!orthoRun.ok)
+                {
+                    QMessageBox::warning(self->m_parentWidget,
+                                         QStringLiteral("生成正射影像"),
+                                         QStringLiteral("处理失败：%1").arg(orthoRun.error));
+                    emit self->demPipelineFinished(false, orthoRun.error);
+                    return;
+                }
+
+                QJsonObject meta = self->m_projectData->metadata();
+                const QJsonObject orthoResult = orthoRun.payload;
+                const double effectiveResolution = orthoResult.value(QStringLiteral("output_resolution"))
+                                                       .toDouble(requestedResolution > 0.0 ? requestedResolution : 1.0);
+
+                QJsonObject record = makeOrthoResultRecord(
+                    orthoResult.value(QStringLiteral("created_at")).toString(),
+                    resolvedDem,
+                    orthoResult.value(QStringLiteral("output_path")).toString(),
+                    orthoResult.value(QStringLiteral("source_image_count")).toInt(),
+                    sourceImages,
+                    true,
+                    effectiveResolution);
+                record[QStringLiteral("dom_georeferenced")] =
+                    orthoResult.value(QStringLiteral("dom_georeferenced")).toBool(false);
+                record[QStringLiteral("projection_wkt_present")] =
+                    orthoResult.value(QStringLiteral("projection_wkt_present")).toBool(false);
+                if (!matchedDemRecord.isEmpty())
+                {
+                    record[QStringLiteral("dem_reference")] =
+                        matchedDemRecord.value(QStringLiteral("dem_reference")).toString();
+                }
+                upsertMetaArrayRecordByPath(&meta,
+                                            QStringLiteral("ortho_results"),
+                                            QStringLiteral("output_path"),
+                                            record);
+                persistProjectMeta(self->m_projectData, meta, true);
+                self->m_owner->refreshReconstructionQualityReport();
+
+                emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+                emit self->demPipelineFinished(true, QStringLiteral("正射影像生成完成"));
+                QMessageBox::information(
+                    self->m_parentWidget,
+                    QStringLiteral("生成正射影像"),
+                    QStringLiteral("正射影像已生成：\n%1\n分辨率: %2 m/px\n与 DEM 投影一致: %3")
+                        .arg(record.value(QStringLiteral("output_path")).toString())
+                        .arg(record.value(QStringLiteral("resolution")).toDouble(), 0, 'f', 3)
+                        .arg(record.value(QStringLiteral("dom_georeferenced")).toBool(false)
+                                 ? QStringLiteral("是")
+                                 : QStringLiteral("否")));
+            },
+            Qt::QueuedConnection);
+    };
+
+    xjw::gui::tasks::runGuarded(this,
+                                std::move(orthoWork),
+                                [](ProjectTerrainProductsManager *) {});
 }
 void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipelineContext &ctx)
 {

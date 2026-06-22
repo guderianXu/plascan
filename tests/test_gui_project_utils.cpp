@@ -1113,6 +1113,26 @@ TEST(TerrainPipelineAsyncTest, StereoPoint2DemRunsOffGuiThread)
         << "The Async entry point must not call the QMessageBox wrapper directly.";
 }
 
+TEST(TerrainPipelineAsyncTest, MapProjectRunsOffGuiThread)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startMapProjectAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "The DOM/map projection Async entry point should keep ortho IO and rasterization off the GUI thread.";
+    EXPECT_TRUE(block.contains(QStringLiteral("runOrthoProduct(sourceImages")))
+        << "The worker should call the non-UI ortho function and report errors after returning to the GUI thread.";
+    EXPECT_FALSE(block.contains(QStringLiteral("runOrthoProductOrWarn")))
+        << "The Async entry point must not call the QMessageBox wrapper directly.";
+}
+
 TEST(GuiAsyncLifetimeTest, TerrainAndDenseBackgroundCallbacksUseQPointerGuards)
 {
     const QString terrainSource = readProjectSourceFile(
