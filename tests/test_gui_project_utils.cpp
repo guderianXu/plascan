@@ -1128,6 +1128,29 @@ TEST(GuiAsyncLifetimeTest, FullDemPipelineUsesGuardedTaskRunner)
         << "The guarded runner cannot protect a work closure that captures raw this.";
 }
 
+TEST(GuiAsyncLifetimeTest, BundleAdjustProgressCallbackUsesQPointerGuard)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int callbackStart = source.indexOf(QStringLiteral("opts.baOpt.progressCallback ="));
+    ASSERT_GE(callbackStart, 0);
+    const int callbackEnd = source.indexOf(
+        QStringLiteral("emit atProgressChanged(QStringLiteral(\"光束法平差准备中...\"), 1);"),
+        callbackStart);
+    ASSERT_GT(callbackEnd, callbackStart);
+    const QString callbackBlock = source.mid(callbackStart, callbackEnd - callbackStart);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QPointer<ProjectManager> baProgressSelf")))
+        << "BA progress callbacks can outlive the GUI owner and must use QPointer.";
+    EXPECT_TRUE(callbackBlock.contains(QStringLiteral("[baProgressSelf, cancelFlag]")))
+        << "The callback should capture only the guarded ProjectManager pointer and cancellation flag.";
+    EXPECT_FALSE(callbackBlock.contains(QStringLiteral("[self = this, cancelFlag]")))
+        << "Capturing raw this in the BA progress callback can enqueue events after ProjectManager is destroyed.";
+    EXPECT_FALSE(callbackBlock.contains(QStringLiteral("QMetaObject::invokeMethod(\n                self,")))
+        << "Queued BA progress updates must target baProgressSelf.data(), not a raw this alias.";
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));

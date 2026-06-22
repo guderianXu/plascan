@@ -1045,10 +1045,12 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     setAtCancelFlag(cancelFlag);
     opts.baOpt.cancelFlag = cancelFlag;
+    QPointer<ProjectManager> baProgressSelf(this);
     opts.baOpt.progressCallback =
-        [self = this, cancelFlag](int currentIteration, int maxIterations, double avgRms, int validPoints) -> bool
+        [baProgressSelf, cancelFlag](int currentIteration, int maxIterations, double avgRms, int validPoints) -> bool
         {
-            if (cancelFlag->load(std::memory_order_relaxed))
+            if (!baProgressSelf ||
+                cancelFlag->load(std::memory_order_relaxed))
             {
                 return false;
             }
@@ -1064,15 +1066,19 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
                 .arg(avgRms, 0, 'f', 4)
                 .arg(validPoints);
             QMetaObject::invokeMethod(
-                self,
-                [self, cancelFlag, stage, percent]()
+                baProgressSelf.data(),
+                [baProgressSelf, cancelFlag, stage, percent]()
                 {
-                    if (self->m_atCancelFlag != cancelFlag ||
+                    if (!baProgressSelf)
+                    {
+                        return;
+                    }
+                    if (baProgressSelf->m_atCancelFlag != cancelFlag ||
                         cancelFlag->load(std::memory_order_relaxed))
                     {
                         return;
                     }
-                    emit self->atProgressChanged(stage, percent);
+                    emit baProgressSelf->atProgressChanged(stage, percent);
                 },
                 Qt::QueuedConnection);
             return true;
