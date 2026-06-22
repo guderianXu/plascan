@@ -51,6 +51,7 @@ set(GUI_SOURCES
   project/manager/ProjectSparseReconstructionManager.cpp
   project/manager/ProjectTerrainProductsManager.cpp
   project/manager/ProjectCameraSetupManager.cpp
+  tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
   views/LayerFeatureLoader.cpp
   views/LayerImageLoader.cpp
@@ -164,6 +165,7 @@ set(GUI_HEADERS
   project/manager/ProjectSparseReconstructionManager.h
   project/manager/ProjectTerrainProductsManager.h
   project/manager/ProjectCameraSetupManager.h
+  tasks/DenseMatchRunner.h
   tasks/FeatureExtractionRunner.h
   tasks/GuiTaskRunner.h
   tasks/SFMService.h
@@ -252,6 +254,7 @@ set(GUI_PROJECT_SOURCES
 )
 
 set(GUI_TASK_SOURCES
+  tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
   ../core/pipeline/FeatureMatchRunner.cpp
   ../core/pipeline/SFMService.cpp

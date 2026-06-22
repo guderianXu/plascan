@@ -3657,13 +3657,13 @@ TEST(DenseMatchCancelTest, StatusBarCancelSignalStopsRemainingPairs)
         readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
     const QString projectManagerHeader =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
-    const QString projectManagerSource =
-        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString denseMatchRunnerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/tasks/DenseMatchRunner.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(mainWindowSource.isEmpty());
     ASSERT_FALSE(controllerSource.isEmpty());
     ASSERT_FALSE(projectManagerHeader.isEmpty());
-    ASSERT_FALSE(projectManagerSource.isEmpty());
+    ASSERT_FALSE(denseMatchRunnerSource.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("dmCancelRequested")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("m_dmTaskStatus")));
@@ -3672,8 +3672,8 @@ TEST(DenseMatchCancelTest, StatusBarCancelSignalStopsRemainingPairs)
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("dmCancelFlag")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("hideDmProgress(!cancelled)")));
     EXPECT_TRUE(projectManagerHeader.contains(QStringLiteral("std::shared_ptr<std::atomic<bool>> cancelFlag")));
-    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("cancelFlag && cancelFlag->load()")));
-    EXPECT_TRUE(projectManagerSource.contains(QStringLiteral("密集匹配已请求取消")));
+    EXPECT_TRUE(denseMatchRunnerSource.contains(QStringLiteral("cancelFlag && cancelFlag->load()")));
+    EXPECT_TRUE(denseMatchRunnerSource.contains(QStringLiteral("密集匹配已请求取消")));
 }
 
 TEST(ForwardIntersectionCheckDialogTest, AutoModeAcceptsPythonLightGlueSidecarTokens)
@@ -3939,6 +3939,28 @@ TEST(FeatureExtractionRunnerTest, FeatureExtractionLogUsesSelectedAlgorithmName)
 
     EXPECT_FALSE(source.contains(QStringLiteral("开始在后台线程执行 SuperPoint...")));
     EXPECT_TRUE(source.contains(QStringLiteral("开始在后台线程执行 %1 特征提取")));
+}
+
+TEST(DenseMatchRunnerTest, DenseMatchWorkerDoesNotCaptureWorkflowControllerThis)
+{
+    const QString controllerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
+    const QString guiSources = readProjectSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    ASSERT_FALSE(controllerSource.isEmpty());
+    ASSERT_FALSE(guiSources.isEmpty());
+
+    const int start = controllerSource.indexOf(QStringLiteral("DenseMatchDialog::runRequested"));
+    ASSERT_GE(start, 0);
+    const int end = controllerSource.indexOf(QStringLiteral("void ReconstructionWorkflowController::openDepthMapEstimateDialog"), start);
+    ASSERT_GT(end, start);
+    const QString block = controllerSource.mid(start, end - start);
+
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("tasks/DenseMatchRunner.cpp")));
+    EXPECT_TRUE(block.contains(QStringLiteral("DenseMatchRunner::run(settings, progress, dmCancelFlag)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[this, settings, progress, dmCancelFlag]")))
+        << "The dense-match worker should not capture the workflow controller just to reach ProjectManager.";
+    EXPECT_FALSE(block.contains(QStringLiteral("m_projectManager->startDenseMatchAsyncWithProgress")))
+        << "Dense matching work should live in a narrow runner that does not depend on GUI manager lifetime.";
 }
 
 TEST(FeatureNamingCleanupTest, GuiOrchestrationDoesNotExposeLegacyAlgorithmSpecificInterfaces)

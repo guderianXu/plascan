@@ -44,7 +44,7 @@ DenseMatchDialog (GUI)
 ReconstructionWorkflowController
     │ 创建进度追踪, 启动异步任务
     ▼
-ProjectManager::startDenseMatchAsyncWithProgress()
+DenseMatchRunner
     │ 遍历匹配对, 逐个调用 DenseMatchService
     ▼
 DenseMatchService
@@ -87,6 +87,7 @@ DenseMatchService
 
 ### 服务层
 - **DenseMatchService.h/cpp** — 编排完整流水线: 加载影像 → 匹配器 → 验证 → 保存 TIFF。内置 `printf` 性能诊断日志 (图像尺寸、算法、CUDA 状态、耗时)
+- **GUI DenseMatchRunner** — GUI 侧薄任务 runner，负责从 JSON 配置生成 `DenseMatchConfig`、遍历匹配对、更新进度和保存结果，避免 workflow controller 或 ProjectManager 直接承载长任务实现
 
 ### OpenCV 封装
 - **opencv/OpenCVSgbmWrapper.h/cpp** — 封装 `cv::StereoSGBM::create()`，用于与自研 CUDA 算法对比精度和速度

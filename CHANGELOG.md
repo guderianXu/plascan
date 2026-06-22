@@ -38,8 +38,17 @@
 - `ProjectManager.cpp` 移除未使用的 `SuperPoint`/`SuperGlue`/`FeatureFileIO` 旧算法头和 `QtTorchMacroGuard`，避免主项目 manager 编译单元引入 LibTorch 头导致 MSVC C4267 外部模板 warning。
 - 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
 
+### 优化
+
+- 密集匹配执行逻辑从 `ProjectManager`/`ReconstructionWorkflowController` 拆到 `DenseMatchRunner`，workflow controller 的 `QtConcurrent` worker 不再捕获 `this`，也不再依赖 GUI manager 生命周期。
+
 ### 验证
 
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译并链接 `plascan_gui`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DenseMatchRunnerTest.DenseMatchWorkerDoesNotCaptureWorkflowControllerThis" --output-on-failure` 通过，1/1。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DenseMatch|FeatureNamingCleanupTest.ProjectManagerDoesNotIncludeLegacyTorchAlgorithmHeaders" --output-on-failure` 通过，8/8。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，重新编译 GUI/project/tasks 相关目标并同步 LibTorch 运行时 DLL。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，534/534；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_reconstruction_quality_report -Jobs 8` 通过。
 - `E:/code/plascan/build/windows-vcpkg-cuda-release/src/core/qc/test_survey_control_import.exe` 通过，3/3。
 - `E:/code/plascan/build/windows-vcpkg-cuda-release/src/core/qc/test_reconstruction_quality_report.exe` 通过，3/3。

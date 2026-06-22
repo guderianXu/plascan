@@ -8,6 +8,7 @@
 #include "ProjectManager.h"
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
+#include "DenseMatchRunner.h"
 #include "graph/ObservationNetworkBuilder.h"
 
 // ── 重建对话框头文件 ──
@@ -855,9 +856,9 @@ void ReconstructionWorkflowController::openDenseMatchDialog()
         });
 
         watcher->setFuture(QtConcurrent::run(
-            [this, settings, progress, dmCancelFlag]()
+            [settings, progress, dmCancelFlag]()
         {
-            m_projectManager->startDenseMatchAsyncWithProgress(settings, progress, dmCancelFlag);
+            DenseMatchRunner::run(settings, progress, dmCancelFlag);
         }));
     });
 

@@ -264,7 +264,7 @@ public slots:
     // 异步执行纹理映射（从最近一次网格生成 OBJ+MTL+PNG）
     void startTextureMappingAsync(const QJsonObject &settings);
 
-    // 异步执行密集立体匹配（DenseMatchService）。
+    // 兼容入口：密集匹配长任务由 DenseMatchRunner 执行。
     // settings 支持的字段见 DenseMatchDialog::collectSettings()。
     void startDenseMatchAsync(const QJsonObject &settings);
     void startDenseMatchAsyncWithProgress(const QJsonObject &settings,
