@@ -1254,6 +1254,28 @@ TEST(GuiAsyncLifetimeTest, GenerateDenseCloudCallbacksUseQPointerGuard)
     EXPECT_FALSE(block.contains(QStringLiteral("[self = QPointer<ProjectDenseReconstructionManager>(this)")));
 }
 
+TEST(GuiAsyncLifetimeTest, DenseCloudFusionUsesGuardedTaskRunner)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(
+        QStringLiteral("void ProjectDenseReconstructionManager::startFuseDepthMapsAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(
+        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "Dense-cloud fusion should use the shared guarded runner before starting long-running work.";
+    EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
+        << "Open-coded QtConcurrent can still start fusion after the manager owner has been destroyed.";
+}
+
 TEST(GuiAsyncLifetimeTest, DepthMapSparsePreloadWorkersGuardGeneratorLifetime)
 {
     const QString source = readProjectSourceFile(

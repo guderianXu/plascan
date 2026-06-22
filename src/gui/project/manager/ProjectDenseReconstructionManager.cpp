@@ -9,6 +9,7 @@
 #include "ProjectSupportUtils.h"
 #include "ProjectWorkflowUtils.h"
 #include "project/SparseResultQuality.h"
+#include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
@@ -1220,15 +1221,16 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
 
     const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
     QPointer<ProjectDenseReconstructionManager> self(this);
-    (void)QtConcurrent::run([self,
-                             storedFrames,
-                             camMap,
-                             request,
-                             keepColor,
-                             keepNormals,
-                             outputPly,
-                             pipelineMode,
-                             cancelFlag]() {
+    auto fusionWork = [self,
+                       storedFrames,
+                       camMap,
+                       request,
+                       keepColor,
+                       keepNormals,
+                       outputPly,
+                       pipelineMode,
+                       cancelFlag]()
+    {
         if (!self)
         {
             return;
@@ -1495,7 +1497,11 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                                          QStringLiteral("密集点云生成完成，共 %1 个点。").arg(pointCount));
             }
         }, Qt::QueuedConnection);
-    });
+    };
+
+    xjw::gui::tasks::runGuarded(this,
+                                std::move(fusionWork),
+                                [](ProjectDenseReconstructionManager *) {});
 }
 
 void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJsonObject &settings)
