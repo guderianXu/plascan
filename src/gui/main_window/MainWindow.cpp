@@ -28,6 +28,7 @@
 #include <QDragEnterEvent>
 #include <QDropEvent>
 #include <QMimeData>
+#include <QPointer>
 
 #include <algorithm>
 
@@ -461,7 +462,8 @@ void MainWindow::setupProjectManager()
                 connect(dlg, &FeatureMatchingDialog::runRequested, this,
                     [this](const QJsonObject &config, const QStringList &imagePairs)
                 {
-                    if (!m_projectManager)
+                    QPointer<ProjectManager> pmGuard(m_projectManager);
+                    if (!pmGuard)
                     {
                         LOG_ERROR(QStringLiteral("无法运行特征匹配：项目管理器未初始化"));
                         return;
@@ -487,7 +489,7 @@ void MainWindow::setupProjectManager()
                         const QStringList compatibleSuffixes =
                             xjw::feature_match::compatibleFeatureSuffixes(algorithm);
                         const QStringList availableSuffixes = xjw::gui::project::projectFeatureSuffixes(
-                            m_projectManager->currentProjectPath(), m_projectManager->currentMeta());
+                            pmGuard->currentProjectPath(), pmGuard->currentMeta());
                         int suffixCount = 0;
                         if (availableSuffixes.isEmpty())
                         {
@@ -540,9 +542,9 @@ void MainWindow::setupProjectManager()
                     });
 
                     watcher->setFuture(QtConcurrent::run(
-                        [config, imagePairs, pm = m_projectManager, cancelFlag, progressCount]()
+                        [config, imagePairs, pmGuard, cancelFlag, progressCount]()
                         {
-                            FeatureMatchRunner::run(config, imagePairs, pm, *cancelFlag, *progressCount);
+                            FeatureMatchRunner::run(config, imagePairs, pmGuard, *cancelFlag, *progressCount);
                         }));
                 });
 

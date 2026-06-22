@@ -1565,6 +1565,35 @@ TEST(GuiAsyncLifetimeTest, ObservationNetworkWorkerUsesGuardedProjectManagerCall
     EXPECT_FALSE(block.contains(QStringLiteral("[pm, stage, pct]")));
 }
 
+TEST(GuiAsyncLifetimeTest, FeatureMatchRunnerUsesGuardedProjectManagerCallbacks)
+{
+    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString runnerHeader = readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.h"));
+    const QString runnerSource = readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"));
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+    ASSERT_FALSE(runnerHeader.isEmpty());
+    ASSERT_FALSE(runnerSource.isEmpty());
+
+    const int mainStart = mainWindowSource.indexOf(QStringLiteral("connect(m_mainMenu->matchFeaturesAction()"));
+    ASSERT_GE(mainStart, 0);
+    const int mainEnd = mainWindowSource.indexOf(QStringLiteral("if (m_mainMenu->viewMatchesAction())"), mainStart);
+    ASSERT_GT(mainEnd, mainStart);
+    const QString mainBlock = mainWindowSource.mid(mainStart, mainEnd - mainStart);
+
+    EXPECT_TRUE(runnerHeader.contains(QStringLiteral("QPointer<ProjectManager> projectManager")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("QPointer<ProjectManager> projectManager")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("const QString projectPath = projectManager ? projectManager->currentProjectPath() : QString()")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("if (!projectManager || projectManager->currentProjectPath() != projectPath)")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("[projectManager, projectPath")));
+    EXPECT_FALSE(runnerSource.contains(QStringLiteral("QMetaObject::invokeMethod(projectManager, \"appendIpmatchResult\"")));
+    EXPECT_FALSE(runnerSource.contains(QStringLiteral("ProjectIO::projectAssetsDir(projectManager->currentProjectPath())")));
+    EXPECT_FALSE(runnerSource.contains(QStringLiteral("projectManager->getAllImages()")));
+
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(m_projectManager)")));
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("FeatureMatchRunner::run(config, imagePairs, pmGuard")));
+    EXPECT_FALSE(mainBlock.contains(QStringLiteral("pm = m_projectManager")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

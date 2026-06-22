@@ -996,7 +996,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     matchConfig[QStringLiteral("outlier_method")] = QStringLiteral("fundamental_ransac");
 
     progressCount.store(0);
-    FeatureMatchRunner::run(matchConfig, imagePairs, m_owner, cancelFlag, progressCount);
+    FeatureMatchRunner::run(matchConfig, imagePairs, ownerGuard, cancelFlag, progressCount);
     LOG_INFO(QStringLiteral("[DEM流水线] ✓ 特征匹配完成"));
 
     // 步骤 3-5: 正式 SfM/BA 稀疏云 → MVS → DEM 需要在主线程通过信号链驱动

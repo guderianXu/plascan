@@ -134,9 +134,32 @@ bool waitForProcessOrCancel(QProcess &process,
     return true;
 }
 
+void appendIpmatchResultGuarded(QPointer<ProjectManager> projectManager,
+                                const QString &projectPath,
+                                const QStringList &outputs,
+                                const QJsonObject &settings)
+{
+    QObject *receiver = QCoreApplication::instance();
+    if (!receiver)
+    {
+        return;
+    }
+
+    QMetaObject::invokeMethod(receiver,
+        [projectManager, projectPath, outputs, settings]()
+        {
+            if (!projectManager || projectManager->currentProjectPath() != projectPath)
+            {
+                return;
+            }
+            projectManager->appendIpmatchResult(outputs, settings);
+        },
+        Qt::QueuedConnection);
+}
+
 } // namespace
 
-void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &imagePairs, ProjectManager *projectManager)
+void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &imagePairs, QPointer<ProjectManager> projectManager)
 {
     std::atomic<bool> neverCancel{false};
     std::atomic<int> dummy{0};
@@ -144,27 +167,29 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 }
 
 void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &imagePairs,
-                           ProjectManager *projectManager, std::atomic<bool> &cancelFlag)
+                           QPointer<ProjectManager> projectManager, std::atomic<bool> &cancelFlag)
 {
     std::atomic<int> dummy{0};
     run(config, imagePairs, projectManager, cancelFlag, dummy);
 }
 
 void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &imagePairs,
-                           ProjectManager *projectManager, std::atomic<bool> &cancelFlag,
+                           QPointer<ProjectManager> projectManager, std::atomic<bool> &cancelFlag,
                            std::atomic<int> &progressCount)
 {
     const QString matchAlgorithm = config.value("match_algorithm").toString("superglue").trimmed().toLower();
     const QString rawSuffix      = config.value("feature_suffix").toString();
-    const QString plascanPath = projectManager ? projectManager->currentProjectPath() : QString();
+    const QString projectPath = projectManager ? projectManager->currentProjectPath() : QString();
     const QJsonObject currentMeta = projectManager ? projectManager->currentMeta() : QJsonObject();
+    ProjectManager *manager = projectManager.data();
+    const QStringList projectImages = manager ? manager->getAllImages() : QStringList();
 
     // "__all__" mode: try all compatible feature suffixes
     QStringList suffixesToTry;
     if (rawSuffix == "__all__")
     {
         const QStringList compatibleSuffixes = xjw::feature_match::compatibleFeatureSuffixes(matchAlgorithm);
-        const QStringList availableSuffixes = xjw::gui::project::projectFeatureSuffixes(plascanPath, currentMeta);
+        const QStringList availableSuffixes = xjw::gui::project::projectFeatureSuffixes(projectPath, currentMeta);
         if (compatibleSuffixes.isEmpty())
         {
             LOG_WARN("%s", qUtf8Printable(QString("All-features mode: %1 不依赖预提取特征，跳过后缀匹配")
@@ -238,7 +263,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     QString outputDir = config["output_dir"].toString();
     if (outputDir.isEmpty()) 
     {
-        const QString assetsDir = ProjectIO::projectAssetsDir(projectManager->currentProjectPath());
+        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
         outputDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
     }
     
@@ -485,8 +510,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             const QString token1 = QFileInfo(parts[1]).fileName();
             const QString imagePath0 = xjw::gui::project::resolveProjectImagePathFromToken(token0, currentMeta);
             const QString imagePath1 = xjw::gui::project::resolveProjectImagePathFromToken(token1, currentMeta);
-            const QString sp0 = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, token0, featureSuffix);
-            const QString sp1 = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, token1, featureSuffix);
+            const QString sp0 = xjw::gui::project::resolveFeaturePathBySuffix(projectPath, currentMeta, token0, featureSuffix);
+            const QString sp1 = xjw::gui::project::resolveFeaturePathBySuffix(projectPath, currentMeta, token1, featureSuffix);
             if (!QFile::exists(sp0) || !QFile::exists(sp1)) { LOG_WARN("Feature file missing for %s", qUtf8Printable(pairStr)); continue; }
 
             const QString imagePath0ForMeta = imagePath0.isEmpty() ? token0 : imagePath0;
@@ -553,29 +578,23 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                 }
             }
 
-            if (projectManager)
-            {
-                QJsonObject pairSettings = config;
-                QJsonArray imgFilesForMeta;
-                imgFilesForMeta.append(imagePath0ForMeta);
-                imgFilesForMeta.append(imagePath1ForMeta);
-                pairSettings[QStringLiteral("image_files")] = imgFilesForMeta;
-                pairSettings[QStringLiteral("image0")] = imagePath0ForMeta;
-                pairSettings[QStringLiteral("image1")] = imagePath1ForMeta;
-                pairSettings[QStringLiteral("sp0_path")] = sp0;
-                pairSettings[QStringLiteral("sp1_path")] = sp1;
-                pairSettings[QStringLiteral("feature0_path")] = sp0;
-                pairSettings[QStringLiteral("feature1_path")] = sp1;
-                pairSettings[QStringLiteral("pair_name")] = canonicalPairName;
-                pairSettings[QStringLiteral("sidecar_json")] = sidecarPath;
-                pairSettings[QStringLiteral("match_algorithm")] = matchAlgorithm;
+            QJsonObject pairSettings = config;
+            QJsonArray imgFilesForMeta;
+            imgFilesForMeta.append(imagePath0ForMeta);
+            imgFilesForMeta.append(imagePath1ForMeta);
+            pairSettings[QStringLiteral("image_files")] = imgFilesForMeta;
+            pairSettings[QStringLiteral("image0")] = imagePath0ForMeta;
+            pairSettings[QStringLiteral("image1")] = imagePath1ForMeta;
+            pairSettings[QStringLiteral("sp0_path")] = sp0;
+            pairSettings[QStringLiteral("sp1_path")] = sp1;
+            pairSettings[QStringLiteral("feature0_path")] = sp0;
+            pairSettings[QStringLiteral("feature1_path")] = sp1;
+            pairSettings[QStringLiteral("pair_name")] = canonicalPairName;
+            pairSettings[QStringLiteral("sidecar_json")] = sidecarPath;
+            pairSettings[QStringLiteral("match_algorithm")] = matchAlgorithm;
 
-                QStringList singleOutput{outPath};
-                QMetaObject::invokeMethod(projectManager, "appendIpmatchResult",
-                                          Qt::QueuedConnection,
-                                          Q_ARG(QStringList, singleOutput),
-                                          Q_ARG(QJsonObject, pairSettings));
-            }
+            QStringList singleOutput{outPath};
+            appendIpmatchResultGuarded(projectManager, projectPath, singleOutput, pairSettings);
             LOG_INFO("Python LG done: %s", qUtf8Printable(matchName));
         }
         LOG_INFO("Python LightGlue (%s) done", qUtf8Printable(lightglueAlgo));
@@ -603,14 +622,13 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             ? QThread::idealThreadCount() : sgConfig.num_threads);
 
     // 无匹配记录文件
-    const QString assetsDir2 = ProjectIO::projectAssetsDir(projectManager->currentProjectPath());
+    const QString assetsDir2 = ProjectIO::projectAssetsDir(projectPath);
     const QString noMatchFilePath = QDir(QDir(assetsDir2).filePath(QStringLiteral("matches")))
                                         .filePath(QStringLiteral("no_match_pairs.json"));
 
     // 构建 baseName -> 原始影像完整路径 的索引，便于写入更完整的元数据
     QMap<QString, QString> baseToImagePath;
-    const QStringList allImages = projectManager->getAllImages();
-    for (const QString &imgPath : allImages) 
+    for (const QString &imgPath : projectImages)
     {
         QFileInfo fi(imgPath);
         const QString base = fi.completeBaseName();
@@ -728,8 +746,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                     const QString canonicalPairName = QString("%1__%2").arg(baseName0, baseName1);
 
                     // 根据项目和特征后缀解析特征文件路径
-                    const QString sp0Path = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, imageToken0, featureSuffix);
-                    const QString sp1Path = xjw::gui::project::resolveFeaturePathBySuffix(plascanPath, currentMeta, imageToken1, featureSuffix);
+                    const QString sp0Path = xjw::gui::project::resolveFeaturePathBySuffix(projectPath, currentMeta, imageToken0, featureSuffix);
+                    const QString sp1Path = xjw::gui::project::resolveFeaturePathBySuffix(projectPath, currentMeta, imageToken1, featureSuffix);
 
                     if (!QFile::exists(sp0Path) || !QFile::exists(sp1Path)) 
                     {
@@ -989,10 +1007,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         pairSettings["match_algorithm"] = matchAlgorithm;
 
                         QStringList singleOutput{outputPath};
-                        QMetaObject::invokeMethod(projectManager, "appendIpmatchResult",
-                                                  Qt::QueuedConnection,
-                                                  Q_ARG(QStringList, singleOutput),
-                                                  Q_ARG(QJsonObject, pairSettings));
+                        appendIpmatchResultGuarded(projectManager, projectPath, singleOutput, pairSettings);
 
                         successCount.fetch_add(1);
                         LOG_INFO("%s", qUtf8Printable(QString("  %1 匹配完成: %2 对")
