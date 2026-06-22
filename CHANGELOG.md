@@ -17,6 +17,7 @@
 - `GuiTaskRunner::runGuarded` 在后台任务真正开始前先检查 GUI owner 是否仍然有效，并把完整 DEM 自动流水线入口纳入该 runner，降低关闭项目/窗口后启动长任务的风险。
 - DEM 自动流水线在启动 MVS 前记录已有密集点云数量，完成后只扫描本次新增且文件真实存在的 dense cloud 记录，并用共享连接状态统一清理 metadata/MVS 信号，避免误用旧点云或泄漏连接句柄。
 - DEM 自动流水线在 MVS 新增 dense cloud 后，会把深度图直接 DEM 和点云回退 DEM 生成放入 `GuiTaskRunner::runGuarded` 后台任务；metadata 回调只做新增结果筛选和轻量请求准备，减少大数据 DEM/DOM IO 与栅格生成卡住 GUI 的风险。
+- 手动“从密集点云创建相对 DEM”入口改用 `GuiTaskRunner::runGuarded` 启动 DEM/DOM IO 与栅格生成，避免关闭项目/窗口后 open-coded `QtConcurrent` 仍启动地形产品任务。
 - 光束法平差核心优化进度回调改用 `QPointer<ProjectManager>` 守护，避免后台 BA 迭代中关闭项目或窗口后继续向已销毁的 `ProjectManager` 投递进度事件。
 - 深度图估计入口的进度、深度图 artifact 登记和完成回调改用 `QPointer<ProjectDenseReconstructionManager>` 守护，降低 MVS 运行中关闭项目/窗口后的悬挂回调风险。
 - 稠密点云生成入口的进度、深度图 artifact、点云保存和完成回调统一复用 `QPointer<ProjectDenseReconstructionManager>`，继续收敛 MVS 长任务关闭/切换工程时的生命周期风险。
@@ -38,6 +39,7 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "BundleAdjust(Lidar|ControlPoint|ScaleBar)ConstraintTest|BaInputBuilderSurveyControl|BundleAdjustServiceLidarTest\\.RunWrites(ScaleBar|ControlPoint)ConstraintSummary|SfmSparseResultMetadataTest\\.BundleAdjustAutoEnablesSurveyControlConstraints|BundleAdjustCliTest" --output-on-failure` 通过，11/11。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "SuperPointTest|DiskExtractorTest|AlikedExtractorTest" --output-on-failure` 通过，13/13。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，重新编译 `CameraModel3DDialog.cpp` 并链接 `plascan_gui`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipelineAsync|GuiAsyncLifetime|TerrainDemDom|TerrainProductManifest" --output-on-failure` 通过，36/36。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipelineAsync|GuiAsyncLifetime" --output-on-failure` 通过，15/15。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|BundleAdjust" --output-on-failure` 通过，36/36。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|MvsPipelineTest|DepthMapFusion|DenseCloudRefine" --output-on-failure` 通过，36/36。

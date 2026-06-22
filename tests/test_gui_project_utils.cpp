@@ -1083,10 +1083,12 @@ TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
 
-    EXPECT_TRUE(block.contains(QStringLiteral("QtConcurrent::run")))
-        << "The Async entry point should not run DEM/DOM IO and rasterization on the GUI thread.";
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "The Async entry point should run DEM/DOM IO and rasterization through the guarded task runner.";
     EXPECT_TRUE(block.contains(QStringLiteral("runDemProducts(resolvedDenseCloud")))
         << "The worker should call the non-UI terrain function and report errors on the GUI thread.";
+    EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
+        << "Open-coded QtConcurrent can still start terrain work after the manager owner is destroyed.";
     EXPECT_FALSE(block.contains(QStringLiteral("runDemProductsOrWarn")))
         << "runDemProductsOrWarn shows QMessageBox and must stay on the GUI thread.";
 }

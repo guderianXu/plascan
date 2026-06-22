@@ -663,12 +663,12 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
     emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 5);
 
     QPointer<ProjectTerrainProductsManager> self(this);
-    (void)QtConcurrent::run([self,
-                             resolvedDenseCloud,
-                             outDir,
-                             demResolution,
-                             demType,
-                             projectPath]()
+    auto demWork = [self,
+                    resolvedDenseCloud,
+                    outDir,
+                    demResolution,
+                    demType,
+                    projectPath]()
     {
         const auto terrainRun = runDemProducts(resolvedDenseCloud,
                                                outDir,
@@ -746,7 +746,11 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
                         .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
             },
             Qt::QueuedConnection);
-    });
+    };
+
+    xjw::gui::tasks::runGuarded(this,
+                                std::move(demWork),
+                                [](ProjectTerrainProductsManager *) {});
 }
 
 void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &images,
