@@ -728,21 +728,27 @@ void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
     LOG_INFO(QStringLiteral("[3D] 正在加载点云: %1").arg(xyzPath));
 
     const int gen = m_loadGen;
+    QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
-            this, [this, watcher, gen]()
+            this, [self, watcher, gen]()
     {
-        if (gen == m_loadGen)
+        if (!self)
+        {
+            watcher->deleteLater();
+            return;
+        }
+        if (gen == self->m_loadGen)
         {
             auto result = watcher->result();
             if (result)
             {
-                m_cloud = std::move(*result);
+                self->m_cloud = std::move(*result);
                 LOG_INFO(QStringLiteral("[3D] 点云加载完成，共 %1 点")
-                    .arg(m_cloud.size()));
-                invalidateCache();
-                m_gpuDirty = true;
-                update();
+                    .arg(self->m_cloud.size()));
+                self->invalidateCache();
+                self->m_gpuDirty = true;
+                self->update();
             }
         }
         watcher->deleteLater();
@@ -778,45 +784,50 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
 
     const int gen = m_loadGen;
     emit plyLoadProgressChanged(gen, 0, m_plyLoadProgressText);
+    QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
-            this, [this, watcher, gen]()
+            this, [self, watcher, gen]()
     {
-        if (gen == m_loadGen)
+        if (!self)
+        {
+            watcher->deleteLater();
+            return;
+        }
+        if (gen == self->m_loadGen)
         {
             auto result = watcher->result();
-            if (result) m_cloud = std::move(*result);
-            m_preferModelPointRender = !m_cloud.hasFaces();
-            if (!m_cloud.hasFaces())
+            if (result) self->m_cloud = std::move(*result);
+            self->m_preferModelPointRender = !self->m_cloud.hasFaces();
+            if (!self->m_cloud.hasFaces())
             {
-                if (m_cloud.size() >= 3'000'000)
+                if (self->m_cloud.size() >= 3'000'000)
                 {
-                    m_modelPointSize = 1.1f;
+                    self->m_modelPointSize = 1.1f;
                 }
-                else if (m_cloud.size() >= 1'000'000)
+                else if (self->m_cloud.size() >= 1'000'000)
                 {
-                    m_modelPointSize = 1.4f;
+                    self->m_modelPointSize = 1.4f;
                 }
                 else
                 {
-                    m_modelPointSize = 3.5f;
+                    self->m_modelPointSize = 3.5f;
                 }
             }
-            m_loading = false;
-            m_plyLoadProgressPercent = -1;
-            m_plyLoadProgressText.clear();
+            self->m_loading = false;
+            self->m_plyLoadProgressPercent = -1;
+            self->m_plyLoadProgressText.clear();
             LOG_INFO(QStringLiteral("[3D] 模型加载完成，共 %1 顶点 / %2 面%3")
-                     .arg(m_cloud.size())
-                     .arg(m_cloud.hasFaces() ? static_cast<int>(m_cloud.faces()->rows()) : 0)
-                     .arg(m_cloud.hasColors() ? QStringLiteral("（含RGB颜色）")
-                                              : QStringLiteral("（无颜色）")));
-            invalidateCache();
-            m_gpuDirty = true;
-            update();
+                     .arg(self->m_cloud.size())
+                     .arg(self->m_cloud.hasFaces() ? static_cast<int>(self->m_cloud.faces()->rows()) : 0)
+                     .arg(self->m_cloud.hasColors() ? QStringLiteral("（含RGB颜色）")
+                                                    : QStringLiteral("（无颜色）")));
+            self->invalidateCache();
+            self->m_gpuDirty = true;
+            self->update();
         }
         watcher->deleteLater();
     });
-    QPointer<CameraSceneWidget> self(this);
     watcher->setFuture(QtConcurrent::run([plyPath, self, gen]() -> std::shared_ptr<RenderCloud>
     {
         auto reportProgress = [self, gen](int percent, const QString &statusText)
@@ -879,24 +890,30 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
     LOG_INFO(QStringLiteral("[3D] 正在加载 OBJ 模型: %1").arg(objPath));
 
     const int gen = m_loadGen;
+    QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
-            this, [this, watcher, gen]()
+            this, [self, watcher, gen]()
     {
-        if (gen == m_loadGen)
+        if (!self)
+        {
+            watcher->deleteLater();
+            return;
+        }
+        if (gen == self->m_loadGen)
         {
             auto result = watcher->result();
             if (result)
             {
-                m_cloud = std::move(*result);
+                self->m_cloud = std::move(*result);
             }
-            m_preferModelPointRender = !m_cloud.hasFaces();
+            self->m_preferModelPointRender = !self->m_cloud.hasFaces();
             LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面")
-                         .arg(m_cloud.size())
-                         .arg(m_cloud.hasFaces() ? static_cast<int>(m_cloud.faces()->rows()) : 0));
-            invalidateCache();
-            m_gpuDirty = true;
-            update();
+                         .arg(self->m_cloud.size())
+                         .arg(self->m_cloud.hasFaces() ? static_cast<int>(self->m_cloud.faces()->rows()) : 0));
+            self->invalidateCache();
+            self->m_gpuDirty = true;
+            self->update();
         }
         watcher->deleteLater();
     });

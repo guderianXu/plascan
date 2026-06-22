@@ -1281,6 +1281,39 @@ TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
     EXPECT_FALSE(textureBlock.contains(QStringLiteral("[this, meshPath, baseRecord]")));
 }
 
+TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const auto blockBetween = [&source](const QString &begin, const QString &finish) {
+        const int start = source.indexOf(begin);
+        EXPECT_GE(start, 0);
+        const int end = source.indexOf(finish, start);
+        EXPECT_GT(end, start);
+        return source.mid(start, end - start);
+    };
+
+    const QString xyzBlock = blockBetween(
+        QStringLiteral("void CameraSceneWidget::loadPointCloudFromXyz"),
+        QStringLiteral("void CameraSceneWidget::loadModelFromPly"));
+    const QString plyBlock = blockBetween(
+        QStringLiteral("void CameraSceneWidget::loadModelFromPly"),
+        QStringLiteral("void CameraSceneWidget::loadModelFromObj"));
+    const QString objBlock = blockBetween(
+        QStringLiteral("void CameraSceneWidget::loadModelFromObj"),
+        QStringLiteral("QVector3D CameraSceneWidget::sceneCenter"));
+
+    for (const QString &block : {xyzBlock, plyBlock, objBlock})
+    {
+        EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CameraSceneWidget> self(this)")));
+        EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, gen]()")))
+            << "Finished callbacks from async 3D loading must not capture raw this.";
+        EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
+        EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, gen]()")));
+    }
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));

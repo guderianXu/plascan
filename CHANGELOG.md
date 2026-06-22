@@ -21,6 +21,7 @@
 - 稠密点云生成入口的进度、深度图 artifact、点云保存和完成回调统一复用 `QPointer<ProjectDenseReconstructionManager>`，继续收敛 MVS 长任务关闭/切换工程时的生命周期风险。
 - 深度图估计和稠密点云生成的稀疏点云预处理 worker 改用 `QPointer<DepthMapGenerator>`，并把 `setSparseCloud/start` 投递回 generator 所在线程，避免后台预处理完成后访问已释放 generator。
 - 网格重建和纹理映射后台任务改用 `QPointer<ProjectModelManager>` 守护进度、完成回调和结果登记，降低模型/纹理长任务运行中关闭窗口后的悬挂回调风险。
+- 3D 模型视图的 XYZ/PLY/OBJ 异步加载完成回调改用 `QPointer<CameraSceneWidget>` 守护，降低关闭 3D 视图、切换模型或项目时后台加载回调访问已释放对象的风险。
 - 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
 
 ### 验证
@@ -32,8 +33,9 @@
 - `C:/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/ctest.exe --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "SurveyControl|ReconstructionQualityReport|QualityReport|ReferenceDatasetActionsConnectToProjectManager" --output-on-failure` 通过，17/17。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "BundleAdjust(Lidar|ControlPoint|ScaleBar)ConstraintTest|BaInputBuilderSurveyControl|BundleAdjustServiceLidarTest\\.RunWrites(ScaleBar|ControlPoint)ConstraintSummary|SfmSparseResultMetadataTest\\.BundleAdjustAutoEnablesSurveyControlConstraints|BundleAdjustCliTest" --output-on-failure` 通过，11/11。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "SuperPointTest|DiskExtractorTest|AlikedExtractorTest" --output-on-failure` 通过，13/13。
-- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，519/519；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
-- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime" --output-on-failure` 通过，10/10。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Jobs 8` 通过，重新编译 `CameraModel3DDialog.cpp` 并链接 `plascan_gui`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，520/520；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime" --output-on-failure` 通过，11/11。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|InitCameraPose|SfmServiceKnownPoseMode|SfmServicePairPlanning|AerialTriangulationWorkflow" --output-on-failure` 通过，14/14。
 - `python -m pytest tests/test_repo_hygiene.py -q` 通过，11/11，27 个 subtest 通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过。
