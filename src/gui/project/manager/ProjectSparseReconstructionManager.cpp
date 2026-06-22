@@ -9,6 +9,7 @@
 #include "ProjectTriangulationService.h"
 #include "ProjectWorkflowUtils.h"
 #include "project/SparseResultQuality.h"
+#include "tasks/GuiTaskRunner.h"
 #include "Logger.h"
 
 #include <QDateTime>
@@ -16,9 +17,6 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QMessageBox>
-#include <QMetaObject>
-#include <QPointer>
-#include <QtConcurrent/QtConcurrent>
 
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
 using xjw::gui::project::findLatestAtResultIndex;
@@ -127,22 +125,15 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
 
     emit atProgressChanged(QStringLiteral("正在构建两视预览云..."), 10);
 
-    QPointer<ProjectSparseReconstructionManager> self(this);
-    (void)QtConcurrent::run([self, mergedMeta, selectedImages, options, replaceIndex]() {
-        if (!self)
+    xjw::gui::tasks::runGuarded(
+        this,
+        [mergedMeta, selectedImages, options]()
         {
-            return;
-        }
-
-        const xjw::gui::project::TriangulationServiceResult result =
-            xjw::gui::project::ProjectTriangulationService::run(mergedMeta, selectedImages, options);
-
-        QMetaObject::invokeMethod(self, [self, result, selectedImages, options, replaceIndex]() {
-            if (!self)
-            {
-                return;
-            }
-
+            return xjw::gui::project::ProjectTriangulationService::run(mergedMeta, selectedImages, options);
+        },
+        [selectedImages, options, replaceIndex](ProjectSparseReconstructionManager *self,
+                                                const xjw::gui::project::TriangulationServiceResult &result)
+        {
             if (!result.success)
             {
                 emit self->atProgressFinished(false);
@@ -152,8 +143,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
                 return;
             }
             self->finalizeTriangulationSuccess(result, selectedImages, options, replaceIndex);
-        }, Qt::QueuedConnection);
-    });
+        });
 }
 
 void ProjectSparseReconstructionManager::startSparseCloudOutlierRemovalAsync(const QJsonObject &settings)
@@ -265,24 +255,15 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
 
     emit atProgressChanged(spec.progressMessage, 20);
 
-    QPointer<ProjectSparseReconstructionManager> self(this);
-    (void)QtConcurrent::run([self, kind, spec, context, settings, outputDir]() {
-        if (!self)
+    xjw::gui::tasks::runGuarded(
+        this,
+        [kind, context, settings, outputDir]()
         {
-            return;
-        }
-
-        const SparsePointWorkflowResult workflowResult = runSparsePointWorkflowResult(kind,
-                                                                                       context,
-                                                                                       settings,
-                                                                                       outputDir);
-
-        QMetaObject::invokeMethod(self, [self, spec, context, workflowResult]() {
-            if (!self)
-            {
-                return;
-            }
-
+            return runSparsePointWorkflowResult(kind, context, settings, outputDir);
+        },
+        [spec, context](ProjectSparseReconstructionManager *self,
+                        const SparsePointWorkflowResult &workflowResult)
+        {
             if (!workflowResult.status.ok)
             {
                 emit self->atProgressFinished(false);
@@ -304,6 +285,5 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
             QMessageBox::information(self->m_parentWidget,
                                      spec.title,
                                      buildSparsePointWorkflowSuccessMessage(spec, operationResult));
-        }, Qt::QueuedConnection);
-    });
+        });
 }

@@ -4193,6 +4193,41 @@ TEST(ProjectTriangulationUiTest, FinalizeTriangulationStoresPreviewQualityMetada
     EXPECT_TRUE(source.contains(QStringLiteral("两视预览云")));
 }
 
+TEST(ProjectTriangulationUiTest, SparseManagerLongTasksUseGuardedRunner)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int triangulationStart = source.indexOf(
+        QStringLiteral("void ProjectSparseReconstructionManager::startTriangulationAsync"));
+    ASSERT_GE(triangulationStart, 0);
+    const int workflowStart = source.indexOf(
+        QStringLiteral("void ProjectSparseReconstructionManager::startSparsePointWorkflow"),
+        triangulationStart);
+    ASSERT_GT(workflowStart, triangulationStart);
+    const QString triangulationBody = source.mid(triangulationStart, workflowStart - triangulationStart);
+
+    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "Two-view preview triangulation should not launch open-coded background work.";
+    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("ProjectTriangulationService::run")))
+        << "The guarded worker should still run the triangulation service off the GUI thread.";
+    EXPECT_FALSE(triangulationBody.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
+        << "Open-coded QtConcurrent can race with manager destruction.";
+
+    const int workflowEnd = source.indexOf(
+        QStringLiteral("} // namespace"),
+        workflowStart);
+    const QString workflowBody = source.mid(workflowStart,
+                                            workflowEnd > workflowStart ? workflowEnd - workflowStart : -1);
+    EXPECT_TRUE(workflowBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "Sparse post-processing workflows should share the guarded GUI task runner.";
+    EXPECT_TRUE(workflowBody.contains(QStringLiteral("runSparsePointWorkflowResult")))
+        << "The guarded worker should still run the sparse point workflow off the GUI thread.";
+    EXPECT_FALSE(workflowBody.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
+        << "Open-coded QtConcurrent can race with manager destruction.";
+}
+
 TEST(SfmSparseResultMetadataTest, SfmServicePublishesProductionQualityRecord)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.h"));
