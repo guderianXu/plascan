@@ -14,6 +14,7 @@
 - 光束法平差新增比例尺/标尺软约束，`BaInputBuilder` 可把 `survey_control.scale_bars` 映射为两条控制点 track 之间的距离约束，并在 BA JSON 中输出 `scale_bar_constraints_summary`。
 - Windows CTest 新增 `PlascanTestRuntime.cmake`，为 SuperPoint/DISK/ALIKED 等 Torch 测试自动补齐 LibTorch、CUDA 和 vcpkg 运行时 PATH，避免测试目录缺 DLL 时出现 `0xc0000135`。
 - GUI 新增 `GuiTaskRunner`，提供 `runGuarded/postGuarded` 生命周期守护后台任务入口，首批迁移相机 SFM 初始化、空中三角测量预检/SFM 和三维重建空三流程，减少关闭项目、切换工程或窗口销毁后后台回调访问已释放对象的风险。
+- DEM 自动流水线在启动 MVS 前记录已有密集点云数量，完成后只扫描本次新增且文件真实存在的 dense cloud 记录，并用共享连接状态统一清理 metadata/MVS 信号，避免误用旧点云或泄漏连接句柄。
 - 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
 
 ### 验证

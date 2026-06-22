@@ -28,6 +28,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <memory>
 
 using xjw::gui::project::makeDemResultRecord;
 using xjw::gui::project::makeOrthoResultRecord;
@@ -52,6 +53,24 @@ struct DirectDepthDemInput
     int availableFrameCount = 0;
     int loadedFrameCount = 0;
 };
+
+struct DemPipelineConnectionState
+{
+    QMetaObject::Connection metadataConnection;
+    QMetaObject::Connection mvsFinishedConnection;
+    bool disconnected = false;
+};
+
+void disconnectDemPipelineConnections(const std::shared_ptr<DemPipelineConnectionState> &state)
+{
+    if (!state || state->disconnected)
+    {
+        return;
+    }
+    state->disconnected = true;
+    QObject::disconnect(state->metadataConnection);
+    QObject::disconnect(state->mvsFinishedConnection);
+}
 
 QString canonicalFeatureAlgorithmFromMatcher(const QString &matcher)
 {
@@ -818,15 +837,14 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
         const int pendingDenseResultCount =
             self->m_projectData->metadata().value(QStringLiteral("dense_cloud_results")).toArray().size();
 
-        // 监听元数据变化：dense_cloud_results 出现新记录即表示融合完成
-        auto *connMeta = new QMetaObject::Connection();
-        *connMeta = connect(self->m_owner, &ProjectManager::projectMetadataChanged, self.data(),
-            [self, connMeta, demOutputDir, demResolution, demType, pendingDenseResultCount](
+        // 监听元数据变化：dense_cloud_results 出现本次 MVS 的新记录即表示融合完成。
+        auto connections = std::make_shared<DemPipelineConnectionState>();
+        connections->metadataConnection = connect(self->m_owner, &ProjectManager::projectMetadataChanged, self.data(),
+            [self, connections, demOutputDir, demResolution, demType, pendingDenseResultCount](
                 const QJsonObject &metaChanged)
             {
                 if (!self)
                 {
-                    delete connMeta;
                     return;
                 }
                 const QJsonArray denseArr = metaChanged.value(QStringLiteral("dense_cloud_results")).toArray();
@@ -835,16 +853,28 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 {
                     return;
                 }
-                const QJsonObject denseRecord = denseArr.at(pendingDenseResultCount).toObject();
-                const QString plyPath = denseRecord.value(QStringLiteral("dense_cloud_xyz")).toString();
-                LOG_INFO(QStringLiteral("[DEM流水线] 最新 dense_cloud_xyz=%1 exists=%2")
-                             .arg(plyPath)
-                             .arg(QFileInfo::exists(plyPath) ? QStringLiteral("true") : QStringLiteral("false")));
-                if (plyPath.isEmpty() || !QFileInfo::exists(plyPath))
-                    return;
 
-                disconnect(*connMeta);
-                delete connMeta;
+                QString plyPath;
+                for (int denseIndex = pendingDenseResultCount; denseIndex < denseArr.size(); ++denseIndex)
+                {
+                    const QJsonObject candidateRecord = denseArr.at(denseIndex).toObject();
+                    const QString candidatePath = candidateRecord.value(QStringLiteral("dense_cloud_xyz")).toString();
+                    LOG_INFO(QStringLiteral("[DEM流水线] 新增 dense_cloud_xyz[%1]=%2 exists=%3")
+                                 .arg(denseIndex)
+                                 .arg(candidatePath)
+                                 .arg(QFileInfo::exists(candidatePath) ? QStringLiteral("true") : QStringLiteral("false")));
+                    if (!candidatePath.isEmpty() && QFileInfo::exists(candidatePath))
+                    {
+                        plyPath = candidatePath;
+                        break;
+                    }
+                }
+                if (plyPath.isEmpty() || !QFileInfo::exists(plyPath))
+                {
+                    return;
+                }
+
+                disconnectDemPipelineConnections(connections);
 
                 LOG_INFO(QStringLiteral("[DEM流水线] ✓ 密集点云就绪（%1），启动 DEM 生成...").arg(plyPath));
                 emit self->demPipelineProgressChanged(QStringLiteral("DEM 生成"), 85);
@@ -950,23 +980,19 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
             });
 
         // 同时监听 MVS 失败
-        auto *connMvsFail = new QMetaObject::Connection();
-        *connMvsFail = connect(self->m_owner, &ProjectManager::mvsProgressFinished, self.data(),
-            [self, connMvsFail, connMeta](bool mvsSuccess)
+        connections->mvsFinishedConnection = connect(self->m_owner, &ProjectManager::mvsProgressFinished, self.data(),
+            [self, connections](bool mvsSuccess)
             {
                 if (!self)
                 {
-                    delete connMvsFail;
-                    delete connMeta;
                     return;
                 }
                 LOG_INFO(QStringLiteral("[DEM流水线] mvsProgressFinished: success=%1").arg(mvsSuccess));
                 if (mvsSuccess)
+                {
                     return; // 成功时由 projectMetadataChanged 处理
-                disconnect(*connMvsFail);
-                delete connMvsFail;
-                disconnect(*connMeta);
-                delete connMeta;
+                }
+                disconnectDemPipelineConnections(connections);
                 LOG_ERROR(QStringLiteral("[DEM流水线] ✗ MVS 失败（mvsProgressFinished(false)）"));
                 emit self->demPipelineFinished(false, QStringLiteral("MVS 密集重建失败"));
             }, Qt::SingleShotConnection);

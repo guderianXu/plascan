@@ -1018,10 +1018,30 @@ TEST(TerrainPipelineAsyncTest, AutoDemConsumesOnlyNewDenseCloudResults)
         << "The automatic DEM pipeline should remember the dense result count before launching MVS.";
     EXPECT_TRUE(source.contains(QStringLiteral("denseArr.size() <= pendingDenseResultCount")))
         << "Unrelated metadata changes or pre-existing dense clouds must not trigger DEM generation.";
-    EXPECT_TRUE(source.contains(QStringLiteral("denseArr.at(pendingDenseResultCount)")))
-        << "DEM generation should consume the first dense result created by this MVS run, not dense_cloud_results.last().";
+    EXPECT_TRUE(source.contains(QStringLiteral("denseIndex = pendingDenseResultCount")))
+        << "DEM generation should scan only dense records created after this MVS run starts.";
+    EXPECT_FALSE(source.contains(QStringLiteral("denseArr.at(pendingDenseResultCount)")))
+        << "The first new dense record can be incomplete; scan new records for the first existing output instead.";
     EXPECT_FALSE(source.contains(QStringLiteral("const QJsonObject lastRecord = denseArr.last().toObject()")))
         << "Using last() can pick an old or unrelated dense cloud record.";
+}
+
+TEST(TerrainPipelineAsyncTest, AutoDemPipelineConnectionsUseSharedCleanupState)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("DemPipelineConnectionState")))
+        << "Metadata and MVS-finished signal handles should share a cleanup state.";
+    EXPECT_TRUE(source.contains(QStringLiteral("std::make_shared<DemPipelineConnectionState>")))
+        << "The connection state should be owned by the queued callbacks, not raw new/delete.";
+    EXPECT_TRUE(source.contains(QStringLiteral("disconnectDemPipelineConnections")))
+        << "Both signal handles should be disconnected together on success or failure.";
+    EXPECT_FALSE(source.contains(QStringLiteral("new QMetaObject::Connection")))
+        << "Raw connection handles leak when the owner is destroyed or when the success path returns early.";
+    EXPECT_FALSE(source.contains(QStringLiteral("delete connMeta")));
+    EXPECT_FALSE(source.contains(QStringLiteral("delete connMvsFail")));
 }
 
 TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
