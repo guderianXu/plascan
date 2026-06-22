@@ -52,6 +52,7 @@ set(GUI_SOURCES
   project/manager/ProjectTerrainProductsManager.cpp
   project/manager/ProjectCameraSetupManager.cpp
   tasks/FeatureExtractionRunner.cpp
+  views/LayerFeatureLoader.cpp
   views/LayerImageLoader.cpp
   views/LayerOverlayItems.cpp
   views/LayerRenderer.cpp
@@ -165,6 +166,7 @@ set(GUI_HEADERS
   tasks/FeatureExtractionRunner.h
   tasks/GuiTaskRunner.h
   tasks/SFMService.h
+  views/LayerFeatureLoader.h
   views/LayerImageLoader.h
   views/LayerOverlayItems.h
   views/LayerRenderer.h

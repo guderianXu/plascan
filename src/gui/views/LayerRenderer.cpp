@@ -1,41 +1,10 @@
 #include "LayerRenderer.h"
+#include "LayerFeatureLoader.h"
 #include "LayerImageLoader.h"
 #include "LayerOverlayItems.h"
 #include "Logger.h"
-#include "ProjectIO.h"
 
-#include <opencv2/opencv.hpp>
-
-// 为避免 Qt 宏与 LibTorch 冲突，在包含 FeatureOutput.h 前 undef。
-#ifdef slots
-  #undef slots
-  #define NEED_RESTORE_SLOTS  
-#endif
-#ifdef signals
-  #undef signals
-  #define NEED_RESTORE_SIGNALS
-#endif
-#ifdef emit
-  #undef emit
-  #define NEED_RESTORE_EMIT
-#endif
-
-#include "FeatureOutput.h"
-#include "FeatureFileIO.h"
-
-// 恢复Qt宏
-#ifdef NEED_RESTORE_SLOTS
-  #define slots Q_SLOTS
-  #undef NEED_RESTORE_SLOTS
-#endif
-#ifdef NEED_RESTORE_SIGNALS
-  #define signals Q_SIGNALS
-  #undef NEED_RESTORE_SIGNALS
-#endif
-#ifdef NEED_RESTORE_EMIT
-  #define emit Q_EMIT
-  #undef NEED_RESTORE_EMIT
-#endif
+#include <opencv2/core/types.hpp>
 
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
@@ -114,30 +83,10 @@ bool LayerRenderer::addImageLayer(const QImage &image, int z)
 bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
 {
     if (!m_scene) return false;
-    
-    // 使用ProjectIO查找特征文件(支持所有提取器后缀)
-    QString spPath = ProjectIO::findFeatureForImage(m_currentProjectPath, imagePath);
-    if (spPath.isEmpty()) {
-        qDebug() << "LayerRenderer: No feature file found for" << imagePath;
-        return false;
-    }
 
-    // 使用FeatureFileIO读取.sp文件
-    QString imageName;
-    FeatureOutput output;
-    if (!FeatureFileIO::read(spPath, imageName, output)) {
-        qWarning() << "Failed to read .sp file:" << spPath;
-        return false;
-    }
-    
-    // FeatureOutput.keypoints已经是std::vector<cv::KeyPoint>
-    // scores已经存在output.scores中,将其存入KeyPoint.response字段
-    for (size_t i = 0; i < output.keypoints.size() && i < output.scores.size(); ++i) {
-        output.keypoints[i].response = output.scores[i];
-    }
-    
-    if (output.keypoints.empty()) return false;
-    addFeatureItems(output.keypoints);
+    const auto keypoints = xjw::gui::views::loadFeatureKeypointsForImage(m_currentProjectPath, imagePath);
+    if (keypoints.empty()) return false;
+    addFeatureItems(keypoints);
     return true;
 }
 

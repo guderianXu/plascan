@@ -4010,6 +4010,32 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesOverlayDrawingToDedic
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("new QGraphicsLineItem(a.x(), a.y()")));
 }
 
+TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader)
+{
+    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString featureLoaderHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerFeatureLoader.h"));
+    const QString featureLoaderSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerFeatureLoader.cpp"));
+    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(featureLoaderHeader.isEmpty());
+    ASSERT_FALSE(featureLoaderSource.isEmpty());
+
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("loadFeatureKeypointsForImage(m_currentProjectPath, imagePath)")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("ProjectIO::findFeatureForImage")))
+        << "Feature sidecar lookup should stay out of the scene renderer.";
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("FeatureFileIO::read")))
+        << "Feature file decoding should stay out of the scene renderer.";
+
+    EXPECT_TRUE(featureLoaderHeader.contains(QStringLiteral("loadFeatureKeypointsForImage")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("ProjectIO::findFeatureForImage")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("FeatureFileIO::read")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("output.keypoints[i].response = output.scores[i]")));
+    EXPECT_TRUE(featureLoaderSource.contains(QStringLiteral("#pragma warning(disable: 4267)")))
+        << "LibTorch emits MSVC C4267 from external templates; keep it local to the feature loader.";
+}
+
 TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
