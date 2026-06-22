@@ -278,6 +278,12 @@ BaServiceResult BundleAdjustService::run(
             opts.laserUseMissingNormalsAsHeightPlanes;
         optObj[QStringLiteral("laser_weight")] = opts.laserWeight;
         optObj[QStringLiteral("laser_huber_delta_m")] = opts.laserHuberDeltaMeters;
+        optObj[QStringLiteral("enable_control_point_constraints")] = baOptions.enableControlPointConstraints;
+        optObj[QStringLiteral("control_point_weight")] = baOptions.controlPointWeight;
+        optObj[QStringLiteral("control_point_huber_delta_m")] = baOptions.controlPointHuberDeltaMeters;
+        optObj[QStringLiteral("enable_scale_bar_constraints")] = baOptions.enableScaleBarConstraints;
+        optObj[QStringLiteral("scale_bar_weight")] = baOptions.scaleBarWeight;
+        optObj[QStringLiteral("scale_bar_huber_delta_m")] = baOptions.scaleBarHuberDeltaMeters;
         optObj[QStringLiteral("enable_reference_terrain_prior")] = opts.enableReferenceTerrainPrior;
         optObj[QStringLiteral("reference_terrain_dem_path")] = opts.referenceTerrainDemPath;
         optObj[QStringLiteral("reference_terrain_sigma_m")] = opts.referenceTerrainSigmaMeters;
@@ -313,6 +319,30 @@ BaServiceResult BundleAdjustService::run(
         laserSummary[QStringLiteral("laser_median_before_m")] = baResult.laserMedianBeforeMeters;
         laserSummary[QStringLiteral("laser_median_after_m")] = baResult.laserMedianAfterMeters;
         saveObj[QStringLiteral("laser_constraints_summary")] = laserSummary;
+    }
+
+    if (baOptions.enableControlPointConstraints || baResult.controlPointConstraintCount > 0)
+    {
+        QJsonObject controlSummary;
+        controlSummary[QStringLiteral("enabled")] = baOptions.enableControlPointConstraints;
+        controlSummary[QStringLiteral("control_point_constraint_count")] = baResult.controlPointConstraintCount;
+        controlSummary[QStringLiteral("control_point_rms_before_m")] = baResult.controlPointRmsBeforeMeters;
+        controlSummary[QStringLiteral("control_point_rms_after_m")] = baResult.controlPointRmsAfterMeters;
+        controlSummary[QStringLiteral("control_point_weight")] = baOptions.controlPointWeight;
+        controlSummary[QStringLiteral("control_point_huber_delta_m")] = baOptions.controlPointHuberDeltaMeters;
+        saveObj[QStringLiteral("control_point_constraints_summary")] = controlSummary;
+    }
+
+    if (baOptions.enableScaleBarConstraints || baResult.scaleBarConstraintCount > 0)
+    {
+        QJsonObject scaleBarSummary;
+        scaleBarSummary[QStringLiteral("enabled")] = baOptions.enableScaleBarConstraints;
+        scaleBarSummary[QStringLiteral("scale_bar_constraint_count")] = baResult.scaleBarConstraintCount;
+        scaleBarSummary[QStringLiteral("scale_bar_rms_before_m")] = baResult.scaleBarRmsBeforeMeters;
+        scaleBarSummary[QStringLiteral("scale_bar_rms_after_m")] = baResult.scaleBarRmsAfterMeters;
+        scaleBarSummary[QStringLiteral("scale_bar_weight")] = baOptions.scaleBarWeight;
+        scaleBarSummary[QStringLiteral("scale_bar_huber_delta_m")] = baOptions.scaleBarHuberDeltaMeters;
+        saveObj[QStringLiteral("scale_bar_constraints_summary")] = scaleBarSummary;
     }
 
     // ── 点位精度统计写入 JSON 数组 ─────────────────────────────────────────

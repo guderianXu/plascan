@@ -2,6 +2,32 @@
 
 本文件按版本倒序记录用户可感知的主要变更。详细验证记录见 `docs/releases/`。
 
+## Unreleased
+
+### 新增
+
+- 重建质量报告新增 `survey_control` 汇总，支持从项目 metadata 统计控制点、检查点和比例尺数量、启用数量、残差 RMSE、最大残差和质量状态，为后续 GCP/检查点/scale bar 生产闭环打基础。
+- 新增 Survey Control CSV 导入核心解析器，支持按 `role/type/kind` 区分控制点、检查点和比例尺，并解析 `id/x/y/z/sigma/enabled/from_id/to_id/measured_m` 等基础字段。
+- GUI 项目支持层新增 `ProjectSurveyControl`，可把 Survey Control CSV 导入并持久化到项目 `survey_control` metadata，同时记录 `source_path/imported_at/format`。
+- GUI 工具菜单新增“测绘控制...”入口和 `SurveyControlDialog`，可导入 Survey Control CSV，并以控制点、检查点、比例尺三张表查看当前项目控制数据。
+- GUI 项目 `report_results` 摘要同步写入控制点、检查点和比例尺数量/RMSE，目录树或报告窗口后续可直接消费这些 metadata。
+- 光束法平差新增比例尺/标尺软约束，`BaInputBuilder` 可把 `survey_control.scale_bars` 映射为两条控制点 track 之间的距离约束，并在 BA JSON 中输出 `scale_bar_constraints_summary`。
+- Windows CTest 新增 `PlascanTestRuntime.cmake`，为 SuperPoint/DISK/ALIKED 等 Torch 测试自动补齐 LibTorch、CUDA 和 vcpkg 运行时 PATH，避免测试目录缺 DLL 时出现 `0xc0000135`。
+- 新增 `docs/superpowers/plans/2026-06-21-survey-control-quality-loop.md`，记录测绘控制质量闭环的第一批实现计划和后续 GCP/CRS/DOM 扩展顺序。
+
+### 验证
+
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_reconstruction_quality_report -Jobs 8` 通过。
+- `E:/code/plascan/build/windows-vcpkg-cuda-release/src/core/qc/test_survey_control_import.exe` 通过，3/3。
+- `E:/code/plascan/build/windows-vcpkg-cuda-release/src/core/qc/test_reconstruction_quality_report.exe` 通过，3/3。
+- `E:/code/plascan/build/windows-vcpkg-cuda-release/tests/test_gui_project_utils.exe --gtest_filter=MainMenuTest.ToolsMenuExposesSurveyControlAction:MainWindowTest.ReferenceDatasetActionsConnectToProjectManager:ProjectSurveyControlTest.ImportsCsvIntoProjectMetadata:SurveyControlDialogTest.PopulatesTablesFromProjectMetadata` 通过，4/4。
+- `C:/BuildTools/Common7/IDE/CommonExtensions/Microsoft/CMake/CMake/bin/ctest.exe --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "SurveyControl|ReconstructionQualityReport|QualityReport|ReferenceDatasetActionsConnectToProjectManager" --output-on-failure` 通过，17/17。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "BundleAdjust(Lidar|ControlPoint|ScaleBar)ConstraintTest|BaInputBuilderSurveyControl|BundleAdjustServiceLidarTest\\.RunWrites(ScaleBar|ControlPoint)ConstraintSummary|SfmSparseResultMetadataTest\\.BundleAdjustAutoEnablesSurveyControlConstraints|BundleAdjustCliTest" --output-on-failure` 通过，11/11。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "SuperPointTest|DiskExtractorTest|AlikedExtractorTest" --output-on-failure` 通过，13/13。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，509/509；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
+- `python -m pytest tests/test_repo_hygiene.py -q` 通过，11/11，27 个 subtest 通过。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过。
+
 ## v1.1.6 - 2026-06-21
 
 ### 新增

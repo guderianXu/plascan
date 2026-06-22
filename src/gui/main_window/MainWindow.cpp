@@ -375,71 +375,7 @@ void MainWindow::setupProjectManager()
 
         if (m_menuWorkflowController)
         {
-            if (m_mainMenu->detectFeaturesAction())
-            {
-                connect(m_mainMenu->detectFeaturesAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openFeatureExtractionDialog);
-            }
-            if (m_mainMenu->vocabularyOverlapAction())
-            {
-                connect(m_mainMenu->vocabularyOverlapAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openVocabularyOverlapDialog);
-            }
-            if (m_mainMenu->aerialTriangulationAction())
-            {
-                connect(m_mainMenu->aerialTriangulationAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openAerialTriangulationDialog);
-            }
-            if (m_mainMenu->featureVisualizationAction())
-            {
-                connect(m_mainMenu->featureVisualizationAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openFeaturePointVisualizationDialog);
-            }
-            if (m_mainMenu->threeDReconstructionAction())
-            {
-                connect(m_mainMenu->threeDReconstructionAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openThreeDReconstructionDialog);
-            }
-            if (m_mainMenu->overlapAnalysisAction())
-            {
-                connect(m_mainMenu->overlapAnalysisAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openOverlapAnalysisDialog);
-            }
-            if (m_mainMenu->createDEMAction())
-            {
-                connect(m_mainMenu->createDEMAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openCreateDemDialog);
-            }
-            if (m_mainMenu->generateOrthoAction())
-            {
-                connect(m_mainMenu->generateOrthoAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openMapProjectDialog);
-            }
-            if (m_mainMenu->viewWorkflowReportAction())
-            {
-                connect(m_mainMenu->viewWorkflowReportAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openWorkflowReportDialog);
-            }
-            if (m_mainMenu->cameraConvertAction())
-            {
-                connect(m_mainMenu->cameraConvertAction(), &QAction::triggered,
-                        m_menuWorkflowController, &MenuWorkflowController::openCameraConvertDialog);
-            }
-            if (m_mainMenu->importReferenceDatasetAction())
-            {
-                connect(m_mainMenu->importReferenceDatasetAction(), &QAction::triggered,
-                        m_projectManager, &ProjectManager::importReferenceDataset);
-            }
-            if (m_mainMenu->referenceQualityCheckAction())
-            {
-                connect(m_mainMenu->referenceQualityCheckAction(), &QAction::triggered,
-                        m_projectManager, &ProjectManager::runReferenceQualityCheck);
-            }
-            if (m_mainMenu->referenceTerrainBundleAdjustAction())
-            {
-                connect(m_mainMenu->referenceTerrainBundleAdjustAction(), &QAction::triggered,
-                        m_projectManager, &ProjectManager::prepareReferenceTerrainBundleAdjust);
-            }
+            m_menuWorkflowController->bindActions(m_mainMenu);
         }
 
         // ── 重建菜单 → ReconstructionWorkflowController ──

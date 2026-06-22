@@ -485,14 +485,25 @@ int main(int argc, char *argv[])
     baOptions.stepTolerance = stepTolerance;
     baOptions.refineCameraPose = refinePose;
     baOptions.numThreads = threads;
+    if (baInput.surveyControlTrackCount > 0)
+    {
+        baOptions.enableControlPointConstraints = true;
+    }
+    if (!baInput.scaleBarConstraints.empty())
+    {
+        baOptions.enableScaleBarConstraints = true;
+        baOptions.scaleBarConstraints = baInput.scaleBarConstraints;
+    }
 
     printUtf8(stdout,
-              QStringLiteral("BA 输入: cameras=%1 tracks=%2 selected_images=%3 sidecar_v2_pairs=%4 multiview_tracks=%5")
+              QStringLiteral("BA 输入: cameras=%1 tracks=%2 selected_images=%3 sidecar_v2_pairs=%4 multiview_tracks=%5 survey_control_tracks=%6 scale_bars=%7")
                   .arg(static_cast<int>(baInput.cameras.size()))
                   .arg(static_cast<int>(baInput.tracks.size()))
                   .arg(selectedImages.size())
                   .arg(baInput.sidecarV2PairCount)
-                  .arg(baInput.multiViewTrackCount));
+                  .arg(baInput.multiViewTrackCount)
+                  .arg(baInput.surveyControlTrackCount)
+                  .arg(baInput.surveyScaleBarConstraintCount));
 
     if (abCompare)
     {

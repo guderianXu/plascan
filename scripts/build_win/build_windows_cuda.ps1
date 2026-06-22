@@ -175,6 +175,33 @@ function Get-UniqueExistingPathList
     return $result.ToArray()
 }
 
+function Resolve-NinjaDirectory
+{
+    param([Parameter(Mandatory = $true)][string] $CMakePath)
+
+    $cmakeBin = Split-Path -Parent $CMakePath
+    $candidateDirs = New-Object 'System.Collections.Generic.List[string]'
+    [void] $candidateDirs.Add((Join-Path (Split-Path -Parent (Split-Path -Parent $cmakeBin)) "Ninja"))
+    [void] $candidateDirs.Add((Join-Path (Split-Path -Parent $cmakeBin) "Ninja"))
+    [void] $candidateDirs.Add((Join-Path $cmakeBin "Ninja"))
+
+    $existingNinja = Get-Command ninja -ErrorAction SilentlyContinue
+    if ($existingNinja)
+    {
+        [void] $candidateDirs.Add((Split-Path -Parent $existingNinja.Source))
+    }
+
+    foreach ($candidate in (Get-UniqueExistingPathList $candidateDirs.ToArray()))
+    {
+        if (Test-Path -LiteralPath (Join-Path $candidate "ninja.exe"))
+        {
+            return (Resolve-FullPath $candidate)
+        }
+    }
+
+    return ""
+}
+
 function Set-IsolatedBuildEnvironment
 {
     param(
@@ -200,7 +227,7 @@ function Set-IsolatedBuildEnvironment
     $qtPluginsRootCMake = Convert-ToCMakePath $qtPluginsRoot
     $qtPlatformsRootCMake = Convert-ToCMakePath $qtPlatformsRoot
     $cmakeBin = Split-Path -Parent $CMakePath
-    $ninjaDir = Join-Path (Split-Path -Parent $cmakeBin) "Ninja"
+    $ninjaDir = Resolve-NinjaDirectory $CMakePath
 
     $env:VCPKG_ROOT = $VcpkgPath
     $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"

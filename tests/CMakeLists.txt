@@ -137,6 +137,27 @@ target_include_directories(test_sfm_pipeline PRIVATE
 gtest_discover_tests(test_sfm_pipeline)
 
 # ==============================================================================
+# test_ba_input_builder — BA 输入构建与测绘控制点观测接入
+# ==============================================================================
+add_executable(test_ba_input_builder test_ba_input_builder.cpp)
+target_link_libraries(test_ba_input_builder PRIVATE
+    sfm
+    camera
+    intersection
+    bundle_adjust
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_ba_input_builder PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/core/intersection
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_ba_input_builder)
+
+# ==============================================================================
 # test_sfm_pair_planner — SFM 已知相机匹配配对规划
 # ==============================================================================
 add_executable(test_sfm_pair_planner test_sfm_pair_planner.cpp)
@@ -388,6 +409,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SurveyControlDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
@@ -399,6 +421,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceDatasets.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceTerrainBa.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSurveyControl.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp

@@ -13,6 +13,7 @@
 #include "FeaturePointVisualizationDialog.h"
 #include "CanvasWidget.h"
 #include "MainWindow.h"
+#include "MainMenu.h"
 #include "MatchPairSelectorDialog.h"
 #include "ThreeDReconstructionDialog.h"
 #include "OverlapAnalysisDialog.h"
@@ -40,6 +41,7 @@
 #include <QPushButton>
 #include <QSet>
 #include <QTimer>
+#include <QAction>
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
@@ -255,6 +257,52 @@ MenuWorkflowController::MenuWorkflowController(QMainWindow *mainWindow, QObject 
 void MenuWorkflowController::setProjectManager(ProjectManager *projectManager)
 {
     m_projectManager = projectManager;
+}
+
+void MenuWorkflowController::bindActions(MainMenu *mainMenu)
+{
+    if (!mainMenu)
+    {
+        return;
+    }
+
+    auto connectAction = [this](QAction *action, void (MenuWorkflowController::*slot)())
+    {
+        if (action)
+        {
+            connect(action, &QAction::triggered, this, slot, Qt::UniqueConnection);
+        }
+    };
+
+    connectAction(mainMenu->detectFeaturesAction(), &MenuWorkflowController::openFeatureExtractionDialog);
+    connectAction(mainMenu->vocabularyOverlapAction(), &MenuWorkflowController::openVocabularyOverlapDialog);
+    connectAction(mainMenu->aerialTriangulationAction(), &MenuWorkflowController::openAerialTriangulationDialog);
+    connectAction(mainMenu->featureVisualizationAction(), &MenuWorkflowController::openFeaturePointVisualizationDialog);
+    connectAction(mainMenu->threeDReconstructionAction(), &MenuWorkflowController::openThreeDReconstructionDialog);
+    connectAction(mainMenu->overlapAnalysisAction(), &MenuWorkflowController::openOverlapAnalysisDialog);
+    connectAction(mainMenu->createDEMAction(), &MenuWorkflowController::openCreateDemDialog);
+    connectAction(mainMenu->generateOrthoAction(), &MenuWorkflowController::openMapProjectDialog);
+    connectAction(mainMenu->viewWorkflowReportAction(), &MenuWorkflowController::openWorkflowReportDialog);
+    connectAction(mainMenu->cameraConvertAction(), &MenuWorkflowController::openCameraConvertDialog);
+
+    if (!m_projectManager)
+    {
+        return;
+    }
+
+    auto connectProjectAction = [this](QAction *action, void (ProjectManager::*slot)())
+    {
+        if (action)
+        {
+            connect(action, &QAction::triggered, m_projectManager, slot, Qt::UniqueConnection);
+        }
+    };
+
+    connectProjectAction(mainMenu->importReferenceDatasetAction(), &ProjectManager::importReferenceDataset);
+    connectProjectAction(mainMenu->surveyControlAction(), &ProjectManager::openSurveyControlDialog);
+    connectProjectAction(mainMenu->referenceQualityCheckAction(), &ProjectManager::runReferenceQualityCheck);
+    connectProjectAction(mainMenu->referenceTerrainBundleAdjustAction(),
+                         &ProjectManager::prepareReferenceTerrainBundleAdjust);
 }
 
 QJsonObject MenuWorkflowController::colorToJson(const QColor &c)

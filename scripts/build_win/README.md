@@ -39,6 +39,33 @@
 powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\build_win\build_windows_cuda.ps1 -Jobs 8
 ```
 
+## 普通 PowerShell 开发终端
+
+如果直接打开普通 PowerShell，通常会找不到 `cmake`、`ninja`、`cl`，并且 MSVC
+标准库 `INCLUDE` 没有加载。先进入 PlaScan Windows 开发终端：
+
+```powershell
+powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\build_win\enter_plascan_dev_shell.ps1
+```
+
+脚本会加载 VS Build Tools、CUDA 13.1、当前构建目录的 vcpkg 依赖、CUDA LibTorch、
+CMake 和 Ninja，然后打开一个新的交互式 PowerShell。进入后可以直接运行：
+
+```powershell
+cmake --version
+ninja --version
+ninja -C E:\code\plascan\build\windows-vcpkg-cuda-release plascan_gui
+```
+
+如果想在当前 PowerShell 会话里生效，不打开子终端，用点加载：
+
+```powershell
+. E:\code\plascan\scripts\build_win\enter_plascan_dev_shell.ps1 -NoLaunch
+```
+
+运行 GUI 时默认不强制 `QT_QPA_PLATFORM=offscreen`；如果是跑 GUI 自动化测试，可加
+`-HeadlessQt`。
+
 只编译 GUI：
 
 ```powershell

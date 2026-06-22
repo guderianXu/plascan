@@ -1,4 +1,5 @@
-// 替换为最小化 stub：保留类型与接口以避免删除后造成大量引用出错。
+// LayerRenderer 负责把影像、特征点和匹配连线渲染到 QGraphicsScene。
+// 后续可继续拆分为影像缓存、特征点覆盖层和匹配线覆盖层三个协作类。
 #pragma once
 
 #include <QObject>
@@ -17,9 +18,6 @@ class QString;
 
 // forward declaration避免在头文件中包含完整的OpenCV
 namespace cv { class KeyPoint; }
-
-// LayerRenderer: 负责把影像层渲染到 QGraphicsScene 上（最小实现）
-// 提供加载影像的简单接口和清理接口
 
 class LayerRenderer : public QObject
 {

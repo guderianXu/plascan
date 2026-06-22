@@ -24,6 +24,7 @@
 
 class QMainWindow;
 class QColor;
+class MainMenu;
 class ProjectManager;
 class DialogSettingStore;
 
@@ -52,6 +53,10 @@ public:
     /// 注入项目管理器，供各菜单流程查询项目状态和发起任务。
     /// @param projectManager 当前项目管理器指针，非拥有引用。
     void setProjectManager(ProjectManager *projectManager);
+
+    /// 绑定 MainMenu 中由本控制器负责处理的菜单动作。
+    /// @param mainMenu 主菜单管理器，提供各 QAction 访问器。
+    void bindActions(MainMenu *mainMenu);
 
 public slots:
     /// 打开特征提取配置对话框，并恢复记忆化参数。

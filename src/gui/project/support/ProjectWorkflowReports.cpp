@@ -367,6 +367,12 @@ ReconstructionQualityProjectReportResult writeReconstructionQualityProjectReport
     record[QStringLiteral("dense_point_count")] = writeResult.report.value(QStringLiteral("dense_point_count"));
     record[QStringLiteral("mvs_valid_coverage")] = writeResult.report.value(QStringLiteral("mvs_valid_coverage"));
     record[QStringLiteral("dem_coverage")] = writeResult.report.value(QStringLiteral("dem_coverage"));
+    record[QStringLiteral("control_point_count")] = writeResult.report.value(QStringLiteral("control_point_count"));
+    record[QStringLiteral("check_point_count")] = writeResult.report.value(QStringLiteral("check_point_count"));
+    record[QStringLiteral("scale_bar_count")] = writeResult.report.value(QStringLiteral("scale_bar_count"));
+    record[QStringLiteral("control_point_rmse_m")] = writeResult.report.value(QStringLiteral("control_point_rmse_m"));
+    record[QStringLiteral("check_point_rmse_m")] = writeResult.report.value(QStringLiteral("check_point_rmse_m"));
+    record[QStringLiteral("scale_bar_rmse_m")] = writeResult.report.value(QStringLiteral("scale_bar_rmse_m"));
 
     if (!projectData->upsertResultRecordByPath(QStringLiteral("report_results"),
                                                QStringLiteral("path"),

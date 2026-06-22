@@ -41,6 +41,16 @@ class BundleAdjustCliTest(unittest.TestCase):
         self.assertIn("--export-eval-plot", source)
         self.assertIn("options.exportEvalPlot = exportEvalPlot;", source)
 
+    def test_cli_enables_survey_control_constraints_when_tracks_exist(self):
+        source = (REPO_ROOT / "src" / "cli" / "cli_bundle_adjust.cpp").read_text(encoding="utf-8")
+        self.assertIn("baInput.surveyControlTrackCount > 0", source)
+        self.assertIn("baOptions.enableControlPointConstraints = true", source)
+        self.assertIn("baInput.scaleBarConstraints", source)
+        self.assertIn("baOptions.enableScaleBarConstraints = true", source)
+        self.assertIn("baOptions.scaleBarConstraints = baInput.scaleBarConstraints", source)
+        self.assertIn("survey_control_tracks", source)
+        self.assertIn("scale_bars", source)
+
     def test_missing_project_fails_before_creating_output(self):
         if not CLI_PATH.exists():
             self.skipTest(f"bundle_adjust_cli not found: {CLI_PATH}")

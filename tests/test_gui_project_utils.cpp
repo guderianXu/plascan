@@ -13,6 +13,7 @@
 #include "ProjectReferenceDatasets.h"
 #include "ProjectReferenceTerrainBa.h"
 #include "ProjectSupportUtils.h"
+#include "ProjectSurveyControl.h"
 #include "ProjectTriangulationService.h"
 #include "ProjectWorkflowReports.h"
 #include "ProjectWorkflowUtils.h"
@@ -24,6 +25,7 @@
 #include "SparseCloudPostProcessDialog.h"
 #include "MapProjectDialog.h"
 #include "BundleAdjustDialog.h"
+#include "SurveyControlDialog.h"
 #include "ModelDropSupport.h"
 #include "DataTreeWidget.h"
 #include "ProjectDashboardWidget.h"
@@ -1006,6 +1008,62 @@ TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
         << "DEM previews should be available from the DEM section instead.";
 }
 
+TEST(TerrainPipelineAsyncTest, AutoDemConsumesOnlyNewDenseCloudResults)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("pendingDenseResultCount")))
+        << "The automatic DEM pipeline should remember the dense result count before launching MVS.";
+    EXPECT_TRUE(source.contains(QStringLiteral("denseArr.size() <= pendingDenseResultCount")))
+        << "Unrelated metadata changes or pre-existing dense clouds must not trigger DEM generation.";
+    EXPECT_TRUE(source.contains(QStringLiteral("denseArr.at(pendingDenseResultCount)")))
+        << "DEM generation should consume the first dense result created by this MVS run, not dense_cloud_results.last().";
+    EXPECT_FALSE(source.contains(QStringLiteral("const QJsonObject lastRecord = denseArr.last().toObject()")))
+        << "Using last() can pick an old or unrelated dense cloud record.";
+}
+
+TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startDemFromDenseCloudAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startMapProjectAsync"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QtConcurrent::run")))
+        << "The Async entry point should not run DEM/DOM IO and rasterization on the GUI thread.";
+    EXPECT_TRUE(block.contains(QStringLiteral("runDemProducts(resolvedDenseCloud")))
+        << "The worker should call the non-UI terrain function and report errors on the GUI thread.";
+    EXPECT_FALSE(block.contains(QStringLiteral("runDemProductsOrWarn")))
+        << "runDemProductsOrWarn shows QMessageBox and must stay on the GUI thread.";
+}
+
+TEST(GuiAsyncLifetimeTest, TerrainAndDenseBackgroundCallbacksUseQPointerGuards)
+{
+    const QString terrainSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    const QString denseSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    const QString managerSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(terrainSource.isEmpty());
+    ASSERT_FALSE(denseSource.isEmpty());
+    ASSERT_FALSE(managerSource.isEmpty());
+
+    EXPECT_TRUE(terrainSource.contains(QStringLiteral("#include <QPointer>")));
+    EXPECT_TRUE(terrainSource.contains(QStringLiteral("QPointer<ProjectTerrainProductsManager> self(this)")));
+    EXPECT_TRUE(denseSource.contains(QStringLiteral("#include <QPointer>")));
+    EXPECT_TRUE(denseSource.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("#include <QPointer>")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("QPointer<ProjectManager> self(this)")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
@@ -1646,6 +1704,21 @@ TEST(MainMenuTest, ToolsMenuExposesReferenceTerrainBundleAdjustAction)
     EXPECT_TRUE(toolsMenu->actions().contains(action));
 }
 
+TEST(MainMenuTest, ToolsMenuExposesSurveyControlAction)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *action = menu.surveyControlAction();
+    ASSERT_NE(action, nullptr);
+    EXPECT_TRUE(action->text().contains(QStringLiteral("测绘控制")));
+    EXPECT_EQ(action->objectName(), QStringLiteral("actionSurveyControl"));
+
+    QMenu *toolsMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("工具"));
+    ASSERT_NE(toolsMenu, nullptr);
+    EXPECT_TRUE(toolsMenu->actions().contains(action));
+}
+
 TEST(MainMenuTest, ViewMenuExposesCheckedCameraVisibilityAction)
 {
     QMainWindow window;
@@ -1682,8 +1755,15 @@ TEST(CameraSceneWidgetTest, CameraVisibilityToggleIsExposedAndGuardsCameraOverla
 
 TEST(MainWindowTest, ReferenceDatasetActionsConnectToProjectManager)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString mainWindow = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(mainWindow.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("bindActions(MainMenu")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral("m_menuWorkflowController->bindActions(m_mainMenu)")));
 
     EXPECT_TRUE(source.contains(QStringLiteral("importReferenceDatasetAction()")));
     EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::importReferenceDataset")));
@@ -1691,6 +1771,13 @@ TEST(MainWindowTest, ReferenceDatasetActionsConnectToProjectManager)
     EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::runReferenceQualityCheck")));
     EXPECT_TRUE(source.contains(QStringLiteral("referenceTerrainBundleAdjustAction()")));
     EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::prepareReferenceTerrainBundleAdjust")));
+    EXPECT_TRUE(source.contains(QStringLiteral("surveyControlAction()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::openSurveyControlDialog")));
+
+    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::importReferenceDataset")));
+    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::runReferenceQualityCheck")));
+    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::prepareReferenceTerrainBundleAdjust")));
+    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&ProjectManager::openSurveyControlDialog")));
 }
 
 TEST(MainMenuTest, TriangulationActionNamesPairwisePreviewCloud)
@@ -1855,13 +1942,18 @@ TEST(MainMenuTest, UiBackedSparseReconstructionBindsExistingActionsAndKeepsMenuT
 TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowController)
 {
     const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString controllerHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
     const QString controllerSource =
         readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     ASSERT_FALSE(mainWindowSource.isEmpty());
+    ASSERT_FALSE(controllerHeader.isEmpty());
     ASSERT_FALSE(controllerSource.isEmpty());
 
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("cameraConvertAction")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("openCameraConvertDialog")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("m_menuWorkflowController->bindActions(m_mainMenu)")));
+    EXPECT_TRUE(controllerHeader.contains(QStringLiteral("bindActions(MainMenu")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("cameraConvertAction")));
+    EXPECT_TRUE(controllerSource.contains(QStringLiteral("openCameraConvertDialog")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("CameraConvertDialog")));
 }
 
@@ -2777,21 +2869,35 @@ TEST(MenuWorkflowControllerTest, DenseStageAdvancesOnMvsSuccessWithoutRequiringC
 
 TEST(AerialTriangulationWorkflowTest, MainWindowWiresSparseOnlyAerialTriangulationAction)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString mainWindow = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(mainWindow.isEmpty());
 
-    const int actionIndex = source.indexOf(QStringLiteral("aerialTriangulationAction()"));
+    EXPECT_TRUE(header.contains(QStringLiteral("bindActions(MainMenu")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral("m_menuWorkflowController->bindActions(m_mainMenu)")));
+
+    const int bindIndex = source.indexOf(QStringLiteral("void MenuWorkflowController::bindActions"));
+    ASSERT_GE(bindIndex, 0);
+    const int bindEnd = source.indexOf(QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"),
+                                       bindIndex);
+    ASSERT_GT(bindEnd, bindIndex);
+    const QString bindBlock = source.mid(bindIndex, bindEnd - bindIndex);
+
+    const int actionIndex = bindBlock.indexOf(QStringLiteral("aerialTriangulationAction()"));
     ASSERT_GE(actionIndex, 0);
-    const int nextMenuAction = source.indexOf(QStringLiteral("if (m_mainMenu->"), actionIndex + 1);
+    const int nextMenuAction = bindBlock.indexOf(QStringLiteral("connectAction("), actionIndex + 1);
     ASSERT_GT(nextMenuAction, actionIndex);
-    const QString connectBlock = source.mid(actionIndex, nextMenuAction - actionIndex);
+    const QString connectBlock = bindBlock.mid(actionIndex, nextMenuAction - actionIndex);
 
-    EXPECT_TRUE(connectBlock.contains(QStringLiteral("connect(m_mainMenu->aerialTriangulationAction()"))
-                || connectBlock.contains(QStringLiteral("aerialTriangulationAction()")));
-    EXPECT_TRUE(connectBlock.contains(QStringLiteral("&QAction::triggered")));
-    EXPECT_TRUE(connectBlock.contains(QStringLiteral("m_menuWorkflowController")));
+    EXPECT_TRUE(connectBlock.contains(QStringLiteral("aerialTriangulationAction()")));
+    EXPECT_TRUE(bindBlock.contains(QStringLiteral("&QAction::triggered")));
     EXPECT_TRUE(connectBlock.contains(QStringLiteral("&MenuWorkflowController::openAerialTriangulationDialog")));
     EXPECT_FALSE(connectBlock.contains(QStringLiteral("openThreeDReconstructionDialog")));
+
+    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&MenuWorkflowController::openAerialTriangulationDialog")));
 }
 
 TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
@@ -3793,6 +3899,28 @@ TEST(SfmSparseResultMetadataTest, ScaleAwareBaConsumesTrackConfidenceWeights)
     EXPECT_TRUE(incrementalSfm.contains(QStringLiteral("obs.weight")));
 }
 
+TEST(SfmSparseResultMetadataTest, BundleAdjustAutoEnablesSurveyControlConstraints)
+{
+    const QString execution = readProjectSourceFile(
+        QStringLiteral("src/gui/project/support/ProjectBundleAdjustExecution.cpp"));
+    const QString baHeader = readProjectSourceFile(QStringLiteral("src/core/bundle_adjust/BundleAdjust.h"));
+    const QString baService = readProjectSourceFile(
+        QStringLiteral("src/gui/project/services/BundleAdjustService.cpp"));
+    ASSERT_FALSE(execution.isEmpty());
+    ASSERT_FALSE(baHeader.isEmpty());
+    ASSERT_FALSE(baService.isEmpty());
+
+    EXPECT_TRUE(execution.contains(QStringLiteral("baInput.surveyControlTrackCount > 0")));
+    EXPECT_TRUE(execution.contains(QStringLiteral("options.baOpt.enableControlPointConstraints = true")));
+    EXPECT_TRUE(execution.contains(QStringLiteral("baInput.scaleBarConstraints")));
+    EXPECT_TRUE(execution.contains(QStringLiteral("options.baOpt.enableScaleBarConstraints = true")));
+    EXPECT_TRUE(execution.contains(QStringLiteral("options.baOpt.scaleBarConstraints = baInput.scaleBarConstraints")));
+    EXPECT_TRUE(baHeader.contains(QStringLiteral("BAControlPointConstraint")));
+    EXPECT_TRUE(baHeader.contains(QStringLiteral("BAScaleBarConstraint")));
+    EXPECT_TRUE(baService.contains(QStringLiteral("control_point_constraints_summary")));
+    EXPECT_TRUE(baService.contains(QStringLiteral("scale_bar_constraints_summary")));
+}
+
 TEST(SfmSparseResultMetadataTest, OneClickWorkflowPreservesProductionQualityRecord)
 {
     const QString controller = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
@@ -4529,6 +4657,106 @@ TEST(ProjectReferenceDatasetsTest, QualityReportRegistersReferenceReadiness)
     EXPECT_EQ(reportRecord.value(QStringLiteral("type")).toString(), QStringLiteral("reference_quality"));
 }
 
+TEST(ProjectSurveyControlTest, ImportsCsvIntoProjectMetadata)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("survey_control_project.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("survey_control_project")));
+
+    const QString csvPath = QDir(tempDir.path()).filePath(QStringLiteral("survey_control.csv"));
+    QFile csvFile(csvPath);
+    ASSERT_TRUE(csvFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    csvFile.write("role,id,x,y,z,sigma_m,from_id,to_id,measured_m\n"
+                  "control,GCP001,1,2,3,0.02,,,\n"
+                  "check,CHK001,4,5,6,0.05,,,\n"
+                  "scale_bar,SB001,,,,0.01,GCP001,CHK001,7.5\n");
+    csvFile.close();
+
+    const auto result = xjw::gui::project::importSurveyControlCsv(
+        &projectData,
+        csvPath,
+        QStringLiteral(""));
+
+    ASSERT_TRUE(result.imported) << result.errorMessage.toStdString();
+    EXPECT_EQ(result.controlPointCount, 1);
+    EXPECT_EQ(result.checkPointCount, 1);
+    EXPECT_EQ(result.scaleBarCount, 1);
+
+    const QJsonObject survey = projectData.metadata().value(QStringLiteral("survey_control")).toObject();
+    EXPECT_EQ(survey.value(QStringLiteral("source_path")).toString(), QFileInfo(csvPath).absoluteFilePath());
+    EXPECT_EQ(survey.value(QStringLiteral("control_points")).toArray().size(), 1);
+    EXPECT_EQ(survey.value(QStringLiteral("check_points")).toArray().size(), 1);
+    EXPECT_EQ(survey.value(QStringLiteral("scale_bars")).toArray().size(), 1);
+
+    const auto reportResult = xjw::gui::project::writeReconstructionQualityProjectReport(
+        &projectData,
+        QStringLiteral("survey_control_quality"));
+    ASSERT_TRUE(reportResult.saved) << reportResult.errorMessage.toStdString();
+
+    const QJsonObject reportRecord = reportResult.record;
+    EXPECT_EQ(reportRecord.value(QStringLiteral("control_point_count")).toInt(), 1);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("check_point_count")).toInt(), 1);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("scale_bar_count")).toInt(), 1);
+}
+
+TEST(SurveyControlDialogTest, PopulatesTablesFromProjectMetadata)
+{
+    SurveyControlDialog dialog;
+    dialog.setSurveyControlMetadata(QJsonObject{
+        {QStringLiteral("source_path"), QStringLiteral("E:/code/test/control.csv")},
+        {QStringLiteral("control_points"), QJsonArray{
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("GCP001")},
+                        {QStringLiteral("x"), 1.0},
+                        {QStringLiteral("y"), 2.0},
+                        {QStringLiteral("z"), 3.0},
+                        {QStringLiteral("sigma_m"), 0.02},
+                        {QStringLiteral("enabled"), true}}
+        }},
+        {QStringLiteral("check_points"), QJsonArray{
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("CHK001")},
+                        {QStringLiteral("x"), 4.0},
+                        {QStringLiteral("y"), 5.0},
+                        {QStringLiteral("z"), 6.0},
+                        {QStringLiteral("residual"), QJsonObject{{QStringLiteral("total_m"), 0.08}}},
+                        {QStringLiteral("enabled"), true}}
+        }},
+        {QStringLiteral("scale_bars"), QJsonArray{
+            QJsonObject{{QStringLiteral("id"), QStringLiteral("SB001")},
+                        {QStringLiteral("from_id"), QStringLiteral("GCP001")},
+                        {QStringLiteral("to_id"), QStringLiteral("CHK001")},
+                        {QStringLiteral("measured_m"), 7.5},
+                        {QStringLiteral("sigma_m"), 0.01},
+                        {QStringLiteral("enabled"), true}}
+        }}
+    });
+
+    auto *summary = dialog.findChild<QLabel *>(QStringLiteral("surveyControlSummaryLabel"));
+    ASSERT_NE(summary, nullptr);
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("控制点 1")));
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("检查点 1")));
+    EXPECT_TRUE(summary->text().contains(QStringLiteral("比例尺 1")));
+
+    auto *controlTable = dialog.findChild<QTableWidget *>(QStringLiteral("surveyControlPointTable"));
+    auto *checkTable = dialog.findChild<QTableWidget *>(QStringLiteral("surveyCheckPointTable"));
+    auto *scaleTable = dialog.findChild<QTableWidget *>(QStringLiteral("surveyScaleBarTable"));
+    ASSERT_NE(controlTable, nullptr);
+    ASSERT_NE(checkTable, nullptr);
+    ASSERT_NE(scaleTable, nullptr);
+    EXPECT_EQ(controlTable->rowCount(), 1);
+    EXPECT_EQ(checkTable->rowCount(), 1);
+    EXPECT_EQ(scaleTable->rowCount(), 1);
+    EXPECT_EQ(controlTable->item(0, 0)->text(), QStringLiteral("GCP001"));
+    EXPECT_EQ(checkTable->item(0, 0)->text(), QStringLiteral("CHK001"));
+    EXPECT_EQ(scaleTable->item(0, 1)->text(), QStringLiteral("GCP001"));
+
+    auto *importButton = dialog.findChild<QPushButton *>(QStringLiteral("surveyControlImportCsvButton"));
+    ASSERT_NE(importButton, nullptr);
+    EXPECT_TRUE(importButton->text().contains(QStringLiteral("导入 CSV")));
+}
+
 TEST(ProjectReferenceDatasetsTest, QualityReportComputesSameGridDemDifferenceMetrics)
 {
     QTemporaryDir tempDir;
@@ -4952,6 +5180,25 @@ TEST(ProjectWorkflowReportsTest, ReconstructionQualityReportIsRegisteredInProjec
     meta[QStringLiteral("dem_results")] = QJsonArray{
         QJsonObject{{QStringLiteral("coverage_ratio"), 0.75}}
     };
+
+    QJsonObject gcp;
+    gcp[QStringLiteral("id")] = QStringLiteral("GCP001");
+    gcp[QStringLiteral("residual")] = QJsonObject{{QStringLiteral("total_m"), 0.02}};
+
+    QJsonObject checkpoint;
+    checkpoint[QStringLiteral("id")] = QStringLiteral("CHK001");
+    checkpoint[QStringLiteral("residual")] = QJsonObject{{QStringLiteral("total_m"), 0.08}};
+
+    QJsonObject scaleBar;
+    scaleBar[QStringLiteral("id")] = QStringLiteral("SB001");
+    scaleBar[QStringLiteral("measured_m")] = 10.0;
+    scaleBar[QStringLiteral("estimated_m")] = 10.03;
+
+    QJsonObject surveyControl;
+    surveyControl[QStringLiteral("control_points")] = QJsonArray{gcp};
+    surveyControl[QStringLiteral("check_points")] = QJsonArray{checkpoint};
+    surveyControl[QStringLiteral("scale_bars")] = QJsonArray{scaleBar};
+    meta[QStringLiteral("survey_control")] = surveyControl;
     projectData.updateMetadata(meta, true);
 
     const auto result = xjw::gui::project::writeReconstructionQualityProjectReport(
@@ -4969,6 +5216,12 @@ TEST(ProjectWorkflowReportsTest, ReconstructionQualityReportIsRegisteredInProjec
     EXPECT_EQ(reportRecord.value(QStringLiteral("csv_path")).toString(), result.csvPath);
     EXPECT_EQ(reportRecord.value(QStringLiteral("type")).toString(), QStringLiteral("reconstruction_quality"));
     EXPECT_EQ(reportRecord.value(QStringLiteral("registered_image_count")).toInt(), 1);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("control_point_count")).toInt(), 1);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("check_point_count")).toInt(), 1);
+    EXPECT_EQ(reportRecord.value(QStringLiteral("scale_bar_count")).toInt(), 1);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("control_point_rmse_m")).toDouble(), 0.02, 1e-9);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("check_point_rmse_m")).toDouble(), 0.08, 1e-9);
+    EXPECT_NEAR(reportRecord.value(QStringLiteral("scale_bar_rmse_m")).toDouble(), 0.03, 1e-9);
     EXPECT_NEAR(reportRecord.value(QStringLiteral("mvs_valid_coverage")).toDouble(), 0.5, 1e-9);
     EXPECT_NEAR(reportRecord.value(QStringLiteral("dem_coverage")).toDouble(), 0.75, 1e-9);
 }

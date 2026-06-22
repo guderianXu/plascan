@@ -47,6 +47,30 @@ struct BALaserPlaneConstraint
 };
 
 /**
+ * @brief 测绘控制点软约束：约束 BA 三维点靠近已知物方控制点坐标。
+ */
+struct BAControlPointConstraint
+{
+    std::array<double, 3> point{{0.0, 0.0, 0.0}};
+    double sigmaMeters = 1.0;
+    double weight = 1.0;
+    int sourceIndex = -1;
+};
+
+/**
+ * @brief 比例尺/标尺软约束：约束两条 BA track 之间的物方距离。
+ */
+struct BAScaleBarConstraint
+{
+    int trackIndexA = -1;
+    int trackIndexB = -1;
+    double measuredDistanceMeters = 0.0;
+    double sigmaMeters = 1.0;
+    double weight = 1.0;
+    int sourceIndex = -1;
+};
+
+/**
  * @brief 相机位姿软先验：用于已知外参不完全可靠时约束 BA 不发生无意义漂移。
  */
 struct BACameraPosePrior
@@ -71,6 +95,7 @@ struct BATrack
     std::array<double, 3> initialPoint{{0.0, 0.0, 0.0}}; ///< 三维点的初始坐标（优化起始值）
     std::vector<BAObservation> observations;              ///< 所有相机中对该点的观测列表
     std::vector<BALaserPlaneConstraint> laserPlaneConstraints; ///< 可选 LiDAR 点到面软约束
+    std::vector<BAControlPointConstraint> controlPointConstraints; ///< 可选 GCP/控制点软约束
 };
 
 /**
@@ -92,6 +117,17 @@ struct BAOptions
     bool enableLaserPlaneConstraints = false; ///< 是否启用 BATrack 上挂载的 LiDAR 点到面约束
     double laserPlaneWeight = 1.0;            ///< LiDAR 残差全局权重，单位相当于 1/m
     double laserHuberDeltaMeters = 0.2;       ///< LiDAR 点到面 Huber 阈值（米）
+
+    // ── 测绘控制点软约束 ────────────────────────────────────────────────
+    bool enableControlPointConstraints = false; ///< 是否启用 BATrack 上挂载的控制点约束
+    double controlPointWeight = 1.0;            ///< 控制点残差全局权重
+    double controlPointHuberDeltaMeters = 0.2;  ///< 控制点 3D 距离 Huber 阈值（米）
+
+    // ── 比例尺/标尺软约束 ────────────────────────────────────────────────
+    bool enableScaleBarConstraints = false;       ///< 是否启用两点间距离约束
+    double scaleBarWeight = 1.0;                  ///< 比例尺残差全局权重
+    double scaleBarHuberDeltaMeters = 0.2;        ///< 比例尺长度残差 Huber 阈值（米）
+    std::vector<BAScaleBarConstraint> scaleBarConstraints; ///< 与 tracks 下标关联的比例尺约束
 
     // ── 相机位姿软先验 ───────────────────────────────────────────────────
     std::vector<BACameraPosePrior> cameraPosePriors; ///< 与 cameras 同序的可选外参软先验
@@ -155,6 +191,14 @@ struct BAResult
     double laserRmsAfterMeters = 0.0;      ///< 优化后 LiDAR 点到面 RMS（米）
     double laserMedianBeforeMeters = 0.0;  ///< 优化前 LiDAR 点到面绝对距离中位数（米）
     double laserMedianAfterMeters = 0.0;   ///< 优化后 LiDAR 点到面绝对距离中位数（米）
+
+    int controlPointConstraintCount = 0;       ///< 参与统计/优化的控制点约束数量
+    double controlPointRmsBeforeMeters = 0.0;  ///< 优化前控制点 3D RMS（米）
+    double controlPointRmsAfterMeters = 0.0;   ///< 优化后控制点 3D RMS（米）
+
+    int scaleBarConstraintCount = 0;       ///< 参与统计/优化的比例尺约束数量
+    double scaleBarRmsBeforeMeters = 0.0;  ///< 优化前比例尺长度 RMS（米）
+    double scaleBarRmsAfterMeters = 0.0;   ///< 优化后比例尺长度 RMS（米）
 
     std::vector<BARefinedPoint> points;   ///< 每条轨迹对应的点优化结果（与输入 tracks 索引一一对应）
     std::vector<Camera> refinedCameras;   ///< 优化后的相机列表（与输入 cameras 長度相同）

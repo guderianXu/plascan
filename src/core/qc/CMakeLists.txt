@@ -1,7 +1,9 @@
 add_library(qc STATIC
     DemDifference.cpp
     PointCloudAlignment.cpp
+    SurveyControlImport.cpp
     ReconstructionQualityReport.cpp
+    SurveyControlReport.cpp
 )
 
 target_include_directories(qc PUBLIC
@@ -33,6 +35,22 @@ if(BUILD_TESTS)
     )
 
     gtest_discover_tests(test_reconstruction_quality_report)
+
+    add_executable(test_survey_control_import
+        tests/test_survey_control_import.cpp
+    )
+
+    target_link_libraries(test_survey_control_import PRIVATE
+        qc
+        Qt6::Core
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_survey_control_import PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+    )
+
+    gtest_discover_tests(test_survey_control_import)
 
     add_executable(test_point_cloud_alignment
         tests/test_point_cloud_alignment.cpp

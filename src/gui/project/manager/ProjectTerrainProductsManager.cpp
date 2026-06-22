@@ -19,6 +19,7 @@
 #include <QJsonArray>
 #include <QMap>
 #include <QMessageBox>
+#include <QPointer>
 #include <QtConcurrent>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -446,9 +447,14 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
     // 启动后台流水线（步骤1-2同步，步骤3-5通过信号链在主线程驱动）
     // demPipelineFinished 由信号链末端（DEM完成或失败）发出，不在此处发出
     LOG_INFO(QStringLiteral("[DEM流水线] 启动后台任务（特征提取+匹配）..."));
-    (void)QtConcurrent::run([this, ctx]()
+    QPointer<ProjectTerrainProductsManager> self(this);
+    (void)QtConcurrent::run([self, ctx]()
     {
-        runFullDemPipelineInBackground(ctx);
+        if (!self)
+        {
+            return;
+        }
+        self->runFullDemPipelineInBackground(ctx);
     });
 }
 
@@ -492,49 +498,94 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
                                              outputDir.trimmed(),
                                              QStringLiteral("assets/dem/relative_dem"));
 
-    QJsonObject terrainResult;
-    if (!runDemProductsOrWarn(resolvedDenseCloud,
-                              outDir,
-                              demResolution,
-                              demType,
-                              false,
-                              QStringLiteral("创建相对 DEM"),
-                              &terrainResult))
+    const QString projectPath = m_owner ? m_owner->currentProjectPath() : QString();
+    emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 5);
+
+    QPointer<ProjectTerrainProductsManager> self(this);
+    (void)QtConcurrent::run([self,
+                             resolvedDenseCloud,
+                             outDir,
+                             demResolution,
+                             demType,
+                             projectPath]()
     {
-        return;
-    }
+        const auto terrainRun = runDemProducts(resolvedDenseCloud,
+                                               outDir,
+                                               demResolution,
+                                               demType,
+                                               false);
+        if (!self)
+        {
+            return;
+        }
 
-    QJsonObject demResult = makeDemResultRecord(
-        terrainResult.value(QStringLiteral("created_at")).toString(),
-        outDir,
-        QString(),
-        terrainResult.value(QStringLiteral("dem_tif")).toString(),
-        demType,
-        demResolution,
-        QString(),
-        QStringList());
-    demResult[QStringLiteral("source_dense_cloud")] = resolvedDenseCloud;
-    demResult[QStringLiteral("dem_reference")] = QStringLiteral("relative");
-    demResult[QStringLiteral("depth_preview_png")] = terrainResult.value(QStringLiteral("depth_png")).toString();
-    demResult[QStringLiteral("relative_z_offset")] = terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
-    upsertMetaArrayRecordByPath(&meta,
-                                QStringLiteral("dem_results"),
-                                QStringLiteral("dem_tif"),
-                                demResult);
+        QMetaObject::invokeMethod(self.data(),
+            [self,
+             terrainRun,
+             resolvedDenseCloud,
+             outDir,
+             demResolution,
+             demType,
+             projectPath]()
+            {
+                if (!self)
+                {
+                    return;
+                }
+                if (!self->m_owner ||
+                    !self->m_projectData ||
+                    self->m_owner->currentProjectPath() != projectPath)
+                {
+                    return;
+                }
 
-    persistProjectMeta(m_projectData, meta, true);
-    if (m_owner)
-    {
-        m_owner->refreshReconstructionQualityReport();
-    }
+                if (!terrainRun.ok)
+                {
+                    QMessageBox::warning(self->m_parentWidget,
+                                         QStringLiteral("创建相对 DEM"),
+                                         QStringLiteral("处理失败：%1").arg(terrainRun.error));
+                    emit self->demPipelineFinished(false, terrainRun.error);
+                    return;
+                }
 
-    QMessageBox::information(m_parentWidget,
-                             QStringLiteral("创建相对 DEM"),
-                             QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
-                                 .arg(terrainResult.value(QStringLiteral("dem_tif")).toString())
-                                 .arg(terrainResult.value(QStringLiteral("depth_png")).toString())
-                                 .arg(resolvedDenseCloud)
-                                 .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
+                QJsonObject meta = self->m_projectData->metadata();
+                const QJsonObject terrainResult = terrainRun.payload;
+                QJsonObject demResult = makeDemResultRecord(
+                    terrainResult.value(QStringLiteral("created_at")).toString(),
+                    outDir,
+                    QString(),
+                    terrainResult.value(QStringLiteral("dem_tif")).toString(),
+                    demType,
+                    demResolution,
+                    QString(),
+                    QStringList());
+                demResult[QStringLiteral("source_dense_cloud")] = resolvedDenseCloud;
+                demResult[QStringLiteral("dem_reference")] = QStringLiteral("relative");
+                demResult[QStringLiteral("depth_preview_png")] =
+                    terrainResult.value(QStringLiteral("depth_png")).toString();
+                demResult[QStringLiteral("relative_z_offset")] =
+                    terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
+                upsertMetaArrayRecordByPath(&meta,
+                                            QStringLiteral("dem_results"),
+                                            QStringLiteral("dem_tif"),
+                                            demResult);
+
+                persistProjectMeta(self->m_projectData, meta, true);
+                self->m_owner->refreshReconstructionQualityReport();
+
+                emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+                emit self->demPipelineFinished(true, QStringLiteral("DEM 生成完成"));
+                QMessageBox::information(
+                    self->m_parentWidget,
+                    QStringLiteral("创建相对 DEM"),
+                    QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
+                        .arg(terrainResult.value(QStringLiteral("dem_tif")).toString())
+                        .arg(terrainResult.value(QStringLiteral("depth_png")).toString())
+                        .arg(resolvedDenseCloud)
+                        .arg(terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0), 0, 'f', 6));
+            },
+            Qt::QueuedConnection);
+    });
 }
 
 void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &images,
@@ -666,6 +717,8 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
 }
 void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipelineContext &ctx)
 {
+    QPointer<ProjectTerrainProductsManager> self(this);
+    QPointer<QWidget> parentWidget(m_parentWidget);
     LOG_INFO(QStringLiteral("[DEM流水线] ========== 流水线启动 =========="));
     LOG_INFO(QStringLiteral("[DEM流水线] 影像数量: %1").arg(ctx.images.size()));
     for (int i = 0; i < ctx.images.size(); ++i)
@@ -690,10 +743,22 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     if (!featureOk)
     {
         LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 特征提取失败（FeatureExtractionRunner::run 返回 false）"));
-        QMetaObject::invokeMethod(m_parentWidget, [this]() {
-            QMessageBox::warning(m_parentWidget, QStringLiteral("创建相对 DEM"), QStringLiteral("特征提取失败，流水线中止。"));
+        if (parentWidget)
+        {
+            QMetaObject::invokeMethod(parentWidget.data(), [parentWidget]() {
+                if (!parentWidget)
+                {
+                    return;
+                }
+                QMessageBox::warning(parentWidget,
+                                     QStringLiteral("创建相对 DEM"),
+                                     QStringLiteral("特征提取失败，流水线中止。"));
         }, Qt::QueuedConnection);
-        emit demPipelineFinished(false, QStringLiteral("特征提取失败"));
+        }
+        if (self)
+        {
+            emit self->demPipelineFinished(false, QStringLiteral("特征提取失败"));
+        }
         return;
     }
     LOG_INFO(QStringLiteral("[DEM流水线] ✓ 特征提取完成"));
@@ -724,34 +789,54 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     const QString demOutputDir = ctx.outputDir;
     const double demResolution = ctx.demResolution;
     const QString demType = ctx.demType;
-    QMetaObject::invokeMethod(this, [this, demOutputDir, demResolution, demType]()
+    if (!self)
     {
-        const int productionAtIndex = findLatestProductionAtResultIndex(m_projectData->metadata());
+        return;
+    }
+    QMetaObject::invokeMethod(self.data(), [self, demOutputDir, demResolution, demType]()
+    {
+        if (!self)
+        {
+            return;
+        }
+
+        const int productionAtIndex = findLatestProductionAtResultIndex(self->m_projectData->metadata());
         if (productionAtIndex < 0)
         {
             LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 未找到正式 SfM/BA 稀疏点云，拒绝使用两视预览云继续 DEM 流水线"));
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(self->m_parentWidget,
                                  QStringLiteral("创建相对 DEM"),
                                  QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。\n请先运行[工作流程 → 三维重建/空三]，不要使用两视预览三角化作为 DEM 输入。"));
-            emit demPipelineFinished(false, QStringLiteral("缺少正式 SfM/BA 稀疏点云"));
+            emit self->demPipelineFinished(false, QStringLiteral("缺少正式 SfM/BA 稀疏点云"));
             return;
         }
 
         LOG_INFO(QStringLiteral("[DEM流水线] ✓ 使用正式 SfM/BA 稀疏点云结果 index=%1，启动 MVS（CUDA PatchMatch）...")
                      .arg(productionAtIndex));
-        emit demPipelineProgressChanged(QStringLiteral("密集重建 (MVS)"), 55);
+        emit self->demPipelineProgressChanged(QStringLiteral("密集重建 (MVS)"), 55);
+
+        const int pendingDenseResultCount =
+            self->m_projectData->metadata().value(QStringLiteral("dense_cloud_results")).toArray().size();
 
         // 监听元数据变化：dense_cloud_results 出现新记录即表示融合完成
         auto *connMeta = new QMetaObject::Connection();
-        *connMeta = connect(m_owner, &ProjectManager::projectMetadataChanged, this,
-            [this, connMeta, demOutputDir, demResolution, demType](const QJsonObject &metaChanged)
+        *connMeta = connect(self->m_owner, &ProjectManager::projectMetadataChanged, self.data(),
+            [self, connMeta, demOutputDir, demResolution, demType, pendingDenseResultCount](
+                const QJsonObject &metaChanged)
             {
+                if (!self)
+                {
+                    delete connMeta;
+                    return;
+                }
                 const QJsonArray denseArr = metaChanged.value(QStringLiteral("dense_cloud_results")).toArray();
                 LOG_INFO(QStringLiteral("[DEM流水线] projectMetadataChanged: dense_cloud_results 条目数=%1").arg(denseArr.size()));
-                if (denseArr.isEmpty())
+                if (denseArr.size() <= pendingDenseResultCount)
+                {
                     return;
-                const QJsonObject lastRecord = denseArr.last().toObject();
-                const QString plyPath = lastRecord.value(QStringLiteral("dense_cloud_xyz")).toString();
+                }
+                const QJsonObject denseRecord = denseArr.at(pendingDenseResultCount).toObject();
+                const QString plyPath = denseRecord.value(QStringLiteral("dense_cloud_xyz")).toString();
                 LOG_INFO(QStringLiteral("[DEM流水线] 最新 dense_cloud_xyz=%1 exists=%2")
                              .arg(plyPath)
                              .arg(QFileInfo::exists(plyPath) ? QStringLiteral("true") : QStringLiteral("false")));
@@ -762,9 +847,9 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 delete connMeta;
 
                 LOG_INFO(QStringLiteral("[DEM流水线] ✓ 密集点云就绪（%1），启动 DEM 生成...").arg(plyPath));
-                emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 85);
+                emit self->demPipelineProgressChanged(QStringLiteral("DEM 生成"), 85);
 
-                const QString outDir = resolveProjectOutputDir(m_owner->currentProjectPath(),
+                const QString outDir = resolveProjectOutputDir(self->m_owner->currentProjectPath(),
                                                                demOutputDir.trimmed(),
                                                                QStringLiteral("assets/dem/relative_dem"));
 
@@ -774,7 +859,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
 
                 DirectDepthDemInput directDepthInput;
                 QString directDepthError;
-                if (loadDirectDepthDemInput(metaChanged, m_owner, &directDepthInput, &directDepthError))
+                if (loadDirectDepthDemInput(metaChanged, self->m_owner, &directDepthInput, &directDepthError))
                 {
                     LOG_INFO(QStringLiteral("[DEM流水线] 使用深度图直接生成 DEM: loaded=%1/%2 batch=%3")
                                  .arg(directDepthInput.loadedFrameCount)
@@ -809,18 +894,29 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 if (!demOk)
                 {
                     LOG_INFO(QStringLiteral("[DEM流水线] 使用点云方法生成 DEM"));
-                    demOk = runDemProductsOrWarn(plyPath, outDir, demResolution, demType, false,
-                                                 QStringLiteral("创建相对 DEM"), &terrainResult);
+                    const auto terrainRun = runDemProducts(plyPath, outDir, demResolution, demType, false);
+                    demOk = terrainRun.ok;
+                    if (terrainRun.ok)
+                    {
+                        terrainResult = terrainRun.payload;
+                    }
+                    else
+                    {
+                        LOG_ERROR(QStringLiteral("[DEM流水线] 点云 DEM 失败: %1").arg(terrainRun.error));
+                        QMessageBox::warning(self->m_parentWidget,
+                                             QStringLiteral("创建相对 DEM"),
+                                             QStringLiteral("处理失败：%1").arg(terrainRun.error));
+                    }
                 }
 
                 if (!demOk)
                 {
                     LOG_ERROR(QStringLiteral("[DEM流水线] ✗ DEM 生成失败"));
-                    emit demPipelineFinished(false, QStringLiteral("DEM 生成失败"));
+                    emit self->demPipelineFinished(false, QStringLiteral("DEM 生成失败"));
                     return;
                 }
 
-                QJsonObject metaUpdated = m_projectData->metadata();
+                QJsonObject metaUpdated = self->m_projectData->metadata();
                 QJsonObject demResult = makeDemResultRecord(
                     terrainResult.value(QStringLiteral("created_at")).toString(),
                     outDir, QString(),
@@ -841,23 +937,29 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                     terrainResult.value(QStringLiteral("depth_input_loaded_count")).toInt(0);
                 upsertMetaArrayRecordByPath(&metaUpdated, QStringLiteral("dem_results"),
                                             QStringLiteral("dem_tif"), demResult);
-                persistProjectMeta(m_projectData, metaUpdated, true);
-                if (m_owner)
+                persistProjectMeta(self->m_projectData, metaUpdated, true);
+                if (self->m_owner)
                 {
-                    m_owner->refreshReconstructionQualityReport();
+                    self->m_owner->refreshReconstructionQualityReport();
                 }
 
                 LOG_INFO(QStringLiteral("[DEM流水线] ✓ DEM 生成完成: %1")
                              .arg(terrainResult.value(QStringLiteral("dem_tif")).toString()));
-                emit demPipelineProgressChanged(QStringLiteral("完成"), 100);
-                emit demPipelineFinished(true, QStringLiteral("DEM 流水线已完成"));
+                emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+                emit self->demPipelineFinished(true, QStringLiteral("DEM 流水线已完成"));
             });
 
         // 同时监听 MVS 失败
         auto *connMvsFail = new QMetaObject::Connection();
-        *connMvsFail = connect(m_owner, &ProjectManager::mvsProgressFinished, this,
-            [this, connMvsFail, connMeta](bool mvsSuccess)
+        *connMvsFail = connect(self->m_owner, &ProjectManager::mvsProgressFinished, self.data(),
+            [self, connMvsFail, connMeta](bool mvsSuccess)
             {
+                if (!self)
+                {
+                    delete connMvsFail;
+                    delete connMeta;
+                    return;
+                }
                 LOG_INFO(QStringLiteral("[DEM流水线] mvsProgressFinished: success=%1").arg(mvsSuccess));
                 if (mvsSuccess)
                     return; // 成功时由 projectMetadataChanged 处理
@@ -866,7 +968,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 disconnect(*connMeta);
                 delete connMeta;
                 LOG_ERROR(QStringLiteral("[DEM流水线] ✗ MVS 失败（mvsProgressFinished(false)）"));
-                emit demPipelineFinished(false, QStringLiteral("MVS 密集重建失败"));
+                emit self->demPipelineFinished(false, QStringLiteral("MVS 密集重建失败"));
             }, Qt::SingleShotConnection);
 
         LOG_INFO(QStringLiteral("[DEM流水线] 主线程：调用 startGenerateDenseCloudAsync..."));
@@ -878,6 +980,6 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
         mvsSettings[QStringLiteral("iterations")] = 16;
         mvsSettings[QStringLiteral("cuda")] = true;
         mvsSettings[QStringLiteral("minConsistentViews")] = 1;
-        m_owner->startGenerateDenseCloudAsync(mvsSettings);
+        self->m_owner->startGenerateDenseCloudAsync(mvsSettings);
     }, Qt::QueuedConnection);
 }

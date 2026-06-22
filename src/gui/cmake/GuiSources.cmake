@@ -39,6 +39,7 @@ set(GUI_SOURCES
   project/support/ProjectResultRecords.cpp
   project/support/ProjectSfmWorkflow.cpp
   project/support/ProjectSparseWorkflow.cpp
+  project/support/ProjectSurveyControl.cpp
   project/support/ProjectWorkflowUtils.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
@@ -92,6 +93,7 @@ set(GUI_SOURCES
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp
   dialogs/CameraConvertDialog.cpp
+  dialogs/SurveyControlDialog.cpp
   dialogs/ObservationNetworkDialog.cpp
   dialogs/InitCameraPoseDialog.cpp
   dialogs/TriangulationDialog.cpp
@@ -146,6 +148,7 @@ set(GUI_HEADERS
   project/support/ProjectResultRecords.h
   project/support/ProjectSfmWorkflow.h
   project/support/ProjectSparseWorkflow.h
+  project/support/ProjectSurveyControl.h
   project/support/ProjectWorkflowUtils.h
   project/support/ProjectWorkflowReports.h
   project/manager/ProjectManager.h
@@ -192,6 +195,7 @@ set(GUI_HEADERS
   dialogs/SparseCloudPostProcessDialog.h
   dialogs/WorkflowReportDialog.h
   dialogs/CameraConvertDialog.h
+  dialogs/SurveyControlDialog.h
   dialogs/ObservationNetworkDialog.h
   dialogs/InitCameraPoseDialog.h
   dialogs/TriangulationDialog.h
@@ -224,6 +228,7 @@ set(GUI_PROJECT_SOURCES
   project/support/ProjectResultRecords.cpp
   project/support/ProjectSfmWorkflow.cpp
   project/support/ProjectSparseWorkflow.cpp
+  project/support/ProjectSurveyControl.cpp
   project/support/ProjectWorkflowUtils.cpp
   project/support/ProjectWorkflowReports.cpp
   project/manager/ProjectManager.cpp
@@ -267,6 +272,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp
   dialogs/CameraConvertDialog.cpp
+  dialogs/SurveyControlDialog.cpp
   dialogs/ObservationNetworkDialog.cpp
   dialogs/InitCameraPoseDialog.cpp
   dialogs/TriangulationDialog.cpp

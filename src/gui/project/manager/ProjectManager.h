@@ -151,6 +151,8 @@ public slots:
     void removeResources(const QStringList &resourcePaths);
     // 以外部引用方式导入 DEM/LiDAR/点云参考数据，默认用于精度检查。
     void importReferenceDataset();
+    // 打开控制点/检查点/比例尺管理窗口，支持导入 CSV 并写入项目元数据。
+    void openSurveyControlDialog();
     // 生成参考 DEM/LiDAR 与当前项目成果的精度检查准备报告。
     void runReferenceQualityCheck();
     // 生成参考地形软约束 BA 前置检查报告；真正 BA 只在检查通过后进入后续流程。

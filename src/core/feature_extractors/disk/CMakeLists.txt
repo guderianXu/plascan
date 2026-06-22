@@ -18,7 +18,7 @@ target_include_directories(feature_extractors_disk PUBLIC
 if(BUILD_TESTS)
     find_package(GTest QUIET)
     if(GTest_FOUND)
-        include(GoogleTest)
+        include(PlascanTestRuntime)
         add_executable(test_disk_unit tests/test_disk.cpp)
         target_link_libraries(test_disk_unit PRIVATE
             feature_extractors_disk
@@ -35,6 +35,6 @@ if(BUILD_TESTS)
             TESTDATA_DIR="${CMAKE_SOURCE_DIR}/src/core/feature_extractors/testdata"
             MODEL_DIR="${CMAKE_SOURCE_DIR}/resources/models"
         )
-        gtest_discover_tests(test_disk_unit)
+        plascan_gtest_discover_tests(test_disk_unit)
     endif()
 endif()

@@ -64,6 +64,15 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
     result.beforeCamMeta = baInput.beforeCamMeta;
     options.imagePathByIndex = baInput.imagePathByIndex;
     options.beforeCamMeta = baInput.beforeCamMeta;
+    if (baInput.surveyControlTrackCount > 0)
+    {
+        options.baOpt.enableControlPointConstraints = true;
+    }
+    if (!baInput.scaleBarConstraints.empty())
+    {
+        options.baOpt.enableScaleBarConstraints = true;
+        options.baOpt.scaleBarConstraints = baInput.scaleBarConstraints;
+    }
 
     const ReferenceTerrainBaApplyResult terrainPriorResult =
         applyReferenceTerrainPriorToBundleAdjust(&baInput.tracks, &options);

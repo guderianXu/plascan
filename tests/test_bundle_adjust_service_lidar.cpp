@@ -175,6 +175,95 @@ TEST(BundleAdjustServiceLidarTest, RunUsesXyzLaserCloudAsHeightPlanesWhenExplici
     EXPECT_TRUE(optionsJson.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool());
 }
 
+TEST(BundleAdjustServiceLidarTest, RunWritesControlPointConstraintSummary)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack()};
+
+    xjw::BAControlPointConstraint constraint;
+    constraint.point = {{0.0, 0.0, 10.0}};
+    constraint.sigmaMeters = 0.05;
+    constraint.weight = 1.0;
+    tracks.front().controlPointConstraints.push_back(constraint);
+
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.exportTsai = false;
+    options.exportEvalPlot = false;
+    options.baOpt.refineCameraPose = false;
+    options.baOpt.enablePointFilter = false;
+    options.baOpt.enableControlPointConstraints = true;
+    options.baOpt.controlPointHuberDeltaMeters = 10.0;
+    options.baOpt.maxIterations = 4;
+
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+    ASSERT_TRUE(result.resultJson.contains(QStringLiteral("control_point_constraints_summary")));
+    const QJsonObject summary =
+        result.resultJson.value(QStringLiteral("control_point_constraints_summary")).toObject();
+    EXPECT_TRUE(summary.value(QStringLiteral("enabled")).toBool());
+    EXPECT_EQ(summary.value(QStringLiteral("control_point_constraint_count")).toInt(), 1);
+    EXPECT_NEAR(summary.value(QStringLiteral("control_point_rms_before_m")).toDouble(), 2.0, 1e-9);
+    EXPECT_LT(summary.value(QStringLiteral("control_point_rms_after_m")).toDouble(), 0.05);
+
+    const QJsonObject optionsJson = result.resultJson.value(QStringLiteral("options")).toObject();
+    EXPECT_TRUE(optionsJson.value(QStringLiteral("enable_control_point_constraints")).toBool());
+    EXPECT_DOUBLE_EQ(optionsJson.value(QStringLiteral("control_point_huber_delta_m")).toDouble(), 10.0);
+}
+
+TEST(BundleAdjustServiceLidarTest, RunWritesScaleBarConstraintSummary)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
+    tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
+    tracks[1].initialPoint = {{12.0, 0.0, 10.0}};
+    tracks[1].observations[0].u = 1712.0;
+    tracks[1].observations[1].u = 1712.0;
+
+    xjw::BAScaleBarConstraint constraint;
+    constraint.trackIndexA = 0;
+    constraint.trackIndexB = 1;
+    constraint.measuredDistanceMeters = 10.0;
+    constraint.sigmaMeters = 0.05;
+
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.exportTsai = false;
+    options.exportEvalPlot = false;
+    options.baOpt.refineCameraPose = false;
+    options.baOpt.enablePointFilter = false;
+    options.baOpt.enableScaleBarConstraints = true;
+    options.baOpt.scaleBarWeight = 1000.0;
+    options.baOpt.scaleBarHuberDeltaMeters = 10.0;
+    options.baOpt.scaleBarConstraints.push_back(constraint);
+    options.baOpt.maxIterations = 8;
+    options.baOpt.maxPointIterations = 20;
+
+    const xjw::gui::BaServiceResult result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+    ASSERT_TRUE(result.resultJson.contains(QStringLiteral("scale_bar_constraints_summary")));
+    const QJsonObject summary =
+        result.resultJson.value(QStringLiteral("scale_bar_constraints_summary")).toObject();
+    EXPECT_TRUE(summary.value(QStringLiteral("enabled")).toBool());
+    EXPECT_EQ(summary.value(QStringLiteral("scale_bar_constraint_count")).toInt(), 1);
+    EXPECT_NEAR(summary.value(QStringLiteral("scale_bar_rms_before_m")).toDouble(), 2.0, 1e-9);
+    EXPECT_LT(summary.value(QStringLiteral("scale_bar_rms_after_m")).toDouble(), 0.2);
+
+    const QJsonObject optionsJson = result.resultJson.value(QStringLiteral("options")).toObject();
+    EXPECT_TRUE(optionsJson.value(QStringLiteral("enable_scale_bar_constraints")).toBool());
+    EXPECT_DOUBLE_EQ(optionsJson.value(QStringLiteral("scale_bar_huber_delta_m")).toDouble(), 10.0);
+}
+
 TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
 {
     QTemporaryDir tempDir;

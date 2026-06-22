@@ -1,4 +1,5 @@
 #include "ReconstructionQualityReport.h"
+#include "SurveyControlReport.h"
 
 #include <QDir>
 #include <QFile>
@@ -250,6 +251,18 @@ QJsonObject ReconstructionQualityReport::buildFromProjectMeta(const QJsonObject 
     report[QStringLiteral("mvs_completed_depth_frame_count")] = completedDepthFrameCount(projectMeta);
     report[QStringLiteral("mvs_valid_coverage")] = averageCompletedDepthCoverage(projectMeta);
     report[QStringLiteral("dem_coverage")] = demCoverage(projectMeta);
+
+    const QJsonObject surveySummary = buildSurveyControlSummary(projectMeta);
+    report[QStringLiteral("survey_control")] = surveySummary;
+    report[QStringLiteral("control_point_count")] = surveySummary.value(QStringLiteral("control_point_count")).toInt();
+    report[QStringLiteral("check_point_count")] = surveySummary.value(QStringLiteral("check_point_count")).toInt();
+    report[QStringLiteral("scale_bar_count")] = surveySummary.value(QStringLiteral("scale_bar_count")).toInt();
+    report[QStringLiteral("control_point_rmse_m")] =
+        surveySummary.value(QStringLiteral("control_point_rmse_m")).toDouble();
+    report[QStringLiteral("check_point_rmse_m")] =
+        surveySummary.value(QStringLiteral("check_point_rmse_m")).toDouble();
+    report[QStringLiteral("scale_bar_rmse_m")] =
+        surveySummary.value(QStringLiteral("scale_bar_rmse_m")).toDouble();
     return report;
 }
 

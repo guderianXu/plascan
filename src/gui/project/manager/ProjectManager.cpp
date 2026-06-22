@@ -30,8 +30,10 @@
 #include "ProjectTriangulationService.h"
 #include "ProjectResultRecords.h"
 #include "ProjectReferenceDatasets.h"
+#include "ProjectSurveyControl.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectWorkflowReports.h"
+#include "SurveyControlDialog.h"
 #include "Logger.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
@@ -52,6 +54,7 @@
 #include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
+#include <QPointer>
 #include <QThread>
 #include <cmath>
 #include <QFile>
@@ -547,6 +550,56 @@ bool ProjectManager::registerReferenceDataset(const QString &path,
     return xjw::gui::project::registerReferenceDataset(m_projectData, path, type, role, errorMsg);
 }
 
+void ProjectManager::openSurveyControlDialog()
+{
+    if (!ensureProjectOpen(QStringLiteral("请先打开项目，再管理测绘控制点。")))
+    {
+        return;
+    }
+
+    SurveyControlDialog dialog(m_parent);
+    dialog.setSurveyControlMetadata(m_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
+
+    connect(&dialog, &SurveyControlDialog::importCsvRequested, this, [this, &dialog]()
+    {
+        const QString selected = QFileDialog::getOpenFileName(
+            &dialog,
+            QStringLiteral("导入测绘控制 CSV"),
+            getLastUsedDir(QStringLiteral("survey_control")),
+            QStringLiteral("控制点 CSV (*.csv);;所有文件 (*)"));
+        if (selected.isEmpty())
+        {
+            return;
+        }
+
+        saveLastUsedDir(QStringLiteral("survey_control"), QFileInfo(selected).absolutePath());
+        const auto result = xjw::gui::project::importSurveyControlCsv(m_projectData,
+                                                                      selected,
+                                                                      QString());
+        if (!result.imported)
+        {
+            showWarning(result.errorMessage.isEmpty()
+                            ? QStringLiteral("导入测绘控制 CSV 失败。")
+                            : result.errorMessage,
+                        QStringLiteral("测绘控制"));
+            return;
+        }
+
+        dialog.setSurveyControlMetadata(m_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
+        dialog.setStatusMessage(QStringLiteral("已导入：控制点 %1，检查点 %2，比例尺 %3")
+                                    .arg(result.controlPointCount)
+                                    .arg(result.checkPointCount)
+                                    .arg(result.scaleBarCount));
+        LOG_INFO(QStringLiteral("测绘控制 CSV 已导入: %1 controls=%2 checks=%3 scale_bars=%4")
+                 .arg(QFileInfo(selected).fileName())
+                 .arg(result.controlPointCount)
+                 .arg(result.checkPointCount)
+                 .arg(result.scaleBarCount));
+    });
+
+    dialog.exec();
+}
+
 void ProjectManager::runReferenceQualityCheck()
 {
     if (!ensureProjectOpen(QStringLiteral("请先打开项目，再执行点云/DEM 精度检查。")))
@@ -1029,7 +1082,7 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
 
     LOG_INFO(QStringLiteral("BA: 特征/匹配准备完毕，启动光束法平差"));
 
-    auto *self = this;
+    QPointer<ProjectManager> self(this);
 
 (void)QtConcurrent::run(
         [self, coreData, plascanPath, images, minMatches,
@@ -1037,10 +1090,18 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     {
         auto finishTask = [self, cancelFlag](bool success)
         {
+            if (!self)
+            {
+                return;
+            }
             QMetaObject::invokeMethod(
-                self,
+                self.data(),
                 [self, cancelFlag, success]()
                 {
+                    if (!self)
+                    {
+                        return;
+                    }
                     if (self->m_atCancelFlag != cancelFlag)
                     {
                         return;
@@ -1051,10 +1112,18 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
                 Qt::QueuedConnection);
         };
 
+        if (!self)
+        {
+            return;
+        }
         QMetaObject::invokeMethod(
-            self,
+            self.data(),
             [self, cancelFlag]()
             {
+                if (!self)
+                {
+                    return;
+                }
                 if (self->m_atCancelFlag != cancelFlag ||
                     cancelFlag->load(std::memory_order_relaxed))
                 {
@@ -1073,22 +1142,37 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         if (cancelFlag->load(std::memory_order_relaxed))
         {
             LOG_INFO(QStringLiteral("BA: 用户取消了光束法平差"));
-            QMetaObject::invokeMethod(self,
+            if (self)
+            {
+                QMetaObject::invokeMethod(self.data(),
                 [self, cancelFlag]()
                 {
+                    if (!self)
+                    {
+                        return;
+                    }
                     if (self->m_atCancelFlag == cancelFlag)
                     {
                         emit self->bundleAdjustPreviewReady(QJsonObject());
                     }
                 },
                 Qt::QueuedConnection);
+            }
             finishTask(false);
             return;
         }
 
         if (executionResult.buildStatus != xjw::gui::project::BaInputBuildStatus::Ok) {
-            QMetaObject::invokeMethod(self,
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(),
                 [self, cancelFlag, buildStatus = executionResult.buildStatus]() {
+                    if (!self)
+                    {
+                        return;
+                    }
                     if (self->m_atCancelFlag != cancelFlag)
                     {
                         return;
@@ -1111,13 +1195,21 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
                 .arg(executionResult.serviceResult.pendingCamUpdates.size())
                 .arg(executionResult.serviceResult.resultJson.value(QStringLiteral("track_count")).toInt()));
 
-        QMetaObject::invokeMethod(self,
+        if (!self)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(),
             [self,
              cancelFlag,
              baResult = executionResult.serviceResult,
              beforeCamMeta = executionResult.beforeCamMeta,
              isDryRun]()
             {
+                if (!self)
+                {
+                    return;
+                }
                 if (self->m_atCancelFlag != cancelFlag)
                 {
                     return;

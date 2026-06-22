@@ -97,6 +97,64 @@ TEST(ReconstructionQualityReport, BuildsSummaryFromProjectMetadata)
     EXPECT_TRUE(report.value(QStringLiteral("ba_summary")).isObject());
 }
 
+TEST(ReconstructionQualityReport, SummarizesSurveyControlResiduals)
+{
+    QJsonObject control0;
+    control0[QStringLiteral("id")] = QStringLiteral("GCP001");
+    control0[QStringLiteral("enabled")] = true;
+    control0[QStringLiteral("residual")] = QJsonObject{
+        {QStringLiteral("horizontal_m"), 0.03},
+        {QStringLiteral("vertical_m"), 0.04}
+    };
+
+    QJsonObject control1;
+    control1[QStringLiteral("id")] = QStringLiteral("GCP002");
+    control1[QStringLiteral("enabled")] = true;
+    control1[QStringLiteral("residual")] = QJsonObject{
+        {QStringLiteral("total_m"), 0.05}
+    };
+
+    QJsonObject check0;
+    check0[QStringLiteral("id")] = QStringLiteral("CHK001");
+    check0[QStringLiteral("enabled")] = true;
+    check0[QStringLiteral("residual")] = QJsonObject{
+        {QStringLiteral("total_m"), 0.12}
+    };
+
+    QJsonObject scaleBar0;
+    scaleBar0[QStringLiteral("id")] = QStringLiteral("SB001");
+    scaleBar0[QStringLiteral("enabled")] = true;
+    scaleBar0[QStringLiteral("residual_m")] = -0.02;
+
+    QJsonObject thresholds;
+    thresholds[QStringLiteral("checkpoint_rmse_warn_m")] = 0.10;
+    thresholds[QStringLiteral("scale_bar_rmse_warn_m")] = 0.05;
+
+    QJsonObject survey;
+    survey[QStringLiteral("control_points")] = QJsonArray{control0, control1};
+    survey[QStringLiteral("check_points")] = QJsonArray{check0};
+    survey[QStringLiteral("scale_bars")] = QJsonArray{scaleBar0};
+    survey[QStringLiteral("quality_thresholds")] = thresholds;
+
+    QJsonObject meta;
+    meta[QStringLiteral("survey_control")] = survey;
+
+    const QJsonObject report = ReconstructionQualityReport::buildFromProjectMeta(meta);
+    const QJsonObject surveyReport = report.value(QStringLiteral("survey_control")).toObject();
+
+    EXPECT_EQ(surveyReport.value(QStringLiteral("control_point_count")).toInt(), 2);
+    EXPECT_EQ(surveyReport.value(QStringLiteral("check_point_count")).toInt(), 1);
+    EXPECT_EQ(surveyReport.value(QStringLiteral("scale_bar_count")).toInt(), 1);
+    EXPECT_NEAR(surveyReport.value(QStringLiteral("control_point_rmse_m")).toDouble(), 0.05, 1e-9);
+    EXPECT_NEAR(surveyReport.value(QStringLiteral("check_point_rmse_m")).toDouble(), 0.12, 1e-9);
+    EXPECT_NEAR(surveyReport.value(QStringLiteral("scale_bar_rmse_m")).toDouble(), 0.02, 1e-9);
+    EXPECT_EQ(surveyReport.value(QStringLiteral("status")).toString(), QStringLiteral("warn"));
+
+    EXPECT_EQ(report.value(QStringLiteral("control_point_count")).toInt(), 2);
+    EXPECT_EQ(report.value(QStringLiteral("check_point_count")).toInt(), 1);
+    EXPECT_EQ(report.value(QStringLiteral("scale_bar_count")).toInt(), 1);
+}
+
 TEST(ReconstructionQualityReport, WritesJsonAndCsvReport)
 {
     QTemporaryDir tempDir;

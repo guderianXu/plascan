@@ -143,6 +143,7 @@ public:
     QAction *viewWorkflowReportAction() const;
     QAction *manualPointCloudPruneAction() const;
     QAction *cameraConvertAction() const;
+    QAction *surveyControlAction() const;
     QAction *importReferenceDatasetAction() const;
     QAction *referenceQualityCheckAction() const;
     QAction *referenceTerrainBundleAdjustAction() const;
@@ -237,6 +238,7 @@ private:
     QAction *m_viewWorkflowReportAct{};        ///< 查看工作流程历史报告
     QAction *m_manualPointCloudPruneAct{};     ///< 手动点云剔除
     QAction *m_cameraConvertAct{};             ///< 通用相机格式转换
+    QAction *m_surveyControlAct{};             ///< 控制点/检查点/比例尺管理
     QAction *m_importReferenceDatasetAct{};    ///< 导入外部 DEM/LiDAR 参考数据
     QAction *m_referenceQualityCheckAct{};     ///< 使用参考数据生成精度检查报告
     QAction *m_referenceTerrainBundleAdjustAct{}; ///< 参考地形软约束 BA 前置检查

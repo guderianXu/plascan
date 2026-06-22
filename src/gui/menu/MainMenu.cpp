@@ -108,6 +108,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         m_viewMatchesAct = findNamedChild<QAction>(m_mainWindow, "actionViewMatches");
         m_viewWorkflowReportAct = findNamedChild<QAction>(m_mainWindow, "actionViewWorkflowReport");
         m_cameraConvertAct = findNamedChild<QAction>(m_mainWindow, "actionCameraConvert");
+        m_surveyControlAct = findNamedChild<QAction>(m_mainWindow, "actionSurveyControl");
         m_importReferenceDatasetAct = findNamedChild<QAction>(m_mainWindow, "actionImportReferenceDataset");
         m_referenceQualityCheckAct = findNamedChild<QAction>(m_mainWindow, "actionReferenceQualityCheck");
         m_referenceTerrainBundleAdjustAct = findNamedChild<QAction>(m_mainWindow, "actionReferenceTerrainBundleAdjust");
@@ -178,6 +179,30 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 else
                 {
                     toolsMenu->addAction(m_importReferenceDatasetAct);
+                }
+            }
+        }
+        if (!m_surveyControlAct)
+        {
+            QObject *actionParent = toolsMenu
+                ? static_cast<QObject *>(toolsMenu)
+                : static_cast<QObject *>(m_mainWindow);
+            m_surveyControlAct = new QAction(tr("测绘控制..."), actionParent);
+            m_surveyControlAct->setObjectName(QStringLiteral("actionSurveyControl"));
+            m_surveyControlAct->setToolTip(tr("导入并查看控制点、检查点和比例尺约束"));
+            if (toolsMenu)
+            {
+                if (m_importReferenceDatasetAct)
+                {
+                    toolsMenu->insertAction(m_importReferenceDatasetAct, m_surveyControlAct);
+                }
+                else if (m_viewWorkflowReportAct)
+                {
+                    toolsMenu->insertAction(m_viewWorkflowReportAct, m_surveyControlAct);
+                }
+                else
+                {
+                    toolsMenu->addAction(m_surveyControlAct);
                 }
             }
         }
@@ -401,6 +426,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     m_cameraConvertAct = toolsMenu->addAction(tr("相机格式转换..."));
 
     // 参考数据：外部 DEM/LiDAR 只登记引用，用于精度检查和后续 BA 软约束
+    m_surveyControlAct = toolsMenu->addAction(tr("测绘控制..."));
+    m_surveyControlAct->setObjectName(QStringLiteral("actionSurveyControl"));
+    m_surveyControlAct->setToolTip(tr("导入并查看控制点、检查点和比例尺约束"));
     m_importReferenceDatasetAct = toolsMenu->addAction(tr("导入参考 DEM/LiDAR..."));
     m_importReferenceDatasetAct->setObjectName(QStringLiteral("actionImportReferenceDataset"));
     m_importReferenceDatasetAct->setToolTip(tr("以外部引用方式导入 DEM、LAS/LAZ/COPC 或点云文件，用于精度检查和后续软约束"));
@@ -556,6 +584,7 @@ QAction *MainMenu::generateOrthoAction() const  { return m_generateOrthoAct; }
 QAction *MainMenu::viewWorkflowReportAction() const         { return m_viewWorkflowReportAct; }
 QAction *MainMenu::manualPointCloudPruneAction() const      { return m_manualPointCloudPruneAct; }
 QAction *MainMenu::cameraConvertAction() const              { return m_cameraConvertAct; }
+QAction *MainMenu::surveyControlAction() const              { return m_surveyControlAct; }
 QAction *MainMenu::importReferenceDatasetAction() const     { return m_importReferenceDatasetAct; }
 QAction *MainMenu::referenceQualityCheckAction() const      { return m_referenceQualityCheckAct; }
 QAction *MainMenu::referenceTerrainBundleAdjustAction() const { return m_referenceTerrainBundleAdjustAct; }

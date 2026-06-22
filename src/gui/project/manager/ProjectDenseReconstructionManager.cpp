@@ -1193,7 +1193,8 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
     emit mvsProgressChanged(QStringLiteral("正在加载深度图批次..."), 0);
 
     const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
-    (void)QtConcurrent::run([this,
+    QPointer<ProjectDenseReconstructionManager> self(this);
+    (void)QtConcurrent::run([self,
                              storedFrames,
                              camMap,
                              request,
@@ -1202,14 +1203,26 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                              outputPly,
                              pipelineMode,
                              cancelFlag]() {
+        if (!self)
+        {
+            return;
+        }
         const auto isCancelled = [cancelFlag]() {
             return cancelFlag && cancelFlag->load(std::memory_order_relaxed);
         };
-        const auto finishCancelled = [this, cancelFlag]() {
-            QMetaObject::invokeMethod(this, [this, cancelFlag]() {
-                clearActiveMvsCancelFlag(cancelFlag);
+        const auto finishCancelled = [self, cancelFlag]() {
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, cancelFlag]() {
+                if (!self)
+                {
+                    return;
+                }
+                self->clearActiveMvsCancelFlag(cancelFlag);
                 LOG_INFO(QStringLiteral("[MVS] 深度图融合已取消"));
-                emit mvsProgressFinished(false);
+                emit self->mvsProgressFinished(false);
             }, Qt::QueuedConnection);
         };
 
@@ -1249,10 +1262,18 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                 if (!frameResult.status.ok)
                 {
                     const QString loadError = frameResult.status.errorMessage;
-                    QMetaObject::invokeMethod(this, [this, loadError, cancelFlag]() {
-                        clearActiveMvsCancelFlag(cancelFlag);
-                        emit mvsProgressFinished(false);
-                        QMessageBox::warning(m_parentWidget, QStringLiteral("深度图融合"), loadError);
+                    if (!self)
+                    {
+                        return;
+                    }
+                    QMetaObject::invokeMethod(self.data(), [self, loadError, cancelFlag]() {
+                        if (!self)
+                        {
+                            return;
+                        }
+                        self->clearActiveMvsCancelFlag(cancelFlag);
+                        emit self->mvsProgressFinished(false);
+                        QMessageBox::warning(self->m_parentWidget, QStringLiteral("深度图融合"), loadError);
                     }, Qt::QueuedConnection);
                     return;
                 }
@@ -1266,12 +1287,20 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             }
 
             const int baseProgress = std::clamp((refIndex * 90) / std::max(1, totalFrames), 1, 90);
-            QMetaObject::invokeMethod(this, [this, refIndex, totalFrames, baseProgress, windowSize = frames.size()]() {
-                emit mvsProgressChanged(QStringLiteral("正在加载深度图 %1/%2，窗口 %3 帧")
-                                            .arg(refIndex + 1)
-                                            .arg(totalFrames)
-                                            .arg(static_cast<int>(windowSize)),
-                                        baseProgress);
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, refIndex, totalFrames, baseProgress, windowSize = frames.size()]() {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->mvsProgressChanged(QStringLiteral("正在加载深度图 %1/%2，窗口 %3 帧")
+                                                  .arg(refIndex + 1)
+                                                  .arg(totalFrames)
+                                                  .arg(static_cast<int>(windowSize)),
+                                              baseProgress);
             }, Qt::QueuedConnection);
 
             StereoFusionConfig fusionCfg;
@@ -1296,14 +1325,22 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             std::string fuseErr;
             const bool fuseOk = fusion.fuse(frames,
                                             batchPoints,
-                                            [this, refIndex, totalFrames](const std::string &stage, float ratio) {
-                                                QMetaObject::invokeMethod(this, [this, stage, ratio, refIndex, totalFrames]() {
+                                            [self, refIndex, totalFrames](const std::string &stage, float ratio) {
+                                                if (!self)
+                                                {
+                                                    return;
+                                                }
+                                                QMetaObject::invokeMethod(self.data(), [self, stage, ratio, refIndex, totalFrames]() {
+                                                    if (!self)
+                                                    {
+                                                        return;
+                                                    }
                                                     const int progressValue = std::clamp(
                                                         static_cast<int>(((refIndex + ratio) * 90.0f) /
                                                                          static_cast<float>(std::max(1, totalFrames))),
                                                         1,
                                                         90);
-                                                    emit mvsProgressChanged(
+                                                    emit self->mvsProgressChanged(
                                                         QStringLiteral("流式深度图融合 %1/%2: %3")
                                                             .arg(refIndex + 1)
                                                             .arg(totalFrames)
@@ -1334,10 +1371,18 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             if (!fuseOk)
             {
                 const QString err = QString::fromStdString(fuseErr);
-                QMetaObject::invokeMethod(this, [this, err, cancelFlag]() {
-                    clearActiveMvsCancelFlag(cancelFlag);
-                    emit mvsProgressFinished(false);
-                    QMessageBox::warning(m_parentWidget,
+                if (!self)
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(self.data(), [self, err, cancelFlag]() {
+                    if (!self)
+                    {
+                        return;
+                    }
+                    self->clearActiveMvsCancelFlag(cancelFlag);
+                    emit self->mvsProgressFinished(false);
+                    QMessageBox::warning(self->m_parentWidget,
                                          QStringLiteral("深度图融合"),
                                          QStringLiteral("深度图融合失败：%1").arg(err));
                 }, Qt::QueuedConnection);
@@ -1351,11 +1396,19 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             if ((refIndex + 1) == totalFrames || ((refIndex + 1) % std::max(1, totalFrames / 100)) == 0)
             {
                 const int progressValue = std::clamp(((refIndex + 1) * 90) / std::max(1, totalFrames), 1, 90);
-                QMetaObject::invokeMethod(this, [this, refIndex, totalFrames, progressValue]() {
-                    emit mvsProgressChanged(QStringLiteral("流式深度图融合 %1/%2")
-                                                .arg(refIndex + 1)
-                                                .arg(totalFrames),
-                                            progressValue);
+                if (!self)
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(self.data(), [self, refIndex, totalFrames, progressValue]() {
+                    if (!self)
+                    {
+                        return;
+                    }
+                    emit self->mvsProgressChanged(QStringLiteral("流式深度图融合 %1/%2")
+                                                      .arg(refIndex + 1)
+                                                      .arg(totalFrames),
+                                                  progressValue);
                 }, Qt::QueuedConnection);
             }
         }
@@ -1369,10 +1422,18 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         QString saveError;
         if (!writePointCloudPly(outputPly, pointCloud, keepNormals, &saveError))
         {
-            QMetaObject::invokeMethod(this, [this, saveError, cancelFlag]() {
-                clearActiveMvsCancelFlag(cancelFlag);
-                emit mvsProgressFinished(false);
-                QMessageBox::warning(m_parentWidget,
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, saveError, cancelFlag]() {
+                if (!self)
+                {
+                    return;
+                }
+                self->clearActiveMvsCancelFlag(cancelFlag);
+                emit self->mvsProgressFinished(false);
+                QMessageBox::warning(self->m_parentWidget,
                                      QStringLiteral("深度图融合"),
                                      QStringLiteral("保存密集点云失败：%1").arg(saveError));
             }, Qt::QueuedConnection);
@@ -1386,16 +1447,24 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         }
 
         const int pointCount = static_cast<int>(pointCloud.size());
-        QMetaObject::invokeMethod(this, [this, outputPly, pointCount, pipelineMode, cancelFlag]() {
-            clearActiveMvsCancelFlag(cancelFlag);
-            upsertProjectRecordByPath(m_projectData,
+        if (!self)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, outputPly, pointCount, pipelineMode, cancelFlag]() {
+            if (!self)
+            {
+                return;
+            }
+            self->clearActiveMvsCancelFlag(cancelFlag);
+            upsertProjectRecordByPath(self->m_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
-            emit mvsProgressFinished(true);
+            emit self->mvsProgressFinished(true);
             if (!pipelineMode)
             {
-                QMessageBox::information(m_parentWidget,
+                QMessageBox::information(self->m_parentWidget,
                                          QStringLiteral("深度图融合"),
                                          QStringLiteral("密集点云生成完成，共 %1 个点。").arg(pointCount));
             }
@@ -1606,11 +1675,19 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             qWarning() << "[MVS] 保存失败:" << saveErr;
         }
     });
-    connect(gen, &DepthMapGenerator::finished, this, [this, settings, continueMissingMode](bool success) {
-        if (m_activeMvsGenerator)
+    connect(gen,
+            &DepthMapGenerator::finished,
+            this,
+            [self = QPointer<ProjectDenseReconstructionManager>(this), settings, continueMissingMode](bool success)
+    {
+        if (!self)
         {
-            m_activeMvsGenerator->deleteLater();
-            m_activeMvsGenerator = nullptr;
+            return;
+        }
+        if (self->m_activeMvsGenerator)
+        {
+            self->m_activeMvsGenerator->deleteLater();
+            self->m_activeMvsGenerator = nullptr;
         }
 
         const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
@@ -1618,26 +1695,30 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
         if (!shouldStartFusion)
         {
-            emit mvsProgressFinished(success);
+            emit self->mvsProgressFinished(success);
         }
 
         if (shouldStartFusion)
         {
             if (!pipelineMode)
             {
-                QMessageBox::information(m_parentWidget,
+                QMessageBox::information(self->m_parentWidget,
                                          QStringLiteral("稠密重建"),
                                          QStringLiteral("缺失深度图补齐完成，正在开始融合。"));
             }
-            QMetaObject::invokeMethod(this,
-                                      [this, settings]() {
-                                          startFuseDepthMapsAsync(settings);
+            QMetaObject::invokeMethod(self.data(),
+                                      [self, settings]() {
+                                          if (!self)
+                                          {
+                                              return;
+                                          }
+                                          self->startFuseDepthMapsAsync(settings);
                                       },
                                       Qt::QueuedConnection);
         }
         else if (!pipelineMode)
         {
-            QMessageBox::information(m_parentWidget,
+            QMessageBox::information(self->m_parentWidget,
                                      QStringLiteral("稠密重建"),
                                      success ? QStringLiteral("稠密点云生成完成。")
                                              : QStringLiteral("稠密点云生成失败或被取消。"));
@@ -1693,15 +1774,28 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
     const auto cancelFlag = createActiveMvsCancelFlag();
 
     emit mvsProgressChanged(QStringLiteral("正在加载密集点云..."), 0);
-    (void)QtConcurrent::run([this, inputPly, outputPly, request, pipelineMode, cancelFlag]() {
+    QPointer<ProjectDenseReconstructionManager> self(this);
+    (void)QtConcurrent::run([self, inputPly, outputPly, request, pipelineMode, cancelFlag]() {
+        if (!self)
+        {
+            return;
+        }
         const auto isCancelled = [cancelFlag]() {
             return cancelFlag && cancelFlag->load(std::memory_order_relaxed);
         };
-        const auto finishCancelled = [this, cancelFlag]() {
-            QMetaObject::invokeMethod(this, [this, cancelFlag]() {
-                clearActiveMvsCancelFlag(cancelFlag);
+        const auto finishCancelled = [self, cancelFlag]() {
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, cancelFlag]() {
+                if (!self)
+                {
+                    return;
+                }
+                self->clearActiveMvsCancelFlag(cancelFlag);
                 LOG_INFO(QStringLiteral("[MVS] 密集点云后处理已取消"));
-                emit mvsProgressFinished(false);
+                emit self->mvsProgressFinished(false);
             }, Qt::QueuedConnection);
         };
 
@@ -1709,10 +1803,18 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
         QString loadErr;
         if (!readPointCloudPly(inputPly, &cloud, &loadErr))
         {
-            QMetaObject::invokeMethod(this, [this, loadErr, cancelFlag]() {
-                clearActiveMvsCancelFlag(cancelFlag);
-                emit mvsProgressFinished(false);
-                QMessageBox::warning(m_parentWidget,
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, loadErr, cancelFlag]() {
+                if (!self)
+                {
+                    return;
+                }
+                self->clearActiveMvsCancelFlag(cancelFlag);
+                emit self->mvsProgressFinished(false);
+                QMessageBox::warning(self->m_parentWidget,
                                      QStringLiteral("密集点云后处理"),
                                      QStringLiteral("加载点云失败：%1").arg(loadErr));
             }, Qt::QueuedConnection);
@@ -1724,9 +1826,17 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             return;
         }
 
-        const auto postProgress = [this](const QString &message, int progressValue) {
-            QMetaObject::invokeMethod(this, [this, message, progressValue]() {
-                emit mvsProgressChanged(message, progressValue);
+        const auto postProgress = [self](const QString &message, int progressValue) {
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, message, progressValue]() {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->mvsProgressChanged(message, progressValue);
             }, Qt::QueuedConnection);
         };
         const DenseRefinePreconditionStats precondition =
@@ -1744,8 +1854,16 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 finishCancelled();
                 return;
             }
-            QMetaObject::invokeMethod(this, [this]() {
-                emit mvsProgressChanged(QStringLiteral("统计离群点移除 (SOR)..."), 20);
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self]() {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->mvsProgressChanged(QStringLiteral("统计离群点移除 (SOR)..."), 20);
             }, Qt::QueuedConnection);
 
             const auto beforeSor = cloud.size();
@@ -1802,8 +1920,16 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                     finishCancelled();
                     return;
                 }
-                QMetaObject::invokeMethod(this, [this]() {
-                    emit mvsProgressChanged(QStringLiteral("半径离群点移除..."), 35);
+                if (!self)
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(self.data(), [self]() {
+                    if (!self)
+                    {
+                        return;
+                    }
+                    emit self->mvsProgressChanged(QStringLiteral("半径离群点移除..."), 35);
                 }, Qt::QueuedConnection);
                 const auto beforeRadius = cloud.size();
                 plapoint::ProcessingReport radiusReport;
@@ -1828,8 +1954,16 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 finishCancelled();
                 return;
             }
-            QMetaObject::invokeMethod(this, [this]() {
-                emit mvsProgressChanged(QStringLiteral("体素下采样..."), 50);
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self]() {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->mvsProgressChanged(QStringLiteral("体素下采样..."), 50);
             }, Qt::QueuedConnection);
             const auto beforeVoxel = cloud.size();
             plapoint::ProcessingReport voxelReport;
@@ -1851,8 +1985,16 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 finishCancelled();
                 return;
             }
-            QMetaObject::invokeMethod(this, [this]() {
-                emit mvsProgressChanged(QStringLiteral("估计法向量..."), 70);
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self]() {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->mvsProgressChanged(QStringLiteral("估计法向量..."), 70);
             }, Qt::QueuedConnection);
 
             plapoint::ProcessingReport normalReport;
@@ -1871,18 +2013,34 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             finishCancelled();
             return;
         }
-        QMetaObject::invokeMethod(this, [this]() {
-            emit mvsProgressChanged(QStringLiteral("保存后处理结果..."), 90);
+        if (!self)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self]() {
+            if (!self)
+            {
+                return;
+            }
+            emit self->mvsProgressChanged(QStringLiteral("保存后处理结果..."), 90);
         }, Qt::QueuedConnection);
 
         const bool writeNormalsOut = request.normalsEnabled && cloud.hasNormals();
         QString saveErr;
         if (!writePointCloudPly(outputPly, cloud, writeNormalsOut, &saveErr))
         {
-            QMetaObject::invokeMethod(this, [this, saveErr, cancelFlag]() {
-                clearActiveMvsCancelFlag(cancelFlag);
-                emit mvsProgressFinished(false);
-                QMessageBox::warning(m_parentWidget,
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, saveErr, cancelFlag]() {
+                if (!self)
+                {
+                    return;
+                }
+                self->clearActiveMvsCancelFlag(cancelFlag);
+                emit self->mvsProgressFinished(false);
+                QMessageBox::warning(self->m_parentWidget,
                                      QStringLiteral("密集点云后处理"),
                                      QStringLiteral("保存点云失败：%1").arg(saveErr));
             }, Qt::QueuedConnection);
@@ -1896,20 +2054,28 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
         }
 
         const int pointCount = static_cast<int>(cloud.size());
-        QMetaObject::invokeMethod(this, [this, outputPly, pointCount, pipelineMode, cancelFlag]() {
-            clearActiveMvsCancelFlag(cancelFlag);
-            upsertProjectRecordByPath(m_projectData,
+        if (!self)
+        {
+            return;
+        }
+        QMetaObject::invokeMethod(self.data(), [self, outputPly, pointCount, pipelineMode, cancelFlag]() {
+            if (!self)
+            {
+                return;
+            }
+            self->clearActiveMvsCancelFlag(cancelFlag);
+            upsertProjectRecordByPath(self->m_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
-            if (m_owner)
+            if (self->m_owner)
             {
-                m_owner->refreshReconstructionQualityReport();
+                self->m_owner->refreshReconstructionQualityReport();
             }
-            emit mvsProgressFinished(true);
+            emit self->mvsProgressFinished(true);
             if (!pipelineMode)
             {
-                QMessageBox::information(m_parentWidget,
+                QMessageBox::information(self->m_parentWidget,
                                          QStringLiteral("密集点云后处理"),
                                          QStringLiteral("后处理完成，共 %1 个点。").arg(pointCount));
             }

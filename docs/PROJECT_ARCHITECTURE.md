@@ -112,7 +112,7 @@ core/
 │   └── GroundBackProjector.h/cpp  # 地面投影
 │
 ├── bundle_adjust/              # 光束法平差
-│   └── BundleAdjust.h/cpp      # BA 优化，可选 LiDAR 点到面软约束
+│   └── BundleAdjust.h/cpp      # BA 优化，可选 LiDAR 点到面、控制点和比例尺软约束
 │
 ├── lidar/                      # LiDAR / 激光点约束
 │   ├── LaserConstraintTypes.h  # 点到面约束、地图采样和关联统计类型
@@ -134,7 +134,7 @@ core/
 │   │   ├── SfmPointCloudFilter.h/cpp       # 点云过滤
 │   │   └── SparsePointCloudProcessor.h/cpp # 稀疏点云后处理
 │   ├── ReferenceTerrainPrior.h/cpp # 参考 DEM/LiDAR 局部地形面作为 BA soft prior
-│   ├── BaInputBuilder.h/cpp    # BA 输入构建器
+│   ├── BaInputBuilder.h/cpp    # BA 输入构建器，合并匹配 tracks 与 Survey Control 约束
 │   └── TriangulationService.h/cpp  # 三角化服务
 │
 ├── mvs/                        # Multi-View Stereo：深度图 manifest、source planning、流式融合
@@ -199,7 +199,9 @@ core/
 │   └── tests/ (5 个测试)
 │
 ├── qc/                         # 重建质量检查和外部参考验证
-│   ├── ReconstructionQualityReport.h/cpp # 注册影像、track、重投影、MVS/DEM 覆盖率报告
+│   ├── ReconstructionQualityReport.h/cpp # 注册影像、track、重投影、MVS/DEM 覆盖率、GCP/检查点/比例尺报告
+│   ├── SurveyControlImport.h/cpp # GCP/检查点/比例尺 CSV 导入为 survey_control metadata
+│   ├── SurveyControlReport.h/cpp # GCP/检查点/比例尺 metadata 统计和残差状态汇总
 │   ├── PointCloudAlignment.h/cpp # 点云 Sim3 / 最近邻平移配准与 beg/end error CSV
 │   └── DemDifference.h/cpp     # DEM 差分、绝对差分和统计报告
 │
@@ -235,7 +237,7 @@ gui/
 ├── menu/
 │   └── MainMenu.h/cpp          # 菜单栏/工具栏构建 (所有 QAction 创建)
 │
-├── dialogs/                    # 对话框 (30 个)
+├── dialogs/                    # 对话框 (31 个)
 │   ├── FeatureMatchingDialog.h/cpp          # 特征匹配参数
 │   ├── FeatureExtractionDialog.h/cpp/ui     # 多算法特征提取参数
 │   ├── DenseMatchDialog.h/cpp/Ui.cpp        # 密集匹配参数 (新增)
@@ -255,6 +257,7 @@ gui/
 │   ├── ForwardIntersectionResultsDialog.h/cpp  # 前方交汇结果
 │   ├── CameraModel3DDialog.h/cpp            # 相机模型 3D 查看
 │   ├── CameraConvertDialog.h/cpp            # 外部相机格式转换
+│   ├── SurveyControlDialog.h/cpp            # 控制点/检查点/比例尺导入和查看
 │   ├── CreateDemDialog.h/cpp                # DEM 生成参数
 │   ├── MapProjectDialog.h/cpp               # 地图投影参数
 │   ├── ModelGenerationDialog.h/cpp          # 模型生成
@@ -316,6 +319,7 @@ gui/
 │       ├── ProjectResultRecords.h/cpp               # 结果记录
 │       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流
 │       ├── ProjectSparseWorkflow.h/cpp              # 稀疏工作流
+│       ├── ProjectSurveyControl.h/cpp               # GCP/检查点/比例尺 CSV 导入和项目 metadata 持久化
 │       ├── ProjectWorkflowUtils.h/cpp               # 工作流工具
 │       └── ProjectWorkflowReports.h/cpp             # 工作流报告
 │
