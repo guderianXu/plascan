@@ -55,6 +55,26 @@ struct DirectDepthDemInput
     int loadedFrameCount = 0;
 };
 
+struct DirectDepthDemFrameRequest
+{
+    xjw::core::project::StoredDepthFrameRecord frame;
+    xjw::Camera camera;
+};
+
+struct DirectDepthDemRequest
+{
+    std::vector<DirectDepthDemFrameRequest> frames;
+    QString batchDir;
+    int availableFrameCount = 0;
+};
+
+struct AutomaticDemGenerationTaskResult
+{
+    bool ok = false;
+    QString error;
+    QJsonObject terrainResult;
+};
+
 struct DemPipelineConnectionState
 {
     QMetaObject::Connection metadataConnection;
@@ -129,12 +149,12 @@ bool cameraForTerrainImagePath(const QMap<QString, xjw::Camera> &camMap,
     return true;
 }
 
-bool loadDirectDepthDemInput(const QJsonObject &projectMeta,
-                             ProjectManager *owner,
-                             DirectDepthDemInput *input,
-                             QString *errorMsg)
+bool prepareDirectDepthDemRequest(const QJsonObject &projectMeta,
+                                  ProjectManager *owner,
+                                  DirectDepthDemRequest *request,
+                                  QString *errorMsg)
 {
-    if (!owner || !input)
+    if (!owner || !request)
     {
         if (errorMsg)
         {
@@ -165,13 +185,12 @@ bool loadDirectDepthDemInput(const QJsonObject &projectMeta,
     Q_UNUSED(allCamerasFound);
 
     constexpr int kMaxDirectDepthFrames = 32;
-    constexpr int kMaxDirectDepthSide = 2048;
-    input->batchDir = storedFramesResult.batchDir;
-    input->availableFrameCount = static_cast<int>(storedFramesResult.frames.size());
+    request->batchDir = storedFramesResult.batchDir;
+    request->availableFrameCount = static_cast<int>(storedFramesResult.frames.size());
 
     for (const auto &frame : storedFramesResult.frames)
     {
-        if (input->loadedFrameCount >= kMaxDirectDepthFrames)
+        if (static_cast<int>(request->frames.size()) >= kMaxDirectDepthFrames)
         {
             break;
         }
@@ -183,6 +202,42 @@ bool loadDirectDepthDemInput(const QJsonObject &projectMeta,
             continue;
         }
 
+        request->frames.push_back(DirectDepthDemFrameRequest{frame, camera});
+    }
+
+    if (request->frames.empty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("最近深度图批次没有可用于 DEM 的深度图/相机组合");
+        }
+        return false;
+    }
+
+    return true;
+}
+
+bool loadDirectDepthDemInput(const DirectDepthDemRequest &request,
+                             DirectDepthDemInput *input,
+                             QString *errorMsg)
+{
+    if (!input)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("内部错误：DEM 深度图输入参数无效");
+        }
+        return false;
+    }
+
+    constexpr int kMaxDirectDepthSide = 2048;
+    input->batchDir = request.batchDir;
+    input->availableFrameCount = request.availableFrameCount;
+
+    for (const auto &entry : request.frames)
+    {
+        xjw::Camera camera = entry.camera;
+        const auto &frame = entry.frame;
         cv::Mat depthMap;
         const auto loadStatus = loadDepthMatStorage(frame.rawDepthPath, &depthMap);
         if (!loadStatus.ok || depthMap.empty())
@@ -229,6 +284,89 @@ bool loadDirectDepthDemInput(const QJsonObject &projectMeta,
     }
 
     return true;
+}
+
+AutomaticDemGenerationTaskResult runAutomaticDemGenerationTask(const DirectDepthDemRequest &directDepthRequest,
+                                                               const QString &directDepthError,
+                                                               const QString &plyPath,
+                                                               const QString &outDir,
+                                                               double demResolution,
+                                                               const QString &demType)
+{
+    AutomaticDemGenerationTaskResult result;
+    QJsonObject terrainResult;
+    bool demOk = false;
+    QString fallbackError;
+
+    if (!directDepthRequest.frames.empty())
+    {
+        DirectDepthDemInput directDepthInput;
+        QString loadError;
+        if (loadDirectDepthDemInput(directDepthRequest, &directDepthInput, &loadError))
+        {
+            LOG_INFO(QStringLiteral("[DEM流水线] 使用深度图直接生成 DEM: loaded=%1/%2 batch=%3")
+                         .arg(directDepthInput.loadedFrameCount)
+                         .arg(directDepthInput.availableFrameCount)
+                         .arg(directDepthInput.batchDir));
+            QString demErr;
+            demOk = xjw::TerrainPipeline::generateDemFromDepthMaps(
+                directDepthInput.depthMaps,
+                directDepthInput.cameras,
+                outDir,
+                &terrainResult,
+                &demErr);
+            if (!demOk)
+            {
+                LOG_ERROR(QStringLiteral("[DEM流水线] 深度图直接 DEM 失败: %1，回退到点云方法").arg(demErr));
+                fallbackError = demErr;
+            }
+            else
+            {
+                terrainResult[QStringLiteral("depth_input_source")] = QStringLiteral("mvs_depth_map_results");
+                terrainResult[QStringLiteral("depth_input_batch_dir")] = directDepthInput.batchDir;
+                terrainResult[QStringLiteral("depth_input_available_count")] = directDepthInput.availableFrameCount;
+                terrainResult[QStringLiteral("depth_input_loaded_count")] = directDepthInput.loadedFrameCount;
+            }
+        }
+        else
+        {
+            LOG_WARN(QStringLiteral("[DEM流水线] 深度图直接 DEM 输入加载失败: %1，回退到点云方法")
+                         .arg(loadError));
+            fallbackError = loadError;
+        }
+    }
+    else
+    {
+        LOG_WARN(QStringLiteral("[DEM流水线] 深度图直接 DEM 输入不可用: %1，回退到点云方法")
+                     .arg(directDepthError));
+        fallbackError = directDepthError;
+    }
+
+    if (!demOk)
+    {
+        LOG_INFO(QStringLiteral("[DEM流水线] 使用点云方法生成 DEM"));
+        const auto terrainRun = runDemProducts(plyPath, outDir, demResolution, demType, false);
+        demOk = terrainRun.ok;
+        if (terrainRun.ok)
+        {
+            terrainResult = terrainRun.payload;
+        }
+        else
+        {
+            LOG_ERROR(QStringLiteral("[DEM流水线] 点云 DEM 失败: %1").arg(terrainRun.error));
+            fallbackError = terrainRun.error;
+        }
+    }
+
+    if (!demOk)
+    {
+        result.error = fallbackError.isEmpty() ? QStringLiteral("DEM 生成失败") : fallbackError;
+        return result;
+    }
+
+    result.ok = true;
+    result.terrainResult = terrainResult;
+    return result;
 }
 
 } // namespace
@@ -887,100 +1025,82 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                                                                demOutputDir.trimmed(),
                                                                QStringLiteral("assets/dem/relative_dem"));
 
-                // 优先使用最近一次 MVS 深度图直接生成 DEM（覆盖率接近 100%）
-                QJsonObject terrainResult;
-                bool demOk = false;
-
-                DirectDepthDemInput directDepthInput;
+                DirectDepthDemRequest directDepthRequest;
                 QString directDepthError;
-                if (loadDirectDepthDemInput(metaChanged, self->m_owner, &directDepthInput, &directDepthError))
+                if (!prepareDirectDepthDemRequest(metaChanged, self->m_owner, &directDepthRequest, &directDepthError))
                 {
-                    LOG_INFO(QStringLiteral("[DEM流水线] 使用深度图直接生成 DEM: loaded=%1/%2 batch=%3")
-                                 .arg(directDepthInput.loadedFrameCount)
-                                 .arg(directDepthInput.availableFrameCount)
-                                 .arg(directDepthInput.batchDir));
-                    QString demErr;
-                    demOk = xjw::TerrainPipeline::generateDemFromDepthMaps(
-                        directDepthInput.depthMaps,
-                        directDepthInput.cameras,
-                        outDir,
-                        &terrainResult,
-                        &demErr);
-                    if (!demOk)
-                    {
-                        LOG_ERROR(QStringLiteral("[DEM流水线] 深度图直接 DEM 失败: %1，回退到点云方法").arg(demErr));
-                    }
-                    else
-                    {
-                        terrainResult[QStringLiteral("depth_input_source")] = QStringLiteral("mvs_depth_map_results");
-                        terrainResult[QStringLiteral("depth_input_batch_dir")] = directDepthInput.batchDir;
-                        terrainResult[QStringLiteral("depth_input_available_count")] = directDepthInput.availableFrameCount;
-                        terrainResult[QStringLiteral("depth_input_loaded_count")] = directDepthInput.loadedFrameCount;
-                    }
-                }
-                else
-                {
-                    LOG_WARN(QStringLiteral("[DEM流水线] 深度图直接 DEM 输入不可用: %1，回退到点云方法")
+                    LOG_WARN(QStringLiteral("[DEM流水线] 深度图直接 DEM 输入不可用: %1，后台任务将回退到点云方法")
                                  .arg(directDepthError));
                 }
 
-                // 回退：使用点云方法
-                if (!demOk)
-                {
-                    LOG_INFO(QStringLiteral("[DEM流水线] 使用点云方法生成 DEM"));
-                    const auto terrainRun = runDemProducts(plyPath, outDir, demResolution, demType, false);
-                    demOk = terrainRun.ok;
-                    if (terrainRun.ok)
+                const QString projectPath = self->m_owner ? self->m_owner->currentProjectPath() : QString();
+                xjw::gui::tasks::runGuarded(
+                    self.data(),
+                    [directDepthRequest, directDepthError, plyPath, outDir, demResolution, demType]()
                     {
-                        terrainResult = terrainRun.payload;
-                    }
-                    else
+                        return runAutomaticDemGenerationTask(
+                            directDepthRequest,
+                            directDepthError,
+                            plyPath,
+                            outDir,
+                            demResolution,
+                            demType);
+                    },
+                    [projectPath, plyPath, outDir, demResolution, demType](
+                        ProjectTerrainProductsManager *manager,
+                        const AutomaticDemGenerationTaskResult &taskResult)
                     {
-                        LOG_ERROR(QStringLiteral("[DEM流水线] 点云 DEM 失败: %1").arg(terrainRun.error));
-                        QMessageBox::warning(self->m_parentWidget,
-                                             QStringLiteral("创建相对 DEM"),
-                                             QStringLiteral("处理失败：%1").arg(terrainRun.error));
-                    }
-                }
+                        if (!manager->m_owner ||
+                            !manager->m_projectData ||
+                            manager->m_owner->currentProjectPath() != projectPath)
+                        {
+                            return;
+                        }
 
-                if (!demOk)
-                {
-                    LOG_ERROR(QStringLiteral("[DEM流水线] ✗ DEM 生成失败"));
-                    emit self->demPipelineFinished(false, QStringLiteral("DEM 生成失败"));
-                    return;
-                }
+                        if (!taskResult.ok)
+                        {
+                            LOG_ERROR(QStringLiteral("[DEM流水线] ✗ DEM 生成失败: %1").arg(taskResult.error));
+                            QMessageBox::warning(manager->m_parentWidget,
+                                                 QStringLiteral("创建相对 DEM"),
+                                                 QStringLiteral("处理失败：%1").arg(taskResult.error));
+                            emit manager->demPipelineFinished(false, QStringLiteral("DEM 生成失败"));
+                            return;
+                        }
 
-                QJsonObject metaUpdated = self->m_projectData->metadata();
-                QJsonObject demResult = makeDemResultRecord(
-                    terrainResult.value(QStringLiteral("created_at")).toString(),
-                    outDir, QString(),
-                    terrainResult.value(QStringLiteral("dem_tif")).toString(),
-                    demType, demResolution, QString(), QStringList());
-                demResult[QStringLiteral("source_dense_cloud")] = plyPath;
-                demResult[QStringLiteral("dem_reference")] = QStringLiteral("relative");
-                demResult[QStringLiteral("depth_preview_png")] = terrainResult.value(QStringLiteral("depth_png")).toString();
-                demResult[QStringLiteral("relative_z_offset")] = terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
-                demResult[QStringLiteral("method")] = terrainResult.value(QStringLiteral("method")).toString();
-                demResult[QStringLiteral("depth_input_source")] =
-                    terrainResult.value(QStringLiteral("depth_input_source")).toString();
-                demResult[QStringLiteral("depth_input_batch_dir")] =
-                    terrainResult.value(QStringLiteral("depth_input_batch_dir")).toString();
-                demResult[QStringLiteral("depth_input_available_count")] =
-                    terrainResult.value(QStringLiteral("depth_input_available_count")).toInt(0);
-                demResult[QStringLiteral("depth_input_loaded_count")] =
-                    terrainResult.value(QStringLiteral("depth_input_loaded_count")).toInt(0);
-                upsertMetaArrayRecordByPath(&metaUpdated, QStringLiteral("dem_results"),
-                                            QStringLiteral("dem_tif"), demResult);
-                persistProjectMeta(self->m_projectData, metaUpdated, true);
-                if (self->m_owner)
-                {
-                    self->m_owner->refreshReconstructionQualityReport();
-                }
+                        QJsonObject metaUpdated = manager->m_projectData->metadata();
+                        const QJsonObject terrainResult = taskResult.terrainResult;
+                        QJsonObject demResult = makeDemResultRecord(
+                            terrainResult.value(QStringLiteral("created_at")).toString(),
+                            outDir, QString(),
+                            terrainResult.value(QStringLiteral("dem_tif")).toString(),
+                            demType, demResolution, QString(), QStringList());
+                        demResult[QStringLiteral("source_dense_cloud")] = plyPath;
+                        demResult[QStringLiteral("dem_reference")] = QStringLiteral("relative");
+                        demResult[QStringLiteral("depth_preview_png")] =
+                            terrainResult.value(QStringLiteral("depth_png")).toString();
+                        demResult[QStringLiteral("relative_z_offset")] =
+                            terrainResult.value(QStringLiteral("relative_z_offset")).toDouble(0.0);
+                        demResult[QStringLiteral("method")] = terrainResult.value(QStringLiteral("method")).toString();
+                        demResult[QStringLiteral("depth_input_source")] =
+                            terrainResult.value(QStringLiteral("depth_input_source")).toString();
+                        demResult[QStringLiteral("depth_input_batch_dir")] =
+                            terrainResult.value(QStringLiteral("depth_input_batch_dir")).toString();
+                        demResult[QStringLiteral("depth_input_available_count")] =
+                            terrainResult.value(QStringLiteral("depth_input_available_count")).toInt(0);
+                        demResult[QStringLiteral("depth_input_loaded_count")] =
+                            terrainResult.value(QStringLiteral("depth_input_loaded_count")).toInt(0);
+                        upsertMetaArrayRecordByPath(&metaUpdated,
+                                                    QStringLiteral("dem_results"),
+                                                    QStringLiteral("dem_tif"),
+                                                    demResult);
+                        persistProjectMeta(manager->m_projectData, metaUpdated, true);
+                        manager->m_owner->refreshReconstructionQualityReport();
 
-                LOG_INFO(QStringLiteral("[DEM流水线] ✓ DEM 生成完成: %1")
-                             .arg(terrainResult.value(QStringLiteral("dem_tif")).toString()));
-                emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
-                emit self->demPipelineFinished(true, QStringLiteral("DEM 流水线已完成"));
+                        LOG_INFO(QStringLiteral("[DEM流水线] ✓ DEM 生成完成: %1")
+                                     .arg(terrainResult.value(QStringLiteral("dem_tif")).toString()));
+                        emit manager->demPipelineProgressChanged(QStringLiteral("完成"), 100);
+                        emit manager->demPipelineFinished(true, QStringLiteral("DEM 流水线已完成"));
+                    });
             });
 
         // 同时监听 MVS 失败

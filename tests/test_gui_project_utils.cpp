@@ -1044,6 +1044,33 @@ TEST(TerrainPipelineAsyncTest, AutoDemPipelineConnectionsUseSharedCleanupState)
     EXPECT_FALSE(source.contains(QStringLiteral("delete connMvsFail")));
 }
 
+TEST(TerrainPipelineAsyncTest, AutoDemGenerationRunsOffGuiThreadAfterMvs)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(
+        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
+    ASSERT_GE(start, 0);
+    const QString block = source.mid(start);
+
+    const int metadataStart = block.indexOf(QStringLiteral("projectMetadataChanged"));
+    ASSERT_GE(metadataStart, 0);
+    const int mvsFailureStart = block.indexOf(QStringLiteral("// 同时监听 MVS 失败"), metadataStart);
+    ASSERT_GT(mvsFailureStart, metadataStart);
+    const QString metadataBlock = block.mid(metadataStart, mvsFailureStart - metadataStart);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("runAutomaticDemGenerationTask")))
+        << "The expensive DEM generation work should be isolated in a worker helper.";
+    EXPECT_TRUE(metadataBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "MVS success should start DEM generation through the guarded GUI task runner.";
+    EXPECT_FALSE(metadataBlock.contains(QStringLiteral("xjw::TerrainPipeline::generateDemFromDepthMaps(")))
+        << "Depth-map DEM rasterization must not run inside the GUI metadata callback.";
+    EXPECT_FALSE(metadataBlock.contains(QStringLiteral("runDemProducts(plyPath")))
+        << "Dense-cloud fallback DEM rasterization must not run inside the GUI metadata callback.";
+}
+
 TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)
 {
     const QString source = readProjectSourceFile(
