@@ -11,6 +11,7 @@
 #include "ProjectCameraImportService.h"
 #include "FeatureExtractionRunner.h"
 #include "FeatureMatchRunner.h"
+#include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "Camera.h"
 #include "TerrainPipeline.h"
@@ -467,14 +468,17 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
     // demPipelineFinished 由信号链末端（DEM完成或失败）发出，不在此处发出
     LOG_INFO(QStringLiteral("[DEM流水线] 启动后台任务（特征提取+匹配）..."));
     QPointer<ProjectTerrainProductsManager> self(this);
-    (void)QtConcurrent::run([self, ctx]()
-    {
-        if (!self)
+    xjw::gui::tasks::runGuarded(
+        this,
+        [self, ctx]()
         {
-            return;
-        }
-        self->runFullDemPipelineInBackground(ctx);
-    });
+            if (!self)
+            {
+                return;
+            }
+            self->runFullDemPipelineInBackground(ctx);
+        },
+        [](ProjectTerrainProductsManager *) {});
 }
 
 void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &denseCloudPath,

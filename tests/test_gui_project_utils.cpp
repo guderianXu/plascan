@@ -1084,6 +1084,50 @@ TEST(GuiAsyncLifetimeTest, TerrainAndDenseBackgroundCallbacksUseQPointerGuards)
     EXPECT_TRUE(managerSource.contains(QStringLiteral("QPointer<ProjectManager> self(this)")));
 }
 
+TEST(GuiAsyncLifetimeTest, GuiTaskRunnerChecksOwnerBeforeStartingWork)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int runGuardedStart = source.indexOf(QStringLiteral("void runGuarded"));
+    ASSERT_GE(runGuardedStart, 0);
+    const int workerLaunch = source.indexOf(QStringLiteral("(void)QtConcurrent::run"), runGuardedStart);
+    ASSERT_GE(workerLaunch, 0);
+    const int workCall = source.indexOf(QStringLiteral("(*workPtr)();"), workerLaunch);
+    ASSERT_GE(workCall, 0);
+    const QString beforeWork = source.mid(workerLaunch, workCall - workerLaunch);
+
+    EXPECT_TRUE(beforeWork.contains(QStringLiteral("if (!self)")))
+        << "Guarded background tasks must not start work after their GUI owner has been destroyed.";
+}
+
+TEST(GuiAsyncLifetimeTest, FullDemPipelineUsesGuardedTaskRunner)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startFullDemPipelineAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ProjectTerrainProductsManager::startDemFromDenseCloudAsync"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "The full DEM pipeline worker should use the shared guarded runner.";
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectTerrainProductsManager> self(this)")))
+        << "The worker should not capture the DEM manager as a raw this pointer.";
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, ctx]()")))
+        << "The worker should capture the guarded pointer and context only.";
+    EXPECT_TRUE(block.contains(QStringLiteral("runFullDemPipelineInBackground(ctx)")))
+        << "The existing background implementation should remain off the GUI thread.";
+    EXPECT_FALSE(block.contains(QStringLiteral("QtConcurrent::run([self, ctx")))
+        << "Do not open-code QtConcurrent for GUI-owned long-running workflows.";
+    EXPECT_FALSE(block.contains(QStringLiteral("[this, ctx]()")))
+        << "The guarded runner cannot protect a work closure that captures raw this.";
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));

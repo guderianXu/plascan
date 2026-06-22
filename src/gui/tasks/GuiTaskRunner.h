@@ -51,6 +51,11 @@ void runGuarded(Owner *owner, Work &&work, Finished &&finished)
 
     (void)QtConcurrent::run([self, workPtr, finishedPtr]() mutable
     {
+        if (!self)
+        {
+            return;
+        }
+
         if constexpr (std::is_void_v<Result>)
         {
             (*workPtr)();
