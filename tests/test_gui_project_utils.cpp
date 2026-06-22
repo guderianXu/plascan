@@ -1208,6 +1208,41 @@ TEST(GuiAsyncLifetimeTest, GenerateDenseCloudCallbacksUseQPointerGuard)
     EXPECT_FALSE(block.contains(QStringLiteral("[self = QPointer<ProjectDenseReconstructionManager>(this)")));
 }
 
+TEST(GuiAsyncLifetimeTest, DepthMapSparsePreloadWorkersGuardGeneratorLifetime)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const auto blockBetween = [&source](const QString &begin, const QString &finish) {
+        const int start = source.indexOf(begin);
+        EXPECT_GE(start, 0);
+        const int end = source.indexOf(finish, start);
+        EXPECT_GT(end, start);
+        return source.mid(start, end - start);
+    };
+
+    const QString estimateBlock = blockBetween(
+        QStringLiteral("void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync"),
+        QStringLiteral("void ProjectDenseReconstructionManager::startFuseDepthMapsAsync"));
+    const QString denseBlock = blockBetween(
+        QStringLiteral("void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"),
+        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"));
+
+    for (const QString &block : {estimateBlock, denseBlock})
+    {
+        EXPECT_TRUE(block.contains(QStringLiteral("QPointer<DepthMapGenerator> genSelf(gen)")))
+            << "Sparse preload workers should guard the generator before leaving the GUI thread.";
+        EXPECT_TRUE(block.contains(QStringLiteral("QtConcurrent::run([genSelf, sparseXyz, views, request]()")))
+            << "The worker should capture the guarded generator pointer, not raw gen.";
+        EXPECT_TRUE(block.contains(QStringLiteral("QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]()")))
+            << "Sparse cloud handoff should be posted back through the guarded generator.";
+        EXPECT_FALSE(block.contains(QStringLiteral("QtConcurrent::run([gen, sparseXyz, views, request]()")));
+        EXPECT_FALSE(block.contains(QStringLiteral("gen->setSparseCloud(sparse)")));
+        EXPECT_FALSE(block.contains(QStringLiteral("QMetaObject::invokeMethod(gen, \"start\"")));
+    }
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));

@@ -204,10 +204,19 @@ class MvsSchedulerConfigTest(unittest.TestCase):
     def test_dense_sparse_preload_respects_cancel_before_starting_mvs(self):
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
 
-        self.assertGreaterEqual(manager.count("if (gen->isCancelled())"), 2)
+        self.assertGreaterEqual(manager.count("QPointer<DepthMapGenerator> genSelf(gen)"), 2)
+        self.assertGreaterEqual(manager.count("QtConcurrent::run([genSelf, sparseXyz, views, request]()"), 2)
+        self.assertGreaterEqual(manager.count("if (genSelf->isCancelled())"), 2)
         self.assertGreaterEqual(manager.count("return;"), 2)
-        self.assertGreaterEqual(manager.count('QMetaObject::invokeMethod(gen, "finished"'), 2)
+        self.assertGreaterEqual(manager.count('QMetaObject::invokeMethod(genSelf.data(), "finished"'), 2)
+        self.assertGreaterEqual(
+            manager.count("QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]()"),
+            2,
+        )
         self.assertIn("Q_ARG(bool, false)", manager)
+        self.assertNotIn("QtConcurrent::run([gen, sparseXyz, views, request]()", manager)
+        self.assertNotIn("gen->setSparseCloud(sparse)", manager)
+        self.assertNotIn('QMetaObject::invokeMethod(gen, "start"', manager)
 
     def test_depth_artifact_saving_uses_fast_binary_and_timing_logs(self):
         scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")

@@ -1135,7 +1135,8 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     m_activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
-    (void)QtConcurrent::run([gen, sparseXyz, views, request]() {
+    QPointer<DepthMapGenerator> genSelf(gen);
+    (void)QtConcurrent::run([genSelf, sparseXyz, views, request]() {
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
@@ -1147,13 +1148,24 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                 sparse = ppRes.cloud;
             }
         }
-        if (gen->isCancelled())
+        if (!genSelf)
         {
-            QMetaObject::invokeMethod(gen, "finished", Qt::QueuedConnection, Q_ARG(bool, false));
             return;
         }
-        gen->setSparseCloud(sparse);
-        QMetaObject::invokeMethod(gen, "start", Qt::QueuedConnection);
+        auto sparseCloud = std::make_shared<SparseCloud>(std::move(sparse));
+        QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]() {
+            if (!genSelf)
+            {
+                return;
+            }
+            if (genSelf->isCancelled())
+            {
+                QMetaObject::invokeMethod(genSelf.data(), "finished", Qt::QueuedConnection, Q_ARG(bool, false));
+                return;
+            }
+            genSelf->setSparseCloud(*sparseCloud);
+            genSelf->start();
+        }, Qt::QueuedConnection);
     });
 }
 
@@ -1754,7 +1766,8 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
     m_activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
-    (void)QtConcurrent::run([gen, sparseXyz, views, request]() {
+    QPointer<DepthMapGenerator> genSelf(gen);
+    (void)QtConcurrent::run([genSelf, sparseXyz, views, request]() {
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
@@ -1766,13 +1779,24 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                 sparse = ppRes.cloud;
             }
         }
-        if (gen->isCancelled())
+        if (!genSelf)
         {
-            QMetaObject::invokeMethod(gen, "finished", Qt::QueuedConnection, Q_ARG(bool, false));
             return;
         }
-        gen->setSparseCloud(sparse);
-        QMetaObject::invokeMethod(gen, "start", Qt::QueuedConnection);
+        auto sparseCloud = std::make_shared<SparseCloud>(std::move(sparse));
+        QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]() {
+            if (!genSelf)
+            {
+                return;
+            }
+            if (genSelf->isCancelled())
+            {
+                QMetaObject::invokeMethod(genSelf.data(), "finished", Qt::QueuedConnection, Q_ARG(bool, false));
+                return;
+            }
+            genSelf->setSparseCloud(*sparseCloud);
+            genSelf->start();
+        }, Qt::QueuedConnection);
     });
 }
 
