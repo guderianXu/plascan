@@ -96,7 +96,7 @@ private:
     QFutureWatcher<QImage> *m_imageWatcher{nullptr};
     // cache: imagePath -> (lastModified, keypoints)
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> m_spCache;
-    int m_featureLoadGen{0};
+    int _featureLoadGeneration{0};
 
     // 缩放限制（避免无限放大/缩小导致精度或性能问题）
     double m_zoomFactor{1.0};

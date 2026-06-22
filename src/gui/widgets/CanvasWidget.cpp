@@ -418,7 +418,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     const QString activeSuffix = m_activeFeatureSuffix;
     const QString projectPath = property("currentProjectPath").toString();
     const bool shouldEstimateOrientation = m_currentFeatureOpts.showOrientation;
-    const int gen = ++m_featureLoadGen;
+    const int generation = ++_featureLoadGeneration;
     // 检查缓存 (key 含 suffix)
     QFileInfo fiCheck(imagePathCopy);
     const QString cacheKey = imagePathCopy + activeSuffix;
@@ -505,7 +505,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     auto *watcher = new QFutureWatcher<std::vector<cv::KeyPoint>>(this);
     m_spWatcher = watcher;
     connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,
-            this, [self, watcher, imagePathCopy, activeSuffix, gen]()
+            this, [self, watcher, imagePathCopy, activeSuffix, generation]()
     {
         if (!self)
         {
@@ -520,7 +520,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
         watcher->deleteLater();
 
-        if (gen != self->m_featureLoadGen)
+        if (generation != self->_featureLoadGeneration)
         {
             return;
         }

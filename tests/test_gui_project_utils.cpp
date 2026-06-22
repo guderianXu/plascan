@@ -1611,12 +1611,12 @@ TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
 
-    EXPECT_TRUE(header.contains(QStringLiteral("int m_featureLoadGen{0}")));
+    EXPECT_TRUE(header.contains(QStringLiteral("int _featureLoadGeneration{0}")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
-    EXPECT_TRUE(block.contains(QStringLiteral("const int gen = ++m_featureLoadGen")));
+    EXPECT_TRUE(block.contains(QStringLiteral("const int generation = ++_featureLoadGeneration")));
     EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
-    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, imagePathCopy, activeSuffix, gen]()")));
-    EXPECT_TRUE(block.contains(QStringLiteral("gen != self->m_featureLoadGen")))
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, imagePathCopy, activeSuffix, generation]()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
         << "Late feature-load completions from an older image/suffix must not update the current canvas.";
     EXPECT_TRUE(block.contains(QStringLiteral("const QString key = imagePathCopy + activeSuffix")));
     EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpPath")));
@@ -4319,7 +4319,7 @@ TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage
     ASSERT_GE(finishedIndex, 0);
     const QString finishedBlock = source.mid(finishedIndex, 2200);
 
-    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("gen != self->m_featureLoadGen")))
+    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
         << "Late completions must be dropped after another image/suffix request starts.";
     EXPECT_TRUE(finishedBlock.contains(
         QStringLiteral("QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->m_currentImagePath)")));
