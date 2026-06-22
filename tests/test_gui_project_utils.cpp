@@ -3646,20 +3646,20 @@ TEST(FeatureVisualizationSettingsTest, PersistsAndRestoresActiveFeatureSuffix)
 TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
 {
     const QString rendererHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
-    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString overlaySource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerOverlayItems.cpp"));
     const QString uiDefaults = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
     const QString dialogSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.cpp"));
     const QString dialogUi = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.ui"));
     ASSERT_FALSE(rendererHeader.isEmpty());
-    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(overlaySource.isEmpty());
     ASSERT_FALSE(uiDefaults.isEmpty());
     ASSERT_FALSE(dialogSource.isEmpty());
     ASSERT_FALSE(dialogUi.isEmpty());
 
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("int pointSize = 1")));
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("markerShape = QStringLiteral(\"cross\")")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("const double crossRadius")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("crossPen.setWidthF(1.0)")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("const double crossRadius")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("crossPen.setWidthF(1.0)")));
 
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("featureDisplay[\"pointSize\"]         = 1")));
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("featureDisplay[\"markerShape\"]       = QStringLiteral(\"cross\")")));
@@ -3980,6 +3980,34 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesImageLoadingToDedicat
     EXPECT_TRUE(loaderHeader.contains(QStringLiteral("QImage loadImageForDisplay")));
     EXPECT_TRUE(loaderSource.contains(QStringLiteral("convertTo8BitGeoTiff_GDAL")));
     EXPECT_TRUE(loaderSource.contains(QStringLiteral("loadImageWithOpenCvByteDecode")));
+}
+
+TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesOverlayDrawingToDedicatedItems)
+{
+    const QString rendererSource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    const QString overlayHeader = readProjectSourceFile(QStringLiteral("src/gui/views/LayerOverlayItems.h"));
+    const QString overlaySource = readProjectSourceFile(QStringLiteral("src/gui/views/LayerOverlayItems.cpp"));
+    ASSERT_FALSE(rendererSource.isEmpty());
+    ASSERT_FALSE(overlayHeader.isEmpty());
+    ASSERT_FALSE(overlaySource.isEmpty());
+
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerOverlayItems.h\"")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("createFeatureOverlayItem(keypoints, m_featureOpts, m_imageBounds)")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("createMatchOverlayItems(ptsA, ptsB, m_matchOpts, bOffsetX)")));
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("class BatchedFeatureOverlayItem")))
+        << "Feature overlay item implementation should stay out of LayerRenderer.";
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("void drawKeypoint(")))
+        << "Keypoint painting details should stay out of LayerRenderer.";
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("addEllipse(a.x()-3")))
+        << "Match endpoint item construction should stay out of LayerRenderer.";
+    EXPECT_FALSE(rendererSource.contains(QStringLiteral("addLine(a.x(), a.y()")))
+        << "Match line item construction should stay out of LayerRenderer.";
+
+    EXPECT_TRUE(overlayHeader.contains(QStringLiteral("createFeatureOverlayItem")));
+    EXPECT_TRUE(overlayHeader.contains(QStringLiteral("createMatchOverlayItems")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("class BatchedFeatureOverlayItem")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("new QGraphicsEllipseItem(a.x() - 3")));
+    EXPECT_TRUE(overlaySource.contains(QStringLiteral("new QGraphicsLineItem(a.x(), a.y()")));
 }
 
 TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage)
