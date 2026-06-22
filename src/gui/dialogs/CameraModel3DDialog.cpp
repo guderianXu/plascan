@@ -40,6 +40,7 @@
 #include <QFileInfo>
 #include <QKeyEvent>
 #include <QKeySequence>
+#include <QMetaObject>
 #include <QPointer>
 #include <QRegularExpression>
 #include <QStringList>
@@ -832,10 +833,18 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
     {
         auto reportProgress = [self, gen](int percent, const QString &statusText)
         {
-            if (self)
+            if (!self)
             {
-                emit self->plyLoadProgressChanged(gen, percent, statusText);
+                return;
             }
+            QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()
+            {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->plyLoadProgressChanged(gen, percent, statusText);
+            }, Qt::QueuedConnection);
         };
 
         try

@@ -1459,6 +1459,10 @@ TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
         EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
         EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, gen]()")));
     }
+    EXPECT_TRUE(plyBlock.contains(QStringLiteral("QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()")))
+        << "PLY load progress emitted from a worker thread must be queued back through the guarded widget.";
+    EXPECT_FALSE(plyBlock.contains(QStringLiteral("if (self)\n            {\n                emit self->plyLoadProgressChanged(gen, percent, statusText);")))
+        << "The PLY worker must not directly emit signals through a GUI object from the worker thread.";
 }
 
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
