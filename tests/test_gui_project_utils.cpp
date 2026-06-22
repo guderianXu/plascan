@@ -1276,6 +1276,28 @@ TEST(GuiAsyncLifetimeTest, DenseCloudFusionUsesGuardedTaskRunner)
         << "Open-coded QtConcurrent can still start fusion after the manager owner has been destroyed.";
 }
 
+TEST(GuiAsyncLifetimeTest, DenseCloudRefineUsesGuardedTaskRunner)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(
+        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(
+        QStringLiteral("void ProjectDenseReconstructionManager::cancelMvs"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectDenseReconstructionManager> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "Dense-cloud post-processing should use the shared guarded runner before loading large clouds.";
+    EXPECT_FALSE(block.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
+        << "Open-coded QtConcurrent can still start dense refine work after the manager owner is destroyed.";
+}
+
 TEST(GuiAsyncLifetimeTest, DepthMapSparsePreloadWorkersGuardGeneratorLifetime)
 {
     const QString source = readProjectSourceFile(

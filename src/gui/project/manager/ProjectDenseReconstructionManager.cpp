@@ -1832,7 +1832,8 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
 
     emit mvsProgressChanged(QStringLiteral("正在加载密集点云..."), 0);
     QPointer<ProjectDenseReconstructionManager> self(this);
-    (void)QtConcurrent::run([self, inputPly, outputPly, request, pipelineMode, cancelFlag]() {
+    auto refineWork = [self, inputPly, outputPly, request, pipelineMode, cancelFlag]()
+    {
         if (!self)
         {
             return;
@@ -2137,7 +2138,11 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                                          QStringLiteral("后处理完成，共 %1 个点。").arg(pointCount));
             }
         }, Qt::QueuedConnection);
-    });
+    };
+
+    xjw::gui::tasks::runGuarded(this,
+                                std::move(refineWork),
+                                [](ProjectDenseReconstructionManager *) {});
 }
 
 void ProjectDenseReconstructionManager::cancelMvs()
