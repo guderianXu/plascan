@@ -32,6 +32,7 @@
 #include <QMainWindow>
 #include <QMessageBox>
 #include <QFutureWatcher>
+#include <QPointer>
 #include <QtConcurrent/QtConcurrent>
 #include <QDateTime>
 #include <QtEndian>
@@ -299,13 +300,22 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
             {
                 return;
             }
+            QPointer<ProjectManager> pmGuard(pm);
+            if (!pmGuard)
+            {
+                return;
+            }
+            const QString projectPath = pmGuard->currentProjectPath();
 
             // 1) 发出进度: 准备中 0%
-            QMetaObject::invokeMethod(
-                pm,
-                [pm]()
+            QMetaObject::invokeMethod(pmGuard.data(),
+                [pmGuard, projectPath]()
                 {
-                    emit pm->obsNetProgressChanged(QStringLiteral("准备中"), 0);
+                    if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                    {
+                        return;
+                    }
+                    emit pmGuard->obsNetProgressChanged(QStringLiteral("准备中"), 0);
                 },
                 Qt::QueuedConnection);
 
@@ -364,12 +374,16 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
                 watcher,
                 &WatcherT::finished,
                 this,
-                [pm, watcher, algoStr]()
+                [pmGuard, watcher, algoStr, projectPath]()
                 {
                     try
                     {
                         xjw::ObservationNetwork net = watcher->result();
                         watcher->deleteLater();
+                        if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                        {
+                            return;
+                        }
                         LOG_INFO(
                             QStringLiteral("观测网络构建完成: %1 节点, %2 边")
                                 .arg(net.numNodes()).arg(net.numEdges()));
@@ -394,7 +408,7 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
                         extra[QStringLiteral("edges")] = edgesArr;
                         extra[QStringLiteral("node_names")] = namesArr;
 
-                        const QString plascanPath = pm->currentProjectPath();
+                        const QString plascanPath = pmGuard->currentProjectPath();
                         if (!plascanPath.isEmpty())
                         {
                             const QString assetsDir = ProjectIO::projectAssetsDir(plascanPath);
@@ -420,12 +434,15 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
                             }
                         }
 
-                        pm->appendObsNetResult(net.numNodes(), net.numEdges(), algoStr, extra);
-                        QMetaObject::invokeMethod(
-                            pm,
-                            [pm]()
+                        pmGuard->appendObsNetResult(net.numNodes(), net.numEdges(), algoStr, extra);
+                        QMetaObject::invokeMethod(pmGuard.data(),
+                            [pmGuard, projectPath]()
                             {
-                                emit pm->obsNetProgressFinished(true);
+                                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                                {
+                                    return;
+                                }
+                                emit pmGuard->obsNetProgressFinished(true);
                             },
                             Qt::QueuedConnection);
                     }
@@ -435,23 +452,37 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
                         LOG_ERROR(
                             QStringLiteral("观测网络构建异常: %1")
                                 .arg(QString::fromStdString(ex.what())));
-                        QMetaObject::invokeMethod(
-                            pm,
-                            [pm]()
+                        if (!pmGuard)
+                        {
+                            return;
+                        }
+                        QMetaObject::invokeMethod(pmGuard.data(),
+                            [pmGuard, projectPath]()
                             {
-                                emit pm->obsNetProgressFinished(false);
+                                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                                {
+                                    return;
+                                }
+                                emit pmGuard->obsNetProgressFinished(false);
                             },
                             Qt::QueuedConnection);
                     }
                 });
 
-            auto progressFn = [pm](const QString &stage, int pct)
+            auto progressFn = [pmGuard, projectPath](const QString &stage, int pct)
             {
-                QMetaObject::invokeMethod(
-                    pm,
-                    [pm, stage, pct]()
+                if (!pmGuard)
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(pmGuard.data(),
+                    [pmGuard, projectPath, stage, pct]()
                     {
-                        emit pm->obsNetProgressChanged(stage, pct);
+                        if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                        {
+                            return;
+                        }
+                        emit pmGuard->obsNetProgressChanged(stage, pct);
                     },
                     Qt::QueuedConnection);
             };

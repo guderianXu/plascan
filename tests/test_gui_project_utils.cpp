@@ -1542,6 +1542,29 @@ TEST(GuiAsyncLifetimeTest, FeatureExtractionRunnerUsesGuardedProjectManagerCallb
     EXPECT_TRUE(terrainBlock.contains(QStringLiteral("FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard")));
 }
 
+TEST(GuiAsyncLifetimeTest, ObservationNetworkWorkerUsesGuardedProjectManagerCallbacks)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ReconstructionWorkflowController::openObservationNetworkDialog"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ReconstructionWorkflowController::openInitCameraPoseDialog"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(pm)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("const QString projectPath = pmGuard->currentProjectPath()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("pmGuard->currentProjectPath() != projectPath")))
+        << "Observation network results must not be written back after the active project changes.";
+    EXPECT_TRUE(block.contains(QStringLiteral("QMetaObject::invokeMethod(pmGuard.data()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("[pmGuard, projectPath]")));
+    EXPECT_TRUE(block.contains(QStringLiteral("[pmGuard, projectPath, stage, pct]")));
+    EXPECT_FALSE(block.contains(QStringLiteral("QMetaObject::invokeMethod(\n                pm,")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[pm]()")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[pm, stage, pct]")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
