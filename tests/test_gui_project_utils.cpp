@@ -4213,6 +4213,25 @@ TEST(FeatureNamingCleanupTest, TorchRunnerWarningsStayLocalToRunnerTranslationUn
     }
 }
 
+TEST(FeatureNamingCleanupTest, TorchHeavyTranslationUnitsSuppressLibTorchC4267Warnings)
+{
+    const QString sfmService =
+        readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString vocabularyDialog =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    ASSERT_FALSE(sfmService.isEmpty());
+    ASSERT_FALSE(vocabularyDialog.isEmpty());
+
+    for (const QString &source : {sfmService, vocabularyDialog})
+    {
+        EXPECT_TRUE(source.contains(QStringLiteral("#include \"compat/QtTorchMacroGuard.h\"")));
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(push)")));
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(disable: 4267)")))
+            << "LibTorch emits MSVC C4267 from external templates; suppress it only in Torch-heavy translation units.";
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)")));
+    }
+}
+
 TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));

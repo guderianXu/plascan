@@ -52,6 +52,7 @@
 - CanvasWidget 上轮新增的特征加载 generation 成员改为 `_featureLoadGeneration`，让新增私有成员命名与项目 `_lowerCamelCase` 规范保持一致。
 - `GlobalSettings` 和 `ProjectDialogJsonSettingBase` 去除 tab 缩进，并将私有成员收敛为 `_settings` / `_plascanPath`，作为 settings 小模块逐步迁移 `_lowerCamelCase` 私有成员规范的起点。
 - `ProjectSupportUtils.h` 去除残留 tab 缩进，让 GUI 项目支持层头文件继续按 4 空格缩进规范收敛。
+- `SFMService.cpp` 和 `VocabularyOverlapDialog.cpp` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被这两个 Torch-heavy 编译单元刷屏。
 
 ### 验证
 
@@ -64,6 +65,8 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SettingsFilesUse" --output-on-failure` 先失败后通过，验证 settings 小模块不再含 tab 且私有成员使用 `_lowerCamelCase`。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GlobalSettings.cpp`、`ProjectDialogJsonSettingBase.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.GuiSupportFilesUseSpacesInsteadOfTabs" --output-on-failure` 先失败后通过，验证 `ProjectSupportUtils.h` 不再含 tab 缩进。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest.TorchHeavyTranslationUnitsSuppressLibTorchC4267Warnings" --output-on-failure` 先失败后通过，验证 `SFMService.cpp` 和 `VocabularyOverlapDialog.cpp` 均有局部 C4267 warning guard。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `SFMService.cpp`、`VocabularyOverlapDialog.cpp` 并链接 GUI；构建日志未发现 `warning C4267`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetimeTest.CameraSceneAsyncLoadCallbacksUseQPointerGuards" --output-on-failure` 先失败后通过，验证 PLY 加载 worker 不再直接从后台线程 emit GUI 进度信号。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CameraModel3DDialog.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|CameraModel3DDialog|ProjectModel|MeshReconstructor|TextureMapper" --output-on-failure` 通过，29/29。

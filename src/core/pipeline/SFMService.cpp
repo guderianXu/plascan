@@ -9,6 +9,11 @@
 // ── LibTorch / OpenCV 头文件必须在 Qt 头文件之前引入，避免宏冲突 ────────
 #include "compat/QtTorchMacroGuard.h"
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "ExtractorFactory.h"
 #include "FeatureData.h"
 #include "FeatureFileIO.h"
@@ -4023,3 +4028,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
 } // namespace gui
 } // namespace xjw
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

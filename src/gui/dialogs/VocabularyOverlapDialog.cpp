@@ -1,5 +1,10 @@
 #include "compat/QtTorchMacroGuard.h"
 
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "FeatureOutput.h"
 #include "FeatureFileIO.h"
 
@@ -129,6 +134,10 @@ QString referenceBodyId(xjw::ReferenceBody body)
         return QStringLiteral("earth");
     }
 }
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 xjw::ReferenceBody referenceBodyFromId(const QString &id)
 {
