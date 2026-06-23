@@ -6666,6 +6666,92 @@ TEST(MatchViewerEmptyMatchTest, CanOpenImagePairWithoutSparseMatchFile)
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("尚未生成匹配")));
 }
 
+TEST(CodeStyleTest, MatchViewerDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchViewerDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchViewerDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("DualImageViewer *_viewer = nullptr;"),
+        QStringLiteral("QTabWidget *_tabWidget = nullptr;"),
+        QStringLiteral("QWidget *_sparseTab = nullptr;"),
+        QStringLiteral("QWidget *_denseTab = nullptr;"),
+        QStringLiteral("int _initialTab = 0;"),
+        QStringLiteral("QString _disparityFile;"),
+        QStringLiteral("bool _sparseMatchFileMissing = false;"),
+        QStringLiteral("QCheckBox *_syncModeChk = nullptr;"),
+        QStringLiteral("QPushButton *_fitBtn = nullptr;"),
+        QStringLiteral("QPushButton *_resetBtn = nullptr;"),
+        QStringLiteral("QPushButton *_zoomInBtn = nullptr;"),
+        QStringLiteral("QPushButton *_zoomOutBtn = nullptr;"),
+        QStringLiteral("QPushButton *_lineColorBtn = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_lineWidthSpin = nullptr;"),
+        QStringLiteral("QSlider *_opacitySlider = nullptr;"),
+        QStringLiteral("QSpinBox *_maxCountSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_showEndPointsChk = nullptr;"),
+        QStringLiteral("QCheckBox *_showOnlyInliersChk = nullptr;"),
+        QStringLiteral("QCheckBox *_rainbowChk = nullptr;"),
+        QStringLiteral("QSlider *_denseOpacitySlider = nullptr;"),
+        QStringLiteral("QComboBox *_denseColormapCombo = nullptr;"),
+        QStringLiteral("QCheckBox *_denseAutoRangeChk = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_denseMinSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_denseMaxSpin = nullptr;"),
+        QStringLiteral("QGroupBox *_denseDisplayGroup = nullptr;"),
+        QStringLiteral("QLabel *_statusLabel = nullptr;"),
+        QStringLiteral("QString _matchFile;"),
+        QStringLiteral("int _totalMatches = 0;"),
+        QStringLiteral("DialogSettingStore *_setting = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_viewer"),
+        QStringLiteral("m_tabWidget"),
+        QStringLiteral("m_sparseTab"),
+        QStringLiteral("m_denseTab"),
+        QStringLiteral("m_initialTab"),
+        QStringLiteral("m_disparityFile"),
+        QStringLiteral("m_sparseMatchFileMissing"),
+        QStringLiteral("m_syncModeChk"),
+        QStringLiteral("m_fitBtn"),
+        QStringLiteral("m_resetBtn"),
+        QStringLiteral("m_zoomInBtn"),
+        QStringLiteral("m_zoomOutBtn"),
+        QStringLiteral("m_lineColorBtn"),
+        QStringLiteral("m_lineWidthSpin"),
+        QStringLiteral("m_opacitySlider"),
+        QStringLiteral("m_maxCountSpin"),
+        QStringLiteral("m_showEndPointsChk"),
+        QStringLiteral("m_showOnlyInliersChk"),
+        QStringLiteral("m_rainbowChk"),
+        QStringLiteral("m_denseOpacitySlider"),
+        QStringLiteral("m_denseColormapCombo"),
+        QStringLiteral("m_denseAutoRangeChk"),
+        QStringLiteral("m_denseMinSpin"),
+        QStringLiteral("m_denseMaxSpin"),
+        QStringLiteral("m_denseDisplayGroup"),
+        QStringLiteral("m_statusLabel"),
+        QStringLiteral("m_matchFile"),
+        QStringLiteral("m_totalMatches"),
+        QStringLiteral("m_setting"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+    EXPECT_FALSE(source.contains(QStringLiteral("m_matchFile(")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_totalMatches(")));
+}
+
 TEST(MatchViewerVisualizationTest, ImageDisplayKeepsRawPixelOrientationForMatchCoordinates)
 {
     const QString imageViewSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));

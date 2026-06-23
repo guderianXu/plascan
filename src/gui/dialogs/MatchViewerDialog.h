@@ -85,17 +85,17 @@ private slots:
     // ── 显示选项槽 ────────────────────────────────────────────────
     // 弹出颜色选择对话框，更新匹配连线颜色
     void onLineColorChanged();
-    // 连线宽度变化（单位：像素，由 m_lineWidthSpin 触发）
+    // 连线宽度变化（单位：像素，由 _lineWidthSpin 触发）
     void onLineWidthChanged(double value);
-    // 连线整体透明度变化（0–100，由 m_opacitySlider 触发）
+    // 连线整体透明度变化（0–100，由 _opacitySlider 触发）
     void onOpacityChanged(int value);
-    // 最大显示匹配点数限制变化（0 表示全部显示，由 m_maxCountSpin 触发）
+    // 最大显示匹配点数限制变化（0 表示全部显示，由 _maxCountSpin 触发）
     void onMaxCountChanged(int value);
-    // 是否显示匹配点端点圆圈（由 m_showEndPointsChk 触发）
+    // 是否显示匹配点端点圆圈（由 _showEndPointsChk 触发）
     void onShowEndPointsToggled(bool checked);
-    // 是否仅显示内点（需要 bundle_adjust 后的内点标记，由 m_showOnlyInliersChk 触发）
+    // 是否仅显示内点（需要 bundle_adjust 后的内点标记，由 _showOnlyInliersChk 触发）
     void onShowOnlyInliersToggled(bool checked);
-    // 五彩斑斓模式开关：每条匹配线使用不同颜色（由 m_rainbowChk 触发）
+    // 五彩斑斓模式开关：每条匹配线使用不同颜色（由 _rainbowChk 触发）
     void onRainbowToggled(bool checked);
 
     // ── 数据加载回调槽 ────────────────────────────────────────────
@@ -120,45 +120,45 @@ private:
     void saveSettings();
 
     // ── 核心控件 ──────────────────────────────────────────────────
-    DualImageViewer *m_viewer;  // 双图查看器，持有左右 ImageViewWidget 和 MatchLineOverlay
+    DualImageViewer *_viewer = nullptr;  // 双图查看器，持有左右 ImageViewWidget 和 MatchLineOverlay
 
     // ── 标签页控件 ──────────────────────────────────────────────────
-    QTabWidget        *m_tabWidget     = nullptr;
-    QWidget           *m_sparseTab     = nullptr;
-    QWidget           *m_denseTab      = nullptr;
-    int                m_initialTab    = 0;
-    QString            m_disparityFile;
-    bool               m_sparseMatchFileMissing = false;
+    QTabWidget *_tabWidget = nullptr;
+    QWidget *_sparseTab = nullptr;
+    QWidget *_denseTab = nullptr;
+    int _initialTab = 0;
+    QString _disparityFile;
+    bool _sparseMatchFileMissing = false;
 
     // ── 工具栏及工具按钮 ──────────────────────────────────────────
-    QCheckBox   *m_syncModeChk;    // 同步缩放/平移开关
-    QPushButton *m_fitBtn;         // 适应窗口按钮
-    QPushButton *m_resetBtn;       // 重置到 100% 按钮
-    QPushButton *m_zoomInBtn;      // 放大按钮（显示 "+"）
-    QPushButton *m_zoomOutBtn;     // 缩小按钮（显示 "-"）
+    QCheckBox *_syncModeChk = nullptr;  // 同步缩放/平移开关
+    QPushButton *_fitBtn = nullptr;  // 适应窗口按钮
+    QPushButton *_resetBtn = nullptr;  // 重置到 100% 按钮
+    QPushButton *_zoomInBtn = nullptr;  // 放大按钮（显示 "+"）
+    QPushButton *_zoomOutBtn = nullptr;  // 缩小按钮（显示 "-"）
 
     // ── 显示选项控件（嵌入工具栏的 QGroupBox） ────────────────────
-    QPushButton  *m_lineColorBtn;       // 连线颜色选择按钮（背景色即当前颜色）
-    QDoubleSpinBox *m_lineWidthSpin;    // 连线宽度（0.5–10.0，步长 0.5）
-    QSlider      *m_opacitySlider;      // 透明度滑块（0–100）
-    QSpinBox     *m_maxCountSpin;       // 最大显示连线数（0 = 全部）
-    QCheckBox    *m_showEndPointsChk;   // 显示端点开关
-    QCheckBox    *m_showOnlyInliersChk; // 仅显示内点开关（默认禁用）
-    QCheckBox    *m_rainbowChk;         // 五彩斑斓模式开关
+    QPushButton *_lineColorBtn = nullptr;  // 连线颜色选择按钮（背景色即当前颜色）
+    QDoubleSpinBox *_lineWidthSpin = nullptr;  // 连线宽度（0.5–10.0，步长 0.5）
+    QSlider *_opacitySlider = nullptr;  // 透明度滑块（0–100）
+    QSpinBox *_maxCountSpin = nullptr;  // 最大显示连线数（0 = 全部）
+    QCheckBox *_showEndPointsChk = nullptr;  // 显示端点开关
+    QCheckBox *_showOnlyInliersChk = nullptr;  // 仅显示内点开关（默认禁用）
+    QCheckBox *_rainbowChk = nullptr;  // 五彩斑斓模式开关
 
     // ── 密集显示选项控件 ──────────────────────────────────────────
-    QSlider           *m_denseOpacitySlider = nullptr;
-    QComboBox         *m_denseColormapCombo = nullptr;
-    QCheckBox         *m_denseAutoRangeChk  = nullptr;
-    QDoubleSpinBox    *m_denseMinSpin       = nullptr;
-    QDoubleSpinBox    *m_denseMaxSpin       = nullptr;
-    QGroupBox         *m_denseDisplayGroup  = nullptr;
+    QSlider *_denseOpacitySlider = nullptr;
+    QComboBox *_denseColormapCombo = nullptr;
+    QCheckBox *_denseAutoRangeChk = nullptr;
+    QDoubleSpinBox *_denseMinSpin = nullptr;
+    QDoubleSpinBox *_denseMaxSpin = nullptr;
+    QGroupBox *_denseDisplayGroup = nullptr;
 
     // ── 状态栏 ────────────────────────────────────────────────────
-    QLabel *m_statusLabel;  // 底部状态信息标签
+    QLabel *_statusLabel = nullptr;  // 底部状态信息标签
 
     // ── 数据成员 ──────────────────────────────────────────────────
-    QString m_matchFile;    // 当前加载的 .match 文件路径
-    int m_totalMatches;     // 已加载的总匹配点数（加载成功后更新）
-    DialogSettingStore *m_setting = nullptr; ///< 项目级记忆化管理器（可空）
+    QString _matchFile;    // 当前加载的 .match 文件路径
+    int _totalMatches = 0;     // 已加载的总匹配点数（加载成功后更新）
+    DialogSettingStore *_setting = nullptr; ///< 项目级记忆化管理器（可空）
 };
