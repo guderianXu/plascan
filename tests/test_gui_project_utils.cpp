@@ -1641,6 +1641,47 @@ TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
     EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgproc.hpp>")));
 }
 
+TEST(CodeStyleTest, SettingsFilesUseSpacesInsteadOfTabs)
+{
+    const QStringList files = {
+        QStringLiteral("src/gui/config/settings/GlobalSettings.cpp"),
+        QStringLiteral("src/gui/config/settings/GlobalSettings.h"),
+        QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.cpp"),
+        QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.h"),
+    };
+
+    for (const QString &path : files)
+    {
+        const QString source = readProjectSourceFile(path);
+        ASSERT_FALSE(source.isEmpty()) << qPrintable(path);
+        EXPECT_FALSE(source.contains(QChar('\t'))) << qPrintable(path) << " should use spaces instead of tabs.";
+    }
+}
+
+TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
+{
+    const QString globalSettingsHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/config/settings/GlobalSettings.h"));
+    const QString projectDialogHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.h"));
+    const QString globalSettingsSource =
+        readProjectSourceFile(QStringLiteral("src/gui/config/settings/GlobalSettings.cpp"));
+    const QString projectDialogSource =
+        readProjectSourceFile(QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.cpp"));
+    ASSERT_FALSE(globalSettingsHeader.isEmpty());
+    ASSERT_FALSE(projectDialogHeader.isEmpty());
+    ASSERT_FALSE(globalSettingsSource.isEmpty());
+    ASSERT_FALSE(projectDialogSource.isEmpty());
+
+    EXPECT_TRUE(globalSettingsHeader.contains(QStringLiteral("QList<IGlobalSetting *> _settings;")));
+    EXPECT_FALSE(globalSettingsHeader.contains(QStringLiteral("m_settings")));
+    EXPECT_FALSE(globalSettingsSource.contains(QStringLiteral("m_settings")));
+
+    EXPECT_TRUE(projectDialogHeader.contains(QStringLiteral("QString _plascanPath;")));
+    EXPECT_FALSE(projectDialogHeader.contains(QStringLiteral("m_plascanPath")));
+    EXPECT_FALSE(projectDialogSource.contains(QStringLiteral("m_plascanPath")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

@@ -38,73 +38,73 @@
 class ProjectDialogJsonSettingBase
 {
 public:
-	/** @brief 虚析构函数，确保派生类正确销毁。 */
-	virtual ~ProjectDialogJsonSettingBase() = default;
+    /** @brief 虚析构函数，确保派生类正确销毁。 */
+    virtual ~ProjectDialogJsonSettingBase() = default;
 
-	/**
-	 * @brief 设置当前项目的 .plascan 文件路径。
-	 *
-	 * 该路径决定了 project_dialog.json 的存放位置
-	 * （与 .plascan 同目录，即项目根目录）。
-	 *
-	 * @param plascanPath .plascan 文件的绝对路径。
-	 */
-	void setProjectPath(const QString &plascanPath);
+    /**
+     * @brief 设置当前项目的 .plascan 文件路径。
+     *
+     * 该路径决定了 project_dialog.json 的存放位置
+     * （与 .plascan 同目录，即项目根目录）。
+     *
+     * @param plascanPath .plascan 文件的绝对路径。
+     */
+    void setProjectPath(const QString &plascanPath);
 
 protected:
-	/**
-	 * @brief 返回对话框参数文件的文件名（不含路径）。
-	 *
-	 * 默认实现返回 "project_dialog.json"。
-	 * 若需将参数写入不同文件可在派生类中覆盖此方法。
-	 *
-	 * @return 对话框参数文件名。
-	 */
-	virtual QString dialogFileName() const;
+    /**
+     * @brief 返回对话框参数文件的文件名（不含路径）。
+     *
+     * 默认实现返回 "project_dialog.json"。
+     * 若需将参数写入不同文件可在派生类中覆盖此方法。
+     *
+     * @return 对话框参数文件名。
+     */
+    virtual QString dialogFileName() const;
 
-	/**
-	 * @brief 按键名加载对应的 JSON 子对象。
-	 *
-	 * 从 project_dialog.json 中读取顶层键 @p key 对应的对象。
-	 * 若文件不存在、路径未设置或键不存在，均返回空 QJsonObject。
-	 *
-	 * @param key 顶层键名（如 "aerial_triangulation"）。
-	 * @return 对应的 JSON 对象，或空对象。
-	 */
-	QJsonObject loadByKey(const QString &key) const;
+    /**
+     * @brief 按键名加载对应的 JSON 子对象。
+     *
+     * 从 project_dialog.json 中读取顶层键 @p key 对应的对象。
+     * 若文件不存在、路径未设置或键不存在，均返回空 QJsonObject。
+     *
+     * @param key 顶层键名（如 "aerial_triangulation"）。
+     * @return 对应的 JSON 对象，或空对象。
+     */
+    QJsonObject loadByKey(const QString &key) const;
 
-	/**
-	 * @brief 按键名保存 JSON 子对象（只更新指定键，不影响其他键）。
-	 *
-	 * 读取现有 project_dialog.json → 插入/覆盖 @p key → 整体写回文件。
-	 *
-	 * @param key   顶层键名。
-	 * @param value 要保存的 JSON 对象。
-	 * @return true 表示写入成功；false 表示路径无效或写入失败。
-	 */
-	bool saveByKey(const QString &key, const QJsonObject &value) const;
+    /**
+     * @brief 按键名保存 JSON 子对象（只更新指定键，不影响其他键）。
+     *
+     * 读取现有 project_dialog.json → 插入/覆盖 @p key → 整体写回文件。
+     *
+     * @param key   顶层键名。
+     * @param value 要保存的 JSON 对象。
+     * @return true 表示写入成功；false 表示路径无效或写入失败。
+     */
+    bool saveByKey(const QString &key, const QJsonObject &value) const;
 
 private:
-	/**
-	 * @brief 计算 project_dialog.json 的完整绝对路径。
-	 * @return 文件绝对路径；若 m_plascanPath 未设置则返回空字符串。
-	 */
-	QString dialogFilePath() const;
+    /**
+     * @brief 计算 project_dialog.json 的完整绝对路径。
+     * @return 文件绝对路径；若 _plascanPath 未设置则返回空字符串。
+     */
+    QString dialogFilePath() const;
 
-	/**
-	 * @brief 读取指定路径的 JSON 文件并解析为对象。
-	 * @param path JSON 文件的绝对路径。
-	 * @return 解析后的 QJsonObject；文件不存在或解析失败时返回空对象。
-	 */
-	static QJsonObject readJsonFile(const QString &path);
+    /**
+     * @brief 读取指定路径的 JSON 文件并解析为对象。
+     * @param path JSON 文件的绝对路径。
+     * @return 解析后的 QJsonObject；文件不存在或解析失败时返回空对象。
+     */
+    static QJsonObject readJsonFile(const QString &path);
 
-	/**
-	 * @brief 将 JSON 对象写入指定路径的文件（缩进格式）。
-	 * @param path JSON 文件的绝对路径。
-	 * @param root 要写入的完整 JSON 根对象。
-	 * @return true 表示写入成功。
-	 */
-	static bool writeJsonFile(const QString &path, const QJsonObject &root);
+    /**
+     * @brief 将 JSON 对象写入指定路径的文件（缩进格式）。
+     * @param path JSON 文件的绝对路径。
+     * @param root 要写入的完整 JSON 根对象。
+     * @return true 表示写入成功。
+     */
+    static bool writeJsonFile(const QString &path, const QJsonObject &root);
 
-	QString m_plascanPath; ///< 当前项目 .plascan 文件的绝对路径
+    QString _plascanPath; ///< 当前项目 .plascan 文件的绝对路径
 };

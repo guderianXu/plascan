@@ -28,8 +28,11 @@ namespace {
  */
 QJsonObject ensureObject(const QJsonDocument &doc)
 {
-	if (doc.isObject()) return doc.object();
-	return QJsonObject();
+    if (doc.isObject())
+    {
+        return doc.object();
+    }
+    return QJsonObject();
 }
 
 } // anonymous namespace
@@ -48,7 +51,7 @@ QJsonObject ensureObject(const QJsonDocument &doc)
  */
 void ProjectDialogJsonSettingBase::setProjectPath(const QString &plascanPath)
 {
-	m_plascanPath = plascanPath;
+    _plascanPath = plascanPath;
 }
 
 // ---------------------------------------------------------------------------
@@ -65,7 +68,7 @@ void ProjectDialogJsonSettingBase::setProjectPath(const QString &plascanPath)
  */
 QString ProjectDialogJsonSettingBase::dialogFileName() const
 {
-	return QStringLiteral("project_dialog.json");
+    return QStringLiteral("project_dialog.json");
 }
 
 // ---------------------------------------------------------------------------
@@ -75,17 +78,23 @@ QString ProjectDialogJsonSettingBase::dialogFileName() const
 /**
  * @brief 计算 project_dialog.json 的完整绝对路径。
  *
- * 路径 = projectRootFromPlascan(m_plascanPath) / dialogFileName()。
+ * 路径 = projectRootFromPlascan(_plascanPath) / dialogFileName()。
  * 若 .plascan 路径未设置或无法推导出项目根目录，则返回空字符串。
  *
  * @return 文件绝对路径；失败时返回空字符串。
  */
 QString ProjectDialogJsonSettingBase::dialogFilePath() const
 {
-	if (m_plascanPath.trimmed().isEmpty()) return QString();
-	const QString root = ProjectIO::projectRootFromPlascan(m_plascanPath);
-	if (root.isEmpty()) return QString();
-	return QDir(root).filePath(dialogFileName());
+    if (_plascanPath.trimmed().isEmpty())
+    {
+        return QString();
+    }
+    const QString root = ProjectIO::projectRootFromPlascan(_plascanPath);
+    if (root.isEmpty())
+    {
+        return QString();
+    }
+    return QDir(root).filePath(dialogFileName());
 }
 
 /**
@@ -99,11 +108,17 @@ QString ProjectDialogJsonSettingBase::dialogFilePath() const
  */
 QJsonObject ProjectDialogJsonSettingBase::readJsonFile(const QString &path)
 {
-	if (path.isEmpty() || !QFileInfo::exists(path)) return QJsonObject();
-	QFile file(path);
-	if (!file.open(QIODevice::ReadOnly)) return QJsonObject();
-	const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
-	return ensureObject(doc);
+    if (path.isEmpty() || !QFileInfo::exists(path))
+    {
+        return QJsonObject();
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return QJsonObject();
+    }
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
+    return ensureObject(doc);
 }
 
 /**
@@ -117,12 +132,18 @@ QJsonObject ProjectDialogJsonSettingBase::readJsonFile(const QString &path)
  */
 bool ProjectDialogJsonSettingBase::writeJsonFile(const QString &path, const QJsonObject &root)
 {
-	if (path.isEmpty()) return false;
-	QFile file(path);
-	if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate)) return false;
-	const QJsonDocument doc(root);
-	file.write(doc.toJson(QJsonDocument::Indented));
-	return true;
+    if (path.isEmpty())
+    {
+        return false;
+    }
+    QFile file(path);
+    if (!file.open(QIODevice::WriteOnly | QIODevice::Truncate))
+    {
+        return false;
+    }
+    const QJsonDocument doc(root);
+    file.write(doc.toJson(QJsonDocument::Indented));
+    return true;
 }
 
 /**
@@ -135,11 +156,17 @@ bool ProjectDialogJsonSettingBase::writeJsonFile(const QString &path, const QJso
  */
 QJsonObject ProjectDialogJsonSettingBase::loadByKey(const QString &key) const
 {
-	if (key.isEmpty()) return QJsonObject();
-	const QString path = dialogFilePath();
-	if (path.isEmpty()) return QJsonObject();
-	const QJsonObject root = readJsonFile(path);
-	return root.value(key).toObject();
+    if (key.isEmpty())
+    {
+        return QJsonObject();
+    }
+    const QString path = dialogFilePath();
+    if (path.isEmpty())
+    {
+        return QJsonObject();
+    }
+    const QJsonObject root = readJsonFile(path);
+    return root.value(key).toObject();
 }
 
 /**
@@ -155,10 +182,16 @@ QJsonObject ProjectDialogJsonSettingBase::loadByKey(const QString &key) const
  */
 bool ProjectDialogJsonSettingBase::saveByKey(const QString &key, const QJsonObject &value) const
 {
-	if (key.isEmpty()) return false;
-	const QString path = dialogFilePath();
-	if (path.isEmpty()) return false;
-	QJsonObject root = readJsonFile(path);
-	root.insert(key, value);
-	return writeJsonFile(path, root);
+    if (key.isEmpty())
+    {
+        return false;
+    }
+    const QString path = dialogFilePath();
+    if (path.isEmpty())
+    {
+        return false;
+    }
+    QJsonObject root = readJsonFile(path);
+    root.insert(key, value);
+    return writeJsonFile(path, root);
 }

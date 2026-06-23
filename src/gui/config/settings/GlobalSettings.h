@@ -25,27 +25,27 @@ class QSettings;
  */
 class IGlobalSetting : public QObject
 {
-	Q_OBJECT
+    Q_OBJECT
 public:
-	explicit IGlobalSetting(QObject *parent = nullptr) : QObject(parent) {}
-	~IGlobalSetting() override = default;
+    explicit IGlobalSetting(QObject *parent = nullptr) : QObject(parent) {}
+    ~IGlobalSetting() override = default;
 
-	/**
-	 * @brief 返回此子设置在 QSettings 中使用的组名（唯一标识）。
-	 */
-	virtual QString id() const = 0;
+    /**
+     * @brief 返回此子设置在 QSettings 中使用的组名（唯一标识）。
+     */
+    virtual QString id() const = 0;
 
-	/**
-	 * @brief 从给定的 QSettings 中读取并恢复状态。
-	 * @param settings QSettings 引用，调用方已切入到对应的 group（或可直接使用）。
-	 */
-	virtual void load(QSettings &settings) = 0;
+    /**
+     * @brief 从给定的 QSettings 中读取并恢复状态。
+     * @param settings QSettings 引用，调用方已切入到对应的 group（或可直接使用）。
+     */
+    virtual void load(QSettings &settings) = 0;
 
-	/**
-	 * @brief 将当前状态写入到给定的 QSettings 中。
-	 * @param settings QSettings 引用，调用方已切入到对应的 group（或可直接使用）。
-	 */
-	virtual void save(QSettings &settings) const = 0;
+    /**
+     * @brief 将当前状态写入到给定的 QSettings 中。
+     * @param settings QSettings 引用，调用方已切入到对应的 group（或可直接使用）。
+     */
+    virtual void save(QSettings &settings) const = 0;
 };
 
 /**
@@ -57,33 +57,32 @@ public:
  */
 class GlobalSettings : public QObject
 {
-	Q_OBJECT
+    Q_OBJECT
 public:
-	explicit GlobalSettings(QObject *parent = nullptr);
+    explicit GlobalSettings(QObject *parent = nullptr);
 
-	/**
-	 * @brief 注册一个子设置对象（若已注册则忽略）。
-	 * @param setting 指向派生自 IGlobalSetting 的对象，所有权仍由调用方或 Qt 对象树管理，
-	 *                本函数会将其父对象设置为 GlobalSettings 以便统一管理。
-	 */
-	void registerSetting(IGlobalSetting *setting);
+    /**
+     * @brief 注册一个子设置对象（若已注册则忽略）。
+     * @param setting 指向派生自 IGlobalSetting 的对象，所有权仍由调用方或 Qt 对象树管理，
+     *                本函数会将其父对象设置为 GlobalSettings 以便统一管理。
+     */
+    void registerSetting(IGlobalSetting *setting);
 
-	/** @brief 取消注册一个子设置对象（不删除对象，仅从管理列表移除）。 */
-	void unregisterSetting(IGlobalSetting *setting);
+    /** @brief 取消注册一个子设置对象（不删除对象，仅从管理列表移除）。 */
+    void unregisterSetting(IGlobalSetting *setting);
 
-	/** @brief 加载所有已注册子设置的数据（从 QSettings）。 */
-	void loadAll();
+    /** @brief 加载所有已注册子设置的数据（从 QSettings）。 */
+    void loadAll();
 
-	/** @brief 保存所有已注册子设置的数据（到 QSettings）。 */
-	void saveAll() const;
+    /** @brief 保存所有已注册子设置的数据（到 QSettings）。 */
+    void saveAll() const;
 
-	/** @brief 按 id 加载单个子设置（若存在）。 */
-	void loadById(const QString &id);
+    /** @brief 按 id 加载单个子设置（若存在）。 */
+    void loadById(const QString &id);
 
-	/** @brief 按 id 保存单个子设置（若存在）。 */
-	void saveById(const QString &id) const;
+    /** @brief 按 id 保存单个子设置（若存在）。 */
+    void saveById(const QString &id) const;
 
 private:
-	QList<IGlobalSetting *> m_settings;
+    QList<IGlobalSetting *> _settings;
 };
-

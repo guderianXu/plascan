@@ -50,6 +50,7 @@
 - CanvasWidget 特征点异步加载改为按请求创建 watcher，并用 generation guard 丢弃旧影像/旧后缀的迟到结果，避免切换影像后旧特征点覆盖当前画布。
 - CanvasWidget 不再直接包含 `SuperPoint`、`FeatureOutput` 或 `FeatureFileIO`，改为复用 `LayerFeatureLoader::loadFeatureKeypointsFromFile()`；视图层只消费 `cv::KeyPoint`，LibTorch/ATen 头文件和 MSVC C4267 warning 继续隔离在 feature loader/runner 编译单元内。
 - CanvasWidget 上轮新增的特征加载 generation 成员改为 `_featureLoadGeneration`，让新增私有成员命名与项目 `_lowerCamelCase` 规范保持一致。
+- `GlobalSettings` 和 `ProjectDialogJsonSettingBase` 去除 tab 缩进，并将私有成员收敛为 `_settings` / `_plascanPath`，作为 settings 小模块逐步迁移 `_lowerCamelCase` 私有成员规范的起点。
 
 ### 验证
 
@@ -59,6 +60,8 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|FeatureNamingCleanup|CanvasWidgetResponsiveness|LayerRenderer" --output-on-failure` 通过，29/29。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，540/540；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|StaleFeatureLoadsDoNotPaintOverCurrentImage" --output-on-failure` 先失败后通过，验证 CanvasWidget 新增 generation 成员使用 `_lowerCamelCase` 命名且旧结果丢弃逻辑仍有效。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SettingsFilesUse" --output-on-failure` 先失败后通过，验证 settings 小模块不再含 tab 且私有成员使用 `_lowerCamelCase`。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GlobalSettings.cpp`、`ProjectDialogJsonSettingBase.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetimeTest.CameraSceneAsyncLoadCallbacksUseQPointerGuards" --output-on-failure` 先失败后通过，验证 PLY 加载 worker 不再直接从后台线程 emit GUI 进度信号。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CameraModel3DDialog.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|CameraModel3DDialog|ProjectModel|MeshReconstructor|TextureMapper" --output-on-failure` 通过，29/29。
