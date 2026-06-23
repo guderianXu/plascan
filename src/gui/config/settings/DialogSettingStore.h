@@ -12,7 +12,7 @@ class DialogSettingStore : public QObject, public ProjectDialogJsonSettingBase
 public:
     explicit DialogSettingStore(const QString &dialogKey, QObject *parent = nullptr);
 
-    QString key() const { return m_dialogKey; }
+    QString key() const { return _dialogKey; }
 
     void setProjectPath(const QString &plascanPath);
     QJsonObject load() const;
@@ -20,5 +20,5 @@ public:
     bool merge(const QJsonObject &partial) const;
 
 private:
-    QString m_dialogKey;
+    QString _dialogKey;
 };

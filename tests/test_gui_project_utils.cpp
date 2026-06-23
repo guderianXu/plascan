@@ -1666,14 +1666,20 @@ TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
         readProjectSourceFile(QStringLiteral("src/gui/config/settings/GlobalSettings.h"));
     const QString projectDialogHeader =
         readProjectSourceFile(QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.h"));
+    const QString dialogStoreHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/config/settings/DialogSettingStore.h"));
     const QString globalSettingsSource =
         readProjectSourceFile(QStringLiteral("src/gui/config/settings/GlobalSettings.cpp"));
     const QString projectDialogSource =
         readProjectSourceFile(QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.cpp"));
+    const QString dialogStoreSource =
+        readProjectSourceFile(QStringLiteral("src/gui/config/settings/DialogSettingStore.cpp"));
     ASSERT_FALSE(globalSettingsHeader.isEmpty());
     ASSERT_FALSE(projectDialogHeader.isEmpty());
+    ASSERT_FALSE(dialogStoreHeader.isEmpty());
     ASSERT_FALSE(globalSettingsSource.isEmpty());
     ASSERT_FALSE(projectDialogSource.isEmpty());
+    ASSERT_FALSE(dialogStoreSource.isEmpty());
 
     EXPECT_TRUE(globalSettingsHeader.contains(QStringLiteral("QList<IGlobalSetting *> _settings;")));
     EXPECT_FALSE(globalSettingsHeader.contains(QStringLiteral("m_settings")));
@@ -1682,6 +1688,12 @@ TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
     EXPECT_TRUE(projectDialogHeader.contains(QStringLiteral("QString _plascanPath;")));
     EXPECT_FALSE(projectDialogHeader.contains(QStringLiteral("m_plascanPath")));
     EXPECT_FALSE(projectDialogSource.contains(QStringLiteral("m_plascanPath")));
+
+    EXPECT_TRUE(dialogStoreHeader.contains(QStringLiteral("QString _dialogKey;")));
+    EXPECT_TRUE(dialogStoreHeader.contains(QStringLiteral("return _dialogKey;")));
+    EXPECT_TRUE(dialogStoreSource.contains(QStringLiteral(", _dialogKey(dialogKey.trimmed())")));
+    EXPECT_FALSE(dialogStoreHeader.contains(QStringLiteral("m_dialogKey")));
+    EXPECT_FALSE(dialogStoreSource.contains(QStringLiteral("m_dialogKey")));
 }
 
 TEST(CodeStyleTest, WindowPanelUsesLowerCamelPrivateMemberNames)

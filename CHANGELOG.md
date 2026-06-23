@@ -50,7 +50,7 @@
 - CanvasWidget 特征点异步加载改为按请求创建 watcher，并用 generation guard 丢弃旧影像/旧后缀的迟到结果，避免切换影像后旧特征点覆盖当前画布。
 - CanvasWidget 不再直接包含 `SuperPoint`、`FeatureOutput` 或 `FeatureFileIO`，改为复用 `LayerFeatureLoader::loadFeatureKeypointsFromFile()`；视图层只消费 `cv::KeyPoint`，LibTorch/ATen 头文件和 MSVC C4267 warning 继续隔离在 feature loader/runner 编译单元内。
 - CanvasWidget 上轮新增的特征加载 generation 成员改为 `_featureLoadGeneration`，让新增私有成员命名与项目 `_lowerCamelCase` 规范保持一致。
-- `GlobalSettings` 和 `ProjectDialogJsonSettingBase` 去除 tab 缩进，并将私有成员收敛为 `_settings` / `_plascanPath`，作为 settings 小模块逐步迁移 `_lowerCamelCase` 私有成员规范的起点。
+- `GlobalSettings`、`ProjectDialogJsonSettingBase` 和 `DialogSettingStore` 去除 tab 缩进或旧 `m_` 私有成员，并将私有成员收敛为 `_settings` / `_plascanPath` / `_dialogKey`，作为 settings 小模块逐步迁移 `_lowerCamelCase` 私有成员规范的起点。
 - `ProjectSupportUtils.h` 去除残留 tab 缩进，让 GUI 项目支持层头文件继续按 4 空格缩进规范收敛。
 - `WindowPanel` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并整理该小组件内的紧凑控制语句花括号风格。
 - `ThreeDReconstructionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
@@ -96,7 +96,7 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，540/540；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|StaleFeatureLoadsDoNotPaintOverCurrentImage" --output-on-failure` 先失败后通过，验证 CanvasWidget 新增 generation 成员使用 `_lowerCamelCase` 命名且旧结果丢弃逻辑仍有效。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SettingsFilesUse" --output-on-failure` 先失败后通过，验证 settings 小模块不再含 tab 且私有成员使用 `_lowerCamelCase`。
-- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GlobalSettings.cpp`、`ProjectDialogJsonSettingBase.cpp` 并链接 GUI。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GlobalSettings.cpp`、`ProjectDialogJsonSettingBase.cpp`、`DialogSettingStore.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.GuiSupportFilesUseSpacesInsteadOfTabs" --output-on-failure` 先失败后通过，验证 `ProjectSupportUtils.h` 不再含 tab 缩进。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.WindowPanelUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `WindowPanel` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MainMenuTest|CodeStyleTest.WindowPanelUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，12/12，验证 `WindowPanel` 迁移后主菜单窗口面板入口保持可用。

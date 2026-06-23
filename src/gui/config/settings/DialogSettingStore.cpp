@@ -4,7 +4,7 @@
 
 DialogSettingStore::DialogSettingStore(const QString &dialogKey, QObject *parent)
     : QObject(parent)
-    , m_dialogKey(dialogKey.trimmed())
+    , _dialogKey(dialogKey.trimmed())
 {
 }
 
@@ -15,14 +15,22 @@ void DialogSettingStore::setProjectPath(const QString &plascanPath)
 
 QJsonObject DialogSettingStore::load() const
 {
-    if (m_dialogKey.isEmpty()) return QJsonObject();
-    return loadByKey(m_dialogKey);
+    if (_dialogKey.isEmpty())
+    {
+        return QJsonObject();
+    }
+
+    return loadByKey(_dialogKey);
 }
 
 bool DialogSettingStore::save(const QJsonObject &settings) const
 {
-    if (m_dialogKey.isEmpty()) return false;
-    return saveByKey(m_dialogKey, settings);
+    if (_dialogKey.isEmpty())
+    {
+        return false;
+    }
+
+    return saveByKey(_dialogKey, settings);
 }
 
 bool DialogSettingStore::merge(const QJsonObject &partial) const
