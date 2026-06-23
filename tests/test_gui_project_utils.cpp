@@ -2388,6 +2388,64 @@ TEST(CodeStyleTest, FeaturePointVisualizationDialogUsesLowerCamelPrivateMemberNa
     }
 }
 
+TEST(CodeStyleTest, ObservationNetworkDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/ObservationNetworkDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/ObservationNetworkDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QTabWidget *_tabs = nullptr;"),
+        QStringLiteral("ObservationNetworkView *_netView = nullptr;"),
+        QStringLiteral("QLabel *_statsLabel = nullptr;"),
+        QStringLiteral("QComboBox *_presetCombo = nullptr;"),
+        QStringLiteral("QComboBox *_graphAlgoCombo = nullptr;"),
+        QStringLiteral("QSpinBox *_maxNeighborsSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_minMatchCountSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_minOverlapSpin = nullptr;"),
+        QStringLiteral("QComboBox *_verifyMethodCombo = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_verifyThreshSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_pruneWeakCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_pruneThreshSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_threadsSpin = nullptr;"),
+        QStringLiteral("QVector<xjw::MatchEdge> _matchEdges;"),
+        QStringLiteral("QStringList _imageNames;"),
+        QStringLiteral("QVector<xjw::GpsCoord> _gpsCoords;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_tabs"),
+        QStringLiteral("m_netView"),
+        QStringLiteral("m_statsLabel"),
+        QStringLiteral("m_presetCombo"),
+        QStringLiteral("m_graphAlgoCombo"),
+        QStringLiteral("m_maxNeighborsSpin"),
+        QStringLiteral("m_minMatchCountSpin"),
+        QStringLiteral("m_minOverlapSpin"),
+        QStringLiteral("m_verifyMethodCombo"),
+        QStringLiteral("m_verifyThreshSpin"),
+        QStringLiteral("m_pruneWeakCheck"),
+        QStringLiteral("m_pruneThreshSpin"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_matchEdges"),
+        QStringLiteral("m_imageNames"),
+        QStringLiteral("m_gpsCoords"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

@@ -58,24 +58,24 @@ private:
     xjw::ObservationNetworkConfig buildConfig() const;
 
     // ── 标签页 ──
-    QTabWidget              *m_tabs       = nullptr;
-    ObservationNetworkView  *m_netView    = nullptr;
-    QLabel                  *m_statsLabel = nullptr;
+    QTabWidget *_tabs = nullptr;
+    ObservationNetworkView *_netView = nullptr;
+    QLabel *_statsLabel = nullptr;
 
     // ── 参数控件 ──
-    QComboBox      *m_presetCombo        = nullptr;  ///< 预设档位
-    QComboBox      *m_graphAlgoCombo     = nullptr;  ///< 连接图算法
-    QSpinBox       *m_maxNeighborsSpin   = nullptr;  ///< 最大邻居数
-    QSpinBox       *m_minMatchCountSpin  = nullptr;  ///< 最少匹配数
-    QDoubleSpinBox *m_minOverlapSpin     = nullptr;  ///< 最小重叠率
-    QComboBox      *m_verifyMethodCombo  = nullptr;  ///< 几何验证方法
-    QDoubleSpinBox *m_verifyThreshSpin   = nullptr;  ///< 几何验证阈值
-    QCheckBox      *m_pruneWeakCheck     = nullptr;  ///< 剪枝弱连接
-    QDoubleSpinBox *m_pruneThreshSpin    = nullptr;  ///< 剪枝阈值
-    QSpinBox       *m_threadsSpin        = nullptr;
+    QComboBox *_presetCombo = nullptr;             ///< 预设档位
+    QComboBox *_graphAlgoCombo = nullptr;          ///< 连接图算法
+    QSpinBox *_maxNeighborsSpin = nullptr;         ///< 最大邻居数
+    QSpinBox *_minMatchCountSpin = nullptr;        ///< 最少匹配数
+    QDoubleSpinBox *_minOverlapSpin = nullptr;     ///< 最小重叠率
+    QComboBox *_verifyMethodCombo = nullptr;       ///< 几何验证方法
+    QDoubleSpinBox *_verifyThreshSpin = nullptr;   ///< 几何验证阈值
+    QCheckBox *_pruneWeakCheck = nullptr;          ///< 剪枝弱连接
+    QDoubleSpinBox *_pruneThreshSpin = nullptr;    ///< 剪枝阈值
+    QSpinBox *_threadsSpin = nullptr;
 
     // ── 注入数据 ──
-    QVector<xjw::MatchEdge>  m_matchEdges;
-    QStringList              m_imageNames;
-    QVector<xjw::GpsCoord>   m_gpsCoords;
+    QVector<xjw::MatchEdge> _matchEdges;
+    QStringList _imageNames;
+    QVector<xjw::GpsCoord> _gpsCoords;
 };
