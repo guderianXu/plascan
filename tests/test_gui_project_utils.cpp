@@ -2144,6 +2144,50 @@ TEST(CodeStyleTest, SurveyControlDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, CreateDemDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CreateDemDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CreateDemDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_projectManager = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QStringList _availableImages;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _running = false;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_autoModeBtn = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_manualModeBtn = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QStackedWidget *_modeStack = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QListWidget *_imageList = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_camStatusLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("class QLineEdit *_denseEdit = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QProgressBar *_progressBar = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_stageLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_runBtn = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_closeBtn = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_availableImages"),
+        QStringLiteral("m_running"),
+        QStringLiteral("m_autoModeBtn"),
+        QStringLiteral("m_manualModeBtn"),
+        QStringLiteral("m_modeStack"),
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_camStatusLabel"),
+        QStringLiteral("m_denseEdit"),
+        QStringLiteral("m_progressBar"),
+        QStringLiteral("m_stageLabel"),
+        QStringLiteral("m_runBtn"),
+        QStringLiteral("m_closeBtn"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

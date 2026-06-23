@@ -48,27 +48,27 @@ private:
     void setRunning(bool running);
     void refreshRunButton();
 
-    ProjectManager *m_projectManager = nullptr;
-    QStringList m_availableImages;
-    bool m_running = false;
+    ProjectManager *_projectManager = nullptr;
+    QStringList _availableImages;
+    bool _running = false;
 
     // 模式切换
-    QPushButton *m_autoModeBtn  = nullptr;
-    QPushButton *m_manualModeBtn = nullptr;
-    QStackedWidget *m_modeStack = nullptr;
+    QPushButton *_autoModeBtn = nullptr;
+    QPushButton *_manualModeBtn = nullptr;
+    QStackedWidget *_modeStack = nullptr;
 
     // 自动模式
-    QListWidget *m_imageList    = nullptr;
-    QLabel *m_camStatusLabel    = nullptr;
+    QListWidget *_imageList = nullptr;
+    QLabel *_camStatusLabel = nullptr;
 
     // 手动模式
-    class QLineEdit *m_denseEdit = nullptr;
+    class QLineEdit *_denseEdit = nullptr;
 
     // 进度区域
-    QProgressBar *m_progressBar  = nullptr;
-    QLabel       *m_stageLabel   = nullptr;
+    QProgressBar *_progressBar = nullptr;
+    QLabel *_stageLabel = nullptr;
 
     // 按钮
-    QPushButton *m_runBtn   = nullptr;
-    QPushButton *m_closeBtn = nullptr;
+    QPushButton *_runBtn = nullptr;
+    QPushButton *_closeBtn = nullptr;
 };
