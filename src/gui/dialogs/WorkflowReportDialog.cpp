@@ -38,7 +38,7 @@
 // ReportChartWidget
 // =============================================================================
 ReportChartWidget::ReportChartWidget(ChartType type, QWidget *parent)
-    : QWidget(parent), m_type(type)
+    : QWidget(parent), _type(type)
 {
     setMinimumSize(200, 160);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
@@ -46,7 +46,7 @@ ReportChartWidget::ReportChartWidget(ChartType type, QWidget *parent)
 
 QSize ReportChartWidget::sizeHint() const
 {
-    switch (m_type) {
+    switch (_type) {
     case ChartType::ArcProgress:      return {220, 180};
     case ChartType::BarComparison:    return {400, 200};
     case ChartType::BarSeries:        return {400, 200};
@@ -59,13 +59,13 @@ void ReportChartWidget::setComparisonData(const QStringList &labels,
                                            const std::vector<double> &after,
                                            const QString &unit)
 {
-    m_labels = labels; m_before = before; m_after = after; m_unit = unit;
+    _labels = labels; _before = before; _after = after; _unit = unit;
     update();
 }
 
 void ReportChartWidget::setArcData(double value, double total, const QString &label)
 {
-    m_arcValue = value; m_arcTotal = total; m_arcLabel = label;
+    _arcValue = value; _arcTotal = total; _arcLabel = label;
     update();
 }
 
@@ -73,7 +73,7 @@ void ReportChartWidget::setBarSeriesData(const QStringList &labels,
                                           const std::vector<double> &values,
                                           const QString &unit)
 {
-    m_labels = labels; m_values = values; m_unit = unit;
+    _labels = labels; _values = values; _unit = unit;
     update();
 }
 
@@ -81,7 +81,7 @@ void ReportChartWidget::paintEvent(QPaintEvent *)
 {
     QPainter p(this);
     p.setRenderHint(QPainter::Antialiasing);
-    switch (m_type) {
+    switch (_type) {
     case ChartType::BarComparison: drawBarComparison(p); break;
     case ChartType::ArcProgress:  drawArcProgress(p);   break;
     case ChartType::BarSeries:    drawBarSeries(p);     break;
@@ -90,9 +90,9 @@ void ReportChartWidget::paintEvent(QPaintEvent *)
 
 void ReportChartWidget::drawBarComparison(QPainter &p)
 {
-    if (m_labels.isEmpty() || m_before.empty()) return;
+    if (_labels.isEmpty() || _before.empty()) return;
 
-    const int n = qMin(m_labels.size(), (int)m_before.size());
+    const int n = qMin(_labels.size(), (int)_before.size());
     const QColor colBefore(220, 90, 80);
     const QColor colAfter (60, 160, 100);
     const QColor colGrid  (230, 230, 230);
@@ -108,8 +108,8 @@ void ReportChartWidget::drawBarComparison(QPainter &p)
     // 最大值
     double maxVal = 0.01;
     for (int i = 0; i < n; ++i) {
-        maxVal = std::max(maxVal, m_before[i]);
-        if (i < (int)m_after.size()) maxVal = std::max(maxVal, m_after[i]);
+        maxVal = std::max(maxVal, _before[i]);
+        if (i < (int)_after.size()) maxVal = std::max(maxVal, _after[i]);
     }
     maxVal *= 1.15;
 
@@ -135,7 +135,7 @@ void ReportChartWidget::drawBarComparison(QPainter &p)
     p.save();
     p.translate(10, marginT + H / 2);
     p.rotate(-90);
-    p.drawText(-40, -6, 80, 14, Qt::AlignCenter, m_unit);
+    p.drawText(-40, -6, 80, 14, Qt::AlignCenter, _unit);
     p.restore();
 
     // 左边框
@@ -151,26 +151,26 @@ void ReportChartWidget::drawBarComparison(QPainter &p)
         int cx = marginL + i * barGroupW + barGroupW / 2;
 
         // 平差前（红）
-        int h1 = (maxVal > 0) ? (int)(H * m_before[i] / maxVal) : 0;
+        int h1 = (maxVal > 0) ? (int)(H * _before[i] / maxVal) : 0;
         p.fillRect(cx - barW - gap, marginT + H - h1, barW, h1, colBefore);
         // 数值
         p.setPen(colBefore);
         p.drawText(cx - barW - gap, marginT + H - h1 - 14, barW, 13,
-                   Qt::AlignHCenter, QString::number(m_before[i], 'f', 2));
+                   Qt::AlignHCenter, QString::number(_before[i], 'f', 2));
 
         // 平差后（绿）
-        if (i < (int)m_after.size()) {
-            int h2 = (maxVal > 0) ? (int)(H * m_after[i] / maxVal) : 0;
+        if (i < (int)_after.size()) {
+            int h2 = (maxVal > 0) ? (int)(H * _after[i] / maxVal) : 0;
             p.fillRect(cx + gap, marginT + H - h2, barW, h2, colAfter);
             p.setPen(colAfter);
             p.drawText(cx + gap, marginT + H - h2 - 14, barW, 13,
-                       Qt::AlignHCenter, QString::number(m_after[i], 'f', 2));
+                       Qt::AlignHCenter, QString::number(_after[i], 'f', 2));
         }
 
         // X 轴标签
         p.setPen(colText);
         p.drawText(cx - barGroupW / 2, marginT + H + 4, barGroupW, 18,
-                   Qt::AlignHCenter, m_labels[i]);
+                   Qt::AlignHCenter, _labels[i]);
     }
 
     // 图例
@@ -195,7 +195,7 @@ void ReportChartWidget::drawArcProgress(QPainter &p)
     const int r  = qMin(cx, cy) - 28;
     if (r < 20) return;
 
-    const double ratio = (m_arcTotal > 0) ? qBound(0.0, m_arcValue / m_arcTotal, 1.0) : 0.0;
+    const double ratio = (_arcTotal > 0) ? qBound(0.0, _arcValue / _arcTotal, 1.0) : 0.0;
     const int   spanned= (int)(ratio * 5760); // 0.01度单位，360°=5760
 
     // 灰色背景环
@@ -223,17 +223,17 @@ void ReportChartWidget::drawArcProgress(QPainter &p)
     p.setFont(smallFont);
     p.setPen(QColor(120, 120, 120));
     p.drawText(cx - r, cy + 8, 2*r, 20, Qt::AlignCenter,
-               QString("%1 / %2").arg((int)m_arcValue).arg((int)m_arcTotal));
+               QString("%1 / %2").arg((int)_arcValue).arg((int)_arcTotal));
 
     // 底部标签
-    p.drawText(0, height() - 22, width(), 20, Qt::AlignCenter, m_arcLabel);
+    p.drawText(0, height() - 22, width(), 20, Qt::AlignCenter, _arcLabel);
 }
 
 void ReportChartWidget::drawBarSeries(QPainter &p)
 {
-    if (m_labels.isEmpty() || m_values.empty()) return;
+    if (_labels.isEmpty() || _values.empty()) return;
 
-    const int n = qMin(m_labels.size(), (int)m_values.size());
+    const int n = qMin(_labels.size(), (int)_values.size());
     const QColor colBar(70, 130, 210);
     const QColor colGrid(230, 230, 230);
     const QColor colText(80, 80, 80);
@@ -245,7 +245,7 @@ void ReportChartWidget::drawBarSeries(QPainter &p)
     p.fillRect(rect(), QColor(250, 250, 252));
 
     double maxVal = 0.01;
-    for (int i = 0; i < n; ++i) maxVal = std::max(maxVal, m_values[i]);
+    for (int i = 0; i < n; ++i) maxVal = std::max(maxVal, _values[i]);
     maxVal *= 1.15;
 
     QFont smallFont = p.font(); smallFont.setPointSize(8); p.setFont(smallFont);
@@ -269,7 +269,7 @@ void ReportChartWidget::drawBarSeries(QPainter &p)
     p.save();
     p.translate(10, marginT + H / 2);
     p.rotate(-90);
-    p.drawText(-40, -6, 80, 14, Qt::AlignCenter, m_unit);
+    p.drawText(-40, -6, 80, 14, Qt::AlignCenter, _unit);
     p.restore();
 
     const int barW  = qMax(4, W / n - 8);
@@ -277,17 +277,17 @@ void ReportChartWidget::drawBarSeries(QPainter &p)
 
     for (int i = 0; i < n; ++i) {
         int x = marginL + i * cellW + (cellW - barW) / 2;
-        int barH = (maxVal > 0) ? (int)(H * m_values[i] / maxVal) : 0;
+        int barH = (maxVal > 0) ? (int)(H * _values[i] / maxVal) : 0;
         int y = marginT + H - barH;
 
         p.fillRect(x, y, barW, barH, colBar);
 
         p.setPen(colBar.darker(130));
         p.drawText(x, y - 14, barW, 13, Qt::AlignHCenter,
-                   QString::number(m_values[i], 'f', 1));
+                   QString::number(_values[i], 'f', 1));
 
         p.setPen(colText);
-        const QString lbl = m_labels[i];
+        const QString lbl = _labels[i];
         p.drawText(x - 4, marginT + H + 4, barW + 8, 18, Qt::AlignHCenter, lbl);
     }
 }
@@ -308,7 +308,7 @@ static QString fmtPercent(int n, int d) {
 
 WorkflowReportDialog::WorkflowReportDialog(const QString &projectAssetsDir, QWidget *parent)
     : QDialog(parent)
-    , m_assetsDir(projectAssetsDir)
+    , _assetsDir(projectAssetsDir)
 {
     setWindowTitle(tr("工作流程历史报告"));
     setMinimumSize(750, 600);
@@ -318,7 +318,7 @@ WorkflowReportDialog::WorkflowReportDialog(const QString &projectAssetsDir, QWid
 
 QJsonObject WorkflowReportDialog::loadReport(const QString &name) const
 {
-    const QString path = QDir(m_assetsDir).filePath("reports/" + name);
+    const QString path = QDir(_assetsDir).filePath("reports/" + name);
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return {};
     QJsonParseError err;
@@ -329,7 +329,7 @@ QJsonObject WorkflowReportDialog::loadReport(const QString &name) const
 
 QJsonArray WorkflowReportDialog::loadReportHistory(const QString &name) const
 {
-    const QString path = QDir(m_assetsDir).filePath("reports/" + name);
+    const QString path = QDir(_assetsDir).filePath("reports/" + name);
     QFile f(path);
     if (!f.open(QIODevice::ReadOnly)) return {};
 
@@ -404,8 +404,8 @@ void WorkflowReportDialog::buildUi()
     Ui::WorkflowReportDialog form;
     form.setupUi(this);
 
-    m_refreshBtn = form.m_refreshBtn;
-    m_tabs = form.m_tabs;
+    _refreshBtn = form.m_refreshBtn;
+    _tabs = form.m_tabs;
 
     auto *titleLbl = form.reportTitleLabel;
     QFont tf = titleLbl->font();
@@ -413,19 +413,19 @@ void WorkflowReportDialog::buildUi()
     tf.setBold(true);
     titleLbl->setFont(tf);
 
-    connect(m_refreshBtn, &QPushButton::clicked, this, &WorkflowReportDialog::refresh);
+    connect(_refreshBtn, &QPushButton::clicked, this, &WorkflowReportDialog::refresh);
 
-    m_tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
-    m_tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));
-    m_tabs->addTab(buildMeshTab(),  tr("▲ 三维模型"));
+    _tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
+    _tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));
+    _tabs->addTab(buildMeshTab(),  tr("▲ 三维模型"));
 }
 
 void WorkflowReportDialog::refresh()
 {
-    m_tabs->removeTab(2); m_tabs->removeTab(1); m_tabs->removeTab(0);
-    m_tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
-    m_tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));
-    m_tabs->addTab(buildMeshTab(),  tr("▲ 三维模型"));
+    _tabs->removeTab(2); _tabs->removeTab(1); _tabs->removeTab(0);
+    _tabs->addTab(buildAtTab(),    tr("✈ 空中三角测量"));
+    _tabs->addTab(buildDenseTab(), tr("☁ 稠密点云"));
+    _tabs->addTab(buildMeshTab(),  tr("▲ 三维模型"));
 }
 
 // ─────────────────────────────────────────────────────────────────────────────

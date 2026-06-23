@@ -2274,6 +2274,50 @@ TEST(CodeStyleTest, TriangulationDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, WorkflowReportDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/WorkflowReportDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/WorkflowReportDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("ChartType _type;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QStringList _labels;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::vector<double> _before;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::vector<double> _after;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::vector<double> _values;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("double _arcValue = 0.0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("double _arcTotal = 1.0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QString _arcLabel;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QString _unit;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QString _assetsDir;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QTabWidget *_tabs = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_refreshBtn = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_type"),
+        QStringLiteral("m_labels"),
+        QStringLiteral("m_before"),
+        QStringLiteral("m_after"),
+        QStringLiteral("m_values"),
+        QStringLiteral("m_arcValue"),
+        QStringLiteral("m_arcTotal"),
+        QStringLiteral("m_arcLabel"),
+        QStringLiteral("m_unit"),
+        QStringLiteral("m_assetsDir"),
+        QStringLiteral("m_tabs"),
+        QStringLiteral("m_refreshBtn"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

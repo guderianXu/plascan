@@ -68,15 +68,15 @@ private:
     void drawArcProgress(QPainter &p);
     void drawBarSeries(QPainter &p);
 
-    ChartType               m_type;
-    QStringList             m_labels;
-    std::vector<double>     m_before;
-    std::vector<double>     m_after;
-    std::vector<double>     m_values;
-    double                  m_arcValue  = 0.0;
-    double                  m_arcTotal  = 1.0;
-    QString                 m_arcLabel;
-    QString                 m_unit;
+    ChartType _type;
+    QStringList _labels;
+    std::vector<double> _before;
+    std::vector<double> _after;
+    std::vector<double> _values;
+    double _arcValue = 0.0;
+    double _arcTotal = 1.0;
+    QString _arcLabel;
+    QString _unit;
 };
 
 // ─────────────────────────────────────────────────────────────────────────────
@@ -115,7 +115,7 @@ private:
     // 辅助：创建形如 "键: 值" 的行
     static QLabel *makeKVLabel(const QString &key, const QString &value);
 
-    QString         m_assetsDir;
-    QTabWidget     *m_tabs      = nullptr;
-    QPushButton    *m_refreshBtn= nullptr;
+    QString _assetsDir;
+    QTabWidget *_tabs = nullptr;
+    QPushButton *_refreshBtn = nullptr;
 };
