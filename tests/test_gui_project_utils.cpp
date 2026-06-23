@@ -1823,6 +1823,48 @@ TEST(CodeStyleTest, DenseCloudRefineDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, DepthFusionDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DepthFusionDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DepthFusionDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_fusionMethodCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_depthConsistSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_minConsistViewSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_normalConsistSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_voxelSizeSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_minConfidenceSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_maxReprojSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_colorCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_normalCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_threadsSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_cudaCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_infoLabel = nullptr;")));
+
+    const QStringList oldHeaderMemberNames = {
+        QStringLiteral("m_fusionMethodCombo"),
+        QStringLiteral("m_depthConsistSpin"),
+        QStringLiteral("m_minConsistViewSpin"),
+        QStringLiteral("m_normalConsistSpin"),
+        QStringLiteral("m_voxelSizeSpin"),
+        QStringLiteral("m_minConfidenceSpin"),
+        QStringLiteral("m_maxReprojSpin"),
+        QStringLiteral("m_colorCheck"),
+        QStringLiteral("m_normalCheck"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_cudaCheck"),
+        QStringLiteral("m_infoLabel"),
+    };
+    for (const QString &oldName : oldHeaderMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

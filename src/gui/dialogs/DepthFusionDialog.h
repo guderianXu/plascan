@@ -32,16 +32,16 @@ private slots:
 private:
     QJsonObject collectSettings() const;
 
-    QComboBox      *m_fusionMethodCombo  = nullptr;  ///< 融合方法
-    QDoubleSpinBox *m_depthConsistSpin   = nullptr;  ///< 深度一致性阈值
-    QSpinBox       *m_minConsistViewSpin = nullptr;  ///< 最少一致视图
-    QDoubleSpinBox *m_normalConsistSpin  = nullptr;  ///< 法向量一致性
-    QDoubleSpinBox *m_voxelSizeSpin      = nullptr;  ///< 体素大小
-    QDoubleSpinBox *m_minConfidenceSpin  = nullptr;  ///< 最小置信度
-    QDoubleSpinBox *m_maxReprojSpin      = nullptr;  ///< 最大重投影误差
-    QCheckBox      *m_colorCheck         = nullptr;  ///< 保留颜色
-    QCheckBox      *m_normalCheck        = nullptr;  ///< 保留法向量
-    QSpinBox       *m_threadsSpin        = nullptr;
-    QCheckBox      *m_cudaCheck          = nullptr;
-    QLabel         *m_infoLabel          = nullptr;
+    QComboBox *_fusionMethodCombo = nullptr;       ///< 融合方法
+    QDoubleSpinBox *_depthConsistSpin = nullptr;   ///< 深度一致性阈值
+    QSpinBox *_minConsistViewSpin = nullptr;       ///< 最少一致视图
+    QDoubleSpinBox *_normalConsistSpin = nullptr;  ///< 法向量一致性
+    QDoubleSpinBox *_voxelSizeSpin = nullptr;      ///< 体素大小
+    QDoubleSpinBox *_minConfidenceSpin = nullptr;  ///< 最小置信度
+    QDoubleSpinBox *_maxReprojSpin = nullptr;      ///< 最大重投影误差
+    QCheckBox *_colorCheck = nullptr;              ///< 保留颜色
+    QCheckBox *_normalCheck = nullptr;             ///< 保留法向量
+    QSpinBox *_threadsSpin = nullptr;
+    QCheckBox *_cudaCheck = nullptr;
+    QLabel *_infoLabel = nullptr;
 };
