@@ -37,9 +37,9 @@ private slots:
 private:
     QJsonObject currentSettings() const;
 
-    QListWidget *m_imageList = nullptr;
-    QLineEdit *m_demEdit = nullptr;
-    QLineEdit *m_outputEdit = nullptr;
-    QDoubleSpinBox *m_resolutionSpin = nullptr;
-    QString m_projectRoot;
+    QListWidget *_imageList = nullptr;
+    QLineEdit *_demEdit = nullptr;
+    QLineEdit *_outputEdit = nullptr;
+    QDoubleSpinBox *_resolutionSpin = nullptr;
+    QString _projectRoot;
 };

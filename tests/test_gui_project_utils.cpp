@@ -2082,6 +2082,34 @@ TEST(CodeStyleTest, TextureMappingDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, MapProjectDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MapProjectDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MapProjectDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QListWidget *_imageList = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_demEdit = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_outputEdit = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_resolutionSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QString _projectRoot;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_demEdit"),
+        QStringLiteral("m_outputEdit"),
+        QStringLiteral("m_resolutionSpin"),
+        QStringLiteral("m_projectRoot"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
