@@ -681,14 +681,14 @@ VocabularyOverlapDialog::RunResult runVocabularyOverlapRequest(const VocabularyO
 
 VocabularyOverlapDialog::VocabularyOverlapDialog(ProjectManager *projectManager, QWidget *parent)
     : QDialog(parent)
-    , m_projectManager(projectManager)
+    , _projectManager(projectManager)
 {
     setupUi();
     setupConnections();
     onResetDefaults();
-    if (m_projectManager)
+    if (_projectManager)
     {
-        setProjectImages(m_projectManager->getAllImages());
+        setProjectImages(_projectManager->getAllImages());
     }
 }
 
@@ -699,156 +699,156 @@ void VocabularyOverlapDialog::setupUi()
     Ui::VocabularyOverlapDialog ui;
     ui.setupUi(this);
 
-    m_imageList = ui.m_imageList;
-    m_selectAllBtn = ui.m_selectAllBtn;
-    m_clearSelectionBtn = ui.m_clearSelectionBtn;
-    m_overlapMethodCombo = ui.m_overlapMethodCombo;
-    m_referenceBodyCombo = ui.m_referenceBodyCombo;
-    m_autoReferenceElevationCheck = ui.m_autoReferenceElevationCheck;
-    m_referenceElevationSpin = ui.m_referenceElevationSpin;
-    m_cameraNeighborFactorSpin = ui.m_cameraNeighborFactorSpin;
-    m_featureAlgorithmCombo = ui.m_featureAlgorithmCombo;
-    m_featureDirEdit = ui.m_featureDirEdit;
-    m_autoDetectFeatureDirBtn = ui.m_autoDetectFeatureDirBtn;
-    m_browseFeatureDirBtn = ui.m_browseFeatureDirBtn;
-    m_branchFactorSpin = ui.m_branchFactorSpin;
-    m_treeDepthSpin = ui.m_treeDepthSpin;
-    m_samplePerImageSpin = ui.m_samplePerImageSpin;
-    m_maxTrainingDescriptorsSpin = ui.m_maxTrainingDescriptorsSpin;
-    m_topKSpin = ui.m_topKSpin;
-    m_minSimilaritySpin = ui.m_minSimilaritySpin;
-    m_useTfidfCheck = ui.m_useTfidfCheck;
-    m_mutualTopKCheck = ui.m_mutualTopKCheck;
-    m_enableGeometryCheck = ui.m_enableGeometryCheck;
-    m_minInliersSpin = ui.m_minInliersSpin;
-    m_ransacThresholdSpin = ui.m_ransacThresholdSpin;
-    m_geometryModelCombo = ui.m_geometryModelCombo;
-    m_overlapThreadsSpin = ui.m_overlapThreadsSpin;
-    m_useFlannAssignmentCheck = ui.m_useFlannAssignmentCheck;
-    m_useInvertedIndexCheck = ui.m_useInvertedIndexCheck;
-    m_useCudaOverlapCheck = ui.m_useCudaOverlapCheck;
-    m_geometryMaxDescriptorsSpin = ui.m_geometryMaxDescriptorsSpin;
-    m_geometryMaxPairsSpin = ui.m_geometryMaxPairsSpin;
-    m_outputJsonEdit = ui.m_outputJsonEdit;
-    m_outputLisEdit = ui.m_outputLisEdit;
-    m_applyToMatchingCheck = ui.m_applyToMatchingCheck;
-    m_pairTable = ui.m_pairTable;
-    m_summaryLabel = ui.m_summaryLabel;
-    m_resetBtn = ui.m_resetBtn;
-    m_exportLisBtn = ui.m_exportLisBtn;
-    m_applyToMatchingBtn = ui.m_applyToMatchingBtn;
-    m_runBtn = ui.m_runBtn;
-    m_closeBtn = ui.m_closeBtn;
+    _imageList = ui.m_imageList;
+    _selectAllBtn = ui.m_selectAllBtn;
+    _clearSelectionBtn = ui.m_clearSelectionBtn;
+    _overlapMethodCombo = ui.m_overlapMethodCombo;
+    _referenceBodyCombo = ui.m_referenceBodyCombo;
+    _autoReferenceElevationCheck = ui.m_autoReferenceElevationCheck;
+    _referenceElevationSpin = ui.m_referenceElevationSpin;
+    _cameraNeighborFactorSpin = ui.m_cameraNeighborFactorSpin;
+    _featureAlgorithmCombo = ui.m_featureAlgorithmCombo;
+    _featureDirEdit = ui.m_featureDirEdit;
+    _autoDetectFeatureDirBtn = ui.m_autoDetectFeatureDirBtn;
+    _browseFeatureDirBtn = ui.m_browseFeatureDirBtn;
+    _branchFactorSpin = ui.m_branchFactorSpin;
+    _treeDepthSpin = ui.m_treeDepthSpin;
+    _samplePerImageSpin = ui.m_samplePerImageSpin;
+    _maxTrainingDescriptorsSpin = ui.m_maxTrainingDescriptorsSpin;
+    _topKSpin = ui.m_topKSpin;
+    _minSimilaritySpin = ui.m_minSimilaritySpin;
+    _useTfidfCheck = ui.m_useTfidfCheck;
+    _mutualTopKCheck = ui.m_mutualTopKCheck;
+    _enableGeometryCheck = ui.m_enableGeometryCheck;
+    _minInliersSpin = ui.m_minInliersSpin;
+    _ransacThresholdSpin = ui.m_ransacThresholdSpin;
+    _geometryModelCombo = ui.m_geometryModelCombo;
+    _overlapThreadsSpin = ui.m_overlapThreadsSpin;
+    _useFlannAssignmentCheck = ui.m_useFlannAssignmentCheck;
+    _useInvertedIndexCheck = ui.m_useInvertedIndexCheck;
+    _useCudaOverlapCheck = ui.m_useCudaOverlapCheck;
+    _geometryMaxDescriptorsSpin = ui.m_geometryMaxDescriptorsSpin;
+    _geometryMaxPairsSpin = ui.m_geometryMaxPairsSpin;
+    _outputJsonEdit = ui.m_outputJsonEdit;
+    _outputLisEdit = ui.m_outputLisEdit;
+    _applyToMatchingCheck = ui.m_applyToMatchingCheck;
+    _pairTable = ui.m_pairTable;
+    _summaryLabel = ui.m_summaryLabel;
+    _resetBtn = ui.m_resetBtn;
+    _exportLisBtn = ui.m_exportLisBtn;
+    _applyToMatchingBtn = ui.m_applyToMatchingBtn;
+    _runBtn = ui.m_runBtn;
+    _closeBtn = ui.m_closeBtn;
 
     ui.topSplit->setStretchFactor(0, 3);
     ui.topSplit->setStretchFactor(1, 2);
 
-    m_overlapMethodCombo->clear();
-    m_overlapMethodCombo->addItem(QStringLiteral("特征词汇（已有特征）"), QStringLiteral("vocabulary"));
-    m_overlapMethodCombo->addItem(QStringLiteral("相机模型（已有相机）"), QStringLiteral("camera"));
+    _overlapMethodCombo->clear();
+    _overlapMethodCombo->addItem(QStringLiteral("特征词汇（已有特征）"), QStringLiteral("vocabulary"));
+    _overlapMethodCombo->addItem(QStringLiteral("相机模型（已有相机）"), QStringLiteral("camera"));
 
-    m_referenceBodyCombo->clear();
-    m_referenceBodyCombo->addItem(QStringLiteral("地球 (WGS84 6378137 m)"), QStringLiteral("earth"));
-    m_referenceBodyCombo->addItem(QStringLiteral("月球 (1737400 m)"), QStringLiteral("moon"));
-    m_referenceBodyCombo->addItem(QStringLiteral("火星 (3389500 m)"), QStringLiteral("mars"));
+    _referenceBodyCombo->clear();
+    _referenceBodyCombo->addItem(QStringLiteral("地球 (WGS84 6378137 m)"), QStringLiteral("earth"));
+    _referenceBodyCombo->addItem(QStringLiteral("月球 (1737400 m)"), QStringLiteral("moon"));
+    _referenceBodyCombo->addItem(QStringLiteral("火星 (3389500 m)"), QStringLiteral("mars"));
 
-    m_featureAlgorithmCombo->clear();
-    m_featureAlgorithmCombo->addItem(QStringLiteral("DISK (.dsk)"), QStringLiteral(".dsk"));
-    m_featureAlgorithmCombo->addItem(QStringLiteral("ALIKED (.alk)"), QStringLiteral(".alk"));
-    m_featureAlgorithmCombo->addItem(QStringLiteral("SuperPoint (.sp)"), QStringLiteral(".sp"));
-    m_featureAlgorithmCombo->addItem(QStringLiteral("SIFT (.sift)"), QStringLiteral(".sift"));
-    m_featureAlgorithmCombo->addItem(QStringLiteral("ORB (.orb)"), QStringLiteral(".orb"));
+    _featureAlgorithmCombo->clear();
+    _featureAlgorithmCombo->addItem(QStringLiteral("DISK (.dsk)"), QStringLiteral(".dsk"));
+    _featureAlgorithmCombo->addItem(QStringLiteral("ALIKED (.alk)"), QStringLiteral(".alk"));
+    _featureAlgorithmCombo->addItem(QStringLiteral("SuperPoint (.sp)"), QStringLiteral(".sp"));
+    _featureAlgorithmCombo->addItem(QStringLiteral("SIFT (.sift)"), QStringLiteral(".sift"));
+    _featureAlgorithmCombo->addItem(QStringLiteral("ORB (.orb)"), QStringLiteral(".orb"));
 
-    m_geometryModelCombo->clear();
-    m_geometryModelCombo->addItem(QStringLiteral("Fundamental Matrix"), QStringLiteral("fundamental"));
+    _geometryModelCombo->clear();
+    _geometryModelCombo->addItem(QStringLiteral("Fundamental Matrix"), QStringLiteral("fundamental"));
 
-    m_pairTable->setColumnCount(6);
-    m_pairTable->setHorizontalHeaderLabels(QStringList()
+    _pairTable->setColumnCount(6);
+    _pairTable->setHorizontalHeaderLabels(QStringList()
                                            << QStringLiteral("影像 1")
                                            << QStringLiteral("影像 2")
                                            << QStringLiteral("相似度")
                                            << QStringLiteral("共享词")
                                            << QStringLiteral("几何内点")
                                            << QStringLiteral("状态"));
-    m_pairTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_pairTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_pairTable->setMinimumHeight(180);
-    m_pairTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
+    _pairTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    _pairTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _pairTable->setMinimumHeight(180);
+    _pairTable->horizontalHeader()->setSectionResizeMode(QHeaderView::Stretch);
 }
 
 void VocabularyOverlapDialog::setupConnections()
 {
-    connect(m_selectAllBtn, &QPushButton::clicked, this, [this]()
+    connect(_selectAllBtn, &QPushButton::clicked, this, [this]()
     {
-        for (int i = 0; i < m_imageList->count(); ++i)
+        for (int i = 0; i < _imageList->count(); ++i)
         {
-            m_imageList->item(i)->setCheckState(Qt::Checked);
+            _imageList->item(i)->setCheckState(Qt::Checked);
         }
         emitSettingsNow();
     });
 
-    connect(m_clearSelectionBtn, &QPushButton::clicked, this, [this]()
+    connect(_clearSelectionBtn, &QPushButton::clicked, this, [this]()
     {
-        for (int i = 0; i < m_imageList->count(); ++i)
+        for (int i = 0; i < _imageList->count(); ++i)
         {
-            m_imageList->item(i)->setCheckState(Qt::Unchecked);
+            _imageList->item(i)->setCheckState(Qt::Unchecked);
         }
         emitSettingsNow();
     });
 
-    connect(m_featureAlgorithmCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]()
+    connect(_featureAlgorithmCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]()
     {
         refreshFeatureStatus();
         emitSettingsNow();
     });
-    connect(m_overlapMethodCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]()
+    connect(_overlapMethodCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, [this]()
     {
         updateMethodUi();
         emitSettingsNow();
     });
-    connect(m_featureDirEdit, &QLineEdit::editingFinished, this, [this]()
+    connect(_featureDirEdit, &QLineEdit::editingFinished, this, [this]()
     {
         refreshFeatureStatus();
         emitSettingsNow();
     });
-    connect(m_browseFeatureDirBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onBrowseFeatureDir);
-    connect(m_autoDetectFeatureDirBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onAutoDetectFeatureDir);
-    connect(m_runBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onRun);
-    connect(m_exportLisBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onExportLis);
-    connect(m_applyToMatchingBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onApplyToMatching);
-    connect(m_resetBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onResetDefaults);
-    connect(m_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
+    connect(_browseFeatureDirBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onBrowseFeatureDir);
+    connect(_autoDetectFeatureDirBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onAutoDetectFeatureDir);
+    connect(_runBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onRun);
+    connect(_exportLisBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onExportLis);
+    connect(_applyToMatchingBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onApplyToMatching);
+    connect(_resetBtn, &QPushButton::clicked, this, &VocabularyOverlapDialog::onResetDefaults);
+    connect(_closeBtn, &QPushButton::clicked, this, &QDialog::accept);
 
     const auto emitNow = [this]() { emitSettingsNow(); };
-    connect(m_branchFactorSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_treeDepthSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_samplePerImageSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_maxTrainingDescriptorsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_topKSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_minSimilaritySpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
-    connect(m_referenceBodyCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, emitNow);
-    connect(m_autoReferenceElevationCheck, &QCheckBox::toggled, this, [this](bool checked)
+    connect(_branchFactorSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_treeDepthSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_samplePerImageSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_maxTrainingDescriptorsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_topKSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_minSimilaritySpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
+    connect(_referenceBodyCombo, qOverload<int>(&QComboBox::currentIndexChanged), this, emitNow);
+    connect(_autoReferenceElevationCheck, &QCheckBox::toggled, this, [this](bool checked)
     {
-        m_referenceElevationSpin->setEnabled(!checked &&
-                                             m_overlapMethodCombo->currentData().toString() == QStringLiteral("camera"));
+        _referenceElevationSpin->setEnabled(!checked &&
+                                             _overlapMethodCombo->currentData().toString() == QStringLiteral("camera"));
         emitSettingsNow();
     });
-    connect(m_referenceElevationSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
-    connect(m_cameraNeighborFactorSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
-    connect(m_useTfidfCheck, &QCheckBox::toggled, this, emitNow);
-    connect(m_mutualTopKCheck, &QCheckBox::toggled, this, emitNow);
-    connect(m_enableGeometryCheck, &QCheckBox::toggled, this, emitNow);
-    connect(m_minInliersSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_ransacThresholdSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
-    connect(m_overlapThreadsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_useFlannAssignmentCheck, &QCheckBox::toggled, this, emitNow);
-    connect(m_useInvertedIndexCheck, &QCheckBox::toggled, this, emitNow);
-    connect(m_useCudaOverlapCheck, &QCheckBox::toggled, this, emitNow);
-    connect(m_geometryMaxDescriptorsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_geometryMaxPairsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
-    connect(m_outputJsonEdit, &QLineEdit::editingFinished, this, emitNow);
-    connect(m_outputLisEdit, &QLineEdit::editingFinished, this, emitNow);
-    connect(m_applyToMatchingCheck, &QCheckBox::toggled, this, emitNow);
+    connect(_referenceElevationSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
+    connect(_cameraNeighborFactorSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
+    connect(_useTfidfCheck, &QCheckBox::toggled, this, emitNow);
+    connect(_mutualTopKCheck, &QCheckBox::toggled, this, emitNow);
+    connect(_enableGeometryCheck, &QCheckBox::toggled, this, emitNow);
+    connect(_minInliersSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_ransacThresholdSpin, qOverload<double>(&QDoubleSpinBox::valueChanged), this, emitNow);
+    connect(_overlapThreadsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_useFlannAssignmentCheck, &QCheckBox::toggled, this, emitNow);
+    connect(_useInvertedIndexCheck, &QCheckBox::toggled, this, emitNow);
+    connect(_useCudaOverlapCheck, &QCheckBox::toggled, this, emitNow);
+    connect(_geometryMaxDescriptorsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_geometryMaxPairsSpin, qOverload<int>(&QSpinBox::valueChanged), this, emitNow);
+    connect(_outputJsonEdit, &QLineEdit::editingFinished, this, emitNow);
+    connect(_outputLisEdit, &QLineEdit::editingFinished, this, emitNow);
+    connect(_applyToMatchingCheck, &QCheckBox::toggled, this, emitNow);
 }
 
 void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
@@ -858,80 +858,80 @@ void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
         return;
     }
 
-    QSignalBlocker blockAlgorithm(m_featureAlgorithmCombo);
-    QSignalBlocker blockMethod(m_overlapMethodCombo);
-    QSignalBlocker blockFeatureDir(m_featureDirEdit);
-    QSignalBlocker blockReferenceBody(m_referenceBodyCombo);
-    QSignalBlocker blockReferenceAuto(m_autoReferenceElevationCheck);
-    QSignalBlocker blockReferenceElevation(m_referenceElevationSpin);
+    QSignalBlocker blockAlgorithm(_featureAlgorithmCombo);
+    QSignalBlocker blockMethod(_overlapMethodCombo);
+    QSignalBlocker blockFeatureDir(_featureDirEdit);
+    QSignalBlocker blockReferenceBody(_referenceBodyCombo);
+    QSignalBlocker blockReferenceAuto(_autoReferenceElevationCheck);
+    QSignalBlocker blockReferenceElevation(_referenceElevationSpin);
 
     const QString method = settings.value(QStringLiteral("overlap_method")).toString(QStringLiteral("vocabulary"));
-    const int methodIndex = m_overlapMethodCombo->findData(method);
+    const int methodIndex = _overlapMethodCombo->findData(method);
     if (methodIndex >= 0)
     {
-        m_overlapMethodCombo->setCurrentIndex(methodIndex);
+        _overlapMethodCombo->setCurrentIndex(methodIndex);
     }
 
     const QString suffix = settings.value(QStringLiteral("feature_suffix")).toString(QStringLiteral(".dsk"));
-    const int algorithmIndex = m_featureAlgorithmCombo->findData(suffix);
+    const int algorithmIndex = _featureAlgorithmCombo->findData(suffix);
     if (algorithmIndex >= 0)
     {
-        m_featureAlgorithmCombo->setCurrentIndex(algorithmIndex);
+        _featureAlgorithmCombo->setCurrentIndex(algorithmIndex);
     }
 
-    m_featureDirEdit->setText(settings.value(QStringLiteral("feature_dir")).toString(m_featureDirEdit->text()));
-    m_branchFactorSpin->setValue(settings.value(QStringLiteral("branch_factor")).toInt(m_branchFactorSpin->value()));
-    m_treeDepthSpin->setValue(settings.value(QStringLiteral("tree_depth")).toInt(m_treeDepthSpin->value()));
-    m_samplePerImageSpin->setValue(settings.value(QStringLiteral("sample_per_image")).toInt(m_samplePerImageSpin->value()));
-    m_maxTrainingDescriptorsSpin->setValue(
-        settings.value(QStringLiteral("max_training_descriptors")).toInt(m_maxTrainingDescriptorsSpin->value()));
-    m_topKSpin->setValue(settings.value(QStringLiteral("top_k")).toInt(m_topKSpin->value()));
-    m_minSimilaritySpin->setValue(settings.value(QStringLiteral("min_similarity")).toDouble(m_minSimilaritySpin->value()));
+    _featureDirEdit->setText(settings.value(QStringLiteral("feature_dir")).toString(_featureDirEdit->text()));
+    _branchFactorSpin->setValue(settings.value(QStringLiteral("branch_factor")).toInt(_branchFactorSpin->value()));
+    _treeDepthSpin->setValue(settings.value(QStringLiteral("tree_depth")).toInt(_treeDepthSpin->value()));
+    _samplePerImageSpin->setValue(settings.value(QStringLiteral("sample_per_image")).toInt(_samplePerImageSpin->value()));
+    _maxTrainingDescriptorsSpin->setValue(
+        settings.value(QStringLiteral("max_training_descriptors")).toInt(_maxTrainingDescriptorsSpin->value()));
+    _topKSpin->setValue(settings.value(QStringLiteral("top_k")).toInt(_topKSpin->value()));
+    _minSimilaritySpin->setValue(settings.value(QStringLiteral("min_similarity")).toDouble(_minSimilaritySpin->value()));
     const QString referenceBody = settings.value(QStringLiteral("reference_body")).toString(QStringLiteral("earth"));
-    const int referenceBodyIndex = m_referenceBodyCombo->findData(referenceBody);
+    const int referenceBodyIndex = _referenceBodyCombo->findData(referenceBody);
     if (referenceBodyIndex >= 0)
     {
-        m_referenceBodyCombo->setCurrentIndex(referenceBodyIndex);
+        _referenceBodyCombo->setCurrentIndex(referenceBodyIndex);
     }
     const double referenceElevation = settings.contains(QStringLiteral("reference_elevation_m"))
-        ? settings.value(QStringLiteral("reference_elevation_m")).toDouble(m_referenceElevationSpin->value())
-        : settings.value(QStringLiteral("fixed_ground_z")).toDouble(m_referenceElevationSpin->value());
-    m_referenceElevationSpin->setValue(referenceElevation);
-    m_autoReferenceElevationCheck->setChecked(
-        settings.value(QStringLiteral("auto_reference_elevation")).toBool(m_autoReferenceElevationCheck->isChecked()));
-    m_cameraNeighborFactorSpin->setValue(
-        settings.value(QStringLiteral("camera_neighbor_factor")).toDouble(m_cameraNeighborFactorSpin->value()));
-    m_useTfidfCheck->setChecked(settings.value(QStringLiteral("use_tfidf")).toBool(m_useTfidfCheck->isChecked()));
-    m_mutualTopKCheck->setChecked(settings.value(QStringLiteral("mutual_top_k")).toBool(m_mutualTopKCheck->isChecked()));
-    m_enableGeometryCheck->setChecked(
-        settings.value(QStringLiteral("geometry_check")).toBool(m_enableGeometryCheck->isChecked()));
-    m_minInliersSpin->setValue(settings.value(QStringLiteral("min_inliers")).toInt(m_minInliersSpin->value()));
-    m_ransacThresholdSpin->setValue(
-        settings.value(QStringLiteral("ransac_threshold")).toDouble(m_ransacThresholdSpin->value()));
-    m_overlapThreadsSpin->setValue(settings.value(QStringLiteral("overlap_threads")).toInt(m_overlapThreadsSpin->value()));
-    m_useFlannAssignmentCheck->setChecked(
-        settings.value(QStringLiteral("use_flann_assignment")).toBool(m_useFlannAssignmentCheck->isChecked()));
-    m_useInvertedIndexCheck->setChecked(
-        settings.value(QStringLiteral("use_inverted_index")).toBool(m_useInvertedIndexCheck->isChecked()));
-    m_useCudaOverlapCheck->setChecked(
-        settings.value(QStringLiteral("use_cuda_overlap")).toBool(m_useCudaOverlapCheck->isChecked()));
-    m_geometryMaxDescriptorsSpin->setValue(
-        settings.value(QStringLiteral("geometry_max_descriptors")).toInt(m_geometryMaxDescriptorsSpin->value()));
-    m_geometryMaxPairsSpin->setValue(
-        settings.value(QStringLiteral("geometry_max_pairs")).toInt(m_geometryMaxPairsSpin->value()));
-    m_outputJsonEdit->setText(settings.value(QStringLiteral("output_json")).toString(m_outputJsonEdit->text()));
-    m_outputLisEdit->setText(settings.value(QStringLiteral("output_lis")).toString(m_outputLisEdit->text()));
-    m_applyToMatchingCheck->setChecked(
-        settings.value(QStringLiteral("apply_to_matching")).toBool(m_applyToMatchingCheck->isChecked()));
+        ? settings.value(QStringLiteral("reference_elevation_m")).toDouble(_referenceElevationSpin->value())
+        : settings.value(QStringLiteral("fixed_ground_z")).toDouble(_referenceElevationSpin->value());
+    _referenceElevationSpin->setValue(referenceElevation);
+    _autoReferenceElevationCheck->setChecked(
+        settings.value(QStringLiteral("auto_reference_elevation")).toBool(_autoReferenceElevationCheck->isChecked()));
+    _cameraNeighborFactorSpin->setValue(
+        settings.value(QStringLiteral("camera_neighbor_factor")).toDouble(_cameraNeighborFactorSpin->value()));
+    _useTfidfCheck->setChecked(settings.value(QStringLiteral("use_tfidf")).toBool(_useTfidfCheck->isChecked()));
+    _mutualTopKCheck->setChecked(settings.value(QStringLiteral("mutual_top_k")).toBool(_mutualTopKCheck->isChecked()));
+    _enableGeometryCheck->setChecked(
+        settings.value(QStringLiteral("geometry_check")).toBool(_enableGeometryCheck->isChecked()));
+    _minInliersSpin->setValue(settings.value(QStringLiteral("min_inliers")).toInt(_minInliersSpin->value()));
+    _ransacThresholdSpin->setValue(
+        settings.value(QStringLiteral("ransac_threshold")).toDouble(_ransacThresholdSpin->value()));
+    _overlapThreadsSpin->setValue(settings.value(QStringLiteral("overlap_threads")).toInt(_overlapThreadsSpin->value()));
+    _useFlannAssignmentCheck->setChecked(
+        settings.value(QStringLiteral("use_flann_assignment")).toBool(_useFlannAssignmentCheck->isChecked()));
+    _useInvertedIndexCheck->setChecked(
+        settings.value(QStringLiteral("use_inverted_index")).toBool(_useInvertedIndexCheck->isChecked()));
+    _useCudaOverlapCheck->setChecked(
+        settings.value(QStringLiteral("use_cuda_overlap")).toBool(_useCudaOverlapCheck->isChecked()));
+    _geometryMaxDescriptorsSpin->setValue(
+        settings.value(QStringLiteral("geometry_max_descriptors")).toInt(_geometryMaxDescriptorsSpin->value()));
+    _geometryMaxPairsSpin->setValue(
+        settings.value(QStringLiteral("geometry_max_pairs")).toInt(_geometryMaxPairsSpin->value()));
+    _outputJsonEdit->setText(settings.value(QStringLiteral("output_json")).toString(_outputJsonEdit->text()));
+    _outputLisEdit->setText(settings.value(QStringLiteral("output_lis")).toString(_outputLisEdit->text()));
+    _applyToMatchingCheck->setChecked(
+        settings.value(QStringLiteral("apply_to_matching")).toBool(_applyToMatchingCheck->isChecked()));
 
-    m_generatedPairs.clear();
+    _generatedPairs.clear();
     const QJsonArray generatedPairs = settings.value(QStringLiteral("generated_pairs")).toArray();
     for (const QJsonValue &value : generatedPairs)
     {
         const QString pair = value.toString().trimmed();
         if (!pair.isEmpty())
         {
-            m_generatedPairs.append(pair);
+            _generatedPairs.append(pair);
         }
     }
 
@@ -941,12 +941,12 @@ void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
 
 void VocabularyOverlapDialog::setProjectImages(const QStringList &paths)
 {
-    m_projectImages = paths;
-    m_imageList->clear();
+    _projectImages = paths;
+    _imageList->clear();
 
     for (const QString &path : paths)
     {
-        auto *item = new QListWidgetItem(path, m_imageList);
+        auto *item = new QListWidgetItem(path, _imageList);
         item->setData(Qt::UserRole, path);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(Qt::Checked);
@@ -957,48 +957,48 @@ void VocabularyOverlapDialog::setProjectImages(const QStringList &paths)
 
 void VocabularyOverlapDialog::cancelRun()
 {
-    if (!m_runWatcher || !m_runWatcher->isRunning())
+    if (!_runWatcher || !_runWatcher->isRunning())
     {
         return;
     }
-    if (m_cancelFlag)
+    if (_cancelFlag)
     {
-        m_cancelFlag->store(true, std::memory_order_relaxed);
+        _cancelFlag->store(true, std::memory_order_relaxed);
     }
-    m_runBtn->setEnabled(false);
-    m_runBtn->setText(QStringLiteral("正在取消..."));
-    m_summaryLabel->setText(QStringLiteral("正在取消获取重叠对..."));
+    _runBtn->setEnabled(false);
+    _runBtn->setText(QStringLiteral("正在取消..."));
+    _summaryLabel->setText(QStringLiteral("正在取消获取重叠对..."));
 }
 
 void VocabularyOverlapDialog::onBrowseFeatureDir()
 {
     const QString dir = QFileDialog::getExistingDirectory(this,
                                                           QStringLiteral("选择特征目录"),
-                                                          m_featureDirEdit->text());
+                                                          _featureDirEdit->text());
     if (dir.isEmpty())
     {
         return;
     }
-    m_featureDirEdit->setText(QDir::cleanPath(dir));
+    _featureDirEdit->setText(QDir::cleanPath(dir));
     refreshFeatureStatus();
     emitSettingsNow();
 }
 
 void VocabularyOverlapDialog::onAutoDetectFeatureDir()
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
-    const QString projectPath = m_projectManager->currentProjectPath();
-    m_featureDirEdit->setText(ProjectIO::ipfindOutputDir(projectPath));
+    const QString projectPath = _projectManager->currentProjectPath();
+    _featureDirEdit->setText(ProjectIO::ipfindOutputDir(projectPath));
     refreshFeatureStatus();
     emitSettingsNow();
 }
 
 void VocabularyOverlapDialog::onRun()
 {
-    if (m_runWatcher && m_runWatcher->isRunning())
+    if (_runWatcher && _runWatcher->isRunning())
     {
         cancelRun();
         emit overlapCancelRequested();
@@ -1006,41 +1006,41 @@ void VocabularyOverlapDialog::onRun()
     }
 
     VocabularyOverlapRunRequest request;
-    request.method = m_overlapMethodCombo->currentData().toString();
+    request.method = _overlapMethodCombo->currentData().toString();
     if (request.method.isEmpty())
     {
         request.method = QStringLiteral("vocabulary");
     }
     request.images = checkedImages();
     request.suffix = selectedFeatureSuffix();
-    request.featureDir = m_featureDirEdit->text().trimmed();
-    request.projectPath = m_projectManager ? m_projectManager->currentProjectPath() : QString();
-    request.projectMeta = m_projectManager ? m_projectManager->currentMeta() : QJsonObject();
+    request.featureDir = _featureDirEdit->text().trimmed();
+    request.projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
+    request.projectMeta = _projectManager ? _projectManager->currentMeta() : QJsonObject();
     request.settings = collectSettings();
-    request.applyToMatching = m_applyToMatchingCheck->isChecked();
-    request.referenceBody = referenceBodyFromId(m_referenceBodyCombo->currentData().toString());
+    request.applyToMatching = _applyToMatchingCheck->isChecked();
+    request.referenceBody = referenceBodyFromId(_referenceBodyCombo->currentData().toString());
     request.referenceRadiusMeters = xjw::referenceBodyRadiusMeters(request.referenceBody);
-    request.referenceElevationMeters = m_referenceElevationSpin->value();
-    request.autoReferenceElevation = m_autoReferenceElevationCheck->isChecked();
-    request.cameraNeighborFactor = m_cameraNeighborFactorSpin->value();
+    request.referenceElevationMeters = _referenceElevationSpin->value();
+    request.autoReferenceElevation = _autoReferenceElevationCheck->isChecked();
+    request.cameraNeighborFactor = _cameraNeighborFactorSpin->value();
     request.cancelFlag = std::make_shared<std::atomic_bool>(false);
-    request.config.branchFactor = m_branchFactorSpin->value();
-    request.config.treeDepth = m_treeDepthSpin->value();
-    request.config.samplePerImage = m_samplePerImageSpin->value();
-    request.config.maxTrainingDescriptors = m_maxTrainingDescriptorsSpin->value();
-    request.config.topK = m_topKSpin->value();
-    request.config.minSimilarity = m_minSimilaritySpin->value();
-    request.config.useTfidf = m_useTfidfCheck->isChecked();
-    request.config.mutualTopK = m_mutualTopKCheck->isChecked();
-    request.config.geometryCheck = m_enableGeometryCheck->isChecked();
-    request.config.minInliers = m_minInliersSpin->value();
-    request.config.ransacThreshold = m_ransacThresholdSpin->value();
-    request.config.numThreads = m_overlapThreadsSpin->value();
-    request.config.useFlannAssignment = m_useFlannAssignmentCheck->isChecked();
-    request.config.useInvertedIndex = m_useInvertedIndexCheck->isChecked();
-    request.config.useCuda = m_useCudaOverlapCheck->isChecked();
-    request.config.geometryMaxDescriptors = m_geometryMaxDescriptorsSpin->value();
-    request.config.geometryMaxCandidatePairs = m_geometryMaxPairsSpin->value();
+    request.config.branchFactor = _branchFactorSpin->value();
+    request.config.treeDepth = _treeDepthSpin->value();
+    request.config.samplePerImage = _samplePerImageSpin->value();
+    request.config.maxTrainingDescriptors = _maxTrainingDescriptorsSpin->value();
+    request.config.topK = _topKSpin->value();
+    request.config.minSimilarity = _minSimilaritySpin->value();
+    request.config.useTfidf = _useTfidfCheck->isChecked();
+    request.config.mutualTopK = _mutualTopKCheck->isChecked();
+    request.config.geometryCheck = _enableGeometryCheck->isChecked();
+    request.config.minInliers = _minInliersSpin->value();
+    request.config.ransacThreshold = _ransacThresholdSpin->value();
+    request.config.numThreads = _overlapThreadsSpin->value();
+    request.config.useFlannAssignment = _useFlannAssignmentCheck->isChecked();
+    request.config.useInvertedIndex = _useInvertedIndexCheck->isChecked();
+    request.config.useCuda = _useCudaOverlapCheck->isChecked();
+    request.config.geometryMaxDescriptors = _geometryMaxDescriptorsSpin->value();
+    request.config.geometryMaxCandidatePairs = _geometryMaxPairsSpin->value();
 
     QPointer<VocabularyOverlapDialog> self(this);
     const std::shared_ptr<std::atomic_bool> cancelFlag = request.cancelFlag;
@@ -1067,12 +1067,12 @@ void VocabularyOverlapDialog::onRun()
         return progress(QString::fromStdString(stage), percent);
     };
 
-    m_cancelFlag = request.cancelFlag;
+    _cancelFlag = request.cancelFlag;
     setUiBusy(true, QStringLiteral("正在获取重叠对..."));
     emit overlapProgressChanged(QStringLiteral("正在获取重叠对"), 0);
 
     auto *watcher = new QFutureWatcher<RunResult>(this);
-    m_runWatcher = watcher;
+    _runWatcher = watcher;
     connect(watcher, &QFutureWatcher<RunResult>::finished, this, [this, watcher]()
     {
         handleRunFinished(watcher);
@@ -1085,15 +1085,15 @@ void VocabularyOverlapDialog::onRun()
 
 void VocabularyOverlapDialog::onExportLis()
 {
-    if (m_generatedPairs.isEmpty())
+    if (_generatedPairs.isEmpty())
     {
         QMessageBox::information(this, QStringLiteral("导出 LIS"), QStringLiteral("当前没有可导出的重叠对。"));
         return;
     }
 
     QString error;
-    const QJsonObject settings = m_lastRunSettings.isEmpty() ? collectSettings() : m_lastRunSettings;
-    if (!writeOutputs(settings, m_generatedPairs, &error))
+    const QJsonObject settings = _lastRunSettings.isEmpty() ? collectSettings() : _lastRunSettings;
+    if (!writeOutputs(settings, _generatedPairs, &error))
     {
         QMessageBox::warning(this, QStringLiteral("导出 LIS 失败"), error);
     }
@@ -1101,56 +1101,56 @@ void VocabularyOverlapDialog::onExportLis()
 
 void VocabularyOverlapDialog::onApplyToMatching()
 {
-    if (m_generatedPairs.isEmpty())
+    if (_generatedPairs.isEmpty())
     {
         QMessageBox::information(this, QStringLiteral("应用到匹配"), QStringLiteral("请先运行获取重叠对。"));
         return;
     }
 
-    QJsonObject settings = m_lastRunSettings.isEmpty() ? collectSettings() : m_lastRunSettings;
-    settings.insert(QStringLiteral("generated_pairs"), stringListToJsonArray(m_generatedPairs));
-    emit generatedPairsReady(m_generatedPairs, settings);
+    QJsonObject settings = _lastRunSettings.isEmpty() ? collectSettings() : _lastRunSettings;
+    settings.insert(QStringLiteral("generated_pairs"), stringListToJsonArray(_generatedPairs));
+    emit generatedPairsReady(_generatedPairs, settings);
     emit settingsChanged(settings);
 }
 
 void VocabularyOverlapDialog::onResetDefaults()
 {
-    const QString projectPath = m_projectManager ? m_projectManager->currentProjectPath() : QString();
+    const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
     const QString outputDir = defaultOverlapOutputDir(projectPath);
 
-    const int diskIndex = m_featureAlgorithmCombo->findData(QStringLiteral(".dsk"));
-    const int vocabIndex = m_overlapMethodCombo->findData(QStringLiteral("vocabulary"));
-    const int earthIndex = m_referenceBodyCombo->findData(QStringLiteral("earth"));
-    m_overlapMethodCombo->setCurrentIndex(vocabIndex >= 0 ? vocabIndex : 0);
-    m_referenceBodyCombo->setCurrentIndex(earthIndex >= 0 ? earthIndex : 0);
-    m_autoReferenceElevationCheck->setChecked(true);
-    m_referenceElevationSpin->setValue(0.0);
-    m_cameraNeighborFactorSpin->setValue(2.0);
-    m_featureAlgorithmCombo->setCurrentIndex(diskIndex >= 0 ? diskIndex : 0);
-    m_featureDirEdit->setText(projectPath.isEmpty() ? QString() : ProjectIO::ipfindOutputDir(projectPath));
-    m_branchFactorSpin->setValue(10);
-    m_treeDepthSpin->setValue(3);
-    m_samplePerImageSpin->setValue(500);
-    m_maxTrainingDescriptorsSpin->setValue(50000);
-    m_topKSpin->setValue(8);
-    m_minSimilaritySpin->setValue(0.05);
-    m_useTfidfCheck->setChecked(true);
-    m_mutualTopKCheck->setChecked(true);
-    m_enableGeometryCheck->setChecked(false);
-    m_minInliersSpin->setValue(30);
-    m_ransacThresholdSpin->setValue(3.0);
-    m_overlapThreadsSpin->setValue(0);
-    m_useFlannAssignmentCheck->setChecked(true);
-    m_useInvertedIndexCheck->setChecked(true);
-    m_useCudaOverlapCheck->setChecked(false);
-    m_geometryMaxDescriptorsSpin->setValue(2048);
-    m_geometryMaxPairsSpin->setValue(2000);
-    m_applyToMatchingCheck->setChecked(true);
+    const int diskIndex = _featureAlgorithmCombo->findData(QStringLiteral(".dsk"));
+    const int vocabIndex = _overlapMethodCombo->findData(QStringLiteral("vocabulary"));
+    const int earthIndex = _referenceBodyCombo->findData(QStringLiteral("earth"));
+    _overlapMethodCombo->setCurrentIndex(vocabIndex >= 0 ? vocabIndex : 0);
+    _referenceBodyCombo->setCurrentIndex(earthIndex >= 0 ? earthIndex : 0);
+    _autoReferenceElevationCheck->setChecked(true);
+    _referenceElevationSpin->setValue(0.0);
+    _cameraNeighborFactorSpin->setValue(2.0);
+    _featureAlgorithmCombo->setCurrentIndex(diskIndex >= 0 ? diskIndex : 0);
+    _featureDirEdit->setText(projectPath.isEmpty() ? QString() : ProjectIO::ipfindOutputDir(projectPath));
+    _branchFactorSpin->setValue(10);
+    _treeDepthSpin->setValue(3);
+    _samplePerImageSpin->setValue(500);
+    _maxTrainingDescriptorsSpin->setValue(50000);
+    _topKSpin->setValue(8);
+    _minSimilaritySpin->setValue(0.05);
+    _useTfidfCheck->setChecked(true);
+    _mutualTopKCheck->setChecked(true);
+    _enableGeometryCheck->setChecked(false);
+    _minInliersSpin->setValue(30);
+    _ransacThresholdSpin->setValue(3.0);
+    _overlapThreadsSpin->setValue(0);
+    _useFlannAssignmentCheck->setChecked(true);
+    _useInvertedIndexCheck->setChecked(true);
+    _useCudaOverlapCheck->setChecked(false);
+    _geometryMaxDescriptorsSpin->setValue(2048);
+    _geometryMaxPairsSpin->setValue(2000);
+    _applyToMatchingCheck->setChecked(true);
 
     if (!outputDir.isEmpty())
     {
-        m_outputJsonEdit->setText(QDir(outputDir).filePath(QStringLiteral("vocabulary_overlap_pairs.json")));
-        m_outputLisEdit->setText(QDir(outputDir).filePath(QStringLiteral("vocabulary_overlap_pairs.lis")));
+        _outputJsonEdit->setText(QDir(outputDir).filePath(QStringLiteral("vocabulary_overlap_pairs.json")));
+        _outputLisEdit->setText(QDir(outputDir).filePath(QStringLiteral("vocabulary_overlap_pairs.lis")));
     }
 
     refreshFeatureStatus();
@@ -1166,17 +1166,17 @@ void VocabularyOverlapDialog::emitSettingsNow()
 void VocabularyOverlapDialog::refreshFeatureStatus()
 {
     const QString suffix = selectedFeatureSuffix();
-    const QString featureDir = m_featureDirEdit->text().trimmed();
+    const QString featureDir = _featureDirEdit->text().trimmed();
     int existing = 0;
 
-    for (int i = 0; i < m_imageList->count(); ++i)
+    for (int i = 0; i < _imageList->count(); ++i)
     {
-        QListWidgetItem *item = m_imageList->item(i);
+        QListWidgetItem *item = _imageList->item(i);
         const QString imagePath = item->data(Qt::UserRole).toString();
         QString featurePath = featurePathInDir(featureDir, imagePath, suffix);
-        if (!QFile::exists(featurePath) && m_projectManager)
+        if (!QFile::exists(featurePath) && _projectManager)
         {
-            featurePath = ProjectIO::featureFileForSuffix(m_projectManager->currentProjectPath(), imagePath, suffix);
+            featurePath = ProjectIO::featureFileForSuffix(_projectManager->currentProjectPath(), imagePath, suffix);
         }
         const bool found = QFile::exists(featurePath);
         if (found)
@@ -1189,63 +1189,63 @@ void VocabularyOverlapDialog::refreshFeatureStatus()
         item->setData(Qt::UserRole + 1, featurePath);
     }
 
-    m_summaryLabel->setText(QStringLiteral("特征文件 %1/%2，当前算法 %3")
+    _summaryLabel->setText(QStringLiteral("特征文件 %1/%2，当前算法 %3")
                                 .arg(existing)
-                                .arg(m_imageList->count())
+                                .arg(_imageList->count())
                                 .arg(suffix));
 }
 
 QJsonObject VocabularyOverlapDialog::collectSettings() const
 {
     QJsonObject settings;
-    settings.insert(QStringLiteral("overlap_method"), m_overlapMethodCombo->currentData().toString());
+    settings.insert(QStringLiteral("overlap_method"), _overlapMethodCombo->currentData().toString());
     settings.insert(QStringLiteral("feature_suffix"), selectedFeatureSuffix());
-    settings.insert(QStringLiteral("feature_algorithm"), m_featureAlgorithmCombo->currentText());
-    settings.insert(QStringLiteral("feature_dir"), m_featureDirEdit->text().trimmed());
-    settings.insert(QStringLiteral("branch_factor"), m_branchFactorSpin->value());
-    settings.insert(QStringLiteral("tree_depth"), m_treeDepthSpin->value());
-    settings.insert(QStringLiteral("sample_per_image"), m_samplePerImageSpin->value());
-    settings.insert(QStringLiteral("max_training_descriptors"), m_maxTrainingDescriptorsSpin->value());
-    settings.insert(QStringLiteral("top_k"), m_topKSpin->value());
-    settings.insert(QStringLiteral("min_similarity"), m_minSimilaritySpin->value());
-    const xjw::ReferenceBody body = referenceBodyFromId(m_referenceBodyCombo->currentData().toString());
+    settings.insert(QStringLiteral("feature_algorithm"), _featureAlgorithmCombo->currentText());
+    settings.insert(QStringLiteral("feature_dir"), _featureDirEdit->text().trimmed());
+    settings.insert(QStringLiteral("branch_factor"), _branchFactorSpin->value());
+    settings.insert(QStringLiteral("tree_depth"), _treeDepthSpin->value());
+    settings.insert(QStringLiteral("sample_per_image"), _samplePerImageSpin->value());
+    settings.insert(QStringLiteral("max_training_descriptors"), _maxTrainingDescriptorsSpin->value());
+    settings.insert(QStringLiteral("top_k"), _topKSpin->value());
+    settings.insert(QStringLiteral("min_similarity"), _minSimilaritySpin->value());
+    const xjw::ReferenceBody body = referenceBodyFromId(_referenceBodyCombo->currentData().toString());
     settings.insert(QStringLiteral("reference_body"), referenceBodyId(body));
     settings.insert(QStringLiteral("reference_radius_m"), xjw::referenceBodyRadiusMeters(body));
-    settings.insert(QStringLiteral("reference_elevation_m"), m_referenceElevationSpin->value());
-    settings.insert(QStringLiteral("auto_reference_elevation"), m_autoReferenceElevationCheck->isChecked());
-    settings.insert(QStringLiteral("fixed_ground_z"), m_referenceElevationSpin->value());
-    settings.insert(QStringLiteral("camera_neighbor_factor"), m_cameraNeighborFactorSpin->value());
-    settings.insert(QStringLiteral("use_tfidf"), m_useTfidfCheck->isChecked());
-    settings.insert(QStringLiteral("mutual_top_k"), m_mutualTopKCheck->isChecked());
-    settings.insert(QStringLiteral("geometry_check"), m_enableGeometryCheck->isChecked());
-    settings.insert(QStringLiteral("geometry_model"), m_geometryModelCombo->currentData().toString());
-    settings.insert(QStringLiteral("min_inliers"), m_minInliersSpin->value());
-    settings.insert(QStringLiteral("ransac_threshold"), m_ransacThresholdSpin->value());
-    settings.insert(QStringLiteral("overlap_threads"), m_overlapThreadsSpin->value());
-    settings.insert(QStringLiteral("use_flann_assignment"), m_useFlannAssignmentCheck->isChecked());
-    settings.insert(QStringLiteral("use_inverted_index"), m_useInvertedIndexCheck->isChecked());
-    settings.insert(QStringLiteral("use_cuda_overlap"), m_useCudaOverlapCheck->isChecked());
-    settings.insert(QStringLiteral("geometry_max_descriptors"), m_geometryMaxDescriptorsSpin->value());
-    settings.insert(QStringLiteral("geometry_max_pairs"), m_geometryMaxPairsSpin->value());
-    settings.insert(QStringLiteral("output_json"), m_outputJsonEdit->text().trimmed());
-    settings.insert(QStringLiteral("output_lis"), m_outputLisEdit->text().trimmed());
-    settings.insert(QStringLiteral("apply_to_matching"), m_applyToMatchingCheck->isChecked());
-    settings.insert(QStringLiteral("generated_pairs"), stringListToJsonArray(m_generatedPairs));
+    settings.insert(QStringLiteral("reference_elevation_m"), _referenceElevationSpin->value());
+    settings.insert(QStringLiteral("auto_reference_elevation"), _autoReferenceElevationCheck->isChecked());
+    settings.insert(QStringLiteral("fixed_ground_z"), _referenceElevationSpin->value());
+    settings.insert(QStringLiteral("camera_neighbor_factor"), _cameraNeighborFactorSpin->value());
+    settings.insert(QStringLiteral("use_tfidf"), _useTfidfCheck->isChecked());
+    settings.insert(QStringLiteral("mutual_top_k"), _mutualTopKCheck->isChecked());
+    settings.insert(QStringLiteral("geometry_check"), _enableGeometryCheck->isChecked());
+    settings.insert(QStringLiteral("geometry_model"), _geometryModelCombo->currentData().toString());
+    settings.insert(QStringLiteral("min_inliers"), _minInliersSpin->value());
+    settings.insert(QStringLiteral("ransac_threshold"), _ransacThresholdSpin->value());
+    settings.insert(QStringLiteral("overlap_threads"), _overlapThreadsSpin->value());
+    settings.insert(QStringLiteral("use_flann_assignment"), _useFlannAssignmentCheck->isChecked());
+    settings.insert(QStringLiteral("use_inverted_index"), _useInvertedIndexCheck->isChecked());
+    settings.insert(QStringLiteral("use_cuda_overlap"), _useCudaOverlapCheck->isChecked());
+    settings.insert(QStringLiteral("geometry_max_descriptors"), _geometryMaxDescriptorsSpin->value());
+    settings.insert(QStringLiteral("geometry_max_pairs"), _geometryMaxPairsSpin->value());
+    settings.insert(QStringLiteral("output_json"), _outputJsonEdit->text().trimmed());
+    settings.insert(QStringLiteral("output_lis"), _outputLisEdit->text().trimmed());
+    settings.insert(QStringLiteral("apply_to_matching"), _applyToMatchingCheck->isChecked());
+    settings.insert(QStringLiteral("generated_pairs"), stringListToJsonArray(_generatedPairs));
     return settings;
 }
 
 QString VocabularyOverlapDialog::selectedFeatureSuffix() const
 {
-    const QString suffix = m_featureAlgorithmCombo->currentData().toString();
+    const QString suffix = _featureAlgorithmCombo->currentData().toString();
     return suffix.isEmpty() ? QStringLiteral(".dsk") : suffix;
 }
 
 QStringList VocabularyOverlapDialog::checkedImages() const
 {
     QStringList images;
-    for (int i = 0; i < m_imageList->count(); ++i)
+    for (int i = 0; i < _imageList->count(); ++i)
     {
-        const QListWidgetItem *item = m_imageList->item(i);
+        const QListWidgetItem *item = _imageList->item(i);
         if (item->checkState() == Qt::Checked)
         {
             images.append(item->data(Qt::UserRole).toString());
@@ -1282,13 +1282,13 @@ bool VocabularyOverlapDialog::loadFeatures(std::vector<xjw::VocabularyImageFeatu
     }
 
     const QString suffix = selectedFeatureSuffix();
-    const QString featureDir = m_featureDirEdit->text().trimmed();
+    const QString featureDir = _featureDirEdit->text().trimmed();
     for (const QString &imagePath : images)
     {
         QString featurePath = featurePathInDir(featureDir, imagePath, suffix);
-        if (!QFile::exists(featurePath) && m_projectManager)
+        if (!QFile::exists(featurePath) && _projectManager)
         {
-            featurePath = ProjectIO::featureFileForSuffix(m_projectManager->currentProjectPath(), imagePath, suffix);
+            featurePath = ProjectIO::featureFileForSuffix(_projectManager->currentProjectPath(), imagePath, suffix);
         }
         if (!QFile::exists(featurePath))
         {
@@ -1332,48 +1332,48 @@ bool VocabularyOverlapDialog::loadFeatures(std::vector<xjw::VocabularyImageFeatu
 
 void VocabularyOverlapDialog::setUiBusy(bool busy, const QString &message)
 {
-    m_runBtn->setEnabled(true);
-    m_runBtn->setText(busy ? QStringLiteral("取消") : QStringLiteral("运行"));
-    m_selectAllBtn->setEnabled(!busy);
-    m_clearSelectionBtn->setEnabled(!busy);
-    m_overlapMethodCombo->setEnabled(!busy);
-    m_referenceBodyCombo->setEnabled(!busy);
-    m_autoReferenceElevationCheck->setEnabled(!busy);
-    m_referenceElevationSpin->setEnabled(!busy && !m_autoReferenceElevationCheck->isChecked());
-    m_cameraNeighborFactorSpin->setEnabled(!busy);
-    m_featureAlgorithmCombo->setEnabled(!busy);
-    m_featureDirEdit->setEnabled(!busy);
-    m_autoDetectFeatureDirBtn->setEnabled(!busy);
-    m_browseFeatureDirBtn->setEnabled(!busy);
-    m_branchFactorSpin->setEnabled(!busy);
-    m_treeDepthSpin->setEnabled(!busy);
-    m_samplePerImageSpin->setEnabled(!busy);
-    m_maxTrainingDescriptorsSpin->setEnabled(!busy);
-    m_topKSpin->setEnabled(!busy);
-    m_minSimilaritySpin->setEnabled(!busy);
-    m_useTfidfCheck->setEnabled(!busy);
-    m_mutualTopKCheck->setEnabled(!busy);
-    m_enableGeometryCheck->setEnabled(!busy);
-    m_minInliersSpin->setEnabled(!busy);
-    m_ransacThresholdSpin->setEnabled(!busy);
-    m_geometryModelCombo->setEnabled(!busy);
-    m_overlapThreadsSpin->setEnabled(!busy);
-    m_useFlannAssignmentCheck->setEnabled(!busy);
-    m_useInvertedIndexCheck->setEnabled(!busy);
-    m_useCudaOverlapCheck->setEnabled(!busy);
-    m_geometryMaxDescriptorsSpin->setEnabled(!busy);
-    m_geometryMaxPairsSpin->setEnabled(!busy);
-    m_outputJsonEdit->setEnabled(!busy);
-    m_outputLisEdit->setEnabled(!busy);
-    m_applyToMatchingCheck->setEnabled(!busy);
-    m_resetBtn->setEnabled(!busy);
-    m_exportLisBtn->setEnabled(!busy && !m_generatedPairs.isEmpty());
-    m_applyToMatchingBtn->setEnabled(!busy && !m_generatedPairs.isEmpty());
-    m_closeBtn->setEnabled(!busy);
+    _runBtn->setEnabled(true);
+    _runBtn->setText(busy ? QStringLiteral("取消") : QStringLiteral("运行"));
+    _selectAllBtn->setEnabled(!busy);
+    _clearSelectionBtn->setEnabled(!busy);
+    _overlapMethodCombo->setEnabled(!busy);
+    _referenceBodyCombo->setEnabled(!busy);
+    _autoReferenceElevationCheck->setEnabled(!busy);
+    _referenceElevationSpin->setEnabled(!busy && !_autoReferenceElevationCheck->isChecked());
+    _cameraNeighborFactorSpin->setEnabled(!busy);
+    _featureAlgorithmCombo->setEnabled(!busy);
+    _featureDirEdit->setEnabled(!busy);
+    _autoDetectFeatureDirBtn->setEnabled(!busy);
+    _browseFeatureDirBtn->setEnabled(!busy);
+    _branchFactorSpin->setEnabled(!busy);
+    _treeDepthSpin->setEnabled(!busy);
+    _samplePerImageSpin->setEnabled(!busy);
+    _maxTrainingDescriptorsSpin->setEnabled(!busy);
+    _topKSpin->setEnabled(!busy);
+    _minSimilaritySpin->setEnabled(!busy);
+    _useTfidfCheck->setEnabled(!busy);
+    _mutualTopKCheck->setEnabled(!busy);
+    _enableGeometryCheck->setEnabled(!busy);
+    _minInliersSpin->setEnabled(!busy);
+    _ransacThresholdSpin->setEnabled(!busy);
+    _geometryModelCombo->setEnabled(!busy);
+    _overlapThreadsSpin->setEnabled(!busy);
+    _useFlannAssignmentCheck->setEnabled(!busy);
+    _useInvertedIndexCheck->setEnabled(!busy);
+    _useCudaOverlapCheck->setEnabled(!busy);
+    _geometryMaxDescriptorsSpin->setEnabled(!busy);
+    _geometryMaxPairsSpin->setEnabled(!busy);
+    _outputJsonEdit->setEnabled(!busy);
+    _outputLisEdit->setEnabled(!busy);
+    _applyToMatchingCheck->setEnabled(!busy);
+    _resetBtn->setEnabled(!busy);
+    _exportLisBtn->setEnabled(!busy && !_generatedPairs.isEmpty());
+    _applyToMatchingBtn->setEnabled(!busy && !_generatedPairs.isEmpty());
+    _closeBtn->setEnabled(!busy);
 
     if (!message.isEmpty())
     {
-        m_summaryLabel->setText(message);
+        _summaryLabel->setText(message);
     }
     if (!busy)
     {
@@ -1383,7 +1383,7 @@ void VocabularyOverlapDialog::setUiBusy(bool busy, const QString &message)
 
 void VocabularyOverlapDialog::handleProgress(const QString &stage, int percent)
 {
-    if (!m_runWatcher || !m_runWatcher->isRunning())
+    if (!_runWatcher || !_runWatcher->isRunning())
     {
         return;
     }
@@ -1391,7 +1391,7 @@ void VocabularyOverlapDialog::handleProgress(const QString &stage, int percent)
     const QString text = percent > 0 && percent < 100
         ? QStringLiteral("%1 %2%").arg(stage).arg(percent)
         : stage;
-    m_summaryLabel->setText(text);
+    _summaryLabel->setText(text);
     emit overlapProgressChanged(stage, std::clamp(percent, 0, 100));
 }
 
@@ -1402,13 +1402,13 @@ void VocabularyOverlapDialog::handleRunFinished(QFutureWatcher<RunResult> *watch
         return;
     }
 
-    const bool isCurrentWatcher = (watcher == m_runWatcher);
+    const bool isCurrentWatcher = (watcher == _runWatcher);
     const RunResult runResult = watcher->result();
     if (isCurrentWatcher)
     {
-        m_runWatcher = nullptr;
+        _runWatcher = nullptr;
     }
-    m_cancelFlag.reset();
+    _cancelFlag.reset();
     watcher->deleteLater();
 
     if (!isCurrentWatcher)
@@ -1429,22 +1429,22 @@ void VocabularyOverlapDialog::handleRunFinished(QFutureWatcher<RunResult> *watch
         return;
     }
 
-    m_candidatePairs = runResult.candidates;
-    m_generatedPairs = runResult.generatedPairs;
-    m_lastRunSettings = runResult.settings;
+    _candidatePairs = runResult.candidates;
+    _generatedPairs = runResult.generatedPairs;
+    _lastRunSettings = runResult.settings;
 
     populatePairTable();
-    m_summaryLabel->setText(QStringLiteral("候选 %1，对外输出 %2，词汇数 %3")
-                                .arg(m_candidatePairs.size())
-                                .arg(m_generatedPairs.size())
+    _summaryLabel->setText(QStringLiteral("候选 %1，对外输出 %2，词汇数 %3")
+                                .arg(_candidatePairs.size())
+                                .arg(_generatedPairs.size())
                                 .arg(runResult.vocabularySize));
     setUiBusy(false);
     emit overlapFinished(true);
 
-    emit settingsChanged(m_lastRunSettings);
+    emit settingsChanged(_lastRunSettings);
     if (runResult.applyToMatching)
     {
-        emit generatedPairsReady(m_generatedPairs, m_lastRunSettings);
+        emit generatedPairsReady(_generatedPairs, _lastRunSettings);
     }
 }
 
@@ -1452,33 +1452,33 @@ bool VocabularyOverlapDialog::writeOutputs(const QJsonObject &settings,
                                            const QStringList &pairs,
                                            QString *errorMsg) const
 {
-    return writeOverlapOutputs(settings, pairs, m_candidatePairs, errorMsg);
+    return writeOverlapOutputs(settings, pairs, _candidatePairs, errorMsg);
 }
 
 void VocabularyOverlapDialog::populatePairTable()
 {
-    m_pairTable->setRowCount(static_cast<int>(m_candidatePairs.size()));
-    for (int row = 0; row < static_cast<int>(m_candidatePairs.size()); ++row)
+    _pairTable->setRowCount(static_cast<int>(_candidatePairs.size()));
+    for (int row = 0; row < static_cast<int>(_candidatePairs.size()); ++row)
     {
-        const xjw::VocabularyOverlapPairResult &pair = m_candidatePairs[static_cast<std::size_t>(row)];
-        setTableItem(m_pairTable, row, 0, QFileInfo(QString::fromStdString(pair.imagePathA)).fileName());
-        setTableItem(m_pairTable, row, 1, QFileInfo(QString::fromStdString(pair.imagePathB)).fileName());
-        setTableItem(m_pairTable, row, 2, QString::number(pair.bowScore, 'f', 4));
-        setTableItem(m_pairTable, row, 3, QString::number(pair.sharedWordCount));
-        setTableItem(m_pairTable, row, 4, QString::number(pair.geometricInliers));
-        setTableItem(m_pairTable, row, 5,
+        const xjw::VocabularyOverlapPairResult &pair = _candidatePairs[static_cast<std::size_t>(row)];
+        setTableItem(_pairTable, row, 0, QFileInfo(QString::fromStdString(pair.imagePathA)).fileName());
+        setTableItem(_pairTable, row, 1, QFileInfo(QString::fromStdString(pair.imagePathB)).fileName());
+        setTableItem(_pairTable, row, 2, QString::number(pair.bowScore, 'f', 4));
+        setTableItem(_pairTable, row, 3, QString::number(pair.sharedWordCount));
+        setTableItem(_pairTable, row, 4, QString::number(pair.geometricInliers));
+        setTableItem(_pairTable, row, 5,
                      pair.accepted ? QStringLiteral("保留") : QStringLiteral("剔除：%1").arg(
                          QString::fromStdString(pair.rejectReason)));
     }
-    m_pairTable->resizeColumnsToContents();
-    m_pairTable->setVisible(true);
-    m_pairTable->viewport()->update();
+    _pairTable->resizeColumnsToContents();
+    _pairTable->setVisible(true);
+    _pairTable->viewport()->update();
 }
 
 void VocabularyOverlapDialog::updateMethodUi(bool refreshSummary)
 {
-    const bool cameraMode = m_overlapMethodCombo &&
-        m_overlapMethodCombo->currentData().toString() == QStringLiteral("camera");
+    const bool cameraMode = _overlapMethodCombo &&
+        _overlapMethodCombo->currentData().toString() == QStringLiteral("camera");
 
     if (auto *featureGroup = findChild<QGroupBox *>(QStringLiteral("featureGroup")))
     {
@@ -1493,16 +1493,16 @@ void VocabularyOverlapDialog::updateMethodUi(bool refreshSummary)
         geometryGroup->setVisible(!cameraMode);
     }
 
-    m_referenceBodyCombo->setEnabled(cameraMode);
-    m_autoReferenceElevationCheck->setEnabled(cameraMode);
-    m_referenceElevationSpin->setEnabled(cameraMode && !m_autoReferenceElevationCheck->isChecked());
-    m_cameraNeighborFactorSpin->setEnabled(cameraMode);
-    m_useTfidfCheck->setEnabled(!cameraMode);
-    m_useFlannAssignmentCheck->setEnabled(!cameraMode);
-    m_useInvertedIndexCheck->setEnabled(!cameraMode);
-    m_useCudaOverlapCheck->setEnabled(!cameraMode);
-    m_geometryMaxDescriptorsSpin->setEnabled(!cameraMode);
-    m_geometryMaxPairsSpin->setEnabled(!cameraMode);
+    _referenceBodyCombo->setEnabled(cameraMode);
+    _autoReferenceElevationCheck->setEnabled(cameraMode);
+    _referenceElevationSpin->setEnabled(cameraMode && !_autoReferenceElevationCheck->isChecked());
+    _cameraNeighborFactorSpin->setEnabled(cameraMode);
+    _useTfidfCheck->setEnabled(!cameraMode);
+    _useFlannAssignmentCheck->setEnabled(!cameraMode);
+    _useInvertedIndexCheck->setEnabled(!cameraMode);
+    _useCudaOverlapCheck->setEnabled(!cameraMode);
+    _geometryMaxDescriptorsSpin->setEnabled(!cameraMode);
+    _geometryMaxPairsSpin->setEnabled(!cameraMode);
 
     if (!refreshSummary)
     {
@@ -1511,7 +1511,7 @@ void VocabularyOverlapDialog::updateMethodUi(bool refreshSummary)
 
     if (cameraMode)
     {
-        m_summaryLabel->setText(QStringLiteral("相机模型模式：使用项目中的相机参数、影像尺寸和基准球面计算地面重叠对"));
+        _summaryLabel->setText(QStringLiteral("相机模型模式：使用项目中的相机参数、影像尺寸和基准球面计算地面重叠对"));
     }
     else
     {

@@ -8142,6 +8142,75 @@ TEST(VocabularyOverlapDialogTest, UiDefinesRequiredControls)
     }
 }
 
+TEST(CodeStyleTest, VocabularyOverlapDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_runWatcher"),
+        QStringLiteral("m_cancelFlag"),
+        QStringLiteral("m_projectImages"),
+        QStringLiteral("m_generatedPairs"),
+        QStringLiteral("m_lastRunSettings"),
+        QStringLiteral("m_candidatePairs"),
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_selectAllBtn"),
+        QStringLiteral("m_clearSelectionBtn"),
+        QStringLiteral("m_overlapMethodCombo"),
+        QStringLiteral("m_referenceBodyCombo"),
+        QStringLiteral("m_autoReferenceElevationCheck"),
+        QStringLiteral("m_referenceElevationSpin"),
+        QStringLiteral("m_cameraNeighborFactorSpin"),
+        QStringLiteral("m_featureAlgorithmCombo"),
+        QStringLiteral("m_featureDirEdit"),
+        QStringLiteral("m_autoDetectFeatureDirBtn"),
+        QStringLiteral("m_browseFeatureDirBtn"),
+        QStringLiteral("m_branchFactorSpin"),
+        QStringLiteral("m_treeDepthSpin"),
+        QStringLiteral("m_samplePerImageSpin"),
+        QStringLiteral("m_maxTrainingDescriptorsSpin"),
+        QStringLiteral("m_topKSpin"),
+        QStringLiteral("m_minSimilaritySpin"),
+        QStringLiteral("m_useTfidfCheck"),
+        QStringLiteral("m_mutualTopKCheck"),
+        QStringLiteral("m_enableGeometryCheck"),
+        QStringLiteral("m_minInliersSpin"),
+        QStringLiteral("m_ransacThresholdSpin"),
+        QStringLiteral("m_geometryModelCombo"),
+        QStringLiteral("m_overlapThreadsSpin"),
+        QStringLiteral("m_useFlannAssignmentCheck"),
+        QStringLiteral("m_useInvertedIndexCheck"),
+        QStringLiteral("m_useCudaOverlapCheck"),
+        QStringLiteral("m_geometryMaxDescriptorsSpin"),
+        QStringLiteral("m_geometryMaxPairsSpin"),
+        QStringLiteral("m_outputJsonEdit"),
+        QStringLiteral("m_outputLisEdit"),
+        QStringLiteral("m_applyToMatchingCheck"),
+        QStringLiteral("m_pairTable"),
+        QStringLiteral("m_summaryLabel"),
+        QStringLiteral("m_resetBtn"),
+        QStringLiteral("m_exportLisBtn"),
+        QStringLiteral("m_applyToMatchingBtn"),
+        QStringLiteral("m_runBtn"),
+        QStringLiteral("m_closeBtn"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        const QString newName = QStringLiteral("_") + oldName.mid(2);
+        EXPECT_TRUE(header.contains(newName)) << qPrintable(newName);
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+    EXPECT_FALSE(source.contains(QStringLiteral("m_projectManager(")));
+}
+
 TEST(VocabularyOverlapDialogTest, DialogKeyIsAvailableForPersistence)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/config/settings/DialogSettingKeys.h"));
@@ -8221,7 +8290,7 @@ TEST(VocabularyOverlapDialogTest, DisplaysResultsWithoutOverwritingSummary)
     ASSERT_GT(writeOutputsIndex, finishIndex);
     const QString finishBody = dialogSource.mid(finishIndex, writeOutputsIndex - finishIndex);
     EXPECT_TRUE(finishBody.contains(QStringLiteral("populatePairTable();")));
-    EXPECT_TRUE(finishBody.contains(QStringLiteral("m_summaryLabel->setText(QStringLiteral(\"候选 %1，对外输出 %2，词汇数 %3\")")));
+    EXPECT_TRUE(finishBody.contains(QStringLiteral("_summaryLabel->setText(QStringLiteral(\"候选 %1，对外输出 %2，词汇数 %3\")")));
     EXPECT_TRUE(finishBody.contains(QStringLiteral("setUiBusy(false);")));
 
     const int tableIndex = dialogSource.indexOf(QStringLiteral("void VocabularyOverlapDialog::populatePairTable"));
@@ -8229,9 +8298,9 @@ TEST(VocabularyOverlapDialogTest, DisplaysResultsWithoutOverwritingSummary)
     ASSERT_GE(tableIndex, 0);
     ASSERT_GT(methodUiIndex, tableIndex);
     const QString tableBody = dialogSource.mid(tableIndex, methodUiIndex - tableIndex);
-    EXPECT_TRUE(tableBody.contains(QStringLiteral("m_pairTable->setRowCount")));
-    EXPECT_TRUE(tableBody.contains(QStringLiteral("m_pairTable->setVisible(true)")));
-    EXPECT_TRUE(tableBody.contains(QStringLiteral("m_pairTable->viewport()->update()")));
+    EXPECT_TRUE(tableBody.contains(QStringLiteral("_pairTable->setRowCount")));
+    EXPECT_TRUE(tableBody.contains(QStringLiteral("_pairTable->setVisible(true)")));
+    EXPECT_TRUE(tableBody.contains(QStringLiteral("_pairTable->viewport()->update()")));
 }
 
 TEST(MenuWorkflowControllerTest, VocabularyOverlapAppliesGeneratedPairsToFeatureMatchingSettings)
