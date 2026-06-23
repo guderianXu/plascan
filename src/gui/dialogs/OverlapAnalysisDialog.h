@@ -35,25 +35,25 @@ private slots:
     void runAnalysis();
 
 private:
-    // 从项目元数据中加载影像列表，填充 m_imageList 复选框列表
+    // 从项目元数据中加载影像列表，填充 _imageList 复选框列表
     void loadProjectImages();
 
     // 项目管理器指针，用于读取影像路径和相机参数
-    ProjectManager *m_projectManager = nullptr;
+    ProjectManager *_projectManager = nullptr;
 
     // 影像复选框列表控件，支持多选；每项 UserRole 存储完整路径
-    QListWidget *m_imageList = nullptr;
+    QListWidget *_imageList = nullptr;
     // DEM 文件路径输入框（XYZ 格式点云文件）
-    QLineEdit *m_demPathEdit = nullptr;
+    QLineEdit *_demPathEdit = nullptr;
     // 是否使用固定高程 Z 的复选框（勾选后忽略 DEM，改用固定 Z 值）
-    QCheckBox *m_useFixedZCheck = nullptr;
-    // 固定高程 Z 值微调框（m_useFixedZCheck 打勾时生效）
-    QDoubleSpinBox *m_fixedZSpin = nullptr;
+    QCheckBox *_useFixedZCheck = nullptr;
+    // 固定高程 Z 值微调框（_useFixedZCheck 打勾时生效）
+    QDoubleSpinBox *_fixedZSpin = nullptr;
     // 邻域系数微调框，用于控制重叠评分的邻域范围系数
-    QDoubleSpinBox *m_neighborSpin = nullptr;
+    QDoubleSpinBox *_neighborSpin = nullptr;
 
     // 分析结果摘要标签，显示统计描述文字
-    QLabel *m_summaryLabel = nullptr;
+    QLabel *_summaryLabel = nullptr;
     // 分析结果表格，列：影像A | 影像B | 中心距(m) | 重叠评分 | 是否重叠
-    QTableWidget *m_resultTable = nullptr;
+    QTableWidget *_resultTable = nullptr;
 };

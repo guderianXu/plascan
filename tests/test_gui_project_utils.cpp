@@ -2446,6 +2446,48 @@ TEST(CodeStyleTest, ObservationNetworkDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, OverlapAnalysisDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/OverlapAnalysisDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/OverlapAnalysisDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("ProjectManager *_projectManager = nullptr;"),
+        QStringLiteral("QListWidget *_imageList = nullptr;"),
+        QStringLiteral("QLineEdit *_demPathEdit = nullptr;"),
+        QStringLiteral("QCheckBox *_useFixedZCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_fixedZSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_neighborSpin = nullptr;"),
+        QStringLiteral("QLabel *_summaryLabel = nullptr;"),
+        QStringLiteral("QTableWidget *_resultTable = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_demPathEdit"),
+        QStringLiteral("m_useFixedZCheck"),
+        QStringLiteral("m_fixedZSpin"),
+        QStringLiteral("m_neighborSpin"),
+        QStringLiteral("m_summaryLabel"),
+        QStringLiteral("m_resultTable"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
