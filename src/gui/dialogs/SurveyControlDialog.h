@@ -28,12 +28,12 @@ private:
     void populatePointTable(QTableWidget *table, const QJsonArray &points, bool includeResidual);
     void populateScaleBarTable(QTableWidget *table, const QJsonArray &scaleBars);
 
-    QLabel *m_summaryLabel = nullptr;
-    QLabel *m_sourceLabel = nullptr;
-    QLabel *m_statusLabel = nullptr;
-    QPushButton *m_importCsvButton = nullptr;
-    QTableWidget *m_controlPointTable = nullptr;
-    QTableWidget *m_checkPointTable = nullptr;
-    QTableWidget *m_scaleBarTable = nullptr;
-    QJsonObject m_metadata;
+    QLabel *_summaryLabel = nullptr;
+    QLabel *_sourceLabel = nullptr;
+    QLabel *_statusLabel = nullptr;
+    QPushButton *_importCsvButton = nullptr;
+    QTableWidget *_controlPointTable = nullptr;
+    QTableWidget *_checkPointTable = nullptr;
+    QTableWidget *_scaleBarTable = nullptr;
+    QJsonObject _metadata;
 };

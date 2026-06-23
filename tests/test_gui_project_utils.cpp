@@ -2110,6 +2110,40 @@ TEST(CodeStyleTest, MapProjectDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, SurveyControlDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SurveyControlDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SurveyControlDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_summaryLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_sourceLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_statusLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_importCsvButton = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QTableWidget *_controlPointTable = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QTableWidget *_checkPointTable = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QTableWidget *_scaleBarTable = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject _metadata;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_summaryLabel"),
+        QStringLiteral("m_sourceLabel"),
+        QStringLiteral("m_statusLabel"),
+        QStringLiteral("m_importCsvButton"),
+        QStringLiteral("m_controlPointTable"),
+        QStringLiteral("m_checkPointTable"),
+        QStringLiteral("m_scaleBarTable"),
+        QStringLiteral("m_metadata"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

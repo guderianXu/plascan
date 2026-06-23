@@ -69,15 +69,15 @@ SurveyControlDialog::SurveyControlDialog(QWidget *parent)
 
 void SurveyControlDialog::setSurveyControlMetadata(const QJsonObject &metadata)
 {
-    m_metadata = metadata;
+    _metadata = metadata;
     refreshTables();
 }
 
 void SurveyControlDialog::setStatusMessage(const QString &message)
 {
-    if (m_statusLabel)
+    if (_statusLabel)
     {
-        m_statusLabel->setText(message);
+        _statusLabel->setText(message);
     }
 }
 
@@ -90,39 +90,39 @@ void SurveyControlDialog::setupUi()
 
     auto *summaryBox = new QGroupBox(tr("项目控制数据"), this);
     auto *summaryLayout = new QGridLayout(summaryBox);
-    m_summaryLabel = new QLabel(summaryBox);
-    m_summaryLabel->setObjectName(QStringLiteral("surveyControlSummaryLabel"));
-    m_sourceLabel = new QLabel(summaryBox);
-    m_sourceLabel->setObjectName(QStringLiteral("surveyControlSourceLabel"));
-    m_sourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_statusLabel = new QLabel(summaryBox);
-    m_statusLabel->setObjectName(QStringLiteral("surveyControlStatusLabel"));
-    m_statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_importCsvButton = new QPushButton(tr("导入 CSV..."), summaryBox);
-    m_importCsvButton->setObjectName(QStringLiteral("surveyControlImportCsvButton"));
-    m_importCsvButton->setToolTip(tr("导入包含控制点、检查点和比例尺的 CSV 文件"));
-    connect(m_importCsvButton, &QPushButton::clicked, this, &SurveyControlDialog::importCsvRequested);
+    _summaryLabel = new QLabel(summaryBox);
+    _summaryLabel->setObjectName(QStringLiteral("surveyControlSummaryLabel"));
+    _sourceLabel = new QLabel(summaryBox);
+    _sourceLabel->setObjectName(QStringLiteral("surveyControlSourceLabel"));
+    _sourceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _statusLabel = new QLabel(summaryBox);
+    _statusLabel->setObjectName(QStringLiteral("surveyControlStatusLabel"));
+    _statusLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _importCsvButton = new QPushButton(tr("导入 CSV..."), summaryBox);
+    _importCsvButton->setObjectName(QStringLiteral("surveyControlImportCsvButton"));
+    _importCsvButton->setToolTip(tr("导入包含控制点、检查点和比例尺的 CSV 文件"));
+    connect(_importCsvButton, &QPushButton::clicked, this, &SurveyControlDialog::importCsvRequested);
 
-    summaryLayout->addWidget(m_summaryLabel, 0, 0);
-    summaryLayout->addWidget(m_importCsvButton, 0, 1, Qt::AlignRight);
-    summaryLayout->addWidget(m_sourceLabel, 1, 0, 1, 2);
-    summaryLayout->addWidget(m_statusLabel, 2, 0, 1, 2);
+    summaryLayout->addWidget(_summaryLabel, 0, 0);
+    summaryLayout->addWidget(_importCsvButton, 0, 1, Qt::AlignRight);
+    summaryLayout->addWidget(_sourceLabel, 1, 0, 1, 2);
+    summaryLayout->addWidget(_statusLabel, 2, 0, 1, 2);
     summaryLayout->setColumnStretch(0, 1);
     root->addWidget(summaryBox);
 
     auto *tabs = new QTabWidget(this);
     tabs->setObjectName(QStringLiteral("surveyControlTabs"));
 
-    m_controlPointTable = new QTableWidget(tabs);
-    m_controlPointTable->setObjectName(QStringLiteral("surveyControlPointTable"));
-    m_checkPointTable = new QTableWidget(tabs);
-    m_checkPointTable->setObjectName(QStringLiteral("surveyCheckPointTable"));
-    m_scaleBarTable = new QTableWidget(tabs);
-    m_scaleBarTable->setObjectName(QStringLiteral("surveyScaleBarTable"));
+    _controlPointTable = new QTableWidget(tabs);
+    _controlPointTable->setObjectName(QStringLiteral("surveyControlPointTable"));
+    _checkPointTable = new QTableWidget(tabs);
+    _checkPointTable->setObjectName(QStringLiteral("surveyCheckPointTable"));
+    _scaleBarTable = new QTableWidget(tabs);
+    _scaleBarTable->setObjectName(QStringLiteral("surveyScaleBarTable"));
 
-    tabs->addTab(m_controlPointTable, tr("控制点"));
-    tabs->addTab(m_checkPointTable, tr("检查点"));
-    tabs->addTab(m_scaleBarTable, tr("比例尺"));
+    tabs->addTab(_controlPointTable, tr("控制点"));
+    tabs->addTab(_checkPointTable, tr("检查点"));
+    tabs->addTab(_scaleBarTable, tr("比例尺"));
     root->addWidget(tabs, 1);
 
     auto *buttons = new QDialogButtonBox(QDialogButtonBox::Close, this);
@@ -132,32 +132,32 @@ void SurveyControlDialog::setupUi()
 
 void SurveyControlDialog::refreshTables()
 {
-    const QJsonArray controlPoints = m_metadata.value(QStringLiteral("control_points")).toArray();
-    const QJsonArray checkPoints = m_metadata.value(QStringLiteral("check_points")).toArray();
-    const QJsonArray scaleBars = m_metadata.value(QStringLiteral("scale_bars")).toArray();
+    const QJsonArray controlPoints = _metadata.value(QStringLiteral("control_points")).toArray();
+    const QJsonArray checkPoints = _metadata.value(QStringLiteral("check_points")).toArray();
+    const QJsonArray scaleBars = _metadata.value(QStringLiteral("scale_bars")).toArray();
 
-    if (m_summaryLabel)
+    if (_summaryLabel)
     {
-        m_summaryLabel->setText(tr("控制点 %1，检查点 %2，比例尺 %3")
-                                    .arg(controlPoints.size())
-                                    .arg(checkPoints.size())
-                                    .arg(scaleBars.size()));
+        _summaryLabel->setText(tr("控制点 %1，检查点 %2，比例尺 %3")
+                                   .arg(controlPoints.size())
+                                   .arg(checkPoints.size())
+                                   .arg(scaleBars.size()));
     }
-    if (m_sourceLabel)
+    if (_sourceLabel)
     {
-        const QString sourcePath = m_metadata.value(QStringLiteral("source_path")).toString();
-        m_sourceLabel->setText(sourcePath.isEmpty()
-                                   ? tr("来源：未导入")
-                                   : tr("来源：%1").arg(sourcePath));
+        const QString sourcePath = _metadata.value(QStringLiteral("source_path")).toString();
+        _sourceLabel->setText(sourcePath.isEmpty()
+                                  ? tr("来源：未导入")
+                                  : tr("来源：%1").arg(sourcePath));
     }
-    if (m_statusLabel && m_statusLabel->text().isEmpty())
+    if (_statusLabel && _statusLabel->text().isEmpty())
     {
-        m_statusLabel->setText(tr("控制点参与平差，检查点用于验证；比例尺用于距离约束。"));
+        _statusLabel->setText(tr("控制点参与平差，检查点用于验证；比例尺用于距离约束。"));
     }
 
-    populatePointTable(m_controlPointTable, controlPoints, false);
-    populatePointTable(m_checkPointTable, checkPoints, true);
-    populateScaleBarTable(m_scaleBarTable, scaleBars);
+    populatePointTable(_controlPointTable, controlPoints, false);
+    populatePointTable(_checkPointTable, checkPoints, true);
+    populateScaleBarTable(_scaleBarTable, scaleBars);
 }
 
 void SurveyControlDialog::populatePointTable(QTableWidget *table, const QJsonArray &points, bool includeResidual)
