@@ -64,64 +64,64 @@ private:
     QJsonObject collectSettings() const;
 
     // 输入输出控件
-    QListWidget*      m_fileList{nullptr};
-    QPushButton*      m_addFilesBtn{nullptr};
-    QPushButton*      m_addFolderBtn{nullptr};
-    QPushButton*      m_removeBtn{nullptr};
-    QPushButton*      m_clearBtn{nullptr};
-    QLineEdit*        m_outputLine{nullptr};
-    QPushButton*      m_browseOutBtn{nullptr};
+    QListWidget*      _fileList{nullptr};
+    QPushButton*      _addFilesBtn{nullptr};
+    QPushButton*      _addFolderBtn{nullptr};
+    QPushButton*      _removeBtn{nullptr};
+    QPushButton*      _clearBtn{nullptr};
+    QLineEdit*        _outputLine{nullptr};
+    QPushButton*      _browseOutBtn{nullptr};
 
     // 算法选择
-    QComboBox*        m_algorithmCombo{nullptr};
-    QFormLayout*      m_basicForm{nullptr};
-    QWidget*          m_cudaRowWidget{nullptr};
-    QWidget*          m_grayRangeWidget{nullptr};
+    QComboBox*        _algorithmCombo{nullptr};
+    QFormLayout*      _basicForm{nullptr};
+    QWidget*          _cudaRowWidget{nullptr};
+    QWidget*          _grayRangeWidget{nullptr};
 
     // 基础参数 (Basic)
-    QSpinBox*         m_nmsRadiusSpin{nullptr};
-    QDoubleSpinBox*   m_detectionThresholdSpin{nullptr};
-    QSpinBox*         m_maxKeypointsSpin{nullptr};
-    QSpinBox*         m_removeBordersSpin{nullptr};
-    QSpinBox*         m_grayscaleMinSpin{nullptr};
-    QSpinBox*         m_grayscaleMaxSpin{nullptr};
+    QSpinBox*         _nmsRadiusSpin{nullptr};
+    QDoubleSpinBox*   _detectionThresholdSpin{nullptr};
+    QSpinBox*         _maxKeypointsSpin{nullptr};
+    QSpinBox*         _removeBordersSpin{nullptr};
+    QSpinBox*         _grayscaleMinSpin{nullptr};
+    QSpinBox*         _grayscaleMaxSpin{nullptr};
 
     // 高级参数 (Advanced) - 折叠组
-    QGroupBox*        m_advancedGroup{nullptr};
-    QFormLayout*      m_advancedForm{nullptr};
-    QLabel*           m_advancedHintLabel{nullptr};
-    QCheckBox*        m_normalizeInputChk{nullptr};
-    QSpinBox*         m_descriptorDimSpin{nullptr};
-    QSpinBox*         m_gridSizeSpin{nullptr};
-    QSpinBox*         m_batchSizeSpin{nullptr};
+    QGroupBox*        _advancedGroup{nullptr};
+    QFormLayout*      _advancedForm{nullptr};
+    QLabel*           _advancedHintLabel{nullptr};
+    QCheckBox*        _normalizeInputChk{nullptr};
+    QSpinBox*         _descriptorDimSpin{nullptr};
+    QSpinBox*         _gridSizeSpin{nullptr};
+    QSpinBox*         _batchSizeSpin{nullptr};
     // 邻域判断控件
-    QSpinBox*         m_neighborhoodRadiusSpin{nullptr};
-    QDoubleSpinBox*   m_neighborhoodThresholdSpin{nullptr};
+    QSpinBox*         _neighborhoodRadiusSpin{nullptr};
+    QDoubleSpinBox*   _neighborhoodThresholdSpin{nullptr};
 
     // 系统参数 (System) - 折叠组
-    QGroupBox*        m_systemGroup{nullptr};
-    QComboBox*        m_deviceCombo{nullptr};
-    QCheckBox*        m_allowFallbackChk{nullptr};
-    QLineEdit*        m_pythonPathEdit{nullptr};
+    QGroupBox*        _systemGroup{nullptr};
+    QComboBox*        _deviceCombo{nullptr};
+    QCheckBox*        _allowFallbackChk{nullptr};
+    QLineEdit*        _pythonPathEdit{nullptr};
 
     // 调试参数 (Debug) - 折叠组
-    QGroupBox*        m_debugGroup{nullptr};
-    QCheckBox*        m_saveCsvChk{nullptr};
-    QCheckBox*        m_saveOverlayChk{nullptr};
+    QGroupBox*        _debugGroup{nullptr};
+    QCheckBox*        _saveCsvChk{nullptr};
+    QCheckBox*        _saveOverlayChk{nullptr};
 
     // 底部按钮
-    QPushButton*      m_runBtn{nullptr};
-    QPushButton*      m_cancelBtn{nullptr};
-    QPushButton*      m_resetBtn{nullptr};
+    QPushButton*      _runBtn{nullptr};
+    QPushButton*      _cancelBtn{nullptr};
+    QPushButton*      _resetBtn{nullptr};
 
     // ── 多算法参数切换 ──
-    QStackedWidget*   m_paramStack{nullptr};
-    QLineEdit*        m_modelPathEdit{nullptr};    // DL 算法模型路径 (共享)
-    QCheckBox*        m_useCudaChk{nullptr};       // CUDA 开关 (共享)
-    QSpinBox*         m_cudaDeviceSpin{nullptr};   // CUDA 设备ID (共享)
+    QStackedWidget*   _paramStack{nullptr};
+    QLineEdit*        _modelPathEdit{nullptr};    // DL 算法模型路径 (共享)
+    QCheckBox*        _useCudaChk{nullptr};       // CUDA 开关 (共享)
+    QSpinBox*         _cudaDeviceSpin{nullptr};   // CUDA 设备ID (共享)
     // 简单算法页控件
-    QSpinBox*         m_simpleMaxKpSpin{nullptr};  // SIFT/ORB 最大特征数
-    QSpinBox*         m_diskMaxKpSpin{nullptr};    // DISK 最大KP
-    QDoubleSpinBox*   m_diskScoreThreshSpin{nullptr};
-    QSpinBox*         m_alikedMaxKpSpin{nullptr};
+    QSpinBox*         _simpleMaxKpSpin{nullptr};  // SIFT/ORB 最大特征数
+    QSpinBox*         _diskMaxKpSpin{nullptr};    // DISK 最大KP
+    QDoubleSpinBox*   _diskScoreThreshSpin{nullptr};
+    QSpinBox*         _alikedMaxKpSpin{nullptr};
 };

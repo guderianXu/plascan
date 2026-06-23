@@ -2040,6 +2040,120 @@ TEST(CodeStyleTest, FeatureMatchingDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, FeatureExtractionDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeatureExtractionDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeatureExtractionDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QListWidget*      _fileList{nullptr};"),
+        QStringLiteral("QPushButton*      _addFilesBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _addFolderBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _removeBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _clearBtn{nullptr};"),
+        QStringLiteral("QLineEdit*        _outputLine{nullptr};"),
+        QStringLiteral("QPushButton*      _browseOutBtn{nullptr};"),
+        QStringLiteral("QComboBox*        _algorithmCombo{nullptr};"),
+        QStringLiteral("QFormLayout*      _basicForm{nullptr};"),
+        QStringLiteral("QWidget*          _cudaRowWidget{nullptr};"),
+        QStringLiteral("QWidget*          _grayRangeWidget{nullptr};"),
+        QStringLiteral("QSpinBox*         _nmsRadiusSpin{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _detectionThresholdSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _maxKeypointsSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _removeBordersSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _grayscaleMinSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _grayscaleMaxSpin{nullptr};"),
+        QStringLiteral("QGroupBox*        _advancedGroup{nullptr};"),
+        QStringLiteral("QFormLayout*      _advancedForm{nullptr};"),
+        QStringLiteral("QLabel*           _advancedHintLabel{nullptr};"),
+        QStringLiteral("QCheckBox*        _normalizeInputChk{nullptr};"),
+        QStringLiteral("QSpinBox*         _descriptorDimSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _gridSizeSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _batchSizeSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _neighborhoodRadiusSpin{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _neighborhoodThresholdSpin{nullptr};"),
+        QStringLiteral("QGroupBox*        _systemGroup{nullptr};"),
+        QStringLiteral("QComboBox*        _deviceCombo{nullptr};"),
+        QStringLiteral("QCheckBox*        _allowFallbackChk{nullptr};"),
+        QStringLiteral("QLineEdit*        _pythonPathEdit{nullptr};"),
+        QStringLiteral("QGroupBox*        _debugGroup{nullptr};"),
+        QStringLiteral("QCheckBox*        _saveCsvChk{nullptr};"),
+        QStringLiteral("QCheckBox*        _saveOverlayChk{nullptr};"),
+        QStringLiteral("QPushButton*      _runBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _cancelBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _resetBtn{nullptr};"),
+        QStringLiteral("QStackedWidget*   _paramStack{nullptr};"),
+        QStringLiteral("QLineEdit*        _modelPathEdit{nullptr};"),
+        QStringLiteral("QCheckBox*        _useCudaChk{nullptr};"),
+        QStringLiteral("QSpinBox*         _cudaDeviceSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _simpleMaxKpSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _diskMaxKpSpin{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _diskScoreThreshSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _alikedMaxKpSpin{nullptr};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_fileList"),
+        QStringLiteral("m_addFilesBtn"),
+        QStringLiteral("m_addFolderBtn"),
+        QStringLiteral("m_removeBtn"),
+        QStringLiteral("m_clearBtn"),
+        QStringLiteral("m_outputLine"),
+        QStringLiteral("m_browseOutBtn"),
+        QStringLiteral("m_algorithmCombo"),
+        QStringLiteral("m_basicForm"),
+        QStringLiteral("m_cudaRowWidget"),
+        QStringLiteral("m_grayRangeWidget"),
+        QStringLiteral("m_nmsRadiusSpin"),
+        QStringLiteral("m_detectionThresholdSpin"),
+        QStringLiteral("m_maxKeypointsSpin"),
+        QStringLiteral("m_removeBordersSpin"),
+        QStringLiteral("m_grayscaleMinSpin"),
+        QStringLiteral("m_grayscaleMaxSpin"),
+        QStringLiteral("m_advancedGroup"),
+        QStringLiteral("m_advancedForm"),
+        QStringLiteral("m_advancedHintLabel"),
+        QStringLiteral("m_normalizeInputChk"),
+        QStringLiteral("m_descriptorDimSpin"),
+        QStringLiteral("m_gridSizeSpin"),
+        QStringLiteral("m_batchSizeSpin"),
+        QStringLiteral("m_neighborhoodRadiusSpin"),
+        QStringLiteral("m_neighborhoodThresholdSpin"),
+        QStringLiteral("m_systemGroup"),
+        QStringLiteral("m_deviceCombo"),
+        QStringLiteral("m_allowFallbackChk"),
+        QStringLiteral("m_pythonPathEdit"),
+        QStringLiteral("m_debugGroup"),
+        QStringLiteral("m_saveCsvChk"),
+        QStringLiteral("m_saveOverlayChk"),
+        QStringLiteral("m_runBtn"),
+        QStringLiteral("m_cancelBtn"),
+        QStringLiteral("m_resetBtn"),
+        QStringLiteral("m_paramStack"),
+        QStringLiteral("m_modelPathEdit"),
+        QStringLiteral("m_useCudaChk"),
+        QStringLiteral("m_cudaDeviceSpin"),
+        QStringLiteral("m_simpleMaxKpSpin"),
+        QStringLiteral("m_diskMaxKpSpin"),
+        QStringLiteral("m_diskScoreThreshSpin"),
+        QStringLiteral("m_alikedMaxKpSpin"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, MatchPairSelectorDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));

@@ -218,45 +218,45 @@ void FeatureExtractionDialog::setupUi()
     Ui::FeatureExtractionDialog ui;
     ui.setupUi(this);
 
-    m_fileList = ui.m_fileList;
-    m_addFilesBtn = ui.m_addFilesBtn;
-    m_addFolderBtn = ui.m_addFolderBtn;
-    m_removeBtn = ui.m_removeBtn;
-    m_clearBtn = ui.m_clearBtn;
-    m_outputLine = ui.m_outputLine;
-    m_browseOutBtn = ui.m_browseOutBtn;
-    m_basicForm = ui.m_basicForm;
-    m_algorithmCombo = ui.m_algorithmCombo;
-    m_modelPathEdit = ui.m_modelPathEdit;
-    m_cudaRowWidget = ui.m_cudaRowWidget;
-    m_useCudaChk = ui.m_useCudaChk;
-    m_cudaDeviceSpin = ui.m_cudaDeviceSpin;
-    m_nmsRadiusSpin = ui.m_nmsRadiusSpin;
-    m_detectionThresholdSpin = ui.m_detectionThresholdSpin;
-    m_maxKeypointsSpin = ui.m_maxKeypointsSpin;
-    m_removeBordersSpin = ui.m_removeBordersSpin;
-    m_grayRangeWidget = ui.m_grayRangeWidget;
-    m_grayscaleMinSpin = ui.m_grayscaleMinSpin;
-    m_grayscaleMaxSpin = ui.m_grayscaleMaxSpin;
-    m_advancedGroup = ui.m_advancedGroup;
-    m_advancedForm = ui.m_advancedForm;
-    m_advancedHintLabel = ui.m_advancedHintLabel;
-    m_normalizeInputChk = ui.m_normalizeInputChk;
-    m_descriptorDimSpin = ui.m_descriptorDimSpin;
-    m_gridSizeSpin = ui.m_gridSizeSpin;
-    m_batchSizeSpin = ui.m_batchSizeSpin;
-    m_neighborhoodRadiusSpin = ui.m_neighborhoodRadiusSpin;
-    m_neighborhoodThresholdSpin = ui.m_neighborhoodThresholdSpin;
-    m_systemGroup = ui.m_systemGroup;
-    m_deviceCombo = ui.m_deviceCombo;
-    m_allowFallbackChk = ui.m_allowFallbackChk;
-    m_pythonPathEdit = ui.m_pythonPathEdit;
-    m_debugGroup = ui.m_debugGroup;
-    m_saveCsvChk = ui.m_saveCsvChk;
-    m_saveOverlayChk = ui.m_saveOverlayChk;
-    m_resetBtn = ui.m_resetBtn;
-    m_runBtn = ui.m_runBtn;
-    m_cancelBtn = ui.m_cancelBtn;
+    _fileList = ui.m_fileList;
+    _addFilesBtn = ui.m_addFilesBtn;
+    _addFolderBtn = ui.m_addFolderBtn;
+    _removeBtn = ui.m_removeBtn;
+    _clearBtn = ui.m_clearBtn;
+    _outputLine = ui.m_outputLine;
+    _browseOutBtn = ui.m_browseOutBtn;
+    _basicForm = ui.m_basicForm;
+    _algorithmCombo = ui.m_algorithmCombo;
+    _modelPathEdit = ui.m_modelPathEdit;
+    _cudaRowWidget = ui.m_cudaRowWidget;
+    _useCudaChk = ui.m_useCudaChk;
+    _cudaDeviceSpin = ui.m_cudaDeviceSpin;
+    _nmsRadiusSpin = ui.m_nmsRadiusSpin;
+    _detectionThresholdSpin = ui.m_detectionThresholdSpin;
+    _maxKeypointsSpin = ui.m_maxKeypointsSpin;
+    _removeBordersSpin = ui.m_removeBordersSpin;
+    _grayRangeWidget = ui.m_grayRangeWidget;
+    _grayscaleMinSpin = ui.m_grayscaleMinSpin;
+    _grayscaleMaxSpin = ui.m_grayscaleMaxSpin;
+    _advancedGroup = ui.m_advancedGroup;
+    _advancedForm = ui.m_advancedForm;
+    _advancedHintLabel = ui.m_advancedHintLabel;
+    _normalizeInputChk = ui.m_normalizeInputChk;
+    _descriptorDimSpin = ui.m_descriptorDimSpin;
+    _gridSizeSpin = ui.m_gridSizeSpin;
+    _batchSizeSpin = ui.m_batchSizeSpin;
+    _neighborhoodRadiusSpin = ui.m_neighborhoodRadiusSpin;
+    _neighborhoodThresholdSpin = ui.m_neighborhoodThresholdSpin;
+    _systemGroup = ui.m_systemGroup;
+    _deviceCombo = ui.m_deviceCombo;
+    _allowFallbackChk = ui.m_allowFallbackChk;
+    _pythonPathEdit = ui.m_pythonPathEdit;
+    _debugGroup = ui.m_debugGroup;
+    _saveCsvChk = ui.m_saveCsvChk;
+    _saveOverlayChk = ui.m_saveOverlayChk;
+    _resetBtn = ui.m_resetBtn;
+    _runBtn = ui.m_runBtn;
+    _cancelBtn = ui.m_cancelBtn;
 
     if (ui.topSplit)
     {
@@ -264,36 +264,36 @@ void FeatureExtractionDialog::setupUi()
         ui.topSplit->setStretchFactor(1, 2);
     }
 
-    m_fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    _fileList->setSelectionMode(QAbstractItemView::ExtendedSelection);
 
-    m_algorithmCombo->clear();
-    m_algorithmCombo->addItem("SuperPoint", "superpoint");
-    m_algorithmCombo->addItem("DISK", "disk");
-    m_algorithmCombo->addItem("ALIKED", "aliked");
-    m_algorithmCombo->addItem("ORB", "orb");
-    m_algorithmCombo->addItem("SIFT", "sift");
-    setComboDataOrFirst(m_algorithmCombo, QStringLiteral("disk"));
+    _algorithmCombo->clear();
+    _algorithmCombo->addItem("SuperPoint", "superpoint");
+    _algorithmCombo->addItem("DISK", "disk");
+    _algorithmCombo->addItem("ALIKED", "aliked");
+    _algorithmCombo->addItem("ORB", "orb");
+    _algorithmCombo->addItem("SIFT", "sift");
+    setComboDataOrFirst(_algorithmCombo, QStringLiteral("disk"));
 
-    m_deviceCombo->clear();
-    m_deviceCombo->addItems(QStringList() << "CPU" << "CUDA");
-    m_deviceCombo->setCurrentText("CUDA");
-    setFormRowVisible(ui.systemForm, m_pythonPathEdit, false);
+    _deviceCombo->clear();
+    _deviceCombo->addItems(QStringList() << "CPU" << "CUDA");
+    _deviceCombo->setCurrentText("CUDA");
+    setFormRowVisible(ui.systemForm, _pythonPathEdit, false);
 
     connect(ui.advancedToggle, &QToolButton::toggled, this, [this, advancedToggle = ui.advancedToggle](bool checked)
     {
-        m_advancedGroup->setVisible(checked);
+        _advancedGroup->setVisible(checked);
         advancedToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
     });
 
     connect(ui.systemToggle, &QToolButton::toggled, this, [this, systemToggle = ui.systemToggle](bool checked)
     {
-        m_systemGroup->setVisible(checked);
+        _systemGroup->setVisible(checked);
         systemToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
     });
 
     connect(ui.debugToggle, &QToolButton::toggled, this, [this, debugToggle = ui.debugToggle](bool checked)
     {
-        m_debugGroup->setVisible(checked);
+        _debugGroup->setVisible(checked);
         debugToggle->setArrowType(checked ? Qt::DownArrow : Qt::RightArrow);
     });
 }
@@ -301,77 +301,77 @@ void FeatureExtractionDialog::setupUi()
 void FeatureExtractionDialog::setupConnections() 
 {
     // 文件操作
-    connect(m_addFilesBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onAddFiles);
-    connect(m_addFolderBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onAddFolder);
-    connect(m_removeBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onRemoveSelected);
-    connect(m_clearBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onClearFiles);
-    connect(m_browseOutBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onBrowseOutput);
+    connect(_addFilesBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onAddFiles);
+    connect(_addFolderBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onAddFolder);
+    connect(_removeBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onRemoveSelected);
+    connect(_clearBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onClearFiles);
+    connect(_browseOutBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onBrowseOutput);
 
     // 底部按钮
-    connect(m_runBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onRun);
-    connect(m_cancelBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onCancel);
-    connect(m_resetBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onResetDefaults);
+    connect(_runBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onRun);
+    connect(_cancelBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onCancel);
+    connect(_resetBtn, &QPushButton::clicked, this, &FeatureExtractionDialog::onResetDefaults);
 
     // 参数变更信号（实时同步到项目配置）
     // 基础参数
-        connect(m_algorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        connect(_algorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &FeatureExtractionDialog::onAlgorithmChanged);
-        connect(m_algorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+        connect(_algorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_nmsRadiusSpin, QOverload<int>::of(&QSpinBox::valueChanged), 
+    connect(_nmsRadiusSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_detectionThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(_detectionThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_maxKeypointsSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_maxKeypointsSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_removeBordersSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_removeBordersSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_grayscaleMinSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_grayscaleMinSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_grayscaleMaxSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_grayscaleMaxSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_useCudaChk, &QCheckBox::toggled, this, [this]()
+    connect(_useCudaChk, &QCheckBox::toggled, this, [this]()
     {
         {
-            QSignalBlocker blocker(m_deviceCombo);
-            m_deviceCombo->setCurrentText(m_useCudaChk->isChecked() ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+            QSignalBlocker blocker(_deviceCombo);
+            _deviceCombo->setCurrentText(_useCudaChk->isChecked() ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
         }
         updateModelPathForCurrentAlgorithm();
         emitSettingsNow();
     });
-    connect(m_cudaDeviceSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_cudaDeviceSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
 
     // 高级参数
-    connect(m_normalizeInputChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_descriptorDimSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_normalizeInputChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_descriptorDimSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_gridSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_gridSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_batchSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_batchSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_neighborhoodRadiusSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_neighborhoodThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_neighborhoodRadiusSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_neighborhoodThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &FeatureExtractionDialog::emitSettingsNow);
 
     // 系统参数
-    connect(m_deviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]()
+    connect(_deviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]()
     {
         {
-            QSignalBlocker blocker(m_useCudaChk);
-            m_useCudaChk->setChecked(deviceTextRequestsCuda(m_deviceCombo->currentText()));
+            QSignalBlocker blocker(_useCudaChk);
+            _useCudaChk->setChecked(deviceTextRequestsCuda(_deviceCombo->currentText()));
         }
         updateModelPathForCurrentAlgorithm();
         emitSettingsNow();
     });
-    connect(m_allowFallbackChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_pythonPathEdit, &QLineEdit::textChanged, this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_allowFallbackChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_pythonPathEdit, &QLineEdit::textChanged, this, &FeatureExtractionDialog::emitSettingsNow);
 
     // 调试参数
-    connect(m_saveCsvChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(m_saveOverlayChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_saveCsvChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_saveOverlayChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
 
     // 初始状态
-    onAlgorithmChanged(m_algorithmCombo->currentIndex());
+    onAlgorithmChanged(_algorithmCombo->currentIndex());
 }
 
 void FeatureExtractionDialog::onAddFiles() 
@@ -385,7 +385,7 @@ void FeatureExtractionDialog::onAddFiles()
     
     for (const QString& file : files) {
         if (!file.isEmpty()) {
-            QListWidgetItem *item = new QListWidgetItem(file, m_fileList);
+            QListWidgetItem *item = new QListWidgetItem(file, _fileList);
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             item->setCheckState(Qt::Checked);
         }
@@ -411,7 +411,7 @@ void FeatureExtractionDialog::onAddFolder()
         for (const QString &file : files) {
             QString fullPath = folder.filePath(file);
             // 创建带checkbox的item
-            QListWidgetItem *item = new QListWidgetItem(fullPath, m_fileList);
+            QListWidgetItem *item = new QListWidgetItem(fullPath, _fileList);
             item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
             item->setCheckState(Qt::Checked); // 默认选中
         }
@@ -420,15 +420,15 @@ void FeatureExtractionDialog::onAddFolder()
 
 void FeatureExtractionDialog::onRemoveSelected() 
 {
-    QList<QListWidgetItem*> selected = m_fileList->selectedItems();
+    QList<QListWidgetItem*> selected = _fileList->selectedItems();
     for (QListWidgetItem* item : selected) {
-        delete m_fileList->takeItem(m_fileList->row(item));
+        delete _fileList->takeItem(_fileList->row(item));
     }
 }
 
 void FeatureExtractionDialog::onClearFiles() 
 {
-    m_fileList->clear();
+    _fileList->clear();
 }
 
 void FeatureExtractionDialog::onBrowseOutput() 
@@ -436,12 +436,12 @@ void FeatureExtractionDialog::onBrowseOutput()
     QString dir = QFileDialog::getExistingDirectory(
         this,
         tr("选择输出目录"),
-        m_outputLine->text(),
+        _outputLine->text(),
         QFileDialog::ShowDirsOnly | QFileDialog::DontResolveSymlinks
     );
     
     if (!dir.isEmpty()) {
-        m_outputLine->setText(dir);
+        _outputLine->setText(dir);
     }
 }
 
@@ -449,8 +449,8 @@ void FeatureExtractionDialog::onRun()
 {
     // 收集选中的输入文件列表（只处理checkbox选中的）
     QStringList inputs;
-    for (int i = 0; i < m_fileList->count(); ++i) {
-        QListWidgetItem *item = m_fileList->item(i);
+    for (int i = 0; i < _fileList->count(); ++i) {
+        QListWidgetItem *item = _fileList->item(i);
         if (item->checkState() == Qt::Checked) {
             inputs.append(item->text());
         }
@@ -479,76 +479,76 @@ void FeatureExtractionDialog::onCancel()
 void FeatureExtractionDialog::onResetDefaults()
 {
     // 恢复所有参数到默认值
-    setComboDataOrFirst(m_algorithmCombo, QStringLiteral("disk"));
-    m_nmsRadiusSpin->setValue(3);
-    m_detectionThresholdSpin->setValue(0.003);
-    m_maxKeypointsSpin->setValue(-1);
-    m_removeBordersSpin->setValue(4);
-    m_grayscaleMinSpin->setValue(kDefaultGrayscaleMinPx);
-    m_grayscaleMaxSpin->setValue(kDefaultGrayscaleMaxPx);
+    setComboDataOrFirst(_algorithmCombo, QStringLiteral("disk"));
+    _nmsRadiusSpin->setValue(3);
+    _detectionThresholdSpin->setValue(0.003);
+    _maxKeypointsSpin->setValue(-1);
+    _removeBordersSpin->setValue(4);
+    _grayscaleMinSpin->setValue(kDefaultGrayscaleMinPx);
+    _grayscaleMaxSpin->setValue(kDefaultGrayscaleMaxPx);
 
-    m_normalizeInputChk->setChecked(true);
-    m_descriptorDimSpin->setValue(256);
-    m_gridSizeSpin->setValue(8);
-    m_batchSizeSpin->setValue(8);
-    m_neighborhoodRadiusSpin->setValue(3);
-    m_neighborhoodThresholdSpin->setValue(0.05);
+    _normalizeInputChk->setChecked(true);
+    _descriptorDimSpin->setValue(256);
+    _gridSizeSpin->setValue(8);
+    _batchSizeSpin->setValue(8);
+    _neighborhoodRadiusSpin->setValue(3);
+    _neighborhoodThresholdSpin->setValue(0.05);
 
-    m_deviceCombo->setCurrentText("CUDA");
-    m_allowFallbackChk->setChecked(true);
+    _deviceCombo->setCurrentText("CUDA");
+    _allowFallbackChk->setChecked(true);
 
-    m_saveCsvChk->setChecked(false);
-    m_saveOverlayChk->setChecked(false);
-    m_pythonPathEdit->clear();
+    _saveCsvChk->setChecked(false);
+    _saveOverlayChk->setChecked(false);
+    _pythonPathEdit->clear();
     updateModelPathForCurrentAlgorithm();
 }
 
 void FeatureExtractionDialog::onAlgorithmChanged(int)
 {
-    const QString algo = m_algorithmCombo->currentData().toString();
+    const QString algo = _algorithmCombo->currentData().toString();
     const bool isDL = (algo == "superpoint" || algo == "disk" || algo == "aliked");
     const bool isSP = (algo == "superpoint");
     const bool isPythonDL = (algo == "disk" || algo == "aliked");
     const bool isTraditional = (algo == "orb" || algo == "sift");
 
     // 模型路径: 仅 DL 算法需要
-    setFormRowVisible(m_basicForm, m_modelPathEdit, isDL);
-    setFormRowVisible(m_basicForm, m_cudaRowWidget, isDL);
+    setFormRowVisible(_basicForm, _modelPathEdit, isDL);
+    setFormRowVisible(_basicForm, _cudaRowWidget, isDL);
 
     // SuperPoint 专有参数
-    setFormRowVisible(m_basicForm, m_nmsRadiusSpin, isSP);
-    setFormRowVisible(m_basicForm, m_detectionThresholdSpin, isDL);
-    setFormRowVisible(m_basicForm, m_removeBordersSpin, isSP);
+    setFormRowVisible(_basicForm, _nmsRadiusSpin, isSP);
+    setFormRowVisible(_basicForm, _detectionThresholdSpin, isDL);
+    setFormRowVisible(_basicForm, _removeBordersSpin, isSP);
 
-    if (m_advancedHintLabel)
+    if (_advancedHintLabel)
     {
         const bool showHint = isPythonDL || isTraditional;
         if (isPythonDL)
         {
-            m_advancedHintLabel->setText(tr("DISK/ALIKED 的检测阈值、最大关键点数在基础参数中设置；"
+            _advancedHintLabel->setText(tr("DISK/ALIKED 的检测阈值、最大关键点数在基础参数中设置；"
                                             "灰度阈值在高级参数中设置；"
                                             "模型路径和设备会传给 C++ TorchScript 提取器。"));
         }
         else if (isTraditional)
         {
-            m_advancedHintLabel->setText(tr("ORB/SIFT 使用 OpenCV 提取器，基础参数中的最大关键点数和高级参数中的灰度阈值会生效。"));
+            _advancedHintLabel->setText(tr("ORB/SIFT 使用 OpenCV 提取器，基础参数中的最大关键点数和高级参数中的灰度阈值会生效。"));
         }
-        setFormRowVisible(m_advancedForm, m_advancedHintLabel, showHint);
+        setFormRowVisible(_advancedForm, _advancedHintLabel, showHint);
     }
 
-    setFormRowVisible(m_advancedForm, m_grayRangeWidget, isDL || isTraditional);
-    setFormRowVisible(m_advancedForm, m_normalizeInputChk, isSP);
-    setFormRowVisible(m_advancedForm, m_descriptorDimSpin, isSP);
-    setFormRowVisible(m_advancedForm, m_gridSizeSpin, isSP);
-    setFormRowVisible(m_advancedForm, m_batchSizeSpin, isSP);
-    setFormRowVisible(m_advancedForm, m_neighborhoodRadiusSpin, isSP);
-    setFormRowVisible(m_advancedForm, m_neighborhoodThresholdSpin, isSP);
+    setFormRowVisible(_advancedForm, _grayRangeWidget, isDL || isTraditional);
+    setFormRowVisible(_advancedForm, _normalizeInputChk, isSP);
+    setFormRowVisible(_advancedForm, _descriptorDimSpin, isSP);
+    setFormRowVisible(_advancedForm, _gridSizeSpin, isSP);
+    setFormRowVisible(_advancedForm, _batchSizeSpin, isSP);
+    setFormRowVisible(_advancedForm, _neighborhoodRadiusSpin, isSP);
+    setFormRowVisible(_advancedForm, _neighborhoodThresholdSpin, isSP);
 
     // 描述子维度自动设置
     if (algo == "disk" || algo == "aliked")
-        m_descriptorDimSpin->setValue(128);
+        _descriptorDimSpin->setValue(128);
     else if (isSP)
-        m_descriptorDimSpin->setValue(256);
+        _descriptorDimSpin->setValue(256);
 
     updateModelPathForCurrentAlgorithm();
     emitSettingsNow();
@@ -556,32 +556,32 @@ void FeatureExtractionDialog::onAlgorithmChanged(int)
 
 void FeatureExtractionDialog::updateModelPathForCurrentAlgorithm()
 {
-    const QString algo = m_algorithmCombo->currentData().toString();
+    const QString algo = _algorithmCombo->currentData().toString();
     const bool isDL = (algo == "superpoint" || algo == "disk" || algo == "aliked");
     if (!isDL)
     {
-        QSignalBlocker blocker(m_modelPathEdit);
-        m_modelPathEdit->clear();
+        QSignalBlocker blocker(_modelPathEdit);
+        _modelPathEdit->clear();
         return;
     }
 
-    const QString resolvedPath = defaultModelPath(algo, deviceTextRequestsCuda(m_deviceCombo->currentText()));
-    const QString currentPath = m_modelPathEdit->text().trimmed();
+    const QString resolvedPath = defaultModelPath(algo, deviceTextRequestsCuda(_deviceCombo->currentText()));
+    const QString currentPath = _modelPathEdit->text().trimmed();
     const bool shouldReplace = currentPath.isEmpty() || isManagedModelPath(currentPath);
 
     if (shouldReplace)
     {
-        QSignalBlocker blocker(m_modelPathEdit);
-        m_modelPathEdit->setText(resolvedPath);
+        QSignalBlocker blocker(_modelPathEdit);
+        _modelPathEdit->setText(resolvedPath);
     }
 
     if (!resolvedPath.isEmpty())
     {
-        m_modelPathEdit->setToolTip(tr("当前自动解析模型路径：\n%1").arg(resolvedPath));
+        _modelPathEdit->setToolTip(tr("当前自动解析模型路径：\n%1").arg(resolvedPath));
     }
     else
     {
-        m_modelPathEdit->setToolTip(tr("未找到当前算法的默认模型文件"));
+        _modelPathEdit->setToolTip(tr("未找到当前算法的默认模型文件"));
     }
 }
 
@@ -590,7 +590,7 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
     if (settings.contains("feature_algorithm"))
     {
         const QString featureAlgorithm = settings["feature_algorithm"].toString("disk").trimmed().toLower();
-        setComboDataOrFirst(m_algorithmCombo, featureAlgorithm);
+        setComboDataOrFirst(_algorithmCombo, featureAlgorithm);
     }
 
     if (settings.contains("model_path"))
@@ -598,73 +598,73 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
         const QString modelPath = settings["model_path"].toString().trimmed();
         if (!modelPath.isEmpty())
         {
-            m_modelPathEdit->setText(modelPath);
+            _modelPathEdit->setText(modelPath);
         }
     }
     if (settings.contains("cuda_device"))
-        m_cudaDeviceSpin->setValue(settings["cuda_device"].toInt());
+        _cudaDeviceSpin->setValue(settings["cuda_device"].toInt());
     if (settings.contains("python_executable"))
-        m_pythonPathEdit->setText(settings["python_executable"].toString().trimmed());
+        _pythonPathEdit->setText(settings["python_executable"].toString().trimmed());
 
     // 基础参数
     if (settings.contains("nms_radius"))
-        m_nmsRadiusSpin->setValue(settings["nms_radius"].toInt(3));
+        _nmsRadiusSpin->setValue(settings["nms_radius"].toInt(3));
     if (settings.contains("detection_threshold"))
-        m_detectionThresholdSpin->setValue(settings["detection_threshold"].toDouble(0.003));
+        _detectionThresholdSpin->setValue(settings["detection_threshold"].toDouble(0.003));
     if (settings.contains("max_num_keypoints"))
-        m_maxKeypointsSpin->setValue(settings["max_num_keypoints"].toInt(-1));
+        _maxKeypointsSpin->setValue(settings["max_num_keypoints"].toInt(-1));
     if (settings.contains("remove_borders"))
-        m_removeBordersSpin->setValue(settings["remove_borders"].toInt(4));
-    m_grayscaleMinSpin->setValue(grayscalePixelSetting(settings,
+        _removeBordersSpin->setValue(settings["remove_borders"].toInt(4));
+    _grayscaleMinSpin->setValue(grayscalePixelSetting(settings,
                                                        QStringLiteral("grayscale_min_px"),
                                                        QStringLiteral("grayscale_min"),
                                                        kDefaultGrayscaleMinPx));
-    m_grayscaleMaxSpin->setValue(grayscalePixelSetting(settings,
+    _grayscaleMaxSpin->setValue(grayscalePixelSetting(settings,
                                                        QStringLiteral("grayscale_max_px"),
                                                        QStringLiteral("grayscale_max"),
                                                        kDefaultGrayscaleMaxPx));
 
     // 高级参数
     if (settings.contains("normalize_input"))
-        m_normalizeInputChk->setChecked(settings["normalize_input"].toBool(true));
+        _normalizeInputChk->setChecked(settings["normalize_input"].toBool(true));
     if (settings.contains("descriptor_dim"))
-        m_descriptorDimSpin->setValue(settings["descriptor_dim"].toInt(256));
+        _descriptorDimSpin->setValue(settings["descriptor_dim"].toInt(256));
     if (settings.contains("grid_size"))
-        m_gridSizeSpin->setValue(settings["grid_size"].toInt(8));
+        _gridSizeSpin->setValue(settings["grid_size"].toInt(8));
     if (settings.contains("batch_size"))
-        m_batchSizeSpin->setValue(settings["batch_size"].toInt(8));
+        _batchSizeSpin->setValue(settings["batch_size"].toInt(8));
     if (settings.contains("neighborhood_check_radius"))
-        m_neighborhoodRadiusSpin->setValue(settings["neighborhood_check_radius"].toInt(3));
+        _neighborhoodRadiusSpin->setValue(settings["neighborhood_check_radius"].toInt(3));
     if (settings.contains("neighborhood_threshold"))
-        m_neighborhoodThresholdSpin->setValue(settings["neighborhood_threshold"].toDouble(0.05));
+        _neighborhoodThresholdSpin->setValue(settings["neighborhood_threshold"].toDouble(0.05));
 
     // 系统参数
     if (settings.contains("device"))
     {
         const bool useCuda = deviceTextRequestsCuda(settings["device"].toString("CUDA").trimmed());
-        m_deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
-        m_useCudaChk->setChecked(useCuda);
+        _deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+        _useCudaChk->setChecked(useCuda);
     }
     else if (settings.contains("use_cuda"))
     {
         const bool useCuda = settings["use_cuda"].toBool();
-        m_useCudaChk->setChecked(useCuda);
-        m_deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+        _useCudaChk->setChecked(useCuda);
+        _deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
     }
     if (settings.contains("allow_device_fallback"))
-        m_allowFallbackChk->setChecked(settings["allow_device_fallback"].toBool(true));
+        _allowFallbackChk->setChecked(settings["allow_device_fallback"].toBool(true));
 
     // 调试参数
     if (settings.contains("save_keypoints_csv"))
-        m_saveCsvChk->setChecked(settings["save_keypoints_csv"].toBool(false));
+        _saveCsvChk->setChecked(settings["save_keypoints_csv"].toBool(false));
     if (settings.contains("save_overlay_image"))
-        m_saveOverlayChk->setChecked(settings["save_overlay_image"].toBool(false));
+        _saveOverlayChk->setChecked(settings["save_overlay_image"].toBool(false));
 
     // 输出目录
     if (settings.contains("output_dir")) {
         QString outputDir = settings["output_dir"].toString();
         if (!outputDir.isEmpty()) {
-            m_outputLine->setText(outputDir);
+            _outputLine->setText(outputDir);
         }
     }
 
@@ -673,11 +673,11 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
 
 void FeatureExtractionDialog::setProjectImages(const QStringList &paths) 
 {
-    m_fileList->clear();
+    _fileList->clear();
     for (const QString &path : paths) 
     {
         // 创建带checkbox的item
-        QListWidgetItem *item = new QListWidgetItem(path, m_fileList);
+        QListWidgetItem *item = new QListWidgetItem(path, _fileList);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(Qt::Checked); // 默认全选
     }
@@ -697,42 +697,42 @@ QJsonObject FeatureExtractionDialog::collectSettings() const
 {
     QJsonObject settings;
 
-    settings["feature_algorithm"] = m_algorithmCombo->currentData().toString();
-    settings["model_path"]  = m_modelPathEdit->text();
-    settings["use_cuda"]    = deviceTextRequestsCuda(m_deviceCombo->currentText());
-    settings["cuda_device"] = m_cudaDeviceSpin->value();
+    settings["feature_algorithm"] = _algorithmCombo->currentData().toString();
+    settings["model_path"]  = _modelPathEdit->text();
+    settings["use_cuda"]    = deviceTextRequestsCuda(_deviceCombo->currentText());
+    settings["cuda_device"] = _cudaDeviceSpin->value();
 
     // 基础参数
-    settings["nms_radius"] = m_nmsRadiusSpin->value();
-    settings["detection_threshold"] = m_detectionThresholdSpin->value();
-    settings["max_num_keypoints"] = m_maxKeypointsSpin->value();
-    settings["remove_borders"] = m_removeBordersSpin->value();
-    const int grayscaleMinPx = qBound(0, qMin(m_grayscaleMinSpin->value(), m_grayscaleMaxSpin->value()), 255);
-    const int grayscaleMaxPx = qBound(0, qMax(m_grayscaleMinSpin->value(), m_grayscaleMaxSpin->value()), 255);
+    settings["nms_radius"] = _nmsRadiusSpin->value();
+    settings["detection_threshold"] = _detectionThresholdSpin->value();
+    settings["max_num_keypoints"] = _maxKeypointsSpin->value();
+    settings["remove_borders"] = _removeBordersSpin->value();
+    const int grayscaleMinPx = qBound(0, qMin(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
+    const int grayscaleMaxPx = qBound(0, qMax(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
     settings["grayscale_min_px"] = grayscaleMinPx;
     settings["grayscale_max_px"] = grayscaleMaxPx;
     settings["grayscale_min"] = grayscalePixelToNormalized(grayscaleMinPx);
     settings["grayscale_max"] = grayscalePixelToNormalized(grayscaleMaxPx);
 
     // 高级参数
-    settings["normalize_input"] = m_normalizeInputChk->isChecked();
-    settings["descriptor_dim"] = m_descriptorDimSpin->value();
-    settings["grid_size"] = m_gridSizeSpin->value();
-    settings["batch_size"] = m_batchSizeSpin->value();
-    settings["neighborhood_check_radius"] = m_neighborhoodRadiusSpin->value();
-    settings["neighborhood_threshold"] = m_neighborhoodThresholdSpin->value();
+    settings["normalize_input"] = _normalizeInputChk->isChecked();
+    settings["descriptor_dim"] = _descriptorDimSpin->value();
+    settings["grid_size"] = _gridSizeSpin->value();
+    settings["batch_size"] = _batchSizeSpin->value();
+    settings["neighborhood_check_radius"] = _neighborhoodRadiusSpin->value();
+    settings["neighborhood_threshold"] = _neighborhoodThresholdSpin->value();
 
     // 系统参数
-    settings["device"] = m_deviceCombo->currentText();
-    settings["allow_device_fallback"] = m_allowFallbackChk->isChecked();
-    settings["python_executable"] = m_pythonPathEdit->text().trimmed();
+    settings["device"] = _deviceCombo->currentText();
+    settings["allow_device_fallback"] = _allowFallbackChk->isChecked();
+    settings["python_executable"] = _pythonPathEdit->text().trimmed();
 
     // 调试参数
-    settings["save_keypoints_csv"] = m_saveCsvChk->isChecked();
-    settings["save_overlay_image"] = m_saveOverlayChk->isChecked();
+    settings["save_keypoints_csv"] = _saveCsvChk->isChecked();
+    settings["save_overlay_image"] = _saveOverlayChk->isChecked();
 
     // 输出目录
-    settings["output_dir"] = m_outputLine->text();
+    settings["output_dir"] = _outputLine->text();
 
     return settings;
 }
