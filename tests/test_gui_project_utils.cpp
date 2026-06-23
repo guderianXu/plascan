@@ -1751,6 +1751,38 @@ TEST(CodeStyleTest, CameraUsesDescriptiveLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/ForwardIntersectionResultsDialog.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/ForwardIntersectionResultsDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_projectManager{};")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_pairCombo{};")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonArray _allResults;")));
+
+    const QStringList oldMemberUses = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_pairCombo"),
+        QStringLiteral("m_table"),
+        QStringLiteral("m_detailTable"),
+        QStringLiteral("m_allResults"),
+    };
+    for (const QString &oldName : oldMemberUses)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+    }
+
+    EXPECT_FALSE(source.contains(QStringLiteral("m_projectManager")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_pairCombo->")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_table->")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_detailTable->")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_allResults")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

@@ -25,9 +25,9 @@ private:
     void fillDetailTable(const QJsonObject &batchResult);
     QString makePairKey(const QJsonObject &result) const;
 
-    ProjectManager *m_projectManager{};
-    QComboBox *m_pairCombo{};
-    QTableWidget *m_table{};
-    QTableWidget *m_detailTable{};
-    QJsonArray m_allResults;
+    ProjectManager *_projectManager{};
+    QComboBox *_pairCombo{};
+    QTableWidget *_table{};
+    QTableWidget *_detailTable{};
+    QJsonArray _allResults;
 };
