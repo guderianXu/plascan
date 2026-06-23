@@ -26,11 +26,11 @@ private:
     void buildUi();
     void setResultText(const QString &text, bool error);
 
-    QComboBox *m_formatCombo = nullptr;
-    QLineEdit *m_inputEdit = nullptr;
-    QLineEdit *m_outputEdit = nullptr;
-    QCheckBox *m_overwriteCheck = nullptr;
-    QLabel *m_statusLabel = nullptr;
-    QTextEdit *m_resultEdit = nullptr;
-    QPushButton *m_runButton = nullptr;
+    QComboBox *_formatCombo = nullptr;
+    QLineEdit *_inputEdit = nullptr;
+    QLineEdit *_outputEdit = nullptr;
+    QCheckBox *_overwriteCheck = nullptr;
+    QLabel *_statusLabel = nullptr;
+    QTextEdit *_resultEdit = nullptr;
+    QPushButton *_runButton = nullptr;
 };

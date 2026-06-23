@@ -1924,6 +1924,38 @@ TEST(CodeStyleTest, DepthMapEstimateDialogUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_pendingAtIndex")));
 }
 
+TEST(CodeStyleTest, CameraConvertDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraConvertDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraConvertDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_formatCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_inputEdit = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_outputEdit = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_overwriteCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_statusLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QTextEdit *_resultEdit = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_runButton = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_formatCombo"),
+        QStringLiteral("m_inputEdit"),
+        QStringLiteral("m_outputEdit"),
+        QStringLiteral("m_overwriteCheck"),
+        QStringLiteral("m_statusLabel"),
+        QStringLiteral("m_resultEdit"),
+        QStringLiteral("m_runButton"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
