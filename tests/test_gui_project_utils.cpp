@@ -2046,6 +2046,42 @@ TEST(CodeStyleTest, ModelExportDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, TextureMappingDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/TextureMappingDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/TextureMappingDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_blendCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_texSizeCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_uvMethodCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_colorCorrCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_ghostFilterCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_seamsMarginSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_paddingSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_keepUnmappedCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_threadsSpin = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_blendCombo"),
+        QStringLiteral("m_texSizeCombo"),
+        QStringLiteral("m_uvMethodCombo"),
+        QStringLiteral("m_colorCorrCheck"),
+        QStringLiteral("m_ghostFilterCheck"),
+        QStringLiteral("m_seamsMarginSpin"),
+        QStringLiteral("m_paddingSpin"),
+        QStringLiteral("m_keepUnmappedCheck"),
+        QStringLiteral("m_threadsSpin"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

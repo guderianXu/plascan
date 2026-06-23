@@ -46,13 +46,13 @@ private:
     /// @return 配置参数 JSON 对象。
     QJsonObject collectSettings() const;
 
-    QComboBox      *m_blendCombo       = nullptr;  ///< 混合方式
-    QComboBox      *m_texSizeCombo     = nullptr;  ///< 纹理分辨率
-    QComboBox      *m_uvMethodCombo    = nullptr;  ///< UV 展开方式
-    QCheckBox      *m_colorCorrCheck   = nullptr;  ///< 色彩一致性校正
-    QCheckBox      *m_ghostFilterCheck = nullptr;  ///< 去除鬼影
-    QDoubleSpinBox *m_seamsMarginSpin  = nullptr;  ///< 接缝边距
-    QSpinBox       *m_paddingSpin      = nullptr;  ///< 纹理填充边距
-    QCheckBox      *m_keepUnmappedCheck = nullptr; ///< 保留无纹理区域
-    QSpinBox       *m_threadsSpin      = nullptr;
+    QComboBox *_blendCombo = nullptr;       ///< 混合方式
+    QComboBox *_texSizeCombo = nullptr;     ///< 纹理分辨率
+    QComboBox *_uvMethodCombo = nullptr;    ///< UV 展开方式
+    QCheckBox *_colorCorrCheck = nullptr;   ///< 色彩一致性校正
+    QCheckBox *_ghostFilterCheck = nullptr; ///< 去除鬼影
+    QDoubleSpinBox *_seamsMarginSpin = nullptr; ///< 接缝边距
+    QSpinBox *_paddingSpin = nullptr;       ///< 纹理填充边距
+    QCheckBox *_keepUnmappedCheck = nullptr; ///< 保留无纹理区域
+    QSpinBox *_threadsSpin = nullptr;
 };

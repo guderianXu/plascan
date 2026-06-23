@@ -14,15 +14,15 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
     Ui::TextureMappingDialog form;
     form.setupUi(this);
 
-    m_texSizeCombo      = form.m_texSizeCombo;
-    m_blendCombo        = form.m_blendCombo;
-    m_uvMethodCombo     = form.m_uvMethodCombo;
-    m_colorCorrCheck    = form.m_colorCorrCheck;
-    m_ghostFilterCheck  = form.m_ghostFilterCheck;
-    m_seamsMarginSpin   = form.m_seamsMarginSpin;
-    m_paddingSpin       = form.m_paddingSpin;
-    m_keepUnmappedCheck = form.m_keepUnmappedCheck;
-    m_threadsSpin       = form.m_threadsSpin;
+    _texSizeCombo = form.m_texSizeCombo;
+    _blendCombo = form.m_blendCombo;
+    _uvMethodCombo = form.m_uvMethodCombo;
+    _colorCorrCheck = form.m_colorCorrCheck;
+    _ghostFilterCheck = form.m_ghostFilterCheck;
+    _seamsMarginSpin = form.m_seamsMarginSpin;
+    _paddingSpin = form.m_paddingSpin;
+    _keepUnmappedCheck = form.m_keepUnmappedCheck;
+    _threadsSpin = form.m_threadsSpin;
 
     auto hideUnsupportedField = [](QWidget *widget)
     {
@@ -39,17 +39,17 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
         }
         widget->hide();
     };
-    hideUnsupportedField(m_colorCorrCheck);
-    hideUnsupportedField(m_ghostFilterCheck);
-    hideUnsupportedField(m_seamsMarginSpin);
-    hideUnsupportedField(m_threadsSpin);
+    hideUnsupportedField(_colorCorrCheck);
+    hideUnsupportedField(_ghostFilterCheck);
+    hideUnsupportedField(_seamsMarginSpin);
+    hideUnsupportedField(_threadsSpin);
 
     auto changed = [this]() { emitSettingsNow(); };
-    connect(m_texSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_blendCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_uvMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_paddingSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
-    connect(m_keepUnmappedCheck, &QCheckBox::toggled, this, changed);
+    connect(_texSizeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_blendCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_uvMethodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_paddingSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
+    connect(_keepUnmappedCheck, &QCheckBox::toggled, this, changed);
 
     connect(form.m_runBtn, &QPushButton::clicked, this, &TextureMappingDialog::onRun);
     connect(form.m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
@@ -58,11 +58,11 @@ TextureMappingDialog::TextureMappingDialog(QWidget *parent)
 QJsonObject TextureMappingDialog::collectSettings() const
 {
     QJsonObject o;
-    o["textureSize"]    = m_texSizeCombo->currentText().toInt();
-    o["blendMethod"]    = m_blendCombo->currentText();
-    o["uvMethod"]       = m_uvMethodCombo->currentText();
-    o["padding"]        = m_paddingSpin->value();
-    o["keepUnmapped"]   = m_keepUnmappedCheck->isChecked();
+    o["textureSize"] = _texSizeCombo->currentText().toInt();
+    o["blendMethod"] = _blendCombo->currentText();
+    o["uvMethod"] = _uvMethodCombo->currentText();
+    o["padding"] = _paddingSpin->value();
+    o["keepUnmapped"] = _keepUnmappedCheck->isChecked();
     return o;
 }
 
@@ -70,22 +70,45 @@ void TextureMappingDialog::applySettings(const QJsonObject &s)
 {
     if (s.contains("textureSize"))
     {
-        int i = m_texSizeCombo->findText(QString::number(s["textureSize"].toInt()));
-        if (i >= 0) m_texSizeCombo->setCurrentIndex(i);
+        const int i = _texSizeCombo->findText(QString::number(s["textureSize"].toInt()));
+        if (i >= 0)
+        {
+            _texSizeCombo->setCurrentIndex(i);
+        }
     }
     if (s.contains("blendMethod"))
     {
-        int i = m_blendCombo->findText(s["blendMethod"].toString());
-        if (i >= 0) m_blendCombo->setCurrentIndex(i);
+        const int i = _blendCombo->findText(s["blendMethod"].toString());
+        if (i >= 0)
+        {
+            _blendCombo->setCurrentIndex(i);
+        }
     }
     if (s.contains("uvMethod"))
     {
-        int i = m_uvMethodCombo->findText(s["uvMethod"].toString());
-        if (i >= 0) m_uvMethodCombo->setCurrentIndex(i);
+        const int i = _uvMethodCombo->findText(s["uvMethod"].toString());
+        if (i >= 0)
+        {
+            _uvMethodCombo->setCurrentIndex(i);
+        }
     }
-    if (s.contains("padding"))         m_paddingSpin->setValue(s["padding"].toInt());
-    if (s.contains("keepUnmapped"))    m_keepUnmappedCheck->setChecked(s["keepUnmapped"].toBool());
+    if (s.contains("padding"))
+    {
+        _paddingSpin->setValue(s["padding"].toInt());
+    }
+    if (s.contains("keepUnmapped"))
+    {
+        _keepUnmappedCheck->setChecked(s["keepUnmapped"].toBool());
+    }
 }
 
-void TextureMappingDialog::emitSettingsNow() { emit settingsChanged(collectSettings()); }
-void TextureMappingDialog::onRun() { emit runRequested(collectSettings()); accept(); }
+void TextureMappingDialog::emitSettingsNow()
+{
+    emit settingsChanged(collectSettings());
+}
+
+void TextureMappingDialog::onRun()
+{
+    emit runRequested(collectSettings());
+    accept();
+}
