@@ -1751,6 +1751,80 @@ TEST(CodeStyleTest, CameraUsesDescriptiveLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/ForwardIntersectionCheckDialog.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/ForwardIntersectionCheckDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("ProjectManager *_projectManager{};"),
+        QStringLiteral("QComboBox *_image1Combo{};"),
+        QStringLiteral("QComboBox *_image2Combo{};"),
+        QStringLiteral("QComboBox *_pickModeCombo{};"),
+        QStringLiteral("QLabel *_hintLabel{};"),
+        QStringLiteral("QPushButton *_deleteSelectedBtn{};"),
+        QStringLiteral("QPushButton *_clearManualBtn{};"),
+        QStringLiteral("QPushButton *_runBtn{};"),
+        QStringLiteral("QTableWidget *_pairTable{};"),
+        QStringLiteral("QTableWidget *_resultTable{};"),
+        QStringLiteral("QTabWidget *_tabWidget{};"),
+        QStringLiteral("DualImageViewer *_viewer{};"),
+        QStringLiteral("QVector<QPointF> _manualPts1;"),
+        QStringLiteral("QVector<QPointF> _manualPts2;"),
+        QStringLiteral("QVector<QPointF> _currentPts1;"),
+        QStringLiteral("QVector<QPointF> _currentPts2;"),
+        QStringLiteral("QVector<xjw::Intersection::Result> _currentResults;"),
+        QStringLiteral("bool _currentPairsEditable{false};"),
+        QStringLiteral("int _pendingFirstSide{-1};"),
+        QStringLiteral("QPointF _pendingFirstPoint{};"),
+        QStringLiteral("int _currentHighlighted{-1};"),
+        QStringLiteral("int _resultSortCol{-1};"),
+        QStringLiteral("Qt::SortOrder _resultSortOrder{Qt::DescendingOrder};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_image1Combo"),
+        QStringLiteral("m_image2Combo"),
+        QStringLiteral("m_pickModeCombo"),
+        QStringLiteral("m_hintLabel"),
+        QStringLiteral("m_deleteSelectedBtn"),
+        QStringLiteral("m_clearManualBtn"),
+        QStringLiteral("m_runBtn"),
+        QStringLiteral("m_pairTable"),
+        QStringLiteral("m_resultTable"),
+        QStringLiteral("m_tabWidget"),
+        QStringLiteral("m_viewer"),
+        QStringLiteral("m_manualPts1"),
+        QStringLiteral("m_manualPts2"),
+        QStringLiteral("m_currentPts1"),
+        QStringLiteral("m_currentPts2"),
+        QStringLiteral("m_currentResults"),
+        QStringLiteral("m_currentPairsEditable"),
+        QStringLiteral("m_pendingFirstSide"),
+        QStringLiteral("m_pendingFirstPoint"),
+        QStringLiteral("m_currentHighlighted"),
+        QStringLiteral("m_resultSortCol"),
+        QStringLiteral("m_resultSortOrder"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

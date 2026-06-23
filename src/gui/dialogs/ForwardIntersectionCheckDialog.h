@@ -58,30 +58,30 @@ private:
     QString selectedImage1() const;
     QString selectedImage2() const;
 
-    ProjectManager *m_projectManager{};
+    ProjectManager *_projectManager{};
 
-    QComboBox *m_image1Combo{};
-    QComboBox *m_image2Combo{};
-    QComboBox *m_pickModeCombo{};
-    QLabel *m_hintLabel{};
-    QPushButton *m_deleteSelectedBtn{};
-    QPushButton *m_clearManualBtn{};
-    QPushButton *m_runBtn{};
-    QTableWidget *m_pairTable{};
-    QTableWidget *m_resultTable{};
-    QTabWidget *m_tabWidget{};
-    DualImageViewer *m_viewer{};
+    QComboBox *_image1Combo{};
+    QComboBox *_image2Combo{};
+    QComboBox *_pickModeCombo{};
+    QLabel *_hintLabel{};
+    QPushButton *_deleteSelectedBtn{};
+    QPushButton *_clearManualBtn{};
+    QPushButton *_runBtn{};
+    QTableWidget *_pairTable{};
+    QTableWidget *_resultTable{};
+    QTabWidget *_tabWidget{};
+    DualImageViewer *_viewer{};
 
-    QVector<QPointF> m_manualPts1;
-    QVector<QPointF> m_manualPts2;
-    QVector<QPointF> m_currentPts1;
-    QVector<QPointF> m_currentPts2;
-    QVector<xjw::Intersection::Result> m_currentResults;
-    bool m_currentPairsEditable{false};
+    QVector<QPointF> _manualPts1;
+    QVector<QPointF> _manualPts2;
+    QVector<QPointF> _currentPts1;
+    QVector<QPointF> _currentPts2;
+    QVector<xjw::Intersection::Result> _currentResults;
+    bool _currentPairsEditable{false};
     // 右键配对临时状态：如果 firstSide==0 表示已在左侧选了点，1 表示右侧
-    int m_pendingFirstSide{-1};
-    QPointF m_pendingFirstPoint{};
-    int m_currentHighlighted{-1};
-    int m_resultSortCol{-1};
-    Qt::SortOrder m_resultSortOrder{Qt::DescendingOrder};
+    int _pendingFirstSide{-1};
+    QPointF _pendingFirstPoint{};
+    int _currentHighlighted{-1};
+    int _resultSortCol{-1};
+    Qt::SortOrder _resultSortOrder{Qt::DescendingOrder};
 };
