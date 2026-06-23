@@ -57,23 +57,23 @@ private:
     /// @return 配置参数 JSON 对象。
     QJsonObject collectSettings() const;
 
-    QComboBox      *m_presetCombo        = nullptr;
-    QComboBox      *m_atResultCombo      = nullptr;  ///< AT 结果选择（提供稀疏点云来源）
-    QDoubleSpinBox *m_resScaleSpin       = nullptr;  ///< 分辨率缩放
-    QSpinBox       *m_iterationsSpin     = nullptr;  ///< PatchMatch 迭代
-    QComboBox      *m_costFuncCombo      = nullptr;  ///< 代价函数
-    QComboBox      *m_propagCombo        = nullptr;  ///< 传播方式
-    QSpinBox       *m_patchSizeSpin      = nullptr;  ///< 窗口大小
-    QSpinBox       *m_minViewsSpin       = nullptr;  ///< 最少视图数
-    QDoubleSpinBox *m_depthMinSpin       = nullptr;
-    QDoubleSpinBox *m_depthMaxSpin       = nullptr;
-    QDoubleSpinBox *m_confidenceSpin     = nullptr;  ///< 置信度阈值
-    QCheckBox      *m_normalMapCheck     = nullptr;  ///< 输出法向量图
-    QCheckBox      *m_cudaCheck          = nullptr;
-    QSpinBox       *m_tileWSpin          = nullptr;  ///< Tile 宽
-    QSpinBox       *m_tileHSpin          = nullptr;  ///< Tile 高
-    QSpinBox       *m_threadsSpin        = nullptr;
-    QLabel         *m_estimateLabel      = nullptr;
-    bool            m_applyingPreset     = false;  ///< 预设应用中，禁止反向切换到"自定义"
-    int             m_pendingAtIndex     = -1;     ///< applySettings 先到时的待应用 AT 索引
+    QComboBox *_presetCombo = nullptr;
+    QComboBox *_atResultCombo = nullptr;          ///< AT 结果选择（提供稀疏点云来源）
+    QDoubleSpinBox *_resScaleSpin = nullptr;      ///< 分辨率缩放
+    QSpinBox *_iterationsSpin = nullptr;          ///< PatchMatch 迭代
+    QComboBox *_costFuncCombo = nullptr;          ///< 代价函数
+    QComboBox *_propagCombo = nullptr;            ///< 传播方式
+    QSpinBox *_patchSizeSpin = nullptr;           ///< 窗口大小
+    QSpinBox *_minViewsSpin = nullptr;            ///< 最少视图数
+    QDoubleSpinBox *_depthMinSpin = nullptr;
+    QDoubleSpinBox *_depthMaxSpin = nullptr;
+    QDoubleSpinBox *_confidenceSpin = nullptr;    ///< 置信度阈值
+    QCheckBox *_normalMapCheck = nullptr;         ///< 输出法向量图
+    QCheckBox *_cudaCheck = nullptr;
+    QSpinBox *_tileWSpin = nullptr;               ///< Tile 宽
+    QSpinBox *_tileHSpin = nullptr;               ///< Tile 高
+    QSpinBox *_threadsSpin = nullptr;
+    QLabel *_estimateLabel = nullptr;
+    bool _applyingPreset = false;                 ///< 预设应用中，禁止反向切换到"自定义"
+    int _pendingAtIndex = -1;                     ///< applySettings 先到时的待应用 AT 索引
 };

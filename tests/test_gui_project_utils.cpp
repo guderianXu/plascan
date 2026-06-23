@@ -1865,6 +1865,65 @@ TEST(CodeStyleTest, DepthFusionDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, DepthMapEstimateDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DepthMapEstimateDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DepthMapEstimateDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_presetCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_atResultCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_resScaleSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_iterationsSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_costFuncCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_propagCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_patchSizeSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_minViewsSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_depthMinSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_depthMaxSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_confidenceSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_normalMapCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_cudaCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_tileWSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_tileHSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_threadsSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_estimateLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _applyingPreset = false;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("int _pendingAtIndex = -1;")));
+
+    const QStringList oldWidgetMemberNames = {
+        QStringLiteral("m_presetCombo"),
+        QStringLiteral("m_atResultCombo"),
+        QStringLiteral("m_resScaleSpin"),
+        QStringLiteral("m_iterationsSpin"),
+        QStringLiteral("m_costFuncCombo"),
+        QStringLiteral("m_propagCombo"),
+        QStringLiteral("m_patchSizeSpin"),
+        QStringLiteral("m_minViewsSpin"),
+        QStringLiteral("m_depthMinSpin"),
+        QStringLiteral("m_depthMaxSpin"),
+        QStringLiteral("m_confidenceSpin"),
+        QStringLiteral("m_normalMapCheck"),
+        QStringLiteral("m_cudaCheck"),
+        QStringLiteral("m_tileWSpin"),
+        QStringLiteral("m_tileHSpin"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_estimateLabel"),
+    };
+    for (const QString &oldName : oldWidgetMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+
+    EXPECT_FALSE(header.contains(QStringLiteral("m_applyingPreset")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_pendingAtIndex")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_applyingPreset")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_pendingAtIndex")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
