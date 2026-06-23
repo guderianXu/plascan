@@ -4232,6 +4232,25 @@ TEST(FeatureNamingCleanupTest, TorchHeavyTranslationUnitsSuppressLibTorchC4267Wa
     }
 }
 
+TEST(FeatureNamingCleanupTest, GuiTestsDoNotCompileObsoleteCompatibilityTranslationUnits)
+{
+    const QString testsCMake = readProjectSourceFile(QStringLiteral("tests/CMakeLists.txt"));
+    const QString projectBaInputBuilderCompat =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectBaInputBuilder.cpp"));
+    const QString projectTriangulationCompat =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectTriangulationService.cpp"));
+    ASSERT_FALSE(testsCMake.isEmpty());
+
+    EXPECT_FALSE(testsCMake.contains(QStringLiteral("ProjectBaInputBuilder.cpp")))
+        << "The GUI BA input compatibility wrapper is header-only; tests should link the core implementation directly.";
+    EXPECT_FALSE(testsCMake.contains(QStringLiteral("ProjectTriangulationService.cpp")))
+        << "The GUI triangulation compatibility wrapper is header-only; tests should link the core implementation directly.";
+    EXPECT_TRUE(projectBaInputBuilderCompat.isEmpty())
+        << "Remove empty compatibility translation units once they are not part of any target.";
+    EXPECT_TRUE(projectTriangulationCompat.isEmpty())
+        << "Remove empty compatibility translation units once they are not part of any target.";
+}
+
 TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));

@@ -423,9 +423,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceTerrainBa.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSurveyControl.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectBaInputBuilder.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTriangulationService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
