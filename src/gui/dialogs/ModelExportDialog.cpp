@@ -14,28 +14,28 @@ ModelExportDialog::ModelExportDialog(QWidget *parent)
     Ui::ModelExportDialog form;
     form.setupUi(this);
 
-    m_formatCombo        = form.m_formatCombo;
-    m_coordSysCombo      = form.m_coordSysCombo;
-    m_includeTexCheck    = form.m_includeTexCheck;
-    m_includeNormalCheck = form.m_includeNormalCheck;
-    m_includeColorCheck  = form.m_includeColorCheck;
-    m_simplifyCheck      = form.m_simplifyCheck;
-    m_simplifyRatioSpin  = form.m_simplifyRatioSpin;
-    m_upAxisCombo        = form.m_upAxisCombo;
-    m_outputPathEdit     = form.m_outputPathEdit;
-    m_browseBtn          = form.m_browseBtn;
+    _formatCombo = form.m_formatCombo;
+    _coordSysCombo = form.m_coordSysCombo;
+    _includeTexCheck = form.m_includeTexCheck;
+    _includeNormalCheck = form.m_includeNormalCheck;
+    _includeColorCheck = form.m_includeColorCheck;
+    _simplifyCheck = form.m_simplifyCheck;
+    _simplifyRatioSpin = form.m_simplifyRatioSpin;
+    _upAxisCombo = form.m_upAxisCombo;
+    _outputPathEdit = form.m_outputPathEdit;
+    _browseBtn = form.m_browseBtn;
 
-    connect(m_browseBtn, &QPushButton::clicked, this, &ModelExportDialog::onBrowseOutput);
+    connect(_browseBtn, &QPushButton::clicked, this, &ModelExportDialog::onBrowseOutput);
 
     auto changed = [this]() { emitSettingsNow(); };
-    connect(m_formatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_coordSysCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_upAxisCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_includeTexCheck, &QCheckBox::toggled, this, changed);
-    connect(m_includeNormalCheck, &QCheckBox::toggled, this, changed);
-    connect(m_includeColorCheck, &QCheckBox::toggled, this, changed);
-    connect(m_simplifyCheck, &QCheckBox::toggled, this, changed);
-    connect(m_simplifyRatioSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
+    connect(_formatCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_coordSysCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_upAxisCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_includeTexCheck, &QCheckBox::toggled, this, changed);
+    connect(_includeNormalCheck, &QCheckBox::toggled, this, changed);
+    connect(_includeColorCheck, &QCheckBox::toggled, this, changed);
+    connect(_simplifyCheck, &QCheckBox::toggled, this, changed);
+    connect(_simplifyRatioSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
 
     connect(form.m_runBtn, &QPushButton::clicked, this, &ModelExportDialog::onRun);
     connect(form.m_cancelBtn, &QPushButton::clicked, this, &QDialog::reject);
@@ -48,22 +48,22 @@ void ModelExportDialog::onBrowseOutput()
         tr("所有文件 (*)"));
     if (!path.isEmpty())
     {
-        m_outputPathEdit->setText(path);
+        _outputPathEdit->setText(path);
     }
 }
 
 QJsonObject ModelExportDialog::collectSettings() const
 {
     QJsonObject o;
-    o["format"]       = m_formatCombo->currentText();
-    o["coordSystem"]  = m_coordSysCombo->currentText();
-    o["upAxis"]       = m_upAxisCombo->currentText();
-    o["includeTexture"] = m_includeTexCheck->isChecked();
-    o["includeNormals"] = m_includeNormalCheck->isChecked();
-    o["includeColor"]   = m_includeColorCheck->isChecked();
-    o["simplify"]       = m_simplifyCheck->isChecked();
-    o["simplifyRatio"]  = m_simplifyRatioSpin->value();
-    o["outputPath"]     = m_outputPathEdit->text();
+    o["format"] = _formatCombo->currentText();
+    o["coordSystem"] = _coordSysCombo->currentText();
+    o["upAxis"] = _upAxisCombo->currentText();
+    o["includeTexture"] = _includeTexCheck->isChecked();
+    o["includeNormals"] = _includeNormalCheck->isChecked();
+    o["includeColor"] = _includeColorCheck->isChecked();
+    o["simplify"] = _simplifyCheck->isChecked();
+    o["simplifyRatio"] = _simplifyRatioSpin->value();
+    o["outputPath"] = _outputPathEdit->text();
     return o;
 }
 
@@ -71,26 +71,61 @@ void ModelExportDialog::applySettings(const QJsonObject &s)
 {
     if (s.contains("format"))
     {
-        int i = m_formatCombo->findText(s["format"].toString());
-        if (i >= 0) m_formatCombo->setCurrentIndex(i);
+        const int i = _formatCombo->findText(s["format"].toString());
+        if (i >= 0)
+        {
+            _formatCombo->setCurrentIndex(i);
+        }
     }
     if (s.contains("coordSystem"))
     {
-        int i = m_coordSysCombo->findText(s["coordSystem"].toString());
-        if (i >= 0) m_coordSysCombo->setCurrentIndex(i);
+        const int i = _coordSysCombo->findText(s["coordSystem"].toString());
+        if (i >= 0)
+        {
+            _coordSysCombo->setCurrentIndex(i);
+        }
     }
     if (s.contains("upAxis"))
     {
-        int i = m_upAxisCombo->findText(s["upAxis"].toString());
-        if (i >= 0) m_upAxisCombo->setCurrentIndex(i);
+        const int i = _upAxisCombo->findText(s["upAxis"].toString());
+        if (i >= 0)
+        {
+            _upAxisCombo->setCurrentIndex(i);
+        }
     }
-    if (s.contains("includeTexture")) m_includeTexCheck->setChecked(s["includeTexture"].toBool());
-    if (s.contains("includeNormals")) m_includeNormalCheck->setChecked(s["includeNormals"].toBool());
-    if (s.contains("includeColor"))   m_includeColorCheck->setChecked(s["includeColor"].toBool());
-    if (s.contains("simplify"))       m_simplifyCheck->setChecked(s["simplify"].toBool());
-    if (s.contains("simplifyRatio"))  m_simplifyRatioSpin->setValue(s["simplifyRatio"].toDouble());
-    if (s.contains("outputPath"))     m_outputPathEdit->setText(s["outputPath"].toString());
+    if (s.contains("includeTexture"))
+    {
+        _includeTexCheck->setChecked(s["includeTexture"].toBool());
+    }
+    if (s.contains("includeNormals"))
+    {
+        _includeNormalCheck->setChecked(s["includeNormals"].toBool());
+    }
+    if (s.contains("includeColor"))
+    {
+        _includeColorCheck->setChecked(s["includeColor"].toBool());
+    }
+    if (s.contains("simplify"))
+    {
+        _simplifyCheck->setChecked(s["simplify"].toBool());
+    }
+    if (s.contains("simplifyRatio"))
+    {
+        _simplifyRatioSpin->setValue(s["simplifyRatio"].toDouble());
+    }
+    if (s.contains("outputPath"))
+    {
+        _outputPathEdit->setText(s["outputPath"].toString());
+    }
 }
 
-void ModelExportDialog::emitSettingsNow() { emit settingsChanged(collectSettings()); }
-void ModelExportDialog::onRun() { emit runRequested(collectSettings()); accept(); }
+void ModelExportDialog::emitSettingsNow()
+{
+    emit settingsChanged(collectSettings());
+}
+
+void ModelExportDialog::onRun()
+{
+    emit runRequested(collectSettings());
+    accept();
+}

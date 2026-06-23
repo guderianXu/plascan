@@ -2008,6 +2008,44 @@ TEST(CodeStyleTest, MeshReconstructionDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ModelExportDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/ModelExportDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/ModelExportDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_formatCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_coordSysCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_includeTexCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_includeNormalCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_includeColorCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_simplifyCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_simplifyRatioSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_upAxisCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLineEdit *_outputPathEdit = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_browseBtn = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_formatCombo"),
+        QStringLiteral("m_coordSysCombo"),
+        QStringLiteral("m_includeTexCheck"),
+        QStringLiteral("m_includeNormalCheck"),
+        QStringLiteral("m_includeColorCheck"),
+        QStringLiteral("m_simplifyCheck"),
+        QStringLiteral("m_simplifyRatioSpin"),
+        QStringLiteral("m_upAxisCombo"),
+        QStringLiteral("m_outputPathEdit"),
+        QStringLiteral("m_browseBtn"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

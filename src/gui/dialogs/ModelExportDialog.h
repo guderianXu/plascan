@@ -33,14 +33,14 @@ private slots:
 private:
     QJsonObject collectSettings() const;
 
-    QComboBox      *m_formatCombo      = nullptr;  ///< OBJ/PLY/glTF/FBX/STL
-    QComboBox      *m_coordSysCombo    = nullptr;  ///< 坐标系
-    QCheckBox      *m_includeTexCheck  = nullptr;
-    QCheckBox      *m_includeNormalCheck = nullptr;
-    QCheckBox      *m_includeColorCheck = nullptr;
-    QCheckBox      *m_simplifyCheck    = nullptr;
-    QDoubleSpinBox *m_simplifyRatioSpin= nullptr;
-    QComboBox      *m_upAxisCombo      = nullptr;  ///< Up 轴
-    QLineEdit      *m_outputPathEdit   = nullptr;
-    QPushButton    *m_browseBtn        = nullptr;
+    QComboBox *_formatCombo = nullptr;       ///< OBJ/PLY/glTF/FBX/STL
+    QComboBox *_coordSysCombo = nullptr;     ///< 坐标系
+    QCheckBox *_includeTexCheck = nullptr;
+    QCheckBox *_includeNormalCheck = nullptr;
+    QCheckBox *_includeColorCheck = nullptr;
+    QCheckBox *_simplifyCheck = nullptr;
+    QDoubleSpinBox *_simplifyRatioSpin = nullptr;
+    QComboBox *_upAxisCombo = nullptr;       ///< Up 轴
+    QLineEdit *_outputPathEdit = nullptr;
+    QPushButton *_browseBtn = nullptr;
 };
