@@ -70,38 +70,38 @@ private:
     void emitCurrentOptions();
 
     // ── 特征文件选择 ─────────────────────────────────────────────
-    QComboBox*      m_suffixCombo{nullptr};
+    QComboBox *_suffixCombo{nullptr};
 
     // ── 显示内容控制 ─────────────────────────────────────────────
-    QCheckBox*      m_showPointsChk{nullptr};
-    QCheckBox*      m_showScaleChk{nullptr};
-    QCheckBox*      m_showOrientationChk{nullptr};
-    QCheckBox*      m_useFillChk{nullptr};
+    QCheckBox *_showPointsChk{nullptr};
+    QCheckBox *_showScaleChk{nullptr};
+    QCheckBox *_showOrientationChk{nullptr};
+    QCheckBox *_useFillChk{nullptr};
 
     // ── 尺寸和透明度 ──────────────────────────────────────────────
-    QSpinBox*       m_pointSizeSpin{nullptr};
-    QDoubleSpinBox* m_scaleMultiplierSpin{nullptr};
-    QSlider*        m_opacitySlider{nullptr};
-    QLabel*         m_opacityLabel{nullptr};
+    QSpinBox *_pointSizeSpin{nullptr};
+    QDoubleSpinBox *_scaleMultiplierSpin{nullptr};
+    QSlider *_opacitySlider{nullptr};
+    QLabel *_opacityLabel{nullptr};
 
     // ── 颜色选择按钮 ──────────────────────────────────────────────
-    QPushButton*    m_pointColorBtn{nullptr};
-    QPushButton*    m_scaleColorBtn{nullptr};
-    QPushButton*    m_orientColorBtn{nullptr};
+    QPushButton *_pointColorBtn{nullptr};
+    QPushButton *_scaleColorBtn{nullptr};
+    QPushButton *_orientColorBtn{nullptr};
 
     // ── 形状和过滤 ────────────────────────────────────────────────
-    QComboBox*      m_markerShapeCombo{nullptr};
-    QSpinBox*       m_maxDisplaySpin{nullptr};
-    QCheckBox*      m_showTopScoresChk{nullptr};
+    QComboBox *_markerShapeCombo{nullptr};
+    QSpinBox *_maxDisplaySpin{nullptr};
+    QCheckBox *_showTopScoresChk{nullptr};
 
     // ── 预览与底部按钮 ────────────────────────────────────────────
-    QLabel*         m_previewLabel{nullptr};
-    QPushButton*    m_applyBtn{nullptr};
-    QPushButton*    m_resetBtn{nullptr};
-    QPushButton*    m_closeBtn{nullptr};
+    QLabel *_previewLabel{nullptr};
+    QPushButton *_applyBtn{nullptr};
+    QPushButton *_resetBtn{nullptr};
+    QPushButton *_closeBtn{nullptr};
 
     // ── 当前颜色缓存 ──────────────────────────────────────────────
-    QColor m_pointColor{0, 120, 255};
-    QColor m_scaleColor{255, 255, 0};
-    QColor m_orientColor{255, 0, 0};
+    QColor _pointColor{0, 120, 255};
+    QColor _scaleColor{255, 255, 0};
+    QColor _orientColor{255, 0, 0};
 };

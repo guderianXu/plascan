@@ -31,7 +31,7 @@ FeaturePointVisualizationDialog::FeaturePointVisualizationDialog(const QStringLi
     setupUi();
     if (!availableSuffixes.isEmpty())
     {
-        m_suffixCombo->addItems(availableSuffixes);
+        _suffixCombo->addItems(availableSuffixes);
     }
     setupConnections();
 }
@@ -40,26 +40,26 @@ FeaturePointVisualizationDialog::~FeaturePointVisualizationDialog() = default;
 
 QString FeaturePointVisualizationDialog::currentSuffix() const
 {
-    return m_suffixCombo->currentText();
+    return _suffixCombo->currentText();
 }
 
 void FeaturePointVisualizationDialog::setCurrentSuffix(const QString &suffix)
 {
-    const int idx = m_suffixCombo->findText(suffix);
+    const int idx = _suffixCombo->findText(suffix);
     if (idx >= 0)
-        m_suffixCombo->setCurrentIndex(idx);
+        _suffixCombo->setCurrentIndex(idx);
 }
 
 void FeaturePointVisualizationDialog::setAvailableSuffixes(const QStringList &suffixes)
 {
-    const QString current = m_suffixCombo->currentText();
-    m_suffixCombo->blockSignals(true);
-    m_suffixCombo->clear();
-    m_suffixCombo->addItems(suffixes);
-    const int idx = m_suffixCombo->findText(current);
+    const QString current = _suffixCombo->currentText();
+    _suffixCombo->blockSignals(true);
+    _suffixCombo->clear();
+    _suffixCombo->addItems(suffixes);
+    const int idx = _suffixCombo->findText(current);
     if (idx >= 0)
-        m_suffixCombo->setCurrentIndex(idx);
-    m_suffixCombo->blockSignals(false);
+        _suffixCombo->setCurrentIndex(idx);
+    _suffixCombo->blockSignals(false);
 }
 
 // setupUi: 构建对话框全部控件和分组布局
@@ -75,33 +75,33 @@ void FeaturePointVisualizationDialog::setupUi()
     Ui::FeaturePointVisualizationDialog ui;
     ui.setupUi(this);
 
-    m_suffixCombo = ui.m_suffixCombo;
-    m_showPointsChk = ui.m_showPointsChk;
-    m_showScaleChk = ui.m_showScaleChk;
-    m_showOrientationChk = ui.m_showOrientationChk;
-    m_useFillChk = ui.m_useFillChk;
-    m_pointSizeSpin = ui.m_pointSizeSpin;
-    m_scaleMultiplierSpin = ui.m_scaleMultiplierSpin;
-    m_opacitySlider = ui.m_opacitySlider;
-    m_opacityLabel = ui.m_opacityLabel;
-    m_pointColorBtn = ui.m_pointColorBtn;
-    m_scaleColorBtn = ui.m_scaleColorBtn;
-    m_orientColorBtn = ui.m_orientColorBtn;
-    m_markerShapeCombo = ui.m_markerShapeCombo;
-    m_maxDisplaySpin = ui.m_maxDisplaySpin;
-    m_showTopScoresChk = ui.m_showTopScoresChk;
-    m_previewLabel = ui.m_previewLabel;
-    m_applyBtn = ui.m_applyBtn;
-    m_resetBtn = ui.m_resetBtn;
-    m_closeBtn = ui.m_closeBtn;
+    _suffixCombo = ui.m_suffixCombo;
+    _showPointsChk = ui.m_showPointsChk;
+    _showScaleChk = ui.m_showScaleChk;
+    _showOrientationChk = ui.m_showOrientationChk;
+    _useFillChk = ui.m_useFillChk;
+    _pointSizeSpin = ui.m_pointSizeSpin;
+    _scaleMultiplierSpin = ui.m_scaleMultiplierSpin;
+    _opacitySlider = ui.m_opacitySlider;
+    _opacityLabel = ui.m_opacityLabel;
+    _pointColorBtn = ui.m_pointColorBtn;
+    _scaleColorBtn = ui.m_scaleColorBtn;
+    _orientColorBtn = ui.m_orientColorBtn;
+    _markerShapeCombo = ui.m_markerShapeCombo;
+    _maxDisplaySpin = ui.m_maxDisplaySpin;
+    _showTopScoresChk = ui.m_showTopScoresChk;
+    _previewLabel = ui.m_previewLabel;
+    _applyBtn = ui.m_applyBtn;
+    _resetBtn = ui.m_resetBtn;
+    _closeBtn = ui.m_closeBtn;
 
-    m_pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_pointColor.red()).arg(m_pointColor.green()).arg(m_pointColor.blue()));
-    m_scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_scaleColor.red()).arg(m_scaleColor.green()).arg(m_scaleColor.blue()));
-    m_orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_orientColor.red()).arg(m_orientColor.green()).arg(m_orientColor.blue()));
-    m_applyBtn->setDefault(true);
+    _pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_pointColor.red()).arg(_pointColor.green()).arg(_pointColor.blue()));
+    _scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_scaleColor.red()).arg(_scaleColor.green()).arg(_scaleColor.blue()));
+    _orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_orientColor.red()).arg(_orientColor.green()).arg(_orientColor.blue()));
+    _applyBtn->setDefault(true);
 }
 
 // setupConnections: 连接所有控件的变化信号
@@ -111,69 +111,69 @@ void FeaturePointVisualizationDialog::setupUi()
 void FeaturePointVisualizationDialog::setupConnections()
 {
     // 特征文件后缀切换 → 通知外部
-    connect(m_suffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(_suffixCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, [this]() {
-        emit featureSuffixChanged(m_suffixCombo->currentText());
+        emit featureSuffixChanged(_suffixCombo->currentText());
     });
 
     // 显示选项变化 → 实时刷新预览文字
-    connect(m_showPointsChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
-    connect(m_showScaleChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
-    connect(m_showOrientationChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
-    connect(m_useFillChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_showPointsChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_showScaleChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_showOrientationChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_useFillChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
     
     // 样式变化
-    connect(m_markerShapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), 
+    connect(_markerShapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &FeaturePointVisualizationDialog::updatePreview);
-    connect(m_pointSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_pointSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeaturePointVisualizationDialog::updatePreview);
-    connect(m_scaleMultiplierSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+    connect(_scaleMultiplierSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
             this, &FeaturePointVisualizationDialog::updatePreview);
-    connect(m_opacitySlider, &QSlider::valueChanged, this, [this](int value) {
-        m_opacityLabel->setText(QString::number(value));
+    connect(_opacitySlider, &QSlider::valueChanged, this, [this](int value) {
+        _opacityLabel->setText(QString::number(value));
         updatePreview();
     });
     
     // 颜色选择
-    connect(m_pointColorBtn, &QPushButton::clicked, this, [this]() {
-        QColor color = QColorDialog::getColor(m_pointColor, this, tr("选择点颜色"));
+    connect(_pointColorBtn, &QPushButton::clicked, this, [this]() {
+        QColor color = QColorDialog::getColor(_pointColor, this, tr("选择点颜色"));
         if (color.isValid()) {
-            m_pointColor = color;
-            m_pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+            _pointColor = color;
+            _pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
                 .arg(color.red()).arg(color.green()).arg(color.blue()));
             updatePreview();
         }
     });
     
-    connect(m_scaleColorBtn, &QPushButton::clicked, this, [this]() {
-        QColor color = QColorDialog::getColor(m_scaleColor, this, tr("选择尺度圈颜色"));
+    connect(_scaleColorBtn, &QPushButton::clicked, this, [this]() {
+        QColor color = QColorDialog::getColor(_scaleColor, this, tr("选择尺度圈颜色"));
         if (color.isValid()) {
-            m_scaleColor = color;
-            m_scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+            _scaleColor = color;
+            _scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
                 .arg(color.red()).arg(color.green()).arg(color.blue()));
             updatePreview();
         }
     });
     
-    connect(m_orientColorBtn, &QPushButton::clicked, this, [this]() {
-        QColor color = QColorDialog::getColor(m_orientColor, this, tr("选择方向箭头颜色"));
+    connect(_orientColorBtn, &QPushButton::clicked, this, [this]() {
+        QColor color = QColorDialog::getColor(_orientColor, this, tr("选择方向箭头颜色"));
         if (color.isValid()) {
-            m_orientColor = color;
-            m_orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+            _orientColor = color;
+            _orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
                 .arg(color.red()).arg(color.green()).arg(color.blue()));
             updatePreview();
         }
     });
     
     // 过滤变化
-    connect(m_maxDisplaySpin, QOverload<int>::of(&QSpinBox::valueChanged),
+    connect(_maxDisplaySpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeaturePointVisualizationDialog::updatePreview);
-    connect(m_showTopScoresChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_showTopScoresChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
     
     // 按钮
-    connect(m_applyBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onApply);
-    connect(m_closeBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onClose);
-    connect(m_resetBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onResetDefaults);
+    connect(_applyBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onApply);
+    connect(_closeBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onClose);
+    connect(_resetBtn, &QPushButton::clicked, this, &FeaturePointVisualizationDialog::onResetDefaults);
 }
 
 // getDisplayOptions: 将当前控件状态序列化为 FeatureDisplayOptions 结构体
@@ -186,28 +186,28 @@ LayerRenderer::FeatureDisplayOptions FeaturePointVisualizationDialog::getDisplay
 {
     LayerRenderer::FeatureDisplayOptions opts;
     
-    opts.showPoints = m_showPointsChk->isChecked();
-    opts.showScale = m_showScaleChk->isChecked();
-    opts.showOrientation = m_showOrientationChk->isChecked();
-    opts.useFill = m_useFillChk->isChecked();
+    opts.showPoints = _showPointsChk->isChecked();
+    opts.showScale = _showScaleChk->isChecked();
+    opts.showOrientation = _showOrientationChk->isChecked();
+    opts.useFill = _useFillChk->isChecked();
     
-    opts.pointSize = m_pointSizeSpin->value();
-    opts.scaleMultiplier = m_scaleMultiplierSpin->value();
-    opts.opacity = m_opacitySlider->value();
+    opts.pointSize = _pointSizeSpin->value();
+    opts.scaleMultiplier = _scaleMultiplierSpin->value();
+    opts.opacity = _opacitySlider->value();
     
-    opts.pointColor = m_pointColor;
-    opts.scaleColor = m_scaleColor;
-    opts.orientColor = m_orientColor;
+    opts.pointColor = _pointColor;
+    opts.scaleColor = _scaleColor;
+    opts.orientColor = _orientColor;
     
     // 标记形状
-    int shapeIndex = m_markerShapeCombo->currentIndex();
+    int shapeIndex = _markerShapeCombo->currentIndex();
     if (shapeIndex == 0) opts.markerShape = QStringLiteral("point");
     else if (shapeIndex == 1) opts.markerShape = QStringLiteral("circle");
     else if (shapeIndex == 2) opts.markerShape = QStringLiteral("cross");
     else opts.markerShape = QStringLiteral("plus");
     
-    opts.maxDisplayCount = m_maxDisplaySpin->value();
-    opts.showTopScores = m_showTopScoresChk->isChecked();
+    opts.maxDisplayCount = _maxDisplaySpin->value();
+    opts.showTopScores = _showTopScoresChk->isChecked();
     
     return opts;
 }
@@ -217,36 +217,36 @@ LayerRenderer::FeatureDisplayOptions FeaturePointVisualizationDialog::getDisplay
 // markerShape 字符串映射关系与 getDisplayOptions() 对称
 void FeaturePointVisualizationDialog::setDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts)
 {
-    m_showPointsChk->setChecked(opts.showPoints);
-    m_showScaleChk->setChecked(opts.showScale);
-    m_showOrientationChk->setChecked(opts.showOrientation);
-    m_useFillChk->setChecked(opts.useFill);
+    _showPointsChk->setChecked(opts.showPoints);
+    _showScaleChk->setChecked(opts.showScale);
+    _showOrientationChk->setChecked(opts.showOrientation);
+    _useFillChk->setChecked(opts.useFill);
     
-    m_pointSizeSpin->setValue(opts.pointSize);
-    m_scaleMultiplierSpin->setValue(opts.scaleMultiplier);
-    m_opacitySlider->setValue(opts.opacity);
-    m_opacityLabel->setText(QString::number(opts.opacity));
+    _pointSizeSpin->setValue(opts.pointSize);
+    _scaleMultiplierSpin->setValue(opts.scaleMultiplier);
+    _opacitySlider->setValue(opts.opacity);
+    _opacityLabel->setText(QString::number(opts.opacity));
     
-    m_pointColor = opts.pointColor;
-    m_scaleColor = opts.scaleColor;
-    m_orientColor = opts.orientColor;
+    _pointColor = opts.pointColor;
+    _scaleColor = opts.scaleColor;
+    _orientColor = opts.orientColor;
     
     // 更新颜色按钮
-    m_pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_pointColor.red()).arg(m_pointColor.green()).arg(m_pointColor.blue()));
-    m_scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_scaleColor.red()).arg(m_scaleColor.green()).arg(m_scaleColor.blue()));
-    m_orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_orientColor.red()).arg(m_orientColor.green()).arg(m_orientColor.blue()));
+    _pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_pointColor.red()).arg(_pointColor.green()).arg(_pointColor.blue()));
+    _scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_scaleColor.red()).arg(_scaleColor.green()).arg(_scaleColor.blue()));
+    _orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_orientColor.red()).arg(_orientColor.green()).arg(_orientColor.blue()));
     
     // 标记形状
-    if (opts.markerShape == QStringLiteral("point")) m_markerShapeCombo->setCurrentIndex(0);
-    else if (opts.markerShape == QStringLiteral("circle")) m_markerShapeCombo->setCurrentIndex(1);
-    else if (opts.markerShape == QStringLiteral("cross")) m_markerShapeCombo->setCurrentIndex(2);
-    else m_markerShapeCombo->setCurrentIndex(3);
+    if (opts.markerShape == QStringLiteral("point")) _markerShapeCombo->setCurrentIndex(0);
+    else if (opts.markerShape == QStringLiteral("circle")) _markerShapeCombo->setCurrentIndex(1);
+    else if (opts.markerShape == QStringLiteral("cross")) _markerShapeCombo->setCurrentIndex(2);
+    else _markerShapeCombo->setCurrentIndex(3);
     
-    m_maxDisplaySpin->setValue(opts.maxDisplayCount);
-    m_showTopScoresChk->setChecked(opts.showTopScores);
+    _maxDisplaySpin->setValue(opts.maxDisplayCount);
+    _showTopScoresChk->setChecked(opts.showTopScores);
 }
 
 // onApply: 点击"应用"按钮时触发，将当前控件参数通过信号发出
@@ -268,29 +268,29 @@ void FeaturePointVisualizationDialog::onClose()
 void FeaturePointVisualizationDialog::onResetDefaults()
 {
     // 恢复默认值
-    m_showPointsChk->setChecked(true);
-    m_showScaleChk->setChecked(false);
-    m_showOrientationChk->setChecked(false);
-    m_useFillChk->setChecked(false);
+    _showPointsChk->setChecked(true);
+    _showScaleChk->setChecked(false);
+    _showOrientationChk->setChecked(false);
+    _useFillChk->setChecked(false);
     
-    m_markerShapeCombo->setCurrentIndex(2); // 默认：十字
-    m_pointSizeSpin->setValue(1);
-    m_scaleMultiplierSpin->setValue(1.0);
-    m_opacitySlider->setValue(180);
+    _markerShapeCombo->setCurrentIndex(2); // 默认：十字
+    _pointSizeSpin->setValue(1);
+    _scaleMultiplierSpin->setValue(1.0);
+    _opacitySlider->setValue(180);
     
-    m_pointColor = QColor(0, 120, 255);
-    m_scaleColor = QColor(255, 255, 0);
-    m_orientColor = QColor(255, 0, 0);
+    _pointColor = QColor(0, 120, 255);
+    _scaleColor = QColor(255, 255, 0);
+    _orientColor = QColor(255, 0, 0);
     
-    m_pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_pointColor.red()).arg(m_pointColor.green()).arg(m_pointColor.blue()));
-    m_scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_scaleColor.red()).arg(m_scaleColor.green()).arg(m_scaleColor.blue()));
-    m_orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
-        .arg(m_orientColor.red()).arg(m_orientColor.green()).arg(m_orientColor.blue()));
+    _pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_pointColor.red()).arg(_pointColor.green()).arg(_pointColor.blue()));
+    _scaleColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_scaleColor.red()).arg(_scaleColor.green()).arg(_scaleColor.blue()));
+    _orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_orientColor.red()).arg(_orientColor.green()).arg(_orientColor.blue()));
     
-    m_maxDisplaySpin->setValue(0);
-    m_showTopScoresChk->setChecked(true);
+    _maxDisplaySpin->setValue(0);
+    _showTopScoresChk->setChecked(true);
     
     updatePreview();
 }
@@ -301,17 +301,17 @@ void FeaturePointVisualizationDialog::updatePreview()
 {
     // 拼接当前启用的显示项名称
     QString desc;
-    if (m_showPointsChk->isChecked()) desc += tr("显示点 ");
-    if (m_showScaleChk->isChecked()) desc += tr("显示尺度 ");
-    if (m_showOrientationChk->isChecked()) desc += tr("显示方向 ");
+    if (_showPointsChk->isChecked()) desc += tr("显示点 ");
+    if (_showScaleChk->isChecked()) desc += tr("显示尺度 ");
+    if (_showOrientationChk->isChecked()) desc += tr("显示方向 ");
     
-    if (m_maxDisplaySpin->value() > 0) {
-        desc += tr("(最多 %1 个)").arg(m_maxDisplaySpin->value());
+    if (_maxDisplaySpin->value() > 0) {
+        desc += tr("(最多 %1 个)").arg(_maxDisplaySpin->value());
     }
     
     if (desc.isEmpty()) desc = tr("无显示内容");
     
-    m_previewLabel->setText(desc);
+    _previewLabel->setText(desc);
 }
 
 // emitCurrentOptions: 收集当前选项并通过 displayOptionsChanged 信号通知外部

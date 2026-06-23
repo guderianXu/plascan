@@ -2318,6 +2318,76 @@ TEST(CodeStyleTest, WorkflowReportDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, FeaturePointVisualizationDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeaturePointVisualizationDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QComboBox *_suffixCombo{nullptr};"),
+        QStringLiteral("QCheckBox *_showPointsChk{nullptr};"),
+        QStringLiteral("QCheckBox *_showScaleChk{nullptr};"),
+        QStringLiteral("QCheckBox *_showOrientationChk{nullptr};"),
+        QStringLiteral("QCheckBox *_useFillChk{nullptr};"),
+        QStringLiteral("QSpinBox *_pointSizeSpin{nullptr};"),
+        QStringLiteral("QDoubleSpinBox *_scaleMultiplierSpin{nullptr};"),
+        QStringLiteral("QSlider *_opacitySlider{nullptr};"),
+        QStringLiteral("QLabel *_opacityLabel{nullptr};"),
+        QStringLiteral("QPushButton *_pointColorBtn{nullptr};"),
+        QStringLiteral("QPushButton *_scaleColorBtn{nullptr};"),
+        QStringLiteral("QPushButton *_orientColorBtn{nullptr};"),
+        QStringLiteral("QComboBox *_markerShapeCombo{nullptr};"),
+        QStringLiteral("QSpinBox *_maxDisplaySpin{nullptr};"),
+        QStringLiteral("QCheckBox *_showTopScoresChk{nullptr};"),
+        QStringLiteral("QLabel *_previewLabel{nullptr};"),
+        QStringLiteral("QPushButton *_applyBtn{nullptr};"),
+        QStringLiteral("QPushButton *_resetBtn{nullptr};"),
+        QStringLiteral("QPushButton *_closeBtn{nullptr};"),
+        QStringLiteral("QColor _pointColor{0, 120, 255};"),
+        QStringLiteral("QColor _scaleColor{255, 255, 0};"),
+        QStringLiteral("QColor _orientColor{255, 0, 0};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_suffixCombo"),
+        QStringLiteral("m_showPointsChk"),
+        QStringLiteral("m_showScaleChk"),
+        QStringLiteral("m_showOrientationChk"),
+        QStringLiteral("m_useFillChk"),
+        QStringLiteral("m_pointSizeSpin"),
+        QStringLiteral("m_scaleMultiplierSpin"),
+        QStringLiteral("m_opacitySlider"),
+        QStringLiteral("m_opacityLabel"),
+        QStringLiteral("m_pointColorBtn"),
+        QStringLiteral("m_scaleColorBtn"),
+        QStringLiteral("m_orientColorBtn"),
+        QStringLiteral("m_markerShapeCombo"),
+        QStringLiteral("m_maxDisplaySpin"),
+        QStringLiteral("m_showTopScoresChk"),
+        QStringLiteral("m_previewLabel"),
+        QStringLiteral("m_applyBtn"),
+        QStringLiteral("m_resetBtn"),
+        QStringLiteral("m_closeBtn"),
+        QStringLiteral("m_pointColor"),
+        QStringLiteral("m_scaleColor"),
+        QStringLiteral("m_orientColor"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
@@ -4535,8 +4605,8 @@ TEST(FeatureVisualizationSettingsTest, DefaultsToOnePixelCrossMarker)
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("featureDisplay[\"pointSize\"]         = 1")));
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("featureDisplay[\"markerShape\"]       = QStringLiteral(\"cross\")")));
 
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_markerShapeCombo->setCurrentIndex(2)")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_pointSizeSpin->setValue(1)")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("_markerShapeCombo->setCurrentIndex(2)")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("_pointSizeSpin->setValue(1)")));
     EXPECT_TRUE(dialogUi.contains(QStringLiteral("<number>1</number>")));
 }
 
@@ -4556,8 +4626,8 @@ TEST(FeatureVisualizationSettingsTest, DefaultsPointColorToBlue)
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"r\"] = 0")));
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"g\"] = 120")));
     EXPECT_TRUE(uiDefaults.contains(QStringLiteral("pointColor[\"b\"] = 255")));
-    EXPECT_TRUE(dialogHeader.contains(QStringLiteral("QColor m_pointColor{0, 120, 255}")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("m_pointColor = QColor(0, 120, 255)")));
+    EXPECT_TRUE(dialogHeader.contains(QStringLiteral("QColor _pointColor{0, 120, 255}")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("_pointColor = QColor(0, 120, 255)")));
     EXPECT_FALSE(dialogSource.contains(QStringLiteral("点颜色黄")));
 }
 
