@@ -40,43 +40,43 @@ private:
     QJsonObject collectSettings() const;
 
     // 输入源
-    QComboBox  *m_sourceModeCombo = nullptr;
-    QComboBox  *m_sourceCombo      = nullptr;
-    QLineEdit  *m_externalPathEdit = nullptr;
-    QPushButton *m_browseExternalButton = nullptr;
-    QLabel     *m_statsLabel       = nullptr;
-    QJsonArray  m_availableResults;
-    int         m_pendingSourceIdx = -1;
-    bool        m_programmaticUpdate = false;
+    QComboBox *_sourceModeCombo = nullptr;
+    QComboBox *_sourceCombo = nullptr;
+    QLineEdit *_externalPathEdit = nullptr;
+    QPushButton *_browseExternalButton = nullptr;
+    QLabel *_statsLabel = nullptr;
+    QJsonArray _availableResults;
+    int _pendingSourceIdx = -1;
+    bool _programmaticUpdate = false;
 
     // 点级滤波
-    QCheckBox      *m_reprojCheck      = nullptr;
-    QDoubleSpinBox *m_reprojSpin       = nullptr;
-    QCheckBox      *m_trackCheck       = nullptr;
-    QSpinBox       *m_trackSpin        = nullptr;
-    QCheckBox      *m_angleCheck       = nullptr;
-    QDoubleSpinBox *m_angleSpin        = nullptr;
-    QCheckBox      *m_statCheck        = nullptr;
-    QSpinBox       *m_statKSpin        = nullptr;
-    QDoubleSpinBox *m_statStdSpin      = nullptr;
-    QCheckBox      *m_densityCheck     = nullptr;
-    QDoubleSpinBox *m_densityRadiusSpin = nullptr;
-    QSpinBox       *m_densityMinNbSpin  = nullptr;
+    QCheckBox *_reprojCheck = nullptr;
+    QDoubleSpinBox *_reprojSpin = nullptr;
+    QCheckBox *_trackCheck = nullptr;
+    QSpinBox *_trackSpin = nullptr;
+    QCheckBox *_angleCheck = nullptr;
+    QDoubleSpinBox *_angleSpin = nullptr;
+    QCheckBox *_statCheck = nullptr;
+    QSpinBox *_statKSpin = nullptr;
+    QDoubleSpinBox *_statStdSpin = nullptr;
+    QCheckBox *_densityCheck = nullptr;
+    QDoubleSpinBox *_densityRadiusSpin = nullptr;
+    QSpinBox *_densityMinNbSpin = nullptr;
 
     // 迭代精修（可选 GroupBox）
-    QGroupBox  *m_refineGroup     = nullptr;
-    QSpinBox   *m_iterRoundsSpin  = nullptr;
-    QCheckBox  *m_retriangCheck   = nullptr;
-    QCheckBox  *m_normalConsCheck = nullptr;
-    QSpinBox   *m_threadsSpin     = nullptr;
+    QGroupBox *_refineGroup = nullptr;
+    QSpinBox *_iterRoundsSpin = nullptr;
+    QCheckBox *_retriangCheck = nullptr;
+    QCheckBox *_normalConsCheck = nullptr;
+    QSpinBox *_threadsSpin = nullptr;
 
     // 空间清理（可选 GroupBox）
-    QGroupBox      *m_spatialGroup      = nullptr;
-    QDoubleSpinBox *m_voxelSizeSpin     = nullptr;
-    QSpinBox       *m_minVoxelPtsSpin   = nullptr;
-    QCheckBox      *m_localReprojCheck  = nullptr;
-    QDoubleSpinBox *m_reprojStdMulSpin  = nullptr;
-    QDoubleSpinBox *m_dedupRadiusSpin   = nullptr;
+    QGroupBox *_spatialGroup = nullptr;
+    QDoubleSpinBox *_voxelSizeSpin = nullptr;
+    QSpinBox *_minVoxelPtsSpin = nullptr;
+    QCheckBox *_localReprojCheck = nullptr;
+    QDoubleSpinBox *_reprojStdMulSpin = nullptr;
+    QDoubleSpinBox *_dedupRadiusSpin = nullptr;
 
-    QPushButton *m_runButton = nullptr;
+    QPushButton *_runButton = nullptr;
 };

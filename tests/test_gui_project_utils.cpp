@@ -2488,6 +2488,96 @@ TEST(CodeStyleTest, OverlapAnalysisDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, SparseCloudPostProcessDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SparseCloudPostProcessDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/SparseCloudPostProcessDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QComboBox *_sourceModeCombo = nullptr;"),
+        QStringLiteral("QComboBox *_sourceCombo = nullptr;"),
+        QStringLiteral("QLineEdit *_externalPathEdit = nullptr;"),
+        QStringLiteral("QPushButton *_browseExternalButton = nullptr;"),
+        QStringLiteral("QLabel *_statsLabel = nullptr;"),
+        QStringLiteral("QJsonArray _availableResults;"),
+        QStringLiteral("int _pendingSourceIdx = -1;"),
+        QStringLiteral("bool _programmaticUpdate = false;"),
+        QStringLiteral("QCheckBox *_reprojCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_reprojSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_trackCheck = nullptr;"),
+        QStringLiteral("QSpinBox *_trackSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_angleCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_angleSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_statCheck = nullptr;"),
+        QStringLiteral("QSpinBox *_statKSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_statStdSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_densityCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_densityRadiusSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_densityMinNbSpin = nullptr;"),
+        QStringLiteral("QGroupBox *_refineGroup = nullptr;"),
+        QStringLiteral("QSpinBox *_iterRoundsSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_retriangCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_normalConsCheck = nullptr;"),
+        QStringLiteral("QSpinBox *_threadsSpin = nullptr;"),
+        QStringLiteral("QGroupBox *_spatialGroup = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_voxelSizeSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_minVoxelPtsSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_localReprojCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_reprojStdMulSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_dedupRadiusSpin = nullptr;"),
+        QStringLiteral("QPushButton *_runButton = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_sourceModeCombo"),
+        QStringLiteral("m_sourceCombo"),
+        QStringLiteral("m_externalPathEdit"),
+        QStringLiteral("m_browseExternalButton"),
+        QStringLiteral("m_statsLabel"),
+        QStringLiteral("m_availableResults"),
+        QStringLiteral("m_pendingSourceIdx"),
+        QStringLiteral("m_programmaticUpdate"),
+        QStringLiteral("m_reprojCheck"),
+        QStringLiteral("m_reprojSpin"),
+        QStringLiteral("m_trackCheck"),
+        QStringLiteral("m_trackSpin"),
+        QStringLiteral("m_angleCheck"),
+        QStringLiteral("m_angleSpin"),
+        QStringLiteral("m_statCheck"),
+        QStringLiteral("m_statKSpin"),
+        QStringLiteral("m_statStdSpin"),
+        QStringLiteral("m_densityCheck"),
+        QStringLiteral("m_densityRadiusSpin"),
+        QStringLiteral("m_densityMinNbSpin"),
+        QStringLiteral("m_refineGroup"),
+        QStringLiteral("m_iterRoundsSpin"),
+        QStringLiteral("m_retriangCheck"),
+        QStringLiteral("m_normalConsCheck"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_spatialGroup"),
+        QStringLiteral("m_voxelSizeSpin"),
+        QStringLiteral("m_minVoxelPtsSpin"),
+        QStringLiteral("m_localReprojCheck"),
+        QStringLiteral("m_reprojStdMulSpin"),
+        QStringLiteral("m_dedupRadiusSpin"),
+        QStringLiteral("m_runButton"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
