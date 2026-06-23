@@ -33,21 +33,21 @@ private:
     QJsonObject collectSettings() const;
 
     // 处理步骤开关（checkable GroupBox）
-    QGroupBox      *m_sorGroup          = nullptr;  ///< 统计离群点移除
-    QGroupBox      *m_voxelGroup        = nullptr;  ///< 体素下采样
-    QGroupBox      *m_normalGroup       = nullptr;  ///< 法向量估计
-    QGroupBox      *m_colorGroup        = nullptr;  ///< 颜色校正
+    QGroupBox *_sorGroup = nullptr;     ///< 统计离群点移除
+    QGroupBox *_voxelGroup = nullptr;   ///< 体素下采样
+    QGroupBox *_normalGroup = nullptr;  ///< 法向量估计
+    QGroupBox *_colorGroup = nullptr;   ///< 颜色校正
 
     // SOR
-    QSpinBox       *m_sorKSpin          = nullptr;
-    QDoubleSpinBox *m_sorStdSpin        = nullptr;
+    QSpinBox *_sorKSpin = nullptr;
+    QDoubleSpinBox *_sorStdSpin = nullptr;
     // 下采样
-    QDoubleSpinBox *m_voxelSizeSpin     = nullptr;
+    QDoubleSpinBox *_voxelSizeSpin = nullptr;
     // 法向量
-    QSpinBox       *m_normalKSpin       = nullptr;
-    QSpinBox       *m_smoothIterSpin    = nullptr;
+    QSpinBox *_normalKSpin = nullptr;
+    QSpinBox *_smoothIterSpin = nullptr;
     // 颜色
-    QComboBox      *m_colorMethodCombo  = nullptr;
+    QComboBox *_colorMethodCombo = nullptr;
     // 系统
-    QSpinBox       *m_threadsSpin       = nullptr;
+    QSpinBox *_threadsSpin = nullptr;
 };

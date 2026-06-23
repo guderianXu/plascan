@@ -1783,6 +1783,46 @@ TEST(CodeStyleTest, ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberN
     EXPECT_FALSE(source.contains(QStringLiteral("m_allResults")));
 }
 
+TEST(CodeStyleTest, DenseCloudRefineDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudRefineDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudRefineDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QGroupBox *_sorGroup = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QGroupBox *_voxelGroup = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QGroupBox *_normalGroup = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QGroupBox *_colorGroup = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_sorKSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_sorStdSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_voxelSizeSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_normalKSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_smoothIterSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_colorMethodCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_threadsSpin = nullptr;")));
+
+    const QStringList oldHeaderMemberNames = {
+        QStringLiteral("m_sorGroup"),
+        QStringLiteral("m_voxelGroup"),
+        QStringLiteral("m_normalGroup"),
+        QStringLiteral("m_colorGroup"),
+        QStringLiteral("m_sorKSpin"),
+        QStringLiteral("m_sorStdSpin"),
+        QStringLiteral("m_voxelSizeSpin"),
+        QStringLiteral("m_normalKSpin"),
+        QStringLiteral("m_smoothIterSpin"),
+        QStringLiteral("m_colorMethodCombo"),
+        QStringLiteral("m_threadsSpin"),
+    };
+    for (const QString &oldName : oldHeaderMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
