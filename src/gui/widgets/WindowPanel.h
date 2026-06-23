@@ -18,5 +18,5 @@ public:
     void setActions(const QList<QAction*> &actions);
 
 private:
-    QWidget *m_container{};
+    QWidget *_container{};
 };

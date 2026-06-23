@@ -1684,6 +1684,21 @@ TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
     EXPECT_FALSE(projectDialogSource.contains(QStringLiteral("m_plascanPath")));
 }
 
+TEST(CodeStyleTest, WindowPanelUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/WindowPanel.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/WindowPanel.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QWidget *_container{};")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_container = ui.m_container;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_container")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_container =")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_container->")));
+    EXPECT_FALSE(source.contains(QStringLiteral("new QToolButton(m_container)")));
+}
+
 TEST(CodeStyleTest, ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

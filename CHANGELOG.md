@@ -52,6 +52,7 @@
 - CanvasWidget 上轮新增的特征加载 generation 成员改为 `_featureLoadGeneration`，让新增私有成员命名与项目 `_lowerCamelCase` 规范保持一致。
 - `GlobalSettings` 和 `ProjectDialogJsonSettingBase` 去除 tab 缩进，并将私有成员收敛为 `_settings` / `_plascanPath`，作为 settings 小模块逐步迁移 `_lowerCamelCase` 私有成员规范的起点。
 - `ProjectSupportUtils.h` 去除残留 tab 缩进，让 GUI 项目支持层头文件继续按 4 空格缩进规范收敛。
+- `WindowPanel` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并整理该小组件内的紧凑控制语句花括号风格。
 - `ThreeDReconstructionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
 - `Camera` 核心类内部私有成员从 `_fu/_R/_C` 等短名迁移到 `_focalX/_cameraToWorldRotation/_cameraCenter` 等 `_lowerCamelCase` 描述性命名，公开 accessor 和 Tsai 文件字段保持兼容。
 - `ForwardIntersectionResultsDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并顺手整理该小对话框内的紧凑控制语句花括号风格。
@@ -97,6 +98,9 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SettingsFilesUse" --output-on-failure` 先失败后通过，验证 settings 小模块不再含 tab 且私有成员使用 `_lowerCamelCase`。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GlobalSettings.cpp`、`ProjectDialogJsonSettingBase.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.GuiSupportFilesUseSpacesInsteadOfTabs" --output-on-failure` 先失败后通过，验证 `ProjectSupportUtils.h` 不再含 tab 缩进。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.WindowPanelUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `WindowPanel` 私有成员迁移到 `_lowerCamelCase`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MainMenuTest|CodeStyleTest.WindowPanelUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，12/12，验证 `WindowPanel` 迁移后主菜单窗口面板入口保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `WindowPanel.cpp` / `MainMenu.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames|ThreeDReconstructionDialogTest" --output-on-failure` 先失败后通过，验证三维重建对话框私有成员迁移到 `_lowerCamelCase` 且 UI 默认值/空三模式行为保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.CameraUsesDescriptiveLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `Camera` 私有成员命名不再使用 `_fu/_R/_C` 等旧短名。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "Camera(Basic|Intrinsics|Projection|ToPositiveDepthModel|Test|FormatConverter)|PositiveDepthCameraModel|ProjectSupportUtilsTest.CameraJsonRoundTripPreservesUnitsAndDepthDirection|ProjectCameraImportServiceTest.BatchImportRecordsActualTsaiSourceFileInCameraMeta|ProjectDataCameraMetadataTest.SetImageCamerasClearsLegacyTopLevelCameraFile" --output-on-failure` 通过，31/31。
