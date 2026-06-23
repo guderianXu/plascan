@@ -1641,13 +1641,14 @@ TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
     EXPECT_TRUE(source.contains(QStringLiteral("#include <opencv2/imgproc.hpp>")));
 }
 
-TEST(CodeStyleTest, SettingsFilesUseSpacesInsteadOfTabs)
+TEST(CodeStyleTest, GuiSupportFilesUseSpacesInsteadOfTabs)
 {
     const QStringList files = {
         QStringLiteral("src/gui/config/settings/GlobalSettings.cpp"),
         QStringLiteral("src/gui/config/settings/GlobalSettings.h"),
         QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.cpp"),
         QStringLiteral("src/gui/config/settings/ProjectDialogJsonSettingBase.h"),
+        QStringLiteral("src/gui/project/support/ProjectSupportUtils.h"),
     };
 
     for (const QString &path : files)
