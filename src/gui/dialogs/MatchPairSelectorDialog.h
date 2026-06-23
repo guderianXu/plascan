@@ -106,30 +106,30 @@ private:
 
 private:
     // 项目管理器指针，用于获取影像列表和匹配元数据
-    ProjectManager *m_projectManager;
+    ProjectManager *_projectManager;
     
     // 顶部影像选择下拉框
-    QComboBox *m_imageComboBox;
+    QComboBox *_imageComboBox;
     // 匹配对信息表格（图像名 | 总计 | 有效 | 无效）
-    QTableWidget *m_matchTable;
+    QTableWidget *_matchTable;
     // 打开详细匹配查看器的按钮（有选中行时启用）
-    QPushButton *m_viewDetailBtn;
+    QPushButton *_viewDetailBtn;
     // 刷新数据的按钮
-    QPushButton *m_refreshBtn;
+    QPushButton *_refreshBtn;
     // 底部状态标签，显示当前匹配对数或选中信息
-    QLabel *m_statusLabel;
+    QLabel *_statusLabel;
     
     // 所有影像的完整路径列表
-    QStringList m_allImages;
+    QStringList _allImages;
     // 当前选中的影像路径
-    QString m_currentImage;
+    QString _currentImage;
     // 当前影像的所有匹配信息列表
-    QList<MatchInfo> m_currentMatches;
+    QList<MatchInfo> _currentMatches;
     // 当前在表格中选中的匹配对索引（-1 表示无选中）
-    int m_selectedMatchIndex;
+    int _selectedMatchIndex;
 
     // matches 目录路径（用于文件系统扫描，替代读取大 JSON 元数据）
-    QString m_matchDir;
+    QString _matchDir;
     // 防抖刷新计时器（300ms 内多次触发只刷新一次）
-    QTimer *m_refreshTimer = nullptr;
+    QTimer *_refreshTimer = nullptr;
 };

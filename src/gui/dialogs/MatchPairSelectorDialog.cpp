@@ -94,16 +94,16 @@ QString resolveProjectImagePath(const QString &token,
 // 构造函数：初始化对话框，构建界面，加载项目影像列表
 MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager, QWidget *parent)
     : QDialog(parent)
-    , m_projectManager(projectManager)
-    , m_selectedMatchIndex(-1)   // -1 表示初始无选中行
+    , _projectManager(projectManager)
+    , _selectedMatchIndex(-1)   // -1 表示初始无选中行
 {
     setWindowTitle(tr("匹配查看器"));
     resize(800, 600);
 
     // 获取 matches 目录（直接扫描，不依赖元数据）
-    if (m_projectManager && !m_projectManager->currentProjectPath().isEmpty()) {
-        const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
-        m_matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
+    if (_projectManager && !_projectManager->currentProjectPath().isEmpty()) {
+        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
+        _matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
     }
 
     setupUI();
@@ -111,15 +111,15 @@ MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager,
 
     // ── 实时刷新：projectMetadataChanged / matchPairReady 时自动更新视图 ──
     // 使用防抖 QTimer，避免高频更新导致 UI 闪烁（300ms 内不再触发才真正刷新）
-    m_refreshTimer = new QTimer(this);
-    m_refreshTimer->setSingleShot(true);
-    m_refreshTimer->setInterval(300);
-    connect(m_refreshTimer, &QTimer::timeout, this, &MatchPairSelectorDialog::onRefresh);
+    _refreshTimer = new QTimer(this);
+    _refreshTimer->setSingleShot(true);
+    _refreshTimer->setInterval(300);
+    connect(_refreshTimer, &QTimer::timeout, this, &MatchPairSelectorDialog::onRefresh);
 
-    if (m_projectManager) {
-        connect(m_projectManager, &ProjectManager::projectMetadataChanged,
+    if (_projectManager) {
+        connect(_projectManager, &ProjectManager::projectMetadataChanged,
                 this, &MatchPairSelectorDialog::scheduleRefresh);
-        connect(m_projectManager, &ProjectManager::matchPairReady,
+        connect(_projectManager, &ProjectManager::matchPairReady,
                 this, [this](const QString &, const QString &, const QString &, int) {
                     scheduleRefresh();
                 });
@@ -137,19 +137,19 @@ void MatchPairSelectorDialog::setupUI()
     Ui::MatchPairSelectorDialog ui;
     ui.setupUi(this);
 
-    m_imageComboBox = ui.m_imageComboBox;
-    m_matchTable = ui.m_matchTable;
-    m_viewDetailBtn = ui.m_viewDetailBtn;
-    m_refreshBtn = ui.m_refreshBtn;
-    m_statusLabel = ui.m_statusLabel;
+    _imageComboBox = ui.m_imageComboBox;
+    _matchTable = ui.m_matchTable;
+    _viewDetailBtn = ui.m_viewDetailBtn;
+    _refreshBtn = ui.m_refreshBtn;
+    _statusLabel = ui.m_statusLabel;
 
-    connect(m_imageComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(_imageComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MatchPairSelectorDialog::onCurrentImageChanged);
-    connect(m_refreshBtn, &QPushButton::clicked, this, &MatchPairSelectorDialog::onRefresh);
+    connect(_refreshBtn, &QPushButton::clicked, this, &MatchPairSelectorDialog::onRefresh);
 
     setupTable();
 
-    connect(m_viewDetailBtn, &QPushButton::clicked, 
+    connect(_viewDetailBtn, &QPushButton::clicked,
             this, &MatchPairSelectorDialog::onViewDetailedMatch);
 
     connect(ui.closeBtn, &QPushButton::clicked, this, &QDialog::accept);
@@ -159,105 +159,105 @@ void MatchPairSelectorDialog::setupUI()
 // 设置列数（4列）、列头、列宽、选择行为、文字对齐、交替行颜色等属性
 void MatchPairSelectorDialog::setupTable()
 {
-    m_matchTable->setColumnCount(5);
+    _matchTable->setColumnCount(5);
 
     QStringList headers;
     headers << tr("图像") << tr("算法") << tr("总计") << tr("有效") << tr("无效");
-    m_matchTable->setHorizontalHeaderLabels(headers);
+    _matchTable->setHorizontalHeaderLabels(headers);
 
     // 设置列宽
-    m_matchTable->setColumnWidth(0, 320);
-    m_matchTable->setColumnWidth(1, 100);
-    m_matchTable->setColumnWidth(2, 80);
-    m_matchTable->setColumnWidth(3, 80);
-    m_matchTable->setColumnWidth(4, 80);
+    _matchTable->setColumnWidth(0, 320);
+    _matchTable->setColumnWidth(1, 100);
+    _matchTable->setColumnWidth(2, 80);
+    _matchTable->setColumnWidth(3, 80);
+    _matchTable->setColumnWidth(4, 80);
     
     // 设置表格属性
-    m_matchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-    m_matchTable->setSelectionMode(QAbstractItemView::SingleSelection);
-    m_matchTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-    m_matchTable->horizontalHeader()->setStretchLastSection(true);
-    m_matchTable->verticalHeader()->setVisible(false);
-    m_matchTable->setAlternatingRowColors(true);
+    _matchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+    _matchTable->setSelectionMode(QAbstractItemView::SingleSelection);
+    _matchTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _matchTable->horizontalHeader()->setStretchLastSection(true);
+    _matchTable->verticalHeader()->setVisible(false);
+    _matchTable->setAlternatingRowColors(true);
     
     // 连接信号
-    connect(m_matchTable, &QTableWidget::cellClicked,
+    connect(_matchTable, &QTableWidget::cellClicked,
             this, &MatchPairSelectorDialog::onMatchPairSelected);
-    connect(m_matchTable, &QTableWidget::cellDoubleClicked,
+    connect(_matchTable, &QTableWidget::cellDoubleClicked,
             this, &MatchPairSelectorDialog::onMatchPairDoubleClicked);
 }
 
 // loadProjectImages: 从项目管理器读取所有影像，填充顶部下拉框并默认选中第一项
 void MatchPairSelectorDialog::loadProjectImages()
 {
-    if (!m_projectManager) {
-        m_statusLabel->setText(tr("错误：未找到项目管理器"));
+    if (!_projectManager) {
+        _statusLabel->setText(tr("错误：未找到项目管理器"));
         return;
     }
     
     // 获取项目中的所有图像
-    m_allImages = m_projectManager->getAllImages();
+    _allImages = _projectManager->getAllImages();
     
-    if (m_allImages.isEmpty()) {
-        m_statusLabel->setText(tr("项目中没有图像"));
+    if (_allImages.isEmpty()) {
+        _statusLabel->setText(tr("项目中没有图像"));
         return;
     }
     
     // 填充下拉框
-    m_imageComboBox->clear();
-    for (const QString &img : m_allImages) {
+    _imageComboBox->clear();
+    for (const QString &img : _allImages) {
         QString displayName = QFileInfo(img).fileName();
-        m_imageComboBox->addItem(displayName, img);
+        _imageComboBox->addItem(displayName, img);
     }
     
     // 选择第一个图像
-    if (m_imageComboBox->count() > 0) {
-        m_imageComboBox->setCurrentIndex(0);
+    if (_imageComboBox->count() > 0) {
+        _imageComboBox->setCurrentIndex(0);
     }
 }
 
 void MatchPairSelectorDialog::onCurrentImageChanged(int index)
 {
-    if (index < 0 || index >= m_imageComboBox->count()) {
+    if (index < 0 || index >= _imageComboBox->count()) {
         return;
     }
     
-    m_currentImage = m_imageComboBox->itemData(index).toString();
-    loadMatchPairsForImage(m_currentImage);
+    _currentImage = _imageComboBox->itemData(index).toString();
+    loadMatchPairsForImage(_currentImage);
 }
 
 void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
 {
-    m_matchTable->setRowCount(0);
-    m_currentMatches.clear();
-    m_selectedMatchIndex = -1;
-    m_viewDetailBtn->setEnabled(false);
+    _matchTable->setRowCount(0);
+    _currentMatches.clear();
+    _selectedMatchIndex = -1;
+    _viewDetailBtn->setEnabled(false);
     
     // 解析匹配数据
-    m_currentMatches = parseMatchDataForImage(imagePath);
+    _currentMatches = parseMatchDataForImage(imagePath);
     
-    if (m_currentMatches.isEmpty()) {
-        m_statusLabel->setText(tr("该图像没有匹配数据"));
+    if (_currentMatches.isEmpty()) {
+        _statusLabel->setText(tr("该图像没有匹配数据"));
         return;
     }
     
     // 填充表格
-    m_matchTable->setRowCount(m_currentMatches.size());
+    _matchTable->setRowCount(_currentMatches.size());
     
-    for (int i = 0; i < m_currentMatches.size(); ++i) {
-        const MatchInfo &info = m_currentMatches[i];
+    for (int i = 0; i < _currentMatches.size(); ++i) {
+        const MatchInfo &info = _currentMatches[i];
 
         // 图像名称
         QTableWidgetItem *nameItem = new QTableWidgetItem(info.imageName);
         nameItem->setToolTip(info.imagePath);
-        m_matchTable->setItem(i, 0, nameItem);
+        _matchTable->setItem(i, 0, nameItem);
 
         // 算法名
         QString algoDisplay = info.algorithm;
         if (algoDisplay.isEmpty()) algoDisplay = tr("(旧格式)");
         QTableWidgetItem *algoItem = new QTableWidgetItem(algoDisplay);
         algoItem->setTextAlignment(Qt::AlignCenter);
-        m_matchTable->setItem(i, 1, algoItem);
+        _matchTable->setItem(i, 1, algoItem);
 
         // 总计
         QTableWidgetItem *totalItem = new QTableWidgetItem(
@@ -265,7 +265,7 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
                 ? tr("未匹配")
                 : QString::number(info.totalPoints));
         totalItem->setTextAlignment(Qt::AlignCenter);
-        m_matchTable->setItem(i, 2, totalItem);
+        _matchTable->setItem(i, 2, totalItem);
 
         // 有效
         QTableWidgetItem *validItem = new QTableWidgetItem(
@@ -273,7 +273,7 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
                 ? QStringLiteral("-")
                 : QString::number(info.validPoints));
         validItem->setTextAlignment(Qt::AlignCenter);
-        m_matchTable->setItem(i, 3, validItem);
+        _matchTable->setItem(i, 3, validItem);
 
         // 无效
         QTableWidgetItem *invalidItem = new QTableWidgetItem(
@@ -281,11 +281,11 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
                 ? QStringLiteral("-")
                 : QString::number(info.invalidPoints));
         invalidItem->setTextAlignment(Qt::AlignCenter);
-        m_matchTable->setItem(i, 4, invalidItem);
+        _matchTable->setItem(i, 4, invalidItem);
     }
     
     int overlapCandidateCount = 0;
-    for (const MatchInfo &info : m_currentMatches)
+    for (const MatchInfo &info : _currentMatches)
     {
         if (info.overlapCandidate && info.matchFilePath.isEmpty())
         {
@@ -295,13 +295,13 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
 
     if (overlapCandidateCount > 0)
     {
-        m_statusLabel->setText(tr("找到 %1 个影像对（含 %2 个重叠候选）")
-                                   .arg(m_currentMatches.size())
+        _statusLabel->setText(tr("找到 %1 个影像对（含 %2 个重叠候选）")
+                                   .arg(_currentMatches.size())
                                    .arg(overlapCandidateCount));
     }
     else
     {
-        m_statusLabel->setText(tr("找到 %1 个匹配对").arg(m_currentMatches.size()));
+        _statusLabel->setText(tr("找到 %1 个匹配对").arg(_currentMatches.size()));
     }
 }
 
@@ -309,13 +309,13 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
 {
     QList<MatchInfo> matches;
 
-    if (!m_projectManager) return matches;
+    if (!_projectManager) return matches;
 
     const QString baseName = QFileInfo(imagePath).completeBaseName();
 
     // ── 构建 baseName/fileName → 完整路径 映射（供查找配对影像使用）──────────────
     QMap<QString, QString> baseToPath;    // completeBaseName → fullPath
-    for (const QString &imgPath : m_allImages) {
+    for (const QString &imgPath : _allImages) {
         const QString base = QFileInfo(imgPath).completeBaseName();
         if (!baseToPath.contains(base)) baseToPath.insert(base, imgPath);
     }
@@ -328,8 +328,8 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
     static const QStringList knownAlgos = {"superglue","lightglue","loftr","roma",
                                             "orb_bf_hamming","sift_bf_l2","sift_flann"};
 
-    if (!m_matchDir.isEmpty()) {
-        QDir matchDirObj(m_matchDir);
+    if (!_matchDir.isEmpty()) {
+        QDir matchDirObj(_matchDir);
         const QStringList matchFiles = matchDirObj.entryList(
             QStringList{QStringLiteral("*.match")}, QDir::Files);
 
@@ -379,11 +379,11 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
 
     // ── 方式二：兜底 — 扫描项目元数据（针对仅有元数据无文件的历史记录）──────────
     // 仅当 matchDir 不存在或为空时才回退到元数据读取
-    if (matches.isEmpty() && m_matchDir.isEmpty()) {
-        QJsonObject meta = m_projectManager->currentMeta();
+    if (matches.isEmpty() && _matchDir.isEmpty()) {
+        QJsonObject meta = _projectManager->currentMeta();
         const QString baseFileName = QFileInfo(imagePath).fileName();
         QMap<QString, QString> imageNameToPath;
-        for (const QString &img : m_allImages) {
+        for (const QString &img : _allImages) {
             imageNameToPath[QFileInfo(img).fileName()] = img;
         }
 
@@ -442,12 +442,12 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCa
     const QMap<QString, QString> &baseToPath) const
 {
     QList<MatchInfo> candidates;
-    if (!m_projectManager || m_projectManager->currentProjectPath().isEmpty())
+    if (!_projectManager || _projectManager->currentProjectPath().isEmpty())
     {
         return candidates;
     }
 
-    const QString overlapDir = QDir(ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath()))
+    const QString overlapDir = QDir(ProjectIO::projectAssetsDir(_projectManager->currentProjectPath()))
                                    .filePath(QStringLiteral("overlap"));
     const QString jsonPath = QDir(overlapDir).filePath(QStringLiteral("vocabulary_overlap_pairs.json"));
     const QString lisPath = QDir(overlapDir).filePath(QStringLiteral("vocabulary_overlap_pairs.lis"));
@@ -469,7 +469,7 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCa
         }
 
         const QString otherToken = imageTokenMatches(imageA, imagePath) ? imageB : imageA;
-        const QString otherImagePath = resolveProjectImagePath(otherToken, m_allImages, baseToPath);
+        const QString otherImagePath = resolveProjectImagePath(otherToken, _allImages, baseToPath);
         if (otherImagePath.trimmed().isEmpty() || imageTokenMatches(otherImagePath, imagePath))
         {
             return;
@@ -563,13 +563,13 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCa
 
 QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QString &imgB)
 {
-    if (!m_projectManager) return QString();
+    if (!_projectManager) return QString();
     
     QString baseNameA = QFileInfo(imgA).completeBaseName();
     QString baseNameB = QFileInfo(imgB).completeBaseName();
     
     // 第一优先：从 ipmatch_results 元数据中查找
-    QJsonObject meta = m_projectManager->currentMeta();
+    QJsonObject meta = _projectManager->currentMeta();
     QJsonArray ipmatchResults = meta.value("ipmatch_results").toArray();
     
     for (const QJsonValue &val : ipmatchResults) {
@@ -596,7 +596,7 @@ QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QStrin
             // 路径不存在时，尝试在项目的 assets/matches 中查找同名文件
             if (!outputPath.isEmpty()) {
                 QString fileName = QFileInfo(outputPath).fileName();
-                QString projectRoot = QFileInfo(m_projectManager->currentProjectPath()).absolutePath();
+                QString projectRoot = QFileInfo(_projectManager->currentProjectPath()).absolutePath();
                 QString matchesDir = QDir(projectRoot).filePath("assets/matches");
                 QString candidatePath = QDir(matchesDir).filePath(fileName);
                 
@@ -608,7 +608,7 @@ QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QStrin
     }
     
     // 第二优先：在 assets/matches 目录中按文件名模式直接搜索
-    QString plascanPath = m_projectManager->currentProjectPath();
+    QString plascanPath = _projectManager->currentProjectPath();
     if (plascanPath.isEmpty()) return QString();
     
     QString projectRoot = QFileInfo(plascanPath).absolutePath();
@@ -686,23 +686,23 @@ void MatchPairSelectorDialog::onMatchPairSelected(int row, int column)
 {
     Q_UNUSED(column);
     
-    if (row < 0 || row >= m_currentMatches.size()) {
-        m_selectedMatchIndex = -1;
-        m_viewDetailBtn->setEnabled(false);
+    if (row < 0 || row >= _currentMatches.size()) {
+        _selectedMatchIndex = -1;
+        _viewDetailBtn->setEnabled(false);
         return;
     }
     
-    m_selectedMatchIndex = row;
-    m_viewDetailBtn->setEnabled(true);
+    _selectedMatchIndex = row;
+    _viewDetailBtn->setEnabled(true);
     
-    const MatchInfo &info = m_currentMatches[row];
+    const MatchInfo &info = _currentMatches[row];
     if (info.overlapCandidate && info.matchFilePath.isEmpty())
     {
-        m_statusLabel->setText(tr("已选择：%1（重叠候选，尚未匹配）").arg(info.imageName));
+        _statusLabel->setText(tr("已选择：%1（重叠候选，尚未匹配）").arg(info.imageName));
     }
     else
     {
-        m_statusLabel->setText(tr("已选择：%1 (%2 个匹配点)")
+        _statusLabel->setText(tr("已选择：%1 (%2 个匹配点)")
             .arg(info.imageName)
             .arg(info.totalPoints));
     }
@@ -712,28 +712,28 @@ void MatchPairSelectorDialog::onMatchPairDoubleClicked(int row, int column)
 {
     Q_UNUSED(column);
     
-    m_selectedMatchIndex = row;
+    _selectedMatchIndex = row;
     onViewDetailedMatch();
 }
 
 void MatchPairSelectorDialog::onViewDetailedMatch()
 {
-    if (m_selectedMatchIndex < 0 || m_selectedMatchIndex >= m_currentMatches.size()) {
+    if (_selectedMatchIndex < 0 || _selectedMatchIndex >= _currentMatches.size()) {
         QMessageBox::warning(this, tr("未选择匹配对"), 
             tr("请先选择要查看的匹配对"));
         return;
     }
     
-    const MatchInfo &info = m_currentMatches[m_selectedMatchIndex];
+    const MatchInfo &info = _currentMatches[_selectedMatchIndex];
     
     // 打开详细匹配查看器
-    auto *viewer = new MatchViewerDialog(m_currentImage, info.imagePath, 
+    auto *viewer = new MatchViewerDialog(_currentImage, info.imagePath,
                                          info.matchFilePath, this);
     viewer->setAttribute(Qt::WA_DeleteOnClose);
 
     // 传递项目路径以启用项目级记忆化
-    if (m_projectManager) {
-        viewer->setProjectPath(m_projectManager->currentProjectPath());
+    if (_projectManager) {
+        viewer->setProjectPath(_projectManager->currentProjectPath());
     }
 
     viewer->exec();
@@ -742,19 +742,19 @@ void MatchPairSelectorDialog::onViewDetailedMatch()
 void MatchPairSelectorDialog::onRefresh()
 {
     // 更新 matchDir（防止项目切换后路径变化）
-    if (m_projectManager && !m_projectManager->currentProjectPath().isEmpty()) {
-        const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
-        m_matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
+    if (_projectManager && !_projectManager->currentProjectPath().isEmpty()) {
+        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
+        _matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
     }
 
     loadProjectImages();
 
-    if (!m_currentImage.isEmpty()) {
-        loadMatchPairsForImage(m_currentImage);
+    if (!_currentImage.isEmpty()) {
+        loadMatchPairsForImage(_currentImage);
     }
 }
 
 void MatchPairSelectorDialog::scheduleRefresh()
 {
-    if (m_refreshTimer) m_refreshTimer->start();
+    if (_refreshTimer) _refreshTimer->start();
 }

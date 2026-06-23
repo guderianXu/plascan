@@ -1912,6 +1912,56 @@ TEST(CodeStyleTest, DenseMatchDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, MatchPairSelectorDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("ProjectManager *_projectManager;"),
+        QStringLiteral("QComboBox *_imageComboBox;"),
+        QStringLiteral("QTableWidget *_matchTable;"),
+        QStringLiteral("QPushButton *_viewDetailBtn;"),
+        QStringLiteral("QPushButton *_refreshBtn;"),
+        QStringLiteral("QLabel *_statusLabel;"),
+        QStringLiteral("QStringList _allImages;"),
+        QStringLiteral("QString _currentImage;"),
+        QStringLiteral("QList<MatchInfo> _currentMatches;"),
+        QStringLiteral("int _selectedMatchIndex;"),
+        QStringLiteral("QString _matchDir;"),
+        QStringLiteral("QTimer *_refreshTimer = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_imageComboBox"),
+        QStringLiteral("m_matchTable"),
+        QStringLiteral("m_viewDetailBtn"),
+        QStringLiteral("m_refreshBtn"),
+        QStringLiteral("m_statusLabel"),
+        QStringLiteral("m_allImages"),
+        QStringLiteral("m_currentImage"),
+        QStringLiteral("m_currentMatches"),
+        QStringLiteral("m_selectedMatchIndex"),
+        QStringLiteral("m_matchDir"),
+        QStringLiteral("m_refreshTimer"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
