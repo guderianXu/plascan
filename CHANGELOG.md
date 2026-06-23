@@ -65,6 +65,7 @@
 - `MapProjectDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并整理该小对话框内的紧凑控制语句和循环花括号风格。
 - `SurveyControlDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持测绘控制 CSV/表格查看行为不变。
 - `CreateDemDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，并整理该小对话框内的紧凑控制语句花括号风格。
+- `MVSProgressDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，并整理进度/取消回调中的紧凑控制语句花括号风格。
 - `SFMService.cpp` 和 `VocabularyOverlapDialog.cpp` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被这两个 Torch-heavy 编译单元刷屏。
 - 删除 GUI 工程服务层中已无生产目标引用的 `ProjectBaInputBuilder.cpp` / `ProjectTriangulationService.cpp` 空壳兼容编译单元；兼容接口继续保留在对应头文件中，测试目标直接链接 core 实现。
 - GUI 工程 BA 输入和三角化调用方直接依赖 `src/core/sfm/BaInputBuilder.h` / `TriangulationService.h`，删除 `ProjectBaInputBuilder.h` / `ProjectTriangulationService.h` 这层 header-only 兼容 wrapper，减少旧接口暴露面。
@@ -102,6 +103,8 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.CreateDemDialogUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 DEM 创建对话框私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CreateDemDialogTest" --output-on-failure` 通过，验证 DEM 创建对话框的一键 DEM 工作流 UI 和手动运行保护仍可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CreateDemDialog.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MVSProgressDialogUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 MVS 进度对话框私有成员迁移到 `_lowerCamelCase`。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MVSProgressDialog.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest.TorchHeavyTranslationUnitsSuppressLibTorchC4267Warnings" --output-on-failure` 先失败后通过，验证 `SFMService.cpp` 和 `VocabularyOverlapDialog.cpp` 均有局部 C4267 warning guard。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `SFMService.cpp`、`VocabularyOverlapDialog.cpp` 并链接 GUI；构建日志未发现 `warning C4267`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest.GuiTestsDoNotCompileObsoleteCompatibilityTranslationUnits" --output-on-failure` 先失败后通过，验证 GUI 工具测试不再编译空壳兼容 `.cpp`。

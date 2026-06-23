@@ -71,16 +71,16 @@ private slots:
 private:
     void setupUi();
 
-    QLabel       *m_stageLabel   = nullptr;
-    QProgressBar *m_progressBar  = nullptr;
-    QLabel       *m_elapsedLabel = nullptr;
-    QPushButton  *m_cancelBtn    = nullptr;
+    QLabel *_stageLabel = nullptr;
+    QProgressBar *_progressBar = nullptr;
+    QLabel *_elapsedLabel = nullptr;
+    QPushButton *_cancelBtn = nullptr;
 
-    QTimer        m_timer;
-    QElapsedTimer m_elapsed;
+    QTimer _timer;
+    QElapsedTimer _elapsed;
 
-    int  m_totalSteps = 0;
-    bool m_finished   = false;
+    int _totalSteps = 0;
+    bool _finished = false;
 };
 
 } // namespace xjw

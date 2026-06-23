@@ -2188,6 +2188,41 @@ TEST(CodeStyleTest, CreateDemDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, MVSProgressDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MVSProgressDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MVSProgressDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_stageLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QProgressBar *_progressBar = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_elapsedLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_cancelBtn = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QTimer _timer;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QElapsedTimer _elapsed;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("int _totalSteps = 0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _finished = false;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_stageLabel"),
+        QStringLiteral("m_progressBar"),
+        QStringLiteral("m_elapsedLabel"),
+        QStringLiteral("m_cancelBtn"),
+        QStringLiteral("m_timer"),
+        QStringLiteral("m_elapsed"),
+        QStringLiteral("m_totalSteps"),
+        QStringLiteral("m_finished"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
