@@ -60,7 +60,7 @@ private slots:
     void onAddLisFile();
     // 清空当前已加载的 lis 文件路径及生成的匹配对列表
     void onClearLis();
-    // 根据选中的影像自动生成所有两两影像组合并填入 m_currentPairs
+    // 根据选中的影像自动生成所有两两影像组合并填入 _currentPairs
     void onGeneratePairs();
     // 点击"浏览"按钮，弹出目录选择对话框并设置匹配结果输出路径
     void onBrowseOutput();
@@ -95,7 +95,7 @@ private:
     void setupUi();
     // 连接各控件的变化信号到 emitSettingsNow 等槽，实现实时配置持久化
     void setupConnections();
-    // 根据 m_currentPairs 刷新 m_pairPreview 文本框的预览内容
+    // 根据 _currentPairs 刷新 _pairPreview 文本框的预览内容
     void updatePreview();
     // 根据项目已有后缀和当前算法兼容性刷新特征后缀选择器
     void refreshFeatureSuffixChoices();
@@ -110,76 +110,76 @@ private:
     QStringList generateAllPairs() const;
 
     // ── 输入输出控件 ──────────────────────────────────────────────
-    QPushButton*      m_selectAllBtn{nullptr};     // 全选按钮
-    QPushButton*      m_deselectAllBtn{nullptr};   // 清除按钮
-    QListWidget*      m_imageList{nullptr};        // 影像列表（所有算法共用）
-    QWidget*          m_imageInputWidget{nullptr};    // 影像输入区
-    QTextEdit*        m_pairPreview{nullptr};      // 当前匹配对的预览文本框（只读）
-    QLineEdit*        m_lisFileLine{nullptr};      // lis 文件路径输入框
-    QPushButton*      m_addLisBtn{nullptr};        // "添加 lis 文件"按钮
-    QPushButton*      m_clearLisBtn{nullptr};      // "清空"匹配对按钮
-    QPushButton*      m_generatePairsBtn{nullptr}; // "自动生成全组合"按钮
-    QLineEdit*        m_outputLine{nullptr};       // 匹配结果输出目录输入框
-    QPushButton*      m_browseOutBtn{nullptr};     // "浏览"输出目录按钮
+    QPushButton*      _selectAllBtn{nullptr};     // 全选按钮
+    QPushButton*      _deselectAllBtn{nullptr};   // 清除按钮
+    QListWidget*      _imageList{nullptr};        // 影像列表（所有算法共用）
+    QWidget*          _imageInputWidget{nullptr};    // 影像输入区
+    QTextEdit*        _pairPreview{nullptr};      // 当前匹配对的预览文本框（只读）
+    QLineEdit*        _lisFileLine{nullptr};      // lis 文件路径输入框
+    QPushButton*      _addLisBtn{nullptr};        // "添加 lis 文件"按钮
+    QPushButton*      _clearLisBtn{nullptr};      // "清空"匹配对按钮
+    QPushButton*      _generatePairsBtn{nullptr}; // "自动生成全组合"按钮
+    QLineEdit*        _outputLine{nullptr};       // 匹配结果输出目录输入框
+    QPushButton*      _browseOutBtn{nullptr};     // "浏览"输出目录按钮
 
     // ── 基础参数控件（Basic） ─────────────────────────────────────
-    QComboBox*        m_matchAlgorithmCombo{nullptr}; // 匹配算法选择
-    QLabel*           m_featureSuffixLabel{nullptr};  // 特征类型标签
-    QComboBox*        m_featureSuffixCombo{nullptr};  // 特征文件后缀选择
-    QComboBox*        m_outlierMethodCombo{nullptr};  // 粗差剔除算法（始终显示）
-    QSpinBox*         m_maxKeypointsSpin{nullptr};    // 最大关键点数（始终显示）
+    QComboBox*        _matchAlgorithmCombo{nullptr}; // 匹配算法选择
+    QLabel*           _featureSuffixLabel{nullptr};  // 特征类型标签
+    QComboBox*        _featureSuffixCombo{nullptr};  // 特征文件后缀选择
+    QComboBox*        _outlierMethodCombo{nullptr};  // 粗差剔除算法（始终显示）
+    QSpinBox*         _maxKeypointsSpin{nullptr};    // 最大关键点数（始终显示）
 
     // ── 算法参数切换面板 ──────────────────────────────────────────
-    QStackedWidget*   m_paramStack{nullptr};          // Page 0=SuperGlue, 1=LightGlue, 2=传统, 3=LoFTR, 4=RoMa
+    QStackedWidget*   _paramStack{nullptr};          // Page 0=SuperGlue, 1=LightGlue, 2=传统, 3=LoFTR, 4=RoMa
 
     // SuperGlue 面板（Page 0）
-    QComboBox*        m_modelTypeCombo{nullptr};      // 模型类型：indoor / outdoor
-    QDoubleSpinBox*   m_matchThresholdSpin{nullptr};  // 匹配置信度阈值
-    QSpinBox*         m_sinkhornIterSpin{nullptr};    // Sinkhorn 正则化迭代次数
-    QSpinBox*         m_batchSizeSpin{nullptr};       // 推理批次大小
-    QSpinBox*         m_inputWidthSpin{nullptr};      // 推理输入宽度
-    QSpinBox*         m_inputHeightSpin{nullptr};     // 推理输入高度
+    QComboBox*        _modelTypeCombo{nullptr};      // 模型类型：indoor / outdoor
+    QDoubleSpinBox*   _matchThresholdSpin{nullptr};  // 匹配置信度阈值
+    QSpinBox*         _sinkhornIterSpin{nullptr};    // Sinkhorn 正则化迭代次数
+    QSpinBox*         _batchSizeSpin{nullptr};       // 推理批次大小
+    QSpinBox*         _inputWidthSpin{nullptr};      // 推理输入宽度
+    QSpinBox*         _inputHeightSpin{nullptr};     // 推理输入高度
 
     // LightGlue 面板（Page 1）— 独立控件，避免与 SuperGlue 面板共享状态
-    QDoubleSpinBox*   m_lgMatchThresholdSpin{nullptr};
-    QSpinBox*         m_lgBatchSizeSpin{nullptr};
-    QSpinBox*         m_lgInputWidthSpin{nullptr};
-    QSpinBox*         m_lgInputHeightSpin{nullptr};
+    QDoubleSpinBox*   _lgMatchThresholdSpin{nullptr};
+    QSpinBox*         _lgBatchSizeSpin{nullptr};
+    QSpinBox*         _lgInputWidthSpin{nullptr};
+    QSpinBox*         _lgInputHeightSpin{nullptr};
 
     // LoFTR 面板（Page 3）
-    QComboBox*        m_loftrModelTypeCombo{nullptr};
-    QDoubleSpinBox*   m_loftrMatchThresholdSpin{nullptr};
+    QComboBox*        _loftrModelTypeCombo{nullptr};
+    QDoubleSpinBox*   _loftrMatchThresholdSpin{nullptr};
 
     // RoMa 面板（Page 4）
-    QComboBox*        m_romaModelTypeCombo{nullptr};
-    QDoubleSpinBox*   m_romaMatchThresholdSpin{nullptr};
-    QSpinBox*         m_romaMaxKeypointsSpin{nullptr};
+    QComboBox*        _romaModelTypeCombo{nullptr};
+    QDoubleSpinBox*   _romaMatchThresholdSpin{nullptr};
+    QSpinBox*         _romaMaxKeypointsSpin{nullptr};
 
     // ── 高级参数控件（Advanced，可折叠 QGroupBox） ────────────────
-    QGroupBox*        m_advancedGroup{nullptr};
-    QDoubleSpinBox*   m_outlierReprojSpin{nullptr};
-    QDoubleSpinBox*   m_outlierConfidenceSpin{nullptr};
-    QSpinBox*         m_outlierMaxItersSpin{nullptr};
-    QSpinBox*         m_outlierMinInliersSpin{nullptr};
+    QGroupBox*        _advancedGroup{nullptr};
+    QDoubleSpinBox*   _outlierReprojSpin{nullptr};
+    QDoubleSpinBox*   _outlierConfidenceSpin{nullptr};
+    QSpinBox*         _outlierMaxItersSpin{nullptr};
+    QSpinBox*         _outlierMinInliersSpin{nullptr};
 
     // ── 系统参数控件（System，可折叠 QGroupBox） ──────────────────
-    QGroupBox*        m_systemGroup{nullptr};     // 系统参数折叠组
-    QComboBox*        m_deviceCombo{nullptr};     // 推理设备选择：cpu / cuda:0 等
-    QSpinBox*         m_numThreadsSpin{nullptr};     // CPU 推理线程数
-    QSpinBox*         m_cudaParallelSpin{nullptr};  // CUDA 模式并行对数（1-8）
+    QGroupBox*        _systemGroup{nullptr};     // 系统参数折叠组
+    QComboBox*        _deviceCombo{nullptr};     // 推理设备选择：cpu / cuda:0 等
+    QSpinBox*         _numThreadsSpin{nullptr};     // CPU 推理线程数
+    QSpinBox*         _cudaParallelSpin{nullptr};  // CUDA 模式并行对数（1-8）
     // ── 调试参数控件（Debug，可折叠 QGroupBox） ───────────────────
-    QGroupBox*        m_debugGroup{nullptr};   // 调试参数折叠组
-    QCheckBox*        m_saveCsvChk{nullptr};   // 是否保存匹配结果为 CSV 文件
-    QCheckBox*        m_saveVisChk{nullptr};   // 是否保存匹配可视化图像
-    QCheckBox*        m_verboseChk{nullptr};   // 是否输出详细调试日志
+    QGroupBox*        _debugGroup{nullptr};   // 调试参数折叠组
+    QCheckBox*        _saveCsvChk{nullptr};   // 是否保存匹配结果为 CSV 文件
+    QCheckBox*        _saveVisChk{nullptr};   // 是否保存匹配可视化图像
+    QCheckBox*        _verboseChk{nullptr};   // 是否输出详细调试日志
 
     // ── 底部操作按钮 ──────────────────────────────────────────────
-    QPushButton*      m_runBtn{nullptr};         // "运行"按钮：发出 runRequested 信号
-    QPushButton*      m_viewMatchesBtn{nullptr}; // "查看匹配"按钮：在项目视图中打开匹配结果
-    QPushButton*      m_cancelBtn{nullptr};      // "取消"按钮：关闭对话框
-    QPushButton*      m_resetBtn{nullptr};       // "恢复默认"按钮：重置所有参数
+    QPushButton*      _runBtn{nullptr};         // "运行"按钮：发出 runRequested 信号
+    QPushButton*      _viewMatchesBtn{nullptr}; // "查看匹配"按钮：在项目视图中打开匹配结果
+    QPushButton*      _cancelBtn{nullptr};      // "取消"按钮：关闭对话框
+    QPushButton*      _resetBtn{nullptr};       // "恢复默认"按钮：重置所有参数
     
     // ── 数据成员 ──────────────────────────────────────────────────
-    QStringList       m_currentPairs;       // 当前待匹配的影像对列表（格式："img1__img2"）
-    QStringList       m_projectFeatureSuffixes; // 项目中实际存在的特征后缀；空表示未知，回退算法兼容列表
+    QStringList       _currentPairs;       // 当前待匹配的影像对列表（格式："img1__img2"）
+    QStringList       _projectFeatureSuffixes; // 项目中实际存在的特征后缀；空表示未知，回退算法兼容列表
 };

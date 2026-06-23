@@ -1912,6 +1912,134 @@ TEST(CodeStyleTest, DenseMatchDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, FeatureMatchingDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeatureMatchingDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/FeatureMatchingDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QPushButton*      _selectAllBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _deselectAllBtn{nullptr};"),
+        QStringLiteral("QListWidget*      _imageList{nullptr};"),
+        QStringLiteral("QWidget*          _imageInputWidget{nullptr};"),
+        QStringLiteral("QTextEdit*        _pairPreview{nullptr};"),
+        QStringLiteral("QLineEdit*        _lisFileLine{nullptr};"),
+        QStringLiteral("QPushButton*      _addLisBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _clearLisBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _generatePairsBtn{nullptr};"),
+        QStringLiteral("QLineEdit*        _outputLine{nullptr};"),
+        QStringLiteral("QPushButton*      _browseOutBtn{nullptr};"),
+        QStringLiteral("QComboBox*        _matchAlgorithmCombo{nullptr};"),
+        QStringLiteral("QLabel*           _featureSuffixLabel{nullptr};"),
+        QStringLiteral("QComboBox*        _featureSuffixCombo{nullptr};"),
+        QStringLiteral("QComboBox*        _outlierMethodCombo{nullptr};"),
+        QStringLiteral("QSpinBox*         _maxKeypointsSpin{nullptr};"),
+        QStringLiteral("QStackedWidget*   _paramStack{nullptr};"),
+        QStringLiteral("QComboBox*        _modelTypeCombo{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _matchThresholdSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _sinkhornIterSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _batchSizeSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _inputWidthSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _inputHeightSpin{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _lgMatchThresholdSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _lgBatchSizeSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _lgInputWidthSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _lgInputHeightSpin{nullptr};"),
+        QStringLiteral("QComboBox*        _loftrModelTypeCombo{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _loftrMatchThresholdSpin{nullptr};"),
+        QStringLiteral("QComboBox*        _romaModelTypeCombo{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _romaMatchThresholdSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _romaMaxKeypointsSpin{nullptr};"),
+        QStringLiteral("QGroupBox*        _advancedGroup{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _outlierReprojSpin{nullptr};"),
+        QStringLiteral("QDoubleSpinBox*   _outlierConfidenceSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _outlierMaxItersSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _outlierMinInliersSpin{nullptr};"),
+        QStringLiteral("QGroupBox*        _systemGroup{nullptr};"),
+        QStringLiteral("QComboBox*        _deviceCombo{nullptr};"),
+        QStringLiteral("QSpinBox*         _numThreadsSpin{nullptr};"),
+        QStringLiteral("QSpinBox*         _cudaParallelSpin{nullptr};"),
+        QStringLiteral("QGroupBox*        _debugGroup{nullptr};"),
+        QStringLiteral("QCheckBox*        _saveCsvChk{nullptr};"),
+        QStringLiteral("QCheckBox*        _saveVisChk{nullptr};"),
+        QStringLiteral("QCheckBox*        _verboseChk{nullptr};"),
+        QStringLiteral("QPushButton*      _runBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _viewMatchesBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _cancelBtn{nullptr};"),
+        QStringLiteral("QPushButton*      _resetBtn{nullptr};"),
+        QStringLiteral("QStringList       _currentPairs;"),
+        QStringLiteral("QStringList       _projectFeatureSuffixes;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_selectAllBtn"),
+        QStringLiteral("m_deselectAllBtn"),
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_imageInputWidget"),
+        QStringLiteral("m_pairPreview"),
+        QStringLiteral("m_lisFileLine"),
+        QStringLiteral("m_addLisBtn"),
+        QStringLiteral("m_clearLisBtn"),
+        QStringLiteral("m_generatePairsBtn"),
+        QStringLiteral("m_outputLine"),
+        QStringLiteral("m_browseOutBtn"),
+        QStringLiteral("m_matchAlgorithmCombo"),
+        QStringLiteral("m_featureSuffixLabel"),
+        QStringLiteral("m_featureSuffixCombo"),
+        QStringLiteral("m_outlierMethodCombo"),
+        QStringLiteral("m_maxKeypointsSpin"),
+        QStringLiteral("m_paramStack"),
+        QStringLiteral("m_modelTypeCombo"),
+        QStringLiteral("m_matchThresholdSpin"),
+        QStringLiteral("m_sinkhornIterSpin"),
+        QStringLiteral("m_batchSizeSpin"),
+        QStringLiteral("m_inputWidthSpin"),
+        QStringLiteral("m_inputHeightSpin"),
+        QStringLiteral("m_lgMatchThresholdSpin"),
+        QStringLiteral("m_lgBatchSizeSpin"),
+        QStringLiteral("m_lgInputWidthSpin"),
+        QStringLiteral("m_lgInputHeightSpin"),
+        QStringLiteral("m_loftrModelTypeCombo"),
+        QStringLiteral("m_loftrMatchThresholdSpin"),
+        QStringLiteral("m_romaModelTypeCombo"),
+        QStringLiteral("m_romaMatchThresholdSpin"),
+        QStringLiteral("m_romaMaxKeypointsSpin"),
+        QStringLiteral("m_advancedGroup"),
+        QStringLiteral("m_outlierReprojSpin"),
+        QStringLiteral("m_outlierConfidenceSpin"),
+        QStringLiteral("m_outlierMaxItersSpin"),
+        QStringLiteral("m_outlierMinInliersSpin"),
+        QStringLiteral("m_systemGroup"),
+        QStringLiteral("m_deviceCombo"),
+        QStringLiteral("m_numThreadsSpin"),
+        QStringLiteral("m_cudaParallelSpin"),
+        QStringLiteral("m_debugGroup"),
+        QStringLiteral("m_saveCsvChk"),
+        QStringLiteral("m_saveVisChk"),
+        QStringLiteral("m_verboseChk"),
+        QStringLiteral("m_runBtn"),
+        QStringLiteral("m_viewMatchesBtn"),
+        QStringLiteral("m_cancelBtn"),
+        QStringLiteral("m_resetBtn"),
+        QStringLiteral("m_currentPairs"),
+        QStringLiteral("m_projectFeatureSuffixes"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, MatchPairSelectorDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
