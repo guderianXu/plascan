@@ -2223,6 +2223,57 @@ TEST(CodeStyleTest, MVSProgressDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, TriangulationDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/TriangulationDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/TriangulationDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_presetCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_minAngleSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_reprojThreshSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_minObsSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_ignoreTwoViewCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_depthStabSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_filterModeCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_maxReprojErrSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_minAngleFiltSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_minTrackLenSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_threadsSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_focalLenSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_baselineSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_overwriteResultCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_suggestBtn = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_suggestLabel = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_presetCombo"),
+        QStringLiteral("m_minAngleSpin"),
+        QStringLiteral("m_reprojThreshSpin"),
+        QStringLiteral("m_minObsSpin"),
+        QStringLiteral("m_ignoreTwoViewCheck"),
+        QStringLiteral("m_depthStabSpin"),
+        QStringLiteral("m_filterModeCombo"),
+        QStringLiteral("m_maxReprojErrSpin"),
+        QStringLiteral("m_minAngleFiltSpin"),
+        QStringLiteral("m_minTrackLenSpin"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_focalLenSpin"),
+        QStringLiteral("m_baselineSpin"),
+        QStringLiteral("m_overwriteResultCheck"),
+        QStringLiteral("m_suggestBtn"),
+        QStringLiteral("m_suggestLabel"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("hideUnsupportedField(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

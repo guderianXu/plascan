@@ -56,20 +56,20 @@ private:
     /// @return 配置参数 JSON 对象。
     QJsonObject collectSettings() const;
 
-    QComboBox      *m_presetCombo          = nullptr;
-    QDoubleSpinBox *m_minAngleSpin         = nullptr;  ///< 最小交会角
-    QDoubleSpinBox *m_reprojThreshSpin     = nullptr;  ///< 重投影阈值
-    QSpinBox       *m_minObsSpin           = nullptr;  ///< 最少观测数
-    QCheckBox      *m_ignoreTwoViewCheck   = nullptr;
-    QDoubleSpinBox *m_depthStabSpin        = nullptr;  ///< 深度稳定性
-    QComboBox      *m_filterModeCombo      = nullptr;
-    QDoubleSpinBox *m_maxReprojErrSpin     = nullptr;
-    QDoubleSpinBox *m_minAngleFiltSpin     = nullptr;
-    QSpinBox       *m_minTrackLenSpin      = nullptr;
-    QSpinBox       *m_threadsSpin          = nullptr;
-    QDoubleSpinBox *m_focalLenSpin         = nullptr;
-    QDoubleSpinBox *m_baselineSpin         = nullptr;
-    QCheckBox      *m_overwriteResultCheck = nullptr;
-    QPushButton    *m_suggestBtn           = nullptr;
-    QLabel         *m_suggestLabel         = nullptr;
+    QComboBox *_presetCombo = nullptr;
+    QDoubleSpinBox *_minAngleSpin = nullptr;  ///< 最小交会角
+    QDoubleSpinBox *_reprojThreshSpin = nullptr;  ///< 重投影阈值
+    QSpinBox *_minObsSpin = nullptr;  ///< 最少观测数
+    QCheckBox *_ignoreTwoViewCheck = nullptr;
+    QDoubleSpinBox *_depthStabSpin = nullptr;  ///< 深度稳定性
+    QComboBox *_filterModeCombo = nullptr;
+    QDoubleSpinBox *_maxReprojErrSpin = nullptr;
+    QDoubleSpinBox *_minAngleFiltSpin = nullptr;
+    QSpinBox *_minTrackLenSpin = nullptr;
+    QSpinBox *_threadsSpin = nullptr;
+    QDoubleSpinBox *_focalLenSpin = nullptr;
+    QDoubleSpinBox *_baselineSpin = nullptr;
+    QCheckBox *_overwriteResultCheck = nullptr;
+    QPushButton *_suggestBtn = nullptr;
+    QLabel *_suggestLabel = nullptr;
 };
