@@ -53,44 +53,44 @@ private:
     void updateTargetUi();
 
     // ── 模式选择 ──
-    QComboBox      *m_modeCombo          = nullptr;
-    QStackedWidget *m_modeStack          = nullptr;
-    QLabel         *m_statusLabel        = nullptr;
+    QComboBox *_modeCombo = nullptr;
+    QStackedWidget *_modeStack = nullptr;
+    QLabel *_statusLabel = nullptr;
 
     // ── 应用范围 ──
-    QGroupBox      *m_applyBox              = nullptr;
-    QFormLayout    *m_applyForm             = nullptr;
-    QComboBox      *m_applyScopeCombo       = nullptr;
-    QComboBox      *m_applyTargetImageCombo = nullptr;
-    QCheckBox      *m_overwriteExistingCheck = nullptr;
-    QLabel         *m_applyHintLabel        = nullptr;
-    QComboBox      *m_qualityCombo          = nullptr;
-    QSpinBox       *m_threadsSpin           = nullptr;
-    QComboBox      *m_matchAlgorithmCombo   = nullptr;
-    QComboBox      *m_featureSuffixCombo    = nullptr;
-    QStringList     m_projectFeatureSuffixes;
+    QGroupBox *_applyBox = nullptr;
+    QFormLayout *_applyForm = nullptr;
+    QComboBox *_applyScopeCombo = nullptr;
+    QComboBox *_applyTargetImageCombo = nullptr;
+    QCheckBox *_overwriteExistingCheck = nullptr;
+    QLabel *_applyHintLabel = nullptr;
+    QComboBox *_qualityCombo = nullptr;
+    QSpinBox *_threadsSpin = nullptr;
+    QComboBox *_matchAlgorithmCombo = nullptr;
+    QComboBox *_featureSuffixCombo = nullptr;
+    QStringList _projectFeatureSuffixes;
 
     // ── 模式 1: 无相机文件 ──
-    QCheckBox      *m_exifAutoCheck      = nullptr;  ///< 自动读取 EXIF
-    QDoubleSpinBox *m_defaultFocalSpin   = nullptr;  ///< 默认焦距 (mm)
-    QDoubleSpinBox *m_sensorWidthSpin    = nullptr;  ///< 传感器宽度 (mm)
+    QCheckBox *_exifAutoCheck = nullptr;  ///< 自动读取 EXIF
+    QDoubleSpinBox *_defaultFocalSpin = nullptr;  ///< 默认焦距 (mm)
+    QDoubleSpinBox *_sensorWidthSpin = nullptr;  ///< 传感器宽度 (mm)
 
     // ── 模式 2: 仅有内参 ──
-    QDoubleSpinBox *m_fxSpin             = nullptr;
-    QDoubleSpinBox *m_fySpin             = nullptr;
-    QDoubleSpinBox *m_cxSpin             = nullptr;
-    QDoubleSpinBox *m_cySpin             = nullptr;
-    QComboBox      *m_distModelCombo     = nullptr;  ///< 畸变模型
-    QFormLayout    *m_intrinsicsForm     = nullptr;
-    QDoubleSpinBox *m_k1Spin             = nullptr;
-    QDoubleSpinBox *m_k2Spin             = nullptr;
-    QDoubleSpinBox *m_p1Spin             = nullptr;
-    QDoubleSpinBox *m_p2Spin             = nullptr;
+    QDoubleSpinBox *_fxSpin = nullptr;
+    QDoubleSpinBox *_fySpin = nullptr;
+    QDoubleSpinBox *_cxSpin = nullptr;
+    QDoubleSpinBox *_cySpin = nullptr;
+    QComboBox *_distModelCombo = nullptr;  ///< 畸变模型
+    QFormLayout *_intrinsicsForm = nullptr;
+    QDoubleSpinBox *_k1Spin = nullptr;
+    QDoubleSpinBox *_k2Spin = nullptr;
+    QDoubleSpinBox *_p1Spin = nullptr;
+    QDoubleSpinBox *_p2Spin = nullptr;
 
     // ── 模式 3: 完整相机文件 ──
-    QComboBox      *m_cameraImportModeCombo = nullptr;
-    QComboBox      *m_targetImageCombo      = nullptr;
-    QComboBox      *m_cameraFormatCombo  = nullptr;  ///< 文件格式
-    QLabel         *m_cameraImportHintLabel = nullptr;
-    QFormLayout    *m_cameraImportForm      = nullptr;
+    QComboBox *_cameraImportModeCombo = nullptr;
+    QComboBox *_targetImageCombo = nullptr;
+    QComboBox *_cameraFormatCombo = nullptr;  ///< 文件格式
+    QLabel *_cameraImportHintLabel = nullptr;
+    QFormLayout *_cameraImportForm = nullptr;
 };

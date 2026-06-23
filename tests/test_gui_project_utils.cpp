@@ -2578,6 +2578,96 @@ TEST(CodeStyleTest, SparseCloudPostProcessDialogUsesLowerCamelPrivateMemberNames
     }
 }
 
+TEST(CodeStyleTest, InitCameraPoseDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/InitCameraPoseDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/InitCameraPoseDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QComboBox *_modeCombo = nullptr;"),
+        QStringLiteral("QStackedWidget *_modeStack = nullptr;"),
+        QStringLiteral("QLabel *_statusLabel = nullptr;"),
+        QStringLiteral("QGroupBox *_applyBox = nullptr;"),
+        QStringLiteral("QFormLayout *_applyForm = nullptr;"),
+        QStringLiteral("QComboBox *_applyScopeCombo = nullptr;"),
+        QStringLiteral("QComboBox *_applyTargetImageCombo = nullptr;"),
+        QStringLiteral("QCheckBox *_overwriteExistingCheck = nullptr;"),
+        QStringLiteral("QLabel *_applyHintLabel = nullptr;"),
+        QStringLiteral("QComboBox *_qualityCombo = nullptr;"),
+        QStringLiteral("QSpinBox *_threadsSpin = nullptr;"),
+        QStringLiteral("QComboBox *_matchAlgorithmCombo = nullptr;"),
+        QStringLiteral("QComboBox *_featureSuffixCombo = nullptr;"),
+        QStringLiteral("QStringList _projectFeatureSuffixes;"),
+        QStringLiteral("QCheckBox *_exifAutoCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_defaultFocalSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_sensorWidthSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_fxSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_fySpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_cxSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_cySpin = nullptr;"),
+        QStringLiteral("QComboBox *_distModelCombo = nullptr;"),
+        QStringLiteral("QFormLayout *_intrinsicsForm = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_k1Spin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_k2Spin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_p1Spin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_p2Spin = nullptr;"),
+        QStringLiteral("QComboBox *_cameraImportModeCombo = nullptr;"),
+        QStringLiteral("QComboBox *_targetImageCombo = nullptr;"),
+        QStringLiteral("QComboBox *_cameraFormatCombo = nullptr;"),
+        QStringLiteral("QLabel *_cameraImportHintLabel = nullptr;"),
+        QStringLiteral("QFormLayout *_cameraImportForm = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_modeCombo"),
+        QStringLiteral("m_modeStack"),
+        QStringLiteral("m_statusLabel"),
+        QStringLiteral("m_applyBox"),
+        QStringLiteral("m_applyForm"),
+        QStringLiteral("m_applyScopeCombo"),
+        QStringLiteral("m_applyTargetImageCombo"),
+        QStringLiteral("m_overwriteExistingCheck"),
+        QStringLiteral("m_applyHintLabel"),
+        QStringLiteral("m_qualityCombo"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_matchAlgorithmCombo"),
+        QStringLiteral("m_featureSuffixCombo"),
+        QStringLiteral("m_projectFeatureSuffixes"),
+        QStringLiteral("m_exifAutoCheck"),
+        QStringLiteral("m_defaultFocalSpin"),
+        QStringLiteral("m_sensorWidthSpin"),
+        QStringLiteral("m_fxSpin"),
+        QStringLiteral("m_fySpin"),
+        QStringLiteral("m_cxSpin"),
+        QStringLiteral("m_cySpin"),
+        QStringLiteral("m_distModelCombo"),
+        QStringLiteral("m_intrinsicsForm"),
+        QStringLiteral("m_k1Spin"),
+        QStringLiteral("m_k2Spin"),
+        QStringLiteral("m_p1Spin"),
+        QStringLiteral("m_p2Spin"),
+        QStringLiteral("m_cameraImportModeCombo"),
+        QStringLiteral("m_targetImageCombo"),
+        QStringLiteral("m_cameraFormatCombo"),
+        QStringLiteral("m_cameraImportHintLabel"),
+        QStringLiteral("m_cameraImportForm"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
