@@ -54,42 +54,42 @@ static bool parseDoublesFromLine(const std::string &line, std::vector<double> &o
 Camera::Intrinsics Camera::intrinsics() const
 {
     Intrinsics intrinsicsValue;
-    intrinsicsValue.focalX = _fu;
-    intrinsicsValue.focalY = _fv;
-    intrinsicsValue.principalX = _cu;
-    intrinsicsValue.principalY = _cv;
-    intrinsicsValue.pixelPitch = _pitch;
-    intrinsicsValue.uAxisSign = _u_dir;
-    intrinsicsValue.vAxisSign = _v_dir;
+    intrinsicsValue.focalX = _focalX;
+    intrinsicsValue.focalY = _focalY;
+    intrinsicsValue.principalX = _principalX;
+    intrinsicsValue.principalY = _principalY;
+    intrinsicsValue.pixelPitch = _pixelPitch;
+    intrinsicsValue.uAxisSign = _uAxisSign;
+    intrinsicsValue.vAxisSign = _vAxisSign;
     return intrinsicsValue;
 }
 
 Camera::Distortion Camera::distortion() const
 {
     Distortion distortionValue;
-    distortionValue.radialK1 = _k1;
-    distortionValue.radialK2 = _k2;
-    distortionValue.radialK3 = _k3;
-    distortionValue.tangentialP1 = _p1;
-    distortionValue.tangentialP2 = _p2;
+    distortionValue.radialK1 = _radialK1;
+    distortionValue.radialK2 = _radialK2;
+    distortionValue.radialK3 = _radialK3;
+    distortionValue.tangentialP1 = _tangentialP1;
+    distortionValue.tangentialP2 = _tangentialP2;
     return distortionValue;
 }
 
 Camera::Pose Camera::pose() const
 {
     Pose poseValue;
-    poseValue.cameraToWorldRotation = _R;
-    poseValue.cameraCenter = _C;
-    poseValue.depthAxisFlipped = _depth_flipped_z;
+    poseValue.cameraToWorldRotation = _cameraToWorldRotation;
+    poseValue.cameraCenter = _cameraCenter;
+    poseValue.depthAxisFlipped = _depthAxisFlipped;
     return poseValue;
 }
 
 std::array<double, 9> Camera::worldToCameraRotation() const
 {
     return std::array<double, 9>{{
-        _R[0], _R[3], _R[6],
-        _R[1], _R[4], _R[7],
-        _R[2], _R[5], _R[8]
+        _cameraToWorldRotation[0], _cameraToWorldRotation[3], _cameraToWorldRotation[6],
+        _cameraToWorldRotation[1], _cameraToWorldRotation[4], _cameraToWorldRotation[7],
+        _cameraToWorldRotation[2], _cameraToWorldRotation[5], _cameraToWorldRotation[8]
     }};
 }
 
@@ -101,7 +101,7 @@ std::array<double, 3> Camera::worldToCameraTranslation() const
     {
         for (int col = 0; col < 3; ++col)
         {
-            translation[row] -= rotation[row * 3 + col] * _C[col];
+            translation[row] -= rotation[row * 3 + col] * _cameraCenter[col];
         }
     }
     return translation;
@@ -115,10 +115,10 @@ Camera::PositiveDepthModel Camera::toPositiveDepthModel() const
 Camera Camera::scaledIntrinsics(double scaleX, double scaleY) const
 {
     Camera scaledCamera = *this;
-    scaledCamera._fu *= scaleX;
-    scaledCamera._fv *= scaleY;
-    scaledCamera._cu *= scaleX;
-    scaledCamera._cv *= scaleY;
+    scaledCamera._focalX *= scaleX;
+    scaledCamera._focalY *= scaleY;
+    scaledCamera._principalX *= scaleX;
+    scaledCamera._principalY *= scaleY;
     return scaledCamera;
 }
 
@@ -145,23 +145,23 @@ bool Camera::loadFromFile(const std::string &path)
         return false;
     }
 
-    _fu = 0.0;
-    _fv = 0.0;
-    _cu = 0.0;
-    _cv = 0.0;
-    _C = {{0.0, 0.0, 0.0}};
-    _R = {{1.0, 0.0, 0.0,
+    _focalX = 0.0;
+    _focalY = 0.0;
+    _principalX = 0.0;
+    _principalY = 0.0;
+    _cameraCenter = {{0.0, 0.0, 0.0}};
+    _cameraToWorldRotation = {{1.0, 0.0, 0.0,
            0.0, 1.0, 0.0,
            0.0, 0.0, 1.0}};
-    _k1 = 0.0;
-    _k2 = 0.0;
-    _k3 = 0.0;
-    _p1 = 0.0;
-    _p2 = 0.0;
-    _pitch = 1.0;
-    _u_dir = 1;
-    _v_dir = 1;
-    _loaded = false;
+    _radialK1 = 0.0;
+    _radialK2 = 0.0;
+    _radialK3 = 0.0;
+    _tangentialP1 = 0.0;
+    _tangentialP2 = 0.0;
+    _pixelPitch = 1.0;
+    _uAxisSign = 1;
+    _vAxisSign = 1;
+    _isLoaded = false;
 
     bool hasFu = false;
     bool hasFv = false;
@@ -210,7 +210,7 @@ bool Camera::loadFromFile(const std::string &path)
             std::vector<double> v;
             if (parseDoublesFromLine(s, v) && !v.empty())
             {
-                _fu = v[0];
+                _focalX = v[0];
                 hasFu = true;
             }
         }
@@ -219,7 +219,7 @@ bool Camera::loadFromFile(const std::string &path)
             std::vector<double> v;
             if (parseDoublesFromLine(s, v) && !v.empty())
             {
-                _fv = v[0];
+                _focalY = v[0];
                 hasFv = true;
             }
         }
@@ -228,7 +228,7 @@ bool Camera::loadFromFile(const std::string &path)
             std::vector<double> v;
             if (parseDoublesFromLine(s, v) && !v.empty())
             {
-                _cu = v[0];
+                _principalX = v[0];
                 hasCu = true;
             }
         }
@@ -237,7 +237,7 @@ bool Camera::loadFromFile(const std::string &path)
             std::vector<double> v;
             if (parseDoublesFromLine(s, v) && !v.empty())
             {
-                _cv = v[0];
+                _principalY = v[0];
                 hasCv = true;
             }
         }
@@ -246,9 +246,9 @@ bool Camera::loadFromFile(const std::string &path)
             std::vector<double> v;
             if (parseDoublesFromLine(s, v) && v.size() >= 3)
             {
-                _C[0] = v[0];
-                _C[1] = v[1];
-                _C[2] = v[2];
+                _cameraCenter[0] = v[0];
+                _cameraCenter[1] = v[1];
+                _cameraCenter[2] = v[2];
                 hasC = true;
             }
         }
@@ -259,7 +259,7 @@ bool Camera::loadFromFile(const std::string &path)
             {
                 for (int i = 0; i < 9; ++i)
                 {
-                    _R[i] = v[i];
+                    _cameraToWorldRotation[i] = v[i];
                 }
                 hasR = true;
             }
@@ -271,7 +271,7 @@ bool Camera::loadFromFile(const std::string &path)
             auto pos = s.find_first_of("=:");
             if (pos != std::string::npos && parseDoublesFromLine(s.substr(pos + 1), v) && !v.empty())
             {
-                _k1 = v[0];
+                _radialK1 = v[0];
             }
         }
         else if (startsWithKey(sl, "k2"))
@@ -280,7 +280,7 @@ bool Camera::loadFromFile(const std::string &path)
             auto pos = s.find_first_of("=:");
             if (pos != std::string::npos && parseDoublesFromLine(s.substr(pos + 1), v) && !v.empty())
             {
-                _k2 = v[0];
+                _radialK2 = v[0];
             }
         }
         else if (startsWithKey(sl, "k3"))
@@ -289,7 +289,7 @@ bool Camera::loadFromFile(const std::string &path)
             auto pos = s.find_first_of("=:");
             if (pos != std::string::npos && parseDoublesFromLine(s.substr(pos + 1), v) && !v.empty())
             {
-                _k3 = v[0];
+                _radialK3 = v[0];
             }
         }
         else if (startsWithKey(sl, "p1"))
@@ -298,7 +298,7 @@ bool Camera::loadFromFile(const std::string &path)
             auto pos = s.find_first_of("=:");
             if (pos != std::string::npos && parseDoublesFromLine(s.substr(pos + 1), v) && !v.empty())
             {
-                _p1 = v[0];
+                _tangentialP1 = v[0];
             }
         }
         else if (startsWithKey(sl, "p2"))
@@ -307,7 +307,7 @@ bool Camera::loadFromFile(const std::string &path)
             auto pos = s.find_first_of("=:");
             if (pos != std::string::npos && parseDoublesFromLine(s.substr(pos + 1), v) && !v.empty())
             {
-                _p2 = v[0];
+                _tangentialP2 = v[0];
             }
         }
         else if (startsWithKey(sl, "pitch"))
@@ -315,7 +315,7 @@ bool Camera::loadFromFile(const std::string &path)
             std::vector<double> v;
             if (parseDoublesFromLine(s, v) && !v.empty())
             {
-                _pitch = v[0];
+                _pixelPitch = v[0];
             }
         }
         else if (startsWithKey(sl, "u_direction"))
@@ -339,7 +339,7 @@ bool Camera::loadFromFile(const std::string &path)
                 {
                     dominant = v[0]; // 标量：直接表示方向符号
                 }
-                _u_dir = (dominant < 0.0 ? -1 : 1);
+                _uAxisSign = (dominant < 0.0 ? -1 : 1);
             }
         }
         else if (startsWithKey(sl, "v_direction"))
@@ -363,7 +363,7 @@ bool Camera::loadFromFile(const std::string &path)
                 {
                     dominant = v[0]; // 标量：直接表示方向符号
                 }
-                _v_dir = (dominant < 0.0 ? -1 : 1);
+                _vAxisSign = (dominant < 0.0 ? -1 : 1);
             }
         }
         else if (startsWithKey(sl, "w_direction")) 
@@ -376,7 +376,7 @@ bool Camera::loadFromFile(const std::string &path)
             if (parseDoublesFromLine(s, v) && !v.empty()) 
             {
                 double wz = (v.size() >= 3) ? v[2] : v[0];
-                _depth_flipped_z = (wz < 0.0);
+                _depthAxisFlipped = (wz < 0.0);
             }
         }
         // ignore other lines (VERSION_, PINHOLE, TSAI, directions)
@@ -388,20 +388,20 @@ bool Camera::loadFromFile(const std::string &path)
     }
 
     // 基本参数合法性校验
-    if (_pitch <= 0.0)
+    if (_pixelPitch <= 0.0)
     {
-        fprintf(stderr, "[Camera] loadFromFile 失败：pitch=%.6g 必须 > 0\n", _pitch);
+        fprintf(stderr, "[Camera] loadFromFile 失败：pitch=%.6g 必须 > 0\n", _pixelPitch);
         return false;
     }
-    if (_fu <= 0.0 || _fv <= 0.0)
+    if (_focalX <= 0.0 || _focalY <= 0.0)
     {
-        fprintf(stderr, "[Camera] loadFromFile 失败：fu=%.6g fv=%.6g 必须 > 0\n", _fu, _fv);
+        fprintf(stderr, "[Camera] loadFromFile 失败：fu=%.6g fv=%.6g 必须 > 0\n", _focalX, _focalY);
         return false;
     }
 
     // 旋转矩阵正交性校验（行列式应 ≈ ±1，每行范数应 ≈ 1）
     {
-        const auto &R = _R;
+        const auto &R = _cameraToWorldRotation;
         double det = R[0]*(R[4]*R[8]-R[5]*R[7])
                    - R[1]*(R[3]*R[8]-R[5]*R[6])
                    + R[2]*(R[3]*R[7]-R[4]*R[6]);
@@ -412,12 +412,12 @@ bool Camera::loadFromFile(const std::string &path)
     }
 
     // 将 fu/fv/cu/cv 从 mm 换算到像素，供内部投影与几何计算使用。
-    _fu = _fu / _pitch;
-    _fv = _fv / _pitch;
-    _cu = _cu / _pitch;
-    _cv = _cv / _pitch;
+    _focalX = _focalX / _pixelPitch;
+    _focalY = _focalY / _pixelPitch;
+    _principalX = _principalX / _pixelPitch;
+    _principalY = _principalY / _pixelPitch;
 
-    _loaded = true;
+    _isLoaded = true;
     return true;
 }
 
@@ -439,10 +439,10 @@ bool Camera::loadFromFile(const std::string &path)
 void Camera::applyTsaiDistortion(double x, double y, double &xd, double &yd) const
 {
     double r2 = x * x + y * y;                              // 归一化半径平方
-    double radial = 1.0 + _k1 * r2 + _k2 * r2 * r2 + _k3 * r2 * r2 * r2; // 径向畸变因子
+    double radial = 1.0 + _radialK1 * r2 + _radialK2 * r2 * r2 + _radialK3 * r2 * r2 * r2; // 径向畸变因子
     // 径向畸变 + 切向畸变（分别对 x 和 y 方向）
-    xd = x * radial + 2.0 * _p1 * x * y + _p2 * (r2 + 2.0 * x * x);
-    yd = y * radial + _p1 * (r2 + 2.0 * y * y) + 2.0 * _p2 * x * y;
+    xd = x * radial + 2.0 * _tangentialP1 * x * y + _tangentialP2 * (r2 + 2.0 * x * x);
+    yd = y * radial + _tangentialP1 * (r2 + 2.0 * y * y) + 2.0 * _tangentialP2 * x * y;
 }
 
 /**
@@ -452,7 +452,7 @@ void Camera::applyTsaiDistortion(double x, double y, double &xd, double &yd) con
  * 即相机坐标轴在世界坐标系中的方向。
  * 世界点 Xw 到相机点 Xc 的变换公式为：
  *   Xc = R_cw^T * (Xw - C)
- * 由于 R 为行优先存储，R^T 对应的乘法等价于按列访问 R（即 _R[0],_R[3],_R[6] 为第一列）。
+ * 由于 R 为行优先存储，R^T 对应的乘法等价于按列访问 R（即 _cameraToWorldRotation[0],_cameraToWorldRotation[3],_cameraToWorldRotation[6] 为第一列）。
  *
  * @param world  输入，世界坐标 [Xw, Yw, Zw]
  * @param cam    输出，相机坐标 [Xc, Yc, Zc]
@@ -460,13 +460,13 @@ void Camera::applyTsaiDistortion(double x, double y, double &xd, double &yd) con
 void Camera::worldToCameraFromCameraToWorldPose(const double world[3], double cameraPoint[3]) const
 {
     // 先计算偏移量 Xw - C
-    double x = world[0] - _C[0];
-    double y = world[1] - _C[1];
-    double z = world[2] - _C[2];
+    double x = world[0] - _cameraCenter[0];
+    double y = world[1] - _cameraCenter[1];
+    double z = world[2] - _cameraCenter[2];
     // 用 R^T 左乘（即 R 按列读取），得到相机坐标
-    cameraPoint[0] = _R[0] * x + _R[3] * y + _R[6] * z;
-    cameraPoint[1] = _R[1] * x + _R[4] * y + _R[7] * z;
-    cameraPoint[2] = _R[2] * x + _R[5] * y + _R[8] * z;
+    cameraPoint[0] = _cameraToWorldRotation[0] * x + _cameraToWorldRotation[3] * y + _cameraToWorldRotation[6] * z;
+    cameraPoint[1] = _cameraToWorldRotation[1] * x + _cameraToWorldRotation[4] * y + _cameraToWorldRotation[7] * z;
+    cameraPoint[2] = _cameraToWorldRotation[2] * x + _cameraToWorldRotation[5] * y + _cameraToWorldRotation[8] * z;
 }
 
 void Camera::worldToCamera(const double world[3], double cameraPoint[3]) const
@@ -534,17 +534,17 @@ void Camera::applyDeltaPose(const double delta[6])
             double s = 0;
             for (int k = 0; k < 3; k++)
             {
-                s += dR[r * 3 + k] * _R[k * 3 + c];
+                s += dR[r * 3 + k] * _cameraToWorldRotation[k * 3 + c];
             }
             Rnew[r * 3 + c] = s;
         }
     }
     for (int i = 0; i < 9; i++)
     {
-        _R[i] = Rnew[i];
+        _cameraToWorldRotation[i] = Rnew[i];
     }
     // 更新相机中心：直接累加平移增量
-    _C[0] += tx; _C[1] += ty; _C[2] += tz;
+    _cameraCenter[0] += tx; _cameraCenter[1] += ty; _cameraCenter[2] += tz;
 }
 
 /**
@@ -566,12 +566,12 @@ void Camera::applyDeltaPose(const double delta[6])
  */
 bool Camera::projectWorldPoint(const double world[3], double pixel[2]) const
 {
-    if (!_loaded) return false;
+    if (!_isLoaded) return false;
     double cameraPoint[3];
     // 按 ASP 约定，R 为 camera-to-world，故用 R^T 将世界点转换到相机坐标系
     worldToCameraFromCameraToWorldPose(world, cameraPoint);
     // 物理前向深度需要与 w_direction 语义一致。
-    const double forwardDepth = _depth_flipped_z ? -cameraPoint[2] : cameraPoint[2];
+    const double forwardDepth = _depthAxisFlipped ? -cameraPoint[2] : cameraPoint[2];
     if (!(forwardDepth > 1e-9)) return false;
     // 透视除法仍使用带符号的 Z_cam，保证 flipped-depth 情况下像素坐标不镜像。
     double x = cameraPoint[0] / cameraPoint[2];
@@ -579,8 +579,8 @@ bool Camera::projectWorldPoint(const double world[3], double pixel[2]) const
     // 应用 Tsai 畸变模型
     double xd, yd; applyTsaiDistortion(x, y, xd, yd);
     // 根据文件中读取的坐标轴方向符号，计算最终像素坐标
-    pixel[0] = _u_dir * (_fu * xd) + _cu;
-    pixel[1] = _v_dir * (_fv * yd) + _cv;
+    pixel[0] = _uAxisSign * (_focalX * xd) + _principalX;
+    pixel[1] = _vAxisSign * (_focalY * yd) + _principalY;
     return true;
 }
 
@@ -594,7 +594,7 @@ bool Camera::projectWorldPoint(const double world[3], double pixel[2]) const
  */
 bool Camera::projectWorldPointSigned(const double world[3], double pixel[2]) const
 {
-    if (!_loaded) return false;
+    if (!_isLoaded) return false;
     double cameraPoint[3];
     worldToCameraFromCameraToWorldPose(world, cameraPoint);
     if (std::fabs(cameraPoint[2]) < 1e-9) return false;  // 仅排除极接近零的情况
@@ -602,8 +602,8 @@ bool Camera::projectWorldPointSigned(const double world[3], double pixel[2]) con
     const double x = cameraPoint[0] / cameraPoint[2];
     const double y = cameraPoint[1] / cameraPoint[2];
     double xd, yd; applyTsaiDistortion(x, y, xd, yd);
-    pixel[0] = _u_dir * (_fu * xd) + _cu;
-    pixel[1] = _v_dir * (_fv * yd) + _cv;
+    pixel[0] = _uAxisSign * (_focalX * xd) + _principalX;
+    pixel[1] = _vAxisSign * (_focalY * yd) + _principalY;
     return true;
 }
 
@@ -616,28 +616,28 @@ bool Camera::projectWorldPointSigned(const double world[3], double pixel[2]) con
  * 反向：给定 pixel，求 (x, y)。
  * 初始估计用无畸变公式：x0 = u_dir*(u-cu)/fu，然后 Newton 迭代修正畸变。
  *
- * 每步残差：r = f(x_cur) - target，其中 f(x) = u_dir*fu*distort(x)+cu
+ * 每步残差：r = f(x_current) - target，其中 f(x) = u_dir*fu*distort(x)+cu
  * Jacobian（对 x 数值差分 1e-7 精度足够）。
  */
 bool Camera::undistortPixel(const double pixel[2], double norm[2],
                              int maxIter, double tol) const
 {
-    if (!_loaded) return false;
+    if (!_isLoaded) return false;
 
     // 初始估计（忽略畸变）
-    double x = static_cast<double>(_u_dir) * (pixel[0] - _cu) / _fu;
-    double y = static_cast<double>(_v_dir) * (pixel[1] - _cv) / _fv;
+    double x = static_cast<double>(_uAxisSign) * (pixel[0] - _principalX) / _focalX;
+    double y = static_cast<double>(_vAxisSign) * (pixel[1] - _principalY) / _focalY;
 
     for (int iter = 0; iter < maxIter; ++iter)
     {
         double xd, yd;
         applyTsaiDistortion(x, y, xd, yd);
 
-        double u_cur = static_cast<double>(_u_dir) * (_fu * xd) + _cu;
-        double v_cur = static_cast<double>(_v_dir) * (_fv * yd) + _cv;
+        double u_current = static_cast<double>(_uAxisSign) * (_focalX * xd) + _principalX;
+        double v_current = static_cast<double>(_vAxisSign) * (_focalY * yd) + _principalY;
 
-        double ru = u_cur - pixel[0];
-        double rv = v_cur - pixel[1];
+        double ru = u_current - pixel[0];
+        double rv = v_current - pixel[1];
 
         if (std::fabs(ru) < tol && std::fabs(rv) < tol)
             break;
@@ -646,12 +646,12 @@ bool Camera::undistortPixel(const double pixel[2], double norm[2],
         const double h = 1e-7;
         double xdh, ydh;
         applyTsaiDistortion(x + h, y, xdh, ydh);
-        double J00 = static_cast<double>(_u_dir) * _fu * (xdh - xd) / h;
-        double J10 = static_cast<double>(_v_dir) * _fv * (ydh - yd) / h;
+        double J00 = static_cast<double>(_uAxisSign) * _focalX * (xdh - xd) / h;
+        double J10 = static_cast<double>(_vAxisSign) * _focalY * (ydh - yd) / h;
 
         applyTsaiDistortion(x, y + h, xdh, ydh);
-        double J01 = static_cast<double>(_u_dir) * _fu * (xdh - xd) / h;
-        double J11 = static_cast<double>(_v_dir) * _fv * (ydh - yd) / h;
+        double J01 = static_cast<double>(_uAxisSign) * _focalX * (xdh - xd) / h;
+        double J11 = static_cast<double>(_vAxisSign) * _focalY * (ydh - yd) / h;
 
         // Newton step: delta = -J^{-1} * r
         double det = J00 * J11 - J01 * J10;
@@ -683,31 +683,31 @@ bool Camera::saveToFile(const std::string &path) const
     // 使用 double 类型能表示的最大有效位数，避免精度损失
     ofs << std::setprecision(std::numeric_limits<double>::max_digits10);
     // 乘回 pitch，将像素单位的内参转换为 mm 后写入文件。
-    ofs << "fu = " << (_fu * _pitch) << "\n";
-    ofs << "fv = " << (_fv * _pitch) << "\n";
-    ofs << "cu = " << (_cu * _pitch) << "\n";
-    ofs << "cv = " << (_cv * _pitch) << "\n";
-    ofs << "c = " << _C[0] << " " << _C[1] << " " << _C[2] << "\n";
+    ofs << "fu = " << (_focalX * _pixelPitch) << "\n";
+    ofs << "fv = " << (_focalY * _pixelPitch) << "\n";
+    ofs << "cu = " << (_principalX * _pixelPitch) << "\n";
+    ofs << "cv = " << (_principalY * _pixelPitch) << "\n";
+    ofs << "c = " << _cameraCenter[0] << " " << _cameraCenter[1] << " " << _cameraCenter[2] << "\n";
     // 旋转矩阵以空格分隔，行优先，共 9 个值
     ofs << "r = ";
     for (int i = 0; i < 9; i++)
     {
-        ofs << _R[i];
+        ofs << _cameraToWorldRotation[i];
         if (i < 8)
         {
             ofs << " ";
         }
     }
     ofs << "\n";
-    ofs << "k1 = " << _k1 << "\n";
-    ofs << "k2 = " << _k2 << "\n";
-    ofs << "k3 = " << _k3 << "\n";
-    ofs << "p1 = " << _p1 << "\n";
-    ofs << "p2 = " << _p2 << "\n";
-    ofs << "pitch = " << _pitch << "\n";
-    ofs << "u_direction = " << _u_dir << "\n";
-    ofs << "v_direction = " << _v_dir << "\n";
-    ofs << "w_direction = " << (_depth_flipped_z ? -1 : 1) << "\n";
+    ofs << "k1 = " << _radialK1 << "\n";
+    ofs << "k2 = " << _radialK2 << "\n";
+    ofs << "k3 = " << _radialK3 << "\n";
+    ofs << "p1 = " << _tangentialP1 << "\n";
+    ofs << "p2 = " << _tangentialP2 << "\n";
+    ofs << "pitch = " << _pixelPitch << "\n";
+    ofs << "u_direction = " << _uAxisSign << "\n";
+    ofs << "v_direction = " << _vAxisSign << "\n";
+    ofs << "w_direction = " << (_depthAxisFlipped ? -1 : 1) << "\n";
     return true;
 }
 

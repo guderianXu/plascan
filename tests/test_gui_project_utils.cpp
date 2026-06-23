@@ -57,6 +57,7 @@
 #include <QMetaObject>
 #include <QFileInfo>
 #include <QPushButton>
+#include <QRegularExpression>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
@@ -1702,6 +1703,52 @@ TEST(CodeStyleTest, ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_mode = mode")));
     EXPECT_FALSE(source.contains(QStringLiteral("m_titleLabel->")));
     EXPECT_FALSE(source.contains(QStringLiteral("m_startBtn->")));
+}
+
+TEST(CodeStyleTest, CameraUsesDescriptiveLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/Camera.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("double _focalX = 0.0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("double _principalX = 0.0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::array<double, 3> _cameraCenter")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::array<double, 9> _cameraToWorldRotation")));
+    EXPECT_TRUE(header.contains(QStringLiteral("double _radialK1 = 0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("double _pixelPitch = 1.0;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _isLoaded = false;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("_fu"),
+        QStringLiteral("_fv"),
+        QStringLiteral("_cu"),
+        QStringLiteral("_cv"),
+        QStringLiteral("_C"),
+        QStringLiteral("_R"),
+        QStringLiteral("_k1"),
+        QStringLiteral("_k2"),
+        QStringLiteral("_k3"),
+        QStringLiteral("_p1"),
+        QStringLiteral("_p2"),
+        QStringLiteral("_pitch"),
+        QStringLiteral("_u_dir"),
+        QStringLiteral("_v_dir"),
+        QStringLiteral("_depth_flipped_z"),
+        QStringLiteral("_loaded"),
+    };
+    auto containsIdentifier = [](const QString &text, const QString &identifier)
+    {
+        const QString pattern = QStringLiteral("(?<![A-Za-z0-9_])%1(?![A-Za-z0-9_])")
+                                    .arg(QRegularExpression::escape(identifier));
+        return QRegularExpression(pattern).match(text).hasMatch();
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(containsIdentifier(header, oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(containsIdentifier(source, oldName)) << qPrintable(oldName);
+    }
 }
 
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)

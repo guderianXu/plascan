@@ -83,7 +83,7 @@ public:
     Camera() = default;
 
     /// 返回相机是否有效。
-    bool isValid() const { return _loaded; }
+    bool isValid() const { return _isLoaded; }
 
     /// 返回显式内参描述。
     Intrinsics intrinsics() const;
@@ -95,38 +95,38 @@ public:
     Pose pose() const;
 
     /// 返回 camera-to-world 旋转矩阵。
-    std::array<double, 9> cameraToWorldRotation() const { return _R; }
+    std::array<double, 9> cameraToWorldRotation() const { return _cameraToWorldRotation; }
 
     /// 返回 world-to-camera 旋转矩阵。
     std::array<double, 9> worldToCameraRotation() const;
 
     /// 返回世界坐标系中的相机中心。
-    std::array<double, 3> cameraCenter() const { return _C; }
+    std::array<double, 3> cameraCenter() const { return _cameraCenter; }
 
     /// 返回 world-to-camera 平移向量 `t = -R_wc * C`。
     std::array<double, 3> worldToCameraTranslation() const;
 
     /// 返回运行态 x 方向焦距（像素）。
-    double focalX() const { return _fu; }
+    double focalX() const { return _focalX; }
     /// 返回运行态 y 方向焦距（像素）。
-    double focalY() const { return _fv; }
+    double focalY() const { return _focalY; }
     /// 返回运行态主点 u 坐标（像素）。
-    double principalX() const { return _cu; }
+    double principalX() const { return _principalX; }
     /// 返回运行态主点 v 坐标（像素）。
-    double principalY() const { return _cv; }
+    double principalY() const { return _principalY; }
     /// 返回像元大小（mm/pixel）。
-    double pixelPitch() const { return _pitch; }
+    double pixelPitch() const { return _pixelPitch; }
     /// 返回文件/项目元数据语义下的 x 方向焦距（mm）。
-    double focalXMillimeters() const { return _fu * _pitch; }
+    double focalXMillimeters() const { return _focalX * _pixelPitch; }
     /// 返回文件/项目元数据语义下的 y 方向焦距（mm）。
-    double focalYMillimeters() const { return _fv * _pitch; }
+    double focalYMillimeters() const { return _focalY * _pixelPitch; }
     /// 返回文件/项目元数据语义下的主点 u 坐标（mm）。
-    double principalXMillimeters() const { return _cu * _pitch; }
+    double principalXMillimeters() const { return _principalX * _pixelPitch; }
     /// 返回文件/项目元数据语义下的主点 v 坐标（mm）。
-    double principalYMillimeters() const { return _cv * _pitch; }
-    int uAxisSign() const { return _u_dir; }
-    int vAxisSign() const { return _v_dir; }
-    bool depthAxisFlipped() const { return _depth_flipped_z; }
+    double principalYMillimeters() const { return _principalY * _pixelPitch; }
+    int uAxisSign() const { return _uAxisSign; }
+    int vAxisSign() const { return _vAxisSign; }
+    bool depthAxisFlipped() const { return _depthAxisFlipped; }
 
     /// 生成适用于 MVS 的正深度相机模型。
     PositiveDepthModel toPositiveDepthModel() const;
@@ -182,15 +182,15 @@ public:
      */
     void setPose(const std::array<double, 9> &R, const std::array<double, 3> &C)
     {
-        _R = R;
-        _C = C;
-        _loaded = true;
+        _cameraToWorldRotation = R;
+        _cameraCenter = C;
+        _isLoaded = true;
     }
 
     /// 仅更新相机中心坐标（不修改旋转矩阵）
     void setCameraCenter(const std::array<double, 3> &cameraCenter)
     {
-        _C = cameraCenter;
+        _cameraCenter = cameraCenter;
     }
 
     /**
@@ -198,11 +198,11 @@ public:
      */
     void setIntrinsics(double fu, double fv, double cu, double cv)
     {
-        _fu = fu;
-        _fv = fv;
-        _cu = cu;
-        _cv = cv;
-        _loaded = true;
+        _focalX = fu;
+        _focalY = fv;
+        _principalX = cu;
+        _principalY = cv;
+        _isLoaded = true;
     }
 
     /**
@@ -219,11 +219,11 @@ public:
                                   double cvMm,
                                   double pitchMmPerPixel)
     {
-        _pitch = (pitchMmPerPixel > 0.0) ? pitchMmPerPixel : 1.0;
-        setIntrinsics(fuMm / _pitch,
-                      fvMm / _pitch,
-                      cuMm / _pitch,
-                      cvMm / _pitch);
+        _pixelPitch = (pitchMmPerPixel > 0.0) ? pitchMmPerPixel : 1.0;
+        setIntrinsics(fuMm / _pixelPitch,
+                      fvMm / _pixelPitch,
+                      cuMm / _pixelPitch,
+                      cvMm / _pixelPitch);
     }
 
     /// 设置像元大小（mm/pixel）。
@@ -231,7 +231,7 @@ public:
     {
         if (pixelPitch > 0.0)
         {
-            _pitch = pixelPitch;
+            _pixelPitch = pixelPitch;
         }
     }
 
@@ -242,16 +242,16 @@ public:
      */
     void setAxisDirections(int uDir, int vDir)
     {
-        _u_dir = (uDir < 0 ? -1 : 1);
-        _v_dir = (vDir < 0 ? -1 : 1);
-        _loaded = true;
+        _uAxisSign = (uDir < 0 ? -1 : 1);
+        _vAxisSign = (vDir < 0 ? -1 : 1);
+        _isLoaded = true;
     }
 
     /// 设置光轴正方向是否翻转到负 Z。
     void setDepthAxisFlipped(bool depthAxisFlipped)
     {
-        _depth_flipped_z = depthAxisFlipped;
-        _loaded = true;
+        _depthAxisFlipped = depthAxisFlipped;
+        _isLoaded = true;
     }
 
     /**
@@ -261,12 +261,12 @@ public:
      */
     void setDistortion(double k1, double k2, double k3, double p1, double p2)
     {
-        _k1 = k1;
-        _k2 = k2;
-        _k3 = k3;
-        _p1 = p1;
-        _p2 = p2;
-        _loaded = true;
+        _radialK1 = k1;
+        _radialK2 = k2;
+        _radialK3 = k3;
+        _tangentialP1 = p1;
+        _tangentialP2 = p2;
+        _isLoaded = true;
     }
 
     void setDistortion(const Distortion &distortion)
@@ -313,27 +313,27 @@ public:
 
 private:
     // ---------- 内参 ----------
-    double _fu=0.0; ///< x 方向焦距（内部计算单位：像素）
-    double _fv=0.0; ///< y 方向焦距（内部计算单位：像素）
-    double _cu=0.0; ///< 主点 u 坐标（内部计算单位：像素）
-    double _cv=0.0; ///< 主点 v 坐标（内部计算单位：像素）
+    double _focalX = 0.0; ///< x 方向焦距（内部计算单位：像素）
+    double _focalY = 0.0; ///< y 方向焦距（内部计算单位：像素）
+    double _principalX = 0.0; ///< 主点 u 坐标（内部计算单位：像素）
+    double _principalY = 0.0; ///< 主点 v 坐标（内部计算单位：像素）
 
     // ---------- 外参 ----------
-    std::array<double,3> _C{{0,0,0}};          ///< 相机中心在世界坐标系中的位置，单位为米（m）
-    std::array<double,9> _R{{1,0,0,0,1,0,0,0,1}}; ///< camera-to-world 旋转矩阵，行优先存储（3×3）
+    std::array<double, 3> _cameraCenter{{0, 0, 0}}; ///< 相机中心在世界坐标系中的位置，单位为米（m）
+    std::array<double, 9> _cameraToWorldRotation{{1, 0, 0, 0, 1, 0, 0, 0, 1}}; ///< camera-to-world 旋转矩阵，行优先存储（3×3）
 
     // ---------- 畸变系数（Tsai/Brown-Conrady 模型） ----------
-    double _k1=0; ///< 径向畸变一阶系数（r^2 项）
-    double _k2=0; ///< 径向畸变二阶系数（r^4 项）
-    double _k3=0; ///< 径向畸变三阶系数（r^6 项）
-    double _p1=0; ///< 切向畸变系数 1
-    double _p2=0; ///< 切向畸变系数 2
+    double _radialK1 = 0; ///< 径向畸变一阶系数（r^2 项）
+    double _radialK2 = 0; ///< 径向畸变二阶系数（r^4 项）
+    double _radialK3 = 0; ///< 径向畸变三阶系数（r^6 项）
+    double _tangentialP1 = 0; ///< 切向畸变系数 1
+    double _tangentialP2 = 0; ///< 切向畸变系数 2
 
-    double _pitch=1.0; ///< 像元大小（mm/pixel），用于 mm 与像素之间的换算
-    int _u_dir = 1;    ///< u 轴方向符号（+1 或 -1）
-    int _v_dir = 1;    ///< v 轴方向符号（+1 或 -1）
-    bool _depth_flipped_z = false; ///< w_direction z 分量 < 0 时为 true（场景在 Z_cam<0 侧）
-    bool _loaded = false; ///< 是否已成功加载（或手动初始化）
+    double _pixelPitch = 1.0; ///< 像元大小（mm/pixel），用于 mm 与像素之间的换算
+    int _uAxisSign = 1;    ///< u 轴方向符号（+1 或 -1）
+    int _vAxisSign = 1;    ///< v 轴方向符号（+1 或 -1）
+    bool _depthAxisFlipped = false; ///< w_direction z 分量 < 0 时为 true（场景在 Z_cam<0 侧）
+    bool _isLoaded = false; ///< 是否已成功加载（或手动初始化）
 
     /**
      * @brief 利用 R^T 将世界坐标系下的点转换到相机坐标系。
