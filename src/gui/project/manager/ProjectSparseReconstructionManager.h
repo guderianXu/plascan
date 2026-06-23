@@ -4,7 +4,7 @@
 #include <QJsonArray>
 #include <QJsonObject>
 
-#include "ProjectTriangulationService.h"
+#include "TriangulationService.h"
 
 class QWidget;
 class ProjectData;
@@ -37,9 +37,9 @@ signals:
 private:
     bool ensureProjectOpen(const QString &message,
                            const QString &title) const;
-    void finalizeTriangulationSuccess(const xjw::gui::project::TriangulationServiceResult &result,
+    void finalizeTriangulationSuccess(const xjw::core::project::TriangulationServiceResult &result,
                                       const QStringList &selectedImages,
-                                      const xjw::gui::project::TriangulationServiceOptions &options,
+                                      const xjw::core::project::TriangulationServiceOptions &options,
                                       int replaceIndex);
     void startSparsePointWorkflow(xjw::gui::project::SparsePointWorkflowKind kind,
                                   const QJsonObject &settings);

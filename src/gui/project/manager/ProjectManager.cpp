@@ -18,7 +18,6 @@
 #include "ProjectMetadataOperations.h"
 #include "ProjectSfmWorkflow.h"
 #include "ProjectSparseWorkflow.h"
-#include "ProjectTriangulationService.h"
 #include "ProjectResultRecords.h"
 #include "ProjectReferenceDatasets.h"
 #include "ProjectSurveyControl.h"
@@ -1060,7 +1059,7 @@ xjw::gui::tasks::runGuarded(
             return;
         }
 
-        if (executionResult.buildStatus != xjw::gui::project::BaInputBuildStatus::Ok) {
+        if (executionResult.buildStatus != xjw::core::project::BaInputBuildStatus::Ok) {
             if (!self)
             {
                 return;
@@ -1076,7 +1075,7 @@ xjw::gui::tasks::runGuarded(
                         return;
                     }
                     const QString msg =
-                        buildStatus == xjw::gui::project::BaInputBuildStatus::NotEnoughCameras
+                        buildStatus == xjw::core::project::BaInputBuildStatus::NotEnoughCameras
                         ? QStringLiteral("所选影像中可用相机参数不足（至少需要两台相机）")
                         : QStringLiteral("未找到可用于光束法平差的匹配点（请检查选中影像是否已有匹配结果）");
                     QMessageBox::warning(self->m_parent, QStringLiteral("提示"), msg);

@@ -6,8 +6,8 @@
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectSparseWorkflow.h"
-#include "ProjectTriangulationService.h"
 #include "ProjectWorkflowUtils.h"
+#include "TriangulationService.h"
 #include "project/SparseResultQuality.h"
 #include "tasks/GuiTaskRunner.h"
 #include "Logger.h"
@@ -115,7 +115,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
                 .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
     }
 
-    xjw::gui::project::TriangulationServiceOptions options;
+    xjw::core::project::TriangulationServiceOptions options;
     options.outputDir = outputDir;
     options.minTriAngleDeg = settings.value(QStringLiteral("minAngle")).toDouble(2.0);
     options.maxReprojErrorPx = settings.value(QStringLiteral("reprojThreshold")).toDouble(2.0);
@@ -129,10 +129,10 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
         this,
         [mergedMeta, selectedImages, options]()
         {
-            return xjw::gui::project::ProjectTriangulationService::run(mergedMeta, selectedImages, options);
+            return xjw::core::project::TriangulationService::run(mergedMeta, selectedImages, options);
         },
         [selectedImages, options, replaceIndex](ProjectSparseReconstructionManager *self,
-                                                const xjw::gui::project::TriangulationServiceResult &result)
+                                                const xjw::core::project::TriangulationServiceResult &result)
         {
             if (!result.success)
             {
@@ -162,9 +162,9 @@ void ProjectSparseReconstructionManager::startSparseCloudRefineAsync(const QJson
 }
 
 void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
-    const xjw::gui::project::TriangulationServiceResult &result,
+    const xjw::core::project::TriangulationServiceResult &result,
     const QStringList &selectedImages,
-    const xjw::gui::project::TriangulationServiceOptions &options,
+    const xjw::core::project::TriangulationServiceOptions &options,
     int replaceIndex)
 {
     QJsonObject extraRecord;

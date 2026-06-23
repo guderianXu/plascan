@@ -14,7 +14,7 @@
 #include "ProjectReferenceTerrainBa.h"
 #include "ProjectSupportUtils.h"
 #include "ProjectSurveyControl.h"
-#include "ProjectTriangulationService.h"
+#include "TriangulationService.h"
 #include "ProjectWorkflowReports.h"
 #include "ProjectWorkflowUtils.h"
 #include "project/SparseResultQuality.h"
@@ -4251,6 +4251,46 @@ TEST(FeatureNamingCleanupTest, GuiTestsDoNotCompileObsoleteCompatibilityTranslat
         << "Remove empty compatibility translation units once they are not part of any target.";
 }
 
+TEST(FeatureNamingCleanupTest, GuiSfmCallersUseCoreServicesDirectly)
+{
+    const QString testsSource = readProjectSourceFile(QStringLiteral("tests/test_gui_project_utils.cpp"));
+    const QString guiSources = readProjectSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    const QString bundleAdjustHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/project/support/ProjectBundleAdjustExecution.h"));
+    const QString projectManagerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString sparseManagerHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.h"));
+    const QString sparseManagerSource =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.cpp"));
+    ASSERT_FALSE(testsSource.isEmpty());
+    ASSERT_FALSE(guiSources.isEmpty());
+    ASSERT_FALSE(bundleAdjustHeader.isEmpty());
+    ASSERT_FALSE(projectManagerSource.isEmpty());
+    ASSERT_FALSE(sparseManagerHeader.isEmpty());
+    ASSERT_FALSE(sparseManagerSource.isEmpty());
+
+    const int includeBlockEnd = testsSource.indexOf(QStringLiteral("namespace"));
+    const QString testsIncludeBlock = includeBlockEnd > 0 ? testsSource.left(includeBlockEnd) : testsSource;
+
+    for (const QString &source : {testsIncludeBlock,
+                                  guiSources,
+                                  bundleAdjustHeader,
+                                  projectManagerSource,
+                                  sparseManagerHeader,
+                                  sparseManagerSource})
+    {
+        EXPECT_FALSE(source.contains(QStringLiteral("ProjectBaInputBuilder")))
+            << "GUI code should use core::project BaInputBuilder directly instead of a GUI compatibility wrapper.";
+        EXPECT_FALSE(source.contains(QStringLiteral("ProjectTriangulationService")))
+            << "GUI code should use core::project TriangulationService directly instead of a GUI compatibility wrapper.";
+    }
+
+    EXPECT_TRUE(bundleAdjustHeader.contains(QStringLiteral("#include \"BaInputBuilder.h\"")));
+    EXPECT_TRUE(sparseManagerHeader.contains(QStringLiteral("#include \"TriangulationService.h\"")));
+    EXPECT_TRUE(sparseManagerSource.contains(QStringLiteral("xjw::core::project::TriangulationService::run")));
+}
+
 TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadNonCurrentImages)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
@@ -4423,7 +4463,7 @@ TEST(CanvasWidgetResponsivenessTest, FeatureLoadEstimatesOrientationOnlyWhenDisp
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("if (shouldEstimateOrientation)")));
 }
 
-TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
+TEST(TriangulationServiceTest, ExportsInitialSparseCloud)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -4489,7 +4529,7 @@ TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
     meta[QStringLiteral("images")] = images;
     meta[QStringLiteral("ipmatch_results")] = ipmatchResults;
 
-    xjw::gui::project::TriangulationServiceOptions options;
+    xjw::core::project::TriangulationServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out"));
     options.minTriAngleDeg = 1.0;
     options.maxReprojErrorPx = 2.0;
@@ -4497,7 +4537,7 @@ TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
     options.ignoreTwoViewTracks = false;
     options.minTrackLength = 2;
 
-    const auto result = xjw::gui::project::ProjectTriangulationService::run(
+    const auto result = xjw::core::project::TriangulationService::run(
         meta, QStringList{image0Path, image1Path}, options);
 
     EXPECT_TRUE(result.success) << result.errorMessage.toStdString();
@@ -4514,7 +4554,7 @@ TEST(ProjectTriangulationServiceTest, ExportsInitialSparseCloud)
     EXPECT_FALSE(xjw::gui::project::isProductionSparseResult(result.resultJson));
 }
 
-TEST(ProjectTriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
+TEST(TriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -4597,7 +4637,7 @@ TEST(ProjectTriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
                     {QStringLiteral("output"), match02Path}}
     };
 
-    xjw::gui::project::TriangulationServiceOptions options;
+    xjw::core::project::TriangulationServiceOptions options;
     options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("out"));
     options.minTriAngleDeg = 1.0;
     options.maxReprojErrorPx = 2.0;
@@ -4605,7 +4645,7 @@ TEST(ProjectTriangulationServiceTest, UsesSidecarV2IndicesForMultiViewTracks)
     options.ignoreTwoViewTracks = true;
     options.minTrackLength = 3;
 
-    const auto result = xjw::gui::project::ProjectTriangulationService::run(
+    const auto result = xjw::core::project::TriangulationService::run(
         meta, QStringList{image0Path, image1Path, image2Path}, options);
 
     ASSERT_TRUE(result.success) << result.errorMessage.toStdString();
@@ -4644,7 +4684,7 @@ TEST(ProjectTriangulationUiTest, SparseManagerLongTasksUseGuardedRunner)
 
     EXPECT_TRUE(triangulationBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
         << "Two-view preview triangulation should not launch open-coded background work.";
-    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("ProjectTriangulationService::run")))
+    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("xjw::core::project::TriangulationService::run")))
         << "The guarded worker should still run the triangulation service off the GUI thread.";
     EXPECT_FALSE(triangulationBody.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
         << "Open-coded QtConcurrent can race with manager destruction.";

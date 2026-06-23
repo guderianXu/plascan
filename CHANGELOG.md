@@ -54,6 +54,7 @@
 - `ProjectSupportUtils.h` 去除残留 tab 缩进，让 GUI 项目支持层头文件继续按 4 空格缩进规范收敛。
 - `SFMService.cpp` 和 `VocabularyOverlapDialog.cpp` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被这两个 Torch-heavy 编译单元刷屏。
 - 删除 GUI 工程服务层中已无生产目标引用的 `ProjectBaInputBuilder.cpp` / `ProjectTriangulationService.cpp` 空壳兼容编译单元；兼容接口继续保留在对应头文件中，测试目标直接链接 core 实现。
+- GUI 工程 BA 输入和三角化调用方直接依赖 `src/core/sfm/BaInputBuilder.h` / `TriangulationService.h`，删除 `ProjectBaInputBuilder.h` / `ProjectTriangulationService.h` 这层 header-only 兼容 wrapper，减少旧接口暴露面。
 
 ### 验证
 
@@ -70,6 +71,8 @@
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `SFMService.cpp`、`VocabularyOverlapDialog.cpp` 并链接 GUI；构建日志未发现 `warning C4267`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest.GuiTestsDoNotCompileObsoleteCompatibilityTranslationUnits" --output-on-failure` 先失败后通过，验证 GUI 工具测试不再编译空壳兼容 `.cpp`。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，确认删除空壳兼容 `.cpp` 后 GUI 目标仍可构建。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureNamingCleanupTest\\.(GuiSfmCallersUseCoreServicesDirectly|GuiTestsDoNotCompileObsoleteCompatibilityTranslationUnits)|TriangulationServiceTest|ProjectTriangulationUiTest" --output-on-failure` 先失败后通过，验证 GUI/测试调用方已直连 core SFM 服务且三角化流程保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，确认删除 header-only 兼容 wrapper 后 GUI 目标仍可构建。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetimeTest.CameraSceneAsyncLoadCallbacksUseQPointerGuards" --output-on-failure` 先失败后通过，验证 PLY 加载 worker 不再直接从后台线程 emit GUI 进度信号。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CameraModel3DDialog.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|CameraModel3DDialog|ProjectModel|MeshReconstructor|TextureMapper" --output-on-failure` 通过，29/29。

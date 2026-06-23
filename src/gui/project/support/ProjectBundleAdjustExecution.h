@@ -1,13 +1,17 @@
 #pragma once
 
+#include "BaInputBuilder.h"
 #include "BundleAdjustService.h"
-#include "ProjectBaInputBuilder.h"
 
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
 
 namespace xjw::gui::project {
+
+using xjw::core::project::BaInputBuildResult;
+using xjw::core::project::BaInputBuildStatus;
+using xjw::core::project::buildBaInputFromMeta;
 
 struct BundleAdjustExecutionResult
 {

@@ -137,10 +137,8 @@ set(GUI_HEADERS
   project/data/ProjectFilesManager.h
   project/io/ProjectIO.h
   project/services/BundleAdjustService.h
-  project/services/ProjectBaInputBuilder.h
   project/services/ProjectCameraImportService.h
   project/services/ProjectResourceCleanupService.h
-  project/services/ProjectTriangulationService.h
   project/support/ProjectSupportUtils.h
   project/support/ProjectBundleAdjustExecution.h
   project/support/ProjectBundleAdjustWorkflow.h
