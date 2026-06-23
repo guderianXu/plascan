@@ -1683,6 +1683,27 @@ TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
     EXPECT_FALSE(projectDialogSource.contains(QStringLiteral("m_plascanPath")));
 }
 
+TEST(CodeStyleTest, ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/ThreeDReconstructionDialog.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/ThreeDReconstructionDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("Mode _mode = Mode::ThreeDReconstruction;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_titleLabel = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_startBtn = nullptr;")));
+
+    EXPECT_FALSE(header.contains(QStringLiteral("m_mode")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_titleLabel")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_startBtn")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_mode = mode")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_titleLabel->")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_startBtn->")));
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));

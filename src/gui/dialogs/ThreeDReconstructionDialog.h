@@ -40,16 +40,16 @@ private:
     void browseOutputDir();
     void start();
 
-    Mode m_mode = Mode::ThreeDReconstruction;
-    QLabel *m_titleLabel = nullptr;
-    QLabel *m_statusLabel = nullptr;
-    QComboBox *m_qualityCombo = nullptr;
-    QComboBox *m_deviceCombo = nullptr;
-    QSpinBox *m_featureGrayMinSpin = nullptr;
-    QSpinBox *m_threadsSpin = nullptr;
-    QLineEdit *m_outputDirEdit = nullptr;
-    QCheckBox *m_exportObjCheck = nullptr;
-    QPushButton *m_browseBtn = nullptr;
-    QPushButton *m_startBtn = nullptr;
-    QPushButton *m_cancelBtn = nullptr;
+    Mode _mode = Mode::ThreeDReconstruction;
+    QLabel *_titleLabel = nullptr;
+    QLabel *_statusLabel = nullptr;
+    QComboBox *_qualityCombo = nullptr;
+    QComboBox *_deviceCombo = nullptr;
+    QSpinBox *_featureGrayMinSpin = nullptr;
+    QSpinBox *_threadsSpin = nullptr;
+    QLineEdit *_outputDirEdit = nullptr;
+    QCheckBox *_exportObjCheck = nullptr;
+    QPushButton *_browseBtn = nullptr;
+    QPushButton *_startBtn = nullptr;
+    QPushButton *_cancelBtn = nullptr;
 };
