@@ -37,56 +37,56 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
         Ui::BundleAdjustDialog ui;
         ui.setupUi(this);
 
-        m_imageList = ui.m_imageList;
-        m_outputDirEdit = ui.m_outputDirEdit;
-        m_resultSummaryLabel = ui.m_resultSummaryLabel;
-        m_resultCameraTable = ui.m_resultCameraTable;
-        m_applyResultBtn = ui.m_applyResultBtn;
-        m_discardResultBtn = ui.m_discardResultBtn;
-        m_threadsSpin = ui.m_threadsSpin;
-        m_chunkSizeSpin = ui.m_chunkSizeSpin;
-        m_maxIterationsSpin = ui.m_maxIterationsSpin;
-        m_maxPointItersSpin = ui.m_maxPointItersSpin;
-        m_maxCameraItersSpin = ui.m_maxCameraItersSpin;
-        m_minMatchesSpin = ui.m_minMatchesSpin;
-        m_huberDeltaSpin = ui.m_huberDeltaSpin;
-        m_dampingSpin = ui.m_dampingSpin;
-        m_finiteDiffSpin = ui.m_finiteDiffSpin;
-        m_stepTolSpin = ui.m_stepTolSpin;
-        m_refinePoseCheck = ui.m_refinePoseCheck;
-        m_dryRunCheck = ui.m_dryRunCheck;
-        m_enableLaserConstraintsCheck = ui.m_enableLaserConstraintsCheck;
-        m_laserConstraintCloudEdit = ui.m_laserConstraintCloudEdit;
-        m_chooseLaserConstraintCloudBtn = ui.chooseLaserConstraintCloudBtn;
-        m_laserAssociationMaxDistanceSpin = ui.m_laserAssociationMaxDistanceSpin;
-        m_laserVoxelSizeSpin = ui.m_laserVoxelSizeSpin;
-        m_laserMaxCurvatureSpin = ui.m_laserMaxCurvatureSpin;
-        m_laserMaxSamplesSpin = ui.m_laserMaxSamplesSpin;
-        m_laserMissingNormalsAsHeightPlanesCheck = ui.m_laserMissingNormalsAsHeightPlanesCheck;
-        m_laserWeightSpin = ui.m_laserWeightSpin;
-        m_laserHuberDeltaSpin = ui.m_laserHuberDeltaSpin;
-        m_exportTsaiCheck = ui.m_exportTsaiCheck;
-        m_exportSummaryTxtCheck = ui.m_exportSummaryTxtCheck;
-        m_exportPointsCsvCheck = ui.m_exportPointsCsvCheck;
-        m_exportCameraCsvCheck = ui.m_exportCameraCsvCheck;
-        m_exportRunJsonCheck = ui.m_exportRunJsonCheck;
-        m_exportEvalPlotCheck = ui.m_exportEvalPlotCheck;
+        _imageList = ui.m_imageList;
+        _outputDirEdit = ui.m_outputDirEdit;
+        _resultSummaryLabel = ui.m_resultSummaryLabel;
+        _resultCameraTable = ui.m_resultCameraTable;
+        _applyResultBtn = ui.m_applyResultBtn;
+        _discardResultBtn = ui.m_discardResultBtn;
+        _threadsSpin = ui.m_threadsSpin;
+        _chunkSizeSpin = ui.m_chunkSizeSpin;
+        _maxIterationsSpin = ui.m_maxIterationsSpin;
+        _maxPointItersSpin = ui.m_maxPointItersSpin;
+        _maxCameraItersSpin = ui.m_maxCameraItersSpin;
+        _minMatchesSpin = ui.m_minMatchesSpin;
+        _huberDeltaSpin = ui.m_huberDeltaSpin;
+        _dampingSpin = ui.m_dampingSpin;
+        _finiteDiffSpin = ui.m_finiteDiffSpin;
+        _stepTolSpin = ui.m_stepTolSpin;
+        _refinePoseCheck = ui.m_refinePoseCheck;
+        _dryRunCheck = ui.m_dryRunCheck;
+        _enableLaserConstraintsCheck = ui.m_enableLaserConstraintsCheck;
+        _laserConstraintCloudEdit = ui.m_laserConstraintCloudEdit;
+        _chooseLaserConstraintCloudBtn = ui.chooseLaserConstraintCloudBtn;
+        _laserAssociationMaxDistanceSpin = ui.m_laserAssociationMaxDistanceSpin;
+        _laserVoxelSizeSpin = ui.m_laserVoxelSizeSpin;
+        _laserMaxCurvatureSpin = ui.m_laserMaxCurvatureSpin;
+        _laserMaxSamplesSpin = ui.m_laserMaxSamplesSpin;
+        _laserMissingNormalsAsHeightPlanesCheck = ui.m_laserMissingNormalsAsHeightPlanesCheck;
+        _laserWeightSpin = ui.m_laserWeightSpin;
+        _laserHuberDeltaSpin = ui.m_laserHuberDeltaSpin;
+        _exportTsaiCheck = ui.m_exportTsaiCheck;
+        _exportSummaryTxtCheck = ui.m_exportSummaryTxtCheck;
+        _exportPointsCsvCheck = ui.m_exportPointsCsvCheck;
+        _exportCameraCsvCheck = ui.m_exportCameraCsvCheck;
+        _exportRunJsonCheck = ui.m_exportRunJsonCheck;
+        _exportEvalPlotCheck = ui.m_exportEvalPlotCheck;
 
-        m_resultCameraTable->setColumnCount(10);
-        m_resultCameraTable->setHorizontalHeaderLabels({
+        _resultCameraTable->setColumnCount(10);
+        _resultCameraTable->setHorizontalHeaderLabels({
             QStringLiteral("影像"), QStringLiteral("ΔC(m)"),
             QStringLiteral("yaw前"), QStringLiteral("yaw后"),
             QStringLiteral("pitch前"), QStringLiteral("pitch后"),
             QStringLiteral("roll前"), QStringLiteral("roll后"),
             QStringLiteral("RMS前"), QStringLiteral("RMS后")
         });
-        m_resultCameraTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
-        m_resultCameraTable->setSelectionBehavior(QAbstractItemView::SelectRows);
-        m_resultCameraTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
-        m_resultCameraTable->horizontalHeader()->setStretchLastSection(true);
+        _resultCameraTable->setEditTriggers(QAbstractItemView::NoEditTriggers);
+        _resultCameraTable->setSelectionBehavior(QAbstractItemView::SelectRows);
+        _resultCameraTable->horizontalHeader()->setSectionResizeMode(QHeaderView::ResizeToContents);
+        _resultCameraTable->horizontalHeader()->setStretchLastSection(true);
 
         connect(ui.chooseOutputBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onChooseOutputDir);
-        connect(m_chooseLaserConstraintCloudBtn,
+        connect(_chooseLaserConstraintCloudBtn,
                 &QToolButton::clicked,
                 this,
                 &BundleAdjustDialog::onChooseLaserConstraintCloud);
@@ -94,60 +94,60 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
         connect(ui.closeBtn, &QPushButton::clicked, this, &BundleAdjustDialog::reject);
         connect(ui.restoreBtn, &QPushButton::clicked, this, &BundleAdjustDialog::requestRestore);
 
-        connect(m_applyResultBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onApplyResult);
-        connect(m_discardResultBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onDiscardResult);
-        connect(m_imageList, &QListWidget::itemChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_applyResultBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onApplyResult);
+        connect(_discardResultBtn, &QToolButton::clicked, this, &BundleAdjustDialog::onDiscardResult);
+        connect(_imageList, &QListWidget::itemChanged, this, &BundleAdjustDialog::emitSettingsNow);
 
-        connect(m_outputDirEdit, &QLineEdit::textChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_chunkSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_maxIterationsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_maxPointItersSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_maxCameraItersSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_minMatchesSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_huberDeltaSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_dampingSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_finiteDiffSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_stepTolSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_refinePoseCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_dryRunCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_enableLaserConstraintsCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_enableLaserConstraintsCheck, &QCheckBox::toggled, this, &BundleAdjustDialog::updateLaserControls);
-        connect(m_laserConstraintCloudEdit, &QLineEdit::textChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_laserAssociationMaxDistanceSpin,
+        connect(_outputDirEdit, &QLineEdit::textChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_chunkSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_maxIterationsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_maxPointItersSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_maxCameraItersSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_minMatchesSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_huberDeltaSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_dampingSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_finiteDiffSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_stepTolSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_refinePoseCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_dryRunCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_enableLaserConstraintsCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_enableLaserConstraintsCheck, &QCheckBox::toggled, this, &BundleAdjustDialog::updateLaserControls);
+        connect(_laserConstraintCloudEdit, &QLineEdit::textChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_laserAssociationMaxDistanceSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
-        connect(m_laserVoxelSizeSpin,
+        connect(_laserVoxelSizeSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
-        connect(m_laserMaxCurvatureSpin,
+        connect(_laserMaxCurvatureSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
-        connect(m_laserMaxSamplesSpin,
+        connect(_laserMaxSamplesSpin,
                 QOverload<int>::of(&QSpinBox::valueChanged),
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
-        connect(m_laserMissingNormalsAsHeightPlanesCheck,
+        connect(_laserMissingNormalsAsHeightPlanesCheck,
                 &QCheckBox::stateChanged,
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
-        connect(m_laserWeightSpin,
+        connect(_laserWeightSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
-        connect(m_laserHuberDeltaSpin,
+        connect(_laserHuberDeltaSpin,
                 QOverload<double>::of(&QDoubleSpinBox::valueChanged),
                 this,
                 &BundleAdjustDialog::emitSettingsNow);
-        connect(m_exportTsaiCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_exportSummaryTxtCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_exportPointsCsvCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_exportCameraCsvCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_exportRunJsonCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
-        connect(m_exportEvalPlotCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_exportTsaiCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_exportSummaryTxtCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_exportPointsCsvCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_exportCameraCsvCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_exportRunJsonCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
+        connect(_exportEvalPlotCheck, &QCheckBox::stateChanged, this, &BundleAdjustDialog::emitSettingsNow);
 
         updateLaserControls();
         updateResultButtons();
@@ -156,10 +156,10 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
 
 void BundleAdjustDialog::setAvailableImages(const QStringList &images)
 {
-    m_imageList->clear();
-    const QSet<QString> savedSet(m_savedSelectedImages.begin(), m_savedSelectedImages.end());
+    _imageList->clear();
+    const QSet<QString> savedSet(_savedSelectedImages.begin(), _savedSelectedImages.end());
     for (const QString &p : images) {
-        auto *it = new QListWidgetItem(p, m_imageList);
+        auto *it = new QListWidgetItem(p, _imageList);
         it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
         it->setCheckState(savedSet.isEmpty() || savedSet.contains(p) ? Qt::Checked : Qt::Unchecked);
     }
@@ -167,63 +167,63 @@ void BundleAdjustDialog::setAvailableImages(const QStringList &images)
 
 void BundleAdjustDialog::setDefaultOutputDir(const QString &dirPath)
 {
-    if (m_outputDirEdit && m_outputDirEdit->text().trimmed().isEmpty()) {
-        m_outputDirEdit->setText(dirPath);
+    if (_outputDirEdit && _outputDirEdit->text().trimmed().isEmpty()) {
+        _outputDirEdit->setText(dirPath);
     }
 }
 
 void BundleAdjustDialog::applySettings(const QJsonObject &settings)
 {
-    m_savedSelectedImages.clear();
+    _savedSelectedImages.clear();
     const QJsonArray selectedImages = settings.value(QStringLiteral("selected_images")).toArray();
     for (const QJsonValue &value : selectedImages)
     {
         const QString imagePath = value.toString();
         if (!imagePath.isEmpty())
         {
-            m_savedSelectedImages.append(imagePath);
+            _savedSelectedImages.append(imagePath);
         }
     }
 
-    if (settings.contains(QStringLiteral("output_dir"))) m_outputDirEdit->setText(settings.value(QStringLiteral("output_dir")).toString());
-    if (m_outputDirEdit->text().trimmed().isEmpty() && settings.contains(QStringLiteral("out_prefix"))) {
+    if (settings.contains(QStringLiteral("output_dir"))) _outputDirEdit->setText(settings.value(QStringLiteral("output_dir")).toString());
+    if (_outputDirEdit->text().trimmed().isEmpty() && settings.contains(QStringLiteral("out_prefix"))) {
         // 兼容旧版本字段：历史上使用 out_prefix。
-        m_outputDirEdit->setText(settings.value(QStringLiteral("out_prefix")).toString());
+        _outputDirEdit->setText(settings.value(QStringLiteral("out_prefix")).toString());
     }
-    if (settings.contains(QStringLiteral("threads"))) m_threadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt());
-    if (settings.contains(QStringLiteral("chunk_size"))) m_chunkSizeSpin->setValue(settings.value(QStringLiteral("chunk_size")).toInt());
-    if (settings.contains(QStringLiteral("max_iterations"))) m_maxIterationsSpin->setValue(settings.value(QStringLiteral("max_iterations")).toInt());
-    if (settings.contains(QStringLiteral("max_point_iterations"))) m_maxPointItersSpin->setValue(settings.value(QStringLiteral("max_point_iterations")).toInt());
-    if (settings.contains(QStringLiteral("max_camera_iterations"))) m_maxCameraItersSpin->setValue(settings.value(QStringLiteral("max_camera_iterations")).toInt());
-    if (settings.contains(QStringLiteral("min_matches"))) m_minMatchesSpin->setValue(settings.value(QStringLiteral("min_matches")).toInt());
-    if (settings.contains(QStringLiteral("huber_delta"))) m_huberDeltaSpin->setValue(settings.value(QStringLiteral("huber_delta")).toDouble());
-    if (settings.contains(QStringLiteral("damping"))) m_dampingSpin->setValue(settings.value(QStringLiteral("damping")).toDouble());
-    if (settings.contains(QStringLiteral("finite_diff_eps"))) m_finiteDiffSpin->setValue(settings.value(QStringLiteral("finite_diff_eps")).toDouble());
-    if (settings.contains(QStringLiteral("step_tolerance"))) m_stepTolSpin->setValue(settings.value(QStringLiteral("step_tolerance")).toDouble());
-    if (settings.contains(QStringLiteral("refine_camera_pose"))) m_refinePoseCheck->setChecked(settings.value(QStringLiteral("refine_camera_pose")).toBool());
-    if (settings.contains(QStringLiteral("dry_run"))) m_dryRunCheck->setChecked(settings.value(QStringLiteral("dry_run")).toBool());
-    if (settings.contains(QStringLiteral("enable_laser_constraints"))) m_enableLaserConstraintsCheck->setChecked(settings.value(QStringLiteral("enable_laser_constraints")).toBool());
-    if (settings.contains(QStringLiteral("laser_constraint_cloud_path"))) m_laserConstraintCloudEdit->setText(settings.value(QStringLiteral("laser_constraint_cloud_path")).toString());
-    if (settings.contains(QStringLiteral("laser_association_max_distance_m"))) m_laserAssociationMaxDistanceSpin->setValue(settings.value(QStringLiteral("laser_association_max_distance_m")).toDouble());
-    if (settings.contains(QStringLiteral("laser_voxel_size_m"))) m_laserVoxelSizeSpin->setValue(settings.value(QStringLiteral("laser_voxel_size_m")).toDouble());
-    if (settings.contains(QStringLiteral("laser_max_curvature"))) m_laserMaxCurvatureSpin->setValue(settings.value(QStringLiteral("laser_max_curvature")).toDouble());
-    if (settings.contains(QStringLiteral("laser_max_samples"))) m_laserMaxSamplesSpin->setValue(settings.value(QStringLiteral("laser_max_samples")).toInt());
-    if (settings.contains(QStringLiteral("laser_missing_normals_as_height_planes"))) m_laserMissingNormalsAsHeightPlanesCheck->setChecked(settings.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool());
-    if (settings.contains(QStringLiteral("laser_weight"))) m_laserWeightSpin->setValue(settings.value(QStringLiteral("laser_weight")).toDouble());
-    if (settings.contains(QStringLiteral("laser_huber_delta_m"))) m_laserHuberDeltaSpin->setValue(settings.value(QStringLiteral("laser_huber_delta_m")).toDouble());
-    if (settings.contains(QStringLiteral("export_tsai"))) m_exportTsaiCheck->setChecked(settings.value(QStringLiteral("export_tsai")).toBool());
-    if (settings.contains(QStringLiteral("export_summary_txt"))) m_exportSummaryTxtCheck->setChecked(settings.value(QStringLiteral("export_summary_txt")).toBool());
-    if (settings.contains(QStringLiteral("export_points_csv"))) m_exportPointsCsvCheck->setChecked(settings.value(QStringLiteral("export_points_csv")).toBool());
-    if (settings.contains(QStringLiteral("export_camera_csv"))) m_exportCameraCsvCheck->setChecked(settings.value(QStringLiteral("export_camera_csv")).toBool());
-    if (settings.contains(QStringLiteral("export_run_json"))) m_exportRunJsonCheck->setChecked(settings.value(QStringLiteral("export_run_json")).toBool());
-    if (settings.contains(QStringLiteral("export_eval_plot"))) m_exportEvalPlotCheck->setChecked(settings.value(QStringLiteral("export_eval_plot")).toBool());
+    if (settings.contains(QStringLiteral("threads"))) _threadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt());
+    if (settings.contains(QStringLiteral("chunk_size"))) _chunkSizeSpin->setValue(settings.value(QStringLiteral("chunk_size")).toInt());
+    if (settings.contains(QStringLiteral("max_iterations"))) _maxIterationsSpin->setValue(settings.value(QStringLiteral("max_iterations")).toInt());
+    if (settings.contains(QStringLiteral("max_point_iterations"))) _maxPointItersSpin->setValue(settings.value(QStringLiteral("max_point_iterations")).toInt());
+    if (settings.contains(QStringLiteral("max_camera_iterations"))) _maxCameraItersSpin->setValue(settings.value(QStringLiteral("max_camera_iterations")).toInt());
+    if (settings.contains(QStringLiteral("min_matches"))) _minMatchesSpin->setValue(settings.value(QStringLiteral("min_matches")).toInt());
+    if (settings.contains(QStringLiteral("huber_delta"))) _huberDeltaSpin->setValue(settings.value(QStringLiteral("huber_delta")).toDouble());
+    if (settings.contains(QStringLiteral("damping"))) _dampingSpin->setValue(settings.value(QStringLiteral("damping")).toDouble());
+    if (settings.contains(QStringLiteral("finite_diff_eps"))) _finiteDiffSpin->setValue(settings.value(QStringLiteral("finite_diff_eps")).toDouble());
+    if (settings.contains(QStringLiteral("step_tolerance"))) _stepTolSpin->setValue(settings.value(QStringLiteral("step_tolerance")).toDouble());
+    if (settings.contains(QStringLiteral("refine_camera_pose"))) _refinePoseCheck->setChecked(settings.value(QStringLiteral("refine_camera_pose")).toBool());
+    if (settings.contains(QStringLiteral("dry_run"))) _dryRunCheck->setChecked(settings.value(QStringLiteral("dry_run")).toBool());
+    if (settings.contains(QStringLiteral("enable_laser_constraints"))) _enableLaserConstraintsCheck->setChecked(settings.value(QStringLiteral("enable_laser_constraints")).toBool());
+    if (settings.contains(QStringLiteral("laser_constraint_cloud_path"))) _laserConstraintCloudEdit->setText(settings.value(QStringLiteral("laser_constraint_cloud_path")).toString());
+    if (settings.contains(QStringLiteral("laser_association_max_distance_m"))) _laserAssociationMaxDistanceSpin->setValue(settings.value(QStringLiteral("laser_association_max_distance_m")).toDouble());
+    if (settings.contains(QStringLiteral("laser_voxel_size_m"))) _laserVoxelSizeSpin->setValue(settings.value(QStringLiteral("laser_voxel_size_m")).toDouble());
+    if (settings.contains(QStringLiteral("laser_max_curvature"))) _laserMaxCurvatureSpin->setValue(settings.value(QStringLiteral("laser_max_curvature")).toDouble());
+    if (settings.contains(QStringLiteral("laser_max_samples"))) _laserMaxSamplesSpin->setValue(settings.value(QStringLiteral("laser_max_samples")).toInt());
+    if (settings.contains(QStringLiteral("laser_missing_normals_as_height_planes"))) _laserMissingNormalsAsHeightPlanesCheck->setChecked(settings.value(QStringLiteral("laser_missing_normals_as_height_planes")).toBool());
+    if (settings.contains(QStringLiteral("laser_weight"))) _laserWeightSpin->setValue(settings.value(QStringLiteral("laser_weight")).toDouble());
+    if (settings.contains(QStringLiteral("laser_huber_delta_m"))) _laserHuberDeltaSpin->setValue(settings.value(QStringLiteral("laser_huber_delta_m")).toDouble());
+    if (settings.contains(QStringLiteral("export_tsai"))) _exportTsaiCheck->setChecked(settings.value(QStringLiteral("export_tsai")).toBool());
+    if (settings.contains(QStringLiteral("export_summary_txt"))) _exportSummaryTxtCheck->setChecked(settings.value(QStringLiteral("export_summary_txt")).toBool());
+    if (settings.contains(QStringLiteral("export_points_csv"))) _exportPointsCsvCheck->setChecked(settings.value(QStringLiteral("export_points_csv")).toBool());
+    if (settings.contains(QStringLiteral("export_camera_csv"))) _exportCameraCsvCheck->setChecked(settings.value(QStringLiteral("export_camera_csv")).toBool());
+    if (settings.contains(QStringLiteral("export_run_json"))) _exportRunJsonCheck->setChecked(settings.value(QStringLiteral("export_run_json")).toBool());
+    if (settings.contains(QStringLiteral("export_eval_plot"))) _exportEvalPlotCheck->setChecked(settings.value(QStringLiteral("export_eval_plot")).toBool());
 
-    if (!m_savedSelectedImages.isEmpty() && m_imageList->count() > 0)
+    if (!_savedSelectedImages.isEmpty() && _imageList->count() > 0)
     {
-        const QSet<QString> savedSet(m_savedSelectedImages.begin(), m_savedSelectedImages.end());
-        for (int i = 0; i < m_imageList->count(); ++i)
+        const QSet<QString> savedSet(_savedSelectedImages.begin(), _savedSelectedImages.end());
+        for (int i = 0; i < _imageList->count(); ++i)
         {
-            QListWidgetItem *item = m_imageList->item(i);
+            QListWidgetItem *item = _imageList->item(i);
             if (item)
             {
                 item->setCheckState(savedSet.contains(item->text()) ? Qt::Checked : Qt::Unchecked);
@@ -238,8 +238,8 @@ void BundleAdjustDialog::onChooseOutputDir()
 {
     const QString outDir = QFileDialog::getExistingDirectory(this,
                                                              QStringLiteral("选择光束法平差输出目录"),
-                                                             m_outputDirEdit->text().trimmed());
-    if (!outDir.isEmpty()) m_outputDirEdit->setText(outDir);
+                                                             _outputDirEdit->text().trimmed());
+    if (!outDir.isEmpty()) _outputDirEdit->setText(outDir);
 }
 
 void BundleAdjustDialog::onChooseLaserConstraintCloud()
@@ -247,20 +247,20 @@ void BundleAdjustDialog::onChooseLaserConstraintCloud()
     const QString cloudPath = QFileDialog::getOpenFileName(
         this,
         QStringLiteral("选择 LiDAR 约束点云"),
-        m_laserConstraintCloudEdit->text().trimmed(),
+        _laserConstraintCloudEdit->text().trimmed(),
         QStringLiteral("PLY 点云 (*.ply);;所有文件 (*)"));
     if (!cloudPath.isEmpty())
     {
-        m_laserConstraintCloudEdit->setText(cloudPath);
+        _laserConstraintCloudEdit->setText(cloudPath);
     }
 }
 
 QStringList BundleAdjustDialog::selectedImages() const
 {
     QStringList out;
-    if (!m_imageList) return out;
-    for (int i = 0; i < m_imageList->count(); ++i) {
-        QListWidgetItem *it = m_imageList->item(i);
+    if (!_imageList) return out;
+    for (int i = 0; i < _imageList->count(); ++i) {
+        QListWidgetItem *it = _imageList->item(i);
         if (it && it->checkState() == Qt::Checked) out.append(it->text());
     }
     return out;
@@ -274,14 +274,14 @@ void BundleAdjustDialog::onRun()
         return;
     }
 
-    const QString outputDir = m_outputDirEdit->text().trimmed();
+    const QString outputDir = _outputDirEdit->text().trimmed();
     if (outputDir.isEmpty()) {
         QMessageBox::warning(this, QStringLiteral("参数错误"), QStringLiteral("请指定输出目录。"));
         return;
     }
 
-    const bool enableLaserConstraints = m_enableLaserConstraintsCheck->isChecked();
-    const QString laserCloudPath = m_laserConstraintCloudEdit->text().trimmed();
+    const bool enableLaserConstraints = _enableLaserConstraintsCheck->isChecked();
+    const QString laserCloudPath = _laserConstraintCloudEdit->text().trimmed();
     if (enableLaserConstraints && laserCloudPath.isEmpty())
     {
         QMessageBox::warning(this, QStringLiteral("参数错误"), QStringLiteral("请指定 LiDAR 约束点云 PLY 文件。"));
@@ -289,50 +289,50 @@ void BundleAdjustDialog::onRun()
     }
 
     // 清空上一轮结果状态，避免误操作保留旧结果。
-    m_hasPendingResult = false;
+    _hasPendingResult = false;
     updateResultButtons();
 
     QJsonObject options;
-    options[QStringLiteral("max_iterations")] = m_maxIterationsSpin->value();
-    options[QStringLiteral("max_point_iterations")] = m_maxPointItersSpin->value();
-    options[QStringLiteral("max_camera_iterations")] = m_maxCameraItersSpin->value();
-    options[QStringLiteral("chunk_size")] = m_chunkSizeSpin->value();
-    options[QStringLiteral("min_matches")] = m_minMatchesSpin->value();
-    options[QStringLiteral("huber_delta")] = m_huberDeltaSpin->value();
-    options[QStringLiteral("damping")] = m_dampingSpin->value();
-    options[QStringLiteral("finite_diff_eps")] = m_finiteDiffSpin->value();
-    options[QStringLiteral("step_tolerance")] = m_stepTolSpin->value();
-    options[QStringLiteral("refine_camera_pose")] = m_refinePoseCheck->isChecked();
+    options[QStringLiteral("max_iterations")] = _maxIterationsSpin->value();
+    options[QStringLiteral("max_point_iterations")] = _maxPointItersSpin->value();
+    options[QStringLiteral("max_camera_iterations")] = _maxCameraItersSpin->value();
+    options[QStringLiteral("chunk_size")] = _chunkSizeSpin->value();
+    options[QStringLiteral("min_matches")] = _minMatchesSpin->value();
+    options[QStringLiteral("huber_delta")] = _huberDeltaSpin->value();
+    options[QStringLiteral("damping")] = _dampingSpin->value();
+    options[QStringLiteral("finite_diff_eps")] = _finiteDiffSpin->value();
+    options[QStringLiteral("step_tolerance")] = _stepTolSpin->value();
+    options[QStringLiteral("refine_camera_pose")] = _refinePoseCheck->isChecked();
     options[QStringLiteral("enable_laser_constraints")] = enableLaserConstraints;
     options[QStringLiteral("laser_constraint_cloud_path")] = laserCloudPath;
-    options[QStringLiteral("laser_association_max_distance_m")] = m_laserAssociationMaxDistanceSpin->value();
-    options[QStringLiteral("laser_voxel_size_m")] = m_laserVoxelSizeSpin->value();
-    options[QStringLiteral("laser_max_curvature")] = m_laserMaxCurvatureSpin->value();
-    options[QStringLiteral("laser_max_samples")] = m_laserMaxSamplesSpin->value();
+    options[QStringLiteral("laser_association_max_distance_m")] = _laserAssociationMaxDistanceSpin->value();
+    options[QStringLiteral("laser_voxel_size_m")] = _laserVoxelSizeSpin->value();
+    options[QStringLiteral("laser_max_curvature")] = _laserMaxCurvatureSpin->value();
+    options[QStringLiteral("laser_max_samples")] = _laserMaxSamplesSpin->value();
     options[QStringLiteral("laser_missing_normals_as_height_planes")] =
-        m_laserMissingNormalsAsHeightPlanesCheck->isChecked();
-    options[QStringLiteral("laser_weight")] = m_laserWeightSpin->value();
-    options[QStringLiteral("laser_huber_delta_m")] = m_laserHuberDeltaSpin->value();
-    options[QStringLiteral("export_tsai")] = m_exportTsaiCheck->isChecked();
-    options[QStringLiteral("export_summary_txt")] = m_exportSummaryTxtCheck->isChecked();
-    options[QStringLiteral("export_points_csv")] = m_exportPointsCsvCheck->isChecked();
-    options[QStringLiteral("export_camera_csv")] = m_exportCameraCsvCheck->isChecked();
-    options[QStringLiteral("export_run_json")] = m_exportRunJsonCheck->isChecked();
-    options[QStringLiteral("export_eval_plot")] = m_exportEvalPlotCheck->isChecked();
+        _laserMissingNormalsAsHeightPlanesCheck->isChecked();
+    options[QStringLiteral("laser_weight")] = _laserWeightSpin->value();
+    options[QStringLiteral("laser_huber_delta_m")] = _laserHuberDeltaSpin->value();
+    options[QStringLiteral("export_tsai")] = _exportTsaiCheck->isChecked();
+    options[QStringLiteral("export_summary_txt")] = _exportSummaryTxtCheck->isChecked();
+    options[QStringLiteral("export_points_csv")] = _exportPointsCsvCheck->isChecked();
+    options[QStringLiteral("export_camera_csv")] = _exportCameraCsvCheck->isChecked();
+    options[QStringLiteral("export_run_json")] = _exportRunJsonCheck->isChecked();
+    options[QStringLiteral("export_eval_plot")] = _exportEvalPlotCheck->isChecked();
 
     emit requestRunBundleAdjust(images,
                                 outputDir,
-                                m_threadsSpin->value(),
-                                m_dryRunCheck->isChecked(),
+                                _threadsSpin->value(),
+                                _dryRunCheck->isChecked(),
                                 options);
 }
 
 void BundleAdjustDialog::setRunResult(const QJsonObject &result)
 {
     if (result.isEmpty()) {
-        m_resultSummaryLabel->setText(QStringLiteral("尚未运行平差。"));
-        m_resultCameraTable->setRowCount(0);
-        m_hasPendingResult = false;
+        _resultSummaryLabel->setText(QStringLiteral("尚未运行平差。"));
+        _resultCameraTable->setRowCount(0);
+        _hasPendingResult = false;
         updateResultButtons();
         return;
     }
@@ -348,7 +348,7 @@ void BundleAdjustDialog::setRunResult(const QJsonObject &result)
     const QString cameraCsv = filesObj.value(QStringLiteral("camera_csv")).toString();
     const QString runJson = filesObj.value(QStringLiteral("run_json")).toString();
 
-    m_resultSummaryLabel->setText(
+    _resultSummaryLabel->setText(
         QStringLiteral("平差完成：轨迹 %1，成功优化 %2，平均 RMS: %3 -> %4\n输出：\n- %5\n- %6\n- %7\n- %8")
             .arg(trackCount)
             .arg(optimizedCount)
@@ -360,60 +360,60 @@ void BundleAdjustDialog::setRunResult(const QJsonObject &result)
             .arg(runJson));
 
     const QJsonArray cams = result.value(QStringLiteral("camera_preview")).toArray();
-    m_resultCameraTable->setRowCount(cams.size());
+    _resultCameraTable->setRowCount(cams.size());
     for (int i = 0; i < cams.size(); ++i) {
         const QJsonObject one = cams.at(i).toObject();
-        m_resultCameraTable->setItem(i, 0, new QTableWidgetItem(one.value(QStringLiteral("image_name")).toString()));
-        m_resultCameraTable->setItem(i, 1, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("delta_c_m"), 6)));
-        m_resultCameraTable->setItem(i, 2, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("yaw_before"), 6)));
-        m_resultCameraTable->setItem(i, 3, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("yaw_after"), 6)));
-        m_resultCameraTable->setItem(i, 4, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("pitch_before"), 6)));
-        m_resultCameraTable->setItem(i, 5, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("pitch_after"), 6)));
-        m_resultCameraTable->setItem(i, 6, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("roll_before"), 6)));
-        m_resultCameraTable->setItem(i, 7, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("roll_after"), 6)));
-        m_resultCameraTable->setItem(i, 8, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("mean_rms_before"), 6)));
-        m_resultCameraTable->setItem(i, 9, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("mean_rms_after"), 6)));
+        _resultCameraTable->setItem(i, 0, new QTableWidgetItem(one.value(QStringLiteral("image_name")).toString()));
+        _resultCameraTable->setItem(i, 1, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("delta_c_m"), 6)));
+        _resultCameraTable->setItem(i, 2, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("yaw_before"), 6)));
+        _resultCameraTable->setItem(i, 3, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("yaw_after"), 6)));
+        _resultCameraTable->setItem(i, 4, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("pitch_before"), 6)));
+        _resultCameraTable->setItem(i, 5, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("pitch_after"), 6)));
+        _resultCameraTable->setItem(i, 6, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("roll_before"), 6)));
+        _resultCameraTable->setItem(i, 7, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("roll_after"), 6)));
+        _resultCameraTable->setItem(i, 8, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("mean_rms_before"), 6)));
+        _resultCameraTable->setItem(i, 9, new QTableWidgetItem(valueOrEmpty(one, QStringLiteral("mean_rms_after"), 6)));
     }
 
-    m_hasPendingResult = true;
+    _hasPendingResult = true;
     updateResultButtons();
 }
 
 void BundleAdjustDialog::onApplyResult()
 {
-    if (!m_hasPendingResult) return;
+    if (!_hasPendingResult) return;
     emit requestApplyBundleAdjustResult();
-    m_hasPendingResult = false;
+    _hasPendingResult = false;
     updateResultButtons();
 }
 
 void BundleAdjustDialog::onDiscardResult()
 {
-    if (!m_hasPendingResult) return;
+    if (!_hasPendingResult) return;
     emit requestDiscardBundleAdjustResult();
-    m_hasPendingResult = false;
+    _hasPendingResult = false;
     updateResultButtons();
 }
 
 void BundleAdjustDialog::updateResultButtons()
 {
-    if (m_applyResultBtn) m_applyResultBtn->setEnabled(m_hasPendingResult);
-    if (m_discardResultBtn) m_discardResultBtn->setEnabled(m_hasPendingResult);
+    if (_applyResultBtn) _applyResultBtn->setEnabled(_hasPendingResult);
+    if (_discardResultBtn) _discardResultBtn->setEnabled(_hasPendingResult);
 }
 
 void BundleAdjustDialog::updateLaserControls()
 {
-    const bool enabled = m_enableLaserConstraintsCheck && m_enableLaserConstraintsCheck->isChecked();
+    const bool enabled = _enableLaserConstraintsCheck && _enableLaserConstraintsCheck->isChecked();
     const QList<QWidget *> widgets = {
-        m_laserConstraintCloudEdit,
-        m_chooseLaserConstraintCloudBtn,
-        m_laserAssociationMaxDistanceSpin,
-        m_laserVoxelSizeSpin,
-        m_laserMaxCurvatureSpin,
-        m_laserMaxSamplesSpin,
-        m_laserMissingNormalsAsHeightPlanesCheck,
-        m_laserWeightSpin,
-        m_laserHuberDeltaSpin
+        _laserConstraintCloudEdit,
+        _chooseLaserConstraintCloudBtn,
+        _laserAssociationMaxDistanceSpin,
+        _laserVoxelSizeSpin,
+        _laserMaxCurvatureSpin,
+        _laserMaxSamplesSpin,
+        _laserMissingNormalsAsHeightPlanesCheck,
+        _laserWeightSpin,
+        _laserHuberDeltaSpin
     };
     for (QWidget *widget : widgets)
     {
@@ -428,34 +428,34 @@ void BundleAdjustDialog::emitSettingsNow()
 {
     QJsonObject settings;
     settings[QStringLiteral("selected_images")] = QJsonArray::fromStringList(selectedImages());
-    settings[QStringLiteral("output_dir")] = m_outputDirEdit->text().trimmed();
-    settings[QStringLiteral("threads")] = m_threadsSpin->value();
-    settings[QStringLiteral("chunk_size")] = m_chunkSizeSpin->value();
-    settings[QStringLiteral("max_iterations")] = m_maxIterationsSpin->value();
-    settings[QStringLiteral("max_point_iterations")] = m_maxPointItersSpin->value();
-    settings[QStringLiteral("max_camera_iterations")] = m_maxCameraItersSpin->value();
-    settings[QStringLiteral("min_matches")] = m_minMatchesSpin->value();
-    settings[QStringLiteral("huber_delta")] = m_huberDeltaSpin->value();
-    settings[QStringLiteral("damping")] = m_dampingSpin->value();
-    settings[QStringLiteral("finite_diff_eps")] = m_finiteDiffSpin->value();
-    settings[QStringLiteral("step_tolerance")] = m_stepTolSpin->value();
-    settings[QStringLiteral("refine_camera_pose")] = m_refinePoseCheck->isChecked();
-    settings[QStringLiteral("dry_run")] = m_dryRunCheck->isChecked();
-    settings[QStringLiteral("enable_laser_constraints")] = m_enableLaserConstraintsCheck->isChecked();
-    settings[QStringLiteral("laser_constraint_cloud_path")] = m_laserConstraintCloudEdit->text().trimmed();
-    settings[QStringLiteral("laser_association_max_distance_m")] = m_laserAssociationMaxDistanceSpin->value();
-    settings[QStringLiteral("laser_voxel_size_m")] = m_laserVoxelSizeSpin->value();
-    settings[QStringLiteral("laser_max_curvature")] = m_laserMaxCurvatureSpin->value();
-    settings[QStringLiteral("laser_max_samples")] = m_laserMaxSamplesSpin->value();
+    settings[QStringLiteral("output_dir")] = _outputDirEdit->text().trimmed();
+    settings[QStringLiteral("threads")] = _threadsSpin->value();
+    settings[QStringLiteral("chunk_size")] = _chunkSizeSpin->value();
+    settings[QStringLiteral("max_iterations")] = _maxIterationsSpin->value();
+    settings[QStringLiteral("max_point_iterations")] = _maxPointItersSpin->value();
+    settings[QStringLiteral("max_camera_iterations")] = _maxCameraItersSpin->value();
+    settings[QStringLiteral("min_matches")] = _minMatchesSpin->value();
+    settings[QStringLiteral("huber_delta")] = _huberDeltaSpin->value();
+    settings[QStringLiteral("damping")] = _dampingSpin->value();
+    settings[QStringLiteral("finite_diff_eps")] = _finiteDiffSpin->value();
+    settings[QStringLiteral("step_tolerance")] = _stepTolSpin->value();
+    settings[QStringLiteral("refine_camera_pose")] = _refinePoseCheck->isChecked();
+    settings[QStringLiteral("dry_run")] = _dryRunCheck->isChecked();
+    settings[QStringLiteral("enable_laser_constraints")] = _enableLaserConstraintsCheck->isChecked();
+    settings[QStringLiteral("laser_constraint_cloud_path")] = _laserConstraintCloudEdit->text().trimmed();
+    settings[QStringLiteral("laser_association_max_distance_m")] = _laserAssociationMaxDistanceSpin->value();
+    settings[QStringLiteral("laser_voxel_size_m")] = _laserVoxelSizeSpin->value();
+    settings[QStringLiteral("laser_max_curvature")] = _laserMaxCurvatureSpin->value();
+    settings[QStringLiteral("laser_max_samples")] = _laserMaxSamplesSpin->value();
     settings[QStringLiteral("laser_missing_normals_as_height_planes")] =
-        m_laserMissingNormalsAsHeightPlanesCheck->isChecked();
-    settings[QStringLiteral("laser_weight")] = m_laserWeightSpin->value();
-    settings[QStringLiteral("laser_huber_delta_m")] = m_laserHuberDeltaSpin->value();
-    settings[QStringLiteral("export_tsai")] = m_exportTsaiCheck->isChecked();
-    settings[QStringLiteral("export_summary_txt")] = m_exportSummaryTxtCheck->isChecked();
-    settings[QStringLiteral("export_points_csv")] = m_exportPointsCsvCheck->isChecked();
-    settings[QStringLiteral("export_camera_csv")] = m_exportCameraCsvCheck->isChecked();
-    settings[QStringLiteral("export_run_json")] = m_exportRunJsonCheck->isChecked();
-    settings[QStringLiteral("export_eval_plot")] = m_exportEvalPlotCheck->isChecked();
+        _laserMissingNormalsAsHeightPlanesCheck->isChecked();
+    settings[QStringLiteral("laser_weight")] = _laserWeightSpin->value();
+    settings[QStringLiteral("laser_huber_delta_m")] = _laserHuberDeltaSpin->value();
+    settings[QStringLiteral("export_tsai")] = _exportTsaiCheck->isChecked();
+    settings[QStringLiteral("export_summary_txt")] = _exportSummaryTxtCheck->isChecked();
+    settings[QStringLiteral("export_points_csv")] = _exportPointsCsvCheck->isChecked();
+    settings[QStringLiteral("export_camera_csv")] = _exportCameraCsvCheck->isChecked();
+    settings[QStringLiteral("export_run_json")] = _exportRunJsonCheck->isChecked();
+    settings[QStringLiteral("export_eval_plot")] = _exportEvalPlotCheck->isChecked();
     emit settingsChanged(settings);
 }

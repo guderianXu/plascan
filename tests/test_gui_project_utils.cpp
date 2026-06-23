@@ -2154,6 +2154,104 @@ TEST(CodeStyleTest, FeatureExtractionDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, BundleAdjustDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/BundleAdjustDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/BundleAdjustDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QListWidget *_imageList = nullptr;"),
+        QStringLiteral("QLineEdit *_outputDirEdit = nullptr;"),
+        QStringLiteral("QSpinBox *_threadsSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_chunkSizeSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_maxIterationsSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_maxPointItersSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_maxCameraItersSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_minMatchesSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_huberDeltaSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_dampingSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_finiteDiffSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_stepTolSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_refinePoseCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_dryRunCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_enableLaserConstraintsCheck = nullptr;"),
+        QStringLiteral("QLineEdit *_laserConstraintCloudEdit = nullptr;"),
+        QStringLiteral("QToolButton *_chooseLaserConstraintCloudBtn = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_laserAssociationMaxDistanceSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_laserVoxelSizeSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_laserMaxCurvatureSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_laserMaxSamplesSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_laserMissingNormalsAsHeightPlanesCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_laserWeightSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_laserHuberDeltaSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_exportTsaiCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_exportSummaryTxtCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_exportPointsCsvCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_exportCameraCsvCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_exportRunJsonCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_exportEvalPlotCheck = nullptr;"),
+        QStringLiteral("QLabel *_resultSummaryLabel = nullptr;"),
+        QStringLiteral("QTableWidget *_resultCameraTable = nullptr;"),
+        QStringLiteral("QToolButton *_applyResultBtn = nullptr;"),
+        QStringLiteral("QToolButton *_discardResultBtn = nullptr;"),
+        QStringLiteral("QStringList _savedSelectedImages;"),
+        QStringLiteral("bool _hasPendingResult = false;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_outputDirEdit"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_chunkSizeSpin"),
+        QStringLiteral("m_maxIterationsSpin"),
+        QStringLiteral("m_maxPointItersSpin"),
+        QStringLiteral("m_maxCameraItersSpin"),
+        QStringLiteral("m_minMatchesSpin"),
+        QStringLiteral("m_huberDeltaSpin"),
+        QStringLiteral("m_dampingSpin"),
+        QStringLiteral("m_finiteDiffSpin"),
+        QStringLiteral("m_stepTolSpin"),
+        QStringLiteral("m_refinePoseCheck"),
+        QStringLiteral("m_dryRunCheck"),
+        QStringLiteral("m_enableLaserConstraintsCheck"),
+        QStringLiteral("m_laserConstraintCloudEdit"),
+        QStringLiteral("m_chooseLaserConstraintCloudBtn"),
+        QStringLiteral("m_laserAssociationMaxDistanceSpin"),
+        QStringLiteral("m_laserVoxelSizeSpin"),
+        QStringLiteral("m_laserMaxCurvatureSpin"),
+        QStringLiteral("m_laserMaxSamplesSpin"),
+        QStringLiteral("m_laserMissingNormalsAsHeightPlanesCheck"),
+        QStringLiteral("m_laserWeightSpin"),
+        QStringLiteral("m_laserHuberDeltaSpin"),
+        QStringLiteral("m_exportTsaiCheck"),
+        QStringLiteral("m_exportSummaryTxtCheck"),
+        QStringLiteral("m_exportPointsCsvCheck"),
+        QStringLiteral("m_exportCameraCsvCheck"),
+        QStringLiteral("m_exportRunJsonCheck"),
+        QStringLiteral("m_exportEvalPlotCheck"),
+        QStringLiteral("m_resultSummaryLabel"),
+        QStringLiteral("m_resultCameraTable"),
+        QStringLiteral("m_applyResultBtn"),
+        QStringLiteral("m_discardResultBtn"),
+        QStringLiteral("m_savedSelectedImages"),
+        QStringLiteral("m_hasPendingResult"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, MatchPairSelectorDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
