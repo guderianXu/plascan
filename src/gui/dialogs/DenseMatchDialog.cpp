@@ -24,7 +24,7 @@
 
 DenseMatchDialog::DenseMatchDialog(ProjectManager *projectManager, QWidget *parent)
     : QDialog(parent)
-    , m_projectManager(projectManager)
+    , _projectManager(projectManager)
 {
     setWindowTitle(tr("密集匹配"));
     resize(900, 560);
@@ -34,28 +34,28 @@ DenseMatchDialog::DenseMatchDialog(ProjectManager *projectManager, QWidget *pare
 
 void DenseMatchDialog::loadProjectImages()
 {
-    if (!m_projectManager) return;
+    if (!_projectManager) return;
 
-    m_allImages = m_projectManager->getAllImages();
-    if (m_allImages.isEmpty()) return;
+    _allImages = _projectManager->getAllImages();
+    if (_allImages.isEmpty()) return;
 
-    m_imageList->blockSignals(true);
-    for (const QString &imgPath : m_allImages)
+    _imageList->blockSignals(true);
+    for (const QString &imgPath : _allImages)
     {
         QFileInfo fi(imgPath);
         auto *item = new QListWidgetItem(fi.fileName());
         item->setData(Qt::UserRole, imgPath);
         item->setFlags(item->flags() | Qt::ItemIsUserCheckable);
         item->setCheckState(Qt::Checked);
-        m_imageList->addItem(item);
+        _imageList->addItem(item);
     }
-    m_imageList->blockSignals(false);
+    _imageList->blockSignals(false);
 
-    if (m_projectManager && !m_projectManager->currentProjectPath().isEmpty())
+    if (_projectManager && !_projectManager->currentProjectPath().isEmpty())
     {
         const QString assetsDir = ProjectIO::projectAssetsDir(
-            m_projectManager->currentProjectPath());
-        m_outputEdit->setText(
+            _projectManager->currentProjectPath());
+        _outputEdit->setText(
             QDir(assetsDir).filePath(QStringLiteral("dense_match")));
     }
 
@@ -64,31 +64,31 @@ void DenseMatchDialog::loadProjectImages()
 
 void DenseMatchDialog::refreshMatchPairs()
 {
-    if (!m_projectManager) return;
+    if (!_projectManager) return;
 
-    m_matchPairs.clear();
-    m_matchTable->setRowCount(0);
+    _matchPairs.clear();
+    _matchTable->setRowCount(0);
 
     QStringList selected;
-    for (int i = 0; i < m_imageList->count(); ++i)
+    for (int i = 0; i < _imageList->count(); ++i)
     {
-        auto *item = m_imageList->item(i);
+        auto *item = _imageList->item(i);
         if (item->checkState() == Qt::Checked)
             selected.append(item->data(Qt::UserRole).toString());
     }
 
     if (selected.size() < 2)
     {
-        m_matchCountLabel->setText(
+        _matchCountLabel->setText(
             tr("请至少选择 2 张影像（当前选中 %1 张）").arg(selected.size()));
         return;
     }
 
     const QString assetsDir = ProjectIO::projectAssetsDir(
-        m_projectManager->currentProjectPath());
+        _projectManager->currentProjectPath());
     const QString matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
 
-    const auto *projData = m_projectManager->projectData();
+    const auto *projData = _projectManager->projectData();
     if (!projData) return;
 
     for (int i = 0; i < selected.size(); ++i)
@@ -134,45 +134,45 @@ void DenseMatchDialog::refreshMatchPairs()
                     info.numMatches = nMatches;
                     mFile.close();
                 }
-                m_matchPairs.append(info);
+                _matchPairs.append(info);
             }
         }
     }
 
-    for (const auto &info : m_matchPairs)
+    for (const auto &info : _matchPairs)
     {
-        int row = m_matchTable->rowCount();
-        m_matchTable->insertRow(row);
-        m_matchTable->setItem(row, 0,
+        int row = _matchTable->rowCount();
+        _matchTable->insertRow(row);
+        _matchTable->setItem(row, 0,
             new QTableWidgetItem(QFileInfo(info.imgA).fileName()));
-        m_matchTable->setItem(row, 1,
+        _matchTable->setItem(row, 1,
             new QTableWidgetItem(QFileInfo(info.imgB).fileName()));
-        m_matchTable->setItem(row, 2,
+        _matchTable->setItem(row, 2,
             new QTableWidgetItem(QString::number(info.numMatches)));
     }
 
-    m_matchCountLabel->setText(
+    _matchCountLabel->setText(
         tr("共 %1 个匹配对（从 %2 张选中影像中）")
-            .arg(m_matchPairs.size())
+            .arg(_matchPairs.size())
             .arg(selected.size()));
 }
 
 void DenseMatchDialog::onSelectAll()
 {
-    m_imageList->blockSignals(true);
-    for (int i = 0; i < m_imageList->count(); ++i)
-        m_imageList->item(i)->setCheckState(Qt::Checked);
-    m_imageList->blockSignals(false);
+    _imageList->blockSignals(true);
+    for (int i = 0; i < _imageList->count(); ++i)
+        _imageList->item(i)->setCheckState(Qt::Checked);
+    _imageList->blockSignals(false);
     refreshMatchPairs();
     emitSettingsNow();
 }
 
 void DenseMatchDialog::onDeselectAll()
 {
-    m_imageList->blockSignals(true);
-    for (int i = 0; i < m_imageList->count(); ++i)
-        m_imageList->item(i)->setCheckState(Qt::Unchecked);
-    m_imageList->blockSignals(false);
+    _imageList->blockSignals(true);
+    for (int i = 0; i < _imageList->count(); ++i)
+        _imageList->item(i)->setCheckState(Qt::Unchecked);
+    _imageList->blockSignals(false);
     refreshMatchPairs();
     emitSettingsNow();
 }
@@ -187,20 +187,20 @@ void DenseMatchDialog::onBrowseOutput()
 {
     QString dir = QFileDialog::getExistingDirectory(this, tr("选择输出目录"));
     if (!dir.isEmpty())
-        m_outputEdit->setText(dir);
+        _outputEdit->setText(dir);
 }
 
 void DenseMatchDialog::onAlgorithmChanged(int /*index*/)
 {
-    int algo = m_algorithmCombo->currentData().toInt();
+    int algo = _algorithmCombo->currentData().toInt();
     bool isSGM = (algo == 1 || algo == 2);
     bool isOpenCV = (algo == 3);
-    m_p1Spin->setEnabled(isSGM);
-    m_p2Spin->setEnabled(isSGM);
-    m_directionsSpin->setEnabled(isSGM);
-    m_pyramidSpin->setEnabled(isSGM);
-    m_useCudaChk->setEnabled(!isOpenCV);
-    m_deviceSpin->setEnabled(!isOpenCV);
+    _p1Spin->setEnabled(isSGM);
+    _p2Spin->setEnabled(isSGM);
+    _directionsSpin->setEnabled(isSGM);
+    _pyramidSpin->setEnabled(isSGM);
+    _useCudaChk->setEnabled(!isOpenCV);
+    _deviceSpin->setEnabled(!isOpenCV);
     emitSettingsNow();
 }
 
@@ -211,19 +211,19 @@ void DenseMatchDialog::onRun()
 
     if (pairs.isEmpty())
     {
-        m_matchCountLabel->setText(tr("没有可处理的匹配对"));
+        _matchCountLabel->setText(tr("没有可处理的匹配对"));
         return;
     }
 
-    m_runBtn->setEnabled(false);
-    m_cancelBtn->setEnabled(false);
+    _runBtn->setEnabled(false);
+    _cancelBtn->setEnabled(false);
     emit runRequested(settings);
 }
 
 void DenseMatchDialog::onProcessingFinished()
 {
-    m_runBtn->setEnabled(true);
-    m_cancelBtn->setEnabled(true);
+    _runBtn->setEnabled(true);
+    _cancelBtn->setEnabled(true);
 }
 
 void DenseMatchDialog::emitSettingsNow()
@@ -236,43 +236,43 @@ QJsonObject DenseMatchDialog::collectSettings() const
     QJsonObject s;
 
     QJsonArray images;
-    for (int i = 0; i < m_imageList->count(); ++i)
+    for (int i = 0; i < _imageList->count(); ++i)
     {
-        auto *item = m_imageList->item(i);
+        auto *item = _imageList->item(i);
         if (item->checkState() == Qt::Checked)
             images.append(item->data(Qt::UserRole).toString());
     }
     s["selected_images"] = images;
 
     QJsonArray pairs;
-    for (int r = 0; r < m_matchTable->rowCount(); ++r)
+    for (int r = 0; r < _matchTable->rowCount(); ++r)
     {
         QJsonObject pair;
-        pair["imgA"]       = m_matchPairs[r].imgA;
-        pair["imgB"]       = m_matchPairs[r].imgB;
-        pair["match_file"] = m_matchPairs[r].matchFile;
+        pair["imgA"]       = _matchPairs[r].imgA;
+        pair["imgB"]       = _matchPairs[r].imgB;
+        pair["match_file"] = _matchPairs[r].matchFile;
         pairs.append(pair);
     }
     s["match_pairs"] = pairs;
 
-    s["output_dir"]     = m_outputEdit->text();
-    s["algorithm"]      = m_algorithmCombo->currentData().toInt();
-    s["cost_func"]      = m_costFuncCombo->currentData().toInt();
-    s["subpixel_mode"]  = m_subpixelCombo->currentData().toInt();
-    s["min_disparity"]  = m_minDispSpin->value();
-    s["max_disparity"]  = m_maxDispSpin->value();
-    s["kernel_w"]       = m_kernelWSpin->value();
-    s["kernel_h"]       = m_kernelHSpin->value();
-    s["p1"]             = m_p1Spin->value();
-    s["p2"]             = m_p2Spin->value();
-    s["directions"]     = m_directionsSpin->value();
-    s["pyramid"]        = m_pyramidSpin->value();
-    s["use_cuda"]       = m_useCudaChk->isChecked();
-    s["cuda_device"]    = m_deviceSpin->value();
-    s["threads"]        = m_threadsSpin->value();
-    s["opencv_compare"] = m_opencvCompareChk->isChecked();
-    s["lr_threshold"]   = m_lrThresholdSpin->value();
-    s["median_filter"]  = m_medianFilterSpin->value();
+    s["output_dir"]     = _outputEdit->text();
+    s["algorithm"]      = _algorithmCombo->currentData().toInt();
+    s["cost_func"]      = _costFuncCombo->currentData().toInt();
+    s["subpixel_mode"]  = _subpixelCombo->currentData().toInt();
+    s["min_disparity"]  = _minDispSpin->value();
+    s["max_disparity"]  = _maxDispSpin->value();
+    s["kernel_w"]       = _kernelWSpin->value();
+    s["kernel_h"]       = _kernelHSpin->value();
+    s["p1"]             = _p1Spin->value();
+    s["p2"]             = _p2Spin->value();
+    s["directions"]     = _directionsSpin->value();
+    s["pyramid"]        = _pyramidSpin->value();
+    s["use_cuda"]       = _useCudaChk->isChecked();
+    s["cuda_device"]    = _deviceSpin->value();
+    s["threads"]        = _threadsSpin->value();
+    s["opencv_compare"] = _opencvCompareChk->isChecked();
+    s["lr_threshold"]   = _lrThresholdSpin->value();
+    s["median_filter"]  = _medianFilterSpin->value();
 
     return s;
 }
@@ -282,35 +282,35 @@ void DenseMatchDialog::applySettings(const QJsonObject &settings)
     if (settings.isEmpty()) return;
 
     if (settings.contains("output_dir"))
-        m_outputEdit->setText(settings.value("output_dir").toString());
+        _outputEdit->setText(settings.value("output_dir").toString());
 
     int algo = settings.value("algorithm").toInt(2);
-    for (int i = 0; i < m_algorithmCombo->count(); ++i)
-        if (m_algorithmCombo->itemData(i).toInt() == algo)
-        { m_algorithmCombo->setCurrentIndex(i); break; }
+    for (int i = 0; i < _algorithmCombo->count(); ++i)
+        if (_algorithmCombo->itemData(i).toInt() == algo)
+        { _algorithmCombo->setCurrentIndex(i); break; }
 
     int cost = settings.value("cost_func").toInt(3);
-    for (int i = 0; i < m_costFuncCombo->count(); ++i)
-        if (m_costFuncCombo->itemData(i).toInt() == cost)
-        { m_costFuncCombo->setCurrentIndex(i); break; }
+    for (int i = 0; i < _costFuncCombo->count(); ++i)
+        if (_costFuncCombo->itemData(i).toInt() == cost)
+        { _costFuncCombo->setCurrentIndex(i); break; }
 
     int sub = settings.value("subpixel_mode").toInt(1);
-    for (int i = 0; i < m_subpixelCombo->count(); ++i)
-        if (m_subpixelCombo->itemData(i).toInt() == sub)
-        { m_subpixelCombo->setCurrentIndex(i); break; }
+    for (int i = 0; i < _subpixelCombo->count(); ++i)
+        if (_subpixelCombo->itemData(i).toInt() == sub)
+        { _subpixelCombo->setCurrentIndex(i); break; }
 
-    m_minDispSpin->setValue(settings.value("min_disparity").toInt(0));
-    m_maxDispSpin->setValue(settings.value("max_disparity").toInt(256));
-    m_kernelWSpin->setValue(settings.value("kernel_w").toInt(15));
-    m_kernelHSpin->setValue(settings.value("kernel_h").toInt(15));
-    m_p1Spin->setValue(settings.value("p1").toInt(8));
-    m_p2Spin->setValue(settings.value("p2").toInt(32));
-    m_directionsSpin->setValue(settings.value("directions").toInt(8));
-    m_pyramidSpin->setValue(settings.value("pyramid").toInt(2));
-    m_useCudaChk->setChecked(settings.value("use_cuda").toBool(true));
-    m_deviceSpin->setValue(settings.value("cuda_device").toInt(0));
-    m_threadsSpin->setValue(settings.value("threads").toInt(4));
-    m_opencvCompareChk->setChecked(settings.value("opencv_compare").toBool(false));
-    m_lrThresholdSpin->setValue(settings.value("lr_threshold").toDouble(1.0));
-    m_medianFilterSpin->setValue(settings.value("median_filter").toInt(3));
+    _minDispSpin->setValue(settings.value("min_disparity").toInt(0));
+    _maxDispSpin->setValue(settings.value("max_disparity").toInt(256));
+    _kernelWSpin->setValue(settings.value("kernel_w").toInt(15));
+    _kernelHSpin->setValue(settings.value("kernel_h").toInt(15));
+    _p1Spin->setValue(settings.value("p1").toInt(8));
+    _p2Spin->setValue(settings.value("p2").toInt(32));
+    _directionsSpin->setValue(settings.value("directions").toInt(8));
+    _pyramidSpin->setValue(settings.value("pyramid").toInt(2));
+    _useCudaChk->setChecked(settings.value("use_cuda").toBool(true));
+    _deviceSpin->setValue(settings.value("cuda_device").toInt(0));
+    _threadsSpin->setValue(settings.value("threads").toInt(4));
+    _opencvCompareChk->setChecked(settings.value("opencv_compare").toBool(false));
+    _lrThresholdSpin->setValue(settings.value("lr_threshold").toDouble(1.0));
+    _medianFilterSpin->setValue(settings.value("median_filter").toInt(3));
 }

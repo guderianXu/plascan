@@ -56,41 +56,41 @@ private:
         int     numMatches = 0;
     };
 
-    ProjectManager *m_projectManager = nullptr;
+    ProjectManager *_projectManager = nullptr;
 
-    QListWidget   *m_imageList       = nullptr;
-    QPushButton   *m_selectAllBtn    = nullptr;
-    QPushButton   *m_deselectAllBtn  = nullptr;
-    QStringList    m_allImages;
+    QListWidget *_imageList = nullptr;
+    QPushButton *_selectAllBtn = nullptr;
+    QPushButton *_deselectAllBtn = nullptr;
+    QStringList _allImages;
 
-    QTableWidget  *m_matchTable      = nullptr;
-    QLabel        *m_matchCountLabel = nullptr;
-    QList<MatchPairInfo> m_matchPairs;
+    QTableWidget *_matchTable = nullptr;
+    QLabel *_matchCountLabel = nullptr;
+    QList<MatchPairInfo> _matchPairs;
 
-    QLineEdit     *m_outputEdit      = nullptr;
+    QLineEdit *_outputEdit = nullptr;
 
-    QComboBox     *m_algorithmCombo  = nullptr;
-    QComboBox     *m_costFuncCombo   = nullptr;
-    QComboBox     *m_subpixelCombo   = nullptr;
-    QSpinBox      *m_minDispSpin     = nullptr;
-    QSpinBox      *m_maxDispSpin     = nullptr;
-    QSpinBox      *m_kernelWSpin     = nullptr;
-    QSpinBox      *m_kernelHSpin     = nullptr;
+    QComboBox *_algorithmCombo = nullptr;
+    QComboBox *_costFuncCombo = nullptr;
+    QComboBox *_subpixelCombo = nullptr;
+    QSpinBox *_minDispSpin = nullptr;
+    QSpinBox *_maxDispSpin = nullptr;
+    QSpinBox *_kernelWSpin = nullptr;
+    QSpinBox *_kernelHSpin = nullptr;
 
-    QSpinBox      *m_p1Spin          = nullptr;
-    QSpinBox      *m_p2Spin          = nullptr;
-    QSpinBox      *m_directionsSpin  = nullptr;
-    QSpinBox      *m_pyramidSpin     = nullptr;
+    QSpinBox *_p1Spin = nullptr;
+    QSpinBox *_p2Spin = nullptr;
+    QSpinBox *_directionsSpin = nullptr;
+    QSpinBox *_pyramidSpin = nullptr;
 
-    QCheckBox     *m_useCudaChk      = nullptr;
-    QSpinBox      *m_deviceSpin      = nullptr;
-    QSpinBox      *m_threadsSpin     = nullptr;
-    QCheckBox     *m_opencvCompareChk = nullptr;
+    QCheckBox *_useCudaChk = nullptr;
+    QSpinBox *_deviceSpin = nullptr;
+    QSpinBox *_threadsSpin = nullptr;
+    QCheckBox *_opencvCompareChk = nullptr;
 
-    QDoubleSpinBox *m_lrThresholdSpin = nullptr;
-    QSpinBox      *m_medianFilterSpin = nullptr;
+    QDoubleSpinBox *_lrThresholdSpin = nullptr;
+    QSpinBox *_medianFilterSpin = nullptr;
 
-    QPushButton   *m_runBtn    = nullptr;
-    QPushButton   *m_cancelBtn = nullptr;
-    QPushButton   *m_resetBtn  = nullptr;
+    QPushButton *_runBtn = nullptr;
+    QPushButton *_cancelBtn = nullptr;
+    QPushButton *_resetBtn = nullptr;
 };

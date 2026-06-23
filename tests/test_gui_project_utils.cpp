@@ -1825,6 +1825,93 @@ TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNam
     }
 }
 
+TEST(CodeStyleTest, DenseMatchDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseMatchDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseMatchDialog.cpp"));
+    const QString uiSource = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseMatchDialogUi.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(uiSource.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("ProjectManager *_projectManager = nullptr;"),
+        QStringLiteral("QListWidget *_imageList = nullptr;"),
+        QStringLiteral("QPushButton *_selectAllBtn = nullptr;"),
+        QStringLiteral("QPushButton *_deselectAllBtn = nullptr;"),
+        QStringLiteral("QStringList _allImages;"),
+        QStringLiteral("QTableWidget *_matchTable = nullptr;"),
+        QStringLiteral("QLabel *_matchCountLabel = nullptr;"),
+        QStringLiteral("QList<MatchPairInfo> _matchPairs;"),
+        QStringLiteral("QLineEdit *_outputEdit = nullptr;"),
+        QStringLiteral("QComboBox *_algorithmCombo = nullptr;"),
+        QStringLiteral("QComboBox *_costFuncCombo = nullptr;"),
+        QStringLiteral("QComboBox *_subpixelCombo = nullptr;"),
+        QStringLiteral("QSpinBox *_minDispSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_maxDispSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_kernelWSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_kernelHSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_p1Spin = nullptr;"),
+        QStringLiteral("QSpinBox *_p2Spin = nullptr;"),
+        QStringLiteral("QSpinBox *_directionsSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_pyramidSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_useCudaChk = nullptr;"),
+        QStringLiteral("QSpinBox *_deviceSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_threadsSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_opencvCompareChk = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_lrThresholdSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_medianFilterSpin = nullptr;"),
+        QStringLiteral("QPushButton *_runBtn = nullptr;"),
+        QStringLiteral("QPushButton *_cancelBtn = nullptr;"),
+        QStringLiteral("QPushButton *_resetBtn = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_imageList"),
+        QStringLiteral("m_selectAllBtn"),
+        QStringLiteral("m_deselectAllBtn"),
+        QStringLiteral("m_allImages"),
+        QStringLiteral("m_matchTable"),
+        QStringLiteral("m_matchCountLabel"),
+        QStringLiteral("m_matchPairs"),
+        QStringLiteral("m_outputEdit"),
+        QStringLiteral("m_algorithmCombo"),
+        QStringLiteral("m_costFuncCombo"),
+        QStringLiteral("m_subpixelCombo"),
+        QStringLiteral("m_minDispSpin"),
+        QStringLiteral("m_maxDispSpin"),
+        QStringLiteral("m_kernelWSpin"),
+        QStringLiteral("m_kernelHSpin"),
+        QStringLiteral("m_p1Spin"),
+        QStringLiteral("m_p2Spin"),
+        QStringLiteral("m_directionsSpin"),
+        QStringLiteral("m_pyramidSpin"),
+        QStringLiteral("m_useCudaChk"),
+        QStringLiteral("m_deviceSpin"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_opencvCompareChk"),
+        QStringLiteral("m_lrThresholdSpin"),
+        QStringLiteral("m_medianFilterSpin"),
+        QStringLiteral("m_runBtn"),
+        QStringLiteral("m_cancelBtn"),
+        QStringLiteral("m_resetBtn"),
+    };
+    const QString combinedSource = source + QStringLiteral("\n") + uiSource;
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(combinedSource.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(combinedSource.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(combinedSource.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(combinedSource.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
