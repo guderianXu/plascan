@@ -17,47 +17,47 @@ MeshReconstructionDialog::MeshReconstructionDialog(QWidget *parent)
     Ui::MeshReconstructionDialog form;
     form.setupUi(this);
 
-    m_denseCloudCombo     = form.m_denseCloudCombo;
-    m_browseDenseBtn      = form.m_browseDenseBtn;
-    m_methodCombo         = form.m_methodCombo;
-    m_outputFormatCombo   = form.m_outputFormatCombo;
-    m_qualityProfileCombo = form.m_qualityProfileCombo;
-    m_octreeDepthSpin     = form.m_octreeDepthSpin;
-    m_meshResSpin         = form.m_meshResSpin;
-    m_smoothIterSpin      = form.m_smoothIterSpin;
-    m_holeFillCheck       = form.m_holeFillCheck;
-    m_maxHoleSizeSpin     = form.m_maxHoleSizeSpin;
-    m_cleanCheck          = form.m_cleanCheck;
-    m_minFacesSpin        = form.m_minFacesSpin;
-    m_voxelDensityCombo   = form.m_voxelDensityCombo;
-    m_decimateCheck       = form.m_decimateCheck;
-    m_decimateRatioSpin   = form.m_decimateRatioSpin;
-    m_threadsSpin         = form.m_threadsSpin;
-    m_infoLabel           = form.m_infoLabel;
+    _denseCloudCombo = form.m_denseCloudCombo;
+    _browseDenseBtn = form.m_browseDenseBtn;
+    _methodCombo = form.m_methodCombo;
+    _outputFormatCombo = form.m_outputFormatCombo;
+    _qualityProfileCombo = form.m_qualityProfileCombo;
+    _octreeDepthSpin = form.m_octreeDepthSpin;
+    _meshResSpin = form.m_meshResSpin;
+    _smoothIterSpin = form.m_smoothIterSpin;
+    _holeFillCheck = form.m_holeFillCheck;
+    _maxHoleSizeSpin = form.m_maxHoleSizeSpin;
+    _cleanCheck = form.m_cleanCheck;
+    _minFacesSpin = form.m_minFacesSpin;
+    _voxelDensityCombo = form.m_voxelDensityCombo;
+    _decimateCheck = form.m_decimateCheck;
+    _decimateRatioSpin = form.m_decimateRatioSpin;
+    _threadsSpin = form.m_threadsSpin;
+    _infoLabel = form.m_infoLabel;
 
-    m_qualityProfileCombo->setItemData(0, QStringLiteral("detail"));
-    m_qualityProfileCombo->setItemData(1, QStringLiteral("balanced"));
-    m_qualityProfileCombo->setItemData(2, QStringLiteral("lite"));
-    m_voxelDensityCombo->setItemData(0, QStringLiteral("coarse"));
-    m_voxelDensityCombo->setItemData(1, QStringLiteral("medium"));
-    m_voxelDensityCombo->setItemData(2, QStringLiteral("fine"));
+    _qualityProfileCombo->setItemData(0, QStringLiteral("detail"));
+    _qualityProfileCombo->setItemData(1, QStringLiteral("balanced"));
+    _qualityProfileCombo->setItemData(2, QStringLiteral("lite"));
+    _voxelDensityCombo->setItemData(0, QStringLiteral("coarse"));
+    _voxelDensityCombo->setItemData(1, QStringLiteral("medium"));
+    _voxelDensityCombo->setItemData(2, QStringLiteral("fine"));
 
     auto changed = [this]() { emitSettingsNow(); };
-    connect(m_denseCloudCombo, &QComboBox::editTextChanged, this, changed);
-    connect(m_methodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_qualityProfileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_octreeDepthSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
-    connect(m_meshResSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
-    connect(m_smoothIterSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
-    connect(m_holeFillCheck, &QCheckBox::toggled, this, changed);
-    connect(m_cleanCheck, &QCheckBox::toggled, this, changed);
-    connect(m_voxelDensityCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
-    connect(m_decimateCheck, &QCheckBox::toggled, this, changed);
-    connect(m_decimateRatioSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
-    connect(m_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
+    connect(_denseCloudCombo, &QComboBox::editTextChanged, this, changed);
+    connect(_methodCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_qualityProfileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_octreeDepthSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
+    connect(_meshResSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
+    connect(_smoothIterSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
+    connect(_holeFillCheck, &QCheckBox::toggled, this, changed);
+    connect(_cleanCheck, &QCheckBox::toggled, this, changed);
+    connect(_voxelDensityCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_decimateCheck, &QCheckBox::toggled, this, changed);
+    connect(_decimateRatioSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
+    connect(_threadsSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
 
-    connect(m_browseDenseBtn, &QPushButton::clicked, this, [this]() {
-        const QString initialPath = m_denseCloudCombo->currentText().trimmed();
+    connect(_browseDenseBtn, &QPushButton::clicked, this, [this]() {
+        const QString initialPath = _denseCloudCombo->currentText().trimmed();
         const QString initialDir = initialPath.isEmpty()
             ? QDir::homePath()
             : QFileInfo(initialPath).absolutePath();
@@ -74,12 +74,12 @@ MeshReconstructionDialog::MeshReconstructionDialog(QWidget *parent)
         }
 
         const QString normalized = QDir::cleanPath(chosenPath);
-        const int index = m_denseCloudCombo->findData(normalized);
+        const int index = _denseCloudCombo->findData(normalized);
         if (index < 0)
         {
-            m_denseCloudCombo->addItem(normalized, normalized);
+            _denseCloudCombo->addItem(normalized, normalized);
         }
-        m_denseCloudCombo->setCurrentText(normalized);
+        _denseCloudCombo->setCurrentText(normalized);
         emitSettingsNow();
     });
 
@@ -90,21 +90,21 @@ MeshReconstructionDialog::MeshReconstructionDialog(QWidget *parent)
 QJsonObject MeshReconstructionDialog::collectSettings() const
 {
     QJsonObject o;
-    o["method"]        = m_methodCombo->currentText();
-    o["denseCloudPath"] = m_denseCloudCombo->currentText().trimmed();
-    o["export_format"] = m_outputFormatCombo->currentText();
-    o["qualityProfile"] = m_qualityProfileCombo->currentData().toString();
-    o["octreeDepth"]   = m_octreeDepthSpin->value();
-    o["meshResolution"]= m_meshResSpin->value();
-    o["smoothIter"]    = m_smoothIterSpin->value();
-    o["holeFill"]      = m_holeFillCheck->isChecked();
-    o["maxHoleSize"]   = m_maxHoleSizeSpin->value();
-    o["cleanSmall"]    = m_cleanCheck->isChecked();
-    o["minFaces"]      = m_minFacesSpin->value();
-    o["voxelDensity"]  = m_voxelDensityCombo->currentData().toString();
-    o["decimate"]      = m_decimateCheck->isChecked();
-    o["decimateRatio"] = m_decimateRatioSpin->value();
-    o["threads"]       = m_threadsSpin->value();
+    o["method"] = _methodCombo->currentText();
+    o["denseCloudPath"] = _denseCloudCombo->currentText().trimmed();
+    o["export_format"] = _outputFormatCombo->currentText();
+    o["qualityProfile"] = _qualityProfileCombo->currentData().toString();
+    o["octreeDepth"] = _octreeDepthSpin->value();
+    o["meshResolution"] = _meshResSpin->value();
+    o["smoothIter"] = _smoothIterSpin->value();
+    o["holeFill"] = _holeFillCheck->isChecked();
+    o["maxHoleSize"] = _maxHoleSizeSpin->value();
+    o["cleanSmall"] = _cleanCheck->isChecked();
+    o["minFaces"] = _minFacesSpin->value();
+    o["voxelDensity"] = _voxelDensityCombo->currentData().toString();
+    o["decimate"] = _decimateCheck->isChecked();
+    o["decimateRatio"] = _decimateRatioSpin->value();
+    o["threads"] = _threadsSpin->value();
     return o;
 }
 
@@ -112,79 +112,123 @@ void MeshReconstructionDialog::applySettings(const QJsonObject &s)
 {
     if (s.contains("method"))
     {
-        int i = m_methodCombo->findText(s["method"].toString());
-        if (i >= 0) m_methodCombo->setCurrentIndex(i);
+        const int i = _methodCombo->findText(s["method"].toString());
+        if (i >= 0)
+        {
+            _methodCombo->setCurrentIndex(i);
+        }
     }
     if (s.contains("denseCloudPath"))
     {
-        m_denseCloudCombo->setCurrentText(QDir::cleanPath(s["denseCloudPath"].toString()));
+        _denseCloudCombo->setCurrentText(QDir::cleanPath(s["denseCloudPath"].toString()));
     }
     if (s.contains("export_format"))
     {
-        const int i = m_outputFormatCombo->findText(s["export_format"].toString());
-        if (i >= 0) m_outputFormatCombo->setCurrentIndex(i);
+        const int i = _outputFormatCombo->findText(s["export_format"].toString());
+        if (i >= 0)
+        {
+            _outputFormatCombo->setCurrentIndex(i);
+        }
     }
     if (s.contains("qualityProfile"))
     {
         const QString qualityProfile = s["qualityProfile"].toString();
-        const int i = m_qualityProfileCombo->findData(qualityProfile);
+        const int i = _qualityProfileCombo->findData(qualityProfile);
         if (i >= 0)
         {
-            m_qualityProfileCombo->setCurrentIndex(i);
+            _qualityProfileCombo->setCurrentIndex(i);
         }
     }
-    if (s.contains("octreeDepth"))    m_octreeDepthSpin->setValue(s["octreeDepth"].toInt());
-    if (s.contains("meshResolution")) m_meshResSpin->setValue(s["meshResolution"].toDouble());
-    if (s.contains("smoothIter"))     m_smoothIterSpin->setValue(s["smoothIter"].toInt());
-    if (s.contains("holeFill"))       m_holeFillCheck->setChecked(s["holeFill"].toBool());
-    if (s.contains("maxHoleSize"))    m_maxHoleSizeSpin->setValue(s["maxHoleSize"].toDouble());
-    if (s.contains("cleanSmall"))     m_cleanCheck->setChecked(s["cleanSmall"].toBool());
-    if (s.contains("minFaces"))       m_minFacesSpin->setValue(s["minFaces"].toInt());
+    if (s.contains("octreeDepth"))
+    {
+        _octreeDepthSpin->setValue(s["octreeDepth"].toInt());
+    }
+    if (s.contains("meshResolution"))
+    {
+        _meshResSpin->setValue(s["meshResolution"].toDouble());
+    }
+    if (s.contains("smoothIter"))
+    {
+        _smoothIterSpin->setValue(s["smoothIter"].toInt());
+    }
+    if (s.contains("holeFill"))
+    {
+        _holeFillCheck->setChecked(s["holeFill"].toBool());
+    }
+    if (s.contains("maxHoleSize"))
+    {
+        _maxHoleSizeSpin->setValue(s["maxHoleSize"].toDouble());
+    }
+    if (s.contains("cleanSmall"))
+    {
+        _cleanCheck->setChecked(s["cleanSmall"].toBool());
+    }
+    if (s.contains("minFaces"))
+    {
+        _minFacesSpin->setValue(s["minFaces"].toInt());
+    }
     if (s.contains("voxelDensity"))
     {
         const QString density = s["voxelDensity"].toString();
-        const int index = m_voxelDensityCombo->findData(density);
+        const int index = _voxelDensityCombo->findData(density);
         if (index >= 0)
         {
-            m_voxelDensityCombo->setCurrentIndex(index);
+            _voxelDensityCombo->setCurrentIndex(index);
         }
     }
-    if (s.contains("decimate"))       m_decimateCheck->setChecked(s["decimate"].toBool());
-    if (s.contains("decimateRatio"))  m_decimateRatioSpin->setValue(s["decimateRatio"].toDouble());
-    if (s.contains("threads"))        m_threadsSpin->setValue(s["threads"].toInt());
+    if (s.contains("decimate"))
+    {
+        _decimateCheck->setChecked(s["decimate"].toBool());
+    }
+    if (s.contains("decimateRatio"))
+    {
+        _decimateRatioSpin->setValue(s["decimateRatio"].toDouble());
+    }
+    if (s.contains("threads"))
+    {
+        _threadsSpin->setValue(s["threads"].toInt());
+    }
 }
 
 void MeshReconstructionDialog::setDenseCloudCandidates(const QStringList &paths)
 {
-    const QString current = QDir::cleanPath(m_denseCloudCombo->currentText().trimmed());
+    const QString current = QDir::cleanPath(_denseCloudCombo->currentText().trimmed());
 
-    m_denseCloudCombo->clear();
+    _denseCloudCombo->clear();
     for (const QString &path : paths)
     {
         const QString normalized = QDir::cleanPath(path);
-        if (!normalized.isEmpty() && m_denseCloudCombo->findData(normalized) < 0)
+        if (!normalized.isEmpty() && _denseCloudCombo->findData(normalized) < 0)
         {
-            m_denseCloudCombo->addItem(normalized, normalized);
+            _denseCloudCombo->addItem(normalized, normalized);
         }
     }
 
     if (!current.isEmpty())
     {
-        const int index = m_denseCloudCombo->findData(current);
+        const int index = _denseCloudCombo->findData(current);
         if (index >= 0)
         {
-            m_denseCloudCombo->setCurrentIndex(index);
+            _denseCloudCombo->setCurrentIndex(index);
         }
         else
         {
-            m_denseCloudCombo->setCurrentText(current);
+            _denseCloudCombo->setCurrentText(current);
         }
     }
-    else if (m_denseCloudCombo->count() > 0)
+    else if (_denseCloudCombo->count() > 0)
     {
-        m_denseCloudCombo->setCurrentIndex(0);
+        _denseCloudCombo->setCurrentIndex(0);
     }
 }
 
-void MeshReconstructionDialog::emitSettingsNow() { emit settingsChanged(collectSettings()); }
-void MeshReconstructionDialog::onRun() { emit runRequested(collectSettings()); accept(); }
+void MeshReconstructionDialog::emitSettingsNow()
+{
+    emit settingsChanged(collectSettings());
+}
+
+void MeshReconstructionDialog::onRun()
+{
+    emit runRequested(collectSettings());
+    accept();
+}

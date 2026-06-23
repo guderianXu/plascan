@@ -1956,6 +1956,58 @@ TEST(CodeStyleTest, CameraConvertDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, MeshReconstructionDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MeshReconstructionDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MeshReconstructionDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_denseCloudCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QPushButton *_browseDenseBtn = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_methodCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_outputFormatCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_qualityProfileCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_octreeDepthSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_meshResSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_smoothIterSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_holeFillCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_maxHoleSizeSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_cleanCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_minFacesSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_voxelDensityCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QCheckBox *_decimateCheck = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QDoubleSpinBox *_decimateRatioSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSpinBox *_threadsSpin = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QLabel *_infoLabel = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_denseCloudCombo"),
+        QStringLiteral("m_browseDenseBtn"),
+        QStringLiteral("m_methodCombo"),
+        QStringLiteral("m_outputFormatCombo"),
+        QStringLiteral("m_qualityProfileCombo"),
+        QStringLiteral("m_octreeDepthSpin"),
+        QStringLiteral("m_meshResSpin"),
+        QStringLiteral("m_smoothIterSpin"),
+        QStringLiteral("m_holeFillCheck"),
+        QStringLiteral("m_maxHoleSizeSpin"),
+        QStringLiteral("m_cleanCheck"),
+        QStringLiteral("m_minFacesSpin"),
+        QStringLiteral("m_voxelDensityCombo"),
+        QStringLiteral("m_decimateCheck"),
+        QStringLiteral("m_decimateRatioSpin"),
+        QStringLiteral("m_threadsSpin"),
+        QStringLiteral("m_infoLabel"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("connect(") + oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(DepthMapPersistenceTest, SavesFrameArtifactsBeforeFinalConsistencyPass)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
