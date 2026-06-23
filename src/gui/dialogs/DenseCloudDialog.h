@@ -58,45 +58,45 @@ private:
     void setupUi();
     void appendLog(const QString &line);
 
-    ProjectManager *m_projectManager = nullptr;
+    ProjectManager *_projectManager = nullptr;
 
     // ---- 基础参数 ----
-    QComboBox    *m_imagePairCombo    = nullptr;  ///< 影像对选择
-    QComboBox    *m_atResultCombo     = nullptr;  ///< AT 结果选择（提供相机位姿）
-    QLineEdit    *m_outputDirEdit     = nullptr;  ///< 输出目录
-    QComboBox    *m_presetCombo       = nullptr;  ///< 参数预设（快速/标准/精细）
+    QComboBox *_imagePairCombo = nullptr;  ///< 影像对选择
+    QComboBox *_atResultCombo = nullptr;  ///< AT 结果选择（提供相机位姿）
+    QLineEdit *_outputDirEdit = nullptr;  ///< 输出目录
+    QComboBox *_presetCombo = nullptr;  ///< 参数预设（快速/标准/精细）
 
     // ---- SGBM 参数 ----
-    QSpinBox     *m_numDispSpin       = nullptr;  ///< 视差搜索范围（16 的倍数）
-    QSpinBox     *m_blockSizeSpin     = nullptr;  ///< 匹配块大小
-    QSpinBox     *m_uniquenessSpin    = nullptr;  ///< 唯一性比率(%)
-    QSpinBox     *m_speckleSizeSpin   = nullptr;  ///< 噪斑消除窗口大小
-    QCheckBox    *m_wlsFilterCheck    = nullptr;  ///< WLS 视差滤波
-    QCheckBox    *m_fullDpCheck       = nullptr;  ///< 使用 SGBM_3WAY 模式
-    QDoubleSpinBox *m_minDepthSpin    = nullptr;  ///< 最小有效深度
-    QDoubleSpinBox *m_maxDepthSpin    = nullptr;  ///< 最大有效深度
+    QSpinBox *_numDispSpin = nullptr;  ///< 视差搜索范围（16 的倍数）
+    QSpinBox *_blockSizeSpin = nullptr;  ///< 匹配块大小
+    QSpinBox *_uniquenessSpin = nullptr;  ///< 唯一性比率(%)
+    QSpinBox *_speckleSizeSpin = nullptr;  ///< 噪斑消除窗口大小
+    QCheckBox *_wlsFilterCheck = nullptr;  ///< WLS 视差滤波
+    QCheckBox *_fullDpCheck = nullptr;  ///< 使用 SGBM_3WAY 模式
+    QDoubleSpinBox *_minDepthSpin = nullptr;  ///< 最小有效深度
+    QDoubleSpinBox *_maxDepthSpin = nullptr;  ///< 最大有效深度
 
     // ---- 点云参数 ----
-    QDoubleSpinBox *m_minConfSpin     = nullptr;  ///< 最小置信度
-    QCheckBox    *m_normalsCheck      = nullptr;  ///< 估计法向量
-    QCheckBox    *m_colorsCheck       = nullptr;  ///< 采样颜色
-    QCheckBox    *m_multiViewCheck    = nullptr;  ///< 多视图一致性融合
-    QSpinBox     *m_minConsistentViewsSpin = nullptr;  ///< 最小一致视图数
-    QCheckBox    *m_geomConsistencyCheck = nullptr;     ///< 几何一致性过滤
-    QDoubleSpinBox *m_maxReprojErrorSpin = nullptr;     ///< 最大重投影误差
-    QSpinBox     *m_speckleMinAreaSpin = nullptr;       ///< 小连通域过滤阈值
-    QSpinBox     *m_fusionMaxImageDimSpin = nullptr;    ///< 融合最长边
-    QSpinBox     *m_normalKnnSpin     = nullptr;  ///< 法向量 KNN
+    QDoubleSpinBox *_minConfSpin = nullptr;  ///< 最小置信度
+    QCheckBox *_normalsCheck = nullptr;  ///< 估计法向量
+    QCheckBox *_colorsCheck = nullptr;  ///< 采样颜色
+    QCheckBox *_multiViewCheck = nullptr;  ///< 多视图一致性融合
+    QSpinBox *_minConsistentViewsSpin = nullptr;  ///< 最小一致视图数
+    QCheckBox *_geomConsistencyCheck = nullptr;  ///< 几何一致性过滤
+    QDoubleSpinBox *_maxReprojErrorSpin = nullptr;  ///< 最大重投影误差
+    QSpinBox *_speckleMinAreaSpin = nullptr;  ///< 小连通域过滤阈值
+    QSpinBox *_fusionMaxImageDimSpin = nullptr;  ///< 融合最长边
+    QSpinBox *_normalKnnSpin = nullptr;  ///< 法向量 KNN
 
     // ---- 网格重建（可选） ----
-    QCheckBox    *m_buildMeshCheck    = nullptr;  ///< 是否重建网格
-    QComboBox    *m_meshMethodCombo   = nullptr;  ///< 网格方法
-    QSpinBox     *m_voxelResSpin      = nullptr;  ///< 体素分辨率
-    QSpinBox     *m_smoothIterSpin    = nullptr;  ///< 平滑迭代次数
+    QCheckBox *_buildMeshCheck = nullptr;  ///< 是否重建网格
+    QComboBox *_meshMethodCombo = nullptr;  ///< 网格方法
+    QSpinBox *_voxelResSpin = nullptr;  ///< 体素分辨率
+    QSpinBox *_smoothIterSpin = nullptr;  ///< 平滑迭代次数
 
     // ---- 进度 & 日志 ----
-    QProgressBar *m_progressBar       = nullptr;
-    QTextEdit    *m_logEdit           = nullptr;
-    QPushButton  *m_runButton         = nullptr;
-    QPushButton  *m_cancelButton      = nullptr;
+    QProgressBar *_progressBar = nullptr;
+    QTextEdit *_logEdit = nullptr;
+    QPushButton *_runButton = nullptr;
+    QPushButton *_cancelButton = nullptr;
 };

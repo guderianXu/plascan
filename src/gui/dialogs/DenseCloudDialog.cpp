@@ -22,7 +22,7 @@
 
 DenseCloudDialog::DenseCloudDialog(ProjectManager *projectManager, QWidget *parent)
     : QDialog(parent)
-    , m_projectManager(projectManager)
+    , _projectManager(projectManager)
 {
     setWindowTitle(tr("生成稠密点云 (MVS)"));
     setMinimumWidth(540);
@@ -39,44 +39,44 @@ void DenseCloudDialog::setupUi()
     Ui::DenseCloudDialog form;
     form.setupUi(this);
 
-    m_imagePairCombo = form.m_imagePairCombo;
-    m_atResultCombo = form.m_atResultCombo;
-    m_presetCombo = form.m_presetCombo;
-    m_outputDirEdit = form.m_outputDirEdit;
-    m_numDispSpin = form.m_numDispSpin;
-    m_blockSizeSpin = form.m_blockSizeSpin;
-    m_uniquenessSpin = form.m_uniquenessSpin;
-    m_speckleSizeSpin = form.m_speckleSizeSpin;
-    m_fullDpCheck = form.m_fullDpCheck;
-    m_wlsFilterCheck = form.m_wlsFilterCheck;
-    m_minDepthSpin = form.m_minDepthSpin;
-    m_maxDepthSpin = form.m_maxDepthSpin;
-    m_minConfSpin = form.m_minConfSpin;
-    m_multiViewCheck = form.m_multiViewCheck;
-    m_minConsistentViewsSpin = form.m_minConsistentViewsSpin;
-    m_geomConsistencyCheck = form.m_geomConsistencyCheck;
-    m_maxReprojErrorSpin = form.m_maxReprojErrorSpin;
-    m_speckleMinAreaSpin = form.m_speckleMinAreaSpin;
-    m_fusionMaxImageDimSpin = form.m_fusionMaxImageDimSpin;
-    m_colorsCheck = form.m_colorsCheck;
-    m_normalsCheck = form.m_normalsCheck;
-    m_normalKnnSpin = form.m_normalKnnSpin;
-    m_buildMeshCheck = form.m_buildMeshCheck;
-    m_meshMethodCombo = form.m_meshMethodCombo;
-    m_voxelResSpin = form.m_voxelResSpin;
-    m_smoothIterSpin = form.m_smoothIterSpin;
-    m_progressBar = form.m_progressBar;
-    m_logEdit = form.m_logEdit;
-    m_runButton = form.m_runButton;
-    m_cancelButton = form.m_cancelButton;
+    _imagePairCombo = form.m_imagePairCombo;
+    _atResultCombo = form.m_atResultCombo;
+    _presetCombo = form.m_presetCombo;
+    _outputDirEdit = form.m_outputDirEdit;
+    _numDispSpin = form.m_numDispSpin;
+    _blockSizeSpin = form.m_blockSizeSpin;
+    _uniquenessSpin = form.m_uniquenessSpin;
+    _speckleSizeSpin = form.m_speckleSizeSpin;
+    _fullDpCheck = form.m_fullDpCheck;
+    _wlsFilterCheck = form.m_wlsFilterCheck;
+    _minDepthSpin = form.m_minDepthSpin;
+    _maxDepthSpin = form.m_maxDepthSpin;
+    _minConfSpin = form.m_minConfSpin;
+    _multiViewCheck = form.m_multiViewCheck;
+    _minConsistentViewsSpin = form.m_minConsistentViewsSpin;
+    _geomConsistencyCheck = form.m_geomConsistencyCheck;
+    _maxReprojErrorSpin = form.m_maxReprojErrorSpin;
+    _speckleMinAreaSpin = form.m_speckleMinAreaSpin;
+    _fusionMaxImageDimSpin = form.m_fusionMaxImageDimSpin;
+    _colorsCheck = form.m_colorsCheck;
+    _normalsCheck = form.m_normalsCheck;
+    _normalKnnSpin = form.m_normalKnnSpin;
+    _buildMeshCheck = form.m_buildMeshCheck;
+    _meshMethodCombo = form.m_meshMethodCombo;
+    _voxelResSpin = form.m_voxelResSpin;
+    _smoothIterSpin = form.m_smoothIterSpin;
+    _progressBar = form.m_progressBar;
+    _logEdit = form.m_logEdit;
+    _runButton = form.m_runButton;
+    _cancelButton = form.m_cancelButton;
 
-    m_presetCombo->setItemData(0, QStringLiteral("fast"));
-    m_presetCombo->setItemData(1, QStringLiteral("standard"));
-    m_presetCombo->setItemData(2, QStringLiteral("quality"));
-    m_presetCombo->setCurrentIndex(1);
+    _presetCombo->setItemData(0, QStringLiteral("fast"));
+    _presetCombo->setItemData(1, QStringLiteral("standard"));
+    _presetCombo->setItemData(2, QStringLiteral("quality"));
+    _presetCombo->setCurrentIndex(1);
 
-    m_meshMethodCombo->setItemData(0, QStringLiteral("voxel_poisson"));
-    m_meshMethodCombo->setItemData(1, QStringLiteral("ball_pivoting"));
+    _meshMethodCombo->setItemData(0, QStringLiteral("voxel_poisson"));
+    _meshMethodCombo->setItemData(1, QStringLiteral("ball_pivoting"));
 
     if (form.denseTabs && form.sgbmTab)
     {
@@ -89,16 +89,16 @@ void DenseCloudDialog::setupUi()
     }
 
     // 填充 AT 结果列表
-    if (m_projectManager) 
+    if (_projectManager)
     {
-        const QJsonArray atResults = m_projectManager->getAvailableAtResults();
+        const QJsonArray atResults = _projectManager->getAvailableAtResults();
         if (atResults.isEmpty()) 
         {
-            m_atResultCombo->addItem(tr("（请先运行空三）"), -2);
+            _atResultCombo->addItem(tr("（请先运行空三）"), -2);
         } 
         else 
         {
-            m_atResultCombo->addItem(tr("最新 AT 结果（推荐）"), -1);
+            _atResultCombo->addItem(tr("最新 AT 结果（推荐）"), -1);
             for (int i = 0; i < atResults.size(); ++i) 
             {
                 const QJsonObject item = atResults[i].toObject();
@@ -109,31 +109,31 @@ void DenseCloudDialog::setupUi()
                 const QString outDir   = QFileInfo(item.value(QStringLiteral("output_dir")).toString()).fileName();
                 const QString label = QStringLiteral("[%1] %2  %3 张影像  %4 点  (%5)")
                     .arg(idx).arg(outDir).arg(imgCnt).arg(ptsCnt).arg(createdAt);
-                m_atResultCombo->addItem(label, idx);
+                _atResultCombo->addItem(label, idx);
             }
-            m_atResultCombo->setCurrentIndex(0);
+            _atResultCombo->setCurrentIndex(0);
         }
     }
 
-    connect(m_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(_presetCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &DenseCloudDialog::onPresetChanged);
-    connect(m_atResultCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(_atResultCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &DenseCloudDialog::onAnyChanged);
 
     connect(form.browseOutputButton, &QPushButton::clicked, this, &DenseCloudDialog::onBrowseOutput);
-    connect(m_normalsCheck, &QCheckBox::toggled, m_normalKnnSpin, &QSpinBox::setEnabled);
+    connect(_normalsCheck, &QCheckBox::toggled, _normalKnnSpin, &QSpinBox::setEnabled);
 
     auto onMeshToggle = [this](bool checked)
     {
-        m_meshMethodCombo->setEnabled(checked);
-        m_voxelResSpin->setEnabled(checked);
-        m_smoothIterSpin->setEnabled(checked);
+        _meshMethodCombo->setEnabled(checked);
+        _voxelResSpin->setEnabled(checked);
+        _smoothIterSpin->setEnabled(checked);
     };
     onMeshToggle(false);
-    connect(m_buildMeshCheck, &QCheckBox::toggled, this, onMeshToggle);
+    connect(_buildMeshCheck, &QCheckBox::toggled, this, onMeshToggle);
 
-    connect(m_runButton,    &QPushButton::clicked, this, &DenseCloudDialog::onRun);
-    connect(m_cancelButton, &QPushButton::clicked, this, &DenseCloudDialog::onCancel);
+    connect(_runButton,    &QPushButton::clicked, this, &DenseCloudDialog::onRun);
+    connect(_cancelButton, &QPushButton::clicked, this, &DenseCloudDialog::onCancel);
 
     // 初始日志
     appendLog(tr("[MVS] 就绪。请确认已完成空中三角测量后再运行稠密重建。"));
@@ -147,8 +147,8 @@ void DenseCloudDialog::setupUi()
 void DenseCloudDialog::onBrowseOutput()
 {
     const QString dir = QFileDialog::getExistingDirectory(
-        this, tr("选择输出目录"), m_outputDirEdit->text());
-    if (!dir.isEmpty()) m_outputDirEdit->setText(dir);
+        this, tr("选择输出目录"), _outputDirEdit->text());
+    if (!dir.isEmpty()) _outputDirEdit->setText(dir);
 }
 
 void DenseCloudDialog::onRun()
@@ -156,8 +156,8 @@ void DenseCloudDialog::onRun()
     const QJsonObject settings = collectSettings();
     emit settingsChanged(settings);
     emit runRequested(settings);
-    m_runButton->setEnabled(false);
-    m_progressBar->setValue(0);
+    _runButton->setEnabled(false);
+    _progressBar->setValue(0);
     appendLog(tr("[MVS] 正在启动稠密点云重建..."));
 }
 
@@ -173,48 +173,48 @@ void DenseCloudDialog::onAnyChanged()
 
 void DenseCloudDialog::onPresetChanged(int index)
 {
-    const QString preset = m_presetCombo->itemData(index).toString();
+    const QString preset = _presetCombo->itemData(index).toString();
     if (preset == QLatin1String("fast")) 
     {
-        m_numDispSpin->setValue(64);
-        m_blockSizeSpin->setValue(11);
-        m_uniquenessSpin->setValue(5);
-        m_speckleSizeSpin->setValue(50);
-        m_minConsistentViewsSpin->setValue(2);
-        m_geomConsistencyCheck->setChecked(true);
-        m_maxReprojErrorSpin->setValue(2.0);
-        m_speckleMinAreaSpin->setValue(16);
-        m_fusionMaxImageDimSpin->setValue(2048);
-        m_fullDpCheck->setChecked(false);
-        m_wlsFilterCheck->setChecked(false);
-        m_normalsCheck->setChecked(false);
-        m_buildMeshCheck->setChecked(false);
+        _numDispSpin->setValue(64);
+        _blockSizeSpin->setValue(11);
+        _uniquenessSpin->setValue(5);
+        _speckleSizeSpin->setValue(50);
+        _minConsistentViewsSpin->setValue(2);
+        _geomConsistencyCheck->setChecked(true);
+        _maxReprojErrorSpin->setValue(2.0);
+        _speckleMinAreaSpin->setValue(16);
+        _fusionMaxImageDimSpin->setValue(2048);
+        _fullDpCheck->setChecked(false);
+        _wlsFilterCheck->setChecked(false);
+        _normalsCheck->setChecked(false);
+        _buildMeshCheck->setChecked(false);
     } else if (preset == QLatin1String("quality")) {
-        m_numDispSpin->setValue(256);
-        m_blockSizeSpin->setValue(7);
-        m_uniquenessSpin->setValue(15);
-        m_speckleSizeSpin->setValue(150);
-        m_minConsistentViewsSpin->setValue(3);
-        m_geomConsistencyCheck->setChecked(true);
-        m_maxReprojErrorSpin->setValue(1.5);
-        m_speckleMinAreaSpin->setValue(24);
-        m_fusionMaxImageDimSpin->setValue(2048);
-        m_fullDpCheck->setChecked(true);
-        m_wlsFilterCheck->setChecked(true);
-        m_normalsCheck->setChecked(true);
+        _numDispSpin->setValue(256);
+        _blockSizeSpin->setValue(7);
+        _uniquenessSpin->setValue(15);
+        _speckleSizeSpin->setValue(150);
+        _minConsistentViewsSpin->setValue(3);
+        _geomConsistencyCheck->setChecked(true);
+        _maxReprojErrorSpin->setValue(1.5);
+        _speckleMinAreaSpin->setValue(24);
+        _fusionMaxImageDimSpin->setValue(2048);
+        _fullDpCheck->setChecked(true);
+        _wlsFilterCheck->setChecked(true);
+        _normalsCheck->setChecked(true);
     } else { // standard
-        m_numDispSpin->setValue(128);
-        m_blockSizeSpin->setValue(9);
-        m_uniquenessSpin->setValue(10);
-        m_speckleSizeSpin->setValue(100);
-        m_minConsistentViewsSpin->setValue(2);
-        m_geomConsistencyCheck->setChecked(true);
-        m_maxReprojErrorSpin->setValue(2.0);
-        m_speckleMinAreaSpin->setValue(16);
-        m_fusionMaxImageDimSpin->setValue(2048);
-        m_fullDpCheck->setChecked(true);
-        m_wlsFilterCheck->setChecked(true);
-        m_normalsCheck->setChecked(true);
+        _numDispSpin->setValue(128);
+        _blockSizeSpin->setValue(9);
+        _uniquenessSpin->setValue(10);
+        _speckleSizeSpin->setValue(100);
+        _minConsistentViewsSpin->setValue(2);
+        _geomConsistencyCheck->setChecked(true);
+        _maxReprojErrorSpin->setValue(2.0);
+        _speckleMinAreaSpin->setValue(16);
+        _fusionMaxImageDimSpin->setValue(2048);
+        _fullDpCheck->setChecked(true);
+        _wlsFilterCheck->setChecked(true);
+        _normalsCheck->setChecked(true);
     }
 }
 
@@ -226,13 +226,13 @@ QJsonObject DenseCloudDialog::collectSettings() const
 {
     QJsonObject s;
     // at_index: AT结果索引（int），-1 表示始终使用最新结果
-    const QVariant atData = m_atResultCombo->currentData();
+    const QVariant atData = _atResultCombo->currentData();
     s["at_index"]          = atData.isValid() ? atData.toInt() : -1;
     s["at_selection_mode"] = (s["at_index"].toInt(-1) < 0)
         ? QStringLiteral("latest")
         : QStringLiteral("fixed");
-    s["output_dir"]        = m_outputDirEdit->text();
-    s["preset"]            = m_presetCombo->currentData().toString();
+    s["output_dir"]        = _outputDirEdit->text();
+    s["preset"]            = _presetCombo->currentData().toString();
 
     const QString preset = s["preset"].toString(QStringLiteral("standard"));
     if (preset == QStringLiteral("fast"))
@@ -251,28 +251,28 @@ QJsonObject DenseCloudDialog::collectSettings() const
         s["iterations"] = 6;
     }
     s["patchSize"] = 11;
-    s["minViews"] = m_minConsistentViewsSpin->value();
-    s["confidence"] = m_minConfSpin->value();
-    s["minConfidence"] = m_minConfSpin->value();
+    s["minViews"] = _minConsistentViewsSpin->value();
+    s["confidence"] = _minConfSpin->value();
+    s["minConfidence"] = _minConfSpin->value();
     s["cuda"] = true;
 
     // Cloud
-    s["min_confidence"]    = m_minConfSpin->value();
-    s["minConsistentViews"] = m_minConsistentViewsSpin->value();
-    s["geomConsistency"]   = m_geomConsistencyCheck->isChecked();
-    s["maxReprojError"]    = m_maxReprojErrorSpin->value();
-    s["speckleMinArea"]    = m_speckleMinAreaSpin->value();
-    s["fusionMaxImageDim"] = m_fusionMaxImageDimSpin->value();
-    s["multi_view_fusion"] = m_multiViewCheck->isChecked();
-    s["output_colors"]     = m_colorsCheck->isChecked();
-    s["output_normals"]    = m_normalsCheck->isChecked();
-    s["normal_knn"]        = m_normalKnnSpin->value();
+    s["min_confidence"]    = _minConfSpin->value();
+    s["minConsistentViews"] = _minConsistentViewsSpin->value();
+    s["geomConsistency"]   = _geomConsistencyCheck->isChecked();
+    s["maxReprojError"]    = _maxReprojErrorSpin->value();
+    s["speckleMinArea"]    = _speckleMinAreaSpin->value();
+    s["fusionMaxImageDim"] = _fusionMaxImageDimSpin->value();
+    s["multi_view_fusion"] = _multiViewCheck->isChecked();
+    s["output_colors"]     = _colorsCheck->isChecked();
+    s["output_normals"]    = _normalsCheck->isChecked();
+    s["normal_knn"]        = _normalKnnSpin->value();
 
     // Mesh
-    s["build_mesh"]        = m_buildMeshCheck->isChecked();
-    s["mesh_method"]       = m_meshMethodCombo->currentData().toString();
-    s["voxel_resolution"]  = m_voxelResSpin->value();
-    s["smooth_iterations"] = m_smoothIterSpin->value();
+    s["build_mesh"]        = _buildMeshCheck->isChecked();
+    s["mesh_method"]       = _meshMethodCombo->currentData().toString();
+    s["voxel_resolution"]  = _voxelResSpin->value();
+    s["smooth_iterations"] = _smoothIterSpin->value();
 
     return s;
 }
@@ -280,46 +280,46 @@ QJsonObject DenseCloudDialog::collectSettings() const
 void DenseCloudDialog::applySettings(const QJsonObject &s)
 {
     if (s.contains("at_selection_mode") && s.value("at_selection_mode").toString() == QStringLiteral("latest")) {
-        const int latestIdx = m_atResultCombo->findData(-1);
+        const int latestIdx = _atResultCombo->findData(-1);
         if (latestIdx >= 0) {
-            m_atResultCombo->setCurrentIndex(latestIdx);
+            _atResultCombo->setCurrentIndex(latestIdx);
         }
     } else if (s.contains("at_index")) {
-        const int latestIdx = m_atResultCombo->findData(-1);
+        const int latestIdx = _atResultCombo->findData(-1);
         if (!s.contains("at_selection_mode") && latestIdx >= 0) {
-            m_atResultCombo->setCurrentIndex(latestIdx);
+            _atResultCombo->setCurrentIndex(latestIdx);
         } else {
-            const int idx = m_atResultCombo->findData(s.value("at_index").toInt(-1));
+            const int idx = _atResultCombo->findData(s.value("at_index").toInt(-1));
             if (idx >= 0) {
-                m_atResultCombo->setCurrentIndex(idx);
+                _atResultCombo->setCurrentIndex(idx);
             }
         }
     }
-    if (s.contains("output_dir"))       m_outputDirEdit->setText(s["output_dir"].toString());
-    if (s.contains("num_disparities"))  m_numDispSpin->setValue(s["num_disparities"].toInt(128));
-    if (s.contains("block_size"))       m_blockSizeSpin->setValue(s["block_size"].toInt(9));
-    if (s.contains("uniqueness_ratio")) m_uniquenessSpin->setValue(s["uniqueness_ratio"].toInt(10));
-    if (s.contains("speckle_window_size")) m_speckleSizeSpin->setValue(s["speckle_window_size"].toInt(100));
-    if (s.contains("use_full_dp"))      m_fullDpCheck->setChecked(s["use_full_dp"].toBool(true));
-    if (s.contains("use_wls_filter"))   m_wlsFilterCheck->setChecked(s["use_wls_filter"].toBool(true));
-    if (s.contains("min_depth"))        m_minDepthSpin->setValue(s["min_depth"].toDouble(0.01));
-    if (s.contains("max_depth"))        m_maxDepthSpin->setValue(s["max_depth"].toDouble(1e5));
-    if (s.contains("min_confidence"))   m_minConfSpin->setValue(s["min_confidence"].toDouble(0.1));
-    if (s.contains("minConsistentViews")) m_minConsistentViewsSpin->setValue(s["minConsistentViews"].toInt(2));
-    if (s.contains("geomConsistency"))  m_geomConsistencyCheck->setChecked(s["geomConsistency"].toBool(true));
-    if (s.contains("maxReprojError"))   m_maxReprojErrorSpin->setValue(s["maxReprojError"].toDouble(2.0));
-    if (s.contains("speckleMinArea"))   m_speckleMinAreaSpin->setValue(s["speckleMinArea"].toInt(16));
-    if (s.contains("fusionMaxImageDim")) m_fusionMaxImageDimSpin->setValue(s["fusionMaxImageDim"].toInt(2048));
-    if (s.contains("multi_view_fusion")) m_multiViewCheck->setChecked(s["multi_view_fusion"].toBool(true));
-    if (s.contains("output_colors"))    m_colorsCheck->setChecked(s["output_colors"].toBool(true));
-    if (s.contains("output_normals"))   m_normalsCheck->setChecked(s["output_normals"].toBool(true));
-    if (s.contains("normal_knn"))       m_normalKnnSpin->setValue(s["normal_knn"].toInt(20));
-    if (s.contains("build_mesh"))       m_buildMeshCheck->setChecked(s["build_mesh"].toBool(false));
-    if (s.contains("voxel_resolution")) m_voxelResSpin->setValue(s["voxel_resolution"].toInt(256));
-    if (s.contains("smooth_iterations")) m_smoothIterSpin->setValue(s["smooth_iterations"].toInt(1));
+    if (s.contains("output_dir"))       _outputDirEdit->setText(s["output_dir"].toString());
+    if (s.contains("num_disparities"))  _numDispSpin->setValue(s["num_disparities"].toInt(128));
+    if (s.contains("block_size"))       _blockSizeSpin->setValue(s["block_size"].toInt(9));
+    if (s.contains("uniqueness_ratio")) _uniquenessSpin->setValue(s["uniqueness_ratio"].toInt(10));
+    if (s.contains("speckle_window_size")) _speckleSizeSpin->setValue(s["speckle_window_size"].toInt(100));
+    if (s.contains("use_full_dp"))      _fullDpCheck->setChecked(s["use_full_dp"].toBool(true));
+    if (s.contains("use_wls_filter"))   _wlsFilterCheck->setChecked(s["use_wls_filter"].toBool(true));
+    if (s.contains("min_depth"))        _minDepthSpin->setValue(s["min_depth"].toDouble(0.01));
+    if (s.contains("max_depth"))        _maxDepthSpin->setValue(s["max_depth"].toDouble(1e5));
+    if (s.contains("min_confidence"))   _minConfSpin->setValue(s["min_confidence"].toDouble(0.1));
+    if (s.contains("minConsistentViews")) _minConsistentViewsSpin->setValue(s["minConsistentViews"].toInt(2));
+    if (s.contains("geomConsistency"))  _geomConsistencyCheck->setChecked(s["geomConsistency"].toBool(true));
+    if (s.contains("maxReprojError"))   _maxReprojErrorSpin->setValue(s["maxReprojError"].toDouble(2.0));
+    if (s.contains("speckleMinArea"))   _speckleMinAreaSpin->setValue(s["speckleMinArea"].toInt(16));
+    if (s.contains("fusionMaxImageDim")) _fusionMaxImageDimSpin->setValue(s["fusionMaxImageDim"].toInt(2048));
+    if (s.contains("multi_view_fusion")) _multiViewCheck->setChecked(s["multi_view_fusion"].toBool(true));
+    if (s.contains("output_colors"))    _colorsCheck->setChecked(s["output_colors"].toBool(true));
+    if (s.contains("output_normals"))   _normalsCheck->setChecked(s["output_normals"].toBool(true));
+    if (s.contains("normal_knn"))       _normalKnnSpin->setValue(s["normal_knn"].toInt(20));
+    if (s.contains("build_mesh"))       _buildMeshCheck->setChecked(s["build_mesh"].toBool(false));
+    if (s.contains("voxel_resolution")) _voxelResSpin->setValue(s["voxel_resolution"].toInt(256));
+    if (s.contains("smooth_iterations")) _smoothIterSpin->setValue(s["smooth_iterations"].toInt(1));
 }
 
 void DenseCloudDialog::appendLog(const QString &line)
 {
-    if (m_logEdit) m_logEdit->append(line);
+    if (_logEdit) _logEdit->append(line);
 }

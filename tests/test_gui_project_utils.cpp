@@ -4571,11 +4571,11 @@ TEST(DenseCloudDialogTest, ExposesAdvancedMvsQualitySettingsWithoutChangingDefau
     EXPECT_TRUE(ui.contains(QStringLiteral("m_speckleMinAreaSpin")));
     EXPECT_TRUE(ui.contains(QStringLiteral("m_fusionMaxImageDimSpin")));
 
-    EXPECT_TRUE(header.contains(QStringLiteral("m_minConsistentViewsSpin")));
-    EXPECT_TRUE(header.contains(QStringLiteral("m_geomConsistencyCheck")));
-    EXPECT_TRUE(header.contains(QStringLiteral("m_maxReprojErrorSpin")));
-    EXPECT_TRUE(header.contains(QStringLiteral("m_speckleMinAreaSpin")));
-    EXPECT_TRUE(header.contains(QStringLiteral("m_fusionMaxImageDimSpin")));
+    EXPECT_TRUE(header.contains(QStringLiteral("_minConsistentViewsSpin")));
+    EXPECT_TRUE(header.contains(QStringLiteral("_geomConsistencyCheck")));
+    EXPECT_TRUE(header.contains(QStringLiteral("_maxReprojErrorSpin")));
+    EXPECT_TRUE(header.contains(QStringLiteral("_speckleMinAreaSpin")));
+    EXPECT_TRUE(header.contains(QStringLiteral("_fusionMaxImageDimSpin")));
 
     EXPECT_TRUE(source.contains(QStringLiteral("s[\"minConsistentViews\"]")));
     EXPECT_TRUE(source.contains(QStringLiteral("s[\"geomConsistency\"]")));
@@ -4588,6 +4588,95 @@ TEST(DenseCloudDialogTest, ExposesAdvancedMvsQualitySettingsWithoutChangingDefau
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"maxReprojError\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"speckleMinArea\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"fusionMaxImageDim\")")));
+}
+
+TEST(CodeStyleTest, DenseCloudDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("ProjectManager *_projectManager = nullptr;"),
+        QStringLiteral("QComboBox *_imagePairCombo = nullptr;"),
+        QStringLiteral("QComboBox *_atResultCombo = nullptr;"),
+        QStringLiteral("QLineEdit *_outputDirEdit = nullptr;"),
+        QStringLiteral("QComboBox *_presetCombo = nullptr;"),
+        QStringLiteral("QSpinBox *_numDispSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_blockSizeSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_uniquenessSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_speckleSizeSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_wlsFilterCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_fullDpCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_minDepthSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_maxDepthSpin = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_minConfSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_normalsCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_colorsCheck = nullptr;"),
+        QStringLiteral("QCheckBox *_multiViewCheck = nullptr;"),
+        QStringLiteral("QSpinBox *_minConsistentViewsSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_geomConsistencyCheck = nullptr;"),
+        QStringLiteral("QDoubleSpinBox *_maxReprojErrorSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_speckleMinAreaSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_fusionMaxImageDimSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_normalKnnSpin = nullptr;"),
+        QStringLiteral("QCheckBox *_buildMeshCheck = nullptr;"),
+        QStringLiteral("QComboBox *_meshMethodCombo = nullptr;"),
+        QStringLiteral("QSpinBox *_voxelResSpin = nullptr;"),
+        QStringLiteral("QSpinBox *_smoothIterSpin = nullptr;"),
+        QStringLiteral("QProgressBar *_progressBar = nullptr;"),
+        QStringLiteral("QTextEdit *_logEdit = nullptr;"),
+        QStringLiteral("QPushButton *_runButton = nullptr;"),
+        QStringLiteral("QPushButton *_cancelButton = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_imagePairCombo"),
+        QStringLiteral("m_atResultCombo"),
+        QStringLiteral("m_outputDirEdit"),
+        QStringLiteral("m_presetCombo"),
+        QStringLiteral("m_numDispSpin"),
+        QStringLiteral("m_blockSizeSpin"),
+        QStringLiteral("m_uniquenessSpin"),
+        QStringLiteral("m_speckleSizeSpin"),
+        QStringLiteral("m_wlsFilterCheck"),
+        QStringLiteral("m_fullDpCheck"),
+        QStringLiteral("m_minDepthSpin"),
+        QStringLiteral("m_maxDepthSpin"),
+        QStringLiteral("m_minConfSpin"),
+        QStringLiteral("m_normalsCheck"),
+        QStringLiteral("m_colorsCheck"),
+        QStringLiteral("m_multiViewCheck"),
+        QStringLiteral("m_minConsistentViewsSpin"),
+        QStringLiteral("m_geomConsistencyCheck"),
+        QStringLiteral("m_maxReprojErrorSpin"),
+        QStringLiteral("m_speckleMinAreaSpin"),
+        QStringLiteral("m_fusionMaxImageDimSpin"),
+        QStringLiteral("m_normalKnnSpin"),
+        QStringLiteral("m_buildMeshCheck"),
+        QStringLiteral("m_meshMethodCombo"),
+        QStringLiteral("m_voxelResSpin"),
+        QStringLiteral("m_smoothIterSpin"),
+        QStringLiteral("m_progressBar"),
+        QStringLiteral("m_logEdit"),
+        QStringLiteral("m_runButton"),
+        QStringLiteral("m_cancelButton"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+    EXPECT_FALSE(source.contains(QStringLiteral("m_projectManager(")));
 }
 
 TEST(BundleAdjustDialogTest, KeepsActionButtonsOutsideScrollableParameterArea)
