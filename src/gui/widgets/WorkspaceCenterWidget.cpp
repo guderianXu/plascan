@@ -39,63 +39,63 @@ void setViewButtonText(QPushButton *button, const QString &text, const QString &
 
 WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
     : QWidget(parent)
-    , m_ui(new Ui::WorkspaceCenterWidget)
+    , _ui(new Ui::WorkspaceCenterWidget)
 {
-    m_ui->setupUi(this);
+    _ui->setupUi(this);
 
-    m_modelBtn = m_ui->m_modelBtn;
-    m_imageBtn = m_ui->m_imageBtn;
-    m_compareBtn = m_ui->m_compareBtn;
-    m_obsNetBtn = m_ui->m_obsNetBtn;
-    m_stack = m_ui->m_stack;
-    m_modelView = m_ui->m_modelView;
-    m_canvas = m_ui->m_canvas;
-    m_dualImageViewer = m_ui->m_dualImageViewer;
-    m_obsNetView = m_ui->m_obsNetView;
+    _modelBtn = _ui->m_modelBtn;
+    _imageBtn = _ui->m_imageBtn;
+    _compareBtn = _ui->m_compareBtn;
+    _obsNetBtn = _ui->m_obsNetBtn;
+    _stack = _ui->m_stack;
+    _modelView = _ui->m_modelView;
+    _canvas = _ui->m_canvas;
+    _dualImageViewer = _ui->m_dualImageViewer;
+    _obsNetView = _ui->m_obsNetView;
 
-    connect(m_modelBtn, &QPushButton::clicked, this, &WorkspaceCenterWidget::showModelView);
-    connect(m_imageBtn, &QPushButton::clicked, this, [this]()
+    connect(_modelBtn, &QPushButton::clicked, this, &WorkspaceCenterWidget::showModelView);
+    connect(_imageBtn, &QPushButton::clicked, this, [this]()
     {
-        m_stack->setCurrentWidget(m_canvas);
-        m_modelBtn->setChecked(false);
-        m_imageBtn->setChecked(true);
-        if (m_compareBtn) m_compareBtn->setChecked(false);
-        if (m_obsNetBtn) m_obsNetBtn->setChecked(false);
+        _stack->setCurrentWidget(_canvas);
+        _modelBtn->setChecked(false);
+        _imageBtn->setChecked(true);
+        if (_compareBtn) _compareBtn->setChecked(false);
+        if (_obsNetBtn) _obsNetBtn->setChecked(false);
     });
-    connect(m_compareBtn, &QPushButton::clicked, this, [this]()
+    connect(_compareBtn, &QPushButton::clicked, this, [this]()
     {
-        if (!m_stack || !m_dualImageViewer)
+        if (!_stack || !_dualImageViewer)
         {
             return;
         }
-        m_stack->setCurrentWidget(m_dualImageViewer);
-        if (m_modelBtn) m_modelBtn->setChecked(false);
-        if (m_imageBtn) m_imageBtn->setChecked(false);
-        if (m_compareBtn) m_compareBtn->setChecked(true);
-        if (m_obsNetBtn) m_obsNetBtn->setChecked(false);
+        _stack->setCurrentWidget(_dualImageViewer);
+        if (_modelBtn) _modelBtn->setChecked(false);
+        if (_imageBtn) _imageBtn->setChecked(false);
+        if (_compareBtn) _compareBtn->setChecked(true);
+        if (_obsNetBtn) _obsNetBtn->setChecked(false);
     });
-    connect(m_obsNetBtn, &QPushButton::clicked, this, [this]()
+    connect(_obsNetBtn, &QPushButton::clicked, this, [this]()
     {
-        if (!m_stack || !m_obsNetView)
+        if (!_stack || !_obsNetView)
         {
             return;
         }
-        m_stack->setCurrentWidget(m_obsNetView);
-        if (m_modelBtn)
+        _stack->setCurrentWidget(_obsNetView);
+        if (_modelBtn)
         {
-            m_modelBtn->setChecked(false);
+            _modelBtn->setChecked(false);
         }
-        if (m_imageBtn)
+        if (_imageBtn)
         {
-            m_imageBtn->setChecked(false);
+            _imageBtn->setChecked(false);
         }
-        if (m_compareBtn)
+        if (_compareBtn)
         {
-            m_compareBtn->setChecked(false);
+            _compareBtn->setChecked(false);
         }
-        if (m_obsNetBtn)
+        if (_obsNetBtn)
         {
-            m_obsNetBtn->setChecked(true);
+            _obsNetBtn->setChecked(true);
         }
     });
 
@@ -104,69 +104,69 @@ WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
 
 WorkspaceCenterWidget::~WorkspaceCenterWidget()
 {
-    delete m_ui;
+    delete _ui;
 }
 
 CanvasWidget *WorkspaceCenterWidget::canvas() const
 {
-    return m_canvas;
+    return _canvas;
 }
 
 CameraSceneWidget *WorkspaceCenterWidget::modelView() const
 {
-    return m_modelView;
+    return _modelView;
 }
 
 void WorkspaceCenterWidget::showModelView()
 {
-    if (!m_stack || !m_modelView)
+    if (!_stack || !_modelView)
     {
         return;
     }
-    m_stack->setCurrentWidget(m_modelView);
-    if (m_modelBtn)
+    _stack->setCurrentWidget(_modelView);
+    if (_modelBtn)
     {
-        m_modelBtn->setChecked(true);
+        _modelBtn->setChecked(true);
     }
-    if (m_imageBtn)
+    if (_imageBtn)
     {
-        m_imageBtn->setChecked(false);
+        _imageBtn->setChecked(false);
     }
-    if (m_compareBtn)
+    if (_compareBtn)
     {
-        m_compareBtn->setChecked(false);
+        _compareBtn->setChecked(false);
     }
-    if (m_obsNetBtn)
+    if (_obsNetBtn)
     {
-        m_obsNetBtn->setChecked(false);
+        _obsNetBtn->setChecked(false);
     }
 }
 
 void WorkspaceCenterWidget::showImageView(const QString &imagePath)
 {
-    if (!m_stack || !m_canvas)
+    if (!_stack || !_canvas)
     {
         return;
     }
 
     // 先切换到 canvas（确保 fitInView 使用正确的视口尺寸），再加载影像
-    m_stack->setCurrentWidget(m_canvas);
-    m_modelBtn->setChecked(false);
-    m_imageBtn->setChecked(true);
-    if (m_compareBtn) m_compareBtn->setChecked(false);
-    if (m_obsNetBtn) m_obsNetBtn->setChecked(false);
+    _stack->setCurrentWidget(_canvas);
+    _modelBtn->setChecked(false);
+    _imageBtn->setChecked(true);
+    if (_compareBtn) _compareBtn->setChecked(false);
+    if (_obsNetBtn) _obsNetBtn->setChecked(false);
 
     if (!imagePath.trimmed().isEmpty())
     {
-        setViewButtonText(m_imageBtn, displayNameForPath(imagePath), imagePath);
-        m_imageBtn->setVisible(true);
-        m_canvas->showImage(imagePath);
+        setViewButtonText(_imageBtn, displayNameForPath(imagePath), imagePath);
+        _imageBtn->setVisible(true);
+        _canvas->showImage(imagePath);
     }
 }
 
 void WorkspaceCenterWidget::showSideBySideImages(const QString &primaryImagePath, const QString &sideImagePath)
 {
-    if (!m_stack || !m_dualImageViewer)
+    if (!_stack || !_dualImageViewer)
     {
         return;
     }
@@ -175,31 +175,31 @@ void WorkspaceCenterWidget::showSideBySideImages(const QString &primaryImagePath
         return;
     }
 
-    m_dualImageViewer->loadMatchPair(primaryImagePath,
+    _dualImageViewer->loadMatchPair(primaryImagePath,
                                      sideImagePath,
                                      QVector<QPointF>(),
                                      QVector<QPointF>());
-    m_dualImageViewer->fitBothViews();
-    m_stack->setCurrentWidget(m_dualImageViewer);
+    _dualImageViewer->fitBothViews();
+    _stack->setCurrentWidget(_dualImageViewer);
 
     const QString primaryName = displayNameForPath(primaryImagePath);
     const QString sideName = displayNameForPath(sideImagePath);
-    if (m_compareBtn)
+    if (_compareBtn)
     {
-        setViewButtonText(m_compareBtn,
+        setViewButtonText(_compareBtn,
                           QStringLiteral("对比: %1 | %2").arg(primaryName, sideName),
                           QStringLiteral("%1\n%2").arg(primaryImagePath, sideImagePath));
-        m_compareBtn->setVisible(true);
-        m_compareBtn->setChecked(true);
+        _compareBtn->setVisible(true);
+        _compareBtn->setChecked(true);
     }
-    if (m_modelBtn) m_modelBtn->setChecked(false);
-    if (m_imageBtn) m_imageBtn->setChecked(false);
-    if (m_obsNetBtn) m_obsNetBtn->setChecked(false);
+    if (_modelBtn) _modelBtn->setChecked(false);
+    if (_imageBtn) _imageBtn->setChecked(false);
+    if (_obsNetBtn) _obsNetBtn->setChecked(false);
 }
 
 void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
 {
-    if (!m_modelView)
+    if (!_modelView)
     {
         return;
     }
@@ -207,27 +207,27 @@ void WorkspaceCenterWidget::showModelFile(const QString &modelPath)
     const QString ext = QFileInfo(modelPath).suffix().toLower();
     if (ext == QLatin1String("obj"))
     {
-        m_modelView->loadModelFromObj(modelPath);
+        _modelView->loadModelFromObj(modelPath);
     }
     else if (ext == QLatin1String("ply"))
     {
-        m_modelView->loadModelFromPly(modelPath);
+        _modelView->loadModelFromPly(modelPath);
     }
     else
     {
-        m_modelView->loadPointCloudFromXyz(modelPath);
+        _modelView->loadPointCloudFromXyz(modelPath);
     }
 
-    if (m_modelBtn)
+    if (_modelBtn)
     {
-        setViewButtonText(m_modelBtn, displayNameForPath(modelPath), modelPath);
+        setViewButtonText(_modelBtn, displayNameForPath(modelPath), modelPath);
     }
     showModelView();
 }
 
 void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
 {
-    if (!m_modelView)
+    if (!_modelView)
     {
         return;
     }
@@ -238,10 +238,10 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
     }
     else
     {
-        m_modelView->loadPointCloudFromXyz(pointCloudPath);
-        if (m_modelBtn)
+        _modelView->loadPointCloudFromXyz(pointCloudPath);
+        if (_modelBtn)
         {
-            setViewButtonText(m_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
+            setViewButtonText(_modelBtn, displayNameForPath(pointCloudPath), pointCloudPath);
         }
         showModelView();
     }
@@ -249,31 +249,31 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
 
 void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title)
 {
-    if (!m_stack || !m_obsNetView || !m_obsNetBtn)
+    if (!_stack || !_obsNetView || !_obsNetBtn)
     {
         return;
     }
 
     const QString buttonText = title.trimmed().isEmpty() ? tr("观测网络") : title.trimmed();
-    setViewButtonText(m_obsNetBtn, buttonText, buttonText);
-    m_obsNetBtn->setVisible(true);
+    setViewButtonText(_obsNetBtn, buttonText, buttonText);
+    _obsNetBtn->setVisible(true);
 
-    m_obsNetView->setNetwork(net);
-    m_stack->setCurrentWidget(m_obsNetView);
+    _obsNetView->setNetwork(net);
+    _stack->setCurrentWidget(_obsNetView);
 
-    if (m_modelBtn)
+    if (_modelBtn)
     {
-        m_modelBtn->setChecked(false);
+        _modelBtn->setChecked(false);
     }
-    if (m_imageBtn)
+    if (_imageBtn)
     {
-        m_imageBtn->setChecked(false);
+        _imageBtn->setChecked(false);
     }
-    if (m_compareBtn)
+    if (_compareBtn)
     {
-        m_compareBtn->setChecked(false);
+        _compareBtn->setChecked(false);
     }
-    m_obsNetBtn->setChecked(true);
+    _obsNetBtn->setChecked(true);
 }
 
 void WorkspaceCenterWidget::setProjectMeta(const QJsonObject &meta)
@@ -318,8 +318,8 @@ void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
         poses.push_back(pose);
     }
 
-    if (m_modelView)
+    if (_modelView)
     {
-        m_modelView->setCameraPoses(poses);
+        _modelView->setCameraPoses(poses);
     }
 }

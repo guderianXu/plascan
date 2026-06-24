@@ -2033,6 +2033,62 @@ TEST(CodeStyleTest, DualImageViewerUsesLowerCamelPrivateMemberNames)
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_splitter"))) << "Qt Designer object name must stay stable";
 }
 
+TEST(CodeStyleTest, WorkspaceCenterWidgetUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("Ui::WorkspaceCenterWidget *_ui = nullptr;"),
+        QStringLiteral("QPushButton *_modelBtn = nullptr;"),
+        QStringLiteral("QPushButton *_imageBtn = nullptr;"),
+        QStringLiteral("QPushButton *_compareBtn = nullptr;"),
+        QStringLiteral("QPushButton *_obsNetBtn = nullptr;"),
+        QStringLiteral("QStackedWidget *_stack = nullptr;"),
+        QStringLiteral("CameraSceneWidget *_modelView = nullptr;"),
+        QStringLiteral("CanvasWidget *_canvas = nullptr;"),
+        QStringLiteral("DualImageViewer *_dualImageViewer = nullptr;"),
+        QStringLiteral("ObservationNetworkView *_obsNetView = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_ui"),
+        QStringLiteral("m_modelBtn"),
+        QStringLiteral("m_imageBtn"),
+        QStringLiteral("m_compareBtn"),
+        QStringLiteral("m_obsNetBtn"),
+        QStringLiteral("m_stack"),
+        QStringLiteral("m_modelView"),
+        QStringLiteral("m_canvas"),
+        QStringLiteral("m_dualImageViewer"),
+        QStringLiteral("m_obsNetView"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_modelBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_imageBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_compareBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_obsNetBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_stack"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_modelView"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_canvas"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_dualImageViewer"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_obsNetView"))) << "Qt Designer object name must stay stable";
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));

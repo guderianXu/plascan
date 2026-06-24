@@ -38,14 +38,14 @@ public slots:
 private:
     void refreshModelFromMeta(const QJsonObject &meta);
 
-    Ui::WorkspaceCenterWidget *m_ui = nullptr;
-    QPushButton *m_modelBtn = nullptr;
-    QPushButton *m_imageBtn = nullptr;
-    QPushButton *m_compareBtn = nullptr;
-    QPushButton *m_obsNetBtn = nullptr;
-    QStackedWidget *m_stack = nullptr;
-    CameraSceneWidget *m_modelView = nullptr;
-    CanvasWidget *m_canvas = nullptr;
-    DualImageViewer *m_dualImageViewer = nullptr;
-    ObservationNetworkView *m_obsNetView = nullptr;
+    Ui::WorkspaceCenterWidget *_ui = nullptr;
+    QPushButton *_modelBtn = nullptr;
+    QPushButton *_imageBtn = nullptr;
+    QPushButton *_compareBtn = nullptr;
+    QPushButton *_obsNetBtn = nullptr;
+    QStackedWidget *_stack = nullptr;
+    CameraSceneWidget *_modelView = nullptr;
+    CanvasWidget *_canvas = nullptr;
+    DualImageViewer *_dualImageViewer = nullptr;
+    ObservationNetworkView *_obsNetView = nullptr;
 };
