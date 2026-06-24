@@ -36,8 +36,8 @@ private:
     QStringList selectedImagePaths() const;
     void rebuildTable(const QJsonArray &images);
 
-    QTableWidget *m_table{};
-    QPushButton *m_exactImportBtn{};
-    QPushButton *m_batchImportBtn{};
-    QPushButton *m_clearCameraBtn{};
+    QTableWidget *_table{};
+    QPushButton *_exactImportBtn{};
+    QPushButton *_batchImportBtn{};
+    QPushButton *_clearCameraBtn{};
 };

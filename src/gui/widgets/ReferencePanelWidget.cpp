@@ -55,13 +55,13 @@ ReferencePanelWidget::ReferencePanelWidget(QWidget *parent)
     Ui::ReferencePanelWidget ui;
     ui.setupUi(this);
 
-    m_table = ui.m_table;
-    m_exactImportBtn = ui.m_exactImportBtn;
-    m_batchImportBtn = ui.m_batchImportBtn;
-    m_clearCameraBtn = ui.m_clearCameraBtn;
+    _table = ui.m_table;
+    _exactImportBtn = ui.m_exactImportBtn;
+    _batchImportBtn = ui.m_batchImportBtn;
+    _clearCameraBtn = ui.m_clearCameraBtn;
 
-    m_table->setColumnCount(10);
-    m_table->setHorizontalHeaderLabels({
+    _table->setColumnCount(10);
+    _table->setHorizontalHeaderLabels({
         tr("影像"),
         tr("状态"),
         tr("X (m)"),
@@ -73,27 +73,27 @@ ReferencePanelWidget::ReferencePanelWidget(QWidget *parent)
         tr("fu"),
         tr("fv")
     });
-    m_table->horizontalHeader()->setStretchLastSection(true);
-    m_table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(8, QHeaderView::ResizeToContents);
-    m_table->horizontalHeader()->setSectionResizeMode(9, QHeaderView::Stretch);
-    m_table->verticalHeader()->setVisible(false);
-    m_table->setAlternatingRowColors(true);
-    m_table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
-    m_table->setWordWrap(false);
+    _table->horizontalHeader()->setStretchLastSection(true);
+    _table->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(3, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(4, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(5, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(6, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(7, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(8, QHeaderView::ResizeToContents);
+    _table->horizontalHeader()->setSectionResizeMode(9, QHeaderView::Stretch);
+    _table->verticalHeader()->setVisible(false);
+    _table->setAlternatingRowColors(true);
+    _table->setHorizontalScrollMode(QAbstractItemView::ScrollPerPixel);
+    _table->setWordWrap(false);
 
-    connect(m_exactImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onExactImportClicked);
-    connect(m_batchImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onBatchImportClicked);
-    connect(m_clearCameraBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onClearCameraClicked);
-    connect(m_table, &QTableWidget::cellDoubleClicked, this, &ReferencePanelWidget::onCellDoubleClicked);
-    connect(m_table->selectionModel(), &QItemSelectionModel::selectionChanged,
+    connect(_exactImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onExactImportClicked);
+    connect(_batchImportBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onBatchImportClicked);
+    connect(_clearCameraBtn, &QPushButton::clicked, this, &ReferencePanelWidget::onClearCameraClicked);
+    connect(_table, &QTableWidget::cellDoubleClicked, this, &ReferencePanelWidget::onCellDoubleClicked);
+    connect(_table->selectionModel(), &QItemSelectionModel::selectionChanged,
             this, &ReferencePanelWidget::onSelectionChanged);
 }
 
@@ -132,15 +132,15 @@ void ReferencePanelWidget::onClearCameraClicked()
 void ReferencePanelWidget::onSelectionChanged()
 {
     const bool hasSel = !selectedImagePath().isEmpty();
-    m_exactImportBtn->setEnabled(hasSel);
-    m_clearCameraBtn->setEnabled(hasSel);
+    _exactImportBtn->setEnabled(hasSel);
+    _clearCameraBtn->setEnabled(hasSel);
 }
 
 void ReferencePanelWidget::onCellDoubleClicked(int row, int column)
 {
     Q_UNUSED(column);
-    if (row < 0 || row >= m_table->rowCount()) return;
-    QString path = m_table->item(row, 0) ? m_table->item(row, 0)->data(Qt::UserRole).toString() : QString();
+    if (row < 0 || row >= _table->rowCount()) return;
+    QString path = _table->item(row, 0) ? _table->item(row, 0)->data(Qt::UserRole).toString() : QString();
     if (!path.isEmpty()) emit imageActivated(path);
 }
 
@@ -157,18 +157,18 @@ QJsonObject ReferencePanelWidget::normalizeMeta(const QJsonObject &meta) const
 
 QString ReferencePanelWidget::selectedImagePath() const
 {
-    const int row = m_table->currentRow();
-    if (row < 0 || row >= m_table->rowCount()) return QString();
-    if (!m_table->item(row, 0)) return QString();
-    return m_table->item(row, 0)->data(Qt::UserRole).toString();
+    const int row = _table->currentRow();
+    if (row < 0 || row >= _table->rowCount()) return QString();
+    if (!_table->item(row, 0)) return QString();
+    return _table->item(row, 0)->data(Qt::UserRole).toString();
 }
 
 QStringList ReferencePanelWidget::selectedImagePaths() const
 {
     QStringList paths;
-    const auto rows = m_table->selectionModel()->selectedRows();
+    const auto rows = _table->selectionModel()->selectedRows();
     for (const auto &idx : rows) {
-        if (auto *item = m_table->item(idx.row(), 0)) {
+        if (auto *item = _table->item(idx.row(), 0)) {
             const QString p = item->data(Qt::UserRole).toString();
             if (!p.isEmpty()) paths.append(p);
         }
@@ -182,8 +182,8 @@ QStringList ReferencePanelWidget::selectedImagePaths() const
 
 void ReferencePanelWidget::rebuildTable(const QJsonArray &images)
 {
-    m_table->setRowCount(0);
-    m_table->setRowCount(images.size());
+    _table->setRowCount(0);
+    _table->setRowCount(images.size());
 
     for (int i = 0; i < images.size(); ++i) {
         const QJsonObject imgObj = images.at(i).toObject();
@@ -228,18 +228,18 @@ void ReferencePanelWidget::rebuildTable(const QJsonArray &images)
                          ? QString::number(camObj.value(QStringLiteral("fv")).toDouble(), 'f', 6)
                          : QString();
 
-        m_table->setItem(i, 0, nameItem);
-        m_table->setItem(i, 1, statusItem);
-        m_table->setItem(i, 2, new QTableWidgetItem(x));
-        m_table->setItem(i, 3, new QTableWidgetItem(y));
-        m_table->setItem(i, 4, new QTableWidgetItem(z));
-        m_table->setItem(i, 5, new QTableWidgetItem(yaw));
-        m_table->setItem(i, 6, new QTableWidgetItem(pitch));
-        m_table->setItem(i, 7, new QTableWidgetItem(roll));
-        m_table->setItem(i, 8, new QTableWidgetItem(fu));
-        m_table->setItem(i, 9, new QTableWidgetItem(fv));
+        _table->setItem(i, 0, nameItem);
+        _table->setItem(i, 1, statusItem);
+        _table->setItem(i, 2, new QTableWidgetItem(x));
+        _table->setItem(i, 3, new QTableWidgetItem(y));
+        _table->setItem(i, 4, new QTableWidgetItem(z));
+        _table->setItem(i, 5, new QTableWidgetItem(yaw));
+        _table->setItem(i, 6, new QTableWidgetItem(pitch));
+        _table->setItem(i, 7, new QTableWidgetItem(roll));
+        _table->setItem(i, 8, new QTableWidgetItem(fu));
+        _table->setItem(i, 9, new QTableWidgetItem(fv));
     }
 
-    m_exactImportBtn->setEnabled(!selectedImagePath().isEmpty());
-    m_clearCameraBtn->setEnabled(!selectedImagePath().isEmpty());
+    _exactImportBtn->setEnabled(!selectedImagePath().isEmpty());
+    _clearCameraBtn->setEnabled(!selectedImagePath().isEmpty());
 }

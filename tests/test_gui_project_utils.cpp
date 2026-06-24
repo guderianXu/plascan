@@ -1776,6 +1776,38 @@ TEST(CodeStyleTest, WindowPanelUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("new QToolButton(m_container)")));
 }
 
+TEST(CodeStyleTest, ReferencePanelWidgetUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ReferencePanelWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/ReferencePanelWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QTableWidget *_table{};"),
+        QStringLiteral("QPushButton *_exactImportBtn{};"),
+        QStringLiteral("QPushButton *_batchImportBtn{};"),
+        QStringLiteral("QPushButton *_clearCameraBtn{};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_table"),
+        QStringLiteral("m_exactImportBtn"),
+        QStringLiteral("m_batchImportBtn"),
+        QStringLiteral("m_clearCameraBtn"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
