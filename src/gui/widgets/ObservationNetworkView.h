@@ -166,25 +166,25 @@ private:
     QColor edgeColor(double weight) const;
 
     // ── 场景对象 ──
-    QGraphicsScene *m_scene = nullptr;
+    QGraphicsScene *_scene = nullptr;
 
     // ── 数据 ──
-    xjw::ObservationNetwork m_net;
-    QVector<QPointF> m_pos;    ///< 当前节点位置（场景坐标）
-    QVector<double> m_nodeRadii;
-    QVector<int> m_visibleEdgeIndices;
-    QVector<int> m_visibleLabelIndices;
-    QVector<QVector<int>> m_nodeEdgeAdjacency;
+    xjw::ObservationNetwork _net;
+    QVector<QPointF> _pos;    ///< 当前节点位置（场景坐标）
+    QVector<double> _nodeRadii;
+    QVector<int> _visibleEdgeIndices;
+    QVector<int> _visibleLabelIndices;
+    QVector<QVector<int>> _nodeEdgeAdjacency;
     static constexpr double LAYOUT_AREA_SIZE = 500.0; ///< 虚拟场景边长（用于 FR 算法）
 
     // ── 力导向 ──
-    QTimer *m_forceTimer = nullptr;
-    int m_forceIter = 0;
-    double m_temp = 0.0;
+    QTimer *_forceTimer = nullptr;
+    int _forceIter = 0;
+    double _temp = 0.0;
     static constexpr int MAX_FORCE_LAYOUT_ITERATIONS = 80;
     static constexpr double FORCE_LAYOUT_COOL_RATE = 0.92;
-    bool m_autoFitPending = false;
-    int m_selectedNodeIndex = -1;
+    bool _autoFitPending = false;
+    int _selectedNodeIndex = -1;
 
     // ── 交互 ──
     void mousePressEvent(QMouseEvent *event) override;

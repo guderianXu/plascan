@@ -60,8 +60,8 @@ QLineF trimmedEdgeSegment(const QPointF &startPoint,
 ObservationNetworkView::ObservationNetworkView(QWidget *parent)
     : QGraphicsView(parent)
 {
-    m_scene = new QGraphicsScene(this);
-    setScene(m_scene);
+    _scene = new QGraphicsScene(this);
+    setScene(_scene);
     setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform | QPainter::TextAntialiasing);
     setDragMode(QGraphicsView::ScrollHandDrag);
     setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
@@ -73,99 +73,99 @@ ObservationNetworkView::ObservationNetworkView(QWidget *parent)
     setOptimizationFlag(QGraphicsView::DontAdjustForAntialiasing, true);
     setCacheMode(QGraphicsView::CacheBackground);
 
-    m_forceTimer = new QTimer(this);
-    m_forceTimer->setInterval(16); // ~60fps
-    connect(m_forceTimer, &QTimer::timeout, this, &ObservationNetworkView::onForceStep);
+    _forceTimer = new QTimer(this);
+    _forceTimer->setInterval(16); // ~60fps
+    connect(_forceTimer, &QTimer::timeout, this, &ObservationNetworkView::onForceStep);
 }
 
 ObservationNetworkView::~ObservationNetworkView()
 {
-    m_forceTimer->stop();
+    _forceTimer->stop();
 }
 
 void ObservationNetworkView::clearNetwork()
 {
-    m_forceTimer->stop();
-    m_scene->clear();
-    m_pos.clear();
-    m_nodeRadii.clear();
-    m_visibleEdgeIndices.clear();
-    m_visibleLabelIndices.clear();
-    m_nodeEdgeAdjacency.clear();
-    m_selectedNodeIndex = -1;
-    m_net = xjw::ObservationNetwork{};
+    _forceTimer->stop();
+    _scene->clear();
+    _pos.clear();
+    _nodeRadii.clear();
+    _visibleEdgeIndices.clear();
+    _visibleLabelIndices.clear();
+    _nodeEdgeAdjacency.clear();
+    _selectedNodeIndex = -1;
+    _net = xjw::ObservationNetwork{};
     viewport()->update();
 }
 
 void ObservationNetworkView::setNetwork(const xjw::ObservationNetwork &net)
 {
-    m_forceTimer->stop();
+    _forceTimer->stop();
     resetTransform();
-    m_scene->clear();
-    m_net = net;
-    m_autoFitPending = false;
-    m_selectedNodeIndex = -1;
+    _scene->clear();
+    _net = net;
+    _autoFitPending = false;
+    _selectedNodeIndex = -1;
 
     if (net.numNodes() == 0)
     {
-        m_pos.clear();
-        m_nodeRadii.clear();
-        m_visibleEdgeIndices.clear();
-        m_visibleLabelIndices.clear();
-        m_nodeEdgeAdjacency.clear();
+        _pos.clear();
+        _nodeRadii.clear();
+        _visibleEdgeIndices.clear();
+        _visibleLabelIndices.clear();
+        _nodeEdgeAdjacency.clear();
         return;
     }
 
-    m_nodeEdgeAdjacency.clear();
-    m_nodeEdgeAdjacency.resize(net.numNodes());
+    _nodeEdgeAdjacency.clear();
+    _nodeEdgeAdjacency.resize(net.numNodes());
     for (int edgeIndex = 0; edgeIndex < net.numEdges(); ++edgeIndex)
     {
         const auto &edge = net.edges[edgeIndex];
         if (edge.idx0 >= 0 && edge.idx0 < net.numNodes())
         {
-            m_nodeEdgeAdjacency[edge.idx0].push_back(edgeIndex);
+            _nodeEdgeAdjacency[edge.idx0].push_back(edgeIndex);
         }
         if (edge.idx1 >= 0 && edge.idx1 < net.numNodes())
         {
-            m_nodeEdgeAdjacency[edge.idx1].push_back(edgeIndex);
+            _nodeEdgeAdjacency[edge.idx1].push_back(edgeIndex);
         }
     }
 
     chooseInitialLayout();
     buildScene();
-    m_autoFitPending = true;
+    _autoFitPending = true;
     fitNetworkInView();
 }
 
 void ObservationNetworkView::startForceLayout()
 {
-    if (m_net.numNodes() <= 1)
+    if (_net.numNodes() <= 1)
     {
         emit forceLayoutDone();
         return;
     }
 
-    if (m_net.numNodes() > FORCE_LAYOUT_NODE_THRESHOLD)
+    if (_net.numNodes() > FORCE_LAYOUT_NODE_THRESHOLD)
     {
         multiRingLayout();
         applyPositions();
-        m_autoFitPending = true;
+        _autoFitPending = true;
         fitNetworkInView();
         emit forceLayoutDone();
         return;
     }
 
-    m_forceIter = 0;
-    m_temp = LAYOUT_AREA_SIZE * 0.15;  // 初始温度
-    m_forceTimer->start();
+    _forceIter = 0;
+    _temp = LAYOUT_AREA_SIZE * 0.15;  // 初始温度
+    _forceTimer->start();
 }
 
 void ObservationNetworkView::resetLayout()
 {
-    m_forceTimer->stop();
+    _forceTimer->stop();
     chooseInitialLayout();
     applyPositions();
-    m_autoFitPending = true;
+    _autoFitPending = true;
     fitNetworkInView();
 }
 
@@ -186,11 +186,11 @@ void ObservationNetworkView::chooseInitialLayout()
 // ---------------------------------------------------------------------------
 void ObservationNetworkView::circularLayout()
 {
-    const int n = m_net.numNodes();
-    m_pos.resize(n);
+    const int n = _net.numNodes();
+    _pos.resize(n);
     if (n == 1)
     {
-        m_pos[0] = {SCENE_SIZE / 2, SCENE_SIZE / 2};
+        _pos[0] = {SCENE_SIZE / 2, SCENE_SIZE / 2};
         return;
     }
     const double radius = SCENE_SIZE * 0.42;
@@ -199,14 +199,14 @@ void ObservationNetworkView::circularLayout()
     for (int i = 0; i < n; ++i)
     {
         double angle = 2.0 * M_PI * i / n - M_PI / 2.0;
-        m_pos[i] = {centerX + radius * std::cos(angle), centerY + radius * std::sin(angle)};
+        _pos[i] = {centerX + radius * std::cos(angle), centerY + radius * std::sin(angle)};
     }
 }
 
 void ObservationNetworkView::multiRingLayout()
 {
-    const int nodeCount = m_net.numNodes();
-    m_pos.resize(nodeCount);
+    const int nodeCount = _net.numNodes();
+    _pos.resize(nodeCount);
     if (nodeCount == 0)
     {
         return;
@@ -221,8 +221,8 @@ void ObservationNetworkView::multiRingLayout()
     std::sort(orderedNodeIndices.begin(), orderedNodeIndices.end(),
               [this](int leftIndex, int rightIndex)
               {
-                  const int leftDegree = leftIndex < (int)m_net.degrees.size() ? m_net.degrees[leftIndex] : 0;
-                  const int rightDegree = rightIndex < (int)m_net.degrees.size() ? m_net.degrees[rightIndex] : 0;
+                  const int leftDegree = leftIndex < (int)_net.degrees.size() ? _net.degrees[leftIndex] : 0;
+                  const int rightDegree = rightIndex < (int)_net.degrees.size() ? _net.degrees[rightIndex] : 0;
                   if (leftDegree != rightDegree)
                   {
                       return leftDegree > rightDegree;
@@ -246,7 +246,7 @@ void ObservationNetworkView::multiRingLayout()
         if (ringIndex == 0)
         {
             const int nodeIndex = orderedNodeIndices[cursor++];
-            m_pos[nodeIndex] = QPointF(centerX, centerY);
+            _pos[nodeIndex] = QPointF(centerX, centerY);
             continue;
         }
 
@@ -254,7 +254,7 @@ void ObservationNetworkView::multiRingLayout()
         {
             const int nodeIndex = orderedNodeIndices[cursor++];
             const double angle = (2.0 * M_PI * localIndex / nodesInRing) - M_PI / 2.0;
-            m_pos[nodeIndex] = QPointF(centerX + ringRadius * std::cos(angle),
+            _pos[nodeIndex] = QPointF(centerX + ringRadius * std::cos(angle),
                                        centerY + ringRadius * std::sin(angle));
         }
     }
@@ -263,7 +263,7 @@ void ObservationNetworkView::multiRingLayout()
 QVector<QVector<int>> ObservationNetworkView::computeConnectedComponents() const
 {
     QVector<QVector<int>> components;
-    const int nodeCount = m_net.numNodes();
+    const int nodeCount = _net.numNodes();
     if (nodeCount <= 0)
     {
         return components;
@@ -289,9 +289,9 @@ QVector<QVector<int>> ObservationNetworkView::computeConnectedComponents() const
             stack.pop_back();
             component.push_back(nodeIndex);
 
-            for (int edgeIndex : m_nodeEdgeAdjacency.value(nodeIndex))
+            for (int edgeIndex : _nodeEdgeAdjacency.value(nodeIndex))
             {
-                const auto &edge = m_net.edges[edgeIndex];
+                const auto &edge = _net.edges[edgeIndex];
                 const int neighborIndex = (edge.idx0 == nodeIndex) ? edge.idx1 : edge.idx0;
                 if (neighborIndex >= 0 && neighborIndex < nodeCount && !visited[neighborIndex])
                 {
@@ -323,7 +323,7 @@ void ObservationNetworkView::layoutComponentNodes(const QVector<int> &componentN
 
     if (componentNodeIndices.size() == 1)
     {
-        m_pos[componentNodeIndices.front()] = componentCenter;
+        _pos[componentNodeIndices.front()] = componentCenter;
         return;
     }
 
@@ -331,8 +331,8 @@ void ObservationNetworkView::layoutComponentNodes(const QVector<int> &componentN
     std::sort(orderedNodeIndices.begin(), orderedNodeIndices.end(),
               [this](int leftIndex, int rightIndex)
               {
-                  const int leftDegree = leftIndex < (int)m_net.degrees.size() ? m_net.degrees[leftIndex] : 0;
-                  const int rightDegree = rightIndex < (int)m_net.degrees.size() ? m_net.degrees[rightIndex] : 0;
+                  const int leftDegree = leftIndex < (int)_net.degrees.size() ? _net.degrees[leftIndex] : 0;
+                  const int rightDegree = rightIndex < (int)_net.degrees.size() ? _net.degrees[rightIndex] : 0;
                   if (leftDegree != rightDegree)
                   {
                       return leftDegree > rightDegree;
@@ -352,7 +352,7 @@ void ObservationNetworkView::layoutComponentNodes(const QVector<int> &componentN
 
         if (ringIndex == 0)
         {
-            m_pos[orderedNodeIndices[cursor++]] = componentCenter;
+            _pos[orderedNodeIndices[cursor++]] = componentCenter;
             continue;
         }
 
@@ -360,7 +360,7 @@ void ObservationNetworkView::layoutComponentNodes(const QVector<int> &componentN
         {
             const int nodeIndex = orderedNodeIndices[cursor++];
             const double angle = (2.0 * M_PI * localIndex / nodesInRing) - M_PI / 2.0;
-            m_pos[nodeIndex] = QPointF(componentCenter.x() + ringRadius * std::cos(angle),
+            _pos[nodeIndex] = QPointF(componentCenter.x() + ringRadius * std::cos(angle),
                                        componentCenter.y() + ringRadius * std::sin(angle));
         }
     }
@@ -368,8 +368,8 @@ void ObservationNetworkView::layoutComponentNodes(const QVector<int> &componentN
 
 void ObservationNetworkView::componentAwareLayout()
 {
-    const int nodeCount = m_net.numNodes();
-    m_pos.resize(nodeCount);
+    const int nodeCount = _net.numNodes();
+    _pos.resize(nodeCount);
     if (nodeCount == 0)
     {
         return;
@@ -419,7 +419,7 @@ void ObservationNetworkView::componentAwareLayout()
 
 void ObservationNetworkView::relaxNodeOverlaps(int maxIterations, double padding)
 {
-    if (m_pos.size() < 2)
+    if (_pos.size() < 2)
     {
         return;
     }
@@ -428,11 +428,11 @@ void ObservationNetworkView::relaxNodeOverlaps(int maxIterations, double padding
     for (int iterationIndex = 0; iterationIndex < maxIterations; ++iterationIndex)
     {
         bool moved = false;
-        for (int leftNodeIndex = 0; leftNodeIndex < m_pos.size(); ++leftNodeIndex)
+        for (int leftNodeIndex = 0; leftNodeIndex < _pos.size(); ++leftNodeIndex)
         {
-            for (int rightNodeIndex = leftNodeIndex + 1; rightNodeIndex < m_pos.size(); ++rightNodeIndex)
+            for (int rightNodeIndex = leftNodeIndex + 1; rightNodeIndex < _pos.size(); ++rightNodeIndex)
             {
-                QPointF delta = m_pos[leftNodeIndex] - m_pos[rightNodeIndex];
+                QPointF delta = _pos[leftNodeIndex] - _pos[rightNodeIndex];
                 double distanceSquared = delta.x() * delta.x() + delta.y() * delta.y();
                 if (distanceSquared < 1e-6)
                 {
@@ -441,8 +441,8 @@ void ObservationNetworkView::relaxNodeOverlaps(int maxIterations, double padding
                 }
 
                 const double distance = std::sqrt(distanceSquared);
-                const double minDistance = m_nodeRadii.value(leftNodeIndex, NODE_MIN_RADIUS)
-                    + m_nodeRadii.value(rightNodeIndex, NODE_MIN_RADIUS)
+                const double minDistance = _nodeRadii.value(leftNodeIndex, NODE_MIN_RADIUS)
+                    + _nodeRadii.value(rightNodeIndex, NODE_MIN_RADIUS)
                     + padding;
                 if (distance >= minDistance)
                 {
@@ -451,16 +451,16 @@ void ObservationNetworkView::relaxNodeOverlaps(int maxIterations, double padding
 
                 const double pushDistance = (minDistance - distance) * 0.52;
                 const QPointF direction = delta / distance;
-                m_pos[leftNodeIndex] += direction * pushDistance;
-                m_pos[rightNodeIndex] -= direction * pushDistance;
+                _pos[leftNodeIndex] += direction * pushDistance;
+                _pos[rightNodeIndex] -= direction * pushDistance;
                 moved = true;
             }
         }
 
-        for (int nodeIndex = 0; nodeIndex < m_pos.size(); ++nodeIndex)
+        for (int nodeIndex = 0; nodeIndex < _pos.size(); ++nodeIndex)
         {
-            m_pos[nodeIndex].setX(std::clamp(m_pos[nodeIndex].x(), bounds.left(), bounds.right()));
-            m_pos[nodeIndex].setY(std::clamp(m_pos[nodeIndex].y(), bounds.top(), bounds.bottom()));
+            _pos[nodeIndex].setX(std::clamp(_pos[nodeIndex].x(), bounds.left(), bounds.right()));
+            _pos[nodeIndex].setY(std::clamp(_pos[nodeIndex].y(), bounds.top(), bounds.bottom()));
         }
 
         if (!moved)
@@ -509,15 +509,15 @@ QColor ObservationNetworkView::edgeColor(double weight) const
 
 void ObservationNetworkView::buildScene()
 {
-    m_scene->clear();
-    const int maxDegree = m_net.degrees.empty()
+    _scene->clear();
+    const int maxDegree = _net.degrees.empty()
         ? 0
-        : *std::max_element(m_net.degrees.begin(), m_net.degrees.end());
+        : *std::max_element(_net.degrees.begin(), _net.degrees.end());
 
-    m_nodeRadii.resize(m_net.numNodes());
-    for (int nodeIndex = 0; nodeIndex < m_net.numNodes(); ++nodeIndex)
+    _nodeRadii.resize(_net.numNodes());
+    for (int nodeIndex = 0; nodeIndex < _net.numNodes(); ++nodeIndex)
     {
-        m_nodeRadii[nodeIndex] = nodeRadius(nodeIndex, maxDegree);
+        _nodeRadii[nodeIndex] = nodeRadius(nodeIndex, maxDegree);
     }
 
     rebuildRenderCache();
@@ -526,23 +526,23 @@ void ObservationNetworkView::buildScene()
 
 void ObservationNetworkView::applyPositions()
 {
-    m_scene->setSceneRect(networkBounds());
+    _scene->setSceneRect(networkBounds());
     viewport()->update();
 }
 
 QRectF ObservationNetworkView::networkBounds() const
 {
-    if (m_pos.isEmpty())
+    if (_pos.isEmpty())
     {
         return QRectF(-100.0, -100.0, 200.0, 200.0);
     }
 
-    qreal minX = m_pos.front().x();
-    qreal minY = m_pos.front().y();
-    qreal maxX = m_pos.front().x();
-    qreal maxY = m_pos.front().y();
+    qreal minX = _pos.front().x();
+    qreal minY = _pos.front().y();
+    qreal maxX = _pos.front().x();
+    qreal maxY = _pos.front().y();
 
-    for (const QPointF &p : m_pos)
+    for (const QPointF &p : _pos)
     {
         minX = std::min(minX, p.x());
         minY = std::min(minY, p.y());
@@ -557,7 +557,7 @@ QRectF ObservationNetworkView::networkBounds() const
 
 double ObservationNetworkView::nodeRadius(int nodeIndex, int maxDegree) const
 {
-    const int degree = (nodeIndex < (int)m_net.degrees.size()) ? m_net.degrees[nodeIndex] : 0;
+    const int degree = (nodeIndex < (int)_net.degrees.size()) ? _net.degrees[nodeIndex] : 0;
     const double t = (maxDegree > 0) ? (double)degree / maxDegree : 0.0;
     const double minRadius = isHighPerformanceMode() ? NODE_MIN_RADIUS : NODE_MIN_RADIUS + 2.0;
     const double maxRadius = isHighPerformanceMode() ? NODE_MAX_RADIUS - 6.0 : NODE_MAX_RADIUS;
@@ -566,8 +566,8 @@ double ObservationNetworkView::nodeRadius(int nodeIndex, int maxDegree) const
 
 bool ObservationNetworkView::isHighPerformanceMode() const
 {
-    return m_net.numNodes() >= HIGH_PERFORMANCE_NODE_THRESHOLD ||
-           m_net.numEdges() >= HIGH_PERFORMANCE_EDGE_THRESHOLD;
+    return _net.numNodes() >= HIGH_PERFORMANCE_NODE_THRESHOLD ||
+           _net.numEdges() >= HIGH_PERFORMANCE_EDGE_THRESHOLD;
 }
 
 double ObservationNetworkView::currentViewScale() const
@@ -577,7 +577,7 @@ double ObservationNetworkView::currentViewScale() const
 
 bool ObservationNetworkView::shouldDrawLabels() const
 {
-    if (m_selectedNodeIndex >= 0)
+    if (_selectedNodeIndex >= 0)
     {
         return true;
     }
@@ -592,19 +592,19 @@ bool ObservationNetworkView::shouldDrawLabels() const
 
 void ObservationNetworkView::rebuildRenderCache()
 {
-    m_visibleEdgeIndices.clear();
-    m_visibleLabelIndices.clear();
+    _visibleEdgeIndices.clear();
+    _visibleLabelIndices.clear();
 
-    QVector<int> allEdgeIndices(m_net.numEdges());
-    for (int edgeIndex = 0; edgeIndex < m_net.numEdges(); ++edgeIndex)
+    QVector<int> allEdgeIndices(_net.numEdges());
+    for (int edgeIndex = 0; edgeIndex < _net.numEdges(); ++edgeIndex)
     {
         allEdgeIndices[edgeIndex] = edgeIndex;
     }
 
     auto edgePriorityLess = [this](int leftEdgeIndex, int rightEdgeIndex)
     {
-        const auto &leftEdge = m_net.edges[leftEdgeIndex];
-        const auto &rightEdge = m_net.edges[rightEdgeIndex];
+        const auto &leftEdge = _net.edges[leftEdgeIndex];
+        const auto &rightEdge = _net.edges[rightEdgeIndex];
         if (leftEdge.weight != rightEdge.weight)
         {
             return leftEdge.weight > rightEdge.weight;
@@ -612,24 +612,24 @@ void ObservationNetworkView::rebuildRenderCache()
         return leftEdge.numMatches > rightEdge.numMatches;
     };
 
-    if (m_selectedNodeIndex >= 0 && m_selectedNodeIndex < m_nodeEdgeAdjacency.size())
+    if (_selectedNodeIndex >= 0 && _selectedNodeIndex < _nodeEdgeAdjacency.size())
     {
-        m_visibleEdgeIndices = m_nodeEdgeAdjacency[m_selectedNodeIndex];
-        std::sort(m_visibleEdgeIndices.begin(), m_visibleEdgeIndices.end(), edgePriorityLess);
+        _visibleEdgeIndices = _nodeEdgeAdjacency[_selectedNodeIndex];
+        std::sort(_visibleEdgeIndices.begin(), _visibleEdgeIndices.end(), edgePriorityLess);
     }
     else if (!isHighPerformanceMode())
     {
-        m_visibleEdgeIndices = allEdgeIndices;
+        _visibleEdgeIndices = allEdgeIndices;
     }
     else
     {
         std::sort(allEdgeIndices.begin(), allEdgeIndices.end(), edgePriorityLess);
-        const int edgeLimit = (m_net.numNodes() >= 600) ? MAX_VISIBLE_EDGES_HUGE : MAX_VISIBLE_EDGES_LARGE;
-        m_visibleEdgeIndices = allEdgeIndices.mid(0, std::min(edgeLimit, static_cast<int>(allEdgeIndices.size())));
+        const int edgeLimit = (_net.numNodes() >= 600) ? MAX_VISIBLE_EDGES_HUGE : MAX_VISIBLE_EDGES_LARGE;
+        _visibleEdgeIndices = allEdgeIndices.mid(0, std::min(edgeLimit, static_cast<int>(allEdgeIndices.size())));
     }
 
-    QVector<int> allNodeIndices(m_net.numNodes());
-    for (int nodeIndex = 0; nodeIndex < m_net.numNodes(); ++nodeIndex)
+    QVector<int> allNodeIndices(_net.numNodes());
+    for (int nodeIndex = 0; nodeIndex < _net.numNodes(); ++nodeIndex)
     {
         allNodeIndices[nodeIndex] = nodeIndex;
     }
@@ -637,8 +637,8 @@ void ObservationNetworkView::rebuildRenderCache()
     std::sort(allNodeIndices.begin(), allNodeIndices.end(),
               [this](int leftNodeIndex, int rightNodeIndex)
               {
-                  const int leftDegree = leftNodeIndex < (int)m_net.degrees.size() ? m_net.degrees[leftNodeIndex] : 0;
-                  const int rightDegree = rightNodeIndex < (int)m_net.degrees.size() ? m_net.degrees[rightNodeIndex] : 0;
+                  const int leftDegree = leftNodeIndex < (int)_net.degrees.size() ? _net.degrees[leftNodeIndex] : 0;
+                  const int rightDegree = rightNodeIndex < (int)_net.degrees.size() ? _net.degrees[rightNodeIndex] : 0;
                   if (leftDegree != rightDegree)
                   {
                       return leftDegree > rightDegree;
@@ -648,27 +648,27 @@ void ObservationNetworkView::rebuildRenderCache()
 
     if (!shouldDrawLabels())
     {
-        if (m_selectedNodeIndex >= 0)
+        if (_selectedNodeIndex >= 0)
         {
-            m_visibleLabelIndices.push_back(m_selectedNodeIndex);
+            _visibleLabelIndices.push_back(_selectedNodeIndex);
         }
         return;
     }
 
-    if (m_selectedNodeIndex >= 0)
+    if (_selectedNodeIndex >= 0)
     {
-        m_visibleLabelIndices.push_back(m_selectedNodeIndex);
-        QVector<int> adjacentEdgeIndices = m_nodeEdgeAdjacency.value(m_selectedNodeIndex);
+        _visibleLabelIndices.push_back(_selectedNodeIndex);
+        QVector<int> adjacentEdgeIndices = _nodeEdgeAdjacency.value(_selectedNodeIndex);
         std::sort(adjacentEdgeIndices.begin(), adjacentEdgeIndices.end(), edgePriorityLess);
         for (int edgeIndex : adjacentEdgeIndices)
         {
-            const auto &edge = m_net.edges[edgeIndex];
-            const int neighborIndex = (edge.idx0 == m_selectedNodeIndex) ? edge.idx1 : edge.idx0;
-            if (!m_visibleLabelIndices.contains(neighborIndex))
+            const auto &edge = _net.edges[edgeIndex];
+            const int neighborIndex = (edge.idx0 == _selectedNodeIndex) ? edge.idx1 : edge.idx0;
+            if (!_visibleLabelIndices.contains(neighborIndex))
             {
-                m_visibleLabelIndices.push_back(neighborIndex);
+                _visibleLabelIndices.push_back(neighborIndex);
             }
-            if (m_visibleLabelIndices.size() >= MAX_VISIBLE_NEIGHBOR_LABELS + 1)
+            if (_visibleLabelIndices.size() >= MAX_VISIBLE_NEIGHBOR_LABELS + 1)
             {
                 break;
             }
@@ -677,24 +677,24 @@ void ObservationNetworkView::rebuildRenderCache()
     }
 
     const int labelLimit = isHighPerformanceMode() ? MAX_VISIBLE_LABELS_LARGE : MAX_VISIBLE_LABELS_NORMAL;
-    m_visibleLabelIndices = allNodeIndices.mid(0, std::min(labelLimit, static_cast<int>(allNodeIndices.size())));
+    _visibleLabelIndices = allNodeIndices.mid(0, std::min(labelLimit, static_cast<int>(allNodeIndices.size())));
 }
 
 void ObservationNetworkView::fitNetworkInView()
 {
-    if (!m_scene || m_net.numNodes() == 0 || viewport()->size().isEmpty())
+    if (!_scene || _net.numNodes() == 0 || viewport()->size().isEmpty())
     {
         return;
     }
 
-    const QRectF rect = m_scene->sceneRect();
+    const QRectF rect = _scene->sceneRect();
     if (!rect.isValid() || rect.isEmpty())
     {
         return;
     }
 
     fitInView(rect, Qt::KeepAspectRatio);
-    m_autoFitPending = false;
+    _autoFitPending = false;
     rebuildRenderCache();
     viewport()->update();
 }
@@ -703,23 +703,23 @@ void ObservationNetworkView::drawBackground(QPainter *painter, const QRectF &rec
 {
     QGraphicsView::drawBackground(painter, rect);
 
-    if (m_net.numNodes() == 0)
+    if (_net.numNodes() == 0)
     {
         return;
     }
 
     const QRectF visibleSceneRect = mapToScene(viewport()->rect()).boundingRect();
-    const int maxDegree = m_net.degrees.empty()
+    const int maxDegree = _net.degrees.empty()
         ? 0
-        : *std::max_element(m_net.degrees.begin(), m_net.degrees.end());
+        : *std::max_element(_net.degrees.begin(), _net.degrees.end());
 
-    QVector<bool> highlightedNodes(m_net.numNodes(), false);
-    if (m_selectedNodeIndex >= 0 && m_selectedNodeIndex < highlightedNodes.size())
+    QVector<bool> highlightedNodes(_net.numNodes(), false);
+    if (_selectedNodeIndex >= 0 && _selectedNodeIndex < highlightedNodes.size())
     {
-        highlightedNodes[m_selectedNodeIndex] = true;
-        for (int edgeIndex : m_nodeEdgeAdjacency.value(m_selectedNodeIndex))
+        highlightedNodes[_selectedNodeIndex] = true;
+        for (int edgeIndex : _nodeEdgeAdjacency.value(_selectedNodeIndex))
         {
-            const auto &edge = m_net.edges[edgeIndex];
+            const auto &edge = _net.edges[edgeIndex];
             highlightedNodes[edge.idx0] = true;
             highlightedNodes[edge.idx1] = true;
         }
@@ -728,21 +728,21 @@ void ObservationNetworkView::drawBackground(QPainter *painter, const QRectF &rec
     painter->save();
     painter->setRenderHint(QPainter::Antialiasing, !isHighPerformanceMode());
 
-    for (int edgeIndex : m_visibleEdgeIndices)
+    for (int edgeIndex : _visibleEdgeIndices)
     {
-        const auto &edge = m_net.edges[edgeIndex];
-        if (edge.idx0 < 0 || edge.idx0 >= m_pos.size() || edge.idx1 < 0 || edge.idx1 >= m_pos.size())
+        const auto &edge = _net.edges[edgeIndex];
+        if (edge.idx0 < 0 || edge.idx0 >= _pos.size() || edge.idx1 < 0 || edge.idx1 >= _pos.size())
         {
             continue;
         }
 
-        const QPointF startPoint = m_pos[edge.idx0];
-        const QPointF endPoint = m_pos[edge.idx1];
-        const double startRadius = edge.idx0 < m_nodeRadii.size()
-            ? m_nodeRadii[edge.idx0]
+        const QPointF startPoint = _pos[edge.idx0];
+        const QPointF endPoint = _pos[edge.idx1];
+        const double startRadius = edge.idx0 < _nodeRadii.size()
+            ? _nodeRadii[edge.idx0]
             : nodeRadius(edge.idx0, maxDegree);
-        const double endRadius = edge.idx1 < m_nodeRadii.size()
-            ? m_nodeRadii[edge.idx1]
+        const double endRadius = edge.idx1 < _nodeRadii.size()
+            ? _nodeRadii[edge.idx1]
             : nodeRadius(edge.idx1, maxDegree);
         const QLineF visibleEdgeLine = trimmedEdgeSegment(startPoint, endPoint,
                                                           startRadius, endRadius);
@@ -756,9 +756,9 @@ void ObservationNetworkView::drawBackground(QPainter *painter, const QRectF &rec
 
         QColor lineColor = edgeColor(edge.weight);
         double lineWidth = std::clamp(1.0 + 2.4 * edge.weight, 1.0, 3.8);
-        if (m_selectedNodeIndex >= 0)
+        if (_selectedNodeIndex >= 0)
         {
-            const bool isHighlighted = edge.idx0 == m_selectedNodeIndex || edge.idx1 == m_selectedNodeIndex;
+            const bool isHighlighted = edge.idx0 == _selectedNodeIndex || edge.idx1 == _selectedNodeIndex;
             if (isHighlighted)
             {
                 lineColor = QColor(220, 88, 34, 240);
@@ -778,10 +778,10 @@ void ObservationNetworkView::drawBackground(QPainter *painter, const QRectF &rec
     }
 
     painter->setPen(Qt::NoPen);
-    for (int nodeIndex = 0; nodeIndex < m_pos.size(); ++nodeIndex)
+    for (int nodeIndex = 0; nodeIndex < _pos.size(); ++nodeIndex)
     {
-        const QPointF nodePosition = m_pos[nodeIndex];
-        const double radius = nodeIndex < m_nodeRadii.size() ? m_nodeRadii[nodeIndex] : nodeRadius(nodeIndex, maxDegree);
+        const QPointF nodePosition = _pos[nodeIndex];
+        const double radius = nodeIndex < _nodeRadii.size() ? _nodeRadii[nodeIndex] : nodeRadius(nodeIndex, maxDegree);
         QRectF nodeRect(nodePosition.x() - radius, nodePosition.y() - radius,
                         radius * 2.0, radius * 2.0);
         if (!nodeRect.adjusted(-8.0, -8.0, 8.0, 8.0).intersects(visibleSceneRect))
@@ -789,11 +789,11 @@ void ObservationNetworkView::drawBackground(QPainter *painter, const QRectF &rec
             continue;
         }
 
-        const int degree = nodeIndex < (int)m_net.degrees.size() ? m_net.degrees[nodeIndex] : 0;
+        const int degree = nodeIndex < (int)_net.degrees.size() ? _net.degrees[nodeIndex] : 0;
         QColor fillColor = nodeColor(degree, maxDegree);
-        if (m_selectedNodeIndex >= 0)
+        if (_selectedNodeIndex >= 0)
         {
-            if (nodeIndex == m_selectedNodeIndex)
+            if (nodeIndex == _selectedNodeIndex)
             {
                 fillColor = QColor(235, 115, 40);
             }
@@ -806,7 +806,7 @@ void ObservationNetworkView::drawBackground(QPainter *painter, const QRectF &rec
         painter->setBrush(fillColor);
         painter->drawEllipse(nodeRect);
 
-        if (nodeIndex == m_selectedNodeIndex)
+        if (nodeIndex == _selectedNodeIndex)
         {
             QPen highlightPen(QColor(70, 30, 10), 2.0);
             highlightPen.setCosmetic(true);
@@ -826,7 +826,7 @@ void ObservationNetworkView::drawForeground(QPainter *painter, const QRectF &rec
 
     QGraphicsView::drawForeground(painter, rect);
 
-    if (m_net.numNodes() == 0)
+    if (_net.numNodes() == 0)
     {
         return;
     }
@@ -841,15 +841,15 @@ void ObservationNetworkView::drawForeground(QPainter *painter, const QRectF &rec
         labelFont.setPointSizeF(isHighPerformanceMode() ? 8.8 : 9.6);
         painter->setFont(labelFont);
 
-        for (int nodeIndex : m_visibleLabelIndices)
+        for (int nodeIndex : _visibleLabelIndices)
         {
-            if (nodeIndex < 0 || nodeIndex >= m_pos.size() || nodeIndex >= (int)m_net.nodeNames.size())
+            if (nodeIndex < 0 || nodeIndex >= _pos.size() || nodeIndex >= (int)_net.nodeNames.size())
             {
                 continue;
             }
 
-            const QPoint viewPoint = mapFromScene(m_pos[nodeIndex]);
-            const QString text = QString::fromStdString(m_net.nodeNames[nodeIndex]);
+            const QPoint viewPoint = mapFromScene(_pos[nodeIndex]);
+            const QString text = QString::fromStdString(_net.nodeNames[nodeIndex]);
             const QFontMetrics fontMetrics(painter->font());
             const QRect textRect = fontMetrics.boundingRect(text);
             const QRect bubbleRect(viewPoint.x() + 10,
@@ -857,17 +857,17 @@ void ObservationNetworkView::drawForeground(QPainter *painter, const QRectF &rec
                                    textRect.width() + 10,
                                    textRect.height() + 6);
 
-            QColor bubbleColor(255, 255, 255, nodeIndex == m_selectedNodeIndex ? 245 : 210);
+            QColor bubbleColor(255, 255, 255, nodeIndex == _selectedNodeIndex ? 245 : 210);
             painter->setPen(QPen(QColor(190, 190, 190, 180), 1.0));
             painter->setBrush(bubbleColor);
             painter->drawRoundedRect(bubbleRect, 5.0, 5.0);
-            painter->setPen(nodeIndex == m_selectedNodeIndex ? QColor(25, 25, 25) : QColor(55, 55, 55));
+            painter->setPen(nodeIndex == _selectedNodeIndex ? QColor(25, 25, 25) : QColor(55, 55, 55));
             painter->drawText(bubbleRect.adjusted(5, 0, -5, 0), Qt::AlignVCenter | Qt::AlignLeft, text);
         }
     }
 
-    const int maxDeg = m_net.degrees.empty() ? 0
-        : *std::max_element(m_net.degrees.begin(), m_net.degrees.end());
+    const int maxDeg = _net.degrees.empty() ? 0
+        : *std::max_element(_net.degrees.begin(), _net.degrees.end());
 
     // 计算度（连接数）分档的整数阈值，便于在图例中显示具体范围
     const int lowMax = (maxDeg > 0) ? std::max(1, (int)std::floor(maxDeg / 3.0)) : 0;
@@ -936,8 +936,8 @@ void ObservationNetworkView::drawForeground(QPainter *painter, const QRectF &rec
     // 额外说明：橙色表示当前网络中连接数最多（度 = maxDeg）
     if (maxDeg > 0)
     {
-        QString extra = (m_selectedNodeIndex >= 0)
-            ? tr("当前已选节点：%1，已高亮其直接连接关系").arg(QString::fromStdString(m_net.nodeNames[m_selectedNodeIndex]))
+        QString extra = (_selectedNodeIndex >= 0)
+            ? tr("当前已选节点：%1，已高亮其直接连接关系").arg(QString::fromStdString(_net.nodeNames[_selectedNodeIndex]))
             : tr("例如：当前最大度 = %1，颜色越偏橙表示连接越多").arg(maxDeg);
         painter->drawText(QRectF(legendRect.left() + 12.0, legendRect.bottom() - 20.0,
                                  legendRect.width() - 24.0, 18.0),
@@ -953,10 +953,10 @@ void ObservationNetworkView::drawForeground(QPainter *painter, const QRectF &rec
 // ---------------------------------------------------------------------------
 void ObservationNetworkView::onForceStep()
 {
-    if (m_forceIter >= MAX_FORCE_LAYOUT_ITERATIONS || m_net.numNodes() < 2)
+    if (_forceIter >= MAX_FORCE_LAYOUT_ITERATIONS || _net.numNodes() < 2)
     {
-        m_forceTimer->stop();
-        if (m_autoFitPending)
+        _forceTimer->stop();
+        if (_autoFitPending)
         {
             fitNetworkInView();
         }
@@ -964,7 +964,7 @@ void ObservationNetworkView::onForceStep()
         return;
     }
 
-    const int    n  = m_net.numNodes();
+    const int    n  = _net.numNodes();
     const double k  = std::sqrt(LAYOUT_AREA_SIZE * LAYOUT_AREA_SIZE / n);
     const double k2 = k * k;
     QVector<QPointF> disp(n, {0, 0});
@@ -974,7 +974,7 @@ void ObservationNetworkView::onForceStep()
     {
         for (int j = i + 1; j < n; ++j)
         {
-            QPointF d = m_pos[i] - m_pos[j];
+            QPointF d = _pos[i] - _pos[j];
             double dist2 = d.x()*d.x() + d.y()*d.y();
             if (dist2 < 1e-6)
             {
@@ -990,9 +990,9 @@ void ObservationNetworkView::onForceStep()
     }
 
     // 引力：边
-    for (const auto &e : m_net.edges)
+    for (const auto &e : _net.edges)
     {
-        QPointF d = m_pos[e.idx0] - m_pos[e.idx1];
+        QPointF d = _pos[e.idx0] - _pos[e.idx1];
         double dist = std::sqrt(d.x()*d.x() + d.y()*d.y());
         if (dist < 1e-6) continue;
         double fa = dist * dist / k;
@@ -1008,16 +1008,16 @@ void ObservationNetworkView::onForceStep()
         double dLen = std::sqrt(disp[i].x()*disp[i].x() + disp[i].y()*disp[i].y());
         if (dLen > 1e-6)
         {
-            double clamp = std::min(dLen, m_temp);
-            m_pos[i] += disp[i] / dLen * clamp;
+            double clamp = std::min(dLen, _temp);
+            _pos[i] += disp[i] / dLen * clamp;
         }
         // 限制在场景内
-        m_pos[i].setX(std::clamp(m_pos[i].x(), -half, SCENE_SIZE + half));
-        m_pos[i].setY(std::clamp(m_pos[i].y(), -half, SCENE_SIZE + half));
+        _pos[i].setX(std::clamp(_pos[i].x(), -half, SCENE_SIZE + half));
+        _pos[i].setY(std::clamp(_pos[i].y(), -half, SCENE_SIZE + half));
     }
 
-    m_temp *= FORCE_LAYOUT_COOL_RATE;
-    ++m_forceIter;
+    _temp *= FORCE_LAYOUT_COOL_RATE;
+    ++_forceIter;
 
     applyPositions();
 }
@@ -1032,17 +1032,17 @@ void ObservationNetworkView::mousePressEvent(QMouseEvent *event)
         const int pickedNodeIndex = pickNodeAt(mapToScene(event->pos()));
         if (pickedNodeIndex >= 0)
         {
-            m_selectedNodeIndex = pickedNodeIndex;
+            _selectedNodeIndex = pickedNodeIndex;
             rebuildRenderCache();
             viewport()->update();
-            emit nodeClicked(pickedNodeIndex, QString::fromStdString(m_net.nodeNames[pickedNodeIndex]));
+            emit nodeClicked(pickedNodeIndex, QString::fromStdString(_net.nodeNames[pickedNodeIndex]));
             event->accept();
             return;
         }
 
-        if (m_selectedNodeIndex >= 0)
+        if (_selectedNodeIndex >= 0)
         {
-            m_selectedNodeIndex = -1;
+            _selectedNodeIndex = -1;
             rebuildRenderCache();
             viewport()->update();
         }
@@ -1054,12 +1054,12 @@ void ObservationNetworkView::mousePressEvent(QMouseEvent *event)
 void ObservationNetworkView::mouseMoveEvent(QMouseEvent *event)
 {
     const int pickedNodeIndex = pickNodeAt(mapToScene(event->pos()));
-    if (pickedNodeIndex >= 0 && pickedNodeIndex < (int)m_net.nodeNames.size())
+    if (pickedNodeIndex >= 0 && pickedNodeIndex < (int)_net.nodeNames.size())
     {
-        const int degree = pickedNodeIndex < (int)m_net.degrees.size() ? m_net.degrees[pickedNodeIndex] : 0;
+        const int degree = pickedNodeIndex < (int)_net.degrees.size() ? _net.degrees[pickedNodeIndex] : 0;
         QToolTip::showText(event->globalPos(),
                            tr("%1\n度: %2")
-                               .arg(QString::fromStdString(m_net.nodeNames[pickedNodeIndex]))
+                               .arg(QString::fromStdString(_net.nodeNames[pickedNodeIndex]))
                                .arg(degree),
                            this);
     }
@@ -1074,7 +1074,7 @@ void ObservationNetworkView::mouseMoveEvent(QMouseEvent *event)
 void ObservationNetworkView::wheelEvent(QWheelEvent *event)
 {
     const double factor = event->angleDelta().y() > 0 ? 1.15 : 1.0 / 1.15;
-    m_autoFitPending = false;
+    _autoFitPending = false;
     scale(factor, factor);
     rebuildRenderCache();
     viewport()->update();
@@ -1084,7 +1084,7 @@ void ObservationNetworkView::wheelEvent(QWheelEvent *event)
 void ObservationNetworkView::showEvent(QShowEvent *event)
 {
     QGraphicsView::showEvent(event);
-    if (m_autoFitPending)
+    if (_autoFitPending)
     {
         fitNetworkInView();
     }
@@ -1093,7 +1093,7 @@ void ObservationNetworkView::showEvent(QShowEvent *event)
 void ObservationNetworkView::resizeEvent(QResizeEvent *event)
 {
     QGraphicsView::resizeEvent(event);
-    if (m_autoFitPending)
+    if (_autoFitPending)
     {
         fitNetworkInView();
     }
@@ -1101,21 +1101,21 @@ void ObservationNetworkView::resizeEvent(QResizeEvent *event)
 
 int ObservationNetworkView::pickNodeAt(const QPointF &scenePos) const
 {
-    if (m_pos.isEmpty())
+    if (_pos.isEmpty())
     {
         return -1;
     }
 
-    const int maxDegree = m_net.degrees.empty()
+    const int maxDegree = _net.degrees.empty()
         ? 0
-        : *std::max_element(m_net.degrees.begin(), m_net.degrees.end());
+        : *std::max_element(_net.degrees.begin(), _net.degrees.end());
 
     int bestNodeIndex = -1;
     double bestDistanceSquared = std::numeric_limits<double>::max();
-    for (int nodeIndex = 0; nodeIndex < m_pos.size(); ++nodeIndex)
+    for (int nodeIndex = 0; nodeIndex < _pos.size(); ++nodeIndex)
     {
-        const QPointF delta = scenePos - m_pos[nodeIndex];
-        const double radius = nodeIndex < m_nodeRadii.size() ? m_nodeRadii[nodeIndex] : nodeRadius(nodeIndex, maxDegree);
+        const QPointF delta = scenePos - _pos[nodeIndex];
+        const double radius = nodeIndex < _nodeRadii.size() ? _nodeRadii[nodeIndex] : nodeRadius(nodeIndex, maxDegree);
         const double distanceSquared = delta.x() * delta.x() + delta.y() * delta.y();
         if (distanceSquared <= radius * radius && distanceSquared < bestDistanceSquared)
         {

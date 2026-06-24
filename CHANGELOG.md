@@ -86,6 +86,7 @@
 - `WorkflowReportDialog` / `ReportChartWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
 - `FeaturePointVisualizationDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛特征点可视化配置模块的命名规范。
 - `ObservationNetworkDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛观测网络参数/预览对话框命名规范。
+- `ObservationNetworkView` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持观测网络初始布局、力导向迭代、边/标签缓存和节点选择高亮行为不变。
 - `OverlapAnalysisDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛影像重叠度分析对话框命名规范。
 - `SparseCloudPostProcessDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名和动态创建控件 objectName 不变，继续收敛稀疏点云后处理对话框命名规范。
 - `InitCameraPoseDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名和动态匹配/特征类型控件 objectName 不变，继续收敛相机初始化对话框命名规范。
@@ -115,6 +116,9 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.CanvasWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `CanvasWidget` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasWidget|CanvasFeature|LayerRenderer" --output-on-failure` 通过，11/11，验证 CanvasWidget 命名迁移后影像异步加载、特征点迟到结果丢弃和 LayerRenderer 委托测试保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CanvasWidget.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ObservationNetworkViewUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `ObservationNetworkView` 私有成员迁移到 `_lowerCamelCase`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "ObservationNetwork|CodeStyleTest.ObservationNetworkViewUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，3/3，验证观测网络 worker 生命周期检查、视图命名和对话框命名测试保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ObservationNetworkView.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SettingsFilesUse" --output-on-failure` 先失败后通过，验证 settings 小模块不再含 tab 且私有成员使用 `_lowerCamelCase`。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GlobalSettings.cpp`、`ProjectDialogJsonSettingBase.cpp`、`DialogSettingStore.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectConfigManagersUseLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 GUI 配置管理类私有成员迁移到 `_lowerCamelCase`。

@@ -2096,6 +2096,60 @@ TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ObservationNetworkViewUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ObservationNetworkView.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/ObservationNetworkView.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QGraphicsScene *_scene = nullptr;"),
+        QStringLiteral("xjw::ObservationNetwork _net;"),
+        QStringLiteral("QVector<QPointF> _pos;"),
+        QStringLiteral("QVector<double> _nodeRadii;"),
+        QStringLiteral("QVector<int> _visibleEdgeIndices;"),
+        QStringLiteral("QVector<int> _visibleLabelIndices;"),
+        QStringLiteral("QVector<QVector<int>> _nodeEdgeAdjacency;"),
+        QStringLiteral("QTimer *_forceTimer = nullptr;"),
+        QStringLiteral("int _forceIter = 0;"),
+        QStringLiteral("double _temp = 0.0;"),
+        QStringLiteral("bool _autoFitPending = false;"),
+        QStringLiteral("int _selectedNodeIndex = -1;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_scene"),
+        QStringLiteral("m_net"),
+        QStringLiteral("m_pos"),
+        QStringLiteral("m_nodeRadii"),
+        QStringLiteral("m_visibleEdgeIndices"),
+        QStringLiteral("m_visibleLabelIndices"),
+        QStringLiteral("m_nodeEdgeAdjacency"),
+        QStringLiteral("m_forceTimer"),
+        QStringLiteral("m_forceIter"),
+        QStringLiteral("m_temp"),
+        QStringLiteral("m_autoFitPending"),
+        QStringLiteral("m_selectedNodeIndex"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(")"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(";"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("["))) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, WorkspaceCenterWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.h"));
