@@ -2033,6 +2033,69 @@ TEST(CodeStyleTest, DualImageViewerUsesLowerCamelPrivateMemberNames)
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_splitter"))) << "Qt Designer object name must stay stable";
 }
 
+TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("LayerRenderer *_layerRenderer{};"),
+        QStringLiteral("bool _showInterestPoints{true};"),
+        QStringLiteral("QString _activeFeatureSuffix{QStringLiteral(\".sp\")};"),
+        QStringLiteral("LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;"),
+        QStringLiteral("QString _currentImagePath;"),
+        QStringLiteral("QFutureWatcher<std::vector<cv::KeyPoint>> *_spWatcher{nullptr};"),
+        QStringLiteral("QFutureWatcher<QImage> *_imageWatcher{nullptr};"),
+        QStringLiteral("std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;"),
+        QStringLiteral("int _featureLoadGeneration{0};"),
+        QStringLiteral("double _zoomFactor{1.0};"),
+        QStringLiteral("const double _zoomStep{1.15};"),
+        QStringLiteral("const double _zoomMin{0.05};"),
+        QStringLiteral("const double _zoomMax{50.0};"),
+        QStringLiteral("bool _isPanning{false};"),
+        QStringLiteral("QPoint _lastPanPoint{};"),
+        QStringLiteral("const int _panThreshold{4};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    EXPECT_TRUE(header.contains(QStringLiteral("return _activeFeatureSuffix;")))
+        << "CanvasWidget accessor should use the renamed member";
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_layerRenderer"),
+        QStringLiteral("m_showInterestPoints"),
+        QStringLiteral("m_activeFeatureSuffix"),
+        QStringLiteral("m_currentFeatureOpts"),
+        QStringLiteral("m_currentImagePath"),
+        QStringLiteral("m_spWatcher"),
+        QStringLiteral("m_imageWatcher"),
+        QStringLiteral("m_spCache"),
+        QStringLiteral("m_zoomFactor"),
+        QStringLiteral("m_zoomStep"),
+        QStringLiteral("m_zoomMin"),
+        QStringLiteral("m_zoomMax"),
+        QStringLiteral("m_isPanning"),
+        QStringLiteral("m_lastPanPoint"),
+        QStringLiteral("m_panThreshold"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(")"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(";"))) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, WorkspaceCenterWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/WorkspaceCenterWidget.h"));
@@ -6591,10 +6654,10 @@ TEST(CanvasWidgetResponsivenessTest, ImageSwitchUsesBackgroundLoadAndIgnoresStal
     ASSERT_FALSE(rendererHeader.isEmpty());
     ASSERT_FALSE(rendererSource.isEmpty());
 
-    EXPECT_TRUE(header.contains(QStringLiteral("QFutureWatcher<QImage> *m_imageWatcher")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QFutureWatcher<QImage> *_imageWatcher")));
     EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run([pathCopy, projectPath]")));
     EXPECT_TRUE(source.contains(QStringLiteral("LayerRenderer::loadImageForDisplay(pathCopy, projectPath)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("QDir::cleanPath(loadedPath) != QDir::cleanPath(m_currentImagePath)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QDir::cleanPath(loadedPath) != QDir::cleanPath(_currentImagePath)")));
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("static QImage loadImageForDisplay")));
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("bool addImageLayer(const QImage &image, int z = 0)")));
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("QPixmap::fromImage(image)")));
@@ -6714,8 +6777,8 @@ TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage
     EXPECT_TRUE(finishedBlock.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
         << "Late completions must be dropped after another image/suffix request starts.";
     EXPECT_TRUE(finishedBlock.contains(
-        QStringLiteral("QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->m_currentImagePath)")));
-    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && self->m_layerRenderer)")));
+        QStringLiteral("QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath)")));
+    EXPECT_TRUE(finishedBlock.contains(QStringLiteral("if (isCurrentImage && self->_layerRenderer)")));
 }
 
 TEST(CanvasWidgetResponsivenessTest, FeatureLoadEstimatesOrientationOnlyWhenDisplayed)
@@ -6730,7 +6793,7 @@ TEST(CanvasWidgetResponsivenessTest, FeatureLoadEstimatesOrientationOnlyWhenDisp
     const QString loadBlock = source.mid(startIndex, imreadIndex - startIndex + 600);
 
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("const QString projectPath = property(\"currentProjectPath\").toString()")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("const bool shouldEstimateOrientation = m_currentFeatureOpts.showOrientation")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("const bool shouldEstimateOrientation = _currentFeatureOpts.showOrientation")));
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("[imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]()")));
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("if (shouldEstimateOrientation)")));
 }

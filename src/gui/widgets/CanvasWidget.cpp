@@ -36,7 +36,7 @@ CanvasWidget::CanvasWidget(QWidget *parent)
     setScene(scene);
 
     // 渲染器：负责把影像层加入到 scene
-    m_layerRenderer = new LayerRenderer(scene, this);
+    _layerRenderer = new LayerRenderer(scene, this);
 
     // 默认设置：平滑缩放，开启抗锯齿（若需要可调整）
     setRenderHint(QPainter::Antialiasing, true);
@@ -52,16 +52,16 @@ CanvasWidget::CanvasWidget(QWidget *parent)
 
 void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDisplayOptions &opts)
 {
-    if (!m_layerRenderer) return;
+    if (!_layerRenderer) return;
     // 保存当前选项并立即注入渲染器
-    m_currentFeatureOpts = opts;
-    m_layerRenderer->setFeatureDisplayOptions(opts);
+    _currentFeatureOpts = opts;
+    _layerRenderer->setFeatureDisplayOptions(opts);
     // Use the options' showPoints to control visibility: 当 opts.showPoints 为 true 时加载特征点，否则清除
-    if (opts.showPoints && !m_currentImagePath.trimmed().isEmpty()) {
-        m_layerRenderer->clearFeatureLayers();
-        startSpLoadForImage(m_currentImagePath);
+    if (opts.showPoints && !_currentImagePath.trimmed().isEmpty()) {
+        _layerRenderer->clearFeatureLayers();
+        startSpLoadForImage(_currentImagePath);
     } else {
-        m_layerRenderer->clearFeatureLayers();
+        _layerRenderer->clearFeatureLayers();
     }
 }
 
@@ -70,7 +70,7 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
 void CanvasWidget::showEvent(QShowEvent *event)
 {
     QGraphicsView::showEvent(event);
-    if (scene() && !scene()->sceneRect().isEmpty() && m_zoomFactor == 1.0)
+    if (scene() && !scene()->sceneRect().isEmpty() && _zoomFactor == 1.0)
     {
         fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
     }
@@ -78,7 +78,7 @@ void CanvasWidget::showEvent(QShowEvent *event)
 
 void CanvasWidget::showImage(const QString &path)
 {
-    if (!scene() || !m_layerRenderer)
+    if (!scene() || !_layerRenderer)
     {
         return;
     }
@@ -86,56 +86,56 @@ void CanvasWidget::showImage(const QString &path)
     // 清理旧覆盖层；影像图层在新影像加载完成后替换，避免磁盘解码期间界面空白。
     // NOTE: 不调用 scene()->clear() —— 那会使 QGraphicsScene 删除所有 items，
     // 导致 LayerRenderer 持有的指针变为悬空并在后续删除时造成双重释放。
-    m_layerRenderer->clearFeatureLayers();
+    _layerRenderer->clearFeatureLayers();
     // 确保清除上一次的匹配连线层，避免其干扰新的场景布局
-    m_layerRenderer->clearMatchLayers();
+    _layerRenderer->clearMatchLayers();
 
     if (path.trimmed().isEmpty())
     {
-        m_layerRenderer->clear();
+        _layerRenderer->clear();
         return;
     }
 
     // 将当前项目路径注入渲染器，用于把非 8-bit 影像转换缓存写入项目 .plascan_tmp。
     // 说明：CanvasWidget 不直接依赖 ProjectManager 头文件，这里通过 QObject 动态属性读取。
     // MainWindow/ProjectManager 会在运行时设置该属性。
-    if (m_layerRenderer)
+    if (_layerRenderer)
     {
         const QVariant v = property("currentProjectPath");
         if (v.isValid())
         {
-            m_layerRenderer->setCurrentProjectPath(v.toString());
+            _layerRenderer->setCurrentProjectPath(v.toString());
         }
     }
 
     // 记录当前影像路径
-    m_currentImagePath = path;
+    _currentImagePath = path;
 
     const QString pathCopy = path;
     const QString projectPath = property("currentProjectPath").toString();
     auto *watcher = new QFutureWatcher<QImage>(this);
-    m_imageWatcher = watcher;
+    _imageWatcher = watcher;
     connect(watcher, &QFutureWatcher<QImage>::finished, this, [this, watcher, loadedPath = pathCopy]()
     {
         const QImage image = watcher->result();
         watcher->deleteLater();
-        if (watcher != m_imageWatcher)
+        if (watcher != _imageWatcher)
         {
             return;
         }
-        m_imageWatcher = nullptr;
-        if (QDir::cleanPath(loadedPath) != QDir::cleanPath(m_currentImagePath))
+        _imageWatcher = nullptr;
+        if (QDir::cleanPath(loadedPath) != QDir::cleanPath(_currentImagePath))
         {
             return;
         }
-        if (image.isNull() || !m_layerRenderer)
+        if (image.isNull() || !_layerRenderer)
         {
             LOG_WARN(QStringLiteral("showImage: failed to load image %1").arg(loadedPath));
             return;
         }
 
-        m_layerRenderer->clear();
-        if (!m_layerRenderer->addImageLayer(image, 0))
+        _layerRenderer->clear();
+        if (!_layerRenderer->addImageLayer(image, 0))
         {
             return;
         }
@@ -148,7 +148,7 @@ void CanvasWidget::showImage(const QString &path)
         fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
 
         // 重新适配后，重置缩放因子
-        m_zoomFactor = 1.0;
+        _zoomFactor = 1.0;
 
         // 自动加载特征点（默认启用）
         // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
@@ -167,14 +167,14 @@ void CanvasWidget::showImage(const QString &path)
 
 void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile)
 {
-    if (!scene() || !m_layerRenderer) return;
+    if (!scene() || !_layerRenderer) return;
 
     LOG_DEBUG(QStringLiteral("showMatchedPair: imgA=%1 imgB=%2 match=%3").arg(imgA, imgB, matchFile));
 
     // clear existing layers
-    m_layerRenderer->clearFeatureLayers();
-    m_layerRenderer->clearMatchLayers();
-    m_layerRenderer->clear();
+    _layerRenderer->clearFeatureLayers();
+    _layerRenderer->clearMatchLayers();
+    _layerRenderer->clear();
 
     // parse match file (robust raw parser based on ASP parse_match_file.py)
     QVector<QPointF> ptsA, ptsB;
@@ -272,14 +272,14 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
     }
 
     // Ensure renderer knows project path (so caching/convert works same as showImage)
-    if (m_layerRenderer) {
+    if (_layerRenderer) {
         const QVariant v = property("currentProjectPath");
-        if (v.isValid()) m_layerRenderer->setCurrentProjectPath(v.toString());
+        if (v.isValid()) _layerRenderer->setCurrentProjectPath(v.toString());
     }
 
     // Add stitched images
     QGraphicsPixmapItem *itemA = nullptr; QGraphicsPixmapItem *itemB = nullptr;
-    if (!m_layerRenderer->addStitchedImagePair(imgA, imgB, &itemA, &itemB, 20)) {
+    if (!_layerRenderer->addStitchedImagePair(imgA, imgB, &itemA, &itemB, 20)) {
         qWarning() << "addStitchedImagePair failed for" << imgA << imgB;
         LOG_WARN(QStringLiteral("showMatchedPair: addStitchedImagePair failed for %1 <-> %2").arg(imgA, imgB));
         // fallback: show single image
@@ -291,14 +291,14 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
     if (!itemA || itemA->pixmap().isNull()) {
         qWarning() << "Failed to load image A for stitched view:" << imgA;
         // cleanup any added B
-        if (itemA) { m_layerRenderer->clear(); }
+        if (itemA) { _layerRenderer->clear(); }
         showImage(imgA);
         return;
     }
     if (!itemB || itemB->pixmap().isNull()) {
         qWarning() << "Failed to load image B for stitched view:" << imgB;
         // treat as single image
-        m_layerRenderer->clear();
+        _layerRenderer->clear();
         showImage(imgA);
         return;
     }
@@ -342,7 +342,7 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
         LOG_DEBUG(QStringLiteral("showMatchedPair: filtered ptsA=%1 ptsB=%2").arg(fA.size()).arg(fB.size()));
 
         if (!fA.isEmpty() && !fB.isEmpty()) {
-            m_layerRenderer->addMatchLines(fA, fB, bOffsetX);
+            _layerRenderer->addMatchLines(fA, fB, bOffsetX);
         } else {
             LOG_DEBUG(QStringLiteral("showMatchedPair: no valid match points after filtering"));
         }
@@ -370,43 +370,43 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
         // fallback to show single image
         qWarning() << "itemsBoundingRect empty after stitching; falling back";
         LOG_WARN(QStringLiteral("showMatchedPair: itemsBoundingRect empty after stitching, falling back to single image"));
-        m_layerRenderer->clear();
+        _layerRenderer->clear();
         showImage(imgA);
         return;
     }
-    m_zoomFactor = 1.0;
+    _zoomFactor = 1.0;
 }
 
 void CanvasWidget::setActiveFeatureSuffix(const QString &suffix)
 {
-    if (suffix.isEmpty() || suffix == m_activeFeatureSuffix) return;
-    m_activeFeatureSuffix = suffix;
+    if (suffix.isEmpty() || suffix == _activeFeatureSuffix) return;
+    _activeFeatureSuffix = suffix;
     // 清除当前影像的缓存, 强制重新加载
-    if (!m_currentImagePath.isEmpty())
-        setShowInterestPoints(m_showInterestPoints);
+    if (!_currentImagePath.isEmpty())
+        setShowInterestPoints(_showInterestPoints);
 }
 
 QStringList CanvasWidget::availableFeatureSuffixes() const
 {
-    if (m_currentImagePath.isEmpty()) return {};
+    if (_currentImagePath.isEmpty()) return {};
     const QString projectPath = property("currentProjectPath").toString();
-    return ProjectIO::availableFeatureSuffixes(projectPath, m_currentImagePath);
+    return ProjectIO::availableFeatureSuffixes(projectPath, _currentImagePath);
 }
 
 void CanvasWidget::setShowInterestPoints(bool show)
 {
-    m_showInterestPoints = show;
-    if (!m_layerRenderer) return;
+    _showInterestPoints = show;
+    if (!_layerRenderer) return;
 
-    if (m_showInterestPoints && !m_currentImagePath.trimmed().isEmpty())
+    if (_showInterestPoints && !_currentImagePath.trimmed().isEmpty())
     {
         // 异步加载当前影像的特征文件
-        m_layerRenderer->clearFeatureLayers();
-        startSpLoadForImage(m_currentImagePath);
+        _layerRenderer->clearFeatureLayers();
+        startSpLoadForImage(_currentImagePath);
     }
     else
     {
-        m_layerRenderer->clearFeatureLayers();
+        _layerRenderer->clearFeatureLayers();
     }
 }
 
@@ -415,21 +415,21 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     if (imagePath.trimmed().isEmpty()) return;
 
     const QString imagePathCopy = imagePath;
-    const QString activeSuffix = m_activeFeatureSuffix;
+    const QString activeSuffix = _activeFeatureSuffix;
     const QString projectPath = property("currentProjectPath").toString();
-    const bool shouldEstimateOrientation = m_currentFeatureOpts.showOrientation;
+    const bool shouldEstimateOrientation = _currentFeatureOpts.showOrientation;
     const int generation = ++_featureLoadGeneration;
     // 检查缓存 (key 含 suffix)
     QFileInfo fiCheck(imagePathCopy);
     const QString cacheKey = imagePathCopy + activeSuffix;
-    auto it = m_spCache.find(cacheKey);
-    if (it != m_spCache.end()) {
+    auto it = _spCache.find(cacheKey);
+    if (it != _spCache.end()) {
         if (it->second.first == fiCheck.lastModified()) {
-            const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(m_currentImagePath);
-            if (isCurrentImage && m_layerRenderer) {
-                m_layerRenderer->setFeatureDisplayOptions(m_currentFeatureOpts);
-                m_layerRenderer->clearFeatureLayers();
-                if (!it->second.second.empty()) m_layerRenderer->addFeatureItems(it->second.second);
+            const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(_currentImagePath);
+            if (isCurrentImage && _layerRenderer) {
+                _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
+                _layerRenderer->clearFeatureLayers();
+                if (!it->second.second.empty()) _layerRenderer->addFeatureItems(it->second.second);
             }
             emit featuresLoaded(imagePathCopy, static_cast<int>(it->second.second.size()));
             return;
@@ -496,14 +496,14 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
 
     // 取消上一个 watcher（如果有）并启动新 watcher。QtConcurrent 任务可能已经在运行，
     // 因此完成回调仍需依赖 generation 判断来丢弃旧结果。
-    if (m_spWatcher && m_spWatcher->isRunning())
+    if (_spWatcher && _spWatcher->isRunning())
     {
-        m_spWatcher->cancel();
+        _spWatcher->cancel();
     }
 
     QPointer<CanvasWidget> self(this);
     auto *watcher = new QFutureWatcher<std::vector<cv::KeyPoint>>(this);
-    m_spWatcher = watcher;
+    _spWatcher = watcher;
     connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,
             this, [self, watcher, imagePathCopy, activeSuffix, generation]()
     {
@@ -514,9 +514,9 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
 
         std::vector<cv::KeyPoint> kps = watcher->result();
-        if (watcher == self->m_spWatcher)
+        if (watcher == self->_spWatcher)
         {
-            self->m_spWatcher = nullptr;
+            self->_spWatcher = nullptr;
         }
         watcher->deleteLater();
 
@@ -525,21 +525,21 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
             return;
         }
 
-        const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->m_currentImagePath);
+        const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath);
         if (!imagePathCopy.trimmed().isEmpty())
         {
             QFileInfo fi(imagePathCopy);
             const QString key = imagePathCopy + activeSuffix;
-            self->m_spCache[key] = std::make_pair(fi.lastModified(), kps);
+            self->_spCache[key] = std::make_pair(fi.lastModified(), kps);
         }
-        if (isCurrentImage && self->m_layerRenderer)
+        if (isCurrentImage && self->_layerRenderer)
         {
             // 重新应用当前显示设置，确保使用 UI 中的参数
-            self->m_layerRenderer->setFeatureDisplayOptions(self->m_currentFeatureOpts);
-            self->m_layerRenderer->clearFeatureLayers();
+            self->_layerRenderer->setFeatureDisplayOptions(self->_currentFeatureOpts);
+            self->_layerRenderer->clearFeatureLayers();
             if (!kps.empty())
             {
-                self->m_layerRenderer->addFeatureItems(kps);
+                self->_layerRenderer->addFeatureItems(kps);
             }
         }
         // 发出信号以便主窗体更新状态栏 / 面板
@@ -553,18 +553,18 @@ void CanvasWidget::reloadInterestPoints(const QString &imagePath)
     if (imagePath.trimmed().isEmpty()) return;
 
     // 删除缓存条目以确保后续读取不会直接走缓存分支
-    auto it = m_spCache.find(imagePath);
-    if (it != m_spCache.end()) {
-        m_spCache.erase(it);
+    auto it = _spCache.find(imagePath);
+    if (it != _spCache.end()) {
+        _spCache.erase(it);
     }
 
     // 仅在用户开启叠加兴趣点或当前图像为目标时刷新渲染
-    if (m_showInterestPoints && !m_currentImagePath.trimmed().isEmpty()) {
+    if (_showInterestPoints && !_currentImagePath.trimmed().isEmpty()) {
         // 如果请求的路径不是当前显示的影像，仍尝试加载以更新缓存（但不叠加到当前视图）
-        if (QDir::cleanPath(imagePath) == QDir::cleanPath(m_currentImagePath)) {
+        if (QDir::cleanPath(imagePath) == QDir::cleanPath(_currentImagePath)) {
             // 对当前显示影像，直接触发加载并叠加
-            m_layerRenderer->clearFeatureLayers();
-            startSpLoadForImage(m_currentImagePath);
+            _layerRenderer->clearFeatureLayers();
+            startSpLoadForImage(_currentImagePath);
         } else {
             // 对非当前显示影像，只更新缓存：启动后台加载但不要修改当前 scene
             startSpLoadForImage(imagePath);
@@ -579,21 +579,21 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
 {
     if (imagePath.trimmed().isEmpty()) return;
 
-    const bool isCurrentImage = (QDir::cleanPath(imagePath) == QDir::cleanPath(m_currentImagePath));
+    const bool isCurrentImage = (QDir::cleanPath(imagePath) == QDir::cleanPath(_currentImagePath));
 
     // 删除缓存条目以确保后续读取不会直接走缓存分支
-    auto it = m_spCache.find(imagePath);
-    if (it != m_spCache.end()) {
-        m_spCache.erase(it);
+    auto it = _spCache.find(imagePath);
+    if (it != _spCache.end()) {
+        _spCache.erase(it);
     }
 
     // 直接在主线程同步读取特征文件并更新显示，使用当前活动的后缀
     const QString projectPath = property("currentProjectPath").toString();
-    const QString spFile = ProjectIO::featureFileForSuffix(projectPath, imagePath, m_activeFeatureSuffix);
+    const QString spFile = ProjectIO::featureFileForSuffix(projectPath, imagePath, _activeFeatureSuffix);
     if (spFile.isEmpty()) {
-        LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no %1 found for %2").arg(m_activeFeatureSuffix, imagePath));
+        LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no %1 found for %2").arg(_activeFeatureSuffix, imagePath));
         // 仅在当前显示影像时清除场景中的兴趣点，避免覆盖用户正在看的其它影像
-        if (isCurrentImage && m_layerRenderer) m_layerRenderer->clearFeatureLayers();
+        if (isCurrentImage && _layerRenderer) _layerRenderer->clearFeatureLayers();
         emit featuresLoaded(imagePath, 0);
         return;
     }
@@ -601,12 +601,12 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
     std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
     if (keypoints.empty()) {
         LOG_WARN(QStringLiteral("immediateReloadInterestPoints: failed to read .sp file %1").arg(spFile));
-        if (isCurrentImage && m_layerRenderer) m_layerRenderer->clearFeatureLayers();
+        if (isCurrentImage && _layerRenderer) _layerRenderer->clearFeatureLayers();
         emit featuresLoaded(imagePath, 0);
         return;
     }
 
-    if (m_currentFeatureOpts.showOrientation)
+    if (_currentFeatureOpts.showOrientation)
     {
         // 估计每个 keypoint 的方向（用于显示方向箭头）。
         // 注意：startSpLoadForImage 的异步路径有做这个；这里同步刷新也需要同样处理，否则 showOrientation 不会生效。
@@ -641,16 +641,16 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
 
     // 更新 cache (key 含 suffix, 支持多提取器)
     QFileInfo fi(imagePath);
-    m_spCache[imagePath + m_activeFeatureSuffix] = std::make_pair(fi.lastModified(), keypoints);
+    _spCache[imagePath + _activeFeatureSuffix] = std::make_pair(fi.lastModified(), keypoints);
 
     // 仅当刷新的是“当前显示的影像”时才更新场景，避免处理批量图像时最后一张覆盖当前视图。
-    if (isCurrentImage && m_layerRenderer) {
-        m_layerRenderer->setFeatureDisplayOptions(m_currentFeatureOpts);
-        if (!m_showInterestPoints || !m_currentFeatureOpts.showPoints) {
-            m_layerRenderer->clearFeatureLayers();
+    if (isCurrentImage && _layerRenderer) {
+        _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
+        if (!_showInterestPoints || !_currentFeatureOpts.showPoints) {
+            _layerRenderer->clearFeatureLayers();
         } else {
-            m_layerRenderer->clearFeatureLayers();
-            if (!keypoints.empty()) m_layerRenderer->addFeatureItems(keypoints);
+            _layerRenderer->clearFeatureLayers();
+            if (!keypoints.empty()) _layerRenderer->addFeatureItems(keypoints);
         }
     }
 
@@ -662,8 +662,8 @@ QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString 
 {
     QList<QVariantMap> out;
     if (imagePath.trimmed().isEmpty()) return out;
-    auto it = m_spCache.find(imagePath);
-    if (it == m_spCache.end()) return out;
+    auto it = _spCache.find(imagePath);
+    if (it == _spCache.end()) return out;
     for (const auto &kp : it->second.second) {
         QVariantMap m;
         m.insert(QStringLiteral("x"), kp.pt.x);
@@ -678,32 +678,32 @@ QList<QVariantMap> CanvasWidget::getCachedInterestPointsAsVariant(const QString 
 
 QString CanvasWidget::currentImagePath() const
 {
-    return m_currentImagePath;
+    return _currentImagePath;
 }
 
 void CanvasWidget::zoomIn()
 {
     // 放大 1.2 倍
-    const double next = m_zoomFactor * m_zoomStep;
-    if (next > m_zoomMax) return;
-    m_zoomFactor = next;
-    scale(m_zoomStep, m_zoomStep);
+    const double next = _zoomFactor * _zoomStep;
+    if (next > _zoomMax) return;
+    _zoomFactor = next;
+    scale(_zoomStep, _zoomStep);
 }
 
 void CanvasWidget::zoomOut()
 {
     // 缩小 1/1.2
-    const double next = m_zoomFactor / m_zoomStep;
-    if (next < m_zoomMin) return;
-    m_zoomFactor = next;
-    scale(1.0 / m_zoomStep, 1.0 / m_zoomStep);
+    const double next = _zoomFactor / _zoomStep;
+    if (next < _zoomMin) return;
+    _zoomFactor = next;
+    scale(1.0 / _zoomStep, 1.0 / _zoomStep);
 }
 
 void CanvasWidget::resetView()
 {
     // 恢复为默认变换并居中场景
     resetTransform();
-    m_zoomFactor = 1.0;
+    _zoomFactor = 1.0;
     if (scene()) {
         fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
     }
@@ -741,8 +741,8 @@ void CanvasWidget::mousePressEvent(QMouseEvent *event)
 
     if (event->button() == Qt::LeftButton)
     {
-        m_isPanning = false;
-        m_lastPanPoint = event->pos();
+        _isPanning = false;
+        _lastPanPoint = event->pos();
         setCursor(Qt::OpenHandCursor);
         event->accept();
         return;
@@ -756,22 +756,22 @@ void CanvasWidget::mouseMoveEvent(QMouseEvent *event)
 
     if (event->buttons() & Qt::LeftButton)
     {
-        const QPoint delta = event->pos() - m_lastPanPoint;
-        if (!m_isPanning)
+        const QPoint delta = event->pos() - _lastPanPoint;
+        if (!_isPanning)
         {
-            if (std::abs(delta.x()) >= m_panThreshold || std::abs(delta.y()) >= m_panThreshold)
+            if (std::abs(delta.x()) >= _panThreshold || std::abs(delta.y()) >= _panThreshold)
             {
-                m_isPanning = true;
+                _isPanning = true;
                 setCursor(Qt::ClosedHandCursor);
             }
         }
 
-        if (m_isPanning)
+        if (_isPanning)
         {
             // 反向滚动以产生拖动手感
             horizontalScrollBar()->setValue(horizontalScrollBar()->value() - delta.x());
             verticalScrollBar()->setValue(verticalScrollBar()->value() - delta.y());
-            m_lastPanPoint = event->pos();
+            _lastPanPoint = event->pos();
             event->accept();
             return;
         }
@@ -786,10 +786,10 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent *event)
 
     if (event->button() == Qt::LeftButton)
     {
-        if (m_isPanning)
+        if (_isPanning)
         {
             // 结束平移
-            m_isPanning = false;
+            _isPanning = false;
             setCursor(Qt::ArrowCursor);
             event->accept();
             return;

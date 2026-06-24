@@ -49,7 +49,7 @@
 - 3D 视图 PLY 异步加载的进度回报改为通过 `QMetaObject::invokeMethod(..., Qt::QueuedConnection)` 回到 `CameraSceneWidget` 所在线程，避免后台加载线程直接通过 GUI 对象发射进度信号。
 - CanvasWidget 特征点异步加载改为按请求创建 watcher，并用 generation guard 丢弃旧影像/旧后缀的迟到结果，避免切换影像后旧特征点覆盖当前画布。
 - CanvasWidget 不再直接包含 `SuperPoint`、`FeatureOutput` 或 `FeatureFileIO`，改为复用 `LayerFeatureLoader::loadFeatureKeypointsFromFile()`；视图层只消费 `cv::KeyPoint`，LibTorch/ATen 头文件和 MSVC C4267 warning 继续隔离在 feature loader/runner 编译单元内。
-- CanvasWidget 上轮新增的特征加载 generation 成员改为 `_featureLoadGeneration`，让新增私有成员命名与项目 `_lowerCamelCase` 规范保持一致。
+- `CanvasWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持影像异步加载、特征点缓存、迟到结果丢弃、缩放和平移行为不变。
 - `GlobalSettings`、`ProjectDialogJsonSettingBase` 和 `DialogSettingStore` 去除 tab 缩进或旧 `m_` 私有成员，并将私有成员收敛为 `_settings` / `_plascanPath` / `_dialogKey`，作为 settings 小模块逐步迁移 `_lowerCamelCase` 私有成员规范的起点。
 - `AppConfigManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持窗口状态、最近项目和文件对话框子管理器访问接口不变。
 - `ProjectConfigManager`、`ProjectUiConfigManager` 和 `ProjectWorkflowConfigManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，继续收敛 GUI 配置管理层命名规范。
@@ -112,6 +112,9 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|FeatureNamingCleanup|CanvasWidgetResponsiveness|LayerRenderer" --output-on-failure` 通过，29/29。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，540/540；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|StaleFeatureLoadsDoNotPaintOverCurrentImage" --output-on-failure` 先失败后通过，验证 CanvasWidget 新增 generation 成员使用 `_lowerCamelCase` 命名且旧结果丢弃逻辑仍有效。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.CanvasWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `CanvasWidget` 私有成员迁移到 `_lowerCamelCase`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasWidget|CanvasFeature|LayerRenderer" --output-on-failure` 通过，11/11，验证 CanvasWidget 命名迁移后影像异步加载、特征点迟到结果丢弃和 LayerRenderer 委托测试保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CanvasWidget.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SettingsFilesUse" --output-on-failure` 先失败后通过，验证 settings 小模块不再含 tab 且私有成员使用 `_lowerCamelCase`。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GlobalSettings.cpp`、`ProjectDialogJsonSettingBase.cpp`、`DialogSettingStore.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectConfigManagersUseLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 GUI 配置管理类私有成员迁移到 `_lowerCamelCase`。

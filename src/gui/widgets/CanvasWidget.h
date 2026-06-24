@@ -44,7 +44,7 @@ public slots:
     // 切换当前显示的特征提取器后缀 (.sp/.dsk/.alk 等), 重新加载特征点
     void setActiveFeatureSuffix(const QString &suffix);
     // 获取当前活动的特征文件后缀
-    QString activeFeatureSuffix() const { return m_activeFeatureSuffix; }
+    QString activeFeatureSuffix() const { return _activeFeatureSuffix; }
 
     // 获取当前影像可用的特征文件后缀列表 (供 UI 构建选择器)
     QStringList availableFeatureSuffixes() const;
@@ -85,29 +85,29 @@ protected:
     void mouseReleaseEvent(QMouseEvent *event) override;
 
 private:
-    LayerRenderer *m_layerRenderer{};
-    bool m_showInterestPoints{true};  // 默认启用特征点显示
-    QString m_activeFeatureSuffix{QStringLiteral(".sp")};  // 当前选择的特征提取器后缀
+    LayerRenderer *_layerRenderer{};
+    bool _showInterestPoints{true};  // 默认启用特征点显示
+    QString _activeFeatureSuffix{QStringLiteral(".sp")};  // 当前选择的特征提取器后缀
     // 当前的兴趣点显示选项（由 UI 通过 applyFeatureDisplayOptions 设置）
-    LayerRenderer::FeatureDisplayOptions m_currentFeatureOpts;
-    QString m_currentImagePath;
+    LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;
+    QString _currentImagePath;
     // 后台读取 .sp 的 watcher（每次启动一个异步任务）
-    QFutureWatcher<std::vector<cv::KeyPoint>> *m_spWatcher{nullptr};
-    QFutureWatcher<QImage> *m_imageWatcher{nullptr};
+    QFutureWatcher<std::vector<cv::KeyPoint>> *_spWatcher{nullptr};
+    QFutureWatcher<QImage> *_imageWatcher{nullptr};
     // cache: imagePath -> (lastModified, keypoints)
-    std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> m_spCache;
+    std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;
     int _featureLoadGeneration{0};
 
     // 缩放限制（避免无限放大/缩小导致精度或性能问题）
-    double m_zoomFactor{1.0};
-    const double m_zoomStep{1.15};
-    const double m_zoomMin{0.05};
-    const double m_zoomMax{50.0};
+    double _zoomFactor{1.0};
+    const double _zoomStep{1.15};
+    const double _zoomMin{0.05};
+    const double _zoomMax{50.0};
 
     // 将来可添加：加载影像、设置图层可见性、坐标转换、拾取等接口
     // 平移状态
-    bool m_isPanning{false};
-    QPoint m_lastPanPoint{};
+    bool _isPanning{false};
+    QPoint _lastPanPoint{};
     // 用于判断单击还是拖动的阈值（像素）
-    const int m_panThreshold{4};
+    const int _panThreshold{4};
 };
