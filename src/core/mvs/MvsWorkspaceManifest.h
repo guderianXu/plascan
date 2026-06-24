@@ -63,8 +63,8 @@ public:
 private:
     int findFrameIndex(int refIndex) const;
 
-    QString m_configHash;
-    QVector<MvsDepthFrameRecord> m_frames;
+    QString _configHash;
+    QVector<MvsDepthFrameRecord> _frames;
 };
 
 QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount);

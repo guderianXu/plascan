@@ -133,14 +133,14 @@ bool MvsWorkspaceManifest::load(const QString &path, QString *errorMsg)
     }
 
     const QJsonObject root = doc.object();
-    m_configHash = root.value(QStringLiteral("config_hash")).toString();
+    _configHash = root.value(QStringLiteral("config_hash")).toString();
     const QJsonArray frames = root.value(QStringLiteral("frames")).toArray();
-    m_frames.reserve(frames.size());
+    _frames.reserve(frames.size());
     for (const QJsonValue &value : frames)
     {
         if (value.isObject())
         {
-            m_frames.push_back(MvsDepthFrameRecord::fromJson(value.toObject()));
+            _frames.push_back(MvsDepthFrameRecord::fromJson(value.toObject()));
         }
     }
     return true;
@@ -182,29 +182,29 @@ bool MvsWorkspaceManifest::saveAtomic(const QString &path, QString *errorMsg) co
 
 void MvsWorkspaceManifest::clear()
 {
-    m_configHash.clear();
-    m_frames.clear();
+    _configHash.clear();
+    _frames.clear();
 }
 
 QString MvsWorkspaceManifest::configHash() const
 {
-    return m_configHash;
+    return _configHash;
 }
 
 void MvsWorkspaceManifest::setConfigHash(const QString &hash)
 {
-    m_configHash = hash;
+    _configHash = hash;
 }
 
 const QVector<MvsDepthFrameRecord> &MvsWorkspaceManifest::frames() const
 {
-    return m_frames;
+    return _frames;
 }
 
 QVector<MvsDepthFrameRecord> MvsWorkspaceManifest::completedFramesSortedByName() const
 {
     QVector<MvsDepthFrameRecord> result;
-    for (const MvsDepthFrameRecord &record : m_frames)
+    for (const MvsDepthFrameRecord &record : _frames)
     {
         if (record.status == QStringLiteral("completed"))
         {
@@ -228,11 +228,11 @@ void MvsWorkspaceManifest::upsertFrame(const MvsDepthFrameRecord &record)
     const int index = findFrameIndex(record.refIndex);
     if (index >= 0)
     {
-        m_frames[index] = record;
+        _frames[index] = record;
     }
     else
     {
-        m_frames.push_back(record);
+        _frames.push_back(record);
     }
 }
 
@@ -242,7 +242,7 @@ void MvsWorkspaceManifest::markRunning(int refIndex, const QString &refImage, co
     const int index = findFrameIndex(refIndex);
     if (index >= 0)
     {
-        record = m_frames[index];
+        record = _frames[index];
     }
     record.refIndex = refIndex;
     record.refImage = refImage;
@@ -258,18 +258,18 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     const int index = findFrameIndex(completed.refIndex);
     if (completed.sourcePlan.isEmpty() && index >= 0)
     {
-        completed.sourcePlan = m_frames[index].sourcePlan;
+        completed.sourcePlan = _frames[index].sourcePlan;
     }
     if (completed.sourceViewCount <= 0 && index >= 0)
     {
-        completed.sourceViewCount = m_frames[index].sourceViewCount;
-        completed.meanSourceQualityScore = m_frames[index].meanSourceQualityScore;
-        completed.minSourceQualityScore = m_frames[index].minSourceQualityScore;
+        completed.sourceViewCount = _frames[index].sourceViewCount;
+        completed.meanSourceQualityScore = _frames[index].meanSourceQualityScore;
+        completed.minSourceQualityScore = _frames[index].minSourceQualityScore;
     }
     if (completed.validPixelCount <= 0 && index >= 0)
     {
-        completed.validPixelCount = m_frames[index].validPixelCount;
-        completed.meanDepthConfidence = m_frames[index].meanDepthConfidence;
+        completed.validPixelCount = _frames[index].validPixelCount;
+        completed.meanDepthConfidence = _frames[index].meanDepthConfidence;
     }
     completed.status = QStringLiteral("completed");
     completed.error.clear();
@@ -282,7 +282,7 @@ void MvsWorkspaceManifest::markFailed(int refIndex, const QString &error)
     const int index = findFrameIndex(refIndex);
     if (index >= 0)
     {
-        record = m_frames[index];
+        record = _frames[index];
     }
     record.refIndex = refIndex;
     record.status = QStringLiteral("failed");
@@ -297,7 +297,7 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
     {
         return false;
     }
-    const MvsDepthFrameRecord &record = m_frames[index];
+    const MvsDepthFrameRecord &record = _frames[index];
     if (record.status != QStringLiteral("completed") || record.configHash != configHash)
     {
         return false;
@@ -310,10 +310,10 @@ QJsonObject MvsWorkspaceManifest::toJson() const
 {
     QJsonObject root;
     root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.workspace.v1"));
-    root.insert(QStringLiteral("config_hash"), m_configHash);
+    root.insert(QStringLiteral("config_hash"), _configHash);
 
     QJsonArray frames;
-    for (const MvsDepthFrameRecord &record : m_frames)
+    for (const MvsDepthFrameRecord &record : _frames)
     {
         frames.push_back(record.toJson());
     }
@@ -323,9 +323,9 @@ QJsonObject MvsWorkspaceManifest::toJson() const
 
 int MvsWorkspaceManifest::findFrameIndex(int refIndex) const
 {
-    for (int i = 0; i < m_frames.size(); ++i)
+    for (int i = 0; i < _frames.size(); ++i)
     {
-        if (m_frames[i].refIndex == refIndex)
+        if (_frames[i].refIndex == refIndex)
         {
             return i;
         }

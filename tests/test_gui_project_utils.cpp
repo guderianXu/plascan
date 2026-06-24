@@ -2812,6 +2812,21 @@ TEST(CodeStyleTest, SparseCloudValidatorUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_opts")));
 }
 
+TEST(CodeStyleTest, MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/MvsWorkspaceManifest.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/MvsWorkspaceManifest.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QString _configHash;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QVector<MvsDepthFrameRecord> _frames;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_configHash")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_frames")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_configHash")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_frames")));
+}
+
 TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
