@@ -18,27 +18,23 @@
 
 LayerRenderer::LayerRenderer(QGraphicsScene *scene, QObject *parent)
     : QObject(parent)
-    , m_scene(scene)
+    , _scene(scene)
 {
 }
 
 void LayerRenderer::setFeatureDisplayOptions(const FeatureDisplayOptions &opts)
 {
-    // store options for future rendering
-    // We'll use these in addFeatureItems when drawing items
-    // keep a copy as a member variable
-    // Use m_featureOpts (add member below)
-    m_featureOpts = opts;
+    _featureOpts = opts;
 }
 
 void LayerRenderer::setCurrentProjectPath(const QString &plascanPath)
 {
-    m_currentProjectPath = plascanPath;
+    _currentProjectPath = plascanPath;
 }
 
 bool LayerRenderer::addImageLayer(const QString &path, int z)
 {
-    return addImageLayer(loadImageForDisplay(path, m_currentProjectPath), z);
+    return addImageLayer(loadImageForDisplay(path, _currentProjectPath), z);
 }
 
 QImage LayerRenderer::loadImageForDisplay(const QString &path, const QString &plascanPath)
@@ -48,13 +44,13 @@ QImage LayerRenderer::loadImageForDisplay(const QString &path, const QString &pl
 
 bool LayerRenderer::addImageLayer(const QImage &image, int z)
 {
-    if (!m_scene || image.isNull())
+    if (!_scene || image.isNull())
     {
         return false;
     }
 
     QPixmap pix = QPixmap::fromImage(image);
-    auto *item = m_scene->addPixmap(pix);
+    auto *item = _scene->addPixmap(pix);
     if (!item)
     {
         return false;
@@ -63,16 +59,16 @@ bool LayerRenderer::addImageLayer(const QImage &image, int z)
     item->setPos(0, 0);
     item->setVisible(true);
     item->setZValue(z);
-    m_layers.append(item);
-    m_imageBounds = m_imageBounds.isNull() ? item->sceneBoundingRect() : m_imageBounds.united(item->sceneBoundingRect());
+    _layers.append(item);
+    _imageBounds = _imageBounds.isNull() ? item->sceneBoundingRect() : _imageBounds.united(item->sceneBoundingRect());
     return true;
 }
 
 bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
 {
-    if (!m_scene) return false;
+    if (!_scene) return false;
 
-    const auto keypoints = xjw::gui::views::loadFeatureKeypointsForImage(m_currentProjectPath, imagePath);
+    const auto keypoints = xjw::gui::views::loadFeatureKeypointsForImage(_currentProjectPath, imagePath);
     if (keypoints.empty()) return false;
     addFeatureItems(keypoints);
     return true;
@@ -81,73 +77,73 @@ bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
 void LayerRenderer::clearFeatureLayers()
 {
     // Remove items we explicitly tracked
-    for (auto *it: std::as_const(m_featureItems))
+    for (auto *it: std::as_const(_featureItems))
     {
-        if (it && m_scene)
+        if (it && _scene)
         {
-            m_scene->removeItem(it);
+            _scene->removeItem(it);
             delete it;
         }
     }
-    m_featureItems.clear();
+    _featureItems.clear();
 }
 
 void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
 {
-    if (!m_scene) return;
+    if (!_scene) return;
     // Debug incoming keypoints for troubleshooting feature rendering
     LOG_DEBUG(QStringLiteral("addFeatureItems: incoming keypoints=%1").arg(static_cast<int>(keypoints.size())));
 
-    if (keypoints.empty() || !m_featureOpts.showPoints)
+    if (keypoints.empty() || !_featureOpts.showPoints)
     {
         return;
     }
 
-    auto *item = xjw::gui::views::createFeatureOverlayItem(keypoints, m_featureOpts, m_imageBounds);
-    m_scene->addItem(item);
-    m_featureItems.append(item);
+    auto *item = xjw::gui::views::createFeatureOverlayItem(keypoints, _featureOpts, _imageBounds);
+    _scene->addItem(item);
+    _featureItems.append(item);
     const int added = 1;
-    LOG_DEBUG(QStringLiteral("addFeatureItems: added items=%1 total_scene_items=%2").arg(added).arg(m_scene ? m_scene->items().size() : 0));
+    LOG_DEBUG(QStringLiteral("addFeatureItems: added items=%1 total_scene_items=%2").arg(added).arg(_scene ? _scene->items().size() : 0));
 }
 
 void LayerRenderer::clear()
 {
-    for (auto *it: std::as_const(m_layers))
+    for (auto *it: std::as_const(_layers))
     {
-        if (it && m_scene)
+        if (it && _scene)
         {
-            m_scene->removeItem(it);
+            _scene->removeItem(it);
             delete it;
         }
     }
-    m_layers.clear();
-    m_imageBounds = QRectF();
+    _layers.clear();
+    _imageBounds = QRectF();
 }
 
 bool LayerRenderer::addStitchedImagePair(const QString &pathA, const QString &pathB, QGraphicsPixmapItem **outA, QGraphicsPixmapItem **outB, int gap)
 {
-    if (!m_scene) return false;
+    if (!_scene) return false;
 
     LOG_DEBUG(QStringLiteral("addStitchedImagePair: %1 <-> %2").arg(pathA, pathB));
 
     // clear existing image layers (we expect caller to manage state)
     // We'll add both images using addImageLayer then reposition the second.
-    const int before = m_layers.size();
+    const int before = _layers.size();
     if (!addImageLayer(pathA, 0)) return false;
     QGraphicsPixmapItem *itemA = nullptr;
-    if (!m_layers.isEmpty()) itemA = m_layers.last();
+    if (!_layers.isEmpty()) itemA = _layers.last();
 
     if (!addImageLayer(pathB, 0)) {
         // cleanup the first if second failed
         if (itemA) {
-            m_scene->removeItem(itemA);
-            m_layers.removeOne(itemA);
+            _scene->removeItem(itemA);
+            _layers.removeOne(itemA);
             delete itemA;
         }
         return false;
     }
     QGraphicsPixmapItem *itemB = nullptr;
-    if (!m_layers.isEmpty() && m_layers.size() > before + 0) itemB = m_layers.last();
+    if (!_layers.isEmpty() && _layers.size() > before + 0) itemB = _layers.last();
 
     if (!itemA || !itemB) return false;
 
@@ -156,48 +152,48 @@ bool LayerRenderer::addStitchedImagePair(const QString &pathA, const QString &pa
     // position B to the right of A
     qreal bx = itemA->pixmap().width() + gap;
     itemB->setPos(bx, 0);
-    m_imageBounds = itemA->sceneBoundingRect().united(itemB->sceneBoundingRect());
+    _imageBounds = itemA->sceneBoundingRect().united(itemB->sceneBoundingRect());
 
     if (outA) *outA = itemA;
     if (outB) *outB = itemB;
 
-    xjw::gui::views::recordStitchedImagePairDebug(m_scene, m_currentProjectPath, pathA, pathB, itemA, itemB, gap);
+    xjw::gui::views::recordStitchedImagePairDebug(_scene, _currentProjectPath, pathA, pathB, itemA, itemB, gap);
     return true;
 }
 
 void LayerRenderer::addMatchLines(const QVector<QPointF> &ptsA, const QVector<QPointF> &ptsB, qreal bOffsetX)
 {
-    if (!m_scene) return;
-    if (!m_matchOpts.showLines) return; // 如果不显示匹配线,直接返回
+    if (!_scene) return;
+    if (!_matchOpts.showLines) return; // 如果不显示匹配线,直接返回
     
     clearMatchLayers();
 
     LOG_DEBUG(QStringLiteral("addMatchLines: ptsA=%1 ptsB=%2 bOffsetX=%3").arg(ptsA.size()).arg(ptsB.size()).arg(bOffsetX));
 
-    const auto items = xjw::gui::views::createMatchOverlayItems(ptsA, ptsB, m_matchOpts, bOffsetX);
+    const auto items = xjw::gui::views::createMatchOverlayItems(ptsA, ptsB, _matchOpts, bOffsetX);
     for (QGraphicsItem *item : items)
     {
         if (!item)
         {
             continue;
         }
-        m_scene->addItem(item);
-        m_matchItems.append(item);
+        _scene->addItem(item);
+        _matchItems.append(item);
     }
 }
 
 void LayerRenderer::setMatchDisplayOptions(const MatchDisplayOptions &opts)
 {
-    m_matchOpts = opts;
+    _matchOpts = opts;
 }
 
 void LayerRenderer::clearMatchLayers()
 {
-    for (auto *it: std::as_const(m_matchItems)) {
-        if (it && m_scene) {
-            m_scene->removeItem(it);
+    for (auto *it: std::as_const(_matchItems)) {
+        if (it && _scene) {
+            _scene->removeItem(it);
             delete it;
         }
     }
-    m_matchItems.clear();
+    _matchItems.clear();
 }

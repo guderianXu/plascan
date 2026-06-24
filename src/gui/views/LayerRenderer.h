@@ -86,16 +86,16 @@ public:
     void addFeatureItems(const std::vector<cv::KeyPoint> &keypoints);
 
 private:
-    QGraphicsScene *m_scene{};
-    QList<QGraphicsPixmapItem *> m_layers{};
-    QList<QGraphicsItem *> m_featureItems{};
-    QList<QGraphicsItem *> m_matchItems{};
-    QRectF m_imageBounds{};
+    QGraphicsScene *_scene{};
+    QList<QGraphicsPixmapItem *> _layers{};
+    QList<QGraphicsItem *> _featureItems{};
+    QList<QGraphicsItem *> _matchItems{};
+    QRectF _imageBounds{};
 
     // 当前项目的 .plascan 文件路径（可为空：表示未打开项目）
-    QString m_currentProjectPath;
+    QString _currentProjectPath;
     // 当前兴趣点显示选项
-    FeatureDisplayOptions m_featureOpts;
+    FeatureDisplayOptions _featureOpts;
     // 当前匹配线显示选项
-    MatchDisplayOptions m_matchOpts;
+    MatchDisplayOptions _matchOpts;
 };

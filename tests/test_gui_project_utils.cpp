@@ -2170,6 +2170,49 @@ TEST(CodeStyleTest, DataTreeWidgetUsesLowerCamelPrivateMemberNames)
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_view"))) << "Qt Designer object name must stay stable";
 }
 
+TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QGraphicsScene *_scene{};"),
+        QStringLiteral("QList<QGraphicsPixmapItem *> _layers{};"),
+        QStringLiteral("QList<QGraphicsItem *> _featureItems{};"),
+        QStringLiteral("QList<QGraphicsItem *> _matchItems{};"),
+        QStringLiteral("QRectF _imageBounds{};"),
+        QStringLiteral("QString _currentProjectPath;"),
+        QStringLiteral("FeatureDisplayOptions _featureOpts;"),
+        QStringLiteral("MatchDisplayOptions _matchOpts;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_scene"),
+        QStringLiteral("m_layers"),
+        QStringLiteral("m_featureItems"),
+        QStringLiteral("m_matchItems"),
+        QStringLiteral("m_imageBounds"),
+        QStringLiteral("m_currentProjectPath"),
+        QStringLiteral("m_featureOpts"),
+        QStringLiteral("m_matchOpts"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));
@@ -6515,8 +6558,8 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesOverlayDrawingToDedic
     ASSERT_FALSE(overlaySource.isEmpty());
 
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerOverlayItems.h\"")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("createFeatureOverlayItem(keypoints, m_featureOpts, m_imageBounds)")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("createMatchOverlayItems(ptsA, ptsB, m_matchOpts, bOffsetX)")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("createFeatureOverlayItem(keypoints, _featureOpts, _imageBounds)")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("createMatchOverlayItems(ptsA, ptsB, _matchOpts, bOffsetX)")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("class BatchedFeatureOverlayItem")))
         << "Feature overlay item implementation should stay out of LayerRenderer.";
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("void drawKeypoint(")))
@@ -6543,7 +6586,7 @@ TEST(CanvasWidgetResponsivenessTest, LayerRendererDelegatesFeatureFileLoadingToD
     ASSERT_FALSE(featureLoaderSource.isEmpty());
 
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("#include \"LayerFeatureLoader.h\"")));
-    EXPECT_TRUE(rendererSource.contains(QStringLiteral("loadFeatureKeypointsForImage(m_currentProjectPath, imagePath)")));
+    EXPECT_TRUE(rendererSource.contains(QStringLiteral("loadFeatureKeypointsForImage(_currentProjectPath, imagePath)")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureOutput.h\"")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("#include \"FeatureFileIO.h\"")));
     EXPECT_FALSE(rendererSource.contains(QStringLiteral("ProjectIO::findFeatureForImage")))
