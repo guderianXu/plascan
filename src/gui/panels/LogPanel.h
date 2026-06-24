@@ -78,7 +78,7 @@ public slots:
     /**
     * @brief 追加一行已格式化的日志到文本区（由 Logger sink 回调触发）。
      *
-     * 根据 level 与 m_displayLevel 比较进行过滤；
+     * 根据 level 与 _displayLevel 比较进行过滤；
      * 通过 moveCursor + insertPlainText 追加到末尾并自动滚动。
      *
      * @param formatted 格式化后的完整日志行（含时间戳、级别与末尾换行符）。
@@ -104,7 +104,7 @@ public slots:
 
 private slots:
     /**
-     * @brief 响应等级下拉框的选项变更，更新 m_displayLevel 并发出信号。
+     * @brief 响应等级下拉框的选项变更，更新 _displayLevel 并发出信号。
      * @param index 下拉框当前选中的索引（对应 Logger::Level 枚举值）。
      */
     void onLevelChanged(int index);
@@ -118,20 +118,20 @@ signals:
 
 private:
     /** @brief 只读文本区，用于显示所有满足过滤条件的日志条目。 */
-    QTextEdit   *m_text{nullptr};
+    QTextEdit *_text{nullptr};
 
     /** @brief 日志等级过滤下拉框（Debug / Info / Warn / Error）。 */
-    QComboBox   *m_levelCombo{nullptr};
+    QComboBox *_levelCombo{nullptr};
 
     /** @brief 清空面板按钮。 */
-    QPushButton *m_clearBtn{nullptr};
+    QPushButton *_clearBtn{nullptr};
 
     /** @brief 将日志另存为文件的按钮。 */
-    QPushButton *m_saveBtn{nullptr};
+    QPushButton *_saveBtn{nullptr};
 
     /** @brief 当前 UI 显示的最低日志等级，低于此等级的日志不在面板中显示。 */
-    Logger::Level m_displayLevel{Logger::Debug};
+    Logger::Level _displayLevel{Logger::Debug};
 
     /** @brief 注册到全局 Logger 的 sink 令牌，析构时用于注销。 */
-    int m_sinkId{0};
+    int _sinkId{0};
 };

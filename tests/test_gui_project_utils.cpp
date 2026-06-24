@@ -2089,6 +2089,49 @@ TEST(CodeStyleTest, WorkspaceCenterWidgetUsesLowerCamelPrivateMemberNames)
     EXPECT_TRUE(source.contains(QStringLiteral("_ui->m_obsNetView"))) << "Qt Designer object name must stay stable";
 }
 
+TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/panels/LogPanel.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/panels/LogPanel.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QTextEdit *_text{nullptr};"),
+        QStringLiteral("QComboBox *_levelCombo{nullptr};"),
+        QStringLiteral("QPushButton *_clearBtn{nullptr};"),
+        QStringLiteral("QPushButton *_saveBtn{nullptr};"),
+        QStringLiteral("Logger::Level _displayLevel{Logger::Debug};"),
+        QStringLiteral("int _sinkId{0};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_text"),
+        QStringLiteral("m_levelCombo"),
+        QStringLiteral("m_clearBtn"),
+        QStringLiteral("m_saveBtn"),
+        QStringLiteral("m_displayLevel"),
+        QStringLiteral("m_sinkId"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_levelCombo"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_clearBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_saveBtn"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_text"))) << "Qt Designer object name must stay stable";
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));

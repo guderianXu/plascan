@@ -29,15 +29,15 @@
  * │ 显示等级: [下拉框]   [清空]  [保存]       │  ← topLayout
  * ├──────────────────────────────────────────┤
  * │                                          │
- * │           只读日志文本区（m_text）         │  ← QTextEdit
+ * │           只读日志文本区（_text）         │  ← QTextEdit
  * │                                          │
  * └──────────────────────────────────────────┘
  *
  * 关键连接：
  * - Logger sink → LogPanel::appendLog（invokeMethod 排队到 UI 线程）
- * - m_levelCombo::currentIndexChanged → LogPanel::onLevelChanged
- * - m_clearBtn::clicked → LogPanel::clearLogs
- * - m_saveBtn::clicked → 打开文件保存对话框 → saveLogsToFile
+ * - _levelCombo::currentIndexChanged → LogPanel::onLevelChanged
+ * - _clearBtn::clicked → LogPanel::clearLogs
+ * - _saveBtn::clicked → 打开文件保存对话框 → saveLogsToFile
  *
  * @param parent 父 Widget 指针。
  */
@@ -47,25 +47,25 @@ LogPanel::LogPanel(QWidget *parent)
     Ui::LogPanel ui;
     ui.setupUi(this);
 
-    m_levelCombo = ui.m_levelCombo;
-    m_clearBtn = ui.m_clearBtn;
-    m_saveBtn = ui.m_saveBtn;
-    m_text = ui.m_text;
+    _levelCombo = ui.m_levelCombo;
+    _clearBtn = ui.m_clearBtn;
+    _saveBtn = ui.m_saveBtn;
+    _text = ui.m_text;
 
-    m_levelCombo->setCurrentIndex(static_cast<int>(m_displayLevel));
-    connect(m_levelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    _levelCombo->setCurrentIndex(static_cast<int>(_displayLevel));
+    connect(_levelCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &LogPanel::onLevelChanged);
 
-    connect(m_clearBtn, &QPushButton::clicked, this, &LogPanel::clearLogs);
+    connect(_clearBtn, &QPushButton::clicked, this, &LogPanel::clearLogs);
 
-    connect(m_saveBtn, &QPushButton::clicked, this, [this]() {
+    connect(_saveBtn, &QPushButton::clicked, this, [this]() {
         QString p = QFileDialog::getSaveFileName(
             this, tr("保存日志为"), QDir::homePath(), tr("文本文件 (*.txt);;所有文件 (*)"));
         if (!p.isEmpty()) saveLogsToFile(p);
     });
 
     QPointer<LogPanel> self(this);
-    m_sinkId = Logger::instance()->registerSink(
+    _sinkId = Logger::instance()->registerSink(
         [self](const Logger::Entry &entry)
         {
             if (!self)
@@ -91,9 +91,9 @@ LogPanel::LogPanel(QWidget *parent)
 /** @brief 析构函数，无特殊资源需要释放。 */
 LogPanel::~LogPanel()
 {
-    if (m_sinkId != 0)
+    if (_sinkId != 0)
     {
-        Logger::instance()->unregisterSink(m_sinkId);
+        Logger::instance()->unregisterSink(_sinkId);
     }
 }
 
@@ -103,8 +103,8 @@ LogPanel::~LogPanel()
  */
 void LogPanel::setDisplayLevel(Logger::Level level)
 {
-    m_displayLevel = level;
-    m_levelCombo->setCurrentIndex(static_cast<int>(level));
+    _displayLevel = level;
+    _levelCombo->setCurrentIndex(static_cast<int>(level));
 }
 
 /**
@@ -117,7 +117,7 @@ void LogPanel::setDisplayLevel(Logger::Level level)
  */
 void LogPanel::onLevelChanged(int index)
 {
-    m_displayLevel = static_cast<Logger::Level>(index);
+    _displayLevel = static_cast<Logger::Level>(index);
     emit displayLevelChanged(index); // 通知外部持久化新等级
 }
 
@@ -135,7 +135,7 @@ void LogPanel::append(const QString &text)
  *
  * UI 过滤策略：
  * - 仅在面板中过滤显示，磁盘上的完整日志不受影响；
- * - level < m_displayLevel 时直接返回，不追加到文本区。
+ * - level < _displayLevel 时直接返回，不追加到文本区。
  *
  * 追加方式：
  * - moveCursor(End) + insertPlainText 比 append() 更高效（不触发段落格式化）；
@@ -147,12 +147,12 @@ void LogPanel::append(const QString &text)
 void LogPanel::appendLog(const QString &formatted, int level)
 {
     // UI 过滤：仅显示达到或超过最低等级的日志条目
-    if (level < static_cast<int>(m_displayLevel))
+    if (level < static_cast<int>(_displayLevel))
         return;
 
-    m_text->moveCursor(QTextCursor::End);    // 将光标移到末尾
-    m_text->insertPlainText(formatted);       // 追加文本
-    m_text->ensureCursorVisible();           // 自动滚动到最新一行
+    _text->moveCursor(QTextCursor::End);    // 将光标移到末尾
+    _text->insertPlainText(formatted);       // 追加文本
+    _text->ensureCursorVisible();           // 自动滚动到最新一行
 }
 
 /**
@@ -165,7 +165,7 @@ void LogPanel::appendLog(const QString &formatted, int level)
 void LogPanel::clearLogs()
 {
     // 清空 UI 文本区
-    if (m_text) m_text->clear();
+    if (_text) _text->clear();
 
     Logger::instance()->clearLogFile();
 }
@@ -181,7 +181,7 @@ bool LogPanel::saveLogsToFile(const QString &filePath)
     QFile f(filePath);
     if (!f.open(QIODevice::WriteOnly | QIODevice::Truncate | QIODevice::Text)) return false;
     QTextStream ts(&f);
-    ts << m_text->toPlainText();
+    ts << _text->toPlainText();
     f.close();
     return true;
 }
@@ -196,7 +196,7 @@ bool LogPanel::saveLogsToFile(const QString &filePath)
  *
  * 过滤策略：
  * - 按行解析，查找 "] [LEVEL]" 模式提取日志级别；
- * - 仅追加级别 ≥ m_displayLevel 的行；
+ * - 仅追加级别 ≥ _displayLevel 的行；
  * - 最终批量 insertPlainText，减少 UI 重绘次数。
  *
  * 使用场景：打开已有项目时，将上次运行留下的历史日志回填到面板。
@@ -252,7 +252,7 @@ void LogPanel::loadFromLogFile()
             }
 
             // 按当前显示等级过滤：只追加达到或超过阈值的行
-            if (lvl >= static_cast<int>(m_displayLevel)) {
+            if (lvl >= static_cast<int>(_displayLevel)) {
                 toInsert.append(ln);
                 toInsert.append('\n');
             }
@@ -260,9 +260,9 @@ void LogPanel::loadFromLogFile()
 
         // 批量插入，减少多次单行插入带来的 UI 重绘开销
         if (!toInsert.isEmpty()) {
-            m_text->moveCursor(QTextCursor::End);
-            m_text->insertPlainText(toInsert);
-            m_text->ensureCursorVisible();
+            _text->moveCursor(QTextCursor::End);
+            _text->insertPlainText(toInsert);
+            _text->ensureCursorVisible();
         }
     }
 }
