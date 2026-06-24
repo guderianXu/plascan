@@ -2768,6 +2768,37 @@ TEST(CodeStyleTest, DenseMatchCoreUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, GroundBackProjectorUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("std::vector<std::array<double, 3>> _points;"),
+        QStringLiteral("std::vector<DemKdTree2D::Point> _xyPoints;"),
+        QStringLiteral("DemKdTree2D _index;"),
+        QStringLiteral("double _meanHeight = 0.0;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_points"),
+        QStringLiteral("m_xyPoints"),
+        QStringLiteral("m_index"),
+        QStringLiteral("m_meanHeight"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

@@ -63,9 +63,9 @@ namespace xjw {
 bool DemSurface::loadFromXYZ(const std::string &path, std::string *errorMsg)
 {
     // 清空已有数据，准备重新加载
-    m_points.clear();
-    m_xyPoints.clear();
-    m_meanHeight = 0.0;
+    _points.clear();
+    _xyPoints.clear();
+    _meanHeight = 0.0;
 
     std::ifstream ifs(path);
     if (!ifs.is_open()) {
@@ -80,41 +80,41 @@ bool DemSurface::loadFromXYZ(const std::string &path, std::string *errorMsg)
         std::istringstream iss(line);
         double x = 0.0, y = 0.0, z = 0.0;
         if (!(iss >> x >> y >> z)) continue; // 解析失败则跳过该行
-        m_points.push_back({x, y, z});
+        _points.push_back({x, y, z});
     }
 
-    if (m_points.empty()) {
+    if (_points.empty()) {
         if (errorMsg) *errorMsg = "DEM 中未读取到有效 XYZ 点";
         return false;
     }
 
     // 构建 KD 树所需的 2D 点集（只需 x, y 坐标），同时累加 Z 值以计算均值
-    m_xyPoints.reserve(m_points.size());
+    _xyPoints.reserve(_points.size());
     double sumZ = 0.0;
-    for (size_t i = 0; i < m_points.size(); ++i) {
+    for (size_t i = 0; i < _points.size(); ++i) {
         // 将 3D 点压缩为 2D 点（附原始下标），用于 KD 树水平查询
-        m_xyPoints.push_back(DemKdTree2D::Point{{m_points[i][0], m_points[i][1]}, static_cast<int>(i)});
-        sumZ += m_points[i][2];
+        _xyPoints.push_back(DemKdTree2D::Point{{_points[i][0], _points[i][1]}, static_cast<int>(i)});
+        sumZ += _points[i][2];
     }
 
     // 建立 KD 树空间索引，后续 sampleHeight 调用依赖此索引加速
-    m_index.build(m_xyPoints);
+    _index.build(_xyPoints);
 
     // 计算平均高程，用作射线行进初始深度估计（避免迭代从零开始）
-    m_meanHeight = sumZ / static_cast<double>(m_points.size());
+    _meanHeight = sumZ / static_cast<double>(_points.size());
     return true;
 }
 
 // 在 (x,y) 处查询最近邻高程：通过 KD 树找到平面最近点，返回其 Z 值
-// idx 是 PlaPoint KDTree 点的 payload，即 m_points 中的原始下标
+// idx 是 PlaPoint KDTree 点的 payload，即 _points 中的原始下标
 bool DemSurface::sampleHeight(double x, double y, double *z, double *xyDistance) const
 {
-    if (!z || m_index.empty()) return false;
+    if (!z || _index.empty()) return false;
     double dist = 0.0;
-    // KD 树最近邻查询：返回 PlaPoint KDTree 点的 payload（即 m_points 的下标），dist 为水平距离
-    const int idx = m_index.nearest(DemKdTree2D::CoordinateArray{x, y}, &dist);
-    if (idx < 0 || idx >= static_cast<int>(m_points.size())) return false;
-    *z = m_points[static_cast<size_t>(idx)][2]; // 取对应点的高程 Z
+    // KD 树最近邻查询：返回 PlaPoint KDTree 点的 payload（即 _points 的下标），dist 为水平距离
+    const int idx = _index.nearest(DemKdTree2D::CoordinateArray{x, y}, &dist);
+    if (idx < 0 || idx >= static_cast<int>(_points.size())) return false;
+    *z = _points[static_cast<size_t>(idx)][2]; // 取对应点的高程 Z
     if (xyDistance) *xyDistance = dist;          // 可选：返回水平距离（评估外推精度）
     return true;
 }
@@ -122,13 +122,13 @@ bool DemSurface::sampleHeight(double x, double y, double *z, double *xyDistance)
 // 检查 DEM 是否已有有效数据（至少加载了一个点）
 bool DemSurface::valid() const
 {
-    return !m_points.empty();
+    return !_points.empty();
 }
 
 // 返回 DEM 点云的平均高程
 double DemSurface::meanHeight() const
 {
-    return m_meanHeight;
+    return _meanHeight;
 }
 
 // ============================================================

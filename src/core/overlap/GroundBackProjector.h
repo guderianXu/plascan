@@ -60,18 +60,18 @@ public:
 
 private:
     // 原始 XYZ 三维点集合
-    std::vector<std::array<double, 3>> m_points;
+    std::vector<std::array<double, 3>> _points;
 
     using DemKdTree2D = plapoint::search::SpatialKdTree<2, double>;
 
     // 对应 2D 平面点（仅含 XY 坐标+索引），用于构建 KD 树
-    std::vector<DemKdTree2D::Point> m_xyPoints;
+    std::vector<DemKdTree2D::Point> _xyPoints;
 
     // 2D KD 树空间索引，加速水平方向最近邻查询
-    DemKdTree2D m_index;
+    DemKdTree2D _index;
 
     // 所有点的 Z 均值，作为 DEM 整体高程的近似估计
-    double m_meanHeight = 0.0;
+    double _meanHeight = 0.0;
 };
 
 // ============================================================
