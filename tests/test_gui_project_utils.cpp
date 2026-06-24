@@ -1543,7 +1543,7 @@ TEST(GuiAsyncLifetimeTest, FeatureExtractionRunnerUsesGuardedProjectManagerCallb
     EXPECT_TRUE(menuBlock.contains(QStringLiteral("FeatureExtractionRunner::run(config, inputs, pmGuard")));
     EXPECT_FALSE(menuBlock.contains(QStringLiteral("pm = m_projectManager")));
 
-    EXPECT_TRUE(terrainBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(m_owner)")));
+    EXPECT_TRUE(terrainBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")));
     EXPECT_TRUE(terrainBlock.contains(QStringLiteral("FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard")));
 }
 
@@ -1922,6 +1922,37 @@ TEST(CodeStyleTest, PlascanArchiveUsesLowerCamelPrivateMemberNames)
         EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
         EXPECT_FALSE(source.contains(oldName + QStringLiteral(")"))) << qPrintable(oldName);
         EXPECT_FALSE(source.contains(oldName + QStringLiteral(";"))) << qPrintable(oldName);
+    }
+}
+
+TEST(CodeStyleTest, ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("ProjectManager *_owner = nullptr;"),
+        QStringLiteral("ProjectData *_projectData = nullptr;"),
+        QStringLiteral("QWidget *_parentWidget = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_owner"),
+        QStringLiteral("m_projectData"),
+        QStringLiteral("m_parentWidget"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
     }
 }
 
@@ -8776,7 +8807,7 @@ TEST(ProjectManagerQualityReportTest, PipelineStageBoundariesRefreshReconstructi
     EXPECT_TRUE(managerSource.contains(QStringLiteral("ProjectManager::refreshReconstructionQualityReport")));
     EXPECT_TRUE(managerSource.contains(QStringLiteral("refreshReconstructionQualityReport();")));
     EXPECT_TRUE(denseSource.contains(QStringLiteral("m_owner->refreshReconstructionQualityReport()")));
-    EXPECT_TRUE(terrainSource.contains(QStringLiteral("m_owner->refreshReconstructionQualityReport()")));
+    EXPECT_TRUE(terrainSource.contains(QStringLiteral("_owner->refreshReconstructionQualityReport()")));
 }
 
 TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)

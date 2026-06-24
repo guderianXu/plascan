@@ -376,20 +376,20 @@ ProjectTerrainProductsManager::ProjectTerrainProductsManager(ProjectManager *own
                                                              QWidget *parentWidget,
                                                              QObject *parent)
     : QObject(parent)
-    , m_owner(owner)
-    , m_projectData(projectData)
-    , m_parentWidget(parentWidget)
+    , _owner(owner)
+    , _projectData(projectData)
+    , _parentWidget(parentWidget)
 {
 }
 
 bool ProjectTerrainProductsManager::ensureProjectOpen(const QString &message,
                                                       const QString &title) const
 {
-    if (m_projectData && m_projectData->hasProject())
+    if (_projectData && _projectData->hasProject())
     {
         return true;
     }
-    QMessageBox::warning(m_parentWidget, title, message);
+    QMessageBox::warning(_parentWidget, title, message);
     return false;
 }
 
@@ -411,9 +411,9 @@ void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringLi
 
     QString denseCloudPath;
     QString denseError;
-    if (!resolveLatestDenseCloudPath(m_projectData, &denseCloudPath, &denseError))
+    if (!resolveLatestDenseCloudPath(_projectData, &denseCloudPath, &denseError))
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("创建相对 DEM"),
                              QStringLiteral("%1\n请先完成[工作流程 → 创建点云]。")
                                  .arg(denseError.isEmpty()
@@ -422,7 +422,7 @@ void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringLi
         return;
     }
 
-    const QString projectPath = m_owner ? m_owner->currentProjectPath() : QString();
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QString outDir = resolveProjectOutputDir(projectPath,
                                              outputDir.trimmed(),
                                              QStringLiteral("assets/dem/relative_dem"));
@@ -464,23 +464,23 @@ void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringLi
                 {
                     return;
                 }
-                if (!self->m_owner ||
-                    !self->m_projectData ||
-                    self->m_owner->currentProjectPath() != projectPath)
+                if (!self->_owner ||
+                    !self->_projectData ||
+                    self->_owner->currentProjectPath() != projectPath)
                 {
                     return;
                 }
 
                 if (!terrainRun.ok)
                 {
-                    QMessageBox::warning(self->m_parentWidget,
+                    QMessageBox::warning(self->_parentWidget,
                                          QStringLiteral("创建相对 DEM"),
                                          QStringLiteral("处理失败：%1").arg(terrainRun.error));
                     emit self->demPipelineFinished(false, terrainRun.error);
                     return;
                 }
 
-                QJsonObject meta = self->m_projectData->metadata();
+                QJsonObject meta = self->_projectData->metadata();
                 const QJsonObject terrainResult = terrainRun.payload;
                 QJsonObject demResult = makeDemResultRecord(
                     terrainResult.value(QStringLiteral("created_at")).toString(),
@@ -502,13 +502,13 @@ void ProjectTerrainProductsManager::startStereoAndPoint2DemAsync(const QStringLi
                                             QStringLiteral("dem_tif"),
                                             demResult);
 
-                persistProjectMeta(self->m_projectData, meta, true);
-                self->m_owner->refreshReconstructionQualityReport();
+                persistProjectMeta(self->_projectData, meta, true);
+                self->_owner->refreshReconstructionQualityReport();
 
                 emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
                 emit self->demPipelineFinished(true, QStringLiteral("DEM 生成完成"));
                 QMessageBox::information(
-                    self->m_parentWidget,
+                    self->_parentWidget,
                     QStringLiteral("创建相对 DEM"),
                     QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
                         .arg(terrainResult.value(QStringLiteral("dem_tif")).toString())
@@ -537,7 +537,7 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
 
     if (images.size() < 2)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("创建相对 DEM"),
                              QStringLiteral("至少需要 2 张影像才能生成立体 DEM。"));
         return;
@@ -570,7 +570,7 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
 
         if (!importErrors.isEmpty())
         {
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(_parentWidget,
                                  QStringLiteral("创建相对 DEM"),
                                  QStringLiteral("部分相机文件导入失败：\n%1").arg(importErrors.join(QStringLiteral("\n"))));
             return;
@@ -580,9 +580,9 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
         {
             int updatedCount = 0;
             QString writeErr;
-            if (!m_projectData->setImageCameras(cameraMetaByImage, &updatedCount, &writeErr))
+            if (!_projectData->setImageCameras(cameraMetaByImage, &updatedCount, &writeErr))
             {
-                QMessageBox::warning(m_parentWidget,
+                QMessageBox::warning(_parentWidget,
                                      QStringLiteral("创建相对 DEM"),
                                      QStringLiteral("相机参数写入项目失败: %1").arg(writeErr));
                 return;
@@ -629,16 +629,16 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
         return;
     }
 
-    QJsonObject meta = m_projectData->metadata();
+    QJsonObject meta = _projectData->metadata();
     QString resolvedDenseCloud = denseCloudPath.trimmed();
 
     // 如果未指定密集点云路径，自动查找最新的
     if (resolvedDenseCloud.isEmpty())
     {
         QString denseError;
-        if (!resolveLatestDenseCloudPath(m_projectData, &resolvedDenseCloud, &denseError))
+        if (!resolveLatestDenseCloudPath(_projectData, &resolvedDenseCloud, &denseError))
         {
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(_parentWidget,
                                  QStringLiteral("创建相对 DEM"),
                                  QStringLiteral("%1\n请先完成[工作流程 → 创建点云]。")
                                      .arg(denseError.isEmpty()
@@ -649,17 +649,17 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
     }
     else if (!QFileInfo::exists(resolvedDenseCloud))
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("创建相对 DEM"),
                              QStringLiteral("指定的密集点云文件不存在：\n%1").arg(resolvedDenseCloud));
         return;
     }
 
-    QString outDir = resolveProjectOutputDir(m_owner->currentProjectPath(),
+    QString outDir = resolveProjectOutputDir(_owner->currentProjectPath(),
                                              outputDir.trimmed(),
                                              QStringLiteral("assets/dem/relative_dem"));
 
-    const QString projectPath = m_owner ? m_owner->currentProjectPath() : QString();
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     emit demPipelineProgressChanged(QStringLiteral("DEM 生成"), 5);
 
     QPointer<ProjectTerrainProductsManager> self(this);
@@ -693,23 +693,23 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
                 {
                     return;
                 }
-                if (!self->m_owner ||
-                    !self->m_projectData ||
-                    self->m_owner->currentProjectPath() != projectPath)
+                if (!self->_owner ||
+                    !self->_projectData ||
+                    self->_owner->currentProjectPath() != projectPath)
                 {
                     return;
                 }
 
                 if (!terrainRun.ok)
                 {
-                    QMessageBox::warning(self->m_parentWidget,
+                    QMessageBox::warning(self->_parentWidget,
                                          QStringLiteral("创建相对 DEM"),
                                          QStringLiteral("处理失败：%1").arg(terrainRun.error));
                     emit self->demPipelineFinished(false, terrainRun.error);
                     return;
                 }
 
-                QJsonObject meta = self->m_projectData->metadata();
+                QJsonObject meta = self->_projectData->metadata();
                 const QJsonObject terrainResult = terrainRun.payload;
                 QJsonObject demResult = makeDemResultRecord(
                     terrainResult.value(QStringLiteral("created_at")).toString(),
@@ -731,13 +731,13 @@ void ProjectTerrainProductsManager::startDemFromDenseCloudAsync(const QString &d
                                             QStringLiteral("dem_tif"),
                                             demResult);
 
-                persistProjectMeta(self->m_projectData, meta, true);
-                self->m_owner->refreshReconstructionQualityReport();
+                persistProjectMeta(self->_projectData, meta, true);
+                self->_owner->refreshReconstructionQualityReport();
 
                 emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
                 emit self->demPipelineFinished(true, QStringLiteral("DEM 生成完成"));
                 QMessageBox::information(
-                    self->m_parentWidget,
+                    self->_parentWidget,
                     QStringLiteral("创建相对 DEM"),
                     QStringLiteral("处理完成。\nDEM: %1\n预览图: %2\n参考点云: %3\n高程基准偏移: %4")
                         .arg(terrainResult.value(QStringLiteral("dem_tif")).toString())
@@ -763,7 +763,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
         return;
     }
 
-    QJsonObject meta = m_projectData->metadata();
+    QJsonObject meta = _projectData->metadata();
     QString resolvedDem = demPath.trimmed();
     QJsonObject matchedDemRecord;
     if (resolvedDem.isEmpty())
@@ -802,7 +802,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
     }
     if (resolvedDem.isEmpty() || !QFileInfo::exists(resolvedDem))
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("生成正射影像"),
                              QStringLiteral("找不到 DEM 文件，请先执行[创建 DEM]。"));
         return;
@@ -811,11 +811,11 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
     QStringList sourceImages = images;
     if (sourceImages.isEmpty())
     {
-        sourceImages = m_owner->getAllImages();
+        sourceImages = _owner->getAllImages();
     }
     if (sourceImages.isEmpty())
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("生成正射影像"),
                              QStringLiteral("项目中没有可用影像。"));
         return;
@@ -824,14 +824,14 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
     QString out = outputPath.trimmed();
     if (out.isEmpty())
     {
-        const QString root = ProjectIO::projectRootFromPlascan(m_owner->currentProjectPath());
+        const QString root = ProjectIO::projectRootFromPlascan(_owner->currentProjectPath());
         out = QDir(root).filePath(QStringLiteral("assets/ortho/relative_dom.tif"));
     }
     out = QDir::cleanPath(out);
 
     const double requestedResolution = resolution > 0.0 ? resolution : 0.0;
 
-    const QString projectPath = m_owner ? m_owner->currentProjectPath() : QString();
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     emit demPipelineProgressChanged(QStringLiteral("正射影像生成"), 5);
 
     QPointer<ProjectTerrainProductsManager> self(this);
@@ -867,23 +867,23 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
                 {
                     return;
                 }
-                if (!self->m_owner ||
-                    !self->m_projectData ||
-                    self->m_owner->currentProjectPath() != projectPath)
+                if (!self->_owner ||
+                    !self->_projectData ||
+                    self->_owner->currentProjectPath() != projectPath)
                 {
                     return;
                 }
 
                 if (!orthoRun.ok)
                 {
-                    QMessageBox::warning(self->m_parentWidget,
+                    QMessageBox::warning(self->_parentWidget,
                                          QStringLiteral("生成正射影像"),
                                          QStringLiteral("处理失败：%1").arg(orthoRun.error));
                     emit self->demPipelineFinished(false, orthoRun.error);
                     return;
                 }
 
-                QJsonObject meta = self->m_projectData->metadata();
+                QJsonObject meta = self->_projectData->metadata();
                 const QJsonObject orthoResult = orthoRun.payload;
                 const double effectiveResolution = orthoResult.value(QStringLiteral("output_resolution"))
                                                        .toDouble(requestedResolution > 0.0 ? requestedResolution : 1.0);
@@ -909,13 +909,13 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
                                             QStringLiteral("ortho_results"),
                                             QStringLiteral("output_path"),
                                             record);
-                persistProjectMeta(self->m_projectData, meta, true);
-                self->m_owner->refreshReconstructionQualityReport();
+                persistProjectMeta(self->_projectData, meta, true);
+                self->_owner->refreshReconstructionQualityReport();
 
                 emit self->demPipelineProgressChanged(QStringLiteral("完成"), 100);
                 emit self->demPipelineFinished(true, QStringLiteral("正射影像生成完成"));
                 QMessageBox::information(
-                    self->m_parentWidget,
+                    self->_parentWidget,
                     QStringLiteral("生成正射影像"),
                     QStringLiteral("正射影像已生成：\n%1\n分辨率: %2 m/px\n与 DEM 投影一致: %3")
                         .arg(record.value(QStringLiteral("output_path")).toString())
@@ -934,7 +934,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
 void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipelineContext &ctx)
 {
     QPointer<ProjectTerrainProductsManager> self(this);
-    QPointer<QWidget> parentWidget(m_parentWidget);
+    QPointer<QWidget> parentWidget(_parentWidget);
     LOG_INFO(QStringLiteral("[DEM流水线] ========== 流水线启动 =========="));
     LOG_INFO(QStringLiteral("[DEM流水线] 影像数量: %1").arg(ctx.images.size()));
     for (int i = 0; i < ctx.images.size(); ++i)
@@ -955,7 +955,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     featureConfig[QStringLiteral("use_cuda")] = true;
     featureConfig[QStringLiteral("max_num_keypoints")] = 2048;
 
-    QPointer<ProjectManager> ownerGuard(m_owner);
+    QPointer<ProjectManager> ownerGuard(_owner);
     const bool featureOk = FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard, cancelFlag, progressCount);
     if (!featureOk)
     {
@@ -1017,11 +1017,11 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
             return;
         }
 
-        const int productionAtIndex = findLatestProductionAtResultIndex(self->m_projectData->metadata());
+        const int productionAtIndex = findLatestProductionAtResultIndex(self->_projectData->metadata());
         if (productionAtIndex < 0)
         {
             LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 未找到正式 SfM/BA 稀疏点云，拒绝使用两视预览云继续 DEM 流水线"));
-            QMessageBox::warning(self->m_parentWidget,
+            QMessageBox::warning(self->_parentWidget,
                                  QStringLiteral("创建相对 DEM"),
                                  QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。\n请先运行[工作流程 → 三维重建/空三]，不要使用两视预览三角化作为 DEM 输入。"));
             emit self->demPipelineFinished(false, QStringLiteral("缺少正式 SfM/BA 稀疏点云"));
@@ -1033,11 +1033,11 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
         emit self->demPipelineProgressChanged(QStringLiteral("密集重建 (MVS)"), 55);
 
         const int pendingDenseResultCount =
-            self->m_projectData->metadata().value(QStringLiteral("dense_cloud_results")).toArray().size();
+            self->_projectData->metadata().value(QStringLiteral("dense_cloud_results")).toArray().size();
 
         // 监听元数据变化：dense_cloud_results 出现本次 MVS 的新记录即表示融合完成。
         auto connections = std::make_shared<DemPipelineConnectionState>();
-        connections->metadataConnection = connect(self->m_owner, &ProjectManager::projectMetadataChanged, self.data(),
+        connections->metadataConnection = connect(self->_owner, &ProjectManager::projectMetadataChanged, self.data(),
             [self, connections, demOutputDir, demResolution, demType, pendingDenseResultCount](
                 const QJsonObject &metaChanged)
             {
@@ -1077,19 +1077,19 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 LOG_INFO(QStringLiteral("[DEM流水线] ✓ 密集点云就绪（%1），启动 DEM 生成...").arg(plyPath));
                 emit self->demPipelineProgressChanged(QStringLiteral("DEM 生成"), 85);
 
-                const QString outDir = resolveProjectOutputDir(self->m_owner->currentProjectPath(),
+                const QString outDir = resolveProjectOutputDir(self->_owner->currentProjectPath(),
                                                                demOutputDir.trimmed(),
                                                                QStringLiteral("assets/dem/relative_dem"));
 
                 DirectDepthDemRequest directDepthRequest;
                 QString directDepthError;
-                if (!prepareDirectDepthDemRequest(metaChanged, self->m_owner, &directDepthRequest, &directDepthError))
+                if (!prepareDirectDepthDemRequest(metaChanged, self->_owner, &directDepthRequest, &directDepthError))
                 {
                     LOG_WARN(QStringLiteral("[DEM流水线] 深度图直接 DEM 输入不可用: %1，后台任务将回退到点云方法")
                                  .arg(directDepthError));
                 }
 
-                const QString projectPath = self->m_owner ? self->m_owner->currentProjectPath() : QString();
+                const QString projectPath = self->_owner ? self->_owner->currentProjectPath() : QString();
                 xjw::gui::tasks::runGuarded(
                     self.data(),
                     [directDepthRequest, directDepthError, plyPath, outDir, demResolution, demType]()
@@ -1106,9 +1106,9 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                         ProjectTerrainProductsManager *manager,
                         const AutomaticDemGenerationTaskResult &taskResult)
                     {
-                        if (!manager->m_owner ||
-                            !manager->m_projectData ||
-                            manager->m_owner->currentProjectPath() != projectPath)
+                        if (!manager->_owner ||
+                            !manager->_projectData ||
+                            manager->_owner->currentProjectPath() != projectPath)
                         {
                             return;
                         }
@@ -1116,14 +1116,14 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                         if (!taskResult.ok)
                         {
                             LOG_ERROR(QStringLiteral("[DEM流水线] ✗ DEM 生成失败: %1").arg(taskResult.error));
-                            QMessageBox::warning(manager->m_parentWidget,
+                            QMessageBox::warning(manager->_parentWidget,
                                                  QStringLiteral("创建相对 DEM"),
                                                  QStringLiteral("处理失败：%1").arg(taskResult.error));
                             emit manager->demPipelineFinished(false, QStringLiteral("DEM 生成失败"));
                             return;
                         }
 
-                        QJsonObject metaUpdated = manager->m_projectData->metadata();
+                        QJsonObject metaUpdated = manager->_projectData->metadata();
                         const QJsonObject terrainResult = taskResult.terrainResult;
                         QJsonObject demResult = makeDemResultRecord(
                             terrainResult.value(QStringLiteral("created_at")).toString(),
@@ -1149,8 +1149,8 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                                                     QStringLiteral("dem_results"),
                                                     QStringLiteral("dem_tif"),
                                                     demResult);
-                        persistProjectMeta(manager->m_projectData, metaUpdated, true);
-                        manager->m_owner->refreshReconstructionQualityReport();
+                        persistProjectMeta(manager->_projectData, metaUpdated, true);
+                        manager->_owner->refreshReconstructionQualityReport();
 
                         LOG_INFO(QStringLiteral("[DEM流水线] ✓ DEM 生成完成: %1")
                                      .arg(terrainResult.value(QStringLiteral("dem_tif")).toString()));
@@ -1160,7 +1160,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
             });
 
         // 同时监听 MVS 失败
-        connections->mvsFinishedConnection = connect(self->m_owner, &ProjectManager::mvsProgressFinished, self.data(),
+        connections->mvsFinishedConnection = connect(self->_owner, &ProjectManager::mvsProgressFinished, self.data(),
             [self, connections](bool mvsSuccess)
             {
                 if (!self)
@@ -1186,6 +1186,6 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
         mvsSettings[QStringLiteral("iterations")] = 16;
         mvsSettings[QStringLiteral("cuda")] = true;
         mvsSettings[QStringLiteral("minConsistentViews")] = 1;
-        self->m_owner->startGenerateDenseCloudAsync(mvsSettings);
+        self->_owner->startGenerateDenseCloudAsync(mvsSettings);
     }, Qt::QueuedConnection);
 }
