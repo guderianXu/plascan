@@ -34,11 +34,11 @@ signals:
 private:
     void markCancelling();
 
-    QLabel *m_statusLabel = nullptr;
-    QProgressBar *m_progressBar = nullptr;
-    QToolButton *m_cancelButton = nullptr;
-    QString m_cancelText;
-    QString m_cancellingText;
-    bool m_active = false;
-    bool m_cancelling = false;
+    QLabel *_statusLabel = nullptr;
+    QProgressBar *_progressBar = nullptr;
+    QToolButton *_cancelButton = nullptr;
+    QString _cancelText;
+    QString _cancellingText;
+    bool _active = false;
+    bool _cancelling = false;
 };

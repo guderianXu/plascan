@@ -1808,6 +1808,43 @@ TEST(CodeStyleTest, ReferencePanelWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, TaskStatusWidgetUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/TaskStatusWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/TaskStatusWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QLabel *_statusLabel = nullptr;"),
+        QStringLiteral("QProgressBar *_progressBar = nullptr;"),
+        QStringLiteral("QToolButton *_cancelButton = nullptr;"),
+        QStringLiteral("QString _cancelText;"),
+        QStringLiteral("QString _cancellingText;"),
+        QStringLiteral("bool _active = false;"),
+        QStringLiteral("bool _cancelling = false;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_statusLabel"),
+        QStringLiteral("m_progressBar"),
+        QStringLiteral("m_cancelButton"),
+        QStringLiteral("m_cancelText"),
+        QStringLiteral("m_cancellingText"),
+        QStringLiteral("m_active"),
+        QStringLiteral("m_cancelling"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
