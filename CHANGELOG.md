@@ -65,6 +65,7 @@
 - `LogPanel` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 Qt Designer `ui.m_*` 对象名不变，继续收敛日志面板命名规范。
 - `DataTreeWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 Qt Designer `ui.m_view` 对象名不变，继续收敛工作区目录树命名规范。
 - `LayerRenderer` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持影像图层、特征点覆盖层、匹配线和拼接调试输出行为不变。
+- `LayerOverlayItems` 内部特征点覆盖层 item 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持特征点裁剪、排序和绘制行为不变。
 - `Logger` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持日志文件轮转、sink 分发和 Qt 字符串适配接口不变。
 - `ProjectDashboardWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持概览页摘要、任务、参考数据、质量指标和报告表格行为不变。
 - `ThreeDReconstructionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
@@ -106,6 +107,8 @@
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具测试。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|CanvasWidgetDoesNotIncludeTorchExtractorHeaders|LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader" --output-on-failure` 通过，3/3。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CanvasWidget.cpp`、`LayerFeatureLoader.cpp`、`LayerRenderer.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.LayerOverlayItemsUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `LayerOverlayItems` 内部特征点覆盖层 item 私有成员迁移到 `_lowerCamelCase`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "LayerOverlayItems|LayerRenderer|CodeStyleTest.LayerOverlayItemsUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，6/6；`powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `LayerOverlayItems.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "GuiAsyncLifetime|FeatureNamingCleanup|CanvasWidgetResponsiveness|LayerRenderer" --output-on-failure` 通过，29/29。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release --output-on-failure` 通过，540/540；`PatchMatchCudaBenchmarkTest.CompareParallelAndLegacySweepAfterWarmup` 为 disabled benchmark，未运行。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|StaleFeatureLoadsDoNotPaintOverCurrentImage" --output-on-failure` 先失败后通过，验证 CanvasWidget 新增 generation 成员使用 `_lowerCamelCase` 命名且旧结果丢弃逻辑仍有效。

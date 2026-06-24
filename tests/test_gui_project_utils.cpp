@@ -2213,6 +2213,38 @@ TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, LayerOverlayItemsUsesLowerCamelPrivateMemberNames)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/LayerOverlayItems.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("std::vector<cv::KeyPoint> _keypoints;"),
+        QStringLiteral("LayerRenderer::FeatureDisplayOptions _options;"),
+        QStringLiteral("QRectF _bounds;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(source.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_keypoints"),
+        QStringLiteral("m_options"),
+        QStringLiteral("m_bounds"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(")"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(";"))) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, LoggerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/common/log/Logger.h"));
