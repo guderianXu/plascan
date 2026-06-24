@@ -1761,6 +1761,135 @@ TEST(CodeStyleTest, AppConfigManagerUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, MainMenuUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QMainWindow *_mainWindow{};"),
+        QStringLiteral("QToolBar *_toolBar{};"),
+        QStringLiteral("QMenu *_fileMenu{};"),
+        QStringLiteral("QMenu *_recentMenu{};"),
+        QStringLiteral("QAction *_newAct{};"),
+        QStringLiteral("QAction *_openAct{};"),
+        QStringLiteral("QAction *_saveAct{};"),
+        QStringLiteral("QAction *_minimizeAct{};"),
+        QStringLiteral("QAction *_exitAct{};"),
+        QStringLiteral("QAction *_zoomInAct{};"),
+        QStringLiteral("QAction *_zoomOutAct{};"),
+        QStringLiteral("QAction *_resetViewAct{};"),
+        QStringLiteral("QAction *_toggleGizmoAct{};"),
+        QStringLiteral("QAction *_toggleCamerasAct{};"),
+        QStringLiteral("QAction *_featureInfoAct{};"),
+        QStringLiteral("QAction *_toggleLogAct{};"),
+        QStringLiteral("QAction *_addPhotoAct{};"),
+        QStringLiteral("QAction *_addFolderAct{};"),
+        QStringLiteral("QAction *_detectFeaturesAct{};"),
+        QStringLiteral("QAction *_vocabularyOverlapAct{};"),
+        QStringLiteral("QAction *_featureVisualizationAct{};"),
+        QStringLiteral("QAction *_matchFeaturesAct{};"),
+        QStringLiteral("QAction *_viewMatchesAct{};"),
+        QStringLiteral("QAction *_denseMatchAct{};"),
+        QStringLiteral("QAction *_threeDReconstructionAct{};"),
+        QStringLiteral("QAction *_overlapAnalysisAct{};"),
+        QStringLiteral("QAction *_intersectionCheckAct{};"),
+        QStringLiteral("QAction *_intersectionViewResultsAct{};"),
+        QStringLiteral("QAction *_createDEMAct{};"),
+        QStringLiteral("QAction *_generateOrthoAct{};"),
+        QStringLiteral("QAction *_viewWorkflowReportAct{};"),
+        QStringLiteral("QAction *_manualPointCloudPruneAct{};"),
+        QStringLiteral("QAction *_cameraConvertAct{};"),
+        QStringLiteral("QAction *_surveyControlAct{};"),
+        QStringLiteral("QAction *_importReferenceDatasetAct{};"),
+        QStringLiteral("QAction *_referenceQualityCheckAct{};"),
+        QStringLiteral("QAction *_referenceTerrainBundleAdjustAct{};"),
+        QStringLiteral("QAction *_buildObsNetworkAct{};"),
+        QStringLiteral("QAction *_initCameraPoseAct{};"),
+        QStringLiteral("QAction *_aerialTriangulationAct{};"),
+        QStringLiteral("QAction *_triangulateAct{};"),
+        QStringLiteral("QAction *_reconBundleAdjustAct{};"),
+        QStringLiteral("QAction *_sparseCloudPostProcessAct{};"),
+        QStringLiteral("QAction *_depthMapEstimateAct{};"),
+        QStringLiteral("QAction *_fuseDepthMapsAct{};"),
+        QStringLiteral("QAction *_refineDenseCloudAct{};"),
+        QStringLiteral("QAction *_meshReconstructAct{};"),
+        QStringLiteral("QAction *_textureMappingAct{};"),
+        QStringLiteral("QAction *_exportModelAct{};"),
+        QStringLiteral("QAction *_exportMatchedPairsAct{};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_mainWindow"),
+        QStringLiteral("m_toolBar"),
+        QStringLiteral("m_fileMenu"),
+        QStringLiteral("m_recentMenu"),
+        QStringLiteral("m_newAct"),
+        QStringLiteral("m_openAct"),
+        QStringLiteral("m_saveAct"),
+        QStringLiteral("m_minimizeAct"),
+        QStringLiteral("m_exitAct"),
+        QStringLiteral("m_zoomInAct"),
+        QStringLiteral("m_zoomOutAct"),
+        QStringLiteral("m_resetViewAct"),
+        QStringLiteral("m_toggleGizmoAct"),
+        QStringLiteral("m_toggleCamerasAct"),
+        QStringLiteral("m_featureInfoAct"),
+        QStringLiteral("m_toggleLogAct"),
+        QStringLiteral("m_addPhotoAct"),
+        QStringLiteral("m_addFolderAct"),
+        QStringLiteral("m_detectFeaturesAct"),
+        QStringLiteral("m_vocabularyOverlapAct"),
+        QStringLiteral("m_featureVisualizationAct"),
+        QStringLiteral("m_matchFeaturesAct"),
+        QStringLiteral("m_viewMatchesAct"),
+        QStringLiteral("m_denseMatchAct"),
+        QStringLiteral("m_threeDReconstructionAct"),
+        QStringLiteral("m_overlapAnalysisAct"),
+        QStringLiteral("m_intersectionCheckAct"),
+        QStringLiteral("m_intersectionViewResultsAct"),
+        QStringLiteral("m_createDEMAct"),
+        QStringLiteral("m_generateOrthoAct"),
+        QStringLiteral("m_viewWorkflowReportAct"),
+        QStringLiteral("m_manualPointCloudPruneAct"),
+        QStringLiteral("m_cameraConvertAct"),
+        QStringLiteral("m_surveyControlAct"),
+        QStringLiteral("m_importReferenceDatasetAct"),
+        QStringLiteral("m_referenceQualityCheckAct"),
+        QStringLiteral("m_referenceTerrainBundleAdjustAct"),
+        QStringLiteral("m_buildObsNetworkAct"),
+        QStringLiteral("m_initCameraPoseAct"),
+        QStringLiteral("m_aerialTriangulationAct"),
+        QStringLiteral("m_triangulateAct"),
+        QStringLiteral("m_reconBundleAdjustAct"),
+        QStringLiteral("m_sparseCloudPostProcessAct"),
+        QStringLiteral("m_depthMapEstimateAct"),
+        QStringLiteral("m_fuseDepthMapsAct"),
+        QStringLiteral("m_refineDenseCloudAct"),
+        QStringLiteral("m_meshReconstructAct"),
+        QStringLiteral("m_textureMappingAct"),
+        QStringLiteral("m_exportModelAct"),
+        QStringLiteral("m_exportMatchedPairsAct"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(")"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(";"))) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, WindowPanelUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/WindowPanel.h"));
@@ -8863,9 +8992,9 @@ TEST(MainMenuTest, SparseReconstructionMenuPlacesVocabularyOverlapBetweenFeature
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int detectIndex = source.indexOf(QStringLiteral("m_detectFeaturesAct"));
-    const int overlapIndex = source.indexOf(QStringLiteral("m_vocabularyOverlapAct"));
-    const int matchIndex = source.indexOf(QStringLiteral("m_matchFeaturesAct"));
+    const int detectIndex = source.indexOf(QStringLiteral("_detectFeaturesAct"));
+    const int overlapIndex = source.indexOf(QStringLiteral("_vocabularyOverlapAct"));
+    const int matchIndex = source.indexOf(QStringLiteral("_matchFeaturesAct"));
 
     ASSERT_GE(detectIndex, 0);
     ASSERT_GE(overlapIndex, 0);

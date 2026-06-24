@@ -190,71 +190,71 @@ signals:
 
 private:
     /** @brief 目标主窗口指针，用于 addMenu/addToolBar 等操作。 */
-    QMainWindow *m_mainWindow{};
+    QMainWindow *_mainWindow{};
 
     /** @brief 主工具栏，供外部追加快捷操作按钮。 */
-    QToolBar    *m_toolBar{};
+    QToolBar *_toolBar{};
 
     /** @brief "项目"顶级菜单（原名"文件"）。 */
-    QMenu       *m_fileMenu{};
+    QMenu *_fileMenu{};
 
     /** @brief "最近打开"子菜单，内容由 setRecentProjects 动态重建。 */
-    QMenu       *m_recentMenu{};
+    QMenu *_recentMenu{};
 
     // ---- 项目菜单中的固定动作 ----
-    QAction *m_newAct{};   ///< 新建项目
-    QAction *m_openAct{};  ///< 打开项目
-    QAction *m_saveAct{};  ///< 保存项目
-    QAction *m_minimizeAct{}; ///< 最小化窗口
-    QAction *m_exitAct{};  ///< 退出应用
+    QAction *_newAct{};   ///< 新建项目
+    QAction *_openAct{};  ///< 打开项目
+    QAction *_saveAct{};  ///< 保存项目
+    QAction *_minimizeAct{}; ///< 最小化窗口
+    QAction *_exitAct{};  ///< 退出应用
 
     // ---- 视图菜单动作 ----
-    QAction *m_zoomInAct{};    ///< 放大视图
-    QAction *m_zoomOutAct{};   ///< 缩小视图
-    QAction *m_resetViewAct{}; ///< 重置视图到原始比例
-    QAction *m_toggleGizmoAct{}; ///< 显示/隐藏操控球
-    QAction *m_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
-    QAction *m_featureInfoAct{}; ///< 兴趣点信息面板开关
+    QAction *_zoomInAct{};    ///< 放大视图
+    QAction *_zoomOutAct{};   ///< 缩小视图
+    QAction *_resetViewAct{}; ///< 重置视图到原始比例
+    QAction *_toggleGizmoAct{}; ///< 显示/隐藏操控球
+    QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
+    QAction *_featureInfoAct{}; ///< 兴趣点信息面板开关
 
     // ---- 面板开关动作 ----
-    QAction *m_toggleLogAct{}; ///< 日志面板显示/隐藏
+    QAction *_toggleLogAct{}; ///< 日志面板显示/隐藏
 
     // ---- 工作流程菜单动作 ----
-    QAction *m_addPhotoAct{};            ///< 添加单张照片
-    QAction *m_addFolderAct{};           ///< 批量添加文件夹中的图片
-    QAction *m_detectFeaturesAct{};      ///< 特征点检测
-    QAction *m_vocabularyOverlapAct{};   ///< 基于特征词汇预获取重叠影像对
-    QAction *m_featureVisualizationAct{};///< 特征点可视化设置对话框
-    QAction *m_matchFeaturesAct{};       ///< 特征点匹配生成连接点
-    QAction *m_viewMatchesAct{};         ///< 查看匹配结果
-    QAction *m_denseMatchAct{};          ///< 密集匹配
-    QAction *m_threeDReconstructionAct{}; ///< 三维重建（一键完整建模）
-    QAction *m_overlapAnalysisAct{};     ///< 重叠度分析
-    QAction *m_intersectionCheckAct{};   ///< 前方交汇精度检验
-    QAction *m_intersectionViewResultsAct{}; ///< 查看前方交汇结果
-    QAction *m_createDEMAct{};           ///< 创建数字高程模型（DEM）
-    QAction *m_generateOrthoAct{};       ///< 生成正射影像
+    QAction *_addPhotoAct{};            ///< 添加单张照片
+    QAction *_addFolderAct{};           ///< 批量添加文件夹中的图片
+    QAction *_detectFeaturesAct{};      ///< 特征点检测
+    QAction *_vocabularyOverlapAct{};   ///< 基于特征词汇预获取重叠影像对
+    QAction *_featureVisualizationAct{};///< 特征点可视化设置对话框
+    QAction *_matchFeaturesAct{};       ///< 特征点匹配生成连接点
+    QAction *_viewMatchesAct{};         ///< 查看匹配结果
+    QAction *_denseMatchAct{};          ///< 密集匹配
+    QAction *_threeDReconstructionAct{}; ///< 三维重建（一键完整建模）
+    QAction *_overlapAnalysisAct{};     ///< 重叠度分析
+    QAction *_intersectionCheckAct{};   ///< 前方交汇精度检验
+    QAction *_intersectionViewResultsAct{}; ///< 查看前方交汇结果
+    QAction *_createDEMAct{};           ///< 创建数字高程模型（DEM）
+    QAction *_generateOrthoAct{};       ///< 生成正射影像
 
-    QAction *m_viewWorkflowReportAct{};        ///< 查看工作流程历史报告
-    QAction *m_manualPointCloudPruneAct{};     ///< 手动点云剔除
-    QAction *m_cameraConvertAct{};             ///< 通用相机格式转换
-    QAction *m_surveyControlAct{};             ///< 控制点/检查点/比例尺管理
-    QAction *m_importReferenceDatasetAct{};    ///< 导入外部 DEM/LiDAR 参考数据
-    QAction *m_referenceQualityCheckAct{};     ///< 使用参考数据生成精度检查报告
-    QAction *m_referenceTerrainBundleAdjustAct{}; ///< 参考地形软约束 BA 前置检查
+    QAction *_viewWorkflowReportAct{};        ///< 查看工作流程历史报告
+    QAction *_manualPointCloudPruneAct{};     ///< 手动点云剔除
+    QAction *_cameraConvertAct{};             ///< 通用相机格式转换
+    QAction *_surveyControlAct{};             ///< 控制点/检查点/比例尺管理
+    QAction *_importReferenceDatasetAct{};    ///< 导入外部 DEM/LiDAR 参考数据
+    QAction *_referenceQualityCheckAct{};     ///< 使用参考数据生成精度检查报告
+    QAction *_referenceTerrainBundleAdjustAct{}; ///< 参考地形软约束 BA 前置检查
 
     // ---- 重建菜单动作 ----
-    QAction *m_buildObsNetworkAct{};         ///< 构建观测网络模型
-    QAction *m_initCameraPoseAct{};          ///< 初始化相机位姿
-    QAction *m_aerialTriangulationAct{};     ///< 正式空中三角测量（SfM + BA）
-    QAction *m_triangulateAct{};             ///< 两视预览云三角化
-    QAction *m_reconBundleAdjustAct{};       ///< 光束法平差（重建菜单）
-    QAction *m_sparseCloudPostProcessAct{};  ///< 稀疏点云后处理
-    QAction *m_depthMapEstimateAct{};        ///< 深度图估计
-    QAction *m_fuseDepthMapsAct{};           ///< 深度图融合
-    QAction *m_refineDenseCloudAct{};        ///< 密集点云后处理
-    QAction *m_meshReconstructAct{};         ///< 网格重建
-    QAction *m_textureMappingAct{};          ///< 纹理映射
-    QAction *m_exportModelAct{};             ///< 模型导出
-    QAction *m_exportMatchedPairsAct{};      ///< 导出匹配影像对 .lis
+    QAction *_buildObsNetworkAct{};         ///< 构建观测网络模型
+    QAction *_initCameraPoseAct{};          ///< 初始化相机位姿
+    QAction *_aerialTriangulationAct{};     ///< 正式空中三角测量（SfM + BA）
+    QAction *_triangulateAct{};             ///< 两视预览云三角化
+    QAction *_reconBundleAdjustAct{};       ///< 光束法平差（重建菜单）
+    QAction *_sparseCloudPostProcessAct{};  ///< 稀疏点云后处理
+    QAction *_depthMapEstimateAct{};        ///< 深度图估计
+    QAction *_fuseDepthMapsAct{};           ///< 深度图融合
+    QAction *_refineDenseCloudAct{};        ///< 密集点云后处理
+    QAction *_meshReconstructAct{};         ///< 网格重建
+    QAction *_textureMappingAct{};          ///< 纹理映射
+    QAction *_exportModelAct{};             ///< 模型导出
+    QAction *_exportMatchedPairsAct{};      ///< 导出匹配影像对 .lis
 };
