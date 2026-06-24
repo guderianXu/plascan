@@ -17,7 +17,7 @@ static const int SGM_DIRS[8][2] = {
     {-1, 0}, {0, -1}, {-1, -1}, {-1, 1}
 };
 
-SgmMatcher::SgmMatcher(const DenseMatchConfig &cfg) : m_cfg(cfg)
+SgmMatcher::SgmMatcher(const DenseMatchConfig &cfg) : _config(cfg)
 {
 }
 
@@ -32,8 +32,8 @@ void SgmMatcher::aggregatePath(CostVolume &L, const CostVolume &C,
     int endX   = (dirX > 0) ? imgW : -1;
     int stepX  = (dirX > 0) ? 1 : -1;
 
-    float p1 = static_cast<float>(m_cfg.p1);
-    float p2 = static_cast<float>(m_cfg.p2);
+    float p1 = static_cast<float>(_config.p1);
+    float p2 = static_cast<float>(_config.p2);
 
     for (int y = startY; y != endY; y += stepY)
     {
@@ -85,7 +85,7 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
 
     int imgW = left.cols;
     int imgH = left.rows;
-    int numDisp = m_cfg.maxDisparity - m_cfg.minDisparity;
+    int numDisp = _config.maxDisparity - _config.minDisparity;
 
     if (numDisp <= 0)
     {
@@ -98,20 +98,20 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
 
     CostVolume C;
 #ifdef DM_ENABLE_CUDA
-    if (m_cfg.useCuda)
+    if (_config.useCuda)
     {
         C = computeCostVolumeCUDA(left, right,
-            m_cfg.minDisparity, m_cfg.maxDisparity,
-            m_cfg.corrKernelW, m_cfg.corrKernelH,
-            m_cfg.costFunc, m_cfg.cudaDevice);
+            _config.minDisparity, _config.maxDisparity,
+            _config.corrKernelW, _config.corrKernelH,
+            _config.costFunc, _config.cudaDevice);
     }
     else
 #endif
     {
         C = computeCostVolume(left, right,
-            m_cfg.minDisparity, m_cfg.maxDisparity,
-            m_cfg.corrKernelW, m_cfg.corrKernelH,
-            m_cfg.costFunc, m_cfg.numThreads);
+            _config.minDisparity, _config.maxDisparity,
+            _config.corrKernelW, _config.corrKernelH,
+            _config.costFunc, _config.numThreads);
     }
 
     CostVolume L(numDisp);
@@ -120,7 +120,7 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
         L[d] = cv::Mat(imgH, imgW, CV_32FC1, cv::Scalar(0));
     }
 
-    int numDirs = m_cfg.sgmDirections;
+    int numDirs = _config.sgmDirections;
     if (numDirs < 1)
     {
         numDirs = 1;
@@ -142,7 +142,7 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
     result.validMask  = cv::Mat(imgH, imgW, CV_8UC1);
 
 #ifdef _OPENMP
-    #pragma omp parallel for num_threads(m_cfg.numThreads)
+    #pragma omp parallel for num_threads(_config.numThreads)
 #endif
     for (int y = 0; y < imgH; ++y)
     {
@@ -159,7 +159,7 @@ DisparityResult SgmMatcher::compute(const cv::Mat &left, const cv::Mat &right)
                 {
                     secondBest = bestCost;
                     bestCost = c;
-                    bestDisp = m_cfg.minDisparity + dIdx;
+                    bestDisp = _config.minDisparity + dIdx;
                 }
                 else if (c < secondBest)
                 {

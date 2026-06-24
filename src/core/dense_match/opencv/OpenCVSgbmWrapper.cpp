@@ -7,18 +7,18 @@
 namespace xjw::dense_match
 {
 
-OpenCVSgbmWrapper::OpenCVSgbmWrapper(const DenseMatchConfig &cfg) : m_cfg(cfg) {}
+OpenCVSgbmWrapper::OpenCVSgbmWrapper(const DenseMatchConfig &cfg) : _config(cfg) {}
 
 DisparityResult OpenCVSgbmWrapper::compute(const cv::Mat &left, const cv::Mat &right)
 {
-    int numDisp = m_cfg.maxDisparity - m_cfg.minDisparity;
+    int numDisp = _config.maxDisparity - _config.minDisparity;
     int numDisp16 = std::max(16, ((numDisp + 15) / 16) * 16);
-    int blockSize = std::max(3, m_cfg.corrKernelW | 1);
-    int p1 = std::max(m_cfg.p1, 8 * blockSize * blockSize);
-    int p2 = std::max(m_cfg.p2, 32 * blockSize * blockSize);
+    int blockSize = std::max(3, _config.corrKernelW | 1);
+    int p1 = std::max(_config.p1, 8 * blockSize * blockSize);
+    int p2 = std::max(_config.p2, 32 * blockSize * blockSize);
 
     auto sgbm = cv::StereoSGBM::create(
-        m_cfg.minDisparity,
+        _config.minDisparity,
         numDisp16,
         blockSize,
         p1,

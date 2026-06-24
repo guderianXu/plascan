@@ -25,7 +25,7 @@ private:
                            const CostVolume &costVol,
                            int minDisp, int maxDisp);
 
-    DenseMatchConfig m_cfg;
+    DenseMatchConfig _config;
 };
 
 } // namespace xjw::dense_match

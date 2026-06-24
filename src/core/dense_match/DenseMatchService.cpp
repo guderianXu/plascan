@@ -12,19 +12,19 @@
 namespace xjw::dense_match
 {
 
-DenseMatchService::DenseMatchService(const DenseMatchConfig &cfg) : m_cfg(cfg) {}
+DenseMatchService::DenseMatchService(const DenseMatchConfig &cfg) : _config(cfg) {}
 
 DisparityResult DenseMatchService::process()
 {
-    m_left  = cv::imread(m_cfg.leftImagePath, cv::IMREAD_GRAYSCALE);
-    m_right = cv::imread(m_cfg.rightImagePath, cv::IMREAD_GRAYSCALE);
-    if (m_left.empty() || m_right.empty())
+    _left  = cv::imread(_config.leftImagePath, cv::IMREAD_GRAYSCALE);
+    _right = cv::imread(_config.rightImagePath, cv::IMREAD_GRAYSCALE);
+    if (_left.empty() || _right.empty())
     {
         fprintf(stderr, "[DenseMatch] ERROR: failed to load %s or %s\n",
-                m_cfg.leftImagePath.c_str(), m_cfg.rightImagePath.c_str());
+                _config.leftImagePath.c_str(), _config.rightImagePath.c_str());
         return DisparityResult();
     }
-    return process(m_left, m_right);
+    return process(_left, _right);
 }
 
 DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &right)
@@ -37,13 +37,13 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
     fprintf(stdout, "[DenseMatch] size=%dx%d algo=%d cost=%d disp=[%d,%d] kernel=%dx%d "
             "cuda=%d device=%d threads=%d\n",
             left.cols, left.rows,
-            static_cast<int>(m_cfg.algorithm), static_cast<int>(m_cfg.costFunc),
-            m_cfg.minDisparity, m_cfg.maxDisparity,
-            m_cfg.corrKernelW, m_cfg.corrKernelH,
-            m_cfg.useCuda ? 1 : 0, m_cfg.cudaDevice, m_cfg.numThreads);
+            static_cast<int>(_config.algorithm), static_cast<int>(_config.costFunc),
+            _config.minDisparity, _config.maxDisparity,
+            _config.corrKernelW, _config.corrKernelH,
+            _config.useCuda ? 1 : 0, _config.cudaDevice, _config.numThreads);
 
 #ifdef DM_ENABLE_CUDA
-    fprintf(stdout, "[DenseMatch] DM_ENABLE_CUDA=YES useCuda=%d\n", m_cfg.useCuda ? 1 : 0);
+    fprintf(stdout, "[DenseMatch] DM_ENABLE_CUDA=YES useCuda=%d\n", _config.useCuda ? 1 : 0);
 #else
     fprintf(stdout, "[DenseMatch] DM_ENABLE_CUDA=NO (CPU only)\n");
 #endif
@@ -55,9 +55,9 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
     fprintf(stdout, "[DenseMatch] matching: %.0f ms\n",
             std::chrono::duration<double, std::milli>(t1 - t0).count());
 
-    DisparityValidator validator(m_cfg);
+    DisparityValidator validator(_config);
     result = validator.validate(result.disparity, result.confidence);
-    if (m_cfg.enableLRCheck && m_cfg.lrCheckThreshold > 0.0f && !result.disparity.empty())
+    if (_config.enableLRCheck && _config.lrCheckThreshold > 0.0f && !result.disparity.empty())
     {
         DisparityResult reverse = computeRawDisparity(right, left);
         reverse = validator.validate(reverse.disparity, reverse.confidence);
@@ -86,18 +86,18 @@ DisparityResult DenseMatchService::process(const cv::Mat &left, const cv::Mat &r
 
 DisparityResult DenseMatchService::computeRawDisparity(const cv::Mat &left, const cv::Mat &right) const
 {
-    if (m_cfg.algorithm == StereoAlgorithm::BlockMatch)
+    if (_config.algorithm == StereoAlgorithm::BlockMatch)
     {
-        BlockMatcher bm(m_cfg);
+        BlockMatcher bm(_config);
         return bm.compute(left, right);
     }
-    if (m_cfg.algorithm == StereoAlgorithm::OpenCV_SGBM)
+    if (_config.algorithm == StereoAlgorithm::OpenCV_SGBM)
     {
-        OpenCVSgbmWrapper sgbm(m_cfg);
+        OpenCVSgbmWrapper sgbm(_config);
         return sgbm.compute(left, right);
     }
 
-    SgmMatcher sgm(m_cfg);
+    SgmMatcher sgm(_config);
     return sgm.compute(left, right);
 }
 

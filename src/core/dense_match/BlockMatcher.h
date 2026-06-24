@@ -17,7 +17,7 @@ public:
     DisparityResult compute(const cv::Mat &left, const cv::Mat &right);
 
 private:
-    DenseMatchConfig m_cfg;
+    DenseMatchConfig _config;
 };
 
 } // namespace xjw::dense_match

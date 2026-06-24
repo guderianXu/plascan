@@ -21,8 +21,8 @@ public:
 private:
     DisparityResult computeRawDisparity(const cv::Mat &left, const cv::Mat &right) const;
 
-    DenseMatchConfig m_cfg;
-    cv::Mat m_left, m_right;
+    DenseMatchConfig _config;
+    cv::Mat _left, _right;
 };
 
 } // namespace xjw::dense_match

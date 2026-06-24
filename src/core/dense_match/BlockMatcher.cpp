@@ -11,7 +11,7 @@
 namespace xjw::dense_match
 {
 
-BlockMatcher::BlockMatcher(const DenseMatchConfig &cfg) : m_cfg(cfg)
+BlockMatcher::BlockMatcher(const DenseMatchConfig &cfg) : _config(cfg)
 {
 }
 
@@ -21,24 +21,24 @@ DisparityResult BlockMatcher::compute(const cv::Mat &left, const cv::Mat &right)
     CV_Assert(left.size() == right.size());
 
     int imgW = left.cols, imgH = left.rows;
-    int numDisp = m_cfg.maxDisparity - m_cfg.minDisparity;
+    int numDisp = _config.maxDisparity - _config.minDisparity;
 
     CostVolume volume;
 #ifdef DM_ENABLE_CUDA
-    if (m_cfg.useCuda)
+    if (_config.useCuda)
     {
         volume = computeCostVolumeCUDA(left, right,
-            m_cfg.minDisparity, m_cfg.maxDisparity,
-            m_cfg.corrKernelW, m_cfg.corrKernelH,
-            m_cfg.costFunc, m_cfg.cudaDevice);
+            _config.minDisparity, _config.maxDisparity,
+            _config.corrKernelW, _config.corrKernelH,
+            _config.costFunc, _config.cudaDevice);
     }
     else
 #endif
     {
         volume = computeCostVolume(left, right,
-            m_cfg.minDisparity, m_cfg.maxDisparity,
-            m_cfg.corrKernelW, m_cfg.corrKernelH,
-            m_cfg.costFunc, m_cfg.numThreads);
+            _config.minDisparity, _config.maxDisparity,
+            _config.corrKernelW, _config.corrKernelH,
+            _config.costFunc, _config.numThreads);
     }
 
     DisparityResult result;
@@ -47,7 +47,7 @@ DisparityResult BlockMatcher::compute(const cv::Mat &left, const cv::Mat &right)
     result.validMask  = cv::Mat(imgH, imgW, CV_8UC1, cv::Scalar(0));
 
     #ifdef _OPENMP
-    #pragma omp parallel for num_threads(m_cfg.numThreads)
+    #pragma omp parallel for num_threads(_config.numThreads)
     #endif
     for (int y = 0; y < imgH; ++y)
     {
@@ -62,7 +62,7 @@ DisparityResult BlockMatcher::compute(const cv::Mat &left, const cv::Mat &right)
                 {
                     secondBest = bestCost;
                     bestCost = c;
-                    bestDisp = m_cfg.minDisparity + dIdx;
+                    bestDisp = _config.minDisparity + dIdx;
                 }
                 else if (c < secondBest)
                 {

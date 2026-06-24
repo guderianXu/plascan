@@ -11,13 +11,16 @@
 namespace xjw::dense_match
 {
 
-SubpixelRefiner::SubpixelRefiner(const DenseMatchConfig &cfg) : m_cfg(cfg) {}
+SubpixelRefiner::SubpixelRefiner(const DenseMatchConfig &cfg)
+    : _config(cfg)
+{
+}
 
 cv::Mat SubpixelRefiner::refine(const cv::Mat &disparityInt,
                                 const CostVolume &costVolume,
                                 int minDisp, int maxDisp)
 {
-    switch (m_cfg.subpixel)
+    switch (_config.subpixel)
     {
     case SubpixelMode::None:
         return disparityInt.clone();
@@ -35,9 +38,9 @@ cv::Mat SubpixelRefiner::refineParabola(const cv::Mat &disp,
     int numDisp = maxDisp - minDisp;
     cv::Mat result = disp.clone();
 
-    #ifdef _OPENMP
-    #pragma omp parallel for collapse(2)
-    #endif
+#ifdef _OPENMP
+#pragma omp parallel for
+#endif
     for (int y = 0; y < disp.rows; ++y)
     {
         for (int x = 0; x < disp.cols; ++x)

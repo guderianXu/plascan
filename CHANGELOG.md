@@ -95,6 +95,8 @@
 - `InitCameraPoseDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名和动态匹配/特征类型控件 objectName 不变，继续收敛相机初始化对话框命名规范。
 - `ForwardIntersectionCheckDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛前方交汇检测对话框命名规范。
 - `DenseMatchDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛密集匹配参数对话框命名规范。
+- `dense_match` 核心小类的配置和输入缓存私有成员从 `m_cfg/m_left/m_right` 迁移到 `_config/_left/_right`，保持 BM/SGM/OpenCV SGBM/亚像素细化/验证链路行为不变。
+- `SubpixelRefiner` 移除 MSVC 会忽略的 OpenMP `collapse(2)` 子句，保留外层并行，避免 Windows CUDA 构建继续输出 C4849 warning。
 - `MatchPairSelectorDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛匹配对选择器命名规范。
 - `FeatureMatchingDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛特征匹配参数对话框命名规范。
 - `FeatureExtractionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛特征提取参数对话框命名规范。
@@ -117,6 +119,10 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `ProjectTerrainProductsManager` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipeline|TerrainProducts|CodeStyleTest.ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberNames|GuiAsyncLifetimeTest.FeatureExtractionRunnerUsesGuardedProjectManagerCallbacks|ProjectManagerQualityReportTest.PipelineStageBoundariesRefreshReconstructionQualityReport" --output-on-failure` 通过，16/16，验证 DEM/DOM 异步入口、质量报告刷新和生命周期守护断言保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectTerrainProductsManager.cpp`、`ProjectManager.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.DenseMatchCoreUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 dense_match 核心私有成员迁移到 `_lowerCamelCase`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.DenseMatchCoreUsesLowerCamelPrivateMemberNames|BlockMatcher|SgmMatcher|SubpixelRefiner|DisparityValidator|DenseMatchIntegration" --output-on-failure` 通过，18/18，验证 BM/SGM/亚像素细化、视差验证和 dense match 集成链路保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_dense_match_unit -Jobs 8` 通过，重新编译 `dense_match`，且不再输出 `SubpixelRefiner.cpp` 的 OpenMP C4849 warning。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新链接依赖 `dense_match` 的 GUI。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具测试。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|CanvasWidgetDoesNotIncludeTorchExtractorHeaders|LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader" --output-on-failure` 通过，3/3。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CanvasWidget.cpp`、`LayerFeatureLoader.cpp`、`LayerRenderer.cpp` 并链接 GUI。

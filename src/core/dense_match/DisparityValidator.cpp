@@ -6,7 +6,7 @@
 namespace xjw::dense_match
 {
 
-DisparityValidator::DisparityValidator(const DenseMatchConfig &cfg) : m_cfg(cfg) {}
+DisparityValidator::DisparityValidator(const DenseMatchConfig &cfg) : _config(cfg) {}
 
 DisparityResult DisparityValidator::validate(const cv::Mat &disparity,
                                              const cv::Mat &confidence)
@@ -19,8 +19,8 @@ DisparityResult DisparityValidator::validate(const cv::Mat &disparity,
         return result;
     }
 
-    if (m_cfg.medianFilterSize > 0)
-        result.disparity = medianFilter(result.disparity, m_cfg.medianFilterSize);
+    if (_config.medianFilterSize > 0)
+        result.disparity = medianFilter(result.disparity, _config.medianFilterSize);
 
     result.validMask = cv::Mat(disparity.rows, disparity.cols, CV_8UC1, cv::Scalar(1));
     return result;
@@ -42,7 +42,7 @@ cv::Mat DisparityValidator::checkLRConsistency(const cv::Mat &dispLR,
             {
                 float dRL = dispRL.at<float>(y, xR);
                 valid.at<uchar>(y, x) =
-                    (std::abs(dLR - dRL) <= m_cfg.lrCheckThreshold) ? 1 : 0;
+                    (std::abs(dLR - dRL) <= _config.lrCheckThreshold) ? 1 : 0;
             }
             else
             {
@@ -98,7 +98,7 @@ void DisparityValidator::applyImageSupportMask(DisparityResult &result,
     if (result.validMask.empty())
         result.validMask = cv::Mat(result.disparity.size(), CV_8UC1, cv::Scalar(1));
 
-    const int threshold = std::max(0, m_cfg.supportIntensityThreshold);
+    const int threshold = std::max(0, _config.supportIntensityThreshold);
     int removed = 0;
     int kept = 0;
 

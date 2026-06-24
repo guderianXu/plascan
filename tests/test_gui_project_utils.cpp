@@ -2710,6 +2710,64 @@ TEST(CodeStyleTest, CameraUsesDescriptiveLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, DenseMatchCoreUsesLowerCamelPrivateMemberNames)
+{
+    const QHash<QString, QStringList> expectedByHeader = {
+        {QStringLiteral("src/core/dense_match/BlockMatcher.h"),
+         {QStringLiteral("DenseMatchConfig _config;")}},
+        {QStringLiteral("src/core/dense_match/DenseMatchService.h"),
+         {QStringLiteral("DenseMatchConfig _config;"),
+          QStringLiteral("cv::Mat _left, _right;")}},
+        {QStringLiteral("src/core/dense_match/DisparityValidator.h"),
+         {QStringLiteral("DenseMatchConfig _config;")}},
+        {QStringLiteral("src/core/dense_match/SgmMatcher.h"),
+         {QStringLiteral("DenseMatchConfig _config;")}},
+        {QStringLiteral("src/core/dense_match/SubpixelRefiner.h"),
+         {QStringLiteral("DenseMatchConfig _config;")}},
+        {QStringLiteral("src/core/dense_match/opencv/OpenCVSgbmWrapper.h"),
+         {QStringLiteral("DenseMatchConfig _config;")}},
+    };
+
+    for (auto it = expectedByHeader.cbegin(); it != expectedByHeader.cend(); ++it)
+    {
+        const QString header = readProjectSourceFile(it.key());
+        ASSERT_FALSE(header.isEmpty()) << qPrintable(it.key());
+        for (const QString &expectedMember : it.value())
+        {
+            EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(it.key() + QStringLiteral(": ") + expectedMember);
+        }
+    }
+
+    const QStringList files = {
+        QStringLiteral("src/core/dense_match/BlockMatcher.h"),
+        QStringLiteral("src/core/dense_match/BlockMatcher.cpp"),
+        QStringLiteral("src/core/dense_match/DenseMatchService.h"),
+        QStringLiteral("src/core/dense_match/DenseMatchService.cpp"),
+        QStringLiteral("src/core/dense_match/DisparityValidator.h"),
+        QStringLiteral("src/core/dense_match/DisparityValidator.cpp"),
+        QStringLiteral("src/core/dense_match/SgmMatcher.h"),
+        QStringLiteral("src/core/dense_match/SgmMatcher.cpp"),
+        QStringLiteral("src/core/dense_match/SubpixelRefiner.h"),
+        QStringLiteral("src/core/dense_match/SubpixelRefiner.cpp"),
+        QStringLiteral("src/core/dense_match/opencv/OpenCVSgbmWrapper.h"),
+        QStringLiteral("src/core/dense_match/opencv/OpenCVSgbmWrapper.cpp"),
+    };
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_cfg"),
+        QStringLiteral("m_left"),
+        QStringLiteral("m_right"),
+    };
+    for (const QString &path : files)
+    {
+        const QString source = readProjectSourceFile(path);
+        ASSERT_FALSE(source.isEmpty()) << qPrintable(path);
+        for (const QString &oldName : oldMemberNames)
+        {
+            EXPECT_FALSE(source.contains(oldName)) << qPrintable(path + QStringLiteral(": ") + oldName);
+        }
+    }
+}
+
 TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

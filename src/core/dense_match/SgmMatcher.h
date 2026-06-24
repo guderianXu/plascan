@@ -22,7 +22,7 @@ private:
                        int imgW, int imgH, int numDisp,
                        int dirX, int dirY) const;
 
-    DenseMatchConfig m_cfg;
+    DenseMatchConfig _config;
 };
 
 } // namespace xjw::dense_match
