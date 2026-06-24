@@ -1845,6 +1845,47 @@ TEST(CodeStyleTest, TaskStatusWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, DisparityHeatmapOverlayUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DisparityHeatmapOverlay.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("cv::Mat _disparity;"),
+        QStringLiteral("QImage  _heatmapImage;"),
+        QStringLiteral("QPixmap _heatmap;"),
+        QStringLiteral("float   _opacity     = 0.6f;"),
+        QStringLiteral("float   _dispMin     = 0.0f;"),
+        QStringLiteral("float   _dispMax     = 256.0f;"),
+        QStringLiteral("bool    _autoRange   = true;"),
+        QStringLiteral("int     _colormap    = 2;"),
+        QStringLiteral("bool    _showInvalid = false;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_disparity"),
+        QStringLiteral("m_heatmapImage"),
+        QStringLiteral("m_heatmap"),
+        QStringLiteral("m_opacity"),
+        QStringLiteral("m_dispMin"),
+        QStringLiteral("m_dispMax"),
+        QStringLiteral("m_autoRange"),
+        QStringLiteral("m_colormap"),
+        QStringLiteral("m_showInvalid"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
@@ -3415,7 +3456,7 @@ TEST(DisparityHeatmapOverlayTest, InvalidPixelsUseAlphaMask)
         << "Heatmap storage should carry alpha so invalid disparity can be transparent.";
     EXPECT_TRUE(source.contains(QStringLiteral("alphaRow[col] = validRow[col] ? 255 : 0")))
         << "Invalid disparity pixels should be masked out, not colorized as low disparity.";
-    EXPECT_TRUE(source.contains(QStringLiteral("if (m_showInvalid)")))
+    EXPECT_TRUE(source.contains(QStringLiteral("if (_showInvalid)")))
         << "setShowInvalid() must affect the rendered invalid-pixel state.";
     EXPECT_TRUE(header.contains(QStringLiteral("QImage heatmapImage() const")))
         << "Tests and callers need a mask-aware image accessor.";
