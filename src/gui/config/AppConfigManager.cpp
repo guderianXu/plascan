@@ -15,8 +15,8 @@
  */
 AppConfigManager::AppConfigManager(QObject *parent)
     : QObject(parent)
-    , m_windowState(this)      // 窗口状态管理器，父对象为本实例
-    , m_recentProjects(this)   // 最近项目管理器，父对象为本实例
-    , m_fileDialogs(this)      // 文件对话框状态管理器，父对象为本实例
+    , _windowState(this)      // 窗口状态管理器，父对象为本实例
+    , _recentProjects(this)   // 最近项目管理器，父对象为本实例
+    , _fileDialogs(this)      // 文件对话框状态管理器，父对象为本实例
 {
 }

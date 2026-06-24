@@ -1732,6 +1732,35 @@ TEST(CodeStyleTest, ProjectConfigManagersUseLowerCamelPrivateMemberNames)
     EXPECT_FALSE(workflowSource.contains(QStringLiteral("m_workflow")));
 }
 
+TEST(CodeStyleTest, AppConfigManagerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/config/AppConfigManager.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/config/AppConfigManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("WindowStateManager _windowState;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("RecentProjectsManager _recentProjects;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("FileDialogStateManager _fileDialogs;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("return &_windowState;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("return &_recentProjects;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("return &_fileDialogs;")));
+    EXPECT_TRUE(source.contains(QStringLiteral(", _windowState(this)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(", _recentProjects(this)")));
+    EXPECT_TRUE(source.contains(QStringLiteral(", _fileDialogs(this)")));
+
+    const QStringList oldNames = {
+        QStringLiteral("m_windowState"),
+        QStringLiteral("m_recentProjects"),
+        QStringLiteral("m_fileDialogs"),
+    };
+    for (const QString &oldName : oldNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, WindowPanelUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/WindowPanel.h"));

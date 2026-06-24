@@ -37,21 +37,21 @@ public:
     explicit AppConfigManager(QObject *parent = nullptr);
 
     /** @brief 返回窗口几何/状态持久化管理器的指针。 */
-    WindowStateManager *windowState() { return &m_windowState; }
+    WindowStateManager *windowState() { return &_windowState; }
 
     /** @brief 返回最近打开项目列表管理器的指针。 */
-    RecentProjectsManager *recentProjects() { return &m_recentProjects; }
+    RecentProjectsManager *recentProjects() { return &_recentProjects; }
 
     /** @brief 返回文件对话框最近目录管理器的指针。 */
-    FileDialogStateManager *fileDialogs() { return &m_fileDialogs; }
+    FileDialogStateManager *fileDialogs() { return &_fileDialogs; }
 
 private:
     /** @brief 负责保存/恢复主窗口尺寸、位置和停靠布局。 */
-    WindowStateManager m_windowState;
+    WindowStateManager _windowState;
 
     /** @brief 维护最近打开的 .plascan 项目路径列表（上限 10 条）。 */
-    RecentProjectsManager m_recentProjects;
+    RecentProjectsManager _recentProjects;
 
     /** @brief 为各文件对话框记住上次浏览的目录，提升操作效率。 */
-    FileDialogStateManager m_fileDialogs;
+    FileDialogStateManager _fileDialogs;
 };
