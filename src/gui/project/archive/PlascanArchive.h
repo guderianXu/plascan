@@ -68,7 +68,7 @@ public:
                     QString *err = nullptr);
 
 private:
-    QString m_path;       // .plascan 文件的磁盘路径
-    bool m_valid{false};  // 是否成功打开（libzip 句柄有效）
-    void *m_impl{};       // 指向 zip_t* 的不透明指针，避免头文件暴露 libzip 类型
+    QString _path;       // .plascan 文件的磁盘路径
+    bool _valid{false};  // 是否成功打开（libzip 句柄有效）
+    void *_impl{};       // 指向 zip_t* 的不透明指针，避免头文件暴露 libzip 类型
 };
