@@ -102,14 +102,14 @@ private:
     void rotateIfNeededLocked();
     void writeToTerminalFallback(const Entry &entry) const;
 
-    mutable std::mutex m_mutex;
-    std::string m_logDir;
-    std::string m_logFilePath;
-    std::ofstream m_file;
-    std::uintmax_t m_maxSize{5u * 1024u * 1024u};
-    int m_maxFiles{3};
-    int m_nextSinkId{1};
-    std::unordered_map<int, SinkCallback> m_sinks;
+    mutable std::mutex _mutex;
+    std::string _logDir;
+    std::string _logFilePath;
+    std::ofstream _file;
+    std::uintmax_t _maxSize{5u * 1024u * 1024u};
+    int _maxFiles{3};
+    int _nextSinkId{1};
+    std::unordered_map<int, SinkCallback> _sinks;
 };
 
 namespace logger_detail

@@ -2213,6 +2213,49 @@ TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, LoggerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/common/log/Logger.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/common/log/Logger.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("mutable std::mutex _mutex;"),
+        QStringLiteral("std::string _logDir;"),
+        QStringLiteral("std::string _logFilePath;"),
+        QStringLiteral("std::ofstream _file;"),
+        QStringLiteral("std::uintmax_t _maxSize{5u * 1024u * 1024u};"),
+        QStringLiteral("int _maxFiles{3};"),
+        QStringLiteral("int _nextSinkId{1};"),
+        QStringLiteral("std::unordered_map<int, SinkCallback> _sinks;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_mutex"),
+        QStringLiteral("m_logDir"),
+        QStringLiteral("m_logFilePath"),
+        QStringLiteral("m_file"),
+        QStringLiteral("m_maxSize"),
+        QStringLiteral("m_maxFiles"),
+        QStringLiteral("m_nextSinkId"),
+        QStringLiteral("m_sinks"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));

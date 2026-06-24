@@ -31,9 +31,9 @@ Logger *Logger::instance()
 }
 
 Logger::Logger()
-    : m_logDir(defaultLogDirectory())
+    : _logDir(defaultLogDirectory())
 {
-    m_logFilePath = (std::filesystem::path(m_logDir) / "plascan.log").string();
+    _logFilePath = (std::filesystem::path(_logDir) / "plascan.log").string();
 }
 
 int Logger::registerSink(SinkCallback sink)
@@ -43,62 +43,62 @@ int Logger::registerSink(SinkCallback sink)
         return 0;
     }
 
-    std::lock_guard<std::mutex> lock(m_mutex);
-    const int sinkId = m_nextSinkId++;
-    m_sinks.emplace(sinkId, std::move(sink));
+    std::lock_guard<std::mutex> lock(_mutex);
+    const int sinkId = _nextSinkId++;
+    _sinks.emplace(sinkId, std::move(sink));
     return sinkId;
 }
 
 void Logger::unregisterSink(int sinkId)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_sinks.erase(sinkId);
+    std::lock_guard<std::mutex> lock(_mutex);
+    _sinks.erase(sinkId);
 }
 
 void Logger::setLogDirectory(const std::string &dir)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_logDir = dir.empty() ? defaultLogDirectory() : dir;
-    m_logFilePath = (std::filesystem::path(m_logDir) / "plascan.log").string();
-    if (m_file.is_open())
+    std::lock_guard<std::mutex> lock(_mutex);
+    _logDir = dir.empty() ? defaultLogDirectory() : dir;
+    _logFilePath = (std::filesystem::path(_logDir) / "plascan.log").string();
+    if (_file.is_open())
     {
-        m_file.close();
+        _file.close();
     }
     openLogFileLocked(false);
 }
 
 std::string Logger::logDirectory() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_logDir;
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _logDir;
 }
 
 std::string Logger::logFilePath() const
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    return m_logFilePath;
+    std::lock_guard<std::mutex> lock(_mutex);
+    return _logFilePath;
 }
 
 void Logger::clearLogFile()
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    if (m_file.is_open())
+    std::lock_guard<std::mutex> lock(_mutex);
+    if (_file.is_open())
     {
-        m_file.close();
+        _file.close();
     }
     openLogFileLocked(true);
 }
 
 void Logger::setMaxFileSize(std::uintmax_t bytes)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_maxSize = bytes;
+    std::lock_guard<std::mutex> lock(_mutex);
+    _maxSize = bytes;
 }
 
 void Logger::setMaxBackupFiles(int n)
 {
-    std::lock_guard<std::mutex> lock(m_mutex);
-    m_maxFiles = (n < 1) ? 1 : n;
+    std::lock_guard<std::mutex> lock(_mutex);
+    _maxFiles = (n < 1) ? 1 : n;
 }
 
 void Logger::log(Level level, std::string_view message)
@@ -112,16 +112,16 @@ void Logger::log(Level level, std::string_view message)
     std::vector<SinkCallback> sinks;
     bool terminalFallback = false;
     {
-        std::lock_guard<std::mutex> lock(m_mutex);
+        std::lock_guard<std::mutex> lock(_mutex);
         if (openLogFileLocked(false))
         {
-            m_file << entry.formatted;
-            m_file.flush();
+            _file << entry.formatted;
+            _file.flush();
             rotateIfNeededLocked();
         }
 
-        sinks.reserve(m_sinks.size());
-        for (const auto &item : m_sinks)
+        sinks.reserve(_sinks.size());
+        for (const auto &item : _sinks)
         {
             sinks.push_back(item.second);
         }
@@ -267,43 +267,43 @@ std::string Logger::formatLine(Level level,
 void Logger::ensureLogDirectoryLocked()
 {
     std::error_code errorCode;
-    std::filesystem::create_directories(m_logDir, errorCode);
+    std::filesystem::create_directories(_logDir, errorCode);
 }
 
 bool Logger::openLogFileLocked(bool truncate)
 {
-    if (m_logFilePath.empty())
+    if (_logFilePath.empty())
     {
-        m_logFilePath = (std::filesystem::path(m_logDir) / "plascan.log").string();
+        _logFilePath = (std::filesystem::path(_logDir) / "plascan.log").string();
     }
-    if (m_file.is_open())
+    if (_file.is_open())
     {
         return true;
     }
 
     ensureLogDirectoryLocked();
     const auto mode = truncate ? (std::ios::out | std::ios::trunc) : (std::ios::out | std::ios::app);
-    m_file.open(m_logFilePath, mode);
-    return m_file.is_open();
+    _file.open(_logFilePath, mode);
+    return _file.is_open();
 }
 
 void Logger::rotateIfNeededLocked()
 {
-    if (!m_file.is_open())
+    if (!_file.is_open())
     {
         return;
     }
 
     std::error_code errorCode;
-    const auto size = std::filesystem::file_size(m_logFilePath, errorCode);
-    if (errorCode || size < m_maxSize)
+    const auto size = std::filesystem::file_size(_logFilePath, errorCode);
+    if (errorCode || size < _maxSize)
     {
         return;
     }
 
-    m_file.close();
-    const std::filesystem::path basePath(m_logFilePath);
-    for (int index = m_maxFiles - 1; index >= 1; --index)
+    _file.close();
+    const std::filesystem::path basePath(_logFilePath);
+    for (int index = _maxFiles - 1; index >= 1; --index)
     {
         const std::filesystem::path fromPath = basePath.string() + "." + std::to_string(index);
         const std::filesystem::path toPath = basePath.string() + "." + std::to_string(index + 1);
