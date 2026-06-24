@@ -40,22 +40,22 @@ public:
     void setShowEndPoints(bool show); // 是否在连线两端画小圆点
     
     // 获取当前设置
-    QColor lineColor() const { return m_lineColor; }
-    qreal lineWidth() const { return m_lineWidth; }
-    qreal opacity() const { return m_opacity; }
-    int maxDisplayCount() const { return m_maxDisplayCount; }
-    bool showOnlyInliers() const { return m_showOnlyInliers; }
-    bool showEndPoints() const { return m_showEndPoints; }
+    QColor lineColor() const { return _lineColor; }
+    qreal lineWidth() const { return _lineWidth; }
+    qreal opacity() const { return _opacity; }
+    int maxDisplayCount() const { return _maxDisplayCount; }
+    bool showOnlyInliers() const { return _showOnlyInliers; }
+    bool showEndPoints() const { return _showEndPoints; }
     // 获取当前可见匹配（由外部组件查询以同步点的可见性）
     QVector<int> visibleMatches() const;
     // 五彩斑斓模式设置
-    void setRainbowMode(bool enabled) { m_rainbowMode = enabled; update(); }
-    bool rainbowMode() const { return m_rainbowMode; }
+    void setRainbowMode(bool enabled) { _rainbowMode = enabled; update(); }
+    bool rainbowMode() const { return _rainbowMode; }
     // 高亮/展示控制：仅显示指定索引（当启用时，覆盖层只绘制这些索引）
     void setHighlightedIndices(const QVector<int> &indices);
     void clearHighlightedIndices();
-    void setShowOnlyHighlighted(bool onlyHighlighted) { m_showOnlyHighlighted = onlyHighlighted; update(); }
-    bool showOnlyHighlighted() const { return m_showOnlyHighlighted; }
+    void setShowOnlyHighlighted(bool onlyHighlighted) { _showOnlyHighlighted = onlyHighlighted; update(); }
+    bool showOnlyHighlighted() const { return _showOnlyHighlighted; }
     
 public slots:
     // 当视图变化时，外部调用此方法触发重绘
@@ -77,29 +77,29 @@ private:
                         ImageViewWidget *view) const;
 
 private:
-    ImageViewWidget *m_leftView;
-    ImageViewWidget *m_rightView;
+    ImageViewWidget *_leftView;
+    ImageViewWidget *_rightView;
     
-    QVector<QPointF> m_ptsA;
-    QVector<QPointF> m_ptsB;
-    QVector<bool> m_inlierMask;
+    QVector<QPointF> _ptsA;
+    QVector<QPointF> _ptsB;
+    QVector<bool> _inlierMask;
     
     // 显示选项
-    QColor m_lineColor;
-    qreal m_lineWidth;
-    qreal m_opacity;
-    int m_maxDisplayCount;
-    bool m_showOnlyInliers;
-    bool m_showEndPoints;
-    bool m_rainbowMode; // 五彩斑斓模式：每条线颜色不同
+    QColor _lineColor;
+    qreal _lineWidth;
+    qreal _opacity;
+    int _maxDisplayCount;
+    bool _showOnlyInliers;
+    bool _showEndPoints;
+    bool _rainbowMode; // 五彩斑斓模式：每条线颜色不同
 
-    // 是否只绘制高亮索引（如果为true，则仅绘制 m_highlightIndices 中的索引）
-    bool m_showOnlyHighlighted;
-    QVector<int> m_highlightIndices;
+    // 是否只绘制高亮索引（如果为true，则仅绘制 _highlightIndices 中的索引）
+    bool _showOnlyHighlighted;
+    QVector<int> _highlightIndices;
 
 
 private:
     // 缓存：当前可见的匹配索引
-    mutable QVector<int> m_cachedVisibleMatches;
-    mutable bool m_cacheValid;
+    mutable QVector<int> _cachedVisibleMatches;
+    mutable bool _cacheValid;
 };

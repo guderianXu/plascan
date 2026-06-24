@@ -1886,6 +1886,61 @@ TEST(CodeStyleTest, DisparityHeatmapOverlayUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, MatchLineOverlayUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchLineOverlay.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchLineOverlay.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("ImageViewWidget *_leftView;"),
+        QStringLiteral("ImageViewWidget *_rightView;"),
+        QStringLiteral("QVector<QPointF> _ptsA;"),
+        QStringLiteral("QVector<QPointF> _ptsB;"),
+        QStringLiteral("QVector<bool> _inlierMask;"),
+        QStringLiteral("QColor _lineColor;"),
+        QStringLiteral("qreal _lineWidth;"),
+        QStringLiteral("qreal _opacity;"),
+        QStringLiteral("int _maxDisplayCount;"),
+        QStringLiteral("bool _showOnlyInliers;"),
+        QStringLiteral("bool _showEndPoints;"),
+        QStringLiteral("bool _rainbowMode;"),
+        QStringLiteral("bool _showOnlyHighlighted;"),
+        QStringLiteral("QVector<int> _highlightIndices;"),
+        QStringLiteral("mutable QVector<int> _cachedVisibleMatches;"),
+        QStringLiteral("mutable bool _cacheValid;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_leftView"),
+        QStringLiteral("m_rightView"),
+        QStringLiteral("m_ptsA"),
+        QStringLiteral("m_ptsB"),
+        QStringLiteral("m_inlierMask"),
+        QStringLiteral("m_lineColor"),
+        QStringLiteral("m_lineWidth"),
+        QStringLiteral("m_opacity"),
+        QStringLiteral("m_maxDisplayCount"),
+        QStringLiteral("m_showOnlyInliers"),
+        QStringLiteral("m_showEndPoints"),
+        QStringLiteral("m_rainbowMode"),
+        QStringLiteral("m_showOnlyHighlighted"),
+        QStringLiteral("m_highlightIndices"),
+        QStringLiteral("m_cachedVisibleMatches"),
+        QStringLiteral("m_cacheValid"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));

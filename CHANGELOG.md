@@ -58,6 +58,7 @@
 - `ReferencePanelWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛参考面板组件命名规范。
 - `TaskStatusWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持状态栏进度、取消请求和取消中状态行为不变。
 - `DisparityHeatmapOverlay` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持密集匹配视差热力图透明 mask 和无效像素显示行为不变。
+- `MatchLineOverlay` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持匹配查看器连线、高亮、内点过滤和可见匹配缓存行为不变。
 - `ProjectDashboardWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持概览页摘要、任务、参考数据、质量指标和报告表格行为不变。
 - `ThreeDReconstructionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
 - `Camera` 核心类内部私有成员从 `_fu/_R/_C` 等短名迁移到 `_focalX/_cameraToWorldRotation/_cameraCenter` 等 `_lowerCamelCase` 描述性命名，公开 accessor 和 Tsai 文件字段保持兼容。
@@ -122,6 +123,9 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.DisparityHeatmapOverlayUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `DisparityHeatmapOverlay` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DisparityHeatmapOverlayTest|CodeStyleTest.DisparityHeatmapOverlayUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，2/2，验证视差热力图透明 mask 行为保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `DisparityHeatmapOverlay.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MatchLineOverlayUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `MatchLineOverlay` 私有成员迁移到 `_lowerCamelCase`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MatchLineOverlay|MatchViewer(SidecarOrder|EmptyMatch|Visualization)|CodeStyleTest.MatchLineOverlayUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，5/5，验证匹配连线 overlay 命名迁移后匹配查看器 sidecar 顺序、空匹配和坐标显示回归保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MatchLineOverlay.cpp`、`DualImageViewer.cpp`、`MatchViewerDialog.cpp`、`ForwardIntersectionCheckDialog.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `ProjectDashboardWidget` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "ProjectDashboard|CodeStyleTest.ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，11/11，验证概览页命名迁移后 dashboard 汇总、表格和主窗口同步回归保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectDashboardWidget.cpp` 并链接 GUI。
