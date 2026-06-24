@@ -42,13 +42,13 @@ public:
      * @brief 获取完整的底层 QJsonObject 数据（包含 "ui" 和 "workflow" 段）。
      * @return 当前配置的 JSON 对象副本。
      */
-    QJsonObject data() const { return m_config; }
+    QJsonObject data() const { return _config; }
 
     /**
      * @brief 替换全部底层配置数据。
      * @param data 新的 JSON 配置对象，应包含 "ui" 和 "workflow" 两个顶层键。
      */
-    void setData(const QJsonObject &data) { m_config = data; }
+    void setData(const QJsonObject &data) { _config = data; }
 
     /**
      * @brief 生成包含所有字段默认值的标准配置对象。
@@ -100,5 +100,5 @@ public:
 
 private:
     /** @brief 存储完整项目配置的底层 JSON 对象（包含 "ui" 和 "workflow" 段）。 */
-    QJsonObject m_config;
+    QJsonObject _config;
 };

@@ -52,14 +52,14 @@ QJsonObject ProjectConfigManager::mergeWithDefaults(const QJsonObject &input)
  */
 QJsonObject ProjectConfigManager::uiSettings() const
 {
-    return m_config.value("ui").toObject();
+    return _config.value("ui").toObject();
 }
 
 /**
  * @brief 部分更新 "ui" 段配置（深度合并补丁）。
  *
  * 通过临时 ProjectUiConfigManager 实例操作 "ui" 子对象，
- * 调用 applyPatch 深度合并补丁后写回 m_config，
+ * 调用 applyPatch 深度合并补丁后写回 _config，
  * 保证未改动字段仍保持原值。
  *
  * @param settings 仅含需要修改字段的 JSON 补丁对象。
@@ -68,11 +68,11 @@ void ProjectConfigManager::setUiSettings(const QJsonObject &settings)
 {
     // 临时创建子管理器，加载当前 "ui" 段数据
     ProjectUiConfigManager uiManager;
-    uiManager.setData(m_config.value("ui").toObject());
+    uiManager.setData(_config.value("ui").toObject());
     // 深度合并补丁（仅改动 settings 中指定的字段）
     uiManager.applyPatch(settings);
     // 将更新后的 "ui" 写回完整配置
-    m_config["ui"] = uiManager.data();
+    _config["ui"] = uiManager.data();
 }
 
 /**
@@ -85,7 +85,7 @@ QJsonObject ProjectConfigManager::workflowSettings(const QString &step) const
 {
     // 临时创建子管理器，加载 "workflow" 段后查询指定步骤
     ProjectWorkflowConfigManager workflowManager;
-    workflowManager.setData(m_config.value("workflow").toObject());
+    workflowManager.setData(_config.value("workflow").toObject());
     return workflowManager.settings(step);
 }
 
@@ -99,8 +99,8 @@ void ProjectConfigManager::setWorkflowSettings(const QString &step, const QJsonO
 {
     // 临时创建子管理器，加载 "workflow" 段后更新指定步骤
     ProjectWorkflowConfigManager workflowManager;
-    workflowManager.setData(m_config.value("workflow").toObject());
+    workflowManager.setData(_config.value("workflow").toObject());
     workflowManager.setSettings(step, settings);
     // 将更新后的 "workflow" 写回完整配置
-    m_config["workflow"] = workflowManager.data();
+    _config["workflow"] = workflowManager.data();
 }

@@ -1696,6 +1696,42 @@ TEST(CodeStyleTest, SettingsFilesUseLowerCamelPrivateMemberNames)
     EXPECT_FALSE(dialogStoreSource.contains(QStringLiteral("m_dialogKey")));
 }
 
+TEST(CodeStyleTest, ProjectConfigManagersUseLowerCamelPrivateMemberNames)
+{
+    const QString configHeader = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectConfigManager.h"));
+    const QString configSource = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectConfigManager.cpp"));
+    const QString uiHeader = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.h"));
+    const QString uiSource = readProjectSourceFile(QStringLiteral("src/gui/config/ProjectUiConfigManager.cpp"));
+    const QString workflowHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/config/ProjectWorkflowConfigManager.h"));
+    const QString workflowSource =
+        readProjectSourceFile(QStringLiteral("src/gui/config/ProjectWorkflowConfigManager.cpp"));
+    ASSERT_FALSE(configHeader.isEmpty());
+    ASSERT_FALSE(configSource.isEmpty());
+    ASSERT_FALSE(uiHeader.isEmpty());
+    ASSERT_FALSE(uiSource.isEmpty());
+    ASSERT_FALSE(workflowHeader.isEmpty());
+    ASSERT_FALSE(workflowSource.isEmpty());
+
+    EXPECT_TRUE(configHeader.contains(QStringLiteral("QJsonObject _config;")));
+    EXPECT_TRUE(configHeader.contains(QStringLiteral("return _config;")));
+    EXPECT_TRUE(configHeader.contains(QStringLiteral("_config = data;")));
+    EXPECT_FALSE(configHeader.contains(QStringLiteral("m_config")));
+    EXPECT_FALSE(configSource.contains(QStringLiteral("m_config")));
+
+    EXPECT_TRUE(uiHeader.contains(QStringLiteral("QJsonObject _ui;")));
+    EXPECT_TRUE(uiHeader.contains(QStringLiteral("_ui = data;")));
+    EXPECT_TRUE(uiHeader.contains(QStringLiteral("return _ui;")));
+    EXPECT_FALSE(uiHeader.contains(QStringLiteral("m_ui")));
+    EXPECT_FALSE(uiSource.contains(QStringLiteral("m_ui")));
+
+    EXPECT_TRUE(workflowHeader.contains(QStringLiteral("QJsonObject _workflow;")));
+    EXPECT_TRUE(workflowHeader.contains(QStringLiteral("_workflow = data;")));
+    EXPECT_TRUE(workflowHeader.contains(QStringLiteral("return _workflow;")));
+    EXPECT_FALSE(workflowHeader.contains(QStringLiteral("m_workflow")));
+    EXPECT_FALSE(workflowSource.contains(QStringLiteral("m_workflow")));
+}
+
 TEST(CodeStyleTest, WindowPanelUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/WindowPanel.h"));

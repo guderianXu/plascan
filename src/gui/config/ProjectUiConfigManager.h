@@ -43,13 +43,13 @@ public:
      * @brief 设置（替换）当前管理的 UI 配置数据。
      * @param data 通常来自 ProjectConfigManager 中 "ui" 键对应的 JSON 子对象。
      */
-    void setData(const QJsonObject &data) { m_ui = data; }
+    void setData(const QJsonObject &data) { _ui = data; }
 
     /**
      * @brief 获取当前 UI 配置数据。
      * @return "ui" 段的 QJsonObject 副本。
      */
-    QJsonObject data() const { return m_ui; }
+    QJsonObject data() const { return _ui; }
 
     /**
      * @brief 将 partial 补丁深度合并到当前配置中。
@@ -63,5 +63,5 @@ public:
 
 private:
     /** @brief 存储 "ui" 段 JSON 数据的内部成员。 */
-    QJsonObject m_ui;
+    QJsonObject _ui;
 };

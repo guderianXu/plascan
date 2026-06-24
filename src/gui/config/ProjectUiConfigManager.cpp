@@ -85,5 +85,5 @@ QJsonObject ProjectUiConfigManager::defaultUiSettings()
  */
 void ProjectUiConfigManager::applyPatch(const QJsonObject &partial)
 {
-    m_ui = JsonMergeUtil::deepMerge(m_ui, partial);
+    _ui = JsonMergeUtil::deepMerge(_ui, partial);
 }

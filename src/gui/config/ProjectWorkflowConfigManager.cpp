@@ -35,7 +35,7 @@ QJsonObject ProjectWorkflowConfigManager::defaultWorkflowSettings()
  */
 QJsonObject ProjectWorkflowConfigManager::settings(const QString &step) const
 {
-    return m_workflow.value(step).toObject();
+    return _workflow.value(step).toObject();
 }
 
 /**
@@ -44,7 +44,7 @@ QJsonObject ProjectWorkflowConfigManager::settings(const QString &step) const
  * 实现细节：
  * 1. 取出该步骤的当前配置作为基准；
  * 2. 将 settings 补丁深度合并到基准中，仅覆盖指定字段；
- * 3. 将合并结果写回 m_workflow 对应键。
+ * 3. 将合并结果写回 _workflow 对应键。
  *
  * @param step     步骤名称。
  * @param settings 仅含需要修改字段的 JSON 补丁对象。
@@ -52,6 +52,6 @@ QJsonObject ProjectWorkflowConfigManager::settings(const QString &step) const
 void ProjectWorkflowConfigManager::setSettings(const QString &step, const QJsonObject &settings)
 {
     // 以当前步骤配置为基准进行深度合并，保留未被补丁覆盖的原有字段
-    QJsonObject current = m_workflow.value(step).toObject();
-    m_workflow[step] = JsonMergeUtil::deepMerge(current, settings);
+    QJsonObject current = _workflow.value(step).toObject();
+    _workflow[step] = JsonMergeUtil::deepMerge(current, settings);
 }

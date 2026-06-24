@@ -43,13 +43,13 @@ public:
      * @brief 设置（替换）当前管理的工作流配置数据。
      * @param data 通常来自 ProjectConfigManager 中 "workflow" 键对应的 JSON 子对象。
      */
-    void setData(const QJsonObject &data) { m_workflow = data; }
+    void setData(const QJsonObject &data) { _workflow = data; }
 
     /**
      * @brief 获取当前工作流配置数据。
      * @return "workflow" 段的 QJsonObject 副本。
      */
-    QJsonObject data() const { return m_workflow; }
+    QJsonObject data() const { return _workflow; }
 
     /**
      * @brief 获取指定步骤的参数配置。
@@ -71,5 +71,5 @@ public:
 
 private:
     /** @brief 存储 "workflow" 段 JSON 数据的内部成员。 */
-    QJsonObject m_workflow;
+    QJsonObject _workflow;
 };
