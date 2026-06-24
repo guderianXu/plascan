@@ -100,6 +100,7 @@
 - `GroundBackProjector::DemSurface` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 DEM 点云加载、KD 树高程查询和影像覆盖反投影行为不变。
 - `SparseCloudValidator` 私有成员从 `m_opts` 迁移到 `_options`，保持稀疏点云 PLY/XYZ 质量检查、有限坐标统计和最小点数判定行为不变。
 - `MvsWorkspaceManifest` 私有成员从 `m_configHash/m_frames` 迁移到 `_configHash/_frames`，保持深度图 manifest 读写、完成帧自然排序和可复用缓存判定行为不变。
+- `TerrainProductManifest` 私有成员从 `m_records` 迁移到 `_records`，保持 DEM/DOM 产品 manifest 读写、质量栅格路径保留和自然排序行为不变。
 - `MatchPairSelectorDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛匹配对选择器命名规范。
 - `FeatureMatchingDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛特征匹配参数对话框命名规范。
 - `FeatureExtractionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛特征提取参数对话框命名规范。
@@ -132,6 +133,7 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SparseCloudValidatorUsesLowerCamelPrivateMemberNames|MvsPipeline" --output-on-failure` 通过，21/21，验证 `SparseCloudValidator` 命名迁移后 MVS pipeline 基础链路保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新链接依赖 `mvs` 的 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsWorkspaceManifest|CodeStyleTest.MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，8/8，验证深度图 manifest 读写、排序、缓存复用和命名迁移断言保持可用。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainProductManifest|CodeStyleTest.TerrainProductManifestUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，4/4，验证 DEM/DOM 产品 manifest 读写、排序和命名迁移断言保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具测试。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|CanvasWidgetDoesNotIncludeTorchExtractorHeaders|LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader" --output-on-failure` 通过，3/3。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CanvasWidget.cpp`、`LayerFeatureLoader.cpp`、`LayerRenderer.cpp` 并链接 GUI。

@@ -142,12 +142,12 @@ bool TerrainProductManifest::load(const QString &path, QString *errorMsg)
     }
 
     const QJsonArray records = document.object().value(QStringLiteral("products")).toArray();
-    m_records.reserve(records.size());
+    _records.reserve(records.size());
     for (const QJsonValue &value : records)
     {
         if (value.isObject())
         {
-            m_records.push_back(TerrainProductRecord::fromJson(value.toObject()));
+            _records.push_back(TerrainProductRecord::fromJson(value.toObject()));
         }
     }
     return true;
@@ -189,17 +189,17 @@ bool TerrainProductManifest::saveAtomic(const QString &path, QString *errorMsg) 
 
 void TerrainProductManifest::clear()
 {
-    m_records.clear();
+    _records.clear();
 }
 
 const QVector<TerrainProductRecord> &TerrainProductManifest::records() const
 {
-    return m_records;
+    return _records;
 }
 
 QVector<TerrainProductRecord> TerrainProductManifest::recordsSortedByPrimaryPath() const
 {
-    QVector<TerrainProductRecord> result = m_records;
+    QVector<TerrainProductRecord> result = _records;
     QCollator collator;
     collator.setNumericMode(true);
     collator.setCaseSensitivity(Qt::CaseInsensitive);
@@ -218,11 +218,11 @@ void TerrainProductManifest::upsertRecord(const TerrainProductRecord &record)
     const int index = findRecordIndex(record.productId);
     if (index >= 0)
     {
-        m_records[index] = record;
+        _records[index] = record;
     }
     else
     {
-        m_records.push_back(record);
+        _records.push_back(record);
     }
 }
 
@@ -232,7 +232,7 @@ QJsonObject TerrainProductManifest::toJson() const
     root.insert(QStringLiteral("schema"), QStringLiteral("plascan.terrain.products.v1"));
 
     QJsonArray records;
-    for (const TerrainProductRecord &record : m_records)
+    for (const TerrainProductRecord &record : _records)
     {
         records.push_back(record.toJson());
     }
@@ -246,9 +246,9 @@ int TerrainProductManifest::findRecordIndex(const QString &productId) const
     {
         return -1;
     }
-    for (int i = 0; i < m_records.size(); ++i)
+    for (int i = 0; i < _records.size(); ++i)
     {
-        if (m_records[i].productId == productId)
+        if (_records[i].productId == productId)
         {
             return i;
         }

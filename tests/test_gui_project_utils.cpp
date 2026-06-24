@@ -2827,6 +2827,18 @@ TEST(CodeStyleTest, MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_frames")));
 }
 
+TEST(CodeStyleTest, TerrainProductManifestUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/terrain/TerrainProductManifest.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/terrain/TerrainProductManifest.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QVector<TerrainProductRecord> _records;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_records")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_records")));
+}
+
 TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

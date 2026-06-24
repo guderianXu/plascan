@@ -50,7 +50,7 @@ public:
 private:
     int findRecordIndex(const QString &productId) const;
 
-    QVector<TerrainProductRecord> m_records;
+    QVector<TerrainProductRecord> _records;
 };
 
 } // namespace xjw
