@@ -63,6 +63,7 @@
 - `DualImageViewer` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 Qt Designer `ui.m_leftView/ui.m_rightView/ui.m_splitter` 对象名不变，继续收敛匹配查看器双图容器命名规范。
 - `WorkspaceCenterWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 Qt Designer 子对象名不变，继续收敛中央工作区视图切换组件命名规范。
 - `LogPanel` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 Qt Designer `ui.m_*` 对象名不变，继续收敛日志面板命名规范。
+- `DataTreeWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 Qt Designer `ui.m_view` 对象名不变，继续收敛工作区目录树命名规范。
 - `ProjectDashboardWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持概览页摘要、任务、参考数据、质量指标和报告表格行为不变。
 - `ThreeDReconstructionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
 - `Camera` 核心类内部私有成员从 `_fu/_R/_C` 等短名迁移到 `_focalX/_cameraToWorldRotation/_cameraCenter` 等 `_lowerCamelCase` 描述性命名，公开 accessor 和 Tsai 文件字段保持兼容。
@@ -141,6 +142,9 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.LogPanelUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `LogPanel` 私有成员迁移到 `_lowerCamelCase` 且保留 Qt Designer `ui.m_*` 对象名。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "LogPanel|CodeStyleTest.LogPanelUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，1/1，验证日志面板命名迁移回归保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `LogPanel.cpp`、`MainWindow.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.DataTreeWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `DataTreeWidget` 私有成员迁移到 `_lowerCamelCase` 且保留 Qt Designer `ui.m_view`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "DataTreeWidget|CodeStyleTest.DataTreeWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，9/9，验证目录树命名迁移后临时模型、结果刷新、文件名排序、路径解析和激活行为保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `DataTreeWidget.cpp`、`MainWindow.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `ProjectDashboardWidget` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "ProjectDashboard|CodeStyleTest.ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，11/11，验证概览页命名迁移后 dashboard 汇总、表格和主窗口同步回归保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectDashboardWidget.cpp` 并链接 GUI。

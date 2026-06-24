@@ -215,36 +215,36 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     Ui::DataTreeWidget ui;
     ui.setupUi(this);
 
-    m_view = ui.m_view;
-    m_model = new QStandardItemModel(this);
+    _view = ui.m_view;
+    _model = new QStandardItemModel(this);
     // 左侧列表显示策略：
     // - 只展示“名称”一列，保持列表简洁（用户不希望直接看到路径/存储）。
     // - 但为了右键菜单“属性”弹窗仍能显示完整信息，这里仍保留 path/storage 作为隐藏列。
-    m_model->setHorizontalHeaderLabels({QObject::tr("名称"), QObject::tr("路径"), QObject::tr("存储")});
+    _model->setHorizontalHeaderLabels({QObject::tr("名称"), QObject::tr("路径"), QObject::tr("存储")});
 
-    m_view->setModel(m_model);
+    _view->setModel(_model);
     // 隐藏“路径/存储”两列
-    m_view->setColumnHidden(1, true);
-    m_view->setColumnHidden(2, true);
+    _view->setColumnHidden(1, true);
+    _view->setColumnHidden(2, true);
     // 禁用双击进入编辑（用户要求：双击不应改名）
-    m_view->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _view->setEditTriggers(QAbstractItemView::NoEditTriggers);
     // 允许使用 Ctrl / Shift 多选
-    m_view->setSelectionMode(QAbstractItemView::ExtendedSelection);
-    connect(m_view, &QTreeView::customContextMenuRequested, this, &DataTreeWidget::onContextMenuRequested);
+    _view->setSelectionMode(QAbstractItemView::ExtendedSelection);
+    connect(_view, &QTreeView::customContextMenuRequested, this, &DataTreeWidget::onContextMenuRequested);
 
     // 双击或回车激活资源时，通知上层切换中央显示。
     // 单击只负责选择，避免浏览资源树时同步加载大图造成界面卡顿。
-    connect(m_view, &QTreeView::activated, this, [this](const QModelIndex &idx) {
+    connect(_view, &QTreeView::activated, this, [this](const QModelIndex &idx) {
         if (!idx.isValid()) return;
         // Use the index to access the hidden 'path' column in the same row/parent
         QModelIndex pathIdx = idx.sibling(idx.row(), 1);
         if (!pathIdx.isValid()) return;
-        QString path = m_model->data(pathIdx).toString();
+        QString path = _model->data(pathIdx).toString();
         QModelIndex nameIdx = idx.sibling(idx.row(), 0);
         QModelIndex parentNameIdx = nameIdx.parent().isValid() ? nameIdx.parent() : QModelIndex();
         QString section;
         if (parentNameIdx.isValid()) {
-            section = m_model->data(parentNameIdx).toString().section(' ', 0, 0);
+            section = _model->data(parentNameIdx).toString().section(' ', 0, 0);
         }
         if (!path.trimmed().isEmpty())
         {
@@ -267,9 +267,9 @@ DataTreeWidget::~DataTreeWidget()
 
 void DataTreeWidget::setProjectPath(const QString &plascanPath)
 {
-    m_currentPlascanPath = plascanPath;
-    m_lastMeta = QJsonObject();
-    m_model->removeRows(0, m_model->rowCount());
+    _currentPlascanPath = plascanPath;
+    _lastMeta = QJsonObject();
+    _model->removeRows(0, _model->rowCount());
 }
 
 void DataTreeWidget::loadFromArchive(const QString &plascanPath)
@@ -307,7 +307,7 @@ void DataTreeWidget::loadFromJson(const QJsonObject &meta)
             return;
         }
 
-        normalized = normalizeMeta(m_lastMeta);
+        normalized = normalizeMeta(_lastMeta);
         if (normalized.isEmpty())
         {
             normalized.insert(QStringLiteral("images"), QJsonArray());
@@ -322,7 +322,7 @@ void DataTreeWidget::loadFromJson(const QJsonObject &meta)
     }
 
     // 无论 images 是否为空，只要 meta 明确提供了 images，我们就清空并重建模型（允许清空列表）。
-    m_lastMeta = normalized;
+    _lastMeta = normalized;
     populateFromMeta(normalized);
 }
 
@@ -334,35 +334,35 @@ void DataTreeWidget::addTransientModel(const QString &modelPath)
         return;
     }
 
-    if (!m_transientModels.contains(cleanPath))
+    if (!_transientModels.contains(cleanPath))
     {
-        m_transientModels.append(cleanPath);
+        _transientModels.append(cleanPath);
     }
 
-    if (m_lastMeta.isEmpty())
+    if (_lastMeta.isEmpty())
     {
         QJsonObject emptyProject;
         emptyProject.insert(QStringLiteral("images"), QJsonArray());
-        m_lastMeta = emptyProject;
+        _lastMeta = emptyProject;
     }
-    populateFromMeta(m_lastMeta);
+    populateFromMeta(_lastMeta);
 }
 
 void DataTreeWidget::clearTransientResources()
 {
-    if (m_transientModels.isEmpty())
+    if (_transientModels.isEmpty())
     {
         return;
     }
 
-    m_transientModels.clear();
-    if (!m_lastMeta.isEmpty())
+    _transientModels.clear();
+    if (!_lastMeta.isEmpty())
     {
-        populateFromMeta(m_lastMeta);
+        populateFromMeta(_lastMeta);
     }
     else
     {
-        m_model->removeRows(0, m_model->rowCount());
+        _model->removeRows(0, _model->rowCount());
     }
 }
 
@@ -400,7 +400,7 @@ QStandardItem *DataTreeWidget::createSection(const QString &title, int count)
     pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
 
-    m_model->appendRow({nameItem, pathItem, storageItem});
+    _model->appendRow({nameItem, pathItem, storageItem});
     return nameItem;
 }
 
@@ -483,12 +483,12 @@ QString DataTreeWidget::resolveResourcePath(const QString &resourcePath) const
         return QString();
     }
 
-    if (QFileInfo(trimmedPath).isAbsolute() || m_currentPlascanPath.trimmed().isEmpty())
+    if (QFileInfo(trimmedPath).isAbsolute() || _currentPlascanPath.trimmed().isEmpty())
     {
         return QDir::cleanPath(trimmedPath);
     }
 
-    const QString projectRoot = QFileInfo(m_currentPlascanPath).absolutePath();
+    const QString projectRoot = QFileInfo(_currentPlascanPath).absolutePath();
     return QDir::cleanPath(QDir(projectRoot).filePath(trimmedPath));
 }
 
@@ -535,21 +535,21 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     }
 
     const int denseCount = denseResults.size();
-    const int modelCount = modelResults.size() + m_transientModels.size();
+    const int modelCount = modelResults.size() + _transientModels.size();
 
     // ── 保存展开状态 ──────────────────────────────────────────────────────
     QSet<QString> expandedSections;
-    for (int i = 0; i < m_model->rowCount(); ++i) {
-        QStandardItem *item = m_model->item(i, 0);
+    for (int i = 0; i < _model->rowCount(); ++i) {
+        QStandardItem *item = _model->item(i, 0);
         if (item) {
-            QModelIndex idx = m_model->indexFromItem(item);
-            if (m_view->isExpanded(idx)) {
+            QModelIndex idx = _model->indexFromItem(item);
+            if (_view->isExpanded(idx)) {
                 expandedSections.insert(item->text().section(' ', 0, 0));
             }
         }
     }
     
-    m_model->removeRows(0, m_model->rowCount());
+    _model->removeRows(0, _model->rowCount());
 
     // "连接点" 括号里显示稀疏点总数（若有AT结果），否则显示文件数
     const int matchesCount = (totalSparsePoints >= 0) ? totalSparsePoints : atResults.size();
@@ -666,7 +666,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         appendItemRow(model3d, name, modelPath, QStringLiteral("generated"));
     }
 
-    for (const QString &modelPath : m_transientModels) {
+    for (const QString &modelPath : _transientModels) {
         if (modelPath.trimmed().isEmpty()) continue;
         QString name = QFileInfo(modelPath).fileName();
         if (name.isEmpty()) name = modelPath;
@@ -806,22 +806,22 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         appendItemRow(references, name, path, storage);
     }
 
-    for (int i = 0; i < m_model->rowCount(); ++i)
+    for (int i = 0; i < _model->rowCount(); ++i)
     {
-        sortSectionChildrenByFileName(m_model->item(i, 0));
+        sortSectionChildrenByFileName(_model->item(i, 0));
     }
     
     // ── 恢复展开状态 ──────────────────────────────────────────────────────
     // 仅恢复用户先前显式展开过的分组，不在数据更新时自动展开任何默认分组。
     // 之前这里对第一个分组（通常是“照片”）做了强制展开，导致新增深度图/点云等
     // 元数据写回后，工作区会突然自动展开“照片”树，打断用户当前浏览位置。
-    for (int i = 0; i < m_model->rowCount(); ++i) {
-        QStandardItem *item = m_model->item(i, 0);
+    for (int i = 0; i < _model->rowCount(); ++i) {
+        QStandardItem *item = _model->item(i, 0);
         if (item) {
             QString sectionName = item->text().section(' ', 0, 0);
             if (expandedSections.contains(sectionName)) {
-                QModelIndex idx = m_model->indexFromItem(item);
-                m_view->expand(idx);
+                QModelIndex idx = _model->indexFromItem(item);
+                _view->expand(idx);
             }
         }
     }
@@ -829,11 +829,11 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
 
 void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
 {
-    QModelIndex idx = m_view->indexAt(pos);
+    QModelIndex idx = _view->indexAt(pos);
     if (!idx.isValid()) return;
 
     // 收集当前选中的所有条目（支持树状选择），如果没有多选，则只包含右键所在项
-    QModelIndexList sel = m_view->selectionModel()->selectedIndexes();
+    QModelIndexList sel = _view->selectionModel()->selectedIndexes();
     QSet<QModelIndex> uniqueRows;
     for (const QModelIndex &si : sel) {
         if (si.isValid() && si.column() == 0) uniqueRows.insert(si);
@@ -853,10 +853,10 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
         }
         QModelIndex pathIdx = i.sibling(i.row(), 1);
         if (pathIdx.isValid()) {
-            paths << resolveResourcePath(m_model->data(pathIdx).toString());
+            paths << resolveResourcePath(_model->data(pathIdx).toString());
             rows.append(i);
 
-            const QString rowSection = m_model->data(i.parent()).toString().section(' ', 0, 0);
+            const QString rowSection = _model->data(i.parent()).toString().section(' ', 0, 0);
             if (sectionName.isEmpty()) {
                 sectionName = rowSection;
             } else if (sectionName != rowSection) {
@@ -891,7 +891,7 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
         sideOpenAct = menu.addAction(tr("在侧边打开"));
     }
 
-    QAction *act = menu.exec(m_view->viewport()->mapToGlobal(pos));
+    QAction *act = menu.exec(_view->viewport()->mapToGlobal(pos));
     if (!act) return;
     if (act == openAct)
     {
@@ -969,7 +969,7 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
         QString storage;
         if (!rows.isEmpty()) {
             QModelIndex sidx = rows.first().sibling(rows.first().row(), 2);
-            if (sidx.isValid()) storage = m_model->data(sidx).toString();
+            if (sidx.isValid()) storage = _model->data(sidx).toString();
         }
         if (!storage.isEmpty())
         {

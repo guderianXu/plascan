@@ -1,4 +1,4 @@
-#pragma once
+﻿#pragma once
 
 #include <QWidget>
 #include <QJsonObject>
@@ -64,9 +64,9 @@ private:
     void sortSectionChildrenByFileName(QStandardItem *section);
     QString resolveResourcePath(const QString &resourcePath) const;
 
-    QTreeView *m_view{};
-    QStandardItemModel *m_model{};
-    QString m_currentPlascanPath{};
-    QJsonObject m_lastMeta{};
-    QStringList m_transientModels{};
+    QTreeView *_view{};
+    QStandardItemModel *_model{};
+    QString _currentPlascanPath{};
+    QJsonObject _lastMeta{};
+    QStringList _transientModels{};
 };

@@ -2132,6 +2132,44 @@ TEST(CodeStyleTest, LogPanelUsesLowerCamelPrivateMemberNames)
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_text"))) << "Qt Designer object name must stay stable";
 }
 
+TEST(CodeStyleTest, DataTreeWidgetUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DataTreeWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QTreeView *_view{};"),
+        QStringLiteral("QStandardItemModel *_model{};"),
+        QStringLiteral("QString _currentPlascanPath{};"),
+        QStringLiteral("QJsonObject _lastMeta{};"),
+        QStringLiteral("QStringList _transientModels{};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_view"),
+        QStringLiteral("m_model"),
+        QStringLiteral("m_currentPlascanPath"),
+        QStringLiteral("m_lastMeta"),
+        QStringLiteral("m_transientModels"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_view"))) << "Qt Designer object name must stay stable";
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));
