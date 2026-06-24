@@ -1983,6 +1983,56 @@ TEST(CodeStyleTest, ImageViewWidgetUsesLowerCamelPrivateMemberNames)
     EXPECT_TRUE(source.contains(QStringLiteral("ui.m_view"))) << "Qt Designer object name must stay stable";
 }
 
+TEST(CodeStyleTest, DualImageViewerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QPointer<ImageViewWidget> _leftView;"),
+        QStringLiteral("QPointer<ImageViewWidget> _rightView;"),
+        QStringLiteral("QPointer<MatchLineOverlay> _overlay;"),
+        QStringLiteral("QPointer<DisparityHeatmapOverlay> _disparityOverlay;"),
+        QStringLiteral("int _overlayMode = 0;"),
+        QStringLiteral("bool _syncEnabled;"),
+        QStringLiteral("bool _syncing;"),
+        QStringLiteral("QVector<QPointF> _matchPtsA;"),
+        QStringLiteral("QVector<QPointF> _matchPtsB;"),
+        QStringLiteral("QTimer *_overlayUpdateTimer;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_leftView"),
+        QStringLiteral("m_rightView"),
+        QStringLiteral("m_overlay"),
+        QStringLiteral("m_disparityOverlay"),
+        QStringLiteral("m_overlayMode"),
+        QStringLiteral("m_syncEnabled"),
+        QStringLiteral("m_syncing"),
+        QStringLiteral("m_matchPtsA"),
+        QStringLiteral("m_matchPtsB"),
+        QStringLiteral("m_overlayUpdateTimer"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_leftView"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_rightView"))) << "Qt Designer object name must stay stable";
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_splitter"))) << "Qt Designer object name must stay stable";
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));

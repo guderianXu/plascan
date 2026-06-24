@@ -36,7 +36,7 @@ public:
     
     // 同步模式控制
     void setSyncMode(bool enabled);
-    bool syncMode() const { return m_syncEnabled; }
+    bool syncMode() const { return _syncEnabled; }
     
     // 获取子组件
     ImageViewWidget* leftView() const;
@@ -44,7 +44,7 @@ public:
     MatchLineOverlay* overlay() const;
     DisparityHeatmapOverlay* disparityOverlay() const;
     void setOverlayMode(int mode); // 0=sparse, 1=dense
-    int overlayMode() const { return m_overlayMode; }
+    int overlayMode() const { return _overlayMode; }
 
     // 快捷操作
     void fitBothViews();
@@ -95,18 +95,18 @@ private:
                         QVector<QPointF> &ptsB);
 
 private:
-    QPointer<ImageViewWidget> m_leftView;
-    QPointer<ImageViewWidget> m_rightView;
-    QPointer<MatchLineOverlay> m_overlay;
-    QPointer<DisparityHeatmapOverlay> m_disparityOverlay;
-    int m_overlayMode = 0;
+    QPointer<ImageViewWidget> _leftView;
+    QPointer<ImageViewWidget> _rightView;
+    QPointer<MatchLineOverlay> _overlay;
+    QPointer<DisparityHeatmapOverlay> _disparityOverlay;
+    int _overlayMode = 0;
     
-    bool m_syncEnabled;
-    bool m_syncing; // 防止递归同步
+    bool _syncEnabled;
+    bool _syncing; // 防止递归同步
     
-    QVector<QPointF> m_matchPtsA;
-    QVector<QPointF> m_matchPtsB;
+    QVector<QPointF> _matchPtsA;
+    QVector<QPointF> _matchPtsB;
     
     // 延迟更新定时器（性能优化）
-    QTimer *m_overlayUpdateTimer;
+    QTimer *_overlayUpdateTimer;
 };

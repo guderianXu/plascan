@@ -221,112 +221,112 @@ void appendSidecarMatchedPoints(const QJsonArray &points0,
 
 DualImageViewer::DualImageViewer(QWidget *parent)
     : QWidget(parent)
-    , m_leftView(nullptr)
-    , m_rightView(nullptr)
-    , m_overlay(nullptr)
-    , m_disparityOverlay(nullptr)
-    , m_syncEnabled(false)
-    , m_syncing(false)
+    , _leftView(nullptr)
+    , _rightView(nullptr)
+    , _overlay(nullptr)
+    , _disparityOverlay(nullptr)
+    , _syncEnabled(false)
+    , _syncing(false)
 {
     setupLayout();
     connectSignals();
 
     // 创建延迟更新定时器
-    m_overlayUpdateTimer = new QTimer(this);
-    m_overlayUpdateTimer->setSingleShot(true);
-    m_overlayUpdateTimer->setInterval(16); // ~60 FPS
-    connect(m_overlayUpdateTimer, &QTimer::timeout,
+    _overlayUpdateTimer = new QTimer(this);
+    _overlayUpdateTimer->setSingleShot(true);
+    _overlayUpdateTimer->setInterval(16); // ~60 FPS
+    connect(_overlayUpdateTimer, &QTimer::timeout,
             this, &DualImageViewer::updateOverlayNow);
 
     // 创建视差热力图覆盖层
-    m_disparityOverlay = new DisparityHeatmapOverlay(this);
-    m_disparityOverlay->hide();
+    _disparityOverlay = new DisparityHeatmapOverlay(this);
+    _disparityOverlay->hide();
 }
 
 ImageViewWidget* DualImageViewer::leftView() const
 {
-    return m_leftView.data();
+    return _leftView.data();
 }
 
 ImageViewWidget* DualImageViewer::rightView() const
 {
-    return m_rightView.data();
+    return _rightView.data();
 }
 
 MatchLineOverlay* DualImageViewer::overlay() const
 {
-    return m_overlay.data();
+    return _overlay.data();
 }
 
 DisparityHeatmapOverlay* DualImageViewer::disparityOverlay() const
 {
-    return m_disparityOverlay;
+    return _disparityOverlay;
 }
 
 void DualImageViewer::setOverlayMode(int mode)
 {
-    m_overlayMode = mode;
-    m_overlay->setVisible(mode == 0);
-    m_disparityOverlay->setVisible(mode == 1);
+    _overlayMode = mode;
+    _overlay->setVisible(mode == 0);
+    _disparityOverlay->setVisible(mode == 1);
     scheduleOverlayUpdate();
 }
 
 void DualImageViewer::highlightMatchIndex(int index)
 {
-    if (!m_overlay) return;
+    if (!_overlay) return;
     QVector<int> idxs;
     if (index >= 0) idxs.append(index);
-    m_overlay->setHighlightedIndices(idxs);
-    m_overlay->setShowOnlyHighlighted(true);
+    _overlay->setHighlightedIndices(idxs);
+    _overlay->setShowOnlyHighlighted(true);
     scheduleOverlayUpdate();
 }
 
 void DualImageViewer::highlightMatchIndices(const QVector<int> &indices)
 {
-    if (!m_overlay) return;
-    m_overlay->setHighlightedIndices(indices);
-    m_overlay->setShowOnlyHighlighted(true);
+    if (!_overlay) return;
+    _overlay->setHighlightedIndices(indices);
+    _overlay->setShowOnlyHighlighted(true);
     scheduleOverlayUpdate();
 }
 
 void DualImageViewer::clearMatchHighlights()
 {
-    if (!m_overlay) return;
-    m_overlay->clearHighlightedIndices();
-    m_overlay->setShowOnlyHighlighted(false);
+    if (!_overlay) return;
+    _overlay->clearHighlightedIndices();
+    _overlay->setShowOnlyHighlighted(false);
     scheduleOverlayUpdate();
 }
 
 void DualImageViewer::setShowAllMatches(bool showAll)
 {
-    if (!m_overlay) return;
-    m_overlay->setShowOnlyHighlighted(!showAll);
-    if (showAll) m_overlay->clearHighlightedIndices();
+    if (!_overlay) return;
+    _overlay->setShowOnlyHighlighted(!showAll);
+    if (showAll) _overlay->clearHighlightedIndices();
     scheduleOverlayUpdate();
 }
 
 DualImageViewer::~DualImageViewer()
 {
     // 停止并断开延迟更新定时器，防止在widget销毁后触发回调
-    if (m_overlayUpdateTimer) {
-        m_overlayUpdateTimer->stop();
-        disconnect(m_overlayUpdateTimer, nullptr, this, nullptr);
+    if (_overlayUpdateTimer) {
+        _overlayUpdateTimer->stop();
+        disconnect(_overlayUpdateTimer, nullptr, this, nullptr);
     }
 
     // 断开与视图的信号连接，清理覆盖层内容
-    if (m_leftView) {
-        disconnect(m_leftView, nullptr, this, nullptr);
-        m_leftView->clearMatchPoints();
+    if (_leftView) {
+        disconnect(_leftView, nullptr, this, nullptr);
+        _leftView->clearMatchPoints();
     }
-    if (m_rightView) {
-        disconnect(m_rightView, nullptr, this, nullptr);
-        m_rightView->clearMatchPoints();
+    if (_rightView) {
+        disconnect(_rightView, nullptr, this, nullptr);
+        _rightView->clearMatchPoints();
     }
-    if (m_overlay) {
-        disconnect(m_overlay, nullptr, this, nullptr);
+    if (_overlay) {
+        disconnect(_overlay, nullptr, this, nullptr);
         // 清空覆盖层数据，避免后续paint访问已释放的数据
-        m_overlay->setMatches(QVector<QPointF>(), QVector<QPointF>());
-        m_overlay->hide();
+        _overlay->setMatches(QVector<QPointF>(), QVector<QPointF>());
+        _overlay->hide();
     }
 }
 
@@ -335,40 +335,40 @@ void DualImageViewer::setupLayout()
     Ui::DualImageViewer ui;
     ui.setupUi(this);
 
-    m_leftView = ui.m_leftView;
-    m_rightView = ui.m_rightView;
+    _leftView = ui.m_leftView;
+    _rightView = ui.m_rightView;
     ui.m_splitter->setStretchFactor(0, 1);
     ui.m_splitter->setStretchFactor(1, 1);
     
     // 创建覆盖层（在所有控件之上）
-    m_overlay = new MatchLineOverlay(this);
-    m_overlay->setViewWidgets(m_leftView, m_rightView);
-    m_overlay->setAttribute(Qt::WA_TransparentForMouseEvents); // 鼠标事件穿透
-    m_overlay->raise(); // 确保在最上层
-    m_overlay->show(); // 显式显示
+    _overlay = new MatchLineOverlay(this);
+    _overlay->setViewWidgets(_leftView, _rightView);
+    _overlay->setAttribute(Qt::WA_TransparentForMouseEvents); // 鼠标事件穿透
+    _overlay->raise(); // 确保在最上层
+    _overlay->show(); // 显式显示
 }
 
 void DualImageViewer::connectSignals()
 {
     // 连接视图变化信号
-    connect(m_leftView, &ImageViewWidget::viewTransformChanged,
+    connect(_leftView, &ImageViewWidget::viewTransformChanged,
             this, &DualImageViewer::onLeftViewChanged, Qt::QueuedConnection);
-    connect(m_rightView, &ImageViewWidget::viewTransformChanged,
+    connect(_rightView, &ImageViewWidget::viewTransformChanged,
             this, &DualImageViewer::onRightViewChanged, Qt::QueuedConnection);
     
     // 覆盖层更新
-    connect(m_leftView, &ImageViewWidget::viewTransformChanged,
+    connect(_leftView, &ImageViewWidget::viewTransformChanged,
             this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
-    connect(m_rightView, &ImageViewWidget::viewTransformChanged,
+    connect(_rightView, &ImageViewWidget::viewTransformChanged,
             this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
 
     auto forwardImageLoadFailure = [this](const QString &, const QString &message)
     {
         emit loadFailed(message);
     };
-    connect(m_leftView, &ImageViewWidget::imageLoadFailed,
+    connect(_leftView, &ImageViewWidget::imageLoadFailed,
             this, forwardImageLoadFailure, Qt::QueuedConnection);
-    connect(m_rightView, &ImageViewWidget::imageLoadFailed,
+    connect(_rightView, &ImageViewWidget::imageLoadFailed,
             this, forwardImageLoadFailure, Qt::QueuedConnection);
 }
 
@@ -397,26 +397,26 @@ void DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
                                     const QVector<QPointF> &ptsB)
 {
     // 加载图像
-    if (!m_leftView->loadImage(imgA)) {
+    if (!_leftView->loadImage(imgA)) {
         emit loadFailed(tr("无法加载图像：%1").arg(imgA));
         return;
     }
     
-    if (!m_rightView->loadImage(imgB)) {
+    if (!_rightView->loadImage(imgB)) {
         emit loadFailed(tr("无法加载图像：%1").arg(imgB));
         return;
     }
     
     // 保存匹配数据
-    m_matchPtsA = ptsA;
-    m_matchPtsB = ptsB;
+    _matchPtsA = ptsA;
+    _matchPtsB = ptsB;
     
     // 设置匹配点到视图
-    m_leftView->setMatchPoints(ptsA);
-    m_rightView->setMatchPoints(ptsB);
+    _leftView->setMatchPoints(ptsA);
+    _rightView->setMatchPoints(ptsB);
     
     // 设置匹配数据到覆盖层
-    m_overlay->setMatches(ptsA, ptsB);
+    _overlay->setMatches(ptsA, ptsB);
     
     // 更新覆盖层几何
     updateOverlayGeometry();
@@ -428,50 +428,50 @@ void DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
 
 void DualImageViewer::setSyncMode(bool enabled)
 {
-    if (m_syncEnabled == enabled) return;
+    if (_syncEnabled == enabled) return;
     
-    m_syncEnabled = enabled;
+    _syncEnabled = enabled;
     emit syncModeChanged(enabled);
     
     // 如果启用同步，立即同步一次
-    if (enabled && m_leftView && m_rightView) {
-        m_syncing = true;
-        m_rightView->setTransform(m_leftView->currentTransform());
-        m_syncing = false;
+    if (enabled && _leftView && _rightView) {
+        _syncing = true;
+        _rightView->setTransform(_leftView->currentTransform());
+        _syncing = false;
     }
 }
 
 void DualImageViewer::fitBothViews()
 {
-    m_leftView->fitToView();
-    m_rightView->fitToView();
+    _leftView->fitToView();
+    _rightView->fitToView();
 }
 
 void DualImageViewer::resetBothViews()
 {
-    m_leftView->resetZoom();
-    m_rightView->resetZoom();
+    _leftView->resetZoom();
+    _rightView->resetZoom();
 }
 
 int DualImageViewer::totalMatchCount() const
 {
-    return m_matchPtsA.size();
+    return _matchPtsA.size();
 }
 
 int DualImageViewer::visibleMatchCount() const
 {
-    if (!m_overlay) return -1;
-    return m_overlay->visibleMatches().size();
+    if (!_overlay) return -1;
+    return _overlay->visibleMatches().size();
 }
 
 QString DualImageViewer::leftImagePath() const
 {
-    return m_leftView ? m_leftView->imagePath() : QString();
+    return _leftView ? _leftView->imagePath() : QString();
 }
 
 QString DualImageViewer::rightImagePath() const
 {
-    return m_rightView ? m_rightView->imagePath() : QString();
+    return _rightView ? _rightView->imagePath() : QString();
 }
 
 void DualImageViewer::resizeEvent(QResizeEvent *event)
@@ -482,28 +482,28 @@ void DualImageViewer::resizeEvent(QResizeEvent *event)
 
 void DualImageViewer::onLeftViewChanged(const QTransform &transform)
 {
-    if (m_syncEnabled && !m_syncing) {
-        m_syncing = true;
-        m_rightView->setTransform(transform);
-        m_syncing = false;
+    if (_syncEnabled && !_syncing) {
+        _syncing = true;
+        _rightView->setTransform(transform);
+        _syncing = false;
     }
 }
 
 void DualImageViewer::onRightViewChanged(const QTransform &transform)
 {
-    if (m_syncEnabled && !m_syncing) {
-        m_syncing = true;
-        m_leftView->setTransform(transform);
-        m_syncing = false;
+    if (_syncEnabled && !_syncing) {
+        _syncing = true;
+        _leftView->setTransform(transform);
+        _syncing = false;
     }
 }
 
 void DualImageViewer::scheduleOverlayUpdate()
 {
     // 延迟更新以提高性能（合并多次连续的更新请求）
-    if (!m_overlayUpdateTimer) return;
-    if (!m_overlayUpdateTimer->isActive()) {
-        m_overlayUpdateTimer->start();
+    if (!_overlayUpdateTimer) return;
+    if (!_overlayUpdateTimer->isActive()) {
+        _overlayUpdateTimer->start();
     }
 }
 
@@ -511,20 +511,20 @@ void DualImageViewer::updateOverlayNow()
 {
     updateOverlayGeometry();
     // 防护：若组件已经被删除或指针失效则不进行更新
-    if (!m_overlay || !m_leftView || !m_rightView) return;
-    m_overlay->updateOverlay();
+    if (!_overlay || !_leftView || !_rightView) return;
+    _overlay->updateOverlay();
     
     // 同步点的可见性：仅显示在两边都可见的匹配点
-    QVector<int> vis = m_overlay->visibleMatches();
+    QVector<int> vis = _overlay->visibleMatches();
 
     // 为避免使用不正确的大小（可能导致大内存分配），使用视图中实际的点图元数量
-    int leftCount = m_leftView ? m_leftView->matchItemCount() : 0;
-    int rightCount = m_rightView ? m_rightView->matchItemCount() : 0;
+    int leftCount = _leftView ? _leftView->matchItemCount() : 0;
+    int rightCount = _rightView ? _rightView->matchItemCount() : 0;
     int useCount = qMax(leftCount, rightCount);
     if (useCount <= 0) return;
 
     QVector<bool> mask(useCount, false);
-    if (m_overlay->showOnlyHighlighted()) {
+    if (_overlay->showOnlyHighlighted()) {
         // 高亮模式下不隐藏点，避免用户看不到已选点
         std::fill(mask.begin(), mask.end(), true);
     } else {
@@ -538,20 +538,20 @@ void DualImageViewer::updateOverlayNow()
         }
     }
 
-    if (m_leftView) m_leftView->setMatchVisibilityMask(mask);
-    if (m_rightView) m_rightView->setMatchVisibilityMask(mask);
+    if (_leftView) _leftView->setMatchVisibilityMask(mask);
+    if (_rightView) _rightView->setMatchVisibilityMask(mask);
 }
 
 void DualImageViewer::updateOverlayGeometry()
 {
-    if (m_overlay) {
-        m_overlay->setGeometry(rect());
-        m_overlay->raise();
-        m_overlay->show();
+    if (_overlay) {
+        _overlay->setGeometry(rect());
+        _overlay->raise();
+        _overlay->show();
     }
-    if (m_disparityOverlay) {
-        m_disparityOverlay->setGeometry(rect());
-        m_disparityOverlay->raise();
+    if (_disparityOverlay) {
+        _disparityOverlay->setGeometry(rect());
+        _disparityOverlay->raise();
     }
 }
 
