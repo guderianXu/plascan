@@ -31,7 +31,9 @@ class SparseCloudValidator
 {
 public:
     explicit SparseCloudValidator(const SparseCloudValidatorOptions &opts = SparseCloudValidatorOptions{})
-        : m_opts(opts) {}
+        : _options(opts)
+    {
+    }
 
     /// 校验点云文件（.xyz 或 .ply），返回 true 表示质量合格
     bool validate(const std::string &cloudPath,
@@ -40,7 +42,7 @@ public:
                   std::string       *errorMsg = nullptr) const;
 
 private:
-    SparseCloudValidatorOptions m_opts;
+    SparseCloudValidatorOptions _options;
 };
 
 } // namespace mvs

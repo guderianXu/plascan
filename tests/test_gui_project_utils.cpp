@@ -2799,6 +2799,19 @@ TEST(CodeStyleTest, GroundBackProjectorUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, SparseCloudValidatorUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/SparseCloudValidator.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/SparseCloudValidator.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("SparseCloudValidatorOptions _options;")));
+    EXPECT_TRUE(header.contains(QStringLiteral(": _options(opts)")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_opts")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_opts")));
+}
+
 TEST(CodeStyleTest, ForwardIntersectionCheckDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

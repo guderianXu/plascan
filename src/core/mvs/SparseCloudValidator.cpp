@@ -101,12 +101,12 @@ bool SparseCloudValidator::validate(const std::string &cloudPath,
         return false;
     }
 
-    if (count < m_opts.minPoints)
+    if (count < _options.minPoints)
     {
         if (errorMsg)
         {
             *errorMsg = "点数量不足: " + std::to_string(count) +
-                        " < " + std::to_string(m_opts.minPoints);
+                        " < " + std::to_string(_options.minPoints);
         }
         return false;
     }
