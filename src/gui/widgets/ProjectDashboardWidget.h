@@ -24,14 +24,14 @@ private:
     void updateTables(const QJsonObject &meta);
     void updateTaskTable();
 
-    QLabel *m_summaryLabel = nullptr;
-    QLabel *m_referenceLabel = nullptr;
-    QLabel *m_taskLabel = nullptr;
-    QTableWidget *m_taskTable = nullptr;
-    QTableWidget *m_referenceTable = nullptr;
-    QTableWidget *m_workflowTable = nullptr;
-    QTableWidget *m_qualityTable = nullptr;
-    QTableWidget *m_qualityAlertTable = nullptr;
-    QTableWidget *m_reportTable = nullptr;
-    QJsonArray m_taskSnapshots;
+    QLabel *_summaryLabel = nullptr;
+    QLabel *_referenceLabel = nullptr;
+    QLabel *_taskLabel = nullptr;
+    QTableWidget *_taskTable = nullptr;
+    QTableWidget *_referenceTable = nullptr;
+    QTableWidget *_workflowTable = nullptr;
+    QTableWidget *_qualityTable = nullptr;
+    QTableWidget *_qualityAlertTable = nullptr;
+    QTableWidget *_reportTable = nullptr;
+    QJsonArray _taskSnapshots;
 };

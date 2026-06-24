@@ -247,81 +247,81 @@ void ProjectDashboardWidget::setupUi()
     layout->setContentsMargins(8, 8, 8, 8);
     layout->setSpacing(8);
 
-    m_summaryLabel = new QLabel(this);
-    m_summaryLabel->setObjectName(QStringLiteral("dashboardSummaryLabel"));
-    m_summaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_summaryLabel->setWordWrap(true);
-    layout->addWidget(m_summaryLabel);
+    _summaryLabel = new QLabel(this);
+    _summaryLabel->setObjectName(QStringLiteral("dashboardSummaryLabel"));
+    _summaryLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _summaryLabel->setWordWrap(true);
+    layout->addWidget(_summaryLabel);
 
-    m_referenceLabel = new QLabel(this);
-    m_referenceLabel->setObjectName(QStringLiteral("dashboardReferenceLabel"));
-    m_referenceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_referenceLabel->setWordWrap(true);
-    layout->addWidget(m_referenceLabel);
+    _referenceLabel = new QLabel(this);
+    _referenceLabel->setObjectName(QStringLiteral("dashboardReferenceLabel"));
+    _referenceLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _referenceLabel->setWordWrap(true);
+    layout->addWidget(_referenceLabel);
 
-    m_taskLabel = new QLabel(this);
-    m_taskLabel->setObjectName(QStringLiteral("dashboardTaskLabel"));
-    m_taskLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
-    m_taskLabel->setWordWrap(true);
-    layout->addWidget(m_taskLabel);
+    _taskLabel = new QLabel(this);
+    _taskLabel->setObjectName(QStringLiteral("dashboardTaskLabel"));
+    _taskLabel->setTextInteractionFlags(Qt::TextSelectableByMouse);
+    _taskLabel->setWordWrap(true);
+    layout->addWidget(_taskLabel);
 
-    m_taskTable = new QTableWidget(this);
-    m_taskTable->setObjectName(QStringLiteral("dashboardTaskTable"));
-    m_taskTable->setColumnCount(3);
-    m_taskTable->setHorizontalHeaderLabels({tr("任务"), tr("状态"), tr("进度")});
-    configureReadOnlyTable(m_taskTable);
-    m_taskTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_taskTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    m_taskTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
-    layout->addWidget(m_taskTable, 1);
+    _taskTable = new QTableWidget(this);
+    _taskTable->setObjectName(QStringLiteral("dashboardTaskTable"));
+    _taskTable->setColumnCount(3);
+    _taskTable->setHorizontalHeaderLabels({tr("任务"), tr("状态"), tr("进度")});
+    configureReadOnlyTable(_taskTable);
+    _taskTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _taskTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    _taskTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::ResizeToContents);
+    layout->addWidget(_taskTable, 1);
 
-    m_referenceTable = new QTableWidget(this);
-    m_referenceTable->setObjectName(QStringLiteral("dashboardReferenceTable"));
-    m_referenceTable->setColumnCount(3);
-    m_referenceTable->setHorizontalHeaderLabels({tr("类型"), tr("用途"), tr("路径")});
-    configureReadOnlyTable(m_referenceTable);
-    m_referenceTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_referenceTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_referenceTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    layout->addWidget(m_referenceTable, 1);
+    _referenceTable = new QTableWidget(this);
+    _referenceTable->setObjectName(QStringLiteral("dashboardReferenceTable"));
+    _referenceTable->setColumnCount(3);
+    _referenceTable->setHorizontalHeaderLabels({tr("类型"), tr("用途"), tr("路径")});
+    configureReadOnlyTable(_referenceTable);
+    _referenceTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _referenceTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    _referenceTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    layout->addWidget(_referenceTable, 1);
 
-    m_workflowTable = new QTableWidget(this);
-    m_workflowTable->setObjectName(QStringLiteral("dashboardWorkflowTable"));
-    m_workflowTable->setColumnCount(3);
-    m_workflowTable->setHorizontalHeaderLabels({tr("状态"), tr("阶段"), tr("说明")});
-    configureReadOnlyTable(m_workflowTable);
-    m_workflowTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_workflowTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_workflowTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    layout->addWidget(m_workflowTable, 2);
+    _workflowTable = new QTableWidget(this);
+    _workflowTable->setObjectName(QStringLiteral("dashboardWorkflowTable"));
+    _workflowTable->setColumnCount(3);
+    _workflowTable->setHorizontalHeaderLabels({tr("状态"), tr("阶段"), tr("说明")});
+    configureReadOnlyTable(_workflowTable);
+    _workflowTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _workflowTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    _workflowTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    layout->addWidget(_workflowTable, 2);
 
-    m_qualityTable = new QTableWidget(this);
-    m_qualityTable->setObjectName(QStringLiteral("dashboardQualityTable"));
-    m_qualityTable->setColumnCount(2);
-    m_qualityTable->setHorizontalHeaderLabels({tr("指标"), tr("数值")});
-    configureReadOnlyTable(m_qualityTable);
-    m_qualityTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_qualityTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    layout->addWidget(m_qualityTable, 1);
+    _qualityTable = new QTableWidget(this);
+    _qualityTable->setObjectName(QStringLiteral("dashboardQualityTable"));
+    _qualityTable->setColumnCount(2);
+    _qualityTable->setHorizontalHeaderLabels({tr("指标"), tr("数值")});
+    configureReadOnlyTable(_qualityTable);
+    _qualityTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _qualityTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    layout->addWidget(_qualityTable, 1);
 
-    m_qualityAlertTable = new QTableWidget(this);
-    m_qualityAlertTable->setObjectName(QStringLiteral("dashboardQualityAlertTable"));
-    m_qualityAlertTable->setColumnCount(3);
-    m_qualityAlertTable->setHorizontalHeaderLabels({tr("级别"), tr("来源"), tr("说明")});
-    configureReadOnlyTable(m_qualityAlertTable);
-    m_qualityAlertTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_qualityAlertTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
-    m_qualityAlertTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
-    layout->addWidget(m_qualityAlertTable, 1);
+    _qualityAlertTable = new QTableWidget(this);
+    _qualityAlertTable->setObjectName(QStringLiteral("dashboardQualityAlertTable"));
+    _qualityAlertTable->setColumnCount(3);
+    _qualityAlertTable->setHorizontalHeaderLabels({tr("级别"), tr("来源"), tr("说明")});
+    configureReadOnlyTable(_qualityAlertTable);
+    _qualityAlertTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _qualityAlertTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::ResizeToContents);
+    _qualityAlertTable->horizontalHeader()->setSectionResizeMode(2, QHeaderView::Stretch);
+    layout->addWidget(_qualityAlertTable, 1);
 
-    m_reportTable = new QTableWidget(this);
-    m_reportTable->setObjectName(QStringLiteral("dashboardReportTable"));
-    m_reportTable->setColumnCount(2);
-    m_reportTable->setHorizontalHeaderLabels({tr("报告"), tr("路径")});
-    configureReadOnlyTable(m_reportTable);
-    m_reportTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
-    m_reportTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
-    layout->addWidget(m_reportTable, 1);
+    _reportTable = new QTableWidget(this);
+    _reportTable->setObjectName(QStringLiteral("dashboardReportTable"));
+    _reportTable->setColumnCount(2);
+    _reportTable->setHorizontalHeaderLabels({tr("报告"), tr("路径")});
+    configureReadOnlyTable(_reportTable);
+    _reportTable->horizontalHeader()->setSectionResizeMode(0, QHeaderView::ResizeToContents);
+    _reportTable->horizontalHeader()->setSectionResizeMode(1, QHeaderView::Stretch);
+    layout->addWidget(_reportTable, 1);
 }
 
 void ProjectDashboardWidget::loadFromJson(const QJsonObject &meta)
@@ -331,13 +331,13 @@ void ProjectDashboardWidget::loadFromJson(const QJsonObject &meta)
 
 void ProjectDashboardWidget::setTaskSnapshots(const QJsonArray &tasks)
 {
-    m_taskSnapshots = tasks;
+    _taskSnapshots = tasks;
     updateTaskTable();
 }
 
 void ProjectDashboardWidget::clear()
 {
-    m_taskSnapshots = QJsonArray();
+    _taskSnapshots = QJsonArray();
     updateTables(QJsonObject());
     updateTaskTable();
 }
@@ -345,7 +345,7 @@ void ProjectDashboardWidget::clear()
 void ProjectDashboardWidget::updateTaskTable()
 {
     QVector<QJsonObject> visibleTasks;
-    for (const QJsonValue &value : m_taskSnapshots)
+    for (const QJsonValue &value : _taskSnapshots)
     {
         if (!value.isObject())
         {
@@ -358,19 +358,19 @@ void ProjectDashboardWidget::updateTaskTable()
         }
     }
 
-    if (m_taskLabel)
+    if (_taskLabel)
     {
-        m_taskLabel->setText(visibleTasks.isEmpty()
+        _taskLabel->setText(visibleTasks.isEmpty()
             ? tr("主任务空闲，概览页仅只读展示已有项目数据。")
             : tr("当前运行任务 %1；概览页只读旁听状态，不会触发处理流程。").arg(visibleTasks.size()));
     }
 
-    if (!m_taskTable)
+    if (!_taskTable)
     {
         return;
     }
 
-    m_taskTable->setRowCount(visibleTasks.size());
+    _taskTable->setRowCount(visibleTasks.size());
     for (int row = 0; row < visibleTasks.size(); ++row)
     {
         const QJsonObject record = visibleTasks.at(row);
@@ -380,13 +380,13 @@ void ProjectDashboardWidget::updateTaskTable()
         {
             statusText = QStringLiteral("正在取消：%1").arg(statusText);
         }
-        m_taskTable->setItem(row,
+        _taskTable->setItem(row,
                              0,
                              makeReadOnlyItem(record.value(QStringLiteral("name")).toString()));
-        m_taskTable->setItem(row,
+        _taskTable->setItem(row,
                              1,
                              makeReadOnlyItem(statusText));
-        m_taskTable->setItem(row,
+        _taskTable->setItem(row,
                              2,
                              makeReadOnlyItem(taskProgressText(record)));
     }
@@ -396,9 +396,9 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
 {
     const auto summary = xjw::gui::project::buildProjectDashboardSummary(meta);
 
-    if (m_summaryLabel)
+    if (_summaryLabel)
     {
-        m_summaryLabel->setText(tr("影像 %1  相机 %2/%3  特征 %4  匹配 %5  点云 %6")
+        _summaryLabel->setText(tr("影像 %1  相机 %2/%3  特征 %4  匹配 %5  点云 %6")
                                     .arg(summary.imageCount)
                                     .arg(summary.cameraCount)
                                     .arg(summary.imageCount)
@@ -407,9 +407,9 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                                     .arg(summary.denseCloudResultCount));
     }
 
-    if (m_referenceLabel)
+    if (_referenceLabel)
     {
-        m_referenceLabel->setText(tr("LiDAR %1  参考点云 %2  参考DEM %3  BA约束 %4  质量报告 %5")
+        _referenceLabel->setText(tr("LiDAR %1  参考点云 %2  参考DEM %3  BA约束 %4  质量报告 %5")
                                       .arg(summary.lidarReferenceCount)
                                       .arg(summary.pointCloudReferenceCount)
                                       .arg(summary.demReferenceCount)
@@ -417,34 +417,34 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                                       .arg(summary.qualityReportCount));
     }
 
-    if (m_workflowTable)
+    if (_workflowTable)
     {
-        m_workflowTable->setRowCount(summary.workflowSteps.size());
+        _workflowTable->setRowCount(summary.workflowSteps.size());
         for (int row = 0; row < summary.workflowSteps.size(); ++row)
         {
             const auto &step = summary.workflowSteps.at(row);
-            m_workflowTable->setItem(row, 0, makeReadOnlyItem(stateDisplayName(step.state)));
-            m_workflowTable->setItem(row, 1, makeReadOnlyItem(step.title));
-            m_workflowTable->setItem(row, 2, makeReadOnlyItem(step.detail));
+            _workflowTable->setItem(row, 0, makeReadOnlyItem(stateDisplayName(step.state)));
+            _workflowTable->setItem(row, 1, makeReadOnlyItem(step.title));
+            _workflowTable->setItem(row, 2, makeReadOnlyItem(step.detail));
         }
     }
 
-    if (m_referenceTable)
+    if (_referenceTable)
     {
-        m_referenceTable->setRowCount(summary.referenceDatasets.size());
+        _referenceTable->setRowCount(summary.referenceDatasets.size());
         for (int row = 0; row < summary.referenceDatasets.size(); ++row)
         {
             const QJsonObject reference = summary.referenceDatasets.at(row).toObject();
             const QString path = referenceDatasetPath(reference);
-            m_referenceTable->setItem(row,
+            _referenceTable->setItem(row,
                                       0,
                                       makeReadOnlyItem(referenceTypeDisplayName(
                                           reference.value(QStringLiteral("type")).toString())));
-            m_referenceTable->setItem(row,
+            _referenceTable->setItem(row,
                                       1,
                                       makeReadOnlyItem(referenceRoleDisplayName(
                                           reference.value(QStringLiteral("role")).toString())));
-            m_referenceTable->setItem(row,
+            _referenceTable->setItem(row,
                                       2,
                                       makeReadOnlyItem(QFileInfo(path).fileName().isEmpty()
                                                            ? path
@@ -452,9 +452,9 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
         }
     }
 
-    if (m_qualityTable)
+    if (_qualityTable)
     {
-        m_qualityTable->setRowCount(0);
+        _qualityTable->setRowCount(0);
         int row = 0;
         for (const QJsonValue &value : summary.qualityReports)
         {
@@ -475,45 +475,45 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                 {
                     imageRegistrationText = QStringLiteral("%1/%2").arg(registeredImageCount, totalImageCount);
                 }
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("注册影像"),
                                 imageRegistrationText);
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("稀疏点"),
                                 metricValueText(report.value(QStringLiteral("sparse_point_count"))));
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("稠密点"),
                                 metricValueText(report.value(QStringLiteral("dense_point_count"))));
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("MVS覆盖"),
                                 metricValueText(report.value(QStringLiteral("mvs_valid_coverage")), true));
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("DEM覆盖"),
                                 metricValueText(report.value(QStringLiteral("dem_coverage")), true));
             }
             else if (type == QStringLiteral("reference_quality"))
             {
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("参考数据状态"),
                                 metricValueText(report.value(QStringLiteral("status"))));
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("参考数据可对比"),
                                 metricValueText(report.value(QStringLiteral("comparison_available"))));
             }
             else if (type == QStringLiteral("reference_terrain_prior_preflight"))
             {
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("参考地形平差就绪"),
                                 metricValueText(report.value(QStringLiteral("ready"))));
-                appendMetricRow(m_qualityTable,
+                appendMetricRow(_qualityTable,
                                 &row,
                                 tr("BA约束参考数"),
                                 metricValueText(report.value(QStringLiteral("ba_prior_reference_count"))));
@@ -521,9 +521,9 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
         }
     }
 
-    if (m_qualityAlertTable)
+    if (_qualityAlertTable)
     {
-        m_qualityAlertTable->setRowCount(0);
+        _qualityAlertTable->setRowCount(0);
         int row = 0;
         for (const QJsonValue &value : summary.qualityReports)
         {
@@ -539,7 +539,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                 const int total = report.value(QStringLiteral("total_image_count")).toInt(-1);
                 if (registered >= 0 && total > 0 && registered < total)
                 {
-                    appendAlertRow(m_qualityAlertTable,
+                    appendAlertRow(_qualityAlertTable,
                                    &row,
                                    registered * 10 < total * 8 ? tr("注意") : tr("信息"),
                                    tr("重建质量"),
@@ -548,7 +548,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                 const double mvsCoverage = report.value(QStringLiteral("mvs_valid_coverage")).toDouble(-1.0);
                 if (mvsCoverage >= 0.0 && mvsCoverage < 0.6)
                 {
-                    appendAlertRow(m_qualityAlertTable,
+                    appendAlertRow(_qualityAlertTable,
                                    &row,
                                    tr("注意"),
                                    tr("重建质量"),
@@ -558,7 +558,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                 const double demCoverage = report.value(QStringLiteral("dem_coverage")).toDouble(-1.0);
                 if (demCoverage >= 0.0 && demCoverage < 0.6)
                 {
-                    appendAlertRow(m_qualityAlertTable,
+                    appendAlertRow(_qualityAlertTable,
                                    &row,
                                    tr("注意"),
                                    tr("重建质量"),
@@ -573,7 +573,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                     report.value(QStringLiteral("comparison_available")).toBool(false);
                 if (!comparisonAvailable || (!status.isEmpty() && status != QStringLiteral("ready")))
                 {
-                    appendAlertRow(m_qualityAlertTable,
+                    appendAlertRow(_qualityAlertTable,
                                    &row,
                                    tr("阻塞"),
                                    tr("参考数据质检"),
@@ -605,7 +605,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                 }
                 if (!errorMetrics.isEmpty())
                 {
-                    appendAlertRow(m_qualityAlertTable,
+                    appendAlertRow(_qualityAlertTable,
                                    &row,
                                    tr("信息"),
                                    tr("参考误差"),
@@ -618,7 +618,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                 const QString status = report.value(QStringLiteral("status")).toString();
                 if (!ready)
                 {
-                    appendAlertRow(m_qualityAlertTable,
+                    appendAlertRow(_qualityAlertTable,
                                    &row,
                                    tr("阻塞"),
                                    tr("参考地形平差"),
@@ -631,7 +631,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
 
         if (row == 0)
         {
-            appendAlertRow(m_qualityAlertTable,
+            appendAlertRow(_qualityAlertTable,
                            &row,
                            tr("信息"),
                            tr("质量中心"),
@@ -639,9 +639,9 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
         }
     }
 
-    if (m_reportTable)
+    if (_reportTable)
     {
-        m_reportTable->setRowCount(summary.qualityReports.size());
+        _reportTable->setRowCount(summary.qualityReports.size());
         for (int row = 0; row < summary.qualityReports.size(); ++row)
         {
             const QJsonObject report = summary.qualityReports.at(row).toObject();
@@ -650,11 +650,11 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
             {
                 path = report.value(QStringLiteral("json_path")).toString();
             }
-            m_reportTable->setItem(row,
+            _reportTable->setItem(row,
                                    0,
                                    makeReadOnlyItem(reportTypeDisplayName(
                                        report.value(QStringLiteral("type")).toString())));
-            m_reportTable->setItem(row,
+            _reportTable->setItem(row,
                                    1,
                                    makeReadOnlyItem(QFileInfo(path).fileName().isEmpty() ? path
                                                                                          : QFileInfo(path).fileName()));

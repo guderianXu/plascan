@@ -1886,6 +1886,49 @@ TEST(CodeStyleTest, DisparityHeatmapOverlayUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QLabel *_summaryLabel = nullptr;"),
+        QStringLiteral("QLabel *_referenceLabel = nullptr;"),
+        QStringLiteral("QLabel *_taskLabel = nullptr;"),
+        QStringLiteral("QTableWidget *_taskTable = nullptr;"),
+        QStringLiteral("QTableWidget *_referenceTable = nullptr;"),
+        QStringLiteral("QTableWidget *_workflowTable = nullptr;"),
+        QStringLiteral("QTableWidget *_qualityTable = nullptr;"),
+        QStringLiteral("QTableWidget *_qualityAlertTable = nullptr;"),
+        QStringLiteral("QTableWidget *_reportTable = nullptr;"),
+        QStringLiteral("QJsonArray _taskSnapshots;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_summaryLabel"),
+        QStringLiteral("m_referenceLabel"),
+        QStringLiteral("m_taskLabel"),
+        QStringLiteral("m_taskTable"),
+        QStringLiteral("m_referenceTable"),
+        QStringLiteral("m_workflowTable"),
+        QStringLiteral("m_qualityTable"),
+        QStringLiteral("m_qualityAlertTable"),
+        QStringLiteral("m_reportTable"),
+        QStringLiteral("m_taskSnapshots"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header =
