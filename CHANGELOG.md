@@ -73,6 +73,7 @@
 - `ProjectTerrainProductsManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 DEM/DOM 自动流水线、密集点云 DEM 和正射入口行为不变。
 - `ThreeDReconstructionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
 - `Camera` 核心类内部私有成员从 `_fu/_R/_C` 等短名迁移到 `_focalX/_cameraToWorldRotation/_cameraCenter` 等 `_lowerCamelCase` 描述性命名，公开 accessor 和 Tsai 文件字段保持兼容。
+- `PositiveDepthCameraModel` 像素变换缓存私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持正深度投影、反投影和 rectified pixel transform 行为不变。
 - `ForwardIntersectionResultsDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并顺手整理该小对话框内的紧凑控制语句花括号风格。
 - `DenseCloudRefineDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，并整理该小对话框内的紧凑控制语句和连接语句格式。
 - `DepthFusionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，并整理该小对话框内的紧凑控制语句和连接语句格式。
@@ -197,6 +198,7 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ThreeDReconstructionDialogUsesLowerCamelPrivateMemberNames|ThreeDReconstructionDialogTest" --output-on-failure` 先失败后通过，验证三维重建对话框私有成员迁移到 `_lowerCamelCase` 且 UI 默认值/空三模式行为保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.CameraUsesDescriptiveLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `Camera` 私有成员命名不再使用 `_fu/_R/_C` 等旧短名。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "Camera(Basic|Intrinsics|Projection|ToPositiveDepthModel|Test|FormatConverter)|PositiveDepthCameraModel|ProjectSupportUtilsTest.CameraJsonRoundTripPreservesUnitsAndDepthDirection|ProjectCameraImportServiceTest.BatchImportRecordsActualTsaiSourceFileInCameraMeta|ProjectDataCameraMetadataTest.SetImageCamerasClearsLegacyTopLevelCameraFile" --output-on-failure` 通过，31/31。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CameraToPositiveDepthModel|PositiveDepthCameraModelTest|CodeStyleTest.PositiveDepthCameraModelUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，9/9，验证正深度相机模型投影/反投影和像素变换缓存命名迁移保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ForwardIntersectionResultsDialogUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证前方交汇结果对话框私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.DenseCloudRefineDialogUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证密集点云后处理对话框私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.DepthFusionDialogUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证深度图融合对话框私有成员迁移到 `_lowerCamelCase`。

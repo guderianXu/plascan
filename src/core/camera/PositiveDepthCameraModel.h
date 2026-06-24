@@ -59,13 +59,13 @@ public:
                            const std::array<double, 9> &inverseTransform);
 
 private:
-    bool m_hasPixelTransform = false;
-    std::array<float, 9> m_pixelTransform = {1.0f, 0.0f, 0.0f,
-                                             0.0f, 1.0f, 0.0f,
-                                             0.0f, 0.0f, 1.0f};
-    std::array<float, 9> m_pixelTransformInv = {1.0f, 0.0f, 0.0f,
-                                                0.0f, 1.0f, 0.0f,
-                                                0.0f, 0.0f, 1.0f};
+    bool _hasPixelTransform = false;
+    std::array<float, 9> _pixelTransform = {1.0f, 0.0f, 0.0f,
+                                            0.0f, 1.0f, 0.0f,
+                                            0.0f, 0.0f, 1.0f};
+    std::array<float, 9> _pixelTransformInverse = {1.0f, 0.0f, 0.0f,
+                                                   0.0f, 1.0f, 0.0f,
+                                                   0.0f, 0.0f, 1.0f};
 };
 
 } // namespace xjw

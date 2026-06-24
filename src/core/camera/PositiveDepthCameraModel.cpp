@@ -127,9 +127,9 @@ bool PositiveDepthCameraModel::projectWithDepth(float worldX, float worldY, floa
     pixelX = focalX * cameraX / cameraZ + principalX;
     pixelY = focalY * cameraY / cameraZ + principalY;
 
-    if (m_hasPixelTransform)
+    if (_hasPixelTransform)
     {
-        applyPixelTransform(m_pixelTransform, pixelX, pixelY, pixelX, pixelY);
+        applyPixelTransform(_pixelTransform, pixelX, pixelY, pixelX, pixelY);
     }
 
     return true;
@@ -138,9 +138,9 @@ bool PositiveDepthCameraModel::projectWithDepth(float worldX, float worldY, floa
 void PositiveDepthCameraModel::unproject(float pixelX, float pixelY, float depth,
                                          float &worldX, float &worldY, float &worldZ) const
 {
-    if (m_hasPixelTransform)
+    if (_hasPixelTransform)
     {
-        applyPixelTransform(m_pixelTransformInv, pixelX, pixelY, pixelX, pixelY);
+        applyPixelTransform(_pixelTransformInverse, pixelX, pixelY, pixelX, pixelY);
     }
 
     const float cameraX = (pixelX - principalX) / focalX * depth;
@@ -164,11 +164,11 @@ void PositiveDepthCameraModel::unproject(float pixelX, float pixelY, float depth
 void PositiveDepthCameraModel::setPixelTransform(const std::array<double, 9> &transform,
                                                  const std::array<double, 9> &inverseTransform)
 {
-    m_hasPixelTransform = true;
+    _hasPixelTransform = true;
     for (int i = 0; i < 9; ++i)
     {
-        m_pixelTransform[i] = static_cast<float>(transform[i]);
-        m_pixelTransformInv[i] = static_cast<float>(inverseTransform[i]);
+        _pixelTransform[i] = static_cast<float>(transform[i]);
+        _pixelTransformInverse[i] = static_cast<float>(inverseTransform[i]);
     }
 }
 

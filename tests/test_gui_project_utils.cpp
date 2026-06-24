@@ -2710,6 +2710,25 @@ TEST(CodeStyleTest, CameraUsesDescriptiveLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, PositiveDepthCameraModelUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/camera/PositiveDepthCameraModel.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/camera/PositiveDepthCameraModel.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _hasPixelTransform = false;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::array<float, 9> _pixelTransform")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::array<float, 9> _pixelTransformInverse")));
+
+    EXPECT_FALSE(header.contains(QStringLiteral("m_hasPixelTransform")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_pixelTransform")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_pixelTransformInv")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_hasPixelTransform")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_pixelTransform")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_pixelTransformInv")));
+}
+
 TEST(CodeStyleTest, DenseMatchCoreUsesLowerCamelPrivateMemberNames)
 {
     const QHash<QString, QStringList> expectedByHeader = {
