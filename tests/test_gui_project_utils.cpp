@@ -1941,6 +1941,48 @@ TEST(CodeStyleTest, MatchLineOverlayUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ImageViewWidgetUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QGraphicsView *_view;"),
+        QStringLiteral("QGraphicsScene *_scene;"),
+        QStringLiteral("QGraphicsPixmapItem *_imageItem;"),
+        QStringLiteral("QVector<QPointF> _matchPoints;"),
+        QStringLiteral("QVector<QGraphicsEllipseItem*> _pointItems;"),
+        QStringLiteral("QString _imagePath;"),
+        QStringLiteral("int _highlightedIndex;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_view"),
+        QStringLiteral("m_scene"),
+        QStringLiteral("m_imageItem"),
+        QStringLiteral("m_matchPoints"),
+        QStringLiteral("m_pointItems"),
+        QStringLiteral("m_imagePath"),
+        QStringLiteral("m_highlightedIndex"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+    }
+
+    EXPECT_TRUE(source.contains(QStringLiteral("ui.m_view"))) << "Qt Designer object name must stay stable";
+}
+
 TEST(CodeStyleTest, ProjectDashboardWidgetUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ProjectDashboardWidget.h"));

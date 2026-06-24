@@ -20,10 +20,10 @@
 
 ImageViewWidget::ImageViewWidget(QWidget *parent)
     : QWidget(parent)
-    , m_view(nullptr)
-    , m_scene(nullptr)
-    , m_imageItem(nullptr)
-    , m_highlightedIndex(-1)
+    , _view(nullptr)
+    , _scene(nullptr)
+    , _imageItem(nullptr)
+    , _highlightedIndex(-1)
 {
     setupView();
 }
@@ -38,25 +38,25 @@ void ImageViewWidget::setupView()
     Ui::ImageViewWidget ui;
     ui.setupUi(this);
 
-    m_scene = new QGraphicsScene(this);
-    m_view = ui.m_view;
-    m_view->setScene(m_scene);
+    _scene = new QGraphicsScene(this);
+    _view = ui.m_view;
+    _view->setScene(_scene);
     
     // 设置视图属性
-    m_view->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
-    m_view->setDragMode(QGraphicsView::ScrollHandDrag);
-    m_view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-    m_view->setResizeAnchor(QGraphicsView::AnchorViewCenter);
-    m_view->setBackgroundBrush(QBrush(Qt::darkGray));
-    m_view->setFrameShape(QFrame::NoFrame);
+    _view->setRenderHints(QPainter::Antialiasing | QPainter::SmoothPixmapTransform);
+    _view->setDragMode(QGraphicsView::ScrollHandDrag);
+    _view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+    _view->setResizeAnchor(QGraphicsView::AnchorViewCenter);
+    _view->setBackgroundBrush(QBrush(Qt::darkGray));
+    _view->setFrameShape(QFrame::NoFrame);
     
     // 安装事件过滤器以捕获滚轮事件
-    m_view->viewport()->installEventFilter(this);
+    _view->viewport()->installEventFilter(this);
     
     // 连接滚动条信号以检测视图变化
-    connect(m_view->horizontalScrollBar(), &QScrollBar::valueChanged,
+    connect(_view->horizontalScrollBar(), &QScrollBar::valueChanged,
         this, &ImageViewWidget::onViewChanged, Qt::QueuedConnection);
-    connect(m_view->verticalScrollBar(), &QScrollBar::valueChanged,
+    connect(_view->verticalScrollBar(), &QScrollBar::valueChanged,
         this, &ImageViewWidget::onViewChanged, Qt::QueuedConnection);
     
 }
@@ -64,7 +64,7 @@ void ImageViewWidget::setupView()
 bool ImageViewWidget::loadImage(const QString &imagePath)
 {
     // ── 异步解码：后台线程读取原始分辨率，主线程更新 Scene ────────────────
-    m_imagePath = imagePath;
+    _imagePath = imagePath;
 
     QFuture<QImage> future = QtConcurrent::run(
         [imagePath]() -> QImage {
@@ -76,7 +76,7 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
     connect(watcher, &QFutureWatcher<QImage>::finished,
             this, [this, watcher, imagePath]() {
         watcher->deleteLater();
-        if (m_imagePath != imagePath) return; // 图像已被其他请求替换
+        if (_imagePath != imagePath) return; // 图像已被其他请求替换
 
         const QImage img = watcher->result();
         if (img.isNull()) {
@@ -84,14 +84,14 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
             return;
         }
 
-        if (m_imageItem) {
-            m_scene->removeItem(m_imageItem);
-            delete m_imageItem;
-            m_imageItem = nullptr;
+        if (_imageItem) {
+            _scene->removeItem(_imageItem);
+            delete _imageItem;
+            _imageItem = nullptr;
         }
-        m_imageItem = m_scene->addPixmap(QPixmap::fromImage(img));
-        m_imageItem->setZValue(0);
-        m_scene->setSceneRect(m_imageItem->boundingRect());
+        _imageItem = _scene->addPixmap(QPixmap::fromImage(img));
+        _imageItem->setZValue(0);
+        _scene->setSceneRect(_imageItem->boundingRect());
         QTimer::singleShot(10, this, [this]() { fitToView(); });
     });
     watcher->setFuture(future);
@@ -102,7 +102,7 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
 void ImageViewWidget::setMatchPoints(const QVector<QPointF> &points)
 {
     clearMatchPoints();
-    m_matchPoints = points;
+    _matchPoints = points;
     
     // 创建点图元
     QPen pen(Qt::red);
@@ -114,7 +114,7 @@ void ImageViewWidget::setMatchPoints(const QVector<QPointF> &points)
 
     for (int i = 0; i < points.size(); ++i) {
         const QPointF &pt = points[i];
-        QGraphicsEllipseItem *item = m_scene->addEllipse(
+        QGraphicsEllipseItem *item = _scene->addEllipse(
             -screenPointSize / 2.0, -screenPointSize / 2.0,
             screenPointSize, screenPointSize,
             pen, brush);
@@ -123,26 +123,26 @@ void ImageViewWidget::setMatchPoints(const QVector<QPointF> &points)
         // 忽略视图变换，使点在屏幕上保持恒定像素大小
         item->setFlag(QGraphicsItem::ItemIgnoresTransformations, true);
         item->setPos(pt);
-        m_pointItems.append(item);
+        _pointItems.append(item);
     }
 }
 
 void ImageViewWidget::clearMatchPoints()
 {
-    for (QGraphicsEllipseItem *item : m_pointItems) {
-        m_scene->removeItem(item);
+    for (QGraphicsEllipseItem *item : _pointItems) {
+        _scene->removeItem(item);
         delete item;
     }
-    m_pointItems.clear();
-    m_matchPoints.clear();
-    m_highlightedIndex = -1;
+    _pointItems.clear();
+    _matchPoints.clear();
+    _highlightedIndex = -1;
 }
 
 void ImageViewWidget::zoomIn()
 {
     qreal factor = currentTransform().m11();
     if (factor < MAX_ZOOM) {
-        m_view->scale(1.2, 1.2);
+        _view->scale(1.2, 1.2);
         onViewChanged();
     }
 }
@@ -151,7 +151,7 @@ void ImageViewWidget::zoomOut()
 {
     qreal factor = currentTransform().m11();
     if (factor > MIN_ZOOM) {
-        m_view->scale(1.0 / 1.2, 1.0 / 1.2);
+        _view->scale(1.0 / 1.2, 1.0 / 1.2);
         onViewChanged();
     }
 }
@@ -161,37 +161,37 @@ void ImageViewWidget::zoomTo(qreal factor)
     factor = qBound(MIN_ZOOM, factor, MAX_ZOOM);
     QTransform trans;
     trans.scale(factor, factor);
-    m_view->setTransform(trans);
+    _view->setTransform(trans);
     onViewChanged();
 }
 
 void ImageViewWidget::fitToView()
 {
-    if (m_imageItem) {
-        m_view->fitInView(m_scene->sceneRect(), Qt::KeepAspectRatio);
+    if (_imageItem) {
+        _view->fitInView(_scene->sceneRect(), Qt::KeepAspectRatio);
         onViewChanged();
     }
 }
 
 void ImageViewWidget::resetZoom()
 {
-    m_view->resetTransform();
+    _view->resetTransform();
     onViewChanged();
 }
 
 QRectF ImageViewWidget::visibleSceneRect() const
 {
-    return m_view->mapToScene(m_view->viewport()->rect()).boundingRect();
+    return _view->mapToScene(_view->viewport()->rect()).boundingRect();
 }
 
 QTransform ImageViewWidget::currentTransform() const
 {
-    return m_view->transform();
+    return _view->transform();
 }
 
 void ImageViewWidget::setTransform(const QTransform &transform)
 {
-    m_view->setTransform(transform);
+    _view->setTransform(transform);
     onViewChanged();
 }
 
@@ -199,9 +199,9 @@ void ImageViewWidget::highlightPoint(int index)
 {
     clearHighlight();
     
-    if (index >= 0 && index < m_pointItems.size()) {
-        m_highlightedIndex = index;
-        QGraphicsEllipseItem *item = m_pointItems[index];
+    if (index >= 0 && index < _pointItems.size()) {
+        _highlightedIndex = index;
+        QGraphicsEllipseItem *item = _pointItems[index];
         
         // 高亮显示（放大、改变颜色）
         QPen pen(Qt::yellow);
@@ -215,15 +215,15 @@ void ImageViewWidget::highlightPoint(int index)
 
 void ImageViewWidget::clearHighlight()
 {
-    if (m_highlightedIndex >= 0 && m_highlightedIndex < m_pointItems.size()) {
-        QGraphicsEllipseItem *item = m_pointItems[m_highlightedIndex];
+    if (_highlightedIndex >= 0 && _highlightedIndex < _pointItems.size()) {
+        QGraphicsEllipseItem *item = _pointItems[_highlightedIndex];
         QPen pen(Qt::red);
         pen.setWidth(2);
         item->setPen(pen);
         item->setBrush(QBrush(Qt::red));
         item->setZValue(10);
         
-        m_highlightedIndex = -1;
+        _highlightedIndex = -1;
     }
 }
 
@@ -231,12 +231,12 @@ void ImageViewWidget::setMatchVisibilityMask(const QVector<bool> &mask)
 {
     // mask长度可能小于点数；若mask为空则显示所有点
     if (mask.isEmpty()) {
-        for (QGraphicsEllipseItem *item : m_pointItems) item->setVisible(true);
+        for (QGraphicsEllipseItem *item : _pointItems) item->setVisible(true);
         return;
     }
 
-    for (int i = 0; i < m_pointItems.size(); ++i) {
-        QGraphicsEllipseItem *item = m_pointItems[i];
+    for (int i = 0; i < _pointItems.size(); ++i) {
+        QGraphicsEllipseItem *item = _pointItems[i];
         if (!item) continue;
         bool vis = (i < mask.size()) ? mask[i] : false;
         item->setVisible(vis);
@@ -245,7 +245,7 @@ void ImageViewWidget::setMatchVisibilityMask(const QVector<bool> &mask)
 
 bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
 {
-    if (obj == m_view->viewport()) {
+    if (obj == _view->viewport()) {
         if (event->type() == QEvent::Wheel) {
             QWheelEvent *wheelEvent = static_cast<QWheelEvent*>(event);
         
@@ -268,8 +268,8 @@ bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
         }
         
         // 执行缩放（以鼠标位置为中心）
-        m_view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
-        m_view->scale(scaleFactor, scaleFactor);
+        _view->setTransformationAnchor(QGraphicsView::AnchorUnderMouse);
+        _view->scale(scaleFactor, scaleFactor);
         onViewChanged();
         
             return true; // 阻止事件继续传播
@@ -278,7 +278,7 @@ bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
         if (event->type() == QEvent::MouseButtonPress) {
             QMouseEvent *me = static_cast<QMouseEvent*>(event);
             if (me->button() == Qt::RightButton) {
-                const QPointF p = m_view->mapToScene(me->pos());
+                const QPointF p = _view->mapToScene(me->pos());
                 emit viewRightClicked(p);
                 return true; // 阻止默认上下文菜单
             }
@@ -291,9 +291,9 @@ bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
                 const qreal threshold = 14.0; // 屏幕像素
                 int closestIdx = -1;
                 qreal closestDist = threshold + 1.0;
-                for (int i = 0; i < m_pointItems.size(); ++i) {
-                    if (!m_pointItems[i] || !m_pointItems[i]->isVisible()) continue;
-                    const QPointF screenPt = m_view->mapFromScene(m_pointItems[i]->pos());
+                for (int i = 0; i < _pointItems.size(); ++i) {
+                    if (!_pointItems[i] || !_pointItems[i]->isVisible()) continue;
+                    const QPointF screenPt = _view->mapFromScene(_pointItems[i]->pos());
                     const QPointF d = screenPt - QPointF(me->pos());
                     const qreal dist = std::sqrt(d.x()*d.x() + d.y()*d.y());
                     if (dist < closestDist) {
@@ -301,8 +301,8 @@ bool ImageViewWidget::eventFilter(QObject *obj, QEvent *event)
                         closestIdx = i;
                     }
                 }
-                if (closestIdx >= 0 && closestIdx < m_matchPoints.size()) {
-                    emit matchPointClicked(closestIdx, m_matchPoints[closestIdx]);
+                if (closestIdx >= 0 && closestIdx < _matchPoints.size()) {
+                    emit matchPointClicked(closestIdx, _matchPoints[closestIdx]);
                 }
                 return true;
             }
@@ -324,7 +324,7 @@ void ImageViewWidget::updatePointsVisibility()
     qreal zoom = currentTransform().m11();
     qreal pointSize = 6.0 / qMax(1.0, zoom * 0.5);
 
-    for (QGraphicsEllipseItem *item : m_pointItems) {
+    for (QGraphicsEllipseItem *item : _pointItems) {
         if (!item) continue;
         // 跳过设置为忽略变换的点（这些点为固定屏幕像素大小）
         if (item->flags() & QGraphicsItem::ItemIgnoresTransformations) continue;

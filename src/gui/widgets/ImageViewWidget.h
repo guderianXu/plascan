@@ -51,7 +51,7 @@ public:
     void setTransform(const QTransform &transform);
     
     // 获取视图组件（用于坐标转换）
-    QGraphicsView* view() const { return m_view; }
+    QGraphicsView* view() const { return _view; }
     
     // 高亮指定索引的匹配点
     void highlightPoint(int index);
@@ -61,10 +61,10 @@ public:
     void setMatchVisibilityMask(const QVector<bool> &mask);
     
     // 获取当前图像路径
-    QString imagePath() const { return m_imagePath; }
+    QString imagePath() const { return _imagePath; }
 
     // 返回当前场景中点图元数量（用于外部同步可见性掩码的大小）
-    int matchItemCount() const { return m_pointItems.size(); }
+    int matchItemCount() const { return _pointItems.size(); }
 
 signals:
     // 视图变换变化（缩放、平移）
@@ -95,15 +95,15 @@ private:
     void updatePointsVisibility();
     qreal calculateZoomFactor() const;
     
-    QGraphicsView *m_view;
-    QGraphicsScene *m_scene;
-    QGraphicsPixmapItem *m_imageItem;
+    QGraphicsView *_view;
+    QGraphicsScene *_scene;
+    QGraphicsPixmapItem *_imageItem;
     
-    QVector<QPointF> m_matchPoints;
-    QVector<QGraphicsEllipseItem*> m_pointItems;
+    QVector<QPointF> _matchPoints;
+    QVector<QGraphicsEllipseItem*> _pointItems;
     
-    QString m_imagePath;
-    int m_highlightedIndex;
+    QString _imagePath;
+    int _highlightedIndex;
     
     // 缩放范围限制
     static constexpr qreal MIN_ZOOM = 0.05;
