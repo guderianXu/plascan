@@ -49,6 +49,7 @@
 - `CanvasWidget.cpp` 拆分匹配查看器诊断日志、特征异步加载和方向估计路径中的超长语句，并新增行宽回归测试，继续收敛图像视图代码格式规范。
 - `LayerRenderer.cpp` 拆分特征覆盖层、拼接影像和匹配线日志中的超长语句，并新增行宽回归测试，继续收敛图层渲染代码格式规范。
 - `VocabularyOverlapDialog.cpp` 拆分相机重叠诊断、描述子转换和参数恢复中的超长语句，并新增行宽回归测试，继续收敛重叠对规划对话框格式规范。
+- `ProjectModelManager.cpp` 拆分网格/纹理结果登记和 Poisson/简化参数恢复中的超长语句，并新增行宽回归测试，继续收敛模型生成 manager 格式规范。
 - 手动特征提取和 DEM 自动流水线中的特征提取步骤改为向 `FeatureExtractionRunner` 传递 `QPointer<ProjectManager>`，runner 在回写 `appendIpfindResult` 前再次检查项目管理器生命周期，避免关闭/切换项目后后台特征任务回调已释放对象。
 - 观测网络构建后台任务改用 `QPointer<ProjectManager>` 和项目路径 guard 回写进度、结果和完成信号，避免用户关闭项目或切换工程后旧任务写回当前项目。
 - `FeatureMatchRunner` 公共入口改为接收 `QPointer<ProjectManager>`，手动匹配和 DEM 自动流水线匹配步骤不再把裸 `ProjectManager*` 捕进后台 worker；匹配结果写回时会重新检查项目仍然有效且路径未切换。

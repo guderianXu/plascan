@@ -218,8 +218,10 @@ QJsonObject buildTextureMappingRecord(const QJsonObject &baseRecord,
         modelRecord = xjw::gui::project::makeModelResultRecord(utcNowIso(),
                                                                 QStringLiteral("texture_mapping"),
                                                                 meshPath,
-                                                                taskResult.value(QStringLiteral("vertex_count")).toInt(-1),
-                                                                taskResult.value(QStringLiteral("face_count")).toInt(-1));
+                                                                taskResult.value(QStringLiteral("vertex_count"))
+                                                                    .toInt(-1),
+                                                                taskResult.value(QStringLiteral("face_count"))
+                                                                    .toInt(-1));
     }
 
     modelRecord[QStringLiteral("created_at")] = utcNowIso();
@@ -423,22 +425,25 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                                    .contains(QStringLiteral("Poisson"), Qt::CaseInsensitive);
             cfg.poissonDepth = qBound(7, settings.value(QStringLiteral("octreeDepth")).toInt(10), 12);
             cfg.poissonThreads = qBound(1, settings.value(QStringLiteral("threads")).toInt(8), 128);
-            cfg.poissonPointWeight = std::clamp(static_cast<float>(settings.value(QStringLiteral("poissonPointWeight")).toDouble(cfg.poissonPointWeight)),
-                                                0.0f,
-                                                8.0f);
-            cfg.poissonTrim = std::clamp(static_cast<float>(settings.value(QStringLiteral("poissonTrim")).toDouble(cfg.poissonTrim)),
-                                         0.0f,
-                                         12.0f);
+            const double point_weight = settings.value(QStringLiteral("poissonPointWeight"))
+                                            .toDouble(cfg.poissonPointWeight);
+            cfg.poissonPointWeight = std::clamp(static_cast<float>(point_weight), 0.0f, 8.0f);
+            const double poisson_trim = settings.value(QStringLiteral("poissonTrim")).toDouble(cfg.poissonTrim);
+            cfg.poissonTrim = std::clamp(static_cast<float>(poisson_trim), 0.0f, 12.0f);
             cfg.fillHoles = settings.value(QStringLiteral("holeFill")).toBool(true);
             cfg.holeFillPasses =
-                xjw::mesh::workflow::holeFillPassesFromArea(settings.value(QStringLiteral("maxHoleSize")).toDouble(100.0));
+                xjw::mesh::workflow::holeFillPassesFromArea(
+                    settings.value(QStringLiteral("maxHoleSize")).toDouble(100.0));
             cfg.cleanSmallComponents = settings.value(QStringLiteral("cleanSmall")).toBool(true);
-            cfg.minComponentFaces = qBound(2, settings.value(QStringLiteral("minFaces")).toInt(100), 100000);
+            cfg.minComponentFaces = qBound(2,
+                                           settings.value(QStringLiteral("minFaces")).toInt(100),
+                                           100000);
 
             const QString qualityProfile = settings.contains(QStringLiteral("qualityProfile"))
                 ? settings.value(QStringLiteral("qualityProfile")).toString()
                 : QStringLiteral("balanced");
-            const QString voxelDensity = settings.value(QStringLiteral("voxelDensity")).toString(QStringLiteral("medium"));
+            const QString voxelDensity =
+                settings.value(QStringLiteral("voxelDensity")).toString(QStringLiteral("medium"));
 
             if (qualityProfile == QStringLiteral("detail"))
             {
@@ -499,7 +504,9 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                     settings.value(QStringLiteral("decimateRatio")).toDouble(0.5),
                     0.05,
                     1.0);
-                cfg.simplifyTargetFaces = std::max(1000, static_cast<int>(std::lround(cfg.simplifyTargetFaces * decimateRatio)));
+                cfg.simplifyTargetFaces = std::max(
+                    1000,
+                    static_cast<int>(std::lround(cfg.simplifyTargetFaces * decimateRatio)));
                 cfg.enableDownsample = true;
                 cfg.voxelSimplifyFactor = std::max(cfg.voxelSimplifyFactor,
                                                    static_cast<float>(1.0 / decimateRatio));
