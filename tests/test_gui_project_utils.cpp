@@ -1579,9 +1579,9 @@ TEST(GuiAsyncLifetimeTest, FeatureMatchRunnerUsesGuardedProjectManagerCallbacks)
     ASSERT_FALSE(runnerHeader.isEmpty());
     ASSERT_FALSE(runnerSource.isEmpty());
 
-    const int mainStart = mainWindowSource.indexOf(QStringLiteral("connect(m_mainMenu->matchFeaturesAction()"));
+    const int mainStart = mainWindowSource.indexOf(QStringLiteral("connect(_mainMenu->matchFeaturesAction()"));
     ASSERT_GE(mainStart, 0);
-    const int mainEnd = mainWindowSource.indexOf(QStringLiteral("if (m_mainMenu->viewMatchesAction())"), mainStart);
+    const int mainEnd = mainWindowSource.indexOf(QStringLiteral("if (_mainMenu->viewMatchesAction())"), mainStart);
     ASSERT_GT(mainEnd, mainStart);
     const QString mainBlock = mainWindowSource.mid(mainStart, mainEnd - mainStart);
 
@@ -1594,9 +1594,9 @@ TEST(GuiAsyncLifetimeTest, FeatureMatchRunnerUsesGuardedProjectManagerCallbacks)
     EXPECT_FALSE(runnerSource.contains(QStringLiteral("ProjectIO::projectAssetsDir(projectManager->currentProjectPath())")));
     EXPECT_FALSE(runnerSource.contains(QStringLiteral("projectManager->getAllImages()")));
 
-    EXPECT_TRUE(mainBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(m_projectManager)")));
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(_projectManager)")));
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("FeatureMatchRunner::run(config, imagePairs, pmGuard")));
-    EXPECT_FALSE(mainBlock.contains(QStringLiteral("pm = m_projectManager")));
+    EXPECT_FALSE(mainBlock.contains(QStringLiteral("pm = _projectManager")));
 }
 
 TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
@@ -5520,7 +5520,7 @@ TEST(MainWindowTest, ReferenceDatasetActionsConnectToProjectManager)
     ASSERT_FALSE(mainWindow.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("bindActions(MainMenu")));
-    EXPECT_TRUE(mainWindow.contains(QStringLiteral("m_menuWorkflowController->bindActions(m_mainMenu)")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral("_menuWorkflowController->bindActions(_mainMenu)")));
 
     EXPECT_TRUE(source.contains(QStringLiteral("importReferenceDatasetAction()")));
     EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::importReferenceDataset")));
@@ -5707,11 +5707,92 @@ TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowContro
     ASSERT_FALSE(controllerHeader.isEmpty());
     ASSERT_FALSE(controllerSource.isEmpty());
 
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("m_menuWorkflowController->bindActions(m_mainMenu)")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_menuWorkflowController->bindActions(_mainMenu)")));
     EXPECT_TRUE(controllerHeader.contains(QStringLiteral("bindActions(MainMenu")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("cameraConvertAction")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("openCameraConvertDialog")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("CameraConvertDialog")));
+}
+
+TEST(CodeStyleTest, MainWindowUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("Ui::MainWindow*  _ui{};"),
+        QStringLiteral("QSplitter*        _mainSplitter{};"),
+        QStringLiteral("QTabWidget*       _leftTabs{};"),
+        QStringLiteral("ProjectDashboardWidget* _dashboard{};"),
+        QStringLiteral("DataTreeWidget*   _dataTree{};"),
+        QStringLiteral("ReferencePanelWidget* _referencePanel{};"),
+        QStringLiteral("WorkspaceCenterWidget* _workspaceCenter{};"),
+        QStringLiteral("CanvasWidget*     _canvas{};"),
+        QStringLiteral("LogPanel*         _log{};"),
+        QStringLiteral("MainMenu*         _mainMenu{};"),
+        QStringLiteral("AppConfigManager* _config{};"),
+        QStringLiteral("ProjectData*      _projectData{};"),
+        QStringLiteral("MenuWorkflowController* _menuWorkflowController{};"),
+        QStringLiteral("ReconstructionWorkflowController* _reconController{};"),
+        QStringLiteral("ProjectManager*   _projectManager{};"),
+        QStringLiteral("QProgressDialog*  _saveProgressDialog{};"),
+        QStringLiteral("TaskStatusWidget* _mvsTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _meshTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _atTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _sgTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _spTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _dmTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _overlapTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _obsNetTaskStatus{};"),
+        QStringLiteral("QDockWidget*      _logDock{};"),
+        QStringLiteral("QToolButton*      _logBtn{};"),
+        QStringLiteral("DialogSettingStore*   _featureMatchingSetting{};"),
+        QStringLiteral("DialogSettingStore*   _uiSetting{};"),
+        QStringLiteral("QString           _lastSelectedImage;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_ui"),
+        QStringLiteral("m_mainSplitter"),
+        QStringLiteral("m_leftTabs"),
+        QStringLiteral("m_dashboard"),
+        QStringLiteral("m_dataTree"),
+        QStringLiteral("m_referencePanel"),
+        QStringLiteral("m_workspaceCenter"),
+        QStringLiteral("m_canvas"),
+        QStringLiteral("m_log"),
+        QStringLiteral("m_mainMenu"),
+        QStringLiteral("m_config"),
+        QStringLiteral("m_projectData"),
+        QStringLiteral("m_menuWorkflowController"),
+        QStringLiteral("m_reconController"),
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_saveProgressDialog"),
+        QStringLiteral("m_mvsTaskStatus"),
+        QStringLiteral("m_meshTaskStatus"),
+        QStringLiteral("m_atTaskStatus"),
+        QStringLiteral("m_sgTaskStatus"),
+        QStringLiteral("m_spTaskStatus"),
+        QStringLiteral("m_dmTaskStatus"),
+        QStringLiteral("m_overlapTaskStatus"),
+        QStringLiteral("m_obsNetTaskStatus"),
+        QStringLiteral("m_logDock"),
+        QStringLiteral("m_logBtn"),
+        QStringLiteral("m_featureMatchingSetting"),
+        QStringLiteral("m_uiSetting"),
+        QStringLiteral("m_lastSelectedImage"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
 }
 
 TEST(CodeStyleTest, MenuWorkflowControllerUsesLowerCamelPrivateMemberNames)
@@ -6639,9 +6720,9 @@ TEST(ProjectDashboardWidgetTest, MainWindowRefreshesDashboardFromProjectMetadata
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("ProjectDashboardWidget")));
-    EXPECT_TRUE(source.contains(QStringLiteral("m_dashboard")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_dashboard")));
     EXPECT_TRUE(source.contains(QStringLiteral("ProjectDashboardWidget::loadFromJson")));
-    EXPECT_TRUE(source.contains(QStringLiteral("projectMetadataChanged, m_dashboard")));
+    EXPECT_TRUE(source.contains(QStringLiteral("projectMetadataChanged, _dashboard")));
 }
 
 TEST(ProjectDashboardWidgetTest, ShowsQualityMetricsFromRegisteredReports)
@@ -6832,7 +6913,7 @@ TEST(AerialTriangulationWorkflowTest, MainWindowWiresSparseOnlyAerialTriangulati
     ASSERT_FALSE(mainWindow.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("bindActions(MainMenu")));
-    EXPECT_TRUE(mainWindow.contains(QStringLiteral("m_menuWorkflowController->bindActions(m_mainMenu)")));
+    EXPECT_TRUE(mainWindow.contains(QStringLiteral("_menuWorkflowController->bindActions(_mainMenu)")));
 
     const int bindIndex = source.indexOf(QStringLiteral("void MenuWorkflowController::bindActions"));
     ASSERT_GE(bindIndex, 0);
@@ -7097,7 +7178,7 @@ TEST(MainWindowFeatureMatchingTest, DialogUsesProjectFeatureSuffixesInsteadOfCur
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("projectFeatureSuffixes")));
-    EXPECT_FALSE(source.contains(QStringLiteral("m_canvas->availableFeatureSuffixes()")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_canvas->availableFeatureSuffixes()")));
 }
 
 TEST(MainWindowCancelTest, StatusBarCancelButtonsGiveImmediateFeedbackAndEmitSignals)
@@ -7111,8 +7192,8 @@ TEST(MainWindowCancelTest, StatusBarCancelButtonsGiveImmediateFeedbackAndEmitSig
     EXPECT_TRUE(header.contains(QStringLiteral("spCancelRequested")));
     EXPECT_TRUE(source.contains(QStringLiteral("正在取消特征匹配")));
     EXPECT_TRUE(source.contains(QStringLiteral("正在取消特征提取")));
-    EXPECT_TRUE(source.contains(QStringLiteral("m_sgTaskStatus")));
-    EXPECT_TRUE(source.contains(QStringLiteral("m_spTaskStatus")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_sgTaskStatus")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_spTaskStatus")));
     EXPECT_TRUE(source.contains(QStringLiteral("TaskStatusWidget::cancelRequested")));
     EXPECT_TRUE(source.contains(QStringLiteral("emit sgCancelRequested()")));
     EXPECT_TRUE(source.contains(QStringLiteral("emit spCancelRequested()")));
@@ -7183,7 +7264,7 @@ TEST(DenseMatchCancelTest, StatusBarCancelSignalStopsRemainingPairs)
     ASSERT_FALSE(denseMatchRunnerSource.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("dmCancelRequested")));
-    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("m_dmTaskStatus")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_dmTaskStatus")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("emit dmCancelRequested()")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("MainWindow::dmCancelRequested")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("dmCancelFlag")));
@@ -7664,7 +7745,7 @@ TEST(MainWindowFeatureRefreshTest, BatchFeatureAppendDoesNotSynchronouslyReloadN
 
     const int connectIndex = source.indexOf(QStringLiteral("ipfindResultAppended"));
     ASSERT_GE(connectIndex, 0);
-    const int blockEnd = source.indexOf(QStringLiteral("if (m_config)"), connectIndex);
+    const int blockEnd = source.indexOf(QStringLiteral("if (_config)"), connectIndex);
     ASSERT_GE(blockEnd, connectIndex);
     const QString block = source.mid(connectIndex, blockEnd - connectIndex);
 
@@ -10001,7 +10082,7 @@ TEST(VocabularyOverlapDialogTest, SupportsCameraModelModeAndStatusProgress)
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("ReferenceBody::Earth")));
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("ReferenceBody::Moon")));
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("ReferenceBody::Mars")));
-    EXPECT_TRUE(mainHeader.contains(QStringLiteral("m_overlapTaskStatus")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("_overlapTaskStatus")));
     EXPECT_TRUE(mainHeader.contains(QStringLiteral("overlapCancelRequested")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("onOverlapProgress")));
     EXPECT_TRUE(mainSource.contains(QStringLiteral("onOverlapFinished")));

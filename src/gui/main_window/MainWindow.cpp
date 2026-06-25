@@ -67,7 +67,7 @@
 // ============================================================
 MainWindow::MainWindow(QWidget *parent)
     : QMainWindow(parent)
-    , m_ui(new Ui::MainWindow)
+    , _ui(new Ui::MainWindow)
 {
     Qt::WindowFlags flags = windowFlags();
     flags |= Qt::Window;
@@ -78,11 +78,11 @@ MainWindow::MainWindow(QWidget *parent)
     flags &= ~Qt::FramelessWindowHint;
     setWindowFlags(flags);
     setWindowTitle(QStringLiteral("PlaScan"));
-    m_config   = new AppConfigManager(this);
+    _config   = new AppConfigManager(this);
 
     setupUi();
-    m_mainMenu = new MainMenu(this);
-    m_config->windowState()->load(this);
+    _mainMenu = new MainMenu(this);
+    _config->windowState()->load(this);
 
     if (windowState().testFlag(Qt::WindowFullScreen))
     {
@@ -99,7 +99,7 @@ MainWindow::MainWindow(QWidget *parent)
 
 MainWindow::~MainWindow()
 {
-    delete m_ui;
+    delete _ui;
 }
 
 void MainWindow::dragEnterEvent(QDragEnterEvent *event)
@@ -130,18 +130,18 @@ void MainWindow::dropEvent(QDropEvent *event)
         return;
     }
 
-    if (m_workspaceCenter)
+    if (_workspaceCenter)
     {
-        m_workspaceCenter->showModelFile(modelPath);
+        _workspaceCenter->showModelFile(modelPath);
         statusBar()->showMessage(tr("已加载三维模型：%1").arg(QFileInfo(modelPath).fileName()), 5000);
     }
-    if (m_dataTree)
+    if (_dataTree)
     {
-        m_dataTree->addTransientModel(modelPath);
+        _dataTree->addTransientModel(modelPath);
     }
-    if (m_leftTabs && m_dataTree)
+    if (_leftTabs && _dataTree)
     {
-        m_leftTabs->setCurrentWidget(m_dataTree);
+        _leftTabs->setCurrentWidget(_dataTree);
     }
     event->acceptProposedAction();
 }
@@ -152,20 +152,20 @@ void MainWindow::dropEvent(QDropEvent *event)
 
 void MainWindow::setupUi()
 {
-    m_ui->setupUi(this);
+    _ui->setupUi(this);
 
-    m_mainSplitter = m_ui->mainSplitter;
-    m_leftTabs = m_ui->leftTabs;
-    m_dashboard = m_ui->dashboardWidget;
-    m_dataTree = m_ui->dataTree;
-    m_referencePanel = m_ui->referencePanel;
-    m_workspaceCenter = m_ui->workspaceCenter;
-    m_canvas       = m_workspaceCenter->canvas();
-    m_mainSplitter->setStretchFactor(1, 1);
+    _mainSplitter = _ui->mainSplitter;
+    _leftTabs = _ui->leftTabs;
+    _dashboard = _ui->dashboardWidget;
+    _dataTree = _ui->dataTree;
+    _referencePanel = _ui->referencePanel;
+    _workspaceCenter = _ui->workspaceCenter;
+    _canvas       = _workspaceCenter->canvas();
+    _mainSplitter->setStretchFactor(1, 1);
 
-    m_log = m_ui->logPanel;
-    m_logDock = m_ui->logDock;
-    m_logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+    _log = _ui->logPanel;
+    _logDock = _ui->logDock;
+    _logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
 
     LOG_INFO("%s", qUtf8Printable(tr("日志面板已就绪")));
 
@@ -179,18 +179,18 @@ void MainWindow::setupBottomPanel()
 {
     QWidget* titleBar = new QWidget();
 
-    m_logBtn = new QToolButton(titleBar);
-    m_logBtn->setText(tr("日志"));
-    m_logBtn->setCheckable(true);
-    m_logBtn->setChecked(true);
+    _logBtn = new QToolButton(titleBar);
+    _logBtn->setText(tr("日志"));
+    _logBtn->setCheckable(true);
+    _logBtn->setChecked(true);
 
     auto *grp = new QButtonGroup(titleBar);
     grp->setExclusive(true);
-    grp->addButton(m_logBtn, 0);
+    grp->addButton(_logBtn, 0);
 
-    m_logDock->setTitleBarWidget(titleBar);
+    _logDock->setTitleBarWidget(titleBar);
 
-    connect(m_logBtn, &QToolButton::clicked, this, &MainWindow::onLogBtnClicked);
+    connect(_logBtn, &QToolButton::clicked, this, &MainWindow::onLogBtnClicked);
 
     Q_UNUSED(titleBar);
 }
@@ -201,54 +201,54 @@ void MainWindow::setupBottomPanel()
 
 void MainWindow::setupMenuConnections()
 {
-    if (!m_mainMenu)
+    if (!_mainMenu)
     {
         return;
     }
 
-    if (m_mainMenu->zoomInAction())
+    if (_mainMenu->zoomInAction())
     {
-        connect(m_mainMenu->zoomInAction(), &QAction::triggered, m_canvas, &CanvasWidget::zoomIn);
+        connect(_mainMenu->zoomInAction(), &QAction::triggered, _canvas, &CanvasWidget::zoomIn);
     }
-    if (m_mainMenu->zoomOutAction())
+    if (_mainMenu->zoomOutAction())
     {
-        connect(m_mainMenu->zoomOutAction(), &QAction::triggered, m_canvas, &CanvasWidget::zoomOut);
+        connect(_mainMenu->zoomOutAction(), &QAction::triggered, _canvas, &CanvasWidget::zoomOut);
     }
-    if (m_mainMenu->resetViewAction())
+    if (_mainMenu->resetViewAction())
     {
-        connect(m_mainMenu->resetViewAction(), &QAction::triggered, m_canvas, &CanvasWidget::resetView);
-    }
-
-    if (m_mainMenu->toggleLogAction())
-    {
-        connect(m_mainMenu->toggleLogAction(), &QAction::toggled, this, &MainWindow::onToggleLogAction);
+        connect(_mainMenu->resetViewAction(), &QAction::triggered, _canvas, &CanvasWidget::resetView);
     }
 
-    if (m_mainMenu->minimizeAction())
+    if (_mainMenu->toggleLogAction())
     {
-        connect(m_mainMenu->minimizeAction(), &QAction::triggered, this, &QWidget::showMinimized);
+        connect(_mainMenu->toggleLogAction(), &QAction::toggled, this, &MainWindow::onToggleLogAction);
     }
 
-    if (m_mainMenu->toggleGizmoAction() && m_workspaceCenter && m_workspaceCenter->modelView())
+    if (_mainMenu->minimizeAction())
     {
-        connect(m_mainMenu->toggleGizmoAction(), &QAction::toggled,
-                m_workspaceCenter->modelView(), &CameraSceneWidget::setShowGizmo);
-    }
-    if (m_mainMenu->toggleCamerasAction() && m_workspaceCenter && m_workspaceCenter->modelView())
-    {
-        connect(m_mainMenu->toggleCamerasAction(), &QAction::toggled,
-                m_workspaceCenter->modelView(), &CameraSceneWidget::setShowCameras);
+        connect(_mainMenu->minimizeAction(), &QAction::triggered, this, &QWidget::showMinimized);
     }
 
-    if (m_mainMenu->manualPointCloudPruneAction())
+    if (_mainMenu->toggleGizmoAction() && _workspaceCenter && _workspaceCenter->modelView())
     {
-        connect(m_mainMenu->manualPointCloudPruneAction(), &QAction::triggered,
+        connect(_mainMenu->toggleGizmoAction(), &QAction::toggled,
+                _workspaceCenter->modelView(), &CameraSceneWidget::setShowGizmo);
+    }
+    if (_mainMenu->toggleCamerasAction() && _workspaceCenter && _workspaceCenter->modelView())
+    {
+        connect(_mainMenu->toggleCamerasAction(), &QAction::toggled,
+                _workspaceCenter->modelView(), &CameraSceneWidget::setShowCameras);
+    }
+
+    if (_mainMenu->manualPointCloudPruneAction())
+    {
+        connect(_mainMenu->manualPointCloudPruneAction(), &QAction::triggered,
                 this, &MainWindow::onManualPointCloudPrune);
     }
 
-    if (m_workspaceCenter && m_workspaceCenter->modelView())
+    if (_workspaceCenter && _workspaceCenter->modelView())
     {
-        auto *modelView = m_workspaceCenter->modelView();
+        auto *modelView = _workspaceCenter->modelView();
         connect(modelView, &CameraSceneWidget::manualPruneApplied, this,
                 [this](int removedCount, int remainingCount)
         {
@@ -285,163 +285,163 @@ void MainWindow::setupMenuConnections()
 // ============================================================
 void MainWindow::setupProjectManager()
 {
-    m_projectData = new ProjectData(this);
-    m_projectManager = new ProjectManager(m_projectData, this);
-    m_projectManager->setObjectName(QStringLiteral("ProjectManager"));
+    _projectData = new ProjectData(this);
+    _projectManager = new ProjectManager(_projectData, this);
+    _projectManager->setObjectName(QStringLiteral("ProjectManager"));
 
-    m_menuWorkflowController = new MenuWorkflowController(this, this);
-    m_menuWorkflowController->setProjectManager(m_projectManager);
+    _menuWorkflowController = new MenuWorkflowController(this, this);
+    _menuWorkflowController->setProjectManager(_projectManager);
  
-    m_reconController = new ReconstructionWorkflowController(this, this);
-    m_reconController->setProjectManager(m_projectManager);
+    _reconController = new ReconstructionWorkflowController(this, this);
+    _reconController->setProjectManager(_projectManager);
     // 连接特征显示选项更新到CanvasWidget
-    connect(m_menuWorkflowController, &MenuWorkflowController::requestApplyFeatureDisplayOptions,
+    connect(_menuWorkflowController, &MenuWorkflowController::requestApplyFeatureDisplayOptions,
             this, [this](const LayerRenderer::FeatureDisplayOptions &opts)
             {
-                if (m_canvas)
+                if (_canvas)
                 {
-                    m_canvas->applyFeatureDisplayOptions(opts);
+                    _canvas->applyFeatureDisplayOptions(opts);
                 }
             });
 
-    if (m_dataTree)
+    if (_dataTree)
     {
-        connect(m_dataTree, &DataTreeWidget::imageActivated,
+        connect(_dataTree, &DataTreeWidget::imageActivated,
                 this, [this](const QString &p)
                 {
-                    m_lastSelectedImage = p;
+                    _lastSelectedImage = p;
                 });
     }
-    if (m_referencePanel)
+    if (_referencePanel)
     {
-        connect(m_referencePanel, &ReferencePanelWidget::imageActivated,
+        connect(_referencePanel, &ReferencePanelWidget::imageActivated,
                 this, [this](const QString &p)
                 {
-                    m_lastSelectedImage = p;
+                    _lastSelectedImage = p;
                 });
     }
     // 画布切换影像时，通过 DialogSettingStore 持久化活跃影像路径
-    if (m_canvas)
+    if (_canvas)
     {
-        connect(m_canvas, &CanvasWidget::activeImageChanged, this, [this](const QString &path)
+        connect(_canvas, &CanvasWidget::activeImageChanged, this, [this](const QString &path)
         {
             saveUiSetting(QJsonObject{{QStringLiteral("active_image_path"), path}});
         });
     }
 
-    if (m_mainMenu)
+    if (_mainMenu)
     {
-        if (m_mainMenu->toggleLogAction())
+        if (_mainMenu->toggleLogAction())
         {
-            connect(m_mainMenu->toggleLogAction(), &QAction::toggled, this, &MainWindow::onLogVisiblePersist);
+            connect(_mainMenu->toggleLogAction(), &QAction::toggled, this, &MainWindow::onLogVisiblePersist);
         }
     }
-    if (m_log)
+    if (_log)
     {
-        connect(m_log, &LogPanel::displayLevelChanged, this, &MainWindow::onLogDisplayLevelChanged);
-    }
-
-    if (m_config)
-    {
-        m_projectManager->setFileDialogStateManager(m_config->fileDialogs());
+        connect(_log, &LogPanel::displayLevelChanged, this, &MainWindow::onLogDisplayLevelChanged);
     }
 
-    if (m_mainMenu)
+    if (_config)
     {
-        if (m_mainMenu->newAction())
+        _projectManager->setFileDialogStateManager(_config->fileDialogs());
+    }
+
+    if (_mainMenu)
+    {
+        if (_mainMenu->newAction())
         {
-            connect(m_mainMenu->newAction(), &QAction::triggered, m_projectManager, &ProjectManager::createNewProject);
+            connect(_mainMenu->newAction(), &QAction::triggered, _projectManager, &ProjectManager::createNewProject);
         }
-        if (m_mainMenu->openAction())
+        if (_mainMenu->openAction())
         {
-            connect(m_mainMenu->openAction(), &QAction::triggered, m_projectManager, &ProjectManager::openProject);
+            connect(_mainMenu->openAction(), &QAction::triggered, _projectManager, &ProjectManager::openProject);
         }
-        if (m_mainMenu->addPhotoAction())
+        if (_mainMenu->addPhotoAction())
         {
-            connect(m_mainMenu->addPhotoAction(), &QAction::triggered, m_projectManager, &ProjectManager::addPhoto);
+            connect(_mainMenu->addPhotoAction(), &QAction::triggered, _projectManager, &ProjectManager::addPhoto);
         }
-        if (m_mainMenu->addFolderAction())
+        if (_mainMenu->addFolderAction())
         {
-            connect(m_mainMenu->addFolderAction(), &QAction::triggered, m_projectManager, &ProjectManager::addFolder);
+            connect(_mainMenu->addFolderAction(), &QAction::triggered, _projectManager, &ProjectManager::addFolder);
         }
-        if (m_mainMenu->saveAction())
+        if (_mainMenu->saveAction())
         {
-            connect(m_mainMenu->saveAction(), &QAction::triggered, m_projectManager, &ProjectManager::saveProject);
+            connect(_mainMenu->saveAction(), &QAction::triggered, _projectManager, &ProjectManager::saveProject);
         }
-        if (m_mainMenu->exportMatchedPairsAction())
+        if (_mainMenu->exportMatchedPairsAction())
         {
-            connect(m_mainMenu->exportMatchedPairsAction(), &QAction::triggered,
+            connect(_mainMenu->exportMatchedPairsAction(), &QAction::triggered,
                     this, &MainWindow::onExportMatchedPairs);
         }
 
-        if (m_menuWorkflowController)
+        if (_menuWorkflowController)
         {
-            m_menuWorkflowController->bindActions(m_mainMenu);
+            _menuWorkflowController->bindActions(_mainMenu);
         }
 
         // ── 重建菜单 → ReconstructionWorkflowController ──
-        if (m_reconController)
+        if (_reconController)
         {
             auto connectRecon = [&](QAction *act, void (ReconstructionWorkflowController::*slot)())
             {
                 if (act)
                 {
-                    connect(act, &QAction::triggered, m_reconController, slot);
+                    connect(act, &QAction::triggered, _reconController, slot);
                 }
             };
             // 稀疏重建
-            connectRecon(m_mainMenu->buildObsNetworkAction(),   &ReconstructionWorkflowController::openObservationNetworkDialog);
-            connectRecon(m_mainMenu->initCameraPoseAction(),    &ReconstructionWorkflowController::openInitCameraPoseDialog);
-            connectRecon(m_mainMenu->triangulateAction(),       &ReconstructionWorkflowController::openTriangulationDialog);
-            connectRecon(m_mainMenu->reconBundleAdjustAction(), &ReconstructionWorkflowController::openReconBundleAdjustDialog);
-            connectRecon(m_mainMenu->sparseCloudPostProcessAction(), &ReconstructionWorkflowController::openSparseCloudPostProcessDialog);
+            connectRecon(_mainMenu->buildObsNetworkAction(),   &ReconstructionWorkflowController::openObservationNetworkDialog);
+            connectRecon(_mainMenu->initCameraPoseAction(),    &ReconstructionWorkflowController::openInitCameraPoseDialog);
+            connectRecon(_mainMenu->triangulateAction(),       &ReconstructionWorkflowController::openTriangulationDialog);
+            connectRecon(_mainMenu->reconBundleAdjustAction(), &ReconstructionWorkflowController::openReconBundleAdjustDialog);
+            connectRecon(_mainMenu->sparseCloudPostProcessAction(), &ReconstructionWorkflowController::openSparseCloudPostProcessDialog);
             // 密集重建
-            connectRecon(m_mainMenu->denseMatchAction(),       &ReconstructionWorkflowController::openDenseMatchDialog);
-            connectRecon(m_mainMenu->depthMapEstimateAction(),  &ReconstructionWorkflowController::openDepthMapEstimateDialog);
-            connectRecon(m_mainMenu->fuseDepthMapsAction(),     &ReconstructionWorkflowController::openDepthFusionDialog);
-            connectRecon(m_mainMenu->refineDenseCloudAction(),  &ReconstructionWorkflowController::openDenseCloudRefineDialog);
+            connectRecon(_mainMenu->denseMatchAction(),       &ReconstructionWorkflowController::openDenseMatchDialog);
+            connectRecon(_mainMenu->depthMapEstimateAction(),  &ReconstructionWorkflowController::openDepthMapEstimateDialog);
+            connectRecon(_mainMenu->fuseDepthMapsAction(),     &ReconstructionWorkflowController::openDepthFusionDialog);
+            connectRecon(_mainMenu->refineDenseCloudAction(),  &ReconstructionWorkflowController::openDenseCloudRefineDialog);
             // 模型生成
-            connectRecon(m_mainMenu->meshReconstructAction(),   &ReconstructionWorkflowController::openMeshReconstructionDialog);
-            connectRecon(m_mainMenu->textureMappingAction(),    &ReconstructionWorkflowController::openTextureMappingDialog);
-            connectRecon(m_mainMenu->exportModelAction(),       &ReconstructionWorkflowController::openModelExportDialog);
+            connectRecon(_mainMenu->meshReconstructAction(),   &ReconstructionWorkflowController::openMeshReconstructionDialog);
+            connectRecon(_mainMenu->textureMappingAction(),    &ReconstructionWorkflowController::openTextureMappingDialog);
+            connectRecon(_mainMenu->exportModelAction(),       &ReconstructionWorkflowController::openModelExportDialog);
         }
 
         // 连接匹配相关菜单动作到对话框（如果 ProjectManager 可用则传入以便填充数据）
-        if (m_mainMenu->matchFeaturesAction())
+        if (_mainMenu->matchFeaturesAction())
         {
-            connect(m_mainMenu->matchFeaturesAction(), &QAction::triggered, this, [this]()
+            connect(_mainMenu->matchFeaturesAction(), &QAction::triggered, this, [this]()
             {
-                if (!m_projectManager)
+                if (!_projectManager)
                 {
                     LOG_ERROR(QStringLiteral("无法打开匹配配置：ProjectManager 未初始化"));
                     return;
                 }
                 auto *dlg = new FeatureMatchingDialog(this);
                 dlg->setAttribute(Qt::WA_DeleteOnClose);
-                dlg->setProjectImages(m_projectManager->getAllImages());
+                dlg->setProjectImages(_projectManager->getAllImages());
 
                 // 从项目整体收集可用的特征后缀并设置到下拉框
                 const QStringList projectSuffixes = xjw::gui::project::projectFeatureSuffixes(
-                    m_projectManager->currentProjectPath(), m_projectManager->currentMeta());
+                    _projectManager->currentProjectPath(), _projectManager->currentMeta());
                 if (!projectSuffixes.isEmpty())
                 {
                     dlg->setAvailableFeatureSuffixes(projectSuffixes);
                 }
 
                 // 懒初始化特征匹配记忆化设置管理器
-                if (!m_featureMatchingSetting)
+                if (!_featureMatchingSetting)
                 {
-                    m_featureMatchingSetting = new DialogSettingStore(DialogSettingKeys::FeatureMatching, this);
+                    _featureMatchingSetting = new DialogSettingStore(DialogSettingKeys::FeatureMatching, this);
                 }
-                m_featureMatchingSetting->setProjectPath(m_projectManager->currentProjectPath());
-                const QJsonObject saved = m_featureMatchingSetting->load();
+                _featureMatchingSetting->setProjectPath(_projectManager->currentProjectPath());
+                const QJsonObject saved = _featureMatchingSetting->load();
                 if (!saved.isEmpty())
                 {
                     dlg->applySettings(saved);
                 }
 
                 // 默认输出目录（仅当用户未保存过 output_dir 时才设置）
-                const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
+                const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
                 if (!assetsDir.isEmpty() && saved.value("output_dir").toString().isEmpty())
                 {
                     QJsonObject defaultOutput = saved;  // 基于已恢复的设置，只覆盖 output_dir
@@ -452,9 +452,9 @@ void MainWindow::setupProjectManager()
                 // 实时保存参数到项目配置（通过 DialogSettingStore）
                 connect(dlg, &FeatureMatchingDialog::settingsChanged, this, [this](const QJsonObject &s)
                 {
-                    if (m_featureMatchingSetting)
+                    if (_featureMatchingSetting)
                     {
-                        m_featureMatchingSetting->save(s);
+                        _featureMatchingSetting->save(s);
                     }
                 });
 
@@ -462,7 +462,7 @@ void MainWindow::setupProjectManager()
                 connect(dlg, &FeatureMatchingDialog::runRequested, this,
                     [this](const QJsonObject &config, const QStringList &imagePairs)
                 {
-                    QPointer<ProjectManager> pmGuard(m_projectManager);
+                    QPointer<ProjectManager> pmGuard(_projectManager);
                     if (!pmGuard)
                     {
                         LOG_ERROR(QStringLiteral("无法运行特征匹配：项目管理器未初始化"));
@@ -551,12 +551,12 @@ void MainWindow::setupProjectManager()
                 // 连接"查看匹配"信号：在对话框中直接打开匹配查看器
                 connect(dlg, &FeatureMatchingDialog::viewMatchesRequested, this, [this]()
                 {
-                    if (!m_projectManager)
+                    if (!_projectManager)
                     {
                         return;
                     }
 
-                    auto *matchDlg = new MatchPairSelectorDialog(m_projectManager, this);
+                    auto *matchDlg = new MatchPairSelectorDialog(_projectManager, this);
                     matchDlg->setAttribute(Qt::WA_DeleteOnClose);
                     matchDlg->show();
                 });
@@ -565,163 +565,163 @@ void MainWindow::setupProjectManager()
             });
         }
 
-        if (m_mainMenu->viewMatchesAction())
+        if (_mainMenu->viewMatchesAction())
         {
-            connect(m_mainMenu->viewMatchesAction(), &QAction::triggered, this, [this]()
+            connect(_mainMenu->viewMatchesAction(), &QAction::triggered, this, [this]()
             {
-                if (!m_projectManager)
+                if (!_projectManager)
                 {
                     LOG_ERROR(QStringLiteral("无法打开匹配查看：ProjectManager 未初始化"));
                     return;
                 }
                 // 打开匹配对选择对话框以便用户选择要查看的匹配对
-                auto *dlg = new MatchPairSelectorDialog(m_projectManager, this);
+                auto *dlg = new MatchPairSelectorDialog(_projectManager, this);
                 dlg->setAttribute(Qt::WA_DeleteOnClose);
                 dlg->exec();
             });
         }
 
-        if (m_mainMenu->intersectionCheckAction())
+        if (_mainMenu->intersectionCheckAction())
         {
-            connect(m_mainMenu->intersectionCheckAction(), &QAction::triggered, this, [this]()
+            connect(_mainMenu->intersectionCheckAction(), &QAction::triggered, this, [this]()
             {
-                if (!m_projectManager)
+                if (!_projectManager)
                 {
                     LOG_ERROR(QStringLiteral("无法打开前方交汇检测：ProjectManager 未初始化"));
                     return;
                 }
-                auto *dlg = new ForwardIntersectionCheckDialog(m_projectManager, this);
+                auto *dlg = new ForwardIntersectionCheckDialog(_projectManager, this);
                 dlg->setAttribute(Qt::WA_DeleteOnClose);
                 dlg->exec();
             });
         }
 
-        if (m_mainMenu->intersectionViewResultsAction())
+        if (_mainMenu->intersectionViewResultsAction())
         {
-            connect(m_mainMenu->intersectionViewResultsAction(), &QAction::triggered, this, [this]()
+            connect(_mainMenu->intersectionViewResultsAction(), &QAction::triggered, this, [this]()
             {
-                if (!m_projectManager)
+                if (!_projectManager)
                 {
                     LOG_ERROR(QStringLiteral("无法打开前方交汇结果：ProjectManager 未初始化"));
                     return;
                 }
-                auto *dlg = new ForwardIntersectionResultsDialog(m_projectManager, this);
+                auto *dlg = new ForwardIntersectionResultsDialog(_projectManager, this);
                 dlg->setAttribute(Qt::WA_DeleteOnClose);
                 dlg->exec();
             });
         }
 
-        connect(m_projectManager, &ProjectManager::projectCreated, this, &MainWindow::onProjectOpened);
-        connect(m_projectManager, &ProjectManager::projectOpened,  this, &MainWindow::onProjectOpened);
+        connect(_projectManager, &ProjectManager::projectCreated, this, &MainWindow::onProjectOpened);
+        connect(_projectManager, &ProjectManager::projectOpened,  this, &MainWindow::onProjectOpened);
 
         // 当特征提取完成后，切换 Canvas 到对应后缀并刷新显示
-        connect(m_projectManager, &ProjectManager::ipfindResultAppended, this,
+        connect(_projectManager, &ProjectManager::ipfindResultAppended, this,
             [this](const QString &imagePath, const QString &suffix)
         {
-            if (m_canvas)
+            if (_canvas)
             {
                 const bool isCurrentImage =
-                    QDir::cleanPath(imagePath) == QDir::cleanPath(m_canvas->currentImagePath());
+                    QDir::cleanPath(imagePath) == QDir::cleanPath(_canvas->currentImagePath());
                 if (!suffix.isEmpty())
-                    m_canvas->setActiveFeatureSuffix(suffix);
+                    _canvas->setActiveFeatureSuffix(suffix);
                 if (isCurrentImage)
                 {
-                    m_canvas->reloadInterestPoints(imagePath);
+                    _canvas->reloadInterestPoints(imagePath);
                 }
             }
         });
 
-        if (m_config)
+        if (_config)
         {
-            m_mainMenu->setRecentProjects(m_config->recentProjects()->recentProjects());
+            _mainMenu->setRecentProjects(_config->recentProjects()->recentProjects());
         }
 
-        connect(m_mainMenu, &MainMenu::recentProjectSelected, this, [this](const QString &p)
+        connect(_mainMenu, &MainMenu::recentProjectSelected, this, [this](const QString &p)
         {
-            if (!p.isEmpty() && m_projectManager)
+            if (!p.isEmpty() && _projectManager)
             {
-                m_projectManager->openProjectFromPath(p);
+                _projectManager->openProjectFromPath(p);
             }
         });
-        connect(m_mainMenu, &MainMenu::clearRecentRequested, this, &MainWindow::onClearRecentRequested);
+        connect(_mainMenu, &MainMenu::clearRecentRequested, this, &MainWindow::onClearRecentRequested);
     }
 
     
-    connect(m_projectManager, &ProjectManager::saveStarted,    this, &MainWindow::onSaveStarted);
-    connect(m_projectManager, &ProjectManager::saveFinished,   this, &MainWindow::onSaveFinished);
-    connect(m_projectManager, &ProjectManager::metadataDirtyChanged, this, &MainWindow::onMetadataDirtyChanged);
+    connect(_projectManager, &ProjectManager::saveStarted,    this, &MainWindow::onSaveStarted);
+    connect(_projectManager, &ProjectManager::saveFinished,   this, &MainWindow::onSaveFinished);
+    connect(_projectManager, &ProjectManager::metadataDirtyChanged, this, &MainWindow::onMetadataDirtyChanged);
 
-    connect(m_projectManager, &ProjectManager::projectOpened, this, [this](const QString &)
+    connect(_projectManager, &ProjectManager::projectOpened, this, [this](const QString &)
     {
-        if (m_dataTree)
+        if (_dataTree)
         {
-            m_dataTree->loadFromJson(m_projectManager->currentMeta());
+            _dataTree->loadFromJson(_projectManager->currentMeta());
         }
-        if (m_dashboard)
+        if (_dashboard)
         {
-            m_dashboard->loadFromJson(m_projectManager->currentMeta());
+            _dashboard->loadFromJson(_projectManager->currentMeta());
         }
-        if (m_referencePanel)
+        if (_referencePanel)
         {
-            m_referencePanel->loadFromJson(m_projectManager->currentMeta());
+            _referencePanel->loadFromJson(_projectManager->currentMeta());
         }
     });
-    connect(m_projectManager, &ProjectManager::projectMetadataUpdated, this, [this](const QString &)
+    connect(_projectManager, &ProjectManager::projectMetadataUpdated, this, [this](const QString &)
     {
-        if (m_dataTree)
+        if (_dataTree)
         {
-            m_dataTree->loadFromJson(m_projectManager->currentMeta());
+            _dataTree->loadFromJson(_projectManager->currentMeta());
         }
-        if (m_dashboard)
+        if (_dashboard)
         {
-            m_dashboard->loadFromJson(m_projectManager->currentMeta());
+            _dashboard->loadFromJson(_projectManager->currentMeta());
         }
-        if (m_referencePanel)
+        if (_referencePanel)
         {
-            m_referencePanel->loadFromJson(m_projectManager->currentMeta());
+            _referencePanel->loadFromJson(_projectManager->currentMeta());
         }
     });
-    connect(m_projectManager, &ProjectManager::projectMetadataChanged, m_dashboard, &ProjectDashboardWidget::loadFromJson);
-    connect(m_projectManager, &ProjectManager::projectMetadataChanged, m_dataTree, &DataTreeWidget::loadFromJson);
-    connect(m_projectManager, &ProjectManager::projectMetadataChanged, m_referencePanel, &ReferencePanelWidget::loadFromJson);
+    connect(_projectManager, &ProjectManager::projectMetadataChanged, _dashboard, &ProjectDashboardWidget::loadFromJson);
+    connect(_projectManager, &ProjectManager::projectMetadataChanged, _dataTree, &DataTreeWidget::loadFromJson);
+    connect(_projectManager, &ProjectManager::projectMetadataChanged, _referencePanel, &ReferencePanelWidget::loadFromJson);
 
-    connect(m_dataTree, &DataTreeWidget::removeRequested,  m_projectManager, &ProjectManager::removeResources);
-    connect(m_dataTree, &DataTreeWidget::deleteDataRequested, m_projectManager, &ProjectManager::deleteGeneratedData);
-    connect(m_dataTree, &DataTreeWidget::sideOpenRequested, this, [this](const QString &section, const QString &path)
+    connect(_dataTree, &DataTreeWidget::removeRequested,  _projectManager, &ProjectManager::removeResources);
+    connect(_dataTree, &DataTreeWidget::deleteDataRequested, _projectManager, &ProjectManager::deleteGeneratedData);
+    connect(_dataTree, &DataTreeWidget::sideOpenRequested, this, [this](const QString &section, const QString &path)
     {
         Q_UNUSED(section);
-        if (!m_workspaceCenter || path.trimmed().isEmpty())
+        if (!_workspaceCenter || path.trimmed().isEmpty())
         {
             return;
         }
-        if (m_lastSelectedImage.trimmed().isEmpty())
+        if (_lastSelectedImage.trimmed().isEmpty())
         {
             QMessageBox::information(this,
                                      QStringLiteral("侧边打开"),
                                      QStringLiteral("请先在中间打开一张二维影像，再选择另一张在侧边打开。"));
             return;
         }
-        if (QDir::cleanPath(m_lastSelectedImage) == QDir::cleanPath(path))
+        if (QDir::cleanPath(_lastSelectedImage) == QDir::cleanPath(path))
         {
             QMessageBox::information(this,
                                      QStringLiteral("侧边打开"),
                                      QStringLiteral("当前主影像与侧边影像相同，请选择另一张影像。"));
             return;
         }
-        m_workspaceCenter->showSideBySideImages(m_lastSelectedImage, path);
+        _workspaceCenter->showSideBySideImages(_lastSelectedImage, path);
     });
-    connect(m_dataTree, &DataTreeWidget::packRequested,    m_projectManager, &ProjectManager::packResource);
-    connect(m_dataTree, &DataTreeWidget::openRequested, this, [](const QString &p)
+    connect(_dataTree, &DataTreeWidget::packRequested,    _projectManager, &ProjectManager::packResource);
+    connect(_dataTree, &DataTreeWidget::openRequested, this, [](const QString &p)
     {
         QDesktopServices::openUrl(QUrl::fromLocalFile(p));
     });
-    connect(m_dataTree, &DataTreeWidget::revealRequested, this, [](const QString &p)
+    connect(_dataTree, &DataTreeWidget::revealRequested, this, [](const QString &p)
     {
         QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(p).absolutePath()));
     });
-    connect(m_dataTree, &DataTreeWidget::resourceActivated, this, [this](const QString &section, const QString &path)
+    connect(_dataTree, &DataTreeWidget::resourceActivated, this, [this](const QString &section, const QString &path)
     {
-        if (!m_workspaceCenter || !m_projectManager)
+        if (!_workspaceCenter || !_projectManager)
         {
             return;
         }
@@ -732,25 +732,25 @@ void MainWindow::setupProjectManager()
 
         auto normalizedMeta = [this]()
         {
-            return xjw::gui::project::projectFilesRootObject(m_projectManager->currentMeta());
+            return xjw::gui::project::projectFilesRootObject(_projectManager->currentMeta());
         };
 
         if (section == QStringLiteral("深度图"))
         {
             // 深度图（16-bit PNG）通过 LayerRenderer 的 GDAL 归一化后显示
-            m_workspaceCenter->showImageView(path);
-            m_lastSelectedImage = path;
+            _workspaceCenter->showImageView(path);
+            _lastSelectedImage = path;
             return;
         }
         if (section == QStringLiteral("DEM") || section == QStringLiteral("正射影像"))
         {
-            m_workspaceCenter->showImageView(path);
-            m_lastSelectedImage = path;
+            _workspaceCenter->showImageView(path);
+            _lastSelectedImage = path;
             return;
         }
         if (section == QStringLiteral("3D模型"))
         {
-            m_workspaceCenter->showModelFile(path);
+            _workspaceCenter->showModelFile(path);
             return;
         }
         if (section == QStringLiteral("连接点"))
@@ -758,32 +758,32 @@ void MainWindow::setupProjectManager()
             // 直接加载稀疏点云 XYZ 文件到 3D 视图
             if (!path.isEmpty() && QFileInfo::exists(path))
             {
-                m_workspaceCenter->showPointCloudFile(path);
+                _workspaceCenter->showPointCloudFile(path);
             }
             return;
         }
         if (section == QStringLiteral("稠密点云"))
         {
-            m_workspaceCenter->showPointCloudFile(path);
+            _workspaceCenter->showPointCloudFile(path);
             return;
         }
         if (section == QStringLiteral("匹配"))
         {
             if (!path.isEmpty() && QFileInfo::exists(path))
             {
-                m_workspaceCenter->showPointCloudFile(path);
+                _workspaceCenter->showPointCloudFile(path);
                 return;
             }
-            m_workspaceCenter->showModelView();
+            _workspaceCenter->showModelView();
             return;
         }
         if (section == QStringLiteral("观测网络"))
         {
-            if (!m_projectManager)
+            if (!_projectManager)
             {
                 return;
             }
-            const QJsonObject meta = m_projectManager->currentMeta();
+            const QJsonObject meta = _projectManager->currentMeta();
             const QJsonArray results = meta.value(QStringLiteral("observation_network_results")).toArray();
             if (results.isEmpty())
             {
@@ -874,21 +874,21 @@ void MainWindow::setupProjectManager()
             const QString algo = res.value(QStringLiteral("algorithm")).toString();
             const QString title = QStringLiteral("%1 [N:%2 E:%3]")
                 .arg(algo).arg(net.numNodes()).arg(net.numEdges());
-            m_workspaceCenter->showObservationNetwork(net, title);
+            _workspaceCenter->showObservationNetwork(net, title);
             return;
         }
     });
 
-    connect(m_referencePanel, &ReferencePanelWidget::exactImportRequested,
-        m_projectManager, &ProjectManager::importCameraForImage);
-    connect(m_referencePanel, &ReferencePanelWidget::batchImportRequested,
-        m_projectManager, &ProjectManager::importCamerasByFilenameBatch);
-    connect(m_referencePanel, &ReferencePanelWidget::clearCameraRequested,
+    connect(_referencePanel, &ReferencePanelWidget::exactImportRequested,
+        _projectManager, &ProjectManager::importCameraForImage);
+    connect(_referencePanel, &ReferencePanelWidget::batchImportRequested,
+        _projectManager, &ProjectManager::importCamerasByFilenameBatch);
+    connect(_referencePanel, &ReferencePanelWidget::clearCameraRequested,
         this, [this](const QStringList &paths)
         {
             int cleared = 0;
             QString err;
-            if (m_projectManager->clearImageCameras(paths, &cleared, &err))
+            if (_projectManager->clearImageCameras(paths, &cleared, &err))
             {
                 LOG_INFO(QStringLiteral("已清除 %1 张影像的相机参数").arg(cleared));
             }
@@ -897,30 +897,30 @@ void MainWindow::setupProjectManager()
                 LOG_WARN(QStringLiteral("清除相机参数失败: %1").arg(err));
             }
         });
-    connect(m_referencePanel, &ReferencePanelWidget::imageActivated,
+    connect(_referencePanel, &ReferencePanelWidget::imageActivated,
         this, [this](const QString &p)
         {
-            if (m_workspaceCenter)
+            if (_workspaceCenter)
             {
-                m_workspaceCenter->showImageView(p);
-                m_lastSelectedImage = p;
+                _workspaceCenter->showImageView(p);
+                _lastSelectedImage = p;
             }
         });
 
-    connect(m_dataTree, &DataTreeWidget::imageActivated, this, [this](const QString &p)
+    connect(_dataTree, &DataTreeWidget::imageActivated, this, [this](const QString &p)
     {
-        if (m_workspaceCenter)
+        if (_workspaceCenter)
         {
-            m_workspaceCenter->showImageView(p);
-            m_lastSelectedImage = p;
+            _workspaceCenter->showImageView(p);
+            _lastSelectedImage = p;
         }
     });
 
-    connect(m_projectManager, &ProjectManager::projectMetadataChanged, this, [this](const QJsonObject &meta)
+    connect(_projectManager, &ProjectManager::projectMetadataChanged, this, [this](const QJsonObject &meta)
     {
-        if (m_workspaceCenter)
+        if (_workspaceCenter)
         {
-            m_workspaceCenter->setProjectMeta(meta);
+            _workspaceCenter->setProjectMeta(meta);
         }
     });
 
@@ -940,77 +940,77 @@ void MainWindow::setupProjectManager()
     };
 
     // ── MVS 状态栏进度条 ──────────────────────────────────────────
-    m_mvsTaskStatus = createTaskStatus(220, true, tr("正在取消稠密重建..."));
-    connect(m_mvsTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    _mvsTaskStatus = createTaskStatus(220, true, tr("正在取消稠密重建..."));
+    connect(_mvsTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
-        if (m_projectManager)
+        if (_projectManager)
         {
-            m_projectManager->cancelMvs();
+            _projectManager->cancelMvs();
         }
     });
 
-    connect(m_projectManager, &ProjectManager::mvsProgressChanged,
+    connect(_projectManager, &ProjectManager::mvsProgressChanged,
             this, &MainWindow::onMvsProgress);
-    connect(m_projectManager, &ProjectManager::mvsProgressFinished,
+    connect(_projectManager, &ProjectManager::mvsProgressFinished,
             this, &MainWindow::onMvsFinished);
 
     // ── 网格重建状态栏进度条 ──────────────────────────────────────
-    m_meshTaskStatus = createTaskStatus(220, false, QString());
+    _meshTaskStatus = createTaskStatus(220, false, QString());
 
-    connect(m_projectManager, &ProjectManager::meshProgressChanged,
+    connect(_projectManager, &ProjectManager::meshProgressChanged,
             this, &MainWindow::onMeshProgress);
-    connect(m_projectManager, &ProjectManager::meshProgressFinished,
+    connect(_projectManager, &ProjectManager::meshProgressFinished,
             this, &MainWindow::onMeshFinished);
 
     // ── 空三（AT）/光束法平差状态栏进度条 ───────────────────────
-    m_atTaskStatus = createTaskStatus(220, true, tr("正在取消空三/光束法平差..."));
-    connect(m_atTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    _atTaskStatus = createTaskStatus(220, true, tr("正在取消空三/光束法平差..."));
+    connect(_atTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
-        if (m_projectManager)
+        if (_projectManager)
         {
-            m_projectManager->cancelAt();
+            _projectManager->cancelAt();
         }
     });
 
-    connect(m_projectManager, &ProjectManager::atProgressChanged,
+    connect(_projectManager, &ProjectManager::atProgressChanged,
             this, &MainWindow::onAtProgress);
-    connect(m_projectManager, &ProjectManager::atProgressFinished,
+    connect(_projectManager, &ProjectManager::atProgressFinished,
             this, &MainWindow::onAtFinished);
 
     // ── 特征匹配状态栏进度条 ────────────────────────────
-    m_sgTaskStatus = createTaskStatus(180, true, tr("正在取消特征匹配..."));
-    connect(m_sgTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    _sgTaskStatus = createTaskStatus(180, true, tr("正在取消特征匹配..."));
+    connect(_sgTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
         emit sgCancelRequested();
     });
 
     // ── 特征点提取状态栏进度条 ──────────────────────────
-    m_spTaskStatus = createTaskStatus(180, true, tr("正在取消特征提取..."));
-    connect(m_spTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    _spTaskStatus = createTaskStatus(180, true, tr("正在取消特征提取..."));
+    connect(_spTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
         emit spCancelRequested();
     });
 
     // ── 密集匹配进度条 ─────────────────────────────────────────
-    m_dmTaskStatus = createTaskStatus(180, true, tr("正在取消密集匹配..."));
-    connect(m_dmTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    _dmTaskStatus = createTaskStatus(180, true, tr("正在取消密集匹配..."));
+    connect(_dmTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
         emit dmCancelRequested();
     });
 
     // ── 重叠对获取进度条 ─────────────────────────────────────────
-    m_overlapTaskStatus = createTaskStatus(200, true, tr("正在取消重叠对获取..."));
-    connect(m_overlapTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    _overlapTaskStatus = createTaskStatus(200, true, tr("正在取消重叠对获取..."));
+    connect(_overlapTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
     {
         emit overlapCancelRequested();
     });
 
     // ── 观测网络构建状态栏进度条 ─────────────────────────────────────
-    m_obsNetTaskStatus = createTaskStatus(200, false, QString());
+    _obsNetTaskStatus = createTaskStatus(200, false, QString());
 
-    connect(m_projectManager, &ProjectManager::obsNetProgressChanged,
+    connect(_projectManager, &ProjectManager::obsNetProgressChanged,
             this, &MainWindow::onObsNetProgress);
-    connect(m_projectManager, &ProjectManager::obsNetProgressFinished,
+    connect(_projectManager, &ProjectManager::obsNetProgressFinished,
             this, &MainWindow::onObsNetFinished);
 
     refreshDashboardTaskSnapshots();
@@ -1018,7 +1018,7 @@ void MainWindow::setupProjectManager()
 
 void MainWindow::refreshDashboardTaskSnapshots()
 {
-    if (!m_dashboard)
+    if (!_dashboard)
     {
         return;
     }
@@ -1041,16 +1041,16 @@ void MainWindow::refreshDashboardTaskSnapshots()
         tasks.append(record);
     };
 
-    appendTask(tr("MVS/稠密重建"), m_mvsTaskStatus);
-    appendTask(tr("网格重建"), m_meshTaskStatus);
-    appendTask(tr("空三/光束法平差"), m_atTaskStatus);
-    appendTask(tr("特征匹配"), m_sgTaskStatus);
-    appendTask(tr("特征提取"), m_spTaskStatus);
-    appendTask(tr("密集匹配"), m_dmTaskStatus);
-    appendTask(tr("重叠对获取"), m_overlapTaskStatus);
-    appendTask(tr("观测网络"), m_obsNetTaskStatus);
+    appendTask(tr("MVS/稠密重建"), _mvsTaskStatus);
+    appendTask(tr("网格重建"), _meshTaskStatus);
+    appendTask(tr("空三/光束法平差"), _atTaskStatus);
+    appendTask(tr("特征匹配"), _sgTaskStatus);
+    appendTask(tr("特征提取"), _spTaskStatus);
+    appendTask(tr("密集匹配"), _dmTaskStatus);
+    appendTask(tr("重叠对获取"), _overlapTaskStatus);
+    appendTask(tr("观测网络"), _obsNetTaskStatus);
 
-    m_dashboard->setTaskSnapshots(tasks);
+    _dashboard->setTaskSnapshots(tasks);
 }
 
 bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMessage) const
@@ -1064,7 +1064,7 @@ bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMess
         errorMessage->clear();
     }
 
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         if (errorMessage)
         {
@@ -1073,7 +1073,7 @@ bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMess
         return false;
     }
 
-    const QString plascanPath = m_projectManager->currentProjectPath();
+    const QString plascanPath = _projectManager->currentProjectPath();
     if (plascanPath.isEmpty())
     {
         if (errorMessage)
@@ -1084,7 +1084,7 @@ bool MainWindow::exportMatchedPairsToLis(QString *outputPath, QString *errorMess
     }
 
     const QVector<QPair<QString, QString>> matchedPairs =
-        xjw::gui::project::collectMatchedImageNamePairs(plascanPath, m_projectManager->currentMeta());
+        xjw::gui::project::collectMatchedImageNamePairs(plascanPath, _projectManager->currentMeta());
     if (matchedPairs.isEmpty())
     {
         if (errorMessage)
@@ -1157,12 +1157,12 @@ void MainWindow::onExportMatchedPairs()
 
 void MainWindow::onManualPointCloudPrune()
 {
-    if (!m_workspaceCenter || !m_workspaceCenter->modelView())
+    if (!_workspaceCenter || !_workspaceCenter->modelView())
     {
         return;
     }
 
-    auto *modelView = m_workspaceCenter->modelView();
+    auto *modelView = _workspaceCenter->modelView();
     const bool enable = !modelView->isManualPruneModeEnabled();
     QString errorMessage;
     if (!modelView->setManualPruneModeEnabled(enable, &errorMessage))
@@ -1173,7 +1173,7 @@ void MainWindow::onManualPointCloudPrune()
 
     if (enable)
     {
-        m_workspaceCenter->showModelView();
+        _workspaceCenter->showModelView();
         QMessageBox::information(this,
                                  tr("手动点云剔除"),
                                  tr("已进入手动剔除模式。\n"
@@ -1195,26 +1195,26 @@ void MainWindow::onManualPointCloudPrune()
 
 void MainWindow::onMvsProgress(const QString &stage, int percent)
 {
-    if (!m_mvsTaskStatus)
+    if (!_mvsTaskStatus)
     {
         return;
     }
-    if (!m_mvsTaskStatus->isActive())
+    if (!_mvsTaskStatus->isActive())
     {
-        m_mvsTaskStatus->begin(stage, 0, 100);
+        _mvsTaskStatus->begin(stage, 0, 100);
     }
-    m_mvsTaskStatus->updateProgress(stage, percent);
+    _mvsTaskStatus->updateProgress(stage, percent);
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());   // 清空普通消息，让 permanent widget 露出
 }
 
 void MainWindow::onMvsFinished(bool success)
 {
-    if (!m_mvsTaskStatus)
+    if (!_mvsTaskStatus)
     {
         return;
     }
-    m_mvsTaskStatus->finish();
+    _mvsTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("稠密重建完成") : tr("稠密重建已取消或失败"), 4000);
@@ -1226,26 +1226,26 @@ void MainWindow::onMvsFinished(bool success)
 
 void MainWindow::onMeshProgress(const QString &stage, int percent)
 {
-    if (!m_meshTaskStatus)
+    if (!_meshTaskStatus)
     {
         return;
     }
-    if (!m_meshTaskStatus->isActive())
+    if (!_meshTaskStatus->isActive())
     {
-        m_meshTaskStatus->begin(stage, 0, 100);
+        _meshTaskStatus->begin(stage, 0, 100);
     }
-    m_meshTaskStatus->updateProgress(stage, percent);
+    _meshTaskStatus->updateProgress(stage, percent);
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::onMeshFinished(bool success)
 {
-    if (!m_meshTaskStatus)
+    if (!_meshTaskStatus)
     {
         return;
     }
-    m_meshTaskStatus->finish();
+    _meshTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("网格重建完成") : tr("网格重建失败"), 4000);
@@ -1257,7 +1257,7 @@ void MainWindow::onMeshFinished(bool success)
 
 void MainWindow::onAtProgress(const QString &stage, int percent)
 {
-    if (!m_atTaskStatus)
+    if (!_atTaskStatus)
     {
         return;
     }
@@ -1267,22 +1267,22 @@ void MainWindow::onAtProgress(const QString &stage, int percent)
     {
         statusText = QStringLiteral("%1 %2%").arg(stage).arg(percent);
     }
-    if (!m_atTaskStatus->isActive())
+    if (!_atTaskStatus->isActive())
     {
-        m_atTaskStatus->begin(statusText, 0, 100);
+        _atTaskStatus->begin(statusText, 0, 100);
     }
-    m_atTaskStatus->updateProgress(statusText, percent);
+    _atTaskStatus->updateProgress(statusText, percent);
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());   // 清空普通消息，让 permanent widget 露出
 }
 
 void MainWindow::onAtFinished(bool success)
 {
-    if (!m_atTaskStatus)
+    if (!_atTaskStatus)
     {
         return;
     }
-    m_atTaskStatus->finish();
+    _atTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("空三/光束法平差完成") : tr("空三/光束法平差已取消或失败"), 4000);
@@ -1290,9 +1290,9 @@ void MainWindow::onAtFinished(bool success)
 
 void MainWindow::onCancelAt()
 {
-    if (m_projectManager)
+    if (_projectManager)
     {
-        m_projectManager->cancelAt();
+        _projectManager->cancelAt();
     }
 }
 
@@ -1302,27 +1302,27 @@ void MainWindow::onCancelAt()
 
 void MainWindow::onObsNetProgress(const QString &stage, int percent)
 {
-    if (!m_obsNetTaskStatus)
+    if (!_obsNetTaskStatus)
     {
         return;
     }
     const QString statusText = QStringLiteral("观测网络: %1 %2%").arg(stage).arg(percent);
-    if (!m_obsNetTaskStatus->isActive())
+    if (!_obsNetTaskStatus->isActive())
     {
-        m_obsNetTaskStatus->begin(statusText, 0, 100);
+        _obsNetTaskStatus->begin(statusText, 0, 100);
     }
-    m_obsNetTaskStatus->updateProgress(statusText, percent);
+    _obsNetTaskStatus->updateProgress(statusText, percent);
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::onObsNetFinished(bool success)
 {
-    if (!m_obsNetTaskStatus)
+    if (!_obsNetTaskStatus)
     {
         return;
     }
-    m_obsNetTaskStatus->finish();
+    _obsNetTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("观测网络构建完成") : tr("观测网络构建失败"), 4000);
@@ -1330,99 +1330,99 @@ void MainWindow::onObsNetFinished(bool success)
 
 void MainWindow::showSgProgress(int total)
 {
-    if (!m_sgTaskStatus)
+    if (!_sgTaskStatus)
     {
         return;
     }
-    m_sgTaskStatus->begin(tr("特征匹配 0/%1").arg(total), 0, total);
+    _sgTaskStatus->begin(tr("特征匹配 0/%1").arg(total), 0, total);
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::updateSgProgress(int done)
 {
-    if (!m_sgTaskStatus)
+    if (!_sgTaskStatus)
     {
         return;
     }
-    const int total = m_sgTaskStatus->progressMaximum();
+    const int total = _sgTaskStatus->progressMaximum();
     const int clampedDone = std::clamp(done, 0, total);
-    m_sgTaskStatus->updateProgress(
+    _sgTaskStatus->updateProgress(
         tr("特征匹配 %1/%2").arg(clampedDone).arg(total), clampedDone);
     refreshDashboardTaskSnapshots();
 }
 
 void MainWindow::hideSgProgress(bool ok)
 {
-    if (!m_sgTaskStatus)
+    if (!_sgTaskStatus)
     {
         return;
     }
-    m_sgTaskStatus->finish();
+    _sgTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(ok ? tr("匹配完成") : tr("匹配已取消"), 4000);
 }
 
 void MainWindow::showDmProgress(int total)
 {
-    if (!m_dmTaskStatus)
+    if (!_dmTaskStatus)
     {
         return;
     }
-    m_dmTaskStatus->begin(tr("密集匹配 0/%1").arg(total), 0, total);
+    _dmTaskStatus->begin(tr("密集匹配 0/%1").arg(total), 0, total);
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::updateDmProgress(int done)
 {
-    if (!m_dmTaskStatus)
+    if (!_dmTaskStatus)
     {
         return;
     }
-    const int total = m_dmTaskStatus->progressMaximum();
+    const int total = _dmTaskStatus->progressMaximum();
     const int clampedDone = std::clamp(done, 0, total);
-    m_dmTaskStatus->updateProgress(
+    _dmTaskStatus->updateProgress(
         tr("密集匹配 %1/%2").arg(clampedDone).arg(total), clampedDone);
     refreshDashboardTaskSnapshots();
 }
 
 void MainWindow::hideDmProgress(bool ok)
 {
-    if (!m_dmTaskStatus)
+    if (!_dmTaskStatus)
     {
         return;
     }
-    m_dmTaskStatus->finish();
+    _dmTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(ok ? tr("密集匹配完成") : tr("密集匹配已取消"), 4000);
 }
 
 void MainWindow::onOverlapProgress(const QString &stage, int percent)
 {
-    if (!m_overlapTaskStatus)
+    if (!_overlapTaskStatus)
     {
         return;
     }
     const QString statusText = percent > 0 && percent < 100
         ? tr("重叠对: %1 %2%").arg(stage).arg(percent)
         : tr("重叠对: %1").arg(stage);
-    if (!m_overlapTaskStatus->isActive())
+    if (!_overlapTaskStatus->isActive())
     {
-        m_overlapTaskStatus->begin(statusText, 0, 100);
+        _overlapTaskStatus->begin(statusText, 0, 100);
     }
-    m_overlapTaskStatus->updateProgress(statusText, std::clamp(percent, 0, 100));
+    _overlapTaskStatus->updateProgress(statusText, std::clamp(percent, 0, 100));
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::onOverlapFinished(bool success)
 {
-    if (!m_overlapTaskStatus)
+    if (!_overlapTaskStatus)
     {
         return;
     }
-    m_overlapTaskStatus->finish();
+    _overlapTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(success ? tr("重叠对获取完成") : tr("重叠对获取已取消或失败"), 4000);
 }
@@ -1433,35 +1433,35 @@ void MainWindow::onOverlapFinished(bool success)
 
 void MainWindow::showSpProgress(int total)
 {
-    if (!m_spTaskStatus)
+    if (!_spTaskStatus)
     {
         return;
     }
-    m_spTaskStatus->begin(tr("特征提取 0/%1").arg(total), 0, total);
+    _spTaskStatus->begin(tr("特征提取 0/%1").arg(total), 0, total);
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(QString());
 }
 
 void MainWindow::updateSpProgress(int done)
 {
-    if (!m_spTaskStatus)
+    if (!_spTaskStatus)
     {
         return;
     }
-    const int total = m_spTaskStatus->progressMaximum();
+    const int total = _spTaskStatus->progressMaximum();
     const int clampedDone = std::clamp(done, 0, total);
-    m_spTaskStatus->updateProgress(
+    _spTaskStatus->updateProgress(
         tr("特征提取 %1/%2").arg(clampedDone).arg(total), clampedDone);
     refreshDashboardTaskSnapshots();
 }
 
 void MainWindow::hideSpProgress(bool ok)
 {
-    if (!m_spTaskStatus)
+    if (!_spTaskStatus)
     {
         return;
     }
-    m_spTaskStatus->finish();
+    _spTaskStatus->finish();
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(ok ? tr("特征提取完成") : tr("特征提取已取消"), 4000);
 }
@@ -1472,9 +1472,9 @@ void MainWindow::hideSpProgress(bool ok)
 
 void MainWindow::saveUiSetting(const QJsonObject &partial)
 {
-    if (m_uiSetting)
+    if (_uiSetting)
     {
-        m_uiSetting->merge(partial);
+        _uiSetting->merge(partial);
     }
 }
 
@@ -1485,17 +1485,17 @@ QString MainWindow::currentBottomPanelKey() const
 
 void MainWindow::switchToLogPanel()
 {
-    if (m_logDock)
+    if (_logDock)
     {
-        m_logDock->setWidget(m_log);
+        _logDock->setWidget(_log);
     }
-    if (m_log)
+    if (_log)
     {
-        m_log->loadFromLogFile();
+        _log->loadFromLogFile();
     }
-    if (m_logBtn)
+    if (_logBtn)
     {
-        m_logBtn->setChecked(true);
+        _logBtn->setChecked(true);
     }
 }
 
@@ -1509,9 +1509,9 @@ void MainWindow::onLogBtnClicked()
     switchToLogPanel();
     QJsonObject s;
     s[QStringLiteral("bottom_panel")] = QStringLiteral("log");
-    if (m_mainMenu && m_mainMenu->toggleLogAction())
+    if (_mainMenu && _mainMenu->toggleLogAction())
     {
-        s[QStringLiteral("log_visible")] = m_mainMenu->toggleLogAction()->isChecked();
+        s[QStringLiteral("log_visible")] = _mainMenu->toggleLogAction()->isChecked();
     }
     saveUiSetting(s);
 }
@@ -1524,21 +1524,21 @@ void MainWindow::onLogBtnClicked()
 
 void MainWindow::onToggleLogAction(bool on)
 {
-    if (m_logBtn)
+    if (_logBtn)
     {
-        m_logBtn->setVisible(on);
+        _logBtn->setVisible(on);
     }
     if (on)
     {
-        m_logDock->setWidget(m_log);
-        m_logDock->setVisible(true);
-        if (m_log)
+        _logDock->setWidget(_log);
+        _logDock->setVisible(true);
+        if (_log)
         {
-            m_log->loadFromLogFile();
+            _log->loadFromLogFile();
         }
-        if (m_logBtn)
+        if (_logBtn)
         {
-            m_logBtn->setChecked(true);
+            _logBtn->setChecked(true);
         }
     }
     else
@@ -1576,30 +1576,30 @@ void MainWindow::onLogDisplayLevelChanged(int lvl)
 
 void MainWindow::onSaveStarted()
 {
-    if (!m_saveProgressDialog)
+    if (!_saveProgressDialog)
     {
-        m_saveProgressDialog = new QProgressDialog(tr("正在保存项目..."), QString(), 0, 0, this);
-        m_saveProgressDialog->setWindowModality(Qt::ApplicationModal);
-        m_saveProgressDialog->setCancelButton(nullptr);
-        m_saveProgressDialog->setMinimumDuration(0);
+        _saveProgressDialog = new QProgressDialog(tr("正在保存项目..."), QString(), 0, 0, this);
+        _saveProgressDialog->setWindowModality(Qt::ApplicationModal);
+        _saveProgressDialog->setCancelButton(nullptr);
+        _saveProgressDialog->setMinimumDuration(0);
     }
-    m_saveProgressDialog->show();
+    _saveProgressDialog->show();
 }
 
 void MainWindow::onSaveFinished(bool ok)
 {
-    if (m_saveProgressDialog)
+    if (_saveProgressDialog)
     {
-        m_saveProgressDialog->hide();
-        m_saveProgressDialog->deleteLater();
-        m_saveProgressDialog = nullptr;
+        _saveProgressDialog->hide();
+        _saveProgressDialog->deleteLater();
+        _saveProgressDialog = nullptr;
     }
     statusBar()->showMessage(ok ? tr("保存完成") : tr("保存失败"), ok ? 3000 : 5000);
 }
 
 void MainWindow::onMetadataDirtyChanged(bool dirty)
 {
-    QString projPath = m_projectManager->currentProjectPath();
+    QString projPath = _projectManager->currentProjectPath();
     QString name = QFileInfo(projPath).baseName();
     if (name.isEmpty())
     {
@@ -1611,7 +1611,7 @@ void MainWindow::onMetadataDirtyChanged(bool dirty)
 
 void MainWindow::onClearRecentRequested()
 {
-    if (!m_config)
+    if (!_config)
     {
         return;
     }
@@ -1620,10 +1620,10 @@ void MainWindow::onClearRecentRequested()
         QMessageBox::Yes | QMessageBox::No, QMessageBox::No);
     if (btn == QMessageBox::Yes)
     {
-        m_config->recentProjects()->clearRecentProjects();
-        if (m_mainMenu)
+        _config->recentProjects()->clearRecentProjects();
+        if (_mainMenu)
         {
-            m_mainMenu->setRecentProjects(m_config->recentProjects()->recentProjects());
+            _mainMenu->setRecentProjects(_config->recentProjects()->recentProjects());
         }
         statusBar()->showMessage(tr("已清空最近打开列表"), 3000);
     }
@@ -1640,9 +1640,9 @@ void MainWindow::onProjectCreated(const QString &plascanPath)
 
 void MainWindow::onProjectOpened(const QString &plascanPath)
 {
-    if (m_dataTree)
+    if (_dataTree)
     {
-        m_dataTree->clearTransientResources();
+        _dataTree->clearTransientResources();
     }
 
     QFileInfo fi(plascanPath);
@@ -1654,53 +1654,53 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     setWindowTitle(QStringLiteral("PlaScan - %1").arg(name));
     statusBar()->showMessage(tr("已打开项目：%1").arg(plascanPath), 4000);
 
-    if (m_canvas)
+    if (_canvas)
     {
-        m_canvas->setProperty("currentProjectPath", plascanPath);
+        _canvas->setProperty("currentProjectPath", plascanPath);
     }
-    if (m_workspaceCenter)
+    if (_workspaceCenter)
     {
-        m_workspaceCenter->showModelView();
+        _workspaceCenter->showModelView();
     }
-    if (m_dataTree)
+    if (_dataTree)
     {
-        m_dataTree->setProjectPath(plascanPath);
+        _dataTree->setProjectPath(plascanPath);
     }
-    if (m_projectManager && m_dataTree)
-        m_dataTree->loadFromJson(m_projectManager->currentMeta());
-    if (m_projectManager && m_dashboard)
-        m_dashboard->loadFromJson(m_projectManager->currentMeta());
-    if (m_projectManager && m_workspaceCenter)
-        m_workspaceCenter->setProjectMeta(m_projectManager->currentMeta());
+    if (_projectManager && _dataTree)
+        _dataTree->loadFromJson(_projectManager->currentMeta());
+    if (_projectManager && _dashboard)
+        _dashboard->loadFromJson(_projectManager->currentMeta());
+    if (_projectManager && _workspaceCenter)
+        _workspaceCenter->setProjectMeta(_projectManager->currentMeta());
 
-    if (m_config && m_mainMenu)
+    if (_config && _mainMenu)
     {
-        m_config->recentProjects()->addRecentProject(plascanPath);
-        m_mainMenu->setRecentProjects(m_config->recentProjects()->recentProjects());
+        _config->recentProjects()->addRecentProject(plascanPath);
+        _mainMenu->setRecentProjects(_config->recentProjects()->recentProjects());
     }
 
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
 
     // 初始化/更新项目级 UI 设置路径
-    if (!m_uiSetting)
+    if (!_uiSetting)
     {
-        m_uiSetting = new DialogSettingStore(DialogSettingKeys::MainWindowUi, this);
+        _uiSetting = new DialogSettingStore(DialogSettingKeys::MainWindowUi, this);
     }
-    m_uiSetting->setProjectPath(plascanPath);
-    if (!m_featureMatchingSetting)
+    _uiSetting->setProjectPath(plascanPath);
+    if (!_featureMatchingSetting)
     {
-        m_featureMatchingSetting = new DialogSettingStore(DialogSettingKeys::FeatureMatching, this);
+        _featureMatchingSetting = new DialogSettingStore(DialogSettingKeys::FeatureMatching, this);
     }
-    m_featureMatchingSetting->setProjectPath(plascanPath);
+    _featureMatchingSetting->setProjectPath(plascanPath);
 
-    QJsonObject ui = m_uiSetting->load();
+    QJsonObject ui = _uiSetting->load();
     // 向后兼容：若新文件中无数据，尝试从旧 project_config.json 读取
     if (ui.isEmpty())
     {
-        ui = m_projectManager->loadUiSettings();
+        ui = _projectManager->loadUiSettings();
     }
     applyUiSettings(ui);
 
@@ -1714,9 +1714,9 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
 void MainWindow::applyUiSettings(const QJsonObject &ui)
 {
     // 特征后缀恢复不能依赖主窗口 UI 设置存在；旧项目可能只有 assets/ip/*.dsk。
-    if (m_menuWorkflowController)
+    if (_menuWorkflowController)
     {
-        m_menuWorkflowController->applySavedFeatureDisplayOptions(ui);
+        _menuWorkflowController->applySavedFeatureDisplayOptions(ui);
     }
 
     if (ui.isEmpty())
@@ -1725,29 +1725,29 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
     }
 
     // feature-info panel removed: no ip button handling
-    if (m_logBtn && ui.contains(QStringLiteral("log_visible")))
+    if (_logBtn && ui.contains(QStringLiteral("log_visible")))
     {
         bool lvis = ui.value(QStringLiteral("log_visible")).toBool();
-        m_logBtn->setChecked(lvis);
-        m_logBtn->setVisible(lvis);
+        _logBtn->setChecked(lvis);
+        _logBtn->setVisible(lvis);
     }
 
-    if (ui.contains(QStringLiteral("log_display_level")) && m_log)
+    if (ui.contains(QStringLiteral("log_display_level")) && _log)
     {
         int lvl = ui.value(QStringLiteral("log_display_level")).toInt(static_cast<int>(Logger::Info));
-        m_log->setDisplayLevel(static_cast<Logger::Level>(lvl));
+        _log->setDisplayLevel(static_cast<Logger::Level>(lvl));
     }
 
     bool panelHandledByLog = false;
-    if (ui.contains(QStringLiteral("log_visible")) && m_mainMenu && m_mainMenu->toggleLogAction())
+    if (ui.contains(QStringLiteral("log_visible")) && _mainMenu && _mainMenu->toggleLogAction())
     {
         bool on = ui.value(QStringLiteral("log_visible")).toBool();
-        m_mainMenu->toggleLogAction()->blockSignals(true);
-        m_mainMenu->toggleLogAction()->setChecked(on);
-        m_mainMenu->toggleLogAction()->blockSignals(false);
-        if (m_logBtn)
+        _mainMenu->toggleLogAction()->blockSignals(true);
+        _mainMenu->toggleLogAction()->setChecked(on);
+        _mainMenu->toggleLogAction()->blockSignals(false);
+        if (_logBtn)
         {
-            m_logBtn->setVisible(on);
+            _logBtn->setVisible(on);
         }
         if (on)
         {
@@ -1758,16 +1758,16 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
 
     // feature-info visibility handling removed
 
-    if (ui.contains(QStringLiteral("active_image_path")) && m_canvas)
+    if (ui.contains(QStringLiteral("active_image_path")) && _canvas)
     {
         QString imagePath = ui.value(QStringLiteral("active_image_path")).toString();
         if (!imagePath.isEmpty() && QFileInfo::exists(imagePath))
         {
             QTimer::singleShot(100, this, [this, imagePath]()
             {
-                if (m_workspaceCenter)
+                if (_workspaceCenter)
                 {
-                    m_workspaceCenter->showImageView(imagePath);
+                    _workspaceCenter->showImageView(imagePath);
                 }
             });
         }
@@ -1780,12 +1780,12 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (m_config)
+    if (_config)
     {
-        m_config->windowState()->save(this);
+        _config->windowState()->save(this);
     }
 
-    if (m_projectManager && m_projectManager->isDirty())
+    if (_projectManager && _projectManager->isDirty())
     {
         auto btn = QMessageBox::warning(this, tr("未保存的更改"),
             tr("当前项目有未保存的更改。是否保存？"),
@@ -1801,7 +1801,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         if (btn == QMessageBox::Save)
         {
             // 同步保存，不使用事件循环
-            m_projectManager->saveProject();
+            _projectManager->saveProject();
 
             // 保存完成后接受事件，自动退出
             event->accept();
@@ -1809,7 +1809,7 @@ void MainWindow::closeEvent(QCloseEvent *event)
         }
         else if (btn == QMessageBox::Discard)
         {
-            m_projectManager->discardTemporaryMeta();
+            _projectManager->discardTemporaryMeta();
         }
     }
 

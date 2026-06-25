@@ -127,11 +127,16 @@
 - `ProjectDenseReconstructionManager` 及其内部深度帧 LRU cache 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持深度图估计、深度图融合、稠密点云生成/后处理和 MVS 取消入口行为不变。
 - `ProjectSparseReconstructionManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持两视预览三角化、稀疏点云后处理和 guarded runner 回调行为不变。
 - `ProjectCameraSetupManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持单张/批量相机导入、EXIF/内参初始化和相机 SFM 初始化入口行为不变。
+- `MainWindow` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持菜单接线、项目管理、状态栏任务、仪表盘刷新、特征/匹配入口和工作区视图切换行为不变。
 - 删除 GUI 工程服务层中已无生产目标引用的 `ProjectBaInputBuilder.cpp` / `ProjectTriangulationService.cpp` 空壳兼容编译单元；兼容接口继续保留在对应头文件中，测试目标直接链接 core 实现。
 - GUI 工程 BA 输入和三角化调用方直接依赖 `src/core/sfm/BaInputBuilder.h` / `TriangulationService.h`，删除 `ProjectBaInputBuilder.h` / `ProjectTriangulationService.h` 这层 header-only 兼容 wrapper，减少旧接口暴露面。
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.MainWindowUsesLowerCamelPrivateMemberNames" --output-on-failure` 在生产代码迁移前按预期失败，确认新增风格回归测试能抓到 `MainWindow` 旧 `m_` 成员；迁移后通过。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MainWindow.cpp`、菜单/重建 workflow controller 相关编译单元并链接 GUI。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具/风格测试目标。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MainWindow|GuiAsyncLifetimeTest\.FeatureMatchRunnerUsesGuardedProjectManagerCallbacks|DenseMatchCancelTest\.StatusBarCancelSignalStopsRemainingPairs" --output-on-failure` 通过，14/14，验证 `MainWindow` 命名迁移后菜单接线、仪表盘、状态栏取消、特征匹配 guard 和工作区刷新相关回归保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.DepthMapGeneratorUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `DepthMapGenerator` 私有成员迁移到 `_lowerCamelCase`。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_mvs_pipeline -Jobs 8` 通过，重新编译依赖 `DepthMapGenerator` 的 MVS 测试目标。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具/风格测试目标。

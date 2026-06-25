@@ -90,38 +90,38 @@ private:
     bool exportMatchedPairsToLis(QString *outputPath, QString *errorMessage) const;
 
     // ---- 成员 ----
-    Ui::MainWindow*  m_ui{};                           // Qt Designer 生成的主窗口静态布局
-    QSplitter*        m_mainSplitter{};                 // 左右主分割器（左=数据树选项卡, 右=工作区）
-    QTabWidget*       m_leftTabs{};                     // 左侧选项卡容器（工作区 | 参考）
-    ProjectDashboardWidget* m_dashboard{};              // 项目概览与工作流状态（只读）
-    DataTreeWidget*   m_dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）
-    ReferencePanelWidget* m_referencePanel{};           // 参考面板（相机参数外参导入）
-    WorkspaceCenterWidget* m_workspaceCenter{};         // 中央工作区（影像画布 + 三维模型视图）
-    CanvasWidget*     m_canvas{};                       // 影像画布（从 workspaceCenter 获取的直接引用）
+    Ui::MainWindow*  _ui{};                           // Qt Designer 生成的主窗口静态布局
+    QSplitter*        _mainSplitter{};                 // 左右主分割器（左=数据树选项卡, 右=工作区）
+    QTabWidget*       _leftTabs{};                     // 左侧选项卡容器（工作区 | 参考）
+    ProjectDashboardWidget* _dashboard{};              // 项目概览与工作流状态（只读）
+    DataTreeWidget*   _dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）
+    ReferencePanelWidget* _referencePanel{};           // 参考面板（相机参数外参导入）
+    WorkspaceCenterWidget* _workspaceCenter{};         // 中央工作区（影像画布 + 三维模型视图）
+    CanvasWidget*     _canvas{};                       // 影像画布（从 workspaceCenter 获取的直接引用）
 public:
-    CanvasWidget* canvas() const { return m_canvas; }
-    LogPanel*         m_log{};                          // 日志面板（底部 Dock 的内容 widget）
-    MainMenu*         m_mainMenu{};                     // 菜单栏封装对象（管理所有 QAction）
-    AppConfigManager* m_config{};                       // 应用级配置管理器（窗口状态/最近项目）
-    ProjectData*      m_projectData{};                  // 项目数据模型（元数据 + 文件索引）
-    MenuWorkflowController* m_menuWorkflowController{}; // 菜单业务流程控制器（对话框调用协调）
-    ReconstructionWorkflowController* m_reconController{}; // 重建菜单业务控制器
-    ProjectManager*   m_projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
-    QProgressDialog*  m_saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
-    TaskStatusWidget* m_mvsTaskStatus{};                 // MVS 状态栏任务状态
-    TaskStatusWidget* m_meshTaskStatus{};                // 网格重建状态栏任务状态
-    TaskStatusWidget* m_atTaskStatus{};                  // 空三状态栏任务状态
-    TaskStatusWidget* m_sgTaskStatus{};                  // 特征匹配状态栏任务状态
-    TaskStatusWidget* m_spTaskStatus{};                  // 特征提取状态栏任务状态
-    TaskStatusWidget* m_dmTaskStatus{};                  // 密集匹配状态栏任务状态
-    TaskStatusWidget* m_overlapTaskStatus{};             // 重叠对获取状态栏任务状态
-    TaskStatusWidget* m_obsNetTaskStatus{};              // 观测网络状态栏任务状态
-    QDockWidget*      m_logDock{};                      // 底部日志 Dock 窗口容器
-    QToolButton*      m_logBtn{};                       // 标题栏中的「日志」可选中切换按钮
-    DialogSettingStore*   m_featureMatchingSetting{};   // 特征匹配对话框记忆化设置
-    DialogSettingStore*   m_uiSetting{};                // 主窗口 UI 状态记忆化设置
+    CanvasWidget* canvas() const { return _canvas; }
+    LogPanel*         _log{};                          // 日志面板（底部 Dock 的内容 widget）
+    MainMenu*         _mainMenu{};                     // 菜单栏封装对象（管理所有 QAction）
+    AppConfigManager* _config{};                       // 应用级配置管理器（窗口状态/最近项目）
+    ProjectData*      _projectData{};                  // 项目数据模型（元数据 + 文件索引）
+    MenuWorkflowController* _menuWorkflowController{}; // 菜单业务流程控制器（对话框调用协调）
+    ReconstructionWorkflowController* _reconController{}; // 重建菜单业务控制器
+    ProjectManager*   _projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
+    QProgressDialog*  _saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
+    TaskStatusWidget* _mvsTaskStatus{};                 // MVS 状态栏任务状态
+    TaskStatusWidget* _meshTaskStatus{};                // 网格重建状态栏任务状态
+    TaskStatusWidget* _atTaskStatus{};                  // 空三状态栏任务状态
+    TaskStatusWidget* _sgTaskStatus{};                  // 特征匹配状态栏任务状态
+    TaskStatusWidget* _spTaskStatus{};                  // 特征提取状态栏任务状态
+    TaskStatusWidget* _dmTaskStatus{};                  // 密集匹配状态栏任务状态
+    TaskStatusWidget* _overlapTaskStatus{};             // 重叠对获取状态栏任务状态
+    TaskStatusWidget* _obsNetTaskStatus{};              // 观测网络状态栏任务状态
+    QDockWidget*      _logDock{};                      // 底部日志 Dock 窗口容器
+    QToolButton*      _logBtn{};                       // 标题栏中的「日志」可选中切换按钮
+    DialogSettingStore*   _featureMatchingSetting{};   // 特征匹配对话框记忆化设置
+    DialogSettingStore*   _uiSetting{};                // 主窗口 UI 状态记忆化设置
     
-    QString           m_lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
+    QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
 
 private slots:
     // ---- 项目生命周期 ----
