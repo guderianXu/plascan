@@ -40,9 +40,9 @@ public:
     ~ProjectData() override = default;
 
     // === 项目基本信息 ===
-    QString currentProjectPath() const { return m_projectPath; }
-    bool hasProject() const { return !m_projectPath.isEmpty(); }
-    bool isDirty() const { return m_isDirty; }
+    QString currentProjectPath() const { return _projectPath; }
+    bool hasProject() const { return !_projectPath.isEmpty(); }
+    bool isDirty() const { return _isDirty; }
 
     // === 项目生命周期 ===
     // 创建新项目
@@ -56,9 +56,9 @@ public:
 
     // === 元数据访问 ===
     // 获取当前运行时元数据(project_files.json + project_results.json 合并)
-    QJsonObject metadata() const { ensureResultsLoaded(); return m_filesManager.data(); }
+    QJsonObject metadata() const { ensureResultsLoaded(); return _filesManager.data(); }
     // 获取核心数据（仅 project_files.json，不触发惰性加载，快速）
-    QJsonObject coreFilesMeta() const { return m_filesManager.coreData(); }
+    QJsonObject coreFilesMeta() const { return _filesManager.coreData(); }
     // 更新运行时元数据
     void updateMetadata(const QJsonObject &meta, bool markDirty = true);
     // 更新配置数据
@@ -154,17 +154,17 @@ private Q_SLOTS:
     void syncToArchive();
 
 private:
-    QString m_projectPath;                          // 当前.plascan路径
-    mutable ProjectFilesManager m_filesManager;     // project_files.json / project_results.json 管理（mutable 用于惰性加载）
-    ProjectConfigManager m_configManager;           // project_config.json 管理
-    bool m_isDirty = false;                         // 是否有未保存更改
-    mutable bool m_resultsLoaded = false;           // project_results.json 是否已载入内存
+    QString _projectPath;                          // 当前.plascan路径
+    mutable ProjectFilesManager _filesManager;     // project_files.json / project_results.json 管理（mutable 用于惰性加载）
+    ProjectConfigManager _configManager;           // project_config.json 管理
+    bool _isDirty = false;                         // 是否有未保存更改
+    mutable bool _resultsLoaded = false;           // project_results.json 是否已载入内存
 
     // 防抖归档写入：每次 appendIpfind/appendIpmatch/setImageCameras 不再单次打开 ZIP，
     // 而是启动 2s 单射定时器，到期一次性批量写入
-    QTimer *m_archiveSyncTimer{};                   // 单射，2s防抖
-    bool m_resultsDirtyForArchive{false};           // project_results.json 需同步到归档
-    bool m_coreFileDirtyForArchive{false};          // project_files.json 需同步到归档
+    QTimer *_archiveSyncTimer{};                   // 单射，2s防抖
+    bool _resultsDirtyForArchive{false};           // project_results.json 需同步到归档
+    bool _coreFileDirtyForArchive{false};          // project_files.json 需同步到归档
 
     // 惰性加载 results：仅在首次访问时读取 project_results.json
     void ensureResultsLoaded() const;

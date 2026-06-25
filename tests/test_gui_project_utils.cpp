@@ -1954,6 +1954,45 @@ TEST(CodeStyleTest, ProjectFilesManagerUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ProjectDataUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectData.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectData.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QString _projectPath;"),
+        QStringLiteral("mutable ProjectFilesManager _filesManager;"),
+        QStringLiteral("ProjectConfigManager _configManager;"),
+        QStringLiteral("bool _isDirty = false;"),
+        QStringLiteral("mutable bool _resultsLoaded = false;"),
+        QStringLiteral("QTimer *_archiveSyncTimer{};"),
+        QStringLiteral("bool _resultsDirtyForArchive{false};"),
+        QStringLiteral("bool _coreFileDirtyForArchive{false};"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_projectPath"),
+        QStringLiteral("m_filesManager"),
+        QStringLiteral("m_configManager"),
+        QStringLiteral("m_isDirty"),
+        QStringLiteral("m_resultsLoaded"),
+        QStringLiteral("m_archiveSyncTimer"),
+        QStringLiteral("m_resultsDirtyForArchive"),
+        QStringLiteral("m_coreFileDirtyForArchive"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

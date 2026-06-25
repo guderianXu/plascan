@@ -94,39 +94,39 @@ ProjectData::ProjectData(QObject *parent)
     : QObject(parent)
 {
     // 防抖归档写入定时器：将多次 appendIpfind/appendIpmatch/setImageCameras 合并为一次 ZIP 写入
-    m_archiveSyncTimer = new QTimer(this);
-    m_archiveSyncTimer->setSingleShot(true);
-    connect(m_archiveSyncTimer, &QTimer::timeout, this, &ProjectData::syncToArchive);
+    _archiveSyncTimer = new QTimer(this);
+    _archiveSyncTimer->setSingleShot(true);
+    connect(_archiveSyncTimer, &QTimer::timeout, this, &ProjectData::syncToArchive);
 }
 
 void ProjectData::markDirtyIfRequested(bool markDirty)
 {
-    if (markDirty && !m_isDirty)
+    if (markDirty && !_isDirty)
     {
-        m_isDirty = true;
+        _isDirty = true;
         emit dirtyStateChanged(true);
     }
 }
 
 void ProjectData::emitCurrentMetadataChanged()
 {
-    emit metadataChanged(m_filesManager.data());
+    emit metadataChanged(_filesManager.data());
 }
 
 void ProjectData::scheduleArchiveSync(bool coreDirty, bool resultsDirty, bool writeTemporary)
 {
     if (coreDirty)
     {
-        m_coreFileDirtyForArchive = true;
+        _coreFileDirtyForArchive = true;
     }
     if (resultsDirty)
     {
-        m_resultsDirtyForArchive = true;
+        _resultsDirtyForArchive = true;
     }
 
-    if ((coreDirty || resultsDirty) && m_archiveSyncTimer && QCoreApplication::instance())
+    if ((coreDirty || resultsDirty) && _archiveSyncTimer && QCoreApplication::instance())
     {
-        m_archiveSyncTimer->start(2000);
+        _archiveSyncTimer->start(2000);
     }
 
     if (writeTemporary)
@@ -174,16 +174,16 @@ bool ProjectData::createProject(const QString &plascanPath, const QString &proje
     }
 
     // 步骤6：更新内存状态
-    m_projectPath = plascanPath;
+    _projectPath = plascanPath;
     updateMetadata(filesMeta, false);   // false = 不标记为脏（刚创建，不需要保存）
     updateConfig(configMeta, false);
     saveTemporaryMetadata();             // 同步写一份到临时目录以便崩溃恢复
 
     // 步骤7：在磁盘上创建项目所需的子目录结构（assets/images、assets/ip、assets/matches）
-    QDir projectRoot(ProjectIO::projectRootFromPlascan(m_projectPath));
-    projectRoot.mkpath(QDir(projectRoot.path()).relativeFilePath(ProjectIO::projectImagesDir(m_projectPath)));
-    projectRoot.mkpath(QDir(projectRoot.path()).relativeFilePath(ProjectIO::ipfindOutputDir(m_projectPath)));
-    projectRoot.mkpath(QDir(projectRoot.path()).relativeFilePath(ProjectIO::ipmatchOutputDir(m_projectPath)));
+    QDir projectRoot(ProjectIO::projectRootFromPlascan(_projectPath));
+    projectRoot.mkpath(QDir(projectRoot.path()).relativeFilePath(ProjectIO::projectImagesDir(_projectPath)));
+    projectRoot.mkpath(QDir(projectRoot.path()).relativeFilePath(ProjectIO::ipfindOutputDir(_projectPath)));
+    projectRoot.mkpath(QDir(projectRoot.path()).relativeFilePath(ProjectIO::ipmatchOutputDir(_projectPath)));
 
     LOG_INFO(QStringLiteral("项目创建成功: %1").arg(plascanPath));
     // 发出 projectOpened 信号（新建项目视同已打开）
@@ -202,10 +202,10 @@ bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
     }
 
     // 记录路径并清空旧数据
-    m_projectPath = plascanPath;
-    m_filesManager.setData(QJsonObject());
-    m_configManager.setData(QJsonObject());
-    m_resultsLoaded = false;    // results 延迟加载：不在此时读取
+    _projectPath = plascanPath;
+    _filesManager.setData(QJsonObject());
+    _configManager.setData(QJsonObject());
+    _resultsLoaded = false;    // results 延迟加载：不在此时读取
 
     // 优先从 .plascan_tmp/ 临时目录恢复（处理上次异常退出后的未保存数据）
     if (loadTemporaryMetadata()) {
@@ -214,7 +214,7 @@ bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
 
     // 若临时目录中没有 core 数据，则从归档读取（仅读核心数据）
     QString err;
-    if (m_filesManager.coreData().isEmpty()) {
+    if (_filesManager.coreData().isEmpty()) {
         // 优先尝试新版文件名（project_files.json），回退到旧版（project.json）
         QByteArray filesData = archive.readEntry("project_files.json", &err);
         if (filesData.isEmpty()) {
@@ -222,23 +222,23 @@ bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
         }
 
         if (filesData.isEmpty()) {
-            m_filesManager.setData(ProjectFilesManager::defaultFiles());
+            _filesManager.setData(ProjectFilesManager::defaultFiles());
         } else {
             QJsonDocument doc = QJsonDocument::fromJson(filesData);
             QJsonObject obj = doc.object();
             // 旧格式：project_files.json 可能包含 results 键
             // 若包含，则通过 setData() 拆分，并标记 results 已加载（旧格式一次性读入）
             const bool hasLegacyResults = containsResultKeys(obj);
-            m_filesManager.setData(obj);    // setData() 自动拆分到 coreFiles + resultFiles
+            _filesManager.setData(obj);    // setData() 自动拆分到 coreFiles + resultFiles
             if (hasLegacyResults) {
-                m_resultsLoaded = true;     // 旧格式数据已全部和 core 一起读入
+                _resultsLoaded = true;     // 旧格式数据已全部和 core 一起读入
                 LOG_INFO(QStringLiteral("检测到旧格式项目，已将内嵌 results 拆分到独立存储"));
             }
         }
     }
 
     // 若临时目录中没有 config 数据，则从归档读取
-    if (m_configManager.data().isEmpty()) {
+    if (_configManager.data().isEmpty()) {
         QByteArray configData = archive.readEntry("project_config.json", &err);
         if (configData.isEmpty()) {
             updateConfig(ProjectConfigManager::defaultConfig(), false);
@@ -256,15 +256,15 @@ bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
 
 bool ProjectData::saveProject(QString *errorMsg)
 {
-    if (m_projectPath.isEmpty()) {
+    if (_projectPath.isEmpty()) {
         if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
 
     // 完整保存前首先取消防抖定时器，避免重复写入
-    if (m_archiveSyncTimer) m_archiveSyncTimer->stop();
+    if (_archiveSyncTimer) _archiveSyncTimer->stop();
 
-    PlascanArchive archive(m_projectPath);
+    PlascanArchive archive(_projectPath);
     if (!archive.isValid()) {
         if (errorMsg) *errorMsg = QStringLiteral("无法打开项目文件");
         return false;
@@ -273,7 +273,7 @@ bool ProjectData::saveProject(QString *errorMsg)
     QString err;
 
     // 写入核心数据（小，需常写）
-    QJsonDocument coreDoc(m_filesManager.coreData());
+    QJsonDocument coreDoc(_filesManager.coreData());
     if (!archive.writeEntry(ProjectFilesManager::kArchiveCoreFile,
                             coreDoc.toJson(QJsonDocument::Compact), &err)) {
         if (errorMsg) *errorMsg = QStringLiteral("写入 %1 失败: %2")
@@ -282,8 +282,8 @@ bool ProjectData::saveProject(QString *errorMsg)
     }
 
     // 写入结果数据（Compact JSON，zip 内层压缩）
-    if (m_resultsLoaded) {
-        QJsonDocument resultsDoc(m_filesManager.resultsData());
+    if (_resultsLoaded) {
+        QJsonDocument resultsDoc(_filesManager.resultsData());
         if (!archive.writeEntry(ProjectFilesManager::kArchiveResultsFile,
                                 resultsDoc.toJson(QJsonDocument::Compact), &err)) {
             LOG_WARN(QStringLiteral("写入 %1 失败: %2")
@@ -292,48 +292,48 @@ bool ProjectData::saveProject(QString *errorMsg)
     }
 
     // 写入配置数据
-    QJsonDocument configDoc(m_configManager.data());
+    QJsonDocument configDoc(_configManager.data());
     if (!archive.writeEntry("project_config.json",
                             configDoc.toJson(QJsonDocument::Compact), &err)) {
         if (errorMsg) *errorMsg = QStringLiteral("写入 project_config.json 失败: %1").arg(err);
         return false;
     }
 
-    m_isDirty = false;
-    m_resultsDirtyForArchive = false;
-    m_coreFileDirtyForArchive = false;
+    _isDirty = false;
+    _resultsDirtyForArchive = false;
+    _coreFileDirtyForArchive = false;
     emit dirtyStateChanged(false);
-    emit projectSaved(m_projectPath);
+    emit projectSaved(_projectPath);
 
     clearTemporaryMetadata();
-    LOG_INFO(QStringLiteral("项目已保存: %1").arg(m_projectPath));
+    LOG_INFO(QStringLiteral("项目已保存: %1").arg(_projectPath));
     return true;
 }
 
 void ProjectData::closeProject()
 {
     // 关闭前将待写入归档的项目数据刷新
-    if (m_archiveSyncTimer && m_archiveSyncTimer->isActive()) {
-        m_archiveSyncTimer->stop();
+    if (_archiveSyncTimer && _archiveSyncTimer->isActive()) {
+        _archiveSyncTimer->stop();
         syncToArchive();
     }
-    m_projectPath.clear();
-    m_filesManager.setData(QJsonObject());
-    m_configManager.setData(QJsonObject());
-    m_isDirty = false;
-    m_resultsLoaded = false;
-    m_resultsDirtyForArchive = false;
-    m_coreFileDirtyForArchive = false;
+    _projectPath.clear();
+    _filesManager.setData(QJsonObject());
+    _configManager.setData(QJsonObject());
+    _isDirty = false;
+    _resultsLoaded = false;
+    _resultsDirtyForArchive = false;
+    _coreFileDirtyForArchive = false;
     emit projectClosed();
 }
 
 // 防抖定时器回调：将内存项目数据批量写入 .plascan 归档（最多 2 次 zip_open/close）
 void ProjectData::syncToArchive()
 {
-    if (m_projectPath.isEmpty()) return;
-    if (!m_resultsDirtyForArchive && !m_coreFileDirtyForArchive) return;
+    if (_projectPath.isEmpty()) return;
+    if (!_resultsDirtyForArchive && !_coreFileDirtyForArchive) return;
 
-    PlascanArchive archive(m_projectPath);
+    PlascanArchive archive(_projectPath);
     if (!archive.isValid()) {
         // 归档无法访问，回退到临时文件
         saveTemporaryMetadata();
@@ -342,26 +342,26 @@ void ProjectData::syncToArchive()
 
     bool wroteAny = false;
 
-    if (m_resultsDirtyForArchive && m_resultsLoaded) {
+    if (_resultsDirtyForArchive && _resultsLoaded) {
         QString err;
         if (!archive.writeEntry(ProjectFilesManager::kArchiveResultsFile,
-                                QJsonDocument(m_filesManager.resultsData()).toJson(QJsonDocument::Compact), &err)) {
+                                QJsonDocument(_filesManager.resultsData()).toJson(QJsonDocument::Compact), &err)) {
             LOG_WARN(QStringLiteral("同步写入 %1 失败: %2")
                                          .arg(ProjectFilesManager::kArchiveResultsFile, err));
         } else {
-            m_resultsDirtyForArchive = false;
+            _resultsDirtyForArchive = false;
             wroteAny = true;
         }
     }
 
-    if (m_coreFileDirtyForArchive) {
+    if (_coreFileDirtyForArchive) {
         QString err;
         if (!archive.writeEntry(ProjectFilesManager::kArchiveCoreFile,
-                                QJsonDocument(m_filesManager.coreData()).toJson(QJsonDocument::Compact), &err)) {
+                                QJsonDocument(_filesManager.coreData()).toJson(QJsonDocument::Compact), &err)) {
             LOG_WARN(QStringLiteral("同步写入 %1 失败: %2")
                                          .arg(QLatin1String(ProjectFilesManager::kArchiveCoreFile), err));
         } else {
-            m_coreFileDirtyForArchive = false;
+            _coreFileDirtyForArchive = false;
             wroteAny = true;
         }
     }
@@ -369,23 +369,23 @@ void ProjectData::syncToArchive()
     saveTemporaryMetadata();
 
     if (wroteAny) {
-        LOG_INFO(QStringLiteral("归档已同步 (防抖写入): %1").arg(m_projectPath));
+        LOG_INFO(QStringLiteral("归档已同步 (防抖写入): %1").arg(_projectPath));
     }
 }
 
 void ProjectData::updateMetadata(const QJsonObject &meta, bool markDirty)
 {
     const bool hasResults = containsResultKeys(meta);
-    const bool preserveLoadedResults = !hasResults && m_resultsLoaded;
-    const QJsonObject existingResults = preserveLoadedResults ? m_filesManager.resultsData() : QJsonObject();
+    const bool preserveLoadedResults = !hasResults && _resultsLoaded;
+    const QJsonObject existingResults = preserveLoadedResults ? _filesManager.resultsData() : QJsonObject();
 
-    m_filesManager.setData(meta);
+    _filesManager.setData(meta);
 
     if (hasResults) {
-        m_resultsLoaded = true;
+        _resultsLoaded = true;
     }
     else if (preserveLoadedResults) {
-        m_filesManager.setResultsData(existingResults);
+        _filesManager.setResultsData(existingResults);
     }
 
     markDirtyIfRequested(markDirty);
@@ -399,10 +399,10 @@ void ProjectData::updateMetadata(const QJsonObject &meta, bool markDirty)
 // 惰性加载 project_results.json：仅在首次访问 results 时读归档
 void ProjectData::ensureResultsLoaded() const
 {
-    if (m_resultsLoaded) return;
-    m_resultsLoaded = true;   // 先置位，防止递归
+    if (_resultsLoaded) return;
+    _resultsLoaded = true;   // 先置位，防止递归
 
-    if (m_projectPath.isEmpty()) return;
+    if (_projectPath.isEmpty()) return;
 
     // 尝试从 tmp 先加载（崩溃恢复）
     const QString tmpPath = tempResultsPath();
@@ -411,7 +411,7 @@ void ProjectData::ensureResultsLoaded() const
         if (f.open(QIODevice::ReadOnly)) {
             const QJsonDocument doc = parseJsonOrCompressedJson(f.readAll());
             if (!doc.isNull() && doc.isObject()) {
-                m_filesManager.setResultsData(doc.object());
+                _filesManager.setResultsData(doc.object());
                 LOG_INFO(QStringLiteral("从临时目录加载 results"));
                 return;
             }
@@ -419,7 +419,7 @@ void ProjectData::ensureResultsLoaded() const
     }
 
     // 从归档读取
-    PlascanArchive archive(m_projectPath);
+    PlascanArchive archive(_projectPath);
     if (!archive.isValid()) return;
 
     QString err;
@@ -431,7 +431,7 @@ void ProjectData::ensureResultsLoaded() const
     }
     const QJsonDocument doc = parseJsonOrCompressedJson(data);
     if (doc.isObject()) {
-        m_filesManager.setResultsData(doc.object());
+        _filesManager.setResultsData(doc.object());
         LOG_INFO(
             QStringLiteral("从归档惰性加载 results（%1 字节）").arg(data.size()));
     }
@@ -439,10 +439,10 @@ void ProjectData::ensureResultsLoaded() const
 
 void ProjectData::updateConfig(const QJsonObject &config, bool markDirty)
 {
-    m_configManager.setData(config);
+    _configManager.setData(config);
 
-    if (markDirty && !m_isDirty) {
-        m_isDirty = true;
+    if (markDirty && !_isDirty) {
+        _isDirty = true;
         emit dirtyStateChanged(true);
     }
 }
@@ -458,7 +458,7 @@ bool ProjectData::loadTemporaryMetadata()
         if (file.open(QIODevice::ReadOnly)) {
             QJsonDocument doc = QJsonDocument::fromJson(file.readAll());
             if (!doc.isNull() && doc.isObject()) {
-                m_filesManager.setCoreData(doc.object());
+                _filesManager.setCoreData(doc.object());
                 loaded = true;
             }
         }
@@ -472,8 +472,8 @@ bool ProjectData::loadTemporaryMetadata()
         if (file.open(QIODevice::ReadOnly)) {
             const QJsonDocument doc = parseJsonOrCompressedJson(file.readAll());
             if (!doc.isNull() && doc.isObject()) {
-                m_filesManager.setResultsData(doc.object());
-                m_resultsLoaded = true;
+                _filesManager.setResultsData(doc.object());
+                _resultsLoaded = true;
                 loaded = true;
             }
         }
@@ -508,17 +508,17 @@ bool ProjectData::saveTemporaryMetadata()
     QFile filesFile(filesPath);
     if (!filesFile.open(QIODevice::WriteOnly))
         return false;
-    filesFile.write(QJsonDocument(m_filesManager.coreData()).toJson(QJsonDocument::Compact));
+    filesFile.write(QJsonDocument(_filesManager.coreData()).toJson(QJsonDocument::Compact));
     filesFile.close();
 
     // 写结果数据（qCompress 压缩的 Compact JSON，比原始 JSON 小 60-70%）
-    if (m_resultsLoaded) {
+    if (_resultsLoaded) {
         QString resultsPath = tempResultsPath();
         if (!resultsPath.isEmpty()) {
             QFile resultsFile(resultsPath);
             if (resultsFile.open(QIODevice::WriteOnly)) {
                 const QByteArray json =
-                    QJsonDocument(m_filesManager.resultsData()).toJson(QJsonDocument::Compact);
+                    QJsonDocument(_filesManager.resultsData()).toJson(QJsonDocument::Compact);
                 resultsFile.write(qCompress(json, 1));  // level 1 = 最快压缩
                 resultsFile.close();
             }
@@ -529,7 +529,7 @@ bool ProjectData::saveTemporaryMetadata()
     QFile configFile(configPath);
     if (!configFile.open(QIODevice::WriteOnly))
         return false;
-    configFile.write(QJsonDocument(m_configManager.data()).toJson(QJsonDocument::Compact));
+    configFile.write(QJsonDocument(_configManager.data()).toJson(QJsonDocument::Compact));
     configFile.close();
 
     return true;
@@ -553,13 +553,13 @@ bool ProjectData::hasTemporaryMetadata() const
 
 bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
 {
-    if (m_projectPath.isEmpty()) {
+    if (_projectPath.isEmpty()) {
         if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
 
     // 获取现有影像列表，准备追加
-    QJsonArray images = m_filesManager.coreData().value("images").toArray();
+    QJsonArray images = _filesManager.coreData().value("images").toArray();
 
     // 构建已有路径集合用于去重
     QSet<QString> existingPaths;
@@ -597,9 +597,9 @@ bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
     }
 
     // 更新元数据并写入临时缓存
-    QJsonObject core = m_filesManager.coreData();
+    QJsonObject core = _filesManager.coreData();
     core["images"] = images;
-    m_filesManager.setCoreData(core);
+    _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
@@ -638,7 +638,7 @@ bool ProjectData::removeResource(const QString &resourcePath)
 
 bool ProjectData::removeResources(const QStringList &resourcePaths)
 {
-    const QString projectRoot = QFileInfo(m_projectPath).absolutePath();
+    const QString projectRoot = QFileInfo(_projectPath).absolutePath();
     QStringList normalizedTargets;
     for (const QString &path : resourcePaths)
     {
@@ -649,7 +649,7 @@ bool ProjectData::removeResources(const QStringList &resourcePaths)
         }
     }
 
-    QJsonArray images = m_filesManager.coreData().value("images").toArray();
+    QJsonArray images = _filesManager.coreData().value("images").toArray();
     QJsonArray newImages;
 
     for (const QJsonValue &val : images) {
@@ -659,9 +659,9 @@ bool ProjectData::removeResources(const QStringList &resourcePaths)
             newImages.append(val);
     }
 
-    QJsonObject core = m_filesManager.coreData();
+    QJsonObject core = _filesManager.coreData();
     core["images"] = newImages;
-    m_filesManager.setCoreData(core);
+    _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
@@ -681,7 +681,7 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
 {
     if (updatedCount) *updatedCount = 0;
 
-    if (m_projectPath.isEmpty()) {
+    if (_projectPath.isEmpty()) {
         if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
@@ -699,7 +699,7 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
     }
 
     // 遍历影像数组，对匹配的条目写入 camera 字段
-    QJsonObject core = m_filesManager.coreData();
+    QJsonObject core = _filesManager.coreData();
     QJsonArray images = core.value("images").toArray();
     int changed = 0;
 
@@ -724,7 +724,7 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
     }
 
     core["images"] = images;
-    m_filesManager.setCoreData(core);
+    _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
@@ -741,7 +741,7 @@ bool ProjectData::clearImageCameras(const QStringList &imagePaths,
 {
     if (clearedCount) *clearedCount = 0;
 
-    if (m_projectPath.isEmpty()) {
+    if (_projectPath.isEmpty()) {
         if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
         return false;
     }
@@ -756,7 +756,7 @@ bool ProjectData::clearImageCameras(const QStringList &imagePaths,
     for (const QString &p : imagePaths)
         normalizedSet.insert(QDir::cleanPath(QFileInfo(p).absoluteFilePath()));
 
-    QJsonObject core = m_filesManager.coreData();
+    QJsonObject core = _filesManager.coreData();
     QJsonArray images = core.value("images").toArray();
     int cleared = 0;
 
@@ -777,7 +777,7 @@ bool ProjectData::clearImageCameras(const QStringList &imagePaths,
     }
 
     core["images"] = images;
-    m_filesManager.setCoreData(core);
+    _filesManager.setCoreData(core);
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
     scheduleArchiveSync(true, false, true);
@@ -799,7 +799,7 @@ bool ProjectData::appendIntersectionResult(const QJsonObject &result, QString *e
 QJsonArray ProjectData::getIntersectionResults() const
 {
     ensureResultsLoaded();
-    return m_filesManager.resultsData().value(QLatin1String("intersection_results")).toArray();
+    return _filesManager.resultsData().value(QLatin1String("intersection_results")).toArray();
 }
 
 bool ProjectData::appendBundleAdjustResult(const QJsonObject &result, QString *errorMsg)
@@ -815,24 +815,24 @@ bool ProjectData::appendBundleAdjustResult(const QJsonObject &result, QString *e
 QJsonArray ProjectData::getBundleAdjustResults() const
 {
     ensureResultsLoaded();
-    return m_filesManager.resultsData().value(QLatin1String("bundle_adjust_results")).toArray();
+    return _filesManager.resultsData().value(QLatin1String("bundle_adjust_results")).toArray();
 }
 
 bool ProjectData::appendResultRecord(const QString &arrayKey,
                                      const QJsonObject &record,
                                      bool markDirty)
 {
-    if (m_projectPath.isEmpty())
+    if (_projectPath.isEmpty())
     {
         return false;
     }
 
     ensureResultsLoaded();
-    QJsonObject results = m_filesManager.resultsData();
+    QJsonObject results = _filesManager.resultsData();
     QJsonArray array = results.value(arrayKey).toArray();
     array.append(record);
     results[arrayKey] = array;
-    m_filesManager.setResultsData(results);
+    _filesManager.setResultsData(results);
 
     markDirtyIfRequested(markDirty);
     emitCurrentMetadataChanged();
@@ -845,13 +845,13 @@ bool ProjectData::upsertResultRecordByPath(const QString &arrayKey,
                                            const QJsonObject &record,
                                            bool markDirty)
 {
-    if (m_projectPath.isEmpty())
+    if (_projectPath.isEmpty())
     {
         return false;
     }
 
     ensureResultsLoaded();
-    QJsonObject results = m_filesManager.resultsData();
+    QJsonObject results = _filesManager.resultsData();
     const QString targetPath = record.value(pathKey).toString();
     const QString targetBaseName = QFileInfo(targetPath).fileName();
     const QJsonArray source = results.value(arrayKey).toArray();
@@ -871,7 +871,7 @@ bool ProjectData::upsertResultRecordByPath(const QString &arrayKey,
     }
     deduped.append(record);
     results[arrayKey] = deduped;
-    m_filesManager.setResultsData(results);
+    _filesManager.setResultsData(results);
 
     markDirtyIfRequested(markDirty);
     emitCurrentMetadataChanged();
@@ -884,13 +884,13 @@ bool ProjectData::upsertResultRecordByIndex(const QString &arrayKey,
                                             int replaceIndex,
                                             bool markDirty)
 {
-    if (m_projectPath.isEmpty())
+    if (_projectPath.isEmpty())
     {
         return false;
     }
 
     ensureResultsLoaded();
-    QJsonObject results = m_filesManager.resultsData();
+    QJsonObject results = _filesManager.resultsData();
     QJsonArray array = results.value(arrayKey).toArray();
     if (replaceIndex >= 0 && replaceIndex < array.size())
     {
@@ -901,7 +901,7 @@ bool ProjectData::upsertResultRecordByIndex(const QString &arrayKey,
         array.append(record);
     }
     results[arrayKey] = array;
-    m_filesManager.setResultsData(results);
+    _filesManager.setResultsData(results);
 
     markDirtyIfRequested(markDirty);
     emitCurrentMetadataChanged();
@@ -913,15 +913,15 @@ bool ProjectData::replaceResultRecordWithLatest(const QString &arrayKey,
                                                 const QJsonObject &record,
                                                 bool markDirty)
 {
-    if (m_projectPath.isEmpty())
+    if (_projectPath.isEmpty())
     {
         return false;
     }
 
     ensureResultsLoaded();
-    QJsonObject results = m_filesManager.resultsData();
+    QJsonObject results = _filesManager.resultsData();
     results[arrayKey] = QJsonArray{record};
-    m_filesManager.setResultsData(results);
+    _filesManager.setResultsData(results);
 
     markDirtyIfRequested(markDirty);
     emitCurrentMetadataChanged();
@@ -938,38 +938,38 @@ bool ProjectData::packResource(const QString &resourcePath, QString *errorMsg)
 
 QStringList ProjectData::getAllImages() const
 {
-    return m_filesManager.getAllImages();
+    return _filesManager.getAllImages();
 }
 
 QStringList ProjectData::getImagesByCategory(const QString &category) const
 {
-    return m_filesManager.getImagesByCategory(category);
+    return _filesManager.getImagesByCategory(category);
 }
 
 QMap<QString, QString> ProjectData::getIpfindOutputMap() const
 {
-    return m_filesManager.getIpfindOutputMap();
+    return _filesManager.getIpfindOutputMap();
 }
 
 QString ProjectData::findMatchFile(const QString &imgA, const QString &imgB) const
 {
-    return m_filesManager.findMatchFile(imgA, imgB);
+    return _filesManager.findMatchFile(imgA, imgB);
 }
 
 void ProjectData::saveIpfindSettings(const QJsonObject &settings)
 {
-    m_configManager.setWorkflowSettings("ipfind", settings);
-    updateConfig(m_configManager.data());
+    _configManager.setWorkflowSettings("ipfind", settings);
+    updateConfig(_configManager.data());
 
     // 立即写入项目配置：如果存在已打开项目，则直接将 project_config.json 写入归档，
     // 以避免只写入临时元数据的行为。若未打开项目，则回落为保存到临时目录。
-    if (!m_projectPath.isEmpty()) 
+    if (!_projectPath.isEmpty())
     {
-        PlascanArchive archive(m_projectPath);
+        PlascanArchive archive(_projectPath);
         if (archive.isValid()) 
         {
             QString err;
-            QJsonDocument configDoc(m_configManager.data());
+            QJsonDocument configDoc(_configManager.data());
             if (!archive.writeEntry("project_config.json", configDoc.toJson(QJsonDocument::Compact), &err)) 
             {
                 LOG_WARN(QStringLiteral("保存 ipfind 设置到项目归档失败: %1").arg(err));
@@ -991,32 +991,32 @@ void ProjectData::saveIpfindSettings(const QJsonObject &settings)
 
 QJsonObject ProjectData::loadIpfindSettings() const
 {
-    return m_configManager.workflowSettings("ipfind");
+    return _configManager.workflowSettings("ipfind");
 }
 
 void ProjectData::setIpmatchSettings(const QJsonObject &settings)
 {
-    m_configManager.setWorkflowSettings("ipmatch", settings);
-    updateConfig(m_configManager.data(), false);
+    _configManager.setWorkflowSettings("ipmatch", settings);
+    updateConfig(_configManager.data(), false);
 }
 
 QJsonObject ProjectData::getIpmatchSettings() const
 {
-    return m_configManager.workflowSettings("ipmatch");
+    return _configManager.workflowSettings("ipmatch");
 }
 
 void ProjectData::saveUiSettings(const QJsonObject &settings)
 {
-    m_configManager.setUiSettings(settings);
-    updateConfig(m_configManager.data());
+    _configManager.setUiSettings(settings);
+    updateConfig(_configManager.data());
     saveTemporaryMetadata();
 
     // 如果有打开的项目，立即写入 project_config.json 到归档，避免只保存在内存/临时文件中
-    if (!m_projectPath.isEmpty()) {
-        PlascanArchive archive(m_projectPath);
+    if (!_projectPath.isEmpty()) {
+        PlascanArchive archive(_projectPath);
         if (archive.isValid()) {
             QString err;
-            QJsonDocument configDoc(m_configManager.data());
+            QJsonDocument configDoc(_configManager.data());
             if (!archive.writeEntry("project_config.json", configDoc.toJson(QJsonDocument::Compact), &err)) {
                 LOG_WARN(QStringLiteral("保存 UI 设置到项目归档失败: %1").arg(err));
             }
@@ -1031,13 +1031,13 @@ void ProjectData::saveUiSettings(const QJsonObject &settings)
 
 QJsonObject ProjectData::loadUiSettings() const
 {
-    return m_configManager.uiSettings();
+    return _configManager.uiSettings();
 }
 
 void ProjectData::appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings)
 {
     ensureResultsLoaded();
-    m_filesManager.appendIpfindResult(input, output, settings);
+    _filesManager.appendIpfindResult(input, output, settings);
 
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
@@ -1047,7 +1047,7 @@ void ProjectData::appendIpfindResult(const QString &input, const QString &output
 void ProjectData::appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings)
 {
     ensureResultsLoaded();
-    m_filesManager.appendIpmatchResult(outputs, settings);
+    _filesManager.appendIpmatchResult(outputs, settings);
 
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();
@@ -1059,35 +1059,35 @@ void ProjectData::appendIpmatchResult(const QStringList &outputs, const QJsonObj
 // 返回项目根目录（即 .plascan 文件所在目录）
 QString ProjectData::projectDir() const
 {
-    return ProjectIO::projectRootFromPlascan(m_projectPath);
+    return ProjectIO::projectRootFromPlascan(_projectPath);
 }
 
 // 返回临时 project_files.json 的完整磁盘路径（.plascan_tmp/project_files.json）
 QString ProjectData::tempFilesPath() const
 {
-    return ProjectIO::tempFilesPath(m_projectPath);
+    return ProjectIO::tempFilesPath(_projectPath);
 }
 
 // 返回临时 project_config.json 的完整磁盘路径（.plascan_tmp/project_config.json）
 QString ProjectData::tempConfigPath() const
 {
-    return ProjectIO::tempConfigPath(m_projectPath);
+    return ProjectIO::tempConfigPath(_projectPath);
 }
 
 // 返回临时 project_results.json 的完整磁盘路径（.plascan_tmp/project_results.json）
 QString ProjectData::tempResultsPath() const
 {
-    return ProjectIO::tempResultsPath(m_projectPath);
+    return ProjectIO::tempResultsPath(_projectPath);
 }
 
 // 返回 assets/ 目录路径
 QString ProjectData::assetsDir() const
 {
-    return ProjectIO::projectAssetsDir(m_projectPath);
+    return ProjectIO::projectAssetsDir(_projectPath);
 }
 
 // 返回 assets/images/ 目录路径
 QString ProjectData::imagesDir() const
 {
-    return ProjectIO::projectImagesDir(m_projectPath);
+    return ProjectIO::projectImagesDir(_projectPath);
 }
