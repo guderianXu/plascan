@@ -336,20 +336,20 @@ ProjectModelManager::ProjectModelManager(ProjectManager *owner,
                                          QWidget *parentWidget,
                                          QObject *parent)
     : QObject(parent)
-    , m_owner(owner)
-    , m_projectData(projectData)
-    , m_parentWidget(parentWidget)
+    , _owner(owner)
+    , _projectData(projectData)
+    , _parentWidget(parentWidget)
 {
 }
 
 bool ProjectModelManager::ensureProjectOpen(const QString &message,
                                             const QString &title) const
 {
-    if (m_projectData && m_projectData->hasProject())
+    if (_projectData && _projectData->hasProject())
     {
         return true;
     }
-    QMessageBox::warning(m_parentWidget, title, message);
+    QMessageBox::warning(_parentWidget, title, message);
     return false;
 }
 
@@ -375,7 +375,7 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     {
         if (!QFileInfo::exists(denseCloudPath))
         {
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(_parentWidget,
                                  QStringLiteral("网格重建"),
                                  QStringLiteral("所选密集点云不存在：\n%1").arg(denseCloudPath));
             return;
@@ -384,9 +384,9 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     else
     {
         QString errorMessage;
-        if (!resolveLatestDenseCloudPath(m_projectData, &denseCloudPath, &errorMessage))
+        if (!resolveLatestDenseCloudPath(_projectData, &denseCloudPath, &errorMessage))
         {
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(_parentWidget,
                                  QStringLiteral("网格重建"),
                                  QStringLiteral("%1\n请先完成密集点云生成。").arg(errorMessage));
             return;
@@ -394,9 +394,9 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     }
 
     {
-        QJsonObject meta = m_projectData->metadata();
+        QJsonObject meta = _projectData->metadata();
         meta[QStringLiteral("mesh_reconstruction_settings")] = settings;
-        xjw::gui::project::persistProjectMeta(m_projectData, meta, false);
+        xjw::gui::project::persistProjectMeta(_projectData, meta, false);
     }
 
     const QString outputRoot = QFileInfo(denseCloudPath).absolutePath();
@@ -525,7 +525,7 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 return;
             }
             emit self->meshProgressFinished(task.ok);
-            handleTaskResult(self->m_parentWidget,
+            handleTaskResult(self->_parentWidget,
                              QStringLiteral("网格重建"),
                              QStringLiteral("网格重建失败"),
                              task,
@@ -537,10 +537,10 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 const QJsonObject modelRecord = buildMeshReconstructionRecord(taskResult,
                                                                                denseCloudPath,
                                                                                settings);
-                persistModelResult(self->m_projectData, modelRecord);
+                persistModelResult(self->_projectData, modelRecord);
                 if (!settings.value(QStringLiteral("pipeline_mode")).toBool(false))
                 {
-                    QMessageBox::information(self->m_parentWidget,
+                    QMessageBox::information(self->_parentWidget,
                                              QStringLiteral("网格重建"),
                                              meshReconstructionSuccessMessage(taskResult));
                 }
@@ -555,18 +555,18 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
         return;
     }
 
-    if (!m_projectData)
+    if (!_projectData)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("纹理映射"),
                              QStringLiteral("项目未就绪"));
         return;
     }
 
-    const auto lookup = xjw::common::project::resolveLatestModelMeshRecord(m_projectData->metadata());
+    const auto lookup = xjw::common::project::resolveLatestModelMeshRecord(_projectData->metadata());
     if (!lookup.ok)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("纹理映射"),
                              lookup.errorMessage);
         return;
@@ -576,9 +576,9 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
     const QJsonObject baseRecord = lookup.modelRecord;
 
     {
-        QJsonObject meta = m_projectData->metadata();
+        QJsonObject meta = _projectData->metadata();
         meta[QStringLiteral("texture_mapping_settings")] = settings;
-        xjw::gui::project::persistProjectMeta(m_projectData, meta, false);
+        xjw::gui::project::persistProjectMeta(_projectData, meta, false);
     }
 
     const QString productsDir = QFileInfo(meshPath).absolutePath();
@@ -612,7 +612,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
                 return;
             }
             emit self->meshProgressFinished(task.ok);
-            handleTaskResult(self->m_parentWidget,
+            handleTaskResult(self->_parentWidget,
                              QStringLiteral("纹理映射"),
                              QStringLiteral("纹理映射失败"),
                              task,
@@ -624,8 +624,8 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
                 const QJsonObject modelRecord = buildTextureMappingRecord(baseRecord,
                                                                            taskResult,
                                                                            meshPath);
-                persistModelResult(self->m_projectData, modelRecord);
-                QMessageBox::information(self->m_parentWidget,
+                persistModelResult(self->_projectData, modelRecord);
+                QMessageBox::information(self->_parentWidget,
                                          QStringLiteral("纹理映射"),
                                          textureMappingSuccessMessage(taskResult));
             });
@@ -656,8 +656,8 @@ void ProjectModelManager::finalizeModelGenerationSuccess(const QJsonObject &terr
     const QJsonObject enrichedModelResult =
         xjw::common::project::enrichModelResultFromTerrain(modelResult, terrainResult);
 
-    QJsonObject updatedMeta = m_projectData->metadata();
+    QJsonObject updatedMeta = _projectData->metadata();
     replaceMetaArrayWithLatest(&updatedMeta, QStringLiteral("dense_cloud_results"), denseResult);
     replaceMetaArrayWithLatest(&updatedMeta, QStringLiteral("model_results"), enrichedModelResult);
-    xjw::gui::project::persistProjectMeta(m_projectData, updatedMeta, true);
+    xjw::gui::project::persistProjectMeta(_projectData, updatedMeta, true);
 }

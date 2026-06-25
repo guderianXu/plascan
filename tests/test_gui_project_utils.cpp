@@ -2887,6 +2887,29 @@ TEST(CodeStyleTest, MatcherFactoryUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
 }
 
+TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_owner = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectData *_projectData = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QWidget *_parentWidget = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_owner"),
+        QStringLiteral("m_projectData"),
+        QStringLiteral("m_parentWidget"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, GroundBackProjectorUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.h"));

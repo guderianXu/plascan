@@ -32,7 +32,7 @@ private:
                                         const QString &sourceCloudPath,
                                         bool sourceIsDense);
 
-    ProjectManager *m_owner = nullptr;
-    ProjectData *m_projectData = nullptr;
-    QWidget *m_parentWidget = nullptr;
+    ProjectManager *_owner = nullptr;
+    ProjectData *_projectData = nullptr;
+    QWidget *_parentWidget = nullptr;
 };
