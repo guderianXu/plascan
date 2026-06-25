@@ -251,13 +251,13 @@ QStringList loadGeneratedPairConstraints(const QString &projectPath,
 
 MenuWorkflowController::MenuWorkflowController(QMainWindow *mainWindow, QObject *parent)
     : QObject(parent)
-    , m_mainWindow(mainWindow)
+    , _mainWindow(mainWindow)
 {
 }
 
 void MenuWorkflowController::setProjectManager(ProjectManager *projectManager)
 {
-    m_projectManager = projectManager;
+    _projectManager = projectManager;
 }
 
 void MenuWorkflowController::bindActions(MainMenu *mainMenu)
@@ -286,7 +286,7 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
     connectAction(mainMenu->viewWorkflowReportAction(), &MenuWorkflowController::openWorkflowReportDialog);
     connectAction(mainMenu->cameraConvertAction(), &MenuWorkflowController::openCameraConvertDialog);
 
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
@@ -295,7 +295,7 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
     {
         if (action)
         {
-            connect(action, &QAction::triggered, m_projectManager, slot, Qt::UniqueConnection);
+            connect(action, &QAction::triggered, _projectManager, slot, Qt::UniqueConnection);
         }
     };
 
@@ -317,15 +317,15 @@ QJsonObject MenuWorkflowController::colorToJson(const QColor &c)
 
 QStringList MenuWorkflowController::getProjectImages() const
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return QStringList();
     }
 
-    QStringList images = m_projectManager->getImagesByCategory(QStringLiteral("源数据"));
-    if (images.isEmpty()) images = m_projectManager->getImagesByCategory(QStringLiteral("照片"));
-    if (images.isEmpty()) images = m_projectManager->getImagesByCategory(QStringLiteral("Photos"));
-    if (images.isEmpty()) images = m_projectManager->getAllImages();
+    QStringList images = _projectManager->getImagesByCategory(QStringLiteral("源数据"));
+    if (images.isEmpty()) images = _projectManager->getImagesByCategory(QStringLiteral("照片"));
+    if (images.isEmpty()) images = _projectManager->getImagesByCategory(QStringLiteral("Photos"));
+    if (images.isEmpty()) images = _projectManager->getAllImages();
     return images;
 }
 
@@ -563,7 +563,7 @@ bool MenuWorkflowController::confirmAutoFillMissingSparseInputs(const SparsePrer
 
     const QString message = QStringLiteral("空中三角测量缺少上游数据：\n\n%1\n\n是否自动补齐缺失步骤？")
         .arg(summary.missingMessages.join(QStringLiteral("\n")));
-    QMessageBox box(m_mainWindow);
+    QMessageBox box(_mainWindow);
     box.setIcon(QMessageBox::Question);
     box.setWindowTitle(QStringLiteral("空中三角测量"));
     box.setText(message);
@@ -575,24 +575,24 @@ bool MenuWorkflowController::confirmAutoFillMissingSparseInputs(const SparsePrer
 
 void MenuWorkflowController::openFeatureExtractionDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new FeatureExtractionDialog(m_mainWindow);
+    auto *dlg = new FeatureExtractionDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        if (!m_featureExtractionSetting)
+        if (!_featureExtractionSetting)
         {
-            m_featureExtractionSetting = new DialogSettingStore(DialogSettingKeys::FeatureExtraction, this);
+            _featureExtractionSetting = new DialogSettingStore(DialogSettingKeys::FeatureExtraction, this);
         }
-        m_featureExtractionSetting->setProjectPath(m_projectManager->currentProjectPath());
+        _featureExtractionSetting->setProjectPath(_projectManager->currentProjectPath());
 
         // 从 project_dialog.json 加载之前保存的设置
-        const QJsonObject saved = m_featureExtractionSetting->load();
+        const QJsonObject saved = _featureExtractionSetting->load();
         if (!saved.isEmpty())
         {
             dlg->applySettings(saved);
@@ -606,7 +606,7 @@ void MenuWorkflowController::openFeatureExtractionDialog()
         }
 
         // 设置默认输出目录
-        const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
+        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
         if (!assetsDir.isEmpty())
         {
             QJsonObject defaultOutput;
@@ -622,9 +622,9 @@ void MenuWorkflowController::openFeatureExtractionDialog()
     // 连接设置变更信号，实时保存到 project_dialog.json
     connect(dlg, &FeatureExtractionDialog::settingsChanged, this, [this](const QJsonObject &s)
     {
-        if (m_featureExtractionSetting)
+        if (_featureExtractionSetting)
         {
-            m_featureExtractionSetting->save(s);
+            _featureExtractionSetting->save(s);
         }
     });
 
@@ -632,7 +632,7 @@ void MenuWorkflowController::openFeatureExtractionDialog()
     connect(dlg, &FeatureExtractionDialog::runRequested, this,
         [this](const QJsonObject &config, const QStringList &inputs)
     {
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             LOG_ERROR(QStringLiteral("无法运行特征提取：项目管理器未初始化"));
             return;
@@ -646,28 +646,28 @@ void MenuWorkflowController::openFeatureExtractionDialog()
 
 void MenuWorkflowController::openVocabularyOverlapDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
-    if (!m_projectManager || m_projectManager->currentProjectPath().isEmpty())
+    if (!_projectManager || _projectManager->currentProjectPath().isEmpty())
     {
         LOG_ERROR(QStringLiteral("无法获取重叠对：请先打开或创建项目"));
-        QMessageBox::warning(m_mainWindow, QStringLiteral("获取重叠对"), QStringLiteral("请先打开或创建项目。"));
+        QMessageBox::warning(_mainWindow, QStringLiteral("获取重叠对"), QStringLiteral("请先打开或创建项目。"));
         return;
     }
 
-    if (!m_vocabOverlapSetting)
+    if (!_vocabOverlapSetting)
     {
-        m_vocabOverlapSetting = new DialogSettingStore(DialogSettingKeys::VocabularyOverlap, this);
+        _vocabOverlapSetting = new DialogSettingStore(DialogSettingKeys::VocabularyOverlap, this);
     }
-    m_vocabOverlapSetting->setProjectPath(m_projectManager->currentProjectPath());
+    _vocabOverlapSetting->setProjectPath(_projectManager->currentProjectPath());
 
-    auto *dlg = new VocabularyOverlapDialog(m_projectManager, m_mainWindow);
+    auto *dlg = new VocabularyOverlapDialog(_projectManager, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->setProjectImages(getProjectImages());
 
-    auto *mainWin = qobject_cast<MainWindow *>(m_mainWindow.data());
+    auto *mainWin = qobject_cast<MainWindow *>(_mainWindow.data());
     QMetaObject::Connection overlapCancelConn;
     if (mainWin)
     {
@@ -683,7 +683,7 @@ void MenuWorkflowController::openVocabularyOverlapDialog()
         });
     }
 
-    const QJsonObject saved = m_vocabOverlapSetting->load();
+    const QJsonObject saved = _vocabOverlapSetting->load();
     if (!saved.isEmpty())
     {
         dlg->applySettings(saved);
@@ -691,9 +691,9 @@ void MenuWorkflowController::openVocabularyOverlapDialog()
 
     connect(dlg, &VocabularyOverlapDialog::settingsChanged, this, [this](const QJsonObject &settings)
     {
-        if (m_vocabOverlapSetting)
+        if (_vocabOverlapSetting)
         {
-            m_vocabOverlapSetting->save(settings);
+            _vocabOverlapSetting->save(settings);
         }
     });
 
@@ -702,13 +702,13 @@ void MenuWorkflowController::openVocabularyOverlapDialog()
             this,
             [this](const QStringList &pairs, const QJsonObject &settings)
     {
-        if (!m_projectManager || m_projectManager->currentProjectPath().isEmpty())
+        if (!_projectManager || _projectManager->currentProjectPath().isEmpty())
         {
             return;
         }
 
         DialogSettingStore matchStore(DialogSettingKeys::FeatureMatching, this);
-        matchStore.setProjectPath(m_projectManager->currentProjectPath());
+        matchStore.setProjectPath(_projectManager->currentProjectPath());
 
         QJsonObject matchingSettings = matchStore.load();
         matchingSettings.insert(QStringLiteral("generated_pairs"), stringListToJsonArray(pairs));
@@ -727,7 +727,7 @@ void MenuWorkflowController::openVocabularyOverlapDialog()
 
 void MenuWorkflowController::openFeaturePointVisualizationDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
@@ -735,7 +735,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
     // 收集当前可用的特征文件后缀
     QStringList availableSuffixes;
     QString currentSuffix;
-    auto *mainWin = qobject_cast<MainWindow*>(m_mainWindow.data());
+    auto *mainWin = qobject_cast<MainWindow*>(_mainWindow.data());
     auto *canvas = mainWin ? mainWin->canvas() : nullptr;
     if (canvas)
     {
@@ -747,15 +747,15 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
                            << QStringLiteral(".sift") << QStringLiteral(".orb") << QStringLiteral(".akz");
 
     QJsonObject sv;
-    if (m_projectManager)
+    if (_projectManager)
     {
-        if (!m_featurePointVisualizationSetting)
+        if (!_featurePointVisualizationSetting)
         {
-            m_featurePointVisualizationSetting =
+            _featurePointVisualizationSetting =
                 new DialogSettingStore(DialogSettingKeys::FeaturePointVisualization, this);
         }
-        m_featurePointVisualizationSetting->setProjectPath(m_projectManager->currentProjectPath());
-        sv = m_featurePointVisualizationSetting->load();
+        _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
+        sv = _featurePointVisualizationSetting->load();
 
         const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
         if (!savedSuffix.isEmpty())
@@ -764,7 +764,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
         }
     }
 
-    auto *dlg = new FeaturePointVisualizationDialog(availableSuffixes, m_mainWindow);
+    auto *dlg = new FeaturePointVisualizationDialog(availableSuffixes, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     if (!currentSuffix.isEmpty())
     {
@@ -783,17 +783,17 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
                 this, [this, canvas](const QString &suffix)
         {
             canvas->setActiveFeatureSuffix(suffix);
-            if (m_featurePointVisualizationSetting)
+            if (_featurePointVisualizationSetting)
             {
-                QJsonObject sv = m_featurePointVisualizationSetting->load();
+                QJsonObject sv = _featurePointVisualizationSetting->load();
                 sv[QStringLiteral("feature_suffix")] = suffix;
-                m_featurePointVisualizationSetting->save(sv);
+                _featurePointVisualizationSetting->save(sv);
             }
         });
     }
 
     // 懒初始化可视化记忆化管理器并加载保存的设置
-    if (m_projectManager)
+    if (_projectManager)
     {
         if (!sv.isEmpty())
         {
@@ -837,7 +837,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
             emit requestApplyFeatureDisplayOptions(opts);
 
             // 保存到 project_dialog.json
-            if (m_featurePointVisualizationSetting)
+            if (_featurePointVisualizationSetting)
             {
                 QJsonObject sv;
                 sv["showPoints"] = opts.showPoints;
@@ -855,7 +855,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
                 sv["scaleColor"] = colorToJson(opts.scaleColor);
                 sv["orientColor"] = colorToJson(opts.orientColor);
 
-                m_featurePointVisualizationSetting->save(sv);
+                _featurePointVisualizationSetting->save(sv);
             }
         });
 
@@ -864,36 +864,36 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
 
 void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &ui)
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
 
     // 优先从 project_dialog.json 加载
-    if (!m_featurePointVisualizationSetting)
+    if (!_featurePointVisualizationSetting)
     {
-        m_featurePointVisualizationSetting =
+        _featurePointVisualizationSetting =
             new DialogSettingStore(DialogSettingKeys::FeaturePointVisualization, this);
     }
-    m_featurePointVisualizationSetting->setProjectPath(m_projectManager->currentProjectPath());
-    QJsonObject sv = m_featurePointVisualizationSetting->load();
+    _featurePointVisualizationSetting->setProjectPath(_projectManager->currentProjectPath());
+    QJsonObject sv = _featurePointVisualizationSetting->load();
 
     // 兼容旧版本：若新文件中无数据则尝试从传入的旧 ui 设置中读取
     if (sv.isEmpty() && ui.contains(QStringLiteral("superpoint_visualization")))
     {
         sv = ui.value(QStringLiteral("superpoint_visualization")).toObject();
     }
-    auto *mainWin = qobject_cast<MainWindow*>(m_mainWindow.data());
+    auto *mainWin = qobject_cast<MainWindow*>(_mainWindow.data());
     auto *canvas = mainWin ? mainWin->canvas() : nullptr;
     const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
     if (canvas)
     {
         const QString inferredSuffix = xjw::gui::project::inferPreferredFeatureSuffix(
-            m_projectManager->currentProjectPath(), m_projectManager->currentMeta());
+            _projectManager->currentProjectPath(), _projectManager->currentMeta());
         const bool savedSuffixUsable = !savedSuffix.isEmpty()
             && (inferredSuffix.isEmpty()
                 || xjw::gui::project::projectHasFeatureSuffix(
-                    m_projectManager->currentProjectPath(), m_projectManager->currentMeta(), savedSuffix));
+                    _projectManager->currentProjectPath(), _projectManager->currentMeta(), savedSuffix));
         if (savedSuffixUsable)
         {
             canvas->setActiveFeatureSuffix(savedSuffix);
@@ -941,44 +941,44 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
 
 void MenuWorkflowController::openThreeDReconstructionDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new ThreeDReconstructionDialog(m_mainWindow);
+    auto *dlg = new ThreeDReconstructionDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
     const QStringList images = getProjectImages();
     dlg->setImageCount(images.size());
 
-    if (!m_threeDSetting)
+    if (!_threeDSetting)
     {
-        m_threeDSetting = new DialogSettingStore(DialogSettingKeys::ThreeDReconstruction, this);
+        _threeDSetting = new DialogSettingStore(DialogSettingKeys::ThreeDReconstruction, this);
     }
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        const QString projectPath = m_projectManager->currentProjectPath();
+        const QString projectPath = _projectManager->currentProjectPath();
         const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
         if (!assetsDir.isEmpty())
         {
             dlg->setDefaultOutputDir(QDir(assetsDir).filePath(QStringLiteral("three_d_reconstruction")));
         }
-        m_threeDSetting->setProjectPath(projectPath);
-        dlg->applySettings(m_threeDSetting->load());
+        _threeDSetting->setProjectPath(projectPath);
+        dlg->applySettings(_threeDSetting->load());
     }
 
     connect(dlg, &ThreeDReconstructionDialog::settingsChanged, this, [this](const QJsonObject &settings) {
-        if (m_threeDSetting)
+        if (_threeDSetting)
         {
-            m_threeDSetting->save(settings);
+            _threeDSetting->save(settings);
         }
     });
     connect(dlg, &ThreeDReconstructionDialog::runRequested, this, [this](const QJsonObject &settings) {
-        if (m_threeDSetting)
+        if (_threeDSetting)
         {
-            m_threeDSetting->save(settings);
+            _threeDSetting->save(settings);
         }
         startThreeDReconstructionWorkflow(settings);
     }, Qt::QueuedConnection);
@@ -988,45 +988,45 @@ void MenuWorkflowController::openThreeDReconstructionDialog()
 
 void MenuWorkflowController::openAerialTriangulationDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new ThreeDReconstructionDialog(m_mainWindow);
+    auto *dlg = new ThreeDReconstructionDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation);
 
     const QStringList images = getProjectImages();
     dlg->setImageCount(images.size());
 
-    if (!m_aerialTriangulationSetting)
+    if (!_aerialTriangulationSetting)
     {
-        m_aerialTriangulationSetting = new DialogSettingStore(DialogSettingKeys::AerialTriangulation, this);
+        _aerialTriangulationSetting = new DialogSettingStore(DialogSettingKeys::AerialTriangulation, this);
     }
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        const QString projectPath = m_projectManager->currentProjectPath();
+        const QString projectPath = _projectManager->currentProjectPath();
         const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
         if (!assetsDir.isEmpty())
         {
             dlg->setDefaultOutputDir(QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation")));
         }
-        m_aerialTriangulationSetting->setProjectPath(projectPath);
-        dlg->applySettings(m_aerialTriangulationSetting->load());
+        _aerialTriangulationSetting->setProjectPath(projectPath);
+        dlg->applySettings(_aerialTriangulationSetting->load());
     }
 
     connect(dlg, &ThreeDReconstructionDialog::settingsChanged, this, [this](const QJsonObject &settings) {
-        if (m_aerialTriangulationSetting)
+        if (_aerialTriangulationSetting)
         {
-            m_aerialTriangulationSetting->save(settings);
+            _aerialTriangulationSetting->save(settings);
         }
     });
     connect(dlg, &ThreeDReconstructionDialog::runRequested, this, [this](const QJsonObject &settings) {
-        if (m_aerialTriangulationSetting)
+        if (_aerialTriangulationSetting)
         {
-            m_aerialTriangulationSetting->save(settings);
+            _aerialTriangulationSetting->save(settings);
         }
         startAerialTriangulationWorkflow(settings);
     }, Qt::QueuedConnection);
@@ -1036,22 +1036,22 @@ void MenuWorkflowController::openAerialTriangulationDialog()
 
 void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject &settings)
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
-        QMessageBox::warning(m_mainWindow, QStringLiteral("空中三角测量"), QStringLiteral("请先打开项目"));
+        QMessageBox::warning(_mainWindow, QStringLiteral("空中三角测量"), QStringLiteral("请先打开项目"));
         return;
     }
 
     const QStringList images = getProjectImages();
     if (images.size() < 2)
     {
-        QMessageBox::warning(m_mainWindow,
+        QMessageBox::warning(_mainWindow,
                              QStringLiteral("空中三角测量"),
                              QStringLiteral("至少需要 2 张影像才能进行空中三角测量。"));
         return;
     }
 
-    auto *pm = m_projectManager;
+    auto *pm = _projectManager;
     const QString projectPath = pm->currentProjectPath();
     const QJsonObject projectMeta = pm->currentMeta();
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
@@ -1085,7 +1085,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
             if (pmGuard->currentProjectPath() != projectPath)
             {
                 emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->m_mainWindow,
+                QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
                                      QStringLiteral("项目已切换，本次空三启动已取消。"));
                 return;
@@ -1114,16 +1114,16 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
                                                          const QString &outputRoot,
                                                          bool autoFillMissing)
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
 
-    auto *pm = m_projectManager;
+    auto *pm = _projectManager;
     if (pm->currentProjectPath() != projectPath)
     {
         emit pm->atProgressFinished(false);
-        QMessageBox::warning(m_mainWindow,
+        QMessageBox::warning(_mainWindow,
                              QStringLiteral("空中三角测量"),
                              QStringLiteral("项目已切换，本次空三启动已取消。"));
         return;
@@ -1248,7 +1248,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
             if (pmGuard->currentProjectPath() != projectPath)
             {
                 emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->m_mainWindow,
+                QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
                                      QStringLiteral("项目已切换，本次空三结果未写回。"));
                 return;
@@ -1318,7 +1318,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
             }
             if (!result.success)
             {
-                QMessageBox::warning(controller->m_mainWindow,
+                QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
                                      result.errorMessage.isEmpty()
                                          ? QStringLiteral("空中三角测量失败。")
@@ -1328,7 +1328,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
 
             if (!xjw::gui::project::isProductionSparseResult(resultRecordExtra))
             {
-                QMessageBox::warning(controller->m_mainWindow,
+                QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
                                      sparseBlockingReason.isEmpty()
                                          ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
@@ -1336,7 +1336,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
                 return;
             }
 
-            QMessageBox::information(controller->m_mainWindow,
+            QMessageBox::information(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
                                      QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3")
                                          .arg(registeredImageCount)
@@ -1347,16 +1347,16 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
 
 void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject &settings)
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
-        QMessageBox::warning(m_mainWindow, QStringLiteral("三维重建"), QStringLiteral("请先打开项目"));
+        QMessageBox::warning(_mainWindow, QStringLiteral("三维重建"), QStringLiteral("请先打开项目"));
         return;
     }
 
     const QStringList images = getProjectImages();
     if (images.size() < 2)
     {
-        QMessageBox::warning(m_mainWindow,
+        QMessageBox::warning(_mainWindow,
                              QStringLiteral("三维重建"),
                              QStringLiteral("至少需要 2 张影像才能进行三维重建。"));
         return;
@@ -1365,7 +1365,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
     if (outputRoot.isEmpty())
     {
-        const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
+        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
         outputRoot = QDir(assetsDir).filePath(QStringLiteral("three_d_reconstruction"));
     }
     outputRoot = QDir::cleanPath(outputRoot);
@@ -1374,7 +1374,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     QJsonObject runSettings = settings;
     runSettings[QStringLiteral("output_dir")] = outputRoot;
 
-    auto *pm = m_projectManager;
+    auto *pm = _projectManager;
     xjw::gui::SFMServiceOptions opts;
     opts.images = images;
     opts.plascanPath = pm->currentProjectPath();
@@ -1478,7 +1478,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
             if (pmGuard->currentProjectPath() != projectPath)
             {
                 emit pmGuard->atProgressFinished(false);
-                QMessageBox::warning(controller->m_mainWindow,
+                QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("三维重建"),
                                      QStringLiteral("项目已切换，本次三维重建空三结果未写回。"));
                 return;
@@ -1550,7 +1550,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
             emit pmGuard->atProgressFinished(result.success);
             if (!result.success)
             {
-                QMessageBox::warning(controller->m_mainWindow,
+                QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("三维重建"),
                                      result.errorMessage.isEmpty()
                                          ? QStringLiteral("空中三角测量失败。")
@@ -1560,7 +1560,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
 
             if (!currentSfmIsProduction)
             {
-                QMessageBox::warning(controller->m_mainWindow,
+                QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("三维重建"),
                                      currentSfmBlockingReason.isEmpty()
                                          ? QStringLiteral("当前 SFM 稀疏点云质量不足，已停止后续 MVS 流程。")
@@ -1577,14 +1577,14 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
 
 void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObject &settings)
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
 
-    QObject *ctx = new QObject(m_projectManager);
+    QObject *ctx = new QObject(_projectManager);
     QPointer<MenuWorkflowController> self(this);
-    connect(m_projectManager, &ProjectManager::mvsProgressFinished, ctx,
+    connect(_projectManager, &ProjectManager::mvsProgressFinished, ctx,
             [self, ctx, settings](bool success) {
         ctx->deleteLater();
         if (!success || !self)
@@ -1641,19 +1641,19 @@ void MenuWorkflowController::startThreeDReconstructionDenseStage(const QJsonObje
         denseSettings[QStringLiteral("iterations")] = 6;
     }
 
-    m_projectManager->startGenerateDenseCloudAsync(denseSettings);
+    _projectManager->startGenerateDenseCloudAsync(denseSettings);
 }
 
 void MenuWorkflowController::startThreeDReconstructionDenseRefineStage(const QJsonObject &settings)
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
 
-    QObject *ctx = new QObject(m_projectManager);
+    QObject *ctx = new QObject(_projectManager);
     QPointer<MenuWorkflowController> self(this);
-    connect(m_projectManager, &ProjectManager::mvsProgressFinished, ctx,
+    connect(_projectManager, &ProjectManager::mvsProgressFinished, ctx,
             [self, ctx, settings](bool success) {
         ctx->deleteLater();
         if (!success || !self)
@@ -1679,21 +1679,21 @@ void MenuWorkflowController::startThreeDReconstructionDenseRefineStage(const QJs
     refineSettings[QStringLiteral("threads")] = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
     refineSettings[QStringLiteral("processingDevice")] = useCuda ? QStringLiteral("gpu") : QStringLiteral("cpu");
 
-    m_projectManager->startDenseCloudRefineAsync(refineSettings);
+    _projectManager->startDenseCloudRefineAsync(refineSettings);
 }
 
 void MenuWorkflowController::startThreeDReconstructionMeshStage(const QJsonObject &settings)
 {
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return;
     }
 
-    QObject *ctx = new QObject(m_projectManager);
-    connect(m_projectManager, &ProjectManager::meshProgressFinished, ctx,
+    QObject *ctx = new QObject(_projectManager);
+    connect(_projectManager, &ProjectManager::meshProgressFinished, ctx,
             [this, ctx](bool success) {
         ctx->deleteLater();
-        QMessageBox::information(m_mainWindow,
+        QMessageBox::information(_mainWindow,
                                  QStringLiteral("三维重建"),
                                  success ? QStringLiteral("三维模型生成完成。")
                                          : QStringLiteral("三维模型生成失败。"));
@@ -1731,34 +1731,34 @@ void MenuWorkflowController::startThreeDReconstructionMeshStage(const QJsonObjec
         meshSettings[QStringLiteral("octreeDepth")] = 9;
     }
 
-    m_projectManager->startMeshReconstructionAsync(meshSettings);
+    _projectManager->startMeshReconstructionAsync(meshSettings);
 }
 
 void MenuWorkflowController::openOverlapAnalysisDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new OverlapAnalysisDialog(m_projectManager, m_mainWindow);
+    auto *dlg = new OverlapAnalysisDialog(_projectManager, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
 
 void MenuWorkflowController::openCreateDemDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
-    if (!m_projectManager)
+    if (!_projectManager)
     {
-        QMessageBox::warning(m_mainWindow, QStringLiteral("生成 DEM"), QStringLiteral("请先打开项目"));
+        QMessageBox::warning(_mainWindow, QStringLiteral("生成 DEM"), QStringLiteral("请先打开项目"));
         return;
     }
 
-    auto *dlg = new CreateDemDialog(m_projectManager, m_mainWindow);
+    auto *dlg = new CreateDemDialog(_projectManager, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
     QStringList images = getProjectImages();
@@ -1771,9 +1771,9 @@ void MenuWorkflowController::openCreateDemDialog()
     connect(dlg, &CreateDemDialog::requestRunFullPipeline, this,
         [this](const QStringList &images, const QString &outputDir, const QJsonObject &pipelineSettings)
     {
-        if (!m_projectManager)
+        if (!_projectManager)
             return;
-        QMetaObject::invokeMethod(m_projectManager, "startFullDemPipelineAsync", Qt::QueuedConnection,
+        QMetaObject::invokeMethod(_projectManager, "startFullDemPipelineAsync", Qt::QueuedConnection,
             Q_ARG(QStringList, images), Q_ARG(QString, outputDir), Q_ARG(QJsonObject, pipelineSettings));
     });
 
@@ -1781,19 +1781,19 @@ void MenuWorkflowController::openCreateDemDialog()
     connect(dlg, &CreateDemDialog::requestRunFromDenseCloud, this,
         [this](const QString &denseCloudPath, const QString &outputDir, double demResolution, const QString &demType)
     {
-        if (!m_projectManager)
+        if (!_projectManager)
             return;
-        QMetaObject::invokeMethod(m_projectManager, "startDemFromDenseCloudAsync", Qt::QueuedConnection,
+        QMetaObject::invokeMethod(_projectManager, "startDemFromDenseCloudAsync", Qt::QueuedConnection,
             Q_ARG(QString, denseCloudPath), Q_ARG(QString, outputDir),
             Q_ARG(double, demResolution), Q_ARG(QString, demType));
     });
 
     // 进度反馈 → 对话框内显示
-    if (m_projectManager)
+    if (_projectManager)
     {
-        connect(m_projectManager, &ProjectManager::demPipelineProgressChanged,
+        connect(_projectManager, &ProjectManager::demPipelineProgressChanged,
                 dlg, &CreateDemDialog::onPipelineProgress);
-        connect(m_projectManager, &ProjectManager::demPipelineFinished,
+        connect(_projectManager, &ProjectManager::demPipelineFinished,
                 dlg, &CreateDemDialog::onPipelineFinished);
     }
 
@@ -1802,15 +1802,15 @@ void MenuWorkflowController::openCreateDemDialog()
 
 void MenuWorkflowController::openMapProjectDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new MapProjectDialog(m_mainWindow);
+    auto *dlg = new MapProjectDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
-    if (m_projectManager)
+    if (_projectManager)
     {
         QStringList images = getProjectImages();
         if (!images.isEmpty())
@@ -1818,13 +1818,13 @@ void MenuWorkflowController::openMapProjectDialog()
             dlg->setAvailableImages(images);
         }
 
-        QString projectRoot = ProjectIO::projectRootFromPlascan(m_projectManager->currentProjectPath());
+        QString projectRoot = ProjectIO::projectRootFromPlascan(_projectManager->currentProjectPath());
         if (!projectRoot.isEmpty())
         {
             dlg->setProjectRoot(projectRoot);
         }
 
-        const QJsonArray demResults = m_projectManager->currentMeta().value(QStringLiteral("dem_results")).toArray();
+        const QJsonArray demResults = _projectManager->currentMeta().value(QStringLiteral("dem_results")).toArray();
         QString latestRelativeDem;
         QString latestAnyDem;
         for (int index = demResults.size() - 1; index >= 0; --index)
@@ -1848,12 +1848,12 @@ void MenuWorkflowController::openMapProjectDialog()
         dlg->setDefaultDemPath(!latestRelativeDem.isEmpty() ? latestRelativeDem : latestAnyDem);
 
         // 懒初始化 MapProject 记忆化管理器
-        if (!m_mapSetting)
+        if (!_mapSetting)
         {
-            m_mapSetting = new DialogSettingStore(DialogSettingKeys::MapProject, this);
+            _mapSetting = new DialogSettingStore(DialogSettingKeys::MapProject, this);
         }
-        m_mapSetting->setProjectPath(m_projectManager->currentProjectPath());
-        const QJsonObject saved = m_mapSetting->load();
+        _mapSetting->setProjectPath(_projectManager->currentProjectPath());
+        const QJsonObject saved = _mapSetting->load();
         if (!saved.isEmpty())
         {
             dlg->applySettings(saved);
@@ -1862,21 +1862,21 @@ void MenuWorkflowController::openMapProjectDialog()
 
     connect(dlg, &MapProjectDialog::settingsChanged, this, [this](const QJsonObject &s)
     {
-        if (m_mapSetting)
+        if (_mapSetting)
         {
-            m_mapSetting->save(s);
+            _mapSetting->save(s);
         }
     });
 
     connect(dlg, &MapProjectDialog::requestRunMapProject, this,
         [this](const QStringList &images, const QString &demPath, const QString &outputPath, double res)
         {
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             LOG_WARN(QStringLiteral("MapProject: 未找到 ProjectManager"));
             return;
         }
-        QMetaObject::invokeMethod(m_projectManager, "startMapProjectAsync", Qt::QueuedConnection,
+        QMetaObject::invokeMethod(_projectManager, "startMapProjectAsync", Qt::QueuedConnection,
             Q_ARG(QStringList, images), Q_ARG(QString, demPath), Q_ARG(QString, outputPath), Q_ARG(double, res));
     });
 
@@ -1888,7 +1888,7 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
     const QString featureAlgorithm = config.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("disk")).toUpper();
     LOG_INFO(QStringLiteral("开始在后台线程执行 %1 特征提取...").arg(featureAlgorithm));
 
-    auto *mainWin = qobject_cast<MainWindow *>(m_mainWindow.data());
+    auto *mainWin = qobject_cast<MainWindow *>(_mainWindow.data());
 
     auto cancelFlag    = std::make_shared<std::atomic<bool>>(false);
     auto progressCount = std::make_shared<std::atomic<int>>(0);
@@ -1911,7 +1911,7 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
     }
 
     // 定时轮询进度（100ms）
-    auto *timer = new QTimer(m_mainWindow);
+    auto *timer = new QTimer(_mainWindow);
     timer->setInterval(100);
     connect(timer, &QTimer::timeout, [mainWin, progressCount]()
     {
@@ -1922,7 +1922,7 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
     });
     timer->start();
 
-    auto *watcher = new QFutureWatcher<bool>(m_mainWindow);
+    auto *watcher = new QFutureWatcher<bool>(_mainWindow);
     connect(watcher, &QFutureWatcher<bool>::finished,
             [mainWin, cancelFlag, timer, watcher, cancelConn]()
     {
@@ -1938,7 +1938,7 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
         watcher->deleteLater();
     });
 
-    QPointer<ProjectManager> pmGuard(m_projectManager);
+    QPointer<ProjectManager> pmGuard(_projectManager);
     watcher->setFuture(QtConcurrent::run(
         [config, inputs, pmGuard, cancelFlag, progressCount]() -> bool
         {
@@ -1948,30 +1948,30 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
 
 void MenuWorkflowController::openWorkflowReportDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
     QString assetsDir;
-    if (m_projectManager)
+    if (_projectManager)
     {
-        assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
+        assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
     }
 
-    auto *dlg = new WorkflowReportDialog(assetsDir, m_mainWindow);
+    auto *dlg = new WorkflowReportDialog(assetsDir, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }
 
 void MenuWorkflowController::openCameraConvertDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new CameraConvertDialog(m_mainWindow);
+    auto *dlg = new CameraConvertDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
     dlg->show();
 }

@@ -69,6 +69,7 @@
 - `Logger` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持日志文件轮转、sink 分发和 Qt 字符串适配接口不变。
 - `ProjectDashboardWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持概览页摘要、任务、参考数据、质量指标和报告表格行为不变。
 - `MainMenu` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持菜单构建、UI 绑定、工具栏动作和最近项目菜单行为不变。
+- `MenuWorkflowController` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并把对话框设置缓存指针从 `public` 收回 `private`，保持特征提取、词汇重叠、空三、三维重建、DEM/DOM 和报告入口行为不变。
 - `PlascanArchive` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并整理归档读写封装中的局部控制语句花括号风格，保持 `.plascan` 读写行为不变。
 - `ProjectFilesManager` 私有成员和拆分数据模型注释从 `m_` 迁移到 `_lowerCamelCase`，保持 `project_files.json` / `project_results.json` 拆分、惰性结果加载和匹配结果精简记录行为不变。
 - `ProjectData` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 `.plascan` 创建/打开/保存、惰性 results 加载、临时 metadata 和防抖归档同步行为不变。
@@ -152,6 +153,10 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MainMenuUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `MainMenu` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MainMenu|MainWindowMenu|CodeStyleTest.MainMenuUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，13/13，验证主菜单动作、UI 绑定和菜单接线保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MainMenu.cpp`、`MainWindow.cpp`、`MenuWorkflowController.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MenuWorkflowControllerUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `MenuWorkflowController` 私有成员迁移到 `_lowerCamelCase` 且对话框设置缓存不再暴露在 `public` 段。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MenuWorkflowControllerUsesLowerCamelPrivateMemberNames|MenuWorkflowControllerTest|MainWindowMenuWiringTest|AerialTriangulationWorkflowTest|GuiAsyncLifetimeTest.FeatureExtractionRunnerUsesGuardedProjectManagerCallbacks|FeatureNamingCleanupTest.GuiOrchestrationDoesNotExposeLegacyAlgorithmSpecificInterfaces|FeatureExtractionRunnerTest.FeatureExtractionLogUsesSelectedAlgorithmName|VocabularyOverlapDialogTest.(SupportsCameraModelModeAndStatusProgress|DisplaysResultsWithoutOverwritingSummary)|MainMenuTest.WorkflowMenuExposesOnlyOneClickThreeDReconstruction" --output-on-failure` 通过，17/17，验证菜单工作流编排、空三入口、词汇重叠设置写回、特征提取 runner guard 和报告/重建入口保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MenuWorkflowController.cpp`、`MainWindow.cpp` 并链接 GUI。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具测试。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.PlascanArchiveUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `PlascanArchive` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "PlascanArchive|ProjectData" --output-on-failure` 通过，9/9，验证 `.plascan` 写入替换、项目 metadata 保存和迁移逻辑保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `PlascanArchive.cpp`、`ProjectData.cpp` 并链接 GUI。

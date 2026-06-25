@@ -1539,9 +1539,9 @@ TEST(GuiAsyncLifetimeTest, FeatureExtractionRunnerUsesGuardedProjectManagerCallb
     EXPECT_TRUE(runnerSource.contains(QStringLiteral("[projectManager, imagePath, outputPath, config]()")));
     EXPECT_FALSE(runnerSource.contains(QStringLiteral("QMetaObject::invokeMethod(projectManager, \"appendIpfindResult\"")));
 
-    EXPECT_TRUE(menuBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(m_projectManager)")));
+    EXPECT_TRUE(menuBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(_projectManager)")));
     EXPECT_TRUE(menuBlock.contains(QStringLiteral("FeatureExtractionRunner::run(config, inputs, pmGuard")));
-    EXPECT_FALSE(menuBlock.contains(QStringLiteral("pm = m_projectManager")));
+    EXPECT_FALSE(menuBlock.contains(QStringLiteral("pm = _projectManager")));
 
     EXPECT_TRUE(terrainBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")));
     EXPECT_TRUE(terrainBlock.contains(QStringLiteral("FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard")));
@@ -5634,6 +5634,60 @@ TEST(MainWindowMenuWiringTest, CameraConversionActionIsConnectedToWorkflowContro
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("cameraConvertAction")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("openCameraConvertDialog")));
     EXPECT_TRUE(controllerSource.contains(QStringLiteral("CameraConvertDialog")));
+}
+
+TEST(CodeStyleTest, MenuWorkflowControllerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("DialogSettingStore *_featureExtractionSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_vocabOverlapSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_featurePointVisualizationSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_baSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_mapSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_dcSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_threeDSetting = nullptr;"),
+        QStringLiteral("DialogSettingStore *_aerialTriangulationSetting = nullptr;"),
+        QStringLiteral("QPointer<QMainWindow> _mainWindow;"),
+        QStringLiteral("ProjectManager *_projectManager = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const int publicIndex = header.indexOf(QStringLiteral("public:"));
+    const int ctorIndex = header.indexOf(QStringLiteral("explicit MenuWorkflowController"), publicIndex);
+    ASSERT_GE(publicIndex, 0);
+    ASSERT_GT(ctorIndex, publicIndex);
+    const QString publicDataBlock = header.mid(publicIndex, ctorIndex - publicIndex);
+    EXPECT_FALSE(publicDataBlock.contains(QStringLiteral("DialogSettingStore *")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_featureExtractionSetting"),
+        QStringLiteral("m_vocabOverlapSetting"),
+        QStringLiteral("m_featurePointVisualizationSetting"),
+        QStringLiteral("m_baSetting"),
+        QStringLiteral("m_mapSetting"),
+        QStringLiteral("m_dcSetting"),
+        QStringLiteral("m_threeDSetting"),
+        QStringLiteral("m_aerialTriangulationSetting"),
+        QStringLiteral("m_mainWindow"),
+        QStringLiteral("m_projectManager"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+    }
 }
 
 TEST(MainWindowChromeTest, KeepsNativeMaximizeControlAvailable)

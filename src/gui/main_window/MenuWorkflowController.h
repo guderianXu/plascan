@@ -35,16 +35,6 @@ class MenuWorkflowController : public QObject
     Q_OBJECT
 
 public:
-    /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
-    DialogSettingStore *m_featureExtractionSetting = nullptr;
-    DialogSettingStore *m_vocabOverlapSetting = nullptr;
-    DialogSettingStore *m_featurePointVisualizationSetting = nullptr;
-    DialogSettingStore *m_baSetting = nullptr;
-    DialogSettingStore *m_mapSetting = nullptr;
-    DialogSettingStore *m_dcSetting = nullptr;
-    DialogSettingStore *m_threeDSetting = nullptr;
-    DialogSettingStore *m_aerialTriangulationSetting = nullptr;
-
     /// 构造菜单业务流程控制器。
     /// @param mainWindow 父主窗口，用于创建模态或非模态对话框。
     /// @param parent QObject 父对象。
@@ -138,6 +128,15 @@ private:
     void startThreeDReconstructionDenseRefineStage(const QJsonObject &settings);
     void startThreeDReconstructionMeshStage(const QJsonObject &settings);
 
-    QPointer<QMainWindow> m_mainWindow;            // 父主窗口弱引用（不拥有）
-    ProjectManager *m_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）
+    /// 各对话框记忆化设置管理器（生命周期与控制器一致）。
+    DialogSettingStore *_featureExtractionSetting = nullptr;
+    DialogSettingStore *_vocabOverlapSetting = nullptr;
+    DialogSettingStore *_featurePointVisualizationSetting = nullptr;
+    DialogSettingStore *_baSetting = nullptr;
+    DialogSettingStore *_mapSetting = nullptr;
+    DialogSettingStore *_dcSetting = nullptr;
+    DialogSettingStore *_threeDSetting = nullptr;
+    DialogSettingStore *_aerialTriangulationSetting = nullptr;
+    QPointer<QMainWindow> _mainWindow;            // 父主窗口弱引用（不拥有）
+    ProjectManager *_projectManager = nullptr;    // 注入的项目管理器（非拥有引用）
 };
