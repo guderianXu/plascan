@@ -3949,6 +3949,20 @@ TEST(CodeStyleTest, BundleAdjustDialogUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, BundleAdjustDialogSourceKeepsLinesWithinStyleLimit)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/BundleAdjustDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "BundleAdjustDialog.cpp:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, MatchPairSelectorDialogUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
