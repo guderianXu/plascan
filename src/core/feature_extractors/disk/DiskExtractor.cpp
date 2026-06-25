@@ -2,7 +2,17 @@
 // 文件: DiskExtractor.cpp
 // 功能: DISK 特征提取器 LibTorch 实现
 // =============================================================================
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "DiskExtractor.h"
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
+
 #include "FeatureOutput.h"
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
@@ -10,13 +20,13 @@
 namespace xjw::feature_extractors
 {
 
-DiskExtractor::DiskExtractor(const DiskConfig &cfg) : m_cfg(cfg)
+DiskExtractor::DiskExtractor(const DiskConfig &cfg) : _config(cfg)
 {
-    m_device = (cfg.useCuda && torch::cuda::is_available())
+    _device = (cfg.useCuda && torch::cuda::is_available())
                    ? torch::Device(torch::kCUDA, cfg.cudaDevice)
                    : torch::Device(torch::kCPU);
-    m_model = torch::jit::load(cfg.modelPath, m_device);
-    m_model.eval();
+    _model = torch::jit::load(cfg.modelPath, _device);
+    _model.eval();
 }
 
 FeatureOutput DiskExtractor::extract(const cv::Mat &grayImage)
@@ -28,31 +38,31 @@ FeatureOutput DiskExtractor::extract(const cv::Mat &grayImage)
     cv::Mat img = grayImage.clone();
 
     int maxSide = std::max(origW, origH);
-    if (m_cfg.maxImageDim > 0 && maxSide > m_cfg.maxImageDim)
+    if (_config.maxImageDim > 0 && maxSide > _config.maxImageDim)
     {
-        scale = static_cast<float>(m_cfg.maxImageDim) / maxSide;
+        scale = static_cast<float>(_config.maxImageDim) / maxSide;
         cv::resize(img, img, cv::Size(), scale, scale, cv::INTER_AREA);
     }
 
     cv::Mat f;
     img.convertTo(f, CV_32FC1, 1.0 / 255.0);
     auto input = torch::from_blob(f.data, {1, 1, f.rows, f.cols},
-                                  torch::kFloat32).clone().to(m_device);
+                                  torch::kFloat32).clone().to(_device);
 
     auto orig_wh = torch::tensor({static_cast<float>(origW), static_cast<float>(origH)},
-        torch::TensorOptions().dtype(torch::kFloat32).device(m_device));
-    auto outputs = m_model.forward({input, orig_wh}).toTuple();
+        torch::TensorOptions().dtype(torch::kFloat32).device(_device));
+    auto outputs = _model.forward({input, orig_wh}).toTuple();
     auto kpts   = outputs->elements()[0].toTensor();
     auto descs  = outputs->elements()[1].toTensor();
     auto scores = outputs->elements()[2].toTensor();
 
     return tensorToFeatureOutput(kpts, descs, scores,
-                                 m_cfg.scoreThreshold,
+                                 _config.scoreThreshold,
                                  scale,
-                                 m_cfg.maxKeypoints,
+                                 _config.maxKeypoints,
                                  &grayImage,
-                                 m_cfg.grayscaleMin,
-                                 m_cfg.grayscaleMax);
+                                 _config.grayscaleMin,
+                                 _config.grayscaleMax);
 }
 
 } // namespace xjw::feature_extractors

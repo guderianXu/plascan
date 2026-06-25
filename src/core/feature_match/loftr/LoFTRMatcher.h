@@ -37,9 +37,9 @@ public:
     LoFTRResult match(const cv::Mat &img0, const cv::Mat &img1);
 
 private:
-    LoFTRConfig m_cfg;
-    torch::jit::script::Module m_model;
-    torch::Device m_device{torch::kCPU};
+    LoFTRConfig _config;
+    torch::jit::script::Module _model;
+    torch::Device _device{torch::kCPU};
 };
 
 } // namespace xjw::feature_match

@@ -2778,7 +2778,8 @@ TEST(CodeStyleTest, DenseMatchCoreUsesLowerCamelPrivateMemberNames)
         ASSERT_FALSE(header.isEmpty()) << qPrintable(it.key());
         for (const QString &expectedMember : it.value())
         {
-            EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(it.key() + QStringLiteral(": ") + expectedMember);
+            EXPECT_TRUE(header.contains(expectedMember))
+                << qPrintable(it.key() + QStringLiteral(": ") + expectedMember);
         }
     }
 
@@ -2810,6 +2811,68 @@ TEST(CodeStyleTest, DenseMatchCoreUsesLowerCamelPrivateMemberNames)
             EXPECT_FALSE(source.contains(oldName)) << qPrintable(path + QStringLiteral(": ") + oldName);
         }
     }
+}
+
+TEST(CodeStyleTest, TorchFeatureWrappersUseLowerCamelPrivateMemberNames)
+{
+    const QHash<QString, QStringList> expectedByHeader = {
+        {QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.h"),
+         {QStringLiteral("DiskConfig _config;"),
+          QStringLiteral("torch::jit::script::Module _model;"),
+          QStringLiteral("torch::Device _device{torch::kCPU};")}},
+        {QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.h"),
+         {QStringLiteral("AlikedConfig _config;"),
+          QStringLiteral("torch::jit::script::Module _model;"),
+          QStringLiteral("torch::Device _device{torch::kCPU};")}},
+        {QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.h"),
+         {QStringLiteral("LoFTRConfig _config;"),
+          QStringLiteral("torch::jit::script::Module _model;"),
+          QStringLiteral("torch::Device _device{torch::kCPU};")}},
+    };
+    for (auto it = expectedByHeader.cbegin(); it != expectedByHeader.cend(); ++it)
+    {
+        const QString header = readProjectSourceFile(it.key());
+        ASSERT_FALSE(header.isEmpty()) << qPrintable(it.key());
+        for (const QString &expectedMember : it.value())
+        {
+            EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(it.key() + QStringLiteral(": ") + expectedMember);
+        }
+    }
+
+    const QStringList files = {
+        QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.h"),
+        QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.cpp"),
+        QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.h"),
+        QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.cpp"),
+        QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.h"),
+        QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.cpp"),
+    };
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_cfg"),
+        QStringLiteral("m_model"),
+        QStringLiteral("m_device"),
+    };
+    for (const QString &path : files)
+    {
+        const QString source = readProjectSourceFile(path);
+        ASSERT_FALSE(source.isEmpty()) << qPrintable(path);
+        for (const QString &oldName : oldMemberNames)
+        {
+            EXPECT_FALSE(source.contains(oldName)) << qPrintable(path + QStringLiteral(": ") + oldName);
+        }
+    }
+}
+
+TEST(CodeStyleTest, ExtractorFactoryUsesLowerCamelPrivateMemberNames)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/feature_extractors/ExtractorFactory.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("std::string _algorithm;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("SuperPointConfig _config;")));
+
+    EXPECT_FALSE(source.contains(QStringLiteral("m_algo")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
 }
 
 TEST(CodeStyleTest, GroundBackProjectorUsesLowerCamelPrivateMemberNames)
@@ -7028,6 +7091,25 @@ TEST(FeatureNamingCleanupTest, TorchHeavyTranslationUnitsSuppressLibTorchC4267Wa
         EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(disable: 4267)")))
             << "LibTorch emits MSVC C4267 from external templates; suppress it only in Torch-heavy translation units.";
         EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)")));
+    }
+}
+
+TEST(FeatureNamingCleanupTest, TorchFeatureWrappersSuppressLibTorchC4267Warnings)
+{
+    const QStringList files = {
+        QStringLiteral("src/core/feature_extractors/ExtractorFactory.cpp"),
+        QStringLiteral("src/core/feature_extractors/disk/DiskExtractor.cpp"),
+        QStringLiteral("src/core/feature_extractors/aliked/AlikedExtractor.cpp"),
+        QStringLiteral("src/core/feature_match/loftr/LoFTRMatcher.cpp"),
+    };
+    for (const QString &path : files)
+    {
+        const QString source = readProjectSourceFile(path);
+        ASSERT_FALSE(source.isEmpty()) << qPrintable(path);
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(push)"))) << qPrintable(path);
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(disable: 4267)")))
+            << qPrintable(path + QStringLiteral(": LibTorch emits MSVC C4267 from external templates."));
+        EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)"))) << qPrintable(path);
     }
 }
 

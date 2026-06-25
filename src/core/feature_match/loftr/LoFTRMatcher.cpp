@@ -2,7 +2,16 @@
 // 文件: LoFTRMatcher.cpp
 // 功能: LoFTR 端到端匹配器实现
 // =============================================================================
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "LoFTRMatcher.h"
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif
 
 #include <opencv2/imgproc.hpp>
 #include <stdexcept>
@@ -10,11 +19,11 @@
 namespace xjw::feature_match
 {
 
-LoFTRMatcher::LoFTRMatcher(const LoFTRConfig &cfg) : m_cfg(cfg)
+LoFTRMatcher::LoFTRMatcher(const LoFTRConfig &cfg) : _config(cfg)
 {
-    m_device = (cfg.useCuda && torch::cuda::is_available()) ? torch::kCUDA : torch::kCPU;
-    m_model  = torch::jit::load(cfg.modelPath, m_device);
-    m_model.eval();
+    _device = (cfg.useCuda && torch::cuda::is_available()) ? torch::kCUDA : torch::kCPU;
+    _model  = torch::jit::load(cfg.modelPath, _device);
+    _model.eval();
 }
 
 static torch::Tensor toTensor(const cv::Mat &gray, torch::Device device)
@@ -38,18 +47,18 @@ LoFTRResult LoFTRMatcher::match(const cv::Mat &img0, const cv::Mat &img1)
     cv::Mat left  = img0.clone();
     cv::Mat right = img1.clone();
 
-    if (m_cfg.maxImageDim > 0 && maxSide > m_cfg.maxImageDim)
+    if (_config.maxImageDim > 0 && maxSide > _config.maxImageDim)
     {
-        scale = static_cast<float>(m_cfg.maxImageDim) / maxSide;
+        scale = static_cast<float>(_config.maxImageDim) / maxSide;
         cv::resize(left,  left,  cv::Size(), scale, scale, cv::INTER_AREA);
         cv::resize(right, right, cv::Size(), scale, scale, cv::INTER_AREA);
     }
 
-    auto t0 = toTensor(left,  m_device);
-    auto t1 = toTensor(right, m_device);
+    auto t0 = toTensor(left,  _device);
+    auto t1 = toTensor(right, _device);
 
     // forward(img0, img1) → (mkpts0, mkpts1, mconf)
-    auto output = m_model.forward({t0, t1}).toTuple();
+    auto output = _model.forward({t0, t1}).toTuple();
     auto mkpts0 = output->elements()[0].toTensor().to(torch::kCPU);
     auto mkpts1 = output->elements()[1].toTensor().to(torch::kCPU);
     auto mconf  = output->elements()[2].toTensor().to(torch::kCPU);
@@ -66,7 +75,7 @@ LoFTRResult LoFTRMatcher::match(const cv::Mat &img0, const cv::Mat &img1)
     auto a1 = mkpts1.accessor<float, 2>();
     auto ac = mconf.accessor<float, 2>();
 
-    float thresh = m_cfg.matchThreshold;
+    float thresh = _config.matchThreshold;
     for (int i = 0; i < N; ++i)
     {
         float conf = ac[i][0];

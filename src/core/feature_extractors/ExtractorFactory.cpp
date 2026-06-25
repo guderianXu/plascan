@@ -2,6 +2,11 @@
 // 文件: ExtractorFactory.cpp
 // 功能: 提取器工厂 — 根据算法名创建对应提取器实例
 // =============================================================================
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "ExtractorFactory.h"
 #include "SuperPoint.h"
 #include "DiskExtractor.h"
@@ -16,19 +21,24 @@ class TraditionalAdapter : public IExtractor
 {
 public:
     TraditionalAdapter(const std::string &algo, const SuperPointConfig &cfg)
-        : m_algo(algo), m_cfg(cfg) {}
+        : _algorithm(algo), _config(cfg)
+    {
+    }
 
     FeatureOutput extract(const cv::Mat &gray) override
     {
         return xjw::feature_extractors::TraditionalFeatureExtractor::detect(
-            gray, m_cfg, m_algo);
+            gray, _config, _algorithm);
     }
 
-    std::string algorithmName() const override { return m_algo; }
+    std::string algorithmName() const override
+    {
+        return _algorithm;
+    }
 
 private:
-    std::string m_algo;
-    SuperPointConfig m_cfg;
+    std::string _algorithm;
+    SuperPointConfig _config;
 };
 } // anonymous
 
@@ -103,3 +113,7 @@ std::unique_ptr<IExtractor> createExtractor(const std::string &algo,
 }
 
 } // namespace xjw::feature_extractors
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

@@ -36,9 +36,9 @@ public:
     std::string algorithmName() const override { return "disk"; }
 
 private:
-    DiskConfig m_cfg;
-    torch::jit::script::Module m_model;
-    torch::Device m_device{torch::kCPU};
+    DiskConfig _config;
+    torch::jit::script::Module _model;
+    torch::Device _device{torch::kCPU};
 };
 
 } // namespace xjw::feature_extractors
