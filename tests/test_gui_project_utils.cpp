@@ -5705,6 +5705,61 @@ TEST(CodeStyleTest, MenuWorkflowControllerUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ReconstructionWorkflowControllerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QPointer<QMainWindow> _mainWindow;"),
+        QStringLiteral("ProjectManager       *_projectManager = nullptr;"),
+        QStringLiteral("DialogSettingStore *_obsNetStore       = nullptr;"),
+        QStringLiteral("DialogSettingStore *_initPoseStore     = nullptr;"),
+        QStringLiteral("DialogSettingStore *_triStore          = nullptr;"),
+        QStringLiteral("DialogSettingStore *_reconBaStore      = nullptr;"),
+        QStringLiteral("DialogSettingStore *_sparsePostStore   = nullptr;"),
+        QStringLiteral("DialogSettingStore *_denseMatchStore   = nullptr;"),
+        QStringLiteral("DialogSettingStore *_depthEstStore     = nullptr;"),
+        QStringLiteral("DialogSettingStore *_depthFuseStore    = nullptr;"),
+        QStringLiteral("DialogSettingStore *_denseRefStore     = nullptr;"),
+        QStringLiteral("DialogSettingStore *_meshStore         = nullptr;"),
+        QStringLiteral("DialogSettingStore *_texStore          = nullptr;"),
+        QStringLiteral("DialogSettingStore *_exportStore       = nullptr;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_mainWindow"),
+        QStringLiteral("m_projectManager"),
+        QStringLiteral("m_obsNetStore"),
+        QStringLiteral("m_initPoseStore"),
+        QStringLiteral("m_triStore"),
+        QStringLiteral("m_reconBaStore"),
+        QStringLiteral("m_sparsePostStore"),
+        QStringLiteral("m_denseMatchStore"),
+        QStringLiteral("m_depthEstStore"),
+        QStringLiteral("m_depthFuseStore"),
+        QStringLiteral("m_denseRefStore"),
+        QStringLiteral("m_meshStore"),
+        QStringLiteral("m_texStore"),
+        QStringLiteral("m_exportStore"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("->"))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(" ="))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral("."))) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(QStringLiteral("&") + oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName + QStringLiteral(","))) << qPrintable(oldName);
+    }
+}
+
 TEST(MainWindowChromeTest, KeepsNativeMaximizeControlAvailable)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));

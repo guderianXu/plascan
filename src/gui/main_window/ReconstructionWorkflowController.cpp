@@ -44,18 +44,18 @@
 ReconstructionWorkflowController::ReconstructionWorkflowController(
     QMainWindow *mainWindow, QObject *parent)
     : QObject(parent)
-    , m_mainWindow(mainWindow)
+    , _mainWindow(mainWindow)
 {
 }
 
 void ReconstructionWorkflowController::setProjectManager(ProjectManager *pm)
 {
-    m_projectManager = pm;
+    _projectManager = pm;
 }
 
 QString ReconstructionWorkflowController::projectPath() const
 {
-    return m_projectManager ? m_projectManager->currentProjectPath() : QString();
+    return _projectManager ? _projectManager->currentProjectPath() : QString();
 }
 
 // ============================================================================
@@ -268,7 +268,7 @@ static QVector<xjw::MatchEdge> buildMatchEdges(
 void ReconstructionWorkflowController::openObservationNetworkDialog()
 {
     auto *dlg = prepareDialog<ObservationNetworkDialog>(
-        DialogSettingKeys::ObservationNetwork, m_obsNetStore);
+        DialogSettingKeys::ObservationNetwork, _obsNetStore);
     if (!dlg)
     {
         return;
@@ -278,17 +278,17 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
     QVector<xjw::MatchEdge> allEdges;
     QStringList             allImageNames;
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        QJsonObject meta = m_projectManager->currentMeta();
+        QJsonObject meta = _projectManager->currentMeta();
         QJsonArray results = meta.value(QStringLiteral("ipmatch_results")).toArray();
         allEdges = buildMatchEdges(results, allImageNames);
         dlg->setMatchEdges(allEdges, allImageNames);
     }
 
     // ── 收到"执行构建"信号 → 后台运行算法 ───────────────────────────────
-    auto *pm = m_projectManager;
-    auto *mw = m_mainWindow.data();
+    auto *pm = _projectManager;
+    auto *mw = _mainWindow.data();
 
     connect(
         dlg,
@@ -508,24 +508,24 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
 void ReconstructionWorkflowController::openInitCameraPoseDialog()
 {
     auto *dlg = prepareDialog<InitCameraPoseDialog>(
-        DialogSettingKeys::InitCameraPose, m_initPoseStore);
+        DialogSettingKeys::InitCameraPose, _initPoseStore);
     if (!dlg)
     {
         return;
     }
 
     QStringList imagePaths;
-    if (m_projectManager)
+    if (_projectManager)
     {
-        imagePaths = xjw::gui::project::projectImagePaths(m_projectManager->currentMeta());
+        imagePaths = xjw::gui::project::projectImagePaths(_projectManager->currentMeta());
         dlg->setAvailableFeatureSuffixes(
-            xjw::gui::project::projectFeatureSuffixes(m_projectManager->currentProjectPath(),
-                                                       m_projectManager->currentMeta()));
+            xjw::gui::project::projectFeatureSuffixes(_projectManager->currentProjectPath(),
+                                                       _projectManager->currentMeta()));
     }
     dlg->setAvailableImages(imagePaths);
-    if (m_initPoseStore)
+    if (_initPoseStore)
     {
-        const QJsonObject saved = m_initPoseStore->load();
+        const QJsonObject saved = _initPoseStore->load();
         if (!saved.isEmpty())
         {
             dlg->applySettings(saved);
@@ -540,7 +540,7 @@ void ReconstructionWorkflowController::openInitCameraPoseDialog()
         {
             const int mode = s.value(QStringLiteral("mode")).toInt();
 
-            if (!m_projectManager)
+            if (!_projectManager)
             {
                 return;
             }
@@ -555,16 +555,16 @@ void ReconstructionWorkflowController::openInitCameraPoseDialog()
                     if (imagePath.isEmpty())
                     {
                         QMessageBox::warning(
-                            m_mainWindow,
+                            _mainWindow,
                             QStringLiteral("初始化相机位姿"),
                             QStringLiteral("请先选择需要导入相机文件的影像。"));
                         return;
                     }
-                    imported = m_projectManager->importCameraForImage(imagePath);
+                    imported = _projectManager->importCameraForImage(imagePath);
                 }
                 else
                 {
-                    imported = m_projectManager->importCamerasByFilenameBatch();
+                    imported = _projectManager->importCamerasByFilenameBatch();
                 }
 
                 if (imported)
@@ -580,7 +580,7 @@ void ReconstructionWorkflowController::openInitCameraPoseDialog()
             bool ok = false;
             if (mode == 0 || mode == 1)
             {
-                ok = m_projectManager->initializeCameraPosesWithSFM(s);
+                ok = _projectManager->initializeCameraPosesWithSFM(s);
             }
 
             if (ok)
@@ -598,7 +598,7 @@ void ReconstructionWorkflowController::openInitCameraPoseDialog()
 void ReconstructionWorkflowController::openTriangulationDialog()
 {
     auto *dlg = prepareDialog<TriangulationDialog>(
-        DialogSettingKeys::Triangulation, m_triStore);
+        DialogSettingKeys::Triangulation, _triStore);
     if (!dlg)
     {
         return;
@@ -606,14 +606,14 @@ void ReconstructionWorkflowController::openTriangulationDialog()
 
     connect(dlg, &TriangulationDialog::runRequested, this, [this, dlg](const QJsonObject &s)
     {
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             return;
         }
 
         LOG_INFO(QStringLiteral("三角化: %1")
             .arg(QString::fromUtf8(QJsonDocument(s).toJson(QJsonDocument::Compact))));
-        m_projectManager->startTriangulationAsync(s);
+        _projectManager->startTriangulationAsync(s);
         dlg->accept();
     });
 
@@ -623,29 +623,29 @@ void ReconstructionWorkflowController::openTriangulationDialog()
 void ReconstructionWorkflowController::openReconBundleAdjustDialog()
 {
     auto *dlg = prepareDialog<BundleAdjustDialog>(
-        DialogSettingKeys::ReconBundleAdjust, m_reconBaStore);
+        DialogSettingKeys::ReconBundleAdjust, _reconBaStore);
     if (!dlg)
     {
         return;
     }
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        const QStringList images = m_projectManager->getAllImages();
+        const QStringList images = _projectManager->getAllImages();
         if (!images.isEmpty())
         {
             dlg->setAvailableImages(images);
         }
 
-        const QString assetsDir = ProjectIO::projectAssetsDir(m_projectManager->currentProjectPath());
+        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
         if (!assetsDir.isEmpty())
         {
             dlg->setDefaultOutputDir(QDir(assetsDir).filePath(QStringLiteral("ba")));
         }
 
-        if (m_reconBaStore)
+        if (_reconBaStore)
         {
-            const QJsonObject saved = m_reconBaStore->load();
+            const QJsonObject saved = _reconBaStore->load();
             if (!saved.isEmpty())
             {
                 dlg->applySettings(saved);
@@ -659,11 +659,11 @@ void ReconstructionWorkflowController::openReconBundleAdjustDialog()
         this,
         [this, dlg]()
         {
-            if (!m_reconBaStore || !dlg)
+            if (!_reconBaStore || !dlg)
             {
                 return;
             }
-            const QJsonObject saved = m_reconBaStore->load();
+            const QJsonObject saved = _reconBaStore->load();
             if (!saved.isEmpty())
             {
                 dlg->applySettings(saved);
@@ -681,11 +681,11 @@ void ReconstructionWorkflowController::openReconBundleAdjustDialog()
                bool dryRun,
                const QJsonObject &extra)
         {
-            if (!m_projectManager)
+            if (!_projectManager)
             {
                 return;
             }
-            m_projectManager->startBundleAdjustAsync(images, outputDir, threads, dryRun, extra);
+            _projectManager->startBundleAdjustAsync(images, outputDir, threads, dryRun, extra);
         });
 
     connect(
@@ -694,12 +694,12 @@ void ReconstructionWorkflowController::openReconBundleAdjustDialog()
         this,
         [this]()
         {
-            if (!m_projectManager)
+            if (!_projectManager)
             {
                 return;
             }
             QString err;
-            if (!m_projectManager->acceptBundleAdjustPreview(&err) && !err.isEmpty())
+            if (!_projectManager->acceptBundleAdjustPreview(&err) && !err.isEmpty())
             {
                 LOG_WARN(QStringLiteral("BA 应用失败: %1").arg(err));
             }
@@ -711,15 +711,15 @@ void ReconstructionWorkflowController::openReconBundleAdjustDialog()
         this,
         [this]()
         {
-            if (m_projectManager)
+            if (_projectManager)
             {
-                m_projectManager->discardBundleAdjustPreview();
+                _projectManager->discardBundleAdjustPreview();
             }
         });
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        connect(m_projectManager, &ProjectManager::bundleAdjustPreviewReady,
+        connect(_projectManager, &ProjectManager::bundleAdjustPreviewReady,
                 dlg, &BundleAdjustDialog::setRunResult);
     }
 
@@ -732,34 +732,34 @@ void ReconstructionWorkflowController::openReconBundleAdjustDialog()
 
 void ReconstructionWorkflowController::openSparseCloudPostProcessDialog()
 {
-    if (!m_mainWindow)
+    if (!_mainWindow)
     {
         return;
     }
 
-    auto *dlg = new SparseCloudPostProcessDialog(m_mainWindow);
+    auto *dlg = new SparseCloudPostProcessDialog(_mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        if (!m_sparsePostStore)
+        if (!_sparsePostStore)
         {
-            m_sparsePostStore = new DialogSettingStore(DialogSettingKeys::SparseCloudPostProcess, this);
+            _sparsePostStore = new DialogSettingStore(DialogSettingKeys::SparseCloudPostProcess, this);
         }
-        m_sparsePostStore->setProjectPath(projectPath());
+        _sparsePostStore->setProjectPath(projectPath());
 
-        const QJsonObject saved = m_sparsePostStore->load();
+        const QJsonObject saved = _sparsePostStore->load();
         dlg->applySettings(saved);
 
         connect(dlg, &SparseCloudPostProcessDialog::settingsChanged, this, [this](const QJsonObject &settings)
         {
-            if (m_sparsePostStore)
+            if (_sparsePostStore)
             {
-                m_sparsePostStore->save(settings);
+                _sparsePostStore->save(settings);
             }
         });
 
-        dlg->setAvailableSparseClouds(m_projectManager->getAvailableAtResults());
+        dlg->setAvailableSparseClouds(_projectManager->getAvailableAtResults());
     }
 
     connect(dlg, &SparseCloudPostProcessDialog::runRequested, this, [this](const QJsonObject &settings)
@@ -769,22 +769,22 @@ void ReconstructionWorkflowController::openSparseCloudPostProcessDialog()
             .arg(mode)
             .arg(QString::fromUtf8(QJsonDocument(settings).toJson(QJsonDocument::Compact))));
 
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             return;
         }
 
         if (mode == QLatin1String("refine"))
         {
-            m_projectManager->startSparseCloudRefineAsync(settings);
+            _projectManager->startSparseCloudRefineAsync(settings);
         }
         else if (mode == QLatin1String("spatial_cleanup"))
         {
-            m_projectManager->startSparseCloudLocalOptimAsync(settings);
+            _projectManager->startSparseCloudLocalOptimAsync(settings);
         }
         else
         {
-            m_projectManager->startSparseCloudOutlierRemovalAsync(settings);
+            _projectManager->startSparseCloudOutlierRemovalAsync(settings);
         }
     });
 
@@ -797,22 +797,22 @@ void ReconstructionWorkflowController::openSparseCloudPostProcessDialog()
 
 void ReconstructionWorkflowController::openDenseMatchDialog()
 {
-    if (!m_mainWindow || !m_projectManager)
+    if (!_mainWindow || !_projectManager)
     {
         return;
     }
 
-    auto *dlg = new DenseMatchDialog(m_projectManager, m_mainWindow);
+    auto *dlg = new DenseMatchDialog(_projectManager, _mainWindow);
     dlg->setAttribute(Qt::WA_DeleteOnClose);
 
     // 恢复记忆化设置
-    if (!m_denseMatchStore)
+    if (!_denseMatchStore)
     {
-        m_denseMatchStore = new DialogSettingStore(
+        _denseMatchStore = new DialogSettingStore(
             DialogSettingKeys::DenseMatch, this);
     }
-    m_denseMatchStore->setProjectPath(projectPath());
-    const QJsonObject saved = m_denseMatchStore->load();
+    _denseMatchStore->setProjectPath(projectPath());
+    const QJsonObject saved = _denseMatchStore->load();
     if (!saved.isEmpty())
     {
         dlg->applySettings(saved);
@@ -822,17 +822,17 @@ void ReconstructionWorkflowController::openDenseMatchDialog()
     connect(dlg, &DenseMatchDialog::settingsChanged, this,
             [this](const QJsonObject &s)
     {
-        if (m_denseMatchStore)
-            m_denseMatchStore->save(s);
+        if (_denseMatchStore)
+            _denseMatchStore->save(s);
     });
 
     // 运行（进度条在主窗口状态栏右下角）
-    auto *mw = qobject_cast<MainWindow*>(m_mainWindow);
+    auto *mw = qobject_cast<MainWindow*>(_mainWindow);
     connect(dlg, &DenseMatchDialog::runRequested, this,
             [this, mw, dlg_ptr = QPointer<DenseMatchDialog>(dlg)]
             (const QJsonObject &settings)
     {
-        if (!m_projectManager) return;
+        if (!_projectManager) return;
 
         const QJsonArray pairs = settings.value(QStringLiteral("match_pairs")).toArray();
         const int totalPairs = pairs.size();
@@ -899,18 +899,18 @@ void ReconstructionWorkflowController::openDenseMatchDialog()
 void ReconstructionWorkflowController::openDepthMapEstimateDialog()
 {
     auto *dlg = prepareDialog<DepthMapEstimateDialog>(
-        DialogSettingKeys::DepthMapEstimate, m_depthEstStore);
+        DialogSettingKeys::DepthMapEstimate, _depthEstStore);
     if (!dlg)
     {
         return;
     }
 
-    if (m_projectManager)
+    if (_projectManager)
     {
-        dlg->setAvailableAtResults(m_projectManager->getAvailableAtResults());
-        if (m_depthEstStore)
+        dlg->setAvailableAtResults(_projectManager->getAvailableAtResults());
+        if (_depthEstStore)
         {
-            const QJsonObject saved = m_depthEstStore->load();
+            const QJsonObject saved = _depthEstStore->load();
             if (!saved.isEmpty())
             {
                 dlg->applySettings(saved);
@@ -920,7 +920,7 @@ void ReconstructionWorkflowController::openDepthMapEstimateDialog()
 
     connect(dlg, &DepthMapEstimateDialog::runRequested, this, [this](const QJsonObject &depthSettings)
     {
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             return;
         }
@@ -930,7 +930,7 @@ void ReconstructionWorkflowController::openDepthMapEstimateDialog()
             .arg(depthSettings.value(QStringLiteral("iterations")).toInt())
             .arg(depthSettings.value(QStringLiteral("confidence")).toDouble()));
 
-        m_projectManager->startEstimateDepthMapsAsync(depthSettings);
+        _projectManager->startEstimateDepthMapsAsync(depthSettings);
     });
 
     dlg->exec();
@@ -939,7 +939,7 @@ void ReconstructionWorkflowController::openDepthMapEstimateDialog()
 void ReconstructionWorkflowController::openDepthFusionDialog()
 {
     auto *dlg = prepareDialog<DepthFusionDialog>(
-        DialogSettingKeys::DepthFusion, m_depthFuseStore);
+        DialogSettingKeys::DepthFusion, _depthFuseStore);
     if (!dlg)
     {
         return;
@@ -947,7 +947,7 @@ void ReconstructionWorkflowController::openDepthFusionDialog()
 
     connect(dlg, &DepthFusionDialog::runRequested, this, [this](const QJsonObject &fuseSettings)
     {
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             return;
         }
@@ -956,7 +956,7 @@ void ReconstructionWorkflowController::openDepthFusionDialog()
             .arg(fuseSettings.value(QStringLiteral("minConsistentViews")).toInt())
             .arg(fuseSettings.value(QStringLiteral("minConfidence")).toDouble()));
 
-        m_projectManager->startFuseDepthMapsAsync(fuseSettings);
+        _projectManager->startFuseDepthMapsAsync(fuseSettings);
     });
 
     dlg->exec();
@@ -965,7 +965,7 @@ void ReconstructionWorkflowController::openDepthFusionDialog()
 void ReconstructionWorkflowController::openDenseCloudRefineDialog()
 {
     auto *dlg = prepareDialog<DenseCloudRefineDialog>(
-        DialogSettingKeys::DenseCloudRefine, m_denseRefStore);
+        DialogSettingKeys::DenseCloudRefine, _denseRefStore);
     if (!dlg)
     {
         return;
@@ -973,7 +973,7 @@ void ReconstructionWorkflowController::openDenseCloudRefineDialog()
 
     connect(dlg, &DenseCloudRefineDialog::runRequested, this, [this](const QJsonObject &settings)
     {
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             return;
         }
@@ -983,7 +983,7 @@ void ReconstructionWorkflowController::openDenseCloudRefineDialog()
             .arg(settings.value(QStringLiteral("voxelEnabled")).toBool())
             .arg(settings.value(QStringLiteral("normalsEnabled")).toBool()));
 
-        m_projectManager->startDenseCloudRefineAsync(settings);
+        _projectManager->startDenseCloudRefineAsync(settings);
     });
 
     dlg->exec();
@@ -992,16 +992,16 @@ void ReconstructionWorkflowController::openDenseCloudRefineDialog()
 void ReconstructionWorkflowController::openMeshReconstructionDialog()
 {
     auto *dlg = prepareDialog<MeshReconstructionDialog>(
-        DialogSettingKeys::MeshReconstruction, m_meshStore);
+        DialogSettingKeys::MeshReconstruction, _meshStore);
     if (!dlg)
     {
         return;
     }
 
-    if (m_projectManager)
+    if (_projectManager)
     {
         QStringList denseCandidates;
-        const QJsonArray denseResults = m_projectManager->currentMeta().value(QStringLiteral("dense_cloud_results")).toArray();
+        const QJsonArray denseResults = _projectManager->currentMeta().value(QStringLiteral("dense_cloud_results")).toArray();
         for (int index = denseResults.size() - 1; index >= 0; --index)
         {
             const QString candidate = QDir::cleanPath(
@@ -1021,12 +1021,12 @@ void ReconstructionWorkflowController::openMeshReconstructionDialog()
         LOG_INFO(QStringLiteral("网格重建: %1")
             .arg(QString::fromUtf8(QJsonDocument(s).toJson(QJsonDocument::Compact))));
 
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             return;
         }
 
-        m_projectManager->startMeshReconstructionAsync(s);
+        _projectManager->startMeshReconstructionAsync(s);
     });
 
     dlg->exec();
@@ -1035,7 +1035,7 @@ void ReconstructionWorkflowController::openMeshReconstructionDialog()
 void ReconstructionWorkflowController::openTextureMappingDialog()
 {
     auto *dlg = prepareDialog<TextureMappingDialog>(
-        DialogSettingKeys::TextureMapping, m_texStore);
+        DialogSettingKeys::TextureMapping, _texStore);
     if (!dlg)
     {
         return;
@@ -1046,12 +1046,12 @@ void ReconstructionWorkflowController::openTextureMappingDialog()
         LOG_INFO(QStringLiteral("纹理映射: %1")
             .arg(QString::fromUtf8(QJsonDocument(s).toJson(QJsonDocument::Compact))));
 
-        if (!m_projectManager)
+        if (!_projectManager)
         {
             return;
         }
 
-        m_projectManager->startTextureMappingAsync(s);
+        _projectManager->startTextureMappingAsync(s);
     });
 
     dlg->exec();
@@ -1060,7 +1060,7 @@ void ReconstructionWorkflowController::openTextureMappingDialog()
 void ReconstructionWorkflowController::openModelExportDialog()
 {
     auto *dlg = prepareDialog<ModelExportDialog>(
-        DialogSettingKeys::ModelExport, m_exportStore);
+        DialogSettingKeys::ModelExport, _exportStore);
     if (!dlg)
     {
         return;

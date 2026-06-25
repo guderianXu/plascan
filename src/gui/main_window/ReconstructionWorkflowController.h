@@ -83,15 +83,15 @@ private:
     template<typename DialogT>
     DialogT *prepareDialog(const QString &settingKey, DialogSettingStore *&store)
     {
-        if (!m_mainWindow)
+        if (!_mainWindow)
         {
             return nullptr;
         }
 
-        auto *dlg = new DialogT(m_mainWindow);
+        auto *dlg = new DialogT(_mainWindow);
         dlg->setAttribute(Qt::WA_DeleteOnClose);
 
-        if (m_projectManager)
+        if (_projectManager)
         {
             if (!store)
             {
@@ -122,20 +122,20 @@ private:
     /// 获取当前项目路径，避免重复查询逻辑。
     QString projectPath() const;
 
-    QPointer<QMainWindow> m_mainWindow;
-    ProjectManager       *m_projectManager = nullptr;
+    QPointer<QMainWindow> _mainWindow;
+    ProjectManager       *_projectManager = nullptr;
 
     // ── 各对话框的设置存储（延迟初始化） ──
-    DialogSettingStore *m_obsNetStore       = nullptr;
-    DialogSettingStore *m_initPoseStore     = nullptr;
-    DialogSettingStore *m_triStore          = nullptr;
-    DialogSettingStore *m_reconBaStore      = nullptr;
-    DialogSettingStore *m_sparsePostStore   = nullptr;
-    DialogSettingStore *m_denseMatchStore   = nullptr;
-    DialogSettingStore *m_depthEstStore     = nullptr;
-    DialogSettingStore *m_depthFuseStore    = nullptr;
-    DialogSettingStore *m_denseRefStore     = nullptr;
-    DialogSettingStore *m_meshStore         = nullptr;
-    DialogSettingStore *m_texStore          = nullptr;
-    DialogSettingStore *m_exportStore       = nullptr;
+    DialogSettingStore *_obsNetStore       = nullptr;
+    DialogSettingStore *_initPoseStore     = nullptr;
+    DialogSettingStore *_triStore          = nullptr;
+    DialogSettingStore *_reconBaStore      = nullptr;
+    DialogSettingStore *_sparsePostStore   = nullptr;
+    DialogSettingStore *_denseMatchStore   = nullptr;
+    DialogSettingStore *_depthEstStore     = nullptr;
+    DialogSettingStore *_depthFuseStore    = nullptr;
+    DialogSettingStore *_denseRefStore     = nullptr;
+    DialogSettingStore *_meshStore         = nullptr;
+    DialogSettingStore *_texStore          = nullptr;
+    DialogSettingStore *_exportStore       = nullptr;
 };
