@@ -792,8 +792,9 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
         {
             for (int word = 0; word < histograms.cols; ++word)
             {
+                const auto word_index = static_cast<std::size_t>(word);
                 const double idf = std::log((static_cast<double>(image_count) + 1.0) /
-                                            (static_cast<double>(document_frequency[static_cast<std::size_t>(word)]) + 1.0)) +
+                                            (static_cast<double>(document_frequency[word_index]) + 1.0)) +
                                    1.0;
                 histograms.at<float>(row, word) *= static_cast<float>(idf);
             }
