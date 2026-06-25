@@ -135,9 +135,13 @@
 - `LightGlueMatcher.h` 拆分超长的 `_filterScores` 声明，并新增头文件 120 列风格回归测试，保持 LightGlue 匹配器接口行为不变。
 - `PointCloudPreprocess.h` 拆分点云预处理默认设备参数的超长声明，并新增头文件 120 列风格回归测试，保持体素降采样和统计去噪接口行为不变。
 - `Intersection.cpp` 拆分前方交汇健康检查的超长布尔表达式，并新增源文件 120 列风格回归测试，保持正深度和有限值判定逻辑不变。
+- `EpipolarRectifier.cpp` 拆分 MVS 极线校正诊断日志的超长格式串，并新增源文件 120 列风格回归测试，保持日志输出内容和校正逻辑不变。
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.EpipolarRectifierSourceKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `EpipolarRectifier.cpp:216` 超长诊断日志；拆分相邻字符串字面量后通过。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target mvs -Jobs 8`、`-Target test_mvs_rectifier_unit`、`-Target test_gui_project_utils` 和 `-Target plascan_gui` 均通过，确认 MVS 核心库、极线校正单测、GUI 工具测试和主 GUI 可重新构建。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.EpipolarRectifierSourceKeepsLinesWithinStyleLimit|EpipolarRectifier|DisparityTriangulator\.TransposedRectifiedDepthTriangulationKeepsLowReprojectionError" --output-on-failure` 通过，8/8，验证极线校正源文件行宽、水平/垂直基线校正和转置校正深度三角化回归保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.IntersectionSourceKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `Intersection.cpp:236` 超长健康检查表达式；拆分表达式后通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target intersection -Jobs 8`、`-Target test_gui_project_utils` 和 `-Target plascan_gui` 均通过，确认前方交汇核心库、GUI 工具测试和主 GUI 可重新构建。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.IntersectionSourceKeepsLinesWithinStyleLimit|ForwardIntersection|Triangulation|test_initial_sparse_triangulator" --output-on-failure` 通过，26/26，验证前方交汇源文件行宽、前方交汇对话框、空三/三角化 UI、三角化服务和多视 track 三角化回归保持可用。

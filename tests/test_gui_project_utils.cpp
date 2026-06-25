@@ -3010,6 +3010,20 @@ TEST(CodeStyleTest, IntersectionSourceKeepsLinesWithinStyleLimit)
     }
 }
 
+TEST(CodeStyleTest, EpipolarRectifierSourceKeepsLinesWithinStyleLimit)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/EpipolarRectifier.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "EpipolarRectifier.cpp:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.h"));

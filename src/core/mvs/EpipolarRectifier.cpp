@@ -213,7 +213,8 @@ bool EpipolarRectifier::rectify(
     }
 
     std::fprintf(stderr,
-                 "[MVS] Stereo rectification: fxL=%.2f fxR=%.2f cxL=%.2f cxR=%.2f tx=%.6f p2_03=%.2f roiL=%dx%d roiR=%dx%d transposed=%d\n",
+                 "[MVS] Stereo rectification: fxL=%.2f fxR=%.2f cxL=%.2f cxR=%.2f "
+                 "tx=%.6f p2_03=%.2f roiL=%dx%d roiR=%dx%d transposed=%d\n",
                  P1.at<double>(0, 0),
                  P2.at<double>(0, 0),
                  P1.at<double>(0, 2),
