@@ -324,7 +324,13 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
         }
 
         // 打印实际使用的配置，便于调试参数未生效的问题
-        LOG_INFO("%s", qUtf8Printable(QString("特征提取配置: algorithm=%1, nms_radius=%2, detection_threshold=%3, max_num_keypoints=%4, remove_borders=%5, grayscale_min=%6, grayscale_max=%7, normalize_input=%8, descriptor_dim=%9, grid_size=%10, batch_size=%11, neighborhood_radius=%12, neighborhood_threshold=%13, device=%14")
+        const QString configLog =
+            QStringLiteral("特征提取配置: algorithm=%1, nms_radius=%2, detection_threshold=%3, ")
+            + QStringLiteral("max_num_keypoints=%4, remove_borders=%5, grayscale_min=%6, ")
+            + QStringLiteral("grayscale_max=%7, normalize_input=%8, descriptor_dim=%9, ")
+            + QStringLiteral("grid_size=%10, batch_size=%11, neighborhood_radius=%12, ")
+            + QStringLiteral("neighborhood_threshold=%13, device=%14");
+        LOG_INFO("%s", qUtf8Printable(configLog
             .arg(featureAlgorithm.toUpper())
             .arg(spConfig.nms_radius)
             .arg(spConfig.detection_threshold)
