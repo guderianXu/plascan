@@ -2593,6 +2593,19 @@ TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, LayerRendererHeaderKeepsLinesWithinStyleLimit)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
+    ASSERT_FALSE(header.isEmpty());
+
+    const QStringList lines = header.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "LayerRenderer.h:" << (i + 1) << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, LayerOverlayItemsUsesLowerCamelPrivateMemberNames)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/views/LayerOverlayItems.cpp"));

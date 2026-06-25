@@ -70,12 +70,16 @@ public:
         bool showOnlyInliers = false;
         int maxDisplayCount = 0; // 0=all
     };
-    
+
     void setMatchDisplayOptions(const MatchDisplayOptions &opts);
 
     // 将两幅影像并排加载为一个拼接图层（用于可视化匹配对）。
     // 返回是否成功，并通过 outA/outB 返回对应的 QGraphicsPixmapItem 指针（可为 nullptr）。
-    bool addStitchedImagePair(const QString &pathA, const QString &pathB, QGraphicsPixmapItem **outA = nullptr, QGraphicsPixmapItem **outB = nullptr, int gap = 20);
+    bool addStitchedImagePair(const QString &pathA,
+                              const QString &pathB,
+                              QGraphicsPixmapItem **outA = nullptr,
+                              QGraphicsPixmapItem **outB = nullptr,
+                              int gap = 20);
 
     // 根据两组点绘制匹配连线，ptsA/ptsB 应按同一索引对应；bOffsetX 为第二幅图在 scene 中的 X 偏移量。
     void addMatchLines(const QVector<QPointF> &ptsA, const QVector<QPointF> &ptsB, qreal bOffsetX = 0.0);

@@ -130,9 +130,13 @@
 - `MainWindow` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持菜单接线、项目管理、状态栏任务、仪表盘刷新、特征/匹配入口和工作区视图切换行为不变。
 - 删除 GUI 工程服务层中已无生产目标引用的 `ProjectBaInputBuilder.cpp` / `ProjectTriangulationService.cpp` 空壳兼容编译单元；兼容接口继续保留在对应头文件中，测试目标直接链接 core 实现。
 - GUI 工程 BA 输入和三角化调用方直接依赖 `src/core/sfm/BaInputBuilder.h` / `TriangulationService.h`，删除 `ProjectBaInputBuilder.h` / `ProjectTriangulationService.h` 这层 header-only 兼容 wrapper，减少旧接口暴露面。
+- `LayerRenderer.h` 拆分超长的拼接影像接口声明，并新增头文件 120 列风格回归测试，保持影像拼接、特征点和匹配线渲染接口行为不变。
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.LayerRendererHeaderKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `LayerRenderer.h` 超长声明；拆分声明后通过。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.LayerRendererHeaderKeepsLinesWithinStyleLimit|CodeStyleTest\.LayerRendererUsesLowerCamelPrivateMemberNames|CanvasWidgetResponsivenessTest\.LayerRenderer" --output-on-failure` 通过，6/6，验证 `LayerRenderer` 头文件行宽、成员命名和渲染职责拆分断言保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `LayerRenderer` 相关 GUI 编译单元并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.MainWindowUsesLowerCamelPrivateMemberNames" --output-on-failure` 在生产代码迁移前按预期失败，确认新增风格回归测试能抓到 `MainWindow` 旧 `m_` 成员；迁移后通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MainWindow.cpp`、菜单/重建 workflow controller 相关编译单元并链接 GUI。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具/风格测试目标。
