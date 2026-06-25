@@ -98,7 +98,10 @@ private:
      * @brief 从内部 tensor scores 提取 mutual-NN 匹配对和置信度。
      * @return vector<{idx0, score}>，其中 idx1 = m0[idx0]
      */
-    std::vector<std::pair<int64_t, float>> _filterScores(const torch::Tensor &scores, int64_t expectedN0, int64_t expectedN1) const;
+    std::vector<std::pair<int64_t, float>> _filterScores(
+        const torch::Tensor &scores,
+        int64_t expectedN0,
+        int64_t expectedN1) const;
 
     /**
      * @brief 将 BGR Mat 转为归一化 float32 Tensor [1,3,H,W] 并移至设备。

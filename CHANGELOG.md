@@ -132,9 +132,13 @@
 - GUI 工程 BA 输入和三角化调用方直接依赖 `src/core/sfm/BaInputBuilder.h` / `TriangulationService.h`，删除 `ProjectBaInputBuilder.h` / `ProjectTriangulationService.h` 这层 header-only 兼容 wrapper，减少旧接口暴露面。
 - `LayerRenderer.h` 拆分超长的拼接影像接口声明，并新增头文件 120 列风格回归测试，保持影像拼接、特征点和匹配线渲染接口行为不变。
 - `FeatureExtractionRunner.cpp` 拆分超长的特征提取配置日志格式串，并新增 120 列风格回归测试，保持 DISK/ALIKED TorchScript 提取入口和配置日志内容不变。
+- `LightGlueMatcher.h` 拆分超长的 `_filterScores` 声明，并新增头文件 120 列风格回归测试，保持 LightGlue 匹配器接口行为不变。
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.LightGlueMatcherHeaderKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `LightGlueMatcher.h` 超长声明；拆分声明后通过。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target lightglue_matcher -Jobs 8`、`-Target test_gui_project_utils` 和 `-Target plascan_gui` 均通过，确认 LightGlue 匹配器、GUI 工具测试和主 GUI 目标可重新构建。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.LightGlueMatcherHeaderKeepsLinesWithinStyleLimit|FeatureMatchingDialogTest\.(DefaultsToLightGlueAlgorithm|ProjectAvailableSuffixesConstrainLightGlueChoicesAfterApplyingSettings)|FeatureNamingCleanupTest\.MatcherFactorySuppressesLibTorchC4267Warnings|CodeStyleTest\.MatcherFactoryUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，5/5，验证 LightGlue 头文件行宽、默认匹配算法选择、项目可用后缀过滤和 matcher 工厂命名/warning guard 回归保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureExtractionRunnerTest\.SourceLinesStayWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `FeatureExtractionRunner.cpp` 超长日志行；拆分日志格式串后通过。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "FeatureExtractionRunnerTest\.(SourceLinesStayWithinStyleLimit|DiskAndAlikedUseNativeTorchscriptExtractor|FeatureExtractionLogUsesSelectedAlgorithmName)|GuiAsyncLifetimeTest\.FeatureExtractionRunnerUsesGuardedProjectManagerCallbacks|FeatureExtractionDialogTest\.(NativeFeatureRunnerReceivesGrayscaleRange|DiskSelectionShowsResolvedModelPath|DefaultsToDiskAlgorithm)" --output-on-failure` 通过，7/7，验证特征提取 runner 行宽、DISK/ALIKED 原生提取、日志名称、生命周期 guard 和灰度阈值配置链路保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `FeatureExtractionRunner.cpp` 并链接 GUI。

@@ -2968,6 +2968,20 @@ TEST(CodeStyleTest, MatcherFactoryUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
 }
 
+TEST(CodeStyleTest, LightGlueMatcherHeaderKeepsLinesWithinStyleLimit)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/feature_match/lightglue/LightGlueMatcher.h"));
+    ASSERT_FALSE(header.isEmpty());
+
+    const QStringList lines = header.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "LightGlueMatcher.h:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.h"));
