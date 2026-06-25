@@ -233,7 +233,9 @@ Intersection::Result Intersection::intersectPair(const Camera &cam1,
 
     // 最后做一些健康性检查：要求深度 s,t 为正（点在相机前方），并且关键量为有限数
     const bool positive_depth = (s > 0.0 && t > 0.0);
-    const bool finite_main = isFinite3(out.point) && std::isfinite(out.angle_deg) && std::isfinite(out.ray_miss_distance);
+    const bool finite_main = isFinite3(out.point)
+                             && std::isfinite(out.angle_deg)
+                             && std::isfinite(out.ray_miss_distance);
     out.valid = finite_main && positive_depth;
     return out;
 }
