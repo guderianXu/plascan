@@ -2,6 +2,11 @@
 // 文件: MatcherFactory.cpp
 // 功能: 匹配器工厂 (C++ 适配器 + Python 子进程)
 // =============================================================================
+#ifdef _MSC_VER
+#pragma warning(push)
+#pragma warning(disable: 4267)
+#endif
+
 #include "MatcherFactory.h"
 #include "SuperGlueMatcher.h"
 #include "LightGlueMatcher.h"
@@ -79,18 +84,21 @@ static bool loadPair(const std::string &sp1, const std::string &sp2,
 class SuperGlueAdapter : public IMatcher
 {
 public:
-    explicit SuperGlueAdapter(const MatcherConfig &cfg) : m_cfg(cfg) {}
+    explicit SuperGlueAdapter(const MatcherConfig &cfg)
+        : _config(cfg)
+    {
+    }
 
     int match(const std::string &sp1, const std::string &sp2,
               const std::string &, const std::string &,
               const std::string &outPath) override
     {
         superglue::SuperGlueConfig sgCfg;
-        sgCfg.model_path      = m_cfg.modelPath;
-        sgCfg.match_threshold = m_cfg.matchThreshold;
-        sgCfg.max_keypoints   = m_cfg.maxKeypoints;
-        sgCfg.use_cuda        = m_cfg.useCuda;
-        sgCfg.cuda_device_id  = m_cfg.cudaDevice;
+        sgCfg.model_path      = _config.modelPath;
+        sgCfg.match_threshold = _config.matchThreshold;
+        sgCfg.max_keypoints   = _config.maxKeypoints;
+        sgCfg.use_cuda        = _config.useCuda;
+        sgCfg.cuda_device_id  = _config.cudaDevice;
 
         superglue::SuperGlueMatcher matcher(sgCfg);
 
@@ -108,26 +116,32 @@ public:
         return saveMatch(outPath, mr, fd0.keypoints, fd1.keypoints);
     }
 
-    std::string algorithmName() const override { return "superglue"; }
+    std::string algorithmName() const override
+    {
+        return "superglue";
+    }
 
 private:
-    MatcherConfig m_cfg;
+    MatcherConfig _config;
 };
 
 // ── LightGlue ──
 class LightGlueAdapter : public IMatcher
 {
 public:
-    explicit LightGlueAdapter(const MatcherConfig &cfg) : m_cfg(cfg) {}
+    explicit LightGlueAdapter(const MatcherConfig &cfg)
+        : _config(cfg)
+    {
+    }
 
     int match(const std::string &sp1, const std::string &sp2,
               const std::string &, const std::string &,
               const std::string &outPath) override
     {
         xjw::feature_match::LightGlueConfig lgCfg;
-        lgCfg.matcherModelPath = m_cfg.modelPath;
-        lgCfg.useCuda          = m_cfg.useCuda;
-        lgCfg.scoreThreshold   = m_cfg.matchThreshold;
+        lgCfg.matcherModelPath = _config.modelPath;
+        lgCfg.useCuda          = _config.useCuda;
+        lgCfg.scoreThreshold   = _config.matchThreshold;
 
         xjw::feature_match::LightGlueMatcher matcher(lgCfg);
 
@@ -145,10 +159,13 @@ public:
         return saveMatch(outPath, mr, fd0.keypoints, fd1.keypoints);
     }
 
-    std::string algorithmName() const override { return "lightglue"; }
+    std::string algorithmName() const override
+    {
+        return "lightglue";
+    }
 
 private:
-    MatcherConfig m_cfg;
+    MatcherConfig _config;
 };
 
 // ── Python 子进程 (LoFTR/DISK/ALIKED) ──
@@ -156,15 +173,17 @@ class PythonAdapter : public IMatcher
 {
 public:
     PythonAdapter(const std::string &algo, const MatcherConfig &cfg)
-        : m_algo(algo), m_cfg(cfg) {}
+        : _algorithm(algo), _config(cfg)
+    {
+    }
 
     int match(const std::string &, const std::string &,
               const std::string &imgL, const std::string &imgR,
               const std::string &outPath) override
     {
         QString script = QCoreApplication::applicationDirPath()
-            + "/../../scripts/run_" + QString::fromStdString(m_algo) + ".py";
-        if (m_algo == "disk" || m_algo == "aliked")
+            + "/../../scripts/run_" + QString::fromStdString(_algorithm) + ".py";
+        if (_algorithm == "disk" || _algorithm == "aliked")
         {
             script = QCoreApplication::applicationDirPath()
                 + "/../../../src/core/feature_extractors/disk/run_disk_aliked.py";
@@ -175,11 +194,11 @@ public:
              << "-L" << QString::fromStdString(imgL)
              << "-R" << QString::fromStdString(imgR)
              << "-o" << QString::fromStdString(outPath);
-        if (m_algo == "disk" || m_algo == "aliked")
+        if (_algorithm == "disk" || _algorithm == "aliked")
         {
-            args << "-a" << QString::fromStdString(m_algo);
+            args << "-a" << QString::fromStdString(_algorithm);
         }
-        if (m_cfg.useCuda)
+        if (_config.useCuda)
         {
             args << "--cuda";
         }
@@ -200,12 +219,19 @@ public:
         return 1;
     }
 
-    std::string algorithmName() const override { return m_algo; }
-    bool needsFeatureFiles() const override { return false; }
+    std::string algorithmName() const override
+    {
+        return _algorithm;
+    }
+
+    bool needsFeatureFiles() const override
+    {
+        return false;
+    }
 
 private:
-    std::string m_algo;
-    MatcherConfig m_cfg;
+    std::string _algorithm;
+    MatcherConfig _config;
 };
 
 } // anonymous namespace
@@ -227,3 +253,7 @@ std::unique_ptr<IMatcher> createMatcher(const std::string &algo,
     }
     throw std::runtime_error("unsupported matcher: " + algo);
 }
+
+#ifdef _MSC_VER
+#pragma warning(pop)
+#endif

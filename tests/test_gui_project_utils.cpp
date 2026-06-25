@@ -2875,6 +2875,18 @@ TEST(CodeStyleTest, ExtractorFactoryUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
 }
 
+TEST(CodeStyleTest, MatcherFactoryUsesLowerCamelPrivateMemberNames)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/feature_match/MatcherFactory.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("std::string _algorithm;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MatcherConfig _config;")));
+
+    EXPECT_FALSE(source.contains(QStringLiteral("m_algo")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_cfg")));
+}
+
 TEST(CodeStyleTest, GroundBackProjectorUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.h"));
@@ -7111,6 +7123,17 @@ TEST(FeatureNamingCleanupTest, TorchFeatureWrappersSuppressLibTorchC4267Warnings
             << qPrintable(path + QStringLiteral(": LibTorch emits MSVC C4267 from external templates."));
         EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)"))) << qPrintable(path);
     }
+}
+
+TEST(FeatureNamingCleanupTest, MatcherFactorySuppressesLibTorchC4267Warnings)
+{
+    const QString path = QStringLiteral("src/core/feature_match/MatcherFactory.cpp");
+    const QString source = readProjectSourceFile(path);
+    ASSERT_FALSE(source.isEmpty());
+    EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(push)"))) << qPrintable(path);
+    EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(disable: 4267)")))
+        << qPrintable(path + QStringLiteral(": LibTorch emits MSVC C4267 from external templates."));
+    EXPECT_TRUE(source.contains(QStringLiteral("#pragma warning(pop)"))) << qPrintable(path);
 }
 
 TEST(FeatureNamingCleanupTest, GuiTestsDoNotCompileObsoleteCompatibilityTranslationUnits)

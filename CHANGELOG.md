@@ -114,6 +114,7 @@
 - `VocabularyOverlapDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛词汇重叠度分析对话框命名规范。
 - `SFMService.cpp` 和 `VocabularyOverlapDialog.cpp` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被这两个 Torch-heavy 编译单元刷屏。
 - DISK/ALIKED/LoFTR Torch 包装器和 `ExtractorFactory` 内部 adapter 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并把 LibTorch C4267 warning guard 局部化到对应 Torch-heavy 编译单元，保持模型加载、CUDA 选择和默认 DISK/ALIKED 入口行为不变。
+- `MatcherFactory` 内部 SuperGlue/LightGlue/Python adapter 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并对该 Torch-heavy 工厂编译单元补齐 MSVC C4267 局部 warning guard，保持 matcher 创建、Python 兜底和 CUDA 参数传递行为不变。
 - 删除 GUI 工程服务层中已无生产目标引用的 `ProjectBaInputBuilder.cpp` / `ProjectTriangulationService.cpp` 空壳兼容编译单元；兼容接口继续保留在对应头文件中，测试目标直接链接 core 实现。
 - GUI 工程 BA 输入和三角化调用方直接依赖 `src/core/sfm/BaInputBuilder.h` / `TriangulationService.h`，删除 `ProjectBaInputBuilder.h` / `ProjectTriangulationService.h` 这层 header-only 兼容 wrapper，减少旧接口暴露面。
 
@@ -122,6 +123,9 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.(TorchFeatureWrappersUseLowerCamelPrivateMemberNames|ExtractorFactoryUsesLowerCamelPrivateMemberNames)|FeatureNamingCleanupTest.TorchFeatureWrappersSuppressLibTorchC4267Warnings|FeatureExtractionRunnerTest.DiskAndAlikedUseNativeTorchscriptExtractor|FeatureExtractionDialogTest.(DiskSelectionShowsResolvedModelPath|DefaultsToDiskAlgorithm|DiskSelectionHidesSuperPointOnlyAdvancedRows|DiskSelectionShowsAdvancedApplicabilityHint)" --output-on-failure` 先失败后通过，8/8，验证 Torch 特征包装器/工厂命名迁移、C4267 局部 guard 和 DISK/ALIKED GUI 默认入口保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target feature_extractors_traditional -Jobs 8` 通过，重新编译 `ExtractorFactory.cpp`，且不再输出 LibTorch/ATen C4267 warning。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新链接依赖 DISK/ALIKED/LoFTR/Torch 特征包装器的 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MatcherFactoryUsesLowerCamelPrivateMemberNames|FeatureNamingCleanupTest.MatcherFactorySuppressesLibTorchC4267Warnings" --output-on-failure` 先失败后通过，2/2，验证 `MatcherFactory` 内部 adapter 命名迁移和 C4267 局部 guard。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "AlgorithmCompat|FeatureMatch|MatcherFactory|LightGlue|SuperGlue|LoFTR" --output-on-failure` 通过，18/18，验证匹配算法兼容、匹配 runner/sidecar、LightGlue/SuperGlue/LoFTR 相关入口保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target feature_match_factory -Jobs 8` 通过，重新编译 `MatcherFactory.cpp`，且不再输出 LibTorch/ATen C4267 warning。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MainMenuUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `MainMenu` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MainMenu|MainWindowMenu|CodeStyleTest.MainMenuUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，13/13，验证主菜单动作、UI 绑定和菜单接线保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MainMenu.cpp`、`MainWindow.cpp`、`MenuWorkflowController.cpp` 并链接 GUI。
