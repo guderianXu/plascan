@@ -99,6 +99,7 @@
 - `dense_match` 核心小类的配置和输入缓存私有成员从 `m_cfg/m_left/m_right` 迁移到 `_config/_left/_right`，保持 BM/SGM/OpenCV SGBM/亚像素细化/验证链路行为不变。
 - `SubpixelRefiner` 移除 MSVC 会忽略的 OpenMP `collapse(2)` 子句，保留外层并行，避免 Windows CUDA 构建继续输出 C4849 warning。
 - `GroundBackProjector::DemSurface` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 DEM 点云加载、KD 树高程查询和影像覆盖反投影行为不变。
+- `LaserConstraintMap` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 LiDAR PLY 加载、体素降采样、KD 树索引和最近平面查询行为不变。
 - `SparseCloudValidator` 私有成员从 `m_opts` 迁移到 `_options`，保持稀疏点云 PLY/XYZ 质量检查、有限坐标统计和最小点数判定行为不变。
 - `MvsWorkspaceManifest` 私有成员从 `m_configHash/m_frames` 迁移到 `_configHash/_frames`，保持深度图 manifest 读写、完成帧自然排序和可复用缓存判定行为不变。
 - `TerrainProductManifest` 私有成员从 `m_records` 迁移到 `_records`，保持 DEM/DOM 产品 manifest 读写、质量栅格路径保留和自然排序行为不变。
@@ -132,6 +133,7 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.GroundBackProjectorUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `DemSurface` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "OverlapAnalyzer|CodeStyleTest.GroundBackProjectorUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，3/3，验证基准球面重叠分析和 `GroundBackProjector` 风格断言保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GroundBackProjector.cpp`、`OverlapAnalyzer.cpp` 相关依赖并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "LaserConstraintMap|CodeStyleTest.LaserConstraintMapUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，5/5，验证 LiDAR PLY/高度面/体素降采样和命名迁移断言保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SparseCloudValidatorUsesLowerCamelPrivateMemberNames|MvsPipeline" --output-on-failure` 通过，21/21，验证 `SparseCloudValidator` 命名迁移后 MVS pipeline 基础链路保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新链接依赖 `mvs` 的 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsWorkspaceManifest|CodeStyleTest.MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，8/8，验证深度图 manifest 读写、排序、缓存复用和命名迁移断言保持可用。

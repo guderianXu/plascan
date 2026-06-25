@@ -26,17 +26,17 @@ public:
 
     std::size_t size() const
     {
-        return m_samples.size();
+        return _samples.size();
     }
 
     bool empty() const
     {
-        return m_samples.empty();
+        return _samples.empty();
     }
 
     const std::vector<LaserPlaneSample> &samples() const
     {
-        return m_samples;
+        return _samples;
     }
 
     bool nearestPlane(const std::array<double, 3> &query,
@@ -46,8 +46,8 @@ public:
 private:
     void rebuildIndex();
 
-    std::vector<LaserPlaneSample> m_samples;
-    plapoint::search::SpatialKdTree<3, double> m_index;
+    std::vector<LaserPlaneSample> _samples;
+    plapoint::search::SpatialKdTree<3, double> _index;
 };
 
 } // namespace lidar

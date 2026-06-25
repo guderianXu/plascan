@@ -2856,6 +2856,27 @@ TEST(CodeStyleTest, SparseCloudValidatorUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_opts")));
 }
 
+TEST(CodeStyleTest, LaserConstraintMapUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/lidar/LaserConstraintMap.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/lidar/LaserConstraintMap.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("std::vector<LaserPlaneSample> _samples;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("plapoint::search::SpatialKdTree<3, double> _index;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_samples"),
+        QStringLiteral("m_index"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/MvsWorkspaceManifest.h"));

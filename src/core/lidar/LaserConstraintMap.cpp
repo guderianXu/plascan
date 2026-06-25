@@ -500,13 +500,13 @@ bool LaserConstraintMap::build(std::vector<LaserPlaneSample> samples,
 
     if (samples.empty())
     {
-        m_samples.clear();
-        m_index.clear();
+        _samples.clear();
+        _index.clear();
         setError(errorMessage, "LiDAR constraint map has no valid plane samples");
         return false;
     }
 
-    m_samples = std::move(samples);
+    _samples = std::move(samples);
     rebuildIndex();
     return true;
 }
@@ -515,21 +515,21 @@ bool LaserConstraintMap::nearestPlane(const std::array<double, 3> &query,
                                       LaserPlaneSample *sample,
                                       double *distanceMeters) const
 {
-    if (m_samples.empty())
+    if (_samples.empty())
     {
         return false;
     }
 
     double distance = 0.0;
-    const int index = m_index.nearest(query, &distance);
-    if (index < 0 || index >= static_cast<int>(m_samples.size()))
+    const int index = _index.nearest(query, &distance);
+    if (index < 0 || index >= static_cast<int>(_samples.size()))
     {
         return false;
     }
 
     if (sample)
     {
-        *sample = m_samples[static_cast<std::size_t>(index)];
+        *sample = _samples[static_cast<std::size_t>(index)];
     }
     if (distanceMeters)
     {
@@ -543,14 +543,14 @@ void LaserConstraintMap::rebuildIndex()
     using LaserKdTree3D = plapoint::search::SpatialKdTree<3, double>;
 
     std::vector<LaserKdTree3D::Point> points;
-    points.reserve(m_samples.size());
-    for (std::size_t i = 0; i < m_samples.size(); ++i)
+    points.reserve(_samples.size());
+    for (std::size_t i = 0; i < _samples.size(); ++i)
     {
         points.push_back(LaserKdTree3D::Point{
-            m_samples[i].point,
+            _samples[i].point,
             static_cast<int>(i)});
     }
-    m_index.build(points);
+    _index.build(points);
 }
 
 } // namespace lidar
