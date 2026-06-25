@@ -522,7 +522,8 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
     for (const QJsonValue &value : imageArray)
     {
         const QJsonObject object = value.toObject();
-        const QString normalizedPath = xjw::common::project::normalizePath(object.value(QStringLiteral("path")).toString());
+        const QString normalizedPath =
+            xjw::common::project::normalizePath(object.value(QStringLiteral("path")).toString());
         if (!selectedNormalized.contains(normalizedPath))
         {
             continue;
