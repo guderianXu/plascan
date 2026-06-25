@@ -177,7 +177,8 @@ cv::Mat tensorToCvMat(const torch::Tensor &tensor)
     const int rows = static_cast<int>(cpu.size(0));
     const int cols = static_cast<int>(cpu.size(1));
     cv::Mat descriptors(rows, cols, CV_32F);
-    std::memcpy(descriptors.ptr<float>(0), cpu.data_ptr<float>(), static_cast<std::size_t>(rows * cols) * sizeof(float));
+    const auto descriptor_bytes = static_cast<std::size_t>(rows) * static_cast<std::size_t>(cols) * sizeof(float);
+    std::memcpy(descriptors.ptr<float>(0), cpu.data_ptr<float>(), descriptor_bytes);
     return descriptors;
 }
 
@@ -480,8 +481,10 @@ bool buildCameraOverlapCandidates(const VocabularyOverlapRunRequest &request,
                   return pair.accepted;
               }))
             : 0;
-        *detail = QStringLiteral("method=camera images=%1 candidates=%2 accepted=%3 neighbor=%4 reference_body=%5 radius_m=%6 auto_elevation=%7 elevation_m=%8")
-                      .arg(imageCount)
+        const QString detail_template =
+            QStringLiteral("method=camera images=%1 candidates=%2 accepted=%3 neighbor=%4 reference_body=%5 ")
+            + QStringLiteral("radius_m=%6 auto_elevation=%7 elevation_m=%8");
+        *detail = detail_template.arg(imageCount)
                       .arg(overlapResult.pairs.size())
                       .arg(acceptedCount)
                       .arg(request.cameraNeighborFactor)
@@ -880,13 +883,16 @@ void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
     }
 
     _featureDirEdit->setText(settings.value(QStringLiteral("feature_dir")).toString(_featureDirEdit->text()));
-    _branchFactorSpin->setValue(settings.value(QStringLiteral("branch_factor")).toInt(_branchFactorSpin->value()));
+    _branchFactorSpin->setValue(
+        settings.value(QStringLiteral("branch_factor")).toInt(_branchFactorSpin->value()));
     _treeDepthSpin->setValue(settings.value(QStringLiteral("tree_depth")).toInt(_treeDepthSpin->value()));
-    _samplePerImageSpin->setValue(settings.value(QStringLiteral("sample_per_image")).toInt(_samplePerImageSpin->value()));
+    _samplePerImageSpin->setValue(
+        settings.value(QStringLiteral("sample_per_image")).toInt(_samplePerImageSpin->value()));
     _maxTrainingDescriptorsSpin->setValue(
         settings.value(QStringLiteral("max_training_descriptors")).toInt(_maxTrainingDescriptorsSpin->value()));
     _topKSpin->setValue(settings.value(QStringLiteral("top_k")).toInt(_topKSpin->value()));
-    _minSimilaritySpin->setValue(settings.value(QStringLiteral("min_similarity")).toDouble(_minSimilaritySpin->value()));
+    _minSimilaritySpin->setValue(
+        settings.value(QStringLiteral("min_similarity")).toDouble(_minSimilaritySpin->value()));
     const QString referenceBody = settings.value(QStringLiteral("reference_body")).toString(QStringLiteral("earth"));
     const int referenceBodyIndex = _referenceBodyCombo->findData(referenceBody);
     if (referenceBodyIndex >= 0)
@@ -908,7 +914,8 @@ void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
     _minInliersSpin->setValue(settings.value(QStringLiteral("min_inliers")).toInt(_minInliersSpin->value()));
     _ransacThresholdSpin->setValue(
         settings.value(QStringLiteral("ransac_threshold")).toDouble(_ransacThresholdSpin->value()));
-    _overlapThreadsSpin->setValue(settings.value(QStringLiteral("overlap_threads")).toInt(_overlapThreadsSpin->value()));
+    _overlapThreadsSpin->setValue(
+        settings.value(QStringLiteral("overlap_threads")).toInt(_overlapThreadsSpin->value()));
     _useFlannAssignmentCheck->setChecked(
         settings.value(QStringLiteral("use_flann_assignment")).toBool(_useFlannAssignmentCheck->isChecked()));
     _useInvertedIndexCheck->setChecked(
