@@ -103,7 +103,9 @@ void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
     _scene->addItem(item);
     _featureItems.append(item);
     const int added = 1;
-    LOG_DEBUG(QStringLiteral("addFeatureItems: added items=%1 total_scene_items=%2").arg(added).arg(_scene ? _scene->items().size() : 0));
+    LOG_DEBUG(QStringLiteral("addFeatureItems: added items=%1 total_scene_items=%2")
+                  .arg(added)
+                  .arg(_scene ? _scene->items().size() : 0));
 }
 
 void LayerRenderer::clear()
@@ -120,7 +122,11 @@ void LayerRenderer::clear()
     _imageBounds = QRectF();
 }
 
-bool LayerRenderer::addStitchedImagePair(const QString &pathA, const QString &pathB, QGraphicsPixmapItem **outA, QGraphicsPixmapItem **outB, int gap)
+bool LayerRenderer::addStitchedImagePair(const QString &pathA,
+                                         const QString &pathB,
+                                         QGraphicsPixmapItem **outA,
+                                         QGraphicsPixmapItem **outB,
+                                         int gap)
 {
     if (!_scene) return false;
 
@@ -147,7 +153,11 @@ bool LayerRenderer::addStitchedImagePair(const QString &pathA, const QString &pa
 
     if (!itemA || !itemB) return false;
 
-    LOG_DEBUG(QStringLiteral("addStitchedImagePair: itemA size=%1x%2 itemB size=%3x%4").arg(itemA->pixmap().width()).arg(itemA->pixmap().height()).arg(itemB->pixmap().width()).arg(itemB->pixmap().height()));
+    LOG_DEBUG(QStringLiteral("addStitchedImagePair: itemA size=%1x%2 itemB size=%3x%4")
+                  .arg(itemA->pixmap().width())
+                  .arg(itemA->pixmap().height())
+                  .arg(itemB->pixmap().width())
+                  .arg(itemB->pixmap().height()));
 
     // position B to the right of A
     qreal bx = itemA->pixmap().width() + gap;
@@ -168,7 +178,10 @@ void LayerRenderer::addMatchLines(const QVector<QPointF> &ptsA, const QVector<QP
     
     clearMatchLayers();
 
-    LOG_DEBUG(QStringLiteral("addMatchLines: ptsA=%1 ptsB=%2 bOffsetX=%3").arg(ptsA.size()).arg(ptsB.size()).arg(bOffsetX));
+    LOG_DEBUG(QStringLiteral("addMatchLines: ptsA=%1 ptsB=%2 bOffsetX=%3")
+                  .arg(ptsA.size())
+                  .arg(ptsB.size())
+                  .arg(bOffsetX));
 
     const auto items = xjw::gui::views::createMatchOverlayItems(ptsA, ptsB, _matchOpts, bOffsetX);
     for (QGraphicsItem *item : items)
