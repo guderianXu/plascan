@@ -31,13 +31,15 @@ float estimateBaseVoxelStep(const std::vector<PointXYZRGB> &points,
 
 std::vector<PointXYZRGB> voxelDownsamplePoints(const std::vector<PointXYZRGB> &points,
                                                 float voxelSize,
-                                                plapoint::ProcessingDevice device = plapoint::ProcessingDevice::Auto);
+                                                plapoint::ProcessingDevice device =
+                                                    plapoint::ProcessingDevice::Auto);
 
 std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB> &points,
                                                     int k,
                                                     float stdMul,
                                                     float gridCellSize,
-                                                    plapoint::ProcessingDevice device = plapoint::ProcessingDevice::Auto);
+                                                    plapoint::ProcessingDevice device =
+                                                        plapoint::ProcessingDevice::Auto);
 
 } // namespace detail
 } // namespace mesh

@@ -133,9 +133,13 @@
 - `LayerRenderer.h` 拆分超长的拼接影像接口声明，并新增头文件 120 列风格回归测试，保持影像拼接、特征点和匹配线渲染接口行为不变。
 - `FeatureExtractionRunner.cpp` 拆分超长的特征提取配置日志格式串，并新增 120 列风格回归测试，保持 DISK/ALIKED TorchScript 提取入口和配置日志内容不变。
 - `LightGlueMatcher.h` 拆分超长的 `_filterScores` 声明，并新增头文件 120 列风格回归测试，保持 LightGlue 匹配器接口行为不变。
+- `PointCloudPreprocess.h` 拆分点云预处理默认设备参数的超长声明，并新增头文件 120 列风格回归测试，保持体素降采样和统计去噪接口行为不变。
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.PointCloudPreprocessHeaderKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `PointCloudPreprocess.h` 超长声明；拆分两个默认参数声明后通过。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target meshing -Jobs 8`、`-Target test_mesh_reconstructor` 和 `-Target plascan_gui` 均通过，确认点云预处理头文件变更可重新编译网格库、网格测试和主 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.PointCloudPreprocessHeaderKeepsLinesWithinStyleLimit|MeshReconstructor" --output-on-failure` 通过，8/8，验证点云预处理头文件行宽和网格重建流式高度网格/Poisson fallback 回归保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.LightGlueMatcherHeaderKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `LightGlueMatcher.h` 超长声明；拆分声明后通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target lightglue_matcher -Jobs 8`、`-Target test_gui_project_utils` 和 `-Target plascan_gui` 均通过，确认 LightGlue 匹配器、GUI 工具测试和主 GUI 目标可重新构建。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.LightGlueMatcherHeaderKeepsLinesWithinStyleLimit|FeatureMatchingDialogTest\.(DefaultsToLightGlueAlgorithm|ProjectAvailableSuffixesConstrainLightGlueChoicesAfterApplyingSettings)|FeatureNamingCleanupTest\.MatcherFactorySuppressesLibTorchC4267Warnings|CodeStyleTest\.MatcherFactoryUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，5/5，验证 LightGlue 头文件行宽、默认匹配算法选择、项目可用后缀过滤和 matcher 工厂命名/warning guard 回归保持可用。
