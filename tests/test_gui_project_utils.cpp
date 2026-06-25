@@ -3190,6 +3190,69 @@ TEST(CodeStyleTest, DepthMapFusionUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_filteredDepths")));
 }
 
+TEST(CodeStyleTest, DepthMapGeneratorUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("std::vector<CameraView> _views;"),
+        QStringLiteral("SparseCloud _sparse;"),
+        QStringLiteral("DepthGenConfig _config;"),
+        QStringLiteral("std::atomic<bool> _cancelled{false};"),
+        QStringLiteral("std::string _outputDir;"),
+        QStringLiteral("std::vector<DepthFrameResult> _depthFrames;"),
+        QStringLiteral("std::vector<uint8_t> _skipFrameMask;"),
+        QStringLiteral("std::vector<cv::Mat> _grayCache;"),
+        QStringLiteral("std::vector<cv::Mat> _contentMasks;"),
+        QStringLiteral("std::vector<FrameMvsCache> _frameCaches;"),
+        QStringLiteral("std::vector<uint64_t> _visibilityBits;"),
+        QStringLiteral("std::vector<int> _pairCommonCounts;"),
+        QStringLiteral("size_t _visibilityWordCount = 0;"),
+        QStringLiteral("bool _frameCachesReady = false;"),
+        QStringLiteral("QString _workspaceManifestPath;"),
+        QStringLiteral("QString _depthConfigHash;"),
+        QStringLiteral("MvsWorkspaceManifest _workspaceManifest;"),
+        QStringLiteral("std::mutex _workspaceManifestMutex;"),
+        QStringLiteral("std::vector<cv::Mat> _filteredDepths;"),
+        QStringLiteral("mutable std::mutex   _filteredDepthsMutex;"),
+    };
+    for (const QString &member : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(member)) << qPrintable(member);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_views"),
+        QStringLiteral("m_sparse"),
+        QStringLiteral("m_config"),
+        QStringLiteral("m_cancelled"),
+        QStringLiteral("m_outputDir"),
+        QStringLiteral("m_depthFrames"),
+        QStringLiteral("m_skipFrameMask"),
+        QStringLiteral("m_grayCache"),
+        QStringLiteral("m_contentMasks"),
+        QStringLiteral("m_frameCaches"),
+        QStringLiteral("m_visibilityBits"),
+        QStringLiteral("m_pairCommonCounts"),
+        QStringLiteral("m_visibilityWordCount"),
+        QStringLiteral("m_frameCachesReady"),
+        QStringLiteral("m_workspaceManifestPath"),
+        QStringLiteral("m_depthConfigHash"),
+        QStringLiteral("m_workspaceManifest"),
+        QStringLiteral("m_workspaceManifestMutex"),
+        QStringLiteral("m_filteredDepths"),
+        QStringLiteral("m_filteredDepthsMutex"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, LaserConstraintMapUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/lidar/LaserConstraintMap.h"));

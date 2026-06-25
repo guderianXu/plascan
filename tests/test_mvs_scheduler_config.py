@@ -51,8 +51,8 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("DepthFrameResult storedResult = res;", scheduler)
         self.assertIn("if (!keepDepthFramesInMemory.load())", scheduler)
         self.assertIn("storedResult.releasePixelStorage();", scheduler)
-        self.assertIn("m_depthFrames[i] = storedResult;", scheduler)
-        self.assertNotIn("m_depthFrames[i] = res;", scheduler)
+        self.assertIn("_depthFrames[i] = storedResult;", scheduler)
+        self.assertNotIn("_depthFrames[i] = res;", scheduler)
         self.assertIn("if (keepDepthFramesInMemory.load() && NV >= 2)", scheduler)
 
     def test_depth_cache_retention_is_budgeted_from_system_memory(self):
@@ -62,8 +62,8 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("querySystemMemorySnapshot", scheduler)
         self.assertIn("estimateDepthFrameCacheBytes", scheduler)
         self.assertIn("retainedDepthMemoryBudgetBytes", scheduler)
-        self.assertIn("m_config.maxDepthCacheRamFraction", scheduler)
-        self.assertIn("m_config.minFreeRamBytes", scheduler)
+        self.assertIn("_config.maxDepthCacheRamFraction", scheduler)
+        self.assertIn("_config.minFreeRamBytes", scheduler)
         self.assertIn("深度图内存策略", scheduler)
 
     def test_depth_cache_unknown_dimensions_use_streaming_not_cache(self):
@@ -184,8 +184,8 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         join_pos = scheduler.index("for (std::thread &worker : workers)")
         cleanup_pos = scheduler.index("// 释放图像缓存", join_pos)
         post_worker_block = scheduler[join_pos:cleanup_pos]
-        self.assertIn("if (m_cancelled.load())", post_worker_block)
-        self.assertLess(post_worker_block.index("if (m_cancelled.load())"),
+        self.assertIn("if (_cancelled.load())", post_worker_block)
+        self.assertLess(post_worker_block.index("if (_cancelled.load())"),
                         post_worker_block.index("saveQueue.waitUntilIdle()"))
         self.assertIn("saveQueue.cancel()", post_worker_block)
 
@@ -195,11 +195,11 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         cross_end = scheduler.index("bool DepthMapGenerator::saveDepthFrameArtifacts", cross_start)
         cross_block = scheduler[cross_start:cross_end]
 
-        self.assertIn("if (m_cancelled.load())", cross_block)
+        self.assertIn("if (_cancelled.load())", cross_block)
 
         filtered_save_pos = scheduler.index("saveQueue.enqueue(i, res, QStringLiteral(\"过滤后\"))")
         filtered_block = scheduler[filtered_save_pos - 400:filtered_save_pos + 200]
-        self.assertIn("if (m_cancelled.load())", filtered_block)
+        self.assertIn("if (_cancelled.load())", filtered_block)
 
     def test_dense_sparse_preload_respects_cancel_before_starting_mvs(self):
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
@@ -250,12 +250,12 @@ class MvsSchedulerConfigTest(unittest.TestCase):
 
         self.assertIn("FrameMvsCache", header)
         self.assertIn("prepareFrameCaches", header)
-        self.assertIn("m_visibilityBits", header)
-        self.assertIn("m_pairCommonCounts", header)
+        self.assertIn("_visibilityBits", header)
+        self.assertIn("_pairCommonCounts", header)
         self.assertIn("prepareFrameCaches();", scheduler)
         self.assertIn("sourceViewIndicesForFrame", scheduler)
         self.assertIn("visibleSparsePointIndicesForFrame", scheduler)
-        self.assertNotIn("selectMvsSourceViewIndices(m_views, m_sparse, refIdx, numSrc)", scheduler)
+        self.assertNotIn("selectMvsSourceViewIndices(_views, _sparse, refIdx, numSrc)", scheduler)
 
     def test_depth_scheduler_caches_selected_source_shared_sparse_points(self):
         header = self.read("src/core/mvs/DepthMapGenerator.h")
@@ -286,7 +286,7 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("shard.pairCommonCounts", block)
         self.assertIn("mergeVisibilityCacheShards", block)
         self.assertIn("buildVisibilityBitsFromFrameCaches", block)
-        self.assertNotIn("m_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices.push_back(pointIndex);",
+        self.assertNotIn("_frameCaches[static_cast<size_t>(viewIdx)].visiblePointIndices.push_back(pointIndex);",
                          block)
 
     def test_source_view_scoring_short_circuits_angle_sampling_when_top_sources_are_proven(self):

@@ -74,17 +74,17 @@ public:
 
     const std::vector<CameraView> &views() const
     {
-        return m_views;
+        return _views;
     }
 
     const SparseCloud &sparse() const
     {
-        return m_sparse;
+        return _sparse;
     }
 
     const DepthGenConfig &config() const
     {
-        return m_config;
+        return _config;
     }
 
     /// 异步启动
@@ -93,23 +93,23 @@ public:
     /// 设置输出目录（深度图 PNG 保存位置）
     void setOutputDir(const std::string &dir)
     {
-        m_outputDir = dir;
+        _outputDir = dir;
     }
 
     /// 请求取消
     void cancel()
     {
-        m_cancelled = true;
+        _cancelled = true;
     }
 
     void requestCancel()
     {
-        m_cancelled = true;
+        _cancelled = true;
     }
 
     bool isCancelled() const
     {
-        return m_cancelled.load();
+        return _cancelled.load();
     }
 
     /// 基于稀疏点投影生成深度过滤支撑区，返回 CV_8U 掩码 (255=保留)；覆盖率不可靠时返回空 Mat
@@ -283,47 +283,47 @@ private:
     void preloadImages();
     void refreshViewImageDimensionsFromCache();
 
-    std::vector<CameraView> m_views;
-    SparseCloud m_sparse;
-    DepthGenConfig m_config;
-    std::atomic<bool> m_cancelled{false};
-    std::string m_outputDir;
+    std::vector<CameraView> _views;
+    SparseCloud _sparse;
+    DepthGenConfig _config;
+    std::atomic<bool> _cancelled{false};
+    std::string _outputDir;
 
     /// 缓存已估计的深度帧
-    std::vector<DepthFrameResult> m_depthFrames;
-    std::vector<uint8_t> m_skipFrameMask;
+    std::vector<DepthFrameResult> _depthFrames;
+    std::vector<uint8_t> _skipFrameMask;
 
     /// 图像缓存（灰度图，预加载一次复用多次）
-    std::vector<cv::Mat> m_grayCache;
+    std::vector<cv::Mat> _grayCache;
 
     /// 内容区域掩码（在 CLAHE 增强前基于原始图像计算，CV_8U 0/255）
     /// gamma/CLAHE 会将黑边像素 (gray≈3) 提升到 37+，使暗区掩码失效
     /// 因此必须在增强前计算真正的内容/黑边分界
-    std::vector<cv::Mat> m_contentMasks;
+    std::vector<cv::Mat> _contentMasks;
 
     /// MVS 稀疏点可见性与源视图缓存；runInBackground 中预计算一次，帧 worker 仅读取
-    std::vector<FrameMvsCache> m_frameCaches;
-    std::vector<uint64_t> m_visibilityBits;
-    std::vector<int> m_pairCommonCounts;
-    size_t m_visibilityWordCount = 0;
-    bool m_frameCachesReady = false;
+    std::vector<FrameMvsCache> _frameCaches;
+    std::vector<uint64_t> _visibilityBits;
+    std::vector<int> _pairCommonCounts;
+    size_t _visibilityWordCount = 0;
+    bool _frameCachesReady = false;
 
-    QString m_workspaceManifestPath;
-    QString m_depthConfigHash;
-    MvsWorkspaceManifest m_workspaceManifest;
-    std::mutex m_workspaceManifestMutex;
+    QString _workspaceManifestPath;
+    QString _depthConfigHash;
+    MvsWorkspaceManifest _workspaceManifest;
+    std::mutex _workspaceManifestMutex;
 
 public:
     /// 融合完可获取每帧一致性过滤的深度图（返回副本，线程安全）
     std::vector<cv::Mat> filteredDepths() const
     {
-        std::lock_guard<std::mutex> lock(m_filteredDepthsMutex);
-        return m_filteredDepths;
+        std::lock_guard<std::mutex> lock(_filteredDepthsMutex);
+        return _filteredDepths;
     }
 
 private:
-    std::vector<cv::Mat> m_filteredDepths;
-    mutable std::mutex   m_filteredDepthsMutex;
+    std::vector<cv::Mat> _filteredDepths;
+    mutable std::mutex   _filteredDepthsMutex;
 };
 
 } // namespace mvs

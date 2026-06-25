@@ -106,6 +106,7 @@
 - `LaserConstraintMap` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 LiDAR PLY 加载、体素降采样、KD 树索引和最近平面查询行为不变。
 - `SparseCloudValidator` 私有成员从 `m_opts` 迁移到 `_options`，保持稀疏点云 PLY/XYZ 质量检查、有限坐标统计和最小点数判定行为不变。
 - `DepthMapFusion` 私有成员从 `m_config/m_filteredDepths` 迁移到 `_config/_filteredDepths`，保持多视深度融合、流式首帧融合和一致性过滤深度图输出行为不变。
+- `DepthMapGenerator` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持深度图调度、manifest 复用、图像缓存、source view 缓存和融合过滤深度图输出行为不变。
 - `MvsWorkspaceManifest` 私有成员从 `m_configHash/m_frames` 迁移到 `_configHash/_frames`，保持深度图 manifest 读写、完成帧自然排序和可复用缓存判定行为不变。
 - `TerrainProductManifest` 私有成员从 `m_records` 迁移到 `_records`，保持 DEM/DOM 产品 manifest 读写、质量栅格路径保留和自然排序行为不变。
 - `MultiViewTrackBuilder` 及其内部并查集缓存私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持多视 track 合并、冲突拆分和置信度统计行为不变。
@@ -131,6 +132,12 @@
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.DepthMapGeneratorUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `DepthMapGenerator` 私有成员迁移到 `_lowerCamelCase`。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_mvs_pipeline -Jobs 8` 通过，重新编译依赖 `DepthMapGenerator` 的 MVS 测试目标。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具/风格测试目标。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新链接依赖 `DepthMapGenerator` 的 Qt GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.DepthMapGeneratorUsesLowerCamelPrivateMemberNames|MvsPipelineTest|MvsWorkspaceManifest|MvsSourcePlanner|MvsDepthPostprocess|DepthMapPersistence|DepthFrameUtils" --output-on-failure` 通过，42/42，验证 MVS manifest、source planner、深度后处理、持久化和 pipeline 子集。
+- `python -m pytest tests/test_mvs_scheduler_config.py -q` 通过，72/72，验证 MVS 调度源码结构、内存策略、取消检查和 source view 缓存断言已同步到新成员命名。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.(TorchFeatureWrappersUseLowerCamelPrivateMemberNames|ExtractorFactoryUsesLowerCamelPrivateMemberNames)|FeatureNamingCleanupTest.TorchFeatureWrappersSuppressLibTorchC4267Warnings|FeatureExtractionRunnerTest.DiskAndAlikedUseNativeTorchscriptExtractor|FeatureExtractionDialogTest.(DiskSelectionShowsResolvedModelPath|DefaultsToDiskAlgorithm|DiskSelectionHidesSuperPointOnlyAdvancedRows|DiskSelectionShowsAdvancedApplicabilityHint)" --output-on-failure` 先失败后通过，8/8，验证 Torch 特征包装器/工厂命名迁移、C4267 局部 guard 和 DISK/ALIKED GUI 默认入口保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target feature_extractors_traditional -Jobs 8` 通过，重新编译 `ExtractorFactory.cpp`，且不再输出 LibTorch/ATen C4267 warning。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新链接依赖 DISK/ALIKED/LoFTR/Torch 特征包装器的 GUI。
