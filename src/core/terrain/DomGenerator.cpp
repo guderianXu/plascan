@@ -311,8 +311,12 @@ void rasterizeTriangle(float v0x, float v0y,
             }
 
             // 插值 UV
-            const float u = static_cast<float>(static_cast<double>(w0) * uv0u + static_cast<double>(w1) * uv1u + static_cast<double>(w2) * uv2u);
-            const float v = static_cast<float>(static_cast<double>(w0) * uv0v + static_cast<double>(w1) * uv1v + static_cast<double>(w2) * uv2v);
+            const double interpolated_u =
+                static_cast<double>(w0) * uv0u + static_cast<double>(w1) * uv1u + static_cast<double>(w2) * uv2u;
+            const double interpolated_v =
+                static_cast<double>(w0) * uv0v + static_cast<double>(w1) * uv1v + static_cast<double>(w2) * uv2v;
+            const float u = static_cast<float>(interpolated_u);
+            const float v = static_cast<float>(interpolated_v);
 
             domImage.at<cv::Vec3b>(row, col) = sampleTextureBilinear(texture, u, v);
         }
