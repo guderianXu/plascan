@@ -3094,6 +3094,20 @@ TEST(CodeStyleTest, BaInputBuilderSourceKeepsLinesWithinStyleLimit)
     }
 }
 
+TEST(CodeStyleTest, CliBundleAdjustSourceKeepsLinesWithinStyleLimit)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/cli/cli_bundle_adjust.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "cli_bundle_adjust.cpp:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, SuperPointBatchSourceKeepsLinesWithinStyleLimit)
 {
     const QString source =

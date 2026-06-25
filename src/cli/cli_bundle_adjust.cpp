@@ -337,7 +337,8 @@ QJsonObject buildCompareJson(const QString &outputDir,
     compare[QStringLiteral("baseline_improvement")] =
         jsonDouble(baseObj, QStringLiteral("mean_rms_before")) - jsonDouble(baseObj, QStringLiteral("mean_rms_after"));
     compare[QStringLiteral("laser_improvement")] =
-        jsonDouble(laserObj, QStringLiteral("mean_rms_before")) - jsonDouble(laserObj, QStringLiteral("mean_rms_after"));
+        jsonDouble(laserObj, QStringLiteral("mean_rms_before"))
+        - jsonDouble(laserObj, QStringLiteral("mean_rms_after"));
     compare[QStringLiteral("laser_after_minus_baseline_after")] =
         jsonDouble(laserObj, QStringLiteral("mean_rms_after")) - jsonDouble(baseObj, QStringLiteral("mean_rms_after"));
     compare[QStringLiteral("laser_constraints_summary")] =
@@ -495,9 +496,11 @@ int main(int argc, char *argv[])
         baOptions.scaleBarConstraints = baInput.scaleBarConstraints;
     }
 
+    const QString ba_input_summary =
+        QStringLiteral("BA 输入: cameras=%1 tracks=%2 selected_images=%3 sidecar_v2_pairs=%4 ")
+        + QStringLiteral("multiview_tracks=%5 survey_control_tracks=%6 scale_bars=%7");
     printUtf8(stdout,
-              QStringLiteral("BA 输入: cameras=%1 tracks=%2 selected_images=%3 sidecar_v2_pairs=%4 multiview_tracks=%5 survey_control_tracks=%6 scale_bars=%7")
-                  .arg(static_cast<int>(baInput.cameras.size()))
+              ba_input_summary.arg(static_cast<int>(baInput.cameras.size()))
                   .arg(static_cast<int>(baInput.tracks.size()))
                   .arg(selectedImages.size())
                   .arg(baInput.sidecarV2PairCount)
@@ -544,8 +547,11 @@ int main(int argc, char *argv[])
         const QJsonObject compareJson = buildCompareJson(outputDir, baseline, laser);
         writeJsonFile(comparePath, compareJson);
         printUtf8(stdout, QStringLiteral("A/B 对比已写入: %1").arg(comparePath));
-        if (failOnQualityGate
-            && !compareJson.value(QStringLiteral("quality_gate")).toObject().value(QStringLiteral("passed")).toBool(false))
+        const bool quality_gate_passed = compareJson.value(QStringLiteral("quality_gate"))
+                                             .toObject()
+                                             .value(QStringLiteral("passed"))
+                                             .toBool(false);
+        if (failOnQualityGate && !quality_gate_passed)
         {
             printUtf8(stderr, QStringLiteral("错误: LiDAR BA 质量门禁失败，详情见: %1").arg(comparePath));
             return cli::EXIT_ALGO_ERR;
