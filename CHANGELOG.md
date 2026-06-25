@@ -43,6 +43,7 @@
 
 - 密集匹配执行逻辑从 `ProjectManager`/`ReconstructionWorkflowController` 拆到 `DenseMatchRunner`，workflow controller 的 `QtConcurrent` worker 不再捕获 `this`，也不再依赖 GUI manager 生命周期。
 - `FeatureExtractionRunner` 和 `FeatureMatchRunner` 对 LibTorch/ATen 触发的 MSVC C4267 外部模板 warning 使用编译单元级局部隔离，避免 Windows CUDA GUI 构建日志继续被第三方头文件窄化警告刷屏。
+- `SuperPointBatch.cpp` 拆分描述子诊断和密集描述子采样路径中的超长语句，并新增行宽回归测试，继续收敛旧 SuperPoint 编译单元的格式债。
 - 手动特征提取和 DEM 自动流水线中的特征提取步骤改为向 `FeatureExtractionRunner` 传递 `QPointer<ProjectManager>`，runner 在回写 `appendIpfindResult` 前再次检查项目管理器生命周期，避免关闭/切换项目后后台特征任务回调已释放对象。
 - 观测网络构建后台任务改用 `QPointer<ProjectManager>` 和项目路径 guard 回写进度、结果和完成信号，避免用户关闭项目或切换工程后旧任务写回当前项目。
 - `FeatureMatchRunner` 公共入口改为接收 `QPointer<ProjectManager>`，手动匹配和 DEM 自动流水线匹配步骤不再把裸 `ProjectManager*` 捕进后台 worker；匹配结果写回时会重新检查项目仍然有效且路径未切换。

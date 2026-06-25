@@ -156,27 +156,74 @@ std::vector<FeatureOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& i
                             try {
                                 auto tmp = desc.to(torch::kCPU);
                                 std::string info = "model batch desc shape:";
-                                for (auto s : tmp.sizes()) { info += " "; info += std::to_string(s); }
+                                for (auto s : tmp.sizes())
+                                {
+                                    info += " ";
+                                    info += std::to_string(s);
+                                }
                                 std::cerr << info << std::endl;
                                 // 计算少量统计量（若为2D或3D）
-                                if (tmp.numel() > 0 && tmp.dim() <= 4) {
+                                if (tmp.numel() > 0 && tmp.dim() <= 4)
+                                {
                                     auto tfloat = tmp.to(torch::kFloat32).contiguous();
                                     const float* dp = tfloat.data_ptr<float>();
                                     int64_t ne = tfloat.numel();
-                                    double ssum = 0.0; int64_t nz = 0; float mn = 0.0f, mx = 0.0f;
+                                    double ssum = 0.0;
+                                    int64_t nz = 0;
+                                    float mn = 0.0f;
+                                    float mx = 0.0f;
                                     int64_t lim = std::min<int64_t>(ne, 1000);
-                                    for (int64_t ii = 0; ii < lim; ++ii) {
-                                        float v = dp[ii]; ssum += v; if (v != 0.0f) ++nz; if (ii==0) { mn = mx = v; } else { if (v < mn) mn = v; if (v > mx) mx = v; }
+                                    for (int64_t ii = 0; ii < lim; ++ii)
+                                    {
+                                        const float v = dp[ii];
+                                        ssum += v;
+                                        if (v != 0.0f)
+                                        {
+                                            ++nz;
+                                        }
+                                        if (ii == 0)
+                                        {
+                                            mn = mx = v;
+                                        }
+                                        else
+                                        {
+                                            if (v < mn)
+                                            {
+                                                mn = v;
+                                            }
+                                            if (v > mx)
+                                            {
+                                                mx = v;
+                                            }
+                                        }
                                     }
                                     double total_sum = 0.0;
-                                    try { total_sum = tfloat.sum().item<double>(); } catch(...) {}
-                                    std::cerr << "model desc sample stats: ne=" << ne << " sample_nz=" << nz << " mean_sample=" << (lim? ssum / lim : 0.0) << " min_sample=" << mn << " max_sample=" << mx << " sum=" << total_sum << std::endl;
+                                    try
+                                    {
+                                        total_sum = tfloat.sum().item<double>();
+                                    }
+                                    catch (...)
+                                    {
+                                    }
+                                    std::cerr << "model desc sample stats: ne=" << ne
+                                              << " sample_nz=" << nz
+                                              << " mean_sample=" << (lim ? ssum / lim : 0.0)
+                                              << " min_sample=" << mn
+                                              << " max_sample=" << mx
+                                              << " sum=" << total_sum << std::endl;
                                     int show = static_cast<int>(std::min<int64_t>(ne, 20));
                                     std::cerr << "model desc first_values:";
-                                    for (int i=0;i<show;i++) std::cerr << " " << dp[i];
+                                    for (int i = 0; i < show; i++)
+                                    {
+                                        std::cerr << " " << dp[i];
+                                    }
                                     std::cerr << std::endl;
                                 }
-                            } catch(...) { std::cerr << "warn: failed to inspect model desc" << std::endl; }
+                            }
+                            catch (...)
+                            {
+                                std::cerr << "warn: failed to inspect model desc" << std::endl;
+                            }
                         }
                         FeatureOutput sop;
                         if (kp.numel() > 0) 
@@ -225,41 +272,56 @@ std::vector<FeatureOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& i
                                 auto desc_t = desc;
                                 // 将 desc 迁移到 CPU 并转换为 float
                                 desc_t = desc_t.to(torch::kCPU);
-                                if (desc_t.dtype() != torch::kFloat32) desc_t = desc_t.to(torch::kFloat32);
+                                if (desc_t.dtype() != torch::kFloat32)
+                                {
+                                    desc_t = desc_t.to(torch::kFloat32);
+                                }
 
                                 const int num_kp = static_cast<int>(sop.keypoints.size());
                                 // 情形1: 已是按点描述子 [N, D]
-                                if (desc_t.dim() == 2 && desc_t.size(0) == num_kp) {
+                                if (desc_t.dim() == 2 && desc_t.size(0) == num_kp)
+                                {
                                     sop.descriptors = desc_t.contiguous();
                                 }
                                 // 情形2: 密集描述子 [C, H, W]
-                                else if (desc_t.dim() == 3) {
+                                else if (desc_t.dim() == 3)
+                                {
                                     torch::Tensor desc_chw = desc_t;
                                     // 如果形状为 [H, W, C]，则转为 [C, H, W]
-                                    if (desc_chw.size(2) == config_.descriptor_dim && desc_chw.size(0) != config_.descriptor_dim) {
+                                    if (desc_chw.size(2) == config_.descriptor_dim &&
+                                        desc_chw.size(0) != config_.descriptor_dim)
+                                    {
                                         desc_chw = desc_chw.permute({2, 0, 1});
                                     }
 
-                                    if (desc_chw.size(0) == config_.descriptor_dim) {
+                                    if (desc_chw.size(0) == config_.descriptor_dim)
+                                    {
                                         // 构建 keypoints tensor [1, N, 2]
                                         std::vector<float> kps;
                                         kps.reserve(static_cast<size_t>(num_kp) * 2);
-                                        for (const auto &kp : sop.keypoints) {
+                                        for (const auto &kp : sop.keypoints)
+                                        {
                                             kps.push_back(static_cast<float>(kp.pt.x));
                                             kps.push_back(static_cast<float>(kp.pt.y));
                                         }
-                                        if (!kps.empty()) {
-                                            auto kpt_tensor = torch::from_blob(kps.data(), {num_kp, 2}, torch::kFloat32).clone();
+                                        if (!kps.empty())
+                                        {
+                                            auto kpt_tensor =
+                                                torch::from_blob(kps.data(), {num_kp, 2}, torch::kFloat32).clone();
                                             kpt_tensor = kpt_tensor.unsqueeze(0); // [1,N,2]
                                             // sampleDescriptors 期望 descriptors 为 [B,C,H,W]
                                             auto desc_bchw = desc_chw.unsqueeze(0);
                                             auto sampled = sampleDescriptors(kpt_tensor, desc_bchw, config_.grid_size);
                                             sampled = sampled.squeeze(0).transpose(0, 1); // [N, D]
                                             sop.descriptors = sampled.contiguous();
-                                        } else {
+                                        }
+                                        else
+                                        {
                                             sop.descriptors = torch::Tensor();
                                         }
-                                    } else {
+                                    }
+                                    else
+                                    {
                                         // 无法识别的描述子形状，保空
                                         sop.descriptors = torch::Tensor();
                                     }
