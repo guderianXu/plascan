@@ -37,9 +37,9 @@ private:
     std::shared_ptr<std::atomic_bool> createActiveMvsCancelFlag();
     void clearActiveMvsCancelFlag(const std::shared_ptr<std::atomic_bool> &cancelFlag);
 
-    ProjectManager *m_owner = nullptr;
-    ProjectData *m_projectData = nullptr;
-    QWidget *m_parentWidget = nullptr;
-    QPointer<QObject> m_activeMvsGenerator;
-    std::shared_ptr<std::atomic_bool> m_activeMvsCancelFlag;
+    ProjectManager *_owner = nullptr;
+    ProjectData *_projectData = nullptr;
+    QWidget *_parentWidget = nullptr;
+    QPointer<QObject> _activeMvsGenerator;
+    std::shared_ptr<std::atomic_bool> _activeMvsCancelFlag;
 };

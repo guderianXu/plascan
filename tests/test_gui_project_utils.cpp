@@ -979,7 +979,7 @@ TEST(DenseDepthCameraLookupTest, MvsCameraLookupUsesNormalizedImageKeys)
 
     EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(camMap, imgPath")))
         << "Dense estimation should query cameras with the same normalized key used by ProjectManager.";
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(m_camMap, m_records[index].refImage")))
+    EXPECT_TRUE(source.contains(QStringLiteral("cameraForImagePath(_cameraMap, _records[index].refImage")))
         << "Stored-depth fusion cache should normalize ref_image before camera lookup.";
     EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(imgPath)")));
     EXPECT_FALSE(source.contains(QStringLiteral("camMap.value(stored.refImage)")));
@@ -2948,6 +2948,64 @@ TEST(CodeStyleTest, ProjectSparseReconstructionManagerUsesLowerCamelPrivateMembe
         QStringLiteral("m_owner"),
         QStringLiteral("m_projectData"),
         QStringLiteral("m_parentWidget"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
+TEST(CodeStyleTest, ProjectDenseReconstructionManagerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h"));
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedHeaderMembers = {
+        QStringLiteral("ProjectManager *_owner = nullptr;"),
+        QStringLiteral("ProjectData *_projectData = nullptr;"),
+        QStringLiteral("QWidget *_parentWidget = nullptr;"),
+        QStringLiteral("QPointer<QObject> _activeMvsGenerator;"),
+        QStringLiteral("std::shared_ptr<std::atomic_bool> _activeMvsCancelFlag;"),
+    };
+    for (const QString &expectedMember : expectedHeaderMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList expectedSourceMembers = {
+        QStringLiteral("const std::vector<StoredDepthFrameRecord> &_records;"),
+        QStringLiteral("const QMap<QString, xjw::Camera> &_cameraMap;"),
+        QStringLiteral("float _confidenceThreshold = 0.0f;"),
+        QStringLiteral("int _viewCount = 0;"),
+        QStringLiteral("int _fusionMaxImageDim = 0;"),
+        QStringLiteral("int _capacity = 1;"),
+        QStringLiteral("std::list<int> _lru;"),
+        QStringLiteral("std::unordered_map<int, CacheEntry> _cache;"),
+    };
+    for (const QString &expectedMember : expectedSourceMembers)
+    {
+        EXPECT_TRUE(source.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_owner"),
+        QStringLiteral("m_projectData"),
+        QStringLiteral("m_parentWidget"),
+        QStringLiteral("m_activeMvsGenerator"),
+        QStringLiteral("m_activeMvsCancelFlag"),
+        QStringLiteral("m_records"),
+        QStringLiteral("m_camMap"),
+        QStringLiteral("m_confidenceThreshold"),
+        QStringLiteral("m_viewCount"),
+        QStringLiteral("m_fusionMaxImageDim"),
+        QStringLiteral("m_capacity"),
+        QStringLiteral("m_lru"),
+        QStringLiteral("m_cache"),
     };
     for (const QString &oldName : oldMemberNames)
     {
@@ -9226,7 +9284,7 @@ TEST(ProjectManagerQualityReportTest, PipelineStageBoundariesRefreshReconstructi
     EXPECT_TRUE(managerSource.contains(QStringLiteral("writeReconstructionQualityProjectReport")));
     EXPECT_TRUE(managerSource.contains(QStringLiteral("ProjectManager::refreshReconstructionQualityReport")));
     EXPECT_TRUE(managerSource.contains(QStringLiteral("refreshReconstructionQualityReport();")));
-    EXPECT_TRUE(denseSource.contains(QStringLiteral("m_owner->refreshReconstructionQualityReport()")));
+    EXPECT_TRUE(denseSource.contains(QStringLiteral("_owner->refreshReconstructionQualityReport()")));
     EXPECT_TRUE(terrainSource.contains(QStringLiteral("_owner->refreshReconstructionQualityReport()")));
 }
 

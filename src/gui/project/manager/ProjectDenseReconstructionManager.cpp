@@ -207,55 +207,55 @@ public:
                        int viewCount,
                        int fusionMaxImageDim,
                        int capacity)
-        : m_records(records)
-        , m_camMap(camMap)
-        , m_confidenceThreshold(confidenceThreshold)
-        , m_viewCount(viewCount)
-        , m_fusionMaxImageDim(std::max(0, fusionMaxImageDim))
-        , m_capacity(std::max(1, capacity))
+        : _records(records)
+        , _cameraMap(camMap)
+        , _confidenceThreshold(confidenceThreshold)
+        , _viewCount(viewCount)
+        , _fusionMaxImageDim(std::max(0, fusionMaxImageDim))
+        , _capacity(std::max(1, capacity))
     {
     }
 
     FusionFrameBuildResult get(int index)
     {
-        if (index < 0 || index >= static_cast<int>(m_records.size()))
+        if (index < 0 || index >= static_cast<int>(_records.size()))
         {
             FusionFrameBuildResult result;
             result.status = {false, QStringLiteral("深度图索引越界：%1").arg(index)};
             return result;
         }
 
-        auto it = m_cache.find(index);
-        if (it != m_cache.end())
+        auto it = _cache.find(index);
+        if (it != _cache.end())
         {
             touch(it);
             return it->second.result;
         }
 
         xjw::Camera camera;
-        if (!cameraForImagePath(m_camMap, m_records[index].refImage, &camera))
+        if (!cameraForImagePath(_cameraMap, _records[index].refImage, &camera))
         {
             FusionFrameBuildResult result;
             result.status = {false, QStringLiteral("深度图对应影像缺少相机参数：%1")
-                                      .arg(QDir::toNativeSeparators(m_records[index].refImage))};
+                                      .arg(QDir::toNativeSeparators(_records[index].refImage))};
             return result;
         }
 
-        FusionFrameBuildResult loaded = buildStoredFusionFrame(m_records[index],
+        FusionFrameBuildResult loaded = buildStoredFusionFrame(_records[index],
                                                                camera,
-                                                               m_confidenceThreshold,
-                                                               m_viewCount,
-                                                               m_fusionMaxImageDim);
+                                                               _confidenceThreshold,
+                                                               _viewCount,
+                                                               _fusionMaxImageDim);
         if (!loaded.status.ok)
         {
             return loaded;
         }
 
-        m_lru.push_front(index);
+        _lru.push_front(index);
         CacheEntry entry;
         entry.result = loaded;
-        entry.lruIt = m_lru.begin();
-        m_cache.emplace(index, std::move(entry));
+        entry.lruIt = _lru.begin();
+        _cache.emplace(index, std::move(entry));
         evictIfNeeded();
         return loaded;
     }
@@ -269,29 +269,29 @@ private:
 
     void touch(std::unordered_map<int, CacheEntry>::iterator it)
     {
-        m_lru.erase(it->second.lruIt);
-        m_lru.push_front(it->first);
-        it->second.lruIt = m_lru.begin();
+        _lru.erase(it->second.lruIt);
+        _lru.push_front(it->first);
+        it->second.lruIt = _lru.begin();
     }
 
     void evictIfNeeded()
     {
-        while (static_cast<int>(m_cache.size()) > m_capacity)
+        while (static_cast<int>(_cache.size()) > _capacity)
         {
-            const int victim = m_lru.back();
-            m_lru.pop_back();
-            m_cache.erase(victim);
+            const int victim = _lru.back();
+            _lru.pop_back();
+            _cache.erase(victim);
         }
     }
 
-    const std::vector<StoredDepthFrameRecord> &m_records;
-    const QMap<QString, xjw::Camera> &m_camMap;
-    float m_confidenceThreshold = 0.0f;
-    int m_viewCount = 0;
-    int m_fusionMaxImageDim = 0;
-    int m_capacity = 1;
-    std::list<int> m_lru;
-    std::unordered_map<int, CacheEntry> m_cache;
+    const std::vector<StoredDepthFrameRecord> &_records;
+    const QMap<QString, xjw::Camera> &_cameraMap;
+    float _confidenceThreshold = 0.0f;
+    int _viewCount = 0;
+    int _fusionMaxImageDim = 0;
+    int _capacity = 1;
+    std::list<int> _lru;
+    std::unordered_map<int, CacheEntry> _cache;
 };
 
 enum class ExistingDepthAction
@@ -907,36 +907,36 @@ ProjectDenseReconstructionManager::ProjectDenseReconstructionManager(ProjectMana
                                                                      QWidget *parentWidget,
                                                                      QObject *parent)
     : QObject(parent)
-    , m_owner(owner)
-    , m_projectData(projectData)
-    , m_parentWidget(parentWidget)
+    , _owner(owner)
+    , _projectData(projectData)
+    , _parentWidget(parentWidget)
 {
 }
 
 bool ProjectDenseReconstructionManager::ensureProjectOpen(const QString &message,
                                                           const QString &title) const
 {
-    if (m_projectData && m_projectData->hasProject())
+    if (_projectData && _projectData->hasProject())
     {
         return true;
     }
-    QMessageBox::warning(m_parentWidget, title, message);
+    QMessageBox::warning(_parentWidget, title, message);
     return false;
 }
 
 std::shared_ptr<std::atomic_bool> ProjectDenseReconstructionManager::createActiveMvsCancelFlag()
 {
     auto cancelFlag = std::make_shared<std::atomic_bool>(false);
-    m_activeMvsCancelFlag = cancelFlag;
+    _activeMvsCancelFlag = cancelFlag;
     return cancelFlag;
 }
 
 void ProjectDenseReconstructionManager::clearActiveMvsCancelFlag(
     const std::shared_ptr<std::atomic_bool> &cancelFlag)
 {
-    if (m_activeMvsCancelFlag == cancelFlag)
+    if (_activeMvsCancelFlag == cancelFlag)
     {
-        m_activeMvsCancelFlag.reset();
+        _activeMvsCancelFlag.reset();
     }
 }
 
@@ -950,11 +950,11 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     }
 
     const xjw::gui::project::DenseGenerationSettings request = denseGenerationSettingsFromJson(settings);
-    const QJsonObject meta = m_projectData->metadata();
+    const QJsonObject meta = _projectData->metadata();
     const QJsonArray atArr = meta.value(QStringLiteral("aerial_triangulation_results")).toArray();
     if (atArr.isEmpty())
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("未找到空三结果，请先执行空中三角测量。"));
         return;
@@ -965,7 +965,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         : findLatestProductionAtResultIndex(meta);
     if (realIdx < 0)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三。"));
         return;
@@ -974,7 +974,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     if (!xjw::gui::project::isProductionSparseResult(atResult))
     {
         const QString reason = sparseResultBlockingReason(atResult);
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              reason.isEmpty()
                                  ? QStringLiteral("所选稀疏点云不是正式 SfM/BA 结果。")
@@ -993,18 +993,18 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     if (selectedImages.size() < 2)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("空三结果中影像数量不足（至少需要2张）。"));
         return;
     }
 
-    const QString mvsOutDir = resolveProjectOutputDir(m_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
+    const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     const QSet<int> existingIndices = collectExistingDepthFrameIndices(mvsOutDir, selectedImages.size());
     QSet<int> skipIndices;
     if (!existingIndices.isEmpty())
     {
-        const ExistingDepthAction action = askExistingDepthAction(m_parentWidget,
+        const ExistingDepthAction action = askExistingDepthAction(_parentWidget,
                                                                   existingIndices.size(),
                                                                   selectedImages.size(),
                                                                   mvsOutDir);
@@ -1021,11 +1021,11 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         else if (action == ExistingDepthAction::ContinueMissing)
         {
             skipIndices = existingIndices;
-            upsertExistingDepthRecords(m_projectData, selectedImages, sparseXyz, mvsOutDir, skipIndices);
+            upsertExistingDepthRecords(_projectData, selectedImages, sparseXyz, mvsOutDir, skipIndices);
 
             if (skipIndices.size() >= selectedImages.size())
             {
-                QMessageBox::information(m_parentWidget,
+                QMessageBox::information(_parentWidget,
                                          QStringLiteral("深度图估计"),
                                          QStringLiteral("当前影像的深度图已全部存在，无需继续生成。"));
                 return;
@@ -1038,10 +1038,10 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     }
 
     bool allCams = false;
-    const QMap<QString, xjw::Camera> camMap = m_owner->getCamerasForImages(selectedImages, &allCams);
+    const QMap<QString, xjw::Camera> camMap = _owner->getCamerasForImages(selectedImages, &allCams);
     if (!allCams)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("部分影像缺少相机参数，无法执行深度图估计。"));
         return;
@@ -1055,7 +1055,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         view.imagePath = imgPath.toStdString();
         if (!cameraForImagePath(camMap, imgPath, &view.camera))
         {
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(_parentWidget,
                                  QStringLiteral("深度图估计"),
                                  QStringLiteral("影像缺少相机参数：%1").arg(QDir::toNativeSeparators(imgPath)));
             return;
@@ -1108,7 +1108,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         {
             return;
         }
-        upsertProjectRecordByPath(self->m_projectData,
+        upsertProjectRecordByPath(self->_projectData,
                                   QStringLiteral("depth_map_results"),
                                   QStringLiteral("depth_png"),
                                   depthResult);
@@ -1118,23 +1118,23 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         {
             return;
         }
-        if (success && self->m_owner)
+        if (success && self->_owner)
         {
-            self->m_owner->refreshReconstructionQualityReport();
+            self->_owner->refreshReconstructionQualityReport();
         }
         emit self->mvsProgressFinished(success);
-        QMessageBox::information(self->m_parentWidget,
+        QMessageBox::information(self->_parentWidget,
                                  QStringLiteral("深度图估计"),
                                  success ? QStringLiteral("深度图估计完成。")
                                          : QStringLiteral("深度图估计失败或被取消。"));
-        if (self->m_activeMvsGenerator)
+        if (self->_activeMvsGenerator)
         {
-            self->m_activeMvsGenerator->deleteLater();
-            self->m_activeMvsGenerator = nullptr;
+            self->_activeMvsGenerator->deleteLater();
+            self->_activeMvsGenerator = nullptr;
         }
     });
 
-    m_activeMvsGenerator = gen;
+    _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
     QPointer<DepthMapGenerator> genSelf(gen);
     (void)QtConcurrent::run([genSelf, sparseXyz, views, request]() {
@@ -1183,11 +1183,11 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
     const bool keepColor = settings.value(QStringLiteral("keepColor")).toBool(true);
     const bool keepNormals = settings.value(QStringLiteral("keepNormals")).toBool(true);
 
-    const auto storedFramesResult = collectLatestStoredDepthFrames(m_projectData->metadata());
+    const auto storedFramesResult = collectLatestStoredDepthFrames(_projectData->metadata());
     const std::vector<StoredDepthFrameRecord> &storedFrames = storedFramesResult.frames;
     if (storedFrames.size() < 2)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图融合"),
                              storedFrames.empty()
                                  ? storedFramesResult.status.errorMessage
@@ -1202,10 +1202,10 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
     }
 
     bool allCams = false;
-    const QMap<QString, xjw::Camera> camMap = m_owner->getCamerasForImages(imagePaths, &allCams);
+    const QMap<QString, xjw::Camera> camMap = _owner->getCamerasForImages(imagePaths, &allCams);
     if (!allCams)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图融合"),
                              QStringLiteral("部分深度图对应影像缺少相机参数，无法执行融合。"));
         return;
@@ -1213,7 +1213,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
 
     const QString outputDir = request.outputDir.trimmed().isEmpty()
         ? storedFramesResult.batchDir
-        : resolveProjectOutputDir(m_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
+        : resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     const QString outputPly = QDir(outputDir).filePath(QStringLiteral("dense_cloud.ply"));
     const auto cancelFlag = createActiveMvsCancelFlag();
 
@@ -1301,7 +1301,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                         }
                         self->clearActiveMvsCancelFlag(cancelFlag);
                         emit self->mvsProgressFinished(false);
-                        QMessageBox::warning(self->m_parentWidget, QStringLiteral("深度图融合"), loadError);
+                        QMessageBox::warning(self->_parentWidget, QStringLiteral("深度图融合"), loadError);
                     }, Qt::QueuedConnection);
                     return;
                 }
@@ -1410,7 +1410,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                     }
                     self->clearActiveMvsCancelFlag(cancelFlag);
                     emit self->mvsProgressFinished(false);
-                    QMessageBox::warning(self->m_parentWidget,
+                    QMessageBox::warning(self->_parentWidget,
                                          QStringLiteral("深度图融合"),
                                          QStringLiteral("深度图融合失败：%1").arg(err));
                 }, Qt::QueuedConnection);
@@ -1461,7 +1461,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                 }
                 self->clearActiveMvsCancelFlag(cancelFlag);
                 emit self->mvsProgressFinished(false);
-                QMessageBox::warning(self->m_parentWidget,
+                QMessageBox::warning(self->_parentWidget,
                                      QStringLiteral("深度图融合"),
                                      QStringLiteral("保存密集点云失败：%1").arg(saveError));
             }, Qt::QueuedConnection);
@@ -1485,14 +1485,14 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                 return;
             }
             self->clearActiveMvsCancelFlag(cancelFlag);
-            upsertProjectRecordByPath(self->m_projectData,
+            upsertProjectRecordByPath(self->_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
             emit self->mvsProgressFinished(true);
             if (!pipelineMode)
             {
-                QMessageBox::information(self->m_parentWidget,
+                QMessageBox::information(self->_parentWidget,
                                          QStringLiteral("深度图融合"),
                                          QStringLiteral("密集点云生成完成，共 %1 个点。").arg(pointCount));
             }
@@ -1514,11 +1514,11 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     }
 
     const xjw::gui::project::DenseGenerationSettings request = denseGenerationSettingsFromJson(settings);
-    const QJsonObject meta = m_projectData->metadata();
+    const QJsonObject meta = _projectData->metadata();
     const QJsonArray atArr = meta.value(QStringLiteral("aerial_triangulation_results")).toArray();
     if (atArr.isEmpty())
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("未找到空三结果，请先执行空中三角测量。"));
         return;
@@ -1529,7 +1529,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         : findLatestProductionAtResultIndex(meta);
     if (realIdx < 0)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三。"));
         return;
@@ -1538,7 +1538,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     if (!xjw::gui::project::isProductionSparseResult(atResult))
     {
         const QString reason = sparseResultBlockingReason(atResult);
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              reason.isEmpty()
                                  ? QStringLiteral("所选稀疏点云不是正式 SfM/BA 结果。")
@@ -1556,17 +1556,17 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     }
     if (selectedImages.size() < 2)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("空三结果中影像数量不足（至少需要2张）。"));
         return;
     }
 
     bool allCams = false;
-    const QMap<QString, xjw::Camera> camMap = m_owner->getCamerasForImages(selectedImages, &allCams);
+    const QMap<QString, xjw::Camera> camMap = _owner->getCamerasForImages(selectedImages, &allCams);
     if (!allCams)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("部分影像缺少相机参数，无法执行稠密重建。"));
         return;
@@ -1579,7 +1579,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         view.imagePath = imgPath.toStdString();
         if (!cameraForImagePath(camMap, imgPath, &view.camera))
         {
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(_parentWidget,
                                  QStringLiteral("稠密重建"),
                                  QStringLiteral("影像缺少相机参数：%1").arg(QDir::toNativeSeparators(imgPath)));
             return;
@@ -1590,7 +1590,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
     DepthGenConfig genCfg = buildDepthGenConfig(request, static_cast<int>(views.size()));
     genCfg.saveIntermediateDepthMaps = true;
-    const QString mvsOutDir = resolveProjectOutputDir(m_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
+    const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     genCfg.intermediateDir = mvsOutDir.toStdString();
     if (request.pipelineMode)
     {
@@ -1612,7 +1612,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         }
         else
         {
-            action = askExistingDepthAction(m_parentWidget,
+            action = askExistingDepthAction(_parentWidget,
                                             existingIndices.size(),
                                             selectedImages.size(),
                                             mvsOutDir);
@@ -1631,7 +1631,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         {
             continueMissingMode = true;
             skipIndices = existingIndices;
-            upsertExistingDepthRecords(m_projectData, selectedImages, sparseXyz, mvsOutDir, skipIndices);
+            upsertExistingDepthRecords(_projectData, selectedImages, sparseXyz, mvsOutDir, skipIndices);
 
             if (skipIndices.size() >= selectedImages.size())
             {
@@ -1686,7 +1686,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         {
             return;
         }
-        upsertProjectRecordByPath(self->m_projectData,
+        upsertProjectRecordByPath(self->_projectData,
                                   QStringLiteral("depth_map_results"),
                                   QStringLiteral("depth_png"),
                                   depthResult);
@@ -1706,13 +1706,13 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         QString saveErr;
         if (writePointCloudPly(plyPath, pointCloud, false, &saveErr))
         {
-            upsertProjectRecordByPath(self->m_projectData,
+            upsertProjectRecordByPath(self->_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), plyPath, static_cast<int>(cloud.size())));
-            if (self->m_owner)
+            if (self->_owner)
             {
-                self->m_owner->refreshReconstructionQualityReport();
+                self->_owner->refreshReconstructionQualityReport();
             }
         }
         else
@@ -1729,10 +1729,10 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         {
             return;
         }
-        if (self->m_activeMvsGenerator)
+        if (self->_activeMvsGenerator)
         {
-            self->m_activeMvsGenerator->deleteLater();
-            self->m_activeMvsGenerator = nullptr;
+            self->_activeMvsGenerator->deleteLater();
+            self->_activeMvsGenerator = nullptr;
         }
 
         const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
@@ -1747,7 +1747,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         {
             if (!pipelineMode)
             {
-                QMessageBox::information(self->m_parentWidget,
+                QMessageBox::information(self->_parentWidget,
                                          QStringLiteral("稠密重建"),
                                          QStringLiteral("缺失深度图补齐完成，正在开始融合。"));
             }
@@ -1763,14 +1763,14 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         }
         else if (!pipelineMode)
         {
-            QMessageBox::information(self->m_parentWidget,
+            QMessageBox::information(self->_parentWidget,
                                      QStringLiteral("稠密重建"),
                                      success ? QStringLiteral("稠密点云生成完成。")
                                              : QStringLiteral("稠密点云生成失败或被取消。"));
         }
     });
 
-    m_activeMvsGenerator = gen;
+    _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
     QPointer<DepthMapGenerator> genSelf(gen);
     (void)QtConcurrent::run([genSelf, sparseXyz, views, request]() {
@@ -1815,9 +1815,9 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
 
     QString inputPly;
     QString denseError;
-    if (!resolveLatestDenseCloudPath(m_projectData, &inputPly, &denseError))
+    if (!resolveLatestDenseCloudPath(_projectData, &inputPly, &denseError))
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("密集点云后处理"),
                              QStringLiteral("%1，请先执行深度图融合生成密集点云。").arg(denseError));
         return;
@@ -1872,7 +1872,7 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 }
                 self->clearActiveMvsCancelFlag(cancelFlag);
                 emit self->mvsProgressFinished(false);
-                QMessageBox::warning(self->m_parentWidget,
+                QMessageBox::warning(self->_parentWidget,
                                      QStringLiteral("密集点云后处理"),
                                      QStringLiteral("加载点云失败：%1").arg(loadErr));
             }, Qt::QueuedConnection);
@@ -2098,7 +2098,7 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 }
                 self->clearActiveMvsCancelFlag(cancelFlag);
                 emit self->mvsProgressFinished(false);
-                QMessageBox::warning(self->m_parentWidget,
+                QMessageBox::warning(self->_parentWidget,
                                      QStringLiteral("密集点云后处理"),
                                      QStringLiteral("保存点云失败：%1").arg(saveErr));
             }, Qt::QueuedConnection);
@@ -2122,18 +2122,18 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 return;
             }
             self->clearActiveMvsCancelFlag(cancelFlag);
-            upsertProjectRecordByPath(self->m_projectData,
+            upsertProjectRecordByPath(self->_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
-            if (self->m_owner)
+            if (self->_owner)
             {
-                self->m_owner->refreshReconstructionQualityReport();
+                self->_owner->refreshReconstructionQualityReport();
             }
             emit self->mvsProgressFinished(true);
             if (!pipelineMode)
             {
-                QMessageBox::information(self->m_parentWidget,
+                QMessageBox::information(self->_parentWidget,
                                          QStringLiteral("密集点云后处理"),
                                          QStringLiteral("后处理完成，共 %1 个点。").arg(pointCount));
             }
@@ -2148,15 +2148,15 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
 void ProjectDenseReconstructionManager::cancelMvs()
 {
     bool requestedCancel = false;
-    if (m_activeMvsCancelFlag)
+    if (_activeMvsCancelFlag)
     {
-        m_activeMvsCancelFlag->store(true, std::memory_order_relaxed);
+        _activeMvsCancelFlag->store(true, std::memory_order_relaxed);
         requestedCancel = true;
     }
 
-    if (m_activeMvsGenerator)
+    if (_activeMvsGenerator)
     {
-        auto *gen = qobject_cast<xjw::mvs::DepthMapGenerator *>(m_activeMvsGenerator.data());
+        auto *gen = qobject_cast<xjw::mvs::DepthMapGenerator *>(_activeMvsGenerator.data());
         if (gen)
         {
             gen->requestCancel();
