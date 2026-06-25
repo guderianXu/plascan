@@ -64,12 +64,12 @@ public:
 
     void setConfig(const StereoFusionConfig &c)
     {
-        m_config = c;
+        _config = c;
     }
 
     const StereoFusionConfig &config() const
     {
-        return m_config;
+        return _config;
     }
 
     /// 主接口：将多帧深度图融合为稠密点云
@@ -86,11 +86,11 @@ public:
     /// 辅助：获取每帧一致性过滤后的深度图（通过 fuse() 后可用）
     const std::vector<cv::Mat> &filteredDepths() const
     {
-        return m_filteredDepths;
+        return _filteredDepths;
     }
 
 private:
-    StereoFusionConfig m_config;
+    StereoFusionConfig _config;
 
     /// 每帧的投影/逆投影矩阵（预计算）
     struct FrameGeometry
@@ -149,7 +149,7 @@ private:
     /// 取中位数
     static float median(std::vector<float> &v);
 
-    std::vector<cv::Mat> m_filteredDepths;
+    std::vector<cv::Mat> _filteredDepths;
 };
 
 } // namespace mvs

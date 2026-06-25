@@ -560,7 +560,7 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("fuseFirstFrameObservationsFast", header)
         self.assertIn("fuseFirstFrameObservationsFast", fusion)
         self.assertIn("使用已过滤深度图快速反投影", fusion)
-        self.assertIn("m_config.fuseOnlyFirstFrame", fusion)
+        self.assertIn("_config.fuseOnlyFirstFrame", fusion)
         self.assertIn("resolveFusionWorkerCount", fusion)
 
     def test_gui_streaming_depth_fusion_downsamples_stored_frames(self):
@@ -572,9 +572,9 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("scalePositiveDepthCameraModel", helper)
         self.assertIn("downsampleFusionFrameForMaxDimension", helper)
         self.assertIn("fusionMaxImageDim", manager)
-        self.assertIn("m_fusionMaxImageDim", manager)
+        self.assertIn("_fusionMaxImageDim", manager)
         self.assertIn("request.fusionMaxImageDim", manager)
-        self.assertIn("m_fusionMaxImageDim)", manager)
+        self.assertIn("_fusionMaxImageDim)", manager)
 
     def test_cuda_scheduler_defaults_can_pipeline_two_frame_workers(self):
         config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
@@ -661,7 +661,7 @@ class MvsSchedulerConfigTest(unittest.TestCase):
 
         self.assertIn("depthFrameArtifactsExist(pngPath)", manager)
         self.assertIn("cameraForImagePath(camMap, imgPath", manager)
-        self.assertIn("cameraForImagePath(m_camMap, m_records[index].refImage", manager)
+        self.assertIn("cameraForImagePath(_cameraMap, _records[index].refImage", manager)
         self.assertNotIn("camMap.value(imgPath)", manager)
         self.assertNotIn("camMap.value(stored.refImage)", manager)
 
@@ -691,7 +691,7 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("QImage heatmapImage() const", header)
         self.assertIn("QImage::Format_RGBA8888", source)
         self.assertIn("alphaRow[col] = validRow[col] ? 255 : 0", source)
-        self.assertIn("if (m_showInvalid)", source)
+        self.assertIn("if (_showInvalid)", source)
 
     def test_pipeline_dense_stage_reuses_depth_fusion_entrypoint(self):
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
@@ -790,13 +790,13 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         header = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.h")
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
 
-        self.assertIn("std::shared_ptr<std::atomic_bool> m_activeMvsCancelFlag", header)
+        self.assertIn("std::shared_ptr<std::atomic_bool> _activeMvsCancelFlag", header)
         self.assertIn("createActiveMvsCancelFlag", header)
         self.assertIn("clearActiveMvsCancelFlag", header)
 
         cancel_start = manager.index("void ProjectDenseReconstructionManager::cancelMvs()")
         cancel_body = manager[cancel_start:]
-        self.assertIn("m_activeMvsCancelFlag->store(true", cancel_body)
+        self.assertIn("_activeMvsCancelFlag->store(true", cancel_body)
         self.assertIn("gen->requestCancel()", cancel_body)
 
         fuse_start = manager.index("void ProjectDenseReconstructionManager::startFuseDepthMapsAsync")

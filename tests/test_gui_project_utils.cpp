@@ -3175,6 +3175,21 @@ TEST(CodeStyleTest, SparseCloudValidatorUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_opts")));
 }
 
+TEST(CodeStyleTest, DepthMapFusionUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapFusion.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapFusion.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("StereoFusionConfig _config;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("std::vector<cv::Mat> _filteredDepths;")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_config")));
+    EXPECT_FALSE(header.contains(QStringLiteral("m_filteredDepths")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_config")));
+    EXPECT_FALSE(source.contains(QStringLiteral("m_filteredDepths")));
+}
+
 TEST(CodeStyleTest, LaserConstraintMapUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/lidar/LaserConstraintMap.h"));

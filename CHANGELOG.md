@@ -104,6 +104,7 @@
 - `GroundBackProjector::DemSurface` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 DEM 点云加载、KD 树高程查询和影像覆盖反投影行为不变。
 - `LaserConstraintMap` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 LiDAR PLY 加载、体素降采样、KD 树索引和最近平面查询行为不变。
 - `SparseCloudValidator` 私有成员从 `m_opts` 迁移到 `_options`，保持稀疏点云 PLY/XYZ 质量检查、有限坐标统计和最小点数判定行为不变。
+- `DepthMapFusion` 私有成员从 `m_config/m_filteredDepths` 迁移到 `_config/_filteredDepths`，保持多视深度融合、流式首帧融合和一致性过滤深度图输出行为不变。
 - `MvsWorkspaceManifest` 私有成员从 `m_configHash/m_frames` 迁移到 `_configHash/_frames`，保持深度图 manifest 读写、完成帧自然排序和可复用缓存判定行为不变。
 - `TerrainProductManifest` 私有成员从 `m_records` 迁移到 `_records`，保持 DEM/DOM 产品 manifest 读写、质量栅格路径保留和自然排序行为不变。
 - `MultiViewTrackBuilder` 及其内部并查集缓存私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持多视 track 合并、冲突拆分和置信度统计行为不变。
@@ -179,6 +180,10 @@
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `GroundBackProjector.cpp`、`OverlapAnalyzer.cpp` 相关依赖并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "LaserConstraintMap|CodeStyleTest.LaserConstraintMapUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，5/5，验证 LiDAR PLY/高度面/体素降采样和命名迁移断言保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.SparseCloudValidatorUsesLowerCamelPrivateMemberNames|MvsPipeline" --output-on-failure` 通过，21/21，验证 `SparseCloudValidator` 命名迁移后 MVS pipeline 基础链路保持可用。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.DepthMapFusionUsesLowerCamelPrivateMemberNames" --output-on-failure` 在生产代码迁移前按预期失败，确认新增风格回归测试能抓到 `m_config/m_filteredDepths` 旧命名。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_mvs_pipeline -Jobs 8`、`-Target test_gui_project_utils`、`-Target plascan_gui` 均通过，验证 `DepthMapFusion` 成员迁移后 MVS 测试目标、GUI 工具测试和 GUI 主程序可重新构建。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.DepthMapFusionUsesLowerCamelPrivateMemberNames|MvsPipelineTest\.DepthMapFusion" --output-on-failure` 通过，6/6，验证多视深度融合、取消、双视快速路径、过滤深度图和 source planning 行为不变。
+- `python -m pytest tests/test_mvs_scheduler_config.py -q` 通过，72/72，验证 MVS/GUI 结构检查已同步到 `_lowerCamelCase` 成员命名。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新链接依赖 `mvs` 的 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsWorkspaceManifest|CodeStyleTest.MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，8/8，验证深度图 manifest 读写、排序、缓存复用和命名迁移断言保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainProductManifest|CodeStyleTest.TerrainProductManifestUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，4/4，验证 DEM/DOM 产品 manifest 读写、排序和命名迁移断言保持可用。

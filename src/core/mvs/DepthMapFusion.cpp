@@ -158,7 +158,7 @@ private:
 
 // =============================================================================
 DepthMapFusion::DepthMapFusion(const StereoFusionConfig &config)
-    : m_config(config)
+    : _config(config)
 {
 }
 
@@ -267,7 +267,7 @@ void DepthMapFusion::computeOverlappingImages(
     {
         if (!frames[fi].sourceImageIndices.empty())
         {
-            overlapping[fi].reserve(std::min(m_config.checkNumImages,
+            overlapping[fi].reserve(std::min(_config.checkNumImages,
                                              static_cast<int>(frames[fi].sourceImageIndices.size())));
             for (int sourceIdx : frames[fi].sourceImageIndices)
             {
@@ -280,7 +280,7 @@ void DepthMapFusion::computeOverlappingImages(
                     continue;
                 }
                 overlapping[fi].push_back(sourceIdx);
-                if (static_cast<int>(overlapping[fi].size()) >= m_config.checkNumImages)
+                if (static_cast<int>(overlapping[fi].size()) >= _config.checkNumImages)
                 {
                     break;
                 }
@@ -322,7 +322,7 @@ void DepthMapFusion::computeOverlappingImages(
                       return a.dist < b.dist;
                   });
 
-        int numOverlap = std::min(m_config.checkNumImages, (int)candidates.size());
+        int numOverlap = std::min(_config.checkNumImages, (int)candidates.size());
         overlapping[fi].resize(numOverlap);
         for (int i = 0; i < numOverlap; ++i)
         {
@@ -343,9 +343,9 @@ bool DepthMapFusion::fusePixel(
     std::vector<std::vector<char>> &fusedMask,
     FusedPoint &outPoint)
 {
-    const float maxReprojSq = m_config.maxReprojError * m_config.maxReprojError;
-    const float maxDepthErr = m_config.maxDepthError;
-    const float cosMaxNormErr = std::cos(m_config.maxNormalError * (float)M_PI / 180.f);
+    const float maxReprojSq = _config.maxReprojError * _config.maxReprojError;
+    const float maxDepthErr = _config.maxDepthError;
+    const float cosMaxNormErr = std::cos(_config.maxNormalError * (float)M_PI / 180.f);
 
     // BFS 数据
     struct QueueItem
@@ -374,7 +374,7 @@ bool DepthMapFusion::fusePixel(
     float refX = 0.f, refY = 0.f, refZ = 0.f;
     bool hasRef = false;
 
-    while (!bfsQueue.empty() && (int)xs.size() < m_config.maxNumPixels)
+    while (!bfsQueue.empty() && (int)xs.size() < _config.maxNumPixels)
     {
         QueueItem item = bfsQueue.front();
         bfsQueue.pop();
@@ -472,11 +472,11 @@ bool DepthMapFusion::fusePixel(
         g.cameraModel.unproject(static_cast<float>(c), static_cast<float>(r), d, Xw, Yw, Zw);
 
         // 包围盒检查
-        if (m_config.useBoundingBox)
+        if (_config.useBoundingBox)
         {
-            if (Xw < m_config.bboxMin[0] || Xw > m_config.bboxMax[0] ||
-                Yw < m_config.bboxMin[1] || Yw > m_config.bboxMax[1] ||
-                Zw < m_config.bboxMin[2] || Zw > m_config.bboxMax[2])
+            if (Xw < _config.bboxMin[0] || Xw > _config.bboxMax[0] ||
+                Yw < _config.bboxMin[1] || Yw > _config.bboxMax[1] ||
+                Zw < _config.bboxMin[2] || Zw > _config.bboxMax[2])
             {
                 continue;
             }
@@ -554,7 +554,7 @@ bool DepthMapFusion::fusePixel(
         }
 
         // BFS 扩展到重叠视图
-        if ((int)xs.size() < m_config.maxNumPixels && td < 100)
+        if ((int)xs.size() < _config.maxNumPixels && td < 100)
         {
             for (int overlapIdx : overlapping[fi])
             {
@@ -581,7 +581,7 @@ bool DepthMapFusion::fusePixel(
     }
 
     // 检查最少观测数
-    if ((int)xs.size() < m_config.minNumPixels)
+    if ((int)xs.size() < _config.minNumPixels)
     {
         for (const AcceptedPixel &pixel : acceptedPixels)
         {
@@ -627,9 +627,9 @@ bool DepthMapFusion::fusePixel(
     {
         const FrameGeometry &g = geom[pixel.frameIdx];
         fusedMask[pixel.frameIdx][pixel.row * g.W + pixel.col] = 1;
-        if (pixel.frameIdx >= 0 && pixel.frameIdx < static_cast<int>(m_filteredDepths.size()))
+        if (pixel.frameIdx >= 0 && pixel.frameIdx < static_cast<int>(_filteredDepths.size()))
         {
-            m_filteredDepths[pixel.frameIdx].at<float>(pixel.row, pixel.col) =
+            _filteredDepths[pixel.frameIdx].at<float>(pixel.row, pixel.col) =
                 frames[pixel.frameIdx].depthMap.at<float>(pixel.row, pixel.col);
         }
     }
@@ -646,14 +646,14 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
 {
     constexpr int kFrameCount = 2;
     const int maxRows = std::max(geom[0].H, geom[1].H);
-    const int workerCount = resolveFusionWorkerCount(m_config.workerCount, maxRows);
-    const float maxReprojSq = m_config.maxReprojError * m_config.maxReprojError;
-    const float cosMaxNormErr = std::cos(m_config.maxNormalError * static_cast<float>(M_PI) / 180.f);
+    const int workerCount = resolveFusionWorkerCount(_config.workerCount, maxRows);
+    const float maxReprojSq = _config.maxReprojError * _config.maxReprojError;
+    const float cosMaxNormErr = std::cos(_config.maxNormalError * static_cast<float>(M_PI) / 180.f);
 
     fprintf(stderr,
             "[StereoFusion] 快速并行融合: frames=2 workers=%d minNumPixels=%d\n",
             workerCount,
-            m_config.minNumPixels);
+            _config.minNumPixels);
 
     std::size_t reserveCount = 0;
     for (int fi = 0; fi < kFrameCount; ++fi)
@@ -689,13 +689,13 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
     };
 
     auto inBoundingBox = [&](float x, float y, float z) {
-        if (!m_config.useBoundingBox)
+        if (!_config.useBoundingBox)
         {
             return true;
         }
-        return x >= m_config.bboxMin[0] && x <= m_config.bboxMax[0] &&
-               y >= m_config.bboxMin[1] && y <= m_config.bboxMax[1] &&
-               z >= m_config.bboxMin[2] && z <= m_config.bboxMax[2];
+        return x >= _config.bboxMin[0] && x <= _config.bboxMax[0] &&
+               y >= _config.bboxMin[1] && y <= _config.bboxMax[1] &&
+               z >= _config.bboxMin[2] && z <= _config.bboxMax[2];
     };
 
     auto readColor = [&](int frameIdx, int row, int col, uint8_t &r, uint8_t &g, uint8_t &b) {
@@ -738,7 +738,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
 
     for (int fi = 0; fi < kFrameCount; ++fi)
     {
-        if (isFusionCancelled(m_config))
+        if (isFusionCancelled(_config))
         {
             return false;
         }
@@ -766,7 +766,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
 
                 for (;;)
                 {
-                    if (isFusionCancelled(m_config))
+                    if (isFusionCancelled(_config))
                     {
                         break;
                     }
@@ -835,7 +835,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                                                   zExpected > 0.f &&
                                                   du * du + dv * dv <= maxReprojSq &&
                                                   std::fabs(otherDepth - zExpected) / zExpected <=
-                                                      m_config.maxDepthError;
+                                                      _config.maxDepthError;
                                 if (consistent && hasNormal0 && !frames[other].normalMap.empty())
                                 {
                                     float tx = 0.f, ty = 0.f, tz = 0.f;
@@ -903,7 +903,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                         }
 
                         localPoints.push_back(fp);
-                        m_filteredDepths[fi].at<float>(row, col) = depth;
+                        _filteredDepths[fi].at<float>(row, col) = depth;
                     }
                 }
             });
@@ -913,7 +913,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
         {
             thread.join();
         }
-        if (isFusionCancelled(m_config))
+        if (isFusionCancelled(_config))
         {
             return false;
         }
@@ -926,7 +926,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
         }
 
         const int frameValid = cv::countNonZero(frames[fi].depthMap > 0);
-        const int frameFused = cv::countNonZero(m_filteredDepths[fi] > 0);
+        const int frameFused = cv::countNonZero(_filteredDepths[fi] > 0);
         fprintf(stderr,
                 "[StereoFusion] 快速并行帧 %d: 有效深度=%d 融合点=%d (%.1f%%)\n",
                 fi,
@@ -964,15 +964,15 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
         return true;
     }
 
-    const int workerCount = resolveFusionWorkerCount(m_config.workerCount, H);
+    const int workerCount = resolveFusionWorkerCount(_config.workerCount, H);
     const cv::Mat colorImage = colorProvider ? colorProvider(fi) : cv::Mat();
     const bool hasColor = !colorImage.empty();
     const bool hasNormals = !frames[fi].normalMap.empty();
     std::atomic<int> nextRow{0};
-    const int requiredObservations = std::max(1, m_config.minNumPixels);
+    const int requiredObservations = std::max(1, _config.minNumPixels);
     const bool requireNeighborAgreement = requiredObservations > 1 && frames.size() > 1;
-    const float maxReprojSq = m_config.maxReprojError * m_config.maxReprojError;
-    const float cosMaxNormErr = std::cos(m_config.maxNormalError * static_cast<float>(M_PI) / 180.0f);
+    const float maxReprojSq = _config.maxReprojError * _config.maxReprojError;
+    const float cosMaxNormErr = std::cos(_config.maxNormalError * static_cast<float>(M_PI) / 180.0f);
 
     std::vector<int> neighborFrames;
     neighborFrames.reserve(frames.size() > 0 ? frames.size() - 1 : 0);
@@ -997,17 +997,17 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
             neighborFrames.push_back(localIndex);
         }
     }
-    if (requireNeighborAgreement && m_config.checkNumImages > 0 &&
-        static_cast<int>(neighborFrames.size()) > m_config.checkNumImages)
+    if (requireNeighborAgreement && _config.checkNumImages > 0 &&
+        static_cast<int>(neighborFrames.size()) > _config.checkNumImages)
     {
-        neighborFrames.resize(static_cast<std::size_t>(m_config.checkNumImages));
+        neighborFrames.resize(static_cast<std::size_t>(_config.checkNumImages));
     }
 
     const int validCount = cv::countNonZero(frames[fi].depthMap > 0);
     fusedPoints.clear();
     fusedPoints.reserve(static_cast<std::size_t>(std::max(0, validCount)));
-    m_filteredDepths.resize(frames.size());
-    m_filteredDepths[fi] = cv::Mat::zeros(H, W, CV_32F);
+    _filteredDepths.resize(frames.size());
+    _filteredDepths[fi] = cv::Mat::zeros(H, W, CV_32F);
 
     fprintf(stderr,
             "[StereoFusion] 使用已过滤深度图快速反投影: frame=0 size=%dx%d valid=%d workers=%d minNumPixels=%d neighbors=%d\n",
@@ -1063,7 +1063,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
 
             for (;;)
             {
-                if (isFusionCancelled(m_config))
+                if (isFusionCancelled(_config))
                 {
                     break;
                 }
@@ -1075,7 +1075,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                 }
 
                 const float *depthRow = frames[fi].depthMap.ptr<float>(row);
-                float *filteredRow = m_filteredDepths[fi].ptr<float>(row);
+                float *filteredRow = _filteredDepths[fi].ptr<float>(row);
                 for (int col = 0; col < W; ++col)
                 {
                     const float depth = depthRow[col];
@@ -1093,10 +1093,10 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                         point.y,
                         point.z);
 
-                    if (m_config.useBoundingBox &&
-                        (point.x < m_config.bboxMin[0] || point.x > m_config.bboxMax[0] ||
-                         point.y < m_config.bboxMin[1] || point.y > m_config.bboxMax[1] ||
-                         point.z < m_config.bboxMin[2] || point.z > m_config.bboxMax[2]))
+                    if (_config.useBoundingBox &&
+                        (point.x < _config.bboxMin[0] || point.x > _config.bboxMax[0] ||
+                         point.y < _config.bboxMin[1] || point.y > _config.bboxMax[1] ||
+                         point.z < _config.bboxMin[2] || point.z > _config.bboxMax[2]))
                     {
                         continue;
                     }
@@ -1185,7 +1185,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                                 otherGeom.cameraModel.R_cw[8] * point.z +
                                 otherGeom.cameraModel.T[2];
                             if (otherDepth <= 0.0f || expectedDepth <= 0.0f ||
-                                std::fabs(otherDepth - expectedDepth) / expectedDepth > m_config.maxDepthError)
+                                std::fabs(otherDepth - expectedDepth) / expectedDepth > _config.maxDepthError)
                             {
                                 continue;
                             }
@@ -1215,10 +1215,10 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                                 otherX,
                                 otherY,
                                 otherZ);
-                            if (m_config.useBoundingBox &&
-                                (otherX < m_config.bboxMin[0] || otherX > m_config.bboxMax[0] ||
-                                 otherY < m_config.bboxMin[1] || otherY > m_config.bboxMax[1] ||
-                                 otherZ < m_config.bboxMin[2] || otherZ > m_config.bboxMax[2]))
+                            if (_config.useBoundingBox &&
+                                (otherX < _config.bboxMin[0] || otherX > _config.bboxMax[0] ||
+                                 otherY < _config.bboxMin[1] || otherY > _config.bboxMax[1] ||
+                                 otherZ < _config.bboxMin[2] || otherZ > _config.bboxMax[2]))
                             {
                                 continue;
                             }
@@ -1278,7 +1278,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
         thread.join();
     }
 
-    if (isFusionCancelled(m_config))
+    if (isFusionCancelled(_config))
     {
         return false;
     }
@@ -1310,7 +1310,7 @@ bool DepthMapFusion::fuse(
     std::string                         *errorMsg)
 {
     fusedPoints.clear();
-    m_filteredDepths.clear();
+    _filteredDepths.clear();
 
     if (frames.empty())
     {
@@ -1321,7 +1321,7 @@ bool DepthMapFusion::fuse(
         return false;
     }
 
-    if (isFusionCancelled(m_config))
+    if (isFusionCancelled(_config))
     {
         if (errorMsg)
         {
@@ -1335,7 +1335,7 @@ bool DepthMapFusion::fuse(
     // 检查深度图
     for (int fi = 0; fi < NF; ++fi)
     {
-        if (isFusionCancelled(m_config))
+        if (isFusionCancelled(_config))
         {
             if (errorMsg)
             {
@@ -1356,14 +1356,14 @@ bool DepthMapFusion::fuse(
     fprintf(stderr, "[StereoFusion] 开始融合 %d 帧\n", NF);
     fprintf(stderr, "[StereoFusion] config: minNumPixels=%d maxReprojError=%.1f "
             "maxDepthError=%.3f maxNormalError=%.1f workerCount=%d\n",
-            m_config.minNumPixels, m_config.maxReprojError,
-            m_config.maxDepthError, m_config.maxNormalError,
-            resolveFusionWorkerCount(m_config.workerCount, frames.front().depthMap.rows));
+            _config.minNumPixels, _config.maxReprojError,
+            _config.maxDepthError, _config.maxNormalError,
+            resolveFusionWorkerCount(_config.workerCount, frames.front().depthMap.rows));
 
     // 1. 预计算投影几何
     std::vector<FrameGeometry> geom;
     prepareGeometry(frames, geom);
-    if (isFusionCancelled(m_config))
+    if (isFusionCancelled(_config))
     {
         if (errorMsg)
         {
@@ -1372,9 +1372,9 @@ bool DepthMapFusion::fuse(
         return false;
     }
 
-    if (m_config.fuseOnlyFirstFrame)
+    if (_config.fuseOnlyFirstFrame)
     {
-        ColorImageCache colorCache(frames, m_config.useColor, m_config.colorCacheCapacity);
+        ColorImageCache colorCache(frames, _config.useColor, _config.colorCacheCapacity);
         auto colorProvider = [&colorCache](int frameIdx) {
             return colorCache.get(frameIdx);
         };
@@ -1383,7 +1383,7 @@ bool DepthMapFusion::fuse(
                                                            colorProvider,
                                                            fusedPoints,
                                                            progressCb);
-        if (!fastOk && isFusionCancelled(m_config) && errorMsg)
+        if (!fastOk && isFusionCancelled(_config) && errorMsg)
         {
             *errorMsg = "用户取消深度图融合";
         }
@@ -1393,7 +1393,7 @@ bool DepthMapFusion::fuse(
     // 2. 计算重叠图像
     std::vector<std::vector<int>> overlapping;
     computeOverlappingImages(frames, geom, overlapping);
-    if (isFusionCancelled(m_config))
+    if (isFusionCancelled(_config))
     {
         if (errorMsg)
         {
@@ -1406,7 +1406,7 @@ bool DepthMapFusion::fuse(
     std::vector<std::vector<char>> fusedMask(NF);
     for (int fi = 0; fi < NF; ++fi)
     {
-        if (isFusionCancelled(m_config))
+        if (isFusionCancelled(_config))
         {
             if (errorMsg)
             {
@@ -1419,16 +1419,16 @@ bool DepthMapFusion::fuse(
     }
 
     // 4. 彩色图懒加载；只有融合点需要赋色时才读取原图，并通过 LRU 控制内存。
-    ColorImageCache colorCache(frames, m_config.useColor, m_config.colorCacheCapacity);
+    ColorImageCache colorCache(frames, _config.useColor, _config.colorCacheCapacity);
     auto colorProvider = [&colorCache](int frameIdx) {
         return colorCache.get(frameIdx);
     };
 
     // 5. 初始化每帧一致性过滤深度
-    m_filteredDepths.resize(NF);
+    _filteredDepths.resize(NF);
     for (int fi = 0; fi < NF; ++fi)
     {
-        if (isFusionCancelled(m_config))
+        if (isFusionCancelled(_config))
         {
             if (errorMsg)
             {
@@ -1436,17 +1436,17 @@ bool DepthMapFusion::fuse(
             }
             return false;
         }
-        m_filteredDepths[fi] = cv::Mat::zeros(geom[fi].H, geom[fi].W, CV_32F);
+        _filteredDepths[fi] = cv::Mat::zeros(geom[fi].H, geom[fi].W, CV_32F);
     }
 
-    if (!m_config.fuseOnlyFirstFrame && NF == 2 && m_config.minNumPixels <= 1)
+    if (!_config.fuseOnlyFirstFrame && NF == 2 && _config.minNumPixels <= 1)
     {
         const bool fastOk = fuseTwoViewSingleObservationFast(frames,
                                                              geom,
                                                              colorProvider,
                                                              fusedPoints,
                                                              progressCb);
-        if (!fastOk && isFusionCancelled(m_config) && errorMsg)
+        if (!fastOk && isFusionCancelled(_config) && errorMsg)
         {
             *errorMsg = "用户取消深度图融合";
         }
@@ -1460,11 +1460,11 @@ bool DepthMapFusion::fuse(
     int totalProcessed = 0;
 
     const int fusionStartFrame = 0;
-    const int fusionEndFrame = m_config.fuseOnlyFirstFrame ? std::min(1, NF) : NF;
+    const int fusionEndFrame = _config.fuseOnlyFirstFrame ? std::min(1, NF) : NF;
     const int fusionFrameCount = std::max(1, fusionEndFrame - fusionStartFrame);
     for (int fi = fusionStartFrame; fi < fusionEndFrame; ++fi)
     {
-        if (isFusionCancelled(m_config))
+        if (isFusionCancelled(_config))
         {
             if (errorMsg)
             {
@@ -1484,7 +1484,7 @@ bool DepthMapFusion::fuse(
 
         for (int r = 0; r < H; ++r)
         {
-            if (isFusionCancelled(m_config))
+            if (isFusionCancelled(_config))
             {
                 if (errorMsg)
                 {
@@ -1518,12 +1518,12 @@ bool DepthMapFusion::fuse(
                 ++totalProcessed;
 
                 // 记录该像素通过一致性
-                m_filteredDepths[fi].at<float>(r, c) = d;
+                _filteredDepths[fi].at<float>(r, c) = d;
             }
         }
 
         int frameValid = cv::countNonZero(frames[fi].depthMap > 0);
-        int frameFused = cv::countNonZero(m_filteredDepths[fi] > 0);
+        int frameFused = cv::countNonZero(_filteredDepths[fi] > 0);
         fprintf(stderr, "[StereoFusion] 帧 %d: 有效深度=%d 融合点=%d (%.1f%%)\n",
                 fi, frameValid, frameFused, 100.f * frameFused / std::max(1, frameValid));
     }
