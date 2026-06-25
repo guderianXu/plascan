@@ -117,6 +117,7 @@
 - `MatcherFactory` 内部 SuperGlue/LightGlue/Python adapter 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并对该 Torch-heavy 工厂编译单元补齐 MSVC C4267 局部 warning guard，保持 matcher 创建、Python 兜底和 CUDA 参数传递行为不变。
 - `ProjectModelManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持网格重建、纹理映射、模型结果登记和 `QPointer` 生命周期守护行为不变。
 - `ProjectReconstructionManager` 子 manager 指针从 `m_` 迁移到 `_lowerCamelCase`，保持稀疏、密集、模型重建任务分发和进度信号转发行为不变。
+- `ProjectSparseReconstructionManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持两视预览三角化、稀疏点云后处理和 guarded runner 回调行为不变。
 - 删除 GUI 工程服务层中已无生产目标引用的 `ProjectBaInputBuilder.cpp` / `ProjectTriangulationService.cpp` 空壳兼容编译单元；兼容接口继续保留在对应头文件中，测试目标直接链接 core 实现。
 - GUI 工程 BA 输入和三角化调用方直接依赖 `src/core/sfm/BaInputBuilder.h` / `TriangulationService.h`，删除 `ProjectBaInputBuilder.h` / `ProjectTriangulationService.h` 这层 header-only 兼容 wrapper，减少旧接口暴露面。
 
@@ -132,6 +133,8 @@
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectModelManager.cpp`、`ProjectReconstructionManager.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectReconstructionManagerUsesLowerCamelPrivateMemberNames|GuiAsyncLifetimeTest.ProjectModelTasksUseQPointerGuards|ProjectTriangulationUiTest|CodeStyleTest.ProjectModelManagerUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，5/5，验证 `ProjectReconstructionManager` 命名迁移后重建任务分发相关轻量回归保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectReconstructionManager.cpp`、`ProjectTaskDispatcher.cpp`、`ProjectManager.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectSparseReconstructionManagerUsesLowerCamelPrivateMemberNames|ProjectTriangulationUiTest|SparseCloudPostProcessDialogTest|CodeStyleTest.SparseCloudPostProcessDialogUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，10/10，验证 `ProjectSparseReconstructionManager` 命名迁移、三角化 UI 和稀疏点云后处理对话框回归保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectSparseReconstructionManager.cpp`、`ProjectReconstructionManager.cpp` 并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.MainMenuUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `MainMenu` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MainMenu|MainWindowMenu|CodeStyleTest.MainMenuUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，13/13，验证主菜单动作、UI 绑定和菜单接线保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `MainMenu.cpp`、`MainWindow.cpp`、`MenuWorkflowController.cpp` 并链接 GUI。

@@ -44,7 +44,7 @@ private:
     void startSparsePointWorkflow(xjw::gui::project::SparsePointWorkflowKind kind,
                                   const QJsonObject &settings);
 
-    ProjectManager *m_owner = nullptr;
-    ProjectData *m_projectData = nullptr;
-    QWidget *m_parentWidget = nullptr;
+    ProjectManager *_owner = nullptr;
+    ProjectData *_projectData = nullptr;
+    QWidget *_parentWidget = nullptr;
 };

@@ -38,29 +38,29 @@ ProjectSparseReconstructionManager::ProjectSparseReconstructionManager(ProjectMa
                                                                        QWidget *parentWidget,
                                                                        QObject *parent)
     : QObject(parent)
-    , m_owner(owner)
-    , m_projectData(projectData)
-    , m_parentWidget(parentWidget)
+    , _owner(owner)
+    , _projectData(projectData)
+    , _parentWidget(parentWidget)
 {
 }
 
 QJsonArray ProjectSparseReconstructionManager::getAvailableAtResults() const
 {
-    if (!m_projectData || !m_projectData->hasProject())
+    if (!_projectData || !_projectData->hasProject())
     {
         return QJsonArray();
     }
-    return summarizeAtResults(m_projectData->metadata());
+    return summarizeAtResults(_projectData->metadata());
 }
 
 bool ProjectSparseReconstructionManager::ensureProjectOpen(const QString &message,
                                                            const QString &title) const
 {
-    if (m_projectData && m_projectData->hasProject())
+    if (_projectData && _projectData->hasProject())
     {
         return true;
     }
-    QMessageBox::warning(m_parentWidget, title, message);
+    QMessageBox::warning(_parentWidget, title, message);
     return false;
 }
 
@@ -72,17 +72,17 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
         return;
     }
 
-    const QStringList selectedImages = m_owner->getAllImages();
+    const QStringList selectedImages = _owner->getAllImages();
     if (selectedImages.size() < 2)
     {
-        QMessageBox::warning(m_parentWidget,
+        QMessageBox::warning(_parentWidget,
                              QStringLiteral("生成两视预览云"),
                              QStringLiteral("至少需要两张影像才能执行三角化"));
         return;
     }
 
-    QJsonObject mergedMeta = projectFilesMeta(m_projectData);
-    const QJsonObject runtimeMeta = m_owner->currentMeta();
+    QJsonObject mergedMeta = projectFilesMeta(_projectData);
+    const QJsonObject runtimeMeta = _owner->currentMeta();
     for (auto it = runtimeMeta.begin(); it != runtimeMeta.end(); ++it)
     {
         if (it.key() != QLatin1String("images") && it.key() != QLatin1String("project_files"))
@@ -91,7 +91,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
         }
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(m_owner->currentProjectPath());
+    const QString assetsDir = ProjectIO::projectAssetsDir(_owner->currentProjectPath());
     const bool overwriteExistingResult = settings.value(QStringLiteral("overwriteExistingResult")).toBool(false);
     int replaceIndex = -1;
     QString outputDir;
@@ -137,7 +137,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
             if (!result.success)
             {
                 emit self->atProgressFinished(false);
-                QMessageBox::warning(self->m_parentWidget,
+                QMessageBox::warning(self->_parentWidget,
                                      QStringLiteral("生成两视预览云"),
                                      result.errorMessage);
                 return;
@@ -189,7 +189,7 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
         extraRecord = mergeSparseQualityIntoRecord(extraRecord, quality);
     }
 
-    m_owner->appendAtResult(result.sparseCloudPath,
+    _owner->appendAtResult(result.sparseCloudPath,
                             result.exportedPointCount,
                             selectedImages,
                             options.outputDir,
@@ -202,7 +202,7 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
                  .arg(result.sparseCloudPath));
 
     emit atProgressFinished(true);
-    QMessageBox::information(m_parentWidget,
+    QMessageBox::information(_parentWidget,
                              QStringLiteral("生成两视预览云"),
                              QStringLiteral("两视预览云生成完成。\n候选轨迹: %1\n导出点数: %2\n输出文件: %3")
                                  .arg(result.candidateTrackCount)
@@ -226,7 +226,7 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
             settings.value(QStringLiteral("externalSparseCloudPath")).toString().trimmed());
         if (path.isEmpty() || !QFileInfo::exists(path))
         {
-            QMessageBox::warning(m_parentWidget,
+            QMessageBox::warning(_parentWidget,
                                  spec.title,
                                  QStringLiteral("外部 PLY 点云不存在: %1").arg(path));
             return;
@@ -237,17 +237,17 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
     else
     {
         const auto contextResult = resolveSparsePointContextResult(
-            m_owner->currentMeta(),
+            _owner->currentMeta(),
             settings.value(QStringLiteral("sourceAtIndex")).toInt(-1));
         if (!contextResult.status.ok)
         {
-            QMessageBox::warning(m_parentWidget, spec.title, contextResult.status.errorMessage);
+            QMessageBox::warning(_parentWidget, spec.title, contextResult.status.errorMessage);
             return;
         }
         context = contextResult.context;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(m_owner->currentProjectPath());
+    const QString assetsDir = ProjectIO::projectAssetsDir(_owner->currentProjectPath());
     const QString outputDir = QDir(assetsDir).filePath(
         QStringLiteral("aerial_triangulation/%1_%2")
             .arg(spec.outputDirPrefix,
@@ -267,7 +267,7 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
             if (!workflowResult.status.ok)
             {
                 emit self->atProgressFinished(false);
-                QMessageBox::warning(self->m_parentWidget,
+                QMessageBox::warning(self->_parentWidget,
                                      spec.title,
                                      workflowResult.status.errorMessage);
                 return;
@@ -275,14 +275,14 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
 
             const SparsePointOperationResult &operationResult = workflowResult.operation;
 
-            self->m_owner->appendAtResult(operationResult.sparseCloudPath,
+            self->_owner->appendAtResult(operationResult.sparseCloudPath,
                                           operationResult.outputCount,
                                           context.selectedImages,
                                           operationResult.outputDir,
                                           operationResult.extraRecord);
 
             emit self->atProgressFinished(true);
-            QMessageBox::information(self->m_parentWidget,
+            QMessageBox::information(self->_parentWidget,
                                      spec.title,
                                      buildSparsePointWorkflowSuccessMessage(spec, operationResult));
         });
