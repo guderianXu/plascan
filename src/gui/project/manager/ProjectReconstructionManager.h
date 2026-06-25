@@ -49,7 +49,7 @@ signals:
     void atProgressFinished(bool success);
 
 private:
-    ProjectSparseReconstructionManager *m_sparseManager = nullptr;
-    ProjectDenseReconstructionManager *m_denseManager = nullptr;
-    ProjectModelManager *m_modelManager = nullptr;
+    ProjectSparseReconstructionManager *_sparseManager = nullptr;
+    ProjectDenseReconstructionManager *_denseManager = nullptr;
+    ProjectModelManager *_modelManager = nullptr;
 };

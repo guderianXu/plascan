@@ -9,29 +9,29 @@ ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner
                                                            QWidget *parentWidget,
                                                            QObject *parent)
     : QObject(parent)
-    , m_sparseManager(new ProjectSparseReconstructionManager(owner, projectData, parentWidget, this))
-    , m_denseManager(new ProjectDenseReconstructionManager(owner, projectData, parentWidget, this))
-    , m_modelManager(new ProjectModelManager(owner, projectData, parentWidget, this))
+    , _sparseManager(new ProjectSparseReconstructionManager(owner, projectData, parentWidget, this))
+    , _denseManager(new ProjectDenseReconstructionManager(owner, projectData, parentWidget, this))
+    , _modelManager(new ProjectModelManager(owner, projectData, parentWidget, this))
 {
-    connect(m_sparseManager, &ProjectSparseReconstructionManager::atProgressChanged,
+    connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressChanged,
             this, &ProjectReconstructionManager::atProgressChanged);
-    connect(m_sparseManager, &ProjectSparseReconstructionManager::atProgressFinished,
+    connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressFinished,
             this, &ProjectReconstructionManager::atProgressFinished);
 
-    connect(m_denseManager, &ProjectDenseReconstructionManager::mvsProgressChanged,
+    connect(_denseManager, &ProjectDenseReconstructionManager::mvsProgressChanged,
             this, &ProjectReconstructionManager::mvsProgressChanged);
-    connect(m_denseManager, &ProjectDenseReconstructionManager::mvsProgressFinished,
+    connect(_denseManager, &ProjectDenseReconstructionManager::mvsProgressFinished,
             this, &ProjectReconstructionManager::mvsProgressFinished);
 
-    connect(m_modelManager, &ProjectModelManager::meshProgressChanged,
+    connect(_modelManager, &ProjectModelManager::meshProgressChanged,
             this, &ProjectReconstructionManager::meshProgressChanged);
-    connect(m_modelManager, &ProjectModelManager::meshProgressFinished,
+    connect(_modelManager, &ProjectModelManager::meshProgressFinished,
             this, &ProjectReconstructionManager::meshProgressFinished);
 }
 
 QJsonArray ProjectReconstructionManager::getAvailableAtResults() const
 {
-    return m_sparseManager->getAvailableAtResults();
+    return _sparseManager->getAvailableAtResults();
 }
 
 void ProjectReconstructionManager::startTask(Task task, const QJsonObject &settings)
@@ -39,42 +39,42 @@ void ProjectReconstructionManager::startTask(Task task, const QJsonObject &setti
     switch (task)
     {
     case Task::GenerateModel:
-        m_modelManager->startGenerateModelAsync();
+        _modelManager->startGenerateModelAsync();
         break;
     case Task::MeshReconstruction:
-        m_modelManager->startMeshReconstructionAsync(settings);
+        _modelManager->startMeshReconstructionAsync(settings);
         break;
     case Task::TextureMapping:
-        m_modelManager->startTextureMappingAsync(settings);
+        _modelManager->startTextureMappingAsync(settings);
         break;
     case Task::Triangulation:
-        m_sparseManager->startTriangulationAsync(settings);
+        _sparseManager->startTriangulationAsync(settings);
         break;
     case Task::SparseOutlierRemoval:
-        m_sparseManager->startSparseCloudOutlierRemovalAsync(settings);
+        _sparseManager->startSparseCloudOutlierRemovalAsync(settings);
         break;
     case Task::SparseLocalOptimization:
-        m_sparseManager->startSparseCloudLocalOptimAsync(settings);
+        _sparseManager->startSparseCloudLocalOptimAsync(settings);
         break;
     case Task::SparseRefine:
-        m_sparseManager->startSparseCloudRefineAsync(settings);
+        _sparseManager->startSparseCloudRefineAsync(settings);
         break;
     case Task::EstimateDepthMaps:
-        m_denseManager->startEstimateDepthMapsAsync(settings);
+        _denseManager->startEstimateDepthMapsAsync(settings);
         break;
     case Task::FuseDepthMaps:
-        m_denseManager->startFuseDepthMapsAsync(settings);
+        _denseManager->startFuseDepthMapsAsync(settings);
         break;
     case Task::GenerateDenseCloud:
-        m_denseManager->startGenerateDenseCloudAsync(settings);
+        _denseManager->startGenerateDenseCloudAsync(settings);
         break;
     case Task::RefineDenseCloud:
-        m_denseManager->startDenseCloudRefineAsync(settings);
+        _denseManager->startDenseCloudRefineAsync(settings);
         break;
     }
 }
 
 void ProjectReconstructionManager::cancelMvs()
 {
-    m_denseManager->cancelMvs();
+    _denseManager->cancelMvs();
 }

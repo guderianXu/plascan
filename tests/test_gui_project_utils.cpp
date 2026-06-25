@@ -2910,6 +2910,29 @@ TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ProjectReconstructionManagerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectSparseReconstructionManager *_sparseManager = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectDenseReconstructionManager *_denseManager = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectModelManager *_modelManager = nullptr;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_sparseManager"),
+        QStringLiteral("m_denseManager"),
+        QStringLiteral("m_modelManager"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, GroundBackProjectorUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/overlap/GroundBackProjector.h"));
