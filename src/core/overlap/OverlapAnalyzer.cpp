@@ -492,7 +492,10 @@ bool OverlapAnalyzer::analyze(const std::vector<OverlapImageInput> &images,
             // 计算重叠判断阈值：
             //   threshold = neighborFactor * (r_i + r_j)
             //   当 d ≤ threshold 时认为两影像有重叠覆盖
-            const double threshold = std::max(1e-6, kNeighbor * (result->footprintRadii[i] + result->footprintRadii[static_cast<size_t>(j)]));
+            const double threshold = std::max(
+                1e-6,
+                kNeighbor * (result->footprintRadii[i]
+                             + result->footprintRadii[static_cast<size_t>(j)]));
             if (distance > threshold) continue; // 距离超出阈值，无重叠
 
             // 线性重叠得分：中心重合时为 1.0，距离达到阈值时为 0.0

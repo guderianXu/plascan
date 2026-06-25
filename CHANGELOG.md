@@ -136,9 +136,13 @@
 - `PointCloudPreprocess.h` 拆分点云预处理默认设备参数的超长声明，并新增头文件 120 列风格回归测试，保持体素降采样和统计去噪接口行为不变。
 - `Intersection.cpp` 拆分前方交汇健康检查的超长布尔表达式，并新增源文件 120 列风格回归测试，保持正深度和有限值判定逻辑不变。
 - `EpipolarRectifier.cpp` 拆分 MVS 极线校正诊断日志的超长格式串，并新增源文件 120 列风格回归测试，保持日志输出内容和校正逻辑不变。
+- `OverlapAnalyzer.cpp` 拆分重叠对阈值计算的超长表达式，并新增源文件 120 列风格回归测试，保持中心距离阈值和重叠得分逻辑不变。
 
 ### 验证
 
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.OverlapAnalyzerSourceKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `OverlapAnalyzer.cpp:495` 超长阈值表达式；拆分表达式后通过。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target overlap -Jobs 8`、`-Target test_overlap_analyzer`、`-Target test_gui_project_utils` 和 `-Target plascan_gui` 均通过，确认重叠分析核心库、单测、GUI 工具测试和主 GUI 可重新构建。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.OverlapAnalyzerSourceKeepsLinesWithinStyleLimit|OverlapAnalyzer" --output-on-failure` 通过，3/3，验证重叠分析源文件行宽和 ReferenceSphere 重叠分析回归保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.EpipolarRectifierSourceKeepsLinesWithinStyleLimit" --output-on-failure` 在生产代码调整前按预期失败，确认新增风格回归测试能抓到 `EpipolarRectifier.cpp:216` 超长诊断日志；拆分相邻字符串字面量后通过。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target mvs -Jobs 8`、`-Target test_mvs_rectifier_unit`、`-Target test_gui_project_utils` 和 `-Target plascan_gui` 均通过，确认 MVS 核心库、极线校正单测、GUI 工具测试和主 GUI 可重新构建。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest\.EpipolarRectifierSourceKeepsLinesWithinStyleLimit|EpipolarRectifier|DisparityTriangulator\.TransposedRectifiedDepthTriangulationKeepsLowReprojectionError" --output-on-failure` 通过，8/8，验证极线校正源文件行宽、水平/垂直基线校正和转置校正深度三角化回归保持可用。
