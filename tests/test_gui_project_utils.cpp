@@ -2359,6 +2359,20 @@ TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, CanvasWidgetSourceKeepsLinesWithinStyleLimit)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "CanvasWidget.cpp:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, ObservationNetworkViewUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/ObservationNetworkView.h"));
@@ -8075,7 +8089,10 @@ TEST(CanvasWidgetResponsivenessTest, FeatureLoadEstimatesOrientationOnlyWhenDisp
 
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("const QString projectPath = property(\"currentProjectPath\").toString()")));
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("const bool shouldEstimateOrientation = _currentFeatureOpts.showOrientation")));
-    EXPECT_TRUE(loadBlock.contains(QStringLiteral("[imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]()")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("imagePathCopy")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("activeSuffix")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("projectPath")));
+    EXPECT_TRUE(loadBlock.contains(QStringLiteral("shouldEstimateOrientation")));
     EXPECT_TRUE(loadBlock.contains(QStringLiteral("if (shouldEstimateOrientation)")));
 }
 

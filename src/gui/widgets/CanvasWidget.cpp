@@ -249,14 +249,20 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
                 if (!readUint64LE(ndesc)) return QPointF();
 
                 qint64 toSkip = static_cast<qint64>(ndesc) * static_cast<qint64>(sizeof(float));
-                if (toSkip > 0) {
+                if (toSkip > 0)
+                {
                     // guard the seek length to avoid absurd values
                     const qint64 maxSkip = 1LL << 30; // ~1GB
-                    if (toSkip > maxSkip) {
-                        LOG_WARN(QStringLiteral("showMatchedPair: ndesc too large (%1), skipping descriptors aborted").arg(ndesc));
-                    } else {
+                    if (toSkip > maxSkip)
+                    {
+                        LOG_WARN(QStringLiteral("showMatchedPair: ndesc too large (%1), skipping descriptors aborted")
+                                     .arg(ndesc));
+                    }
+                    else
+                    {
                         const qint64 cur = f.pos();
-                        if (!f.seek(cur + toSkip)) {
+                        if (!f.seek(cur + toSkip))
+                        {
                             LOG_WARN(QStringLiteral("showMatchedPair: failed to skip descriptor bytes %1").arg(toSkip));
                         }
                     }
@@ -272,14 +278,20 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
     }
 
     // Ensure renderer knows project path (so caching/convert works same as showImage)
-    if (_layerRenderer) {
+    if (_layerRenderer)
+    {
         const QVariant v = property("currentProjectPath");
-        if (v.isValid()) _layerRenderer->setCurrentProjectPath(v.toString());
+        if (v.isValid())
+        {
+            _layerRenderer->setCurrentProjectPath(v.toString());
+        }
     }
 
     // Add stitched images
-    QGraphicsPixmapItem *itemA = nullptr; QGraphicsPixmapItem *itemB = nullptr;
-    if (!_layerRenderer->addStitchedImagePair(imgA, imgB, &itemA, &itemB, 20)) {
+    QGraphicsPixmapItem *itemA = nullptr;
+    QGraphicsPixmapItem *itemB = nullptr;
+    if (!_layerRenderer->addStitchedImagePair(imgA, imgB, &itemA, &itemB, 20))
+    {
         qWarning() << "addStitchedImagePair failed for" << imgA << imgB;
         LOG_WARN(QStringLiteral("showMatchedPair: addStitchedImagePair failed for %1 <-> %2").arg(imgA, imgB));
         // fallback: show single image
@@ -306,55 +318,103 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
     qreal bOffsetX = itemB ? itemB->pos().x() : 0.0;
 
     // Debug: report positions and sizes of stitched items
-    if (itemA) LOG_DEBUG(QStringLiteral("showMatchedPair: itemA pos=(%1,%2) size=%3x%4").arg(itemA->pos().x()).arg(itemA->pos().y()).arg(itemA->pixmap().width()).arg(itemA->pixmap().height()));
-    if (itemB) LOG_DEBUG(QStringLiteral("showMatchedPair: itemB pos=(%1,%2) size=%3x%4").arg(itemB->pos().x()).arg(itemB->pos().y()).arg(itemB->pixmap().width()).arg(itemB->pixmap().height()));
+    if (itemA)
+    {
+        LOG_DEBUG(QStringLiteral("showMatchedPair: itemA pos=(%1,%2) size=%3x%4")
+                      .arg(itemA->pos().x())
+                      .arg(itemA->pos().y())
+                      .arg(itemA->pixmap().width())
+                      .arg(itemA->pixmap().height()));
+    }
+    if (itemB)
+    {
+        LOG_DEBUG(QStringLiteral("showMatchedPair: itemB pos=(%1,%2) size=%3x%4")
+                      .arg(itemB->pos().x())
+                      .arg(itemB->pos().y())
+                      .arg(itemB->pixmap().width())
+                      .arg(itemB->pixmap().height()));
+    }
 
     // draw match lines if points parsed
-    if (!ptsA.isEmpty() && !ptsB.isEmpty()) {
+    if (!ptsA.isEmpty() && !ptsB.isEmpty())
+    {
         LOG_DEBUG(QStringLiteral("showMatchedPair: drawing match lines with offset %1").arg(bOffsetX));
 
         // Log a few sample points for diagnostics
-        for (int si = 0; si < qMin(5, ptsA.size()); ++si) {
+        for (int si = 0; si < qMin(5, ptsA.size()); ++si)
+        {
             const QPointF &pa = ptsA.at(si);
             const QPointF &pb = (si < ptsB.size()) ? ptsB.at(si) : QPointF();
-            LOG_DEBUG(QStringLiteral("showMatchedPair: sample[%1] A=(%2,%3) B=(%4,%5)").arg(si).arg(pa.x()).arg(pa.y()).arg(pb.x()).arg(pb.y()));
+            LOG_DEBUG(QStringLiteral("showMatchedPair: sample[%1] A=(%2,%3) B=(%4,%5)")
+                          .arg(si)
+                          .arg(pa.x())
+                          .arg(pa.y())
+                          .arg(pb.x())
+                          .arg(pb.y()));
         }
 
         // Filter out obviously invalid points (non-finite or extreme) to avoid corrupting scene bounds
-        QVector<QPointF> fA; fA.reserve(ptsA.size());
-        QVector<QPointF> fB; fB.reserve(ptsB.size());
+        QVector<QPointF> fA;
+        fA.reserve(ptsA.size());
+        QVector<QPointF> fB;
+        fB.reserve(ptsB.size());
         const double MAX_COORD = 1e7; // arbitrary large threshold
         const int n = qMin(ptsA.size(), ptsB.size());
-        for (int i = 0; i < n; ++i) {
+        for (int i = 0; i < n; ++i)
+        {
             const QPointF &a = ptsA.at(i);
             const QPointF &b = ptsB.at(i);
-            const bool aok = std::isfinite(a.x()) && std::isfinite(a.y()) && std::fabs(a.x()) <= MAX_COORD && std::fabs(a.y()) <= MAX_COORD;
-            const bool bok = std::isfinite(b.x()) && std::isfinite(b.y()) && std::fabs(b.x()) <= MAX_COORD && std::fabs(b.y()) <= MAX_COORD;
-            if (aok && bok) {
+            const bool aok = std::isfinite(a.x()) &&
+                             std::isfinite(a.y()) &&
+                             std::fabs(a.x()) <= MAX_COORD &&
+                             std::fabs(a.y()) <= MAX_COORD;
+            const bool bok = std::isfinite(b.x()) &&
+                             std::isfinite(b.y()) &&
+                             std::fabs(b.x()) <= MAX_COORD &&
+                             std::fabs(b.y()) <= MAX_COORD;
+            if (aok && bok)
+            {
                 fA.append(a);
                 fB.append(b);
             }
-            else {
-                LOG_DEBUG(QStringLiteral("showMatchedPair: skipping invalid pair index %1 A=(%2,%3) B=(%4,%5)").arg(i).arg(a.x()).arg(a.y()).arg(b.x()).arg(b.y()));
+            else
+            {
+                LOG_DEBUG(QStringLiteral("showMatchedPair: skipping invalid pair index %1 A=(%2,%3) B=(%4,%5)")
+                              .arg(i)
+                              .arg(a.x())
+                              .arg(a.y())
+                              .arg(b.x())
+                              .arg(b.y()));
             }
         }
 
         LOG_DEBUG(QStringLiteral("showMatchedPair: filtered ptsA=%1 ptsB=%2").arg(fA.size()).arg(fB.size()));
 
-        if (!fA.isEmpty() && !fB.isEmpty()) {
+        if (!fA.isEmpty() && !fB.isEmpty())
+        {
             _layerRenderer->addMatchLines(fA, fB, bOffsetX);
-        } else {
+        }
+        else
+        {
             LOG_DEBUG(QStringLiteral("showMatchedPair: no valid match points after filtering"));
         }
-    } else {
+    }
+    else
+    {
         LOG_DEBUG(QStringLiteral("showMatchedPair: no match points to draw"));
     }
     // 强制刷新并输出场景信息，帮助诊断“白屏”
-    if (scene()) {
+    if (scene())
+    {
         // log item count and bounding rect
         const auto itemsCount = scene()->items().size();
         const QRectF boundsBefore = scene()->itemsBoundingRect();
-        LOG_DEBUG(QStringLiteral("showMatchedPair: scene items=%1 boundsBefore=(%2,%3,%4,%5)").arg(itemsCount).arg(boundsBefore.x()).arg(boundsBefore.y()).arg(boundsBefore.width()).arg(boundsBefore.height()));
+        LOG_DEBUG(QStringLiteral("showMatchedPair: scene items=%1 boundsBefore=(%2,%3,%4,%5)")
+                      .arg(itemsCount)
+                      .arg(boundsBefore.x())
+                      .arg(boundsBefore.y())
+                      .arg(boundsBefore.width())
+                      .arg(boundsBefore.height()));
         // Ask scene and viewport to update immediately
         scene()->update();
         viewport()->update();
@@ -362,14 +422,22 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
 
     // fit view to items bounding rect (robust if sceneRect was large/empty)
     QRectF rect = scene()->itemsBoundingRect();
-    LOG_DEBUG(QStringLiteral("showMatchedPair: itemsBoundingRect after draw=(%1,%2,%3,%4)").arg(rect.x()).arg(rect.y()).arg(rect.width()).arg(rect.height()));
-    if (!rect.isEmpty()) {
+    LOG_DEBUG(QStringLiteral("showMatchedPair: itemsBoundingRect after draw=(%1,%2,%3,%4)")
+                  .arg(rect.x())
+                  .arg(rect.y())
+                  .arg(rect.width())
+                  .arg(rect.height()));
+    if (!rect.isEmpty())
+    {
         scene()->setSceneRect(rect);
         fitInView(rect, Qt::KeepAspectRatio);
-    } else {
+    }
+    else
+    {
         // fallback to show single image
         qWarning() << "itemsBoundingRect empty after stitching; falling back";
-        LOG_WARN(QStringLiteral("showMatchedPair: itemsBoundingRect empty after stitching, falling back to single image"));
+        LOG_WARN(QStringLiteral("showMatchedPair: itemsBoundingRect empty after stitching, "
+                                "falling back to single image"));
         _layerRenderer->clear();
         showImage(imgA);
         return;
@@ -436,7 +504,11 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
     }
     
-    QFuture<std::vector<cv::KeyPoint>> future = QtConcurrent::run([imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]() -> std::vector<cv::KeyPoint> {
+    QFuture<std::vector<cv::KeyPoint>> future =
+        QtConcurrent::run([imagePathCopy,
+                           activeSuffix,
+                           projectPath,
+                           shouldEstimateOrientation]() -> std::vector<cv::KeyPoint> {
         std::vector<cv::KeyPoint> empty;
         // 使用当前选中的后缀查找特征文件
         const QString spFile = ProjectIO::featureOutputPathForImage(
@@ -444,7 +516,8 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         LOG_DEBUG(QStringLiteral("startSpLoadForImage: suffix=%1 file=%2")
             .arg(activeSuffix, spFile));
 
-        if (spFile.isEmpty() || !QFile::exists(spFile)) {
+        if (spFile.isEmpty() || !QFile::exists(spFile))
+        {
             LOG_DEBUG(QStringLiteral("startSpLoadForImage: no %1 found for %2")
                 .arg(activeSuffix, imagePathCopy));
             return empty;
@@ -452,7 +525,8 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
 
         // 读取特征文件 (支持所有提取器类型)
         std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
-        if (keypoints.empty()) {
+        if (keypoints.empty())
+        {
             LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read feature file %1").arg(spFile));
             return empty;
         }
@@ -461,36 +535,55 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         {
             // 尝试从影像中估计每个 keypoint 的方向（梯度方向），以便显示方向箭头。
             // 默认不开方向显示时跳过整图 imread/Sobel，避免切换影像时抢占磁盘与 CPU。
-            try {
+            try
+            {
                 cv::Mat img = cv::imread(imagePathCopy.toStdString(), cv::IMREAD_GRAYSCALE);
-                if (!img.empty()) {
+                if (!img.empty())
+                {
                     cv::Mat gx, gy;
                     cv::Sobel(img, gx, CV_32F, 1, 0, 3);
                     cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                    for (auto &kp : keypoints) {
+                    for (auto &kp : keypoints)
+                    {
                         int x = static_cast<int>(std::round(kp.pt.x));
                         int y = static_cast<int>(std::round(kp.pt.y));
-                        if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
+                        if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows)
+                        {
                             float vx = gx.at<float>(y, x);
                             float vy = gy.at<float>(y, x);
-                            if (std::isfinite(vx) && std::isfinite(vy) && (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f)) {
-                                double ang = std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
-                                if (ang < 0) ang += 360.0;
+                            if (std::isfinite(vx) &&
+                                std::isfinite(vy) &&
+                                (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f))
+                            {
+                                double ang =
+                                    std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
+                                if (ang < 0)
+                                {
+                                    ang += 360.0;
+                                }
                                 kp.angle = static_cast<float>(ang);
-                            } else {
+                            }
+                            else
+                            {
                                 kp.angle = 0.0f;
                             }
-                        } else {
+                        }
+                        else
+                        {
                             kp.angle = 0.0f;
                         }
                     }
                 }
-            } catch (...) {
+            }
+            catch (...)
+            {
                 // 估计失败则忽略，保持原有角度值
             }
         }
 
-        LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2").arg(static_cast<int>(keypoints.size())).arg(spFile));
+        LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2")
+                      .arg(static_cast<int>(keypoints.size()))
+                      .arg(spFile));
         return keypoints;
     });
 
@@ -590,18 +683,27 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
     // 直接在主线程同步读取特征文件并更新显示，使用当前活动的后缀
     const QString projectPath = property("currentProjectPath").toString();
     const QString spFile = ProjectIO::featureFileForSuffix(projectPath, imagePath, _activeFeatureSuffix);
-    if (spFile.isEmpty()) {
-        LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no %1 found for %2").arg(_activeFeatureSuffix, imagePath));
+    if (spFile.isEmpty())
+    {
+        LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no %1 found for %2")
+                      .arg(_activeFeatureSuffix, imagePath));
         // 仅在当前显示影像时清除场景中的兴趣点，避免覆盖用户正在看的其它影像
-        if (isCurrentImage && _layerRenderer) _layerRenderer->clearFeatureLayers();
+        if (isCurrentImage && _layerRenderer)
+        {
+            _layerRenderer->clearFeatureLayers();
+        }
         emit featuresLoaded(imagePath, 0);
         return;
     }
 
     std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
-    if (keypoints.empty()) {
+    if (keypoints.empty())
+    {
         LOG_WARN(QStringLiteral("immediateReloadInterestPoints: failed to read .sp file %1").arg(spFile));
-        if (isCurrentImage && _layerRenderer) _layerRenderer->clearFeatureLayers();
+        if (isCurrentImage && _layerRenderer)
+        {
+            _layerRenderer->clearFeatureLayers();
+        }
         emit featuresLoaded(imagePath, 0);
         return;
     }
@@ -610,31 +712,48 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
     {
         // 估计每个 keypoint 的方向（用于显示方向箭头）。
         // 注意：startSpLoadForImage 的异步路径有做这个；这里同步刷新也需要同样处理，否则 showOrientation 不会生效。
-        try {
+        try
+        {
             cv::Mat img = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
-            if (!img.empty()) {
+            if (!img.empty())
+            {
                 cv::Mat gx, gy;
                 cv::Sobel(img, gx, CV_32F, 1, 0, 3);
                 cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                for (auto &kp : keypoints) {
+                for (auto &kp : keypoints)
+                {
                     int x = static_cast<int>(std::round(kp.pt.x));
                     int y = static_cast<int>(std::round(kp.pt.y));
-                    if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows) {
+                    if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows)
+                    {
                         float vx = gx.at<float>(y, x);
                         float vy = gy.at<float>(y, x);
-                        if (std::isfinite(vx) && std::isfinite(vy) && (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f)) {
-                            double ang = std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
-                            if (ang < 0) ang += 360.0;
+                        if (std::isfinite(vx) &&
+                            std::isfinite(vy) &&
+                            (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f))
+                        {
+                            double ang =
+                                std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
+                            if (ang < 0)
+                            {
+                                ang += 360.0;
+                            }
                             kp.angle = static_cast<float>(ang);
-                        } else {
+                        }
+                        else
+                        {
                             kp.angle = 0.0f;
                         }
-                    } else {
+                    }
+                    else
+                    {
                         kp.angle = 0.0f;
                     }
                 }
             }
-        } catch (...) {
+        }
+        catch (...)
+        {
             // 忽略方向估计失败
         }
     }
@@ -644,17 +763,26 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
     _spCache[imagePath + _activeFeatureSuffix] = std::make_pair(fi.lastModified(), keypoints);
 
     // 仅当刷新的是“当前显示的影像”时才更新场景，避免处理批量图像时最后一张覆盖当前视图。
-    if (isCurrentImage && _layerRenderer) {
+    if (isCurrentImage && _layerRenderer)
+    {
         _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
-        if (!_showInterestPoints || !_currentFeatureOpts.showPoints) {
+        if (!_showInterestPoints || !_currentFeatureOpts.showPoints)
+        {
             _layerRenderer->clearFeatureLayers();
-        } else {
+        }
+        else
+        {
             _layerRenderer->clearFeatureLayers();
-            if (!keypoints.empty()) _layerRenderer->addFeatureItems(keypoints);
+            if (!keypoints.empty())
+            {
+                _layerRenderer->addFeatureItems(keypoints);
+            }
         }
     }
 
-    LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: loaded %1 keypoints from %2").arg(static_cast<int>(keypoints.size())).arg(spFile));
+    LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: loaded %1 keypoints from %2")
+                  .arg(static_cast<int>(keypoints.size()))
+                  .arg(spFile));
     emit featuresLoaded(imagePath, static_cast<int>(keypoints.size()));
 }
 
