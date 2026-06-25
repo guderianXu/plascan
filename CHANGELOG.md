@@ -70,6 +70,7 @@
 - `ProjectDashboardWidget` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持概览页摘要、任务、参考数据、质量指标和报告表格行为不变。
 - `MainMenu` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持菜单构建、UI 绑定、工具栏动作和最近项目菜单行为不变。
 - `PlascanArchive` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，并整理归档读写封装中的局部控制语句花括号风格，保持 `.plascan` 读写行为不变。
+- `ProjectFilesManager` 私有成员和拆分数据模型注释从 `m_` 迁移到 `_lowerCamelCase`，保持 `project_files.json` / `project_results.json` 拆分、惰性结果加载和匹配结果精简记录行为不变。
 - `ProjectTerrainProductsManager` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 DEM/DOM 自动流水线、密集点云 DEM 和正射入口行为不变。
 - `ThreeDReconstructionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续按小模块逐步收敛 GUI 成员命名规范。
 - `Camera` 核心类内部私有成员从 `_fu/_R/_C` 等短名迁移到 `_focalX/_cameraToWorldRotation/_cameraCenter` 等 `_lowerCamelCase` 描述性命名，公开 accessor 和 Tsai 文件字段保持兼容。
@@ -153,6 +154,9 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.PlascanArchiveUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `PlascanArchive` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "PlascanArchive|ProjectData" --output-on-failure` 通过，9/9，验证 `.plascan` 写入替换、项目 metadata 保存和迁移逻辑保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `PlascanArchive.cpp`、`ProjectData.cpp` 并链接 GUI。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectFilesManagerUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `ProjectFilesManager` 私有成员迁移到 `_lowerCamelCase`。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectFilesManagerUsesLowerCamelPrivateMemberNames|ProjectFilesManagerTest|ProjectDataCameraMetadataTest|ProjectWorkflowReportsTest" --output-on-failure` 通过，6/6，验证项目文件 metadata/results 分流、相机 metadata 清理和重建质量报告登记保持可用。
+- `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectFilesManager.cpp`、`ProjectData.cpp` 及相关项目支持编译单元并链接 GUI。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，验证 `ProjectTerrainProductsManager` 私有成员迁移到 `_lowerCamelCase`。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainPipeline|TerrainProducts|CodeStyleTest.ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberNames|GuiAsyncLifetimeTest.FeatureExtractionRunnerUsesGuardedProjectManagerCallbacks|ProjectManagerQualityReportTest.PipelineStageBoundariesRefreshReconstructionQualityReport" --output-on-failure` 通过，16/16，验证 DEM/DOM 异步入口、质量报告刷新和生命周期守护断言保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `ProjectTerrainProductsManager.cpp`、`ProjectManager.cpp` 并链接 GUI。

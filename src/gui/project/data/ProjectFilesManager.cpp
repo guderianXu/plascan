@@ -4,10 +4,10 @@
 //
 //         数据拆分为两個对象，分别对应归档中的两个文件：
 //
-//   【m_coreFiles → project_files.json】始终加载
+//   【_coreFiles → project_files.json】始终加载
 //     { "images": [...] }
 //
-//   【m_resultFiles → project_results.json】惰性加载（需要时再读）
+//   【_resultFiles → project_results.json】惰性加载（需要时再读）
 //     {
 //       "ipfind_results":  [...],
 //       "ipmatch_results": [
@@ -73,15 +73,15 @@ QJsonObject ProjectFilesManager::defaultResults()
 
 void ProjectFilesManager::setResultsData(const QJsonObject &data)
 {
-    m_resultFiles  = data;
-    m_resultsDirty = false;
+    _resultFiles  = data;
+    _resultsDirty = false;
 }
 
 QJsonObject ProjectFilesManager::data() const
 {
     // 合并 core + results，供需要全量数据的历史调用方使用
-    QJsonObject merged = m_coreFiles;
-    for (auto it = m_resultFiles.constBegin(); it != m_resultFiles.constEnd(); ++it) {
+    QJsonObject merged = _coreFiles;
+    for (auto it = _resultFiles.constBegin(); it != _resultFiles.constEnd(); ++it) {
         merged.insert(it.key(), it.value());
     }
     return merged;
@@ -99,9 +99,9 @@ void ProjectFilesManager::setData(const QJsonObject &data)
             core.insert(it.key(), it.value());
         }
     }
-    m_coreFiles    = core;
-    m_resultFiles  = results;
-    m_resultsDirty = false;
+    _coreFiles    = core;
+    _resultFiles  = results;
+    _resultsDirty = false;
 }
 
 // ── 查询接口 ─────────────────────────────────────────────────────────────────
@@ -109,7 +109,7 @@ void ProjectFilesManager::setData(const QJsonObject &data)
 QStringList ProjectFilesManager::getAllImages() const
 {
     QStringList result;
-    const QJsonArray images = m_coreFiles.value(QLatin1String("images")).toArray();
+    const QJsonArray images = _coreFiles.value(QLatin1String("images")).toArray();
     for (const QJsonValue &val : images) {
         const QString path = val.toObject().value(QLatin1String("path")).toString();
         if (!path.isEmpty())
@@ -121,7 +121,7 @@ QStringList ProjectFilesManager::getAllImages() const
 QStringList ProjectFilesManager::getImagesByCategory(const QString &category) const
 {
     QStringList result;
-    const QJsonArray images = m_coreFiles.value(QLatin1String("images")).toArray();
+    const QJsonArray images = _coreFiles.value(QLatin1String("images")).toArray();
     for (const QJsonValue &val : images) {
         const QJsonObject obj = val.toObject();
         if (category.isEmpty() || obj.value(QLatin1String("category")).toString() == category)
@@ -133,7 +133,7 @@ QStringList ProjectFilesManager::getImagesByCategory(const QString &category) co
 QMap<QString, QString> ProjectFilesManager::getIpfindOutputMap() const
 {
     QMap<QString, QString> result;
-    const QJsonArray results = m_resultFiles.value(QLatin1String("ipfind_results")).toArray();
+    const QJsonArray results = _resultFiles.value(QLatin1String("ipfind_results")).toArray();
     for (const QJsonValue &val : results) {
         const QJsonObject obj = val.toObject();
         const QString input  = obj.value(QLatin1String("input")).toString();
@@ -146,7 +146,7 @@ QMap<QString, QString> ProjectFilesManager::getIpfindOutputMap() const
 
 QString ProjectFilesManager::findMatchFile(const QString &imgA, const QString &imgB) const
 {
-    const QJsonArray results = m_resultFiles.value(QLatin1String("ipmatch_results")).toArray();
+    const QJsonArray results = _resultFiles.value(QLatin1String("ipmatch_results")).toArray();
     for (const QJsonValue &val : results) {
         const QJsonObject obj = val.toObject();
         // 新格式：顶层 image0 / image1
@@ -173,14 +173,14 @@ QString ProjectFilesManager::findMatchFile(const QString &imgA, const QString &i
 
 void ProjectFilesManager::setImages(const QJsonArray &images)
 {
-    m_coreFiles[QLatin1String("images")] = images;
+    _coreFiles[QLatin1String("images")] = images;
 }
 
 void ProjectFilesManager::appendIpfindResult(const QString &input,
                                               const QString &output,
                                               const QJsonObject &settings)
 {
-    QJsonArray results = m_resultFiles.value(QLatin1String("ipfind_results")).toArray();
+    QJsonArray results = _resultFiles.value(QLatin1String("ipfind_results")).toArray();
 
     const QString cleanInput = QDir::cleanPath(input);
     int existingIndex = -1;
@@ -202,14 +202,14 @@ void ProjectFilesManager::appendIpfindResult(const QString &input,
     else
         results.append(rec);
 
-    m_resultFiles[QLatin1String("ipfind_results")] = results;
-    m_resultsDirty = true;
+    _resultFiles[QLatin1String("ipfind_results")] = results;
+    _resultsDirty = true;
 }
 
 void ProjectFilesManager::appendIpmatchResult(const QStringList &outputs,
                                                const QJsonObject &settings)
 {
-    QJsonArray results = m_resultFiles.value(QLatin1String("ipmatch_results")).toArray();
+    QJsonArray results = _resultFiles.value(QLatin1String("ipmatch_results")).toArray();
 
     // 去重索引：已有的 output 路径集合
     QSet<QString> existingOutputs;
@@ -304,6 +304,6 @@ void ProjectFilesManager::appendIpmatchResult(const QStringList &outputs,
         existingOutputs.insert(cleanOutput);
     }
 
-    m_resultFiles[QLatin1String("ipmatch_results")] = results;
-    m_resultsDirty = true;
+    _resultFiles[QLatin1String("ipmatch_results")] = results;
+    _resultsDirty = true;
 }

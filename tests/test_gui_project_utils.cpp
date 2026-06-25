@@ -1925,6 +1925,35 @@ TEST(CodeStyleTest, PlascanArchiveUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ProjectFilesManagerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectFilesManager.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectFilesManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QJsonObject _coreFiles;"),
+        QStringLiteral("QJsonObject _resultFiles;"),
+        QStringLiteral("bool _resultsDirty = false;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_coreFiles"),
+        QStringLiteral("m_resultFiles"),
+        QStringLiteral("m_resultsDirty"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ProjectTerrainProductsManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header =

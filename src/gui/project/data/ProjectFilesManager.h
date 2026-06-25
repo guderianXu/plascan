@@ -34,16 +34,16 @@ public:
     ProjectFilesManager() = default;
 
     // ── 核心数据（images）── 项目打开时立即可用 ──────────────────────────
-    QJsonObject coreData() const { return m_coreFiles; }
-    void setCoreData(const QJsonObject &data) { m_coreFiles = data; }
+    QJsonObject coreData() const { return _coreFiles; }
+    void setCoreData(const QJsonObject &data) { _coreFiles = data; }
 
     // ── 结果数据（*_results）── 惰性加载，仅在需要时填充 ─────────────────
-    QJsonObject resultsData() const { return m_resultFiles; }
+    QJsonObject resultsData() const { return _resultFiles; }
     void setResultsData(const QJsonObject &data);
 
     /// 结果数据是否已被修改（尚未持久化）
-    bool isResultsDirty() const { return m_resultsDirty; }
-    void clearResultsDirty() { m_resultsDirty = false; }
+    bool isResultsDirty() const { return _resultsDirty; }
+    void clearResultsDirty() { _resultsDirty = false; }
 
     // ── 兼容接口（返回 core + results 合并视图，仅在需要全量数据时使用）──
     QJsonObject data() const;
@@ -73,10 +73,10 @@ public:
 
 private:
     // 核心数据（images 数组）
-    QJsonObject m_coreFiles;
+    QJsonObject _coreFiles;
     // 结果数据（*_results 结果数组）
-    QJsonObject m_resultFiles;
+    QJsonObject _resultFiles;
     // 结果数据脏标记
-    bool m_resultsDirty = false;
+    bool _resultsDirty = false;
 
 };
