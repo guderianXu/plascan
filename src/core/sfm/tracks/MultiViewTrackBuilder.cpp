@@ -14,16 +14,16 @@ class DisjointSet
 public:
     int add(const MultiViewTrackBuilder::ObservationKey &key)
     {
-        const auto it = m_indexByKey.find(key);
-        if (it != m_indexByKey.end())
+        const auto it = _indexByKey.find(key);
+        if (it != _indexByKey.end())
         {
             return it->second;
         }
 
-        const int index = static_cast<int>(m_keys.size());
-        m_indexByKey.emplace(key, index);
-        m_keys.push_back(key);
-        m_parent.push_back(index);
+        const int index = static_cast<int>(_keys.size());
+        _indexByKey.emplace(key, index);
+        _keys.push_back(key);
+        _parent.push_back(index);
         return index;
     }
 
@@ -43,7 +43,7 @@ public:
         {
             std::swap(rootA, rootB);
         }
-        m_parent[rootB] = rootA;
+        _parent[rootB] = rootA;
         if (mergedRoot)
         {
             *mergedRoot = rootB;
@@ -54,14 +54,14 @@ public:
     int find(int index)
     {
         int root = index;
-        while (m_parent[root] != root)
+        while (_parent[root] != root)
         {
-            root = m_parent[root];
+            root = _parent[root];
         }
-        while (m_parent[index] != index)
+        while (_parent[index] != index)
         {
-            const int next = m_parent[index];
-            m_parent[index] = root;
+            const int next = _parent[index];
+            _parent[index] = root;
             index = next;
         }
         return root;
@@ -69,13 +69,13 @@ public:
 
     const std::vector<MultiViewTrackBuilder::ObservationKey> &keys() const
     {
-        return m_keys;
+        return _keys;
     }
 
 private:
-    std::map<MultiViewTrackBuilder::ObservationKey, int> m_indexByKey;
-    std::vector<MultiViewTrackBuilder::ObservationKey> m_keys;
-    std::vector<int> m_parent;
+    std::map<MultiViewTrackBuilder::ObservationKey, int> _indexByKey;
+    std::vector<MultiViewTrackBuilder::ObservationKey> _keys;
+    std::vector<int> _parent;
 };
 
 } // namespace
@@ -96,11 +96,11 @@ void MultiViewTrackBuilder::addMatchPair(ImageId imageA,
             continue;
         }
 
-        m_edges.push_back({
+        _edges.push_back({
             ObservationKey{imageA, match.first},
             ObservationKey{imageB, match.second},
             std::isfinite(match.score) ? match.score : 0.0f,
-            static_cast<int>(m_edges.size())
+            static_cast<int>(_edges.size())
         });
     }
 }
@@ -111,8 +111,8 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
 
     DisjointSet disjointSet;
     std::vector<std::pair<int, int>> indexedEdges;
-    indexedEdges.reserve(m_edges.size());
-    for (const auto &edge : m_edges)
+    indexedEdges.reserve(_edges.size());
+    for (const auto &edge : _edges)
     {
         const int left = disjointSet.add(edge.first);
         const int right = disjointSet.add(edge.second);
@@ -127,15 +127,15 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
                                                              keys[static_cast<size_t>(i)].featureIdx);
     }
 
-    std::vector<int> order(m_edges.size());
+    std::vector<int> order(_edges.size());
     for (int i = 0; i < static_cast<int>(order.size()); ++i)
     {
         order[static_cast<size_t>(i)] = i;
     }
     std::sort(order.begin(), order.end(), [&](int left, int right)
     {
-        const Edge &leftEdge = m_edges[static_cast<size_t>(left)];
-        const Edge &rightEdge = m_edges[static_cast<size_t>(right)];
+        const Edge &leftEdge = _edges[static_cast<size_t>(left)];
+        const Edge &rightEdge = _edges[static_cast<size_t>(right)];
         if (leftEdge.score != rightEdge.score)
         {
             return leftEdge.score > rightEdge.score;
@@ -187,7 +187,7 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
             edgeScoreCountByRoot[static_cast<size_t>(mergedRoot)] = 0;
         }
         edgeScoreSumByRoot[static_cast<size_t>(newRoot)] +=
-            std::max(0.0f, m_edges[static_cast<size_t>(edgeIndex)].score);
+            std::max(0.0f, _edges[static_cast<size_t>(edgeIndex)].score);
         ++edgeScoreCountByRoot[static_cast<size_t>(newRoot)];
 
         auto &newFeatures = featureByImageByRoot[static_cast<size_t>(newRoot)];

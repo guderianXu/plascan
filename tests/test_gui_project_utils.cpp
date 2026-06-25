@@ -2729,6 +2729,31 @@ TEST(CodeStyleTest, PositiveDepthCameraModelUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_pixelTransformInv")));
 }
 
+TEST(CodeStyleTest, MultiViewTrackBuilderUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/sfm/tracks/MultiViewTrackBuilder.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/sfm/tracks/MultiViewTrackBuilder.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("std::vector<Edge> _edges;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::map<MultiViewTrackBuilder::ObservationKey, int> _indexByKey;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::vector<MultiViewTrackBuilder::ObservationKey> _keys;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("std::vector<int> _parent;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_edges"),
+        QStringLiteral("m_indexByKey"),
+        QStringLiteral("m_keys"),
+        QStringLiteral("m_parent"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, DenseMatchCoreUsesLowerCamelPrivateMemberNames)
 {
     const QHash<QString, QStringList> expectedByHeader = {

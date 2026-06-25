@@ -64,7 +64,7 @@ private:
         int insertionOrder = 0;
     };
 
-    std::vector<Edge> m_edges;
+    std::vector<Edge> _edges;
 };
 
 } // namespace xjw
