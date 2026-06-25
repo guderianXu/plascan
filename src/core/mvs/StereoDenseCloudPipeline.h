@@ -106,16 +106,16 @@ public:
              const std::string &outputDir,
              StereoPipelineResult *result = nullptr);
 
-    void setConfig(const StereoPipelineConfig &cfg) { m_config = cfg; }
-    void cancel() { m_cancelled = true; }
+    void setConfig(const StereoPipelineConfig &cfg) { _config = cfg; }
+    void cancel() { _cancelled = true; }
 
 signals:
     void progressChanged(QString stage, float ratio);
     void finished(bool success);
 
 private:
-    StereoPipelineConfig m_config;
-    bool m_cancelled = false;
+    StereoPipelineConfig _config;
+    bool _cancelled = false;
 };
 
 } // namespace mvs

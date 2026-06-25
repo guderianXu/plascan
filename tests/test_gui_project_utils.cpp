@@ -2877,6 +2877,27 @@ TEST(CodeStyleTest, LaserConstraintMapUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, StereoDenseCloudPipelineUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/StereoDenseCloudPipeline.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/StereoDenseCloudPipeline.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("StereoPipelineConfig _config;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _cancelled = false;")));
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_config"),
+        QStringLiteral("m_cancelled"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/MvsWorkspaceManifest.h"));

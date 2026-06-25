@@ -104,6 +104,7 @@
 - `MvsWorkspaceManifest` 私有成员从 `m_configHash/m_frames` 迁移到 `_configHash/_frames`，保持深度图 manifest 读写、完成帧自然排序和可复用缓存判定行为不变。
 - `TerrainProductManifest` 私有成员从 `m_records` 迁移到 `_records`，保持 DEM/DOM 产品 manifest 读写、质量栅格路径保留和自然排序行为不变。
 - `MultiViewTrackBuilder` 及其内部并查集缓存私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持多视 track 合并、冲突拆分和置信度统计行为不变。
+- `StereoDenseCloudPipeline` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保持 stereo dense pipeline 默认配置、取消入口和 OriginalDepth/RectifiedDisparity 路径选择行为不变。
 - `MatchPairSelectorDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛匹配对选择器命名规范。
 - `FeatureMatchingDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛特征匹配参数对话框命名规范。
 - `FeatureExtractionDialog` 私有成员从 `m_` 迁移到 `_lowerCamelCase`，保留 `.ui` 生成对象名不变，继续收敛特征提取参数对话框命名规范。
@@ -139,6 +140,7 @@
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MvsWorkspaceManifest|CodeStyleTest.MvsWorkspaceManifestUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，8/8，验证深度图 manifest 读写、排序、缓存复用和命名迁移断言保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "TerrainProductManifest|CodeStyleTest.TerrainProductManifestUsesLowerCamelPrivateMemberNames" --output-on-failure` 通过，4/4，验证 DEM/DOM 产品 manifest 读写、排序和命名迁移断言保持可用。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "MultiViewTrackBuilder|CodeStyleTest.MultiViewTrackBuilderUsesLowerCamelPrivateMemberNames" --output-on-failure` 先失败后通过，5/5，验证多视 track 合并、冲突拆分、置信度统计和命名迁移断言保持可用。
+- `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CodeStyleTest.StereoDenseCloudPipelineUsesLowerCamelPrivateMemberNames|TerrainPipelineAsyncTest.StereoPoint2DemRunsOffGuiThread" --output-on-failure` 先失败后通过，2/2，验证 stereo dense pipeline 命名迁移和 terrain 异步 stereo 入口保持可用。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target test_gui_project_utils -Jobs 8` 通过，重新编译 GUI 工具测试。
 - `ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CanvasFeatureLoadCallbacksUseRequestGeneration|CanvasWidgetDoesNotIncludeTorchExtractorHeaders|LayerRendererDelegatesFeatureFileLoadingToDedicatedLoader" --output-on-failure` 通过，3/3。
 - `powershell -NoProfile -ExecutionPolicy Bypass -File E:/code/plascan/scripts/build_win/build_windows_cuda.ps1 -BuildOnly -Target plascan_gui -Jobs 8` 通过，重新编译 `CanvasWidget.cpp`、`LayerFeatureLoader.cpp`、`LayerRenderer.cpp` 并链接 GUI。

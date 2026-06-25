@@ -47,11 +47,11 @@ cv::Mat toGray8U(const cv::Mat &img)
 StereoDenseCloudPipeline::StereoDenseCloudPipeline(QObject *parent)
     : QObject(parent)
 {
-    m_config.patchMatch.numIterations = 16;
-    m_config.patchMatch.downsampleFactor = 1;
-    m_config.patchMatch.geomConsistency = false;
-    m_config.patchMatch.numSourceViews = 1;
-    m_config.triangulation.maxTriangulationError = 0.001f;
+    _config.patchMatch.numIterations = 16;
+    _config.patchMatch.downsampleFactor = 1;
+    _config.patchMatch.geomConsistency = false;
+    _config.patchMatch.numSourceViews = 1;
+    _config.triangulation.maxTriangulationError = 0.001f;
 }
 
 bool StereoDenseCloudPipeline::run(const std::string &leftImagePath,
@@ -102,13 +102,13 @@ bool StereoDenseCloudPipeline::run(const cv::Mat &leftImage,
                  grayL.cols, grayL.rows, grayR.cols, grayR.rows);
 
     bool ok = false;
-    if (m_config.geometryMode == StereoPipelineGeometryMode::OriginalDepth)
+    if (_config.geometryMode == StereoPipelineGeometryMode::OriginalDepth)
     {
-        ok = runOriginalDepthPath(grayL, grayR, leftCamera, rightCamera, outputDir, m_config, res, this);
+        ok = runOriginalDepthPath(grayL, grayR, leftCamera, rightCamera, outputDir, _config, res, this);
     }
     else
     {
-        ok = runRectifiedDisparityPath(grayL, grayR, leftCamera, rightCamera, outputDir, m_config, res, this);
+        ok = runRectifiedDisparityPath(grayL, grayR, leftCamera, rightCamera, outputDir, _config, res, this);
     }
 
     if (result)
