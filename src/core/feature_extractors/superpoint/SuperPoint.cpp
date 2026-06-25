@@ -195,34 +195,49 @@ torch::Tensor SuperPoint::preprocessImage(const cv::Mat& image) {
 // 输出: 抑制后的 scores [B,C,H,W]，非最大点被置零
 
 // Note: File-based saving/reading is intentionally handled outside this class.
-// Use a separate Qt-based I/O helper (e.g. FeatureFileIO) in the GUI layer to write/read binary files via QFile/QDataStream.
+// Use a Qt-based helper (e.g. FeatureFileIO) in the GUI layer for QFile/QDataStream binary I/O.
 
 // 表头格式: x,y,score[,d0,...,d{D-1}]
 // 描述子派算中会输出说明数据的评断信息
 // （为 0 比例较高时会打印警告，帮助排查描述子异常）
-bool SuperPoint::saveKeypointsCSV(const FeatureOutput& output, const std::string& path) {
+bool SuperPoint::saveKeypointsCSV(const FeatureOutput& output, const std::string& path)
+{
     std::ofstream ofs(path);
-    if (!ofs.is_open()) return false;
+    if (!ofs.is_open())
+    {
+        return false;
+    }
     // 如果有描述子，则在表头添加 d0..d{D-1}
     int D = 0;
     torch::Tensor desc_cpu;
-    if (output.descriptors.defined()) {
+    if (output.descriptors.defined())
+    {
         // 强制转为 CPU + float32 并连续，避免 dtype/布局导致读取错误
         desc_cpu = output.descriptors.to(torch::kCPU);
-        if (desc_cpu.dtype() != torch::kFloat32) desc_cpu = desc_cpu.to(torch::kFloat32);
+        if (desc_cpu.dtype() != torch::kFloat32)
+        {
+            desc_cpu = desc_cpu.to(torch::kFloat32);
+        }
         desc_cpu = desc_cpu.contiguous();
-        if (desc_cpu.dim() == 2) D = static_cast<int>(desc_cpu.size(1));
+        if (desc_cpu.dim() == 2)
+        {
+            D = static_cast<int>(desc_cpu.size(1));
+        }
     }
 
     ofs << "x,y,score";
-    if (D > 0) {
-        for (int d = 0; d < D; ++d) {
+    if (D > 0)
+    {
+        for (int d = 0; d < D; ++d)
+        {
             ofs << ",d" << d;
         }
     }
     ofs << "\n";
 
-    if (D > 0 && desc_cpu.defined() && desc_cpu.dim() == 2 && static_cast<size_t>(desc_cpu.size(0)) == output.keypoints.size()) {
+    if (D > 0 && desc_cpu.defined() && desc_cpu.dim() == 2 &&
+        static_cast<size_t>(desc_cpu.size(0)) == output.keypoints.size())
+    {
         const float* data_ptr = desc_cpu.data_ptr<float>();
         const int rows = static_cast<int>(desc_cpu.size(0));
         const int cols = D;
@@ -231,27 +246,39 @@ bool SuperPoint::saveKeypointsCSV(const FeatureOutput& output, const std::string
         double abs_sum = 0.0;
         size_t nonzero = 0;
         size_t total = static_cast<size_t>(rows) * static_cast<size_t>(cols);
-        for (size_t i = 0; i < static_cast<size_t>(rows); ++i) {
+        for (size_t i = 0; i < static_cast<size_t>(rows); ++i)
+        {
             const float* row_ptr = data_ptr + i * static_cast<size_t>(cols);
-            for (int d = 0; d < cols; ++d) {
+            for (int d = 0; d < cols; ++d)
+            {
                 float v = row_ptr[d];
                 abs_sum += std::abs(static_cast<double>(v));
-                if (std::abs(v) > 1e-9f) ++nonzero;
+                if (std::abs(v) > 1e-9f)
+                {
+                    ++nonzero;
+                }
             }
         }
         double mean_abs = total > 0 ? (abs_sum / static_cast<double>(total)) : 0.0;
-        std::cerr << "CSV descriptors stats: rows=" << rows << " cols=" << cols << " nonzero=" << nonzero << " total=" << total << " mean_abs=" << mean_abs << std::endl;
-        if (nonzero == 0) {
+        std::cerr << "CSV descriptors stats: rows=" << rows
+                  << " cols=" << cols
+                  << " nonzero=" << nonzero
+                  << " total=" << total
+                  << " mean_abs=" << mean_abs << std::endl;
+        if (nonzero == 0)
+        {
             std::cerr << "WARN: CSV descriptors appear all zeros for file: " << path << std::endl;
         }
 
-        for (int i = 0; i < rows; ++i) {
+        for (int i = 0; i < rows; ++i)
+        {
             ofs << std::fixed << std::setprecision(6)
                 << output.keypoints[static_cast<size_t>(i)].pt.x << ","
                 << output.keypoints[static_cast<size_t>(i)].pt.y << ","
                 << output.scores[static_cast<size_t>(i)];
             const float* row_ptr = data_ptr + static_cast<size_t>(i) * static_cast<size_t>(cols);
-            for (int d = 0; d < cols; ++d) {
+            for (int d = 0; d < cols; ++d)
+            {
                 ofs << "," << std::setprecision(6) << row_ptr[d];
             }
             ofs << "\n";

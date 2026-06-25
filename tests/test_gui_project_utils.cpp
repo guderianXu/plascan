@@ -3081,6 +3081,21 @@ TEST(CodeStyleTest, SuperPointBatchSourceKeepsLinesWithinStyleLimit)
     }
 }
 
+TEST(CodeStyleTest, SuperPointSourceKeepsLinesWithinStyleLimit)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/feature_extractors/superpoint/SuperPoint.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "SuperPoint.cpp:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, ProjectModelManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.h"));
