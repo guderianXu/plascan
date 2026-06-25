@@ -2933,6 +2933,55 @@ TEST(CodeStyleTest, ProjectReconstructionManagerUsesLowerCamelPrivateMemberNames
     }
 }
 
+TEST(CodeStyleTest, ProjectManagerUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList expectedMembers = {
+        QStringLiteral("QWidget *_parent = nullptr;"),
+        QStringLiteral("ProjectData *_projectData = nullptr;"),
+        QStringLiteral("FileDialogStateManager *_fileDialogState = nullptr;"),
+        QStringLiteral("ProjectReconstructionManager *_reconstructionManager = nullptr;"),
+        QStringLiteral("ProjectTerrainProductsManager *_terrainProductsManager = nullptr;"),
+        QStringLiteral("ProjectCameraSetupManager *_cameraSetupManager = nullptr;"),
+        QStringLiteral("ProjectTaskDispatcher *_taskDispatcher = nullptr;"),
+        QStringLiteral("ProjectUiCommands *_uiCommands = nullptr;"),
+        QStringLiteral("std::shared_ptr<std::atomic<bool>> _atCancelFlag;"),
+        QStringLiteral("QMap<QString, QJsonObject> _pendingBaCameraMeta;"),
+        QStringLiteral("QMap<QString, QJsonObject> _pendingBaBeforeCameraMeta;"),
+        QStringLiteral("QJsonObject _pendingBaResult;"),
+        QStringLiteral("bool _hasPendingBaPreview = false;"),
+    };
+    for (const QString &expectedMember : expectedMembers)
+    {
+        EXPECT_TRUE(header.contains(expectedMember)) << qPrintable(expectedMember);
+    }
+
+    const QStringList oldMemberNames = {
+        QStringLiteral("m_parent"),
+        QStringLiteral("m_projectData"),
+        QStringLiteral("m_fileDialogState"),
+        QStringLiteral("m_reconstructionManager"),
+        QStringLiteral("m_terrainProductsManager"),
+        QStringLiteral("m_cameraSetupManager"),
+        QStringLiteral("m_taskDispatcher"),
+        QStringLiteral("m_uiCommands"),
+        QStringLiteral("m_atCancelFlag"),
+        QStringLiteral("m_pendingBaCameraMeta"),
+        QStringLiteral("m_pendingBaBeforeCameraMeta"),
+        QStringLiteral("m_pendingBaResult"),
+        QStringLiteral("m_hasPendingBaPreview"),
+    };
+    for (const QString &oldName : oldMemberNames)
+    {
+        EXPECT_FALSE(header.contains(oldName)) << qPrintable(oldName);
+        EXPECT_FALSE(source.contains(oldName)) << qPrintable(oldName);
+    }
+}
+
 TEST(CodeStyleTest, ProjectSparseReconstructionManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectSparseReconstructionManager.h"));

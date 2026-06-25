@@ -180,14 +180,14 @@ public slots:
     /// 设置 AT/SFM 取消标志（供 MenuWorkflowController 在启动后台任务时调用）
     void setAtCancelFlag(const std::shared_ptr<std::atomic<bool>> &flag)
     {
-        m_atCancelFlag = flag;
+        _atCancelFlag = flag;
     }
 
     void clearAtCancelFlag(const std::shared_ptr<std::atomic<bool>> &flag)
     {
-        if (m_atCancelFlag == flag)
+        if (_atCancelFlag == flag)
         {
-            m_atCancelFlag.reset();
+            _atCancelFlag.reset();
         }
     }
     
@@ -335,7 +335,7 @@ public slots:
     QStringList getImagesByCategory(const QString &category) const; // 按类别获取影像
     QStringList getAllImages() const;                    // 获取所有影像路径
     QString findMatchFileForPair(const QString &imgA, const QString &imgB) const; // 查找匹配文件
-    const ProjectData *projectData() const { return m_projectData; } // 获取底层数据对象
+    const ProjectData *projectData() const { return _projectData; } // 获取底层数据对象
     bool hasTemporaryMeta() const;                      // 是否存在临时缓存
     void discardTemporaryMeta();                        // 删除临时缓存文件
     // 更新内存元数据并异步写入临时缓存（线程安全，适合在后台任务完成时调用）
@@ -357,25 +357,25 @@ public slots:
     void saveLastUsedDir(const QString &key, const QString &dir);
 
 private:
-    QWidget *m_parent = nullptr;                        // 父窗口指针（用于对话框父窗口）
-    ProjectData *m_projectData = nullptr;               // 数据层：负责所有数据读写
-    FileDialogStateManager *m_fileDialogState = nullptr; // 文件对话框状态（记住上次路径）
-    ProjectReconstructionManager *m_reconstructionManager = nullptr;
-    ProjectTerrainProductsManager *m_terrainProductsManager = nullptr;
-    ProjectCameraSetupManager *m_cameraSetupManager = nullptr;
-    ProjectTaskDispatcher *m_taskDispatcher = nullptr;
-    ProjectUiCommands *m_uiCommands = nullptr;
+    QWidget *_parent = nullptr;                        // 父窗口指针（用于对话框父窗口）
+    ProjectData *_projectData = nullptr;               // 数据层：负责所有数据读写
+    FileDialogStateManager *_fileDialogState = nullptr; // 文件对话框状态（记住上次路径）
+    ProjectReconstructionManager *_reconstructionManager = nullptr;
+    ProjectTerrainProductsManager *_terrainProductsManager = nullptr;
+    ProjectCameraSetupManager *_cameraSetupManager = nullptr;
+    ProjectTaskDispatcher *_taskDispatcher = nullptr;
+    ProjectUiCommands *_uiCommands = nullptr;
 
     // AT/SFM 取消标志（跨线程共享）
-    std::shared_ptr<std::atomic<bool>> m_atCancelFlag;
+    std::shared_ptr<std::atomic<bool>> _atCancelFlag;
 
     // BA 预览缓存：BA 运行后先缓存到此处，
     // 用户点击"保留"后再通过 acceptBundleAdjustPreview() 写回项目相机参数。
     // 键: 影像绝对路径，值: 更新后的相机元数据 JSON
-    QMap<QString, QJsonObject> m_pendingBaCameraMeta;
-    QMap<QString, QJsonObject> m_pendingBaBeforeCameraMeta;
-    QJsonObject m_pendingBaResult;    // BA 完整结果 JSON（含统计信息）
-    bool m_hasPendingBaPreview = false; // 是否有待确认的 BA 预览结果
+    QMap<QString, QJsonObject> _pendingBaCameraMeta;
+    QMap<QString, QJsonObject> _pendingBaBeforeCameraMeta;
+    QJsonObject _pendingBaResult;    // BA 完整结果 JSON（含统计信息）
+    bool _hasPendingBaPreview = false; // 是否有待确认的 BA 预览结果
 
     // 辅助：统一提示框（默认标题“提示”）
     void showWarning(const QString &message,

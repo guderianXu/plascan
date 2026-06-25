@@ -198,51 +198,51 @@ void appendMetaArrayRecord(QJsonObject *meta,
 
 ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
     : QObject(parent)
-    , m_parent(parent)
-    , m_projectData(projectData)
-    , m_reconstructionManager(new ProjectReconstructionManager(this, projectData, parent, this))
-    , m_terrainProductsManager(new ProjectTerrainProductsManager(this, projectData, parent, this))
-    , m_cameraSetupManager(new ProjectCameraSetupManager(this, projectData, parent, this))
-    , m_taskDispatcher(new ProjectTaskDispatcher(m_cameraSetupManager,
-                                                 m_terrainProductsManager,
-                                                 m_reconstructionManager,
+    , _parent(parent)
+    , _projectData(projectData)
+    , _reconstructionManager(new ProjectReconstructionManager(this, projectData, parent, this))
+    , _terrainProductsManager(new ProjectTerrainProductsManager(this, projectData, parent, this))
+    , _cameraSetupManager(new ProjectCameraSetupManager(this, projectData, parent, this))
+    , _taskDispatcher(new ProjectTaskDispatcher(_cameraSetupManager,
+                                                 _terrainProductsManager,
+                                                 _reconstructionManager,
                                                  this))
-    , m_uiCommands(new ProjectUiCommands(projectData, parent))
+    , _uiCommands(new ProjectUiCommands(projectData, parent))
 {
-    m_uiCommands->setDirectoryAccessors(
+    _uiCommands->setDirectoryAccessors(
         [this](const QString &key) { return getLastUsedDir(key); },
         [this](const QString &key, const QString &dir) { saveLastUsedDir(key, dir); });
 
     // 连接ProjectData信号
-    if (m_projectData)
+    if (_projectData)
     {
-        connect(m_projectData, &ProjectData::projectOpened,
+        connect(_projectData, &ProjectData::projectOpened,
                 this, &ProjectManager::projectOpened);
-        connect(m_projectData, &ProjectData::projectSaved,
+        connect(_projectData, &ProjectData::projectSaved,
                 this, &ProjectManager::projectSaved);
-        connect(m_projectData, &ProjectData::projectClosed,
+        connect(_projectData, &ProjectData::projectClosed,
                 this, &ProjectManager::projectClosed);
-        connect(m_projectData, &ProjectData::metadataChanged,
+        connect(_projectData, &ProjectData::metadataChanged,
                 this, &ProjectManager::projectMetadataChanged);
-        connect(m_projectData, &ProjectData::dirtyStateChanged,
+        connect(_projectData, &ProjectData::dirtyStateChanged,
                 this, &ProjectManager::metadataDirtyChanged);
     }
 
-        connect(m_reconstructionManager, &ProjectReconstructionManager::mvsProgressChanged,
+        connect(_reconstructionManager, &ProjectReconstructionManager::mvsProgressChanged,
             this, &ProjectManager::mvsProgressChanged);
-        connect(m_reconstructionManager, &ProjectReconstructionManager::mvsProgressFinished,
+        connect(_reconstructionManager, &ProjectReconstructionManager::mvsProgressFinished,
             this, &ProjectManager::mvsProgressFinished);
-        connect(m_reconstructionManager, &ProjectReconstructionManager::meshProgressChanged,
+        connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressChanged,
             this, &ProjectManager::meshProgressChanged);
-        connect(m_reconstructionManager, &ProjectReconstructionManager::meshProgressFinished,
+        connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressFinished,
             this, &ProjectManager::meshProgressFinished);
-        connect(m_reconstructionManager, &ProjectReconstructionManager::atProgressChanged,
+        connect(_reconstructionManager, &ProjectReconstructionManager::atProgressChanged,
             this, &ProjectManager::atProgressChanged);
-        connect(m_reconstructionManager, &ProjectReconstructionManager::atProgressFinished,
+        connect(_reconstructionManager, &ProjectReconstructionManager::atProgressFinished,
             this, &ProjectManager::atProgressFinished);
-        connect(m_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineProgressChanged,
+        connect(_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineProgressChanged,
             this, &ProjectManager::demPipelineProgressChanged);
-        connect(m_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineFinished,
+        connect(_terrainProductsManager, &ProjectTerrainProductsManager::demPipelineFinished,
             this, &ProjectManager::demPipelineFinished);
 
     LOG_INFO(QStringLiteral("ProjectManager 已初始化(精简版)"));
@@ -259,7 +259,7 @@ ProjectManager::~ProjectManager()
 void ProjectManager::createNewProject()
 {
     QString plascanPath;
-    if (m_uiCommands && m_uiCommands->createNewProject(&plascanPath))
+    if (_uiCommands && _uiCommands->createNewProject(&plascanPath))
     {
         emit projectCreated(plascanPath);
         LOG_INFO(QStringLiteral("项目已创建: %1").arg(plascanPath));
@@ -269,7 +269,7 @@ void ProjectManager::createNewProject()
 void ProjectManager::openProject()
 {
     QString plascanPath;
-    if (m_uiCommands && m_uiCommands->openProjectByDialog(&plascanPath))
+    if (_uiCommands && _uiCommands->openProjectByDialog(&plascanPath))
     {
         LOG_INFO(QStringLiteral("项目已打开: %1").arg(plascanPath));
     }
@@ -277,7 +277,7 @@ void ProjectManager::openProject()
 
 void ProjectManager::openProjectFromPath(const QString &plascanPath)
 {
-    if (m_uiCommands && m_uiCommands->openProjectFromPath(plascanPath))
+    if (_uiCommands && _uiCommands->openProjectFromPath(plascanPath))
     {
         LOG_INFO(QStringLiteral("项目已打开: %1").arg(plascanPath));
     }
@@ -285,22 +285,22 @@ void ProjectManager::openProjectFromPath(const QString &plascanPath)
 
 void ProjectManager::saveProject()
 {
-    if (!m_projectData)
+    if (!_projectData)
     {
         return;
     }
 
     emit saveStarted();
-    const bool success = m_uiCommands && m_uiCommands->saveProject();
+    const bool success = _uiCommands && _uiCommands->saveProject();
 
     emit saveFinished(success);
 }
 
 void ProjectManager::closeProject()
 {
-    if (m_uiCommands)
+    if (_uiCommands)
     {
-        m_uiCommands->closeProject();
+        _uiCommands->closeProject();
     }
 }
 
@@ -310,28 +310,28 @@ void ProjectManager::closeProject()
 
 void ProjectManager::addPhoto()
 {
-    if (m_uiCommands)
+    if (_uiCommands)
     {
-        (void)m_uiCommands->addPhoto();
+        (void)_uiCommands->addPhoto();
     }
 }
 
 void ProjectManager::addFolder()
 {
-    if (m_uiCommands)
+    if (_uiCommands)
     {
-        (void)m_uiCommands->addFolder();
+        (void)_uiCommands->addFolder();
     }
 }
 
 bool ProjectManager::importCameraForImage(const QString &imagePath)
 {
-    return m_taskDispatcher->importCameraForImage(imagePath);
+    return _taskDispatcher->importCameraForImage(imagePath);
 }
 
 void ProjectManager::startTriangulationAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::Triangulation, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::Triangulation, settings);
 }
 
 void ProjectManager::startDenseMatchAsync(const QJsonObject &settings)
@@ -349,52 +349,52 @@ void ProjectManager::startDenseMatchAsyncWithProgress(
 
 void ProjectManager::startSparseCloudOutlierRemovalAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseOutlierRemoval, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseOutlierRemoval, settings);
 }
 
 void ProjectManager::startSparseCloudLocalOptimAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseLocalOptimization, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseLocalOptimization, settings);
 }
 
 void ProjectManager::startSparseCloudRefineAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseRefine, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::SparseRefine, settings);
 }
 
 bool ProjectManager::importCamerasByFilenameBatch()
 {
-    return m_taskDispatcher->importCamerasByFilenameBatch();
+    return _taskDispatcher->importCamerasByFilenameBatch();
 }
 
 bool ProjectManager::initializeCamerasFromExifOrDefault(const QJsonObject &settings)
 {
-    return m_taskDispatcher->initializeCamerasFromExifOrDefault(settings);
+    return _taskDispatcher->initializeCamerasFromExifOrDefault(settings);
 }
 
 bool ProjectManager::initializeCamerasFromIntrinsics(const QJsonObject &settings)
 {
-    return m_taskDispatcher->initializeCamerasFromIntrinsics(settings);
+    return _taskDispatcher->initializeCamerasFromIntrinsics(settings);
 }
 
 bool ProjectManager::initializeCameraPosesWithSFM(const QJsonObject &settings)
 {
-    return m_taskDispatcher->initializeCameraPosesWithSFM(settings);
+    return _taskDispatcher->initializeCameraPosesWithSFM(settings);
 }
 
 void ProjectManager::removeResource(const QString &resourcePath)
 {
-    if (m_projectData)
+    if (_projectData)
     {
-        m_projectData->removeResource(resourcePath);
+        _projectData->removeResource(resourcePath);
     }
 }
 
 void ProjectManager::removeResources(const QStringList &resourcePaths)
 {
-    if (m_projectData)
+    if (_projectData)
     {
-        m_projectData->removeResources(resourcePaths);
+        _projectData->removeResources(resourcePaths);
     }
 }
 
@@ -406,7 +406,7 @@ void ProjectManager::importReferenceDataset()
     }
 
     const QString selected = QFileDialog::getOpenFileName(
-        m_parent,
+        _parent,
         QStringLiteral("导入参考 DEM/LiDAR"),
         getLastUsedDir(QStringLiteral("reference_dataset")),
         QStringLiteral("参考地形/点云 (*.tif *.tiff *.vrt *.las *.laz *.copc *.ply *.xyz *.csv);;"
@@ -437,7 +437,7 @@ bool ProjectManager::registerReferenceDataset(const QString &path,
                                               const QString &role,
                                               QString *errorMsg)
 {
-    return xjw::gui::project::registerReferenceDataset(m_projectData, path, type, role, errorMsg);
+    return xjw::gui::project::registerReferenceDataset(_projectData, path, type, role, errorMsg);
 }
 
 void ProjectManager::openSurveyControlDialog()
@@ -447,8 +447,8 @@ void ProjectManager::openSurveyControlDialog()
         return;
     }
 
-    SurveyControlDialog dialog(m_parent);
-    dialog.setSurveyControlMetadata(m_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
+    SurveyControlDialog dialog(_parent);
+    dialog.setSurveyControlMetadata(_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
 
     connect(&dialog, &SurveyControlDialog::importCsvRequested, this, [this, &dialog]()
     {
@@ -463,7 +463,7 @@ void ProjectManager::openSurveyControlDialog()
         }
 
         saveLastUsedDir(QStringLiteral("survey_control"), QFileInfo(selected).absolutePath());
-        const auto result = xjw::gui::project::importSurveyControlCsv(m_projectData,
+        const auto result = xjw::gui::project::importSurveyControlCsv(_projectData,
                                                                       selected,
                                                                       QString());
         if (!result.imported)
@@ -475,7 +475,7 @@ void ProjectManager::openSurveyControlDialog()
             return;
         }
 
-        dialog.setSurveyControlMetadata(m_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
+        dialog.setSurveyControlMetadata(_projectData->metadata().value(QStringLiteral("survey_control")).toObject());
         dialog.setStatusMessage(QStringLiteral("已导入：控制点 %1，检查点 %2，比例尺 %3")
                                     .arg(result.controlPointCount)
                                     .arg(result.checkPointCount)
@@ -497,7 +497,7 @@ void ProjectManager::runReferenceQualityCheck()
         return;
     }
 
-    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(m_projectData);
+    const auto result = xjw::gui::project::writeReferenceDatasetQualityReport(_projectData);
     if (!result.saved)
     {
         showWarning(result.errorMessage.isEmpty()
@@ -511,7 +511,7 @@ void ProjectManager::runReferenceQualityCheck()
         ? QStringLiteral("已找到可检查的参考数据与项目成果。")
         : QStringLiteral("报告已生成，但当前缺少参考数据或可比较的项目成果。");
     LOG_INFO(QStringLiteral("参考数据精度检查报告已生成: %1").arg(result.jsonPath));
-    QMessageBox::information(m_parent,
+    QMessageBox::information(_parent,
                              QStringLiteral("点云/DEM 精度检查"),
                              QStringLiteral("%1\nJSON: %2\nCSV: %3")
                                  .arg(status, result.jsonPath, result.csvPath));
@@ -524,7 +524,7 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
         return;
     }
 
-    const auto result = xjw::gui::project::writeReferenceTerrainPriorPreflightReport(m_projectData);
+    const auto result = xjw::gui::project::writeReferenceTerrainPriorPreflightReport(_projectData);
     if (!result.saved)
     {
         showWarning(result.errorMessage.isEmpty()
@@ -541,19 +541,19 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
              .arg(ready));
     if (!ready)
     {
-        QMessageBox::information(m_parent,
+        QMessageBox::information(_parent,
                                  QStringLiteral("参考地形约束重新平差"),
                                  QStringLiteral("前置检查未通过：%1。\n请先导入 role=ba_prior 的参考 DEM/LiDAR，并完成正式空三。\nJSON: %2\nCSV: %3")
                                      .arg(status, result.jsonPath, result.csvPath));
         return;
     }
 
-    const QJsonObject meta = m_projectData->metadata();
+    const QJsonObject meta = _projectData->metadata();
     const QString demPriorPath = firstReferenceDemPriorPath(meta);
     const QString laserPriorPath = firstReferenceLaserPriorPath(meta);
     if (demPriorPath.isEmpty() && laserPriorPath.isEmpty())
     {
-        QMessageBox::information(m_parent,
+        QMessageBox::information(_parent,
                                  QStringLiteral("参考地形约束重新平差"),
                                  QStringLiteral("前置检查通过，但未找到可直接用于 BA 的参考数据。\n"
                                                 "请导入 role=ba_prior 的 DEM（GeoTIFF/VRT），或带 LiDAR/点云类型的 PLY 文件。\n"
@@ -565,7 +565,7 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
     const QStringList images = getAllImages();
     if (images.size() < 2)
     {
-        QMessageBox::warning(m_parent,
+        QMessageBox::warning(_parent,
                              QStringLiteral("参考地形约束重新平差"),
                              QStringLiteral("项目影像少于 2 张，无法执行 BA。"));
         return;
@@ -599,7 +599,7 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
               .arg(outputDir);
 
     const QMessageBox::StandardButton choice = QMessageBox::question(
-        m_parent,
+        _parent,
         QStringLiteral("参考地形约束重新平差"),
         prompt,
         QMessageBox::Yes | QMessageBox::No,
@@ -658,13 +658,13 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
 
 void ProjectManager::deleteGeneratedData(const QString &section, const QStringList &resourcePaths)
 {
-    if (!m_projectData || resourcePaths.isEmpty())
+    if (!_projectData || resourcePaths.isEmpty())
     {
         return;
     }
     if (section == QStringLiteral("照片"))
     {
-        QMessageBox::information(m_parent,
+        QMessageBox::information(_parent,
                                  QStringLiteral("删除数据"),
                                  QStringLiteral("照片分组不支持删除数据，请使用移除引用。"));
         return;
@@ -672,7 +672,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
 
     const int selectedCount = resourcePaths.size();
     const QMessageBox::StandardButton confirm = QMessageBox::question(
-        m_parent,
+        _parent,
         QStringLiteral("删除数据"),
         selectedCount == 1
             ? QStringLiteral("确定删除所选%1数据及其关联生成文件吗？此操作不可撤销。").arg(section)
@@ -684,12 +684,12 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
         return;
     }
 
-    const auto cleanupResult = xjw::gui::project::ProjectResourceCleanupService::cleanupGeneratedData(m_projectData,
+    const auto cleanupResult = xjw::gui::project::ProjectResourceCleanupService::cleanupGeneratedData(_projectData,
                                                                                                        section,
                                                                                                        resourcePaths);
     if (cleanupResult.unsupportedSection)
     {
-        QMessageBox::warning(m_parent,
+        QMessageBox::warning(_parent,
                              QStringLiteral("删除数据"),
                              QStringLiteral("当前分组暂不支持删除数据：%1").arg(section));
         return;
@@ -697,7 +697,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
 
     if (!cleanupResult.success && !cleanupResult.errorMessage.isEmpty())
     {
-        QMessageBox::warning(m_parent,
+        QMessageBox::warning(_parent,
                              QStringLiteral("删除数据"),
                              QStringLiteral("删除失败：%1").arg(cleanupResult.errorMessage));
         return;
@@ -705,7 +705,7 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
 
     if (cleanupResult.noMatchedRecords)
     {
-        QMessageBox::information(m_parent,
+        QMessageBox::information(_parent,
                                  QStringLiteral("删除数据"),
                                  QStringLiteral("未找到可删除的%1数据记录。").arg(section));
         return;
@@ -713,13 +713,13 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
 
     if (cleanupResult.failedPaths.isEmpty())
     {
-        QMessageBox::information(m_parent,
+        QMessageBox::information(_parent,
                                  QStringLiteral("删除数据"),
                                  QStringLiteral("已删除 %1 项%2数据。").arg(cleanupResult.removedCount).arg(section));
     }
     else
     {
-        QMessageBox::warning(m_parent,
+        QMessageBox::warning(_parent,
                              QStringLiteral("删除数据"),
                              QStringLiteral("已移除 %1 项%2数据记录，但以下文件/目录删除失败：\n%3")
                                  .arg(cleanupResult.removedCount)
@@ -731,9 +731,9 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
 void ProjectManager::packResource(const QString &resourcePath)
 {
     QString err;
-    if (m_projectData && !m_projectData->packResource(resourcePath, &err))
+    if (_projectData && !_projectData->packResource(resourcePath, &err))
     {
-        QMessageBox::warning(m_parent, QStringLiteral("提示"), err);
+        QMessageBox::warning(_parent, QStringLiteral("提示"), err);
     }
 }
 
@@ -745,7 +745,7 @@ void ProjectManager::packResource(const QString &resourcePath)
 
 QJsonObject ProjectManager::loadUiSettings() const
 {
-    return m_projectData ? m_projectData->loadUiSettings() : QJsonObject();
+    return _projectData ? _projectData->loadUiSettings() : QJsonObject();
 }
 
 //==============================================================================
@@ -754,68 +754,68 @@ QJsonObject ProjectManager::loadUiSettings() const
 
 bool ProjectManager::isDirty() const
 {
-    return m_projectData ? m_projectData->isDirty() : false;
+    return _projectData ? _projectData->isDirty() : false;
 }
 
 QString ProjectManager::currentProjectPath() const
 {
-    return m_projectData ? m_projectData->currentProjectPath() : QString();
+    return _projectData ? _projectData->currentProjectPath() : QString();
 }
 
 QJsonObject ProjectManager::currentMeta() const
 {
-    return m_projectData ? m_projectData->metadata() : QJsonObject();
+    return _projectData ? _projectData->metadata() : QJsonObject();
 }
 
 QJsonObject ProjectManager::coreProjectMeta() const
 {
-    return m_projectData ? m_projectData->coreFilesMeta() : QJsonObject();
+    return _projectData ? _projectData->coreFilesMeta() : QJsonObject();
 }
 
 QStringList ProjectManager::getImagesByCategory(const QString &category) const
 {
-    return m_projectData ? m_projectData->getImagesByCategory(category) : QStringList();
+    return _projectData ? _projectData->getImagesByCategory(category) : QStringList();
 }
 
 QStringList ProjectManager::getAllImages() const
 {
-    return m_projectData ? m_projectData->getAllImages() : QStringList();
+    return _projectData ? _projectData->getAllImages() : QStringList();
 }
 
 QString ProjectManager::findMatchFileForPair(const QString &imgA, const QString &imgB) const
 {
-    return m_projectData ? m_projectData->findMatchFile(imgA, imgB) : QString();
+    return _projectData ? _projectData->findMatchFile(imgA, imgB) : QString();
 }
 
 bool ProjectManager::hasTemporaryMeta() const
 {
-    return m_projectData ? m_projectData->hasTemporaryMetadata() : false;
+    return _projectData ? _projectData->hasTemporaryMetadata() : false;
 }
 
 void ProjectManager::discardTemporaryMeta()
 {
-    if (m_projectData) {
-        m_projectData->clearTemporaryMetadata();
+    if (_projectData) {
+        _projectData->clearTemporaryMetadata();
     }
 }
 
 void ProjectManager::writeMetadataToTempAsync(const QJsonObject &meta, bool markDirty)
 {
-    if (m_projectData) {
-        m_projectData->updateMetadata(meta, markDirty);
-        m_projectData->saveTemporaryMetadata();
+    if (_projectData) {
+        _projectData->updateMetadata(meta, markDirty);
+        _projectData->saveTemporaryMetadata();
     }
 }
 
 void ProjectManager::refreshReconstructionQualityReport()
 {
-    if (!m_projectData || !m_projectData->hasProject())
+    if (!_projectData || !_projectData->hasProject())
     {
         return;
     }
 
     const auto reportResult =
-        xjw::gui::project::writeReconstructionQualityProjectReport(m_projectData);
+        xjw::gui::project::writeReconstructionQualityProjectReport(_projectData);
     if (!reportResult.saved && !reportResult.errorMessage.isEmpty())
     {
         LOG_WARN(QStringLiteral("重建质量报告刷新失败: %1").arg(reportResult.errorMessage));
@@ -824,8 +824,8 @@ void ProjectManager::refreshReconstructionQualityReport()
 
 void ProjectManager::appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings)
 {
-    if (m_projectData) {
-        m_projectData->appendIpfindResult(input, output, settings);
+    if (_projectData) {
+        _projectData->appendIpfindResult(input, output, settings);
         // 通知界面刷新该影像的 interest points 缓存
         // 从输出路径推导后缀 (.sp/.dsk/.alk/.sift/...)
         QString suffix;
@@ -839,8 +839,8 @@ void ProjectManager::appendIpfindResult(const QString &input, const QString &out
 
 void ProjectManager::appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings)
 {
-    if (m_projectData) {
-        m_projectData->appendIpmatchResult(outputs, settings);
+    if (_projectData) {
+        _projectData->appendIpmatchResult(outputs, settings);
     }
 }
 
@@ -853,11 +853,11 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     // ── 前置检查（仅快速校验，不做任何 IO）───────────────────────────────
     if (!ensureProjectOpen()) return;
     if (images.size() < 2) {
-        QMessageBox::warning(m_parent, QStringLiteral("提示"), QStringLiteral("至少需要选择两张影像"));
+        QMessageBox::warning(_parent, QStringLiteral("提示"), QStringLiteral("至少需要选择两张影像"));
         return;
     }
     if (outputDir.trimmed().isEmpty()) {
-        QMessageBox::warning(m_parent, QStringLiteral("提示"), QStringLiteral("请指定输出目录"));
+        QMessageBox::warning(_parent, QStringLiteral("提示"), QStringLiteral("请指定输出目录"));
         return;
     }
 
@@ -865,8 +865,8 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
 
     // ── 只获取核心数据（影像列表/相机，无结果数组，速度极快）──────────────
     // 结果数据（ipmatch_results）在后台线程直接读取，避免 UI 阻塞
-    const QJsonObject coreData   = m_projectData->coreFilesMeta();
-    const QString     plascanPath = m_projectData->currentProjectPath();
+    const QJsonObject coreData   = _projectData->coreFilesMeta();
+    const QString     plascanPath = _projectData->currentProjectPath();
 
     const int minMatches = qMax(0, extraSettings.value(QStringLiteral("min_matches")).toInt(0));
 
@@ -963,7 +963,7 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
                     {
                         return;
                     }
-                    if (baProgressSelf->m_atCancelFlag != cancelFlag ||
+                    if (baProgressSelf->_atCancelFlag != cancelFlag ||
                         cancelFlag->load(std::memory_order_relaxed))
                     {
                         return;
@@ -999,11 +999,11 @@ xjw::gui::tasks::runGuarded(
                     {
                         return;
                     }
-                    if (self->m_atCancelFlag != cancelFlag)
+                    if (self->_atCancelFlag != cancelFlag)
                     {
                         return;
                     }
-                    self->m_atCancelFlag.reset();
+                    self->_atCancelFlag.reset();
                     emit self->atProgressFinished(success);
                 },
                 Qt::QueuedConnection);
@@ -1021,7 +1021,7 @@ xjw::gui::tasks::runGuarded(
                 {
                     return;
                 }
-                if (self->m_atCancelFlag != cancelFlag ||
+                if (self->_atCancelFlag != cancelFlag ||
                     cancelFlag->load(std::memory_order_relaxed))
                 {
                     return;
@@ -1048,7 +1048,7 @@ xjw::gui::tasks::runGuarded(
                     {
                         return;
                     }
-                    if (self->m_atCancelFlag == cancelFlag)
+                    if (self->_atCancelFlag == cancelFlag)
                     {
                         emit self->bundleAdjustPreviewReady(QJsonObject());
                     }
@@ -1070,7 +1070,7 @@ xjw::gui::tasks::runGuarded(
                     {
                         return;
                     }
-                    if (self->m_atCancelFlag != cancelFlag)
+                    if (self->_atCancelFlag != cancelFlag)
                     {
                         return;
                     }
@@ -1078,9 +1078,9 @@ xjw::gui::tasks::runGuarded(
                         buildStatus == xjw::core::project::BaInputBuildStatus::NotEnoughCameras
                         ? QStringLiteral("所选影像中可用相机参数不足（至少需要两台相机）")
                         : QStringLiteral("未找到可用于光束法平差的匹配点（请检查选中影像是否已有匹配结果）");
-                    QMessageBox::warning(self->m_parent, QStringLiteral("提示"), msg);
+                    QMessageBox::warning(self->_parent, QStringLiteral("提示"), msg);
                     emit self->bundleAdjustPreviewReady(QJsonObject());
-                    self->m_atCancelFlag.reset();
+                    self->_atCancelFlag.reset();
                     emit self->atProgressFinished(false);
                 },
                 Qt::QueuedConnection);
@@ -1107,14 +1107,14 @@ xjw::gui::tasks::runGuarded(
                 {
                     return;
                 }
-                if (self->m_atCancelFlag != cancelFlag)
+                if (self->_atCancelFlag != cancelFlag)
                 {
                     return;
                 }
                 if (cancelFlag->load(std::memory_order_relaxed))
                 {
                     emit self->bundleAdjustPreviewReady(QJsonObject());
-                    self->m_atCancelFlag.reset();
+                    self->_atCancelFlag.reset();
                     emit self->atProgressFinished(false);
                     return;
                 }
@@ -1122,16 +1122,16 @@ xjw::gui::tasks::runGuarded(
                 emit self->atProgressChanged(QStringLiteral("光束法平差整理结果..."), 95);
 
                 if (!baResult.success && !isDryRun) {
-                    QMessageBox::warning(self->m_parent,
+                    QMessageBox::warning(self->_parent,
                         QStringLiteral("平差提示"),
                         QStringLiteral("光束法平差执行出现问题：%1").arg(baResult.errorMessage));
                 }
-                self->m_pendingBaBeforeCameraMeta = beforeCamMeta;
-                self->m_pendingBaCameraMeta  = baResult.pendingCamUpdates;
-                self->m_pendingBaResult      = baResult.resultJson;
-                self->m_hasPendingBaPreview  = !self->m_pendingBaCameraMeta.isEmpty();
+                self->_pendingBaBeforeCameraMeta = beforeCamMeta;
+                self->_pendingBaCameraMeta  = baResult.pendingCamUpdates;
+                self->_pendingBaResult      = baResult.resultJson;
+                self->_hasPendingBaPreview  = !self->_pendingBaCameraMeta.isEmpty();
                 emit self->bundleAdjustPreviewReady(baResult.resultJson);
-                self->m_atCancelFlag.reset();
+                self->_atCancelFlag.reset();
                 emit self->atProgressFinished(baResult.success);
             },
             Qt::QueuedConnection);
@@ -1147,25 +1147,25 @@ bool ProjectManager::setImageCameras(const QMap<QString, QJsonObject> &cameras,
                                      QString *errorMsg)
 {
     // 直接委托给数据层——ProjectManager 不持有算法逻辑，仅转发
-    if (!m_projectData)
+    if (!_projectData)
     {
         if (errorMsg) *errorMsg = QStringLiteral("ProjectData 未初始化");
         if (updatedCount) *updatedCount = 0;
         return false;
     }
-    return m_projectData->setImageCameras(cameras, updatedCount, errorMsg);
+    return _projectData->setImageCameras(cameras, updatedCount, errorMsg);
 }
 
 bool ProjectManager::clearImageCameras(const QStringList &imagePaths,
                                        int    *updatedCount,
                                        QString *errorMsg)
 {
-    if (!m_projectData) {
+    if (!_projectData) {
         if (errorMsg) *errorMsg = QStringLiteral("ProjectData 未初始化");
         if (updatedCount) *updatedCount = 0;
         return false;
     }
-    return m_projectData->clearImageCameras(imagePaths, updatedCount, errorMsg);
+    return _projectData->clearImageCameras(imagePaths, updatedCount, errorMsg);
 }
 
 QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
@@ -1175,7 +1175,7 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
     if (hasCamerasForAll) *hasCamerasForAll = true;
 
     QMap<QString, xjw::Camera> result;
-    if (!m_projectData)
+    if (!_projectData)
     {
         if (hasCamerasForAll) *hasCamerasForAll = false;
         return result;
@@ -1183,7 +1183,7 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
 
     // 从运行时元数据中建立路径 → 影像元数据索引，再按需解析相机。
     const QMap<QString, QJsonObject> imageMetaByPath =
-        xjw::gui::project::projectImageMetaByPath(projectFilesMeta(m_projectData), true);
+        xjw::gui::project::projectImageMetaByPath(projectFilesMeta(_projectData), true);
 
     for (const QString &imgPath : images)
     {
@@ -1214,17 +1214,17 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
 
 void ProjectManager::startGenerateModelAsync()
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateModel);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateModel);
 }
 
 void ProjectManager::startMeshReconstructionAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::MeshReconstruction, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::MeshReconstruction, settings);
 }
 
 void ProjectManager::startTextureMappingAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::TextureMapping, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::TextureMapping, settings);
 }
 
 void ProjectManager::startStereoAndPoint2DemAsync(const QStringList &images,
@@ -1235,7 +1235,7 @@ void ProjectManager::startStereoAndPoint2DemAsync(const QStringList &images,
                                                    const QString &demType,
                                                    const QString &t_srs)
 {
-    m_taskDispatcher->startStereoAndPoint2DemAsync(images,
+    _taskDispatcher->startStereoAndPoint2DemAsync(images,
                                                    outputDir,
                                                    threads,
                                                    genPointCloud,
@@ -1248,7 +1248,7 @@ void ProjectManager::startFullDemPipelineAsync(const QStringList &images,
                                                const QString &outputDir,
                                                const QJsonObject &pipelineSettings)
 {
-    m_taskDispatcher->startFullDemPipelineAsync(images, outputDir, pipelineSettings);
+    _taskDispatcher->startFullDemPipelineAsync(images, outputDir, pipelineSettings);
 }
 
 void ProjectManager::startDemFromDenseCloudAsync(const QString &denseCloudPath,
@@ -1256,7 +1256,7 @@ void ProjectManager::startDemFromDenseCloudAsync(const QString &denseCloudPath,
                                                  double demResolution,
                                                  const QString &demType)
 {
-    m_taskDispatcher->startDemFromDenseCloudAsync(denseCloudPath, outputDir, demResolution, demType);
+    _taskDispatcher->startDemFromDenseCloudAsync(denseCloudPath, outputDir, demResolution, demType);
 }
 
 void ProjectManager::startMapProjectAsync(const QStringList &images,
@@ -1264,7 +1264,7 @@ void ProjectManager::startMapProjectAsync(const QStringList &images,
                                           const QString &outputPath,
                                           double resolution)
 {
-    m_taskDispatcher->startMapProjectAsync(images,
+    _taskDispatcher->startMapProjectAsync(images,
                                            demPath,
                                            outputPath,
                                            resolution);
@@ -1272,15 +1272,15 @@ void ProjectManager::startMapProjectAsync(const QStringList &images,
 
 bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
 {
-    if (!m_hasPendingBaPreview || m_pendingBaCameraMeta.isEmpty()) {
+    if (!_hasPendingBaPreview || _pendingBaCameraMeta.isEmpty()) {
         if (errorMsg) *errorMsg = QStringLiteral("当前没有可应用的平差预览结果");
         return false;
     }
 
-    const QStringList allImages = m_projectData ? m_projectData->getAllImages() : QStringList();
-    const auto commitResult = commitBundleAdjustPreview(m_projectData,
-                                                        m_pendingBaCameraMeta,
-                                                        m_pendingBaResult);
+    const QStringList allImages = _projectData ? _projectData->getAllImages() : QStringList();
+    const auto commitResult = commitBundleAdjustPreview(_projectData,
+                                                        _pendingBaCameraMeta,
+                                                        _pendingBaResult);
     if (!commitResult.success) {
         if (errorMsg) *errorMsg = commitResult.errorMessage;
         return false;
@@ -1297,12 +1297,12 @@ bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
                   .arg(QDateTime::currentDateTimeUtc().toString(QStringLiteral("yyyyMMdd_HHmmss"))));
     const auto artifactsResult = finalizeBundleAdjustArtifacts(
         assetsDir,
-        m_pendingBaResult,
+        _pendingBaResult,
         allImages,
-        m_pendingBaResult.value(QStringLiteral("output_dir")).toString(),
+        _pendingBaResult.value(QStringLiteral("output_dir")).toString(),
         QStringLiteral("reconstruction_bundle_adjust"),
-        m_pendingBaBeforeCameraMeta,
-        m_pendingBaCameraMeta,
+        _pendingBaBeforeCameraMeta,
+        _pendingBaCameraMeta,
         baOutputDir,
         true);
     if (!artifactsResult.reportWarning.isEmpty())
@@ -1326,12 +1326,12 @@ bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
                      .arg(artifactsResult.sparseCloudExport.errorMessage));
     }
 
-    m_pendingBaCameraMeta.clear();
-    m_pendingBaBeforeCameraMeta.clear();
-    m_pendingBaResult = QJsonObject();
-    m_hasPendingBaPreview = false;
+    _pendingBaCameraMeta.clear();
+    _pendingBaBeforeCameraMeta.clear();
+    _pendingBaResult = QJsonObject();
+    _hasPendingBaPreview = false;
 
-    QMessageBox::information(m_parent,
+    QMessageBox::information(_parent,
                              QStringLiteral("光束法平差"),
                              QStringLiteral("已保留本次平差结果，并更新 %1 台相机参数。")
                                  .arg(commitResult.updatedCameraCount));
@@ -1340,10 +1340,10 @@ bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
 
 void ProjectManager::discardBundleAdjustPreview()
 {
-    m_pendingBaCameraMeta.clear();
-    m_pendingBaBeforeCameraMeta.clear();
-    m_pendingBaResult = QJsonObject();
-    m_hasPendingBaPreview = false;
+    _pendingBaCameraMeta.clear();
+    _pendingBaBeforeCameraMeta.clear();
+    _pendingBaResult = QJsonObject();
+    _hasPendingBaPreview = false;
 }
 
 void ProjectManager::applyBundleAdjustForAt(const QString     &assetsDir,
@@ -1352,11 +1352,11 @@ void ProjectManager::applyBundleAdjustForAt(const QString     &assetsDir,
                                             const QMap<QString, QJsonObject> &beforeCameras)
 {
     bool success = false;
-    if (m_hasPendingBaPreview && !m_pendingBaCameraMeta.isEmpty()) 
+    if (_hasPendingBaPreview && !_pendingBaCameraMeta.isEmpty())
     {
-        const auto commitResult = commitBundleAdjustPreview(m_projectData,
-                                                            m_pendingBaCameraMeta,
-                                                            m_pendingBaResult);
+        const auto commitResult = commitBundleAdjustPreview(_projectData,
+                                                            _pendingBaCameraMeta,
+                                                            _pendingBaResult);
         if (commitResult.success)
         {
             LOG_INFO(
@@ -1380,12 +1380,12 @@ void ProjectManager::applyBundleAdjustForAt(const QString     &assetsDir,
     }
 
     const auto artifactsResult = finalizeBundleAdjustArtifacts(assetsDir,
-                                                               m_pendingBaResult,
+                                                               _pendingBaResult,
                                                                images,
                                                                outputDir,
                                                                QStringLiteral("workflow_aerial_triangulation"),
                                                                beforeCameras,
-                                                               m_pendingBaCameraMeta,
+                                                               _pendingBaCameraMeta,
                                                                outputDir,
                                                                false);
     if (!artifactsResult.reportWarning.isEmpty())
@@ -1408,10 +1408,10 @@ void ProjectManager::applyBundleAdjustForAt(const QString     &assetsDir,
     }
 
     // ── 4. 清理预览缓存 ────────────────────────────────────────────────────
-    m_pendingBaCameraMeta.clear();
-    m_pendingBaBeforeCameraMeta.clear();
-    m_pendingBaResult    = QJsonObject();
-    m_hasPendingBaPreview = false;
+    _pendingBaCameraMeta.clear();
+    _pendingBaBeforeCameraMeta.clear();
+    _pendingBaResult    = QJsonObject();
+    _hasPendingBaPreview = false;
 
     // ── 5. 发出空三完成信号 ────────────────────────────────────────────────
     emit atProgressFinished(success);
@@ -1419,12 +1419,12 @@ void ProjectManager::applyBundleAdjustForAt(const QString     &assetsDir,
 
 bool ProjectManager::appendIntersectionResult(const QJsonObject &result, QString *errorMsg)
 {
-    return m_projectData ? m_projectData->appendIntersectionResult(result, errorMsg) : false;
+    return _projectData ? _projectData->appendIntersectionResult(result, errorMsg) : false;
 }
 
 QJsonArray ProjectManager::intersectionResults() const
 {
-    return m_projectData ? m_projectData->getIntersectionResults() : QJsonArray();
+    return _projectData ? _projectData->getIntersectionResults() : QJsonArray();
 }
 
 //==============================================================================
@@ -1433,32 +1433,32 @@ QJsonArray ProjectManager::intersectionResults() const
 
 void ProjectManager::setFileDialogStateManager(FileDialogStateManager *manager)
 {
-    m_fileDialogState = manager;
+    _fileDialogState = manager;
 }
 
 QString ProjectManager::getLastUsedDir(const QString &key) const
 {
-    if (!m_fileDialogState) return QDir::homePath();
-    return m_fileDialogState->lastDir(key);
+    if (!_fileDialogState) return QDir::homePath();
+    return _fileDialogState->lastDir(key);
 }
 
 void ProjectManager::saveLastUsedDir(const QString &key, const QString &dir)
 {
-    if (m_fileDialogState) {
-        m_fileDialogState->setLastDir(key, dir);
+    if (_fileDialogState) {
+        _fileDialogState->setLastDir(key, dir);
     }
 }
 
 void ProjectManager::showWarning(const QString &message, const QString &title) const
 {
     // 统一 warning 出口，后续若切换提示组件只需改这里。
-    QMessageBox::warning(m_parent, title, message);
+    QMessageBox::warning(_parent, title, message);
 }
 
 bool ProjectManager::ensureProjectOpen(const QString &message, const QString &title) const
 {
     // 将“项目是否打开”校验统一收口，避免重复 if 与文案分散。
-    if (m_projectData && m_projectData->hasProject()) return true;
+    if (_projectData && _projectData->hasProject()) return true;
     showWarning(message, title);
     return false;
 }
@@ -1470,7 +1470,7 @@ void ProjectManager::appendAtResult(const QString &sparseCloudPath,
                                     const QJsonObject &extraRecord,
                                     int replaceIndex)
 {
-    xjw::gui::project::appendAtResult(m_projectData,
+    xjw::gui::project::appendAtResult(_projectData,
                                       sparseCloudPath,
                                       sparsePointCount,
                                       selectedImages,
@@ -1485,7 +1485,7 @@ void ProjectManager::appendObsNetResult(int nodeCount,
                                         const QString &algorithmName,
                                         const QJsonObject &extraInfo)
 {
-    xjw::gui::project::appendObsNetResult(m_projectData,
+    xjw::gui::project::appendObsNetResult(_projectData,
                                           nodeCount,
                                           edgeCount,
                                           algorithmName,
@@ -1495,23 +1495,23 @@ void ProjectManager::appendObsNetResult(int nodeCount,
 // ── 追加空三（SFM）结果到 aerial_triangulation_results ─────────────────
 QJsonArray ProjectManager::getAvailableAtResults() const
 {
-    return m_taskDispatcher->getAvailableAtResults();
+    return _taskDispatcher->getAvailableAtResults();
 }
 
 void ProjectManager::startEstimateDepthMapsAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::EstimateDepthMaps, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::EstimateDepthMaps, settings);
 }
 
 void ProjectManager::startFuseDepthMapsAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::FuseDepthMaps, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::FuseDepthMaps, settings);
 }
 
 // ── 带配置参数的MVS稠密点云生成（PatchMatch 多视图） ─────────────────────
 void ProjectManager::startGenerateDenseCloudAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateDenseCloud, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateDenseCloud, settings);
 }
 
 
@@ -1519,7 +1519,7 @@ void ProjectManager::startGenerateDenseCloudAsync(const QJsonObject &settings)
 // ── 密集点云后处理（SOR + 体素下采样 + 法向量估计） ─────────────────────────────
 void ProjectManager::startDenseCloudRefineAsync(const QJsonObject &settings)
 {
-    m_taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::RefineDenseCloud, settings);
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::RefineDenseCloud, settings);
 }
 
 
@@ -1527,15 +1527,15 @@ void ProjectManager::startDenseCloudRefineAsync(const QJsonObject &settings)
 // ── 取消正在运行的 MVS 任务 ──────────────────────────────────────────────────
 void ProjectManager::cancelMvs()
 {
-    m_taskDispatcher->cancelMvs();
+    _taskDispatcher->cancelMvs();
 }
 
 // ── 取消正在运行的 AT/SFM 任务 ──────────────────────────────────────────────
 void ProjectManager::cancelAt()
 {
-    if (m_atCancelFlag)
+    if (_atCancelFlag)
     {
-        m_atCancelFlag->store(true);
+        _atCancelFlag->store(true);
         qDebug() << "[AT/BA] 已请求取消";
     }
 }
