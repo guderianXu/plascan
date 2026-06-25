@@ -350,8 +350,10 @@ void FeatureExtractionDialog::setupConnections()
             this, &FeatureExtractionDialog::emitSettingsNow);
     connect(_batchSizeSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(_neighborhoodRadiusSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, &FeatureExtractionDialog::emitSettingsNow);
-    connect(_neighborhoodThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_neighborhoodRadiusSpin, QOverload<int>::of(&QSpinBox::valueChanged),
+            this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_neighborhoodThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &FeatureExtractionDialog::emitSettingsNow);
 
     // 系统参数
     connect(_deviceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, [this]()
