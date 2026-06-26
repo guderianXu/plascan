@@ -54,6 +54,7 @@
 - `DomGenerator.cpp` 拆分纹理网格 DOM 光栅化 UV 插值中的超长语句，并新增行宽回归测试，继续收敛 terrain 核心格式规范。
 - `FeatureExtractionDialog.cpp` 拆分高级参数信号连接中的超长语句，并新增行宽回归测试，继续收敛特征提取对话框格式规范。
 - `ProjectResourceCleanupService.cpp` 拆分生成资源清理路径登记中的超长语句，并新增行宽回归测试，继续收敛项目服务层格式规范。
+- `ForwardIntersectionResultsDialog.cpp` 拆分详情表数值格式化和单元格填充中的超长语句，并新增行宽回归测试，继续收敛前方交会结果对话框格式规范。
 - 手动特征提取和 DEM 自动流水线中的特征提取步骤改为向 `FeatureExtractionRunner` 传递 `QPointer<ProjectManager>`，runner 在回写 `appendIpfindResult` 前再次检查项目管理器生命周期，避免关闭/切换项目后后台特征任务回调已释放对象。
 - 观测网络构建后台任务改用 `QPointer<ProjectManager>` 和项目路径 guard 回写进度、结果和完成信号，避免用户关闭项目或切换工程后旧任务写回当前项目。
 - `FeatureMatchRunner` 公共入口改为接收 `QPointer<ProjectManager>`，手动匹配和 DEM 自动流水线匹配步骤不再把裸 `ProjectManager*` 捕进后台 worker；匹配结果写回时会重新检查项目仍然有效且路径未切换。

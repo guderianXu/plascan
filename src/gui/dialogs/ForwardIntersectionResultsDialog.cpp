@@ -5,6 +5,7 @@
 
 #include <QComboBox>
 #include <QHeaderView>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QPushButton>
 #include <QTableWidget>
@@ -12,6 +13,26 @@
 #include <QSet>
 
 #include <algorithm>
+
+namespace {
+
+void setDetailItem(QTableWidget *table, int row, int column, const QString &text)
+{
+    table->setItem(row, column, new QTableWidgetItem(text));
+}
+
+QString formatJsonNumber(const QJsonObject &object, const QString &key)
+{
+    return QString::number(object.value(key).toDouble(), 'f', 6);
+}
+
+QString formatArrayNumber(const QJsonArray &values, int index)
+{
+    const double value = values.size() > index ? values.at(index).toDouble() : 0.0;
+    return QString::number(value, 'f', 6);
+}
+
+}
 
 ForwardIntersectionResultsDialog::ForwardIntersectionResultsDialog(ProjectManager *projectManager, QWidget *parent)
     : QDialog(parent)
@@ -172,24 +193,24 @@ void ForwardIntersectionResultsDialog::fillDetailTable(const QJsonObject &batchR
     for (int i = 0; i < points.size(); ++i)
     {
         const QJsonObject one = points.at(i).toObject();
-        const QJsonArray p0 = one.value(QStringLiteral("point0_uv")).toArray();
-        const QJsonArray p1 = one.value(QStringLiteral("point1_uv")).toArray();
-        const QJsonObject m = one.value(QStringLiteral("metrics")).toObject();
+        const QJsonArray point0_uv = one.value(QStringLiteral("point0_uv")).toArray();
+        const QJsonArray point1_uv = one.value(QStringLiteral("point1_uv")).toArray();
+        const QJsonObject metrics = one.value(QStringLiteral("metrics")).toObject();
 
-        _detailTable->setItem(i, 0, new QTableWidgetItem(QString::number(one.value(QStringLiteral("index")).toInt(i) + 1)));
-        _detailTable->setItem(i, 1, new QTableWidgetItem(QString::number(p0.size() > 0 ? p0.at(0).toDouble() : 0.0, 'f', 6)));
-        _detailTable->setItem(i, 2, new QTableWidgetItem(QString::number(p0.size() > 1 ? p0.at(1).toDouble() : 0.0, 'f', 6)));
-        _detailTable->setItem(i, 3, new QTableWidgetItem(QString::number(p1.size() > 0 ? p1.at(0).toDouble() : 0.0, 'f', 6)));
-        _detailTable->setItem(i, 4, new QTableWidgetItem(QString::number(p1.size() > 1 ? p1.at(1).toDouble() : 0.0, 'f', 6)));
-        _detailTable->setItem(i, 5, new QTableWidgetItem(m.value(QStringLiteral("valid")).toBool() ? tr("是") : tr("否")));
-        _detailTable->setItem(i, 6, new QTableWidgetItem(QString::number(m.value(QStringLiteral("X")).toDouble(), 'f', 6)));
-        _detailTable->setItem(i, 7, new QTableWidgetItem(QString::number(m.value(QStringLiteral("Y")).toDouble(), 'f', 6)));
-        _detailTable->setItem(i, 8, new QTableWidgetItem(QString::number(m.value(QStringLiteral("Z")).toDouble(), 'f', 6)));
-        _detailTable->setItem(i, 9, new QTableWidgetItem(QString::number(m.value(QStringLiteral("angle_deg")).toDouble(), 'f', 6)));
-        _detailTable->setItem(i, 10, new QTableWidgetItem(QString::number(m.value(QStringLiteral("ray_miss_distance")).toDouble(), 'f', 6)));
-        _detailTable->setItem(i, 11, new QTableWidgetItem(QString::number(m.value(QStringLiteral("reproj_error_cam1")).toDouble(), 'f', 6)));
-        _detailTable->setItem(i, 12, new QTableWidgetItem(QString::number(m.value(QStringLiteral("reproj_error_cam2")).toDouble(), 'f', 6)));
-        _detailTable->setItem(i, 13, new QTableWidgetItem(QString::number(m.value(QStringLiteral("reproj_error_rms")).toDouble(), 'f', 6)));
+        setDetailItem(_detailTable, i, 0, QString::number(one.value(QStringLiteral("index")).toInt(i) + 1));
+        setDetailItem(_detailTable, i, 1, formatArrayNumber(point0_uv, 0));
+        setDetailItem(_detailTable, i, 2, formatArrayNumber(point0_uv, 1));
+        setDetailItem(_detailTable, i, 3, formatArrayNumber(point1_uv, 0));
+        setDetailItem(_detailTable, i, 4, formatArrayNumber(point1_uv, 1));
+        setDetailItem(_detailTable, i, 5, metrics.value(QStringLiteral("valid")).toBool() ? tr("是") : tr("否"));
+        setDetailItem(_detailTable, i, 6, formatJsonNumber(metrics, QStringLiteral("X")));
+        setDetailItem(_detailTable, i, 7, formatJsonNumber(metrics, QStringLiteral("Y")));
+        setDetailItem(_detailTable, i, 8, formatJsonNumber(metrics, QStringLiteral("Z")));
+        setDetailItem(_detailTable, i, 9, formatJsonNumber(metrics, QStringLiteral("angle_deg")));
+        setDetailItem(_detailTable, i, 10, formatJsonNumber(metrics, QStringLiteral("ray_miss_distance")));
+        setDetailItem(_detailTable, i, 11, formatJsonNumber(metrics, QStringLiteral("reproj_error_cam1")));
+        setDetailItem(_detailTable, i, 12, formatJsonNumber(metrics, QStringLiteral("reproj_error_cam2")));
+        setDetailItem(_detailTable, i, 13, formatJsonNumber(metrics, QStringLiteral("reproj_error_rms")));
     }
 }
 
