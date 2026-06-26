@@ -80,7 +80,10 @@ void OverlapAnalysisDialog::loadProjectImages()
 // browseDemPath: 弹出文件选择对话框，让用户选择 DEM（XYZ 格式）文件路径
 void OverlapAnalysisDialog::browseDemPath()
 {
-    const QString path = QFileDialog::getOpenFileName(this, tr("选择 DEM XYZ"), QString(), tr("XYZ (*.xyz *.txt *.csv);;All files (*.*)"));
+    const QString path = QFileDialog::getOpenFileName(this,
+                                                      tr("选择 DEM XYZ"),
+                                                      QString(),
+                                                      tr("XYZ (*.xyz *.txt *.csv);;All files (*.*)"));
     if (!path.isEmpty())
     {
         _demPathEdit->setText(path);
