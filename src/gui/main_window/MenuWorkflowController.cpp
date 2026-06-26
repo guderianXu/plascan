@@ -1888,7 +1888,7 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
     const QString featureAlgorithm = config.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("disk")).toUpper();
     LOG_INFO(QStringLiteral("开始在后台线程执行 %1 特征提取...").arg(featureAlgorithm));
 
-    auto *mainWin = qobject_cast<MainWindow *>(_mainWindow.data());
+    QPointer<MainWindow> mainWin(qobject_cast<MainWindow *>(_mainWindow.data()));
 
     auto cancelFlag    = std::make_shared<std::atomic<bool>>(false);
     auto progressCount = std::make_shared<std::atomic<int>>(0);
@@ -1913,7 +1913,7 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
     // 定时轮询进度（100ms）
     auto *timer = new QTimer(_mainWindow);
     timer->setInterval(100);
-    connect(timer, &QTimer::timeout, [mainWin, progressCount]()
+    connect(timer, &QTimer::timeout, timer, [mainWin, progressCount]()
     {
         if (mainWin)
         {
@@ -1923,7 +1923,7 @@ void MenuWorkflowController::runFeatureExtraction(const QJsonObject &config, con
     timer->start();
 
     auto *watcher = new QFutureWatcher<bool>(_mainWindow);
-    connect(watcher, &QFutureWatcher<bool>::finished,
+    connect(watcher, &QFutureWatcher<bool>::finished, watcher,
             [mainWin, cancelFlag, timer, watcher, cancelConn]()
     {
         timer->stop();

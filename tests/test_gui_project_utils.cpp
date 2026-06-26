@@ -1694,6 +1694,25 @@ TEST(GuiAsyncLifetimeTest, FeatureExtractionRunnerUsesGuardedProjectManagerCallb
     EXPECT_TRUE(terrainBlock.contains(QStringLiteral("FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard")));
 }
 
+TEST(GuiAsyncLifetimeTest, FeatureExtractionProgressUiUsesQPointerGuard)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void MenuWorkflowController::runFeatureExtraction"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void MenuWorkflowController::openWorkflowReportDialog"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<MainWindow> mainWin")))
+        << "Feature-extraction progress callbacks can outlive the window and must use QPointer.";
+    EXPECT_FALSE(block.contains(QStringLiteral("auto *mainWin = qobject_cast<MainWindow *>(")))
+        << "Do not keep a raw MainWindow pointer in asynchronous progress callbacks.";
+    EXPECT_TRUE(block.contains(QStringLiteral("if (mainWin)")))
+        << "Progress updates should no-op after the main window is destroyed.";
+}
+
 TEST(GuiAsyncLifetimeTest, ObservationNetworkWorkerUsesGuardedProjectManagerCallbacks)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
