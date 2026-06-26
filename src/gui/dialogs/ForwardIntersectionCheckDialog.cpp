@@ -368,7 +368,9 @@ static bool loadSidecarMatchPoints(const QString &sidecarPath,
     return !pts1->isEmpty();
 }
 
-bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts1, QVector<QPointF> *pts2, QString *sourceInfo)
+bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts1,
+                                                           QVector<QPointF> *pts2,
+                                                           QString *sourceInfo)
 {
     if (!pts1 || !pts2) return false;
     pts1->clear();
@@ -434,7 +436,9 @@ bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts
     return false;
 }
 
-bool ForwardIntersectionCheckDialog::buildCameraFromImageMeta(const QJsonObject &imgObj, xjw::Camera *cam, QString *errorMsg) const
+bool ForwardIntersectionCheckDialog::buildCameraFromImageMeta(const QJsonObject &imgObj,
+                                                              xjw::Camera *cam,
+                                                              QString *errorMsg) const
 {
     if (!cam) return false;
     const QJsonObject camObj = imgObj.value(QStringLiteral("camera")).toObject();
@@ -452,8 +456,11 @@ bool ForwardIntersectionCheckDialog::buildCameraFromImageMeta(const QJsonObject 
 
     const auto intrinsics = cam->intrinsics();
     const auto center = cam->cameraCenter();
+    const QString depthFieldPresent =
+        camObj.contains(QStringLiteral("depth_axis_flipped")) ? QStringLiteral("true") : QStringLiteral("false");
     LOG_INFO(
-        QStringLiteral("[前方交汇] 相机解析: image=%1 fu_px=%2 fv_px=%3 cu_px=%4 cv_px=%5 pitch=%6 depthFlip=%7 depthFieldPresent=%8 C=(%9,%10,%11)")
+        QStringLiteral("[前方交汇] 相机解析: image=%1 fu_px=%2 fv_px=%3 cu_px=%4 cv_px=%5 "
+                       "pitch=%6 depthFlip=%7 depthFieldPresent=%8 C=(%9,%10,%11)")
             .arg(QFileInfo(imgObj.value(QStringLiteral("path")).toString()).fileName())
             .arg(intrinsics.focalX, 0, 'f', 6)
             .arg(intrinsics.focalY, 0, 'f', 6)
@@ -461,7 +468,7 @@ bool ForwardIntersectionCheckDialog::buildCameraFromImageMeta(const QJsonObject 
             .arg(intrinsics.principalY, 0, 'f', 6)
             .arg(intrinsics.pixelPitch, 0, 'f', 9)
             .arg(cam->depthAxisFlipped() ? QStringLiteral("true") : QStringLiteral("false"))
-            .arg(camObj.contains(QStringLiteral("depth_axis_flipped")) ? QStringLiteral("true") : QStringLiteral("false"))
+            .arg(depthFieldPresent)
             .arg(center[0], 0, 'f', 6)
             .arg(center[1], 0, 'f', 6)
             .arg(center[2], 0, 'f', 6));
