@@ -752,7 +752,7 @@ void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
-            this, [self, watcher, gen]()
+            watcher, [self, watcher, gen]()
     {
         if (!self)
         {
@@ -808,7 +808,7 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
-            this, [self, watcher, gen]()
+            watcher, [self, watcher, gen]()
     {
         if (!self)
         {
@@ -922,7 +922,7 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
-            this, [self, watcher, gen]()
+            watcher, [self, watcher, gen]()
     {
         if (!self)
         {

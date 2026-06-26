@@ -1584,9 +1584,16 @@ TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
     for (const QString &block : {xyzBlock, plyBlock, objBlock})
     {
         EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CameraSceneWidget> self(this)")));
+        EXPECT_TRUE(block.contains(
+            QStringLiteral("connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,\n"
+                           "            watcher,")))
+            << "Async 3D load finished callbacks should be tied to the watcher lifetime.";
         EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, gen]()")))
             << "Finished callbacks from async 3D loading must not capture raw this.";
         EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
+        EXPECT_FALSE(block.contains(
+            QStringLiteral("connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,\n"
+                           "            this,")));
         EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, gen]()")));
     }
     EXPECT_TRUE(plyBlock.contains(QStringLiteral("QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()")))
