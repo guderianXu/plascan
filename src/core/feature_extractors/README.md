@@ -1,12 +1,13 @@
 # 特征提取模块 (feature_extractors)
 
-从影像中检测关键点并计算描述子。所有提取器输出统一的 `SuperPointOutput` 结构，可复用 `.sp` 文件格式和下游匹配流程。
+从影像中检测关键点并计算描述子。所有提取器最终汇入统一的 `FeatureData`
+容器，可复用下游匹配、几何验证和 SfM 流程。
 
 ## 目录结构
 
 ```
 feature_extractors/
-├── FeatureData.h/cpp          # 通用特征数据容器 (从 SuperPointOutput 转换)
+├── FeatureData.h/cpp          # 通用特征数据容器
 ├── CMakeLists.txt             # 注册所有提取器子模块
 │
 ├── superpoint/                # SuperPoint 深度学习提取器
@@ -39,7 +40,7 @@ feature_extractors/
 
 | 提取器 | 模型 | 描述子维度 | 设备 | 特点 |
 |--------|------|:---:|------|------|
-| SuperPoint | superpoint_extractor_{cuda,cpu}.torchscript | 256 | GPU/CPU | 最通用, 与SuperGlue/LightGlue配套 |
+| SuperPoint | superpoint_extractor_{cuda,cpu}.torchscript | 256 | GPU/CPU | 通用深度学习提取器, 与 SuperGlue/LightGlue 配套 |
 | SIFT | OpenCV内置 | 128 | CPU | 尺度不变, 卫星影像鲁棒 |
 | ORB | OpenCV内置 | 32 | CPU | 极快, binary描述子 |
 | AKAZE | OpenCV内置 | 61 | CPU | 非线性扩散, 边缘保持 |
@@ -98,16 +99,21 @@ auto output = TraditionalFeatureExtractor::detect(image, config, "sift");
 
 ## 统一输出格式
 
-所有提取器输出 `SuperPointOutput` (或可转换为此格式):
+所有提取器输出 `FeatureData`，或在适配层转换为此格式：
 ```cpp
-struct SuperPointOutput {
-    std::vector<cv::KeyPoint> keypoints;  // 像素坐标 [0,W]×[0,H]
-    std::vector<float>        scores;     // 响应值
-    torch::Tensor             descriptors; // [N, D] float32, L2归一化
+struct FeatureData
+{
+    std::vector<cv::KeyPoint> keypoints;   // 像素坐标 [0,W] x [0,H]
+    std::vector<float>        scores;      // 响应值
+    cv::Mat                   descriptors; // [N,D] CV_32F 或算法原生描述子类型
+    std::string               sourceAlgorithm;
+    int                       imageWidth = 0;
+    int                       imageHeight = 0;
 };
 ```
 
-通过 `QFileBinaryIO::write()` 保存为 `.sp` 二进制文件，`QFileBinaryIO::read()` 加载。
+通过 `FeatureFileIO` 保存和加载特征文件。SuperPoint 继续使用 `.sp`，
+DISK/ALIKED 等提取器使用各自后缀，匹配阶段按算法兼容性选择输入。
 
 ## 新增提取器
 

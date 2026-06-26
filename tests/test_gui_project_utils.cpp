@@ -8070,6 +8070,30 @@ TEST(FeatureNamingCleanupTest, GuiOrchestrationDoesNotExposeLegacyAlgorithmSpeci
     EXPECT_FALSE(settingKeys.contains(QStringLiteral("SuperGlue")));
 }
 
+TEST(FeatureNamingCleanupTest, LightGlueDocumentationDoesNotAdvertiseSuperPointAsLegacy)
+{
+    const QString header =
+        readProjectSourceFile(QStringLiteral("src/core/feature_match/lightglue/LightGlueMatcher.h"));
+    ASSERT_FALSE(header.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("SuperPoint")))
+        << "The algorithm remains supported, but it should be described as an explicit compatibility path.";
+    EXPECT_FALSE(header.contains(QStringLiteral("SuperPoint legacy")))
+        << "Do not present the supported SuperPoint fallback as a legacy GUI/interface path.";
+}
+
+TEST(FeatureNamingCleanupTest, FeatureExtractorReadmeUsesFeatureDataForSharedOutput)
+{
+    const QString readme =
+        readProjectSourceFile(QStringLiteral("src/core/feature_extractors/README.md"));
+    ASSERT_FALSE(readme.isEmpty());
+
+    EXPECT_TRUE(readme.contains(QStringLiteral("FeatureData")))
+        << "Feature extractor docs should describe the current shared feature container.";
+    EXPECT_FALSE(readme.contains(QStringLiteral("SuperPointOutput")))
+        << "Do not describe the shared output abstraction with the old SuperPoint-specific type name.";
+}
+
 TEST(FeatureNamingCleanupTest, ProjectManagerDoesNotIncludeLegacyTorchAlgorithmHeaders)
 {
     const QString managerSource =
