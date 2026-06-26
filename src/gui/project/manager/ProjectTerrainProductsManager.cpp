@@ -18,6 +18,7 @@
 #include "TerrainPipeline.h"
 
 #include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 #include <QMap>
 #include <QMessageBox>
@@ -92,6 +93,32 @@ void disconnectDemPipelineConnections(const std::shared_ptr<DemPipelineConnectio
     state->disconnected = true;
     QObject::disconnect(state->metadataConnection);
     QObject::disconnect(state->mvsFinishedConnection);
+}
+
+QString normalizedAbsolutePath(const QString &path)
+{
+    const QString trimmed = path.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return QString();
+    }
+    return QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
+}
+
+bool pathIsInsideDirectory(const QString &path, const QString &directory)
+{
+    const QString cleanPath = normalizedAbsolutePath(path);
+    const QString cleanDirectory = normalizedAbsolutePath(directory);
+    if (cleanPath.isEmpty() || cleanDirectory.isEmpty())
+    {
+        return false;
+    }
+
+    const QString relativePath = QDir(cleanDirectory).relativeFilePath(cleanPath);
+    return relativePath != QStringLiteral("..") &&
+           !relativePath.startsWith(QStringLiteral("../")) &&
+           !relativePath.startsWith(QStringLiteral("..\\")) &&
+           !QDir::isAbsolutePath(relativePath);
 }
 
 QString canonicalFeatureAlgorithmFromMatcher(const QString &matcher)
@@ -1054,10 +1081,15 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                      .arg(productionAtIndex));
         emit self->demPipelineProgressChanged(QStringLiteral("密集重建 (MVS)"), 55);
 
+        const QString outDir = resolveProjectOutputDir(self->_owner->currentProjectPath(),
+                                                       demOutputDir.trimmed(),
+                                                       QStringLiteral("assets/dem/relative_dem"));
+        const QString expectedMvsOutputDir = QDir(outDir).filePath(QStringLiteral("mvs"));
+
         // 监听本次 MVS 输出：由密集重建管理器在写入 dense_cloud_results 后携带明确 PLY 路径发出。
         auto connections = std::make_shared<DemPipelineConnectionState>();
         connections->metadataConnection = connect(self->_owner, &ProjectManager::denseCloudResultReady, self.data(),
-            [self, connections, demOutputDir, demResolution, demType](
+            [self, connections, outDir, expectedMvsOutputDir, demResolution, demType](
                 const QString &denseCloudPath,
                 int pointCount)
             {
@@ -1074,15 +1106,17 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 {
                     return;
                 }
+                if (!pathIsInsideDirectory(plyPath, expectedMvsOutputDir))
+                {
+                    LOG_WARN(QStringLiteral("[DEM流水线] 忽略非本次 MVS 输出的密集点云: path=%1 expected_dir=%2")
+                                 .arg(plyPath, expectedMvsOutputDir));
+                    return;
+                }
 
                 disconnectDemPipelineConnections(connections);
 
                 LOG_INFO(QStringLiteral("[DEM流水线] ✓ 密集点云就绪（%1），启动 DEM 生成...").arg(plyPath));
                 emit self->demPipelineProgressChanged(QStringLiteral("DEM 生成"), 85);
-
-                const QString outDir = resolveProjectOutputDir(self->_owner->currentProjectPath(),
-                                                               demOutputDir.trimmed(),
-                                                               QStringLiteral("assets/dem/relative_dem"));
 
                 DirectDepthDemRequest directDepthRequest;
                 QString directDepthError;
@@ -1174,7 +1208,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                 LOG_INFO(QStringLiteral("[DEM流水线] mvsProgressFinished: success=%1").arg(mvsSuccess));
                 if (mvsSuccess)
                 {
-                    return; // 成功时由 projectMetadataChanged 处理
+                    return; // 成功时由 denseCloudResultReady 处理
                 }
                 disconnectDemPipelineConnections(connections);
                 LOG_ERROR(QStringLiteral("[DEM流水线] ✗ MVS 失败（mvsProgressFinished(false)）"));
@@ -1185,6 +1219,7 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
         QJsonObject mvsSettings;
         mvsSettings[QStringLiteral("pipeline_mode")] = true;
         mvsSettings[QStringLiteral("at_index")] = productionAtIndex;
+        mvsSettings[QStringLiteral("output_dir")] = expectedMvsOutputDir;
         // 两视图立体对：全分辨率，不降采样
         mvsSettings[QStringLiteral("resScale")] = 1.0;
         mvsSettings[QStringLiteral("iterations")] = 16;

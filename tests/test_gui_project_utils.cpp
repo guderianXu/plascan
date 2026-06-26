@@ -1079,6 +1079,33 @@ TEST(TerrainPipelineAsyncTest, AutoDemGenerationRunsOffGuiThreadAfterMvs)
         << "Dense-cloud fallback DEM rasterization must not run inside the GUI dense-ready callback.";
 }
 
+TEST(TerrainPipelineAsyncTest, AutoDemPipelineScopesDenseCloudSignalToCurrentMvsRun)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(
+        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
+    ASSERT_GE(start, 0);
+    const QString block = source.mid(start);
+
+    const int denseReadyStart = block.indexOf(QStringLiteral("denseCloudResultReady"));
+    ASSERT_GE(denseReadyStart, 0);
+    const int mvsFailureStart = block.indexOf(QStringLiteral("// 同时监听 MVS 失败"), denseReadyStart);
+    ASSERT_GT(mvsFailureStart, denseReadyStart);
+    const QString denseReadyBlock = block.mid(denseReadyStart, mvsFailureStart - denseReadyStart);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("const QString expectedMvsOutputDir")))
+        << "The full DEM pipeline should reserve a dedicated MVS output directory for this run.";
+    EXPECT_TRUE(block.contains(QStringLiteral("mvsSettings[QStringLiteral(\"output_dir\")] = expectedMvsOutputDir")))
+        << "The MVS request should write into the expected directory instead of the shared default mvs_output.";
+    EXPECT_TRUE(denseReadyBlock.contains(QStringLiteral("pathIsInsideDirectory(plyPath, expectedMvsOutputDir)")))
+        << "The dense-cloud-ready callback must ignore outputs from unrelated dense-cloud jobs.";
+    EXPECT_FALSE(denseReadyBlock.contains(QStringLiteral("return; // 成功时由 projectMetadataChanged 处理")))
+        << "The success path is now driven by denseCloudResultReady, not projectMetadataChanged.";
+}
+
 TEST(TerrainPipelineAsyncTest, FullDemPipelineUsesBoundedFeaturePairPlanning)
 {
     const QString source = readProjectSourceFile(
