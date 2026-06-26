@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // 文件: CameraModel3DDialog.h
 // 功能: 相机三维模型可视化对话框声明
 // 职责:
@@ -84,18 +84,18 @@ public:
     void loadModelFromObj(const QString &objPath);
 
     bool setManualPruneModeEnabled(bool enabled, QString *errorMessage = nullptr);
-    bool isManualPruneModeEnabled() const { return m_manualPruneMode; }
+    bool isManualPruneModeEnabled() const { return _manualPruneMode; }
     bool saveCurrentPointCloudToSource(QString *errorMessage = nullptr);
     bool undoLastManualPrune(QString *errorMessage = nullptr);
 
     /// 设置是否显示操控球（Gizmo 旋转环），用于减少视线遮挡
     void setShowGizmo(bool show);
     /// 查询当前操控球是否可见
-    bool isGizmoVisible() const { return m_showGizmo; }
+    bool isGizmoVisible() const { return _showGizmo; }
     /// 设置是否显示相机光心、视锥体和文件名标签
     void setShowCameras(bool show);
     /// 查询当前相机覆盖层是否可见
-    bool areCamerasVisible() const { return m_showCameras; }
+    bool areCamerasVisible() const { return _showCameras; }
 
 signals:
     void plyLoadProgressChanged(int generation, int percent, const QString &statusText);
@@ -124,7 +124,7 @@ protected:
     // 鼠标释放：清除拖拽状态，恢复光标
     void mouseReleaseEvent(QMouseEvent *event) override;
 
-    // 滚轮事件：缩放场景（调整 m_zoomScale）
+    // 滚轮事件：缩放场景（调整 _zoomScale）
     void wheelEvent(QWheelEvent *event) override;
 
     void keyPressEvent(QKeyEvent *event) override;
@@ -146,7 +146,7 @@ private:
     // ok 为 nullptr 或 false 时表示点在裁剪空间外
     QPointF projectToScreen(const QVector3D &p, bool *ok = nullptr) const;
 
-    // 将向量从本地空间旋转到当前视图空间（应用 m_viewRot）
+    // 将向量从本地空间旋转到当前视图空间（应用 _viewRot）
     QVector3D applyViewRotation(const QVector3D &v) const;
 
     // 返回当前视图四元数对应的欧拉角（度数，顺序：pitch/yaw/roll）
@@ -208,74 +208,74 @@ private:
     void cancelPendingLoad();
 
     // OpenGL 4.3 Core Profile 函数对象
-    QOpenGLFunctions_4_3_Core *m_gl = nullptr;
-    bool m_gpuDirty = true;  // VBO 需要重新上传
+    QOpenGLFunctions_4_3_Core *_gl = nullptr;
+    bool _gpuDirty = true;  // VBO 需要重新上传
 
     // Shader 程序
-    QOpenGLShaderProgram *m_colorProgram = nullptr; // 点云/线框：pos+color 直通
-    QOpenGLShaderProgram *m_meshProgram  = nullptr; // 网格：pos+normal+color Phong
+    QOpenGLShaderProgram *_colorProgram = nullptr; // 点云/线框：pos+color 直通
+    QOpenGLShaderProgram *_meshProgram  = nullptr; // 网格：pos+normal+color Phong
 
     // 点云 GPU 资源
-    QOpenGLVertexArrayObject m_pointVao;
-    QOpenGLBuffer m_pointVbo{QOpenGLBuffer::VertexBuffer};
-    int m_pointCount = 0;
+    QOpenGLVertexArrayObject _pointVao;
+    QOpenGLBuffer _pointVbo{QOpenGLBuffer::VertexBuffer};
+    int _pointCount = 0;
 
     // 网格（三角面展开）GPU 资源
-    QOpenGLVertexArrayObject m_meshVao;
-    QOpenGLBuffer m_meshVbo{QOpenGLBuffer::VertexBuffer};
-    int m_meshVertCount = 0;
-    bool m_meshHasFaces = true;  ///< false 时用 GL_POINTS 绘制含法向量点云
+    QOpenGLVertexArrayObject _meshVao;
+    QOpenGLBuffer _meshVbo{QOpenGLBuffer::VertexBuffer};
+    int _meshVertCount = 0;
+    bool _meshHasFaces = true;  ///< false 时用 GL_POINTS 绘制含法向量点云
 
     // 无面片模型（作为点云绘制）GPU 资源
-    QOpenGLVertexArrayObject m_modelPtVao;
-    QOpenGLBuffer m_modelPtVbo{QOpenGLBuffer::VertexBuffer};
-    int m_modelPtCount = 0;
-    float m_modelPointSize = 3.5f;
+    QOpenGLVertexArrayObject _modelPtVao;
+    QOpenGLBuffer _modelPtVbo{QOpenGLBuffer::VertexBuffer};
+    int _modelPtCount = 0;
+    float _modelPointSize = 3.5f;
 
     // 包围盒线框 GPU 资源
-    QOpenGLVertexArrayObject m_lineVao;
-    QOpenGLBuffer m_lineVbo{QOpenGLBuffer::VertexBuffer};
-    int m_lineCount = 0;
+    QOpenGLVertexArrayObject _lineVao;
+    QOpenGLBuffer _lineVbo{QOpenGLBuffer::VertexBuffer};
+    int _lineCount = 0;
 
-    QVector<CameraPose> m_poses;             // 当前相机姿态列表
-    RenderCloud m_cloud;     // 当前显示的点云或网格（源自文件或外部调用）
+    QVector<CameraPose> _poses;             // 当前相机姿态列表
+    RenderCloud _cloud;     // 当前显示的点云或网格（源自文件或外部调用）
 
     // 场景中心/半径/包围盒缓存（避免每帧遍历大量点）
-    mutable QVector3D  m_cachedCenter;
-    mutable float      m_cachedRadius = 10.0f;
-    mutable float      m_cachedCameraFrustumBase = 0.6f;
-    mutable QVector3D  m_cachedAABBMin;
-    mutable QVector3D  m_cachedAABBMax;
-    mutable bool       m_cacheDirty = true;
+    mutable QVector3D  _cachedCenter;
+    mutable float      _cachedRadius = 10.0f;
+    mutable float      _cachedCameraFrustumBase = 0.6f;
+    mutable QVector3D  _cachedAABBMin;
+    mutable QVector3D  _cachedAABBMax;
+    mutable bool       _cacheDirty = true;
 
     // 异步加载状态
-    bool   m_loading      = false;
-    int    m_loadGen      = 0;    ///< 每次发起新加载时递增，用于丢弃过期回调
-    int    m_plyLoadProgressPercent = -1;
-    QString m_plyLoadProgressText;
-    bool m_preferModelPointRender = false;
-    QQuaternion m_viewRot;                     // 当前视图旋转四元数
-    float m_zoomScale = 1.0f;                  // 当前缩放系数（影响相机到场景中心的距离）
-    QPointF m_sceneOffsetPx = QPointF(0.0, 0.0); // 场景在屏幕空间的平移偏移（像素）
-    QPoint m_lastMousePos;                     // 上一帧鼠标位置（用于增量计算）
-    HoverAxis m_hoverAxis = HoverAxis::None;   // 当前鼠标悬停的轴（高亮显示）
-    HoverAxis m_dragAxis = HoverAxis::None;    // 当前拖拽激活的轴
-    bool m_leftDragging = false;               // 左键是否正在拖拽
-    bool m_middleDragging = false;             // 中键是否正在拖拽（平移）
-    QVector2D m_dragAxisDir;                   // 单轴旋转时的切线方向（屏幕空间）
+    bool   _loading      = false;
+    int    _loadGen      = 0;    ///< 每次发起新加载时递增，用于丢弃过期回调
+    int    _plyLoadProgressPercent = -1;
+    QString _plyLoadProgressText;
+    bool _preferModelPointRender = false;
+    QQuaternion _viewRot;                     // 当前视图旋转四元数
+    float _zoomScale = 1.0f;                  // 当前缩放系数（影响相机到场景中心的距离）
+    QPointF _sceneOffsetPx = QPointF(0.0, 0.0); // 场景在屏幕空间的平移偏移（像素）
+    QPoint _lastMousePos;                     // 上一帧鼠标位置（用于增量计算）
+    HoverAxis _hoverAxis = HoverAxis::None;   // 当前鼠标悬停的轴（高亮显示）
+    HoverAxis _dragAxis = HoverAxis::None;    // 当前拖拽激活的轴
+    bool _leftDragging = false;               // 左键是否正在拖拽
+    bool _middleDragging = false;             // 中键是否正在拖拽（平移）
+    QVector2D _dragAxisDir;                   // 单轴旋转时的切线方向（屏幕空间）
     // Arcball 按下时记录的状态（用于从初始旋转叠加增量，避免浮点漂移）
-    QVector3D  m_arcballPressVector;  // 按下时球面坐标向量
-    QQuaternion m_viewRotAtPress;     // 按下时的视图旋转快照
-    bool m_showGizmo = true;                       // 操控球是否可见（默认可见）
-    bool m_showCameras = true;                      // 相机光心、视锥体和标签是否可见（默认可见）
-    bool m_manualPruneMode = false;
-    bool m_manualSelecting = false;
-    QPoint m_manualSelectStart;
-    QRect m_manualSelectRect;
-    std::vector<std::size_t> m_manualPreviewIndices;
-    QString m_currentCloudPath;
-    std::vector<RenderCloud> m_manualUndoStack;
-    int m_manualUndoLimit = 10;
+    QVector3D  _arcballPressVector;  // 按下时球面坐标向量
+    QQuaternion _viewRotAtPress;     // 按下时的视图旋转快照
+    bool _showGizmo = true;                       // 操控球是否可见（默认可见）
+    bool _showCameras = true;                      // 相机光心、视锥体和标签是否可见（默认可见）
+    bool _manualPruneMode = false;
+    bool _manualSelecting = false;
+    QPoint _manualSelectStart;
+    QRect _manualSelectRect;
+    std::vector<std::size_t> _manualPreviewIndices;
+    QString _currentCloudPath;
+    std::vector<RenderCloud> _manualUndoStack;
+    int _manualUndoLimit = 10;
 };
 
 // =============================================================================
@@ -300,7 +300,7 @@ private:
     // JSON 结构: { "images": [ { "camera": { "C": [x,y,z], "R": [3x3] }, "name": "..." }, ... ] }
     QVector<CameraSceneWidget::CameraPose> readCamerasFromMeta() const;
 
-    ProjectManager *m_projectManager = nullptr;  // 项目管理器（提供相机 JSON 元数据）
-    CameraSceneWidget *m_scene = nullptr;         // 三维场景渲染控件
-    QLabel *m_summaryLabel = nullptr;             // 底部摘要标签（显示相机数量及操作提示）
+    ProjectManager *_projectManager = nullptr;  // 项目管理器（提供相机 JSON 元数据）
+    CameraSceneWidget *_scene = nullptr;         // 三维场景渲染控件
+    QLabel *_summaryLabel = nullptr;             // 底部摘要标签（显示相机数量及操作提示）
 };

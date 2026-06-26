@@ -2665,6 +2665,27 @@ TEST(CodeStyleTest, LayerRendererUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, CameraModel3DDialogUsesLowerCamelPrivateMemberNames)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const QRegularExpression legacyMemberPattern(QStringLiteral("\\bm_[A-Za-z0-9_]+"));
+    const QString sourceWithoutGeneratedUiObjects = QString(source)
+        .replace(QStringLiteral("form.m_scene"), QStringLiteral("form.scene"))
+        .replace(QStringLiteral("form.m_summaryLabel"), QStringLiteral("form.summaryLabel"));
+    EXPECT_FALSE(header.contains(legacyMemberPattern))
+        << "CameraModel3DDialog private members should use _lowerCamelCase.";
+    EXPECT_FALSE(sourceWithoutGeneratedUiObjects.contains(legacyMemberPattern))
+        << "CameraModel3DDialog source should not reference m_ private members.";
+    EXPECT_TRUE(header.contains(QStringLiteral("QOpenGLFunctions_4_3_Core *_gl = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_projectManager = nullptr;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("form.m_scene")));
+    EXPECT_TRUE(source.contains(QStringLiteral("form.m_summaryLabel")));
+}
+
 TEST(CodeStyleTest, LayerRendererHeaderKeepsLinesWithinStyleLimit)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/views/LayerRenderer.h"));
@@ -5886,9 +5907,9 @@ TEST(CameraSceneWidgetTest, CameraVisibilityToggleIsExposedAndGuardsCameraOverla
 
     EXPECT_TRUE(header.contains(QStringLiteral("void setShowCameras(bool show)")));
     EXPECT_TRUE(header.contains(QStringLiteral("bool areCamerasVisible() const")));
-    EXPECT_TRUE(header.contains(QStringLiteral("bool m_showCameras = true")));
+    EXPECT_TRUE(header.contains(QStringLiteral("bool _showCameras = true")));
     EXPECT_TRUE(source.contains(QStringLiteral("void CameraSceneWidget::setShowCameras(bool show)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("if (m_showCameras)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("if (_showCameras)")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCamerasAction()")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameras")));
 }
@@ -10178,7 +10199,7 @@ TEST(CameraModel3DDialogTest, DenseCameraScenesThrottleLabelsAndFrustumSize)
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("maxVisibleCameraLabels")));
-    EXPECT_TRUE(source.contains(QStringLiteral("m_poses.size() <= maxVisibleCameraLabels")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_poses.size() <= maxVisibleCameraLabels")));
     EXPECT_TRUE(source.contains(QStringLiteral("cameraFrustumBase()")));
     EXPECT_FALSE(source.contains(QStringLiteral("const float base = qMax(0.1f, r * 0.06f);")));
 }
@@ -10213,7 +10234,7 @@ TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsAsBoundedStreamingPreview)
     EXPECT_TRUE(source.contains(QStringLiteral("PlyPreviewProgressCallback")));
     EXPECT_TRUE(source.contains(QStringLiteral("emit plyLoadProgressChanged")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawPlyLoadProgressOverlay")));
-    EXPECT_TRUE(source.contains(QStringLiteral("m_plyLoadProgressPercent")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_plyLoadProgressPercent")));
     EXPECT_TRUE(source.contains(QStringLiteral("preview.header.vertexCount > kMaxDirectPlyVertices")));
     EXPECT_TRUE(source.contains(QStringLiteral("preview.header.faceCount == 0")));
     EXPECT_TRUE(source.contains(QStringLiteral("file.seek(recordOffset + static_cast<qint64>(i) * preview.header.vertexStride)")));

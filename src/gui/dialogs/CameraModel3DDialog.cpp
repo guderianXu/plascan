@@ -1,4 +1,4 @@
-// =============================================================================
+﻿// =============================================================================
 // 文件: CameraModel3DDialog.cpp
 // 功能: 相机三维模型可视化对话框实现
 // 内容:
@@ -572,20 +572,20 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
 
     setMinimumSize(760, 520);
     setMouseTracking(true); // 启用鼠标追踪，以便在无按键时检测悬停轴
-    m_viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
+    _viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
     setFocusPolicy(Qt::StrongFocus);
     updateCursor();
 
     connect(this, &CameraSceneWidget::plyLoadProgressChanged,
             this, [this](int generation, int percent, const QString &statusText)
     {
-        if (generation != m_loadGen)
+        if (generation != _loadGen)
         {
             return;
         }
-        m_loading = percent < 100;
-        m_plyLoadProgressPercent = qBound(0, percent, 100);
-        m_plyLoadProgressText = statusText;
+        _loading = percent < 100;
+        _plyLoadProgressPercent = qBound(0, percent, 100);
+        _plyLoadProgressText = statusText;
         update();
     }, Qt::QueuedConnection);
 }
@@ -594,25 +594,25 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
 // 调用后触发重绘，场景中每个姿态点将绘制光心标记和视锥体框线。
 void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
 {
-    m_poses = poses;
-    m_cacheDirty = true; // 相机位置变更，缓存失效
+    _poses = poses;
+    _cacheDirty = true; // 相机位置变更，缓存失效
     update(); // 触发 paintGL 重绘
 }
 
 void CameraSceneWidget::setShowGizmo(bool show)
 {
-    if (m_showGizmo != show) 
+    if (_showGizmo != show)
     {
-        m_showGizmo = show;
+        _showGizmo = show;
         update(); // 触发重绘
     }
 }
 
 void CameraSceneWidget::setShowCameras(bool show)
 {
-    if (m_showCameras != show)
+    if (_showCameras != show)
     {
-        m_showCameras = show;
+        _showCameras = show;
         update();
     }
 }
@@ -620,10 +620,10 @@ void CameraSceneWidget::setShowCameras(bool show)
 // 取消未完成的加载（递增 generation 令旧回调自行失效）
 void CameraSceneWidget::cancelPendingLoad()
 {
-    ++m_loadGen;
-    m_loading = false;
-    m_plyLoadProgressPercent = -1;
-    m_plyLoadProgressText.clear();
+    ++_loadGen;
+    _loading = false;
+    _plyLoadProgressPercent = -1;
+    _plyLoadProgressText.clear();
 }
 
 // 标记缓存脏 + 重算（在加载完成后或场景数据变更后调用）
@@ -642,64 +642,64 @@ void CameraSceneWidget::invalidateCache() const
         mx.setX(qMax(mx.x(), p.x())); mx.setY(qMax(mx.y(), p.y())); mx.setZ(qMax(mx.z(), p.z()));
     };
 
-    for (const auto &p : m_poses)             accum(p.center);
-    for (size_t i = 0; i < m_cloud.size(); ++i)
+    for (const auto &p : _poses)             accum(p.center);
+    for (size_t i = 0; i < _cloud.size(); ++i)
     {
-        accum(QVector3D(m_cloud.points()(static_cast<plamatrix::Index>(i), 0),
-                        m_cloud.points()(static_cast<plamatrix::Index>(i), 1),
-                        m_cloud.points()(static_cast<plamatrix::Index>(i), 2)));
+        accum(QVector3D(_cloud.points()(static_cast<plamatrix::Index>(i), 0),
+                        _cloud.points()(static_cast<plamatrix::Index>(i), 1),
+                        _cloud.points()(static_cast<plamatrix::Index>(i), 2)));
     }
 
     if (count <= 0)
     {
-        m_cachedCenter  = QVector3D(0, 0, 0);
-        m_cachedRadius  = 10.0f;
-        m_cachedCameraFrustumBase = 0.6f;
-        m_cachedAABBMin = QVector3D(-10, -10, -10);
-        m_cachedAABBMax = QVector3D( 10,  10,  10);
+        _cachedCenter  = QVector3D(0, 0, 0);
+        _cachedRadius  = 10.0f;
+        _cachedCameraFrustumBase = 0.6f;
+        _cachedAABBMin = QVector3D(-10, -10, -10);
+        _cachedAABBMax = QVector3D( 10,  10,  10);
     }
     else
     {
-        m_cachedCenter  = acc / float(count);
-        m_cachedAABBMin = mn;
-        m_cachedAABBMax = mx;
+        _cachedCenter  = acc / float(count);
+        _cachedAABBMin = mn;
+        _cachedAABBMax = mx;
         // 使用 95th 百分位距离作为场景半径，避免离群点把相机推太远
         std::vector<float> dists;
-        dists.reserve(m_poses.size() + m_cloud.size());
-        for (const auto &p : m_poses)             dists.push_back((p.center - m_cachedCenter).length());
-        for (size_t i = 0; i < m_cloud.size(); ++i)
+        dists.reserve(_poses.size() + _cloud.size());
+        for (const auto &p : _poses)             dists.push_back((p.center - _cachedCenter).length());
+        for (size_t i = 0; i < _cloud.size(); ++i)
         {
-            const QVector3D qp(m_cloud.points()(static_cast<plamatrix::Index>(i), 0),
-                               m_cloud.points()(static_cast<plamatrix::Index>(i), 1),
-                               m_cloud.points()(static_cast<plamatrix::Index>(i), 2));
-            dists.push_back((qp - m_cachedCenter).length());
+            const QVector3D qp(_cloud.points()(static_cast<plamatrix::Index>(i), 0),
+                               _cloud.points()(static_cast<plamatrix::Index>(i), 1),
+                               _cloud.points()(static_cast<plamatrix::Index>(i), 2));
+            dists.push_back((qp - _cachedCenter).length());
         }
         if (!dists.empty())
         {
             std::sort(dists.begin(), dists.end());
             const int p95 = std::min((int)dists.size() - 1, (int)(dists.size() * 0.95));
-            m_cachedRadius = qMax(1.0f, dists[p95] * 1.15f);
+            _cachedRadius = qMax(1.0f, dists[p95] * 1.15f);
         }
         else
         {
-            m_cachedRadius = 1.0f;
+            _cachedRadius = 1.0f;
         }
 
-        m_cachedCameraFrustumBase = qMax(0.1f, m_cachedRadius * 0.02f);
-        if (m_poses.size() > 1)
+        _cachedCameraFrustumBase = qMax(0.1f, _cachedRadius * 0.02f);
+        if (_poses.size() > 1)
         {
             std::vector<float> nearestDistances;
-            nearestDistances.reserve(static_cast<size_t>(m_poses.size()));
-            for (qsizetype i = 0; i < m_poses.size(); ++i)
+            nearestDistances.reserve(static_cast<size_t>(_poses.size()));
+            for (qsizetype i = 0; i < _poses.size(); ++i)
             {
                 float nearest = std::numeric_limits<float>::max();
-                for (qsizetype j = 0; j < m_poses.size(); ++j)
+                for (qsizetype j = 0; j < _poses.size(); ++j)
                 {
                     if (i == j)
                     {
                         continue;
                     }
-                    nearest = qMin(nearest, (m_poses[i].center - m_poses[j].center).length());
+                    nearest = qMin(nearest, (_poses[i].center - _poses[j].center).length());
                 }
                 if (std::isfinite(nearest))
                 {
@@ -713,22 +713,22 @@ void CameraSceneWidget::invalidateCache() const
                                  nearestDistances.begin() + static_cast<std::ptrdiff_t>(medianIndex),
                                  nearestDistances.end());
                 const float spacingBase = nearestDistances[medianIndex] * 0.25f;
-                m_cachedCameraFrustumBase = qMax(0.1f, qMin(m_cachedCameraFrustumBase, spacingBase));
+                _cachedCameraFrustumBase = qMax(0.1f, qMin(_cachedCameraFrustumBase, spacingBase));
             }
         }
     }
-    m_cacheDirty = false;
+    _cacheDirty = false;
 }
 
 // 直接设置点云或网格（cloud.hasFaces() 决定渲染模式）
 void CameraSceneWidget::setPointCloud(const RenderCloud &cloud)
 {
     cancelPendingLoad();
-    m_cloud = cloneRenderCloud(cloud);
-    m_currentCloudPath.clear();
-    m_preferModelPointRender = false;
-    m_cacheDirty = true;
-    m_gpuDirty   = true;
+    _cloud = cloneRenderCloud(cloud);
+    _currentCloudPath.clear();
+    _preferModelPointRender = false;
+    _cacheDirty = true;
+    _gpuDirty   = true;
     update();
 }
 
@@ -741,14 +741,14 @@ void CameraSceneWidget::setMesh(const RenderCloud &mesh)
 void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
 {
     cancelPendingLoad();
-    m_currentCloudPath = xyzPath;
-    m_cloud = RenderCloud();
-    m_preferModelPointRender = false;
-    m_cacheDirty = true;
-    m_gpuDirty   = true;
+    _currentCloudPath = xyzPath;
+    _cloud = RenderCloud();
+    _preferModelPointRender = false;
+    _cacheDirty = true;
+    _gpuDirty   = true;
     LOG_INFO(QStringLiteral("[3D] 正在加载点云: %1").arg(xyzPath));
 
-    const int gen = m_loadGen;
+    const int gen = _loadGen;
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
@@ -759,16 +759,16 @@ void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
             watcher->deleteLater();
             return;
         }
-        if (gen == self->m_loadGen)
+        if (gen == self->_loadGen)
         {
             auto result = watcher->result();
             if (result)
             {
-                self->m_cloud = std::move(*result);
+                self->_cloud = std::move(*result);
                 LOG_INFO(QStringLiteral("[3D] 点云加载完成，共 %1 点")
-                    .arg(self->m_cloud.size()));
+                    .arg(self->_cloud.size()));
                 self->invalidateCache();
-                self->m_gpuDirty = true;
+                self->_gpuDirty = true;
                 self->update();
             }
         }
@@ -792,19 +792,19 @@ void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
 void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
 {
     cancelPendingLoad();
-    m_currentCloudPath = plyPath;
-    m_cloud = RenderCloud();
-    m_preferModelPointRender = true;
-    m_cacheDirty = true;
-    m_gpuDirty   = true;
-    m_loading = true;
-    m_plyLoadProgressPercent = 0;
-    m_plyLoadProgressText = QStringLiteral("正在加载密集点云...");
+    _currentCloudPath = plyPath;
+    _cloud = RenderCloud();
+    _preferModelPointRender = true;
+    _cacheDirty = true;
+    _gpuDirty   = true;
+    _loading = true;
+    _plyLoadProgressPercent = 0;
+    _plyLoadProgressText = QStringLiteral("正在加载密集点云...");
     update();
     LOG_INFO(QStringLiteral("[3D] 正在加载模型: %1").arg(plyPath));
 
-    const int gen = m_loadGen;
-    emit plyLoadProgressChanged(gen, 0, m_plyLoadProgressText);
+    const int gen = _loadGen;
+    emit plyLoadProgressChanged(gen, 0, _plyLoadProgressText);
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
@@ -815,36 +815,36 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
             watcher->deleteLater();
             return;
         }
-        if (gen == self->m_loadGen)
+        if (gen == self->_loadGen)
         {
             auto result = watcher->result();
-            if (result) self->m_cloud = std::move(*result);
-            self->m_preferModelPointRender = !self->m_cloud.hasFaces();
-            if (!self->m_cloud.hasFaces())
+            if (result) self->_cloud = std::move(*result);
+            self->_preferModelPointRender = !self->_cloud.hasFaces();
+            if (!self->_cloud.hasFaces())
             {
-                if (self->m_cloud.size() >= 3'000'000)
+                if (self->_cloud.size() >= 3'000'000)
                 {
-                    self->m_modelPointSize = 1.1f;
+                    self->_modelPointSize = 1.1f;
                 }
-                else if (self->m_cloud.size() >= 1'000'000)
+                else if (self->_cloud.size() >= 1'000'000)
                 {
-                    self->m_modelPointSize = 1.4f;
+                    self->_modelPointSize = 1.4f;
                 }
                 else
                 {
-                    self->m_modelPointSize = 3.5f;
+                    self->_modelPointSize = 3.5f;
                 }
             }
-            self->m_loading = false;
-            self->m_plyLoadProgressPercent = -1;
-            self->m_plyLoadProgressText.clear();
+            self->_loading = false;
+            self->_plyLoadProgressPercent = -1;
+            self->_plyLoadProgressText.clear();
             LOG_INFO(QStringLiteral("[3D] 模型加载完成，共 %1 顶点 / %2 面%3")
-                     .arg(self->m_cloud.size())
-                     .arg(self->m_cloud.hasFaces() ? static_cast<int>(self->m_cloud.faces()->rows()) : 0)
-                     .arg(self->m_cloud.hasColors() ? QStringLiteral("（含RGB颜色）")
+                     .arg(self->_cloud.size())
+                     .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0)
+                     .arg(self->_cloud.hasColors() ? QStringLiteral("（含RGB颜色）")
                                                     : QStringLiteral("（无颜色）")));
             self->invalidateCache();
-            self->m_gpuDirty = true;
+            self->_gpuDirty = true;
             self->update();
         }
         watcher->deleteLater();
@@ -911,14 +911,14 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
 void CameraSceneWidget::loadModelFromObj(const QString &objPath)
 {
     cancelPendingLoad();
-    m_currentCloudPath = objPath;
-    m_cloud = RenderCloud();
-    m_preferModelPointRender = false;
-    m_cacheDirty = true;
-    m_gpuDirty = true;
+    _currentCloudPath = objPath;
+    _cloud = RenderCloud();
+    _preferModelPointRender = false;
+    _cacheDirty = true;
+    _gpuDirty = true;
     LOG_INFO(QStringLiteral("[3D] 正在加载 OBJ 模型: %1").arg(objPath));
 
-    const int gen = m_loadGen;
+    const int gen = _loadGen;
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
@@ -929,19 +929,19 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
             watcher->deleteLater();
             return;
         }
-        if (gen == self->m_loadGen)
+        if (gen == self->_loadGen)
         {
             auto result = watcher->result();
             if (result)
             {
-                self->m_cloud = std::move(*result);
+                self->_cloud = std::move(*result);
             }
-            self->m_preferModelPointRender = !self->m_cloud.hasFaces();
+            self->_preferModelPointRender = !self->_cloud.hasFaces();
             LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面")
-                         .arg(self->m_cloud.size())
-                         .arg(self->m_cloud.hasFaces() ? static_cast<int>(self->m_cloud.faces()->rows()) : 0));
+                         .arg(self->_cloud.size())
+                         .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0));
             self->invalidateCache();
-            self->m_gpuDirty = true;
+            self->_gpuDirty = true;
             self->update();
         }
         watcher->deleteLater();
@@ -964,23 +964,23 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
 // 使用缓存，仅在数据变更后重新计算。
 QVector3D CameraSceneWidget::sceneCenter() const
 {
-    if (m_cacheDirty) invalidateCache();
-    return m_cachedCenter;
+    if (_cacheDirty) invalidateCache();
+    return _cachedCenter;
 }
 
 // 计算场景中所有点到质心的最大距离，用于自适应相机距离、投影远裁平面等。
 // 使用缓存，仅在数据变更后重新计算。
 float CameraSceneWidget::sceneRadius() const
 {
-    if (m_cacheDirty) invalidateCache();
-    return m_cachedRadius;
+    if (_cacheDirty) invalidateCache();
+    return _cachedRadius;
 }
 
 QPointF CameraSceneWidget::projectToScreen(const QVector3D &p, bool *ok) const
 {
     const QVector3D center = sceneCenter();
     const float radius = sceneRadius();
-    const float distance = qMax(radius * 0.001f, radius * (3.2f / qMax(0.1f, m_zoomScale)));
+    const float distance = qMax(radius * 0.001f, radius * (3.2f / qMax(0.1f, _zoomScale)));
 
     // 从 +Z 方向看向原点：世界X→屏幕右，世界Y→屏幕上，与overlay/arcball坐标系一致
     const QVector3D eye = center + QVector3D(0.0f, 0.0f, distance);
@@ -991,7 +991,7 @@ QPointF CameraSceneWidget::projectToScreen(const QVector3D &p, bool *ok) const
     QMatrix4x4 model;
     model.setToIdentity();
     model.translate(center);
-    model.rotate(m_viewRot);
+    model.rotate(_viewRot);
     model.translate(-center);
 
     const float nearPlane = qMax(1e-4f, distance * 0.001f);
@@ -1007,21 +1007,21 @@ QPointF CameraSceneWidget::projectToScreen(const QVector3D &p, bool *ok) const
     }
     QVector3D ndc(clip.x() / clip.w(), clip.y() / clip.w(), clip.z() / clip.w());
     if (ok) *ok = true;
-    const float sx = (ndc.x() * 0.5f + 0.5f) * width() + float(m_sceneOffsetPx.x());
-    const float sy = (1.0f - (ndc.y() * 0.5f + 0.5f)) * height() + float(m_sceneOffsetPx.y());
+    const float sx = (ndc.x() * 0.5f + 0.5f) * width() + float(_sceneOffsetPx.x());
+    const float sy = (1.0f - (ndc.y() * 0.5f + 0.5f)) * height() + float(_sceneOffsetPx.y());
     return QPointF(sx, sy);
 }
 
-// 将向量从副本局部空间旋转到当前视图空间（应用 m_viewRot）
+// 将向量从副本局部空间旋转到当前视图空间（应用 _viewRot）
 QVector3D CameraSceneWidget::applyViewRotation(const QVector3D &v) const
 {
-    return m_viewRot.rotatedVector(v);
+    return _viewRot.rotatedVector(v);
 }
 
 // 返回当前视图四元数对应的欧拉角（度， x=pitch, y=yaw, z=roll）
 QVector3D CameraSceneWidget::eulerAnglesDeg() const
 {
-    return m_viewRot.toEulerAngles();
+    return _viewRot.toEulerAngles();
 }
 
 // 根据窗口尺寸自适应计算 Gizmo 操控球屏幕半径（px）
@@ -1035,15 +1035,15 @@ qreal CameraSceneWidget::manipRadiusPx() const
 int CameraSceneWidget::maxVisibleCameraLabels() const
 {
     const int viewportBudget = qBound(8, width() / 140, 28);
-    if (m_poses.size() > 300)
+    if (_poses.size() > 300)
     {
         return qMin(viewportBudget, 12);
     }
-    if (m_poses.size() > 120)
+    if (_poses.size() > 120)
     {
         return qMin(viewportBudget, 18);
     }
-    if (m_poses.size() > 60)
+    if (_poses.size() > 60)
     {
         return qMin(viewportBudget, 24);
     }
@@ -1052,8 +1052,8 @@ int CameraSceneWidget::maxVisibleCameraLabels() const
 
 float CameraSceneWidget::cameraFrustumBase() const
 {
-    if (m_cacheDirty) invalidateCache();
-    return m_cachedCameraFrustumBase;
+    if (_cacheDirty) invalidateCache();
+    return _cachedCameraFrustumBase;
 }
 
 // Gizmo 操控球的世界中心点（等于场景质心）
@@ -1211,7 +1211,7 @@ void CameraSceneWidget::clampSceneOffset()
 //   - 默认              → 开放手型光标
 void CameraSceneWidget::updateCursor()
 {
-    if (m_manualPruneMode && m_manualSelecting)
+    if (_manualPruneMode && _manualSelecting)
     {
         setCursor(Qt::CrossCursor);
         return;
@@ -1229,17 +1229,17 @@ void CameraSceneWidget::updateCursor()
         return QCursor(pm, 12, 12);
     };
 
-    if (m_middleDragging) {
+    if (_middleDragging) {
         setCursor(Qt::SizeAllCursor); // 中键平移中
         return;
     }
-    if (m_leftDragging && m_dragAxis == HoverAxis::None) {
+    if (_leftDragging && _dragAxis == HoverAxis::None) {
         setCursor(Qt::ClosedHandCursor); // Arcball 自由旋转中
         return;
     }
 
     // 优先显示当前拖拽轴（若无则显示悬停轴）
-    HoverAxis axis = (m_leftDragging ? m_dragAxis : m_hoverAxis);
+    HoverAxis axis = (_leftDragging ? _dragAxis : _hoverAxis);
     if (axis == HoverAxis::X) {
         setCursor(axisCursor(QColor(255, 120, 120), QStringLiteral("X")));
     } else if (axis == HoverAxis::Y) {
@@ -1254,13 +1254,13 @@ void CameraSceneWidget::updateCursor()
 // OpenGL 初始化：获取 GL 4.3 Core Profile 函数对象，编译 shader，创建 VAO/VBO
 void CameraSceneWidget::initializeGL()
 {
-    m_gl = context() ? QOpenGLVersionFunctionsFactory::get<QOpenGLFunctions_4_3_Core>(context()) : nullptr;
-    if (!m_gl) return;
-    m_gl->initializeOpenGLFunctions();
-    m_gl->glEnable(GL_DEPTH_TEST);
-    m_gl->glEnable(GL_BLEND);
-    m_gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    m_gl->glEnable(GL_PROGRAM_POINT_SIZE); // 允许 vertex shader 通过 gl_PointSize 控制点大小
+    _gl = context() ? QOpenGLVersionFunctionsFactory::get<QOpenGLFunctions_4_3_Core>(context()) : nullptr;
+    if (!_gl) return;
+    _gl->initializeOpenGLFunctions();
+    _gl->glEnable(GL_DEPTH_TEST);
+    _gl->glEnable(GL_BLEND);
+    _gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+    _gl->glEnable(GL_PROGRAM_POINT_SIZE); // 允许 vertex shader 通过 gl_PointSize 控制点大小
 
     // ── 顶点色直通 shader（点云 + 线框）────────────────────────────────────
     static const char *colorVert =
@@ -1283,10 +1283,10 @@ void CameraSceneWidget::initializeGL()
         "    fragColor = vec4(vColor, 1.0);\n"
         "}\n";
 
-    m_colorProgram = new QOpenGLShaderProgram(this);
-    m_colorProgram->addShaderFromSourceCode(QOpenGLShader::Vertex,   colorVert);
-    m_colorProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, colorFrag);
-    m_colorProgram->link();
+    _colorProgram = new QOpenGLShaderProgram(this);
+    _colorProgram->addShaderFromSourceCode(QOpenGLShader::Vertex,   colorVert);
+    _colorProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, colorFrag);
+    _colorProgram->link();
 
     // ── Phong 光照 shader（三角网格）────────────────────────────────────────
     static const char *meshVert =
@@ -1329,33 +1329,33 @@ void CameraSceneWidget::initializeGL()
         "    fragColor = vec4(linearToSrgb(litLinear), 1.0);\n"
         "}\n";
 
-    m_meshProgram = new QOpenGLShaderProgram(this);
-    m_meshProgram->addShaderFromSourceCode(QOpenGLShader::Vertex,   meshVert);
-    m_meshProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, meshFrag);
-    m_meshProgram->link();
+    _meshProgram = new QOpenGLShaderProgram(this);
+    _meshProgram->addShaderFromSourceCode(QOpenGLShader::Vertex,   meshVert);
+    _meshProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, meshFrag);
+    _meshProgram->link();
 
     // 创建 VAO/VBO（GL 资源，需在 context 活跃时创建）
-    m_pointVao.create();   m_pointVbo.create();
-    m_meshVao.create();    m_meshVbo.create();
-    m_modelPtVao.create(); m_modelPtVbo.create();
-    m_lineVao.create();    m_lineVbo.create();
+    _pointVao.create();   _pointVbo.create();
+    _meshVao.create();    _meshVbo.create();
+    _modelPtVao.create(); _modelPtVbo.create();
+    _lineVao.create();    _lineVbo.create();
 
-    m_gpuDirty = true;
+    _gpuDirty = true;
 }
 
 // 视口尺寸变化时更新 OpenGL 的视口矩形
 void CameraSceneWidget::resizeGL(int w, int h)
 {
-    if (!m_gl) return;
-    m_gl->glViewport(0, 0, w, h);
-    m_gpuDirty = true; // 包围盒线框依赖 AABB，重建一次以防万一
+    if (!_gl) return;
+    _gl->glViewport(0, 0, w, h);
+    _gpuDirty = true; // 包围盒线框依赖 AABB，重建一次以防万一
 }
 
 // 将点云/模型/包围盒数据上传到 GPU（VBO/VAO）。
-// 在 paintGL 检测到 m_gpuDirty 时调用，避免每帧重复上传。
+// 在 paintGL 检测到 _gpuDirty 时调用，避免每帧重复上传。
 void CameraSceneWidget::uploadGpuData()
 {
-    if (!m_gl) return;
+    if (!_gl) return;
 
     // ── 辅助：建立颜色直通 VAO（stride=6 floats: xyz rgb）────────────────
     auto setupColorVao = [this](QOpenGLVertexArrayObject &vao,
@@ -1366,77 +1366,77 @@ void CameraSceneWidget::uploadGpuData()
         vbo.bind();
         vbo.allocate(data.constData(), data.size() * sizeof(float));
         const int stride = 6 * sizeof(float);
-        m_gl->glEnableVertexAttribArray(0);
-        m_gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-        m_gl->glEnableVertexAttribArray(1);
-        m_gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
+        _gl->glEnableVertexAttribArray(0);
+        _gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
+        _gl->glEnableVertexAttribArray(1);
+        _gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
                                     reinterpret_cast<void*>(3 * sizeof(float)));
         vbo.release();
         vao.release();
     };
 
-    // ── 1. 点云（m_cloud，无面片且无法向量，颜色直通）──────────────────────────
-    m_pointCount = 0;
-    m_modelPtCount = 0;
-    if (!(m_cloud.size() == 0) && !m_cloud.hasFaces() && !m_cloud.hasNormals()) {
-        const bool hasColors = m_cloud.hasColors();
+    // ── 1. 点云（_cloud，无面片且无法向量，颜色直通）──────────────────────────
+    _pointCount = 0;
+    _modelPtCount = 0;
+    if (!(_cloud.size() == 0) && !_cloud.hasFaces() && !_cloud.hasNormals()) {
+        const bool hasColors = _cloud.hasColors();
         QVector<float> data;
-        data.reserve((int)m_cloud.size() * 6);
-        for (std::size_t i = 0; i < m_cloud.size(); ++i) {
-            data << m_cloud.points()(static_cast<plamatrix::Index>(i), 0)
-                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 1)
-                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 2);
+        data.reserve((int)_cloud.size() * 6);
+        for (std::size_t i = 0; i < _cloud.size(); ++i) {
+            data << _cloud.points()(static_cast<plamatrix::Index>(i), 0)
+                 << _cloud.points()(static_cast<plamatrix::Index>(i), 1)
+                 << _cloud.points()(static_cast<plamatrix::Index>(i), 2);
             if (hasColors) {
-                data << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 0) / 255.f
-                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 1) / 255.f
-                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 2) / 255.f;
+                data << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 0) / 255.f
+                     << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 1) / 255.f
+                     << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 2) / 255.f;
             } else {
                 data << 0.45f << 0.45f << 0.50f;
             }
         }
-        if (m_preferModelPointRender) {
-            setupColorVao(m_modelPtVao, m_modelPtVbo, data);
-            m_modelPtCount = (int)m_cloud.size();
+        if (_preferModelPointRender) {
+            setupColorVao(_modelPtVao, _modelPtVbo, data);
+            _modelPtCount = (int)_cloud.size();
         } else {
-            setupColorVao(m_pointVao, m_pointVbo, data);
-            m_pointCount = (int)m_cloud.size();
+            setupColorVao(_pointVao, _pointVbo, data);
+            _pointCount = (int)_cloud.size();
         }
     }
 
     // ── 2. 网格（hasFaces）或含法向量点云（!hasFaces && hasNormals）──────────
-    m_meshVertCount = 0;
-    m_meshHasFaces = false;
-    if (!(m_cloud.size() == 0) && m_cloud.hasFaces()) {
-        m_meshHasFaces = true;
-        const bool hasVertCol = m_cloud.hasColors();
-        const bool hasNrm     = m_cloud.hasNormals();
-        const std::size_t Nv  = m_cloud.size();
+    _meshVertCount = 0;
+    _meshHasFaces = false;
+    if (!(_cloud.size() == 0) && _cloud.hasFaces()) {
+        _meshHasFaces = true;
+        const bool hasVertCol = _cloud.hasColors();
+        const bool hasNrm     = _cloud.hasNormals();
+        const std::size_t Nv  = _cloud.size();
 
         // 计算（或复用）逐顶点法向量
         std::vector<QVector3D> vNormals(Nv);
         if (hasNrm) {
             for (std::size_t i = 0; i < Nv; ++i) {
                 vNormals[i] = QVector3D(
-                    m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 0),
-                    m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 1),
-                    m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 2));
+                    _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 0),
+                    _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 1),
+                    _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 2));
             }
         } else {
-            const auto nF = static_cast<std::size_t>(m_cloud.faces()->rows());
+            const auto nF = static_cast<std::size_t>(_cloud.faces()->rows());
             for (std::size_t fi = 0; fi < nF; ++fi) {
-                const std::size_t i0 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 0));
-                const std::size_t i1 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 1));
-                const std::size_t i2 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 2));
+                const std::size_t i0 = static_cast<std::size_t>(_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 0));
+                const std::size_t i1 = static_cast<std::size_t>(_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 1));
+                const std::size_t i2 = static_cast<std::size_t>(_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 2));
                 if (i0 >= Nv || i1 >= Nv || i2 >= Nv) continue;
-                float p0x = m_cloud.points()(static_cast<plamatrix::Index>(i0), 0);
-                float p0y = m_cloud.points()(static_cast<plamatrix::Index>(i0), 1);
-                float p0z = m_cloud.points()(static_cast<plamatrix::Index>(i0), 2);
-                float p1x = m_cloud.points()(static_cast<plamatrix::Index>(i1), 0);
-                float p1y = m_cloud.points()(static_cast<plamatrix::Index>(i1), 1);
-                float p1z = m_cloud.points()(static_cast<plamatrix::Index>(i1), 2);
-                float p2x = m_cloud.points()(static_cast<plamatrix::Index>(i2), 0);
-                float p2y = m_cloud.points()(static_cast<plamatrix::Index>(i2), 1);
-                float p2z = m_cloud.points()(static_cast<plamatrix::Index>(i2), 2);
+                float p0x = _cloud.points()(static_cast<plamatrix::Index>(i0), 0);
+                float p0y = _cloud.points()(static_cast<plamatrix::Index>(i0), 1);
+                float p0z = _cloud.points()(static_cast<plamatrix::Index>(i0), 2);
+                float p1x = _cloud.points()(static_cast<plamatrix::Index>(i1), 0);
+                float p1y = _cloud.points()(static_cast<plamatrix::Index>(i1), 1);
+                float p1z = _cloud.points()(static_cast<plamatrix::Index>(i1), 2);
+                float p2x = _cloud.points()(static_cast<plamatrix::Index>(i2), 0);
+                float p2y = _cloud.points()(static_cast<plamatrix::Index>(i2), 1);
+                float p2z = _cloud.points()(static_cast<plamatrix::Index>(i2), 2);
                 const QVector3D fn = QVector3D::crossProduct(
                     QVector3D(p1x - p0x, p1y - p0y, p1z - p0z),
                     QVector3D(p2x - p0x, p2y - p0y, p2z - p0z));
@@ -1449,90 +1449,90 @@ void CameraSceneWidget::uploadGpuData()
 
         // 展开面片为平坦顶点数组（stride=9 floats: xyz nxnynz rgb）
         QVector<float> data;
-        data.reserve(static_cast<int>(m_cloud.faces()->rows()) * 3 * 9);
-        const auto nFaces = static_cast<std::size_t>(m_cloud.faces()->rows());
+        data.reserve(static_cast<int>(_cloud.faces()->rows()) * 3 * 9);
+        const auto nFaces = static_cast<std::size_t>(_cloud.faces()->rows());
         for (std::size_t fi = 0; fi < nFaces; ++fi) {
-            const std::size_t i0 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 0));
-            const std::size_t i1 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 1));
-            const std::size_t i2 = static_cast<std::size_t>(m_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 2));
+            const std::size_t i0 = static_cast<std::size_t>(_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 0));
+            const std::size_t i1 = static_cast<std::size_t>(_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 1));
+            const std::size_t i2 = static_cast<std::size_t>(_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 2));
             if (i0 >= Nv || i1 >= Nv || i2 >= Nv) continue;
             const std::size_t indices[3] = {i0, i1, i2};
             for (int vi = 0; vi < 3; ++vi) {
                 const std::size_t idx = indices[vi];
-                data << m_cloud.points()(static_cast<plamatrix::Index>(idx), 0)
-                     << m_cloud.points()(static_cast<plamatrix::Index>(idx), 1)
-                     << m_cloud.points()(static_cast<plamatrix::Index>(idx), 2);
+                data << _cloud.points()(static_cast<plamatrix::Index>(idx), 0)
+                     << _cloud.points()(static_cast<plamatrix::Index>(idx), 1)
+                     << _cloud.points()(static_cast<plamatrix::Index>(idx), 2);
                 data << vNormals[idx].x() << vNormals[idx].y() << vNormals[idx].z();
                 if (hasVertCol) {
-                    data << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 0) / 255.f
-                         << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 1) / 255.f
-                         << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 2) / 255.f;
+                    data << _cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 0) / 255.f
+                         << _cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 1) / 255.f
+                         << _cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 2) / 255.f;
                 } else {
                     data << 0.55f << 0.55f << 0.58f;
                 }
             }
         }
-        m_meshVao.bind();
-        m_meshVbo.bind();
-        m_meshVbo.allocate(data.constData(), data.size() * sizeof(float));
+        _meshVao.bind();
+        _meshVbo.bind();
+        _meshVbo.allocate(data.constData(), data.size() * sizeof(float));
         const int stride = 9 * sizeof(float);
-        m_gl->glEnableVertexAttribArray(0);
-        m_gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-        m_gl->glEnableVertexAttribArray(1);
-        m_gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
+        _gl->glEnableVertexAttribArray(0);
+        _gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
+        _gl->glEnableVertexAttribArray(1);
+        _gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
                                     reinterpret_cast<void*>(3 * sizeof(float)));
-        m_gl->glEnableVertexAttribArray(2);
-        m_gl->glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
+        _gl->glEnableVertexAttribArray(2);
+        _gl->glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
                                     reinterpret_cast<void*>(6 * sizeof(float)));
-        m_meshVbo.release();
-        m_meshVao.release();
-        m_meshVertCount = data.size() / 9;
-    } else if (!(m_cloud.size() == 0) && !m_cloud.hasFaces() && m_cloud.hasNormals()) {
+        _meshVbo.release();
+        _meshVao.release();
+        _meshVertCount = data.size() / 9;
+    } else if (!(_cloud.size() == 0) && !_cloud.hasFaces() && _cloud.hasNormals()) {
         // 含法向量但无面片 → GL_POINTS + Phong 光照（稠密点云等）
-        const bool hasColors = m_cloud.hasColors();
-        const std::size_t Nv = m_cloud.size();
+        const bool hasColors = _cloud.hasColors();
+        const std::size_t Nv = _cloud.size();
         QVector<float> data;
         data.reserve((int)Nv * 9);
         for (std::size_t i = 0; i < Nv; ++i) {
-            data << m_cloud.points()(static_cast<plamatrix::Index>(i), 0)
-                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 1)
-                 << m_cloud.points()(static_cast<plamatrix::Index>(i), 2);
-            data << m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 0)
-                 << m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 1)
-                 << m_cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 2);
+            data << _cloud.points()(static_cast<plamatrix::Index>(i), 0)
+                 << _cloud.points()(static_cast<plamatrix::Index>(i), 1)
+                 << _cloud.points()(static_cast<plamatrix::Index>(i), 2);
+            data << _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 0)
+                 << _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 1)
+                 << _cloud.normals()->getValue(static_cast<plamatrix::Index>(i), 2);
             if (hasColors) {
-                data << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 0) / 255.f
-                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 1) / 255.f
-                     << m_cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 2) / 255.f;
+                data << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 0) / 255.f
+                     << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 1) / 255.f
+                     << _cloud.colors()->getValue(static_cast<plamatrix::Index>(i), 2) / 255.f;
             } else {
                 data << 0.55f << 0.55f << 0.58f;
             }
         }
-        m_meshVao.bind();
-        m_meshVbo.bind();
-        m_meshVbo.allocate(data.constData(), data.size() * sizeof(float));
+        _meshVao.bind();
+        _meshVbo.bind();
+        _meshVbo.allocate(data.constData(), data.size() * sizeof(float));
         const int stride = 9 * sizeof(float);
-        m_gl->glEnableVertexAttribArray(0);
-        m_gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-        m_gl->glEnableVertexAttribArray(1);
-        m_gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
+        _gl->glEnableVertexAttribArray(0);
+        _gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
+        _gl->glEnableVertexAttribArray(1);
+        _gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
                                     reinterpret_cast<void*>(3 * sizeof(float)));
-        m_gl->glEnableVertexAttribArray(2);
-        m_gl->glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
+        _gl->glEnableVertexAttribArray(2);
+        _gl->glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
                                     reinterpret_cast<void*>(6 * sizeof(float)));
-        m_meshVbo.release();
-        m_meshVao.release();
-        m_meshVertCount = (int)Nv;
+        _meshVbo.release();
+        _meshVao.release();
+        _meshVertCount = (int)Nv;
     }
 
     // ── 3. 包围盒线框（12 条边 × 2 顶点）────────────────────────────────
-    m_lineCount = 0;
+    _lineCount = 0;
     {
-        if (m_cacheDirty) invalidateCache();
-        const bool empty = m_poses.isEmpty() && (m_cloud.size() == 0);
+        if (_cacheDirty) invalidateCache();
+        const bool empty = _poses.isEmpty() && (_cloud.size() == 0);
         if (!empty) {
-            const QVector3D &mn = m_cachedAABBMin;
-            const QVector3D &mx = m_cachedAABBMax;
+            const QVector3D &mn = _cachedAABBMin;
+            const QVector3D &mx = _cachedAABBMax;
             const QVector3D v000(mn.x(), mn.y(), mn.z());
             const QVector3D v001(mn.x(), mn.y(), mx.z());
             const QVector3D v010(mn.x(), mx.y(), mn.z());
@@ -1554,34 +1554,34 @@ void CameraSceneWidget::uploadGpuData()
             addEdge(data, v001, v011); addEdge(data, v001, v101);
             addEdge(data, v010, v011); addEdge(data, v010, v110);
             addEdge(data, v100, v101); addEdge(data, v100, v110);
-            setupColorVao(m_lineVao, m_lineVbo, data);
-            m_lineCount = 24; // 12 条边 × 2 顶点
+            setupColorVao(_lineVao, _lineVbo, data);
+            _lineCount = 24; // 12 条边 × 2 顶点
         }
     }
 
-    m_gpuDirty = false;
+    _gpuDirty = false;
 }
 
 
 
 void CameraSceneWidget::paintGL()
 {
-    if (!m_gl || !m_colorProgram || !m_meshProgram) {
+    if (!_gl || !_colorProgram || !_meshProgram) {
         QPainter p(this);
         p.fillRect(rect(), Qt::white);
         return;
     }
 
     // 按需上传 GPU 数据
-    if (m_gpuDirty) uploadGpuData();
+    if (_gpuDirty) uploadGpuData();
 
-    m_gl->glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    m_gl->glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+    _gl->glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
+    _gl->glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
 
     // ── 构建 MVP 矩阵（与旧代码逻辑保持一致）───────────────────────────────
     const QVector3D center = sceneCenter();
     const float radius = sceneRadius();
-    const float distance = qMax(radius * 0.001f, radius * (3.2f / qMax(0.1f, m_zoomScale)));
+    const float distance = qMax(radius * 0.001f, radius * (3.2f / qMax(0.1f, _zoomScale)));
     const QVector3D eye = center + QVector3D(0.0f, 0.0f, distance);
 
     QMatrix4x4 view;
@@ -1590,7 +1590,7 @@ void CameraSceneWidget::paintGL()
     QMatrix4x4 model;
     model.setToIdentity();
     model.translate(center);
-    model.rotate(m_viewRot);
+    model.rotate(_viewRot);
     model.translate(-center);
 
     const float nearPlane = qMax(1e-4f, distance * 0.001f);
@@ -1601,8 +1601,8 @@ void CameraSceneWidget::paintGL()
 
     QMatrix4x4 shift;
     shift.setToIdentity();
-    shift.translate(float(2.0 * m_sceneOffsetPx.x() / qMax(1, width())),
-                    float(-2.0 * m_sceneOffsetPx.y() / qMax(1, height())),
+    shift.translate(float(2.0 * _sceneOffsetPx.x() / qMax(1, width())),
+                    float(-2.0 * _sceneOffsetPx.y() / qMax(1, height())),
                     0.0f);
     const QMatrix4x4 mv  = view * model;
     const QMatrix4x4 mvp = shift * proj * mv;
@@ -1617,79 +1617,79 @@ void CameraSceneWidget::paintGL()
 
         const float depthOnlyPointSize = qMax(pointSize + 1.25f, pointSize * 1.35f);
 
-        m_gl->glEnable(GL_DEPTH_TEST);
-        m_gl->glDepthMask(GL_TRUE);
-        m_gl->glDepthFunc(GL_LEQUAL);
-        m_gl->glDisable(GL_BLEND);
+        _gl->glEnable(GL_DEPTH_TEST);
+        _gl->glDepthMask(GL_TRUE);
+        _gl->glDepthFunc(GL_LEQUAL);
+        _gl->glDisable(GL_BLEND);
 
         // 先写入稍大一点的深度轮廓，减少后层点从前层点之间漏出来。
-        m_gl->glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-        m_colorProgram->bind();
-        m_colorProgram->setUniformValue("uMVP", mvp);
-        m_colorProgram->setUniformValue("uPointSize", depthOnlyPointSize);
+        _gl->glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
+        _colorProgram->bind();
+        _colorProgram->setUniformValue("uMVP", mvp);
+        _colorProgram->setUniformValue("uPointSize", depthOnlyPointSize);
         vao.bind();
-        m_gl->glDrawArrays(GL_POINTS, 0, pointCount);
+        _gl->glDrawArrays(GL_POINTS, 0, pointCount);
         vao.release();
-        m_colorProgram->release();
+        _colorProgram->release();
 
-        m_gl->glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
+        _gl->glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
 
-        m_colorProgram->bind();
-        m_colorProgram->setUniformValue("uMVP", mvp);
-        m_colorProgram->setUniformValue("uPointSize", pointSize);
+        _colorProgram->bind();
+        _colorProgram->setUniformValue("uMVP", mvp);
+        _colorProgram->setUniformValue("uPointSize", pointSize);
         vao.bind();
-        m_gl->glDrawArrays(GL_POINTS, 0, pointCount);
+        _gl->glDrawArrays(GL_POINTS, 0, pointCount);
         vao.release();
-        m_colorProgram->release();
+        _colorProgram->release();
 
-        m_gl->glEnable(GL_BLEND);
-        m_gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        _gl->glEnable(GL_BLEND);
+        _gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     };
 
     // ── 点云（颜色直通）──────────────────────────────────────────────────
-    if (m_pointCount > 0) {
-        drawOpaquePointSet(m_pointVao, m_pointCount, 2.3f);
+    if (_pointCount > 0) {
+        drawOpaquePointSet(_pointVao, _pointCount, 2.3f);
     }
 
     // ── 三角网格（Phong 双面光照）────────────────────────────────────────
-    if (m_meshVertCount > 0) {
-        m_gl->glDisable(GL_BLEND);
-        m_gl->glEnable(GL_DEPTH_TEST);
-        m_gl->glDepthMask(GL_TRUE);
-        m_gl->glDepthFunc(GL_LEQUAL);
-        m_meshProgram->bind();
-        m_meshProgram->setUniformValue("uMVP",       mvp);
-        m_meshProgram->setUniformValue("uNormalMat", mv.normalMatrix());
+    if (_meshVertCount > 0) {
+        _gl->glDisable(GL_BLEND);
+        _gl->glEnable(GL_DEPTH_TEST);
+        _gl->glDepthMask(GL_TRUE);
+        _gl->glDepthFunc(GL_LEQUAL);
+        _meshProgram->bind();
+        _meshProgram->setUniformValue("uMVP",       mvp);
+        _meshProgram->setUniformValue("uNormalMat", mv.normalMatrix());
         // 固定方向光：视角坐标系左上前方（与旧 GL_LIGHT0 位置一致）
-        m_meshProgram->setUniformValue("uLightDir",  QVector3D(0.5f, 0.8f, 0.6f));
-        m_meshVao.bind();
-        if (m_meshHasFaces) {
-            m_gl->glDrawArrays(GL_TRIANGLES, 0, m_meshVertCount);
+        _meshProgram->setUniformValue("uLightDir",  QVector3D(0.5f, 0.8f, 0.6f));
+        _meshVao.bind();
+        if (_meshHasFaces) {
+            _gl->glDrawArrays(GL_TRIANGLES, 0, _meshVertCount);
         } else {
-            m_meshProgram->setUniformValue("uPointSize", 1.8f);
-            m_gl->glDrawArrays(GL_POINTS, 0, m_meshVertCount);
+            _meshProgram->setUniformValue("uPointSize", 1.8f);
+            _gl->glDrawArrays(GL_POINTS, 0, _meshVertCount);
         }
-        m_meshVao.release();
-        m_meshProgram->release();
-        m_gl->glEnable(GL_BLEND);
-        m_gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
+        _meshVao.release();
+        _meshProgram->release();
+        _gl->glEnable(GL_BLEND);
+        _gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
     }
 
     // ── 模型顶点（无面片时作为点云）──────────────────────────────────────
-    if (m_modelPtCount > 0) {
-        drawOpaquePointSet(m_modelPtVao, m_modelPtCount, m_modelPointSize);
+    if (_modelPtCount > 0) {
+        drawOpaquePointSet(_modelPtVao, _modelPtCount, _modelPointSize);
     }
 
     // ── 包围盒线框 ────────────────────────────────────────────────────────
-    if (m_lineCount > 0) {
-        m_colorProgram->bind();
-        m_colorProgram->setUniformValue("uMVP",       mvp);
-        m_colorProgram->setUniformValue("uPointSize", 1.0f);
-        m_lineVao.bind();
-        m_gl->glLineWidth(1.0f);
-        m_gl->glDrawArrays(GL_LINES, 0, m_lineCount);
-        m_lineVao.release();
-        m_colorProgram->release();
+    if (_lineCount > 0) {
+        _colorProgram->bind();
+        _colorProgram->setUniformValue("uMVP",       mvp);
+        _colorProgram->setUniformValue("uPointSize", 1.0f);
+        _lineVao.bind();
+        _gl->glLineWidth(1.0f);
+        _gl->glDrawArrays(GL_LINES, 0, _lineCount);
+        _lineVao.release();
+        _colorProgram->release();
     }
 
     drawOverlay();
@@ -1703,8 +1703,8 @@ void CameraSceneWidget::drawOverlay()
     const QPointF center2d = manipCenterScreen();
     const qreal radiusPx = manipRadiusPx();
 
-    // ── 操控球（Gizmo）：仅当 m_showGizmo 为 true 时绘制 ───────────────
-    if (m_showGizmo) {
+    // ── 操控球（Gizmo）：仅当 _showGizmo 为 true 时绘制 ───────────────
+    if (_showGizmo) {
     QRadialGradient grad(center2d - QPointF(radiusPx * 0.18, radiusPx * 0.18), radiusPx * 1.25);
     grad.setColorAt(0.0, QColor(245, 245, 248, 40));
     grad.setColorAt(1.0, QColor(175, 178, 186, 28));
@@ -1713,7 +1713,7 @@ void CameraSceneWidget::drawOverlay()
     painter.drawEllipse(center2d, radiusPx, radiusPx);
 
     auto axisPen = [&](HoverAxis axis, const QColor &base) {
-        const bool hl = (m_hoverAxis == axis) || (m_dragAxis == axis && m_leftDragging);
+        const bool hl = (_hoverAxis == axis) || (_dragAxis == axis && _leftDragging);
         QColor cc = base;
         if (hl) cc = cc.lighter(150);
         return QPen(cc, hl ? 4.0 : 2.0);
@@ -1749,14 +1749,14 @@ void CameraSceneWidget::drawOverlay()
     drawGreatCircle(HoverAxis::X, QColor(255, 110, 110, 52));
     drawGreatCircle(HoverAxis::Y, QColor(110, 255, 150, 52));
     drawGreatCircle(HoverAxis::Z, QColor(110, 170, 255, 52));
-    } // end if (m_showGizmo)
+    } // end if (_showGizmo)
 
-    if (m_showCameras)
+    if (_showCameras)
     {
         const float frustumBase = cameraFrustumBase();
         const int labelBudget = maxVisibleCameraLabels();
-        const int cameraCount = static_cast<int>(m_poses.size());
-        const bool drawAllCameraLabels = m_poses.size() <= maxVisibleCameraLabels();
+        const int cameraCount = static_cast<int>(_poses.size());
+        const bool drawAllCameraLabels = _poses.size() <= maxVisibleCameraLabels();
         const int cameraLabelStride = drawAllCameraLabels
             ? 1
             : qMax(1, static_cast<int>(std::ceil(double(cameraCount) / double(qMax(1, labelBudget)))));
@@ -1775,7 +1775,7 @@ void CameraSceneWidget::drawOverlay()
             painter.drawLine(pa, pb);
         };
 
-        if (m_poses.isEmpty())
+        if (_poses.isEmpty())
         {
             painter.setPen(QColor(120, 120, 120));
             painter.drawText(rect(), Qt::AlignCenter, tr("暂无相机参数，显示默认模型球"));
@@ -1783,9 +1783,9 @@ void CameraSceneWidget::drawOverlay()
 
         painter.setBrush(QColor(220, 100, 40));
         painter.setPen(Qt::NoPen);
-        for (qsizetype poseIndex = 0; poseIndex < m_poses.size(); ++poseIndex)
+        for (qsizetype poseIndex = 0; poseIndex < _poses.size(); ++poseIndex)
         {
-            const CameraPose &pose = m_poses.at(poseIndex);
+            const CameraPose &pose = _poses.at(poseIndex);
             bool ok = false;
             const QPointF pc = projectToScreen(pose.center, &ok);
             if (!ok) continue;
@@ -1811,7 +1811,7 @@ void CameraSceneWidget::drawOverlay()
             drawLine3D(p4, p1, frustumPen);
             const bool drawCameraLabel = drawAllCameraLabels
                 || (poseIndex == 0)
-                || (poseIndex == m_poses.size() - 1)
+                || (poseIndex == _poses.size() - 1)
                 || (static_cast<int>(poseIndex) % cameraLabelStride == 0);
             if (drawCameraLabel)
             {
@@ -1855,31 +1855,31 @@ void CameraSceneWidget::drawOverlay()
                          .arg(QString::number(euler.x(), 'f', 1))
                          .arg(QString::number(euler.z(), 'f', 1)));
 
-    if (m_manualPruneMode)
+    if (_manualPruneMode)
     {
         painter.setPen(QPen(QColor(255, 90, 90, 220), 1.5, Qt::DashLine));
         painter.setBrush(QColor(255, 90, 90, 40));
-        if (!m_manualSelectRect.isNull())
+        if (!_manualSelectRect.isNull())
         {
-            painter.drawRect(m_manualSelectRect.normalized());
+            painter.drawRect(_manualSelectRect.normalized());
         }
 
         painter.setPen(Qt::NoPen);
         painter.setBrush(QColor(255, 230, 90, 170));
         const int highlightCap = 12000;
-        const int drawCount = std::min<int>(static_cast<int>(m_manualPreviewIndices.size()), highlightCap);
+        const int drawCount = std::min<int>(static_cast<int>(_manualPreviewIndices.size()), highlightCap);
         for (int i = 0; i < drawCount; ++i)
         {
-            const std::size_t pointIndex = m_manualPreviewIndices[static_cast<std::size_t>(i)];
-            if (pointIndex >= m_cloud.size())
+            const std::size_t pointIndex = _manualPreviewIndices[static_cast<std::size_t>(i)];
+            if (pointIndex >= _cloud.size())
             {
                 continue;
             }
             bool ok = false;
             const QPointF screenPoint = projectToScreen(QVector3D(
-                m_cloud.points()(static_cast<plamatrix::Index>(pointIndex), 0),
-                m_cloud.points()(static_cast<plamatrix::Index>(pointIndex), 1),
-                m_cloud.points()(static_cast<plamatrix::Index>(pointIndex), 2)), &ok);
+                _cloud.points()(static_cast<plamatrix::Index>(pointIndex), 0),
+                _cloud.points()(static_cast<plamatrix::Index>(pointIndex), 1),
+                _cloud.points()(static_cast<plamatrix::Index>(pointIndex), 2)), &ok);
             if (ok)
             {
                 painter.drawEllipse(screenPoint, 1.5, 1.5);
@@ -1889,7 +1889,7 @@ void CameraSceneWidget::drawOverlay()
         painter.setPen(QColor(235, 80, 80));
         painter.drawText(QPointF(14.0, 24.0),
                          tr("手动剔除模式：右键框选高亮，前进侧键删除，Ctrl+Z 撤销（已选 %1）")
-                             .arg(static_cast<int>(m_manualPreviewIndices.size())));
+                             .arg(static_cast<int>(_manualPreviewIndices.size())));
     }
 
     drawPlyLoadProgressOverlay(painter);
@@ -1897,7 +1897,7 @@ void CameraSceneWidget::drawOverlay()
 
 void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
 {
-    if (!m_loading || m_plyLoadProgressPercent < 0)
+    if (!_loading || _plyLoadProgressPercent < 0)
     {
         return;
     }
@@ -1910,7 +1910,7 @@ void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
 
     const QRectF panel(24.0, height() - 72.0, panelWidth, 48.0);
     const QRectF bar(panel.left() + 16.0, panel.bottom() - 16.0, panel.width() - 32.0, 6.0);
-    const qreal fillWidth = bar.width() * qBound(0, m_plyLoadProgressPercent, 100) / 100.0;
+    const qreal fillWidth = bar.width() * qBound(0, _plyLoadProgressPercent, 100) / 100.0;
 
     painter.save();
     painter.setPen(QPen(QColor(70, 82, 96, 160), 1.0));
@@ -1918,9 +1918,9 @@ void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
     painter.drawRoundedRect(panel, 6.0, 6.0);
 
     painter.setPen(QColor(34, 48, 68));
-    const QString title = m_plyLoadProgressText.isEmpty()
+    const QString title = _plyLoadProgressText.isEmpty()
         ? tr("正在加载密集点云...")
-        : m_plyLoadProgressText;
+        : _plyLoadProgressText;
     painter.drawText(QRectF(panel.left() + 16.0,
                             panel.top() + 8.0,
                             panel.width() - 96.0,
@@ -1932,7 +1932,7 @@ void CameraSceneWidget::drawPlyLoadProgressOverlay(QPainter &painter)
                             54.0,
                             20.0),
                      Qt::AlignVCenter | Qt::AlignRight,
-                     QStringLiteral("%1%").arg(qBound(0, m_plyLoadProgressPercent, 100)));
+                     QStringLiteral("%1%").arg(qBound(0, _plyLoadProgressPercent, 100)));
 
     painter.setPen(Qt::NoPen);
     painter.setBrush(QColor(218, 226, 238));
@@ -1946,7 +1946,7 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
 {
     if (enabled)
     {
-        if ((m_cloud.size() == 0))
+        if ((_cloud.size() == 0))
         {
             if (errorMessage)
             {
@@ -1954,7 +1954,7 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
             }
             return false;
         }
-        if (m_cloud.hasFaces())
+        if (_cloud.hasFaces())
         {
             if (errorMessage)
             {
@@ -1964,15 +1964,15 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
         }
     }
 
-    m_manualPruneMode = enabled;
-    m_manualSelecting = false;
-    m_manualSelectRect = QRect();
-    m_manualPreviewIndices.clear();
+    _manualPruneMode = enabled;
+    _manualSelecting = false;
+    _manualSelectRect = QRect();
+    _manualPreviewIndices.clear();
     if (!enabled)
     {
-        m_manualUndoStack.clear();
+        _manualUndoStack.clear();
     }
-    emit manualPruneModeChanged(m_manualPruneMode);
+    emit manualPruneModeChanged(_manualPruneMode);
     updateCursor();
     update();
     return true;
@@ -1980,20 +1980,20 @@ bool CameraSceneWidget::setManualPruneModeEnabled(bool enabled, QString *errorMe
 
 void CameraSceneWidget::pushManualUndoSnapshot(RenderCloud snapshot)
 {
-    if (!m_manualPruneMode)
+    if (!_manualPruneMode)
     {
         return;
     }
-    m_manualUndoStack.push_back(std::move(snapshot));
-    if (static_cast<int>(m_manualUndoStack.size()) > m_manualUndoLimit)
+    _manualUndoStack.push_back(std::move(snapshot));
+    if (static_cast<int>(_manualUndoStack.size()) > _manualUndoLimit)
     {
-        m_manualUndoStack.erase(m_manualUndoStack.begin());
+        _manualUndoStack.erase(_manualUndoStack.begin());
     }
 }
 
 bool CameraSceneWidget::undoLastManualPrune(QString *errorMessage)
 {
-    if (!m_manualPruneMode)
+    if (!_manualPruneMode)
     {
         if (errorMessage)
         {
@@ -2001,7 +2001,7 @@ bool CameraSceneWidget::undoLastManualPrune(QString *errorMessage)
         }
         return false;
     }
-    if (m_manualUndoStack.empty())
+    if (_manualUndoStack.empty())
     {
         if (errorMessage)
         {
@@ -2010,10 +2010,10 @@ bool CameraSceneWidget::undoLastManualPrune(QString *errorMessage)
         return false;
     }
 
-    m_cloud = std::move(m_manualUndoStack.back());
-    m_manualUndoStack.pop_back();
-    m_cacheDirty = true;
-    m_gpuDirty = true;
+    _cloud = std::move(_manualUndoStack.back());
+    _manualUndoStack.pop_back();
+    _cacheDirty = true;
+    _gpuDirty = true;
     update();
 
     QString saveError;
@@ -2027,22 +2027,22 @@ bool CameraSceneWidget::undoLastManualPrune(QString *errorMessage)
         return false;
     }
 
-    emit manualPruneUndone(static_cast<int>(m_cloud.size()));
-    emit manualPruneSaved(m_currentCloudPath, static_cast<int>(m_cloud.size()));
+    emit manualPruneUndone(static_cast<int>(_cloud.size()));
+    emit manualPruneSaved(_currentCloudPath, static_cast<int>(_cloud.size()));
     return true;
 }
 
 int CameraSceneWidget::removePointsInScreenRect(const QRect &screenRect)
 {
     const QRect rect = screenRect.normalized();
-    if (rect.width() < 3 || rect.height() < 3 || (m_cloud.size() == 0))
+    if (rect.width() < 3 || rect.height() < 3 || (_cloud.size() == 0))
     {
         return 0;
     }
 
     std::vector<std::size_t> selectedIndices;
     collectPointIndicesInScreenRect(rect, &selectedIndices);
-    const std::size_t pointCount = m_cloud.size();
+    const std::size_t pointCount = _cloud.size();
     std::vector<bool> removeMask(pointCount, false);
     for (const std::size_t index : selectedIndices)
     {
@@ -2074,55 +2074,55 @@ int CameraSceneWidget::removePointsInScreenRect(const QRect &screenRect)
     {
         plamatrix::Index src = kept[i];
         for (int d = 0; d < 3; ++d)
-            newPts(static_cast<plamatrix::Index>(i), d) = m_cloud.points()(src, d);
+            newPts(static_cast<plamatrix::Index>(i), d) = _cloud.points()(src, d);
     }
 
     RenderCloud filtered(std::move(newPts));
-    filtered.setMaterialLibraryFile(m_cloud.materialLibraryFile());
-    filtered.setTextureImageFile(m_cloud.textureImageFile());
+    filtered.setMaterialLibraryFile(_cloud.materialLibraryFile());
+    filtered.setTextureImageFile(_cloud.textureImageFile());
 
     // Copy colors if present
-    if (m_cloud.hasColors())
+    if (_cloud.hasColors())
     {
         plamatrix::DenseMatrix<uint8_t, plamatrix::Device::CPU> newCol(keepCount, 3);
         for (std::size_t i = 0; i < keepCount; ++i)
         {
             plamatrix::Index src = kept[i];
             for (int d = 0; d < 3; ++d)
-                newCol(static_cast<plamatrix::Index>(i), d) = m_cloud.colors()->getValue(src, d);
+                newCol(static_cast<plamatrix::Index>(i), d) = _cloud.colors()->getValue(src, d);
         }
         filtered.setColors(std::move(newCol));
     }
 
     // Copy normals if present
-    if (m_cloud.hasNormals())
+    if (_cloud.hasNormals())
     {
         plamatrix::DenseMatrix<float, plamatrix::Device::CPU> newNrm(keepCount, 3);
         for (std::size_t i = 0; i < keepCount; ++i)
         {
             plamatrix::Index src = kept[i];
             for (int d = 0; d < 3; ++d)
-                newNrm(static_cast<plamatrix::Index>(i), d) = m_cloud.normals()->getValue(src, d);
+                newNrm(static_cast<plamatrix::Index>(i), d) = _cloud.normals()->getValue(src, d);
         }
         filtered.setNormals(std::move(newNrm));
     }
 
     // Copy texture coords if present
-    if (m_cloud.hasTextureCoords())
+    if (_cloud.hasTextureCoords())
     {
         plamatrix::DenseMatrix<float, plamatrix::Device::CPU> newTex(keepCount, 2);
         for (std::size_t i = 0; i < keepCount; ++i)
         {
             plamatrix::Index src = kept[i];
             for (int d = 0; d < 2; ++d)
-                newTex(static_cast<plamatrix::Index>(i), d) = m_cloud.textureCoords()->getValue(src, d);
+                newTex(static_cast<plamatrix::Index>(i), d) = _cloud.textureCoords()->getValue(src, d);
         }
         filtered.setTextureCoords(std::move(newTex));
     }
 
-    m_cloud = std::move(filtered);
-    m_cacheDirty = true;
-    m_gpuDirty = true;
+    _cloud = std::move(filtered);
+    _cacheDirty = true;
+    _gpuDirty = true;
     update();
     return removedCount;
 }
@@ -2137,20 +2137,20 @@ void CameraSceneWidget::collectPointIndicesInScreenRect(const QRect &screenRect,
     indices->clear();
 
     const QRect rect = screenRect.normalized();
-    if (rect.width() < 3 || rect.height() < 3 || (m_cloud.size() == 0))
+    if (rect.width() < 3 || rect.height() < 3 || (_cloud.size() == 0))
     {
         return;
     }
 
-    const std::size_t pointCount = m_cloud.size();
+    const std::size_t pointCount = _cloud.size();
     indices->reserve(pointCount / 8);
     for (std::size_t index = 0; index < pointCount; ++index)
     {
         bool projected = false;
         const QPointF screenPoint = projectToScreen(QVector3D(
-            m_cloud.points()(static_cast<plamatrix::Index>(index), 0),
-            m_cloud.points()(static_cast<plamatrix::Index>(index), 1),
-            m_cloud.points()(static_cast<plamatrix::Index>(index), 2)), &projected);
+            _cloud.points()(static_cast<plamatrix::Index>(index), 0),
+            _cloud.points()(static_cast<plamatrix::Index>(index), 1),
+            _cloud.points()(static_cast<plamatrix::Index>(index), 2)), &projected);
         if (projected && rect.contains(screenPoint.toPoint()))
         {
             indices->push_back(index);
@@ -2160,7 +2160,7 @@ void CameraSceneWidget::collectPointIndicesInScreenRect(const QRect &screenRect,
 
 bool CameraSceneWidget::saveCurrentPointCloudToSource(QString *errorMessage)
 {
-    if (m_currentCloudPath.trimmed().isEmpty())
+    if (_currentCloudPath.trimmed().isEmpty())
     {
         if (errorMessage)
         {
@@ -2170,7 +2170,7 @@ bool CameraSceneWidget::saveCurrentPointCloudToSource(QString *errorMessage)
     }
 
     // Determine file format from extension
-    const std::string stdPath = m_currentCloudPath.toStdString();
+    const std::string stdPath = _currentCloudPath.toStdString();
     const bool isPly = (stdPath.size() >= 4 &&
         (stdPath.substr(stdPath.size() - 4) == ".ply" || stdPath.substr(stdPath.size() - 4) == ".PLY"));
 
@@ -2178,11 +2178,11 @@ bool CameraSceneWidget::saveCurrentPointCloudToSource(QString *errorMessage)
     {
         if (isPly)
         {
-            plapoint::io::writePly<float>(stdPath, m_cloud);
+            plapoint::io::writePly<float>(stdPath, _cloud);
         }
         else
         {
-            plapoint::io::writeXyz<float>(stdPath, m_cloud);
+            plapoint::io::writeXyz<float>(stdPath, _cloud);
         }
         return true;
     }
@@ -2200,64 +2200,64 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
 {
     setFocus();
 
-    if (m_manualPruneMode && event->button() == Qt::RightButton)
+    if (_manualPruneMode && event->button() == Qt::RightButton)
     {
-        m_manualSelecting = true;
-        m_manualSelectStart = event->pos();
-        m_manualSelectRect = QRect(m_manualSelectStart, m_manualSelectStart);
+        _manualSelecting = true;
+        _manualSelectStart = event->pos();
+        _manualSelectRect = QRect(_manualSelectStart, _manualSelectStart);
         updateCursor();
         event->accept();
         update();
         return;
     }
 
-    if (m_manualPruneMode && event->button() == Qt::ForwardButton)
+    if (_manualPruneMode && event->button() == Qt::ForwardButton)
     {
-        const QRect selectionRect = m_manualSelectRect.normalized();
-        RenderCloud snapshot = cloneRenderCloud(m_cloud);
+        const QRect selectionRect = _manualSelectRect.normalized();
+        RenderCloud snapshot = cloneRenderCloud(_cloud);
         const int removedCount = removePointsInScreenRect(selectionRect);
         if (removedCount > 0)
         {
             pushManualUndoSnapshot(std::move(snapshot));
-            emit manualPruneApplied(removedCount, static_cast<int>(m_cloud.size()));
+            emit manualPruneApplied(removedCount, static_cast<int>(_cloud.size()));
             QString saveError;
             if (saveCurrentPointCloudToSource(&saveError))
             {
-                emit manualPruneSaved(m_currentCloudPath, static_cast<int>(m_cloud.size()));
+                emit manualPruneSaved(_currentCloudPath, static_cast<int>(_cloud.size()));
             }
             else
             {
                 emit manualPruneSaveFailed(saveError);
             }
-            collectPointIndicesInScreenRect(m_manualSelectRect, &m_manualPreviewIndices);
+            collectPointIndicesInScreenRect(_manualSelectRect, &_manualPreviewIndices);
         }
         event->accept();
         update();
         return;
     }
 
-    m_lastMousePos = event->pos();
+    _lastMousePos = event->pos();
     if (event->button() == Qt::LeftButton) {
-        m_leftDragging = true;
-        m_dragAxis = m_hoverAxis;
+        _leftDragging = true;
+        _dragAxis = _hoverAxis;
         // 无论单轴还是自由旋转，均记录按下时的旋转状态
-        m_viewRotAtPress = m_viewRot;
-        if (m_dragAxis != HoverAxis::None) {
-            m_dragAxisDir = pickAxisTangent(event->pos(), m_dragAxis);
+        _viewRotAtPress = _viewRot;
+        if (_dragAxis != HoverAxis::None) {
+            _dragAxisDir = pickAxisTangent(event->pos(), _dragAxis);
             // 注意：Y 轴环的屏幕切线方向在参数化时与鼠标拖拽方向有符号差，
             // 在多数情况下需要翻转切线方向以使鼠标向右/上时视图按直觉旋转。
             // 仅对 Y 轴做翻转修正，避免对 X/Z 轴产生副作用。
-            if (m_dragAxis == HoverAxis::Y) m_dragAxisDir = -m_dragAxisDir;
+            if (_dragAxis == HoverAxis::Y) _dragAxisDir = -_dragAxisDir;
         } else {
             // Arcball 自由旋转：记录按下那一刻球面坐标
-            m_arcballPressVector = arcballVector(event->pos());
+            _arcballPressVector = arcballVector(event->pos());
         }
         updateCursor();
         event->accept();
         return;
     }
     if (event->button() == Qt::MiddleButton) {
-        m_middleDragging = true;
+        _middleDragging = true;
         updateCursor();
         event->accept();
         return;
@@ -2267,33 +2267,33 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
 
 void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
 {
-    if (m_manualPruneMode && m_manualSelecting && (event->buttons() & Qt::RightButton))
+    if (_manualPruneMode && _manualSelecting && (event->buttons() & Qt::RightButton))
     {
-        m_manualSelectRect = QRect(m_manualSelectStart, event->pos()).normalized();
-        collectPointIndicesInScreenRect(m_manualSelectRect, &m_manualPreviewIndices);
+        _manualSelectRect = QRect(_manualSelectStart, event->pos()).normalized();
+        collectPointIndicesInScreenRect(_manualSelectRect, &_manualPreviewIndices);
         event->accept();
         update();
         return;
     }
 
-    const QPoint delta = event->pos() - m_lastMousePos;
+    const QPoint delta = event->pos() - _lastMousePos;
 
-    if (m_leftDragging && (event->buttons() & Qt::LeftButton)) {
-        if (m_dragAxis == HoverAxis::None) {
+    if (_leftDragging && (event->buttons() & Qt::LeftButton)) {
+        if (_dragAxis == HoverAxis::None) {
             // ── Arcball 自由旋转 ──────────────────────────────────────────────
             // 将当前鼠标投影到球面，计算从按下点到当前点的旋转，
             // 再䈛到按下时保存的初始视图旋转上——
             // 这样球面上最始点击处就会一直跟随鼠标移动。
             const QVector3D v2 = arcballVector(event->pos());
-            const QVector3D axis = QVector3D::crossProduct(m_arcballPressVector, v2);
+            const QVector3D axis = QVector3D::crossProduct(_arcballPressVector, v2);
             if (axis.lengthSquared() > 1e-10f) {
                 const float dot = qBound(-1.0f,
-                    QVector3D::dotProduct(m_arcballPressVector, v2), 1.0f);
+                    QVector3D::dotProduct(_arcballPressVector, v2), 1.0f);
                 const float angleDeg = qRadiansToDegrees(std::acos(dot));
                 const QQuaternion delta_q =
                     QQuaternion::fromAxisAndAngle(axis.normalized(), angleDeg);
                 // 应用到按下时的初始旋转（非增量式，避免浮点漂移）
-                m_viewRot = (delta_q * m_viewRotAtPress).normalized();
+                _viewRot = (delta_q * _viewRotAtPress).normalized();
             }
         } else {
             // ── 单轴环旋转 ─────────────────────────────────────────────────────
@@ -2303,45 +2303,45 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
             //       前乘（世界空间旋转）效果：环法向不变，环平面姿态不变，
             //       场景内容（相机等）绕该轴旋转。
             const QVector2D d(float(delta.x()), float(delta.y()));
-            const float scalar = QVector2D::dotProduct(d, m_dragAxisDir);
+            const float scalar = QVector2D::dotProduct(d, _dragAxisDir);
             const float ang = scalar * 0.35f;
             // 取该环的本地法向轴，转换为当前视图下的世界方向
             QVector3D localAxis;
-            if (m_dragAxis == HoverAxis::X)      localAxis = QVector3D(1.0f, 0.0f, 0.0f);
-            else if (m_dragAxis == HoverAxis::Y) localAxis = QVector3D(0.0f, 1.0f, 0.0f);
+            if (_dragAxis == HoverAxis::X)      localAxis = QVector3D(1.0f, 0.0f, 0.0f);
+            else if (_dragAxis == HoverAxis::Y) localAxis = QVector3D(0.0f, 1.0f, 0.0f);
             else                                  localAxis = QVector3D(0.0f, 0.0f, 1.0f);
             const QVector3D axisWorld = applyViewRotation(localAxis).normalized();
             // 绕世界空间轴前乘：new_rot = qa_world * old_rot
             // 这样环的法向量方向(axisWorld)在此次旋转后保持恒定
             const QQuaternion qa = QQuaternion::fromAxisAndAngle(axisWorld, ang);
-            m_viewRot = (qa * m_viewRot).normalized();
+            _viewRot = (qa * _viewRot).normalized();
         }
         update();
-    } else if (m_middleDragging && (event->buttons() & Qt::MiddleButton)) {
+    } else if (_middleDragging && (event->buttons() & Qt::MiddleButton)) {
         // 中键平移：1:1 映射鼠标像素，无论缩放倍率如何，拖拽同量始终移动同距离
-        m_sceneOffsetPx += QPointF(delta.x(), delta.y());
+        _sceneOffsetPx += QPointF(delta.x(), delta.y());
         clampSceneOffset();
         update();
     } else {
         const HoverAxis newHover = pickHoverAxis(event->pos());
-        if (newHover != m_hoverAxis) {
-            m_hoverAxis = newHover;
+        if (newHover != _hoverAxis) {
+            _hoverAxis = newHover;
             updateCursor();
             update();
         }
     }
 
-    m_lastMousePos = event->pos();
+    _lastMousePos = event->pos();
     QOpenGLWidget::mouseMoveEvent(event);
 }
 
 void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
 {
-    if (m_manualPruneMode && event->button() == Qt::RightButton)
+    if (_manualPruneMode && event->button() == Qt::RightButton)
     {
-        m_manualSelecting = false;
-        m_manualSelectRect = m_manualSelectRect.normalized();
-        collectPointIndicesInScreenRect(m_manualSelectRect, &m_manualPreviewIndices);
+        _manualSelecting = false;
+        _manualSelectRect = _manualSelectRect.normalized();
+        collectPointIndicesInScreenRect(_manualSelectRect, &_manualPreviewIndices);
         updateCursor();
         update();
         event->accept();
@@ -2349,11 +2349,11 @@ void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
     }
 
     if (event->button() == Qt::LeftButton) {
-        m_leftDragging = false;
-        m_dragAxis = HoverAxis::None;
+        _leftDragging = false;
+        _dragAxis = HoverAxis::None;
     }
     if (event->button() == Qt::MiddleButton) {
-        m_middleDragging = false;
+        _middleDragging = false;
     }
     updateCursor();
     QOpenGLWidget::mouseReleaseEvent(event);
@@ -2361,7 +2361,7 @@ void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
 
 void CameraSceneWidget::wheelEvent(QWheelEvent *event)
 {
-    if (m_leftDragging || m_middleDragging) {
+    if (_leftDragging || _middleDragging) {
         event->ignore();
         return;
     }
@@ -2369,7 +2369,7 @@ void CameraSceneWidget::wheelEvent(QWheelEvent *event)
     const QPoint angle = event->angleDelta();
     if (!angle.isNull()) {
         const float factor = (angle.y() > 0) ? 1.10f : 0.90f;
-        m_zoomScale = m_zoomScale * factor;   // 无缩放上下限
+        _zoomScale = _zoomScale * factor;   // 无缩放上下限
         clampSceneOffset();
         update();
     }
@@ -2378,7 +2378,7 @@ void CameraSceneWidget::wheelEvent(QWheelEvent *event)
 
 void CameraSceneWidget::keyPressEvent(QKeyEvent *event)
 {
-    if (m_manualPruneMode && event->matches(QKeySequence::Undo))
+    if (_manualPruneMode && event->matches(QKeySequence::Undo))
     {
         QString errorMessage;
         undoLastManualPrune(&errorMessage);
@@ -2390,13 +2390,13 @@ void CameraSceneWidget::keyPressEvent(QKeyEvent *event)
 
 CameraModel3DDialog::CameraModel3DDialog(ProjectManager *projectManager, QWidget *parent)
     : QDialog(parent)
-    , m_projectManager(projectManager)
+    , _projectManager(projectManager)
 {
     Ui::CameraModel3DDialog form;
     form.setupUi(this);
 
-    m_scene = form.m_scene;
-    m_summaryLabel = form.m_summaryLabel;
+    _scene = form.m_scene;
+    _summaryLabel = form.m_summaryLabel;
 
     connect(form.reloadButton, &QPushButton::clicked, this, &CameraModel3DDialog::reloadFromProject);
     connect(form.closeButton, &QPushButton::clicked, this, &QDialog::accept);
@@ -2407,12 +2407,12 @@ CameraModel3DDialog::CameraModel3DDialog(ProjectManager *projectManager, QWidget
 QVector<CameraSceneWidget::CameraPose> CameraModel3DDialog::readCamerasFromMeta() const
 {
     QVector<CameraSceneWidget::CameraPose> poses;
-    if (!m_projectManager)
+    if (!_projectManager)
     {
         return poses;
     }
 
-    const QJsonArray images = xjw::gui::project::projectImageEntries(m_projectManager->currentMeta());
+    const QJsonArray images = xjw::gui::project::projectImageEntries(_projectManager->currentMeta());
     for (const QJsonValue &imageValue : images)
     {
         const QJsonObject imageObject = imageValue.toObject();
@@ -2454,9 +2454,9 @@ QVector<CameraSceneWidget::CameraPose> CameraModel3DDialog::readCamerasFromMeta(
 void CameraModel3DDialog::reloadFromProject()
 {
     const QVector<CameraSceneWidget::CameraPose> poses = readCamerasFromMeta();
-    m_scene->setCameraPoses(poses);
+    _scene->setCameraPoses(poses);
     const QString labelHint = poses.size() > 40
         ? tr("，相机名称已抽样显示")
         : QString();
-    m_summaryLabel->setText(tr("相机数量: %1%2（左键旋转，滚轮缩放）").arg(poses.size()).arg(labelHint));
+    _summaryLabel->setText(tr("相机数量: %1%2（左键旋转，滚轮缩放）").arg(poses.size()).arg(labelHint));
 }
