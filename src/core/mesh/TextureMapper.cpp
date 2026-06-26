@@ -370,22 +370,30 @@ bool bakeTextureFromVertexColors(const PlaPointCloud &meshCloud,
             continue;
         }
 
-        const std::size_t t0Idx = faceTexIndices ? static_cast<std::size_t>((*faceTexIndices)(fi, 0)) : static_cast<std::size_t>(i0);
-        const std::size_t t1Idx = faceTexIndices ? static_cast<std::size_t>((*faceTexIndices)(fi, 1)) : static_cast<std::size_t>(i1);
-        const std::size_t t2Idx = faceTexIndices ? static_cast<std::size_t>((*faceTexIndices)(fi, 2)) : static_cast<std::size_t>(i2);
-        if (t0Idx >= static_cast<std::size_t>(texCoords->rows())
-            || t1Idx >= static_cast<std::size_t>(texCoords->rows())
-            || t2Idx >= static_cast<std::size_t>(texCoords->rows()))
+        const auto texture_index_for_face = [&](int column, int vertex_index)
+        {
+            if (faceTexIndices)
+            {
+                return static_cast<std::size_t>((*faceTexIndices)(fi, column));
+            }
+            return static_cast<std::size_t>(vertex_index);
+        };
+        const std::size_t t0_idx = texture_index_for_face(0, i0);
+        const std::size_t t1_idx = texture_index_for_face(1, i1);
+        const std::size_t t2_idx = texture_index_for_face(2, i2);
+        if (t0_idx >= static_cast<std::size_t>(texCoords->rows())
+            || t1_idx >= static_cast<std::size_t>(texCoords->rows())
+            || t2_idx >= static_cast<std::size_t>(texCoords->rows()))
         {
             continue;
         }
 
-        const QPointF p0((*texCoords)(static_cast<int>(t0Idx), 0) * (textureSize - 1),
-                         (1.0f - (*texCoords)(static_cast<int>(t0Idx), 1)) * (textureSize - 1));
-        const QPointF p1((*texCoords)(static_cast<int>(t1Idx), 0) * (textureSize - 1),
-                         (1.0f - (*texCoords)(static_cast<int>(t1Idx), 1)) * (textureSize - 1));
-        const QPointF p2((*texCoords)(static_cast<int>(t2Idx), 0) * (textureSize - 1),
-                         (1.0f - (*texCoords)(static_cast<int>(t2Idx), 1)) * (textureSize - 1));
+        const QPointF p0((*texCoords)(static_cast<int>(t0_idx), 0) * (textureSize - 1),
+                         (1.0f - (*texCoords)(static_cast<int>(t0_idx), 1)) * (textureSize - 1));
+        const QPointF p1((*texCoords)(static_cast<int>(t1_idx), 0) * (textureSize - 1),
+                         (1.0f - (*texCoords)(static_cast<int>(t1_idx), 1)) * (textureSize - 1));
+        const QPointF p2((*texCoords)(static_cast<int>(t2_idx), 0) * (textureSize - 1),
+                         (1.0f - (*texCoords)(static_cast<int>(t2_idx), 1)) * (textureSize - 1));
         const double area = edgeFunction(p0, p1, p2);
         if (std::abs(area) < 1e-8)
         {
