@@ -76,8 +76,10 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("extractorCfg.maxImageDim   = featureMaxImageDim", source)
         self.assertIn("dcfg.scoreThreshold = cfg.detThreshold", factory)
         self.assertIn("acfg.scoreThreshold = cfg.detThreshold", factory)
-        self.assertIn("m_cfg.maxKeypoints", disk_cpp)
-        self.assertIn("m_cfg.maxKeypoints", aliked_cpp)
+        self.assertIn("_config.maxKeypoints", disk_cpp)
+        self.assertIn("_config.maxKeypoints", aliked_cpp)
+        self.assertNotIn("m_cfg.maxKeypoints", disk_cpp)
+        self.assertNotIn("m_cfg.maxKeypoints", aliked_cpp)
 
     def test_one_click_feature_extraction_filters_pixels_below_five_by_default(self):
         header = (ROOT / "src/core/pipeline/SFMService.h").read_text(encoding="utf-8")
