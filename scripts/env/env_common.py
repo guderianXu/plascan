@@ -21,6 +21,10 @@ def default_output_dir() -> Path:
 
 
 def host_platform() -> str:
+    test_override = os.environ.get("_PLASCAN_TEST_HOST_PLATFORM", "").strip().lower()
+    if test_override in {"windows", "linux", "macos"}:
+        return test_override
+
     system = platform.system().lower()
     if system.startswith("win"):
         return "windows"

@@ -1,7 +1,7 @@
 {
   "$schema": "https://raw.githubusercontent.com/microsoft/vcpkg-tool/main/docs/vcpkg.schema.json",
   "name": "plascan",
-  "version-string": "1.1.1",
+  "version-string": "1.1.6",
   "builtin-baseline": "dd306f32e07d87fdb16837af64f33b6b415c770a",
   "dependencies": [
     {
@@ -15,6 +15,10 @@
       ]
     },
     "gtest",
+    {
+      "name": "libxkbcommon",
+      "platform": "linux"
+    },
     "libzip",
     {
       "name": "opencv",
@@ -32,6 +36,30 @@
       ]
     },
     "qtbase",
-    "tiff"
+    "tiff",
+    {
+      "name": "xcb-cursor",
+      "platform": "linux"
+    },
+    {
+      "name": "xcb-image",
+      "platform": "linux"
+    },
+    {
+      "name": "xcb-keysyms",
+      "platform": "linux"
+    },
+    {
+      "name": "xcb-render-util",
+      "platform": "linux"
+    },
+    {
+      "name": "xcb-util",
+      "platform": "linux"
+    },
+    {
+      "name": "xcb-util-wm",
+      "platform": "linux"
+    }
   ]
 }

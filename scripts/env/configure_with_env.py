@@ -4,10 +4,11 @@
 from __future__ import annotations
 
 import argparse
+import re
 import subprocess
 from pathlib import Path
 
-from env_common import default_output_dir, host_platform, load_env_json, merged_environment, quote_command
+from env_common import default_output_dir, fail, host_platform, load_env_json, merged_environment, quote_command
 
 
 def default_preset(build_type: str) -> str:
@@ -31,6 +32,30 @@ def cmake_defines(values: dict[str, str]) -> list[str]:
         if value:
             defines.append(f"-D{cmake_key}={value}")
     return defines
+
+
+def is_foreign_platform_path(value: str) -> bool:
+    if host_platform() == "windows":
+        return False
+    return bool(re.match(r"^[A-Za-z]:[\\/]", value) or value.startswith("\\\\"))
+
+
+def validate_environment_values(values: dict[str, str]) -> None:
+    path_keys = [
+        "Torch_DIR",
+        "PLASCAN_TORCH_DIR",
+        "CUDAToolkit_ROOT",
+        "CUDA_TOOLKIT_ROOT_DIR",
+        "CMAKE_CUDA_COMPILER",
+        "CMAKE_TOOLCHAIN_FILE",
+    ]
+    for key in path_keys:
+        value = values.get(key, "").strip()
+        if value and is_foreign_platform_path(value):
+            fail(
+                f"{key} contains a foreign platform path for {host_platform()}: {value}. "
+                "Regenerate build/env on this host or pass --env-file for the current platform."
+            )
 
 
 def run(cmd: list[str], dry_run: bool, env: dict[str, str]) -> None:
@@ -67,6 +92,8 @@ def main() -> None:
         values.update(load_env_json(vcpkg_path))
     elif args.require_vcpkg_file:
         values.update(load_env_json(vcpkg_path))
+
+    validate_environment_values(values)
 
     env = merged_environment(values)
     preset = args.preset or default_preset(args.build_type)

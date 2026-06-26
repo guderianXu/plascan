@@ -287,23 +287,11 @@ if(UNIX AND NOT APPLE)
   set(CPACK_DEBIAN_COMPRESSION_TYPE "xz")
 endif()
 
-# ── 安装规则 ──
 if(WIN32)
   install(DIRECTORY resources/ DESTINATION share/plascan
       FILES_MATCHING
       PATTERN "*.png"
       PATTERN "*.svg")
-else()
-  # 启动脚本 (处理 conda 隔离 + LibTorch + 系统 Qt6 GLX)
-  install(PROGRAMS resources/plascan.sh
-      DESTINATION bin RENAME plascan)
-  install(DIRECTORY resources/ DESTINATION share/plascan
-      FILES_MATCHING PATTERN "*.svg" PATTERN "*.desktop")
-  # 桌面集成
-  install(FILES resources/plascan.svg
-      DESTINATION share/icons/hicolor/scalable/apps RENAME plascan.svg)
-  install(FILES resources/plascan.desktop
-      DESTINATION share/applications)
 endif()
 
 include(CPack)

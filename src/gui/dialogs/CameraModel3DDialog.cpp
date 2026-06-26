@@ -48,8 +48,10 @@
 #include <cmath>
 #include <cstdint>
 #include <cstring>
+#include <fstream>
 #include <functional>
 #include <limits>
+#include <string>
 #include <plapoint/io/xyz_io.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/obj_io.h>
@@ -215,6 +217,24 @@ quint64 availableSystemMemoryBytes()
     if (GlobalMemoryStatusEx(&status))
     {
         return static_cast<quint64>(status.ullAvailPhys);
+    }
+#elif defined(Q_OS_LINUX)
+    std::ifstream meminfo("/proc/meminfo");
+    std::string key;
+    quint64 valueKb = 0;
+    std::string unit;
+    quint64 availableKb = 0;
+    while (meminfo >> key >> valueKb >> unit)
+    {
+        if (key == "MemAvailable:")
+        {
+            availableKb = valueKb;
+            break;
+        }
+    }
+    if (availableKb > 0)
+    {
+        return availableKb * 1024ull;
     }
 #endif
     return 0;

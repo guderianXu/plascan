@@ -1,3 +1,8 @@
+import json
+import os
+import subprocess
+import sys
+import tempfile
 import unittest
 from pathlib import Path
 
@@ -123,11 +128,13 @@ class RepoHygieneTest(unittest.TestCase):
     def test_release_1_1_6_metadata_is_synchronized(self):
         root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
         core_cmake = (ROOT / "src" / "core" / "CMakeLists.txt").read_text(encoding="utf-8")
+        manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
         changelog = (ROOT / "CHANGELOG.md").read_text(encoding="utf-8")
         release_doc = ROOT / "docs" / "releases" / "v1.1.6.md"
 
         self.assertIn("project(PlaScan VERSION 1.1.6", root_cmake)
         self.assertIn("project(PlaScanCore VERSION 1.1.6", core_cmake)
+        self.assertEqual(manifest.get("version-string"), "1.1.6")
         self.assertIn("## v1.1.6 - 2026-06-21", changelog)
         self.assertTrue(release_doc.exists(), "v1.1.6 release notes are missing")
 
@@ -186,6 +193,58 @@ class RepoHygieneTest(unittest.TestCase):
                 text = path.read_text(encoding="utf-8")
                 for term in required_terms:
                     self.assertIn(term, text)
+
+    def test_linux_install_rules_have_single_plascan_launcher_owner(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        gui_install = (ROOT / "src" / "gui" / "cmake" / "GuiInstall.cmake").read_text(encoding="utf-8")
+
+        self.assertNotIn("resources/plascan.sh", root_cmake)
+        self.assertIn("plascan_gui_launcher.sh.in", gui_install)
+        self.assertIn('install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION bin)', gui_install)
+        self.assertIn('install(PROGRAMS "${CMAKE_CURRENT_BINARY_DIR}/plascan" DESTINATION /usr/bin)', gui_install)
+
+    def test_configure_with_env_rejects_foreign_platform_paths(self):
+        script = ROOT / "scripts" / "env" / "configure_with_env.py"
+        with tempfile.TemporaryDirectory() as tmp:
+            env_file = Path(tmp) / "plascan-env.json"
+            env_file.write_text(
+                json.dumps(
+                    {
+                        "Torch_DIR": r"E:\code\plascan\build\env\libtorch-cu130\libtorch\share\cmake\Torch",
+                        "PLASCAN_TORCH_DIR": r"E:\code\plascan\build\env\libtorch-cu130\libtorch\share\cmake\Torch",
+                    }
+                ),
+                encoding="utf-8",
+            )
+            result = subprocess.run(
+                [
+                    sys.executable,
+                    str(script),
+                    "--env-file",
+                    str(env_file),
+                    "--vcpkg-file",
+                    str(Path(tmp) / "missing-vcpkg.json"),
+                    "--dry-run",
+                ],
+                cwd=ROOT,
+                env={**os.environ, "_PLASCAN_TEST_HOST_PLATFORM": "linux"},
+                text=True,
+                stdout=subprocess.PIPE,
+                stderr=subprocess.PIPE,
+                check=False,
+            )
+
+        self.assertNotEqual(result.returncode, 0)
+        self.assertIn("foreign platform path", result.stderr)
+        self.assertIn("Torch_DIR", result.stderr)
+
+    def test_camera_preview_memory_detection_supports_linux(self):
+        source = (ROOT / "src" / "gui" / "dialogs" / "CameraModel3DDialog.cpp").read_text(encoding="utf-8")
+
+        self.assertRegex(source, r"#elif\s+defined\(Q_OS_LINUX\)")
+        self.assertIn("/proc/meminfo", source)
+        self.assertIn("MemAvailable:", source)
+        self.assertRegex(source, r"return\s+availableKb\s*\*\s*1024")
 
 
 if __name__ == "__main__":
