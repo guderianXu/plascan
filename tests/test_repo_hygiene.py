@@ -35,6 +35,13 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("cmake --build build", text)
         self.assertIn("ctest --test-dir build", text)
 
+    def test_github_actions_uses_current_checkout_action(self):
+        workflow_path = ROOT / ".github" / "workflows" / "ci.yml"
+        text = workflow_path.read_text(encoding="utf-8")
+
+        self.assertIn("uses: actions/checkout@v7", text)
+        self.assertNotIn("uses: actions/checkout@v4", text)
+
     def test_triangulate_cli_test_uses_process_api_and_unique_temp_dirs(self):
         source = (ROOT / "tests" / "test_triangulate_cli.cpp").read_text(encoding="utf-8")
 
