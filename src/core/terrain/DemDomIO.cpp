@@ -359,7 +359,9 @@ bool DemDomIO::writeDemPreviewPng(const DemGridData &demGrid,
 
             const double normalized =
                 (demGrid.elevation.at<float>(row, col) - minValue) / (maxValue - minValue);
-            preview.at<uchar>(row, col) = static_cast<uchar>(qBound(0, static_cast<int>(std::round(normalized * 255.0)), 255));
+            const int roundedValue = static_cast<int>(std::round(normalized * 255.0));
+            const int clampedValue = qBound(0, roundedValue, 255);
+            preview.at<uchar>(row, col) = static_cast<uchar>(clampedValue);
         }
     }
 
@@ -472,7 +474,9 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
                 }
                 const double normalized =
                     (demGrid.elevation.at<float>(row, col) - minValue) / (maxValue - minValue);
-                u16.at<uint16_t>(row, col) = static_cast<uint16_t>(qBound(0, static_cast<int>(std::round(normalized * 65535.0)), 65535));
+                const int roundedValue = static_cast<int>(std::round(normalized * 65535.0));
+                const int clampedValue = qBound(0, roundedValue, 65535);
+                u16.at<uint16_t>(row, col) = static_cast<uint16_t>(clampedValue);
             }
         }
         cv::Mat writeRaster = flipForRasterWrite(u16);
