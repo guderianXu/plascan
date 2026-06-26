@@ -73,7 +73,7 @@ QJsonObject TerrainProductRecord::toJson() const
     object.insert(QStringLiteral("grid_width"), gridWidth);
     object.insert(QStringLiteral("grid_height"), gridHeight);
 
-    // Keep legacy GUI field names during the transition to the formal terrain manifest.
+    // GUI compatibility aliases consumed by project metadata views and older project archives.
     insertIfNotEmpty(&object, QStringLiteral("dem_tif"), demPath);
     insertIfNotEmpty(&object, QStringLiteral("dom_png"), domPath);
     insertIfNotEmpty(&object, QStringLiteral("depth_png"), previewPath);

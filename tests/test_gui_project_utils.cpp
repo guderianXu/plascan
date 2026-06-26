@@ -3667,6 +3667,16 @@ TEST(CodeStyleTest, TerrainProductManifestUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_records")));
 }
 
+TEST(CodeStyleTest, TerrainProductManifestDocumentsGuiAliasesAsStableCompatibilityFields)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/terrain/TerrainProductManifest.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("GUI compatibility aliases")));
+    EXPECT_FALSE(source.contains(QStringLiteral("legacy GUI field names during the transition")))
+        << "DEM/DOM alias fields are still consumed by GUI/project metadata; document them as compatibility aliases.";
+}
+
 TEST(CodeStyleTest, DomGeneratorSourceKeepsLinesWithinStyleLimit)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/terrain/DomGenerator.cpp"));
