@@ -3402,6 +3402,20 @@ TEST(CodeStyleTest, DepthMapFusionUsesLowerCamelPrivateMemberNames)
     EXPECT_FALSE(source.contains(QStringLiteral("m_filteredDepths")));
 }
 
+TEST(CodeStyleTest, AspPointCloudMetricsSourceKeepsLinesWithinStyleLimit)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/AspPointCloudMetrics.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "AspPointCloudMetrics.cpp:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, DepthMapGeneratorUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));

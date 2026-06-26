@@ -59,6 +59,7 @@
 - `ForwardIntersectionCheckDialog.cpp` 拆分自动匹配点收集、相机解析和诊断日志中的超长语句，并新增行宽回归测试，继续收敛前方交会检查对话框格式规范。
 - `DemDomIO.cpp` 拆分 8-bit preview 和 16-bit GeoTIFF 栅格写值中的超长语句，并新增行宽回归测试，继续收敛 terrain IO 格式规范。
 - `TextureMapper.cpp` 拆分纹理面索引选择中的超长语句，并新增行宽回归测试，继续收敛网格纹理映射格式规范。
+- `AspPointCloudMetrics.cpp` 拆分 ASP/PlaScan 点云质检边界判断和报告输出中的超长语句，并新增行宽回归测试，继续收敛 MVS 质检格式规范。
 - 手动特征提取和 DEM 自动流水线中的特征提取步骤改为向 `FeatureExtractionRunner` 传递 `QPointer<ProjectManager>`，runner 在回写 `appendIpfindResult` 前再次检查项目管理器生命周期，避免关闭/切换项目后后台特征任务回调已释放对象。
 - 观测网络构建后台任务改用 `QPointer<ProjectManager>` 和项目路径 guard 回写进度、结果和完成信号，避免用户关闭项目或切换工程后旧任务写回当前项目。
 - `FeatureMatchRunner` 公共入口改为接收 `QPointer<ProjectManager>`，手动匹配和 DEM 自动流水线匹配步骤不再把裸 `ProjectManager*` 捕进后台 worker；匹配结果写回时会重新检查项目仍然有效且路径未切换。

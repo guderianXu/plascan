@@ -209,8 +209,9 @@ bool AspPointCloudMetrics::compare(const std::string &plascanTifPath,
     result.plascanValidPoints = plascan.valid;
     result.coverageRatio = static_cast<double>(plascan.valid) / static_cast<double>(asp.valid);
 
-    Point3 aspMin{std::numeric_limits<float>::max(), std::numeric_limits<float>::max(), std::numeric_limits<float>::max()};
-    Point3 aspMax{-std::numeric_limits<float>::max(), -std::numeric_limits<float>::max(), -std::numeric_limits<float>::max()};
+    const float max_float = std::numeric_limits<float>::max();
+    Point3 aspMin{max_float, max_float, max_float};
+    Point3 aspMax{-max_float, -max_float, -max_float};
     for (const Point3 &p : asp.points)
     {
         updateBounds(p, aspMin, aspMax);
@@ -219,7 +220,10 @@ bool AspPointCloudMetrics::compare(const std::string &plascanTifPath,
     int insideBbox = 0;
     for (const Point3 &p : plascan.points)
     {
-        if (p.x >= aspMin.x && p.x <= aspMax.x && p.y >= aspMin.y && p.y <= aspMax.y && p.z >= aspMin.z && p.z <= aspMax.z)
+        const bool inside_x = p.x >= aspMin.x && p.x <= aspMax.x;
+        const bool inside_y = p.y >= aspMin.y && p.y <= aspMax.y;
+        const bool inside_z = p.z >= aspMin.z && p.z <= aspMax.z;
+        if (inside_x && inside_y && inside_z)
         {
             ++insideBbox;
         }
@@ -298,7 +302,8 @@ std::string AspPointCloudMetrics::toTextReport(const AspPointCloudMetricsResult 
     out << "NN P90: " << result.nnP90 << "\n";
     out << "NN P95: " << result.nnP95 << "\n";
     out << "NN max: " << result.nnMax << "\n";
-    out << "Mean offset: (" << result.meanOffset[0] << ", " << result.meanOffset[1] << ", " << result.meanOffset[2] << ")\n";
+    out << "Mean offset: (" << result.meanOffset[0] << ", "
+        << result.meanOffset[1] << ", " << result.meanOffset[2] << ")\n";
     out << "PASS: " << (result.passed ? "true" : "false") << "\n";
     if (!result.passed)
     {
@@ -320,7 +325,8 @@ std::string AspPointCloudMetrics::toJson(const AspPointCloudMetricsResult &resul
     out << "  \"nn_p90\": " << result.nnP90 << ",\n";
     out << "  \"nn_p95\": " << result.nnP95 << ",\n";
     out << "  \"nn_max\": " << result.nnMax << ",\n";
-    out << "  \"mean_offset\": [" << result.meanOffset[0] << ", " << result.meanOffset[1] << ", " << result.meanOffset[2] << "],\n";
+    out << "  \"mean_offset\": [" << result.meanOffset[0] << ", "
+        << result.meanOffset[1] << ", " << result.meanOffset[2] << "],\n";
     out << "  \"passed\": " << (result.passed ? "true" : "false") << ",\n";
     out << "  \"failure_reason\": \"" << result.failureReason << "\"\n";
     out << "}\n";
