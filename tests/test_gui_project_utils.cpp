@@ -1644,8 +1644,13 @@ TEST(GuiAsyncLifetimeTest, ImageViewAsyncLoadCallbackUsesQPointerGuard)
     const QString block = source.mid(start, end - start);
 
     EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ImageViewWidget> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<QImage>::finished,\n"
+                                             "            watcher,")))
+        << "Image view decode finished callbacks should be tied to the watcher lifetime.";
     EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, imagePath]()")));
     EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<QImage>::finished,\n"
+                                              "            this,")));
     EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, imagePath]()")))
         << "Async image decode callbacks must not capture the view widget through raw this.";
 }

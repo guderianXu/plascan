@@ -76,7 +76,7 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
     auto *watcher = new QFutureWatcher<QImage>(this);
     QPointer<ImageViewWidget> self(this);
     connect(watcher, &QFutureWatcher<QImage>::finished,
-            this, [self, watcher, imagePath]() {
+            watcher, [self, watcher, imagePath]() {
         watcher->deleteLater();
         if (!self) return;
         if (self->_imagePath != imagePath) return; // 图像已被其他请求替换
