@@ -596,6 +596,18 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
     ctx.images = images;
     for (int i = 0; i < camFilesArr.size(); ++i)
         ctx.cameraPaths << camFilesArr.at(i).toString();
+    bool hasAllCameras = false;
+    const QMap<QString, xjw::Camera> camerasByImage =
+        _owner->getCamerasForImages(images, &hasAllCameras);
+    if (hasAllCameras)
+    {
+        ctx.knownCameraCenters.reserve(static_cast<std::size_t>(images.size()));
+        for (const QString &image : images)
+        {
+            const QString normalizedImage = xjw::gui::project::normalizePath(image);
+            ctx.knownCameraCenters.push_back(camerasByImage.value(normalizedImage).cameraCenter());
+        }
+    }
     ctx.outputDir = outputDir;
     const QString matcher = pipelineSettings.value(QStringLiteral("matcher")).toString(QStringLiteral("disk_lightglue"));
     ctx.featureAlgorithm = canonicalFeatureAlgorithmFromMatcher(matcher);
@@ -988,14 +1000,17 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     xjw::gui::FeaturePairPlannerOptions pairOptions;
     pairOptions.exhaustiveMaxImages = 80;
     pairOptions.sequentialWindow = 4;
+    pairOptions.spatialNeighborCount = ctx.knownCameraCenters.empty() ? 0 : 8;
+    pairOptions.knownCameraCenters = ctx.knownCameraCenters;
     const QStringList imagePairs = xjw::gui::planFeatureMatchPairPaths(ctx.images, pairOptions);
     const int exhaustivePairCount = ctx.images.size() > 1
         ? (ctx.images.size() * (ctx.images.size() - 1)) / 2
         : 0;
-    LOG_INFO(QStringLiteral("[DEM流水线] 匹配对规划完成: planned=%1 exhaustive=%2 window=%3")
+    LOG_INFO(QStringLiteral("[DEM流水线] 匹配对规划完成: planned=%1 exhaustive=%2 window=%3 cameraCenters=%4")
                  .arg(imagePairs.size())
                  .arg(exhaustivePairCount)
-                 .arg(pairOptions.sequentialWindow));
+                 .arg(pairOptions.sequentialWindow)
+                 .arg(static_cast<int>(ctx.knownCameraCenters.size())));
 
     QJsonObject matchConfig;
     matchConfig[QStringLiteral("match_algorithm")] = ctx.matchAlgorithm;

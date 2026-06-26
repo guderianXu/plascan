@@ -4,6 +4,9 @@
 #include <QJsonObject>
 #include <QStringList>
 
+#include <array>
+#include <vector>
+
 class QWidget;
 class ProjectData;
 class ProjectManager;
@@ -54,6 +57,7 @@ private:
         QString outputDir;
         QString featureAlgorithm;
         QString matchAlgorithm;
+        std::vector<std::array<double, 3>> knownCameraCenters;
         double demResolution;
         QString demType;
     };

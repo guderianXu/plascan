@@ -1101,6 +1101,43 @@ TEST(TerrainPipelineAsyncTest, FullDemPipelineUsesBoundedFeaturePairPlanning)
         << "Large DEM runs must not plan all image pairs by default.";
 }
 
+TEST(TerrainPipelineAsyncTest, FullDemPipelineFeedsCameraCentersToPairPlanner)
+{
+    const QString header = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.h"));
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(
+        QStringLiteral("void ProjectTerrainProductsManager::startFullDemPipelineAsync"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(
+        QStringLiteral("void ProjectTerrainProductsManager::startDemFromDenseCloudAsync"),
+        start);
+    ASSERT_GT(end, start);
+    const QString startBlock = source.mid(start, end - start);
+
+    const int matchStart = source.indexOf(
+        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
+    ASSERT_GE(matchStart, 0);
+    const int matchEnd = source.indexOf(QStringLiteral("// 步骤 3-5:"), matchStart);
+    ASSERT_GT(matchEnd, matchStart);
+    const QString matchingBlock = source.mid(matchStart, matchEnd - matchStart);
+
+    EXPECT_TRUE(header.contains(QStringLiteral("knownCameraCenters")))
+        << "The DEM pipeline context should carry camera centers into the background worker.";
+    EXPECT_TRUE(startBlock.contains(QStringLiteral("getCamerasForImages(images")))
+        << "The GUI-thread setup should read the project's imported camera centers before launching the worker.";
+    EXPECT_TRUE(startBlock.contains(QStringLiteral("ctx.knownCameraCenters")))
+        << "The start function should store camera centers on the DEM pipeline context.";
+    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("pairOptions.knownCameraCenters = ctx.knownCameraCenters")))
+        << "The background matching step should feed known centers into the shared pair planner.";
+    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("pairOptions.spatialNeighborCount")))
+        << "Spatial neighbors should be enabled when camera centers are available.";
+}
+
 TEST(TerrainPipelineAsyncTest, DenseCloudResultSignalCarriesOutputPath)
 {
     const QString denseHeader = readProjectSourceFile(

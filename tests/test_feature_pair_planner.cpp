@@ -135,3 +135,29 @@ TEST(FeaturePairPlannerTest, LargePathSetUsesBoundedPipelinePairs)
         EXPECT_FALSE(pair.contains(QStringLiteral("__"))) << pair.toStdString();
     }
 }
+
+TEST(FeaturePairPlannerTest, LargePathSetUsesKnownCameraSpatialNeighbors)
+{
+    FeaturePairPlannerOptions options;
+    options.exhaustiveMaxImages = 10;
+    options.sequentialWindow = 3;
+    options.spatialNeighborCount = 2;
+
+    std::vector<std::array<double, 3>> centers;
+    centers.reserve(25);
+    for (int i = 0; i < 25; ++i)
+    {
+        centers.push_back({1000.0 * double(i), 0.0, 100.0});
+    }
+    centers[20] = {5.0, 0.0, 100.0};
+    options.knownCameraCenters = centers;
+
+    const QStringList pairs = planFeatureMatchPairPaths(numberedImagePaths(25), options);
+
+    EXPECT_TRUE(pairs.contains(
+        QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_003.JPG")));
+    EXPECT_TRUE(pairs.contains(
+        QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_020.JPG")));
+    EXPECT_FALSE(pairs.contains(
+        QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_004.JPG")));
+}
