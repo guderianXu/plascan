@@ -373,7 +373,7 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
             connect(
                 watcher,
                 &WatcherT::finished,
-                this,
+                watcher,
                 [pmGuard, watcher, algoStr, projectPath]()
                 {
                     try

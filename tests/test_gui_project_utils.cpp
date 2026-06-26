@@ -1778,9 +1778,12 @@ TEST(GuiAsyncLifetimeTest, ObservationNetworkWorkerUsesGuardedProjectManagerCall
     EXPECT_TRUE(block.contains(QStringLiteral("QMetaObject::invokeMethod(pmGuard.data()")));
     EXPECT_TRUE(block.contains(QStringLiteral("[pmGuard, projectPath]")));
     EXPECT_TRUE(block.contains(QStringLiteral("[pmGuard, projectPath, stage, pct]")));
+    EXPECT_TRUE(block.contains(QStringLiteral("connect(\n                watcher,\n                &WatcherT::finished,\n                watcher,")))
+        << "Observation-network task completion should be tied to the watcher lifetime, not the controller.";
     EXPECT_FALSE(block.contains(QStringLiteral("QMetaObject::invokeMethod(\n                pm,")));
     EXPECT_FALSE(block.contains(QStringLiteral("[pm]()")));
     EXPECT_FALSE(block.contains(QStringLiteral("[pm, stage, pct]")));
+    EXPECT_FALSE(block.contains(QStringLiteral("connect(\n                watcher,\n                &WatcherT::finished,\n                this,")));
 }
 
 TEST(GuiAsyncLifetimeTest, DenseMatchProgressUiUsesQPointerGuard)
