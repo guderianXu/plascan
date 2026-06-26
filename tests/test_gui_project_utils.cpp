@@ -1850,6 +1850,10 @@ TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
     EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
     EXPECT_TRUE(block.contains(QStringLiteral("const int generation = ++_featureLoadGeneration")));
     EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
+    EXPECT_TRUE(block.contains(
+        QStringLiteral("connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,\n"
+                       "            watcher,")))
+        << "Canvas feature-load finished callbacks should be tied to the watcher lifetime.";
     EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, imagePathCopy, activeSuffix, generation]()")));
     EXPECT_TRUE(block.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
         << "Late feature-load completions from an older image/suffix must not update the current canvas.";
@@ -1857,6 +1861,9 @@ TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
     EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpPath")));
     EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpSuffix")));
     EXPECT_FALSE(source.contains(QStringLiteral("connect(m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished")));
+    EXPECT_FALSE(block.contains(
+        QStringLiteral("connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,\n"
+                       "            this,")));
 }
 
 TEST(GuiAsyncLifetimeTest, CanvasImageLoadCallbacksUseQPointerGuard)
@@ -1871,8 +1878,11 @@ TEST(GuiAsyncLifetimeTest, CanvasImageLoadCallbacksUseQPointerGuard)
     const QString block = source.mid(start, end - start);
 
     EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<QImage>::finished, watcher,")))
+        << "Canvas image decode finished callbacks should be tied to the watcher lifetime.";
     EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, loadedPath = pathCopy]()")));
     EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<QImage>::finished, this,")));
     EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, loadedPath = pathCopy]()")))
         << "Canvas image decode callbacks must not capture the view through raw this.";
 }

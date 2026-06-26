@@ -116,7 +116,7 @@ void CanvasWidget::showImage(const QString &path)
     auto *watcher = new QFutureWatcher<QImage>(this);
     _imageWatcher = watcher;
     QPointer<CanvasWidget> self(this);
-    connect(watcher, &QFutureWatcher<QImage>::finished, this, [self, watcher, loadedPath = pathCopy]()
+    connect(watcher, &QFutureWatcher<QImage>::finished, watcher, [self, watcher, loadedPath = pathCopy]()
     {
         const QImage image = watcher->result();
         watcher->deleteLater();
@@ -603,7 +603,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     auto *watcher = new QFutureWatcher<std::vector<cv::KeyPoint>>(this);
     _spWatcher = watcher;
     connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,
-            this, [self, watcher, imagePathCopy, activeSuffix, generation]()
+            watcher, [self, watcher, imagePathCopy, activeSuffix, generation]()
     {
         if (!self)
         {
