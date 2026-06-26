@@ -14,6 +14,7 @@
 #include <QPixmap>
 #include <QPen>
 #include <QBrush>
+#include <QPointer>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrent>
 #include <cmath>
@@ -73,26 +74,32 @@ bool ImageViewWidget::loadImage(const QString &imagePath)
 
     // 挂监听器，解码完成后切回主线程更新视图
     auto *watcher = new QFutureWatcher<QImage>(this);
+    QPointer<ImageViewWidget> self(this);
     connect(watcher, &QFutureWatcher<QImage>::finished,
-            this, [this, watcher, imagePath]() {
+            this, [self, watcher, imagePath]() {
         watcher->deleteLater();
-        if (_imagePath != imagePath) return; // 图像已被其他请求替换
+        if (!self) return;
+        if (self->_imagePath != imagePath) return; // 图像已被其他请求替换
 
         const QImage img = watcher->result();
         if (img.isNull()) {
-            emit imageLoadFailed(imagePath, tr("无法加载图像：%1").arg(imagePath));
+            emit self->imageLoadFailed(imagePath, self->tr("无法加载图像：%1").arg(imagePath));
             return;
         }
 
-        if (_imageItem) {
-            _scene->removeItem(_imageItem);
-            delete _imageItem;
-            _imageItem = nullptr;
+        if (self->_imageItem) {
+            self->_scene->removeItem(self->_imageItem);
+            delete self->_imageItem;
+            self->_imageItem = nullptr;
         }
-        _imageItem = _scene->addPixmap(QPixmap::fromImage(img));
-        _imageItem->setZValue(0);
-        _scene->setSceneRect(_imageItem->boundingRect());
-        QTimer::singleShot(10, this, [this]() { fitToView(); });
+        self->_imageItem = self->_scene->addPixmap(QPixmap::fromImage(img));
+        self->_imageItem->setZValue(0);
+        self->_scene->setSceneRect(self->_imageItem->boundingRect());
+        QTimer::singleShot(10, self.data(), [self]() {
+            if (self) {
+                self->fitToView();
+            }
+        });
     });
     watcher->setFuture(future);
 

@@ -1509,6 +1509,24 @@ TEST(GuiAsyncLifetimeTest, CameraSceneAsyncLoadCallbacksUseQPointerGuards)
         << "The PLY worker must not directly emit signals through a GUI object from the worker thread.";
 }
 
+TEST(GuiAsyncLifetimeTest, ImageViewAsyncLoadCallbackUsesQPointerGuard)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/ImageViewWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("bool ImageViewWidget::loadImage"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ImageViewWidget::setMatchPoints"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<ImageViewWidget> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, imagePath]()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, imagePath]()")))
+        << "Async image decode callbacks must not capture the view widget through raw this.";
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
@@ -9018,7 +9036,7 @@ TEST(MatchViewerVisualizationTest, UsesSharedDisplayLoaderAndReportsAsyncImageFa
 
     EXPECT_TRUE(header.contains(QStringLiteral("imageLoadFailed")));
     EXPECT_TRUE(source.contains(QStringLiteral("LayerRenderer::loadImageForDisplay(imagePath, QString())")));
-    EXPECT_TRUE(source.contains(QStringLiteral("emit imageLoadFailed(imagePath")));
+    EXPECT_TRUE(source.contains(QStringLiteral("emit self->imageLoadFailed(imagePath")));
     EXPECT_TRUE(dualSource.contains(QStringLiteral("&ImageViewWidget::imageLoadFailed")));
     EXPECT_TRUE(dualSource.contains(QStringLiteral("emit loadFailed(message)")));
 }
