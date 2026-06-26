@@ -1704,6 +1704,25 @@ TEST(GuiAsyncLifetimeTest, CanvasImageLoadCallbacksUseQPointerGuard)
         << "Canvas image decode callbacks must not capture the view through raw this.";
 }
 
+TEST(GuiAsyncLifetimeTest, VocabularyOverlapFinishedCallbackUsesQPointerGuard)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void VocabularyOverlapDialog::onRun"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void VocabularyOverlapDialog::onExportLis"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<VocabularyOverlapDialog> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher]()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("self->handleRunFinished(watcher)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher]()")))
+        << "Vocabulary overlap completion must not call back through raw this after the dialog is closed.";
+}
+
 TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
