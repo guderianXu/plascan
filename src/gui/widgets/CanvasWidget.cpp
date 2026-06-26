@@ -115,40 +115,45 @@ void CanvasWidget::showImage(const QString &path)
     const QString projectPath = property("currentProjectPath").toString();
     auto *watcher = new QFutureWatcher<QImage>(this);
     _imageWatcher = watcher;
-    connect(watcher, &QFutureWatcher<QImage>::finished, this, [this, watcher, loadedPath = pathCopy]()
+    QPointer<CanvasWidget> self(this);
+    connect(watcher, &QFutureWatcher<QImage>::finished, this, [self, watcher, loadedPath = pathCopy]()
     {
         const QImage image = watcher->result();
         watcher->deleteLater();
-        if (watcher != _imageWatcher)
+        if (!self)
         {
             return;
         }
-        _imageWatcher = nullptr;
-        if (QDir::cleanPath(loadedPath) != QDir::cleanPath(_currentImagePath))
+        if (watcher != self->_imageWatcher)
         {
             return;
         }
-        if (image.isNull() || !_layerRenderer)
+        self->_imageWatcher = nullptr;
+        if (QDir::cleanPath(loadedPath) != QDir::cleanPath(self->_currentImagePath))
+        {
+            return;
+        }
+        if (image.isNull() || !self->_layerRenderer)
         {
             LOG_WARN(QStringLiteral("showImage: failed to load image %1").arg(loadedPath));
             return;
         }
 
-        _layerRenderer->clear();
-        if (!_layerRenderer->addImageLayer(image, 0))
+        self->_layerRenderer->clear();
+        if (!self->_layerRenderer->addImageLayer(image, 0))
         {
             return;
         }
 
         // 通知外部当前活跃影像已变更（MainWindow 据此持久化状态）
-        emit activeImageChanged(loadedPath);
+        emit self->activeImageChanged(loadedPath);
 
         // 让视图自动适配内容
-        scene()->setSceneRect(scene()->itemsBoundingRect());
-        fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
+        self->scene()->setSceneRect(self->scene()->itemsBoundingRect());
+        self->fitInView(self->scene()->sceneRect(), Qt::KeepAspectRatio);
 
         // 重新适配后，重置缩放因子
-        _zoomFactor = 1.0;
+        self->_zoomFactor = 1.0;
 
         // 自动加载特征点（默认启用）
         // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
@@ -156,7 +161,7 @@ void CanvasWidget::showImage(const QString &path)
         const bool isDepthMap = fileName.startsWith(QLatin1String("depth_"), Qt::CaseInsensitive)
                              && fileName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive);
         if (!isDepthMap) {
-            startSpLoadForImage(loadedPath);
+            self->startSpLoadForImage(loadedPath);
         }
     });
     QFuture<QImage> future = QtConcurrent::run([pathCopy, projectPath]() {

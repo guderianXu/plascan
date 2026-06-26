@@ -1686,6 +1686,24 @@ TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
     EXPECT_FALSE(source.contains(QStringLiteral("connect(m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished")));
 }
 
+TEST(GuiAsyncLifetimeTest, CanvasImageLoadCallbacksUseQPointerGuard)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void CanvasWidget::showImage"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void CanvasWidget::showMatchedPair"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, loadedPath = pathCopy]()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher, loadedPath = pathCopy]()")))
+        << "Canvas image decode callbacks must not capture the view through raw this.";
+}
+
 TEST(FeatureNamingCleanupTest, CanvasWidgetDoesNotIncludeTorchExtractorHeaders)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.cpp"));
@@ -8205,7 +8223,7 @@ TEST(CanvasWidgetResponsivenessTest, ImageSwitchUsesBackgroundLoadAndIgnoresStal
     EXPECT_TRUE(header.contains(QStringLiteral("QFutureWatcher<QImage> *_imageWatcher")));
     EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run([pathCopy, projectPath]")));
     EXPECT_TRUE(source.contains(QStringLiteral("LayerRenderer::loadImageForDisplay(pathCopy, projectPath)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("QDir::cleanPath(loadedPath) != QDir::cleanPath(_currentImagePath)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QDir::cleanPath(loadedPath) != QDir::cleanPath(self->_currentImagePath)")));
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("static QImage loadImageForDisplay")));
     EXPECT_TRUE(rendererHeader.contains(QStringLiteral("bool addImageLayer(const QImage &image, int z = 0)")));
     EXPECT_TRUE(rendererSource.contains(QStringLiteral("QPixmap::fromImage(image)")));
