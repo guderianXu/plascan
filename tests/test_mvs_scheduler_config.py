@@ -816,6 +816,17 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("密集点云后处理已取消", refine_body)
         self.assertIn("clearActiveMvsCancelFlag(cancelFlag)", refine_body)
 
+    def test_gui_mvs_cancel_finishes_status_when_no_worker_accepts_request(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        cancel_start = manager.index("void ProjectDenseReconstructionManager::cancelMvs()")
+        cancel_body = manager[cancel_start:]
+
+        self.assertIn("if (!requestedCancel)", cancel_body)
+        self.assertIn("emit mvsProgressFinished(false);", cancel_body)
+        self.assertLess(cancel_body.index("if (!requestedCancel)"),
+                        cancel_body.index("qDebug() << \"[MVS] 已请求取消\""))
+
     def test_gui_dense_cloud_refine_preconditions_large_clouds_before_expensive_filters(self):
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
         refine_start = manager.index("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync")

@@ -2166,6 +2166,13 @@ void ProjectDenseReconstructionManager::cancelMvs()
         }
     }
 
+    if (!requestedCancel)
+    {
+        qDebug() << "[MVS] 没有正在运行的任务，取消请求直接收敛";
+        emit mvsProgressFinished(false);
+        return;
+    }
+
     if (requestedCancel)
     {
         qDebug() << "[MVS] 已请求取消";
