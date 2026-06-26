@@ -22,6 +22,8 @@ ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner
             this, &ProjectReconstructionManager::mvsProgressChanged);
     connect(_denseManager, &ProjectDenseReconstructionManager::mvsProgressFinished,
             this, &ProjectReconstructionManager::mvsProgressFinished);
+    connect(_denseManager, &ProjectDenseReconstructionManager::denseCloudResultReady,
+            this, &ProjectReconstructionManager::denseCloudResultReady);
 
     connect(_modelManager, &ProjectModelManager::meshProgressChanged,
             this, &ProjectReconstructionManager::meshProgressChanged);

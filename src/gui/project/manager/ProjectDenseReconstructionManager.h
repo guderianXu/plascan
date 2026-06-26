@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QJsonObject>
 #include <QPointer>
+#include <QString>
 
 #include <atomic>
 #include <memory>
@@ -30,6 +31,7 @@ public:
 signals:
     void mvsProgressChanged(const QString &stage, int percent);
     void mvsProgressFinished(bool success);
+    void denseCloudResultReady(const QString &denseCloudPath, int pointCount);
 
 private:
     bool ensureProjectOpen(const QString &message,

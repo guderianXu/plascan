@@ -96,6 +96,8 @@ signals:
     void mvsProgressChanged(const QString &stage, int percent);
     // MVS 流程结束（success=true 表示正常完成）
     void mvsProgressFinished(bool success);
+    // 本次 MVS 写入的密集点云结果，携带明确输出路径，避免下游靠元数据变化猜测结果归属。
+    void denseCloudResultReady(const QString &denseCloudPath, int pointCount);
 
     // 网格重建进度（主窗口状态栏显示）
     void meshProgressChanged(const QString &stage, int percent);

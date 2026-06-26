@@ -232,6 +232,8 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
             this, &ProjectManager::mvsProgressChanged);
         connect(_reconstructionManager, &ProjectReconstructionManager::mvsProgressFinished,
             this, &ProjectManager::mvsProgressFinished);
+        connect(_reconstructionManager, &ProjectReconstructionManager::denseCloudResultReady,
+            this, &ProjectManager::denseCloudResultReady);
         connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressChanged,
             this, &ProjectManager::meshProgressChanged);
         connect(_reconstructionManager, &ProjectReconstructionManager::meshProgressFinished,

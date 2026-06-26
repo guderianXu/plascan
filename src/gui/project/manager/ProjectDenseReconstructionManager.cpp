@@ -1489,6 +1489,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
                                       makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
+            emit self->denseCloudResultReady(outputPly, pointCount);
             emit self->mvsProgressFinished(true);
             if (!pipelineMode)
             {
@@ -2130,6 +2131,7 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             {
                 self->_owner->refreshReconstructionQualityReport();
             }
+            emit self->denseCloudResultReady(outputPly, pointCount);
             emit self->mvsProgressFinished(true);
             if (!pipelineMode)
             {

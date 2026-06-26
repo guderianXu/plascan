@@ -3,6 +3,7 @@
 #include <QObject>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QString>
 
 class QWidget;
 class ProjectData;
@@ -43,6 +44,7 @@ public:
 signals:
     void mvsProgressChanged(const QString &stage, int percent);
     void mvsProgressFinished(bool success);
+    void denseCloudResultReady(const QString &denseCloudPath, int pointCount);
     void meshProgressChanged(const QString &stage, int percent);
     void meshProgressFinished(bool success);
     void atProgressChanged(const QString &stage, int percent);

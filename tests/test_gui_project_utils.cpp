@@ -1009,18 +1009,22 @@ TEST(DepthMapMetadataTest, DemPreviewsStayOutOfMvsDepthResults)
         << "DEM previews should be available from the DEM section instead.";
 }
 
-TEST(TerrainPipelineAsyncTest, AutoDemConsumesOnlyNewDenseCloudResults)
+TEST(TerrainPipelineAsyncTest, AutoDemConsumesOnlyCurrentDenseCloudSignal)
 {
     const QString source = readProjectSourceFile(
         QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("pendingDenseResultCount")))
-        << "The automatic DEM pipeline should remember the dense result count before launching MVS.";
-    EXPECT_TRUE(source.contains(QStringLiteral("denseArr.size() <= pendingDenseResultCount")))
-        << "Unrelated metadata changes or pre-existing dense clouds must not trigger DEM generation.";
-    EXPECT_TRUE(source.contains(QStringLiteral("denseIndex = pendingDenseResultCount")))
-        << "DEM generation should scan only dense records created after this MVS run starts.";
+    EXPECT_TRUE(source.contains(QStringLiteral("&ProjectManager::denseCloudResultReady")))
+        << "The automatic DEM pipeline should consume the exact dense cloud produced by the current MVS run.";
+    EXPECT_TRUE(source.contains(QStringLiteral("const QString plyPath = denseCloudPath.trimmed();")))
+        << "DEM generation should use the PLY path carried by the dense-cloud-ready signal.";
+    EXPECT_FALSE(source.contains(QStringLiteral("pendingDenseResultCount")))
+        << "Counting metadata records is still vulnerable to unrelated metadata updates.";
+    EXPECT_FALSE(source.contains(QStringLiteral("denseArr.size() <= pendingDenseResultCount")))
+        << "Unrelated metadata changes or pre-existing dense clouds must not drive DEM generation.";
+    EXPECT_FALSE(source.contains(QStringLiteral("denseIndex = pendingDenseResultCount")))
+        << "DEM generation should not scan dense metadata records to infer this run's output.";
     EXPECT_FALSE(source.contains(QStringLiteral("denseArr.at(pendingDenseResultCount)")))
         << "The first new dense record can be incomplete; scan new records for the first existing output instead.";
     EXPECT_FALSE(source.contains(QStringLiteral("const QJsonObject lastRecord = denseArr.last().toObject()")))
@@ -1056,20 +1060,59 @@ TEST(TerrainPipelineAsyncTest, AutoDemGenerationRunsOffGuiThreadAfterMvs)
     ASSERT_GE(start, 0);
     const QString block = source.mid(start);
 
-    const int metadataStart = block.indexOf(QStringLiteral("projectMetadataChanged"));
-    ASSERT_GE(metadataStart, 0);
-    const int mvsFailureStart = block.indexOf(QStringLiteral("// 同时监听 MVS 失败"), metadataStart);
-    ASSERT_GT(mvsFailureStart, metadataStart);
-    const QString metadataBlock = block.mid(metadataStart, mvsFailureStart - metadataStart);
+    const int denseReadyStart = block.indexOf(QStringLiteral("denseCloudResultReady"));
+    ASSERT_GE(denseReadyStart, 0);
+    const int mvsFailureStart = block.indexOf(QStringLiteral("// 同时监听 MVS 失败"), denseReadyStart);
+    ASSERT_GT(mvsFailureStart, denseReadyStart);
+    const QString denseReadyBlock = block.mid(denseReadyStart, mvsFailureStart - denseReadyStart);
 
     EXPECT_TRUE(source.contains(QStringLiteral("runAutomaticDemGenerationTask")))
         << "The expensive DEM generation work should be isolated in a worker helper.";
-    EXPECT_TRUE(metadataBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+    EXPECT_TRUE(denseReadyBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
         << "MVS success should start DEM generation through the guarded GUI task runner.";
-    EXPECT_FALSE(metadataBlock.contains(QStringLiteral("xjw::TerrainPipeline::generateDemFromDepthMaps(")))
-        << "Depth-map DEM rasterization must not run inside the GUI metadata callback.";
-    EXPECT_FALSE(metadataBlock.contains(QStringLiteral("runDemProducts(plyPath")))
-        << "Dense-cloud fallback DEM rasterization must not run inside the GUI metadata callback.";
+    EXPECT_FALSE(block.contains(QStringLiteral("ProjectManager::projectMetadataChanged")))
+        << "The full DEM pipeline should consume the exact dense cloud result signal, not infer completion "
+           "from unrelated metadata updates.";
+    EXPECT_FALSE(denseReadyBlock.contains(QStringLiteral("xjw::TerrainPipeline::generateDemFromDepthMaps(")))
+        << "Depth-map DEM rasterization must not run inside the GUI dense-ready callback.";
+    EXPECT_FALSE(denseReadyBlock.contains(QStringLiteral("runDemProducts(plyPath")))
+        << "Dense-cloud fallback DEM rasterization must not run inside the GUI dense-ready callback.";
+}
+
+TEST(TerrainPipelineAsyncTest, DenseCloudResultSignalCarriesOutputPath)
+{
+    const QString denseHeader = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.h"));
+    const QString reconstructionHeader = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.h"));
+    const QString managerHeader = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString denseSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    const QString reconstructionSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectReconstructionManager.cpp"));
+    const QString managerSource = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(denseHeader.isEmpty());
+    ASSERT_FALSE(reconstructionHeader.isEmpty());
+    ASSERT_FALSE(managerHeader.isEmpty());
+    ASSERT_FALSE(denseSource.isEmpty());
+    ASSERT_FALSE(reconstructionSource.isEmpty());
+    ASSERT_FALSE(managerSource.isEmpty());
+
+    const QString signalDecl =
+        QStringLiteral("void denseCloudResultReady(const QString &denseCloudPath, int pointCount);");
+    EXPECT_TRUE(denseHeader.contains(signalDecl));
+    EXPECT_TRUE(reconstructionHeader.contains(signalDecl));
+    EXPECT_TRUE(managerHeader.contains(signalDecl));
+    EXPECT_TRUE(denseSource.contains(QStringLiteral("emit self->denseCloudResultReady(outputPly, pointCount);")))
+        << "MVS completion should publish the exact PLY path produced by the current run.";
+    EXPECT_TRUE(reconstructionSource.contains(
+        QStringLiteral("&ProjectDenseReconstructionManager::denseCloudResultReady")));
+    EXPECT_TRUE(reconstructionSource.contains(
+        QStringLiteral("&ProjectReconstructionManager::denseCloudResultReady")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("&ProjectReconstructionManager::denseCloudResultReady")));
+    EXPECT_TRUE(managerSource.contains(QStringLiteral("&ProjectManager::denseCloudResultReady")));
 }
 
 TEST(TerrainPipelineAsyncTest, DenseCloudDemRunsOffGuiThread)

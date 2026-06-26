@@ -1032,41 +1032,22 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
                      .arg(productionAtIndex));
         emit self->demPipelineProgressChanged(QStringLiteral("密集重建 (MVS)"), 55);
 
-        const int pendingDenseResultCount =
-            self->_projectData->metadata().value(QStringLiteral("dense_cloud_results")).toArray().size();
-
-        // 监听元数据变化：dense_cloud_results 出现本次 MVS 的新记录即表示融合完成。
+        // 监听本次 MVS 输出：由密集重建管理器在写入 dense_cloud_results 后携带明确 PLY 路径发出。
         auto connections = std::make_shared<DemPipelineConnectionState>();
-        connections->metadataConnection = connect(self->_owner, &ProjectManager::projectMetadataChanged, self.data(),
-            [self, connections, demOutputDir, demResolution, demType, pendingDenseResultCount](
-                const QJsonObject &metaChanged)
+        connections->metadataConnection = connect(self->_owner, &ProjectManager::denseCloudResultReady, self.data(),
+            [self, connections, demOutputDir, demResolution, demType](
+                const QString &denseCloudPath,
+                int pointCount)
             {
                 if (!self)
                 {
                     return;
                 }
-                const QJsonArray denseArr = metaChanged.value(QStringLiteral("dense_cloud_results")).toArray();
-                LOG_INFO(QStringLiteral("[DEM流水线] projectMetadataChanged: dense_cloud_results 条目数=%1").arg(denseArr.size()));
-                if (denseArr.size() <= pendingDenseResultCount)
-                {
-                    return;
-                }
-
-                QString plyPath;
-                for (int denseIndex = pendingDenseResultCount; denseIndex < denseArr.size(); ++denseIndex)
-                {
-                    const QJsonObject candidateRecord = denseArr.at(denseIndex).toObject();
-                    const QString candidatePath = candidateRecord.value(QStringLiteral("dense_cloud_xyz")).toString();
-                    LOG_INFO(QStringLiteral("[DEM流水线] 新增 dense_cloud_xyz[%1]=%2 exists=%3")
-                                 .arg(denseIndex)
-                                 .arg(candidatePath)
-                                 .arg(QFileInfo::exists(candidatePath) ? QStringLiteral("true") : QStringLiteral("false")));
-                    if (!candidatePath.isEmpty() && QFileInfo::exists(candidatePath))
-                    {
-                        plyPath = candidatePath;
-                        break;
-                    }
-                }
+                const QString plyPath = denseCloudPath.trimmed();
+                LOG_INFO(QStringLiteral("[DEM流水线] denseCloudResultReady: path=%1 points=%2 exists=%3")
+                             .arg(plyPath)
+                             .arg(pointCount)
+                             .arg(QFileInfo::exists(plyPath) ? QStringLiteral("true") : QStringLiteral("false")));
                 if (plyPath.isEmpty() || !QFileInfo::exists(plyPath))
                 {
                     return;
@@ -1083,7 +1064,8 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
 
                 DirectDepthDemRequest directDepthRequest;
                 QString directDepthError;
-                if (!prepareDirectDepthDemRequest(metaChanged, self->_owner, &directDepthRequest, &directDepthError))
+                const QJsonObject currentMeta = self->_projectData->metadata();
+                if (!prepareDirectDepthDemRequest(currentMeta, self->_owner, &directDepthRequest, &directDepthError))
                 {
                     LOG_WARN(QStringLiteral("[DEM流水线] 深度图直接 DEM 输入不可用: %1，后台任务将回退到点云方法")
                                  .arg(directDepthError));
