@@ -480,6 +480,7 @@ void MainWindow::setupProjectManager()
                     LOG_INFO("%s", qUtf8Printable(QString("开始在后台线程执行 %1 匹配...").arg(algorithm)));
 
                     // 在状态栏展示特征匹配进度
+                    QPointer<MainWindow> self(this);
                     auto cancelFlag    = std::make_shared<std::atomic<bool>>(false);
                     auto progressCount = std::make_shared<std::atomic<int>>(0);
                     int total = imagePairs.size();
@@ -522,22 +523,29 @@ void MainWindow::setupProjectManager()
                     // 定时刷新进度（100ms 轮询）
                     auto *timer = new QTimer(this);
                     timer->setInterval(100);
-                    connect(timer, &QTimer::timeout, this,
-                            [this, progressCount, total]()
+                    connect(timer, &QTimer::timeout, timer,
+                            [self, progressCount, total]()
                     {
                         Q_UNUSED(total);
-                        updateSgProgress(progressCount->load());
+                        if (!self)
+                        {
+                            return;
+                        }
+                        self->updateSgProgress(progressCount->load());
                     });
                     timer->start();
 
                     auto *watcher = new QFutureWatcher<void>(this);
-                    connect(watcher, &QFutureWatcher<void>::finished, this,
-                            [this, cancelFlag, timer, watcher, cancelConn]()
+                    connect(watcher, &QFutureWatcher<void>::finished, watcher,
+                            [self, cancelFlag, timer, watcher, cancelConn]()
                         {
                         timer->stop();
                         timer->deleteLater();
                         QObject::disconnect(cancelConn);
-                        hideSgProgress(!cancelFlag->load());
+                        if (self)
+                        {
+                            self->hideSgProgress(!cancelFlag->load());
+                        }
                         watcher->deleteLater();
                     });
 

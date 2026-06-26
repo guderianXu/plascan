@@ -1785,6 +1785,14 @@ TEST(GuiAsyncLifetimeTest, FeatureMatchRunnerUsesGuardedProjectManagerCallbacks)
 
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(_projectManager)")));
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("FeatureMatchRunner::run(config, imagePairs, pmGuard")));
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("QPointer<MainWindow> self(this)")))
+        << "Feature matching progress callbacks can outlive MainWindow and must use QPointer.";
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("connect(timer, &QTimer::timeout, timer,")))
+        << "Feature matching progress timer callbacks should be tied to the timer lifetime.";
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("connect(watcher, &QFutureWatcher<void>::finished, watcher,")))
+        << "Feature matching watcher callbacks should be tied to the watcher lifetime.";
+    EXPECT_FALSE(mainBlock.contains(QStringLiteral("connect(timer, &QTimer::timeout, this,")));
+    EXPECT_FALSE(mainBlock.contains(QStringLiteral("connect(watcher, &QFutureWatcher<void>::finished, this,")));
     EXPECT_FALSE(mainBlock.contains(QStringLiteral("pm = _projectManager")));
 }
 
