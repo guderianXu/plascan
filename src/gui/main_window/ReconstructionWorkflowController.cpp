@@ -827,7 +827,7 @@ void ReconstructionWorkflowController::openDenseMatchDialog()
     });
 
     // 运行（进度条在主窗口状态栏右下角）
-    auto *mw = qobject_cast<MainWindow*>(_mainWindow);
+    QPointer<MainWindow> mw(qobject_cast<MainWindow*>(_mainWindow));
     connect(dlg, &DenseMatchDialog::runRequested, this,
             [this, mw, dlg_ptr = QPointer<DenseMatchDialog>(dlg)]
             (const QJsonObject &settings)
@@ -861,14 +861,14 @@ void ReconstructionWorkflowController::openDenseMatchDialog()
             });
         }
 
-        connect(timer, &QTimer::timeout, this,
+        connect(timer, &QTimer::timeout, timer,
                 [mw, progress, totalSteps]()
         {
             if (mw) mw->updateDmProgress(progress->load());
         });
         timer->start(150);
 
-        connect(watcher, &QFutureWatcher<void>::finished, this,
+        connect(watcher, &QFutureWatcher<void>::finished, watcher,
                 [timer, watcher, mw, dlg_ptr, progress, dmCancelFlag, cancelConn]()
         {
             timer->stop();

@@ -1736,6 +1736,29 @@ TEST(GuiAsyncLifetimeTest, ObservationNetworkWorkerUsesGuardedProjectManagerCall
     EXPECT_FALSE(block.contains(QStringLiteral("[pm, stage, pct]")));
 }
 
+TEST(GuiAsyncLifetimeTest, DenseMatchProgressUiUsesQPointerGuard)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ReconstructionWorkflowController::openDenseMatchDialog"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void ReconstructionWorkflowController::openDepthMapEstimateDialog"),
+                                   start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(QStringLiteral("QPointer<MainWindow> mw")))
+        << "Dense-match progress callbacks can outlive the main window and must use QPointer.";
+    EXPECT_FALSE(block.contains(QStringLiteral("auto *mw = qobject_cast<MainWindow*>(")))
+        << "Do not keep a raw MainWindow pointer in dense-match asynchronous callbacks.";
+    EXPECT_TRUE(block.contains(QStringLiteral("connect(timer, &QTimer::timeout, timer,")))
+        << "Timer progress callbacks should be tied to the timer object lifetime.";
+    EXPECT_TRUE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<void>::finished, watcher,")))
+        << "Finished callbacks should be tied to the watcher object lifetime.";
+}
+
 TEST(GuiAsyncLifetimeTest, FeatureMatchRunnerUsesGuardedProjectManagerCallbacks)
 {
     const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
