@@ -105,22 +105,34 @@ void collectSectionRecordArtifacts(const QString &section,
                 appendUniquePath(filePaths, normalizedProjectPath(projectRoot, it.value().toString()));
             }
         }
-        appendUniquePath(dirPaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("output_dir")).toString()));
+        appendUniquePath(dirPaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("output_dir")).toString()));
         return;
     }
 
     if (section == QStringLiteral("深度图"))
     {
-        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("depth_png")).toString()));
-        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("raw_depth_path")).toString()));
-        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("raw_confidence_path")).toString()));
-        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("valid_mask_path")).toString()));
+        appendUniquePath(filePaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("depth_png")).toString()));
+        appendUniquePath(filePaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("raw_depth_path")).toString()));
+        appendUniquePath(filePaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("raw_confidence_path")).toString()));
+        appendUniquePath(filePaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("valid_mask_path")).toString()));
         return;
     }
 
     if (section == QStringLiteral("稠密点云"))
     {
-        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("dense_cloud_xyz")).toString()));
+        appendUniquePath(filePaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("dense_cloud_xyz")).toString()));
         return;
     }
 
@@ -138,7 +150,8 @@ void collectSectionRecordArtifacts(const QString &section,
             appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(key).toString()));
         }
 
-        const QString texturePath = normalizedProjectPath(projectRoot, record.value(QStringLiteral("texture_png")).toString());
+        const QString texturePath =
+            normalizedProjectPath(projectRoot, record.value(QStringLiteral("texture_png")).toString());
         if (!texturePath.isEmpty())
         {
             appendUniquePath(dirPaths, QFileInfo(texturePath).absolutePath());
@@ -148,14 +161,20 @@ void collectSectionRecordArtifacts(const QString &section,
 
     if (section == QStringLiteral("DEM"))
     {
-        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("dem_tif")).toString()));
-        appendUniquePath(dirPaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("output_dir")).toString()));
+        appendUniquePath(filePaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("dem_tif")).toString()));
+        appendUniquePath(dirPaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("output_dir")).toString()));
         return;
     }
 
     if (section == QStringLiteral("正射影像"))
     {
-        appendUniquePath(filePaths, normalizedProjectPath(projectRoot, record.value(QStringLiteral("output_path")).toString()));
+        appendUniquePath(filePaths,
+                         normalizedProjectPath(projectRoot,
+                                               record.value(QStringLiteral("output_path")).toString()));
     }
 }
 

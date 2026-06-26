@@ -1925,6 +1925,21 @@ TEST(CodeStyleTest, PlascanArchiveUsesLowerCamelPrivateMemberNames)
     }
 }
 
+TEST(CodeStyleTest, ProjectResourceCleanupServiceSourceKeepsLinesWithinStyleLimit)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/services/ProjectResourceCleanupService.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const QStringList lines = source.split(QLatin1Char('\n'));
+    for (int i = 0; i < lines.size(); ++i)
+    {
+        EXPECT_LE(lines.at(i).size(), 120)
+            << "ProjectResourceCleanupService.cpp:" << (i + 1)
+            << " has " << lines.at(i).size() << " characters";
+    }
+}
+
 TEST(CodeStyleTest, ProjectFilesManagerUsesLowerCamelPrivateMemberNames)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/data/ProjectFilesManager.h"));
