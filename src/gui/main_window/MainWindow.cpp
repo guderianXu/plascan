@@ -1771,8 +1771,13 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
         QString imagePath = ui.value(QStringLiteral("active_image_path")).toString();
         if (!imagePath.isEmpty() && QFileInfo::exists(imagePath))
         {
-            QTimer::singleShot(100, this, [this, imagePath]()
+            const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
+            QTimer::singleShot(100, this, [this, imagePath, projectPath]()
             {
+                if (!_projectManager || _projectManager->currentProjectPath() != projectPath)
+                {
+                    return;
+                }
                 if (_workspaceCenter)
                 {
                     _workspaceCenter->showImageView(imagePath);

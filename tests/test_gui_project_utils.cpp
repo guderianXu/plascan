@@ -1660,6 +1660,26 @@ TEST(GuiAsyncLifetimeTest, ImageViewAsyncLoadCallbackUsesQPointerGuard)
         << "Async image decode callbacks must not capture the view widget through raw this.";
 }
 
+TEST(GuiAsyncLifetimeTest, RestoredActiveImageSingleShotChecksProjectBeforeLoading)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void MainWindow::applyUiSettings"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("void MainWindow::closeEvent"), start);
+    ASSERT_GT(end, start);
+    const QString block = source.mid(start, end - start);
+
+    EXPECT_TRUE(block.contains(
+        QStringLiteral("const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();")))
+        << "Delayed active-image restore must remember the project it belongs to.";
+    EXPECT_TRUE(block.contains(QStringLiteral("[this, imagePath, projectPath]()")))
+        << "Delayed active-image restore should compare against the captured project path.";
+    EXPECT_TRUE(block.contains(QStringLiteral("_projectManager->currentProjectPath() != projectPath")))
+        << "Do not let stale UI settings from a previous project switch the central image view later.";
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
