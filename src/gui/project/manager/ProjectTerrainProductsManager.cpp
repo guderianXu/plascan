@@ -11,6 +11,7 @@
 #include "ProjectCameraImportService.h"
 #include "FeatureExtractionRunner.h"
 #include "FeatureMatchRunner.h"
+#include "FeaturePairPlanner.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "Camera.h"
@@ -984,11 +985,17 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     LOG_INFO(QStringLiteral("[DEM流水线] ── 步骤 2/5: 特征匹配 (%1) ──").arg(ctx.matchAlgorithm));
     emit demPipelineProgressChanged(QStringLiteral("特征匹配"), 20);
 
-    QStringList imagePairs;
-    for (int i = 0; i < ctx.images.size(); ++i)
-        for (int j = i + 1; j < ctx.images.size(); ++j)
-            imagePairs << QStringLiteral("%1|%2").arg(ctx.images[i], ctx.images[j]);
-    LOG_INFO(QStringLiteral("[DEM流水线] 匹配对数: %1").arg(imagePairs.size()));
+    xjw::gui::FeaturePairPlannerOptions pairOptions;
+    pairOptions.exhaustiveMaxImages = 80;
+    pairOptions.sequentialWindow = 4;
+    const QStringList imagePairs = xjw::gui::planFeatureMatchPairPaths(ctx.images, pairOptions);
+    const int exhaustivePairCount = ctx.images.size() > 1
+        ? (ctx.images.size() * (ctx.images.size() - 1)) / 2
+        : 0;
+    LOG_INFO(QStringLiteral("[DEM流水线] 匹配对规划完成: planned=%1 exhaustive=%2 window=%3")
+                 .arg(imagePairs.size())
+                 .arg(exhaustivePairCount)
+                 .arg(pairOptions.sequentialWindow));
 
     QJsonObject matchConfig;
     matchConfig[QStringLiteral("match_algorithm")] = ctx.matchAlgorithm;

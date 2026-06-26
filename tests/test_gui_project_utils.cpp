@@ -1079,6 +1079,28 @@ TEST(TerrainPipelineAsyncTest, AutoDemGenerationRunsOffGuiThreadAfterMvs)
         << "Dense-cloud fallback DEM rasterization must not run inside the GUI dense-ready callback.";
 }
 
+TEST(TerrainPipelineAsyncTest, FullDemPipelineUsesBoundedFeaturePairPlanning)
+{
+    const QString source = readProjectSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectTerrainProductsManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(
+        QStringLiteral("void ProjectTerrainProductsManager::runFullDemPipelineInBackground"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("// 步骤 3-5:"), start);
+    ASSERT_GT(end, start);
+    const QString matchingBlock = source.mid(start, end - start);
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"FeaturePairPlanner.h\"")));
+    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("planFeatureMatchPairPaths(ctx.images, pairOptions)")))
+        << "The full DEM pipeline should reuse bounded pair planning instead of N^2 matching.";
+    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("exhaustivePairCount")))
+        << "The log should keep the full-pair count visible for diagnostics.";
+    EXPECT_FALSE(matchingBlock.contains(QStringLiteral("for (int j = i + 1; j < ctx.images.size(); ++j)")))
+        << "Large DEM runs must not plan all image pairs by default.";
+}
+
 TEST(TerrainPipelineAsyncTest, DenseCloudResultSignalCarriesOutputPath)
 {
     const QString denseHeader = readProjectSourceFile(

@@ -21,4 +21,7 @@ struct FeaturePairPlannerOptions
 QStringList planFeatureMatchPairs(const QStringList &imageBaseNames,
                                   const FeaturePairPlannerOptions &options = {});
 
+QStringList planFeatureMatchPairPaths(const QStringList &imagePaths,
+                                      const FeaturePairPlannerOptions &options = {});
+
 } // namespace xjw::gui

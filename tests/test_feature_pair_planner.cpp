@@ -9,6 +9,7 @@
 
 using xjw::gui::FeaturePairPlannerOptions;
 using xjw::gui::planFeatureMatchPairs;
+using xjw::gui::planFeatureMatchPairPaths;
 
 namespace
 {
@@ -19,6 +20,17 @@ QStringList numberedImages(int count)
     for (int i = 0; i < count; ++i)
     {
         images.append(QStringLiteral("image_%1").arg(i, 3, 10, QLatin1Char('0')));
+    }
+    return images;
+}
+
+QStringList numberedImagePaths(int count)
+{
+    QStringList images;
+    for (int i = 0; i < count; ++i)
+    {
+        images.append(QStringLiteral("E:/dataset/images/image_%1.JPG")
+                          .arg(i, 3, 10, QLatin1Char('0')));
     }
     return images;
 }
@@ -102,4 +114,24 @@ TEST(FeaturePairPlannerTest, ExplicitOverlapPairsTakePriority)
     EXPECT_TRUE(pairs.contains(QStringLiteral("image_000__image_003")));
     EXPECT_TRUE(pairs.contains(QStringLiteral("image_010__image_020")));
     EXPECT_FALSE(pairs.contains(QStringLiteral("image_000__image_020")));
+}
+
+TEST(FeaturePairPlannerTest, LargePathSetUsesBoundedPipelinePairs)
+{
+    FeaturePairPlannerOptions options;
+    options.exhaustiveMaxImages = 10;
+    options.sequentialWindow = 4;
+
+    const QStringList images = numberedImagePaths(100);
+    const QStringList pairs = planFeatureMatchPairPaths(images, options);
+
+    EXPECT_EQ(pairs.size(), 390);
+    EXPECT_TRUE(pairs.contains(QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_004.JPG")));
+    EXPECT_FALSE(pairs.contains(QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_005.JPG")));
+    EXPECT_FALSE(pairs.contains(QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_099.JPG")));
+    for (const QString &pair : pairs)
+    {
+        EXPECT_TRUE(pair.contains(QLatin1Char('|'))) << pair.toStdString();
+        EXPECT_FALSE(pair.contains(QStringLiteral("__"))) << pair.toStdString();
+    }
 }
