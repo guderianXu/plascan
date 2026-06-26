@@ -1889,9 +1889,12 @@ TEST(GuiAsyncLifetimeTest, VocabularyOverlapFinishedCallbackUsesQPointerGuard)
     const QString block = source.mid(start, end - start);
 
     EXPECT_TRUE(block.contains(QStringLiteral("QPointer<VocabularyOverlapDialog> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<RunResult>::finished, watcher,")))
+        << "Vocabulary overlap finished callbacks should be tied to the watcher lifetime.";
     EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher]()")));
     EXPECT_TRUE(block.contains(QStringLiteral("if (!self)")));
     EXPECT_TRUE(block.contains(QStringLiteral("self->handleRunFinished(watcher)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("connect(watcher, &QFutureWatcher<RunResult>::finished, this,")));
     EXPECT_FALSE(block.contains(QStringLiteral("[this, watcher]()")))
         << "Vocabulary overlap completion must not call back through raw this after the dialog is closed.";
 }

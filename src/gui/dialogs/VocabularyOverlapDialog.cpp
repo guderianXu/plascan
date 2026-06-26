@@ -1080,7 +1080,7 @@ void VocabularyOverlapDialog::onRun()
 
     auto *watcher = new QFutureWatcher<RunResult>(this);
     _runWatcher = watcher;
-    connect(watcher, &QFutureWatcher<RunResult>::finished, this, [self, watcher]()
+    connect(watcher, &QFutureWatcher<RunResult>::finished, watcher, [self, watcher]()
     {
         if (!self)
         {
