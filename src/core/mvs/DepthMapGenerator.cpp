@@ -979,6 +979,11 @@ DepthMapGenerator::DepthMapGenerator(QObject *parent)
 
 DepthMapGenerator::~DepthMapGenerator()
 {
+    requestCancel();
+    if (_backgroundFuture.isRunning())
+    {
+        _backgroundFuture.waitForFinished();
+    }
 }
 
 // =============================================================================
@@ -1766,9 +1771,15 @@ void DepthMapGenerator::refreshViewImageDimensionsFromCache()
 // =============================================================================
 void DepthMapGenerator::start()
 {
+    if (_backgroundFuture.isRunning())
+    {
+        emit errorOccurred(QStringLiteral("深度图生成任务已经在运行，忽略重复启动请求"));
+        return;
+    }
+
     _cancelled = false;
     _depthFrames.clear();
-    (void)QtConcurrent::run([this]()
+    _backgroundFuture = QtConcurrent::run([this]()
     {
         runInBackground();
     });

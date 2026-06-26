@@ -20,6 +20,7 @@
 #include "SparseCloudPreprocessor.h"
 
 #include <QObject>
+#include <QFuture>
 #include <QString>
 #include <QSharedPointer>
 #include <QMetaType>
@@ -287,6 +288,7 @@ private:
     SparseCloud _sparse;
     DepthGenConfig _config;
     std::atomic<bool> _cancelled{false};
+    QFuture<void> _backgroundFuture;
     std::string _outputDir;
 
     /// 缓存已估计的深度帧

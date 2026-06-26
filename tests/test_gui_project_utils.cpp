@@ -1520,6 +1520,36 @@ TEST(GuiAsyncLifetimeTest, DepthMapSparsePreloadWorkersGuardGeneratorLifetime)
     }
 }
 
+TEST(GuiAsyncLifetimeTest, DepthMapGeneratorOwnsAndJoinsBackgroundFuture)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    const int destructorStart = source.indexOf(QStringLiteral("DepthMapGenerator::~DepthMapGenerator()"));
+    ASSERT_GE(destructorStart, 0);
+    const int setViewsStart = source.indexOf(QStringLiteral("void DepthMapGenerator::setViews"), destructorStart);
+    ASSERT_GT(setViewsStart, destructorStart);
+    const QString destructorBlock = source.mid(destructorStart, setViewsStart - destructorStart);
+
+    const int startStart = source.indexOf(QStringLiteral("void DepthMapGenerator::start()"));
+    ASSERT_GE(startStart, 0);
+    const int rangeStart = source.indexOf(QStringLiteral("bool DepthMapGenerator::estimateDepthRange"), startStart);
+    ASSERT_GT(rangeStart, startStart);
+    const QString startBlock = source.mid(startStart, rangeStart - startStart);
+
+    EXPECT_TRUE(header.contains(QStringLiteral("#include <QFuture>")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QFuture<void> _backgroundFuture")));
+    EXPECT_TRUE(destructorBlock.contains(QStringLiteral("requestCancel();")));
+    EXPECT_TRUE(destructorBlock.contains(QStringLiteral("_backgroundFuture.waitForFinished();")))
+        << "DepthMapGenerator must not be destroyed while its background MVS worker still uses members.";
+    EXPECT_TRUE(startBlock.contains(QStringLiteral("_backgroundFuture = QtConcurrent::run([this]()")))
+        << "start() should retain the background future so destruction can join it safely.";
+    EXPECT_TRUE(startBlock.contains(QStringLiteral("if (_backgroundFuture.isRunning())")))
+        << "start() should avoid launching overlapping background workers on the same generator.";
+}
+
 TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
 {
     const QString source = readProjectSourceFile(
