@@ -1572,6 +1572,11 @@ TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
     EXPECT_TRUE(source.contains(QStringLiteral("makeProgressReporter(QPointer<ProjectModelManager> manager)")))
         << "Background mesh workflow progress must post through a guarded manager pointer.";
     EXPECT_FALSE(source.contains(QStringLiteral("makeProgressReporter(this)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QObject::connect(watcher, &QFutureWatcher<ModelTaskResult>::finished,\n"
+                                             "                     watcher,")))
+        << "Model task finished callbacks should be tied to the watcher lifetime.";
+    EXPECT_FALSE(source.contains(QStringLiteral("QObject::connect(watcher, &QFutureWatcher<ModelTaskResult>::finished,\n"
+                                              "                     owner,")));
 
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("QPointer<ProjectModelManager> self(this)")));
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, denseCloudPath, outputRoot, settings]() -> ModelTaskResult")));

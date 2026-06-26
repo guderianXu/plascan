@@ -283,7 +283,7 @@ void runModelAsyncTask(QObject *owner,
 {
     auto *watcher = new QFutureWatcher<ModelTaskResult>(owner);
     QObject::connect(watcher, &QFutureWatcher<ModelTaskResult>::finished,
-                     owner, [watcher, onFinished = std::forward<OnFinished>(onFinished)]() mutable {
+                     watcher, [watcher, onFinished = std::forward<OnFinished>(onFinished)]() mutable {
         ModelTaskResult task;
         try
         {
