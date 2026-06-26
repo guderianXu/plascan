@@ -22,7 +22,40 @@ QString normalizeKey(QString value)
     return value;
 }
 
-QStringList splitCsvLine(const QString &line)
+int countUnquotedDelimiter(const QString &line, QChar delimiter)
+{
+    int count = 0;
+    bool inQuotes = false;
+    for (int i = 0; i < line.size(); ++i)
+    {
+        const QChar ch = line.at(i);
+        if (ch == QLatin1Char('"'))
+        {
+            if (inQuotes && i + 1 < line.size() && line.at(i + 1) == QLatin1Char('"'))
+            {
+                ++i;
+            }
+            else
+            {
+                inQuotes = !inQuotes;
+            }
+        }
+        else if (ch == delimiter && !inQuotes)
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+QChar detectDelimiter(const QString &headerLine)
+{
+    const int commaCount = countUnquotedDelimiter(headerLine, QLatin1Char(','));
+    const int semicolonCount = countUnquotedDelimiter(headerLine, QLatin1Char(';'));
+    return semicolonCount > commaCount ? QLatin1Char(';') : QLatin1Char(',');
+}
+
+QStringList splitCsvLine(const QString &line, QChar delimiter)
 {
     QStringList cells;
     QString cell;
@@ -43,7 +76,7 @@ QStringList splitCsvLine(const QString &line)
                 inQuotes = !inQuotes;
             }
         }
-        else if (ch == QLatin1Char(',') && !inQuotes)
+        else if (ch == delimiter && !inQuotes)
         {
             cells.append(cell.trimmed());
             cell.clear();
@@ -323,6 +356,7 @@ SurveyControlImportResult parseSurveyControlCsv(const QString &csvText,
     const QStringList lines = normalizedText.split(QLatin1Char('\n'));
     int headerLine = -1;
     QStringList headers;
+    QChar delimiter = QLatin1Char(',');
     for (int i = 0; i < lines.size(); ++i)
     {
         if (lines.at(i).trimmed().isEmpty())
@@ -330,7 +364,8 @@ SurveyControlImportResult parseSurveyControlCsv(const QString &csvText,
             continue;
         }
 
-        headers = splitCsvLine(lines.at(i));
+        delimiter = detectDelimiter(lines.at(i));
+        headers = splitCsvLine(lines.at(i), delimiter);
         for (QString &header : headers)
         {
             header = normalizeKey(header);
@@ -359,7 +394,7 @@ SurveyControlImportResult parseSurveyControlCsv(const QString &csvText,
             continue;
         }
 
-        const QStringList cells = splitCsvLine(rawLine);
+        const QStringList cells = splitCsvLine(rawLine, delimiter);
         QHash<QString, QString> row;
         for (int i = 0; i < headers.size(); ++i)
         {

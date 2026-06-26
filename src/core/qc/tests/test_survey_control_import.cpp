@@ -64,6 +64,24 @@ TEST(SurveyControlImport, UsesDefaultRoleWhenRoleColumnIsMissing)
     EXPECT_EQ(result.scaleBarCount, 0);
 }
 
+TEST(SurveyControlImport, AcceptsSemicolonSeparatedControlCsv)
+{
+    const QString csv = QStringLiteral(
+        "role;id;x;y;z;sigma_m\n"
+        "control;GCP001;1.0;2.0;3.0;0.02\n"
+        "check;CHK001;4.0;5.0;6.0;0.05\n");
+
+    const auto result = parseSurveyControlCsv(csv);
+
+    ASSERT_TRUE(result.ok) << result.error.toStdString();
+    EXPECT_EQ(result.controlPointCount, 1);
+    EXPECT_EQ(result.checkPointCount, 1);
+
+    const QJsonArray controls = result.surveyControl.value(QStringLiteral("control_points")).toArray();
+    ASSERT_EQ(controls.size(), 1);
+    EXPECT_EQ(controls.at(0).toObject().value(QStringLiteral("id")).toString(), QStringLiteral("GCP001"));
+}
+
 TEST(SurveyControlImport, AggregatesImageObservationsByControlPointId)
 {
     const QString csv = QStringLiteral(
