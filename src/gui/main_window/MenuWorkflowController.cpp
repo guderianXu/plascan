@@ -1772,9 +1772,20 @@ void MenuWorkflowController::openCreateDemDialog()
         [this](const QStringList &images, const QString &outputDir, const QJsonObject &pipelineSettings)
     {
         if (!_projectManager)
+        {
             return;
-        QMetaObject::invokeMethod(_projectManager, "startFullDemPipelineAsync", Qt::QueuedConnection,
-            Q_ARG(QStringList, images), Q_ARG(QString, outputDir), Q_ARG(QJsonObject, pipelineSettings));
+        }
+        QPointer<ProjectManager> pmGuard(_projectManager);
+        const QString projectPath = pmGuard->currentProjectPath();
+        QTimer::singleShot(0, pmGuard.data(),
+            [pmGuard, projectPath, images, outputDir, pipelineSettings]()
+            {
+                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                {
+                    return;
+                }
+                pmGuard->startFullDemPipelineAsync(images, outputDir, pipelineSettings);
+            });
     });
 
     // 手动模式：从密集点云生成 DEM
@@ -1782,10 +1793,20 @@ void MenuWorkflowController::openCreateDemDialog()
         [this](const QString &denseCloudPath, const QString &outputDir, double demResolution, const QString &demType)
     {
         if (!_projectManager)
+        {
             return;
-        QMetaObject::invokeMethod(_projectManager, "startDemFromDenseCloudAsync", Qt::QueuedConnection,
-            Q_ARG(QString, denseCloudPath), Q_ARG(QString, outputDir),
-            Q_ARG(double, demResolution), Q_ARG(QString, demType));
+        }
+        QPointer<ProjectManager> pmGuard(_projectManager);
+        const QString projectPath = pmGuard->currentProjectPath();
+        QTimer::singleShot(0, pmGuard.data(),
+            [pmGuard, projectPath, denseCloudPath, outputDir, demResolution, demType]()
+            {
+                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                {
+                    return;
+                }
+                pmGuard->startDemFromDenseCloudAsync(denseCloudPath, outputDir, demResolution, demType);
+            });
     });
 
     // 进度反馈 → 对话框内显示
@@ -1876,8 +1897,17 @@ void MenuWorkflowController::openMapProjectDialog()
             LOG_WARN(QStringLiteral("MapProject: 未找到 ProjectManager"));
             return;
         }
-        QMetaObject::invokeMethod(_projectManager, "startMapProjectAsync", Qt::QueuedConnection,
-            Q_ARG(QStringList, images), Q_ARG(QString, demPath), Q_ARG(QString, outputPath), Q_ARG(double, res));
+        QPointer<ProjectManager> pmGuard(_projectManager);
+        const QString projectPath = pmGuard->currentProjectPath();
+        QTimer::singleShot(0, pmGuard.data(),
+            [pmGuard, projectPath, images, demPath, outputPath, res]()
+            {
+                if (!pmGuard || pmGuard->currentProjectPath() != projectPath)
+                {
+                    return;
+                }
+                pmGuard->startMapProjectAsync(images, demPath, outputPath, res);
+            });
     });
 
     dlg->exec();

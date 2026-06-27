@@ -1263,6 +1263,43 @@ TEST(TerrainPipelineAsyncTest, MapProjectRunsOffGuiThread)
         << "The Async entry point must not call the QMessageBox wrapper directly.";
 }
 
+TEST(TerrainPipelineAsyncTest, TerrainMenuQueuedStartsCheckProjectBeforeDispatch)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int demStart = source.indexOf(QStringLiteral("void MenuWorkflowController::openCreateDemDialog"));
+    ASSERT_GE(demStart, 0);
+    const int mapStart = source.indexOf(QStringLiteral("void MenuWorkflowController::openMapProjectDialog"), demStart);
+    ASSERT_GT(mapStart, demStart);
+    const QString demBlock = source.mid(demStart, mapStart - demStart);
+
+    const int mapEnd = source.indexOf(QStringLiteral("void MenuWorkflowController::runFeatureExtraction"), mapStart);
+    ASSERT_GT(mapEnd, mapStart);
+    const QString mapBlock = source.mid(mapStart, mapEnd - mapStart);
+
+    EXPECT_TRUE(demBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(_projectManager)")))
+        << "Queued DEM workflow starts must not capture ProjectManager as a raw pointer.";
+    EXPECT_TRUE(demBlock.contains(QStringLiteral("const QString projectPath = pmGuard->currentProjectPath()")))
+        << "Queued DEM workflow starts must remember the project that requested the run.";
+    EXPECT_TRUE(demBlock.contains(QStringLiteral("pmGuard->currentProjectPath() != projectPath")))
+        << "Queued DEM workflow starts must be dropped after project switches.";
+    EXPECT_TRUE(demBlock.contains(QStringLiteral("QTimer::singleShot(0, pmGuard.data(),")))
+        << "DEM workflow starts should remain queued but use a guarded lambda.";
+    EXPECT_FALSE(demBlock.contains(QStringLiteral("QMetaObject::invokeMethod(_projectManager, \"startFullDemPipelineAsync\"")));
+    EXPECT_FALSE(demBlock.contains(QStringLiteral("QMetaObject::invokeMethod(_projectManager, \"startDemFromDenseCloudAsync\"")));
+
+    EXPECT_TRUE(mapBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(_projectManager)")))
+        << "Queued DOM workflow starts must not capture ProjectManager as a raw pointer.";
+    EXPECT_TRUE(mapBlock.contains(QStringLiteral("const QString projectPath = pmGuard->currentProjectPath()")))
+        << "Queued DOM workflow starts must remember the project that requested the run.";
+    EXPECT_TRUE(mapBlock.contains(QStringLiteral("pmGuard->currentProjectPath() != projectPath")))
+        << "Queued DOM workflow starts must be dropped after project switches.";
+    EXPECT_TRUE(mapBlock.contains(QStringLiteral("QTimer::singleShot(0, pmGuard.data(),")))
+        << "DOM workflow starts should remain queued but use a guarded lambda.";
+    EXPECT_FALSE(mapBlock.contains(QStringLiteral("QMetaObject::invokeMethod(_projectManager, \"startMapProjectAsync\"")));
+}
+
 TEST(TerrainPipelineAsyncTest, TerrainProductsManagerDropsBlockingUiWrappers)
 {
     const QString header = readProjectSourceFile(
