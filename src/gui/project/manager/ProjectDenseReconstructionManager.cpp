@@ -1136,8 +1136,9 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QPointer<DepthMapGenerator> genSelf(gen);
-    (void)QtConcurrent::run([genSelf, sparseXyz, views, request]() {
+    (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]() {
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
@@ -1149,14 +1150,23 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                 sparse = ppRes.cloud;
             }
         }
-        if (!genSelf)
+        if (!self || !genSelf)
         {
             return;
         }
         auto sparseCloud = std::make_shared<SparseCloud>(std::move(sparse));
-        QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]() {
-            if (!genSelf)
+        QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]() {
+            if (!self || !genSelf)
             {
+                return;
+            }
+            if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+            {
+                if (self->_activeMvsGenerator == genSelf.data())
+                {
+                    self->_activeMvsGenerator = nullptr;
+                }
+                genSelf->deleteLater();
                 return;
             }
             if (genSelf->isCancelled())
@@ -1773,8 +1783,9 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
     _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QPointer<DepthMapGenerator> genSelf(gen);
-    (void)QtConcurrent::run([genSelf, sparseXyz, views, request]() {
+    (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]() {
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
@@ -1786,14 +1797,23 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                 sparse = ppRes.cloud;
             }
         }
-        if (!genSelf)
+        if (!self || !genSelf)
         {
             return;
         }
         auto sparseCloud = std::make_shared<SparseCloud>(std::move(sparse));
-        QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]() {
-            if (!genSelf)
+        QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]() {
+            if (!self || !genSelf)
             {
+                return;
+            }
+            if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+            {
+                if (self->_activeMvsGenerator == genSelf.data())
+                {
+                    self->_activeMvsGenerator = nullptr;
+                }
+                genSelf->deleteLater();
                 return;
             }
             if (genSelf->isCancelled())

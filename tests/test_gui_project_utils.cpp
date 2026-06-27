@@ -1488,7 +1488,7 @@ TEST(GuiAsyncLifetimeTest, DenseCloudFusionUsesGuardedTaskRunner)
         QStringLiteral("void ProjectDenseReconstructionManager::startFuseDepthMapsAsync"));
     ASSERT_GE(start, 0);
     const int end = source.indexOf(
-        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"), start);
+        QStringLiteral("void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync"), start);
     ASSERT_GT(end, start);
     const QString block = source.mid(start, end - start);
 
@@ -1547,10 +1547,14 @@ TEST(GuiAsyncLifetimeTest, DepthMapSparsePreloadWorkersGuardGeneratorLifetime)
     {
         EXPECT_TRUE(block.contains(QStringLiteral("QPointer<DepthMapGenerator> genSelf(gen)")))
             << "Sparse preload workers should guard the generator before leaving the GUI thread.";
-        EXPECT_TRUE(block.contains(QStringLiteral("QtConcurrent::run([genSelf, sparseXyz, views, request]()")))
+        EXPECT_TRUE(block.contains(QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()")))
+            << "Sparse preload workers must bind their result to the project that launched them.";
+        EXPECT_TRUE(block.contains(QStringLiteral("QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]()")))
             << "The worker should capture the guarded generator pointer, not raw gen.";
-        EXPECT_TRUE(block.contains(QStringLiteral("QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]()")))
+        EXPECT_TRUE(block.contains(QStringLiteral("QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]()")))
             << "Sparse cloud handoff should be posted back through the guarded generator.";
+        EXPECT_TRUE(block.contains(QStringLiteral("self->_owner->currentProjectPath() != projectPath")))
+            << "Sparse preload completion must not start depth estimation after the user switches projects.";
         EXPECT_FALSE(block.contains(QStringLiteral("QtConcurrent::run([gen, sparseXyz, views, request]()")));
         EXPECT_FALSE(block.contains(QStringLiteral("gen->setSparseCloud(sparse)")));
         EXPECT_FALSE(block.contains(QStringLiteral("QMetaObject::invokeMethod(gen, \"start\"")));
