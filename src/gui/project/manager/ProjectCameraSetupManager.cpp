@@ -572,14 +572,15 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         return false;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(_owner->currentProjectPath());
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     const QString outputDir = QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation/init_pose_%1").arg(timestamp));
     QDir().mkpath(outputDir);
 
     xjw::gui::SFMServiceOptions opts;
     opts.images = allImages;
-    opts.plascanPath = _owner->currentProjectPath();
+    opts.plascanPath = projectPath;
     opts.projectMeta = withPreparedCameras(fullMeta, preparedCameras, overwriteExisting);
     opts.outputDir = outputDir;
     opts.quality = settings.value(QStringLiteral("quality")).toInt(1);
@@ -610,28 +611,38 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
     opts.cancelFlag = cancelFlag;
 
     QPointer<ProjectCameraSetupManager> self(this);
-    opts.progressFn = [self](const QString &stage, int pct)
+    QPointer<ProjectManager> ownerGuard(_owner);
+    opts.progressFn = [self, ownerGuard, projectPath](const QString &stage, int pct)
     {
-        if (!self)
+        if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(self.data(), [stage, pct](ProjectCameraSetupManager *manager)
+        xjw::gui::tasks::postGuarded(self.data(), [ownerGuard, projectPath, stage, pct](ProjectCameraSetupManager *manager)
         {
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                return;
+            }
             emit manager->atProgressChanged(stage, pct);
         });
     };
 
-    opts.pairMatchedFn = [self](const QString &img0, const QString &img1,
-                                const QString &matchPath, int numMatches)
+    opts.pairMatchedFn = [self, ownerGuard, projectPath](const QString &img0, const QString &img1,
+                                                         const QString &matchPath, int numMatches)
     {
-        if (!self)
+        if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
         {
             return;
         }
         xjw::gui::tasks::postGuarded(self.data(),
-                                     [img0, img1, matchPath, numMatches](ProjectCameraSetupManager *manager)
+                                     [ownerGuard, projectPath, img0, img1, matchPath, numMatches](
+                                         ProjectCameraSetupManager *manager)
         {
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                return;
+            }
             emit manager->matchPairReady(img0, img1, matchPath, numMatches);
         });
     };
@@ -663,8 +674,15 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
          keptExistingCount,
          invalidSizeCount,
          exifCount,
-         fallbackCount](ProjectCameraSetupManager *manager, xjw::gui::SFMServiceResult result) mutable
+         fallbackCount,
+         ownerGuard,
+         projectPath](ProjectCameraSetupManager *manager, xjw::gui::SFMServiceResult result) mutable
         {
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                return;
+            }
+
             if (!result.success)
             {
                 emit manager->atProgressFinished(false);

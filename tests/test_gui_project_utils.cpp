@@ -1752,6 +1752,13 @@ TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
     EXPECT_TRUE(cameraSource.contains(QStringLiteral("#include \"GuiTaskRunner.h\"")));
     EXPECT_TRUE(cameraSource.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
     EXPECT_TRUE(cameraSource.contains(QStringLiteral("xjw::gui::tasks::postGuarded")));
+    EXPECT_TRUE(cameraSource.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")))
+        << "Camera SFM initialization must guard callbacks against ProjectManager lifetime.";
+    EXPECT_TRUE(cameraSource.contains(
+        QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString();")))
+        << "Camera SFM initialization must bind all callbacks to the project active at launch.";
+    EXPECT_TRUE(cameraSource.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
+        << "Camera SFM initialization must not write results after switching projects.";
     EXPECT_FALSE(cameraSource.contains(QStringLiteral("QtConcurrent::run([self, opts")))
         << "Camera SFM initialization should use the shared guarded runner instead of open-coded QtConcurrent.";
 }
