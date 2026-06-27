@@ -69,17 +69,19 @@ void showTaskFailure(QWidget *parentWidget,
 
 void mergeJsonObject(QJsonObject *target, const QJsonObject &source);
 
-auto makeProgressReporter(QPointer<ProjectModelManager> manager)
+auto makeProgressReporter(QPointer<ProjectModelManager> manager,
+                          QPointer<ProjectManager> owner,
+                          const QString &projectPath)
 {
-    return [manager](const QString &stage, int percent) 
+    return [manager, owner, projectPath](const QString &stage, int percent)
     {
-        if (!manager)
+        if (!manager || !owner)
         {
             return;
         }
-        QMetaObject::invokeMethod(manager.data(), [manager, stage, percent]()
+        QMetaObject::invokeMethod(manager.data(), [manager, owner, projectPath, stage, percent]()
         {
-            if (!manager)
+            if (!manager || !owner || owner->currentProjectPath() != projectPath)
             {
                 return;
             }
@@ -102,6 +104,8 @@ void applyWorkflowResult(ModelTaskResult *task,
 }
 
 ModelTaskResult runGenerateModelTask(QPointer<ProjectModelManager> manager,
+                                     QPointer<ProjectManager> owner,
+                                     const QString &projectPath,
                                      const GenerateModelTaskInput &input)
 {
     ModelTaskResult task;
@@ -140,7 +144,7 @@ ModelTaskResult runGenerateModelTask(QPointer<ProjectModelManager> manager,
     request.reconstruction = reconstruction;
     request.exportObj = input.exportObj;
     request.texture = xjw::mesh::workflow::defaultTextureConfig();
-    request.progress = makeProgressReporter(manager);
+    request.progress = makeProgressReporter(manager, owner, projectPath);
 
     const xjw::mesh::workflow::WorkflowResult workflowResult =
         xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
@@ -405,9 +409,11 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
 
     emit meshProgressChanged(tr("正在初始化网格重建..."), 0);
     QPointer<ProjectModelManager> self(this);
+    QPointer<ProjectManager> ownerGuard(_owner);
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     runModelAsyncTask(
         this,
-        [self, denseCloudPath, outputRoot, settings]() -> ModelTaskResult {
+        [self, ownerGuard, denseCloudPath, outputRoot, settings, projectPath]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
             {
@@ -519,15 +525,15 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             request.reconstruction = cfg;
             request.exportObj = xjw::mesh::workflow::exportObjRequested(settings);
             request.texture = xjw::mesh::workflow::defaultTextureConfig();
-            request.progress = makeProgressReporter(self);
+            request.progress = makeProgressReporter(self, ownerGuard, projectPath);
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [self, denseCloudPath, settings](const ModelTaskResult &task) {
-            if (!self)
+        [self, ownerGuard, denseCloudPath, settings, projectPath](const ModelTaskResult &task) {
+            if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {
                 return;
             }
@@ -592,9 +598,11 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
 
     emit meshProgressChanged(tr("正在初始化纹理映射..."), 0);
     QPointer<ProjectModelManager> self(this);
+    QPointer<ProjectManager> ownerGuard(_owner);
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     runModelAsyncTask(
         this,
-        [self, meshPath, productsDir, settings]() -> ModelTaskResult {
+        [self, ownerGuard, meshPath, productsDir, settings, projectPath]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
             {
@@ -606,15 +614,15 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             request.meshPath = meshPath;
             request.outputDir = productsDir;
             request.texture = xjw::mesh::workflow::textureConfigFromSettings(settings);
-            request.progress = makeProgressReporter(self);
+            request.progress = makeProgressReporter(self, ownerGuard, projectPath);
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildTextureOnly(request);
             applyWorkflowResult(&task, workflowResult);
             return task;
         },
-        [self, meshPath, baseRecord](const ModelTaskResult &task) {
-            if (!self)
+        [self, ownerGuard, meshPath, baseRecord, projectPath](const ModelTaskResult &task) {
+            if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {
                 return;
             }

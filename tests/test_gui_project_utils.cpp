@@ -1610,8 +1610,12 @@ TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
     const QString textureBlock = source.mid(textureStart, finalizerStart - textureStart);
 
     EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
-    EXPECT_TRUE(source.contains(QStringLiteral("makeProgressReporter(QPointer<ProjectModelManager> manager)")))
+    EXPECT_TRUE(source.contains(QStringLiteral("makeProgressReporter(QPointer<ProjectModelManager> manager,")))
         << "Background mesh workflow progress must post through a guarded manager pointer.";
+    EXPECT_TRUE(source.contains(QStringLiteral("QPointer<ProjectManager> owner,")))
+        << "Progress callbacks must also guard the owning ProjectManager.";
+    EXPECT_TRUE(source.contains(QStringLiteral("owner->currentProjectPath() != projectPath")))
+        << "Model progress callbacks must not update UI after the user switches projects.";
     EXPECT_FALSE(source.contains(QStringLiteral("makeProgressReporter(this)")));
     EXPECT_TRUE(source.contains(QStringLiteral("QObject::connect(watcher, &QFutureWatcher<ModelTaskResult>::finished,\n"
                                              "                     watcher,")))
@@ -1620,15 +1624,27 @@ TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
                                               "                     owner,")));
 
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("QPointer<ProjectModelManager> self(this)")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, denseCloudPath, outputRoot, settings]() -> ModelTaskResult")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, denseCloudPath, settings](const ModelTaskResult &task)")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()")))
+        << "Mesh tasks must bind results to the project that launched them.";
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, ownerGuard, denseCloudPath, outputRoot, settings, projectPath]() -> ModelTaskResult")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("makeProgressReporter(self, ownerGuard, projectPath)")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, ownerGuard, denseCloudPath, settings, projectPath](const ModelTaskResult &task)")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
+        << "Mesh task completion must not write results after the user switches projects.";
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, denseCloudPath, settings](const QJsonObject &taskResult)")));
     EXPECT_FALSE(meshBlock.contains(QStringLiteral("[this, denseCloudPath, outputRoot, settings]")));
     EXPECT_FALSE(meshBlock.contains(QStringLiteral("[this, denseCloudPath, settings]")));
 
     EXPECT_TRUE(textureBlock.contains(QStringLiteral("QPointer<ProjectModelManager> self(this)")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, meshPath, productsDir, settings]() -> ModelTaskResult")));
-    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, meshPath, baseRecord](const ModelTaskResult &task)")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()")))
+        << "Texture tasks must bind results to the project that launched them.";
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, ownerGuard, meshPath, productsDir, settings, projectPath]() -> ModelTaskResult")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("makeProgressReporter(self, ownerGuard, projectPath)")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, ownerGuard, meshPath, baseRecord, projectPath](const ModelTaskResult &task)")));
+    EXPECT_TRUE(textureBlock.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
+        << "Texture task completion must not write results after the user switches projects.";
     EXPECT_TRUE(textureBlock.contains(QStringLiteral("[self, meshPath, baseRecord](const QJsonObject &taskResult)")));
     EXPECT_FALSE(textureBlock.contains(QStringLiteral("[this, meshPath, productsDir, settings]")));
     EXPECT_FALSE(textureBlock.contains(QStringLiteral("[this, meshPath, baseRecord]")));
