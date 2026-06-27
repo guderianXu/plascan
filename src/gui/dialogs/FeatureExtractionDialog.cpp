@@ -23,6 +23,7 @@
 #include <QLabel>
 #include <QToolButton>
 #include <QMessageBox>
+#include <QScopedValueRollback>
 #include <QSignalBlocker>
 #include <QtGlobal>
 
@@ -314,10 +315,8 @@ void FeatureExtractionDialog::setupConnections()
 
     // 参数变更信号（实时同步到项目配置）
     // 基础参数
-        connect(_algorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+    connect(_algorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &FeatureExtractionDialog::onAlgorithmChanged);
-        connect(_algorithmCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &FeatureExtractionDialog::emitSettingsNow);
     connect(_nmsRadiusSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &FeatureExtractionDialog::emitSettingsNow);
     connect(_detectionThresholdSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -366,6 +365,7 @@ void FeatureExtractionDialog::setupConnections()
         emitSettingsNow();
     });
     connect(_allowFallbackChk, &QCheckBox::toggled, this, &FeatureExtractionDialog::emitSettingsNow);
+    connect(_modelPathEdit, &QLineEdit::textChanged, this, &FeatureExtractionDialog::emitSettingsNow);
     connect(_pythonPathEdit, &QLineEdit::textChanged, this, &FeatureExtractionDialog::emitSettingsNow);
 
     // 调试参数
@@ -480,29 +480,37 @@ void FeatureExtractionDialog::onCancel()
 
 void FeatureExtractionDialog::onResetDefaults()
 {
-    // 恢复所有参数到默认值
-    setComboDataOrFirst(_algorithmCombo, QStringLiteral("disk"));
-    _nmsRadiusSpin->setValue(3);
-    _detectionThresholdSpin->setValue(0.003);
-    _maxKeypointsSpin->setValue(-1);
-    _removeBordersSpin->setValue(4);
-    _grayscaleMinSpin->setValue(kDefaultGrayscaleMinPx);
-    _grayscaleMaxSpin->setValue(kDefaultGrayscaleMaxPx);
+    {
+        QScopedValueRollback<bool> applying_settings(_applyingSettings, true);
 
-    _normalizeInputChk->setChecked(true);
-    _descriptorDimSpin->setValue(256);
-    _gridSizeSpin->setValue(8);
-    _batchSizeSpin->setValue(8);
-    _neighborhoodRadiusSpin->setValue(3);
-    _neighborhoodThresholdSpin->setValue(0.05);
+        // 恢复所有参数到默认值
+        setComboDataOrFirst(_algorithmCombo, QStringLiteral("disk"));
+        _nmsRadiusSpin->setValue(3);
+        _detectionThresholdSpin->setValue(0.003);
+        _maxKeypointsSpin->setValue(-1);
+        _removeBordersSpin->setValue(4);
+        _grayscaleMinSpin->setValue(kDefaultGrayscaleMinPx);
+        _grayscaleMaxSpin->setValue(kDefaultGrayscaleMaxPx);
 
-    _deviceCombo->setCurrentText("CUDA");
-    _allowFallbackChk->setChecked(true);
+        _normalizeInputChk->setChecked(true);
+        _descriptorDimSpin->setValue(256);
+        _gridSizeSpin->setValue(8);
+        _batchSizeSpin->setValue(8);
+        _neighborhoodRadiusSpin->setValue(3);
+        _neighborhoodThresholdSpin->setValue(0.05);
 
-    _saveCsvChk->setChecked(false);
-    _saveOverlayChk->setChecked(false);
-    _pythonPathEdit->clear();
-    updateModelPathForCurrentAlgorithm();
+        _deviceCombo->setCurrentText(QStringLiteral("CUDA"));
+        _cudaDeviceSpin->setValue(0);
+        _allowFallbackChk->setChecked(true);
+
+        _saveCsvChk->setChecked(false);
+        _saveOverlayChk->setChecked(false);
+        _modelPathEdit->clear();
+        _outputLine->clear();
+        _pythonPathEdit->clear();
+        updateModelPathForCurrentAlgorithm();
+    }
+    emitSettingsNow();
 }
 
 void FeatureExtractionDialog::onAlgorithmChanged(int)
@@ -589,19 +597,20 @@ void FeatureExtractionDialog::updateModelPathForCurrentAlgorithm()
 
 void FeatureExtractionDialog::applySettings(const QJsonObject &settings) 
 {
+    QScopedValueRollback<bool> applying_settings(_applyingSettings, true);
+    const bool has_model_path = settings.contains(QStringLiteral("model_path"));
+    const QString restored_model_path = settings.value(QStringLiteral("model_path")).toString().trimmed();
+
     if (settings.contains("feature_algorithm"))
     {
-        const QString featureAlgorithm = settings["feature_algorithm"].toString("disk").trimmed().toLower();
-        setComboDataOrFirst(_algorithmCombo, featureAlgorithm);
+        const QString feature_algorithm = settings["feature_algorithm"].toString("disk").trimmed().toLower();
+        setComboDataOrFirst(_algorithmCombo, feature_algorithm);
     }
 
-    if (settings.contains("model_path"))
+    if (has_model_path)
     {
-        const QString modelPath = settings["model_path"].toString().trimmed();
-        if (!modelPath.isEmpty())
-        {
-            _modelPathEdit->setText(modelPath);
-        }
+        QSignalBlocker blocker(_modelPathEdit);
+        _modelPathEdit->setText(restored_model_path);
     }
     if (settings.contains("cuda_device"))
         _cudaDeviceSpin->setValue(settings["cuda_device"].toInt());
@@ -617,14 +626,20 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
         _maxKeypointsSpin->setValue(settings["max_num_keypoints"].toInt(-1));
     if (settings.contains("remove_borders"))
         _removeBordersSpin->setValue(settings["remove_borders"].toInt(4));
-    _grayscaleMinSpin->setValue(grayscalePixelSetting(settings,
-                                                       QStringLiteral("grayscale_min_px"),
-                                                       QStringLiteral("grayscale_min"),
-                                                       kDefaultGrayscaleMinPx));
-    _grayscaleMaxSpin->setValue(grayscalePixelSetting(settings,
-                                                       QStringLiteral("grayscale_max_px"),
-                                                       QStringLiteral("grayscale_max"),
-                                                       kDefaultGrayscaleMaxPx));
+    if (settings.contains(QStringLiteral("grayscale_min_px")) || settings.contains(QStringLiteral("grayscale_min")))
+    {
+        _grayscaleMinSpin->setValue(grayscalePixelSetting(settings,
+                                                           QStringLiteral("grayscale_min_px"),
+                                                           QStringLiteral("grayscale_min"),
+                                                           kDefaultGrayscaleMinPx));
+    }
+    if (settings.contains(QStringLiteral("grayscale_max_px")) || settings.contains(QStringLiteral("grayscale_max")))
+    {
+        _grayscaleMaxSpin->setValue(grayscalePixelSetting(settings,
+                                                           QStringLiteral("grayscale_max_px"),
+                                                           QStringLiteral("grayscale_max"),
+                                                           kDefaultGrayscaleMaxPx));
+    }
 
     // 高级参数
     if (settings.contains("normalize_input"))
@@ -643,15 +658,15 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
     // 系统参数
     if (settings.contains("device"))
     {
-        const bool useCuda = deviceTextRequestsCuda(settings["device"].toString("CUDA").trimmed());
-        _deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
-        _useCudaChk->setChecked(useCuda);
+        const bool use_cuda = deviceTextRequestsCuda(settings["device"].toString("CUDA").trimmed());
+        _deviceCombo->setCurrentText(use_cuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+        _useCudaChk->setChecked(use_cuda);
     }
     else if (settings.contains("use_cuda"))
     {
-        const bool useCuda = settings["use_cuda"].toBool();
-        _useCudaChk->setChecked(useCuda);
-        _deviceCombo->setCurrentText(useCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
+        const bool use_cuda = settings["use_cuda"].toBool();
+        _useCudaChk->setChecked(use_cuda);
+        _deviceCombo->setCurrentText(use_cuda ? QStringLiteral("CUDA") : QStringLiteral("CPU"));
     }
     if (settings.contains("allow_device_fallback"))
         _allowFallbackChk->setChecked(settings["allow_device_fallback"].toBool(true));
@@ -663,14 +678,22 @@ void FeatureExtractionDialog::applySettings(const QJsonObject &settings)
         _saveOverlayChk->setChecked(settings["save_overlay_image"].toBool(false));
 
     // 输出目录
-    if (settings.contains("output_dir")) {
-        QString outputDir = settings["output_dir"].toString();
-        if (!outputDir.isEmpty()) {
-            _outputLine->setText(outputDir);
+    if (settings.contains("output_dir"))
+    {
+        const QString output_dir = settings["output_dir"].toString();
+        if (!output_dir.isEmpty())
+        {
+            _outputLine->setText(output_dir);
         }
     }
 
     updateModelPathForCurrentAlgorithm();
+    if (has_model_path && !restored_model_path.isEmpty())
+    {
+        QSignalBlocker blocker(_modelPathEdit);
+        _modelPathEdit->setText(restored_model_path);
+    }
+    updatePreview();
 }
 
 void FeatureExtractionDialog::setProjectImages(const QStringList &paths) 
@@ -687,11 +710,41 @@ void FeatureExtractionDialog::setProjectImages(const QStringList &paths)
 
 void FeatureExtractionDialog::updatePreview() 
 {
-    // TODO: 可选实现，提供参数预览或影响说明
+    if (!_advancedHintLabel)
+    {
+        return;
+    }
+
+    const QString algo = _algorithmCombo->currentText().trimmed();
+    const QString device = _deviceCombo->currentText().trimmed();
+    const int grayscale_min_px = qBound(0, qMin(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
+    const int grayscale_max_px = qBound(0, qMax(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
+    const QString max_keypoints = _maxKeypointsSpin->value() < 0
+        ? tr("不限")
+        : QString::number(_maxKeypointsSpin->value());
+    const QString model_state = _modelPathEdit->text().trimmed().isEmpty()
+        ? tr("无模型")
+        : QFileInfo(_modelPathEdit->text()).fileName();
+
+    const QString base_hint = _advancedHintLabel->text().section(QStringLiteral("\n\n有效配置："), 0, 0);
+    _advancedHintLabel->setText(
+        tr("%1\n\n有效配置：%2 / %3，最大关键点 %4，灰度 %5-%6，模型 %7")
+            .arg(base_hint,
+                 algo,
+                 device,
+                 max_keypoints,
+                 QString::number(grayscale_min_px),
+                 QString::number(grayscale_max_px),
+                 model_state));
 }
 
 void FeatureExtractionDialog::emitSettingsNow() 
 {
+    if (_applyingSettings)
+    {
+        return;
+    }
+    updatePreview();
     emit settingsChanged(collectSettings());
 }
 
@@ -709,12 +762,12 @@ QJsonObject FeatureExtractionDialog::collectSettings() const
     settings["detection_threshold"] = _detectionThresholdSpin->value();
     settings["max_num_keypoints"] = _maxKeypointsSpin->value();
     settings["remove_borders"] = _removeBordersSpin->value();
-    const int grayscaleMinPx = qBound(0, qMin(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
-    const int grayscaleMaxPx = qBound(0, qMax(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
-    settings["grayscale_min_px"] = grayscaleMinPx;
-    settings["grayscale_max_px"] = grayscaleMaxPx;
-    settings["grayscale_min"] = grayscalePixelToNormalized(grayscaleMinPx);
-    settings["grayscale_max"] = grayscalePixelToNormalized(grayscaleMaxPx);
+    const int grayscale_min_px = qBound(0, qMin(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
+    const int grayscale_max_px = qBound(0, qMax(_grayscaleMinSpin->value(), _grayscaleMaxSpin->value()), 255);
+    settings["grayscale_min_px"] = grayscale_min_px;
+    settings["grayscale_max_px"] = grayscale_max_px;
+    settings["grayscale_min"] = grayscalePixelToNormalized(grayscale_min_px);
+    settings["grayscale_max"] = grayscalePixelToNormalized(grayscale_max_px);
 
     // 高级参数
     settings["normalize_input"] = _normalizeInputChk->isChecked();

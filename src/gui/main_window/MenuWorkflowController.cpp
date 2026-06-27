@@ -607,9 +607,9 @@ void MenuWorkflowController::openFeatureExtractionDialog()
 
         // 设置默认输出目录
         const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
-        if (!assetsDir.isEmpty())
+        if (!assetsDir.isEmpty() && saved.value(QStringLiteral("output_dir")).toString().isEmpty())
         {
-            QJsonObject defaultOutput;
+            QJsonObject defaultOutput = saved;
             defaultOutput.insert("output_dir", QDir(assetsDir).filePath(QStringLiteral("ip")));
             dlg->applySettings(defaultOutput);
         }

@@ -124,4 +124,5 @@ private:
     QSpinBox*         _diskMaxKpSpin{nullptr};    // DISK 最大KP
     QDoubleSpinBox*   _diskScoreThreshSpin{nullptr};
     QSpinBox*         _alikedMaxKpSpin{nullptr};
+    bool              _applyingSettings{false};
 };

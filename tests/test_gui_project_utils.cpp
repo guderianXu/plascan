@@ -6758,15 +6758,55 @@ TEST(FeatureExtractionDialogTest, DefaultsToDiskAlgorithm)
 {
     FeatureExtractionDialog dialog;
 
-    QComboBox *algorithmCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_algorithmCombo"));
-    ASSERT_NE(algorithmCombo, nullptr);
-    EXPECT_EQ(algorithmCombo->currentData().toString(), QStringLiteral("disk"));
+    QComboBox *algorithm_combo = dialog.findChild<QComboBox *>(QStringLiteral("m_algorithmCombo"));
+    ASSERT_NE(algorithm_combo, nullptr);
+    EXPECT_EQ(algorithm_combo->currentData().toString(), QStringLiteral("disk"));
 
-    QPushButton *resetButton = dialog.findChild<QPushButton *>(QStringLiteral("m_resetBtn"));
-    ASSERT_NE(resetButton, nullptr);
-    resetButton->click();
+    QPushButton *reset_button = dialog.findChild<QPushButton *>(QStringLiteral("m_resetBtn"));
+    ASSERT_NE(reset_button, nullptr);
+    reset_button->click();
 
-    EXPECT_EQ(algorithmCombo->currentData().toString(), QStringLiteral("disk"));
+    EXPECT_EQ(algorithm_combo->currentData().toString(), QStringLiteral("disk"));
+}
+
+TEST(FeatureExtractionDialogTest, ResetDefaultsEmitsSingleFinalSettings)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject settings;
+    settings[QStringLiteral("feature_algorithm")] = QStringLiteral("aliked");
+    settings[QStringLiteral("device")] = QStringLiteral("CPU");
+    settings[QStringLiteral("cuda_device")] = 3;
+    settings[QStringLiteral("max_num_keypoints")] = 512;
+    settings[QStringLiteral("grayscale_min_px")] = 20;
+    settings[QStringLiteral("grayscale_max_px")] = 200;
+    settings[QStringLiteral("model_path")] = QStringLiteral("E:/models/custom_aliked.torchscript");
+    settings[QStringLiteral("output_dir")] = QStringLiteral("E:/tmp/custom_feature_output");
+    dialog.applySettings(settings);
+
+    QSignalSpy settings_spy(&dialog, &FeatureExtractionDialog::settingsChanged);
+    QPushButton *reset_button = dialog.findChild<QPushButton *>(QStringLiteral("m_resetBtn"));
+    ASSERT_NE(reset_button, nullptr);
+    reset_button->click();
+    QApplication::processEvents();
+
+    ASSERT_EQ(settings_spy.count(), 1);
+    const QJsonObject emitted_settings = settings_spy.takeFirst().at(0).toJsonObject();
+    EXPECT_EQ(emitted_settings.value(QStringLiteral("feature_algorithm")).toString(), QStringLiteral("disk"));
+    EXPECT_EQ(emitted_settings.value(QStringLiteral("device")).toString(), QStringLiteral("CUDA"));
+    EXPECT_EQ(emitted_settings.value(QStringLiteral("cuda_device")).toInt(), 0);
+    EXPECT_EQ(emitted_settings.value(QStringLiteral("max_num_keypoints")).toInt(), -1);
+    EXPECT_EQ(emitted_settings.value(QStringLiteral("grayscale_min_px")).toInt(), 5);
+    EXPECT_EQ(emitted_settings.value(QStringLiteral("grayscale_max_px")).toInt(), 255);
+    EXPECT_TRUE(emitted_settings.value(QStringLiteral("model_path")).toString().contains(QStringLiteral("disk_extractor")))
+        << qPrintable(emitted_settings.value(QStringLiteral("model_path")).toString());
+    EXPECT_FALSE(emitted_settings.value(QStringLiteral("model_path")).toString().contains(QStringLiteral("custom_aliked")));
+    EXPECT_TRUE(emitted_settings.value(QStringLiteral("output_dir")).toString().isEmpty());
+
+    QLabel *advanced_hint_label = dialog.findChild<QLabel *>(QStringLiteral("m_advancedHintLabel"));
+    ASSERT_NE(advanced_hint_label, nullptr);
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("不限")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("5-255")));
 }
 
 TEST(FeatureExtractionDialogTest, GrayscaleThresholdLivesInAdvancedParameters)
@@ -6886,6 +6926,190 @@ TEST(FeatureExtractionDialogTest, DiskSelectionShowsAdvancedApplicabilityHint)
     QLabel *advancedHintLabel = findLabelContaining(&dialog, QStringLiteral("DISK/ALIKED"));
     ASSERT_NE(advancedHintLabel, nullptr);
     EXPECT_TRUE(advancedHintLabel->isVisibleTo(&dialog));
+}
+
+TEST(FeatureExtractionDialogTest, AdvancedHintShowsEffectiveConfigurationPreview)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject settings;
+    settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    settings[QStringLiteral("max_num_keypoints")] = 2048;
+    dialog.applySettings(settings);
+
+    QLabel *advanced_hint_label = dialog.findChild<QLabel *>(QStringLiteral("m_advancedHintLabel"));
+    ASSERT_NE(advanced_hint_label, nullptr);
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("有效配置")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("DISK")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("CUDA")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("2048")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("模型")));
+
+    QComboBox *device_combo = dialog.findChild<QComboBox *>(QStringLiteral("m_deviceCombo"));
+    ASSERT_NE(device_combo, nullptr);
+    device_combo->setCurrentText(QStringLiteral("CPU"));
+    QApplication::processEvents();
+
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("CPU")));
+    EXPECT_FALSE(advanced_hint_label->text().contains(QStringLiteral("CUDA")));
+}
+
+TEST(FeatureExtractionDialogTest, ApplySettingsRefreshesPreviewForRestoredModelPath)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject settings;
+    settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    settings[QStringLiteral("model_path")] = QStringLiteral("E:/models/custom_disk_cuda.torchscript");
+    dialog.applySettings(settings);
+
+    QLabel *advanced_hint_label = dialog.findChild<QLabel *>(QStringLiteral("m_advancedHintLabel"));
+    ASSERT_NE(advanced_hint_label, nullptr);
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("custom_disk_cuda.torchscript")))
+        << qPrintable(advanced_hint_label->text());
+}
+
+TEST(FeatureExtractionDialogTest, ApplySettingsRestoresModelPathWithoutPartialSignal)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject initial_settings;
+    initial_settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    initial_settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    dialog.applySettings(initial_settings);
+
+    QSignalSpy settings_spy(&dialog, &FeatureExtractionDialog::settingsChanged);
+
+    QJsonObject restored_settings;
+    restored_settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    restored_settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    restored_settings[QStringLiteral("model_path")] = QStringLiteral("E:/models/restored_disk_cuda.torchscript");
+    dialog.applySettings(restored_settings);
+    QApplication::processEvents();
+
+    EXPECT_EQ(settings_spy.count(), 0);
+
+    QLineEdit *model_path_edit = dialog.findChild<QLineEdit *>(QStringLiteral("m_modelPathEdit"));
+    ASSERT_NE(model_path_edit, nullptr);
+    EXPECT_EQ(model_path_edit->text(), QStringLiteral("E:/models/restored_disk_cuda.torchscript"));
+}
+
+TEST(FeatureExtractionDialogTest, ExplicitEmptyModelPathClearsPreviousCustomPath)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject custom_settings;
+    custom_settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    custom_settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    custom_settings[QStringLiteral("model_path")] = QStringLiteral("E:/models/old_custom_disk.torchscript");
+    dialog.applySettings(custom_settings);
+
+    QJsonObject empty_model_settings;
+    empty_model_settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    empty_model_settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    empty_model_settings[QStringLiteral("model_path")] = QString();
+    dialog.applySettings(empty_model_settings);
+
+    QLineEdit *model_path_edit = dialog.findChild<QLineEdit *>(QStringLiteral("m_modelPathEdit"));
+    ASSERT_NE(model_path_edit, nullptr);
+    EXPECT_FALSE(model_path_edit->text().contains(QStringLiteral("old_custom_disk")));
+    EXPECT_TRUE(model_path_edit->text().contains(QStringLiteral("disk_extractor")))
+        << qPrintable(model_path_edit->text());
+}
+
+TEST(FeatureExtractionDialogTest, ApplySettingsDoesNotEmitIntermediateChanges)
+{
+    FeatureExtractionDialog dialog;
+
+    QSignalSpy settings_spy(&dialog, &FeatureExtractionDialog::settingsChanged);
+
+    QJsonObject settings;
+    settings[QStringLiteral("feature_algorithm")] = QStringLiteral("aliked");
+    settings[QStringLiteral("device")] = QStringLiteral("CPU");
+    settings[QStringLiteral("cuda_device")] = 2;
+    settings[QStringLiteral("max_num_keypoints")] = 1024;
+    settings[QStringLiteral("grayscale_min_px")] = 12;
+    settings[QStringLiteral("grayscale_max_px")] = 240;
+    settings[QStringLiteral("python_executable")] = QStringLiteral("E:/venv/python.exe");
+    settings[QStringLiteral("output_dir")] = QStringLiteral("E:/tmp/plascan_features");
+    dialog.applySettings(settings);
+    QApplication::processEvents();
+
+    EXPECT_EQ(settings_spy.count(), 0);
+
+    QLabel *advanced_hint_label = dialog.findChild<QLabel *>(QStringLiteral("m_advancedHintLabel"));
+    ASSERT_NE(advanced_hint_label, nullptr);
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("ALIKED")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("CPU")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("1024")));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("12-240")));
+}
+
+TEST(FeatureExtractionDialogTest, PartialApplySettingsDoesNotResetGrayscaleRange)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject full_settings;
+    full_settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    full_settings[QStringLiteral("grayscale_min_px")] = 18;
+    full_settings[QStringLiteral("grayscale_max_px")] = 210;
+    dialog.applySettings(full_settings);
+
+    QJsonObject output_patch;
+    output_patch[QStringLiteral("output_dir")] = QStringLiteral("E:/tmp/plascan_features");
+    dialog.applySettings(output_patch);
+
+    QSpinBox *grayscale_min_spin = dialog.findChild<QSpinBox *>(QStringLiteral("m_grayscaleMinSpin"));
+    QSpinBox *grayscale_max_spin = dialog.findChild<QSpinBox *>(QStringLiteral("m_grayscaleMaxSpin"));
+    ASSERT_NE(grayscale_min_spin, nullptr);
+    ASSERT_NE(grayscale_max_spin, nullptr);
+    EXPECT_EQ(grayscale_min_spin->value(), 18);
+    EXPECT_EQ(grayscale_max_spin->value(), 210);
+}
+
+TEST(FeatureExtractionDialogTest, ModelPathTextChangeRefreshesPreviewAndSettings)
+{
+    FeatureExtractionDialog dialog;
+
+    QJsonObject settings;
+    settings[QStringLiteral("feature_algorithm")] = QStringLiteral("disk");
+    settings[QStringLiteral("device")] = QStringLiteral("CUDA");
+    dialog.applySettings(settings);
+
+    QLabel *advanced_hint_label = dialog.findChild<QLabel *>(QStringLiteral("m_advancedHintLabel"));
+    ASSERT_NE(advanced_hint_label, nullptr);
+
+    QLineEdit *model_path_edit = dialog.findChild<QLineEdit *>(QStringLiteral("m_modelPathEdit"));
+    ASSERT_NE(model_path_edit, nullptr);
+
+    QSignalSpy settings_spy(&dialog, &FeatureExtractionDialog::settingsChanged);
+    model_path_edit->setText(QStringLiteral("E:/models/manual_disk_cuda.torchscript"));
+    QApplication::processEvents();
+
+    ASSERT_EQ(settings_spy.count(), 1);
+    const QJsonObject emitted_settings = settings_spy.takeFirst().at(0).toJsonObject();
+    EXPECT_EQ(emitted_settings.value(QStringLiteral("model_path")).toString(),
+              QStringLiteral("E:/models/manual_disk_cuda.torchscript"));
+    EXPECT_TRUE(advanced_hint_label->text().contains(QStringLiteral("manual_disk_cuda.torchscript")))
+        << qPrintable(advanced_hint_label->text());
+}
+
+TEST(FeatureExtractionDialogTest, AlgorithmChangeEmitsSettingsOnce)
+{
+    FeatureExtractionDialog dialog;
+
+    QComboBox *algorithm_combo = dialog.findChild<QComboBox *>(QStringLiteral("m_algorithmCombo"));
+    ASSERT_NE(algorithm_combo, nullptr);
+
+    QSignalSpy settings_spy(&dialog, &FeatureExtractionDialog::settingsChanged);
+    const int aliked_index = algorithm_combo->findData(QStringLiteral("aliked"));
+    ASSERT_GE(aliked_index, 0);
+    algorithm_combo->setCurrentIndex(aliked_index);
+    QApplication::processEvents();
+
+    EXPECT_EQ(settings_spy.count(), 1);
 }
 
 TEST(FeatureExtractionDialogTest, PreservesConfiguredPythonExecutable)
@@ -7658,6 +7882,24 @@ TEST(MenuWorkflowControllerTest, DenseStageAdvancesOnMvsSuccessWithoutRequiringC
     EXPECT_TRUE(source.contains(QStringLiteral("startThreeDReconstructionDenseRefineStage(settings)")));
     EXPECT_TRUE(source.contains(QStringLiteral("startDenseCloudRefineAsync(refineSettings)")));
     EXPECT_TRUE(source.contains(QStringLiteral("startThreeDReconstructionMeshStage(settings)")));
+}
+
+TEST(MenuWorkflowControllerTest, FeatureExtractionDefaultOutputDoesNotOverwriteSavedOutputDir)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int function_start = source.indexOf(QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"));
+    ASSERT_GE(function_start, 0);
+    const int next_function = source.indexOf(QStringLiteral("void MenuWorkflowController::openVocabularyOverlapDialog"),
+                                             function_start);
+    ASSERT_GT(next_function, function_start);
+    const QString function_body = source.mid(function_start, next_function - function_start);
+
+    EXPECT_TRUE(function_body.contains(QStringLiteral("saved.value(QStringLiteral(\"output_dir\")).toString().isEmpty()")))
+        << "Feature extraction should keep a user-saved output_dir instead of always replacing it with assets/ip.";
+    EXPECT_TRUE(function_body.contains(QStringLiteral("defaultOutput = saved")))
+        << "The default output patch should preserve other loaded feature extraction settings.";
 }
 
 TEST(AerialTriangulationWorkflowTest, MainWindowWiresSparseOnlyAerialTriangulationAction)
