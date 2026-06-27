@@ -17,6 +17,7 @@
 #include <QFileInfo>
 #include <QJsonArray>
 #include <QMessageBox>
+#include <QPointer>
 
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
 using xjw::gui::project::findLatestAtResultIndex;
@@ -91,7 +92,8 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
         }
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(_owner->currentProjectPath());
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
     const bool overwriteExistingResult = settings.value(QStringLiteral("overwriteExistingResult")).toBool(false);
     int replaceIndex = -1;
     QString outputDir;
@@ -125,15 +127,22 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
 
     emit atProgressChanged(QStringLiteral("正在构建两视预览云..."), 10);
 
+    QPointer<ProjectManager> ownerGuard(_owner);
     xjw::gui::tasks::runGuarded(
         this,
         [mergedMeta, selectedImages, options]()
         {
             return xjw::core::project::TriangulationService::run(mergedMeta, selectedImages, options);
         },
-        [selectedImages, options, replaceIndex](ProjectSparseReconstructionManager *self,
-                                                const xjw::core::project::TriangulationServiceResult &result)
+        [selectedImages, options, replaceIndex, ownerGuard, projectPath](
+            ProjectSparseReconstructionManager *self,
+            const xjw::core::project::TriangulationServiceResult &result)
         {
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                return;
+            }
+
             if (!result.success)
             {
                 emit self->atProgressFinished(false);
@@ -247,7 +256,8 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
         context = contextResult.context;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(_owner->currentProjectPath());
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
+    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
     const QString outputDir = QDir(assetsDir).filePath(
         QStringLiteral("aerial_triangulation/%1_%2")
             .arg(spec.outputDirPrefix,
@@ -255,15 +265,21 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
 
     emit atProgressChanged(spec.progressMessage, 20);
 
+    QPointer<ProjectManager> ownerGuard(_owner);
     xjw::gui::tasks::runGuarded(
         this,
         [kind, context, settings, outputDir]()
         {
             return runSparsePointWorkflowResult(kind, context, settings, outputDir);
         },
-        [spec, context](ProjectSparseReconstructionManager *self,
-                        const SparsePointWorkflowResult &workflowResult)
+        [spec, context, ownerGuard, projectPath](ProjectSparseReconstructionManager *self,
+                                                 const SparsePointWorkflowResult &workflowResult)
         {
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                return;
+            }
+
             if (!workflowResult.status.ok)
             {
                 emit self->atProgressFinished(false);

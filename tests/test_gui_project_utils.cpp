@@ -8931,6 +8931,13 @@ TEST(ProjectTriangulationUiTest, SparseManagerLongTasksUseGuardedRunner)
         << "Two-view preview triangulation should not launch open-coded background work.";
     EXPECT_TRUE(triangulationBody.contains(QStringLiteral("xjw::core::project::TriangulationService::run")))
         << "The guarded worker should still run the triangulation service off the GUI thread.";
+    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")))
+        << "Triangulation completion must guard the owning ProjectManager.";
+    EXPECT_TRUE(triangulationBody.contains(
+        QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString();")))
+        << "Triangulation output must be tied to the project active at launch.";
+    EXPECT_TRUE(triangulationBody.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
+        << "Triangulation must not append AT results after switching projects.";
     EXPECT_FALSE(triangulationBody.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
         << "Open-coded QtConcurrent can race with manager destruction.";
 
@@ -8943,6 +8950,13 @@ TEST(ProjectTriangulationUiTest, SparseManagerLongTasksUseGuardedRunner)
         << "Sparse post-processing workflows should share the guarded GUI task runner.";
     EXPECT_TRUE(workflowBody.contains(QStringLiteral("runSparsePointWorkflowResult")))
         << "The guarded worker should still run the sparse point workflow off the GUI thread.";
+    EXPECT_TRUE(workflowBody.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")))
+        << "Sparse post-processing completion must guard the owning ProjectManager.";
+    EXPECT_TRUE(workflowBody.contains(
+        QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString();")))
+        << "Sparse post-processing output must be tied to the project active at launch.";
+    EXPECT_TRUE(workflowBody.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
+        << "Sparse post-processing must not append AT results after switching projects.";
     EXPECT_FALSE(workflowBody.contains(QStringLiteral("(void)QtConcurrent::run([self,")))
         << "Open-coded QtConcurrent can race with manager destruction.";
 }
