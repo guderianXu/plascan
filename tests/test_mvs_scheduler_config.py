@@ -205,16 +205,25 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
 
         self.assertGreaterEqual(manager.count("QPointer<DepthMapGenerator> genSelf(gen)"), 2)
-        self.assertGreaterEqual(manager.count("QtConcurrent::run([genSelf, sparseXyz, views, request]()"), 2)
+        self.assertGreaterEqual(
+            manager.count("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()"),
+            2,
+        )
+        self.assertGreaterEqual(
+            manager.count("QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]()"),
+            2,
+        )
+        self.assertGreaterEqual(manager.count("self->_owner->currentProjectPath() != projectPath"), 2)
         self.assertGreaterEqual(manager.count("if (genSelf->isCancelled())"), 2)
         self.assertGreaterEqual(manager.count("return;"), 2)
         self.assertGreaterEqual(manager.count('QMetaObject::invokeMethod(genSelf.data(), "finished"'), 2)
         self.assertGreaterEqual(
-            manager.count("QMetaObject::invokeMethod(genSelf.data(), [genSelf, sparseCloud]()"),
+            manager.count("QMetaObject::invokeMethod(genSelf.data(), [self, genSelf, sparseCloud, projectPath]()"),
             2,
         )
         self.assertIn("Q_ARG(bool, false)", manager)
         self.assertNotIn("QtConcurrent::run([gen, sparseXyz, views, request]()", manager)
+        self.assertNotIn("QtConcurrent::run([genSelf, sparseXyz, views, request]()", manager)
         self.assertNotIn("gen->setSparseCloud(sparse)", manager)
         self.assertNotIn('QMetaObject::invokeMethod(gen, "start"', manager)
 
