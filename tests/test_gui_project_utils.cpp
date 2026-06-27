@@ -1806,8 +1806,13 @@ TEST(GuiAsyncLifetimeTest, FeatureExtractionRunnerUsesGuardedProjectManagerCallb
 
     EXPECT_TRUE(runnerHeader.contains(QStringLiteral("QPointer<ProjectManager> projectManager")));
     EXPECT_TRUE(runnerSource.contains(QStringLiteral("QPointer<ProjectManager> projectManager")));
+    EXPECT_TRUE(runnerSource.contains(
+        QStringLiteral("const QString projectPath = projectManager ? projectManager->currentProjectPath() : QString();")))
+        << "Feature extraction must bind metadata writes to the project active at launch.";
     EXPECT_TRUE(runnerSource.contains(QStringLiteral("QMetaObject::invokeMethod(projectManager.data()")));
-    EXPECT_TRUE(runnerSource.contains(QStringLiteral("[projectManager, imagePath, outputPath, config]()")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("[projectManager, projectPath, imagePath, outputPath, config]()")));
+    EXPECT_TRUE(runnerSource.contains(QStringLiteral("projectManager->currentProjectPath() != projectPath")))
+        << "Queued feature metadata writes must be ignored after switching projects.";
     EXPECT_FALSE(runnerSource.contains(QStringLiteral("QMetaObject::invokeMethod(projectManager, \"appendIpfindResult\"")));
 
     EXPECT_TRUE(menuBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(_projectManager)")));

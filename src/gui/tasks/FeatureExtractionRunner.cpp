@@ -174,6 +174,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
                             std::atomic<int> &progressCount)
 {
     const QString featureAlgorithm = normalizedFeatureAlgorithm(config);
+    const QString projectPath = projectManager ? projectManager->currentProjectPath() : QString();
     const QString fileSuffix = QString::fromStdString(
         ExtractorSuffix::forAlgorithm(featureAlgorithm.toStdString()));
     LOG_INFO("%s", qUtf8Printable(QString("开始特征提取(%1): %2 张影像, 后缀=%3")
@@ -190,7 +191,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
             LOG_ERROR("%s", qUtf8Printable(QString("特征提取缺少输出目录，且项目已关闭或 ProjectManager 不可用")));
             return false;
         }
-        const QString assetsDir = ProjectIO::projectAssetsDir(projectManager->currentProjectPath());
+        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
         outputDir = QDir(assetsDir).filePath(QStringLiteral("ip"));
     }
     
@@ -447,9 +448,9 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
                     {
                         // 使用主线程进行元数据更新，避免并发写入问题
                         QMetaObject::invokeMethod(projectManager.data(),
-                                                  [projectManager, imagePath, outputPath, config]()
+                                                  [projectManager, projectPath, imagePath, outputPath, config]()
                         {
-                            if (!projectManager)
+                            if (!projectManager || projectManager->currentProjectPath() != projectPath)
                             {
                                 return;
                             }
