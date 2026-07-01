@@ -168,3 +168,17 @@ TEST(IncrementalSfmParamsTest, NegativeDepthFilterEnabled)
     EXPECT_TRUE(opts.filterNegativeDepth)
         << "Negative depth filtering should be enabled by default";
 }
+
+TEST(IncrementalSfmParamsTest, KnownPoseBaUsesSoftPriorsAndKeepsIntrinsicsFixed)
+{
+    IncrementalSfmOptions opts;
+
+    EXPECT_TRUE(opts.refineKnownCameraPoseWithSoftPrior)
+        << "Known external orientations should be soft priors, not hard-fixed poses";
+    EXPECT_TRUE(opts.keepIntrinsicsFixedInKnownPoseBa)
+        << "Aerial weak-geometry BA should not release intrinsics in the first pass";
+    EXPECT_GT(opts.knownPosePriorPositionSigmaScale, 0.0)
+        << "Soft pose prior needs a positive adaptive sigma scale";
+    EXPECT_GT(opts.knownPosePriorRotationSigmaDegrees, 0.0)
+        << "Soft pose prior needs a positive rotation sigma";
+}

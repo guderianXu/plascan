@@ -9,6 +9,7 @@
 #include <QFile>
 #include <QDataStream>
 #include <QDebug>
+#include <cmath>
 #include <cstring>
 
 namespace
@@ -28,6 +29,8 @@ const MagicEntry MAGIC_TABLE[] = {
     {{'O','R','B','B'}, "orb"},
     {{'A','K','Z','B'}, "akaze"},
 };
+
+constexpr quint32 kCurrentFeatureFileVersion = 2;
 
 const char magicForAlgo(const std::string &algo)
 {
@@ -72,7 +75,7 @@ bool FeatureFileIO::write(const QString& path, const QString& image_name,
     out.setFloatingPointPrecision(QDataStream::SinglePrecision);
 
     writeMagic(out, algoName);
-    out << quint32(1);  // version
+    out << kCurrentFeatureFileVersion;  // version 2 stores keypoint scale/orientation.
 
     QByteArray nameBytes = image_name.toUtf8();
     out << quint32(nameBytes.size());
@@ -82,9 +85,15 @@ bool FeatureFileIO::write(const QString& path, const QString& image_name,
     out << N;
     for (quint32 i = 0; i < N; ++i)
     {
-        out << float(output.keypoints[i].pt.x);
-        out << float(output.keypoints[i].pt.y);
-        out << float(output.scores[i]);
+        const cv::KeyPoint &keypoint = output.keypoints[i];
+        const float score = i < static_cast<quint32>(output.scores.size())
+            ? output.scores[i]
+            : keypoint.response;
+        out << float(keypoint.pt.x);
+        out << float(keypoint.pt.y);
+        out << float(score);
+        out << float(keypoint.size);
+        out << float(keypoint.angle);
     }
 
     if (!output.descriptors.defined() || output.descriptors.numel() == 0)
@@ -126,6 +135,11 @@ bool FeatureFileIO::read(const QString& path, QString& image_name, FeatureOutput
     if (!algo) { file.close(); return false; }
 
     quint32 version; in >> version;
+    if (version < 1 || version > kCurrentFeatureFileVersion)
+    {
+        file.close();
+        return false;
+    }
     quint32 nameLen; in >> nameLen;
     QByteArray nameBytes(nameLen, 0);
     if (in.readRawData(nameBytes.data(), nameLen) != int(nameLen)) { file.close(); return false; }
@@ -135,9 +149,22 @@ bool FeatureFileIO::read(const QString& path, QString& image_name, FeatureOutput
     output.keypoints.clear(); output.scores.clear();
     for (quint32 i = 0; i < N; ++i)
     {
-        float x, y, s; in >> x >> y >> s;
+        float x = 0.0f;
+        float y = 0.0f;
+        float s = 0.0f;
+        float size = 8.0f;
+        float angle = -1.0f;
+        in >> x >> y >> s;
+        if (version >= 2)
+        {
+            in >> size >> angle;
+        }
         cv::KeyPoint kp;
-        kp.pt.x = x; kp.pt.y = y; kp.response = s; kp.size = 8.0f;
+        kp.pt.x = x;
+        kp.pt.y = y;
+        kp.response = s;
+        kp.size = (std::isfinite(size) && size > 0.0f) ? size : 8.0f;
+        kp.angle = std::isfinite(angle) ? angle : -1.0f;
         output.keypoints.push_back(kp);
         output.scores.push_back(s);
     }

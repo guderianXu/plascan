@@ -2,6 +2,7 @@ import contextlib
 import importlib.util
 import io
 import json
+import struct
 import sys
 import tempfile
 import unittest
@@ -37,6 +38,26 @@ def write_ascii_ply(path: Path, rows: list[str]) -> None:
         ]),
         encoding="utf-8",
     )
+
+
+def write_binary_ply(path: Path, vertices: list[tuple[float, float, float, int, int, int]]) -> None:
+    header = "\n".join([
+        "ply",
+        "format binary_little_endian 1.0",
+        f"element vertex {len(vertices)}",
+        "property float x",
+        "property float y",
+        "property float z",
+        "property uchar red",
+        "property uchar green",
+        "property uchar blue",
+        "end_header",
+        "",
+    ]).encode("ascii")
+    with path.open("wb") as handle:
+        handle.write(header)
+        for vertex in vertices:
+            handle.write(struct.pack("<fffBBB", *vertex))
 
 
 class ComparePointCloudToLidarTest(unittest.TestCase):
@@ -162,6 +183,172 @@ class ComparePointCloudToLidarTest(unittest.TestCase):
             self.assertFalse(gate["passed"])
             self.assertIn("reference_coverage_below_threshold", gate["failure_codes"])
 
+    def test_compare_reports_signed_vertical_error_to_reference_surface(self):
+        comparator = load_comparator()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "rough_reconstruction.xyz"
+            reference = root / "flat_reference.xyz"
+            source.write_text(
+                "\n".join([
+                    "0.00 0.00 1.00",
+                    "1.00 0.00 -2.00",
+                ]),
+                encoding="utf-8",
+            )
+            reference.write_text(
+                "\n".join([
+                    "0.00 0.00 0.00",
+                    "1.00 0.00 0.00",
+                ]),
+                encoding="utf-8",
+            )
+
+            comparison = comparator.compare_point_clouds(source, reference, nearest_neighbor_method="kd-tree")
+
+            vertical = comparison["vertical_error_m"]
+            self.assertAlmostEqual(vertical["mean_signed"], -0.5)
+            self.assertAlmostEqual(vertical["mean_abs"], 1.5)
+            self.assertAlmostEqual(vertical["rmse"], (1.0 + 4.0) ** 0.5 / (2 ** 0.5))
+            self.assertAlmostEqual(vertical["p95_abs"], 2.0)
+
+    def test_vertical_error_quality_gate_catches_rough_surface(self):
+        comparator = load_comparator()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "rough_reconstruction.xyz"
+            reference = root / "flat_reference.xyz"
+            source.write_text("0 0 1\n1 0 -2\n", encoding="utf-8")
+            reference.write_text("0 0 0\n1 0 0\n", encoding="utf-8")
+
+            comparison = comparator.compare_point_clouds(
+                source,
+                reference,
+                max_vertical_rmse_m=1.0,
+                max_vertical_p95_m=1.5,
+            )
+
+            gate = comparison["quality_gate"]
+            self.assertFalse(gate["passed"])
+            self.assertIn("vertical_rmse_above_threshold", gate["failure_codes"])
+            self.assertIn("vertical_p95_above_threshold", gate["failure_codes"])
+            self.assertEqual(gate["thresholds"]["max_vertical_rmse_m"], 1.0)
+            self.assertEqual(gate["thresholds"]["max_vertical_p95_m"], 1.5)
+
+    def test_local_roughness_gate_catches_thick_terrain_cloud(self):
+        comparator = load_comparator()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "thick_reconstruction.xyz"
+            reference = root / "flat_metashape_reference.xyz"
+            source.write_text(
+                "\n".join([
+                    "0.00 0.00 0.00",
+                    "0.10 0.00 0.02",
+                    "0.00 0.10 0.04",
+                    "0.10 0.10 1.20",
+                    "1.00 0.00 0.00",
+                    "1.10 0.00 0.01",
+                    "1.00 0.10 0.03",
+                    "1.10 0.10 0.04",
+                ]),
+                encoding="utf-8",
+            )
+            reference.write_text(
+                "\n".join([
+                    "0.00 0.00 0.00",
+                    "0.10 0.00 0.01",
+                    "0.00 0.10 0.02",
+                    "0.10 0.10 0.03",
+                    "1.00 0.00 0.00",
+                    "1.10 0.00 0.01",
+                    "1.00 0.10 0.02",
+                    "1.10 0.10 0.03",
+                ]),
+                encoding="utf-8",
+            )
+
+            comparison = comparator.compare_point_clouds(
+                source,
+                reference,
+                roughness_grid_cells=1,
+                roughness_min_cell_points=3,
+                max_local_z_range_p95_m=0.25,
+            )
+
+            source_roughness = comparison["source_local_roughness"]
+            reference_roughness = comparison["reference_local_roughness"]
+            self.assertGreater(source_roughness["z_range_in_cell"]["p95"], 1.0)
+            self.assertLess(reference_roughness["z_range_in_cell"]["p95"], 0.05)
+            gate = comparison["quality_gate"]
+            self.assertFalse(gate["passed"])
+            self.assertIn("local_z_range_p95_above_threshold", gate["failure_codes"])
+            self.assertEqual(gate["thresholds"]["max_local_z_range_p95_m"], 0.25)
+
+    def test_improvement_report_compares_raw_refined_and_reference_clouds(self):
+        comparator = load_comparator()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            raw = root / "dense_cloud_raw.xyz"
+            refined = root / "dense_cloud_refined.xyz"
+            reference = root / "metashape_reference.xyz"
+            raw.write_text(
+                "\n".join([
+                    "0.00 0.00 0.00",
+                    "0.10 0.00 0.03",
+                    "0.00 0.10 0.05",
+                    "0.10 0.10 1.20",
+                    "1.00 0.00 0.00",
+                    "1.10 0.00 0.04",
+                    "1.00 0.10 0.06",
+                    "1.10 0.10 1.10",
+                ]),
+                encoding="utf-8",
+            )
+            refined.write_text(
+                "\n".join([
+                    "0.00 0.00 0.00",
+                    "0.10 0.00 0.03",
+                    "0.00 0.10 0.05",
+                    "0.10 0.10 0.07",
+                    "1.00 0.00 0.00",
+                    "1.10 0.00 0.04",
+                    "1.00 0.10 0.06",
+                    "1.10 0.10 0.08",
+                ]),
+                encoding="utf-8",
+            )
+            reference.write_text(
+                "\n".join([
+                    "0.00 0.00 0.00",
+                    "0.10 0.00 0.02",
+                    "0.00 0.10 0.04",
+                    "0.10 0.10 0.06",
+                    "1.00 0.00 0.00",
+                    "1.10 0.00 0.03",
+                    "1.00 0.10 0.05",
+                    "1.10 0.10 0.07",
+                ]),
+                encoding="utf-8",
+            )
+
+            report = comparator.compare_point_cloud_improvement(
+                raw,
+                refined,
+                reference,
+                roughness_grid_cells=1,
+                roughness_min_cell_points=3,
+                max_local_z_range_p95_m=0.25,
+                min_local_z_range_p95_improvement_percent=80.0,
+            )
+
+            self.assertEqual(report["baseline"]["source"], str(raw))
+            self.assertEqual(report["candidate"]["source"], str(refined))
+            self.assertFalse(report["baseline"]["quality_gate"]["passed"])
+            self.assertTrue(report["candidate"]["quality_gate"]["passed"])
+            self.assertGreater(report["improvement"]["local_z_range_p95_reduction_percent"], 90.0)
+            self.assertTrue(report["quality_gate"]["passed"])
+
     def test_cli_accepts_explicit_kd_tree_nearest_neighbor_method(self):
         comparator = load_comparator()
         with tempfile.TemporaryDirectory() as tmp:
@@ -258,25 +445,49 @@ class ComparePointCloudToLidarTest(unittest.TestCase):
             self.assertFalse(output_json.exists())
             self.assertIn("coverage radius", stderr.getvalue())
 
-    def test_parser_rejects_binary_ply(self):
+    def test_binary_ply_reader_supports_sampling_and_extra_properties(self):
         comparator = load_comparator()
         with tempfile.TemporaryDirectory() as tmp:
             path = Path(tmp) / "binary.ply"
-            path.write_text(
-                "\n".join([
-                    "ply",
-                    "format binary_little_endian 1.0",
-                    "element vertex 1",
-                    "property double x",
-                    "property double y",
-                    "property double z",
-                    "end_header",
-                ]),
-                encoding="utf-8",
+            write_binary_ply(path, [
+                (0.0, 0.0, 0.0, 255, 0, 0),
+                (10.0, 0.0, 0.0, 0, 255, 0),
+                (20.0, 0.0, 0.0, 0, 0, 255),
+            ])
+
+            points = comparator.read_ply_points(path, max_points=2)
+
+            self.assertEqual(points, [(0.0, 0.0, 0.0), (20.0, 0.0, 0.0)])
+
+    def test_compare_binary_ply_clouds_can_limit_large_inputs(self):
+        comparator = load_comparator()
+        with tempfile.TemporaryDirectory() as tmp:
+            root = Path(tmp)
+            source = root / "candidate_binary.ply"
+            reference = root / "reference_binary.ply"
+            write_binary_ply(source, [
+                (0.25, 0.0, 0.0, 255, 0, 0),
+                (9.50, 0.0, 0.0, 0, 255, 0),
+                (30.0, 0.0, 0.0, 0, 0, 255),
+            ])
+            write_binary_ply(reference, [
+                (0.0, 0.0, 0.0, 255, 255, 255),
+                (10.0, 0.0, 0.0, 255, 255, 255),
+                (30.0, 0.0, 0.0, 255, 255, 255),
+            ])
+
+            comparison = comparator.compare_point_clouds(
+                source,
+                reference,
+                max_source_points=2,
+                max_reference_points=2,
             )
 
-            with self.assertRaisesRegex(ValueError, "only ASCII PLY"):
-                comparator.read_ascii_ply_points(path)
+            self.assertEqual(comparison["source_points"], 2)
+            self.assertEqual(comparison["reference_points"], 2)
+            self.assertEqual(comparison["sampling"]["max_source_points"], 2)
+            self.assertEqual(comparison["sampling"]["max_reference_points"], 2)
+            self.assertAlmostEqual(comparison["distance_m"]["p95"], 0.25)
 
 
 if __name__ == "__main__":

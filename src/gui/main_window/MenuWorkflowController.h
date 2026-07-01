@@ -103,7 +103,10 @@ private:
         int imageCount = 0;
         bool hasFeatures = false;
         bool hasMatches = false;
+        bool blockOnMatchQuality = false;
+        QJsonObject prerequisiteReport;
         QStringList missingMessages;
+        QStringList warningMessages;
     };
 
     static SparsePrerequisiteSummary summarizeSparsePrerequisites(const QStringList &images,

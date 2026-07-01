@@ -20,15 +20,15 @@ namespace
 class TraditionalAdapter : public IExtractor
 {
 public:
-    TraditionalAdapter(const std::string &algo, const SuperPointConfig &cfg)
-        : _algorithm(algo), _config(cfg)
+    TraditionalAdapter(const std::string &algo, const SuperPointConfig &cfg, bool useCuda, int cudaDevice)
+        : _algorithm(algo), _config(cfg), _useCuda(useCuda), _cudaDevice(cudaDevice)
     {
     }
 
     FeatureOutput extract(const cv::Mat &gray) override
     {
         return xjw::feature_extractors::TraditionalFeatureExtractor::detect(
-            gray, _config, _algorithm);
+            gray, _config, _algorithm, _useCuda, _cudaDevice);
     }
 
     std::string algorithmName() const override
@@ -39,6 +39,8 @@ public:
 private:
     std::string _algorithm;
     SuperPointConfig _config;
+    bool _useCuda = false;
+    int _cudaDevice = 0;
 };
 } // anonymous
 
@@ -62,7 +64,7 @@ std::unique_ptr<IExtractor> createExtractor(const std::string &algo,
         spCfg.grayscale_max       = cfg.grayscaleMax;
         spCfg.allow_device_fallback = true;
 
-        return std::make_unique<TraditionalAdapter>(norm, spCfg);
+        return std::make_unique<TraditionalAdapter>(norm, spCfg, cfg.useCuda, cfg.cudaDevice);
     }
 
     // 深度学习提取器

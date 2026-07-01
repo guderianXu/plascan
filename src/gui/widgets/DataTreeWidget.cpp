@@ -59,6 +59,37 @@ int mvsDepthResultCount(const QJsonArray &depthResults)
     return count;
 }
 
+bool isDisplayableMeshResult(const QJsonObject &record)
+{
+    if (record.contains(QStringLiteral("face_count")) &&
+        record.value(QStringLiteral("face_count")).toInt(0) <= 0)
+    {
+        return false;
+    }
+
+    return !record.value(QStringLiteral("final_model_path")).toString().isEmpty()
+        || !record.value(QStringLiteral("model_obj")).toString().isEmpty()
+        || !record.value(QStringLiteral("model_ply")).toString().isEmpty()
+        || !record.value(QStringLiteral("mesh_ply")).toString().isEmpty();
+}
+
+int displayableMeshResultCount(const QJsonArray &modelResults)
+{
+    int count = 0;
+    for (const QJsonValue &value : modelResults)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+        if (isDisplayableMeshResult(value.toObject()))
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
 bool isTreeResultKey(const QString &key)
 {
     return key == QStringLiteral("ipfind_results")
@@ -535,7 +566,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     }
 
     const int denseCount = denseResults.size();
-    const int modelCount = modelResults.size() + _transientModels.size();
+    const int modelCount = displayableMeshResultCount(modelResults) + _transientModels.size();
 
     // ── 保存展开状态 ──────────────────────────────────────────────────────
     QSet<QString> expandedSections;
@@ -641,6 +672,7 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     for (const QJsonValue &v : modelResults) {
         if (!v.isObject()) continue;
         const QJsonObject obj = v.toObject();
+        if (!isDisplayableMeshResult(obj)) continue;
         QString modelPath = obj.value(QStringLiteral("final_model_path")).toString();
         bool texturedModel = obj.value(QStringLiteral("textured")).toBool(false);
         if (modelPath.isEmpty()) {

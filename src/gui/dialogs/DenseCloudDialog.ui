@@ -389,7 +389,7 @@
           <item row="0" column="1">
            <widget class="QDoubleSpinBox" name="m_minConfSpin">
             <property name="toolTip">
-             <string>WLS 滤波后的最低置信度阈值（0~1）。越高误差越少但点云越稀疏。建议：0.1~0.3</string>
+             <string>MVS 融合前的最低置信度阈值（0~1）。越高误差越少但点云越稀疏。建议：0.65（生产）/0.30（预览）</string>
             </property>
             <property name="decimals">
              <number>2</number>
@@ -404,7 +404,7 @@
              <double>0.050000000000000</double>
             </property>
             <property name="value">
-             <double>0.100000000000000</double>
+             <double>0.650000000000000</double>
             </property>
            </widget>
           </item>
@@ -440,7 +440,7 @@
              <number>8</number>
             </property>
             <property name="value">
-             <number>2</number>
+             <number>3</number>
             </property>
            </widget>
           </item>
@@ -485,7 +485,7 @@
              <double>0.250000000000000</double>
             </property>
             <property name="value">
-             <double>2.000000000000000</double>
+             <double>1.500000000000000</double>
             </property>
            </widget>
           </item>

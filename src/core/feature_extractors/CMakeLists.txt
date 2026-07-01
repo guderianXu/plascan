@@ -14,6 +14,8 @@ add_library(feature_extractors_traditional STATIC
   FeatureData.h
   ExtractorFactory.cpp
   ExtractorFactory.h
+  tradition/CudaSiftFeatureExtractor.cpp
+  tradition/CudaSiftFeatureExtractor.h
   tradition/TraditionalFeatureExtractor.cpp
   tradition/TraditionalFeatureExtractor.h
 )
@@ -25,6 +27,7 @@ target_include_directories(feature_extractors_traditional
     ${CMAKE_CURRENT_SOURCE_DIR}/superpoint
     ${CMAKE_CURRENT_SOURCE_DIR}/disk
     ${CMAKE_CURRENT_SOURCE_DIR}/aliked
+    ${CMAKE_SOURCE_DIR}/3rdparty/cudasift
     ${CMAKE_SOURCE_DIR}/src/common
     ${TORCH_INCLUDE_DIRS}
     ${OpenCV_INCLUDE_DIRS}
@@ -38,6 +41,20 @@ target_link_libraries(feature_extractors_traditional
 
 if(TARGET superpoint)
   target_link_libraries(feature_extractors_traditional PUBLIC superpoint)
+endif()
+
+set(_plascan_cuda_sift_default OFF)
+if(CMAKE_CUDA_COMPILER AND EXISTS "${CMAKE_SOURCE_DIR}/3rdparty/cudasift/CMakeLists.txt")
+  set(_plascan_cuda_sift_default ON)
+endif()
+option(PLASCAN_ENABLE_CUDA_SIFT "Build optional CUDA SIFT extractor backend" ${_plascan_cuda_sift_default})
+if(PLASCAN_ENABLE_CUDA_SIFT AND CMAKE_CUDA_COMPILER)
+  add_subdirectory("${CMAKE_SOURCE_DIR}/3rdparty/cudasift" "${CMAKE_BINARY_DIR}/3rdparty/cudasift")
+  target_link_libraries(feature_extractors_traditional PUBLIC plascan_cudasift)
+  target_compile_definitions(feature_extractors_traditional PUBLIC PLASCAN_HAS_CUDA_SIFT=1)
+  message(STATUS "plascan_core: building feature extractor - CUDA SIFT")
+else()
+  message(STATUS "plascan_core: CUDA SIFT disabled")
 endif()
 
 # ── DISK ──

@@ -17,6 +17,9 @@
 #include "TriangulationService.h"
 #include "ProjectWorkflowReports.h"
 #include "ProjectWorkflowUtils.h"
+#include "ProjectResultRecords.h"
+#include "ProjectMetadataOperations.h"
+#include "ProjectDenseWorkflowConfig.h"
 #include "project/SparseResultQuality.h"
 #include "FeatureExtractionDialog.h"
 #include "FeatureMatchingDialog.h"
@@ -571,6 +574,46 @@ TEST(ProjectSupportUtilsTest, CollectMatchedPairsUsesFilenameWithSuffix)
     EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("1.jpg"), QStringLiteral("3.tif"))));
 }
 
+TEST(ProjectSupportUtilsTest, CollectSettledNoMatchPairsUsesFilenameWithSuffix)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
+    const QString matchesDir = ProjectIO::ipmatchOutputDir(projectPath);
+    ASSERT_TRUE(QDir().mkpath(matchesDir));
+
+    QJsonArray noMatchPairs;
+    noMatchPairs.append(QJsonObject{{QStringLiteral("image0"), QStringLiteral("/tmp/1.jpg")},
+                                    {QStringLiteral("image1"), QStringLiteral("/tmp/2.png")},
+                                    {QStringLiteral("feature_algorithm"), QStringLiteral("disk")},
+                                    {QStringLiteral("match_algorithm"), QStringLiteral("lightglue")}});
+    noMatchPairs.append(QJsonObject{{QStringLiteral("image0"), QStringLiteral("3")},
+                                    {QStringLiteral("image1"), QStringLiteral("4")},
+                                    {QStringLiteral("feature_algorithm"), QStringLiteral("disk")},
+                                    {QStringLiteral("match_algorithm"), QStringLiteral("lightglue")}});
+
+    QFile noMatchFile(QDir(matchesDir).filePath(QStringLiteral("no_match_pairs.json")));
+    ASSERT_TRUE(noMatchFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    noMatchFile.write(QJsonDocument(noMatchPairs).toJson(QJsonDocument::Compact));
+    noMatchFile.close();
+
+    QJsonArray images;
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/1.jpg")}});
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/2.png")}});
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/3.tif")}});
+    images.append(QJsonObject{{QStringLiteral("path"), QStringLiteral("/tmp/4.tif")}});
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = images;
+
+    const QVector<QPair<QString, QString>> pairs =
+        xjw::gui::project::collectSettledNoMatchImageNamePairs(projectPath, meta);
+
+    EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("1.jpg"), QStringLiteral("2.png"))));
+    EXPECT_TRUE(pairs.contains(qMakePair(QStringLiteral("3.tif"), QStringLiteral("4.tif"))));
+}
+
 TEST(ProjectDashboardSummaryTest, EmptyMetadataShowsMissingReadOnlyWorkflow)
 {
     const QJsonObject meta;
@@ -681,6 +724,65 @@ TEST(ProjectDashboardSummaryTest, DoesNotMutateInputMetadata)
 
     EXPECT_EQ(summary.imageCount, 1);
     EXPECT_EQ(QJsonDocument(meta).toJson(QJsonDocument::Compact), before);
+}
+
+TEST(ProjectDashboardSummaryTest, IgnoresPointOnlyModelRecords)
+{
+    QJsonObject pointOnlyModelRecord;
+    pointOnlyModelRecord[QStringLiteral("kind")] = QStringLiteral("mesh");
+    pointOnlyModelRecord[QStringLiteral("model_ply")] = QStringLiteral("/tmp/products/model_from_mesh.ply");
+    pointOnlyModelRecord[QStringLiteral("vertex_count")] = 1058511291;
+    pointOnlyModelRecord[QStringLiteral("face_count")] = 0;
+
+    QJsonObject validMeshRecord;
+    validMeshRecord[QStringLiteral("kind")] = QStringLiteral("mesh");
+    validMeshRecord[QStringLiteral("model_ply")] = QStringLiteral("/tmp/products/terrain_mesh.ply");
+    validMeshRecord[QStringLiteral("vertex_count")] = 3286949;
+    validMeshRecord[QStringLiteral("face_count")] = 6502504;
+
+    QJsonObject meta;
+    meta[QStringLiteral("model_results")] = QJsonArray{pointOnlyModelRecord, validMeshRecord};
+
+    const auto summary = xjw::gui::project::buildProjectDashboardSummary(meta);
+
+    EXPECT_EQ(summary.modelResultCount, 1);
+}
+
+TEST(ProjectResultRecordsTest, DenseCloudAndMeshRecordsKeepDistinctProductKinds)
+{
+    const QJsonObject dense = xjw::gui::project::makeDenseResultRecord(
+        QStringLiteral("2026-06-28T00:00:00Z"),
+        QStringLiteral("E:/code/test/agisoft_aerial_gcps/mvs_output/dense_cloud.ply"),
+        1058511291,
+        QStringLiteral("E:/code/test/agisoft_aerial_gcps/sparse_cloud.ply"));
+
+    EXPECT_EQ(dense.value(QStringLiteral("kind")).toString(), QStringLiteral("dense_cloud"));
+    EXPECT_EQ(dense.value(QStringLiteral("result_type")).toString(), QStringLiteral("dense_cloud"));
+    EXPECT_EQ(dense.value(QStringLiteral("dense_cloud_xyz")).toString(),
+              QStringLiteral("E:/code/test/agisoft_aerial_gcps/mvs_output/dense_cloud.ply"));
+    EXPECT_EQ(dense.value(QStringLiteral("point_count")).toInt(), 1058511291);
+    EXPECT_EQ(dense.value(QStringLiteral("face_count")).toInt(-1), 0);
+    EXPECT_FALSE(dense.contains(QStringLiteral("model_ply")));
+
+    const QJsonObject mesh = xjw::gui::project::makeModelResultRecord(
+        QStringLiteral("2026-06-28T00:00:00Z"),
+        QStringLiteral("mvs_dense_cloud_mesh"),
+        QStringLiteral("E:/code/test/agisoft_aerial_gcps/mvs_output/products/model_from_mesh.ply"),
+        3286949,
+        6502504,
+        QString(),
+        QStringLiteral("E:/code/test/agisoft_aerial_gcps/mvs_output/dense_cloud.ply"));
+
+    EXPECT_EQ(mesh.value(QStringLiteral("kind")).toString(), QStringLiteral("mesh"));
+    EXPECT_EQ(mesh.value(QStringLiteral("result_type")).toString(), QStringLiteral("mesh"));
+    EXPECT_EQ(mesh.value(QStringLiteral("model_ply")).toString(),
+              QStringLiteral("E:/code/test/agisoft_aerial_gcps/mvs_output/products/model_from_mesh.ply"));
+    EXPECT_EQ(mesh.value(QStringLiteral("vertex_count")).toInt(), 3286949);
+    EXPECT_EQ(mesh.value(QStringLiteral("face_count")).toInt(), 6502504);
+    EXPECT_EQ(mesh.value(QStringLiteral("source_dense_cloud")).toString(),
+              QStringLiteral("E:/code/test/agisoft_aerial_gcps/mvs_output/dense_cloud.ply"));
+    EXPECT_NE(mesh.value(QStringLiteral("model_ply")).toString(),
+              mesh.value(QStringLiteral("source_dense_cloud")).toString());
 }
 
 TEST(ProjectSupportUtilsTest, CameraJsonRoundTripPreservesUnitsAndDepthDirection)
@@ -1120,8 +1222,12 @@ TEST(TerrainPipelineAsyncTest, FullDemPipelineUsesBoundedFeaturePairPlanning)
     const QString matchingBlock = source.mid(start, end - start);
 
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"FeaturePairPlanner.h\"")));
-    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("planFeatureMatchPairPaths(ctx.images, pairOptions)")))
-        << "The full DEM pipeline should reuse bounded pair planning instead of N^2 matching.";
+    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("planFeatureMatchPairPathPlan(ctx.images, pairOptions)")))
+        << "The full DEM pipeline should reuse the rich core-backed pair plan instead of N^2 matching.";
+    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("pairPlan.corePlan.pairCandidates")))
+        << "The full DEM pipeline should keep pair source diagnostics from the shared core planner.";
+    EXPECT_TRUE(matchingBlock.contains(QStringLiteral("sourceTypes")))
+        << "The pair-planning log should expose whether pairs came from sequence, spatial, or overlap planning.";
     EXPECT_TRUE(matchingBlock.contains(QStringLiteral("exhaustivePairCount")))
         << "The log should keep the full-pair count visible for diagnostics.";
     EXPECT_FALSE(matchingBlock.contains(QStringLiteral("for (int j = i + 1; j < ctx.images.size(); ++j)")))
@@ -5714,6 +5820,42 @@ TEST(SparseResultQualityTest, RejectsFormalSfmWhenTooFewSelectedImagesRegister)
     EXPECT_TRUE(xjw::gui::project::sparseResultBlockingReason(quality).contains(QStringLiteral("注册影像")));
 }
 
+TEST(SparseResultQualityTest, RejectsFormalSfmWhenQualityGateBlocksMvs)
+{
+    const QJsonObject quality = xjw::gui::project::buildSparseQualityMetadata(
+        productionSparsePoints(),
+        60,
+        true,
+        xjw::gui::project::kSparseResultKindSfmSparseReconstruction,
+        QString(),
+        QString(),
+        80);
+
+    QJsonObject sparseQuality;
+    sparseQuality[QStringLiteral("quality_gate")] = QJsonObject{
+        {QStringLiteral("acceptable_for_mvs"), false},
+        {QStringLiteral("status"), QStringLiteral("warn")},
+        {QStringLiteral("warnings"), QJsonArray{
+             QStringLiteral("high_reprojection_error"),
+             QStringLiteral("weak_triangulation_angle"),
+             QStringLiteral("poor_observation_spatial_coverage")}}
+    };
+
+    QJsonObject record = xjw::gui::project::mergeSparseQualityIntoRecord(
+        QJsonObject{{QStringLiteral("operation"), QStringLiteral("workflow_aerial_triangulation")}},
+        quality);
+    record[QStringLiteral("sfm_diagnostics")] = QJsonObject{
+        {QStringLiteral("sparse_quality"), sparseQuality}
+    };
+
+    EXPECT_FALSE(xjw::gui::project::isProductionSparseResult(record));
+    const QString reason = xjw::gui::project::sparseResultBlockingReason(record);
+    EXPECT_TRUE(reason.contains(QStringLiteral("质量门控")));
+    EXPECT_TRUE(reason.contains(QStringLiteral("重投影")));
+    EXPECT_TRUE(reason.contains(QStringLiteral("三角角")));
+    EXPECT_TRUE(reason.contains(QStringLiteral("空间覆盖")));
+}
+
 TEST(SparseResultQualityTest, LegacyTriangulationRecordsAreShownAsPairwisePreview)
 {
     const QJsonObject legacyRecord{
@@ -7352,15 +7494,94 @@ TEST(DenseCloudDialogTest, ExposesAdvancedMvsQualitySettingsWithoutChangingDefau
 
     EXPECT_TRUE(source.contains(QStringLiteral("s[\"minConsistentViews\"]")));
     EXPECT_TRUE(source.contains(QStringLiteral("s[\"geomConsistency\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s[\"qualityProfile\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s[\"fusionRelDepthThreshold\"]")));
     EXPECT_TRUE(source.contains(QStringLiteral("s[\"maxReprojError\"]")));
     EXPECT_TRUE(source.contains(QStringLiteral("s[\"speckleMinArea\"]")));
     EXPECT_TRUE(source.contains(QStringLiteral("s[\"fusionMaxImageDim\"]")));
 
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"minConsistentViews\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"geomConsistency\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"qualityProfile\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"fusionRelDepthThreshold\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"maxReprojError\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"speckleMinArea\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("s.contains(\"fusionMaxImageDim\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_minConfSpin->setValue(0.65);")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_minConsistentViewsSpin->setValue(3);")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_maxReprojErrorSpin->setValue(1.5);")));
+}
+
+TEST(DenseWorkflowConfigTest, StandardProfileUpgradesLegacyThreeSourceViewsForProductionMvs)
+{
+    QJsonObject legacySettings;
+    legacySettings[QStringLiteral("qualityProfile")] = QStringLiteral("standard");
+    legacySettings[QStringLiteral("minViews")] = 3;
+    legacySettings[QStringLiteral("minConsistentViews")] = 2;
+    legacySettings[QStringLiteral("confidence")] = 0.20;
+    legacySettings[QStringLiteral("minConfidence")] = 0.20;
+
+    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(legacySettings);
+    EXPECT_EQ(settings.qualityProfile, QStringLiteral("standard"));
+    EXPECT_GE(settings.minViews, 6)
+        << "Standard production MVS must not keep the old 3-source-view project default.";
+    EXPECT_GE(settings.minConsistentViews, 3);
+    EXPECT_FLOAT_EQ(settings.patchMatchConfidence, 0.60f);
+    EXPECT_FLOAT_EQ(settings.fusionMinConfidence, 0.65f);
+
+    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 444);
+    EXPECT_GE(config.numSourceViews, 6);
+    EXPECT_GE(config.patchMatch.numSourceViews, 6);
+    EXPECT_EQ(config.fusion.minConsistentViews, 3);
+}
+
+TEST(DenseWorkflowConfigTest, FastPreviewProfileKeepsThreeSourceViews)
+{
+    QJsonObject previewSettings;
+    previewSettings[QStringLiteral("qualityProfile")] = QStringLiteral("fast_preview");
+    previewSettings[QStringLiteral("minViews")] = 3;
+
+    const auto settings = xjw::gui::project::denseGenerationSettingsFromJson(previewSettings);
+    EXPECT_EQ(settings.qualityProfile, QStringLiteral("fast_preview"));
+    EXPECT_EQ(settings.minViews, 3);
+
+    const auto config = xjw::gui::project::buildDepthGenConfig(settings, 444);
+    EXPECT_EQ(config.numSourceViews, 3);
+}
+
+TEST(DenseCloudPostProcessMetadataTest, TerrainSpikeFilterPublishesProductionTerrainStage)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int refineStart = source.indexOf(
+        QStringLiteral("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync"));
+    ASSERT_GE(refineStart, 0);
+    const int recordStart = source.indexOf(QStringLiteral("QJsonObject record = makeDenseResultRecord"), refineStart);
+    ASSERT_GE(recordStart, 0);
+    const int upsertStart = source.indexOf(QStringLiteral("upsertProjectRecordByPath"), recordStart);
+    ASSERT_GT(upsertStart, recordStart);
+    const QString recordBlock = source.mid(recordStart, upsertStart - recordStart);
+
+    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"production\")")));
+    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"terrain\")")));
+    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"dense_cloud_surface_cleanup\")")));
+    EXPECT_TRUE(recordBlock.contains(QStringLiteral("QStringLiteral(\"streaming_cli\")")));
+    EXPECT_TRUE(recordBlock.contains(QStringLiteral("request.terrainFilterPasses")));
+    EXPECT_TRUE(recordBlock.contains(QStringLiteral("dense_refine_report")));
+
+    const int fallbackRecordStart = source.indexOf(QStringLiteral("const bool terrainProductionCloud"), upsertStart);
+    ASSERT_GT(fallbackRecordStart, upsertStart);
+    const int fallbackUpsertStart = source.indexOf(QStringLiteral("upsertProjectRecordByPath"), fallbackRecordStart);
+    ASSERT_GT(fallbackUpsertStart, fallbackRecordStart);
+    const QString fallbackRecordBlock = source.mid(fallbackRecordStart, fallbackUpsertStart - fallbackRecordStart);
+
+    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("request.terrainSpikeFilterEnabled")));
+    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"production\")")));
+    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"terrain\")")));
+    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"dense_cloud_surface_cleanup\")")));
+    EXPECT_TRUE(fallbackRecordBlock.contains(QStringLiteral("QStringLiteral(\"refined\")")));
 }
 
 TEST(CodeStyleTest, DenseCloudDialogUsesLowerCamelPrivateMemberNames)
@@ -8010,6 +8231,34 @@ TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataOffersAutoFillOrManualR
     EXPECT_FALSE(sparseBody.contains(QStringLiteral("opts.projectMeta = pm->coreProjectMeta()")));
 }
 
+TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingBlocksInsteadOfAutoFill)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("blockOnMatchQuality")));
+    EXPECT_TRUE(source.contains(QStringLiteral("summary.blockOnMatchQuality = matchingProducedNoUsableEdges")));
+    EXPECT_TRUE(source.contains(QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边")));
+    EXPECT_TRUE(source.contains(QStringLiteral("不会自动重新跑完整匹配")));
+
+    const int callbackStart = source.indexOf(
+        QStringLiteral("bool autoFillMissing = false;"));
+    ASSERT_GE(callbackStart, 0);
+    const int launchStart = source.indexOf(
+        QStringLiteral("controller->launchAerialTriangulationSfm"),
+        callbackStart);
+    ASSERT_GT(launchStart, callbackStart);
+    const QString callbackBody = source.mid(callbackStart, launchStart - callbackStart);
+
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("if (prereq.blockOnMatchQuality)")));
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("atProgressFinished(false)")));
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("return;")));
+    EXPECT_LT(callbackBody.indexOf(QStringLiteral("if (prereq.blockOnMatchQuality)")),
+              callbackBody.indexOf(QStringLiteral("if (!prereq.missingMessages.isEmpty())")));
+}
+
 TEST(AerialTriangulationWorkflowTest, PreflightReusesGeneratedPairPlanBeforeReportingMissingMatches)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
@@ -8030,6 +8279,111 @@ TEST(AerialTriangulationWorkflowTest, PreflightReusesGeneratedPairPlanBeforeRepo
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("generatedPairCoveredCount")));
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("generatedPairRequiredCount")));
     EXPECT_FALSE(summaryBody.contains(QStringLiteral("coveredPairCount == requiredPairCount")));
+}
+
+TEST(AerialTriangulationWorkflowTest, ExistingDisconnectedMatchesAreWarningsNotMissingInputs)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    const int summaryStart = source.indexOf(
+        QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
+    ASSERT_GE(summaryStart, 0);
+    const int promptStart = source.indexOf(
+        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        summaryStart);
+    ASSERT_GT(promptStart, summaryStart);
+    const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
+
+    EXPECT_TRUE(header.contains(QStringLiteral("warningMessages")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("matchGraphStats")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("matchedImageCount")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("componentCount")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("summary.warningMessages.append")));
+    EXPECT_FALSE(summaryBody.contains(
+        QStringLiteral("summary.hasMatches = !generatedPlanHasNoCoveredPairs && currentMatchGraphIsUsable();")))
+        << "Disconnected match graphs are quality warnings; existing match files must not be treated as missing input.";
+}
+
+TEST(AerialTriangulationWorkflowTest, NoMatchCacheCountsAsProcessedPairCoverage)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int summaryStart = source.indexOf(
+        QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
+    ASSERT_GE(summaryStart, 0);
+    const int promptStart = source.indexOf(
+        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        summaryStart);
+    ASSERT_GT(promptStart, summaryStart);
+    const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
+
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("collectSettledNoMatchImageNamePairs")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("processedPairKeys")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("imagePairProcessed")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("generatedPairProcessedCount")));
+    EXPECT_FALSE(summaryBody.contains(QStringLiteral("generatedPairCoveredCount == 0")));
+}
+
+TEST(AerialTriangulationWorkflowTest, PreflightEmitsPrerequisiteReportAndRecommendation)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("ReconstructionPrerequisiteReport")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QJsonObject prerequisiteReport")));
+    EXPECT_TRUE(source.contains(QStringLiteral("prereq.prerequisiteReport")));
+    EXPECT_TRUE(source.contains(QStringLiteral("空三上游数据就绪：复用已有匹配")));
+    EXPECT_TRUE(source.contains(QStringLiteral("空三缺少部分匹配：只补齐缺失 pair")));
+    EXPECT_TRUE(source.contains(QStringLiteral("空三缺少特征/匹配：需要先运行特征提取/匹配")));
+}
+
+TEST(AerialTriangulationWorkflowTest, CompletedMatchingWithoutUsableEdgesPromptsQualityInspectionNotAutoFill)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int summaryStart = source.indexOf(
+        QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
+    ASSERT_GE(summaryStart, 0);
+    const int promptStart = source.indexOf(
+        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        summaryStart);
+    ASSERT_GT(promptStart, summaryStart);
+    const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
+
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("InspectMatchQuality")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边")))
+        << "Completed no-match/failed-geometry outcomes should guide the user to inspect matching quality.";
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("matchingProducedNoUsableEdges")))
+        << "The missing-input prompt must distinguish failed matching quality from missing upstream data.";
+}
+
+TEST(AerialTriangulationWorkflowTest, DoesNotAutoRematchWhenPrerequisitesArePresent)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int sparseStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
+    ASSERT_GE(sparseStart, 0);
+    const int launchStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::launchAerialTriangulationSfm"),
+        sparseStart);
+    ASSERT_GT(launchStart, sparseStart);
+    const QString startBody = source.mid(sparseStart, launchStart - sparseStart);
+
+    EXPECT_TRUE(startBody.contains(QStringLiteral("bool autoFillMissing = false")))
+        << "AT should only enable SFM auto-rematching after the user explicitly accepts missing-step autofill.";
+    EXPECT_TRUE(startBody.contains(QStringLiteral("if (!prereq.missingMessages.isEmpty())")));
+    EXPECT_FALSE(startBody.contains(
+        QStringLiteral("const bool autoFillMissing = controller->confirmAutoFillMissingSparseInputs(prereq);")))
+        << "A successful preflight must not be interpreted as a request to regenerate failed/skipped matches.";
 }
 
 TEST(AerialTriangulationWorkflowTest, DialogStartsWorkflowWithQueuedConnection)
@@ -9258,19 +9612,57 @@ TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishPerPairCandidateMetadata)
 TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishGuidedMatchingPlan)
 {
     const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString serviceHeader = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.h"));
     const QString diagnostics = readProjectSourceFile(QStringLiteral("src/core/pipeline/SfmMatchDiagnostics.h"));
     ASSERT_FALSE(service.isEmpty());
+    ASSERT_FALSE(serviceHeader.isEmpty());
     ASSERT_FALSE(diagnostics.isEmpty());
 
     EXPECT_TRUE(diagnostics.contains(QStringLiteral("SfmGuidedMatchPlannerOptions")));
     EXPECT_TRUE(diagnostics.contains(QStringLiteral("SfmGuidedMatchCandidate")));
     EXPECT_TRUE(diagnostics.contains(QStringLiteral("planSfmGuidedMatching")));
 
+    EXPECT_TRUE(serviceHeader.contains(QStringLiteral("enableGuidedRematching = false")))
+        << "Guided rematching should be an explicit opt-in second pass, not an implicit default.";
+    EXPECT_TRUE(service.contains(QStringLiteral("opts.enableGuidedRematching")))
+        << "SFMService should only plan guided rematching when the caller opts in.";
+    EXPECT_TRUE(service.contains(QStringLiteral("guided_matching_enabled")))
+        << "Diagnostics should record whether guided rematching was enabled for this run.";
     EXPECT_TRUE(service.contains(QStringLiteral("guided_matching")));
     EXPECT_TRUE(service.contains(QStringLiteral("guided_match_candidate_count")));
     EXPECT_TRUE(service.contains(QStringLiteral("seed_pair_count")));
     EXPECT_TRUE(service.contains(QStringLiteral("can_use_epipolar_band")));
     EXPECT_TRUE(service.contains(QStringLiteral("planSfmGuidedMatching")));
+}
+
+TEST(SfmSparseResultMetadataTest, GuidedRematchingIsOptInAndAppendOnly)
+{
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    ASSERT_FALSE(service.isEmpty());
+
+    EXPECT_TRUE(service.contains(QStringLiteral("opts.enableGuidedRematching")))
+        << "Guided rematching must remain an explicit second pass.";
+    EXPECT_TRUE(service.contains(QStringLiteral("generateGuidedRematchCandidates")))
+        << "SFMService should not stop at diagnostics; it must generate guided candidates.";
+    EXPECT_TRUE(service.contains(QStringLiteral("mergeGuidedRematchMatches")))
+        << "Guided candidates should be appended into SfM matches through the shared merge service.";
+    EXPECT_TRUE(service.contains(QStringLiteral("replacesExistingMatch = false")))
+        << "Guided rematching must not overwrite stable existing pair matches.";
+}
+
+TEST(SfmSparseResultMetadataTest, GuidedRematchingRerunsSfmAfterAddingMatches)
+{
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    ASSERT_FALSE(service.isEmpty());
+
+    EXPECT_TRUE(service.contains(QStringLiteral("guided_matching_second_pass_attempted")))
+        << "Diagnostics should say whether guided matches triggered a second SfM pass.";
+    EXPECT_TRUE(service.contains(QStringLiteral("guided_matching_second_pass_accepted")))
+        << "Diagnostics should say whether the second pass replaced the first reconstruction.";
+    EXPECT_TRUE(service.contains(QStringLiteral("SFM Guided matching: second pass")))
+        << "SFMService should execute a real second pass after guided matches are appended.";
+    EXPECT_TRUE(service.contains(QStringLiteral("sfmResult = std::move(guidedSfmResult)")))
+        << "The accepted second pass must become the authoritative SfM result.";
 }
 
 TEST(SfmSparseResultMetadataTest, ScaleAwareBaConsumesTrackConfidenceWeights)
@@ -9487,6 +9879,33 @@ TEST(FeatureMatchSidecarTest, NativeRunnerWritesSidecarV2Indices)
     EXPECT_TRUE(source.contains(QStringLiteral("matched_scores")));
 }
 
+TEST(FeatureMatchRunnerScriptLookupTest, PythonBackendsUseSharedSourceAwareScriptLookup)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QString findScriptFile")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_SCRIPT_DIR")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_SOURCE_DIR")));
+    EXPECT_TRUE(source.contains(QStringLiteral("findScriptFile(scriptName)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("findScriptFile(QStringLiteral(\"run_lightglue.py\"))")));
+    EXPECT_FALSE(source.contains(QStringLiteral("E2E script not found: %s")));
+}
+
+TEST(FeatureMatchRunnerScriptLookupTest, MatcherFactoryPythonAdapterUsesSourceAwareScriptLookup)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/feature_match/MatcherFactory.cpp"));
+    const QString cmake = readProjectSourceFile(QStringLiteral("src/core/feature_match/CMakeLists.txt"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(cmake.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QString findScriptFile")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_SCRIPT_DIR")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_SOURCE_DIR")));
+    EXPECT_TRUE(source.contains(QStringLiteral("findScriptFile(QStringLiteral(\"run_%1.py\")")));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("PLASCAN_SOURCE_DIR=\"${CMAKE_SOURCE_DIR}\"")));
+}
+
 TEST(FeatureMatchSidecarTest, FormalSfmRejectsLegacyCoordinateOnlyMatchCaches)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
@@ -9502,6 +9921,23 @@ TEST(FeatureMatchSidecarTest, FormalSfmRejectsLegacyCoordinateOnlyMatchCaches)
     EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("matched_indices0")));
     EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("matched_indices1")));
     EXPECT_TRUE(compatibilityBlock.contains(QStringLiteral("缺少 V2 特征索引")));
+}
+
+TEST(FeatureMatchSidecarTest, FormalSfmFindsAlgorithmSuffixedMatchCaches)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int candidateStart = source.indexOf(QStringLiteral("appendCandidatePair"));
+    ASSERT_GE(candidateStart, 0);
+    const int staleCheckStart = source.indexOf(QStringLiteral("匹配缓存与当前"), candidateStart);
+    ASSERT_GT(staleCheckStart, candidateStart);
+    const QString candidateBlock = source.mid(candidateStart, staleCheckStart - candidateStart);
+
+    EXPECT_TRUE(candidateBlock.contains(QStringLiteral("findExistingMatchCache")))
+        << "Formal SfM must reuse A__B_lightglue.match files generated by the GUI matcher, "
+           "not only bare A__B.match caches.";
+    EXPECT_TRUE(candidateBlock.contains(QStringLiteral("%1__%2*.match")));
 }
 
 TEST(MatchViewerSidecarOrderTest, ReordersCachedPointsWhenDisplayOrderIsReversed)
@@ -9744,6 +10180,188 @@ TEST(DataTreeWidgetTest, ShowsTemporaryDroppedModelUntilCleared)
         }
     }
     EXPECT_TRUE(foundClearedModelSection);
+}
+
+TEST(DataTreeWidgetTest, DoesNotShowPointOnlyModelRecordAsThreeDModel)
+{
+    DataTreeWidget tree;
+
+    QJsonObject denseRecord;
+    denseRecord[QStringLiteral("kind")] = QStringLiteral("dense_cloud");
+    denseRecord[QStringLiteral("dense_cloud_xyz")] = QStringLiteral("/tmp/mvs_output/dense_cloud.ply");
+    denseRecord[QStringLiteral("point_count")] = 1058511291;
+    denseRecord[QStringLiteral("face_count")] = 0;
+
+    QJsonObject pointOnlyModelRecord;
+    pointOnlyModelRecord[QStringLiteral("kind")] = QStringLiteral("mesh");
+    pointOnlyModelRecord[QStringLiteral("model_ply")] = QStringLiteral("/tmp/mvs_output/products/model_from_mesh.ply");
+    pointOnlyModelRecord[QStringLiteral("vertex_count")] = 1058511291;
+    pointOnlyModelRecord[QStringLiteral("face_count")] = 0;
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray();
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{denseRecord};
+    meta[QStringLiteral("model_results")] = QJsonArray{pointOnlyModelRecord};
+    tree.loadFromJson(meta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    auto findSection = [model](const QString &prefix) -> QStandardItem *
+    {
+        for (int row = 0; row < model->rowCount(); ++row)
+        {
+            QStandardItem *item = model->item(row, 0);
+            if (item && item->text().startsWith(prefix))
+            {
+                return item;
+            }
+        }
+        return nullptr;
+    };
+
+    QStandardItem *denseSection = findSection(QStringLiteral("稠密点云 (1)"));
+    ASSERT_NE(denseSection, nullptr);
+    ASSERT_EQ(denseSection->rowCount(), 1);
+    EXPECT_EQ(denseSection->child(0, 1)->text(), QStringLiteral("/tmp/mvs_output/dense_cloud.ply"));
+
+    QStandardItem *modelSection = findSection(QStringLiteral("3D模型 (0)"));
+    ASSERT_NE(modelSection, nullptr);
+    EXPECT_EQ(modelSection->rowCount(), 0);
+}
+
+TEST(ProjectMetadataOperationsTest, ResolveLatestDenseCloudPrefersCleanedProductionCloudForMeshing)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_select.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("dense_select")));
+
+    const QString cleanedPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud_refined.ply"));
+    const QString rawPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud.ply"));
+    QFile cleanedFile(cleanedPath);
+    ASSERT_TRUE(cleanedFile.open(QIODevice::WriteOnly));
+    cleanedFile.write("cleaned");
+    cleanedFile.close();
+    QFile rawFile(rawPath);
+    ASSERT_TRUE(rawFile.open(QIODevice::WriteOnly));
+    rawFile.write("raw");
+    rawFile.close();
+
+    QJsonObject cleanedRecord;
+    cleanedRecord[QStringLiteral("dense_cloud_xyz")] = cleanedPath;
+    cleanedRecord[QStringLiteral("point_count")] = 900;
+    cleanedRecord[QStringLiteral("quality_stage")] = QStringLiteral("cleaned");
+    cleanedRecord[QStringLiteral("operation")] = QStringLiteral("dense_refine");
+
+    QJsonObject rawRecord;
+    rawRecord[QStringLiteral("dense_cloud_xyz")] = rawPath;
+    rawRecord[QStringLiteral("point_count")] = 1200;
+    rawRecord[QStringLiteral("quality_stage")] = QStringLiteral("raw");
+    rawRecord[QStringLiteral("operation")] = QStringLiteral("mvs_fusion");
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{cleanedRecord, rawRecord};
+    projectData.updateMetadata(meta, true);
+
+    QString selectedPath;
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::resolveLatestDenseCloudPath(&projectData,
+                                                               &selectedPath,
+                                                               &error)) << error.toStdString();
+    EXPECT_EQ(QDir::cleanPath(selectedPath), QDir::cleanPath(cleanedPath));
+}
+
+TEST(ProjectMetadataOperationsTest, ResolveLatestDenseCloudUsesStageWhenSelectingRefinedCloudForMeshing)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_stage_select.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("dense_stage_select")));
+
+    const QString refinedPath = QDir(tempDir.path()).filePath(QStringLiteral("candidate_a.ply"));
+    const QString laterRawPath = QDir(tempDir.path()).filePath(QStringLiteral("candidate_b.ply"));
+    QFile refinedFile(refinedPath);
+    ASSERT_TRUE(refinedFile.open(QIODevice::WriteOnly));
+    refinedFile.write("refined");
+    refinedFile.close();
+    QFile rawFile(laterRawPath);
+    ASSERT_TRUE(rawFile.open(QIODevice::WriteOnly));
+    rawFile.write("raw");
+    rawFile.close();
+
+    QJsonObject refinedRecord;
+    refinedRecord[QStringLiteral("dense_cloud_xyz")] = refinedPath;
+    refinedRecord[QStringLiteral("stage")] = QStringLiteral("refined");
+    refinedRecord[QStringLiteral("operation")] = QStringLiteral("mvs_output");
+
+    QJsonObject laterRawRecord;
+    laterRawRecord[QStringLiteral("dense_cloud_xyz")] = laterRawPath;
+    laterRawRecord[QStringLiteral("stage")] = QStringLiteral("raw");
+    laterRawRecord[QStringLiteral("operation")] = QStringLiteral("mvs_output");
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{refinedRecord, laterRawRecord};
+    projectData.updateMetadata(meta, true);
+
+    QString selectedPath;
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::resolveLatestDenseCloudPath(&projectData,
+                                                               &selectedPath,
+                                                               &error)) << error.toStdString();
+    EXPECT_EQ(QDir::cleanPath(selectedPath), QDir::cleanPath(refinedPath));
+}
+
+TEST(ProjectMetadataOperationsTest, ResolveLatestDenseCloudPrefersProductionTerrainCloudOverLaterDebugRefinedCloud)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    ProjectData projectData;
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_production_select.plascan"));
+    ASSERT_TRUE(projectData.createProject(projectPath, QStringLiteral("dense_production_select")));
+
+    const QString productionPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud_production.ply"));
+    const QString laterDebugRefinedPath = QDir(tempDir.path()).filePath(QStringLiteral("dense_cloud_refined_debug.ply"));
+    QFile productionFile(productionPath);
+    ASSERT_TRUE(productionFile.open(QIODevice::WriteOnly));
+    productionFile.write("production");
+    productionFile.close();
+    QFile debugFile(laterDebugRefinedPath);
+    ASSERT_TRUE(debugFile.open(QIODevice::WriteOnly));
+    debugFile.write("debug refined");
+    debugFile.close();
+
+    QJsonObject productionRecord;
+    productionRecord[QStringLiteral("dense_cloud_xyz")] = productionPath;
+    productionRecord[QStringLiteral("stage")] = QStringLiteral("production");
+    productionRecord[QStringLiteral("quality_stage")] = QStringLiteral("terrain");
+    productionRecord[QStringLiteral("operation")] = QStringLiteral("dense_cloud_surface_cleanup");
+    productionRecord[QStringLiteral("point_count")] = 300000000;
+
+    QJsonObject laterDebugRefinedRecord;
+    laterDebugRefinedRecord[QStringLiteral("dense_cloud_xyz")] = laterDebugRefinedPath;
+    laterDebugRefinedRecord[QStringLiteral("stage")] = QStringLiteral("refined");
+    laterDebugRefinedRecord[QStringLiteral("quality_stage")] = QStringLiteral("debug");
+    laterDebugRefinedRecord[QStringLiteral("operation")] = QStringLiteral("dense_refine");
+    laterDebugRefinedRecord[QStringLiteral("point_count")] = 310000000;
+
+    QJsonObject meta = projectData.metadata();
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{productionRecord, laterDebugRefinedRecord};
+    projectData.updateMetadata(meta, true);
+
+    QString selectedPath;
+    QString error;
+    ASSERT_TRUE(xjw::gui::project::resolveLatestDenseCloudPath(&projectData,
+                                                               &selectedPath,
+                                                               &error)) << error.toStdString();
+    EXPECT_EQ(QDir::cleanPath(selectedPath), QDir::cleanPath(productionPath));
 }
 
 TEST(DataTreeWidgetTest, ResultOnlyMetadataUpdateRefreshesDepthMapSection)
@@ -10873,6 +11491,17 @@ TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsAsBoundedStreamingPreview)
     EXPECT_TRUE(source.contains(QStringLiteral("file.seek(recordOffset + static_cast<qint64>(i) * preview.header.vertexStride)")));
     EXPECT_TRUE(source.contains(QStringLiteral("[3D] PLY 过大，使用预览抽样")));
     EXPECT_TRUE(header.contains(QStringLiteral("plyLoadProgressChanged")));
+}
+
+TEST(CameraModel3DDialogTest, PlyLoadProgressDoesNotRegressAfterFinished)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("if (!_loading && percent < 100)")))
+        << "Late queued PLY progress from the worker must not re-enable the loading overlay after the model loaded.";
+    EXPECT_TRUE(source.contains(QStringLiteral("正在完整加载 PLY 点云")))
+        << "Direct PLY loading should advance the overlay beyond the header parsing stage.";
 }
 
 TEST(DenseCloudRefineTest, ReportsPlaPointProcessingDeviceForGui)

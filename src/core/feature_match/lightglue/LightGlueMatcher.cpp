@@ -126,7 +126,7 @@ LightGlueMatcher::_filterScores(const torch::Tensor &scores, int64_t expectedN0,
 // 设计思路：
 //   FeatureData 在项目中存储的是像素坐标（原图尺度）和 [N,D] CV_32F 描述子。
 //   LightGlue 模型需要：
-//     kpts_t  [1,N,2] 坐标（fixed-size 空间）
+//     kpts_t  [1,N,2] 坐标（fixed-size 空间）；SIFT 额外传 [scale, orientation]
 //     descs_t [1,N,D] 描述子（DISK/ALIKED 为 128 维，SuperPoint 为 256 维）
 //     fixed_wh [1,2]   fixed 宽高
 //   将 imageWidth/imageHeight 设为 fixed_wh，则 kpts_t = 像素坐标，无需坐标变换。
@@ -167,16 +167,26 @@ LightGlueMatcher::match(const xjw::feature_extractors::FeatureData &feat0,
     auto [fw0, fh0] = inferSize(feat0);
     auto [fw1, fh1] = inferSize(feat1);
 
-    // 构造 kpts_t [1,N,2]
+    // 构造 kpts_t [1,N,2]；SIFT LightGlue 需要 OpenCV SIFT 的尺度和方向参与位置编码。
     auto buildKpts = [&](const xjw::feature_extractors::FeatureData &fd) -> torch::Tensor
     {
         const int N = fd.size();
-        torch::Tensor t = torch::zeros({1, N, 2}, torch::kFloat32);
+        const bool useSiftGeometry = fd.sourceAlgorithm == "sift";
+        const int kptDim = useSiftGeometry ? 4 : 2;
+        torch::Tensor t = torch::zeros({1, N, kptDim}, torch::kFloat32);
         auto acc = t.accessor<float, 3>();
         for (int i = 0; i < N; ++i)
         {
-            acc[0][i][0] = fd.keypoints[i].pt.x;
-            acc[0][i][1] = fd.keypoints[i].pt.y;
+            const cv::KeyPoint &keypoint = fd.keypoints[i];
+            acc[0][i][0] = keypoint.pt.x;
+            acc[0][i][1] = keypoint.pt.y;
+            if (useSiftGeometry)
+            {
+                acc[0][i][2] = std::max(1.0f, keypoint.size);
+                acc[0][i][3] = (std::isfinite(keypoint.angle) && keypoint.angle >= 0.0f)
+                    ? keypoint.angle * static_cast<float>(CV_PI / 180.0)
+                    : 0.0f;
+            }
         }
         return t.to(_torchDevice);
     };

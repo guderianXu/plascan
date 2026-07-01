@@ -65,6 +65,8 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("source_quality_min"), minSourceQualityScore);
     object.insert(QStringLiteral("depth_confidence_mean"), meanDepthConfidence);
     object.insert(QStringLiteral("valid_pixel_count"), validPixelCount);
+    object.insert(QStringLiteral("depth_quality"), depthQuality);
+    object.insert(QStringLiteral("depth_postprocess"), depthPostprocess);
     object.insert(QStringLiteral("status"), status);
     object.insert(QStringLiteral("device"), device);
     object.insert(QStringLiteral("depth_png"), depthPng);
@@ -91,6 +93,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.minSourceQualityScore = object.value(QStringLiteral("source_quality_min")).toDouble(0.0);
     record.meanDepthConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(0.0);
     record.validPixelCount = object.value(QStringLiteral("valid_pixel_count")).toInt(0);
+    record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
+    record.depthPostprocess = object.value(QStringLiteral("depth_postprocess")).toObject();
     record.status = object.value(QStringLiteral("status")).toString();
     record.device = object.value(QStringLiteral("device")).toString();
     record.depthPng = object.value(QStringLiteral("depth_png")).toString();
@@ -270,6 +274,14 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     {
         completed.validPixelCount = _frames[index].validPixelCount;
         completed.meanDepthConfidence = _frames[index].meanDepthConfidence;
+    }
+    if (completed.depthQuality.isEmpty() && index >= 0)
+    {
+        completed.depthQuality = _frames[index].depthQuality;
+    }
+    if (completed.depthPostprocess.isEmpty() && index >= 0)
+    {
+        completed.depthPostprocess = _frames[index].depthPostprocess;
     }
     completed.status = QStringLiteral("completed");
     completed.error.clear();

@@ -1,5 +1,6 @@
 #include "MvsWorkspaceManifest.h"
 #include "DepthMapGenerator.h"
+#include "MvsQualityReport.h"
 #include "MvsTypes.h"
 
 #include <gtest/gtest.h>
@@ -173,6 +174,82 @@ TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
     EXPECT_DOUBLE_EQ(json.value(QStringLiteral("source_quality_min")).toDouble(), 0.43);
     EXPECT_DOUBLE_EQ(json.value(QStringLiteral("depth_confidence_mean")).toDouble(), 0.81);
     EXPECT_EQ(json.value(QStringLiteral("valid_pixel_count")).toInt(), 123456);
+}
+
+TEST(MvsWorkspaceManifest, PreservesDepthQualityDiagnostics)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString manifestPath = QDir(tempDir.path()).filePath(QStringLiteral("mvs_manifest.json"));
+
+    cv::Mat depth(8, 10, CV_32F, cv::Scalar(12.0f));
+    cv::Mat confidence(8, 10, CV_32F, cv::Scalar(0.55f));
+    confidence.at<float>(3, 4) = 0.84f;
+    const QJsonObject depthQuality = xjw::mvs::depthMapQualityMetricsToJson(
+        xjw::mvs::analyzeDepthMapQuality(depth, confidence, 4));
+
+    MvsDepthFrameRecord record = makeRecord(8, QStringLiteral("image_008.jpg"), QStringLiteral("completed"));
+    record.depthQuality = depthQuality;
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.markCompleted(record);
+
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
+
+    MvsWorkspaceManifest loaded;
+    ASSERT_TRUE(loaded.load(manifestPath, &error)) << error.toStdString();
+    ASSERT_EQ(loaded.frames().size(), 1);
+    const QJsonObject loadedQuality = loaded.frames().front().depthQuality;
+    EXPECT_TRUE(loadedQuality.value(QStringLiteral("low_confidence_full_coverage")).toBool());
+    EXPECT_GE(loadedQuality.value(QStringLiteral("recommended_fusion_confidence")).toDouble(), 0.65);
+    EXPECT_DOUBLE_EQ(loaded.frames().front().toJson()
+                         .value(QStringLiteral("depth_quality"))
+                         .toObject()
+                         .value(QStringLiteral("valid_coverage"))
+                         .toDouble(),
+                     1.0);
+}
+
+TEST(MvsWorkspaceManifest, PreservesDepthPostprocessDiagnostics)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString manifestPath = QDir(tempDir.path()).filePath(QStringLiteral("mvs_manifest.json"));
+
+    MvsDepthFrameRecord record = makeRecord(9, QStringLiteral("image_009.jpg"), QStringLiteral("completed"));
+    record.depthPostprocess = QJsonObject{
+        {QStringLiteral("valid_before"), 1000},
+        {QStringLiteral("confidence_removed"), 120},
+        {QStringLiteral("local_depth_outlier_removed"), 8},
+        {QStringLiteral("speckle_removed"), 24},
+        {QStringLiteral("valid_after"), 848},
+        {QStringLiteral("effective_confidence_threshold"), 0.65}
+    };
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.markCompleted(record);
+
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifestPath, &error)) << error.toStdString();
+
+    MvsWorkspaceManifest loaded;
+    ASSERT_TRUE(loaded.load(manifestPath, &error)) << error.toStdString();
+    ASSERT_EQ(loaded.frames().size(), 1);
+    const QJsonObject postprocess = loaded.frames().front().depthPostprocess;
+    EXPECT_EQ(postprocess.value(QStringLiteral("confidence_removed")).toInt(), 120);
+    EXPECT_EQ(postprocess.value(QStringLiteral("local_depth_outlier_removed")).toInt(), 8);
+    EXPECT_EQ(postprocess.value(QStringLiteral("speckle_removed")).toInt(), 24);
+    EXPECT_EQ(loaded.frames().front().toJson()
+                  .value(QStringLiteral("depth_postprocess"))
+                  .toObject()
+                  .value(QStringLiteral("valid_after"))
+                  .toInt(),
+              848);
 }
 
 TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)

@@ -532,6 +532,74 @@ QVector<QPair<QString, QString>> collectMatchedImageNamePairs(const QString &pla
     return matchedPairs;
 }
 
+QVector<QPair<QString, QString>> collectSettledNoMatchImageNamePairs(const QString &plascanPath,
+                                                                     const QJsonObject &meta)
+{
+    QVector<QPair<QString, QString>> noMatchPairs;
+    QSet<QString> seenKeys;
+    const QJsonArray imageEntries = projectImageEntries(meta);
+
+    auto resolveImageDisplayName = [&imageEntries](const QString &token) -> QString
+    {
+        const QString trimmedToken = token.trimmed();
+        if (trimmedToken.isEmpty())
+        {
+            return QString();
+        }
+
+        for (const QJsonValue &imageValue : imageEntries)
+        {
+            const QString imagePath = imageValue.toObject().value(QStringLiteral("path")).toString();
+            if (imagePath.isEmpty())
+            {
+                continue;
+            }
+
+            if (pathTokenMatchesImage(trimmedToken, imagePath))
+            {
+                const QString fileName = QFileInfo(imagePath).fileName();
+                return fileName.isEmpty() ? imagePath : fileName;
+            }
+        }
+
+        const QString tokenFileName = QFileInfo(trimmedToken).fileName();
+        return tokenFileName.isEmpty() ? trimmedToken : tokenFileName;
+    };
+
+    if (plascanPath.isEmpty())
+    {
+        return noMatchPairs;
+    }
+
+    QFile noMatchFile(QDir(ProjectIO::ipmatchOutputDir(plascanPath)).filePath(QStringLiteral("no_match_pairs.json")));
+    if (!noMatchFile.open(QIODevice::ReadOnly))
+    {
+        return noMatchPairs;
+    }
+
+    const QJsonDocument doc = QJsonDocument::fromJson(noMatchFile.readAll());
+    const QJsonArray records = doc.array();
+    for (const QJsonValue &value : records)
+    {
+        const QJsonObject object = value.toObject();
+        appendMatchedPair(&noMatchPairs,
+                          &seenKeys,
+                          resolveImageDisplayName(object.value(QStringLiteral("image0")).toString()),
+                          resolveImageDisplayName(object.value(QStringLiteral("image1")).toString()));
+    }
+
+    std::sort(noMatchPairs.begin(), noMatchPairs.end(),
+              [](const QPair<QString, QString> &leftPair, const QPair<QString, QString> &rightPair)
+              {
+                  if (leftPair.first != rightPair.first)
+                  {
+                      return leftPair.first < rightPair.first;
+                  }
+                  return leftPair.second < rightPair.second;
+              });
+    return noMatchPairs;
+}
+
 } // namespace project
 } // namespace gui
 } // namespace xjw

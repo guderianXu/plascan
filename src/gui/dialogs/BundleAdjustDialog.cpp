@@ -186,6 +186,8 @@ BundleAdjustDialog::BundleAdjustDialog(QWidget *parent)
 
 void BundleAdjustDialog::setAvailableImages(const QStringList &images)
 {
+    const bool previousSuppress = _suppressSettingsChanged;
+    _suppressSettingsChanged = true;
     _imageList->clear();
     const QSet<QString> savedSet(_savedSelectedImages.begin(), _savedSelectedImages.end());
     for (const QString &p : images) {
@@ -193,6 +195,7 @@ void BundleAdjustDialog::setAvailableImages(const QStringList &images)
         it->setFlags(it->flags() | Qt::ItemIsUserCheckable);
         it->setCheckState(savedSet.isEmpty() || savedSet.contains(p) ? Qt::Checked : Qt::Unchecked);
     }
+    _suppressSettingsChanged = previousSuppress;
 }
 
 void BundleAdjustDialog::setDefaultOutputDir(const QString &dirPath)
@@ -204,6 +207,8 @@ void BundleAdjustDialog::setDefaultOutputDir(const QString &dirPath)
 
 void BundleAdjustDialog::applySettings(const QJsonObject &settings)
 {
+    const bool previousSuppress = _suppressSettingsChanged;
+    _suppressSettingsChanged = true;
     _savedSelectedImages.clear();
     const QJsonArray selectedImages = settings.value(QStringLiteral("selected_images")).toArray();
     for (const QJsonValue &value : selectedImages)
@@ -351,6 +356,7 @@ void BundleAdjustDialog::applySettings(const QJsonObject &settings)
     }
 
     updateLaserControls();
+    _suppressSettingsChanged = previousSuppress;
 }
 
 void BundleAdjustDialog::onChooseOutputDir()
@@ -547,6 +553,11 @@ void BundleAdjustDialog::updateLaserControls()
 
 void BundleAdjustDialog::emitSettingsNow()
 {
+    if (_suppressSettingsChanged)
+    {
+        return;
+    }
+
     QJsonObject settings;
     settings[QStringLiteral("selected_images")] = QJsonArray::fromStringList(selectedImages());
     settings[QStringLiteral("output_dir")] = _outputDirEdit->text().trimmed();

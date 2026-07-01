@@ -11,7 +11,7 @@ inline const QMap<QString, QStringList> &algorithmFeatureMap()
 {
     static const QMap<QString, QStringList> map = {
         {"superglue",       {".sp"}},
-        {"lightglue",       {".sp", ".dsk", ".alk"}},
+        {"lightglue",       {".sp", ".dsk", ".alk", ".sift"}},
         {"loftr",           {}},
         {"roma",            {}},
         {"orb_bf_hamming",  {".orb"}},

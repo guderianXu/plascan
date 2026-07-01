@@ -1043,6 +1043,78 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
         return true;
     };
 
+    auto estimateWorldNormalFromDepth = [&](int frameIdx, int row, int col, float &nx, float &ny, float &nz) {
+        if (frameIdx < 0 || frameIdx >= static_cast<int>(frames.size()) ||
+            frames[frameIdx].depthMap.empty())
+        {
+            return false;
+        }
+        const FrameGeometry &frameGeom = geom[frameIdx];
+        if (frameGeom.W < 2 || frameGeom.H < 2 ||
+            row < 0 || row >= frameGeom.H || col < 0 || col >= frameGeom.W)
+        {
+            return false;
+        }
+        const int leftCol = std::max(0, col - 1);
+        const int rightCol = std::min(frameGeom.W - 1, col + 1);
+        const int upRow = std::max(0, row - 1);
+        const int downRow = std::min(frameGeom.H - 1, row + 1);
+        if (leftCol == rightCol || upRow == downRow)
+        {
+            return false;
+        }
+
+        auto unprojectPixel = [&](int sampleRow, int sampleCol, float &x, float &y, float &z) {
+            const float sampleDepth = frames[frameIdx].depthMap.at<float>(sampleRow, sampleCol);
+            if (sampleDepth <= 0.0f)
+            {
+                return false;
+            }
+            frameGeom.cameraModel.unproject(
+                static_cast<float>(sampleCol),
+                static_cast<float>(sampleRow),
+                sampleDepth,
+                x,
+                y,
+                z);
+            return true;
+        };
+
+        float xl = 0.0f, yl = 0.0f, zl = 0.0f;
+        float xr = 0.0f, yr = 0.0f, zr = 0.0f;
+        float xu = 0.0f, yu = 0.0f, zu = 0.0f;
+        float xd = 0.0f, yd = 0.0f, zd = 0.0f;
+        if (!unprojectPixel(row, leftCol, xl, yl, zl) ||
+            !unprojectPixel(row, rightCol, xr, yr, zr) ||
+            !unprojectPixel(upRow, col, xu, yu, zu) ||
+            !unprojectPixel(downRow, col, xd, yd, zd))
+        {
+            return false;
+        }
+
+        const float ax = xr - xl;
+        const float ay = yr - yl;
+        const float az = zr - zl;
+        const float bx = xd - xu;
+        const float by = yd - yu;
+        const float bz = zd - zu;
+        nx = ay * bz - az * by;
+        ny = az * bx - ax * bz;
+        nz = ax * by - ay * bx;
+        const float normLen = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (normLen <= 1e-6f)
+        {
+            nx = 0.0f;
+            ny = 0.0f;
+            nz = 0.0f;
+            return false;
+        }
+        nx /= normLen;
+        ny /= normLen;
+        nz /= normLen;
+        return true;
+    };
+
     auto medianArray = [](std::array<float, 64> values, int count) {
         count = std::clamp(count, 1, static_cast<int>(values.size()));
         const int mid = count / 2;
@@ -1101,9 +1173,14 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                         continue;
                     }
 
+                    bool hasPointNormal = false;
                     if (hasNormals)
                     {
-                        (void)readWorldNormal(fi, row, col, point.nx, point.ny, point.nz);
+                        hasPointNormal = readWorldNormal(fi, row, col, point.nx, point.ny, point.nz);
+                    }
+                    if (!hasPointNormal)
+                    {
+                        hasPointNormal = estimateWorldNormalFromDepth(fi, row, col, point.nx, point.ny, point.nz);
                     }
 
                     point.r = 128;
@@ -1141,7 +1218,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                         xs[0] = point.x;
                         ys[0] = point.y;
                         zs[0] = point.z;
-                        if (hasNormals)
+                        if (hasPointNormal)
                         {
                             nxs[0] = point.nx;
                             nys[0] = point.ny;
@@ -1193,9 +1270,19 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                             float otherNx = 0.0f;
                             float otherNy = 0.0f;
                             float otherNz = 0.0f;
-                            const bool hasOtherNormal =
+                            bool hasOtherNormal =
                                 readWorldNormal(otherFrame, otherRow, otherCol, otherNx, otherNy, otherNz);
-                            if (hasNormals && hasOtherNormal)
+                            if (!hasOtherNormal)
+                            {
+                                hasOtherNormal = estimateWorldNormalFromDepth(
+                                    otherFrame,
+                                    otherRow,
+                                    otherCol,
+                                    otherNx,
+                                    otherNy,
+                                    otherNz);
+                            }
+                            if (hasPointNormal && hasOtherNormal)
                             {
                                 const float cosAngle =
                                     point.nx * otherNx + point.ny * otherNy + point.nz * otherNz;
@@ -1288,6 +1375,51 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
         fusedPoints.insert(fusedPoints.end(),
                            std::make_move_iterator(localPoints.begin()),
                            std::make_move_iterator(localPoints.end()));
+    }
+
+    const float yieldRatio = validCount > 0
+        ? static_cast<float>(fusedPoints.size()) / static_cast<float>(validCount)
+        : 1.0f;
+    if (_config.enableLowYieldFallback
+        && requireNeighborAgreement
+        && requiredObservations > 2
+        && validCount > 0
+        && yieldRatio < std::max(0.0f, _config.lowYieldFallbackMinRatio)
+        && !isFusionCancelled(_config))
+    {
+        const int fallbackRequiredObservations =
+            std::clamp(_config.lowYieldFallbackMinNumPixels, 2, requiredObservations - 1);
+        fprintf(stderr,
+                "[StereoFusion] 严格流式融合产出过低: points=%d valid=%d ratio=%.4f, "
+                "fallback minNumPixels=%d\n",
+                static_cast<int>(fusedPoints.size()),
+                validCount,
+                yieldRatio,
+                fallbackRequiredObservations);
+
+        StereoFusionConfig savedConfig = _config;
+        _config.minNumPixels = fallbackRequiredObservations;
+        _config.enableLowYieldFallback = false;
+
+        std::vector<FusedPoint> fallbackPoints;
+        const bool fallbackOk = fuseFirstFrameObservationsFast(frames,
+                                                               geom,
+                                                               colorProvider,
+                                                               fallbackPoints,
+                                                               progressCb);
+        _config = savedConfig;
+
+        if (!fallbackOk)
+        {
+            return false;
+        }
+        if (fallbackPoints.size() > fusedPoints.size())
+        {
+            fusedPoints = std::move(fallbackPoints);
+            fprintf(stderr,
+                    "[StereoFusion] 已采用双视一致 fallback: points=%d\n",
+                    static_cast<int>(fusedPoints.size()));
+        }
     }
 
     fprintf(stderr,

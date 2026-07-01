@@ -19,6 +19,63 @@ def load_run_lightglue():
 
 
 class RunLightGlueScriptTest(unittest.TestCase):
+    def test_read_feature_file_supports_version_two_keypoint_geometry(self):
+        module = load_run_lightglue()
+        with tempfile.TemporaryDirectory() as tmp:
+            feature_path = Path(tmp) / "a.sift"
+            with feature_path.open("wb") as f:
+                f.write(b"SFTB")
+                f.write(struct.pack("<I", 2))
+                name = b"a.jpg"
+                f.write(struct.pack("<I", len(name)))
+                f.write(name)
+                f.write(struct.pack("<I", 2))
+                f.write(struct.pack("<fffff", 1.0, 2.0, 0.5, 4.0, 90.0))
+                f.write(struct.pack("<fffff", 3.0, 4.0, 0.6, 8.0, 180.0))
+                f.write(struct.pack("<I", 2))
+                f.write(np.array([[0.1, 0.2], [0.3, 0.4]], dtype=np.float32).tobytes())
+
+            data = module.read_feature_file(str(feature_path))
+
+            self.assertEqual(data["version"], 2)
+            np.testing.assert_allclose(data["keypoints"], np.array([[1.0, 2.0], [3.0, 4.0]],
+                                                                   dtype=np.float32))
+            np.testing.assert_allclose(data["scales"], np.array([4.0, 8.0], dtype=np.float32))
+            np.testing.assert_allclose(data["orientations"], np.array([90.0, 180.0],
+                                                                      dtype=np.float32))
+
+    def test_read_feature_file_keeps_version_one_compatibility(self):
+        module = load_run_lightglue()
+        with tempfile.TemporaryDirectory() as tmp:
+            feature_path = Path(tmp) / "legacy.sift"
+            with feature_path.open("wb") as f:
+                f.write(b"SFTB")
+                f.write(struct.pack("<I", 1))
+                name = b"legacy.jpg"
+                f.write(struct.pack("<I", len(name)))
+                f.write(name)
+                f.write(struct.pack("<I", 1))
+                f.write(struct.pack("<fff", 1.0, 2.0, 0.5))
+                f.write(struct.pack("<I", 2))
+                f.write(np.array([[0.1, 0.2]], dtype=np.float32).tobytes())
+
+            data = module.read_feature_file(str(feature_path))
+
+            self.assertEqual(data["version"], 1)
+            np.testing.assert_allclose(data["keypoints"], np.array([[1.0, 2.0]],
+                                                                   dtype=np.float32))
+            np.testing.assert_allclose(data["scales"], np.array([1.0], dtype=np.float32))
+            np.testing.assert_allclose(data["orientations"], np.array([-1.0], dtype=np.float32))
+
+    def test_sift_uses_sift_lightglue_backend_before_generic_128d(self):
+        module = load_run_lightglue()
+
+        candidates = module.lightglue_feature_candidates("sift", 128)
+
+        self.assertGreaterEqual(len(candidates), 2)
+        self.assertEqual(candidates[0], "sift")
+        self.assertIn("auto_128d", candidates)
+
     def test_sgmt_scores_use_qdatastream_double_precision(self):
         module = load_run_lightglue()
         with tempfile.TemporaryDirectory() as tmp:

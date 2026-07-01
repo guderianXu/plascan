@@ -1,0 +1,47 @@
+{
+  "source": "E:\\code\\test\\agisoft_aerial_gcps\\mvs_output\\dense_cloud.ply",
+  "reference": "E:\\code\\plascan\\testData\\photogrammetry_benchmarks\\agisoft_aerial_gcps\\extracted\\aerial_images_with_gcps\\converted\\metashape_dense_cloud\\metashape_dense_cloud_leaf_local_sample_1pct_with_normals.ply",
+  "nearest_neighbor_method": "kd-tree",
+  "source_points": 100000,
+  "reference_points": 100000,
+  "sampling": {
+    "max_source_points": 100000,
+    "max_reference_points": 100000
+  },
+  "distance_m": {
+    "mean": 0.19149970956033577,
+    "rmse": 0.28472755074504774,
+    "median": 0.13132015346283527,
+    "p95": 0.6169849247678251,
+    "max": 3.222308235595309
+  },
+  "vertical_error_m": {
+    "mean_signed": 0.0417462327671051,
+    "mean_abs": 0.15214071458816528,
+    "rmse": 0.26115859633458316,
+    "p50_abs": 0.09025430679321289,
+    "p95_abs": 0.5812945365905762,
+    "max_abs": 3.1952948570251465
+  },
+  "reference_coverage": {
+    "radius_m": 0.15,
+    "covered_points": 51420,
+    "total_points": 100000,
+    "covered_percent": 51.42,
+    "nearest_neighbor_method": "kd-tree"
+  },
+  "quality_gate": {
+    "passed": true,
+    "status": "pass",
+    "failure_codes": [],
+    "failure_reasons": [],
+    "thresholds": {
+      "max_rmse_m": null,
+      "max_p95_m": null,
+      "max_vertical_rmse_m": null,
+      "max_vertical_p95_m": null,
+      "coverage_radius_m": 0.15,
+      "min_reference_coverage_percent": null
+    }
+  }
+}

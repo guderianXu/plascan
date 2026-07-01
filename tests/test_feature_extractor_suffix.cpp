@@ -5,6 +5,8 @@
 #include <gtest/gtest.h>
 
 #include "ExtractorFactory.h"
+#include "CudaSiftFeatureExtractor.h"
+#include "FeatureData.h"
 #include "TraditionalFeatureExtractor.h"
 
 #include <opencv2/imgproc.hpp>
@@ -113,6 +115,124 @@ TEST(TraditionalFeatureExtractorTest, AkazeProducesFeatures)
     EXPECT_FALSE(output.empty());
     EXPECT_TRUE(output.descriptors.defined());
     EXPECT_EQ(output.descriptors.size(0), static_cast<int64_t>(output.keypoints.size()));
+}
+
+TEST(TraditionalFeatureExtractorTest, SiftKeepsNativeDescriptorDim)
+{
+    cv::Mat image(240, 320, CV_8UC1, cv::Scalar(40));
+    cv::circle(image, cv::Point(90, 90), 35, cv::Scalar(230), -1);
+    cv::rectangle(image, cv::Rect(170, 55, 85, 95), cv::Scalar(175), -1);
+    cv::line(image, cv::Point(30, 205), cv::Point(290, 175), cv::Scalar(245), 4);
+
+    SuperPointConfig cfg;
+    cfg.max_num_keypoints = 256;
+    cfg.descriptor_dim = 256;
+    cfg.remove_borders = 0;
+    cfg.grayscale_min = 0.0f;
+    cfg.grayscale_max = 1.0f;
+
+    const FeatureOutput output =
+        xjw::feature_extractors::TraditionalFeatureExtractor::detect(image, cfg, "sift");
+
+    ASSERT_FALSE(output.empty());
+    ASSERT_TRUE(output.descriptors.defined());
+    EXPECT_EQ(output.descriptors.size(0), static_cast<int64_t>(output.keypoints.size()));
+    EXPECT_EQ(output.descriptors.size(1), 128);
+}
+
+TEST(TraditionalFeatureExtractorTest, SiftCudaRequestUsesOpenCvSiftAndKeepsNativeDescriptorDim)
+{
+    cv::Mat image(240, 320, CV_8UC1, cv::Scalar(40));
+    cv::circle(image, cv::Point(90, 90), 35, cv::Scalar(230), -1);
+    cv::rectangle(image, cv::Rect(170, 55, 85, 95), cv::Scalar(175), -1);
+    cv::line(image, cv::Point(30, 205), cv::Point(290, 175), cv::Scalar(245), 4);
+
+    SuperPointConfig cfg;
+    cfg.max_num_keypoints = 256;
+    cfg.descriptor_dim = 256;
+    cfg.remove_borders = 0;
+    cfg.grayscale_min = 0.0f;
+    cfg.grayscale_max = 1.0f;
+    cfg.allow_device_fallback = true;
+
+    const FeatureOutput output =
+        xjw::feature_extractors::TraditionalFeatureExtractor::detect(image, cfg, "sift", true, 0);
+
+    ASSERT_FALSE(output.empty());
+    ASSERT_TRUE(output.descriptors.defined());
+    EXPECT_EQ(output.descriptors.size(0), static_cast<int64_t>(output.keypoints.size()));
+    EXPECT_EQ(output.descriptors.size(1), 128);
+}
+
+TEST(TraditionalFeatureExtractorTest, FactoryKeepsSiftExtractionOnOpenCvWhenCudaRequested)
+{
+    cv::Mat image(240, 320, CV_8UC1, cv::Scalar(40));
+    cv::circle(image, cv::Point(90, 90), 35, cv::Scalar(230), -1);
+    cv::rectangle(image, cv::Rect(170, 55, 85, 95), cv::Scalar(175), -1);
+    cv::line(image, cv::Point(30, 205), cv::Point(290, 175), cv::Scalar(245), 4);
+
+    ExtractorConfig cfg;
+    cfg.maxKeypoints = 256;
+    cfg.removeBorder = 0;
+    cfg.useCuda = true;
+    cfg.cudaDevice = 0;
+
+    auto extractor = xjw::feature_extractors::createExtractor("sift", cfg);
+    const FeatureOutput output = extractor->extract(image);
+
+    ASSERT_FALSE(output.empty());
+    ASSERT_TRUE(output.descriptors.defined());
+    EXPECT_EQ(output.descriptors.size(0), static_cast<int64_t>(output.keypoints.size()));
+    EXPECT_EQ(output.descriptors.size(1), 128);
+}
+
+TEST(TraditionalFeatureExtractorTest, CudaSiftAvailabilityQueryDoesNotThrow)
+{
+    (void)xjw::feature_extractors::isCudaSiftAvailable();
+    SUCCEED();
+}
+
+TEST(TraditionalFeatureExtractorTest, CudaSiftReportsNonZeroDetectionScores)
+{
+    if (!xjw::feature_extractors::isCudaSiftAvailable())
+    {
+        GTEST_SKIP() << "CUDA SIFT is not available on this machine";
+    }
+
+    cv::Mat image(512, 512, CV_8UC1);
+    cv::randu(image, 20, 235);
+    cv::circle(image, cv::Point(140, 160), 60, cv::Scalar(245), -1);
+    cv::rectangle(image, cv::Rect(270, 95, 120, 160), cv::Scalar(35), -1);
+    cv::line(image, cv::Point(40, 430), cv::Point(470, 360), cv::Scalar(250), 5);
+
+    SuperPointConfig cfg;
+    cfg.max_num_keypoints = 512;
+    cfg.remove_borders = 0;
+    cfg.grayscale_min = 0.0f;
+    cfg.grayscale_max = 1.0f;
+
+    const FeatureOutput output = xjw::feature_extractors::detectCudaSift(image, cfg, 0);
+
+    ASSERT_FALSE(output.empty());
+    ASSERT_FALSE(output.scores.empty());
+    const auto max_score = *std::max_element(output.scores.begin(), output.scores.end());
+    EXPECT_GT(max_score, 0.0f);
+}
+
+TEST(TraditionalFeatureExtractorTest, SiftDescriptorsUseRootSiftNormalization)
+{
+    cv::Mat descriptor(1, 2, CV_32F);
+    descriptor.at<float>(0, 0) = 1.0f;
+    descriptor.at<float>(0, 1) = 3.0f;
+
+    const torch::Tensor tensor =
+        xjw::feature_extractors::FeatureData::cvDescriptorsToTensor(descriptor, 2, "sift");
+
+    ASSERT_TRUE(tensor.defined());
+    ASSERT_EQ(tensor.size(0), 1);
+    ASSERT_EQ(tensor.size(1), 2);
+    EXPECT_NEAR(tensor[0][0].item<float>(), 0.5f, 1e-5f);
+    EXPECT_NEAR(tensor[0][1].item<float>(), 0.8660254f, 1e-5f);
 }
 
 TEST(FeatureOutputPostprocessTest, GrayscaleRangeFiltersTensorOutput)

@@ -112,6 +112,10 @@ set(GUI_SOURCES
   dialogs/DenseMatchDialogUi.cpp
 )
 
+list(APPEND GUI_SOURCES
+  ../core/pipeline/GuidedRematchService.cpp
+)
+
 set(GUI_HEADERS
   config/AppConfigManager.h
   config/JsonMergeUtil.h
@@ -255,6 +259,7 @@ set(GUI_TASK_SOURCES
   tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
   ../core/pipeline/FeatureMatchRunner.cpp
+  ../core/pipeline/ReconstructionPrerequisiteReport.cpp
   ../core/pipeline/SFMService.cpp
 )
 

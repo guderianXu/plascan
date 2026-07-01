@@ -75,6 +75,11 @@ bool imageCameraFromEntry(const QJsonObject &imageObj, xjw::Camera *cam);
 QVector<QPair<QString, QString>> collectMatchedImageNamePairs(const QString &plascanPath,
                                                               const QJsonObject &meta);
 
+// 收集项目中已确认无有效匹配的影像对，返回值中的每项为“影像名1 / 影像名2”。
+// 这些 pair 已被匹配流程处理过，不应在空三预检中被当作“缺失匹配”触发整轮重匹配。
+QVector<QPair<QString, QString>> collectSettledNoMatchImageNamePairs(const QString &plascanPath,
+                                                                     const QJsonObject &meta);
+
 } // namespace project
 } // namespace gui
 } // namespace xjw

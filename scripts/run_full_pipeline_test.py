@@ -50,16 +50,20 @@ MODEL_CANDIDATES = {
         "cuda": ["superglue_outdoor_cuda.pt", "superglue_outdoor.pt", "superglue_indoor_cuda.pt"],
     },
     "lightglue": {
-        "cpu": ["lightglue_matcher_cpu.torchscript", "lightglue_matcher_cpu.pt", "lightglue_matcher.torchscript", "lightglue_matcher.pt"],
-        "cuda": ["lightglue_matcher_cuda.torchscript", "lightglue_matcher_cuda.pt", "lightglue_matcher.torchscript", "lightglue_matcher.pt"],
+        "cpu": ["lightglue_matcher_cpu.torchscript", "lightglue_matcher.torchscript"],
+        "cuda": ["lightglue_matcher_cuda.torchscript", "lightglue_matcher.torchscript"],
     },
     "lightglue_disk": {
-        "cpu": ["lightglue_disk_cpu.torchscript", "lightglue_disk_cpu.pt"],
-        "cuda": ["lightglue_disk_cuda.torchscript", "lightglue_disk_cuda.pt"],
+        "cpu": ["lightglue_disk_cpu.torchscript"],
+        "cuda": ["lightglue_disk_cuda.torchscript"],
     },
     "lightglue_aliked": {
-        "cpu": ["lightglue_aliked_cpu.torchscript", "lightglue_aliked_cpu.pt"],
-        "cuda": ["lightglue_aliked_cuda.torchscript", "lightglue_aliked_cuda.pt"],
+        "cpu": ["lightglue_aliked_cpu.torchscript"],
+        "cuda": ["lightglue_aliked_cuda.torchscript"],
+    },
+    "lightglue_sift": {
+        "cpu": ["lightglue_sift_cpu.torchscript"],
+        "cuda": ["lightglue_sift_cuda.torchscript"],
     },
 }
 
@@ -304,6 +308,8 @@ def lightglue_model_kind_for_algorithm(algo: str) -> str:
         return "lightglue_disk"
     if algo == "aliked":
         return "lightglue_aliked"
+    if algo == "sift":
+        return "lightglue_sift"
     return "lightglue"
 
 

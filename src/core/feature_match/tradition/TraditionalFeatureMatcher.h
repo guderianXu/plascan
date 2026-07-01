@@ -15,6 +15,8 @@ struct TraditionalMatchConfig
     std::string algorithmName;
     float ratioTestThreshold = 0.75f;
     bool requireMutualConsistency = true;
+    bool useCuda = false;
+    int cudaDevice = 0;
 };
 
 class TraditionalFeatureMatcher

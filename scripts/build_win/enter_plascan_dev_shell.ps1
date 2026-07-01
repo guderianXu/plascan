@@ -209,9 +209,15 @@ function Set-PlascanWindowsBuildEnvironment
     $qtPlatformsRoot = Join-Path $qtPluginsRoot "platforms"
     $cmakeBin = Split-Path -Parent $CMakePath
     $ninjaDir = Resolve-NinjaDirectory $CMakePath
+    $pythonRuntimeRoot = Join-Path $ProjectRoot "build\env\python-runtime"
+    $pythonRuntimeScripts = Join-Path $pythonRuntimeRoot "Scripts"
+    $runtimePython = Join-Path $pythonRuntimeScripts "python.exe"
 
     $env:PLASCAN_SOURCE_DIR = $ProjectRoot
     $env:PLASCAN_BUILD_DIR = $BuildPath
+    $env:PLASCAN_MODEL_DIR = Resolve-FullPath (Join-Path $ProjectRoot "resources\models")
+    $env:PLASCAN_SCRIPT_DIR = Resolve-FullPath (Join-Path $ProjectRoot "scripts")
+    $env:PLASCAN_PYTHON_RUNTIME_DIR = Resolve-FullPath $pythonRuntimeRoot
     $env:VCPKG_ROOT = $VcpkgPath
     $env:VCPKG_DEFAULT_TRIPLET = "x64-windows"
     $env:VCPKG_INSTALLED_DIR = Convert-ToCMakePath $vcpkgInstalled
@@ -228,6 +234,17 @@ function Set-PlascanWindowsBuildEnvironment
     if ($HeadlessQt)
     {
         $env:QT_QPA_PLATFORM = "offscreen"
+    }
+
+    $runtimePythonPathEntries = @()
+    if (Test-Path -LiteralPath $runtimePython)
+    {
+        $env:PLASCAN_PYTHON_EXECUTABLE = Resolve-FullPath $runtimePython
+        $env:PLASCAN_PYTHON = $env:PLASCAN_PYTHON_EXECUTABLE
+        $runtimePythonPathEntries = @(
+            (Resolve-FullPath $pythonRuntimeScripts),
+            (Resolve-FullPath $pythonRuntimeRoot)
+        )
     }
 
     $rejectRoots = @(
@@ -267,6 +284,7 @@ function Set-PlascanWindowsBuildEnvironment
     $prepend = @(
         (Join-Path $BuildPath "bin"),
         (Join-Path $BuildPath "tests"),
+        $runtimePythonPathEntries,
         (Join-Path $tripletRoot "bin"),
         (Join-Path $tripletRoot "tools\Qt6\bin"),
         (Join-Path $TorchPath "lib"),
@@ -367,6 +385,14 @@ if (-not $Quiet)
     }
     Write-Host "  Torch:     $TorchRoot"
     Write-Host "  CUDA:      $CudaRoot"
+    if ($env:PLASCAN_PYTHON_EXECUTABLE)
+    {
+        Write-Host "  Python:    $env:PLASCAN_PYTHON_EXECUTABLE"
+    }
+    else
+    {
+        Write-Host "  Python:    not initialized (run scripts\env\setup_python_runtime.py)"
+    }
 }
 
 $dotSourced = $MyInvocation.InvocationName -eq "."

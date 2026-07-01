@@ -1,4 +1,5 @@
 #include "TraditionalFeatureMatcher.h"
+#include "CudaSiftMatcher.h"
 
 #include <algorithm>
 #include <cctype>
@@ -135,9 +136,17 @@ std::vector<cv::DMatch> TraditionalFeatureMatcher::matchDescriptors(const cv::Ma
     {
         desc0 = toDescriptorType(descriptors0, CV_32F);
         desc1 = toDescriptorType(descriptors1, CV_32F);
-        cv::BFMatcher matcher(cv::NORM_L2, false);
-        matcher.knnMatch(desc0, desc1, knnForward, 2);
-        matcher.knnMatch(desc1, desc0, knnReverse, 2);
+        if (config.useCuda && CudaSiftMatcher::isAvailable())
+        {
+            knnForward = CudaSiftMatcher::knnMatchL2(desc0, desc1, 2, config.cudaDevice);
+            knnReverse = CudaSiftMatcher::knnMatchL2(desc1, desc0, 2, config.cudaDevice);
+        }
+        else
+        {
+            cv::BFMatcher matcher(cv::NORM_L2, false);
+            matcher.knnMatch(desc0, desc1, knnForward, 2);
+            matcher.knnMatch(desc1, desc0, knnReverse, 2);
+        }
     }
     else if (normalizedAlgorithm == "sift_flann")
     {

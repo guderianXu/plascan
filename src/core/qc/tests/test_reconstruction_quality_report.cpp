@@ -97,6 +97,55 @@ TEST(ReconstructionQualityReport, BuildsSummaryFromProjectMetadata)
     EXPECT_TRUE(report.value(QStringLiteral("ba_summary")).isObject());
 }
 
+TEST(ReconstructionQualityReport, UsesCurrentWorkflowArtifactsInsteadOfStaleReportRecords)
+{
+    QJsonObject staleReport;
+    staleReport[QStringLiteral("type")] = QStringLiteral("reconstruction_quality");
+    staleReport[QStringLiteral("registered_image_count")] = 0;
+    staleReport[QStringLiteral("sparse_point_count")] = 0;
+    staleReport[QStringLiteral("dense_point_count")] = 0;
+
+    QJsonObject sparseQuality;
+    sparseQuality[QStringLiteral("registered_image_count")] = 444;
+    sparseQuality[QStringLiteral("total_image_count")] = 444;
+    sparseQuality[QStringLiteral("point_count")] = 588257;
+    sparseQuality[QStringLiteral("two_view_ratio")] = 0.23;
+
+    QJsonObject sfmDiagnostics;
+    sfmDiagnostics[QStringLiteral("sparse_quality")] = sparseQuality;
+    sfmDiagnostics[QStringLiteral("ba_summary")] = QJsonObject{
+        {QStringLiteral("rms_after_px"), 0.74}
+    };
+
+    QJsonObject currentSparse;
+    currentSparse[QStringLiteral("result_kind")] = QStringLiteral("sfm_sparse_reconstruction");
+    currentSparse[QStringLiteral("sparse_point_count")] = 588257;
+    currentSparse[QStringLiteral("sfm_diagnostics")] = sfmDiagnostics;
+
+    QJsonObject meta;
+    meta[QStringLiteral("project_files")] = QJsonObject{
+        {QStringLiteral("images"), QJsonArray{
+             makeImage(QStringLiteral("img_001.jpg"), true),
+             makeImage(QStringLiteral("img_002.jpg"), true),
+             makeImage(QStringLiteral("img_003.jpg"), true)
+         }}
+    };
+    meta[QStringLiteral("report_results")] = QJsonArray{staleReport};
+    meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{currentSparse};
+    meta[QStringLiteral("dense_cloud_results")] =
+        QJsonArray{QJsonObject{{QStringLiteral("point_count"), 1058511291}}};
+
+    const QJsonObject report = ReconstructionQualityReport::buildFromProjectMeta(meta);
+
+    EXPECT_EQ(report.value(QStringLiteral("total_image_count")).toInt(), 444);
+    EXPECT_EQ(report.value(QStringLiteral("registered_image_count")).toInt(), 444);
+    EXPECT_EQ(report.value(QStringLiteral("sparse_point_count")).toInt(), 588257);
+    EXPECT_EQ(report.value(QStringLiteral("dense_point_count")).toInt(), 1058511291);
+    EXPECT_NEAR(report.value(QStringLiteral("mean_reprojection_error_px")).toDouble(), 0.0, 1e-9);
+    EXPECT_EQ(report.value(QStringLiteral("ba_summary")).toObject().value(QStringLiteral("rms_after_px")).toDouble(),
+              0.74);
+}
+
 TEST(ReconstructionQualityReport, SummarizesSurveyControlResiduals)
 {
     QJsonObject control0;

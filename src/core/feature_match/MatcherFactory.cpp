@@ -18,6 +18,8 @@
 #include <QProcess>
 #include <QCoreApplication>
 #include <QFile>
+#include <QFileInfo>
+#include <QDir>
 #include <QDataStream>
 #include <stdexcept>
 #include <cstdio>
@@ -78,6 +80,38 @@ static bool loadPair(const std::string &sp1, const std::string &sp2,
     fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo1);
     fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo2);
     return true;
+}
+
+QString findScriptFile(const QString &scriptName)
+{
+    QStringList candidates;
+
+    const QString envScriptDir = qEnvironmentVariable("PLASCAN_SCRIPT_DIR").trimmed();
+    if (!envScriptDir.isEmpty())
+    {
+        candidates.append(QDir(envScriptDir).filePath(scriptName));
+    }
+
+#ifdef PLASCAN_SOURCE_DIR
+    candidates.append(
+        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+#endif
+
+    const QString exeDir = QCoreApplication::applicationDirPath();
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(QDir::currentPath()).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+        {
+            return QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+        }
+    }
+
+    return QString();
 }
 
 // ── SuperGlue ──
@@ -181,12 +215,15 @@ public:
               const std::string &imgL, const std::string &imgR,
               const std::string &outPath) override
     {
-        QString script = QCoreApplication::applicationDirPath()
-            + "/../../scripts/run_" + QString::fromStdString(_algorithm) + ".py";
+        QString script = findScriptFile(QStringLiteral("run_%1.py").arg(QString::fromStdString(_algorithm)));
         if (_algorithm == "disk" || _algorithm == "aliked")
         {
-            script = QCoreApplication::applicationDirPath()
-                + "/../../../src/core/feature_extractors/disk/run_disk_aliked.py";
+            script = findScriptFile(QStringLiteral("run_disk_aliked.py"));
+        }
+        if (script.isEmpty())
+        {
+            fprintf(stderr, "Python matcher script not found for %s\n", _algorithm.c_str());
+            return -1;
         }
 
         QStringList args;

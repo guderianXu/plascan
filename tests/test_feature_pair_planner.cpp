@@ -1,4 +1,5 @@
 #include "FeaturePairPlanner.h"
+#include "SfmPairPlanner.h"
 
 #include <gtest/gtest.h>
 
@@ -8,7 +9,9 @@
 #include <vector>
 
 using xjw::gui::FeaturePairPlannerOptions;
+using xjw::gui::FeaturePairPlan;
 using xjw::gui::planFeatureMatchPairs;
+using xjw::gui::planFeatureMatchPairPathPlan;
 using xjw::gui::planFeatureMatchPairPaths;
 
 namespace
@@ -160,4 +163,59 @@ TEST(FeaturePairPlannerTest, LargePathSetUsesKnownCameraSpatialNeighbors)
         QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_020.JPG")));
     EXPECT_FALSE(pairs.contains(
         QStringLiteral("E:/dataset/images/image_000.JPG|E:/dataset/images/image_004.JPG")));
+}
+
+TEST(FeaturePairPlannerTest, PathPlanExposesCorePairPlanAndMatchesCorePlanner)
+{
+    FeaturePairPlannerOptions options;
+    options.exhaustiveMaxImages = 10;
+    options.sequentialWindow = 3;
+    options.spatialNeighborCount = 2;
+
+    std::vector<std::array<double, 3>> centers;
+    centers.reserve(25);
+    for (int i = 0; i < 25; ++i)
+    {
+        centers.push_back({1000.0 * double(i), 0.0, 100.0});
+    }
+    centers[20] = {5.0, 0.0, 100.0};
+    options.knownCameraCenters = centers;
+
+    const QStringList images = numberedImagePaths(25);
+    const FeaturePairPlan guiPlan = planFeatureMatchPairPathPlan(images, options);
+
+    xjw::gui::SfmPairPlannerOptions coreOptions;
+    coreOptions.autoRestrictKnownCameraPairs = true;
+    coreOptions.knownCameraAllPairsMaxImages = options.exhaustiveMaxImages;
+    coreOptions.knownCameraPairWindow = options.sequentialWindow;
+    coreOptions.knownCameraSpatialNeighborCount = options.spatialNeighborCount;
+    coreOptions.knownCameraCenters = options.knownCameraCenters;
+    coreOptions.knownCameraOverlapMaxExpansion = options.knownCameraOverlapMaxExpansion;
+    const xjw::gui::SfmPairPlan corePlan =
+        xjw::gui::planSfmMatchPairs(images, QStringList(), coreOptions);
+
+    ASSERT_TRUE(corePlan.restrictPairs);
+    EXPECT_EQ(guiPlan.corePairKeys, corePlan.allowedPairKeys);
+    EXPECT_EQ(guiPlan.corePlan.allowedPairKeys, corePlan.allowedPairKeys);
+    ASSERT_EQ(guiPlan.pairs.size(), corePlan.allowedPairKeys.size());
+    ASSERT_EQ(guiPlan.corePlan.pairCandidates.size(), corePlan.pairCandidates.size());
+
+    for (int i = 0; i < guiPlan.pairs.size(); ++i)
+    {
+        const QStringList pairParts = guiPlan.pairs.at(i).split(QLatin1Char('|'));
+        ASSERT_EQ(pairParts.size(), 2);
+        EXPECT_EQ(xjw::gui::canonicalSfmPairKey(pairParts.at(0), pairParts.at(1)),
+                  corePlan.allowedPairKeys.at(i));
+    }
+
+    const QString spatialKey =
+        xjw::gui::canonicalSfmPairKey(images.at(0), images.at(20));
+    const auto spatialIt = std::find_if(guiPlan.corePlan.pairCandidates.begin(),
+                                        guiPlan.corePlan.pairCandidates.end(),
+                                        [&](const xjw::gui::SfmPairCandidate &candidate)
+    {
+        return candidate.pairKey == spatialKey;
+    });
+    ASSERT_NE(spatialIt, guiPlan.corePlan.pairCandidates.end());
+    EXPECT_TRUE(spatialIt->sourceTypes.contains(QStringLiteral("known_camera_spatial_neighbors")));
 }

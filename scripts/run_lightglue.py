@@ -46,8 +46,15 @@ def read_feature_file(path):
 
         keypoints = np.zeros((n_keypoints, 2), dtype=np.float32)
         scores = np.zeros(n_keypoints, dtype=np.float32)
+        scales = np.ones(n_keypoints, dtype=np.float32)
+        orientations = np.full(n_keypoints, -1.0, dtype=np.float32)
         for idx in range(n_keypoints):
-            x, y, score = struct.unpack("<fff", f.read(12))
+            if version >= 2:
+                x, y, score, scale, orientation = struct.unpack("<fffff", f.read(20))
+                scales[idx] = scale if np.isfinite(scale) and scale > 0.0 else 1.0
+                orientations[idx] = orientation if np.isfinite(orientation) else -1.0
+            else:
+                x, y, score = struct.unpack("<fff", f.read(12))
             keypoints[idx] = [x, y]
             scores[idx] = score
 
@@ -65,6 +72,8 @@ def read_feature_file(path):
         "name": name,
         "keypoints": keypoints,
         "scores": scores,
+        "scales": scales,
+        "orientations": orientations,
         "descriptors": descriptors,
         "n_keypoints": n_keypoints,
         "desc_dim": int(desc_dim),
@@ -100,6 +109,8 @@ def lightglue_feature_candidates(feature_algorithm, desc_dim):
         return ["aliked", f"auto_{desc_dim}d"]
     if feature_algorithm == "superpoint":
         return ["superpoint", f"auto_{desc_dim}d"]
+    if feature_algorithm == "sift":
+        return ["sift", f"auto_{desc_dim}d"]
     if desc_dim == 128:
         return ["disk", "aliked", "auto_128d"]
     if desc_dim == 256:

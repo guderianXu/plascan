@@ -16,7 +16,8 @@ enum class MvsSourceRejectReason
     Self,
     Duplicate,
     NoEvidence,
-    TriangulationAngle
+    TriangulationAngle,
+    LowQuality
 };
 
 struct MvsSourceCandidate
@@ -61,6 +62,12 @@ struct MvsSourcePlannerOptions
     bool rejectAngleOutliers = false;
     float minTriangulationAngleDeg = 0.2f;
     float maxTriangulationAngleDeg = 65.0f;
+    float preferredTriangulationAngleDeg = 10.0f;
+    float softMaxTriangulationAngleDeg = 25.0f;
+    int minSharedTracks = 0;
+    int minGeometricInliers = 0;
+    float minSourceQualityScore = 0.0f;
+    bool allowWeakKnownOverlap = true;
 };
 
 struct MvsSourcePlan

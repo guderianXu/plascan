@@ -1,5 +1,6 @@
 #include "OpenCvCompat.h"
 #include <opencv2/imgcodecs.hpp>
+#include <torch/torch.h>
 
 #include <cstdlib>
 #include <iostream>
@@ -77,6 +78,41 @@ int main()
                 static_cast<int>(siftKp0.size()),
                 static_cast<int>(siftKp1.size()),
                 siftBfCfg);
+
+        if (torch::cuda::is_available())
+        {
+            xjw::feature_match::tradition::TraditionalMatchConfig siftCudaBfCfg = siftBfCfg;
+            siftCudaBfCfg.useCuda = true;
+            siftCudaBfCfg.cudaDevice = 0;
+            const xjw::feature_match::MatchResult siftCudaBfMatches =
+                xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
+                    siftDesc0,
+                    siftDesc1,
+                    static_cast<int>(siftKp0.size()),
+                    static_cast<int>(siftKp1.size()),
+                    siftCudaBfCfg);
+
+            if (siftCudaBfMatches.cvMatches.size() != siftBfMatches.cvMatches.size())
+            {
+                std::cerr << "[ERROR] CUDA SIFT BF match count differs from CPU: "
+                          << siftCudaBfMatches.cvMatches.size() << " vs "
+                          << siftBfMatches.cvMatches.size() << std::endl;
+                return EXIT_FAILURE;
+            }
+            for (std::size_t i = 0; i < siftBfMatches.cvMatches.size(); ++i)
+            {
+                const cv::DMatch &cpuMatch = siftBfMatches.cvMatches[i];
+                const cv::DMatch &cudaMatch = siftCudaBfMatches.cvMatches[i];
+                if (cpuMatch.queryIdx != cudaMatch.queryIdx || cpuMatch.trainIdx != cudaMatch.trainIdx)
+                {
+                    std::cerr << "[ERROR] CUDA SIFT BF match differs at " << i
+                              << ": CPU " << cpuMatch.queryIdx << "->" << cpuMatch.trainIdx
+                              << ", CUDA " << cudaMatch.queryIdx << "->" << cudaMatch.trainIdx
+                              << std::endl;
+                    return EXIT_FAILURE;
+                }
+            }
+        }
 
         xjw::feature_match::tradition::TraditionalMatchConfig siftFlannCfg;
         siftFlannCfg.algorithmName = "sift_flann";

@@ -28,17 +28,94 @@ QJsonObject lastObject(const QJsonObject &root, const QString &arrayKey)
     return array.at(array.size() - 1).toObject();
 }
 
-QJsonObject qualityFromLatestSparseResult(const QJsonObject &projectMeta)
+QJsonObject normalizeProjectMeta(const QJsonObject &projectMeta)
 {
-    const QJsonObject atResult = lastObject(projectMeta, QStringLiteral("at_results"));
-    const QJsonObject diagnostics = atResult.value(QStringLiteral("sfm_diagnostics")).toObject();
-    QJsonObject quality = diagnostics.value(QStringLiteral("sparse_quality")).toObject();
-    if (!quality.isEmpty())
+    QJsonObject normalized = projectMeta.value(QStringLiteral("project_files")).toObject();
+    if (normalized.isEmpty())
     {
-        return quality;
+        normalized = projectMeta;
     }
 
-    quality = atResult.value(QStringLiteral("quality")).toObject();
+    for (auto it = projectMeta.constBegin(); it != projectMeta.constEnd(); ++it)
+    {
+        if (it.key() == QLatin1String("project_files"))
+        {
+            continue;
+        }
+        normalized.insert(it.key(), it.value());
+    }
+    return normalized;
+}
+
+QJsonObject latestSparseArtifact(const QJsonObject &projectMeta)
+{
+    const QStringList keys = {
+        QStringLiteral("sparse_results"),
+        QStringLiteral("aerial_triangulation_results"),
+        QStringLiteral("at_results")
+    };
+
+    for (const QString &key : keys)
+    {
+        const QJsonObject record = lastObject(projectMeta, key);
+        if (!record.isEmpty())
+        {
+            return record;
+        }
+    }
+    return QJsonObject();
+}
+
+QJsonObject qualityFromSparseArtifactRecord(const QJsonObject &record)
+{
+    const QJsonObject diagnostics = record.value(QStringLiteral("sfm_diagnostics")).toObject();
+    QJsonObject quality = diagnostics.value(QStringLiteral("sparse_quality")).toObject();
+    if (quality.isEmpty())
+    {
+        quality = record.value(QStringLiteral("quality")).toObject();
+    }
+
+    if (quality.isEmpty())
+    {
+        quality = QJsonObject();
+    }
+
+    const int sparsePointCount = record.value(QStringLiteral("sparse_point_count")).toInt(
+        record.value(QStringLiteral("point_count")).toInt(-1));
+    if (sparsePointCount >= 0 && !quality.contains(QStringLiteral("point_count")))
+    {
+        quality[QStringLiteral("point_count")] = sparsePointCount;
+    }
+
+    const int registeredImageCount = record.value(QStringLiteral("registered_image_count")).toInt(-1);
+    if (registeredImageCount >= 0 && !quality.contains(QStringLiteral("registered_image_count")))
+    {
+        quality[QStringLiteral("registered_image_count")] = registeredImageCount;
+    }
+
+    const int totalImageCount = record.value(QStringLiteral("total_image_count")).toInt(
+        record.value(QStringLiteral("input_image_count")).toInt(-1));
+    if (totalImageCount >= 0 && !quality.contains(QStringLiteral("total_image_count")))
+    {
+        quality[QStringLiteral("total_image_count")] = totalImageCount;
+    }
+
+    if (record.contains(QStringLiteral("track_len_histogram")) &&
+        !quality.contains(QStringLiteral("track_len_histogram")))
+    {
+        quality[QStringLiteral("track_len_histogram")] = record.value(QStringLiteral("track_len_histogram"));
+    }
+    if (record.contains(QStringLiteral("track_length_histogram")) &&
+        !quality.contains(QStringLiteral("track_length_histogram")))
+    {
+        quality[QStringLiteral("track_length_histogram")] = record.value(QStringLiteral("track_length_histogram"));
+    }
+    return quality;
+}
+
+QJsonObject qualityFromLatestSparseResult(const QJsonObject &projectMeta)
+{
+    QJsonObject quality = qualityFromSparseArtifactRecord(latestSparseArtifact(projectMeta));
     if (!quality.isEmpty())
     {
         return quality;
@@ -56,8 +133,8 @@ QJsonObject qualityFromLatestSparseResult(const QJsonObject &projectMeta)
 
 QJsonObject baSummaryFromLatestSparseResult(const QJsonObject &projectMeta)
 {
-    const QJsonObject atResult = lastObject(projectMeta, QStringLiteral("at_results"));
-    const QJsonObject diagnostics = atResult.value(QStringLiteral("sfm_diagnostics")).toObject();
+    const QJsonObject sparseArtifact = latestSparseArtifact(projectMeta);
+    const QJsonObject diagnostics = sparseArtifact.value(QStringLiteral("sfm_diagnostics")).toObject();
     return diagnostics.value(QStringLiteral("ba_summary")).toObject();
 }
 
@@ -222,20 +299,21 @@ bool writeTextAtomically(const QString &path, const QByteArray &data, QString *e
 
 QJsonObject ReconstructionQualityReport::buildFromProjectMeta(const QJsonObject &projectMeta)
 {
-    const QJsonObject sparseQuality = qualityFromLatestSparseResult(projectMeta);
-    const QJsonObject baSummary = baSummaryFromLatestSparseResult(projectMeta);
-    const int totalImages = sparseQuality.value(QStringLiteral("total_image_count")).toInt(imageCount(projectMeta));
+    const QJsonObject normalizedMeta = normalizeProjectMeta(projectMeta);
+    const QJsonObject sparseQuality = qualityFromLatestSparseResult(normalizedMeta);
+    const QJsonObject baSummary = baSummaryFromLatestSparseResult(normalizedMeta);
+    const int totalImages = sparseQuality.value(QStringLiteral("total_image_count")).toInt(imageCount(normalizedMeta));
     const int registeredImages = sparseQuality.value(QStringLiteral("registered_image_count")).toInt(
-        registeredImageCountFromImages(projectMeta));
+        registeredImageCountFromImages(normalizedMeta));
 
     QJsonObject report;
     report[QStringLiteral("type")] = QStringLiteral("reconstruction_quality");
     report[QStringLiteral("total_image_count")] = totalImages;
     report[QStringLiteral("registered_image_count")] = registeredImages;
     report[QStringLiteral("unregistered_image_count")] = std::max(0, totalImages - registeredImages);
-    report[QStringLiteral("unregistered_images")] = unregisteredImages(projectMeta);
+    report[QStringLiteral("unregistered_images")] = unregisteredImages(normalizedMeta);
     report[QStringLiteral("sparse_point_count")] = sparseQuality.value(QStringLiteral("point_count")).toInt(0);
-    report[QStringLiteral("dense_point_count")] = densePointCount(projectMeta);
+    report[QStringLiteral("dense_point_count")] = densePointCount(normalizedMeta);
     report[QStringLiteral("mean_reprojection_error_px")] =
         sparseQuality.value(QStringLiteral("mean_reprojection_error_px")).toDouble(
             sparseQuality.value(QStringLiteral("mean_reproj_px")).toDouble(0.0));
@@ -247,12 +325,12 @@ QJsonObject ReconstructionQualityReport::buildFromProjectMeta(const QJsonObject 
     report[QStringLiteral("triangulation_angle")] = sparseQuality.value(QStringLiteral("triangulation_angle")).toObject();
     report[QStringLiteral("ba_summary")] = baSummary;
     report[QStringLiteral("mvs_depth_frame_count")] =
-        projectMeta.value(QStringLiteral("depth_map_results")).toArray().size();
-    report[QStringLiteral("mvs_completed_depth_frame_count")] = completedDepthFrameCount(projectMeta);
-    report[QStringLiteral("mvs_valid_coverage")] = averageCompletedDepthCoverage(projectMeta);
-    report[QStringLiteral("dem_coverage")] = demCoverage(projectMeta);
+        normalizedMeta.value(QStringLiteral("depth_map_results")).toArray().size();
+    report[QStringLiteral("mvs_completed_depth_frame_count")] = completedDepthFrameCount(normalizedMeta);
+    report[QStringLiteral("mvs_valid_coverage")] = averageCompletedDepthCoverage(normalizedMeta);
+    report[QStringLiteral("dem_coverage")] = demCoverage(normalizedMeta);
 
-    const QJsonObject surveySummary = buildSurveyControlSummary(projectMeta);
+    const QJsonObject surveySummary = buildSurveyControlSummary(normalizedMeta);
     report[QStringLiteral("survey_control")] = surveySummary;
     report[QStringLiteral("control_point_count")] = surveySummary.value(QStringLiteral("control_point_count")).toInt();
     report[QStringLiteral("check_point_count")] = surveySummary.value(QStringLiteral("check_point_count")).toInt();

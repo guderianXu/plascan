@@ -92,6 +92,51 @@ TEST(MultiViewTrackBuilderTest, PublishesTrackConfidenceFromAcceptedEdgeScores)
     EXPECT_NEAR(result.meanTrackConfidence, 0.80, 1e-6);
 }
 
+TEST(MultiViewTrackBuilderTest, QualityThinningPrefersLongTracksOverDenseTwoViewTracks)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.setImageKeypoints(0, {{10.0f, 10.0f}, {12.0f, 10.0f}, {14.0f, 10.0f}});
+    builder.setImageKeypoints(1, {{10.0f, 10.0f}, {12.0f, 10.0f}, {14.0f, 10.0f}});
+    builder.setImageKeypoints(2, {{10.0f, 10.0f}});
+    builder.addMatchPair(0, 1, {{0, 0, 0.50f}, {1, 1, 0.99f}, {2, 2, 0.98f}});
+    builder.addMatchPair(1, 2, {{0, 0, 0.50f}});
+
+    xjw::MultiViewTrackBuilder::BuildOptions options;
+    options.enableQualityThinning = true;
+    options.imageWidth = 100.0f;
+    options.imageHeight = 100.0f;
+    options.gridColumns = 1;
+    options.gridRows = 1;
+    options.maxTracksPerGridCell = 1;
+
+    const xjw::MultiViewTrackBuildResult result = builder.build(options);
+
+    ASSERT_EQ(result.tracks.size(), 1);
+    EXPECT_EQ(result.tracks.front().length(), 3);
+    EXPECT_EQ(result.prunedByQualityThinning, 2);
+}
+
+TEST(MultiViewTrackBuilderTest, QualityThinningKeepsSpatiallySeparatedTracks)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.setImageKeypoints(0, {{10.0f, 10.0f}, {90.0f, 10.0f}});
+    builder.setImageKeypoints(1, {{10.0f, 10.0f}, {90.0f, 10.0f}});
+    builder.addMatchPair(0, 1, {{0, 0, 0.90f}, {1, 1, 0.80f}});
+
+    xjw::MultiViewTrackBuilder::BuildOptions options;
+    options.enableQualityThinning = true;
+    options.imageWidth = 100.0f;
+    options.imageHeight = 100.0f;
+    options.gridColumns = 2;
+    options.gridRows = 1;
+    options.maxTracksPerGridCell = 1;
+
+    const xjw::MultiViewTrackBuildResult result = builder.build(options);
+
+    ASSERT_EQ(result.tracks.size(), 2);
+    EXPECT_EQ(result.prunedByQualityThinning, 0);
+}
+
 TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 {
     const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);

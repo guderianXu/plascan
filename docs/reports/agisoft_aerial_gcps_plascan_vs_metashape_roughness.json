@@ -1,0 +1,66 @@
+{
+  "source": "E:\\code\\test\\agisoft_aerial_gcps\\mvs_output\\dense_cloud.ply",
+  "reference": "E:\\code\\plascan\\testData\\photogrammetry_benchmarks\\agisoft_aerial_gcps\\extracted\\aerial_images_with_gcps\\converted\\metashape_dense_cloud\\metashape_dense_cloud_leaf_local_sample_1pct_with_normals.ply",
+  "sampling": {
+    "max_source_points": 120000,
+    "max_reference_points": 120000
+  },
+  "source_summary": {
+    "count": 120000,
+    "bbox_min": [
+      -25.393362045288086,
+      -30.85091781616211,
+      -10.530261039733887
+    ],
+    "bbox_max": [
+      17.546451568603516,
+      10.486797332763672,
+      -4.505720615386963
+    ],
+    "z_mean": -6.76268151460886,
+    "z_std": 0.4221242334320258,
+    "z_p01": -7.697962760925293,
+    "z_p50": -6.738733768463135,
+    "z_p99": -5.532704830169678
+  },
+  "reference_summary": {
+    "count": 120000,
+    "bbox_min": [
+      -25.37049102783203,
+      -30.411327362060547,
+      -8.237841606140137
+    ],
+    "bbox_max": [
+      17.915111541748047,
+      10.26438045501709,
+      -5.398166656494141
+    ],
+    "z_mean": -6.816073607472578,
+    "z_std": 0.39342870079572534,
+    "z_p01": -7.701686859130859,
+    "z_p50": -6.800856113433838,
+    "z_p99": -5.98347806930542
+  },
+  "source_roughness": {
+    "grid_m": 0.35,
+    "min_points_per_cell": 5,
+    "used_cells": 7545,
+    "z_range_p50": 0.7198343276977539,
+    "z_range_p84": 1.4186558723449707,
+    "z_range_p95": 1.8420734405517578,
+    "z_std_p50": 0.1720224767814332,
+    "z_std_p84": 0.366350122672794,
+    "z_std_p95": 0.5193218052822755
+  },
+  "reference_roughness": {
+    "grid_m": 0.35,
+    "min_points_per_cell": 5,
+    "used_cells": 11382,
+    "z_range_p50": 0.05944538116455078,
+    "z_range_p84": 0.3018012046813965,
+    "z_range_p95": 0.4161200523376465,
+    "z_std_p50": 0.020199864196533,
+    "z_std_p84": 0.12269993150083618,
+    "z_std_p95": 0.16025327212776155
+  }
+}

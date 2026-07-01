@@ -1,5 +1,6 @@
 #include "project/SparseResultQuality.h"
 
+#include <QJsonArray>
 #include <QJsonValue>
 
 #include <algorithm>
@@ -93,6 +94,86 @@ bool hasInsufficientRegisteredImageCoverage(const QJsonObject &quality)
 
     return static_cast<double>(registeredCount) / static_cast<double>(inputCount)
         < kProductionMinRegisteredImageRatio;
+}
+
+QJsonObject qualityGateObjectFromRecord(const QJsonObject &record)
+{
+    const QJsonObject quality = qualityObjectFromRecord(record);
+    QJsonObject gate = quality.value(QStringLiteral("quality_gate")).toObject();
+    if (!gate.isEmpty())
+    {
+        return gate;
+    }
+
+    gate = record.value(QStringLiteral("quality_gate")).toObject();
+    if (!gate.isEmpty())
+    {
+        return gate;
+    }
+
+    const QJsonObject sparseQuality = record.value(QStringLiteral("sfm_diagnostics"))
+        .toObject()
+        .value(QStringLiteral("sparse_quality"))
+        .toObject();
+    return sparseQuality.value(QStringLiteral("quality_gate")).toObject();
+}
+
+bool qualityGateBlocksMvs(const QJsonObject &record)
+{
+    const QJsonObject gate = qualityGateObjectFromRecord(record);
+    return gate.contains(QStringLiteral("acceptable_for_mvs"))
+        && !gate.value(QStringLiteral("acceptable_for_mvs")).toBool(true);
+}
+
+QString qualityGateWarningText(const QString &warning)
+{
+    if (warning == QLatin1String("high_reprojection_error"))
+    {
+        return QStringLiteral("重投影误差过高");
+    }
+    if (warning == QLatin1String("weak_triangulation_angle"))
+    {
+        return QStringLiteral("三角角过小");
+    }
+    if (warning == QLatin1String("too_many_two_view_tracks"))
+    {
+        return QStringLiteral("两视 track 占比过高");
+    }
+    if (warning == QLatin1String("low_registered_image_coverage"))
+    {
+        return QStringLiteral("注册影像覆盖率过低");
+    }
+    if (warning == QLatin1String("poor_observation_spatial_coverage"))
+    {
+        return QStringLiteral("观测空间覆盖不足");
+    }
+    return warning;
+}
+
+QString qualityGateBlockingReason(const QJsonObject &record)
+{
+    const QJsonObject gate = qualityGateObjectFromRecord(record);
+    if (gate.isEmpty())
+    {
+        return QString();
+    }
+
+    QStringList warnings;
+    for (const QJsonValue &value : gate.value(QStringLiteral("warnings")).toArray())
+    {
+        const QString text = qualityGateWarningText(value.toString());
+        if (!text.isEmpty())
+        {
+            warnings.append(text);
+        }
+    }
+
+    const QString warningText = warnings.isEmpty()
+        ? QStringLiteral("稀疏质量指标未达到 MVS 阈值")
+        : warnings.join(QStringLiteral("、"));
+    return QStringLiteral("当前 SfM 稀疏点云未通过 MVS 质量门控：%1。"
+                          "请检查匹配/SfM/BA 质量后再生成深度图。")
+        .arg(warningText);
 }
 
 } // namespace
@@ -264,6 +345,10 @@ bool isProductionSparseResult(const QJsonObject &record)
     {
         return false;
     }
+    if (qualityGateBlocksMvs(record))
+    {
+        return false;
+    }
     if (hasInsufficientRegisteredImageCoverage(quality))
     {
         return false;
@@ -294,6 +379,10 @@ QString sparseResultBlockingReason(const QJsonObject &record)
     if (registeredImageCount(quality) < 2)
     {
         return QStringLiteral("当前稀疏点云注册影像少于 2 张，不能作为正式航测稀疏点云。");
+    }
+    if (qualityGateBlocksMvs(record))
+    {
+        return qualityGateBlockingReason(record);
     }
     if (hasInsufficientRegisteredImageCoverage(quality))
     {

@@ -38,6 +38,9 @@ struct StereoFusionConfig
     bool  useColor           = true;   ///< 是否按原图给融合点赋色
     int   colorCacheCapacity = 4;      ///< 原图懒加载 LRU 缓存容量
     bool  fuseOnlyFirstFrame = false;  ///< 流式窗口模式：只从窗口首帧产生点
+    bool  enableLowYieldFallback = false; ///< 显式预览/低产出模式才允许降到双视一致
+    float lowYieldFallbackMinRatio = 0.01f; ///< 严格融合点数 / 首帧有效深度低于该比例时触发 fallback
+    int   lowYieldFallbackMinNumPixels = 2; ///< fallback 的最少一致观测数；默认仍要求至少双视一致
     bool  useBoundingBox     = false;  ///< 是否裁剪到指定包围盒
     float bboxMin[3]         = {-1e9f, -1e9f, -1e9f};
     float bboxMax[3]         = { 1e9f,  1e9f,  1e9f};

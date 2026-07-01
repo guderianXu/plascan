@@ -175,6 +175,24 @@ TEST(BundleAdjustDialogLidarTest, PersistsLaserConstraintSettings)
     EXPECT_DOUBLE_EQ(emitted.value(QStringLiteral("laser_huber_delta_m")).toDouble(), 0.45);
 }
 
+TEST(BundleAdjustDialogPerformanceTest, SetAvailableImagesDoesNotPersistDuringInitialization)
+{
+    BundleAdjustDialog dialog;
+    QSignalSpy settingsSpy(&dialog, &BundleAdjustDialog::settingsChanged);
+    ASSERT_TRUE(settingsSpy.isValid());
+
+    QStringList images;
+    for (int i = 0; i < 500; ++i)
+    {
+        images.append(QStringLiteral("image_%1.jpg").arg(i, 4, 10, QLatin1Char('0')));
+    }
+
+    dialog.setAvailableImages(images);
+
+    EXPECT_EQ(settingsSpy.count(), 0)
+        << "Bulk image list initialization must not synchronously persist settings for every item.";
+}
+
 TEST(ProjectManagerBundleAdjustLidarTest, MapsLaserSettingsToBundleAdjustServiceOptions)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));

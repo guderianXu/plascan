@@ -130,6 +130,21 @@ class ThreeDReconstructionCliTest(unittest.TestCase):
         self.assertLess(source.index("stopAfterSfm || skipMvs"),
                         source.index("kMinimumSparsePointsForDenseWorkflow"))
 
+    def test_streaming_mvs_fusion_caches_small_frame_sets(self):
+        source = (ROOT / "src/cli/cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
+
+        fusion_function = re.search(
+            r"bool\s+fuseDepthMapsStreamingFromDisk\(.*?\n\}",
+            source,
+            re.S,
+        )
+        self.assertIsNotNone(fusion_function)
+        body = fusion_function.group(0)
+        self.assertIn("kStreamingFusionCacheFrameLimit", body)
+        self.assertIn("cachedFrames", body)
+        self.assertIn("loadFusionFramesFromDepthMaps", body)
+        self.assertIn("useCachedFrames", body)
+
     def test_mvs_uses_only_sfm_registered_cameras(self):
         cli_source = (ROOT / "src/cli/cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
         gui_source = (ROOT / "src/gui/main_window/MenuWorkflowController.cpp").read_text(encoding="utf-8")

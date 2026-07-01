@@ -5,7 +5,8 @@ C++ interface:
     forward(kpts0, descs0, image_size0, kpts1, descs1, image_size1) -> scores
 
 Inputs:
-    kpts*:      [1, N, 2] pixel coordinates
+    kpts*:      [1, N, 2] pixel coordinates; SIFT may pass [1, N, 4] as
+                [x, y, scale, orientation_radians]
     descs*:     [1, N, D] descriptors, D depends on feature type
     image_size: [1, 2] as [width, height]
 
@@ -16,11 +17,11 @@ Output:
 from __future__ import annotations
 
 import argparse
+import os
+import sys
 from pathlib import Path
 
 import torch
-from lightglue import LightGlue
-from lightglue.lightglue import normalize_keypoints
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -28,8 +29,35 @@ DEFAULT_OUTPUT_DIR = ROOT / "resources" / "models"
 FEATURE_DIMS = {
     "disk": 128,
     "aliked": 128,
+    "sift": 128,
     "superpoint": 256,
 }
+
+
+def add_vendored_lightglue_to_path() -> str:
+    candidates: list[Path] = []
+    env_repo = os.environ.get("LIGHTGLUE_REPO", "").strip()
+    if env_repo:
+        candidates.append(Path(env_repo))
+    candidates.extend([
+        ROOT / "3rdparty" / "LightGlue-main",
+        ROOT / "3rdparty" / "LightGlue",
+        ROOT / "third_party" / "LightGlue-main",
+        ROOT / "third_party" / "LightGlue",
+    ])
+
+    for candidate in candidates:
+        if (candidate / "lightglue" / "__init__.py").exists():
+            candidate_str = str(candidate)
+            if candidate_str not in sys.path:
+                sys.path.insert(0, candidate_str)
+            return candidate_str
+    return ""
+
+
+add_vendored_lightglue_to_path()
+from lightglue import LightGlue
+from lightglue.lightglue import normalize_keypoints
 
 
 class LightGlueScoreWrapper(torch.nn.Module):
@@ -52,8 +80,27 @@ class LightGlueScoreWrapper(torch.nn.Module):
         descs1: torch.Tensor,
         image_size1: torch.Tensor,
     ) -> torch.Tensor:
-        kpts0 = normalize_keypoints(kpts0, image_size0).clone()
-        kpts1 = normalize_keypoints(kpts1, image_size1).clone()
+        xy0 = normalize_keypoints(kpts0[..., :2], image_size0).clone()
+        xy1 = normalize_keypoints(kpts1[..., :2], image_size1).clone()
+        if self.model.conf.add_scale_ori:
+            if kpts0.size(-1) >= 4:
+                scales0 = kpts0[..., 2:3]
+                oris0 = kpts0[..., 3:4]
+            else:
+                scales0 = torch.ones_like(xy0[..., :1])
+                oris0 = torch.zeros_like(xy0[..., :1])
+            if kpts1.size(-1) >= 4:
+                scales1 = kpts1[..., 2:3]
+                oris1 = kpts1[..., 3:4]
+            else:
+                scales1 = torch.ones_like(xy1[..., :1])
+                oris1 = torch.zeros_like(xy1[..., :1])
+            kpts0 = torch.cat([xy0, scales0, oris0], dim=-1)
+            kpts1 = torch.cat([xy1, scales1, oris1], dim=-1)
+        else:
+            kpts0 = xy0
+            kpts1 = xy1
+
         desc0 = descs0.detach().contiguous()
         desc1 = descs1.detach().contiguous()
 
@@ -71,7 +118,7 @@ class LightGlueScoreWrapper(torch.nn.Module):
 
 def parse_features(value: str) -> list[str]:
     if value == "all":
-        return ["disk", "aliked", "superpoint"]
+        return ["disk", "aliked", "sift", "superpoint"]
     features = [item.strip().lower() for item in value.split(",") if item.strip()]
     unknown = [item for item in features if item not in FEATURE_DIMS]
     if unknown:
@@ -98,8 +145,16 @@ def export_one(feature: str, device_name: str, output_dir: Path) -> Path:
     model = LightGlueScoreWrapper(feature).eval().to(device)
 
     torch.manual_seed(42)
-    kpts0 = torch.rand(1, 16, 2, device=device) * torch.tensor([640.0, 480.0], device=device)
-    kpts1 = torch.rand(1, 18, 2, device=device) * torch.tensor([640.0, 480.0], device=device)
+    kpt_dim = 4 if feature == "sift" else 2
+    kpts0 = torch.rand(1, 16, kpt_dim, device=device)
+    kpts1 = torch.rand(1, 18, kpt_dim, device=device)
+    kpts0[..., :2] *= torch.tensor([640.0, 480.0], device=device)
+    kpts1[..., :2] *= torch.tensor([640.0, 480.0], device=device)
+    if feature == "sift":
+        kpts0[..., 2:3] = 1.0 + kpts0[..., 2:3] * 15.0
+        kpts1[..., 2:3] = 1.0 + kpts1[..., 2:3] * 15.0
+        kpts0[..., 3:4] = (kpts0[..., 3:4] * 2.0 - 1.0) * torch.pi
+        kpts1[..., 3:4] = (kpts1[..., 3:4] * 2.0 - 1.0) * torch.pi
     desc0 = torch.rand(1, 16, dim, device=device)
     desc1 = torch.rand(1, 18, dim, device=device)
     image_size = torch.tensor([[640.0, 480.0]], device=device)
@@ -127,8 +182,8 @@ def main() -> int:
     parser.add_argument(
         "--features",
         type=parse_features,
-        default=parse_features("disk,aliked"),
-        help="Comma-separated: disk,aliked,superpoint or all. Default: disk,aliked",
+        default=parse_features("disk,aliked,sift"),
+        help="Comma-separated: disk,aliked,sift,superpoint or all. Default: disk,aliked,sift",
     )
     parser.add_argument(
         "--devices",

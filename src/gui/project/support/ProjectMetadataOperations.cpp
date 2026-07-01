@@ -8,7 +8,88 @@
 #include <QDir>
 #include <QFileInfo>
 
+#include <limits>
+
 namespace xjw::gui::project {
+namespace {
+
+QString denseCloudPathFromRecord(const QJsonObject &record)
+{
+    QString path = record.value(QStringLiteral("dense_cloud_xyz")).toString().trimmed();
+    if (path.isEmpty())
+    {
+        path = record.value(QStringLiteral("path")).toString().trimmed();
+    }
+    return QDir::cleanPath(path);
+}
+
+bool containsAnyToken(const QString &text, const QStringList &tokens)
+{
+    for (const QString &token : tokens)
+    {
+        if (text.contains(token))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+int denseCloudMeshingPreferenceScore(const QJsonObject &record)
+{
+    const QString path = denseCloudPathFromRecord(record);
+    const QString haystack = QStringList{
+        record.value(QStringLiteral("stage")).toString(),
+        record.value(QStringLiteral("quality_stage")).toString(),
+        record.value(QStringLiteral("operation")).toString(),
+        record.value(QStringLiteral("source")).toString(),
+        record.value(QStringLiteral("result_type")).toString(),
+        record.value(QStringLiteral("kind")).toString(),
+        QFileInfo(path).completeBaseName()
+    }.join(QLatin1Char(' ')).toLower();
+
+    int score = 0;
+    if (containsAnyToken(haystack, {QStringLiteral("production"),
+                                   QStringLiteral("final"),
+                                   QStringLiteral("deliverable")}))
+    {
+        score += 3000;
+    }
+    if (containsAnyToken(haystack, {QStringLiteral("terrain"),
+                                   QStringLiteral("surface"),
+                                   QStringLiteral("dem_surface"),
+                                   QStringLiteral("height_grid")}))
+    {
+        score += 1200;
+    }
+    if (containsAnyToken(haystack, {QStringLiteral("refined"),
+                                   QStringLiteral("refine"),
+                                   QStringLiteral("cleaned"),
+                                   QStringLiteral("clean"),
+                                   QStringLiteral("filtered"),
+                                   QStringLiteral("filter"),
+                                   QStringLiteral("postprocess"),
+                                   QStringLiteral("denoise")}))
+    {
+        score += 1000;
+    }
+    if (containsAnyToken(haystack, {QStringLiteral("raw"),
+                                   QStringLiteral("mvs_fusion"),
+                                   QStringLiteral("depth_fusion")}))
+    {
+        score -= 100;
+    }
+    if (containsAnyToken(haystack, {QStringLiteral("debug"),
+                                   QStringLiteral("preview"),
+                                   QStringLiteral("sample"),
+                                   QStringLiteral("temporary")}))
+    {
+        score -= 800;
+    }
+    return score;
+}
+
+} // namespace
 
 QJsonObject projectFilesMeta(ProjectData *projectData)
 {
@@ -77,14 +158,28 @@ bool resolveLatestDenseCloudPath(ProjectData *projectData,
     }
 
     const QJsonArray denseResults = projectData->metadata().value(QStringLiteral("dense_cloud_results")).toArray();
-    for (int index = denseResults.size() - 1; index >= 0; --index)
+    int bestScore = std::numeric_limits<int>::min();
+    int bestIndex = -1;
+    QString bestPath;
+    for (int index = 0; index < denseResults.size(); ++index)
     {
-        const QString candidate = denseResults.at(index).toObject().value(QStringLiteral("dense_cloud_xyz")).toString();
+        const QJsonObject record = denseResults.at(index).toObject();
+        const QString candidate = denseCloudPathFromRecord(record);
         if (!candidate.isEmpty() && QFileInfo::exists(candidate))
         {
-            *denseCloudPath = candidate;
-            return true;
+            const int score = denseCloudMeshingPreferenceScore(record);
+            if (score > bestScore || (score == bestScore && index > bestIndex))
+            {
+                bestScore = score;
+                bestIndex = index;
+                bestPath = candidate;
+            }
         }
+    }
+    if (!bestPath.isEmpty())
+    {
+        *denseCloudPath = bestPath;
+        return true;
     }
 
     if (errorMessage)

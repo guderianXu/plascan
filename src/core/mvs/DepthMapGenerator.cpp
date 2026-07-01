@@ -7,6 +7,7 @@
 #include "DenseCloudBuilder.h"
 #include "DepthFrameUtils.h"
 #include "EpipolarRectifier.h"
+#include "MvsQualityReport.h"
 #include "MvsSourcePlanner.h"
 #include "MvsViewSelection.h"
 #include "Logger.h"
@@ -92,6 +93,22 @@ struct DepthConfidenceSummary
     int validPixelCount = 0;
     double meanConfidence = 0.0;
 };
+
+QJsonObject depthPostProcessStatsToJson(const DepthPostProcessStats &stats)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("valid_before"), stats.validBeforePostprocess);
+    object.insert(QStringLiteral("valid_after_confidence_filter"), stats.validAfterConfidenceFilter);
+    object.insert(QStringLiteral("confidence_removed"), stats.confidenceRemoved);
+    object.insert(QStringLiteral("local_depth_outlier_removed"), stats.localDepthOutlierRemoved);
+    object.insert(QStringLiteral("small_component_removed"), stats.smallComponentRemoved);
+    object.insert(QStringLiteral("speckle_removed"), stats.speckleRemoved);
+    object.insert(QStringLiteral("edge_confidence_removed"), stats.edgeConfidenceRemoved);
+    object.insert(QStringLiteral("geom_consistency_removed"), stats.geomConsistencyRemoved);
+    object.insert(QStringLiteral("valid_after"), stats.validAfterPostprocess);
+    object.insert(QStringLiteral("effective_confidence_threshold"), stats.effectiveConfidenceThreshold);
+    return object;
+}
 
 double bytesToGiB(uint64_t bytes)
 {
@@ -1413,6 +1430,13 @@ void DepthMapGenerator::prepareFrameCaches()
         plannerOptions.rejectAngleOutliers = true;
         plannerOptions.minTriangulationAngleDeg = 0.2f;
         plannerOptions.maxTriangulationAngleDeg = 70.0f;
+        if (_config.numSourceViews >= 5 && _config.fusion.minConsistentViews >= 3)
+        {
+            plannerOptions.minSharedTracks = 20;
+            plannerOptions.minGeometricInliers = 20;
+            plannerOptions.minSourceQualityScore = 0.35f;
+            plannerOptions.allowWeakKnownOverlap = false;
+        }
 
         struct RankedSourceCandidate
         {
@@ -2603,11 +2627,11 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
     {
         confThresh = 0.0f;
     }
-    stats.effectiveConfidenceThreshold = confThresh;
 
     const bool hasConfidence = !confidenceMap.empty()
         && confidenceMap.size() == depthMap.size()
         && confidenceMap.type() == CV_32F;
+    bool adaptiveConfidenceRaised = false;
     if (hasConfidence)
     {
         double cMin = 0.0;
@@ -2622,6 +2646,35 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                 cMax,
                 cMean[0],
                 confThresh);
+
+        if (viewCount > 2 && config.enableAdaptiveConfidenceFilter)
+        {
+            const DepthMapQualityMetrics quality =
+                analyzeDepthMapQuality(depthMap, confidenceMap, viewCount);
+            const bool suspiciousFullCoverage =
+                quality.validCoverage >= config.adaptiveFullCoverageThreshold &&
+                quality.meanConfidence > 0.0f &&
+                quality.meanConfidence < config.adaptiveLowMeanConfidenceThreshold;
+            if (suspiciousFullCoverage)
+            {
+                const float strictThreshold = std::max(
+                    config.adaptiveStrictConfidenceThreshold,
+                    quality.recommendedFusionConfidence);
+                if (strictThreshold > confThresh)
+                {
+                    fprintf(stderr,
+                            "[MVS] 帧%d 低置信满幅深度图: coverage=%.3f mean_conf=%.3f, "
+                            "fusion confidence %.3f→%.3f\n",
+                            refIdx,
+                            quality.validCoverage,
+                            quality.meanConfidence,
+                            confThresh,
+                            strictThreshold);
+                    confThresh = strictThreshold;
+                    adaptiveConfidenceRaised = true;
+                }
+            }
+        }
 
         if (confThresh > 0.0f)
         {
@@ -2647,7 +2700,8 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
                     validAfterConfidence,
                     confThresh);
 
-            if (validAfterConfidence < stats.validBeforePostprocess / 20)
+            if (!adaptiveConfidenceRaised &&
+                validAfterConfidence < stats.validBeforePostprocess / 20)
             {
                 fprintf(stderr, "[MVS] 帧%d 置信度过滤后像素太少，回退为不过滤\n", refIdx);
                 depthMap = std::move(beforeConfidence);
@@ -2658,6 +2712,7 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
             stats.confidenceRemoved = std::max(0, stats.validBeforePostprocess - validAfterConfidence);
         }
     }
+    stats.effectiveConfidenceThreshold = confThresh;
 
     if (config.enableLocalDepthOutlierFilter)
     {
@@ -3242,11 +3297,18 @@ FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res
     cv::Mat filteredDepth = rawDepth.clone();
     cv::Mat filteredConfidence = res.confidence ? res.confidence->clone() : cv::Mat();
 
-    frame.depthPostprocess = postprocessFusionDepthMap(filteredDepth,
-                                                       filteredConfidence,
-                                                       _config.fusion,
-                                                       res.refViewIdx,
-                                                       static_cast<int>(_views.size()));
+    if (res.depthPostprocessApplied)
+    {
+        frame.depthPostprocess = res.depthPostprocess;
+    }
+    else
+    {
+        frame.depthPostprocess = postprocessFusionDepthMap(filteredDepth,
+                                                           filteredConfidence,
+                                                           _config.fusion,
+                                                           res.refViewIdx,
+                                                           static_cast<int>(_views.size()));
+    }
 
     frame.depthMap   = filteredDepth;
     frame.confidence = filteredConfidence;
@@ -3604,6 +3666,14 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
             : nullptr;
         const DepthConfidenceSummary depthConfidenceSummary =
             summarizeDepthConfidence(*result.depthMap, confidenceMap);
+        const cv::Mat emptyConfidence;
+        const DepthMapQualityMetrics depthQualityMetrics = analyzeDepthMapQuality(
+            *result.depthMap,
+            confidenceMap ? *confidenceMap : emptyConfidence,
+            sourceQualitySummary.sourceViewCount);
+        const QJsonObject depthQualityJson = depthMapQualityMetricsToJson(depthQualityMetrics);
+        const QJsonObject depthPostprocessJson =
+            depthPostProcessStatsToJson(result.depthPostprocess);
 
         QJsonObject artifact;
         artifact[QStringLiteral("ref_index")] = frameIndex;
@@ -3621,6 +3691,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("source_quality_min")] = sourceQualitySummary.minQuality;
         artifact[QStringLiteral("depth_confidence_mean")] = depthConfidenceSummary.meanConfidence;
         artifact[QStringLiteral("valid_pixel_count")] = depthConfidenceSummary.validPixelCount;
+        artifact[QStringLiteral("depth_quality")] = depthQualityJson;
+        artifact[QStringLiteral("depth_postprocess")] = depthPostprocessJson;
         artifact[QStringLiteral("status")] = QStringLiteral("completed");
         artifact[QStringLiteral("stage")] = stageLabel;
         artifact[QStringLiteral("device")] = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
@@ -3641,6 +3713,8 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.minSourceQualityScore = sourceQualitySummary.minQuality;
         record.meanDepthConfidence = depthConfidenceSummary.meanConfidence;
         record.validPixelCount = depthConfidenceSummary.validPixelCount;
+        record.depthQuality = depthQualityJson;
+        record.depthPostprocess = depthPostprocessJson;
         record.status = QStringLiteral("completed");
         record.device = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
         record.depthPng = QString::fromStdString(pngPath);
@@ -4123,7 +4197,7 @@ void DepthMapGenerator::runInBackground()
         LOG_INFO(QStringLiteral("[MVS] 已保存原始深度图并释放内存，跳过需要全量深度常驻的一致性检查"));
     }
 
-    if (keepDepthFramesInMemory.load() && (savePreviewPng || saveRawDepth))
+    if (_config.runFusion && keepDepthFramesInMemory.load() && (savePreviewPng || saveRawDepth))
     {
         for (int i = 0; i < NV; ++i)
         {
@@ -4134,7 +4208,26 @@ void DepthMapGenerator::runInBackground()
                 emit finished(false);
                 return;
             }
-            const DepthFrameResult &res = _depthFrames[i];
+            DepthFrameResult &res = _depthFrames[i];
+            if (res.success && res.depthMap && !res.depthMap->empty() && !res.depthPostprocessApplied)
+            {
+                cv::Mat emptyConfidence;
+                cv::Mat &confidence =
+                    (res.confidence && !res.confidence->empty()) ? *res.confidence : emptyConfidence;
+                res.depthPostprocess = postprocessFusionDepthMap(*res.depthMap,
+                                                                  confidence,
+                                                                  _config.fusion,
+                                                                  res.refViewIdx,
+                                                                  static_cast<int>(_views.size()));
+                res.depthPostprocessApplied = true;
+            }
+            if (_cancelled.load())
+            {
+                saveQueue.cancel();
+                saveQueue.stop();
+                emit finished(false);
+                return;
+            }
             saveQueue.enqueue(i, res, QStringLiteral("过滤后"));
         }
         saveQueue.waitUntilIdle();

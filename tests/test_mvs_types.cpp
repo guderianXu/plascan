@@ -10,9 +10,12 @@
 // ============================================================
 
 #include <gtest/gtest.h>
+#include "MvsQualityReport.h"
 #include "MvsTypes.h"
 #include "MvsViewSelection.h"
 #include "Camera.h"
+
+#include <QJsonObject>
 
 #include <cmath>
 #include <array>
@@ -54,13 +57,14 @@ TEST(PatchMatchConfigTest, DefaultParametersOptimized)
 {
     PatchMatchConfig cfg;
 
-    // 核心参数已收紧
+    // 生产点云默认应偏质量，避免把整幅低置信深度图直接用于融合。
     EXPECT_EQ(cfg.patchHalf, 7)
         << "patchHalf should be 7 (15x15 window) for robust matching";
     EXPECT_EQ(cfg.numIterations, 16);
-    EXPECT_EQ(cfg.numSourceViews, 4);
-    EXPECT_FLOAT_EQ(cfg.confidenceThresh, 0.30f)
-        << "confidence threshold should be 0.30";
+    EXPECT_GE(cfg.numSourceViews, 5)
+        << "Aerial production MVS should use enough source views for consensus";
+    EXPECT_FLOAT_EQ(cfg.confidenceThresh, 0.60f)
+        << "Production PatchMatch confidence threshold should reject low-confidence full-frame depths";
     EXPECT_TRUE(cfg.useCuda);
     EXPECT_EQ(cfg.downsampleFactor, 2);
 }
@@ -193,14 +197,18 @@ TEST(FusionConfigTest, DefaultParametersOptimized)
 {
     FusionConfig cfg;
 
-    // 收紧后的融合参数
-    EXPECT_EQ(cfg.minConsistentViews, 2);
-    EXPECT_FLOAT_EQ(cfg.relDepthThresh, 0.05f)
-        << "Relative depth threshold should be 0.05 (tightened from 0.08)";
-    EXPECT_FLOAT_EQ(cfg.pixelThresh, 2.0f)
-        << "Pixel threshold should be 2.0 (tightened from 4.0)";
-    EXPECT_FLOAT_EQ(cfg.confidenceThresh, 0.25f)
-        << "Fusion confidence threshold should be 0.25";
+    // 正式 dense cloud 要求多视一致；快速预览应由 GUI/profile 显式放宽。
+    EXPECT_EQ(cfg.minConsistentViews, 3);
+    EXPECT_FLOAT_EQ(cfg.relDepthThresh, 0.03f)
+        << "Relative depth threshold should be strict enough to suppress vertical spikes";
+    EXPECT_FLOAT_EQ(cfg.pixelThresh, 1.5f)
+        << "Pixel threshold should be strict for production fusion";
+    EXPECT_FLOAT_EQ(cfg.confidenceThresh, 0.65f)
+        << "Fusion confidence threshold should reject low-confidence near-full depth maps";
+    EXPECT_TRUE(cfg.enableAdaptiveConfidenceFilter);
+    EXPECT_FLOAT_EQ(cfg.adaptiveFullCoverageThreshold, 0.95f);
+    EXPECT_FLOAT_EQ(cfg.adaptiveLowMeanConfidenceThreshold, 0.65f);
+    EXPECT_FLOAT_EQ(cfg.adaptiveStrictConfidenceThreshold, 0.65f);
 }
 
 TEST(FusionConfigTest, InpaintEnabled)
@@ -215,6 +223,27 @@ TEST(FusionConfigTest, SigmaFusionEnabled)
     FusionConfig cfg;
     EXPECT_TRUE(cfg.doSigmaFusion);
     EXPECT_GT(cfg.sigmaMultiplier, 0.f);
+}
+
+TEST(MvsQualityReportTest, DetectsLocalDepthSpikesEvenWithHighConfidence)
+{
+    cv::Mat depth(8, 8, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(8, 8, CV_32F, cv::Scalar(0.90f));
+    depth.at<float>(2, 2) = 40.0f;
+    depth.at<float>(5, 5) = 42.0f;
+
+    const DepthMapQualityMetrics metrics =
+        analyzeDepthMapQuality(depth, confidence, 5);
+
+    EXPECT_EQ(metrics.validPixelCount, 64);
+    EXPECT_FLOAT_EQ(metrics.validCoverage, 1.0f);
+    EXPECT_EQ(metrics.localDepthOutlierCount, 2);
+    EXPECT_GT(metrics.localDepthOutlierRatio, 0.02f);
+    EXPECT_TRUE(metrics.hasLocalDepthOutliers);
+
+    const QJsonObject json = depthMapQualityMetricsToJson(metrics);
+    EXPECT_EQ(json.value(QStringLiteral("local_depth_outlier_count")).toInt(), 2);
+    EXPECT_TRUE(json.value(QStringLiteral("has_local_depth_outliers")).toBool(false));
 }
 
 // ─── Camera::PositiveDepthModel 测试 ───────────────────────────

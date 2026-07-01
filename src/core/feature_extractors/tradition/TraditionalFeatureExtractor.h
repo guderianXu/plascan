@@ -43,6 +43,12 @@ public:
     static FeatureOutput detect(const cv::Mat &grayImage,
                                    const SuperPointConfig &config,
                                    const std::string &normalizedName);
+
+    static FeatureOutput detect(const cv::Mat &grayImage,
+                                const SuperPointConfig &config,
+                                const std::string &normalizedName,
+                                bool useCuda,
+                                int cudaDevice);
 };
 
 } // namespace xjw::feature_extractors

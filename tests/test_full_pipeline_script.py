@@ -40,10 +40,16 @@ class FullPipelineScriptTest(unittest.TestCase):
     def test_disk_and_aliked_lightglue_candidates_use_dedicated_torchscript_models(self):
         self.assertEqual(pipeline.lightglue_model_kind_for_algorithm("disk"), "lightglue_disk")
         self.assertEqual(pipeline.lightglue_model_kind_for_algorithm("aliked"), "lightglue_aliked")
+        self.assertEqual(pipeline.lightglue_model_kind_for_algorithm("sift"), "lightglue_sift")
         self.assertEqual(pipeline.MODEL_CANDIDATES["lightglue_disk"]["cpu"][0],
                          "lightglue_disk_cpu.torchscript")
         self.assertEqual(pipeline.MODEL_CANDIDATES["lightglue_aliked"]["cuda"][0],
                          "lightglue_aliked_cuda.torchscript")
+        self.assertEqual(pipeline.MODEL_CANDIDATES["lightglue_sift"]["cpu"],
+                         ["lightglue_sift_cpu.torchscript"])
+        for kind in ("lightglue", "lightglue_disk", "lightglue_aliked", "lightglue_sift"):
+            for names in pipeline.MODEL_CANDIDATES[kind].values():
+                self.assertFalse(any(name.endswith(".pt") for name in names))
 
     def test_auto_dense_max_disparity_uses_camera_geometry(self):
         with tempfile.TemporaryDirectory() as tmp:

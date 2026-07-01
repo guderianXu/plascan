@@ -21,6 +21,7 @@
 #include "MatchOutlierRejector.h"
 #include "AlgorithmCompat.h"
 #include "lightglue/LightGlueMatcher.h"
+#include "tradition/TraditionalFeatureMatcher.h"
 #include <opencv2/opencv.hpp>
 #if defined(PLASCAN_TORCH_HAS_CUDA)
 #include <c10/cuda/CUDACachingAllocator.h>
@@ -31,6 +32,7 @@
 #include "SFMService.h"
 #include "SfmPairPlanner.h"
 #include "SfmMatchDiagnostics.h"
+#include "GuidedRematchService.h"
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "Logger.h"
@@ -39,6 +41,7 @@
 #include "project/SparseResultQuality.h"
 #include "pipeline/IncrementalSfm.h"
 #include "common/SfmTypes.h"
+#include "quality/SfmQualityReport.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
 
@@ -66,6 +69,7 @@
 #include <mutex>
 #include <stdexcept>
 #include <thread>
+#include <utility>
 
 namespace xjw
 {
@@ -690,6 +694,28 @@ bool isSfmFeatureAlgorithm(const QString &featureAlgorithm)
            featureAlgorithm == QStringLiteral("akaze");
 }
 
+bool isLightGlueSfmMatch(const QString &featureAlgorithm, const QString &matchAlgorithm)
+{
+    return matchAlgorithm == QStringLiteral("lightglue") &&
+           (featureAlgorithm == QStringLiteral("disk") ||
+            featureAlgorithm == QStringLiteral("aliked") ||
+            featureAlgorithm == QStringLiteral("sift"));
+}
+
+bool isTraditionalSiftMatch(const QString &featureAlgorithm, const QString &matchAlgorithm)
+{
+    return featureAlgorithm == QStringLiteral("sift") &&
+           (matchAlgorithm == QStringLiteral("sift_flann") ||
+            matchAlgorithm == QStringLiteral("sift_bf_l2"));
+}
+
+bool sfmFeatureNeedsModel(const QString &featureAlgorithm)
+{
+    return featureAlgorithm == QStringLiteral("disk") ||
+           featureAlgorithm == QStringLiteral("aliked") ||
+           featureAlgorithm == QStringLiteral("superpoint");
+}
+
 QStringList featureModelCandidates(const QString &featureAlgorithm, bool useCuda)
 {
     const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
@@ -722,22 +748,24 @@ QStringList lightGlueModelCandidates(const QString &featureAlgorithm, bool useCu
     if (featureAlgorithm == QStringLiteral("disk"))
     {
         return {
-            QStringLiteral("lightglue_disk_%1.torchscript").arg(suffix),
-            QStringLiteral("lightglue_disk_%1.pt").arg(suffix)
+            QStringLiteral("lightglue_disk_%1.torchscript").arg(suffix)
         };
     }
     if (featureAlgorithm == QStringLiteral("aliked"))
     {
         return {
-            QStringLiteral("lightglue_aliked_%1.torchscript").arg(suffix),
-            QStringLiteral("lightglue_aliked_%1.pt").arg(suffix)
+            QStringLiteral("lightglue_aliked_%1.torchscript").arg(suffix)
+        };
+    }
+    if (featureAlgorithm == QStringLiteral("sift"))
+    {
+        return {
+            QStringLiteral("lightglue_sift_%1.torchscript").arg(suffix)
         };
     }
     return {
         QStringLiteral("lightglue_matcher_%1.torchscript").arg(suffix),
-        QStringLiteral("lightglue_matcher_%1.pt").arg(suffix),
-        QStringLiteral("lightglue_matcher.torchscript"),
-        QStringLiteral("lightglue_matcher.pt")
+        QStringLiteral("lightglue_matcher.torchscript")
     };
 }
 
@@ -919,6 +947,158 @@ QString processOutputSummary(QProcess &process)
     return stdoutText;
 }
 
+QString lightGlueModelOutputDir(QString *error)
+{
+    const QString envModelDir = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
+    if (!envModelDir.isEmpty())
+    {
+        return QDir::cleanPath(QFileInfo(envModelDir).absoluteFilePath());
+    }
+
+#ifdef PLASCAN_SOURCE_DIR
+    return QDir::cleanPath(QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("resources/models")));
+#else
+    const QString exeDir = QCoreApplication::applicationDirPath();
+    const QString installedModels = QDir(exeDir).filePath(QStringLiteral("../models"));
+    if (!installedModels.trimmed().isEmpty())
+    {
+        return QDir::cleanPath(QFileInfo(installedModels).absoluteFilePath());
+    }
+    if (error)
+    {
+        *error = QStringLiteral("无法确定模型输出目录");
+    }
+    return QString();
+#endif
+}
+
+QString lightGlueTorchScriptModelName(const QString &featureAlgorithm, bool useCuda)
+{
+    const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
+    return QStringLiteral("lightglue_%1_%2.torchscript").arg(featureAlgorithm, suffix);
+}
+
+QString ensureLightGlueTorchScriptModel(const QString &featureAlgorithm,
+                                        bool useCuda,
+                                        QString *pickedModelName,
+                                        QString *error)
+{
+    const QString modelName = lightGlueTorchScriptModelName(featureAlgorithm, useCuda);
+    const QString existingPath = findModelFile(modelName);
+    if (!existingPath.isEmpty())
+    {
+        if (pickedModelName)
+        {
+            *pickedModelName = modelName;
+        }
+        return existingPath;
+    }
+
+    const QString scriptPath = findScriptFile(QStringLiteral("export_lightglue_torchscript.py"));
+    if (scriptPath.isEmpty())
+    {
+        if (error)
+        {
+            *error = QStringLiteral("未找到自动导出脚本 export_lightglue_torchscript.py");
+        }
+        return QString();
+    }
+
+    QString outputDirError;
+    const QString outputDir = lightGlueModelOutputDir(&outputDirError);
+    if (outputDir.isEmpty())
+    {
+        if (error)
+        {
+            *error = outputDirError;
+        }
+        return QString();
+    }
+
+    QDir dir;
+    if (!dir.mkpath(outputDir))
+    {
+        if (error)
+        {
+            *error = QStringLiteral("无法创建模型输出目录: %1").arg(outputDir);
+        }
+        return QString();
+    }
+
+    const QString deviceName = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
+    QStringList args;
+    args << scriptPath
+         << QStringLiteral("--features") << featureAlgorithm
+         << QStringLiteral("--devices") << deviceName
+         << QStringLiteral("--output-dir") << outputDir;
+
+    LOG_INFO(QStringLiteral("  LightGlue %1 TorchScript 缺失，自动导出: %2")
+        .arg(featureAlgorithm.toUpper(), modelName));
+
+    QProcess process;
+    process.setWorkingDirectory(QFileInfo(scriptPath).absolutePath());
+    process.start(pythonExecutable(), args);
+    if (!process.waitForStarted(30000))
+    {
+        if (error)
+        {
+            *error = QStringLiteral("无法启动 LightGlue TorchScript 自动导出: %1").arg(process.errorString());
+        }
+        return QString();
+    }
+    if (!process.waitForFinished(900000))
+    {
+        process.kill();
+        process.waitForFinished(5000);
+        if (error)
+        {
+            *error = QStringLiteral("LightGlue TorchScript 自动导出超时: %1").arg(processOutputSummary(process));
+        }
+        return QString();
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    {
+        if (error)
+        {
+            const QString details = processOutputSummary(process);
+            *error = details.isEmpty()
+                ? QStringLiteral("LightGlue TorchScript 自动导出失败，退出码: %1").arg(process.exitCode())
+                : QStringLiteral("LightGlue TorchScript 自动导出失败，退出码: %1\n%2")
+                    .arg(process.exitCode())
+                    .arg(details);
+        }
+        return QString();
+    }
+
+    const QString generatedPath = findModelFile(modelName);
+    if (!generatedPath.isEmpty())
+    {
+        if (pickedModelName)
+        {
+            *pickedModelName = modelName;
+        }
+        LOG_INFO(QStringLiteral("  LightGlue TorchScript 已生成: %1").arg(generatedPath));
+        return generatedPath;
+    }
+
+    const QString directPath = QDir(outputDir).filePath(modelName);
+    if (QFile::exists(directPath))
+    {
+        if (pickedModelName)
+        {
+            *pickedModelName = modelName;
+        }
+        LOG_INFO(QStringLiteral("  LightGlue TorchScript 已生成: %1").arg(directPath));
+        return QDir::cleanPath(QFileInfo(directPath).absoluteFilePath());
+    }
+
+    if (error)
+    {
+        *error = QStringLiteral("自动导出完成但未找到模型文件: %1").arg(modelName);
+    }
+    return QString();
+}
+
 bool runPythonLightGlue(const QString &scriptPath,
                         const QString &featurePath0,
                         const QString &featurePath1,
@@ -1010,6 +1190,56 @@ bool allowPythonLightGlueFallback()
         || value == QStringLiteral("on");
 }
 
+xjw::feature_extractors::FeatureData withHalfTurnRotatedKeypoints(
+    const xjw::feature_extractors::FeatureData &input)
+{
+    xjw::feature_extractors::FeatureData rotated = input;
+    if (rotated.imageWidth <= 0 || rotated.imageHeight <= 0)
+    {
+        return rotated;
+    }
+
+    const float maxX = static_cast<float>(rotated.imageWidth - 1);
+    const float maxY = static_cast<float>(rotated.imageHeight - 1);
+    for (cv::KeyPoint &keypoint : rotated.keypoints)
+    {
+        keypoint.pt.x = maxX - keypoint.pt.x;
+        keypoint.pt.y = maxY - keypoint.pt.y;
+    }
+    return rotated;
+}
+
+xjw::feature_extractors::FeatureData limitedFeatureData(
+    const xjw::feature_extractors::FeatureData &input,
+    int maxKeypoints)
+{
+    if (maxKeypoints <= 0 || input.size() <= maxKeypoints)
+    {
+        return input;
+    }
+
+    xjw::feature_extractors::FeatureData limited = input;
+    const int safeLimit = std::max(0, maxKeypoints);
+    limited.keypoints.resize(static_cast<std::size_t>(safeLimit));
+    if (static_cast<int>(limited.scores.size()) > safeLimit)
+    {
+        limited.scores.resize(static_cast<std::size_t>(safeLimit));
+    }
+    if (!limited.descriptors.empty() && limited.descriptors.rows > safeLimit)
+    {
+        limited.descriptors = limited.descriptors.rowRange(0, safeLimit).clone();
+    }
+    return limited;
+}
+
+bool shouldRunLightGlueHalfTurnRetry(const QString &featureAlgorithm,
+                                     const QString &matchAlgorithm)
+{
+    return matchAlgorithm == QStringLiteral("lightglue")
+        && (featureAlgorithm == QStringLiteral("disk")
+            || featureAlgorithm == QStringLiteral("aliked"));
+}
+
 QJsonObject readJsonObjectFile(const QString &path)
 {
     QFile file(path);
@@ -1037,6 +1267,41 @@ float matchScoreForDMatch(const xjw::feature_match::MatchResult &result, const c
         return std::max(0.0f, std::min(1.0f, 1.0f / (1.0f + std::max(0.0f, match.distance))));
     }
     return 1.0f;
+}
+
+xjw::feature_match::MatchResult runTraditionalSiftFallback(
+    const xjw::feature_extractors::FeatureData &fdA,
+    const xjw::feature_extractors::FeatureData &fdB,
+    const std::vector<cv::KeyPoint> &keypointsA,
+    const std::vector<cv::KeyPoint> &keypointsB,
+    const superglue::OutlierFilterConfig &outlierCfg,
+    bool useCuda,
+    int cudaDevice,
+    int *rawMatchCount)
+{
+    xjw::feature_match::tradition::TraditionalMatchConfig traditionalCfg;
+    traditionalCfg.algorithmName = "sift_bf_l2";
+    traditionalCfg.ratioTestThreshold = 0.75f;
+    traditionalCfg.requireMutualConsistency = true;
+    traditionalCfg.useCuda = useCuda;
+    traditionalCfg.cudaDevice = cudaDevice;
+
+    xjw::feature_match::MatchResult fallback =
+        xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
+            fdA.toCvDescriptors(traditionalCfg.algorithmName),
+            fdB.toCvDescriptors(traditionalCfg.algorithmName),
+            fdA.size(),
+            fdB.size(),
+            traditionalCfg);
+
+    if (rawMatchCount)
+    {
+        *rawMatchCount = fallback.numMatches;
+    }
+
+    int inlierCount = fallback.numMatches;
+    return superglue::MatchOutlierRejector::filter(
+        fallback, keypointsA, keypointsB, outlierCfg, &inlierCount);
 }
 
 // ── 精度等级参数预设 ─────────────────────────────────────────────────────────
@@ -1314,6 +1579,34 @@ struct PairMatchData
     std::vector<FeatureMatch> matches;
     bool loaded = false;
     bool skippedByNoMatchCache = false;
+};
+
+struct GuidedRematchExecutionStats
+{
+    int plannedPairCount = 0;
+    int attemptedPairCount = 0;
+    int invalidGeometryPairCount = 0;
+    int generatedMatchCount = 0;
+    int addedMatchCount = 0;
+    int skippedExistingMatchCount = 0;
+    int skippedInvalidMatchCount = 0;
+    bool secondPassAttempted = false;
+    bool secondPassAccepted = false;
+
+    QJsonObject toJson() const
+    {
+        QJsonObject object;
+        object[QStringLiteral("guided_matching_planned_pair_count")] = plannedPairCount;
+        object[QStringLiteral("guided_matching_attempted_pair_count")] = attemptedPairCount;
+        object[QStringLiteral("guided_matching_invalid_geometry_pair_count")] = invalidGeometryPairCount;
+        object[QStringLiteral("guided_matching_generated_match_count")] = generatedMatchCount;
+        object[QStringLiteral("guided_matching_added_match_count")] = addedMatchCount;
+        object[QStringLiteral("guided_matching_skipped_existing_match_count")] = skippedExistingMatchCount;
+        object[QStringLiteral("guided_matching_skipped_invalid_match_count")] = skippedInvalidMatchCount;
+        object[QStringLiteral("guided_matching_second_pass_attempted")] = secondPassAttempted;
+        object[QStringLiteral("guided_matching_second_pass_accepted")] = secondPassAccepted;
+        return object;
+    }
 };
 
 QVector<int> makeSfmDiagnosticImageIds(const QVector<ImageId> &validIds)
@@ -1654,10 +1947,12 @@ QJsonObject buildSfmPairDiagnosticsJson(const QString &label,
 }
 
 QJsonObject sfmGuidedMatchPlanToJson(const SfmGuidedMatchPlan &plan,
-                                     const QMap<ImageId, QString> &idToPath)
+                                     const QMap<ImageId, QString> &idToPath,
+                                     bool enabled)
 {
     constexpr int kCandidateSampleLimit = 500;
     QJsonObject object;
+    object[QStringLiteral("guided_matching_enabled")] = enabled;
     object[QStringLiteral("guided_match_candidate_count")] = plan.candidates.size();
     object[QStringLiteral("seed_pair_count")] = plan.seedPairCount;
     object[QStringLiteral("skipped_healthy_pairs")] = plan.skippedHealthyPairs;
@@ -1828,40 +2123,6 @@ QJsonObject writeSfmMatchingQualityReports(const QString &assetsDir,
     return result;
 }
 
-struct NumericSummary
-{
-    int count = 0;
-    double sum = 0.0;
-    double minValue = std::numeric_limits<double>::infinity();
-    double maxValue = -std::numeric_limits<double>::infinity();
-
-    void add(double value)
-    {
-        if (!std::isfinite(value))
-        {
-            return;
-        }
-        ++count;
-        sum += value;
-        minValue = std::min(minValue, value);
-        maxValue = std::max(maxValue, value);
-    }
-
-    QJsonObject toJson(const QString &unit) const
-    {
-        QJsonObject object;
-        object[QStringLiteral("count")] = count;
-        object[QStringLiteral("unit")] = unit;
-        if (count > 0)
-        {
-            object[QStringLiteral("mean")] = sum / static_cast<double>(count);
-            object[QStringLiteral("min")] = minValue;
-            object[QStringLiteral("max")] = maxValue;
-        }
-        return object;
-    }
-};
-
 double computeTrackMaxTriangulationAngleDeg(const SfmReconstruction &reconstruction,
                                             const ScenePoint3D &point)
 {
@@ -1903,6 +2164,42 @@ double computeTrackMaxTriangulationAngleDeg(const SfmReconstruction &reconstruct
         }
     }
     return maxAngle;
+}
+
+QSize inferSfmQualityImageSize(const SfmReconstruction &reconstruction, const QStringList &imagePaths)
+{
+    for (const QString &imagePath : imagePaths)
+    {
+        QImageReader reader(imagePath);
+        const QSize size = reader.size();
+        if (size.isValid() && size.width() > 0 && size.height() > 0)
+        {
+            return size;
+        }
+    }
+
+    double maxX = 0.0;
+    double maxY = 0.0;
+    for (ImageId imageId : reconstruction.allImageIds())
+    {
+        if (!reconstruction.hasImage(imageId))
+        {
+            continue;
+        }
+
+        const ImageData &image = reconstruction.image(imageId);
+        for (const FeatureKeypoint &keypoint : image.keypoints)
+        {
+            maxX = std::max(maxX, static_cast<double>(keypoint.x));
+            maxY = std::max(maxY, static_cast<double>(keypoint.y));
+        }
+    }
+
+    if (maxX > 0.0 && maxY > 0.0)
+    {
+        return QSize(static_cast<int>(std::ceil(maxX + 1.0)), static_cast<int>(std::ceil(maxY + 1.0)));
+    }
+    return QSize();
 }
 
 void logSfmMatchDiagnostics(const QString &label,
@@ -2053,12 +2350,304 @@ bool appendIndexedMatchesFromSidecar(const QJsonObject &sidecar,
     return matches->size() > originalSize;
 }
 
+QString guidedPairKey(ImageId imageA, ImageId imageB)
+{
+    const ImageId a = std::min(imageA, imageB);
+    const ImageId b = std::max(imageA, imageB);
+    return QStringLiteral("%1:%2").arg(static_cast<qulonglong>(a)).arg(static_cast<qulonglong>(b));
+}
+
+std::vector<cv::Point2f> guidedKeypointPoints(const std::vector<cv::KeyPoint> &keypoints)
+{
+    std::vector<cv::Point2f> points;
+    points.reserve(keypoints.size());
+    for (const cv::KeyPoint &keypoint : keypoints)
+    {
+        points.push_back(keypoint.pt);
+    }
+    return points;
+}
+
+std::vector<std::pair<int, int>> guidedExistingMatches(const PairMatchData &pair,
+                                                       const ImageFeatureCache &featureA,
+                                                       const ImageFeatureCache &featureB)
+{
+    std::vector<std::pair<int, int>> existingMatches;
+    existingMatches.reserve(pair.matches.size());
+    const int countA = static_cast<int>(featureA.featureOutput.keypoints.size());
+    const int countB = static_cast<int>(featureB.featureOutput.keypoints.size());
+
+    for (const FeatureMatch &match : pair.matches)
+    {
+        if (match.idx1 == kInvalidFeatureIdx || match.idx2 == kInvalidFeatureIdx)
+        {
+            continue;
+        }
+
+        const int queryIndex = static_cast<int>(match.idx1);
+        const int trainIndex = static_cast<int>(match.idx2);
+        if (queryIndex < 0 || trainIndex < 0 || queryIndex >= countA || trainIndex >= countB)
+        {
+            continue;
+        }
+        existingMatches.emplace_back(queryIndex, trainIndex);
+    }
+    return existingMatches;
+}
+
+cv::Mat estimateFundamentalFromExistingMatches(const PairMatchData &pair,
+                                               const ImageFeatureCache &featureA,
+                                               const ImageFeatureCache &featureB)
+{
+    std::vector<cv::Point2f> pointsA;
+    std::vector<cv::Point2f> pointsB;
+    pointsA.reserve(pair.matches.size());
+    pointsB.reserve(pair.matches.size());
+
+    const int countA = static_cast<int>(featureA.featureOutput.keypoints.size());
+    const int countB = static_cast<int>(featureB.featureOutput.keypoints.size());
+    for (const FeatureMatch &match : pair.matches)
+    {
+        if (match.idx1 == kInvalidFeatureIdx || match.idx2 == kInvalidFeatureIdx)
+        {
+            continue;
+        }
+
+        const int queryIndex = static_cast<int>(match.idx1);
+        const int trainIndex = static_cast<int>(match.idx2);
+        if (queryIndex < 0 || trainIndex < 0 || queryIndex >= countA || trainIndex >= countB)
+        {
+            continue;
+        }
+
+        pointsA.push_back(featureA.featureOutput.keypoints[static_cast<std::size_t>(queryIndex)].pt);
+        pointsB.push_back(featureB.featureOutput.keypoints[static_cast<std::size_t>(trainIndex)].pt);
+    }
+
+    if (pointsA.size() < 8 || pointsB.size() < 8)
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat inlierMask;
+    cv::Mat fundamental = cv::findFundamentalMat(pointsA, pointsB, cv::FM_RANSAC, 2.0, 0.99, inlierMask);
+    if (fundamental.empty() || fundamental.rows != 3 || fundamental.cols != 3)
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat fundamental64;
+    fundamental.convertTo(fundamental64, CV_64F);
+    return fundamental64;
+}
+
+cv::Matx33d cameraIntrinsicMatrix(const Camera &camera)
+{
+    return cv::Matx33d(camera.uAxisSign() * camera.focalX(), 0.0, camera.principalX(),
+                       0.0, camera.vAxisSign() * camera.focalY(), camera.principalY(),
+                       0.0, 0.0, 1.0);
+}
+
+cv::Matx33d worldToCameraMatrix(const Camera &camera)
+{
+    const auto rotation = camera.worldToCameraRotation();
+    return cv::Matx33d(rotation[0], rotation[1], rotation[2],
+                       rotation[3], rotation[4], rotation[5],
+                       rotation[6], rotation[7], rotation[8]);
+}
+
+cv::Vec3d cameraCenterVector(const Camera &camera)
+{
+    const auto center = camera.cameraCenter();
+    return cv::Vec3d(center[0], center[1], center[2]);
+}
+
+cv::Matx33d skewSymmetric(const cv::Vec3d &vector)
+{
+    return cv::Matx33d(0.0, -vector[2], vector[1],
+                       vector[2], 0.0, -vector[0],
+                       -vector[1], vector[0], 0.0);
+}
+
+cv::Mat fundamentalFromRegisteredCameras(const Camera &cameraA,
+                                         const Camera &cameraB)
+{
+    if (!cameraA.isValid() || !cameraB.isValid() ||
+        std::abs(cameraA.focalX()) <= 1e-9 ||
+        std::abs(cameraA.focalY()) <= 1e-9 ||
+        std::abs(cameraB.focalX()) <= 1e-9 ||
+        std::abs(cameraB.focalY()) <= 1e-9)
+    {
+        return cv::Mat();
+    }
+
+    const cv::Matx33d rotationA = worldToCameraMatrix(cameraA);
+    const cv::Matx33d rotationB = worldToCameraMatrix(cameraB);
+    const cv::Vec3d centerA = cameraCenterVector(cameraA);
+    const cv::Vec3d centerB = cameraCenterVector(cameraB);
+    const cv::Vec3d translationAB = rotationB * (centerA - centerB);
+    const double baseline = cv::norm(translationAB);
+    if (baseline <= 1e-9)
+    {
+        return cv::Mat();
+    }
+
+    const cv::Matx33d relativeRotation = rotationB * rotationA.t();
+    const cv::Matx33d essential = skewSymmetric(translationAB) * relativeRotation;
+    const cv::Matx33d intrinsicA = cameraIntrinsicMatrix(cameraA);
+    const cv::Matx33d intrinsicB = cameraIntrinsicMatrix(cameraB);
+    const cv::Matx33d fundamental = intrinsicB.inv().t() * essential * intrinsicA.inv();
+
+    double frobeniusNorm = 0.0;
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            frobeniusNorm += fundamental(row, col) * fundamental(row, col);
+        }
+    }
+    frobeniusNorm = std::sqrt(frobeniusNorm);
+    if (frobeniusNorm <= 1e-12)
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat matrix(3, 3, CV_64F);
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            matrix.at<double>(row, col) = fundamental(row, col) / frobeniusNorm;
+        }
+    }
+    return matrix;
+}
+
+cv::Mat guidedDescriptorsFromFeatureOutput(const FeatureOutput &featureOutput,
+                                           const QString &featureAlgorithm)
+{
+    const xjw::feature_extractors::FeatureData featureData =
+        xjw::feature_extractors::FeatureData::fromFeatureOutput(featureOutput,
+                                                                featureAlgorithm.toStdString());
+    return featureData.descriptors;
+}
+
+GuidedRematchExecutionStats appendGuidedRematchCandidatesToPairs(
+    const SfmGuidedMatchPlan &guidedPlan,
+    QVector<PairMatchData> *pairs,
+    const QMap<ImageId, ImageFeatureCache> &featureCache,
+    const SfmReconstruction &reconstruction,
+    const QString &featureAlgorithm,
+    int targetInlierCount)
+{
+    GuidedRematchExecutionStats stats;
+    stats.plannedPairCount = guidedPlan.candidates.size();
+    if (!pairs || guidedPlan.candidates.isEmpty())
+    {
+        return stats;
+    }
+
+    QHash<QString, int> pairIndexByKey;
+    for (int index = 0; index < pairs->size(); ++index)
+    {
+        const PairMatchData &pair = pairs->at(index);
+        pairIndexByKey.insert(guidedPairKey(pair.idA, pair.idB), index);
+    }
+
+    GuidedRematchOptions options;
+    options.minOverlapScore = 0.0;
+    options.targetInlierCount = std::max(1, targetInlierCount);
+    options.epipolarBandPx = 2.0;
+    options.maxMatches = 200;
+
+    for (const SfmGuidedMatchCandidate &candidate : guidedPlan.candidates)
+    {
+        const ImageId imageA = static_cast<ImageId>(candidate.imageA);
+        const ImageId imageB = static_cast<ImageId>(candidate.imageB);
+        auto pairIndexIt = pairIndexByKey.constFind(guidedPairKey(imageA, imageB));
+        if (pairIndexIt == pairIndexByKey.constEnd())
+        {
+            PairMatchData newPair;
+            newPair.idA = imageA;
+            newPair.idB = imageB;
+            pairIndexByKey.insert(guidedPairKey(imageA, imageB), pairs->size());
+            pairs->push_back(std::move(newPair));
+            pairIndexIt = pairIndexByKey.constFind(guidedPairKey(imageA, imageB));
+        }
+
+        PairMatchData &pair = (*pairs)[pairIndexIt.value()];
+        if (!reconstruction.isRegistered(pair.idA) || !reconstruction.isRegistered(pair.idB))
+        {
+            continue;
+        }
+
+        auto featureAIt = featureCache.constFind(pair.idA);
+        auto featureBIt = featureCache.constFind(pair.idB);
+        if (featureAIt == featureCache.constEnd() || featureBIt == featureCache.constEnd())
+        {
+            continue;
+        }
+
+        cv::Mat fundamental = estimateFundamentalFromExistingMatches(pair, featureAIt.value(), featureBIt.value());
+        if (fundamental.empty())
+        {
+            fundamental = fundamentalFromRegisteredCameras(reconstruction.camera(pair.idA),
+                                                          reconstruction.camera(pair.idB));
+        }
+        if (fundamental.empty())
+        {
+            ++stats.invalidGeometryPairCount;
+            continue;
+        }
+
+        GuidedRematchInput input;
+        input.pair.hasRegisteredCameraA = true;
+        input.pair.hasRegisteredCameraB = true;
+        input.pair.overlapScore = 1.0;
+        input.pair.geometricInlierCount = static_cast<int>(pair.matches.size());
+        input.pair.permanentlyRejected = false;
+        input.options = options;
+        input.fundamentalMatrix = fundamental;
+        input.keypointsA = guidedKeypointPoints(featureAIt.value().featureOutput.keypoints);
+        input.keypointsB = guidedKeypointPoints(featureBIt.value().featureOutput.keypoints);
+        input.descriptorsA = guidedDescriptorsFromFeatureOutput(featureAIt.value().featureOutput, featureAlgorithm);
+        input.descriptorsB = guidedDescriptorsFromFeatureOutput(featureBIt.value().featureOutput, featureAlgorithm);
+        input.existingMatches = guidedExistingMatches(pair, featureAIt.value(), featureBIt.value());
+
+        GuidedRematchResult guidedResult = generateGuidedRematchCandidates(input);
+        for (GuidedRematchMatch &guidedMatch : guidedResult.matches)
+        {
+            guidedMatch.replacesExistingMatch = false;
+        }
+
+        if (!guidedResult.executed)
+        {
+            continue;
+        }
+
+        ++stats.attemptedPairCount;
+        stats.generatedMatchCount += static_cast<int>(guidedResult.matches.size());
+
+        const GuidedRematchMergeResult mergeResult =
+            mergeGuidedRematchMatches(pair.matches, guidedResult);
+        pair.matches = mergeResult.matches;
+        pair.loaded = !pair.matches.empty();
+        pair.skippedByNoMatchCache = false;
+
+        stats.addedMatchCount += mergeResult.addedMatchCount;
+        stats.skippedExistingMatchCount += mergeResult.skippedExistingMatchCount;
+        stats.skippedInvalidMatchCount += mergeResult.skippedInvalidMatchCount;
+    }
+
+    return stats;
+}
+
 } // anonymous namespace
 
 // ══════════════════════════════════════════════════════════════════════════════
 // SFMService::run  — 一站式增量 SFM 全自动主入口（同步阻塞）
 // ══════════════════════════════════════════════════════════════════════════════
-SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
+SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
 {
     SFMServiceResult result;
     QElapsedTimer elapsedTimer;
@@ -2133,11 +2722,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         return result;
     }
 
-    if (!isExistingMatchOnlyMode &&
-        (matchAlgorithm != QStringLiteral("lightglue") ||
-         (featureAlgorithm != QStringLiteral("disk") && featureAlgorithm != QStringLiteral("aliked"))))
+    const bool useLightGlueSfmMatch = isLightGlueSfmMatch(featureAlgorithm, matchAlgorithm);
+    const bool useTraditionalSiftSfmMatch = isTraditionalSiftMatch(featureAlgorithm, matchAlgorithm);
+    if (!isExistingMatchOnlyMode && !useLightGlueSfmMatch && !useTraditionalSiftSfmMatch)
     {
-        result.errorMessage = QStringLiteral("自动补全匹配当前只支持 DISK/ALIKED + LightGlue，收到: %1 + %2")
+        result.errorMessage = QStringLiteral(
+            "自动补全匹配当前支持 DISK/ALIKED/SIFT + LightGlue，或 SIFT + FLANN/BF-L2，收到: %1 + %2")
             .arg(featureAlgorithm, matchAlgorithm);
         result.summary = result.errorMessage;
         return result;
@@ -2221,10 +2811,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         LOG_INFO(QStringLiteral("  启动 %1 特征提取...").arg(featureAlgorithm.toUpper()));
 
         QString pickedExtractorModelName;
+        const bool featureNeedsModel = sfmFeatureNeedsModel(featureAlgorithm);
         const QString extractorModelPath = findFirstModelFile(
             featureModelCandidates(featureAlgorithm, useCuda),
             &pickedExtractorModelName);
-        if (extractorModelPath.isEmpty())
+        if (featureNeedsModel && extractorModelPath.isEmpty())
         {
             result.errorMessage = QStringLiteral("未找到 %1 模型文件: %2")
                 .arg(featureAlgorithm.toUpper(),
@@ -2232,7 +2823,22 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             result.summary      = result.errorMessage;
             return result;
         }
-        LOG_INFO(QStringLiteral("  特征提取模型: %1").arg(pickedExtractorModelName));
+        if (featureNeedsModel)
+        {
+            LOG_INFO(QStringLiteral("  特征提取模型: %1").arg(pickedExtractorModelName));
+        }
+        else
+        {
+            if (featureAlgorithm == QStringLiteral("sift") && useCuda)
+            {
+                LOG_INFO(QStringLiteral("  SIFT 使用 OpenCV 标准特征提取器；CUDA 仅用于后续匹配阶段"));
+            }
+            else
+            {
+                LOG_INFO(QStringLiteral("  %1 使用 OpenCV 传统特征提取器，无需模型文件")
+                    .arg(featureAlgorithm.toUpper()));
+            }
+        }
 
         try
         {
@@ -2251,7 +2857,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             extractorCfg.maxImageDim   = featureMaxImageDim;
             extractorCfg.grayscaleMin  = opts.featureGrayscaleMin;
             extractorCfg.grayscaleMax  = opts.featureGrayscaleMax;
-            extractorCfg.useCuda       = useCuda;
+            extractorCfg.useCuda       = useCuda && featureAlgorithm != QStringLiteral("sift");
             extractorCfg.cudaDevice    = 0;
 
             std::unique_ptr<IExtractor> extractor =
@@ -2741,16 +3347,58 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             pd.idA = idA;
             pd.idB = idB;
 
-            // 在 matches 目录下查找已有 .match 文件（两种命名顺序）
-            const QString pathAB = QDir(matchDir).filePath(
-                QStringLiteral("%1__%2.match").arg(baseA, baseB));
-            const QString pathBA = QDir(matchDir).filePath(
-                QStringLiteral("%1__%2.match").arg(baseB, baseA));
+            auto findExistingMatchCache = [&](const QString &leftBase,
+                                              const QString &rightBase) -> QString
+            {
+                const QDir dir(matchDir);
+                const QStringList patterns{
+                    QStringLiteral("%1__%2.match").arg(leftBase, rightBase),
+                    QStringLiteral("%1__%2*.match").arg(leftBase, rightBase)
+                };
 
-            QString foundPath;
-            if (QFile::exists(pathAB))      foundPath = pathAB;
-            else if (QFile::exists(pathBA)) foundPath = pathBA;
-            else
+                QFileInfoList candidates;
+                QSet<QString> seenPaths;
+                for (const QString &pattern : patterns)
+                {
+                    const QFileInfoList files = dir.entryInfoList(QStringList{pattern},
+                                                                  QDir::Files,
+                                                                  QDir::Time);
+                    for (const QFileInfo &fileInfo : files)
+                    {
+                        const QString path = QDir::cleanPath(fileInfo.absoluteFilePath());
+                        if (!seenPaths.contains(path))
+                        {
+                            seenPaths.insert(path);
+                            candidates.append(fileInfo);
+                        }
+                    }
+                }
+
+                std::sort(candidates.begin(), candidates.end(),
+                          [](const QFileInfo &left, const QFileInfo &right)
+                          {
+                              return left.lastModified() > right.lastModified();
+                          });
+
+                for (const QFileInfo &fileInfo : candidates)
+                {
+                    const QString candidatePath = QDir::cleanPath(fileInfo.absoluteFilePath());
+                    if (existingMatchCompatible(candidatePath, idA, idB))
+                    {
+                        return candidatePath;
+                    }
+                }
+                return QString();
+            };
+
+            // 在 matches 目录下查找已有 .match 文件（两种命名顺序，兼容 A__B_lightglue.match）
+            QString foundPath = findExistingMatchCache(baseA, baseB);
+            if (foundPath.isEmpty())
+            {
+                foundPath = findExistingMatchCache(baseB, baseA);
+            }
+
+            if (foundPath.isEmpty())
             {
                 const QString pairKey = canonicalPairKey(idToPath.value(idA), idToPath.value(idB));
                 const QString metaPath = metaMatchPathByPair.value(pairKey);
@@ -2947,47 +3595,67 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             .arg(metaReadOkCount));
     }
 
-    // 2a. 对缺失配对执行 LightGlue 匹配（可按选项禁用）
+    // 2a. 对缺失配对执行特征匹配（可按选项禁用）
     if (!missingPairIndices.isEmpty() && opts.autoGenerateMissingMatches)
     {
-        LOG_INFO(QStringLiteral("  启动 LightGlue 特征匹配..."));
+        LOG_INFO(QStringLiteral("  启动 %1 特征匹配...").arg(matchAlgorithm.toUpper()));
 
         QString lgModelName;
-        const QString lgModelPath = findFirstModelFile(lightGlueModelCandidates(featureAlgorithm, useCuda), &lgModelName);
+        QString lgModelPath = useLightGlueSfmMatch
+            ? findFirstModelFile(lightGlueModelCandidates(featureAlgorithm, useCuda), &lgModelName)
+            : QString();
         const bool canUsePythonLightGlue = featureAlgorithm == QStringLiteral("disk")
-                                        || featureAlgorithm == QStringLiteral("aliked");
-        const bool usePythonLightGlue = lgModelPath.isEmpty()
+                                        || featureAlgorithm == QStringLiteral("aliked")
+                                        || featureAlgorithm == QStringLiteral("sift");
+        QString lightGlueExportError;
+        if (useLightGlueSfmMatch && lgModelPath.isEmpty() && canUsePythonLightGlue)
+        {
+            lgModelPath = ensureLightGlueTorchScriptModel(
+                featureAlgorithm, useCuda, &lgModelName, &lightGlueExportError);
+            if (!lgModelPath.isEmpty())
+            {
+                LOG_INFO(QStringLiteral("  自动导出后使用 LightGlue 模型: %1").arg(lgModelName));
+            }
+        }
+        const bool usePythonLightGlue = useLightGlueSfmMatch
+                                     && lgModelPath.isEmpty()
                                      && canUsePythonLightGlue
                                      && allowPythonLightGlueFallback();
         const float activeMatchThreshold = usePythonLightGlue
             ? pythonLightGlueFallbackThreshold(featureAlgorithm, presets.matchThreshold)
             : presets.matchThreshold;
         QString pythonLightGlueScript;
-        if (usePythonLightGlue)
+        if (useTraditionalSiftSfmMatch)
+        {
+            LOG_INFO(QStringLiteral("  SIFT 传统匹配器: %1").arg(matchAlgorithm));
+        }
+        else if (usePythonLightGlue)
         {
             pythonLightGlueScript = findScriptFile(QStringLiteral("run_lightglue.py"));
             if (pythonLightGlueScript.isEmpty())
             {
                 result.errorMessage =
-                    QStringLiteral("未找到 %1 专用 LightGlue TorchScript 模型(%2)，且未找到 scripts/run_lightglue.py")
+                    QStringLiteral("未找到 %1 专用 LightGlue TorchScript 模型(%2)，自动导出失败: %3；且未找到 scripts/run_lightglue.py")
                         .arg(featureAlgorithm.toUpper(),
-                             lightGlueModelCandidates(featureAlgorithm, useCuda).join(QStringLiteral(", ")));
+                             lightGlueModelCandidates(featureAlgorithm, useCuda).join(QStringLiteral(", ")),
+                             lightGlueExportError);
                 result.summary = result.errorMessage;
                 return result;
             }
-            LOG_INFO(QStringLiteral("  未找到 %1 专用 LightGlue TorchScript，使用 Python LightGlue: %2")
-                .arg(featureAlgorithm.toUpper(), pythonLightGlueScript));
+            LOG_WARN(QStringLiteral("  LightGlue TorchScript 自动导出失败: %1").arg(lightGlueExportError));
+            LOG_INFO(QStringLiteral("  使用 Python LightGlue: %1").arg(pythonLightGlueScript));
             LOG_INFO(QStringLiteral("  Python LightGlue 阈值: %1").arg(activeMatchThreshold, 0, 'g', 6));
         }
         else if (lgModelPath.isEmpty())
         {
-            result.errorMessage = QStringLiteral("未找到 LightGlue 模型文件: %1")
+            result.errorMessage = QStringLiteral("未找到 LightGlue TorchScript 模型文件: %1")
                 .arg(lightGlueModelCandidates(featureAlgorithm, useCuda).join(QStringLiteral(", ")));
             if (canUsePythonLightGlue)
             {
                 result.errorMessage += QStringLiteral(
-                    "。默认流程不再自动回退 Python LightGlue；请先运行 scripts/export_lightglue_torchscript.py 导出 TorchScript，"
-                    "或临时设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1");
+                    "。自动导出失败: %1；请检查 PLASCAN_PYTHON_EXECUTABLE/PLASCAN_PYTHON 指向的环境是否包含 torch 和 lightglue。"
+                    "如需临时使用 Python 逐对匹配，可设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1")
+                    .arg(lightGlueExportError);
             }
             result.summary      = result.errorMessage;
             return result;
@@ -3041,8 +3709,25 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         lgCfg.useCuda = useCuda;
         lgCfg.scoreThreshold = activeMatchThreshold;
 
+        const bool use_skeleton_feature_budget =
+            opts.enableTwoStageMatching &&
+            opts.enableGuidedRematching &&
+            useLightGlueSfmMatch &&
+            opts.skeletonFeatureMaxKeypoints > 0;
+        const int two_stage_skeleton_keypoint_limit =
+            use_skeleton_feature_budget && presets.featureMaxKeypoints > 0
+                ? std::min(presets.featureMaxKeypoints, opts.skeletonFeatureMaxKeypoints)
+                : (use_skeleton_feature_budget
+                       ? opts.skeletonFeatureMaxKeypoints
+                       : presets.featureMaxKeypoints);
+        if (use_skeleton_feature_budget)
+        {
+            LOG_INFO(QStringLiteral("  两阶段匹配: 特征全量提取，第一阶段只使用前 %1 个 keypoints 建骨架")
+                .arg(two_stage_skeleton_keypoint_limit));
+        }
+
         // ── 验证模型可加载（用单个测试实例） ─────────────────────────────
-        if (!usePythonLightGlue)
+        if (useLightGlueSfmMatch && !usePythonLightGlue)
         {
             xjw::feature_match::LightGlueMatcher testMatcher(lgCfg);
             if (!testMatcher.isLoaded()) 
@@ -3070,7 +3755,7 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
             {
                 // 每线程自有 matcher 实例
                 std::unique_ptr<xjw::feature_match::IFeatureMatcher> localMatcher;
-                if (!usePythonLightGlue)
+                if (useLightGlueSfmMatch && !usePythonLightGlue)
                 {
                     auto lgMatcher = std::make_unique<xjw::feature_match::LightGlueMatcher>(lgCfg);
                     if (!lgMatcher->isLoaded()) return;
@@ -3121,9 +3806,37 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     fdB.imageWidth = fcB.imgW;
                     fdB.imageHeight = fcB.imgH;
 
+                    const xjw::feature_extractors::FeatureData matchFdA =
+                        use_skeleton_feature_budget
+                            ? limitedFeatureData(fdA, two_stage_skeleton_keypoint_limit)
+                            : fdA;
+                    const xjw::feature_extractors::FeatureData matchFdB =
+                        use_skeleton_feature_budget
+                            ? limitedFeatureData(fdB, two_stage_skeleton_keypoint_limit)
+                            : fdB;
+
                     // 执行匹配
                     xjw::feature_match::MatchResult mr;
-                    if (usePythonLightGlue)
+                    bool usedLightGlueHalfTurnRetry = false;
+                    bool usedTraditionalSiftFallback = false;
+                    int primaryLightGlueInliers = -1;
+                    int traditionalSiftFallbackRawMatchCount = 0;
+                    if (useTraditionalSiftSfmMatch)
+                    {
+                        xjw::feature_match::tradition::TraditionalMatchConfig traditionalCfg;
+                        traditionalCfg.algorithmName = matchAlgorithm.toStdString();
+                        traditionalCfg.ratioTestThreshold = 0.75f;
+                        traditionalCfg.requireMutualConsistency = true;
+                        traditionalCfg.useCuda = useCuda && matchAlgorithm == QStringLiteral("sift_bf_l2");
+                        traditionalCfg.cudaDevice = 0;
+                        mr = xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
+                            matchFdA.toCvDescriptors(matchAlgorithm.toStdString()),
+                            matchFdB.toCvDescriptors(matchAlgorithm.toStdString()),
+                            matchFdA.size(),
+                            matchFdB.size(),
+                            traditionalCfg);
+                    }
+                    else if (usePythonLightGlue)
                     {
                         QString pythonError;
                         if (!runPythonLightGlue(pythonLightGlueScript,
@@ -3142,14 +3855,68 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     }
                     else
                     {
-                        mr = localMatcher->match(fdA, fdB);
+                        mr = localMatcher->match(matchFdA, matchFdB);
                     }
 
                     // 粗差剔除
                     int inlierCount = mr.numMatches;
                     mr = superglue::MatchOutlierRejector::filter(
-                        mr, fcA.featureOutput.keypoints, fcB.featureOutput.keypoints,
+                        mr, matchFdA.keypoints, matchFdB.keypoints,
                         outlierCfg, &inlierCount);
+                    primaryLightGlueInliers = mr.numMatches;
+
+                    if (!usePythonLightGlue
+                        && shouldRunLightGlueHalfTurnRetry(featureAlgorithm, matchAlgorithm)
+                        && localMatcher
+                        && mr.numMatches < presets.minInliers
+                        && matchFdA.imageWidth > 0
+                        && matchFdB.imageWidth > 0)
+                    {
+                        xjw::feature_match::MatchResult retryResult =
+                            localMatcher->match(matchFdA, withHalfTurnRotatedKeypoints(matchFdB));
+                        int retryInlierCount = retryResult.numMatches;
+                        retryResult = superglue::MatchOutlierRejector::filter(
+                            retryResult, matchFdA.keypoints, matchFdB.keypoints,
+                            outlierCfg, &retryInlierCount);
+
+                        if (retryResult.numMatches > mr.numMatches)
+                        {
+                            LOG_INFO(QStringLiteral("  %1 LightGlue 180°重试改善内点: %2 → %3")
+                                .arg(pairName)
+                                .arg(mr.numMatches)
+                                .arg(retryResult.numMatches));
+                            mr = std::move(retryResult);
+                            usedLightGlueHalfTurnRetry = true;
+                        }
+                    }
+
+                    if (!usePythonLightGlue
+                        && useLightGlueSfmMatch
+                        && featureAlgorithm == QStringLiteral("sift")
+                        && mr.numMatches < presets.minInliers)
+                    {
+                        xjw::feature_match::MatchResult fallbackResult = runTraditionalSiftFallback(
+                            matchFdA,
+                            matchFdB,
+                            matchFdA.keypoints,
+                            matchFdB.keypoints,
+                            outlierCfg,
+                            useCuda,
+                            0,
+                            &traditionalSiftFallbackRawMatchCount);
+
+                        if (fallbackResult.numMatches > mr.numMatches)
+                        {
+                            LOG_INFO(QStringLiteral("  %1 SIFT+BF-L2 fallback 改善内点: %2 → %3 (raw=%4, cuda=%5)")
+                                .arg(pairName)
+                                .arg(mr.numMatches)
+                                .arg(fallbackResult.numMatches)
+                                .arg(traditionalSiftFallbackRawMatchCount)
+                                .arg(useCuda ? QStringLiteral("on") : QStringLiteral("off")));
+                            mr = std::move(fallbackResult);
+                            usedTraditionalSiftFallback = true;
+                        }
+                    }
 
                     // ── 最小内点数检测：内点不足时记录到 failedPairs（不写文件）──
                     if (mr.numMatches < presets.minInliers)
@@ -3196,6 +3963,19 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     sidecar[QStringLiteral("feature_format_version")] = 2;
                     sidecar[QStringLiteral("num_matches")]     = mr.numMatches;
                     sidecar[QStringLiteral("match_threshold")] = static_cast<double>(activeMatchThreshold);
+                    if (usedLightGlueHalfTurnRetry)
+                    {
+                        sidecar[QStringLiteral("lightglue_rotation_retry")] = QStringLiteral("half_turn_image1");
+                        sidecar[QStringLiteral("rotation_retry_degrees")] = 180;
+                        sidecar[QStringLiteral("primary_inlier_count")] = primaryLightGlueInliers;
+                    }
+                    if (usedTraditionalSiftFallback)
+                    {
+                        sidecar[QStringLiteral("traditional_sift_fallback")] = true;
+                        sidecar[QStringLiteral("fallback_algorithm")] = QStringLiteral("sift_bf_l2");
+                        sidecar[QStringLiteral("fallback_raw_match_count")] = traditionalSiftFallbackRawMatchCount;
+                        sidecar[QStringLiteral("primary_inlier_count")] = primaryLightGlueInliers;
+                    }
 
                     QJsonArray pts0, pts1, indices0, indices1, scores;
                     for (const auto &dm : mr.cvMatches) 
@@ -3248,6 +4028,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                     pairSettings[QStringLiteral("sp1_path")]     = featureFilePaths.value(idB);
                     pairSettings[QStringLiteral("feature_algorithm")] = featureAlgorithm;
                     pairSettings[QStringLiteral("match_algorithm")] = matchAlgorithm;
+                    if (usedLightGlueHalfTurnRetry)
+                    {
+                        pairSettings[QStringLiteral("lightglue_rotation_retry")] =
+                            QStringLiteral("half_turn_image1");
+                        pairSettings[QStringLiteral("rotation_retry_degrees")] = 180;
+                    }
                     mfr.settings = pairSettings;
 
                     // ── 转换为 SFM 需要的 FeatureMatch ──────────────────────
@@ -3502,6 +4288,10 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         }
     }
     sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras;
+    sfmOpts.maxKnownPoseTracksPerImage = opts.maxTiePointsPerImage;
+    sfmOpts.maxKnownPoseTracksPerGridCell = opts.maxTiePointsPerGridCell;
+    sfmOpts.trackThinningGridColumns = opts.tiePointGridColumns;
+    sfmOpts.trackThinningGridRows = opts.tiePointGridRows;
     if (sfmOpts.useKnownCameraPoses)
     {
         sfmOpts.baOptions.progressCallback =
@@ -3709,8 +4499,11 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     for (auto it = featureCache.constBegin(); it != featureCache.constEnd(); ++it)
         kptPositions[it.key()] = it.value().featureOutput.keypoints;
 
-    // 释放特征缓存（描述子张量等大块内存），SFM 不再需要
-    featureCache.clear();
+    // 默认及时释放描述子张量；guided rematching 需要在初始 SfM 后复用描述子做第二轮补匹配。
+    if (!opts.enableGuidedRematching)
+    {
+        featureCache.clear();
+    }
 
     LOG_INFO(QStringLiteral("  影像: %1, 匹配对: %2, 开始重建...")
         .arg(addedImages).arg(loadedMatches));
@@ -3740,15 +4533,18 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     // Phase 4: 处理结果
     // ══════════════════════════════════════════════════════════════════════════
     reportProgress(QStringLiteral("整理结果..."), 90);
-    result.numRegisteredImages = sfmResult.numRegisteredImages;
-    result.numPoints3D         = sfmResult.numPoints3D;
-    result.meanReprojError     = sfmResult.meanReprojError;
-    // BA 统计
-    result.baRmsBefore       = sfmResult.baRmsBefore;
-    result.baRmsAfter        = sfmResult.baRmsAfter;
-    result.baTracksTotal     = sfmResult.baTracksTotal;
-    result.baTracksOptimized = sfmResult.baTracksOptimized;
-    result.baTracksFiltered  = sfmResult.baTracksFiltered;
+    auto applySfmResultStats = [&]()
+    {
+        result.numRegisteredImages = sfmResult.numRegisteredImages;
+        result.numPoints3D         = sfmResult.numPoints3D;
+        result.meanReprojError     = sfmResult.meanReprojError;
+        result.baRmsBefore         = sfmResult.baRmsBefore;
+        result.baRmsAfter          = sfmResult.baRmsAfter;
+        result.baTracksTotal       = sfmResult.baTracksTotal;
+        result.baTracksOptimized   = sfmResult.baTracksOptimized;
+        result.baTracksFiltered    = sfmResult.baTracksFiltered;
+    };
+    applySfmResultStats();
     result.durationSeconds   = elapsedTimer.elapsed() / 1000.0;
 
     if (sfmResult.success && sfmResult.reconstruction) {
@@ -3771,30 +4567,276 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         }
         LOG_INFO(QStringLiteral("SFM: 相机更新收集完成 %1 项").arg(result.pendingCamUpdates.size()));
 
+        GuidedRematchExecutionStats guidedStats;
         {
-            SfmGuidedMatchPlannerOptions guidedOptions;
-            guidedOptions.minSeedMatches = presets.initMinNumMatches;
-            guidedOptions.maxHealthyMatches = presets.minInliers;
-            guidedOptions.maxCandidates = 2000;
-            for (const ImageId id : validIds)
+            SfmGuidedMatchPlan guidedPlan;
+            if (opts.enableGuidedRematching)
             {
-                if (recon->isRegistered(id))
+                SfmGuidedMatchPlannerOptions guidedOptions;
+                guidedOptions.minSeedMatches = presets.initMinNumMatches;
+                guidedOptions.maxHealthyMatches = presets.minInliers;
+                guidedOptions.maxCandidates = 2000;
+                for (const ImageId id : validIds)
                 {
-                    guidedOptions.registeredImageIds.insert(static_cast<int>(id));
+                    if (recon->isRegistered(id))
+                    {
+                        guidedOptions.registeredImageIds.insert(static_cast<int>(id));
+                    }
+                }
+
+                guidedPlan = planSfmGuidedMatching(makeSfmDiagnosticImageIds(validIds),
+                                                   makeSfmDiagnosticPairs(allPairs),
+                                                   guidedOptions);
+                LOG_INFO(QStringLiteral("SFM: Guided matching 候选 %1 对，种子匹配 %2 对，未注册跳过 %3 对")
+                    .arg(guidedPlan.candidates.size())
+                    .arg(guidedPlan.seedPairCount)
+                    .arg(guidedPlan.skippedUnregisteredPairs));
+            }
+            else
+            {
+                LOG_INFO(QStringLiteral("SFM: Guided matching 未启用，跳过第二轮候选规划"));
+            }
+
+            if (opts.enableGuidedRematching)
+            {
+                guidedStats = appendGuidedRematchCandidatesToPairs(guidedPlan,
+                                                                    &allPairs,
+                                                                    featureCache,
+                                                                    *recon,
+                                                                    featureAlgorithm,
+                                                                    presets.minInliers);
+                LOG_INFO(QStringLiteral(
+                    "SFM: Guided matching 尝试 %1/%2 对，生成候选 %3 个，追加 %4 个，不替换已有匹配")
+                    .arg(guidedStats.attemptedPairCount)
+                    .arg(guidedStats.plannedPairCount)
+                    .arg(guidedStats.generatedMatchCount)
+                    .arg(guidedStats.addedMatchCount));
+
+                if (guidedStats.addedMatchCount > 0 && !isCancelled())
+                {
+                    guidedStats.secondPassAttempted = true;
+                    LOG_INFO(QStringLiteral("SFM Guided matching: second pass with %1 appended matches")
+                        .arg(guidedStats.addedMatchCount));
+                    reportProgress(QStringLiteral("Guided matching 第二轮 SFM..."), 88);
+
+                    IncrementalSfm guidedSfm(sfmOpts);
+                    for (auto it = featureCache.constBegin(); it != featureCache.constEnd(); ++it)
+                    {
+                        const ImageId id = it.key();
+                        const ImageFeatureCache &fc = it.value();
+
+                        std::vector<FeatureKeypoint> kpts;
+                        kpts.reserve(fc.featureOutput.keypoints.size());
+                        for (const cv::KeyPoint &kp : fc.featureOutput.keypoints)
+                        {
+                            FeatureKeypoint fkp;
+                            fkp.x = kp.pt.x;
+                            fkp.y = kp.pt.y;
+                            kpts.push_back(fkp);
+                        }
+
+                        int imgW = fc.imgW;
+                        int imgH = fc.imgH;
+                        if (imgW == 0 || imgH == 0)
+                        {
+                            cv::Mat img = cv::imread(idToPath[id].toStdString(), cv::IMREAD_GRAYSCALE);
+                            if (!img.empty())
+                            {
+                                imgW = img.cols;
+                                imgH = img.rows;
+                            }
+                            else
+                            {
+                                imgW = 1920;
+                                imgH = 1080;
+                            }
+                        }
+
+                        bool added = false;
+                        if (!added && hasCameraPaths && id < static_cast<ImageId>(opts.cameraPaths.size()))
+                        {
+                            const QString &camPath = opts.cameraPaths[static_cast<int>(id)];
+                            if (!camPath.isEmpty() && QFileInfo::exists(camPath))
+                            {
+                                guidedSfm.addImage(id, idToPath[id].toStdString(), camPath.toStdString(), kpts);
+                                added = true;
+                            }
+                        }
+
+                        if (!added)
+                        {
+                            const QString normImgPath = normalizePath(idToPath[id]);
+                            auto metaIt = projectCameraMap.find(normImgPath);
+                            if (metaIt != projectCameraMap.end())
+                            {
+                                Camera cam;
+                                if (xjw::gui::project::cameraFromJson(metaIt.value(), &cam) && cam.isValid())
+                                {
+                                    guidedSfm.addImageWithCamera(id, idToPath[id].toStdString(), cam, kpts);
+                                    added = true;
+                                }
+                            }
+                        }
+
+                        if (!added && hasUserIntrinsics)
+                        {
+                            Camera estimatedCam;
+                            double fuPx = opts.userFu;
+                            double fvPx = opts.userFv;
+                            double cuPx = opts.userCu;
+                            double cvPx = opts.userCv;
+                            if (opts.userPitch > 0)
+                            {
+                                fuPx = opts.userFu / opts.userPitch;
+                                fvPx = opts.userFv / opts.userPitch;
+                                if (cuPx > 0)
+                                {
+                                    cuPx = opts.userCu / opts.userPitch;
+                                }
+                                if (cvPx > 0)
+                                {
+                                    cvPx = opts.userCv / opts.userPitch;
+                                }
+                            }
+                            if (cuPx <= 0)
+                            {
+                                cuPx = imgW * 0.5;
+                            }
+                            if (cvPx <= 0)
+                            {
+                                cvPx = imgH * 0.5;
+                            }
+                            estimatedCam.setIntrinsics(fuPx, fvPx, cuPx, cvPx);
+                            guidedSfm.addImageWithCamera(id, idToPath[id].toStdString(), estimatedCam, kpts);
+                            added = true;
+                        }
+
+                        if (!added)
+                        {
+                            Camera estimatedCam;
+                            const double focalPx = std::max(imgW, imgH) * 1.2;
+                            estimatedCam.setIntrinsics(focalPx, focalPx, imgW * 0.5, imgH * 0.5);
+                            guidedSfm.addImageWithCamera(id, idToPath[id].toStdString(), estimatedCam, kpts);
+                        }
+                    }
+
+                    int guidedLoadedPairs = 0;
+                    for (const PairMatchData &pair : allPairs)
+                    {
+                        if (!pair.loaded || pair.matches.empty())
+                        {
+                            continue;
+                        }
+                        guidedSfm.addMatches(pair.idA, pair.idB, pair.matches);
+                        ++guidedLoadedPairs;
+                    }
+
+                    IncrementalSfmResult guidedSfmResult =
+                        guidedSfm.run([&reportProgress, &isCancelled](int registered,
+                                                                       int total,
+                                                                       const std::string &msg) -> bool
+                    {
+                        LOG_INFO(QStringLiteral("  Guided SFM 进度: [%1/%2] %3")
+                            .arg(registered)
+                            .arg(total)
+                            .arg(QString::fromStdString(msg)));
+                        if (isCancelled())
+                        {
+                            return false;
+                        }
+                        const int pct = total > 0 ? 88 + static_cast<int>(7.0 * registered / total) : 88;
+                        reportProgress(QStringLiteral("Guided matching 二次重建... %1/%2")
+                                           .arg(registered)
+                                           .arg(total),
+                                       pct);
+                        return true;
+                    });
+
+                    const int guided_point_gain = guidedSfmResult.numPoints3D - sfmResult.numPoints3D;
+                    const int guided_min_point_gain =
+                        std::max(50, static_cast<int>(std::ceil(
+                            sfmResult.numPoints3D *
+                            std::max(0.0, opts.guidedFillMinPointGainRatio))));
+                    const double initial_rms =
+                        sfmResult.baRmsAfter > 0.0 ? sfmResult.baRmsAfter : sfmResult.meanReprojError;
+                    const double guided_rms =
+                        guidedSfmResult.baRmsAfter > 0.0
+                            ? guidedSfmResult.baRmsAfter
+                            : guidedSfmResult.meanReprojError;
+                    const bool guided_rms_acceptable =
+                        initial_rms <= 0.0 ||
+                        guided_rms <= initial_rms * std::max(1.0, opts.guidedFillMaxRmsRegressionRatio);
+                    const bool guided_improved =
+                        guidedSfmResult.numRegisteredImages > sfmResult.numRegisteredImages ||
+                        guided_point_gain >= guided_min_point_gain;
+
+                    if (guidedSfmResult.success &&
+                        guidedSfmResult.numRegisteredImages >= sfmResult.numRegisteredImages &&
+                        guidedSfmResult.numPoints3D > 0 &&
+                        guided_improved &&
+                        guided_rms_acceptable)
+                    {
+                        guidedStats.secondPassAccepted = true;
+                        LOG_INFO(QStringLiteral("SFM Guided matching: second pass accepted, pairs=%1, registered=%2, "
+                                                "points=%3, gain=%4/%5, rms=%6 -> %7")
+                            .arg(guidedLoadedPairs)
+                            .arg(guidedSfmResult.numRegisteredImages)
+                            .arg(guidedSfmResult.numPoints3D)
+                            .arg(guided_point_gain)
+                            .arg(guided_min_point_gain)
+                            .arg(initial_rms, 0, 'f', 4)
+                            .arg(guided_rms, 0, 'f', 4));
+                        sfmResult = std::move(guidedSfmResult);
+                        applySfmResultStats();
+                        recon = sfmResult.reconstruction.get();
+
+                        result.pendingCamUpdates.clear();
+                        for (auto it = imageIdMap.constBegin(); it != imageIdMap.constEnd(); ++it)
+                        {
+                            const ImageId id = it.value();
+                            if (!recon->isRegistered(id))
+                            {
+                                continue;
+                            }
+                            const Camera &cam = recon->camera(id);
+                            result.pendingCamUpdates.insert(it.key(), cameraToJson(cam));
+                        }
+                        LOG_INFO(QStringLiteral("SFM: Guided second pass 相机更新收集完成 %1 项")
+                            .arg(result.pendingCamUpdates.size()));
+                    }
+                    else
+                    {
+                        LOG_WARN(QStringLiteral("SFM Guided matching: second pass rejected, keeping initial reconstruction "
+                                                "(insufficient gain or worse RMS; success=%1, registered=%2/%3, "
+                                                "points=%4, gain=%5/%6, rms=%7 -> %8)")
+                            .arg(guidedSfmResult.success ? 1 : 0)
+                            .arg(guidedSfmResult.numRegisteredImages)
+                            .arg(sfmResult.numRegisteredImages)
+                            .arg(guidedSfmResult.numPoints3D)
+                            .arg(guided_point_gain)
+                            .arg(guided_min_point_gain)
+                            .arg(initial_rms, 0, 'f', 4)
+                            .arg(guided_rms, 0, 'f', 4));
+                    }
                 }
             }
 
-            const SfmGuidedMatchPlan guidedPlan =
-                planSfmGuidedMatching(makeSfmDiagnosticImageIds(validIds),
-                                      makeSfmDiagnosticPairs(allPairs),
-                                      guidedOptions);
+            QJsonObject guidedDiagnostics =
+                sfmGuidedMatchPlanToJson(guidedPlan, idToPath, opts.enableGuidedRematching);
+            const QJsonObject guidedStatsJson = guidedStats.toJson();
+            for (auto it = guidedStatsJson.constBegin(); it != guidedStatsJson.constEnd(); ++it)
+            {
+                guidedDiagnostics.insert(it.key(), it.value());
+            }
+
             QJsonObject diagnostics = result.sfmDiagnostics;
-            diagnostics[QStringLiteral("guided_matching")] = sfmGuidedMatchPlanToJson(guidedPlan, idToPath);
+            diagnostics[QStringLiteral("guided_matching")] = guidedDiagnostics;
             result.sfmDiagnostics = diagnostics;
-            LOG_INFO(QStringLiteral("SFM: Guided matching 候选 %1 对，种子匹配 %2 对，未注册跳过 %3 对")
-                .arg(guidedPlan.candidates.size())
-                .arg(guidedPlan.seedPairCount)
-                .arg(guidedPlan.skippedUnregisteredPairs));
+        }
+
+        if (opts.enableGuidedRematching)
+        {
+            featureCache.clear();
         }
 
         // 4a-2. 收集逐相机残差（供报告使用，一次遍历所有三维点）
@@ -3834,12 +4876,8 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
         QMap<Point3DId, double> triangulationAngleByPoint;
         {
             LOG_INFO(QStringLiteral("SFM: 开始统计稀疏质量指标"));
-            NumericSummary trackLengthStats;
-            NumericSummary reprojErrorStats;
-            NumericSummary triAngleStats;
-            QJsonObject trackLengthHistogram;
-            int twoViewTrackCount = 0;
-            int multiViewTrackCount = 0;
+            std::vector<SfmQualityPoint> qualityPoints;
+            qualityPoints.reserve(recon->allPoint3DIds().size());
 
             for (Point3DId pid : recon->allPoint3DIds())
             {
@@ -3852,32 +4890,51 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
                 const double triAngle = computeTrackMaxTriangulationAngleDeg(*recon, pt);
                 triangulationAngleByPoint.insert(pid, triAngle);
 
-                trackLengthStats.add(trackLen);
-                reprojErrorStats.add(pt.error);
-                triAngleStats.add(triAngle);
-                const QString histKey = QString::number(trackLen);
-                trackLengthHistogram[histKey] = trackLengthHistogram.value(histKey).toInt() + 1;
-                if (trackLen == 2)
+                SfmQualityPoint qualityPoint;
+                qualityPoint.trackLength = trackLen;
+                qualityPoint.reprojectionErrorPx = pt.error;
+                qualityPoint.triangulationAngleDeg = triAngle;
+
+                for (const TrackElement &element : pt.track.elements)
                 {
-                    ++twoViewTrackCount;
+                    if (!recon->hasImage(element.imageId))
+                    {
+                        continue;
+                    }
+
+                    const ImageData &image = recon->image(element.imageId);
+                    if (element.featureIdx >= static_cast<FeatureIdx>(image.keypoints.size()))
+                    {
+                        continue;
+                    }
+
+                    const FeatureKeypoint &keypoint = image.keypoints[element.featureIdx];
+                    qualityPoint.observations.push_back({
+                        static_cast<int>(element.imageId),
+                        static_cast<double>(keypoint.x),
+                        static_cast<double>(keypoint.y),
+                    });
                 }
-                else if (trackLen >= 3)
-                {
-                    ++multiViewTrackCount;
-                }
+
+                qualityPoints.push_back(std::move(qualityPoint));
             }
 
-            QJsonObject sparseQuality;
-            sparseQuality[QStringLiteral("registered_image_count")] = result.numRegisteredImages;
-            sparseQuality[QStringLiteral("total_image_count")] = opts.images.size();
-            sparseQuality[QStringLiteral("point_count")] = result.numPoints3D;
+            const QSize qualityImageSize = inferSfmQualityImageSize(*recon, opts.images);
+            SfmQualityReportOptions qualityOptions;
+            qualityOptions.totalImageCount = opts.images.size();
+            qualityOptions.registeredImageCount = result.numRegisteredImages;
+            qualityOptions.imageWidth = qualityImageSize.width();
+            qualityOptions.imageHeight = qualityImageSize.height();
+            qualityOptions.coverageGridColumns = 4;
+            qualityOptions.coverageGridRows = 4;
+            qualityOptions.minTrackLength = sfmOpts.filterMinTrackLen;
+            qualityOptions.minTriangulationAngleDeg = sfmOpts.filterMinTriAngle;
+            qualityOptions.maxReprojectionErrorPx = sfmOpts.filterMaxReprojError;
+            qualityOptions.minObservationGridCoverageMeanForMvs = 0.08;
+
+            const SfmQualityReport qualityReport = analyzeSfmQuality(qualityPoints, qualityOptions);
+            QJsonObject sparseQuality = qualityReport.toJson();
             sparseQuality[QStringLiteral("mean_reprojection_error_px")] = result.meanReprojError;
-            sparseQuality[QStringLiteral("track_length")] = trackLengthStats.toJson(QStringLiteral("observations"));
-            sparseQuality[QStringLiteral("track_length_histogram")] = trackLengthHistogram;
-            sparseQuality[QStringLiteral("two_view_track_count")] = twoViewTrackCount;
-            sparseQuality[QStringLiteral("multi_view_track_count")] = multiViewTrackCount;
-            sparseQuality[QStringLiteral("reprojection_error")] = reprojErrorStats.toJson(QStringLiteral("px"));
-            sparseQuality[QStringLiteral("triangulation_angle")] = triAngleStats.toJson(QStringLiteral("deg"));
 
             QJsonObject baSummary;
             baSummary[QStringLiteral("rms_before_px")] = result.baRmsBefore;
@@ -4024,6 +5081,119 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
     }
 
     return result;
+}
+
+int minimumUsableSparsePointCountForSiftFallback(const SFMServiceOptions &opts,
+                                                 const SFMServiceResult &result)
+{
+    const int imageCount = static_cast<int>(opts.images.size());
+    const int registeredImages = std::max(0, result.numRegisteredImages);
+    const int registeredTarget = imageCount > 0
+        ? std::max(1, static_cast<int>(std::ceil(static_cast<double>(imageCount) * 0.95)))
+        : std::max(1, registeredImages);
+    return std::max(300, registeredTarget * 100);
+}
+
+bool primarySfmResultHasProductionSparseCloud(const SFMServiceOptions &opts,
+                                              const SFMServiceResult &result)
+{
+    if (!result.success)
+    {
+        return false;
+    }
+
+    const int imageCount = static_cast<int>(opts.images.size());
+    if (imageCount > 0)
+    {
+        const int minRegisteredImages =
+            std::max(1, static_cast<int>(std::ceil(static_cast<double>(imageCount) * 0.95)));
+        if (result.numRegisteredImages < minRegisteredImages)
+        {
+            return false;
+        }
+    }
+
+    return result.numPoints3D >= minimumUsableSparsePointCountForSiftFallback(opts, result);
+}
+
+bool shouldRetrySfmWithSiftFallback(const SFMServiceOptions &opts,
+                                    const SFMServiceResult &result)
+{
+    const QString featureAlgorithm = normalizedAlgorithm(opts.featureAlgorithm, QStringLiteral("disk"));
+    const QString matchAlgorithm = normalizedAlgorithm(opts.matchAlgorithm, QStringLiteral("lightglue"));
+    if (!opts.autoGenerateMissingMatches ||
+        opts.restrictPairs ||
+        !isLightGlueSfmMatch(featureAlgorithm, matchAlgorithm) ||
+        featureAlgorithm != QStringLiteral("disk"))
+    {
+        return false;
+    }
+
+    if (opts.cancelFlag && opts.cancelFlag->load())
+    {
+        return false;
+    }
+
+    if (primarySfmResultHasProductionSparseCloud(opts, result))
+    {
+        const QString message = QStringLiteral(
+            "SFM fallback skipped: DISK+LightGlue 已生成可用点云 "
+            "(registered=%1/%2, points=%3, minPoints=%4)")
+            .arg(result.numRegisteredImages)
+            .arg(opts.images.size())
+            .arg(result.numPoints3D)
+            .arg(minimumUsableSparsePointCountForSiftFallback(opts, result));
+        LOG_INFO(message);
+        return false;
+    }
+
+    const QJsonObject actualGraph =
+        result.sfmDiagnostics.value(QStringLiteral("actual_match_graph")).toObject();
+    const int nodeCount = actualGraph.value(QStringLiteral("node_count")).toInt();
+    const int componentCount = actualGraph.value(QStringLiteral("component_count")).toInt();
+    const int largestComponentSize = actualGraph.value(QStringLiteral("largest_component_size")).toInt();
+    if (nodeCount <= 1 || componentCount <= 1)
+    {
+        return false;
+    }
+
+    const double largestRatio = static_cast<double>(largestComponentSize) /
+        static_cast<double>(std::max(1, nodeCount));
+    return largestRatio < 0.95;
+}
+
+SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
+{
+    SFMServiceResult firstResult = runSingleSfmAttempt(opts);
+    if (!shouldRetrySfmWithSiftFallback(opts, firstResult))
+    {
+        return firstResult;
+    }
+
+    LOG_WARN(QStringLiteral(
+        "SFM 默认 DISK+LightGlue 匹配图不连通，自动切换 SIFT+BF-L2 重跑一次空三"));
+    SFMServiceOptions fallbackOptions = opts;
+    fallbackOptions.featureAlgorithm = QStringLiteral("sift");
+    fallbackOptions.matchAlgorithm = QStringLiteral("sift_bf_l2");
+    fallbackOptions.cudaParallelPairs = 1;
+
+    SFMServiceResult fallbackResult = runSingleSfmAttempt(fallbackOptions);
+    if (fallbackResult.success || !firstResult.success)
+    {
+        QJsonObject diagnostics = fallbackResult.sfmDiagnostics;
+        diagnostics[QStringLiteral("fallback_from_feature_algorithm")] =
+            normalizedAlgorithm(opts.featureAlgorithm, QStringLiteral("disk"));
+        diagnostics[QStringLiteral("fallback_from_match_algorithm")] =
+            normalizedAlgorithm(opts.matchAlgorithm, QStringLiteral("lightglue"));
+        diagnostics[QStringLiteral("fallback_reason")] =
+            QStringLiteral("disconnected_default_match_graph");
+        fallbackResult.sfmDiagnostics = diagnostics;
+        return fallbackResult;
+    }
+
+    LOG_WARN(QStringLiteral("SFM SIFT+BF-L2 fallback 失败，保留首轮 DISK+LightGlue 结果: %1")
+        .arg(fallbackResult.errorMessage));
+    return firstResult;
 }
 
 } // namespace gui

@@ -583,6 +583,10 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
         {
             return;
         }
+        if (!_loading && percent < 100)
+        {
+            return;
+        }
         _loading = percent < 100;
         _plyLoadProgressPercent = qBound(0, percent, 100);
         _plyLoadProgressText = statusText;
@@ -896,6 +900,17 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
                 LOG_INFO(QStringLiteral("[3D] PLY 网格较大，保留面片完整加载: %1 顶点 / %2 面")
                              .arg(preview.header.vertexCount)
                              .arg(preview.header.faceCount));
+            }
+            else if (preview.header.valid)
+            {
+                reportProgress(5,
+                               QStringLiteral("正在完整加载 PLY 点云 (%1 顶点 / %2 面)...")
+                                   .arg(preview.header.vertexCount)
+                                   .arg(preview.header.faceCount));
+            }
+            else
+            {
+                reportProgress(5, QStringLiteral("正在完整加载 PLY 点云..."));
             }
             return plapoint::io::readPly<float>(plyPath.toStdString());
         }

@@ -92,6 +92,18 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
                                                      const SuperPointConfig &config,
                                                      const std::string &normalizedName)
 {
+    return detect(grayImage, config, normalizedName, false, 0);
+}
+
+FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
+                                                     const SuperPointConfig &config,
+                                                     const std::string &normalizedName,
+                                                     bool useCuda,
+                                                     int cudaDevice)
+{
+    (void)useCuda;
+    (void)cudaDevice;
+
     if (grayImage.empty())
     {
         throw std::runtime_error("input image is empty");
@@ -194,8 +206,14 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
         }
     }
 
+    int descriptorDim = config.descriptor_dim;
+    if (normalizedName == "sift" && !selectedDescriptors.empty())
+    {
+        descriptorDim = selectedDescriptors.cols;
+    }
+
     output.descriptors = FeatureData::cvDescriptorsToTensor(selectedDescriptors,
-                                                            config.descriptor_dim,
+                                                            descriptorDim,
                                                             normalizedName);
     return output;
 }

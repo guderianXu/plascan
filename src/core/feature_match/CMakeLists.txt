@@ -66,6 +66,7 @@ add_library(feature_match_factory STATIC
     MatcherFactory.cpp
     MatcherFactory.h
 )
+target_compile_definitions(feature_match_factory PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_include_directories(feature_match_factory PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/superglue

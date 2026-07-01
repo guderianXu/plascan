@@ -32,6 +32,7 @@
 #include <QJsonDocument>
 #include <QJsonObject>
 #include <QRegularExpression>
+#include <QStandardPaths>
 #include <QThread>
 #include <atomic>
 #include <cmath>
@@ -40,6 +41,7 @@
 #include <thread>
 #include <vector>
 #include <algorithm>
+#include <utility>
 
 namespace
 {
@@ -90,6 +92,251 @@ QString findFirstModelFile(const QStringList &modelNames, QString *pickedModelNa
     return QString();
 }
 
+QString resolvedExecutablePath(const QString &candidate)
+{
+    const QString trimmed = candidate.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return QString();
+    }
+
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
+    {
+        const QFileInfo info(trimmed);
+        if (info.exists() && info.isFile() && info.isExecutable())
+        {
+            return QDir::cleanPath(info.absoluteFilePath());
+        }
+        return QString();
+    }
+
+    const QString resolved = QStandardPaths::findExecutable(trimmed);
+    return resolved.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
+}
+
+QString pythonExecutable()
+{
+    static const QString cached = []()
+    {
+        QStringList candidates;
+        candidates << qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed()
+                   << qEnvironmentVariable("PLASCAN_PYTHON").trimmed()
+                   << qEnvironmentVariable("PYTHON").trimmed()
+                   << QStringLiteral("python3")
+                   << QStringLiteral("python");
+        candidates.removeAll(QString());
+        candidates.removeDuplicates();
+
+        for (const QString &candidate : candidates)
+        {
+            const QString resolved = resolvedExecutablePath(candidate);
+            if (!resolved.isEmpty())
+            {
+                return resolved;
+            }
+        }
+        return QStringLiteral("python");
+    }();
+    return cached;
+}
+
+QString findScriptFile(const QString &scriptName)
+{
+    QStringList candidates;
+
+    const QString envScriptDir = qEnvironmentVariable("PLASCAN_SCRIPT_DIR").trimmed();
+    if (!envScriptDir.isEmpty())
+    {
+        candidates.append(QDir(envScriptDir).filePath(scriptName));
+    }
+
+#ifdef PLASCAN_SOURCE_DIR
+    candidates.append(
+        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+#endif
+
+    const QString exePath = QCoreApplication::applicationDirPath();
+    candidates.append(QDir(exePath).filePath(QStringLiteral("../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exePath).filePath(QStringLiteral("../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exePath).filePath(QStringLiteral("../../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(QDir::currentPath()).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+        {
+            return QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+        }
+    }
+
+    return QString();
+}
+
+QString processOutputSummary(QProcess &process)
+{
+    const QString stdoutText = QString::fromUtf8(process.readAllStandardOutput()).trimmed();
+    const QString stderrText = QString::fromUtf8(process.readAllStandardError()).trimmed();
+    if (!stderrText.isEmpty() && !stdoutText.isEmpty())
+    {
+        return QStringLiteral("%1\n%2").arg(stderrText, stdoutText);
+    }
+    if (!stderrText.isEmpty())
+    {
+        return stderrText;
+    }
+    return stdoutText;
+}
+
+QString lightGlueModelOutputDir(QString *error)
+{
+    const QString envModelDir = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
+    if (!envModelDir.isEmpty())
+    {
+        return QDir::cleanPath(QFileInfo(envModelDir).absoluteFilePath());
+    }
+
+#ifdef PLASCAN_SOURCE_DIR
+    return QDir::cleanPath(QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("resources/models")));
+#else
+    const QString exePath = QCoreApplication::applicationDirPath();
+    const QString installedModels = QDir(exePath).filePath(QStringLiteral("../models"));
+    if (!installedModels.trimmed().isEmpty())
+    {
+        return QDir::cleanPath(QFileInfo(installedModels).absoluteFilePath());
+    }
+    if (error)
+    {
+        *error = QStringLiteral("无法确定模型输出目录");
+    }
+    return QString();
+#endif
+}
+
+QString lightGlueTorchScriptModelName(const QString &featureAlgorithm, const QString &deviceSuffix)
+{
+    return QStringLiteral("lightglue_%1_%2.torchscript").arg(featureAlgorithm, deviceSuffix);
+}
+
+QString ensureLightGlueTorchScriptModel(const QString &featureAlgorithm,
+                                        const QString &deviceSuffix,
+                                        QString *pickedModelName,
+                                        QString *error)
+{
+    const QString modelName = lightGlueTorchScriptModelName(featureAlgorithm, deviceSuffix);
+    const QString existingPath = findModelFile(modelName);
+    if (!existingPath.isEmpty())
+    {
+        if (pickedModelName)
+        {
+            *pickedModelName = modelName;
+        }
+        return existingPath;
+    }
+
+    const QString scriptPath = findScriptFile(QStringLiteral("export_lightglue_torchscript.py"));
+    if (scriptPath.isEmpty())
+    {
+        if (error)
+        {
+            *error = QStringLiteral("未找到自动导出脚本 export_lightglue_torchscript.py");
+        }
+        return QString();
+    }
+
+    QString outputDirError;
+    const QString outputDir = lightGlueModelOutputDir(&outputDirError);
+    if (outputDir.isEmpty())
+    {
+        if (error)
+        {
+            *error = outputDirError;
+        }
+        return QString();
+    }
+
+    QDir dir;
+    if (!dir.mkpath(outputDir))
+    {
+        if (error)
+        {
+            *error = QStringLiteral("无法创建模型输出目录: %1").arg(outputDir);
+        }
+        return QString();
+    }
+
+    QStringList args;
+    args << scriptPath
+         << QStringLiteral("--features") << featureAlgorithm
+         << QStringLiteral("--devices") << deviceSuffix
+         << QStringLiteral("--output-dir") << outputDir;
+
+    LOG_INFO("%s", qUtf8Printable(QString("LightGlue %1 TorchScript 缺失，自动导出: %2")
+        .arg(featureAlgorithm.toUpper(), modelName)));
+
+    QProcess process;
+    process.setWorkingDirectory(QFileInfo(scriptPath).absolutePath());
+    process.start(pythonExecutable(), args);
+    if (!process.waitForStarted(30000))
+    {
+        if (error)
+        {
+            *error = QStringLiteral("无法启动 LightGlue TorchScript 自动导出: %1").arg(process.errorString());
+        }
+        return QString();
+    }
+    if (!process.waitForFinished(900000))
+    {
+        process.kill();
+        process.waitForFinished(5000);
+        if (error)
+        {
+            *error = QStringLiteral("LightGlue TorchScript 自动导出超时: %1").arg(processOutputSummary(process));
+        }
+        return QString();
+    }
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    {
+        if (error)
+        {
+            const QString details = processOutputSummary(process);
+            *error = details.isEmpty()
+                ? QStringLiteral("LightGlue TorchScript 自动导出失败，退出码: %1").arg(process.exitCode())
+                : QStringLiteral("LightGlue TorchScript 自动导出失败，退出码: %1\n%2")
+                    .arg(process.exitCode())
+                    .arg(details);
+        }
+        return QString();
+    }
+
+    const QString generatedPath = findModelFile(modelName);
+    if (!generatedPath.isEmpty())
+    {
+        if (pickedModelName)
+        {
+            *pickedModelName = modelName;
+        }
+        LOG_INFO("%s", qUtf8Printable(QString("LightGlue TorchScript 已生成: %1").arg(generatedPath)));
+        return generatedPath;
+    }
+
+    const QString directPath = QDir(outputDir).filePath(modelName);
+    if (QFile::exists(directPath))
+    {
+        if (pickedModelName)
+        {
+            *pickedModelName = modelName;
+        }
+        LOG_INFO("%s", qUtf8Printable(QString("LightGlue TorchScript 已生成: %1").arg(directPath)));
+        return QDir::cleanPath(QFileInfo(directPath).absoluteFilePath());
+    }
+
+    if (error)
+    {
+        *error = QStringLiteral("自动导出完成但未找到模型文件: %1").arg(modelName);
+    }
+    return QString();
+}
+
 bool allowPythonLightGlueFallback()
 {
     const QString value = qEnvironmentVariable("PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK")
@@ -99,6 +346,102 @@ bool allowPythonLightGlueFallback()
         || value == QStringLiteral("true")
         || value == QStringLiteral("yes")
         || value == QStringLiteral("on");
+}
+
+xjw::feature_extractors::FeatureData withHalfTurnRotatedKeypoints(
+    const xjw::feature_extractors::FeatureData &input)
+{
+    xjw::feature_extractors::FeatureData rotated = input;
+    if (rotated.imageWidth <= 0 || rotated.imageHeight <= 0)
+    {
+        return rotated;
+    }
+
+    const float maxX = static_cast<float>(rotated.imageWidth - 1);
+    const float maxY = static_cast<float>(rotated.imageHeight - 1);
+    for (cv::KeyPoint &keypoint : rotated.keypoints)
+    {
+        keypoint.pt.x = maxX - keypoint.pt.x;
+        keypoint.pt.y = maxY - keypoint.pt.y;
+    }
+    return rotated;
+}
+
+bool shouldRunLightGlueHalfTurnRetry(const QString &matchAlgorithm,
+                                     const QString &lightglueAlgo,
+                                     const QJsonObject &config)
+{
+    if (matchAlgorithm != QStringLiteral("lightglue"))
+    {
+        return false;
+    }
+    if (!config.value(QStringLiteral("lightglue_rotation_retry")).toBool(true))
+    {
+        return false;
+    }
+    return lightglueAlgo == QStringLiteral("disk")
+        || lightglueAlgo == QStringLiteral("aliked");
+}
+
+QString featureAlgorithmForSuffix(const QString &featureSuffix,
+                                  const QString &fallback)
+{
+    if (featureSuffix == QStringLiteral(".dsk"))
+    {
+        return QStringLiteral("disk");
+    }
+    if (featureSuffix == QStringLiteral(".alk"))
+    {
+        return QStringLiteral("aliked");
+    }
+    if (featureSuffix == QStringLiteral(".sift"))
+    {
+        return QStringLiteral("sift");
+    }
+    if (featureSuffix == QStringLiteral(".orb"))
+    {
+        return QStringLiteral("orb");
+    }
+    if (featureSuffix == QStringLiteral(".sp"))
+    {
+        return QStringLiteral("superpoint");
+    }
+    return fallback;
+}
+
+xjw::feature_match::MatchResult runTraditionalSiftFallback(
+    const xjw::feature_extractors::FeatureData &fd0,
+    const xjw::feature_extractors::FeatureData &fd1,
+    const std::vector<cv::KeyPoint> &keypoints0,
+    const std::vector<cv::KeyPoint> &keypoints1,
+    const superglue::OutlierFilterConfig &outlierConfig,
+    bool useCuda,
+    int cudaDevice,
+    int *rawMatchCount)
+{
+    xjw::feature_match::tradition::TraditionalMatchConfig traditionalConfig;
+    traditionalConfig.algorithmName = "sift_bf_l2";
+    traditionalConfig.ratioTestThreshold = 0.75f;
+    traditionalConfig.requireMutualConsistency = true;
+    traditionalConfig.useCuda = useCuda;
+    traditionalConfig.cudaDevice = cudaDevice;
+
+    xjw::feature_match::MatchResult fallback =
+        xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
+            fd0.toCvDescriptors(traditionalConfig.algorithmName),
+            fd1.toCvDescriptors(traditionalConfig.algorithmName),
+            fd0.size(),
+            fd1.size(),
+            traditionalConfig);
+
+    if (rawMatchCount)
+    {
+        *rawMatchCount = fallback.numMatches;
+    }
+
+    int inlierCount = fallback.numMatches;
+    return superglue::MatchOutlierRejector::filter(
+        fallback, keypoints0, keypoints1, outlierConfig, &inlierCount);
 }
 
 bool waitForProcessOrCancel(QProcess &process,
@@ -283,17 +626,10 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         const QString pyModelType = config["model_type"].toString("outdoor");
 
         const QString scriptName = isLoftrMatch ? QStringLiteral("run_loftr.py") : QStringLiteral("match_roma.py");
-        QStringList scriptCandidates;
-        scriptCandidates << QCoreApplication::applicationDirPath() + "/../scripts/" + scriptName;
-        scriptCandidates << QCoreApplication::applicationDirPath() + "/../../scripts/" + scriptName;
-        QString scriptPath;
-        for (const auto &c : scriptCandidates)
-        {
-            if (QFile::exists(c)) { scriptPath = c; break; }
-        }
+        const QString scriptPath = findScriptFile(scriptName);
         if (scriptPath.isEmpty())
         {
-            LOG_ERROR("E2E script not found: %s", qUtf8Printable(scriptName));
+            LOG_ERROR("%s", qUtf8Printable(QString("未找到 Python E2E 脚本: %1").arg(scriptName)));
             return;
         }
 
@@ -447,25 +783,27 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             lightglueAlgo = QStringLiteral("disk");
         else if (featureSuffix == QStringLiteral(".alk"))
             lightglueAlgo = QStringLiteral("aliked");
+        else if (featureSuffix == QStringLiteral(".sift"))
+            lightglueAlgo = QStringLiteral("sift");
         else
             lightglueAlgo = QStringLiteral("superpoint");
 
         if (lightglueAlgo == QStringLiteral("disk"))
         {
-            modelCandidates << QString("lightglue_disk_%1.torchscript").arg(deviceSuffix)
-                            << QString("lightglue_disk_%1.pt").arg(deviceSuffix);
+            modelCandidates << QString("lightglue_disk_%1.torchscript").arg(deviceSuffix);
         }
         else if (lightglueAlgo == QStringLiteral("aliked"))
         {
-            modelCandidates << QString("lightglue_aliked_%1.torchscript").arg(deviceSuffix)
-                            << QString("lightglue_aliked_%1.pt").arg(deviceSuffix);
+            modelCandidates << QString("lightglue_aliked_%1.torchscript").arg(deviceSuffix);
+        }
+        else if (lightglueAlgo == QStringLiteral("sift"))
+        {
+            modelCandidates << QString("lightglue_sift_%1.torchscript").arg(deviceSuffix);
         }
         else
         {
             modelCandidates << QString("lightglue_matcher_%1.torchscript").arg(deviceSuffix)
-                            << QString("lightglue_matcher_%1.pt").arg(deviceSuffix)
-                            << QStringLiteral("lightglue_matcher.torchscript")
-                            << QStringLiteral("lightglue_matcher.pt");
+                            << QStringLiteral("lightglue_matcher.torchscript");
         }
 
         LOG_INFO("%s", qUtf8Printable(QString("LightGlue suffix=%1 algo=%2 model=%3")
@@ -474,29 +812,33 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     }
     QString pickedModelName;
     QString modelPath = findFirstModelFile(modelCandidates, &pickedModelName);
+    QString lightGlueExportError;
+    if (isLightGlueMatch && modelPath.isEmpty() && lightglueAlgo != QStringLiteral("superpoint"))
+    {
+        modelPath = ensureLightGlueTorchScriptModel(
+            lightglueAlgo, deviceSuffix, &pickedModelName, &lightGlueExportError);
+    }
 
-    // DISK/ALIKED 专用 TorchScript 模型缺失时使用 Python LightGlue 脚本
+    // DISK/ALIKED/SIFT 专用 TorchScript 模型缺失时使用 Python LightGlue 脚本
     if (isLightGlueMatch && modelPath.isEmpty() && lightglueAlgo != QStringLiteral("superpoint"))
     {
         if (!allowPythonLightGlueFallback())
         {
             LOG_ERROR("%s", qUtf8Printable(
-                QString("LightGlue %1 TorchScript 模型不存在(%2)。默认不再自动回退 Python；"
-                        "请先运行 scripts/export_lightglue_torchscript.py 导出 TorchScript，"
-                        "或临时设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1")
-                    .arg(lightglueAlgo, modelCandidates.join(QStringLiteral(", ")))));
+                QString("LightGlue %1 TorchScript 模型不存在(%2)，自动导出失败: %3。"
+                        "请检查 PLASCAN_PYTHON_EXECUTABLE/PLASCAN_PYTHON 指向的环境是否包含 torch 和 lightglue；"
+                        "如需临时使用 Python 逐对匹配，可设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1")
+                    .arg(lightglueAlgo,
+                         modelCandidates.join(QStringLiteral(", ")),
+                         lightGlueExportError)));
             return;
         }
+        LOG_WARN("%s", qUtf8Printable(QString("LightGlue TorchScript 自动导出失败: %1")
+            .arg(lightGlueExportError)));
         LOG_INFO("%s", qUtf8Printable(
             QString("LightGlue %1 TorchScript 模型不存在, 使用 Python 脚本").arg(lightglueAlgo)));
 
-        QString pyScript;
-        for (const auto &c : QStringList{
-            QCoreApplication::applicationDirPath() + "/../scripts/run_lightglue.py",
-            QCoreApplication::applicationDirPath() + "/../../scripts/run_lightglue.py"})
-        {
-            if (QFile::exists(c)) { pyScript = c; break; }
-        }
+        const QString pyScript = findScriptFile(QStringLiteral("run_lightglue.py"));
         if (pyScript.isEmpty()) { LOG_ERROR("run_lightglue.py not found"); return; }
 
         for (const QString &pairStr : imagePairs)
@@ -532,7 +874,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             {
                 args << QStringLiteral("--cuda");
             }
-            proc.start(QStringLiteral("python3"), args);
+            proc.start(pythonExecutable(), args);
             if (!waitForProcessOrCancel(proc,
                                         cancelFlag,
                                         300000,
@@ -784,7 +1126,13 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             continue;
                         }
 
+                        xjw::feature_extractors::FeatureData fd0;
+                        xjw::feature_extractors::FeatureData fd1;
                         xjw::feature_match::MatchResult matchResult;
+                        bool usedLightGlueHalfTurnRetry = false;
+                        bool usedTraditionalSiftFallback = false;
+                        int primaryLightGlueInliers = -1;
+                        int traditionalSiftFallbackRawMatchCount = 0;
 
                         const QString imagePath0Resolved = imagePath0.isEmpty() ? baseToImagePath.value(baseName0) : imagePath0;
                         const QString imagePath1Resolved = imagePath1.isEmpty() ? baseToImagePath.value(baseName1) : imagePath1;
@@ -808,10 +1156,10 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
                         if (isSuperGlueMatch || isLightGlueMatch)
                         {
-                            // 从 ipfind_results 读取实际特征提取算法
-                            QString featureAlgo = QStringLiteral("superpoint");
+                            // 优先由当前特征 suffix 决定算法，避免 GUI 选择 .sift 时误用 metadata 第一条记录。
+                            QString featureAlgo = featureAlgorithmForSuffix(featureSuffix, QStringLiteral("superpoint"));
                             const QJsonArray ipResults = currentMeta.value(QLatin1String("ipfind_results")).toArray();
-                            if (!ipResults.isEmpty())
+                            if (featureAlgo == QStringLiteral("superpoint") && !ipResults.isEmpty())
                             {
                                 const QString a = ipResults.first().toObject()
                                                       .value(QLatin1String("settings")).toObject()
@@ -819,8 +1167,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                                                       .toLower();
                                 if (!a.isEmpty()) featureAlgo = a;
                             }
-                            auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, featureAlgo.toStdString());
-                            auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, featureAlgo.toStdString());
+                            fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, featureAlgo.toStdString());
+                            fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, featureAlgo.toStdString());
                             fd0.imageWidth = w0;
                             fd0.imageHeight = h0;
                             fd1.imageWidth = w1;
@@ -836,34 +1184,52 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             else
                                 featureAlgoName = "sift";
 
-                            auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, featureAlgoName);
-                            auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, featureAlgoName);
+                            fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp0, featureAlgoName);
+                            fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(sp1, featureAlgoName);
                             fd0.imageWidth = w0;
                             fd0.imageHeight = h0;
                             fd1.imageWidth = w1;
                             fd1.imageHeight = h1;
 
-                            cv::Mat desc0 = fd0.toCvDescriptors(matchAlgorithm.toStdString());
-                            cv::Mat desc1 = fd1.toCvDescriptors(matchAlgorithm.toStdString());
-
-                            std::vector<cv::DMatch> cvMatches;
-                            if (matchAlgorithm == QStringLiteral("sift_flann"))
+                            if (matchAlgorithm == QStringLiteral("sift_bf_l2"))
                             {
-                                cv::FlannBasedMatcher matcher;
-                                matcher.match(desc0, desc1, cvMatches);
+                                xjw::feature_match::tradition::TraditionalMatchConfig traditionalConfig;
+                                traditionalConfig.algorithmName = matchAlgorithm.toStdString();
+                                traditionalConfig.ratioTestThreshold = 0.75f;
+                                traditionalConfig.requireMutualConsistency = true;
+                                traditionalConfig.useCuda = useCudaFinal;
+                                traditionalConfig.cudaDevice = 0;
+                                matchResult = xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
+                                    fd0.toCvDescriptors(matchAlgorithm.toStdString()),
+                                    fd1.toCvDescriptors(matchAlgorithm.toStdString()),
+                                    fd0.size(),
+                                    fd1.size(),
+                                    traditionalConfig);
                             }
                             else
                             {
-                                int norm = (matchAlgorithm == QStringLiteral("orb_bf_hamming")) ? cv::NORM_HAMMING : cv::NORM_L2;
-                                cv::BFMatcher matcher(norm, true);
-                                matcher.match(desc0, desc1, cvMatches);
-                            }
+                                cv::Mat desc0 = fd0.toCvDescriptors(matchAlgorithm.toStdString());
+                                cv::Mat desc1 = fd1.toCvDescriptors(matchAlgorithm.toStdString());
 
-                            matchResult = xjw::feature_match::MatchResult::fromCvMatches(
-                                cvMatches,
-                                static_cast<int>(sp0.keypoints.size()),
-                                static_cast<int>(sp1.keypoints.size()),
-                                matchAlgorithm.toStdString());
+                                std::vector<cv::DMatch> cvMatches;
+                                if (matchAlgorithm == QStringLiteral("sift_flann"))
+                                {
+                                    cv::FlannBasedMatcher matcher;
+                                    matcher.match(desc0, desc1, cvMatches);
+                                }
+                                else
+                                {
+                                    int norm = (matchAlgorithm == QStringLiteral("orb_bf_hamming")) ? cv::NORM_HAMMING : cv::NORM_L2;
+                                    cv::BFMatcher matcher(norm, true);
+                                    matcher.match(desc0, desc1, cvMatches);
+                                }
+
+                                matchResult = xjw::feature_match::MatchResult::fromCvMatches(
+                                    cvMatches,
+                                    static_cast<int>(sp0.keypoints.size()),
+                                    static_cast<int>(sp1.keypoints.size()),
+                                    matchAlgorithm.toStdString());
+                            }
                         }
 
                         const int rawMatchCount = matchResult.numMatches;
@@ -874,6 +1240,60 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         matchResult = superglue::MatchOutlierRejector::filter(
                             matchResult, sp0.keypoints, sp1.keypoints,
                             outlierConfig, &inlierCount);
+                        primaryLightGlueInliers = matchResult.numMatches;
+
+                        if (shouldRunLightGlueHalfTurnRetry(matchAlgorithm, lightglueAlgo, config)
+                            && localMatcher
+                            && matchResult.numMatches < outlierConfig.minInliers
+                            && fd0.imageWidth > 0
+                            && fd1.imageWidth > 0)
+                        {
+                            xjw::feature_match::MatchResult retryResult =
+                                localMatcher->match(fd0, withHalfTurnRotatedKeypoints(fd1));
+                            int retryInlierCount = retryResult.numMatches;
+                            retryResult = superglue::MatchOutlierRejector::filter(
+                                retryResult, sp0.keypoints, sp1.keypoints,
+                                outlierConfig, &retryInlierCount);
+
+                            if (retryResult.numMatches > matchResult.numMatches)
+                            {
+                                LOG_INFO("%s", qUtf8Printable(
+                                    QString("  %1 LightGlue 180°重试改善内点: %2 → %3")
+                                        .arg(canonicalPairName)
+                                        .arg(matchResult.numMatches)
+                                        .arg(retryResult.numMatches)));
+                                matchResult = std::move(retryResult);
+                                usedLightGlueHalfTurnRetry = true;
+                            }
+                        }
+
+                        if (isLightGlueMatch
+                            && lightglueAlgo == QStringLiteral("sift")
+                            && matchResult.numMatches < outlierConfig.minInliers)
+                        {
+                            xjw::feature_match::MatchResult fallbackResult = runTraditionalSiftFallback(
+                                fd0,
+                                fd1,
+                                sp0.keypoints,
+                                sp1.keypoints,
+                                outlierConfig,
+                                useCudaFinal,
+                                0,
+                                &traditionalSiftFallbackRawMatchCount);
+
+                            if (fallbackResult.numMatches > matchResult.numMatches)
+                            {
+                                LOG_INFO("%s", qUtf8Printable(
+                                    QString("  %1 SIFT+BF-L2 fallback 改善内点: %2 → %3 (raw=%4, cuda=%5)")
+                                        .arg(canonicalPairName)
+                                        .arg(matchResult.numMatches)
+                                        .arg(fallbackResult.numMatches)
+                                        .arg(traditionalSiftFallbackRawMatchCount)
+                                        .arg(useCudaFinal ? QStringLiteral("on") : QStringLiteral("off"))));
+                                matchResult = std::move(fallbackResult);
+                                usedTraditionalSiftFallback = true;
+                            }
+                        }
 
                         // BF/FLANN 分支容错：几何过滤过严导致全丢时，回退到原始匹配结果。
                         if (isBfFlann && rawMatchCount > 0 && matchResult.numMatches <= 0)
@@ -954,6 +1374,19 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         sidecar["feature_format_version"] = 2;
                         sidecar["num_matches"]  = matchResult.numMatches;
                         sidecar["match_algorithm"] = matchAlgorithm;
+                        if (usedLightGlueHalfTurnRetry)
+                        {
+                            sidecar["lightglue_rotation_retry"] = QStringLiteral("half_turn_image1");
+                            sidecar["rotation_retry_degrees"] = 180;
+                            sidecar["primary_inlier_count"] = primaryLightGlueInliers;
+                        }
+                        if (usedTraditionalSiftFallback)
+                        {
+                            sidecar["traditional_sift_fallback"] = true;
+                            sidecar["fallback_algorithm"] = QStringLiteral("sift_bf_l2");
+                            sidecar["fallback_raw_match_count"] = traditionalSiftFallbackRawMatchCount;
+                            sidecar["primary_inlier_count"] = primaryLightGlueInliers;
+                        }
 
                         QJsonArray pts0, pts1, indices0, indices1, scores;
                         for (const auto &dm : matchResult.cvMatches) 
@@ -1005,6 +1438,17 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         pairSettings["pair_name"]    = canonicalPairName;
                         pairSettings["sidecar_json"] = sidecarPath;
                         pairSettings["match_algorithm"] = matchAlgorithm;
+                        if (usedLightGlueHalfTurnRetry)
+                        {
+                            pairSettings["lightglue_rotation_retry"] = QStringLiteral("half_turn_image1");
+                            pairSettings["rotation_retry_degrees"] = 180;
+                        }
+                        if (usedTraditionalSiftFallback)
+                        {
+                            pairSettings["traditional_sift_fallback"] = true;
+                            pairSettings["fallback_algorithm"] = QStringLiteral("sift_bf_l2");
+                            pairSettings["fallback_raw_match_count"] = traditionalSiftFallbackRawMatchCount;
+                        }
 
                         QStringList singleOutput{outputPath};
                         appendIpmatchResultGuarded(projectManager, projectPath, singleOutput, pairSettings);

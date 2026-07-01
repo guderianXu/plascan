@@ -60,6 +60,7 @@ gtest_discover_tests(test_sparse_point_cloud_processor)
 # ==============================================================================
 add_executable(test_mvs_types test_mvs_types.cpp)
 target_link_libraries(test_mvs_types PRIVATE
+    mvs
     camera
     ${OpenCV_LIBS}
     GTest::gtest_main
@@ -118,6 +119,20 @@ target_include_directories(test_sfm_params PRIVATE
 gtest_discover_tests(test_sfm_params)
 
 # ==============================================================================
+# test_sfm_quality_report — SfM 稀疏重建质量报告
+# ==============================================================================
+add_executable(test_sfm_quality_report test_sfm_quality_report.cpp)
+target_link_libraries(test_sfm_quality_report PRIVATE
+    sfm
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_sfm_quality_report PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+)
+gtest_discover_tests(test_sfm_quality_report)
+
+# ==============================================================================
 # test_sfm_pipeline — SFM 管线与 BA 离群点过滤集成测试
 # ==============================================================================
 add_executable(test_sfm_pipeline test_sfm_pipeline.cpp)
@@ -169,6 +184,34 @@ target_include_directories(test_sfm_pair_planner PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_sfm_pair_planner)
+
+add_executable(test_reconstruction_prerequisites
+    test_reconstruction_prerequisites.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline/ReconstructionPrerequisiteReport.cpp
+)
+target_link_libraries(test_reconstruction_prerequisites PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_reconstruction_prerequisites PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
+)
+gtest_discover_tests(test_reconstruction_prerequisites)
+
+add_executable(test_guided_rematch_service
+    test_guided_rematch_service.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp
+)
+target_link_libraries(test_guided_rematch_service PRIVATE
+    Qt6::Core
+    ${OpenCV_LIBS}
+    GTest::gtest_main
+)
+target_include_directories(test_guided_rematch_service PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+)
+gtest_discover_tests(test_guided_rematch_service)
 
 add_executable(test_feature_pair_planner
     test_feature_pair_planner.cpp
@@ -417,6 +460,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDashboardSummary.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectMetadataOperations.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceDatasets.cpp
@@ -424,6 +469,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSurveyControl.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectResultRecords.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
@@ -557,6 +603,14 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_repo_hygiene
     )
     set_tests_properties(RepoHygieneTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME PythonRuntimeSetupTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_setup_python_runtime
+    )
+    set_tests_properties(PythonRuntimeSetupTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 
@@ -793,3 +847,19 @@ target_include_directories(test_feature_extractor_suffix PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition
 )
 gtest_discover_tests(test_feature_extractor_suffix)
+
+add_executable(test_feature_file_io
+    test_feature_file_io.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
+)
+target_link_libraries(test_feature_file_io PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+    ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
+)
+target_include_directories(test_feature_file_io PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+)
+gtest_discover_tests(test_feature_file_io)

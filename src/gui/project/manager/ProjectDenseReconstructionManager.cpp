@@ -11,6 +11,7 @@
 #include "project/SparseResultQuality.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
+#include "DenseCloudQualityFilter.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "SparseCloudPreprocessor.h"
@@ -20,15 +21,18 @@
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/features/normal_estimation.h>
 
+#include <QCoreApplication>
 #include <QDateTime>
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
+#include <QJsonDocument>
 #include <QMap>
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QProcess>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QSet>
@@ -508,6 +512,19 @@ using PlaPC = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
 constexpr std::size_t kMaxDenseRefineFilterInputPoints = 250000;
 constexpr int kMaxDenseRefinePreconditionPasses = 6;
+constexpr std::uint64_t kStreamingDenseRefineMinPoints = 1000000;
+constexpr int kStreamingDenseRefineChunkMb = 512;
+
+struct StreamingDenseRefineResult
+{
+    bool cancelled = false;
+    QString error;
+    QString reportPath;
+    QJsonObject reportJson;
+    QJsonObject terrainReportJson;
+    xjw::mvs::TerrainHeightSpikeFilterReport terrainReport;
+    int pointCount = 0;
+};
 
 PlaPC densePointsToPointCloud(const std::vector<xjw::mvs::DensePoint> &cloud)
 {
@@ -628,6 +645,234 @@ bool writePointCloudPly(const QString &path,
         if (errorMessage) *errorMessage = QString::fromStdString(e.what());
         return false;
     }
+}
+
+xjw::mvs::TerrainHeightSpikeFilterOptions terrainSpikeOptionsFromRequest(
+    const xjw::gui::project::DenseRefineSettings &request)
+{
+    xjw::mvs::TerrainHeightSpikeFilterOptions options;
+    options.enabled = request.terrainSpikeFilterEnabled;
+    options.gridResolution = request.terrainSpikeGridResolution;
+    options.minCellPoints = request.terrainSpikeMinCellPoints;
+    options.minHeightThreshold = static_cast<float>(request.terrainSpikeMinHeightThreshold);
+    options.madMultiplier = static_cast<float>(request.terrainSpikeMadMultiplier);
+    options.localPlaneFilterEnabled = request.terrainLocalPlaneFilterEnabled;
+    options.localPlaneMinPoints = request.terrainLocalPlaneMinPoints;
+    options.localPlaneMinResidualThreshold =
+        static_cast<float>(request.terrainLocalPlaneMinResidualThreshold);
+    options.localPlaneMadMultiplier = static_cast<float>(request.terrainLocalPlaneMadMultiplier);
+    return options;
+}
+
+QJsonObject terrainSpikeReportToJson(const xjw::mvs::TerrainHeightSpikeFilterReport &report)
+{
+    return QJsonObject{
+        {QStringLiteral("input_points"), static_cast<double>(report.inputPoints)},
+        {QStringLiteral("output_points"), static_cast<double>(report.outputPoints)},
+        {QStringLiteral("removed_points"), static_cast<double>(report.removedPoints)},
+        {QStringLiteral("local_plane_removed_points"), static_cast<double>(report.localPlaneRemovedPoints)},
+        {QStringLiteral("median_cell_z_range_before"), report.medianCellZRangeBefore},
+        {QStringLiteral("p95_cell_z_range_before"), report.p95CellZRangeBefore},
+        {QStringLiteral("median_cell_z_range_after"), report.medianCellZRangeAfter},
+        {QStringLiteral("p95_cell_z_range_after"), report.p95CellZRangeAfter}
+    };
+}
+
+xjw::mvs::TerrainHeightSpikeFilterReport terrainSpikeReportFromJson(const QJsonObject &object)
+{
+    xjw::mvs::TerrainHeightSpikeFilterReport report;
+    report.inputPoints = static_cast<std::size_t>(object.value(QStringLiteral("input_points")).toDouble(0.0));
+    report.outputPoints = static_cast<std::size_t>(object.value(QStringLiteral("output_points")).toDouble(0.0));
+    report.removedPoints = static_cast<std::size_t>(object.value(QStringLiteral("removed_points")).toDouble(0.0));
+    report.localPlaneRemovedPoints =
+        static_cast<std::size_t>(object.value(QStringLiteral("local_plane_removed_points")).toDouble(0.0));
+    report.medianCellZRangeBefore = object.value(QStringLiteral("median_cell_z_range_before")).toDouble(0.0);
+    report.p95CellZRangeBefore = object.value(QStringLiteral("p95_cell_z_range_before")).toDouble(0.0);
+    report.medianCellZRangeAfter = object.value(QStringLiteral("median_cell_z_range_after")).toDouble(0.0);
+    report.p95CellZRangeAfter = object.value(QStringLiteral("p95_cell_z_range_after")).toDouble(0.0);
+    return report;
+}
+
+QString denseCloudRefineCliExecutablePath()
+{
+    const QString exeName =
+#ifdef Q_OS_WIN
+        QStringLiteral("dense_cloud_refine_cli.exe");
+#else
+        QStringLiteral("dense_cloud_refine_cli");
+#endif
+
+    const QStringList candidates{
+        QDir(QCoreApplication::applicationDirPath()).filePath(exeName),
+        QDir(QDir::currentPath()).filePath(exeName),
+        QDir(QDir::currentPath()).filePath(QStringLiteral("bin/%1").arg(exeName))
+    };
+
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+        {
+            return candidate;
+        }
+    }
+    return {};
+}
+
+bool readBinaryPlyVertexCount(const QString &plyPath, std::uint64_t *vertexCount)
+{
+    if (!vertexCount)
+    {
+        return false;
+    }
+
+    plapoint::io::PlyVertexStreamHeader header;
+    std::string error;
+    if (!plapoint::io::parseBinaryPlyVertexStreamHeader(plyPath.toStdString(), &header, &error))
+    {
+        return false;
+    }
+
+    *vertexCount = header.vertexCount;
+    return true;
+}
+
+bool shouldUseStreamingDenseRefine(const QString &inputPly,
+                                   const xjw::gui::project::DenseRefineSettings &request,
+                                   std::uint64_t *vertexCount)
+{
+    std::uint64_t count = 0;
+    if (!request.terrainSpikeFilterEnabled || !readBinaryPlyVertexCount(inputPly, &count))
+    {
+        return false;
+    }
+    if (vertexCount)
+    {
+        *vertexCount = count;
+    }
+    return count >= kStreamingDenseRefineMinPoints;
+}
+
+QStringList streamingDenseRefineArguments(const QString &inputPly,
+                                          const QString &outputPly,
+                                          const QString &reportPath,
+                                          const xjw::gui::project::DenseRefineSettings &request)
+{
+    QStringList args{
+        QStringLiteral("--input"),
+        inputPly,
+        QStringLiteral("--output"),
+        outputPly,
+        QStringLiteral("--report-json"),
+        reportPath,
+        QStringLiteral("--streaming-chunk-mb"),
+        QString::number(kStreamingDenseRefineChunkMb),
+        QStringLiteral("--terrain-grid-cells"),
+        QString::number(request.terrainSpikeGridResolution),
+        QStringLiteral("--terrain-min-cell-points"),
+        QString::number(request.terrainSpikeMinCellPoints),
+        QStringLiteral("--terrain-min-height-threshold"),
+        QString::number(request.terrainSpikeMinHeightThreshold, 'g', 8),
+        QStringLiteral("--terrain-mad-multiplier"),
+        QString::number(request.terrainSpikeMadMultiplier, 'g', 8),
+        QStringLiteral("--terrain-local-plane-min-points"),
+        QString::number(request.terrainLocalPlaneMinPoints),
+        QStringLiteral("--terrain-local-plane-min-residual-threshold"),
+        QString::number(request.terrainLocalPlaneMinResidualThreshold, 'g', 8),
+        QStringLiteral("--terrain-local-plane-mad-multiplier"),
+        QString::number(request.terrainLocalPlaneMadMultiplier, 'g', 8),
+        QStringLiteral("--terrain-filter-passes"),
+        QString::number(request.terrainFilterPasses)
+    };
+
+    args << (request.terrainLocalPlaneFilterEnabled
+                 ? QStringLiteral("--terrain-local-plane-filter")
+                 : QStringLiteral("--disable-terrain-local-plane-filter"));
+    return args;
+}
+
+bool runStreamingDenseCloudRefineCli(const QString &inputPly,
+                                     const QString &outputPly,
+                                     const xjw::gui::project::DenseRefineSettings &request,
+                                     const std::function<bool()> &isCancelled,
+                                     const std::function<void(const QString &, int)> &postProgress,
+                                     StreamingDenseRefineResult *result)
+{
+    if (!result)
+    {
+        return false;
+    }
+
+    const QString exePath = denseCloudRefineCliExecutablePath();
+    if (exePath.isEmpty())
+    {
+        result->error = QStringLiteral("未找到 dense_cloud_refine_cli 可执行文件");
+        return false;
+    }
+
+    const QString reportPath = outputPly + QStringLiteral(".report.json");
+    QFile::remove(reportPath);
+    QFile::remove(outputPly);
+
+    if (postProgress)
+    {
+        postProgress(QStringLiteral("流式密集点云地表清理..."), 8);
+    }
+
+    QProcess process;
+    process.setProgram(exePath);
+    process.setArguments(streamingDenseRefineArguments(inputPly, outputPly, reportPath, request));
+    process.start();
+    if (!process.waitForStarted(10000))
+    {
+        result->error = QStringLiteral("启动 dense_cloud_refine_cli 失败: %1").arg(process.errorString());
+        return false;
+    }
+
+    while (!process.waitForFinished(500))
+    {
+        if (isCancelled && isCancelled())
+        {
+            process.kill();
+            process.waitForFinished(5000);
+            QFile::remove(outputPly);
+            QFile::remove(reportPath);
+            result->cancelled = true;
+            result->error = QStringLiteral("用户取消了流式密集点云后处理");
+            return false;
+        }
+    }
+
+    const QString stdOut = QString::fromUtf8(process.readAllStandardOutput());
+    const QString stdErr = QString::fromUtf8(process.readAllStandardError());
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    {
+        result->error = QStringLiteral("dense_cloud_refine_cli 失败(exit=%1): %2 %3")
+                            .arg(process.exitCode())
+                            .arg(stdErr.trimmed(), stdOut.trimmed());
+        return false;
+    }
+
+    QFile reportFile(reportPath);
+    if (!reportFile.open(QIODevice::ReadOnly))
+    {
+        result->error = QStringLiteral("无法读取流式清理报告: %1").arg(reportPath);
+        return false;
+    }
+
+    const QJsonDocument doc = QJsonDocument::fromJson(reportFile.readAll());
+    const QJsonObject reportObject = doc.object();
+    const QJsonObject terrainObject = reportObject.value(QStringLiteral("terrain_spike_filter")).toObject();
+    result->reportPath = reportPath;
+    result->reportJson = reportObject;
+    result->terrainReportJson = terrainObject;
+    result->terrainReport = terrainSpikeReportFromJson(terrainObject);
+    result->pointCount = static_cast<int>(
+        std::min<double>(reportObject.value(QStringLiteral("output_points")).toDouble(0.0),
+                         static_cast<double>(std::numeric_limits<int>::max())));
+
+    LOG_INFO(QStringLiteral("[DenseRefine] 流式地表清理完成: %1")
+                 .arg(stdOut.trimmed()));
+    return QFileInfo::exists(outputPly);
 }
 
 // Helper: deep-copy PointCloud to shared_ptr
@@ -824,7 +1069,7 @@ DenseRefinePreconditionStats preconditionDenseRefineCloudForFilters(
     {
         return stats;
     }
-    if (!request.sorEnabled && !request.normalsEnabled)
+    if (!request.sorEnabled && !request.normalsEnabled && !request.terrainSpikeFilterEnabled)
     {
         return stats;
     }
@@ -1344,7 +1589,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             StereoFusionConfig fusionCfg;
             fusionCfg.minNumPixels = std::max(1, request.minConsistentViews);
             fusionCfg.maxReprojError = request.depthConsistency;
-            fusionCfg.maxDepthError = 0.05f;
+            fusionCfg.maxDepthError = request.fusionRelDepthThreshold;
             fusionCfg.checkNumImages = std::min(neighborCount, static_cast<int>(frames.size()) - 1);
             fusionCfg.workerCount = std::max(1, request.threads);
             fusionCfg.useColor = keepColor;
@@ -1878,6 +2123,96 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             }, Qt::QueuedConnection);
         };
 
+        const auto postProgress = [self](const QString &message, int progressValue) {
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, message, progressValue]() {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->mvsProgressChanged(message, progressValue);
+            }, Qt::QueuedConnection);
+        };
+
+        std::uint64_t streamingVertexCount = 0;
+        if (shouldUseStreamingDenseRefine(inputPly, request, &streamingVertexCount))
+        {
+            StreamingDenseRefineResult streamingResult;
+            LOG_INFO(QStringLiteral("[DenseRefine] 大点云启用流式地表清理: inputPoints=%1 threshold=%2")
+                         .arg(static_cast<double>(streamingVertexCount), 0, 'f', 0)
+                         .arg(static_cast<double>(kStreamingDenseRefineMinPoints), 0, 'f', 0));
+            if (runStreamingDenseCloudRefineCli(inputPly,
+                                                outputPly,
+                                                request,
+                                                isCancelled,
+                                                postProgress,
+                                                &streamingResult))
+            {
+                if (!self)
+                {
+                    return;
+                }
+                QMetaObject::invokeMethod(self.data(), [self,
+                                                        inputPly,
+                                                        outputPly,
+                                                        request,
+                                                        streamingResult,
+                                                        pipelineMode,
+                                                        cancelFlag]() {
+                    if (!self)
+                    {
+                        return;
+                    }
+                    self->clearActiveMvsCancelFlag(cancelFlag);
+                    QJsonObject record = makeDenseResultRecord(utcNowIso(),
+                                                               outputPly,
+                                                               streamingResult.pointCount);
+                    record[QStringLiteral("stage")] = QStringLiteral("production");
+                    record[QStringLiteral("quality_stage")] = QStringLiteral("terrain");
+                    record[QStringLiteral("operation")] = QStringLiteral("dense_cloud_surface_cleanup");
+                    record[QStringLiteral("backend")] = QStringLiteral("streaming_cli");
+                    record[QStringLiteral("source_dense_cloud")] = inputPly;
+                    record[QStringLiteral("terrain_filter_passes")] = request.terrainFilterPasses;
+                    record[QStringLiteral("terrain_spike_filter")] = streamingResult.terrainReportJson;
+                    record[QStringLiteral("dense_refine_report")] = streamingResult.reportJson;
+                    if (request.normalsEnabled)
+                    {
+                        record[QStringLiteral("normal_status")] =
+                            QStringLiteral("skipped_for_streaming_large_cloud");
+                    }
+                    upsertProjectRecordByPath(self->_projectData,
+                                              QStringLiteral("dense_cloud_results"),
+                                              QStringLiteral("dense_cloud_xyz"),
+                                              record);
+                    if (self->_owner)
+                    {
+                        self->_owner->refreshReconstructionQualityReport();
+                    }
+                    emit self->denseCloudResultReady(outputPly, streamingResult.pointCount);
+                    emit self->mvsProgressFinished(true);
+                    if (!pipelineMode)
+                    {
+                        QMessageBox::information(
+                            self->_parentWidget,
+                            QStringLiteral("密集点云后处理"),
+                            QStringLiteral("流式后处理完成，共 %1 个点。").arg(streamingResult.pointCount));
+                    }
+                }, Qt::QueuedConnection);
+                return;
+            }
+
+            if (streamingResult.cancelled)
+            {
+                finishCancelled();
+                return;
+            }
+            LOG_WARN(QStringLiteral("[DenseRefine] 流式地表清理不可用，回退内存路径: %1")
+                         .arg(streamingResult.error));
+        }
+
         PlaPC cloud;
         QString loadErr;
         if (!readPointCloudPly(inputPly, &cloud, &loadErr))
@@ -1905,21 +2240,9 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
             return;
         }
 
-        const auto postProgress = [self](const QString &message, int progressValue) {
-            if (!self)
-            {
-                return;
-            }
-            QMetaObject::invokeMethod(self.data(), [self, message, progressValue]() {
-                if (!self)
-                {
-                    return;
-                }
-                emit self->mvsProgressChanged(message, progressValue);
-            }, Qt::QueuedConnection);
-        };
         const DenseRefinePreconditionStats precondition =
             preconditionDenseRefineCloudForFilters(&cloud, request, postProgress);
+        xjw::mvs::TerrainHeightSpikeFilterReport terrainSpikeReport;
         if (isCancelled())
         {
             finishCancelled();
@@ -2057,6 +2380,32 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
                 return;
             }
         }
+        if (request.terrainSpikeFilterEnabled)
+        {
+            if (isCancelled())
+            {
+                finishCancelled();
+                return;
+            }
+            postProgress(QStringLiteral("局部高度突刺过滤..."), 60);
+            const auto beforeTerrainFilter = cloud.size();
+            cloud = xjw::mvs::filterTerrainHeightSpikes(
+                cloud,
+                terrainSpikeOptionsFromRequest(request),
+                &terrainSpikeReport);
+            LOG_INFO(QStringLiteral("[DenseRefine] 局部高度突刺过滤完成: %1 -> %2 点，移除 %3 点，"
+                                    "cellZRangeP95 %4 -> %5")
+                         .arg(beforeTerrainFilter)
+                         .arg(cloud.size())
+                         .arg(terrainSpikeReport.removedPoints)
+                         .arg(terrainSpikeReport.p95CellZRangeBefore, 0, 'f', 4)
+                         .arg(terrainSpikeReport.p95CellZRangeAfter, 0, 'f', 4));
+            if (isCancelled())
+            {
+                finishCancelled();
+                return;
+            }
+        }
         if (request.normalsEnabled)
         {
             if (isCancelled())
@@ -2137,16 +2486,33 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
         {
             return;
         }
-        QMetaObject::invokeMethod(self.data(), [self, outputPly, pointCount, pipelineMode, cancelFlag]() {
+        QMetaObject::invokeMethod(self.data(), [self,
+                                                inputPly,
+                                                outputPly,
+                                                pointCount,
+                                                request,
+                                                terrainSpikeReport,
+                                                pipelineMode,
+                                                cancelFlag]() {
             if (!self)
             {
                 return;
             }
             self->clearActiveMvsCancelFlag(cancelFlag);
+            QJsonObject record = makeDenseResultRecord(utcNowIso(), outputPly, pointCount);
+            const bool terrainProductionCloud = request.terrainSpikeFilterEnabled;
+            record[QStringLiteral("stage")] =
+                terrainProductionCloud ? QStringLiteral("production") : QStringLiteral("refined");
+            record[QStringLiteral("quality_stage")] =
+                terrainProductionCloud ? QStringLiteral("terrain") : QStringLiteral("refined");
+            record[QStringLiteral("operation")] =
+                terrainProductionCloud ? QStringLiteral("dense_cloud_surface_cleanup") : QStringLiteral("dense_refine");
+            record[QStringLiteral("source_dense_cloud")] = inputPly;
+            record[QStringLiteral("terrain_spike_filter")] = terrainSpikeReportToJson(terrainSpikeReport);
             upsertProjectRecordByPath(self->_projectData,
                                       QStringLiteral("dense_cloud_results"),
                                       QStringLiteral("dense_cloud_xyz"),
-                                      makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
+                                      record);
             if (self->_owner)
             {
                 self->_owner->refreshReconstructionQualityReport();

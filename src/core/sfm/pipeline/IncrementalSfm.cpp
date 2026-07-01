@@ -775,6 +775,25 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     int longTrackTwoViewOnlyCount = 0;
 
     MultiViewTrackBuilder trackBuilder;
+    float maxKeypointX = 0.0f;
+    float maxKeypointY = 0.0f;
+    for (ImageId imageId : imageIds)
+    {
+        const ImageData &image = _reconstruction->image(imageId);
+        trackBuilder.setImageKeypoints(imageId, image.keypoints);
+        for (const FeatureKeypoint &keypoint : image.keypoints)
+        {
+            if (std::isfinite(keypoint.x))
+            {
+                maxKeypointX = std::max(maxKeypointX, keypoint.x);
+            }
+            if (std::isfinite(keypoint.y))
+            {
+                maxKeypointY = std::max(maxKeypointY, keypoint.y);
+            }
+        }
+    }
+
     int indexedPairCount = 0;
     int indexedMatchCount = 0;
     int rawIndexedMatchCount = 0;
@@ -825,7 +844,18 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
         }
     }
 
-    const MultiViewTrackBuildResult multiViewTracks = trackBuilder.build();
+    MultiViewTrackBuilder::BuildOptions trackBuildOptions;
+    trackBuildOptions.enableQualityThinning =
+        _sfmOptions.maxKnownPoseTracksPerImage > 0 ||
+        _sfmOptions.maxKnownPoseTracksPerGridCell > 0;
+    trackBuildOptions.maxTracksPerImage = _sfmOptions.maxKnownPoseTracksPerImage;
+    trackBuildOptions.maxTracksPerGridCell = _sfmOptions.maxKnownPoseTracksPerGridCell;
+    trackBuildOptions.gridColumns = _sfmOptions.trackThinningGridColumns;
+    trackBuildOptions.gridRows = _sfmOptions.trackThinningGridRows;
+    trackBuildOptions.imageWidth = std::max(1.0f, maxKeypointX + 1.0f);
+    trackBuildOptions.imageHeight = std::max(1.0f, maxKeypointY + 1.0f);
+
+    const MultiViewTrackBuildResult multiViewTracks = trackBuilder.build(trackBuildOptions);
     if (!multiViewTracks.tracks.empty())
     {
         std::ostringstream trackLengthHistogram;
@@ -854,7 +884,7 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
         Logger::instance()->infof(
             "[SFM] Known-pose multiview tracks: pairs=%d matches=%d rawMatches=%d "
             "geometryRejected=%d components=%d accepted=%d rejectedConflict=%d "
-            "rejectedConflictEdges=%d hist=%s created=%d addedObservations=%d",
+            "rejectedConflictEdges=%d qualityPruned=%d hist=%s created=%d addedObservations=%d",
             indexedPairCount,
             indexedMatchCount,
             rawIndexedMatchCount,
@@ -863,6 +893,7 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
             multiViewTracks.acceptedComponents,
             multiViewTracks.rejectedConflictComponents,
             multiViewTracks.rejectedConflictEdges,
+            multiViewTracks.prunedByQualityThinning,
             trackLengthHistogram.str().c_str(),
             trackStats.numCreated,
             trackStats.numContinued);
@@ -1105,7 +1136,9 @@ std::vector<BACameraPosePrior> IncrementalSfm::buildCameraPosePriorsFromInputCam
     }
 
     const double inputExtent = centerExtent(inputCenters);
-    const double adaptivePositionSigmaMeters = std::max(0.25, inputExtent * 0.01);
+    const double adaptivePositionSigmaMeters = std::max(
+        0.25,
+        inputExtent * 0.01 * std::max(1e-6, _sfmOptions.knownPosePriorPositionSigmaScale));
 
     std::vector<BACameraPosePrior> priors;
     priors.reserve(imageIds.size());
@@ -1119,7 +1152,8 @@ std::vector<BACameraPosePrior> IncrementalSfm::buildCameraPosePriorsFromInputCam
             prior.cameraToWorldRotation = inputCamera.cameraToWorldRotation();
             prior.cameraCenter = inputCamera.cameraCenter();
             prior.positionSigmaMeters = std::max(1e-6, adaptivePositionSigmaMeters);
-            prior.rotationSigmaDegrees = std::max(1e-6, prior.rotationSigmaDegrees);
+            prior.rotationSigmaDegrees =
+                std::max(1e-6, _sfmOptions.knownPosePriorRotationSigmaDegrees);
         }
         priors.push_back(prior);
     }
@@ -1959,7 +1993,7 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     if (_sfmOptions.useKnownCameraPoses && baOpt.cameraPosePriors.empty())
     {
         baOpt.cameraPosePriors = buildCameraPosePriorsFromInputCameras(baImageIds);
-        baOpt.refineCameraPose = false;
+        baOpt.refineCameraPose = _sfmOptions.refineKnownCameraPoseWithSoftPrior;
     }
     if (!localOnly && !baImageIds.empty())
     {

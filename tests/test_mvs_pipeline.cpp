@@ -9,6 +9,7 @@
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "DenseCloudBuilder.h"
+#include "MvsQualityReport.h"
 #include "SparseCloudPreprocessor.h"
 #include "Camera.h"
 
@@ -304,6 +305,94 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionRejectsDepthsWithoutNeighborAgree
         << "Streaming fusion must not directly back-project first-frame depths when neighbors disagree.";
 }
 
+TEST(MvsPipelineTest, StreamingFirstFrameFusionKeepsProductionStrictWhenFallbackIsNotEnabled)
+{
+    constexpr int W = 20;
+    constexpr int H = 14;
+    constexpr double FOCAL = 40.0;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C[3] = {0,0,0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(3);
+    frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
+    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].imgW = W;
+    frames[0].imgH = H;
+    frames[0].sourceImageIndices = {1, 2};
+
+    frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
+    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].imgW = W;
+    frames[1].imgH = H;
+
+    frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
+    frames[2].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[2].imgW = W;
+    frames[2].imgH = H;
+
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.fuseOnlyFirstFrame = true;
+    fcfg.minNumPixels = 3;
+    fcfg.checkNumImages = 2;
+    fcfg.maxReprojError = 0.5f;
+    fcfg.maxDepthError = 0.01f;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts;
+    std::string err;
+    const bool ok = fusion.fuse(frames, pts, nullptr, &err);
+
+    ASSERT_TRUE(ok) << err;
+    EXPECT_TRUE(pts.empty())
+        << "Production fusion must keep strict 3-view agreement unless low-yield fallback is explicitly enabled.";
+}
+
+TEST(MvsPipelineTest, StreamingFirstFrameFusionFallsBackToTwoViewAgreementWhenStrictYieldCollapses)
+{
+    constexpr int W = 20;
+    constexpr int H = 14;
+    constexpr double FOCAL = 40.0;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C[3] = {0,0,0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(3);
+    frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
+    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].imgW = W;
+    frames[0].imgH = H;
+    frames[0].sourceImageIndices = {1, 2};
+
+    frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
+    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].imgW = W;
+    frames[1].imgH = H;
+
+    frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
+    frames[2].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[2].imgW = W;
+    frames[2].imgH = H;
+
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.fuseOnlyFirstFrame = true;
+    fcfg.minNumPixels = 3;
+    fcfg.checkNumImages = 2;
+    fcfg.maxReprojError = 0.5f;
+    fcfg.maxDepthError = 0.01f;
+    fcfg.enableLowYieldFallback = true;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts;
+    std::string err;
+    const bool ok = fusion.fuse(frames, pts, nullptr, &err);
+
+    ASSERT_TRUE(ok) << err;
+    EXPECT_GT(pts.size(), 0u)
+        << "When strict 3-view streaming fusion collapses, the pipeline should preserve supported "
+           "2-view dense observations instead of producing a sparse-like cloud.";
+}
+
 TEST(MvsPipelineTest, DepthMapFusionFilteredDepthsIncludeAllAcceptedObservations)
 {
     constexpr int W = 24;
@@ -396,6 +485,25 @@ TEST(MvsPipelineTest, DepthMapFusionUsesPlannedSourceImagesBeforeNearestCenters)
     ASSERT_TRUE(ok) << err;
     EXPECT_GT(static_cast<int>(pts.size()), 0)
         << "Fusion should prefer planned source image 2 over nearest invalid image 1.";
+}
+
+TEST(MvsPipelineTest, MvsQualityReportFlagsLowConfidenceFullCoverageDepthMap)
+{
+    cv::Mat depth(20, 30, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(20, 30, CV_32F, cv::Scalar(0.56f));
+    confidence.at<float>(10, 15) = 0.82f;
+
+    const xjw::mvs::DepthMapQualityMetrics metrics =
+        xjw::mvs::analyzeDepthMapQuality(depth, confidence, 3);
+
+    EXPECT_GT(metrics.validCoverage, 0.95f);
+    EXPECT_LT(metrics.meanConfidence, 0.65f);
+    EXPECT_TRUE(metrics.lowConfidenceFullCoverage);
+    EXPECT_GE(metrics.recommendedFusionConfidence, 0.65f);
+
+    const QJsonObject json = xjw::mvs::depthMapQualityMetricsToJson(metrics);
+    EXPECT_TRUE(json.value(QStringLiteral("low_confidence_full_coverage")).toBool());
+    EXPECT_GE(json.value(QStringLiteral("recommended_fusion_confidence")).toDouble(), 0.65);
 }
 
 TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
@@ -600,6 +708,72 @@ TEST(MvsPipelineTest, FusionDepthPostprocessReportsConfidenceAndLocalOutliers)
     EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 0.0f);
     EXPECT_FLOAT_EQ(depth.at<float>(3, 3), 0.0f);
     EXPECT_FLOAT_EQ(confidence.at<float>(3, 3), 0.0f);
+}
+
+TEST(MvsPipelineTest, FusionDepthPostprocessRaisesThresholdForLowConfidenceFullCoverage)
+{
+    cv::Mat depth(10, 10, CV_32F, cv::Scalar(10.0f));
+    cv::Mat confidence(10, 10, CV_32F, cv::Scalar(0.56f));
+    confidence.at<float>(4, 4) = 0.80f;
+    confidence.at<float>(5, 5) = 0.78f;
+
+    xjw::mvs::FusionConfig config;
+    config.confidenceThresh = 0.25f;
+    config.enableAdaptiveConfidenceFilter = true;
+    config.adaptiveFullCoverageThreshold = 0.95f;
+    config.adaptiveLowMeanConfidenceThreshold = 0.65f;
+    config.adaptiveStrictConfidenceThreshold = 0.65f;
+    config.enableLocalDepthOutlierFilter = false;
+    config.enableSpeckleFilter = false;
+
+    const xjw::mvs::DepthPostProcessStats stats =
+        xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(depth, confidence, config, 0, 4);
+
+    EXPECT_FLOAT_EQ(stats.effectiveConfidenceThreshold, 0.65f);
+    EXPECT_EQ(stats.validAfterConfidenceFilter, 2);
+    EXPECT_EQ(stats.confidenceRemoved, 98);
+    EXPECT_FLOAT_EQ(depth.at<float>(0, 0), 0.0f);
+    EXPECT_FLOAT_EQ(depth.at<float>(4, 4), 10.0f);
+}
+
+TEST(MvsPipelineTest, StreamingFirstFrameFusionEstimatesNormalsWhenNormalMapMissing)
+{
+    constexpr int W = 16;
+    constexpr int H = 12;
+    constexpr double FOCAL = 40.0;
+    constexpr float DEPTH_VAL = 8.0f;
+
+    const double I[9] = {1,0,0,0,1,0,0,0,1};
+    const double C[3] = {0,0,0};
+
+    std::vector<xjw::mvs::FusionFrameInput> frames(3);
+    for (int i = 0; i < 3; ++i)
+    {
+        frames[static_cast<size_t>(i)].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
+        frames[static_cast<size_t>(i)].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+        frames[static_cast<size_t>(i)].imgW = W;
+        frames[static_cast<size_t>(i)].imgH = H;
+    }
+    frames[0].sourceImageIndices = {1, 2};
+
+    xjw::mvs::StereoFusionConfig fcfg;
+    fcfg.fuseOnlyFirstFrame = true;
+    fcfg.minNumPixels = 3;
+    fcfg.checkNumImages = 2;
+    fcfg.maxReprojError = 0.5f;
+    fcfg.maxDepthError = 0.01f;
+
+    xjw::mvs::DepthMapFusion fusion(fcfg);
+    std::vector<xjw::mvs::FusedPoint> pts;
+    std::string err;
+    const bool ok = fusion.fuse(frames, pts, nullptr, &err);
+
+    ASSERT_TRUE(ok) << err;
+    ASSERT_GT(pts.size(), 0u);
+    const xjw::mvs::FusedPoint &p = pts[pts.size() / 2];
+    const float normalLength = std::sqrt(p.nx * p.nx + p.ny * p.ny + p.nz * p.nz);
+    EXPECT_GT(normalLength, 0.90f)
+        << "Production dense clouds must not write all-zero normals into PLY output";
 }
 
 TEST(MvsPipelineTest, ContentMaskSkipsNearlyFullAerialFrame)

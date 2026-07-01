@@ -1,3 +1,4 @@
+import re
 import pathlib
 import unittest
 
@@ -491,6 +492,17 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("rawDepthStoragePath(depthPngPath)", cli)
         self.assertIn("loadDepthMatStorage", cli)
 
+    def test_depth_generator_skips_internal_fusion_postprocess_when_fusion_disabled(self):
+        scheduler = self.read("src/core/mvs/DepthMapGenerator.cpp")
+
+        postprocess_guard = re.search(
+            r"if\s*\(\s*_config\.runFusion\s*&&\s*keepDepthFramesInMemory\.load\(\)\s*&&"
+            r"\s*\(\s*savePreviewPng\s*\|\|\s*saveRawDepth\s*\)\s*\)",
+            scheduler,
+            re.S,
+        )
+        self.assertIsNotNone(postprocess_guard)
+
     def test_reconstruct_pipeline_cli_exposes_mvs_regression_controls(self):
         cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
 
@@ -539,7 +551,9 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertIn("fusionCfg.fuseOnlyFirstFrame = true", cli)
         self.assertIn("流式深度图融合", cli)
         self.assertIn("voxelDownsampleFusedPointsToTarget", cli)
-        self.assertNotIn("loadFusionFramesFromDepthMaps(mvsDir,\n                                           views,", cli)
+        self.assertIn("kStreamingFusionCacheFrameLimit", cli)
+        self.assertIn("const bool useCachedFrames", cli)
+        self.assertIn("if (useCachedFrames)", cli)
 
     def test_reconstruct_pipeline_cli_downsamples_fusion_frames(self):
         cli = self.read("src/cli/cli_reconstruct_pipeline.cpp")
@@ -765,11 +779,29 @@ class MvsSchedulerConfigTest(unittest.TestCase):
 
         self.assertIn("bool geomConsistency", config_h)
         self.assertIn("int speckleMinArea", config_h)
+        self.assertIn("QString qualityProfile", config_h)
         self.assertIn('settings.value(QStringLiteral("geomConsistency")).toBool(true)', config_cpp)
         self.assertIn('settings.value(QStringLiteral("speckleMinArea")).toInt(16)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("qualityProfile"))', config_cpp)
+        self.assertIn('applyDenseQualityProfile', config_cpp)
+        self.assertIn('QStringLiteral("fast_preview")', config_cpp)
+        self.assertIn('QStringLiteral("standard")', config_cpp)
+        self.assertIn('QStringLiteral("high_quality")', config_cpp)
         self.assertIn("config.patchMatch.geomConsistency = settings.geomConsistency", config_cpp)
         self.assertIn("config.fusion.minSpeckleComponentArea", config_cpp)
         self.assertIn("config.fusion.enableSpeckleFilter", config_cpp)
+        self.assertIn("config.fusion.enableAdaptiveConfidenceFilter", config_cpp)
+
+    def test_dense_cloud_production_profile_controls_fusion_depth_threshold(self):
+        config_h = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.h")
+        config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+
+        self.assertIn("float fusionRelDepthThreshold = 0.03f", config_h)
+        self.assertIn("parsed->fusionRelDepthThreshold", config_cpp)
+        self.assertIn("config.fusion.relDepthThresh = settings.fusionRelDepthThreshold", config_cpp)
+        self.assertIn("fusionCfg.maxDepthError = request.fusionRelDepthThreshold", manager)
+        self.assertNotIn("fusionCfg.maxDepthError = 0.05f;", manager)
 
     def test_sparse_cloud_preprocessor_samples_spacing_and_parallelizes_linear_passes(self):
         preprocessor = self.read("src/core/mvs/SparseCloudPreprocessor.cpp")
@@ -849,6 +881,52 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertLess(refine_body.index("preconditionDenseRefineCloudForFilters"),
                         refine_body.index("estimateNormals(cloud"))
         self.assertIn("!precondition.consumedRequestedVoxel", refine_body)
+
+    def test_gui_dense_cloud_refine_uses_streaming_cli_before_loading_large_ply(self):
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+        refine_start = manager.index("void ProjectDenseReconstructionManager::startDenseCloudRefineAsync")
+        refine_body = manager[refine_start:]
+
+        self.assertIn("kStreamingDenseRefineMinPoints", manager)
+        self.assertIn("shouldUseStreamingDenseRefine", manager)
+        self.assertIn("runStreamingDenseCloudRefineCli", manager)
+        self.assertIn("dense_cloud_refine_cli", manager)
+        self.assertIn("parseBinaryPlyVertexStreamHeader", manager)
+        self.assertIn("QProcess process", manager)
+        self.assertIn("--terrain-filter-passes", manager)
+        self.assertLess(refine_body.index("runStreamingDenseCloudRefineCli"),
+                        refine_body.index("readPointCloudPly(inputPly"))
+
+    def test_dense_refine_defaults_use_metashape_quality_tuned_terrain_filter(self):
+        config_h = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.h")
+        config_cpp = self.read("src/gui/project/support/ProjectDenseWorkflowConfig.cpp")
+
+        self.assertIn("int terrainSpikeGridResolution = 260;", config_h)
+        self.assertIn("int terrainSpikeMinCellPoints = 32;", config_h)
+        self.assertIn("double terrainSpikeMinHeightThreshold = 0.25;", config_h)
+        self.assertIn("double terrainSpikeMadMultiplier = 3.0;", config_h)
+        self.assertIn("bool terrainLocalPlaneFilterEnabled = true;", config_h)
+        self.assertIn("int terrainLocalPlaneMinPoints = 12;", config_h)
+        self.assertIn("double terrainLocalPlaneMinResidualThreshold = 0.12;", config_h)
+        self.assertIn("double terrainLocalPlaneMadMultiplier = 4.0;", config_h)
+        self.assertIn("int terrainFilterPasses = 2;", config_h)
+
+        self.assertIn('settings.value(QStringLiteral("terrainSpikeGridResolution")).toInt(260)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainSpikeMinCellPoints")).toInt(32)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainSpikeMinHeightThreshold")).toDouble(0.25)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainSpikeMadMultiplier")).toDouble(3.0)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainLocalPlaneFilterEnabled")).toBool(true)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainLocalPlaneMinPoints")).toInt(12)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainLocalPlaneMinResidualThreshold")).toDouble(0.12)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainLocalPlaneMadMultiplier")).toDouble(4.0)', config_cpp)
+        self.assertIn('settings.value(QStringLiteral("terrainFilterPasses")).toInt(2)', config_cpp)
+
+        manager = self.read("src/gui/project/manager/ProjectDenseReconstructionManager.cpp")
+        self.assertIn("options.localPlaneFilterEnabled = request.terrainLocalPlaneFilterEnabled", manager)
+        self.assertIn("options.localPlaneMinPoints = request.terrainLocalPlaneMinPoints", manager)
+        self.assertIn("options.localPlaneMinResidualThreshold", manager)
+        self.assertIn("options.localPlaneMadMultiplier", manager)
+        self.assertIn("local_plane_removed_points", manager)
 
 
 if __name__ == "__main__":

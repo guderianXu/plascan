@@ -4,6 +4,7 @@
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "SFMService.h"
+#include "ReconstructionPrerequisiteReport.h"
 #include "Logger.h"
 #include "project/SparseResultQuality.h"
 
@@ -400,6 +401,26 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         }
     }
 
+    QSet<QString> processedPairKeys = matchedPairKeys;
+    const QVector<QPair<QString, QString>> settledNoMatchPairs =
+        xjw::gui::project::collectSettledNoMatchImageNamePairs(projectPath, meta);
+    for (const auto &pair : settledNoMatchPairs)
+    {
+        const QStringList leftAliases = nameAliases(pair.first);
+        const QStringList rightAliases = nameAliases(pair.second);
+        for (const QString &left : leftAliases)
+        {
+            for (const QString &right : rightAliases)
+            {
+                const QString key = matchPairKey(left, right);
+                if (!key.isEmpty())
+                {
+                    processedPairKeys.insert(key);
+                }
+            }
+        }
+    }
+
     auto pairCoveredByAliases = [&](const QStringList &leftAliases, const QStringList &rightAliases) -> bool
     {
         for (const QString &left : leftAliases)
@@ -415,9 +436,29 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         return false;
     };
 
+    auto pairProcessedByAliases = [&](const QStringList &leftAliases, const QStringList &rightAliases) -> bool
+    {
+        for (const QString &left : leftAliases)
+        {
+            for (const QString &right : rightAliases)
+            {
+                if (processedPairKeys.contains(matchPairKey(left, right)))
+                {
+                    return true;
+                }
+            }
+        }
+        return false;
+    };
+
     auto imagePairCovered = [&](const QString &leftImage, const QString &rightImage) -> bool
     {
         return pairCoveredByAliases(nameAliases(leftImage), nameAliases(rightImage));
+    };
+
+    auto imagePairProcessed = [&](const QString &leftImage, const QString &rightImage) -> bool
+    {
+        return pairProcessedByAliases(nameAliases(leftImage), nameAliases(rightImage));
     };
 
     bool usedStoredPairs = false;
@@ -429,12 +470,27 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                                                                     &storedPairsStale);
     int generatedPairRequiredCount = 0;
     int generatedPairCoveredCount = 0;
+    int generatedPairProcessedCount = 0;
 
-    auto currentMatchGraphIsUsable = [&]() -> bool
+    struct MatchGraphStats
     {
+        int matchedEdgeCount = 0;
+        int matchedImageCount = 0;
+        int componentCount = 0;
+        int largestComponentSize = 0;
+        bool allImagesCovered = true;
+        bool connected = true;
+    };
+
+    auto matchGraphStats = [&]() -> MatchGraphStats
+    {
+        MatchGraphStats stats;
         if (images.size() < 2)
         {
-            return true;
+            stats.matchedImageCount = images.size();
+            stats.componentCount = images.isEmpty() ? 0 : 1;
+            stats.largestComponentSize = images.size();
+            return stats;
         }
 
         QHash<QString, int> imageIndexByAlias;
@@ -482,7 +538,6 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
             return -1;
         };
 
-        int matchedEdgeCount = 0;
         QSet<int> matchedImageIndices;
         for (const auto &pair : matchedPairs)
         {
@@ -501,24 +556,35 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
             }
             matchedImageIndices.insert(leftIndex);
             matchedImageIndices.insert(rightIndex);
-            ++matchedEdgeCount;
+            ++stats.matchedEdgeCount;
         }
 
-        if (matchedEdgeCount <= 0 || matchedImageIndices.size() != images.size())
+        stats.matchedImageCount = matchedImageIndices.size();
+        stats.allImagesCovered = (stats.matchedImageCount == images.size());
+        if (stats.matchedEdgeCount <= 0)
         {
-            return false;
+            stats.connected = false;
+            stats.componentCount = images.size();
+            stats.largestComponentSize = images.isEmpty() ? 0 : 1;
+            return stats;
         }
 
-        const int firstRoot = findRoot(0);
-        for (int i = 1; i < images.size(); ++i)
+        QHash<int, int> componentSizes;
+        for (int i = 0; i < images.size(); ++i)
         {
-            if (findRoot(i) != firstRoot)
-            {
-                return false;
-            }
+            const int root = findRoot(i);
+            componentSizes[root] = componentSizes.value(root) + 1;
         }
-        return true;
+        stats.componentCount = componentSizes.size();
+        for (auto it = componentSizes.constBegin(); it != componentSizes.constEnd(); ++it)
+        {
+            stats.largestComponentSize = std::max(stats.largestComponentSize, it.value());
+        }
+        stats.connected = (stats.componentCount <= 1);
+        return stats;
     };
+
+    const MatchGraphStats matchStats = matchGraphStats();
 
     if (usedStoredPairs && !storedPairsStale)
     {
@@ -535,21 +601,106 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
             {
                 ++generatedPairCoveredCount;
             }
+            if (imagePairProcessed(parts.at(0), parts.at(1)))
+            {
+                ++generatedPairProcessedCount;
+            }
         }
     }
-    const bool generatedPlanHasNoCoveredPairs = usedStoredPairs
+    const bool generatedPlanHasNoProcessedPairs = usedStoredPairs
         && !storedPairsStale
         && generatedPairRequiredCount > 0
-        && generatedPairCoveredCount == 0;
-    summary.hasMatches = !generatedPlanHasNoCoveredPairs && currentMatchGraphIsUsable();
+        && generatedPairProcessedCount == 0;
+    summary.hasMatches = images.size() < 2 || (!generatedPlanHasNoProcessedPairs && matchStats.matchedEdgeCount > 0);
+
+    xjw::gui::ReconstructionPrerequisiteReport prerequisiteReport;
+    prerequisiteReport.imageCount = static_cast<int>(images.size());
+    prerequisiteReport.plannedPairCount = generatedPairRequiredCount;
+    prerequisiteReport.validMatchPairCount = matchStats.matchedEdgeCount;
+    prerequisiteReport.settledNoMatchPairCount = settledNoMatchPairs.size();
+    prerequisiteReport.missingFeaturePairCount =
+        std::max(0, static_cast<int>(images.size()) - availableFeatureCount);
+    prerequisiteReport.missingMatchPairCount =
+        (usedStoredPairs && !storedPairsStale && generatedPairRequiredCount > 0)
+            ? std::max(0, generatedPairRequiredCount - generatedPairProcessedCount)
+            : 0;
+    prerequisiteReport.failedGeometryPairCount = settledNoMatchPairs.size();
+    summary.prerequisiteReport = prerequisiteReport.toJson();
+
+    const auto recommendedAction = prerequisiteReport.recommendedAction();
+    const bool matchingProducedNoUsableEdges =
+        recommendedAction == xjw::gui::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality;
+    summary.blockOnMatchQuality = matchingProducedNoUsableEdges;
+
+    switch (recommendedAction)
+    {
+    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::RunSfmWithExistingMatches:
+        LOG_INFO(QStringLiteral("空三上游数据就绪：复用已有匹配 %1 对，已确认无匹配 %2 对")
+                     .arg(prerequisiteReport.validMatchPairCount)
+                     .arg(prerequisiteReport.settledNoMatchPairCount));
+        break;
+    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::FillMissingMatchesOnly:
+        LOG_INFO(QStringLiteral("空三缺少部分匹配：只补齐缺失 pair %1 对，复用已有匹配 %2 对")
+                     .arg(prerequisiteReport.missingMatchPairCount)
+                     .arg(prerequisiteReport.validMatchPairCount));
+        break;
+    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::PrepareFeaturesAndMatches:
+        LOG_WARN(QStringLiteral("空三缺少特征/匹配：需要先运行特征提取/匹配"));
+        break;
+    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality:
+        LOG_WARN(QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边；请检查匹配参数、重叠对和几何验证报告。"));
+        break;
+    }
+
+    if (matchStats.matchedEdgeCount > 0)
+    {
+        LOG_INFO(QStringLiteral("空中三角测量预检: 匹配边=%1 覆盖影像=%2/%3 连通分量=%4 最大分量=%5 已确认无匹配=%6")
+                     .arg(matchStats.matchedEdgeCount)
+                     .arg(matchStats.matchedImageCount)
+                     .arg(images.size())
+                     .arg(matchStats.componentCount)
+                     .arg(matchStats.largestComponentSize)
+                     .arg(settledNoMatchPairs.size()));
+    }
+    else if (images.size() >= 2)
+    {
+        LOG_WARN(QStringLiteral("空中三角测量预检: 未找到已完成的影像匹配结果"));
+    }
 
     if (!summary.hasFeatures)
     {
         summary.missingMessages.append(QStringLiteral("缺少特征：当前影像特征不完整，无法直接用于空三。"));
     }
-    if (!summary.hasMatches)
+    if (!summary.hasMatches && matchingProducedNoUsableEdges)
+    {
+        summary.warningMessages.append(
+            QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边；请检查匹配参数、重叠对和几何验证报告。"));
+    }
+    else if (!summary.hasMatches)
     {
         summary.missingMessages.append(QStringLiteral("缺少连接点：当前影像对匹配不完整，无法直接用于空三。"));
+    }
+    if (summary.hasMatches && images.size() >= 2 && matchStats.matchedEdgeCount > 0)
+    {
+        if (!matchStats.allImagesCovered)
+        {
+            summary.warningMessages.append(
+                QStringLiteral("匹配网络未覆盖全部影像：已覆盖 %1/%2 张，空三可能只注册部分影像。")
+                    .arg(matchStats.matchedImageCount)
+                    .arg(images.size()));
+        }
+        if (!matchStats.connected)
+        {
+            summary.warningMessages.append(
+                QStringLiteral("匹配网络不连通：%1 个连通分量，最大分量 %2/%3 张；空三可能只从最大分量开始扩展。")
+                    .arg(matchStats.componentCount)
+                    .arg(matchStats.largestComponentSize)
+                    .arg(images.size()));
+        }
+    }
+    for (const QString &warning : summary.warningMessages)
+    {
+        LOG_WARN(QStringLiteral("空中三角测量预检: %1").arg(warning));
     }
     return summary;
 }
@@ -1091,11 +1242,33 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
                 return;
             }
 
-            const bool autoFillMissing = controller->confirmAutoFillMissingSparseInputs(prereq);
-            if (!autoFillMissing && !prereq.missingMessages.isEmpty())
+            if (!prereq.prerequisiteReport.isEmpty())
+            {
+                LOG_INFO(QStringLiteral("空三前置报告: %1")
+                             .arg(QString::fromUtf8(
+                                 QJsonDocument(prereq.prerequisiteReport).toJson(QJsonDocument::Compact))));
+            }
+
+            bool autoFillMissing = false;
+            if (prereq.blockOnMatchQuality)
             {
                 emit pmGuard->atProgressFinished(false);
+                const QString details = prereq.warningMessages.isEmpty()
+                    ? QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边；请检查匹配参数、重叠对和几何验证报告。")
+                    : prereq.warningMessages.join(QStringLiteral("\n"));
+                QMessageBox::warning(controller->_mainWindow,
+                                     QStringLiteral("空中三角测量"),
+                                     QStringLiteral("%1\n\n不会自动重新跑完整匹配。").arg(details));
                 return;
+            }
+            if (!prereq.missingMessages.isEmpty())
+            {
+                autoFillMissing = controller->confirmAutoFillMissingSparseInputs(prereq);
+                if (!autoFillMissing)
+                {
+                    emit pmGuard->atProgressFinished(false);
+                    return;
+                }
             }
 
             controller->launchAerialTriangulationSfm(runSettings,

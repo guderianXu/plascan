@@ -46,6 +46,8 @@ struct DepthFrameResult
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
+    DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
+    bool depthPostprocessApplied = false;   ///< true 表示 depthMap/confidence 已应用上述后处理
     bool success = false;
     double elapsedMs = 0.0;               ///< 单帧深度估计耗时，不含异步写盘
     std::string device;                   ///< 实际调度设备：GPU/CPU

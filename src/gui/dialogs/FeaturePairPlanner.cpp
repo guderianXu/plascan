@@ -116,11 +116,25 @@ QStringList makeExhaustiveOrWindowPathPairs(const QStringList &paths, int window
     return pairs;
 }
 
+SfmPairPlannerOptions makeSfmPairPlannerOptions(const FeaturePairPlannerOptions &options, bool exhaustive)
+{
+    SfmPairPlannerOptions pairOptions;
+    pairOptions.autoRestrictKnownCameraPairs = !exhaustive;
+    pairOptions.knownCameraAllPairsMaxImages = std::max(2, options.exhaustiveMaxImages);
+    pairOptions.knownCameraPairWindow = std::max(1, options.sequentialWindow);
+    pairOptions.knownCameraSpatialNeighborCount = std::max(0, options.spatialNeighborCount);
+    pairOptions.knownCameraCenters = options.knownCameraCenters;
+    pairOptions.knownCameraOverlapPairs = options.knownCameraOverlapPairs;
+    pairOptions.knownCameraOverlapMaxExpansion = options.knownCameraOverlapMaxExpansion;
+    return pairOptions;
+}
+
 } // namespace
 
-QStringList planFeatureMatchPairs(const QStringList &imageBaseNames,
-                                  const FeaturePairPlannerOptions &options)
+FeaturePairPlan planFeatureMatchPairPlan(const QStringList &imageBaseNames,
+                                         const FeaturePairPlannerOptions &options)
 {
+    FeaturePairPlan result;
     QStringList names;
     names.reserve(imageBaseNames.size());
     for (const QString &name : imageBaseNames)
@@ -135,7 +149,7 @@ QStringList planFeatureMatchPairs(const QStringList &imageBaseNames,
     const int count = names.size();
     if (count < 2)
     {
-        return {};
+        return result;
     }
 
     const bool exhaustive = count <= std::max(2, options.exhaustiveMaxImages);
@@ -144,7 +158,8 @@ QStringList planFeatureMatchPairs(const QStringList &imageBaseNames,
         options.knownCameraOverlapPairs.empty() &&
         options.knownCameraCenters.empty())
     {
-        return makeExhaustiveOrWindowPairs(names, window);
+        result.pairs = makeExhaustiveOrWindowPairs(names, window);
+        return result;
     }
 
     QStringList plannerImages;
@@ -156,33 +171,30 @@ QStringList planFeatureMatchPairs(const QStringList &imageBaseNames,
         nameByCanonicalPath.insert(canonicalSfmPath(name), name);
     }
 
-    SfmPairPlannerOptions pairOptions;
-    pairOptions.autoRestrictKnownCameraPairs = !exhaustive;
-    pairOptions.knownCameraAllPairsMaxImages = std::max(2, options.exhaustiveMaxImages);
-    pairOptions.knownCameraPairWindow = std::max(1, options.sequentialWindow);
-    pairOptions.knownCameraSpatialNeighborCount = std::max(0, options.spatialNeighborCount);
-    pairOptions.knownCameraCenters = options.knownCameraCenters;
-    pairOptions.knownCameraOverlapPairs = options.knownCameraOverlapPairs;
-    pairOptions.knownCameraOverlapMaxExpansion = options.knownCameraOverlapMaxExpansion;
-
-    const SfmPairPlan pairPlan = planSfmMatchPairs(plannerImages, QStringList(), pairOptions);
-    if (!pairPlan.restrictPairs)
+    result.corePlan = planSfmMatchPairs(plannerImages,
+                                        QStringList(),
+                                        makeSfmPairPlannerOptions(options, exhaustive));
+    if (!result.corePlan.restrictPairs)
     {
-        return makeExhaustiveOrWindowPairs(names, window);
+        result.pairs = makeExhaustiveOrWindowPairs(names, window);
+        return result;
     }
 
-    QStringList pairs = convertCanonicalPairsToGuiPairs(pairPlan.allowedPairKeys, nameByCanonicalPath);
-    if (pairs.isEmpty())
+    result.corePairKeys = result.corePlan.allowedPairKeys;
+    result.pairs = convertCanonicalPairsToGuiPairs(result.corePairKeys, nameByCanonicalPath);
+    if (result.pairs.isEmpty())
     {
-        return makeExhaustiveOrWindowPairs(names, window);
+        result.pairs = makeExhaustiveOrWindowPairs(names, window);
+        result.corePairKeys.clear();
     }
 
-    return pairs;
+    return result;
 }
 
-QStringList planFeatureMatchPairPaths(const QStringList &imagePaths,
-                                      const FeaturePairPlannerOptions &options)
+FeaturePairPlan planFeatureMatchPairPathPlan(const QStringList &imagePaths,
+                                             const FeaturePairPlannerOptions &options)
 {
+    FeaturePairPlan result;
     QStringList paths;
     paths.reserve(imagePaths.size());
     for (const QString &path : imagePaths)
@@ -197,7 +209,7 @@ QStringList planFeatureMatchPairPaths(const QStringList &imagePaths,
     const int count = paths.size();
     if (count < 2)
     {
-        return {};
+        return result;
     }
 
     const bool exhaustive = count <= std::max(2, options.exhaustiveMaxImages);
@@ -206,7 +218,8 @@ QStringList planFeatureMatchPairPaths(const QStringList &imagePaths,
         options.knownCameraOverlapPairs.empty() &&
         options.knownCameraCenters.empty())
     {
-        return makeExhaustiveOrWindowPathPairs(paths, window);
+        result.pairs = makeExhaustiveOrWindowPathPairs(paths, window);
+        return result;
     }
 
     QHash<QString, QString> pathByCanonicalPath;
@@ -215,28 +228,36 @@ QStringList planFeatureMatchPairPaths(const QStringList &imagePaths,
         pathByCanonicalPath.insert(canonicalSfmPath(path), path);
     }
 
-    SfmPairPlannerOptions pairOptions;
-    pairOptions.autoRestrictKnownCameraPairs = !exhaustive;
-    pairOptions.knownCameraAllPairsMaxImages = std::max(2, options.exhaustiveMaxImages);
-    pairOptions.knownCameraPairWindow = std::max(1, options.sequentialWindow);
-    pairOptions.knownCameraSpatialNeighborCount = std::max(0, options.spatialNeighborCount);
-    pairOptions.knownCameraCenters = options.knownCameraCenters;
-    pairOptions.knownCameraOverlapPairs = options.knownCameraOverlapPairs;
-    pairOptions.knownCameraOverlapMaxExpansion = options.knownCameraOverlapMaxExpansion;
-
-    const SfmPairPlan pairPlan = planSfmMatchPairs(paths, QStringList(), pairOptions);
-    if (!pairPlan.restrictPairs)
+    result.corePlan = planSfmMatchPairs(paths,
+                                        QStringList(),
+                                        makeSfmPairPlannerOptions(options, exhaustive));
+    if (!result.corePlan.restrictPairs)
     {
-        return makeExhaustiveOrWindowPathPairs(paths, window);
+        result.pairs = makeExhaustiveOrWindowPathPairs(paths, window);
+        return result;
     }
 
-    QStringList pairs = convertCanonicalPairsToPipelinePairs(pairPlan.allowedPairKeys, pathByCanonicalPath);
-    if (pairs.isEmpty())
+    result.corePairKeys = result.corePlan.allowedPairKeys;
+    result.pairs = convertCanonicalPairsToPipelinePairs(result.corePairKeys, pathByCanonicalPath);
+    if (result.pairs.isEmpty())
     {
-        return makeExhaustiveOrWindowPathPairs(paths, window);
+        result.pairs = makeExhaustiveOrWindowPathPairs(paths, window);
+        result.corePairKeys.clear();
     }
 
-    return pairs;
+    return result;
+}
+
+QStringList planFeatureMatchPairs(const QStringList &imageBaseNames,
+                                  const FeaturePairPlannerOptions &options)
+{
+    return planFeatureMatchPairPlan(imageBaseNames, options).pairs;
+}
+
+QStringList planFeatureMatchPairPaths(const QStringList &imagePaths,
+                                      const FeaturePairPlannerOptions &options)
+{
+    return planFeatureMatchPairPathPlan(imagePaths, options).pairs;
 }
 
 } // namespace xjw::gui

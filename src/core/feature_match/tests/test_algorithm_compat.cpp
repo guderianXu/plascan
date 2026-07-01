@@ -13,10 +13,11 @@ TEST(AlgorithmCompatTest, SuperGlueOnlySupportsSP)
 TEST(AlgorithmCompatTest, LightGlueSupportsMultiple)
 {
     auto suffixes = compatibleFeatureSuffixes("lightglue");
-    EXPECT_GE(suffixes.size(), 3);
+    EXPECT_GE(suffixes.size(), 4);
     EXPECT_TRUE(suffixes.contains(".sp"));
     EXPECT_TRUE(suffixes.contains(".dsk"));
     EXPECT_TRUE(suffixes.contains(".alk"));
+    EXPECT_TRUE(suffixes.contains(".sift"));
 }
 
 TEST(AlgorithmCompatTest, EndToEndHasNoFeatures)

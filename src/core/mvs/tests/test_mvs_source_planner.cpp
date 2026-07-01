@@ -135,6 +135,39 @@ TEST(MvsSourcePlanner, AllowsKnownOverlapPairsWithWeakGeometryAfterStrongPairs)
     EXPECT_FALSE(plan.usedSequenceFallback);
 }
 
+TEST(MvsSourcePlanner, ProductionGateRejectsKnownOverlapWithoutGeometryEvidence)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 3;
+    options.minSharedTracks = 20;
+    options.minGeometricInliers = 20;
+    options.minSourceQualityScore = 0.35f;
+    options.allowWeakKnownOverlap = false;
+
+    const auto plan = planMvsSourceViews({
+        candidate(2, 0, 0, 0.0f, 0.0f, 0.0f, true),
+        candidate(3, 60, 50, 8.0f, 0.75f, 0.40f, true),
+        candidate(5, 12, 12, 8.0f, 0.20f, 0.25f, true),
+        candidate(6, 45, 42, 9.0f, 0.65f, 0.35f, true),
+    }, options);
+
+    ASSERT_EQ(plan.selected.size(), 2u);
+    EXPECT_EQ(plan.selected[0].viewIndex, 3);
+    EXPECT_EQ(plan.selected[1].viewIndex, 6);
+
+    const auto rejectedWeakOverlap = std::find_if(
+        plan.rejected.begin(),
+        plan.rejected.end(),
+        [](const auto &rejected)
+        {
+            return rejected.candidate.viewIndex == 2
+                && rejected.reason == MvsSourceRejectReason::LowQuality;
+        });
+    EXPECT_NE(rejectedWeakOverlap, plan.rejected.end());
+}
+
 TEST(MvsSourcePlanner, PublishesNormalizedSourceQualityScore)
 {
     MvsSourcePlannerOptions options;
@@ -155,4 +188,29 @@ TEST(MvsSourcePlanner, PublishesNormalizedSourceQualityScore)
     const QJsonObject json = mvsSourcePlanEntryToJson(plan.selected[0]);
     EXPECT_TRUE(json.contains(QStringLiteral("source_quality_score")));
     EXPECT_GT(json.value(QStringLiteral("source_quality_score")).toDouble(), 0.0);
+}
+
+TEST(MvsSourcePlanner, PrefersProductionAerialAngleOverSlightlyMoreDistantWideBaseline)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 2;
+    options.rejectAngleOutliers = true;
+    options.minTriangulationAngleDeg = 1.0f;
+    options.maxTriangulationAngleDeg = 45.0f;
+    options.preferredTriangulationAngleDeg = 10.0f;
+    options.softMaxTriangulationAngleDeg = 25.0f;
+
+    const auto plan = planMvsSourceViews({
+        candidate(2, 150, 145, 38.0f, 0.92f, 1.0f, true),
+        candidate(3, 142, 136, 9.0f, 0.88f, 0.45f, true),
+        candidate(5, 70, 65, 7.0f, 0.50f, 0.35f, true),
+    }, options);
+
+    ASSERT_GE(plan.selected.size(), 2u);
+    EXPECT_EQ(plan.selected[0].viewIndex, 3)
+        << "Aerial MVS should prefer a well-supported 5-15 degree baseline over a slightly stronger wide baseline.";
+    EXPECT_EQ(plan.selected[1].viewIndex, 2);
+    EXPECT_GT(plan.selected[0].sourceQualityScore, plan.selected[1].sourceQualityScore);
 }

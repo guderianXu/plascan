@@ -89,4 +89,5 @@ private:
     QToolButton *_discardResultBtn = nullptr;
     QStringList _savedSelectedImages;
     bool _hasPendingResult = false;
+    bool _suppressSettingsChanged = false;
 };

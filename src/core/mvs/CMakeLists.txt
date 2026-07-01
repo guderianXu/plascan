@@ -15,9 +15,11 @@ endif()
 
 # ── 源文件 ────────────────────────────────────────────────────────────────────
 set(MVS_CXX_SOURCES
+    DenseCloudQualityFilter.cpp
     DepthMapFusion.cpp
     DepthFrameUtils.cpp
     MvsSourcePlanner.cpp
+    MvsQualityReport.cpp
     MvsWorkspaceManifest.cpp
     DenseCloudBuilder.cpp
     DepthMapGenerator.cpp
@@ -35,8 +37,10 @@ set(MVS_CXX_SOURCES
 )
 
 set(MVS_HEADERS
+    DenseCloudQualityFilter.h
     MvsTypes.h
     MvsSourcePlanner.h
+    MvsQualityReport.h
     MvsViewSelection.h
     MvsWorkspaceManifest.h
     PatchMatchCUDA.h
@@ -111,8 +115,8 @@ target_link_libraries(mvs
         camera
         plascan_common_log
         plapoint::plapoint
-    PRIVATE
         Qt6::Core
+    PRIVATE
         Qt6::Concurrent
         ${OpenCV_LIBS}
         ${PLASCAN_GDAL_TARGET}
@@ -168,5 +172,17 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_source_planner)
+
+        add_executable(test_dense_cloud_quality_filter
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_dense_cloud_quality_filter.cpp
+        )
+        target_link_libraries(test_dense_cloud_quality_filter PRIVATE
+            mvs
+            GTest::gtest_main
+        )
+        target_include_directories(test_dense_cloud_quality_filter PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_dense_cloud_quality_filter)
     endif()
 endif()

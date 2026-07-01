@@ -43,6 +43,13 @@ if(TARGET mvs)
         "${CMAKE_SOURCE_DIR}/src/core/mvs;${CMAKE_SOURCE_DIR}/src/core/camera")
 endif()
 
+# ── 密集点云质量细化：raw dense cloud -> refined dense cloud ──
+if(TARGET mvs)
+    add_plascan_cli(dense_cloud_refine_cli cli_dense_cloud_refine.cpp
+        "mvs"
+        "${CMAKE_SOURCE_DIR}/src/core/mvs")
+endif()
+
 # ── 特征提取 ──
 if(TARGET superpoint)
     add_plascan_cli(feature_extract_cli cli_feature_extract.cpp
@@ -102,10 +109,11 @@ if(TARGET sfm AND TARGET bundle_adjust AND TARGET lidar)
 endif()
 
 # ── GUI 等价一键重建：SFM -> MVS -> Mesh -> DEM/DOM ──
-if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing AND TARGET terrain)
+if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AND TARGET lightglue_matcher AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing AND TARGET terrain)
     add_executable(reconstruct_pipeline_cli
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
@@ -117,6 +125,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         terrain
         superglue_matcher
         lightglue_matcher
+        feature_match_traditional
         feature_extractors_traditional
         feature_match_common
         camera
@@ -139,6 +148,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         ${CMAKE_SOURCE_DIR}/src/core/feature_match
         ${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue
         ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition
         ${CMAKE_SOURCE_DIR}/src/core/mesh
         ${CMAKE_SOURCE_DIR}/src/core/mvs
         ${CMAKE_SOURCE_DIR}/src/core/overlap
@@ -168,6 +178,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
     add_executable(three_d_reconstruction_cli
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp

@@ -41,9 +41,9 @@ struct PatchMatchConfig
 {
     int   numIterations      = 16;      ///< PatchMatch 迭代次数（16轮保证宽深度范围下充分收敛）
     int   patchHalf          = 7;       ///< NCC 块半径（块大小 = 2r+1 = 15×15），更大→更鲁棒
-    int   numSourceViews     = 4;
+    int   numSourceViews     = 6;
     int   cpuThreadCount     = 1;       ///< CPU 路径的像素级并行线程数
-    float confidenceThresh   = 0.30f;   ///< 多图默认阈值；少视图时由调用方自适应降低
+    float confidenceThresh   = 0.60f;   ///< 多图生产阈值；少视图/快速预览由调用方显式降低
     bool  useCuda            = true;
     int   downsampleFactor   = 2;       ///< 降采样因子（2=半分辨率，速度提升约4倍）
     bool  doMedianBlur       = true;
@@ -73,10 +73,14 @@ struct PatchMatchConfig
 // =============================================================================
 struct FusionConfig
 {
-    int   minConsistentViews = 2;      ///< 至少有多少视图一致才保留像素
-    float relDepthThresh     = 0.05f;  ///< 深度相对误差阈值（收紧→更严格一致性）
-    float pixelThresh        = 2.0f;   ///< 投影误差阈值（像素），收紧→减少噎点
-    float confidenceThresh   = 0.25f;  ///< 融合前二次置信度过滤阈值（与PatchMatch 0.30对应）
+    int   minConsistentViews = 3;      ///< 至少有多少视图一致才保留像素
+    float relDepthThresh     = 0.03f;  ///< 深度相对误差阈值（收紧→更严格一致性）
+    float pixelThresh        = 1.5f;   ///< 投影误差阈值（像素），收紧→减少噎点
+    float confidenceThresh   = 0.65f;  ///< 融合前二次置信度过滤阈值（生产点云默认较严格）
+    bool  enableAdaptiveConfidenceFilter = true; ///< 低置信满幅深度图自动进入严格过滤
+    float adaptiveFullCoverageThreshold = 0.95f; ///< 有效覆盖率超过该值时检查低置信满幅风险
+    float adaptiveLowMeanConfidenceThreshold = 0.65f; ///< 平均置信度低于该值视为可疑满幅深度
+    float adaptiveStrictConfidenceThreshold = 0.65f; ///< 可疑满幅深度图使用的最低融合阈值
     bool  doSigmaFusion      = true;   ///< 是否做 sigma 加权深度融合
     float sigmaMultiplier    = 2.0f;   ///< sigma 乘数放宽→少剔除内点
     bool  doInpaint          = true;   ///< 对小洞做 inpaint（填补）

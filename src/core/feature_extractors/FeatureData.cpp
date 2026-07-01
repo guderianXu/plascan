@@ -207,8 +207,27 @@ torch::Tensor FeatureData::cvDescriptorsToTensor(const cv::Mat &descriptors,
         for (int row = 0; row < floatDesc.rows; ++row)
         {
             const float *src = floatDesc.ptr<float>(row);
-            for (int col = 0; col < copyDim; ++col)
-                acc[row][col] = src[col];
+            if (algo == "sift")
+            {
+                float l1Norm = 0.0f;
+                for (int col = 0; col < copyDim; ++col)
+                {
+                    l1Norm += std::max(0.0f, src[col]);
+                }
+                const float invL1 = l1Norm > 1e-6f ? 1.0f / l1Norm : 0.0f;
+                for (int col = 0; col < copyDim; ++col)
+                {
+                    const float l1Value = std::max(0.0f, src[col]) * invL1;
+                    acc[row][col] = std::sqrt(std::max(l1Value, 1e-6f));
+                }
+            }
+            else
+            {
+                for (int col = 0; col < copyDim; ++col)
+                {
+                    acc[row][col] = src[col];
+                }
+            }
         }
     }
 

@@ -69,6 +69,7 @@ target_include_directories(plascan_gui PRIVATE
 
 target_include_directories(gui_project PRIVATE $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>)
 target_include_directories(gui_tasks PRIVATE $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>)
+target_compile_definitions(plascan_gui PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_definitions(gui_tasks PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 set_target_properties(gui_project gui_tasks PROPERTIES

@@ -22,6 +22,8 @@ struct MvsDepthFrameRecord
     double minSourceQualityScore = 0.0;
     double meanDepthConfidence = 0.0;
     int validPixelCount = 0;
+    QJsonObject depthQuality;
+    QJsonObject depthPostprocess;
     QString status;
     QString device;
     QString depthPng;

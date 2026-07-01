@@ -63,6 +63,21 @@ float angleWeight(const MvsSourcePlanEntry &entry,
     {
         return 0.50f;
     }
+    if (options.softMaxTriangulationAngleDeg > options.minTriangulationAngleDeg &&
+        angle > options.softMaxTriangulationAngleDeg)
+    {
+        const float range = std::max(
+            1.0f,
+            options.maxTriangulationAngleDeg - options.softMaxTriangulationAngleDeg);
+        const float t = std::clamp((angle - options.softMaxTriangulationAngleDeg) / range, 0.0f, 1.0f);
+        return 0.75f - 0.25f * t;
+    }
+    if (options.preferredTriangulationAngleDeg > options.minTriangulationAngleDeg)
+    {
+        const float normalizedDistance = std::fabs(angle - options.preferredTriangulationAngleDeg) /
+            std::max(1.0f, options.preferredTriangulationAngleDeg);
+        return std::clamp(1.15f - 0.25f * normalizedDistance, 0.85f, 1.15f);
+    }
     return 1.0f;
 }
 
@@ -95,18 +110,49 @@ float computeSourceQualityScore(const MvsSourcePlanEntry &entry,
                                 const MvsSourcePlannerOptions &options)
 {
     const int evidence = std::max(entry.sharedTracks, entry.geometricInliers);
-    const float evidenceScore = evidence > 0
+    float evidenceScore = evidence > 0
         ? 1.0f - std::exp(-static_cast<float>(evidence) / 80.0f)
         : (entry.knownOverlap ? 0.20f : 0.0f);
-    const float angleScore = angleWeight(entry, options);
+    const float angleScore = std::clamp(angleWeight(entry, options), 0.0f, 1.0f);
+    float baselineScore = entry.baselineScore;
+    if (entry.medianTriangulationAngleDeg > options.softMaxTriangulationAngleDeg)
+    {
+        evidenceScore *= angleScore;
+        baselineScore *= angleScore;
+    }
     const float overlapScore = entry.knownOverlap ? 1.0f : 0.0f;
-    return std::clamp(0.45f * evidenceScore +
+    return std::clamp(0.35f * evidenceScore +
                           0.20f * entry.coverageScore +
-                          0.15f * entry.baselineScore +
-                          0.15f * angleScore +
-                          0.05f * overlapScore,
+                          0.10f * baselineScore +
+                          0.25f * angleScore +
+                          0.10f * overlapScore,
                       0.0f,
                       1.0f);
+}
+
+bool failsQualityGate(const MvsSourcePlanEntry &entry,
+                      const MvsSourcePlannerOptions &options)
+{
+    if (!options.allowWeakKnownOverlap
+        && entry.knownOverlap
+        && entry.sharedTracks <= 0
+        && entry.geometricInliers <= 0)
+    {
+        return true;
+    }
+    if (options.minSharedTracks > 0 && entry.sharedTracks < options.minSharedTracks)
+    {
+        return true;
+    }
+    if (options.minGeometricInliers > 0 && entry.geometricInliers < options.minGeometricInliers)
+    {
+        return true;
+    }
+    if (options.minSourceQualityScore > 0.0f && entry.sourceQualityScore < options.minSourceQualityScore)
+    {
+        return true;
+    }
+    return false;
 }
 
 bool sourceEntryLess(const MvsSourcePlanEntry &lhs,
@@ -208,6 +254,11 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
         if (!std::isfinite(entry.score) || entry.score <= 0.0f)
         {
             plan.rejected.push_back({entry, MvsSourceRejectReason::NoEvidence});
+            continue;
+        }
+        if (failsQualityGate(entry, options))
+        {
+            plan.rejected.push_back({entry, MvsSourceRejectReason::LowQuality});
             continue;
         }
 

@@ -18,6 +18,9 @@ set(SFM_SOURCES
     # ---- 重建状态 ----
     reconstruction/SfmReconstruction.cpp
 
+    # ---- 质量报告 ----
+    quality/SfmQualityReport.cpp
+
     # ---- 位姿估计 ----
     pose/PnpSolver.cpp
 
@@ -42,6 +45,7 @@ set(SFM_HEADERS
     graph/ObservationNetworkBuilder.h
     tracks/MultiViewTrackBuilder.h
     reconstruction/SfmReconstruction.h
+    quality/SfmQualityReport.h
     pose/PnpSolver.h
     triangulation/Triangulator.h
     triangulation/InitialSparsePointCloudTriangulator.h

@@ -7,6 +7,7 @@
 #include "cli_common.h"
 
 #include "Camera.h"
+#include "DenseCloudQualityFilter.h"
 #include "DepthFrameUtils.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
@@ -996,9 +997,35 @@ bool writePointCloudPly(const QString &path,
     }
 }
 
+xjw::mvs::TerrainHeightSpikeFilterOptions terrainSpikeOptionsFromRequest(
+    const xjw::gui::project::DenseRefineSettings &request)
+{
+    xjw::mvs::TerrainHeightSpikeFilterOptions options;
+    options.enabled = request.terrainSpikeFilterEnabled;
+    options.gridResolution = request.terrainSpikeGridResolution;
+    options.minCellPoints = request.terrainSpikeMinCellPoints;
+    options.minHeightThreshold = static_cast<float>(request.terrainSpikeMinHeightThreshold);
+    options.madMultiplier = static_cast<float>(request.terrainSpikeMadMultiplier);
+    return options;
+}
+
+QJsonObject terrainSpikeReportToJson(const xjw::mvs::TerrainHeightSpikeFilterReport &report)
+{
+    return QJsonObject{
+        {QStringLiteral("input_points"), static_cast<double>(report.inputPoints)},
+        {QStringLiteral("output_points"), static_cast<double>(report.outputPoints)},
+        {QStringLiteral("removed_points"), static_cast<double>(report.removedPoints)},
+        {QStringLiteral("median_cell_z_range_before"), report.medianCellZRangeBefore},
+        {QStringLiteral("p95_cell_z_range_before"), report.p95CellZRangeBefore},
+        {QStringLiteral("median_cell_z_range_after"), report.medianCellZRangeAfter},
+        {QStringLiteral("p95_cell_z_range_after"), report.p95CellZRangeAfter}
+    };
+}
+
 PlaCloud refineDenseCloud(PlaCloud cloud,
                           const xjw::gui::project::DenseRefineSettings &request,
-                          const std::function<void(const QString &, int)> &progress)
+                          const std::function<void(const QString &, int)> &progress,
+                          xjw::mvs::TerrainHeightSpikeFilterReport *terrainSpikeReport = nullptr)
 {
     if (request.sorEnabled)
     {
@@ -1077,6 +1104,29 @@ PlaCloud refineDenseCloud(PlaCloud cloud,
                                 &voxelReport);
         reportPlaPointDevice(progress, QStringLiteral("体素下采样"),
                              voxelReport, beforeVoxel, cloud.size(), 52);
+    }
+
+    if (request.terrainSpikeFilterEnabled)
+    {
+        if (progress) progress(QStringLiteral("局部高度突刺过滤..."), 60);
+        const auto beforeTerrainFilter = cloud.size();
+        xjw::mvs::TerrainHeightSpikeFilterReport localReport;
+        cloud = xjw::mvs::filterTerrainHeightSpikes(
+            cloud,
+            terrainSpikeOptionsFromRequest(request),
+            &localReport);
+        if (terrainSpikeReport)
+        {
+            *terrainSpikeReport = localReport;
+        }
+        if (progress)
+        {
+            progress(QStringLiteral("局部高度突刺过滤: %1 -> %2 点，移除 %3 点")
+                         .arg(beforeTerrainFilter)
+                         .arg(cloud.size())
+                         .arg(localReport.removedPoints),
+                     62);
+        }
     }
 
     if (request.normalsEnabled)
@@ -1271,6 +1321,7 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
 
     constexpr std::size_t kStreamingFusionPreVoxelThreshold = 2000000;
     constexpr std::size_t kStreamingFusionTargetPoints = 1000000;
+    constexpr int kStreamingFusionCacheFrameLimit = 32;
     const int neighborCount = std::min(frameCount - 1, std::clamp(std::max(4, denseSettings.minViews * 3), 2, 16));
     fusedCloud->reserve(std::min<std::size_t>(kStreamingFusionTargetPoints, 200000));
 
@@ -1280,6 +1331,31 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
                  neighborCount);
     std::fflush(stdout);
 
+    const bool useCachedFrames = frameCount <= kStreamingFusionCacheFrameLimit;
+    std::vector<xjw::mvs::FusionFrameInput> cachedFrames;
+    if (useCachedFrames)
+    {
+        std::fprintf(stdout,
+                     "  [MVS  70%%] 小规模融合缓存: frames=%d limit=%d\n",
+                     frameCount,
+                     kStreamingFusionCacheFrameLimit);
+        std::fflush(stdout);
+        if (!loadFusionFramesFromDepthMaps(mvsDir,
+                                           views,
+                                           depthConfig.fusion,
+                                           denseSettings.fusionMaxImageDim,
+                                           &cachedFrames,
+                                           error))
+        {
+            return false;
+        }
+        depthPostprocessStats->reserve(cachedFrames.size());
+        for (const auto &frame : cachedFrames)
+        {
+            depthPostprocessStats->push_back(frame.depthPostprocess);
+        }
+    }
+
     for (int refIndex = 0; refIndex < frameCount; ++refIndex)
     {
         const auto windowStart = std::chrono::steady_clock::now();
@@ -1288,6 +1364,12 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
         frames.reserve(windowIndices.size());
         for (const int frameIndex : windowIndices)
         {
+            if (useCachedFrames)
+            {
+                frames.push_back(cachedFrames[static_cast<std::size_t>(frameIndex)]);
+                continue;
+            }
+
             xjw::mvs::FusionFrameInput frame;
             if (!loadFusionFrameFromDepthMap(mvsDir,
                                              views,
@@ -1307,7 +1389,10 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
             continue;
         }
 
-        depthPostprocessStats->push_back(frames.front().depthPostprocess);
+        if (!useCachedFrames)
+        {
+            depthPostprocessStats->push_back(frames.front().depthPostprocess);
+        }
 
         xjw::mvs::StereoFusionConfig fusionCfg;
         fusionCfg.minNumPixels = std::max(1, denseSettings.minConsistentViews);
@@ -1652,6 +1737,9 @@ int main(int argc, char *argv[])
     std::string outputDirArg = "full_pipeline_output";
 #endif
     std::string device = "auto";
+    std::string sfmFeatureAlgorithm = "disk";
+    std::string sfmMatchAlgorithm = "lightglue";
+    bool sfmGuidedRematching = false;
     int quality = 3;
     int threads = 8;
     int cudaParallelPairs = 1;
@@ -1685,6 +1773,15 @@ int main(int argc, char *argv[])
     app.add_option("list_file", listPathArg, "image/camera .lis file")->required();
     app.add_option("-o,--output-dir", outputDirArg, "output directory");
     app.add_option("--device", device, "auto, cpu, cuda")->check(CLI::IsMember({"auto", "cpu", "cuda"}));
+    app.add_option("--sfm-feature-algorithm", sfmFeatureAlgorithm,
+                   "SFM feature algorithm: disk, aliked, sift")
+        ->check(CLI::IsMember({"disk", "aliked", "sift"}));
+    app.add_option("--sfm-match-algorithm", sfmMatchAlgorithm,
+                   "SFM match algorithm: lightglue, sift_flann, sift_bf_l2")
+        ->check(CLI::IsMember({"lightglue", "sift_flann", "sift_bf_l2"}));
+    app.add_flag("--sfm-guided-rematching",
+                 sfmGuidedRematching,
+                 "enable guided rematching after initial SfM");
     app.add_option("--quality", quality, "SFM quality level 0..3");
     app.add_option("--threads", threads, "CPU thread count");
     app.add_option("--cuda-parallel-pairs", cudaParallelPairs, "LightGlue CUDA parallel pair count");
@@ -1823,6 +1920,9 @@ int main(int argc, char *argv[])
     sfmOptions.plascanPath = QDir(outputDir).filePath(QStringLiteral("headless.plascan"));
     sfmOptions.outputDir = QDir(outputDir).filePath(QStringLiteral("sparse"));
     sfmOptions.device = QString::fromStdString(device);
+    sfmOptions.featureAlgorithm = QString::fromStdString(sfmFeatureAlgorithm);
+    sfmOptions.matchAlgorithm = QString::fromStdString(sfmMatchAlgorithm);
+    sfmOptions.enableGuidedRematching = sfmGuidedRematching;
     sfmOptions.quality = qBound(0, quality, 3);
     sfmOptions.threads = std::max(1, threads);
     sfmOptions.cudaParallelPairs = std::max(1, cudaParallelPairs);
@@ -2108,6 +2208,7 @@ int main(int argc, char *argv[])
     QString refinedCloudPathForModel;
     int densePointCount = 0;
     int refinedPointCount = 0;
+    xjw::mvs::TerrainHeightSpikeFilterReport terrainSpikeReport;
     if (mvsOk && mvsDepthOnly)
     {
         const QString depthOnlyReason = QStringLiteral("用户请求只生成 MVS 深度图");
@@ -2305,7 +2406,8 @@ int main(int argc, char *argv[])
                                                                           percent,
                                                                           qUtf8Printable(stage));
                                                              std::fflush(stdout);
-                                                         });
+                                                         },
+                                                         &terrainSpikeReport);
                 const QString refinedCloudPath = QDir(mvsDir).filePath(QStringLiteral("dense_cloud_refined.ply"));
                 if (!writePointCloudPly(refinedCloudPath,
                                         refinedCloud,
@@ -2345,6 +2447,7 @@ int main(int argc, char *argv[])
         {QStringLiteral("refined_point_cloud"), refinedCloudPathForModel},
         {QStringLiteral("points"), densePointCount},
         {QStringLiteral("refined_points"), refinedPointCount},
+        {QStringLiteral("terrain_spike_filter"), terrainSpikeReportToJson(terrainSpikeReport)},
         {QStringLiteral("has_rgb"), true},
         {QStringLiteral("has_normals"), true}
     };

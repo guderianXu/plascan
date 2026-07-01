@@ -59,6 +59,14 @@ struct IncrementalSfmOptions
     ImageId initImageId2 = kInvalidImageId;
     /// 使用输入相机中的已知外参，跳过初始像对相对定向和 PnP 注册
     bool useKnownCameraPoses = false;
+    /// 已知外参作为 soft prior 时仍允许 BA 微调相机位姿。
+    bool refineKnownCameraPoseWithSoftPrior = true;
+    /// 航测弱几何第一轮 BA 不释放内参/畸变，避免弱基线下内参吸收几何误差。
+    bool keepIntrinsicsFixedInKnownPoseBa = true;
+    /// 根据相机中心范围自适应位置先验 sigma 的倍率。
+    double knownPosePriorPositionSigmaScale = 1.0;
+    /// 已知外参 soft prior 的旋转 sigma（deg）。
+    double knownPosePriorRotationSigmaDegrees = 2.0;
     /// 自动选择初始像对时的最大候选对数量（参考 COLMAP 多候选重试策略）
     int maxInitPairCandidates = 10;
 
@@ -77,6 +85,16 @@ struct IncrementalSfmOptions
     int globalBAInterval = 10;
     /// BA 选项
     BAOptions baOptions;
+
+    // --- Known-pose track 质量管理 ---
+    /// 每张影像最多保留的 tie points，<=0 表示不限制。
+    int maxKnownPoseTracksPerImage = 6000;
+    /// 每张影像每个网格最多保留的 tie points，<=0 表示不限制。
+    int maxKnownPoseTracksPerGridCell = 300;
+    /// tie point 空间均匀化网格列数。
+    int trackThinningGridColumns = 8;
+    /// tie point 空间均匀化网格行数。
+    int trackThinningGridRows = 8;
 
     // --- 迭代 BA + 过滤选项（参考 COLMAP IterativeGlobalRefinement）---
     /// 全局 BA 迭代精化轮数：每轮 = BA + 过滤，直到变化率 < 阈值或达到上限

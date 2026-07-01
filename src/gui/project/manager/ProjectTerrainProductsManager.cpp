@@ -1029,15 +1029,30 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     pairOptions.sequentialWindow = 4;
     pairOptions.spatialNeighborCount = ctx.knownCameraCenters.empty() ? 0 : 8;
     pairOptions.knownCameraCenters = ctx.knownCameraCenters;
-    const QStringList imagePairs = xjw::gui::planFeatureMatchPairPaths(ctx.images, pairOptions);
+    const xjw::gui::FeaturePairPlan pairPlan =
+        xjw::gui::planFeatureMatchPairPathPlan(ctx.images, pairOptions);
+    const QStringList imagePairs = pairPlan.pairs;
+    QStringList sourceTypes;
+    for (const xjw::gui::SfmPairCandidate &candidate : pairPlan.corePlan.pairCandidates)
+    {
+        for (const QString &sourceType : candidate.sourceTypes)
+        {
+            if (!sourceTypes.contains(sourceType))
+            {
+                sourceTypes.append(sourceType);
+            }
+        }
+    }
+    sourceTypes.sort();
     const int exhaustivePairCount = ctx.images.size() > 1
         ? (ctx.images.size() * (ctx.images.size() - 1)) / 2
         : 0;
-    LOG_INFO(QStringLiteral("[DEM流水线] 匹配对规划完成: planned=%1 exhaustive=%2 window=%3 cameraCenters=%4")
+    LOG_INFO(QStringLiteral("[DEM流水线] 匹配对规划完成: planned=%1 exhaustive=%2 window=%3 cameraCenters=%4 sourceTypes=%5")
                  .arg(imagePairs.size())
                  .arg(exhaustivePairCount)
                  .arg(pairOptions.sequentialWindow)
-                 .arg(static_cast<int>(ctx.knownCameraCenters.size())));
+                 .arg(static_cast<int>(ctx.knownCameraCenters.size()))
+                 .arg(sourceTypes.isEmpty() ? QStringLiteral("fallback_window") : sourceTypes.join(QLatin1Char(','))));
 
     QJsonObject matchConfig;
     matchConfig[QStringLiteral("match_algorithm")] = ctx.matchAlgorithm;

@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <tuple>
 
 namespace xjw
 {
@@ -105,7 +106,16 @@ void MultiViewTrackBuilder::addMatchPair(ImageId imageA,
     }
 }
 
-MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
+void MultiViewTrackBuilder::setImageKeypoints(ImageId imageId, const std::vector<FeatureKeypoint> &keypoints)
+{
+    if (imageId == kInvalidImageId)
+    {
+        return;
+    }
+    _keypointsByImage[imageId] = keypoints;
+}
+
+MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &options) const
 {
     MultiViewTrackBuildResult result;
 
@@ -250,6 +260,121 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build() const
         result.trackConfidenceScores.push_back(track.confidence);
         result.tracks.push_back(std::move(track));
     }
+
+    if (options.enableQualityThinning && !result.tracks.empty())
+    {
+        std::vector<int> order(result.tracks.size());
+        for (int i = 0; i < static_cast<int>(order.size()); ++i)
+        {
+            order[static_cast<std::size_t>(i)] = i;
+        }
+        std::sort(order.begin(), order.end(), [&](int left, int right)
+        {
+            const Track &leftTrack = result.tracks[static_cast<std::size_t>(left)];
+            const Track &rightTrack = result.tracks[static_cast<std::size_t>(right)];
+            if (leftTrack.length() != rightTrack.length())
+            {
+                return leftTrack.length() > rightTrack.length();
+            }
+            if (leftTrack.confidence != rightTrack.confidence)
+            {
+                return leftTrack.confidence > rightTrack.confidence;
+            }
+            return left < right;
+        });
+
+        std::map<ImageId, int> acceptedByImage;
+        std::map<std::tuple<ImageId, int, int>, int> acceptedByGridCell;
+        std::vector<Track> thinnedTracks;
+        thinnedTracks.reserve(result.tracks.size());
+
+        const int gridColumns = std::max(1, options.gridColumns);
+        const int gridRows = std::max(1, options.gridRows);
+        const bool useGridLimit =
+            options.maxTracksPerGridCell > 0 && options.imageWidth > 0.0f && options.imageHeight > 0.0f;
+
+        for (int trackIndex : order)
+        {
+            const Track &track = result.tracks[static_cast<std::size_t>(trackIndex)];
+            bool keep = true;
+            for (const TrackElement &element : track.elements)
+            {
+                if (options.maxTracksPerImage > 0 &&
+                    acceptedByImage[element.imageId] >= options.maxTracksPerImage)
+                {
+                    keep = false;
+                    break;
+                }
+
+                if (!useGridLimit)
+                {
+                    continue;
+                }
+
+                const auto keypointsIt = _keypointsByImage.find(element.imageId);
+                if (keypointsIt == _keypointsByImage.end() ||
+                    element.featureIdx >= static_cast<FeatureIdx>(keypointsIt->second.size()))
+                {
+                    continue;
+                }
+
+                const FeatureKeypoint &keypoint = keypointsIt->second[static_cast<std::size_t>(element.featureIdx)];
+                const int col = std::max(0, std::min(gridColumns - 1,
+                    static_cast<int>(std::floor(keypoint.x / options.imageWidth * gridColumns))));
+                const int row = std::max(0, std::min(gridRows - 1,
+                    static_cast<int>(std::floor(keypoint.y / options.imageHeight * gridRows))));
+                const auto gridKey = std::make_tuple(element.imageId, col, row);
+                if (acceptedByGridCell[gridKey] >= options.maxTracksPerGridCell)
+                {
+                    keep = false;
+                    break;
+                }
+            }
+
+            if (!keep)
+            {
+                ++result.prunedByQualityThinning;
+                continue;
+            }
+
+            for (const TrackElement &element : track.elements)
+            {
+                ++acceptedByImage[element.imageId];
+                if (!useGridLimit)
+                {
+                    continue;
+                }
+
+                const auto keypointsIt = _keypointsByImage.find(element.imageId);
+                if (keypointsIt == _keypointsByImage.end() ||
+                    element.featureIdx >= static_cast<FeatureIdx>(keypointsIt->second.size()))
+                {
+                    continue;
+                }
+
+                const FeatureKeypoint &keypoint = keypointsIt->second[static_cast<std::size_t>(element.featureIdx)];
+                const int col = std::max(0, std::min(gridColumns - 1,
+                    static_cast<int>(std::floor(keypoint.x / options.imageWidth * gridColumns))));
+                const int row = std::max(0, std::min(gridRows - 1,
+                    static_cast<int>(std::floor(keypoint.y / options.imageHeight * gridRows))));
+                ++acceptedByGridCell[std::make_tuple(element.imageId, col, row)];
+            }
+            thinnedTracks.push_back(track);
+        }
+
+        result.tracks = std::move(thinnedTracks);
+        result.acceptedComponents = static_cast<int>(result.tracks.size());
+        result.trackLengthHistogram.clear();
+        result.trackConfidenceScores.clear();
+        result.meanTrackConfidence = 0.0;
+        for (const Track &track : result.tracks)
+        {
+            ++result.trackLengthHistogram[static_cast<int>(track.length())];
+            result.trackConfidenceScores.push_back(track.confidence);
+            result.meanTrackConfidence += track.confidence;
+        }
+    }
+
     if (!result.trackConfidenceScores.empty())
     {
         result.meanTrackConfidence /=

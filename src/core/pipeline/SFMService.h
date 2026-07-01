@@ -128,6 +128,34 @@ struct SFMServiceOptions
     /// true: 对缺失匹配自动调用配置的匹配器生成；false: 仅复用已有 .match 文件。
     bool                autoGenerateMissingMatches = true;
 
+    /// 是否在初始 SfM 后启用 guided rematching 第二轮候选规划。
+    /// 默认关闭；开启后只补充弱匹配/无匹配但相机已注册的 pair，不替换已有稳定匹配。
+    bool                enableGuidedRematching = false;
+
+    /// 两阶段匹配：第一阶段用较少 keypoints 建立 SfM 骨架，第二阶段 guided rematching 补点。
+    bool                enableTwoStageMatching = true;
+
+    /// 两阶段第一阶段的关键点上限。<=0 表示沿用质量档位。
+    int                 skeletonFeatureMaxKeypoints = 2048;
+
+    /// Guided 二次结果至少需要带来的点数增益比例，否则拒绝写回。
+    double              guidedFillMinPointGainRatio = 0.03;
+
+    /// Guided 二次结果允许的 RMS 回退倍率，超过则拒绝写回。
+    double              guidedFillMaxRmsRegressionRatio = 1.05;
+
+    /// Known-pose / 航测弱几何场景下每张影像最多保留的 tie points，<=0 表示不限制。
+    int                 maxTiePointsPerImage = 6000;
+
+    /// 每张影像每个网格最多保留的 tie points，优先保留长 track / 多视 track。
+    int                 maxTiePointsPerGridCell = 300;
+
+    /// tie point 空间均匀化网格列数。
+    int                 tiePointGridColumns = 8;
+
+    /// tie point 空间均匀化网格行数。
+    int                 tiePointGridRows = 8;
+
     /// 取消标志（由调用方提供的原子标志，置 true 则流水线尽早中止）
     std::shared_ptr<std::atomic<bool>> cancelFlag;
 

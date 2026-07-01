@@ -97,6 +97,32 @@ int mvsDepthResultCount(const QJsonArray &records)
     return count;
 }
 
+bool isDisplayableModelResult(const QJsonObject &record)
+{
+    if (record.contains(QStringLiteral("face_count")) &&
+        record.value(QStringLiteral("face_count")).toInt(0) <= 0)
+    {
+        return false;
+    }
+    return !record.value(QStringLiteral("final_model_path")).toString().isEmpty()
+        || !record.value(QStringLiteral("model_obj")).toString().isEmpty()
+        || !record.value(QStringLiteral("model_ply")).toString().isEmpty()
+        || !record.value(QStringLiteral("mesh_ply")).toString().isEmpty();
+}
+
+int displayableModelResultCount(const QJsonArray &records)
+{
+    int count = 0;
+    for (const QJsonValue &value : records)
+    {
+        if (value.isObject() && isDisplayableModelResult(value.toObject()))
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
 QString normalizedReferenceType(const QJsonObject &record)
 {
     QString type = record.value(QStringLiteral("type")).toString().trimmed().toLower();
@@ -256,7 +282,7 @@ ProjectDashboardSummary buildProjectDashboardSummary(const QJsonObject &metadata
     summary.bundleAdjustResultCount = bundleAdjustResults.size();
     summary.depthMapResultCount = mvsDepthResultCount(depthResults);
     summary.denseCloudResultCount = denseResults.size();
-    summary.modelResultCount = modelResults.size();
+    summary.modelResultCount = displayableModelResultCount(modelResults);
     summary.demResultCount = demResults.size();
     summary.orthoResultCount = orthoResults.size();
     summary.reportResultCount = reportResults.size();

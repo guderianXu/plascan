@@ -180,6 +180,7 @@ void DenseCloudDialog::onPresetChanged(int index)
         _blockSizeSpin->setValue(11);
         _uniquenessSpin->setValue(5);
         _speckleSizeSpin->setValue(50);
+        _minConfSpin->setValue(0.30);
         _minConsistentViewsSpin->setValue(2);
         _geomConsistencyCheck->setChecked(true);
         _maxReprojErrorSpin->setValue(2.0);
@@ -194,9 +195,10 @@ void DenseCloudDialog::onPresetChanged(int index)
         _blockSizeSpin->setValue(7);
         _uniquenessSpin->setValue(15);
         _speckleSizeSpin->setValue(150);
-        _minConsistentViewsSpin->setValue(3);
+        _minConfSpin->setValue(0.70);
+        _minConsistentViewsSpin->setValue(4);
         _geomConsistencyCheck->setChecked(true);
-        _maxReprojErrorSpin->setValue(1.5);
+        _maxReprojErrorSpin->setValue(1.0);
         _speckleMinAreaSpin->setValue(24);
         _fusionMaxImageDimSpin->setValue(2048);
         _fullDpCheck->setChecked(true);
@@ -207,9 +209,10 @@ void DenseCloudDialog::onPresetChanged(int index)
         _blockSizeSpin->setValue(9);
         _uniquenessSpin->setValue(10);
         _speckleSizeSpin->setValue(100);
-        _minConsistentViewsSpin->setValue(2);
+        _minConfSpin->setValue(0.65);
+        _minConsistentViewsSpin->setValue(3);
         _geomConsistencyCheck->setChecked(true);
-        _maxReprojErrorSpin->setValue(2.0);
+        _maxReprojErrorSpin->setValue(1.5);
         _speckleMinAreaSpin->setValue(16);
         _fusionMaxImageDimSpin->setValue(2048);
         _fullDpCheck->setChecked(true);
@@ -239,16 +242,22 @@ QJsonObject DenseCloudDialog::collectSettings() const
     {
         s["resScale"] = 0.25;
         s["iterations"] = 4;
+        s["qualityProfile"] = QStringLiteral("fast_preview");
+        s["fusionRelDepthThreshold"] = 0.05;
     }
     else if (preset == QStringLiteral("quality"))
     {
         s["resScale"] = 0.5;
         s["iterations"] = 10;
+        s["qualityProfile"] = QStringLiteral("high_quality");
+        s["fusionRelDepthThreshold"] = 0.02;
     }
     else
     {
         s["resScale"] = 0.5;
         s["iterations"] = 6;
+        s["qualityProfile"] = QStringLiteral("standard");
+        s["fusionRelDepthThreshold"] = 0.03;
     }
     s["patchSize"] = 11;
     s["minViews"] = _minConsistentViewsSpin->value();
@@ -296,6 +305,19 @@ void DenseCloudDialog::applySettings(const QJsonObject &s)
         }
     }
     if (s.contains("output_dir"))       _outputDirEdit->setText(s["output_dir"].toString());
+    if (s.contains("qualityProfile")) {
+        const QString profile = s["qualityProfile"].toString(QStringLiteral("standard"));
+        const QString preset = profile == QStringLiteral("fast_preview")
+            ? QStringLiteral("fast")
+            : (profile == QStringLiteral("high_quality") ? QStringLiteral("quality") : QStringLiteral("standard"));
+        const int presetIndex = _presetCombo->findData(preset);
+        if (presetIndex >= 0) {
+            _presetCombo->setCurrentIndex(presetIndex);
+        }
+    }
+    if (s.contains("fusionRelDepthThreshold")) {
+        // 该阈值由质量档位派生；旧项目读取时保留字段但不暴露额外控件。
+    }
     if (s.contains("num_disparities"))  _numDispSpin->setValue(s["num_disparities"].toInt(128));
     if (s.contains("block_size"))       _blockSizeSpin->setValue(s["block_size"].toInt(9));
     if (s.contains("uniqueness_ratio")) _uniquenessSpin->setValue(s["uniqueness_ratio"].toInt(10));

@@ -34,30 +34,54 @@ Use `--dry-run` to print the clone/bootstrap/install commands without running th
 
 ## Python Runtime
 
-Create a CPU Python environment:
+The recommended development and packaging runtime is an isolated standard-library `venv` at
+`build/env/python-runtime`. Use this path for model export helpers such as LightGlue TorchScript export, so the
+application and packaging scripts do not depend on a user-managed conda environment.
 
-```bash
-python scripts/env/setup_python_env.py --manager conda --name plascan --device cpu
-```
-
-Create a CUDA Python environment with a specific PyTorch wheel channel:
-
-```bash
-python scripts/env/setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
-```
-
-On Windows PowerShell the command is the same:
+Windows CUDA development runtime:
 
 ```powershell
-python scripts\env\setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 ```
 
-The script writes:
+Linux CPU runtime:
+
+```bash
+python3 scripts/env/setup_python_runtime.py --device cpu
+```
+
+Linux CUDA runtime:
+
+```bash
+python3 scripts/env/setup_python_runtime.py --device cuda --cuda-wheel cu130
+```
+
+Use `--skip-install` when the runtime already contains the required packages and only the generated environment
+files need to be refreshed.
+LightGlue is installed from `https://github.com/cvg/LightGlue.git`, so the full install requires `git` and network
+access to GitHub.
+
+The runtime setup script writes:
 
 - `build/env/plascan-env.json`
 - `build/env/plascan-env.cmake`
 - `build/env/plascan-env.sh`
 - `build/env/plascan-env.ps1`
+
+`scripts/build_win/enter_plascan_dev_shell.ps1` automatically detects
+`build/env/python-runtime/Scripts/python.exe`, prepends it to `PATH`, and exports:
+
+- `PLASCAN_PYTHON_EXECUTABLE`
+- `PLASCAN_PYTHON`
+- `PLASCAN_MODEL_DIR`
+- `PLASCAN_SCRIPT_DIR`
+
+The older `setup_python_env.py` script remains available for custom conda or non-standard venv locations:
+
+```bash
+python scripts/env/setup_python_env.py --manager conda --name plascan --device cpu
+python scripts/env/setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+```
 
 ## LibTorch
 

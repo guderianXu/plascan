@@ -10,7 +10,7 @@
  *   3. extractNative(cv::Mat)           —— 使用内置 SP 模型提取特征
  *
  * 模型路径通过 LightGlueConfig 指定：
- *   - DISK/ALIKED: resources/models/lightglue_{disk,aliked}_{cpu,cuda}.torchscript
+ *   - DISK/ALIKED/SIFT: resources/models/lightglue_{disk,aliked,sift}_{cpu,cuda}.torchscript
  *   - SuperPoint compatibility: resources/models/lightglue_matcher_{cpu,cuda}.torchscript
  *
  * SuperPoint 提取器模型路径可选配置，仅用于原始图像端到端匹配。

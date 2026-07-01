@@ -37,8 +37,11 @@ QJsonObject makeDenseResultRecord(const QString &createdAt,
     if (!sourceSparseCloud.isEmpty()) {
         rec[QStringLiteral("source_sparse_cloud")] = sourceSparseCloud;
     }
+    rec[QStringLiteral("kind")] = QStringLiteral("dense_cloud");
+    rec[QStringLiteral("result_type")] = QStringLiteral("dense_cloud");
     rec[QStringLiteral("dense_cloud_xyz")] = densePath;
     rec[QStringLiteral("point_count")] = pointCount;
+    rec[QStringLiteral("face_count")] = 0;
     return rec;
 }
 
@@ -53,6 +56,8 @@ QJsonObject makeModelResultRecord(const QString &createdAt,
 {
     QJsonObject rec;
     rec[QStringLiteral("created_at")] = createdAt;
+    rec[QStringLiteral("kind")] = QStringLiteral("mesh");
+    rec[QStringLiteral("result_type")] = QStringLiteral("mesh");
     rec[QStringLiteral("source")] = sourceTag;
     if (!sourceSparseCloud.isEmpty()) {
         rec[QStringLiteral("source_sparse_cloud")] = sourceSparseCloud;
