@@ -198,6 +198,19 @@ target_include_directories(test_reconstruction_prerequisites PRIVATE
 )
 gtest_discover_tests(test_reconstruction_prerequisites)
 
+add_executable(test_match_result_catalog
+    test_match_result_catalog.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline/MatchResultCatalog.cpp
+)
+target_link_libraries(test_match_result_catalog PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_match_result_catalog PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
+)
+gtest_discover_tests(test_match_result_catalog)
+
 add_executable(test_guided_rematch_service
     test_guided_rematch_service.cpp
     ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp

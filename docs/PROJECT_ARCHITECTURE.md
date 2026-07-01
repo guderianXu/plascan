@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-06-20。
+行星表面摄影测量处理系统。最后更新: 2026-07-01。
 
 ## 顶层目录
 
@@ -207,6 +207,7 @@ core/
 │
 └── pipeline/                   # 核心流水线桥接 (GUI 可调用)
     ├── FeatureMatchRunner.h/cpp  # 特征匹配异步执行器
+    ├── MatchResultCatalog.h/cpp  # 匹配缓存多算法 variant 编目、兼容性状态与最佳结果选择
     ├── SfmPairPlanner.h        # SfM 匹配候选规划：足迹重叠/空间邻域/序列窗口/手工配对 + priority
     └── SFMService.h/cpp         # SfM 异步服务
 ```
