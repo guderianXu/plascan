@@ -416,7 +416,7 @@ TEST(MatchResultCatalogTest, MissingOrMismatchedSidecarsAreRecordedButNotSelecte
     EXPECT_TRUE(statuses.contains(QStringLiteral("mismatched_image_names")));
 }
 
-TEST(MatchResultCatalogTest, InvalidMatchHeaderUsesReadableSidecarPairForGrouping)
+TEST(MatchResultCatalogTest, SidecarImagePathsKeepValidAndInvalidHeaderVariantsInOneGroup)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -425,8 +425,8 @@ TEST(MatchResultCatalogTest, InvalidMatchHeaderUsesReadableSidecarPairForGroupin
     const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("invalid_B.tif"));
     const QString validPath = writeSgmtMatch(tempDir.path(),
                                              QStringLiteral("valid_for_pair.match"),
-                                             imageA,
-                                             imageB,
+                                             QFileInfo(imageA).fileName(),
+                                             QFileInfo(imageB).fileName(),
                                              30);
     writeSidecar(validPath, imageA, imageB, QStringLiteral("superpoint"), QStringLiteral("superglue"), 30, 12);
 
@@ -442,6 +442,16 @@ TEST(MatchResultCatalogTest, InvalidMatchHeaderUsesReadableSidecarPairForGroupin
     const xjw::pipeline::MatchPairGroup &group = summary.pairGroups.front();
     EXPECT_EQ(group.pairKey, xjw::pipeline::MatchResultCatalog::canonicalPairKey(imageA, imageB));
     ASSERT_EQ(group.variants.size(), 2);
+
+    const auto validIt = std::find_if(group.variants.begin(), group.variants.end(),
+                                      [&](const xjw::pipeline::MatchVariant &variant)
+    {
+        return variant.matchFilePath == QFileInfo(validPath).absoluteFilePath();
+    });
+    ASSERT_NE(validIt, group.variants.end());
+    EXPECT_TRUE(validIt->compatible);
+    EXPECT_EQ(validIt->imageA, imageA);
+    EXPECT_EQ(validIt->imageB, imageB);
 
     const auto invalidIt = std::find_if(group.variants.begin(), group.variants.end(),
                                         [&](const xjw::pipeline::MatchVariant &variant)

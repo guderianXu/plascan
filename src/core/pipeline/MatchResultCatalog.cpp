@@ -250,12 +250,6 @@ MatchVariant readVariant(const QFileInfo &matchInfo)
         QStringLiteral("image1_name"),
         QStringLiteral("image_b")
     });
-    if (!header.ok && !sidecarImageA.isEmpty() && !sidecarImageB.isEmpty())
-    {
-        variant.imageA = sidecarImageA;
-        variant.imageB = sidecarImageB;
-    }
-
     variant.featureAlgorithm = sidecarAlgorithm(sidecar, QStringLiteral("feature_algorithm"));
     variant.matchAlgorithm = sidecarAlgorithm(sidecar, QStringLiteral("match_algorithm"));
     int sidecarTotalMatches = std::max(0, variant.totalMatches);
@@ -296,6 +290,9 @@ MatchVariant readVariant(const QFileInfo &matchInfo)
                         QStringLiteral("sidecar_images_do_not_match_sgmt_header"));
         return variant;
     }
+
+    variant.imageA = sidecarImageA;
+    variant.imageB = sidecarImageB;
 
     if (!header.ok)
     {
