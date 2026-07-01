@@ -9980,6 +9980,8 @@ TEST(MatchPairSelectorCatalogTest, UsesCatalogGroupsAndPassesVariantsToViewer)
     EXPECT_TRUE(source.contains(QStringLiteral("MatchResultCatalogConfig")));
     EXPECT_TRUE(source.contains(QStringLiteral(".scan()")));
     EXPECT_TRUE(source.contains(QStringLiteral("bestVariantIndex")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const QString base = imageBaseKey(imgPath);")));
+    EXPECT_TRUE(source.contains(QStringLiteral("baseToPath.insert(base, imgPath)")));
     EXPECT_TRUE(source.contains(QStringLiteral("setMatchVariants(info.variants, info.matchFilePath)")));
     EXPECT_TRUE(guiSources.contains(QStringLiteral("../core/pipeline/MatchResultCatalog.cpp")));
 }

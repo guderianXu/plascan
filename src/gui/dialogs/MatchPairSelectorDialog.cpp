@@ -515,9 +515,9 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
     const QString baseName = QFileInfo(imagePath).completeBaseName();
 
     // ── 构建 baseName/fileName → 完整路径 映射（供查找配对影像使用）──────────────
-    QMap<QString, QString> baseToPath;    // completeBaseName → fullPath
+    QMap<QString, QString> baseToPath;    // normalized completeBaseName → fullPath
     for (const QString &imgPath : _allImages) {
-        const QString base = QFileInfo(imgPath).completeBaseName();
+        const QString base = imageBaseKey(imgPath);
         if (!baseToPath.contains(base)) baseToPath.insert(base, imgPath);
     }
 

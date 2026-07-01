@@ -339,8 +339,14 @@ TEST(MatchResultCatalogTest, CanonicalPairKeyIsStableForReversedOrdering)
 
     EXPECT_FALSE(keyAB.isEmpty());
     EXPECT_EQ(keyAB, keyBA);
-    EXPECT_TRUE(keyAB.contains(QFileInfo(imageA).absoluteFilePath()));
-    EXPECT_TRUE(keyAB.contains(QFileInfo(imageB).absoluteFilePath()));
+    QString expectedA = QFileInfo(imageA).absoluteFilePath();
+    QString expectedB = QFileInfo(imageB).absoluteFilePath();
+#if defined(Q_OS_WIN)
+    expectedA = expectedA.toLower();
+    expectedB = expectedB.toLower();
+#endif
+    EXPECT_TRUE(keyAB.contains(expectedA));
+    EXPECT_TRUE(keyAB.contains(expectedB));
 }
 
 TEST(MatchResultCatalogTest, MissingOrMismatchedSidecarsAreRecordedButNotSelected)
@@ -416,6 +422,73 @@ TEST(MatchResultCatalogTest, MissingOrMismatchedSidecarsAreRecordedButNotSelecte
     EXPECT_TRUE(statuses.contains(QStringLiteral("compatible")));
     EXPECT_TRUE(statuses.contains(QStringLiteral("missing_sidecar")));
     EXPECT_TRUE(statuses.contains(QStringLiteral("mismatched_image_names")));
+}
+
+TEST(MatchResultCatalogTest, RejectsSidecarPathWithSameFileNameInDifferentDirectory)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString headerDir = QDir(tempDir.path()).filePath(QStringLiteral("header"));
+    const QString sidecarDir = QDir(tempDir.path()).filePath(QStringLiteral("sidecar"));
+    ASSERT_TRUE(QDir().mkpath(headerDir));
+    ASSERT_TRUE(QDir().mkpath(sidecarDir));
+
+    const QString headerImageA = QDir(headerDir).filePath(QStringLiteral("A.tif"));
+    const QString headerImageB = QDir(headerDir).filePath(QStringLiteral("B.tif"));
+    const QString sidecarImageA = QDir(sidecarDir).filePath(QStringLiteral("A.tif"));
+
+    const QString staleSidecarPath = writeSgmtMatch(tempDir.path(),
+                                                    QStringLiteral("stale_sidecar.match"),
+                                                    headerImageA,
+                                                    headerImageB,
+                                                    40);
+    writeSidecar(staleSidecarPath,
+                 sidecarImageA,
+                 headerImageB,
+                 QStringLiteral("disk"),
+                 QStringLiteral("lightglue"),
+                 40,
+                 30);
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = tempDir.path();
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+
+    ASSERT_EQ(summary.pairGroups.size(), 1);
+    const xjw::pipeline::MatchPairGroup &group = summary.pairGroups.front();
+    ASSERT_EQ(group.variants.size(), 1);
+    const int compatibleCount = std::count_if(group.variants.begin(),
+                                              group.variants.end(),
+                                              [](const xjw::pipeline::MatchVariant &variant)
+    {
+        return variant.compatible;
+    });
+    EXPECT_EQ(compatibleCount, 0);
+    EXPECT_EQ(group.bestVariantIndex, -1);
+
+    const xjw::pipeline::MatchVariant &variant = group.variants.front();
+    EXPECT_FALSE(variant.compatible);
+    EXPECT_EQ(variant.status, QStringLiteral("mismatched_image_names"));
+}
+
+TEST(MatchResultCatalogTest, CanonicalPairKeyTreatsWindowsPathCaseAsSamePair)
+{
+#if defined(Q_OS_WIN)
+    const QString imageA = QStringLiteral("E:/Data/Images/A.tif");
+    const QString imageB = QStringLiteral("E:/Data/Images/B.tif");
+    const QString lowerA = QStringLiteral("e:/data/images/a.tif");
+    const QString lowerB = QStringLiteral("e:/data/images/b.tif");
+
+    const QString keyUpper = xjw::pipeline::MatchResultCatalog::canonicalPairKey(imageA, imageB);
+    const QString keyLower = xjw::pipeline::MatchResultCatalog::canonicalPairKey(lowerA, lowerB);
+
+    EXPECT_FALSE(keyUpper.isEmpty());
+    EXPECT_EQ(keyUpper, keyLower);
+#else
+    GTEST_SKIP() << "Windows-specific path case normalization";
+#endif
 }
 
 TEST(MatchResultCatalogTest, SidecarImagePathsKeepValidAndInvalidHeaderVariantsInOneGroup)

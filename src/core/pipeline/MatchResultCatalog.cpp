@@ -33,11 +33,20 @@ QString normalizedPathKey(const QString &path)
     {
         return QString();
     }
-    return QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
+    QString key = QDir::cleanPath(QFileInfo(trimmed).absoluteFilePath());
+#if defined(Q_OS_WIN)
+    key = key.toLower();
+#endif
+    return key;
 }
 QString lowerCleanToken(const QString &token)
 {
-    return QDir::cleanPath(token.trimmed()).toLower();
+    return QDir::cleanPath(QDir::fromNativeSeparators(token.trimmed())).toLower();
+}
+bool tokenHasPathComponent(const QString &token)
+{
+    const QString clean = QDir::fromNativeSeparators(token.trimmed());
+    return QFileInfo(clean).isAbsolute() || clean.contains(QLatin1Char('/'));
 }
 bool imageTokensReferToSameImage(const QString &lhs, const QString &rhs)
 {
@@ -50,6 +59,10 @@ bool imageTokensReferToSameImage(const QString &lhs, const QString &rhs)
     if (lowerCleanToken(left) == lowerCleanToken(right))
     {
         return true;
+    }
+    if (tokenHasPathComponent(left) && tokenHasPathComponent(right))
+    {
+        return false;
     }
     const QFileInfo leftInfo(left);
     const QFileInfo rightInfo(right);
