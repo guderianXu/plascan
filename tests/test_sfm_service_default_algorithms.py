@@ -114,6 +114,27 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("primarySfmResultHasProductionSparseCloud(opts, result)", retry_body)
         self.assertIn("return false;", retry_body)
 
+    def test_sfm_logs_match_result_catalog_diagnostics_without_using_best_variant_for_input(self):
+        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+
+        self.assertIn('#include "MatchResultCatalog.h"', source)
+        self.assertIn("xjw::pipeline::MatchResultCatalog", source)
+        self.assertIn("匹配缓存目录诊断", source)
+        self.assertIn("SfM 默认仍按当前 feature_algorithm + match_algorithm 选择匹配", source)
+        self.assertIn("best variant 只是展示/诊断用途", source)
+
+        diagnostic_start = source.index("void logSfmMatchCacheCatalogDiagnostics")
+        diagnostic_end = source.index("SFMServiceResult runSingleSfmAttempt", diagnostic_start)
+        diagnostic_body = source[diagnostic_start:diagnostic_end]
+        self.assertIn("bestVariantIndex", diagnostic_body)
+
+        selection_start = source.index("auto appendCandidatePair")
+        selection_end = source.index("if (allPairs.isEmpty())", selection_start)
+        selection_body = source[selection_start:selection_end]
+        self.assertNotIn("bestVariantIndex", selection_body)
+        self.assertIn("findExistingMatchCache(baseA, baseB)", selection_body)
+        self.assertIn("findExistingMatchCache(baseB, baseA)", selection_body)
+
     def test_disk_and_aliked_lightglue_use_dedicated_torchscript_models(self):
         source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
         runner_source = (ROOT / "src/core/pipeline/FeatureMatchRunner.cpp").read_text(encoding="utf-8")

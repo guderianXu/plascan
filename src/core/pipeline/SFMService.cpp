@@ -33,6 +33,7 @@
 #include "SfmPairPlanner.h"
 #include "SfmMatchDiagnostics.h"
 #include "GuidedRematchService.h"
+#include "MatchResultCatalog.h"
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "Logger.h"
@@ -105,6 +106,88 @@ bool shouldReportIndexedProgress(int doneCount, int totalCount, int maxReports =
     }
     const int stride = std::max(1, totalCount / std::max(1, maxReports));
     return (doneCount % stride) == 0;
+}
+
+void logSfmMatchCacheCatalogDiagnostics(const QString &matchDir)
+{
+    if (matchDir.trimmed().isEmpty())
+    {
+        LOG_INFO(QStringLiteral("匹配缓存目录诊断: 未提供匹配缓存目录，跳过"));
+        return;
+    }
+
+    const QDir dir(matchDir);
+    if (!dir.exists())
+    {
+        LOG_INFO(QStringLiteral("匹配缓存目录诊断: 目录不存在，跳过: %1").arg(matchDir));
+        return;
+    }
+
+    xjw::pipeline::MatchResultCatalogConfig catalogConfig;
+    catalogConfig.matchDirectory = matchDir;
+    const xjw::pipeline::MatchResultCatalog catalog(catalogConfig);
+    const xjw::pipeline::MatchResultCatalogSummary summary = catalog.scan();
+    if (summary.variantCount == 0)
+    {
+        LOG_INFO(QStringLiteral("匹配缓存目录诊断: 目录为空或没有 .match 文件: %1").arg(matchDir));
+        return;
+    }
+
+    int compatiblePairCount = 0;
+    int multiAlgorithmPairCount = 0;
+    for (const xjw::pipeline::MatchPairGroup &group : summary.pairGroups)
+    {
+        QSet<QString> algorithmKeys;
+        bool hasCompatibleVariant = false;
+        for (const xjw::pipeline::MatchVariant &variant : group.variants)
+        {
+            if (!variant.compatible)
+            {
+                continue;
+            }
+
+            hasCompatibleVariant = true;
+            algorithmKeys.insert(QStringLiteral("%1 + %2")
+                                     .arg(variant.featureAlgorithm.trimmed().toLower(),
+                                          variant.matchAlgorithm.trimmed().toLower()));
+        }
+
+        if (hasCompatibleVariant)
+        {
+            ++compatiblePairCount;
+        }
+        if (algorithmKeys.size() > 1)
+        {
+            ++multiAlgorithmPairCount;
+        }
+
+        if (group.bestVariantIndex >= 0 && group.variants.size() > 1)
+        {
+            const xjw::pipeline::MatchVariant &bestVariant = group.variants.at(group.bestVariantIndex);
+            LOG_INFO(QStringLiteral(
+                "匹配缓存目录诊断: pair=%1 variant=%2 个, best variant 只是展示/诊断用途: %3 + %4, inliers=%5, total=%6")
+                .arg(group.pairKey)
+                .arg(group.variants.size())
+                .arg(bestVariant.featureAlgorithm.isEmpty() ? QStringLiteral("unknown") : bestVariant.featureAlgorithm,
+                     bestVariant.matchAlgorithm.isEmpty() ? QStringLiteral("unknown") : bestVariant.matchAlgorithm)
+                .arg(bestVariant.hasInlierStats ? bestVariant.geometricVerifiedInliers : -1)
+                .arg(bestVariant.totalMatches));
+        }
+    }
+
+    LOG_INFO(QStringLiteral(
+        "匹配缓存目录诊断: 总 pair 数=%1, 可查看/兼容 pair 数=%2, 多算法 pair 数=%3, 不可用 variant 数=%4, variant 总数=%5")
+        .arg(summary.pairGroupCount)
+        .arg(compatiblePairCount)
+        .arg(multiAlgorithmPairCount)
+        .arg(summary.incompatibleVariantCount)
+        .arg(summary.variantCount));
+    if (multiAlgorithmPairCount > 0)
+    {
+        LOG_INFO(QStringLiteral(
+            "匹配缓存目录诊断: 检测到同一影像对存在多个算法结果，catalog best variant 只是展示/诊断用途"));
+    }
+    LOG_INFO(QStringLiteral("SfM 默认仍按当前 feature_algorithm + match_algorithm 选择匹配"));
 }
 
 struct SparseExportColorRequest
@@ -2756,6 +2839,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
     const QString outDir    = QDir::cleanPath(opts.outputDir);
     QDir().mkpath(ipDir);
     QDir().mkpath(matchDir);
+    logSfmMatchCacheCatalogDiagnostics(matchDir);
     if (!outDir.isEmpty())
     {
         QDir().mkpath(outDir);

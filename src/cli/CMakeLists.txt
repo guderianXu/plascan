@@ -114,6 +114,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline/MatchResultCatalog.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
@@ -179,6 +180,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline/MatchResultCatalog.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
