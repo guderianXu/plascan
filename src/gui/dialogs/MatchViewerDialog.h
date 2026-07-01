@@ -12,6 +12,9 @@
 
 #include <QDialog>
 #include <QString>
+#include <QVector>
+
+#include "MatchResultCatalog.h"
 
 // 前向声明，减少头文件依赖
 class DualImageViewer;  // 双图并列查看器（左右各一个 ImageViewWidget）
@@ -55,6 +58,9 @@ public:
         const QString &imgA, const QString &imgB,
         const QString &disparityFile, QWidget *parent = nullptr);
 
+    void setMatchVariants(const QVector<xjw::pipeline::MatchVariant> &variants,
+                          const QString &selectedMatchFile);
+
     void setInitialTab(int tabIndex);
 
     // 析构函数：保存当前显示设置到 project_dialog.json
@@ -97,6 +103,8 @@ private slots:
     void onShowOnlyInliersToggled(bool checked);
     // 五彩斑斓模式开关：每条匹配线使用不同颜色（由 _rainbowChk 触发）
     void onRainbowToggled(bool checked);
+    // 稀疏匹配算法变体下拉框切换
+    void onVariantChanged(int index);
 
     // ── 数据加载回调槽 ────────────────────────────────────────────
     // 匹配数据加载成功后触发，count 为总匹配点数
@@ -118,6 +126,8 @@ private:
     void loadSettings();
     // 将当前显示参数保存到 project_dialog.json（项目级）
     void saveSettings();
+    // 应用一个稀疏匹配算法变体，必要时重新加载 .match 文件
+    void applyMatchVariant(const xjw::pipeline::MatchVariant &variant, bool forceReload);
 
     // ── 核心控件 ──────────────────────────────────────────────────
     DualImageViewer *_viewer = nullptr;  // 双图查看器，持有左右 ImageViewWidget 和 MatchLineOverlay
@@ -136,6 +146,7 @@ private:
     QPushButton *_resetBtn = nullptr;  // 重置到 100% 按钮
     QPushButton *_zoomInBtn = nullptr;  // 放大按钮（显示 "+"）
     QPushButton *_zoomOutBtn = nullptr;  // 缩小按钮（显示 "-"）
+    QComboBox *_variantCombo = nullptr; // 稀疏匹配算法变体选择
 
     // ── 显示选项控件（嵌入工具栏的 QGroupBox） ────────────────────
     QPushButton *_lineColorBtn = nullptr;  // 连线颜色选择按钮（背景色即当前颜色）
@@ -158,7 +169,11 @@ private:
     QLabel *_statusLabel = nullptr;  // 底部状态信息标签
 
     // ── 数据成员 ──────────────────────────────────────────────────
+    QString _imageA;       // 左侧影像路径
+    QString _imageB;       // 右侧影像路径
     QString _matchFile;    // 当前加载的 .match 文件路径
     int _totalMatches = 0;     // 已加载的总匹配点数（加载成功后更新）
+    QVector<xjw::pipeline::MatchVariant> _matchVariants;
+    QString _currentVariantSummary;
     DialogSettingStore *_setting = nullptr; ///< 项目级记忆化管理器（可空）
 };

@@ -9966,6 +9966,24 @@ TEST(MatchPairSelectorOverlapCandidatesTest, ListsOverlapPairsEvenWhenNoMatchFil
     EXPECT_TRUE(source.contains(QStringLiteral("matchFilePath.isEmpty()")));
 }
 
+TEST(MatchPairSelectorCatalogTest, UsesCatalogGroupsAndPassesVariantsToViewer)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.cpp"));
+    const QString guiSources = readProjectSourceFile(QStringLiteral("src/gui/cmake/GuiSources.cmake"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(guiSources.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QVector<xjw::pipeline::MatchVariant> variants;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"MatchResultCatalog.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MatchResultCatalogConfig")));
+    EXPECT_TRUE(source.contains(QStringLiteral(".scan()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("bestVariantIndex")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setMatchVariants(info.variants, info.matchFilePath)")));
+    EXPECT_TRUE(guiSources.contains(QStringLiteral("../core/pipeline/MatchResultCatalog.cpp")));
+}
+
 TEST(MatchViewerEmptyMatchTest, CanOpenImagePairWithoutSparseMatchFile)
 {
     const QString viewerSource = readProjectSourceFile(QStringLiteral("src/gui/widgets/DualImageViewer.cpp"));
@@ -9976,6 +9994,22 @@ TEST(MatchViewerEmptyMatchTest, CanOpenImagePairWithoutSparseMatchFile)
     EXPECT_TRUE(viewerSource.contains(QStringLiteral("matchFile.trimmed().isEmpty()")));
     EXPECT_TRUE(viewerSource.contains(QStringLiteral("QVector<QPointF>{}, QVector<QPointF>{}")));
     EXPECT_TRUE(dialogSource.contains(QStringLiteral("尚未生成匹配")));
+}
+
+TEST(MatchViewerVariantSwitchTest, ExposesCompactVariantComboAndReloadsSparseMatch)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchViewerDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchViewerDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("setMatchVariants")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QComboBox *_variantCombo = nullptr;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QVector<xjw::pipeline::MatchVariant> _matchVariants;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("onVariantChanged")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_variantCombo->setVisible(_variantCombo->count() > 1)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("loadMatchPair(_imageA, _imageB, _matchFile)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("内点 %1 / 总 %2")));
 }
 
 TEST(CodeStyleTest, MatchViewerDialogUsesLowerCamelPrivateMemberNames)
@@ -9998,6 +10032,7 @@ TEST(CodeStyleTest, MatchViewerDialogUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QPushButton *_resetBtn = nullptr;"),
         QStringLiteral("QPushButton *_zoomInBtn = nullptr;"),
         QStringLiteral("QPushButton *_zoomOutBtn = nullptr;"),
+        QStringLiteral("QComboBox *_variantCombo = nullptr;"),
         QStringLiteral("QPushButton *_lineColorBtn = nullptr;"),
         QStringLiteral("QDoubleSpinBox *_lineWidthSpin = nullptr;"),
         QStringLiteral("QSlider *_opacitySlider = nullptr;"),
@@ -10014,6 +10049,7 @@ TEST(CodeStyleTest, MatchViewerDialogUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QLabel *_statusLabel = nullptr;"),
         QStringLiteral("QString _matchFile;"),
         QStringLiteral("int _totalMatches = 0;"),
+        QStringLiteral("QVector<xjw::pipeline::MatchVariant> _matchVariants;"),
         QStringLiteral("DialogSettingStore *_setting = nullptr;"),
     };
     for (const QString &expectedMember : expectedMembers)

@@ -14,6 +14,9 @@
 #include <QTimer>
 #include <QMap>
 #include <QSet>
+#include <QVector>
+
+#include "MatchResultCatalog.h"
 
 // Qt 控件前向声明
 class QComboBox;
@@ -26,7 +29,7 @@ class ProjectManager;
 // 功能：
 // - 顶部下拉框：选择当前查看的图像
 // - 中间表格：显示与该图像匹配的所有其他图像
-//   列：图像名称、总计匹配点数、有效点数、无效点数
+//   列：图像名称、最佳算法、有效内点、总匹配、可用算法、状态
 // - 底部按钮：查看详细匹配（打开 MatchViewerDialog）
 class MatchPairSelectorDialog : public QDialog
 {
@@ -77,6 +80,11 @@ private:
         int validPoints;         // 有效（内点）匹配点数
         int invalidPoints;       // 无效（外点）匹配点数
         QString matchFilePath;   // 对应 .match 文件的完整路径
+        QVector<xjw::pipeline::MatchVariant> variants; // 同一影像对的全部算法结果
+        bool hasInlierStats = false; // true 表示 validPoints 来自几何验证内点统计
+        int compatibleVariantCount = 0; // 可由查看器加载的算法结果数量
+        QString availableAlgorithms;    // 可用算法列表（用于表格显示）
+        QString status;                 // 当前行状态说明
         bool overlapCandidate = false; // true 表示来自重叠对规划，尚无匹配文件
         double overlapScore = 0.0;      // 重叠评分（若输出中提供）
         QString overlapSource;          // overlap json/lis 文件路径

@@ -24,10 +24,61 @@
 #include <QDoubleSpinBox>
 #include <QColorDialog>
 #include <QFileInfo>
+#include <QDir>
 #include <QStatusBar>
 #include <QGroupBox>
 #include <QTabWidget>
 #include <QComboBox>
+#include <QHBoxLayout>
+#include <QSignalBlocker>
+
+namespace
+{
+
+QString normalizedMatchPath(const QString &path)
+{
+    return QDir::cleanPath(path.trimmed()).toLower();
+}
+
+bool sameMatchPath(const QString &lhs, const QString &rhs)
+{
+    const QString left = normalizedMatchPath(lhs);
+    const QString right = normalizedMatchPath(rhs);
+    return !left.isEmpty() && left == right;
+}
+
+QString variantAlgorithmLabel(const xjw::pipeline::MatchVariant &variant)
+{
+    QStringList parts;
+    if (!variant.featureAlgorithm.trimmed().isEmpty())
+    {
+        parts.append(variant.featureAlgorithm.trimmed());
+    }
+    if (!variant.matchAlgorithm.trimmed().isEmpty() &&
+        !parts.contains(variant.matchAlgorithm.trimmed()))
+    {
+        parts.append(variant.matchAlgorithm.trimmed());
+    }
+    if (!parts.isEmpty())
+    {
+        return parts.join(QStringLiteral(" + "));
+    }
+
+    const QString fallback = QFileInfo(variant.matchFilePath).completeBaseName();
+    return fallback.isEmpty() ? QStringLiteral("unknown") : fallback;
+}
+
+QString variantComboLabel(const xjw::pipeline::MatchVariant &variant)
+{
+    const QString counts = variant.hasInlierStats
+        ? QStringLiteral("内点 %1 / 总 %2")
+              .arg(variant.geometricVerifiedInliers)
+              .arg(variant.totalMatches)
+        : QStringLiteral("总 %1").arg(variant.totalMatches);
+    return QStringLiteral("%1 · %2").arg(variantAlgorithmLabel(variant), counts);
+}
+
+} // namespace
 
 // 构造函数
 // imgA      — 左侧影像路径
@@ -37,6 +88,8 @@
 MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
                                      const QString &matchFile, QWidget *parent)
     : QDialog(parent)
+    , _imageA(imgA)
+    , _imageB(imgB)
     , _matchFile(matchFile)  // 保存匹配文件路径
     , _totalMatches(0)       // 初始化匹配点计数
 {
@@ -61,6 +114,14 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     _resetBtn = form.m_resetBtn;
     _zoomInBtn = form.m_zoomInBtn;
     _zoomOutBtn = form.m_zoomOutBtn;
+
+    _variantCombo = new QComboBox(this);
+    _variantCombo->setToolTip(tr("选择稀疏匹配算法结果"));
+    _variantCombo->setMinimumContentsLength(24);
+    _variantCombo->setMinimumWidth(240);
+    _variantCombo->setSizeAdjustPolicy(QComboBox::AdjustToMinimumContentsLengthWithIcon);
+    _variantCombo->setVisible(false);
+    form.toolbarLayout->insertWidget(7, _variantCombo);
 
     _lineColorBtn = form.m_lineColorBtn;
     _lineWidthSpin = form.m_lineWidthSpin;
@@ -90,6 +151,8 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     connect(_resetBtn, &QPushButton::clicked, this, &MatchViewerDialog::onResetView);
     connect(_zoomInBtn, &QPushButton::clicked, this, &MatchViewerDialog::onZoomIn);
     connect(_zoomOutBtn, &QPushButton::clicked, this, &MatchViewerDialog::onZoomOut);
+    connect(_variantCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
+            this, &MatchViewerDialog::onVariantChanged);
 
     connect(_lineColorBtn, &QPushButton::clicked, this, &MatchViewerDialog::onLineColorChanged);
     connect(_lineWidthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
@@ -164,6 +227,62 @@ MatchViewerDialog* MatchViewerDialog::forDenseMatch(
     if (!disparityFile.isEmpty())
         dlg->_viewer->disparityOverlay()->loadDisparity(disparityFile);
     return dlg;
+}
+
+void MatchViewerDialog::setMatchVariants(const QVector<xjw::pipeline::MatchVariant> &variants,
+                                         const QString &selectedMatchFile)
+{
+    _matchVariants = variants;
+    if (!_variantCombo)
+    {
+        return;
+    }
+
+    int selectedComboIndex = -1;
+    int selectedVariantIndex = -1;
+    {
+        const QSignalBlocker blocker(_variantCombo);
+        _variantCombo->clear();
+        for (int i = 0; i < _matchVariants.size(); ++i)
+        {
+            const xjw::pipeline::MatchVariant &variant = _matchVariants.at(i);
+            if (!variant.compatible || variant.matchFilePath.trimmed().isEmpty())
+            {
+                continue;
+            }
+
+            _variantCombo->addItem(variantComboLabel(variant), i);
+            const int comboIndex = _variantCombo->count() - 1;
+            _variantCombo->setItemData(comboIndex, variant.matchFilePath, Qt::ToolTipRole);
+            if (sameMatchPath(variant.matchFilePath, selectedMatchFile) ||
+                sameMatchPath(variant.matchFilePath, _matchFile))
+            {
+                selectedComboIndex = comboIndex;
+            }
+        }
+
+        if (selectedComboIndex < 0 && _variantCombo->count() > 0)
+        {
+            selectedComboIndex = 0;
+        }
+        if (selectedComboIndex >= 0)
+        {
+            _variantCombo->setCurrentIndex(selectedComboIndex);
+            selectedVariantIndex = _variantCombo->itemData(selectedComboIndex).toInt();
+        }
+    }
+
+    _variantCombo->setVisible(_variantCombo->count() > 1);
+
+    if (selectedVariantIndex >= 0 && selectedVariantIndex < _matchVariants.size())
+    {
+        applyMatchVariant(_matchVariants.at(selectedVariantIndex), false);
+    }
+    else
+    {
+        _currentVariantSummary.clear();
+        updateStatusBar();
+    }
 }
 
 // setInitialTab: 设置初始显示的标签页索引
@@ -266,6 +385,42 @@ void MatchViewerDialog::onShowOnlyInliersToggled(bool checked)
     _viewer->overlay()->setShowOnlyInliers(checked);
 }
 
+void MatchViewerDialog::onVariantChanged(int index)
+{
+    if (!_variantCombo || index < 0)
+    {
+        return;
+    }
+
+    const int variantIndex = _variantCombo->itemData(index).toInt();
+    if (variantIndex < 0 || variantIndex >= _matchVariants.size())
+    {
+        return;
+    }
+
+    applyMatchVariant(_matchVariants.at(variantIndex), true);
+}
+
+void MatchViewerDialog::applyMatchVariant(const xjw::pipeline::MatchVariant &variant, bool forceReload)
+{
+    if (!variant.compatible || variant.matchFilePath.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    const QString previousMatchFile = _matchFile;
+    _matchFile = variant.matchFilePath;
+    _sparseMatchFileMissing = false;
+    _totalMatches = variant.totalMatches;
+    _currentVariantSummary = variantComboLabel(variant);
+    updateStatusBar();
+
+    if (_viewer && (forceReload || !sameMatchPath(previousMatchFile, _matchFile)))
+    {
+        _viewer->loadMatchPair(_imageA, _imageB, _matchFile);
+    }
+}
+
 // onMatchDataLoaded: 匹配数据加载成功的回调，更新总匹配数并刷新状态栏
 void MatchViewerDialog::onMatchDataLoaded(int count)
 {
@@ -302,6 +457,10 @@ void MatchViewerDialog::updateStatusBar()
     }
 
     QString status = tr("总匹配点数：%1").arg(_totalMatches);
+    if (!_currentVariantSummary.isEmpty())
+    {
+        status += tr(" | 算法：%1").arg(_currentVariantSummary);
+    }
     
     // 可以添加更多统计信息（如可见点数）：
     // int visible = _viewer->visibleMatchCount();

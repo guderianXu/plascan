@@ -114,6 +114,7 @@ set(GUI_SOURCES
 
 list(APPEND GUI_SOURCES
   ../core/pipeline/GuidedRematchService.cpp
+  ../core/pipeline/MatchResultCatalog.cpp
 )
 
 set(GUI_HEADERS

@@ -6,6 +6,7 @@
 // =============================================================================
 #include "MatchPairSelectorDialog.h"
 #include "MatchViewerDialog.h"
+#include "MatchResultCatalog.h"
 #include "ProjectManager.h"
 #include "ProjectIO.h"
 #include "Logger.h"
@@ -89,6 +90,185 @@ QString resolveProjectImagePath(const QString &token,
     return token;
 }
 
+bool pairContainsImage(const QString &imageA,
+                       const QString &imageB,
+                       const QString &imagePath,
+                       QString *otherImageToken)
+{
+    if (imageTokenMatches(imageA, imagePath))
+    {
+        if (otherImageToken)
+        {
+            *otherImageToken = imageB;
+        }
+        return true;
+    }
+    if (imageTokenMatches(imageB, imagePath))
+    {
+        if (otherImageToken)
+        {
+            *otherImageToken = imageA;
+        }
+        return true;
+    }
+    return false;
+}
+
+bool groupContainsImage(const xjw::pipeline::MatchPairGroup &group,
+                        const QString &imagePath,
+                        QString *otherImageToken)
+{
+    if (pairContainsImage(group.imageA, group.imageB, imagePath, otherImageToken))
+    {
+        return true;
+    }
+
+    for (const xjw::pipeline::MatchVariant &variant : group.variants)
+    {
+        if (pairContainsImage(variant.imageA, variant.imageB, imagePath, otherImageToken))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+QString matchVariantAlgorithmLabel(const xjw::pipeline::MatchVariant &variant)
+{
+    QStringList parts;
+    if (!variant.featureAlgorithm.trimmed().isEmpty())
+    {
+        parts.append(variant.featureAlgorithm.trimmed());
+    }
+    if (!variant.matchAlgorithm.trimmed().isEmpty() &&
+        !parts.contains(variant.matchAlgorithm.trimmed()))
+    {
+        parts.append(variant.matchAlgorithm.trimmed());
+    }
+    if (!parts.isEmpty())
+    {
+        return parts.join(QStringLiteral(" + "));
+    }
+
+    const QString fallback = QFileInfo(variant.matchFilePath).completeBaseName();
+    return fallback.isEmpty() ? QStringLiteral("(未知算法)") : fallback;
+}
+
+QString matchVariantReasonLabel(const xjw::pipeline::MatchVariant &variant)
+{
+    if (variant.compatible)
+    {
+        return QStringLiteral("可查看");
+    }
+    if (variant.status == QStringLiteral("missing_sidecar"))
+    {
+        return QStringLiteral("缺少 sidecar");
+    }
+    if (variant.status == QStringLiteral("invalid_sidecar"))
+    {
+        return QStringLiteral("sidecar 无效");
+    }
+    if (variant.status == QStringLiteral("invalid_match_file"))
+    {
+        return QStringLiteral("匹配文件无效");
+    }
+    if (variant.status == QStringLiteral("mismatched_image_names"))
+    {
+        return QStringLiteral("影像名不一致");
+    }
+    if (variant.status == QStringLiteral("missing_image_names"))
+    {
+        return QStringLiteral("缺少影像名");
+    }
+    return variant.reason.isEmpty() ? variant.status : variant.reason;
+}
+
+int bestDisplayVariantIndex(const xjw::pipeline::MatchPairGroup &group)
+{
+    if (group.bestVariantIndex >= 0 && group.bestVariantIndex < group.variants.size())
+    {
+        return group.bestVariantIndex;
+    }
+    for (int i = 0; i < group.variants.size(); ++i)
+    {
+        if (group.variants.at(i).compatible)
+        {
+            return i;
+        }
+    }
+    return group.variants.isEmpty() ? -1 : 0;
+}
+
+int compatibleVariantCount(const QVector<xjw::pipeline::MatchVariant> &variants)
+{
+    int count = 0;
+    for (const xjw::pipeline::MatchVariant &variant : variants)
+    {
+        if (variant.compatible && !variant.matchFilePath.trimmed().isEmpty())
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+QString availableAlgorithmText(const QVector<xjw::pipeline::MatchVariant> &variants)
+{
+    QStringList labels;
+    for (const xjw::pipeline::MatchVariant &variant : variants)
+    {
+        if (!variant.compatible || variant.matchFilePath.trimmed().isEmpty())
+        {
+            continue;
+        }
+
+        const QString label = matchVariantAlgorithmLabel(variant);
+        if (!labels.contains(label))
+        {
+            labels.append(label);
+        }
+    }
+
+    return labels.isEmpty() ? QStringLiteral("无") : labels.join(QStringLiteral(", "));
+}
+
+QString catalogRowStatusText(const QVector<xjw::pipeline::MatchVariant> &variants,
+                             int selectedVariantIndex,
+                             int compatibleCount)
+{
+    if (compatibleCount > 1)
+    {
+        return QStringLiteral("可查看（%1 个算法）").arg(compatibleCount);
+    }
+    if (compatibleCount == 1)
+    {
+        return QStringLiteral("可查看");
+    }
+    if (selectedVariantIndex >= 0 && selectedVariantIndex < variants.size())
+    {
+        return QStringLiteral("不可用：%1").arg(matchVariantReasonLabel(variants.at(selectedVariantIndex)));
+    }
+    return QStringLiteral("不可用");
+}
+
+QString variantsTooltip(const QVector<xjw::pipeline::MatchVariant> &variants)
+{
+    QStringList lines;
+    for (const xjw::pipeline::MatchVariant &variant : variants)
+    {
+        const QString counts = variant.hasInlierStats
+            ? QStringLiteral("内点 %1 / 总 %2")
+                  .arg(variant.geometricVerifiedInliers)
+                  .arg(variant.totalMatches)
+            : QStringLiteral("总 %1").arg(variant.totalMatches);
+        lines.append(QStringLiteral("%1：%2，%3")
+                         .arg(matchVariantAlgorithmLabel(variant),
+                              matchVariantReasonLabel(variant),
+                              counts));
+    }
+    return lines.join(QLatin1Char('\n'));
+}
+
 } // namespace
 
 // 构造函数：初始化对话框，构建界面，加载项目影像列表
@@ -159,18 +339,20 @@ void MatchPairSelectorDialog::setupUI()
 // 设置列数（4列）、列头、列宽、选择行为、文字对齐、交替行颜色等属性
 void MatchPairSelectorDialog::setupTable()
 {
-    _matchTable->setColumnCount(5);
+    _matchTable->setColumnCount(6);
 
     QStringList headers;
-    headers << tr("图像") << tr("算法") << tr("总计") << tr("有效") << tr("无效");
+    headers << tr("图像") << tr("最佳算法") << tr("有效内点")
+            << tr("总匹配") << tr("可用算法") << tr("状态");
     _matchTable->setHorizontalHeaderLabels(headers);
 
     // 设置列宽
     _matchTable->setColumnWidth(0, 320);
-    _matchTable->setColumnWidth(1, 100);
-    _matchTable->setColumnWidth(2, 80);
-    _matchTable->setColumnWidth(3, 80);
-    _matchTable->setColumnWidth(4, 80);
+    _matchTable->setColumnWidth(1, 150);
+    _matchTable->setColumnWidth(2, 90);
+    _matchTable->setColumnWidth(3, 90);
+    _matchTable->setColumnWidth(4, 190);
+    _matchTable->setColumnWidth(5, 150);
     
     // 设置表格属性
     _matchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -246,6 +428,7 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
     
     for (int i = 0; i < _currentMatches.size(); ++i) {
         const MatchInfo &info = _currentMatches[i];
+        const QString tooltip = variantsTooltip(info.variants);
 
         // 图像名称
         QTableWidgetItem *nameItem = new QTableWidgetItem(info.imageName);
@@ -257,31 +440,49 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
         if (algoDisplay.isEmpty()) algoDisplay = tr("(旧格式)");
         QTableWidgetItem *algoItem = new QTableWidgetItem(algoDisplay);
         algoItem->setTextAlignment(Qt::AlignCenter);
+        if (!tooltip.isEmpty())
+        {
+            algoItem->setToolTip(tooltip);
+        }
         _matchTable->setItem(i, 1, algoItem);
 
-        // 总计
-        QTableWidgetItem *totalItem = new QTableWidgetItem(
-            info.overlapCandidate && info.matchFilePath.isEmpty()
-                ? tr("未匹配")
-                : QString::number(info.totalPoints));
-        totalItem->setTextAlignment(Qt::AlignCenter);
-        _matchTable->setItem(i, 2, totalItem);
-
-        // 有效
+        // 有效内点
         QTableWidgetItem *validItem = new QTableWidgetItem(
-            info.overlapCandidate && info.matchFilePath.isEmpty()
+            info.matchFilePath.isEmpty() || !info.hasInlierStats
                 ? QStringLiteral("-")
                 : QString::number(info.validPoints));
         validItem->setTextAlignment(Qt::AlignCenter);
-        _matchTable->setItem(i, 3, validItem);
+        _matchTable->setItem(i, 2, validItem);
 
-        // 无效
-        QTableWidgetItem *invalidItem = new QTableWidgetItem(
-            info.overlapCandidate && info.matchFilePath.isEmpty()
-                ? QStringLiteral("-")
-                : QString::number(info.invalidPoints));
-        invalidItem->setTextAlignment(Qt::AlignCenter);
-        _matchTable->setItem(i, 4, invalidItem);
+        // 总匹配
+        QTableWidgetItem *totalItem = new QTableWidgetItem(
+            info.matchFilePath.isEmpty()
+                ? tr("未匹配")
+                : QString::number(info.totalPoints));
+        totalItem->setTextAlignment(Qt::AlignCenter);
+        _matchTable->setItem(i, 3, totalItem);
+
+        // 可用算法
+        QTableWidgetItem *availableItem = new QTableWidgetItem(
+            info.availableAlgorithms.isEmpty() ? QStringLiteral("无") : info.availableAlgorithms);
+        availableItem->setTextAlignment(Qt::AlignCenter);
+        if (!tooltip.isEmpty())
+        {
+            availableItem->setToolTip(tooltip);
+        }
+        _matchTable->setItem(i, 4, availableItem);
+
+        // 状态
+        QTableWidgetItem *statusItem = new QTableWidgetItem(
+            info.status.isEmpty()
+                ? (info.matchFilePath.isEmpty() ? tr("候选 / 未匹配") : tr("可查看"))
+                : info.status);
+        statusItem->setTextAlignment(Qt::AlignCenter);
+        if (!tooltip.isEmpty())
+        {
+            statusItem->setToolTip(tooltip);
+        }
+        _matchTable->setItem(i, 5, statusItem);
     }
     
     int overlapCandidateCount = 0;
@@ -320,66 +521,82 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
         if (!baseToPath.contains(base)) baseToPath.insert(base, imgPath);
     }
 
-    // ── 方式一：扫描 matchDir/*.match 文件（实时，无需等待元数据写入）───────────
+    // ── 方式一：通过 Catalog 扫描 matchDir/*.match 文件并按影像对聚合 ────────
     QSet<QString> seenMatchFiles;
     QSet<QString> seenPairKeys;
 
-    // 已知算法后缀名列表(匹配文件名中可能出现)
-    static const QStringList knownAlgos = {"superglue","lightglue","loftr","roma",
-                                            "orb_bf_hamming","sift_bf_l2","sift_flann"};
+    if (!_matchDir.isEmpty())
+    {
+        xjw::pipeline::MatchResultCatalogConfig config;
+        config.matchDirectory = _matchDir;
+        const xjw::pipeline::MatchResultCatalogSummary summary =
+            xjw::pipeline::MatchResultCatalog(config).scan();
 
-    if (!_matchDir.isEmpty()) {
-        QDir matchDirObj(_matchDir);
-        const QStringList matchFiles = matchDirObj.entryList(
-            QStringList{QStringLiteral("*.match")}, QDir::Files);
+        for (const xjw::pipeline::MatchPairGroup &group : summary.pairGroups)
+        {
+            QString otherToken;
+            if (!groupContainsImage(group, imagePath, &otherToken))
+            {
+                continue;
+            }
 
-        for (const QString &mf : matchFiles) {
-            const QString stem = QFileInfo(mf).completeBaseName();  // e.g. "A__B_superglue"
-            const QStringList parts = stem.split(QStringLiteral("__"));
-            if (parts.size() != 2) continue;
+            const QString otherImagePath = resolveProjectImagePath(otherToken, _allImages, baseToPath);
+            if (otherImagePath.trimmed().isEmpty() || imageTokenMatches(otherImagePath, imagePath))
+            {
+                continue;
+            }
 
-            const QString &partA = parts[0];
-            QString partB = parts[1];
-            // 解析算法后缀: "B_algo" -> base="B", algo="algo"
-            QString algoName;
-            for (const auto &algo : knownAlgos) {
-                const QString suffix = "_" + algo;
-                if (partB.endsWith(suffix)) {
-                    partB.chop(suffix.size());
-                    algoName = algo;
-                    break;
+            const QString pairKey = canonicalPairKeyForImages(imagePath, otherImagePath);
+            if (seenPairKeys.contains(pairKey))
+            {
+                continue;
+            }
+
+            const int selectedVariantIndex = bestDisplayVariantIndex(group);
+            MatchInfo info;
+            info.imagePath = otherImagePath;
+            info.imageName = QFileInfo(otherImagePath).fileName();
+            if (info.imageName.isEmpty())
+            {
+                info.imageName = otherToken;
+            }
+            info.variants = group.variants;
+            info.compatibleVariantCount = compatibleVariantCount(info.variants);
+            info.availableAlgorithms = availableAlgorithmText(info.variants);
+            info.status = catalogRowStatusText(info.variants,
+                                               selectedVariantIndex,
+                                               info.compatibleVariantCount);
+
+            if (selectedVariantIndex >= 0 && selectedVariantIndex < group.variants.size())
+            {
+                const xjw::pipeline::MatchVariant &variant = group.variants.at(selectedVariantIndex);
+                info.algorithm = matchVariantAlgorithmLabel(variant);
+                info.totalPoints = variant.totalMatches;
+                info.hasInlierStats = variant.hasInlierStats;
+                info.validPoints = variant.hasInlierStats ? variant.geometricVerifiedInliers : 0;
+                info.invalidPoints = variant.hasInlierStats
+                    ? std::max(0, variant.totalMatches - variant.geometricVerifiedInliers)
+                    : 0;
+                if (variant.compatible)
+                {
+                    info.matchFilePath = variant.matchFilePath;
                 }
             }
 
-            // 检查是否包含当前影像
-            bool containsCurrent = false;
-            QString otherBase;
-            if (partA == baseName)      { containsCurrent = true; otherBase = partB; }
-            else if (partB == baseName) { containsCurrent = true; otherBase = partA; }
-
-            if (!containsCurrent) continue;
-
-            const QString matchFilePath = matchDirObj.filePath(mf);
-            const QString cleanPath = QDir::cleanPath(matchFilePath);
-            if (seenMatchFiles.contains(cleanPath)) continue;
-            seenMatchFiles.insert(cleanPath);
-
-            const QString otherImagePath = baseToPath.value(otherBase, otherBase);
-            seenPairKeys.insert(canonicalPairKeyForImages(imagePath, otherImagePath));
-            MatchInfo info = getMatchStatistics(imagePath, otherImagePath, matchFilePath);
-            if (info.imageName.isEmpty())
-                info.imageName = otherBase;
-            if (info.imagePath.isEmpty())
-                info.imagePath = otherImagePath;
-            if (!algoName.isEmpty())
-                info.algorithm = algoName;
+            for (const xjw::pipeline::MatchVariant &variant : group.variants)
+            {
+                if (!variant.matchFilePath.trimmed().isEmpty())
+                {
+                    seenMatchFiles.insert(QDir::cleanPath(variant.matchFilePath));
+                }
+            }
+            seenPairKeys.insert(pairKey);
             matches.append(info);
         }
     }
 
     // ── 方式二：兜底 — 扫描项目元数据（针对仅有元数据无文件的历史记录）──────────
-    // 仅当 matchDir 不存在或为空时才回退到元数据读取
-    if (matches.isEmpty() && _matchDir.isEmpty()) {
+    {
         QJsonObject meta = _projectManager->currentMeta();
         const QString baseFileName = QFileInfo(imagePath).fileName();
         QMap<QString, QString> imageNameToPath;
@@ -422,10 +639,13 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
                 matchFile = findMatchFile(imagePath, matchedPath);
             if (matchFile.isEmpty()) continue;
 
+            const QString pairKey = canonicalPairKeyForImages(imagePath, matchedPath);
+            if (seenPairKeys.contains(pairKey)) continue;
+
             const QString cleanPath = QDir::cleanPath(matchFile);
             if (seenMatchFiles.contains(cleanPath)) continue;
             seenMatchFiles.insert(cleanPath);
-            seenPairKeys.insert(canonicalPairKeyForImages(imagePath, matchedPath));
+            seenPairKeys.insert(pairKey);
 
             matches.append(getMatchStatistics(imagePath, matchedPath, matchFile));
         }
@@ -494,6 +714,8 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCa
         info.validPoints = 0;
         info.invalidPoints = 0;
         info.matchFilePath.clear();
+        info.availableAlgorithms = tr("未匹配");
+        info.status = tr("候选 / 未匹配");
         info.overlapCandidate = true;
         info.overlapScore = overlapScore;
         info.overlapSource = sourcePath;
@@ -643,9 +865,12 @@ MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatistics(
     info.totalPoints = 0;
     info.validPoints = 0;
     info.invalidPoints = 0;
+    info.availableAlgorithms = tr("(旧格式)");
+    info.status = tr("可查看");
 
     QFile file(matchFile);
     if (!file.open(QIODevice::ReadOnly)) {
+        info.status = tr("不可用：无法读取匹配文件");
         return info;
     }
 
@@ -696,14 +921,16 @@ void MatchPairSelectorDialog::onMatchPairSelected(int row, int column)
     _viewDetailBtn->setEnabled(true);
     
     const MatchInfo &info = _currentMatches[row];
-    if (info.overlapCandidate && info.matchFilePath.isEmpty())
+    if (info.matchFilePath.isEmpty())
     {
-        _statusLabel->setText(tr("已选择：%1（重叠候选，尚未匹配）").arg(info.imageName));
+        const QString status = info.status.isEmpty() ? tr("尚未匹配") : info.status;
+        _statusLabel->setText(tr("已选择：%1（%2）").arg(info.imageName, status));
     }
     else
     {
-        _statusLabel->setText(tr("已选择：%1 (%2 个匹配点)")
+        _statusLabel->setText(tr("已选择：%1（%2，总匹配 %3）")
             .arg(info.imageName)
+            .arg(info.algorithm.isEmpty() ? tr("(旧格式)") : info.algorithm)
             .arg(info.totalPoints));
     }
 }
@@ -735,6 +962,7 @@ void MatchPairSelectorDialog::onViewDetailedMatch()
     if (_projectManager) {
         viewer->setProjectPath(_projectManager->currentProjectPath());
     }
+    viewer->setMatchVariants(info.variants, info.matchFilePath);
 
     viewer->exec();
 }
