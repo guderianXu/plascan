@@ -21,7 +21,8 @@ QString writeSgmtMatch(const QString &directory,
                        const QString &imageA,
                        const QString &imageB,
                        int matchCount,
-                       const QDateTime &modifiedTime = QDateTime())
+                       const QDateTime &modifiedTime = QDateTime(),
+                       quint32 version = 2)
 {
     const QString path = QDir(directory).filePath(fileName);
     QFile file(path);
@@ -30,7 +31,7 @@ QString writeSgmtMatch(const QString &directory,
     QDataStream out(&file);
     out.setVersion(QDataStream::Qt_5_15);
     out.writeRawData("SGMT", 4);
-    out << quint32(2);
+    out << version;
 
     const QByteArray imageABytes = imageA.toUtf8();
     const QByteArray imageBBytes = imageB.toUtf8();
@@ -65,13 +66,23 @@ QString writeSgmtMatch(const QString &directory,
     return path;
 }
 
+QString writeInvalidMatch(const QString &directory, const QString &fileName)
+{
+    const QString path = QDir(directory).filePath(fileName);
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    file.write("BAD!");
+    return path;
+}
+
 void writeSidecar(const QString &matchPath,
                   const QString &imageA,
                   const QString &imageB,
                   const QString &featureAlgorithm,
                   const QString &matchAlgorithm,
                   int matchCount,
-                  int geometricInliers)
+                  int geometricInliers,
+                  bool includeInlierStats = true)
 {
     QJsonArray indices0;
     QJsonArray indices1;
@@ -97,7 +108,10 @@ void writeSidecar(const QString &matchPath,
     sidecar.insert(QStringLiteral("match_algorithm"), matchAlgorithm);
     sidecar.insert(QStringLiteral("feature_format_version"), 2);
     sidecar.insert(QStringLiteral("num_matches"), matchCount);
-    sidecar.insert(QStringLiteral("geometric_inlier_count"), geometricInliers);
+    if (includeInlierStats)
+    {
+        sidecar.insert(QStringLiteral("geometric_inlier_count"), geometricInliers);
+    }
     sidecar.insert(QStringLiteral("matched_indices0"), indices0);
     sidecar.insert(QStringLiteral("matched_indices1"), indices1);
     sidecar.insert(QStringLiteral("matched_scores"), scores);
@@ -236,6 +250,80 @@ TEST(MatchResultCatalogTest, SelectsBestVariantByInliersThenMatchesThenModifiedT
     EXPECT_EQ(best.totalMatches, 140);
 }
 
+TEST(MatchResultCatalogTest, PrefersExplicitZeroInlierStatsOverMissingStats)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("zero_A.tif"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("zero_B.tif"));
+    const QDateTime older = QDateTime::fromSecsSinceEpoch(1700000000, Qt::UTC);
+    const QDateTime newer = QDateTime::fromSecsSinceEpoch(1700003600, Qt::UTC);
+
+    const QString explicitZeroPath = writeSgmtMatch(tempDir.path(),
+                                                    QStringLiteral("zero_explicit.match"),
+                                                    imageA,
+                                                    imageB,
+                                                    10,
+                                                    older);
+    writeSidecar(explicitZeroPath,
+                 imageA,
+                 imageB,
+                 QStringLiteral("superpoint"),
+                 QStringLiteral("superglue"),
+                 10,
+                 0);
+
+    const QString missingStatsPath = writeSgmtMatch(tempDir.path(),
+                                                    QStringLiteral("zero_missing_stats.match"),
+                                                    imageA,
+                                                    imageB,
+                                                    500,
+                                                    newer);
+    writeSidecar(missingStatsPath,
+                 imageA,
+                 imageB,
+                 QStringLiteral("disk"),
+                 QStringLiteral("lightglue"),
+                 500,
+                 0,
+                 false);
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = tempDir.path();
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+
+    ASSERT_EQ(summary.pairGroups.size(), 1);
+    const xjw::pipeline::MatchPairGroup &group = summary.pairGroups.front();
+    ASSERT_EQ(group.variants.size(), 2);
+    ASSERT_GE(group.bestVariantIndex, 0);
+
+    bool sawMissingStats = false;
+    bool sawExplicitStats = false;
+    for (const xjw::pipeline::MatchVariant &variant : group.variants)
+    {
+        if (variant.matchFilePath == QFileInfo(missingStatsPath).absoluteFilePath())
+        {
+            sawMissingStats = true;
+            EXPECT_FALSE(variant.hasInlierStats);
+            EXPECT_EQ(variant.geometricVerifiedInliers, 0);
+        }
+        if (variant.matchFilePath == QFileInfo(explicitZeroPath).absoluteFilePath())
+        {
+            sawExplicitStats = true;
+            EXPECT_TRUE(variant.hasInlierStats);
+            EXPECT_EQ(variant.geometricVerifiedInliers, 0);
+        }
+    }
+    EXPECT_TRUE(sawMissingStats);
+    EXPECT_TRUE(sawExplicitStats);
+
+    const xjw::pipeline::MatchVariant &best = group.variants.at(group.bestVariantIndex);
+    EXPECT_EQ(best.matchFilePath, QFileInfo(explicitZeroPath).absoluteFilePath());
+    EXPECT_TRUE(best.hasInlierStats);
+}
+
 TEST(MatchResultCatalogTest, CanonicalPairKeyIsStableForReversedOrdering)
 {
     QTemporaryDir tempDir;
@@ -328,6 +416,46 @@ TEST(MatchResultCatalogTest, MissingOrMismatchedSidecarsAreRecordedButNotSelecte
     EXPECT_TRUE(statuses.contains(QStringLiteral("mismatched_image_names")));
 }
 
+TEST(MatchResultCatalogTest, InvalidMatchHeaderUsesReadableSidecarPairForGrouping)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("invalid_A.tif"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("invalid_B.tif"));
+    const QString validPath = writeSgmtMatch(tempDir.path(),
+                                             QStringLiteral("valid_for_pair.match"),
+                                             imageA,
+                                             imageB,
+                                             30);
+    writeSidecar(validPath, imageA, imageB, QStringLiteral("superpoint"), QStringLiteral("superglue"), 30, 12);
+
+    const QString invalidPath = writeInvalidMatch(tempDir.path(), QStringLiteral("invalid_header.match"));
+    writeSidecar(invalidPath, imageA, imageB, QStringLiteral("disk"), QStringLiteral("lightglue"), 200, 80);
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = tempDir.path();
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+
+    ASSERT_EQ(summary.pairGroups.size(), 1);
+    const xjw::pipeline::MatchPairGroup &group = summary.pairGroups.front();
+    EXPECT_EQ(group.pairKey, xjw::pipeline::MatchResultCatalog::canonicalPairKey(imageA, imageB));
+    ASSERT_EQ(group.variants.size(), 2);
+
+    const auto invalidIt = std::find_if(group.variants.begin(), group.variants.end(),
+                                        [&](const xjw::pipeline::MatchVariant &variant)
+    {
+        return variant.matchFilePath == QFileInfo(invalidPath).absoluteFilePath();
+    });
+    ASSERT_NE(invalidIt, group.variants.end());
+    EXPECT_FALSE(invalidIt->compatible);
+    EXPECT_EQ(invalidIt->status, QStringLiteral("invalid_match_file"));
+    EXPECT_EQ(invalidIt->reason, QStringLiteral("sgmt_magic_missing"));
+    EXPECT_EQ(invalidIt->imageA, imageA);
+    EXPECT_EQ(invalidIt->imageB, imageB);
+}
+
 TEST(MatchResultCatalogTest, ReadsSgmtV2MatchCount)
 {
     QTemporaryDir tempDir;
@@ -340,4 +468,20 @@ TEST(MatchResultCatalogTest, ReadsSgmtV2MatchCount)
                                         37);
 
     EXPECT_EQ(xjw::pipeline::MatchResultCatalog::readSgmtMatchCount(path), 37);
+}
+
+TEST(MatchResultCatalogTest, ReadsSgmtV1MatchCount)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString path = writeSgmtMatch(tempDir.path(),
+                                        QStringLiteral("count_test_v1.match"),
+                                        QStringLiteral("A.tif"),
+                                        QStringLiteral("B.tif"),
+                                        41,
+                                        QDateTime(),
+                                        1);
+
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::readSgmtMatchCount(path), 41);
 }

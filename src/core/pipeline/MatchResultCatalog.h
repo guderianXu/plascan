@@ -19,6 +19,7 @@ struct MatchVariant
     QString sidecarPath;
     int totalMatches = 0;
     int geometricVerifiedInliers = 0;
+    bool hasInlierStats = false;
     bool compatible = false;
     QString status;
     QString reason;
