@@ -310,10 +310,6 @@ bool variantIsBetter(const MatchVariant &candidate, const MatchVariant &current)
     {
         return candidate.geometricVerifiedInliers > current.geometricVerifiedInliers;
     }
-    if (candidate.hasInlierStats != current.hasInlierStats)
-    {
-        return candidate.hasInlierStats;
-    }
     if (candidate.totalMatches != current.totalMatches)
     {
         return candidate.totalMatches > current.totalMatches;

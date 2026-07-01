@@ -250,7 +250,7 @@ TEST(MatchResultCatalogTest, SelectsBestVariantByInliersThenMatchesThenModifiedT
     EXPECT_EQ(best.totalMatches, 140);
 }
 
-TEST(MatchResultCatalogTest, PrefersExplicitZeroInlierStatsOverMissingStats)
+TEST(MatchResultCatalogTest, UsesTotalMatchesAfterEffectiveInlierCount)
 {
     QTemporaryDir tempDir;
     ASSERT_TRUE(tempDir.isValid());
@@ -320,8 +320,10 @@ TEST(MatchResultCatalogTest, PrefersExplicitZeroInlierStatsOverMissingStats)
     EXPECT_TRUE(sawExplicitStats);
 
     const xjw::pipeline::MatchVariant &best = group.variants.at(group.bestVariantIndex);
-    EXPECT_EQ(best.matchFilePath, QFileInfo(explicitZeroPath).absoluteFilePath());
-    EXPECT_TRUE(best.hasInlierStats);
+    EXPECT_EQ(best.matchFilePath, QFileInfo(missingStatsPath).absoluteFilePath());
+    EXPECT_FALSE(best.hasInlierStats);
+    EXPECT_EQ(best.geometricVerifiedInliers, 0);
+    EXPECT_EQ(best.totalMatches, 500);
 }
 
 TEST(MatchResultCatalogTest, CanonicalPairKeyIsStableForReversedOrdering)
