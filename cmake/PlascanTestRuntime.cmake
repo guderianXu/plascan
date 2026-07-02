@@ -25,6 +25,10 @@ function(plascan_get_windows_test_runtime_path out_var)
                 AND EXISTS "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/bin")
             list(APPEND runtime_dirs "$ENV{VCPKG_INSTALLED_DIR}/x64-windows/bin")
         endif()
+
+        if(EXISTS "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
+            list(APPEND runtime_dirs "${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")
+        endif()
     endif()
 
     list(REMOVE_DUPLICATES runtime_dirs)
@@ -42,10 +46,11 @@ function(plascan_gtest_discover_tests target_name)
                 "PATH=path_list_prepend:${_plascan_runtime_dir}")
         endforeach()
 
-        gtest_discover_tests(${target_name}
-            PROPERTIES
-                ENVIRONMENT_MODIFICATION "${_plascan_environment_modifications}")
+        add_test(NAME ${target_name} COMMAND ${target_name})
+        set_tests_properties(${target_name} PROPERTIES
+            ENVIRONMENT_MODIFICATION "${_plascan_environment_modifications}")
     else()
-        gtest_discover_tests(${target_name})
+        gtest_discover_tests(${target_name}
+            DISCOVERY_MODE PRE_TEST)
     endif()
 endfunction()

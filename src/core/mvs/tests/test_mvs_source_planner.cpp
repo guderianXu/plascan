@@ -168,6 +168,42 @@ TEST(MvsSourcePlanner, ProductionGateRejectsKnownOverlapWithoutGeometryEvidence)
     EXPECT_NE(rejectedWeakOverlap, plan.rejected.end());
 }
 
+TEST(MvsSourcePlanner, RejectsProjectedOverlapWithoutVerifiedPairGeometryWhenRequired)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 9;
+    options.maxSources = 2;
+    options.minSharedTracks = 20;
+    options.minGeometricInliers = 20;
+    options.allowWeakKnownOverlap = false;
+    options.allowSequenceFallback = false;
+    options.requireVerifiedPairGeometry = true;
+
+    MvsSourceCandidate projectedOnly = candidate(2, 1500, 0, 9.0f, 0.90f, 0.45f, true);
+    projectedOnly.verifiedPairGeometry = false;
+
+    MvsSourceCandidate verified = candidate(3, 120, 95, 8.0f, 0.70f, 0.40f, true);
+    verified.verifiedPairGeometry = true;
+
+    const auto plan = planMvsSourceViews({projectedOnly, verified}, options);
+
+    ASSERT_EQ(plan.selected.size(), 1u);
+    EXPECT_EQ(plan.selected[0].viewIndex, 3);
+    EXPECT_TRUE(plan.selected[0].verifiedPairGeometry);
+
+    const auto rejectedProjected = std::find_if(
+        plan.rejected.begin(),
+        plan.rejected.end(),
+        [](const auto &rejected)
+        {
+            return rejected.candidate.viewIndex == 2
+                && rejected.reason == MvsSourceRejectReason::LowQuality;
+        });
+    ASSERT_NE(rejectedProjected, plan.rejected.end());
+    EXPECT_FALSE(rejectedProjected->candidate.verifiedPairGeometry);
+}
+
 TEST(MvsSourcePlanner, PublishesNormalizedSourceQualityScore)
 {
     MvsSourcePlannerOptions options;

@@ -12,6 +12,7 @@
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
 #include "Logger.h"
+#include "MatchResultCatalog.h"
 #include "ModelWorkflowService.h"
 #include "ProjectDenseWorkflowConfig.h"
 #include "SFMService.h"
@@ -59,6 +60,77 @@
 
 namespace
 {
+
+std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QString &matchDir)
+{
+    std::vector<xjw::mvs::MvsSourcePairQuality> qualities;
+    if (matchDir.trimmed().isEmpty())
+    {
+        return qualities;
+    }
+
+    const QString matchingReportPath =
+        QDir(QDir(matchDir).filePath(QStringLiteral("..")))
+            .filePath(QStringLiteral("reports/matching_quality_report.json"));
+    QFile reportFile(matchingReportPath);
+    if (reportFile.open(QIODevice::ReadOnly))
+    {
+        const QJsonDocument document = QJsonDocument::fromJson(reportFile.readAll());
+        const QJsonObject root = document.object();
+        const QJsonArray samples = root.value(QStringLiteral("pair_samples")).toArray();
+        qualities.reserve(static_cast<size_t>(samples.size()));
+        for (const QJsonValue &value : samples)
+        {
+            const QJsonObject sample = value.toObject();
+            if (sample.value(QStringLiteral("status")).toString() != QStringLiteral("matched"))
+            {
+                continue;
+            }
+
+            const int inliers = sample.value(QStringLiteral("geometric_inlier_count")).toInt();
+            if (inliers <= 0)
+            {
+                continue;
+            }
+
+            xjw::mvs::MvsSourcePairQuality quality;
+            quality.imageA = sample.value(QStringLiteral("image_a")).toString().toStdString();
+            quality.imageB = sample.value(QStringLiteral("image_b")).toString().toStdString();
+            quality.totalMatches = std::max(0, sample.value(QStringLiteral("match_count")).toInt());
+            quality.geometricInliers = inliers;
+            quality.verified = true;
+            qualities.push_back(std::move(quality));
+        }
+    }
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = matchDir;
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+    qualities.reserve(static_cast<size_t>(summary.pairGroups.size()));
+    for (const xjw::pipeline::MatchPairGroup &group : summary.pairGroups)
+    {
+        if (group.bestVariantIndex < 0 || group.bestVariantIndex >= group.variants.size())
+        {
+            continue;
+        }
+
+        const xjw::pipeline::MatchVariant &variant = group.variants.at(group.bestVariantIndex);
+        if (!variant.compatible || !variant.hasInlierStats || variant.geometricVerifiedInliers <= 0)
+        {
+            continue;
+        }
+
+        xjw::mvs::MvsSourcePairQuality quality;
+        quality.imageA = variant.imageA.toStdString();
+        quality.imageB = variant.imageB.toStdString();
+        quality.totalMatches = std::max(0, variant.totalMatches);
+        quality.geometricInliers = std::max(0, variant.geometricVerifiedInliers);
+        quality.verified = true;
+        qualities.push_back(std::move(quality));
+    }
+    return qualities;
+}
 
 int registerCliConsoleLogger()
 {
@@ -2168,6 +2240,16 @@ int main(int argc, char *argv[])
     depthConfig.runFusion = false;
     depthConfig.saveIntermediateDepthMaps = true;
     depthConfig.intermediateDir = mvsDir.toStdString();
+    depthConfig.sourcePairQualities =
+        loadMvsSourcePairQualities(QDir(outputDir).filePath(QStringLiteral("assets/matches")));
+    depthConfig.requireVerifiedSourcePairs = !depthConfig.sourcePairQualities.empty();
+    if (depthConfig.requireVerifiedSourcePairs)
+    {
+        std::fprintf(stdout,
+                     "  [MVS] source pair quality entries=%zu\n",
+                     depthConfig.sourcePairQualities.size());
+        std::fflush(stdout);
+    }
 
     xjw::mvs::DepthMapGenerator generator;
     generator.setViews(views);

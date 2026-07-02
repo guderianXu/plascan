@@ -61,8 +61,10 @@ set(GUI_SOURCES
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
   widgets/DataTreeWidget.ui
+  widgets/PhotoStripWidget.cpp
   widgets/ProjectDashboardWidget.cpp
   widgets/ReferencePanelWidget.cpp
+  widgets/SelectionPropertiesWidget.cpp
   widgets/WindowPanel.cpp
   widgets/WindowPanel.ui
   widgets/ImageViewWidget.cpp
@@ -92,6 +94,8 @@ set(GUI_SOURCES
   dialogs/ForwardIntersectionCheckDialog.cpp
   dialogs/ForwardIntersectionResultsDialog.cpp
   dialogs/DenseCloudDialog.cpp
+  dialogs/AerialTriangulationDialog.cpp
+  dialogs/AerialTriangulationDialog.ui
   dialogs/ThreeDReconstructionDialog.cpp
   dialogs/ThreeDReconstructionDialog.ui
   dialogs/SparseCloudPostProcessDialog.cpp
@@ -179,8 +183,10 @@ set(GUI_HEADERS
   views/LayerStitchedDebug.h
   widgets/CanvasWidget.h
   widgets/DataTreeWidget.h
+  widgets/PhotoStripWidget.h
   widgets/ProjectDashboardWidget.h
   widgets/ReferencePanelWidget.h
+  widgets/SelectionPropertiesWidget.h
   widgets/WindowPanel.h
   widgets/ImageViewWidget.h
   widgets/MatchLineOverlay.h
@@ -205,6 +211,7 @@ set(GUI_HEADERS
   dialogs/ForwardIntersectionCheckDialog.h
   dialogs/ForwardIntersectionResultsDialog.h
   dialogs/DenseCloudDialog.h
+  dialogs/AerialTriangulationDialog.h
   dialogs/ThreeDReconstructionDialog.h
   dialogs/SparseCloudPostProcessDialog.h
   dialogs/WorkflowReportDialog.h
@@ -282,6 +289,8 @@ set(GUI_DIALOG_SOURCES
   dialogs/ForwardIntersectionCheckDialog.cpp
   dialogs/ForwardIntersectionResultsDialog.cpp
   dialogs/DenseCloudDialog.cpp
+  dialogs/AerialTriangulationDialog.cpp
+  dialogs/AerialTriangulationDialog.ui
   dialogs/ThreeDReconstructionDialog.cpp
   dialogs/ThreeDReconstructionDialog.ui
   dialogs/SparseCloudPostProcessDialog.cpp

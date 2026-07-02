@@ -4,6 +4,7 @@
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "SFMService.h"
+#include "MatchResultCatalog.h"
 #include "ReconstructionPrerequisiteReport.h"
 #include "Logger.h"
 #include "project/SparseResultQuality.h"
@@ -17,6 +18,7 @@
 #include "MainWindow.h"
 #include "MainMenu.h"
 #include "MatchPairSelectorDialog.h"
+#include "AerialTriangulationDialog.h"
 #include "ThreeDReconstructionDialog.h"
 #include "OverlapAnalysisDialog.h"
 #include "CreateDemDialog.h"
@@ -30,6 +32,7 @@
 #include <QColor>
 #include <QDateTime>
 #include <QDebug>
+#include <QDialog>
 #include <QDir>
 #include <QFile>
 #include <QFileDialog>
@@ -278,6 +281,8 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
 
     connectAction(mainMenu->detectFeaturesAction(), &MenuWorkflowController::openFeatureExtractionDialog);
     connectAction(mainMenu->vocabularyOverlapAction(), &MenuWorkflowController::openVocabularyOverlapDialog);
+    connectAction(mainMenu->workflowAerialTriangulationAction(),
+                  &MenuWorkflowController::openWorkflowAerialTriangulationDialog);
     connectAction(mainMenu->aerialTriangulationAction(), &MenuWorkflowController::openAerialTriangulationDialog);
     connectAction(mainMenu->featureVisualizationAction(), &MenuWorkflowController::openFeaturePointVisualizationDialog);
     connectAction(mainMenu->threeDReconstructionAction(), &MenuWorkflowController::openThreeDReconstructionDialog);
@@ -333,10 +338,14 @@ QStringList MenuWorkflowController::getProjectImages() const
 MenuWorkflowController::SparsePrerequisiteSummary
 MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
                                                      const QJsonObject &meta,
-                                                     const QString &projectPath)
+                                                     const QString &projectPath,
+                                                     const QString &featureAlgorithm,
+                                                     const QString &matchAlgorithm)
 {
     SparsePrerequisiteSummary summary;
     summary.imageCount = images.size();
+    const QString selectedFeatureAlgorithm = featureAlgorithm.trimmed().toLower();
+    const QString selectedMatchAlgorithm = matchAlgorithm.trimmed().toLower();
 
     int availableFeatureCount = 0;
     for (const QString &imagePath : images)
@@ -381,9 +390,122 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
             : (right + QStringLiteral("\n") + left);
     };
 
+    auto recordAlgorithmMatches = [&](const QJsonObject &object) -> bool
+    {
+        QString recordFeatureAlgorithm =
+            object.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
+        if (recordFeatureAlgorithm.isEmpty())
+        {
+            recordFeatureAlgorithm = object.value(QStringLiteral("settings")).toObject()
+                                         .value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
+        }
+
+        QString recordMatchAlgorithm =
+            object.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+        if (recordMatchAlgorithm.isEmpty())
+        {
+            recordMatchAlgorithm = object.value(QStringLiteral("settings")).toObject()
+                                      .value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+        }
+
+        if (!selectedFeatureAlgorithm.isEmpty() && recordFeatureAlgorithm != selectedFeatureAlgorithm)
+        {
+            return false;
+        }
+        if (!selectedMatchAlgorithm.isEmpty() && recordMatchAlgorithm != selectedMatchAlgorithm)
+        {
+            return false;
+        }
+        return true;
+    };
+
+    auto variantAlgorithmMatches = [&](const xjw::pipeline::MatchVariant &variant) -> bool
+    {
+        if (!variant.compatible)
+        {
+            return false;
+        }
+        if (!selectedFeatureAlgorithm.isEmpty() &&
+            variant.featureAlgorithm.trimmed().toLower() != selectedFeatureAlgorithm)
+        {
+            return false;
+        }
+        if (!selectedMatchAlgorithm.isEmpty() &&
+            variant.matchAlgorithm.trimmed().toLower() != selectedMatchAlgorithm)
+        {
+            return false;
+        }
+        return true;
+    };
+
     QSet<QString> matchedPairKeys;
-    const QVector<QPair<QString, QString>> matchedPairs =
-        xjw::gui::project::collectMatchedImageNamePairs(projectPath, meta);
+    QVector<QPair<QString, QString>> matchedPairs;
+
+    auto appendPreflightPair = [&](const QString &leftToken, const QString &rightToken)
+    {
+        const QStringList leftAliases = nameAliases(leftToken);
+        const QStringList rightAliases = nameAliases(rightToken);
+        for (const QString &left : leftAliases)
+        {
+            for (const QString &right : rightAliases)
+            {
+                const QString key = matchPairKey(left, right);
+                if (!key.isEmpty() && !matchedPairKeys.contains(key))
+                {
+                    matchedPairKeys.insert(key);
+                    matchedPairs.append(qMakePair(leftToken, rightToken));
+                    return;
+                }
+            }
+        }
+    };
+
+    if (!projectPath.isEmpty())
+    {
+        xjw::pipeline::MatchResultCatalogConfig catalogConfig;
+        catalogConfig.matchDirectory = ProjectIO::ipmatchOutputDir(projectPath);
+        const xjw::pipeline::MatchResultCatalogSummary catalogSummary =
+            xjw::pipeline::MatchResultCatalog(catalogConfig).scan();
+        for (const xjw::pipeline::MatchPairGroup &group : catalogSummary.pairGroups)
+        {
+            for (const xjw::pipeline::MatchVariant &variant : group.variants)
+            {
+                if (!variantAlgorithmMatches(variant))
+                {
+                    continue;
+                }
+
+                appendPreflightPair(variant.imageA.isEmpty() ? group.imageA : variant.imageA,
+                                    variant.imageB.isEmpty() ? group.imageB : variant.imageB);
+                break;
+            }
+        }
+    }
+
+    const QJsonArray ipmatchResults = meta.value(QStringLiteral("ipmatch_results")).toArray();
+    for (const QJsonValue &resultValue : ipmatchResults)
+    {
+        const QJsonObject resultObject = resultValue.toObject();
+        if (!recordAlgorithmMatches(resultObject))
+        {
+            continue;
+        }
+
+        QString image0Name = resultObject.value(QStringLiteral("image0_name")).toString();
+        QString image1Name = resultObject.value(QStringLiteral("image1_name")).toString();
+
+        if (image0Name.isEmpty())
+        {
+            image0Name = QFileInfo(resultObject.value(QStringLiteral("image0")).toString()).completeBaseName();
+        }
+        if (image1Name.isEmpty())
+        {
+            image1Name = QFileInfo(resultObject.value(QStringLiteral("image1")).toString()).completeBaseName();
+        }
+
+        appendPreflightPair(image0Name, image1Name);
+    }
+
     for (const auto &pair : matchedPairs)
     {
         const QStringList leftAliases = nameAliases(pair.first);
@@ -402,8 +524,47 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     }
 
     QSet<QString> processedPairKeys = matchedPairKeys;
-    const QVector<QPair<QString, QString>> settledNoMatchPairs =
-        xjw::gui::project::collectSettledNoMatchImageNamePairs(projectPath, meta);
+    QVector<QPair<QString, QString>> settledNoMatchPairs;
+    QSet<QString> settledNoMatchKeys;
+    auto appendSettledNoMatchPair = [&](const QString &leftToken, const QString &rightToken)
+    {
+        const QStringList leftAliases = nameAliases(leftToken);
+        const QStringList rightAliases = nameAliases(rightToken);
+        for (const QString &left : leftAliases)
+        {
+            for (const QString &right : rightAliases)
+            {
+                const QString key = matchPairKey(left, right);
+                if (!key.isEmpty() && !settledNoMatchKeys.contains(key))
+                {
+                    settledNoMatchKeys.insert(key);
+                    settledNoMatchPairs.append(qMakePair(leftToken, rightToken));
+                    return;
+                }
+            }
+        }
+    };
+
+    if (!projectPath.isEmpty())
+    {
+        QFile noMatchFile(QDir(ProjectIO::ipmatchOutputDir(projectPath))
+                              .filePath(QStringLiteral("no_match_pairs.json")));
+        if (noMatchFile.open(QIODevice::ReadOnly))
+        {
+            const QJsonArray records = QJsonDocument::fromJson(noMatchFile.readAll()).array();
+            for (const QJsonValue &value : records)
+            {
+                const QJsonObject object = value.toObject();
+                if (!recordAlgorithmMatches(object))
+                {
+                    continue;
+                }
+                appendSettledNoMatchPair(object.value(QStringLiteral("image0")).toString(),
+                                         object.value(QStringLiteral("image1")).toString());
+            }
+        }
+    }
+
     for (const auto &pair : settledNoMatchPairs)
     {
         const QStringList leftAliases = nameAliases(pair.first);
@@ -1168,13 +1329,15 @@ void MenuWorkflowController::openAerialTriangulationDialog()
         dlg->applySettings(_aerialTriangulationSetting->load());
     }
 
-    connect(dlg, &ThreeDReconstructionDialog::settingsChanged, this, [this](const QJsonObject &settings) {
+    connect(dlg, &ThreeDReconstructionDialog::settingsChanged, this, [this](const QJsonObject &settings)
+    {
         if (_aerialTriangulationSetting)
         {
             _aerialTriangulationSetting->save(settings);
         }
     });
-    connect(dlg, &ThreeDReconstructionDialog::runRequested, this, [this](const QJsonObject &settings) {
+    connect(dlg, &ThreeDReconstructionDialog::runRequested, this, [this](const QJsonObject &settings)
+    {
         if (_aerialTriangulationSetting)
         {
             _aerialTriangulationSetting->save(settings);
@@ -1183,6 +1346,43 @@ void MenuWorkflowController::openAerialTriangulationDialog()
     }, Qt::QueuedConnection);
 
     dlg->exec();
+}
+
+void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
+{
+    if (!_mainWindow)
+    {
+        return;
+    }
+
+    AerialTriangulationDialog dlg(_mainWindow);
+
+    const QStringList images = getProjectImages();
+    dlg.setImageCount(images.size());
+
+    if (!_aerialTriangulationSetting)
+    {
+        _aerialTriangulationSetting = new DialogSettingStore(DialogSettingKeys::AerialTriangulation, this);
+    }
+
+    if (_projectManager)
+    {
+        const QString projectPath = _projectManager->currentProjectPath();
+        _aerialTriangulationSetting->setProjectPath(projectPath);
+        dlg.applySettings(_aerialTriangulationSetting->load());
+    }
+
+    connect(&dlg, &AerialTriangulationDialog::settingsChanged, this, [this](const QJsonObject &settings) {
+        if (_aerialTriangulationSetting)
+        {
+            _aerialTriangulationSetting->save(settings);
+        }
+    });
+
+    if (dlg.exec() == QDialog::Accepted && _aerialTriangulationSetting)
+    {
+        _aerialTriangulationSetting->save(dlg.collectSettings());
+    }
 }
 
 void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject &settings)
@@ -1216,15 +1416,23 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
 
     QJsonObject runSettings = settings;
     runSettings[QStringLiteral("output_dir")] = outputRoot;
+    const QString selectedFeatureAlgorithm =
+        runSettings.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("disk"));
+    const QString selectedMatchAlgorithm =
+        runSettings.value(QStringLiteral("match_algorithm")).toString(QStringLiteral("lightglue"));
 
     emit pm->atProgressChanged(QStringLiteral("空中三角测量: 检查上游数据..."), 0);
 
     QPointer<ProjectManager> pmGuard(pm);
     xjw::gui::tasks::runGuarded(
         this,
-        [images, projectMeta, projectPath]()
+        [images, projectMeta, projectPath, selectedFeatureAlgorithm, selectedMatchAlgorithm]()
         {
-            return MenuWorkflowController::summarizeSparsePrerequisites(images, projectMeta, projectPath);
+            return MenuWorkflowController::summarizeSparsePrerequisites(images,
+                                                                        projectMeta,
+                                                                        projectPath,
+                                                                        selectedFeatureAlgorithm,
+                                                                        selectedMatchAlgorithm);
         },
         [pmGuard, runSettings, images, projectPath, projectMeta, outputRoot](
             MenuWorkflowController *controller, const SparsePrerequisiteSummary &prereq)
@@ -1311,6 +1519,14 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
     const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
     opts.threads = workflowThreads;
     opts.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
+    opts.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
+                                 .toString(QStringLiteral("disk"))
+                                 .trimmed()
+                                 .toLower();
+    opts.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
+                              .toString(QStringLiteral("lightglue"))
+                              .trimmed()
+                              .toLower();
     opts.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
     opts.featureGrayscaleMax = 1.0f;
     opts.cudaParallelPairs = opts.device == QStringLiteral("cpu")
@@ -1556,6 +1772,14 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
     opts.threads = workflowThreads;
     opts.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
+    opts.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
+                                 .toString(QStringLiteral("disk"))
+                                 .trimmed()
+                                 .toLower();
+    opts.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
+                              .toString(QStringLiteral("lightglue"))
+                              .trimmed()
+                              .toLower();
     opts.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
     opts.featureGrayscaleMax = 1.0f;
     opts.cudaParallelPairs = opts.device == QStringLiteral("cpu")

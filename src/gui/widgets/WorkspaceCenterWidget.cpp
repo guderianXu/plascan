@@ -247,6 +247,22 @@ void WorkspaceCenterWidget::showPointCloudFile(const QString &pointCloudPath)
     }
 }
 
+void WorkspaceCenterWidget::highlightCameraForImage(const QString &imagePath)
+{
+    if (_modelView)
+    {
+        _modelView->setHighlightedCameraPath(imagePath);
+    }
+}
+
+void WorkspaceCenterWidget::clearHighlightedCamera()
+{
+    if (_modelView)
+    {
+        _modelView->clearHighlightedCamera();
+    }
+}
+
 void WorkspaceCenterWidget::showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title)
 {
     if (!_stack || !_obsNetView || !_obsNetBtn)
@@ -300,7 +316,15 @@ void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
         const std::array<double, 9> cameraToWorldRotation = camera.cameraToWorldRotation();
 
         CameraSceneWidget::CameraPose pose;
-        pose.name = QFileInfo(imageObject.value(QStringLiteral("path")).toString()).fileName();
+        pose.imagePath = imageObject.value(QStringLiteral("path")).toString();
+        if (pose.imagePath.isEmpty())
+        {
+            pose.imagePath = imageObject.value(QStringLiteral("image_path")).toString();
+        }
+        const QString labelPath = pose.imagePath.isEmpty()
+            ? imageObject.value(QStringLiteral("path")).toString()
+            : pose.imagePath;
+        pose.name = QFileInfo(labelPath).fileName();
         pose.center = QVector3D(
             float(cameraCenter[0]),
             float(cameraCenter[1]),

@@ -58,6 +58,7 @@ public:
     MatchResultCatalogSummary scan() const;
 
     static QString canonicalPairKey(const QString &imageA, const QString &imageB);
+    static QString algorithmDisplayLabel(const MatchVariant &variant);
     static int readSgmtMatchCount(const QString &path);
 
 private:

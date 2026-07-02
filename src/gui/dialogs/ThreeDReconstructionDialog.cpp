@@ -18,6 +18,13 @@ namespace
 
 constexpr int kDefaultFeatureGrayscaleMinPx = 5;
 
+QString matchPipelineKey(const QString &featureAlgorithm, const QString &matchAlgorithm)
+{
+    return QStringLiteral("%1|%2")
+        .arg(featureAlgorithm.trimmed().toLower(),
+             matchAlgorithm.trimmed().toLower());
+}
+
 double grayscalePixelToNormalized(int value)
 {
     return static_cast<double>(qBound(0, value, 255)) / 255.0;
@@ -62,6 +69,8 @@ void ThreeDReconstructionDialog::setupUi()
     _statusLabel = form.m_statusLabel;
     _qualityCombo = form.m_qualityCombo;
     _deviceCombo = form.m_deviceCombo;
+    _matchPipelineLabel = form.m_matchPipelineLabel;
+    _matchPipelineCombo = form.m_matchPipelineCombo;
     _featureGrayMinSpin = form.m_featureGrayMinSpin;
     _threadsSpin = form.m_threadsSpin;
     _outputDirEdit = form.m_outputDirEdit;
@@ -69,6 +78,7 @@ void ThreeDReconstructionDialog::setupUi()
     _browseBtn = form.m_browseBtn;
     _startBtn = form.m_startBtn;
     _cancelBtn = form.m_cancelBtn;
+    _matchPipelineLabel->setText(QStringLiteral("特征点-匹配算法:"));
     _exportObjCheck->setChecked(true);
 
     _qualityCombo->setItemData(0, QStringLiteral("standard"));
@@ -77,6 +87,16 @@ void ThreeDReconstructionDialog::setupUi()
     _deviceCombo->setItemData(0, QStringLiteral("auto"));
     _deviceCombo->setItemData(1, QStringLiteral("cuda"));
     _deviceCombo->setItemData(2, QStringLiteral("cpu"));
+    _matchPipelineCombo->addItem(QStringLiteral("disk-lightglue"),
+                                 matchPipelineKey(QStringLiteral("disk"), QStringLiteral("lightglue")));
+    _matchPipelineCombo->addItem(QStringLiteral("aliked-lightglue"),
+                                 matchPipelineKey(QStringLiteral("aliked"), QStringLiteral("lightglue")));
+    _matchPipelineCombo->addItem(QStringLiteral("sift-lightglue"),
+                                 matchPipelineKey(QStringLiteral("sift"), QStringLiteral("lightglue")));
+    _matchPipelineCombo->addItem(QStringLiteral("sift-bf-l2"),
+                                 matchPipelineKey(QStringLiteral("sift"), QStringLiteral("sift_bf_l2")));
+    _matchPipelineCombo->addItem(QStringLiteral("sift-flann"),
+                                 matchPipelineKey(QStringLiteral("sift"), QStringLiteral("sift_flann")));
     _threadsSpin->setValue(qMax(1, QThread::idealThreadCount()));
 
     connect(_browseBtn, &QPushButton::clicked, this, &ThreeDReconstructionDialog::browseOutputDir);
@@ -87,6 +107,8 @@ void ThreeDReconstructionDialog::setupUi()
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
     connect(_deviceCombo, qOverload<int>(&QComboBox::currentIndexChanged),
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
+    connect(_matchPipelineCombo, qOverload<int>(&QComboBox::currentIndexChanged),
+            this, &ThreeDReconstructionDialog::emitSettingsChanged);
     connect(_featureGrayMinSpin, qOverload<int>(&QSpinBox::valueChanged),
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
     connect(_threadsSpin, qOverload<int>(&QSpinBox::valueChanged),
@@ -95,6 +117,8 @@ void ThreeDReconstructionDialog::setupUi()
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
     connect(_exportObjCheck, &QCheckBox::toggled,
             this, &ThreeDReconstructionDialog::emitSettingsChanged);
+
+    setMode(_mode);
 }
 
 void ThreeDReconstructionDialog::setMode(Mode mode)
@@ -112,6 +136,14 @@ void ThreeDReconstructionDialog::setMode(Mode mode)
             _exportObjCheck->setChecked(false);
             _exportObjCheck->setVisible(false);
         }
+        if (_matchPipelineLabel)
+        {
+            _matchPipelineLabel->setVisible(true);
+        }
+        if (_matchPipelineCombo)
+        {
+            _matchPipelineCombo->setVisible(true);
+        }
         if (_startBtn)
         {
             _startBtn->setText(QStringLiteral("开始空三"));
@@ -128,6 +160,14 @@ void ThreeDReconstructionDialog::setMode(Mode mode)
     {
         _exportObjCheck->setChecked(true);
         _exportObjCheck->setVisible(true);
+    }
+    if (_matchPipelineLabel)
+    {
+        _matchPipelineLabel->setVisible(false);
+    }
+    if (_matchPipelineCombo)
+    {
+        _matchPipelineCombo->setVisible(false);
     }
     if (_startBtn)
     {
@@ -174,6 +214,15 @@ void ThreeDReconstructionDialog::applySettings(const QJsonObject &settings)
     {
         _threadsSpin->setValue(settings.value(QStringLiteral("threads")).toInt(_threadsSpin->value()));
     }
+    const QString featureAlgorithm =
+        settings.value(QStringLiteral("feature_algorithm")).toString(QStringLiteral("disk")).trimmed().toLower();
+    const QString matchAlgorithm =
+        settings.value(QStringLiteral("match_algorithm")).toString(QStringLiteral("lightglue")).trimmed().toLower();
+    const int matchPipelineIndex = _matchPipelineCombo->findData(matchPipelineKey(featureAlgorithm, matchAlgorithm));
+    if (matchPipelineIndex >= 0)
+    {
+        _matchPipelineCombo->setCurrentIndex(matchPipelineIndex);
+    }
     _featureGrayMinSpin->setValue(grayscaleSettingToPixel(settings,
                                                           QStringLiteral("feature_grayscale_min_px"),
                                                           QStringLiteral("feature_grayscale_min"),
@@ -200,6 +249,16 @@ QJsonObject ThreeDReconstructionDialog::collectSettings() const
     }
     settings[QStringLiteral("quality")] = quality;
     settings[QStringLiteral("device")] = device;
+    QString matchPipeline = _matchPipelineCombo->currentData().toString();
+    if (matchPipeline.isEmpty())
+    {
+        matchPipeline = matchPipelineKey(QStringLiteral("disk"), QStringLiteral("lightglue"));
+    }
+    const QStringList matchPipelineParts = matchPipeline.split(QChar('|'));
+    settings[QStringLiteral("feature_algorithm")] =
+        matchPipelineParts.value(0, QStringLiteral("disk")).trimmed().toLower();
+    settings[QStringLiteral("match_algorithm")] =
+        matchPipelineParts.value(1, QStringLiteral("lightglue")).trimmed().toLower();
     const int featureGrayscaleMinPx = qBound(0, _featureGrayMinSpin->value(), 255);
     settings[QStringLiteral("feature_grayscale_min_px")] = featureGrayscaleMinPx;
     settings[QStringLiteral("feature_grayscale_min")] = grayscalePixelToNormalized(featureGrayscaleMinPx);

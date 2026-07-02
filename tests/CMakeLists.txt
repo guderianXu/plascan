@@ -211,6 +211,23 @@ target_include_directories(test_match_result_catalog PRIVATE
 )
 gtest_discover_tests(test_match_result_catalog)
 
+add_executable(test_lightglue_feature_budget
+    test_lightglue_feature_budget.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/feature_match/match.cpp
+)
+target_link_libraries(test_lightglue_feature_budget PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+    ${TORCH_LIBRARIES}
+    ${OpenCV_LIBS}
+)
+target_include_directories(test_lightglue_feature_budget PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+)
+gtest_discover_tests(test_lightglue_feature_budget)
+
 add_executable(test_guided_rematch_service
     test_guided_rematch_service.cpp
     ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp
@@ -457,6 +474,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureMatchingDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/InitCameraPoseDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/AerialTriangulationDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/AerialTriangulationDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThreeDReconstructionDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SparseCloudPostProcessDialog.cpp

@@ -33,6 +33,7 @@
 #include <functional>
 #include <limits>
 #include <fstream>
+#include <unordered_map>
 #ifdef _WIN32
 #ifndef NOMINMAX
 #define NOMINMAX
@@ -80,6 +81,79 @@ struct SystemMemorySnapshot
     uint64_t availablePhysicalBytes = 0;
     bool valid = false;
 };
+
+QString normalizedMvsPathKey(const std::string &path)
+{
+    const QString rawPath = QString::fromStdString(path).trimmed();
+    if (rawPath.isEmpty())
+    {
+        return QString();
+    }
+
+    const QFileInfo info(rawPath);
+    QString absolutePath = info.exists() ? info.canonicalFilePath() : info.absoluteFilePath();
+    if (absolutePath.isEmpty())
+    {
+        absolutePath = rawPath;
+    }
+
+    return QDir::cleanPath(absolutePath).replace(QLatin1Char('\\'), QLatin1Char('/')).toCaseFolded();
+}
+
+std::string mvsSourcePairKey(const std::string &imageA, const std::string &imageB)
+{
+    const QString keyA = normalizedMvsPathKey(imageA);
+    const QString keyB = normalizedMvsPathKey(imageB);
+    if (keyA.isEmpty() || keyB.isEmpty() || keyA == keyB)
+    {
+        return std::string();
+    }
+
+    const QString pairKey = keyA < keyB
+        ? keyA + QLatin1Char('\n') + keyB
+        : keyB + QLatin1Char('\n') + keyA;
+    return pairKey.toStdString();
+}
+
+struct MvsSourcePairQualityLookup
+{
+    std::unordered_map<std::string, MvsSourcePairQuality> qualitiesByPairKey;
+
+    const MvsSourcePairQuality *find(const std::string &imageA,
+                                     const std::string &imageB) const
+    {
+        const std::string key = mvsSourcePairKey(imageA, imageB);
+        if (key.empty())
+        {
+            return nullptr;
+        }
+
+        const auto it = qualitiesByPairKey.find(key);
+        return it == qualitiesByPairKey.end() ? nullptr : &it->second;
+    }
+};
+
+MvsSourcePairQualityLookup buildMvsSourcePairQualityLookup(const DepthGenConfig &config)
+{
+    MvsSourcePairQualityLookup lookup;
+    lookup.qualitiesByPairKey.reserve(config.sourcePairQualities.size());
+    for (const MvsSourcePairQuality &quality : config.sourcePairQualities)
+    {
+        const std::string key = mvsSourcePairKey(quality.imageA, quality.imageB);
+        if (key.empty())
+        {
+            continue;
+        }
+
+        auto it = lookup.qualitiesByPairKey.find(key);
+        if (it == lookup.qualitiesByPairKey.end()
+            || quality.geometricInliers > it->second.geometricInliers)
+        {
+            lookup.qualitiesByPairKey[key] = quality;
+        }
+    }
+    return lookup;
+}
 
 struct SourceQualitySummary
 {
@@ -1381,6 +1455,10 @@ void DepthMapGenerator::prepareFrameCaches()
     buildVisibilityBitsFromFrameCaches();
 
     _frameCachesReady = true;
+    const MvsSourcePairQualityLookup pairQualityLookup = buildMvsSourcePairQualityLookup(_config);
+    const bool hasSourcePairQuality = !pairQualityLookup.qualitiesByPairKey.empty();
+    const bool requireVerifiedSourcePairs = _config.requireVerifiedSourcePairs && hasSourcePairQuality;
+    const int minVerifiedPairInliers = std::max(1, _config.minSourcePairGeometricInliers);
 
     auto sampledMedianAngle = [this, NV](int refIdx, int sourceIdx) -> float
     {
@@ -1430,7 +1508,14 @@ void DepthMapGenerator::prepareFrameCaches()
         plannerOptions.rejectAngleOutliers = true;
         plannerOptions.minTriangulationAngleDeg = 0.2f;
         plannerOptions.maxTriangulationAngleDeg = 70.0f;
-        if (_config.numSourceViews >= 5 && _config.fusion.minConsistentViews >= 3)
+        if (requireVerifiedSourcePairs)
+        {
+            plannerOptions.minGeometricInliers = minVerifiedPairInliers;
+            plannerOptions.allowWeakKnownOverlap = false;
+            plannerOptions.requireVerifiedPairGeometry = true;
+            plannerOptions.allowSequenceFallback = false;
+        }
+        else if (_config.numSourceViews >= 5 && _config.fusion.minConsistentViews >= 3)
         {
             plannerOptions.minSharedTracks = 20;
             plannerOptions.minGeometricInliers = 20;
@@ -1496,16 +1581,30 @@ void DepthMapGenerator::prepareFrameCaches()
             MvsSourceCandidate sourceCandidate;
             sourceCandidate.viewIndex = candidate.viewIndex;
             sourceCandidate.sharedTracks = candidate.commonVisiblePoints;
-            sourceCandidate.geometricInliers = candidate.commonVisiblePoints;
+            const MvsSourcePairQuality *pairQuality = pairQualityLookup.find(
+                _views[static_cast<size_t>(refIdx)].imagePath,
+                _views[static_cast<size_t>(candidate.viewIndex)].imagePath);
+            sourceCandidate.geometricInliers = hasSourcePairQuality
+                ? (pairQuality ? std::max(0, pairQuality->geometricInliers) : 0)
+                : candidate.commonVisiblePoints;
+            sourceCandidate.verifiedPairGeometry = pairQuality
+                && pairQuality->verified
+                && pairQuality->geometricInliers > 0;
             sourceCandidate.medianTriangulationAngleDeg = medianAngle;
             sourceCandidate.coverageScore = refVisibleCount > 0
                 ? std::clamp(static_cast<float>(candidate.commonVisiblePoints) / static_cast<float>(refVisibleCount), 0.0f, 1.0f)
                 : 0.0f;
             sourceCandidate.baselineScore = std::clamp(medianAngle / 20.0f, 0.0f, 1.0f);
             sourceCandidate.sequenceDistance = candidate.sequenceDistance;
-            sourceCandidate.knownOverlap = true;
+            sourceCandidate.knownOverlap = hasSourcePairQuality
+                ? sourceCandidate.verifiedPairGeometry
+                : true;
             candidates.push_back(sourceCandidate);
-            if (medianAngle >= plannerOptions.minTriangulationAngleDeg
+            const bool hasRequiredPairQuality = !plannerOptions.requireVerifiedPairGeometry
+                || (sourceCandidate.verifiedPairGeometry
+                    && sourceCandidate.geometricInliers >= plannerOptions.minGeometricInliers);
+            if (hasRequiredPairQuality
+                && medianAngle >= plannerOptions.minTriangulationAngleDeg
                 && medianAngle <= plannerOptions.maxTriangulationAngleDeg)
             {
                 ++provenSourceCount;
@@ -1536,11 +1635,14 @@ void DepthMapGenerator::prepareFrameCaches()
 
         if (sources.empty())
         {
-            const MvsSourcePlan fallbackPlan = planMvsSourceViews({}, plannerOptions);
-            _frameCaches[static_cast<size_t>(refIdx)].sourceViewScores = fallbackPlan.selected;
-            for (const auto &entry : fallbackPlan.selected)
+            if (plannerOptions.allowSequenceFallback)
             {
-                sources.push_back(entry.viewIndex);
+                const MvsSourcePlan fallbackPlan = planMvsSourceViews({}, plannerOptions);
+                _frameCaches[static_cast<size_t>(refIdx)].sourceViewScores = fallbackPlan.selected;
+                for (const auto &entry : fallbackPlan.selected)
+                {
+                    sources.push_back(entry.viewIndex);
+                }
             }
         }
 
@@ -1577,11 +1679,8 @@ std::vector<int> DepthMapGenerator::sourceViewIndicesForFrame(int refIdx, int ma
         && maxSources > 0)
     {
         const auto &cached = _frameCaches[static_cast<size_t>(refIdx)].sourceViewIndices;
-        if (!cached.empty())
-        {
-            const int count = std::min(maxSources, static_cast<int>(cached.size()));
-            return std::vector<int>(cached.begin(), cached.begin() + count);
-        }
+        const int count = std::min(maxSources, static_cast<int>(cached.size()));
+        return std::vector<int>(cached.begin(), cached.begin() + count);
     }
 
     return selectMvsSourceViewIndices(_views, _sparse, refIdx, maxSources);
@@ -2877,6 +2976,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
                 details << it->viewIndex
                         << "(tracks=" << it->sharedTracks
                         << ",inliers=" << it->geometricInliers
+                        << ",verified_pair=" << (it->verifiedPairGeometry ? 1 : 0)
                         << ",angle=" << it->medianTriangulationAngleDeg
                         << ",coverage=" << it->coverageScore
                         << ",score=" << it->score << ")";

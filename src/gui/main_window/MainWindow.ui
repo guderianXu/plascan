@@ -135,6 +135,7 @@
     <addaction name="actionAddPhoto"/>
     <addaction name="actionAddFolder"/>
     <addaction name="separator"/>
+    <addaction name="actionWorkflowAerialTriangulation"/>
     <addaction name="actionThreeDReconstruction"/>
     <addaction name="actionCreateDEM"/>
     <addaction name="actionGenerateOrtho"/>
@@ -248,6 +249,7 @@
    <addaction name="actionAddPhoto"/>
    <addaction name="actionAddFolder"/>
    <addaction name="separator"/>
+   <addaction name="actionWorkflowAerialTriangulation"/>
    <addaction name="actionThreeDReconstruction"/>
    <addaction name="actionCreateDEM"/>
    <addaction name="actionGenerateOrtho"/>
@@ -388,6 +390,14 @@
    </property>
    <property name="toolTip">
     <string>执行从特征、匹配、空三到模型生成的一键重建流程</string>
+   </property>
+  </action>
+  <action name="actionWorkflowAerialTriangulation">
+   <property name="text">
+    <string>空中三角测量...</string>
+   </property>
+   <property name="toolTip">
+    <string>打开对齐照片参数对话框</string>
    </property>
   </action>
   <action name="actionCreateDEM">

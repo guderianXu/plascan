@@ -30,6 +30,7 @@ struct MvsSourceCandidate
     float baselineScore = 0.0f;
     int sequenceDistance = 0;
     bool knownOverlap = false;
+    bool verifiedPairGeometry = false;
 };
 
 struct MvsSourcePlanEntry
@@ -42,6 +43,7 @@ struct MvsSourcePlanEntry
     float baselineScore = 0.0f;
     int sequenceDistance = 0;
     bool knownOverlap = false;
+    bool verifiedPairGeometry = false;
     bool sequenceFallback = false;
     float score = 0.0f;
     float sourceQualityScore = 0.0f;
@@ -68,6 +70,7 @@ struct MvsSourcePlannerOptions
     int minGeometricInliers = 0;
     float minSourceQualityScore = 0.0f;
     bool allowWeakKnownOverlap = true;
+    bool requireVerifiedPairGeometry = false;
 };
 
 struct MvsSourcePlan

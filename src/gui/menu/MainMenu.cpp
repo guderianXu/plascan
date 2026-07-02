@@ -30,6 +30,40 @@ T *findNamedChild(QObject *root, const char *name)
     return root ? root->findChild<T *>(QString::fromLatin1(name)) : nullptr;
 }
 
+QAction *ensureCheckableAction(QObject *root,
+                               QObject *actionParent,
+                               QMenu *menu,
+                               const QString &objectName,
+                               const QString &text,
+                               bool checked,
+                               QAction *before = nullptr)
+{
+    auto *action = root ? root->findChild<QAction *>(objectName) : nullptr;
+    if (!action)
+    {
+        action = new QAction(text, actionParent);
+        action->setObjectName(objectName);
+    }
+
+    action->setText(text);
+    action->setCheckable(true);
+    action->setChecked(checked);
+
+    if (menu && !menu->actions().contains(action))
+    {
+        if (before)
+        {
+            menu->insertAction(before, action);
+        }
+        else
+        {
+            menu->addAction(action);
+        }
+    }
+
+    return action;
+}
+
 } // namespace
 
 // ============================================================
@@ -60,6 +94,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _recentMenu = findNamedChild<QMenu>(_mainWindow, "menuRecentProjects");
         auto *viewMenu = findNamedChild<QMenu>(_mainWindow, "menuView");
         auto *windowMenu = findNamedChild<QMenu>(_mainWindow, "menuWindow");
+        auto *workflowMenu = findNamedChild<QMenu>(_mainWindow, "menuWorkflow");
         auto *toolsMenu = findNamedChild<QMenu>(_mainWindow, "menuTools");
 
         _newAct = findNamedChild<QAction>(_mainWindow, "actionNewProject");
@@ -77,9 +112,46 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _featureVisualizationAct = findNamedChild<QAction>(_mainWindow, "actionFeatureVisualization");
         _toggleLogAct = findNamedChild<QAction>(_mainWindow, "actionToggleLog");
         _featureInfoAct = findNamedChild<QAction>(_mainWindow, "actionFeatureInfo");
+        QObject *windowActionParent = windowMenu
+            ? static_cast<QObject *>(windowMenu)
+            : static_cast<QObject *>(_mainWindow);
+        _toggleWorkspaceAct = ensureCheckableAction(_mainWindow,
+                                                    windowActionParent,
+                                                    nullptr,
+                                                    QStringLiteral("actionToggleWorkspace"),
+                                                    tr("工作区"),
+                                                    true);
+        _toggleWorkspaceAct->setToolTip(tr("显示或隐藏左侧工作区"));
+        _togglePropertiesAct = ensureCheckableAction(_mainWindow,
+                                                     windowActionParent,
+                                                     nullptr,
+                                                     QStringLiteral("actionToggleProperties"),
+                                                     tr("属性"),
+                                                     true);
+        _togglePropertiesAct->setToolTip(tr("显示或隐藏选择对象属性面板"));
+        _togglePhotosAct = ensureCheckableAction(_mainWindow,
+                                                 windowActionParent,
+                                                 nullptr,
+                                                 QStringLiteral("actionTogglePhotos"),
+                                                 tr("照片"),
+                                                 true);
+        _togglePhotosAct->setToolTip(tr("显示或隐藏底部照片面板"));
+        QObject *viewActionParent = viewMenu
+            ? static_cast<QObject *>(viewMenu)
+            : static_cast<QObject *>(_mainWindow);
+        _toggleWorldOriginAct = ensureCheckableAction(_mainWindow,
+                                                      viewActionParent,
+                                                      viewMenu,
+                                                      QStringLiteral("actionToggleWorldOrigin"),
+                                                      tr("显示世界原点"),
+                                                      true,
+                                                      _featureVisualizationAct);
+        _toggleWorldOriginAct->setToolTip(tr("显示或隐藏 3D 视图中的世界原点十字"));
 
         _addPhotoAct = findNamedChild<QAction>(_mainWindow, "actionAddPhoto");
         _addFolderAct = findNamedChild<QAction>(_mainWindow, "actionAddFolder");
+        _workflowAerialTriangulationAct =
+            findNamedChild<QAction>(_mainWindow, "actionWorkflowAerialTriangulation");
         _threeDReconstructionAct = findNamedChild<QAction>(_mainWindow, "actionThreeDReconstruction");
         _createDEMAct = findNamedChild<QAction>(_mainWindow, "actionCreateDEM");
         _generateOrthoAct = findNamedChild<QAction>(_mainWindow, "actionGenerateOrtho");
@@ -112,6 +184,27 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _importReferenceDatasetAct = findNamedChild<QAction>(_mainWindow, "actionImportReferenceDataset");
         _referenceQualityCheckAct = findNamedChild<QAction>(_mainWindow, "actionReferenceQualityCheck");
         _referenceTerrainBundleAdjustAct = findNamedChild<QAction>(_mainWindow, "actionReferenceTerrainBundleAdjust");
+        if (!_workflowAerialTriangulationAct)
+        {
+            QObject *actionParent = workflowMenu
+                ? static_cast<QObject *>(workflowMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _workflowAerialTriangulationAct = new QAction(tr("空中三角测量..."), actionParent);
+            _workflowAerialTriangulationAct->setObjectName(
+                QStringLiteral("actionWorkflowAerialTriangulation"));
+            _workflowAerialTriangulationAct->setToolTip(tr("打开对齐照片参数对话框"));
+            if (workflowMenu)
+            {
+                if (_threeDReconstructionAct)
+                {
+                    workflowMenu->insertAction(_threeDReconstructionAct, _workflowAerialTriangulationAct);
+                }
+                else
+                {
+                    workflowMenu->addAction(_workflowAerialTriangulationAct);
+                }
+            }
+        }
         if (!_toggleCamerasAct)
         {
             QObject *actionParent = viewMenu
@@ -260,7 +353,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
         if (windowMenu)
         {
-            QList<QAction*> windowActs = { _toggleLogAct, _featureInfoAct };
+            QList<QAction*> windowActs = {
+                _toggleWorkspaceAct,
+                _togglePropertiesAct,
+                _togglePhotosAct,
+                _toggleLogAct,
+                _featureInfoAct
+            };
             auto *panelAct = new QWidgetAction(windowMenu);
             auto *wp = new WindowPanel(windowMenu);
             panelAct->setDefaultWidget(wp);
@@ -287,6 +386,21 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         if (_addFolderAct)
         {
             _addFolderAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DirOpenIcon));
+        }
+        if (_workflowAerialTriangulationAct)
+        {
+            _workflowAerialTriangulationAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
+            if (_toolBar && !_toolBar->actions().contains(_workflowAerialTriangulationAct))
+            {
+                if (_threeDReconstructionAct)
+                {
+                    _toolBar->insertAction(_threeDReconstructionAct, _workflowAerialTriangulationAct);
+                }
+                else
+                {
+                    _toolBar->addAction(_workflowAerialTriangulationAct);
+                }
+            }
         }
         if (_threeDReconstructionAct)
         {
@@ -345,6 +459,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _toggleCamerasAct->setChecked(true);
     _toggleCamerasAct->setToolTip(tr("显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签"));
     viewMenu->addAction(_toggleCamerasAct);
+    _toggleWorldOriginAct = ensureCheckableAction(_mainWindow,
+                                                  viewMenu,
+                                                  viewMenu,
+                                                  QStringLiteral("actionToggleWorldOrigin"),
+                                                  tr("显示世界原点"),
+                                                  true,
+                                                  _featureVisualizationAct);
+    _toggleWorldOriginAct->setToolTip(tr("显示或隐藏 3D 视图中的世界原点十字"));
     viewMenu->addSeparator();
     // 特征点可视化设置对话框入口
     _featureVisualizationAct = viewMenu->addAction(tr("特征点 可视化设置..."));
@@ -352,6 +474,27 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
     // 窗口面板子菜单：使用 QWidgetAction + WindowPanel 实现带复选框的面板开关列表
     auto *windowMenu = viewMenu->addMenu(tr("窗口"));
+    _toggleWorkspaceAct = ensureCheckableAction(_mainWindow,
+                                                windowMenu,
+                                                windowMenu,
+                                                QStringLiteral("actionToggleWorkspace"),
+                                                tr("工作区"),
+                                                true);
+    _toggleWorkspaceAct->setToolTip(tr("显示或隐藏左侧工作区"));
+    _togglePropertiesAct = ensureCheckableAction(_mainWindow,
+                                                 windowMenu,
+                                                 windowMenu,
+                                                 QStringLiteral("actionToggleProperties"),
+                                                 tr("属性"),
+                                                 true);
+    _togglePropertiesAct->setToolTip(tr("显示或隐藏选择对象属性面板"));
+    _togglePhotosAct = ensureCheckableAction(_mainWindow,
+                                             windowMenu,
+                                             windowMenu,
+                                             QStringLiteral("actionTogglePhotos"),
+                                             tr("照片"),
+                                             true);
+    _togglePhotosAct->setToolTip(tr("显示或隐藏底部照片面板"));
     _toggleLogAct = new QAction(tr("日志"), windowMenu);
     _toggleLogAct->setCheckable(true);  // 可切换：勾选时面板可见
     _toggleLogAct->setChecked(true);    // 默认显示日志面板
@@ -359,7 +502,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _featureInfoAct->setCheckable(true); // 可切换：勾选时面板可见
 
     // 将动作列表传给 WindowPanel 组件，以列表形式展示在子菜单中
-    QList<QAction*> windowActs = { _toggleLogAct, _featureInfoAct };
+    QList<QAction*> windowActs = {
+        _toggleWorkspaceAct,
+        _togglePropertiesAct,
+        _togglePhotosAct,
+        _toggleLogAct,
+        _featureInfoAct
+    };
     auto *panelAct = new QWidgetAction(windowMenu);
     auto *wp = new WindowPanel(windowMenu);
     panelAct->setDefaultWidget(wp);
@@ -372,6 +521,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _addPhotoAct       = workflowMenu->addAction(tr("添加 照片"));
     _addFolderAct      = workflowMenu->addAction(tr("添加 文件夹"));
     workflowMenu->addSeparator();
+    _workflowAerialTriangulationAct = workflowMenu->addAction(tr("空中三角测量...")); // 对齐照片参数对话框
     _threeDReconstructionAct = workflowMenu->addAction(tr("三维重建"));     // 一键完整建模流程
     _createDEMAct      = workflowMenu->addAction(tr("创建 DEM"));          // DEM 完整流程
     _generateOrthoAct  = workflowMenu->addAction(tr("生成 正射影像"));     // 正射影像完整流程
@@ -476,6 +626,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             _toolBar->addAction(_addFolderAct);
         }
         _toolBar->addSeparator();
+        if (_workflowAerialTriangulationAct)
+        {
+            _workflowAerialTriangulationAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
+            _toolBar->addAction(_workflowAerialTriangulationAct);
+        }
         if (_threeDReconstructionAct)
         {
             _threeDReconstructionAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
@@ -566,6 +721,7 @@ QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }
 QAction *MainMenu::resetViewAction() const { return _resetViewAct; }
 QAction *MainMenu::toggleGizmoAction() const { return _toggleGizmoAct; }
 QAction *MainMenu::toggleCamerasAction() const { return _toggleCamerasAct; }
+QAction *MainMenu::toggleWorldOriginAction() const { return _toggleWorldOriginAct; }
 
 QAction *MainMenu::addPhotoAction() const       { return _addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return _addFolderAct; }
@@ -574,6 +730,7 @@ QAction *MainMenu::vocabularyOverlapAction() const { return _vocabularyOverlapAc
 QAction *MainMenu::featureVisualizationAction() const { return _featureVisualizationAct; }
 QAction *MainMenu::matchFeaturesAction() const  { return _matchFeaturesAct; }
 QAction *MainMenu::viewMatchesAction() const    { return _viewMatchesAct; }
+QAction *MainMenu::workflowAerialTriangulationAction() const { return _workflowAerialTriangulationAct; }
 QAction *MainMenu::threeDReconstructionAction() const { return _threeDReconstructionAct; }
 QAction *MainMenu::overlapAnalysisAction() const { return _overlapAnalysisAct; }
 QAction *MainMenu::intersectionCheckAction() const { return _intersectionCheckAct; }
@@ -604,3 +761,6 @@ QAction *MainMenu::exportModelAction() const         { return _exportModelAct; }
 QAction *MainMenu::exportMatchedPairsAction() const  { return _exportMatchedPairsAct; }
 
 QAction *MainMenu::denseMatchAction() const { return _denseMatchAct; }
+QAction *MainMenu::toggleWorkspaceAction() const { return _toggleWorkspaceAct; }
+QAction *MainMenu::togglePropertiesAction() const { return _togglePropertiesAct; }
+QAction *MainMenu::togglePhotosAction() const { return _togglePhotosAct; }

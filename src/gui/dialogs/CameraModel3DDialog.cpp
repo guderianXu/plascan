@@ -38,6 +38,7 @@
 #include <QFutureWatcher>
 #include <QFile>
 #include <QFileInfo>
+#include <QDir>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMetaObject>
@@ -621,6 +622,57 @@ void CameraSceneWidget::setShowCameras(bool show)
     }
 }
 
+void CameraSceneWidget::setHighlightedCameraPath(const QString &imagePath)
+{
+    const QString normalizedPath = normalizedCameraPath(imagePath);
+    if (_highlightedCameraPath == normalizedPath && _highlightedCameraName.isEmpty())
+    {
+        return;
+    }
+
+    _highlightedCameraPath = normalizedPath;
+    _highlightedCameraName.clear();
+    update();
+}
+
+void CameraSceneWidget::setHighlightedCameraName(const QString &imageName)
+{
+    if (_highlightedCameraName == imageName && _highlightedCameraPath.isEmpty())
+    {
+        return;
+    }
+
+    _highlightedCameraName = imageName;
+    _highlightedCameraPath.clear();
+    update();
+}
+
+void CameraSceneWidget::clearHighlightedCamera()
+{
+    if (_highlightedCameraPath.isEmpty() && _highlightedCameraName.isEmpty())
+    {
+        return;
+    }
+
+    _highlightedCameraPath.clear();
+    _highlightedCameraName.clear();
+    update();
+}
+
+void CameraSceneWidget::setShowWorldOrigin(bool show)
+{
+    if (_showWorldOrigin != show)
+    {
+        _showWorldOrigin = show;
+        update();
+    }
+}
+
+bool CameraSceneWidget::isWorldOriginVisible() const
+{
+    return _showWorldOrigin;
+}
+
 // 取消未完成的加载（递增 generation 令旧回调自行失效）
 void CameraSceneWidget::cancelPendingLoad()
 {
@@ -836,7 +888,7 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
                 }
                 else
                 {
-                    self->_modelPointSize = 3.5f;
+                    self->_modelPointSize = 2.4f;
                 }
             }
             self->_loading = false;
@@ -1069,6 +1121,42 @@ float CameraSceneWidget::cameraFrustumBase() const
 {
     if (_cacheDirty) invalidateCache();
     return _cachedCameraFrustumBase;
+}
+
+bool CameraSceneWidget::isCameraHighlighted(const CameraPose &pose) const
+{
+    if (!_highlightedCameraPath.isEmpty())
+    {
+        if (normalizedCameraPath(pose.imagePath) == _highlightedCameraPath)
+        {
+            return true;
+        }
+
+        const QString highlightedFileName = QFileInfo(_highlightedCameraPath).fileName();
+        if (!highlightedFileName.isEmpty())
+        {
+            return pose.name == highlightedFileName
+                || QFileInfo(pose.imagePath).fileName() == highlightedFileName;
+        }
+    }
+
+    if (!_highlightedCameraName.isEmpty())
+    {
+        return pose.name == _highlightedCameraName
+            || QFileInfo(pose.imagePath).fileName() == _highlightedCameraName;
+    }
+
+    return false;
+}
+
+QString CameraSceneWidget::normalizedCameraPath(const QString &imagePath) const
+{
+    if (imagePath.isEmpty())
+    {
+        return QString();
+    }
+
+    return QDir::cleanPath(QFileInfo(imagePath).absoluteFilePath());
 }
 
 // Gizmo 操控球的世界中心点（等于场景质心）
@@ -1663,7 +1751,7 @@ void CameraSceneWidget::paintGL()
 
     // ── 点云（颜色直通）──────────────────────────────────────────────────
     if (_pointCount > 0) {
-        drawOpaquePointSet(_pointVao, _pointCount, 2.3f);
+        drawOpaquePointSet(_pointVao, _pointCount, 1.8f);
     }
 
     // ── 三角网格（Phong 双面光照）────────────────────────────────────────
@@ -1681,7 +1769,7 @@ void CameraSceneWidget::paintGL()
         if (_meshHasFaces) {
             _gl->glDrawArrays(GL_TRIANGLES, 0, _meshVertCount);
         } else {
-            _meshProgram->setUniformValue("uPointSize", 1.8f);
+            _meshProgram->setUniformValue("uPointSize", 1.5f);
             _gl->glDrawArrays(GL_POINTS, 0, _meshVertCount);
         }
         _meshVao.release();
@@ -1775,10 +1863,6 @@ void CameraSceneWidget::drawOverlay()
         const int cameraLabelStride = drawAllCameraLabels
             ? 1
             : qMax(1, static_cast<int>(std::ceil(double(cameraCount) / double(qMax(1, labelBudget)))));
-        const QColor frustumColor = cameraCount > 200
-            ? QColor(180, 130, 50, 105)
-            : QColor(180, 130, 50, 210);
-        const qreal frustumLineWidth = cameraCount > 200 ? 0.8 : 1.5;
         auto drawLine3D = [&](const QVector3D &a, const QVector3D &b, const QPen &pen)
         {
             bool okA = false;
@@ -1796,15 +1880,34 @@ void CameraSceneWidget::drawOverlay()
             painter.drawText(rect(), Qt::AlignCenter, tr("暂无相机参数，显示默认模型球"));
         }
 
-        painter.setBrush(QColor(220, 100, 40));
-        painter.setPen(Qt::NoPen);
         for (qsizetype poseIndex = 0; poseIndex < _poses.size(); ++poseIndex)
         {
             const CameraPose &pose = _poses.at(poseIndex);
+            const bool highlighted = isCameraHighlighted(pose);
+            const QColor frustumColor = highlighted ? QColor(245, 90, 105, 215)
+                                                    : QColor(42, 122, 200, cameraCount > 200 ? 105 : 165);
+            const QColor centerColor = highlighted ? QColor(255, 70, 95, 235)
+                                                   : QColor(32, 100, 180, 210);
+            const qreal frustumLineWidth = highlighted ? 2.2 : (cameraCount > 200 ? 0.8 : 1.3);
             bool ok = false;
             const QPointF pc = projectToScreen(pose.center, &ok);
             if (!ok) continue;
-            painter.drawEllipse(pc, 4.5, 4.5);
+            painter.setBrush(centerColor);
+            if (highlighted)
+            {
+                painter.setPen(QPen(QColor(255, 255, 255, 210), 1.0));
+            }
+            else
+            {
+                painter.setPen(Qt::NoPen);
+            }
+            painter.drawEllipse(pc, highlighted ? 5.8 : 4.0, highlighted ? 5.8 : 4.0);
+            if (highlighted)
+            {
+                painter.setPen(QPen(centerColor, 1.2));
+                painter.setBrush(Qt::NoBrush);
+                painter.drawEllipse(pc, 8.2, 8.2);
+            }
 
             const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
             const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
@@ -1824,25 +1927,37 @@ void CameraSceneWidget::drawOverlay()
             drawLine3D(p2, p3, frustumPen);
             drawLine3D(p3, p4, frustumPen);
             drawLine3D(p4, p1, frustumPen);
-            const bool drawCameraLabel = drawAllCameraLabels
+            const bool drawCameraLabel = highlighted
+                || drawAllCameraLabels
                 || (poseIndex == 0)
                 || (poseIndex == _poses.size() - 1)
                 || (static_cast<int>(poseIndex) % cameraLabelStride == 0);
             if (drawCameraLabel)
             {
-                painter.setPen(drawAllCameraLabels ? QColor(60, 60, 60) : QColor(45, 45, 45, 170));
-                painter.drawText(pc + QPointF(7.0, -7.0), QFileInfo(pose.name).fileName());
+                const QString labelSource = pose.imagePath.isEmpty() ? pose.name : pose.imagePath;
+                const QString label = QFileInfo(labelSource).fileName().isEmpty()
+                    ? pose.name
+                    : QFileInfo(labelSource).fileName();
+                painter.setPen(highlighted
+                    ? QColor(210, 45, 65, 230)
+                    : (drawAllCameraLabels ? QColor(60, 60, 60) : QColor(45, 45, 45, 170)));
+                painter.drawText(pc + QPointF(7.0, -7.0), label);
             }
         }
     }
 
     bool okO = false;
     const QPointF o2d = projectToScreen(QVector3D(0, 0, 0), &okO);
-    if (okO) {
-        painter.setPen(QPen(QColor(80, 80, 80), 1.5));
-        painter.drawLine(o2d + QPointF(-5, 0), o2d + QPointF(5, 0));
-        painter.drawLine(o2d + QPointF(0, -5), o2d + QPointF(0, 5));
-        painter.drawText(o2d + QPointF(6, -6), QStringLiteral("XYZ(0,0,0)"));
+    if (okO)
+    {
+        if (_showWorldOrigin)
+        {
+            painter.setPen(QPen(QColor(80, 80, 80, 170), 1.2));
+            painter.drawLine(o2d + QPointF(-6, 0), o2d + QPointF(6, 0));
+            painter.drawLine(o2d + QPointF(0, -6), o2d + QPointF(0, 6));
+        }
+        painter.setPen(QColor(80, 80, 80, 170));
+        painter.drawText(o2d + QPointF(7, -7), QStringLiteral("XYZ(0,0,0)"));
     }
 
     const QPoint origin(width() - 64, height() - 64);
@@ -2442,9 +2557,14 @@ QVector<CameraSceneWidget::CameraPose> CameraModel3DDialog::readCamerasFromMeta(
 
         CameraSceneWidget::CameraPose pose;
         pose.name = imageObject.value(QStringLiteral("name")).toString();
+        pose.imagePath = imageObject.value(QStringLiteral("path")).toString();
+        if (pose.imagePath.isEmpty())
+        {
+            pose.imagePath = imageObject.value(QStringLiteral("image_path")).toString();
+        }
         if (pose.name.isEmpty())
         {
-            pose.name = imageObject.value(QStringLiteral("path")).toString();
+            pose.name = pose.imagePath;
         }
         pose.center = QVector3D(
             float(cameraCenter[0]),

@@ -18,10 +18,15 @@
 
 #include "AlgorithmCompat.h"
 #include "FeatureMatchRunner.h"
+#include "LightGlueFeatureBudget.h"
 #include "Logger.h"
 #include "ProjectIO.h"
 #include "ProjectManager.h"
 #include "ProjectSupportUtils.h"
+#if defined(PLASCAN_TORCH_HAS_CUDA)
+#include <c10/cuda/CUDACachingAllocator.h>
+#include <c10/cuda/CUDAFunctions.h>
+#endif
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
@@ -346,6 +351,185 @@ bool allowPythonLightGlueFallback()
         || value == QStringLiteral("true")
         || value == QStringLiteral("yes")
         || value == QStringLiteral("on");
+}
+
+bool isCudaOutOfMemoryError(const QString &message)
+{
+    const QString lower = message.toLower();
+    return lower.contains(QStringLiteral("cuda out of memory"))
+        || lower.contains(QStringLiteral("cuda error: out of memory"))
+        || (lower.contains(QStringLiteral("cuda")) && lower.contains(QStringLiteral("out of memory")));
+}
+
+bool isCudaOutOfMemoryError(const std::exception &error)
+{
+    return isCudaOutOfMemoryError(QString::fromUtf8(error.what()));
+}
+
+void clearTorchCudaCache()
+{
+#if defined(PLASCAN_TORCH_HAS_CUDA)
+    if (!torch::cuda::is_available())
+    {
+        return;
+    }
+    try
+    {
+        c10::cuda::CUDACachingAllocator::emptyCache();
+    }
+    catch (...)
+    {
+        // OOM 后清缓存是辅助动作，失败时保留原始异常语义。
+    }
+#endif
+}
+
+xjw::pipeline::LightGlueGpuMemoryInfo currentLightGlueGpuMemoryInfo(bool useCuda)
+{
+    xjw::pipeline::LightGlueGpuMemoryInfo info;
+#if defined(PLASCAN_TORCH_HAS_CUDA)
+    if (!useCuda || !torch::cuda::is_available())
+    {
+        return info;
+    }
+    try
+    {
+        const c10::DeviceIndex device = c10::cuda::current_device();
+        auto *allocator = c10::cuda::CUDACachingAllocator::get();
+        if (!allocator)
+        {
+            return info;
+        }
+        const auto memory = allocator->getMemoryInfo(device);
+        info.available = memory.second > 0;
+        info.freeBytes = static_cast<std::uint64_t>(memory.first);
+        info.totalBytes = static_cast<std::uint64_t>(memory.second);
+        info.deviceIndex = static_cast<int>(device);
+    }
+    catch (...)
+    {
+        info = {};
+    }
+#else
+    Q_UNUSED(useCuda);
+#endif
+    return info;
+}
+
+QString lightGlueGpuMemorySummary(const xjw::pipeline::LightGlueGpuMemoryInfo &info)
+{
+    if (!info.available)
+    {
+        return QStringLiteral("unavailable");
+    }
+
+    const double gib = 1024.0 * 1024.0 * 1024.0;
+    return QStringLiteral("device=%1 free=%2 GiB total=%3 GiB")
+        .arg(info.deviceIndex)
+        .arg(static_cast<double>(info.freeBytes) / gib, 0, 'f', 2)
+        .arg(static_cast<double>(info.totalBytes) / gib, 0, 'f', 2);
+}
+
+void appendLightGlueGpuMemorySidecar(QJsonObject &object,
+                                     const xjw::pipeline::LightGlueGpuMemoryInfo &info)
+{
+    object[QStringLiteral("lightglue_gpu_memory_available")] = info.available;
+    if (!info.available)
+    {
+        return;
+    }
+
+    object[QStringLiteral("lightglue_gpu_device")] = info.deviceIndex;
+    object[QStringLiteral("lightglue_gpu_free_bytes")] = static_cast<double>(info.freeBytes);
+    object[QStringLiteral("lightglue_gpu_total_bytes")] = static_cast<double>(info.totalBytes);
+}
+
+xjw::feature_match::MatchResult matchLightGlueWithAdaptiveBudget(
+    xjw::feature_match::IFeatureMatcher &matcher,
+    const xjw::feature_extractors::FeatureData &fd0,
+    const xjw::feature_extractors::FeatureData &fd1,
+    int keypointBudget,
+    bool useCuda,
+    const QString &pairName,
+    int *usedBudget,
+    int *usedKeypoints0,
+    int *usedKeypoints1,
+    bool *limited,
+    bool *oomRetried)
+{
+    QString lastCudaOom;
+    const QVector<int> budgets = xjw::pipeline::lightGlueRetryKeypointBudgets(keypointBudget);
+    for (int attempt = 0; attempt < budgets.size(); ++attempt)
+    {
+        const int budget = budgets.at(attempt);
+        const xjw::pipeline::BudgetedFeatureData budgeted0 =
+            xjw::pipeline::budgetFeatureDataForLightGlue(fd0, budget);
+        const xjw::pipeline::BudgetedFeatureData budgeted1 =
+            xjw::pipeline::budgetFeatureDataForLightGlue(fd1, budget);
+
+        try
+        {
+            xjw::feature_match::MatchResult localResult =
+                matcher.match(budgeted0.features, budgeted1.features);
+            xjw::feature_match::MatchResult remapped =
+                xjw::pipeline::remapLightGlueMatchResultToOriginal(
+                    localResult, budgeted0, fd0.size(), budgeted1, fd1.size());
+            remapped.sourceAlgorithm = localResult.sourceAlgorithm;
+
+            if (usedBudget)
+            {
+                *usedBudget = budget;
+            }
+            if (usedKeypoints0)
+            {
+                *usedKeypoints0 = budgeted0.features.size();
+            }
+            if (usedKeypoints1)
+            {
+                *usedKeypoints1 = budgeted1.features.size();
+            }
+            if (limited)
+            {
+                *limited = budgeted0.limited || budgeted1.limited;
+            }
+            return remapped;
+        }
+        catch (const c10::Error &error)
+        {
+            if (!(useCuda && isCudaOutOfMemoryError(QString::fromUtf8(error.what()))))
+            {
+                throw;
+            }
+            lastCudaOom = QString::fromUtf8(error.what());
+        }
+        catch (const std::exception &error)
+        {
+            if (!(useCuda && isCudaOutOfMemoryError(error)))
+            {
+                throw;
+            }
+            lastCudaOom = QString::fromUtf8(error.what());
+        }
+
+        clearTorchCudaCache();
+        if (oomRetried)
+        {
+            *oomRetried = true;
+        }
+        if (attempt + 1 < budgets.size())
+        {
+            LOG_WARN("%s", qUtf8Printable(
+                QString("  %1 LightGlue CUDA OOM，keypoints %2/%3 失败，降到 %4 重试")
+                    .arg(pairName)
+                    .arg(budgeted0.features.size())
+                    .arg(budgeted1.features.size())
+                    .arg(budgets.at(attempt + 1))));
+        }
+    }
+
+    throw std::runtime_error(lastCudaOom.isEmpty()
+        ? "LightGlue matching failed after adaptive keypoint retry"
+        : lastCudaOom.toStdString());
 }
 
 xjw::feature_extractors::FeatureData withHalfTurnRotatedKeypoints(
@@ -710,6 +894,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     sgConfig.verbose = config["verbose"].toBool(false);
     sgConfig.enable_csv_output = config["save_csv"].toBool(false);
     sgConfig.enable_visualization = config["save_visualization"].toBool(false);
+    int lightGlueKeypointBudget = sgConfig.max_keypoints;
 
     superglue::OutlierFilterConfig outlierConfig;
     const QString outlierMethod = config["outlier_method"].toString("fundamental_usac_magsac");
@@ -766,6 +951,8 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         sgConfig.use_cuda = false;
         LOG_INFO("%s", qUtf8Printable(QStringLiteral("使用 CPU 设备")));
     }
+
+    xjw::pipeline::LightGlueGpuMemoryInfo lightGlueGpuMemory;
     
     // 确定模型路径（深度匹配算法需要）
     QString modelType = config["model_type"].toString("outdoor");
@@ -809,6 +996,41 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         LOG_INFO("%s", qUtf8Printable(QString("LightGlue suffix=%1 algo=%2 model=%3")
                                           .arg(featureSuffix, lightglueAlgo,
                                                modelCandidates.join(QStringLiteral(",")))));
+    }
+    if (isLightGlueMatch)
+    {
+        lightGlueGpuMemory = currentLightGlueGpuMemoryInfo(sgConfig.use_cuda);
+        lightGlueKeypointBudget = xjw::pipeline::resolveLightGlueKeypointBudget(
+            lightglueAlgo,
+            matchAlgorithm,
+            sgConfig.use_cuda,
+            sgConfig.max_keypoints,
+            lightGlueGpuMemory);
+        const float adaptiveThreshold = xjw::pipeline::resolveLightGlueMatchThreshold(
+            lightglueAlgo,
+            matchAlgorithm,
+            sgConfig.use_cuda,
+            sgConfig.match_threshold,
+            lightGlueKeypointBudget,
+            lightGlueGpuMemory);
+        if (std::abs(adaptiveThreshold - sgConfig.match_threshold) > 1e-6f)
+        {
+            LOG_INFO("%s", qUtf8Printable(
+                QString("LightGlue 自适应阈值: algo=%1 threshold=%2 -> %3")
+                    .arg(lightglueAlgo)
+                    .arg(sgConfig.match_threshold, 0, 'g', 6)
+                    .arg(adaptiveThreshold, 0, 'g', 6)));
+            sgConfig.match_threshold = adaptiveThreshold;
+        }
+        if (lightGlueKeypointBudget > 0)
+        {
+            LOG_INFO("%s", qUtf8Printable(
+                QString("LightGlue keypoint budget: algo=%1 budget=%2 configured=%3 gpu_memory=%4")
+                    .arg(lightglueAlgo)
+                    .arg(lightGlueKeypointBudget)
+                    .arg(sgConfig.max_keypoints)
+                    .arg(lightGlueGpuMemorySummary(lightGlueGpuMemory))));
+        }
     }
     QString pickedModelName;
     QString modelPath = findFirstModelFile(modelCandidates, &pickedModelName);
@@ -873,6 +1095,10 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             if (sgConfig.use_cuda)
             {
                 args << QStringLiteral("--cuda");
+            }
+            if (lightGlueKeypointBudget > 0)
+            {
+                args << QStringLiteral("--max-kpts") << QString::number(lightGlueKeypointBudget);
             }
             proc.start(pythonExecutable(), args);
             if (!waitForProcessOrCancel(proc,
@@ -958,10 +1184,19 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     
     // 并行对数：CUDA 使用 cuda_parallel_pairs，CPU 使用 num_threads
     const bool useCudaFinal = sgConfig.use_cuda;
-    const int  numThreads = useCudaFinal
+    const int requestedNumThreads = useCudaFinal
         ? std::max(1, config["cuda_parallel_pairs"].toInt(1))
         : std::max(1, sgConfig.num_threads <= 0
             ? QThread::idealThreadCount() : sgConfig.num_threads);
+    const bool forceSingleCudaPair =
+        useCudaFinal && isLightGlueMatch && lightglueAlgo == QStringLiteral("sift");
+    const int numThreads = forceSingleCudaPair ? 1 : requestedNumThreads;
+    if (forceSingleCudaPair && requestedNumThreads > 1)
+    {
+        LOG_WARN("%s", qUtf8Printable(
+            QString("SIFT+LightGlue CUDA 模式显存占用高，已将并行匹配对数从 %1 降为 1")
+                .arg(requestedNumThreads)));
+    }
 
     // 无匹配记录文件
     const QString assetsDir2 = ProjectIO::projectAssetsDir(projectPath);
@@ -1014,7 +1249,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         LOG_INFO("%s", qUtf8Printable(QString("%1 配置: match_threshold=%2, max_keypoints=%3, use_cuda=%4")
             .arg(matchAlgorithm)
             .arg(sgConfig.match_threshold)
-            .arg(sgConfig.max_keypoints)
+            .arg(isLightGlueMatch ? lightGlueKeypointBudget : sgConfig.max_keypoints)
             .arg(sgConfig.use_cuda ? "true" : "false")));
         
         std::atomic<int>  successCount{0};
@@ -1131,8 +1366,13 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         xjw::feature_match::MatchResult matchResult;
                         bool usedLightGlueHalfTurnRetry = false;
                         bool usedTraditionalSiftFallback = false;
+                        bool lightGlueWasLimited = false;
+                        bool lightGlueOomRetried = false;
                         int primaryLightGlueInliers = -1;
                         int traditionalSiftFallbackRawMatchCount = 0;
+                        int lightGlueBudgetUsed = -1;
+                        int lightGlueUsedKeypoints0 = 0;
+                        int lightGlueUsedKeypoints1 = 0;
 
                         const QString imagePath0Resolved = imagePath0.isEmpty() ? baseToImagePath.value(baseName0) : imagePath0;
                         const QString imagePath1Resolved = imagePath1.isEmpty() ? baseToImagePath.value(baseName1) : imagePath1;
@@ -1173,7 +1413,25 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             fd0.imageHeight = h0;
                             fd1.imageWidth = w1;
                             fd1.imageHeight = h1;
-                            matchResult = localMatcher->match(fd0, fd1);
+                            if (isLightGlueMatch)
+                            {
+                                matchResult = matchLightGlueWithAdaptiveBudget(
+                                    *localMatcher,
+                                    fd0,
+                                    fd1,
+                                    lightGlueKeypointBudget,
+                                    useCudaFinal,
+                                    canonicalPairName,
+                                    &lightGlueBudgetUsed,
+                                    &lightGlueUsedKeypoints0,
+                                    &lightGlueUsedKeypoints1,
+                                    &lightGlueWasLimited,
+                                    &lightGlueOomRetried);
+                            }
+                            else
+                            {
+                                matchResult = localMatcher->match(fd0, fd1);
+                            }
                         }
                         else if (isBfFlann)
                         {
@@ -1248,8 +1506,24 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             && fd0.imageWidth > 0
                             && fd1.imageWidth > 0)
                         {
+                            int retryBudgetUsed = -1;
+                            int retryUsedKeypoints0 = 0;
+                            int retryUsedKeypoints1 = 0;
+                            bool retryWasLimited = false;
+                            bool retryOomRetried = false;
                             xjw::feature_match::MatchResult retryResult =
-                                localMatcher->match(fd0, withHalfTurnRotatedKeypoints(fd1));
+                                matchLightGlueWithAdaptiveBudget(
+                                    *localMatcher,
+                                    fd0,
+                                    withHalfTurnRotatedKeypoints(fd1),
+                                    lightGlueKeypointBudget,
+                                    useCudaFinal,
+                                    canonicalPairName + QStringLiteral(" 180deg"),
+                                    &retryBudgetUsed,
+                                    &retryUsedKeypoints0,
+                                    &retryUsedKeypoints1,
+                                    &retryWasLimited,
+                                    &retryOomRetried);
                             int retryInlierCount = retryResult.numMatches;
                             retryResult = superglue::MatchOutlierRejector::filter(
                                 retryResult, sp0.keypoints, sp1.keypoints,
@@ -1264,6 +1538,11 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                                         .arg(retryResult.numMatches)));
                                 matchResult = std::move(retryResult);
                                 usedLightGlueHalfTurnRetry = true;
+                                lightGlueBudgetUsed = retryBudgetUsed;
+                                lightGlueUsedKeypoints0 = retryUsedKeypoints0;
+                                lightGlueUsedKeypoints1 = retryUsedKeypoints1;
+                                lightGlueWasLimited = retryWasLimited;
+                                lightGlueOomRetried = retryOomRetried;
                             }
                         }
 
@@ -1369,11 +1648,29 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         sidecar["image1_name"]  = baseName1;
                         sidecar["image0_path"]  = imagePath0ForMeta;
                         sidecar["image1_path"]  = imagePath1ForMeta;
+                        sidecar["feature0_path"] = sp0Path;
+                        sidecar["feature1_path"] = sp1Path;
                         sidecar["sp0_path"]     = sp0Path;
                         sidecar["sp1_path"]     = sp1Path;
                         sidecar["feature_format_version"] = 2;
                         sidecar["num_matches"]  = matchResult.numMatches;
+                        sidecar["feature_algorithm"] =
+                            featureAlgorithmForSuffix(featureSuffix, isLightGlueMatch ? lightglueAlgo
+                                                                                       : QStringLiteral("superpoint"));
                         sidecar["match_algorithm"] = matchAlgorithm;
+                        if (isLightGlueMatch)
+                        {
+                            sidecar["lightglue_keypoint_budget"] = lightGlueBudgetUsed;
+                            sidecar["lightglue_used_keypoints0"] = lightGlueUsedKeypoints0;
+                            sidecar["lightglue_used_keypoints1"] = lightGlueUsedKeypoints1;
+                            sidecar["lightglue_limited_keypoints"] = lightGlueWasLimited;
+                            sidecar["lightglue_oom_retried"] = lightGlueOomRetried;
+                            sidecar["lightglue_configured_match_threshold"] = configuredMatchThreshold;
+                            sidecar["lightglue_effective_match_threshold"] = static_cast<double>(sgConfig.match_threshold);
+                            sidecar["original_keypoints0"] = static_cast<int>(sp0.keypoints.size());
+                            sidecar["original_keypoints1"] = static_cast<int>(sp1.keypoints.size());
+                            appendLightGlueGpuMemorySidecar(sidecar, lightGlueGpuMemory);
+                        }
                         if (usedLightGlueHalfTurnRetry)
                         {
                             sidecar["lightglue_rotation_retry"] = QStringLiteral("half_turn_image1");
@@ -1433,10 +1730,15 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         pairSettings["image_files"]  = imgFilesForMeta;
                         pairSettings["image0"]       = imagePath0ForMeta;
                         pairSettings["image1"]       = imagePath1ForMeta;
+                        pairSettings["feature0_path"] = sp0Path;
+                        pairSettings["feature1_path"] = sp1Path;
                         pairSettings["sp0_path"]     = sp0Path;
                         pairSettings["sp1_path"]     = sp1Path;
                         pairSettings["pair_name"]    = canonicalPairName;
                         pairSettings["sidecar_json"] = sidecarPath;
+                        pairSettings["feature_algorithm"] =
+                            featureAlgorithmForSuffix(featureSuffix, isLightGlueMatch ? lightglueAlgo
+                                                                                       : QStringLiteral("superpoint"));
                         pairSettings["match_algorithm"] = matchAlgorithm;
                         if (usedLightGlueHalfTurnRetry)
                         {
@@ -1448,6 +1750,18 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                             pairSettings["traditional_sift_fallback"] = true;
                             pairSettings["fallback_algorithm"] = QStringLiteral("sift_bf_l2");
                             pairSettings["fallback_raw_match_count"] = traditionalSiftFallbackRawMatchCount;
+                        }
+                        if (isLightGlueMatch)
+                        {
+                            pairSettings["lightglue_keypoint_budget"] = lightGlueBudgetUsed;
+                            pairSettings["lightglue_used_keypoints0"] = lightGlueUsedKeypoints0;
+                            pairSettings["lightglue_used_keypoints1"] = lightGlueUsedKeypoints1;
+                            pairSettings["lightglue_limited_keypoints"] = lightGlueWasLimited;
+                            pairSettings["lightglue_oom_retried"] = lightGlueOomRetried;
+                            pairSettings["lightglue_configured_match_threshold"] = configuredMatchThreshold;
+                            pairSettings["lightglue_effective_match_threshold"] =
+                                static_cast<double>(sgConfig.match_threshold);
+                            appendLightGlueGpuMemorySidecar(pairSettings, lightGlueGpuMemory);
                         }
 
                         QStringList singleOutput{outputPath};

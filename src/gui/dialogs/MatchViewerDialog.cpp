@@ -49,23 +49,7 @@ bool sameMatchPath(const QString &lhs, const QString &rhs)
 
 QString variantAlgorithmLabel(const xjw::pipeline::MatchVariant &variant)
 {
-    QStringList parts;
-    if (!variant.featureAlgorithm.trimmed().isEmpty())
-    {
-        parts.append(variant.featureAlgorithm.trimmed());
-    }
-    if (!variant.matchAlgorithm.trimmed().isEmpty() &&
-        !parts.contains(variant.matchAlgorithm.trimmed()))
-    {
-        parts.append(variant.matchAlgorithm.trimmed());
-    }
-    if (!parts.isEmpty())
-    {
-        return parts.join(QStringLiteral(" + "));
-    }
-
-    const QString fallback = QFileInfo(variant.matchFilePath).completeBaseName();
-    return fallback.isEmpty() ? QStringLiteral("unknown") : fallback;
+    return xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant);
 }
 
 QString variantComboLabel(const xjw::pipeline::MatchVariant &variant)

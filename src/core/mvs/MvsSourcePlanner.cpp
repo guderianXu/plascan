@@ -26,6 +26,7 @@ MvsSourcePlanEntry makeEntry(const MvsSourceCandidate &candidate,
     entry.coverageScore = std::clamp(candidate.coverageScore, 0.0f, 1.0f);
     entry.baselineScore = std::clamp(candidate.baselineScore, 0.0f, 1.0f);
     entry.knownOverlap = candidate.knownOverlap;
+    entry.verifiedPairGeometry = candidate.verifiedPairGeometry;
     entry.sequenceDistance = candidate.sequenceDistance > 0
         ? candidate.sequenceDistance
         : std::abs(candidate.viewIndex - options.refIndex);
@@ -145,6 +146,10 @@ bool failsQualityGate(const MvsSourcePlanEntry &entry,
         return true;
     }
     if (options.minGeometricInliers > 0 && entry.geometricInliers < options.minGeometricInliers)
+    {
+        return true;
+    }
+    if (options.requireVerifiedPairGeometry && !entry.verifiedPairGeometry)
     {
         return true;
     }
@@ -311,6 +316,7 @@ QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)
     object.insert(QStringLiteral("baseline_score"), entry.baselineScore);
     object.insert(QStringLiteral("sequence_distance"), entry.sequenceDistance);
     object.insert(QStringLiteral("known_overlap"), entry.knownOverlap);
+    object.insert(QStringLiteral("verified_pair_geometry"), entry.verifiedPairGeometry);
     object.insert(QStringLiteral("sequence_fallback"), entry.sequenceFallback);
     object.insert(QStringLiteral("score"), entry.score);
     object.insert(QStringLiteral("source_quality_score"), entry.sourceQualityScore);

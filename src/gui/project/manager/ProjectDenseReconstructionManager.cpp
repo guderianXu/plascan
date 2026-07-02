@@ -14,6 +14,8 @@
 #include "DenseCloudQualityFilter.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
+#include "MatchResultCatalog.h"
+#include "ProjectIO.h"
 #include "SparseCloudPreprocessor.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/search/kdtree.h>
@@ -76,6 +78,95 @@ namespace
 QString utcNowIso()
 {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+}
+
+std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QString &matchDir)
+{
+    std::vector<xjw::mvs::MvsSourcePairQuality> qualities;
+    if (matchDir.trimmed().isEmpty())
+    {
+        return qualities;
+    }
+
+    const QString matchingReportPath =
+        QDir(QDir(matchDir).filePath(QStringLiteral("..")))
+            .filePath(QStringLiteral("reports/matching_quality_report.json"));
+    QFile reportFile(matchingReportPath);
+    if (reportFile.open(QIODevice::ReadOnly))
+    {
+        const QJsonDocument document = QJsonDocument::fromJson(reportFile.readAll());
+        const QJsonObject root = document.object();
+        const QJsonArray samples = root.value(QStringLiteral("pair_samples")).toArray();
+        qualities.reserve(static_cast<size_t>(samples.size()));
+        for (const QJsonValue &value : samples)
+        {
+            const QJsonObject sample = value.toObject();
+            if (sample.value(QStringLiteral("status")).toString() != QStringLiteral("matched"))
+            {
+                continue;
+            }
+
+            const int inliers = sample.value(QStringLiteral("geometric_inlier_count")).toInt();
+            if (inliers <= 0)
+            {
+                continue;
+            }
+
+            xjw::mvs::MvsSourcePairQuality quality;
+            quality.imageA = sample.value(QStringLiteral("image_a")).toString().toStdString();
+            quality.imageB = sample.value(QStringLiteral("image_b")).toString().toStdString();
+            quality.totalMatches = std::max(0, sample.value(QStringLiteral("match_count")).toInt());
+            quality.geometricInliers = inliers;
+            quality.verified = true;
+            qualities.push_back(std::move(quality));
+        }
+    }
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = matchDir;
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+    qualities.reserve(static_cast<size_t>(summary.pairGroups.size()));
+    for (const xjw::pipeline::MatchPairGroup &group : summary.pairGroups)
+    {
+        if (group.bestVariantIndex < 0 || group.bestVariantIndex >= group.variants.size())
+        {
+            continue;
+        }
+
+        const xjw::pipeline::MatchVariant &variant = group.variants.at(group.bestVariantIndex);
+        if (!variant.compatible || !variant.hasInlierStats || variant.geometricVerifiedInliers <= 0)
+        {
+            continue;
+        }
+
+        xjw::mvs::MvsSourcePairQuality quality;
+        quality.imageA = variant.imageA.toStdString();
+        quality.imageB = variant.imageB.toStdString();
+        quality.totalMatches = std::max(0, variant.totalMatches);
+        quality.geometricInliers = std::max(0, variant.geometricVerifiedInliers);
+        quality.verified = true;
+        qualities.push_back(std::move(quality));
+    }
+    return qualities;
+}
+
+void attachMvsSourcePairQualities(xjw::mvs::DepthGenConfig *config,
+                                  const QString &plascanPath)
+{
+    if (!config || plascanPath.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    config->sourcePairQualities =
+        loadMvsSourcePairQualities(ProjectIO::ipmatchOutputDir(plascanPath));
+    config->requireVerifiedSourcePairs = !config->sourcePairQualities.empty();
+    if (config->requireVerifiedSourcePairs)
+    {
+        LOG_INFO(QStringLiteral("[MVS] 已加载 %1 个几何验证匹配对用于源视图筛选")
+                     .arg(config->sourcePairQualities.size()));
+    }
 }
 
 bool cameraForImagePath(const QMap<QString, xjw::Camera> &camMap,
@@ -1313,6 +1404,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     genCfg.runFusion = false;
     genCfg.saveIntermediateDepthMaps = true;
     genCfg.intermediateDir = mvsOutDir.toStdString();
+    attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath());
 
     auto *gen = new DepthMapGenerator(this);
     gen->setViews(views);
@@ -1848,6 +1940,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     genCfg.saveIntermediateDepthMaps = true;
     const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     genCfg.intermediateDir = mvsOutDir.toStdString();
+    attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath());
     if (request.pipelineMode)
     {
         // 一键流程复用“深度图融合生成密集点云”的同一入口，避免内部融合与手动融合产物不一致。

@@ -24,6 +24,7 @@
 #include "FeatureExtractionDialog.h"
 #include "FeatureMatchingDialog.h"
 #include "InitCameraPoseDialog.h"
+#include "AerialTriangulationDialog.h"
 #include "ThreeDReconstructionDialog.h"
 #include "SparseCloudPostProcessDialog.h"
 #include "MapProjectDialog.h"
@@ -6455,6 +6456,7 @@ TEST(MainMenuTest, SparseReconstructionSeparatesMainFlowAndAdvancedTools)
     ASSERT_NE(menu.detectFeaturesAction(), nullptr);
     ASSERT_NE(menu.vocabularyOverlapAction(), nullptr);
     ASSERT_NE(menu.matchFeaturesAction(), nullptr);
+    ASSERT_NE(menu.workflowAerialTriangulationAction(), nullptr);
     ASSERT_NE(menu.aerialTriangulationAction(), nullptr);
     ASSERT_NE(menu.sparseCloudPostProcessAction(), nullptr);
     ASSERT_NE(menu.viewMatchesAction(), nullptr);
@@ -6463,7 +6465,9 @@ TEST(MainMenuTest, SparseReconstructionSeparatesMainFlowAndAdvancedTools)
     ASSERT_NE(menu.triangulateAction(), nullptr);
     ASSERT_NE(menu.reconBundleAdjustAction(), nullptr);
 
+    EXPECT_EQ(menu.workflowAerialTriangulationAction()->text(), QStringLiteral("空中三角测量..."));
     EXPECT_EQ(menu.aerialTriangulationAction()->text(), QStringLiteral("空中三角测量..."));
+    EXPECT_NE(menu.workflowAerialTriangulationAction(), menu.aerialTriangulationAction());
     EXPECT_EQ(menu.triangulateAction()->text(), QStringLiteral("生成两视预览云..."));
     EXPECT_FALSE(menu.triangulateAction()->text().contains(QStringLiteral("空中三角")));
 
@@ -7471,6 +7475,187 @@ TEST(ThreeDReconstructionDialogTest, AerialTriangulationModeUsesSparseOnlyLabels
               QStringLiteral("three_d_reconstruction"));
 }
 
+TEST(ThreeDReconstructionDialogTest, AerialTriangulationModeExposesMatchPipelineSelection)
+{
+    ThreeDReconstructionDialog dialog;
+    dialog.setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation);
+
+    auto *matchPipelineCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_matchPipelineCombo"));
+    ASSERT_NE(matchPipelineCombo, nullptr);
+    auto *matchPipelineLabel = dialog.findChild<QLabel *>(QStringLiteral("m_matchPipelineLabel"));
+    ASSERT_NE(matchPipelineLabel, nullptr);
+    EXPECT_EQ(matchPipelineLabel->text(), QStringLiteral("特征点-匹配算法:"));
+    EXPECT_GE(matchPipelineCombo->count(), 5);
+    EXPECT_GE(matchPipelineCombo->findData(QStringLiteral("disk|lightglue")), 0);
+    EXPECT_GE(matchPipelineCombo->findData(QStringLiteral("aliked|lightglue")), 0);
+    EXPECT_GE(matchPipelineCombo->findData(QStringLiteral("sift|lightglue")), 0);
+    EXPECT_GE(matchPipelineCombo->findData(QStringLiteral("sift|sift_bf_l2")), 0);
+    EXPECT_GE(matchPipelineCombo->findData(QStringLiteral("sift|sift_flann")), 0);
+    EXPECT_GE(matchPipelineCombo->findText(QStringLiteral("disk-lightglue")), 0);
+    EXPECT_GE(matchPipelineCombo->findText(QStringLiteral("aliked-lightglue")), 0);
+    EXPECT_GE(matchPipelineCombo->findText(QStringLiteral("sift-lightglue")), 0);
+    EXPECT_GE(matchPipelineCombo->findText(QStringLiteral("sift-bf-l2")), 0);
+    EXPECT_GE(matchPipelineCombo->findText(QStringLiteral("sift-flann")), 0);
+
+    QJsonObject settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("feature_algorithm")).toString(), QStringLiteral("disk"));
+    EXPECT_EQ(settings.value(QStringLiteral("match_algorithm")).toString(), QStringLiteral("lightglue"));
+
+    const int siftBfIndex = matchPipelineCombo->findData(QStringLiteral("sift|sift_bf_l2"));
+    ASSERT_GE(siftBfIndex, 0);
+    matchPipelineCombo->setCurrentIndex(siftBfIndex);
+    settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("feature_algorithm")).toString(), QStringLiteral("sift"));
+    EXPECT_EQ(settings.value(QStringLiteral("match_algorithm")).toString(), QStringLiteral("sift_bf_l2"));
+
+    QJsonObject appliedSettings;
+    appliedSettings[QStringLiteral("feature_algorithm")] = QStringLiteral("aliked");
+    appliedSettings[QStringLiteral("match_algorithm")] = QStringLiteral("lightglue");
+    dialog.applySettings(appliedSettings);
+    settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("feature_algorithm")).toString(), QStringLiteral("aliked"));
+    EXPECT_EQ(settings.value(QStringLiteral("match_algorithm")).toString(), QStringLiteral("lightglue"));
+    EXPECT_EQ(matchPipelineCombo->currentData().toString(), QStringLiteral("aliked|lightglue"));
+}
+
+TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSettings)
+{
+    AerialTriangulationDialog dialog;
+    dialog.setImageCount(9);
+
+    auto *qualityCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_qualityCombo"));
+    auto *genericPreselectionCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_genericPreselectionCheck"));
+    auto *referencePreselectionCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_referencePreselectionCheck"));
+    auto *referenceSourceCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_referenceSourceCombo"));
+    auto *resetAlignmentCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_resetAlignmentCheck"));
+    auto *saveAfterEachStepCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_saveAfterEachStepCheck"));
+    auto *keypointLimitSpin = dialog.findChild<QSpinBox *>(QStringLiteral("m_keypointLimitSpin"));
+    auto *tiepointLimitSpin = dialog.findChild<QSpinBox *>(QStringLiteral("m_tiepointLimitSpin"));
+    auto *maskApplyCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_maskApplyCombo"));
+    auto *excludeFixedTiePointsCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_excludeFixedTiePointsCheck"));
+    auto *guidedImageMatchingCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_guidedImageMatchingCheck"));
+    auto *adaptiveCameraModelCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_adaptiveCameraModelCheck"));
+    auto *statusLabel = dialog.findChild<QLabel *>(QStringLiteral("m_statusLabel"));
+    auto *advancedToggle = dialog.findChild<QToolButton *>(QStringLiteral("m_advancedToggle"));
+    auto *advancedContent = dialog.findChild<QWidget *>(QStringLiteral("m_advancedContent"));
+
+    ASSERT_NE(qualityCombo, nullptr);
+    ASSERT_NE(genericPreselectionCheck, nullptr);
+    ASSERT_NE(referencePreselectionCheck, nullptr);
+    ASSERT_NE(referenceSourceCombo, nullptr);
+    ASSERT_NE(resetAlignmentCheck, nullptr);
+    ASSERT_NE(saveAfterEachStepCheck, nullptr);
+    ASSERT_NE(keypointLimitSpin, nullptr);
+    ASSERT_NE(tiepointLimitSpin, nullptr);
+    ASSERT_NE(maskApplyCombo, nullptr);
+    ASSERT_NE(excludeFixedTiePointsCheck, nullptr);
+    ASSERT_NE(guidedImageMatchingCheck, nullptr);
+    ASSERT_NE(adaptiveCameraModelCheck, nullptr);
+    ASSERT_NE(statusLabel, nullptr);
+    ASSERT_NE(advancedToggle, nullptr);
+    ASSERT_NE(advancedContent, nullptr);
+
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("对齐照片"));
+    EXPECT_TRUE(statusLabel->isHidden());
+    ASSERT_EQ(qualityCombo->count(), 5);
+    EXPECT_EQ(qualityCombo->itemText(0), QStringLiteral("最高"));
+    EXPECT_EQ(qualityCombo->itemData(0).toString(), QStringLiteral("highest"));
+    EXPECT_EQ(qualityCombo->itemText(1), QStringLiteral("高"));
+    EXPECT_EQ(qualityCombo->itemData(1).toString(), QStringLiteral("high"));
+    EXPECT_EQ(qualityCombo->itemText(2), QStringLiteral("中"));
+    EXPECT_EQ(qualityCombo->itemData(2).toString(), QStringLiteral("medium"));
+    EXPECT_EQ(qualityCombo->itemText(3), QStringLiteral("低"));
+    EXPECT_EQ(qualityCombo->itemData(3).toString(), QStringLiteral("low"));
+    EXPECT_EQ(qualityCombo->itemText(4), QStringLiteral("最低"));
+    EXPECT_EQ(qualityCombo->itemData(4).toString(), QStringLiteral("lowest"));
+    EXPECT_EQ(qualityCombo->currentData().toString(), QStringLiteral("high"));
+
+    ASSERT_EQ(referenceSourceCombo->count(), 3);
+    EXPECT_EQ(referenceSourceCombo->itemText(0), QStringLiteral("源代码"));
+    EXPECT_EQ(referenceSourceCombo->itemData(0).toString(), QStringLiteral("source_code"));
+    EXPECT_EQ(referenceSourceCombo->itemText(1), QStringLiteral("估计"));
+    EXPECT_EQ(referenceSourceCombo->itemData(1).toString(), QStringLiteral("estimated"));
+    EXPECT_EQ(referenceSourceCombo->itemText(2), QStringLiteral("序列"));
+    EXPECT_EQ(referenceSourceCombo->itemData(2).toString(), QStringLiteral("sequence"));
+
+    EXPECT_FALSE(advancedToggle->isChecked());
+    EXPECT_TRUE(advancedContent->isHidden());
+    advancedToggle->setChecked(true);
+    EXPECT_FALSE(advancedContent->isHidden());
+    EXPECT_EQ(advancedToggle->arrowType(), Qt::DownArrow);
+    advancedToggle->setChecked(false);
+    EXPECT_TRUE(advancedContent->isHidden());
+    EXPECT_EQ(advancedToggle->arrowType(), Qt::RightArrow);
+
+    EXPECT_TRUE(genericPreselectionCheck->isChecked());
+    EXPECT_FALSE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(resetAlignmentCheck->isChecked());
+    EXPECT_FALSE(saveAfterEachStepCheck->isChecked());
+    EXPECT_EQ(keypointLimitSpin->value(), 40000);
+    EXPECT_EQ(tiepointLimitSpin->value(), 4000);
+    EXPECT_EQ(maskApplyCombo->currentData().toString(), QStringLiteral("none"));
+    EXPECT_TRUE(excludeFixedTiePointsCheck->isChecked());
+    EXPECT_FALSE(guidedImageMatchingCheck->isChecked());
+    EXPECT_FALSE(adaptiveCameraModelCheck->isChecked());
+
+    QJsonObject settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("workflow_kind")).toString(),
+              QStringLiteral("aerial_triangulation_dialog_only"));
+    EXPECT_EQ(settings.value(QStringLiteral("quality")).toString(), QStringLiteral("high"));
+    EXPECT_TRUE(settings.value(QStringLiteral("generic_preselection")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("reference_preselection")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("keypoint_limit")).toInt(), 40000);
+    EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 4000);
+    EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("none"));
+
+    QJsonObject appliedSettings;
+    appliedSettings[QStringLiteral("quality")] = QStringLiteral("highest");
+    appliedSettings[QStringLiteral("generic_preselection")] = false;
+    appliedSettings[QStringLiteral("reference_preselection")] = true;
+    appliedSettings[QStringLiteral("reference_preselection_source")] = QStringLiteral("sequence");
+    appliedSettings[QStringLiteral("reset_current_alignment")] = false;
+    appliedSettings[QStringLiteral("save_project_after_each_step")] = true;
+    appliedSettings[QStringLiteral("keypoint_limit")] = 12000;
+    appliedSettings[QStringLiteral("tiepoint_limit")] = 1800;
+    appliedSettings[QStringLiteral("mask_apply_mode")] = QStringLiteral("tiepoints");
+    appliedSettings[QStringLiteral("exclude_fixed_tie_points")] = false;
+    appliedSettings[QStringLiteral("guided_image_matching")] = true;
+    appliedSettings[QStringLiteral("adaptive_camera_model_fitting")] = true;
+    dialog.applySettings(appliedSettings);
+
+    settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("quality")).toString(), QStringLiteral("highest"));
+    EXPECT_FALSE(settings.value(QStringLiteral("generic_preselection")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("reference_preselection")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("reference_preselection_source")).toString(),
+              QStringLiteral("sequence"));
+    EXPECT_FALSE(settings.value(QStringLiteral("reset_current_alignment")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("save_project_after_each_step")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("keypoint_limit")).toInt(), 12000);
+    EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 1800);
+    EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("tiepoints"));
+    EXPECT_FALSE(settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("guided_image_matching")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
+}
+
+TEST(FeatureMatchRunnerMetadataTest, WritesFeatureMatcherIdentityToEverySidecar)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("sidecar[\"feature0_path\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sidecar[\"feature1_path\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sidecar[\"feature_algorithm\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pairSettings[\"feature0_path\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pairSettings[\"feature1_path\"]")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pairSettings[\"feature_algorithm\"]")));
+}
+
 TEST(DenseCloudDialogTest, ExposesAdvancedMvsQualitySettingsWithoutChangingDefaults)
 {
     const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/DenseCloudDialog.ui"));
@@ -8142,18 +8327,29 @@ TEST(AerialTriangulationWorkflowTest, MainWindowWiresSparseOnlyAerialTriangulati
     ASSERT_GT(bindEnd, bindIndex);
     const QString bindBlock = source.mid(bindIndex, bindEnd - bindIndex);
 
-    const int actionIndex = bindBlock.indexOf(QStringLiteral("aerialTriangulationAction()"));
-    ASSERT_GE(actionIndex, 0);
-    const int nextMenuAction = bindBlock.indexOf(QStringLiteral("connectAction("), actionIndex + 1);
-    ASSERT_GT(nextMenuAction, actionIndex);
-    const QString connectBlock = bindBlock.mid(actionIndex, nextMenuAction - actionIndex);
+    const int workflowActionIndex = bindBlock.indexOf(QStringLiteral("workflowAerialTriangulationAction()"));
+    ASSERT_GE(workflowActionIndex, 0);
+    const int workflowNextAction = bindBlock.indexOf(QStringLiteral("connectAction("), workflowActionIndex + 1);
+    ASSERT_GT(workflowNextAction, workflowActionIndex);
+    const QString workflowConnectBlock = bindBlock.mid(workflowActionIndex, workflowNextAction - workflowActionIndex);
 
-    EXPECT_TRUE(connectBlock.contains(QStringLiteral("aerialTriangulationAction()")));
+    EXPECT_TRUE(workflowConnectBlock.contains(QStringLiteral("workflowAerialTriangulationAction()")));
+    EXPECT_TRUE(workflowConnectBlock.contains(
+        QStringLiteral("&MenuWorkflowController::openWorkflowAerialTriangulationDialog")));
+
+    const int sparseActionIndex = bindBlock.indexOf(QStringLiteral("aerialTriangulationAction()"));
+    ASSERT_GE(sparseActionIndex, 0);
+    const int sparseNextAction = bindBlock.indexOf(QStringLiteral("connectAction("), sparseActionIndex + 1);
+    ASSERT_GT(sparseNextAction, sparseActionIndex);
+    const QString sparseConnectBlock = bindBlock.mid(sparseActionIndex, sparseNextAction - sparseActionIndex);
+
+    EXPECT_TRUE(sparseConnectBlock.contains(QStringLiteral("aerialTriangulationAction()")));
     EXPECT_TRUE(bindBlock.contains(QStringLiteral("&QAction::triggered")));
-    EXPECT_TRUE(connectBlock.contains(QStringLiteral("&MenuWorkflowController::openAerialTriangulationDialog")));
-    EXPECT_FALSE(connectBlock.contains(QStringLiteral("openThreeDReconstructionDialog")));
+    EXPECT_TRUE(sparseConnectBlock.contains(QStringLiteral("&MenuWorkflowController::openAerialTriangulationDialog")));
+    EXPECT_FALSE(sparseConnectBlock.contains(QStringLiteral("openThreeDReconstructionDialog")));
 
     EXPECT_FALSE(mainWindow.contains(QStringLiteral("&MenuWorkflowController::openAerialTriangulationDialog")));
+    EXPECT_FALSE(mainWindow.contains(QStringLiteral("&MenuWorkflowController::openWorkflowAerialTriangulationDialog")));
 }
 
 TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
@@ -8164,9 +8360,35 @@ TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("openAerialTriangulationDialog")));
+    EXPECT_TRUE(header.contains(QStringLiteral("openWorkflowAerialTriangulationDialog")));
     EXPECT_TRUE(header.contains(QStringLiteral("startAerialTriangulationWorkflow")));
     EXPECT_TRUE(source.contains(QStringLiteral("DialogSettingKeys::AerialTriangulation")));
-    EXPECT_TRUE(source.contains(QStringLiteral("setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation)")));
+    const int dialogStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::openAerialTriangulationDialog"));
+    ASSERT_GE(dialogStart, 0);
+    const int workflowDialogStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::openWorkflowAerialTriangulationDialog"),
+        dialogStart);
+    ASSERT_GT(workflowDialogStart, dialogStart);
+    const QString sparseDialogBody = source.mid(dialogStart, workflowDialogStart - dialogStart);
+    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("ThreeDReconstructionDialog")));
+    EXPECT_TRUE(sparseDialogBody.contains(
+        QStringLiteral("setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation)")));
+    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("&ThreeDReconstructionDialog::runRequested")));
+    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
+    EXPECT_FALSE(sparseDialogBody.contains(QStringLiteral("AerialTriangulationDialog dlg")));
+
+    const int workflowDialogEnd = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"),
+        workflowDialogStart);
+    ASSERT_GT(workflowDialogEnd, workflowDialogStart);
+    const QString workflowDialogBody = source.mid(workflowDialogStart, workflowDialogEnd - workflowDialogStart);
+    EXPECT_TRUE(workflowDialogBody.contains(QStringLiteral("AerialTriangulationDialog")));
+    EXPECT_TRUE(workflowDialogBody.contains(QStringLiteral("dlg.exec()")));
+    EXPECT_TRUE(workflowDialogBody.contains(QStringLiteral("dlg.collectSettings()")));
+    EXPECT_FALSE(workflowDialogBody.contains(QStringLiteral("&ThreeDReconstructionDialog::runRequested")));
+    EXPECT_FALSE(workflowDialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
+
     EXPECT_TRUE(source.contains(QStringLiteral("source\"] = QStringLiteral(\"aerial_triangulation\")"))
                 || source.contains(QStringLiteral("source\", QStringLiteral(\"aerial_triangulation\")"))
                 || source.contains(QStringLiteral("resultRecordExtra[QStringLiteral(\"source\")] = QStringLiteral(\"aerial_triangulation\")")));
@@ -8213,10 +8435,10 @@ TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataOffersAutoFillOrManualR
     ASSERT_GT(promptStart, summaryStart);
     const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("ProjectIO::findFeatureForImage")));
-    EXPECT_TRUE(summaryBody.contains(QStringLiteral("collectMatchedImageNamePairs")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("MatchResultCatalogConfig")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("recordAlgorithmMatches")));
     EXPECT_FALSE(summaryBody.contains(QStringLiteral("summary.hasFeatures = !suffixes.isEmpty()")));
     EXPECT_FALSE(summaryBody.contains(QStringLiteral("summary.hasMatches = !matches.isEmpty()")));
-    EXPECT_FALSE(summaryBody.contains(QStringLiteral("meta.value(QStringLiteral(\"ipmatch_results\"))")));
 
     const int sparseStart = source.indexOf(
         QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
@@ -8321,7 +8543,8 @@ TEST(AerialTriangulationWorkflowTest, NoMatchCacheCountsAsProcessedPairCoverage)
     ASSERT_GT(promptStart, summaryStart);
     const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
 
-    EXPECT_TRUE(summaryBody.contains(QStringLiteral("collectSettledNoMatchImageNamePairs")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("no_match_pairs.json")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("recordAlgorithmMatches")));
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("processedPairKeys")));
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("imagePairProcessed")));
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("generatedPairProcessedCount")));
@@ -8386,24 +8609,46 @@ TEST(AerialTriangulationWorkflowTest, DoesNotAutoRematchWhenPrerequisitesArePres
         << "A successful preflight must not be interpreted as a request to regenerate failed/skipped matches.";
 }
 
-TEST(AerialTriangulationWorkflowTest, DialogStartsWorkflowWithQueuedConnection)
+TEST(AerialTriangulationWorkflowTest, WorkflowDialogOnlyDoesNotStartWorkflow)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    const int dialogStart = source.indexOf(QStringLiteral("void MenuWorkflowController::openAerialTriangulationDialog"));
+    const int dialogStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::openWorkflowAerialTriangulationDialog"));
     ASSERT_GE(dialogStart, 0);
     const int nextFunction = source.indexOf(QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"),
                                             dialogStart);
     ASSERT_GT(nextFunction, dialogStart);
     const QString dialogBody = source.mid(dialogStart, nextFunction - dialogStart);
 
-    const int runConnect = dialogBody.indexOf(QStringLiteral("&ThreeDReconstructionDialog::runRequested"));
-    ASSERT_GE(runConnect, 0);
-    const int dialogExec = dialogBody.indexOf(QStringLiteral("dlg->exec()"), runConnect);
-    ASSERT_GT(dialogExec, runConnect);
-    const QString runConnectBlock = dialogBody.mid(runConnect, dialogExec - runConnect);
-    EXPECT_TRUE(runConnectBlock.contains(QStringLiteral("Qt::QueuedConnection")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("AerialTriangulationDialog")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.exec()")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.collectSettings()")));
+    EXPECT_FALSE(dialogBody.contains(QStringLiteral("&ThreeDReconstructionDialog::runRequested")));
+    EXPECT_FALSE(dialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
+}
+
+TEST(AerialTriangulationWorkflowTest, SparseAerialTriangulationDialogStartsWorkflow)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int dialogStart = source.indexOf(QStringLiteral("void MenuWorkflowController::openAerialTriangulationDialog"));
+    ASSERT_GE(dialogStart, 0);
+    const int nextFunction = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::openWorkflowAerialTriangulationDialog"),
+        dialogStart);
+    ASSERT_GT(nextFunction, dialogStart);
+    const QString dialogBody = source.mid(dialogStart, nextFunction - dialogStart);
+
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("ThreeDReconstructionDialog")));
+    EXPECT_TRUE(dialogBody.contains(
+        QStringLiteral("setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation)")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("&ThreeDReconstructionDialog::runRequested")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("Qt::QueuedConnection")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
+    EXPECT_FALSE(dialogBody.contains(QStringLiteral("AerialTriangulationDialog dlg")));
 }
 
 TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThread)
@@ -8426,7 +8671,7 @@ TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThrea
     const QString startBody = source.mid(sparseStart, launchStart - sparseStart);
 
     EXPECT_TRUE(startBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
-    EXPECT_TRUE(startBody.contains(QStringLiteral("summarizeSparsePrerequisites(images, projectMeta, projectPath)")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral("summarizeSparsePrerequisites(images")));
     EXPECT_FALSE(startBody.contains(QStringLiteral("QFutureWatcher<SparsePrerequisiteSummary>")));
     const int preflightLaunch = startBody.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"));
     ASSERT_GE(preflightLaunch, 0);
@@ -8466,6 +8711,63 @@ TEST(AerialTriangulationWorkflowTest, SfmLaunchReusesGeneratedPairConstraints)
     EXPECT_TRUE(launchBody.contains(QStringLiteral("opts.restrictPairs = true")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("opts.allowedPairs = allowedPairs")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("storedPairsStale")));
+}
+
+TEST(AerialTriangulationWorkflowTest, SfmLaunchUsesSelectedMatchPipeline)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int launchStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::launchAerialTriangulationSfm"));
+    ASSERT_GE(launchStart, 0);
+    const int nextFunction = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startThreeDReconstructionWorkflow"),
+        launchStart);
+    ASSERT_GT(nextFunction, launchStart);
+    const QString launchBody = source.mid(launchStart, nextFunction - launchStart);
+
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("opts.featureAlgorithm")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("opts.matchAlgorithm")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"feature_algorithm\")")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"match_algorithm\")")));
+}
+
+TEST(AerialTriangulationWorkflowTest, PreflightUsesSelectedMatchPipeline)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("const QString &featureAlgorithm")));
+    EXPECT_TRUE(header.contains(QStringLiteral("const QString &matchAlgorithm")));
+
+    const int startBegin = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
+    ASSERT_GE(startBegin, 0);
+    const int launchBegin = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::launchAerialTriangulationSfm"),
+        startBegin);
+    ASSERT_GT(launchBegin, startBegin);
+    const QString startBody = source.mid(startBegin, launchBegin - startBegin);
+    EXPECT_TRUE(startBody.contains(QStringLiteral("selectedFeatureAlgorithm")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral("selectedMatchAlgorithm")));
+    EXPECT_TRUE(startBody.contains(QStringLiteral("summarizeSparsePrerequisites(images")));
+
+    const int summaryBegin = source.indexOf(
+        QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
+    ASSERT_GE(summaryBegin, 0);
+    const int confirmBegin = source.indexOf(
+        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        summaryBegin);
+    ASSERT_GT(confirmBegin, summaryBegin);
+    const QString summaryBody = source.mid(summaryBegin, confirmBegin - summaryBegin);
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("selectedFeatureAlgorithm")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("selectedMatchAlgorithm")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("recordAlgorithmMatches")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("variant.featureAlgorithm")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("variant.matchAlgorithm")));
 }
 
 TEST(SfmServicePairPlanningTest, ProjectMetaCamerasEnableBoundedPairPlanning)
@@ -10153,6 +10455,19 @@ TEST(WindowsBuildScriptTest, SyncsQtImageFormatPluginsForDirectBinRuns)
 
     EXPECT_TRUE(syncBlock.contains(QStringLiteral("imageformats")));
     EXPECT_TRUE(syncBlock.contains(QStringLiteral("qjpeg")));
+}
+
+TEST(CMakeTestRuntimeTest, WindowsTorchBackedTestsUseWholeExecutableCtestRegistration)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("cmake/PlascanTestRuntime.cmake"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("${CMAKE_BINARY_DIR}/vcpkg_installed/x64-windows/bin")))
+        << "Windows test discovery must find vcpkg DLLs even when VCPKG_INSTALLED_DIR is not set in the shell.";
+    EXPECT_TRUE(source.contains(QStringLiteral("add_test(NAME ${target_name} COMMAND ${target_name})")))
+        << "Torch-backed tests should not be executed just to enumerate test cases on Windows.";
+    EXPECT_TRUE(source.contains(QStringLiteral("set_tests_properties(${target_name} PROPERTIES")))
+        << "The whole-executable ctest entry still needs the runtime PATH.";
 }
 
 TEST(ModelDropSupportTest, AcceptsStandaloneModelAndPointCloudFiles)
@@ -11871,7 +12186,7 @@ TEST(MenuWorkflowControllerTest, VocabularyOverlapAppliesGeneratedPairsToFeature
     EXPECT_TRUE(source.contains(QStringLiteral("generated_pairs")));
 }
 
-TEST(MainMenuTest, WorkflowMenuExposesOnlyOneClickThreeDReconstruction)
+TEST(MainMenuTest, WorkflowMenuExposesAerialTriangulationDialogBeforeThreeDReconstruction)
 {
     QMainWindow window;
     MainMenu menu(&window);
@@ -11896,12 +12211,18 @@ TEST(MainMenuTest, WorkflowMenuExposesOnlyOneClickThreeDReconstruction)
         }
     }
 
-    EXPECT_TRUE(visibleActions.contains(QStringLiteral("三维重建")));
-    EXPECT_FALSE(visibleActions.contains(QStringLiteral("空中三角测量")));
+    const int aerialIndex = visibleActions.indexOf(QStringLiteral("空中三角测量..."));
+    const int threeDIndex = visibleActions.indexOf(QStringLiteral("三维重建"));
+    ASSERT_GE(aerialIndex, 0);
+    ASSERT_GE(threeDIndex, 0);
+    EXPECT_LT(aerialIndex, threeDIndex);
     EXPECT_FALSE(visibleActions.contains(QStringLiteral("创建密集点云")));
     EXPECT_FALSE(visibleActions.contains(QStringLiteral("生成模型")));
+    ASSERT_NE(menu.workflowAerialTriangulationAction(), nullptr);
     ASSERT_NE(menu.threeDReconstructionAction(), nullptr);
+    EXPECT_EQ(menu.workflowAerialTriangulationAction()->text(), QStringLiteral("空中三角测量..."));
     EXPECT_EQ(menu.threeDReconstructionAction()->text(), QStringLiteral("三维重建"));
+    EXPECT_NE(menu.workflowAerialTriangulationAction(), menu.threeDReconstructionAction());
 }
 
 int main(int argc, char **argv)

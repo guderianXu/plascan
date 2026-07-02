@@ -138,6 +138,15 @@ struct DensePoint
     uint8_t r = 0,   g = 0,   b = 0;
 };
 
+struct MvsSourcePairQuality
+{
+    std::string imageA;
+    std::string imageB;
+    int totalMatches = 0;
+    int geometricInliers = 0;
+    bool verified = false;
+};
+
 // =============================================================================
 // 深度图生成配置
 // =============================================================================
@@ -158,6 +167,9 @@ struct DepthGenConfig
     bool  adaptiveDepthCacheMemory = true;      ///< 根据系统内存自动决定是否常驻 full-res 深度帧
     float maxDepthCacheRamFraction = 0.60f;     ///< full-res 深度帧缓存最多使用物理内存比例
     uint64_t minFreeRamBytes = 2ull * 1024ull * 1024ull * 1024ull; ///< 运行时保留给系统/临时 Mat 的空闲内存
+    std::vector<MvsSourcePairQuality> sourcePairQualities; ///< 直接影像对匹配/几何验证质量
+    bool requireVerifiedSourcePairs = false; ///< 有 pair 质量时，MVS source 必须来自已验证匹配对
+    int minSourcePairGeometricInliers = 20;  ///< source pair 几何内点最低门槛
 };
 
 // =============================================================================

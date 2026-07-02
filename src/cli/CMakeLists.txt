@@ -175,7 +175,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
 endif()
 
 # ── GUI 三维重建等价 CLI：SFM -> MVS -> Mesh（不生成 DEM/DOM） ──
-if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing)
+if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AND TARGET lightglue_matcher AND TARGET superglue_matcher AND TARGET sfm AND TARGET mvs AND TARGET meshing)
     add_executable(three_d_reconstruction_cli
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/pipeline/SFMService.cpp
@@ -191,6 +191,7 @@ if(TARGET feature_extractors_traditional AND TARGET lightglue_matcher AND TARGET
         meshing
         superglue_matcher
         lightglue_matcher
+        feature_match_traditional
         feature_extractors_traditional
         feature_match_common
         camera

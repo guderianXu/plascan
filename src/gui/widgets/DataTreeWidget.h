@@ -52,6 +52,8 @@ signals:
     void imageActivated(const QString &resourcePath);
     // 用户点击任意资源项时发出（含所属分组），用于模型/点云联动显示。
     void resourceActivated(const QString &section, const QString &resourcePath);
+    // 用户选择任意资源项时发出（含所属分组），仅用于属性/高亮等轻量联动。
+    void resourceSelected(const QString &section, const QString &resourcePath);
 
 private slots:
     void onContextMenuRequested(const QPoint &pos);
@@ -62,6 +64,7 @@ private:
     QStandardItem *createSection(const QString &title, int count);
     void appendItemRow(QStandardItem *parent, const QString &name, const QString &path, const QString &storage);
     void sortSectionChildrenByFileName(QStandardItem *section);
+    bool resourceFromIndex(const QModelIndex &index, QString *section, QString *resourcePath) const;
     QString resolveResourcePath(const QString &resourcePath) const;
 
     QTreeView *_view{};

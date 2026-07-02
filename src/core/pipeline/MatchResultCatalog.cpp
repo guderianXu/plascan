@@ -8,6 +8,7 @@
 #include <QJsonObject>
 #include <QJsonParseError>
 #include <QMap>
+#include <QStringList>
 
 #include <algorithm>
 #include <cstring>
@@ -209,6 +210,94 @@ QString sidecarAlgorithm(const QJsonObject &sidecar, const QString &key)
     }
     return value.toLower();
 }
+
+QString featureAlgorithmFromFeaturePath(const QString &path)
+{
+    const QString suffix = QFileInfo(path.trimmed()).suffix().toLower();
+    if (suffix == QStringLiteral("dsk"))
+    {
+        return QStringLiteral("disk");
+    }
+    if (suffix == QStringLiteral("alk"))
+    {
+        return QStringLiteral("aliked");
+    }
+    if (suffix == QStringLiteral("sift"))
+    {
+        return QStringLiteral("sift");
+    }
+    if (suffix == QStringLiteral("orb"))
+    {
+        return QStringLiteral("orb");
+    }
+    if (suffix == QStringLiteral("akz"))
+    {
+        return QStringLiteral("akaze");
+    }
+    if (suffix == QStringLiteral("dedode"))
+    {
+        return QStringLiteral("dedode");
+    }
+    if (suffix == QStringLiteral("sp"))
+    {
+        return QStringLiteral("superpoint");
+    }
+    return QString();
+}
+
+QString inferFeatureAlgorithmFromSidecar(const QJsonObject &sidecar)
+{
+    const QString featurePath = firstString(sidecar, {
+        QStringLiteral("feature0_path"),
+        QStringLiteral("feature1_path"),
+        QStringLiteral("sp0_path"),
+        QStringLiteral("sp1_path")
+    });
+    return featureAlgorithmFromFeaturePath(featurePath);
+}
+
+QString normalizedAlgorithmToken(QString value)
+{
+    value = value.trimmed().toLower();
+    value.replace(QLatin1Char('_'), QLatin1Char('-'));
+    value.replace(QLatin1Char('+'), QLatin1Char('-'));
+    value.replace(QLatin1Char(' '), QLatin1Char('-'));
+    while (value.contains(QStringLiteral("--")))
+    {
+        value.replace(QStringLiteral("--"), QStringLiteral("-"));
+    }
+    return value;
+}
+
+QString inferFeatureAlgorithmFromMatchStem(const QString &stem, const QString &matchAlgorithm)
+{
+    const QString haystack = QStringLiteral("_") + stem.toLower() + QStringLiteral("_");
+    const QString normalizedMatch = normalizedAlgorithmToken(matchAlgorithm);
+    const QStringList features = {
+        QStringLiteral("superpoint"),
+        QStringLiteral("disk"),
+        QStringLiteral("aliked"),
+        QStringLiteral("sift"),
+        QStringLiteral("orb"),
+        QStringLiteral("akaze"),
+        QStringLiteral("dedode")
+    };
+
+    for (const QString &feature : features)
+    {
+        if (haystack.contains(QStringLiteral("_%1_lightglue_").arg(feature)) ||
+            haystack.contains(QStringLiteral("_%1_superglue_").arg(feature)) ||
+            haystack.contains(QStringLiteral("_%1_bf_").arg(feature)) ||
+            haystack.contains(QStringLiteral("_%1_flann_").arg(feature)) ||
+            normalizedMatch.startsWith(feature + QLatin1Char('-')))
+        {
+            return feature;
+        }
+    }
+
+    return QString();
+}
+
 void setIncompatible(MatchVariant *variant, const QString &status, const QString &reason)
 {
     variant->compatible = false;
@@ -264,6 +353,10 @@ MatchVariant readVariant(const QFileInfo &matchInfo)
         QStringLiteral("image_b")
     });
     variant.featureAlgorithm = sidecarAlgorithm(sidecar, QStringLiteral("feature_algorithm"));
+    if (variant.featureAlgorithm.isEmpty())
+    {
+        variant.featureAlgorithm = inferFeatureAlgorithmFromSidecar(sidecar);
+    }
     variant.matchAlgorithm = sidecarAlgorithm(sidecar, QStringLiteral("match_algorithm"));
     int sidecarTotalMatches = std::max(0, variant.totalMatches);
     if (firstInt(sidecar,
@@ -376,6 +469,40 @@ int MatchResultCatalog::readSgmtMatchCount(const QString &path)
 {
     const SgmtHeader header = readSgmtHeader(path);
     return header.ok ? header.matchCount : -1;
+}
+QString MatchResultCatalog::algorithmDisplayLabel(const MatchVariant &variant)
+{
+    QString featureAlgorithm = normalizedAlgorithmToken(variant.featureAlgorithm);
+    QString matchAlgorithm = normalizedAlgorithmToken(variant.matchAlgorithm);
+
+    if (featureAlgorithm.isEmpty())
+    {
+        featureAlgorithm = inferFeatureAlgorithmFromMatchStem(
+            QFileInfo(variant.matchFilePath).completeBaseName(),
+            variant.matchAlgorithm);
+    }
+
+    if (matchAlgorithm.isEmpty())
+    {
+        matchAlgorithm = normalizedAlgorithmToken(QFileInfo(variant.matchFilePath).completeBaseName());
+    }
+    if (matchAlgorithm.isEmpty())
+    {
+        return QStringLiteral("unknown");
+    }
+
+    if (featureAlgorithm.isEmpty())
+    {
+        return QStringLiteral("unknown-") + matchAlgorithm;
+    }
+
+    if (matchAlgorithm == featureAlgorithm ||
+        matchAlgorithm.startsWith(featureAlgorithm + QLatin1Char('-')))
+    {
+        return matchAlgorithm;
+    }
+
+    return featureAlgorithm + QLatin1Char('-') + matchAlgorithm;
 }
 MatchResultCatalogSummary MatchResultCatalog::scan() const
 {

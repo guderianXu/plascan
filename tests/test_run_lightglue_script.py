@@ -109,6 +109,7 @@ class RunLightGlueScriptTest(unittest.TestCase):
 
             sidecar = json.loads(Path(str(out_path) + ".json").read_text(encoding="utf-8"))
             self.assertEqual(sidecar["feature_format_version"], 2)
+            self.assertEqual(sidecar["lightglue_keypoint_budget"], 3)
             self.assertEqual(sidecar["matched_indices0"], [0, 1])
             self.assertEqual(sidecar["matched_indices1"], [2, 1])
             self.assertEqual(sidecar["matched_scores"], [0.75, 0.5])

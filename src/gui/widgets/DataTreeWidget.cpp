@@ -12,6 +12,7 @@
 #include <QJsonArray>
 #include <QFileInfo>
 #include <QDir>
+#include <QItemSelectionModel>
 #include <QMessageBox>
 #include <QImageReader>
 #include <QStyle>
@@ -263,23 +264,27 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     _view->setSelectionMode(QAbstractItemView::ExtendedSelection);
     connect(_view, &QTreeView::customContextMenuRequested, this, &DataTreeWidget::onContextMenuRequested);
 
+    if (_view->selectionModel())
+    {
+        connect(_view->selectionModel(), &QItemSelectionModel::currentChanged,
+                this, [this](const QModelIndex &current, const QModelIndex &)
+        {
+            QString section;
+            QString path;
+            if (resourceFromIndex(current, &section, &path))
+            {
+                emit resourceSelected(section, path);
+            }
+        });
+    }
+
     // 双击或回车激活资源时，通知上层切换中央显示。
     // 单击只负责选择，避免浏览资源树时同步加载大图造成界面卡顿。
     connect(_view, &QTreeView::activated, this, [this](const QModelIndex &idx) {
-        if (!idx.isValid()) return;
-        // Use the index to access the hidden 'path' column in the same row/parent
-        QModelIndex pathIdx = idx.sibling(idx.row(), 1);
-        if (!pathIdx.isValid()) return;
-        QString path = _model->data(pathIdx).toString();
-        QModelIndex nameIdx = idx.sibling(idx.row(), 0);
-        QModelIndex parentNameIdx = nameIdx.parent().isValid() ? nameIdx.parent() : QModelIndex();
         QString section;
-        if (parentNameIdx.isValid()) {
-            section = _model->data(parentNameIdx).toString().section(' ', 0, 0);
-        }
-        if (!path.trimmed().isEmpty())
+        QString path;
+        if (resourceFromIndex(idx, &section, &path))
         {
-            path = resolveResourcePath(path);
             emit resourceActivated(section, path);
             if (section == QStringLiteral("照片")
                 || section == QStringLiteral("深度图")
@@ -504,6 +509,43 @@ void DataTreeWidget::sortSectionChildrenByFileName(QStandardItem *section)
     {
         section->appendRow(row.items);
     }
+}
+
+bool DataTreeWidget::resourceFromIndex(const QModelIndex &index, QString *section, QString *resourcePath) const
+{
+    if (!index.isValid() || !_model)
+    {
+        return false;
+    }
+
+    const QModelIndex nameIndex = index.sibling(index.row(), 0);
+    const QModelIndex parentIndex = nameIndex.parent();
+    if (!parentIndex.isValid())
+    {
+        return false;
+    }
+
+    const QModelIndex pathIndex = index.sibling(index.row(), 1);
+    if (!pathIndex.isValid())
+    {
+        return false;
+    }
+
+    const QString rawPath = _model->data(pathIndex).toString();
+    if (rawPath.trimmed().isEmpty())
+    {
+        return false;
+    }
+
+    if (section)
+    {
+        *section = _model->data(parentIndex).toString().section(QLatin1Char(' '), 0, 0);
+    }
+    if (resourcePath)
+    {
+        *resourcePath = resolveResourcePath(rawPath);
+    }
+    return true;
 }
 
 QString DataTreeWidget::resolveResourcePath(const QString &resourcePath) const
@@ -939,7 +981,8 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
         // 仅展示第一个影像的属性（多选时避免弹出多个窗口）
         if (paths.isEmpty()) return;
 
-        const QString path = paths.first();
+        QString path = paths.first();
+        path = resolveResourcePath(path);
         QFileInfo fi(path);
 
         // 使用 QImageReader 获取尽可能多的信息。

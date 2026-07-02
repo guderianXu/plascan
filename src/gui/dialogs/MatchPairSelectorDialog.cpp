@@ -135,23 +135,8 @@ bool groupContainsImage(const xjw::pipeline::MatchPairGroup &group,
 
 QString matchVariantAlgorithmLabel(const xjw::pipeline::MatchVariant &variant)
 {
-    QStringList parts;
-    if (!variant.featureAlgorithm.trimmed().isEmpty())
-    {
-        parts.append(variant.featureAlgorithm.trimmed());
-    }
-    if (!variant.matchAlgorithm.trimmed().isEmpty() &&
-        !parts.contains(variant.matchAlgorithm.trimmed()))
-    {
-        parts.append(variant.matchAlgorithm.trimmed());
-    }
-    if (!parts.isEmpty())
-    {
-        return parts.join(QStringLiteral(" + "));
-    }
-
-    const QString fallback = QFileInfo(variant.matchFilePath).completeBaseName();
-    return fallback.isEmpty() ? QStringLiteral("(未知算法)") : fallback;
+    const QString label = xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant);
+    return label == QStringLiteral("unknown") ? QStringLiteral("(未知算法)") : label;
 }
 
 QString matchVariantReasonLabel(const xjw::pipeline::MatchVariant &variant)

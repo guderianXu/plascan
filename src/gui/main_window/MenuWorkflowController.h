@@ -65,7 +65,10 @@ public slots:
     /// 打开一键三维重建对话框。
     void openThreeDReconstructionDialog();
 
-    /// 打开空中三角测量对话框。
+    /// 打开工作流程中的对齐照片参数对话框；仅保存参数，不启动算法。
+    void openWorkflowAerialTriangulationDialog();
+
+    /// 打开稀疏重建中的正式空中三角测量对话框。
     void openAerialTriangulationDialog();
 
     /// 打开影像重叠度分析对话框。
@@ -111,7 +114,9 @@ private:
 
     static SparsePrerequisiteSummary summarizeSparsePrerequisites(const QStringList &images,
                                                                   const QJsonObject &meta,
-                                                                  const QString &projectPath);
+                                                                  const QString &projectPath,
+                                                                  const QString &featureAlgorithm = QString(),
+                                                                  const QString &matchAlgorithm = QString());
     bool confirmAutoFillMissingSparseInputs(const SparsePrerequisiteSummary &summary) const;
 
     /// 在后台线程中启动特征提取任务。

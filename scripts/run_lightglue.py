@@ -101,6 +101,37 @@ def torch_features(data, device, torch_module):
     }
 
 
+def select_budget_indices(data, max_keypoints):
+    count = int(data["n_keypoints"])
+    if max_keypoints is None or max_keypoints <= 0 or count <= max_keypoints:
+        return np.arange(count, dtype=np.int64)
+
+    scores = np.asarray(data.get("scores", np.zeros(count, dtype=np.float32)), dtype=np.float32)
+    if scores.shape[0] != count:
+        scores = np.zeros(count, dtype=np.float32)
+    order = np.argsort(-scores, kind="stable")
+    return order[:max_keypoints].astype(np.int64)
+
+
+def limit_feature_data(data, max_keypoints):
+    indices = select_budget_indices(data, max_keypoints)
+    if int(indices.shape[0]) == int(data["n_keypoints"]):
+        limited = dict(data)
+        limited["original_indices"] = indices
+        limited["original_n_keypoints"] = int(data["n_keypoints"])
+        limited["limited_keypoints"] = False
+        return limited
+
+    limited = dict(data)
+    for key in ("keypoints", "scores", "scales", "orientations", "descriptors"):
+        limited[key] = np.asarray(data[key])[indices].copy()
+    limited["n_keypoints"] = int(indices.shape[0])
+    limited["original_indices"] = indices
+    limited["original_n_keypoints"] = int(data["n_keypoints"])
+    limited["limited_keypoints"] = True
+    return limited
+
+
 def lightglue_feature_candidates(feature_algorithm, desc_dim):
     feature_algorithm = (feature_algorithm or "").strip().lower()
     if feature_algorithm == "disk":
@@ -199,26 +230,43 @@ def extract_match_pairs(result, n0, n1):
     return pairs.astype(np.int64), scores.astype(np.float32)
 
 
-def write_sgmt_match(out_path, feat_path0, feat_path1, data0, data1, pairs, scores, feature_algorithm, match_algorithm):
+def write_sgmt_match(out_path, feat_path0, feat_path1, data0, data1, pairs, scores,
+                     feature_algorithm, match_algorithm, max_keypoints=None):
     name0 = os.path.splitext(os.path.basename(feat_path0))[0]
     name1 = os.path.splitext(os.path.basename(feat_path1))[0]
     name0_enc = name0.encode("utf-8")
     name1_enc = name1.encode("utf-8")
-    n0 = int(data0["n_keypoints"])
-    n1 = int(data1["n_keypoints"])
+    n0 = int(data0.get("original_n_keypoints", data0["n_keypoints"]))
+    n1 = int(data1.get("original_n_keypoints", data1["n_keypoints"]))
+    original_indices0 = np.asarray(data0.get("original_indices", np.arange(data0["n_keypoints"])), dtype=np.int64)
+    original_indices1 = np.asarray(data1.get("original_indices", np.arange(data1["n_keypoints"])), dtype=np.int64)
 
     matches0 = np.full(n0, -1, dtype=np.int32)
     matches1 = np.full(n1, -1, dtype=np.int32)
     scores0 = np.zeros(n0, dtype=np.float32)
     scores1 = np.zeros(n1, dtype=np.float32)
+    remapped_pairs = []
+    remapped_scores = []
     for (query_idx, train_idx), score in zip(pairs, scores):
         query_idx = int(query_idx)
         train_idx = int(train_idx)
+        if query_idx < 0 or query_idx >= original_indices0.shape[0]:
+            continue
+        if train_idx < 0 or train_idx >= original_indices1.shape[0]:
+            continue
+        original_query_idx = int(original_indices0[query_idx])
+        original_train_idx = int(original_indices1[train_idx])
+        if original_query_idx < 0 or original_query_idx >= n0:
+            continue
+        if original_train_idx < 0 or original_train_idx >= n1:
+            continue
         score = float(score)
-        matches0[query_idx] = train_idx
-        matches1[train_idx] = query_idx
-        scores0[query_idx] = score
-        scores1[train_idx] = score
+        matches0[original_query_idx] = original_train_idx
+        matches1[original_train_idx] = original_query_idx
+        scores0[original_query_idx] = score
+        scores1[original_train_idx] = score
+        remapped_pairs.append((original_query_idx, original_train_idx, query_idx, train_idx))
+        remapped_scores.append(score)
 
     with open(out_path, "wb") as f:
         f.write(b"SGMT")
@@ -227,7 +275,7 @@ def write_sgmt_match(out_path, feat_path0, feat_path1, data0, data1, pairs, scor
         f.write(name0_enc)
         f.write(struct.pack(">I", len(name1_enc)))
         f.write(name1_enc)
-        f.write(struct.pack(">i", int(len(pairs))))
+        f.write(struct.pack(">i", int(len(remapped_pairs))))
         f.write(struct.pack(">i", n0))
         f.write(struct.pack(">i", n1))
         for match_idx, score in zip(matches0, scores0):
@@ -235,8 +283,12 @@ def write_sgmt_match(out_path, feat_path0, feat_path1, data0, data1, pairs, scor
         for match_idx, score in zip(matches1, scores1):
             f.write(struct.pack(">id", int(match_idx), float(score)))
 
-    pts0 = data0["keypoints"][pairs[:, 0]].tolist() if len(pairs) else []
-    pts1 = data1["keypoints"][pairs[:, 1]].tolist() if len(pairs) else []
+    pts0 = [data0["keypoints"][local_q].tolist() for _, _, local_q, _ in remapped_pairs]
+    pts1 = [data1["keypoints"][local_t].tolist() for _, _, _, local_t in remapped_pairs]
+    keypoint_budget = max_keypoints
+    if keypoint_budget is None:
+        keypoint_budget = max(int(data0["n_keypoints"]), int(data1["n_keypoints"]))
+
     sidecar = {
         "match_file": os.path.abspath(out_path),
         "image0_name": name0,
@@ -249,18 +301,24 @@ def write_sgmt_match(out_path, feat_path0, feat_path1, data0, data1, pairs, scor
         "match_algorithm": match_algorithm,
         "backend": "python_lightglue",
         "feature_format_version": 2,
-        "num_matches": int(len(pairs)),
+        "num_matches": int(len(remapped_pairs)),
+        "lightglue_keypoint_budget": int(keypoint_budget),
+        "lightglue_used_keypoints0": int(data0["n_keypoints"]),
+        "lightglue_used_keypoints1": int(data1["n_keypoints"]),
+        "lightglue_limited_keypoints": bool(data0.get("limited_keypoints") or data1.get("limited_keypoints")),
+        "original_keypoints0": n0,
+        "original_keypoints1": n1,
         "matched_points0": [[float(p[0]), float(p[1])] for p in pts0],
         "matched_points1": [[float(p[0]), float(p[1])] for p in pts1],
-        "matched_indices0": [int(pair[0]) for pair in pairs],
-        "matched_indices1": [int(pair[1]) for pair in pairs],
-        "matched_scores": [float(score) for score in scores],
+        "matched_indices0": [int(pair[0]) for pair in remapped_pairs],
+        "matched_indices1": [int(pair[1]) for pair in remapped_pairs],
+        "matched_scores": [float(score) for score in remapped_scores],
     }
     with open(out_path + ".json", "w", encoding="utf-8") as fj:
         json.dump(sidecar, fj, ensure_ascii=False)
 
 
-def match_pair(feat_path0, feat_path1, out_path, use_cuda, threshold, feature_algorithm, match_algorithm):
+def match_pair(feat_path0, feat_path1, out_path, use_cuda, threshold, max_keypoints, feature_algorithm, match_algorithm):
     try:
         import torch
     except ModuleNotFoundError as exc:
@@ -275,8 +333,8 @@ def match_pair(feat_path0, feat_path1, out_path, use_cuda, threshold, feature_al
             "or set LIGHTGLUE_REPO to a LightGlue checkout."
         ) from exc
 
-    data0 = read_feature_file(feat_path0)
-    data1 = read_feature_file(feat_path1)
+    data0 = limit_feature_data(read_feature_file(feat_path0), max_keypoints)
+    data1 = limit_feature_data(read_feature_file(feat_path1), max_keypoints)
     if data0["n_keypoints"] == 0 or data1["n_keypoints"] == 0:
         raise RuntimeError("empty feature file")
     if data0["desc_dim"] != data1["desc_dim"]:
@@ -295,7 +353,7 @@ def match_pair(feat_path0, feat_path1, out_path, use_cuda, threshold, feature_al
 
     pairs, scores = extract_match_pairs(result, data0["n_keypoints"], data1["n_keypoints"])
     write_sgmt_match(out_path, feat_path0, feat_path1, data0, data1,
-                     pairs, scores, feature_algorithm, match_algorithm)
+                     pairs, scores, feature_algorithm, match_algorithm, max_keypoints)
     return len(pairs), str(device), feature_name
 
 
@@ -306,13 +364,13 @@ def main():
     parser.add_argument("-o", required=True, help="Output .match file")
     parser.add_argument("--cuda", action="store_true")
     parser.add_argument("--threshold", type=float, default=0.15)
-    parser.add_argument("--max-kpts", type=int, default=2048, help="Reserved for CLI compatibility")
+    parser.add_argument("--max-kpts", type=int, default=-1, help="Maximum keypoints per image before LightGlue; <=0 disables")
     parser.add_argument("--feature-algorithm", default="auto")
     parser.add_argument("--match-algorithm", default="lightglue")
     args = parser.parse_args()
 
     try:
-        count, device, feature_name = match_pair(args.f1, args.f2, args.o, args.cuda, args.threshold,
+        count, device, feature_name = match_pair(args.f1, args.f2, args.o, args.cuda, args.threshold, args.max_kpts,
                                                  args.feature_algorithm, args.match_algorithm)
     except Exception as exc:
         print(f"ERROR: {exc}", file=sys.stderr)

@@ -45,6 +45,8 @@ private:
     QLabel *_statusLabel = nullptr;
     QComboBox *_qualityCombo = nullptr;
     QComboBox *_deviceCombo = nullptr;
+    QLabel *_matchPipelineLabel = nullptr;
+    QComboBox *_matchPipelineCombo = nullptr;
     QSpinBox *_featureGrayMinSpin = nullptr;
     QSpinBox *_threadsSpin = nullptr;
     QLineEdit *_outputDirEdit = nullptr;

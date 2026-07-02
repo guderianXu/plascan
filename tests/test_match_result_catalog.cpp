@@ -570,3 +570,83 @@ TEST(MatchResultCatalogTest, ReadsSgmtV1MatchCount)
 
     EXPECT_EQ(xjw::pipeline::MatchResultCatalog::readSgmtMatchCount(path), 41);
 }
+
+TEST(MatchResultCatalogTest, FormatsVariantAlgorithmAsFeatureMatcher)
+{
+    xjw::pipeline::MatchVariant variant;
+    variant.featureAlgorithm = QStringLiteral("disk");
+    variant.matchAlgorithm = QStringLiteral("lightglue");
+
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant),
+              QStringLiteral("disk-lightglue"));
+
+    variant.featureAlgorithm = QStringLiteral("superpoint");
+    variant.matchAlgorithm = QStringLiteral("lightglue");
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant),
+              QStringLiteral("superpoint-lightglue"));
+
+    variant.featureAlgorithm = QStringLiteral("sift");
+    variant.matchAlgorithm = QStringLiteral("sift_bf_l2");
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant),
+              QStringLiteral("sift-bf-l2"));
+
+    variant.featureAlgorithm.clear();
+    variant.matchAlgorithm = QStringLiteral("lightglue");
+    variant.matchFilePath.clear();
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant),
+              QStringLiteral("unknown-lightglue"));
+}
+
+TEST(MatchResultCatalogTest, InfersLegacyLightGlueFeatureFromMatchFileName)
+{
+    xjw::pipeline::MatchVariant variant;
+    variant.matchAlgorithm = QStringLiteral("lightglue");
+    variant.matchFilePath = QStringLiteral("E:/tmp/image_A__image_B_disk_lightglue.match");
+
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant),
+              QStringLiteral("disk-lightglue"));
+
+    variant.matchFilePath = QStringLiteral("E:/tmp/image_A__image_B_sift_lightglue.match");
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant),
+              QStringLiteral("sift-lightglue"));
+}
+
+TEST(MatchResultCatalogTest, InfersFeatureAlgorithmFromLegacySidecarFeaturePath)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("image_A.JPG"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("image_B.JPG"));
+    const QString matchPath = writeSgmtMatch(tempDir.path(),
+                                             QStringLiteral("image_A__image_B_lightglue.match"),
+                                             QFileInfo(imageA).fileName(),
+                                             QFileInfo(imageB).fileName(),
+                                             88);
+
+    QJsonObject sidecar;
+    sidecar.insert(QStringLiteral("image0_path"), imageA);
+    sidecar.insert(QStringLiteral("image1_path"), imageB);
+    sidecar.insert(QStringLiteral("feature0_path"), imageA + QStringLiteral(".dsk"));
+    sidecar.insert(QStringLiteral("feature1_path"), imageB + QStringLiteral(".dsk"));
+    sidecar.insert(QStringLiteral("match_algorithm"), QStringLiteral("lightglue"));
+    sidecar.insert(QStringLiteral("num_matches"), 88);
+
+    QFile sidecarFile(matchPath + QStringLiteral(".json"));
+    ASSERT_TRUE(sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    sidecarFile.write(QJsonDocument(sidecar).toJson(QJsonDocument::Compact));
+    sidecarFile.close();
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = tempDir.path();
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+
+    ASSERT_EQ(summary.pairGroups.size(), 1);
+    ASSERT_EQ(summary.pairGroups.front().variants.size(), 1);
+    const xjw::pipeline::MatchVariant &variant = summary.pairGroups.front().variants.front();
+    EXPECT_TRUE(variant.compatible);
+    EXPECT_EQ(variant.featureAlgorithm, QStringLiteral("disk"));
+    EXPECT_EQ(xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant),
+              QStringLiteral("disk-lightglue"));
+}

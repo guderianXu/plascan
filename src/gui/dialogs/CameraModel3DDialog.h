@@ -60,6 +60,7 @@ public:
     // -------------------------------------------------------------------------
     struct CameraPose {
         QString name;       // 相机名称（用于标注）
+        QString imagePath;  // 影像路径（用于与影像列表联动高亮）
         QVector3D center;   // 相机光心世界坐标
         QMatrix3x3 rotation; // 相机旋转矩阵（right/up/forward 列向量）
     };
@@ -94,6 +95,11 @@ public:
     bool isGizmoVisible() const { return _showGizmo; }
     /// 设置是否显示相机光心、视锥体和文件名标签
     void setShowCameras(bool show);
+    void setHighlightedCameraPath(const QString &imagePath);
+    void setHighlightedCameraName(const QString &imageName);
+    void clearHighlightedCamera();
+    void setShowWorldOrigin(bool show);
+    bool isWorldOriginVisible() const;
     /// 查询当前相机覆盖层是否可见
     bool areCamerasVisible() const { return _showCameras; }
 
@@ -185,6 +191,8 @@ private:
 
     int maxVisibleCameraLabels() const;
     float cameraFrustumBase() const;
+    bool isCameraHighlighted(const CameraPose &pose) const;
+    QString normalizedCameraPath(const QString &imagePath) const;
 
     // 在 OpenGL 渲染完成后，用 QPainter 绘制 2D 覆盖层：
     //   - 操控球 Gizmo（旋转环）
@@ -230,7 +238,7 @@ private:
     QOpenGLVertexArrayObject _modelPtVao;
     QOpenGLBuffer _modelPtVbo{QOpenGLBuffer::VertexBuffer};
     int _modelPtCount = 0;
-    float _modelPointSize = 3.5f;
+    float _modelPointSize = 2.4f;
 
     // 包围盒线框 GPU 资源
     QOpenGLVertexArrayObject _lineVao;
@@ -268,6 +276,9 @@ private:
     QQuaternion _viewRotAtPress;     // 按下时的视图旋转快照
     bool _showGizmo = true;                       // 操控球是否可见（默认可见）
     bool _showCameras = true;                      // 相机光心、视锥体和标签是否可见（默认可见）
+    QString _highlightedCameraPath;
+    QString _highlightedCameraName;
+    bool _showWorldOrigin = true;
     bool _manualPruneMode = false;
     bool _manualSelecting = false;
     QPoint _manualSelectStart;

@@ -37,12 +37,15 @@ class MenuWorkflowController;
 class ReconstructionWorkflowController;
 class QProgressDialog;
 class QDockWidget;
+class QAction;
 class QToolButton;
 class QListWidget;
 class QTabWidget;
 class ProjectDashboardWidget;
 class ReferencePanelWidget;
 class WorkspaceCenterWidget;
+class PhotoStripWidget;
+class SelectionPropertiesWidget;
 class DialogSettingStore;
 class TaskStatusWidget;
 class QDragEnterEvent;
@@ -69,12 +72,18 @@ protected:
 private:
     // ---- 初始化（由构造函数按顺序调用）----
     void setupUi();               // 创建核心布局：分割器、左侧选项卡、数据树、画布、日志面板
+    void setupSelectionPanels();
     void setupBottomPanel();      // 初始化底部 Dock 标题栏的日志切换按钮
     void setupMenuConnections();  // 将菜单/工具栏 QAction 信号连接到对应的槽
     void setupProjectManager();   // 创建所有业务对象（ProjectManager 等）并完成全局信号/槽连接
     void refreshDashboardTaskSnapshots(); // 将状态栏任务快照同步到只读概览页
 
     // ---- UI 设置持久化辅助 ----
+    void connectDockAction(QAction *action, QWidget *panel, const QString &settingKey);
+    void selectPhoto(const QString &imagePath, bool openImage);
+    void selectResource(const QString &section, const QString &resourcePath);
+    bool isProjectPhotoPath(const QString &imagePath) const;
+    QJsonObject currentProjectMeta() const;
     // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
     // 参数: partial - 仅包含需更新键值对的 JSON 对象
     void saveUiSetting(const QJsonObject &partial);
@@ -93,6 +102,11 @@ private:
     Ui::MainWindow*  _ui{};                           // Qt Designer 生成的主窗口静态布局
     QSplitter*        _mainSplitter{};                 // 左右主分割器（左=数据树选项卡, 右=工作区）
     QTabWidget*       _leftTabs{};                     // 左侧选项卡容器（工作区 | 参考）
+    QSplitter *_leftPanelSplitter{};
+    QSplitter *_rightPanelSplitter{};
+    SelectionPropertiesWidget *_selectionProperties{};
+    QWidget *_photosPanel{};
+    PhotoStripWidget *_photoStrip{};
     ProjectDashboardWidget* _dashboard{};              // 项目概览与工作流状态（只读）
     DataTreeWidget*   _dataTree{};                     // 工作区资源树（照片/匹配/点云/DEM 等分组）
     ReferencePanelWidget* _referencePanel{};           // 参考面板（相机参数外参导入）

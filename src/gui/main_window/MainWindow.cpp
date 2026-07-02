@@ -3,6 +3,7 @@
 #include "ui_MainWindow.h"
 
 #include <QApplication>
+#include <QAction>
 #include <QSplitter>
 #include <QDockWidget>
 #include <QToolBar>
@@ -13,6 +14,7 @@
 #include <QUrl>
 #include <QToolButton>
 #include <QButtonGroup>
+#include <QJsonArray>
 #include <QJsonObject>
 #include <QMessageBox>
 #include <QProgressDialog>
@@ -29,6 +31,11 @@
 #include <QDropEvent>
 #include <QMimeData>
 #include <QPointer>
+#include <QSignalBlocker>
+#include <QFrame>
+#include <QHBoxLayout>
+#include <QLabel>
+#include <QVBoxLayout>
 
 #include <algorithm>
 
@@ -48,11 +55,13 @@
 #include "ProjectIO.h"
 #include "ProjectData.h"
 #include "ProjectDashboardWidget.h"
+#include "PhotoStripWidget.h"
 #include "AppConfigManager.h"
 #include "DialogSettingStore.h"
 #include "DialogSettingKeys.h"
 #include "DataTreeWidget.h"
 #include "ReferencePanelWidget.h"
+#include "SelectionPropertiesWidget.h"
 #include "TaskStatusWidget.h"
 #include "ObservationNetworkView.h"
 #include "graph/ObservationNetworkBuilder.h"
@@ -81,6 +90,7 @@ MainWindow::MainWindow(QWidget *parent)
     _config   = new AppConfigManager(this);
 
     setupUi();
+    setupSelectionPanels();
     _mainMenu = new MainMenu(this);
     _config->windowState()->load(this);
 
@@ -171,6 +181,108 @@ void MainWindow::setupUi()
 
 }
 
+void MainWindow::setupSelectionPanels()
+{
+    if (!_mainSplitter || !_leftTabs || !_workspaceCenter || _leftPanelSplitter)
+    {
+        return;
+    }
+
+    const int leftIndex = _mainSplitter->indexOf(_leftTabs);
+    const int workspaceIndex = _mainSplitter->indexOf(_workspaceCenter);
+    if (leftIndex < 0 || workspaceIndex < 0)
+    {
+        return;
+    }
+
+    _selectionProperties = new SelectionPropertiesWidget(this);
+    _selectionProperties->setObjectName(QStringLiteral("selectionProperties"));
+    _selectionProperties->setMinimumHeight(145);
+
+    _leftPanelSplitter = new QSplitter(Qt::Vertical);
+    _leftPanelSplitter->setObjectName(QStringLiteral("leftPanelSplitter"));
+    _leftPanelSplitter->setChildrenCollapsible(false);
+
+    _rightPanelSplitter = new QSplitter(Qt::Vertical);
+    _rightPanelSplitter->setObjectName(QStringLiteral("rightPanelSplitter"));
+    _rightPanelSplitter->setChildrenCollapsible(false);
+
+    auto *photosFrame = new QFrame(_rightPanelSplitter);
+    photosFrame->setObjectName(QStringLiteral("photosPanel"));
+    photosFrame->setFrameShape(QFrame::StyledPanel);
+    photosFrame->setMinimumHeight(170);
+    photosFrame->setMaximumHeight(320);
+
+    auto *photosLayout = new QVBoxLayout(photosFrame);
+    photosLayout->setContentsMargins(0, 0, 0, 0);
+    photosLayout->setSpacing(0);
+
+    auto *photosTitleBar = new QWidget(photosFrame);
+    photosTitleBar->setObjectName(QStringLiteral("photosTitleBar"));
+    auto *photosTitleLayout = new QHBoxLayout(photosTitleBar);
+    photosTitleLayout->setContentsMargins(6, 2, 4, 2);
+    photosTitleLayout->setSpacing(4);
+    auto *photosTitle = new QLabel(tr("照片"), photosTitleBar);
+    auto *photosClose = new QToolButton(photosTitleBar);
+    photosClose->setObjectName(QStringLiteral("photosCloseButton"));
+    photosClose->setText(QStringLiteral("x"));
+    photosClose->setAutoRaise(true);
+    photosClose->setToolTip(tr("隐藏照片面板"));
+    photosTitleLayout->addWidget(photosTitle);
+    photosTitleLayout->addStretch(1);
+    photosTitleLayout->addWidget(photosClose);
+    photosLayout->addWidget(photosTitleBar);
+
+    _photoStrip = new PhotoStripWidget(photosFrame);
+    photosLayout->addWidget(_photoStrip, 1);
+    _photosPanel = photosFrame;
+
+    connect(photosClose, &QToolButton::clicked, this, [this]()
+    {
+        if (_mainMenu && _mainMenu->togglePhotosAction())
+        {
+            _mainMenu->togglePhotosAction()->setChecked(false);
+            return;
+        }
+        if (_photosPanel)
+        {
+            _photosPanel->setVisible(false);
+        }
+        saveUiSetting(QJsonObject{{QStringLiteral("photos_visible"), false}});
+    });
+
+    QWidget *oldLeftTabs = _mainSplitter->replaceWidget(leftIndex, _leftPanelSplitter);
+    if (!oldLeftTabs)
+    {
+        oldLeftTabs = _leftTabs;
+    }
+    QWidget *oldWorkspace = _mainSplitter->replaceWidget(workspaceIndex, _rightPanelSplitter);
+    if (!oldWorkspace)
+    {
+        oldWorkspace = _workspaceCenter;
+    }
+
+    _leftPanelSplitter->addWidget(oldLeftTabs);
+    _leftPanelSplitter->addWidget(_selectionProperties);
+    _leftPanelSplitter->setStretchFactor(0, 3);
+    _leftPanelSplitter->setStretchFactor(1, 1);
+    _leftPanelSplitter->setSizes({560, 190});
+
+    _rightPanelSplitter->addWidget(oldWorkspace);
+    _rightPanelSplitter->addWidget(_photosPanel);
+    _rightPanelSplitter->setStretchFactor(0, 5);
+    _rightPanelSplitter->setStretchFactor(1, 1);
+    _rightPanelSplitter->setSizes({620, 210});
+
+    _mainSplitter->insertWidget(0, _leftPanelSplitter);
+    _mainSplitter->insertWidget(1, _rightPanelSplitter);
+    _mainSplitter->setCollapsible(0, false);
+    _mainSplitter->setCollapsible(1, false);
+    _mainSplitter->setStretchFactor(0, 0);
+    _mainSplitter->setStretchFactor(1, 1);
+    _mainSplitter->setSizes({320, 960});
+}
+
 // ============================================================
 //  setupBottomPanel — 底部面板标题栏切换按钮
 // ============================================================
@@ -224,6 +336,16 @@ void MainWindow::setupMenuConnections()
         connect(_mainMenu->toggleLogAction(), &QAction::toggled, this, &MainWindow::onToggleLogAction);
     }
 
+    connectDockAction(_mainMenu->toggleWorkspaceAction(),
+                      _leftTabs,
+                      QStringLiteral("workspace_visible"));
+    connectDockAction(_mainMenu->togglePropertiesAction(),
+                      _selectionProperties,
+                      QStringLiteral("properties_visible"));
+    connectDockAction(_mainMenu->togglePhotosAction(),
+                      _photosDock,
+                      QStringLiteral("photos_visible"));
+
     if (_mainMenu->minimizeAction())
     {
         connect(_mainMenu->minimizeAction(), &QAction::triggered, this, &QWidget::showMinimized);
@@ -238,6 +360,15 @@ void MainWindow::setupMenuConnections()
     {
         connect(_mainMenu->toggleCamerasAction(), &QAction::toggled,
                 _workspaceCenter->modelView(), &CameraSceneWidget::setShowCameras);
+    }
+    if (_mainMenu->toggleWorldOriginAction() && _workspaceCenter && _workspaceCenter->modelView())
+    {
+        connect(_mainMenu->toggleWorldOriginAction(), &QAction::toggled,
+                _workspaceCenter->modelView(), &CameraSceneWidget::setShowWorldOrigin);
+        connect(_mainMenu->toggleWorldOriginAction(), &QAction::toggled, this, [this](bool on)
+        {
+            saveUiSetting(QJsonObject{{QStringLiteral("world_origin_visible"), on}});
+        });
     }
 
     if (_mainMenu->manualPointCloudPruneAction())
@@ -304,21 +435,12 @@ void MainWindow::setupProjectManager()
                 }
             });
 
-    if (_dataTree)
+    if (_photoStrip)
     {
-        connect(_dataTree, &DataTreeWidget::imageActivated,
-                this, [this](const QString &p)
-                {
-                    _lastSelectedImage = p;
-                });
-    }
-    if (_referencePanel)
-    {
-        connect(_referencePanel, &ReferencePanelWidget::imageActivated,
-                this, [this](const QString &p)
-                {
-                    _lastSelectedImage = p;
-                });
+        connect(_photoStrip, &PhotoStripWidget::photoActivated, this, [this](const QString &path)
+        {
+            selectPhoto(path, true);
+        });
     }
     // 画布切换影像时，通过 DialogSettingStore 持久化活跃影像路径
     if (_canvas)
@@ -692,6 +814,17 @@ void MainWindow::setupProjectManager()
     connect(_projectManager, &ProjectManager::projectMetadataChanged, _dashboard, &ProjectDashboardWidget::loadFromJson);
     connect(_projectManager, &ProjectManager::projectMetadataChanged, _dataTree, &DataTreeWidget::loadFromJson);
     connect(_projectManager, &ProjectManager::projectMetadataChanged, _referencePanel, &ReferencePanelWidget::loadFromJson);
+    connect(_projectManager, &ProjectManager::projectMetadataChanged, this, [this](const QJsonObject &meta)
+    {
+        if (_photoStrip)
+        {
+            if (_projectManager)
+            {
+                _photoStrip->setProjectPath(_projectManager->currentProjectPath());
+            }
+            _photoStrip->loadFromJson(meta);
+        }
+    });
 
     connect(_dataTree, &DataTreeWidget::removeRequested,  _projectManager, &ProjectManager::removeResources);
     connect(_dataTree, &DataTreeWidget::deleteDataRequested, _projectManager, &ProjectManager::deleteGeneratedData);
@@ -727,6 +860,15 @@ void MainWindow::setupProjectManager()
     {
         QDesktopServices::openUrl(QUrl::fromLocalFile(QFileInfo(p).absolutePath()));
     });
+    connect(_dataTree, &DataTreeWidget::resourceSelected, this, [this](const QString &section, const QString &path)
+    {
+        if (section == QStringLiteral("照片"))
+        {
+            selectPhoto(path, false);
+            return;
+        }
+        selectResource(section, path);
+    });
     connect(_dataTree, &DataTreeWidget::resourceActivated, this, [this](const QString &section, const QString &path)
     {
         if (!_workspaceCenter || !_projectManager)
@@ -735,8 +877,10 @@ void MainWindow::setupProjectManager()
         }
         if (section == QStringLiteral("照片"))
         {
+            selectPhoto(path, true);
             return;
         }
+        selectResource(section, path);
 
         auto normalizedMeta = [this]()
         {
@@ -908,21 +1052,8 @@ void MainWindow::setupProjectManager()
     connect(_referencePanel, &ReferencePanelWidget::imageActivated,
         this, [this](const QString &p)
         {
-            if (_workspaceCenter)
-            {
-                _workspaceCenter->showImageView(p);
-                _lastSelectedImage = p;
-            }
+            selectPhoto(p, true);
         });
-
-    connect(_dataTree, &DataTreeWidget::imageActivated, this, [this](const QString &p)
-    {
-        if (_workspaceCenter)
-        {
-            _workspaceCenter->showImageView(p);
-            _lastSelectedImage = p;
-        }
-    });
 
     connect(_projectManager, &ProjectManager::projectMetadataChanged, this, [this](const QJsonObject &meta)
     {
@@ -1478,6 +1609,140 @@ void MainWindow::hideSpProgress(bool ok)
 //  辅助方法
 // ============================================================
 
+void MainWindow::connectDockAction(QAction *action, QWidget *panel, const QString &settingKey)
+{
+    if (!action || !panel)
+    {
+        return;
+    }
+
+    action->setCheckable(true);
+    action->setChecked(!panel->isHidden());
+
+    connect(action, &QAction::toggled, panel, [this, panel, settingKey](bool on)
+    {
+        panel->setVisible(on);
+        saveUiSetting(QJsonObject{{settingKey, on}});
+    });
+
+    if (auto *dock = qobject_cast<QDockWidget *>(panel))
+    {
+        connect(dock, &QDockWidget::visibilityChanged, action, [this, action, settingKey](bool on)
+        {
+            const QSignalBlocker blocker(action);
+            action->setChecked(on);
+            saveUiSetting(QJsonObject{{settingKey, on}});
+        });
+    }
+}
+
+QJsonObject MainWindow::currentProjectMeta() const
+{
+    return _projectManager ? _projectManager->currentMeta() : QJsonObject{};
+}
+
+bool MainWindow::isProjectPhotoPath(const QString &imagePath) const
+{
+    if (imagePath.isEmpty())
+    {
+        return false;
+    }
+
+    const QFileInfo targetInfo(imagePath);
+    const QString targetPath = QDir::cleanPath(imagePath);
+    const QString targetAbsPath = targetInfo.exists()
+        ? QDir::cleanPath(targetInfo.absoluteFilePath())
+        : QString();
+    const QString projectDirPath = _projectManager
+        ? QFileInfo(_projectManager->currentProjectPath()).absolutePath()
+        : QString();
+    const QDir projectDir(projectDirPath);
+    const QJsonArray images = xjw::gui::project::projectImageEntries(currentProjectMeta());
+
+    auto matchesTarget = [&targetPath, &targetAbsPath](const QString &candidatePath)
+    {
+        if (candidatePath.isEmpty())
+        {
+            return false;
+        }
+
+        const QString cleanCandidate = QDir::cleanPath(candidatePath);
+        return targetPath == cleanCandidate || targetAbsPath == cleanCandidate;
+    };
+
+    for (const QJsonValue &value : images)
+    {
+        const QJsonObject image = value.toObject();
+        const QString entryPath = image.value(QStringLiteral("path")).toString();
+        if (entryPath.isEmpty())
+        {
+            continue;
+        }
+
+        const QFileInfo entryInfo(entryPath);
+        const QString entryCleanPath = QDir::cleanPath(entryPath);
+        const QString entryAbsPath = entryInfo.exists()
+            ? QDir::cleanPath(entryInfo.absoluteFilePath())
+            : QString();
+        const QString projectResolvedPath =
+            (!projectDirPath.isEmpty() && entryInfo.isRelative())
+                ? QDir::cleanPath(projectDir.absoluteFilePath(entryPath))
+                : QString();
+
+        if (matchesTarget(entryCleanPath)
+            || matchesTarget(entryAbsPath)
+            || matchesTarget(projectResolvedPath))
+        {
+            return true;
+        }
+    }
+
+    return false;
+}
+
+void MainWindow::selectPhoto(const QString &imagePath, bool openImage)
+{
+    if (imagePath.isEmpty())
+    {
+        return;
+    }
+
+    _lastSelectedImage = imagePath;
+    if (_selectionProperties)
+    {
+        _selectionProperties->showPhotoProperties(currentProjectMeta(), imagePath);
+    }
+    if (_photoStrip)
+    {
+        _photoStrip->setCurrentPhoto(imagePath);
+    }
+    if (_workspaceCenter)
+    {
+        _workspaceCenter->highlightCameraForImage(imagePath);
+        if (openImage)
+        {
+            _workspaceCenter->showImageView(imagePath);
+        }
+    }
+    saveUiSetting(QJsonObject{{QStringLiteral("active_image_path"), imagePath}});
+}
+
+void MainWindow::selectResource(const QString &section, const QString &resourcePath)
+{
+    if (_selectionProperties)
+    {
+        _selectionProperties->showResourceProperties(currentProjectMeta(), section, resourcePath);
+    }
+    if (_photoStrip)
+    {
+        _photoStrip->setCurrentPhoto(QString());
+    }
+    if (_workspaceCenter)
+    {
+        _workspaceCenter->clearHighlightedCamera();
+    }
+}
+
 void MainWindow::saveUiSetting(const QJsonObject &partial)
 {
     if (_uiSetting)
@@ -1674,12 +1939,18 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     {
         _dataTree->setProjectPath(plascanPath);
     }
+    if (_photoStrip)
+    {
+        _photoStrip->setProjectPath(plascanPath);
+    }
     if (_projectManager && _dataTree)
         _dataTree->loadFromJson(_projectManager->currentMeta());
     if (_projectManager && _dashboard)
         _dashboard->loadFromJson(_projectManager->currentMeta());
     if (_projectManager && _workspaceCenter)
         _workspaceCenter->setProjectMeta(_projectManager->currentMeta());
+    if (_projectManager && _photoStrip)
+        _photoStrip->loadFromJson(_projectManager->currentMeta());
 
     if (_config && _mainMenu)
     {
@@ -1765,6 +2036,52 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
     }
 
     // feature-info visibility handling removed
+    auto applyVisibility = [](QAction *action, QWidget *panel, const QJsonObject &settings, const QString &key)
+    {
+        if (!action || !panel || !settings.contains(key))
+        {
+            return;
+        }
+
+        const bool on = settings.value(key).toBool();
+        {
+            const QSignalBlocker actionBlocker(action);
+            action->setChecked(on);
+        }
+        {
+            const QSignalBlocker panelBlocker(panel);
+            panel->setVisible(on);
+        }
+    };
+
+    if (_mainMenu)
+    {
+        applyVisibility(_mainMenu->toggleWorkspaceAction(),
+                        _leftTabs,
+                        ui,
+                        QStringLiteral("workspace_visible"));
+        applyVisibility(_mainMenu->togglePropertiesAction(),
+                        _selectionProperties,
+                        ui,
+                        QStringLiteral("properties_visible"));
+        applyVisibility(_mainMenu->togglePhotosAction(),
+                        _photosDock,
+                        ui,
+                        QStringLiteral("photos_visible"));
+
+        if (ui.contains(QStringLiteral("world_origin_visible")) && _mainMenu->toggleWorldOriginAction())
+        {
+            const bool on = ui.value(QStringLiteral("world_origin_visible")).toBool();
+            {
+                const QSignalBlocker blocker(_mainMenu->toggleWorldOriginAction());
+                _mainMenu->toggleWorldOriginAction()->setChecked(on);
+            }
+            if (_workspaceCenter && _workspaceCenter->modelView())
+            {
+                _workspaceCenter->modelView()->setShowWorldOrigin(on);
+            }
+        }
+    }
 
     if (ui.contains(QStringLiteral("active_image_path")) && _canvas)
     {
@@ -1778,10 +2095,16 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
                 {
                     return;
                 }
+                if (isProjectPhotoPath(imagePath))
+                {
+                    selectPhoto(imagePath, true);
+                    return;
+                }
                 if (_workspaceCenter)
                 {
                     _workspaceCenter->showImageView(imagePath);
                 }
+                _lastSelectedImage = imagePath;
             });
         }
     }

@@ -34,6 +34,8 @@ public slots:
     void showPointCloudFile(const QString &pointCloudPath);
     void showObservationNetwork(const xjw::ObservationNetwork &net, const QString &title = QString());
     void setProjectMeta(const QJsonObject &meta);
+    void highlightCameraForImage(const QString &imagePath);
+    void clearHighlightedCamera();
 
 private:
     void refreshModelFromMeta(const QJsonObject &meta);
