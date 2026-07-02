@@ -176,6 +176,7 @@ void MainWindow::setupUi()
     _log = _ui->logPanel;
     _logDock = _ui->logDock;
     _logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+    _logDock->setVisible(false);
 
     LOG_INFO("%s", qUtf8Printable(tr("日志面板已就绪")));
 
@@ -294,7 +295,8 @@ void MainWindow::setupBottomPanel()
     _logBtn = new QToolButton(titleBar);
     _logBtn->setText(tr("日志"));
     _logBtn->setCheckable(true);
-    _logBtn->setChecked(true);
+    _logBtn->setChecked(false);
+    _logBtn->setVisible(false);
 
     auto *grp = new QButtonGroup(titleBar);
     grp->setExclusive(true);
@@ -342,9 +344,42 @@ void MainWindow::setupMenuConnections()
     connectDockAction(_mainMenu->togglePropertiesAction(),
                       _selectionProperties,
                       QStringLiteral("properties_visible"));
-    connectDockAction(_mainMenu->togglePhotosAction(),
-                      _photosDock,
-                      QStringLiteral("photos_visible"));
+    if (_mainMenu->togglePhotosAction() && _photosPanel)
+    {
+        auto *photosAction = _mainMenu->togglePhotosAction();
+        photosAction->setCheckable(true);
+        photosAction->setChecked(!_photosPanel->isHidden());
+        connect(photosAction, &QAction::toggled, this, [this](bool on)
+        {
+            if (_photosPanel)
+            {
+                _photosPanel->setVisible(on);
+            }
+            if (on)
+            {
+                if (_logDock)
+                {
+                    _logDock->setVisible(false);
+                }
+                if (_logBtn)
+                {
+                    _logBtn->setChecked(false);
+                    _logBtn->setVisible(false);
+                }
+                if (_mainMenu && _mainMenu->toggleLogAction())
+                {
+                    const QSignalBlocker blocker(_mainMenu->toggleLogAction());
+                    _mainMenu->toggleLogAction()->setChecked(false);
+                }
+                saveUiSetting(QJsonObject{
+                    {QStringLiteral("photos_visible"), true},
+                    {QStringLiteral("log_visible"), false}
+                });
+                return;
+            }
+            saveUiSetting(QJsonObject{{QStringLiteral("photos_visible"), false}});
+        });
+    }
 
     if (_mainMenu->minimizeAction())
     {
@@ -1753,14 +1788,28 @@ void MainWindow::saveUiSetting(const QJsonObject &partial)
 
 QString MainWindow::currentBottomPanelKey() const
 {
+    if (_photosPanel && _photosPanel->isVisible())
+    {
+        return QStringLiteral("photos");
+    }
     return QStringLiteral("log");
 }
 
 void MainWindow::switchToLogPanel()
 {
+    if (_photosPanel)
+    {
+        _photosPanel->setVisible(false);
+    }
+    if (_mainMenu && _mainMenu->togglePhotosAction())
+    {
+        const QSignalBlocker blocker(_mainMenu->togglePhotosAction());
+        _mainMenu->togglePhotosAction()->setChecked(false);
+    }
     if (_logDock)
     {
         _logDock->setWidget(_log);
+        _logDock->setVisible(true);
     }
     if (_log)
     {
@@ -1803,8 +1852,7 @@ void MainWindow::onToggleLogAction(bool on)
     }
     if (on)
     {
-        _logDock->setWidget(_log);
-        _logDock->setVisible(true);
+        switchToLogPanel();
         if (_log)
         {
             _log->loadFromLogFile();
@@ -1816,7 +1864,10 @@ void MainWindow::onToggleLogAction(bool on)
     }
     else
     {
-        // feature panel removed; nothing to switch to
+        if (_logDock)
+        {
+            _logDock->setVisible(false);
+        }
     }
 }
 
@@ -2065,9 +2116,28 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
                         ui,
                         QStringLiteral("properties_visible"));
         applyVisibility(_mainMenu->togglePhotosAction(),
-                        _photosDock,
+                        _photosPanel,
                         ui,
                         QStringLiteral("photos_visible"));
+
+        const bool photosVisible = _photosPanel && _photosPanel->isVisible();
+        if (photosVisible)
+        {
+            if (_logDock)
+            {
+                _logDock->setVisible(false);
+            }
+            if (_logBtn)
+            {
+                _logBtn->setChecked(false);
+                _logBtn->setVisible(false);
+            }
+            if (_mainMenu->toggleLogAction())
+            {
+                const QSignalBlocker blocker(_mainMenu->toggleLogAction());
+                _mainMenu->toggleLogAction()->setChecked(false);
+            }
+        }
 
         if (ui.contains(QStringLiteral("world_origin_visible")) && _mainMenu->toggleWorldOriginAction())
         {
