@@ -3134,7 +3134,6 @@ TEST(CodeStyleTest, CameraModel3DDialogUsesLowerCamelPrivateMemberNames)
         << "CameraModel3DDialog private members should use _lowerCamelCase.";
     EXPECT_FALSE(sourceWithoutGeneratedUiObjects.contains(legacyMemberPattern))
         << "CameraModel3DDialog source should not reference m_ private members.";
-    EXPECT_TRUE(header.contains(QStringLiteral("QOpenGLFunctions_4_3_Core *_gl = nullptr;")));
     EXPECT_TRUE(header.contains(QStringLiteral("ProjectManager *_projectManager = nullptr;")));
     EXPECT_TRUE(source.contains(QStringLiteral("form.m_scene")));
     EXPECT_TRUE(source.contains(QStringLiteral("form.m_summaryLabel")));
@@ -6508,6 +6507,65 @@ TEST(CameraSceneWidgetTest, CameraVisibilityToggleIsExposedAndGuardsCameraOverla
     EXPECT_TRUE(source.contains(QStringLiteral("if (_showCameras)")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCamerasAction()")));
     EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameras")));
+}
+
+TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("#include <QRhiWidget>")));
+    EXPECT_TRUE(header.contains(QStringLiteral("class CameraSceneWidget : public QRhiWidget")));
+    EXPECT_TRUE(source.contains(QStringLiteral("setApi(QRhiWidget::Api::Vulkan)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void initialize(QRhiCommandBuffer *cb) override;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void render(QRhiCommandBuffer *cb) override;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void releaseResources() override;")));
+}
+
+TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const QString guiCmake = readProjectSourceFile(QStringLiteral("src/gui/CMakeLists.txt"));
+    const QString packages = readProjectSourceFile(QStringLiteral("cmake/PlascanPackages.cmake"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(guiCmake.isEmpty());
+    ASSERT_FALSE(packages.isEmpty());
+
+    const QStringList forbidden = {
+        QStringLiteral("QOpenGLWidget"),
+        QStringLiteral("QOpenGLFunctions_4_3_Core"),
+        QStringLiteral("QOpenGLBuffer"),
+        QStringLiteral("QOpenGLShaderProgram"),
+        QStringLiteral("QOpenGLVertexArrayObject"),
+        QStringLiteral("initializeGL"),
+        QStringLiteral("resizeGL"),
+        QStringLiteral("paintGL"),
+    };
+    for (const QString &token : forbidden)
+    {
+        EXPECT_FALSE(header.contains(token)) << qPrintable(token);
+        EXPECT_FALSE(source.contains(token)) << qPrintable(token);
+    }
+
+    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::OpenGL")));
+    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::OpenGLWidgets")));
+    EXPECT_FALSE(packages.contains(QStringLiteral("OpenGL OpenGLWidgets")));
+}
+
+TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
+{
+    const QString guiCmake = readProjectSourceFile(QStringLiteral("src/gui/CMakeLists.txt"));
+    ASSERT_FALSE(guiCmake.isEmpty());
+
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("qt_add_shaders(plascan_gui")));
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_color.vert")));
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_color.frag")));
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_mesh.vert")));
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_mesh.frag")));
 }
 
 TEST(CameraSceneWidgetTest, ModelViewDoesNotDrawInvalidWorldOriginLabel)
