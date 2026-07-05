@@ -35,6 +35,7 @@ class ProjectManager;
 class QWidget;
 class QLabel;
 class QPainter;
+class CameraSceneOverlayWidget;
 class QRhiBuffer;
 class QRhiCommandBuffer;
 class QRhiGraphicsPipeline;
@@ -118,7 +119,7 @@ protected:
     // RHI 初始化：创建 Vulkan 渲染资源和管线。
     void initialize(QRhiCommandBuffer *cb) override;
 
-    // 主渲染函数：清屏 → 绘制点云 → 绘制模型 → 绘制包围盒 → 绘制覆盖层（QPainter）
+    // 主渲染函数：清屏 → 绘制点云 → 绘制模型 → 绘制包围盒 → 更新覆盖层。
     void render(QRhiCommandBuffer *cb) override;
 
     // 释放 RHI 资源。
@@ -142,6 +143,8 @@ protected:
     void keyPressEvent(QKeyEvent *event) override;
 
 private:
+    friend class CameraSceneOverlayWidget;
+
     // -------------------------------------------------------------------------
     // HoverAxis：鼠标悬停/拖拽时激活的旋转轴
     //   None - 无激活轴（使用 Arcball 自由旋转）
@@ -202,11 +205,12 @@ private:
     QString normalizedCameraPath(const QString &imagePath) const;
     void drawFloorPivotCross(QPainter &painter) const;
 
-    // 在 RHI 渲染完成后，用 QPainter 绘制 2D 覆盖层：
+    // 在普通透明 QWidget 覆盖层中绘制 2D 标注：
     //   - 操控球 Gizmo（旋转环）
     //   - 相机视锥体和名称标注
     //   - 右下角坐标轴指示器和欧拉角文字
-    void drawOverlay();
+    void requestOverlayUpdate();
+    void paintOverlay(QPainter &painter);
     void drawPlyLoadProgressOverlay(QPainter &painter);
 
     // 将点云/模型/包围盒数据整理为 RHI 顶点缓冲，在 render 中按需上传
@@ -252,6 +256,7 @@ private:
     bool _rhiReady = false;
     bool _pipelinesDirty = true;
     QString _renderError;
+    CameraSceneOverlayWidget *_overlayWidget = nullptr;
 
     bool ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates);
     bool ensurePipeline(RhiPipelineSet *pipeline, int topology, int strideBytes, bool hasNormals);

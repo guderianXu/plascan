@@ -64,7 +64,8 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
                                     const QString &feature1Path,
                                     const QString &matchPath,
                                     const QString &sidecarPath,
-                                    int matchCount);
+                                    int matchCount,
+                                    const QJsonObject &extraSettings = QJsonObject());
 
 bool writeMatchPhotosSidecar(const QString &sidecarPath,
                              const ResolvedImagePair &pair,
@@ -75,7 +76,8 @@ bool writeMatchPhotosSidecar(const QString &sidecarPath,
                              const xjw::feature_extractors::FeatureData &feature1,
                              const xjw::feature_match::MatchResult &matchResult,
                              const MatchPhotosAlgorithmPlan &plan,
-                             const MatchPhotosOptions &options);
+                             const MatchPhotosOptions &options,
+                             const QJsonObject &extraSettings = QJsonObject());
 
 } // namespace matchphotos
 } // namespace xjw

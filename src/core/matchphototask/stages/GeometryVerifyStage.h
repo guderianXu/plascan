@@ -4,6 +4,8 @@
 #include "MatchPhotosOptions.h"
 #include "MatchPhotosResult.h"
 
+#include <vector>
+
 namespace xjw
 {
 namespace matchphotos
@@ -15,7 +17,8 @@ class GeometryVerifyStage
 {
 public:
     MatchPhotosStageReport run(const MatchPhotosContext &context,
-                               const MatchPhotosOptions &options) const;
+                               const MatchPhotosOptions &options,
+                               std::vector<MatchPhotosMatchRecord> *matchRecords) const;
 };
 
 } // namespace matchphotos

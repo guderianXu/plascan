@@ -1,12 +1,18 @@
 #include "MatchPhotosTask.h"
 #include "FeatureFileIO.h"
 #include "FeatureStage.h"
+#include "GeometryVerifyStage.h"
 #include "MatchPhotosAlgorithmSelector.h"
+#include "MatchingStage.h"
+#include "TrackBuildStage.h"
 
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QCoreApplication>
 #include <QFile>
+#include <QFileInfo>
+#include <QTextStream>
 #include <QTemporaryDir>
 
 #include <opencv2/imgcodecs.hpp>
@@ -36,6 +42,40 @@ QString writeSyntheticSiftImage(const QString &dirPath, const QString &name, int
     const QString path = QDir(dirPath).filePath(name);
     EXPECT_TRUE(cv::imwrite(path.toStdString(), image));
     return path;
+}
+
+QString readProjectSourceFile(const QString &relativePath)
+{
+    QStringList roots;
+#ifdef PLASCAN_SOURCE_DIR
+    roots.append(QStringLiteral(PLASCAN_SOURCE_DIR));
+#endif
+    roots.append(QDir::currentPath());
+    roots.append(QCoreApplication::applicationDirPath());
+
+    for (const QString &root : roots)
+    {
+        QDir dir(root);
+        for (int depth = 0; depth < 8; ++depth)
+        {
+            const QString path = dir.filePath(relativePath);
+            if (QFileInfo::exists(path))
+            {
+                QFile file(path);
+                if (!file.open(QIODevice::ReadOnly | QIODevice::Text))
+                {
+                    return QString();
+                }
+                QTextStream in(&file);
+                return in.readAll();
+            }
+            if (!dir.cdUp())
+            {
+                break;
+            }
+        }
+    }
+    return QString();
 }
 
 } // namespace
@@ -98,4 +138,41 @@ TEST(MatchPhotosTaskTest, FeatureStageWritesSiftFilesForSyntheticImages)
         EXPECT_EQ(FeatureFileIO::peekAlgorithm(record.featurePath), "sift");
         EXPECT_GT(FeatureFileIO::peekCount(record.featurePath), 0);
     }
+}
+
+TEST(MatchPhotosTaskTest, FeatureStageUsesTraditionalFeatureConfig)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/FeatureStage.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("TraditionalFeatureConfig config")));
+    EXPECT_FALSE(source.contains(QStringLiteral("SuperPointConfig config")));
+}
+
+TEST(MatchPhotosTaskTest, MatchingStageUsesMemoryAwareLightGlueBudget)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/MatchingStage.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("resolveLightGlueKeypointBudget")));
+    EXPECT_TRUE(source.contains(QStringLiteral("budgetFeatureDataForLightGlue")));
+    EXPECT_TRUE(source.contains(QStringLiteral("remapLightGlueMatchResultToOriginal")));
+    EXPECT_TRUE(source.contains(QStringLiteral("lightglue_keypoint_budget")));
+}
+
+TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
+{
+    const QString geometrySource =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/GeometryVerifyStage.cpp"));
+    const QString trackSource =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/TrackBuildStage.cpp"));
+    ASSERT_FALSE(geometrySource.isEmpty());
+    ASSERT_FALSE(trackSource.isEmpty());
+
+    EXPECT_TRUE(geometrySource.contains(QStringLiteral("MatchGeometryFilter::filter")));
+    EXPECT_FALSE(geometrySource.contains(QStringLiteral("几何验证阶段尚未接入")));
+    EXPECT_TRUE(trackSource.contains(QStringLiteral("MultiViewTrackBuilder")));
+    EXPECT_FALSE(trackSource.contains(QStringLiteral("轨迹构建阶段尚未接入")));
 }

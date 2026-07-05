@@ -35,7 +35,24 @@
         "tiff"
       ]
     },
-    "qtbase",
+    {
+      "name": "qtbase",
+      "default-features": false,
+      "features": [
+        "concurrent",
+        "doubleconversion",
+        "freetype",
+        "gui",
+        "harfbuzz",
+        "jpeg",
+        "pcre2",
+        "png",
+        "testlib",
+        "thread",
+        "vulkan",
+        "widgets"
+      ]
+    },
     "qtshadertools",
     "vulkan",
     "tiff",

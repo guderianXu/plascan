@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QString>
 
+#include <array>
 #include <vector>
 
 namespace xjw
@@ -50,6 +51,9 @@ struct MatchPhotosMatchRecord
     QString matchPath;
     QString sidecarPath;
     int matchCount = 0;
+    int geometricInlierCount = 0;
+    bool passedGeometry = false;
+    std::vector<std::array<int, 2>> inlierIndexPairs;
     QJsonObject settings;
 };
 
@@ -62,6 +66,10 @@ struct MatchPhotosResult
     std::vector<MatchPhotosStageReport> stages;
     std::vector<MatchPhotosFeatureRecord> features;
     std::vector<MatchPhotosMatchRecord> matches;
+    int trackCount = 0;
+    int acceptedTrackComponents = 0;
+    int rejectedTrackConflictComponents = 0;
+    QJsonObject trackSummary;
 };
 
 } // namespace matchphotos

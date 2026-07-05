@@ -1,5 +1,6 @@
 #include "FeatureData.h"
 #include "FeatureFileIO.h"
+#include "LightGlueFeatureBudget.h"
 #include "LightGlueMatcher.h"
 #include "MatchFileIO.h"
 #include "MatchPhotosRuntime.h"
@@ -7,6 +8,7 @@
 
 #include <QDir>
 #include <QFileInfo>
+#include <QJsonObject>
 
 #include <exception>
 
@@ -110,7 +112,20 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
     lightGlueConfig.matcherModelPath = modelPath.toStdString();
     lightGlueConfig.useCuda = useCuda;
     lightGlueConfig.cudaDevice = options.cudaDevice;
-    lightGlueConfig.scoreThreshold = options.matchThreshold;
+
+    const int primaryKeypointBudget = xjw::pipeline::resolveLightGlueKeypointBudget(
+        algorithmPlan.featureAlgorithm,
+        algorithmPlan.matcherAlgorithm,
+        useCuda,
+        algorithmPlan.maxKeypoints);
+    const float effectiveMatchThreshold = xjw::pipeline::resolveLightGlueMatchThreshold(
+        algorithmPlan.featureAlgorithm,
+        algorithmPlan.matcherAlgorithm,
+        useCuda,
+        options.matchThreshold,
+        primaryKeypointBudget,
+        xjw::pipeline::LightGlueGpuMemoryInfo{});
+    lightGlueConfig.scoreThreshold = effectiveMatchThreshold;
 
     int matchedPairs = 0;
     int failedPairs = 0;
@@ -152,7 +167,58 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
                 continue;
             }
 
-            xjw::feature_match::MatchResult matchResult = matcher.match(feature0, feature1);
+            xjw::feature_match::MatchResult matchResult;
+            QJsonObject matchDiagnostics;
+            bool matched = false;
+            QString matchError;
+            for (int keypointBudget : xjw::pipeline::lightGlueRetryKeypointBudgets(primaryKeypointBudget))
+            {
+                try
+                {
+                    const xjw::pipeline::BudgetedFeatureData budgetedFeature0 =
+                        xjw::pipeline::budgetFeatureDataForLightGlue(feature0, keypointBudget);
+                    const xjw::pipeline::BudgetedFeatureData budgetedFeature1 =
+                        xjw::pipeline::budgetFeatureDataForLightGlue(feature1, keypointBudget);
+                    xjw::feature_match::MatchResult limitedMatch =
+                        matcher.match(budgetedFeature0.features, budgetedFeature1.features);
+                    normalizeMatchResult(&limitedMatch,
+                                         budgetedFeature0.features.size(),
+                                         budgetedFeature1.features.size());
+                    matchResult = xjw::pipeline::remapLightGlueMatchResultToOriginal(
+                        limitedMatch,
+                        budgetedFeature0,
+                        feature0.size(),
+                        budgetedFeature1,
+                        feature1.size());
+                    normalizeMatchResult(&matchResult, feature0.size(), feature1.size());
+
+                    matchDiagnostics[QStringLiteral("lightglue_keypoint_budget")] = keypointBudget;
+                    matchDiagnostics[QStringLiteral("lightglue_used_keypoints0")] = budgetedFeature0.features.size();
+                    matchDiagnostics[QStringLiteral("lightglue_used_keypoints1")] = budgetedFeature1.features.size();
+                    matchDiagnostics[QStringLiteral("lightglue_limited_keypoints0")] = budgetedFeature0.limited;
+                    matchDiagnostics[QStringLiteral("lightglue_limited_keypoints1")] = budgetedFeature1.limited;
+                    matchDiagnostics[QStringLiteral("lightglue_effective_match_threshold")] =
+                        static_cast<double>(effectiveMatchThreshold);
+                    matched = true;
+                    break;
+                }
+                catch (const std::exception &e)
+                {
+                    matchError = QString::fromUtf8(e.what());
+                    if (keypointBudget <= 1024)
+                    {
+                        break;
+                    }
+                }
+            }
+
+            if (!matched)
+            {
+                ++failedPairs;
+                advanceMatchPhotosProgress(context);
+                Q_UNUSED(matchError)
+                continue;
+            }
             normalizeMatchResult(&matchResult, feature0.size(), feature1.size());
 
             const QString matchPath = matchPhotosMatchPath(context,
@@ -173,7 +239,8 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
                                          feature1,
                                          matchResult,
                                          algorithmPlan,
-                                         options))
+                                         options,
+                                         matchDiagnostics))
             {
                 ++failedPairs;
                 advanceMatchPhotosProgress(context);
@@ -182,20 +249,22 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
 
             if (matchRecords)
             {
-                matchRecords->push_back(
-                    MatchPhotosMatchRecord{pair.image0Path,
-                                           pair.image1Path,
-                                           matchPath,
-                                           sidecarPath,
-                                           matchResult.numMatches,
-                                           makeMatchRecordSettings(algorithmPlan,
-                                                                   options,
-                                                                   pair,
-                                                                   feature0Path,
-                                                                   feature1Path,
-                                                                   matchPath,
-                                                                   sidecarPath,
-                                                                   matchResult.numMatches)});
+                MatchPhotosMatchRecord record;
+                record.image0Path = pair.image0Path;
+                record.image1Path = pair.image1Path;
+                record.matchPath = matchPath;
+                record.sidecarPath = sidecarPath;
+                record.matchCount = matchResult.numMatches;
+                record.settings = makeMatchRecordSettings(algorithmPlan,
+                                                          options,
+                                                          pair,
+                                                          feature0Path,
+                                                          feature1Path,
+                                                          matchPath,
+                                                          sidecarPath,
+                                                          matchResult.numMatches,
+                                                          matchDiagnostics);
+                matchRecords->push_back(std::move(record));
             }
             ++matchedPairs;
             totalMatches += matchResult.numMatches;

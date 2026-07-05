@@ -6,7 +6,7 @@
 //       · 点云 / PLY 模型 / 相机视锥体渲染（QRhiBuffer + .qsb shader）
 //       · Arcball 自由旋转 + 单轴环旋转（X/Y/Z Gizmo）
 //       · 中键平移、滚轮缩放
-//       · QPainter 覆盖层（Gizmo 环、坐标轴、相机视锥体、欧拉角）
+//       · 透明 QWidget 覆盖层（Gizmo 环、坐标轴、相机视锥体、欧拉角）
 //   - CameraModel3DDialog：对话框 UI + 从 ProjectManager 读取相机姿态
 // =============================================================================
 #include "CameraModel3DDialog.h"
@@ -46,6 +46,7 @@
 #include <rhi/qshader.h>
 #include <QSizePolicy>
 #include <QStringList>
+#include <QWidget>
 #include <algorithm>
 #include <cmath>
 #include <cstdint>
@@ -579,6 +580,36 @@ QShader loadSceneShader(const QString &resourcePath, QString *errorMessage)
 
 } // namespace
 
+class CameraSceneOverlayWidget : public QWidget
+{
+public:
+    explicit CameraSceneOverlayWidget(CameraSceneWidget *scene)
+        : QWidget(scene)
+        , _scene(scene)
+    {
+        setAttribute(Qt::WA_TransparentForMouseEvents, true);
+        setAttribute(Qt::WA_NoSystemBackground, true);
+        setAttribute(Qt::WA_TranslucentBackground, true);
+        setAutoFillBackground(false);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *) override
+    {
+        if (!_scene)
+        {
+            return;
+        }
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        _scene->paintOverlay(painter);
+    }
+
+private:
+    CameraSceneWidget *_scene = nullptr;
+};
+
 // 构造函数：设置基础可用尺寸，启用鼠标追踪（悬停检测需要），
 // 设置默认视角为俯仰 -25°、偏航 35°（斜上方看向场景）
 CameraSceneWidget::CameraSceneWidget(QWidget *parent)
@@ -593,6 +624,11 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     _viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
     setFocusPolicy(Qt::StrongFocus);
     updateCursor();
+
+    _overlayWidget = new CameraSceneOverlayWidget(this);
+    _overlayWidget->setGeometry(rect());
+    _overlayWidget->show();
+    _overlayWidget->raise();
 
     connect(this, &CameraSceneWidget::plyLoadProgressChanged,
             this, [this](int generation, int percent, const QString &statusText)
@@ -1536,6 +1572,11 @@ void CameraSceneWidget::releaseResources()
 void CameraSceneWidget::resizeEvent(QResizeEvent *event)
 {
     QRhiWidget::resizeEvent(event);
+    if (_overlayWidget)
+    {
+        _overlayWidget->setGeometry(rect());
+        _overlayWidget->raise();
+    }
     _pipelinesDirty = true;
     _gpuDirty = true;
 }
@@ -1875,14 +1916,11 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
 {
     if (!_rhiReady || !rhi() || !renderTarget())
     {
-        QPainter painter(this);
-        painter.fillRect(rect(), Qt::white);
-        painter.setPen(QColor(180, 42, 42));
-        painter.drawText(rect().adjusted(12, 12, -12, -12),
-                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
-                         _renderError.isEmpty()
-                             ? QStringLiteral("Vulkan 渲染初始化失败，请检查显卡驱动和 Qt Vulkan 支持。")
-                             : _renderError);
+        if (_renderError.isEmpty())
+        {
+            _renderError = QStringLiteral("Vulkan 渲染初始化失败，请检查显卡驱动和 Qt Vulkan 支持。");
+        }
+        requestOverlayUpdate();
         return;
     }
 
@@ -1912,12 +1950,7 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
                         9 * int(sizeof(float)),
                         true))
     {
-        QPainter painter(this);
-        painter.fillRect(rect(), Qt::white);
-        painter.setPen(QColor(180, 42, 42));
-        painter.drawText(rect().adjusted(12, 12, -12, -12),
-                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
-                         _renderError);
+        requestOverlayUpdate();
         return;
     }
     _pipelinesDirty = false;
@@ -1928,14 +1961,10 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
         !ensureRhiBuffer(&_modelPointBuffer, updates) ||
         !ensureRhiBuffer(&_lineBuffer, updates))
     {
-        QPainter painter(this);
-        painter.fillRect(rect(), Qt::white);
-        painter.setPen(QColor(180, 42, 42));
-        painter.drawText(rect().adjusted(12, 12, -12, -12),
-                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
-                         _renderError);
+        requestOverlayUpdate();
         return;
     }
+    _renderError.clear();
 
     const QVector3D center = sceneCenter();
     const float radius = sceneRadius();
@@ -2001,13 +2030,36 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
 
     cb->endPass();
 
-    drawOverlay();
+    requestOverlayUpdate();
 }
 
-void CameraSceneWidget::drawOverlay()
+void CameraSceneWidget::requestOverlayUpdate()
 {
-    QPainter painter(this);
-    painter.setRenderHint(QPainter::Antialiasing, true);
+    if (!_overlayWidget)
+    {
+        return;
+    }
+    _overlayWidget->setGeometry(rect());
+    _overlayWidget->raise();
+    _overlayWidget->update();
+}
+
+void CameraSceneWidget::paintOverlay(QPainter &painter)
+{
+    if (!painter.isActive())
+    {
+        return;
+    }
+
+    if (!_renderError.isEmpty())
+    {
+        painter.fillRect(rect(), Qt::white);
+        painter.setPen(QColor(180, 42, 42));
+        painter.drawText(rect().adjusted(12, 12, -12, -12),
+                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                         _renderError);
+        return;
+    }
 
     const QPointF center2d = manipCenterScreen();
     const qreal radiusPx = manipRadiusPx();

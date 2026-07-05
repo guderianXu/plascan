@@ -2026,8 +2026,8 @@ TEST(GuiAsyncLifetimeTest, MatchPhotosTaskUsesGuardedProjectManagerCallbacks)
         << "连接点匹配结束写回前必须确认仍是同一个项目。";
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("QFutureWatcher<xjw::matchphotos::MatchPhotosResult>")));
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("MatchPhotosTask task(options)")));
-    EXPECT_TRUE(mainBlock.contains(QStringLiteral("appendIpfindResult(feature.imagePath, feature.featurePath")));
-    EXPECT_TRUE(mainBlock.contains(QStringLiteral("appendIpmatchResult(QStringList{match.matchPath}, match.settings)")));
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("appendIpfindResults(featureRecords)")));
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("appendIpmatchResults(matchRecords)")));
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("QPointer<MainWindow> self(this)")))
         << "Feature matching progress callbacks can outlive MainWindow and must use QPointer.";
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("connect(timer, &QTimer::timeout, timer,")))
@@ -6525,6 +6525,45 @@ TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
     EXPECT_TRUE(header.contains(QStringLiteral("RhiPipelineSet _modelPointPipeline;")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms)")));
     EXPECT_TRUE(source.contains(QStringLiteral("rhi()->clipSpaceCorrMatrix()")));
+}
+
+TEST(CameraSceneWidgetTest, QrhiWidgetDoesNotPaintDirectlyWithQPainter)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    auto cameraSceneFunctionBody = [](const QString &text, const QString &signature)
+    {
+        const int start = text.indexOf(signature);
+        if (start < 0)
+        {
+            return QString();
+        }
+        int end = text.indexOf(QStringLiteral("\nvoid CameraSceneWidget::"), start + signature.size());
+        if (end < 0)
+        {
+            end = text.size();
+        }
+        return text.mid(start, end - start);
+    };
+
+    const QString renderBody = cameraSceneFunctionBody(
+        source,
+        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer *cb)"));
+    const QString requestOverlayBody = cameraSceneFunctionBody(
+        source,
+        QStringLiteral("void CameraSceneWidget::requestOverlayUpdate()"));
+    const QString paintOverlayBody = cameraSceneFunctionBody(
+        source,
+        QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"));
+
+    ASSERT_FALSE(renderBody.isEmpty());
+    ASSERT_FALSE(requestOverlayBody.isEmpty());
+    ASSERT_FALSE(paintOverlayBody.isEmpty());
+    EXPECT_FALSE(renderBody.contains(QStringLiteral("QPainter painter(this)")));
+    EXPECT_TRUE(renderBody.contains(QStringLiteral("requestOverlayUpdate()")));
+    EXPECT_FALSE(paintOverlayBody.contains(QStringLiteral("QPainter painter(this)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("CameraSceneOverlayWidget")));
 }
 
 TEST(CameraSceneWidgetTest, RemovesLegacyRenderingDependencies)

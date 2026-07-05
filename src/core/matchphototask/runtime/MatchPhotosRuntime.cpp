@@ -275,7 +275,8 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
                                     const QString &feature1Path,
                                     const QString &matchPath,
                                     const QString &sidecarPath,
-                                    int matchCount)
+                                    int matchCount,
+                                    const QJsonObject &extraSettings)
 {
     QJsonObject settings;
     QJsonArray imageFiles;
@@ -295,6 +296,10 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("match_threshold")] = static_cast<double>(options.matchThreshold);
     settings[QStringLiteral("num_matches")] = matchCount;
     settings[QStringLiteral("matchphotos_task")] = true;
+    for (auto it = extraSettings.constBegin(); it != extraSettings.constEnd(); ++it)
+    {
+        settings[it.key()] = it.value();
+    }
     return settings;
 }
 
@@ -307,7 +312,8 @@ bool writeMatchPhotosSidecar(const QString &sidecarPath,
                              const xjw::feature_extractors::FeatureData &feature1,
                              const xjw::feature_match::MatchResult &matchResult,
                              const MatchPhotosAlgorithmPlan &plan,
-                             const MatchPhotosOptions &options)
+                             const MatchPhotosOptions &options,
+                             const QJsonObject &extraSettings)
 {
     QJsonArray points0;
     QJsonArray points1;
@@ -337,7 +343,15 @@ bool writeMatchPhotosSidecar(const QString &sidecarPath,
     }
 
     QJsonObject sidecar = makeMatchRecordSettings(
-        plan, options, pair, feature0Path, feature1Path, matchPath, sidecarPath, indices0.size());
+        plan,
+        options,
+        pair,
+        feature0Path,
+        feature1Path,
+        matchPath,
+        sidecarPath,
+        indices0.size(),
+        extraSettings);
     sidecar[QStringLiteral("match_file")] = matchPath;
     sidecar[QStringLiteral("image0_name")] = QFileInfo(pair.image0Path).completeBaseName();
     sidecar[QStringLiteral("image1_name")] = QFileInfo(pair.image1Path).completeBaseName();
@@ -348,6 +362,11 @@ bool writeMatchPhotosSidecar(const QString &sidecarPath,
         static_cast<double>(options.matchThreshold);
     sidecar[QStringLiteral("lightglue_effective_match_threshold")] =
         static_cast<double>(options.matchThreshold);
+    if (extraSettings.contains(QStringLiteral("lightglue_effective_match_threshold")))
+    {
+        sidecar[QStringLiteral("lightglue_effective_match_threshold")] =
+            extraSettings.value(QStringLiteral("lightglue_effective_match_threshold"));
+    }
     sidecar[QStringLiteral("matched_points0")] = points0;
     sidecar[QStringLiteral("matched_points1")] = points1;
     sidecar[QStringLiteral("matched_indices0")] = indices0;

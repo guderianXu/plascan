@@ -130,11 +130,11 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
                                  QStringLiteral("无法创建特征目录: %1").arg(featureDir.path()));
     }
 
-    SuperPointConfig config;
-    config.max_num_keypoints = algorithmPlan.maxKeypoints;
-    config.max_image_size = algorithmPlan.maxImageDim;
-    config.remove_borders = 4;
-    config.allow_device_fallback = true;
+    xjw::feature_extractors::TraditionalFeatureConfig config;
+    config.maxKeypoints = algorithmPlan.maxKeypoints;
+    config.maxImageSize = algorithmPlan.maxImageDim;
+    config.removeBorders = 4;
+    config.allowDeviceFallback = true;
 
     const bool useCuda = shouldUseCudaSift(options, algorithmPlan);
     int extractedCount = 0;

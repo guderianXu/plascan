@@ -46,6 +46,14 @@ struct MatchPhotosOptions
     int maxKeypoints = 0;
     int cudaDevice = 0;
     float matchThreshold = 0.15f;
+    double geometryReprojThreshold = 1.5;
+    int geometryMinInliers = 20;
+    int maxTiePointsPerImage = 4000;
+    int maxTiePointsPerGridCell = 500;
+    int tiePointGridColumns = 4;
+    int tiePointGridRows = 4;
+    bool enableGeometryVerification = true;
+    bool enableTrackBuild = true;
     bool enableGuidedMatching = false;
     bool reuseExistingFeatures = true;
 

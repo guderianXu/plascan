@@ -65,6 +65,20 @@ bool hasDarkPixelInNeighborhood(const cv::Mat &image,
 namespace xjw::feature_extractors
 {
 
+TraditionalFeatureConfig traditionalFeatureConfigFromSuperPoint(const SuperPointConfig &config)
+{
+    TraditionalFeatureConfig traditionalConfig;
+    traditionalConfig.maxKeypoints = config.max_num_keypoints;
+    traditionalConfig.maxImageSize = config.max_image_size;
+    traditionalConfig.removeBorders = config.remove_borders;
+    traditionalConfig.descriptorDim = config.descriptor_dim;
+    traditionalConfig.grayscaleMin = config.grayscale_min;
+    traditionalConfig.grayscaleMax = config.grayscale_max;
+    traditionalConfig.allowDeviceFallback = config.allow_device_fallback;
+    traditionalConfig.detectionThreshold = config.detection_threshold;
+    return traditionalConfig;
+}
+
 std::string TraditionalFeatureExtractor::normalizeAlgorithmName(const std::string &algorithmName)
 {
     std::string normalized = algorithmName;
@@ -90,17 +104,17 @@ bool TraditionalFeatureExtractor::isTraditionalAlgorithm(const std::string &norm
 }
 
 FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
-                                                     const SuperPointConfig &config,
-                                                     const std::string &normalizedName)
+                                                  const TraditionalFeatureConfig &config,
+                                                  const std::string &normalizedName)
 {
     return detect(grayImage, config, normalizedName, false, 0);
 }
 
 FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
-                                                     const SuperPointConfig &config,
-                                                     const std::string &normalizedName,
-                                                     bool useCuda,
-                                                     int cudaDevice)
+                                                  const TraditionalFeatureConfig &config,
+                                                  const std::string &normalizedName,
+                                                  bool useCuda,
+                                                  int cudaDevice)
 {
     if (grayImage.empty())
     {
@@ -114,7 +128,7 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
     std::vector<cv::KeyPoint> keypoints;
     cv::Mat descriptors;
 
-    const int maxKpForDetector = config.max_num_keypoints > 0 ? config.max_num_keypoints : 20000;
+    const int maxKpForDetector = config.maxKeypoints > 0 ? config.maxKeypoints : 20000;
     if (normalizedName == "orb")
     {
         cv::Ptr<cv::ORB> orb = cv::ORB::create(maxKpForDetector);
@@ -126,7 +140,7 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
         {
             if (!isCudaSiftAvailable())
             {
-                if (!config.allow_device_fallback)
+                if (!config.allowDeviceFallback)
                 {
                     throw std::runtime_error("CUDA SIFT requested but no CUDA SIFT device is available");
                 }
@@ -135,11 +149,20 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
             {
                 try
                 {
-                    return detectCudaSift(grayImage, config, cudaDevice);
+                    SuperPointConfig cudaConfig;
+                    cudaConfig.max_num_keypoints = config.maxKeypoints;
+                    cudaConfig.max_image_size = config.maxImageSize;
+                    cudaConfig.remove_borders = config.removeBorders;
+                    cudaConfig.descriptor_dim = config.descriptorDim;
+                    cudaConfig.grayscale_min = config.grayscaleMin;
+                    cudaConfig.grayscale_max = config.grayscaleMax;
+                    cudaConfig.allow_device_fallback = config.allowDeviceFallback;
+                    cudaConfig.detection_threshold = config.detectionThreshold;
+                    return detectCudaSift(grayImage, cudaConfig, cudaDevice);
                 }
                 catch (...)
                 {
-                    if (!config.allow_device_fallback)
+                    if (!config.allowDeviceFallback)
                     {
                         throw;
                     }
@@ -173,7 +196,7 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
 
     std::vector<int> keepIndices;
     keepIndices.reserve(keypoints.size());
-    const int border = std::max(0, config.remove_borders);
+    const int border = std::max(0, config.removeBorders);
 
     for (size_t index = 0; index < keypoints.size(); ++index)
     {
@@ -190,7 +213,7 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
         }
 
         const float gray = normalizedGrayValue(grayImage, x, y);
-        if (gray < config.grayscale_min || gray > config.grayscale_max)
+        if (gray < config.grayscaleMin || gray > config.grayscaleMax)
         {
             continue;
         }
@@ -203,9 +226,9 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
         return keypoints[lhs].response > keypoints[rhs].response;
     });
 
-    if (config.max_num_keypoints > 0 && static_cast<int>(keepIndices.size()) > config.max_num_keypoints)
+    if (config.maxKeypoints > 0 && static_cast<int>(keepIndices.size()) > config.maxKeypoints)
     {
-        keepIndices.resize(config.max_num_keypoints);
+        keepIndices.resize(config.maxKeypoints);
     }
 
     FeatureOutput output;
@@ -231,7 +254,7 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
         }
     }
 
-    int descriptorDim = config.descriptor_dim;
+    int descriptorDim = config.descriptorDim;
     if (normalizedName == "sift" && !selectedDescriptors.empty())
     {
         descriptorDim = selectedDescriptors.cols;
@@ -241,6 +264,26 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
                                                             descriptorDim,
                                                             normalizedName);
     return output;
+}
+
+FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
+                                                  const SuperPointConfig &config,
+                                                  const std::string &normalizedName)
+{
+    return detect(grayImage, traditionalFeatureConfigFromSuperPoint(config), normalizedName, false, 0);
+}
+
+FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
+                                                  const SuperPointConfig &config,
+                                                  const std::string &normalizedName,
+                                                  bool useCuda,
+                                                  int cudaDevice)
+{
+    return detect(grayImage,
+                  traditionalFeatureConfigFromSuperPoint(config),
+                  normalizedName,
+                  useCuda,
+                  cudaDevice);
 }
 
 } // namespace xjw::feature_extractors

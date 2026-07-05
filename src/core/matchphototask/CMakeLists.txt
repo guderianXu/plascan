@@ -38,12 +38,15 @@ target_include_directories(matchphototask PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime
     ${CMAKE_CURRENT_SOURCE_DIR}/stages
     ${CMAKE_CURRENT_SOURCE_DIR}/task
+    ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../overlap
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors/tradition
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors/superpoint
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_match
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_match/lightglue
+    ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline
+    ${CMAKE_CURRENT_SOURCE_DIR}/../sfm
 )
 
 target_link_libraries(matchphototask PUBLIC
@@ -52,6 +55,7 @@ target_link_libraries(matchphototask PUBLIC
     feature_extractors_traditional
     feature_match_common
     lightglue_matcher
+    sfm
 )
 
 target_compile_definitions(matchphototask PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")

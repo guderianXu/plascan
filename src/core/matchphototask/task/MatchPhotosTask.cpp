@@ -106,8 +106,16 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     {
         return result;
     }
-    result.stages.push_back(geometryVerifyStage.run(context, _options));
-    result.stages.push_back(trackBuildStage.run(context, _options));
+    if (appendStageAndStopOnFailure(&result, geometryVerifyStage.run(context, _options, &result.matches)))
+    {
+        return result;
+    }
+    if (appendStageAndStopOnFailure(
+            &result,
+            trackBuildStage.run(context, _options, result.matches, &result)))
+    {
+        return result;
+    }
     result.stages.push_back(guidedMatchStage.run(context, _options));
 
     result.success = true;

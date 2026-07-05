@@ -9,6 +9,20 @@
 namespace xjw::feature_extractors
 {
 
+struct TraditionalFeatureConfig
+{
+    int maxKeypoints = 20000;
+    int maxImageSize = 0;
+    int removeBorders = 4;
+    int descriptorDim = 128;
+    float grayscaleMin = 0.0f;
+    float grayscaleMax = 1.0f;
+    bool allowDeviceFallback = true;
+    float detectionThreshold = 0.005f;
+};
+
+TraditionalFeatureConfig traditionalFeatureConfigFromSuperPoint(const SuperPointConfig &config);
+
 /**
  * @brief 传统特征提取器（ORB/SIFT）统一入口。
  *
@@ -36,10 +50,22 @@ public:
     /**
      * @brief 运行传统特征提取，并输出统一结构。
      * @param grayImage 单通道灰度图（CV_8U）。
-     * @param config 特征参数（沿用 SuperPointConfig 的公共字段）。
+     * @param config 传统特征参数。
      * @param normalizedName 已规范化算法名（`orb`/`sift`）。
      * @return 与 SuperPoint 兼容的输出结构。
      */
+    static FeatureOutput detect(const cv::Mat &grayImage,
+                                const TraditionalFeatureConfig &config,
+                                const std::string &normalizedName);
+
+    static FeatureOutput detect(const cv::Mat &grayImage,
+                                const TraditionalFeatureConfig &config,
+                                const std::string &normalizedName,
+                                bool useCuda,
+                                int cudaDevice);
+
+    // 旧调用方兼容入口。新代码应使用 TraditionalFeatureConfig，避免把
+    // SuperPoint 语义泄漏到 SIFT/ORB/AKAZE 等传统特征阶段。
     static FeatureOutput detect(const cv::Mat &grayImage,
                                    const SuperPointConfig &config,
                                    const std::string &normalizedName);

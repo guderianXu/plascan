@@ -16,13 +16,16 @@
 #include "Logger.h"
 #include "ProjectIO.h"
 #include "ProjectManager.h"
+#include <QByteArray>
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
 #include <QCoreApplication>
+#include <QIODevice>
 #include <QMetaObject>
 
 #include <memory>
+#include <vector>
 
 namespace
 {
@@ -145,6 +148,25 @@ QString resolveExtractorModelPath(const QString &algorithm, bool useCuda, const 
     }
 
     return QString();
+}
+
+cv::Mat readImageWithQtPath(const QString &imagePath, int flags)
+{
+    QFile imageFile(imagePath);
+    if (!imageFile.open(QIODevice::ReadOnly))
+    {
+        return {};
+    }
+
+    const QByteArray encodedBytes = imageFile.readAll();
+    if (encodedBytes.isEmpty())
+    {
+        return {};
+    }
+
+    const auto *begin = reinterpret_cast<const uchar *>(encodedBytes.constData());
+    const std::vector<uchar> buffer(begin, begin + encodedBytes.size());
+    return cv::imdecode(buffer, flags);
 }
 
 } // namespace
@@ -360,7 +382,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
             try
             {
                 // 读取图像
-                cv::Mat image = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+                cv::Mat image = readImageWithQtPath(imagePath, cv::IMREAD_GRAYSCALE);
                 if (image.empty())
                 {
                     LOG_ERROR("%s", qUtf8Printable(QString("无法读取图像: %1").arg(imagePath)));

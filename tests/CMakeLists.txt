@@ -653,6 +653,7 @@ add_executable(test_layer_renderer_batched_overlay
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerStitchedDebug.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
 )
