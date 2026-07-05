@@ -14,6 +14,7 @@
 #endif
 
 #include <opencv2/imgproc.hpp>
+#include <algorithm>
 #include <stdexcept>
 
 namespace xjw::feature_match
@@ -59,11 +60,32 @@ LoFTRResult LoFTRMatcher::match(const cv::Mat &img0, const cv::Mat &img1)
 
     // forward(img0, img1) → (mkpts0, mkpts1, mconf)
     auto output = _model.forward({t0, t1}).toTuple();
-    auto mkpts0 = output->elements()[0].toTensor().to(torch::kCPU);
-    auto mkpts1 = output->elements()[1].toTensor().to(torch::kCPU);
-    auto mconf  = output->elements()[2].toTensor().to(torch::kCPU);
+    auto mkpts0 = output->elements()[0].toTensor().to(torch::kCPU).contiguous();
+    auto mkpts1 = output->elements()[1].toTensor().to(torch::kCPU).contiguous();
+    auto mconf  = output->elements()[2].toTensor().to(torch::kCPU).contiguous();
 
-    int N = static_cast<int>(mkpts0.size(0));
+    if (mkpts0.dim() == 3 && mkpts0.size(0) == 1)
+    {
+        mkpts0 = mkpts0.squeeze(0).contiguous();
+    }
+    if (mkpts1.dim() == 3 && mkpts1.size(0) == 1)
+    {
+        mkpts1 = mkpts1.squeeze(0).contiguous();
+    }
+    if (mconf.dim() == 2 && mconf.size(0) == 1)
+    {
+        mconf = mconf.squeeze(0).contiguous();
+    }
+    if (mkpts0.dim() != 2 || mkpts1.dim() != 2 || mkpts0.size(1) < 2 || mkpts1.size(1) < 2)
+    {
+        throw std::runtime_error("LoFTR TorchScript output must contain keypoint tensors shaped [N,2] or [1,N,2]");
+    }
+    if (mconf.dim() != 1 && !(mconf.dim() == 2 && mconf.size(1) == 1))
+    {
+        throw std::runtime_error("LoFTR TorchScript confidence output must be shaped [N], [N,1], or [1,N]");
+    }
+
+    int N = static_cast<int>(std::min({mkpts0.size(0), mkpts1.size(0), mconf.size(0)}));
     LoFTRResult result;
     result.scale = scale;
     result.numMatches = N;
@@ -73,12 +95,13 @@ LoFTRResult LoFTRMatcher::match(const cv::Mat &img0, const cv::Mat &img1)
 
     auto a0 = mkpts0.accessor<float, 2>();
     auto a1 = mkpts1.accessor<float, 2>();
-    auto ac = mconf.accessor<float, 2>();
 
     float thresh = _config.matchThreshold;
     for (int i = 0; i < N; ++i)
     {
-        float conf = ac[i][0];
+        float conf = mconf.dim() == 1
+            ? mconf[i].item<float>()
+            : mconf[i][0].item<float>();
         if (conf < thresh) continue;
 
         float x0 = a0[i][0] / scale;

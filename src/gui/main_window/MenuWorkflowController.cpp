@@ -4,6 +4,7 @@
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
 #include "SFMService.h"
+#include "AerialTriangulationWorkflow.h"
 #include "MatchResultCatalog.h"
 #include "ReconstructionPrerequisiteReport.h"
 #include "Logger.h"
@@ -1379,9 +1380,14 @@ void MenuWorkflowController::openWorkflowAerialTriangulationDialog()
         }
     });
 
-    if (dlg.exec() == QDialog::Accepted && _aerialTriangulationSetting)
+    if (dlg.exec() == QDialog::Accepted)
     {
-        _aerialTriangulationSetting->save(dlg.collectSettings());
+        const QJsonObject settings = dlg.collectSettings();
+        if (_aerialTriangulationSetting)
+        {
+            _aerialTriangulationSetting->save(settings);
+        }
+        startAerialTriangulationWorkflow(settings);
     }
 }
 
@@ -1510,28 +1516,40 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
         return;
     }
 
-    xjw::gui::SFMServiceOptions opts;
-    opts.autoGenerateMissingMatches = autoFillMissing;
-    opts.images = images;
-    opts.plascanPath = projectPath;
-    opts.projectMeta = projectMeta;
-    opts.outputDir = QDir(outputRoot).filePath(QStringLiteral("sfm_sparse"));
     const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    opts.threads = workflowThreads;
-    opts.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
-    opts.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
-                                 .toString(QStringLiteral("disk"))
-                                 .trimmed()
-                                 .toLower();
-    opts.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
-                              .toString(QStringLiteral("lightglue"))
-                              .trimmed()
-                              .toLower();
-    opts.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
-    opts.featureGrayscaleMax = 1.0f;
-    opts.cudaParallelPairs = opts.device == QStringLiteral("cpu")
-        ? 1
-        : std::clamp(std::max(1, workflowThreads / 4), 1, 2);
+    xjw::gui::AerialTriangulationWorkflowOptions workflowOptions;
+    workflowOptions.images = images;
+    workflowOptions.projectPath = projectPath;
+    workflowOptions.projectMeta = projectMeta;
+    workflowOptions.outputDir = outputRoot;
+    workflowOptions.quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("high"));
+    workflowOptions.genericPreselection = settings.value(QStringLiteral("generic_preselection")).toBool(true);
+    workflowOptions.referencePreselection = settings.value(QStringLiteral("reference_preselection")).toBool(false);
+    workflowOptions.referenceMode =
+        settings.value(QStringLiteral("reference_preselection_source")).toString(QStringLiteral("source_code"));
+    workflowOptions.resetAlignment = settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
+    workflowOptions.saveAfterEachStep = settings.value(QStringLiteral("save_project_after_each_step")).toBool(false);
+    workflowOptions.keypointLimit = settings.value(QStringLiteral("keypoint_limit")).toInt(40000);
+    workflowOptions.tiepointLimit = settings.value(QStringLiteral("tiepoint_limit")).toInt(4000);
+    workflowOptions.maskApplyMode = settings.value(QStringLiteral("mask_apply_mode")).toString(QStringLiteral("none"));
+    workflowOptions.excludeFixedTiePoints = settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool(true);
+    workflowOptions.guidedImageMatching = settings.value(QStringLiteral("guided_image_matching")).toBool(false);
+    workflowOptions.adaptiveCameraModelFitting =
+        settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(false);
+    workflowOptions.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
+                                           .toString(QStringLiteral("disk"))
+                                           .trimmed()
+                                           .toLower();
+    workflowOptions.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
+                                         .toString(QStringLiteral("lightglue"))
+                                         .trimmed()
+                                         .toLower();
+    workflowOptions.matchPipeline = settings.value(QStringLiteral("match_pipeline")).toString().trimmed().toLower();
+    workflowOptions.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
+    workflowOptions.threads = workflowThreads;
+    workflowOptions.autoGenerateMissingMatches = autoFillMissing;
+    workflowOptions.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
+    workflowOptions.featureGrayscaleMax = 1.0f;
 
     bool usedStoredPairs = false;
     bool storedPairsStale = false;
@@ -1542,8 +1560,8 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
                                                                   &storedPairsStale);
     if (!allowedPairs.isEmpty())
     {
-        opts.restrictPairs = true;
-        opts.allowedPairs = allowedPairs;
+        workflowOptions.restrictPairs = true;
+        workflowOptions.allowedPairs = allowedPairs;
         LOG_INFO(QStringLiteral("空中三角测量: 使用已生成候选配对约束 %1 对").arg(allowedPairs.size()));
     }
     else if (storedPairsStale)
@@ -1551,46 +1569,57 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
         LOG_WARN(QStringLiteral("空中三角测量: 已生成候选配对与当前影像集合不一致，改用自动配对规划"));
     }
 
-    const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
-    opts.quality = sfmQualityLevelFromWorkflowQuality(quality);
-
     QPointer<ProjectManager> pmGuard(pm);
-    opts.progressFn = [pmGuard](const QString &stage, int percent) {
+    workflowOptions.progressFn = [pmGuard](const QString &stage, int percent)
+    {
         if (!pmGuard)
         {
             return;
         }
-        xjw::gui::tasks::postGuarded(pmGuard.data(), [stage, percent](ProjectManager *manager) {
+        xjw::gui::tasks::postGuarded(pmGuard.data(), [stage, percent](ProjectManager *manager)
+        {
             emit manager->atProgressChanged(QStringLiteral("空中三角测量: %1").arg(stage), percent);
         });
     };
-    opts.pairMatchedFn = [pmGuard](const QString &img0,
-                                   const QString &img1,
-                                   const QString &matchPath,
-                                   int numMatches) {
+    workflowOptions.pairMatchedFn = [pmGuard](const QString &img0,
+                                              const QString &img1,
+                                              const QString &matchPath,
+                                              int numMatches)
+    {
         if (!pmGuard)
         {
             return;
         }
         xjw::gui::tasks::postGuarded(pmGuard.data(),
-                                     [img0, img1, matchPath, numMatches](ProjectManager *manager) {
+                                     [img0, img1, matchPath, numMatches](ProjectManager *manager)
+        {
             emit manager->matchPairReady(img0, img1, matchPath, numMatches);
         });
     };
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     pm->setAtCancelFlag(cancelFlag);
-    opts.cancelFlag = cancelFlag;
+    workflowOptions.cancelFlag = cancelFlag;
+    const xjw::gui::AerialTriangulationResolvedConfig resolved =
+        xjw::gui::AerialTriangulationWorkflow::resolveConfig(workflowOptions);
 
     emit pm->atProgressChanged(QStringLiteral("空中三角测量: 启动 SfM/BA..."), 0);
 
     const QStringList sfmImages = images;
-    const QString sfmOutputDir = opts.outputDir;
+    const QString sfmOutputDir = resolved.sfmOptions.outputDir;
     const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
     xjw::gui::tasks::runGuarded(
         this,
-        [runOpts = std::move(opts), sfmImages, sfmOutputDir, assetsDir]() mutable {
-            xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(runOpts);
+        [runWorkflowOptions = std::move(workflowOptions), sfmImages, sfmOutputDir, assetsDir]() mutable
+        {
+            xjw::gui::AerialTriangulationWorkflowResult workflowResult =
+                xjw::gui::AerialTriangulationWorkflow::run(
+                    runWorkflowOptions,
+                    [](const xjw::gui::SFMServiceOptions &runOpts)
+            {
+                return xjw::gui::SFMService::run(runOpts);
+            });
+            xjw::gui::SFMServiceResult result = workflowResult.sfmResult;
             if (result.success && !assetsDir.isEmpty())
             {
                 QJsonObject report;
@@ -1613,6 +1642,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
                 report[QStringLiteral("sparse_cloud_path")] = result.sparseCloudPath;
                 report[QStringLiteral("per_camera")] = result.perCameraResiduals;
                 report[QStringLiteral("sfm_diagnostics")] = result.sfmDiagnostics;
+                report[QStringLiteral("resolved_settings")] = workflowResult.config.resolvedSettings;
                 writeLatestAndAppendHistoryReport(QDir(assetsDir).filePath(QStringLiteral("reports")),
                                                   QStringLiteral("at_report.json"),
                                                   QStringLiteral("at_report_history.json"),

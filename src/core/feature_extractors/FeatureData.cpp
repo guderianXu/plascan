@@ -54,6 +54,8 @@ FeatureData FeatureData::fromFeatureOutput(const FeatureOutput &out,
     fd.keypoints = out.keypoints;
     fd.scores = out.scores;
     fd.sourceAlgorithm = algoName;
+    fd.imageWidth = out.imageWidth;
+    fd.imageHeight = out.imageHeight;
 
     // FeatureOutput::descriptors 为 [N, D] float32 CPU Tensor
     if (out.descriptors.defined() && out.descriptors.numel() > 0)

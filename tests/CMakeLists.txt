@@ -7,7 +7,7 @@ include(CheckLanguage)
 # ── GTest ────────────────────────────────────────────────────────────────────
 find_package(GTest REQUIRED)
 include(GoogleTest)
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Widgets)
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Test Widgets Concurrent)
 find_package(Python3 COMPONENTS Interpreter)
 
 # ── 依赖 ─────────────────────────────────────────────────────────────────────
@@ -211,6 +211,28 @@ target_include_directories(test_match_result_catalog PRIVATE
 )
 gtest_discover_tests(test_match_result_catalog)
 
+add_executable(test_aerial_triangulation_workflow
+    test_aerial_triangulation_workflow.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline/AerialTriangulationWorkflow.cpp
+)
+target_link_libraries(test_aerial_triangulation_workflow PRIVATE
+    Qt6::Core
+    sfm
+    camera
+    intersection
+    bundle_adjust
+    GTest::gtest_main
+)
+target_include_directories(test_aerial_triangulation_workflow PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/pipeline
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/core/intersection
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+)
+gtest_discover_tests(test_aerial_triangulation_workflow)
+
 add_executable(test_lightglue_feature_budget
     test_lightglue_feature_budget.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_match/match.cpp
@@ -256,6 +278,52 @@ target_include_directories(test_feature_pair_planner PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_feature_pair_planner)
+
+# ==============================================================================
+# test_match_photos_task — Metashape-like 匹配照片任务框架
+# ==============================================================================
+add_executable(test_matchphotos_algorithm_selector
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_algorithm_selector.cpp
+)
+target_link_libraries(test_matchphotos_algorithm_selector PRIVATE
+    matchphototask
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_matchphotos_algorithm_selector PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/algorithm
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+)
+gtest_discover_tests(test_matchphotos_algorithm_selector)
+
+add_executable(test_matchphotos_pair_selector
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_pair_selector.cpp
+)
+target_link_libraries(test_matchphotos_pair_selector PRIVATE
+    matchphototask
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_matchphotos_pair_selector PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/pair_selection
+)
+gtest_discover_tests(test_matchphotos_pair_selector)
+
+add_executable(test_match_photos_task
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_match_photos_task.cpp
+)
+target_link_libraries(test_match_photos_task PRIVATE
+    matchphototask
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_match_photos_task PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+)
+gtest_discover_tests(test_match_photos_task)
 
 # ==============================================================================
 # test_initial_sparse_triangulator — core/sfm 初始稀疏点云三角化器
@@ -415,6 +483,7 @@ target_link_libraries(test_bundle_adjust_dialog_lidar PRIVATE
     Qt6::Gui
     Qt6::Test
     Qt6::Widgets
+    Qt6::Concurrent
     GTest::gtest
 )
 target_compile_definitions(test_bundle_adjust_dialog_lidar PRIVATE
@@ -485,6 +554,9 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SurveyControlDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CreateTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThinTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CleanTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
@@ -507,6 +579,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WindowPanel.cpp
@@ -515,6 +588,9 @@ set_target_properties(test_gui_project_utils PROPERTIES
     AUTOMOC ON
     AUTOUIC ON
 )
+if(MSVC)
+    target_compile_options(test_gui_project_utils PRIVATE /bigobj)
+endif()
 target_link_libraries(test_gui_project_utils PRIVATE
     mvs
     sfm
@@ -524,6 +600,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     qc
     terrain
     Qt6::Core
+    Qt6::Concurrent
     Qt6::Gui
     Qt6::Test
     Qt6::Widgets
@@ -882,6 +959,7 @@ gtest_discover_tests(test_feature_extractor_suffix)
 
 add_executable(test_feature_file_io
     test_feature_file_io.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
 )
 target_link_libraries(test_feature_file_io PRIVATE

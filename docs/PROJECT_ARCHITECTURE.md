@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-07-01。
+行星表面摄影测量处理系统。最后更新: 2026-07-04。
 
 ## 顶层目录
 
@@ -83,23 +83,26 @@ core/
 │   ├── aliked/                  # ALIKED (128d, GPU/CPU)
 │   │   ├── AlikedExtractor.h/cpp # TorchScript 推理
 │   │   └── tests/
-│   ├── tradition/               # 传统算法 (SIFT/SURF/ORB/AKAZE, CPU)
+│   ├── tradition/               # 传统算法 (SIFT/SURF/ORB/AKAZE, CPU; SIFT 可选 CUDA)
 │   │   ├── TraditionalFeatureExtractor.h/cpp
 │   │   └── test_*.cpp
-│   ├── loftr/                   # LoFTR (Python 子进程)
-│   └── dedode/                  # DeDoDe (Python 子进程)
+│   └── dedode/                  # DeDoDe Python 提取器说明与脚本入口
 │
-├── feature_match/              # 特征点匹配 (7 种算法)
+├── feature_match/              # 特征点匹配和端到端匹配
 │   ├── IMatcher.h              # 匹配器虚接口
 │   ├── MatcherFactory.h/cpp    # 工厂 (独立库 feature_match_factory)
 │   ├── match.h/cpp             # 通用匹配结果结构
+│   ├── MatchFileIO.h/cpp       # 通用匹配文件 I/O (.match 索引格式 + 坐标格式)
+│   ├── MatchExportIO.h/cpp     # CSV/COLMAP 等调试和交换格式导出
+│   ├── MatchGeometryFilter.h/cpp # RANSAC/USAC 几何粗差剔除
+│   ├── MatchVisualization.h/cpp # 匹配连线可视化导出
 │   ├── superglue/
-│   │   ├── SuperGlueMatcher.h/cpp      # SuperGlue 推理
-│   │   ├── MatchOutlierRejector.h/cpp  # 粗差剔除
-│   │   └── SuperGlueMatchIO.h/cpp      # .match 文件 I/O
+│   │   ├── SuperGlueMatcher.h/cpp      # SuperGlue TorchScript 推理
+│   │   ├── export_torchscript.py       # SuperGlue 模型导出
+│   │   └── usage_examples.cpp          # SuperGlue 推理示例
 │   ├── lightglue/
 │   │   └── LightGlueMatcher.h/cpp      # LightGlue 推理
-│   ├── loftr/                  # LoFTR 匹配器
+│   ├── loftr/                  # LoFTR C++ TorchScript 端到端匹配器
 │   └── tradition/
 │       └── TraditionalFeatureMatcher.h/cpp  # BFMatcher/FLANN
 │
@@ -110,6 +113,29 @@ core/
 │   ├── OverlapAnalyzer.h/cpp   # 影像对重叠区域计算
 │   ├── VocabularyOverlapRetriever.h/cpp  # 基于已提取特征描述子的词汇重叠对检索
 │   └── GroundBackProjector.h/cpp  # 地面投影
+│
+├── matchphototask/             # Metashape-like 匹配照片编排层
+│   ├── algorithm/
+│   │   ├── MatchPhotosAlgorithmPlan.h/cpp # 算法计划：当前主线 SIFT + LightGlue
+│   │   └── MatchPhotosAlgorithmSelector.h/cpp # 类 Metashape 预设到算法计划的映射
+│   ├── task/
+│   │   ├── MatchPhotosTask.h/cpp    # 统一任务入口，完成算法选择、pair selection、特征和匹配阶段
+│   │   ├── MatchPhotosOptions.h     # 自动/快速/高精度/CPU/CUDA 等任务选项
+│   │   ├── MatchPhotosContext.h     # 项目路径、输出目录、影像输入、取消和进度上下文
+│   │   └── MatchPhotosResult.h      # 阶段报告、特征文件记录、匹配文件记录和错误信息
+│   ├── pair_selection/
+│   │   ├── PairTypes.h/cpp          # PairCandidate、PairSource、pair key 规范
+│   │   ├── PairSelectionPolicy.h/cpp # 自动/全量/序列/手动等候选策略
+│   │   └── PairSelector.h/cpp       # 合并手动、全量、序列、相机重叠和词汇召回候选
+│   ├── runtime/
+│   │   └── MatchPhotosRuntime.h/cpp # 输出路径、LightGlue 模型查找、匹配 sidecar 写入
+│   ├── stages/
+│   │   ├── FeatureStage.h/cpp       # SIFT 特征提取/复用，输出 assets/ip/*.sift
+│   │   ├── MatchingStage.h/cpp      # SIFT + LightGlue 两两匹配，输出 assets/matches/*.match + JSON sidecar
+│   │   ├── GeometryVerifyStage.h/cpp # 几何验证阶段占位
+│   │   ├── TrackBuildStage.h/cpp    # 多视图 tracks 构建阶段占位
+│   │   └── GuidedMatchStage.h/cpp   # 引导重匹配阶段占位
+│   └── tests/                       # matchphototask 模块级测试
 │
 ├── bundle_adjust/              # 光束法平差
 │   └── BundleAdjust.h/cpp      # BA 优化，可选 LiDAR 点到面、控制点和比例尺软约束

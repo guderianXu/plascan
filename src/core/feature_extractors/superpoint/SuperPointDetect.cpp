@@ -108,6 +108,8 @@ FeatureOutput SuperPoint::detect(const cv::Mat& image)
     
     // 转换为输出格式
     FeatureOutput result;
+    result.imageWidth = image.cols;
+    result.imageHeight = image.rows;
 
     // 当模型返回空关键点（如 superpoint_v1_compat 导出的占位格式）时，
     // 从 dense score map 提取关键点

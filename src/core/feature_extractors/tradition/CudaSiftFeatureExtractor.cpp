@@ -214,6 +214,8 @@ FeatureOutput detectCudaSift(const cv::Mat &grayImage,
 
     cv::Mat descriptors(static_cast<int>(keepIndices.size()), 128, CV_32F);
     FeatureOutput output;
+    output.imageWidth = grayImage.cols;
+    output.imageHeight = grayImage.rows;
     output.keypoints.reserve(keepIndices.size());
     output.scores.reserve(keepIndices.size());
 

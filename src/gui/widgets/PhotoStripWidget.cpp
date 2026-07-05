@@ -81,7 +81,7 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
     _list->setObjectName(QStringLiteral("photoStripList"));
     _list->setViewMode(QListView::IconMode);
     _list->setFlow(QListView::LeftToRight);
-    _list->setWrapping(false);
+    _list->setWrapping(true);
     _list->setMovement(QListView::Static);
     _list->setResizeMode(QListView::Adjust);
     _list->setSelectionMode(QAbstractItemView::SingleSelection);
@@ -92,8 +92,8 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
     _list->setSpacing(6);
     _list->setUniformItemSizes(true);
     _list->setWordWrap(true);
-    _list->setHorizontalScrollBarPolicy(Qt::ScrollBarAsNeeded);
-    _list->setVerticalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    _list->setHorizontalScrollBarPolicy(Qt::ScrollBarAlwaysOff);
+    _list->setVerticalScrollBarPolicy(Qt::ScrollBarAsNeeded);
     layout->addWidget(_list);
 
     connect(_list, &QListWidget::itemClicked, this, [this](QListWidgetItem *item)
@@ -102,7 +102,7 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
         {
             return;
         }
-        emit photoActivated(item->data(PathRole).toString());
+        emit photoSelected(item->data(PathRole).toString());
     });
     connect(_list, &QListWidget::itemActivated, this, [this](QListWidgetItem *item)
     {

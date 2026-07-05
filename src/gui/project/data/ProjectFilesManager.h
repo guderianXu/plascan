@@ -23,6 +23,20 @@
 #include <QJsonArray>
 #include <QMap>
 #include <QStringList>
+#include <QVector>
+
+struct ProjectIpfindResultRecord
+{
+    QString input;
+    QString output;
+    QJsonObject settings;
+};
+
+struct ProjectIpmatchResultRecord
+{
+    QStringList outputs;
+    QJsonObject settings;
+};
 
 class ProjectFilesManager
 {
@@ -68,8 +82,10 @@ public:
     // ── 修改接口 ─────────────────────────────────────────────────────────
     void setImages(const QJsonArray &images);
     void appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings);
+    void appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records);
     /// 追加 ipmatch 结果记录（精简格式：仅存路径，去掉冗余 sp0/sp1/pair_name）
     void appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings);
+    void appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records);
 
 private:
     // 核心数据（images 数组）

@@ -41,6 +41,8 @@ struct LightGlueConfig
     std::string spModelPath;
     /// 是否使用 CUDA，默认 true（不可用时自动回退 CPU）
     bool useCuda = true;
+    /// CUDA 设备编号，useCuda=true 且 CUDA 可用时生效
+    int cudaDevice = 0;
     /// mutual-NN 置信度閘值（越高越严格，默认 0.2，与 SuperGlue 对齐）
     float scoreThreshold = 0.2f;
 };

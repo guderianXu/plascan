@@ -5,6 +5,8 @@
 #include <QComboBox>
 #include <QDialogButtonBox>
 #include <QJsonObject>
+#include <QLayout>
+#include <QSizePolicy>
 #include <QSignalBlocker>
 #include <QSpinBox>
 #include <QToolButton>
@@ -50,6 +52,26 @@ QString normalizeReferenceSource(QString value)
     return value;
 }
 
+void stabilizeInputControl(QWidget *widget)
+{
+    if (!widget)
+    {
+        return;
+    }
+    widget->setMinimumHeight(28);
+    widget->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+}
+
+void stabilizeCheckBox(QCheckBox *checkBox)
+{
+    if (!checkBox)
+    {
+        return;
+    }
+    checkBox->setMinimumHeight(24);
+    checkBox->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+}
+
 } // namespace
 
 AerialTriangulationDialog::AerialTriangulationDialog(QWidget *parent)
@@ -64,6 +86,7 @@ AerialTriangulationDialog::~AerialTriangulationDialog() = default;
 
 void AerialTriangulationDialog::setupUi()
 {
+    setWindowTitle(QStringLiteral("空中三角测量"));
     _ui->m_statusLabel->hide();
 
     _ui->m_qualityCombo->clear();
@@ -98,6 +121,18 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_excludeFixedTiePointsCheck->setChecked(true);
     _ui->m_guidedImageMatchingCheck->setChecked(false);
     _ui->m_adaptiveCameraModelCheck->setChecked(false);
+    stabilizeInputControl(_ui->m_qualityCombo);
+    stabilizeInputControl(_ui->m_referenceSourceCombo);
+    stabilizeInputControl(_ui->m_keypointLimitSpin);
+    stabilizeInputControl(_ui->m_tiepointLimitSpin);
+    stabilizeInputControl(_ui->m_maskApplyCombo);
+    stabilizeCheckBox(_ui->m_genericPreselectionCheck);
+    stabilizeCheckBox(_ui->m_referencePreselectionCheck);
+    stabilizeCheckBox(_ui->m_resetAlignmentCheck);
+    stabilizeCheckBox(_ui->m_saveAfterEachStepCheck);
+    stabilizeCheckBox(_ui->m_excludeFixedTiePointsCheck);
+    stabilizeCheckBox(_ui->m_guidedImageMatchingCheck);
+    stabilizeCheckBox(_ui->m_adaptiveCameraModelCheck);
     setAdvancedExpanded(false);
 
     connect(_ui->m_buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -142,6 +177,12 @@ void AerialTriangulationDialog::setAdvancedExpanded(bool expanded)
     _ui->m_advancedToggle->setChecked(expanded);
     _ui->m_advancedToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
     _ui->m_advancedContent->setVisible(expanded);
+    setMinimumHeight(expanded ? 560 : 360);
+    if (layout())
+    {
+        layout()->invalidate();
+    }
+    adjustSize();
 }
 
 void AerialTriangulationDialog::setImageCount(int count)

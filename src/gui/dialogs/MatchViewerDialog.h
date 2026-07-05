@@ -111,6 +111,8 @@ private slots:
     void onMatchDataLoaded(int count);
     // 匹配数据加载失败后触发，error 为错误描述文字
     void onLoadFailed(const QString &error);
+    // 空三轨迹有效性加载完成后触发，valid/invalid < 0 表示暂无空三分类
+    void onMatchValidityLoaded(int validCount, int invalidCount);
 
     // 刷新底部状态栏文字（含总匹配点数等统计信息）
     void updateStatusBar();
@@ -173,6 +175,8 @@ private:
     QString _imageB;       // 右侧影像路径
     QString _matchFile;    // 当前加载的 .match 文件路径
     int _totalMatches = 0;     // 已加载的总匹配点数（加载成功后更新）
+    int _validMatches = -1;    // 空三后仍有效的匹配数，-1 表示暂无分类
+    int _invalidMatches = -1;  // 空三后被过滤的匹配数，-1 表示暂无分类
     QVector<xjw::pipeline::MatchVariant> _matchVariants;
     QString _currentVariantSummary;
     DialogSettingStore *_setting = nullptr; ///< 项目级记忆化管理器（可空）

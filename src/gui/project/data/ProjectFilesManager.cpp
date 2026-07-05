@@ -37,6 +37,7 @@
 #include <QDir>
 #include <QJsonDocument>
 #include <QSet>
+#include <QHash>
 
 // ── 工具：判断 key 是否属于 results 域 ───────────────────────────────────────
 bool ProjectFilesManager::isResultKey(const QString &key)
@@ -180,27 +181,51 @@ void ProjectFilesManager::appendIpfindResult(const QString &input,
                                               const QString &output,
                                               const QJsonObject &settings)
 {
+    appendIpfindResults(QVector<ProjectIpfindResultRecord>{
+        ProjectIpfindResultRecord{input, output, settings}
+    });
+}
+
+void ProjectFilesManager::appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records)
+{
     QJsonArray results = _resultFiles.value(QLatin1String("ipfind_results")).toArray();
 
-    const QString cleanInput = QDir::cleanPath(input);
-    int existingIndex = -1;
-    for (int i = 0; i < results.size(); ++i) {
-        if (QDir::cleanPath(results[i].toObject().value(QLatin1String("input")).toString()) == cleanInput) {
-            existingIndex = i;
-            break;
+    QHash<QString, int> existingInputs;
+    existingInputs.reserve(results.size());
+    for (int i = 0; i < results.size(); ++i)
+    {
+        const QString existing = QDir::cleanPath(results[i].toObject().value(QLatin1String("input")).toString());
+        if (!existing.isEmpty())
+        {
+            existingInputs.insert(existing, i);
         }
     }
 
-    QJsonObject rec;
-    rec[QLatin1String("input")]      = input;
-    rec[QLatin1String("output")]     = output;
-    rec[QLatin1String("settings")]   = settings;   // ipfind settings 仍保留（字段少）
-    rec[QLatin1String("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+    for (const ProjectIpfindResultRecord &record : records)
+    {
+        const QString cleanInput = QDir::cleanPath(record.input);
+        if (cleanInput.isEmpty() || record.output.trimmed().isEmpty())
+        {
+            continue;
+        }
 
-    if (existingIndex >= 0)
-        results[existingIndex] = rec;
-    else
-        results.append(rec);
+        QJsonObject rec;
+        rec[QLatin1String("input")]      = record.input;
+        rec[QLatin1String("output")]     = record.output;
+        rec[QLatin1String("settings")]   = record.settings;   // ipfind settings 仍保留（字段少）
+        rec[QLatin1String("created_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+
+        const auto found = existingInputs.constFind(cleanInput);
+        if (found != existingInputs.constEnd())
+        {
+            results[found.value()] = rec;
+        }
+        else
+        {
+            existingInputs.insert(cleanInput, results.size());
+            results.append(rec);
+        }
+    }
 
     _resultFiles[QLatin1String("ipfind_results")] = results;
     _resultsDirty = true;
@@ -208,6 +233,13 @@ void ProjectFilesManager::appendIpfindResult(const QString &input,
 
 void ProjectFilesManager::appendIpmatchResult(const QStringList &outputs,
                                                const QJsonObject &settings)
+{
+    appendIpmatchResults(QVector<ProjectIpmatchResultRecord>{
+        ProjectIpmatchResultRecord{outputs, settings}
+    });
+}
+
+void ProjectFilesManager::appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records)
 {
     QJsonArray results = _resultFiles.value(QLatin1String("ipmatch_results")).toArray();
 
@@ -220,28 +252,32 @@ void ProjectFilesManager::appendIpmatchResult(const QStringList &outputs,
             existingOutputs.insert(QDir::cleanPath(existing));
     }
 
-    // 从 settings 中提取 image0/image1 路径（精简存储，不再存 sp0/sp1/pair_name 等冗余字段）
-    QString image0, image1;
-    const QJsonArray imageFiles = settings.value(QLatin1String("image_files")).toArray();
-    if (imageFiles.size() >= 2) {
-        image0 = imageFiles.at(0).toString();
-        image1 = imageFiles.at(1).toString();
-    }
+    for (const ProjectIpmatchResultRecord &record : records)
+    {
+        const QJsonObject &settings = record.settings;
 
-    // 从路径提取影像基名（供 ObservationNetworkBuilder 等使用，避免后续重复 IO）
-    const QString image0Name = QFileInfo(image0).completeBaseName();
-    const QString image1Name = QFileInfo(image1).completeBaseName();
-    const QString createdAt  = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
+        // 从 settings 中提取 image0/image1 路径（精简存储，不再存 sp0/sp1/pair_name 等冗余字段）
+        QString image0, image1;
+        const QJsonArray imageFiles = settings.value(QLatin1String("image_files")).toArray();
+        if (imageFiles.size() >= 2) {
+            image0 = imageFiles.at(0).toString();
+            image1 = imageFiles.at(1).toString();
+        }
 
-    for (const QString &output : outputs) {
-        const QString cleanOutput = QDir::cleanPath(output);
-        if (existingOutputs.contains(cleanOutput))
-            continue;
+        // 从路径提取影像基名（供 ObservationNetworkBuilder 等使用，避免后续重复 IO）
+        const QString image0Name = QFileInfo(image0).completeBaseName();
+        const QString image1Name = QFileInfo(image1).completeBaseName();
+        const QString createdAt  = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 
-        // 读取 num_matches：先尝试 SuperGlue sidecar JSON，再尝试 SGMT 二进制
-        int     numMatches = 0;
-        QString nm0 = image0Name;
-        QString nm1 = image1Name;
+        for (const QString &output : record.outputs) {
+            const QString cleanOutput = QDir::cleanPath(output);
+            if (existingOutputs.contains(cleanOutput))
+                continue;
+
+            // 读取 num_matches：先尝试 SuperGlue sidecar JSON，再尝试 SGMT 二进制
+            int     numMatches = 0;
+            QString nm0 = image0Name;
+            QString nm1 = image1Name;
         {
             QFile sf(output + QStringLiteral(".json"));
             if (sf.open(QIODevice::ReadOnly)) {
@@ -302,6 +338,7 @@ void ProjectFilesManager::appendIpmatchResult(const QStringList &outputs,
 
         results.append(rec);
         existingOutputs.insert(cleanOutput);
+        }
     }
 
     _resultFiles[QLatin1String("ipmatch_results")] = results;

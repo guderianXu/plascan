@@ -2,6 +2,7 @@
 
 #include <QWidget>
 #include <QJsonObject>
+#include <QSize>
 
 #include "graph/ObservationNetworkBuilder.h"
 
@@ -22,6 +23,9 @@ class WorkspaceCenterWidget : public QWidget
 public:
     explicit WorkspaceCenterWidget(QWidget *parent = nullptr);
     ~WorkspaceCenterWidget() override;
+
+    QSize minimumSizeHint() const override;
+    QSize sizeHint() const override;
 
     CanvasWidget *canvas() const;
     CameraSceneWidget *modelView() const;

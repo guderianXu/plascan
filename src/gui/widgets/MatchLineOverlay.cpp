@@ -196,8 +196,9 @@ void MatchLineOverlay::paintEvent(QPaintEvent *event)
             ++i;
         }
     } else {
-        linePen.setColor(_lineColor);
-        painter.setPen(linePen);
+        const bool hasValidityMask = !_inlierMask.isEmpty();
+        const QColor inlierColor(0, 80, 255);
+        const QColor outlierColor(255, 0, 0);
 
         for (int idx : visibleMatches) {
             QPointF ptA = _ptsA[idx];
@@ -207,12 +208,22 @@ void MatchLineOverlay::paintEvent(QPaintEvent *event)
             QPointF screenA = sceneToScreen(ptA, _leftView);
             QPointF screenB = sceneToScreen(ptB, _rightView);
 
+            QColor drawColor = _lineColor;
+            if (hasValidityMask)
+            {
+                drawColor = idx < _inlierMask.size() && _inlierMask[idx]
+                    ? inlierColor
+                    : outlierColor;
+            }
+            linePen.setColor(drawColor);
+            painter.setPen(linePen);
+
             // 绘制连接线
             painter.drawLine(screenA, screenB);
 
             // 可选：绘制端点
             if (_showEndPoints) {
-                painter.setBrush(_lineColor);
+                painter.setBrush(drawColor);
                 painter.drawEllipse(screenA, 2, 2);
                 painter.drawEllipse(screenB, 2, 2);
             }

@@ -42,6 +42,10 @@ def read_feature_file(path):
         version = struct.unpack("<I", f.read(4))[0]
         name_len = struct.unpack("<I", f.read(4))[0]
         name = f.read(name_len).decode("utf-8", errors="replace")
+        image_width = 0
+        image_height = 0
+        if version >= 3:
+            image_width, image_height = struct.unpack("<ii", f.read(8))
         n_keypoints = struct.unpack("<I", f.read(4))[0]
 
         keypoints = np.zeros((n_keypoints, 2), dtype=np.float32)
@@ -77,10 +81,18 @@ def read_feature_file(path):
         "descriptors": descriptors,
         "n_keypoints": n_keypoints,
         "desc_dim": int(desc_dim),
+        "image_width": int(image_width),
+        "image_height": int(image_height),
     }
 
 
 def estimate_image_size(keypoints):
+    if isinstance(keypoints, dict):
+        width = int(keypoints.get("image_width", 0))
+        height = int(keypoints.get("image_height", 0))
+        if width > 0 and height > 0:
+            return np.array([float(width), float(height)], dtype=np.float32)
+        keypoints = keypoints.get("keypoints", np.zeros((0, 2), dtype=np.float32))
     if keypoints.size == 0:
         return np.array([1.0, 1.0], dtype=np.float32)
     width = max(float(np.max(keypoints[:, 0])) + 1.0, 1.0)
@@ -92,7 +104,7 @@ def torch_features(data, device, torch_module):
     keypoints = torch_module.from_numpy(data["keypoints"]).unsqueeze(0).to(device)
     descriptors = torch_module.from_numpy(data["descriptors"]).unsqueeze(0).to(device)
     scores = torch_module.from_numpy(data["scores"]).unsqueeze(0).to(device)
-    image_size = torch_module.from_numpy(estimate_image_size(data["keypoints"])).unsqueeze(0).to(device)
+    image_size = torch_module.from_numpy(estimate_image_size(data)).unsqueeze(0).to(device)
     return {
         "keypoints": keypoints,
         "descriptors": descriptors,

@@ -52,7 +52,7 @@ struct FeatureData
         if (sourceAlgorithm == "superpoint") return "superglue";
         if (sourceAlgorithm == "disk")       return "lightglue";
         if (sourceAlgorithm == "aliked")     return "lightglue";
-        if (sourceAlgorithm == "sift")       return "sift_bf_l2";
+        if (sourceAlgorithm == "sift")       return "lightglue";
         if (sourceAlgorithm == "orb")        return "orb_bf_hamming";
         if (sourceAlgorithm == "akaze")      return "orb_bf_hamming";
         return "sift_bf_l2";

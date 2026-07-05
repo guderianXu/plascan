@@ -15,7 +15,7 @@
  *   - 项目：新建、打开、最近打开、保存、退出
  *   - 视图：放大、缩小、重置视图、特征点可视化、窗口面板开关
  *   - 工作流程：空三、生成模型、DEM、正射影像等高层操作
- *   - 工具：重叠度、前方交汇、工作流程报告
+ *   - 工具：连接点、重叠度、前方交汇、工作流程报告
  *   - 帮助：关于
  */
 
@@ -106,8 +106,8 @@ public:
     /** @brief 返回"显示相机"切换动作（可检查状态）。 */
     QAction *toggleCamerasAction() const;
 
-    /** @brief 返回"显示世界原点"切换动作（可检查状态）。 */
-    QAction *toggleWorldOriginAction() const;
+    /** @brief 返回"河南大学校徽"显示/隐藏切换动作（可检查状态）。 */
+    QAction *toggleHenanUniversityBrandAction() const;
 
     // ==== 工作流程菜单动作 ====
 
@@ -154,8 +154,15 @@ public:
     /** @brief 返回"生成正射影像"动作。 */
     QAction *generateOrthoAction() const;
 
+    /** @brief 返回"生成模型"动作。 */
+    QAction *generateModelAction() const;
+
     /** @brief 返回"查看工作流程报告"动作。 */
     QAction *viewWorkflowReportAction() const;
+    QAction *createTiePointsAction() const;
+    QAction *thinTiePointsAction() const;
+    QAction *cleanTiePointsAction() const;
+    QAction *viewTiePointMatchesAction() const;
     QAction *manualPointCloudPruneAction() const;
     QAction *cameraConvertAction() const;
     QAction *surveyControlAction() const;
@@ -229,7 +236,7 @@ private:
     QAction *_resetViewAct{}; ///< 重置视图到原始比例
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏操控球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
-    QAction *_toggleWorldOriginAct{}; ///< 显示/隐藏世界原点十字
+    QAction *_toggleHenanUniversityBrandAct{}; ///< 显示/隐藏河南大学校徽
     QAction *_featureInfoAct{}; ///< 兴趣点信息面板开关
 
     // ---- 面板开关动作 ----
@@ -249,6 +256,7 @@ private:
     QAction *_denseMatchAct{};          ///< 密集匹配
     QAction *_workflowAerialTriangulationAct{}; ///< 工作流程中的对齐照片参数对话框
     QAction *_threeDReconstructionAct{}; ///< 三维重建（一键完整建模）
+    QAction *_generateModelAct{};       ///< 生成模型（源数据选择）
     QAction *_overlapAnalysisAct{};     ///< 重叠度分析
     QAction *_intersectionCheckAct{};   ///< 前方交汇精度检验
     QAction *_intersectionViewResultsAct{}; ///< 查看前方交汇结果
@@ -256,6 +264,10 @@ private:
     QAction *_generateOrthoAct{};       ///< 生成正射影像
 
     QAction *_viewWorkflowReportAct{};        ///< 查看工作流程历史报告
+    QAction *_createTiePointsAct{};           ///< 工具菜单中创建连接点参数入口
+    QAction *_thinTiePointsAct{};             ///< 工具菜单中稀释连接点参数入口
+    QAction *_cleanTiePointsAct{};            ///< 工具菜单中清理连接点参数入口
+    QAction *_viewTiePointMatchesAct{};       ///< 工具菜单中查看匹配入口
     QAction *_manualPointCloudPruneAct{};     ///< 手动点云剔除
     QAction *_cameraConvertAct{};             ///< 通用相机格式转换
     QAction *_surveyControlAct{};             ///< 控制点/检查点/比例尺管理

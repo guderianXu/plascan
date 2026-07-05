@@ -17,8 +17,8 @@
 #include "ExtractorFactory.h"
 #include "FeatureData.h"
 #include "FeatureFileIO.h"
-#include "SuperGlueMatchIO.h"
-#include "MatchOutlierRejector.h"
+#include "MatchFileIO.h"
+#include "MatchGeometryFilter.h"
 #include "AlgorithmCompat.h"
 #include "lightglue/LightGlueMatcher.h"
 #include "tradition/TraditionalFeatureMatcher.h"
@@ -1245,7 +1245,7 @@ bool runPythonLightGlue(const QString &scriptPath,
 
     QString image0Name;
     QString image1Name;
-    if (!SuperGlueMatchIO::read(matchPath, image0Name, image1Name, *matchResult))
+    if (!xjw::feature_match::readIndexedMatchFile(matchPath, image0Name, image1Name, *matchResult))
     {
         if (error) *error = QStringLiteral("Python LightGlue 已退出但无法读取匹配文件: %1").arg(matchPath);
         return false;
@@ -1361,7 +1361,7 @@ xjw::feature_match::MatchResult runTraditionalSiftFallback(
     const xjw::feature_extractors::FeatureData &fdB,
     const std::vector<cv::KeyPoint> &keypointsA,
     const std::vector<cv::KeyPoint> &keypointsB,
-    const superglue::OutlierFilterConfig &outlierCfg,
+    const xjw::feature_match::OutlierFilterConfig &outlierCfg,
     bool useCuda,
     int cudaDevice,
     int *rawMatchCount)
@@ -1387,7 +1387,7 @@ xjw::feature_match::MatchResult runTraditionalSiftFallback(
     }
 
     int inlierCount = fallback.numMatches;
-    return superglue::MatchOutlierRejector::filter(
+    return xjw::feature_match::MatchGeometryFilter::filter(
         fallback, keypointsA, keypointsB, outlierCfg, &inlierCount);
 }
 
@@ -3066,7 +3066,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
         {
             if (featureAlgorithm == QStringLiteral("sift") && useCuda)
             {
-                LOG_INFO(QStringLiteral("  SIFT 使用 OpenCV 标准特征提取器；CUDA 仅用于后续匹配阶段"));
+                LOG_INFO(QStringLiteral("  SIFT 优先使用 CUDA SIFT；不可用时回退 OpenCV SIFT"));
             }
             else
             {
@@ -3092,7 +3092,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
             extractorCfg.maxImageDim   = featureMaxImageDim;
             extractorCfg.grayscaleMin  = opts.featureGrayscaleMin;
             extractorCfg.grayscaleMax  = opts.featureGrayscaleMax;
-            extractorCfg.useCuda       = useCuda && featureAlgorithm != QStringLiteral("sift");
+            extractorCfg.useCuda       = useCuda;
             extractorCfg.cudaDevice    = 0;
 
             std::unique_ptr<IExtractor> extractor =
@@ -3902,8 +3902,8 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
         }
 
         // ── 粗差剔除配置（USAC_MAGSAC，最优粗差剔除）──────────────────────────────────
-        superglue::OutlierFilterConfig outlierCfg;
-        outlierCfg.method          = superglue::OutlierMethod::FundamentalUsacMagsac;
+        xjw::feature_match::OutlierFilterConfig outlierCfg;
+        outlierCfg.method          = xjw::feature_match::OutlierMethod::FundamentalUsacMagsac;
         outlierCfg.reprojThreshold = presets.outlierReprojThresh;
         outlierCfg.confidence      = 0.9999;
         outlierCfg.maxIters        = 10000;
@@ -4009,6 +4009,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
         xjw::feature_match::LightGlueConfig lgCfg;
         lgCfg.matcherModelPath = lgModelPath.toStdString();
         lgCfg.useCuda = useCuda;
+        lgCfg.cudaDevice = 0;
         lgCfg.scoreThreshold = activeMatchThreshold;
 
         // ── 验证模型可加载（用单个测试实例） ─────────────────────────────
@@ -4164,7 +4165,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
 
                     // 粗差剔除
                     int inlierCount = mr.numMatches;
-                    mr = superglue::MatchOutlierRejector::filter(
+                    mr = xjw::feature_match::MatchGeometryFilter::filter(
                         mr, matchFdA.keypoints, matchFdB.keypoints,
                         outlierCfg, &inlierCount);
                     primaryLightGlueInliers = mr.numMatches;
@@ -4195,7 +4196,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                                 &retryWasLimited,
                                 &retryOomRetried);
                         int retryInlierCount = retryResult.numMatches;
-                        retryResult = superglue::MatchOutlierRejector::filter(
+                        retryResult = xjw::feature_match::MatchGeometryFilter::filter(
                             retryResult, matchFdA.keypoints, matchFdB.keypoints,
                             outlierCfg, &retryInlierCount);
 
@@ -4270,7 +4271,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                         .arg(pairName).arg(mr.numMatches));
 
                     // ── 保存 .match 文件 ────────────────────────────────────
-                    SuperGlueMatchIO::write(matchPath, baseA, baseB, mr);
+                    xjw::feature_match::writeIndexedMatchFile(matchPath, baseA, baseB, mr);
 
                     // ── 保存 sidecar JSON ───────────────────────────────────
                     QJsonObject sidecar;
@@ -5327,12 +5328,42 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                 colorsData.push_back(128);
                 colorsData.push_back(128);
 
+                QJsonArray observations;
+                for (const auto &elem : pt.track.elements)
+                {
+                    if (!recon->hasImage(elem.imageId))
+                    {
+                        continue;
+                    }
+                    const auto kptIt = kptPositions.find(elem.imageId);
+                    if (kptIt == kptPositions.end())
+                    {
+                        continue;
+                    }
+                    const auto &kpts = kptIt.value();
+                    if (elem.featureIdx >= static_cast<FeatureIdx>(kpts.size()))
+                    {
+                        continue;
+                    }
+
+                    const QString imagePath = idToPath.value(elem.imageId);
+                    const auto &keypoint = kpts[elem.featureIdx];
+                    QJsonObject observation;
+                    observation[QStringLiteral("image_id")] = static_cast<int>(elem.imageId);
+                    observation[QStringLiteral("image_path")] = imagePath;
+                    observation[QStringLiteral("image_name")] = QFileInfo(imagePath).fileName();
+                    observation[QStringLiteral("feature_idx")] = static_cast<int>(elem.featureIdx);
+                    observation[QStringLiteral("xy")] = QJsonArray{keypoint.pt.x, keypoint.pt.y};
+                    observations.append(observation);
+                }
+
                 QJsonObject pointObject;
                 pointObject[QStringLiteral("track_len")] = static_cast<int>(pt.track.length());
                 pointObject[QStringLiteral("rms_reproj_px")] = pt.error;
                 pointObject[QStringLiteral("triangulation_angle_deg")] = triangulationAngleByPoint.value(pid, 0.0);
                 pointObject[QStringLiteral("min_tri_angle_deg")] = triangulationAngleByPoint.value(pid, 0.0);
                 pointObject[QStringLiteral("point_xyz")] = QJsonArray{pt.xyz[0], pt.xyz[1], pt.xyz[2]};
+                pointObject[QStringLiteral("observations")] = observations;
                 pointsForQuality.append(pointObject);
             }
 

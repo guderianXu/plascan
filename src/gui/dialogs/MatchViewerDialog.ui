@@ -284,7 +284,7 @@
             <bool>false</bool>
            </property>
            <property name="text">
-            <string>只显示内点</string>
+            <string>只显示有效</string>
            </property>
           </widget>
          </item>

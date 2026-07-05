@@ -17,7 +17,7 @@
    </size>
   </property>
   <property name="windowTitle">
-   <string>对齐照片</string>
+   <string>空中三角测量</string>
   </property>
   <layout class="QVBoxLayout" name="mainLayout">
    <property name="leftMargin">

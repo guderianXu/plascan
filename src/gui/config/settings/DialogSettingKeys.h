@@ -27,6 +27,7 @@ inline const QString DepthMapEstimate     = QStringLiteral("depth_map_estimate")
 inline const QString DenseMatch           = QStringLiteral("dense_match");
 inline const QString DepthFusion          = QStringLiteral("depth_fusion");
 inline const QString DenseCloudRefine     = QStringLiteral("dense_cloud_refine");
+inline const QString GenerateModel        = QStringLiteral("generate_model");
 inline const QString MeshReconstruction   = QStringLiteral("mesh_reconstruction");
 inline const QString TextureMapping       = QStringLiteral("texture_mapping");
 inline const QString ModelExport          = QStringLiteral("model_export");

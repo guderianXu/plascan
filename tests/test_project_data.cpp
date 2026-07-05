@@ -155,6 +155,29 @@ TEST(PlascanArchiveTest, WriteEntryReleasesExistingReadHandleBeforeReplacingArch
     EXPECT_EQ(storedFiles.value(QStringLiteral("project_note")).toString(), QStringLiteral("updated"));
 }
 
+TEST(ProjectDataTest, CreateSaveOpenSupportsChineseProjectPath)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString chineseDir = QDir(dir.path()).filePath(QStringLiteral("中文项目目录"));
+    ASSERT_TRUE(QDir().mkpath(chineseDir)) << qPrintable(chineseDir);
+
+    const QString projectPath = QDir(chineseDir).filePath(QStringLiteral("月球项目.plascan"));
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("月球项目"))) << qPrintable(projectPath);
+    EXPECT_TRUE(QFileInfo::exists(projectPath)) << qPrintable(projectPath);
+
+    QString error;
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &error)) << qPrintable(error);
+    EXPECT_TRUE(reopened.hasProject());
+    EXPECT_EQ(QDir::cleanPath(QFileInfo(reopened.currentProjectPath()).absoluteFilePath()),
+              QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath()));
+}
+
 TEST(ProjectDataTest, SaveProjectWritesWorkflowResultsToResultsEntryOnly)
 {
     QTemporaryDir dir;

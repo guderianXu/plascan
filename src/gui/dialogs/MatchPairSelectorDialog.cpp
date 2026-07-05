@@ -6,6 +6,7 @@
 // =============================================================================
 #include "MatchPairSelectorDialog.h"
 #include "MatchViewerDialog.h"
+#include "MatchValidityAnalyzer.h"
 #include "MatchResultCatalog.h"
 #include "ProjectManager.h"
 #include "ProjectIO.h"
@@ -321,23 +322,23 @@ void MatchPairSelectorDialog::setupUI()
 }
 
 // setupTable: 初始化匹配对信息表格
-// 设置列数（4列）、列头、列宽、选择行为、文字对齐、交替行颜色等属性
+// 设置列头、列宽、选择行为、文字对齐、交替行颜色等属性
 void MatchPairSelectorDialog::setupTable()
 {
     _matchTable->setColumnCount(6);
 
     QStringList headers;
-    headers << tr("图像") << tr("最佳算法") << tr("有效内点")
-            << tr("总匹配") << tr("可用算法") << tr("状态");
+    headers << tr("图像") << tr("总计") << tr("有效")
+            << tr("无效") << tr("最佳算法") << tr("状态");
     _matchTable->setHorizontalHeaderLabels(headers);
 
     // 设置列宽
     _matchTable->setColumnWidth(0, 320);
-    _matchTable->setColumnWidth(1, 150);
+    _matchTable->setColumnWidth(1, 90);
     _matchTable->setColumnWidth(2, 90);
     _matchTable->setColumnWidth(3, 90);
-    _matchTable->setColumnWidth(4, 190);
-    _matchTable->setColumnWidth(5, 150);
+    _matchTable->setColumnWidth(4, 170);
+    _matchTable->setColumnWidth(5, 160);
     
     // 设置表格属性
     _matchTable->setSelectionBehavior(QAbstractItemView::SelectRows);
@@ -420,6 +421,31 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
         nameItem->setToolTip(info.imagePath);
         _matchTable->setItem(i, 0, nameItem);
 
+        // 总计
+        QTableWidgetItem *totalItem = new QTableWidgetItem(
+            info.matchFilePath.isEmpty()
+                ? tr("未匹配")
+                : QString::number(info.totalPoints));
+        totalItem->setTextAlignment(Qt::AlignCenter);
+        _matchTable->setItem(i, 1, totalItem);
+
+        // 有效：优先使用空三最终轨迹统计，其次使用几何验证内点统计
+        const bool hasValidityStats = info.hasTrackValidity || info.hasInlierStats;
+        QTableWidgetItem *validItem = new QTableWidgetItem(
+            info.matchFilePath.isEmpty() || !hasValidityStats
+                ? QStringLiteral("-")
+                : QString::number(info.validPoints));
+        validItem->setTextAlignment(Qt::AlignCenter);
+        _matchTable->setItem(i, 2, validItem);
+
+        // 无效：总匹配中没有进入最终轨迹/几何验证的部分
+        QTableWidgetItem *invalidItem = new QTableWidgetItem(
+            info.matchFilePath.isEmpty() || !hasValidityStats
+                ? QStringLiteral("-")
+                : QString::number(info.invalidPoints));
+        invalidItem->setTextAlignment(Qt::AlignCenter);
+        _matchTable->setItem(i, 3, invalidItem);
+
         // 算法名
         QString algoDisplay = info.algorithm;
         if (algoDisplay.isEmpty()) algoDisplay = tr("(旧格式)");
@@ -429,33 +455,7 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
         {
             algoItem->setToolTip(tooltip);
         }
-        _matchTable->setItem(i, 1, algoItem);
-
-        // 有效内点
-        QTableWidgetItem *validItem = new QTableWidgetItem(
-            info.matchFilePath.isEmpty() || !info.hasInlierStats
-                ? QStringLiteral("-")
-                : QString::number(info.validPoints));
-        validItem->setTextAlignment(Qt::AlignCenter);
-        _matchTable->setItem(i, 2, validItem);
-
-        // 总匹配
-        QTableWidgetItem *totalItem = new QTableWidgetItem(
-            info.matchFilePath.isEmpty()
-                ? tr("未匹配")
-                : QString::number(info.totalPoints));
-        totalItem->setTextAlignment(Qt::AlignCenter);
-        _matchTable->setItem(i, 3, totalItem);
-
-        // 可用算法
-        QTableWidgetItem *availableItem = new QTableWidgetItem(
-            info.availableAlgorithms.isEmpty() ? QStringLiteral("无") : info.availableAlgorithms);
-        availableItem->setTextAlignment(Qt::AlignCenter);
-        if (!tooltip.isEmpty())
-        {
-            availableItem->setToolTip(tooltip);
-        }
-        _matchTable->setItem(i, 4, availableItem);
+        _matchTable->setItem(i, 4, algoItem);
 
         // 状态
         QTableWidgetItem *statusItem = new QTableWidgetItem(
@@ -565,6 +565,17 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
                 if (variant.compatible)
                 {
                     info.matchFilePath = variant.matchFilePath;
+                    const MatchValidityResult validity =
+                        analyzeMatchTrackValidity(variant.matchFilePath, imagePath, otherImagePath);
+                    if (validity.hasTrackValidity)
+                    {
+                        info.hasTrackValidity = true;
+                        info.validPoints = validity.validCount;
+                        info.invalidPoints = validity.invalidCount;
+                        info.status = info.compatibleVariantCount > 1
+                            ? tr("已对齐（%1 个算法）").arg(info.compatibleVariantCount)
+                            : tr("已对齐");
+                    }
                 }
             }
 
@@ -842,7 +853,6 @@ QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QStrin
 MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatistics(
     const QString &imgA, const QString &imgB, const QString &matchFile)
 {
-    Q_UNUSED(imgA);
     MatchInfo info;
     info.imagePath = imgB;
     info.imageName = QFileInfo(imgB).fileName();
@@ -888,6 +898,15 @@ MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatistics(
             }
         }
     }
+
+    const MatchValidityResult validity = analyzeMatchTrackValidity(matchFile, imgA, imgB);
+    if (validity.hasTrackValidity)
+    {
+        info.hasTrackValidity = true;
+        info.validPoints = validity.validCount;
+        info.invalidPoints = validity.invalidCount;
+        info.status = tr("已对齐");
+    }
     
     return info;
 }
@@ -913,10 +932,24 @@ void MatchPairSelectorDialog::onMatchPairSelected(int row, int column)
     }
     else
     {
-        _statusLabel->setText(tr("已选择：%1（%2，总匹配 %3）")
-            .arg(info.imageName)
-            .arg(info.algorithm.isEmpty() ? tr("(旧格式)") : info.algorithm)
-            .arg(info.totalPoints));
+        const QString algorithm = info.algorithm.isEmpty() ? tr("(旧格式)") : info.algorithm;
+        const bool hasValidityStats = info.hasTrackValidity || info.hasInlierStats;
+        if (hasValidityStats)
+        {
+            _statusLabel->setText(tr("已选择：%1（%2，总计 %3，有效 %4，无效 %5）")
+                .arg(info.imageName)
+                .arg(algorithm)
+                .arg(info.totalPoints)
+                .arg(info.validPoints)
+                .arg(info.invalidPoints));
+        }
+        else
+        {
+            _statusLabel->setText(tr("已选择：%1（%2，总计 %3）")
+                .arg(info.imageName)
+                .arg(algorithm)
+                .arg(info.totalPoints));
+        }
     }
 }
 

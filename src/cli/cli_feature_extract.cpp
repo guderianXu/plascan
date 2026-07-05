@@ -1,6 +1,6 @@
 // =============================================================================
 // 文件: cli_feature_extract.cpp
-// 功能: 统一特征提取 CLI — SuperPoint | SIFT | ORB | AKAZE
+// 功能: 统一特征提取 CLI — SuperPoint | DISK | ALIKED | SIFT | ORB | AKAZE | SURF | DeDoDe
 // 用法:
 //   feature_extract_cli -a superpoint -m model.torchscript -i img.tif -o out.sp [--cuda --max-dim 2048]
 //   feature_extract_cli -a sift        -i img.tif -o out.sp [-n 4096]
@@ -16,7 +16,137 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QString>
+#include <QCoreApplication>
+#include <QProcess>
+#include <QStandardPaths>
+#include <algorithm>
+#include <cctype>
 #include <memory>
+
+namespace
+{
+
+QString resolvedExecutablePath(const QString &candidate)
+{
+    const QString trimmed = candidate.trimmed();
+    if (trimmed.isEmpty())
+    {
+        return QString();
+    }
+
+    if (trimmed.contains(QLatin1Char('/')) || trimmed.contains(QLatin1Char('\\')))
+    {
+        const QFileInfo info(trimmed);
+        if (info.exists() && info.isFile() && info.isExecutable())
+        {
+            return QDir::cleanPath(info.absoluteFilePath());
+        }
+        return QString();
+    }
+
+    const QString resolved = QStandardPaths::findExecutable(trimmed);
+    return resolved.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
+}
+
+QString pythonExecutable()
+{
+    static const QString cached = []()
+    {
+        QStringList candidates;
+        candidates << qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed()
+                   << qEnvironmentVariable("PLASCAN_PYTHON").trimmed()
+                   << qEnvironmentVariable("PYTHON").trimmed()
+                   << QStringLiteral("python3")
+                   << QStringLiteral("python");
+        candidates.removeAll(QString());
+        candidates.removeDuplicates();
+
+        for (const QString &candidate : candidates)
+        {
+            const QString resolved = resolvedExecutablePath(candidate);
+            if (!resolved.isEmpty())
+            {
+                return resolved;
+            }
+        }
+        return QStringLiteral("python");
+    }();
+    return cached;
+}
+
+QString findScriptFile(const QString &scriptName)
+{
+    QStringList candidates;
+
+    const QString envScriptDir = qEnvironmentVariable("PLASCAN_SCRIPT_DIR").trimmed();
+    if (!envScriptDir.isEmpty())
+    {
+        candidates.append(QDir(envScriptDir).filePath(scriptName));
+    }
+
+#ifdef PLASCAN_SOURCE_DIR
+    candidates.append(
+        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+#endif
+
+    const QString exeDir = QCoreApplication::applicationDirPath();
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(exeDir).filePath(QStringLiteral("../../../scripts/%1").arg(scriptName)));
+    candidates.append(QDir(QDir::currentPath()).filePath(QStringLiteral("scripts/%1").arg(scriptName)));
+
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+        {
+            return QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
+        }
+    }
+    return QString();
+}
+
+int runPythonDedodeExtract(const std::string &imgPath,
+                           const std::string &outPath,
+                           bool cuda,
+                           int maxDim,
+                           int maxKp)
+{
+    const QString script = findScriptFile(QStringLiteral("run_dedode.py"));
+    if (script.isEmpty())
+    {
+        fprintf(stderr, "未找到 DeDoDe 脚本 scripts/run_dedode.py\n");
+        return cli::EXIT_IO_ERR;
+    }
+
+    QStringList args;
+    args << script
+         << QStringLiteral("-i") << QString::fromStdString(imgPath)
+         << QStringLiteral("-o") << QString::fromStdString(outPath)
+         << QStringLiteral("--max-dim") << QString::number(maxDim)
+         << QStringLiteral("--max-kp") << QString::number(maxKp);
+    if (cuda)
+    {
+        args << QStringLiteral("--cuda");
+    }
+
+    QProcess process;
+    process.start(pythonExecutable(), args);
+    if (!process.waitForFinished(600000))
+    {
+        process.kill();
+        fprintf(stderr, "DeDoDe 提取超时: %s\n", imgPath.c_str());
+        return cli::EXIT_ALGO_ERR;
+    }
+    fprintf(stdout, "%s", process.readAllStandardOutput().constData());
+    if (process.exitStatus() != QProcess::NormalExit || process.exitCode() != 0)
+    {
+        fprintf(stderr, "%s", process.readAllStandardError().constData());
+        return cli::EXIT_ALGO_ERR;
+    }
+    return cli::EXIT_OK;
+}
+
+} // namespace
 
 static int processOne(const std::string &algo,
                       std::unique_ptr<IExtractor> &extractor,
@@ -43,15 +173,15 @@ static int processOne(const std::string &algo,
 
 int main(int argc, char *argv[])
 {
-    CLI::App app{"PlaScan 统一特征提取 — SuperPoint | SIFT | ORB | AKAZE | DISK | ALIKED"};
+    CLI::App app{"PlaScan 统一特征提取 — SuperPoint | DISK | ALIKED | SIFT | ORB | AKAZE | SURF | DeDoDe"};
 
     std::string algo = "superpoint";
-    app.add_option("-a,--algorithm", algo, "算法: superpoint, sift, orb, akaze, surf, disk, aliked");
+    app.add_option("-a,--algorithm", algo, "算法: superpoint, disk, aliked, sift, orb, akaze, surf, dedode");
 
     std::string modelPath, imgPath, outPath;
-    app.add_option("-m,--model", modelPath, "模型路径 (.torchscript/.pt, SuperPoint 必填)");
+    app.add_option("-m,--model", modelPath, "模型路径 (.torchscript/.pt, 深度学习 C++ 提取器必填)");
     app.add_option("-i,--input",  imgPath,  "输入影像或目录")->required();
-    app.add_option("-o,--output", outPath,  "输出 .sp 文件或目录")->required();
+    app.add_option("-o,--output", outPath,  "输出特征文件或目录")->required();
 
     int  maxKp = 4096, nmsRadius = 3, removeBorder = 4, maxDim = 2048, gpu = 0;
     float detThresh = 0.003f, grayscaleMin = 0.0f, grayscaleMax = 1.0f;
@@ -74,9 +204,42 @@ int main(int argc, char *argv[])
 
     // 自动追加算法后缀
     std::string norm = xjw::feature_extractors::TraditionalFeatureExtractor::normalizeAlgorithmName(algo);
+    std::string requestedAlgo = algo;
+    std::transform(requestedAlgo.begin(), requestedAlgo.end(), requestedAlgo.begin(),
+                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    if (requestedAlgo == "dedode")
+    {
+        norm = "dedode";
+    }
     std::string suffix = ExtractorSuffix::forAlgorithm(norm);
-    if (outPath.find('.') == std::string::npos)
+    QFileInfo fiIn(QString::fromStdString(imgPath));
+    if (!fiIn.isDir() && QFileInfo(QString::fromStdString(outPath)).suffix().isEmpty())
+    {
         outPath += suffix;
+    }
+
+    if (norm == "dedode")
+    {
+        if (fiIn.isDir())
+        {
+            QDir inDir(fiIn.absoluteFilePath());
+            QDir outDir(QString::fromStdString(outPath));
+            outDir.mkpath(QStringLiteral("."));
+            QStringList filters = {"*.png","*.jpg","*.jpeg","*.tif","*.tiff","*.bmp"};
+            int ok = 0, fail = 0;
+            for (const QString &fname : inDir.entryList(filters, QDir::Files, QDir::Name))
+            {
+                const std::string in = inDir.absoluteFilePath(fname).toStdString();
+                const QString outName = QFileInfo(fname).completeBaseName() + QString::fromStdString(suffix);
+                const std::string out = outDir.absoluteFilePath(outName).toStdString();
+                const int rc = runPythonDedodeExtract(in, out, cuda, maxDim, maxKp);
+                (rc == cli::EXIT_OK) ? ++ok : ++fail;
+            }
+            fprintf(stdout, "DeDoDe 批量: %d 成功 %d 失败\n", ok, fail);
+            return fail > 0 ? cli::EXIT_ALGO_ERR : cli::EXIT_OK;
+        }
+        return runPythonDedodeExtract(imgPath, outPath, cuda, maxDim, maxKp);
+    }
 
     // 创建提取器 (工厂 + 多态, 无需 if/else 链)
     ExtractorConfig eCfg;
@@ -94,7 +257,7 @@ int main(int argc, char *argv[])
     auto extractor = xjw::feature_extractors::createExtractor(algo, eCfg);
     fprintf(stdout, "算法: %s\n", extractor->algorithmName().c_str());
 
-    QFileInfo fiIn(QString::fromStdString(imgPath)), fiOut(QString::fromStdString(outPath));
+    QFileInfo fiOut(QString::fromStdString(outPath));
     if (fiIn.isDir())
     {
         QDir inDir(fiIn.absoluteFilePath()), outDir(fiOut.absoluteFilePath());

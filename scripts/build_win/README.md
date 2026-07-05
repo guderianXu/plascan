@@ -106,7 +106,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 
 主要可执行文件：
 
-- GUI：`E:\code\plascan\build\windows-vcpkg-cuda-release\bin\plascan_gui.bin.exe`
+- GUI：`E:\code\plascan\build\windows-vcpkg-cuda-release\bin\plascan.exe`
 - CLI：`E:\code\plascan\build\windows-vcpkg-cuda-release\bin`
 - 测试：`E:\code\plascan\build\windows-vcpkg-cuda-release\tests`
 
@@ -147,7 +147,7 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 
 ```powershell
 . E:\code\plascan\build\env\plascan-env.ps1
-E:\code\plascan\build\windows-vcpkg-cuda-release\bin\plascan_gui.bin.exe
+E:\code\plascan\build\windows-vcpkg-cuda-release\bin\plascan.exe
 ```
 
 `build_windows_cuda.ps1` 和 `plascan-env.ps1` 会设置：

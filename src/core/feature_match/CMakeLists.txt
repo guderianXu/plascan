@@ -4,6 +4,14 @@ project(FeatureMatch LANGUAGES CXX)
 add_library(feature_match_common STATIC
   match.cpp
   match.h
+  MatchExportIO.cpp
+  MatchExportIO.h
+  MatchFileIO.cpp
+  MatchFileIO.h
+  MatchGeometryFilter.cpp
+  MatchGeometryFilter.h
+  MatchVisualization.cpp
+  MatchVisualization.h
   MatcherFactory.h
   IMatcher.h
 )
@@ -30,6 +38,8 @@ target_include_directories(feature_match_common
 
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors/aliked
 
+    ${CMAKE_SOURCE_DIR}/src/common
+
     ${TORCH_INCLUDE_DIRS}
 
     ${OpenCV_INCLUDE_DIRS}
@@ -39,6 +49,7 @@ target_include_directories(feature_match_common
 target_link_libraries(feature_match_common
   PUBLIC
     feature_extractors_traditional
+    Qt6::Core
   PRIVATE
     ${TORCH_LIBRARIES}
     ${OpenCV_LIBS}
@@ -98,4 +109,9 @@ if(BUILD_TESTS)
   target_link_libraries(test_algorithm_compat PRIVATE GTest::gtest GTest::gtest_main Qt6::Core)
   target_include_directories(test_algorithm_compat PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
   add_test(NAME AlgorithmCompatTest COMMAND test_algorithm_compat)
+
+  add_executable(test_match_file_io tests/test_match_file_io.cpp)
+  target_link_libraries(test_match_file_io PRIVATE GTest::gtest GTest::gtest_main feature_match_common Qt6::Core)
+  target_include_directories(test_match_file_io PRIVATE ${CMAKE_CURRENT_SOURCE_DIR})
+  add_test(NAME MatchFileIOTest COMMAND test_match_file_io)
 endif()

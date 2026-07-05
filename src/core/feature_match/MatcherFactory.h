@@ -14,6 +14,7 @@ struct MatcherConfig
     std::string spModelPath;       // LightGlue E2E SP模型
     float matchThreshold = 0.2f;
     int   maxKeypoints   = 2048;
+    int   maxImageDim    = 2048;
     bool  useCuda        = true;
     int   cudaDevice     = 0;
 };

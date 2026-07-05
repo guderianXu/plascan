@@ -173,9 +173,30 @@ QCheckBox::indicator {
     background: #ffffff;
 }
 
+QCheckBox::indicator:hover {
+    border-color: #2563eb;
+}
+
 QCheckBox::indicator:checked {
     background: #2563eb;
     border-color: #1d4ed8;
+    image: url(:/icons/checkmark_white.xpm);
+}
+
+QCheckBox::indicator:checked:hover {
+    background: #1d4ed8;
+    border-color: #1e40af;
+}
+
+QCheckBox::indicator:disabled {
+    background: #eef2f7;
+    border-color: #cbd5e1;
+}
+
+QCheckBox::indicator:checked:disabled {
+    background: #9aa8ba;
+    border-color: #8b98aa;
+    image: url(:/icons/checkmark_white.xpm);
 }
 
 QTabWidget::pane {
@@ -287,12 +308,16 @@ QSplitter::handle {
     background: #d6dde7;
 }
 
+QSplitter::handle:hover {
+    background: #9aa8ba;
+}
+
 QSplitter::handle:horizontal {
-    width: 5px;
+    width: 8px;
 }
 
 QSplitter::handle:vertical {
-    height: 5px;
+    height: 10px;
 }
 
 QScrollArea#parameterScrollArea,

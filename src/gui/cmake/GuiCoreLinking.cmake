@@ -103,6 +103,13 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
     message(WARNING "plascan_core sfm target not available - 无相机先验空三流程将不可用")
   endif()
 
+  if(TARGET matchphototask)
+    message(STATUS "plascan_gui: linking against matchphototask target")
+    target_link_libraries(plascan_gui PRIVATE matchphototask)
+  else()
+    message(WARNING "plascan_core matchphototask target not available - 连接点匹配任务将不可用")
+  endif()
+
   if(TARGET mvs)
     message(STATUS "plascan_gui: linking against mvs target")
     target_link_libraries(plascan_gui PRIVATE mvs)

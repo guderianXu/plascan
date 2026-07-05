@@ -23,6 +23,7 @@
 #pragma once
 
 #include "Camera.h"
+#include "ProjectFilesManager.h"
 
 #include <QObject>
 #include <QString>
@@ -196,8 +197,10 @@ public slots:
     // === 结果追加接口（供后台任务通过 Qt::QueuedConnection 调用） ===
     // 追加一条 ipfind 结果到项目元数据，并立即持久化到归档
     void appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings);
+    void appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records);
     // 追加批量 ipmatch 结果到项目元数据，并立即持久化到归档
     void appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings);
+    void appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records);
     // 将影像-相机参数映射批量写回项目 ProjectData（供 AT 服务结果写回时调用）
     // 参数: cameras       - 影像绝对路径 → 相机 JSON 的映射
     //       updatedCount  - 可选，输出实际更新的影像数量

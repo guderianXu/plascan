@@ -107,7 +107,9 @@ FeatureOutput SuperPoint::postprocess(const torch::Tensor& scores,
                                          int img_width, int img_height) 
 {
     FeatureOutput output;
-    
+    output.imageWidth = img_width;
+    output.imageHeight = img_height;
+
     // 在CPU上处理
     auto scores_cpu = scores.to(torch::kCPU);
     auto desc_cpu = descriptors_dense.to(torch::kCPU);

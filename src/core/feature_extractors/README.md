@@ -29,6 +29,8 @@ feature_extractors/
 │   ├── AlikedConfig/AlikedOutput
 │   └── tests/test_aliked.cpp
 │
+├── dedode/                    # DeDoDe Python 提取器说明
+│
 ├── testdata/                  # 测试影像
 │   ├── 1.tif                  # 4608×3456 纳卫星PAN
 │   └── 2.tif                  # 4608×3456 纳卫星PAN
@@ -41,11 +43,13 @@ feature_extractors/
 | 提取器 | 模型 | 描述子维度 | 设备 | 特点 |
 |--------|------|:---:|------|------|
 | SuperPoint | superpoint_extractor_{cuda,cpu}.torchscript | 256 | GPU/CPU | 通用深度学习提取器, 与 SuperGlue/LightGlue 配套 |
-| SIFT | OpenCV内置 | 128 | CPU | 尺度不变, 卫星影像鲁棒 |
+| SIFT | OpenCV / 可选 CUDA SIFT | 128 | CPU/GPU | 尺度不变, 卫星影像鲁棒 |
 | ORB | OpenCV内置 | 32 | CPU | 极快, binary描述子 |
 | AKAZE | OpenCV内置 | 61 | CPU | 非线性扩散, 边缘保持 |
+| SURF | OpenCV contrib | 64/128 | CPU | Hessian blob 特征, 需 OpenCV contrib |
 | DISK | disk_extractor_{cuda,cpu}_8192.torchscript | 128 | GPU/CPU | 深度学习, 与LightGlue disk配套 |
 | ALIKED | aliked_extractor_{cuda,cpu}_480.torchscript | 128 | GPU/CPU | 深度学习, 与LightGlue aliked配套 |
+| DeDoDe | kornia DeDoDe Python | 256 | GPU/CPU | DINOv2 特征, CLI 子进程输出 `.dedode` |
 
 ## 性能基准 (testdata/1.tif, 4608×3456)
 
@@ -66,10 +70,17 @@ feature_extractors/
 # SuperPoint
 feature_extract_cli -a superpoint -m superpoint_extractor_cpu.torchscript -i img.tif -o out.sp --cuda --max-dim 2800
 
-# SIFT/ORB/AKAZE (无需模型)
-feature_extract_cli -a sift  -i img.tif -o out.sp -n 4096
-feature_extract_cli -a orb   -i img.tif -o out.sp -n 5000
-feature_extract_cli -a akaze -i img.tif -o out.sp
+# SIFT/ORB/AKAZE/SURF (无需模型；SIFT 可选 CUDA SIFT)
+feature_extract_cli -a sift  -i img.tif -o out.sift -n 4096
+feature_extract_cli -a orb   -i img.tif -o out.orb -n 5000
+feature_extract_cli -a akaze -i img.tif -o out.akz
+
+# DISK/ALIKED TorchScript
+feature_extract_cli -a disk   -m disk_extractor_cpu_8192.torchscript -i img.tif -o out.dsk
+feature_extract_cli -a aliked -m aliked_extractor_cpu_480.torchscript -i img.tif -o out.alk
+
+# DeDoDe Python backend
+feature_extract_cli -a dedode -i img.tif -o out.dedode --cuda
 ```
 
 ### C++ 库调用

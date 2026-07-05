@@ -104,10 +104,6 @@ int main(int argc, char** argv) {
         // 请根据实际导出的模型文件修改路径
         config.model_path = "superglue_outdoor_cuda.pt";
         config.use_cuda = true; // 如需使用GPU，设置为true并使用CUDA模型
-        config.enable_csv_output = true;
-        config.csv_output_path = "matches_test.csv";
-        config.enable_visualization = true;
-        config.visualization_output_path = "matches_test.jpg";
         config.verbose = true;
 
         SuperGlueMatcher matcher(config);
@@ -125,8 +121,6 @@ int main(int argc, char** argv) {
         MatchResult result = matcher.match(img0, img1, kpts0, kpts1, "test_pair");
 
         std::cout << "匹配完成。找到 " << result.numMatches << " 对匹配" << std::endl;
-        std::cout << "CSV 输出: " << config.csv_output_path << std::endl;
-        std::cout << "可视化输出: " << config.visualization_output_path << std::endl;
 
     } catch (const std::exception& e) {
         std::cerr << "异常: " << e.what() << std::endl;

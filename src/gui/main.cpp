@@ -23,7 +23,15 @@
 // 抑制 libtiff 读取 GDAL 写入的 GeoTIFF 时产生的 tag 42113 (GDAL_NODATA) 警告
 #include <tiffio.h>
 
+#include <clocale>
 #include <exception>
+
+#ifdef Q_OS_WIN
+#ifndef NOMINMAX
+#define NOMINMAX
+#endif
+#include <windows.h>
+#endif
 
 class SafeApplication : public QApplication
 {
@@ -62,6 +70,17 @@ public:
 
 namespace
 {
+void configureConsoleEncoding()
+{
+#ifdef Q_OS_WIN
+    SetConsoleOutputCP(CP_UTF8);
+    SetConsoleCP(CP_UTF8);
+    std::setlocale(LC_ALL, ".UTF-8");
+#else
+    std::setlocale(LC_ALL, "");
+#endif
+}
+
 void applyApplicationStyle(QApplication &app)
 {
     QApplication::setStyle(QStringLiteral("Fusion"));
@@ -84,6 +103,8 @@ void applyApplicationStyle(QApplication &app)
 // 返回值: int - Qt 事件循环退出码（0 表示正常退出）
 int main(int argc, char *argv[])
 {
+    configureConsoleEncoding();
+
     std::set_terminate([]()
     {
         LOG_ERROR("std::terminate triggered. Possible uncaught exception across Qt boundary.");

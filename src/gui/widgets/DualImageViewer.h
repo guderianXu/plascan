@@ -65,6 +65,7 @@ public:
 signals:
     // 加载状态
     void matchDataLoaded(int matchCount);
+    void matchValidityLoaded(int validCount, int invalidCount);
     void loadFailed(const QString &error);
     
     // 同步模式变化

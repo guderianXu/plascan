@@ -1,7 +1,7 @@
 // =============================================================================
 // 文件: FeatureFileIO.h
 // 功能: 多提取器特征文件二进制 I/O (Qt 依赖)
-// 支持: SPBT/DSKB/ALKB/SFTB/ORBB/AKZB/DEDE 全部 magic bytes
+// 支持: SPBT/DSKB/ALKB/SFTB/ORBB/AKZB/DEDE/SURF 全部 magic bytes
 // =============================================================================
 #pragma once
 
@@ -11,6 +11,10 @@
 
 // 前向声明
 struct FeatureOutput;
+namespace xjw::feature_extractors
+{
+struct FeatureData;
+}
 
 // ── 提取器类型 → 文件后缀 / Magic Bytes ──
 namespace ExtractorSuffix
@@ -48,7 +52,13 @@ public:
                       const std::string &algoName = "superpoint");
 
     // 读取
-    static bool read(const QString& path, QString& imageName, FeatureOutput& output);
+    static bool read(const QString& path, QString& imageName, FeatureOutput& output,
+                     std::string *algorithmName = nullptr);
+
+    // 读取为匹配器使用的 FeatureData，同时保留文件 magic 中的算法名和 v3 图像尺寸。
+    static bool readData(const QString& path,
+                         QString& imageName,
+                         xjw::feature_extractors::FeatureData& output);
 
     // 快速读取算法类型 (不加载描述子)
     static std::string peekAlgorithm(const QString& path);

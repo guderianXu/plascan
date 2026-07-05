@@ -67,6 +67,30 @@ class RunLightGlueScriptTest(unittest.TestCase):
             np.testing.assert_allclose(data["scales"], np.array([1.0], dtype=np.float32))
             np.testing.assert_allclose(data["orientations"], np.array([-1.0], dtype=np.float32))
 
+    def test_read_feature_file_supports_version_three_image_size(self):
+        module = load_run_lightglue()
+        with tempfile.TemporaryDirectory() as tmp:
+            feature_path = Path(tmp) / "v3.dsk"
+            with feature_path.open("wb") as f:
+                f.write(b"DSKB")
+                f.write(struct.pack("<I", 3))
+                name = b"v3.jpg"
+                f.write(struct.pack("<I", len(name)))
+                f.write(name)
+                f.write(struct.pack("<ii", 640, 480))
+                f.write(struct.pack("<I", 1))
+                f.write(struct.pack("<fffff", 1.0, 2.0, 0.5, 4.0, 90.0))
+                f.write(struct.pack("<I", 2))
+                f.write(np.array([[0.1, 0.2]], dtype=np.float32).tobytes())
+
+            data = module.read_feature_file(str(feature_path))
+
+            self.assertEqual(data["version"], 3)
+            self.assertEqual(data["image_width"], 640)
+            self.assertEqual(data["image_height"], 480)
+            np.testing.assert_allclose(module.estimate_image_size(data),
+                                       np.array([640.0, 480.0], dtype=np.float32))
+
     def test_sift_uses_sift_lightglue_backend_before_generic_128d(self):
         module = load_run_lightglue()
 

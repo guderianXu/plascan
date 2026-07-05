@@ -170,11 +170,13 @@ def save_features(data: dict, out_path: Path, magic: bytes):
 
     格式：
         magic:      char[4] (SPBT/DSKB/ALKB/etc.)
-        version:    uint32 = 1
+        version:    uint32 = 3
         name_len:   uint32
         name:       utf8[name_len]  (图像文件名)
+        image_width: int32
+        image_height:int32
         N:          uint32          (关键点数量)
-        for i in N: x float32, y float32, score float32
+        for i in N: x float32, y float32, score float32, scale float32, orientation float32
         desc_dim:   uint32
         for i in N, j in D: float32
     """
@@ -183,17 +185,25 @@ def save_features(data: dict, out_path: Path, magic: bytes):
     scores = data["scores"]     # [N] float32
     N = len(kpts)
     D = descs.shape[1] if N > 0 else 0
-    image_name = out_path.stem
+    image_name = data.get("image_name", out_path.stem)
 
     name_bytes = image_name.encode("utf-8")
     with open(out_path, "wb") as f:
         f.write(magic)                                      # magic (算法特定)
-        f.write(struct.pack("<I", 1))                       # version
+        f.write(struct.pack("<I", 3))                       # version
         f.write(struct.pack("<I", len(name_bytes)))         # name_len
         f.write(name_bytes)                                 # name
+        f.write(struct.pack("<ii",
+                            int(data.get("image_width", 0)),
+                            int(data.get("image_height", 0))))
         f.write(struct.pack("<I", N))                       # N
         for i in range(N):
-            f.write(struct.pack("<fff", float(kpts[i, 0]), float(kpts[i, 1]), float(scores[i])))
+            f.write(struct.pack("<fffff",
+                                float(kpts[i, 0]),
+                                float(kpts[i, 1]),
+                                float(scores[i]),
+                                8.0,
+                                -1.0))
         f.write(struct.pack("<I", D))                       # desc_dim
         if N > 0 and D > 0:
             f.write(descs.astype(np.float32).tobytes())
@@ -272,6 +282,7 @@ def main():
                 args.grayscale_min,
                 args.grayscale_max,
             )
+            data["image_name"] = img_path.name
             save_features(data, out_path, magic)
             print(f"  [{i+1}/{len(image_paths)}] {img_path.name} → {data['keypoints'].shape[0]} 个关键点 → {out_path.name}")
         except Exception as e:

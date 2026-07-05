@@ -1,9 +1,12 @@
 #include "PlascanArchive.h"
 
-#include <QStringList>
-#include <QFile>
 #include <QByteArray>
 #include <QDebug>
+#include <QDir>
+#include <QFile>
+#include <QStringList>
+
+#include <string>
 
 // libzip headers if available
 #define HAVE_LIBZIP
@@ -11,12 +14,93 @@
 #include <zip.h>
 #endif
 
+namespace
+{
+
+#if defined(HAVE_LIBZIP)
+
+QByteArray zipEntryName(const QString &entryPath)
+{
+    return entryPath.toUtf8();
+}
+
+QString zipErrorToString(zip_error_t *zipError)
+{
+    if (!zipError)
+    {
+        return QStringLiteral("未知 libzip 错误");
+    }
+
+    const char *message = zip_error_strerror(zipError);
+    if (!message)
+    {
+        return QStringLiteral("未知 libzip 错误");
+    }
+    return QString::fromUtf8(message);
+}
+
+QString zipOpenErrorCodeToString(int errorCode)
+{
+    zip_error_t zipError;
+    zip_error_init_with_code(&zipError, errorCode);
+    const QString message = zipErrorToString(&zipError);
+    zip_error_fini(&zipError);
+    return message;
+}
+
+zip_t *openArchiveFile(const QString &path, int flags, QString *errorMessage = nullptr)
+{
+#if defined(Q_OS_WIN)
+    zip_error_t zipError;
+    zip_error_init(&zipError);
+
+    const std::wstring nativePath = QDir::toNativeSeparators(path).toStdWString();
+    zip_source_t *source = zip_source_win32w_create(nativePath.c_str(), 0, -1, &zipError);
+    if (!source)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = zipErrorToString(&zipError);
+        }
+        zip_error_fini(&zipError);
+        return nullptr;
+    }
+
+    zip_t *archive = zip_open_from_source(source, flags, &zipError);
+    if (!archive)
+    {
+        if (errorMessage)
+        {
+            *errorMessage = zipErrorToString(&zipError);
+        }
+        zip_source_free(source);
+        zip_error_fini(&zipError);
+        return nullptr;
+    }
+
+    zip_error_fini(&zipError);
+    return archive;
+#else
+    int errorCode = 0;
+    const QByteArray nativePath = QFile::encodeName(path);
+    zip_t *archive = zip_open(nativePath.constData(), flags, &errorCode);
+    if (!archive && errorMessage)
+    {
+        *errorMessage = zipOpenErrorCodeToString(errorCode);
+    }
+    return archive;
+#endif
+}
+
+#endif
+
+} // namespace
+
 PlascanArchive::PlascanArchive(const QString &path)
     : _path(path)
 {
 #if defined(HAVE_LIBZIP)
-    int err = 0;
-    zip_t *za = zip_open(path.toLocal8Bit().constData(), ZIP_RDONLY, &err);
+    zip_t *za = openArchiveFile(path, ZIP_RDONLY);
     if (za)
     {
         _impl = za;
@@ -78,14 +162,15 @@ QByteArray PlascanArchive::readEntry(const QString &entryPath, QString *err)
         return data;
     }
     zip_t *za = static_cast<zip_t*>(_impl);
-    zip_file_t *zf = zip_fopen(za, entryPath.toLocal8Bit().constData(), 0);
+    const QByteArray entryName = zipEntryName(entryPath);
+    zip_file_t *zf = zip_fopen(za, entryName.constData(), ZIP_FL_ENC_UTF_8);
     if (!zf)
     {
         if (err) *err = QStringLiteral("entry not found");
         return data;
     }
     zip_stat_t st;
-    if (zip_stat(za, entryPath.toLocal8Bit().constData(), 0, &st) == 0)
+    if (zip_stat(za, entryName.constData(), ZIP_FL_ENC_UTF_8, &st) == 0)
     {
         data.resize(st.size);
         zip_int64_t r = zip_fread(zf, data.data(), st.size);
@@ -115,11 +200,11 @@ bool PlascanArchive::createArchive(const QString &path,
 {
 #if defined(HAVE_LIBZIP)
     // 使用 libzip 创建 ZIP 容器并加入两个初始条目
-    int errorp = 0;
-    zip_t *za = zip_open(path.toLocal8Bit().constData(), ZIP_CREATE | ZIP_TRUNCATE, &errorp);
+    QString openError;
+    zip_t *za = openArchiveFile(path, ZIP_CREATE | ZIP_TRUNCATE, &openError);
     if (!za)
     {
-        if (err) *err = QStringLiteral("无法创建归档（zip_open 失败）");
+        if (err) *err = QStringLiteral("无法创建归档: %1").arg(openError);
         return false;
     }
 
@@ -180,21 +265,22 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
         _valid = false;
     }
 
-    int errorp = 0;
     // 以可写方式打开（如果不存在则创建）
-    zip_t *za = zip_open(_path.toLocal8Bit().constData(), ZIP_CREATE, &errorp);
+    QString openError;
+    zip_t *za = openArchiveFile(_path, ZIP_CREATE, &openError);
     if (!za)
     {
         if (err)
-            *err = QStringLiteral("无法打开归档以写入");
+            *err = QStringLiteral("无法打开归档以写入: %1").arg(openError);
         return false;
     }
 
     // 如果条目已经存在，则先移除（确保替换效果）
-    zip_uint64_t idx = zip_name_locate(za, entryPath.toLocal8Bit().constData(), 0);
-    if (idx != ZIP_UINT64_MAX)
+    const QByteArray entryName = zipEntryName(entryPath);
+    const zip_int64_t idx = zip_name_locate(za, entryName.constData(), ZIP_FL_ENC_UTF_8);
+    if (idx >= 0)
     {
-        if (zip_delete(za, idx) < 0)
+        if (zip_delete(za, static_cast<zip_uint64_t>(idx)) < 0)
         {
             if (err)
                 *err = QString::fromUtf8(zip_strerror(za));
@@ -213,7 +299,7 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
         return false;
     }
 
-    if (zip_file_add(za, entryPath.toLocal8Bit().constData(), src, ZIP_FL_ENC_UTF_8) < 0)
+    if (zip_file_add(za, entryName.constData(), src, ZIP_FL_ENC_UTF_8) < 0)
     {
         if (err)
             *err = QString::fromUtf8(zip_strerror(za));
@@ -230,8 +316,7 @@ bool PlascanArchive::writeEntry(const QString &entryPath,
         return false;
     }
 
-    int reopenErr = 0;
-    zip_t *readArchive = zip_open(_path.toLocal8Bit().constData(), ZIP_RDONLY, &reopenErr);
+    zip_t *readArchive = openArchiveFile(_path, ZIP_RDONLY);
     if (readArchive)
     {
         _impl = readArchive;

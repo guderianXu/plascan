@@ -133,7 +133,8 @@ def main():
         sys.exit(1)
 
 
-def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, max_kpts=2048):
+def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.05,
+               max_kpts=10000, use_cuda=True, max_dim=1200):
     """Single image pair matching with RoMa (unified CLI entry).
 
     Args:
@@ -146,7 +147,7 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
     """
     from romatch import roma_outdoor, roma_indoor
 
-    device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+    device = torch.device("cuda" if use_cuda and torch.cuda.is_available() else "cpu")
 
     if scene == "indoor":
         model = roma_indoor(device=device)
@@ -157,15 +158,17 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
     imgR = cv2.imread(imgR_path, cv2.IMREAD_COLOR)
     if imgL is None or imgR is None:
         raise FileNotFoundError(f"Cannot read images: {imgL_path}, {imgR_path}")
+    orig_h_l, orig_w_l = imgL.shape[:2]
+    orig_h_r, orig_w_r = imgR.shape[:2]
     imgL = cv2.cvtColor(imgL, cv2.COLOR_BGR2RGB)
     imgR = cv2.cvtColor(imgR, cv2.COLOR_BGR2RGB)
 
-    # Resize large images to prevent GPU OOM (max 1200px on longest side)
+    # Resize large images to prevent GPU OOM.
     h, w = imgL.shape[:2]
     max_side = max(h, w)
     scale = 1.0
-    if max_side > 1200:
-        scale = 1200.0 / max_side
+    if max_side > max_dim:
+        scale = max_dim / max_side
         new_h = int(h * scale)
         new_w = int(w * scale)
         imgL = cv2.resize(imgL, (new_w, new_h))
@@ -187,32 +190,32 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
         warped, certainty = model.match(tL, tR)
 
     matches, certainty = model.sample(warped, certainty, num=max_kpts)
-    kptsL = matches[..., :2].cpu().numpy()
-    kptsR = matches[..., 2:].cpu().numpy()
+    kptsL_norm = matches[..., :2].cpu().numpy()
+    kptsR_norm = matches[..., 2:].cpu().numpy()
     conf = certainty.cpu().numpy()
 
     mask = conf > threshold
-    kptsL, kptsR = kptsL[mask], kptsR[mask]
-
-    # Write SGMT binary .match format (LE, compatible with PlaScan viewer)
-    import os
-    conf = certainty.cpu().numpy()
-    mask = conf > threshold
+    kptsL_norm, kptsR_norm = kptsL_norm[mask], kptsR_norm[mask]
     conf_filtered = conf[mask]
+    kptsL = (kptsL_norm + 1.0) / 2.0 * np.array([orig_w_l, orig_h_l], dtype=np.float32)
+    kptsR = (kptsR_norm + 1.0) / 2.0 * np.array([orig_w_r, orig_h_r], dtype=np.float32)
+
+    # Write SGMT binary .match format (BigEndian + double scores, matching QDataStream).
+    import os
     n = len(kptsL)
 
     with open(out_path, "wb") as f:
         f.write(b'SGMT')
-        f.write(struct.pack('<I', 1))
+        f.write(struct.pack('>I', 1))
         name0 = os.path.splitext(os.path.basename(imgL_path))[0].encode('utf-8')
         name1 = os.path.splitext(os.path.basename(imgR_path))[0].encode('utf-8')
-        f.write(struct.pack('<I', len(name0))); f.write(name0)
-        f.write(struct.pack('<I', len(name1))); f.write(name1)
-        f.write(struct.pack('<i', n)); f.write(struct.pack('<i', n)); f.write(struct.pack('<i', n))
+        f.write(struct.pack('>I', len(name0))); f.write(name0)
+        f.write(struct.pack('>I', len(name1))); f.write(name1)
+        f.write(struct.pack('>i', n)); f.write(struct.pack('>i', n)); f.write(struct.pack('>i', n))
         for i in range(n):
-            f.write(struct.pack('<if', i, float(conf_filtered[i])))
+            f.write(struct.pack('>id', i, float(conf_filtered[i])))
         for i in range(n):
-            f.write(struct.pack('<if', i, float(conf_filtered[i])))
+            f.write(struct.pack('>id', i, float(conf_filtered[i])))
 
     # Write sidecar .match.json
     import json
@@ -224,7 +227,8 @@ def match_pair(imgL_path, imgR_path, out_path, scene="outdoor", threshold=0.8, m
         "num_matches": int(n),
         "match_algorithm": "roma",
         "matched_points0": kptsL[:, :2].tolist(),
-        "matched_points1": kptsR[:, :2].tolist()
+        "matched_points1": kptsR[:, :2].tolist(),
+        "matched_scores": conf_filtered.astype(float).tolist()
     }
     with open(out_path + ".json", "w") as fj:
         json.dump(sidecar, fj)
@@ -240,9 +244,13 @@ if __name__ == "__main__":
         ap.add_argument("-R", required=True, help="Right image path")
         ap.add_argument("-o", required=True, help="Output .match file path")
         ap.add_argument("--scene", default="outdoor", choices=["outdoor", "indoor"])
-        ap.add_argument("--threshold", type=float, default=0.8)
-        ap.add_argument("--max-keypoints", type=int, default=2048)
+        ap.add_argument("--threshold", type=float, default=0.05)
+        ap.add_argument("--max-keypoints", type=int, default=10000)
+        ap.add_argument("--max-dim", type=int, default=1200)
+        ap.add_argument("--cuda", action="store_true")
+        ap.add_argument("--device", choices=["cuda", "cpu"], default=None)
         args = ap.parse_args()
-        match_pair(args.L, args.R, args.o, args.scene, args.threshold, args.max_keypoints)
+        use_cuda = args.cuda or args.device == "cuda"
+        match_pair(args.L, args.R, args.o, args.scene, args.threshold, args.max_keypoints, use_cuda, args.max_dim)
     else:
         main()

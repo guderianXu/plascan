@@ -333,6 +333,8 @@ std::vector<FeatureOutput> SuperPoint::detectBatch(const std::vector<cv::Mat>& i
                             }
                         }
                         size_t global_idx = idxs[k];
+                        sop.imageWidth = images[global_idx].cols;
+                        sop.imageHeight = images[global_idx].rows;
                         results[global_idx] = sop;
                         if (config_.save_keypoints_csv) 
                         {

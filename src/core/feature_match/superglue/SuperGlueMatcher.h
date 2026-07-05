@@ -26,8 +26,6 @@
 #include <string>
 #include <vector>
 #include <memory>
-#include <fstream>
-#include <mutex>
 
 namespace superglue 
 {
@@ -52,7 +50,7 @@ struct KeypointData
 
 /**
  * @brief SuperGlue 配置参数
- * 分为四类：基础参数、高级参数、系统参数、调试参数
+ * 分为四类：基础参数、高级参数、系统参数、日志参数
  */
 struct SuperGlueConfig 
 {
@@ -70,11 +68,7 @@ struct SuperGlueConfig
     int cuda_device_id;                  // CUDA设备ID，默认0
     int num_threads;                     // CPU线程数，默认-1（自动）
     
-    // ========== 调试参数 ==========
-    bool enable_csv_output;              // 是否输出匹配关系到CSV文件
-    std::string csv_output_path;         // CSV输出路径，默认"matches.csv"
-    bool enable_visualization;           // 是否输出匹配可视化图像
-    std::string visualization_output_path; // 可视化图像输出路径，默认"matches.jpg"
+    // ========== 日志参数 ==========
     bool verbose;                        // 是否打印详细日志
     
     // 默认构造函数
@@ -87,10 +81,6 @@ struct SuperGlueConfig
         , use_cuda(true)
         , cuda_device_id(0)
         , num_threads(-1)
-        , enable_csv_output(false)
-        , csv_output_path("matches.csv")
-        , enable_visualization(false)
-        , visualization_output_path("matches.jpg")
         , verbose(false)
     {}
     
@@ -105,7 +95,7 @@ struct SuperGlueConfig
 /**
  * @brief SuperGlue匹配器类
  * 用于加载和运行SuperGlue模型进行特征匹配
- * 支持批处理、CUDA加速、调试输出等功能
+ * 支持批处理和 CUDA 加速。
  */
 class SuperGlueMatcher : public xjw::feature_match::IFeatureMatcher 
 {
@@ -195,28 +185,6 @@ public:
     void setBatchSize(int batch_size) 
     { 
         config_.batch_size = batch_size; 
-    }
-    
-    /**
-     * @brief 设置是否启用CSV输出
-     */
-    void setEnableCSVOutput(bool enable, const std::string& path = "") 
-    {
-        config_.enable_csv_output = enable;
-        if (!path.empty()) config_.csv_output_path = path;
-        if (enable && !csv_file_.is_open()) 
-        {
-            openCSVFile();
-        }
-    }
-    
-    /**
-     * @brief 设置是否启用可视化输出
-     */
-    void setEnableVisualization(bool enable, const std::string& path = "") 
-    {
-        config_.enable_visualization = enable;
-        if (!path.empty()) config_.visualization_output_path = path;
     }
     
     /**
@@ -310,32 +278,6 @@ private:
     torch::Tensor createDummyImage(const std::vector<int>& shape);
     
     /**
-     * @brief 打开CSV文件并写入表头
-     */
-    void openCSVFile();
-    
-    /**
-     * @brief 关闭CSV文件
-     */
-    void closeCSVFile();
-    
-    /**
-     * @brief 输出匹配关系到CSV文件
-     */
-    void saveMatchesToCSV(const MatchResult& result,
-                         const std::string& image_pair_name);
-    
-    /**
-     * @brief 保存匹配可视化图像
-     */
-    void saveMatchVisualization(const cv::Mat& image0,
-                               const cv::Mat& image1,
-                               const KeypointData& keypoints0,
-                               const KeypointData& keypoints1,
-                               const MatchResult& result,
-                               const std::string& output_name = "");
-    
-    /**
      * @brief 限制关键点数量
      */
     KeypointData limitKeypoints(const KeypointData& kpts, int max_num);
@@ -350,25 +292,7 @@ private:
     torch::Device device_;                // 计算设备
     bool model_loaded_;                   // 模型加载状态
     int processed_count_;                 // 已处理匹配对计数
-    std::ofstream csv_file_;              // CSV文件流
-    mutable std::mutex csv_mutex_;        // CSV文件操作互斥锁
 };
-
-/**
- * @brief 辅助函数：可视化匹配结果
- * @param image0 输入图像0
- * @param image1 输入图像1
- * @param keypoints0 图像0的关键点
- * @param keypoints1 图像1的关键点
- * @param result 匹配结果
- * @param output_path 输出图像路径
- */
-void visualizeMatches(const cv::Mat& image0,
-                     const cv::Mat& image1,
-                     const std::vector<cv::KeyPoint>& keypoints0,
-                     const std::vector<cv::KeyPoint>& keypoints1,
-                     const MatchResult& result,
-                     const std::string& output_path);
 
 } // namespace superglue
 

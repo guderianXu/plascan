@@ -1044,10 +1044,40 @@ void ProjectData::appendIpfindResult(const QString &input, const QString &output
     scheduleArchiveSync(false, true, true);
 }
 
+void ProjectData::appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records)
+{
+    if (records.isEmpty())
+    {
+        return;
+    }
+
+    ensureResultsLoaded();
+    _filesManager.appendIpfindResults(records);
+
+    markDirtyIfRequested(true);
+    emitCurrentMetadataChanged();
+    scheduleArchiveSync(false, true, true);
+}
+
 void ProjectData::appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings)
 {
     ensureResultsLoaded();
     _filesManager.appendIpmatchResult(outputs, settings);
+
+    markDirtyIfRequested(true);
+    emitCurrentMetadataChanged();
+    scheduleArchiveSync(false, true, false);
+}
+
+void ProjectData::appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records)
+{
+    if (records.isEmpty())
+    {
+        return;
+    }
+
+    ensureResultsLoaded();
+    _filesManager.appendIpmatchResults(records);
 
     markDirtyIfRequested(true);
     emitCurrentMetadataChanged();

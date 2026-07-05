@@ -19,6 +19,7 @@
  */
 
 #include <QWidget>
+#include <QSize>
 
 #include "Logger.h"
 
@@ -45,6 +46,9 @@ public:
 
     /** @brief 析构函数，无特殊资源需要释放（子控件由 Qt 对象树管理）。 */
     ~LogPanel() override;
+
+    QSize minimumSizeHint() const override;
+    QSize sizeHint() const override;
 
     /**
      * @brief 设置面板当前显示的最低日志等级。

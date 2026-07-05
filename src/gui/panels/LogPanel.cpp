@@ -73,7 +73,8 @@ LogPanel::LogPanel(QWidget *parent)
                 return;
             }
 
-            const QString formatted = QString::fromUtf8(entry.formatted.c_str(), static_cast<int>(entry.formatted.size()));
+            const QString formatted =
+                QString::fromUtf8(entry.formatted.c_str(), static_cast<int>(entry.formatted.size()));
             const int level = static_cast<int>(entry.level);
             QMetaObject::invokeMethod(
                 self,
@@ -95,6 +96,16 @@ LogPanel::~LogPanel()
     {
         Logger::instance()->unregisterSink(_sinkId);
     }
+}
+
+QSize LogPanel::minimumSizeHint() const
+{
+    return QSize(220, 90);
+}
+
+QSize LogPanel::sizeHint() const
+{
+    return QSize(720, 220);
 }
 
 /**
@@ -208,6 +219,10 @@ void LogPanel::loadFromLogFile()
     QFile f(logPath);
     if (!f.exists()) return;
     if (!f.open(QIODevice::ReadOnly | QIODevice::Text)) return;
+    if (_text)
+    {
+        _text->clear();
+    }
 
     // 限制读取大小：超过 2 MB 时只读末尾部分，避免 UI 卡顿
     const qint64 limit = 2 * 1024 * 1024; // 2 MB

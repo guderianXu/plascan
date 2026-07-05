@@ -22,20 +22,14 @@ include_directories(
     ${CMAKE_SOURCE_DIR}/src/common                   # plascan_common_log
 )
 
-# 查找 Qt6（用于 SuperGlueMatchIO）
-find_package(Qt6 COMPONENTS Core REQUIRED)
-
 # SuperGlue 库
 add_library(superglue_matcher STATIC
     SuperGlueMatcher.cpp
-    SuperGlueMatchIO.cpp
-    MatchOutlierRejector.cpp
 )
 
 target_link_libraries(superglue_matcher
     ${TORCH_LIBRARIES}
     ${OpenCV_LIBS}
-    Qt6::Core
     plascan_common_log
     feature_match_common
     feature_extractors_traditional

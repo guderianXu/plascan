@@ -62,6 +62,7 @@ public slots:
     void openDenseCloudRefineDialog();
 
     // ── 模型生成 ──
+    void openGenerateModelDialog();
     void openMeshReconstructionDialog();
     void openTextureMappingDialog();
     void openModelExportDialog();
@@ -135,6 +136,7 @@ private:
     DialogSettingStore *_depthEstStore     = nullptr;
     DialogSettingStore *_depthFuseStore    = nullptr;
     DialogSettingStore *_denseRefStore     = nullptr;
+    DialogSettingStore *_generateModelStore = nullptr;
     DialogSettingStore *_meshStore         = nullptr;
     DialogSettingStore *_texStore          = nullptr;
     DialogSettingStore *_exportStore       = nullptr;

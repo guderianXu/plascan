@@ -136,8 +136,10 @@ public:
     // === 结果追加 ===
     // 追加ipfind结果到元数据
     void appendIpfindResult(const QString &input, const QString &output, const QJsonObject &settings);
+    void appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records);
     // 追加ipmatch结果到元数据
     void appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings);
+    void appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records);
 
 signals:
     // 项目状态变化

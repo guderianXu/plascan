@@ -839,10 +839,41 @@ void ProjectManager::appendIpfindResult(const QString &input, const QString &out
     }
 }
 
+void ProjectManager::appendIpfindResults(const QVector<ProjectIpfindResultRecord> &records)
+{
+    if (!_projectData || records.isEmpty())
+    {
+        return;
+    }
+
+    _projectData->appendIpfindResults(records);
+    for (const ProjectIpfindResultRecord &record : records)
+    {
+        QString suffix;
+        for (const char *suf : {".sp", ".dsk", ".alk", ".sift", ".orb", ".akz", ".dedode"})
+        {
+            if (record.output.endsWith(QLatin1String(suf)))
+            {
+                suffix = QLatin1String(suf);
+                break;
+            }
+        }
+        emit ipfindResultAppended(record.input, suffix.isEmpty() ? QStringLiteral(".sp") : suffix);
+    }
+}
+
 void ProjectManager::appendIpmatchResult(const QStringList &outputs, const QJsonObject &settings)
 {
     if (_projectData) {
         _projectData->appendIpmatchResult(outputs, settings);
+    }
+}
+
+void ProjectManager::appendIpmatchResults(const QVector<ProjectIpmatchResultRecord> &records)
+{
+    if (_projectData && !records.isEmpty())
+    {
+        _projectData->appendIpmatchResults(records);
     }
 }
 

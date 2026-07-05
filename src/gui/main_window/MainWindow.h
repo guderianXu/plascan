@@ -11,9 +11,8 @@
 //   - 处理应用退出时的未保存更改提示
 //
 //   布局结构（从左到右）:
-//     左侧: QTabWidget（工作区数据树 | 参考面板）
 //     中央: WorkspaceCenterWidget（影像画布 / 模型视图）
-//     右侧下方: 照片面板；底部 Dock 仅用于按需显示日志
+//     停靠面板: 工作区、资源属性、照片、日志
 // =============================================================================
 
 #pragma once
@@ -23,7 +22,7 @@
 #include <QPointer>
 
 // MainWindow: PlaScan 主窗口
-// 布局：左侧数据树 | 中央画布 | 底部日志/兴趣点面板
+// 布局：中央工作区 + 可停靠的工作区、属性、照片、日志面板
 
 class DataTreeWidget;
 class QSplitter;
@@ -38,7 +37,6 @@ class ReconstructionWorkflowController;
 class QProgressDialog;
 class QDockWidget;
 class QAction;
-class QToolButton;
 class QListWidget;
 class QTabWidget;
 class ProjectDashboardWidget;
@@ -50,6 +48,8 @@ class DialogSettingStore;
 class TaskStatusWidget;
 class QDragEnterEvent;
 class QDropEvent;
+class QWidgetAction;
+class HenuBrandWidget;
 
 namespace Ui {
 class MainWindow;
@@ -71,9 +71,11 @@ protected:
 
 private:
     // ---- 初始化（由构造函数按顺序调用）----
-    void setupUi();               // 创建核心布局：分割器、左侧选项卡、数据树、画布、日志面板
+    void setupUi();               // 创建核心布局：中央工作区、数据树、画布、日志面板
     void setupSelectionPanels();
-    void setupBottomPanel();      // 初始化底部 Dock 标题栏的日志切换按钮
+    void setupLogDock();          // 初始化日志 Dock 标题栏与菜单状态同步
+    void setupHenanUniversityBrand();
+    void setHenanUniversityBrandVisible(bool visible);
     void setupMenuConnections();  // 将菜单/工具栏 QAction 信号连接到对应的槽
     void setupProjectManager();   // 创建所有业务对象（ProjectManager 等）并完成全局信号/槽连接
     void refreshDashboardTaskSnapshots(); // 将状态栏任务快照同步到只读概览页
@@ -87,11 +89,11 @@ private:
     // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
     // 参数: partial - 仅包含需更新键值对的 JSON 对象
     void saveUiSetting(const QJsonObject &partial);
-    // currentBottomPanelKey: 返回当前底部面板的键名字符串（目前固定为 "log"）
+    // currentBottomPanelKey: 返回旧版 UI 设置使用的底部面板键名，dock 化后仅用于兼容保存。
     QString currentBottomPanelKey() const;
 
-    // ---- 底部面板切换 ----
-    // switchToLogPanel: 将底部 Dock 内容切换为日志面板，并从磁盘加载历史日志
+    // ---- 日志面板切换 ----
+    // switchToLogPanel: 显示日志 Dock，并从磁盘加载历史日志
     void switchToLogPanel();
 
     // ---- 导出辅助 ----
@@ -100,10 +102,11 @@ private:
 
     // ---- 成员 ----
     Ui::MainWindow*  _ui{};                           // Qt Designer 生成的主窗口静态布局
-    QSplitter*        _mainSplitter{};                 // 左右主分割器（左=数据树选项卡, 右=工作区）
-    QTabWidget*       _leftTabs{};                     // 左侧选项卡容器（工作区 | 参考）
-    QSplitter *_leftPanelSplitter{};
-    QSplitter *_rightPanelSplitter{};
+    QSplitter*        _mainSplitter{};                 // Designer 初始占位分割器，dock 化后仅保留中央工作区
+    QTabWidget*       _leftTabs{};                     // 工作区 Dock 内的选项卡容器（概览 | 工作区 | 参考）
+    QDockWidget *_workspaceDock{};
+    QDockWidget *_propertiesDock{};
+    QDockWidget *_photosDock{};
     SelectionPropertiesWidget *_selectionProperties{};
     QWidget *_photosPanel{};
     PhotoStripWidget *_photoStrip{};
@@ -114,7 +117,9 @@ private:
     CanvasWidget*     _canvas{};                       // 影像画布（从 workspaceCenter 获取的直接引用）
 public:
     CanvasWidget* canvas() const { return _canvas; }
-    LogPanel*         _log{};                          // 日志面板（底部 Dock 的内容 widget）
+    HenuBrandWidget*  _henuBrandWidget{};              // 主工具栏中的河南大学校徽品牌区
+    QWidgetAction*    _henuBrandAction{};              // 控制品牌区在工具栏中的可见性
+    LogPanel*         _log{};                          // 日志面板（日志 Dock 的内容 widget）
     MainMenu*         _mainMenu{};                     // 菜单栏封装对象（管理所有 QAction）
     AppConfigManager* _config{};                       // 应用级配置管理器（窗口状态/最近项目）
     ProjectData*      _projectData{};                  // 项目数据模型（元数据 + 文件索引）
@@ -130,8 +135,7 @@ public:
     TaskStatusWidget* _dmTaskStatus{};                  // 密集匹配状态栏任务状态
     TaskStatusWidget* _overlapTaskStatus{};             // 重叠对获取状态栏任务状态
     TaskStatusWidget* _obsNetTaskStatus{};              // 观测网络状态栏任务状态
-    QDockWidget*      _logDock{};                      // 底部日志 Dock 窗口容器
-    QToolButton*      _logBtn{};                       // 标题栏中的「日志」可选中切换按钮
+    QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
     DialogSettingStore*   _featureMatchingSetting{};   // 特征匹配对话框记忆化设置
     DialogSettingStore*   _uiSetting{};                // 主窗口 UI 状态记忆化设置
     
@@ -148,9 +152,7 @@ private slots:
     // 参数: ui - 完整的 UI 设置 JSON 对象
     void applyUiSettings(const QJsonObject &ui);
 
-    // ---- 底部面板 ----
-    // onLogBtnClicked: 用户点击底部「日志」切换按钮时调用，切换到日志面板并持久化
-    void onLogBtnClicked();
+    // ---- 日志面板 ----
     // onToggleLogAction: 响应菜单「视图→日志」CheckAction 的勾选状态变化
     // 参数: on - true 表示勾选（显示日志）
     void onToggleLogAction(bool on);

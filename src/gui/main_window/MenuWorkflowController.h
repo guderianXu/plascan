@@ -65,7 +65,7 @@ public slots:
     /// 打开一键三维重建对话框。
     void openThreeDReconstructionDialog();
 
-    /// 打开工作流程中的对齐照片参数对话框；仅保存参数，不启动算法。
+    /// 打开工作流程中的对齐照片参数对话框；确认后启动空中三角测量 workflow。
     void openWorkflowAerialTriangulationDialog();
 
     /// 打开稀疏重建中的正式空中三角测量对话框。

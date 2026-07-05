@@ -40,6 +40,8 @@ class FeatureMatchCliSidecarTest(unittest.TestCase):
             [str(CLI_PATH), *map(str, args)],
             cwd=REPO_ROOT,
             text=True,
+            encoding="utf-8",
+            errors="replace",
             stdout=subprocess.PIPE,
             stderr=subprocess.PIPE,
             check=False,
@@ -65,7 +67,13 @@ class FeatureMatchCliSidecarTest(unittest.TestCase):
                 [[1.0, 0.0], [0.0, 1.0]],
             )
 
-            result = self.run_cli(["--sp1", left, "--sp2", right, "--output", out, "--match-threshold", "0.0"])
+            result = self.run_cli([
+                "--algorithm", "bf",
+                "--sp1", left,
+                "--sp2", right,
+                "--output", out,
+                "--match-threshold", "0.0",
+            ])
 
             self.assertEqual(result.returncode, 0, result.stdout + result.stderr)
             sidecar_path = Path(str(out) + ".json")

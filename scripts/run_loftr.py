@@ -57,30 +57,30 @@ def main():
     mkpts0, mkpts1, mconf = mkpts0[mask], mkpts1[mask], mconf[mask]
     n = len(mkpts0)
 
-    # Save .match (SGMT binary format, LE, compatible with PlaScan viewer)
+    # Save .match (SGMT binary format, BigEndian + double scores, matching QDataStream)
     scale_back_pts0 = mkpts0 / scale if scale != 1.0 else mkpts0
     scale_back_pts1 = mkpts1 / scale if scale != 1.0 else mkpts1
 
     with open(args.output, 'wb') as f:
         # SGMT header
         f.write(b'SGMT')
-        f.write(struct.pack('<I', 1))  # version
+        f.write(struct.pack('>I', 1))  # version
         # Image names
         import os
         name0 = os.path.splitext(os.path.basename(args.left))[0].encode('utf-8')
         name1 = os.path.splitext(os.path.basename(args.right))[0].encode('utf-8')
-        f.write(struct.pack('<I', len(name0))); f.write(name0)
-        f.write(struct.pack('<I', len(name1))); f.write(name1)
+        f.write(struct.pack('>I', len(name0))); f.write(name0)
+        f.write(struct.pack('>I', len(name1))); f.write(name1)
         # Match stats
-        f.write(struct.pack('<i', n))     # numMatches
-        f.write(struct.pack('<i', n))     # num_keypoints0
-        f.write(struct.pack('<i', n))     # num_keypoints1
+        f.write(struct.pack('>i', n))     # numMatches
+        f.write(struct.pack('>i', n))     # num_keypoints0
+        f.write(struct.pack('>i', n))     # num_keypoints1
         # Per-kp0: match_idx + score
         for i in range(n):
-            f.write(struct.pack('<if', i, float(mconf[i])))
+            f.write(struct.pack('>id', i, float(mconf[i])))
         # Per-kp1: match_idx + score
         for i in range(n):
-            f.write(struct.pack('<if', i, float(mconf[i])))
+            f.write(struct.pack('>id', i, float(mconf[i])))
 
     # Write sidecar .match.json (required by PlaScan viewer for coord loading)
     import json

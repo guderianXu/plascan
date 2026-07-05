@@ -12,8 +12,6 @@
 #include <QFileInfo>
 #include <QDesktopServices>
 #include <QUrl>
-#include <QToolButton>
-#include <QButtonGroup>
 #include <QJsonArray>
 #include <QJsonObject>
 #include <QMessageBox>
@@ -32,12 +30,12 @@
 #include <QMimeData>
 #include <QPointer>
 #include <QSignalBlocker>
-#include <QFrame>
-#include <QHBoxLayout>
-#include <QLabel>
-#include <QVBoxLayout>
+#include <QSizePolicy>
+#include <QWidgetAction>
 
 #include <algorithm>
+#include <atomic>
+#include <memory>
 
 #include "AlgorithmCompat.h"
 #include "CanvasWidget.h"
@@ -46,11 +44,14 @@
 #include "MainMenu.h"
 #include "MenuWorkflowController.h"
 #include "ReconstructionWorkflowController.h"
+#include "CleanTiePointsDialog.h"
+#include "CreateTiePointsDialog.h"
 #include "MatchPairSelectorDialog.h"
 #include "FeatureMatchingDialog.h"
-#include "FeatureMatchRunner.h"
+#include "MatchPhotosTask.h"
 #include "ForwardIntersectionCheckDialog.h"
 #include "ForwardIntersectionResultsDialog.h"
+#include "HenuBrandWidget.h"
 #include "ProjectManager.h"
 #include "ProjectIO.h"
 #include "ProjectData.h"
@@ -67,9 +68,139 @@
 #include "graph/ObservationNetworkBuilder.h"
 #include "WorkspaceCenterWidget.h"
 #include "CameraModel3DDialog.h"
+#include "ThinTiePointsDialog.h"
 #include "LayerRenderer.h"
 #include "Logger.h"
 #include "ModelDropSupport.h"
+
+namespace
+{
+constexpr int SelectionPropertiesMinHeight = 80;
+constexpr int PhotosDockMinHeight = 90;
+constexpr int DockMinWidth = 160;
+constexpr int DockMinHeight = 80;
+
+void configureMovableDock(QDockWidget *dock)
+{
+    if (!dock)
+    {
+        return;
+    }
+
+    dock->setAllowedAreas(Qt::AllDockWidgetAreas);
+    dock->setFeatures(QDockWidget::DockWidgetClosable
+                      | QDockWidget::DockWidgetMovable
+                      | QDockWidget::DockWidgetFloatable);
+    dock->setMinimumSize(DockMinWidth, DockMinHeight);
+    dock->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+}
+
+xjw::matchphotos::MatchPhotosProfile tiePointProfileFromAccuracy(const QString &accuracy)
+{
+    if (accuracy == QStringLiteral("highest") || accuracy == QStringLiteral("high"))
+    {
+        return xjw::matchphotos::MatchPhotosProfile::HighAccuracy;
+    }
+    if (accuracy == QStringLiteral("lowest") || accuracy == QStringLiteral("low"))
+    {
+        return xjw::matchphotos::MatchPhotosProfile::Fast;
+    }
+    return xjw::matchphotos::MatchPhotosProfile::Auto;
+}
+
+xjw::matchphotos::PairSelectionPreset pairPresetFromAccuracy(const QString &accuracy)
+{
+    if (accuracy == QStringLiteral("highest") || accuracy == QStringLiteral("high"))
+    {
+        return xjw::matchphotos::PairSelectionPreset::HighAccuracy;
+    }
+    if (accuracy == QStringLiteral("lowest") || accuracy == QStringLiteral("low"))
+    {
+        return xjw::matchphotos::PairSelectionPreset::Fast;
+    }
+    return xjw::matchphotos::PairSelectionPreset::Auto;
+}
+
+int maxImageDimFromAccuracy(const QString &accuracy)
+{
+    if (accuracy == QStringLiteral("highest"))
+    {
+        return 4096;
+    }
+    if (accuracy == QStringLiteral("high"))
+    {
+        return 3072;
+    }
+    if (accuracy == QStringLiteral("low"))
+    {
+        return 1600;
+    }
+    if (accuracy == QStringLiteral("lowest"))
+    {
+        return 1200;
+    }
+    return 2048;
+}
+
+bool imageTokenMatchesProjectImage(const QString &token, const QString &imagePath)
+{
+    if (token.trimmed().isEmpty() || imagePath.trimmed().isEmpty())
+    {
+        return false;
+    }
+
+    const QFileInfo tokenInfo(token);
+    const QFileInfo imageInfo(imagePath);
+    const QString cleanToken = QDir::cleanPath(QDir::fromNativeSeparators(token)).toLower();
+    const QString cleanImage = QDir::cleanPath(QDir::fromNativeSeparators(imagePath)).toLower();
+    return cleanToken == cleanImage ||
+        tokenInfo.fileName().compare(imageInfo.fileName(), Qt::CaseInsensitive) == 0 ||
+        tokenInfo.completeBaseName().compare(imageInfo.completeBaseName(), Qt::CaseInsensitive) == 0;
+}
+
+QString resolveProjectImageToken(const QString &token, const QStringList &images)
+{
+    for (const QString &imagePath : images)
+    {
+        if (imageTokenMatchesProjectImage(token, imagePath))
+        {
+            return imagePath;
+        }
+    }
+    return QString();
+}
+
+QStringList manualPairKeysFromDialogPairs(const QStringList &dialogPairs, const QStringList &images)
+{
+    QStringList pairKeys;
+    for (const QString &pairText : dialogPairs)
+    {
+        QStringList parts = pairText.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+        if (parts.size() != 2)
+        {
+            parts = pairText.split(QStringLiteral("__"), Qt::SkipEmptyParts);
+        }
+        if (parts.size() != 2)
+        {
+            continue;
+        }
+
+        const QString image0 = resolveProjectImageToken(parts.at(0).trimmed(), images);
+        const QString image1 = resolveProjectImageToken(parts.at(1).trimmed(), images);
+        if (image0.isEmpty() || image1.isEmpty() || image0 == image1)
+        {
+            continue;
+        }
+
+        const QString pairKey = xjw::matchphotos::makePairKey(image0, image1);
+        if (!pairKey.isEmpty() && !pairKeys.contains(pairKey))
+        {
+            pairKeys.append(pairKey);
+        }
+    }
+    return pairKeys;
+}
+} // namespace
 
 // ============================================================
 //  构造 / 析构
@@ -92,6 +223,7 @@ MainWindow::MainWindow(QWidget *parent)
     setupUi();
     setupSelectionPanels();
     _mainMenu = new MainMenu(this);
+    setupHenanUniversityBrand();
     _config->windowState()->load(this);
 
     if (windowState().testFlag(Qt::WindowFullScreen))
@@ -99,7 +231,7 @@ MainWindow::MainWindow(QWidget *parent)
         setWindowState((windowState() & ~Qt::WindowFullScreen) | Qt::WindowMaximized);
     }
 
-    setupBottomPanel();
+    setupLogDock();
     setupMenuConnections();
     setupProjectManager();
 
@@ -171,11 +303,21 @@ void MainWindow::setupUi()
     _referencePanel = _ui->referencePanel;
     _workspaceCenter = _ui->workspaceCenter;
     _canvas       = _workspaceCenter->canvas();
+    if (centralWidget())
+    {
+        centralWidget()->setMinimumSize(0, 0);
+        centralWidget()->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+    }
+    _mainSplitter->setMinimumSize(0, 0);
     _mainSplitter->setStretchFactor(1, 1);
+    setDockOptions(QMainWindow::AnimatedDocks
+                   | QMainWindow::AllowNestedDocks
+                   | QMainWindow::AllowTabbedDocks
+                   | QMainWindow::GroupedDragging);
 
     _log = _ui->logPanel;
     _logDock = _ui->logDock;
-    _logDock->setAllowedAreas(Qt::BottomDockWidgetArea);
+    configureMovableDock(_logDock);
     _logDock->setVisible(false);
 
     LOG_INFO("%s", qUtf8Printable(tr("日志面板已就绪")));
@@ -184,7 +326,7 @@ void MainWindow::setupUi()
 
 void MainWindow::setupSelectionPanels()
 {
-    if (!_mainSplitter || !_leftTabs || !_workspaceCenter || _leftPanelSplitter)
+    if (!_mainSplitter || !_leftTabs || !_workspaceCenter || _workspaceDock)
     {
         return;
     }
@@ -196,117 +338,112 @@ void MainWindow::setupSelectionPanels()
         return;
     }
 
+    _leftTabs->setParent(nullptr);
+    _leftTabs->setMinimumSize(160, 80);
+    _leftTabs->setMaximumWidth(QWIDGETSIZE_MAX);
+    _leftTabs->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
+    _workspaceCenter->setMinimumSize(240, 160);
+    _workspaceCenter->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
+
+    const int currentWorkspaceIndex = _mainSplitter->indexOf(_workspaceCenter);
+    if (currentWorkspaceIndex >= 0)
+    {
+        _mainSplitter->setCollapsible(currentWorkspaceIndex, false);
+        _mainSplitter->setStretchFactor(currentWorkspaceIndex, 1);
+        _mainSplitter->setSizes({960});
+    }
+
+    _workspaceDock = new QDockWidget(tr("工作区"), this);
+    _workspaceDock->setObjectName(QStringLiteral("workspaceDock"));
+    configureMovableDock(_workspaceDock);
+    _workspaceDock->setWidget(_leftTabs);
+
     _selectionProperties = new SelectionPropertiesWidget(this);
     _selectionProperties->setObjectName(QStringLiteral("selectionProperties"));
-    _selectionProperties->setMinimumHeight(145);
+    _selectionProperties->setMinimumHeight(SelectionPropertiesMinHeight);
+    _selectionProperties->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
-    _leftPanelSplitter = new QSplitter(Qt::Vertical);
-    _leftPanelSplitter->setObjectName(QStringLiteral("leftPanelSplitter"));
-    _leftPanelSplitter->setChildrenCollapsible(false);
+    _propertiesDock = new QDockWidget(tr("资源属性"), this);
+    _propertiesDock->setObjectName(QStringLiteral("propertiesDock"));
+    configureMovableDock(_propertiesDock);
+    _propertiesDock->setWidget(_selectionProperties);
 
-    _rightPanelSplitter = new QSplitter(Qt::Vertical);
-    _rightPanelSplitter->setObjectName(QStringLiteral("rightPanelSplitter"));
-    _rightPanelSplitter->setChildrenCollapsible(false);
+    _photoStrip = new PhotoStripWidget(this);
+    _photoStrip->setMinimumHeight(PhotosDockMinHeight);
+    _photoStrip->setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Preferred);
 
-    auto *photosFrame = new QFrame(_rightPanelSplitter);
-    photosFrame->setObjectName(QStringLiteral("photosPanel"));
-    photosFrame->setFrameShape(QFrame::StyledPanel);
-    photosFrame->setMinimumHeight(170);
-    photosFrame->setMaximumHeight(320);
+    _photosDock = new QDockWidget(tr("照片"), this);
+    _photosDock->setObjectName(QStringLiteral("photosDock"));
+    configureMovableDock(_photosDock);
+    _photosDock->setWidget(_photoStrip);
+    _photosPanel = _photosDock;
 
-    auto *photosLayout = new QVBoxLayout(photosFrame);
-    photosLayout->setContentsMargins(0, 0, 0, 0);
-    photosLayout->setSpacing(0);
+    addDockWidget(Qt::LeftDockWidgetArea, _workspaceDock);
+    addDockWidget(Qt::LeftDockWidgetArea, _propertiesDock);
+    splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical);
+    addDockWidget(Qt::BottomDockWidgetArea, _photosDock);
 
-    auto *photosTitleBar = new QWidget(photosFrame);
-    photosTitleBar->setObjectName(QStringLiteral("photosTitleBar"));
-    auto *photosTitleLayout = new QHBoxLayout(photosTitleBar);
-    photosTitleLayout->setContentsMargins(6, 2, 4, 2);
-    photosTitleLayout->setSpacing(4);
-    auto *photosTitle = new QLabel(tr("照片"), photosTitleBar);
-    auto *photosClose = new QToolButton(photosTitleBar);
-    photosClose->setObjectName(QStringLiteral("photosCloseButton"));
-    photosClose->setText(QStringLiteral("x"));
-    photosClose->setAutoRaise(true);
-    photosClose->setToolTip(tr("隐藏照片面板"));
-    photosTitleLayout->addWidget(photosTitle);
-    photosTitleLayout->addStretch(1);
-    photosTitleLayout->addWidget(photosClose);
-    photosLayout->addWidget(photosTitleBar);
-
-    _photoStrip = new PhotoStripWidget(photosFrame);
-    photosLayout->addWidget(_photoStrip, 1);
-    _photosPanel = photosFrame;
-
-    connect(photosClose, &QToolButton::clicked, this, [this]()
-    {
-        if (_mainMenu && _mainMenu->togglePhotosAction())
-        {
-            _mainMenu->togglePhotosAction()->setChecked(false);
-            return;
-        }
-        if (_photosPanel)
-        {
-            _photosPanel->setVisible(false);
-        }
-        saveUiSetting(QJsonObject{{QStringLiteral("photos_visible"), false}});
-    });
-
-    QWidget *oldLeftTabs = _mainSplitter->replaceWidget(leftIndex, _leftPanelSplitter);
-    if (!oldLeftTabs)
-    {
-        oldLeftTabs = _leftTabs;
-    }
-    QWidget *oldWorkspace = _mainSplitter->replaceWidget(workspaceIndex, _rightPanelSplitter);
-    if (!oldWorkspace)
-    {
-        oldWorkspace = _workspaceCenter;
-    }
-
-    _leftPanelSplitter->addWidget(oldLeftTabs);
-    _leftPanelSplitter->addWidget(_selectionProperties);
-    _leftPanelSplitter->setStretchFactor(0, 3);
-    _leftPanelSplitter->setStretchFactor(1, 1);
-    _leftPanelSplitter->setSizes({560, 190});
-
-    _rightPanelSplitter->addWidget(oldWorkspace);
-    _rightPanelSplitter->addWidget(_photosPanel);
-    _rightPanelSplitter->setStretchFactor(0, 5);
-    _rightPanelSplitter->setStretchFactor(1, 1);
-    _rightPanelSplitter->setSizes({620, 210});
-
-    _mainSplitter->insertWidget(0, _leftPanelSplitter);
-    _mainSplitter->insertWidget(1, _rightPanelSplitter);
-    _mainSplitter->setCollapsible(0, false);
-    _mainSplitter->setCollapsible(1, false);
-    _mainSplitter->setStretchFactor(0, 0);
-    _mainSplitter->setStretchFactor(1, 1);
-    _mainSplitter->setSizes({320, 960});
+    resizeDocks({_workspaceDock}, {320}, Qt::Horizontal);
+    resizeDocks({_workspaceDock, _propertiesDock}, {560, 190}, Qt::Vertical);
+    resizeDocks({_photosDock}, {210}, Qt::Vertical);
 }
 
 // ============================================================
-//  setupBottomPanel — 底部面板标题栏切换按钮
+//  setupLogDock — 日志面板 Dock 标题栏与菜单状态同步
 // ============================================================
 
-void MainWindow::setupBottomPanel()
+void MainWindow::setupLogDock()
 {
-    QWidget* titleBar = new QWidget();
+    if (!_logDock)
+    {
+        return;
+    }
 
-    _logBtn = new QToolButton(titleBar);
-    _logBtn->setText(tr("日志"));
-    _logBtn->setCheckable(true);
-    _logBtn->setChecked(false);
-    _logBtn->setVisible(false);
+    _logDock->setTitleBarWidget(nullptr);
+    connect(_logDock, &QDockWidget::visibilityChanged, this, [this](bool on)
+    {
+        if (_mainMenu && _mainMenu->toggleLogAction())
+        {
+            const QSignalBlocker blocker(_mainMenu->toggleLogAction());
+            _mainMenu->toggleLogAction()->setChecked(on);
+        }
+        onLogVisiblePersist(on);
+    });
+}
 
-    auto *grp = new QButtonGroup(titleBar);
-    grp->setExclusive(true);
-    grp->addButton(_logBtn, 0);
+void MainWindow::setupHenanUniversityBrand()
+{
+    if (!_mainMenu || _henuBrandAction)
+    {
+        return;
+    }
 
-    _logDock->setTitleBarWidget(titleBar);
+    QToolBar *toolBar = _mainMenu->toolBar();
+    if (!toolBar)
+    {
+        return;
+    }
 
-    connect(_logBtn, &QToolButton::clicked, this, &MainWindow::onLogBtnClicked);
+    _henuBrandWidget = new HenuBrandWidget(toolBar);
+    _henuBrandAction = new QWidgetAction(toolBar);
+    _henuBrandAction->setObjectName(QStringLiteral("henuBrandToolbarAction"));
+    _henuBrandAction->setDefaultWidget(_henuBrandWidget);
 
-    Q_UNUSED(titleBar);
+    QAction *firstAction = toolBar->actions().isEmpty() ? nullptr : toolBar->actions().first();
+    toolBar->insertAction(firstAction, _henuBrandAction);
+    toolBar->insertSeparator(firstAction);
+}
+
+void MainWindow::setHenanUniversityBrandVisible(bool visible)
+{
+    if (_henuBrandAction)
+    {
+        _henuBrandAction->setVisible(visible);
+    }
+    if (_henuBrandWidget)
+    {
+        _henuBrandWidget->setVisible(visible);
+    }
 }
 
 // ============================================================
@@ -335,51 +472,24 @@ void MainWindow::setupMenuConnections()
 
     if (_mainMenu->toggleLogAction())
     {
-        connect(_mainMenu->toggleLogAction(), &QAction::toggled, this, &MainWindow::onToggleLogAction);
+        auto *action = _mainMenu->toggleLogAction();
+        action->setCheckable(true);
+        {
+            const QSignalBlocker blocker(action);
+            action->setChecked(_logDock && _logDock->isVisible());
+        }
+        connect(action, &QAction::toggled, this, &MainWindow::onToggleLogAction);
     }
 
     connectDockAction(_mainMenu->toggleWorkspaceAction(),
-                      _leftTabs,
+                      _workspaceDock,
                       QStringLiteral("workspace_visible"));
     connectDockAction(_mainMenu->togglePropertiesAction(),
-                      _selectionProperties,
+                      _propertiesDock,
                       QStringLiteral("properties_visible"));
-    if (_mainMenu->togglePhotosAction() && _photosPanel)
-    {
-        auto *photosAction = _mainMenu->togglePhotosAction();
-        photosAction->setCheckable(true);
-        photosAction->setChecked(!_photosPanel->isHidden());
-        connect(photosAction, &QAction::toggled, this, [this](bool on)
-        {
-            if (_photosPanel)
-            {
-                _photosPanel->setVisible(on);
-            }
-            if (on)
-            {
-                if (_logDock)
-                {
-                    _logDock->setVisible(false);
-                }
-                if (_logBtn)
-                {
-                    _logBtn->setChecked(false);
-                    _logBtn->setVisible(false);
-                }
-                if (_mainMenu && _mainMenu->toggleLogAction())
-                {
-                    const QSignalBlocker blocker(_mainMenu->toggleLogAction());
-                    _mainMenu->toggleLogAction()->setChecked(false);
-                }
-                saveUiSetting(QJsonObject{
-                    {QStringLiteral("photos_visible"), true},
-                    {QStringLiteral("log_visible"), false}
-                });
-                return;
-            }
-            saveUiSetting(QJsonObject{{QStringLiteral("photos_visible"), false}});
-        });
-    }
+    connectDockAction(_mainMenu->togglePhotosAction(),
+                      _photosDock,
+                      QStringLiteral("photos_visible"));
 
     if (_mainMenu->minimizeAction())
     {
@@ -396,13 +506,14 @@ void MainWindow::setupMenuConnections()
         connect(_mainMenu->toggleCamerasAction(), &QAction::toggled,
                 _workspaceCenter->modelView(), &CameraSceneWidget::setShowCameras);
     }
-    if (_mainMenu->toggleWorldOriginAction() && _workspaceCenter && _workspaceCenter->modelView())
+    if (_mainMenu->toggleHenanUniversityBrandAction())
     {
-        connect(_mainMenu->toggleWorldOriginAction(), &QAction::toggled,
-                _workspaceCenter->modelView(), &CameraSceneWidget::setShowWorldOrigin);
-        connect(_mainMenu->toggleWorldOriginAction(), &QAction::toggled, this, [this](bool on)
+        auto *action = _mainMenu->toggleHenanUniversityBrandAction();
+        setHenanUniversityBrandVisible(action->isChecked());
+        connect(action, &QAction::toggled, this, &MainWindow::setHenanUniversityBrandVisible);
+        connect(action, &QAction::toggled, this, [this](bool on)
         {
-            saveUiSetting(QJsonObject{{QStringLiteral("world_origin_visible"), on}});
+            saveUiSetting(QJsonObject{{QStringLiteral("henu_brand_visible"), on}});
         });
     }
 
@@ -472,6 +583,10 @@ void MainWindow::setupProjectManager()
 
     if (_photoStrip)
     {
+        connect(_photoStrip, &PhotoStripWidget::photoSelected, this, [this](const QString &path)
+        {
+            selectPhoto(path, false);
+        });
         connect(_photoStrip, &PhotoStripWidget::photoActivated, this, [this](const QString &path)
         {
             selectPhoto(path, true);
@@ -486,13 +601,6 @@ void MainWindow::setupProjectManager()
         });
     }
 
-    if (_mainMenu)
-    {
-        if (_mainMenu->toggleLogAction())
-        {
-            connect(_mainMenu->toggleLogAction(), &QAction::toggled, this, &MainWindow::onLogVisiblePersist);
-        }
-    }
     if (_log)
     {
         connect(_log, &LogPanel::displayLevelChanged, this, &MainWindow::onLogDisplayLevelChanged);
@@ -558,15 +666,272 @@ void MainWindow::setupProjectManager()
             connectRecon(_mainMenu->fuseDepthMapsAction(),     &ReconstructionWorkflowController::openDepthFusionDialog);
             connectRecon(_mainMenu->refineDenseCloudAction(),  &ReconstructionWorkflowController::openDenseCloudRefineDialog);
             // 模型生成
+            connectRecon(_mainMenu->generateModelAction(),     &ReconstructionWorkflowController::openGenerateModelDialog);
             connectRecon(_mainMenu->meshReconstructAction(),   &ReconstructionWorkflowController::openMeshReconstructionDialog);
             connectRecon(_mainMenu->textureMappingAction(),    &ReconstructionWorkflowController::openTextureMappingDialog);
             connectRecon(_mainMenu->exportModelAction(),       &ReconstructionWorkflowController::openModelExportDialog);
         }
 
+        auto openMatchViewer = [this](bool modal)
+        {
+            if (!_projectManager)
+            {
+                LOG_ERROR(QStringLiteral("无法打开匹配查看：ProjectManager 未初始化"));
+                return;
+            }
+
+            auto *dlg = new MatchPairSelectorDialog(_projectManager, this);
+            dlg->setAttribute(Qt::WA_DeleteOnClose);
+            if (modal)
+            {
+                dlg->exec();
+            }
+            else
+            {
+                dlg->show();
+            }
+        };
+
+        auto startMatchPhotosTask =
+            [this](xjw::matchphotos::MatchPhotosOptions options,
+                   const QStringList &manualPairKeys,
+                   const QString &taskTitle)
+        {
+            QPointer<ProjectManager> pmGuard(_projectManager);
+            if (!pmGuard)
+            {
+                LOG_ERROR(QStringLiteral("无法运行连接点匹配：ProjectManager 未初始化"));
+                return;
+            }
+
+            const QString projectPath = pmGuard->currentProjectPath();
+            const QStringList images = pmGuard->getAllImages();
+            if (images.size() < 2)
+            {
+                QMessageBox::warning(this,
+                                     tr("创建连接点"),
+                                     tr("当前项目至少需要两张照片才能创建连接点。"));
+                return;
+            }
+
+            if (options.pairPolicy.mode == xjw::matchphotos::PairSelectionMode::ManualOnly &&
+                manualPairKeys.isEmpty())
+            {
+                QMessageBox::warning(this,
+                                     tr("连接点匹配"),
+                                     tr("没有可用的影像对，请先生成或导入匹配对。"));
+                return;
+            }
+
+            options.planOnly = false;
+            options.featureAlgorithm = QStringLiteral("sift");
+            options.matcherAlgorithm = QStringLiteral("lightglue");
+
+            xjw::matchphotos::MatchPhotosContext context;
+            context.projectPath = projectPath;
+            context.workingDirectory = ProjectIO::projectAssetsDir(projectPath);
+            context.featureDirectory = ProjectIO::ipfindOutputDir(projectPath);
+            context.matchDirectory = ProjectIO::ipmatchOutputDir(projectPath);
+            context.pairInput.images = images;
+            context.pairInput.manualPairKeys = manualPairKeys;
+
+            QPointer<MainWindow> self(this);
+            auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+            auto progressCount = std::make_shared<std::atomic<int>>(0);
+            context.cancelFlag = cancelFlag.get();
+            context.progressCount = progressCount.get();
+
+            const int imageCount = images.size();
+            const int allPairCount = imageCount > 1 ? imageCount * (imageCount - 1) / 2 : 0;
+            const int estimatedPairCount = manualPairKeys.isEmpty()
+                ? std::min(allPairCount, imageCount * std::max(1, options.pairPolicy.sequenceWindow))
+                : manualPairKeys.size();
+            showSgProgress(std::max(1, imageCount + estimatedPairCount));
+
+            auto cancelConn = connect(this,
+                                      &MainWindow::sgCancelRequested,
+                                      this,
+                                      [cancelFlag]()
+            {
+                cancelFlag->store(true);
+            });
+
+            auto *timer = new QTimer(this);
+            timer->setInterval(100);
+            connect(timer, &QTimer::timeout, timer, [self, progressCount]()
+            {
+                if (self)
+                {
+                    self->updateSgProgress(progressCount->load());
+                }
+            });
+            timer->start();
+
+            auto *watcher = new QFutureWatcher<xjw::matchphotos::MatchPhotosResult>(this);
+            connect(watcher,
+                    &QFutureWatcher<xjw::matchphotos::MatchPhotosResult>::finished,
+                    watcher,
+                    [self,
+                     pmGuard,
+                     projectPath,
+                     taskTitle,
+                     cancelFlag,
+                     timer,
+                     watcher,
+                     cancelConn]()
+            {
+                timer->stop();
+                timer->deleteLater();
+                QObject::disconnect(cancelConn);
+
+                if (self)
+                {
+                    self->hideSgProgress(!cancelFlag->load());
+                }
+
+                const xjw::matchphotos::MatchPhotosResult result = watcher->result();
+                watcher->deleteLater();
+
+                if (!pmGuard)
+                {
+                    return;
+                }
+                if (pmGuard->currentProjectPath() != projectPath)
+                {
+                    QMessageBox::warning(self.data(),
+                                         QObject::tr("连接点匹配"),
+                                         QObject::tr("项目已切换，本次连接点匹配结果未写回。"));
+                    return;
+                }
+
+                QVector<ProjectIpfindResultRecord> featureRecords;
+                featureRecords.reserve(static_cast<int>(result.features.size()));
+                for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature : result.features)
+                {
+                    featureRecords.push_back(
+                        ProjectIpfindResultRecord{feature.imagePath, feature.featurePath, feature.settings});
+                }
+                pmGuard->appendIpfindResults(featureRecords);
+
+                QVector<ProjectIpmatchResultRecord> matchRecords;
+                matchRecords.reserve(static_cast<int>(result.matches.size()));
+                for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
+                {
+                    matchRecords.push_back(ProjectIpmatchResultRecord{QStringList{match.matchPath}, match.settings});
+                }
+                pmGuard->appendIpmatchResults(matchRecords);
+
+                for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
+                {
+                    emit pmGuard->matchPairReady(match.image0Path,
+                                                 match.image1Path,
+                                                 match.matchPath,
+                                                 match.matchCount);
+                }
+
+                if (result.success)
+                {
+                    const QString message =
+                        QObject::tr("%1完成：%2 个特征文件，%3 对匹配")
+                            .arg(taskTitle)
+                            .arg(static_cast<int>(result.features.size()))
+                            .arg(static_cast<int>(result.matches.size()));
+                    LOG_INFO("%s", qUtf8Printable(message));
+                    if (self)
+                    {
+                        self->statusBar()->showMessage(message, 5000);
+                    }
+                }
+                else
+                {
+                    const QString message = result.errorMessage.isEmpty()
+                        ? QObject::tr("%1失败").arg(taskTitle)
+                        : result.errorMessage;
+                    LOG_ERROR("%s", qUtf8Printable(message));
+                    QMessageBox::warning(self.data(), QObject::tr("连接点匹配"), message);
+                }
+            });
+
+            watcher->setFuture(QtConcurrent::run(
+                [context, options, cancelFlag, progressCount]() mutable
+            {
+                Q_UNUSED(cancelFlag)
+                Q_UNUSED(progressCount)
+                const xjw::matchphotos::MatchPhotosTask task(options);
+                return task.run(context);
+            }));
+        };
+
+        if (_mainMenu->createTiePointsAction())
+        {
+            connect(_mainMenu->createTiePointsAction(), &QAction::triggered, this, [this, startMatchPhotosTask]()
+            {
+                CreateTiePointsDialog dlg(this);
+                if (dlg.exec() == QDialog::Accepted)
+                {
+                    xjw::matchphotos::MatchPhotosOptions options;
+                    options.profile = tiePointProfileFromAccuracy(dlg.accuracy());
+                    options.device = xjw::matchphotos::ComputeDevice::Cuda;
+                    options.maxImageDim = maxImageDimFromAccuracy(dlg.accuracy());
+                    options.maxKeypoints = dlg.keypointLimit();
+                    options.matchThreshold = 0.15f;
+                    options.enableGuidedMatching = dlg.useGuidedMatching();
+                    options.reuseExistingFeatures = true;
+                    options.pairPolicy = xjw::matchphotos::makePairSelectionPolicy(
+                        pairPresetFromAccuracy(dlg.accuracy()));
+                    if (!dlg.useGenericPreselection())
+                    {
+                        options.pairPolicy.mode = xjw::matchphotos::PairSelectionMode::Exhaustive;
+                    }
+
+                    startMatchPhotosTask(options, QStringList(), tr("创建连接点"));
+                }
+            });
+        }
+
+        if (_mainMenu->thinTiePointsAction())
+        {
+            connect(_mainMenu->thinTiePointsAction(), &QAction::triggered, this, [this]()
+            {
+                ThinTiePointsDialog dlg(this);
+                if (dlg.exec() == QDialog::Accepted)
+                {
+                    statusBar()->showMessage(
+                        tr("连接点稀释参数已确认：连接点限制 %1").arg(dlg.tiePointLimit()),
+                        3000);
+                }
+            });
+        }
+
+        if (_mainMenu->cleanTiePointsAction())
+        {
+            connect(_mainMenu->cleanTiePointsAction(), &QAction::triggered, this, [this]()
+            {
+                CleanTiePointsDialog dlg(this);
+                if (dlg.exec() == QDialog::Accepted)
+                {
+                    const QString operation = dlg.deleteRequested() ? tr("删除") : tr("筛选");
+                    statusBar()->showMessage(
+                        tr("连接点清理参数已确认：%1，%2，级别 %3")
+                            .arg(dlg.criterionText(), operation, QString::number(dlg.level(), 'g', 3)),
+                        3000);
+                }
+            });
+        }
+
+        if (_mainMenu->viewTiePointMatchesAction())
+        {
+            connect(_mainMenu->viewTiePointMatchesAction(), &QAction::triggered, this, [openMatchViewer]()
+            {
+                openMatchViewer(true);
+            });
+        }
+
         // 连接匹配相关菜单动作到对话框（如果 ProjectManager 可用则传入以便填充数据）
         if (_mainMenu->matchFeaturesAction())
         {
-            connect(_mainMenu->matchFeaturesAction(), &QAction::triggered, this, [this]()
+            connect(_mainMenu->matchFeaturesAction(), &QAction::triggered, this,
+                    [this, openMatchViewer, startMatchPhotosTask]()
             {
                 if (!_projectManager)
                 {
@@ -617,10 +982,9 @@ void MainWindow::setupProjectManager()
 
                 // 连接运行请求信号
                 connect(dlg, &FeatureMatchingDialog::runRequested, this,
-                    [this](const QJsonObject &config, const QStringList &imagePairs)
+                    [this, startMatchPhotosTask](const QJsonObject &config, const QStringList &imagePairs)
                 {
-                    QPointer<ProjectManager> pmGuard(_projectManager);
-                    if (!pmGuard)
+                    if (!_projectManager)
                     {
                         LOG_ERROR(QStringLiteral("无法运行特征匹配：项目管理器未初始化"));
                         return;
@@ -632,98 +996,41 @@ void MainWindow::setupProjectManager()
                         return;
                     }
 
-                    const QString algorithm = config.value("match_algorithm").toString("superglue");
-                    // 在后台线程执行匹配，避免界面卡死
-                    LOG_INFO("%s", qUtf8Printable(QString("开始在后台线程执行 %1 匹配...").arg(algorithm)));
-
-                    // 在状态栏展示特征匹配进度
-                    QPointer<MainWindow> self(this);
-                    auto cancelFlag    = std::make_shared<std::atomic<bool>>(false);
-                    auto progressCount = std::make_shared<std::atomic<int>>(0);
-                    int total = imagePairs.size();
-                    const QString featureSuffix = config.value(QStringLiteral("feature_suffix")).toString();
-                    if (featureSuffix == QStringLiteral("__all__"))
+                    const QStringList images = _projectManager->getAllImages();
+                    const QStringList manualPairKeys = manualPairKeysFromDialogPairs(imagePairs, images);
+                    if (manualPairKeys.isEmpty())
                     {
-                        const QStringList compatibleSuffixes =
-                            xjw::feature_match::compatibleFeatureSuffixes(algorithm);
-                        const QStringList availableSuffixes = xjw::gui::project::projectFeatureSuffixes(
-                            pmGuard->currentProjectPath(), pmGuard->currentMeta());
-                        int suffixCount = 0;
-                        if (availableSuffixes.isEmpty())
-                        {
-                            suffixCount = compatibleSuffixes.size();
-                        }
-                        else
-                        {
-                            for (const QString &suffix : compatibleSuffixes)
-                            {
-                                if (availableSuffixes.contains(suffix))
-                                {
-                                    ++suffixCount;
-                                }
-                            }
-                        }
-                        if (suffixCount > 1)
-                        {
-                            total *= suffixCount;
-                        }
-                    }
-
-                    showSgProgress(total);
-
-                    auto cancelConn = connect(this, &MainWindow::sgCancelRequested,
-                                              this, [cancelFlag]()
-                    {
-                        cancelFlag->store(true);
-                    });
-
-                    // 定时刷新进度（100ms 轮询）
-                    auto *timer = new QTimer(this);
-                    timer->setInterval(100);
-                    connect(timer, &QTimer::timeout, timer,
-                            [self, progressCount, total]()
-                    {
-                        Q_UNUSED(total);
-                        if (!self)
-                        {
-                            return;
-                        }
-                        self->updateSgProgress(progressCount->load());
-                    });
-                    timer->start();
-
-                    auto *watcher = new QFutureWatcher<void>(this);
-                    connect(watcher, &QFutureWatcher<void>::finished, watcher,
-                            [self, cancelFlag, timer, watcher, cancelConn]()
-                        {
-                        timer->stop();
-                        timer->deleteLater();
-                        QObject::disconnect(cancelConn);
-                        if (self)
-                        {
-                            self->hideSgProgress(!cancelFlag->load());
-                        }
-                        watcher->deleteLater();
-                    });
-
-                    watcher->setFuture(QtConcurrent::run(
-                        [config, imagePairs, pmGuard, cancelFlag, progressCount]()
-                        {
-                            FeatureMatchRunner::run(config, imagePairs, pmGuard, *cancelFlag, *progressCount);
-                        }));
-                });
-
-                // 连接"查看匹配"信号：在对话框中直接打开匹配查看器
-                connect(dlg, &FeatureMatchingDialog::viewMatchesRequested, this, [this]()
-                {
-                    if (!_projectManager)
-                    {
+                        QMessageBox::warning(this,
+                                             tr("连接点匹配"),
+                                             tr("生成的影像对无法对应到当前项目照片。"));
                         return;
                     }
 
-                    auto *matchDlg = new MatchPairSelectorDialog(_projectManager, this);
-                    matchDlg->setAttribute(Qt::WA_DeleteOnClose);
-                    matchDlg->show();
+                    xjw::matchphotos::MatchPhotosOptions options;
+                    options.profile = xjw::matchphotos::MatchPhotosProfile::Auto;
+                    options.device = config.value(QStringLiteral("use_cuda")).toBool(true)
+                        ? xjw::matchphotos::ComputeDevice::Cuda
+                        : xjw::matchphotos::ComputeDevice::Cpu;
+                    const int inputWidth = config.value(QStringLiteral("lg_input_width")).toInt(
+                        config.value(QStringLiteral("input_width")).toInt(2048));
+                    const int inputHeight = config.value(QStringLiteral("lg_input_height")).toInt(
+                        config.value(QStringLiteral("input_height")).toInt(inputWidth));
+                    const int requestedMaxImageDim = std::max(inputWidth, inputHeight);
+                    options.maxImageDim = requestedMaxImageDim > 0 ? requestedMaxImageDim : 2048;
+                    options.maxKeypoints = config.value(QStringLiteral("max_keypoints")).toInt(8192);
+                    options.matchThreshold = static_cast<float>(
+                        config.value(QStringLiteral("lg_match_threshold")).toDouble(
+                            config.value(QStringLiteral("match_threshold")).toDouble(0.15)));
+                    options.reuseExistingFeatures = true;
+                    options.pairPolicy.mode = xjw::matchphotos::PairSelectionMode::ManualOnly;
+
+                    startMatchPhotosTask(options, manualPairKeys, tr("连接点匹配"));
+                });
+
+                // 连接"查看匹配"信号：在对话框中直接打开匹配查看器
+                connect(dlg, &FeatureMatchingDialog::viewMatchesRequested, this, [openMatchViewer]()
+                {
+                    openMatchViewer(false);
                 });
 
                 dlg->exec();
@@ -732,17 +1039,9 @@ void MainWindow::setupProjectManager()
 
         if (_mainMenu->viewMatchesAction())
         {
-            connect(_mainMenu->viewMatchesAction(), &QAction::triggered, this, [this]()
+            connect(_mainMenu->viewMatchesAction(), &QAction::triggered, this, [openMatchViewer]()
             {
-                if (!_projectManager)
-                {
-                    LOG_ERROR(QStringLiteral("无法打开匹配查看：ProjectManager 未初始化"));
-                    return;
-                }
-                // 打开匹配对选择对话框以便用户选择要查看的匹配对
-                auto *dlg = new MatchPairSelectorDialog(_projectManager, this);
-                dlg->setAttribute(Qt::WA_DeleteOnClose);
-                dlg->exec();
+                openMatchViewer(true);
             });
         }
 
@@ -1788,24 +2087,19 @@ void MainWindow::saveUiSetting(const QJsonObject &partial)
 
 QString MainWindow::currentBottomPanelKey() const
 {
-    if (_photosPanel && _photosPanel->isVisible())
+    if (_logDock && _logDock->isVisible())
+    {
+        return QStringLiteral("log");
+    }
+    if (_photosDock && _photosDock->isVisible())
     {
         return QStringLiteral("photos");
     }
-    return QStringLiteral("log");
+    return QStringLiteral("none");
 }
 
 void MainWindow::switchToLogPanel()
 {
-    if (_photosPanel)
-    {
-        _photosPanel->setVisible(false);
-    }
-    if (_mainMenu && _mainMenu->togglePhotosAction())
-    {
-        const QSignalBlocker blocker(_mainMenu->togglePhotosAction());
-        _mainMenu->togglePhotosAction()->setChecked(false);
-    }
     if (_logDock)
     {
         _logDock->setWidget(_log);
@@ -1815,27 +2109,6 @@ void MainWindow::switchToLogPanel()
     {
         _log->loadFromLogFile();
     }
-    if (_logBtn)
-    {
-        _logBtn->setChecked(true);
-    }
-}
-
-
-// ============================================================
-//  底部面板按钮槽
-// ============================================================
-
-void MainWindow::onLogBtnClicked()
-{
-    switchToLogPanel();
-    QJsonObject s;
-    s[QStringLiteral("bottom_panel")] = QStringLiteral("log");
-    if (_mainMenu && _mainMenu->toggleLogAction())
-    {
-        s[QStringLiteral("log_visible")] = _mainMenu->toggleLogAction()->isChecked();
-    }
-    saveUiSetting(s);
 }
 
 // Interest-point panel removed: onIpBtnClicked is a no-op now.
@@ -1846,21 +2119,9 @@ void MainWindow::onLogBtnClicked()
 
 void MainWindow::onToggleLogAction(bool on)
 {
-    if (_logBtn)
-    {
-        _logBtn->setVisible(on);
-    }
     if (on)
     {
         switchToLogPanel();
-        if (_log)
-        {
-            _log->loadFromLogFile();
-        }
-        if (_logBtn)
-        {
-            _logBtn->setChecked(true);
-        }
     }
     else
     {
@@ -2055,34 +2316,25 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
     }
 
     // feature-info panel removed: no ip button handling
-    if (_logBtn && ui.contains(QStringLiteral("log_visible")))
-    {
-        bool lvis = ui.value(QStringLiteral("log_visible")).toBool();
-        _logBtn->setChecked(lvis);
-        _logBtn->setVisible(lvis);
-    }
-
     if (ui.contains(QStringLiteral("log_display_level")) && _log)
     {
         int lvl = ui.value(QStringLiteral("log_display_level")).toInt(static_cast<int>(Logger::Info));
         _log->setDisplayLevel(static_cast<Logger::Level>(lvl));
     }
 
-    bool panelHandledByLog = false;
     if (ui.contains(QStringLiteral("log_visible")) && _mainMenu && _mainMenu->toggleLogAction())
     {
         bool on = ui.value(QStringLiteral("log_visible")).toBool();
         _mainMenu->toggleLogAction()->blockSignals(true);
         _mainMenu->toggleLogAction()->setChecked(on);
         _mainMenu->toggleLogAction()->blockSignals(false);
-        if (_logBtn)
-        {
-            _logBtn->setVisible(on);
-        }
         if (on)
         {
             switchToLogPanel();
-            panelHandledByLog = true;
+        }
+        else if (_logDock)
+        {
+            _logDock->setVisible(false);
         }
     }
 
@@ -2108,48 +2360,26 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
     if (_mainMenu)
     {
         applyVisibility(_mainMenu->toggleWorkspaceAction(),
-                        _leftTabs,
+                        _workspaceDock,
                         ui,
                         QStringLiteral("workspace_visible"));
         applyVisibility(_mainMenu->togglePropertiesAction(),
-                        _selectionProperties,
+                        _propertiesDock,
                         ui,
                         QStringLiteral("properties_visible"));
         applyVisibility(_mainMenu->togglePhotosAction(),
-                        _photosPanel,
+                        _photosDock,
                         ui,
                         QStringLiteral("photos_visible"));
 
-        const bool photosVisible = _photosPanel && _photosPanel->isVisible();
-        if (photosVisible)
+        if (ui.contains(QStringLiteral("henu_brand_visible")) && _mainMenu->toggleHenanUniversityBrandAction())
         {
-            if (_logDock)
+            const bool on = ui.value(QStringLiteral("henu_brand_visible")).toBool();
             {
-                _logDock->setVisible(false);
+                const QSignalBlocker blocker(_mainMenu->toggleHenanUniversityBrandAction());
+                _mainMenu->toggleHenanUniversityBrandAction()->setChecked(on);
             }
-            if (_logBtn)
-            {
-                _logBtn->setChecked(false);
-                _logBtn->setVisible(false);
-            }
-            if (_mainMenu->toggleLogAction())
-            {
-                const QSignalBlocker blocker(_mainMenu->toggleLogAction());
-                _mainMenu->toggleLogAction()->setChecked(false);
-            }
-        }
-
-        if (ui.contains(QStringLiteral("world_origin_visible")) && _mainMenu->toggleWorldOriginAction())
-        {
-            const bool on = ui.value(QStringLiteral("world_origin_visible")).toBool();
-            {
-                const QSignalBlocker blocker(_mainMenu->toggleWorldOriginAction());
-                _mainMenu->toggleWorldOriginAction()->setChecked(on);
-            }
-            if (_workspaceCenter && _workspaceCenter->modelView())
-            {
-                _workspaceCenter->modelView()->setShowWorldOrigin(on);
-            }
+            setHenanUniversityBrandVisible(on);
         }
     }
 

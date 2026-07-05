@@ -184,6 +184,8 @@ MatchViewerDialog::MatchViewerDialog(const QString &imgA, const QString &imgB,
     // 连接 DualImageViewer 的数据加载信号到本对话框的回调槽
     connect(_viewer, &DualImageViewer::matchDataLoaded,
             this, &MatchViewerDialog::onMatchDataLoaded);
+    connect(_viewer, &DualImageViewer::matchValidityLoaded,
+            this, &MatchViewerDialog::onMatchValidityLoaded);
     connect(_viewer, &DualImageViewer::loadFailed,
             this, &MatchViewerDialog::onLoadFailed);
     
@@ -394,12 +396,23 @@ void MatchViewerDialog::applyMatchVariant(const xjw::pipeline::MatchVariant &var
 
     const QString previousMatchFile = _matchFile;
     _matchFile = variant.matchFilePath;
+    const bool willReload = _viewer && (forceReload || !sameMatchPath(previousMatchFile, _matchFile));
     _sparseMatchFileMissing = false;
     _totalMatches = variant.totalMatches;
+    if (willReload)
+    {
+        _validMatches = -1;
+        _invalidMatches = -1;
+        if (_showOnlyInliersChk)
+        {
+            _showOnlyInliersChk->setEnabled(false);
+            _showOnlyInliersChk->setChecked(false);
+        }
+    }
     _currentVariantSummary = variantComboLabel(variant);
     updateStatusBar();
 
-    if (_viewer && (forceReload || !sameMatchPath(previousMatchFile, _matchFile)))
+    if (willReload)
     {
         _viewer->loadMatchPair(_imageA, _imageB, _matchFile);
     }
@@ -430,6 +443,28 @@ void MatchViewerDialog::onLoadFailed(const QString &error)
     _statusLabel->setText(tr("加载失败：%1").arg(error));
 }
 
+void MatchViewerDialog::onMatchValidityLoaded(int validCount, int invalidCount)
+{
+    _validMatches = validCount;
+    _invalidMatches = invalidCount;
+
+    const bool hasTrackValidity = validCount >= 0 && invalidCount >= 0;
+    if (_showOnlyInliersChk)
+    {
+        _showOnlyInliersChk->setEnabled(hasTrackValidity);
+        if (!hasTrackValidity)
+        {
+            _showOnlyInliersChk->setChecked(false);
+        }
+        _showOnlyInliersChk->setToolTip(
+            hasTrackValidity
+                ? tr("只显示空三后进入最终连接点轨迹的有效匹配")
+                : tr("完成空中三角测量后可按有效连接点过滤"));
+    }
+
+    updateStatusBar();
+}
+
 // updateStatusBar: 刷新底部状态栏文字，显示当前总匹配点数
 // 若后续需要显示可见点数、内点数等，可在此处扩展
 void MatchViewerDialog::updateStatusBar()
@@ -441,6 +476,10 @@ void MatchViewerDialog::updateStatusBar()
     }
 
     QString status = tr("总匹配点数：%1").arg(_totalMatches);
+    if (_validMatches >= 0 && _invalidMatches >= 0)
+    {
+        status += tr(" | 有效：%1 | 无效：%2").arg(_validMatches).arg(_invalidMatches);
+    }
     if (!_currentVariantSummary.isEmpty())
     {
         status += tr(" | 算法：%1").arg(_currentVariantSummary);

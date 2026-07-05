@@ -25,7 +25,7 @@ namespace xjw::feature_match
 // ---------------------------------------------------------------------------
 LightGlueMatcher::LightGlueMatcher(const LightGlueConfig &config)
     : _torchDevice(config.useCuda && torch::cuda::is_available()
-                       ? torch::Device(torch::kCUDA)
+                       ? torch::Device(torch::kCUDA, std::max(0, config.cudaDevice))
                        : torch::Device(torch::kCPU)),
       _config(config)
 {

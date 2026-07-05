@@ -107,6 +107,16 @@ WorkspaceCenterWidget::~WorkspaceCenterWidget()
     delete _ui;
 }
 
+QSize WorkspaceCenterWidget::minimumSizeHint() const
+{
+    return QSize(240, 160);
+}
+
+QSize WorkspaceCenterWidget::sizeHint() const
+{
+    return QSize(960, 640);
+}
+
 CanvasWidget *WorkspaceCenterWidget::canvas() const
 {
     return _canvas;

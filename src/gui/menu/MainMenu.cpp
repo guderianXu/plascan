@@ -64,6 +64,67 @@ QAction *ensureCheckableAction(QObject *root,
     return action;
 }
 
+QAction *ensurePlainAction(QObject *root,
+                           QObject *actionParent,
+                           QMenu *menu,
+                           const QString &objectName,
+                           const QString &text,
+                           QAction *before = nullptr)
+{
+    auto *action = root ? root->findChild<QAction *>(objectName) : nullptr;
+    if (!action)
+    {
+        action = new QAction(text, actionParent);
+        action->setObjectName(objectName);
+    }
+
+    action->setText(text);
+
+    if (menu && !menu->actions().contains(action))
+    {
+        if (before && menu->actions().contains(before))
+        {
+            menu->insertAction(before, action);
+        }
+        else
+        {
+            menu->addAction(action);
+        }
+    }
+
+    return action;
+}
+
+QMenu *ensureSubMenu(QObject *root,
+                     QMenu *parent,
+                     const QString &objectName,
+                     const QString &title,
+                     QAction *before = nullptr)
+{
+    auto *menu = root ? root->findChild<QMenu *>(objectName) : nullptr;
+    if (!menu)
+    {
+        menu = new QMenu(title, parent);
+        menu->setObjectName(objectName);
+    }
+
+    menu->setTitle(title);
+
+    if (parent && !parent->actions().contains(menu->menuAction()))
+    {
+        if (before && parent->actions().contains(before))
+        {
+            parent->insertMenu(before, menu);
+        }
+        else
+        {
+            parent->addMenu(menu);
+        }
+    }
+
+    return menu;
+}
+
 } // namespace
 
 // ============================================================
@@ -77,7 +138,7 @@ QAction *ensureCheckableAction(QObject *root,
  *   1. 项目菜单（新建、打开、最近打开子菜单、保存、退出）
  *   2. 视图菜单（缩放、可视化设置、窗口面板子菜单）
  *   3. 工作流程菜单（空三、模型、DEM、正射影像）
- *   4. 工具菜单（重叠度、交汇、报告）
+ *   4. 工具菜单（连接点、重叠度、交汇、报告）
  *   5. 帮助菜单（关于）
  *   6. 主工具栏
  *
@@ -87,6 +148,59 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     : QObject(mainWindow), _mainWindow(mainWindow)
 {
     if (!_mainWindow) return;
+
+    auto installTiePointsMenu = [this](QMenu *toolsMenu, QAction *before = nullptr)
+    {
+        QMenu *tiePointsMenu = ensureSubMenu(_mainWindow,
+                                             toolsMenu,
+                                             QStringLiteral("menuTiePoints"),
+                                             tr("连接点"),
+                                             before);
+        if (!tiePointsMenu)
+        {
+            return;
+        }
+
+        _createTiePointsAct = ensurePlainAction(_mainWindow,
+                                                tiePointsMenu,
+                                                tiePointsMenu,
+                                                QStringLiteral("actionCreateTiePoints"),
+                                                tr("创建连接点..."));
+        _createTiePointsAct->setToolTip(tr("打开连接点创建参数对话框"));
+
+        _thinTiePointsAct = ensurePlainAction(_mainWindow,
+                                              tiePointsMenu,
+                                              tiePointsMenu,
+                                              QStringLiteral("actionThinTiePoints"),
+                                              tr("稀释连接点..."));
+        _thinTiePointsAct->setToolTip(tr("按连接点数量限制稀释当前连接点"));
+
+        _cleanTiePointsAct = ensurePlainAction(_mainWindow,
+                                               tiePointsMenu,
+                                               tiePointsMenu,
+                                               QStringLiteral("actionCleanTiePoints"),
+                                               QStringLiteral("Clean Tie Points..."));
+        _cleanTiePointsAct->setToolTip(tr("按误差或观测指标筛选连接点"));
+
+        auto *separator = _mainWindow->findChild<QAction *>(QStringLiteral("actionTiePointsViewSeparator"));
+        if (!separator)
+        {
+            separator = new QAction(tiePointsMenu);
+            separator->setObjectName(QStringLiteral("actionTiePointsViewSeparator"));
+            separator->setSeparator(true);
+        }
+        if (!tiePointsMenu->actions().contains(separator))
+        {
+            tiePointsMenu->addAction(separator);
+        }
+
+        _viewTiePointMatchesAct = ensurePlainAction(_mainWindow,
+                                                    tiePointsMenu,
+                                                    tiePointsMenu,
+                                                    QStringLiteral("actionViewTiePointMatches"),
+                                                    tr("查看匹配..."));
+        _viewTiePointMatchesAct->setToolTip(tr("打开当前项目的匹配查看器"));
+    };
 
     if (findNamedChild<QAction>(_mainWindow, "actionNewProject"))
     {
@@ -109,6 +223,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _resetViewAct = findNamedChild<QAction>(_mainWindow, "actionResetView");
         _toggleGizmoAct = findNamedChild<QAction>(_mainWindow, "actionToggleGizmo");
         _toggleCamerasAct = findNamedChild<QAction>(_mainWindow, "actionToggleCameras");
+        _toggleHenanUniversityBrandAct =
+            findNamedChild<QAction>(_mainWindow, "actionToggleHenanUniversityBrand");
         _featureVisualizationAct = findNamedChild<QAction>(_mainWindow, "actionFeatureVisualization");
         _toggleLogAct = findNamedChild<QAction>(_mainWindow, "actionToggleLog");
         _featureInfoAct = findNamedChild<QAction>(_mainWindow, "actionFeatureInfo");
@@ -121,7 +237,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     QStringLiteral("actionToggleWorkspace"),
                                                     tr("工作区"),
                                                     true);
-        _toggleWorkspaceAct->setToolTip(tr("显示或隐藏左侧工作区"));
+        _toggleWorkspaceAct->setToolTip(tr("显示或隐藏工作区面板"));
         _togglePropertiesAct = ensureCheckableAction(_mainWindow,
                                                      windowActionParent,
                                                      nullptr,
@@ -135,24 +251,26 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                  QStringLiteral("actionTogglePhotos"),
                                                  tr("照片"),
                                                  true);
-        _togglePhotosAct->setToolTip(tr("显示或隐藏底部照片面板"));
+        _togglePhotosAct->setToolTip(tr("显示或隐藏照片面板"));
         QObject *viewActionParent = viewMenu
             ? static_cast<QObject *>(viewMenu)
             : static_cast<QObject *>(_mainWindow);
-        _toggleWorldOriginAct = ensureCheckableAction(_mainWindow,
-                                                      viewActionParent,
-                                                      viewMenu,
-                                                      QStringLiteral("actionToggleWorldOrigin"),
-                                                      tr("显示世界原点"),
-                                                      true,
-                                                      _featureVisualizationAct);
-        _toggleWorldOriginAct->setToolTip(tr("显示或隐藏 3D 视图中的世界原点十字"));
+        _toggleHenanUniversityBrandAct = ensureCheckableAction(
+            _mainWindow,
+            viewActionParent,
+            viewMenu,
+            QStringLiteral("actionToggleHenanUniversityBrand"),
+            tr("河南大学校徽"),
+            true,
+            _featureVisualizationAct);
+        _toggleHenanUniversityBrandAct->setToolTip(tr("显示或隐藏主工具栏中的河南大学校徽"));
 
         _addPhotoAct = findNamedChild<QAction>(_mainWindow, "actionAddPhoto");
         _addFolderAct = findNamedChild<QAction>(_mainWindow, "actionAddFolder");
         _workflowAerialTriangulationAct =
             findNamedChild<QAction>(_mainWindow, "actionWorkflowAerialTriangulation");
         _threeDReconstructionAct = findNamedChild<QAction>(_mainWindow, "actionThreeDReconstruction");
+        _generateModelAct = findNamedChild<QAction>(_mainWindow, "actionGenerateModel");
         _createDEMAct = findNamedChild<QAction>(_mainWindow, "actionCreateDEM");
         _generateOrthoAct = findNamedChild<QAction>(_mainWindow, "actionGenerateOrtho");
 
@@ -184,6 +302,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _importReferenceDatasetAct = findNamedChild<QAction>(_mainWindow, "actionImportReferenceDataset");
         _referenceQualityCheckAct = findNamedChild<QAction>(_mainWindow, "actionReferenceQualityCheck");
         _referenceTerrainBundleAdjustAct = findNamedChild<QAction>(_mainWindow, "actionReferenceTerrainBundleAdjust");
+        if (toolsMenu)
+        {
+            QAction *firstToolAction = toolsMenu->actions().isEmpty() ? nullptr : toolsMenu->actions().first();
+            installTiePointsMenu(toolsMenu, firstToolAction);
+        }
         if (!_workflowAerialTriangulationAct)
         {
             QObject *actionParent = workflowMenu
@@ -202,6 +325,26 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 else
                 {
                     workflowMenu->addAction(_workflowAerialTriangulationAct);
+                }
+            }
+        }
+        if (!_generateModelAct)
+        {
+            QObject *actionParent = workflowMenu
+                ? static_cast<QObject *>(workflowMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _generateModelAct = new QAction(tr("生成模型..."), actionParent);
+            _generateModelAct->setObjectName(QStringLiteral("actionGenerateModel"));
+            _generateModelAct->setToolTip(tr("选择连接点、点云或已有模型作为源数据生成三维模型"));
+            if (workflowMenu)
+            {
+                if (_createDEMAct)
+                {
+                    workflowMenu->insertAction(_createDEMAct, _generateModelAct);
+                }
+                else
+                {
+                    workflowMenu->addAction(_generateModelAct);
                 }
             }
         }
@@ -459,14 +602,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _toggleCamerasAct->setChecked(true);
     _toggleCamerasAct->setToolTip(tr("显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签"));
     viewMenu->addAction(_toggleCamerasAct);
-    _toggleWorldOriginAct = ensureCheckableAction(_mainWindow,
-                                                  viewMenu,
-                                                  viewMenu,
-                                                  QStringLiteral("actionToggleWorldOrigin"),
-                                                  tr("显示世界原点"),
-                                                  true,
-                                                  _featureVisualizationAct);
-    _toggleWorldOriginAct->setToolTip(tr("显示或隐藏 3D 视图中的世界原点十字"));
+    _toggleHenanUniversityBrandAct = ensureCheckableAction(
+        _mainWindow,
+        viewMenu,
+        viewMenu,
+        QStringLiteral("actionToggleHenanUniversityBrand"),
+        tr("河南大学校徽"),
+        true);
+    _toggleHenanUniversityBrandAct->setToolTip(tr("显示或隐藏主工具栏中的河南大学校徽"));
     viewMenu->addSeparator();
     // 特征点可视化设置对话框入口
     _featureVisualizationAct = viewMenu->addAction(tr("特征点 可视化设置..."));
@@ -480,7 +623,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                 QStringLiteral("actionToggleWorkspace"),
                                                 tr("工作区"),
                                                 true);
-    _toggleWorkspaceAct->setToolTip(tr("显示或隐藏左侧工作区"));
+    _toggleWorkspaceAct->setToolTip(tr("显示或隐藏工作区面板"));
     _togglePropertiesAct = ensureCheckableAction(_mainWindow,
                                                  windowMenu,
                                                  windowMenu,
@@ -494,7 +637,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                              QStringLiteral("actionTogglePhotos"),
                                              tr("照片"),
                                              true);
-    _togglePhotosAct->setToolTip(tr("显示或隐藏底部照片面板"));
+    _togglePhotosAct->setToolTip(tr("显示或隐藏照片面板"));
     _toggleLogAct = new QAction(tr("日志"), windowMenu);
     _toggleLogAct->setCheckable(true);  // 可切换：勾选时面板可见
     _toggleLogAct->setChecked(true);    // 默认显示日志面板
@@ -523,6 +666,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     workflowMenu->addSeparator();
     _workflowAerialTriangulationAct = workflowMenu->addAction(tr("空中三角测量...")); // 对齐照片参数对话框
     _threeDReconstructionAct = workflowMenu->addAction(tr("三维重建"));     // 一键完整建模流程
+    _generateModelAct = workflowMenu->addAction(tr("生成模型..."));        // Metashape 风格源数据选择
     _createDEMAct      = workflowMenu->addAction(tr("创建 DEM"));          // DEM 完整流程
     _generateOrthoAct  = workflowMenu->addAction(tr("生成 正射影像"));     // 正射影像完整流程
 
@@ -562,6 +706,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     // ---- 工具菜单 ----
     // 提供细粒度的单步工具入口，供高级用户和调试场景使用
     auto *toolsMenu = _mainWindow->menuBar()->addMenu(tr("工具"));
+
+    installTiePointsMenu(toolsMenu);
+    toolsMenu->addSeparator();
 
     // 质量检查工具
     _overlapAnalysisAct = toolsMenu->addAction(tr("重叠度获取"));
@@ -721,7 +868,7 @@ QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }
 QAction *MainMenu::resetViewAction() const { return _resetViewAct; }
 QAction *MainMenu::toggleGizmoAction() const { return _toggleGizmoAct; }
 QAction *MainMenu::toggleCamerasAction() const { return _toggleCamerasAct; }
-QAction *MainMenu::toggleWorldOriginAction() const { return _toggleWorldOriginAct; }
+QAction *MainMenu::toggleHenanUniversityBrandAction() const { return _toggleHenanUniversityBrandAct; }
 
 QAction *MainMenu::addPhotoAction() const       { return _addPhotoAct; }
 QAction *MainMenu::addFolderAction() const      { return _addFolderAct; }
@@ -737,8 +884,13 @@ QAction *MainMenu::intersectionCheckAction() const { return _intersectionCheckAc
 QAction *MainMenu::intersectionViewResultsAction() const { return _intersectionViewResultsAct; }
 QAction *MainMenu::createDEMAction() const      { return _createDEMAct; }
 QAction *MainMenu::generateOrthoAction() const  { return _generateOrthoAct; }
+QAction *MainMenu::generateModelAction() const  { return _generateModelAct; }
 
 QAction *MainMenu::viewWorkflowReportAction() const         { return _viewWorkflowReportAct; }
+QAction *MainMenu::createTiePointsAction() const           { return _createTiePointsAct; }
+QAction *MainMenu::thinTiePointsAction() const             { return _thinTiePointsAct; }
+QAction *MainMenu::cleanTiePointsAction() const            { return _cleanTiePointsAct; }
+QAction *MainMenu::viewTiePointMatchesAction() const       { return _viewTiePointMatchesAct; }
 QAction *MainMenu::manualPointCloudPruneAction() const      { return _manualPointCloudPruneAct; }
 QAction *MainMenu::cameraConvertAction() const              { return _cameraConvertAct; }
 QAction *MainMenu::surveyControlAction() const              { return _surveyControlAct; }

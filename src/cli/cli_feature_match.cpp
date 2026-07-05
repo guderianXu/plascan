@@ -7,11 +7,12 @@
 #include "TraditionalFeatureMatcher.h"
 #include "FeatureData.h"
 #include "FeatureOutput.h"
+#include "AlgorithmCompat.h"
 #include "FeatureFileIO.h"
+#include "MatchFileIO.h"
 
 #include <QString>
 #include <QFile>
-#include <QDataStream>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
@@ -102,12 +103,24 @@ void writeIndexedSidecar(const std::string &outPath,
 // 根据文件后缀自动选择匹配器
 static std::string autoMatcher(const std::string &spPath)
 {
-    auto pos = spPath.rfind('.');
-    if (pos == std::string::npos) return "superglue";
-    std::string ext = spPath.substr(pos);
-    if (ext == ".sp" || ext == ".dedode") return "superglue";
-    if (ext == ".dsk" || ext == ".alk" || ext == ".sift") return "bf";
-    return "superglue";
+    return xjw::feature_match::defaultMatcherForFeatureSuffix(
+        QString::fromStdString(spPath)).toStdString();
+}
+
+static bool isTraditionalMatcher(const std::string &algo)
+{
+    return algo == "bf" ||
+        algo == "flann" ||
+        algo == "sift_bf_l2" ||
+        algo == "sift_flann" ||
+        algo == "orb_bf_hamming";
+}
+
+static std::string normalizedTraditionalMatcher(const std::string &algo)
+{
+    if (algo == "bf") return "sift_bf_l2";
+    if (algo == "flann") return "sift_flann";
+    return xjw::feature_match::tradition::TraditionalFeatureMatcher::normalizeAlgorithmName(algo);
 }
 
 int main(int argc, char *argv[])
@@ -126,10 +139,11 @@ int main(int argc, char *argv[])
     app.add_option("-o,--output", outPath, "输出 .match 文件")->required();
 
     float matchThresh = 0.2f;
-    int   maxKp = 2048, gpu = 0;
+    int   maxKp = 2048, maxDim = 2048, gpu = 0;
     bool  cuda = true;
     app.add_option("-t,--match-threshold", matchThresh, "匹配置信度阈值");
     app.add_option("-n,--max-keypoints",   maxKp,       "最大关键点数");
+    app.add_option("--max-dim", maxDim, "端到端匹配最大图像边长");
     app.add_flag("--cuda{true}", cuda, "CUDA");
     app.add_flag("--no-cuda{false}", cuda);
     app.add_option("--gpu", gpu, "CUDA 设备 ID");
@@ -148,19 +162,35 @@ int main(int argc, char *argv[])
     }
 
     // ── 工厂统一处理 ──
-    if (algo == "superglue" || algo == "lightglue"
-        || algo == "loftr" || algo == "disk" || algo == "aliked")
+    if (algo == "superglue" || algo == "lightglue" ||
+        algo == "loftr" || algo == "roma" || algo == "dedode")
     {
         MatcherConfig mCfg;
         mCfg.modelPath      = modelPath;
         mCfg.matchThreshold = matchThresh;
         mCfg.maxKeypoints   = maxKp;
+        mCfg.maxImageDim    = maxDim;
         mCfg.useCuda        = cuda;
         mCfg.cudaDevice     = gpu;
 
         auto matcher = createMatcher(algo, mCfg);
+        if ((algo == "superglue" || algo == "lightglue") && (sp1.empty() || sp2.empty()))
+        {
+            cli::fatal(algo + " 需要 --sp1/--sp2 特征文件", cli::EXIT_ARG_ERR);
+        }
+        if ((algo == "loftr" || algo == "roma") && (imgL.empty() || imgR.empty()))
+        {
+            cli::fatal(algo + " 需要 -L/--left 和 -R/--right 影像", cli::EXIT_ARG_ERR);
+        }
+        if (algo == "dedode" && (sp1.empty() || sp2.empty()) && (imgL.empty() || imgR.empty()))
+        {
+            cli::fatal("dedode 需要 --sp1/--sp2 特征文件，或 -L/-R 影像执行端到端提取+匹配", cli::EXIT_ARG_ERR);
+        }
+
         fprintf(stdout, "%s: %s <-> %s\n",
-                matcher->algorithmName().c_str(), sp1.c_str(), sp2.c_str());
+                matcher->algorithmName().c_str(),
+                sp1.empty() ? imgL.c_str() : sp1.c_str(),
+                sp2.empty() ? imgR.c_str() : sp2.c_str());
 
         int n = matcher->match(sp1, sp2, imgL, imgR, outPath);
         if (n < 0)
@@ -173,38 +203,39 @@ int main(int argc, char *argv[])
         }
         fprintf(stdout, "匹配完成: %d 点 -> %s\n", n, outPath.c_str());
     }
-    else if (algo == "bf" || algo == "flann")
+    else if (isTraditionalMatcher(algo))
     {
         if (sp1.empty() || sp2.empty())
         {
-            cli::fatal("bf/flann 需要 --sp1/--sp2");
+            cli::fatal("传统匹配需要 --sp1/--sp2");
         }
 
-        FeatureOutput spo1, spo2;
         QString n1, n2;
-        if (!FeatureFileIO::read(QString::fromStdString(sp1), n1, spo1))
+        xjw::feature_extractors::FeatureData fd0;
+        xjw::feature_extractors::FeatureData fd1;
+        if (!FeatureFileIO::readData(QString::fromStdString(sp1), n1, fd0))
         {
             cli::fatal("加载失败: " + sp1, cli::EXIT_IO_ERR);
         }
-        if (!FeatureFileIO::read(QString::fromStdString(sp2), n2, spo2))
+        if (!FeatureFileIO::readData(QString::fromStdString(sp2), n2, fd1))
         {
             cli::fatal("加载失败: " + sp2, cli::EXIT_IO_ERR);
         }
 
-        auto fd0 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo1);
-        auto fd1 = xjw::feature_extractors::FeatureData::fromFeatureOutput(spo2);
-
         xjw::feature_match::tradition::TraditionalMatchConfig tc;
-        tc.algorithmName = (algo == "bf") ? "sift_bf_l2" : "sift_flann";
+        tc.algorithmName = normalizedTraditionalMatcher(algo);
         tc.requireMutualConsistency = true;
         tc.ratioTestThreshold = 0.85f;
+        tc.useCuda = cuda;
+        tc.cudaDevice = gpu;
 
-        fprintf(stdout, "%s(L2): %s <-> %s (%zu/%zu kp)\n",
-                algo.c_str(), sp1.c_str(), sp2.c_str(),
+        fprintf(stdout, "%s: %s <-> %s (%zu/%zu kp)\n",
+                tc.algorithmName.c_str(), sp1.c_str(), sp2.c_str(),
                 fd0.keypoints.size(), fd1.keypoints.size());
 
         auto mr = xjw::feature_match::tradition::TraditionalFeatureMatcher::match(
-            fd0.descriptors, fd1.descriptors,
+            fd0.toCvDescriptors(tc.algorithmName),
+            fd1.toCvDescriptors(tc.algorithmName),
             fd0.keypoints.size(), fd1.keypoints.size(), tc);
 
         if (mr.numMatches == 0)
@@ -212,27 +243,13 @@ int main(int argc, char *argv[])
             cli::fatal("未找到匹配点", cli::EXIT_ALGO_ERR);
         }
 
-        QFile f(QString::fromStdString(outPath));
-        if (!f.open(QIODevice::WriteOnly))
+        QByteArray writeError;
+        const int count = xjw::feature_match::writeMatchFile(
+            QString::fromStdString(outPath), mr, fd0.keypoints, fd1.keypoints, &writeError);
+        if (count < 0)
         {
-            cli::fatal("无法写入: " + outPath, cli::EXIT_IO_ERR);
+            cli::fatal("无法写入: " + outPath + " " + writeError.toStdString(), cli::EXIT_IO_ERR);
         }
-        QDataStream ds(&f);
-        ds.setByteOrder(QDataStream::BigEndian);
-        qint32 count = 0;
-        for (size_t i = 0; i < mr.matches0.size(); ++i)
-        {
-            if (mr.matches0[i] >= 0) ++count;
-        }
-        ds << count;
-        for (size_t i = 0; i < mr.matches0.size(); ++i)
-        {
-            int m1 = mr.matches0[i];
-            if (m1 < 0) continue;
-            ds << fd0.keypoints[i].pt.x << fd0.keypoints[i].pt.y
-               << fd1.keypoints[m1].pt.x << fd1.keypoints[m1].pt.y;
-        }
-        f.close();
         writeIndexedSidecar(outPath,
                             sp1,
                             sp2,
@@ -241,7 +258,7 @@ int main(int argc, char *argv[])
                             fd0,
                             fd1,
                             mr,
-                            QString::fromStdString(FeatureFileIO::peekAlgorithm(QString::fromStdString(sp1))),
+                            QString::fromStdString(fd0.sourceAlgorithm),
                             QString::fromStdString(tc.algorithmName),
                             matchThresh);
         fprintf(stdout, "匹配完成: %d 点 -> %s\n", count, outPath.c_str());
@@ -249,7 +266,8 @@ int main(int argc, char *argv[])
     else
     {
         cli::fatal("未知算法: " + algo
-            + ". 支持: superglue, lightglue, loftr, disk, aliked, bf, flann");
+            + ". 支持: superglue, lightglue, loftr, roma, dedode, bf, flann, "
+              "sift_bf_l2, sift_flann, orb_bf_hamming");
     }
     return cli::EXIT_OK;
 }

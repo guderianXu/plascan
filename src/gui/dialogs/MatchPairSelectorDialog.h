@@ -29,7 +29,7 @@ class ProjectManager;
 // 功能：
 // - 顶部下拉框：选择当前查看的图像
 // - 中间表格：显示与该图像匹配的所有其他图像
-//   列：图像名称、最佳算法、有效内点、总匹配、可用算法、状态
+//   列：图像名称、总计、有效、无效、最佳算法、状态
 // - 底部按钮：查看详细匹配（打开 MatchViewerDialog）
 class MatchPairSelectorDialog : public QDialog
 {
@@ -82,6 +82,7 @@ private:
         QString matchFilePath;   // 对应 .match 文件的完整路径
         QVector<xjw::pipeline::MatchVariant> variants; // 同一影像对的全部算法结果
         bool hasInlierStats = false; // true 表示 validPoints 来自几何验证内点统计
+        bool hasTrackValidity = false; // true 表示 validPoints/invalidPoints 来自空三最终轨迹
         int compatibleVariantCount = 0; // 可由查看器加载的算法结果数量
         QString availableAlgorithms;    // 可用算法列表（用于表格显示）
         QString status;                 // 当前行状态说明

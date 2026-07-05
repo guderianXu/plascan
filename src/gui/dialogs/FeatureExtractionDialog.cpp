@@ -520,10 +520,11 @@ void FeatureExtractionDialog::onAlgorithmChanged(int)
     const bool isSP = (algo == "superpoint");
     const bool isPythonDL = (algo == "disk" || algo == "aliked");
     const bool isTraditional = (algo == "orb" || algo == "sift");
+    const bool canUseCuda = isDL || algo == "sift";
 
     // 模型路径: 仅 DL 算法需要
     setFormRowVisible(_basicForm, _modelPathEdit, isDL);
-    setFormRowVisible(_basicForm, _cudaRowWidget, isDL);
+    setFormRowVisible(_basicForm, _cudaRowWidget, canUseCuda);
 
     // SuperPoint 专有参数
     setFormRowVisible(_basicForm, _nmsRadiusSpin, isSP);
@@ -541,7 +542,8 @@ void FeatureExtractionDialog::onAlgorithmChanged(int)
         }
         else if (isTraditional)
         {
-            _advancedHintLabel->setText(tr("ORB/SIFT 使用 OpenCV 提取器，基础参数中的最大关键点数和高级参数中的灰度阈值会生效。"));
+            _advancedHintLabel->setText(tr("ORB 使用 OpenCV 提取器；SIFT 可优先使用 CUDA SIFT，"
+                                            "不可用时回退 OpenCV SIFT。最大关键点数和灰度阈值会生效。"));
         }
         setFormRowVisible(_advancedForm, _advancedHintLabel, showHint);
     }

@@ -98,8 +98,6 @@ public:
     void setHighlightedCameraPath(const QString &imagePath);
     void setHighlightedCameraName(const QString &imageName);
     void clearHighlightedCamera();
-    void setShowWorldOrigin(bool show);
-    bool isWorldOriginVisible() const;
     /// 查询当前相机覆盖层是否可见
     bool areCamerasVisible() const { return _showCameras; }
 
@@ -191,13 +189,14 @@ private:
 
     int maxVisibleCameraLabels() const;
     float cameraFrustumBase() const;
+    float cameraImagePlaneHalfExtent() const;
     bool isCameraHighlighted(const CameraPose &pose) const;
     QString normalizedCameraPath(const QString &imagePath) const;
+    void drawFloorPivotCross(QPainter &painter) const;
 
     // 在 OpenGL 渲染完成后，用 QPainter 绘制 2D 覆盖层：
     //   - 操控球 Gizmo（旋转环）
     //   - 相机视锥体和名称标注
-    //   - 世界原点标记
     //   - 右下角坐标轴指示器和欧拉角文字
     void drawOverlay();
     void drawPlyLoadProgressOverlay(QPainter &painter);
@@ -278,7 +277,6 @@ private:
     bool _showCameras = true;                      // 相机光心、视锥体和标签是否可见（默认可见）
     QString _highlightedCameraPath;
     QString _highlightedCameraName;
-    bool _showWorldOrigin = true;
     bool _manualPruneMode = false;
     bool _manualSelecting = false;
     QPoint _manualSelectStart;

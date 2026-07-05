@@ -1,5 +1,6 @@
 #include "TraditionalFeatureExtractor.h"
 
+#include "CudaSiftFeatureExtractor.h"
 #include "FeatureData.h"
 
 #include "OpenCvCompat.h"
@@ -101,9 +102,6 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
                                                      bool useCuda,
                                                      int cudaDevice)
 {
-    (void)useCuda;
-    (void)cudaDevice;
-
     if (grayImage.empty())
     {
         throw std::runtime_error("input image is empty");
@@ -124,6 +122,31 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
     }
     else if (normalizedName == "sift")
     {
+        if (useCuda)
+        {
+            if (!isCudaSiftAvailable())
+            {
+                if (!config.allow_device_fallback)
+                {
+                    throw std::runtime_error("CUDA SIFT requested but no CUDA SIFT device is available");
+                }
+            }
+            else
+            {
+                try
+                {
+                    return detectCudaSift(grayImage, config, cudaDevice);
+                }
+                catch (...)
+                {
+                    if (!config.allow_device_fallback)
+                    {
+                        throw;
+                    }
+                }
+            }
+        }
+
         cv::Ptr<cv::SIFT> sift = cv::SIFT::create(maxKpForDetector > 0 ? maxKpForDetector : 0);
         sift->detectAndCompute(grayImage, cv::noArray(), keypoints, descriptors, false);
     }
@@ -186,6 +209,8 @@ FeatureOutput TraditionalFeatureExtractor::detect(const cv::Mat &grayImage,
     }
 
     FeatureOutput output;
+    output.imageWidth = grayImage.cols;
+    output.imageHeight = grayImage.rows;
     output.keypoints.reserve(keepIndices.size());
     output.scores.reserve(keepIndices.size());
 

@@ -54,17 +54,21 @@ TEST(SuffixDetectionTest, AutoDetectFromPath)
         auto pos = spPath.rfind('.');
         if (pos == std::string::npos) return "superglue";
         std::string ext = spPath.substr(pos);
-        if (ext == ".sp" || ext == ".dedode") return "superglue";
-        if (ext == ".dsk" || ext == ".alk" || ext == ".sift") return "bf";
+        if (ext == ".sp") return "superglue";
+        if (ext == ".dedode") return "dedode";
+        if (ext == ".dsk" || ext == ".alk" || ext == ".sift") return "lightglue";
+        if (ext == ".orb" || ext == ".akz") return "orb_bf_hamming";
+        if (ext == ".surf") return "sift_bf_l2";
         return "superglue";
     };
 
     EXPECT_EQ(autoMatcher("img.sp"),     "superglue");
-    EXPECT_EQ(autoMatcher("img.dedode"), "superglue");
-    EXPECT_EQ(autoMatcher("img.dsk"),    "bf");
-    EXPECT_EQ(autoMatcher("img.alk"),    "bf");
-    EXPECT_EQ(autoMatcher("img.sift"),   "bf");
-    EXPECT_EQ(autoMatcher("img.orb"),    "superglue");
+    EXPECT_EQ(autoMatcher("img.dedode"), "dedode");
+    EXPECT_EQ(autoMatcher("img.dsk"),    "lightglue");
+    EXPECT_EQ(autoMatcher("img.alk"),    "lightglue");
+    EXPECT_EQ(autoMatcher("img.sift"),   "lightglue");
+    EXPECT_EQ(autoMatcher("img.orb"),    "orb_bf_hamming");
+    EXPECT_EQ(autoMatcher("img.surf"),   "sift_bf_l2");
     EXPECT_EQ(autoMatcher("img.xyz"),    "superglue");
 }
 
@@ -140,7 +144,7 @@ TEST(TraditionalFeatureExtractorTest, SiftKeepsNativeDescriptorDim)
     EXPECT_EQ(output.descriptors.size(1), 128);
 }
 
-TEST(TraditionalFeatureExtractorTest, SiftCudaRequestUsesOpenCvSiftAndKeepsNativeDescriptorDim)
+TEST(TraditionalFeatureExtractorTest, SiftCudaRequestKeepsNativeDescriptorDim)
 {
     cv::Mat image(240, 320, CV_8UC1, cv::Scalar(40));
     cv::circle(image, cv::Point(90, 90), 35, cv::Scalar(230), -1);
@@ -164,7 +168,7 @@ TEST(TraditionalFeatureExtractorTest, SiftCudaRequestUsesOpenCvSiftAndKeepsNativ
     EXPECT_EQ(output.descriptors.size(1), 128);
 }
 
-TEST(TraditionalFeatureExtractorTest, FactoryKeepsSiftExtractionOnOpenCvWhenCudaRequested)
+TEST(TraditionalFeatureExtractorTest, FactoryKeepsSiftDescriptorDimWhenCudaRequested)
 {
     cv::Mat image(240, 320, CV_8UC1, cv::Scalar(40));
     cv::circle(image, cv::Point(90, 90), 35, cv::Scalar(230), -1);

@@ -5,6 +5,7 @@
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
 #include "DisparityHeatmapOverlay.h"
+#include "MatchValidityAnalyzer.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -389,6 +390,17 @@ bool DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
     
     // 加载图像和匹配点
     loadMatchPair(imgA, imgB, ptsA, ptsB);
+    const MatchValidityResult validity = analyzeMatchTrackValidity(matchFile, imgA, imgB);
+    if (validity.hasTrackValidity && validity.inlierMask.size() == ptsA.size())
+    {
+        _overlay->setInlierMask(validity.inlierMask);
+        emit matchValidityLoaded(validity.validCount, validity.invalidCount);
+    }
+    else
+    {
+        _overlay->setInlierMask(QVector<bool>());
+        emit matchValidityLoaded(-1, -1);
+    }
     return true;
 }
 
@@ -417,6 +429,7 @@ void DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
     
     // 设置匹配数据到覆盖层
     _overlay->setMatches(ptsA, ptsB);
+    _overlay->setInlierMask(QVector<bool>());
     
     // 更新覆盖层几何
     updateOverlayGeometry();
@@ -424,6 +437,7 @@ void DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
     updateOverlayNow();
     
     emit matchDataLoaded(ptsA.size());
+    emit matchValidityLoaded(-1, -1);
 }
 
 void DualImageViewer::setSyncMode(bool enabled)

@@ -381,8 +381,13 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
                         const int newW = static_cast<int>(image.cols * scale);
                         const int newH = static_cast<int>(image.rows * scale);
                         cv::resize(image, processImage, cv::Size(newW, newH), 0, 0, cv::INTER_AREA);
-                        LOG_INFO("%s", qUtf8Printable(QString("  图像缩放: %1x%2 → %3x%4 (scale=%.3f)")
-                            .arg(image.cols).arg(image.rows).arg(newW).arg(newH).arg(scale)));
+                        LOG_INFO("%s", qUtf8Printable(
+                            QStringLiteral("  图像缩放: %1x%2 -> %3x%4 (scale=%5)")
+                                .arg(image.cols)
+                                .arg(image.rows)
+                                .arg(newW)
+                                .arg(newH)
+                                .arg(static_cast<double>(scale), 0, 'f', 3)));
                     }
                 }
 

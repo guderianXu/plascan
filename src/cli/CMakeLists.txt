@@ -55,6 +55,7 @@ if(TARGET superpoint)
     add_plascan_cli(feature_extract_cli cli_feature_extract.cpp
         "superpoint;feature_extractors_disk;feature_extractors_aliked;feature_extractors_traditional;Qt6::Core;${TORCH_LIBRARIES}"
         "${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint;${CMAKE_SOURCE_DIR}/src/core/feature_extractors;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked")
+    target_compile_definitions(feature_extract_cli PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
 
 # ── 特征匹配 ──

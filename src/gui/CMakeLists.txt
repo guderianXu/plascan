@@ -60,6 +60,11 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/core/overlap
   ${CMAKE_SOURCE_DIR}/src/core/terrain
   ${CMAKE_SOURCE_DIR}/src/core/sfm
+  ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+  ${CMAKE_SOURCE_DIR}/src/core/matchphototask/algorithm
+  ${CMAKE_SOURCE_DIR}/src/core/matchphototask/pair_selection
+  ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
+  ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
   ${CMAKE_SOURCE_DIR}/src/core/dense_match
   ${CMAKE_SOURCE_DIR}/src/core/pipeline
   ${CMAKE_SOURCE_DIR}/src/common
@@ -118,8 +123,14 @@ target_link_libraries(plascan_gui PRIVATE
 # 设置RPATH
 #==============================================================================
 
+if(WIN32)
+  set(PLASCAN_GUI_OUTPUT_NAME "plascan")
+else()
+  set(PLASCAN_GUI_OUTPUT_NAME "plascan_gui.bin")
+endif()
+
 set_target_properties(plascan_gui PROPERTIES
-  OUTPUT_NAME "plascan_gui.bin"
+  OUTPUT_NAME "${PLASCAN_GUI_OUTPUT_NAME}"
   RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
   CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
   BUILD_RPATH_USE_ORIGIN TRUE

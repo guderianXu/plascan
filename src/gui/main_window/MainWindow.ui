@@ -123,6 +123,7 @@
     <addaction name="separator"/>
     <addaction name="actionToggleGizmo"/>
     <addaction name="actionToggleCameras"/>
+    <addaction name="actionToggleHenanUniversityBrand"/>
     <addaction name="separator"/>
     <addaction name="actionFeatureVisualization"/>
     <addaction name="separator"/>
@@ -261,7 +262,10 @@
     <string>日志</string>
    </property>
    <property name="allowedAreas">
-    <set>Qt::BottomDockWidgetArea</set>
+    <set>Qt::AllDockWidgetAreas</set>
+   </property>
+   <property name="features">
+    <set>QDockWidget::DockWidgetClosable|QDockWidget::DockWidgetMovable|QDockWidget::DockWidgetFloatable</set>
    </property>
    <attribute name="dockWidgetArea">
     <number>8</number>
@@ -342,6 +346,20 @@
    </property>
    <property name="toolTip">
     <string>显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签</string>
+   </property>
+  </action>
+  <action name="actionToggleHenanUniversityBrand">
+   <property name="checkable">
+    <bool>true</bool>
+   </property>
+   <property name="checked">
+    <bool>true</bool>
+   </property>
+   <property name="text">
+    <string>河南大学校徽</string>
+   </property>
+   <property name="toolTip">
+    <string>显示或隐藏主工具栏中的河南大学校徽</string>
    </property>
   </action>
   <action name="actionFeatureVisualization">

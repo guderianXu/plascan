@@ -193,6 +193,10 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
                                           const QString &denseCloudPath,
                                           const QJsonObject &settings)
 {
+    const QString sourceData = settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
+    const QString sourcePath = settings.value(QStringLiteral("source_path")).toString(denseCloudPath);
+    const QString sourceDenseCloud = sourceData == QStringLiteral("point_cloud") ? sourcePath : QString();
+
     QJsonObject modelRecord = xjw::gui::project::makeModelResultRecord(
         utcNowIso(),
         QStringLiteral("mesh_reconstruction"),
@@ -200,10 +204,13 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
         taskResult.value(QStringLiteral("vertex_count")).toInt(-1),
         taskResult.value(QStringLiteral("face_count")).toInt(-1),
         QString(),
-        denseCloudPath,
-        denseCloudPath);
+        sourceDenseCloud,
+        sourceDenseCloud);
 
     mergeJsonObject(&modelRecord, taskResult);
+    modelRecord[QStringLiteral("source_data")] = sourceData;
+    modelRecord[QStringLiteral("source_path")] = sourcePath;
+    modelRecord[QStringLiteral("source_label")] = settings.value(QStringLiteral("source_label")).toString();
     modelRecord[QStringLiteral("requested_method")] = settings.value(QStringLiteral("method")).toString();
     modelRecord[QStringLiteral("requested_quality_profile")] =
         settings.contains(QStringLiteral("qualityProfile"))
@@ -376,24 +383,41 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         return;
     }
 
-    QString denseCloudPath = QDir::cleanPath(settings.value(QStringLiteral("denseCloudPath")).toString().trimmed());
-    if (!denseCloudPath.isEmpty())
+    const QString sourceData = settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
+    if (sourceData == QStringLiteral("depth_maps"))
     {
-        if (!QFileInfo::exists(denseCloudPath))
+        QMessageBox::warning(_parentWidget,
+                             QStringLiteral("生成模型"),
+                             QStringLiteral("当前版本还不能直接从深度图生成模型。\n"
+                                            "请先执行“深度图融合生成密集点云”，再选择点云作为源数据。"));
+        return;
+    }
+
+    QString inputPointCloudPath = QDir::cleanPath(
+        settings.value(QStringLiteral("source_path"))
+            .toString(settings.value(QStringLiteral("denseCloudPath")).toString())
+            .trimmed());
+    const QString dialogTitle = settings.contains(QStringLiteral("source_data"))
+        ? QStringLiteral("生成模型")
+        : QStringLiteral("网格重建");
+
+    if (!inputPointCloudPath.isEmpty())
+    {
+        if (!QFileInfo::exists(inputPointCloudPath))
         {
             QMessageBox::warning(_parentWidget,
-                                 QStringLiteral("网格重建"),
-                                 QStringLiteral("所选密集点云不存在：\n%1").arg(denseCloudPath));
+                                 dialogTitle,
+                                 QStringLiteral("所选源数据文件不存在：\n%1").arg(inputPointCloudPath));
             return;
         }
     }
     else
     {
         QString errorMessage;
-        if (!resolveLatestDenseCloudPath(_projectData, &denseCloudPath, &errorMessage))
+        if (!resolveLatestDenseCloudPath(_projectData, &inputPointCloudPath, &errorMessage))
         {
             QMessageBox::warning(_parentWidget,
-                                 QStringLiteral("网格重建"),
+                                 dialogTitle,
                                  QStringLiteral("%1\n请先完成密集点云生成。").arg(errorMessage));
             return;
         }
@@ -401,23 +425,25 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
 
     {
         QJsonObject meta = _projectData->metadata();
-        meta[QStringLiteral("mesh_reconstruction_settings")] = settings;
+        QJsonObject effectiveSettings = settings;
+        effectiveSettings[QStringLiteral("source_path")] = inputPointCloudPath;
+        meta[QStringLiteral("mesh_reconstruction_settings")] = effectiveSettings;
         xjw::gui::project::persistProjectMeta(_projectData, meta, false);
     }
 
-    const QString outputRoot = QFileInfo(denseCloudPath).absolutePath();
+    const QString outputRoot = QFileInfo(inputPointCloudPath).absolutePath();
 
-    emit meshProgressChanged(tr("正在初始化网格重建..."), 0);
+    emit meshProgressChanged(tr("正在初始化模型生成..."), 0);
     QPointer<ProjectModelManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     runModelAsyncTask(
         this,
-        [self, ownerGuard, denseCloudPath, outputRoot, settings, projectPath]() -> ModelTaskResult {
+        [self, ownerGuard, inputPointCloudPath, outputRoot, settings, projectPath]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
             {
-                task.errMsg = QStringLiteral("网格重建已取消：项目窗口已关闭");
+                task.errMsg = QStringLiteral("模型生成已取消：项目窗口已关闭");
                 return task;
             }
 
@@ -503,6 +529,13 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 cfg.simplifyTargetFaces = 28000;
             }
 
+            const int targetFaces = settings.value(QStringLiteral("simplifyTargetFaces"))
+                                        .toInt(settings.value(QStringLiteral("targetFaces")).toInt(0));
+            if (targetFaces > 0)
+            {
+                cfg.simplifyTargetFaces = qBound(1000, targetFaces, 2000000);
+            }
+
             const bool decimate = settings.value(QStringLiteral("decimate")).toBool(false);
             if (decimate)
             {
@@ -520,7 +553,7 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             cfg.verbose = false;
 
             xjw::mesh::workflow::MeshBuildRequest request;
-            request.pointCloudPath = denseCloudPath;
+            request.pointCloudPath = inputPointCloudPath;
             request.outputRoot = outputRoot;
             request.reconstruction = cfg;
             request.exportObj = xjw::mesh::workflow::exportObjRequested(settings);
@@ -530,31 +563,34 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
             applyWorkflowResult(&task, workflowResult);
+            task.result[QStringLiteral("source_path")] = inputPointCloudPath;
+            task.result[QStringLiteral("source_data")] =
+                settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
             return task;
         },
-        [self, ownerGuard, denseCloudPath, settings, projectPath](const ModelTaskResult &task) {
+        [self, ownerGuard, inputPointCloudPath, settings, projectPath, dialogTitle](const ModelTaskResult &task) {
             if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {
                 return;
             }
             emit self->meshProgressFinished(task.ok);
             handleTaskResult(self->_parentWidget,
-                             QStringLiteral("网格重建"),
-                             QStringLiteral("网格重建失败"),
+                             dialogTitle,
+                             QStringLiteral("模型生成失败"),
                              task,
-                             [self, denseCloudPath, settings](const QJsonObject &taskResult) {
+                             [self, inputPointCloudPath, settings, dialogTitle](const QJsonObject &taskResult) {
                 if (!self)
                 {
                     return;
                 }
                 const QJsonObject modelRecord = buildMeshReconstructionRecord(taskResult,
-                                                                               denseCloudPath,
+                                                                               inputPointCloudPath,
                                                                                settings);
                 persistModelResult(self->_projectData, modelRecord);
                 if (!settings.value(QStringLiteral("pipeline_mode")).toBool(false))
                 {
                     QMessageBox::information(self->_parentWidget,
-                                             QStringLiteral("网格重建"),
+                                             dialogTitle,
                                              meshReconstructionSuccessMessage(taskResult));
                 }
             });

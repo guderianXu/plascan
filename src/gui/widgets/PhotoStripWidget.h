@@ -25,6 +25,7 @@ public slots:
     void clearPhotos();
 
 signals:
+    void photoSelected(const QString &imagePath);
     void photoActivated(const QString &imagePath);
 
 private:

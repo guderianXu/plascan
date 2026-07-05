@@ -16,6 +16,8 @@ struct FeatureOutput
     std::vector<cv::KeyPoint> keypoints;
     std::vector<float>        scores;
     torch::Tensor             descriptors;   // [N, D] float32, L2 normalized
+    int                       imageWidth = 0;
+    int                       imageHeight = 0;
 
     bool empty() const { return keypoints.empty(); }
     int  count() const { return static_cast<int>(keypoints.size()); }
@@ -83,6 +85,11 @@ inline FeatureOutput tensorToFeatureOutput(
     auto scoreAcc  = scoresCpu.accessor<float, 2>();
 
     FeatureOutput result;
+    if (grayImage)
+    {
+        result.imageWidth = grayImage->cols;
+        result.imageHeight = grayImage->rows;
+    }
     std::vector<int> keptIndices;
     keptIndices.reserve(maxKeypoints > 0 ? std::min(maxKeypoints, N) : N);
     for (int i = 0; i < N; ++i)

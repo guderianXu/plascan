@@ -1,6 +1,7 @@
 #include <gtest/gtest.h>
 
 #include "compat/QtTorchMacroGuard.h"
+#include "FeatureData.h"
 #include "FeatureOutput.h"
 #include "FeatureFileIO.h"
 
@@ -29,15 +30,21 @@ TEST(FeatureFileIOTest, SiftRoundTripPreservesScaleAndOrientation)
     output.keypoints = {first, second};
     output.scores = {first.response, second.response};
     output.descriptors = torch::tensor({{0.1f, 0.2f}, {0.3f, 0.4f}}, torch::kFloat32);
+    output.imageWidth = 640;
+    output.imageHeight = 480;
 
     const QString path = tempDir.path() + QStringLiteral("/features.sift");
     ASSERT_TRUE(FeatureFileIO::write(path, QStringLiteral("image.jpg"), output, "sift"));
 
     QString imageName;
     FeatureOutput loaded;
-    ASSERT_TRUE(FeatureFileIO::read(path, imageName, loaded));
+    std::string algorithmName;
+    ASSERT_TRUE(FeatureFileIO::read(path, imageName, loaded, &algorithmName));
 
     EXPECT_EQ(imageName, QStringLiteral("image.jpg"));
+    EXPECT_EQ(algorithmName, "sift");
+    EXPECT_EQ(loaded.imageWidth, 640);
+    EXPECT_EQ(loaded.imageHeight, 480);
     ASSERT_EQ(loaded.keypoints.size(), 2u);
     EXPECT_FLOAT_EQ(loaded.keypoints[0].size, 4.5f);
     EXPECT_FLOAT_EQ(loaded.keypoints[0].angle, 123.0f);
@@ -47,6 +54,12 @@ TEST(FeatureFileIOTest, SiftRoundTripPreservesScaleAndOrientation)
     ASSERT_EQ(loaded.descriptors.size(0), 2);
     ASSERT_EQ(loaded.descriptors.size(1), 2);
     EXPECT_FLOAT_EQ(loaded.descriptors[1][0].item<float>(), 0.3f);
+
+    xjw::feature_extractors::FeatureData data;
+    ASSERT_TRUE(FeatureFileIO::readData(path, imageName, data));
+    EXPECT_EQ(data.sourceAlgorithm, "sift");
+    EXPECT_EQ(data.imageWidth, 640);
+    EXPECT_EQ(data.imageHeight, 480);
 }
 
 TEST(FeatureFileIOTest, VersionOneFilesRemainReadable)
@@ -81,4 +94,53 @@ TEST(FeatureFileIOTest, VersionOneFilesRemainReadable)
     EXPECT_FLOAT_EQ(loaded.keypoints[0].response, 0.8f);
     EXPECT_FLOAT_EQ(loaded.keypoints[0].size, 8.0f);
     EXPECT_FLOAT_EQ(loaded.keypoints[0].angle, -1.0f);
+}
+
+TEST(FeatureFileIOTest, DedodeRoundTripUsesDedicatedMagic)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    FeatureOutput output;
+    cv::KeyPoint keypoint;
+    keypoint.pt = cv::Point2f(12.0f, 24.0f);
+    keypoint.response = 0.9f;
+    keypoint.size = 8.0f;
+    output.keypoints = {keypoint};
+    output.scores = {0.9f};
+    output.descriptors = torch::tensor({{0.1f, 0.2f, 0.3f}}, torch::kFloat32);
+    output.imageWidth = 320;
+    output.imageHeight = 240;
+
+    const QString path = tempDir.path() + QStringLiteral("/features.dedode");
+    ASSERT_TRUE(FeatureFileIO::write(path, QStringLiteral("image.jpg"), output, "dedode"));
+    EXPECT_EQ(FeatureFileIO::peekAlgorithm(path), "dedode");
+    EXPECT_EQ(FeatureFileIO::peekCount(path), 1);
+
+    QString imageName;
+    FeatureOutput loaded;
+    std::string algorithmName;
+    ASSERT_TRUE(FeatureFileIO::read(path, imageName, loaded, &algorithmName));
+    EXPECT_EQ(algorithmName, "dedode");
+    EXPECT_EQ(loaded.imageWidth, 320);
+    EXPECT_EQ(loaded.imageHeight, 240);
+}
+
+TEST(FeatureFileIOTest, UnknownMagicIsRejected)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString path = tempDir.path() + QStringLiteral("/bad.sp");
+
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly));
+    file.write("BADC", 4);
+    file.close();
+
+    EXPECT_TRUE(FeatureFileIO::peekAlgorithm(path).empty());
+    EXPECT_EQ(FeatureFileIO::peekCount(path), -1);
+
+    QString imageName;
+    FeatureOutput loaded;
+    EXPECT_FALSE(FeatureFileIO::read(path, imageName, loaded));
 }

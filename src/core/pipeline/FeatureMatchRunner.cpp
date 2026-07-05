@@ -7,8 +7,9 @@
 
 #include "SuperGlueMatcher.h"
 #include "lightglue/LightGlueMatcher.h"
-#include "SuperGlueMatchIO.h"
-#include "MatchOutlierRejector.h"
+#include "MatchExportIO.h"
+#include "MatchFileIO.h"
+#include "MatchGeometryFilter.h"
 #include "FeatureFileIO.h"
 #include "SuperPoint.h"
 #include "TraditionalFeatureMatcher.h"
@@ -598,7 +599,7 @@ xjw::feature_match::MatchResult runTraditionalSiftFallback(
     const xjw::feature_extractors::FeatureData &fd1,
     const std::vector<cv::KeyPoint> &keypoints0,
     const std::vector<cv::KeyPoint> &keypoints1,
-    const superglue::OutlierFilterConfig &outlierConfig,
+    const xjw::feature_match::OutlierFilterConfig &outlierConfig,
     bool useCuda,
     int cudaDevice,
     int *rawMatchCount)
@@ -624,7 +625,7 @@ xjw::feature_match::MatchResult runTraditionalSiftFallback(
     }
 
     int inlierCount = fallback.numMatches;
-    return superglue::MatchOutlierRejector::filter(
+    return xjw::feature_match::MatchGeometryFilter::filter(
         fallback, keypoints0, keypoints1, outlierConfig, &inlierCount);
 }
 
@@ -807,7 +808,11 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     // ---- Python E2E branch (LoFTR / RoMa) ----â
     if (isPythonE2E)
     {
-        const QString pyModelType = config["model_type"].toString("outdoor");
+        const QString pyModelType = isLoftrMatch
+            ? config.value(QStringLiteral("loftr_model_type")).toString(
+                  config.value(QStringLiteral("model_type")).toString(QStringLiteral("outdoor")))
+            : config.value(QStringLiteral("roma_model_type")).toString(
+                  config.value(QStringLiteral("model_type")).toString(QStringLiteral("outdoor")));
 
         const QString scriptName = isLoftrMatch ? QStringLiteral("run_loftr.py") : QStringLiteral("match_roma.py");
         const QString scriptPath = findScriptFile(scriptName);
@@ -847,11 +852,26 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
             QStringList args;
             args << scriptPath << "-L" << imagePath0 << "-R" << imagePath1 << "-o" << outPath;
+            if (isLoftrMatch)
+            {
+                args << QStringLiteral("--min-conf")
+                     << QString::number(config.value(QStringLiteral("loftr_match_threshold")).toDouble(0.2));
+            }
             if (isRomaMatch)
+            {
                 args << "--scene" << pyModelType;
+                args << QStringLiteral("--threshold")
+                     << QString::number(config.value(QStringLiteral("roma_match_threshold")).toDouble(0.05));
+                args << QStringLiteral("--max-keypoints")
+                     << QString::number(config.value(QStringLiteral("roma_max_keypoints")).toInt(10000));
+            }
+            if (config.value(QStringLiteral("use_cuda")).toBool(true))
+            {
+                args << QStringLiteral("--cuda");
+            }
 
             QProcess process;
-            process.start("python3", args);
+            process.start(pythonExecutable(), args);
             if (!waitForProcessOrCancel(process,
                                         cancelFlag,
                                         300000,
@@ -892,31 +912,30 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
     sgConfig.sinkhorn_iterations = config["sinkhorn_iterations"].toInt(150);
     sgConfig.num_threads = config["num_threads"].toInt(-1);
     sgConfig.verbose = config["verbose"].toBool(false);
-    sgConfig.enable_csv_output = config["save_csv"].toBool(false);
-    sgConfig.enable_visualization = config["save_visualization"].toBool(false);
+    const bool saveCsvOutput = config["save_csv"].toBool(false);
     int lightGlueKeypointBudget = sgConfig.max_keypoints;
 
-    superglue::OutlierFilterConfig outlierConfig;
+    xjw::feature_match::OutlierFilterConfig outlierConfig;
     const QString outlierMethod = config["outlier_method"].toString("fundamental_usac_magsac");
     if (outlierMethod == "fundamental") 
     {
-        outlierConfig.method = superglue::OutlierMethod::FundamentalRansac;
+        outlierConfig.method = xjw::feature_match::OutlierMethod::FundamentalRansac;
     } 
     else if (outlierMethod == "fundamental_usac_magsac") 
     {
-        outlierConfig.method = superglue::OutlierMethod::FundamentalUsacMagsac;
+        outlierConfig.method = xjw::feature_match::OutlierMethod::FundamentalUsacMagsac;
     } 
     else if (outlierMethod == "homography") 
     {
-        outlierConfig.method = superglue::OutlierMethod::HomographyRansac;
+        outlierConfig.method = xjw::feature_match::OutlierMethod::HomographyRansac;
     } 
     else if (outlierMethod == "affine") 
     {
-        outlierConfig.method = superglue::OutlierMethod::AffineRansac;
+        outlierConfig.method = xjw::feature_match::OutlierMethod::AffineRansac;
     } 
     else 
     {
-        outlierConfig.method = superglue::OutlierMethod::None;
+        outlierConfig.method = xjw::feature_match::OutlierMethod::None;
     }
     outlierConfig.reprojThreshold = config["outlier_reproj_threshold"].toDouble(1.5);
     outlierConfig.confidence = config["outlier_confidence"].toDouble(0.9999);
@@ -1237,6 +1256,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
             xjw::feature_match::LightGlueConfig lgConfig;
             lgConfig.matcherModelPath = modelPath.toStdString();
             lgConfig.useCuda = sgConfig.use_cuda;
+            lgConfig.cudaDevice = sgConfig.cuda_device_id;
             lgConfig.scoreThreshold = sgConfig.match_threshold;
             xjw::feature_match::LightGlueMatcher testMatcher(lgConfig);
             if (!testMatcher.isLoaded())
@@ -1286,6 +1306,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                     xjw::feature_match::LightGlueConfig lgConfig;
                     lgConfig.matcherModelPath = modelPath.toStdString();
                     lgConfig.useCuda = sgConfig.use_cuda;
+                    lgConfig.cudaDevice = sgConfig.cuda_device_id;
                     lgConfig.scoreThreshold = sgConfig.match_threshold;
                     auto lgMatcher = std::make_unique<xjw::feature_match::LightGlueMatcher>(lgConfig);
                     if (!lgMatcher->isLoaded())
@@ -1495,7 +1516,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
 
                         // 粗差剔除
                         int inlierCount = matchResult.numMatches;
-                        matchResult = superglue::MatchOutlierRejector::filter(
+                        matchResult = xjw::feature_match::MatchGeometryFilter::filter(
                             matchResult, sp0.keypoints, sp1.keypoints,
                             outlierConfig, &inlierCount);
                         primaryLightGlueInliers = matchResult.numMatches;
@@ -1525,7 +1546,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                                     &retryWasLimited,
                                     &retryOomRetried);
                             int retryInlierCount = retryResult.numMatches;
-                            retryResult = superglue::MatchOutlierRejector::filter(
+                            retryResult = xjw::feature_match::MatchGeometryFilter::filter(
                                 retryResult, sp0.keypoints, sp1.keypoints,
                                 outlierConfig, &retryInlierCount);
 
@@ -1634,7 +1655,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         const QString imagePath0ForMeta = imagePath0Resolved.isEmpty() ? imageToken0 : imagePath0Resolved;
                         const QString imagePath1ForMeta = imagePath1Resolved.isEmpty() ? imageToken1 : imagePath1Resolved;
 
-                        if (!SuperGlueMatchIO::write(outputPath, baseName0, baseName1, matchResult)) 
+                        if (!xjw::feature_match::writeIndexedMatchFile(outputPath, baseName0, baseName1, matchResult))
                         {
                             LOG_ERROR("%s", qUtf8Printable(QString("保存匹配结果失败: %1").arg(outputPath)));
                             failCount.fetch_add(1);
@@ -1771,10 +1792,10 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         LOG_INFO("%s", qUtf8Printable(QString("  %1 匹配完成: %2 对")
                             .arg(canonicalPairName).arg(matchResult.numMatches)));
 
-                        if (sgConfig.enable_csv_output) 
+                        if (saveCsvOutput)
                         {
                             QString csvPath = QDir(outputDir).filePath(canonicalPairName + ".csv");
-                            SuperGlueMatchIO::exportToCSV(csvPath, matchResult);
+                            xjw::feature_match::exportMatchCsv(csvPath, matchResult);
                         }
 
                     } 

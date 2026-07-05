@@ -13,7 +13,8 @@ namespace main_window
 bool isStandaloneModelFile(const QString &path)
 {
     const QString suffix = QFileInfo(path).suffix().toLower();
-    static const QSet<QString> kSupportedSuffixes = {
+    static const QSet<QString> kSupportedSuffixes = 
+    {
         QStringLiteral("ply"),
         QStringLiteral("obj"),
         QStringLiteral("xyz"),

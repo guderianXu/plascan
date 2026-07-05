@@ -74,9 +74,14 @@ set(GUI_SOURCES
   widgets/TaskStatusWidget.cpp
   widgets/DualImageViewer.cpp
   widgets/DualImageViewer.ui
+  widgets/HenuBrandWidget.cpp
+  widgets/MatchValidityAnalyzer.cpp
   widgets/ObservationNetworkView.cpp
   widgets/WorkspaceCenterWidget.cpp
   widgets/WorkspaceCenterWidget.ui
+  dialogs/CreateTiePointsDialog.cpp
+  dialogs/ThinTiePointsDialog.cpp
+  dialogs/CleanTiePointsDialog.cpp
   dialogs/MatchViewerDialog.cpp
   dialogs/MatchPairSelectorDialog.cpp
   dialogs/BundleAdjustDialog.cpp
@@ -109,6 +114,7 @@ set(GUI_SOURCES
   dialogs/DepthMapEstimateDialog.cpp
   dialogs/DepthFusionDialog.cpp
   dialogs/DenseCloudRefineDialog.cpp
+  dialogs/GenerateModelDialog.cpp
   dialogs/MeshReconstructionDialog.cpp
   dialogs/TextureMappingDialog.cpp
   dialogs/ModelExportDialog.cpp
@@ -193,8 +199,13 @@ set(GUI_HEADERS
   widgets/DisparityHeatmapOverlay.h
   widgets/TaskStatusWidget.h
   widgets/DualImageViewer.h
+  widgets/HenuBrandWidget.h
+  widgets/MatchValidityAnalyzer.h
   widgets/ObservationNetworkView.h
   widgets/WorkspaceCenterWidget.h
+  dialogs/CreateTiePointsDialog.h
+  dialogs/ThinTiePointsDialog.h
+  dialogs/CleanTiePointsDialog.h
   dialogs/MatchViewerDialog.h
   dialogs/MatchPairSelectorDialog.h
   dialogs/BundleAdjustDialog.h
@@ -223,6 +234,7 @@ set(GUI_HEADERS
   dialogs/DepthMapEstimateDialog.h
   dialogs/DepthFusionDialog.h
   dialogs/DenseCloudRefineDialog.h
+  dialogs/GenerateModelDialog.h
   dialogs/MeshReconstructionDialog.h
   dialogs/TextureMappingDialog.h
   dialogs/ModelExportDialog.h
@@ -266,12 +278,16 @@ set(GUI_PROJECT_SOURCES
 set(GUI_TASK_SOURCES
   tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
+  ../core/pipeline/AerialTriangulationWorkflow.cpp
   ../core/pipeline/FeatureMatchRunner.cpp
   ../core/pipeline/ReconstructionPrerequisiteReport.cpp
   ../core/pipeline/SFMService.cpp
 )
 
 set(GUI_DIALOG_SOURCES
+  dialogs/CreateTiePointsDialog.cpp
+  dialogs/ThinTiePointsDialog.cpp
+  dialogs/CleanTiePointsDialog.cpp
   dialogs/MatchViewerDialog.cpp
   dialogs/MatchPairSelectorDialog.cpp
   dialogs/BundleAdjustDialog.cpp
@@ -304,6 +320,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/DepthMapEstimateDialog.cpp
   dialogs/DepthFusionDialog.cpp
   dialogs/DenseCloudRefineDialog.cpp
+  dialogs/GenerateModelDialog.cpp
   dialogs/MeshReconstructionDialog.cpp
   dialogs/TextureMappingDialog.cpp
   dialogs/ModelExportDialog.cpp

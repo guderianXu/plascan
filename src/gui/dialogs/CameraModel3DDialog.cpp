@@ -44,6 +44,7 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QRegularExpression>
+#include <QSizePolicy>
 #include <QStringList>
 #include <algorithm>
 #include <cmath>
@@ -558,7 +559,7 @@ PlyPreviewResult readBinaryPlyPreview(const QString &plyPath,
 
 } // namespace
 
-// 构造函数：设置最小尺寸，启用鼠标追踪（悬停检测需要），
+// 构造函数：设置基础可用尺寸，启用鼠标追踪（悬停检测需要），
 // 设置默认视角为俯仰 -25°、偏航 35°（斜上方看向场景）
 CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     : QOpenGLWidget(parent)
@@ -571,7 +572,8 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     format.setSamples(4);
     setFormat(format);
 
-    setMinimumSize(760, 520);
+    setMinimumSize(240, 160);
+    setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
     setMouseTracking(true); // 启用鼠标追踪，以便在无按键时检测悬停轴
     _viewRot = QQuaternion::fromEulerAngles(-25.0f, 35.0f, 0.0f); // 默认斜视角
     setFocusPolicy(Qt::StrongFocus);
@@ -657,20 +659,6 @@ void CameraSceneWidget::clearHighlightedCamera()
     _highlightedCameraPath.clear();
     _highlightedCameraName.clear();
     update();
-}
-
-void CameraSceneWidget::setShowWorldOrigin(bool show)
-{
-    if (_showWorldOrigin != show)
-    {
-        _showWorldOrigin = show;
-        update();
-    }
-}
-
-bool CameraSceneWidget::isWorldOriginVisible() const
-{
-    return _showWorldOrigin;
 }
 
 // 取消未完成的加载（递增 generation 令旧回调自行失效）
@@ -983,9 +971,14 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
     _preferModelPointRender = false;
     _cacheDirty = true;
     _gpuDirty = true;
+    _loading = true;
+    _plyLoadProgressPercent = 0;
+    _plyLoadProgressText = QStringLiteral("正在加载 OBJ 模型...");
+    update();
     LOG_INFO(QStringLiteral("[3D] 正在加载 OBJ 模型: %1").arg(objPath));
 
     const int gen = _loadGen;
+    emit plyLoadProgressChanged(gen, 0, _plyLoadProgressText);
     QPointer<CameraSceneWidget> self(this);
     auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
     connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
@@ -1004,25 +997,63 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
                 self->_cloud = std::move(*result);
             }
             self->_preferModelPointRender = !self->_cloud.hasFaces();
-            LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面")
-                         .arg(self->_cloud.size())
-                         .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0));
+            self->_loading = false;
+            self->_plyLoadProgressPercent = -1;
+            self->_plyLoadProgressText.clear();
+            if (self->_cloud.size() == 0)
+            {
+                LOG_ERROR(QStringLiteral("[3D] OBJ 模型加载失败或为空"));
+            }
+            else
+            {
+                LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面")
+                             .arg(self->_cloud.size())
+                             .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0));
+            }
             self->invalidateCache();
             self->_gpuDirty = true;
             self->update();
         }
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([objPath]() -> std::shared_ptr<RenderCloud>
+    watcher->setFuture(QtConcurrent::run([objPath, self, gen]() -> std::shared_ptr<RenderCloud>
     {
+        auto reportProgress = [self, gen](int percent, const QString &statusText)
+        {
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, gen, percent, statusText]()
+            {
+                if (!self)
+                {
+                    return;
+                }
+                emit self->plyLoadProgressChanged(gen, percent, statusText);
+            }, Qt::QueuedConnection);
+        };
+
         try
         {
-            return plapoint::io::readObj<float>(objPath.toStdString());
+            reportProgress(5, QStringLiteral("正在解析 OBJ 模型..."));
+            auto cloud = plapoint::io::readObj<float>(objPath.toStdString());
+            if (!cloud || cloud->size() == 0)
+            {
+                reportProgress(100, QStringLiteral("OBJ 模型为空"));
+                return nullptr;
+            }
+            reportProgress(96,
+                           QStringLiteral("正在上传 OBJ 模型 (%1 顶点 / %2 面)...")
+                               .arg(cloud->size())
+                               .arg(cloud->hasFaces() ? static_cast<int>(cloud->faces()->rows()) : 0));
+            return cloud;
         }
         catch (const std::exception &e)
         {
             LOG_ERROR(QStringLiteral("[3D] OBJ 加载失败: %1").arg(QString::fromStdString(e.what())));
         }
+        reportProgress(100, QStringLiteral("OBJ 加载失败"));
         return nullptr;
     }));
 }
@@ -1123,6 +1154,44 @@ float CameraSceneWidget::cameraFrustumBase() const
     return _cachedCameraFrustumBase;
 }
 
+float CameraSceneWidget::cameraImagePlaneHalfExtent() const
+{
+    if (_cacheDirty) invalidateCache();
+
+    float halfExtent = qMax(_cachedCameraFrustumBase * 3.8f, _cachedRadius * 0.055f);
+    if (_poses.size() > 1)
+    {
+        std::vector<float> nearestDistances;
+        nearestDistances.reserve(static_cast<size_t>(_poses.size()));
+        for (qsizetype i = 0; i < _poses.size(); ++i)
+        {
+            float nearest = std::numeric_limits<float>::max();
+            for (qsizetype j = 0; j < _poses.size(); ++j)
+            {
+                if (i == j)
+                {
+                    continue;
+                }
+                nearest = qMin(nearest, (_poses[i].center - _poses[j].center).length());
+            }
+            if (std::isfinite(nearest))
+            {
+                nearestDistances.push_back(nearest);
+            }
+        }
+        if (!nearestDistances.empty())
+        {
+            const size_t medianIndex = nearestDistances.size() / 2;
+            std::nth_element(nearestDistances.begin(),
+                             nearestDistances.begin() + static_cast<std::ptrdiff_t>(medianIndex),
+                             nearestDistances.end());
+            halfExtent = qMin(halfExtent, nearestDistances[medianIndex] * 0.48f);
+        }
+    }
+
+    return qBound(0.2f, halfExtent, qMax(0.5f, _cachedRadius * 0.12f));
+}
+
 bool CameraSceneWidget::isCameraHighlighted(const CameraPose &pose) const
 {
     if (!_highlightedCameraPath.isEmpty())
@@ -1157,6 +1226,45 @@ QString CameraSceneWidget::normalizedCameraPath(const QString &imagePath) const
     }
 
     return QDir::cleanPath(QFileInfo(imagePath).absoluteFilePath());
+}
+
+void CameraSceneWidget::drawFloorPivotCross(QPainter &painter) const
+{
+    if (_cacheDirty) invalidateCache();
+
+    const QVector3D floorPivot((_cachedAABBMin.x() + _cachedAABBMax.x()) * 0.5f,
+                               (_cachedAABBMin.y() + _cachedAABBMax.y()) * 0.5f,
+                               _cachedAABBMin.z());
+    const float halfSize = qMax(0.25f, _cachedRadius * 0.045f);
+
+    bool okCenter = false;
+    bool okX1 = false;
+    bool okX2 = false;
+    bool okY1 = false;
+    bool okY2 = false;
+    const QPointF c = projectToScreen(floorPivot, &okCenter);
+    const QPointF x1 = projectToScreen(floorPivot - QVector3D(halfSize, 0.0f, 0.0f), &okX1);
+    const QPointF x2 = projectToScreen(floorPivot + QVector3D(halfSize, 0.0f, 0.0f), &okX2);
+    const QPointF y1 = projectToScreen(floorPivot - QVector3D(0.0f, halfSize, 0.0f), &okY1);
+    const QPointF y2 = projectToScreen(floorPivot + QVector3D(0.0f, halfSize, 0.0f), &okY2);
+    if (!okCenter)
+    {
+        return;
+    }
+
+    painter.setBrush(Qt::NoBrush);
+    painter.setPen(QPen(QColor(125, 128, 132, 150), 1.4));
+    if (okX1 && okX2)
+    {
+        painter.drawLine(x1, x2);
+    }
+    if (okY1 && okY2)
+    {
+        painter.drawLine(y1, y2);
+    }
+    painter.setPen(QPen(QColor(105, 108, 112, 170), 1.0));
+    painter.drawLine(c + QPointF(-4.0, 0.0), c + QPointF(4.0, 0.0));
+    painter.drawLine(c + QPointF(0.0, -4.0), c + QPointF(0.0, 4.0));
 }
 
 // Gizmo 操控球的世界中心点（等于场景质心）
@@ -1856,23 +1964,14 @@ void CameraSceneWidget::drawOverlay()
 
     if (_showCameras)
     {
-        const float frustumBase = cameraFrustumBase();
+        const float planeHalfExtent = cameraImagePlaneHalfExtent();
+        const float planeHalfHeight = planeHalfExtent * 0.68f;
         const int labelBudget = maxVisibleCameraLabels();
         const int cameraCount = static_cast<int>(_poses.size());
         const bool drawAllCameraLabels = _poses.size() <= maxVisibleCameraLabels();
         const int cameraLabelStride = drawAllCameraLabels
             ? 1
             : qMax(1, static_cast<int>(std::ceil(double(cameraCount) / double(qMax(1, labelBudget)))));
-        auto drawLine3D = [&](const QVector3D &a, const QVector3D &b, const QPen &pen)
-        {
-            bool okA = false;
-            bool okB = false;
-            const QPointF pa = projectToScreen(a, &okA);
-            const QPointF pb = projectToScreen(b, &okB);
-            if (!okA || !okB) return;
-            painter.setPen(pen);
-            painter.drawLine(pa, pb);
-        };
 
         if (_poses.isEmpty())
         {
@@ -1884,49 +1983,49 @@ void CameraSceneWidget::drawOverlay()
         {
             const CameraPose &pose = _poses.at(poseIndex);
             const bool highlighted = isCameraHighlighted(pose);
-            const QColor frustumColor = highlighted ? QColor(245, 90, 105, 215)
-                                                    : QColor(42, 122, 200, cameraCount > 200 ? 105 : 165);
-            const QColor centerColor = highlighted ? QColor(255, 70, 95, 235)
-                                                   : QColor(32, 100, 180, 210);
-            const qreal frustumLineWidth = highlighted ? 2.2 : (cameraCount > 200 ? 0.8 : 1.3);
+            const QColor selectedCameraFill(255, 86, 104, 185);
+            const QColor normalCameraFill(40, 118, 190, cameraCount > 200 ? 88 : 150);
+            const QColor planeOutlineColor = highlighted ? QColor(210, 42, 62, 235)
+                                                         : QColor(32, 92, 160, cameraCount > 200 ? 115 : 170);
+            const QColor labelStemColor = highlighted ? QColor(95, 24, 34, 220)
+                                                      : QColor(45, 45, 45, cameraCount > 120 ? 150 : 190);
             bool ok = false;
             const QPointF pc = projectToScreen(pose.center, &ok);
             if (!ok) continue;
-            painter.setBrush(centerColor);
-            if (highlighted)
-            {
-                painter.setPen(QPen(QColor(255, 255, 255, 210), 1.0));
-            }
-            else
-            {
-                painter.setPen(Qt::NoPen);
-            }
-            painter.drawEllipse(pc, highlighted ? 5.8 : 4.0, highlighted ? 5.8 : 4.0);
-            if (highlighted)
-            {
-                painter.setPen(QPen(centerColor, 1.2));
-                painter.setBrush(Qt::NoBrush);
-                painter.drawEllipse(pc, 8.2, 8.2);
-            }
 
             const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
             const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
-            const QVector3D forward(pose.rotation(0, 2), pose.rotation(1, 2), pose.rotation(2, 2));
-            const float base = frustumBase;
-            const QVector3D fc = pose.center + forward * (base * 2.2f);
-            const QVector3D p1 = fc + right * base + up * base;
-            const QVector3D p2 = fc - right * base + up * base;
-            const QVector3D p3 = fc - right * base - up * base;
-            const QVector3D p4 = fc + right * base - up * base;
-            const QPen frustumPen(frustumColor, frustumLineWidth);
-            drawLine3D(pose.center, p1, frustumPen);
-            drawLine3D(pose.center, p2, frustumPen);
-            drawLine3D(pose.center, p3, frustumPen);
-            drawLine3D(pose.center, p4, frustumPen);
-            drawLine3D(p1, p2, frustumPen);
-            drawLine3D(p2, p3, frustumPen);
-            drawLine3D(p3, p4, frustumPen);
-            drawLine3D(p4, p1, frustumPen);
+            const QVector3D p1 = pose.center + right * planeHalfExtent + up * planeHalfHeight;
+            const QVector3D p2 = pose.center - right * planeHalfExtent + up * planeHalfHeight;
+            const QVector3D p3 = pose.center - right * planeHalfExtent - up * planeHalfHeight;
+            const QVector3D p4 = pose.center + right * planeHalfExtent - up * planeHalfHeight;
+
+            bool ok1 = false;
+            bool ok2 = false;
+            bool ok3 = false;
+            bool ok4 = false;
+            const QPointF pp1 = projectToScreen(p1, &ok1);
+            const QPointF pp2 = projectToScreen(p2, &ok2);
+            const QPointF pp3 = projectToScreen(p3, &ok3);
+            const QPointF pp4 = projectToScreen(p4, &ok4);
+            if (ok1 && ok2 && ok3 && ok4)
+            {
+                QPolygonF imagePlane;
+                imagePlane << pp1 << pp2 << pp3 << pp4;
+                painter.setPen(Qt::NoPen);
+                painter.setBrush(highlighted ? selectedCameraFill : normalCameraFill);
+                painter.drawPolygon(imagePlane);
+                painter.setBrush(Qt::NoBrush);
+                const QPen planeOutlinePen(planeOutlineColor, highlighted ? 2.2 : 1.1);
+                painter.setPen(planeOutlinePen);
+                painter.drawPolygon(imagePlane);
+                if (highlighted)
+                {
+                    painter.setPen(QPen(QColor(255, 245, 248, 210), 1.0));
+                    painter.drawLine((pp1 + pp3) * 0.5, (pp2 + pp4) * 0.5);
+                }
+            }
+
             const bool drawCameraLabel = highlighted
                 || drawAllCameraLabels
                 || (poseIndex == 0)
@@ -1938,27 +2037,20 @@ void CameraSceneWidget::drawOverlay()
                 const QString label = QFileInfo(labelSource).fileName().isEmpty()
                     ? pose.name
                     : QFileInfo(labelSource).fileName();
+                const QPointF planeTop = ok1 && ok2 ? (pp1 + pp2) * 0.5 : pc;
+                const qreal labelLift = highlighted ? 30.0 : 24.0;
+                const QPointF labelAnchor = planeTop + QPointF(0.0, -labelLift);
+                painter.setPen(QPen(labelStemColor, highlighted ? 1.35 : 1.0));
+                painter.drawLine(planeTop, labelAnchor);
                 painter.setPen(highlighted
                     ? QColor(210, 45, 65, 230)
                     : (drawAllCameraLabels ? QColor(60, 60, 60) : QColor(45, 45, 45, 170)));
-                painter.drawText(pc + QPointF(7.0, -7.0), label);
+                painter.drawText(labelAnchor + QPointF(5.0, -2.0), label);
             }
         }
     }
 
-    bool okO = false;
-    const QPointF o2d = projectToScreen(QVector3D(0, 0, 0), &okO);
-    if (okO)
-    {
-        if (_showWorldOrigin)
-        {
-            painter.setPen(QPen(QColor(80, 80, 80, 170), 1.2));
-            painter.drawLine(o2d + QPointF(-6, 0), o2d + QPointF(6, 0));
-            painter.drawLine(o2d + QPointF(0, -6), o2d + QPointF(0, 6));
-        }
-        painter.setPen(QColor(80, 80, 80, 170));
-        painter.drawText(o2d + QPointF(7, -7), QStringLiteral("XYZ(0,0,0)"));
-    }
+    drawFloorPivotCross(painter);
 
     const QPoint origin(width() - 64, height() - 64);
     const QVector3D ex = applyViewRotation(QVector3D(1, 0, 0)).normalized();
