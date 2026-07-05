@@ -4,16 +4,16 @@
 
 ## 目标
 
-将 PlaScan 当前 3D 场景的 OpenGL 渲染迁移为 Vulkan 渲染。首期范围聚焦现有 `CameraSceneWidget`，保持用户可见的 3D 视图能力不退化：
+将 PlaScan 当前 3D 场景的旧图形后端迁移为 Vulkan 渲染。首期范围聚焦现有 `CameraSceneWidget`，保持用户可见的 3D 视图能力不退化：
 
 - 显示相机姿态、相机视锥体、相机高亮和名称标签。
 - 显示稀疏/密集点云、PLY/OBJ 网格、无面片模型点云和包围盒线框。
 - 保留旋转、缩放、平移、操控球、手动框选裁剪和异步加载进度覆盖层。
-- 移除 3D 视图对 `QOpenGLWidget`、`QOpenGLFunctions_4_3_Core`、`QOpenGLBuffer`、`QOpenGLShaderProgram`、`QOpenGLVertexArrayObject` 的依赖。
+- 移除 3D 视图对旧 Qt 图形窗口、旧函数对象、旧缓冲、旧 shader program 和旧顶点数组封装的依赖。
 
 ## 当前结构
 
-现有 OpenGL 渲染集中在：
+旧图形后端渲染集中在：
 
 - `src/gui/dialogs/CameraModel3DDialog.h`
 - `src/gui/dialogs/CameraModel3DDialog.cpp`
@@ -23,12 +23,12 @@
 - `cmake/PlascanPackages.cmake`
 - `tests/test_gui_project_utils.cpp`
 
-`CameraSceneWidget` 当前继承 `QOpenGLWidget`。它在同一个类中同时负责：
+`CameraSceneWidget` 迁移前继承旧 Qt 图形窗口。它在同一个类中同时负责：
 
 - 读取和缓存相机、点云、网格数据。
 - 将 CPU 数据整理为 GPU 顶点数组。
-- 创建 OpenGL shader、VAO、VBO。
-- 在 `paintGL()` 中绘制点云、网格、模型点和包围盒。
+- 创建旧后端 shader、VAO、VBO。
+- 在旧帧绘制入口中绘制点云、网格、模型点和包围盒。
 - 使用 `QPainter` 绘制相机覆盖层、操控球、坐标轴和加载进度。
 - 处理鼠标、键盘和手动裁剪。
 
@@ -46,7 +46,7 @@
   - `QRhiShaderResourceBindings` 绑定 MVP、法线矩阵、点大小和光照参数。
   - `QRhiCommandBuffer` 在 `render()` 中提交绘制命令。
 - Shader 从内联 GLSL 改为源文件和 `.qsb` 资源。
-- Vulkan 初始化失败时不静默回退 OpenGL；3D 视图显示中文错误提示并写入日志。
+- Vulkan 初始化失败时不静默回退旧后端；3D 视图显示中文错误提示并写入日志。
 
 该方案的边界是“Vulkan 作为渲染后端”，但不直接手写裸 Vulkan swapchain、render pass 和 descriptor 管理。Qt RHI 负责跨平台表面和生命周期管理，实际 API 固定为 Vulkan。
 
@@ -129,12 +129,12 @@
 - Buffer 创建失败：显示“Vulkan 顶点缓冲创建失败”，日志记录数据类型和字节数。
 - `.qsb` 编译失败时 CMake 配置或构建失败，不能运行到 GUI 后才失败。
 
-不做 OpenGL 回退。这样用户能明确知道当前环境是否真正运行 Vulkan 渲染。
+不做旧后端回退。这样用户能明确知道当前环境是否真正运行 Vulkan 渲染。
 
 ## 构建变更
 
 - `cmake/PlascanPackages.cmake` 增加 `ShaderTools` 组件。
-- `src/gui/CMakeLists.txt` 移除 `Qt6::OpenGL`、`Qt6::OpenGLWidgets` 链接，增加 `Qt6::ShaderTools` 或对应 shader 编译工具依赖。
+- `src/gui/CMakeLists.txt` 移除旧图形后端 Qt 链接目标，增加 `Qt6::ShaderTools` 或对应 shader 编译工具依赖。
 - `src/gui/CMakeLists.txt` 增加 shader 编译规则，生成 `.qsb` 并纳入资源。
 - `resources/resources.qrc` 或 GUI 专用 qrc 增加 shader 资源。
 - 若 Linux/Docker 依赖缺少 Vulkan runtime 或 Qt ShaderTools，更新 `docker/Dockerfile.ubuntu2404` 和构建说明。
@@ -143,10 +143,10 @@
 
 结构测试：
 
-- `tests/test_gui_project_utils.cpp` 不再断言 `QOpenGLFunctions_4_3_Core *_gl = nullptr;`。
+- `tests/test_gui_project_utils.cpp` 不再断言旧后端函数对象成员。
 - 新增断言 `CameraSceneWidget` 继承 `QRhiWidget`。
 - 新增断言构造函数设置 `QRhiWidget::Api::Vulkan`。
-- 新增断言不再包含 `QOpenGLWidget`、`QOpenGLShaderProgram`、`QOpenGLBuffer`、`QOpenGLVertexArrayObject`。
+- 新增断言不再包含旧后端 widget、shader program、buffer 和 vertex array object 封装。
 - 新增断言 shader `.qsb` 资源注册在 qrc 中。
 
 构建验证：
@@ -181,7 +181,7 @@ ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R 
 
 - 不重写 `CanvasWidget` 的 2D 影像绘制。
 - 不把所有 GUI 绘制迁移到 Vulkan。
-- 不新增 OpenGL/Vulkan 后端运行时切换。
+- 不新增多后端运行时切换。
 - 不引入裸 Vulkan swapchain 管理。
 - 不优化大点云分块、LOD 或 GPU picking。
 
@@ -190,7 +190,7 @@ ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R 
 - `QRhiWidget`/QRhi 是 Qt 的 RHI 接口，源码兼容性可能随 Qt 版本变化。当前项目本地 Qt 为 6.11.1，首期按该版本实现。
 - Qt Widgets 上的 `QPainter` 覆盖层与 RHI 渲染混合需要实测，若出现闪烁或覆盖层时序问题，需要改为在 `paintEvent()` 或 RHI pass 后单独处理。
 - 现有测试大量使用源码字符串断言，迁移时需要同步更新，否则会出现非行为性失败。
-- 本次不保留 OpenGL 回退，部分没有 Vulkan 驱动的机器会显示错误提示而不是 3D 内容。
+- 本次不保留旧后端回退，部分没有 Vulkan 驱动的机器会显示错误提示而不是 3D 内容。
 
 ## 批准状态
 

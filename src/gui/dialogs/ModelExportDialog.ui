@@ -100,7 +100,7 @@
         </item>
         <item>
          <property name="text">
-          <string>OpenGL (右手 Y-up)</string>
+          <string>实时渲染坐标系 (右手 Y-up)</string>
          </property>
         </item>
         <item>

@@ -1288,7 +1288,7 @@ Replace `#include "data/PointCloud.h"` with `#include <plapoint/core/point_cloud
 Replace:
 - `m_cloud.positions()`, `.normals()`, `.colors()` → matrix access + PointView
 - `PointCloudIO::readPointCloud()` / `loadPointCloudFromXyz()` → plapoint I/O
-- OpenGL rendering loops: `cloud.positions()[i]` → `cloud[i].x(), cloud[i].y(), cloud[i].z()`
+- Legacy 3D rendering loops: `cloud.positions()[i]` → `cloud[i].x(), cloud[i].y(), cloud[i].z()`
 - Manual pruning operations on `PointCloud` → same operations on plapoint::PointCloud (build new Nx3 matrix with kept points)
 
 - [ ] **Step 3: Update gui/CMakeLists.txt**

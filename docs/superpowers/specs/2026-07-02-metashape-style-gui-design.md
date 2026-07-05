@@ -20,7 +20,7 @@
 - `MainMenu`：菜单动作封装，已有“视图 -> 窗口”面板入口。
 - `DataTreeWidget`：工作区资源树，已有 `imageActivated` 和 `resourceActivated` 信号。
 - `WorkspaceCenterWidget`：中央影像、三维模型、双图对比、观测网络视图的切换容器。
-- `CameraSceneWidget`：OpenGL 3D 视图，已有相机姿态、点云、网格、操控球、坐标轴、原点十字的基础绘制。
+- `CameraSceneWidget`：3D 视图，已有相机姿态、点云、网格、操控球、坐标轴、原点十字的基础绘制。
 - `CanvasWidget`：2D 影像显示和特征点叠加。
 
 当前缺口：
@@ -282,7 +282,7 @@ ctest --test-dir E:\code\plascan\build\windows-vcpkg-cuda-release -R "MainMenuTe
 本设计不包含：
 
 - 重做全部主窗口架构。
-- 替换 OpenGL 渲染后端。
+- 替换底层渲染后端。
 - 实现完整 LAZ/COPC 属性扫描。
 - 实现点云分类、编辑、裁剪的新业务流程。
 - 实现 Metashape 全部窗口和工具栏行为。

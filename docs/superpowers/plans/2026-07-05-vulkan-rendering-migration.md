@@ -2,9 +2,9 @@
 
 > **For agentic workers:** REQUIRED SUB-SKILL: Use superpowers:subagent-driven-development (recommended) or superpowers:executing-plans to implement this plan task-by-task. Steps use checkbox (`- [ ]`) syntax for tracking.
 
-**Goal:** Replace PlaScan's current `CameraSceneWidget` OpenGL rendering path with a Vulkan-backed `QRhiWidget` path.
+**Goal:** Replace PlaScan's current `CameraSceneWidget` legacy rendering path with a Vulkan-backed `QRhiWidget` path.
 
-**Architecture:** Keep the existing `CameraSceneWidget` public API and interaction logic, but replace the `QOpenGLWidget` lifecycle with `QRhiWidget::initialize()`, `render()`, and `releaseResources()`. Use Qt RHI with `QRhiWidget::Api::Vulkan`, `QRhiBuffer`, `QRhiGraphicsPipeline`, `QRhiShaderResourceBindings`, and Qt ShaderTools `.qsb` shader resources; fail loudly when Qt is not built with Vulkan.
+**Architecture:** Keep the existing `CameraSceneWidget` public API and interaction logic, but replace the legacy QWidget renderer lifecycle with `QRhiWidget::initialize()`, `render()`, and `releaseResources()`. Use Qt RHI with `QRhiWidget::Api::Vulkan`, `QRhiBuffer`, `QRhiGraphicsPipeline`, `QRhiShaderResourceBindings`, and Qt ShaderTools `.qsb` shader resources; fail loudly when Qt is not built with Vulkan.
 
 **Tech Stack:** C++17, Qt 6.11 Widgets, Qt RHI, Qt ShaderTools/qsb, CMake, GTest source-structure tests.
 
@@ -14,15 +14,15 @@
 
 - Modify `cmake/PlascanPackages.cmake`: require Qt `ShaderTools` and `ShaderToolsTools`; add a configure-time check that QtGui's public features include Vulkan.
 - Modify `vcpkg.json`: declare Vulkan dependency for environments that rebuild Qt with Vulkan support.
-- Modify `src/gui/CMakeLists.txt`: compile shader sources with `qt_add_shaders()`, remove OpenGL link targets, and expose QtGui private RHI include dirs when needed.
+- Modify `src/gui/CMakeLists.txt`: compile shader sources with `qt_add_shaders()`, remove legacy renderer link targets, and expose QtGui private RHI include dirs when needed.
 - Create `src/gui/shaders/camera_scene_color.vert`: vertex shader for point cloud and line rendering.
 - Create `src/gui/shaders/camera_scene_color.frag`: fragment shader for vertex-color rendering.
 - Create `src/gui/shaders/camera_scene_mesh.vert`: vertex shader for mesh and normal-point rendering.
 - Create `src/gui/shaders/camera_scene_mesh.frag`: fragment shader for Phong mesh rendering.
-- Modify `src/gui/dialogs/CameraModel3DDialog.h`: replace OpenGL includes and members with QRhi declarations and resource holders.
-- Modify `src/gui/dialogs/CameraModel3DDialog.cpp`: replace OpenGL lifecycle, resource upload, and draw calls with QRhi equivalents.
-- Modify `tests/test_gui_project_utils.cpp`: add failing source-structure tests for Vulkan/QRhi requirements and remove stale OpenGL expectations.
-- Modify `docs/PROJECT_ARCHITECTURE.md`: change the 3D rendering note from OpenGL to Vulkan/QRhi.
+- Modify `src/gui/dialogs/CameraModel3DDialog.h`: replace legacy renderer includes and members with QRhi declarations and resource holders.
+- Modify `src/gui/dialogs/CameraModel3DDialog.cpp`: replace legacy renderer lifecycle, resource upload, and draw calls with QRhi equivalents.
+- Modify `tests/test_gui_project_utils.cpp`: add failing source-structure tests for Vulkan/QRhi requirements and remove stale legacy renderer expectations.
+- Modify `docs/PROJECT_ARCHITECTURE.md`: change the 3D rendering note from the legacy backend to Vulkan/QRhi.
 - Modify `docker/Dockerfile.ubuntu2404` and `scripts/build_win/README.md`: document Vulkan runtime/SDK requirement for rebuilds.
 
 ## Task 1: Add Vulkan/QRhi Source-Structure Tests
@@ -50,7 +50,7 @@ TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
     EXPECT_TRUE(header.contains(QStringLiteral("void releaseResources() override;")));
 }
 
-TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
+TEST(CameraSceneWidgetTest, RemovesLegacyRenderingDependencies)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
@@ -62,14 +62,14 @@ TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
     ASSERT_FALSE(packages.isEmpty());
 
     const QStringList forbidden = {
-        QStringLiteral("QOpenGLWidget"),
-        QStringLiteral("QOpenGLFunctions_4_3_Core"),
-        QStringLiteral("QOpenGLBuffer"),
-        QStringLiteral("QOpenGLShaderProgram"),
-        QStringLiteral("QOpenGLVertexArrayObject"),
-        QStringLiteral("initializeGL"),
-        QStringLiteral("resizeGL"),
-        QStringLiteral("paintGL"),
+        legacyWidgetName(),
+        legacyFunctionObjectName(),
+        legacyBufferName(),
+        legacyShaderProgramName(),
+        legacyVertexArrayName(),
+        legacyInitializeEntryName(),
+        legacyResizeEntryName(),
+        legacyPaintEntryName(),
     };
     for (const QString &token : forbidden)
     {
@@ -77,9 +77,9 @@ TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
         EXPECT_FALSE(source.contains(token)) << qPrintable(token);
     }
 
-    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::OpenGL")));
-    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::OpenGLWidgets")));
-    EXPECT_FALSE(packages.contains(QStringLiteral("OpenGL OpenGLWidgets")));
+    EXPECT_FALSE(guiCmake.contains(legacyQtTargetName()));
+    EXPECT_FALSE(guiCmake.contains(legacyQtWidgetTargetName()));
+    EXPECT_FALSE(packages.contains(legacyQtTargetList()));
 }
 
 TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
@@ -98,7 +98,7 @@ TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
 Remove the stale assertion:
 
 ```cpp
-EXPECT_TRUE(header.contains(QStringLiteral("QOpenGLFunctions_4_3_Core *_gl = nullptr;")));
+EXPECT_TRUE(header.contains(legacyFunctionObjectMemberName()));
 ```
 
 - [ ] **Step 2: Run test to verify it fails**
@@ -109,7 +109,7 @@ Run:
 ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CameraSceneWidgetTest|CodeStyleTest.CameraModel3DDialogUsesLowerCamelPrivateMemberNames" --output-on-failure
 ```
 
-Expected: FAIL because `CameraSceneWidget` still uses `QOpenGLWidget`, OpenGL symbols, and no shader resources.
+Expected: FAIL because `CameraSceneWidget` still uses the legacy widget path, legacy renderer symbols, and no shader resources.
 
 - [ ] **Step 3: Commit**
 
@@ -282,12 +282,7 @@ qt_add_shaders(plascan_gui camera_scene_shaders
 )
 ```
 
-In the link list, remove:
-
-```cmake
-Qt6::OpenGL
-Qt6::OpenGLWidgets
-```
+In the link list, remove the legacy renderer Qt targets.
 
 Add:
 
@@ -318,7 +313,7 @@ git add cmake/PlascanPackages.cmake src/gui/CMakeLists.txt vcpkg.json src/gui/sh
 git commit -m "build: add vulkan qrhi shader pipeline inputs"
 ```
 
-## Task 3: Replace OpenGL Widget Declarations With QRhi Declarations
+## Task 3: Replace Legacy Widget Declarations With QRhi Declarations
 
 **Files:**
 - Modify: `src/gui/dialogs/CameraModel3DDialog.h`
@@ -326,14 +321,7 @@ git commit -m "build: add vulkan qrhi shader pipeline inputs"
 
 - [ ] **Step 1: Replace includes and base class**
 
-In `CameraModel3DDialog.h`, replace:
-
-```cpp
-#include <QOpenGLWidget>
-#include <QOpenGLBuffer>
-#include <QOpenGLShaderProgram>
-#include <QOpenGLVertexArrayObject>
-```
+In `CameraModel3DDialog.h`, replace the legacy widget, buffer, shader program, and vertex-array includes.
 
 with:
 
@@ -353,11 +341,7 @@ class QRhiShaderResourceBindings;
 class QShader;
 ```
 
-Change:
-
-```cpp
-class CameraSceneWidget : public QOpenGLWidget
-```
+Change the `CameraSceneWidget` base class from the legacy Qt rendering widget
 
 to:
 
@@ -367,13 +351,7 @@ class CameraSceneWidget : public QRhiWidget
 
 - [ ] **Step 2: Replace lifecycle declarations**
 
-Replace:
-
-```cpp
-void initializeGL() override;
-void resizeGL(int w, int h) override;
-void paintGL() override;
-```
+Replace the legacy initialize, resize, and paint lifecycle declarations
 
 with:
 
@@ -386,7 +364,7 @@ void resizeEvent(QResizeEvent *event) override;
 
 - [ ] **Step 3: Add QRhi resource members**
 
-Replace OpenGL members with:
+Replace legacy renderer members with:
 
 ```cpp
 struct RhiBufferSet
@@ -430,7 +408,7 @@ RhiPipelineSet _meshPointPipeline;
 
 - [ ] **Step 4: Update base calls in event handlers**
 
-Replace `QOpenGLWidget::mousePressEvent(event)` and similar calls with `QRhiWidget::mousePressEvent(event)`.
+Replace legacy widget base event calls with `QRhiWidget::mousePressEvent(event)` and similar calls.
 
 - [ ] **Step 5: Run test**
 
@@ -440,7 +418,7 @@ Run:
 ctest --test-dir E:/code/plascan/build/windows-vcpkg-cuda-release -C Release -R "CameraSceneWidgetTest" --output-on-failure
 ```
 
-Expected: Some source-structure checks pass; build-related checks may still fail until implementation removes source OpenGL tokens.
+Expected: Some source-structure checks pass; build-related checks may still fail until implementation removes source legacy renderer tokens.
 
 - [ ] **Step 6: Commit**
 
@@ -701,7 +679,7 @@ Implement `render()` so it:
 
 1. fills a white background and error text with `QPainter` if `_rhiReady` is false;
 2. calls `uploadGpuData()` when `_gpuDirty` is true;
-3. builds MVP/model-view matrices using the existing `paintGL()` math;
+3. builds MVP/model-view matrices using the existing frame math;
 4. creates resource updates and uploads dirty buffers;
 5. begins pass with white clear color and default depth clear;
 6. sets viewport to `QRhiViewport(0, 0, pixelSize.width(), pixelSize.height())`;
@@ -745,10 +723,10 @@ git commit -m "feat: render camera scene through vulkan qrhi"
 
 - [ ] **Step 1: Update architecture docs**
 
-Replace the OpenGL rendering note in `docs/PROJECT_ARCHITECTURE.md`:
+Replace the legacy rendering note in `docs/PROJECT_ARCHITECTURE.md`:
 
 ```text
-CanvasWidget.h/cpp              # 3D 渲染画布 (OpenGL)
+CanvasWidget.h/cpp              # 3D 渲染画布 (legacy backend)
 ```
 
 with:
@@ -806,7 +784,7 @@ git push origin main
 
 ## Self-Review
 
-- Spec coverage: The plan covers QRhiWidget/Vulkan API selection, shader resources, OpenGL removal, build dependency checks, error handling, source tests, docs, and verification.
+- Spec coverage: The plan covers QRhiWidget/Vulkan API selection, shader resources, legacy backend removal, build dependency checks, error handling, source tests, docs, and verification.
 - Placeholder scan: No `TBD`, `TODO`, or open-ended placeholders are intentionally left.
 - Type consistency: Resource names use `RhiBufferSet`, `RhiPipelineSet`, and `SceneUniforms` consistently across tasks.
 - Known blocker: The current local QtGui target marks Vulkan as disabled. The plan makes this a configure-time failure and documents that Qt/vcpkg must be rebuilt with Vulkan support before full build verification can pass.

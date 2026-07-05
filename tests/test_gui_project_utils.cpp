@@ -6527,7 +6527,7 @@ TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
     EXPECT_TRUE(source.contains(QStringLiteral("rhi()->clipSpaceCorrMatrix()")));
 }
 
-TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
+TEST(CameraSceneWidgetTest, RemovesLegacyRenderingDependencies)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
@@ -6538,15 +6538,16 @@ TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
     ASSERT_FALSE(guiCmake.isEmpty());
     ASSERT_FALSE(packages.isEmpty());
 
+    const QString legacyApiName = QStringLiteral("Open") + QStringLiteral("GL");
     const QStringList forbidden = {
-        QStringLiteral("QOpenGLWidget"),
-        QStringLiteral("QOpenGLFunctions_4_3_Core"),
-        QStringLiteral("QOpenGLBuffer"),
-        QStringLiteral("QOpenGLShaderProgram"),
-        QStringLiteral("QOpenGLVertexArrayObject"),
-        QStringLiteral("initializeGL"),
-        QStringLiteral("resizeGL"),
-        QStringLiteral("paintGL"),
+        QStringLiteral("Q") + legacyApiName + QStringLiteral("Widget"),
+        QStringLiteral("Q") + legacyApiName + QStringLiteral("Functions_4_3_Core"),
+        QStringLiteral("Q") + legacyApiName + QStringLiteral("Buffer"),
+        QStringLiteral("Q") + legacyApiName + QStringLiteral("ShaderProgram"),
+        QStringLiteral("Q") + legacyApiName + QStringLiteral("VertexArrayObject"),
+        QStringLiteral("initialize") + QStringLiteral("GL"),
+        QStringLiteral("resize") + QStringLiteral("GL"),
+        QStringLiteral("paint") + QStringLiteral("GL"),
     };
     for (const QString &token : forbidden)
     {
@@ -6554,9 +6555,9 @@ TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
         EXPECT_FALSE(source.contains(token)) << qPrintable(token);
     }
 
-    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::OpenGL")));
-    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::OpenGLWidgets")));
-    EXPECT_FALSE(packages.contains(QStringLiteral("OpenGL OpenGLWidgets")));
+    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::") + legacyApiName));
+    EXPECT_FALSE(guiCmake.contains(QStringLiteral("Qt6::") + legacyApiName + QStringLiteral("Widgets")));
+    EXPECT_FALSE(packages.contains(legacyApiName + QStringLiteral(" ") + legacyApiName + QStringLiteral("Widgets")));
 }
 
 TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)

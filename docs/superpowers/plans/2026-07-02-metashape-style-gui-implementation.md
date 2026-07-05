@@ -6,7 +6,7 @@
 
 **Architecture:** Keep the existing `MainWindow.ui` mostly stable and compose the new panels in C++ so VSCode/Qt Designer remains usable. Centralize selection in `MainWindow`: project tree and photo strip selections update the property widget, central workspace, and `CameraSceneWidget` camera highlight. Keep heavy image and point-cloud inspection out of the GUI thread by using light metadata reads and asynchronous thumbnail loading.
 
-**Tech Stack:** C++17, Qt6 Widgets, Qt6 Concurrent, Qt6 OpenGL Widgets, CMake AUTOUIC/AUTOMOC, GTest source-structure tests.
+**Tech Stack:** C++17, Qt6 Widgets, Qt6 Concurrent, Qt RHI/Vulkan 3D view, CMake AUTOUIC/AUTOMOC, GTest source-structure tests.
 
 ---
 

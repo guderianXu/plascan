@@ -22,7 +22,6 @@ case "$CMD" in
         sudo docker run $BASE --network host \
             -e DISPLAY=$DISPLAY \
             -e QT_QPA_PLATFORM=xcb \
-            -e QT_OPENGL=desktop \
             -e __GLX_VENDOR_LIBRARY_NAME=nvidia \
             -v /tmp/.X11-unix:/tmp/.X11-unix:ro \
             plascan-build bash -c "
