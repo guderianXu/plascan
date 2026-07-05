@@ -6522,6 +6522,9 @@ TEST(CameraSceneWidgetTest, UsesQrhiWidgetWithVulkanBackend)
     EXPECT_TRUE(header.contains(QStringLiteral("void initialize(QRhiCommandBuffer *cb) override;")));
     EXPECT_TRUE(header.contains(QStringLiteral("void render(QRhiCommandBuffer *cb) override;")));
     EXPECT_TRUE(header.contains(QStringLiteral("void releaseResources() override;")));
+    EXPECT_TRUE(header.contains(QStringLiteral("RhiPipelineSet _modelPointPipeline;")));
+    EXPECT_TRUE(source.contains(QStringLiteral("drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("rhi()->clipSpaceCorrMatrix()")));
 }
 
 TEST(CameraSceneWidgetTest, RemovesOpenGLRenderingDependencies)
@@ -6562,6 +6565,7 @@ TEST(CameraSceneWidgetTest, RegistersQrhiShaderResources)
     ASSERT_FALSE(guiCmake.isEmpty());
 
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("qt_add_shaders(plascan_gui")));
+    EXPECT_TRUE(guiCmake.contains(QStringLiteral("${CMAKE_CURRENT_SOURCE_DIR}/shaders")));
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_color.vert")));
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_color.frag")));
     EXPECT_TRUE(guiCmake.contains(QStringLiteral("shaders/camera_scene_mesh.vert")));

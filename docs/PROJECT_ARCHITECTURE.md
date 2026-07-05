@@ -282,7 +282,7 @@ gui/
 │   ├── SparseCloudPostProcessDialog.h/cpp   # 稀疏点云后处理
 │   ├── ForwardIntersectionCheckDialog.h/cpp # 前方交汇检测
 │   ├── ForwardIntersectionResultsDialog.h/cpp  # 前方交汇结果
-│   ├── CameraModel3DDialog.h/cpp            # 相机模型 3D 查看
+│   ├── CameraModel3DDialog.h/cpp            # 相机模型 3D 查看 (Qt RHI/Vulkan)
 │   ├── CameraConvertDialog.h/cpp            # 外部相机格式转换
 │   ├── SurveyControlDialog.h/cpp            # 控制点/检查点/比例尺导入和查看
 │   ├── CreateDemDialog.h/cpp                # DEM 生成参数
@@ -301,7 +301,7 @@ gui/
 │   └── settings/                            # 对话框设置持久化支持
 │
 ├── widgets/                    # 自定义 Qt 控件 (10 个)
-│   ├── CanvasWidget.h/cpp              # 3D 渲染画布 (OpenGL)
+│   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布 (QGraphicsView)
 │   ├── ImageViewWidget.h/cpp           # 2D 影像缩放/平移控件
 │   ├── DualImageViewer.h/cpp           # 双图并列查看器 (左右影像 + 匹配线)
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)

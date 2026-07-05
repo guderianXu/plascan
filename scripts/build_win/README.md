@@ -22,6 +22,7 @@
 - `C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe`
 - `C:\BuildTools\VC\vcpkg`
 - `C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1`
+- Vulkan SDK，或等效的 Vulkan loader/header，使 vcpkg 构建的 `qtbase` 启用 Vulkan feature
 - `E:\code\plascan\build\env\libtorch-cu130\libtorch`
 - `E:\code\plascan\build\windows-vcpkg-cuda-release\vcpkg_installed\x64-windows`
 
@@ -30,6 +31,11 @@
 默认不会自动运行 vcpkg manifest install；脚本会先检查自己的
 `vcpkg_installed\x64-windows` 里是否已有 Qt6、OpenCV、GDAL、GTest、libzip 和 TIFF。
 需要自动补依赖时再显式加 `-InstallDeps`。
+
+相机模型 3D 视图使用 Qt RHI 的 Vulkan 后端，不再链接 Qt OpenGLWidgets。
+当前 `vcpkg.json` 要求 `vulkan` 和 `qtshadertools`，并在 CMake 配置阶段检查
+`Qt6::Gui` 是否带有 `vulkan` public feature。若已有 vcpkg Qt 是迁移前构建的，
+需要先安装 Vulkan SDK/loader/header，再用 `-InstallDeps` 或清理对应 vcpkg 包后重建 Qt。
 
 ## 常用命令
 
@@ -195,6 +201,17 @@ Select-String E:\code\plascan\build\windows-vcpkg-cuda-release\CMakeCache.txt `
 ```powershell
 powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\build_win\build_windows_cuda.ps1 -CleanConfigure -ConfigureOnly
 ```
+
+### QtGui 未启用 Vulkan
+
+现象：
+
+```text
+PlaScan Vulkan rendering requires QtGui built with Vulkan support.
+```
+
+这表示当前构建目录里的 vcpkg Qt6 是在缺少 Vulkan SDK/loader/header 的环境中构建的。
+安装 Vulkan SDK 或等效开发包后，重新构建 `qtbase`、`qtshadertools` 和 PlaScan。
 
 ### vcpkg ICU/pkg-config 构建失败
 

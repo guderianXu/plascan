@@ -2,7 +2,7 @@
 // 文件: CameraModel3DDialog.h
 // 功能: 相机三维模型可视化对话框声明
 // 职责:
-//   - CameraSceneWidget: 基于 OpenGL 4.x Core Profile 的三维交互场景控件，
+//   - CameraSceneWidget: 基于 Qt RHI/Vulkan 的三维交互场景控件，
 //                        支持相机姿态、点云、PLY 网格模型的渲染与交互旋转/缩放/平移
 //   - CameraModel3DDialog: 封装 CameraSceneWidget 的对话框，从项目元数据读取
 //                          相机信息并在三维场景中展示
@@ -10,45 +10,49 @@
 
 #pragma once
 
+#include <QByteArray>
 #include <QDialog>
-#include <QVector3D>
-#include <QVector2D>
-#include <QQuaternion>
-#include <QMatrix3x3>
-#include <QVector>
-#include <array>
-#include <QOpenGLWidget>
-#include <QOpenGLBuffer>
-#include <QOpenGLShaderProgram>
-#include <QOpenGLVertexArrayObject>
 #include <QFutureWatcher>
+#include <QMatrix3x3>
+#include <QMatrix4x4>
+#include <QQuaternion>
 #include <QRect>
+#include <QRhiWidget>
+#include <QScopedPointer>
+#include <QVector>
+#include <QVector2D>
+#include <QVector3D>
+#include <QVector4D>
+#include <array>
 #include <vector>
 #include <plapoint/core/point_cloud.h>
 
 /// 渲染用点云类型别名
 using RenderCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
-// Qt OpenGL 4.3 Core Profile 函数集（用于可编程管线渲染）
-class QOpenGLFunctions_4_3_Core;
-
 // 前向声明：项目管理器（提供当前项目的相机元数据）
 class ProjectManager;
 class QWidget;
 class QLabel;
 class QPainter;
+class QRhiBuffer;
+class QRhiCommandBuffer;
+class QRhiGraphicsPipeline;
+class QRhiResourceUpdateBatch;
+class QRhiShaderResourceBindings;
+class QResizeEvent;
 
 // =============================================================================
 // CameraSceneWidget
-// 继承自 QOpenGLWidget，提供基于 OpenGL 4.x Core Profile 可编程管线的三维场景渲染控件。
-// 使用 VAO/VBO + GLSL shader（顶点色 shader + Phong 光照 shader）
+// 继承自 QRhiWidget，提供基于 Vulkan 后端的三维场景渲染控件。
+// 使用 QRhiBuffer + .qsb shader（顶点色 shader + Phong 光照 shader）
 // 功能包括：
 //   - 渲染相机姿态（位置+视锥体）、点云（xyz 文件）、网格模型（PLY 文件）
 //   - Arcball 自由旋转、单轴环旋转（X/Y/Z）
 //   - 滚轮缩放、中键平移
 //   - 实时显示坐标轴指示器和欧拉角信息
 // =============================================================================
-class CameraSceneWidget : public QOpenGLWidget
+class CameraSceneWidget : public QRhiWidget
 {
     Q_OBJECT
 public:
@@ -65,8 +69,9 @@ public:
         QMatrix3x3 rotation; // 相机旋转矩阵（right/up/forward 列向量）
     };
 
-    // 构造函数，初始化 OpenGL 控件并设置默认视角
+    // 构造函数，初始化 Vulkan 渲染控件并设置默认视角
     explicit CameraSceneWidget(QWidget *parent = nullptr);
+    ~CameraSceneWidget() override;
 
     // 设置要渲染的相机姿态列表，触发重绘
     void setCameraPoses(const QVector<CameraPose> &poses);
@@ -110,14 +115,17 @@ signals:
     void manualPruneSaveFailed(const QString &errorMessage);
 
 protected:
-    // OpenGL 初始化：获取函数对象、启用深度测试/混合/点平滑
-    void initializeGL() override;
-
-    // 视口尺寸变化时更新 glViewport
-    void resizeGL(int w, int h) override;
+    // RHI 初始化：创建 Vulkan 渲染资源和管线。
+    void initialize(QRhiCommandBuffer *cb) override;
 
     // 主渲染函数：清屏 → 绘制点云 → 绘制模型 → 绘制包围盒 → 绘制覆盖层（QPainter）
-    void paintGL() override;
+    void render(QRhiCommandBuffer *cb) override;
+
+    // 释放 RHI 资源。
+    void releaseResources() override;
+
+    // 视口尺寸变化时标记资源和投影参数需要更新。
+    void resizeEvent(QResizeEvent *event) override;
 
     // 鼠标按下：记录初始旋转状态，区分左键旋转与中键平移
     void mousePressEvent(QMouseEvent *event) override;
@@ -194,14 +202,14 @@ private:
     QString normalizedCameraPath(const QString &imagePath) const;
     void drawFloorPivotCross(QPainter &painter) const;
 
-    // 在 OpenGL 渲染完成后，用 QPainter 绘制 2D 覆盖层：
+    // 在 RHI 渲染完成后，用 QPainter 绘制 2D 覆盖层：
     //   - 操控球 Gizmo（旋转环）
     //   - 相机视锥体和名称标注
     //   - 右下角坐标轴指示器和欧拉角文字
     void drawOverlay();
     void drawPlyLoadProgressOverlay(QPainter &painter);
 
-    // 将点云/模型/包围盒数据上传到 GPU（VBO/VAO），在 paintGL 中按需调用
+    // 将点云/模型/包围盒数据整理为 RHI 顶点缓冲，在 render 中按需上传
     void uploadGpuData();
 
     // 当点云/模型数据变更后调用，标记缓存失效并重新计算
@@ -214,35 +222,67 @@ private:
     // 取消未完成的异步加载并等待结束（在新加载开始前调用）
     void cancelPendingLoad();
 
-    // OpenGL 4.3 Core Profile 函数对象
-    QOpenGLFunctions_4_3_Core *_gl = nullptr;
-    bool _gpuDirty = true;  // VBO 需要重新上传
+    struct RhiBufferSet
+    {
+        QScopedPointer<QRhiBuffer> vertexBuffer;
+        QByteArray vertexData;
+        int vertexCount = 0;
+        int strideBytes = 0;
+        bool dirty = true;
+    };
 
-    // Shader 程序
-    QOpenGLShaderProgram *_colorProgram = nullptr; // 点云/线框：pos+color 直通
-    QOpenGLShaderProgram *_meshProgram  = nullptr; // 网格：pos+normal+color Phong
+    struct RhiPipelineSet
+    {
+        QScopedPointer<QRhiBuffer> uniformBuffer;
+        QScopedPointer<QRhiShaderResourceBindings> bindings;
+        QScopedPointer<QRhiGraphicsPipeline> pipeline;
+        QString vertexShaderPath;
+        QString fragmentShaderPath;
+    };
+
+    struct SceneUniforms
+    {
+        QMatrix4x4 mvp;
+        QMatrix4x4 modelView;
+        QMatrix4x4 normalMatrix;
+        QVector4D lightDirPointSize;
+    };
+
+    bool _gpuDirty = true;  // 顶点缓冲需要重新上传
+    bool _rhiReady = false;
+    bool _pipelinesDirty = true;
+    QString _renderError;
+
+    bool ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates);
+    bool ensurePipeline(RhiPipelineSet *pipeline, int topology, int strideBytes, bool hasNormals);
+    void drawRhiBuffer(QRhiCommandBuffer *cb,
+                       RhiBufferSet *buffer,
+                       RhiPipelineSet *pipeline,
+                       const SceneUniforms &uniforms);
 
     // 点云 GPU 资源
-    QOpenGLVertexArrayObject _pointVao;
-    QOpenGLBuffer _pointVbo{QOpenGLBuffer::VertexBuffer};
+    RhiBufferSet _pointBuffer;
     int _pointCount = 0;
 
     // 网格（三角面展开）GPU 资源
-    QOpenGLVertexArrayObject _meshVao;
-    QOpenGLBuffer _meshVbo{QOpenGLBuffer::VertexBuffer};
+    RhiBufferSet _meshBuffer;
     int _meshVertCount = 0;
-    bool _meshHasFaces = true;  ///< false 时用 GL_POINTS 绘制含法向量点云
+    bool _meshHasFaces = true;  ///< false 时用点图元绘制含法向量点云
 
     // 无面片模型（作为点云绘制）GPU 资源
-    QOpenGLVertexArrayObject _modelPtVao;
-    QOpenGLBuffer _modelPtVbo{QOpenGLBuffer::VertexBuffer};
+    RhiBufferSet _modelPointBuffer;
     int _modelPtCount = 0;
     float _modelPointSize = 2.4f;
 
     // 包围盒线框 GPU 资源
-    QOpenGLVertexArrayObject _lineVao;
-    QOpenGLBuffer _lineVbo{QOpenGLBuffer::VertexBuffer};
+    RhiBufferSet _lineBuffer;
     int _lineCount = 0;
+
+    RhiPipelineSet _colorPointPipeline;
+    RhiPipelineSet _colorLinePipeline;
+    RhiPipelineSet _modelPointPipeline;
+    RhiPipelineSet _meshTrianglePipeline;
+    RhiPipelineSet _meshPointPipeline;
 
     QVector<CameraPose> _poses;             // 当前相机姿态列表
     RenderCloud _cloud;     // 当前显示的点云或网格（源自文件或外部调用）

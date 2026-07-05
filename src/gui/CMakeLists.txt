@@ -36,6 +36,8 @@ add_executable(plascan_gui
 qt_add_shaders(plascan_gui camera_scene_shaders
   PREFIX
     "/shaders"
+  BASE
+    "${CMAKE_CURRENT_SOURCE_DIR}/shaders"
   FILES
     shaders/camera_scene_color.vert
     shaders/camera_scene_color.frag
@@ -101,8 +103,6 @@ if(TIFF_INCLUDE_DIRS)
   target_include_directories(plascan_gui PRIVATE ${TIFF_INCLUDE_DIRS})
 endif()
 
-target_include_directories(plascan_gui PRIVATE ${Qt6Gui_PRIVATE_INCLUDE_DIRS})
-
 # 添加SuperPoint头文件目录（superpoint库始终可用）
 target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint)
 target_include_directories(plascan_gui PRIVATE ${CMAKE_SOURCE_DIR}/src/core/feature_extractors)
@@ -119,6 +119,7 @@ include(${CMAKE_CURRENT_SOURCE_DIR}/cmake/GuiCoreLinking.cmake)
 target_link_libraries(plascan_gui PRIVATE
   Qt6::Core
   Qt6::Gui
+  Qt6::GuiPrivate
   Qt6::Widgets
   Qt6::Concurrent
   Qt6::ShaderTools

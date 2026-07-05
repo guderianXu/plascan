@@ -2,8 +2,8 @@
 // 文件: CameraModel3DDialog.cpp
 // 功能: 相机三维模型可视化对话框实现
 // 内容:
-//   - CameraSceneWidget：OpenGL 4.x Core Profile 可编程管线渲染控件
-//       · 点云 / PLY 模型 / 相机视锥体渲染（VAO/VBO + GLSL shader）
+//   - CameraSceneWidget：Qt RHI/Vulkan 三维渲染控件
+//       · 点云 / PLY 模型 / 相机视锥体渲染（QRhiBuffer + .qsb shader）
 //       · Arcball 自由旋转 + 单轴环旋转（X/Y/Z Gizmo）
 //       · 中键平移、滚轮缩放
 //       · QPainter 覆盖层（Gizmo 环、坐标轴、相机视锥体、欧拉角）
@@ -24,11 +24,9 @@
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QCursor>
+#include <QIODevice>
 #include <QPixmap>
 #include <QVector2D>
-#include <QOpenGLFunctions_4_3_Core>
-#include <QOpenGLVersionFunctionsFactory>
-#include <QSurfaceFormat>
 #include <QJsonObject>
 #include <QJsonArray>
 #include <QMatrix4x4>
@@ -44,6 +42,8 @@
 #include <QMetaObject>
 #include <QPointer>
 #include <QRegularExpression>
+#include <rhi/qrhi.h>
+#include <rhi/qshader.h>
 #include <QSizePolicy>
 #include <QStringList>
 #include <algorithm>
@@ -557,20 +557,35 @@ PlyPreviewResult readBinaryPlyPreview(const QString &plyPath,
     return preview;
 }
 
+QShader loadSceneShader(const QString &resourcePath, QString *errorMessage)
+{
+    QFile file(resourcePath);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("Vulkan 渲染着色器资源缺失：%1").arg(resourcePath);
+        }
+        return {};
+    }
+
+    QShader shader = QShader::fromSerialized(file.readAll());
+    if (!shader.isValid() && errorMessage)
+    {
+        *errorMessage = QStringLiteral("Vulkan 渲染着色器加载失败：%1").arg(resourcePath);
+    }
+    return shader;
+}
+
 } // namespace
 
 // 构造函数：设置基础可用尺寸，启用鼠标追踪（悬停检测需要），
 // 设置默认视角为俯仰 -25°、偏航 35°（斜上方看向场景）
 CameraSceneWidget::CameraSceneWidget(QWidget *parent)
-    : QOpenGLWidget(parent)
+    : QRhiWidget(parent)
 {
-    QSurfaceFormat format;
-    format.setRenderableType(QSurfaceFormat::OpenGL);
-    format.setVersion(4, 3);
-    format.setProfile(QSurfaceFormat::CoreProfile);
-    format.setDepthBufferSize(24);
-    format.setSamples(4);
-    setFormat(format);
+    setApi(QRhiWidget::Api::Vulkan);
+    setSampleCount(4);
 
     setMinimumSize(240, 160);
     setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Expanding);
@@ -597,13 +612,15 @@ CameraSceneWidget::CameraSceneWidget(QWidget *parent)
     }, Qt::QueuedConnection);
 }
 
+CameraSceneWidget::~CameraSceneWidget() = default;
+
 // 设置要渲染的相机姿态列表。
 // 调用后触发重绘，场景中每个姿态点将绘制光心标记和视锥体框线。
 void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
 {
     _poses = poses;
     _cacheDirty = true; // 相机位置变更，缓存失效
-    update(); // 触发 paintGL 重绘
+    update(); // 触发 Vulkan 帧重绘
 }
 
 void CameraSceneWidget::setShowGizmo(bool show)
@@ -1462,129 +1479,89 @@ void CameraSceneWidget::updateCursor()
     }
 }
 
-// OpenGL 初始化：获取 GL 4.3 Core Profile 函数对象，编译 shader，创建 VAO/VBO
-void CameraSceneWidget::initializeGL()
+void CameraSceneWidget::initialize(QRhiCommandBuffer *cb)
 {
-    _gl = context() ? QOpenGLVersionFunctionsFactory::get<QOpenGLFunctions_4_3_Core>(context()) : nullptr;
-    if (!_gl) return;
-    _gl->initializeOpenGLFunctions();
-    _gl->glEnable(GL_DEPTH_TEST);
-    _gl->glEnable(GL_BLEND);
-    _gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    _gl->glEnable(GL_PROGRAM_POINT_SIZE); // 允许 vertex shader 通过 gl_PointSize 控制点大小
+    Q_UNUSED(cb);
 
-    // ── 顶点色直通 shader（点云 + 线框）────────────────────────────────────
-    static const char *colorVert =
-        "#version 430 core\n"
-        "layout(location=0) in vec3 aPos;\n"
-        "layout(location=1) in vec3 aColor;\n"
-        "uniform mat4 uMVP;\n"
-        "uniform float uPointSize;\n"
-        "out vec3 vColor;\n"
-        "void main() {\n"
-        "    gl_Position  = uMVP * vec4(aPos, 1.0);\n"
-        "    gl_PointSize = uPointSize;\n"
-        "    vColor = aColor;\n"
-        "}\n";
-    static const char *colorFrag =
-        "#version 430 core\n"
-        "in vec3 vColor;\n"
-        "out vec4 fragColor;\n"
-        "void main() {\n"
-        "    fragColor = vec4(vColor, 1.0);\n"
-        "}\n";
+    _renderError.clear();
+    _rhiReady = rhi() && api() == QRhiWidget::Api::Vulkan;
+    if (!_rhiReady)
+    {
+        _renderError = QStringLiteral("Vulkan 渲染初始化失败，请检查显卡驱动和 Qt Vulkan 支持。");
+        LOG_ERROR("%s", qPrintable(_renderError));
+        return;
+    }
 
-    _colorProgram = new QOpenGLShaderProgram(this);
-    _colorProgram->addShaderFromSourceCode(QOpenGLShader::Vertex,   colorVert);
-    _colorProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, colorFrag);
-    _colorProgram->link();
+    _colorPointPipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_color.vert.qsb");
+    _colorPointPipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_color.frag.qsb");
+    _colorLinePipeline.vertexShaderPath = _colorPointPipeline.vertexShaderPath;
+    _colorLinePipeline.fragmentShaderPath = _colorPointPipeline.fragmentShaderPath;
+    _modelPointPipeline.vertexShaderPath = _colorPointPipeline.vertexShaderPath;
+    _modelPointPipeline.fragmentShaderPath = _colorPointPipeline.fragmentShaderPath;
+    _meshTrianglePipeline.vertexShaderPath = QStringLiteral(":/shaders/camera_scene_mesh.vert.qsb");
+    _meshTrianglePipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_mesh.frag.qsb");
+    _meshPointPipeline.vertexShaderPath = _meshTrianglePipeline.vertexShaderPath;
+    _meshPointPipeline.fragmentShaderPath = _meshTrianglePipeline.fragmentShaderPath;
 
-    // ── Phong 光照 shader（三角网格）────────────────────────────────────────
-    static const char *meshVert =
-        "#version 430 core\n"
-        "layout(location=0) in vec3 aPos;\n"
-        "layout(location=1) in vec3 aNormal;\n"
-        "layout(location=2) in vec3 aColor;\n"
-        "uniform mat4 uMVP;\n"
-        "uniform mat3 uNormalMat;\n"
-        "uniform float uPointSize;\n"
-        "out vec3 vNormal;\n"
-        "out vec3 vColor;\n"
-        "void main() {\n"
-        "    gl_Position = uMVP * vec4(aPos, 1.0);\n"
-        "    gl_PointSize = uPointSize;\n"
-        "    vNormal = uNormalMat * aNormal;\n"
-        "    vColor  = aColor;\n"
-        "}\n";
-    static const char *meshFrag =
-        "#version 430 core\n"
-        "in vec3 vNormal;\n"
-        "in vec3 vColor;\n"
-        "uniform vec3 uLightDir;\n"
-        "out vec4 fragColor;\n"
-        "vec3 srgbToLinear(vec3 c) {\n"
-        "    return pow(max(c, vec3(0.0)), vec3(2.2));\n"
-        "}\n"
-        "vec3 linearToSrgb(vec3 c) {\n"
-        "    return pow(clamp(c, vec3(0.0), vec3(1.0)), vec3(1.0 / 2.2));\n"
-        "}\n"
-        "void main() {\n"
-        "    vec3 n = normalize(vNormal);\n"
-        "    if (!gl_FrontFacing) n = -n;\n"
-        "    vec3 L = normalize(uLightDir);\n"
-        "    float diff = max(dot(n, L), 0.0);\n"
-        "    vec3 R = reflect(-L, n);\n"
-        "    float spec = pow(max(R.z, 0.0), 32.0) * 0.25;\n"
-        "    vec3 baseLinear = srgbToLinear(vColor);\n"
-        "    vec3 litLinear = baseLinear * (0.55 + 0.75 * diff) + vec3(spec);\n"
-        "    fragColor = vec4(linearToSrgb(litLinear), 1.0);\n"
-        "}\n";
+    _gpuDirty = true;
+    _pipelinesDirty = true;
+}
 
-    _meshProgram = new QOpenGLShaderProgram(this);
-    _meshProgram->addShaderFromSourceCode(QOpenGLShader::Vertex,   meshVert);
-    _meshProgram->addShaderFromSourceCode(QOpenGLShader::Fragment, meshFrag);
-    _meshProgram->link();
+void CameraSceneWidget::releaseResources()
+{
+    _pointBuffer.vertexBuffer.reset();
+    _meshBuffer.vertexBuffer.reset();
+    _modelPointBuffer.vertexBuffer.reset();
+    _lineBuffer.vertexBuffer.reset();
+    _colorPointPipeline.uniformBuffer.reset();
+    _colorPointPipeline.bindings.reset();
+    _colorPointPipeline.pipeline.reset();
+    _colorLinePipeline.uniformBuffer.reset();
+    _colorLinePipeline.bindings.reset();
+    _colorLinePipeline.pipeline.reset();
+    _modelPointPipeline.uniformBuffer.reset();
+    _modelPointPipeline.bindings.reset();
+    _modelPointPipeline.pipeline.reset();
+    _meshTrianglePipeline.uniformBuffer.reset();
+    _meshTrianglePipeline.bindings.reset();
+    _meshTrianglePipeline.pipeline.reset();
+    _meshPointPipeline.uniformBuffer.reset();
+    _meshPointPipeline.bindings.reset();
+    _meshPointPipeline.pipeline.reset();
+    _rhiReady = false;
+    _gpuDirty = true;
+    _pipelinesDirty = true;
+}
 
-    // 创建 VAO/VBO（GL 资源，需在 context 活跃时创建）
-    _pointVao.create();   _pointVbo.create();
-    _meshVao.create();    _meshVbo.create();
-    _modelPtVao.create(); _modelPtVbo.create();
-    _lineVao.create();    _lineVbo.create();
-
+void CameraSceneWidget::resizeEvent(QResizeEvent *event)
+{
+    QRhiWidget::resizeEvent(event);
+    _pipelinesDirty = true;
     _gpuDirty = true;
 }
 
-// 视口尺寸变化时更新 OpenGL 的视口矩形
-void CameraSceneWidget::resizeGL(int w, int h)
-{
-    if (!_gl) return;
-    _gl->glViewport(0, 0, w, h);
-    _gpuDirty = true; // 包围盒线框依赖 AABB，重建一次以防万一
-}
-
-// 将点云/模型/包围盒数据上传到 GPU（VBO/VAO）。
-// 在 paintGL 检测到 _gpuDirty 时调用，避免每帧重复上传。
 void CameraSceneWidget::uploadGpuData()
 {
-    if (!_gl) return;
-
-    // ── 辅助：建立颜色直通 VAO（stride=6 floats: xyz rgb）────────────────
-    auto setupColorVao = [this](QOpenGLVertexArrayObject &vao,
-                                QOpenGLBuffer &vbo,
-                                const QVector<float> &data)
+    auto assignBuffer = [](RhiBufferSet &buffer,
+                           const QVector<float> &data,
+                           int vertexCount,
+                           int strideFloats)
     {
-        vao.bind();
-        vbo.bind();
-        vbo.allocate(data.constData(), data.size() * sizeof(float));
-        const int stride = 6 * sizeof(float);
-        _gl->glEnableVertexAttribArray(0);
-        _gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-        _gl->glEnableVertexAttribArray(1);
-        _gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
-                                    reinterpret_cast<void*>(3 * sizeof(float)));
-        vbo.release();
-        vao.release();
+        buffer.vertexData = QByteArray(reinterpret_cast<const char *>(data.constData()),
+                                       int(data.size() * sizeof(float)));
+        buffer.vertexCount = vertexCount;
+        buffer.strideBytes = strideFloats * int(sizeof(float));
+        buffer.dirty = true;
     };
+
+    _pointBuffer.vertexCount = 0;
+    _meshBuffer.vertexCount = 0;
+    _modelPointBuffer.vertexCount = 0;
+    _lineBuffer.vertexCount = 0;
+    _pointBuffer.vertexData.clear();
+    _meshBuffer.vertexData.clear();
+    _modelPointBuffer.vertexData.clear();
+    _lineBuffer.vertexData.clear();
 
     // ── 1. 点云（_cloud，无面片且无法向量，颜色直通）──────────────────────────
     _pointCount = 0;
@@ -1606,10 +1583,10 @@ void CameraSceneWidget::uploadGpuData()
             }
         }
         if (_preferModelPointRender) {
-            setupColorVao(_modelPtVao, _modelPtVbo, data);
+            assignBuffer(_modelPointBuffer, data, int(_cloud.size()), 6);
             _modelPtCount = (int)_cloud.size();
         } else {
-            setupColorVao(_pointVao, _pointVbo, data);
+            assignBuffer(_pointBuffer, data, int(_cloud.size()), 6);
             _pointCount = (int)_cloud.size();
         }
     }
@@ -1683,23 +1660,10 @@ void CameraSceneWidget::uploadGpuData()
                 }
             }
         }
-        _meshVao.bind();
-        _meshVbo.bind();
-        _meshVbo.allocate(data.constData(), data.size() * sizeof(float));
-        const int stride = 9 * sizeof(float);
-        _gl->glEnableVertexAttribArray(0);
-        _gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-        _gl->glEnableVertexAttribArray(1);
-        _gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
-                                    reinterpret_cast<void*>(3 * sizeof(float)));
-        _gl->glEnableVertexAttribArray(2);
-        _gl->glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
-                                    reinterpret_cast<void*>(6 * sizeof(float)));
-        _meshVbo.release();
-        _meshVao.release();
         _meshVertCount = data.size() / 9;
+        assignBuffer(_meshBuffer, data, _meshVertCount, 9);
     } else if (!(_cloud.size() == 0) && !_cloud.hasFaces() && _cloud.hasNormals()) {
-        // 含法向量但无面片 → GL_POINTS + Phong 光照（稠密点云等）
+        // 含法向量但无面片 → 点图元 + Phong 光照（稠密点云等）
         const bool hasColors = _cloud.hasColors();
         const std::size_t Nv = _cloud.size();
         QVector<float> data;
@@ -1719,21 +1683,8 @@ void CameraSceneWidget::uploadGpuData()
                 data << 0.55f << 0.55f << 0.58f;
             }
         }
-        _meshVao.bind();
-        _meshVbo.bind();
-        _meshVbo.allocate(data.constData(), data.size() * sizeof(float));
-        const int stride = 9 * sizeof(float);
-        _gl->glEnableVertexAttribArray(0);
-        _gl->glVertexAttribPointer(0, 3, GL_FLOAT, GL_FALSE, stride, nullptr);
-        _gl->glEnableVertexAttribArray(1);
-        _gl->glVertexAttribPointer(1, 3, GL_FLOAT, GL_FALSE, stride,
-                                    reinterpret_cast<void*>(3 * sizeof(float)));
-        _gl->glEnableVertexAttribArray(2);
-        _gl->glVertexAttribPointer(2, 3, GL_FLOAT, GL_FALSE, stride,
-                                    reinterpret_cast<void*>(6 * sizeof(float)));
-        _meshVbo.release();
-        _meshVao.release();
         _meshVertCount = (int)Nv;
+        assignBuffer(_meshBuffer, data, _meshVertCount, 9);
     }
 
     // ── 3. 包围盒线框（12 条边 × 2 顶点）────────────────────────────────
@@ -1765,7 +1716,7 @@ void CameraSceneWidget::uploadGpuData()
             addEdge(data, v001, v011); addEdge(data, v001, v101);
             addEdge(data, v010, v011); addEdge(data, v010, v110);
             addEdge(data, v100, v101); addEdge(data, v100, v110);
-            setupColorVao(_lineVao, _lineVbo, data);
+            assignBuffer(_lineBuffer, data, 24, 6);
             _lineCount = 24; // 12 条边 × 2 顶点
         }
     }
@@ -1775,21 +1726,217 @@ void CameraSceneWidget::uploadGpuData()
 
 
 
-void CameraSceneWidget::paintGL()
+bool CameraSceneWidget::ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates)
 {
-    if (!_gl || !_colorProgram || !_meshProgram) {
-        QPainter p(this);
-        p.fillRect(rect(), Qt::white);
+    if (!buffer || !updates || buffer->vertexData.isEmpty() || buffer->vertexCount <= 0)
+    {
+        return true;
+    }
+
+    const quint32 byteCount = quint32(buffer->vertexData.size());
+    if (!buffer->vertexBuffer || buffer->vertexBuffer->size() != byteCount)
+    {
+        buffer->vertexBuffer.reset(rhi()->newBuffer(QRhiBuffer::Static, QRhiBuffer::VertexBuffer, byteCount));
+        if (!buffer->vertexBuffer->create())
+        {
+            _renderError = QStringLiteral("Vulkan 顶点缓冲创建失败。");
+            return false;
+        }
+        buffer->dirty = true;
+    }
+
+    if (buffer->dirty)
+    {
+        updates->uploadStaticBuffer(buffer->vertexBuffer.data(), buffer->vertexData);
+        buffer->dirty = false;
+    }
+    return true;
+}
+
+bool CameraSceneWidget::ensurePipeline(RhiPipelineSet *pipeline, int topology, int strideBytes, bool hasNormals)
+{
+    if (!pipeline)
+    {
+        return false;
+    }
+    if (pipeline->pipeline && !_pipelinesDirty)
+    {
+        return true;
+    }
+
+    QString error;
+    const QShader vertexShader = loadSceneShader(pipeline->vertexShaderPath, &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+    const QShader fragmentShader = loadSceneShader(pipeline->fragmentShaderPath, &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+
+    pipeline->pipeline.reset();
+    pipeline->bindings.reset();
+    pipeline->uniformBuffer.reset();
+
+    pipeline->uniformBuffer.reset(rhi()->newBuffer(QRhiBuffer::Dynamic,
+                                                   QRhiBuffer::UniformBuffer,
+                                                   quint32(sizeof(SceneUniforms))));
+    if (!pipeline->uniformBuffer->create())
+    {
+        _renderError = QStringLiteral("Vulkan uniform 缓冲创建失败。");
+        return false;
+    }
+
+    pipeline->bindings.reset(rhi()->newShaderResourceBindings());
+    pipeline->bindings->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0,
+            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+            pipeline->uniformBuffer.data())
+    });
+    if (!pipeline->bindings->create())
+    {
+        _renderError = QStringLiteral("Vulkan shader 资源绑定创建失败。");
+        return false;
+    }
+
+    QRhiVertexInputLayout inputLayout;
+    inputLayout.setBindings({ QRhiVertexInputBinding(quint32(strideBytes)) });
+    if (hasNormals)
+    {
+        inputLayout.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float)),
+            QRhiVertexInputAttribute(0, 2, QRhiVertexInputAttribute::Float3, 6 * sizeof(float)),
+        });
+    }
+    else
+    {
+        inputLayout.setAttributes({
+            QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+            QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float)),
+        });
+    }
+
+    pipeline->pipeline.reset(rhi()->newGraphicsPipeline());
+    pipeline->pipeline->setTopology(static_cast<QRhiGraphicsPipeline::Topology>(topology));
+    pipeline->pipeline->setShaderStages({
+        QRhiShaderStage(QRhiShaderStage::Vertex, vertexShader),
+        QRhiShaderStage(QRhiShaderStage::Fragment, fragmentShader),
+    });
+    pipeline->pipeline->setVertexInputLayout(inputLayout);
+    pipeline->pipeline->setShaderResourceBindings(pipeline->bindings.data());
+    pipeline->pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    pipeline->pipeline->setSampleCount(sampleCount());
+    pipeline->pipeline->setDepthTest(true);
+    pipeline->pipeline->setDepthWrite(true);
+    pipeline->pipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+    pipeline->pipeline->setCullMode(QRhiGraphicsPipeline::None);
+
+    QRhiGraphicsPipeline::TargetBlend blend;
+    blend.enable = true;
+    blend.srcColor = QRhiGraphicsPipeline::SrcAlpha;
+    blend.dstColor = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    blend.srcAlpha = QRhiGraphicsPipeline::One;
+    blend.dstAlpha = QRhiGraphicsPipeline::OneMinusSrcAlpha;
+    pipeline->pipeline->setTargetBlends({ blend });
+
+    if (!pipeline->pipeline->create())
+    {
+        _renderError = QStringLiteral("Vulkan 图形管线创建失败。");
+        return false;
+    }
+    return true;
+}
+
+void CameraSceneWidget::drawRhiBuffer(QRhiCommandBuffer *cb,
+                                      RhiBufferSet *buffer,
+                                      RhiPipelineSet *pipeline,
+                                      const SceneUniforms &uniforms)
+{
+    if (!cb || !buffer || !pipeline || !buffer->vertexBuffer || buffer->vertexCount <= 0 || !pipeline->pipeline)
+    {
         return;
     }
 
-    // 按需上传 GPU 数据
-    if (_gpuDirty) uploadGpuData();
+    pipeline->uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(&uniforms, sizeof(SceneUniforms));
+    cb->setGraphicsPipeline(pipeline->pipeline.data());
+    cb->setShaderResources(pipeline->bindings.data());
+    const QRhiCommandBuffer::VertexInput vertexInput(buffer->vertexBuffer.data(), 0);
+    cb->setVertexInput(0, 1, &vertexInput);
+    cb->draw(quint32(buffer->vertexCount));
+}
 
-    _gl->glClearColor(1.0f, 1.0f, 1.0f, 1.0f);
-    _gl->glClear(GL_COLOR_BUFFER_BIT | GL_DEPTH_BUFFER_BIT);
+void CameraSceneWidget::render(QRhiCommandBuffer *cb)
+{
+    if (!_rhiReady || !rhi() || !renderTarget())
+    {
+        QPainter painter(this);
+        painter.fillRect(rect(), Qt::white);
+        painter.setPen(QColor(180, 42, 42));
+        painter.drawText(rect().adjusted(12, 12, -12, -12),
+                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                         _renderError.isEmpty()
+                             ? QStringLiteral("Vulkan 渲染初始化失败，请检查显卡驱动和 Qt Vulkan 支持。")
+                             : _renderError);
+        return;
+    }
 
-    // ── 构建 MVP 矩阵（与旧代码逻辑保持一致）───────────────────────────────
+    if (_gpuDirty)
+    {
+        uploadGpuData();
+    }
+
+    if (!ensurePipeline(&_colorPointPipeline,
+                        int(QRhiGraphicsPipeline::Points),
+                        6 * int(sizeof(float)),
+                        false) ||
+        !ensurePipeline(&_colorLinePipeline,
+                        int(QRhiGraphicsPipeline::Lines),
+                        6 * int(sizeof(float)),
+                        false) ||
+        !ensurePipeline(&_modelPointPipeline,
+                        int(QRhiGraphicsPipeline::Points),
+                        6 * int(sizeof(float)),
+                        false) ||
+        !ensurePipeline(&_meshTrianglePipeline,
+                        int(QRhiGraphicsPipeline::Triangles),
+                        9 * int(sizeof(float)),
+                        true) ||
+        !ensurePipeline(&_meshPointPipeline,
+                        int(QRhiGraphicsPipeline::Points),
+                        9 * int(sizeof(float)),
+                        true))
+    {
+        QPainter painter(this);
+        painter.fillRect(rect(), Qt::white);
+        painter.setPen(QColor(180, 42, 42));
+        painter.drawText(rect().adjusted(12, 12, -12, -12),
+                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                         _renderError);
+        return;
+    }
+    _pipelinesDirty = false;
+
+    QRhiResourceUpdateBatch *updates = rhi()->nextResourceUpdateBatch();
+    if (!ensureRhiBuffer(&_pointBuffer, updates) ||
+        !ensureRhiBuffer(&_meshBuffer, updates) ||
+        !ensureRhiBuffer(&_modelPointBuffer, updates) ||
+        !ensureRhiBuffer(&_lineBuffer, updates))
+    {
+        QPainter painter(this);
+        painter.fillRect(rect(), Qt::white);
+        painter.setPen(QColor(180, 42, 42));
+        painter.drawText(rect().adjusted(12, 12, -12, -12),
+                         Qt::AlignLeft | Qt::AlignTop | Qt::TextWordWrap,
+                         _renderError);
+        return;
+    }
+
     const QVector3D center = sceneCenter();
     const float radius = sceneRadius();
     const float distance = qMax(radius * 0.001f, radius * (3.2f / qMax(0.1f, _zoomScale)));
@@ -1816,92 +1963,43 @@ void CameraSceneWidget::paintGL()
                     float(-2.0 * _sceneOffsetPx.y() / qMax(1, height())),
                     0.0f);
     const QMatrix4x4 mv  = view * model;
-    const QMatrix4x4 mvp = shift * proj * mv;
+    const QMatrix4x4 mvp = rhi()->clipSpaceCorrMatrix() * shift * proj * mv;
 
-    auto drawOpaquePointSet = [this, &mvp](QOpenGLVertexArrayObject &vao,
-                                           int pointCount,
-                                           float pointSize)
+    cb->beginPass(renderTarget(),
+                  QColor::fromRgbF(1.0f, 1.0f, 1.0f, 1.0f),
+                  QRhiDepthStencilClearValue(1.0f, 0),
+                  updates);
+    const QSize pixelSize = renderTarget()->pixelSize();
+    cb->setViewport(QRhiViewport(0.0f, 0.0f, float(pixelSize.width()), float(pixelSize.height())));
+
+    SceneUniforms uniforms;
+    uniforms.mvp = mvp;
+    uniforms.modelView = mv;
+    uniforms.normalMatrix.setToIdentity();
+    const QMatrix3x3 normal3x3 = mv.normalMatrix();
+    for (int row = 0; row < 3; ++row)
     {
-        if (pointCount <= 0) {
-            return;
+        for (int col = 0; col < 3; ++col)
+        {
+            uniforms.normalMatrix(row, col) = normal3x3(row, col);
         }
-
-        const float depthOnlyPointSize = qMax(pointSize + 1.25f, pointSize * 1.35f);
-
-        _gl->glEnable(GL_DEPTH_TEST);
-        _gl->glDepthMask(GL_TRUE);
-        _gl->glDepthFunc(GL_LEQUAL);
-        _gl->glDisable(GL_BLEND);
-
-        // 先写入稍大一点的深度轮廓，减少后层点从前层点之间漏出来。
-        _gl->glColorMask(GL_FALSE, GL_FALSE, GL_FALSE, GL_FALSE);
-        _colorProgram->bind();
-        _colorProgram->setUniformValue("uMVP", mvp);
-        _colorProgram->setUniformValue("uPointSize", depthOnlyPointSize);
-        vao.bind();
-        _gl->glDrawArrays(GL_POINTS, 0, pointCount);
-        vao.release();
-        _colorProgram->release();
-
-        _gl->glColorMask(GL_TRUE, GL_TRUE, GL_TRUE, GL_TRUE);
-
-        _colorProgram->bind();
-        _colorProgram->setUniformValue("uMVP", mvp);
-        _colorProgram->setUniformValue("uPointSize", pointSize);
-        vao.bind();
-        _gl->glDrawArrays(GL_POINTS, 0, pointCount);
-        vao.release();
-        _colorProgram->release();
-
-        _gl->glEnable(GL_BLEND);
-        _gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    };
-
-    // ── 点云（颜色直通）──────────────────────────────────────────────────
-    if (_pointCount > 0) {
-        drawOpaquePointSet(_pointVao, _pointCount, 1.8f);
     }
+    uniforms.lightDirPointSize = QVector4D(0.5f, 0.8f, 0.6f, 1.8f);
+    drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);
 
-    // ── 三角网格（Phong 双面光照）────────────────────────────────────────
-    if (_meshVertCount > 0) {
-        _gl->glDisable(GL_BLEND);
-        _gl->glEnable(GL_DEPTH_TEST);
-        _gl->glDepthMask(GL_TRUE);
-        _gl->glDepthFunc(GL_LEQUAL);
-        _meshProgram->bind();
-        _meshProgram->setUniformValue("uMVP",       mvp);
-        _meshProgram->setUniformValue("uNormalMat", mv.normalMatrix());
-        // 固定方向光：视角坐标系左上前方（与旧 GL_LIGHT0 位置一致）
-        _meshProgram->setUniformValue("uLightDir",  QVector3D(0.5f, 0.8f, 0.6f));
-        _meshVao.bind();
-        if (_meshHasFaces) {
-            _gl->glDrawArrays(GL_TRIANGLES, 0, _meshVertCount);
-        } else {
-            _meshProgram->setUniformValue("uPointSize", 1.5f);
-            _gl->glDrawArrays(GL_POINTS, 0, _meshVertCount);
-        }
-        _meshVao.release();
-        _meshProgram->release();
-        _gl->glEnable(GL_BLEND);
-        _gl->glBlendFunc(GL_SRC_ALPHA, GL_ONE_MINUS_SRC_ALPHA);
-    }
+    uniforms.lightDirPointSize.setW(_meshHasFaces ? 1.0f : 1.5f);
+    drawRhiBuffer(cb,
+                  &_meshBuffer,
+                  _meshHasFaces ? &_meshTrianglePipeline : &_meshPointPipeline,
+                  uniforms);
 
-    // ── 模型顶点（无面片时作为点云）──────────────────────────────────────
-    if (_modelPtCount > 0) {
-        drawOpaquePointSet(_modelPtVao, _modelPtCount, _modelPointSize);
-    }
+    uniforms.lightDirPointSize.setW(_modelPointSize);
+    drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms);
 
-    // ── 包围盒线框 ────────────────────────────────────────────────────────
-    if (_lineCount > 0) {
-        _colorProgram->bind();
-        _colorProgram->setUniformValue("uMVP",       mvp);
-        _colorProgram->setUniformValue("uPointSize", 1.0f);
-        _lineVao.bind();
-        _gl->glLineWidth(1.0f);
-        _gl->glDrawArrays(GL_LINES, 0, _lineCount);
-        _lineVao.release();
-        _colorProgram->release();
-    }
+    uniforms.lightDirPointSize.setW(1.0f);
+    drawRhiBuffer(cb, &_lineBuffer, &_colorLinePipeline, uniforms);
+
+    cb->endPass();
 
     drawOverlay();
 }
@@ -2484,7 +2582,7 @@ void CameraSceneWidget::mousePressEvent(QMouseEvent *event)
         event->accept();
         return;
     }
-    QOpenGLWidget::mousePressEvent(event);
+    QRhiWidget::mousePressEvent(event);
 }
 
 void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
@@ -2554,7 +2652,7 @@ void CameraSceneWidget::mouseMoveEvent(QMouseEvent *event)
     }
 
     _lastMousePos = event->pos();
-    QOpenGLWidget::mouseMoveEvent(event);
+    QRhiWidget::mouseMoveEvent(event);
 }
 
 void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
@@ -2578,7 +2676,7 @@ void CameraSceneWidget::mouseReleaseEvent(QMouseEvent *event)
         _middleDragging = false;
     }
     updateCursor();
-    QOpenGLWidget::mouseReleaseEvent(event);
+    QRhiWidget::mouseReleaseEvent(event);
 }
 
 void CameraSceneWidget::wheelEvent(QWheelEvent *event)
@@ -2607,7 +2705,7 @@ void CameraSceneWidget::keyPressEvent(QKeyEvent *event)
         event->accept();
         return;
     }
-    QOpenGLWidget::keyPressEvent(event);
+    QRhiWidget::keyPressEvent(event);
 }
 
 CameraModel3DDialog::CameraModel3DDialog(ProjectManager *projectManager, QWidget *parent)
