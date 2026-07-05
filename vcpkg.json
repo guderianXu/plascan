@@ -36,6 +36,7 @@
       ]
     },
     "qtbase",
+    "vulkan",
     "tiff",
     {
       "name": "xcb-cursor",

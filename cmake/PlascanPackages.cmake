@@ -8,9 +8,17 @@ include_guard(GLOBAL)
 # ==============================================================================
 
 # ── Qt6 ───────────────────────────────────────────────────────────────────────
-# 合并所有模块所需组件（Core/Gui/Widgets/Concurrent/OpenGL/OpenGLWidgets）
-find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent OpenGL OpenGLWidgets)
+# 合并所有模块所需组件（Core/Gui/Widgets/Concurrent/ShaderTools）
+find_package(Qt6 REQUIRED COMPONENTS Core Gui Widgets Concurrent ShaderTools ShaderToolsTools)
 message(STATUS "plascan: found Qt6 ${Qt6_VERSION}")
+
+get_target_property(_PLASCAN_QT_GUI_PUBLIC_FEATURES Qt6::Gui QT_ENABLED_PUBLIC_FEATURES)
+list(FIND _PLASCAN_QT_GUI_PUBLIC_FEATURES vulkan _PLASCAN_QT_GUI_VULKAN_FEATURE_INDEX)
+if(_PLASCAN_QT_GUI_VULKAN_FEATURE_INDEX EQUAL -1)
+  message(FATAL_ERROR
+    "PlaScan Vulkan rendering requires QtGui built with Vulkan support. "
+    "Install Vulkan SDK/loader/headers and rebuild the vcpkg Qt package.")
+endif()
 
 # ── OpenCV ────────────────────────────────────────────────────────────────────
 find_package(OpenCV REQUIRED)
