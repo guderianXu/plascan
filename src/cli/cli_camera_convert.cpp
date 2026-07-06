@@ -5,6 +5,7 @@
 #include "cli_common.h"
 
 #include "CameraFormatConverter.h"
+#include "io/PathIO.h"
 
 #include <cstdio>
 #include <filesystem>
@@ -138,8 +139,8 @@ int main(int argc, char *argv[])
 
     xjw::camera::CameraConversionOptions options;
     options.format = *parsedFormat;
-    options.inputPath = std::filesystem::path(inputPath);
-    options.outputDir = std::filesystem::path(outputDir);
+    options.inputPath = xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(inputPath));
+    options.outputDir = xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(outputDir));
     options.datasetId = datasetId;
     options.overwrite = overwrite;
 
@@ -151,8 +152,10 @@ int main(int argc, char *argv[])
 
     std::fprintf(stdout, "相机转换完成: %d 个相机\n", result.cameraCount);
     std::fprintf(stdout, "输入格式: %s\n", xjw::camera::cameraFormatName(result.inputFormat).c_str());
-    std::fprintf(stdout, "image_camera.lis: %s\n", result.imageCameraList.string().c_str());
-    std::fprintf(stdout, "summary.json: %s\n", result.summaryPath.string().c_str());
+    const std::string imageCameraList = xjw::common::io::toUtf8Path(result.imageCameraList);
+    const std::string summaryPath = xjw::common::io::toUtf8Path(result.summaryPath);
+    std::fprintf(stdout, "image_camera.lis: %s\n", imageCameraList.c_str());
+    std::fprintf(stdout, "summary.json: %s\n", summaryPath.c_str());
     printWarnings(result.warnings);
     return cli::EXIT_OK;
 }

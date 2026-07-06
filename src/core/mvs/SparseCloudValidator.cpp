@@ -4,6 +4,8 @@
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/xyz_io.h>
 
+#include "io/PathIO.h"
+
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -44,11 +46,11 @@ bool SparseCloudValidator::validate(const std::string &cloudPath,
     {
         if (endsWithIgnoreCase(cloudPath, ".ply"))
         {
-            cloud = plapoint::io::readPly<float>(cloudPath);
+            cloud = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(cloudPath));
         }
         else
         {
-            cloud = plapoint::io::readXyz<float>(cloudPath);
+            cloud = plapoint::io::readXyz<float>(xjw::common::io::toNativeNarrowPath(cloudPath));
         }
     }
     catch (const std::exception &e)

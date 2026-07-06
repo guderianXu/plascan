@@ -1,6 +1,6 @@
 add_library(camera STATIC Camera.cpp PositiveDepthCameraModel.cpp CameraFormatConverter.cpp)
 target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
-target_link_libraries(camera PRIVATE ${PLASCAN_LIBZIP_TARGET})
+target_link_libraries(camera PUBLIC plascan_common_io PRIVATE ${PLASCAN_LIBZIP_TARGET})
 
 add_executable(camera_test test.cpp)
 target_link_libraries(camera_test PRIVATE camera)

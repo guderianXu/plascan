@@ -2,6 +2,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <tuple>
 
 namespace xjw
@@ -78,6 +79,88 @@ private:
     std::vector<MultiViewTrackBuilder::ObservationKey> _keys;
     std::vector<int> _parent;
 };
+
+void rebuildTrackStats(MultiViewTrackBuildResult *result)
+{
+    if (!result)
+    {
+        return;
+    }
+
+    result->acceptedComponents = static_cast<int>(result->tracks.size());
+    result->trackLengthHistogram.clear();
+    result->trackConfidenceScores.clear();
+    result->meanTrackConfidence = 0.0;
+    for (const Track &track : result->tracks)
+    {
+        ++result->trackLengthHistogram[static_cast<int>(track.length())];
+        result->trackConfidenceScores.push_back(track.confidence);
+        result->meanTrackConfidence += track.confidence;
+    }
+}
+
+bool isStationaryTrack(const Track &track,
+                       const std::map<ImageId, std::vector<FeatureKeypoint>> &keypointsByImage,
+                       float maxPixelMotion)
+{
+    if (track.length() < 2)
+    {
+        return false;
+    }
+
+    float minX = std::numeric_limits<float>::max();
+    float minY = std::numeric_limits<float>::max();
+    float maxX = std::numeric_limits<float>::lowest();
+    float maxY = std::numeric_limits<float>::lowest();
+    int validObservationCount = 0;
+
+    for (const TrackElement &element : track.elements)
+    {
+        const auto imageIt = keypointsByImage.find(element.imageId);
+        if (imageIt == keypointsByImage.end() ||
+            element.featureIdx >= static_cast<FeatureIdx>(imageIt->second.size()))
+        {
+            return false;
+        }
+
+        const FeatureKeypoint &keypoint = imageIt->second[static_cast<std::size_t>(element.featureIdx)];
+        minX = std::min(minX, keypoint.x);
+        minY = std::min(minY, keypoint.y);
+        maxX = std::max(maxX, keypoint.x);
+        maxY = std::max(maxY, keypoint.y);
+        ++validObservationCount;
+    }
+
+    return validObservationCount >= 2 &&
+        (maxX - minX) <= maxPixelMotion &&
+        (maxY - minY) <= maxPixelMotion;
+}
+
+void pruneStationaryTracks(const MultiViewTrackBuilder::BuildOptions &options,
+                           const std::map<ImageId, std::vector<FeatureKeypoint>> &keypointsByImage,
+                           MultiViewTrackBuildResult *result)
+{
+    if (!result || !options.excludeStationaryTracks || result->tracks.empty())
+    {
+        return;
+    }
+
+    const float maxPixelMotion = std::max(0.0f, options.stationaryTrackMaxPixelMotion);
+    std::vector<Track> keptTracks;
+    keptTracks.reserve(result->tracks.size());
+    for (const Track &track : result->tracks)
+    {
+        if (isStationaryTrack(track, keypointsByImage, maxPixelMotion))
+        {
+            ++result->prunedStationaryTracks;
+            continue;
+        }
+        keptTracks.push_back(track);
+    }
+
+    result->tracks = std::move(keptTracks);
+    rebuildTrackStats(result);
+}
 
 } // namespace
 
@@ -261,6 +344,8 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
         result.tracks.push_back(std::move(track));
     }
 
+    pruneStationaryTracks(options, _keypointsByImage, &result);
+
     if (options.enableQualityThinning && !result.tracks.empty())
     {
         std::vector<int> order(result.tracks.size());
@@ -363,16 +448,7 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
         }
 
         result.tracks = std::move(thinnedTracks);
-        result.acceptedComponents = static_cast<int>(result.tracks.size());
-        result.trackLengthHistogram.clear();
-        result.trackConfidenceScores.clear();
-        result.meanTrackConfidence = 0.0;
-        for (const Track &track : result.tracks)
-        {
-            ++result.trackLengthHistogram[static_cast<int>(track.length())];
-            result.trackConfidenceScores.push_back(track.confidence);
-            result.meanTrackConfidence += track.confidence;
-        }
+        rebuildTrackStats(&result);
     }
 
     if (!result.trackConfidenceScores.empty())

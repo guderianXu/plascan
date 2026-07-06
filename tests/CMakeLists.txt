@@ -22,6 +22,80 @@ endif()
 set(TEST_DATA_DIR "${CMAKE_SOURCE_DIR}/testData")
 add_definitions(-DTEST_DATA_DIR="${TEST_DATA_DIR}")
 
+add_executable(test_common_unicode_path_io test_common_unicode_path_io.cpp)
+target_link_libraries(test_common_unicode_path_io PRIVATE
+    plascan_common_io
+    Qt6::Core
+    ${OpenCV_LIBS}
+    GTest::gtest_main
+)
+target_include_directories(test_common_unicode_path_io PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_common_unicode_path_io)
+
+add_executable(test_mask_generation test_mask_generation.cpp)
+target_link_libraries(test_mask_generation PRIVATE
+    mask
+    ${OpenCV_LIBS}
+    GTest::gtest_main
+)
+target_include_directories(test_mask_generation PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/mask
+)
+gtest_discover_tests(test_mask_generation)
+
+add_executable(test_source_contracts test_source_contracts.cpp)
+target_link_libraries(test_source_contracts PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_compile_definitions(test_source_contracts PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+gtest_discover_tests(test_source_contracts)
+
+add_executable(test_cli_contracts test_cli_contracts.cpp)
+target_link_libraries(test_cli_contracts PRIVATE
+    Qt6::Core
+    ${PLASCAN_LIBZIP_TARGET}
+    GTest::gtest_main
+)
+target_compile_definitions(test_cli_contracts PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+if(TARGET reconstruct_pipeline_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_RECONSTRUCT_PIPELINE_CLI_PATH="$<TARGET_FILE:reconstruct_pipeline_cli>"
+    )
+    add_dependencies(test_cli_contracts reconstruct_pipeline_cli)
+endif()
+if(TARGET camera_convert_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_CAMERA_CONVERT_CLI_PATH="$<TARGET_FILE:camera_convert_cli>"
+    )
+    add_dependencies(test_cli_contracts camera_convert_cli)
+endif()
+if(TARGET bundle_adjust_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_BUNDLE_ADJUST_CLI_PATH="$<TARGET_FILE:bundle_adjust_cli>"
+    )
+    add_dependencies(test_cli_contracts bundle_adjust_cli)
+endif()
+if(TARGET feature_match_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_FEATURE_MATCH_CLI_PATH="$<TARGET_FILE:feature_match_cli>"
+    )
+    add_dependencies(test_cli_contracts feature_match_cli)
+endif()
+if(TARGET dense_cloud_refine_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH="$<TARGET_FILE:dense_cloud_refine_cli>"
+    )
+    add_dependencies(test_cli_contracts dense_cloud_refine_cli)
+endif()
+gtest_discover_tests(test_cli_contracts)
+
 # ==============================================================================
 # test_sfm_filter — 稀疏点云过滤器
 # ==============================================================================
@@ -227,8 +301,8 @@ target_link_libraries(test_aerial_triangulation_workflow PRIVATE
     GTest::gtest_main
 )
 target_include_directories(test_aerial_triangulation_workflow PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
     ${CMAKE_SOURCE_DIR}/src/core/sfm
     ${CMAKE_SOURCE_DIR}/src/core/camera
@@ -279,8 +353,8 @@ target_link_libraries(test_feature_pair_planner PRIVATE
     GTest::gtest_main
 )
 target_include_directories(test_feature_pair_planner PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_feature_pair_planner)
@@ -559,6 +633,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateMaskDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SurveyControlDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CreateTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThinTiePointsDialog.cpp
@@ -584,6 +659,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
@@ -605,6 +681,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     bundle_adjust
     qc
     terrain
+    mask
     Qt6::Core
     Qt6::Concurrent
     Qt6::Gui
@@ -612,13 +689,14 @@ target_link_libraries(test_gui_project_utils PRIVATE
     Qt6::Widgets
     ${OpenCV_LIBS}
     ${PLASCAN_LIBZIP_TARGET}
+    ${PLASCAN_GDAL_TARGET}
+    plascan_common_io
     GTest::gtest
 )
 target_compile_definitions(test_gui_project_utils PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_include_directories(test_gui_project_utils PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/gui/menu
@@ -630,6 +708,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/project/manager
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
+    ${CMAKE_SOURCE_DIR}/src/gui/views
     ${CMAKE_SOURCE_DIR}/src/gui/widgets
     ${CMAKE_SOURCE_DIR}/src/core/sfm
     ${CMAKE_SOURCE_DIR}/src/core/camera
@@ -639,6 +718,8 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/qc
     ${CMAKE_SOURCE_DIR}/src/core/terrain
     ${CMAKE_SOURCE_DIR}/src/core/mvs
+    ${CMAKE_SOURCE_DIR}/src/core/mask
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
     ${CMAKE_SOURCE_DIR}/src/core
     ${OpenCV_INCLUDE_DIRS}
@@ -674,12 +755,16 @@ target_link_libraries(test_layer_renderer_batched_overlay PRIVATE
     ${OpenCV_LIBS}
     ${TORCH_LIBRARIES}
     ${PLASCAN_GDAL_TARGET}
+    plascan_common_io
+    mask
     GTest::gtest
 )
 target_include_directories(test_layer_renderer_batched_overlay PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/views
     ${CMAKE_SOURCE_DIR}/src/gui/project/io
+    ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_SOURCE_DIR}/src/common/log
+    ${CMAKE_SOURCE_DIR}/src/core/mask
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
     ${OpenCV_INCLUDE_DIRS}
@@ -732,14 +817,6 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
-        NAME AerialTriangulationServiceDefaultAlgorithmsTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_sfm_service_default_algorithms
-    )
-    set_tests_properties(AerialTriangulationServiceDefaultAlgorithmsTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
         NAME DownloadPhotogrammetryTestDataTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_download_photogrammetry_testdata
     )
@@ -780,22 +857,6 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
-        NAME MvsSchedulerConfigTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_mvs_scheduler_config
-    )
-    set_tests_properties(MvsSchedulerConfigTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
-        NAME ThreeDReconstructionCliTest
-        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_three_d_reconstruction_cli
-    )
-    set_tests_properties(ThreeDReconstructionCliTest PROPERTIES
-        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-    )
-
-    add_test(
         NAME PhotogrammetryBenchmarkRunnerTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_photogrammetry_benchmark_runner
     )
@@ -826,50 +887,6 @@ if(Python3_Interpreter_FOUND)
     set_tests_properties(LightGlueTorchscriptModelTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
-
-    if(TARGET reconstruct_pipeline_cli)
-        add_test(
-            NAME ReconstructPipelineCliTest
-            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_reconstruct_pipeline_cli
-        )
-        set_tests_properties(ReconstructPipelineCliTest PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            ENVIRONMENT "PLASCAN_RECONSTRUCT_PIPELINE_CLI=$<TARGET_FILE:reconstruct_pipeline_cli>"
-        )
-    endif()
-
-    if(TARGET camera_convert_cli)
-        add_test(
-            NAME CameraConvertCliTest
-            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_camera_convert_cli
-        )
-        set_tests_properties(CameraConvertCliTest PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            ENVIRONMENT "PLASCAN_CAMERA_CONVERT_CLI=$<TARGET_FILE:camera_convert_cli>"
-        )
-    endif()
-
-    if(TARGET bundle_adjust_cli)
-        add_test(
-            NAME BundleAdjustCliTest
-            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_bundle_adjust_cli
-        )
-        set_tests_properties(BundleAdjustCliTest PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            ENVIRONMENT "PLASCAN_BUNDLE_ADJUST_CLI=$<TARGET_FILE:bundle_adjust_cli>"
-        )
-    endif()
-
-    if(TARGET feature_match_cli)
-        add_test(
-            NAME FeatureMatchCliSidecarTest
-            COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_feature_match_cli_sidecar
-        )
-        set_tests_properties(FeatureMatchCliSidecarTest PROPERTIES
-            WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
-            ENVIRONMENT "PLASCAN_FEATURE_MATCH_CLI=$<TARGET_FILE:feature_match_cli>"
-        )
-    endif()
 
     add_test(
         NAME PrepareMunFrlLidarBaProjectTest

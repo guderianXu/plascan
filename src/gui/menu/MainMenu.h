@@ -64,9 +64,6 @@ public:
     /** @brief 返回"照片面板"显示/隐藏切换动作（可检查状态的 QAction）。 */
     QAction *togglePhotosAction() const;
 
-    /** @brief 返回"兴趣点信息面板"显示/隐藏切换动作（可检查状态的 QAction）。 */
-    QAction *featureInfoAction() const;
-
     // ==== 工具栏 ====
 
     /** @brief 返回主工具栏指针，外部可向其添加额外的操作按钮。 */
@@ -165,6 +162,7 @@ public:
     QAction *viewTiePointMatchesAction() const;
     QAction *manualPointCloudPruneAction() const;
     QAction *cameraConvertAction() const;
+    QAction *generateMaskAction() const;
     QAction *surveyControlAction() const;
     QAction *importReferenceDatasetAction() const;
     QAction *referenceQualityCheckAction() const;
@@ -237,8 +235,6 @@ private:
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏操控球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
     QAction *_toggleHenanUniversityBrandAct{}; ///< 显示/隐藏河南大学校徽
-    QAction *_featureInfoAct{}; ///< 兴趣点信息面板开关
-
     // ---- 面板开关动作 ----
     QAction *_toggleWorkspaceAct{}; ///< 左侧工作区显示/隐藏
     QAction *_togglePropertiesAct{}; ///< 属性面板显示/隐藏
@@ -270,6 +266,7 @@ private:
     QAction *_viewTiePointMatchesAct{};       ///< 工具菜单中查看匹配入口
     QAction *_manualPointCloudPruneAct{};     ///< 手动点云剔除
     QAction *_cameraConvertAct{};             ///< 通用相机格式转换
+    QAction *_generateMaskAct{};              ///< 生成照片蒙版
     QAction *_surveyControlAct{};             ///< 控制点/检查点/比例尺管理
     QAction *_importReferenceDatasetAct{};    ///< 导入外部 DEM/LiDAR 参考数据
     QAction *_referenceQualityCheckAct{};     ///< 使用参考数据生成精度检查报告

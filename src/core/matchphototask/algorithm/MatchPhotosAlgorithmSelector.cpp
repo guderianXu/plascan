@@ -1,5 +1,7 @@
 #include "MatchPhotosAlgorithmSelector.h"
 
+#include <algorithm>
+
 namespace xjw
 {
 namespace matchphotos
@@ -57,6 +59,19 @@ int defaultMaxKeypoints(MatchPhotosProfile profile)
     return 8192;
 }
 
+int resolveMaxKeypoints(const MatchPhotosOptions &options)
+{
+    if (options.useExplicitKeypointLimit)
+    {
+        return std::max(0, options.maxKeypoints);
+    }
+    if (options.maxKeypoints > 0)
+    {
+        return options.maxKeypoints;
+    }
+    return defaultMaxKeypoints(options.profile);
+}
+
 bool defaultGuidedMatching(MatchPhotosProfile profile, bool requested)
 {
     return requested ||
@@ -84,7 +99,7 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.rotationRobust = true;
     plan.enableGuidedMatching = defaultGuidedMatching(options.profile, options.enableGuidedMatching);
     plan.maxImageDim = options.maxImageDim;
-    plan.maxKeypoints = options.maxKeypoints > 0 ? options.maxKeypoints : defaultMaxKeypoints(options.profile);
+    plan.maxKeypoints = resolveMaxKeypoints(options);
     plan.reason = QStringLiteral("采用 SIFT 作为特征提取器以保留尺度和旋转鲁棒性，"
                                  "再使用 LightGlue 对 .sift 特征进行学习型匹配。");
     plan.fallbackReason = QStringLiteral("LightGlue 模型或运行环境不可用时，可回退到 SIFT BF-L2，"

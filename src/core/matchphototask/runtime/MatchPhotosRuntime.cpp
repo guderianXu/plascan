@@ -256,6 +256,26 @@ QString resolveLightGlueModelPath(const MatchPhotosAlgorithmPlan &plan,
     return QString();
 }
 
+int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
+                                const MatchPhotosAlgorithmPlan &plan,
+                                int imageWidth,
+                                int imageHeight)
+{
+    if (plan.enableGuidedMatching &&
+        options.keypointLimitPerMegapixel > 0 &&
+        imageWidth > 0 &&
+        imageHeight > 0)
+    {
+        const double megapixels =
+            static_cast<double>(imageWidth) * static_cast<double>(imageHeight) / 1000000.0;
+        return std::max(1,
+                        static_cast<int>(std::round(
+                            static_cast<double>(options.keypointLimitPerMegapixel) * megapixels)));
+    }
+
+    return std::max(0, plan.maxKeypoints);
+}
+
 QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
                                       const MatchPhotosOptions &options)
 {
@@ -263,6 +283,9 @@ QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("feature_algorithm")] = plan.featureAlgorithm;
     settings[QStringLiteral("feature_suffix")] = plan.featureSuffix;
     settings[QStringLiteral("max_keypoints")] = plan.maxKeypoints;
+    settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
+    settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
+    settings[QStringLiteral("guided_image_matching")] = plan.enableGuidedMatching;
     settings[QStringLiteral("max_image_dim")] = options.maxImageDim;
     settings[QStringLiteral("matchphotos_task")] = true;
     return settings;
@@ -294,6 +317,11 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("feature_algorithm")] = plan.featureAlgorithm;
     settings[QStringLiteral("match_algorithm")] = plan.matcherAlgorithm;
     settings[QStringLiteral("match_threshold")] = static_cast<double>(options.matchThreshold);
+    settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
+    settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
+    settings[QStringLiteral("guided_image_matching")] = plan.enableGuidedMatching;
+    settings[QStringLiteral("tiepoint_limit")] = options.maxTiePointsPerImage;
+    settings[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
     settings[QStringLiteral("num_matches")] = matchCount;
     settings[QStringLiteral("matchphotos_task")] = true;
     for (auto it = extraSettings.constBegin(); it != extraSettings.constEnd(); ++it)

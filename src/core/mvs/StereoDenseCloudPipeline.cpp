@@ -1,6 +1,7 @@
 #include "StereoDenseCloudPipeline.h"
 
 #include "StereoDenseCloudPipelinePaths.h"
+#include "io/PathIO.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -61,8 +62,8 @@ bool StereoDenseCloudPipeline::run(const std::string &leftImagePath,
                                    const std::string &outputDir,
                                    StereoPipelineResult *result)
 {
-    cv::Mat leftImg = cv::imread(leftImagePath, cv::IMREAD_UNCHANGED);
-    cv::Mat rightImg = cv::imread(rightImagePath, cv::IMREAD_UNCHANGED);
+    cv::Mat leftImg = xjw::common::io::readImage(leftImagePath, cv::IMREAD_UNCHANGED);
+    cv::Mat rightImg = xjw::common::io::readImage(rightImagePath, cv::IMREAD_UNCHANGED);
     if (leftImg.empty() || rightImg.empty())
     {
         if (result)

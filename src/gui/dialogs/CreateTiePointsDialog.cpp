@@ -5,11 +5,14 @@
 #include <QDialogButtonBox>
 #include <QFormLayout>
 #include <QGroupBox>
+#include <QLabel>
 #include <QLineEdit>
 #include <QPushButton>
 #include <QRegularExpression>
 #include <QRegularExpressionValidator>
 #include <QVBoxLayout>
+
+#include <algorithm>
 
 namespace
 {
@@ -56,7 +59,20 @@ QString CreateTiePointsDialog::accuracy() const
 
 int CreateTiePointsDialog::keypointLimit() const
 {
+    if (useGuidedMatching())
+    {
+        return _keypointLimit;
+    }
     return intFromEdit(_keypointLimitEdit, 40000);
+}
+
+int CreateTiePointsDialog::keypointLimitPerMegapixel() const
+{
+    if (useGuidedMatching())
+    {
+        return intFromEdit(_keypointLimitEdit, 1000);
+    }
+    return _keypointLimitPerMegapixel;
 }
 
 int CreateTiePointsDialog::tiePointLimit() const
@@ -84,6 +100,29 @@ bool CreateTiePointsDialog::excludePinnedTiePoints() const
     return _excludePinnedTiePointsCheck && _excludePinnedTiePointsCheck->isChecked();
 }
 
+void CreateTiePointsDialog::setReferencePreselectionAvailable(bool available,
+                                                              int cameraCount,
+                                                              int imageCount)
+{
+    if (_referencePreselectionCheck)
+    {
+        _referencePreselectionCheck->setEnabled(available);
+        _referencePreselectionCheck->setChecked(false);
+        _referencePreselectionCheck->setToolTip(
+            available
+                ? tr("使用已导入相机模型/外参生成候选匹配对。")
+                : tr("当前项目没有完整可用的相机参考，只能使用通用预选或全量两两匹配。"));
+    }
+
+    if (_preselectionStatusLabel)
+    {
+        _preselectionStatusLabel->setText(
+            available
+                ? tr("已检测到 %1/%2 个相机参考，可启用参考预选。").arg(cameraCount).arg(imageCount)
+                : tr("未检测到完整相机参考；参考预选不可用。"));
+    }
+}
+
 int CreateTiePointsDialog::intFromEdit(const QLineEdit *edit, int fallback) const
 {
     if (!edit)
@@ -98,6 +137,38 @@ int CreateTiePointsDialog::intFromEdit(const QLineEdit *edit, int fallback) cons
     bool ok = false;
     const int value = text.toInt(&ok);
     return ok ? value : fallback;
+}
+
+QString CreateTiePointsDialog::formattedInteger(int value) const
+{
+    QString number = QString::number(std::max(0, value));
+    for (int pos = number.size() - 3; pos > 0; pos -= 3)
+    {
+        number.insert(pos, QLatin1Char(','));
+    }
+    return number;
+}
+
+void CreateTiePointsDialog::updateKeypointLimitMode(bool guided)
+{
+    if (!_keypointLimitEdit || !_keypointLimitLabel)
+    {
+        return;
+    }
+
+    if (guided)
+    {
+        _keypointLimit = intFromEdit(_keypointLimitEdit, _keypointLimit);
+        _keypointLimitLabel->setText(tr("每百万像素的关键点限制:"));
+        _keypointLimitEdit->setText(formattedInteger(_keypointLimitPerMegapixel));
+    }
+    else
+    {
+        _keypointLimitPerMegapixel =
+            intFromEdit(_keypointLimitEdit, _keypointLimitPerMegapixel);
+        _keypointLimitLabel->setText(tr("关键点限制:"));
+        _keypointLimitEdit->setText(formattedInteger(_keypointLimit));
+    }
 }
 
 void CreateTiePointsDialog::buildUi()
@@ -124,16 +195,25 @@ void CreateTiePointsDialog::buildUi()
     _referencePreselectionCheck = new QCheckBox(tr("参考预选"), generalGroup);
     _referencePreselectionCheck->setEnabled(false);
     generalLayout->addRow(QString(), _referencePreselectionCheck);
+
+    _preselectionStatusLabel = new QLabel(generalGroup);
+    _preselectionStatusLabel->setWordWrap(true);
+    _preselectionStatusLabel->setText(tr("未检测到完整相机参考；参考预选不可用。"));
+    generalLayout->addRow(QString(), _preselectionStatusLabel);
     mainLayout->addWidget(generalGroup);
 
     auto *advancedGroup = new QGroupBox(tr("高级"), this);
     auto *advancedLayout = new QFormLayout(advancedGroup);
     advancedLayout->setFieldGrowthPolicy(QFormLayout::ExpandingFieldsGrow);
 
+    _keypointLimitLabel = new QLabel(tr("关键点限制:"), advancedGroup);
+    _keypointLimitLabel->setObjectName(QStringLiteral("m_keypointLimitLabel"));
     _keypointLimitEdit = makeIntegerEdit(advancedGroup, QStringLiteral("40,000"));
-    advancedLayout->addRow(tr("关键点限制:"), _keypointLimitEdit);
+    _keypointLimitEdit->setObjectName(QStringLiteral("m_keypointLimitEdit"));
+    advancedLayout->addRow(_keypointLimitLabel, _keypointLimitEdit);
 
     _tiePointLimitEdit = makeIntegerEdit(advancedGroup, QStringLiteral("4,000"));
+    _tiePointLimitEdit->setObjectName(QStringLiteral("m_tiePointLimitEdit"));
     advancedLayout->addRow(tr("连接点限制:"), _tiePointLimitEdit);
 
     _maskModeCombo = new QComboBox(advancedGroup);
@@ -142,6 +222,11 @@ void CreateTiePointsDialog::buildUi()
     advancedLayout->addRow(tr("将掩膜应用于:"), _maskModeCombo);
 
     _guidedMatchingCheck = new QCheckBox(tr("指导图像匹配"), advancedGroup);
+    _guidedMatchingCheck->setObjectName(QStringLiteral("m_guidedMatchingCheck"));
+    connect(_guidedMatchingCheck,
+            &QCheckBox::toggled,
+            this,
+            &CreateTiePointsDialog::updateKeypointLimitMode);
     advancedLayout->addRow(QString(), _guidedMatchingCheck);
 
     _excludePinnedTiePointsCheck = new QCheckBox(tr("不包括固定的连接点"), advancedGroup);

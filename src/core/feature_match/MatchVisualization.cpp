@@ -1,8 +1,12 @@
 #include "MatchVisualization.h"
+#include "io/PathIO.h"
 
 #include <opencv2/features2d.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+
+#include <QDir>
+#include <QFileInfo>
 
 #include <fstream>
 
@@ -15,15 +19,15 @@ namespace
 bool writeFallbackPpm(const QString &outputPath,
                       const cv::Mat &image)
 {
-    std::string ppmPath = outputPath.toStdString();
-    const size_t dot = ppmPath.find_last_of('.');
-    if (dot != std::string::npos)
+    const QFileInfo outputInfo(outputPath);
+    QString ppmPath;
+    if (!outputInfo.completeBaseName().isEmpty())
     {
-        ppmPath = ppmPath.substr(0, dot) + ".ppm";
+        ppmPath = outputInfo.dir().filePath(outputInfo.completeBaseName() + QStringLiteral(".ppm"));
     }
     else
     {
-        ppmPath += ".ppm";
+        ppmPath = outputPath + QStringLiteral(".ppm");
     }
 
     cv::Mat rgb;
@@ -52,7 +56,7 @@ bool writeFallbackPpm(const QString &outputPath,
         }
     }
 
-    std::ofstream out(ppmPath, std::ios::binary);
+    std::ofstream out = xjw::common::io::openOutputFile(ppmPath, std::ios::binary | std::ios::trunc);
     if (!out.is_open())
     {
         return false;
@@ -99,7 +103,7 @@ bool saveMatchVisualization(const cv::Mat &image0,
 
     try
     {
-        if (cv::imwrite(outputPath.toStdString(), outputImage))
+        if (xjw::common::io::writeImage(outputPath, outputImage))
         {
             return true;
         }

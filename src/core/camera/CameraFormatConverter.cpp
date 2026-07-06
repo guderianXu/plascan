@@ -1,4 +1,5 @@
 #include "CameraFormatConverter.h"
+#include "io/PathIO.h"
 
 #include <algorithm>
 #include <array>
@@ -203,7 +204,7 @@ std::array<double, 9> colmapQvecToWorldToCameraRotation(double qw, double qx, do
 
 std::vector<std::string> readDataLines(const std::filesystem::path &path)
 {
-    std::ifstream in(path);
+    std::ifstream in = xjw::common::io::openInputFile(path, std::ios::in);
     if (!in)
     {
         throw std::runtime_error("无法打开相机文件: " + path.string());
@@ -241,7 +242,7 @@ std::vector<double> parseNumericLine(const std::string &line, int expectedCount)
 
 std::string readTextFile(const std::filesystem::path &path)
 {
-    std::ifstream in(path, std::ios::binary);
+    std::ifstream in = xjw::common::io::openInputFile(path);
     if (!in)
     {
         throw std::runtime_error("无法打开文本文件: " + path.string());
@@ -252,14 +253,65 @@ std::string readTextFile(const std::filesystem::path &path)
     return buffer.str();
 }
 
+std::string zipErrorMessage(zip_error_t *zipError)
+{
+    const char *message = zipError ? zip_error_strerror(zipError) : nullptr;
+    return message ? std::string(message) : std::string("未知 libzip 错误");
+}
+
+zip_t *openZipArchive(const std::filesystem::path &zipPath, std::string *error)
+{
+#ifdef _WIN32
+    zip_error_t zipError;
+    zip_error_init(&zipError);
+    zip_source_t *source = zip_source_win32w_create(zipPath.wstring().c_str(), 0, -1, &zipError);
+    if (!source)
+    {
+        if (error)
+        {
+            *error = zipErrorMessage(&zipError);
+        }
+        zip_error_fini(&zipError);
+        return nullptr;
+    }
+
+    zip_t *archive = zip_open_from_source(source, ZIP_RDONLY, &zipError);
+    if (!archive)
+    {
+        if (error)
+        {
+            *error = zipErrorMessage(&zipError);
+        }
+        zip_source_free(source);
+        zip_error_fini(&zipError);
+        return nullptr;
+    }
+
+    zip_error_fini(&zipError);
+    return archive;
+#else
+    int errorCode = 0;
+    const std::string zipPathUtf8 = xjw::common::io::toUtf8Path(zipPath);
+    zip_t *archive = zip_open(zipPathUtf8.c_str(), ZIP_RDONLY, &errorCode);
+    if (!archive && error)
+    {
+        zip_error_t zipError;
+        zip_error_init_with_code(&zipError, errorCode);
+        *error = zipErrorMessage(&zipError);
+        zip_error_fini(&zipError);
+    }
+    return archive;
+#endif
+}
+
 std::string readZipEntryText(const std::filesystem::path &zipPath,
                              const std::string &entryPath)
 {
-    int errorCode = 0;
-    zip_t *archive = zip_open(zipPath.string().c_str(), ZIP_RDONLY, &errorCode);
+    std::string openError;
+    zip_t *archive = openZipArchive(zipPath, &openError);
     if (!archive)
     {
-        throw std::runtime_error("无法打开 Metashape zip 文件: " + zipPath.string());
+        throw std::runtime_error("无法打开 Metashape zip 文件: " + zipPath.string() + ": " + openError);
     }
 
     zip_file_t *file = zip_fopen(archive, entryPath.c_str(), 0);
@@ -663,7 +715,7 @@ CameraRecord parseColmapImageLine(const std::string &line,
 std::vector<CameraRecord> parseColmapImages(const std::filesystem::path &path,
                                             const std::unordered_map<int, ColmapCameraModel> &cameras)
 {
-    std::ifstream in(path);
+    std::ifstream in = xjw::common::io::openInputFile(path, std::ios::in);
     if (!in)
     {
         throw std::runtime_error("无法打开相机文件: " + path.string());
@@ -1404,7 +1456,7 @@ std::string relativeToken(const std::filesystem::path &path,
 
 void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
 {
-    std::ofstream out(path);
+    std::ofstream out = xjw::common::io::openOutputFile(path, std::ios::out | std::ios::trunc);
     if (!out)
     {
         throw std::runtime_error("无法写入 tsai 文件: " + path.string());
@@ -1444,7 +1496,7 @@ void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
 void writeSummary(const std::filesystem::path &summaryPath,
                   const CameraConversionResult &result)
 {
-    std::ofstream out(summaryPath);
+    std::ofstream out = xjw::common::io::openOutputFile(summaryPath, std::ios::out | std::ios::trunc);
     if (!out)
     {
         throw std::runtime_error("无法写入 summary.json: " + summaryPath.string());
@@ -1453,10 +1505,10 @@ void writeSummary(const std::filesystem::path &summaryPath,
     out << "{\n";
     out << "  \"dataset_id\": \"" << jsonEscape(result.datasetId) << "\",\n";
     out << "  \"input_format\": \"" << cameraFormatName(result.inputFormat) << "\",\n";
-    out << "  \"source_dir\": \"" << jsonEscape(std::filesystem::absolute(result.sourceDir).string()) << "\",\n";
-    out << "  \"output_dir\": \"" << jsonEscape(std::filesystem::absolute(result.outputDir).string()) << "\",\n";
+    out << "  \"source_dir\": \"" << jsonEscape(xjw::common::io::toUtf8Path(std::filesystem::absolute(result.sourceDir))) << "\",\n";
+    out << "  \"output_dir\": \"" << jsonEscape(xjw::common::io::toUtf8Path(std::filesystem::absolute(result.outputDir))) << "\",\n";
     out << "  \"image_camera_list\": \""
-        << jsonEscape(std::filesystem::absolute(result.imageCameraList).string()) << "\",\n";
+        << jsonEscape(xjw::common::io::toUtf8Path(std::filesystem::absolute(result.imageCameraList))) << "\",\n";
     out << "  \"camera_count\": " << result.cameraCount << ",\n";
     out << "  \"warnings\": [";
     if (!result.warnings.empty())
@@ -1623,7 +1675,8 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
 
         prepareOutputDirectory(result.sourceDir, options.outputDir, options.overwrite);
 
-        std::ofstream listFile(result.imageCameraList);
+        std::ofstream listFile = xjw::common::io::openOutputFile(result.imageCameraList,
+                                                                 std::ios::out | std::ios::trunc);
         if (!listFile)
         {
             throw std::runtime_error("无法写入 image_camera.lis: " + result.imageCameraList.string());

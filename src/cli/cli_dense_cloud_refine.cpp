@@ -1,8 +1,12 @@
 #include "cli_common.h"
 
 #include "DenseCloudQualityFilter.h"
+#include "io/PathIO.h"
 
 #include <plapoint/io/ply_io.h>
+
+#include <QDir>
+#include <QFileInfo>
 
 #include <algorithm>
 #include <cmath>
@@ -131,7 +135,8 @@ std::string jsonEscape(const std::string &value)
 
 void ensureParentDirectory(const std::string &path)
 {
-    const std::filesystem::path file_path(path);
+    const std::filesystem::path file_path =
+        xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(path));
     const std::filesystem::path parent = file_path.parent_path();
     if (!parent.empty())
     {
@@ -164,7 +169,7 @@ void writeReportJson(const std::string &path,
                      const std::vector<xjw::mvs::TerrainHeightSpikeFilterReport> &pass_reports)
 {
     ensureParentDirectory(path);
-    std::ofstream out(path, std::ios::out | std::ios::trunc);
+    std::ofstream out = xjw::common::io::openOutputFile(path, std::ios::out | std::ios::trunc);
     if (!out)
     {
         throw std::runtime_error("Cannot write report JSON: " + path);
@@ -370,7 +375,7 @@ void forEachBinaryPlyPoint(const std::string &input_path,
                            int chunk_bytes,
                            Func &&func)
 {
-    std::ifstream file(input_path, std::ios::binary);
+    std::ifstream file = xjw::common::io::openInputFile(input_path);
     if (!file)
     {
         throw std::runtime_error("Cannot open PLY file: " + input_path);
@@ -688,7 +693,8 @@ bool refineBinaryPlyStreaming(const std::string &input_path,
 {
     plapoint::io::PlyVertexStreamHeader header;
     std::string header_error;
-    if (!plapoint::io::parseBinaryPlyVertexStreamHeader(input_path, &header, &header_error))
+    if (!plapoint::io::parseBinaryPlyVertexStreamHeader(
+            xjw::common::io::toNativeNarrowPath(input_path), &header, &header_error))
     {
         return false;
     }
@@ -775,7 +781,8 @@ bool refineBinaryPlyStreaming(const std::string &input_path,
     }
 
     ensureParentDirectory(output_path);
-    std::ofstream out(output_path, std::ios::out | std::ios::binary | std::ios::trunc);
+    std::ofstream out = xjw::common::io::openOutputFile(output_path,
+                                                            std::ios::out | std::ios::binary | std::ios::trunc);
     if (!out)
     {
         throw std::runtime_error("Cannot write PLY file: " + output_path);
@@ -835,11 +842,15 @@ xjw::mvs::TerrainHeightSpikeFilterReport combinePassReports(
 
 std::string temporaryPassPath(const std::string &output_path, int pass_index)
 {
-    std::filesystem::path path(output_path);
-    const std::string stem = path.stem().string();
-    const std::string extension = path.extension().string();
-    path.replace_filename(stem + ".pass" + std::to_string(pass_index) + ".tmp" + extension);
-    return path.string();
+    const QFileInfo outputInfo(xjw::common::io::fromUtf8Path(output_path));
+    const QString extension = outputInfo.suffix().isEmpty()
+                                  ? QString()
+                                  : QStringLiteral(".") + outputInfo.suffix();
+    const QString passName = QStringLiteral("%1.pass%2.tmp%3")
+                                 .arg(outputInfo.completeBaseName())
+                                 .arg(pass_index)
+                                 .arg(extension);
+    return xjw::common::io::toUtf8Path(outputInfo.dir().filePath(passName));
 }
 
 void removeTemporaryPaths(const std::vector<std::string> &paths)
@@ -847,7 +858,7 @@ void removeTemporaryPaths(const std::vector<std::string> &paths)
     for (const std::string &path : paths)
     {
         std::error_code ec;
-        std::filesystem::remove(path, ec);
+        std::filesystem::remove(xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(path)), ec);
     }
 }
 
@@ -1013,7 +1024,7 @@ int main(int argc, char **argv)
             return cli::EXIT_OK;
         }
 
-        auto cloud = plapoint::io::readPly<float>(input_path);
+        auto cloud = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(input_path));
         if (!cloud)
         {
             cli::fatal("无法读取输入点云: " + input_path, cli::EXIT_IO_ERR);
@@ -1029,7 +1040,8 @@ int main(int argc, char **argv)
         report = combinePassReports(pass_reports);
 
         ensureParentDirectory(output_path);
-        plapoint::io::writePly<float>(output_path, refined, plapoint::io::PlyFormat::BinaryLE);
+        plapoint::io::writePly<float>(
+            xjw::common::io::toNativeNarrowPath(output_path), refined, plapoint::io::PlyFormat::BinaryLE);
         writeReportJson(report_path,
                         input_path,
                         output_path,

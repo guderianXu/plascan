@@ -86,6 +86,11 @@ private:
     void selectResource(const QString &section, const QString &resourcePath);
     bool isProjectPhotoPath(const QString &imagePath) const;
     QJsonObject currentProjectMeta() const;
+    QJsonObject currentUiSettingsSnapshot() const;
+    void restoreDefaultProjectDockLayout();
+    void restoreProjectDockState(const QJsonObject &settings);
+    void ensureRequiredProjectDocksVisible();
+    void persistCurrentUiSettings();
     // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
     // 参数: partial - 仅包含需更新键值对的 JSON 对象
     void saveUiSetting(const QJsonObject &partial);
@@ -126,6 +131,7 @@ public:
     MenuWorkflowController* _menuWorkflowController{}; // 菜单业务流程控制器（对话框调用协调）
     ReconstructionWorkflowController* _reconController{}; // 重建菜单业务控制器
     ProjectManager*   _projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
+    QProgressDialog*  _openProgressDialog{};           // 打开项目期间显示的模态进度对话框
     QProgressDialog*  _saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
     TaskStatusWidget* _mvsTaskStatus{};                 // MVS 状态栏任务状态
     TaskStatusWidget* _meshTaskStatus{};                // 网格重建状态栏任务状态
@@ -138,6 +144,7 @@ public:
     QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
     DialogSettingStore*   _featureMatchingSetting{};   // 特征匹配对话框记忆化设置
     DialogSettingStore*   _uiSetting{};                // 主窗口 UI 状态记忆化设置
+    bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
     
     QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
 
@@ -146,6 +153,10 @@ private slots:
     // onProjectOpened: 项目打开/创建完成后刷新标题栏、数据树、画布、最近项目等 UI
     // 参数: plascanPath - .plascan 归档文件的绝对路径
     void onProjectOpened(const QString &plascanPath);
+    void onProjectClosed();
+    void onProjectOpenStarted(const QString &plascanPath);
+    void onProjectOpenProgressChanged(const QString &message, int percent);
+    void onProjectOpenFinished(bool success, const QString &message);
 
     // ---- UI 设置恢复 ----
     // applyUiSettings: 根据从项目文件加载的 JSON 恢复各 UI 状态（面板可见性、日志级别等）
@@ -164,10 +175,6 @@ private slots:
     void onLogDisplayLevelChanged(int lvl);
 
     // ---- 项目管理响应 ----
-    // onProjectCreated: 新建项目完成后调用，其行为与 onProjectOpened 相同
-    // 参数: plascanPath - .plascan 归档文件路径
-    void onProjectCreated(const QString &plascanPath);
-    
     // onSaveStarted: 保存操作开始时显示模态进度对话框
     void onSaveStarted();
     // onSaveFinished: 保存操作完成后隐藏进度对话框；在状态栏显示"保存完成"或"保存失败"

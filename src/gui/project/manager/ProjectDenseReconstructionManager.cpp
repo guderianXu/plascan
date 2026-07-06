@@ -17,6 +17,7 @@
 #include "MatchResultCatalog.h"
 #include "ProjectIO.h"
 #include "SparseCloudPreprocessor.h"
+#include "io/PathIO.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/search/kdtree.h>
 #include <plapoint/io/ply_io.h>
@@ -113,8 +114,8 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
             }
 
             xjw::mvs::MvsSourcePairQuality quality;
-            quality.imageA = sample.value(QStringLiteral("image_a")).toString().toStdString();
-            quality.imageB = sample.value(QStringLiteral("image_b")).toString().toStdString();
+            quality.imageA = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_a")).toString());
+            quality.imageB = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_b")).toString());
             quality.totalMatches = std::max(0, sample.value(QStringLiteral("match_count")).toInt());
             quality.geometricInliers = inliers;
             quality.verified = true;
@@ -141,8 +142,8 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
         }
 
         xjw::mvs::MvsSourcePairQuality quality;
-        quality.imageA = variant.imageA.toStdString();
-        quality.imageB = variant.imageB.toStdString();
+        quality.imageA = xjw::common::io::toUtf8Path(variant.imageA);
+        quality.imageB = xjw::common::io::toUtf8Path(variant.imageB);
         quality.totalMatches = std::max(0, variant.totalMatches);
         quality.geometricInliers = std::max(0, variant.geometricVerifiedInliers);
         quality.verified = true;
@@ -679,7 +680,7 @@ bool readPointCloudPly(const QString &path, PlaPC *cloud, QString *errorMessage)
 {
     try
     {
-        auto loaded = plapoint::io::readPly<float>(path.toStdString());
+        auto loaded = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(path));
         if (!loaded)
         {
             if (errorMessage) *errorMessage = QStringLiteral("读取PLY文件失败: %1").arg(path);
@@ -722,12 +723,14 @@ bool writePointCloudPly(const QString &path,
     {
         if (writeNormals || !pointCloud.hasNormals())
         {
-            plapoint::io::writePly(path.toStdString(), pointCloud, plapoint::io::PlyFormat::BinaryLE);
+            plapoint::io::writePly(
+                xjw::common::io::toNativeNarrowPath(path), pointCloud, plapoint::io::PlyFormat::BinaryLE);
         }
         else
         {
             const auto withoutNormals = cloneCloudValue(pointCloud, false);
-            plapoint::io::writePly(path.toStdString(), withoutNormals, plapoint::io::PlyFormat::BinaryLE);
+            plapoint::io::writePly(
+                xjw::common::io::toNativeNarrowPath(path), withoutNormals, plapoint::io::PlyFormat::BinaryLE);
         }
         return true;
     }
@@ -818,7 +821,8 @@ bool readBinaryPlyVertexCount(const QString &plyPath, std::uint64_t *vertexCount
 
     plapoint::io::PlyVertexStreamHeader header;
     std::string error;
-    if (!plapoint::io::parseBinaryPlyVertexStreamHeader(plyPath.toStdString(), &header, &error))
+    if (!plapoint::io::parseBinaryPlyVertexStreamHeader(
+            xjw::common::io::toNativeNarrowPath(plyPath), &header, &error))
     {
         return false;
     }
@@ -1388,7 +1392,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     for (const QString &imgPath : selectedImages)
     {
         CameraView view;
-        view.imagePath = imgPath.toStdString();
+        view.imagePath = xjw::common::io::toUtf8Path(imgPath);
         if (!cameraForImagePath(camMap, imgPath, &view.camera))
         {
             QMessageBox::warning(_parentWidget,
@@ -1403,7 +1407,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     DepthGenConfig genCfg = buildDepthGenConfig(request, static_cast<int>(views.size()));
     genCfg.runFusion = false;
     genCfg.saveIntermediateDepthMaps = true;
-    genCfg.intermediateDir = mvsOutDir.toStdString();
+    genCfg.intermediateDir = xjw::common::io::toUtf8Path(mvsOutDir);
     attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath());
 
     auto *gen = new DepthMapGenerator(this);
@@ -1420,7 +1424,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         gen->setSkippedFrameIndices(skipVector);
     }
     gen->setConfig(genCfg);
-    gen->setOutputDir(mvsOutDir.toStdString());
+    gen->setOutputDir(xjw::common::io::toUtf8Path(mvsOutDir));
 
     QPointer<ProjectDenseReconstructionManager> self(this);
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
@@ -1482,7 +1486,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
             SparseCloudPreprocessor pp(request.processingDevice);
             PreprocessResult ppRes;
             std::string ppErr;
-            if (pp.run(sparseXyz.toStdString(), views, ppRes, &ppErr))
+            if (pp.run(xjw::common::io::toUtf8Path(sparseXyz), views, ppRes, &ppErr))
             {
                 sparse = ppRes.cloud;
             }
@@ -1924,7 +1928,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     for (const QString &imgPath : selectedImages)
     {
         CameraView view;
-        view.imagePath = imgPath.toStdString();
+        view.imagePath = xjw::common::io::toUtf8Path(imgPath);
         if (!cameraForImagePath(camMap, imgPath, &view.camera))
         {
             QMessageBox::warning(_parentWidget,
@@ -1939,7 +1943,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     DepthGenConfig genCfg = buildDepthGenConfig(request, static_cast<int>(views.size()));
     genCfg.saveIntermediateDepthMaps = true;
     const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
-    genCfg.intermediateDir = mvsOutDir.toStdString();
+    genCfg.intermediateDir = xjw::common::io::toUtf8Path(mvsOutDir);
     attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath());
     if (request.pipelineMode)
     {
@@ -2010,7 +2014,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         gen->setSkippedFrameIndices(skipVector);
     }
     gen->setConfig(genCfg);
-    gen->setOutputDir(mvsOutDir.toStdString());
+    gen->setOutputDir(xjw::common::io::toUtf8Path(mvsOutDir));
 
     QPointer<ProjectDenseReconstructionManager> self(this);
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
@@ -2130,7 +2134,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             SparseCloudPreprocessor pp(request.processingDevice);
             PreprocessResult ppRes;
             std::string ppErr;
-            if (pp.run(sparseXyz.toStdString(), views, ppRes, &ppErr))
+            if (pp.run(xjw::common::io::toUtf8Path(sparseXyz), views, ppRes, &ppErr))
             {
                 sparse = ppRes.cloud;
             }

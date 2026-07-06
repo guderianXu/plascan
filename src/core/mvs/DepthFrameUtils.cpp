@@ -1,5 +1,7 @@
 #include "DepthFrameUtils.h"
 
+#include "io/PathIO.h"
+
 #include <QDir>
 #include <QFile>
 #include <QFileInfo>
@@ -374,7 +376,7 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
     result.frame.cameraModel = camera.toPositiveDepthModel();
     result.frame.imgW = stored.gridWidth;
     result.frame.imgH = stored.gridHeight;
-    result.frame.imagePath = stored.refImage.toStdString();
+    result.frame.imagePath = xjw::common::io::toUtf8Path(stored.refImage);
 
     const QString rawDepthPath = resolveExistingRawDepthPath(stored.depthPng, stored.rawDepthPath);
     result.status = loadDepthMatStorage(rawDepthPath, &result.frame.depthMap);

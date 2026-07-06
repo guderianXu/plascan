@@ -24,6 +24,7 @@
 #include "ProjectIO.h"
 #include "ProjectManager.h"
 #include "ProjectSupportUtils.h"
+#include "io/PathIO.h"
 #if defined(PLASCAN_TORCH_HAS_CUDA)
 #include <c10/cuda/CUDACachingAllocator.h>
 #include <c10/cuda/CUDAFunctions.h>
@@ -1199,7 +1200,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         LOG_INFO("%s", qUtf8Printable(QString("匹配模型: %1").arg(pickedModelName)));
     }
     
-    sgConfig.model_path = modelPath.toStdString();
+    sgConfig.model_path = xjw::common::io::toUtf8Path(modelPath);
     
     // 并行对数：CUDA 使用 cuda_parallel_pairs，CPU 使用 num_threads
     const bool useCudaFinal = sgConfig.use_cuda;
@@ -1254,7 +1255,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         {
             LOG_INFO("%s", qUtf8Printable(QString("加载 LightGlue 模型: %1").arg(modelPath)));
             xjw::feature_match::LightGlueConfig lgConfig;
-            lgConfig.matcherModelPath = modelPath.toStdString();
+            lgConfig.matcherModelPath = xjw::common::io::toUtf8Path(modelPath);
             lgConfig.useCuda = sgConfig.use_cuda;
             lgConfig.cudaDevice = sgConfig.cuda_device_id;
             lgConfig.scoreThreshold = sgConfig.match_threshold;
@@ -1304,7 +1305,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                 else if (isLightGlueMatch)
                 {
                     xjw::feature_match::LightGlueConfig lgConfig;
-                    lgConfig.matcherModelPath = modelPath.toStdString();
+                    lgConfig.matcherModelPath = xjw::common::io::toUtf8Path(modelPath);
                     lgConfig.useCuda = sgConfig.use_cuda;
                     lgConfig.cudaDevice = sgConfig.cuda_device_id;
                     lgConfig.scoreThreshold = sgConfig.match_threshold;
@@ -1401,12 +1402,12 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
                         int h0 = 1000, w0 = 1000, h1 = 1000, w1 = 1000;
                         if (!imagePath0Resolved.isEmpty()) 
                         {
-                            cv::Mat img0 = cv::imread(imagePath0Resolved.toStdString(), cv::IMREAD_GRAYSCALE);
+                            cv::Mat img0 = xjw::common::io::readImage(imagePath0Resolved, cv::IMREAD_GRAYSCALE);
                             if (!img0.empty()) { h0 = img0.rows; w0 = img0.cols; }
                         }
                         if (!imagePath1Resolved.isEmpty()) 
                         {
-                            cv::Mat img1 = cv::imread(imagePath1Resolved.toStdString(), cv::IMREAD_GRAYSCALE);
+                            cv::Mat img1 = xjw::common::io::readImage(imagePath1Resolved, cv::IMREAD_GRAYSCALE);
                             if (!img1.empty()) { h1 = img1.rows; w1 = img1.cols; }
                         }
                         if (overrideInputWidth > 0 && overrideInputHeight > 0) 

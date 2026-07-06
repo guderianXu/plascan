@@ -54,6 +54,11 @@ QString resolveLightGlueModelPath(const MatchPhotosAlgorithmPlan &plan,
                                   bool *useCuda,
                                   QString *modelName);
 
+int resolveFeatureKeypointLimit(const MatchPhotosOptions &options,
+                                const MatchPhotosAlgorithmPlan &plan,
+                                int imageWidth,
+                                int imageHeight);
+
 QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
                                       const MatchPhotosOptions &options);
 

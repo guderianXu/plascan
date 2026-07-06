@@ -17,6 +17,7 @@
 #include <QPointer>
 #include <QTimer>
 #include <QtConcurrent/QtConcurrent>
+#include <algorithm>
 #include <cmath>
 
 ImageViewWidget::ImageViewWidget(QWidget *parent)
@@ -119,7 +120,11 @@ void ImageViewWidget::setMatchPoints(const QVector<QPointF> &points)
     // 使用固定屏幕像素大小的点标记，避免在高缩放下遮挡图像细节。
     const qreal screenPointSize = 8.0; // 屏幕像素大小
 
-    for (int i = 0; i < points.size(); ++i) {
+    constexpr int maxInitialPointItems = 20000;
+    const int pointCount = static_cast<int>(points.size());
+    const int pointItemCount = std::min(pointCount, maxInitialPointItems);
+
+    for (int i = 0; i < pointItemCount; ++i) {
         const QPointF &pt = points[i];
         QGraphicsEllipseItem *item = _scene->addEllipse(
             -screenPointSize / 2.0, -screenPointSize / 2.0,

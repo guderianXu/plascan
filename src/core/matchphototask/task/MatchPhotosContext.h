@@ -1,7 +1,9 @@
 #pragma once
 
+#include "Camera.h"
 #include "PairSelector.h"
 
+#include <QMap>
 #include <QString>
 #include <atomic>
 
@@ -18,6 +20,7 @@ struct MatchPhotosContext
     QString featureDirectory;
     QString matchDirectory;
     PairSelectionInput pairInput;
+    QMap<QString, xjw::Camera> referenceCameras;
     std::atomic_bool *cancelFlag = nullptr;
     std::atomic_int *progressCount = nullptr;
 };

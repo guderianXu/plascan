@@ -114,6 +114,7 @@ target_link_libraries(mvs
     PUBLIC
         camera
         plascan_common_log
+        plascan_common_io
         plapoint::plapoint
         Qt6::Core
     PRIVATE

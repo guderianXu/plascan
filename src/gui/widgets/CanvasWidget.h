@@ -37,6 +37,12 @@ public slots:
     // - 高位深影像的可视化转换在 LayerRenderer 中处理。
     void showImage(const QString &path);
 
+    // 重新读取当前影像的蒙版并刷新轮廓叠加层。
+    void reloadMaskOverlay();
+
+    // 控制是否显示蒙版轮廓叠加层。
+    void setShowMaskOverlay(bool show);
+
 public slots:
     // 控制是否在视图上叠加显示兴趣点
     void setShowInterestPoints(bool show);
@@ -87,6 +93,7 @@ protected:
 private:
     LayerRenderer *_layerRenderer{};
     bool _showInterestPoints{true};  // 默认启用特征点显示
+    bool _showMaskOverlay{true}; // 默认显示照片蒙版轮廓
     QString _activeFeatureSuffix{QStringLiteral(".sp")};  // 当前选择的特征提取器后缀
     // 当前的兴趣点显示选项（由 UI 通过 applyFeatureDisplayOptions 设置）
     LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;

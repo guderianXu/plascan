@@ -2,6 +2,7 @@
 #include "FeatureFileIO.h"
 #include "FeatureStage.h"
 #include "MatchPhotosRuntime.h"
+#include "io/PathIO.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -131,7 +132,6 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
     }
 
     xjw::feature_extractors::TraditionalFeatureConfig config;
-    config.maxKeypoints = algorithmPlan.maxKeypoints;
     config.maxImageSize = algorithmPlan.maxImageDim;
     config.removeBorders = 4;
     config.allowDeviceFallback = true;
@@ -168,7 +168,7 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
             continue;
         }
 
-        cv::Mat grayImage = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+        cv::Mat grayImage = xjw::common::io::readImage(imagePath, cv::IMREAD_GRAYSCALE);
         if (grayImage.empty())
         {
             return makeFeatureReport(MatchPhotosStageStatus::Failed,
@@ -178,12 +178,17 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
 
         try
         {
+            const int effectiveKeypointLimit =
+                resolveFeatureKeypointLimit(options, algorithmPlan, grayImage.cols, grayImage.rows);
+            xjw::feature_extractors::TraditionalFeatureConfig imageConfig = config;
+            imageConfig.maxKeypoints = effectiveKeypointLimit;
+
             double resizeScale = 1.0;
             const cv::Mat inputImage = resizeForFeatureExtraction(grayImage,
                                                                   algorithmPlan.maxImageDim,
                                                                   &resizeScale);
             FeatureOutput output = xjw::feature_extractors::TraditionalFeatureExtractor::detect(
-                inputImage, config, "sift", useCuda, options.cudaDevice);
+                inputImage, imageConfig, "sift", useCuda, options.cudaDevice);
             restoreOriginalCoordinates(&output, grayImage, resizeScale);
 
             if (!FeatureFileIO::write(featurePath,
@@ -198,11 +203,15 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
 
             if (featureRecords)
             {
+                QJsonObject settings = makeFeatureRecordSettings(algorithmPlan, options);
+                settings[QStringLiteral("effective_keypoint_limit")] = effectiveKeypointLimit;
+                settings[QStringLiteral("image_width")] = grayImage.cols;
+                settings[QStringLiteral("image_height")] = grayImage.rows;
                 featureRecords->push_back(
                     MatchPhotosFeatureRecord{imagePath,
                                              featurePath,
                                              output.count(),
-                                             makeFeatureRecordSettings(algorithmPlan, options)});
+                                             settings});
             }
             ++extractedCount;
             advanceMatchPhotosProgress(context);

@@ -2,12 +2,13 @@
 
 #include "ProjectSupportUtils.h"
 
+#include "../views/LayerImageLoader.h"
+
 #include <QAbstractItemView>
+#include <QColor>
 #include <QDir>
-#include <QFileIconProvider>
 #include <QFileInfo>
 #include <QFutureWatcher>
-#include <QImageReader>
 #include <QItemSelectionModel>
 #include <QJsonArray>
 #include <QJsonObject>
@@ -15,7 +16,11 @@
 #include <QListView>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QPainter>
+#include <QPen>
+#include <QPointF>
 #include <QPixmap>
+#include <QRectF>
 #include <QSize>
 #include <QVBoxLayout>
 #include <QtConcurrent>
@@ -62,11 +67,26 @@ QString displayNameForEntry(const QJsonObject &entry, const QString &imagePath)
     return fileName.isEmpty() ? imagePath : fileName;
 }
 
-QIcon fileIconForPath(const QString &imagePath)
+QIcon placeholderPhotoIcon()
 {
-    QFileIconProvider provider;
-    const QIcon pathIcon = provider.icon(QFileInfo(imagePath));
-    return pathIcon.isNull() ? provider.icon(QFileIconProvider::File) : pathIcon;
+    QImage image(QSize(ThumbWidth, ThumbHeight), QImage::Format_ARGB32_Premultiplied);
+    image.fill(QColor(246, 249, 252));
+
+    QPainter painter(&image);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(QPen(QColor(188, 199, 211), 1));
+    painter.setBrush(QColor(236, 242, 248));
+    painter.drawRoundedRect(QRectF(0.5, 0.5, ThumbWidth - 1.0, ThumbHeight - 1.0), 4.0, 4.0);
+
+    painter.setPen(QPen(QColor(117, 135, 153), 2));
+    painter.drawLine(QPointF(28.0, 60.0), QPointF(56.0, 38.0));
+    painter.drawLine(QPointF(56.0, 38.0), QPointF(76.0, 54.0));
+    painter.drawLine(QPointF(76.0, 54.0), QPointF(102.0, 30.0));
+    painter.setBrush(QColor(117, 135, 153));
+    painter.setPen(Qt::NoPen);
+    painter.drawEllipse(QPointF(38.0, 28.0), 5.0, 5.0);
+
+    return QIcon(QPixmap::fromImage(image));
 }
 } // namespace
 
@@ -123,11 +143,12 @@ void PhotoStripWidget::setProjectPath(const QString &plascanPath)
         projectRootPath = QDir::cleanPath(QFileInfo(cleanProjectPath).absolutePath());
     }
 
-    if (_projectRootPath == projectRootPath)
+    if (_projectRootPath == projectRootPath && _projectFilePath == cleanProjectPath)
     {
         return;
     }
 
+    _projectFilePath = cleanProjectPath;
     _projectRootPath = projectRootPath;
     _thumbnailCache.clear();
     _thumbnailLoadsInFlight.clear();
@@ -225,7 +246,7 @@ QListWidgetItem *PhotoStripWidget::createItem(const QJsonObject &entry)
     item->setFlags(item->flags() & ~Qt::ItemIsEditable);
 
     const QIcon cachedIcon = _thumbnailCache.value(key);
-    item->setIcon(cachedIcon.isNull() ? fileIconForPath(imagePath) : cachedIcon);
+    item->setIcon(cachedIcon.isNull() ? placeholderPhotoIcon() : cachedIcon);
 
     const QString alignedText = isAlignedEntry(entry) ? tr("已对齐") : tr("未对齐");
     item->setToolTip(tr("%1\n状态: %2").arg(imagePath, alignedText));
@@ -243,13 +264,14 @@ void PhotoStripWidget::startThumbnailLoad(const QString &imagePath)
 
     _thumbnailLoadsInFlight.insert(key);
     auto *watcher = new QFutureWatcher<ThumbnailResult>(this);
+    const QString projectPath = _projectFilePath;
     connect(watcher, &QFutureWatcher<ThumbnailResult>::finished, this, [this, watcher, key]()
     {
         applyThumbnail(watcher->result());
         _thumbnailLoadsInFlight.remove(key);
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run(&PhotoStripWidget::loadThumbnail, resolvedPath));
+    watcher->setFuture(QtConcurrent::run(&PhotoStripWidget::loadThumbnail, resolvedPath, projectPath));
 }
 
 void PhotoStripWidget::applyThumbnail(const ThumbnailResult &result)
@@ -299,24 +321,11 @@ QString PhotoStripWidget::resolveImagePath(const QString &imagePath) const
     return absolutePath.isEmpty() ? path : QDir::cleanPath(absolutePath);
 }
 
-PhotoStripWidget::ThumbnailResult PhotoStripWidget::loadThumbnail(const QString &imagePath)
+PhotoStripWidget::ThumbnailResult PhotoStripWidget::loadThumbnail(const QString &imagePath, const QString &projectPath)
 {
     ThumbnailResult result;
     result.path = imagePath;
-
-    QImageReader reader(imagePath);
-    reader.setAutoTransform(true);
-
-    const QSize originalSize = reader.size();
-    if (originalSize.isValid())
-    {
-        reader.setScaledSize(originalSize.scaled(QSize(ThumbWidth, ThumbHeight), Qt::KeepAspectRatio));
-        result.image = reader.read();
-    }
-    else
-    {
-        result.image.load(imagePath);
-    }
+    result.image = xjw::gui::views::loadImageForDisplay(imagePath, projectPath);
 
     if (result.image.isNull())
     {

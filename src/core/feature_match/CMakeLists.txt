@@ -49,6 +49,7 @@ target_include_directories(feature_match_common
 target_link_libraries(feature_match_common
   PUBLIC
     feature_extractors_traditional
+    plascan_common_io
     Qt6::Core
   PRIVATE
     ${TORCH_LIBRARIES}

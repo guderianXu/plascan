@@ -269,10 +269,15 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
 
     // 对小数据集，全量匹配仍然是最干净的选择：
     // 在缺少其它证据前，不提前丢弃任何可能的影像对。
+    const bool hasExternalPreselection =
+        (policy.includeCameraOverlap &&
+         (!input.knownCameraOverlapPairs.empty() || input.cameraOverlapResult)) ||
+        (policy.includeVocabularyOverlap && input.vocabularyOverlapResult);
     const bool useExhaustive =
         policy.mode == PairSelectionMode::Exhaustive ||
         (policy.mode == PairSelectionMode::Auto &&
          result.imageCount <= std::max(2, policy.exhaustiveMaxImages) &&
+         !hasExternalPreselection &&
          !manualOnly);
 
     if (!manualOnly && useExhaustive)
@@ -300,7 +305,10 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
     if (!manualOnly &&
         !useExhaustive &&
         (policy.mode == PairSelectionMode::Sequence ||
-         (policy.mode == PairSelectionMode::Auto && result.candidates.empty() && policy.useSequenceFallback)))
+         (policy.mode == PairSelectionMode::Auto &&
+          result.candidates.empty() &&
+          !hasExternalPreselection &&
+          policy.useSequenceFallback)))
     {
         // 序列窗口 fallback 有意放在最后：
         // 当 overlap 或 retrieval 已提供更强先验时，应优先使用那些结果。
@@ -316,6 +324,10 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
         result.restrictPairs = false;
     }
     else if (!result.allowedPairKeys.isEmpty())
+    {
+        result.restrictPairs = true;
+    }
+    else if (hasExternalPreselection)
     {
         result.restrictPairs = true;
     }

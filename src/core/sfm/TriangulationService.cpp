@@ -3,6 +3,7 @@
 #include "BaInputBuilder.h"
 #include "project/SparseResultQuality.h"
 #include "triangulation/InitialSparsePointCloudTriangulator.h"
+#include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
@@ -220,7 +221,8 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
         }
         PlaCloud cloud(std::move(points));
         cloud.setColors(std::move(colors));
-        plapoint::io::writePly(sparseCloudPath.toStdString(), cloud, plapoint::io::PlyFormat::ASCII);
+        plapoint::io::writePly(
+            xjw::common::io::toNativeNarrowPath(sparseCloudPath), cloud, plapoint::io::PlyFormat::ASCII);
     }
     catch (const std::exception &e)
     {

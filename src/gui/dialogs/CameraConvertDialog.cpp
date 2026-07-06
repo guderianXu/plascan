@@ -1,4 +1,5 @@
 #include "CameraConvertDialog.h"
+#include "io/PathIO.h"
 
 #include "CameraFormatConverter.h"
 
@@ -155,8 +156,8 @@ void CameraConvertDialog::runConversion()
 
     xjw::camera::CameraConversionOptions options;
     options.format = *parsedFormat;
-    options.inputPath = inputPath.toStdString();
-    options.outputDir = outputDir.toStdString();
+    options.inputPath = xjw::common::io::toFilesystemPath(inputPath);
+    options.outputDir = xjw::common::io::toFilesystemPath(outputDir);
     options.overwrite = _overwriteCheck && _overwriteCheck->isChecked();
 
     setResultText(tr("正在转换..."), false);
@@ -173,8 +174,8 @@ void CameraConvertDialog::runConversion()
     QStringList lines;
     lines << tr("转换完成：%1 个相机").arg(result.cameraCount);
     lines << tr("输入格式：%1").arg(QString::fromStdString(xjw::camera::cameraFormatName(result.inputFormat)));
-    lines << tr("image_camera.lis：%1").arg(QString::fromStdString(result.imageCameraList.string()));
-    lines << tr("summary.json：%1").arg(QString::fromStdString(result.summaryPath.string()));
+    lines << tr("image_camera.lis：%1").arg(xjw::common::io::fromFilesystemPath(result.imageCameraList));
+    lines << tr("summary.json：%1").arg(xjw::common::io::fromFilesystemPath(result.summaryPath));
     for (const std::string &warning : result.warnings)
     {
         lines << tr("警告：%1").arg(QString::fromStdString(warning));

@@ -10,6 +10,7 @@
 #include "AlgorithmCompat.h"
 #include "FeatureFileIO.h"
 #include "MatchFileIO.h"
+#include "io/PathIO.h"
 
 #include <QString>
 #include <QFile>
@@ -89,7 +90,7 @@ void writeIndexedSidecar(const std::string &outPath,
     sidecar[QStringLiteral("matched_indices1")] = indices1;
     sidecar[QStringLiteral("matched_scores")] = scores;
 
-    QFile sidecarFile(QString::fromStdString(outPath) + QStringLiteral(".json"));
+    QFile sidecarFile(xjw::common::io::fromUtf8Path(outPath) + QStringLiteral(".json"));
     if (!sidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate))
     {
         cli::fatal("无法写入 sidecar: " + outPath + ".json", cli::EXIT_IO_ERR);
@@ -104,7 +105,7 @@ void writeIndexedSidecar(const std::string &outPath,
 static std::string autoMatcher(const std::string &spPath)
 {
     return xjw::feature_match::defaultMatcherForFeatureSuffix(
-        QString::fromStdString(spPath)).toStdString();
+        xjw::common::io::fromUtf8Path(spPath)).toStdString();
 }
 
 static bool isTraditionalMatcher(const std::string &algo)

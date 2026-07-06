@@ -16,6 +16,7 @@ public:
                                std::function<void(const QString &key, const QString &dir)> saveLastDir);
 
     bool createNewProject(QString *createdPath = nullptr) const;
+    bool selectProjectByDialog(QString *selectedPath) const;
     bool openProjectByDialog(QString *openedPath = nullptr) const;
     bool openProjectFromPath(const QString &plascanPath) const;
     bool saveProject() const;

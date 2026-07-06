@@ -1,6 +1,7 @@
 #include "ModelWorkflowService.h"
 
 #include "SurfaceReconstructor.h"
+#include "io/PathIO.h"
 
 #include <QDir>
 #include <QFile>
@@ -18,9 +19,9 @@ namespace
 QJsonObject textureResultToJson(const xjw::mesh::TextureMappingResult &result)
 {
     QJsonObject object;
-    object[QStringLiteral("model_obj")] = QString::fromStdString(result.modelObjPath);
-    object[QStringLiteral("model_mtl")] = QString::fromStdString(result.modelMtlPath);
-    object[QStringLiteral("texture_png")] = QString::fromStdString(result.texturePngPath);
+    object[QStringLiteral("model_obj")] = xjw::common::io::fromUtf8Path(result.modelObjPath);
+    object[QStringLiteral("model_mtl")] = xjw::common::io::fromUtf8Path(result.modelMtlPath);
+    object[QStringLiteral("texture_png")] = xjw::common::io::fromUtf8Path(result.texturePngPath);
     object[QStringLiteral("texture_size")] = result.textureSize;
     object[QStringLiteral("texture_algorithm")] = QString::fromStdString(result.textureAlgorithm);
     object[QStringLiteral("uv_method")] = QString::fromStdString(result.uvMethod);
@@ -182,11 +183,12 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
     xjw::mesh::TriMesh mesh;
     std::string meshError;
     std::string meshAlgorithm;
-    if (!xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(request.pointCloudPath.toStdString(),
-                                                                         reconstruction,
-                                                                         mesh,
-                                                                         &meshError,
-                                                                         &meshAlgorithm))
+    if (!xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(
+            xjw::common::io::toUtf8Path(request.pointCloudPath),
+            reconstruction,
+            mesh,
+            &meshError,
+            &meshAlgorithm))
     {
         result.errorMessage = QStringLiteral("网格重建失败: %1").arg(QString::fromStdString(meshError));
         return result;
@@ -195,7 +197,7 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
     const QString productsDir = QDir(request.outputRoot).filePath(QStringLiteral("products"));
     QDir().mkpath(productsDir);
     const QString meshPlyPath = QDir(productsDir).filePath(QStringLiteral("model_from_mesh.ply"));
-    if (!mesh.savePLY(meshPlyPath.toStdString(), &meshError))
+    if (!mesh.savePLY(xjw::common::io::toUtf8Path(meshPlyPath), &meshError))
     {
         result.errorMessage = QStringLiteral("网格保存失败: %1").arg(QString::fromStdString(meshError));
         return result;
@@ -220,11 +222,12 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
         }
 
         xjw::mesh::TextureMappingResult textureResult;
-        if (xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(meshPlyPath.toStdString(),
-                                                                         productsDir.toStdString(),
-                                                                         textureConfig,
-                                                                         &textureResult,
-                                                                         &textureError))
+        if (xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
+                xjw::common::io::toUtf8Path(meshPlyPath),
+                xjw::common::io::toUtf8Path(productsDir),
+                textureConfig,
+                &textureResult,
+                &textureError))
         {
             const QJsonObject textureJson = textureResultToJson(textureResult);
             for (auto it = textureJson.begin(); it != textureJson.end(); ++it)
@@ -263,11 +266,12 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
 
     xjw::mesh::TextureMappingResult textureResult;
     std::string textureError;
-    result.ok = xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(request.meshPath.toStdString(),
-                                                                             request.outputDir.toStdString(),
-                                                                             textureConfig,
-                                                                             &textureResult,
-                                                                             &textureError);
+    result.ok = xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
+        xjw::common::io::toUtf8Path(request.meshPath),
+        xjw::common::io::toUtf8Path(request.outputDir),
+        textureConfig,
+        &textureResult,
+        &textureError);
 
     if (!result.ok)
     {

@@ -16,16 +16,15 @@
 #include "Logger.h"
 #include "ProjectIO.h"
 #include "ProjectManager.h"
+#include "io/PathIO.h"
 #include <QByteArray>
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
 #include <QCoreApplication>
-#include <QIODevice>
 #include <QMetaObject>
 
 #include <memory>
-#include <vector>
 
 namespace
 {
@@ -148,25 +147,6 @@ QString resolveExtractorModelPath(const QString &algorithm, bool useCuda, const 
     }
 
     return QString();
-}
-
-cv::Mat readImageWithQtPath(const QString &imagePath, int flags)
-{
-    QFile imageFile(imagePath);
-    if (!imageFile.open(QIODevice::ReadOnly))
-    {
-        return {};
-    }
-
-    const QByteArray encodedBytes = imageFile.readAll();
-    if (encodedBytes.isEmpty())
-    {
-        return {};
-    }
-
-    const auto *begin = reinterpret_cast<const uchar *>(encodedBytes.constData());
-    const std::vector<uchar> buffer(begin, begin + encodedBytes.size());
-    return cv::imdecode(buffer, flags);
 }
 
 } // namespace
@@ -313,7 +293,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
             }
 
             LOG_INFO("%s", qUtf8Printable(QString("加载 SuperPoint 模型: %1").arg(modelPath)));
-            superPointExtractor = std::make_unique<SuperPoint>(modelPath.toStdString(), spConfig);
+            superPointExtractor = std::make_unique<SuperPoint>(xjw::common::io::toUtf8Path(modelPath), spConfig);
         }
         else if (featureAlgorithm == QStringLiteral("disk") || featureAlgorithm == QStringLiteral("aliked"))
         {
@@ -329,7 +309,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
             }
 
             ExtractorConfig extractorCfg;
-            extractorCfg.modelPath = modelPath.toStdString();
+            extractorCfg.modelPath = xjw::common::io::toUtf8Path(modelPath);
             extractorCfg.maxKeypoints = maxKeypointsFromConfig(config);
             extractorCfg.detThreshold = static_cast<float>(config["detection_threshold"].toDouble(0.0));
             extractorCfg.nmsRadius = spConfig.nms_radius;
@@ -382,7 +362,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
             try
             {
                 // 读取图像
-                cv::Mat image = readImageWithQtPath(imagePath, cv::IMREAD_GRAYSCALE);
+                cv::Mat image = xjw::common::io::readImage(imagePath, cv::IMREAD_GRAYSCALE);
                 if (image.empty())
                 {
                     LOG_ERROR("%s", qUtf8Printable(QString("无法读取图像: %1").arg(imagePath)));
@@ -462,13 +442,13 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
                     if (spConfig.save_keypoints_csv) 
                     {
                         QString csvPath = QDir(outputDir).filePath(baseName + ".csv");
-                        SuperPoint::saveKeypointsCSV(output, csvPath.toStdString());
+                        SuperPoint::saveKeypointsCSV(output, xjw::common::io::toUtf8Path(csvPath));
                     }
                     
                     if (spConfig.save_overlay_image) 
                     {
                         QString overlayPath = QDir(outputDir).filePath(baseName + "_overlay.png");
-                        SuperPoint::saveOverlayImage(image, output, overlayPath.toStdString());
+                        SuperPoint::saveOverlayImage(image, output, xjw::common::io::toUtf8Path(overlayPath));
                     }
                     // 将输出文件记录到项目元数据（通过 ProjectManager 转发到 ProjectData）
                     if (projectManager) 

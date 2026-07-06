@@ -46,3 +46,15 @@ TEST(MatchPhotosAlgorithmSelectorTest, DifficultTextureEnablesGuidedMatching)
     EXPECT_TRUE(plan.enableGuidedMatching);
     EXPECT_GE(plan.maxKeypoints, 12000);
 }
+
+TEST(MatchPhotosAlgorithmSelectorTest, ExplicitZeroKeypointLimitMeansUnlimited)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.useExplicitKeypointLimit = true;
+    options.maxKeypoints = 0;
+
+    const xjw::matchphotos::MatchPhotosAlgorithmPlan plan =
+        xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    EXPECT_EQ(plan.maxKeypoints, 0);
+}

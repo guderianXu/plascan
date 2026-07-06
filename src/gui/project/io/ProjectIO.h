@@ -53,6 +53,9 @@ public:
     // 返回 assets/matches/ 目录（ipmatch 标准输出目录）
     static QString ipmatchOutputDir(const QString &plascanPath);
 
+    // 返回 assets/masks/ 目录（照片蒙版标准输出目录）
+    static QString maskOutputDir(const QString &plascanPath);
+
     // 返回 .plascan_tmp/ip/ 目录（ipfind 临时输出目录，用于异步处理）
     static QString tmpIpfindDir(const QString &plascanPath);
 
@@ -66,6 +69,10 @@ public:
                                               const QString &imagePath,
                                               const QString &suffix);
 
+    // 根据影像路径推算对应蒙版文件输出路径
+    // 输出格式：assets/masks/<basename>_mask.png
+    static QString maskOutputPathForImage(const QString &plascanPath, const QString &imagePath);
+
     // 在多个候选目录中查找指定影像对应的 .sp 特征点文件
     // 返回第一个存在的文件路径；若均不存在则返回空字符串
     static QString findSpForImage(const QString &plascanPath, const QString &imagePath);
@@ -77,6 +84,9 @@ public:
     // 列出影像所有存在的特征文件后缀 (用于 GUI 多提取器切换)
     static QStringList availableFeatureSuffixes(const QString &plascanPath,
                                                  const QString &imagePath);
+
+    // 查找指定影像对应的蒙版文件，优先标准目录，其次影像同目录。
+    static QString findMaskForImage(const QString &plascanPath, const QString &imagePath);
 
 private:
     // 生成 .sp 文件的候选路径列表（优先检查临时目录，其次标准目录，再次影像同目录）

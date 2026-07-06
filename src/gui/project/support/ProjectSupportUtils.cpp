@@ -1,6 +1,7 @@
 #include "ProjectSupportUtils.h"
 #include "ProjectIO.h"
 #include "project/ProjectCommonUtils.h"
+#include "io/PathIO.h"
 
 #include <QJsonArray>
 #include <QJsonDocument>
@@ -397,7 +398,7 @@ bool parseTsaiCamera(const QString &tsaiPath, QJsonObject *cameraMeta, QString *
     }
     xjw::Camera cam;
     // 文件读取或模型合法性校验任一失败都视为解析失败。
-    if (!cam.loadFromFile(tsaiPath.toStdString()) || !cam.isValid())
+    if (!cam.loadFromFile(xjw::common::io::toUtf8Path(tsaiPath)) || !cam.isValid())
     {
         if (errorMsg)
         {

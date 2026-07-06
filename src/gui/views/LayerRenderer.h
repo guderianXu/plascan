@@ -36,6 +36,10 @@ public:
     // 清除所有已添加的图层
     void clear();
 
+    // 添加/清除蒙版轮廓覆盖层，蒙版约定为 255=排除区域，0=保留前景。
+    bool addMaskContourLayer(const QString &maskPath, int z = 40);
+    void clearMaskLayers();
+
     // 为指定影像（path）查找对应的 .vwip 并在 scene 上添加兴趣点覆盖层
     // 返回是否成功添加了任何兴趣点（false 表示未找到 .vwip 或没有点）
     bool addFeatureLayerFromVwip(const QString &imagePath);
@@ -94,6 +98,7 @@ private:
     QList<QGraphicsPixmapItem *> _layers{};
     QList<QGraphicsItem *> _featureItems{};
     QList<QGraphicsItem *> _matchItems{};
+    QList<QGraphicsItem *> _maskItems{};
     QRectF _imageBounds{};
 
     // 当前项目的 .plascan 文件路径（可为空：表示未打开项目）

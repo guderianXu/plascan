@@ -308,6 +308,7 @@ void MenuWorkflowController::bindActions(MainMenu *mainMenu)
 
     connectProjectAction(mainMenu->importReferenceDatasetAction(), &ProjectManager::importReferenceDataset);
     connectProjectAction(mainMenu->surveyControlAction(), &ProjectManager::openSurveyControlDialog);
+    connectProjectAction(mainMenu->generateMaskAction(), &ProjectManager::openGenerateMaskDialog);
     connectProjectAction(mainMenu->referenceQualityCheckAction(), &ProjectManager::runReferenceQualityCheck);
     connectProjectAction(mainMenu->referenceTerrainBundleAdjustAction(),
                          &ProjectManager::prepareReferenceTerrainBundleAdjust);

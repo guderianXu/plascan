@@ -4,6 +4,7 @@
 // =============================================================================
 
 #include "DenseCloudBuilder.h"
+#include "io/PathIO.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/filters/preprocessing.h>
 #include <plapoint/io/ply_io.h>
@@ -143,7 +144,7 @@ bool DenseCloudBuilder::savePLY(const std::string &path,
 {
     try
     {
-        plapoint::io::writePly(path,
+        plapoint::io::writePly(xjw::common::io::toNativeNarrowPath(path),
                                buildPointCloud(cloud),
                                plapoint::io::PlyFormat::BinaryLE);
         return true;

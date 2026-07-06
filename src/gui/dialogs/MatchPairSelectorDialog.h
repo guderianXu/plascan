@@ -15,6 +15,7 @@
 #include <QMap>
 #include <QSet>
 #include <QVector>
+#include <QFutureWatcher>
 
 #include "MatchResultCatalog.h"
 
@@ -61,24 +62,26 @@ private slots:
     // 收到 ProjectManager::matchPairReady 信号时，触发防抖刷新
     void scheduleRefresh();
 
+    // 后台匹配扫描完成后回到 GUI 线程填表
+    void onMatchPairsLoaded();
+
 private:
-    // 构建并初始化整体界面布局（顶部、中间、底部）
-    void setupUI();
-    // 初始化匹配对表格（列头、列宽、选择模式等）
-    void setupTable();
-    // 从项目管理器加载所有影像并填充下拉框
-    void loadProjectImages();
-    // 为指定影像路径加载其所有匹配对，并填充到表格中
-    void loadMatchPairsForImage(const QString &imagePath);
-    
+    // 只包含后台线程可安全读取的数据快照，避免 worker 访问 ProjectManager/QWidget。
+    struct MatchDataSnapshot {
+        QString projectPath;
+        QString matchDir;
+        QStringList allImages;
+        QJsonObject meta;
+    };
+
     // 匹配信息结构体，描述与某张影像之间的匹配统计
     struct MatchInfo {
         QString imagePath;       // 匹配影像的完整路径
         QString imageName;       // 匹配影像的文件名（用于显示）
         QString algorithm;       // 匹配算法名 (superglue/lightglue/loftr/...)
-        int totalPoints;         // 总匹配点数
-        int validPoints;         // 有效（内点）匹配点数
-        int invalidPoints;       // 无效（外点）匹配点数
+        int totalPoints = 0;     // 总匹配点数
+        int validPoints = 0;     // 有效（内点）匹配点数
+        int invalidPoints = 0;   // 无效（外点）匹配点数
         QString matchFilePath;   // 对应 .match 文件的完整路径
         QVector<xjw::pipeline::MatchVariant> variants; // 同一影像对的全部算法结果
         bool hasInlierStats = false; // true 表示 validPoints 来自几何验证内点统计
@@ -90,20 +93,50 @@ private:
         double overlapScore = 0.0;      // 重叠评分（若输出中提供）
         QString overlapSource;          // overlap json/lis 文件路径
     };
+
+    using MatchInfoList = QList<MatchInfo>;
+
+    // 构建并初始化整体界面布局（顶部、中间、底部）
+    void setupUI();
+    // 初始化匹配对表格（列头、列宽、选择模式等）
+    void setupTable();
+    // 从项目管理器加载所有影像并填充下拉框
+    void loadProjectImages();
+    // 为指定影像路径加载其所有匹配对，并填充到表格中
+    void loadMatchPairsForImage(const QString &imagePath);
+
+    // 发起后台扫描当前影像的匹配数据
+    void startAsyncMatchPairLoad(const QString &imagePath);
+    // 将 _currentMatches 填充到表格
+    void populateMatchTable();
+    // 扫描期间切换刷新/查看按钮状态
+    void setMatchControlsBusy(bool busy);
+    // 在 GUI 线程采集后台扫描所需快照
+    MatchDataSnapshot makeSnapshot() const;
     
     // 解析指定影像与其他影像的所有匹配信息
     // imagePath — 当前选中影像的完整路径
     // 返回值    — 所有与之存在匹配关系的 MatchInfo 列表
     QList<MatchInfo> parseMatchDataForImage(const QString &imagePath);
+    static MatchInfoList parseMatchDataForImageFromSnapshot(const MatchDataSnapshot &snapshot,
+                                                            const QString &imagePath);
 
     QList<MatchInfo> loadOverlapCandidatesForImage(const QString &imagePath,
                                                    const QSet<QString> &seenPairKeys,
                                                    const QMap<QString, QString> &baseToPath) const;
+    static MatchInfoList loadOverlapCandidatesForImageFromSnapshot(
+        const MatchDataSnapshot &snapshot,
+        const QString &imagePath,
+        const QSet<QString> &seenPairKeys,
+        const QMap<QString, QString> &baseToPath);
     
     // 在元数据和文件系统中查找两张影像对应的 .match 文件路径
     // imgA, imgB — 两张影像的完整路径
     // 返回值     — 找到的 .match 文件路径，未找到返回空字符串
     QString findMatchFile(const QString &imgA, const QString &imgB);
+    static QString findMatchFileInSnapshot(const MatchDataSnapshot &snapshot,
+                                           const QString &imgA,
+                                           const QString &imgB);
     
     // 读取 .match 文件，统计匹配点数量并返回 MatchInfo
     // imgA      — 参考影像路径（仅用于上下文，不直接使用）
@@ -112,6 +145,9 @@ private:
     // 返回值    — 包含统计结果的 MatchInfo 结构体
     MatchInfo getMatchStatistics(const QString &imgA, const QString &imgB, 
                                  const QString &matchFile);
+    static MatchInfo getMatchStatisticsFromFile(const QString &imgA,
+                                                const QString &imgB,
+                                                const QString &matchFile);
 
 private:
     // 项目管理器指针，用于获取影像列表和匹配元数据
@@ -141,4 +177,6 @@ private:
     QString _matchDir;
     // 防抖刷新计时器（300ms 内多次触发只刷新一次）
     QTimer *_refreshTimer = nullptr;
+    QFutureWatcher<MatchInfoList> *_matchLoadWatcher = nullptr;
+    int _matchLoadGeneration = 0;
 };

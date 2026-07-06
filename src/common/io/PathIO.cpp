@@ -61,6 +61,11 @@ std::filesystem::path toFilesystemPath(const QString &path)
 #endif
 }
 
+std::filesystem::path toFilesystemPath(const std::string &path)
+{
+    return toFilesystemPath(fromUtf8Path(path));
+}
+
 std::string toUtf8Path(const QString &path)
 {
     const QByteArray bytes = path.toUtf8();
@@ -82,9 +87,14 @@ std::string toNativeNarrowPath(const QString &path)
     return std::string(bytes.constData(), static_cast<size_t>(bytes.size()));
 }
 
-std::string toNativeNarrowPathUtf8(const std::string &path)
+std::string toNativeNarrowPath(const std::string &path)
 {
     return toNativeNarrowPath(fromUtf8Path(path));
+}
+
+std::string toNativeNarrowPath(const std::filesystem::path &path)
+{
+    return toNativeNarrowPath(fromFilesystemPath(path));
 }
 
 QString fromUtf8Path(const std::string &path)
@@ -107,6 +117,11 @@ std::ifstream openInputFile(const QString &path, std::ios::openmode mode)
     return std::ifstream(toFilesystemPath(path), mode);
 }
 
+std::ifstream openInputFile(const std::string &path, std::ios::openmode mode)
+{
+    return openInputFile(fromUtf8Path(path), mode);
+}
+
 std::ifstream openInputFile(const std::filesystem::path &path, std::ios::openmode mode)
 {
     return std::ifstream(path, mode);
@@ -117,19 +132,14 @@ std::ofstream openOutputFile(const QString &path, std::ios::openmode mode)
     return std::ofstream(toFilesystemPath(path), mode);
 }
 
+std::ofstream openOutputFile(const std::string &path, std::ios::openmode mode)
+{
+    return openOutputFile(fromUtf8Path(path), mode);
+}
+
 std::ofstream openOutputFile(const std::filesystem::path &path, std::ios::openmode mode)
 {
     return std::ofstream(path, mode);
-}
-
-std::ifstream openInputFileUtf8(const std::string &path, std::ios::openmode mode)
-{
-    return openInputFile(fromUtf8Path(path), mode);
-}
-
-std::ofstream openOutputFileUtf8(const std::string &path, std::ios::openmode mode)
-{
-    return openOutputFile(fromUtf8Path(path), mode);
 }
 
 QByteArray readFileBytes(const QString &path, QString *errorMessage)
@@ -145,9 +155,14 @@ QByteArray readFileBytes(const QString &path, QString *errorMessage)
     return file.readAll();
 }
 
-QByteArray readFileBytesUtf8(const std::string &path, QString *errorMessage)
+QByteArray readFileBytes(const std::string &path, QString *errorMessage)
 {
     return readFileBytes(fromUtf8Path(path), errorMessage);
+}
+
+QByteArray readFileBytes(const std::filesystem::path &path, QString *errorMessage)
+{
+    return readFileBytes(fromFilesystemPath(path), errorMessage);
 }
 
 bool writeFileBytesAtomic(const QString &path, const QByteArray &bytes, QString *errorMessage)
@@ -183,9 +198,14 @@ bool writeFileBytesAtomic(const QString &path, const QByteArray &bytes, QString 
     return true;
 }
 
-bool writeFileBytesAtomicUtf8(const std::string &path, const QByteArray &bytes, QString *errorMessage)
+bool writeFileBytesAtomic(const std::string &path, const QByteArray &bytes, QString *errorMessage)
 {
     return writeFileBytesAtomic(fromUtf8Path(path), bytes, errorMessage);
+}
+
+bool writeFileBytesAtomic(const std::filesystem::path &path, const QByteArray &bytes, QString *errorMessage)
+{
+    return writeFileBytesAtomic(fromFilesystemPath(path), bytes, errorMessage);
 }
 
 cv::Mat readImage(const QString &path, int flags)
@@ -201,9 +221,14 @@ cv::Mat readImage(const QString &path, int flags)
     return cv::imdecode(encoded, flags);
 }
 
-cv::Mat readImageUtf8(const std::string &path, int flags)
+cv::Mat readImage(const std::string &path, int flags)
 {
     return readImage(fromUtf8Path(path), flags);
+}
+
+cv::Mat readImage(const std::filesystem::path &path, int flags)
+{
+    return readImage(fromFilesystemPath(path), flags);
 }
 
 bool writeImage(const QString &path, const cv::Mat &image, const std::vector<int> &params)
@@ -230,9 +255,14 @@ bool writeImage(const QString &path, const cv::Mat &image, const std::vector<int
     return writeFileBytesAtomic(path, bytes);
 }
 
-bool writeImageUtf8(const std::string &path, const cv::Mat &image, const std::vector<int> &params)
+bool writeImage(const std::string &path, const cv::Mat &image, const std::vector<int> &params)
 {
     return writeImage(fromUtf8Path(path), image, params);
+}
+
+bool writeImage(const std::filesystem::path &path, const cv::Mat &image, const std::vector<int> &params)
+{
+    return writeImage(fromFilesystemPath(path), image, params);
 }
 
 } // namespace xjw::common::io

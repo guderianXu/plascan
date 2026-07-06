@@ -56,6 +56,7 @@ target_include_directories(superpoint
 
 target_link_libraries(superpoint
     PUBLIC ${TORCH_LIBRARIES}
+           plascan_common_io
            ${OpenCV_LIBS}
 )
 if (QT_LIBS)

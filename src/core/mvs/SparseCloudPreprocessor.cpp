@@ -6,6 +6,7 @@
 #include <plapoint/io/xyz_io.h>
 #include <plapoint/search/kdtree.h>
 #include "log/Logger.h"
+#include "io/PathIO.h"
 #include <algorithm>
 #include <cctype>
 #include <cmath>
@@ -169,11 +170,11 @@ bool SparseCloudPreprocessor::loadXYZ(const std::string &path,
         std::shared_ptr<SparsePlaCloud> cloud;
         if (endsWithIgnoreCase(path, ".ply"))
         {
-            cloud = plapoint::io::readPly<float>(path);
+            cloud = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(path));
         }
         else
         {
-            cloud = plapoint::io::readXyz<float>(path);
+            cloud = plapoint::io::readXyz<float>(xjw::common::io::toNativeNarrowPath(path));
         }
         if (!cloud)
         {

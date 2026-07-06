@@ -3,6 +3,7 @@
 // 功能: 视差热力图叠加实现
 // =============================================================================
 #include "DisparityHeatmapOverlay.h"
+#include "io/PathIO.h"
 #include <QPainter>
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -17,7 +18,7 @@ DisparityHeatmapOverlay::DisparityHeatmapOverlay(QWidget *parent)
 
 bool DisparityHeatmapOverlay::loadDisparity(const QString &filepath)
 {
-    cv::Mat disp = cv::imread(filepath.toStdString(), cv::IMREAD_UNCHANGED);
+    cv::Mat disp = xjw::common::io::readImage(filepath, cv::IMREAD_UNCHANGED);
     if (disp.empty()) return false;
     return loadDisparity(disp);
 }

@@ -1,4 +1,5 @@
 #include "DomGenerator.h"
+#include "io/PathIO.h"
 
 #include <QtGlobal>
 
@@ -131,7 +132,7 @@ bool DomGenerator::generateFromImages(const DemGridData &demGrid,
 
     for (const QString &imagePath : images)
     {
-        cv::Mat image = cv::imread(imagePath.toStdString(), cv::IMREAD_COLOR);
+        cv::Mat image = xjw::common::io::readImage(imagePath, cv::IMREAD_COLOR);
         if (image.empty())
         {
             continue;

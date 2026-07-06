@@ -15,7 +15,7 @@ MatchLineOverlay::MatchLineOverlay(QWidget *parent)
     , _lineColor(Qt::yellow)
     , _lineWidth(1.5)
     , _opacity(0.7)
-    , _maxDisplayCount(0) // 默认显示全部
+    , _maxDisplayCount(5000)
     , _showOnlyInliers(false)
     , _showEndPoints(true)
     , _rainbowMode(false)

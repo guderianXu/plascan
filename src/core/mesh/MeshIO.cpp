@@ -1,4 +1,5 @@
 #include "MeshTypes.h"
+#include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
@@ -18,7 +19,8 @@ bool TriMesh::savePLY(const std::string &path, std::string *errorMsg) const
         return false;
     }
 
-    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
+    std::filesystem::create_directories(
+        xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(path)).parent_path());
     try
     {
         using PlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
@@ -53,7 +55,8 @@ bool TriMesh::savePLY(const std::string &path, std::string *errorMsg) const
         cloud.setNormals(std::move(normals));
         cloud.setColors(std::move(colors));
         cloud.setFaces(std::move(faceMatrix));
-        plapoint::io::writePly(path, cloud, plapoint::io::PlyFormat::BinaryLE);
+        plapoint::io::writePly(
+            xjw::common::io::toNativeNarrowPath(path), cloud, plapoint::io::PlyFormat::BinaryLE);
         return true;
     }
     catch (const std::exception &e)
@@ -70,8 +73,9 @@ bool TriMesh::saveOBJ(const std::string &path, std::string *errorMsg) const
         return false;
     }
 
-    std::filesystem::create_directories(std::filesystem::path(path).parent_path());
-    std::ofstream ofs(path);
+    std::filesystem::create_directories(
+        xjw::common::io::toFilesystemPath(xjw::common::io::fromUtf8Path(path)).parent_path());
+    std::ofstream ofs = xjw::common::io::openOutputFile(path, std::ios::out | std::ios::trunc);
     if (!ofs) {
         if (errorMsg) *errorMsg = "无法创建文件: " + path;
         return false;

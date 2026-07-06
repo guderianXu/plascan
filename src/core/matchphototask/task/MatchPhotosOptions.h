@@ -44,6 +44,7 @@ struct MatchPhotosOptions
 
     int maxImageDim = 2048;
     int maxKeypoints = 0;
+    int keypointLimitPerMegapixel = 0;
     int cudaDevice = 0;
     float matchThreshold = 0.15f;
     double geometryReprojThreshold = 1.5;
@@ -55,7 +56,12 @@ struct MatchPhotosOptions
     bool enableGeometryVerification = true;
     bool enableTrackBuild = true;
     bool enableGuidedMatching = false;
+    bool useExplicitKeypointLimit = false;
+    bool useGenericPreselection = true;
+    bool useReferencePreselection = false;
+    bool excludeStationaryTiePoints = true;
     bool reuseExistingFeatures = true;
+    float stationaryTiePointMaxPixelMotion = 1.0f;
 
     // 在特征、匹配、几何验证和轨迹阶段接入现有核心模块前，
     // 框架默认先以 plan-only 方式运行。

@@ -23,6 +23,7 @@ target_link_libraries(terrain
     PUBLIC
         camera
         plapoint::plapoint
+        plascan_common_io
     PRIVATE
         Qt6::Core
         Qt6::Gui

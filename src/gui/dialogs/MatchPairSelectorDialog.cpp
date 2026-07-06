@@ -29,6 +29,10 @@
 #include <QTimer>
 #include <QSet>
 #include <QRegularExpression>
+#include <QFutureWatcher>
+#include <QPointer>
+#include <QSignalBlocker>
+#include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
 
@@ -273,7 +277,6 @@ MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager,
     }
 
     setupUI();
-    loadProjectImages();
 
     // ── 实时刷新：projectMetadataChanged / matchPairReady 时自动更新视图 ──
     // 使用防抖 QTimer，避免高频更新导致 UI 闪烁（300ms 内不再触发才真正刷新）
@@ -290,10 +293,18 @@ MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager,
                     scheduleRefresh();
                 });
     }
+
+    QTimer::singleShot(0, this, &MatchPairSelectorDialog::onRefresh);
 }
 
 MatchPairSelectorDialog::~MatchPairSelectorDialog()
 {
+    if (_matchLoadWatcher)
+    {
+        disconnect(_matchLoadWatcher, nullptr, this, nullptr);
+        _matchLoadWatcher->deleteLater();
+        _matchLoadWatcher = nullptr;
+    }
 }
 
 // setupUI: 构建对话框的整体界面布局
@@ -358,6 +369,11 @@ void MatchPairSelectorDialog::setupTable()
 // loadProjectImages: 从项目管理器读取所有影像，填充顶部下拉框并默认选中第一项
 void MatchPairSelectorDialog::loadProjectImages()
 {
+    const QString previousImage = _currentImage;
+    const QSignalBlocker blocker(_imageComboBox);
+    _imageComboBox->clear();
+    _currentImage.clear();
+
     if (!_projectManager) {
         _statusLabel->setText(tr("错误：未找到项目管理器"));
         return;
@@ -367,20 +383,27 @@ void MatchPairSelectorDialog::loadProjectImages()
     _allImages = _projectManager->getAllImages();
     
     if (_allImages.isEmpty()) {
+        _matchTable->setRowCount(0);
+        _currentMatches.clear();
         _statusLabel->setText(tr("项目中没有图像"));
         return;
     }
     
     // 填充下拉框
-    _imageComboBox->clear();
+    int selectedIndex = 0;
     for (const QString &img : _allImages) {
         QString displayName = QFileInfo(img).fileName();
         _imageComboBox->addItem(displayName, img);
+        if (!previousImage.isEmpty() && normalizedImagePathKey(img) == normalizedImagePathKey(previousImage))
+        {
+            selectedIndex = _imageComboBox->count() - 1;
+        }
     }
     
-    // 选择第一个图像
+    // 选择上次图像或第一个图像；信号被阻塞，避免在填充下拉框时同步触发扫描。
     if (_imageComboBox->count() > 0) {
-        _imageComboBox->setCurrentIndex(0);
+        _imageComboBox->setCurrentIndex(selectedIndex);
+        _currentImage = _imageComboBox->itemData(selectedIndex).toString();
     }
 }
 
@@ -400,16 +423,29 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
     _currentMatches.clear();
     _selectedMatchIndex = -1;
     _viewDetailBtn->setEnabled(false);
-    
-    // 解析匹配数据
-    _currentMatches = parseMatchDataForImage(imagePath);
-    
+
+    if (imagePath.trimmed().isEmpty())
+    {
+        _statusLabel->setText(tr("请选择图像"));
+        return;
+    }
+
+    _statusLabel->setText(tr("正在扫描匹配数据..."));
+    setMatchControlsBusy(true);
+    startAsyncMatchPairLoad(imagePath);
+}
+
+void MatchPairSelectorDialog::populateMatchTable()
+{
+    _matchTable->setRowCount(0);
+    _selectedMatchIndex = -1;
+    _viewDetailBtn->setEnabled(false);
+
     if (_currentMatches.isEmpty()) {
         _statusLabel->setText(tr("该图像没有匹配数据"));
         return;
     }
-    
-    // 填充表格
+
     _matchTable->setRowCount(_currentMatches.size());
     
     for (int i = 0; i < _currentMatches.size(); ++i) {
@@ -491,17 +527,108 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
     }
 }
 
+void MatchPairSelectorDialog::setMatchControlsBusy(bool busy)
+{
+    if (_refreshBtn)
+    {
+        _refreshBtn->setEnabled(!busy);
+    }
+    if (_viewDetailBtn)
+    {
+        _viewDetailBtn->setEnabled(!busy && _selectedMatchIndex >= 0);
+    }
+}
+
+MatchPairSelectorDialog::MatchDataSnapshot MatchPairSelectorDialog::makeSnapshot() const
+{
+    MatchDataSnapshot snapshot;
+    if (!_projectManager)
+    {
+        return snapshot;
+    }
+
+    snapshot.projectPath = _projectManager->currentProjectPath();
+    snapshot.matchDir = _matchDir;
+    if (snapshot.matchDir.isEmpty() && !snapshot.projectPath.isEmpty())
+    {
+        snapshot.matchDir = ProjectIO::ipmatchOutputDir(snapshot.projectPath);
+    }
+    snapshot.allImages = _allImages.isEmpty() ? _projectManager->getAllImages() : _allImages;
+    snapshot.meta = _projectManager->currentMeta();
+    return snapshot;
+}
+
+void MatchPairSelectorDialog::startAsyncMatchPairLoad(const QString &imagePath)
+{
+    const MatchDataSnapshot snapshot = makeSnapshot();
+    const int generation = ++_matchLoadGeneration;
+    auto *watcher = new QFutureWatcher<MatchInfoList>(this);
+    watcher->setProperty("generation", generation);
+    watcher->setProperty("imagePath", imagePath);
+
+    connect(watcher,
+            &QFutureWatcher<MatchInfoList>::finished,
+            this,
+            &MatchPairSelectorDialog::onMatchPairsLoaded);
+
+    _matchLoadWatcher = watcher;
+    watcher->setFuture(QtConcurrent::run([snapshot, imagePath]()
+    {
+        return MatchPairSelectorDialog::parseMatchDataForImageFromSnapshot(snapshot, imagePath);
+    }));
+}
+
+void MatchPairSelectorDialog::onMatchPairsLoaded()
+{
+    QObject *senderObject = sender();
+    auto *watcher = static_cast<QFutureWatcher<MatchInfoList> *>(senderObject);
+    if (!watcher)
+    {
+        return;
+    }
+
+    const int generation = watcher->property("generation").toInt();
+    const QString imagePath = watcher->property("imagePath").toString();
+    const bool isCurrent =
+        watcher == _matchLoadWatcher &&
+        generation == _matchLoadGeneration &&
+        normalizedImagePathKey(imagePath) == normalizedImagePathKey(_currentImage);
+
+    const MatchInfoList matches = watcher->result();
+    watcher->deleteLater();
+    if (watcher == _matchLoadWatcher)
+    {
+        _matchLoadWatcher = nullptr;
+    }
+
+    if (!isCurrent)
+    {
+        return;
+    }
+
+    _currentMatches = matches;
+    setMatchControlsBusy(false);
+    populateMatchTable();
+}
+
 QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDataForImage(const QString &imagePath)
 {
-    QList<MatchInfo> matches;
+    return parseMatchDataForImageFromSnapshot(makeSnapshot(), imagePath);
+}
 
-    if (!_projectManager) return matches;
+MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataForImageFromSnapshot(
+    const MatchDataSnapshot &snapshot,
+    const QString &imagePath)
+{
+    MatchInfoList matches;
+
+    if (snapshot.allImages.isEmpty()) return matches;
 
     const QString baseName = QFileInfo(imagePath).completeBaseName();
 
     // ── 构建 baseName/fileName → 完整路径 映射（供查找配对影像使用）──────────────
     QMap<QString, QString> baseToPath;    // normalized completeBaseName → fullPath
-    for (const QString &imgPath : _allImages) {
+    for (const QString &imgPath : snapshot.allImages) {
         const QString base = imageBaseKey(imgPath);
         if (!baseToPath.contains(base)) baseToPath.insert(base, imgPath);
     }
@@ -510,10 +637,10 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
     QSet<QString> seenMatchFiles;
     QSet<QString> seenPairKeys;
 
-    if (!_matchDir.isEmpty())
+    if (!snapshot.matchDir.isEmpty())
     {
         xjw::pipeline::MatchResultCatalogConfig config;
-        config.matchDirectory = _matchDir;
+        config.matchDirectory = snapshot.matchDir;
         const xjw::pipeline::MatchResultCatalogSummary summary =
             xjw::pipeline::MatchResultCatalog(config).scan();
 
@@ -525,7 +652,7 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
                 continue;
             }
 
-            const QString otherImagePath = resolveProjectImagePath(otherToken, _allImages, baseToPath);
+            const QString otherImagePath = resolveProjectImagePath(otherToken, snapshot.allImages, baseToPath);
             if (otherImagePath.trimmed().isEmpty() || imageTokenMatches(otherImagePath, imagePath))
             {
                 continue;
@@ -593,10 +720,10 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
 
     // ── 方式二：兜底 — 扫描项目元数据（针对仅有元数据无文件的历史记录）──────────
     {
-        QJsonObject meta = _projectManager->currentMeta();
+        QJsonObject meta = snapshot.meta;
         const QString baseFileName = QFileInfo(imagePath).fileName();
         QMap<QString, QString> imageNameToPath;
-        for (const QString &img : _allImages) {
+        for (const QString &img : snapshot.allImages) {
             imageNameToPath[QFileInfo(img).fileName()] = img;
         }
 
@@ -632,7 +759,7 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
 
             QString matchFile = rec.value(QStringLiteral("output")).toString();
             if (matchFile.isEmpty() || !QFile::exists(matchFile))
-                matchFile = findMatchFile(imagePath, matchedPath);
+                matchFile = findMatchFileInSnapshot(snapshot, imagePath, matchedPath);
             if (matchFile.isEmpty()) continue;
 
             const QString pairKey = canonicalPairKeyForImages(imagePath, matchedPath);
@@ -643,11 +770,11 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
             seenMatchFiles.insert(cleanPath);
             seenPairKeys.insert(pairKey);
 
-            matches.append(getMatchStatistics(imagePath, matchedPath, matchFile));
+            matches.append(getMatchStatisticsFromFile(imagePath, matchedPath, matchFile));
         }
     }
 
-    matches.append(loadOverlapCandidatesForImage(imagePath, seenPairKeys, baseToPath));
+    matches.append(loadOverlapCandidatesForImageFromSnapshot(snapshot, imagePath, seenPairKeys, baseToPath));
 
     return matches;
 }
@@ -657,13 +784,22 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCa
     const QSet<QString> &seenPairKeys,
     const QMap<QString, QString> &baseToPath) const
 {
-    QList<MatchInfo> candidates;
-    if (!_projectManager || _projectManager->currentProjectPath().isEmpty())
+    return loadOverlapCandidatesForImageFromSnapshot(makeSnapshot(), imagePath, seenPairKeys, baseToPath);
+}
+
+MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::loadOverlapCandidatesForImageFromSnapshot(
+    const MatchDataSnapshot &snapshot,
+    const QString &imagePath,
+    const QSet<QString> &seenPairKeys,
+    const QMap<QString, QString> &baseToPath)
+{
+    MatchInfoList candidates;
+    if (snapshot.projectPath.isEmpty())
     {
         return candidates;
     }
 
-    const QString overlapDir = QDir(ProjectIO::projectAssetsDir(_projectManager->currentProjectPath()))
+    const QString overlapDir = QDir(ProjectIO::projectAssetsDir(snapshot.projectPath))
                                    .filePath(QStringLiteral("overlap"));
     const QString jsonPath = QDir(overlapDir).filePath(QStringLiteral("vocabulary_overlap_pairs.json"));
     const QString lisPath = QDir(overlapDir).filePath(QStringLiteral("vocabulary_overlap_pairs.lis"));
@@ -685,7 +821,7 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCa
         }
 
         const QString otherToken = imageTokenMatches(imageA, imagePath) ? imageB : imageA;
-        const QString otherImagePath = resolveProjectImagePath(otherToken, _allImages, baseToPath);
+        const QString otherImagePath = resolveProjectImagePath(otherToken, snapshot.allImages, baseToPath);
         if (otherImagePath.trimmed().isEmpty() || imageTokenMatches(otherImagePath, imagePath))
         {
             return;
@@ -781,13 +917,20 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::loadOverlapCa
 
 QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QString &imgB)
 {
-    if (!_projectManager) return QString();
+    return findMatchFileInSnapshot(makeSnapshot(), imgA, imgB);
+}
+
+QString MatchPairSelectorDialog::findMatchFileInSnapshot(const MatchDataSnapshot &snapshot,
+                                                         const QString &imgA,
+                                                         const QString &imgB)
+{
+    if (snapshot.projectPath.isEmpty()) return QString();
     
     QString baseNameA = QFileInfo(imgA).completeBaseName();
     QString baseNameB = QFileInfo(imgB).completeBaseName();
     
     // 第一优先：从 ipmatch_results 元数据中查找
-    QJsonObject meta = _projectManager->currentMeta();
+    QJsonObject meta = snapshot.meta;
     QJsonArray ipmatchResults = meta.value("ipmatch_results").toArray();
     
     for (const QJsonValue &val : ipmatchResults) {
@@ -814,8 +957,11 @@ QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QStrin
             // 路径不存在时，尝试在项目的 assets/matches 中查找同名文件
             if (!outputPath.isEmpty()) {
                 QString fileName = QFileInfo(outputPath).fileName();
-                QString projectRoot = QFileInfo(_projectManager->currentProjectPath()).absolutePath();
-                QString matchesDir = QDir(projectRoot).filePath("assets/matches");
+                QString matchesDir = snapshot.matchDir;
+                if (matchesDir.isEmpty())
+                {
+                    matchesDir = ProjectIO::ipmatchOutputDir(snapshot.projectPath);
+                }
                 QString candidatePath = QDir(matchesDir).filePath(fileName);
                 
                 if (QFile::exists(candidatePath)) {
@@ -826,11 +972,14 @@ QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QStrin
     }
     
     // 第二优先：在 assets/matches 目录中按文件名模式直接搜索
-    QString plascanPath = _projectManager->currentProjectPath();
+    QString plascanPath = snapshot.projectPath;
     if (plascanPath.isEmpty()) return QString();
     
-    QString projectRoot = QFileInfo(plascanPath).absolutePath();
-    QString matchesDir = QDir(projectRoot).filePath("assets/matches");
+    QString matchesDir = snapshot.matchDir;
+    if (matchesDir.isEmpty())
+    {
+        matchesDir = ProjectIO::ipmatchOutputDir(plascanPath);
+    }
     
     // 尝试常见命名模式（双向）
     QStringList patterns = {
@@ -852,6 +1001,14 @@ QString MatchPairSelectorDialog::findMatchFile(const QString &imgA, const QStrin
 
 MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatistics(
     const QString &imgA, const QString &imgB, const QString &matchFile)
+{
+    return getMatchStatisticsFromFile(imgA, imgB, matchFile);
+}
+
+MatchPairSelectorDialog::MatchInfo MatchPairSelectorDialog::getMatchStatisticsFromFile(
+    const QString &imgA,
+    const QString &imgB,
+    const QString &matchFile)
 {
     MatchInfo info;
     info.imagePath = imgB;

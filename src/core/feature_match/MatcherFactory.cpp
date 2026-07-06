@@ -16,6 +16,7 @@
 #include "FeatureData.h"
 #include "FeatureFileIO.h"
 #include "MatchFileIO.h"
+#include "io/PathIO.h"
 
 #include <QProcess>
 #include <QCoreApplication>
@@ -51,11 +52,11 @@ static bool loadPair(const std::string &sp1,
                      QString *imageName1 = nullptr)
 {
     QString n1, n2;
-    if (!FeatureFileIO::readData(QString::fromStdString(sp1), n1, fd0))
+    if (!FeatureFileIO::readData(xjw::common::io::fromUtf8Path(sp1), n1, fd0))
     {
         return false;
     }
-    if (!FeatureFileIO::readData(QString::fromStdString(sp2), n2, fd1))
+    if (!FeatureFileIO::readData(xjw::common::io::fromUtf8Path(sp2), n2, fd1))
     {
         return false;
     }
@@ -475,8 +476,8 @@ public:
             return -1;
         }
 
-        const cv::Mat left = cv::imread(imgL, cv::IMREAD_GRAYSCALE);
-        const cv::Mat right = cv::imread(imgR, cv::IMREAD_GRAYSCALE);
+        const cv::Mat left = xjw::common::io::readImage(imgL, cv::IMREAD_GRAYSCALE);
+        const cv::Mat right = xjw::common::io::readImage(imgR, cv::IMREAD_GRAYSCALE);
         if (left.empty() || right.empty())
         {
             fprintf(stderr, "LoFTR matcher cannot read input images\n");
@@ -492,9 +493,9 @@ public:
         xjw::feature_match::LoFTRMatcher matcher(cfg);
         const xjw::feature_match::LoFTRResult result = matcher.match(left, right);
         return writeEndToEndMatchOutputs(QStringLiteral("loftr"),
-                                         QString::fromStdString(imgL),
-                                         QString::fromStdString(imgR),
-                                         QString::fromStdString(outPath),
+                                         xjw::common::io::fromUtf8Path(imgL),
+                                         xjw::common::io::fromUtf8Path(imgR),
+                                         xjw::common::io::fromUtf8Path(outPath),
                                          result.pts0,
                                          result.pts1,
                                          result.confidences);

@@ -77,6 +77,7 @@ target_link_libraries(sfm
         Qt6::Core
         Qt6::Gui
         plascan_common_log
+        plascan_common_io
         plascan_common_project
         ${OpenCV_LIBS}
 )

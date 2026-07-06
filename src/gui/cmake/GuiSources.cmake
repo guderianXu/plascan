@@ -107,6 +107,7 @@ set(GUI_SOURCES
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp
   dialogs/CameraConvertDialog.cpp
+  dialogs/GenerateMaskDialog.cpp
   dialogs/SurveyControlDialog.cpp
   dialogs/ObservationNetworkDialog.cpp
   dialogs/InitCameraPoseDialog.cpp
@@ -226,6 +227,7 @@ set(GUI_HEADERS
   dialogs/SparseCloudPostProcessDialog.h
   dialogs/WorkflowReportDialog.h
   dialogs/CameraConvertDialog.h
+  dialogs/GenerateMaskDialog.h
   dialogs/SurveyControlDialog.h
   dialogs/ObservationNetworkDialog.h
   dialogs/InitCameraPoseDialog.h
@@ -312,6 +314,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/MVSProgressDialog.cpp
   dialogs/WorkflowReportDialog.cpp
   dialogs/CameraConvertDialog.cpp
+  dialogs/GenerateMaskDialog.cpp
   dialogs/SurveyControlDialog.cpp
   dialogs/ObservationNetworkDialog.cpp
   dialogs/InitCameraPoseDialog.cpp

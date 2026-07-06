@@ -11,6 +11,7 @@
 #include "MvsSourcePlanner.h"
 #include "MvsViewSelection.h"
 #include "Logger.h"
+#include "io/PathIO.h"
 #include <QtConcurrent/QtConcurrent>
 #include <QDir>
 #include <QFile>
@@ -671,7 +672,7 @@ bool saveDepthPreviewPng(const std::string &path, const cv::Mat &depthMap, std::
     cv::applyColorMap(vis, colorVis, cv::COLORMAP_TURBO);
     colorVis.setTo(cv::Scalar(0, 0, 0), previewDepth <= 0);
 
-    if (!cv::imwrite(path, colorVis))
+    if (!xjw::common::io::writeImage(path, colorVis))
     {
         if (errorMsg)
         {
@@ -1777,7 +1778,7 @@ void DepthMapGenerator::preloadImages()
                 break;
             }
 
-            _grayCache[i] = cv::imread(_views[i].imagePath, cv::IMREAD_GRAYSCALE);
+            _grayCache[i] = xjw::common::io::readImage(_views[i].imagePath, cv::IMREAD_GRAYSCALE);
             if (_grayCache[i].empty())
             {
                 LOG_WARN(QStringLiteral("[MVS] 警告: 无法读取图像 %1: %2").arg(i).arg(QString::fromStdString(_views[i].imagePath)));
@@ -2885,7 +2886,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
     if (refIdx >= 0 && refIdx < (int)_grayCache.size() && !_grayCache[refIdx].empty()) {
         refImg = _grayCache[refIdx];  // 浅拷贝，零开销
     } else {
-        refImg = cv::imread(refView.imagePath, cv::IMREAD_GRAYSCALE);
+        refImg = xjw::common::io::readImage(refView.imagePath, cv::IMREAD_GRAYSCALE);
     }
     if (refImg.empty()) {
         result.errorMsg = "无法读取参考帧图像: " + refView.imagePath;
@@ -2916,7 +2917,7 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
         if (si >= 0 && si < (int)_grayCache.size() && !_grayCache[si].empty()) {
             srcImg = _grayCache[si];
         } else {
-            srcImg = cv::imread(_views[si].imagePath, cv::IMREAD_GRAYSCALE);
+            srcImg = xjw::common::io::readImage(_views[si].imagePath, cv::IMREAD_GRAYSCALE);
         }
         if (srcImg.empty()) continue;
         if (srcImg.cols != W || srcImg.rows != H)
@@ -3696,7 +3697,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         cv::Mat validMask = (*result.depthMap > 0.0f);
         if (!validMask.empty())
         {
-            maskSaved = cv::imwrite(validMaskPath, validMask);
+            maskSaved = xjw::common::io::writeImage(validMaskPath, validMask);
             if (!maskSaved)
             {
                 LOG_WARN(QStringLiteral("[MVS] 保存%1有效掩码失败: %2")

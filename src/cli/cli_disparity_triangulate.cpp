@@ -8,12 +8,16 @@
 #include "cli_common.h"
 #include "DisparityTriangulator.h"
 #include "Camera.h"
+#include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/core.hpp>
+#include <QByteArray>
+#include <QFile>
+#include <QIODevice>
 #include <cstdint>
 #include <string>
 
@@ -41,7 +45,7 @@ int main(int argc, char *argv[])
     CLI11_PARSE(app, argc, argv);
 
     // 加载视差图
-    cv::Mat disparity = cv::imread(dispPath, cv::IMREAD_UNCHANGED);
+    cv::Mat disparity = xjw::common::io::readImage(dispPath, cv::IMREAD_UNCHANGED);
     if (disparity.empty())
         cli::fatal("无法加载视差图: " + dispPath, cli::EXIT_IO_ERR);
     if (disparity.type() != CV_32FC1)
@@ -50,7 +54,7 @@ int main(int argc, char *argv[])
     cv::Mat intensityImage;
     if (!intensityImagePath.empty())
     {
-        intensityImage = cv::imread(intensityImagePath, cv::IMREAD_GRAYSCALE);
+        intensityImage = xjw::common::io::readImage(intensityImagePath, cv::IMREAD_GRAYSCALE);
         if (intensityImage.empty())
             cli::fatal("无法加载灰度影像: " + intensityImagePath, cli::EXIT_IO_ERR);
         if (intensityImage.size() != disparity.size())
@@ -58,7 +62,12 @@ int main(int argc, char *argv[])
     }
 
     // 加载校正参数
-    cv::FileStorage fs(rectPath, cv::FileStorage::READ);
+    QFile rectFile(xjw::common::io::fromUtf8Path(rectPath));
+    if (!rectFile.open(QIODevice::ReadOnly))
+        cli::fatal("无法加载校正参数: " + rectPath, cli::EXIT_IO_ERR);
+    const QByteArray rectBytes = rectFile.readAll();
+    cv::FileStorage fs(std::string(rectBytes.constData(), static_cast<size_t>(rectBytes.size())),
+                       cv::FileStorage::READ | cv::FileStorage::MEMORY);
     if (!fs.isOpened())
         cli::fatal("无法加载校正参数: " + rectPath, cli::EXIT_IO_ERR);
     cv::Mat H1inv, H2inv;
@@ -138,7 +147,8 @@ int main(int argc, char *argv[])
 
     try
     {
-        plapoint::io::writePly(outPath, cloud, plapoint::io::PlyFormat::ASCII);
+        plapoint::io::writePly(
+            xjw::common::io::toNativeNarrowPath(outPath), cloud, plapoint::io::PlyFormat::ASCII);
     }
     catch (const std::exception &e)
     {

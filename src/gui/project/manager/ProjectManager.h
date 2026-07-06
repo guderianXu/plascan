@@ -68,6 +68,9 @@ signals:
     void projectSaved(const QString &plascanPath);
     // 项目关闭后发出（数据已清空）
     void projectClosed();
+    void projectOpenStarted(const QString &plascanPath);
+    void projectOpenProgressChanged(const QString &message, int percent);
+    void projectOpenFinished(bool success, const QString &message);
     
     // === 元数据变化信号（转发自 ProjectData） ===
     // 运行时项目元数据（project_files.json + project_results.json 合并视图）变化时发出
@@ -78,6 +81,8 @@ signals:
     void metadataDirtyChanged(bool dirty);
     // 单个 ipfind 结果追加到元数据后发出，参数为对应的输入影像绝对路径
     void ipfindResultAppended(const QString &imagePath, const QString &suffix = QString());
+    // 照片蒙版生成完成后发出，供当前影像视图刷新轮廓覆盖层。
+    void masksGenerated(const QStringList &imagePaths);
     /// 每对影像匹配完成时实时发出（在主线程中）
     /// img0/img1: 影像绝对路径; matchFilePath: .match 文件路径; numMatches: 内点数
     void matchPairReady(const QString &img0, const QString &img1,
@@ -156,6 +161,10 @@ public slots:
     void importReferenceDataset();
     // 打开控制点/检查点/比例尺管理窗口，支持导入 CSV 并写入项目元数据。
     void openSurveyControlDialog();
+    // 记录当前照片视图里的活跃影像，供“生成蒙版/当前照片”使用。
+    void setActiveImagePath(const QString &imagePath);
+    // 生成照片蒙版，并将 mask_path 写入对应影像元数据。
+    void openGenerateMaskDialog();
     // 生成参考 DEM/LiDAR 与当前项目成果的精度检查准备报告。
     void runReferenceQualityCheck();
     // 生成参考地形软约束 BA 前置检查报告；真正 BA 只在检查通过后进入后续流程。
@@ -360,6 +369,7 @@ public slots:
     QString getLastUsedDir(const QString &key) const;
     // 辅助：将当前选择的目录保存到 FileDialogStateManager
     void saveLastUsedDir(const QString &key, const QString &dir);
+    void loadProjectResultsAsync(const QString &plascanPath);
 
 private:
     QWidget *_parent = nullptr;                        // 父窗口指针（用于对话框父窗口）
@@ -370,6 +380,8 @@ private:
     ProjectCameraSetupManager *_cameraSetupManager = nullptr;
     ProjectTaskDispatcher *_taskDispatcher = nullptr;
     ProjectUiCommands *_uiCommands = nullptr;
+    bool _projectOpenInProgress = false;
+    QString _activeImagePath;
 
     // AT/SFM 取消标志（跨线程共享）
     std::shared_ptr<std::atomic<bool>> _atCancelFlag;

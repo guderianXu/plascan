@@ -1,4 +1,5 @@
 #include "LaserConstraintMap.h"
+#include "io/PathIO.h"
 
 #include <algorithm>
 #include <cmath>
@@ -471,7 +472,7 @@ bool LaserConstraintMap::loadPly(const std::string &path,
                                  const LaserConstraintMapOptions &options,
                                  std::string *errorMessage)
 {
-    std::ifstream input(path, std::ios::binary);
+    std::ifstream input = xjw::common::io::openInputFile(path);
     if (!input)
     {
         setError(errorMessage, "Cannot open LiDAR PLY: " + path);

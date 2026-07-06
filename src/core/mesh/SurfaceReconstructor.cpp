@@ -2,6 +2,7 @@
 #include "PointCloudPreprocess.h"
 #include "SurfaceReconstructorHeightGrid.h"
 #include "SurfaceReconstructorPostprocess.h"
+#include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
@@ -80,7 +81,8 @@ std::string localizePlyStreamError(const std::string &error)
 bool parseBinaryPlyHeader(const std::string &cloudPath, PlyHeader *header, std::string *errorMsg)
 {
     std::string streamError;
-    const bool ok = plapoint::io::parseBinaryPlyVertexStreamHeader(cloudPath, header, &streamError);
+    const bool ok = plapoint::io::parseBinaryPlyVertexStreamHeader(
+        xjw::common::io::toNativeNarrowPath(cloudPath), header, &streamError);
     if (!ok && errorMsg)
     {
         *errorMsg = localizePlyStreamError(streamError);
@@ -349,7 +351,7 @@ bool estimateStreamingBoundsParallel(const std::string &cloudPath,
     for (int worker = 0; worker < workerCount; ++worker)
     {
         workers.emplace_back([&, worker]() {
-            std::ifstream file(cloudPath, std::ios::binary);
+            std::ifstream file = xjw::common::io::openInputFile(cloudPath);
             if (!file)
             {
                 errors[static_cast<std::size_t>(worker)] = "无法打开 PLY 文件";
@@ -614,7 +616,7 @@ bool accumulateStreamingGridParallel(const std::string &cloudPath,
     for (int worker = 0; worker < workerCount; ++worker)
     {
         workers.emplace_back([&, worker]() {
-            std::ifstream file(cloudPath, std::ios::binary);
+            std::ifstream file = xjw::common::io::openInputFile(cloudPath);
             if (!file)
             {
                 errors[static_cast<std::size_t>(worker)] = "无法打开 PLY 文件";
@@ -1067,7 +1069,7 @@ std::vector<detail::PointXYZRGB> loadPointsForMeshing(const std::string &cloudPa
         return {};
     }
 
-    auto cloudPtr = plapoint::io::readPly<float>(cloudPath);
+    auto cloudPtr = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(cloudPath));
     if (!cloudPtr)
     {
         if (errorMsg)

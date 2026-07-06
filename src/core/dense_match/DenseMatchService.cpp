@@ -4,6 +4,7 @@
 #include "opencv/OpenCVSgbmWrapper.h"
 #include "SubpixelRefiner.h"
 #include "DisparityValidator.h"
+#include "io/PathIO.h"
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 #include <cstdio>
@@ -16,8 +17,8 @@ DenseMatchService::DenseMatchService(const DenseMatchConfig &cfg) : _config(cfg)
 
 DisparityResult DenseMatchService::process()
 {
-    _left  = cv::imread(_config.leftImagePath, cv::IMREAD_GRAYSCALE);
-    _right = cv::imread(_config.rightImagePath, cv::IMREAD_GRAYSCALE);
+    _left  = xjw::common::io::readImage(_config.leftImagePath, cv::IMREAD_GRAYSCALE);
+    _right = xjw::common::io::readImage(_config.rightImagePath, cv::IMREAD_GRAYSCALE);
     if (_left.empty() || _right.empty())
     {
         fprintf(stderr, "[DenseMatch] ERROR: failed to load %s or %s\n",
@@ -108,7 +109,7 @@ bool DenseMatchService::saveDisparity(const DisparityResult &result,
     {
         return false;
     }
-    return cv::imwrite(filepath, result.disparity);
+    return xjw::common::io::writeImage(filepath, result.disparity);
 }
 
 } // namespace xjw::dense_match

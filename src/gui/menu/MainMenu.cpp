@@ -227,7 +227,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             findNamedChild<QAction>(_mainWindow, "actionToggleHenanUniversityBrand");
         _featureVisualizationAct = findNamedChild<QAction>(_mainWindow, "actionFeatureVisualization");
         _toggleLogAct = findNamedChild<QAction>(_mainWindow, "actionToggleLog");
-        _featureInfoAct = findNamedChild<QAction>(_mainWindow, "actionFeatureInfo");
         QObject *windowActionParent = windowMenu
             ? static_cast<QObject *>(windowMenu)
             : static_cast<QObject *>(_mainWindow);
@@ -295,6 +294,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _intersectionCheckAct = findNamedChild<QAction>(_mainWindow, "actionIntersectionCheck");
         _intersectionViewResultsAct = findNamedChild<QAction>(_mainWindow, "actionIntersectionViewResults");
         _manualPointCloudPruneAct = findNamedChild<QAction>(_mainWindow, "actionManualPointCloudPrune");
+        _generateMaskAct = findNamedChild<QAction>(_mainWindow, "actionGenerateMask");
         _viewMatchesAct = findNamedChild<QAction>(_mainWindow, "actionViewMatches");
         _viewWorkflowReportAct = findNamedChild<QAction>(_mainWindow, "actionViewWorkflowReport");
         _cameraConvertAct = findNamedChild<QAction>(_mainWindow, "actionCameraConvert");
@@ -395,6 +395,30 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 else
                 {
                     toolsMenu->addAction(_cameraConvertAct);
+                }
+            }
+        }
+        if (!_generateMaskAct)
+        {
+            QObject *actionParent = toolsMenu
+                ? static_cast<QObject *>(toolsMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _generateMaskAct = new QAction(tr("生成蒙版..."), actionParent);
+            _generateMaskAct->setObjectName(QStringLiteral("actionGenerateMask"));
+            _generateMaskAct->setToolTip(tr("根据照片背景或阈值生成蒙版，并在照片视图中显示轮廓"));
+            if (toolsMenu)
+            {
+                if (_cameraConvertAct)
+                {
+                    toolsMenu->insertAction(_cameraConvertAct, _generateMaskAct);
+                }
+                else if (_viewWorkflowReportAct)
+                {
+                    toolsMenu->insertAction(_viewWorkflowReportAct, _generateMaskAct);
+                }
+                else
+                {
+                    toolsMenu->addAction(_generateMaskAct);
                 }
             }
         }
@@ -500,8 +524,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 _toggleWorkspaceAct,
                 _togglePropertiesAct,
                 _togglePhotosAct,
-                _toggleLogAct,
-                _featureInfoAct
+                _toggleLogAct
             };
             auto *panelAct = new QWidgetAction(windowMenu);
             auto *wp = new WindowPanel(windowMenu);
@@ -641,16 +664,12 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _toggleLogAct = new QAction(tr("日志"), windowMenu);
     _toggleLogAct->setCheckable(true);  // 可切换：勾选时面板可见
     _toggleLogAct->setChecked(true);    // 默认显示日志面板
-    _featureInfoAct = new QAction(tr("兴趣点信息"), windowMenu);
-    _featureInfoAct->setCheckable(true); // 可切换：勾选时面板可见
-
     // 将动作列表传给 WindowPanel 组件，以列表形式展示在子菜单中
     QList<QAction*> windowActs = {
         _toggleWorkspaceAct,
         _togglePropertiesAct,
         _togglePhotosAct,
-        _toggleLogAct,
-        _featureInfoAct
+        _toggleLogAct
     };
     auto *panelAct = new QWidgetAction(windowMenu);
     auto *wp = new WindowPanel(windowMenu);
@@ -717,6 +736,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _intersectionViewResultsAct = intersectionMenu->addAction(tr("查看结果"));
     toolsMenu->addSeparator();
     _manualPointCloudPruneAct = toolsMenu->addAction(tr("手动点云剔除"));
+    _generateMaskAct = toolsMenu->addAction(tr("生成蒙版..."));
+    _generateMaskAct->setObjectName(QStringLiteral("actionGenerateMask"));
+    _generateMaskAct->setToolTip(tr("根据照片背景或阈值生成蒙版，并在照片视图中显示轮廓"));
 
     // 相机格式转换：外部 benchmark/摄影测量相机 -> tsai + image_camera.lis
     toolsMenu->addSeparator();
@@ -854,7 +876,6 @@ void MainMenu::setRecentProjects(const QStringList &paths)
 // ============================================================
 
 QAction *MainMenu::toggleLogAction() const   { return _toggleLogAct; }
-QAction *MainMenu::featureInfoAction() const { return _featureInfoAct; }
 QToolBar *MainMenu::toolBar() const          { return _toolBar; }
 
 QAction *MainMenu::newAction() const  { return _newAct; }
@@ -893,6 +914,7 @@ QAction *MainMenu::cleanTiePointsAction() const            { return _cleanTiePoi
 QAction *MainMenu::viewTiePointMatchesAction() const       { return _viewTiePointMatchesAct; }
 QAction *MainMenu::manualPointCloudPruneAction() const      { return _manualPointCloudPruneAct; }
 QAction *MainMenu::cameraConvertAction() const              { return _cameraConvertAct; }
+QAction *MainMenu::generateMaskAction() const               { return _generateMaskAct; }
 QAction *MainMenu::surveyControlAction() const              { return _surveyControlAct; }
 QAction *MainMenu::importReferenceDatasetAction() const     { return _importReferenceDatasetAct; }
 QAction *MainMenu::referenceQualityCheckAction() const      { return _referenceQualityCheckAct; }

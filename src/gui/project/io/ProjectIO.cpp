@@ -65,6 +65,13 @@ QString ProjectIO::ipmatchOutputDir(const QString &plascanPath)
     return QDir(root).filePath(QStringLiteral("assets/matches"));
 }
 
+QString ProjectIO::maskOutputDir(const QString &plascanPath)
+{
+    const QString root = projectRootFromPlascan(plascanPath);
+    if (root.isEmpty()) return QString();
+    return QDir(root).filePath(QStringLiteral("assets/masks"));
+}
+
 QString ProjectIO::tmpIpfindDir(const QString &plascanPath)
 {
     const QString root = projectRootFromPlascan(plascanPath);
@@ -94,6 +101,17 @@ QString ProjectIO::featureOutputPathForImage(const QString &plascanPath,
     if (outDir.isEmpty()) return QString();
 
     return QDir(outDir).filePath(fi.completeBaseName() + suffix);
+}
+
+QString ProjectIO::maskOutputPathForImage(const QString &plascanPath, const QString &imagePath)
+{
+    QFileInfo fi(imagePath);
+    if (fi.fileName().isEmpty()) return QString();
+
+    const QString outDir = maskOutputDir(plascanPath);
+    if (outDir.isEmpty()) return QString();
+
+    return QDir(outDir).filePath(fi.completeBaseName() + QStringLiteral("_mask.png"));
 }
 
 QStringList ProjectIO::spCandidates(const QString &plascanPath, const QString &imagePath)
@@ -185,4 +203,27 @@ QStringList ProjectIO::availableFeatureSuffixes(const QString &plascanPath,
         }
     }
     return result;
+}
+
+QString ProjectIO::findMaskForImage(const QString &plascanPath, const QString &imagePath)
+{
+    QFileInfo fi(imagePath);
+    if (fi.fileName().isEmpty()) return QString();
+
+    QStringList candidates;
+    const QString standard = maskOutputPathForImage(plascanPath, imagePath);
+    if (!standard.isEmpty())
+    {
+        candidates << standard;
+    }
+    candidates << fi.absoluteDir().filePath(fi.completeBaseName() + QStringLiteral("_mask.png"));
+
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+        {
+            return candidate;
+        }
+    }
+    return QString();
 }

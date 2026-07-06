@@ -137,6 +137,27 @@ TEST(MultiViewTrackBuilderTest, QualityThinningKeepsSpatiallySeparatedTracks)
     EXPECT_EQ(result.prunedByQualityThinning, 0);
 }
 
+TEST(MultiViewTrackBuilderTest, ExcludesStationaryTracksWhenEnabled)
+{
+    xjw::MultiViewTrackBuilder builder;
+    builder.setImageKeypoints(0, {{50.0f, 50.0f}, {10.0f, 10.0f}});
+    builder.setImageKeypoints(1, {{50.2f, 49.8f}, {30.0f, 10.0f}});
+    builder.setImageKeypoints(2, {{50.1f, 50.1f}, {50.0f, 10.0f}});
+    builder.addMatchPair(0, 1, {{0, 0, 0.95f}, {1, 1, 0.90f}});
+    builder.addMatchPair(1, 2, {{0, 0, 0.95f}, {1, 1, 0.90f}});
+
+    xjw::MultiViewTrackBuilder::BuildOptions options;
+    options.excludeStationaryTracks = true;
+    options.stationaryTrackMaxPixelMotion = 1.0f;
+
+    const xjw::MultiViewTrackBuildResult result = builder.build(options);
+
+    ASSERT_EQ(result.tracks.size(), 1);
+    EXPECT_EQ(result.prunedStationaryTracks, 1);
+    ASSERT_EQ(result.tracks.front().elements.size(), 3u);
+    EXPECT_EQ(result.tracks.front().elements.front().featureIdx, 1);
+}
+
 TEST(KnownPoseMultiViewTriangulationTest, CreatesSingleThreeViewTrack)
 {
     const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);

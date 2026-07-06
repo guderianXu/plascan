@@ -11,7 +11,7 @@
 
 #include "Camera.h"
 #include "PositiveDepthCameraModel.h"
-#include <filesystem>
+#include "io/PathIO.h"
 #include <fstream>
 #include <sstream>
 #include <iostream>
@@ -139,7 +139,7 @@ Camera Camera::scaledIntrinsics(double scaleX, double scaleY) const
  */
 bool Camera::loadFromFile(const std::string &path)
 {
-    std::ifstream ifs(std::filesystem::u8path(path));
+    std::ifstream ifs = xjw::common::io::openInputFile(path);
     if (!ifs)
     {
         return false;
@@ -678,7 +678,7 @@ bool Camera::undistortPixel(const double pixel[2], double norm[2],
  */
 bool Camera::saveToFile(const std::string &path) const
 {
-    std::ofstream ofs(path);
+    std::ofstream ofs = xjw::common::io::openOutputFile(path);
     if (!ofs) return false;
     // 使用 double 类型能表示的最大有效位数，避免精度损失
     ofs << std::setprecision(std::numeric_limits<double>::max_digits10);

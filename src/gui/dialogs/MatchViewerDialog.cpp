@@ -423,14 +423,16 @@ void MatchViewerDialog::onMatchDataLoaded(int count)
 {
     _totalMatches = count;  // 保存总匹配点数
 
-    // 兼容旧版本默认值（500）：若匹配总数超过500且当前仍为500，
-    // 自动切换到“全部显示”，避免用户误以为匹配点丢失。
-    if (_maxCountSpin && _maxCountSpin->value() == 500 && count > 500)
+    // 兼容旧版本保存值：历史配置可能保存 0（全部）或 500。
+    // 打开大匹配文件时保持有限渲染预算，避免一次性绘制过多连线。
+    if (_maxCountSpin &&
+        (_maxCountSpin->value() <= 0 || _maxCountSpin->value() == 500) &&
+        count > 5000)
     {
-        _maxCountSpin->setValue(0);
+        _maxCountSpin->setValue(5000);
         if (_viewer && _viewer->overlay())
         {
-            _viewer->overlay()->setMaxDisplayCount(0);
+            _viewer->overlay()->setMaxDisplayCount(5000);
         }
     }
 
@@ -522,11 +524,11 @@ void MatchViewerDialog::loadSettings()
     int opacity = cfg.value(QStringLiteral("opacity")).toInt(70);
     _opacitySlider->setValue(opacity);
     
-    int maxCount = cfg.value(QStringLiteral("maxCount")).toInt(0);
-    // 兼容旧版本默认值：历史默认是 500，现版本默认应为“全部(0)”。
-    if (maxCount == 500)
+    int maxCount = cfg.value(QStringLiteral("maxCount")).toInt(5000);
+    // 兼容旧版本默认值：历史默认 500 或全部(0) 都会导致大匹配文件打开时卡顿。
+    if (maxCount <= 0 || maxCount == 500)
     {
-        maxCount = 0;
+        maxCount = 5000;
     }
     _maxCountSpin->setValue(maxCount);
     

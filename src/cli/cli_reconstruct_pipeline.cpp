@@ -20,6 +20,7 @@
 #ifndef PLASCAN_THREE_D_ONLY
 #include "TerrainPipeline.h"
 #endif
+#include "io/PathIO.h"
 #include "project/ProjectCommonUtils.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -94,8 +95,8 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
             }
 
             xjw::mvs::MvsSourcePairQuality quality;
-            quality.imageA = sample.value(QStringLiteral("image_a")).toString().toStdString();
-            quality.imageB = sample.value(QStringLiteral("image_b")).toString().toStdString();
+            quality.imageA = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_a")).toString());
+            quality.imageB = xjw::common::io::toUtf8Path(sample.value(QStringLiteral("image_b")).toString());
             quality.totalMatches = std::max(0, sample.value(QStringLiteral("match_count")).toInt());
             quality.geometricInliers = inliers;
             quality.verified = true;
@@ -122,8 +123,8 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
         }
 
         xjw::mvs::MvsSourcePairQuality quality;
-        quality.imageA = variant.imageA.toStdString();
-        quality.imageB = variant.imageB.toStdString();
+        quality.imageA = xjw::common::io::toUtf8Path(variant.imageA);
+        quality.imageB = xjw::common::io::toUtf8Path(variant.imageB);
         quality.totalMatches = std::max(0, variant.totalMatches);
         quality.geometricInliers = std::max(0, variant.geometricVerifiedInliers);
         quality.verified = true;
@@ -566,7 +567,7 @@ bool readImageCameraList(const QString &listPath,
             if (error) *error = QStringLiteral("%1:%2 影像不存在: %3").arg(listPath).arg(lineNumber).arg(item.imagePath);
             return false;
         }
-        if (!item.camera.loadFromFile(item.cameraPath.toStdString()) || !item.camera.isValid())
+        if (!item.camera.loadFromFile(xjw::common::io::toUtf8Path(item.cameraPath)) || !item.camera.isValid())
         {
             if (error) *error = QStringLiteral("%1:%2 相机读取失败: %3").arg(listPath).arg(lineNumber).arg(item.cameraPath);
             return false;
@@ -1053,12 +1054,14 @@ bool writePointCloudPly(const QString &path,
     {
         if (writeNormals || !pointCloud.hasNormals())
         {
-            plapoint::io::writePly(path.toStdString(), pointCloud, plapoint::io::PlyFormat::BinaryLE);
+            plapoint::io::writePly(
+                xjw::common::io::toNativeNarrowPath(path), pointCloud, plapoint::io::PlyFormat::BinaryLE);
         }
         else
         {
             const PlaCloud withoutNormals = cloneCloudValue(pointCloud, false);
-            plapoint::io::writePly(path.toStdString(), withoutNormals, plapoint::io::PlyFormat::BinaryLE);
+            plapoint::io::writePly(
+                xjw::common::io::toNativeNarrowPath(path), withoutNormals, plapoint::io::PlyFormat::BinaryLE);
         }
         return true;
     }
@@ -2134,9 +2137,9 @@ int main(int argc, char *argv[])
         }
 
         xjw::mvs::CameraView view;
-        view.imagePath = imagePath.toStdString();
+        view.imagePath = xjw::common::io::toUtf8Path(imagePath);
         view.camera = camera;
-        cv::Mat image = cv::imread(view.imagePath, cv::IMREAD_GRAYSCALE);
+        cv::Mat image = xjw::common::io::readImage(view.imagePath, cv::IMREAD_GRAYSCALE);
         if (!image.empty())
         {
             view.imageWidth = image.cols;
@@ -2181,7 +2184,10 @@ int main(int argc, char *argv[])
         xjw::mvs::SparseCloudPreprocessor preprocessor;
         xjw::mvs::PreprocessResult preprocessResult;
         std::string preprocessError;
-        if (preprocessor.run(sfmResult.sparseCloudPath.toStdString(), views, preprocessResult, &preprocessError))
+        if (preprocessor.run(xjw::common::io::toUtf8Path(sfmResult.sparseCloudPath),
+                             views,
+                             preprocessResult,
+                             &preprocessError))
         {
             sparse = preprocessResult.cloud;
         }
@@ -2239,7 +2245,7 @@ int main(int argc, char *argv[])
         xjw::gui::project::buildDepthGenConfig(denseSettings, static_cast<int>(views.size()));
     depthConfig.runFusion = false;
     depthConfig.saveIntermediateDepthMaps = true;
-    depthConfig.intermediateDir = mvsDir.toStdString();
+    depthConfig.intermediateDir = xjw::common::io::toUtf8Path(mvsDir);
     depthConfig.sourcePairQualities =
         loadMvsSourcePairQualities(QDir(outputDir).filePath(QStringLiteral("assets/matches")));
     depthConfig.requireVerifiedSourcePairs = !depthConfig.sourcePairQualities.empty();
@@ -2255,7 +2261,7 @@ int main(int argc, char *argv[])
     generator.setViews(views);
     generator.setSparseCloud(sparse);
     generator.setConfig(depthConfig);
-    generator.setOutputDir(mvsDir.toStdString());
+    generator.setOutputDir(xjw::common::io::toUtf8Path(mvsDir));
 
     QEventLoop loop;
     bool depthOk = false;

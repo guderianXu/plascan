@@ -1,4 +1,5 @@
 #include "DemDomIO.h"
+#include "io/PathIO.h"
 
 #include <plapoint/io/ply_io.h>
 #include <plapoint/io/xyz_io.h>
@@ -215,7 +216,8 @@ bool writeSingleBandQualityRaster(const DemGridData &demGrid,
     char **createOptions = nullptr;
     createOptions = CSLSetNameValue(createOptions, "COMPRESS", "LZW");
     createOptions = CSLSetNameValue(createOptions, "TILED", "YES");
-    GDALDataset *dataset = driver->Create(outputPath.toStdString().c_str(),
+    const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
+    GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
                                           demGrid.width,
                                           demGrid.height,
                                           1,
@@ -367,7 +369,7 @@ bool DemDomIO::writeDemPreviewPng(const DemGridData &demGrid,
 
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
     cv::Mat previewFlipped = flipForRasterWrite(preview);
-    if (!cv::imwrite(outputPath.toStdString(), previewFlipped))
+    if (!xjw::common::io::writeImage(outputPath, previewFlipped))
     {
         if (errorMsg)
         {
@@ -412,7 +414,8 @@ bool DemDomIO::writeDemRaster(const DemGridData &demGrid,
 
     const GDALDataType dataType = format == DemRasterFormat::UInt16Tiff ? GDT_UInt16 : GDT_Float32;
     const int nBands = (format == DemRasterFormat::Float32Tiff && demGrid.hasWorldXY()) ? 4 : 1;
-    GDALDataset *dataset = driver->Create(outputPath.toStdString().c_str(),
+    const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
+    GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
                                           demGrid.width,
                                           demGrid.height,
                                           nBands,
@@ -642,7 +645,8 @@ bool DemDomIO::readDemRaster(const QString &inputPath,
     }
 
     ensureGdalRegistered();
-    GDALDataset *dataset = static_cast<GDALDataset *>(GDALOpen(inputPath.toStdString().c_str(), GA_ReadOnly));
+    const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
+    GDALDataset *dataset = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));
     if (!dataset)
     {
         if (errorMsg)
@@ -899,7 +903,7 @@ bool DemDomIO::writeDenseCloudXyz(const PlaPointCloud &denseCloud,
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
     try
     {
-        plapoint::io::writeXyz(outputPath.toStdString(), denseCloud);
+        plapoint::io::writeXyz(xjw::common::io::toNativeNarrowPath(outputPath), denseCloud);
         return true;
     }
     catch (const std::exception &e)
@@ -954,7 +958,9 @@ bool DemDomIO::writeMeshPlyFromDemGrid(const DemGridData &demGrid,
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
     try
     {
-        plapoint::io::writePly(outputPath.toStdString(), mesh, plapoint::io::PlyFormat::ASCII);
+        plapoint::io::writePly(xjw::common::io::toNativeNarrowPath(outputPath),
+                               mesh,
+                               plapoint::io::PlyFormat::ASCII);
     }
     catch (const std::exception &e)
     {
@@ -992,7 +998,9 @@ bool DemDomIO::writeDenseCloudPly(const DemGridData &demGrid,
     QDir().mkpath(QFileInfo(outputPath).absolutePath());
     try
     {
-        plapoint::io::writePly(outputPath.toStdString(), cloud, plapoint::io::PlyFormat::ASCII);
+        plapoint::io::writePly(xjw::common::io::toNativeNarrowPath(outputPath),
+                               cloud,
+                               plapoint::io::PlyFormat::ASCII);
     }
     catch (const std::exception &e)
     {
@@ -1036,7 +1044,8 @@ bool DemDomIO::writeDomImage(const cv::Mat &domImage,
         char **createOptions = nullptr;
         createOptions = CSLSetNameValue(createOptions, "COMPRESS", "LZW");
         createOptions = CSLSetNameValue(createOptions, "TILED", "YES");
-        GDALDataset *dataset = driver->Create(outputPath.toStdString().c_str(),
+        const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
+        GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
                                               domImage.cols,
                                               domImage.rows,
                                               domImage.channels(),
@@ -1083,7 +1092,7 @@ bool DemDomIO::writeDomImage(const cv::Mat &domImage,
         return true;
     }
 
-    if (!cv::imwrite(outputPath.toStdString(), domImage))
+    if (!xjw::common::io::writeImage(outputPath, domImage))
     {
         if (errorMsg)
         {
@@ -1139,7 +1148,8 @@ bool DemDomIO::writeDomGeoTiff(const cv::Mat &domImage,
     createOptions = CSLSetNameValue(createOptions, "COMPRESS", "LZW");
     createOptions = CSLSetNameValue(createOptions, "TILED", "YES");
 
-    GDALDataset *dataset = driver->Create(outputPath.toStdString().c_str(),
+    const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
+    GDALDataset *dataset = driver->Create(outputPathUtf8.c_str(),
                                           domImage.cols,
                                           domImage.rows,
                                           domImage.channels(),

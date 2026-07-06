@@ -94,6 +94,7 @@ QJsonObject makeTrackSummary(const MultiViewTrackBuildResult &buildResult)
     summary[QStringLiteral("rejected_conflict_components")] = buildResult.rejectedConflictComponents;
     summary[QStringLiteral("rejected_conflict_edges")] = buildResult.rejectedConflictEdges;
     summary[QStringLiteral("pruned_by_quality_thinning")] = buildResult.prunedByQualityThinning;
+    summary[QStringLiteral("pruned_stationary_tracks")] = buildResult.prunedStationaryTracks;
     summary[QStringLiteral("mean_track_confidence")] = buildResult.meanTrackConfidence;
 
     QJsonObject histogram;
@@ -236,13 +237,17 @@ MatchPhotosStageReport TrackBuildStage::run(const MatchPhotosContext &context,
     }
 
     MultiViewTrackBuilder::BuildOptions buildOptions;
-    buildOptions.enableQualityThinning = true;
+    buildOptions.enableQualityThinning = options.maxTiePointsPerImage > 0;
     buildOptions.maxTracksPerImage = options.maxTiePointsPerImage;
-    buildOptions.maxTracksPerGridCell = options.maxTiePointsPerGridCell;
+    buildOptions.maxTracksPerGridCell = options.maxTiePointsPerImage > 0
+        ? options.maxTiePointsPerGridCell
+        : 0;
     buildOptions.gridColumns = options.tiePointGridColumns;
     buildOptions.gridRows = options.tiePointGridRows;
     buildOptions.imageWidth = imageWidth;
     buildOptions.imageHeight = imageHeight;
+    buildOptions.excludeStationaryTracks = options.excludeStationaryTiePoints;
+    buildOptions.stationaryTrackMaxPixelMotion = options.stationaryTiePointMaxPixelMotion;
     const MultiViewTrackBuildResult buildResult = builder.build(buildOptions);
 
     if (result)

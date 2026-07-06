@@ -2,7 +2,9 @@
 #include "FeatureFileIO.h"
 #include "FeatureStage.h"
 #include "GeometryVerifyStage.h"
+#include "GuidedMatchStage.h"
 #include "MatchPhotosAlgorithmSelector.h"
+#include "MatchPhotosRuntime.h"
 #include "MatchingStage.h"
 #include "TrackBuildStage.h"
 
@@ -96,11 +98,14 @@ TEST(MatchPhotosTaskTest, RunsPairSelectionAndReportsStageSkeleton)
     EXPECT_EQ(result.algorithmPlan.matcherAlgorithm, QStringLiteral("lightglue"));
     EXPECT_TRUE(result.algorithmPlan.rotationRobust);
     EXPECT_TRUE(result.pairSelection.restrictPairs);
-    ASSERT_EQ(result.stages.size(), 7);
+    ASSERT_EQ(result.stages.size(), 9);
     EXPECT_EQ(result.stages.front().status, xjw::matchphotos::MatchPhotosStageStatus::Completed);
     EXPECT_EQ(result.stages.front().stageId, QStringLiteral("algorithm_selection"));
-    EXPECT_EQ(result.stages.at(1).stageId, QStringLiteral("pair_selection"));
-    EXPECT_EQ(result.stages.at(2).status, xjw::matchphotos::MatchPhotosStageStatus::Skipped);
+    EXPECT_EQ(result.stages.at(1).stageId, QStringLiteral("feature"));
+    EXPECT_EQ(result.stages.at(2).stageId, QStringLiteral("generic_preselection"));
+    EXPECT_EQ(result.stages.at(3).stageId, QStringLiteral("reference_preselection"));
+    EXPECT_EQ(result.stages.at(4).stageId, QStringLiteral("pair_selection"));
+    EXPECT_EQ(result.stages.at(1).status, xjw::matchphotos::MatchPhotosStageStatus::Skipped);
 }
 
 TEST(MatchPhotosTaskTest, FeatureStageWritesSiftFilesForSyntheticImages)
@@ -175,4 +180,35 @@ TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
     EXPECT_FALSE(geometrySource.contains(QStringLiteral("几何验证阶段尚未接入")));
     EXPECT_TRUE(trackSource.contains(QStringLiteral("MultiViewTrackBuilder")));
     EXPECT_FALSE(trackSource.contains(QStringLiteral("轨迹构建阶段尚未接入")));
+}
+
+TEST(MatchPhotosTaskTest, GuidedKeypointLimitPerMegapixelScalesByImageSize)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.enableGuidedMatching = true;
+    options.keypointLimitPerMegapixel = 1000;
+    options.useExplicitKeypointLimit = true;
+    options.maxKeypoints = 40000;
+
+    const xjw::matchphotos::MatchPhotosAlgorithmPlan plan =
+        xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    EXPECT_EQ(xjw::matchphotos::resolveFeatureKeypointLimit(options, plan, 6000, 4000),
+              24000);
+    EXPECT_EQ(xjw::matchphotos::resolveFeatureKeypointLimit(options, plan, 160, 160),
+              26);
+}
+
+TEST(MatchPhotosTaskTest, GuidedMatchStageReportsEnabledDensityMode)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.enableGuidedMatching = true;
+    options.keypointLimitPerMegapixel = 1000;
+
+    const xjw::matchphotos::GuidedMatchStage stage;
+    const xjw::matchphotos::MatchPhotosContext context;
+    const xjw::matchphotos::MatchPhotosStageReport report = stage.run(context, options);
+
+    EXPECT_EQ(report.status, xjw::matchphotos::MatchPhotosStageStatus::Completed);
+    EXPECT_TRUE(report.message.contains(QStringLiteral("每百万像素")));
 }

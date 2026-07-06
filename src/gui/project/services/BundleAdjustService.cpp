@@ -13,6 +13,7 @@
 #include "LaserConstraintMap.h"
 #include "Logger.h"
 #include "ProjectSupportUtils.h"
+#include "io/PathIO.h"
 
 #include <QDir>
 #include <QFile>
@@ -201,7 +202,7 @@ BaServiceResult BundleAdjustService::run(
 
         xjw::lidar::LaserConstraintMap laserMap;
         std::string laserError;
-        if (!laserMap.loadPly(opts.laserConstraintCloudPath.toStdString(), mapOptions, &laserError))
+        if (!laserMap.loadPly(xjw::common::io::toUtf8Path(opts.laserConstraintCloudPath), mapOptions, &laserError))
         {
             result.errorMessage = QStringLiteral("读取 LiDAR 约束点云失败: %1")
                                       .arg(QString::fromStdString(laserError));
@@ -487,7 +488,7 @@ BaServiceResult BundleAdjustService::run(
         {
             tsaiPath = QDir(tsaiDir).filePath(
                 QFileInfo(imgPath).completeBaseName() + QStringLiteral(".ba.tsai"));
-            camAfter.saveToFile(tsaiPath.toStdString());
+            camAfter.saveToFile(xjw::common::io::toUtf8Path(tsaiPath));
         }
 
         // 追加到 JSON 精化相机列表

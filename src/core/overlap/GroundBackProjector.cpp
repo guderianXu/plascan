@@ -1,4 +1,5 @@
 #include "GroundBackProjector.h"
+#include "io/PathIO.h"
 
 // ============================================================
 // 文件：GroundBackProjector.cpp
@@ -67,7 +68,7 @@ bool DemSurface::loadFromXYZ(const std::string &path, std::string *errorMsg)
     _xyPoints.clear();
     _meanHeight = 0.0;
 
-    std::ifstream ifs(path);
+    std::ifstream ifs = xjw::common::io::openInputFile(path, std::ios::in);
     if (!ifs.is_open()) {
         if (errorMsg) *errorMsg = "无法打开 DEM 文件: " + path;
         return false;

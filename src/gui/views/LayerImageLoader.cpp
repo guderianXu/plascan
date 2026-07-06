@@ -1,18 +1,17 @@
 #include "LayerImageLoader.h"
 
 #include "Logger.h"
+#include "io/PathIO.h"
 
 #include <opencv2/opencv.hpp>
 
 #include <QCryptographicHash>
 #include <QDir>
-#include <QFile>
 #include <QFileInfo>
 #include <QImageReader>
 
 #include <algorithm>
 #include <cmath>
-#include <cstring>
 #include <vector>
 
 #include <cpl_conv.h>
@@ -84,7 +83,8 @@ bool convertTo8BitGeoTiff_GDAL(const QString &inputPath,
         gdalInited = true;
     }
 
-    GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(inputPath.toStdString().c_str(), GA_ReadOnly));
+    const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
+    GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));
     if (!ds)
     {
         return false;
@@ -191,7 +191,8 @@ bool convertTo8BitGeoTiff_GDAL(const QString &inputPath,
     options = CSLSetNameValue(options, "COMPRESS", "LZW");
     options = CSLSetNameValue(options, "TILED", "YES");
 
-    GDALDataset *outDs = driver->Create(outputPath.toStdString().c_str(),
+    const std::string outputPathUtf8 = xjw::common::io::toUtf8Path(outputPath);
+    GDALDataset *outDs = driver->Create(outputPathUtf8.c_str(),
                                         width,
                                         height,
                                         bandCount,
@@ -304,7 +305,8 @@ bool needsConvertTo8Bit_GDAL(const QString &inputPath)
         gdalInited = true;
     }
 
-    GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(inputPath.toStdString().c_str(), GA_ReadOnly));
+    const std::string inputPathUtf8 = xjw::common::io::toUtf8Path(inputPath);
+    GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(inputPathUtf8.c_str(), GA_ReadOnly));
     if (!ds)
     {
         return false;
@@ -402,24 +404,7 @@ QImage imageFromOpenCvMat(const cv::Mat &mat)
 
 QImage loadImageWithOpenCvByteDecode(const QString &path)
 {
-    QFile imageFile(path);
-    if (!imageFile.open(QIODevice::ReadOnly))
-    {
-        return QImage();
-    }
-
-    const QByteArray bytes = imageFile.readAll();
-    if (bytes.isEmpty())
-    {
-        return QImage();
-    }
-
-    std::vector<uchar> encoded;
-    encoded.resize(static_cast<size_t>(bytes.size()));
-    std::memcpy(encoded.data(), bytes.constData(), static_cast<size_t>(bytes.size()));
-
-    const cv::Mat decoded = cv::imdecode(encoded, cv::IMREAD_UNCHANGED);
-    return imageFromOpenCvMat(decoded);
+    return imageFromOpenCvMat(xjw::common::io::readImage(path, cv::IMREAD_UNCHANGED));
 }
 
 QString make8BitCachePath(const QString &inputPath, const QString &projectRoot)

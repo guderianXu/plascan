@@ -15,6 +15,7 @@
 #include "ProjectManager.h"
 #include "ProjectSupportUtils.h"
 #include "OverlapAnalyzer.h"
+#include "io/PathIO.h"
 
 #include <QAbstractItemView>
 #include <QCheckBox>
@@ -250,7 +251,7 @@ bool loadCameraInputsForRequest(const VocabularyOverlapRunRequest &request,
         }
 
         xjw::OverlapImageInput input;
-        input.imagePath = imagePath.toStdString();
+        input.imagePath = xjw::common::io::toUtf8Path(imagePath);
         input.camera = camera;
         input.width = size.width();
         input.height = size.height();
@@ -321,7 +322,7 @@ bool loadFeaturesForRequest(const VocabularyOverlapRunRequest &request,
         }
 
         xjw::VocabularyImageFeatures imageFeatures;
-        imageFeatures.imagePath = imagePath.toStdString();
+        imageFeatures.imagePath = xjw::common::io::toUtf8Path(imagePath);
         imageFeatures.keypoints = output.keypoints;
         imageFeatures.descriptors = descriptors;
         features->push_back(std::move(imageFeatures));
@@ -344,8 +345,8 @@ QStringList acceptedPairTokens(const std::vector<xjw::VocabularyOverlapPairResul
         {
             continue;
         }
-        const QString imageA = QString::fromStdString(pair.imagePathA);
-        const QString imageB = QString::fromStdString(pair.imagePathB);
+        const QString imageA = xjw::common::io::fromUtf8Path(pair.imagePathA);
+        const QString imageB = xjw::common::io::fromUtf8Path(pair.imagePathB);
         generatedPairs.append(pairTokenForPath(imageA) + QStringLiteral("__") + pairTokenForPath(imageB));
     }
     return generatedPairs;
@@ -1332,7 +1333,7 @@ bool VocabularyOverlapDialog::loadFeatures(std::vector<xjw::VocabularyImageFeatu
         }
 
         xjw::VocabularyImageFeatures imageFeatures;
-        imageFeatures.imagePath = imagePath.toStdString();
+        imageFeatures.imagePath = xjw::common::io::toUtf8Path(imagePath);
         imageFeatures.keypoints = output.keypoints;
         imageFeatures.descriptors = descriptors;
         features->push_back(std::move(imageFeatures));

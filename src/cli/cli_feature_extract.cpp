@@ -11,6 +11,7 @@
 #include "TraditionalFeatureExtractor.h"
 #include "ExtractorFactory.h"
 #include "FeatureFileIO.h"
+#include "io/PathIO.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <QFileInfo>
@@ -120,8 +121,8 @@ int runPythonDedodeExtract(const std::string &imgPath,
 
     QStringList args;
     args << script
-         << QStringLiteral("-i") << QString::fromStdString(imgPath)
-         << QStringLiteral("-o") << QString::fromStdString(outPath)
+         << QStringLiteral("-i") << xjw::common::io::fromUtf8Path(imgPath)
+         << QStringLiteral("-o") << xjw::common::io::fromUtf8Path(outPath)
          << QStringLiteral("--max-dim") << QString::number(maxDim)
          << QStringLiteral("--max-kp") << QString::number(maxKp);
     if (cuda)
@@ -153,7 +154,7 @@ static int processOne(const std::string &algo,
                       const std::string &imgPath,
                       const std::string &outPath)
 {
-    cv::Mat img = cv::imread(imgPath, cv::IMREAD_GRAYSCALE);
+    cv::Mat img = xjw::common::io::readImage(imgPath, cv::IMREAD_GRAYSCALE);
     if (img.empty()) { fprintf(stderr, "加载失败: %s\n", imgPath.c_str()); return cli::EXIT_IO_ERR; }
 
     fprintf(stdout, "%s: %s (%dx%d)\n",
@@ -162,8 +163,8 @@ static int processOne(const std::string &algo,
     auto output = extractor->extract(img);
     if (output.empty()) { fprintf(stderr, "未检测到关键点\n"); return cli::EXIT_ALGO_ERR; }
 
-    QFileInfo fi(QString::fromStdString(imgPath));
-    if (!FeatureFileIO::write(QString::fromStdString(outPath), fi.fileName(),
+    QFileInfo fi(xjw::common::io::fromUtf8Path(imgPath));
+    if (!FeatureFileIO::write(xjw::common::io::fromUtf8Path(outPath), fi.fileName(),
                               output, extractor->algorithmName()))
     { fprintf(stderr, "写入失败: %s\n", outPath.c_str()); return cli::EXIT_IO_ERR; }
 
@@ -212,8 +213,8 @@ int main(int argc, char *argv[])
         norm = "dedode";
     }
     std::string suffix = ExtractorSuffix::forAlgorithm(norm);
-    QFileInfo fiIn(QString::fromStdString(imgPath));
-    if (!fiIn.isDir() && QFileInfo(QString::fromStdString(outPath)).suffix().isEmpty())
+    QFileInfo fiIn(xjw::common::io::fromUtf8Path(imgPath));
+    if (!fiIn.isDir() && QFileInfo(xjw::common::io::fromUtf8Path(outPath)).suffix().isEmpty())
     {
         outPath += suffix;
     }
@@ -223,15 +224,15 @@ int main(int argc, char *argv[])
         if (fiIn.isDir())
         {
             QDir inDir(fiIn.absoluteFilePath());
-            QDir outDir(QString::fromStdString(outPath));
+            QDir outDir(xjw::common::io::fromUtf8Path(outPath));
             outDir.mkpath(QStringLiteral("."));
             QStringList filters = {"*.png","*.jpg","*.jpeg","*.tif","*.tiff","*.bmp"};
             int ok = 0, fail = 0;
             for (const QString &fname : inDir.entryList(filters, QDir::Files, QDir::Name))
             {
-                const std::string in = inDir.absoluteFilePath(fname).toStdString();
+                const std::string in = xjw::common::io::toUtf8Path(inDir.absoluteFilePath(fname));
                 const QString outName = QFileInfo(fname).completeBaseName() + QString::fromStdString(suffix);
-                const std::string out = outDir.absoluteFilePath(outName).toStdString();
+                const std::string out = xjw::common::io::toUtf8Path(outDir.absoluteFilePath(outName));
                 const int rc = runPythonDedodeExtract(in, out, cuda, maxDim, maxKp);
                 (rc == cli::EXIT_OK) ? ++ok : ++fail;
             }
@@ -257,7 +258,7 @@ int main(int argc, char *argv[])
     auto extractor = xjw::feature_extractors::createExtractor(algo, eCfg);
     fprintf(stdout, "算法: %s\n", extractor->algorithmName().c_str());
 
-    QFileInfo fiOut(QString::fromStdString(outPath));
+    QFileInfo fiOut(xjw::common::io::fromUtf8Path(outPath));
     if (fiIn.isDir())
     {
         QDir inDir(fiIn.absoluteFilePath()), outDir(fiOut.absoluteFilePath());
@@ -266,9 +267,9 @@ int main(int argc, char *argv[])
         int ok = 0, fail = 0;
         for (const QString &fname : inDir.entryList(filters, QDir::Files, QDir::Name))
         {
-            std::string in = inDir.absoluteFilePath(fname).toStdString();
+            std::string in = xjw::common::io::toUtf8Path(inDir.absoluteFilePath(fname));
             QString outName = QFileInfo(fname).completeBaseName() + QString::fromStdString(suffix);
-            std::string out = outDir.absoluteFilePath(outName).toStdString();
+            std::string out = xjw::common::io::toUtf8Path(outDir.absoluteFilePath(outName));
             int rc = processOne(algo, extractor, in, out);
             (rc == cli::EXIT_OK) ? ++ok : ++fail;
         }

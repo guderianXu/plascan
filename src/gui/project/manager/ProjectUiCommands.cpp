@@ -75,6 +75,26 @@ bool ProjectUiCommands::createNewProject(QString *createdPath) const
 
 bool ProjectUiCommands::openProjectByDialog(QString *openedPath) const
 {
+    QString plascanPath;
+    if (!selectProjectByDialog(&plascanPath))
+    {
+        return false;
+    }
+
+    if (!openProjectFromPath(plascanPath))
+    {
+        return false;
+    }
+
+    if (openedPath)
+    {
+        *openedPath = plascanPath;
+    }
+    return true;
+}
+
+bool ProjectUiCommands::selectProjectByDialog(QString *selectedPath) const
+{
     QFileDialog dialog(_parentWidget,
                        QStringLiteral("打开项目"),
                        readLastDir(QStringLiteral("project")),
@@ -93,14 +113,9 @@ bool ProjectUiCommands::openProjectByDialog(QString *openedPath) const
     }
 
     writeLastDir(QStringLiteral("project"), QFileInfo(plascanPath).absolutePath());
-    if (!openProjectFromPath(plascanPath))
+    if (selectedPath)
     {
-        return false;
-    }
-
-    if (openedPath)
-    {
-        *openedPath = plascanPath;
+        *selectedPath = plascanPath;
     }
     return true;
 }

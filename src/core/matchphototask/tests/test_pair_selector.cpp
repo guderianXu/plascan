@@ -118,3 +118,51 @@ TEST(MatchPhotosPairSelectorTest, MergesOverlapAndVocabularyCandidates)
     EXPECT_TRUE(hasSource(*vocabulary, xjw::matchphotos::PairSource::VocabularyOverlap));
     EXPECT_DOUBLE_EQ(vocabulary->vocabularyScore, 0.5);
 }
+
+TEST(MatchPhotosPairSelectorTest, AutoUsesPreselectionInsteadOfSmallSetExhaustive)
+{
+    xjw::VocabularyOverlapResult vocabularyOverlap;
+    xjw::VocabularyOverlapPairResult vocabularyPair;
+    vocabularyPair.indexA = 0;
+    vocabularyPair.indexB = 2;
+    vocabularyPair.bowScore = 0.8;
+    vocabularyPair.sharedWordCount = 18;
+    vocabularyPair.accepted = true;
+    vocabularyOverlap.acceptedPairs.push_back(vocabularyPair);
+
+    xjw::matchphotos::PairSelectionInput input;
+    input.images = makeImages(4);
+    input.vocabularyOverlapResult = &vocabularyOverlap;
+
+    const xjw::matchphotos::PairSelectionPolicy policy =
+        xjw::matchphotos::makePairSelectionPolicy(xjw::matchphotos::PairSelectionPreset::Auto);
+    const xjw::matchphotos::PairSelectionResult result =
+        xjw::matchphotos::PairSelector::select(input, policy);
+
+    EXPECT_TRUE(result.restrictPairs);
+    EXPECT_EQ(result.allPairCount, 6);
+    ASSERT_EQ(result.candidates.size(), 1);
+    ASSERT_NE(findPair(result.candidates, 0, 2), nullptr);
+    EXPECT_TRUE(hasSource(result.candidates.front(), xjw::matchphotos::PairSource::VocabularyOverlap));
+}
+
+TEST(MatchPhotosPairSelectorTest, EmptyPreselectionDoesNotFallBackToSequence)
+{
+    xjw::VocabularyOverlapResult vocabularyOverlap;
+
+    xjw::matchphotos::PairSelectionInput input;
+    input.images = makeImages(6);
+    input.vocabularyOverlapResult = &vocabularyOverlap;
+
+    xjw::matchphotos::PairSelectionPolicy policy;
+    policy.exhaustiveMaxImages = 3;
+    policy.sequenceWindow = 2;
+
+    const xjw::matchphotos::PairSelectionResult result =
+        xjw::matchphotos::PairSelector::select(input, policy);
+
+    EXPECT_TRUE(result.restrictPairs);
+    EXPECT_EQ(result.allPairCount, 15);
+    EXPECT_TRUE(result.candidates.empty());
+    EXPECT_TRUE(result.allowedPairKeys.isEmpty());
+}

@@ -4,8 +4,11 @@
 #include "LayerOverlayItems.h"
 #include "LayerStitchedDebug.h"
 #include "Logger.h"
+#include "MaskGenerator.h"
+#include "io/PathIO.h"
 
 #include <opencv2/core/types.hpp>
+#include <opencv2/imgcodecs.hpp>
 
 #include <QGraphicsScene>
 #include <QGraphicsPixmapItem>
@@ -13,6 +16,9 @@
 #include <QPixmap>
 
 #include <QGraphicsItem>
+#include <QGraphicsPathItem>
+#include <QPainterPath>
+#include <QPen>
 #include <QVector>
 #include <QPointF>
 
@@ -74,6 +80,60 @@ bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
     return true;
 }
 
+bool LayerRenderer::addMaskContourLayer(const QString &maskPath, int z)
+{
+    if (!_scene || maskPath.trimmed().isEmpty())
+    {
+        return false;
+    }
+
+    const cv::Mat mask = xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE);
+    if (mask.empty())
+    {
+        return false;
+    }
+
+    const auto contours = xjw::mask::extractMaskContours(mask, true);
+    if (contours.empty())
+    {
+        return false;
+    }
+
+    QPainterPath path;
+    for (const auto &contour : contours)
+    {
+        if (contour.size() < 2)
+        {
+            continue;
+        }
+
+        path.moveTo(contour.front().x, contour.front().y);
+        for (std::size_t i = 1; i < contour.size(); ++i)
+        {
+            path.lineTo(contour.at(i).x, contour.at(i).y);
+        }
+        path.closeSubpath();
+    }
+
+    if (path.isEmpty())
+    {
+        return false;
+    }
+
+    auto *halo = new QGraphicsPathItem(path);
+    halo->setPen(QPen(QColor(0, 0, 0, 190), 3.0));
+    halo->setZValue(z);
+    _scene->addItem(halo);
+    _maskItems.append(halo);
+
+    auto *outline = new QGraphicsPathItem(path);
+    outline->setPen(QPen(QColor(255, 255, 255, 230), 1.4));
+    outline->setZValue(z + 0.1);
+    _scene->addItem(outline);
+    _maskItems.append(outline);
+    return true;
+}
+
 void LayerRenderer::clearFeatureLayers()
 {
     // Remove items we explicitly tracked
@@ -86,6 +146,19 @@ void LayerRenderer::clearFeatureLayers()
         }
     }
     _featureItems.clear();
+}
+
+void LayerRenderer::clearMaskLayers()
+{
+    for (auto *it : std::as_const(_maskItems))
+    {
+        if (it && _scene)
+        {
+            _scene->removeItem(it);
+            delete it;
+        }
+    }
+    _maskItems.clear();
 }
 
 void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
@@ -110,6 +183,8 @@ void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
 
 void LayerRenderer::clear()
 {
+    clearMaskLayers();
+
     for (auto *it: std::as_const(_layers))
     {
         if (it && _scene)

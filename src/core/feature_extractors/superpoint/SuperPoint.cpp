@@ -1,5 +1,6 @@
 #include "SuperPoint.h"
 #include "SuperPointUtils.h"
+#include "io/PathIO.h"
 #include <iostream>
 #include <filesystem>
 #include <map>
@@ -202,7 +203,7 @@ torch::Tensor SuperPoint::preprocessImage(const cv::Mat& image) {
 // （为 0 比例较高时会打印警告，帮助排查描述子异常）
 bool SuperPoint::saveKeypointsCSV(const FeatureOutput& output, const std::string& path)
 {
-    std::ofstream ofs(path);
+    std::ofstream ofs = xjw::common::io::openOutputFile(path, std::ios::out | std::ios::trunc);
     if (!ofs.is_open())
     {
         return false;
@@ -302,5 +303,5 @@ bool SuperPoint::saveOverlayImage(const cv::Mat& image, const FeatureOutput& out
     if (image.channels() == 1) cv::cvtColor(image, vis, cv::COLOR_GRAY2BGR);
     else vis = image.clone();
     cv::drawKeypoints(vis, output.keypoints, vis, cv::Scalar(0,255,0), cv::DrawMatchesFlags::DRAW_RICH_KEYPOINTS);
-    return cv::imwrite(path, vis);
+    return xjw::common::io::writeImage(path, vis);
 }

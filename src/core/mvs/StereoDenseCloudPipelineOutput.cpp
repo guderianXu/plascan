@@ -1,5 +1,7 @@
 #include "StereoDenseCloudPipelineOutput.h"
 
+#include "io/PathIO.h"
+
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
 
@@ -48,7 +50,8 @@ bool writeStereoPipelinePly(const std::string &path,
 
     try
     {
-        plapoint::io::writePly<float>(path, cloud, plapoint::io::PlyFormat::BinaryLE);
+        plapoint::io::writePly<float>(
+            xjw::common::io::toNativeNarrowPath(path), cloud, plapoint::io::PlyFormat::BinaryLE);
     }
     catch (const std::exception &e)
     {

@@ -1,4 +1,5 @@
 #include "ObjMtlLoader.h"
+#include "io/PathIO.h"
 
 #include <plapoint/io/obj_io.h>
 #include <plapoint/core/point_cloud.h>
@@ -22,9 +23,9 @@ namespace
 
 // Parse MTL file for the first map_Kd texture filename.
 // Returns empty string if not found.
-std::string parseMtlTexturePath(const std::string &mtlPath)
+std::string parseMtlTexturePath(const QString &mtlPath)
 {
-    std::ifstream f(mtlPath);
+    std::ifstream f = xjw::common::io::openInputFile(mtlPath);
     if (!f)
     {
         return {};
@@ -47,9 +48,9 @@ std::string parseMtlTexturePath(const std::string &mtlPath)
 }
 
 // Load texture image, converting to BGR 3-channel.
-cv::Mat loadTextureBgr(const std::string &texturePath)
+cv::Mat loadTextureBgr(const QString &texturePath)
 {
-    cv::Mat image = cv::imread(texturePath, cv::IMREAD_UNCHANGED);
+    cv::Mat image = xjw::common::io::readImage(texturePath, cv::IMREAD_UNCHANGED);
     if (image.empty())
     {
         return {};
@@ -84,7 +85,7 @@ bool ObjMtlLoader::load(const QString &objPath, TerrainMeshInput *out, QString *
     std::shared_ptr<plapoint::PointCloud<float, plamatrix::Device::CPU>> cloudPtr;
     try
     {
-        cloudPtr = plapoint::io::readObj<float>(objPath.toStdString());
+        cloudPtr = plapoint::io::readObj<float>(xjw::common::io::toNativeNarrowPath(objPath));
     }
     catch (const std::exception &e)
     {
@@ -114,12 +115,12 @@ bool ObjMtlLoader::load(const QString &objPath, TerrainMeshInput *out, QString *
     if (!mtlLib.empty())
     {
         const QString objDir = QFileInfo(objPath).absoluteDir().absolutePath();
-        const QString mtlPath = objDir + QLatin1Char('/') + QString::fromStdString(mtlLib);
-        const std::string texFile = parseMtlTexturePath(mtlPath.toStdString());
+        const QString mtlPath = QDir(objDir).filePath(xjw::common::io::fromUtf8Path(mtlLib));
+        const std::string texFile = parseMtlTexturePath(mtlPath);
         if (!texFile.empty())
         {
-            const QString texFullPath = objDir + QLatin1Char('/') + QString::fromStdString(texFile);
-            out->texture = loadTextureBgr(texFullPath.toStdString());
+            const QString texFullPath = QDir(objDir).filePath(xjw::common::io::fromUtf8Path(texFile));
+            out->texture = loadTextureBgr(texFullPath);
         }
     }
 

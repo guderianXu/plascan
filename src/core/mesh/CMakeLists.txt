@@ -19,6 +19,7 @@ target_include_directories(meshing PUBLIC
 target_link_libraries(meshing
     PRIVATE
         plapoint::plapoint
+        plascan_common_io
         Qt6::Core
         Qt6::Gui
         ${OpenCV_LIBS}

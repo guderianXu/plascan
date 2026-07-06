@@ -3,6 +3,7 @@
 #include "DenseMatchConfig.h"
 #include "DenseMatchService.h"
 #include "Logger.h"
+#include "io/PathIO.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -76,13 +77,14 @@ void DenseMatchRunner::run(const QJsonObject &settings,
         cfg.medianFilterSize = medianFilter;
         cfg.enableLRCheck = lrThreshold > 0.0;
         cfg.numThreads = numThreads;
-        cfg.leftImagePath = imgA.toStdString();
-        cfg.rightImagePath = imgB.toStdString();
+        cfg.leftImagePath = xjw::common::io::toUtf8Path(imgA);
+        cfg.rightImagePath = xjw::common::io::toUtf8Path(imgB);
 
-        cfg.outputDisparityPath = QStringLiteral("%1/%2__%3_disp.tif")
+        const QString outputDisparityPath = QStringLiteral("%1/%2__%3_disp.tif")
             .arg(outputDir)
             .arg(fiA.completeBaseName())
-            .arg(fiB.completeBaseName()).toStdString();
+            .arg(fiB.completeBaseName());
+        cfg.outputDisparityPath = xjw::common::io::toUtf8Path(outputDisparityPath);
 
         if (progress)
         {
@@ -107,7 +109,7 @@ void DenseMatchRunner::run(const QJsonObject &settings,
             xjw::dense_match::DenseMatchService::saveDisparity(result, cfg.outputDisparityPath);
             LOG_INFO(QStringLiteral("[密集匹配 %1/%2] 完成 -> %3")
                 .arg(completed + 1).arg(pairs.size())
-                .arg(QString::fromStdString(cfg.outputDisparityPath)));
+                .arg(outputDisparityPath));
         }
         else
         {

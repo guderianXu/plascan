@@ -1,4 +1,5 @@
 #include "TextureMapper.h"
+#include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/obj_io.h>
@@ -466,15 +467,15 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
         *result = TextureMappingResult();
     }
 
-    const QString meshSuffix = QFileInfo(QString::fromStdString(meshPath)).suffix().toLower();
+    const QString meshSuffix = QFileInfo(xjw::common::io::fromUtf8Path(meshPath)).suffix().toLower();
     std::shared_ptr<PlaPointCloud> meshCloudPtr;
     if (meshSuffix == QStringLiteral("ply"))
     {
-        meshCloudPtr = plapoint::io::readPly<float>(meshPath);
+        meshCloudPtr = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(meshPath));
     }
     else
     {
-        meshCloudPtr = plapoint::io::readObj<float>(meshPath);
+        meshCloudPtr = plapoint::io::readObj<float>(xjw::common::io::toNativeNarrowPath(meshPath));
     }
 
     if (!meshCloudPtr)
@@ -502,7 +503,7 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
         return false;
     }
 
-    const QString outputDir = QString::fromStdString(productsDir);
+    const QString outputDir = xjw::common::io::fromUtf8Path(productsDir);
     const QString texturesDir = QDir(outputDir).filePath(QStringLiteral("textures"));
     QDir().mkpath(texturesDir);
 
@@ -511,7 +512,7 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
     {
         if (errorMsg)
         {
-            *errorMsg = "无法写出纹理图像: " + texturePngPath.toStdString();
+            *errorMsg = "无法写出纹理图像: " + xjw::common::io::toUtf8Path(texturePngPath);
         }
         return false;
     }
@@ -522,12 +523,12 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
     meshCloudPtr->setTextureImageFile(QStringLiteral("textures/model_texture.png").toStdString());
 
     {
-        std::ofstream mtl(mtlPath.toStdString());
+        std::ofstream mtl = xjw::common::io::openOutputFile(mtlPath, std::ios::out | std::ios::trunc);
         if (!mtl)
         {
             if (errorMsg)
             {
-                *errorMsg = "无法写出 MTL 文件: " + mtlPath.toStdString();
+                *errorMsg = "无法写出 MTL 文件: " + xjw::common::io::toUtf8Path(mtlPath);
             }
             return false;
         }
@@ -540,13 +541,13 @@ bool TextureMapper::generateTexturedModelFromMeshFile(const std::string &meshPat
             << "map_Kd textures/model_texture.png\n";
     }
 
-    plapoint::io::writeObj<float>(objPath.toStdString(), *meshCloudPtr);
+    plapoint::io::writeObj<float>(xjw::common::io::toNativeNarrowPath(objPath), *meshCloudPtr);
 
     if (result)
     {
-        result->modelObjPath = objPath.toStdString();
-        result->modelMtlPath = mtlPath.toStdString();
-        result->texturePngPath = texturePngPath.toStdString();
+        result->modelObjPath = xjw::common::io::toUtf8Path(objPath);
+        result->modelMtlPath = xjw::common::io::toUtf8Path(mtlPath);
+        result->texturePngPath = xjw::common::io::toUtf8Path(texturePngPath);
         result->textureSize = textureImage.width();
         result->textureAlgorithm = "vertex_color_planar_bake";
         result->uvMethod = config.uvMethod;

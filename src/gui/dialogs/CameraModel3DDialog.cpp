@@ -15,6 +15,7 @@
 #include "ProjectManager.h"
 #include "ProjectSupportUtils.h"
 #include "Logger.h"
+#include "io/PathIO.h"
 
 #include <QVBoxLayout>
 #include <QHBoxLayout>
@@ -875,7 +876,7 @@ void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
     {
         try
         {
-            return plapoint::io::readXyz<float>(xyzPath.toStdString());
+            return plapoint::io::readXyz<float>(xjw::common::io::toNativeNarrowPath(xyzPath));
         }
         catch (const std::exception &e)
         {
@@ -1005,7 +1006,7 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
             {
                 reportProgress(5, QStringLiteral("正在完整加载 PLY 点云..."));
             }
-            return plapoint::io::readPly<float>(plyPath.toStdString());
+            return plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(plyPath));
         }
         catch (const std::exception &e)
         {
@@ -1090,7 +1091,7 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
         try
         {
             reportProgress(5, QStringLiteral("正在解析 OBJ 模型..."));
-            auto cloud = plapoint::io::readObj<float>(objPath.toStdString());
+            auto cloud = plapoint::io::readObj<float>(xjw::common::io::toNativeNarrowPath(objPath));
             if (!cloud || cloud->size() == 0)
             {
                 reportProgress(100, QStringLiteral("OBJ 模型为空"));
@@ -2542,7 +2543,7 @@ bool CameraSceneWidget::saveCurrentPointCloudToSource(QString *errorMessage)
     }
 
     // Determine file format from extension
-    const std::string stdPath = _currentCloudPath.toStdString();
+    const std::string stdPath = xjw::common::io::toNativeNarrowPath(_currentCloudPath);
     const bool isPly = (stdPath.size() >= 4 &&
         (stdPath.substr(stdPath.size() - 4) == ".ply" || stdPath.substr(stdPath.size() - 4) == ".PLY"));
 

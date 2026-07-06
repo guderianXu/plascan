@@ -19,17 +19,16 @@ WindowStateManager::WindowStateManager(QObject *parent)
 }
 
 /**
- * @brief 从 QSettings 恢复主窗口的几何尺寸、停靠布局和最大化状态。
+ * @brief 从 QSettings 恢复主窗口的几何尺寸和最大化状态。
  *
  * 执行步骤：
  * 1. 检查 "hasRunBefore" 标志；若为 false（首次运行），
  *    则直接设置全屏并写入标志后返回，不读取旧几何数据（因为不存在）。
  * 2. 非首次运行时，依次恢复：
  *    a. 窗口几何（位置与大小）——通过 restoreGeometry；
- *    b. 停靠布局（DockWidget 排列、工具栏位置）——通过 restoreState；
- *    c. 窗口状态标志——若上次退出时处于全屏或最大化则恢复为最大化。
+ *    b. 窗口状态标志——若上次退出时处于全屏或最大化则恢复为最大化。
  *
- * @note 最大化恢复放在 geometry/state 之后，防止普通窗口尺寸覆盖用户期望的屏幕占用状态。
+ * @note 最大化恢复放在 geometry 之后，防止普通窗口尺寸覆盖用户期望的屏幕占用状态。
  *
  * @param mainWindow 需要恢复状态的主窗口；为 nullptr 时立即返回。
  */
@@ -49,12 +48,8 @@ void WindowStateManager::load(QMainWindow *mainWindow)
         return;
     }
 
-    // 恢复窗口几何（位置与大小）
     const QByteArray geo   = settings.value("MainWindow/geometry").toByteArray();
-    // 恢复停靠布局（DockWidget、工具栏排列等）
-    const QByteArray state = settings.value("MainWindow/state").toByteArray();
     if (!geo.isEmpty())   mainWindow->restoreGeometry(geo);
-    if (!state.isEmpty()) mainWindow->restoreState(state);
 
     // 恢复窗口状态：将历史全屏回退为最大化，确保窗口控制按钮可用。
     const bool wasFull = settings.value("MainWindow/isFullScreen", false).toBool();
@@ -70,7 +65,6 @@ void WindowStateManager::load(QMainWindow *mainWindow)
  *
  * 保存内容：
  * - "MainWindow/geometry"     : 当前窗口几何（经 saveGeometry 序列化）；
- * - "MainWindow/state"        : 当前停靠布局（经 saveState 序列化）；
  * - "MainWindow/isFullScreen" : 当前是否处于全屏模式的布尔标志；
  * - "MainWindow/isMaximized"  : 当前是否处于最大化模式的布尔标志。
  *
@@ -84,7 +78,6 @@ void WindowStateManager::save(QMainWindow *mainWindow)
 
     QSettings settings("PlaScan", "plascan_gui");
     settings.setValue("MainWindow/geometry",     mainWindow->saveGeometry());
-    settings.setValue("MainWindow/state",        mainWindow->saveState());
     settings.setValue("MainWindow/isFullScreen", mainWindow->isFullScreen());
     settings.setValue("MainWindow/isMaximized",  mainWindow->isMaximized());
 }

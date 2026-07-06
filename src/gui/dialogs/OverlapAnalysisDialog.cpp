@@ -10,6 +10,7 @@
 #include "ProjectSupportUtils.h"
 #include "OverlapAnalyzer.h"
 #include "ui_OverlapAnalysisDialog.h"
+#include "io/PathIO.h"
 
 #include <QListWidget>
 #include <QLineEdit>
@@ -129,7 +130,7 @@ void OverlapAnalysisDialog::runAnalysis()
         }
 
         xjw::OverlapImageInput one;
-        one.imagePath = path.toStdString();
+        one.imagePath = xjw::common::io::toUtf8Path(path);
         one.camera = cam;
 
         QImageReader reader(path);
@@ -158,7 +159,7 @@ void OverlapAnalysisDialog::runAnalysis()
             return;
         }
         std::string demErr;
-        if (!dem.loadFromXYZ(demPath.toStdString(), &demErr))
+        if (!dem.loadFromXYZ(xjw::common::io::toUtf8Path(demPath), &demErr))
         {
             QMessageBox::warning(this, tr("提示"), QString::fromStdString(demErr));
             return;

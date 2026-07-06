@@ -69,6 +69,7 @@ target_include_directories(dense_match PUBLIC
 
 target_link_libraries(dense_match
     PUBLIC
+        plascan_common_io
         ${OpenCV_LIBS}
     PRIVATE
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>

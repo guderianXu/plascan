@@ -17,9 +17,18 @@
 - `MatchPhotosAlgorithmSelector` 将自动/快速/高精度/困难纹理/CPU/CUDA 预设映射为 SIFT + LightGlue。
 - SIFT 负责提供尺度和旋转鲁棒性，LightGlue 负责对 `.sift` 特征做学习型匹配。
 - 特征阶段会复用已有 `.sift`；缺失或禁用复用时才重新提取，并把缩放后的关键点坐标还原到原始影像坐标。
+- `maxKeypoints` 对应关键点限制；调用方设置 `useExplicitKeypointLimit=true` 时，`0` 表示不限制。
+- 开启 `enableGuidedMatching` 且设置 `keypointLimitPerMegapixel` 时，每张影像的关键点上限按
+  `每百万像素关键点限制 * 影像百万像素数` 计算。
 - 匹配阶段查找 `lightglue_sift_cuda.torchscript` / `lightglue_sift_cpu.torchscript`，写出 `.match` 和同名 `.json` sidecar，供 GUI 匹配查看器读取。
+- 几何验证阶段使用 `MatchGeometryFilter` 过滤基础矩阵内点。
+- 轨迹阶段使用 `MultiViewTrackBuilder` 合并多视连接点，`maxTiePointsPerImage` 对应连接点限制；
+  `0` 表示关闭连接点数量稀疏。
+- `excludeStationaryTiePoints` 会剔除在多张影像中像方坐标几乎固定的 track，用于过滤转台背景、
+  传感器污点或镜头伪影类假连接点。
 - `PairSelector` 合并来自手动输入、全量匹配、序列窗口、相机重叠、词汇召回和未来引导重匹配的候选影像对。
-- `MatchPhotosTask` 执行算法选择、影像对选择、特征提取和两两匹配；几何验证、轨迹构建和引导匹配仍是显式跳过阶段。
+- `MatchPhotosTask` 执行算法选择、影像对选择、特征提取、两两匹配、几何验证、轨迹构建和引导匹配报告；
+  当前引导匹配 v1 通过关键点密度扩展提高初始匹配候选，尚未做姿态恢复后的二次补匹配。
 
 `src/core/overlap` 保持为可复用的候选生成模块，由 `PairSelector` 调用；
 它不会被改名，也不会被嵌入到本模块目录下。

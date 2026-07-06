@@ -3,6 +3,7 @@
 #include "filtering/SparsePointCloudProcessor.h"
 #include "project/SparseResultQuality.h"
 #include "TerrainPipeline.h"
+#include "io/PathIO.h"
 
 #include <plapoint/io/ply_io.h>
 
@@ -101,7 +102,7 @@ void copyColorsFromSourcePly(const QString &path,
 
     try
     {
-        const auto cloud = plapoint::io::readPly<float>(path.toStdString());
+        const auto cloud = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(path));
         if (cloud)
         {
             copyColorsFromPlyCloud(*cloud, points);
@@ -237,7 +238,7 @@ bool loadSparsePointsFromPly(const QString &path,
 
     try
     {
-        const auto cloud = plapoint::io::readPly<float>(path.toStdString());
+        const auto cloud = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(path));
         if (!cloud || cloud->size() == 0)
         {
             if (errorMessage)
@@ -387,7 +388,8 @@ bool writeSparsePointCloudPly(const QString &path,
         {
             cloud.setColors(std::move(colors));
         }
-        plapoint::io::writePly<float>(path.toStdString(), cloud, plapoint::io::PlyFormat::ASCII);
+        plapoint::io::writePly<float>(
+            xjw::common::io::toNativeNarrowPath(path), cloud, plapoint::io::PlyFormat::ASCII);
         return true;
     }
     catch (const std::exception &ex)

@@ -17,6 +17,7 @@ target_include_directories(overlap PRIVATE
 
 target_link_libraries(overlap PUBLIC
     camera
+    plascan_common_io
     plapoint::plapoint
     ${OpenCV_LIBS}
     $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>

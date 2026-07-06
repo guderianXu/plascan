@@ -1,4 +1,5 @@
 #include "PointCloudTifIO.h"
+#include "io/PathIO.h"
 
 #include <gdal_priv.h>
 #include <cpl_string.h>
@@ -47,7 +48,8 @@ bool PointCloudTifIO::writeTif(const std::string &path,
     char **opts = nullptr;
     opts = CSLSetNameValue(opts, "COMPRESS", "LZW");
 
-    GDALDataset *ds = driver->Create(path.c_str(), cols, rows, 4,
+    const std::string pathUtf8 = xjw::common::io::toUtf8Path(xjw::common::io::fromUtf8Path(path));
+    GDALDataset *ds = driver->Create(pathUtf8.c_str(), cols, rows, 4,
                                      GDT_Float32, opts);
     CSLDestroy(opts);
     if (!ds)
@@ -107,7 +109,8 @@ bool PointCloudTifIO::readTif(const std::string &path,
 {
     ensureGdalRegistered();
 
-    GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(path.c_str(), GA_ReadOnly));
+    const std::string pathUtf8 = xjw::common::io::toUtf8Path(xjw::common::io::fromUtf8Path(path));
+    GDALDataset *ds = static_cast<GDALDataset *>(GDALOpen(pathUtf8.c_str(), GA_ReadOnly));
     if (!ds)
     {
         if (errorMsg) *errorMsg = "Cannot open TIF: " + path;

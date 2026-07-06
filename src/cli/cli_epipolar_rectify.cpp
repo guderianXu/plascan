@@ -9,9 +9,12 @@
 #include "EpipolarRectifier.h"
 #include "Camera.h"
 #include "PositiveDepthCameraModel.h"
+#include "io/PathIO.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
+#include <QIODevice>
+#include <QSaveFile>
 #include <string>
 
 int main(int argc, char *argv[])
@@ -38,8 +41,8 @@ int main(int argc, char *argv[])
         cli::fatal("无法加载右相机: " + camR, cli::EXIT_IO_ERR);
 
     // 加载影像
-    cv::Mat left  = cv::imread(imgL, cv::IMREAD_GRAYSCALE);
-    cv::Mat right = cv::imread(imgR, cv::IMREAD_GRAYSCALE);
+    cv::Mat left  = xjw::common::io::readImage(imgL, cv::IMREAD_GRAYSCALE);
+    cv::Mat right = xjw::common::io::readImage(imgR, cv::IMREAD_GRAYSCALE);
     if (left.empty() || right.empty())
         cli::fatal("无法加载影像", cli::EXIT_IO_ERR);
 
@@ -63,18 +66,28 @@ int main(int argc, char *argv[])
     // 保存校正影像
     std::string rectL = outPref + "_L.tif";
     std::string rectR = outPref + "_R.tif";
-    cv::imwrite(rectL, result.rectLeft);
-    cv::imwrite(rectR, result.rectRight);
+    if (!xjw::common::io::writeImage(rectL, result.rectLeft) ||
+        !xjw::common::io::writeImage(rectR, result.rectRight))
+    {
+        cli::fatal("无法写出校正影像: " + outPref, cli::EXIT_IO_ERR);
+    }
 
     // 保存单应矩阵
-    cv::FileStorage fs(outPref + ".xml", cv::FileStorage::WRITE);
+    cv::FileStorage fs("", cv::FileStorage::WRITE | cv::FileStorage::MEMORY);
     fs << "H1inv" << result.H1inv;
     fs << "H2inv" << result.H2inv;
     fs << "origW" << result.origW;
     fs << "origH" << result.origH;
     fs << "refIsRight" << static_cast<int>(result.refIsRight);
     fs << "transposed" << static_cast<int>(result.transposed);
-    fs.release();
+    const std::string rectXml = fs.releaseAndGetString();
+    QSaveFile xmlFile(xjw::common::io::fromUtf8Path(outPref + ".xml"));
+    if (!xmlFile.open(QIODevice::WriteOnly) ||
+        xmlFile.write(rectXml.data(), static_cast<qint64>(rectXml.size())) != static_cast<qint64>(rectXml.size()) ||
+        !xmlFile.commit())
+    {
+        cli::fatal("无法写出校正参数: " + outPref + ".xml", cli::EXIT_IO_ERR);
+    }
 
     fprintf(stdout, "校正完成:\n  %s\n  %s\n  %s.xml\n",
             rectL.c_str(), rectR.c_str(), outPref.c_str());

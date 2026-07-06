@@ -88,6 +88,35 @@ QString normalizedProjectResourcePath(const QString &projectRoot, const QString 
     return QDir::cleanPath(QDir(projectRoot).filePath(cleanPath));
 }
 
+QJsonObject readJsonObjectFile(const QString &path)
+{
+    if (path.isEmpty() || !QFileInfo::exists(path))
+    {
+        return QJsonObject();
+    }
+
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return QJsonObject();
+    }
+
+    const QJsonDocument doc = parseJsonOrCompressedJson(file.readAll());
+    return doc.isObject() ? doc.object() : QJsonObject();
+}
+
+QJsonObject readJsonObjectEntry(PlascanArchive &archive, const QString &entryName, QString *error)
+{
+    const QByteArray bytes = archive.readEntry(entryName, error);
+    if (bytes.isEmpty())
+    {
+        return QJsonObject();
+    }
+
+    const QJsonDocument doc = parseJsonOrCompressedJson(bytes);
+    return doc.isObject() ? doc.object() : QJsonObject();
+}
+
 } // namespace
 
 ProjectData::ProjectData(QObject *parent)
@@ -251,6 +280,194 @@ bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
     LOG_INFO(QStringLiteral("项目核心数据加载完成: %1").arg(plascanPath));
     emit projectOpened(plascanPath);
 
+    return true;
+}
+
+ProjectOpenSnapshot ProjectData::loadProjectOpenSnapshot(const QString &plascanPath)
+{
+    ProjectOpenSnapshot snapshot;
+    snapshot.projectPath = QDir::cleanPath(QFileInfo(plascanPath).absoluteFilePath());
+
+    PlascanArchive archive(snapshot.projectPath);
+    if (!archive.isValid())
+    {
+        snapshot.errorMessage = QStringLiteral("无法打开项目文件");
+        return snapshot;
+    }
+
+    snapshot.filesMeta = readJsonObjectFile(ProjectIO::tempFilesPath(snapshot.projectPath));
+    if (!snapshot.filesMeta.isEmpty())
+    {
+        snapshot.recoveredFromTemporary = true;
+    }
+
+    snapshot.configMeta = readJsonObjectFile(ProjectIO::tempConfigPath(snapshot.projectPath));
+    if (!snapshot.configMeta.isEmpty())
+    {
+        snapshot.recoveredFromTemporary = true;
+    }
+
+    QString err;
+    if (snapshot.filesMeta.isEmpty())
+    {
+        snapshot.filesMeta = readJsonObjectEntry(archive, ProjectFilesManager::kArchiveCoreFile, &err);
+        if (snapshot.filesMeta.isEmpty())
+        {
+            snapshot.filesMeta = readJsonObjectEntry(archive, QStringLiteral("project.json"), &err);
+        }
+        if (snapshot.filesMeta.isEmpty())
+        {
+            snapshot.filesMeta = ProjectFilesManager::defaultFiles();
+        }
+    }
+
+    if (snapshot.configMeta.isEmpty())
+    {
+        snapshot.configMeta = readJsonObjectEntry(archive, QStringLiteral("project_config.json"), &err);
+        if (snapshot.configMeta.isEmpty())
+        {
+            snapshot.configMeta = ProjectConfigManager::defaultConfig();
+        }
+        else
+        {
+            snapshot.configMeta = ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
+        }
+    }
+    else
+    {
+        snapshot.configMeta = ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
+    }
+
+    snapshot.resultsLoaded = containsResultKeys(snapshot.filesMeta);
+    snapshot.success = true;
+    return snapshot;
+}
+
+ProjectResultsSnapshot ProjectData::loadProjectResultsSnapshot(const QString &plascanPath)
+{
+    ProjectResultsSnapshot snapshot;
+    snapshot.projectPath = QDir::cleanPath(QFileInfo(plascanPath).absoluteFilePath());
+
+    snapshot.resultsMeta = readJsonObjectFile(ProjectIO::tempResultsPath(snapshot.projectPath));
+    if (!snapshot.resultsMeta.isEmpty())
+    {
+        snapshot.success = true;
+        snapshot.hasResults = true;
+        return snapshot;
+    }
+
+    PlascanArchive archive(snapshot.projectPath);
+    if (!archive.isValid())
+    {
+        snapshot.errorMessage = QStringLiteral("无法打开项目文件");
+        return snapshot;
+    }
+
+    QString err;
+    const QByteArray bytes = archive.readEntry(ProjectFilesManager::kArchiveResultsFile, &err);
+    if (bytes.isEmpty())
+    {
+        snapshot.success = true;
+        snapshot.hasResults = false;
+        return snapshot;
+    }
+
+    const QJsonDocument doc = parseJsonOrCompressedJson(bytes);
+    if (!doc.isObject())
+    {
+        snapshot.errorMessage = QStringLiteral("解析项目结果数据失败");
+        return snapshot;
+    }
+
+    snapshot.resultsMeta = doc.object();
+    snapshot.success = true;
+    snapshot.hasResults = true;
+    return snapshot;
+}
+
+bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, QString *errorMsg)
+{
+    if (!snapshot.success)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = snapshot.errorMessage.isEmpty()
+                ? QStringLiteral("项目快照加载失败")
+                : snapshot.errorMessage;
+        }
+        return false;
+    }
+
+    if (snapshot.projectPath.trimmed().isEmpty())
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("项目路径为空");
+        }
+        return false;
+    }
+
+    if (_archiveSyncTimer)
+    {
+        _archiveSyncTimer->stop();
+    }
+
+    _projectPath = snapshot.projectPath;
+    _filesManager.setData(QJsonObject());
+    _configManager.setData(QJsonObject());
+    _resultsLoaded = false;
+    _resultsDirtyForArchive = false;
+    _coreFileDirtyForArchive = false;
+    _isDirty = false;
+
+    const QJsonObject filesMeta = snapshot.filesMeta.isEmpty()
+        ? ProjectFilesManager::defaultFiles()
+        : snapshot.filesMeta;
+    if (containsResultKeys(filesMeta))
+    {
+        _filesManager.setData(filesMeta);
+        _resultsLoaded = true;
+    }
+    else
+    {
+        _filesManager.setCoreData(filesMeta);
+    }
+
+    const QJsonObject configMeta = snapshot.configMeta.isEmpty()
+        ? ProjectConfigManager::defaultConfig()
+        : ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
+    updateConfig(configMeta, false);
+
+    emit dirtyStateChanged(false);
+    emit projectOpened(_projectPath);
+    return true;
+}
+
+bool ProjectData::applyResultsSnapshot(const ProjectResultsSnapshot &snapshot, QString *errorMsg)
+{
+    if (!snapshot.success)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = snapshot.errorMessage.isEmpty()
+                ? QStringLiteral("项目结果数据加载失败")
+                : snapshot.errorMessage;
+        }
+        return false;
+    }
+
+    if (QDir::cleanPath(snapshot.projectPath) != QDir::cleanPath(_projectPath))
+    {
+        if (errorMsg)
+        {
+            *errorMsg = QStringLiteral("项目结果数据与当前项目不匹配");
+        }
+        return false;
+    }
+
+    _resultsLoaded = true;
+    _filesManager.setResultsData(snapshot.hasResults ? snapshot.resultsMeta : QJsonObject());
+    emitCurrentMetadataChanged();
     return true;
 }
 

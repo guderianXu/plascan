@@ -41,9 +41,10 @@ private:
     void applyThumbnail(const ThumbnailResult &result);
     QString resolveImagePath(const QString &imagePath) const;
     QString normalizedPath(const QString &imagePath) const;
-    static ThumbnailResult loadThumbnail(const QString &imagePath);
+    static ThumbnailResult loadThumbnail(const QString &imagePath, const QString &projectPath);
 
     QListWidget *_list = nullptr;
+    QString _projectFilePath;
     QString _projectRootPath;
     QHash<QString, QList<QListWidgetItem *>> _itemsByPath;
     QHash<QString, QIcon> _thumbnailCache;

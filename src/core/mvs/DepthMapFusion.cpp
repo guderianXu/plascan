@@ -8,6 +8,7 @@
 // =============================================================================
 
 #include "DepthMapFusion.h"
+#include "io/PathIO.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
 #include <cmath>
@@ -96,7 +97,7 @@ public:
         const std::string &path = m_frames[frameIdx].imagePath;
         if (!path.empty())
         {
-            image = cv::imread(path, cv::IMREAD_COLOR);
+            image = xjw::common::io::readImage(path, cv::IMREAD_COLOR);
         }
         if (!image.empty()
             && m_frames[frameIdx].imgW > 0

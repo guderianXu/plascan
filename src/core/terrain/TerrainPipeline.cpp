@@ -7,6 +7,7 @@
 #include "ObjMtlLoader.h"
 #include "projection/AsteroidProjection.h"
 #include "Camera.h"
+#include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
@@ -311,7 +312,7 @@ bool buildOrthoFrames(const QJsonObject &projectMeta,
         }
 
         const QString normalizedPath = normalizePathForOrtho(imagePath);
-        cv::Mat imageBgr = cv::imread(normalizedPath.toStdString(), cv::IMREAD_COLOR);
+        cv::Mat imageBgr = xjw::common::io::readImage(normalizedPath, cv::IMREAD_COLOR);
         if (imageBgr.empty())
         {
             continue;
@@ -457,7 +458,7 @@ bool TerrainPipeline::generateDemProducts(const QString &pointCloudPath,
 {
     // Auto-detect file format and read
     std::shared_ptr<PlaPointCloud> cloudPtr;
-    const std::string path = pointCloudPath.toStdString();
+    const std::string path = xjw::common::io::toNativeNarrowPath(pointCloudPath);
     const QString suffix = QFileInfo(pointCloudPath).suffix().toLower();
     try
     {
@@ -728,7 +729,7 @@ bool TerrainPipeline::generateFromObjMtl(const QString &objPath,
     std::shared_ptr<PlaPointCloud> cloudPtr;
     try
     {
-        cloudPtr = plapoint::io::readObj<float>(objPath.toStdString());
+        cloudPtr = plapoint::io::readObj<float>(xjw::common::io::toNativeNarrowPath(objPath));
     }
     catch (const std::exception &e)
     {
@@ -743,12 +744,13 @@ bool TerrainPipeline::generateFromObjMtl(const QString &objPath,
     const std::string &texFile = meshInput.mesh.textureImageFile();
     if (!texFile.empty())
     {
-        QString texPath = QFileInfo(objPath).dir().filePath(QString::fromStdString(texFile));
-        meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+        QString texPath = QFileInfo(objPath).dir().filePath(xjw::common::io::fromUtf8Path(texFile));
+        meshInput.texture = xjw::common::io::readImage(texPath, cv::IMREAD_COLOR);
         if (meshInput.texture.empty())
         {
-            texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() + QString::fromStdString(texFile));
-            meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+            texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() +
+                                      xjw::common::io::fromUtf8Path(texFile));
+            meshInput.texture = xjw::common::io::readImage(texPath, cv::IMREAD_COLOR);
         }
     }
 
@@ -992,7 +994,7 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
     std::shared_ptr<PlaPointCloud> cloudPtr;
     try
     {
-        cloudPtr = plapoint::io::readObj<float>(objPath.toStdString());
+        cloudPtr = plapoint::io::readObj<float>(xjw::common::io::toNativeNarrowPath(objPath));
     }
     catch (const std::exception &e)
     {
@@ -1007,12 +1009,13 @@ bool TerrainPipeline::generateFromObjMtlWithAsteroidProjections(
     const std::string &texFile = meshInput.mesh.textureImageFile();
     if (!texFile.empty())
     {
-        QString texPath = QFileInfo(objPath).dir().filePath(QString::fromStdString(texFile));
-        meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+        QString texPath = QFileInfo(objPath).dir().filePath(xjw::common::io::fromUtf8Path(texFile));
+        meshInput.texture = xjw::common::io::readImage(texPath, cv::IMREAD_COLOR);
         if (meshInput.texture.empty())
         {
-            texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() + QString::fromStdString(texFile));
-            meshInput.texture = cv::imread(texPath.toStdString(), cv::IMREAD_COLOR);
+            texPath = QDir::cleanPath(QFileInfo(objPath).absolutePath() + QDir::separator() +
+                                      xjw::common::io::fromUtf8Path(texFile));
+            meshInput.texture = xjw::common::io::readImage(texPath, cv::IMREAD_COLOR);
         }
     }
 

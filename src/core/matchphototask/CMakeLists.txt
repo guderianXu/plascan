@@ -55,6 +55,7 @@ target_link_libraries(matchphototask PUBLIC
     feature_extractors_traditional
     feature_match_common
     lightglue_matcher
+    plascan_common_io
     sfm
 )
 

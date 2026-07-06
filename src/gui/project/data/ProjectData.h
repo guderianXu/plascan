@@ -25,6 +25,26 @@
 #include "ProjectFilesManager.h"
 #include "ProjectConfigManager.h"
 
+struct ProjectOpenSnapshot
+{
+    bool success = false;
+    QString projectPath;
+    QString errorMessage;
+    QJsonObject filesMeta;
+    QJsonObject configMeta;
+    bool recoveredFromTemporary = false;
+    bool resultsLoaded = false;
+};
+
+struct ProjectResultsSnapshot
+{
+    bool success = false;
+    QString projectPath;
+    QString errorMessage;
+    QJsonObject resultsMeta;
+    bool hasResults = false;
+};
+
 // ProjectData: 轻量级项目数据管理类
 // 职责:
 // 1. 项目文件(.plascan)的读写
@@ -49,6 +69,10 @@ public:
     bool createProject(const QString &plascanPath, const QString &projectName);
     // 打开已存在项目
     bool openProject(const QString &plascanPath, QString *errorMsg = nullptr);
+    static ProjectOpenSnapshot loadProjectOpenSnapshot(const QString &plascanPath);
+    static ProjectResultsSnapshot loadProjectResultsSnapshot(const QString &plascanPath);
+    bool openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, QString *errorMsg = nullptr);
+    bool applyResultsSnapshot(const ProjectResultsSnapshot &snapshot, QString *errorMsg = nullptr);
     // 保存项目(将运行时元数据写回.plascan归档)
     bool saveProject(QString *errorMsg = nullptr);
     // 关闭当前项目

@@ -3,6 +3,7 @@
 #include "LayerFeatureLoader.h"
 #include "LayerRenderer.h"
 #include "ProjectIO.h"
+#include "io/PathIO.h"
 
 #include <QtConcurrent>
 #include <QFuture>
@@ -89,6 +90,7 @@ void CanvasWidget::showImage(const QString &path)
     _layerRenderer->clearFeatureLayers();
     // 确保清除上一次的匹配连线层，避免其干扰新的场景布局
     _layerRenderer->clearMatchLayers();
+    _layerRenderer->clearMaskLayers();
 
     if (path.trimmed().isEmpty())
     {
@@ -144,6 +146,7 @@ void CanvasWidget::showImage(const QString &path)
         {
             return;
         }
+        self->reloadMaskOverlay();
 
         // 通知外部当前活跃影像已变更（MainWindow 据此持久化状态）
         emit self->activeImageChanged(loadedPath);
@@ -179,6 +182,7 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
     // clear existing layers
     _layerRenderer->clearFeatureLayers();
     _layerRenderer->clearMatchLayers();
+    _layerRenderer->clearMaskLayers();
     _layerRenderer->clear();
 
     // parse match file (robust raw parser based on ASP parse_match_file.py)
@@ -542,7 +546,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
             // 默认不开方向显示时跳过整图 imread/Sobel，避免切换影像时抢占磁盘与 CPU。
             try
             {
-                cv::Mat img = cv::imread(imagePathCopy.toStdString(), cv::IMREAD_GRAYSCALE);
+                cv::Mat img = xjw::common::io::readImage(imagePathCopy, cv::IMREAD_GRAYSCALE);
                 if (!img.empty())
                 {
                     cv::Mat gx, gy;
@@ -646,6 +650,34 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
     watcher->setFuture(future);
 }
 
+void CanvasWidget::reloadMaskOverlay()
+{
+    if (!_layerRenderer)
+    {
+        return;
+    }
+
+    _layerRenderer->clearMaskLayers();
+    if (!_showMaskOverlay || _currentImagePath.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    const QString projectPath = property("currentProjectPath").toString();
+    const QString maskPath = ProjectIO::findMaskForImage(projectPath, _currentImagePath);
+    if (maskPath.isEmpty())
+    {
+        return;
+    }
+    _layerRenderer->addMaskContourLayer(maskPath);
+}
+
+void CanvasWidget::setShowMaskOverlay(bool show)
+{
+    _showMaskOverlay = show;
+    reloadMaskOverlay();
+}
+
 void CanvasWidget::reloadInterestPoints(const QString &imagePath)
 {
     if (imagePath.trimmed().isEmpty()) return;
@@ -719,7 +751,7 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
         // 注意：startSpLoadForImage 的异步路径有做这个；这里同步刷新也需要同样处理，否则 showOrientation 不会生效。
         try
         {
-            cv::Mat img = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+            cv::Mat img = xjw::common::io::readImage(imagePath, cv::IMREAD_GRAYSCALE);
             if (!img.empty())
             {
                 cv::Mat gx, gy;

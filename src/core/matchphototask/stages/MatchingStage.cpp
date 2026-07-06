@@ -5,6 +5,7 @@
 #include "MatchFileIO.h"
 #include "MatchPhotosRuntime.h"
 #include "MatchingStage.h"
+#include "io/PathIO.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -109,7 +110,7 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
     }
 
     xjw::feature_match::LightGlueConfig lightGlueConfig;
-    lightGlueConfig.matcherModelPath = modelPath.toStdString();
+    lightGlueConfig.matcherModelPath = xjw::common::io::toUtf8Path(modelPath);
     lightGlueConfig.useCuda = useCuda;
     lightGlueConfig.cudaDevice = options.cudaDevice;
 

@@ -17,6 +17,7 @@ struct MultiViewTrackBuildResult
     int rejectedConflictComponents = 0;
     int rejectedConflictEdges = 0;
     int prunedByQualityThinning = 0;
+    int prunedStationaryTracks = 0;
     std::map<int, int> trackLengthHistogram;
     std::vector<double> trackConfidenceScores;
     double meanTrackConfidence = 0.0;
@@ -34,6 +35,8 @@ public:
         int gridRows = 4;
         float imageWidth = 0.0f;
         float imageHeight = 0.0f;
+        bool excludeStationaryTracks = false;
+        float stationaryTrackMaxPixelMotion = 1.0f;
     };
 
     struct MatchIndexPair

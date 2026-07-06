@@ -31,6 +31,7 @@
 #include <QPointer>
 #include <QSignalBlocker>
 #include <QSizePolicy>
+#include <QScopedValueRollback>
 #include <QWidgetAction>
 
 #include <algorithm>
@@ -79,6 +80,7 @@ constexpr int SelectionPropertiesMinHeight = 80;
 constexpr int PhotosDockMinHeight = 90;
 constexpr int DockMinWidth = 160;
 constexpr int DockMinHeight = 80;
+constexpr int ProjectDockLayoutVersion = 2;
 
 void configureMovableDock(QDockWidget *dock)
 {
@@ -199,6 +201,33 @@ QStringList manualPairKeysFromDialogPairs(const QStringList &dialogPairs, const 
         }
     }
     return pairKeys;
+}
+
+void ensurePanelVisibilityDefaults(QJsonObject &settings)
+{
+    if (!settings.contains(QStringLiteral("workspace_visible")))
+    {
+        settings[QStringLiteral("workspace_visible")] = true;
+    }
+    if (!settings.contains(QStringLiteral("properties_visible")))
+    {
+        settings[QStringLiteral("properties_visible")] = true;
+    }
+    if (!settings.contains(QStringLiteral("photos_visible")))
+    {
+        settings[QStringLiteral("photos_visible")] = true;
+    }
+    if (!settings.contains(QStringLiteral("log_visible")))
+    {
+        settings[QStringLiteral("log_visible")] = false;
+    }
+}
+
+void enforceRequiredPanelVisibility(QJsonObject &settings)
+{
+    settings[QStringLiteral("workspace_visible")] = true;
+    settings[QStringLiteral("properties_visible")] = true;
+    settings[QStringLiteral("photos_visible")] = true;
 }
 } // namespace
 
@@ -378,14 +407,7 @@ void MainWindow::setupSelectionPanels()
     _photosDock->setWidget(_photoStrip);
     _photosPanel = _photosDock;
 
-    addDockWidget(Qt::LeftDockWidgetArea, _workspaceDock);
-    addDockWidget(Qt::LeftDockWidgetArea, _propertiesDock);
-    splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical);
-    addDockWidget(Qt::BottomDockWidgetArea, _photosDock);
-
-    resizeDocks({_workspaceDock}, {320}, Qt::Horizontal);
-    resizeDocks({_workspaceDock, _propertiesDock}, {560, 190}, Qt::Vertical);
-    resizeDocks({_photosDock}, {210}, Qt::Vertical);
+    restoreDefaultProjectDockLayout();
 }
 
 // ============================================================
@@ -598,6 +620,10 @@ void MainWindow::setupProjectManager()
         connect(_canvas, &CanvasWidget::activeImageChanged, this, [this](const QString &path)
         {
             saveUiSetting(QJsonObject{{QStringLiteral("active_image_path"), path}});
+            if (_projectManager)
+            {
+                _projectManager->setActiveImagePath(path);
+            }
         });
     }
 
@@ -615,11 +641,19 @@ void MainWindow::setupProjectManager()
     {
         if (_mainMenu->newAction())
         {
-            connect(_mainMenu->newAction(), &QAction::triggered, _projectManager, &ProjectManager::createNewProject);
+            connect(_mainMenu->newAction(), &QAction::triggered, this, [this]()
+            {
+                persistCurrentUiSettings();
+                _projectManager->createNewProject();
+            });
         }
         if (_mainMenu->openAction())
         {
-            connect(_mainMenu->openAction(), &QAction::triggered, _projectManager, &ProjectManager::openProject);
+            connect(_mainMenu->openAction(), &QAction::triggered, this, [this]()
+            {
+                persistCurrentUiSettings();
+                _projectManager->openProject();
+            });
         }
         if (_mainMenu->addPhotoAction())
         {
@@ -734,6 +768,16 @@ void MainWindow::setupProjectManager()
             context.matchDirectory = ProjectIO::ipmatchOutputDir(projectPath);
             context.pairInput.images = images;
             context.pairInput.manualPairKeys = manualPairKeys;
+            if (options.useReferencePreselection)
+            {
+                bool hasAllReferenceCameras = false;
+                context.referenceCameras =
+                    pmGuard->getCamerasForImages(images, &hasAllReferenceCameras);
+                if (!hasAllReferenceCameras)
+                {
+                    LOG_WARN(QStringLiteral("参考预选已请求，但项目相机参考不完整；任务将返回明确错误"));
+                }
+            }
 
             QPointer<MainWindow> self(this);
             auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
@@ -867,19 +911,38 @@ void MainWindow::setupProjectManager()
             connect(_mainMenu->createTiePointsAction(), &QAction::triggered, this, [this, startMatchPhotosTask]()
             {
                 CreateTiePointsDialog dlg(this);
+                bool hasAllReferenceCameras = false;
+                const QStringList images = _projectManager ? _projectManager->getAllImages() : QStringList();
+                const int cameraCount = _projectManager
+                    ? _projectManager->getCamerasForImages(images, &hasAllReferenceCameras).size()
+                    : 0;
+                dlg.setReferencePreselectionAvailable(
+                    hasAllReferenceCameras && cameraCount == images.size() && images.size() >= 2,
+                    cameraCount,
+                    images.size());
                 if (dlg.exec() == QDialog::Accepted)
                 {
                     xjw::matchphotos::MatchPhotosOptions options;
                     options.profile = tiePointProfileFromAccuracy(dlg.accuracy());
                     options.device = xjw::matchphotos::ComputeDevice::Cuda;
                     options.maxImageDim = maxImageDimFromAccuracy(dlg.accuracy());
-                    options.maxKeypoints = dlg.keypointLimit();
+                    options.useExplicitKeypointLimit = true;
+                    options.maxKeypoints = dlg.useGuidedMatching() ? 0 : dlg.keypointLimit();
+                    options.keypointLimitPerMegapixel = dlg.useGuidedMatching()
+                        ? dlg.keypointLimitPerMegapixel()
+                        : 0;
+                    options.maxTiePointsPerImage = dlg.tiePointLimit();
+                    options.excludeStationaryTiePoints = dlg.excludePinnedTiePoints();
                     options.matchThreshold = 0.15f;
                     options.enableGuidedMatching = dlg.useGuidedMatching();
+                    options.useGenericPreselection = dlg.useGenericPreselection();
+                    options.useReferencePreselection = dlg.useReferencePreselection();
                     options.reuseExistingFeatures = true;
                     options.pairPolicy = xjw::matchphotos::makePairSelectionPolicy(
                         pairPresetFromAccuracy(dlg.accuracy()));
-                    if (!dlg.useGenericPreselection())
+                    options.pairPolicy.includeVocabularyOverlap = options.useGenericPreselection;
+                    options.pairPolicy.includeCameraOverlap = options.useReferencePreselection;
+                    if (!dlg.useGenericPreselection() && !dlg.useReferencePreselection())
                     {
                         options.pairPolicy.mode = xjw::matchphotos::PairSelectionMode::Exhaustive;
                     }
@@ -1075,8 +1138,8 @@ void MainWindow::setupProjectManager()
             });
         }
 
-        connect(_projectManager, &ProjectManager::projectCreated, this, &MainWindow::onProjectOpened);
         connect(_projectManager, &ProjectManager::projectOpened,  this, &MainWindow::onProjectOpened);
+        connect(_projectManager, &ProjectManager::projectClosed, this, &MainWindow::onProjectClosed);
 
         // 当特征提取完成后，切换 Canvas 到对应后缀并刷新显示
         connect(_projectManager, &ProjectManager::ipfindResultAppended, this,
@@ -1104,6 +1167,7 @@ void MainWindow::setupProjectManager()
         {
             if (!p.isEmpty() && _projectManager)
             {
+                persistCurrentUiSettings();
                 _projectManager->openProjectFromPath(p);
             }
         });
@@ -1113,23 +1177,31 @@ void MainWindow::setupProjectManager()
     
     connect(_projectManager, &ProjectManager::saveStarted,    this, &MainWindow::onSaveStarted);
     connect(_projectManager, &ProjectManager::saveFinished,   this, &MainWindow::onSaveFinished);
+    connect(_projectManager, &ProjectManager::projectOpenStarted,
+            this, &MainWindow::onProjectOpenStarted);
+    connect(_projectManager, &ProjectManager::projectOpenProgressChanged,
+            this, &MainWindow::onProjectOpenProgressChanged);
+    connect(_projectManager, &ProjectManager::projectOpenFinished,
+            this, &MainWindow::onProjectOpenFinished);
     connect(_projectManager, &ProjectManager::metadataDirtyChanged, this, &MainWindow::onMetadataDirtyChanged);
-
-    connect(_projectManager, &ProjectManager::projectOpened, this, [this](const QString &)
+    connect(_projectManager, &ProjectManager::masksGenerated, this, [this](const QStringList &imagePaths)
     {
-        if (_dataTree)
+        if (!_canvas)
         {
-            _dataTree->loadFromJson(_projectManager->currentMeta());
+            return;
         }
-        if (_dashboard)
+
+        const QString current = QDir::cleanPath(_canvas->currentImagePath());
+        for (const QString &imagePath : imagePaths)
         {
-            _dashboard->loadFromJson(_projectManager->currentMeta());
-        }
-        if (_referencePanel)
-        {
-            _referencePanel->loadFromJson(_projectManager->currentMeta());
+            if (QDir::cleanPath(imagePath) == current)
+            {
+                _canvas->reloadMaskOverlay();
+                return;
+            }
         }
     });
+
     connect(_projectManager, &ProjectManager::projectMetadataUpdated, this, [this](const QString &)
     {
         if (_dataTree)
@@ -1955,8 +2027,8 @@ void MainWindow::connectDockAction(QAction *action, QWidget *panel, const QStrin
 
     connect(action, &QAction::toggled, panel, [this, panel, settingKey](bool on)
     {
+        Q_UNUSED(settingKey)
         panel->setVisible(on);
-        saveUiSetting(QJsonObject{{settingKey, on}});
     });
 
     if (auto *dock = qobject_cast<QDockWidget *>(panel))
@@ -2077,8 +2149,135 @@ void MainWindow::selectResource(const QString &section, const QString &resourceP
     }
 }
 
+QJsonObject MainWindow::currentUiSettingsSnapshot() const
+{
+    QJsonObject settings;
+    settings[QStringLiteral("workspace_visible")] = _workspaceDock && !_workspaceDock->isHidden();
+    settings[QStringLiteral("properties_visible")] = _propertiesDock && !_propertiesDock->isHidden();
+    settings[QStringLiteral("photos_visible")] = _photosDock && !_photosDock->isHidden();
+    settings[QStringLiteral("log_visible")] = _logDock && !_logDock->isHidden();
+    settings[QStringLiteral("bottom_panel")] = currentBottomPanelKey();
+    settings[QStringLiteral("dock_layout_version")] = ProjectDockLayoutVersion;
+    settings[QStringLiteral("dock_state")] = QString::fromLatin1(saveState().toBase64());
+
+    if (_mainMenu && _mainMenu->toggleHenanUniversityBrandAction())
+    {
+        settings[QStringLiteral("henu_brand_visible")] =
+            _mainMenu->toggleHenanUniversityBrandAction()->isChecked();
+    }
+    else if (_henuBrandAction)
+    {
+        settings[QStringLiteral("henu_brand_visible")] = _henuBrandAction->isVisible();
+    }
+
+    return settings;
+}
+
+void MainWindow::restoreDefaultProjectDockLayout()
+{
+    if (!_workspaceDock || !_propertiesDock || !_photosDock)
+    {
+        return;
+    }
+
+    addDockWidget(Qt::LeftDockWidgetArea, _workspaceDock);
+    addDockWidget(Qt::LeftDockWidgetArea, _propertiesDock);
+    splitDockWidget(_workspaceDock, _propertiesDock, Qt::Vertical);
+    addDockWidget(Qt::BottomDockWidgetArea, _photosDock);
+
+    _workspaceDock->setVisible(true);
+    _propertiesDock->setVisible(true);
+    _photosDock->setVisible(true);
+    _workspaceDock->raise();
+    _propertiesDock->raise();
+    _photosDock->raise();
+
+    resizeDocks({_workspaceDock}, {320}, Qt::Horizontal);
+    resizeDocks({_workspaceDock, _propertiesDock}, {560, 190}, Qt::Vertical);
+    resizeDocks({_photosDock}, {210}, Qt::Vertical);
+}
+
+void MainWindow::restoreProjectDockState(const QJsonObject &settings)
+{
+    const int layoutVersion = settings.value(QStringLiteral("dock_layout_version")).toInt(0);
+    if (layoutVersion != ProjectDockLayoutVersion)
+    {
+        restoreDefaultProjectDockLayout();
+        return;
+    }
+
+    const QString encoded = settings.value(QStringLiteral("dock_state")).toString();
+    if (encoded.isEmpty())
+    {
+        restoreDefaultProjectDockLayout();
+        return;
+    }
+
+    const QByteArray state = QByteArray::fromBase64(encoded.toLatin1());
+    if (state.isEmpty())
+    {
+        restoreDefaultProjectDockLayout();
+        return;
+    }
+
+    if (!restoreState(state))
+    {
+        restoreDefaultProjectDockLayout();
+    }
+}
+
+void MainWindow::ensureRequiredProjectDocksVisible()
+{
+    auto ensureVisible = [](QAction *action, QDockWidget *dock) -> bool
+    {
+        if (!dock)
+        {
+            return false;
+        }
+
+        const bool wasHidden = dock->isHidden();
+        if (action)
+        {
+            const QSignalBlocker actionBlocker(action);
+            action->setChecked(true);
+        }
+        {
+            const QSignalBlocker dockBlocker(dock);
+            dock->setVisible(true);
+            dock->raise();
+        }
+        return wasHidden;
+    };
+
+    bool restoredHiddenPrimaryDock = false;
+    restoredHiddenPrimaryDock |= ensureVisible(_mainMenu ? _mainMenu->toggleWorkspaceAction() : nullptr,
+                                               _workspaceDock);
+    restoredHiddenPrimaryDock |= ensureVisible(_mainMenu ? _mainMenu->togglePropertiesAction() : nullptr,
+                                               _propertiesDock);
+    restoredHiddenPrimaryDock |= ensureVisible(_mainMenu ? _mainMenu->togglePhotosAction() : nullptr,
+                                               _photosDock);
+
+    if (restoredHiddenPrimaryDock)
+    {
+        restoreDefaultProjectDockLayout();
+    }
+}
+
+void MainWindow::persistCurrentUiSettings()
+{
+    if (!_uiSetting)
+    {
+        return;
+    }
+    saveUiSetting(currentUiSettingsSnapshot());
+}
+
 void MainWindow::saveUiSetting(const QJsonObject &partial)
 {
+    if (_applyingUiSettings)
+    {
+        return;
+    }
     if (_uiSetting)
     {
         _uiSetting->merge(partial);
@@ -2159,6 +2358,45 @@ void MainWindow::onLogDisplayLevelChanged(int lvl)
 
 // Ipfind/Ipmatch finish handlers removed (controllers moved/removed)
 
+void MainWindow::onProjectOpenStarted(const QString &plascanPath)
+{
+    if (!_openProgressDialog)
+    {
+        _openProgressDialog = new QProgressDialog(tr("正在打开项目..."), QString(), 0, 100, this);
+        _openProgressDialog->setWindowModality(Qt::ApplicationModal);
+        _openProgressDialog->setCancelButton(nullptr);
+        _openProgressDialog->setMinimumDuration(0);
+        _openProgressDialog->setAutoClose(false);
+        _openProgressDialog->setAutoReset(false);
+    }
+    _openProgressDialog->setLabelText(tr("正在打开项目：%1").arg(QFileInfo(plascanPath).fileName()));
+    _openProgressDialog->setValue(0);
+    _openProgressDialog->show();
+}
+
+void MainWindow::onProjectOpenProgressChanged(const QString &message, int percent)
+{
+    if (!_openProgressDialog)
+    {
+        return;
+    }
+
+    _openProgressDialog->setLabelText(message.isEmpty() ? tr("正在打开项目...") : message);
+    _openProgressDialog->setValue(std::clamp(percent, 0, 100));
+}
+
+void MainWindow::onProjectOpenFinished(bool success, const QString &message)
+{
+    if (_openProgressDialog)
+    {
+        _openProgressDialog->hide();
+        _openProgressDialog->deleteLater();
+        _openProgressDialog = nullptr;
+    }
+
+    statusBar()->showMessage(success ? message : tr("打开项目失败"), success ? 3000 : 5000);
+}
+
 void MainWindow::onSaveStarted()
 {
     if (!_saveProgressDialog)
@@ -2218,11 +2456,6 @@ void MainWindow::onClearRecentRequested()
 //  项目生命周期
 // ============================================================
 
-void MainWindow::onProjectCreated(const QString &plascanPath)
-{
-    onProjectOpened(plascanPath);
-}
-
 void MainWindow::onProjectOpened(const QString &plascanPath)
 {
     if (_dataTree)
@@ -2256,13 +2489,26 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
         _photoStrip->setProjectPath(plascanPath);
     }
     if (_projectManager && _dataTree)
-        _dataTree->loadFromJson(_projectManager->currentMeta());
-    if (_projectManager && _dashboard)
-        _dashboard->loadFromJson(_projectManager->currentMeta());
-    if (_projectManager && _workspaceCenter)
-        _workspaceCenter->setProjectMeta(_projectManager->currentMeta());
-    if (_projectManager && _photoStrip)
-        _photoStrip->loadFromJson(_projectManager->currentMeta());
+    {
+        const QJsonObject coreMeta = _projectManager->coreProjectMeta();
+        _dataTree->loadFromJson(coreMeta);
+        if (_dashboard)
+        {
+            _dashboard->loadFromJson(coreMeta);
+        }
+        if (_referencePanel)
+        {
+            _referencePanel->loadFromJson(coreMeta);
+        }
+        if (_workspaceCenter)
+        {
+            _workspaceCenter->setProjectMeta(coreMeta);
+        }
+        if (_photoStrip)
+        {
+            _photoStrip->loadFromJson(coreMeta);
+        }
+    }
 
     if (_config && _mainMenu)
     {
@@ -2274,6 +2520,8 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     {
         return;
     }
+
+    persistCurrentUiSettings();
 
     // 初始化/更新项目级 UI 设置路径
     if (!_uiSetting)
@@ -2294,8 +2542,26 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
         ui = _projectManager->loadUiSettings();
     }
     applyUiSettings(ui);
+    persistCurrentUiSettings();
+}
 
-    // feature-info panel removed: do not reload interest points into a removed panel here
+void MainWindow::onProjectClosed()
+{
+    persistCurrentUiSettings();
+    if (_uiSetting)
+    {
+        _uiSetting->setProjectPath(QString());
+    }
+    if (_featureMatchingSetting)
+    {
+        _featureMatchingSetting->setProjectPath(QString());
+    }
+    if (_canvas)
+    {
+        _canvas->setProperty("currentProjectPath", QString());
+    }
+    setWindowTitle(QStringLiteral("PlaScan"));
+    statusBar()->showMessage(tr("项目已关闭"), 3000);
 }
 
 // ============================================================
@@ -2304,27 +2570,28 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
 
 void MainWindow::applyUiSettings(const QJsonObject &ui)
 {
+    QScopedValueRollback<bool> applyingRollback(_applyingUiSettings, true);
+
     // 特征后缀恢复不能依赖主窗口 UI 设置存在；旧项目可能只有 assets/ip/*.dsk。
     if (_menuWorkflowController)
     {
         _menuWorkflowController->applySavedFeatureDisplayOptions(ui);
     }
 
-    if (ui.isEmpty())
-    {
-        return;
-    }
+    QJsonObject settings = ui;
+    ensurePanelVisibilityDefaults(settings);
+    enforceRequiredPanelVisibility(settings);
+    restoreProjectDockState(settings);
 
-    // feature-info panel removed: no ip button handling
-    if (ui.contains(QStringLiteral("log_display_level")) && _log)
+    if (settings.contains(QStringLiteral("log_display_level")) && _log)
     {
-        int lvl = ui.value(QStringLiteral("log_display_level")).toInt(static_cast<int>(Logger::Info));
+        int lvl = settings.value(QStringLiteral("log_display_level")).toInt(static_cast<int>(Logger::Info));
         _log->setDisplayLevel(static_cast<Logger::Level>(lvl));
     }
 
-    if (ui.contains(QStringLiteral("log_visible")) && _mainMenu && _mainMenu->toggleLogAction())
+    if (settings.contains(QStringLiteral("log_visible")) && _mainMenu && _mainMenu->toggleLogAction())
     {
-        bool on = ui.value(QStringLiteral("log_visible")).toBool();
+        bool on = settings.value(QStringLiteral("log_visible")).toBool();
         _mainMenu->toggleLogAction()->blockSignals(true);
         _mainMenu->toggleLogAction()->setChecked(on);
         _mainMenu->toggleLogAction()->blockSignals(false);
@@ -2338,7 +2605,6 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
         }
     }
 
-    // feature-info visibility handling removed
     auto applyVisibility = [](QAction *action, QWidget *panel, const QJsonObject &settings, const QString &key)
     {
         if (!action || !panel || !settings.contains(key))
@@ -2361,20 +2627,22 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
     {
         applyVisibility(_mainMenu->toggleWorkspaceAction(),
                         _workspaceDock,
-                        ui,
+                        settings,
                         QStringLiteral("workspace_visible"));
         applyVisibility(_mainMenu->togglePropertiesAction(),
                         _propertiesDock,
-                        ui,
+                        settings,
                         QStringLiteral("properties_visible"));
         applyVisibility(_mainMenu->togglePhotosAction(),
                         _photosDock,
-                        ui,
+                        settings,
                         QStringLiteral("photos_visible"));
 
-        if (ui.contains(QStringLiteral("henu_brand_visible")) && _mainMenu->toggleHenanUniversityBrandAction())
+        ensureRequiredProjectDocksVisible();
+
+        if (settings.contains(QStringLiteral("henu_brand_visible")) && _mainMenu->toggleHenanUniversityBrandAction())
         {
-            const bool on = ui.value(QStringLiteral("henu_brand_visible")).toBool();
+            const bool on = settings.value(QStringLiteral("henu_brand_visible")).toBool();
             {
                 const QSignalBlocker blocker(_mainMenu->toggleHenanUniversityBrandAction());
                 _mainMenu->toggleHenanUniversityBrandAction()->setChecked(on);
@@ -2383,9 +2651,9 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
         }
     }
 
-    if (ui.contains(QStringLiteral("active_image_path")) && _canvas)
+    if (settings.contains(QStringLiteral("active_image_path")) && _canvas)
     {
-        QString imagePath = ui.value(QStringLiteral("active_image_path")).toString();
+        QString imagePath = settings.value(QStringLiteral("active_image_path")).toString();
         if (!imagePath.isEmpty() && QFileInfo::exists(imagePath))
         {
             const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
@@ -2416,11 +2684,6 @@ void MainWindow::applyUiSettings(const QJsonObject &ui)
 
 void MainWindow::closeEvent(QCloseEvent *event)
 {
-    if (_config)
-    {
-        _config->windowState()->save(this);
-    }
-
     if (_projectManager && _projectManager->isDirty())
     {
         auto btn = QMessageBox::warning(this, tr("未保存的更改"),
@@ -2438,15 +2701,18 @@ void MainWindow::closeEvent(QCloseEvent *event)
         {
             // 同步保存，不使用事件循环
             _projectManager->saveProject();
-
-            // 保存完成后接受事件，自动退出
-            event->accept();
-            return;
         }
         else if (btn == QMessageBox::Discard)
         {
             _projectManager->discardTemporaryMeta();
         }
+    }
+
+    persistCurrentUiSettings();
+
+    if (_config)
+    {
+        _config->windowState()->save(this);
     }
 
     event->accept();
