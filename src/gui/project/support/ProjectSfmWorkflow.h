@@ -9,7 +9,7 @@
 class ProjectData;
 
 namespace xjw::gui {
-struct SFMServiceResult;
+struct AerialTriangulationServiceResult;
 }
 
 namespace xjw::gui::project {
@@ -22,7 +22,7 @@ struct InitPoseFinalizeResult
 };
 
 InitPoseFinalizeResult finalizeInitializedCameraPoses(ProjectData *projectData,
-                                                     const xjw::gui::SFMServiceResult &result,
+                                                     const xjw::gui::AerialTriangulationServiceResult &result,
                                                      const QSet<QString> &targetImages,
                                                      const QSet<QString> &existingImages,
                                                      bool overwriteExisting,

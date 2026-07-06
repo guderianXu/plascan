@@ -41,14 +41,14 @@
 
 ## 匹配配对规划与诊断
 
-`src/core/pipeline/SfmPairPlanner.h` 负责大规模项目的 SfM 匹配候选规划。大项目默认不做无约束 N^2 全匹配，而是按以下来源生成候选并合并去重：
+`src/core/aerial_triangulation/SfmPairPlanner.h` 负责大规模项目的 SfM 匹配候选规划。大项目默认不做无约束 N^2 全匹配，而是按以下来源生成候选并合并去重：
 
 - `known_camera_overlap`：已知相机足迹重叠候选，优先级最高。
 - `known_camera_spatial_neighbors`：已知相机中心邻域候选，用于跨航带/空间近邻补充。
 - `sequence_window`：文件序列窗口候选，用于航线内连续影像。
 - `manual_restricted`：调用方显式传入的配对列表。
 
-每个候选 pair 会记录 `sourceTypes`、`priorityScore`、序列距离、相机中心距离和各来源得分。`SFMService` 按规划后的 `allowedPairKeys` 顺序检查和补生成匹配，因此高优先级 pair 会优先进入缓存检查、自动补匹配和后续诊断。
+每个候选 pair 会记录 `sourceTypes`、`priorityScore`、序列距离、相机中心距离和各来源得分。`AerialTriangulationService` 按规划后的 `allowedPairKeys` 顺序检查和补生成匹配，因此高优先级 pair 会优先进入缓存检查、自动补匹配和后续诊断。
 
 SfM 匹配阶段会在项目 `assets/reports/` 下输出：
 

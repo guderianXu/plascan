@@ -18,7 +18,7 @@ class ThreeDReconstructionCliTest(unittest.TestCase):
         source = (ROOT / "src/cli/cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
 
         self.assertIn("PLASCAN_THREE_D_ONLY", source)
-        self.assertIn("SFMServiceOptions", source)
+        self.assertIn("AerialTriangulationServiceOptions", source)
         self.assertIn("buildDepthGenConfig", source)
         self.assertIn("buildMeshAndOptionalTexture", source)
 

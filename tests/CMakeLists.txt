@@ -181,39 +181,42 @@ target_link_libraries(test_sfm_pair_planner PRIVATE
     GTest::gtest_main
 )
 target_include_directories(test_sfm_pair_planner PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_sfm_pair_planner)
 
 add_executable(test_reconstruction_prerequisites
     test_reconstruction_prerequisites.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline/ReconstructionPrerequisiteReport.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/ReconstructionPrerequisiteReport.cpp
 )
 target_link_libraries(test_reconstruction_prerequisites PRIVATE
     Qt6::Core
     GTest::gtest_main
 )
 target_include_directories(test_reconstruction_prerequisites PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_reconstruction_prerequisites)
 
 add_executable(test_match_result_catalog
     test_match_result_catalog.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline/MatchResultCatalog.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/MatchResultCatalog.cpp
 )
 target_link_libraries(test_match_result_catalog PRIVATE
     Qt6::Core
     GTest::gtest_main
 )
 target_include_directories(test_match_result_catalog PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_match_result_catalog)
 
 add_executable(test_aerial_triangulation_workflow
     test_aerial_triangulation_workflow.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline/AerialTriangulationWorkflow.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationWorkflow.cpp
 )
 target_link_libraries(test_aerial_triangulation_workflow PRIVATE
     Qt6::Core
@@ -224,6 +227,7 @@ target_link_libraries(test_aerial_triangulation_workflow PRIVATE
     GTest::gtest_main
 )
 target_include_directories(test_aerial_triangulation_workflow PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
     ${CMAKE_SOURCE_DIR}/src/core/sfm
@@ -252,7 +256,7 @@ gtest_discover_tests(test_lightglue_feature_budget)
 
 add_executable(test_guided_rematch_service
     test_guided_rematch_service.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline/GuidedRematchService.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/GuidedRematchService.cpp
 )
 target_link_libraries(test_guided_rematch_service PRIVATE
     Qt6::Core
@@ -260,6 +264,7 @@ target_link_libraries(test_guided_rematch_service PRIVATE
     GTest::gtest_main
 )
 target_include_directories(test_guided_rematch_service PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
     ${CMAKE_SOURCE_DIR}/src/core/sfm
 )
@@ -274,6 +279,7 @@ target_link_libraries(test_feature_pair_planner PRIVATE
     GTest::gtest_main
 )
 target_include_directories(test_feature_pair_planner PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
@@ -612,6 +618,7 @@ target_compile_definitions(test_gui_project_utils PRIVATE
     PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
 )
 target_include_directories(test_gui_project_utils PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
     ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/gui/menu
@@ -725,10 +732,10 @@ if(Python3_Interpreter_FOUND)
     )
 
     add_test(
-        NAME SfmServiceDefaultAlgorithmsTest
+        NAME AerialTriangulationServiceDefaultAlgorithmsTest
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_sfm_service_default_algorithms
     )
-    set_tests_properties(SfmServiceDefaultAlgorithmsTest PROPERTIES
+    set_tests_properties(AerialTriangulationServiceDefaultAlgorithmsTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 

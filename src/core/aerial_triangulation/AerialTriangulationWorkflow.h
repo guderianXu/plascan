@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SFMService.h"
+#include "AerialTriangulationService.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -13,6 +13,9 @@
 namespace xjw::gui
 {
 
+// Metashape 的“对齐照片”对应这里的空中三角测量工作流：
+// 输入是影像、相机先验和连接点/匹配设置，输出是已定向相机、BA 质量和正式稀疏观测成果。
+// 下游 MVS、网格、DEM/DOM 不属于本模块职责。
 struct AerialTriangulationWorkflowOptions
 {
     QStringList images;
@@ -53,25 +56,27 @@ struct AerialTriangulationWorkflowOptions
 
 struct AerialTriangulationResolvedConfig
 {
-    SFMServiceOptions sfmOptions;
+    // 已解析为可直接传入空三服务的算法级配置。
+    AerialTriangulationServiceOptions serviceOptions;
     QJsonObject resolvedSettings;
 };
 
 struct AerialTriangulationWorkflowResult
 {
     AerialTriangulationResolvedConfig config;
-    SFMServiceResult sfmResult;
+    AerialTriangulationServiceResult serviceResult;
 };
 
 class AerialTriangulationWorkflow
 {
 public:
-    using SfmRunner = std::function<SFMServiceResult(const SFMServiceOptions &options)>;
+    using ServiceRunner =
+        std::function<AerialTriangulationServiceResult(const AerialTriangulationServiceOptions &options)>;
 
     static AerialTriangulationResolvedConfig resolveConfig(const AerialTriangulationWorkflowOptions &options);
 
     static AerialTriangulationWorkflowResult run(const AerialTriangulationWorkflowOptions &options,
-                                                const SfmRunner &runner);
+                                                const ServiceRunner &runner);
 };
 
 } // namespace xjw::gui

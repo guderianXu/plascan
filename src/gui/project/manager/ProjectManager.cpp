@@ -38,7 +38,7 @@
 #include "SparseCloudValidator.h"
 #include "SurfaceReconstructor.h"
 
-#include "SFMService.h"
+#include "AerialTriangulationService.h"
 
 #include <QMessageBox>
 #include <QDir>

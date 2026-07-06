@@ -7668,7 +7668,7 @@ TEST(InitCameraPoseDialogTest, SfmInitializationUsesSelectedMatchPipeline)
     const QString managerSource =
         readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectCameraSetupManager.cpp"));
     const QString sfmServiceSource =
-        readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+        readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(controllerSource.isEmpty());
     ASSERT_FALSE(managerSource.isEmpty());
     ASSERT_FALSE(sfmServiceSource.isEmpty());
@@ -8769,7 +8769,7 @@ TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
     ASSERT_GT(nextFunction, sparseStart);
     const QString sparseBlock = source.mid(sparseStart, nextFunction - sparseStart);
     EXPECT_TRUE(sparseBlock.contains(QStringLiteral("AerialTriangulationWorkflow::run")));
-    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("SFMService::run(runOpts)")));
+    EXPECT_TRUE(sparseBlock.contains(QStringLiteral("AerialTriangulationService::run(runOpts)")));
     EXPECT_TRUE(sparseBlock.contains(QStringLiteral("appendAtResult")));
     EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionWorkflow")));
     EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startThreeDReconstructionDenseStage")));
@@ -9055,11 +9055,11 @@ TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThrea
 
     EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::tasks::runGuarded")));
     EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::tasks::postGuarded")));
-    EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::SFMService::run(runOpts)")));
-    EXPECT_FALSE(launchBody.contains(QStringLiteral("QFutureWatcher<xjw::gui::SFMServiceResult>")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("xjw::gui::AerialTriangulationService::run(runOpts)")));
+    EXPECT_FALSE(launchBody.contains(QStringLiteral("QFutureWatcher<xjw::gui::AerialTriangulationServiceResult>")));
     const int sfmLaunch = launchBody.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"));
     ASSERT_GE(sfmLaunch, 0);
-    EXPECT_FALSE(launchBody.left(sfmLaunch).contains(QStringLiteral("SFMService::run")));
+    EXPECT_FALSE(launchBody.left(sfmLaunch).contains(QStringLiteral("AerialTriangulationService::run")));
 }
 
 TEST(AerialTriangulationWorkflowTest, SfmLaunchReusesGeneratedPairConstraints)
@@ -9143,7 +9143,7 @@ TEST(AerialTriangulationWorkflowTest, PreflightUsesSelectedMatchPipeline)
 
 TEST(SfmServicePairPlanningTest, ProjectMetaCamerasEnableBoundedPairPlanning)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("loadKnownCameraCentersFromProjectMeta")));
@@ -9156,7 +9156,7 @@ TEST(SfmServicePairPlanningTest, ProjectMetaCamerasEnableBoundedPairPlanning)
 
 TEST(SfmServiceKnownPoseModeTest, CompleteProjectMetaCamerasEnableKnownPoseMode)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("hasCompleteProjectMetaCameras")));
@@ -9716,7 +9716,7 @@ TEST(FeatureNamingCleanupTest, TorchRunnerWarningsStayLocalToRunnerTranslationUn
 TEST(FeatureNamingCleanupTest, TorchHeavyTranslationUnitsSuppressLibTorchC4267Warnings)
 {
     const QString sfmService =
-        readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+        readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     const QString vocabularyDialog =
         readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
     ASSERT_FALSE(sfmService.isEmpty());
@@ -10251,8 +10251,8 @@ TEST(ProjectTriangulationUiTest, SparseManagerLongTasksUseGuardedRunner)
 
 TEST(SfmSparseResultMetadataTest, SfmServicePublishesProductionQualityRecord)
 {
-    const QString header = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.h"));
-    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.h"));
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     const QString workflow = readProjectSourceFile(QStringLiteral("src/gui/project/support/ProjectSfmWorkflow.cpp"));
     ASSERT_FALSE(header.isEmpty());
     ASSERT_FALSE(service.isEmpty());
@@ -10271,8 +10271,8 @@ TEST(SfmSparseResultMetadataTest, SfmServicePublishesProductionQualityRecord)
 
 TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishPerPairCandidateMetadata)
 {
-    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
-    const QString planner = readProjectSourceFile(QStringLiteral("src/core/pipeline/SfmPairPlanner.h"));
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+    const QString planner = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/SfmPairPlanner.h"));
     ASSERT_FALSE(service.isEmpty());
     ASSERT_FALSE(planner.isEmpty());
 
@@ -10303,9 +10303,9 @@ TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishPerPairCandidateMetadata)
 
 TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishGuidedMatchingPlan)
 {
-    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
-    const QString serviceHeader = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.h"));
-    const QString diagnostics = readProjectSourceFile(QStringLiteral("src/core/pipeline/SfmMatchDiagnostics.h"));
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+    const QString serviceHeader = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.h"));
+    const QString diagnostics = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/SfmMatchDiagnostics.h"));
     ASSERT_FALSE(service.isEmpty());
     ASSERT_FALSE(serviceHeader.isEmpty());
     ASSERT_FALSE(diagnostics.isEmpty());
@@ -10317,7 +10317,7 @@ TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishGuidedMatchingPlan)
     EXPECT_TRUE(serviceHeader.contains(QStringLiteral("enableGuidedRematching = false")))
         << "Guided rematching should be an explicit opt-in second pass, not an implicit default.";
     EXPECT_TRUE(service.contains(QStringLiteral("opts.enableGuidedRematching")))
-        << "SFMService should only plan guided rematching when the caller opts in.";
+        << "AerialTriangulationService should only plan guided rematching when the caller opts in.";
     EXPECT_TRUE(service.contains(QStringLiteral("guided_matching_enabled")))
         << "Diagnostics should record whether guided rematching was enabled for this run.";
     EXPECT_TRUE(service.contains(QStringLiteral("guided_matching")));
@@ -10329,13 +10329,13 @@ TEST(SfmSparseResultMetadataTest, SfmDiagnosticsPublishGuidedMatchingPlan)
 
 TEST(SfmSparseResultMetadataTest, GuidedRematchingIsOptInAndAppendOnly)
 {
-    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(service.isEmpty());
 
     EXPECT_TRUE(service.contains(QStringLiteral("opts.enableGuidedRematching")))
         << "Guided rematching must remain an explicit second pass.";
     EXPECT_TRUE(service.contains(QStringLiteral("generateGuidedRematchCandidates")))
-        << "SFMService should not stop at diagnostics; it must generate guided candidates.";
+        << "AerialTriangulationService should not stop at diagnostics; it must generate guided candidates.";
     EXPECT_TRUE(service.contains(QStringLiteral("mergeGuidedRematchMatches")))
         << "Guided candidates should be appended into SfM matches through the shared merge service.";
     EXPECT_TRUE(service.contains(QStringLiteral("replacesExistingMatch = false")))
@@ -10344,7 +10344,7 @@ TEST(SfmSparseResultMetadataTest, GuidedRematchingIsOptInAndAppendOnly)
 
 TEST(SfmSparseResultMetadataTest, GuidedRematchingRerunsSfmAfterAddingMatches)
 {
-    const QString service = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString service = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(service.isEmpty());
 
     EXPECT_TRUE(service.contains(QStringLiteral("guided_matching_second_pass_attempted")))
@@ -10352,7 +10352,7 @@ TEST(SfmSparseResultMetadataTest, GuidedRematchingRerunsSfmAfterAddingMatches)
     EXPECT_TRUE(service.contains(QStringLiteral("guided_matching_second_pass_accepted")))
         << "Diagnostics should say whether the second pass replaced the first reconstruction.";
     EXPECT_TRUE(service.contains(QStringLiteral("SFM Guided matching: second pass")))
-        << "SFMService should execute a real second pass after guided matches are appended.";
+        << "AerialTriangulationService should execute a real second pass after guided matches are appended.";
     EXPECT_TRUE(service.contains(QStringLiteral("sfmResult = std::move(guidedSfmResult)")))
         << "The accepted second pass must become the authoritative SfM result.";
 }
@@ -10603,7 +10603,7 @@ TEST(FeatureMatchRunnerScriptLookupTest, MatcherFactoryPythonAdapterUsesSourceAw
 
 TEST(FeatureMatchSidecarTest, FormalSfmRejectsLegacyCoordinateOnlyMatchCaches)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     const int compatibleStart = source.indexOf(QStringLiteral("existingMatchCompatible"));
@@ -10620,7 +10620,7 @@ TEST(FeatureMatchSidecarTest, FormalSfmRejectsLegacyCoordinateOnlyMatchCaches)
 
 TEST(FeatureMatchSidecarTest, FormalSfmFindsAlgorithmSuffixedMatchCaches)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     const int candidateStart = source.indexOf(QStringLiteral("appendCandidatePair"));
@@ -10648,7 +10648,7 @@ TEST(MatchViewerSidecarOrderTest, ReordersCachedPointsWhenDisplayOrderIsReversed
 
 TEST(SfmSparseSidecarTest, ExportsTrackObservationsForMatchValidity)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/core/pipeline/SFMService.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("pointObject[QStringLiteral(\"observations\")]")));

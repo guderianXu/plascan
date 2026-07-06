@@ -1,8 +1,9 @@
-// =============================================================================
-// 文件名: SFMService.cpp
-// 描述:   增量式 SFM 一站式服务实现，详细说明见 SFMService.h。
+﻿// =============================================================================
+// 文件名: AerialTriangulationService.cpp
+// 描述:   对齐照片式空中三角测量服务实现，详细说明见 AerialTriangulationService.h。
 //
-//         全自动流水线：DISK 特征提取 → LightGlue 匹配 → 增量式 SFM
+//         全自动流水线：特征/匹配/连接点检查 → 相机注册 → BA → 空三质量记录。
+//         该模块对应 Metashape 的 Align Photos，不负责 MVS、网格、DEM/DOM 等下游生产。
 //         本文件不依赖任何 Qt Widget，所有 GUI 提示由调用方负责。
 // =============================================================================
 
@@ -30,7 +31,7 @@
 #include <torch/torch.h>
 
 // ── 项目 / 服务头文件 ──────────────────────────────────────────────────────
-#include "SFMService.h"
+#include "AerialTriangulationService.h"
 #include "SfmPairPlanner.h"
 #include "SfmMatchDiagnostics.h"
 #include "GuidedRematchService.h"
@@ -47,6 +48,7 @@
 #include "quality/SfmQualityReport.h"
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
+#include "io/PathIO.h"
 
 #include <QDir>
 #include <QFile>
@@ -227,7 +229,7 @@ void sampleSparseExportColorsByImage(
             continue;
         }
 
-        const cv::Mat image = cv::imread(imagePath.toStdString(), cv::IMREAD_COLOR);
+        const cv::Mat image = xjw::common::io::readImage(imagePath, cv::IMREAD_COLOR);
         if (image.empty())
         {
             continue;
@@ -376,7 +378,7 @@ std::vector<std::array<double, 3>> loadKnownCameraCentersFromPaths(const QString
         }
 
         Camera camera;
-        if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
+        if (!camera.loadFromFile(xjw::common::io::toUtf8Path(cameraPath)) || !camera.isValid())
         {
             if (errorMessage)
             {
@@ -421,7 +423,7 @@ std::vector<std::array<double, 3>> loadKnownCameraViewingDirectionsFromPaths(con
         }
 
         Camera camera;
-        if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
+        if (!camera.loadFromFile(xjw::common::io::toUtf8Path(cameraPath)) || !camera.isValid())
         {
             if (errorMessage)
             {
@@ -576,7 +578,7 @@ std::vector<std::array<int, 2>> loadKnownCameraOverlapPairsFromPaths(const QStri
         }
 
         Camera camera;
-        if (!camera.loadFromFile(cameraPath.toStdString()) || !camera.isValid())
+        if (!camera.loadFromFile(xjw::common::io::toUtf8Path(cameraPath)) || !camera.isValid())
         {
             if (errorMessage)
             {
@@ -588,7 +590,7 @@ std::vector<std::array<int, 2>> loadKnownCameraOverlapPairsFromPaths(const QStri
         QSize imageSize = QImageReader(imagePath).size();
         if (!imageSize.isValid() || imageSize.width() <= 0 || imageSize.height() <= 0)
         {
-            const cv::Mat image = cv::imread(imagePath.toStdString(), cv::IMREAD_GRAYSCALE);
+            const cv::Mat image = xjw::common::io::readImage(imagePath, cv::IMREAD_GRAYSCALE);
             if (!image.empty())
             {
                 imageSize = QSize(image.cols, image.rows);
@@ -605,7 +607,7 @@ std::vector<std::array<int, 2>> loadKnownCameraOverlapPairsFromPaths(const QStri
         }
 
         OverlapImageInput input;
-        input.imagePath = imagePath.toStdString();
+        input.imagePath = xjw::common::io::toUtf8Path(imagePath);
         input.camera = camera;
         input.width = imageSize.width();
         input.height = imageSize.height();
@@ -1449,7 +1451,7 @@ int safeDefaultFeatureMaxImageDim(const QString &featureAlgorithm)
     return 2048;
 }
 
-int resolveFeatureMaxImageDim(const SFMServiceOptions &opts,
+int resolveFeatureMaxImageDim(const AerialTriangulationServiceOptions &opts,
                               const QualityPresets &presets,
                               const QString &featureAlgorithm)
 {
@@ -1780,7 +1782,7 @@ FeatureOutput extractFeatureWithAdaptiveRetry(const QString &featureAlgorithm,
         LOG_WARN(QStringLiteral("  %1 CUDA OOM: %2 GPU 自适应降级仍失败，切换 CPU 模型重试")
             .arg(featureAlgorithm.toUpper(), imageName));
         extractorCfg->useCuda = false;
-        extractorCfg->modelPath = cpuExtractorModelPath.toStdString();
+        extractorCfg->modelPath = xjw::common::io::toUtf8Path(cpuExtractorModelPath);
         if (extractorCfg->maxImageDim <= 0)
         {
             extractorCfg->maxImageDim = safeDefaultFeatureMaxImageDim(featureAlgorithm);
@@ -2879,11 +2881,11 @@ GuidedRematchExecutionStats appendGuidedRematchCandidatesToPairs(
 } // anonymous namespace
 
 // ══════════════════════════════════════════════════════════════════════════════
-// SFMService::run  — 一站式增量 SFM 全自动主入口（同步阻塞）
+// AerialTriangulationService::run  — 对齐照片式空三主入口（同步阻塞）
 // ══════════════════════════════════════════════════════════════════════════════
-SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
+AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationServiceOptions &opts)
 {
-    SFMServiceResult result;
+    AerialTriangulationServiceResult result;
     QElapsedTimer elapsedTimer;
     elapsedTimer.start();
 
@@ -3084,7 +3086,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
             }
 
             ExtractorConfig extractorCfg;
-            extractorCfg.modelPath     = extractorModelPath.toStdString();
+            extractorCfg.modelPath     = xjw::common::io::toUtf8Path(extractorModelPath);
             extractorCfg.maxKeypoints  = presets.featureMaxKeypoints;
             extractorCfg.detThreshold  = presets.featureDetectionThreshold;
             extractorCfg.nmsRadius     = presets.featureNmsRadius;
@@ -3121,7 +3123,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                 const QString &imgPath = idToPath[id];
                 const QFileInfo fi(imgPath);
 
-                cv::Mat image = cv::imread(imgPath.toStdString(), cv::IMREAD_GRAYSCALE);
+                cv::Mat image = xjw::common::io::readImage(imgPath, cv::IMREAD_GRAYSCALE);
                 if (image.empty()) 
                 {
                     LOG_WARN(QStringLiteral("  无法读取图像: %1").arg(fi.fileName()));
@@ -3923,7 +3925,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                 ImageFeatureCache &fc = featureCache[id];
                 if (fc.imgH == 0 || fc.imgW == 0) 
                 {
-                    cv::Mat img = cv::imread(idToPath[id].toStdString(), cv::IMREAD_GRAYSCALE);
+                    cv::Mat img = xjw::common::io::readImage(idToPath[id], cv::IMREAD_GRAYSCALE);
                     if (!img.empty()) { fc.imgH = img.rows; fc.imgW = img.cols; }
                     else              { fc.imgH = 1000;     fc.imgW = 1000;     }
                 }
@@ -4007,7 +4009,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
 
         // 每个工作线程独立持有一个 LightGlueMatcher，避免模型权重并发写入问题
         xjw::feature_match::LightGlueConfig lgCfg;
-        lgCfg.matcherModelPath = lgModelPath.toStdString();
+        lgCfg.matcherModelPath = xjw::common::io::toUtf8Path(lgModelPath);
         lgCfg.useCuda = useCuda;
         lgCfg.cudaDevice = 0;
         lgCfg.scoreThreshold = activeMatchThreshold;
@@ -4725,7 +4727,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
         int imgH = fc.imgH;
         if (imgW == 0 || imgH == 0)
         {
-            cv::Mat img = cv::imread(idToPath[id].toStdString(), cv::IMREAD_GRAYSCALE);
+            cv::Mat img = xjw::common::io::readImage(idToPath[id], cv::IMREAD_GRAYSCALE);
             if (!img.empty())
             {
                 imgW = img.cols;
@@ -4746,8 +4748,10 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
             const QString &camPath = opts.cameraPaths[static_cast<int>(id)];
             if (!camPath.isEmpty() && QFileInfo::exists(camPath))
             {
-                sfm.addImage(id, idToPath[id].toStdString(),
-                             camPath.toStdString(), kpts);
+                sfm.addImage(id,
+                             xjw::common::io::toUtf8Path(idToPath[id]),
+                             xjw::common::io::toUtf8Path(camPath),
+                             kpts);
                 added = true;
                 ++cameraFromFile;
             }
@@ -4763,7 +4767,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                 Camera cam;
                 if (xjw::gui::project::cameraFromJson(metaIt.value(), &cam) && cam.isValid())
                 {
-                    sfm.addImageWithCamera(id, idToPath[id].toStdString(), cam, kpts);
+                    sfm.addImageWithCamera(id, xjw::common::io::toUtf8Path(idToPath[id]), cam, kpts);
                     added = true;
                     ++cameraFromMeta;
                 }
@@ -4807,7 +4811,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                     .arg(fuPx, 0, 'f', 2).arg(fvPx, 0, 'f', 2)
                     .arg(cuPx, 0, 'f', 2).arg(cvPx, 0, 'f', 2));
             }
-            sfm.addImageWithCamera(id, idToPath[id].toStdString(), estimatedCam, kpts);
+            sfm.addImageWithCamera(id, xjw::common::io::toUtf8Path(idToPath[id]), estimatedCam, kpts);
             added = true;
             ++cameraFromUser;
         }
@@ -4819,7 +4823,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
             const double focalPx = std::max(imgW, imgH) * 1.2;
             estimatedCam.setIntrinsics(focalPx, focalPx,
                                        imgW * 0.5, imgH * 0.5);
-            sfm.addImageWithCamera(id, idToPath[id].toStdString(), estimatedCam, kpts);
+            sfm.addImageWithCamera(id, xjw::common::io::toUtf8Path(idToPath[id]), estimatedCam, kpts);
             ++cameraEstimated;
         }
 
@@ -4980,7 +4984,7 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                         int imgH = fc.imgH;
                         if (imgW == 0 || imgH == 0)
                         {
-                            cv::Mat img = cv::imread(idToPath[id].toStdString(), cv::IMREAD_GRAYSCALE);
+                            cv::Mat img = xjw::common::io::readImage(idToPath[id], cv::IMREAD_GRAYSCALE);
                             if (!img.empty())
                             {
                                 imgW = img.cols;
@@ -4999,7 +5003,10 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                             const QString &camPath = opts.cameraPaths[static_cast<int>(id)];
                             if (!camPath.isEmpty() && QFileInfo::exists(camPath))
                             {
-                                guidedSfm.addImage(id, idToPath[id].toStdString(), camPath.toStdString(), kpts);
+                                guidedSfm.addImage(id,
+                                                   xjw::common::io::toUtf8Path(idToPath[id]),
+                                                   xjw::common::io::toUtf8Path(camPath),
+                                                   kpts);
                                 added = true;
                             }
                         }
@@ -5013,7 +5020,10 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                                 Camera cam;
                                 if (xjw::gui::project::cameraFromJson(metaIt.value(), &cam) && cam.isValid())
                                 {
-                                    guidedSfm.addImageWithCamera(id, idToPath[id].toStdString(), cam, kpts);
+                                    guidedSfm.addImageWithCamera(id,
+                                                                 xjw::common::io::toUtf8Path(idToPath[id]),
+                                                                 cam,
+                                                                 kpts);
                                     added = true;
                                 }
                             }
@@ -5048,7 +5058,10 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                                 cvPx = imgH * 0.5;
                             }
                             estimatedCam.setIntrinsics(fuPx, fvPx, cuPx, cvPx);
-                            guidedSfm.addImageWithCamera(id, idToPath[id].toStdString(), estimatedCam, kpts);
+                            guidedSfm.addImageWithCamera(id,
+                                                         xjw::common::io::toUtf8Path(idToPath[id]),
+                                                         estimatedCam,
+                                                         kpts);
                             added = true;
                         }
 
@@ -5057,7 +5070,10 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
                             Camera estimatedCam;
                             const double focalPx = std::max(imgW, imgH) * 1.2;
                             estimatedCam.setIntrinsics(focalPx, focalPx, imgW * 0.5, imgH * 0.5);
-                            guidedSfm.addImageWithCamera(id, idToPath[id].toStdString(), estimatedCam, kpts);
+                            guidedSfm.addImageWithCamera(id,
+                                                         xjw::common::io::toUtf8Path(idToPath[id]),
+                                                         estimatedCam,
+                                                         kpts);
                         }
                     }
 
@@ -5390,7 +5406,8 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
             try
             {
                 LOG_INFO(QStringLiteral("SFM: 开始写出稀疏 PLY → %1").arg(plyPath));
-                plapoint::io::writePly<float>(plyPath.toStdString(), cloud, plapoint::io::PlyFormat::BinaryLE);
+                plapoint::io::writePly<float>(
+                    xjw::common::io::toNativeNarrowPath(plyPath), cloud, plapoint::io::PlyFormat::BinaryLE);
                 result.sparseCloudPath = plyPath;
                 const bool baApplied = sfmResult.baTracksTotal > 0 || sfmResult.baTracksOptimized > 0;
                 result.qualityMetadata = xjw::common::project::buildSparseQualityMetadata(
@@ -5454,8 +5471,8 @@ SFMServiceResult runSingleSfmAttempt(const SFMServiceOptions &opts)
     return result;
 }
 
-int minimumUsableSparsePointCountForSiftFallback(const SFMServiceOptions &opts,
-                                                 const SFMServiceResult &result)
+int minimumUsableSparsePointCountForSiftFallback(const AerialTriangulationServiceOptions &opts,
+                                                 const AerialTriangulationServiceResult &result)
 {
     const int imageCount = static_cast<int>(opts.images.size());
     const int registeredImages = std::max(0, result.numRegisteredImages);
@@ -5465,8 +5482,8 @@ int minimumUsableSparsePointCountForSiftFallback(const SFMServiceOptions &opts,
     return std::max(300, registeredTarget * 100);
 }
 
-bool primarySfmResultHasProductionSparseCloud(const SFMServiceOptions &opts,
-                                              const SFMServiceResult &result)
+bool primarySfmResultHasProductionSparseCloud(const AerialTriangulationServiceOptions &opts,
+                                              const AerialTriangulationServiceResult &result)
 {
     if (!result.success)
     {
@@ -5487,8 +5504,8 @@ bool primarySfmResultHasProductionSparseCloud(const SFMServiceOptions &opts,
     return result.numPoints3D >= minimumUsableSparsePointCountForSiftFallback(opts, result);
 }
 
-bool shouldRetrySfmWithSiftFallback(const SFMServiceOptions &opts,
-                                    const SFMServiceResult &result)
+bool shouldRetrySfmWithSiftFallback(const AerialTriangulationServiceOptions &opts,
+                                    const AerialTriangulationServiceResult &result)
 {
     const QString featureAlgorithm = normalizedAlgorithm(opts.featureAlgorithm, QStringLiteral("disk"));
     const QString matchAlgorithm = normalizedAlgorithm(opts.matchAlgorithm, QStringLiteral("lightglue"));
@@ -5533,9 +5550,9 @@ bool shouldRetrySfmWithSiftFallback(const SFMServiceOptions &opts,
     return largestRatio < 0.95;
 }
 
-SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
+AerialTriangulationServiceResult AerialTriangulationService::run(const AerialTriangulationServiceOptions &opts)
 {
-    SFMServiceResult firstResult = runSingleSfmAttempt(opts);
+    AerialTriangulationServiceResult firstResult = runSingleSfmAttempt(opts);
     if (!shouldRetrySfmWithSiftFallback(opts, firstResult))
     {
         return firstResult;
@@ -5543,12 +5560,12 @@ SFMServiceResult SFMService::run(const SFMServiceOptions &opts)
 
     LOG_WARN(QStringLiteral(
         "SFM 默认 DISK+LightGlue 匹配图不连通，自动切换 SIFT+BF-L2 重跑一次空三"));
-    SFMServiceOptions fallbackOptions = opts;
+    AerialTriangulationServiceOptions fallbackOptions = opts;
     fallbackOptions.featureAlgorithm = QStringLiteral("sift");
     fallbackOptions.matchAlgorithm = QStringLiteral("sift_bf_l2");
     fallbackOptions.cudaParallelPairs = 1;
 
-    SFMServiceResult fallbackResult = runSingleSfmAttempt(fallbackOptions);
+    AerialTriangulationServiceResult fallbackResult = runSingleSfmAttempt(fallbackOptions);
     if (fallbackResult.success || !firstResult.success)
     {
         QJsonObject diagnostics = fallbackResult.sfmDiagnostics;

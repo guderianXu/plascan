@@ -6,15 +6,15 @@ from pathlib import Path
 ROOT = Path(__file__).resolve().parents[1]
 
 
-class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
+class AerialTriangulationServiceDefaultAlgorithmsTest(unittest.TestCase):
     def test_one_click_sfm_defaults_to_disk_lightglue(self):
-        header = (ROOT / "src/core/pipeline/SFMService.h").read_text(encoding="utf-8")
+        header = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.h").read_text(encoding="utf-8")
 
         self.assertRegex(header, r'featureAlgorithm\s*=\s*QStringLiteral\("disk"\)')
         self.assertRegex(header, r'matchAlgorithm\s*=\s*QStringLiteral\("lightglue"\)')
 
     def test_one_click_sfm_uses_algorithm_aware_feature_and_match_pipeline(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
 
         self.assertNotIn("ProjectIO::findSpForImage", source)
         self.assertNotIn('#include "SuperPoint.h"', source)
@@ -25,7 +25,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("match_algorithm", source)
 
     def test_sfm_pipeline_can_generate_sift_traditional_matches(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
         cli = (ROOT / "src/cli/cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
 
         self.assertIn("TraditionalFeatureMatcher.h", source)
@@ -47,8 +47,8 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("sfmOptions.enableGuidedRematching = sfmGuidedRematching", cli)
 
     def test_sfm_two_stage_matching_uses_skeleton_then_guided_fill(self):
-        header = (ROOT / "src/core/pipeline/SFMService.h").read_text(encoding="utf-8")
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        header = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.h").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
 
         self.assertIn("enableTwoStageMatching", header)
         self.assertIn("skeletonFeatureMaxKeypoints", header)
@@ -74,7 +74,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertNotIn("knnMatchL2Cuda", matcher)
 
     def test_guided_rematching_can_create_missing_pair_from_registered_cameras(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
 
         self.assertIn("fundamentalFromRegisteredCameras", source)
         self.assertIn("pairIndexByKey.insert(guidedPairKey(imageA, imageB), pairs->size())", source)
@@ -84,7 +84,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("fundamentalFromRegisteredCameras(reconstruction.camera(pair.idA)", source)
 
     def test_guided_rematching_requires_quality_gain_before_accepting_second_pass(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
 
         self.assertIn("guided_point_gain", source)
         self.assertIn("guided_min_point_gain", source)
@@ -97,7 +97,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("guided_rms_acceptable", source)
 
     def test_sift_fallback_does_not_replace_usable_disk_result(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
 
         self.assertIn("primarySfmResultHasProductionSparseCloud", source)
         helper_start = source.index("bool primarySfmResultHasProductionSparseCloud")
@@ -108,14 +108,14 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("minimumUsableSparsePointCountForSiftFallback", helper_body)
 
         retry_start = source.index("bool shouldRetrySfmWithSiftFallback")
-        retry_end = source.index("SFMServiceResult SFMService::run", retry_start)
+        retry_end = source.index("AerialTriangulationServiceResult AerialTriangulationService::run", retry_start)
         retry_body = source[retry_start:retry_end]
 
         self.assertIn("primarySfmResultHasProductionSparseCloud(opts, result)", retry_body)
         self.assertIn("return false;", retry_body)
 
     def test_sfm_logs_match_result_catalog_diagnostics_without_using_best_variant_for_input(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
 
         self.assertIn('#include "MatchResultCatalog.h"', source)
         self.assertIn("xjw::pipeline::MatchResultCatalog", source)
@@ -124,7 +124,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("best variant 只是展示/诊断用途", source)
 
         diagnostic_start = source.index("void logSfmMatchCacheCatalogDiagnostics")
-        diagnostic_end = source.index("SFMServiceResult runSingleSfmAttempt", diagnostic_start)
+        diagnostic_end = source.index("AerialTriangulationServiceResult runSingleSfmAttempt", diagnostic_start)
         diagnostic_body = source[diagnostic_start:diagnostic_end]
         self.assertIn("bestVariantIndex", diagnostic_body)
 
@@ -136,7 +136,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("findExistingMatchCache(baseB, baseA)", selection_body)
 
     def test_disk_and_aliked_lightglue_use_dedicated_torchscript_models(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
         runner_source = (ROOT / "src/core/pipeline/FeatureMatchRunner.cpp").read_text(encoding="utf-8")
         export_script = (ROOT / "scripts/export_lightglue_torchscript.py").read_text(encoding="utf-8")
         start = source.index("QStringList lightGlueModelCandidates")
@@ -204,7 +204,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("CV_PI", matcher_source)
 
     def test_sift_lightglue_uses_traditional_fallback_for_weak_pairs(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
         runner_source = (ROOT / "src/core/pipeline/FeatureMatchRunner.cpp").read_text(encoding="utf-8")
 
         self.assertIn("runTraditionalSiftFallback", source)
@@ -232,7 +232,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("优先由当前特征 suffix 决定算法", runner_source)
 
     def test_disk_lightglue_has_half_turn_retry_for_opposite_flight_strips(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
         runner_source = (ROOT / "src/core/pipeline/FeatureMatchRunner.cpp").read_text(encoding="utf-8")
 
         for text in (source, runner_source):
@@ -248,8 +248,8 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertIn("lightglueAlgo == QStringLiteral(\"aliked\")", runner_source)
 
     def test_disk_feature_extraction_uses_high_capacity_model_and_quality_cap(self):
-        header = (ROOT / "src/core/pipeline/SFMService.h").read_text(encoding="utf-8")
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        header = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.h").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
         factory = (ROOT / "src/core/feature_extractors/ExtractorFactory.cpp").read_text(encoding="utf-8")
         disk_cpp = (ROOT / "src/core/feature_extractors/disk/DiskExtractor.cpp").read_text(encoding="utf-8")
         aliked_cpp = (ROOT / "src/core/feature_extractors/aliked/AlikedExtractor.cpp").read_text(encoding="utf-8")
@@ -275,8 +275,8 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertNotIn("m_cfg.maxKeypoints", aliked_cpp)
 
     def test_one_click_feature_extraction_filters_pixels_below_five_by_default(self):
-        header = (ROOT / "src/core/pipeline/SFMService.h").read_text(encoding="utf-8")
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        header = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.h").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
 
         self.assertIn("featureGrayscaleMin", header)
         self.assertRegex(header, r"featureGrayscaleMin\s*=\s*5\.0f\s*/\s*255\.0f")
@@ -285,7 +285,7 @@ class SfmServiceDefaultAlgorithmsTest(unittest.TestCase):
         self.assertRegex(source, r"extractorCfg\.grayscaleMax\s*=\s*opts\.featureGrayscaleMax")
 
     def test_disk_feature_extraction_adapts_after_cuda_oom(self):
-        source = (ROOT / "src/core/pipeline/SFMService.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src/core/aerial_triangulation/AerialTriangulationService.cpp").read_text(encoding="utf-8")
         cli = (ROOT / "src/cli/cli_reconstruct_pipeline.cpp").read_text(encoding="utf-8")
 
         self.assertIn("adaptiveFeatureMaxImageDims", source)

@@ -123,31 +123,31 @@ int scaledLimit(int value, double scale)
 void applyPreselection(AerialTriangulationResolvedConfig &resolved,
                        const AerialTriangulationWorkflowOptions &options)
 {
-    SFMServiceOptions &sfm = resolved.sfmOptions;
+    AerialTriangulationServiceOptions &service = resolved.serviceOptions;
     const QString referenceMode = normalizedToken(options.referenceMode, QStringLiteral("source_code"));
 
-    sfm.autoRestrictKnownCameraPairs = true;
-    sfm.knownCameraPairWindow = 4;
-    sfm.knownCameraSpatialNeighborCount = 8;
-    sfm.useKnownCameraOverlapPairs = options.referencePreselection;
+    service.autoRestrictKnownCameraPairs = true;
+    service.knownCameraPairWindow = 4;
+    service.knownCameraSpatialNeighborCount = 8;
+    service.useKnownCameraOverlapPairs = options.referencePreselection;
     QString pairPlanningMode = QStringLiteral("auto");
 
     if (options.referencePreselection && referenceMode == QStringLiteral("sequence"))
     {
-        sfm.useKnownCameraOverlapPairs = false;
-        sfm.knownCameraSpatialNeighborCount = 0;
+        service.useKnownCameraOverlapPairs = false;
+        service.knownCameraSpatialNeighborCount = 0;
         pairPlanningMode = QStringLiteral("sequence");
     }
     else if (options.referencePreselection && referenceMode == QStringLiteral("estimated"))
     {
-        sfm.useKnownCameraOverlapPairs = false;
-        sfm.knownCameraSpatialNeighborCount = 8;
+        service.useKnownCameraOverlapPairs = false;
+        service.knownCameraSpatialNeighborCount = 8;
         pairPlanningMode = QStringLiteral("estimated");
     }
     else if (options.referencePreselection)
     {
-        sfm.useKnownCameraOverlapPairs = true;
-        sfm.knownCameraSpatialNeighborCount = 8;
+        service.useKnownCameraOverlapPairs = true;
+        service.knownCameraSpatialNeighborCount = 8;
         pairPlanningMode = QStringLiteral("source_code");
     }
     else if (options.genericPreselection)
@@ -164,7 +164,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     const AerialTriangulationWorkflowOptions &options)
 {
     AerialTriangulationResolvedConfig resolved;
-    SFMServiceOptions &sfm = resolved.sfmOptions;
+    AerialTriangulationServiceOptions &service = resolved.serviceOptions;
 
     const QualityPreset preset = presetForQuality(options.quality);
     QString featureAlgorithm = normalizedToken(options.featureAlgorithm, QStringLiteral("disk"));
@@ -172,37 +172,37 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     applyMatchPipeline(options.matchPipeline, featureAlgorithm, matchAlgorithm);
     matchAlgorithm = normalizeMatchAlgorithm(matchAlgorithm);
 
-    sfm.images = options.images;
-    sfm.cameraPaths = options.cameraPaths;
-    sfm.plascanPath = options.projectPath;
-    sfm.projectMeta = options.projectMeta;
-    sfm.outputDir = QDir(QDir::cleanPath(options.outputDir)).filePath(QStringLiteral("sfm_sparse"));
-    sfm.quality = preset.sfmQuality;
-    sfm.threads = std::max(1, options.threads);
-    sfm.device = normalizedToken(options.device, QStringLiteral("auto"));
-    sfm.featureAlgorithm = featureAlgorithm;
-    sfm.matchAlgorithm = matchAlgorithm;
-    sfm.featureMaxImageDim = preset.featureMaxImageDim;
-    sfm.featureGrayscaleMin = options.featureGrayscaleMin;
-    sfm.featureGrayscaleMax = options.featureGrayscaleMax;
-    sfm.autoGenerateMissingMatches = options.autoGenerateMissingMatches;
-    sfm.restrictPairs = options.restrictPairs;
-    sfm.allowedPairs = options.allowedPairs;
-    sfm.enableTwoStageMatching = true;
-    sfm.enableGuidedRematching = options.guidedImageMatching || preset.enableGuidedByDefault;
-    sfm.skeletonFeatureMaxKeypoints = scaledLimit(options.keypointLimit, preset.budgetScale);
-    sfm.maxTiePointsPerImage = scaledLimit(options.tiepointLimit, preset.budgetScale);
-    sfm.tiePointGridColumns = 8;
-    sfm.tiePointGridRows = 8;
-    sfm.maxTiePointsPerGridCell = sfm.maxTiePointsPerImage > 0
-        ? std::max(1, sfm.maxTiePointsPerImage / sfm.tiePointGridColumns)
+    service.images = options.images;
+    service.cameraPaths = options.cameraPaths;
+    service.plascanPath = options.projectPath;
+    service.projectMeta = options.projectMeta;
+    service.outputDir = QDir(QDir::cleanPath(options.outputDir)).filePath(QStringLiteral("sfm_sparse"));
+    service.quality = preset.sfmQuality;
+    service.threads = std::max(1, options.threads);
+    service.device = normalizedToken(options.device, QStringLiteral("auto"));
+    service.featureAlgorithm = featureAlgorithm;
+    service.matchAlgorithm = matchAlgorithm;
+    service.featureMaxImageDim = preset.featureMaxImageDim;
+    service.featureGrayscaleMin = options.featureGrayscaleMin;
+    service.featureGrayscaleMax = options.featureGrayscaleMax;
+    service.autoGenerateMissingMatches = options.autoGenerateMissingMatches;
+    service.restrictPairs = options.restrictPairs;
+    service.allowedPairs = options.allowedPairs;
+    service.enableTwoStageMatching = true;
+    service.enableGuidedRematching = options.guidedImageMatching || preset.enableGuidedByDefault;
+    service.skeletonFeatureMaxKeypoints = scaledLimit(options.keypointLimit, preset.budgetScale);
+    service.maxTiePointsPerImage = scaledLimit(options.tiepointLimit, preset.budgetScale);
+    service.tiePointGridColumns = 8;
+    service.tiePointGridRows = 8;
+    service.maxTiePointsPerGridCell = service.maxTiePointsPerImage > 0
+        ? std::max(1, service.maxTiePointsPerImage / service.tiePointGridColumns)
         : 0;
-    sfm.cancelFlag = options.cancelFlag;
-    sfm.progressFn = options.progressFn;
-    sfm.pairMatchedFn = options.pairMatchedFn;
-    sfm.cudaParallelPairs = sfm.device == QStringLiteral("cpu")
+    service.cancelFlag = options.cancelFlag;
+    service.progressFn = options.progressFn;
+    service.pairMatchedFn = options.pairMatchedFn;
+    service.cudaParallelPairs = service.device == QStringLiteral("cpu")
         ? 1
-        : std::clamp(std::max(1, sfm.threads / 4), 1, 2);
+        : std::clamp(std::max(1, service.threads / 4), 1, 2);
 
     applyPreselection(resolved, options);
 
@@ -212,38 +212,40 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     resolved.resolvedSettings.insert(QStringLiteral("feature_algorithm"), featureAlgorithm);
     resolved.resolvedSettings.insert(QStringLiteral("match_algorithm"), matchAlgorithm);
     resolved.resolvedSettings.insert(QStringLiteral("keypoint_limit"), options.keypointLimit);
-    resolved.resolvedSettings.insert(QStringLiteral("resolved_keypoint_budget"), sfm.skeletonFeatureMaxKeypoints);
+    resolved.resolvedSettings.insert(QStringLiteral("resolved_keypoint_budget"),
+                                     service.skeletonFeatureMaxKeypoints);
     resolved.resolvedSettings.insert(QStringLiteral("tiepoint_limit"), options.tiepointLimit);
-    resolved.resolvedSettings.insert(QStringLiteral("resolved_tiepoint_limit"), sfm.maxTiePointsPerImage);
-    resolved.resolvedSettings.insert(QStringLiteral("mask_apply_mode"), normalizedToken(options.maskApplyMode, QStringLiteral("none")));
+    resolved.resolvedSettings.insert(QStringLiteral("resolved_tiepoint_limit"), service.maxTiePointsPerImage);
+    resolved.resolvedSettings.insert(QStringLiteral("mask_apply_mode"),
+                                     normalizedToken(options.maskApplyMode, QStringLiteral("none")));
     resolved.resolvedSettings.insert(QStringLiteral("exclude_fixed_tie_points"), options.excludeFixedTiePoints);
     resolved.resolvedSettings.insert(QStringLiteral("reset_current_alignment"), options.resetAlignment);
     resolved.resolvedSettings.insert(QStringLiteral("save_project_after_each_step"), options.saveAfterEachStep);
     resolved.resolvedSettings.insert(QStringLiteral("adaptive_camera_model_fitting"), options.adaptiveCameraModelFitting);
     resolved.resolvedSettings.insert(QStringLiteral("adaptive_known_pose_soft_prior"), true);
-    resolved.resolvedSettings.insert(QStringLiteral("restrict_pairs"), sfm.restrictPairs);
-    resolved.resolvedSettings.insert(QStringLiteral("allowed_pair_count"), sfm.allowedPairs.size());
+    resolved.resolvedSettings.insert(QStringLiteral("restrict_pairs"), service.restrictPairs);
+    resolved.resolvedSettings.insert(QStringLiteral("allowed_pair_count"), service.allowedPairs.size());
 
     return resolved;
 }
 
 AerialTriangulationWorkflowResult AerialTriangulationWorkflow::run(
     const AerialTriangulationWorkflowOptions &options,
-    const SfmRunner &runner)
+    const ServiceRunner &runner)
 {
     AerialTriangulationWorkflowResult result;
     result.config = resolveConfig(options);
     if (!runner)
     {
-        result.sfmResult.success = false;
-        result.sfmResult.errorMessage = QStringLiteral("空中三角测量 workflow 缺少 SfM 执行器。");
+        result.serviceResult.success = false;
+        result.serviceResult.errorMessage = QStringLiteral("空中三角测量 workflow 缺少空三服务执行器。");
         return result;
     }
-    result.sfmResult = runner(result.config.sfmOptions);
-    result.sfmResult.resultRecordExtra.insert(QStringLiteral("workflow_kind"),
-                                              QStringLiteral("aerial_triangulation_align_photos"));
-    result.sfmResult.resultRecordExtra.insert(QStringLiteral("resolved_settings"),
-                                              result.config.resolvedSettings);
+    result.serviceResult = runner(result.config.serviceOptions);
+    result.serviceResult.resultRecordExtra.insert(QStringLiteral("workflow_kind"),
+                                                  QStringLiteral("aerial_triangulation_align_photos"));
+    result.serviceResult.resultRecordExtra.insert(QStringLiteral("resolved_settings"),
+                                                  result.config.resolvedSettings);
     return result;
 }
 

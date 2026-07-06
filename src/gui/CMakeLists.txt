@@ -78,14 +78,21 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
   ${CMAKE_SOURCE_DIR}/src/core/dense_match
+  ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
   ${CMAKE_SOURCE_DIR}/src/core/pipeline
   ${CMAKE_SOURCE_DIR}/src/common
   ${OpenCV_INCLUDE_DIRS}
   ${TORCH_INCLUDE_DIRS}
 )
 
-target_include_directories(gui_project PRIVATE $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>)
-target_include_directories(gui_tasks PRIVATE $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>)
+target_include_directories(gui_project PRIVATE
+  $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>
+  ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
+)
+target_include_directories(gui_tasks PRIVATE
+  $<TARGET_PROPERTY:plascan_gui,INCLUDE_DIRECTORIES>
+  ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
+)
 target_compile_definitions(plascan_gui PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 target_compile_definitions(gui_tasks PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
@@ -124,6 +131,7 @@ target_link_libraries(plascan_gui PRIVATE
   Qt6::Concurrent
   Qt6::ShaderTools
   plascan_common_log
+  plascan_common_io
   ${TORCH_LIBRARIES}
   ${OpenCV_LIBS}
   ${PLASCAN_LIBZIP_TARGET}

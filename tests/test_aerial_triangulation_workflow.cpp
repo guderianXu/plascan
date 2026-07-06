@@ -38,21 +38,21 @@ TEST(AerialTriangulationWorkflowCoreTest, HighestQualityMapsToFullResolutionSfmA
 
     const auto resolved = xjw::gui::AerialTriangulationWorkflow::resolveConfig(options);
 
-    EXPECT_EQ(resolved.sfmOptions.images, options.images);
-    EXPECT_EQ(resolved.sfmOptions.cameraPaths, options.cameraPaths);
-    EXPECT_EQ(resolved.sfmOptions.plascanPath, options.projectPath);
-    EXPECT_EQ(resolved.sfmOptions.projectMeta, options.projectMeta);
-    EXPECT_EQ(resolved.sfmOptions.outputDir,
+    EXPECT_EQ(resolved.serviceOptions.images, options.images);
+    EXPECT_EQ(resolved.serviceOptions.cameraPaths, options.cameraPaths);
+    EXPECT_EQ(resolved.serviceOptions.plascanPath, options.projectPath);
+    EXPECT_EQ(resolved.serviceOptions.projectMeta, options.projectMeta);
+    EXPECT_EQ(resolved.serviceOptions.outputDir,
               QStringLiteral("E:/project/assets/aerial_triangulation/sfm_sparse"));
-    EXPECT_EQ(resolved.sfmOptions.quality, 3);
-    EXPECT_EQ(resolved.sfmOptions.featureMaxImageDim, -1);
-    EXPECT_EQ(resolved.sfmOptions.skeletonFeatureMaxKeypoints, 40000);
-    EXPECT_EQ(resolved.sfmOptions.maxTiePointsPerImage, 4000);
-    EXPECT_EQ(resolved.sfmOptions.maxTiePointsPerGridCell, 500);
-    EXPECT_EQ(resolved.sfmOptions.featureAlgorithm, QStringLiteral("sift"));
-    EXPECT_EQ(resolved.sfmOptions.matchAlgorithm, QStringLiteral("lightglue"));
-    EXPECT_TRUE(resolved.sfmOptions.enableGuidedRematching);
-    EXPECT_TRUE(resolved.sfmOptions.enableTwoStageMatching);
+    EXPECT_EQ(resolved.serviceOptions.quality, 3);
+    EXPECT_EQ(resolved.serviceOptions.featureMaxImageDim, -1);
+    EXPECT_EQ(resolved.serviceOptions.skeletonFeatureMaxKeypoints, 40000);
+    EXPECT_EQ(resolved.serviceOptions.maxTiePointsPerImage, 4000);
+    EXPECT_EQ(resolved.serviceOptions.maxTiePointsPerGridCell, 500);
+    EXPECT_EQ(resolved.serviceOptions.featureAlgorithm, QStringLiteral("sift"));
+    EXPECT_EQ(resolved.serviceOptions.matchAlgorithm, QStringLiteral("lightglue"));
+    EXPECT_TRUE(resolved.serviceOptions.enableGuidedRematching);
+    EXPECT_TRUE(resolved.serviceOptions.enableTwoStageMatching);
     EXPECT_TRUE(resolved.resolvedSettings.value(QStringLiteral("adaptive_known_pose_soft_prior")).toBool());
 }
 
@@ -65,12 +65,12 @@ TEST(AerialTriangulationWorkflowCoreTest, LowQualityUsesReducedImageScaleAndCons
 
     const auto resolved = xjw::gui::AerialTriangulationWorkflow::resolveConfig(options);
 
-    EXPECT_EQ(resolved.sfmOptions.quality, 0);
-    EXPECT_EQ(resolved.sfmOptions.featureMaxImageDim, 2048);
-    EXPECT_EQ(resolved.sfmOptions.skeletonFeatureMaxKeypoints, 10000);
-    EXPECT_EQ(resolved.sfmOptions.maxTiePointsPerImage, 1000);
-    EXPECT_EQ(resolved.sfmOptions.maxTiePointsPerGridCell, 125);
-    EXPECT_FALSE(resolved.sfmOptions.enableGuidedRematching);
+    EXPECT_EQ(resolved.serviceOptions.quality, 0);
+    EXPECT_EQ(resolved.serviceOptions.featureMaxImageDim, 2048);
+    EXPECT_EQ(resolved.serviceOptions.skeletonFeatureMaxKeypoints, 10000);
+    EXPECT_EQ(resolved.serviceOptions.maxTiePointsPerImage, 1000);
+    EXPECT_EQ(resolved.serviceOptions.maxTiePointsPerGridCell, 125);
+    EXPECT_FALSE(resolved.serviceOptions.enableGuidedRematching);
 }
 
 TEST(AerialTriangulationWorkflowCoreTest, ReferenceSequencePreselectionMapsToSequenceWindowPairs)
@@ -82,10 +82,10 @@ TEST(AerialTriangulationWorkflowCoreTest, ReferenceSequencePreselectionMapsToSeq
 
     const auto resolved = xjw::gui::AerialTriangulationWorkflow::resolveConfig(options);
 
-    EXPECT_TRUE(resolved.sfmOptions.autoRestrictKnownCameraPairs);
-    EXPECT_FALSE(resolved.sfmOptions.useKnownCameraOverlapPairs);
-    EXPECT_EQ(resolved.sfmOptions.knownCameraPairWindow, 4);
-    EXPECT_EQ(resolved.sfmOptions.knownCameraSpatialNeighborCount, 0);
+    EXPECT_TRUE(resolved.serviceOptions.autoRestrictKnownCameraPairs);
+    EXPECT_FALSE(resolved.serviceOptions.useKnownCameraOverlapPairs);
+    EXPECT_EQ(resolved.serviceOptions.knownCameraPairWindow, 4);
+    EXPECT_EQ(resolved.serviceOptions.knownCameraSpatialNeighborCount, 0);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("pair_planning_mode")).toString(),
               QStringLiteral("sequence"));
 }
@@ -99,8 +99,8 @@ TEST(AerialTriangulationWorkflowCoreTest, MatchPipelineOverridesFeatureAndMatche
 
     const auto resolved = xjw::gui::AerialTriangulationWorkflow::resolveConfig(options);
 
-    EXPECT_EQ(resolved.sfmOptions.featureAlgorithm, QStringLiteral("sift"));
-    EXPECT_EQ(resolved.sfmOptions.matchAlgorithm, QStringLiteral("bf_l2"));
+    EXPECT_EQ(resolved.serviceOptions.featureAlgorithm, QStringLiteral("sift"));
+    EXPECT_EQ(resolved.serviceOptions.matchAlgorithm, QStringLiteral("bf_l2"));
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("match_pipeline")).toString(),
               QStringLiteral("sift-bf-l2"));
 }

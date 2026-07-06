@@ -123,7 +123,7 @@ class MvsSchedulerConfigTest(unittest.TestCase):
         self.assertNotIn("colorImages[fi] = cv::imread", fusion)
 
     def test_sfm_sparse_export_batches_color_sampling_by_image(self):
-        service = self.read("src/core/pipeline/SFMService.cpp")
+        service = self.read("src/core/aerial_triangulation/AerialTriangulationService.cpp")
 
         self.assertIn("struct SparseExportColorRequest", service)
         self.assertIn("sampleSparseExportColorsByImage", service)

@@ -3,7 +3,7 @@
 #include "ProjectManager.h"
 #include "ProjectIO.h"
 #include "ProjectSupportUtils.h"
-#include "SFMService.h"
+#include "AerialTriangulationService.h"
 #include "AerialTriangulationWorkflow.h"
 #include "MatchResultCatalog.h"
 #include "ReconstructionPrerequisiteReport.h"
@@ -1606,7 +1606,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
     emit pm->atProgressChanged(QStringLiteral("空中三角测量: 启动 SfM/BA..."), 0);
 
     const QStringList sfmImages = images;
-    const QString sfmOutputDir = resolved.sfmOptions.outputDir;
+    const QString sfmOutputDir = resolved.serviceOptions.outputDir;
     const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
     xjw::gui::tasks::runGuarded(
         this,
@@ -1615,11 +1615,11 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
             xjw::gui::AerialTriangulationWorkflowResult workflowResult =
                 xjw::gui::AerialTriangulationWorkflow::run(
                     runWorkflowOptions,
-                    [](const xjw::gui::SFMServiceOptions &runOpts)
+                    [](const xjw::gui::AerialTriangulationServiceOptions &runOpts)
             {
-                return xjw::gui::SFMService::run(runOpts);
+                return xjw::gui::AerialTriangulationService::run(runOpts);
             });
-            xjw::gui::SFMServiceResult result = workflowResult.sfmResult;
+            xjw::gui::AerialTriangulationServiceResult result = workflowResult.serviceResult;
             if (result.success && !assetsDir.isEmpty())
             {
                 QJsonObject report;
@@ -1658,7 +1658,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
          cancelFlag,
          sfmImages,
          sfmOutputDir,
-         projectPath](MenuWorkflowController *controller, xjw::gui::SFMServiceResult result) mutable {
+         projectPath](MenuWorkflowController *controller, xjw::gui::AerialTriangulationServiceResult result) mutable {
             if (!pmGuard)
             {
                 return;
@@ -1674,6 +1674,12 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
             }
 
             const bool wasCanceled = cancelFlag->load(std::memory_order_relaxed);
+            if (wasCanceled)
+            {
+                emit pmGuard->atProgressFinished(false);
+                return;
+            }
+
             for (const auto &sp : result.newFeatureFiles)
             {
                 pmGuard->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
@@ -1731,10 +1737,6 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
             }
 
             emit pmGuard->atProgressFinished(result.success);
-            if (wasCanceled)
-            {
-                return;
-            }
             if (!result.success)
             {
                 QMessageBox::warning(controller->_mainWindow,
@@ -1794,7 +1796,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     runSettings[QStringLiteral("output_dir")] = outputRoot;
 
     auto *pm = _projectManager;
-    xjw::gui::SFMServiceOptions opts;
+    xjw::gui::AerialTriangulationServiceOptions opts;
     opts.images = images;
     opts.plascanPath = pm->currentProjectPath();
     opts.projectMeta = pm->coreProjectMeta();
@@ -1856,7 +1858,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     xjw::gui::tasks::runGuarded(
         this,
         [runOpts = std::move(opts), sfmImages, sfmOutputDir, assetsDir]() mutable {
-            xjw::gui::SFMServiceResult result = xjw::gui::SFMService::run(runOpts);
+            xjw::gui::AerialTriangulationServiceResult result = xjw::gui::AerialTriangulationService::run(runOpts);
 
             if (result.success && !assetsDir.isEmpty())
             {
@@ -1896,7 +1898,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
          projectPath,
          runSettings,
          sfmImages,
-         sfmOutputDir](MenuWorkflowController *controller, xjw::gui::SFMServiceResult result) mutable {
+         sfmOutputDir](MenuWorkflowController *controller, xjw::gui::AerialTriangulationServiceResult result) mutable {
             if (!pmGuard)
             {
                 return;
@@ -1908,6 +1910,13 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                 QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("三维重建"),
                                      QStringLiteral("项目已切换，本次三维重建空三结果未写回。"));
+                return;
+            }
+
+            const bool wasCanceled = cancelFlag->load(std::memory_order_relaxed);
+            if (wasCanceled)
+            {
+                emit pmGuard->atProgressFinished(false);
                 return;
             }
 

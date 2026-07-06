@@ -45,6 +45,8 @@ common/
 ├── math/
 │   ├── Vec.h               # 向量运算模板
 │   └── Vec3Ops.h           # 3D 向量特化
+├── io/
+│   └── PathIO.h/cpp        # UTF-8/本机路径转换、原子文件写入和 OpenCV 图像读写封装
 ├── project/
 │   └── ProjectCommonUtils.h # 项目通用工具
 ├── result/
@@ -231,17 +233,24 @@ core/
 │   ├── PointCloudAlignment.h/cpp # 点云 Sim3 / 最近邻平移配准与 beg/end error CSV
 │   └── DemDifference.h/cpp     # DEM 差分、绝对差分和统计报告
 │
-└── pipeline/                   # 核心流水线桥接 (GUI 可调用)
+├── aerial_triangulation/       # 对齐照片式空中三角测量，职责对应 Metashape Align Photos
+│   ├── AerialTriangulationWorkflow.h/cpp  # 用户级空三参数解析、预选策略映射、服务调用封装
+│   ├── AerialTriangulationService.h/cpp   # 特征/匹配检查、相机注册、BA、空三成果和质量记录
+│   ├── GuidedRematchService.h/cpp         # 基于已注册相机的 guided rematching 候选补匹配
+│   ├── MatchResultCatalog.h/cpp           # 匹配缓存多算法 variant 编目、兼容性状态与最佳结果选择
+│   ├── ReconstructionPrerequisiteReport.h/cpp # 空三前置数据完整性、匹配图连通性和补齐建议
+│   ├── SfmPairPlanner.h                   # SfM 匹配候选规划：足迹重叠/空间邻域/序列窗口/手工配对
+│   └── SfmMatchDiagnostics.h              # 候选图/实际匹配图连通性诊断
+│
+└── pipeline/                   # 通用流水线桥接 (GUI 可调用)
     ├── FeatureMatchRunner.h/cpp  # 特征匹配异步执行器
-    ├── MatchResultCatalog.h/cpp  # 匹配缓存多算法 variant 编目、兼容性状态与最佳结果选择
-    ├── SfmPairPlanner.h        # SfM 匹配候选规划：足迹重叠/空间邻域/序列窗口/手工配对 + priority
-    └── SFMService.h/cpp         # SfM 异步服务
+    └── LightGlueFeatureBudget.h  # LightGlue/SIFT 显存感知关键点预算工具
 ```
 
 `sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
 不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
 
-`pipeline/SFMService.cpp` 在匹配阶段写出 `assets/reports/matching_quality_report.json` 和
+`aerial_triangulation/AerialTriangulationService.cpp` 在匹配阶段写出 `assets/reports/matching_quality_report.json` 和
 `assets/reports/matching_quality_report.csv`。报告记录候选图/实际匹配图连通性、pair 来源统计、优先级、pending/failed/skipped
 状态和失败原因，作为后续 guided rematching、track 优化和 Metashape/ASP/Colmap 对比的基线输入。
 
@@ -353,8 +362,7 @@ gui/
 ├── tasks/                      # 异步任务执行器
 │   ├── FeatureExtractionRunner.h/cpp  # 特征提取异步执行
 │   ├── GuiTaskRunner.h         # GUI 后台任务生命周期守护：runGuarded/postGuarded
-│   ├── ../core/pipeline/FeatureMatchRunner.h/cpp  # 特征匹配异步执行
-│   └── SFMService.h/cpp        # SfM 异步服务
+│   └── ../core/pipeline/FeatureMatchRunner.h/cpp  # 特征匹配异步执行
 │
 ├── views/
 │   └── LayerRenderer.h/cpp     # 图层渲染器
@@ -474,7 +482,7 @@ cli/
   ├─ 特征提取 (SuperPoint/DISK/ALIKED/...) → .sp/.dsk/.alk/... 文件
   ├─ 特征匹配 (SuperGlue/LightGlue/BF/FLANN) → .match 文件 + .match.json sidecar
   └─ 光束法平差 / 增量SfM           → 精化相机 + 稀疏点云
-     (GUI 由 SFMService 编排；bundle_adjust_cli 可在已有项目和 match sidecar 上做 headless BA/A-B)
+     (GUI 由 AerialTriangulationService 编排；bundle_adjust_cli 可在已有项目和 match sidecar 上做 headless BA/A-B)
 
 阶段 2: 密集重建 (CLI 可用)
   ├─ feature_extract_cli  特征提取    → .sp/.dsk/.alk 等
@@ -500,7 +508,7 @@ triangulate_cli -d disp.tif --rect-params rect.xml \
 |------|------|------|
 | 多个 GUI 文件超 1000 行 | `gui/dialogs/`, `gui/main_window/` | 提取 UI 构建逻辑 |
 | `mvs/` 和 `dense_match/` 有重复逻辑 | `SubpixelRefiner` 两个版本 | 统一到 `dense_match/` |
-| SFMService 耦合到 GUI | `core/pipeline/SFMService.cpp` 依赖 `ProjectIO` | 提取 headless SFMService, 启用 sfm_cli |
+| AerialTriangulationService 耦合到 GUI | `core/aerial_triangulation/AerialTriangulationService.cpp` 依赖 `ProjectIO` | 提取 headless AerialTriangulationService, 启用 sfm_cli |
 | 构建依赖 4 个系统符号链接 | `/lib64/libm.so.6`, `libnvrtc-builtins.so.13.0` 等 | 见 `CONTEXT.md` 系统依赖 |
 | ALIKED 导出脚本依赖 lightglue pip 包 | `scripts/export_disk_aliked.py` | 已内联 pure-PyTorch DCN |
 | `export_models.py` DISK/ALIKED 部分废弃 | `scripts/export_models.py` | 移除或更新接口 |

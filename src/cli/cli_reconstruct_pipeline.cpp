@@ -15,7 +15,7 @@
 #include "MatchResultCatalog.h"
 #include "ModelWorkflowService.h"
 #include "ProjectDenseWorkflowConfig.h"
-#include "SFMService.h"
+#include "AerialTriangulationService.h"
 #include "SparseCloudPreprocessor.h"
 #ifndef PLASCAN_THREE_D_ONLY
 #include "TerrainPipeline.h"
@@ -1985,7 +1985,7 @@ int main(int argc, char *argv[])
     std::fprintf(stdout, "[1/%d] SFM 稀疏重建...\n", kTotalStages);
     std::fflush(stdout);
     const auto sfmStart = std::chrono::steady_clock::now();
-    xjw::gui::SFMServiceOptions sfmOptions;
+    xjw::gui::AerialTriangulationServiceOptions sfmOptions;
     sfmOptions.images = images;
     sfmOptions.cameraPaths = cameraPaths;
     sfmOptions.projectMeta = projectMeta;
@@ -2004,7 +2004,7 @@ int main(int argc, char *argv[])
         std::fflush(stdout);
     };
 
-    const xjw::gui::SFMServiceResult sfmResult = xjw::gui::SFMService::run(sfmOptions);
+    const xjw::gui::AerialTriangulationServiceResult sfmResult = xjw::gui::AerialTriangulationService::run(sfmOptions);
     sfmElapsedMs = recordTiming(QStringLiteral("sfm_elapsed_ms"), sfmStart);
     QJsonObject sfmJson;
     sfmJson[QStringLiteral("success")] = sfmResult.success;

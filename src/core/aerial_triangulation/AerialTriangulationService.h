@@ -1,20 +1,20 @@
-// =============================================================================
-// 文件名: SFMService.h
-// 描述:   增量式 SFM（运动恢复结构）一站式服务层。
+﻿// =============================================================================
+// 文件名: AerialTriangulationService.h
+// 描述:   对齐照片式空中三角测量服务层。
 //
-//         本服务实现了"傻瓜式"空中三角测量：
-//           - 自动检查并补全 DISK 特征提取
-//           - 优先复用已有特征匹配（可选自动补全缺失匹配）
-//           - 执行增量式 SFM 重建
-//           - 回收恢复的相机参数
+//         本服务对应 Metashape 的“对齐照片”职责，而不是 MVS/网格/DEM 等稀疏重建下游流程：
+//           - 检查或补齐特征、匹配和连接点观测
+//           - 规划普通/参考预选候选对并执行几何一致性约束
+//           - 通过增量 SfM 注册相机、三角化 tie points
+//           - 执行 BA 并回收已定向相机、稀疏观测和质量报告
 //
-//         调用方只需填写 SFMServiceOptions 并调用 SFMService::run()，
+//         调用方只需填写 AerialTriangulationServiceOptions 并调用 AerialTriangulationService::run()，
 //         即使用户此前未执行过任何特征提取或匹配操作，服务也能完成重建。
 //
-//         SFMService::run() 本身不依赖 QWidget / QMessageBox，
+//         AerialTriangulationService::run() 本身不依赖 QWidget / QMessageBox，
 //         并且不直接访问 ProjectData / ProjectManager，
 //         便于未来在无头（headless）环境中复用。
-//         调用方负责根据 SFMServiceResult 更新项目元数据。
+//         调用方负责根据 AerialTriangulationServiceResult 更新项目元数据。
 // =============================================================================
 #pragma once
 
@@ -37,12 +37,12 @@ namespace gui
 {
 
 // ──────────────────────────────────────────────────────────────────────────────
-// SFMServiceOptions  — SFM 服务输入选项
+// AerialTriangulationServiceOptions  — 对齐照片/空三服务输入选项
 // ──────────────────────────────────────────────────────────────────────────────
-struct SFMServiceOptions
+struct AerialTriangulationServiceOptions
 {
     // ── 影像列表 ───────────────────────────────────────────────────────────
-    QStringList         images;             ///< 参与 SFM 的影像完整路径列表
+    QStringList         images;             ///< 参与空三解算的影像完整路径列表
 
     // ── 项目路径（用于查找已有特征 / .match 文件）────────────────────────
     QString             plascanPath;        ///< 当前 .plascan 项目路径
@@ -51,7 +51,7 @@ struct SFMServiceOptions
     QJsonObject         projectMeta;        ///< project_files.json 内容
 
     // ── 输出目录 ───────────────────────────────────────────────────────────
-    QString             outputDir;          ///< 稀疏点云等输出文件的根目录
+    QString             outputDir;          ///< 空三成果和稀疏观测输出文件的根目录
 
     // ── 精度等级（0=低, 1=中, 2=高, 3=最高）────────────────────────────────
     int                 quality = 3;
@@ -59,7 +59,7 @@ struct SFMServiceOptions
     // ── 执行控制 ───────────────────────────────────────────────────────────
     int                 threads = 4;
 
-    /// 仅执行 Phase 1（特征检测）+ Phase 2（特征匹配），不做 SFM 重建。
+    /// 仅执行 Phase 1（特征检测）+ Phase 2（特征匹配），不做相机注册和 BA。
     /// 用于光束法平差模式：先自动保证特征/匹配存在，再由外部做 BA。
     bool                baOnly  = false;
 
@@ -204,9 +204,9 @@ struct MatchFileRecord
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
-// SFMServiceResult  — SFM 服务输出结果
+// AerialTriangulationServiceResult  — 对齐照片/空三服务输出结果
 // ──────────────────────────────────────────────────────────────────────────────
-struct SFMServiceResult
+struct AerialTriangulationServiceResult
 {
     bool    success = false;                ///< 是否成功完成重建
     QString errorMessage;                   ///< 失败时的错误描述
@@ -254,12 +254,12 @@ struct SFMServiceResult
 };
 
 // ──────────────────────────────────────────────────────────────────────────────
-// SFMService  — 一站式增量式 SFM 服务（无状态静态方法）
+// AerialTriangulationService  — 一站式对齐照片/空三服务（无状态静态方法）
 // ──────────────────────────────────────────────────────────────────────────────
-class SFMService
+class AerialTriangulationService
 {
 public:
-    /// 执行完整的增量式 SFM 全自动流程（同步阻塞，应在后台线程中调用）：
+    /// 执行完整的对齐照片式空三流程（同步阻塞，应在后台线程中调用）：
     ///
     ///   Phase 1 — 确保特征:
     ///     检查每张影像是否已有对应算法特征文件，缺失的自动提取。
@@ -268,15 +268,15 @@ public:
     ///     优先复用已有 .match 文件；当 autoGenerateMissingMatches=true 时，
     ///     对缺失配对自动调用配置的匹配器补齐。
     ///
-    ///   Phase 3 — SFM 重建:
+    ///   Phase 3 — 相机注册 + BA:
     ///     将特征点和匹配传入 IncrementalSfm 执行增量式重建。
     ///
     ///   Phase 4 — 结果收集:
     ///     恢复的相机参数序列化为 JSON，导出稀疏点云。
     ///
     /// @param opts  输入选项
-    /// @return      SFMServiceResult（含相机参数 + 自动生成的文件清单）
-    static SFMServiceResult run(const SFMServiceOptions &opts);
+    /// @return      AerialTriangulationServiceResult（含相机参数 + 自动生成的文件清单）
+    static AerialTriangulationServiceResult run(const AerialTriangulationServiceOptions &opts);
 };
 
 } // namespace gui

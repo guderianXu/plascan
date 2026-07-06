@@ -8,7 +8,7 @@
 #include "ProjectSfmWorkflow.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
-#include "SFMService.h"
+#include "AerialTriangulationService.h"
 
 #include <QDir>
 #include <QFileDialog>
@@ -578,7 +578,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
     const QString outputDir = QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation/init_pose_%1").arg(timestamp));
     QDir().mkpath(outputDir);
 
-    xjw::gui::SFMServiceOptions opts;
+    xjw::gui::AerialTriangulationServiceOptions opts;
     opts.images = allImages;
     opts.plascanPath = projectPath;
     opts.projectMeta = withPreparedCameras(fullMeta, preparedCameras, overwriteExisting);
@@ -663,7 +663,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         this,
         [opts]() mutable
         {
-            return xjw::gui::SFMService::run(opts);
+            return xjw::gui::AerialTriangulationService::run(opts);
         },
         [outputDir,
          allImages,
@@ -676,7 +676,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
          exifCount,
          fallbackCount,
          ownerGuard,
-         projectPath](ProjectCameraSetupManager *manager, xjw::gui::SFMServiceResult result) mutable
+         projectPath](ProjectCameraSetupManager *manager, xjw::gui::AerialTriangulationServiceResult result) mutable
         {
             if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {

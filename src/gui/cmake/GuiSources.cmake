@@ -123,8 +123,8 @@ set(GUI_SOURCES
 )
 
 list(APPEND GUI_SOURCES
-  ../core/pipeline/GuidedRematchService.cpp
-  ../core/pipeline/MatchResultCatalog.cpp
+  ../core/aerial_triangulation/GuidedRematchService.cpp
+  ../core/aerial_triangulation/MatchResultCatalog.cpp
 )
 
 set(GUI_HEADERS
@@ -181,7 +181,6 @@ set(GUI_HEADERS
   tasks/DenseMatchRunner.h
   tasks/FeatureExtractionRunner.h
   tasks/GuiTaskRunner.h
-  tasks/SFMService.h
   views/LayerFeatureLoader.h
   views/LayerImageLoader.h
   views/LayerOverlayItems.h
@@ -278,10 +277,10 @@ set(GUI_PROJECT_SOURCES
 set(GUI_TASK_SOURCES
   tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
-  ../core/pipeline/AerialTriangulationWorkflow.cpp
+  ../core/aerial_triangulation/AerialTriangulationWorkflow.cpp
   ../core/pipeline/FeatureMatchRunner.cpp
-  ../core/pipeline/ReconstructionPrerequisiteReport.cpp
-  ../core/pipeline/SFMService.cpp
+  ../core/aerial_triangulation/ReconstructionPrerequisiteReport.cpp
+  ../core/aerial_triangulation/AerialTriangulationService.cpp
 )
 
 set(GUI_DIALOG_SOURCES
