@@ -22,6 +22,18 @@
 #include <QVector>
 #include <QPointF>
 
+namespace
+{
+
+QPen makeMaskContourPen(const QColor &color, qreal width)
+{
+    QPen pen(color, width, Qt::SolidLine, Qt::SquareCap, Qt::RoundJoin);
+    pen.setCosmetic(true);
+    return pen;
+}
+
+} // namespace
+
 LayerRenderer::LayerRenderer(QGraphicsScene *scene, QObject *parent)
     : QObject(parent)
     , _scene(scene)
@@ -121,13 +133,13 @@ bool LayerRenderer::addMaskContourLayer(const QString &maskPath, int z)
     }
 
     auto *halo = new QGraphicsPathItem(path);
-    halo->setPen(QPen(QColor(0, 0, 0, 190), 3.0));
+    halo->setPen(makeMaskContourPen(QColor(0, 0, 0, 210), 4.0));
     halo->setZValue(z);
     _scene->addItem(halo);
     _maskItems.append(halo);
 
     auto *outline = new QGraphicsPathItem(path);
-    outline->setPen(QPen(QColor(255, 255, 255, 230), 1.4));
+    outline->setPen(makeMaskContourPen(QColor(255, 255, 255, 245), 1.6));
     outline->setZValue(z + 0.1);
     _scene->addItem(outline);
     _maskItems.append(outline);

@@ -405,6 +405,21 @@ target_include_directories(test_match_photos_task PRIVATE
 )
 gtest_discover_tests(test_match_photos_task)
 
+add_executable(test_tie_point_track_manager
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tests/test_tie_point_track_manager.cpp
+)
+target_link_libraries(test_tie_point_track_manager PRIVATE
+    matchphototask
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_tie_point_track_manager PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/tie_points
+    ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+)
+gtest_discover_tests(test_tie_point_track_manager)
+
 # ==============================================================================
 # test_initial_sparse_triangulator — core/sfm 初始稀疏点云三角化器
 # ==============================================================================

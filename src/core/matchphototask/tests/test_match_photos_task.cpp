@@ -173,12 +173,17 @@ TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
         readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/GeometryVerifyStage.cpp"));
     const QString trackSource =
         readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/TrackBuildStage.cpp"));
+    const QString tiePointSource =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/tie_points/TiePointTrackManager.cpp"));
     ASSERT_FALSE(geometrySource.isEmpty());
     ASSERT_FALSE(trackSource.isEmpty());
+    ASSERT_FALSE(tiePointSource.isEmpty());
 
     EXPECT_TRUE(geometrySource.contains(QStringLiteral("MatchGeometryFilter::filter")));
     EXPECT_FALSE(geometrySource.contains(QStringLiteral("几何验证阶段尚未接入")));
-    EXPECT_TRUE(trackSource.contains(QStringLiteral("MultiViewTrackBuilder")));
+    EXPECT_TRUE(trackSource.contains(QStringLiteral("TiePointTrackManager")));
+    EXPECT_FALSE(trackSource.contains(QStringLiteral("FeatureFileIO::readData")));
+    EXPECT_TRUE(tiePointSource.contains(QStringLiteral("MultiViewTrackBuilder")));
     EXPECT_FALSE(trackSource.contains(QStringLiteral("轨迹构建阶段尚未接入")));
 }
 

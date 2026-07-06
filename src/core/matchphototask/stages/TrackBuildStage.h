@@ -11,8 +11,7 @@ namespace xjw
 namespace matchphotos
 {
 
-// 将验证后的两两匹配合并为多视图轨迹的阶段边界。
-// 这里应复用 sfm/tracks，而不是重新实现一套轨迹构建器。
+// 连接点轨迹阶段边界。最终多视图 track 管理由 TiePointTrackManager 负责。
 class TrackBuildStage
 {
 public:

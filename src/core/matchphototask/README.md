@@ -10,6 +10,7 @@
 - `runtime/` 负责运行期路径解析、LightGlue 模型查找、匹配 sidecar 写入和 GUI 写回所需记录。
 - `task/` 负责 `MatchPhotosTask`、选项、上下文和结果报告。
 - `stages/` 负责流程阶段，当前已接入 SIFT 特征提取与 SIFT + LightGlue 两两匹配。
+- `tie_points/` 负责最终多视图连接点 track 的构建、筛选和统计摘要。
 - `tests/` 放置本模块自己的单元测试。
 
 当前行为：
@@ -22,7 +23,8 @@
   `每百万像素关键点限制 * 影像百万像素数` 计算。
 - 匹配阶段查找 `lightglue_sift_cuda.torchscript` / `lightglue_sift_cpu.torchscript`，写出 `.match` 和同名 `.json` sidecar，供 GUI 匹配查看器读取。
 - 几何验证阶段使用 `MatchGeometryFilter` 过滤基础矩阵内点。
-- 轨迹阶段使用 `MultiViewTrackBuilder` 合并多视连接点，`maxTiePointsPerImage` 对应连接点限制；
+- 轨迹阶段通过 `TiePointTrackManager` 管理最终多视图连接点，并复用 `MultiViewTrackBuilder` 合并 track。
+- `maxTiePointsPerImage` 对应连接点限制；
   `0` 表示关闭连接点数量稀疏。
 - `excludeStationaryTiePoints` 会剔除在多张影像中像方坐标几乎固定的 track，用于过滤转台背景、
   传感器污点或镜头伪影类假连接点。

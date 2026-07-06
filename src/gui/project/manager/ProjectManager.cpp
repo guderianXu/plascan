@@ -28,6 +28,7 @@
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "MaskGenerator.h"
+#include "io/PathIO.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
 #include "Camera.h"
@@ -194,48 +195,6 @@ void appendMetaArrayRecord(QJsonObject *meta,
     QJsonArray arr = meta->value(arrayKey).toArray();
     arr.append(record);
     (*meta)[arrayKey] = arr;
-}
-
-cv::Mat qImageToGrayMat(const QImage &image)
-{
-    if (image.isNull())
-    {
-        return cv::Mat();
-    }
-
-    const QImage gray = image.convertToFormat(QImage::Format_Grayscale8);
-    cv::Mat mat(gray.height(),
-                gray.width(),
-                CV_8UC1,
-                const_cast<uchar *>(gray.constBits()),
-                gray.bytesPerLine());
-    return mat.clone();
-}
-
-bool writeGrayMaskImage(const QString &path, const cv::Mat &mask)
-{
-    if (path.trimmed().isEmpty() || mask.empty())
-    {
-        return false;
-    }
-
-    cv::Mat gray;
-    if (mask.type() == CV_8UC1)
-    {
-        gray = mask;
-    }
-    else
-    {
-        mask.convertTo(gray, CV_8U);
-    }
-
-    const cv::Mat continuous = gray.isContinuous() ? gray : gray.clone();
-    const QImage image(continuous.data,
-                       continuous.cols,
-                       continuous.rows,
-                       static_cast<int>(continuous.step),
-                       QImage::Format_Grayscale8);
-    return image.copy().save(path);
 }
 
 xjw::mask::MaskGenerationOptions maskOptionsFromSettings(const QJsonObject &settings)
@@ -741,14 +700,13 @@ void ProjectManager::openGenerateMaskDialog()
 
     for (const QString &imagePath : targetImages)
     {
-        const QImage sourceImage(imagePath);
-        if (sourceImage.isNull())
+        const cv::Mat source = xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED);
+        if (source.empty())
         {
             errors << QStringLiteral("%1: 读取失败").arg(QFileInfo(imagePath).fileName());
             continue;
         }
 
-        const cv::Mat source = qImageToGrayMat(sourceImage);
         cv::Mat generated = xjw::mask::generateMask(source, options);
         if (generated.empty())
         {
@@ -759,14 +717,14 @@ void ProjectManager::openGenerateMaskDialog()
         const QString maskPath = ProjectIO::maskOutputPathForImage(projectPath, imagePath);
         if (QFileInfo::exists(maskPath) && operation != xjw::mask::MaskOperation::Replace)
         {
-            const cv::Mat existing = qImageToGrayMat(QImage(maskPath));
+            const cv::Mat existing = xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE);
             if (!existing.empty())
             {
                 generated = xjw::mask::composeMasks(existing, generated, operation);
             }
         }
 
-        if (!writeGrayMaskImage(maskPath, generated))
+        if (!xjw::common::io::writeImage(maskPath, generated))
         {
             errors << QStringLiteral("%1: 写入失败").arg(QFileInfo(maskPath).fileName());
             continue;

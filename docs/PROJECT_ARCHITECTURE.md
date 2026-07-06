@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-07-04。
+行星表面摄影测量处理系统。最后更新: 2026-07-06。
 
 ## 顶层目录
 
@@ -134,9 +134,11 @@ core/
 │   ├── stages/
 │   │   ├── FeatureStage.h/cpp       # SIFT 特征提取/复用，输出 assets/ip/*.sift
 │   │   ├── MatchingStage.h/cpp      # SIFT + LightGlue 两两匹配，输出 assets/matches/*.match + JSON sidecar
-│   │   ├── GeometryVerifyStage.h/cpp # 几何验证阶段占位
-│   │   ├── TrackBuildStage.h/cpp    # 多视图 tracks 构建阶段占位
+│   │   ├── GeometryVerifyStage.h/cpp # 调用 MatchGeometryFilter 做基础矩阵几何验证
+│   │   ├── TrackBuildStage.h/cpp    # 连接点轨迹阶段边界，委托 tie_points 管理最终多视图 track
 │   │   └── GuidedMatchStage.h/cpp   # 引导重匹配阶段占位
+│   ├── tie_points/
+│   │   └── TiePointTrackManager.h/cpp # 最终多视图连接点 track 构建、筛选和统计摘要
 │   └── tests/                       # matchphototask 模块级测试
 │
 ├── bundle_adjust/              # 光束法平差

@@ -22,6 +22,10 @@ target_include_directories(plascan_common_io PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
+if(GDAL_INCLUDE_DIRS)
+  target_include_directories(plascan_common_io PRIVATE ${GDAL_INCLUDE_DIRS})
+endif()
+
 target_include_directories(plascan_common_math INTERFACE
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
@@ -38,6 +42,7 @@ target_compile_features(plascan_common_project PUBLIC cxx_std_17)
 target_link_libraries(plascan_common_io PUBLIC
   Qt6::Core
   ${OpenCV_LIBS}
+  ${PLASCAN_GDAL_TARGET}
 )
 
 target_link_libraries(plascan_common_project PUBLIC Qt6::Core)

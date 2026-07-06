@@ -6485,6 +6485,25 @@ TEST(GenerateMaskDialogTest, DefaultsToBlackBackgroundReplacementForSelectedImag
     EXPECT_GE(settings.value(QStringLiteral("morphology_radius")).toInt(), 0);
 }
 
+TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
+    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+
+    const QString block = source.mid(start, end - start);
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"io/PathIO.h\"")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::writeImage(maskPath, generated)")));
+    EXPECT_FALSE(block.contains(QStringLiteral("QImage sourceImage(imagePath)")))
+        << "Mask generation must not use QImage for source TIFF reading; use common/io PathIO instead.";
+}
+
 TEST(CanvasWidgetTest, ExposesMaskContourOverlayApi)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/widgets/CanvasWidget.h"));

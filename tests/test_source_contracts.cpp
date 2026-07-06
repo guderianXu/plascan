@@ -158,6 +158,24 @@ TEST(FeatureExtractionRunnerContractTest, ReadsImagesThroughCommonUnicodePathIo)
     });
 }
 
+TEST(CommonPathIoContractTest, FallsBackToGdalWhenOpenCvCannotDecodeImage)
+{
+    const QString source = readSourceFile(QStringLiteral("src/common/io/PathIO.cpp"));
+    const QString cmake = readSourceFile(QStringLiteral("src/common/CMakeLists.txt"));
+
+    expectContainsAll(source, {
+        "#include <gdal_priv.h>",
+        "cv::Mat readImageWithGdal(const QString &path, int flags)",
+        "if (!decoded.empty())",
+        "return readImageWithGdal(path, flags)",
+    });
+
+    expectContainsAll(cmake, {
+        "GDAL_INCLUDE_DIRS",
+        "${PLASCAN_GDAL_TARGET}",
+    });
+}
+
 TEST(SfmSourceContractTest, OneClickSfmDefaultsToDiskLightGlue)
 {
     const QString header = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.h"));

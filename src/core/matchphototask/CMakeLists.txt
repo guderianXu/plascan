@@ -24,6 +24,8 @@ add_library(matchphototask STATIC
     stages/MatchingStage.h
     stages/TrackBuildStage.cpp
     stages/TrackBuildStage.h
+    tie_points/TiePointTrackManager.cpp
+    tie_points/TiePointTrackManager.h
     task/MatchPhotosContext.h
     task/MatchPhotosOptions.h
     task/MatchPhotosResult.h
@@ -37,6 +39,7 @@ target_include_directories(matchphototask PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/pair_selection
     ${CMAKE_CURRENT_SOURCE_DIR}/runtime
     ${CMAKE_CURRENT_SOURCE_DIR}/stages
+    ${CMAKE_CURRENT_SOURCE_DIR}/tie_points
     ${CMAKE_CURRENT_SOURCE_DIR}/task
     ${CMAKE_CURRENT_SOURCE_DIR}/..
     ${CMAKE_CURRENT_SOURCE_DIR}/../overlap
