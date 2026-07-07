@@ -71,7 +71,7 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 
 ### Python / LibTorch 环境脚本
 
-`scripts/env/` 集中管理 Python 和 LibTorch 相关的本机环境准备脚本。默认输出到 `build/env/`，不会把下载的大包和机器本地路径写进源码目录。
+`scripts/env/` 集中管理 Python 和 LibTorch 相关的本机环境准备脚本。Python 开发环境默认创建在仓库根目录 `.venv/`，生成的机器本地配置文件仍输出到 `build/env/`，不会把本地路径写进源码目录。
 
 准备 vcpkg：
 
@@ -82,7 +82,7 @@ python scripts/env/setup_vcpkg.py --root /path/to/vcpkg --install
 准备 Python 环境：
 
 ```bash
-python scripts/env/setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+python scripts/env/setup_python_runtime.py --device cuda --cuda-wheel cu130
 ```
 
 注册已有 LibTorch，或让脚本下载到 `build/env/libtorch`：
@@ -102,10 +102,12 @@ Windows PowerShell 使用同一套脚本，只把路径换成 Windows 路径。C
 
 ```powershell
 python scripts\env\setup_vcpkg.py --root C:\src\vcpkg --clone --install --triplet x64-windows
-python scripts\env\setup_python_env.py --manager conda --name plascan --device cuda --cuda-wheel cu128
+python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
 python scripts\env\setup_libtorch.py --libtorch-root C:\deps\libtorch --cuda-root "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v12.8"
 python scripts\env\configure_with_env.py --build-type release --build
 ```
+
+`.venv/` 已加入 git 忽略列表。后续需要运行 Python 模型导出、测试或辅助脚本时，优先复用这个环境；只有 CI、打包或特殊隔离场景才通过 `--runtime-dir` 指定其它虚拟环境位置。
 
 ### GUI 一键工作流
 

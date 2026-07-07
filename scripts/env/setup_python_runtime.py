@@ -1,9 +1,9 @@
 #!/usr/bin/env python3
-"""Create PlaScan's fixed isolated Python runtime.
+"""Create PlaScan's fixed isolated Python development runtime.
 
 The recommended development and packaging runtime lives at:
 
-    build/env/python-runtime
+    .venv
 
 This script intentionally uses the standard-library venv module instead of
 conda so the same workflow can be used on Windows and Linux.
@@ -42,7 +42,7 @@ class DependencyPlan:
 
 
 def default_runtime_dir(repo_root: Path) -> Path:
-    return repo_root / "build" / "env" / "python-runtime"
+    return repo_root / ".venv"
 
 
 def runtime_python_path(runtime_dir: Path, platform_name: str | None = None) -> Path:
@@ -83,7 +83,7 @@ def detect_torch_dir(python_exe: Path, *, dry_run: bool = False) -> str:
         "print(p if (p / 'TorchConfig.cmake').exists() else '')"
     )
     try:
-        return subprocess.check_output([str(python_exe), "-c", code], text=True).strip()
+        return subprocess.check_output([str(python_exe), "-c", code], text=True, stderr=subprocess.DEVNULL).strip()
     except (subprocess.CalledProcessError, FileNotFoundError):
         return ""
 
@@ -182,7 +182,7 @@ def create_runtime(args: argparse.Namespace) -> Path:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source-dir", help="PlaScan source tree root. Defaults to the current script repository.")
-    parser.add_argument("--runtime-dir", help="Runtime directory. Defaults to build/env/python-runtime.")
+    parser.add_argument("--runtime-dir", help="Runtime directory. Defaults to .venv under the source tree.")
     parser.add_argument("--python", help="Bootstrap Python executable. Defaults to the current Python.")
     parser.add_argument("--device", choices=["cpu", "cuda"], default="cpu")
     parser.add_argument("--cuda-wheel", default="cu130", help="PyTorch CUDA wheel tag, for example cu128 or cu130.")

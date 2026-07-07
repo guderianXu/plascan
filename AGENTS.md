@@ -58,6 +58,15 @@ PlaScan 是面向行星表面影像的摄影测量处理系统，主线是从多
 
 ### Python
 
+- 项目统一复用仓库根目录 `.venv/` 作为本地 Python 开发环境。需要 Python 依赖时先运行或复用：
+  ```bash
+  python scripts/env/setup_python_runtime.py --device cpu
+  ```
+  Windows CUDA 开发机可用：
+  ```powershell
+  python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
+  ```
+  不要为单个 build 目录临时创建新的 Python 虚拟环境；只有 CI、打包或明确隔离需求才通过 `--runtime-dir` 指定其它位置。
 - 使用 `pathlib.Path`、`argparse` 和结构化读写接口，避免硬编码本机绝对路径。
 - 脚本入口保持 `parse_args()`、`main()` 结构，错误信息写清缺失路径、参数和建议修复方式。
 - 深度学习脚本要明确区分 CPU/CUDA、模型路径、输入输出目录和阈值参数。
@@ -91,6 +100,13 @@ ctest --output-on-failure
 
 ```bash
 python -m py_compile scripts/extract_features.py
+```
+
+需要运行依赖 torch、cv2、kornia 或 LightGlue 的脚本时，先初始化 `.venv`，再优先使用 `.venv` 中的解释器，例如 Windows：
+
+```powershell
+python scripts\env\setup_python_runtime.py --device cuda --cuda-wheel cu130
+.\.venv\Scripts\python.exe scripts\export_lightglue_torchscript.py --help
 ```
 
 若需要运行脚本本体，必须使用同时包含 torch、cv2 和相关模型依赖的 Python 环境。不要在依赖缺失时声称脚本验证通过。

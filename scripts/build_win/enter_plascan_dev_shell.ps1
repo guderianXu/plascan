@@ -209,7 +209,14 @@ function Set-PlascanWindowsBuildEnvironment
     $qtPlatformsRoot = Join-Path $qtPluginsRoot "platforms"
     $cmakeBin = Split-Path -Parent $CMakePath
     $ninjaDir = Resolve-NinjaDirectory $CMakePath
-    $pythonRuntimeRoot = Join-Path $ProjectRoot "build\env\python-runtime"
+    $pythonRuntimeRoot = Join-Path $ProjectRoot ".venv"
+    $legacyPythonRuntimeRoot = Join-Path $ProjectRoot "build\env\python-runtime"
+    $legacyRuntimePython = Join-Path $legacyPythonRuntimeRoot "Scripts\python.exe"
+    if (-not (Test-Path -LiteralPath (Join-Path $pythonRuntimeRoot "Scripts\python.exe")) -and
+        (Test-Path -LiteralPath $legacyRuntimePython))
+    {
+        $pythonRuntimeRoot = $legacyPythonRuntimeRoot
+    }
     $pythonRuntimeScripts = Join-Path $pythonRuntimeRoot "Scripts"
     $runtimePython = Join-Path $pythonRuntimeScripts "python.exe"
 

@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import importlib.util
+import subprocess
 import sys
 import tempfile
 import unittest
+from unittest import mock
 from pathlib import Path
 
 
@@ -30,17 +32,17 @@ def load_runtime_module():
 
 
 class PythonRuntimeSetupTest(unittest.TestCase):
-    def test_default_runtime_dir_is_fixed_under_build_env(self):
+    def test_default_runtime_dir_is_repo_local_dot_venv(self):
         runtime = load_runtime_module()
 
         self.assertEqual(
             runtime.default_runtime_dir(Path("E:/code/plascan")),
-            Path("E:/code/plascan") / "build" / "env" / "python-runtime",
+            Path("E:/code/plascan") / ".venv",
         )
 
     def test_runtime_python_path_is_platform_specific(self):
         runtime = load_runtime_module()
-        runtime_dir = Path("E:/code/plascan") / "build" / "env" / "python-runtime"
+        runtime_dir = Path("E:/code/plascan") / ".venv"
 
         self.assertEqual(
             runtime.runtime_python_path(runtime_dir, "windows"),
@@ -54,7 +56,7 @@ class PythonRuntimeSetupTest(unittest.TestCase):
     def test_environment_values_include_runtime_model_and_script_paths(self):
         runtime = load_runtime_module()
         repo_root = Path("E:/code/plascan")
-        runtime_dir = repo_root / "build" / "env" / "python-runtime"
+        runtime_dir = repo_root / ".venv"
         python_exe = runtime_dir / "Scripts" / "python.exe"
 
         values = runtime.environment_values(
@@ -91,12 +93,24 @@ class PythonRuntimeSetupTest(unittest.TestCase):
         self.assertTrue(any("lightglue" in package.lower() for package in plan.base_packages))
         self.assertIn("pytest", plan.extra_packages)
 
+    def test_detect_torch_dir_suppresses_missing_torch_traceback(self):
+        runtime = load_runtime_module()
+
+        with mock.patch.object(
+            runtime.subprocess,
+            "check_output",
+            side_effect=subprocess.CalledProcessError(1, ["python"]),
+        ) as check_output:
+            self.assertEqual(runtime.detect_torch_dir(Path(sys.executable)), "")
+
+        self.assertEqual(check_output.call_args.kwargs.get("stderr"), subprocess.DEVNULL)
+
     def test_write_runtime_env_files(self):
         runtime = load_runtime_module()
         with tempfile.TemporaryDirectory() as tmp:
             tmp_path = Path(tmp)
             repo_root = tmp_path / "repo"
-            runtime_dir = repo_root / "build" / "env" / "python-runtime"
+            runtime_dir = repo_root / ".venv"
             python_exe = runtime.runtime_python_path(runtime_dir, "linux")
             json_path = runtime.write_runtime_env_files(
                 output_dir=tmp_path / "env",
@@ -119,7 +133,7 @@ class PythonRuntimeSetupTest(unittest.TestCase):
     def test_windows_dev_shell_auto_detects_fixed_runtime(self):
         script = (REPO_ROOT / "scripts" / "build_win" / "enter_plascan_dev_shell.ps1").read_text(encoding="utf-8")
 
-        self.assertIn("python-runtime", script)
+        self.assertIn(".venv", script)
         self.assertIn("PLASCAN_PYTHON_EXECUTABLE", script)
         self.assertIn("PLASCAN_MODEL_DIR", script)
         self.assertIn("PLASCAN_SCRIPT_DIR", script)

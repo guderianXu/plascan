@@ -1,7 +1,7 @@
 # PlaScan Environment Scripts
 
-This directory contains machine-local environment setup helpers. The scripts write generated files to
-`build/env/` by default so downloaded runtimes and local paths do not enter the source tree.
+This directory contains machine-local environment setup helpers. The scripts write generated environment files to
+`build/env/` by default so machine-local paths do not enter the source tree.
 
 ## vcpkg
 
@@ -34,9 +34,9 @@ Use `--dry-run` to print the clone/bootstrap/install commands without running th
 
 ## Python Runtime
 
-The recommended development and packaging runtime is an isolated standard-library `venv` at
-`build/env/python-runtime`. Use this path for model export helpers such as LightGlue TorchScript export, so the
-application and packaging scripts do not depend on a user-managed conda environment.
+The recommended development runtime is the repository-local standard-library `venv` at `.venv`. Use this runtime for
+model export helpers such as LightGlue TorchScript export and for Python tests, so PlaScan development does not depend
+on a user-managed conda environment or a per-build virtual environment.
 
 Windows CUDA development runtime:
 
@@ -61,6 +61,10 @@ files need to be refreshed.
 LightGlue is installed from `https://github.com/cvg/LightGlue.git`, so the full install requires `git` and network
 access to GitHub.
 
+The `.venv/` directory is intentionally ignored by git. Reuse it for development instead of creating new virtual
+environments under individual build directories. Use `--runtime-dir` only when packaging or CI needs a different
+machine-local runtime location.
+
 The runtime setup script writes:
 
 - `build/env/plascan-env.json`
@@ -68,8 +72,8 @@ The runtime setup script writes:
 - `build/env/plascan-env.sh`
 - `build/env/plascan-env.ps1`
 
-`scripts/build_win/enter_plascan_dev_shell.ps1` automatically detects
-`build/env/python-runtime/Scripts/python.exe`, prepends it to `PATH`, and exports:
+`scripts/build_win/enter_plascan_dev_shell.ps1` automatically detects `.venv/Scripts/python.exe`, prepends it to
+`PATH`, and exports:
 
 - `PLASCAN_PYTHON_EXECUTABLE`
 - `PLASCAN_PYTHON`
