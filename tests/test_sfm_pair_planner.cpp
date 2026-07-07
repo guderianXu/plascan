@@ -64,6 +64,31 @@ TEST(SfmPairPlannerTest, LargeKnownCameraSequenceUsesSlidingWindow)
     EXPECT_FALSE(keys.contains(xjw::gui::canonicalSfmPairKey(imagePath(0), imagePath(4))));
 }
 
+TEST(SfmPairPlannerTest, SequenceLoopClosureConnectsTailBackToHead)
+{
+    xjw::gui::SfmPairPlannerOptions options;
+    options.autoRestrictKnownCameraPairs = true;
+    options.knownCameraPairWindow = 2;
+    options.knownCameraAllPairsMaxImages = 2;
+    options.knownCameraSpatialNeighborCount = 0;
+    options.knownCameraSequenceLoopClosure = true;
+
+    const xjw::gui::SfmPairPlan plan =
+        xjw::gui::planSfmMatchPairs(imagePaths(8), cameraPaths(8), options);
+
+    const QString loopKey = xjw::gui::canonicalSfmPairKey(imagePath(7), imagePath(0));
+    const auto loopIt = std::find_if(plan.pairCandidates.begin(), plan.pairCandidates.end(),
+                                     [&](const xjw::gui::SfmPairCandidate &candidate) {
+                                         return candidate.pairKey == loopKey;
+                                     });
+
+    ASSERT_NE(loopIt, plan.pairCandidates.end());
+    EXPECT_TRUE(plan.usedSequenceLoopClosure);
+    EXPECT_TRUE(loopIt->sourceTypes.contains(QStringLiteral("sequence_loop")));
+    EXPECT_EQ(loopIt->sequenceDistance, 1);
+    EXPECT_GT(loopIt->sequenceScore, 0.0);
+}
+
 TEST(SfmPairPlannerTest, KnownCameraCentersAddSpatialNeighborsOutsideSequenceWindow)
 {
     xjw::gui::SfmPairPlannerOptions options;

@@ -17,6 +17,8 @@
 #include <QVector>
 #include <QFutureWatcher>
 
+#include <functional>
+
 #include "MatchResultCatalog.h"
 
 // Qt 控件前向声明
@@ -24,6 +26,7 @@ class QComboBox;
 class QTableWidget;
 class QPushButton;
 class QLabel;
+class QProgressBar;
 class ProjectManager;
 
 // MatchPairSelectorDialog: 匹配对选择器（类似 Metashape）
@@ -95,6 +98,7 @@ private:
     };
 
     using MatchInfoList = QList<MatchInfo>;
+    using MatchScanProgressCallback = std::function<void(int processed, int total)>;
 
     // 构建并初始化整体界面布局（顶部、中间、底部）
     void setupUI();
@@ -107,10 +111,19 @@ private:
 
     // 发起后台扫描当前影像的匹配数据
     void startAsyncMatchPairLoad(const QString &imagePath);
+    // 快速结果显示后再后台补齐完整 catalog 统计，避免完整扫描抢占首屏加载
+    void startFullMatchPairLoad(const MatchDataSnapshot &snapshot,
+                                const QString &imagePath,
+                                int generation);
     // 将 _currentMatches 填充到表格
     void populateMatchTable();
     // 扫描期间切换刷新/查看按钮状态
     void setMatchControlsBusy(bool busy);
+    // 完整 catalog 扫描的逐文件进度，必须在 GUI 线程调用
+    void setFullScanProgress(int processed,
+                             int total,
+                             const QString &imagePath,
+                             int generation);
     // 在 GUI 线程采集后台扫描所需快照
     MatchDataSnapshot makeSnapshot() const;
     
@@ -118,8 +131,12 @@ private:
     // imagePath — 当前选中影像的完整路径
     // 返回值    — 所有与之存在匹配关系的 MatchInfo 列表
     QList<MatchInfo> parseMatchDataForImage(const QString &imagePath);
+    static MatchInfoList parsePriorityMatchDataForImageFromSnapshot(const MatchDataSnapshot &snapshot,
+                                                                    const QString &imagePath);
     static MatchInfoList parseMatchDataForImageFromSnapshot(const MatchDataSnapshot &snapshot,
-                                                            const QString &imagePath);
+                                                            const QString &imagePath,
+                                                            const MatchScanProgressCallback &progressCallback =
+                                                                MatchScanProgressCallback());
 
     QList<MatchInfo> loadOverlapCandidatesForImage(const QString &imagePath,
                                                    const QSet<QString> &seenPairKeys,
@@ -163,6 +180,8 @@ private:
     QPushButton *_refreshBtn;
     // 底部状态标签，显示当前匹配对数或选中信息
     QLabel *_statusLabel;
+    // 匹配扫描进度条：首屏快速加载和后台完整统计期间显示忙碌状态
+    QProgressBar *_scanProgressBar;
     
     // 所有影像的完整路径列表
     QStringList _allImages;
@@ -177,6 +196,7 @@ private:
     QString _matchDir;
     // 防抖刷新计时器（300ms 内多次触发只刷新一次）
     QTimer *_refreshTimer = nullptr;
+    QFutureWatcher<MatchInfoList> *_priorityMatchLoadWatcher = nullptr;
     QFutureWatcher<MatchInfoList> *_matchLoadWatcher = nullptr;
     int _matchLoadGeneration = 0;
 };

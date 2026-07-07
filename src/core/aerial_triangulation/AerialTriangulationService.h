@@ -104,6 +104,10 @@ struct AerialTriangulationServiceOptions
     /// 自动配对裁剪的邻域窗口。4 表示第 i 张最多匹配 i+1 到 i+4。
     int                 knownCameraPairWindow = 4;
 
+    /// 照片序列预选是否补充首尾闭环候选。
+    /// 适用于绕目标一圈拍摄的有序影像，避免尾段和首段在 SfM 中断开。
+    bool                knownCameraSequenceLoopClosure = false;
+
     /// 已知相机自动配对时，每张影像额外选择的空间最近邻数量。
     /// 与顺序邻域取并集，用于航带换行、跨航带和文件顺序不可靠的数据。
     int                 knownCameraSpatialNeighborCount = 8;

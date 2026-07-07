@@ -19,6 +19,9 @@ public:
     ~AerialTriangulationDialog() override;
 
     void setImageCount(int count);
+    void setReferencePreselectionAvailable(bool available,
+                                           int cameraCount = 0,
+                                           int imageCount = 0);
     void applySettings(const QJsonObject &settings);
     QJsonObject collectSettings() const;
 
@@ -32,4 +35,5 @@ private:
 
     std::unique_ptr<Ui::AerialTriangulationDialog> _ui;
     bool _applyingSettings = false;
+    bool _referencePreselectionAvailable = false;
 };

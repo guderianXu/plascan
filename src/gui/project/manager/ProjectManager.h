@@ -36,6 +36,7 @@
 #include <memory>
 
 class QWidget;
+class GenerateMaskDialog;
 class ProjectData;
 class ProjectReconstructionManager;
 class ProjectTerrainProductsManager;
@@ -81,6 +82,10 @@ signals:
     void metadataDirtyChanged(bool dirty);
     // 单个 ipfind 结果追加到元数据后发出，参数为对应的输入影像绝对路径
     void ipfindResultAppended(const QString &imagePath, const QString &suffix = QString());
+    // 照片蒙版生成进度（主窗口状态栏右下角显示）
+    void maskGenerationProgressChanged(const QString &stage, int done, int total);
+    // 照片蒙版生成结束（success=true 表示全部目标影像生成成功）
+    void maskGenerationFinished(bool success);
     // 照片蒙版生成完成后发出，供当前影像视图刷新轮廓覆盖层。
     void masksGenerated(const QStringList &imagePaths);
     /// 每对影像匹配完成时实时发出（在主线程中）
@@ -165,6 +170,8 @@ public slots:
     void setActiveImagePath(const QString &imagePath);
     // 生成照片蒙版，并将 mask_path 写入对应影像元数据。
     void openGenerateMaskDialog();
+    // 取消正在运行的照片蒙版生成任务。
+    void cancelMaskGeneration();
     // 生成参考 DEM/LiDAR 与当前项目成果的精度检查准备报告。
     void runReferenceQualityCheck();
     // 生成参考地形软约束 BA 前置检查报告；真正 BA 只在检查通过后进入后续流程。
@@ -385,6 +392,8 @@ private:
 
     // AT/SFM 取消标志（跨线程共享）
     std::shared_ptr<std::atomic<bool>> _atCancelFlag;
+    // 照片蒙版生成取消标志（跨线程共享）
+    std::shared_ptr<std::atomic<bool>> _maskGenerationCancelFlag;
 
     // BA 预览缓存：BA 运行后先缓存到此处，
     // 用户点击"保留"后再通过 acceptBundleAdjustPreview() 写回项目相机参数。
@@ -400,4 +409,5 @@ private:
     // 辅助：校验项目是否已打开；失败时统一弹窗提示并返回 false
     bool ensureProjectOpen(const QString &message = QStringLiteral("请先打开项目"),
                            const QString &title = QStringLiteral("提示")) const;
+    void installSam21Model(const QString &variantToken, GenerateMaskDialog *dialog = nullptr);
 };

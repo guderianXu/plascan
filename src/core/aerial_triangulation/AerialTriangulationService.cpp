@@ -937,6 +937,19 @@ QString pythonInEnvironmentPrefix(const QString &prefix)
     return QString();
 }
 
+QString repoLocalPythonExecutable()
+{
+#ifdef PLASCAN_SOURCE_DIR
+#ifdef Q_OS_WIN
+    return QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral(".venv/Scripts/python.exe"));
+#else
+    return QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral(".venv/bin/python"));
+#endif
+#else
+    return QString();
+#endif
+}
+
 QStringList defaultPythonEnvironmentPrefixes()
 {
     QStringList prefixes;
@@ -976,6 +989,7 @@ QString resolvePythonExecutableForLightGlue()
     QStringList candidates;
     candidates << qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed()
                << qEnvironmentVariable("PLASCAN_PYTHON").trimmed()
+               << repoLocalPythonExecutable()
                << pythonInEnvironmentPrefix(qEnvironmentVariable("VIRTUAL_ENV"))
                << pythonInEnvironmentPrefix(qEnvironmentVariable("CONDA_PREFIX"));
 
@@ -1922,6 +1936,10 @@ QStringList sfmPairPlanSourceTypes(const SfmPairPlan &pairPlan)
     {
         sourceTypes.append(QStringLiteral("sequence_window"));
     }
+    if (pairPlan.usedSequenceLoopClosure)
+    {
+        sourceTypes.append(QStringLiteral("sequence_loop"));
+    }
     if (!pairPlan.restrictPairs)
     {
         sourceTypes.append(QStringLiteral("exhaustive"));
@@ -1949,6 +1967,7 @@ QJsonObject sfmPairPlanToJson(const SfmPairPlan &pairPlan)
     object[QStringLiteral("known_camera_overlap_pair_count")] = pairPlan.knownCameraOverlapPairCount;
     object[QStringLiteral("used_camera_overlap_pairs")] = pairPlan.usedCameraOverlapPairs;
     object[QStringLiteral("used_spatial_camera_centers")] = pairPlan.usedSpatialCameraCenters;
+    object[QStringLiteral("used_sequence_loop_closure")] = pairPlan.usedSequenceLoopClosure;
     object[QStringLiteral("source_types")] = QJsonArray::fromStringList(sfmPairPlanSourceTypes(pairPlan));
     object[QStringLiteral("candidate_count")] = static_cast<int>(pairPlan.pairCandidates.size());
     object[QStringLiteral("candidate_sample_limit")] = kCandidateSampleLimit;
@@ -3266,6 +3285,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
     pairPlanOptions.autoRestrictKnownCameraPairs = opts.autoRestrictKnownCameraPairs;
     pairPlanOptions.knownCameraPairWindow = opts.knownCameraPairWindow;
     pairPlanOptions.knownCameraSpatialNeighborCount = opts.knownCameraSpatialNeighborCount;
+    pairPlanOptions.knownCameraSequenceLoopClosure = opts.knownCameraSequenceLoopClosure;
     pairPlanOptions.knownCameraAllPairsMaxImages = opts.knownCameraAllPairsMaxImages;
     int projectMetaCameraCenterCount = 0;
     const std::vector<std::array<double, 3>> projectMetaCameraCenters =
@@ -3571,12 +3591,87 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         return true;
     };
 
+    auto matchCacheBaseKey = [](const QString &baseName) -> QString
+    {
+        return baseName.trimmed().toCaseFolded();
+    };
+
+    auto matchFileNameMatchesPair = [](const QFileInfo &fileInfo,
+                                       const QString &leftBase,
+                                       const QString &rightBase) -> bool
+    {
+        const QString stem = fileInfo.completeBaseName();
+        const QString pairPrefix = leftBase + QStringLiteral("__") + rightBase;
+        return stem.compare(pairPrefix, Qt::CaseInsensitive) == 0 ||
+               stem.startsWith(pairPrefix + QLatin1Char('_'), Qt::CaseInsensitive);
+    };
+
+    QMap<QString, QFileInfoList> matchCacheFilesByLeftBase;
+    {
+        const QDir dir(matchDir);
+        const QFileInfoList matchFiles = dir.entryInfoList(QStringList{QStringLiteral("*.match")},
+                                                           QDir::Files,
+                                                           QDir::Time);
+        for (const QFileInfo &fileInfo : matchFiles)
+        {
+            const QString stem = fileInfo.completeBaseName();
+            const int separator = stem.indexOf(QStringLiteral("__"));
+            if (separator <= 0)
+            {
+                continue;
+            }
+            const QString leftBase = stem.left(separator);
+            matchCacheFilesByLeftBase[matchCacheBaseKey(leftBase)].append(fileInfo);
+        }
+        if (!matchFiles.isEmpty())
+        {
+            LOG_INFO(QStringLiteral("  匹配缓存索引: %1 个文件, %2 个左影像桶")
+                         .arg(matchFiles.size())
+                         .arg(matchCacheFilesByLeftBase.size()));
+        }
+    }
+
+    QMap<QString, ImageId> validIdByPath;
+    QMap<QString, ImageId> uniqueIdByBase;
+    QSet<QString> duplicatedBaseKeys;
+    for (const ImageId id : validIds)
+    {
+        const QString normalizedPath = normalizePath(idToPath.value(id));
+        if (!normalizedPath.isEmpty())
+        {
+            validIdByPath.insert(normalizedPath, id);
+        }
+
+        const QString baseKey = matchCacheBaseKey(QFileInfo(idToPath.value(id)).completeBaseName());
+        if (baseKey.isEmpty())
+        {
+            continue;
+        }
+        if (uniqueIdByBase.contains(baseKey))
+        {
+            uniqueIdByBase.remove(baseKey);
+            duplicatedBaseKeys.insert(baseKey);
+        }
+        else if (!duplicatedBaseKeys.contains(baseKey))
+        {
+            uniqueIdByBase.insert(baseKey, id);
+        }
+    }
+
     // 生成所有需要处理的影像对并检查已有匹配文件
     QVector<PairMatchData> allPairs;
     QVector<int> missingPairIndices;
+    QSet<QString> appendedPairKeys;
 
-    auto appendCandidatePair = [&](ImageId idA, ImageId idB)
+    auto appendCandidatePair = [&](ImageId idA, ImageId idB) -> bool
     {
+            const QString stablePairKey = canonicalPairKey(idToPath.value(idA), idToPath.value(idB));
+            if (stablePairKey.isEmpty() || appendedPairKeys.contains(stablePairKey))
+            {
+                return false;
+            }
+            appendedPairKeys.insert(stablePairKey);
+
             const QString baseA = QFileInfo(idToPath[idA]).completeBaseName();
             const QString baseB = QFileInfo(idToPath[idB]).completeBaseName();
 
@@ -3587,38 +3682,19 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
             auto findExistingMatchCache = [&](const QString &leftBase,
                                               const QString &rightBase) -> QString
             {
-                const QDir dir(matchDir);
-                const QStringList patterns{
-                    QStringLiteral("%1__%2.match").arg(leftBase, rightBase),
-                    QStringLiteral("%1__%2*.match").arg(leftBase, rightBase)
-                };
-
-                QFileInfoList candidates;
-                QSet<QString> seenPaths;
-                for (const QString &pattern : patterns)
+                const auto bucketIt = matchCacheFilesByLeftBase.constFind(matchCacheBaseKey(leftBase));
+                if (bucketIt == matchCacheFilesByLeftBase.constEnd())
                 {
-                    const QFileInfoList files = dir.entryInfoList(QStringList{pattern},
-                                                                  QDir::Files,
-                                                                  QDir::Time);
-                    for (const QFileInfo &fileInfo : files)
-                    {
-                        const QString path = QDir::cleanPath(fileInfo.absoluteFilePath());
-                        if (!seenPaths.contains(path))
-                        {
-                            seenPaths.insert(path);
-                            candidates.append(fileInfo);
-                        }
-                    }
+                    return QString();
                 }
 
-                std::sort(candidates.begin(), candidates.end(),
-                          [](const QFileInfo &left, const QFileInfo &right)
-                          {
-                              return left.lastModified() > right.lastModified();
-                          });
-
+                const QFileInfoList &candidates = bucketIt.value();
                 for (const QFileInfo &fileInfo : candidates)
                 {
+                    if (!matchFileNameMatchesPair(fileInfo, leftBase, rightBase))
+                    {
+                        continue;
+                    }
                     const QString candidatePath = QDir::cleanPath(fileInfo.absoluteFilePath());
                     if (existingMatchCompatible(candidatePath, idA, idB))
                     {
@@ -3752,27 +3828,146 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
             {
                 missingPairIndices.append(pairIdx);
             }
+            return true;
+    };
+
+    auto resolveMatchCacheImageId = [&](const QString &token, ImageId *imageId) -> bool
+    {
+        if (!imageId)
+        {
+            return false;
+        }
+
+        const QString resolvedPath = resolveImagePathTokenFromMeta(token, opts.projectMeta);
+        if (!resolvedPath.isEmpty())
+        {
+            const auto pathIt = validIdByPath.constFind(normalizePath(resolvedPath));
+            if (pathIt != validIdByPath.constEnd())
+            {
+                *imageId = pathIt.value();
+                return true;
+            }
+        }
+
+        const QString baseKey = matchCacheBaseKey(QFileInfo(token).completeBaseName());
+        const auto baseIt = uniqueIdByBase.constFind(baseKey);
+        if (baseIt != uniqueIdByBase.constEnd())
+        {
+            *imageId = baseIt.value();
+            return true;
+        }
+        return false;
+    };
+
+    auto resolveMatchCacheFileIds = [&](const QFileInfo &fileInfo, ImageId *idA, ImageId *idB) -> bool
+    {
+        const QJsonObject sidecar = readJsonObjectFile(fileInfo.absoluteFilePath() + QStringLiteral(".json"));
+        QString image0 = sidecar.value(QStringLiteral("image0_path")).toString().trimmed();
+        QString image1 = sidecar.value(QStringLiteral("image1_path")).toString().trimmed();
+        if (image0.isEmpty())
+        {
+            image0 = sidecar.value(QStringLiteral("image0_name")).toString().trimmed();
+        }
+        if (image1.isEmpty())
+        {
+            image1 = sidecar.value(QStringLiteral("image1_name")).toString().trimmed();
+        }
+        if (image0.isEmpty())
+        {
+            image0 = sidecar.value(QStringLiteral("image_a")).toString().trimmed();
+        }
+        if (image1.isEmpty())
+        {
+            image1 = sidecar.value(QStringLiteral("image_b")).toString().trimmed();
+        }
+
+        if (!image0.isEmpty() &&
+            !image1.isEmpty() &&
+            resolveMatchCacheImageId(image0, idA) &&
+            resolveMatchCacheImageId(image1, idB) &&
+            idA &&
+            idB &&
+            *idA != *idB)
+        {
+            return true;
+        }
+
+        const QString stem = fileInfo.completeBaseName();
+        const int separator = stem.indexOf(QStringLiteral("__"));
+        if (separator <= 0)
+        {
+            return false;
+        }
+
+        const QString leftBase = stem.left(separator);
+        if (!resolveMatchCacheImageId(leftBase, idA))
+        {
+            return false;
+        }
+
+        for (auto it = uniqueIdByBase.constBegin(); it != uniqueIdByBase.constEnd(); ++it)
+        {
+            if (it.value() == *idA)
+            {
+                continue;
+            }
+
+            const QString rightBase = QFileInfo(idToPath.value(it.value())).completeBaseName();
+            if (matchFileNameMatchesPair(fileInfo, leftBase, rightBase))
+            {
+                *idB = it.value();
+                return true;
+            }
+        }
+        return false;
+    };
+
+    auto appendExistingMatchCachesOutsidePlan = [&]() -> int
+    {
+        int appended = 0;
+        for (auto bucketIt = matchCacheFilesByLeftBase.constBegin();
+             bucketIt != matchCacheFilesByLeftBase.constEnd();
+             ++bucketIt)
+        {
+            for (const QFileInfo &fileInfo : bucketIt.value())
+            {
+                ImageId idA = 0;
+                ImageId idB = 0;
+                if (!resolveMatchCacheFileIds(fileInfo, &idA, &idB))
+                {
+                    continue;
+                }
+
+                const QString pairKey = canonicalPairKey(idToPath.value(idA), idToPath.value(idB));
+                if (pairKey.isEmpty() || appendedPairKeys.contains(pairKey))
+                {
+                    continue;
+                }
+
+                const QString matchPath = QDir::cleanPath(fileInfo.absoluteFilePath());
+                if (!existingMatchCompatible(matchPath, idA, idB))
+                {
+                    continue;
+                }
+
+                // restrictPairs 只控制“缺失 pair 是否要补生成”。已有且兼容的匹配缓存
+                // 已经是用户创建连接点得到的结果，SfM 必须全部纳入连接图。
+                if (appendCandidatePair(idA, idB))
+                {
+                    ++appended;
+                }
+            }
+        }
+        return appended;
     };
 
     if (pairPlan.restrictPairs)
     {
-        QMap<QString, ImageId> validIdByPath;
-        for (const ImageId id : validIds)
-        {
-            const QString normalizedPath = normalizePath(idToPath.value(id));
-            if (!normalizedPath.isEmpty())
-            {
-                validIdByPath.insert(normalizedPath, id);
-            }
-        }
-
-        QSet<QString> emittedPairKeys;
         for (const QString &pairKey : pairPlan.allowedPairKeys)
         {
             const QString trimmedPairKey = pairKey.trimmed();
             if (trimmedPairKey.isEmpty() ||
-                !allowedPairSet.contains(trimmedPairKey) ||
-                emittedPairKeys.contains(trimmedPairKey))
+                !allowedPairSet.contains(trimmedPairKey))
             {
                 continue;
             }
@@ -3792,8 +3987,14 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                 continue;
             }
 
-            emittedPairKeys.insert(trimmedPairKey);
             appendCandidatePair(itA.value(), itB.value());
+        }
+
+        const int extraExistingPairCount = appendExistingMatchCachesOutsidePlan();
+        if (extraExistingPairCount > 0)
+        {
+            LOG_INFO(QStringLiteral("  受限配对之外追加已有兼容匹配缓存: %1 对")
+                .arg(extraExistingPairCount));
         }
     }
     else
@@ -3891,7 +4092,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
             if (canUsePythonLightGlue)
             {
                 result.errorMessage += QStringLiteral(
-                    "。自动导出失败: %1；请检查 PLASCAN_PYTHON_EXECUTABLE/PLASCAN_PYTHON 指向的环境是否包含 torch 和 lightglue。"
+                    "。自动导出失败: %1；请检查 PLASCAN_PYTHON_EXECUTABLE、PLASCAN_PYTHON 或项目 .venv 是否包含 torch 和 lightglue。"
                     "如需临时使用 Python 逐对匹配，可设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1")
                     .arg(lightGlueExportError);
             }

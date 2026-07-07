@@ -6,6 +6,7 @@
  * 本文件不包含任何业务逻辑，所有 QAction 的 triggered 信号由主窗口负责连接。
  */
 #include "MainMenu.h"
+#include "AboutDialog.h"
 #include "WindowPanel.h"
 
 #include <QDir>
@@ -13,16 +14,104 @@
 #include <QMenuBar>
 #include <QMenu>
 #include <QAction>
+#include <QActionGroup>
 #include <QToolBar>
 #include <QApplication>
-#include <QStatusBar>
 #include <QWidgetAction>
 #include <QFileInfo>
+#include <QIcon>
+#include <QPainter>
+#include <QPaintEvent>
+#include <QPixmap>
+#include <QPolygonF>
 #include <QSize>
+#include <QSizePolicy>
 #include <QStyle>
+#include <QToolButton>
 #include <Qt>
 
 namespace {
+
+constexpr int ToolbarSplitButtonMenuWidth = 18;
+
+void drawToolbarSplitButtonArrow(QPainter &painter, const QRect &arrowRect, const QColor &color)
+{
+    const QPoint center = arrowRect.center();
+    QPolygonF arrow;
+    arrow << QPointF(center.x() - 3.5, center.y() - 1.5)
+          << QPointF(center.x() + 3.5, center.y() - 1.5)
+          << QPointF(center.x(), center.y() + 3.0);
+    painter.setBrush(color);
+    painter.setPen(Qt::NoPen);
+    painter.drawPolygon(arrow);
+}
+
+class ToolbarSplitButton : public QToolButton
+{
+public:
+    explicit ToolbarSplitButton(QWidget *parent = nullptr)
+        : QToolButton(parent)
+    {
+        setAutoRaise(true);
+        setPopupMode(QToolButton::MenuButtonPopup);
+        setToolButtonStyle(Qt::ToolButtonIconOnly);
+        setFocusPolicy(Qt::NoFocus);
+        setIconSize(QSize(44, 44));
+        setMinimumSize(QSize(66, 48));
+        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event)
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+
+        const QRect buttonRect = rect().adjusted(0, 0, -1, -1);
+        const bool active = isDown() || underMouse();
+        const QColor borderColor = active ? QColor(200, 212, 224) : QColor(214, 221, 231);
+        const QColor buttonColor = active ? QColor(238, 243, 248) : QColor(248, 250, 252);
+        const QColor menuColor = active ? QColor(226, 232, 240) : QColor(238, 242, 246);
+
+        painter.setPen(QPen(borderColor, 1.0));
+        painter.setBrush(buttonColor);
+        painter.drawRoundedRect(buttonRect, 3.0, 3.0);
+
+        QRect menuRect = rect();
+        menuRect.setLeft(width() - ToolbarSplitButtonMenuWidth);
+        painter.setPen(Qt::NoPen);
+        painter.setBrush(menuColor);
+        painter.drawRect(menuRect.adjusted(0, 1, -1, -1));
+        painter.setPen(QPen(QColor(201, 210, 220), 1.0));
+        painter.drawLine(menuRect.topLeft() + QPoint(0, 1), menuRect.bottomLeft() - QPoint(0, 1));
+        drawToolbarSplitButtonArrow(painter, menuRect, QColor(86, 101, 116));
+
+        QRect iconArea = rect();
+        iconArea.setRight(width() - ToolbarSplitButtonMenuWidth - 1);
+        const QSize drawSize(qMin(iconSize().width(), iconArea.width() - 2),
+                             qMin(iconSize().height(), iconArea.height() - 2));
+        const QPoint iconTopLeft(iconArea.left() + (iconArea.width() - drawSize.width()) / 2,
+                                 iconArea.top() + (iconArea.height() - drawSize.height()) / 2);
+        const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
+        const QIcon::State state = isChecked() ? QIcon::On : QIcon::Off;
+        const QPixmap pixmap = icon().pixmap(drawSize, mode, state);
+        painter.drawPixmap(iconTopLeft, pixmap);
+    }
+
+    void enterEvent(QEnterEvent *event) override
+    {
+        QToolButton::enterEvent(event);
+        update();
+    }
+
+    void leaveEvent(QEvent *event) override
+    {
+        QToolButton::leaveEvent(event);
+        update();
+    }
+};
 
 template <typename T>
 T *findNamedChild(QObject *root, const char *name)
@@ -125,6 +214,120 @@ QMenu *ensureSubMenu(QObject *root,
     return menu;
 }
 
+QIcon makeCameraToolbarIcon()
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor bodyColor(142, 145, 148);
+    const QColor lensColor(118, 121, 125);
+    const QColor highlightColor(226, 228, 230);
+    painter.setPen(Qt::NoPen);
+
+    painter.setBrush(bodyColor);
+    const QRectF cameraBodyRect(2.0, 17.0, 52.0, 35.0);
+    painter.drawRoundedRect(cameraBodyRect, 4.0, 4.0);
+
+    const QRectF cameraTopRect(10.0, 7.0, 22.0, 13.0);
+    painter.drawRoundedRect(cameraTopRect, 3.0, 3.0);
+
+    const QRectF cameraShutterRect(40.0, 10.0, 9.0, 6.0);
+    painter.drawRoundedRect(cameraShutterRect, 1.8, 1.8);
+
+    painter.setBrush(lensColor);
+    const QRectF cameraLensRect(19.0, 24.0, 18.0, 18.0);
+    painter.drawEllipse(cameraLensRect);
+
+    painter.setBrush(highlightColor);
+    painter.drawEllipse(QRectF(24.0, 29.0, 7.0, 7.0));
+    painter.drawEllipse(QRectF(43.0, 20.5, 3.2, 3.2));
+
+    return QIcon(pixmap);
+}
+
+QIcon makeCameraImageToolbarIcon()
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor frameColor(128, 132, 136);
+    const QColor imageColor(182, 185, 188);
+    const QColor detailColor(96, 100, 105);
+    painter.setPen(Qt::NoPen);
+
+    painter.setBrush(frameColor);
+    const QRectF imageFrameRect(3.0, 3.0, 50.0, 50.0);
+    painter.drawRoundedRect(imageFrameRect, 3.0, 3.0);
+
+    painter.setBrush(imageColor);
+    painter.drawRect(QRectF(10.0, 10.0, 36.0, 36.0));
+
+    painter.setBrush(detailColor);
+    QPolygonF imageMountain;
+    imageMountain << QPointF(10.0, 46.0)
+                  << QPointF(21.0, 28.0)
+                  << QPointF(29.0, 37.0)
+                  << QPointF(34.0, 33.0)
+                  << QPointF(46.0, 46.0);
+    painter.drawPolygon(imageMountain);
+
+    const QRectF imageSunRect(36.0, 15.0, 7.0, 7.0);
+    painter.drawEllipse(imageSunRect);
+
+    return QIcon(pixmap);
+}
+
+QString toolbarSplitButtonStyleSheet()
+{
+    return QStringLiteral(
+        "QToolButton {"
+        "  background: transparent;"
+        "  border: 1px solid transparent;"
+        "  border-radius: 3px;"
+        "  padding: 0px 18px 0px 0px;"
+        "  min-width: 66px;"
+        "  min-height: 48px;"
+        "  outline: none;"
+        "}"
+        "QToolButton:hover {"
+        "  background: #eef3f8;"
+        "  border-color: #c8d4e0;"
+        "}"
+        "QToolButton:pressed {"
+        "  background: #e2e8f0;"
+        "  border-color: #b6c4d2;"
+        "}"
+        "QToolButton:checked {"
+        "  background: transparent;"
+        "  border-color: transparent;"
+        "  color: #102a43;"
+        "}"
+        "QToolButton:checked:hover {"
+        "  background: #eef3f8;"
+        "  border-color: #c8d4e0;"
+        "}"
+        "QToolButton::menu-button {"
+        "  subcontrol-origin: border;"
+        "  subcontrol-position: top right;"
+        "  width: 18px;"
+        "  border-left: 1px solid #c9d2dc;"
+        "  background: #eef2f6;"
+        "  border-top-right-radius: 3px;"
+        "  border-bottom-right-radius: 3px;"
+        "}"
+        "QToolButton::menu-button:hover {"
+        "  background: #e2e8f0;"
+        "}"
+        "QToolButton::menu-arrow {"
+        "  width: 7px;"
+        "  height: 7px;"
+        "}");
+}
+
 } // namespace
 
 // ============================================================
@@ -202,6 +405,207 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _viewTiePointMatchesAct->setToolTip(tr("打开当前项目的匹配查看器"));
     };
 
+    auto installModelDisplayMenu = [this](QMenu *modelMenu)
+    {
+        if (!modelMenu)
+        {
+            return;
+        }
+        _modelMenu = modelMenu;
+
+        QMenu *displayMenu = ensureSubMenu(_mainWindow,
+                                           modelMenu,
+                                           QStringLiteral("menuModelDisplayHideItems"),
+                                           tr("显示/隐藏项目"));
+        if (!displayMenu)
+        {
+            return;
+        }
+        _modelDisplayHideMenu = displayMenu;
+
+        if (_toggleCamerasAct && !displayMenu->actions().contains(_toggleCamerasAct))
+        {
+            displayMenu->addAction(_toggleCamerasAct);
+        }
+
+        _toggleDependentCamerasAct = ensurePlainAction(_mainWindow,
+                                                       displayMenu,
+                                                       displayMenu,
+                                                       QStringLiteral("actionToggleDependentCameras"),
+                                                       tr("显示从属相机"));
+        _toggleDependentCamerasAct->setEnabled(false);
+        _toggleDependentCamerasAct->setToolTip(tr("暂未建立模型与从属相机关系，当前版本无法单独显示从属相机"));
+
+        _toggleCameraThumbnailsAct = ensureCheckableAction(_mainWindow,
+                                                           displayMenu,
+                                                           displayMenu,
+                                                           QStringLiteral("actionToggleCameraThumbnails"),
+                                                           tr("显示缩略图"),
+                                                           true);
+        _toggleCameraThumbnailsAct->setToolTip(tr("在相机平面上显示项目缩略图"));
+
+        QMenu *imageMenu = ensureSubMenu(_mainWindow,
+                                         displayMenu,
+                                         QStringLiteral("menuModelDisplayImages"),
+                                         tr("显示图像"));
+        if (!imageMenu)
+        {
+            return;
+        }
+
+        _toggleCameraImagesAct = ensureCheckableAction(_mainWindow,
+                                                       imageMenu,
+                                                       imageMenu,
+                                                       QStringLiteral("actionToggleCameraImages"),
+                                                       tr("显示图像"),
+                                                       false);
+        _toggleCameraImagesAct->setToolTip(tr("显示或隐藏当前选中相机的图像平面"));
+
+        imageMenu->addSeparator();
+
+        _showCameraImagesInForegroundAct = ensureCheckableAction(_mainWindow,
+                                                                 imageMenu,
+                                                                 imageMenu,
+                                                                 QStringLiteral("actionShowCameraImagesInForeground"),
+                                                                 tr("在前景中显示"),
+                                                                 true);
+        _showCameraImagesInForegroundAct->setToolTip(tr("将当前相机图像绘制在相机缩略图和标签前方"));
+
+        _showCameraImagesInBackgroundAct = ensureCheckableAction(_mainWindow,
+                                                                 imageMenu,
+                                                                 imageMenu,
+                                                                 QStringLiteral("actionShowCameraImagesInBackground"),
+                                                                 tr("在后景中显示"),
+                                                                 false);
+        _showCameraImagesInBackgroundAct->setToolTip(tr("将当前相机图像绘制在相机缩略图和标签后方"));
+
+        auto *displayLayerGroup =
+            imageMenu->findChild<QActionGroup *>(QStringLiteral("actionGroupCameraImageDisplayLayer"));
+        if (!displayLayerGroup)
+        {
+            displayLayerGroup = new QActionGroup(imageMenu);
+            displayLayerGroup->setObjectName(QStringLiteral("actionGroupCameraImageDisplayLayer"));
+        }
+        displayLayerGroup->setExclusive(true);
+        if (_showCameraImagesInForegroundAct->actionGroup() != displayLayerGroup)
+        {
+            displayLayerGroup->addAction(_showCameraImagesInForegroundAct);
+        }
+        if (_showCameraImagesInBackgroundAct->actionGroup() != displayLayerGroup)
+        {
+            displayLayerGroup->addAction(_showCameraImagesInBackgroundAct);
+        }
+
+        imageMenu->addSeparator();
+
+        _lockCameraImageAct = ensureCheckableAction(_mainWindow,
+                                                    imageMenu,
+                                                    imageMenu,
+                                                    QStringLiteral("actionLockCameraImage"),
+                                                    tr("锁定图像"),
+                                                    false);
+        _lockCameraImageAct->setToolTip(tr("保持当前显示的相机图像，不随照片选择变化切换"));
+    };
+
+    auto installCameraToolbarButton = [this]()
+    {
+        if (!_toolBar || !_toggleCamerasAct || !_toggleCameraThumbnailsAct || !_toggleDependentCamerasAct)
+        {
+            return;
+        }
+        if (_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraVisibility")))
+        {
+            return;
+        }
+
+        _toggleCamerasAct->setIcon(makeCameraToolbarIcon());
+        _toggleCamerasAct->setText(tr("显示相机"));
+        _toggleCamerasAct->setToolTip(tr("显示相机"));
+
+        const bool showLocalAxes = !_toggleGizmoAct || _toggleGizmoAct->isChecked();
+        _toggleLocalAxesAct = ensureCheckableAction(_mainWindow,
+                                                    _mainWindow,
+                                                    nullptr,
+                                                    QStringLiteral("actionToggleLocalAxes"),
+                                                    tr("显示本地轴"),
+                                                    showLocalAxes);
+        _toggleLocalAxesAct->setToolTip(tr("显示或隐藏模型视图中的本地轴"));
+
+        auto *button = new ToolbarSplitButton(_toolBar);
+        button->setObjectName(QStringLiteral("toolButtonModelCameraVisibility"));
+        button->setAutoRaise(true);
+        button->setDefaultAction(_toggleCamerasAct);
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setIconSize(QSize(44, 44));
+        button->setMinimumSize(QSize(66, 48));
+        button->setStyleSheet(toolbarSplitButtonStyleSheet());
+        button->setToolTip(tr("显示相机"));
+
+        auto *cameraMenu = new QMenu(button);
+        cameraMenu->setObjectName(QStringLiteral("menuToolbarCameraVisibility"));
+        cameraMenu->addAction(_toggleCameraThumbnailsAct);
+        cameraMenu->addAction(_toggleDependentCamerasAct);
+        cameraMenu->addAction(_toggleLocalAxesAct);
+        button->setMenu(cameraMenu);
+
+        if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
+        {
+            _toolBar->insertWidget(_manualPointCloudPruneAct, button);
+        }
+        else
+        {
+            _toolBar->addWidget(button);
+        }
+    };
+
+    auto installCameraImageToolbarButton = [this]()
+    {
+        if (!_toolBar || !_toggleCameraImagesAct ||
+            !_showCameraImagesInForegroundAct || !_showCameraImagesInBackgroundAct || !_lockCameraImageAct)
+        {
+            return;
+        }
+        if (_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility")))
+        {
+            return;
+        }
+
+        _toggleCameraImagesAct->setIcon(makeCameraImageToolbarIcon());
+        _toggleCameraImagesAct->setText(tr("显示图像"));
+        _toggleCameraImagesAct->setToolTip(tr("显示图像"));
+
+        auto *button = new ToolbarSplitButton(_toolBar);
+        button->setObjectName(QStringLiteral("toolButtonModelCameraImageVisibility"));
+        button->setAutoRaise(true);
+        button->setDefaultAction(_toggleCameraImagesAct);
+        button->setPopupMode(QToolButton::MenuButtonPopup);
+        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
+        button->setFocusPolicy(Qt::NoFocus);
+        button->setIconSize(QSize(44, 44));
+        button->setMinimumSize(QSize(66, 48));
+        button->setStyleSheet(toolbarSplitButtonStyleSheet());
+        button->setToolTip(tr("显示图像"));
+
+        auto *imageMenu = new QMenu(button);
+        imageMenu->setObjectName(QStringLiteral("menuToolbarCameraImageVisibility"));
+        imageMenu->addAction(_showCameraImagesInForegroundAct);
+        imageMenu->addAction(_showCameraImagesInBackgroundAct);
+        imageMenu->addSeparator();
+        imageMenu->addAction(_lockCameraImageAct);
+        button->setMenu(imageMenu);
+
+        if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
+        {
+            _toolBar->insertWidget(_manualPointCloudPruneAct, button);
+        }
+        else
+        {
+            _toolBar->addWidget(button);
+        }
+    };
+
     if (findNamedChild<QAction>(_mainWindow, "actionNewProject"))
     {
         _fileMenu = findNamedChild<QMenu>(_mainWindow, "menuProject");
@@ -209,7 +613,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         auto *viewMenu = findNamedChild<QMenu>(_mainWindow, "menuView");
         auto *windowMenu = findNamedChild<QMenu>(_mainWindow, "menuWindow");
         auto *workflowMenu = findNamedChild<QMenu>(_mainWindow, "menuWorkflow");
+        auto *reconstructionMenu = findNamedChild<QMenu>(_mainWindow, "menuReconstruction");
         auto *toolsMenu = findNamedChild<QMenu>(_mainWindow, "menuTools");
+        auto *modelMenu = findNamedChild<QMenu>(_mainWindow, "menuModel");
 
         _newAct = findNamedChild<QAction>(_mainWindow, "actionNewProject");
         _openAct = findNamedChild<QAction>(_mainWindow, "actionOpenProject");
@@ -377,6 +783,26 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             _toggleCamerasAct->setChecked(true);
             _toggleCamerasAct->setToolTip(tr("显示或隐藏 3D 视图中的相机光心、视锥体和文件名标签"));
         }
+        if (!modelMenu)
+        {
+            modelMenu = new QMenu(tr("模型"), _mainWindow);
+            modelMenu->setObjectName(QStringLiteral("menuModel"));
+            if (_mainWindow->menuBar())
+            {
+                QAction *before = reconstructionMenu
+                    ? reconstructionMenu->menuAction()
+                    : (toolsMenu ? toolsMenu->menuAction() : nullptr);
+                if (before)
+                {
+                    _mainWindow->menuBar()->insertMenu(before, modelMenu);
+                }
+                else
+                {
+                    _mainWindow->menuBar()->addMenu(modelMenu);
+                }
+            }
+        }
+        installModelDisplayMenu(modelMenu);
         if (!_cameraConvertAct)
         {
             QObject *actionParent = toolsMenu
@@ -514,7 +940,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         if (auto *aboutAct = findNamedChild<QAction>(_mainWindow, "actionAbout"))
         {
             connect(aboutAct, &QAction::triggered, _mainWindow, [mw = _mainWindow]() {
-                mw->statusBar()->showMessage(tr("PlaScan: 行星表面摄影测量处理系统"), 3000);
+                AboutDialog dialog(mw);
+                dialog.exec();
             });
         }
 
@@ -584,6 +1011,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             _manualPointCloudPruneAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_CommandLink));
         }
+        installCameraToolbarButton();
+        installCameraImageToolbarButton();
 
         return;
     }
@@ -689,6 +1118,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _createDEMAct      = workflowMenu->addAction(tr("创建 DEM"));          // DEM 完整流程
     _generateOrthoAct  = workflowMenu->addAction(tr("生成 正射影像"));     // 正射影像完整流程
 
+    _modelMenu = _mainWindow->menuBar()->addMenu(tr("模型"));
+    _modelMenu->setObjectName(QStringLiteral("menuModel"));
+    installModelDisplayMenu(_modelMenu);
+
     // ---- 重建菜单 ----
     // 三级菜单结构：稀疏重建 / 密集重建 / 模型生成
     auto *reconMenu = _mainWindow->menuBar()->addMenu(tr("重建"));
@@ -765,8 +1198,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     // ---- 帮助菜单 ----
     auto *helpMenu = _mainWindow->menuBar()->addMenu(tr("帮助"));
     helpMenu->addAction(tr("关于"), _mainWindow, [mw = _mainWindow]() {
-        // 在状态栏短暂显示应用说明，3 秒后自动清除
-        mw->statusBar()->showMessage(tr("PlaScan: 行星表面摄影测量处理系统"), 3000);
+        AboutDialog dialog(mw);
+        dialog.exec();
     });
 
     // ---- 主工具栏 ----
@@ -821,6 +1254,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             _manualPointCloudPruneAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_CommandLink));
             _toolBar->addAction(_manualPointCloudPruneAct);
         }
+        installCameraToolbarButton();
+        installCameraImageToolbarButton();
     }
 }
 
@@ -889,6 +1324,16 @@ QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }
 QAction *MainMenu::resetViewAction() const { return _resetViewAct; }
 QAction *MainMenu::toggleGizmoAction() const { return _toggleGizmoAct; }
 QAction *MainMenu::toggleCamerasAction() const { return _toggleCamerasAct; }
+QAction *MainMenu::toggleDependentCamerasAction() const { return _toggleDependentCamerasAct; }
+QAction *MainMenu::toggleCameraThumbnailsAction() const { return _toggleCameraThumbnailsAct; }
+QAction *MainMenu::toggleLocalAxesAction() const
+{
+    return _toggleLocalAxesAct;
+}
+QAction *MainMenu::toggleCameraImagesAction() const { return _toggleCameraImagesAct; }
+QAction *MainMenu::showCameraImagesInForegroundAction() const { return _showCameraImagesInForegroundAct; }
+QAction *MainMenu::showCameraImagesInBackgroundAction() const { return _showCameraImagesInBackgroundAct; }
+QAction *MainMenu::lockCameraImageAction() const { return _lockCameraImageAct; }
 QAction *MainMenu::toggleHenanUniversityBrandAction() const { return _toggleHenanUniversityBrandAct; }
 
 QAction *MainMenu::addPhotoAction() const       { return _addPhotoAct; }

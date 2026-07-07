@@ -25,3 +25,8 @@ docker/debs/
 .worktrees/
 logs/
 .superpowers/
+
+# Large AI mask model artifacts are installed locally by scripts.
+resources/models/sam2.1_hiera_tiny.pt
+resources/models/sam21_hiera_*.pt
+resources/models/U2Net_v1.onnx

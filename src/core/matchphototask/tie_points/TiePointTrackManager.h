@@ -30,6 +30,7 @@ struct TiePointTrackBuildResult
     int prunedStationaryTracks = 0;
     double meanTrackConfidence = 0.0;
     QJsonObject trackSummary;
+    QString tiePointPath;
 };
 
 // 管理“匹配照片”阶段最终产出的多视图连接点轨迹。

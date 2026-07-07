@@ -98,8 +98,6 @@ private:
     // 当前的兴趣点显示选项（由 UI 通过 applyFeatureDisplayOptions 设置）
     LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;
     QString _currentImagePath;
-    // 后台读取 .sp 的 watcher（每次启动一个异步任务）
-    QFutureWatcher<std::vector<cv::KeyPoint>> *_spWatcher{nullptr};
     QFutureWatcher<QImage> *_imageWatcher{nullptr};
     // cache: imagePath -> (lastModified, keypoints)
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;

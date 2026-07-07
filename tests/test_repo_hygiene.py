@@ -103,6 +103,41 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("(void)min_z;", icp_source)
         self.assertIn("(void)max_z;", icp_source)
 
+    def test_vcpkg_manifest_has_optional_opencv_dnn_cuda_feature(self):
+        manifest = json.loads((ROOT / "vcpkg.json").read_text(encoding="utf-8"))
+        base_opencv_dependency = next(
+            dependency for dependency in manifest.get("dependencies", [])
+            if isinstance(dependency, dict) and dependency.get("name") == "opencv"
+        )
+        self.assertIn("dnn", set(base_opencv_dependency.get("features", [])))
+
+        optional_features = manifest.get("features", {})
+        self.assertIn("opencv-dnn-cuda", optional_features)
+        feature_dependencies = optional_features["opencv-dnn-cuda"].get("dependencies", [])
+        opencv_dependency = next(
+            dependency for dependency in feature_dependencies
+            if isinstance(dependency, dict) and dependency.get("name") == "opencv"
+        )
+        opencv_features = set(opencv_dependency.get("features", []))
+
+        self.assertIn("cuda", opencv_features)
+        self.assertIn("dnn", opencv_features)
+        self.assertIn("dnn-cuda", opencv_features)
+
+    def test_windows_cuda_build_script_exposes_opencv_dnn_cuda_switch(self):
+        script_path = ROOT / "scripts" / "build_win" / "build_windows_cuda.ps1"
+        text = script_path.read_text(encoding="utf-8")
+
+        self.assertIn("EnableOpenCvDnnCuda", text)
+        self.assertIn("VCPKG_MANIFEST_FEATURES=opencv-dnn-cuda", text)
+        self.assertIn("Assert-OpenCvDnnCudaFeatures", text)
+        self.assertIn("CudnnRoot", text)
+        self.assertIn("CUDNN_ROOT_DIR", text)
+        self.assertIn("build\\env\\cudnn-cu13", text)
+        self.assertIn("VCPKG_OVERLAY_TRIPLETS", text)
+        self.assertIn("VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN cudnn", text)
+        self.assertIn("OpenCV DNN CUDA", text)
+
     def test_laser_photogrammetry_dataset_notes_capture_future_ba_inputs(self):
         doc_path = ROOT / "docs" / "design" / "LASER_PHOTOGRAMMETRY_DATASETS.md"
 

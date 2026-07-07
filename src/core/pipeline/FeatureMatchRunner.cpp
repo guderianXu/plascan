@@ -121,6 +121,19 @@ QString resolvedExecutablePath(const QString &candidate)
     return resolved.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
 }
 
+QString repoLocalPythonExecutable()
+{
+#ifdef PLASCAN_SOURCE_DIR
+#ifdef Q_OS_WIN
+    return QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral(".venv/Scripts/python.exe"));
+#else
+    return QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral(".venv/bin/python"));
+#endif
+#else
+    return QString();
+#endif
+}
+
 QString pythonExecutable()
 {
     static const QString cached = []()
@@ -128,6 +141,7 @@ QString pythonExecutable()
         QStringList candidates;
         candidates << qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed()
                    << qEnvironmentVariable("PLASCAN_PYTHON").trimmed()
+                   << repoLocalPythonExecutable()
                    << qEnvironmentVariable("PYTHON").trimmed()
                    << QStringLiteral("python3")
                    << QStringLiteral("python");
@@ -1068,7 +1082,7 @@ void FeatureMatchRunner::run(const QJsonObject &config, const QStringList &image
         {
             LOG_ERROR("%s", qUtf8Printable(
                 QString("LightGlue %1 TorchScript 模型不存在(%2)，自动导出失败: %3。"
-                        "请检查 PLASCAN_PYTHON_EXECUTABLE/PLASCAN_PYTHON 指向的环境是否包含 torch 和 lightglue；"
+                        "请检查 PLASCAN_PYTHON_EXECUTABLE、PLASCAN_PYTHON 或项目 .venv 是否包含 torch 和 lightglue；"
                         "如需临时使用 Python 逐对匹配，可设置 PLASCAN_ALLOW_PYTHON_LIGHTGLUE_FALLBACK=1")
                     .arg(lightglueAlgo,
                          modelCandidates.join(QStringLiteral(", ")),

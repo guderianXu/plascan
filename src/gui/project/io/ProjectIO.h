@@ -19,6 +19,7 @@
 // =============================================================================
 #pragma once
 
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
@@ -87,6 +88,9 @@ public:
 
     // 查找指定影像对应的蒙版文件，优先标准目录，其次影像同目录。
     static QString findMaskForImage(const QString &plascanPath, const QString &imagePath);
+    // 批量生成影像到蒙版的映射；仅返回真实存在的蒙版，供连接点任务按需过滤。
+    static QMap<QString, QString> maskPathsForImages(const QString &plascanPath,
+                                                     const QStringList &imagePaths);
 
 private:
     // 生成 .sp 文件的候选路径列表（优先检查临时目录，其次标准目录，再次影像同目录）

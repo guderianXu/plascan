@@ -3,6 +3,36 @@
 #include "FeatureStage.h"
 #include "GeometryVerifyStage.h"
 #include "GuidedMatchStage.h"
+
+// 避免 Qt 关键字宏改写 LibTorch 头文件中的 slots()/signals() 成员。
+#ifdef slots
+#undef slots
+#define PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_SLOTS
+#endif
+#ifdef signals
+#undef signals
+#define PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_SIGNALS
+#endif
+#ifdef emit
+#undef emit
+#define PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_EMIT
+#endif
+
+#include "MatchPhotosMaskSupport.h"
+
+#ifdef PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_SLOTS
+#define slots Q_SLOTS
+#undef PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_SLOTS
+#endif
+#ifdef PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_SIGNALS
+#define signals Q_SIGNALS
+#undef PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_SIGNALS
+#endif
+#ifdef PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_EMIT
+#define emit Q_EMIT
+#undef PLASCAN_MATCHPHOTOS_MASK_TEST_RESTORE_QT_EMIT
+#endif
+
 #include "MatchPhotosAlgorithmSelector.h"
 #include "MatchPhotosRuntime.h"
 #include "MatchingStage.h"
@@ -108,6 +138,48 @@ TEST(MatchPhotosTaskTest, RunsPairSelectionAndReportsStageSkeleton)
     EXPECT_EQ(result.stages.at(1).status, xjw::matchphotos::MatchPhotosStageStatus::Skipped);
 }
 
+TEST(MatchPhotosTaskTest, ReportsDetailedProgressThroughContextCallback)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.pairPolicy.exhaustiveMaxImages = 3;
+
+    xjw::matchphotos::MatchPhotosContext context;
+    context.pairInput.images = makeImages(4);
+
+    std::vector<QString> stageIds;
+    std::vector<QString> messages;
+    context.progressCallback =
+        [&stageIds, &messages](const QString &stageId,
+                               const QString &message,
+                               int current,
+                               int maximum)
+    {
+        stageIds.push_back(stageId);
+        messages.push_back(message);
+        EXPECT_GE(current, 0);
+        EXPECT_GE(maximum, 1);
+    };
+
+    const xjw::matchphotos::MatchPhotosTask task(options);
+    const xjw::matchphotos::MatchPhotosResult result = task.run(context);
+
+    EXPECT_TRUE(result.success) << result.errorMessage.toStdString();
+    EXPECT_NE(std::find(stageIds.begin(), stageIds.end(), QStringLiteral("algorithm_selection")),
+              stageIds.end());
+    EXPECT_NE(std::find(stageIds.begin(), stageIds.end(), QStringLiteral("feature")),
+              stageIds.end());
+    EXPECT_NE(std::find(stageIds.begin(), stageIds.end(), QStringLiteral("pair_selection")),
+              stageIds.end());
+    EXPECT_TRUE(std::any_of(messages.begin(), messages.end(), [](const QString &message)
+    {
+        return message.contains(QStringLiteral("特征"));
+    }));
+    EXPECT_TRUE(std::any_of(messages.begin(), messages.end(), [](const QString &message)
+    {
+        return message.contains(QStringLiteral("影像对"));
+    }));
+}
+
 TEST(MatchPhotosTaskTest, FeatureStageWritesSiftFilesForSyntheticImages)
 {
     QTemporaryDir tempDir;
@@ -155,6 +227,129 @@ TEST(MatchPhotosTaskTest, FeatureStageUsesTraditionalFeatureConfig)
     EXPECT_FALSE(source.contains(QStringLiteral("SuperPointConfig config")));
 }
 
+TEST(MatchPhotosTaskTest, FeatureStageUsesDenseSiftThresholdForTiePointExtraction)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/FeatureStage.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("imageConfig.detectionThreshold")));
+    EXPECT_TRUE(source.contains(QStringLiteral("0.001f")))
+        << "连接点生成使用 CUDA SIFT 时不能沿用 TraditionalFeatureConfig 默认 0.005，"
+           "否则 Hayabusa2 这类小天体影像会只保留几百个关键点。";
+}
+
+TEST(MatchPhotosTaskTest, ExplicitCudaSiftDoesNotSilentlyFallBackToCpu)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/FeatureStage.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("config.allowDeviceFallback = options.device != ComputeDevice::Cuda")))
+        << "空三默认请求 CUDA SIFT 后，CUDA 后端不可用时必须报错，不能静默改跑 CPU SIFT。";
+}
+
+TEST(MatchPhotosTaskTest, GenericPreselectionUsesConnectedNoCameraPairGraphDefaults)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/task/MatchPhotosTask.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int configStart = source.indexOf(QStringLiteral("VocabularyOverlapConfig makeVocabularyConfig"));
+    ASSERT_GE(configStart, 0);
+    const int configEnd = source.indexOf(QStringLiteral("MatchPhotosStageReport makeVocabularyPreselectionReport"),
+                                         configStart);
+    ASSERT_GT(configEnd, configStart);
+    const QString configBody = source.mid(configStart, configEnd - configStart);
+
+    EXPECT_TRUE(configBody.contains(QStringLiteral("std::max(8, options.pairPolicy.sequenceWindow * 2)")));
+    EXPECT_TRUE(configBody.contains(QStringLiteral("config.minPairsPerImage")));
+    EXPECT_TRUE(configBody.contains(QStringLiteral("std::max(4, options.pairPolicy.sequenceWindow)")));
+    EXPECT_TRUE(configBody.contains(QStringLiteral("config.connectComponents = true")));
+    EXPECT_TRUE(configBody.contains(QStringLiteral("config.useSequenceFallback = true")));
+    EXPECT_TRUE(configBody.contains(QStringLiteral("config.sequenceWindow")));
+    EXPECT_TRUE(configBody.contains(QStringLiteral("config.closeSequenceLoop = true")));
+}
+
+TEST(MatchPhotosTaskTest, GenericPreselectionReportsRetrieverProgress)
+{
+    const QString source =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/task/MatchPhotosTask.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("bool buildVocabularyPreselection"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("MatchPhotosStageReport makeReferencePreselectionReport"), start);
+    ASSERT_GT(end, start);
+    const QString body = source.mid(start, end - start);
+
+    EXPECT_TRUE(body.contains(QStringLiteral("Generic 预选")));
+    EXPECT_TRUE(body.contains(QStringLiteral("reportMatchPhotosProgress")));
+    EXPECT_TRUE(body.contains(QStringLiteral("QString::fromStdString(stage)")));
+}
+
+TEST(MatchPhotosMaskSupportTest, KeypointMaskRemovesDescriptorsInMaskedPixels)
+{
+    FeatureOutput output;
+    output.imageWidth = 4;
+    output.imageHeight = 4;
+    output.keypoints = {
+        cv::KeyPoint(cv::Point2f(1.0f, 1.0f), 1.0f),
+        cv::KeyPoint(cv::Point2f(3.0f, 1.0f), 1.0f)
+    };
+    output.scores = {0.9f, 0.8f};
+    output.descriptors = torch::tensor({{1.0f, 0.0f}, {0.0f, 1.0f}}, torch::kFloat32);
+
+    cv::Mat mask(4, 4, CV_8UC1, cv::Scalar(0));
+    mask.at<uchar>(1, 3) = 255;
+
+    const FeatureOutput filtered = xjw::matchphotos::filterFeatureOutputByMask(output, mask);
+
+    ASSERT_EQ(filtered.keypoints.size(), 1u);
+    ASSERT_EQ(filtered.scores.size(), 1u);
+    EXPECT_FLOAT_EQ(filtered.keypoints.front().pt.x, 1.0f);
+    ASSERT_TRUE(filtered.descriptors.defined());
+    ASSERT_EQ(filtered.descriptors.size(0), 1);
+    ASSERT_EQ(filtered.descriptors.size(1), 2);
+    EXPECT_FLOAT_EQ(filtered.descriptors.index({0, 0}).item<float>(), 1.0f);
+}
+
+TEST(MatchPhotosMaskSupportTest, TiepointMaskRemovesMatchesTouchingMaskedPixels)
+{
+    xjw::feature_extractors::FeatureData feature0;
+    feature0.keypoints = {
+        cv::KeyPoint(cv::Point2f(1.0f, 1.0f), 1.0f),
+        cv::KeyPoint(cv::Point2f(2.0f, 1.0f), 1.0f)
+    };
+    xjw::feature_extractors::FeatureData feature1;
+    feature1.keypoints = {
+        cv::KeyPoint(cv::Point2f(1.0f, 1.0f), 1.0f),
+        cv::KeyPoint(cv::Point2f(3.0f, 1.0f), 1.0f)
+    };
+
+    const std::vector<cv::DMatch> matches = {
+        cv::DMatch(0, 0, 0.1f),
+        cv::DMatch(1, 1, 0.2f)
+    };
+    xjw::feature_match::MatchResult result =
+        xjw::feature_match::MatchResult::fromCvMatches(matches, 2, 2, "lightglue");
+
+    cv::Mat mask0(4, 4, CV_8UC1, cv::Scalar(0));
+    cv::Mat mask1(4, 4, CV_8UC1, cv::Scalar(0));
+    mask1.at<uchar>(1, 3) = 255;
+
+    const xjw::feature_match::MatchResult filtered =
+        xjw::matchphotos::filterMatchResultByMasks(result, feature0, feature1, mask0, mask1);
+
+    ASSERT_EQ(filtered.cvMatches.size(), 1u);
+    EXPECT_EQ(filtered.cvMatches.front().queryIdx, 0);
+    EXPECT_EQ(filtered.cvMatches.front().trainIdx, 0);
+    EXPECT_EQ(filtered.numMatches, 1);
+    ASSERT_EQ(filtered.matches0.size(), 2u);
+    EXPECT_EQ(filtered.matches0[0], 0);
+    EXPECT_EQ(filtered.matches0[1], -1);
+}
+
 TEST(MatchPhotosTaskTest, MatchingStageUsesMemoryAwareLightGlueBudget)
 {
     const QString source =
@@ -173,10 +368,13 @@ TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
         readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/GeometryVerifyStage.cpp"));
     const QString trackSource =
         readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/TrackBuildStage.cpp"));
+    const QString resultHeader =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/task/MatchPhotosResult.h"));
     const QString tiePointSource =
         readProjectSourceFile(QStringLiteral("src/core/matchphototask/tie_points/TiePointTrackManager.cpp"));
     ASSERT_FALSE(geometrySource.isEmpty());
     ASSERT_FALSE(trackSource.isEmpty());
+    ASSERT_FALSE(resultHeader.isEmpty());
     ASSERT_FALSE(tiePointSource.isEmpty());
 
     EXPECT_TRUE(geometrySource.contains(QStringLiteral("MatchGeometryFilter::filter")));
@@ -184,6 +382,11 @@ TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
     EXPECT_TRUE(trackSource.contains(QStringLiteral("TiePointTrackManager")));
     EXPECT_FALSE(trackSource.contains(QStringLiteral("FeatureFileIO::readData")));
     EXPECT_TRUE(tiePointSource.contains(QStringLiteral("MultiViewTrackBuilder")));
+    EXPECT_FALSE(resultHeader.contains(QStringLiteral("std::vector<Track> tracks")));
+    EXPECT_FALSE(trackSource.contains(QStringLiteral("result->tracks = buildResult.tracks")));
+    EXPECT_TRUE(trackSource.contains(QStringLiteral("result->tiePointPath = buildResult.tiePointPath")));
+    EXPECT_TRUE(tiePointSource.contains(QStringLiteral("latest_tie_points.json")));
+    EXPECT_TRUE(tiePointSource.contains(QStringLiteral("plascan_tie_points")));
     EXPECT_FALSE(trackSource.contains(QStringLiteral("轨迹构建阶段尚未接入")));
 }
 
@@ -216,4 +419,28 @@ TEST(MatchPhotosTaskTest, GuidedMatchStageReportsEnabledDensityMode)
 
     EXPECT_EQ(report.status, xjw::matchphotos::MatchPhotosStageStatus::Completed);
     EXPECT_TRUE(report.message.contains(QStringLiteral("每百万像素")));
+}
+
+TEST(MatchPhotosTaskTest, TiePointPersistenceStreamsTracksWithoutWholeJsonTree)
+{
+    const QString tiePointSource =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/tie_points/TiePointTrackManager.cpp"));
+    ASSERT_FALSE(tiePointSource.isEmpty());
+
+    EXPECT_TRUE(tiePointSource.contains(QStringLiteral("writeTiePointFile(outputPath,")));
+    EXPECT_FALSE(tiePointSource.contains(QStringLiteral("QJsonArray tracks;")));
+    EXPECT_FALSE(tiePointSource.contains(QStringLiteral("makeTiePointFileObject")));
+    EXPECT_FALSE(tiePointSource.contains(QStringLiteral("QJsonDocument(object).toJson(QJsonDocument::Indented)")));
+}
+
+TEST(MatchPhotosTaskTest, ResultDropsTransientInlierPairsBeforeReturningToGui)
+{
+    const QString taskSource =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/task/MatchPhotosTask.cpp"));
+    ASSERT_FALSE(taskSource.isEmpty());
+
+    EXPECT_TRUE(taskSource.contains(QStringLiteral("clearTransientMatchPayloads")));
+    EXPECT_TRUE(taskSource.contains(QStringLiteral("record.inlierIndexPairs.swap")));
+    EXPECT_TRUE(taskSource.contains(QStringLiteral("const MatchPhotosStageReport geometryReport")));
+    EXPECT_TRUE(taskSource.contains(QStringLiteral("const MatchPhotosStageReport trackReport")));
 }

@@ -203,7 +203,7 @@ bool ProjectUiCommands::addPhoto() const
     return true;
 }
 
-bool ProjectUiCommands::addFolder() const
+bool ProjectUiCommands::selectImageFolder(QString *selectedFolder) const
 {
     if (!ensureProjectOpen())
     {
@@ -227,6 +227,20 @@ bool ProjectUiCommands::addFolder() const
     }
 
     writeLastDir(QStringLiteral("images"), folder);
+    if (selectedFolder)
+    {
+        *selectedFolder = folder;
+    }
+    return true;
+}
+
+bool ProjectUiCommands::addFolder() const
+{
+    QString folder;
+    if (!selectImageFolder(&folder))
+    {
+        return false;
+    }
 
     QString error;
     if (!_projectData->addImagesFromFolder(folder, &error))

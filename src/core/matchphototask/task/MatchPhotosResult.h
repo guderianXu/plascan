@@ -70,6 +70,7 @@ struct MatchPhotosResult
     int acceptedTrackComponents = 0;
     int rejectedTrackConflictComponents = 0;
     QJsonObject trackSummary;
+    QString tiePointPath;
 };
 
 } // namespace matchphotos

@@ -171,6 +171,23 @@ void advanceMatchPhotosProgress(const MatchPhotosContext &context)
     }
 }
 
+void reportMatchPhotosProgress(const MatchPhotosContext &context,
+                               const QString &stageId,
+                               const QString &message,
+                               int current,
+                               int maximum)
+{
+    if (!context.progressCallback)
+    {
+        return;
+    }
+
+    context.progressCallback(stageId,
+                             message,
+                             std::max(0, current),
+                             std::max(1, maximum));
+}
+
 bool resolveMatchPhotosPair(const MatchPhotosContext &context,
                             const PairCandidate &candidate,
                             ResolvedImagePair *resolved,
@@ -286,6 +303,7 @@ QJsonObject makeFeatureRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     settings[QStringLiteral("guided_image_matching")] = plan.enableGuidedMatching;
+    settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
     settings[QStringLiteral("max_image_dim")] = options.maxImageDim;
     settings[QStringLiteral("matchphotos_task")] = true;
     return settings;
@@ -320,6 +338,7 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
     settings[QStringLiteral("guided_image_matching")] = plan.enableGuidedMatching;
+    settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
     settings[QStringLiteral("tiepoint_limit")] = options.maxTiePointsPerImage;
     settings[QStringLiteral("exclude_stationary_tie_points")] = options.excludeStationaryTiePoints;
     settings[QStringLiteral("num_matches")] = matchCount;

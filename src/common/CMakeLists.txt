@@ -8,6 +8,12 @@ add_library(plascan_common_io STATIC
   io/PathIO.cpp
 )
 
+add_library(plascan_common_model STATIC
+  model/Sam21ModelCatalog.cpp
+  model/TorchScriptModelResolver.cpp
+  model/U2NetModelCatalog.cpp
+)
+
 add_library(plascan_common_math INTERFACE)
 
 add_library(plascan_common_project STATIC
@@ -19,6 +25,10 @@ target_include_directories(plascan_common_log PUBLIC
 )
 
 target_include_directories(plascan_common_io PUBLIC
+  ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_include_directories(plascan_common_model PUBLIC
   ${CMAKE_CURRENT_SOURCE_DIR}
 )
 
@@ -36,6 +46,7 @@ target_include_directories(plascan_common_project PUBLIC
 
 target_compile_features(plascan_common_log PUBLIC cxx_std_17)
 target_compile_features(plascan_common_io PUBLIC cxx_std_17)
+target_compile_features(plascan_common_model PUBLIC cxx_std_17)
 target_compile_features(plascan_common_math INTERFACE cxx_std_17)
 target_compile_features(plascan_common_project PUBLIC cxx_std_17)
 
@@ -44,5 +55,8 @@ target_link_libraries(plascan_common_io PUBLIC
   ${OpenCV_LIBS}
   ${PLASCAN_GDAL_TARGET}
 )
+
+target_link_libraries(plascan_common_model PUBLIC Qt6::Core)
+target_compile_definitions(plascan_common_model PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
 target_link_libraries(plascan_common_project PUBLIC Qt6::Core)

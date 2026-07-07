@@ -6,6 +6,7 @@ param(
     [string] $VsDevCmd = "C:\BuildTools\Common7\Tools\VsDevCmd.bat",
     [string] $CMakeExe = "C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     [string] $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
+    [string] $CudnnRoot = "",
     [string] $TorchRoot = "",
     [string] $Target = "",
     [string] $CTestRegex = "",
@@ -16,6 +17,7 @@ param(
     [switch] $CleanConfigure,
     [switch] $CleanRootCache,
     [switch] $InstallDeps,
+    [switch] $EnableOpenCvDnnCuda,
     [switch] $SkipVsDevCmd
 )
 
@@ -460,6 +462,92 @@ function Assert-VcpkgInstalledPackages
     }
 }
 
+function Assert-OpenCvDnnCudaFeatures
+{
+    param([Parameter(Mandatory = $true)][string] $TripletRoot)
+
+    $abiInfo = Join-Path $TripletRoot "share\opencv4\vcpkg_abi_info.txt"
+    if (-not (Test-Path -LiteralPath $abiInfo))
+    {
+        throw "OpenCV ABI info not found: $abiInfo. Rerun with -InstallDeps -EnableOpenCvDnnCuda."
+    }
+
+    $text = Get-Content -LiteralPath $abiInfo -Raw
+    if ($text -notmatch "(?m)^features .*cuda" -or
+        $text -notmatch "(?m)^features .*dnn-cuda")
+    {
+        throw "OpenCV DNN CUDA is not installed in $TripletRoot. Rerun this script with -InstallDeps -EnableOpenCvDnnCuda."
+    }
+}
+
+function Test-CudnnDevRoot
+{
+    param([Parameter(Mandatory = $true)][string] $Root)
+
+    if ([string]::IsNullOrWhiteSpace($Root))
+    {
+        return $false
+    }
+
+    $include = Join-Path $Root "include\cudnn.h"
+    $libX64 = Join-Path $Root "lib\x64\cudnn.lib"
+    $lib = Join-Path $Root "lib\cudnn.lib"
+    return (Test-Path -LiteralPath $include) -and
+           ((Test-Path -LiteralPath $libX64) -or (Test-Path -LiteralPath $lib))
+}
+
+function Resolve-CudnnDevRoot
+{
+    param([Parameter(Mandatory = $true)][string] $SourceRoot)
+
+    $candidates = @()
+    if (-not [string]::IsNullOrWhiteSpace($CudnnRoot))
+    {
+        $candidates += $CudnnRoot
+    }
+
+    foreach ($envName in @("CUDNN_ROOT_DIR", "CUDNN", "cudnn"))
+    {
+        $value = [Environment]::GetEnvironmentVariable($envName)
+        if (-not [string]::IsNullOrWhiteSpace($value))
+        {
+            $candidates += $value
+        }
+    }
+
+    $candidates += (Join-Path $SourceRoot "build\env\cudnn-cu13")
+
+    foreach ($candidate in $candidates)
+    {
+        $resolved = Resolve-FullPath $candidate
+        if (Test-CudnnDevRoot $resolved)
+        {
+            return $resolved
+        }
+    }
+
+    $joined = ($candidates | Select-Object -Unique) -join ", "
+    throw "OpenCV DNN CUDA requires cuDNN developer files. Expected include\cudnn.h and lib\x64\cudnn.lib under one of: $joined"
+}
+
+function Ensure-CudnnOverlayTriplet
+{
+    param([Parameter(Mandatory = $true)][string] $SourceRoot)
+
+    $tripletDir = Join-Path $SourceRoot "build\env\vcpkg-triplets"
+    New-Item -ItemType Directory -Force -Path $tripletDir | Out-Null
+
+    $tripletFile = Join-Path $tripletDir "x64-windows.cmake"
+    @(
+        "set(VCPKG_TARGET_ARCHITECTURE x64)",
+        "set(VCPKG_CRT_LINKAGE dynamic)",
+        "set(VCPKG_LIBRARY_LINKAGE dynamic)",
+        "set(VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN cudnn)"
+    ) | Set-Content -Encoding ASCII -Path $tripletFile
+
+    return (Resolve-FullPath $tripletDir)
+}
+
 if ([string]::IsNullOrWhiteSpace($SourceDir))
 {
     $SourceDir = Resolve-FullPath (Join-Path $PSScriptRoot "..\..")
@@ -495,6 +583,7 @@ $vcpkgToolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
 $sourceDirCMake = Convert-ToCMakePath $SourceDir
 $buildDirCMake = Convert-ToCMakePath $BuildDir
 $vcpkgInstalledCMake = Convert-ToCMakePath $vcpkgInstalled
+$vcpkgOverlayTripletsCMake = ""
 $torchConfigDirCMake = Convert-ToCMakePath $torchConfigDir
 $cudaRootCMake = Convert-ToCMakePath $CudaRoot
 $cudaNvccCMake = Convert-ToCMakePath $cudaNvcc
@@ -574,12 +663,29 @@ Set-IsolatedBuildEnvironment `
     -ProjectRoot $SourceDir `
     -VsDevPathEntries $vsDevPathEntries
 
+if ($EnableOpenCvDnnCuda)
+{
+    $resolvedCudnnRoot = Resolve-CudnnDevRoot $SourceDir
+    $vcpkgOverlayTripletsCMake = Convert-ToCMakePath (Ensure-CudnnOverlayTriplet $SourceDir)
+    $env:CUDNN_ROOT_DIR = $resolvedCudnnRoot
+    $env:CUDNN = $resolvedCudnnRoot
+    $env:PATH = (Get-UniqueExistingPathList @(
+        (Join-Path $resolvedCudnnRoot "bin"),
+        (Join-Path $resolvedCudnnRoot "lib\x64"),
+        ($env:PATH -split ';')
+    )) -join ';'
+}
+
 New-Item -ItemType Directory -Force -Path $BuildDir | Out-Null
 Sync-QtRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
 Sync-TorchRuntime -BuildPath $BuildDir -TorchPath $TorchRoot
 if (-not $InstallDeps)
 {
     Assert-VcpkgInstalledPackages $vcpkgTripletRoot
+    if ($EnableOpenCvDnnCuda)
+    {
+        Assert-OpenCvDnnCudaFeatures $vcpkgTripletRoot
+    }
 }
 
 Write-Host "PlaScan Windows CUDA build"
@@ -588,8 +694,13 @@ Write-Host "  BuildDir:  $BuildDir"
 Write-Host "  Vcpkg:     $VcpkgRoot"
 Write-Host "  Installed: $vcpkgInstalled"
 Write-Host "  CUDA:      $CudaRoot"
+if ($EnableOpenCvDnnCuda)
+{
+    Write-Host "  cuDNN:     $env:CUDNN_ROOT_DIR"
+}
 Write-Host "  Torch:     $TorchRoot"
 Write-Host "  Prefix:    $env:CMAKE_PREFIX_PATH"
+Write-Host "  OpenCV DNN CUDA: $(if ($EnableOpenCvDnnCuda) { 'enabled' } else { 'disabled' })"
 
 if (-not $BuildOnly)
 {
@@ -618,11 +729,20 @@ if (-not $BuildOnly)
         "-DCMAKE_FIND_USE_PACKAGE_REGISTRY=FALSE",
         "-DCMAKE_FIND_USE_SYSTEM_PACKAGE_REGISTRY=FALSE"
     )
+    if ($EnableOpenCvDnnCuda)
+    {
+        $configureArgs += "-DVCPKG_MANIFEST_FEATURES=opencv-dnn-cuda"
+        $configureArgs += "-DVCPKG_OVERLAY_TRIPLETS=$vcpkgOverlayTripletsCMake"
+    }
 
     & $CMakeExe @configureArgs
     if ($LASTEXITCODE -ne 0)
     {
         throw "CMake configure failed with exit code $LASTEXITCODE"
+    }
+    if ($EnableOpenCvDnnCuda)
+    {
+        Assert-OpenCvDnnCudaFeatures $vcpkgTripletRoot
     }
 }
 

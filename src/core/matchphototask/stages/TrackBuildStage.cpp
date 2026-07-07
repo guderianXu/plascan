@@ -59,6 +59,7 @@ MatchPhotosStageReport TrackBuildStage::run(const MatchPhotosContext &context,
         result->acceptedTrackComponents = buildResult.acceptedComponents;
         result->rejectedTrackConflictComponents = buildResult.rejectedConflictComponents;
         result->trackSummary = buildResult.trackSummary;
+        result->tiePointPath = buildResult.tiePointPath;
     }
 
     return makeTrackReport(MatchPhotosStageStatus::Completed,

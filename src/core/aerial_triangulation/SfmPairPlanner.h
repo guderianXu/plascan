@@ -25,6 +25,7 @@ struct SfmPairPlannerOptions
     int knownCameraPairWindow = 4;
     int knownCameraAllPairsMaxImages = 20;
     int knownCameraSpatialNeighborCount = 8;
+    bool knownCameraSequenceLoopClosure = false;
     std::vector<std::array<double, 3>> knownCameraCenters;
     std::vector<std::array<double, 3>> knownCameraViewingDirections;
     std::vector<std::array<int, 2>> knownCameraOverlapPairs;
@@ -54,6 +55,7 @@ struct SfmPairPlan
     bool autoRestricted = false;
     bool usedCameraOverlapPairs = false;
     bool usedSpatialCameraCenters = false;
+    bool usedSequenceLoopClosure = false;
     int allPairCount = 0;
     int knownCameraPairWindow = 0;
     int knownCameraSpatialNeighborCount = 0;
@@ -534,6 +536,48 @@ inline SfmPairPlan planSfmMatchPairs(
                                         geometry.orientationScore,
                                         geometry.orientationAngleDeg);
         }
+    }
+
+    if (options.knownCameraSequenceLoopClosure && imageCount > 2)
+    {
+        bool loopClosureAdded = false;
+        const int loopWindow = std::min(window, imageCount - 1);
+        for (int i = 0; i < imageCount; ++i)
+        {
+            for (int distance = 1; distance <= loopWindow; ++distance)
+            {
+                const int j = (i + distance) % imageCount;
+                if (j > i || j == i)
+                {
+                    continue;
+                }
+
+                // 照片序列常见于绕目标一圈拍摄，首尾相邻不能只靠 BoW 召回。
+                // 显式补充闭环候选可避免 SfM 在序列尾段和首段之间断开。
+                const double sequenceScore =
+                    static_cast<double>(loopWindow - distance + 1) / static_cast<double>(loopWindow);
+                const SfmPairGeometryScores geometry =
+                    computeSfmPairGeometryScores(options, imageCount, i, j);
+                addOrUpdateSfmPairCandidate(&plan,
+                                            images,
+                                            i,
+                                            j,
+                                            QStringLiteral("sequence_loop"),
+                                            45.0 + 10.0 * sequenceScore +
+                                                15.0 * geometry.orientationScore +
+                                                5.0 * geometry.baselineScore,
+                                            0.0,
+                                            sequenceScore,
+                                            0.0,
+                                            distance,
+                                            geometry.centerDistance,
+                                            geometry.baselineScore,
+                                            geometry.orientationScore,
+                                            geometry.orientationAngleDeg);
+                loopClosureAdded = true;
+            }
+        }
+        plan.usedSequenceLoopClosure = loopClosureAdded;
     }
 
     if (spatialNeighborCount > 0 && hasCompleteKnownCameraCenters(imageCount, options.knownCameraCenters))

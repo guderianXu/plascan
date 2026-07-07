@@ -45,6 +45,7 @@
 #include "MainMenu.h"
 #include "MenuWorkflowController.h"
 #include "ReconstructionWorkflowController.h"
+#include "GuiTaskRunner.h"
 #include "CleanTiePointsDialog.h"
 #include "CreateTiePointsDialog.h"
 #include "MatchPairSelectorDialog.h"
@@ -523,10 +524,69 @@ void MainWindow::setupMenuConnections()
         connect(_mainMenu->toggleGizmoAction(), &QAction::toggled,
                 _workspaceCenter->modelView(), &CameraSceneWidget::setShowGizmo);
     }
+    if (_mainMenu->toggleLocalAxesAction() && _workspaceCenter && _workspaceCenter->modelView())
+    {
+        connect(_mainMenu->toggleLocalAxesAction(), &QAction::toggled,
+                _workspaceCenter->modelView(), &CameraSceneWidget::setShowGizmo);
+    }
+    if (_mainMenu->toggleGizmoAction() && _mainMenu->toggleLocalAxesAction())
+    {
+        connect(_mainMenu->toggleGizmoAction(), &QAction::toggled, this, [this](bool checked)
+        {
+            const QSignalBlocker localAxesBlocker(_mainMenu->toggleLocalAxesAction());
+            _mainMenu->toggleLocalAxesAction()->setChecked(checked);
+        });
+        connect(_mainMenu->toggleLocalAxesAction(), &QAction::toggled, this, [this](bool checked)
+        {
+            const QSignalBlocker gizmoBlocker(_mainMenu->toggleGizmoAction());
+            _mainMenu->toggleGizmoAction()->setChecked(checked);
+        });
+    }
     if (_mainMenu->toggleCamerasAction() && _workspaceCenter && _workspaceCenter->modelView())
     {
         connect(_mainMenu->toggleCamerasAction(), &QAction::toggled,
                 _workspaceCenter->modelView(), &CameraSceneWidget::setShowCameras);
+    }
+    if (_workspaceCenter && _workspaceCenter->modelView())
+    {
+        auto *modelView = _workspaceCenter->modelView();
+        if (_mainMenu->toggleCameraThumbnailsAction())
+        {
+            connect(_mainMenu->toggleCameraThumbnailsAction(), &QAction::toggled,
+                    modelView, &CameraSceneWidget::setShowCameraThumbnails);
+        }
+        if (_mainMenu->toggleCameraImagesAction())
+        {
+            connect(_mainMenu->toggleCameraImagesAction(), &QAction::toggled,
+                    modelView, &CameraSceneWidget::setShowCameraImage);
+        }
+        if (_mainMenu->showCameraImagesInForegroundAction())
+        {
+            connect(_mainMenu->showCameraImagesInForegroundAction(), &QAction::toggled,
+                    this, [modelView](bool checked)
+            {
+                if (checked)
+                {
+                    modelView->setCameraImageDisplayLayer(CameraSceneWidget::CameraImageDisplayLayer::Foreground);
+                }
+            });
+        }
+        if (_mainMenu->showCameraImagesInBackgroundAction())
+        {
+            connect(_mainMenu->showCameraImagesInBackgroundAction(), &QAction::toggled,
+                    this, [modelView](bool checked)
+            {
+                if (checked)
+                {
+                    modelView->setCameraImageDisplayLayer(CameraSceneWidget::CameraImageDisplayLayer::Background);
+                }
+            });
+        }
+        if (_mainMenu->lockCameraImageAction())
+        {
+            connect(_mainMenu->lockCameraImageAction(), &QAction::toggled,
+                    modelView, &CameraSceneWidget::setCameraImageLocked);
+        }
     }
     if (_mainMenu->toggleHenanUniversityBrandAction())
     {
@@ -768,6 +828,7 @@ void MainWindow::setupProjectManager()
             context.matchDirectory = ProjectIO::ipmatchOutputDir(projectPath);
             context.pairInput.images = images;
             context.pairInput.manualPairKeys = manualPairKeys;
+            context.maskPaths = ProjectIO::maskPathsForImages(projectPath, images);
             if (options.useReferencePreselection)
             {
                 bool hasAllReferenceCameras = false;
@@ -811,99 +872,99 @@ void MainWindow::setupProjectManager()
             });
             timer->start();
 
-            auto *watcher = new QFutureWatcher<xjw::matchphotos::MatchPhotosResult>(this);
-            connect(watcher,
-                    &QFutureWatcher<xjw::matchphotos::MatchPhotosResult>::finished,
-                    watcher,
-                    [self,
-                     pmGuard,
-                     projectPath,
-                     taskTitle,
-                     cancelFlag,
-                     timer,
-                     watcher,
-                     cancelConn]()
-            {
-                timer->stop();
-                timer->deleteLater();
-                QObject::disconnect(cancelConn);
-
-                if (self)
+            xjw::gui::tasks::runGuarded(
+                this,
+                [context, options, cancelFlag, progressCount]() mutable
                 {
-                    self->hideSgProgress(!cancelFlag->load());
-                }
-
-                const xjw::matchphotos::MatchPhotosResult result = watcher->result();
-                watcher->deleteLater();
-
-                if (!pmGuard)
+                    Q_UNUSED(cancelFlag)
+                    Q_UNUSED(progressCount)
+                    const xjw::matchphotos::MatchPhotosTask task(options);
+                    return task.run(context);
+                },
+                [self,
+                 pmGuard,
+                 projectPath,
+                 taskTitle,
+                 cancelFlag,
+                 timer,
+                 cancelConn](MainWindow *window,
+                             xjw::matchphotos::MatchPhotosResult result) mutable
                 {
-                    return;
-                }
-                if (pmGuard->currentProjectPath() != projectPath)
-                {
-                    QMessageBox::warning(self.data(),
-                                         QObject::tr("连接点匹配"),
-                                         QObject::tr("项目已切换，本次连接点匹配结果未写回。"));
-                    return;
-                }
+                    timer->stop();
+                    timer->deleteLater();
+                    QObject::disconnect(cancelConn);
 
-                QVector<ProjectIpfindResultRecord> featureRecords;
-                featureRecords.reserve(static_cast<int>(result.features.size()));
-                for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature : result.features)
-                {
-                    featureRecords.push_back(
-                        ProjectIpfindResultRecord{feature.imagePath, feature.featurePath, feature.settings});
-                }
-                pmGuard->appendIpfindResults(featureRecords);
-
-                QVector<ProjectIpmatchResultRecord> matchRecords;
-                matchRecords.reserve(static_cast<int>(result.matches.size()));
-                for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
-                {
-                    matchRecords.push_back(ProjectIpmatchResultRecord{QStringList{match.matchPath}, match.settings});
-                }
-                pmGuard->appendIpmatchResults(matchRecords);
-
-                for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
-                {
-                    emit pmGuard->matchPairReady(match.image0Path,
-                                                 match.image1Path,
-                                                 match.matchPath,
-                                                 match.matchCount);
-                }
-
-                if (result.success)
-                {
-                    const QString message =
-                        QObject::tr("%1完成：%2 个特征文件，%3 对匹配")
-                            .arg(taskTitle)
-                            .arg(static_cast<int>(result.features.size()))
-                            .arg(static_cast<int>(result.matches.size()));
-                    LOG_INFO("%s", qUtf8Printable(message));
                     if (self)
                     {
-                        self->statusBar()->showMessage(message, 5000);
+                        self->hideSgProgress(!cancelFlag->load());
                     }
-                }
-                else
-                {
-                    const QString message = result.errorMessage.isEmpty()
-                        ? QObject::tr("%1失败").arg(taskTitle)
-                        : result.errorMessage;
-                    LOG_ERROR("%s", qUtf8Printable(message));
-                    QMessageBox::warning(self.data(), QObject::tr("连接点匹配"), message);
-                }
-            });
 
-            watcher->setFuture(QtConcurrent::run(
-                [context, options, cancelFlag, progressCount]() mutable
-            {
-                Q_UNUSED(cancelFlag)
-                Q_UNUSED(progressCount)
-                const xjw::matchphotos::MatchPhotosTask task(options);
-                return task.run(context);
-            }));
+                    if (!pmGuard)
+                    {
+                        return;
+                    }
+                    if (pmGuard->currentProjectPath() != projectPath)
+                    {
+                        QMessageBox::warning(window,
+                                             QObject::tr("连接点匹配"),
+                                             QObject::tr("项目已切换，本次连接点匹配结果未写回。"));
+                        return;
+                    }
+
+                    QVector<ProjectIpfindResultRecord> featureRecords;
+                    featureRecords.reserve(static_cast<int>(result.features.size()));
+                    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature : result.features)
+                    {
+                        featureRecords.push_back(
+                            ProjectIpfindResultRecord{feature.imagePath, feature.featurePath, feature.settings});
+                    }
+                    pmGuard->appendIpfindResults(featureRecords);
+
+                    QVector<ProjectIpmatchResultRecord> matchRecords;
+                    matchRecords.reserve(static_cast<int>(result.matches.size()));
+                    for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
+                    {
+                        QJsonObject matchSettings = match.settings;
+                        if (!result.tiePointPath.isEmpty())
+                        {
+                            matchSettings[QStringLiteral("tie_point_path")] = result.tiePointPath;
+                            matchSettings[QStringLiteral("track_count")] = result.trackCount;
+                            matchSettings[QStringLiteral("track_summary")] = result.trackSummary;
+                        }
+                        matchRecords.push_back(ProjectIpmatchResultRecord{QStringList{match.matchPath}, matchSettings});
+                    }
+                    pmGuard->appendIpmatchResults(matchRecords);
+
+                    for (const xjw::matchphotos::MatchPhotosMatchRecord &match : result.matches)
+                    {
+                        emit pmGuard->matchPairReady(match.image0Path,
+                                                     match.image1Path,
+                                                     match.matchPath,
+                                                     match.matchCount);
+                    }
+
+                    if (result.success)
+                    {
+                        const QString message =
+                            QObject::tr("%1完成：%2 个特征文件，%3 对匹配")
+                                .arg(taskTitle)
+                                .arg(static_cast<int>(result.features.size()))
+                                .arg(static_cast<int>(result.matches.size()));
+                        LOG_INFO("%s", qUtf8Printable(message));
+                        if (self)
+                        {
+                            self->statusBar()->showMessage(message, 5000);
+                        }
+                    }
+                    else
+                    {
+                        const QString message = result.errorMessage.isEmpty()
+                            ? QObject::tr("%1失败").arg(taskTitle)
+                            : result.errorMessage;
+                        LOG_ERROR("%s", qUtf8Printable(message));
+                        QMessageBox::warning(window, QObject::tr("连接点匹配"), message);
+                    }
+                });
         };
 
         if (_mainMenu->createTiePointsAction())
@@ -937,7 +998,13 @@ void MainWindow::setupProjectManager()
                     options.enableGuidedMatching = dlg.useGuidedMatching();
                     options.useGenericPreselection = dlg.useGenericPreselection();
                     options.useReferencePreselection = dlg.useReferencePreselection();
+                    options.maskApplyMode = dlg.maskApplyMode();
                     options.reuseExistingFeatures = true;
+                    if (options.maskApplyMode == QStringLiteral("keypoints"))
+                    {
+                        // 关键点蒙版改变的是特征文件本身，不能复用旧的未过滤特征。
+                        options.reuseExistingFeatures = false;
+                    }
                     options.pairPolicy = xjw::matchphotos::makePairSelectionPolicy(
                         pairPresetFromAccuracy(dlg.accuracy()));
                     options.pairPolicy.includeVocabularyOverlap = options.useGenericPreselection;
@@ -1204,32 +1271,14 @@ void MainWindow::setupProjectManager()
 
     connect(_projectManager, &ProjectManager::projectMetadataUpdated, this, [this](const QString &)
     {
-        if (_dataTree)
+        if (_projectManager)
         {
-            _dataTree->loadFromJson(_projectManager->currentMeta());
-        }
-        if (_dashboard)
-        {
-            _dashboard->loadFromJson(_projectManager->currentMeta());
-        }
-        if (_referencePanel)
-        {
-            _referencePanel->loadFromJson(_projectManager->currentMeta());
+            scheduleProjectMetadataRefresh(_projectManager->currentMeta());
         }
     });
-    connect(_projectManager, &ProjectManager::projectMetadataChanged, _dashboard, &ProjectDashboardWidget::loadFromJson);
-    connect(_projectManager, &ProjectManager::projectMetadataChanged, _dataTree, &DataTreeWidget::loadFromJson);
-    connect(_projectManager, &ProjectManager::projectMetadataChanged, _referencePanel, &ReferencePanelWidget::loadFromJson);
     connect(_projectManager, &ProjectManager::projectMetadataChanged, this, [this](const QJsonObject &meta)
     {
-        if (_photoStrip)
-        {
-            if (_projectManager)
-            {
-                _photoStrip->setProjectPath(_projectManager->currentProjectPath());
-            }
-            _photoStrip->loadFromJson(meta);
-        }
+        scheduleProjectMetadataRefresh(meta);
     });
 
     connect(_dataTree, &DataTreeWidget::removeRequested,  _projectManager, &ProjectManager::removeResources);
@@ -1461,14 +1510,6 @@ void MainWindow::setupProjectManager()
             selectPhoto(p, true);
         });
 
-    connect(_projectManager, &ProjectManager::projectMetadataChanged, this, [this](const QJsonObject &meta)
-    {
-        if (_workspaceCenter)
-        {
-            _workspaceCenter->setProjectMeta(meta);
-        }
-    });
-
     auto createTaskStatus = [this](int labelWidth, bool cancellable, const QString &cancellingText)
     {
         auto *widget = new TaskStatusWidget(this);
@@ -1558,6 +1599,21 @@ void MainWindow::setupProjectManager()
     connect(_projectManager, &ProjectManager::obsNetProgressFinished,
             this, &MainWindow::onObsNetFinished);
 
+    // ── 照片蒙版生成状态栏进度条 ─────────────────────────────────────
+    _maskTaskStatus = createTaskStatus(180, true, tr("正在取消生成蒙版..."));
+    connect(_maskTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        if (_projectManager)
+        {
+            _projectManager->cancelMaskGeneration();
+        }
+    });
+
+    connect(_projectManager, &ProjectManager::maskGenerationProgressChanged,
+            this, &MainWindow::onMaskGenerationProgress);
+    connect(_projectManager, &ProjectManager::maskGenerationFinished,
+            this, &MainWindow::onMaskGenerationFinished);
+
     refreshDashboardTaskSnapshots();
 }
 
@@ -1594,6 +1650,7 @@ void MainWindow::refreshDashboardTaskSnapshots()
     appendTask(tr("密集匹配"), _dmTaskStatus);
     appendTask(tr("重叠对获取"), _overlapTaskStatus);
     appendTask(tr("观测网络"), _obsNetTaskStatus);
+    appendTask(tr("生成蒙版"), _maskTaskStatus);
 
     _dashboard->setTaskSnapshots(tasks);
 }
@@ -1871,6 +1928,45 @@ void MainWindow::onObsNetFinished(bool success)
     refreshDashboardTaskSnapshots();
     statusBar()->showMessage(
         success ? tr("观测网络构建完成") : tr("观测网络构建失败"), 4000);
+}
+
+// ============================================================
+//  照片蒙版生成进度状态栏槽
+// ============================================================
+
+void MainWindow::onMaskGenerationProgress(const QString &stage, int done, int total)
+{
+    if (!_maskTaskStatus)
+    {
+        return;
+    }
+
+    const int safeTotal = std::max(1, total);
+    const int clampedDone = std::clamp(done, 0, safeTotal);
+    const QString defaultText = tr("生成蒙版 %1/%2").arg(clampedDone).arg(safeTotal);
+    const QString stageText = stage.trimmed();
+    const QString statusText = stageText.isEmpty() || stageText == tr("生成蒙版")
+        ? defaultText
+        : tr("%1 %2/%3").arg(stageText).arg(clampedDone).arg(safeTotal);
+
+    if (!_maskTaskStatus->isActive())
+    {
+        _maskTaskStatus->begin(statusText, 0, safeTotal);
+    }
+    _maskTaskStatus->updateProgress(statusText, clampedDone);
+    refreshDashboardTaskSnapshots();
+    statusBar()->showMessage(QString());
+}
+
+void MainWindow::onMaskGenerationFinished(bool success)
+{
+    if (!_maskTaskStatus)
+    {
+        return;
+    }
+    _maskTaskStatus->finish();
+    refreshDashboardTaskSnapshots();
+    statusBar()->showMessage(success ? tr("蒙版生成完成") : tr("蒙版生成已取消或失败"), 4000);
 }
 
 void MainWindow::showSgProgress(int total)
@@ -2488,27 +2584,7 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     {
         _photoStrip->setProjectPath(plascanPath);
     }
-    if (_projectManager && _dataTree)
-    {
-        const QJsonObject coreMeta = _projectManager->coreProjectMeta();
-        _dataTree->loadFromJson(coreMeta);
-        if (_dashboard)
-        {
-            _dashboard->loadFromJson(coreMeta);
-        }
-        if (_referencePanel)
-        {
-            _referencePanel->loadFromJson(coreMeta);
-        }
-        if (_workspaceCenter)
-        {
-            _workspaceCenter->setProjectMeta(coreMeta);
-        }
-        if (_photoStrip)
-        {
-            _photoStrip->loadFromJson(coreMeta);
-        }
-    }
+    scheduleProjectUiHydration(plascanPath);
 
     if (_config && _mainMenu)
     {
@@ -2543,6 +2619,137 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     }
     applyUiSettings(ui);
     persistCurrentUiSettings();
+}
+
+void MainWindow::scheduleProjectMetadataRefresh(const QJsonObject &meta)
+{
+    _pendingMetadataRefresh = meta;
+    ++_metadataRefreshGeneration;
+    if (_metadataRefreshQueued)
+    {
+        return;
+    }
+
+    _metadataRefreshQueued = true;
+    QPointer<MainWindow> self(this);
+    QTimer::singleShot(0, this, [self]()
+    {
+        if (!self)
+        {
+            return;
+        }
+
+        self->_metadataRefreshQueued = false;
+        const int generation = self->_metadataRefreshGeneration;
+        const QJsonObject meta = self->_pendingMetadataRefresh;
+
+        if (self->_dashboard)
+        {
+            self->_dashboard->loadFromJson(meta);
+        }
+        if (self->_referencePanel)
+        {
+            self->_referencePanel->loadFromJson(meta);
+        }
+
+        QTimer::singleShot(0, self.data(), [self, generation, meta]()
+        {
+            if (!self || generation != self->_metadataRefreshGeneration)
+            {
+                return;
+            }
+            if (self->_dataTree)
+            {
+                self->_dataTree->loadFromJson(meta);
+            }
+
+            QTimer::singleShot(0, self.data(), [self, generation, meta]()
+            {
+                if (!self || generation != self->_metadataRefreshGeneration)
+                {
+                    return;
+                }
+                if (self->_workspaceCenter)
+                {
+                    self->_workspaceCenter->setProjectMeta(meta);
+                }
+
+                QTimer::singleShot(0, self.data(), [self, generation, meta]()
+                {
+                    if (!self || generation != self->_metadataRefreshGeneration)
+                    {
+                        return;
+                    }
+                    if (self->_photoStrip)
+                    {
+                        if (self->_projectManager)
+                        {
+                            self->_photoStrip->setProjectPath(self->_projectManager->currentProjectPath());
+                        }
+                        self->_photoStrip->loadFromJson(meta);
+                    }
+                });
+            });
+        });
+    });
+}
+
+void MainWindow::scheduleProjectUiHydration(const QString &plascanPath)
+{
+    QPointer<MainWindow> self(this);
+    QTimer::singleShot(0, this, [self, plascanPath]()
+    {
+        if (!self || !self->_projectManager || self->_projectManager->currentProjectPath() != plascanPath)
+        {
+            return;
+        }
+
+        const QJsonObject coreMeta = self->_projectManager->coreProjectMeta();
+        if (self->_dashboard)
+        {
+            self->_dashboard->loadFromJson(coreMeta);
+        }
+        if (self->_referencePanel)
+        {
+            self->_referencePanel->loadFromJson(coreMeta);
+        }
+
+        QTimer::singleShot(0, self.data(), [self, plascanPath, coreMeta]()
+        {
+            if (!self || !self->_projectManager || self->_projectManager->currentProjectPath() != plascanPath)
+            {
+                return;
+            }
+            if (self->_dataTree)
+            {
+                self->_dataTree->loadFromJson(coreMeta);
+            }
+
+            QTimer::singleShot(0, self.data(), [self, plascanPath, coreMeta]()
+            {
+                if (!self || !self->_projectManager || self->_projectManager->currentProjectPath() != plascanPath)
+                {
+                    return;
+                }
+                if (self->_workspaceCenter)
+                {
+                    self->_workspaceCenter->setProjectMeta(coreMeta);
+                }
+
+                QTimer::singleShot(0, self.data(), [self, plascanPath, coreMeta]()
+                {
+                    if (!self || !self->_projectManager || self->_projectManager->currentProjectPath() != plascanPath)
+                    {
+                        return;
+                    }
+                    if (self->_photoStrip)
+                    {
+                        self->_photoStrip->loadFromJson(coreMeta);
+                    }
+                });
+            });
+        });
+    });
 }
 
 void MainWindow::onProjectClosed()

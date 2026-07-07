@@ -155,9 +155,15 @@ VocabularyOverlapConfig makeVocabularyConfig(const MatchPhotosOptions &options,
                                              const MatchPhotosAlgorithmPlan &plan)
 {
     VocabularyOverlapConfig config;
-    config.topK = std::max(4, options.pairPolicy.sequenceWindow);
+    config.topK = std::max(8, options.pairPolicy.sequenceWindow * 2);
+    config.minPairsPerImage = std::max(4, options.pairPolicy.sequenceWindow);
     config.minSimilarity = 0.03;
     config.mutualTopK = true;
+    config.keepOneWayTopK = true;
+    config.connectComponents = true;
+    config.useSequenceFallback = true;
+    config.sequenceWindow = std::max(1, options.pairPolicy.sequenceWindow);
+    config.closeSequenceLoop = true;
     config.geometryCheck = false;
     config.useCuda = options.device == ComputeDevice::Cuda ||
         (options.device == ComputeDevice::Auto && plan.preferCuda);
@@ -211,9 +217,19 @@ bool buildVocabularyPreselection(const MatchPhotosContext &context,
     }
 
     VocabularyOverlapConfig config = makeVocabularyConfig(options, plan);
-    config.progressCallback = [cancelFlag = context.cancelFlag](const std::string &, int)
+    config.progressCallback = [&context, cancelFlag = context.cancelFlag](const std::string &stage, int percent)
     {
-        return !cancelFlag || !cancelFlag->load(std::memory_order_relaxed);
+        if (cancelFlag && cancelFlag->load(std::memory_order_relaxed))
+        {
+            return false;
+        }
+
+        reportMatchPhotosProgress(context,
+                                  QStringLiteral("generic_preselection"),
+                                  QStringLiteral("Generic 预选: %1").arg(QString::fromStdString(stage)),
+                                  percent,
+                                  100);
+        return true;
     };
 
     std::string coreError;
@@ -409,6 +425,21 @@ bool appendStageAndStopOnFailure(MatchPhotosResult *result,
     return true;
 }
 
+void clearTransientMatchPayloads(std::vector<MatchPhotosMatchRecord> *matchRecords)
+{
+    if (!matchRecords)
+    {
+        return;
+    }
+
+    for (MatchPhotosMatchRecord &record : *matchRecords)
+    {
+        // inlierIndexPairs 只用于构建连接点轨迹，返回 GUI 前必须释放，避免结果对象携带大块临时索引。
+        std::vector<std::array<int, 2>> empty;
+        record.inlierIndexPairs.swap(empty);
+    }
+}
+
 } // namespace
 
 MatchPhotosTask::MatchPhotosTask(const MatchPhotosOptions &options)
@@ -424,8 +455,18 @@ const MatchPhotosOptions &MatchPhotosTask::options() const
 MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 {
     MatchPhotosResult result;
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("algorithm_selection"),
+                              QStringLiteral("选择 SIFT + LightGlue 连接点流程"),
+                              0,
+                              1);
     result.algorithmPlan = MatchPhotosAlgorithmSelector::select(_options);
     result.stages.push_back(makeAlgorithmSelectionReport(result.algorithmPlan));
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("algorithm_selection"),
+                              QStringLiteral("连接点算法已确定: SIFT + LightGlue"),
+                              1,
+                              1);
 
     // 这些阶段对象当前刻意保持短生命周期、无状态。
     // 后续接入真实运行器后，取消和进度状态应放在上下文或运行器中维护。
@@ -435,9 +476,19 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     const TrackBuildStage trackBuildStage;
     const GuidedMatchStage guidedMatchStage;
 
-    if (appendStageAndStopOnFailure(
-            &result,
-            featureStage.run(context, _options, result.algorithmPlan, &result.features)))
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("feature"),
+                              QStringLiteral("SIFT 特征提取：准备处理影像"),
+                              0,
+                              std::max(1, static_cast<int>(context.pairInput.images.size())));
+    const MatchPhotosStageReport featureReport =
+        featureStage.run(context, _options, result.algorithmPlan, &result.features);
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("feature"),
+                              featureReport.message,
+                              featureReport.itemCount,
+                              std::max(1, static_cast<int>(context.pairInput.images.size())));
+    if (appendStageAndStopOnFailure(&result, featureReport))
     {
         return result;
     }
@@ -461,6 +512,11 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 
     VocabularyOverlapResult vocabularyOverlap;
     MatchPhotosStageReport vocabularyReport;
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("generic_preselection"),
+                              QStringLiteral("通用预选：构建候选影像对"),
+                              0,
+                              1);
     if (!buildVocabularyPreselection(context,
                                      effectiveOptions,
                                      result.algorithmPlan,
@@ -473,6 +529,11 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         return result;
     }
     result.stages.push_back(vocabularyReport);
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("generic_preselection"),
+                              vocabularyReport.message,
+                              1,
+                              1);
     if (effectiveOptions.useGenericPreselection)
     {
         pairInput.vocabularyOverlapResult = &vocabularyOverlap;
@@ -480,6 +541,11 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
 
     OverlapAnalysisResult cameraOverlap;
     MatchPhotosStageReport referenceReport;
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("reference_preselection"),
+                              QStringLiteral("参考预选：检查相机参考"),
+                              0,
+                              1);
     if (!buildReferencePreselection(context, effectiveOptions, &cameraOverlap, &referenceReport))
     {
         result.stages.push_back(referenceReport);
@@ -488,11 +554,21 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
         return result;
     }
     result.stages.push_back(referenceReport);
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("reference_preselection"),
+                              referenceReport.message,
+                              1,
+                              1);
     if (effectiveOptions.useReferencePreselection)
     {
         pairInput.cameraOverlapResult = &cameraOverlap;
     }
 
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("pair_selection"),
+                              QStringLiteral("影像对规划：生成候选匹配对"),
+                              0,
+                              1);
     QString errorMessage;
     result.pairSelection = PairSelector::select(pairInput, pairPolicy, &errorMessage);
     if (!errorMessage.isEmpty())
@@ -503,20 +579,51 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     }
 
     result.stages.push_back(makePairSelectionReport(result.pairSelection));
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("pair_selection"),
+                              QStringLiteral("影像对规划完成：候选 %1 对")
+                                  .arg(static_cast<int>(result.pairSelection.candidates.size())),
+                              1,
+                              1);
 
-    if (appendStageAndStopOnFailure(
-            &result,
-            matchingStage.run(context, _options, result.algorithmPlan, result.pairSelection, &result.matches)))
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("matching"),
+                              QStringLiteral("两两匹配：准备处理候选影像对"),
+                              0,
+                              std::max(1, static_cast<int>(result.pairSelection.candidates.size())));
+    const MatchPhotosStageReport matchingReport =
+        matchingStage.run(context, _options, result.algorithmPlan, result.pairSelection, &result.matches);
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("matching"),
+                              matchingReport.message,
+                              matchingReport.itemCount,
+                              std::max(1, static_cast<int>(result.pairSelection.candidates.size())));
+    if (appendStageAndStopOnFailure(&result, matchingReport))
     {
         return result;
     }
-    if (appendStageAndStopOnFailure(&result, geometryVerifyStage.run(context, _options, &result.matches)))
+    const MatchPhotosStageReport geometryReport =
+        geometryVerifyStage.run(context, _options, &result.matches);
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("geometry"),
+                              geometryReport.message,
+                              geometryReport.itemCount,
+                              std::max(1, static_cast<int>(result.matches.size())));
+    if (appendStageAndStopOnFailure(&result, geometryReport))
     {
+        clearTransientMatchPayloads(&result.matches);
         return result;
     }
-    if (appendStageAndStopOnFailure(
-            &result,
-            trackBuildStage.run(context, _options, result.matches, &result)))
+    const MatchPhotosStageReport trackReport =
+        trackBuildStage.run(context, _options, result.matches, &result);
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("track_build"),
+                              trackReport.message,
+                              trackReport.itemCount,
+                              std::max(1, trackReport.itemCount));
+    const bool stopAfterTrackBuild = appendStageAndStopOnFailure(&result, trackReport);
+    clearTransientMatchPayloads(&result.matches);
+    if (stopAfterTrackBuild)
     {
         return result;
     }

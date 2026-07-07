@@ -227,3 +227,31 @@ QString ProjectIO::findMaskForImage(const QString &plascanPath, const QString &i
     }
     return QString();
 }
+
+QMap<QString, QString> ProjectIO::maskPathsForImages(const QString &plascanPath,
+                                                     const QStringList &imagePaths)
+{
+    QMap<QString, QString> masks;
+    for (const QString &imagePath : imagePaths)
+    {
+        const QString maskPath = findMaskForImage(plascanPath, imagePath);
+        if (maskPath.isEmpty())
+        {
+            continue;
+        }
+
+        const QFileInfo imageInfo(imagePath);
+        const QString cleanImagePath = QDir::cleanPath(QDir::fromNativeSeparators(imagePath));
+        masks.insert(imagePath, maskPath);
+        masks.insert(cleanImagePath, maskPath);
+        if (!imageInfo.fileName().isEmpty())
+        {
+            masks.insert(imageInfo.fileName(), maskPath);
+        }
+        if (!imageInfo.completeBaseName().isEmpty())
+        {
+            masks.insert(imageInfo.completeBaseName(), maskPath);
+        }
+    }
+    return masks;
+}

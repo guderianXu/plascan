@@ -205,6 +205,108 @@ void addVocabularyPairs(PairSelectionResult *result,
     }
 }
 
+int findComponentRoot(std::vector<int> *parents, int index)
+{
+    if (!parents || index < 0 || index >= static_cast<int>(parents->size()))
+    {
+        return index;
+    }
+
+    int root = index;
+    while ((*parents)[root] != root)
+    {
+        root = (*parents)[root];
+    }
+
+    while ((*parents)[index] != index)
+    {
+        const int parent = (*parents)[index];
+        (*parents)[index] = root;
+        index = parent;
+    }
+    return root;
+}
+
+void uniteComponents(std::vector<int> *parents, int lhs, int rhs)
+{
+    const int rootL = findComponentRoot(parents, lhs);
+    const int rootR = findComponentRoot(parents, rhs);
+    if (rootL != rootR)
+    {
+        (*parents)[rootR] = rootL;
+    }
+}
+
+int addSequenceBridgeCandidates(PairSelectionResult *result, const QStringList &images, int window)
+{
+    if (!result || result->candidates.empty() || images.size() < 2)
+    {
+        return 0;
+    }
+
+    const int imageCount = static_cast<int>(images.size());
+    std::vector<int> parents(static_cast<std::size_t>(imageCount));
+    for (int i = 0; i < imageCount; ++i)
+    {
+        parents[static_cast<std::size_t>(i)] = i;
+    }
+
+    for (const PairCandidate &candidate : result->candidates)
+    {
+        if (candidate.pair.isValid(imageCount))
+        {
+            uniteComponents(&parents, candidate.pair.indexA, candidate.pair.indexB);
+        }
+    }
+
+    auto componentCount = [&]() -> int
+    {
+        QSet<int> roots;
+        for (int i = 0; i < imageCount; ++i)
+        {
+            roots.insert(findComponentRoot(&parents, i));
+        }
+        return roots.size();
+    };
+
+    if (componentCount() <= 1)
+    {
+        return 0;
+    }
+
+    int added = 0;
+    const int safeWindow = std::max(1, window);
+    for (int distance = 1; distance <= safeWindow && componentCount() > 1; ++distance)
+    {
+        for (int i = 0; i + distance < imageCount && componentCount() > 1; ++i)
+        {
+            const int j = i + distance;
+            const int rootI = findComponentRoot(&parents, i);
+            const int rootJ = findComponentRoot(&parents, j);
+            if (rootI == rootJ)
+            {
+                continue;
+            }
+
+            // 通用/词汇预选可能只在局部分量内召回影像对。这里仅补跨分量的
+            // 序列桥接边，给后续匹配和 SfM 一次把分量接起来的机会。
+            const double sequenceScore =
+                static_cast<double>(safeWindow - distance + 1) / static_cast<double>(safeWindow);
+            PairCandidate *candidate =
+                addOrUpdateCandidate(result, images, i, j, PairSource::SequenceWindow, 40.0 + 10.0 * sequenceScore);
+            if (candidate)
+            {
+                candidate->sequenceScore = std::max(candidate->sequenceScore, sequenceScore);
+                candidate->detail = QStringLiteral("sequence bridge for disconnected preselection graph");
+            }
+            uniteComponents(&parents, i, j);
+            ++added;
+        }
+    }
+
+    return added;
+}
+
 void finalizePairSelection(PairSelectionResult *result, int maxPairs)
 {
     if (!result)
@@ -314,6 +416,19 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
         // 当 overlap 或 retrieval 已提供更强先验时，应优先使用那些结果。
         addSequenceCandidates(&result, input.images, policy.sequenceWindow);
         result.restrictPairs = true;
+    }
+
+    if (!manualOnly &&
+        !useExhaustive &&
+        hasExternalPreselection &&
+        policy.useSequenceFallback &&
+        !result.candidates.empty())
+    {
+        const int bridgeCount = addSequenceBridgeCandidates(&result, input.images, policy.sequenceWindow);
+        if (bridgeCount > 0)
+        {
+            result.restrictPairs = true;
+        }
     }
 
     finalizePairSelection(&result, policy.maxPairs);

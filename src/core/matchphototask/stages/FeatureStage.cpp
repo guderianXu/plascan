@@ -1,6 +1,7 @@
 #include "TraditionalFeatureExtractor.h"
 #include "FeatureFileIO.h"
 #include "FeatureStage.h"
+#include "MatchPhotosMaskSupport.h"
 #include "MatchPhotosRuntime.h"
 #include "io/PathIO.h"
 
@@ -38,6 +39,13 @@ bool shouldUseCudaSift(const MatchPhotosOptions &options,
 {
     return options.device == ComputeDevice::Cuda ||
         (options.device == ComputeDevice::Auto && algorithmPlan.preferCuda);
+}
+
+float siftDetectionThresholdForTiePoints(const MatchPhotosOptions &options)
+{
+    // CUDA SIFT 内部阈值量纲约为 UI 阈值 * 1000。空三连接点需要比通用特征提取
+    // 更密的候选点，否则小天体影像在套用蒙版后容易只剩几百个关键点。
+    return options.profile == MatchPhotosProfile::Fast ? 0.003f : 0.001f;
 }
 
 cv::Mat resizeForFeatureExtraction(const cv::Mat &grayImage,
@@ -133,12 +141,23 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
 
     xjw::feature_extractors::TraditionalFeatureConfig config;
     config.maxImageSize = algorithmPlan.maxImageDim;
-    config.removeBorders = 4;
-    config.allowDeviceFallback = true;
+    config.removeBorders = 16;
+    config.allowDeviceFallback = options.device != ComputeDevice::Cuda;
 
     const bool useCuda = shouldUseCudaSift(options, algorithmPlan);
+    const bool applyKeypointMask = shouldApplyMasksToKeypoints(options);
     int extractedCount = 0;
     int reusedCount = 0;
+    const int totalImages = images.size();
+
+    reportMatchPhotosProgress(context,
+                              QStringLiteral("feature"),
+                              QStringLiteral("SIFT 特征提取：准备处理 %1 张影像%2")
+                                  .arg(totalImages)
+                                  .arg(applyKeypointMask ? QStringLiteral("，按蒙版过滤关键点")
+                                                         : QString()),
+                              0,
+                              totalImages);
 
     for (const QString &imagePath : images)
     {
@@ -151,7 +170,8 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
 
         const QString featurePath = matchPhotosFeaturePath(context, imagePath, algorithmPlan);
         const int existingCount = FeatureFileIO::peekCount(featurePath);
-        if (options.reuseExistingFeatures &&
+        if (!applyKeypointMask &&
+            options.reuseExistingFeatures &&
             existingCount > 0 &&
             FeatureFileIO::peekAlgorithm(featurePath) == "sift")
         {
@@ -165,6 +185,15 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
             }
             ++reusedCount;
             advanceMatchPhotosProgress(context);
+            reportMatchPhotosProgress(context,
+                                      QStringLiteral("feature"),
+                                      QStringLiteral("SIFT 特征提取：%1/%2，复用 %3 张，新提取 %4 张")
+                                          .arg(extractedCount + reusedCount)
+                                          .arg(totalImages)
+                                          .arg(reusedCount)
+                                          .arg(extractedCount),
+                                      extractedCount + reusedCount,
+                                      totalImages);
             continue;
         }
 
@@ -182,6 +211,7 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
                 resolveFeatureKeypointLimit(options, algorithmPlan, grayImage.cols, grayImage.rows);
             xjw::feature_extractors::TraditionalFeatureConfig imageConfig = config;
             imageConfig.maxKeypoints = effectiveKeypointLimit;
+            imageConfig.detectionThreshold = siftDetectionThresholdForTiePoints(options);
 
             double resizeScale = 1.0;
             const cv::Mat inputImage = resizeForFeatureExtraction(grayImage,
@@ -190,6 +220,19 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
             FeatureOutput output = xjw::feature_extractors::TraditionalFeatureExtractor::detect(
                 inputImage, imageConfig, "sift", useCuda, options.cudaDevice);
             restoreOriginalCoordinates(&output, grayImage, resizeScale);
+            const int unmaskedKeypointCount = output.count();
+            QString maskPath;
+            int maskRemovedKeypointCount = 0;
+            if (applyKeypointMask)
+            {
+                maskPath = maskPathForImage(context, imagePath);
+                const cv::Mat mask = loadMaskForImage(context, imagePath, grayImage.size());
+                if (!mask.empty())
+                {
+                    output = filterFeatureOutputByMask(output, mask);
+                    maskRemovedKeypointCount = std::max(0, unmaskedKeypointCount - output.count());
+                }
+            }
 
             if (!FeatureFileIO::write(featurePath,
                                       QFileInfo(imagePath).fileName(),
@@ -207,6 +250,12 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
                 settings[QStringLiteral("effective_keypoint_limit")] = effectiveKeypointLimit;
                 settings[QStringLiteral("image_width")] = grayImage.cols;
                 settings[QStringLiteral("image_height")] = grayImage.rows;
+                if (applyKeypointMask)
+                {
+                    settings[QStringLiteral("mask_path")] = maskPath;
+                    settings[QStringLiteral("mask_unfiltered_keypoints")] = unmaskedKeypointCount;
+                    settings[QStringLiteral("mask_filtered_keypoints")] = maskRemovedKeypointCount;
+                }
                 featureRecords->push_back(
                     MatchPhotosFeatureRecord{imagePath,
                                              featurePath,
@@ -215,6 +264,19 @@ MatchPhotosStageReport FeatureStage::run(const MatchPhotosContext &context,
             }
             ++extractedCount;
             advanceMatchPhotosProgress(context);
+            reportMatchPhotosProgress(context,
+                                      QStringLiteral("feature"),
+                                      QStringLiteral("SIFT 特征提取：%1/%2，新提取 %3 张，复用 %4 张，当前关键点 %5%6")
+                                          .arg(extractedCount + reusedCount)
+                                          .arg(totalImages)
+                                          .arg(extractedCount)
+                                          .arg(reusedCount)
+                                          .arg(output.count())
+                                          .arg(applyKeypointMask
+                                                   ? QStringLiteral("，蒙版剔除 %1 点").arg(maskRemovedKeypointCount)
+                                                   : QString()),
+                                      extractedCount + reusedCount,
+                                      totalImages);
         }
         catch (const std::exception &e)
         {

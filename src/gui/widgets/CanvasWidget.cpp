@@ -3,6 +3,7 @@
 #include "LayerFeatureLoader.h"
 #include "LayerRenderer.h"
 #include "ProjectIO.h"
+#include "GuiTaskRunner.h"
 #include "io/PathIO.h"
 
 #include <QtConcurrent>
@@ -513,141 +514,120 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         }
     }
     
-    QFuture<std::vector<cv::KeyPoint>> future =
-        QtConcurrent::run([imagePathCopy,
-                           activeSuffix,
-                           projectPath,
-                           shouldEstimateOrientation]() -> std::vector<cv::KeyPoint> {
-        std::vector<cv::KeyPoint> empty;
-        // 使用当前选中的后缀查找特征文件
-        const QString spFile = ProjectIO::featureOutputPathForImage(
-            projectPath, imagePathCopy, activeSuffix);
-        LOG_DEBUG(QStringLiteral("startSpLoadForImage: suffix=%1 file=%2")
-            .arg(activeSuffix, spFile));
-
-        if (spFile.isEmpty() || !QFile::exists(spFile))
+    QPointer<CanvasWidget> self(this);
+    xjw::gui::tasks::runGuarded(
+        this,
+        [imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]() -> std::vector<cv::KeyPoint>
         {
-            LOG_DEBUG(QStringLiteral("startSpLoadForImage: no %1 found for %2")
-                .arg(activeSuffix, imagePathCopy));
-            return empty;
-        }
+            std::vector<cv::KeyPoint> empty;
+            // 使用当前选中的后缀查找特征文件。
+            const QString spFile = ProjectIO::featureOutputPathForImage(
+                projectPath, imagePathCopy, activeSuffix);
+            LOG_DEBUG(QStringLiteral("startSpLoadForImage: suffix=%1 file=%2")
+                .arg(activeSuffix, spFile));
 
-        // 读取特征文件 (支持所有提取器类型)
-        std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
-        if (keypoints.empty())
-        {
-            LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read feature file %1").arg(spFile));
-            return empty;
-        }
-
-        if (shouldEstimateOrientation)
-        {
-            // 尝试从影像中估计每个 keypoint 的方向（梯度方向），以便显示方向箭头。
-            // 默认不开方向显示时跳过整图 imread/Sobel，避免切换影像时抢占磁盘与 CPU。
-            try
+            if (spFile.isEmpty() || !QFile::exists(spFile))
             {
-                cv::Mat img = xjw::common::io::readImage(imagePathCopy, cv::IMREAD_GRAYSCALE);
-                if (!img.empty())
+                LOG_DEBUG(QStringLiteral("startSpLoadForImage: no %1 found for %2")
+                    .arg(activeSuffix, imagePathCopy));
+                return empty;
+            }
+
+            // 读取特征文件 (支持所有提取器类型)。
+            std::vector<cv::KeyPoint> keypoints = xjw::gui::views::loadFeatureKeypointsFromFile(spFile);
+            if (keypoints.empty())
+            {
+                LOG_WARN(QStringLiteral("startSpLoadForImage: failed to read feature file %1").arg(spFile));
+                return empty;
+            }
+
+            if (shouldEstimateOrientation)
+            {
+                // 尝试从影像中估计每个 keypoint 的方向（梯度方向），以便显示方向箭头。
+                // 默认不开方向显示时跳过整图 imread/Sobel，避免切换影像时抢占磁盘与 CPU。
+                try
                 {
-                    cv::Mat gx, gy;
-                    cv::Sobel(img, gx, CV_32F, 1, 0, 3);
-                    cv::Sobel(img, gy, CV_32F, 0, 1, 3);
-                    for (auto &kp : keypoints)
+                    cv::Mat img = xjw::common::io::readImage(imagePathCopy, cv::IMREAD_GRAYSCALE);
+                    if (!img.empty())
                     {
-                        int x = static_cast<int>(std::round(kp.pt.x));
-                        int y = static_cast<int>(std::round(kp.pt.y));
-                        if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows)
+                        cv::Mat gx, gy;
+                        cv::Sobel(img, gx, CV_32F, 1, 0, 3);
+                        cv::Sobel(img, gy, CV_32F, 0, 1, 3);
+                        for (auto &kp : keypoints)
                         {
-                            float vx = gx.at<float>(y, x);
-                            float vy = gy.at<float>(y, x);
-                            if (std::isfinite(vx) &&
-                                std::isfinite(vy) &&
-                                (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f))
+                            int x = static_cast<int>(std::round(kp.pt.x));
+                            int y = static_cast<int>(std::round(kp.pt.y));
+                            if (x >= 0 && x < gx.cols && y >= 0 && y < gx.rows)
                             {
-                                double ang =
-                                    std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
-                                if (ang < 0)
+                                float vx = gx.at<float>(y, x);
+                                float vy = gy.at<float>(y, x);
+                                if (std::isfinite(vx) &&
+                                    std::isfinite(vy) &&
+                                    (std::abs(vx) > 1e-6f || std::abs(vy) > 1e-6f))
                                 {
-                                    ang += 360.0;
+                                    double ang =
+                                        std::atan2(static_cast<double>(vy), static_cast<double>(vx)) * 180.0 / M_PI;
+                                    if (ang < 0)
+                                    {
+                                        ang += 360.0;
+                                    }
+                                    kp.angle = static_cast<float>(ang);
                                 }
-                                kp.angle = static_cast<float>(ang);
+                                else
+                                {
+                                    kp.angle = 0.0f;
+                                }
                             }
                             else
                             {
                                 kp.angle = 0.0f;
                             }
                         }
-                        else
-                        {
-                            kp.angle = 0.0f;
-                        }
                     }
                 }
+                catch (...)
+                {
+                    // 估计失败则忽略，保持原有角度值。
+                }
             }
-            catch (...)
+
+            LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2")
+                          .arg(static_cast<int>(keypoints.size()))
+                          .arg(spFile));
+            return keypoints;
+        },
+        [self, imagePathCopy, activeSuffix, generation](CanvasWidget *widget,
+                                                        std::vector<cv::KeyPoint> kps) mutable
+        {
+            if (!self || widget != self.data())
             {
-                // 估计失败则忽略，保持原有角度值
+                return;
             }
-        }
-
-        LOG_DEBUG(QStringLiteral("startSpLoadForImage: loaded %1 keypoints from %2")
-                      .arg(static_cast<int>(keypoints.size()))
-                      .arg(spFile));
-        return keypoints;
-    });
-
-    // 取消上一个 watcher（如果有）并启动新 watcher。QtConcurrent 任务可能已经在运行，
-    // 因此完成回调仍需依赖 generation 判断来丢弃旧结果。
-    if (_spWatcher && _spWatcher->isRunning())
-    {
-        _spWatcher->cancel();
-    }
-
-    QPointer<CanvasWidget> self(this);
-    auto *watcher = new QFutureWatcher<std::vector<cv::KeyPoint>>(this);
-    _spWatcher = watcher;
-    connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,
-            watcher, [self, watcher, imagePathCopy, activeSuffix, generation]()
-    {
-        if (!self)
-        {
-            watcher->deleteLater();
-            return;
-        }
-
-        std::vector<cv::KeyPoint> kps = watcher->result();
-        if (watcher == self->_spWatcher)
-        {
-            self->_spWatcher = nullptr;
-        }
-        watcher->deleteLater();
-
-        if (generation != self->_featureLoadGeneration)
-        {
-            return;
-        }
-
-        const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath);
-        if (!imagePathCopy.trimmed().isEmpty())
-        {
-            QFileInfo fi(imagePathCopy);
-            const QString key = imagePathCopy + activeSuffix;
-            self->_spCache[key] = std::make_pair(fi.lastModified(), kps);
-        }
-        if (isCurrentImage && self->_layerRenderer)
-        {
-            // 重新应用当前显示设置，确保使用 UI 中的参数
-            self->_layerRenderer->setFeatureDisplayOptions(self->_currentFeatureOpts);
-            self->_layerRenderer->clearFeatureLayers();
-            if (!kps.empty())
+            if (generation != self->_featureLoadGeneration)
             {
-                self->_layerRenderer->addFeatureItems(kps);
+                return;
             }
-        }
-        // 发出信号以便主窗体更新状态栏 / 面板
-        emit self->featuresLoaded(imagePathCopy, static_cast<int>(kps.size()));
-    });
-    watcher->setFuture(future);
+
+            const bool isCurrentImage = QDir::cleanPath(imagePathCopy) == QDir::cleanPath(self->_currentImagePath);
+            if (!imagePathCopy.trimmed().isEmpty())
+            {
+                QFileInfo fi(imagePathCopy);
+                const QString key = imagePathCopy + activeSuffix;
+                self->_spCache[key] = std::make_pair(fi.lastModified(), kps);
+            }
+            if (isCurrentImage && self->_layerRenderer)
+            {
+                // 重新应用当前显示设置，确保使用 UI 中的参数。
+                self->_layerRenderer->setFeatureDisplayOptions(self->_currentFeatureOpts);
+                self->_layerRenderer->clearFeatureLayers();
+                if (!kps.empty())
+                {
+                    self->_layerRenderer->addFeatureItems(kps);
+                }
+            }
+            // 发出信号以便主窗体更新状态栏 / 面板。
+            emit self->featuresLoaded(imagePathCopy, static_cast<int>(kps.size()));
+        });
 }
 
 void CanvasWidget::reloadMaskOverlay()

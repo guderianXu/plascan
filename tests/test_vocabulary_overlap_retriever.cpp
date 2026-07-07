@@ -74,6 +74,9 @@ TEST(VocabularyOverlapRetrieverTest, RetrievesExpectedPairFromSharedDescriptors)
     config.minSimilarity = 0.05;
     config.useTfidf = true;
     config.mutualTopK = true;
+    config.keepOneWayTopK = false;
+    config.connectComponents = false;
+    config.closeSequenceLoop = false;
     config.geometryCheck = false;
 
     xjw::VocabularyOverlapResult result;
@@ -141,6 +144,89 @@ TEST(VocabularyOverlapRetrieverTest, InvertedIndexMatchesDensePairScoring)
     ASSERT_FALSE(invertedResult.acceptedPairs.empty());
     EXPECT_EQ(invertedResult.acceptedPairs.front().indexA, denseResult.acceptedPairs.front().indexA);
     EXPECT_EQ(invertedResult.acceptedPairs.front().indexB, denseResult.acceptedPairs.front().indexB);
+}
+
+TEST(VocabularyOverlapRetrieverTest, PlannerKeepsOneWayTopKWhenMutualTopKWouldDisconnect)
+{
+    std::vector<xjw::VocabularyImageFeatures> images;
+    images.push_back(makeImage("a.tif", makeDescriptors({
+        {0.00f, 0.00f}, {0.01f, 0.00f}, {0.02f, 0.01f}, {0.03f, 0.01f},
+        {8.00f, 8.00f}, {8.10f, 8.00f},
+    })));
+    images.push_back(makeImage("b.tif", makeDescriptors({
+        {0.00f, 0.01f}, {0.01f, 0.02f}, {0.02f, 0.03f}, {0.03f, 0.04f},
+    })));
+    images.push_back(makeImage("c.tif", makeDescriptors({
+        {8.00f, 8.10f}, {8.10f, 8.10f},
+    })));
+
+    xjw::VocabularyOverlapConfig config;
+    config.branchFactor = 2;
+    config.treeDepth = 1;
+    config.samplePerImage = 100;
+    config.maxTrainingDescriptors = 1000;
+    config.topK = 1;
+    config.minPairsPerImage = 1;
+    config.minSimilarity = 0.01;
+    config.useTfidf = false;
+    config.mutualTopK = true;
+    config.keepOneWayTopK = true;
+    config.connectComponents = false;
+    config.closeSequenceLoop = false;
+    config.geometryCheck = false;
+    config.useFlannAssignment = false;
+    config.useInvertedIndex = false;
+
+    xjw::VocabularyOverlapResult result;
+    std::string error;
+    ASSERT_TRUE(xjw::VocabularyOverlapRetriever::retrieve(images, config, &result, &error)) << error;
+
+    const auto hasPair = [](const std::vector<xjw::VocabularyOverlapPairResult> &pairs, int indexA, int indexB)
+    {
+        return std::any_of(pairs.begin(), pairs.end(), [=](const xjw::VocabularyOverlapPairResult &pair)
+        {
+            return pair.indexA == indexA && pair.indexB == indexB;
+        });
+    };
+
+    EXPECT_TRUE(hasPair(result.acceptedPairs, 0, 1));
+    EXPECT_TRUE(hasPair(result.acceptedPairs, 0, 2));
+}
+
+TEST(VocabularyOverlapRetrieverTest, PlannerReportsConnectivityRepairInDetail)
+{
+    std::vector<xjw::VocabularyImageFeatures> images;
+    images.push_back(makeImage("a.tif", makeDescriptors({{0.00f, 0.00f}, {0.01f, 0.00f}})));
+    images.push_back(makeImage("b.tif", makeDescriptors({{0.00f, 0.01f}, {0.01f, 0.02f}})));
+    images.push_back(makeImage("c.tif", makeDescriptors({{8.00f, 8.00f}, {8.10f, 8.00f}})));
+    images.push_back(makeImage("d.tif", makeDescriptors({{8.00f, 8.10f}, {8.10f, 8.10f}})));
+
+    xjw::VocabularyOverlapConfig config;
+    config.branchFactor = 2;
+    config.treeDepth = 1;
+    config.samplePerImage = 100;
+    config.maxTrainingDescriptors = 1000;
+    config.topK = 1;
+    config.minPairsPerImage = 0;
+    config.minSimilarity = 0.01;
+    config.useTfidf = false;
+    config.mutualTopK = true;
+    config.keepOneWayTopK = false;
+    config.connectComponents = true;
+    config.useSequenceFallback = true;
+    config.sequenceWindow = 1;
+    config.closeSequenceLoop = false;
+    config.geometryCheck = false;
+    config.useFlannAssignment = false;
+    config.useInvertedIndex = false;
+
+    xjw::VocabularyOverlapResult result;
+    std::string error;
+    ASSERT_TRUE(xjw::VocabularyOverlapRetriever::retrieve(images, config, &result, &error)) << error;
+
+    EXPECT_NE(result.detail.find("components_before="), std::string::npos);
+    EXPECT_NE(result.detail.find("components_after="), std::string::npos);
+    EXPECT_NE(result.detail.find("sequence_bridges="), std::string::npos);
 }
 
 TEST(VocabularyOverlapRetrieverTest, ProgressCallbackCanCancel)

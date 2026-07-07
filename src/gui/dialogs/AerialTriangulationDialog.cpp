@@ -98,16 +98,28 @@ void AerialTriangulationDialog::setupUi()
     setComboByData(_ui->m_qualityCombo, QStringLiteral("high"));
 
     _ui->m_referenceSourceCombo->clear();
-    _ui->m_referenceSourceCombo->addItem(QStringLiteral("源代码"), QStringLiteral("source_code"));
-    _ui->m_referenceSourceCombo->addItem(QStringLiteral("估计"), QStringLiteral("estimated"));
-    _ui->m_referenceSourceCombo->addItem(QStringLiteral("序列"), QStringLiteral("sequence"));
+    _ui->m_referenceSourceCombo->addItem(QStringLiteral("导入参考"), QStringLiteral("source_code"));
+    _ui->m_referenceSourceCombo->addItem(QStringLiteral("已估位姿"), QStringLiteral("estimated"));
+    _ui->m_referenceSourceCombo->addItem(QStringLiteral("照片序列"), QStringLiteral("sequence"));
+    _ui->m_referenceSourceCombo->setItemData(
+        0,
+        QStringLiteral("使用已导入相机文件、影像元数据或外方位参考生成候选匹配对。"),
+        Qt::ToolTipRole);
+    _ui->m_referenceSourceCombo->setItemData(
+        1,
+        QStringLiteral("使用当前已有对齐结果中的估计相机位姿生成候选匹配对。"),
+        Qt::ToolTipRole);
+    _ui->m_referenceSourceCombo->setItemData(
+        2,
+        QStringLiteral("按影像顺序生成邻近候选对，适合视频帧或绕目标连续拍摄。"),
+        Qt::ToolTipRole);
     setComboByData(_ui->m_referenceSourceCombo, QStringLiteral("source_code"));
 
     _ui->m_maskApplyCombo->clear();
     _ui->m_maskApplyCombo->addItem(QStringLiteral("无"), QStringLiteral("none"));
     _ui->m_maskApplyCombo->addItem(QStringLiteral("关键点"), QStringLiteral("keypoints"));
     _ui->m_maskApplyCombo->addItem(QStringLiteral("连接点"), QStringLiteral("tiepoints"));
-    setComboByData(_ui->m_maskApplyCombo, QStringLiteral("none"));
+    setComboByData(_ui->m_maskApplyCombo, QStringLiteral("keypoints"));
 
     _ui->m_genericPreselectionCheck->setChecked(true);
     _ui->m_referencePreselectionCheck->setChecked(false);
@@ -133,6 +145,7 @@ void AerialTriangulationDialog::setupUi()
     stabilizeCheckBox(_ui->m_excludeFixedTiePointsCheck);
     stabilizeCheckBox(_ui->m_guidedImageMatchingCheck);
     stabilizeCheckBox(_ui->m_adaptiveCameraModelCheck);
+    setReferencePreselectionAvailable(false, 0, 0);
     setAdvancedExpanded(false);
 
     connect(_ui->m_buttonBox, &QDialogButtonBox::accepted, this, &QDialog::accept);
@@ -144,7 +157,13 @@ void AerialTriangulationDialog::setupUi()
 
     connect(_ui->m_referencePreselectionCheck, &QCheckBox::toggled, this, [this](bool enabled)
     {
-        _ui->m_referenceSourceCombo->setEnabled(enabled);
+        if (!_referencePreselectionAvailable && enabled)
+        {
+            const QSignalBlocker blocker(_ui->m_referencePreselectionCheck);
+            _ui->m_referencePreselectionCheck->setChecked(false);
+            enabled = false;
+        }
+        _ui->m_referenceSourceCombo->setEnabled(enabled && _referencePreselectionAvailable);
         emitSettingsChanged();
     });
 
@@ -190,6 +209,35 @@ void AerialTriangulationDialog::setImageCount(int count)
     _ui->m_statusLabel->setText(QStringLiteral("当前项目影像：%1 张").arg(qMax(0, count)));
 }
 
+void AerialTriangulationDialog::setReferencePreselectionAvailable(bool available,
+                                                                  int cameraCount,
+                                                                  int imageCount)
+{
+    _referencePreselectionAvailable = available;
+    if (!_ui || !_ui->m_referencePreselectionCheck || !_ui->m_referenceSourceCombo)
+    {
+        return;
+    }
+
+    const QSignalBlocker blockReference(_ui->m_referencePreselectionCheck);
+    if (!available)
+    {
+        _ui->m_referencePreselectionCheck->setChecked(false);
+    }
+    _ui->m_referencePreselectionCheck->setEnabled(available);
+    _ui->m_referencePreselectionCheck->setToolTip(
+        available
+            ? QStringLiteral("使用已导入相机外方位/相机文件生成候选匹配对。")
+            : QStringLiteral("当前项目没有完整可用的相机文件，参考预选不可用。"));
+    _ui->m_referenceSourceCombo->setEnabled(available && _ui->m_referencePreselectionCheck->isChecked());
+    _ui->m_referenceSourceCombo->setToolTip(
+        available
+            ? QStringLiteral("选择参考预选的候选对来源。")
+            : QStringLiteral("需要先为全部影像导入相机文件；当前相机 %1/%2。")
+                  .arg(qMax(0, cameraCount))
+                  .arg(qMax(0, imageCount)));
+}
+
 void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
 {
     _applyingSettings = true;
@@ -210,6 +258,7 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     _ui->m_genericPreselectionCheck->setChecked(
         settings.value(QStringLiteral("generic_preselection")).toBool(true));
     _ui->m_referencePreselectionCheck->setChecked(
+        _referencePreselectionAvailable &&
         settings.value(QStringLiteral("reference_preselection")).toBool(false));
     const QString referenceSource = normalizeReferenceSource(
         settings.value(QStringLiteral("reference_preselection_source")).toString(QStringLiteral("source_code")));
@@ -221,7 +270,7 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     _ui->m_keypointLimitSpin->setValue(settings.value(QStringLiteral("keypoint_limit")).toInt(40000));
     _ui->m_tiepointLimitSpin->setValue(settings.value(QStringLiteral("tiepoint_limit")).toInt(4000));
     setComboByData(_ui->m_maskApplyCombo,
-                   settings.value(QStringLiteral("mask_apply_mode")).toString(QStringLiteral("none")));
+                   settings.value(QStringLiteral("mask_apply_mode")).toString(QStringLiteral("keypoints")));
     _ui->m_excludeFixedTiePointsCheck->setChecked(
         settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool(true));
     _ui->m_guidedImageMatchingCheck->setChecked(
@@ -229,7 +278,8 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     _ui->m_adaptiveCameraModelCheck->setChecked(
         settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(false));
 
-    _ui->m_referenceSourceCombo->setEnabled(_ui->m_referencePreselectionCheck->isChecked());
+    _ui->m_referenceSourceCombo->setEnabled(
+        _referencePreselectionAvailable && _ui->m_referencePreselectionCheck->isChecked());
     _applyingSettings = false;
 }
 
@@ -239,14 +289,15 @@ QJsonObject AerialTriangulationDialog::collectSettings() const
     settings[QStringLiteral("workflow_kind")] = QStringLiteral("aerial_triangulation_dialog_only");
     settings[QStringLiteral("quality")] = comboDataOr(_ui->m_qualityCombo, QStringLiteral("high"));
     settings[QStringLiteral("generic_preselection")] = _ui->m_genericPreselectionCheck->isChecked();
-    settings[QStringLiteral("reference_preselection")] = _ui->m_referencePreselectionCheck->isChecked();
+    settings[QStringLiteral("reference_preselection")] =
+        _referencePreselectionAvailable && _ui->m_referencePreselectionCheck->isChecked();
     settings[QStringLiteral("reference_preselection_source")] =
         comboDataOr(_ui->m_referenceSourceCombo, QStringLiteral("source_code"));
     settings[QStringLiteral("reset_current_alignment")] = _ui->m_resetAlignmentCheck->isChecked();
     settings[QStringLiteral("save_project_after_each_step")] = _ui->m_saveAfterEachStepCheck->isChecked();
     settings[QStringLiteral("keypoint_limit")] = _ui->m_keypointLimitSpin->value();
     settings[QStringLiteral("tiepoint_limit")] = _ui->m_tiepointLimitSpin->value();
-    settings[QStringLiteral("mask_apply_mode")] = comboDataOr(_ui->m_maskApplyCombo, QStringLiteral("none"));
+    settings[QStringLiteral("mask_apply_mode")] = comboDataOr(_ui->m_maskApplyCombo, QStringLiteral("keypoints"));
     settings[QStringLiteral("exclude_fixed_tie_points")] = _ui->m_excludeFixedTiePointsCheck->isChecked();
     settings[QStringLiteral("guided_image_matching")] = _ui->m_guidedImageMatchingCheck->isChecked();
     settings[QStringLiteral("adaptive_camera_model_fitting")] = _ui->m_adaptiveCameraModelCheck->isChecked();

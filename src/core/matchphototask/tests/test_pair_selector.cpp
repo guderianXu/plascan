@@ -5,6 +5,7 @@
 #include <QDir>
 
 #include <algorithm>
+#include <utility>
 
 namespace
 {
@@ -119,7 +120,7 @@ TEST(MatchPhotosPairSelectorTest, MergesOverlapAndVocabularyCandidates)
     EXPECT_DOUBLE_EQ(vocabulary->vocabularyScore, 0.5);
 }
 
-TEST(MatchPhotosPairSelectorTest, AutoUsesPreselectionInsteadOfSmallSetExhaustive)
+TEST(MatchPhotosPairSelectorTest, AutoUsesPreselectionAndRepairsInsteadOfSmallSetExhaustive)
 {
     xjw::VocabularyOverlapResult vocabularyOverlap;
     xjw::VocabularyOverlapPairResult vocabularyPair;
@@ -141,9 +142,51 @@ TEST(MatchPhotosPairSelectorTest, AutoUsesPreselectionInsteadOfSmallSetExhaustiv
 
     EXPECT_TRUE(result.restrictPairs);
     EXPECT_EQ(result.allPairCount, 6);
-    ASSERT_EQ(result.candidates.size(), 1);
-    ASSERT_NE(findPair(result.candidates, 0, 2), nullptr);
-    EXPECT_TRUE(hasSource(result.candidates.front(), xjw::matchphotos::PairSource::VocabularyOverlap));
+    ASSERT_EQ(result.candidates.size(), 3);
+
+    const xjw::matchphotos::PairCandidate *vocabulary = findPair(result.candidates, 0, 2);
+    ASSERT_NE(vocabulary, nullptr);
+    EXPECT_TRUE(hasSource(*vocabulary, xjw::matchphotos::PairSource::VocabularyOverlap));
+    EXPECT_NE(findPair(result.candidates, 0, 1), nullptr);
+    EXPECT_NE(findPair(result.candidates, 2, 3), nullptr);
+    EXPECT_LT(result.candidates.size(), static_cast<std::size_t>(result.allPairCount));
+}
+
+TEST(MatchPhotosPairSelectorTest, AutoRepairsDisconnectedPreselectionWithSequenceBridges)
+{
+    xjw::VocabularyOverlapResult vocabularyOverlap;
+    for (const auto &pair : {std::pair<int, int>{0, 1},
+                             std::pair<int, int>{1, 2},
+                             std::pair<int, int>{3, 4},
+                             std::pair<int, int>{4, 5}})
+    {
+        xjw::VocabularyOverlapPairResult vocabularyPair;
+        vocabularyPair.indexA = pair.first;
+        vocabularyPair.indexB = pair.second;
+        vocabularyPair.bowScore = 0.8;
+        vocabularyPair.sharedWordCount = 18;
+        vocabularyPair.accepted = true;
+        vocabularyOverlap.acceptedPairs.push_back(vocabularyPair);
+    }
+
+    xjw::matchphotos::PairSelectionInput input;
+    input.images = makeImages(6);
+    input.vocabularyOverlapResult = &vocabularyOverlap;
+
+    xjw::matchphotos::PairSelectionPolicy policy;
+    policy.exhaustiveMaxImages = 1;
+    policy.sequenceWindow = 1;
+
+    const xjw::matchphotos::PairSelectionResult result =
+        xjw::matchphotos::PairSelector::select(input, policy);
+
+    EXPECT_TRUE(result.restrictPairs);
+    EXPECT_EQ(result.allPairCount, 15);
+    ASSERT_EQ(result.candidates.size(), 5);
+
+    const xjw::matchphotos::PairCandidate *bridge = findPair(result.candidates, 2, 3);
+    ASSERT_NE(bridge, nullptr);
+    EXPECT_TRUE(hasSource(*bridge, xjw::matchphotos::PairSource::SequenceWindow));
 }
 
 TEST(MatchPhotosPairSelectorTest, EmptyPreselectionDoesNotFallBackToSequence)

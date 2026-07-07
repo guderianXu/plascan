@@ -4,8 +4,10 @@
 
 class QCheckBox;
 class QComboBox;
+class QGroupBox;
 class QLabel;
 class QLineEdit;
+class QToolButton;
 
 class CreateTiePointsDialog : public QDialog
 {
@@ -22,6 +24,7 @@ public:
     bool useReferencePreselection() const;
     bool useGuidedMatching() const;
     bool excludePinnedTiePoints() const;
+    QString maskApplyMode() const;
     void setReferencePreselectionAvailable(bool available,
                                            int cameraCount = 0,
                                            int imageCount = 0);
@@ -30,6 +33,7 @@ private:
     int intFromEdit(const QLineEdit *edit, int fallback) const;
     QString formattedInteger(int value) const;
     void buildUi();
+    void setAdvancedExpanded(bool expanded);
     void updateKeypointLimitMode(bool guided);
 
     QComboBox *_accuracyCombo{};
@@ -42,6 +46,10 @@ private:
     QCheckBox *_guidedMatchingCheck{};
     QCheckBox *_excludePinnedTiePointsCheck{};
     QLabel *_preselectionStatusLabel{};
+    QGroupBox *_generalGroup{};
+    QGroupBox *_advancedGroup{};
+    QToolButton *_advancedToggle{};
+    QWidget *_advancedContent{};
     int _keypointLimit = 40000;
     int _keypointLimitPerMegapixel = 1000;
 };

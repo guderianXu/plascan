@@ -117,7 +117,8 @@ private:
                                                                   const QString &projectPath,
                                                                   const QString &featureAlgorithm = QString(),
                                                                   const QString &matchAlgorithm = QString());
-    bool confirmAutoFillMissingSparseInputs(const SparsePrerequisiteSummary &summary) const;
+    QJsonObject sanitizeAerialTriangulationReferencePreselection(const QJsonObject &settings,
+                                                                const QStringList &images) const;
 
     /// 在后台线程中启动特征提取任务。
     /// @param config 配置参数 JSON，如设备、阈值和输出目录。
@@ -130,7 +131,13 @@ private:
                                       const QString &projectPath,
                                       const QJsonObject &projectMeta,
                                       const QString &outputRoot,
-                                      bool autoFillMissing);
+                                      bool autoFillMissing,
+                                      bool prepareTiePoints);
+    void prepareAerialTriangulationTiePoints(const QJsonObject &settings,
+                                             const QStringList &images,
+                                             const QString &projectPath,
+                                             const QString &outputRoot,
+                                             bool autoFillMissing);
     void startThreeDReconstructionWorkflow(const QJsonObject &settings);
     void startThreeDReconstructionDenseStage(const QJsonObject &settings);
     void startThreeDReconstructionDenseRefineStage(const QJsonObject &settings);

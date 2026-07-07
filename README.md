@@ -69,6 +69,17 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 `build/windows-vcpkg-cuda-release`，并使用该目录自己的 `vcpkg_installed`、CUDA 13.1 和
 `build/env/libtorch-cu130/libtorch`，避免旧 CPU LibTorch 或其它 build cache 混入运行时 PATH。
 
+U2Net ONNX 蒙版的 CPU 推理只需要标准 OpenCV DNN。若要启用 OpenCV DNN CUDA 后端，需要让 vcpkg
+额外安装 `opencv-dnn-cuda` manifest feature：
+
+```powershell
+pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps -EnableOpenCvDnnCuda
+pwsh scripts\build_win\build_windows_cuda.ps1 -EnableOpenCvDnnCuda
+```
+
+不带 `-EnableOpenCvDnnCuda` 时，SAM2.1、LibTorch、MVS 等 CUDA 路径不受影响，但 U2Net ONNX 会使用
+OpenCV DNN CPU 或在 GUI 中从 CUDA 自动回退到 CPU。
+
 ### Python / LibTorch 环境脚本
 
 `scripts/env/` 集中管理 Python 和 LibTorch 相关的本机环境准备脚本。Python 开发环境默认创建在仓库根目录 `.venv/`，生成的机器本地配置文件仍输出到 `build/env/`，不会把本地路径写进源码目录。

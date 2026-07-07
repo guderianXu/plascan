@@ -14,6 +14,8 @@ add_library(matchphototask STATIC
     pair_selection/PairTypes.h
     runtime/MatchPhotosRuntime.cpp
     runtime/MatchPhotosRuntime.h
+    runtime/MatchPhotosMaskSupport.cpp
+    runtime/MatchPhotosMaskSupport.h
     stages/FeatureStage.cpp
     stages/FeatureStage.h
     stages/GeometryVerifyStage.cpp

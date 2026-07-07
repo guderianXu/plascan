@@ -289,13 +289,9 @@ MatchIndexData readDisplayMatchIndices(const QString &matchFile,
     return readMatchIndicesFromSgmt(matchFile, displayImageA, displayImageB);
 }
 
-QStringList candidateSparseSidecars(const QString &matchFile)
+QStringList candidateSparseSidecarsInAssetsDir(const QString &assetsDir)
 {
     QStringList candidates;
-    const QFileInfo matchInfo(matchFile);
-    const QString matchDir = matchInfo.absolutePath();
-    const QString assetsDir = QDir(matchDir).absoluteFilePath(QStringLiteral(".."));
-
     QDirIterator it(assetsDir,
                     QStringList{QStringLiteral("sfm_sparse_points.json"),
                                 QStringLiteral("sparse_cloud_points.json")},
@@ -381,12 +377,40 @@ QSet<QString> validPairsFromSparseSidecar(const QString &sidecarPath,
 
 } // namespace
 
+MatchValidityContext buildMatchValidityContextForMatchDirectory(const QString &matchDirectory)
+{
+    MatchValidityContext context;
+    if (matchDirectory.trimmed().isEmpty())
+    {
+        return context;
+    }
+
+    const QString assetsDir = QDir(matchDirectory).absoluteFilePath(QStringLiteral(".."));
+    context.sparseSidecarPaths = candidateSparseSidecarsInAssetsDir(assetsDir);
+    return context;
+}
+
 MatchValidityResult analyzeMatchTrackValidity(const QString &matchFile,
                                               const QString &displayImageA,
                                               const QString &displayImageB)
 {
+    const MatchValidityContext context =
+        buildMatchValidityContextForMatchDirectory(QFileInfo(matchFile).absolutePath());
+    return analyzeMatchTrackValidity(matchFile, displayImageA, displayImageB, context);
+}
+
+MatchValidityResult analyzeMatchTrackValidity(const QString &matchFile,
+                                              const QString &displayImageA,
+                                              const QString &displayImageB,
+                                              const MatchValidityContext &context)
+{
     MatchValidityResult result;
     if (matchFile.trimmed().isEmpty())
+    {
+        return result;
+    }
+
+    if (context.sparseSidecarPaths.isEmpty())
     {
         return result;
     }
@@ -397,7 +421,7 @@ MatchValidityResult analyzeMatchTrackValidity(const QString &matchFile,
         return result;
     }
 
-    for (const QString &sidecarPath : candidateSparseSidecars(matchFile))
+    for (const QString &sidecarPath : context.sparseSidecarPaths)
     {
         bool hasObservationSchema = false;
         const QSet<QString> validPairs = validPairsFromSparseSidecar(

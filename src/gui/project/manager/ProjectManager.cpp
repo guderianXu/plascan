@@ -28,7 +28,11 @@
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "MaskGenerator.h"
+#include "Sam21MaskGenerator.h"
+#include "u2net/U2NetMaskGenerator.h"
 #include "io/PathIO.h"
+#include "model/TorchScriptModelResolver.h"
+#include "model/U2NetModelCatalog.h"
 #include "filtering/SparsePointCloudProcessor.h"
 #include "FileDialogStateManager.h"
 #include "Camera.h"
@@ -44,11 +48,15 @@
 #include "AerialTriangulationService.h"
 
 #include <QMessageBox>
+#include <QCoreApplication>
 #include <QDir>
 #include <QFileDialog>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
+#include <QProcess>
+#include <QProcessEnvironment>
+#include <QProgressDialog>
 #include <QThread>
 #include <cmath>
 #include <QFile>
@@ -64,8 +72,10 @@
 #include <QColor>
 
 #include <algorithm>
+#include <atomic>
 #include <array>
 #include <limits>
+#include <memory>
 #include <optional>
 
 #include "OpenCvCompat.h"
@@ -120,6 +130,55 @@ using xjw::gui::project::writeBundleAdjustReport;
 
 namespace
 {
+
+struct ImageFolderScan
+{
+    bool success = false;
+    QString folder;
+    QString errorMessage;
+    QStringList imagePaths;
+};
+
+QStringList imageFolderNameFilters()
+{
+    return QStringList{
+        QStringLiteral("*.tif"),
+        QStringLiteral("*.tiff"),
+        QStringLiteral("*.TIF"),
+        QStringLiteral("*.TIFF"),
+        QStringLiteral("*.png"),
+        QStringLiteral("*.PNG"),
+        QStringLiteral("*.jpg"),
+        QStringLiteral("*.jpeg"),
+        QStringLiteral("*.JPG"),
+        QStringLiteral("*.JPEG")
+    };
+}
+
+ImageFolderScan scanImageFolder(const QString &folder)
+{
+    ImageFolderScan scan;
+    scan.folder = folder;
+
+    QDir dir(folder);
+    if (!dir.exists())
+    {
+        scan.errorMessage = QStringLiteral("文件夹不存在: %1").arg(folder);
+        return scan;
+    }
+
+    const QFileInfoList files = dir.entryInfoList(imageFolderNameFilters(),
+                                                  QDir::Files | QDir::Readable,
+                                                  QDir::Name | QDir::IgnoreCase);
+    scan.imagePaths.reserve(files.size());
+    for (const QFileInfo &file : files)
+    {
+        scan.imagePaths.append(file.absoluteFilePath());
+    }
+
+    scan.success = true;
+    return scan;
+}
 
 QString imageLabel(const QString &path)
 {
@@ -256,6 +315,164 @@ QStringList maskTargetsFromSettings(const QJsonObject &settings, const QStringLi
         return currentImage.trimmed().isEmpty() ? QStringList{} : QStringList{currentImage};
     }
     return selectedImages.isEmpty() ? allImages : selectedImages;
+}
+
+std::string utf8StdString(const QString &value)
+{
+    const QByteArray bytes = QDir::toNativeSeparators(value).toUtf8();
+    return std::string(bytes.constData(), static_cast<std::size_t>(bytes.size()));
+}
+
+QString plascanSourceRoot()
+{
+#ifdef PLASCAN_SOURCE_DIR
+    return QDir::cleanPath(QStringLiteral(PLASCAN_SOURCE_DIR));
+#else
+    return QDir::cleanPath(QDir(QCoreApplication::applicationDirPath()).filePath(QStringLiteral("../..")));
+#endif
+}
+
+QString resolveSam21InstallerScript()
+{
+    const QString sourceScript = QDir(plascanSourceRoot()).filePath(QStringLiteral("scripts/install_sam21_model.py"));
+    if (QFileInfo::exists(sourceScript))
+    {
+        return QDir::cleanPath(sourceScript);
+    }
+
+    const QString appDir = QCoreApplication::applicationDirPath();
+    const QStringList candidates{
+        QDir(appDir).filePath(QStringLiteral("scripts/install_sam21_model.py")),
+        QDir(appDir).filePath(QStringLiteral("../scripts/install_sam21_model.py")),
+        QDir(appDir).filePath(QStringLiteral("../../scripts/install_sam21_model.py")),
+    };
+    for (const QString &candidate : candidates)
+    {
+        if (QFileInfo::exists(candidate))
+        {
+            return QDir::cleanPath(candidate);
+        }
+    }
+    return QDir::cleanPath(sourceScript);
+}
+
+QString resolvePythonExecutable()
+{
+    QString pythonExecutable = qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed();
+    if (pythonExecutable.isEmpty())
+    {
+        pythonExecutable = qEnvironmentVariable("PLASCAN_PYTHON").trimmed();
+    }
+    if (!pythonExecutable.isEmpty())
+    {
+        return QDir::cleanPath(pythonExecutable);
+    }
+
+    const QString sourceRoot = plascanSourceRoot();
+#ifdef Q_OS_WIN
+    const QString projectVenv = QDir(sourceRoot).filePath(QStringLiteral(".venv/Scripts/python.exe"));
+    const QString bundled = QDir(sourceRoot).filePath(QStringLiteral("build/env/python-runtime/Scripts/python.exe"));
+#else
+    const QString projectVenv = QDir(sourceRoot).filePath(QStringLiteral(".venv/bin/python"));
+    const QString bundled = QDir(sourceRoot).filePath(QStringLiteral("build/env/python-runtime/bin/python"));
+#endif
+    if (QFileInfo::exists(projectVenv))
+    {
+        return QDir::cleanPath(projectVenv);
+    }
+    if (QFileInfo::exists(bundled))
+    {
+        return QDir::cleanPath(bundled);
+    }
+    return QStringLiteral("python");
+}
+
+std::optional<xjw::mask::Sam21MaskGeneratorConfig> sam21MaskConfigFromSettings(const QJsonObject &settings,
+                                                                               QString *error)
+{
+    const QString variantToken = settings.value(QStringLiteral("sam21_variant")).toString(QStringLiteral("tiny"));
+    const xjw::mask::Sam21ModelVariant variant =
+        xjw::mask::sam21VariantFromToken(variantToken.toStdString());
+    const bool requestCuda =
+        settings.value(QStringLiteral("sam21_device")).toString(QStringLiteral("cuda")) == QLatin1String("cuda");
+    const bool allowFallback = settings.value(QStringLiteral("sam21_allow_fallback")).toBool(true);
+
+    const auto requestedNames = xjw::mask::sam21TorchScriptModelNames(variant, requestCuda);
+    const auto cpuNames = xjw::mask::sam21TorchScriptModelNames(variant, false);
+    const xjw::common::model::TorchScriptModelResolver resolver;
+    const QString requestedEncoder = resolver.findModel(QString::fromStdString(requestedNames.encoder));
+    const QString requestedDecoder = resolver.findModel(QString::fromStdString(requestedNames.decoder));
+    const QString cpuEncoder = resolver.findModel(QString::fromStdString(cpuNames.encoder));
+    const QString cpuDecoder = resolver.findModel(QString::fromStdString(cpuNames.decoder));
+
+    bool useCuda = requestCuda;
+    QString encoder = requestedEncoder;
+    QString decoder = requestedDecoder;
+    if (encoder.isEmpty() || decoder.isEmpty())
+    {
+        if (requestCuda && allowFallback && !cpuEncoder.isEmpty() && !cpuDecoder.isEmpty())
+        {
+            useCuda = false;
+            encoder = cpuEncoder;
+            decoder = cpuDecoder;
+        }
+        else
+        {
+            if (error)
+            {
+                const QString device = requestCuda ? QStringLiteral("CUDA") : QStringLiteral("CPU");
+                *error = QStringLiteral("未找到 SAM2.1 %1 TorchScript 模型：%2, %3。请放到 PLASCAN_MODEL_DIR 或 resources/models。")
+                    .arg(device,
+                         QString::fromStdString(requestedNames.encoder),
+                         QString::fromStdString(requestedNames.decoder));
+            }
+            return std::nullopt;
+        }
+    }
+
+    xjw::mask::Sam21MaskGeneratorConfig config;
+    config.encoderModelPath = utf8StdString(encoder);
+    config.decoderModelPath = utf8StdString(decoder);
+    config.cpuEncoderModelPath = utf8StdString(cpuEncoder);
+    config.cpuDecoderModelPath = utf8StdString(cpuDecoder);
+    config.useCuda = useCuda;
+    config.cudaDevice = std::max(0, settings.value(QStringLiteral("sam21_cuda_device")).toInt(0));
+    config.allowDeviceFallback = allowFallback;
+    config.inputSize = std::clamp(settings.value(QStringLiteral("sam21_input_size")).toInt(1024), 256, 2048);
+    config.maskThreshold = settings.value(QStringLiteral("sam21_mask_threshold")).toDouble(0.0);
+    config.multimaskOutput = true;
+    return config;
+}
+
+std::optional<xjw::mask::U2NetMaskGeneratorConfig> u2netMaskConfigFromSettings(const QJsonObject &settings,
+                                                                               QString *error)
+{
+    const xjw::common::model::TorchScriptModelResolver resolver;
+    const auto status = xjw::common::model::u2netModelStatus(resolver);
+    if (!status.isInstalled)
+    {
+        if (error)
+        {
+            *error = QStringLiteral("未找到 U2Net ONNX 模型：U2Net_v1.onnx。请放到 PLASCAN_MODEL_DIR 或 resources/models。");
+        }
+        return std::nullopt;
+    }
+
+    xjw::mask::U2NetMaskGeneratorConfig config;
+    config.modelPath = utf8StdString(status.modelPath);
+    config.useCuda =
+        settings.value(QStringLiteral("u2net_device")).toString(QStringLiteral("cuda")) == QLatin1String("cuda");
+    config.allowDeviceFallback = settings.value(QStringLiteral("u2net_allow_fallback")).toBool(true);
+    config.cudaDevice = std::max(0, settings.value(QStringLiteral("sam21_cuda_device")).toInt(0));
+    config.inputSize = std::clamp(settings.value(QStringLiteral("u2net_input_size")).toInt(320), 128, 1024);
+    config.foregroundThreshold =
+        static_cast<float>(std::clamp(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(0.5),
+                                      0.01,
+                                      0.99));
+    config.morphologyRadius = 1;
+    config.minComponentArea = 64;
+    config.keepLargestComponent = true;
+    return config;
 }
 
 } // namespace
@@ -476,10 +693,64 @@ void ProjectManager::addPhoto()
 
 void ProjectManager::addFolder()
 {
-    if (_uiCommands)
+    if (!_uiCommands || !_projectData)
     {
-        (void)_uiCommands->addFolder();
+        return;
     }
+
+    QString folder;
+    if (!_uiCommands->selectImageFolder(&folder))
+    {
+        return;
+    }
+
+    const QString projectPath = currentProjectPath();
+    xjw::gui::tasks::runGuarded(
+        this,
+        [folder]() -> ImageFolderScan
+        {
+            return scanImageFolder(folder);
+        },
+        [folder, projectPath](ProjectManager *self, ImageFolderScan scan)
+        {
+            if (!self || !self->_projectData || self->currentProjectPath() != projectPath)
+            {
+                return;
+            }
+
+            if (!scan.success)
+            {
+                QMessageBox::critical(self->_parent,
+                                      QStringLiteral("错误"),
+                                      QStringLiteral("添加文件夹失败: %1").arg(scan.errorMessage));
+                return;
+            }
+
+            if (scan.imagePaths.isEmpty())
+            {
+                QMessageBox::information(self->_parent,
+                                         QStringLiteral("提示"),
+                                         QStringLiteral("文件夹中没有找到可导入的影像: %1").arg(folder));
+                return;
+            }
+
+            QString error;
+            if (!self->_projectData->addImages(scan.imagePaths, &error))
+            {
+                QMessageBox::critical(self->_parent,
+                                      QStringLiteral("错误"),
+                                      QStringLiteral("添加文件夹失败: %1").arg(error));
+                return;
+            }
+
+            LOG_INFO(QStringLiteral("已从文件夹添加 %1 张影像: %2")
+                         .arg(scan.imagePaths.size())
+                         .arg(folder));
+            if (!error.isEmpty())
+            {
+                QMessageBox::information(self->_parent, QStringLiteral("提示"), error);
+            }
+        });
 }
 
 bool ProjectManager::importCameraForImage(const QString &imagePath)
@@ -653,10 +924,179 @@ void ProjectManager::setActiveImagePath(const QString &imagePath)
     _activeImagePath = imagePath;
 }
 
+void ProjectManager::installSam21Model(const QString &variantToken, GenerateMaskDialog *dialog)
+{
+    const QString cleanVariant = variantToken.trimmed().isEmpty() ? QStringLiteral("tiny") : variantToken.trimmed();
+    const QString pythonExecutable = resolvePythonExecutable();
+    const QString installerScript = resolveSam21InstallerScript();
+    const QString sourceRoot = plascanSourceRoot();
+
+    xjw::common::model::TorchScriptModelResolver resolver;
+    const QString modelDir = resolver.defaultModelDir();
+    if (modelDir.isEmpty() || !QDir().mkpath(modelDir))
+    {
+        showWarning(QStringLiteral("无法创建 SAM2.1 模型目录：%1").arg(modelDir), QStringLiteral("安装 SAM2.1 模型"));
+        return;
+    }
+
+    if (!QFileInfo::exists(installerScript))
+    {
+        showWarning(QStringLiteral("未找到 SAM2.1 安装脚本：%1").arg(installerScript),
+                    QStringLiteral("安装 SAM2.1 模型"));
+        return;
+    }
+
+    auto *progressDialog = new QProgressDialog(QStringLiteral("正在安装 SAM2.1 模型..."),
+                                               QStringLiteral("取消"),
+                                               0,
+                                               100,
+                                               _parent);
+    progressDialog->setWindowTitle(QStringLiteral("安装 SAM2.1 模型"));
+    progressDialog->setWindowModality(Qt::WindowModal);
+    progressDialog->setMinimumDuration(0);
+    progressDialog->setAutoClose(false);
+    progressDialog->setAutoReset(false);
+    progressDialog->setValue(0);
+    progressDialog->show();
+
+    auto *process = new QProcess(progressDialog);
+    process->setProcessChannelMode(QProcess::MergedChannels);
+
+    QProcessEnvironment environment = QProcessEnvironment::systemEnvironment();
+    environment.insert(QStringLiteral("PLASCAN_MODEL_DIR"), modelDir);
+    environment.insert(QStringLiteral("PLASCAN_PYTHON_EXECUTABLE"), pythonExecutable);
+    environment.insert(QStringLiteral("PLASCAN_PYTHON"), pythonExecutable);
+    environment.insert(QStringLiteral("PYTHONUTF8"), QStringLiteral("1"));
+    environment.insert(QStringLiteral("PYTHONIOENCODING"), QStringLiteral("utf-8"));
+    process->setProcessEnvironment(environment);
+
+    QStringList arguments;
+    arguments << installerScript
+              << QStringLiteral("--variant") << cleanVariant
+              << QStringLiteral("--source-dir") << sourceRoot
+              << QStringLiteral("--model-dir") << modelDir
+              << QStringLiteral("--python-executable") << pythonExecutable
+              << QStringLiteral("--devices") << QStringLiteral("auto");
+
+    auto outputBuffer = std::make_shared<QString>();
+    QPointer<QProgressDialog> progressGuard(progressDialog);
+    QPointer<GenerateMaskDialog> dialogGuard(dialog);
+
+    connect(progressDialog, &QProgressDialog::canceled,
+            process,
+            [process, progressGuard]()
+            {
+                if (progressGuard)
+                {
+                    progressGuard->setLabelText(QStringLiteral("正在取消 SAM2.1 模型安装..."));
+                }
+                process->kill();
+            });
+
+    connect(process, &QProcess::readyReadStandardOutput,
+            process,
+            [process, outputBuffer, progressGuard]()
+            {
+                const QString text = QString::fromUtf8(process->readAllStandardOutput());
+                outputBuffer->append(text);
+                const QStringList lines = text.split(QLatin1Char('\n'), Qt::SkipEmptyParts);
+                static const QRegularExpression downloadPercentPattern(QStringLiteral("PROGRESS download (\\d+)%"));
+                for (const QString &rawLine : lines)
+                {
+                    const QString line = rawLine.trimmed();
+                    if (!progressGuard || line.isEmpty())
+                    {
+                        continue;
+                    }
+
+                    const QRegularExpressionMatch match = downloadPercentPattern.match(line);
+                    if (match.hasMatch())
+                    {
+                        progressGuard->setRange(0, 100);
+                        progressGuard->setValue(std::clamp(match.captured(1).toInt(), 0, 100));
+                        progressGuard->setLabelText(QStringLiteral("正在下载 SAM2.1 checkpoint..."));
+                    }
+                    else if (line.contains(QStringLiteral("PROGRESS export started")))
+                    {
+                        progressGuard->setRange(0, 0);
+                        progressGuard->setLabelText(QStringLiteral("正在导出 TorchScript 模型..."));
+                    }
+                    else if (line.startsWith(QStringLiteral("PROGRESS")))
+                    {
+                        progressGuard->setLabelText(line.mid(QStringLiteral("PROGRESS").size()).trimmed());
+                    }
+                    else if (line.startsWith(QStringLiteral("EXPORT")))
+                    {
+                        progressGuard->setLabelText(line.mid(QStringLiteral("EXPORT").size()).trimmed());
+                    }
+                }
+            });
+
+    connect(process, &QProcess::errorOccurred,
+            process,
+            [this, progressGuard](QProcess::ProcessError error)
+            {
+                if (error == QProcess::FailedToStart)
+                {
+                    if (progressGuard)
+                    {
+                        progressGuard->close();
+                        progressGuard->deleteLater();
+                    }
+                    showWarning(QStringLiteral("无法启动 Python。请检查 PLASCAN_PYTHON_EXECUTABLE、PLASCAN_PYTHON 或项目 .venv。"),
+                                QStringLiteral("安装 SAM2.1 模型"));
+                }
+            });
+
+    connect(process, QOverload<int, QProcess::ExitStatus>::of(&QProcess::finished),
+            process,
+            [this, process, outputBuffer, progressGuard, dialogGuard](int exitCode, QProcess::ExitStatus exitStatus)
+            {
+                const bool success = exitStatus == QProcess::NormalExit && exitCode == 0;
+                if (progressGuard)
+                {
+                    progressGuard->setRange(0, 100);
+                    progressGuard->setValue(success ? 100 : 0);
+                    progressGuard->close();
+                    progressGuard->deleteLater();
+                }
+
+                if (success)
+                {
+                    if (dialogGuard)
+                    {
+                        dialogGuard->refreshSam21ModelStatus();
+                    }
+                    QMessageBox::information(_parent,
+                                             QStringLiteral("安装 SAM2.1 模型"),
+                                             QStringLiteral("SAM2.1 模型安装完成。"));
+                }
+                else
+                {
+                    QString output = outputBuffer ? outputBuffer->trimmed() : QString();
+                    if (output.size() > 2000)
+                    {
+                        output = output.right(2000);
+                    }
+                    showWarning(QStringLiteral("SAM2.1 模型安装失败。退出码：%1\n%2").arg(exitCode).arg(output),
+                                QStringLiteral("安装 SAM2.1 模型"));
+                }
+                process->deleteLater();
+            });
+
+    process->start(pythonExecutable, arguments);
+}
+
 void ProjectManager::openGenerateMaskDialog()
 {
     if (!ensureProjectOpen(QStringLiteral("请先打开项目，再生成照片蒙版。")))
     {
+        return;
+    }
+    if (_maskGenerationCancelFlag)
+    {
+        showWarning(QStringLiteral("已有照片蒙版生成任务正在运行，请等待完成或取消后再试。"),
+                    QStringLiteral("生成蒙版"));
         return;
     }
 
@@ -669,6 +1109,12 @@ void ProjectManager::openGenerateMaskDialog()
 
     const QString currentImage = allImages.contains(_activeImagePath) ? _activeImagePath : QString();
     GenerateMaskDialog dialog(allImages, currentImage, _parent);
+    connect(&dialog, &GenerateMaskDialog::sam21InstallRequested,
+            this,
+            [this, &dialog](const QString &variantToken)
+            {
+                installSam21Model(variantToken, &dialog);
+            });
     if (dialog.exec() != QDialog::Accepted)
     {
         return;
@@ -690,92 +1136,245 @@ void ProjectManager::openGenerateMaskDialog()
         return;
     }
 
-    const auto options = maskOptionsFromSettings(settings);
-    const auto operation = maskOperationFromSettings(settings);
-    const QString methodToken = settings.value(QStringLiteral("method")).toString(QStringLiteral("black_background"));
+    const auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
+    const int totalImages = targetImages.size();
+    _maskGenerationCancelFlag = cancelFlag;
+    emit maskGenerationProgressChanged(QStringLiteral("生成蒙版"), 0, totalImages);
 
-    QMap<QString, QJsonObject> maskRecordsByImage;
-    QStringList generatedImages;
-    QStringList errors;
-
-    for (const QString &imagePath : targetImages)
+    struct GenerateMaskResult
     {
-        const cv::Mat source = xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED);
-        if (source.empty())
-        {
-            errors << QStringLiteral("%1: 读取失败").arg(QFileInfo(imagePath).fileName());
-            continue;
-        }
+        QMap<QString, QJsonObject> maskRecordsByImage;
+        QStringList generatedImages;
+        QStringList errors;
+        bool cancelled = false;
+    };
 
-        cv::Mat generated = xjw::mask::generateMask(source, options);
-        if (generated.empty())
+    QPointer<ProjectManager> managerGuard(this);
+    xjw::gui::tasks::runGuarded(
+        this,
+        [settings, targetImages, projectPath, cancelFlag, managerGuard, totalImages]() -> GenerateMaskResult
         {
-            errors << QStringLiteral("%1: 生成结果为空").arg(QFileInfo(imagePath).fileName());
-            continue;
-        }
+            GenerateMaskResult result;
+            const auto options = maskOptionsFromSettings(settings);
+            const auto operation = maskOperationFromSettings(settings);
+            const QString methodToken =
+                settings.value(QStringLiteral("method")).toString(QStringLiteral("black_background"));
+            const bool useSam21 = methodToken == QLatin1String("sam21");
+            const bool useU2Net = methodToken == QLatin1String("u2net");
 
-        const QString maskPath = ProjectIO::maskOutputPathForImage(projectPath, imagePath);
-        if (QFileInfo::exists(maskPath) && operation != xjw::mask::MaskOperation::Replace)
-        {
-            const cv::Mat existing = xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE);
-            if (!existing.empty())
+            std::unique_ptr<xjw::mask::Sam21MaskGenerator> sam21Generator;
+            if (useSam21)
             {
-                generated = xjw::mask::composeMasks(existing, generated, operation);
+                const auto variant = xjw::mask::sam21VariantFromToken(
+                    settings.value(QStringLiteral("sam21_variant")).toString(QStringLiteral("tiny")).toStdString());
+                const bool requestCuda =
+                    settings.value(QStringLiteral("sam21_device")).toString(QStringLiteral("cuda"))
+                    == QLatin1String("cuda");
+                const auto modelNamesForLog = xjw::mask::sam21TorchScriptModelNames(variant, requestCuda);
+
+                QString configError;
+                const auto sam21Config = sam21MaskConfigFromSettings(settings, &configError);
+                if (!sam21Config.has_value())
+                {
+                    result.errors << configError;
+                    return result;
+                }
+
+                try
+                {
+                    sam21Generator = std::make_unique<xjw::mask::Sam21MaskGenerator>(sam21Config.value());
+                    LOG_INFO(QStringLiteral("SAM2.1 蒙版模型已加载: encoder=%1 decoder=%2 device=%3")
+                                 .arg(QString::fromStdString(modelNamesForLog.encoder),
+                                      QString::fromStdString(modelNamesForLog.decoder),
+                                      QString::fromStdString(sam21Generator->deviceLabel())));
+                }
+                catch (const std::exception &error)
+                {
+                    result.errors << QStringLiteral("SAM2.1 模型加载失败：%1").arg(QString::fromUtf8(error.what()));
+                    return result;
+                }
             }
-        }
 
-        if (!xjw::common::io::writeImage(maskPath, generated))
+            std::unique_ptr<xjw::mask::U2NetMaskGenerator> u2netGenerator;
+            if (useU2Net)
+            {
+                QString configError;
+                const auto u2netConfig = u2netMaskConfigFromSettings(settings, &configError);
+                if (!u2netConfig.has_value())
+                {
+                    result.errors << configError;
+                    return result;
+                }
+
+                try
+                {
+                    u2netGenerator = std::make_unique<xjw::mask::U2NetMaskGenerator>(u2netConfig.value());
+                    LOG_INFO(QStringLiteral("U2Net ONNX 蒙版模型已加载: model=U2Net_v1.onnx device=%1")
+                                 .arg(QString::fromStdString(u2netGenerator->deviceLabel())));
+                }
+                catch (const std::exception &error)
+                {
+                    result.errors << QStringLiteral("U2Net ONNX 模型加载失败：%1").arg(QString::fromUtf8(error.what()));
+                    return result;
+                }
+            }
+
+            auto reportProgress = [managerGuard, totalImages](int done)
+            {
+                if (!managerGuard)
+                {
+                    return;
+                }
+                xjw::gui::tasks::postGuarded(managerGuard.data(),
+                                             [done, totalImages](ProjectManager *self)
+                {
+                    emit self->maskGenerationProgressChanged(QStringLiteral("生成蒙版"), done, totalImages);
+                });
+            };
+
+            int completed = 0;
+            for (const QString &imagePath : targetImages)
+            {
+                if (cancelFlag->load(std::memory_order_relaxed))
+                {
+                    result.cancelled = true;
+                    break;
+                }
+
+                const cv::Mat source = xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED);
+                if (source.empty())
+                {
+                    result.errors << QStringLiteral("%1: 读取失败").arg(QFileInfo(imagePath).fileName());
+                    reportProgress(++completed);
+                    continue;
+                }
+
+                cv::Mat generated;
+                try
+                {
+                    if (useSam21)
+                    {
+                        const auto prompt = xjw::mask::Sam21Prompt::autoBox(source);
+                        const auto maskResult = sam21Generator->generate(source, prompt);
+                        generated = maskResult.mask;
+                    }
+                    else if (useU2Net)
+                    {
+                        const auto maskResult = u2netGenerator->generate(source);
+                        generated = maskResult.mask;
+                    }
+                    else
+                    {
+                        generated = xjw::mask::generateMask(source, options);
+                    }
+                }
+                catch (const std::exception &error)
+                {
+                    result.errors << QStringLiteral("%1: %2")
+                                         .arg(QFileInfo(imagePath).fileName(),
+                                              QString::fromUtf8(error.what()));
+                    reportProgress(++completed);
+                    continue;
+                }
+
+                if (generated.empty())
+                {
+                    result.errors << QStringLiteral("%1: 生成结果为空").arg(QFileInfo(imagePath).fileName());
+                    reportProgress(++completed);
+                    continue;
+                }
+
+                const QString maskPath = ProjectIO::maskOutputPathForImage(projectPath, imagePath);
+                if (QFileInfo::exists(maskPath) && operation != xjw::mask::MaskOperation::Replace)
+                {
+                    const cv::Mat existing = xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE);
+                    if (!existing.empty())
+                    {
+                        generated = xjw::mask::composeMasks(existing, generated, operation);
+                    }
+                }
+
+                if (!xjw::common::io::writeImage(maskPath, generated))
+                {
+                    result.errors << QStringLiteral("%1: 写入失败").arg(QFileInfo(maskPath).fileName());
+                    reportProgress(++completed);
+                    continue;
+                }
+
+                QJsonObject record;
+                record.insert(QStringLiteral("mask_path"), QDir::cleanPath(maskPath));
+                record.insert(QStringLiteral("mask_method"), methodToken);
+                record.insert(QStringLiteral("mask_updated_at"),
+                              QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
+                result.maskRecordsByImage.insert(normalizePath(imagePath), record);
+                result.generatedImages << imagePath;
+                reportProgress(++completed);
+            }
+            return result;
+        },
+        [projectPath, masksDir, cancelFlag](ProjectManager *self, GenerateMaskResult result)
         {
-            errors << QStringLiteral("%1: 写入失败").arg(QFileInfo(maskPath).fileName());
-            continue;
-        }
+            if (self->_maskGenerationCancelFlag == cancelFlag)
+            {
+                self->_maskGenerationCancelFlag.reset();
+            }
 
-        QJsonObject record;
-        record.insert(QStringLiteral("mask_path"), QDir::cleanPath(maskPath));
-        record.insert(QStringLiteral("mask_method"), methodToken);
-        record.insert(QStringLiteral("mask_updated_at"),
-                      QDateTime::currentDateTimeUtc().toString(Qt::ISODate));
-        maskRecordsByImage.insert(normalizePath(imagePath), record);
-        generatedImages << imagePath;
-    }
+            const bool finishedSuccessfully =
+                !result.cancelled && result.errors.isEmpty() && !result.generatedImages.isEmpty();
+            emit self->maskGenerationFinished(finishedSuccessfully);
 
-    if (generatedImages.isEmpty())
-    {
-        showWarning(QStringLiteral("蒙版生成失败：%1").arg(errors.join(QStringLiteral("; "))),
-                    QStringLiteral("生成蒙版"));
-        return;
-    }
+            if (self->currentProjectPath() != projectPath)
+            {
+                return;
+            }
 
-    QJsonObject meta = _projectData->coreFilesMeta();
-    QJsonArray images = meta.value(QStringLiteral("images")).toArray();
-    for (int i = 0; i < images.size(); ++i)
-    {
-        QJsonObject image = images.at(i).toObject();
-        const QString normalized = normalizePath(image.value(QStringLiteral("path")).toString());
-        if (!maskRecordsByImage.contains(normalized))
-        {
-            continue;
-        }
+            if (result.generatedImages.isEmpty())
+            {
+                const QString detail = result.errors.isEmpty()
+                    ? QStringLiteral("未生成任何蒙版。")
+                    : result.errors.join(QStringLiteral("; "));
+                const QString message = result.cancelled
+                    ? QStringLiteral("蒙版生成已取消。%1").arg(detail)
+                    : QStringLiteral("蒙版生成失败：%1").arg(detail);
+                self->showWarning(message, QStringLiteral("生成蒙版"));
+                return;
+            }
 
-        const QJsonObject record = maskRecordsByImage.value(normalized);
-        image.insert(QStringLiteral("mask_path"), record.value(QStringLiteral("mask_path")));
-        image.insert(QStringLiteral("mask_method"), record.value(QStringLiteral("mask_method")));
-        image.insert(QStringLiteral("mask_updated_at"), record.value(QStringLiteral("mask_updated_at")));
-        images.replace(i, image);
-    }
-    meta.insert(QStringLiteral("images"), images);
+            QJsonObject meta = self->_projectData->coreFilesMeta();
+            QJsonArray images = meta.value(QStringLiteral("images")).toArray();
+            for (int i = 0; i < images.size(); ++i)
+            {
+                QJsonObject image = images.at(i).toObject();
+                const QString normalized = normalizePath(image.value(QStringLiteral("path")).toString());
+                if (!result.maskRecordsByImage.contains(normalized))
+                {
+                    continue;
+                }
 
-    persistProjectMeta(_projectData, meta, true);
-    emit projectMetadataUpdated(projectPath);
-    emit masksGenerated(generatedImages);
+                const QJsonObject record = result.maskRecordsByImage.value(normalized);
+                image.insert(QStringLiteral("mask_path"), record.value(QStringLiteral("mask_path")));
+                image.insert(QStringLiteral("mask_method"), record.value(QStringLiteral("mask_method")));
+                image.insert(QStringLiteral("mask_updated_at"), record.value(QStringLiteral("mask_updated_at")));
+                images.replace(i, image);
+            }
+            meta.insert(QStringLiteral("images"), images);
 
-    QString message = QStringLiteral("已生成 %1 张照片的蒙版。").arg(generatedImages.size());
-    if (!errors.isEmpty())
-    {
-        message += QStringLiteral("\n部分失败：%1").arg(errors.join(QStringLiteral("; ")));
-    }
-    QMessageBox::information(_parent, QStringLiteral("生成蒙版"), message);
-    LOG_INFO(QStringLiteral("蒙版生成完成: count=%1 dir=%2").arg(generatedImages.size()).arg(masksDir));
+            persistProjectMeta(self->_projectData, meta, true);
+            emit self->projectMetadataUpdated(projectPath);
+            emit self->masksGenerated(result.generatedImages);
+
+            QString message = result.cancelled
+                ? QStringLiteral("已取消，已保留 %1 张照片的蒙版。").arg(result.generatedImages.size())
+                : QStringLiteral("已生成 %1 张照片的蒙版。").arg(result.generatedImages.size());
+            if (!result.errors.isEmpty())
+            {
+                message += QStringLiteral("\n部分失败：%1").arg(result.errors.join(QStringLiteral("; ")));
+            }
+            QMessageBox::information(self->_parent, QStringLiteral("生成蒙版"), message);
+            LOG_INFO(QStringLiteral("蒙版生成完成: count=%1 dir=%2")
+                         .arg(result.generatedImages.size())
+                         .arg(masksDir));
+        });
 }
 
 void ProjectManager::runReferenceQualityCheck()
@@ -1856,5 +2455,15 @@ void ProjectManager::cancelAt()
     {
         _atCancelFlag->store(true);
         qDebug() << "[AT/BA] 已请求取消";
+    }
+}
+
+// ── 取消正在运行的照片蒙版生成任务 ───────────────────────────────────────────
+void ProjectManager::cancelMaskGeneration()
+{
+    if (_maskGenerationCancelFlag)
+    {
+        _maskGenerationCancelFlag->store(true, std::memory_order_relaxed);
+        qDebug() << "[Mask] 已请求取消照片蒙版生成";
     }
 }

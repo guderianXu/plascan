@@ -1,6 +1,8 @@
 add_library(overlap STATIC
     GroundBackProjector.cpp
     OverlapAnalyzer.cpp
+    OverlapPairGraphPlanner.cpp
+    OverlapPairGraphPlanner.h
     VocabularyOverlapRetriever.cpp
     VocabularyOverlapRetriever.h
 )

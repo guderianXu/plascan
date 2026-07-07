@@ -325,9 +325,31 @@ TEST(SfmSourceContractTest, MatchResultCatalogDiagnosticsAreNotUsedForInputSelec
 
     const QString selectionBody = sectionBetween(source, "auto appendCandidatePair", "if (allPairs.isEmpty())");
     expectNotContainsAll(selectionBody, {"bestVariantIndex"});
+    expectNotContainsAll(selectionBody, {"entryInfoList"});
     expectContainsAll(selectionBody, {
+        "matchCacheFilesByLeftBase",
         "findExistingMatchCache(baseA, baseB)",
         "findExistingMatchCache(baseB, baseA)",
+    });
+}
+
+TEST(SfmSourceContractTest, RestrictedSfmAddsExistingMatchCachesOutsidePairPlan)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    const QString selectionBody = sectionBetween(source, "auto appendCandidatePair", "if (allPairs.isEmpty())");
+    expectContainsAll(selectionBody, {
+        "appendExistingMatchCachesOutsidePlan",
+        "existingMatchCompatible(matchPath, idA, idB)",
+        "restrictPairs 只控制",
+        "受限配对之外追加已有兼容匹配缓存",
+    });
+
+    const int selectionStart = indexOfOrFail(source, "auto appendCandidatePair");
+    const QString restrictedBody = sectionBetween(source, "if (pairPlan.restrictPairs)", "else\n    {", selectionStart);
+    expectContainsAll(restrictedBody, {
+        "appendCandidatePair(itA.value(), itB.value())",
+        "appendExistingMatchCachesOutsidePlan()",
     });
 }
 
@@ -380,6 +402,29 @@ TEST(SfmSourceContractTest, DiskAlikedAndSiftLightGlueUseDedicatedTorchScriptMod
         "const bool usePythonLightGlue = lgModelPath.isEmpty() && canUsePythonLightGlue;",
         "请先运行 scripts/export_lightglue_torchscript.py 导出 TorchScript",
     });
+}
+
+TEST(PythonRuntimeSourceContractTest, RuntimeLaunchersPreferRepoLocalVenv)
+{
+    const QStringList runtimeSources{
+        QStringLiteral("src/gui/project/manager/ProjectManager.cpp"),
+        QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"),
+        QStringLiteral("src/core/pipeline/FeatureMatchRunner.cpp"),
+        QStringLiteral("src/core/feature_match/MatcherFactory.cpp"),
+        QStringLiteral("src/cli/cli_feature_extract.cpp"),
+    };
+
+    for (const QString &relativePath : runtimeSources)
+    {
+        const QString source = readSourceFile(relativePath);
+        ASSERT_FALSE(source.isEmpty()) << qPrintable(relativePath);
+        expectContainsAll(source, {
+            "PLASCAN_PYTHON_EXECUTABLE",
+            "PLASCAN_PYTHON",
+            ".venv/Scripts/python.exe",
+            ".venv/bin/python",
+        });
+    }
 }
 
 TEST(SfmSourceContractTest, LightGlueSiftCarriesScaleAndOrientation)

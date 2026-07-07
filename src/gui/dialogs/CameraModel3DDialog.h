@@ -13,12 +13,15 @@
 #include <QByteArray>
 #include <QDialog>
 #include <QFutureWatcher>
+#include <QHash>
+#include <QImage>
 #include <QMatrix3x3>
 #include <QMatrix4x4>
 #include <QQuaternion>
 #include <QRect>
 #include <QRhiWidget>
 #include <QScopedPointer>
+#include <QSet>
 #include <QVector>
 #include <QVector2D>
 #include <QVector3D>
@@ -70,6 +73,19 @@ public:
         QMatrix3x3 rotation; // 相机旋转矩阵（right/up/forward 列向量）
     };
 
+    enum class CameraImagePlaneMode
+    {
+        Solid,
+        Thumbnail,
+        Image
+    };
+
+    enum class CameraImageDisplayLayer
+    {
+        Background,
+        Foreground
+    };
+
     // 构造函数，初始化 Vulkan 渲染控件并设置默认视角
     explicit CameraSceneWidget(QWidget *parent = nullptr);
     ~CameraSceneWidget() override;
@@ -101,11 +117,21 @@ public:
     bool isGizmoVisible() const { return _showGizmo; }
     /// 设置是否显示相机光心、视锥体和文件名标签
     void setShowCameras(bool show);
+    void setShowCameraThumbnails(bool show);
+    void setShowCameraImage(bool show);
+    void setCameraImagePlaneMode(CameraImagePlaneMode mode);
+    void setCameraImageDisplayLayer(CameraImageDisplayLayer layer);
+    void setCameraImageLocked(bool locked);
     void setHighlightedCameraPath(const QString &imagePath);
     void setHighlightedCameraName(const QString &imageName);
     void clearHighlightedCamera();
     /// 查询当前相机覆盖层是否可见
     bool areCamerasVisible() const { return _showCameras; }
+    CameraImagePlaneMode cameraImagePlaneMode() const { return _cameraImagePlaneMode; }
+    bool areCameraThumbnailsVisible() const { return _showCameraThumbnails; }
+    bool isCameraImageVisible() const { return _showCameraImage; }
+    CameraImageDisplayLayer cameraImageDisplayLayer() const { return _cameraImageDisplayLayer; }
+    bool isCameraImageLocked() const { return _cameraImageLocked; }
 
 signals:
     void plyLoadProgressChanged(int generation, int percent, const QString &statusText);
@@ -156,6 +182,7 @@ private:
         Y,    // 绕 Y 轴旋转（绿色环）
         Z     // 绕 Z 轴旋转（蓝色环）
     };
+    struct CameraPlaneImageResult;
 
     // 将三维世界点投影到屏幕像素坐标（考虑当前视图旋转、投影、平移偏移）
     // ok 为 nullptr 或 false 时表示点在裁剪空间外
@@ -203,12 +230,23 @@ private:
     float cameraImagePlaneHalfExtent() const;
     bool isCameraHighlighted(const CameraPose &pose) const;
     QString normalizedCameraPath(const QString &imagePath) const;
+    QString cameraPlaneImageKey(const QString &imagePath, CameraImagePlaneMode mode) const;
+    QImage cachedCameraPlaneImage(const QString &imagePath, CameraImagePlaneMode mode) const;
+    void requestCameraPlaneImage(const QString &imagePath, CameraImagePlaneMode mode);
+    void applyCameraPlaneImage(const CameraPlaneImageResult &result);
+    int displayedCameraImagePoseIndex() const;
+    void refreshLockedCameraImage();
+    void drawSelectedCameraImage(QPainter &painter,
+                                 CameraImageDisplayLayer layer,
+                                 float thumbnailHalfExtent,
+                                 float thumbnailHalfHeight);
     void drawFloorPivotCross(QPainter &painter) const;
 
     // 在普通透明 QWidget 覆盖层中绘制 2D 标注：
     //   - 操控球 Gizmo（旋转环）
     //   - 相机视锥体和名称标注
     //   - 右下角坐标轴指示器和欧拉角文字
+    void updateCameraOverlay();
     void requestOverlayUpdate();
     void paintOverlay(QPainter &painter);
     void drawPlyLoadProgressOverlay(QPainter &painter);
@@ -251,6 +289,19 @@ private:
         QMatrix4x4 normalMatrix;
         QVector4D lightDirPointSize;
     };
+
+    struct CameraPlaneImageResult
+    {
+        QString path;
+        QImage image;
+        CameraImagePlaneMode mode = CameraImagePlaneMode::Solid;
+        int generation = 0;
+        bool loaded = false;
+    };
+
+    static CameraPlaneImageResult loadCameraPlaneImage(const QString &imagePath,
+                                                       CameraImagePlaneMode mode,
+                                                       int generation);
 
     bool _gpuDirty = true;  // 顶点缓冲需要重新上传
     bool _rhiReady = false;
@@ -320,6 +371,16 @@ private:
     QQuaternion _viewRotAtPress;     // 按下时的视图旋转快照
     bool _showGizmo = true;                       // 操控球是否可见（默认可见）
     bool _showCameras = true;                      // 相机光心、视锥体和标签是否可见（默认可见）
+    CameraImagePlaneMode _cameraImagePlaneMode = CameraImagePlaneMode::Thumbnail;
+    bool _showCameraThumbnails = true;
+    bool _showCameraImage = false;
+    CameraImageDisplayLayer _cameraImageDisplayLayer = CameraImageDisplayLayer::Foreground;
+    bool _cameraImageLocked = false;
+    QString _lockedCameraImagePath;
+    QString _lockedCameraImageName;
+    QHash<QString, QImage> _cameraImageCache;
+    QSet<QString> _cameraImageLoadsInFlight;
+    int _cameraImageLoadGeneration = 0;
     QString _highlightedCameraPath;
     QString _highlightedCameraName;
     bool _manualPruneMode = false;

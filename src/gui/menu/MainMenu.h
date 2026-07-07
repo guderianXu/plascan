@@ -103,6 +103,22 @@ public:
     /** @brief 返回"显示相机"切换动作（可检查状态）。 */
     QAction *toggleCamerasAction() const;
 
+    /** @brief 返回"显示从属相机"动作（当前未启用，保留 Metashape 风格菜单占位）。 */
+    QAction *toggleDependentCamerasAction() const;
+
+    /** @brief 返回"显示缩略图"切换动作，用于控制相机影像平面显示模式。 */
+    QAction *toggleCameraThumbnailsAction() const;
+
+    /** @brief 返回"显示本地轴"切换动作，用于工具栏相机菜单，状态与操控球显示同步。 */
+    QAction *toggleLocalAxesAction() const;
+
+    /** @brief 返回"显示图像"切换动作，用于控制当前相机图像平面。 */
+    QAction *toggleCameraImagesAction() const;
+
+    QAction *showCameraImagesInForegroundAction() const;
+    QAction *showCameraImagesInBackgroundAction() const;
+    QAction *lockCameraImageAction() const;
+
     /** @brief 返回"河南大学校徽"显示/隐藏切换动作（可检查状态）。 */
     QAction *toggleHenanUniversityBrandAction() const;
 
@@ -221,6 +237,12 @@ private:
     /** @brief "最近打开"子菜单，内容由 setRecentProjects 动态重建。 */
     QMenu *_recentMenu{};
 
+    /** @brief "模型"顶级菜单，承载 3D 模型视图相关显示控制。 */
+    QMenu *_modelMenu{};
+
+    /** @brief "模型 / 显示/隐藏项目"子菜单。 */
+    QMenu *_modelDisplayHideMenu{};
+
     // ---- 项目菜单中的固定动作 ----
     QAction *_newAct{};   ///< 新建项目
     QAction *_openAct{};  ///< 打开项目
@@ -234,6 +256,13 @@ private:
     QAction *_resetViewAct{}; ///< 重置视图到原始比例
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏操控球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
+    QAction *_toggleDependentCamerasAct{}; ///< 显示/隐藏从属相机（当前仅保留菜单占位）
+    QAction *_toggleCameraThumbnailsAct{}; ///< 相机影像平面显示缩略图
+    QAction *_toggleLocalAxesAct{}; ///< 工具栏相机菜单中的本地轴显示开关
+    QAction *_toggleCameraImagesAct{}; ///< 显示当前相机图像平面
+    QAction *_showCameraImagesInForegroundAct{}; ///< 在前景中显示当前相机图像
+    QAction *_showCameraImagesInBackgroundAct{}; ///< 在后景中显示当前相机图像
+    QAction *_lockCameraImageAct{}; ///< 锁定当前显示的相机图像
     QAction *_toggleHenanUniversityBrandAct{}; ///< 显示/隐藏河南大学校徽
     // ---- 面板开关动作 ----
     QAction *_toggleWorkspaceAct{}; ///< 左侧工作区显示/隐藏

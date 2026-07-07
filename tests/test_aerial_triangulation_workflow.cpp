@@ -73,6 +73,22 @@ TEST(AerialTriangulationWorkflowCoreTest, LowQualityUsesReducedImageScaleAndCons
     EXPECT_FALSE(resolved.serviceOptions.enableGuidedRematching);
 }
 
+TEST(AerialTriangulationWorkflowCoreTest, DefaultsToSiftLightGlueForFormalSfmCacheCompatibility)
+{
+    auto options = makeBaseOptions();
+
+    const auto resolved = xjw::gui::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_EQ(resolved.serviceOptions.featureAlgorithm, QStringLiteral("sift"));
+    EXPECT_EQ(resolved.serviceOptions.matchAlgorithm, QStringLiteral("lightglue"));
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("feature_algorithm")).toString(),
+              QStringLiteral("sift"));
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("match_algorithm")).toString(),
+              QStringLiteral("lightglue"));
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("match_pipeline")).toString(),
+              QStringLiteral("sift-lightglue"));
+}
+
 TEST(AerialTriangulationWorkflowCoreTest, ReferenceSequencePreselectionMapsToSequenceWindowPairs)
 {
     auto options = makeBaseOptions();
@@ -84,10 +100,28 @@ TEST(AerialTriangulationWorkflowCoreTest, ReferenceSequencePreselectionMapsToSeq
 
     EXPECT_TRUE(resolved.serviceOptions.autoRestrictKnownCameraPairs);
     EXPECT_FALSE(resolved.serviceOptions.useKnownCameraOverlapPairs);
-    EXPECT_EQ(resolved.serviceOptions.knownCameraPairWindow, 4);
+    EXPECT_EQ(resolved.serviceOptions.knownCameraPairWindow, 6);
     EXPECT_EQ(resolved.serviceOptions.knownCameraSpatialNeighborCount, 0);
+    EXPECT_TRUE(resolved.serviceOptions.knownCameraSequenceLoopClosure);
     EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("pair_planning_mode")).toString(),
               QStringLiteral("sequence"));
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("sequence_pair_window")).toInt(), 6);
+    EXPECT_TRUE(resolved.resolvedSettings.value(QStringLiteral("sequence_loop_closure")).toBool());
+}
+
+TEST(AerialTriangulationWorkflowCoreTest, HighestQualitySequencePreselectionUsesWiderWindow)
+{
+    auto options = makeBaseOptions();
+    options.quality = QStringLiteral("highest");
+    options.genericPreselection = false;
+    options.referencePreselection = true;
+    options.referenceMode = QStringLiteral("sequence");
+
+    const auto resolved = xjw::gui::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_EQ(resolved.serviceOptions.knownCameraPairWindow, 8);
+    EXPECT_TRUE(resolved.serviceOptions.knownCameraSequenceLoopClosure);
+    EXPECT_EQ(resolved.resolvedSettings.value(QStringLiteral("sequence_pair_window")).toInt(), 8);
 }
 
 TEST(AerialTriangulationWorkflowCoreTest, MatchPipelineOverridesFeatureAndMatcherNames)

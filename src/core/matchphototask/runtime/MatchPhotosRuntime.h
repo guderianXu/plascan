@@ -43,6 +43,11 @@ QString matchPhotosMatchPath(const MatchPhotosContext &context,
 
 bool shouldCancelMatchPhotos(const MatchPhotosContext &context);
 void advanceMatchPhotosProgress(const MatchPhotosContext &context);
+void reportMatchPhotosProgress(const MatchPhotosContext &context,
+                               const QString &stageId,
+                               const QString &message,
+                               int current,
+                               int maximum);
 
 bool resolveMatchPhotosPair(const MatchPhotosContext &context,
                             const PairCandidate &candidate,

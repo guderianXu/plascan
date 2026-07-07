@@ -120,6 +120,28 @@ int scaledLimit(int value, double scale)
     return std::max(1, static_cast<int>(std::round(static_cast<double>(value) * scale)));
 }
 
+int sequenceWindowForQuality(const QString &quality)
+{
+    const QString token = normalizedToken(quality, QStringLiteral("high"));
+    if (token == QStringLiteral("highest"))
+    {
+        return 8;
+    }
+    if (token == QStringLiteral("high"))
+    {
+        return 6;
+    }
+    if (token == QStringLiteral("medium") || token == QStringLiteral("standard"))
+    {
+        return 4;
+    }
+    if (token == QStringLiteral("low"))
+    {
+        return 3;
+    }
+    return 2;
+}
+
 void applyPreselection(AerialTriangulationResolvedConfig &resolved,
                        const AerialTriangulationWorkflowOptions &options)
 {
@@ -129,13 +151,16 @@ void applyPreselection(AerialTriangulationResolvedConfig &resolved,
     service.autoRestrictKnownCameraPairs = true;
     service.knownCameraPairWindow = 4;
     service.knownCameraSpatialNeighborCount = 8;
+    service.knownCameraSequenceLoopClosure = false;
     service.useKnownCameraOverlapPairs = options.referencePreselection;
     QString pairPlanningMode = QStringLiteral("auto");
 
     if (options.referencePreselection && referenceMode == QStringLiteral("sequence"))
     {
+        service.knownCameraPairWindow = sequenceWindowForQuality(options.quality);
         service.useKnownCameraOverlapPairs = false;
         service.knownCameraSpatialNeighborCount = 0;
+        service.knownCameraSequenceLoopClosure = true;
         pairPlanningMode = QStringLiteral("sequence");
     }
     else if (options.referencePreselection && referenceMode == QStringLiteral("estimated"))
@@ -156,6 +181,9 @@ void applyPreselection(AerialTriangulationResolvedConfig &resolved,
     }
 
     resolved.resolvedSettings.insert(QStringLiteral("pair_planning_mode"), pairPlanningMode);
+    resolved.resolvedSettings.insert(QStringLiteral("sequence_pair_window"), service.knownCameraPairWindow);
+    resolved.resolvedSettings.insert(QStringLiteral("sequence_loop_closure"),
+                                     service.knownCameraSequenceLoopClosure);
 }
 
 } // namespace

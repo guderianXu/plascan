@@ -7,6 +7,7 @@ set(GUI_SOURCES
   config/ProjectUiConfigManager.cpp
   config/ProjectWorkflowConfigManager.cpp
   config/ProjectConfigManager.cpp
+  config/PythonRuntimeBinding.cpp
   config/settings/WindowStateManager.cpp
   config/settings/RecentProjectsManager.cpp
   config/settings/FileDialogStateManager.cpp
@@ -79,6 +80,7 @@ set(GUI_SOURCES
   widgets/ObservationNetworkView.cpp
   widgets/WorkspaceCenterWidget.cpp
   widgets/WorkspaceCenterWidget.ui
+  dialogs/AboutDialog.cpp
   dialogs/CreateTiePointsDialog.cpp
   dialogs/ThinTiePointsDialog.cpp
   dialogs/CleanTiePointsDialog.cpp
@@ -134,6 +136,7 @@ set(GUI_HEADERS
   config/ProjectUiConfigManager.h
   config/ProjectWorkflowConfigManager.h
   config/ProjectConfigManager.h
+  config/PythonRuntimeBinding.h
   config/settings/WindowStateManager.h
   config/settings/RecentProjectsManager.h
   config/settings/FileDialogStateManager.h
@@ -203,6 +206,7 @@ set(GUI_HEADERS
   widgets/MatchValidityAnalyzer.h
   widgets/ObservationNetworkView.h
   widgets/WorkspaceCenterWidget.h
+  dialogs/AboutDialog.h
   dialogs/CreateTiePointsDialog.h
   dialogs/ThinTiePointsDialog.h
   dialogs/CleanTiePointsDialog.h
@@ -286,6 +290,7 @@ set(GUI_TASK_SOURCES
 )
 
 set(GUI_DIALOG_SOURCES
+  dialogs/AboutDialog.cpp
   dialogs/CreateTiePointsDialog.cpp
   dialogs/ThinTiePointsDialog.cpp
   dialogs/CleanTiePointsDialog.cpp

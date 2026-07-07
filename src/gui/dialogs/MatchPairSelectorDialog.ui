@@ -96,6 +96,19 @@
       </widget>
      </item>
      <item>
+      <widget class="QProgressBar" name="m_scanProgressBar">
+       <property name="minimumWidth">
+        <number>220</number>
+       </property>
+       <property name="maximumWidth">
+        <number>360</number>
+       </property>
+       <property name="textVisible">
+        <bool>false</bool>
+       </property>
+      </widget>
+     </item>
+     <item>
       <widget class="QPushButton" name="m_viewDetailBtn">
        <property name="enabled">
         <bool>false</bool>

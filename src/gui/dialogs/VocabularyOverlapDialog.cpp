@@ -525,6 +525,12 @@ bool writeOverlapOutputs(const QJsonObject &settings,
             object.insert(QStringLiteral("geometric_inliers"), pair.geometricInliers);
             object.insert(QStringLiteral("accepted"), pair.accepted);
             object.insert(QStringLiteral("reject_reason"), QString::fromStdString(pair.rejectReason));
+            QJsonArray sourceTypes;
+            for (const std::string &sourceType : pair.sourceTypes)
+            {
+                sourceTypes.append(QString::fromStdString(sourceType));
+            }
+            object.insert(QStringLiteral("source_types"), sourceTypes);
             candidates.append(object);
         }
         root.insert(QStringLiteral("candidates"), candidates);

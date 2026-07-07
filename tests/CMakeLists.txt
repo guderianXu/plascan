@@ -34,6 +34,17 @@ target_include_directories(test_common_unicode_path_io PRIVATE
 )
 gtest_discover_tests(test_common_unicode_path_io)
 
+add_executable(test_torchscript_model_resolver test_torchscript_model_resolver.cpp)
+target_link_libraries(test_torchscript_model_resolver PRIVATE
+    plascan_common_model
+    Qt6::Core
+    GTest::gtest_main
+)
+target_include_directories(test_torchscript_model_resolver PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_torchscript_model_resolver)
+
 add_executable(test_mask_generation test_mask_generation.cpp)
 target_link_libraries(test_mask_generation PRIVATE
     mask
@@ -453,6 +464,19 @@ target_include_directories(test_vocabulary_overlap_retriever PRIVATE
 )
 gtest_discover_tests(test_vocabulary_overlap_retriever)
 
+# ==============================================================================
+# test_overlap_pair_graph_planner — 无相机 Generic/BoW 候选图连通性规划
+# ==============================================================================
+add_executable(test_overlap_pair_graph_planner test_overlap_pair_graph_planner.cpp)
+target_link_libraries(test_overlap_pair_graph_planner PRIVATE
+    overlap
+    GTest::gtest_main
+)
+target_include_directories(test_overlap_pair_graph_planner PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/overlap
+)
+gtest_discover_tests(test_overlap_pair_graph_planner)
+
 # test_overlap_analyzer — 基于相机模型的重叠对估计
 
 add_executable(test_overlap_analyzer test_overlap_analyzer.cpp)
@@ -648,6 +672,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/MapProjectDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/AboutDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateMaskDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SurveyControlDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CreateTiePointsDialog.cpp
@@ -671,6 +696,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectResultRecords.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/PythonRuntimeBinding.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
@@ -706,6 +732,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     ${PLASCAN_LIBZIP_TARGET}
     ${PLASCAN_GDAL_TARGET}
     plascan_common_io
+    plascan_common_model
     GTest::gtest
 )
 target_compile_definitions(test_gui_project_utils PRIVATE
@@ -828,6 +855,14 @@ if(Python3_Interpreter_FOUND)
         COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_setup_python_runtime
     )
     set_tests_properties(PythonRuntimeSetupTest PROPERTIES
+        WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
+    )
+
+    add_test(
+        NAME InstallSam21ModelScriptTest
+        COMMAND ${Python3_EXECUTABLE} -m unittest tests.test_install_sam21_model
+    )
+    set_tests_properties(InstallSam21ModelScriptTest PROPERTIES
         WORKING_DIRECTORY ${CMAKE_SOURCE_DIR}
     )
 

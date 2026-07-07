@@ -26,6 +26,7 @@
       "features": [
         "calib3d",
         "contrib",
+        "dnn",
         "highgui",
         "intrinsics",
         "jpeg",
@@ -80,5 +81,21 @@
       "name": "xcb-util-wm",
       "platform": "linux"
     }
-  ]
+  ],
+  "features": {
+    "opencv-dnn-cuda": {
+      "description": "Enable OpenCV DNN CUDA backend for ONNX inference such as U2Net masks.",
+      "dependencies": [
+        {
+          "name": "opencv",
+          "default-features": false,
+          "features": [
+            "cuda",
+            "dnn",
+            "dnn-cuda"
+          ]
+        }
+      ]
+    }
+  }
 }

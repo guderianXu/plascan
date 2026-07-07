@@ -16,6 +16,7 @@
 #include <QComboBox>
 #include <QTableWidget>
 #include <QPushButton>
+#include <QProgressBar>
 #include <QLabel>
 #include <QHeaderView>
 #include <QFileInfo>
@@ -32,9 +33,11 @@
 #include <QFutureWatcher>
 #include <QPointer>
 #include <QSignalBlocker>
+#include <QMetaObject>
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
+#include <cstring>
 
 namespace {
 
@@ -259,6 +262,151 @@ QString variantsTooltip(const QVector<xjw::pipeline::MatchVariant> &variants)
     return lines.join(QLatin1Char('\n'));
 }
 
+QJsonObject readJsonObjectFromFile(const QString &path)
+{
+    QFile file(path);
+    if (!file.open(QIODevice::ReadOnly))
+    {
+        return QJsonObject();
+    }
+
+    QJsonParseError error;
+    const QJsonDocument doc = QJsonDocument::fromJson(file.readAll(), &error);
+    if (error.error != QJsonParseError::NoError || !doc.isObject())
+    {
+        return QJsonObject();
+    }
+    return doc.object();
+}
+
+QString sidecarString(const QJsonObject &sidecar, const QString &key)
+{
+    QString value = sidecar.value(key).toString().trimmed();
+    if (!value.isEmpty())
+    {
+        return value;
+    }
+    return sidecar.value(QStringLiteral("settings")).toObject().value(key).toString().trimmed();
+}
+
+int sidecarInt(const QJsonObject &sidecar, const QStringList &keys, int fallback)
+{
+    for (const QString &key : keys)
+    {
+        if (sidecar.contains(key))
+        {
+            return sidecar.value(key).toInt(fallback);
+        }
+        const QJsonObject settings = sidecar.value(QStringLiteral("settings")).toObject();
+        if (settings.contains(key))
+        {
+            return settings.value(key).toInt(fallback);
+        }
+    }
+    return fallback;
+}
+
+bool readSidecarImagePair(const QJsonObject &sidecar, QString *imageA, QString *imageB)
+{
+    QString first = sidecarString(sidecar, QStringLiteral("image0_path"));
+    QString second = sidecarString(sidecar, QStringLiteral("image1_path"));
+    if (first.isEmpty())
+    {
+        first = sidecarString(sidecar, QStringLiteral("image0"));
+    }
+    if (second.isEmpty())
+    {
+        second = sidecarString(sidecar, QStringLiteral("image1"));
+    }
+    if (first.isEmpty() || second.isEmpty())
+    {
+        const QJsonArray imageFiles =
+            sidecar.value(QStringLiteral("settings")).toObject().value(QStringLiteral("image_files")).toArray();
+        if (imageFiles.size() >= 2)
+        {
+            first = imageFiles.at(0).toString().trimmed();
+            second = imageFiles.at(1).toString().trimmed();
+        }
+    }
+
+    if (first.isEmpty() || second.isEmpty())
+    {
+        return false;
+    }
+    if (imageA)
+    {
+        *imageA = first;
+    }
+    if (imageB)
+    {
+        *imageB = second;
+    }
+    return true;
+}
+
+QFileInfoList candidateMatchFilesForImage(const QString &matchDirPath, const QString &imagePath)
+{
+    const QString base = QFileInfo(imagePath).completeBaseName().trimmed();
+    if (matchDirPath.trimmed().isEmpty() || base.isEmpty())
+    {
+        return QFileInfoList();
+    }
+
+    const QDir matchDir(matchDirPath);
+    if (!matchDir.exists())
+    {
+        return QFileInfoList();
+    }
+
+    return matchDir.entryInfoList(QStringList{QStringLiteral("*%1*.match").arg(base)},
+                                  QDir::Files,
+                                  QDir::Name);
+}
+
+QString inferOtherImageFromMatchFileName(const QFileInfo &matchInfo,
+                                         const QString &imagePath,
+                                         const QMap<QString, QString> &baseToPath)
+{
+    const QString currentBase = imageBaseKey(imagePath);
+    const QString stem = matchInfo.completeBaseName().toLower();
+    if (currentBase.isEmpty() || !stem.contains(currentBase))
+    {
+        return QString();
+    }
+
+    QString bestPath;
+    int bestLength = 0;
+    for (auto it = baseToPath.constBegin(); it != baseToPath.constEnd(); ++it)
+    {
+        const QString candidateBase = it.key();
+        if (candidateBase == currentBase || candidateBase.isEmpty() || !stem.contains(candidateBase))
+        {
+            continue;
+        }
+        if (candidateBase.size() > bestLength)
+        {
+            bestLength = candidateBase.size();
+            bestPath = it.value();
+        }
+    }
+    return bestPath;
+}
+
+QString sidecarAlgorithmLabel(const QJsonObject &sidecar)
+{
+    const QString featureAlgorithm = sidecarString(sidecar, QStringLiteral("feature_algorithm"));
+    const QString matchAlgorithm = sidecarString(sidecar, QStringLiteral("match_algorithm"));
+    if (featureAlgorithm.isEmpty())
+    {
+        return matchAlgorithm.isEmpty() ? QStringLiteral("(未知算法)") : matchAlgorithm;
+    }
+    if (matchAlgorithm.isEmpty() || matchAlgorithm == featureAlgorithm)
+    {
+        return featureAlgorithm;
+    }
+    return featureAlgorithm + QLatin1Char('-') + matchAlgorithm;
+}
+
 } // namespace
 
 // 构造函数：初始化对话框，构建界面，加载项目影像列表
@@ -299,6 +447,12 @@ MatchPairSelectorDialog::MatchPairSelectorDialog(ProjectManager *projectManager,
 
 MatchPairSelectorDialog::~MatchPairSelectorDialog()
 {
+    if (_priorityMatchLoadWatcher)
+    {
+        disconnect(_priorityMatchLoadWatcher, nullptr, this, nullptr);
+        _priorityMatchLoadWatcher->deleteLater();
+        _priorityMatchLoadWatcher = nullptr;
+    }
     if (_matchLoadWatcher)
     {
         disconnect(_matchLoadWatcher, nullptr, this, nullptr);
@@ -319,6 +473,10 @@ void MatchPairSelectorDialog::setupUI()
     _viewDetailBtn = ui.m_viewDetailBtn;
     _refreshBtn = ui.m_refreshBtn;
     _statusLabel = ui.m_statusLabel;
+    _scanProgressBar = ui.m_scanProgressBar;
+    _scanProgressBar->setRange(0, 100);
+    _scanProgressBar->setValue(0);
+    _scanProgressBar->setVisible(false);
 
     connect(_imageComboBox, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &MatchPairSelectorDialog::onCurrentImageChanged);
@@ -375,6 +533,7 @@ void MatchPairSelectorDialog::loadProjectImages()
     _currentImage.clear();
 
     if (!_projectManager) {
+        _scanProgressBar->setVisible(false);
         _statusLabel->setText(tr("错误：未找到项目管理器"));
         return;
     }
@@ -385,6 +544,7 @@ void MatchPairSelectorDialog::loadProjectImages()
     if (_allImages.isEmpty()) {
         _matchTable->setRowCount(0);
         _currentMatches.clear();
+        _scanProgressBar->setVisible(false);
         _statusLabel->setText(tr("项目中没有图像"));
         return;
     }
@@ -426,11 +586,15 @@ void MatchPairSelectorDialog::loadMatchPairsForImage(const QString &imagePath)
 
     if (imagePath.trimmed().isEmpty())
     {
+        _scanProgressBar->setVisible(false);
         _statusLabel->setText(tr("请选择图像"));
         return;
     }
 
-    _statusLabel->setText(tr("正在扫描匹配数据..."));
+    _scanProgressBar->setRange(0, 100);
+    _scanProgressBar->setValue(0);
+    _scanProgressBar->setVisible(true);
+    _statusLabel->setText(tr("正在优先加载当前影像匹配..."));
     setMatchControlsBusy(true);
     startAsyncMatchPairLoad(imagePath);
 }
@@ -562,20 +726,104 @@ void MatchPairSelectorDialog::startAsyncMatchPairLoad(const QString &imagePath)
 {
     const MatchDataSnapshot snapshot = makeSnapshot();
     const int generation = ++_matchLoadGeneration;
-    auto *watcher = new QFutureWatcher<MatchInfoList>(this);
-    watcher->setProperty("generation", generation);
-    watcher->setProperty("imagePath", imagePath);
 
-    connect(watcher,
+    auto releaseWatcher = [this](QFutureWatcher<MatchInfoList> *&watcher)
+    {
+        if (!watcher)
+        {
+            return;
+        }
+        disconnect(watcher, nullptr, this, nullptr);
+        watcher->deleteLater();
+        watcher = nullptr;
+    };
+    releaseWatcher(_priorityMatchLoadWatcher);
+    releaseWatcher(_matchLoadWatcher);
+
+    _priorityMatchLoadWatcher = new QFutureWatcher<MatchInfoList>(this);
+    _priorityMatchLoadWatcher->setProperty("generation", generation);
+    _priorityMatchLoadWatcher->setProperty("imagePath", imagePath);
+    _priorityMatchLoadWatcher->setProperty("priorityLoad", true);
+    connect(_priorityMatchLoadWatcher,
             &QFutureWatcher<MatchInfoList>::finished,
             this,
             &MatchPairSelectorDialog::onMatchPairsLoaded);
-
-    _matchLoadWatcher = watcher;
-    watcher->setFuture(QtConcurrent::run([snapshot, imagePath]()
+    _priorityMatchLoadWatcher->setFuture(QtConcurrent::run([snapshot, imagePath]()
     {
-        return MatchPairSelectorDialog::parseMatchDataForImageFromSnapshot(snapshot, imagePath);
+        return MatchPairSelectorDialog::parsePriorityMatchDataForImageFromSnapshot(snapshot, imagePath);
     }));
+}
+
+void MatchPairSelectorDialog::startFullMatchPairLoad(const MatchDataSnapshot &snapshot,
+                                                    const QString &imagePath,
+                                                    int generation)
+{
+    if (_matchLoadWatcher)
+    {
+        disconnect(_matchLoadWatcher, nullptr, this, nullptr);
+        _matchLoadWatcher->deleteLater();
+        _matchLoadWatcher = nullptr;
+    }
+
+    _scanProgressBar->setRange(0, 100);
+    _scanProgressBar->setValue(0);
+    _scanProgressBar->setVisible(true);
+    _statusLabel->setText(tr("正在后台访问全部匹配数据：0%"));
+
+    _matchLoadWatcher = new QFutureWatcher<MatchInfoList>(this);
+    _matchLoadWatcher->setProperty("generation", generation);
+    _matchLoadWatcher->setProperty("imagePath", imagePath);
+    _matchLoadWatcher->setProperty("priorityLoad", false);
+    connect(_matchLoadWatcher,
+            &QFutureWatcher<MatchInfoList>::finished,
+            this,
+            &MatchPairSelectorDialog::onMatchPairsLoaded);
+    QPointer<MatchPairSelectorDialog> self(this);
+    auto progressCallback = [self, generation, imagePath](int processed, int total)
+    {
+        if (!self)
+        {
+            return;
+        }
+
+        QMetaObject::invokeMethod(self.data(), [self, generation, imagePath, processed, total]()
+        {
+            if (!self)
+            {
+                return;
+            }
+            self->setFullScanProgress(processed, total, imagePath, generation);
+        }, Qt::QueuedConnection);
+    };
+
+    _matchLoadWatcher->setFuture(QtConcurrent::run([snapshot, imagePath, progressCallback]()
+    {
+        return MatchPairSelectorDialog::parseMatchDataForImageFromSnapshot(snapshot, imagePath, progressCallback);
+    }));
+}
+
+void MatchPairSelectorDialog::setFullScanProgress(int processed,
+                                                  int total,
+                                                  const QString &imagePath,
+                                                  int generation)
+{
+    if (!_matchLoadWatcher)
+    {
+        return;
+    }
+    if (generation != _matchLoadGeneration ||
+        normalizedImagePathKey(imagePath) != normalizedImagePathKey(_currentImage))
+    {
+        return;
+    }
+
+    const int percent = total <= 0
+        ? 0
+        : qBound(0, static_cast<int>((static_cast<qint64>(processed) * 100) / total), 100);
+    _scanProgressBar->setRange(0, 100);
+    _scanProgressBar->setValue(percent);
+    _scanProgressBar->setVisible(true);
+    _statusLabel->setText(tr("正在后台访问全部匹配数据：%1%").arg(percent));
 }
 
 void MatchPairSelectorDialog::onMatchPairsLoaded()
@@ -589,13 +837,18 @@ void MatchPairSelectorDialog::onMatchPairsLoaded()
 
     const int generation = watcher->property("generation").toInt();
     const QString imagePath = watcher->property("imagePath").toString();
+    const bool priorityLoad = watcher->property("priorityLoad").toBool();
     const bool isCurrent =
-        watcher == _matchLoadWatcher &&
+        (priorityLoad ? watcher == _priorityMatchLoadWatcher : watcher == _matchLoadWatcher) &&
         generation == _matchLoadGeneration &&
         normalizedImagePathKey(imagePath) == normalizedImagePathKey(_currentImage);
 
     const MatchInfoList matches = watcher->result();
     watcher->deleteLater();
+    if (watcher == _priorityMatchLoadWatcher)
+    {
+        _priorityMatchLoadWatcher = nullptr;
+    }
     if (watcher == _matchLoadWatcher)
     {
         _matchLoadWatcher = nullptr;
@@ -606,9 +859,33 @@ void MatchPairSelectorDialog::onMatchPairsLoaded()
         return;
     }
 
+    if (priorityLoad)
+    {
+        if (!matches.isEmpty())
+        {
+            _currentMatches = matches;
+            populateMatchTable();
+            _scanProgressBar->setVisible(true);
+            _statusLabel->setText(tr("已优先加载 %1 个匹配对，正在后台访问全部匹配数据...")
+                                      .arg(_currentMatches.size()));
+        }
+        else
+        {
+            _scanProgressBar->setVisible(true);
+            _statusLabel->setText(tr("正在后台访问全部匹配数据..."));
+        }
+        if (_refreshBtn)
+        {
+            _refreshBtn->setEnabled(false);
+        }
+        startFullMatchPairLoad(makeSnapshot(), imagePath, generation);
+        return;
+    }
+
     _currentMatches = matches;
     setMatchControlsBusy(false);
     populateMatchTable();
+    _scanProgressBar->setVisible(false);
 }
 
 QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDataForImage(const QString &imagePath)
@@ -616,9 +893,105 @@ QList<MatchPairSelectorDialog::MatchInfo> MatchPairSelectorDialog::parseMatchDat
     return parseMatchDataForImageFromSnapshot(makeSnapshot(), imagePath);
 }
 
-MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataForImageFromSnapshot(
+MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parsePriorityMatchDataForImageFromSnapshot(
     const MatchDataSnapshot &snapshot,
     const QString &imagePath)
+{
+    MatchInfoList matches;
+    if (snapshot.allImages.isEmpty() || snapshot.matchDir.trimmed().isEmpty())
+    {
+        return matches;
+    }
+
+    QMap<QString, QString> baseToPath;
+    for (const QString &imgPath : snapshot.allImages)
+    {
+        const QString base = imageBaseKey(imgPath);
+        if (!baseToPath.contains(base))
+        {
+            baseToPath.insert(base, imgPath);
+        }
+    }
+
+    QSet<QString> seenPairKeys;
+    for (const QFileInfo &matchInfo : candidateMatchFilesForImage(snapshot.matchDir, imagePath))
+    {
+        const QString matchPath = matchInfo.absoluteFilePath();
+        const QJsonObject sidecar = readJsonObjectFromFile(matchPath + QStringLiteral(".json"));
+
+        QString otherToken;
+        QString sidecarImageA;
+        QString sidecarImageB;
+        if (readSidecarImagePair(sidecar, &sidecarImageA, &sidecarImageB))
+        {
+            if (!pairContainsImage(sidecarImageA, sidecarImageB, imagePath, &otherToken))
+            {
+                continue;
+            }
+        }
+
+        QString otherImagePath = otherToken.isEmpty()
+            ? inferOtherImageFromMatchFileName(matchInfo, imagePath, baseToPath)
+            : resolveProjectImagePath(otherToken, snapshot.allImages, baseToPath);
+        if (otherImagePath.trimmed().isEmpty() || imageTokenMatches(otherImagePath, imagePath))
+        {
+            continue;
+        }
+
+        const QString pairKey = canonicalPairKeyForImages(imagePath, otherImagePath);
+        if (seenPairKeys.contains(pairKey))
+        {
+            continue;
+        }
+        seenPairKeys.insert(pairKey);
+
+        const int headerMatchCount = xjw::pipeline::MatchResultCatalog::readSgmtMatchCount(matchPath);
+        const int totalMatches = std::max(
+            0,
+            headerMatchCount >= 0
+                ? headerMatchCount
+                : sidecarInt(sidecar,
+                             QStringList{QStringLiteral("num_matches"), QStringLiteral("match_count")},
+                             0));
+
+        xjw::pipeline::MatchVariant variant;
+        variant.imageA = imagePath;
+        variant.imageB = otherImagePath;
+        variant.matchFilePath = matchPath;
+        variant.sidecarPath = matchPath + QStringLiteral(".json");
+        variant.featureAlgorithm = sidecarString(sidecar, QStringLiteral("feature_algorithm"));
+        variant.matchAlgorithm = sidecarString(sidecar, QStringLiteral("match_algorithm"));
+        variant.totalMatches = totalMatches;
+        variant.compatible = true;
+        variant.status = QStringLiteral("priority_loaded");
+        variant.modifiedTime = matchInfo.lastModified();
+
+        MatchInfo info;
+        info.imagePath = otherImagePath;
+        info.imageName = QFileInfo(otherImagePath).fileName();
+        info.matchFilePath = matchPath;
+        info.totalPoints = totalMatches;
+        info.validPoints = 0;
+        info.invalidPoints = 0;
+        info.variants = QVector<xjw::pipeline::MatchVariant>{variant};
+        info.compatibleVariantCount = 1;
+        info.algorithm = sidecarAlgorithmLabel(sidecar);
+        info.availableAlgorithms = info.algorithm;
+        info.status = tr("可查看（快速）");
+        matches.append(info);
+    }
+
+    std::sort(matches.begin(), matches.end(), [](const MatchInfo &a, const MatchInfo &b)
+    {
+        return a.imageName < b.imageName;
+    });
+    return matches;
+}
+
+MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataForImageFromSnapshot(
+    const MatchDataSnapshot &snapshot,
+    const QString &imagePath,
+    const MatchScanProgressCallback &progressCallback)
 {
     MatchInfoList matches;
 
@@ -636,13 +1009,17 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
     // ── 方式一：通过 Catalog 扫描 matchDir/*.match 文件并按影像对聚合 ────────
     QSet<QString> seenMatchFiles;
     QSet<QString> seenPairKeys;
+    MatchValidityContext validityContext;
 
     if (!snapshot.matchDir.isEmpty())
     {
         xjw::pipeline::MatchResultCatalogConfig config;
         config.matchDirectory = snapshot.matchDir;
+        config.progressCallback = progressCallback;
         const xjw::pipeline::MatchResultCatalogSummary summary =
             xjw::pipeline::MatchResultCatalog(config).scan();
+
+        validityContext = buildMatchValidityContextForMatchDirectory(snapshot.matchDir);
 
         for (const xjw::pipeline::MatchPairGroup &group : summary.pairGroups)
         {
@@ -693,7 +1070,7 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
                 {
                     info.matchFilePath = variant.matchFilePath;
                     const MatchValidityResult validity =
-                        analyzeMatchTrackValidity(variant.matchFilePath, imagePath, otherImagePath);
+                        analyzeMatchTrackValidity(variant.matchFilePath, imagePath, otherImagePath, validityContext);
                     if (validity.hasTrackValidity)
                     {
                         info.hasTrackValidity = true;

@@ -20,6 +20,7 @@
 #include "ProjectResultRecords.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectDenseWorkflowConfig.h"
+#include "PythonRuntimeBinding.h"
 #include "project/SparseResultQuality.h"
 #include "CleanTiePointsDialog.h"
 #include "CreateTiePointsDialog.h"
@@ -28,6 +29,7 @@
 #include "ThinTiePointsDialog.h"
 #include "InitCameraPoseDialog.h"
 #include "AerialTriangulationDialog.h"
+#include "AboutDialog.h"
 #include "ThreeDReconstructionDialog.h"
 #include "SparseCloudPostProcessDialog.h"
 #include "MapProjectDialog.h"
@@ -72,15 +74,18 @@
 #include <QMetaObject>
 #include <QFileInfo>
 #include <QPushButton>
+#include <QProcessEnvironment>
 #include <QRegularExpression>
 #include <QScrollArea>
 #include <QSpinBox>
 #include <QStackedWidget>
 #include <QTemporaryDir>
 #include <QTextStream>
+#include <QToolBar>
 #include <QToolButton>
 #include <QTreeView>
 #include <QUrl>
+#include <QWidget>
 #include <QStandardItemModel>
 #include <QSignalSpy>
 #include <QTableWidget>
@@ -183,6 +188,63 @@ QStringList directActionTexts(QMenu *menu)
 
     return texts;
 }
+
+QString runtimePythonRelativePath()
+{
+#ifdef Q_OS_WIN
+    return QStringLiteral(".venv/Scripts/python.exe");
+#else
+    return QStringLiteral(".venv/bin/python");
+#endif
+}
+
+QString createFakeRuntimePython(const QString &sourceRoot)
+{
+    const QString pythonPath = QDir(sourceRoot).filePath(runtimePythonRelativePath());
+    QDir().mkpath(QFileInfo(pythonPath).absolutePath());
+    QFile file(pythonPath);
+    EXPECT_TRUE(file.open(QIODevice::WriteOnly | QIODevice::Text));
+    file.write("python");
+    file.close();
+    return pythonPath;
+}
+
+class ScopedEnvVar
+{
+public:
+    explicit ScopedEnvVar(const char *name)
+        : _name(name)
+        , _hadPrevious(qEnvironmentVariableIsSet(name))
+        , _previous(qgetenv(name))
+    {
+        qunsetenv(_name);
+    }
+
+    ScopedEnvVar(const char *name, const QString &value)
+        : _name(name)
+        , _hadPrevious(qEnvironmentVariableIsSet(name))
+        , _previous(qgetenv(name))
+    {
+        qputenv(_name, value.toUtf8());
+    }
+
+    ~ScopedEnvVar()
+    {
+        if (_hadPrevious)
+        {
+            qputenv(_name, _previous);
+        }
+        else
+        {
+            qunsetenv(_name);
+        }
+    }
+
+private:
+    const char *_name;
+    bool _hadPrevious = false;
+    QByteArray _previous;
+};
 
 void writeMinimalTsai(const QString &path, double fu, double cx)
 {
@@ -1897,6 +1959,49 @@ TEST(GuiAsyncLifetimeTest, RestoredActiveImageSingleShotChecksProjectBeforeLoadi
         << "Do not let stale UI settings from a previous project switch the central image view later.";
 }
 
+TEST(GuiAsyncLifetimeTest, ProjectOpenDefersHeavyWidgetHydrationUntilAfterOpenSignalReturns)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("scheduleProjectUiHydration")))
+        << "MainWindow should keep project-open widget hydration behind a named async helper.";
+
+    const int openedStart = source.indexOf(QStringLiteral("void MainWindow::onProjectOpened"));
+    ASSERT_GE(openedStart, 0);
+    int openedEnd = source.indexOf(QStringLiteral("void MainWindow::scheduleProjectUiHydration"), openedStart);
+    if (openedEnd < 0)
+    {
+        openedEnd = source.indexOf(QStringLiteral("void MainWindow::onProjectClosed"), openedStart);
+    }
+    ASSERT_GT(openedEnd, openedStart);
+    const QString openedBlock = source.mid(openedStart, openedEnd - openedStart);
+
+    EXPECT_TRUE(openedBlock.contains(QStringLiteral("scheduleProjectUiHydration(plascanPath)")))
+        << "Project-open progress must be able to finish before heavy widgets are hydrated.";
+    EXPECT_FALSE(openedBlock.contains(QStringLiteral("_dataTree->loadFromJson(coreMeta)")));
+    EXPECT_FALSE(openedBlock.contains(QStringLiteral("_workspaceCenter->setProjectMeta(coreMeta)")));
+    EXPECT_FALSE(openedBlock.contains(QStringLiteral("_photoStrip->loadFromJson(coreMeta)")));
+
+    const int hydrateStart = source.indexOf(QStringLiteral("void MainWindow::scheduleProjectUiHydration"));
+    ASSERT_GE(hydrateStart, 0);
+    const int hydrateEnd = source.indexOf(QStringLiteral("void MainWindow::onProjectClosed"), hydrateStart);
+    ASSERT_GT(hydrateEnd, hydrateStart);
+    const QString hydrateBlock = source.mid(hydrateStart, hydrateEnd - hydrateStart);
+
+    EXPECT_TRUE(hydrateBlock.contains(QStringLiteral("QPointer<MainWindow> self(this)")))
+        << "Delayed widget hydration must not keep a raw MainWindow pointer.";
+    EXPECT_TRUE(hydrateBlock.contains(QStringLiteral("QTimer::singleShot(0, this")))
+        << "Widget hydration should be posted back to the event loop instead of running inside projectOpened.";
+    EXPECT_TRUE(hydrateBlock.contains(QStringLiteral("_projectManager->currentProjectPath() != plascanPath")))
+        << "Stale delayed hydration from a previous project must not update the current window.";
+    EXPECT_TRUE(hydrateBlock.contains(QStringLiteral("_dataTree->loadFromJson(coreMeta)")));
+    EXPECT_TRUE(hydrateBlock.contains(QStringLiteral("_workspaceCenter->setProjectMeta(coreMeta)")));
+    EXPECT_TRUE(hydrateBlock.contains(QStringLiteral("_photoStrip->loadFromJson(coreMeta)")));
+}
+
 TEST(GuiAsyncLifetimeTest, CameraSetupUsesGuiTaskRunnerForBackgroundSfm)
 {
     const QString runnerSource = readProjectSourceFile(QStringLiteral("src/gui/tasks/GuiTaskRunner.h"));
@@ -2072,7 +2177,8 @@ TEST(GuiAsyncLifetimeTest, MatchPhotosTaskUsesGuardedProjectManagerCallbacks)
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("QPointer<ProjectManager> pmGuard(_projectManager)")));
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("pmGuard->currentProjectPath() != projectPath")))
         << "连接点匹配结束写回前必须确认仍是同一个项目。";
-    EXPECT_TRUE(mainBlock.contains(QStringLiteral("QFutureWatcher<xjw::matchphotos::MatchPhotosResult>")));
+    EXPECT_TRUE(mainBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "连接点匹配结果较重，不应直接通过 QFutureWatcher<MatchPhotosResult>::result() 跨线程取回。";
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("MatchPhotosTask task(options)")));
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("appendIpfindResults(featureRecords)")));
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("appendIpmatchResults(matchRecords)")));
@@ -2080,8 +2186,8 @@ TEST(GuiAsyncLifetimeTest, MatchPhotosTaskUsesGuardedProjectManagerCallbacks)
         << "Feature matching progress callbacks can outlive MainWindow and must use QPointer.";
     EXPECT_TRUE(mainBlock.contains(QStringLiteral("connect(timer, &QTimer::timeout, timer,")))
         << "Feature matching progress timer callbacks should be tied to the timer lifetime.";
-    EXPECT_TRUE(mainBlock.contains(QStringLiteral("&QFutureWatcher<xjw::matchphotos::MatchPhotosResult>::finished")))
-        << "Feature matching watcher callbacks should be tied to the watcher lifetime.";
+    EXPECT_FALSE(mainBlock.contains(QStringLiteral("QFutureWatcher<xjw::matchphotos::MatchPhotosResult>")));
+    EXPECT_FALSE(mainBlock.contains(QStringLiteral("watcher->result()")));
     EXPECT_FALSE(mainBlock.contains(QStringLiteral("FeatureMatchRunner::run(config, imagePairs, pmGuard")));
     EXPECT_FALSE(mainBlock.contains(QStringLiteral("connect(timer, &QTimer::timeout, this,")));
     EXPECT_FALSE(mainBlock.contains(QStringLiteral("connect(watcher, &QFutureWatcher<void>::finished, this,")));
@@ -2105,14 +2211,18 @@ TEST(GuiAsyncLifetimeTest, CanvasFeatureLoadCallbacksUseRequestGeneration)
     EXPECT_TRUE(source.contains(QStringLiteral("#include <QPointer>")));
     EXPECT_TRUE(block.contains(QStringLiteral("const int generation = ++_featureLoadGeneration")));
     EXPECT_TRUE(block.contains(QStringLiteral("QPointer<CanvasWidget> self(this)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "Canvas feature-load results should not be pulled through QFutureWatcher::result().";
     EXPECT_TRUE(block.contains(
-        QStringLiteral("connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished,\n"
-                       "            watcher,")))
-        << "Canvas feature-load finished callbacks should be tied to the watcher lifetime.";
-    EXPECT_TRUE(block.contains(QStringLiteral("[self, watcher, imagePathCopy, activeSuffix, generation]()")));
+        QStringLiteral("[imagePathCopy, activeSuffix, projectPath, shouldEstimateOrientation]()")));
+    EXPECT_TRUE(block.contains(QStringLiteral("std::vector<cv::KeyPoint> kps")))
+        << "Finished callback should receive keypoints as a guarded task result.";
     EXPECT_TRUE(block.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
         << "Late feature-load completions from an older image/suffix must not update the current canvas.";
     EXPECT_TRUE(block.contains(QStringLiteral("const QString key = imagePathCopy + activeSuffix")));
+    EXPECT_FALSE(header.contains(QStringLiteral("QFutureWatcher<std::vector<cv::KeyPoint>> *_spWatcher")));
+    EXPECT_FALSE(block.contains(QStringLiteral("QFutureWatcher<std::vector<cv::KeyPoint>")));
+    EXPECT_FALSE(block.contains(QStringLiteral("watcher->result()")));
     EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpPath")));
     EXPECT_FALSE(source.contains(QStringLiteral("m_lastRequestedSpSuffix")));
     EXPECT_FALSE(source.contains(QStringLiteral("connect(m_spWatcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished")));
@@ -2864,7 +2974,6 @@ TEST(CodeStyleTest, CanvasWidgetUsesLowerCamelPrivateMemberNames)
         QStringLiteral("QString _activeFeatureSuffix{QStringLiteral(\".sp\")};"),
         QStringLiteral("LayerRenderer::FeatureDisplayOptions _currentFeatureOpts;"),
         QStringLiteral("QString _currentImagePath;"),
-        QStringLiteral("QFutureWatcher<std::vector<cv::KeyPoint>> *_spWatcher{nullptr};"),
         QStringLiteral("QFutureWatcher<QImage> *_imageWatcher{nullptr};"),
         QStringLiteral("std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;"),
         QStringLiteral("int _featureLoadGeneration{0};"),
@@ -6472,6 +6581,127 @@ TEST(MainMenuTest, ToolsMenuExposesTiePointsSubmenu)
     EXPECT_FALSE(directActionTexts(toolsMenu).contains(QStringLiteral("查看匹配...")));
 }
 
+TEST(AboutDialogTest, ResolvesPythonEnvironmentWithExplicitExecutableFirst)
+{
+    QProcessEnvironment env;
+    env.insert(QStringLiteral("PLASCAN_PYTHON"), QStringLiteral("E:/fallback/python.exe"));
+
+    EXPECT_EQ(AboutDialog::pythonEnvironmentPath(env), QStringLiteral("E:/fallback/python.exe"));
+
+    env.insert(QStringLiteral("PLASCAN_PYTHON_EXECUTABLE"), QStringLiteral("E:/code/plascan/.venv/Scripts/python.exe"));
+    EXPECT_EQ(AboutDialog::pythonEnvironmentPath(env), QStringLiteral("E:/code/plascan/.venv/Scripts/python.exe"));
+}
+
+TEST(AboutDialogTest, ShowsSelectablePythonEnvironmentPath)
+{
+    QProcessEnvironment env;
+    env.insert(QStringLiteral("PLASCAN_PYTHON_EXECUTABLE"), QStringLiteral("E:/code/plascan/.venv/Scripts/python.exe"));
+
+    AboutDialog dialog(env);
+    EXPECT_EQ(dialog.windowTitle(), QStringLiteral("关于 PlaScan"));
+
+    auto *pythonLabel = dialog.findChild<QLabel *>(QStringLiteral("pythonEnvironmentValueLabel"));
+    ASSERT_NE(pythonLabel, nullptr);
+    EXPECT_EQ(pythonLabel->text(), QStringLiteral("E:/code/plascan/.venv/Scripts/python.exe"));
+    EXPECT_TRUE(pythonLabel->textInteractionFlags().testFlag(Qt::TextSelectableByMouse));
+}
+
+TEST(AboutDialogTest, ShowsUnconfiguredMessageWhenPythonEnvIsMissing)
+{
+    const QProcessEnvironment env;
+
+    AboutDialog dialog(env);
+    auto *pythonLabel = dialog.findChild<QLabel *>(QStringLiteral("pythonEnvironmentValueLabel"));
+    ASSERT_NE(pythonLabel, nullptr);
+    EXPECT_TRUE(pythonLabel->text().contains(QStringLiteral("未配置")));
+    EXPECT_TRUE(pythonLabel->text().contains(QStringLiteral("setup_python_runtime.py")));
+}
+
+TEST(PythonRuntimeBindingTest, ResolvesRepositoryLocalVenvWhenEnvironmentIsMissing)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sourceRoot = QDir(tempDir.path()).filePath(QStringLiteral("source"));
+    const QString appDir = QDir(tempDir.path()).filePath(QStringLiteral("source/build/windows/bin"));
+    const QString pythonPath = createFakeRuntimePython(sourceRoot);
+
+    const QString resolved = PythonRuntimeBinding::resolvePythonExecutable(QProcessEnvironment(),
+                                                                           sourceRoot,
+                                                                           appDir);
+    EXPECT_EQ(QFileInfo(resolved).absoluteFilePath(), QFileInfo(pythonPath).absoluteFilePath());
+}
+
+TEST(PythonRuntimeBindingTest, ReadsGeneratedEnvironmentFileWhenVenvIsMissing)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sourceRoot = QDir(tempDir.path()).filePath(QStringLiteral("source"));
+    const QString appDir = QDir(tempDir.path()).filePath(QStringLiteral("source/build/windows/bin"));
+    const QString pythonPath = QDir(sourceRoot).filePath(QStringLiteral("custom/python.exe"));
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(pythonPath).absolutePath()));
+    QFile pythonFile(pythonPath);
+    ASSERT_TRUE(pythonFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    pythonFile.write("python");
+    pythonFile.close();
+
+    const QString envPath = QDir(sourceRoot).filePath(QStringLiteral("build/env/plascan-env.json"));
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(envPath).absolutePath()));
+    QFile envFile(envPath);
+    ASSERT_TRUE(envFile.open(QIODevice::WriteOnly | QIODevice::Text));
+    envFile.write(QJsonDocument(QJsonObject{
+        {QStringLiteral("PLASCAN_PYTHON_EXECUTABLE"), pythonPath}
+    }).toJson());
+    envFile.close();
+
+    const QString resolved = PythonRuntimeBinding::resolvePythonExecutable(QProcessEnvironment(),
+                                                                           sourceRoot,
+                                                                           appDir);
+    EXPECT_EQ(QFileInfo(resolved).absoluteFilePath(), QFileInfo(pythonPath).absoluteFilePath());
+}
+
+TEST(PythonRuntimeBindingTest, BindsDiscoveredPythonToProcessEnvironment)
+{
+    ScopedEnvVar clearExecutable("PLASCAN_PYTHON_EXECUTABLE");
+    ScopedEnvVar clearPython("PLASCAN_PYTHON");
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString sourceRoot = QDir(tempDir.path()).filePath(QStringLiteral("source"));
+    const QString appDir = QDir(tempDir.path()).filePath(QStringLiteral("source/build/windows/bin"));
+    const QString pythonPath = createFakeRuntimePython(sourceRoot);
+
+    ASSERT_TRUE(PythonRuntimeBinding::bindPythonRuntime(sourceRoot, appDir));
+    EXPECT_EQ(QFileInfo(qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE")).absoluteFilePath(),
+              QFileInfo(pythonPath).absoluteFilePath());
+    EXPECT_EQ(QFileInfo(qEnvironmentVariable("PLASCAN_PYTHON")).absoluteFilePath(),
+              QFileInfo(pythonPath).absoluteFilePath());
+}
+
+TEST(PythonRuntimeBindingTest, GuiStartupBindsPythonRuntimeBeforeMainWindowIsShown)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int appStart = source.indexOf(QStringLiteral("SafeApplication app(argc, argv);"));
+    ASSERT_GE(appStart, 0);
+    const int bindStart = source.indexOf(QStringLiteral("PythonRuntimeBinding::bindPythonRuntime"), appStart);
+    ASSERT_GT(bindStart, appStart);
+    const int windowStart = source.indexOf(QStringLiteral("MainWindow mainWindow;"), appStart);
+    ASSERT_GT(windowStart, bindStart);
+}
+
+TEST(MainMenuTest, HelpAboutActionOpensAboutDialog)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"AboutDialog.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("AboutDialog dialog(mw);")));
+    EXPECT_TRUE(source.contains(QStringLiteral("dialog.exec()")));
+    EXPECT_FALSE(source.contains(QStringLiteral("PlaScan: 行星表面摄影测量处理系统\"), 3000)")))
+        << "The About action should open a dialog instead of only writing a transient status bar message.";
+}
+
 TEST(GenerateMaskDialogTest, DefaultsToBlackBackgroundReplacementForSelectedImages)
 {
     GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png"), QStringLiteral("b.png")});
@@ -6483,6 +6713,108 @@ TEST(GenerateMaskDialogTest, DefaultsToBlackBackgroundReplacementForSelectedImag
     EXPECT_TRUE(settings.value(QStringLiteral("auto_threshold")).toBool());
     EXPECT_GE(settings.value(QStringLiteral("min_component_area")).toInt(), 1);
     EXPECT_GE(settings.value(QStringLiteral("morphology_radius")).toInt(), 0);
+}
+
+TEST(GenerateMaskDialogTest, ShowsOnlyParametersForSelectedMethod)
+{
+    GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
+    auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
+    auto *thresholdPanel = dialog.findChild<QWidget *>(QStringLiteral("thresholdParameterPanel"));
+    auto *sam21Panel = dialog.findChild<QWidget *>(QStringLiteral("sam21ParameterPanel"));
+    auto *u2netPanel = dialog.findChild<QWidget *>(QStringLiteral("u2netParameterPanel"));
+
+    ASSERT_NE(methodCombo, nullptr);
+    ASSERT_NE(thresholdPanel, nullptr);
+    ASSERT_NE(sam21Panel, nullptr);
+    ASSERT_NE(u2netPanel, nullptr);
+
+    const auto selectMethod = [methodCombo](const QString &token)
+    {
+        const int index = methodCombo->findData(token);
+        ASSERT_GE(index, 0);
+        methodCombo->setCurrentIndex(index);
+    };
+
+    selectMethod(QStringLiteral("black_background"));
+    EXPECT_FALSE(thresholdPanel->isHidden());
+    EXPECT_TRUE(sam21Panel->isHidden());
+    EXPECT_TRUE(u2netPanel->isHidden());
+
+    selectMethod(QStringLiteral("u2net"));
+    EXPECT_TRUE(thresholdPanel->isHidden());
+    EXPECT_TRUE(sam21Panel->isHidden());
+    EXPECT_FALSE(u2netPanel->isHidden());
+
+    selectMethod(QStringLiteral("sam21"));
+    EXPECT_TRUE(thresholdPanel->isHidden());
+    EXPECT_FALSE(sam21Panel->isHidden());
+    EXPECT_TRUE(u2netPanel->isHidden());
+}
+
+TEST(GenerateMaskDialogTest, ExposesSam21TorchScriptCpuAndCudaSettings)
+{
+    GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
+    auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
+    auto *deviceCombo = dialog.findChild<QComboBox *>(QStringLiteral("sam21DeviceCombo"));
+    auto *variantCombo = dialog.findChild<QComboBox *>(QStringLiteral("sam21VariantCombo"));
+    auto *fallbackCheck = dialog.findChild<QCheckBox *>(QStringLiteral("sam21AllowFallbackCheck"));
+
+    ASSERT_NE(methodCombo, nullptr);
+    ASSERT_NE(deviceCombo, nullptr);
+    ASSERT_NE(variantCombo, nullptr);
+    ASSERT_NE(fallbackCheck, nullptr);
+
+    const int samIndex = methodCombo->findData(QStringLiteral("sam21"));
+    ASSERT_GE(samIndex, 0);
+    methodCombo->setCurrentIndex(samIndex);
+
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("cuda")), 0);
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("cpu")), 0);
+    EXPECT_EQ(variantCombo->currentData().toString(), QStringLiteral("tiny"));
+    EXPECT_TRUE(fallbackCheck->isChecked());
+
+    const QJsonObject settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("sam21"));
+    EXPECT_EQ(settings.value(QStringLiteral("sam21_variant")).toString(), QStringLiteral("tiny"));
+    EXPECT_EQ(settings.value(QStringLiteral("sam21_device")).toString(), QStringLiteral("cuda"));
+    EXPECT_TRUE(settings.value(QStringLiteral("sam21_allow_fallback")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("sam21_prompt_mode")).toString(), QStringLiteral("full_image_box"));
+}
+
+TEST(GenerateMaskDialogTest, ExposesU2NetOnnxCpuAndCudaSettings)
+{
+    GenerateMaskDialog dialog(QStringList{QStringLiteral("a.png")});
+    auto *methodCombo = dialog.findChild<QComboBox *>(QStringLiteral("methodCombo"));
+    auto *deviceCombo = dialog.findChild<QComboBox *>(QStringLiteral("u2netDeviceCombo"));
+    auto *fallbackCheck = dialog.findChild<QCheckBox *>(QStringLiteral("u2netAllowFallbackCheck"));
+    auto *inputSizeSpin = dialog.findChild<QSpinBox *>(QStringLiteral("u2netInputSizeSpin"));
+    auto *thresholdSpin = dialog.findChild<QDoubleSpinBox *>(QStringLiteral("u2netMaskThresholdSpin"));
+    auto *statusLabel = dialog.findChild<QLabel *>(QStringLiteral("u2netModelStatusLabel"));
+
+    ASSERT_NE(methodCombo, nullptr);
+    ASSERT_NE(deviceCombo, nullptr);
+    ASSERT_NE(fallbackCheck, nullptr);
+    ASSERT_NE(inputSizeSpin, nullptr);
+    ASSERT_NE(thresholdSpin, nullptr);
+    ASSERT_NE(statusLabel, nullptr);
+
+    const int u2netIndex = methodCombo->findData(QStringLiteral("u2net"));
+    ASSERT_GE(u2netIndex, 0);
+    methodCombo->setCurrentIndex(u2netIndex);
+
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("cuda")), 0);
+    EXPECT_GE(deviceCombo->findData(QStringLiteral("cpu")), 0);
+    EXPECT_TRUE(fallbackCheck->isChecked());
+    EXPECT_EQ(inputSizeSpin->value(), 320);
+    EXPECT_DOUBLE_EQ(thresholdSpin->value(), 0.5);
+    EXPECT_TRUE(statusLabel->isEnabled());
+
+    const QJsonObject settings = dialog.collectSettings();
+    EXPECT_EQ(settings.value(QStringLiteral("method")).toString(), QStringLiteral("u2net"));
+    EXPECT_EQ(settings.value(QStringLiteral("u2net_device")).toString(), QStringLiteral("cuda"));
+    EXPECT_TRUE(settings.value(QStringLiteral("u2net_allow_fallback")).toBool());
+    EXPECT_EQ(settings.value(QStringLiteral("u2net_input_size")).toInt(), 320);
+    EXPECT_DOUBLE_EQ(settings.value(QStringLiteral("u2net_mask_threshold")).toDouble(), 0.5);
 }
 
 TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
@@ -6502,6 +6834,157 @@ TEST(GenerateMaskWorkflowTest, ProjectManagerUsesCommonIoForTiffMaskGeneration)
     EXPECT_TRUE(block.contains(QStringLiteral("xjw::common::io::writeImage(maskPath, generated)")));
     EXPECT_FALSE(block.contains(QStringLiteral("QImage sourceImage(imagePath)")))
         << "Mask generation must not use QImage for source TIFF reading; use common/io PathIO instead.";
+}
+
+TEST(GenerateMaskWorkflowTest, Sam21MaskGenerationUsesTorchScriptAndAutoPrompt)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
+    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+
+    const QString block = source.mid(start, end - start);
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"Sam21MaskGenerator.h\"")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::Sam21MaskGenerator")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::Sam21Prompt::autoBox")));
+    EXPECT_TRUE(block.contains(QStringLiteral("sam21TorchScriptModelNames")));
+    EXPECT_FALSE(block.contains(QStringLiteral("methodToken == QStringLiteral(\"sam21\") && options.method")))
+        << "SAM2.1 must not be implemented as a black-background variant.";
+}
+
+TEST(GenerateMaskWorkflowTest, U2NetMaskGenerationUsesBundledOnnxAndOpenCvDnn)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString cmake = readProjectSourceFile(QStringLiteral("src/core/mask/CMakeLists.txt"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(cmake.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
+    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+
+    const QString block = source.mid(start, end - start);
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"u2net/U2NetMaskGenerator.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"model/U2NetModelCatalog.h\"")));
+    EXPECT_TRUE(cmake.contains(QStringLiteral("u2net/U2NetMaskGenerator.cpp")))
+        << "U2Net should live in src/core/mask/u2net as its own mask submodule.";
+    EXPECT_TRUE(readProjectSourceFile(QStringLiteral("src/core/mask/u2net/U2NetMaskGenerator.h"))
+                    .contains(QStringLiteral("class U2NetMaskGenerator")));
+    EXPECT_TRUE(readProjectSourceFile(QStringLiteral("src/core/mask/u2net/U2NetMaskGenerator.cpp"))
+                    .contains(QStringLiteral("#include \"U2NetMaskGenerator.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("u2netMaskConfigFromSettings")));
+    EXPECT_TRUE(block.contains(QStringLiteral("methodToken == QLatin1String(\"u2net\")")));
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::mask::U2NetMaskGenerator")));
+    EXPECT_TRUE(block.contains(QStringLiteral("u2netGenerator->generate(source)")));
+    EXPECT_TRUE(block.contains(QStringLiteral("U2Net_v1.onnx")));
+    EXPECT_TRUE(block.contains(QStringLiteral("deviceLabel()")));
+}
+
+TEST(GenerateMaskWorkflowTest, RunsMaskGenerationOffGuiThreadWithTaskStatusProgress)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
+    const int end = source.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+
+    const QString block = source.mid(start, end - start);
+    EXPECT_TRUE(block.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "SAM2.1 mask generation must not run on the GUI thread.";
+    EXPECT_TRUE(block.contains(QStringLiteral("std::atomic<bool>")))
+        << "Mask generation should keep a worker-visible cancel flag.";
+    EXPECT_TRUE(block.contains(QStringLiteral("if (_maskGenerationCancelFlag)")))
+        << "Without a modal progress dialog, duplicate mask generation runs must be rejected.";
+    EXPECT_TRUE(block.contains(QStringLiteral("reportProgress(++completed)")))
+        << "The worker should report per-image progress while generating masks.";
+    EXPECT_TRUE(block.contains(QStringLiteral("emit self->maskGenerationProgressChanged")))
+        << "The GUI should show long SAM2.1 inference progress in the main task status area.";
+    EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
+        << "Mask generation progress belongs in the main-window task status area.";
+
+    const int acceptedStart = block.indexOf(QStringLiteral("dialog.collectSettings()"));
+    ASSERT_GE(acceptedStart, 0);
+    const int runnerStart = block.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"), acceptedStart);
+    ASSERT_GT(runnerStart, acceptedStart);
+    const QString guiThreadBlock = block.mid(acceptedStart, runnerStart - acceptedStart);
+    EXPECT_FALSE(guiThreadBlock.contains(QStringLiteral("std::make_unique<xjw::mask::Sam21MaskGenerator>")))
+        << "Loading SAM2.1 TorchScript models must happen in the worker thread.";
+    EXPECT_FALSE(guiThreadBlock.contains(QStringLiteral("sam21Generator->generate")))
+        << "SAM2.1 inference must happen in the worker thread.";
+}
+
+TEST(GenerateMaskWorkflowTest, UsesMainWindowTaskStatusInsteadOfModalProgressDialog)
+{
+    const QString managerHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString mainHeader = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString mainSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(managerHeader.isEmpty());
+    ASSERT_FALSE(managerSource.isEmpty());
+    ASSERT_FALSE(mainHeader.isEmpty());
+    ASSERT_FALSE(mainSource.isEmpty());
+
+    const int start = managerSource.indexOf(QStringLiteral("void ProjectManager::openGenerateMaskDialog"));
+    const int end = managerSource.indexOf(QStringLiteral("void ProjectManager::runReferenceQualityCheck"), start);
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+    const QString block = managerSource.mid(start, end - start);
+
+    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void maskGenerationProgressChanged(const QString &stage, int done, int total);")));
+    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void maskGenerationFinished(bool success);")));
+    EXPECT_TRUE(managerHeader.contains(QStringLiteral("void cancelMaskGeneration();")));
+    EXPECT_TRUE(block.contains(QStringLiteral("emit self->maskGenerationProgressChanged")));
+    EXPECT_TRUE(block.contains(QStringLiteral("emit self->maskGenerationFinished")));
+    EXPECT_FALSE(block.contains(QStringLiteral("new QProgressDialog")))
+        << "Mask generation progress belongs in the main-window task status area, not a modal dialog.";
+
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("TaskStatusWidget* _maskTaskStatus{};")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void onMaskGenerationProgress(const QString &stage, int done, int total);")));
+    EXPECT_TRUE(mainHeader.contains(QStringLiteral("void onMaskGenerationFinished(bool success);")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationProgressChanged")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("&ProjectManager::maskGenerationFinished")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("_maskTaskStatus = createTaskStatus")));
+    EXPECT_TRUE(mainSource.contains(QStringLiteral("生成蒙版 %1/%2")));
+}
+
+TEST(GenerateMaskWorkflowTest, DialogShowsSam21InstallStateAndButton)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/GenerateMaskDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/GenerateMaskDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("sam21InstallRequested")))
+        << "The mask dialog should expose a model-install request signal.";
+    EXPECT_TRUE(header.contains(QStringLiteral("refreshSam21ModelStatus")))
+        << "The dialog must refresh installed/missing model labels after installation.";
+    EXPECT_TRUE(source.contains(QStringLiteral("#include \"model/Sam21ModelCatalog.h\"")));
+    EXPECT_TRUE(source.contains(QStringLiteral("xjw::common::model::sam21ModelStatus")));
+    EXPECT_TRUE(source.contains(QStringLiteral("安装模型")));
+    EXPECT_TRUE(source.contains(QStringLiteral("未安装")));
+}
+
+TEST(GenerateMaskWorkflowTest, ProjectManagerInstallsSam21ModelsWithBundledPythonProcess)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("void installSam21Model(const QString &variantToken")));
+    EXPECT_TRUE(source.contains(QStringLiteral("#include <QProcess>")));
+    EXPECT_TRUE(source.contains(QStringLiteral("install_sam21_model.py")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_PYTHON_EXECUTABLE")));
+    EXPECT_TRUE(source.contains(QStringLiteral("PLASCAN_PYTHON")));
+    EXPECT_TRUE(source.contains(QStringLiteral("new QProgressDialog")));
+    EXPECT_TRUE(source.contains(QStringLiteral("process->start(pythonExecutable, arguments)")))
+        << "Model installation should be launched as an asynchronous process, not by blocking the GUI thread.";
 }
 
 TEST(CanvasWidgetTest, ExposesMaskContourOverlayApi)
@@ -6534,6 +7017,19 @@ TEST(TiePointsDialogTest, MetashapeStyleDefaultsAreExposed)
     EXPECT_FALSE(createDialog.useReferencePreselection());
     EXPECT_FALSE(createDialog.useGuidedMatching());
     EXPECT_TRUE(createDialog.excludePinnedTiePoints());
+    EXPECT_EQ(createDialog.maskApplyMode(), QStringLiteral("none"));
+
+    auto *maskModeCombo = createDialog.findChild<QComboBox *>(QStringLiteral("m_maskModeCombo"));
+    ASSERT_NE(maskModeCombo, nullptr);
+    EXPECT_TRUE(maskModeCombo->isEnabled());
+    EXPECT_GE(maskModeCombo->findData(QStringLiteral("none")), 0);
+    EXPECT_GE(maskModeCombo->findData(QStringLiteral("keypoints")), 0);
+    EXPECT_GE(maskModeCombo->findData(QStringLiteral("tiepoints")), 0);
+
+    const int tiePointMaskIndex = maskModeCombo->findData(QStringLiteral("tiepoints"));
+    ASSERT_GE(tiePointMaskIndex, 0);
+    maskModeCombo->setCurrentIndex(tiePointMaskIndex);
+    EXPECT_EQ(createDialog.maskApplyMode(), QStringLiteral("tiepoints"));
 
     ThinTiePointsDialog thinDialog;
     EXPECT_EQ(thinDialog.tiePointLimit(), 500);
@@ -6560,6 +7056,48 @@ TEST(TiePointsDialogTest, GuidedMatchingSwitchesKeypointLimitToPerMegapixelDispl
     EXPECT_EQ(keypointLabel->text(), QStringLiteral("每百万像素的关键点限制:"));
 }
 
+TEST(TiePointsDialogTest, AdvancedSectionIsCollapsible)
+{
+    CreateTiePointsDialog dialog;
+    auto *advancedToggle = dialog.findChild<QToolButton *>(QStringLiteral("m_advancedToggle"));
+    auto *advancedContent = dialog.findChild<QWidget *>(QStringLiteral("m_advancedContent"));
+    auto *generalGroup = dialog.findChild<QGroupBox *>(QStringLiteral("m_generalGroup"));
+    auto *advancedGroup = dialog.findChild<QGroupBox *>(QStringLiteral("m_advancedGroup"));
+    auto *accuracyCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_accuracyCombo"));
+
+    ASSERT_NE(advancedToggle, nullptr);
+    ASSERT_NE(advancedContent, nullptr);
+    ASSERT_NE(generalGroup, nullptr);
+    ASSERT_NE(advancedGroup, nullptr);
+    ASSERT_NE(accuracyCombo, nullptr);
+
+    EXPECT_EQ(advancedToggle->text(), QStringLiteral("高级"));
+    EXPECT_TRUE(advancedToggle->isCheckable());
+    EXPECT_TRUE(advancedToggle->isChecked());
+    EXPECT_EQ(advancedToggle->arrowType(), Qt::DownArrow);
+    EXPECT_FALSE(advancedContent->isHidden());
+    EXPECT_TRUE(advancedGroup->isAncestorOf(advancedContent));
+    EXPECT_EQ(accuracyCombo->currentData().toString(), QStringLiteral("highest"));
+
+    dialog.show();
+    QApplication::processEvents();
+    const int expandedHeight = dialog.height();
+
+    advancedToggle->setChecked(false);
+    QApplication::processEvents();
+    EXPECT_TRUE(advancedContent->isHidden());
+    EXPECT_TRUE(advancedGroup->isHidden());
+    EXPECT_EQ(advancedToggle->arrowType(), Qt::RightArrow);
+    EXPECT_LT(dialog.height(), expandedHeight - 80);
+    EXPECT_EQ(dialog.keypointLimit(), 40000);
+    EXPECT_EQ(dialog.tiePointLimit(), 4000);
+
+    advancedToggle->setChecked(true);
+    QApplication::processEvents();
+    EXPECT_FALSE(advancedContent->isHidden());
+    EXPECT_EQ(advancedToggle->arrowType(), Qt::DownArrow);
+}
+
 TEST(TiePointsDialogTest, MainWindowPassesCreateTiePointsAdvancedOptionsToTask)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
@@ -6569,6 +7107,9 @@ TEST(TiePointsDialogTest, MainWindowPassesCreateTiePointsAdvancedOptionsToTask)
     EXPECT_TRUE(source.contains(QStringLiteral("options.keypointLimitPerMegapixel")));
     EXPECT_TRUE(source.contains(QStringLiteral("options.maxTiePointsPerImage = dlg.tiePointLimit()")));
     EXPECT_TRUE(source.contains(QStringLiteral("options.excludeStationaryTiePoints = dlg.excludePinnedTiePoints()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("options.maskApplyMode = dlg.maskApplyMode()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("context.maskPaths = ProjectIO::maskPathsForImages(projectPath, images)")))
+        << "创建连接点任务必须把项目中的蒙版文件传入核心匹配上下文。";
 }
 
 TEST(MainMenuTest, ViewMenuExposesCheckedCameraVisibilityAction)
@@ -6585,6 +7126,197 @@ TEST(MainMenuTest, ViewMenuExposesCheckedCameraVisibilityAction)
     QMenu *viewMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("视图"));
     ASSERT_NE(viewMenu, nullptr);
     EXPECT_TRUE(viewMenu->actions().contains(action));
+}
+
+TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QMenu *modelMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("模型"));
+    ASSERT_NE(modelMenu, nullptr);
+    QMenu *displayMenu = findSubMenuByTitle(modelMenu, QStringLiteral("显示/隐藏项目"));
+    ASSERT_NE(displayMenu, nullptr);
+
+    ASSERT_NE(menu.toggleCamerasAction(), nullptr);
+    ASSERT_NE(menu.toggleDependentCamerasAction(), nullptr);
+    ASSERT_NE(menu.toggleCameraThumbnailsAction(), nullptr);
+    ASSERT_NE(menu.toggleCameraImagesAction(), nullptr);
+    ASSERT_NE(menu.showCameraImagesInForegroundAction(), nullptr);
+    ASSERT_NE(menu.showCameraImagesInBackgroundAction(), nullptr);
+    ASSERT_NE(menu.lockCameraImageAction(), nullptr);
+
+    EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCamerasAction()));
+    EXPECT_TRUE(displayMenu->actions().contains(menu.toggleDependentCamerasAction()));
+    EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCameraThumbnailsAction()));
+    QMenu *imageMenu = findSubMenuByTitle(displayMenu, QStringLiteral("显示图像"));
+    ASSERT_NE(imageMenu, nullptr);
+    EXPECT_TRUE(imageMenu->actions().contains(menu.toggleCameraImagesAction()));
+    EXPECT_TRUE(imageMenu->actions().contains(menu.showCameraImagesInForegroundAction()));
+    EXPECT_TRUE(imageMenu->actions().contains(menu.showCameraImagesInBackgroundAction()));
+    EXPECT_TRUE(imageMenu->actions().contains(menu.lockCameraImageAction()));
+
+    EXPECT_EQ(menu.toggleDependentCamerasAction()->text(), QStringLiteral("显示从属相机"));
+    EXPECT_FALSE(menu.toggleDependentCamerasAction()->isEnabled());
+    EXPECT_TRUE(menu.toggleDependentCamerasAction()->toolTip().contains(QStringLiteral("暂未建立模型与从属相机关系")));
+
+    EXPECT_EQ(menu.toggleCameraThumbnailsAction()->text(), QStringLiteral("显示缩略图"));
+    EXPECT_TRUE(menu.toggleCameraThumbnailsAction()->isCheckable());
+    EXPECT_TRUE(menu.toggleCameraThumbnailsAction()->isChecked());
+    EXPECT_EQ(menu.toggleCameraThumbnailsAction()->actionGroup(), nullptr);
+    menu.toggleCameraThumbnailsAction()->setChecked(false);
+    EXPECT_FALSE(menu.toggleCameraThumbnailsAction()->isChecked());
+
+    EXPECT_EQ(menu.toggleCameraImagesAction()->text(), QStringLiteral("显示图像"));
+    EXPECT_TRUE(menu.toggleCameraImagesAction()->isCheckable());
+    EXPECT_FALSE(menu.toggleCameraImagesAction()->isChecked());
+    EXPECT_EQ(menu.showCameraImagesInForegroundAction()->text(), QStringLiteral("在前景中显示"));
+    EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isCheckable());
+    EXPECT_TRUE(menu.showCameraImagesInForegroundAction()->isChecked());
+    EXPECT_EQ(menu.showCameraImagesInBackgroundAction()->text(), QStringLiteral("在后景中显示"));
+    EXPECT_TRUE(menu.showCameraImagesInBackgroundAction()->isCheckable());
+    EXPECT_FALSE(menu.showCameraImagesInBackgroundAction()->isChecked());
+    EXPECT_EQ(menu.lockCameraImageAction()->text(), QStringLiteral("锁定图像"));
+    EXPECT_TRUE(menu.lockCameraImageAction()->isCheckable());
+    EXPECT_FALSE(menu.lockCameraImageAction()->isChecked());
+}
+
+TEST(MainMenuTest, ToolbarExposesMetashapeStyleCameraVisibilityButton)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QToolBar *toolBar = menu.toolBar();
+    ASSERT_NE(toolBar, nullptr);
+    auto *cameraButton = toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraVisibility"));
+    ASSERT_NE(cameraButton, nullptr);
+
+    EXPECT_EQ(cameraButton->defaultAction(), menu.toggleCamerasAction());
+    EXPECT_EQ(cameraButton->popupMode(), QToolButton::MenuButtonPopup);
+    EXPECT_EQ(cameraButton->toolTip(), QStringLiteral("显示相机"));
+    EXPECT_GE(cameraButton->iconSize().width(), 44);
+    EXPECT_GE(cameraButton->iconSize().height(), 44);
+    EXPECT_GE(cameraButton->minimumSize().width(), 66);
+    EXPECT_GE(cameraButton->minimumSize().height(), 48);
+    EXPECT_TRUE(cameraButton->styleSheet().contains(QStringLiteral("QToolButton:checked")));
+    EXPECT_TRUE(cameraButton->styleSheet().contains(QStringLiteral("QToolButton::menu-button")));
+    EXPECT_FALSE(cameraButton->styleSheet().contains(QStringLiteral("#2563eb")));
+    ASSERT_NE(cameraButton->menu(), nullptr);
+    EXPECT_FALSE(cameraButton->icon().isNull());
+
+    ASSERT_NE(menu.toggleCameraThumbnailsAction(), nullptr);
+    ASSERT_NE(menu.toggleDependentCamerasAction(), nullptr);
+    ASSERT_NE(menu.toggleLocalAxesAction(), nullptr);
+    EXPECT_TRUE(cameraButton->menu()->actions().contains(menu.toggleCameraThumbnailsAction()));
+    EXPECT_TRUE(cameraButton->menu()->actions().contains(menu.toggleDependentCamerasAction()));
+    EXPECT_TRUE(cameraButton->menu()->actions().contains(menu.toggleLocalAxesAction()));
+
+    EXPECT_EQ(menu.toggleLocalAxesAction()->text(), QStringLiteral("显示本地轴"));
+    EXPECT_TRUE(menu.toggleLocalAxesAction()->isCheckable());
+    EXPECT_TRUE(menu.toggleLocalAxesAction()->isChecked());
+}
+
+TEST(MainMenuTest, ToolbarExposesMetashapeStyleImageVisibilityButton)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QToolBar *toolBar = menu.toolBar();
+    ASSERT_NE(toolBar, nullptr);
+    auto *imageButton =
+        toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility"));
+    ASSERT_NE(imageButton, nullptr);
+
+    EXPECT_EQ(imageButton->defaultAction(), menu.toggleCameraImagesAction());
+    EXPECT_EQ(imageButton->popupMode(), QToolButton::MenuButtonPopup);
+    EXPECT_EQ(imageButton->toolTip(), QStringLiteral("显示图像"));
+    EXPECT_GE(imageButton->iconSize().width(), 44);
+    EXPECT_GE(imageButton->iconSize().height(), 44);
+    EXPECT_GE(imageButton->minimumSize().width(), 66);
+    EXPECT_GE(imageButton->minimumSize().height(), 48);
+    EXPECT_TRUE(imageButton->styleSheet().contains(QStringLiteral("QToolButton:checked")));
+    EXPECT_TRUE(imageButton->styleSheet().contains(QStringLiteral("QToolButton::menu-button")));
+    EXPECT_FALSE(imageButton->styleSheet().contains(QStringLiteral("#2563eb")));
+    ASSERT_NE(imageButton->menu(), nullptr);
+    EXPECT_FALSE(imageButton->icon().isNull());
+
+    ASSERT_NE(menu.toggleCameraImagesAction(), nullptr);
+    ASSERT_NE(menu.showCameraImagesInForegroundAction(), nullptr);
+    ASSERT_NE(menu.showCameraImagesInBackgroundAction(), nullptr);
+    ASSERT_NE(menu.lockCameraImageAction(), nullptr);
+    EXPECT_FALSE(imageButton->menu()->actions().contains(menu.toggleCameraImagesAction()));
+    EXPECT_TRUE(imageButton->menu()->actions().contains(menu.showCameraImagesInForegroundAction()));
+    EXPECT_TRUE(imageButton->menu()->actions().contains(menu.showCameraImagesInBackgroundAction()));
+    EXPECT_TRUE(imageButton->menu()->actions().contains(menu.lockCameraImageAction()));
+}
+
+TEST(MainMenuTest, ToolbarCameraButtonUsesStillCameraIcon)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int iconStart = source.indexOf(QStringLiteral("QIcon makeCameraToolbarIcon()"));
+    ASSERT_GE(iconStart, 0);
+    const int iconEnd = source.indexOf(QStringLiteral("} // namespace"), iconStart);
+    ASSERT_GT(iconEnd, iconStart);
+    const QString iconBody = source.mid(iconStart, iconEnd - iconStart);
+
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("cameraBodyRect")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("cameraTopRect")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("cameraLensRect")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("QPixmap pixmap(56, 56)")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("QRectF cameraBodyRect(2.0, 17.0, 52.0, 35.0)")));
+    EXPECT_FALSE(iconBody.contains(QStringLiteral("QPolygonF lens")));
+    EXPECT_FALSE(iconBody.contains(QStringLiteral("drawLine(QPointF")));
+}
+
+TEST(MainMenuTest, ToolbarImageButtonUsesPictureIcon)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int iconStart = source.indexOf(QStringLiteral("QIcon makeCameraImageToolbarIcon()"));
+    ASSERT_GE(iconStart, 0);
+    const int iconEnd = source.indexOf(QStringLiteral("MainMenu::MainMenu"), iconStart);
+    ASSERT_GT(iconEnd, iconStart);
+    const QString iconBody = source.mid(iconStart, iconEnd - iconStart);
+
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("imageFrameRect")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("imageMountain")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("imageSunRect")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("QPixmap pixmap(56, 56)")));
+    EXPECT_TRUE(iconBody.contains(QStringLiteral("QRectF imageFrameRect(3.0, 3.0, 50.0, 50.0)")));
+}
+
+TEST(MainMenuTest, ToolbarSplitButtonsPaintIconsAcrossButtonArea)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("class ToolbarSplitButton : public QToolButton")))
+        << "相机/图像快捷按钮必须自绘图标区域，不能继续依赖 Qt 默认小图标绘制。";
+    EXPECT_TRUE(source.contains(QStringLiteral("void paintEvent(QPaintEvent *event) override")));
+    EXPECT_TRUE(source.contains(QStringLiteral("drawToolbarSplitButtonArrow")));
+    EXPECT_TRUE(source.contains(QStringLiteral("painter.drawPixmap(iconTopLeft, pixmap)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("new ToolbarSplitButton(_toolBar)")));
+}
+
+TEST(MainWindowTest, CameraToolbarLocalAxesActionConnectsToModelView)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("toggleLocalAxesAction()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("actionToggleLocalAxes")));
+    EXPECT_TRUE(source.contains(QStringLiteral("toolButtonModelCameraVisibility")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleLocalAxesAction()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowGizmo")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("QSignalBlocker localAxesBlocker")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("QSignalBlocker gizmoBlocker")));
 }
 
 TEST(MainMenuTest, ViewMenuExposesCheckedHenanUniversityBrandAction)
@@ -6785,6 +7517,51 @@ TEST(CameraSceneWidgetTest, CameraOverlayUsesMetashapeStyleImagePlanes)
     EXPECT_TRUE(source.contains(QStringLiteral("drawFloorPivotCross(painter)")));
     EXPECT_TRUE(source.contains(QStringLiteral("floorPivot")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawCameraLabel = highlighted")));
+}
+
+TEST(CameraSceneWidgetTest, CameraImagePlanesSupportAsyncThumbnailsAndImageMode)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const QString mainWindowSource = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("enum class CameraImagePlaneMode")));
+    EXPECT_TRUE(header.contains(QStringLiteral("enum class CameraImageDisplayLayer")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void setShowCameraThumbnails(bool show)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void setShowCameraImage(bool show)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void setCameraImagePlaneMode(CameraImagePlaneMode mode)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void setCameraImageDisplayLayer(CameraImageDisplayLayer layer)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void setCameraImageLocked(bool locked)")));
+    EXPECT_TRUE(header.contains(QStringLiteral("CameraImagePlaneMode cameraImagePlaneMode() const")));
+    EXPECT_TRUE(header.contains(QStringLiteral("void updateCameraOverlay()")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QHash<QString, QImage> _cameraImageCache")));
+    EXPECT_TRUE(header.contains(QStringLiteral("QSet<QString> _cameraImageLoadsInFlight")));
+    EXPECT_TRUE(header.contains(QStringLiteral("static CameraPlaneImageResult loadCameraPlaneImage")));
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QtConcurrent::run(&CameraSceneWidget::loadCameraPlaneImage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("xjw::gui::views::loadImageForDisplay")));
+    EXPECT_TRUE(source.contains(QStringLiteral("painter.setClipPath")));
+    EXPECT_TRUE(source.contains(QStringLiteral("painter.drawImage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("CameraImagePlaneMode::Thumbnail")));
+    EXPECT_TRUE(source.contains(QStringLiteral("CameraImagePlaneMode::Image")));
+    EXPECT_TRUE(source.contains(QStringLiteral("CameraImageDisplayLayer::Foreground")));
+    EXPECT_TRUE(source.contains(QStringLiteral("CameraImageDisplayLayer::Background")));
+    EXPECT_TRUE(source.contains(QStringLiteral("drawSelectedCameraImage")));
+    EXPECT_TRUE(source.contains(QStringLiteral("void CameraSceneWidget::updateCameraOverlay()")));
+    EXPECT_TRUE(source.contains(QStringLiteral("updateCameraOverlay();")));
+
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCameraThumbnailsAction()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("toggleCameraImagesAction()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("showCameraImagesInForegroundAction()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("showCameraImagesInBackgroundAction()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("lockCameraImageAction()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameraThumbnails")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("&CameraSceneWidget::setShowCameraImage")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("CameraSceneWidget::CameraImageDisplayLayer::Foreground")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("CameraSceneWidget::CameraImageDisplayLayer::Background")));
 }
 
 TEST(MainWindowTest, ReferenceDatasetActionsConnectToProjectManager)
@@ -7090,6 +7867,36 @@ TEST(ProjectOpenResponsivenessTest, ProjectManagerLoadsProjectSnapshotOffGuiThre
     EXPECT_TRUE(commandsSource.contains(QStringLiteral("selectProjectByDialog(&plascanPath)")));
 }
 
+TEST(ProjectOpenResponsivenessTest, ProjectManagerScansImageFoldersOffGuiThread)
+{
+    const QString managerSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectManager.cpp"));
+    const QString commandsHeader = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.h"));
+    const QString commandsSource = readProjectSourceFile(QStringLiteral("src/gui/project/manager/ProjectUiCommands.cpp"));
+    ASSERT_FALSE(managerSource.isEmpty());
+    ASSERT_FALSE(commandsHeader.isEmpty());
+    ASSERT_FALSE(commandsSource.isEmpty());
+
+    EXPECT_TRUE(commandsHeader.contains(QStringLiteral("bool selectImageFolder(QString *selectedFolder) const;")))
+        << "Folder selection should be separated from the potentially slow folder scan.";
+    EXPECT_TRUE(commandsSource.contains(QStringLiteral("bool ProjectUiCommands::selectImageFolder")))
+        << "The UI command layer should keep the directory dialog logic reusable.";
+
+    const int addStart = managerSource.indexOf(QStringLiteral("void ProjectManager::addFolder"));
+    const int nextStart = managerSource.indexOf(QStringLiteral("bool ProjectManager::importCameraForImage"), addStart);
+    ASSERT_GE(addStart, 0);
+    ASSERT_GT(nextStart, addStart);
+    const QString addBlock = managerSource.mid(addStart, nextStart - addStart);
+
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("selectImageFolder(&folder)")));
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("xjw::gui::tasks::runGuarded")))
+        << "Directory scanning can touch slow disks or large folders and must not run on the GUI thread.";
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("scanImageFolder(folder)")));
+    EXPECT_TRUE(addBlock.contains(QStringLiteral("addImages(scan.imagePaths")))
+        << "Only the final ProjectData mutation should run back on the GUI thread.";
+    EXPECT_FALSE(addBlock.contains(QStringLiteral("_uiCommands->addFolder()")))
+        << "The old synchronous path scans and updates metadata inside the action handler.";
+}
+
 TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuringOpen)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
@@ -7112,7 +7919,8 @@ TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuri
     ASSERT_GE(openSlotStart, 0);
     ASSERT_GT(closedSlotStart, openSlotStart);
     const QString openSlot = source.mid(openSlotStart, closedSlotStart - openSlotStart);
-    EXPECT_TRUE(openSlot.contains(QStringLiteral("const QJsonObject coreMeta = _projectManager->coreProjectMeta();")));
+    EXPECT_TRUE(openSlot.contains(QStringLiteral("scheduleProjectUiHydration(plascanPath)")));
+    EXPECT_TRUE(openSlot.contains(QStringLiteral("coreProjectMeta()")));
     EXPECT_FALSE(openSlot.contains(QStringLiteral("_projectManager->currentMeta()")))
         << "Opening the first viewport must not synchronously trigger project_results.json loading.";
 
@@ -7120,6 +7928,44 @@ TEST(ProjectOpenResponsivenessTest, MainWindowShowsProgressAndAvoidsFullMetaDuri
         QStringLiteral("connect(_projectManager, &ProjectManager::projectOpened, this, [this]"));
     EXPECT_LT(projectOpenedLambda, 0)
         << "The extra projectOpened lambda duplicated refresh work and called currentMeta() during open.";
+}
+
+TEST(ProjectOpenResponsivenessTest, MainWindowDefersMetadataWidgetRefresh)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("scheduleProjectMetadataRefresh")))
+        << "Metadata refresh should be a named queued helper, not direct widget slots.";
+
+    const int setupStart = source.indexOf(QStringLiteral("void MainWindow::setupProjectManager"));
+    const int setupEnd = source.indexOf(QStringLiteral("void MainWindow::refreshDashboardTaskSnapshots"), setupStart);
+    ASSERT_GE(setupStart, 0);
+    ASSERT_GT(setupEnd, setupStart);
+    const QString setupBlock = source.mid(setupStart, setupEnd - setupStart);
+
+    EXPECT_TRUE(setupBlock.contains(QStringLiteral("scheduleProjectMetadataRefresh(meta)")));
+    EXPECT_FALSE(setupBlock.contains(
+        QStringLiteral("connect(_projectManager, &ProjectManager::projectMetadataChanged, _dashboard")));
+    EXPECT_FALSE(setupBlock.contains(
+        QStringLiteral("connect(_projectManager, &ProjectManager::projectMetadataChanged, _dataTree")));
+    EXPECT_FALSE(setupBlock.contains(QStringLiteral("_workspaceCenter->setProjectMeta(meta)")))
+        << "Model view refresh should be delayed with the rest of the heavy widgets.";
+    EXPECT_FALSE(setupBlock.contains(QStringLiteral("_photoStrip->loadFromJson(meta)")));
+
+    const int refreshStart = source.indexOf(QStringLiteral("void MainWindow::scheduleProjectMetadataRefresh"));
+    ASSERT_GE(refreshStart, 0);
+    const int refreshEnd = source.indexOf(QStringLiteral("void MainWindow::scheduleProjectUiHydration"), refreshStart);
+    ASSERT_GT(refreshEnd, refreshStart);
+    const QString refreshBlock = source.mid(refreshStart, refreshEnd - refreshStart);
+
+    EXPECT_TRUE(refreshBlock.contains(QStringLiteral("QTimer::singleShot(0, this")));
+    EXPECT_TRUE(refreshBlock.contains(QStringLiteral("_dashboard->loadFromJson(meta)")));
+    EXPECT_TRUE(refreshBlock.contains(QStringLiteral("_dataTree->loadFromJson(meta)")));
+    EXPECT_TRUE(refreshBlock.contains(QStringLiteral("_workspaceCenter->setProjectMeta(meta)")));
+    EXPECT_TRUE(refreshBlock.contains(QStringLiteral("_photoStrip->loadFromJson(meta)")));
 }
 
 TEST(MainMenuTest, TriangulationActionNamesPairwisePreviewCloud)
@@ -7345,6 +8191,7 @@ TEST(CodeStyleTest, MainWindowUsesLowerCamelPrivateMemberNames)
         QStringLiteral("TaskStatusWidget* _dmTaskStatus{};"),
         QStringLiteral("TaskStatusWidget* _overlapTaskStatus{};"),
         QStringLiteral("TaskStatusWidget* _obsNetTaskStatus{};"),
+        QStringLiteral("TaskStatusWidget* _maskTaskStatus{};"),
         QStringLiteral("QDockWidget*      _logDock{};"),
         QStringLiteral("DialogSettingStore*   _featureMatchingSetting{};"),
         QStringLiteral("DialogSettingStore*   _uiSetting{};"),
@@ -7382,6 +8229,7 @@ TEST(CodeStyleTest, MainWindowUsesLowerCamelPrivateMemberNames)
         QStringLiteral("m_dmTaskStatus"),
         QStringLiteral("m_overlapTaskStatus"),
         QStringLiteral("m_obsNetTaskStatus"),
+        QStringLiteral("m_maskTaskStatus"),
         QStringLiteral("m_logDock"),
         QStringLiteral("m_logBtn"),
         QStringLiteral("m_featureMatchingSetting"),
@@ -8222,6 +9070,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
 {
     AerialTriangulationDialog dialog;
     dialog.setImageCount(9);
+    dialog.setReferencePreselectionAvailable(true, 9, 9);
 
     auto *qualityCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_qualityCombo"));
     auto *genericPreselectionCheck =
@@ -8275,12 +9124,15 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_EQ(qualityCombo->currentData().toString(), QStringLiteral("high"));
 
     ASSERT_EQ(referenceSourceCombo->count(), 3);
-    EXPECT_EQ(referenceSourceCombo->itemText(0), QStringLiteral("源代码"));
+    EXPECT_EQ(referenceSourceCombo->itemText(0), QStringLiteral("导入参考"));
     EXPECT_EQ(referenceSourceCombo->itemData(0).toString(), QStringLiteral("source_code"));
-    EXPECT_EQ(referenceSourceCombo->itemText(1), QStringLiteral("估计"));
+    EXPECT_EQ(referenceSourceCombo->itemText(1), QStringLiteral("已估位姿"));
     EXPECT_EQ(referenceSourceCombo->itemData(1).toString(), QStringLiteral("estimated"));
-    EXPECT_EQ(referenceSourceCombo->itemText(2), QStringLiteral("序列"));
+    EXPECT_EQ(referenceSourceCombo->itemText(2), QStringLiteral("照片序列"));
     EXPECT_EQ(referenceSourceCombo->itemData(2).toString(), QStringLiteral("sequence"));
+    EXPECT_TRUE(referenceSourceCombo->itemData(0, Qt::ToolTipRole).toString().contains(QStringLiteral("相机文件")));
+    EXPECT_TRUE(referenceSourceCombo->itemData(1, Qt::ToolTipRole).toString().contains(QStringLiteral("已有对齐")));
+    EXPECT_TRUE(referenceSourceCombo->itemData(2, Qt::ToolTipRole).toString().contains(QStringLiteral("影像顺序")));
 
     EXPECT_FALSE(advancedToggle->isChecked());
     EXPECT_TRUE(advancedContent->isHidden());
@@ -8298,7 +9150,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_FALSE(saveAfterEachStepCheck->isChecked());
     EXPECT_EQ(keypointLimitSpin->value(), 40000);
     EXPECT_EQ(tiepointLimitSpin->value(), 4000);
-    EXPECT_EQ(maskApplyCombo->currentData().toString(), QStringLiteral("none"));
+    EXPECT_EQ(maskApplyCombo->currentData().toString(), QStringLiteral("keypoints"));
     EXPECT_TRUE(excludeFixedTiePointsCheck->isChecked());
     EXPECT_FALSE(guidedImageMatchingCheck->isChecked());
     EXPECT_FALSE(adaptiveCameraModelCheck->isChecked());
@@ -8311,7 +9163,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_FALSE(settings.value(QStringLiteral("reference_preselection")).toBool());
     EXPECT_EQ(settings.value(QStringLiteral("keypoint_limit")).toInt(), 40000);
     EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 4000);
-    EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("none"));
+    EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("keypoints"));
 
     QJsonObject appliedSettings;
     appliedSettings[QStringLiteral("quality")] = QStringLiteral("highest");
@@ -8342,6 +9194,43 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_FALSE(settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool());
     EXPECT_TRUE(settings.value(QStringLiteral("guided_image_matching")).toBool());
     EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
+}
+
+TEST(AerialTriangulationDialogTest, ReferencePreselectionRequiresCompleteCameras)
+{
+    AerialTriangulationDialog dialog;
+    dialog.setImageCount(3);
+
+    auto *referencePreselectionCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_referencePreselectionCheck"));
+    auto *referenceSourceCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_referenceSourceCombo"));
+    ASSERT_NE(referencePreselectionCheck, nullptr);
+    ASSERT_NE(referenceSourceCombo, nullptr);
+
+    QJsonObject requested;
+    requested[QStringLiteral("reference_preselection")] = true;
+    requested[QStringLiteral("reference_preselection_source")] = QStringLiteral("sequence");
+
+    dialog.applySettings(requested);
+    EXPECT_FALSE(referencePreselectionCheck->isEnabled());
+    EXPECT_FALSE(referencePreselectionCheck->isChecked());
+    EXPECT_FALSE(referenceSourceCombo->isEnabled());
+    EXPECT_FALSE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool())
+        << "参考预选没有完整相机文件时不能从历史设置恢复为启用。";
+
+    dialog.setReferencePreselectionAvailable(true, 3, 3);
+    dialog.applySettings(requested);
+    EXPECT_TRUE(referencePreselectionCheck->isEnabled());
+    EXPECT_TRUE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(referenceSourceCombo->isEnabled());
+    EXPECT_TRUE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
+
+    dialog.setReferencePreselectionAvailable(false, 1, 3);
+    EXPECT_FALSE(referencePreselectionCheck->isEnabled());
+    EXPECT_FALSE(referencePreselectionCheck->isChecked());
+    EXPECT_FALSE(referenceSourceCombo->isEnabled());
+    EXPECT_FALSE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
+    EXPECT_TRUE(referencePreselectionCheck->toolTip().contains(QStringLiteral("相机")));
 }
 
 TEST(AerialTriangulationDialogTest, InputControlsHaveReadableHeights)
@@ -8863,8 +9752,9 @@ TEST(ProjectDashboardWidgetTest, MainWindowRefreshesDashboardFromProjectMetadata
 
     EXPECT_TRUE(header.contains(QStringLiteral("ProjectDashboardWidget")));
     EXPECT_TRUE(source.contains(QStringLiteral("_dashboard")));
-    EXPECT_TRUE(source.contains(QStringLiteral("ProjectDashboardWidget::loadFromJson")));
-    EXPECT_TRUE(source.contains(QStringLiteral("projectMetadataChanged, _dashboard")));
+    EXPECT_TRUE(source.contains(QStringLiteral("scheduleProjectMetadataRefresh")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_dashboard->loadFromJson(meta)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("projectMetadataChanged, _dashboard")));
 }
 
 TEST(ProjectDashboardWidgetTest, ShowsQualityMetricsFromRegisteredReports)
@@ -9154,12 +10044,11 @@ TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
         dialogStart);
     ASSERT_GT(workflowDialogStart, dialogStart);
     const QString sparseDialogBody = source.mid(dialogStart, workflowDialogStart - dialogStart);
-    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("ThreeDReconstructionDialog")));
-    EXPECT_TRUE(sparseDialogBody.contains(
-        QStringLiteral("setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation)")));
-    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("&ThreeDReconstructionDialog::runRequested")));
+    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("AerialTriangulationDialog")));
+    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("dlg.setReferencePreselectionAvailable")));
+    EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("dlg.collectSettings()")));
     EXPECT_TRUE(sparseDialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
-    EXPECT_FALSE(sparseDialogBody.contains(QStringLiteral("AerialTriangulationDialog dlg")));
+    EXPECT_FALSE(sparseDialogBody.contains(QStringLiteral("ThreeDReconstructionDialog")));
 
     const int workflowDialogEnd = source.indexOf(
         QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"),
@@ -9197,7 +10086,82 @@ TEST(AerialTriangulationWorkflowTest, SparseOnlyWorkflowStopsBeforeDenseStages)
     EXPECT_FALSE(sparseBlock.contains(QStringLiteral("startMesh")));
 }
 
-TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataOffersAutoFillOrManualReturn)
+TEST(AerialTriangulationWorkflowTest, ReferencePreselectionRequiresCompleteCameraReferences)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(header.isEmpty());
+
+    const int dialogStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::openWorkflowAerialTriangulationDialog"));
+    ASSERT_GE(dialogStart, 0);
+    const int workflowStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"),
+        dialogStart);
+    ASSERT_GT(workflowStart, dialogStart);
+    const QString dialogBody = source.mid(dialogStart, workflowStart - dialogStart);
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("getCamerasForImages(images, &hasAllReferenceCameras)")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.setReferencePreselectionAvailable")))
+        << "空三参数对话框要在无相机文件时禁用参考预选。";
+
+    EXPECT_TRUE(source.contains(QStringLiteral("sanitizeAerialTriangulationReferencePreselection")));
+    const int helperStart = source.indexOf(
+        QStringLiteral("QJsonObject MenuWorkflowController::sanitizeAerialTriangulationReferencePreselection"));
+    ASSERT_GE(helperStart, 0);
+    const int helperEnd = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"),
+        helperStart);
+    ASSERT_GT(helperEnd, helperStart);
+    const QString helperBody = source.mid(helperStart, helperEnd - helperStart);
+    EXPECT_TRUE(helperBody.contains(QStringLiteral("settings[QStringLiteral(\"reference_preselection\")] = false")));
+    EXPECT_TRUE(helperBody.contains(QStringLiteral("getCamerasForImages(images, &hasAllReferenceCameras)")))
+        << "后端启动前也要重新检查相机文件，不能只依赖 UI。";
+    EXPECT_TRUE(helperBody.contains(QStringLiteral("参考预选已关闭")));
+
+    const int startEnd = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::prepareAerialTriangulationTiePoints"),
+        workflowStart);
+    ASSERT_GT(startEnd, workflowStart);
+    const QString startBody = source.mid(workflowStart, startEnd - workflowStart);
+    EXPECT_TRUE(startBody.contains(
+        QStringLiteral("sanitizeAerialTriangulationReferencePreselection(runSettings, images)")));
+}
+
+TEST(AerialTriangulationWorkflowTest, TiePointPreparationDefaultsToCudaDevice)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int helperStart = source.indexOf(
+        QStringLiteral("xjw::matchphotos::ComputeDevice matchPhotosDeviceFromSettings"));
+    ASSERT_GE(helperStart, 0);
+    const int helperEnd = source.indexOf(
+        QStringLiteral("xjw::matchphotos::MatchPhotosOptions matchPhotosOptionsFromAerialTriangulationSettings"),
+        helperStart);
+    ASSERT_GT(helperEnd, helperStart);
+    const QString helperBody = source.mid(helperStart, helperEnd - helperStart);
+
+    EXPECT_TRUE(helperBody.contains(
+        QStringLiteral("settings.value(QStringLiteral(\"device\")).toString(QStringLiteral(\"cuda\"))")))
+        << "空三对话框当前没有设备选择项，缺省值必须让 SIFT 和 LightGlue 走 CUDA。";
+    EXPECT_TRUE(helperBody.contains(QStringLiteral("return xjw::matchphotos::ComputeDevice::Cuda")));
+    EXPECT_TRUE(helperBody.contains(QStringLiteral("return xjw::matchphotos::ComputeDevice::Cpu")))
+        << "用户显式写入 cpu 时仍应保留 CPU 调试路径。";
+
+    const int optionsStart = source.indexOf(
+        QStringLiteral("xjw::matchphotos::MatchPhotosOptions matchPhotosOptionsFromAerialTriangulationSettings"));
+    ASSERT_GE(optionsStart, 0);
+    const int optionsEnd = source.indexOf(QStringLiteral("QJsonObject withTiePointMetadata"), optionsStart);
+    ASSERT_GT(optionsEnd, optionsStart);
+    const QString optionsBody = source.mid(optionsStart, optionsEnd - optionsStart);
+
+    EXPECT_TRUE(optionsBody.contains(QStringLiteral("options.device = matchPhotosDeviceFromSettings(settings)")));
+    EXPECT_TRUE(optionsBody.contains(QStringLiteral("options.featureAlgorithm = QStringLiteral(\"sift\")")));
+    EXPECT_TRUE(optionsBody.contains(QStringLiteral("options.matcherAlgorithm = QStringLiteral(\"lightglue\")")));
+}
+
+TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataStartsTiePointPreparationWithoutPrompt)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
@@ -9205,21 +10169,30 @@ TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataOffersAutoFillOrManualR
     ASSERT_FALSE(header.isEmpty());
 
     EXPECT_TRUE(header.contains(QStringLiteral("SparsePrerequisiteSummary")));
-    EXPECT_TRUE(source.contains(QStringLiteral("自动补齐缺失步骤")));
-    EXPECT_TRUE(source.contains(QStringLiteral("返回手动处理")));
-    EXPECT_TRUE(source.contains(QStringLiteral("workflowOptions.autoGenerateMissingMatches = autoFillMissing")));
+    EXPECT_TRUE(header.contains(QStringLiteral("prepareAerialTriangulationTiePoints")));
+    EXPECT_TRUE(source.contains(QStringLiteral("MatchPhotosTask task(options)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("prepareTiePoints && (autoFillMissing || resetCurrentAlignment)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("autoFillMissing = true;")))
+        << "Missing features/matches should directly enter the Create Tie Points pipeline.";
+    EXPECT_FALSE(header.contains(QStringLiteral("confirmAutoFillMissingSparseInputs")));
+    EXPECT_FALSE(source.contains(QStringLiteral("confirmAutoFillMissingSparseInputs")))
+        << "Aerial triangulation must not keep the obsolete manual feature/match preparation prompt.";
+    EXPECT_TRUE(source.contains(QStringLiteral("workflowOptions.autoGenerateMissingMatches = false")));
+    EXPECT_TRUE(source.contains(QStringLiteral("withTiePointMetadata(match.settings, result)")));
     EXPECT_TRUE(source.contains(QStringLiteral("缺少连接点")));
 
     const int summaryStart = source.indexOf(
         QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
     ASSERT_GE(summaryStart, 0);
     const int promptStart = source.indexOf(
-        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"),
         summaryStart);
     ASSERT_GT(promptStart, summaryStart);
     const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("ProjectIO::findFeatureForImage")));
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("MatchResultCatalogConfig")));
+    EXPECT_TRUE(summaryBody.contains(QStringLiteral("catalogConfig.targetImagePaths = images")))
+        << "空三前置检查只关心当前项目影像，不能全目录解析所有历史匹配 sidecar。";
     EXPECT_TRUE(summaryBody.contains(QStringLiteral("recordAlgorithmMatches")));
     EXPECT_FALSE(summaryBody.contains(QStringLiteral("summary.hasFeatures = !suffixes.isEmpty()")));
     EXPECT_FALSE(summaryBody.contains(QStringLiteral("summary.hasMatches = !matches.isEmpty()")));
@@ -9237,7 +10210,74 @@ TEST(AerialTriangulationWorkflowTest, MissingUpstreamDataOffersAutoFillOrManualR
     EXPECT_FALSE(sparseBody.contains(QStringLiteral("opts.projectMeta = pm->coreProjectMeta()")));
 }
 
-TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingBlocksInsteadOfAutoFill)
+TEST(AerialTriangulationWorkflowTest, TiePointPreparationPassesMaskOptionsToMatchPhotosTask)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int optionsStart = source.indexOf(
+        QStringLiteral("xjw::matchphotos::MatchPhotosOptions matchPhotosOptionsFromAerialTriangulationSettings"));
+    ASSERT_GE(optionsStart, 0);
+    const int optionsEnd = source.indexOf(QStringLiteral("QJsonObject withTiePointMetadata"), optionsStart);
+    ASSERT_GT(optionsEnd, optionsStart);
+    const QString optionsBody = source.mid(optionsStart, optionsEnd - optionsStart);
+
+    EXPECT_TRUE(optionsBody.contains(QStringLiteral("options.maskApplyMode")))
+        << "空三对话框的掩膜参数必须传给创建连接点任务。";
+    EXPECT_TRUE(optionsBody.contains(QStringLiteral("mask_apply_mode")));
+    EXPECT_TRUE(optionsBody.contains(QStringLiteral("options.reuseExistingFeatures = false")))
+        << "将掩膜应用于关键点时，旧特征文件可能没有经过掩膜过滤，必须强制重提。";
+
+    const int prepareStart = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::prepareAerialTriangulationTiePoints"));
+    ASSERT_GE(prepareStart, 0);
+    const int prepareEnd = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::launchAerialTriangulationSfm"),
+        prepareStart);
+    ASSERT_GT(prepareEnd, prepareStart);
+    const QString prepareBody = source.mid(prepareStart, prepareEnd - prepareStart);
+
+    EXPECT_TRUE(prepareBody.contains(QStringLiteral("context.maskPaths = ProjectIO::maskPathsForImages(projectPath, images)")))
+        << "空三自动创建连接点时也必须按项目影像装载蒙版路径。";
+    EXPECT_TRUE(prepareBody.contains(QStringLiteral("context.progressCallback")))
+        << "空三自动创建连接点不能只显示粗略文字，必须透传 MatchPhotosTask 的阶段进度。";
+    EXPECT_TRUE(prepareBody.contains(QStringLiteral("matchPhotosProgressPercent")))
+        << "连接点准备阶段的特征提取、配对、匹配进度要映射到空三总进度条。";
+}
+
+TEST(AerialTriangulationWorkflowTest, DefaultsToSiftLightGlueWhenDialogOmitsMatchPipeline)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int startBegin = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startAerialTriangulationWorkflow"));
+    ASSERT_GE(startBegin, 0);
+    const int launchBegin = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::launchAerialTriangulationSfm"),
+        startBegin);
+    ASSERT_GT(launchBegin, startBegin);
+    const QString startBody = source.mid(startBegin, launchBegin - startBegin);
+
+    EXPECT_TRUE(startBody.contains(
+        QStringLiteral("runSettings.value(QStringLiteral(\"feature_algorithm\")).toString(QStringLiteral(\"sift\"))")))
+        << "空三参数对话框没有算法字段时，前置检查必须按创建连接点的 SIFT + LightGlue 默认链路检查缓存。";
+    EXPECT_FALSE(startBody.contains(
+        QStringLiteral("runSettings.value(QStringLiteral(\"feature_algorithm\")).toString(QStringLiteral(\"disk\"))")));
+
+    const int launchEnd = source.indexOf(
+        QStringLiteral("void MenuWorkflowController::startThreeDReconstructionWorkflow"),
+        launchBegin);
+    ASSERT_GT(launchEnd, launchBegin);
+    const QString launchBody = source.mid(launchBegin, launchEnd - launchBegin);
+
+    EXPECT_TRUE(launchBody.contains(QStringLiteral("settings.value(QStringLiteral(\"feature_algorithm\"))")));
+    EXPECT_TRUE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"sift\"))")))
+        << "正式 SfM 检查匹配缓存时也必须沿用 SIFT + LightGlue，避免把刚生成的 SIFT 匹配误判为 DISK 不兼容。";
+    EXPECT_FALSE(launchBody.contains(QStringLiteral(".toString(QStringLiteral(\"disk\"))")));
+}
+
+TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingOnlyBlocksWhenNotResettingAlignment)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.cpp"));
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/main_window/MenuWorkflowController.h"));
@@ -9258,10 +10298,11 @@ TEST(AerialTriangulationWorkflowTest, CompletedButUnusableMatchingBlocksInsteadO
     ASSERT_GT(launchStart, callbackStart);
     const QString callbackBody = source.mid(callbackStart, launchStart - callbackStart);
 
-    EXPECT_TRUE(callbackBody.contains(QStringLiteral("if (prereq.blockOnMatchQuality)")));
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("resetCurrentAlignment")));
+    EXPECT_TRUE(callbackBody.contains(QStringLiteral("if (prereq.blockOnMatchQuality && !resetCurrentAlignment)")));
     EXPECT_TRUE(callbackBody.contains(QStringLiteral("atProgressFinished(false)")));
     EXPECT_TRUE(callbackBody.contains(QStringLiteral("return;")));
-    EXPECT_LT(callbackBody.indexOf(QStringLiteral("if (prereq.blockOnMatchQuality)")),
+    EXPECT_LT(callbackBody.indexOf(QStringLiteral("if (prereq.blockOnMatchQuality && !resetCurrentAlignment)")),
               callbackBody.indexOf(QStringLiteral("if (!prereq.missingMessages.isEmpty())")));
 }
 
@@ -9274,7 +10315,7 @@ TEST(AerialTriangulationWorkflowTest, PreflightReusesGeneratedPairPlanBeforeRepo
         QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
     ASSERT_GE(summaryStart, 0);
     const int promptStart = source.indexOf(
-        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"),
         summaryStart);
     ASSERT_GT(promptStart, summaryStart);
     const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
@@ -9298,7 +10339,7 @@ TEST(AerialTriangulationWorkflowTest, ExistingDisconnectedMatchesAreWarningsNotM
         QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
     ASSERT_GE(summaryStart, 0);
     const int promptStart = source.indexOf(
-        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"),
         summaryStart);
     ASSERT_GT(promptStart, summaryStart);
     const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
@@ -9322,7 +10363,7 @@ TEST(AerialTriangulationWorkflowTest, NoMatchCacheCountsAsProcessedPairCoverage)
         QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
     ASSERT_GE(summaryStart, 0);
     const int promptStart = source.indexOf(
-        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"),
         summaryStart);
     ASSERT_GT(promptStart, summaryStart);
     const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
@@ -9347,7 +10388,7 @@ TEST(AerialTriangulationWorkflowTest, PreflightEmitsPrerequisiteReportAndRecomme
     EXPECT_TRUE(source.contains(QStringLiteral("prereq.prerequisiteReport")));
     EXPECT_TRUE(source.contains(QStringLiteral("空三上游数据就绪：复用已有匹配")));
     EXPECT_TRUE(source.contains(QStringLiteral("空三缺少部分匹配：只补齐缺失 pair")));
-    EXPECT_TRUE(source.contains(QStringLiteral("空三缺少特征/匹配：需要先运行特征提取/匹配")));
+    EXPECT_TRUE(source.contains(QStringLiteral("创建连接点流程将自动提取特征并匹配")));
 }
 
 TEST(AerialTriangulationWorkflowTest, CompletedMatchingWithoutUsableEdgesPromptsQualityInspectionNotAutoFill)
@@ -9359,7 +10400,7 @@ TEST(AerialTriangulationWorkflowTest, CompletedMatchingWithoutUsableEdgesPrompts
         QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
     ASSERT_GE(summaryStart, 0);
     const int promptStart = source.indexOf(
-        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"),
         summaryStart);
     ASSERT_GT(promptStart, summaryStart);
     const QString summaryBody = source.mid(summaryStart, promptStart - summaryStart);
@@ -9386,10 +10427,11 @@ TEST(AerialTriangulationWorkflowTest, DoesNotAutoRematchWhenPrerequisitesArePres
     const QString startBody = source.mid(sparseStart, launchStart - sparseStart);
 
     EXPECT_TRUE(startBody.contains(QStringLiteral("bool autoFillMissing = false")))
-        << "AT should only enable SFM auto-rematching after the user explicitly accepts missing-step autofill.";
+        << "AT should not prepare tie points when prerequisites are already present and reset alignment is disabled.";
     EXPECT_TRUE(startBody.contains(QStringLiteral("if (!prereq.missingMessages.isEmpty())")));
-    EXPECT_FALSE(startBody.contains(
-        QStringLiteral("const bool autoFillMissing = controller->confirmAutoFillMissingSparseInputs(prereq);")))
+    EXPECT_TRUE(startBody.contains(QStringLiteral("autoFillMissing = true;")))
+        << "Missing features or matches should be handled by the Create Tie Points pipeline without a prompt.";
+    EXPECT_FALSE(startBody.contains(QStringLiteral("confirmAutoFillMissingSparseInputs")))
         << "A successful preflight must not be interpreted as a request to regenerate failed/skipped matches.";
 }
 
@@ -9426,13 +10468,11 @@ TEST(AerialTriangulationWorkflowTest, SparseAerialTriangulationDialogStartsWorkf
     ASSERT_GT(nextFunction, dialogStart);
     const QString dialogBody = source.mid(dialogStart, nextFunction - dialogStart);
 
-    EXPECT_TRUE(dialogBody.contains(QStringLiteral("ThreeDReconstructionDialog")));
-    EXPECT_TRUE(dialogBody.contains(
-        QStringLiteral("setMode(ThreeDReconstructionDialog::Mode::AerialTriangulation)")));
-    EXPECT_TRUE(dialogBody.contains(QStringLiteral("&ThreeDReconstructionDialog::runRequested")));
-    EXPECT_TRUE(dialogBody.contains(QStringLiteral("Qt::QueuedConnection")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("AerialTriangulationDialog")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.setReferencePreselectionAvailable")));
+    EXPECT_TRUE(dialogBody.contains(QStringLiteral("dlg.collectSettings()")));
     EXPECT_TRUE(dialogBody.contains(QStringLiteral("startAerialTriangulationWorkflow(settings)")));
-    EXPECT_FALSE(dialogBody.contains(QStringLiteral("AerialTriangulationDialog dlg")));
+    EXPECT_FALSE(dialogBody.contains(QStringLiteral("ThreeDReconstructionDialog")));
 }
 
 TEST(AerialTriangulationWorkflowTest, StartDoesPrerequisiteAndSfmWorkOffGuiThread)
@@ -9544,7 +10584,7 @@ TEST(AerialTriangulationWorkflowTest, PreflightUsesSelectedMatchPipeline)
         QStringLiteral("MenuWorkflowController::summarizeSparsePrerequisites"));
     ASSERT_GE(summaryBegin, 0);
     const int confirmBegin = source.indexOf(
-        QStringLiteral("bool MenuWorkflowController::confirmAutoFillMissingSparseInputs"),
+        QStringLiteral("void MenuWorkflowController::openFeatureExtractionDialog"),
         summaryBegin);
     ASSERT_GT(confirmBegin, summaryBegin);
     const QString summaryBody = source.mid(summaryBegin, confirmBegin - summaryBegin);
@@ -10467,9 +11507,10 @@ TEST(CanvasWidgetResponsivenessTest, StaleFeatureLoadsDoNotPaintOverCurrentImage
     ASSERT_FALSE(source.isEmpty());
 
     const int finishedIndex =
-        source.indexOf(QStringLiteral("connect(watcher, &QFutureWatcher<std::vector<cv::KeyPoint>>::finished"));
+        source.indexOf(QStringLiteral("xjw::gui::tasks::runGuarded"), source.indexOf(
+                           QStringLiteral("void CanvasWidget::startSpLoadForImage")));
     ASSERT_GE(finishedIndex, 0);
-    const QString finishedBlock = source.mid(finishedIndex, 2200);
+    const QString finishedBlock = source.mid(finishedIndex, 5200);
 
     EXPECT_TRUE(finishedBlock.contains(QStringLiteral("generation != self->_featureLoadGeneration")))
         << "Late completions must be dropped after another image/suffix request starts.";
@@ -11135,7 +12176,11 @@ TEST(FeatureMatchSidecarTest, FormalSfmFindsAlgorithmSuffixedMatchCaches)
     EXPECT_TRUE(candidateBlock.contains(QStringLiteral("findExistingMatchCache")))
         << "Formal SfM must reuse A__B_lightglue.match files generated by the GUI matcher, "
            "not only bare A__B.match caches.";
-    EXPECT_TRUE(candidateBlock.contains(QStringLiteral("%1__%2*.match")));
+    EXPECT_TRUE(source.contains(QStringLiteral("matchCacheFilesByLeftBase")))
+        << "Checking match files must build a directory index once instead of scanning assets/matches for every pair.";
+    EXPECT_FALSE(candidateBlock.contains(QStringLiteral("entryInfoList")))
+        << "The per-pair loop must not rescan the match directory; this makes the '检查匹配文件' stage O(pair_count * files).";
+    EXPECT_TRUE(candidateBlock.contains(QStringLiteral("matchFileNameMatchesPair")));
 }
 
 TEST(MatchViewerSidecarOrderTest, ReordersCachedPointsWhenDisplayOrderIsReversed)
@@ -11216,6 +12261,8 @@ TEST(MatchPairSelectorTrackValidityTest, ShowsMetashapeStyleCounts)
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"MatchValidityAnalyzer.h\"")));
     EXPECT_TRUE(source.contains(QStringLiteral("headers << tr(\"图像\") << tr(\"总计\") << tr(\"有效\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("<< tr(\"无效\") << tr(\"最佳算法\") << tr(\"状态\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const MatchValidityContext validityContext")))
+        << "Sparse-track sidecar discovery must be done once per selector scan, not once per table row.";
     EXPECT_TRUE(source.contains(QStringLiteral("analyzeMatchTrackValidity")));
     EXPECT_TRUE(source.contains(QStringLiteral("info.hasTrackValidity = true;")));
     EXPECT_TRUE(source.contains(QStringLiteral("总计 %3，有效 %4，无效 %5")));
@@ -11254,6 +12301,88 @@ TEST(MatchPairSelectorResponsivenessTest, DefersHeavyMatchScanToBackgroundWorker
         << "Scanning match files and sparse validity sidecars on the GUI thread freezes large projects.";
 }
 
+TEST(MatchPairSelectorResponsivenessTest, PrioritizesCurrentImageBeforeFullCatalogScan)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("_priorityMatchLoadWatcher")))
+        << "The selector should keep a separate watcher for fast current-image results.";
+    EXPECT_TRUE(source.contains(QStringLiteral("parsePriorityMatchDataForImageFromSnapshot")))
+        << "The first worker should scan only match files that name the current image.";
+    EXPECT_TRUE(source.contains(QStringLiteral("candidateMatchFilesForImage")))
+        << "Fast loading must avoid a full MatchResultCatalog scan before showing rows.";
+    EXPECT_TRUE(header.contains(QStringLiteral("startFullMatchPairLoad")))
+        << "The full catalog scan should have its own delayed launcher.";
+    EXPECT_TRUE(source.contains(QStringLiteral("startFullMatchPairLoad(makeSnapshot(), imagePath, generation)")))
+        << "The full catalog scan should start only after the priority result returns to the UI thread.";
+    EXPECT_TRUE(source.contains(QStringLiteral("parseMatchDataForImageFromSnapshot(snapshot, imagePath, progressCallback)")))
+        << "The full catalog scan should still run in the background to fill validity and variants.";
+    EXPECT_TRUE(source.contains(QStringLiteral("priorityLoad")))
+        << "Loaded results must be distinguished so quick rows do not mark the full scan complete.";
+    EXPECT_TRUE(source.contains(QStringLiteral("正在后台访问全部匹配数据")))
+        << "After quick rows are visible the status should tell the user the full directory scan is still loading.";
+
+    const int priorityStart = source.indexOf(QStringLiteral("void MatchPairSelectorDialog::startAsyncMatchPairLoad"));
+    ASSERT_GE(priorityStart, 0);
+    const int fullStart = source.indexOf(QStringLiteral("void MatchPairSelectorDialog::startFullMatchPairLoad"),
+                                         priorityStart);
+    ASSERT_GT(fullStart, priorityStart);
+    const QString priorityStartBody = source.mid(priorityStart, fullStart - priorityStart);
+    EXPECT_FALSE(priorityStartBody.contains(QStringLiteral("parseMatchDataForImageFromSnapshot(snapshot, imagePath)")))
+        << "Starting the full scan together with the priority scan still lets the full directory scan compete for IO.";
+}
+
+TEST(MatchPairSelectorResponsivenessTest, ShowsPercentageProgressDuringFullMatchScan)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.cpp"));
+    const QString ui = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.ui"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(ui.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("QProgressBar")))
+        << "The selector should keep a progress bar pointer instead of relying on status text only.";
+    EXPECT_TRUE(header.contains(QStringLiteral("_scanProgressBar")))
+        << "The scan progress bar needs a stable member so async callbacks can update it.";
+    EXPECT_TRUE(ui.contains(QStringLiteral("QProgressBar")))
+        << "The progress indicator must be part of the dialog layout.";
+    EXPECT_TRUE(ui.contains(QStringLiteral("m_scanProgressBar")))
+        << "The progress bar object name should be stable for UI tests and future styling.";
+    EXPECT_TRUE(source.contains(QStringLiteral("_scanProgressBar = ui.m_scanProgressBar")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_scanProgressBar->setRange(0, 100)")))
+        << "The full match scan should show a real percentage instead of an indeterminate busy bar.";
+    EXPECT_TRUE(source.contains(QStringLiteral("_scanProgressBar->setValue(0)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_scanProgressBar->setValue(percent)")))
+        << "Catalog progress callbacks should drive the progress bar value.";
+    EXPECT_FALSE(source.contains(QStringLiteral("_scanProgressBar->setRange(0, 0)")))
+        << "The selector now has catalog file counts, so it must not keep the bar indeterminate.";
+    EXPECT_TRUE(source.contains(QStringLiteral("_scanProgressBar->setVisible(true)")))
+        << "Starting current-image scan should make progress visible immediately.";
+    EXPECT_TRUE(source.contains(QStringLiteral("_scanProgressBar->setVisible(false)")))
+        << "Finishing the full background statistics pass should hide the progress bar.";
+    EXPECT_TRUE(source.contains(QStringLiteral("config.progressCallback")))
+        << "The full catalog scan must receive file-level progress from MatchResultCatalog.";
+    EXPECT_TRUE(source.contains(QStringLiteral("QMetaObject::invokeMethod")))
+        << "Worker-thread catalog progress must be marshalled back to the GUI thread.";
+    EXPECT_TRUE(source.contains(QStringLiteral("正在优先加载当前影像匹配")))
+        << "The first stage should tell users why the table may still be empty.";
+    EXPECT_TRUE(source.contains(QStringLiteral("正在后台访问全部匹配数据：%1%")))
+        << "The progress bar should report the whole match directory access progress, not current-image progress.";
+
+    const int progressStart = source.indexOf(QStringLiteral("void MatchPairSelectorDialog::setFullScanProgress"));
+    ASSERT_GE(progressStart, 0);
+    const int loadedStart = source.indexOf(QStringLiteral("void MatchPairSelectorDialog::onMatchPairsLoaded"),
+                                           progressStart);
+    ASSERT_GT(loadedStart, progressStart);
+    const QString progressBody = source.mid(progressStart, loadedStart - progressStart);
+    EXPECT_TRUE(progressBody.contains(QStringLiteral("if (!_matchLoadWatcher)")))
+        << "Late queued progress events must not show the bar again after the full scan has finished.";
+}
+
 TEST(MatchPairSelectorCatalogTest, UsesCatalogGroupsAndPassesVariantsToViewer)
 {
     const QString header = readProjectSourceFile(QStringLiteral("src/gui/dialogs/MatchPairSelectorDialog.h"));
@@ -11266,6 +12395,15 @@ TEST(MatchPairSelectorCatalogTest, UsesCatalogGroupsAndPassesVariantsToViewer)
     EXPECT_TRUE(header.contains(QStringLiteral("QVector<xjw::pipeline::MatchVariant> variants;")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"MatchResultCatalog.h\"")));
     EXPECT_TRUE(source.contains(QStringLiteral("MatchResultCatalogConfig")));
+
+    const int parseStart = source.indexOf(QStringLiteral("MatchPairSelectorDialog::parseMatchDataForImageFromSnapshot"));
+    ASSERT_GE(parseStart, 0);
+    const int overlapStart = source.indexOf(QStringLiteral("MatchPairSelectorDialog::loadOverlapCandidatesForImage"),
+                                            parseStart);
+    ASSERT_GT(overlapStart, parseStart);
+    const QString parseBody = source.mid(parseStart, overlapStart - parseStart);
+    EXPECT_FALSE(parseBody.contains(QStringLiteral("config.targetImagePath = imagePath")))
+        << "The match selector progress bar must represent the whole match directory access, not the current image.";
     EXPECT_TRUE(source.contains(QStringLiteral(".scan()")));
     EXPECT_TRUE(source.contains(QStringLiteral("bestVariantIndex")));
     EXPECT_TRUE(source.contains(QStringLiteral("const QString base = imageBaseKey(imgPath);")));
@@ -13273,6 +14411,22 @@ TEST(VocabularyOverlapDialogTest, RetrievalRunsAsynchronously)
     ASSERT_GT(onExportIndex, onRunIndex);
     const QString onRunBody = source.mid(onRunIndex, onExportIndex - onRunIndex);
     EXPECT_FALSE(onRunBody.contains(QStringLiteral("VocabularyOverlapRetriever::retrieve")));
+}
+
+TEST(VocabularyOverlapDialogTest, WritesPairSourceTypesToJson)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    const int start = source.indexOf(QStringLiteral("bool writeOverlapOutputs"));
+    ASSERT_GE(start, 0);
+    const int end = source.indexOf(QStringLiteral("VocabularyOverlapDialog::RunResult runVocabularyOverlapRequest"),
+                                   start);
+    ASSERT_GT(end, start);
+    const QString body = source.mid(start, end - start);
+
+    EXPECT_TRUE(body.contains(QStringLiteral("source_types")));
+    EXPECT_TRUE(body.contains(QStringLiteral("pair.sourceTypes")));
 }
 
 TEST(VocabularyOverlapDialogTest, SupportsCameraModelModeAndStatusProgress)

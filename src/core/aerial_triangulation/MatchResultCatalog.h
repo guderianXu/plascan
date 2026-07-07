@@ -2,7 +2,10 @@
 
 #include <QDateTime>
 #include <QString>
+#include <QStringList>
 #include <QVector>
+
+#include <functional>
 
 namespace xjw
 {
@@ -38,6 +41,12 @@ struct MatchPairGroup
 struct MatchResultCatalogConfig
 {
     QString matchDirectory;
+    // 仅构建包含该影像的匹配目录索引；为空时扫描全部匹配结果。
+    QString targetImagePath;
+    // 仅构建两端都属于当前影像集合的匹配目录索引；空三前置检查用于跳过历史工程残留匹配。
+    QStringList targetImagePaths;
+    // 扫描 .match 文件时上报 processed/total，用于 GUI 展示真实百分比。
+    std::function<void(int processed, int total)> progressCallback;
 };
 
 struct MatchResultCatalogSummary

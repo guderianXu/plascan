@@ -36,6 +36,11 @@
 #include <gtest/gtest.h>
 
 #include <QDir>
+#include <QFile>
+#include <QFileInfo>
+#include <QJsonArray>
+#include <QJsonDocument>
+#include <QJsonObject>
 #include <QTemporaryDir>
 
 namespace
@@ -109,6 +114,7 @@ TEST(TiePointTrackManagerTest, BuildsFinalMultiviewTracksFromVerifiedPairMatches
                                               {cv::Point2f(14.0f, 12.0f), cv::Point2f(92.0f, 92.0f)});
 
     xjw::matchphotos::MatchPhotosContext context;
+    context.workingDirectory = tempDir.path();
     context.pairInput.images = QStringList{image0, image1, image2};
 
     xjw::matchphotos::MatchPhotosOptions options;
@@ -132,4 +138,56 @@ TEST(TiePointTrackManagerTest, BuildsFinalMultiviewTracksFromVerifiedPairMatches
     EXPECT_EQ(result.tracks.front().length(), 3u);
     EXPECT_EQ(result.trackSummary.value(QStringLiteral("tracks")).toInt(), 1);
     EXPECT_EQ(result.acceptedComponents, 1);
+    ASSERT_FALSE(result.tiePointPath.isEmpty());
+    ASSERT_TRUE(QFileInfo::exists(result.tiePointPath)) << qPrintable(result.tiePointPath);
+
+    QFile file(result.tiePointPath);
+    ASSERT_TRUE(file.open(QIODevice::ReadOnly));
+    const QJsonObject stored = QJsonDocument::fromJson(file.readAll()).object();
+    EXPECT_EQ(stored.value(QStringLiteral("format")).toString(), QStringLiteral("plascan_tie_points"));
+    EXPECT_EQ(stored.value(QStringLiteral("track_count")).toInt(), 1);
+    EXPECT_EQ(stored.value(QStringLiteral("summary")).toObject().value(QStringLiteral("tracks")).toInt(), 1);
+    const QJsonArray tracks = stored.value(QStringLiteral("tracks")).toArray();
+    ASSERT_EQ(tracks.size(), 1);
+    EXPECT_EQ(tracks.at(0).toObject().value(QStringLiteral("observations")).toArray().size(), 3);
+}
+
+TEST(TiePointTrackManagerTest, FailsWhenNoFinalTiePointTracksAreBuilt)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString image0 = QDir(tempDir.path()).filePath(QStringLiteral("image0.png"));
+    const QString image1 = QDir(tempDir.path()).filePath(QStringLiteral("image1.png"));
+
+    const QString feature0 = writeFeatureFile(tempDir.path(),
+                                              QStringLiteral("image0.sift"),
+                                              QStringLiteral("image0.png"),
+                                              {cv::Point2f(10.0f, 10.0f)});
+    const QString feature1 = writeFeatureFile(tempDir.path(),
+                                              QStringLiteral("image1.sift"),
+                                              QStringLiteral("image1.png"),
+                                              {cv::Point2f(10.2f, 10.1f)});
+
+    xjw::matchphotos::MatchPhotosContext context;
+    context.workingDirectory = tempDir.path();
+    context.pairInput.images = QStringList{image0, image1};
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.enableGeometryVerification = true;
+    options.excludeStationaryTiePoints = true;
+    options.stationaryTiePointMaxPixelMotion = 1.0f;
+
+    const std::vector<xjw::matchphotos::MatchPhotosMatchRecord> records{
+        makeMatchRecord(image0, image1, feature0, feature1, true, {{0, 0}}),
+    };
+
+    const xjw::matchphotos::TiePointTrackManager manager;
+    const xjw::matchphotos::TiePointTrackBuildResult result =
+        manager.build(context, options, records);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("连接点")));
+    EXPECT_TRUE(result.tracks.empty());
+    EXPECT_TRUE(result.tiePointPath.isEmpty());
 }

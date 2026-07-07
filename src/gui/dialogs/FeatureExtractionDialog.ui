@@ -717,7 +717,7 @@ GUI 应用通常建议启用以提高容错性</string>
            <widget class="QLineEdit" name="m_pythonPathEdit">
             <property name="toolTip">
              <string>兼容旧 Python 提取脚本时使用；当前 GUI 默认使用 C++ TorchScript 模型路径
-留空时按 PLASCAN_PYTHON_EXECUTABLE、VIRTUAL_ENV、CONDA_PREFIX、plascan 环境、PATH 顺序选择</string>
+留空时按 PLASCAN_PYTHON_EXECUTABLE、PLASCAN_PYTHON、项目 .venv、VIRTUAL_ENV、CONDA_PREFIX、PATH 顺序选择</string>
             </property>
             <property name="placeholderText">
              <string>Python 可执行文件路径（留空自动选择）</string>

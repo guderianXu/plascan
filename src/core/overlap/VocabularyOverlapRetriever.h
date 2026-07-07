@@ -1,5 +1,7 @@
 #pragma once
 
+#include "OverlapPairGraphPlanner.h"
+
 #include <opencv2/core.hpp>
 #include <opencv2/core/types.hpp>
 
@@ -24,9 +26,16 @@ struct VocabularyOverlapConfig
     int maxTrainingDescriptors = 50000;
     int maxVocabularyWords = 4096;
     int topK = 8;
+    int minPairsPerImage = 4;
     double minSimilarity = 0.05;
     bool useTfidf = true;
     bool mutualTopK = true;
+    bool keepOneWayTopK = true;
+    bool connectComponents = true;
+    bool useSequenceFallback = true;
+    int sequenceWindow = 1;
+    bool closeSequenceLoop = true;
+    int componentBridgeMaxPairs = 0;
     bool geometryCheck = false;
     int minInliers = 30;
     double ransacThreshold = 3.0;
@@ -50,6 +59,7 @@ struct VocabularyOverlapPairResult
     int geometricInliers = 0;
     bool accepted = false;
     std::string rejectReason;
+    std::vector<std::string> sourceTypes;
 };
 
 struct VocabularyOverlapResult

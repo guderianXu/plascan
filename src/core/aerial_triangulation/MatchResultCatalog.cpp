@@ -88,6 +88,45 @@ bool unorderedImageTokensMatch(const QString &headerA,
                          imageTokensReferToSameImage(headerB, sidecarA);
     return direct || reverse;
 }
+bool pairContainsImageToken(const QString &imageA,
+                            const QString &imageB,
+                            const QString &targetImagePath)
+{
+    if (targetImagePath.trimmed().isEmpty())
+    {
+        return true;
+    }
+
+    return imageTokensReferToSameImage(imageA, targetImagePath) ||
+           imageTokensReferToSameImage(imageB, targetImagePath);
+}
+bool imageTokenInSet(const QString &imageToken, const QStringList &targetImagePaths)
+{
+    if (imageToken.trimmed().isEmpty())
+    {
+        return false;
+    }
+    for (const QString &targetImagePath : targetImagePaths)
+    {
+        if (imageTokensReferToSameImage(imageToken, targetImagePath))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+bool pairBelongsToImageSet(const QString &imageA,
+                           const QString &imageB,
+                           const QStringList &targetImagePaths)
+{
+    if (targetImagePaths.isEmpty())
+    {
+        return true;
+    }
+
+    return imageTokenInSet(imageA, targetImagePaths) &&
+           imageTokenInSet(imageB, targetImagePaths);
+}
 bool readUtf8String(QDataStream &in, QString *value)
 {
     if (!value)
@@ -410,6 +449,14 @@ MatchVariant readVariant(const QFileInfo &matchInfo)
     variant.reason.clear();
     return variant;
 }
+bool variantContainsImageToken(const MatchVariant &variant, const QString &targetImagePath)
+{
+    return pairContainsImageToken(variant.imageA, variant.imageB, targetImagePath);
+}
+bool variantBelongsToImageSet(const MatchVariant &variant, const QStringList &targetImagePaths)
+{
+    return pairBelongsToImageSet(variant.imageA, variant.imageB, targetImagePaths);
+}
 bool variantIsBetter(const MatchVariant &candidate, const MatchVariant &current)
 {
     if (candidate.geometricVerifiedInliers != current.geometricVerifiedInliers)
@@ -508,21 +555,77 @@ MatchResultCatalogSummary MatchResultCatalog::scan() const
 {
     MatchResultCatalogSummary summary;
 
+    auto reportProgress = [this](int processed, int total)
+    {
+        if (_config.progressCallback)
+        {
+            _config.progressCallback(processed, total);
+        }
+    };
+
     const QDir matchDir(_config.matchDirectory);
     if (!matchDir.exists())
     {
+        reportProgress(0, 0);
         return summary;
     }
 
     const QFileInfoList matchFiles = matchDir.entryInfoList(QStringList{QStringLiteral("*.match")},
                                                             QDir::Files,
                                                             QDir::Name);
+    const int totalFileCount = matchFiles.size();
+    int processedFileCount = 0;
+    reportProgress(processedFileCount, totalFileCount);
+
+    auto finishCurrentFile = [&]()
+    {
+        ++processedFileCount;
+        reportProgress(processedFileCount, totalFileCount);
+    };
+
     QMap<QString, int> groupIndexByKey;
+    const QString targetImagePath = _config.targetImagePath.trimmed();
+    QStringList targetImagePaths;
+    for (const QString &imagePath : _config.targetImagePaths)
+    {
+        if (!imagePath.trimmed().isEmpty())
+        {
+            targetImagePaths.append(imagePath);
+        }
+    }
 
     for (const QFileInfo &matchInfo : matchFiles)
     {
-        ++summary.matchFileCount;
+        // 影像选择器和空三前置检查只关心局部影像集合。
+        // 先读轻量 SGMT 头，避免为无关匹配解析巨大的 sidecar JSON。
+        if (!targetImagePath.isEmpty() || !targetImagePaths.isEmpty())
+        {
+            const SgmtHeader header = readSgmtHeader(matchInfo.absoluteFilePath());
+            if (header.ok && !pairContainsImageToken(header.imageA, header.imageB, targetImagePath))
+            {
+                finishCurrentFile();
+                continue;
+            }
+            if (header.ok && !pairBelongsToImageSet(header.imageA, header.imageB, targetImagePaths))
+            {
+                finishCurrentFile();
+                continue;
+            }
+        }
+
         MatchVariant variant = readVariant(matchInfo);
+        if (!targetImagePath.isEmpty() && !variantContainsImageToken(variant, targetImagePath))
+        {
+            finishCurrentFile();
+            continue;
+        }
+        if (!targetImagePaths.isEmpty() && !variantBelongsToImageSet(variant, targetImagePaths))
+        {
+            finishCurrentFile();
+            continue;
+        }
+
+        ++summary.matchFileCount;
         ++summary.variantCount;
         if (variant.compatible)
         {
@@ -552,6 +655,7 @@ MatchResultCatalogSummary MatchResultCatalog::scan() const
         }
 
         summary.pairGroups[groupIndex].variants.append(variant);
+        finishCurrentFile();
     }
 
     for (MatchPairGroup &group : summary.pairGroups)

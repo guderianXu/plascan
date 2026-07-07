@@ -41,6 +41,9 @@ struct MatchPhotosOptions
     // 阶段层后续会把这些字符串转换为具体实现。
     QString featureAlgorithm = QStringLiteral("sift");
     QString matcherAlgorithm = QStringLiteral("lightglue");
+    // 蒙版应用阶段：none=不使用，keypoints=提取后过滤关键点，tiepoints=匹配后过滤连接点。
+    // 项目蒙版约定为 0 表示有效区域，非 0 表示排除区域。
+    QString maskApplyMode = QStringLiteral("none");
 
     int maxImageDim = 2048;
     int maxKeypoints = 0;

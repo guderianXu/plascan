@@ -91,6 +91,8 @@ private:
     void restoreProjectDockState(const QJsonObject &settings);
     void ensureRequiredProjectDocksVisible();
     void persistCurrentUiSettings();
+    void scheduleProjectMetadataRefresh(const QJsonObject &meta);
+    void scheduleProjectUiHydration(const QString &plascanPath);
     // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
     // 参数: partial - 仅包含需更新键值对的 JSON 对象
     void saveUiSetting(const QJsonObject &partial);
@@ -141,10 +143,14 @@ public:
     TaskStatusWidget* _dmTaskStatus{};                  // 密集匹配状态栏任务状态
     TaskStatusWidget* _overlapTaskStatus{};             // 重叠对获取状态栏任务状态
     TaskStatusWidget* _obsNetTaskStatus{};              // 观测网络状态栏任务状态
+    TaskStatusWidget* _maskTaskStatus{};                // 照片蒙版生成状态栏任务状态
     QDockWidget*      _logDock{};                      // 日志 Dock 窗口容器
     DialogSettingStore*   _featureMatchingSetting{};   // 特征匹配对话框记忆化设置
     DialogSettingStore*   _uiSetting{};                // 主窗口 UI 状态记忆化设置
     bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
+    bool _metadataRefreshQueued{};                     // 已有 metadataChanged 刷新任务排队
+    int _metadataRefreshGeneration{};                  // 丢弃过期的延迟刷新任务
+    QJsonObject _pendingMetadataRefresh;               // 最近一次待刷新的项目元数据
     
     QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
 
@@ -219,6 +225,9 @@ private slots:
     // 观测网络进度状态栏更新
     void onObsNetProgress(const QString &stage, int percent);
     void onObsNetFinished(bool success);
+    // 照片蒙版生成进度状态栏更新
+    void onMaskGenerationProgress(const QString &stage, int done, int total);
+    void onMaskGenerationFinished(bool success);
     // onClearRecentRequested: 用户请求清空最近文件列表时触发的响应函数 用户请求清空最近打开列表，弹确认框后执行
     void onClearRecentRequested();
 

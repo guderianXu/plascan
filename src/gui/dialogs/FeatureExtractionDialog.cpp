@@ -3,6 +3,7 @@
 
 #include "FeatureExtractionDialog.h"
 #include "ui_FeatureExtractionDialog.h"
+#include "model/TorchScriptModelResolver.h"
 
 #include <QAbstractItemView>
 #include <QListWidget>
@@ -13,11 +14,9 @@
 #include <QSpinBox>
 #include <QDoubleSpinBox>
 #include <QCheckBox>
-#include <QCoreApplication>
 #include <QDir>
 #include <QGroupBox>
 #include <QFileDialog>
-#include <QFile>
 #include <QFileInfo>
 #include <QFormLayout>
 #include <QLabel>
@@ -66,35 +65,8 @@ int grayscalePixelSetting(const QJsonObject &settings,
 
 QString findModelFile(const QString &modelName)
 {
-    QStringList candidates;
-
-    const QString envModelDir = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
-    if (!envModelDir.isEmpty())
-    {
-        candidates.append(QDir(envModelDir).filePath(modelName));
-    }
-
-#ifdef PLASCAN_SOURCE_DIR
-    candidates.append(
-        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("resources/models/%1").arg(modelName)));
-#endif
-
-    const QString exePath = QCoreApplication::applicationDirPath();
-    candidates.append(QDir(exePath).filePath(QStringLiteral("../models/%1").arg(modelName)));
-    candidates.append(QDir(exePath).filePath(QStringLiteral("../resources/models/%1").arg(modelName)));
-    candidates.append(QDir(exePath).filePath(QStringLiteral("../../resources/models/%1").arg(modelName)));
-    candidates.append(QDir::current().filePath(QStringLiteral("resources/models/%1").arg(modelName)));
-    candidates.append(QDir::current().filePath(QStringLiteral("models/%1").arg(modelName)));
-
-    for (const QString &candidate : candidates)
-    {
-        if (QFile::exists(candidate))
-        {
-            return QDir::cleanPath(QFileInfo(candidate).absoluteFilePath());
-        }
-    }
-
-    return QString();
+    const xjw::common::model::TorchScriptModelResolver resolver;
+    return resolver.findModel(modelName);
 }
 
 QStringList modelCandidates(const QString &algorithm, bool useCuda)

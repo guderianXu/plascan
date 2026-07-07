@@ -10,6 +10,7 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QJsonObject>
+#include <QPair>
 #include <QSet>
 #include <QTemporaryDir>
 
@@ -190,6 +191,138 @@ TEST(MatchResultCatalogTest, GroupsAlgorithmVariantsForSameImagePair)
     EXPECT_EQ(best.geometricVerifiedInliers, 45);
     EXPECT_TRUE(best.compatible);
     EXPECT_EQ(best.status, QStringLiteral("compatible"));
+}
+
+TEST(MatchResultCatalogTest, TargetImagePathFiltersUnrelatedVariantsBeforeParsingSidecars)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString targetA = QDir(tempDir.path()).filePath(QStringLiteral("target_A.tif"));
+    const QString targetB = QDir(tempDir.path()).filePath(QStringLiteral("target_B.tif"));
+    const QString unrelatedC = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_C.tif"));
+    const QString unrelatedD = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_D.tif"));
+
+    const QString targetPath = writeSgmtMatch(tempDir.path(),
+                                             QStringLiteral("target_A__target_B_lightglue.match"),
+                                             targetA,
+                                             targetB,
+                                             64);
+    writeSidecar(targetPath, targetA, targetB, QStringLiteral("disk"), QStringLiteral("lightglue"), 64, 32);
+
+    const QString unrelatedPath = writeSgmtMatch(tempDir.path(),
+                                                QStringLiteral("unrelated_C__unrelated_D_lightglue.match"),
+                                                unrelatedC,
+                                                unrelatedD,
+                                                96);
+    QFile unrelatedSidecar(unrelatedPath + QStringLiteral(".json"));
+    ASSERT_TRUE(unrelatedSidecar.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    unrelatedSidecar.write("{ not valid json");
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = tempDir.path();
+    config.targetImagePath = targetA;
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+
+    EXPECT_EQ(summary.matchFileCount, 1);
+    EXPECT_EQ(summary.variantCount, 1);
+    EXPECT_EQ(summary.compatibleVariantCount, 1);
+    EXPECT_EQ(summary.incompatibleVariantCount, 0);
+    ASSERT_EQ(summary.pairGroups.size(), 1);
+    EXPECT_NE(findGroup(summary, targetA, targetB), nullptr);
+    EXPECT_EQ(findGroup(summary, unrelatedC, unrelatedD), nullptr);
+}
+
+TEST(MatchResultCatalogTest, TargetImagePathsFilterCurrentProjectPairsBeforeParsingSidecars)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("project_A.tif"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("project_B.tif"));
+    const QString unrelatedC = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_C.tif"));
+    const QString unrelatedD = QDir(tempDir.path()).filePath(QStringLiteral("unrelated_D.tif"));
+
+    const QString projectPath = writeSgmtMatch(tempDir.path(),
+                                               QStringLiteral("project_A__project_B_lightglue.match"),
+                                               imageA,
+                                               imageB,
+                                               48);
+    writeSidecar(projectPath, imageA, imageB, QStringLiteral("sift"), QStringLiteral("lightglue"), 48, 24);
+
+    const QString unrelatedPath = writeSgmtMatch(tempDir.path(),
+                                                 QStringLiteral("unrelated_C__unrelated_D_lightglue.match"),
+                                                 unrelatedC,
+                                                 unrelatedD,
+                                                 96);
+    QFile unrelatedSidecar(unrelatedPath + QStringLiteral(".json"));
+    ASSERT_TRUE(unrelatedSidecar.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    unrelatedSidecar.write("{ not valid json");
+
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = tempDir.path();
+    config.targetImagePaths = QStringList{imageA, imageB};
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+
+    EXPECT_EQ(summary.matchFileCount, 1);
+    EXPECT_EQ(summary.variantCount, 1);
+    EXPECT_EQ(summary.compatibleVariantCount, 1);
+    EXPECT_EQ(summary.incompatibleVariantCount, 0);
+    ASSERT_EQ(summary.pairGroups.size(), 1);
+    EXPECT_NE(findGroup(summary, imageA, imageB), nullptr);
+    EXPECT_EQ(findGroup(summary, unrelatedC, unrelatedD), nullptr);
+}
+
+TEST(MatchResultCatalogTest, ReportsScanProgressForEveryEnumeratedMatchFile)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("progress_A.tif"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("progress_B.tif"));
+    const QString imageC = QDir(tempDir.path()).filePath(QStringLiteral("progress_C.tif"));
+
+    const QString pathAB = writeSgmtMatch(tempDir.path(),
+                                          QStringLiteral("progress_A__progress_B_lightglue.match"),
+                                          imageA,
+                                          imageB,
+                                          10);
+    writeSidecar(pathAB, imageA, imageB, QStringLiteral("sift"), QStringLiteral("lightglue"), 10, 8);
+    const QString pathAC = writeSgmtMatch(tempDir.path(),
+                                          QStringLiteral("progress_A__progress_C_lightglue.match"),
+                                          imageA,
+                                          imageC,
+                                          12);
+    writeSidecar(pathAC, imageA, imageC, QStringLiteral("sift"), QStringLiteral("lightglue"), 12, 9);
+    const QString pathBC = writeSgmtMatch(tempDir.path(),
+                                          QStringLiteral("progress_B__progress_C_lightglue.match"),
+                                          imageB,
+                                          imageC,
+                                          14);
+    writeSidecar(pathBC, imageB, imageC, QStringLiteral("sift"), QStringLiteral("lightglue"), 14, 11);
+
+    QVector<QPair<int, int>> progress;
+    xjw::pipeline::MatchResultCatalogConfig config;
+    config.matchDirectory = tempDir.path();
+    config.progressCallback = [&](int processed, int total)
+    {
+        progress.append(qMakePair(processed, total));
+    };
+
+    const xjw::pipeline::MatchResultCatalogSummary summary =
+        xjw::pipeline::MatchResultCatalog(config).scan();
+
+    EXPECT_EQ(summary.matchFileCount, 3);
+    ASSERT_GE(progress.size(), 4);
+    EXPECT_EQ(progress.first(), qMakePair(0, 3));
+    EXPECT_EQ(progress.last(), qMakePair(3, 3));
+    for (int i = 1; i < progress.size(); ++i)
+    {
+        EXPECT_EQ(progress.at(i).second, 3);
+        EXPECT_GE(progress.at(i).first, progress.at(i - 1).first);
+    }
 }
 
 TEST(MatchResultCatalogTest, SelectsBestVariantByInliersThenMatchesThenModifiedTime)

@@ -49,6 +49,19 @@ QString resolvedExecutablePath(const QString &candidate)
     return resolved.isEmpty() ? QString() : QDir::cleanPath(QFileInfo(resolved).absoluteFilePath());
 }
 
+QString repoLocalPythonExecutable()
+{
+#ifdef PLASCAN_SOURCE_DIR
+#ifdef Q_OS_WIN
+    return QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral(".venv/Scripts/python.exe"));
+#else
+    return QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral(".venv/bin/python"));
+#endif
+#else
+    return QString();
+#endif
+}
+
 QString pythonExecutable()
 {
     static const QString cached = []()
@@ -56,6 +69,7 @@ QString pythonExecutable()
         QStringList candidates;
         candidates << qEnvironmentVariable("PLASCAN_PYTHON_EXECUTABLE").trimmed()
                    << qEnvironmentVariable("PLASCAN_PYTHON").trimmed()
+                   << repoLocalPythonExecutable()
                    << qEnvironmentVariable("PYTHON").trimmed()
                    << QStringLiteral("python3")
                    << QStringLiteral("python");

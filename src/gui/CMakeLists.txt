@@ -133,6 +133,7 @@ target_link_libraries(plascan_gui PRIVATE
   Qt6::ShaderTools
   plascan_common_log
   plascan_common_io
+  plascan_common_model
   ${TORCH_LIBRARIES}
   ${OpenCV_LIBS}
   ${PLASCAN_LIBZIP_TARGET}

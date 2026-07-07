@@ -129,6 +129,15 @@ std::uint64_t pairKey(int indexA, int indexB)
            static_cast<std::uint32_t>(indexB);
 }
 
+bool validPair(int imageCount, int indexA, int indexB)
+{
+    return indexA >= 0 &&
+           indexB >= 0 &&
+           indexA < imageCount &&
+           indexB < imageCount &&
+           indexA != indexB;
+}
+
 std::pair<int, int> decodePairKey(std::uint64_t key)
 {
     return {
@@ -634,6 +643,17 @@ std::vector<std::uint64_t> selectTopCandidatePairs(const PairScoreMap &pairScore
     return selected;
 }
 
+std::vector<std::string> sourceIds(const std::vector<xjw::OverlapPairGraphSource> &sources)
+{
+    std::vector<std::string> ids;
+    ids.reserve(sources.size());
+    for (xjw::OverlapPairGraphSource source : sources)
+    {
+        ids.emplace_back(xjw::overlapPairGraphSourceId(source));
+    }
+    return ids;
+}
+
 } // namespace
 
 namespace xjw {
@@ -810,34 +830,93 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
     const bool use_inverted_index = config.useInvertedIndex;
     PairScoreMap pair_scores = use_inverted_index
         ? buildPairScoresInverted(histograms, word_presence, thread_count)
-        : buildPairScoresDense(histograms, word_presence, config.minSimilarity, thread_count);
-
-    std::vector<std::uint64_t> selected_pair_keys = selectTopCandidatePairs(pair_scores,
-                                                                            image_count,
-                                                                            config.topK,
-                                                                            config.minSimilarity,
-                                                                            config.mutualTopK);
+        : buildPairScoresDense(histograms, word_presence, 0.0, thread_count);
 
     std::vector<VocabularyOverlapPairResult> candidates;
-    candidates.reserve(selected_pair_keys.size());
-    for (std::uint64_t key : selected_pair_keys)
+    candidates.reserve(pair_scores.size());
+    std::unordered_map<std::uint64_t, std::size_t> candidate_index_by_key;
+    std::vector<OverlapPairGraphInputEdge> planner_input;
+    planner_input.reserve(pair_scores.size());
+    for (const auto &score_entry : pair_scores)
     {
-        const auto score_it = pair_scores.find(key);
-        if (score_it == pair_scores.end())
+        if (score_entry.second.score <= 0.0)
         {
             continue;
         }
-        const auto [i, j] = decodePairKey(key);
+        const auto [i, j] = decodePairKey(score_entry.first);
 
         VocabularyOverlapPairResult pair;
         pair.indexA = i;
         pair.indexB = j;
         pair.imagePathA = images[static_cast<std::size_t>(i)].imagePath;
         pair.imagePathB = images[static_cast<std::size_t>(j)].imagePath;
-        pair.bowScore = score_it->second.score;
-        pair.sharedWordCount = score_it->second.sharedWordCount;
-        pair.accepted = true;
+        pair.bowScore = score_entry.second.score;
+        pair.sharedWordCount = score_entry.second.sharedWordCount;
+        pair.accepted = false;
+        candidate_index_by_key.insert({score_entry.first, candidates.size()});
         candidates.push_back(std::move(pair));
+
+        OverlapPairGraphInputEdge graph_edge;
+        graph_edge.indexA = i;
+        graph_edge.indexB = j;
+        graph_edge.bowScore = score_entry.second.score;
+        graph_edge.sharedWordCount = score_entry.second.sharedWordCount;
+        planner_input.push_back(graph_edge);
+    }
+
+    OverlapPairGraphPlannerOptions planner_options;
+    planner_options.imageCount = image_count;
+    planner_options.topK = config.topK;
+    planner_options.minPairsPerImage = config.minPairsPerImage;
+    planner_options.minSimilarity = config.minSimilarity;
+    planner_options.mutualTopK = config.mutualTopK;
+    planner_options.keepOneWayTopK = config.keepOneWayTopK;
+    planner_options.connectComponents = config.connectComponents;
+    planner_options.useSequenceFallback = config.useSequenceFallback;
+    planner_options.sequenceWindow = config.sequenceWindow;
+    planner_options.closeSequenceLoop = config.closeSequenceLoop;
+    planner_options.componentBridgeMaxPairs = config.componentBridgeMaxPairs;
+    const OverlapPairGraphPlan graph_plan = OverlapPairGraphPlanner::plan(planner_input, planner_options);
+
+    for (const OverlapPairGraphEdge &edge : graph_plan.edges)
+    {
+        if (!validPair(image_count, edge.indexA, edge.indexB))
+        {
+            continue;
+        }
+
+        const std::uint64_t key = pairKey(edge.indexA, edge.indexB);
+        auto candidate_it = candidate_index_by_key.find(key);
+        if (candidate_it == candidate_index_by_key.end())
+        {
+            VocabularyOverlapPairResult pair;
+            pair.indexA = std::min(edge.indexA, edge.indexB);
+            pair.indexB = std::max(edge.indexA, edge.indexB);
+            pair.imagePathA = images[static_cast<std::size_t>(pair.indexA)].imagePath;
+            pair.imagePathB = images[static_cast<std::size_t>(pair.indexB)].imagePath;
+            pair.bowScore = edge.bowScore;
+            pair.sharedWordCount = edge.sharedWordCount;
+            pair.geometricInliers = edge.geometricInliers;
+            pair.accepted = true;
+            pair.sourceTypes = sourceIds(edge.sources);
+            candidate_index_by_key.insert({key, candidates.size()});
+            candidates.push_back(std::move(pair));
+        }
+        else
+        {
+            VocabularyOverlapPairResult &pair = candidates[candidate_it->second];
+            pair.accepted = true;
+            pair.rejectReason.clear();
+            pair.sourceTypes = sourceIds(edge.sources);
+        }
+    }
+
+    for (VocabularyOverlapPairResult &pair : candidates)
+    {
+        if (!pair.accepted && pair.rejectReason.empty())
+        {
+            pair.rejectReason = "not_selected_by_pair_graph_planner";
+        }
     }
 
     auto pair_sort = [](const VocabularyOverlapPairResult &lhs, const VocabularyOverlapPairResult &rhs) {
@@ -860,19 +939,30 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
             return false;
         }
 
+        const int accepted_candidate_count =
+            static_cast<int>(std::count_if(candidates.begin(), candidates.end(), [](const auto &pair) {
+                return pair.accepted;
+            }));
         const int geometry_limit = config.geometryMaxCandidatePairs <= 0
-            ? static_cast<int>(candidates.size())
-            : std::min(config.geometryMaxCandidatePairs, static_cast<int>(candidates.size()));
+            ? accepted_candidate_count
+            : std::min(config.geometryMaxCandidatePairs, accepted_candidate_count);
 
+        int verified_candidate_count = 0;
         for (int idx = 0; idx < static_cast<int>(candidates.size()); ++idx)
         {
             VocabularyOverlapPairResult &pair = candidates[static_cast<std::size_t>(idx)];
-            if (idx >= geometry_limit)
+            if (!pair.accepted)
+            {
+                continue;
+            }
+
+            if (verified_candidate_count >= geometry_limit)
             {
                 pair.accepted = false;
                 pair.rejectReason = "超出几何验证候选上限";
                 continue;
             }
+            ++verified_candidate_count;
 
             pair.geometricInliers = geometryInlierCount(images[static_cast<std::size_t>(pair.indexA)],
                                                         images[static_cast<std::size_t>(pair.indexB)],
@@ -910,6 +1000,7 @@ bool VocabularyOverlapRetriever::retrieve(const std::vector<VocabularyImageFeatu
            << " vocabulary=" << result->vocabularySize
            << " candidates=" << result->candidates.size()
            << " accepted=" << result->acceptedPairs.size()
+           << ' ' << graph_plan.detail
            << " assignment=" << (used_flann_assignment ? "flann" : "brute")
            << " pair_scoring=" << (use_inverted_index ? "inverted" : "dense")
            << " threads=" << thread_count

@@ -20,6 +20,7 @@
 #include <QStandardPaths>
 #include "MainWindow.h"
 #include "Logger.h"
+#include "PythonRuntimeBinding.h"
 // 抑制 libtiff 读取 GDAL 写入的 GeoTIFF 时产生的 tag 42113 (GDAL_NODATA) 警告
 #include <tiffio.h>
 
@@ -119,6 +120,8 @@ int main(int argc, char *argv[])
 
     // 创建 Qt 应用程序对象，必须在任何 Qt 对象之前创建
     SafeApplication app(argc, argv);
+    PythonRuntimeBinding::bindPythonRuntime(QStringLiteral(PLASCAN_SOURCE_DIR),
+                                            QCoreApplication::applicationDirPath());
     applyApplicationStyle(app);
 
     // GNOME/桌面集成 — 必须与 .desktop 文件名一致

@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-07-06。
+行星表面摄影测量处理系统。最后更新: 2026-07-07。
 
 ## 顶层目录
 
@@ -8,7 +8,7 @@
 plascan/
 ├── src/            # 所有源代码
 │   ├── common/     # 通用工具库 (日志, 数学, 空间索引)
-│   ├── core/       # 核心算法库 (相机, 特征, 匹配, SfM, MVS, LiDAR, 网格, 地形, 密集匹配)
+│   ├── core/       # 核心算法库 (相机, 特征, 匹配, SfM, MVS, LiDAR, 蒙版, 网格, 地形, 密集匹配)
 │   └── gui/        # Qt6 图形界面
 ├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
 ├── 3rdparty/       # 第三方库源码 (LightGlue)
@@ -47,6 +47,10 @@ common/
 │   └── Vec3Ops.h           # 3D 向量特化
 ├── io/
 │   └── PathIO.h/cpp        # UTF-8/本机路径转换、原子文件写入和 OpenCV 图像读写封装
+├── model/
+│   ├── TorchScriptModelResolver.h/cpp # 模型搜索路径解析（PLASCAN_MODEL_DIR、源码树和安装目录）
+│   ├── Sam21ModelCatalog.h/cpp # SAM2.1 checkpoint / TorchScript 文件名和安装状态
+│   └── U2NetModelCatalog.h/cpp # U2Net ONNX 文件名和安装状态
 ├── project/
 │   └── ProjectCommonUtils.h # 项目通用工具
 ├── result/
@@ -113,6 +117,7 @@ core/
 │
 ├── overlap/                    # 重叠度分析
 │   ├── OverlapAnalyzer.h/cpp   # 影像对重叠区域计算
+│   ├── OverlapPairGraphPlanner.h/cpp # 无相机词汇召回后的连通影像对图规划
 │   ├── VocabularyOverlapRetriever.h/cpp  # 基于已提取特征描述子的词汇重叠对检索
 │   └── GroundBackProjector.h/cpp  # 地面投影
 │
@@ -130,7 +135,8 @@ core/
 │   │   ├── PairSelectionPolicy.h/cpp # 自动/全量/序列/手动等候选策略
 │   │   └── PairSelector.h/cpp       # 合并手动、全量、序列、相机重叠和词汇召回候选
 │   ├── runtime/
-│   │   └── MatchPhotosRuntime.h/cpp # 输出路径、LightGlue 模型查找、匹配 sidecar 写入
+│   │   ├── MatchPhotosRuntime.h/cpp # 输出路径、LightGlue 模型查找、匹配 sidecar 写入
+│   │   └── MatchPhotosMaskSupport.h/cpp # 连接点流程蒙版路径解析、关键点/连接点过滤
 │   ├── stages/
 │   │   ├── FeatureStage.h/cpp       # SIFT 特征提取/复用，输出 assets/ip/*.sift
 │   │   ├── MatchingStage.h/cpp      # SIFT + LightGlue 两两匹配，输出 assets/matches/*.match + JSON sidecar
@@ -148,6 +154,12 @@ core/
 │   ├── LaserConstraintTypes.h  # 点到面约束、地图采样和关联统计类型
 │   ├── LaserConstraintMap.h/cpp # PLY 点云读取、法线/曲率筛选、最近平面查询
 │   └── LaserConstraintAssociation.h/cpp # BA track 与 LiDAR 平面约束关联
+│
+├── mask/                       # 照片蒙版生成与合成
+│   ├── MaskGenerator.h/cpp     # 黑背景/亮度阈值蒙版、蒙版合成和轮廓提取
+│   ├── Sam21MaskGenerator.h/cpp # SAM2.1 TorchScript encoder/decoder 推理，支持 CPU/CUDA
+│   └── u2net/                  # U2Net ONNX 自动蒙版子模块
+│       └── U2NetMaskGenerator.h/cpp # OpenCV DNN 推理，CPU 可用、CUDA 取决于 OpenCV DNN 后端
 │
 ├── sfm/                        # Structure-from-Motion
 │   ├── common/SfmTypes.h       # SfM 公共类型

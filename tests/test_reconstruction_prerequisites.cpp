@@ -61,7 +61,7 @@ TEST(ReconstructionPrerequisiteReportTest, CompletedMatchingWithNoUsableEdgesReq
               QStringLiteral("inspect_match_quality"));
 }
 
-TEST(ReconstructionPrerequisiteReportTest, MissingFeaturesRequireManualPreparation)
+TEST(ReconstructionPrerequisiteReportTest, MissingFeaturesRequireTiePointPreparation)
 {
     ReconstructionPrerequisiteReport report;
     report.imageCount = 444;

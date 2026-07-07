@@ -22,6 +22,7 @@ public:
     bool saveProject() const;
     void closeProject() const;
     bool addPhoto() const;
+    bool selectImageFolder(QString *selectedFolder) const;
     bool addFolder() const;
 
 private:

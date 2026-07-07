@@ -38,7 +38,7 @@ struct AerialTriangulationWorkflowOptions
     bool guidedImageMatching = false;
     bool adaptiveCameraModelFitting = false;
 
-    QString featureAlgorithm = QStringLiteral("disk");
+    QString featureAlgorithm = QStringLiteral("sift");
     QString matchAlgorithm = QStringLiteral("lightglue");
     QString matchPipeline;
     QString device = QStringLiteral("auto");

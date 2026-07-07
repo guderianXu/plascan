@@ -17,11 +17,11 @@
 #include "ProjectIO.h"
 #include "ProjectManager.h"
 #include "io/PathIO.h"
+#include "model/TorchScriptModelResolver.h"
 #include <QByteArray>
 #include <QDir>
 #include <QFileInfo>
 #include <QFile>
-#include <QCoreApplication>
 #include <QMetaObject>
 
 #include <memory>
@@ -59,33 +59,8 @@ bool useCudaFromConfig(const QJsonObject &config)
 
 QString findModelFile(const QString &modelName)
 {
-    QStringList candidates;
-
-    const QString envModelDir = qEnvironmentVariable("PLASCAN_MODEL_DIR").trimmed();
-    if (!envModelDir.isEmpty())
-    {
-        candidates.append(QDir(envModelDir).filePath(modelName));
-    }
-
-#ifdef PLASCAN_SOURCE_DIR
-    candidates.append(
-        QDir(QStringLiteral(PLASCAN_SOURCE_DIR)).filePath(QStringLiteral("resources/models/%1").arg(modelName)));
-#endif
-
-    const QString exePath = QCoreApplication::applicationDirPath();
-    candidates.append(QDir(exePath).filePath(QStringLiteral("../models/%1").arg(modelName)));
-    candidates.append(QDir(exePath).filePath(QStringLiteral("../resources/models/%1").arg(modelName)));
-    candidates.append(QDir(exePath).filePath(QStringLiteral("../../resources/models/%1").arg(modelName)));
-    candidates.append(QStringLiteral("models/%1").arg(modelName));
-
-    for (const QString &candidate : candidates)
-    {
-        if (QFile::exists(candidate))
-        {
-            return candidate;
-        }
-    }
-    return QString();
+    const xjw::common::model::TorchScriptModelResolver resolver;
+    return resolver.findModel(modelName);
 }
 
 QStringList extractorModelCandidates(const QString &algorithm, bool useCuda)
