@@ -1,5 +1,7 @@
 #include "BundleAdjustNativeCuda.h"
 
+#include "BundleAdjustNativeCudaWorkset.h"
+
 namespace xjw::detail
 {
 
@@ -46,6 +48,17 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.totalTracks = static_cast<int>(tracks.size());
     result.refinedCameras = cameras;
     result.points.resize(tracks.size());
+
+    const auto build = native_cuda::buildWorkset(cameras, tracks, options);
+    if (!build.ok)
+    {
+        result.backendMessage = build.message;
+        return result;
+    }
+
+    result.nativeCudaActiveCameras = static_cast<int>(build.workset.cameras.size());
+    result.nativeCudaActiveTracks = static_cast<int>(build.workset.points.size());
+    result.nativeCudaActiveObservations = static_cast<int>(build.workset.observations.size());
     result.backendMessage = "native_cuda 后端尚未完成求解路径";
     return result;
 }
