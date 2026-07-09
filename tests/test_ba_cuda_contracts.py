@@ -10,6 +10,9 @@ def read_text(relative_path: str) -> str:
 
 
 class BaCudaContractsTest(unittest.TestCase):
+    def read_text(self, relative_path: str) -> str:
+        return read_text(relative_path)
+
     def test_windows_cuda_build_enables_ceres_cuda_manifest_feature(self):
         script = read_text("scripts/build_win/build_windows_cuda.ps1")
 
@@ -69,6 +72,13 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn('opts.baOpt.minCeresCpuObservations', project_manager)
         self.assertIn('opts.baOpt.maxCeresPointOnlyObservations', project_manager)
         self.assertIn('opts.baOpt.enableBackendQualityGate', project_manager)
+
+    def test_native_cuda_backend_is_exposed(self):
+        header = self.read_text("src/core/bundle_adjust/BundleAdjust.h")
+        self.assertIn("NativeCuda", header)
+        self.assertIn("minNativeCudaCameras", header)
+        self.assertIn("minNativeCudaObservations", header)
+        self.assertIn("nativeCudaPcgIterations", header)
 
 
 if __name__ == "__main__":

@@ -43,3 +43,31 @@ TEST(BundleAdjustBackendSelectionTest, LargeProblemCanSelectCudaWhenAvailable)
     }
 }
 
+TEST(BundleAdjustBackendSelectionTest, NativeCudaBackendNameAndAutoThresholdsAreStable)
+{
+    EXPECT_STREQ(xjw::BundleAdjust::backendName(xjw::BABackend::NativeCuda), "native_cuda");
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = true;
+    options.minNativeCudaCameras = 3;
+    options.minNativeCudaObservations = 20;
+    options.minCeresCudaCameras = 1000;
+    options.minCeresCudaObservations = 1000000;
+    options.minCeresCpuObservations = 1000000;
+
+    xjw::BAProblemStats stats;
+    stats.cameraCount = 4;
+    stats.trackCount = 10;
+    stats.observationCount = 30;
+
+    const xjw::BABackend selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
+    if (xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::NativeCuda))
+    {
+        EXPECT_EQ(selected, xjw::BABackend::NativeCuda);
+    }
+    else
+    {
+        EXPECT_NE(selected, xjw::BABackend::NativeCuda);
+    }
+}

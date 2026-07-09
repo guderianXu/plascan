@@ -1506,6 +1506,8 @@ const char *BundleAdjust::backendName(BABackend backend)
         return "ceres_cpu";
     case BABackend::CeresCuda:
         return "ceres_cuda";
+    case BABackend::NativeCuda:
+        return "native_cuda";
     }
     return "unknown";
 }
@@ -1522,6 +1524,8 @@ bool BundleAdjust::isBackendAvailable(BABackend backend)
         return detail::isCeresBackendCompiled();
     case BABackend::CeresCuda:
         return detail::isCeresCudaBackendCompiled();
+    case BABackend::NativeCuda:
+        return false;
     }
     return false;
 }
@@ -1546,6 +1550,13 @@ BABackend BundleAdjust::selectBackendForProblem(const BAProblemStats &stats,
     if (!options.refineCameraPose)
     {
         return BABackend::LegacyCpu;
+    }
+    if (options.refineCameraPose &&
+        isBackendAvailable(BABackend::NativeCuda) &&
+        stats.cameraCount >= options.minNativeCudaCameras &&
+        stats.observationCount >= options.minNativeCudaObservations)
+    {
+        return BABackend::NativeCuda;
     }
     if (isBackendAvailable(BABackend::CeresCuda) &&
         stats.cameraCount >= std::max(1, options.minCeresCudaCameras) &&

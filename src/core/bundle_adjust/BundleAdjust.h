@@ -34,6 +34,7 @@ enum class BABackend
     LegacyCpu,
     CeresCpu,
     CeresCuda,
+    NativeCuda,
 };
 
 /**
@@ -192,6 +193,18 @@ struct BAOptions
     // ── Ceres/GPU 后端 ─────────────────────────────────────────────────────
     /// Ceres CUDA 求解使用的 GPU 设备 ID。当前仅在 Ceres 编译了 CUDA 支持时生效。
     int ceresCudaDevice = 0;
+    /// 自研 CUDA BA 使用的 GPU 设备 ID。
+    int nativeCudaDevice = 0;
+    /// 低于该相机数时 Auto 不选择 native_cuda，避免小问题 GPU 调度开销大于收益。
+    int minNativeCudaCameras = 50;
+    /// 低于该观测数时 Auto 不选择 native_cuda。
+    int minNativeCudaObservations = 500000;
+    /// native_cuda PCG 最大迭代次数。
+    int nativeCudaMaxPcgIterations = 100;
+    /// native_cuda PCG 相对残差阈值。
+    double nativeCudaPcgTolerance = 1e-4;
+    /// native_cuda 每个 LM step 允许的最大位姿增量范数。
+    double nativeCudaMaxPoseStepNorm = 1.0;
     /// 参考 COLMAP：问题太小时 GPU 数据搬运开销通常不划算，低于该相机数则回退 Ceres CPU。
     int minCeresCudaCameras = 50;
     /// 低于该观测数时，即使 CUDA 可用也优先使用 CPU，避免 GPU 调度/搬运开销大于收益。
@@ -256,6 +269,13 @@ struct BAResult
     double solveSeconds = 0.0;                         ///< 非线性求解主体耗时
     double totalSeconds = 0.0;                         ///< BA 后端总耗时
     int observationCount = 0;                          ///< 输入观测总数
+    int nativeCudaPcgIterations = 0;                   ///< native_cuda 累计 PCG 迭代次数
+    double nativeCudaLinearResidual = 0.0;             ///< native_cuda 最后一轮线性系统相对残差
+    int nativeCudaAcceptedSteps = 0;                   ///< native_cuda 接受的 LM trial step 数
+    int nativeCudaRejectedSteps = 0;                   ///< native_cuda 拒绝的 LM trial step 数
+    int nativeCudaActiveCameras = 0;                   ///< native_cuda 工作集中的活动相机数
+    int nativeCudaActiveTracks = 0;                    ///< native_cuda 工作集中的活动 track 数
+    int nativeCudaActiveObservations = 0;              ///< native_cuda 工作集中的活动观测数
 
     int totalTracks = 0;        ///< 输入轨迹总数
     int optimizedTracks = 0;    ///< 成功优化的轨迹数
