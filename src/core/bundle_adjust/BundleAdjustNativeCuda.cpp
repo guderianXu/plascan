@@ -1,5 +1,9 @@
 #include "BundleAdjustNativeCuda.h"
 
+#ifdef PLASCAN_BA_HAS_NATIVE_CUDA
+#  include "BundleAdjustNativeCudaKernels.cuh"
+#endif
+
 #include "BundleAdjustNativeCudaWorkset.h"
 
 namespace xjw::detail
@@ -59,6 +63,32 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.nativeCudaActiveCameras = static_cast<int>(build.workset.cameras.size());
     result.nativeCudaActiveTracks = static_cast<int>(build.workset.points.size());
     result.nativeCudaActiveObservations = static_cast<int>(build.workset.observations.size());
+
+#ifdef PLASCAN_BA_HAS_NATIVE_CUDA
+    auto workset = build.workset;
+    const native_cuda::KernelRunSummary summary =
+        native_cuda::runNativeCudaBundleAdjust(&workset,
+                                               options.nativeCudaDevice,
+                                               options.maxIterations,
+                                               options.nativeCudaMaxPcgIterations,
+                                               options.nativeCudaPcgTolerance,
+                                               options.huberDelta,
+                                               options.damping);
+    if (!summary.ok)
+    {
+        result.backendMessage = summary.message;
+        return result;
+    }
+
+    result.usedGpu = true;
+    result.nativeCudaPcgIterations = summary.pcgIterations;
+    result.nativeCudaLinearResidual = summary.linearResidual;
+    result.nativeCudaAcceptedSteps = summary.acceptedSteps;
+    result.nativeCudaRejectedSteps = summary.rejectedSteps;
+    result.backendMessage = "native_cuda kernel smoke path completed";
+    return result;
+#endif
+
     result.backendMessage = "native_cuda 后端尚未完成求解路径";
     return result;
 }

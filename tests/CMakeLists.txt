@@ -631,6 +631,20 @@ target_include_directories(test_bundle_adjust_native_cuda_math PRIVATE
 )
 gtest_discover_tests(test_bundle_adjust_native_cuda_math)
 
+add_executable(test_bundle_adjust_native_cuda_backend
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_native_cuda_backend.cpp
+)
+target_link_libraries(test_bundle_adjust_native_cuda_backend PRIVATE
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_native_cuda_backend PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_bundle_adjust_native_cuda_backend)
+
 add_executable(test_bundle_adjust_quality_gate
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_quality_gate.cpp
 )
