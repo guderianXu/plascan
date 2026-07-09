@@ -1718,6 +1718,25 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         BAResult result = detail::optimizePointsWithNativeCuda(cameras, tracks, options);
         result.requestedBackend = BABackend::NativeCuda;
         updateDerivedResultStats(result);
+        const bool nativeCudaFailed =
+            !result.usedGpu ||
+            result.optimizedTracks == 0 ||
+            !std::isfinite(result.meanRmsAfter);
+        if (nativeCudaFailed && options.allowBackendFallback)
+        {
+            const std::string message = result.backendMessage.empty()
+                                            ? "native_cuda 求解失败，已回退到 legacy_cpu"
+                                            : result.backendMessage + "，已回退到 legacy_cpu";
+            BAResult fallback = runLegacy(message);
+            fallback.setupSeconds += result.setupSeconds;
+            fallback.solveSeconds += result.solveSeconds;
+            fallback.totalSeconds += result.totalSeconds;
+            return fallback;
+        }
+        if (nativeCudaFailed && !options.allowBackendFallback && result.backendMessage.empty())
+        {
+            result.backendMessage = "native_cuda 求解失败，且当前禁止回退";
+        }
         return result;
     }
 

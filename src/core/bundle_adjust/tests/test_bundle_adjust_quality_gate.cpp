@@ -71,6 +71,48 @@ TEST(BundleAdjustQualityGateTest, AutoPointOnlyProblemUsesLegacyCpu)
               xjw::BABackend::LegacyCpu);
 }
 
+TEST(BundleAdjustQualityGateTest, AutoDoesNotSelectNativeCudaForPointOnlyProblem)
+{
+    xjw::BAProblemStats stats;
+    stats.cameraCount = 100;
+    stats.trackCount = 10000;
+    stats.observationCount = 1000000;
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.refineCameraPose = false;
+    options.minNativeCudaCameras = 1;
+    options.minNativeCudaObservations = 1;
+
+    const auto selected = xjw::BundleAdjust::selectBackendForProblem(stats, options);
+    EXPECT_NE(selected, xjw::BABackend::NativeCuda);
+}
+
+TEST(BundleAdjustQualityGateTest, ExplicitNativeCudaFallsBackWhenControlPointsEnabled)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+
+    xjw::BATrack track;
+    track.initialPoint = {{0.0, 0.0, 5.0}};
+    track.observations.push_back({0, 320.0, 240.0, 1.0});
+    track.observations.push_back({1, 300.0, 240.0, 1.0});
+    track.controlPointConstraints.push_back({{{0.0, 0.0, 5.0}}, 1.0, 1.0, 0});
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::NativeCuda;
+    options.enableControlPointConstraints = true;
+    options.allowBackendFallback = true;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+    EXPECT_EQ(result.requestedBackend, xjw::BABackend::NativeCuda);
+    EXPECT_NE(result.usedBackend, xjw::BABackend::NativeCuda);
+    EXPECT_TRUE(result.backendFallback);
+    EXPECT_FALSE(result.backendMessage.empty());
+}
+
 TEST(BundleAdjustQualityGateTest, AutoRejectsCeresCandidateWhenQualityGateFails)
 {
     if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
