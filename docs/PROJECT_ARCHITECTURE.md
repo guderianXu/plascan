@@ -148,7 +148,11 @@ core/
 │   └── tests/                       # matchphototask 模块级测试
 │
 ├── bundle_adjust/              # 光束法平差
-│   └── BundleAdjust.h/cpp      # BA 优化，可选 LiDAR 点到面、控制点和比例尺软约束
+│   ├── BundleAdjust.h/cpp      # BA 公共接口、自动后端选择、legacy CPU 后端调度、后端状态回传
+│   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，记录 dense Schur CPU/GPU、setup/solve 耗时和回退原因
+│   ├── BundleAdjustProjection.h # 与 Camera 一致的模板投影模型，供 Ceres AutoDiff 固定相机残差复用
+│   ├── tools/                  # BA 后端基准工具，例如 ba_backend_benchmark
+│   └── tests/                  # BA 模块级后端、投影模型、自动选择和约束回归测试
 │
 ├── lidar/                      # LiDAR / 激光点约束
 │   ├── LaserConstraintTypes.h  # 点到面约束、地图采样和关联统计类型

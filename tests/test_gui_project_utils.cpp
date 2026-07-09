@@ -7138,6 +7138,7 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     QMenu *displayMenu = findSubMenuByTitle(modelMenu, QStringLiteral("显示/隐藏项目"));
     ASSERT_NE(displayMenu, nullptr);
 
+    ASSERT_NE(menu.toggleGizmoAction(), nullptr);
     ASSERT_NE(menu.toggleCamerasAction(), nullptr);
     ASSERT_NE(menu.toggleDependentCamerasAction(), nullptr);
     ASSERT_NE(menu.toggleCameraThumbnailsAction(), nullptr);
@@ -7146,6 +7147,7 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     ASSERT_NE(menu.showCameraImagesInBackgroundAction(), nullptr);
     ASSERT_NE(menu.lockCameraImageAction(), nullptr);
 
+    EXPECT_TRUE(displayMenu->actions().contains(menu.toggleGizmoAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCamerasAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleDependentCamerasAction()));
     EXPECT_TRUE(displayMenu->actions().contains(menu.toggleCameraThumbnailsAction()));
@@ -7155,6 +7157,10 @@ TEST(MainMenuTest, ModelMenuExposesMetashapeStyleDisplayHideActions)
     EXPECT_TRUE(imageMenu->actions().contains(menu.showCameraImagesInForegroundAction()));
     EXPECT_TRUE(imageMenu->actions().contains(menu.showCameraImagesInBackgroundAction()));
     EXPECT_TRUE(imageMenu->actions().contains(menu.lockCameraImageAction()));
+
+    EXPECT_EQ(menu.toggleGizmoAction()->text(), QStringLiteral("显示轨迹球"));
+    EXPECT_TRUE(menu.toggleGizmoAction()->isCheckable());
+    EXPECT_TRUE(menu.toggleGizmoAction()->isChecked());
 
     EXPECT_EQ(menu.toggleDependentCamerasAction()->text(), QStringLiteral("显示从属相机"));
     EXPECT_FALSE(menu.toggleDependentCamerasAction()->isEnabled());

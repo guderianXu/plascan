@@ -423,6 +423,16 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
         _modelDisplayHideMenu = displayMenu;
 
+        if (_toggleGizmoAct)
+        {
+            _toggleGizmoAct->setText(tr("显示轨迹球"));
+            _toggleGizmoAct->setToolTip(tr("显示或隐藏 3D 视图中的旋转轨迹球"));
+            if (!displayMenu->actions().contains(_toggleGizmoAct))
+            {
+                displayMenu->addAction(_toggleGizmoAct);
+            }
+        }
+
         if (_toggleCamerasAct && !displayMenu->actions().contains(_toggleCamerasAct))
         {
             displayMenu->addAction(_toggleCamerasAct);
@@ -660,6 +670,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         QObject *viewActionParent = viewMenu
             ? static_cast<QObject *>(viewMenu)
             : static_cast<QObject *>(_mainWindow);
+        _toggleGizmoAct = ensureCheckableAction(_mainWindow,
+                                                viewActionParent,
+                                                viewMenu,
+                                                QStringLiteral("actionToggleGizmo"),
+                                                tr("显示轨迹球"),
+                                                true,
+                                                _toggleCamerasAct);
+        _toggleGizmoAct->setToolTip(tr("显示或隐藏 3D 视图中的旋转轨迹球"));
         _toggleHenanUniversityBrandAct = ensureCheckableAction(
             _mainWindow,
             viewActionParent,
@@ -1042,11 +1060,12 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _zoomOutAct   = viewMenu->addAction(tr("缩小"));
     _resetViewAct = viewMenu->addAction(tr("重置视图"));
     viewMenu->addSeparator();
-    // 操控球显示/隐藏切换
-    _toggleGizmoAct = new QAction(tr("显示操控球"), viewMenu);
+    // 轨迹球显示/隐藏切换
+    _toggleGizmoAct = new QAction(tr("显示轨迹球"), viewMenu);
+    _toggleGizmoAct->setObjectName(QStringLiteral("actionToggleGizmo"));
     _toggleGizmoAct->setCheckable(true);
     _toggleGizmoAct->setChecked(true);  // 默认显示
-    _toggleGizmoAct->setToolTip(tr("显示或隐藏 3D 视图中的旋转操控球"));
+    _toggleGizmoAct->setToolTip(tr("显示或隐藏 3D 视图中的旋转轨迹球"));
     viewMenu->addAction(_toggleGizmoAct);
     _toggleCamerasAct = new QAction(tr("显示相机"), viewMenu);
     _toggleCamerasAct->setObjectName(QStringLiteral("actionToggleCameras"));

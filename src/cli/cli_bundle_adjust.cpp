@@ -5,6 +5,7 @@
 #include "cli_common.h"
 
 #include "BaInputBuilder.h"
+#include "BundleAdjust.h"
 #include "BundleAdjustService.h"
 #include "PlascanArchive.h"
 #include "ProjectFilesManager.h"
@@ -54,6 +55,30 @@ void fatalQt(const QString &message, int code = cli::EXIT_ARG_ERR)
 {
     printUtf8(stderr, QStringLiteral("错误: %1").arg(message));
     std::exit(code);
+}
+
+xjw::BABackend parseBaBackendName(const QString &raw)
+{
+    const QString value = raw.trimmed().toLower();
+    if (value == QLatin1String("auto"))
+    {
+        return xjw::BABackend::Auto;
+    }
+    if (value == QLatin1String("legacy_cpu"))
+    {
+        return xjw::BABackend::LegacyCpu;
+    }
+    if (value == QLatin1String("ceres_cpu"))
+    {
+        return xjw::BABackend::CeresCpu;
+    }
+    if (value == QLatin1String("ceres_cuda"))
+    {
+        return xjw::BABackend::CeresCuda;
+    }
+
+    fatalQt(QStringLiteral("未知 BA 后端: %1，可选 auto / legacy_cpu / ceres_cpu / ceres_cuda").arg(raw));
+    return xjw::BABackend::LegacyCpu;
 }
 
 QJsonObject readJsonObject(const QByteArray &bytes, const QString &label)
@@ -362,13 +387,44 @@ void writeJsonFile(const QString &path, const QJsonObject &object)
 void printRunSummary(const QString &label, const xjw::gui::BaServiceResult &result)
 {
     const QJsonObject obj = result.resultJson;
+    const QString usedBackend = obj.value(QStringLiteral("ba_used_backend")).toString(QStringLiteral("unknown"));
+    const QString solver =
+        obj.value(QStringLiteral("ba_ceres_linear_solver")).toString(QStringLiteral("none"));
+    const bool usedGpu = obj.value(QStringLiteral("ba_used_gpu")).toBool(false);
+    const bool backendFallback = obj.value(QStringLiteral("ba_backend_fallback")).toBool(false);
+    const bool qualityRejected = obj.value(QStringLiteral("ba_quality_gate_rejected")).toBool(false);
+    const int observationCount = obj.value(QStringLiteral("ba_observation_count")).toInt(0);
+    const double totalSeconds = obj.value(QStringLiteral("ba_total_seconds")).toDouble(0.0);
+    const double validTrackRatio = obj.value(QStringLiteral("ba_valid_track_ratio")).toDouble(0.0);
+    const QString backendReason =
+        obj.value(QStringLiteral("ba_backend_selection_reason")).toString();
+    const QString qualityMessage =
+        obj.value(QStringLiteral("ba_quality_gate_message")).toString();
     printUtf8(stdout,
-              QStringLiteral("%1: tracks=%2 optimized=%3 rms_before=%4 rms_after=%5")
+              QStringLiteral("%1: tracks=%2 optimized=%3 observations=%4 rms_before=%5 rms_after=%6 "
+                             "backend=%7 solver=%8 gpu=%9 fallback=%10 valid_ratio=%11 "
+                             "quality_rejected=%12 total_s=%13")
                   .arg(label)
                   .arg(obj.value(QStringLiteral("track_count")).toInt())
                   .arg(obj.value(QStringLiteral("optimized_count")).toInt())
+                  .arg(observationCount)
                   .arg(obj.value(QStringLiteral("mean_rms_before")).toDouble(), 0, 'f', 6)
-                  .arg(obj.value(QStringLiteral("mean_rms_after")).toDouble(), 0, 'f', 6));
+                  .arg(obj.value(QStringLiteral("mean_rms_after")).toDouble(), 0, 'f', 6)
+                  .arg(usedBackend,
+                       solver,
+                       usedGpu ? QStringLiteral("true") : QStringLiteral("false"),
+                       backendFallback ? QStringLiteral("true") : QStringLiteral("false"))
+                  .arg(validTrackRatio, 0, 'f', 4)
+                  .arg(qualityRejected ? QStringLiteral("true") : QStringLiteral("false"))
+                  .arg(totalSeconds, 0, 'f', 3));
+    if (!backendReason.isEmpty())
+    {
+        printUtf8(stdout, QStringLiteral("%1 BA 后端说明: %2").arg(label, backendReason));
+    }
+    if (!qualityMessage.isEmpty())
+    {
+        printUtf8(stdout, QStringLiteral("%1 BA 质量门控: %2").arg(label, qualityMessage));
+    }
 }
 
 } // namespace
@@ -384,6 +440,7 @@ int main(int argc, char *argv[])
     std::string outputDirRaw;
     std::vector<std::string> imageTokens;
     std::string laserCloudRaw;
+    std::string baBackendRaw = "auto";
 
     int minMatches = 15;
     int threads = 4;
@@ -391,10 +448,17 @@ int main(int argc, char *argv[])
     int maxPointIterations = 12;
     int maxCameraIterations = 10;
     int chunkSize = 20000;
+    int baCudaDevice = 0;
+    int baMinCudaCameras = 50;
+    int baMinCudaObservations = 500000;
+    int baMinCpuObservations = 50000;
+    int baMaxCeresPointOnlyObservations = 100000;
     double huberDelta = 3.0;
     double damping = 1e-3;
     double finiteDiffEps = 1e-6;
     double stepTolerance = 1e-8;
+    double baMaxAcceptedRmsGrowth = 1.25;
+    double baMinAcceptedValidTrackRatio = 0.60;
     bool refinePose = true;
     bool dryRun = false;
     bool force = false;
@@ -402,6 +466,9 @@ int main(int argc, char *argv[])
     bool exportEvalPlot = false;
     bool failOnQualityGate = false;
     bool laserUseMissingNormalsAsHeightPlanes = false;
+    bool baBackendFallback = true;
+    bool baEnableQualityGate = true;
+    bool baCompareAutoWithLegacy = true;
 
     double laserMaxDistance = 1.0;
     double laserVoxelSize = 0.0;
@@ -424,6 +491,33 @@ int main(int argc, char *argv[])
     app.add_option("--damping", damping, "LM 阻尼初值");
     app.add_option("--finite-diff-eps", finiteDiffEps, "有限差分步长");
     app.add_option("--step-tolerance", stepTolerance, "收敛步长阈值");
+    app.add_option("--ba-backend", baBackendRaw, "BA 求解后端: auto / legacy_cpu / ceres_cpu / ceres_cuda");
+    app.add_option("--ba-cuda-device", baCudaDevice, "Ceres CUDA BA 使用的 GPU 设备 ID");
+    app.add_option("--ba-min-cuda-cameras", baMinCudaCameras, "低于该相机数时 Ceres CUDA BA 回退到 CPU");
+    app.add_option("--ba-min-cuda-observations",
+                   baMinCudaObservations,
+                   "低于该观测数时自动 BA 不选择 Ceres CUDA");
+    app.add_option("--ba-min-cpu-observations",
+                   baMinCpuObservations,
+                   "低于该观测数时自动 BA 不选择 Ceres CPU");
+    app.add_option("--ba-max-ceres-point-only-observations",
+                   baMaxCeresPointOnlyObservations,
+                   "point-only Ceres BA 超过该观测数时回退 legacy_cpu");
+    app.add_flag("--ba-backend-fallback{true},--no-ba-backend-fallback{false}",
+                 baBackendFallback,
+                 "请求的 BA 后端不可用时是否允许回退到可用后端");
+    app.add_flag("--ba-quality-gate{true},--no-ba-quality-gate{false}",
+                 baEnableQualityGate,
+                 "Auto BA 是否启用质量门控，候选后端质量异常时回退 legacy_cpu");
+    app.add_option("--ba-max-rms-growth",
+                   baMaxAcceptedRmsGrowth,
+                   "Auto BA 候选后端允许的最大 RMS 增长倍率");
+    app.add_option("--ba-min-valid-track-ratio",
+                   baMinAcceptedValidTrackRatio,
+                   "Auto BA 候选后端允许的最小有效 track 比例");
+    app.add_flag("--ba-compare-legacy{true},--no-ba-compare-legacy{false}",
+                 baCompareAutoWithLegacy,
+                 "Auto BA 选择 Ceres/CUDA 时是否运行 legacy 对照用于质量门控");
     app.add_flag("--refine-pose{true},--no-refine-pose{false}", refinePose, "是否优化相机姿态");
     app.add_flag("--dry-run", dryRun, "仅检查输入并统计 tracks，不执行优化");
     app.add_flag("--force", force, "允许使用非空输出目录");
@@ -486,6 +580,17 @@ int main(int argc, char *argv[])
     baOptions.stepTolerance = stepTolerance;
     baOptions.refineCameraPose = refinePose;
     baOptions.numThreads = threads;
+    baOptions.backend = parseBaBackendName(toQString(baBackendRaw));
+    baOptions.ceresCudaDevice = std::max(0, baCudaDevice);
+    baOptions.minCeresCudaCameras = std::max(1, baMinCudaCameras);
+    baOptions.minCeresCudaObservations = std::max(1, baMinCudaObservations);
+    baOptions.minCeresCpuObservations = std::max(1, baMinCpuObservations);
+    baOptions.maxCeresPointOnlyObservations = std::max(1, baMaxCeresPointOnlyObservations);
+    baOptions.allowBackendFallback = baBackendFallback;
+    baOptions.enableBackendQualityGate = baEnableQualityGate;
+    baOptions.maxAcceptedRmsGrowth = std::max(0.0, baMaxAcceptedRmsGrowth);
+    baOptions.minAcceptedValidTrackRatio = std::max(0.0, baMinAcceptedValidTrackRatio);
+    baOptions.compareAutoBackendWithLegacy = baCompareAutoWithLegacy;
     if (baInput.surveyControlTrackCount > 0)
     {
         baOptions.enableControlPointConstraints = true;

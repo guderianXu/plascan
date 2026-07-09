@@ -1,18 +1,13 @@
 #include "SparsePointCloudProcessor.h"
 
+#include "SparsePointCloudWorkspace.h"
 #include "math/Vec3Ops.h"
-#include <plapoint/search/kdtree.h>
-#include <plapoint/core/point_cloud.h>
-#include <plapoint/filters/preprocessing.h>
-#include <plamatrix/ops/point_cloud.h>
 
 #include <algorithm>
 #include <array>
 #include <cmath>
 #include <map>
-#include <memory>
 #include <numeric>
-#include <optional>
 #include <tuple>
 #include <utility>
 #include <vector>
@@ -20,71 +15,12 @@
 namespace xjw {
 namespace {
 
-struct Neighbor { int index; double distanceSquared; };
-using NeighborList = std::vector<Neighbor>;
-
-struct TreeAndCloud {
-    std::shared_ptr<plapoint::search::KdTree<double, plamatrix::Device::CPU>> tree;
-    std::shared_ptr<plapoint::PointCloud<double, plamatrix::Device::CPU>> cloud;
-};
-
-TreeAndCloud buildTree(const std::vector<SparsePointCloudPoint> &pts)
-{
-    auto cloud = std::make_shared<plapoint::PointCloud<double, plamatrix::Device::CPU>>(pts.size());
-    for (size_t i = 0; i < pts.size(); ++i) {
-        cloud->points()(static_cast<plamatrix::Index>(i), 0) = pts[i].x;
-        cloud->points()(static_cast<plamatrix::Index>(i), 1) = pts[i].y;
-        cloud->points()(static_cast<plamatrix::Index>(i), 2) = pts[i].z;
-    }
-    auto tree = std::make_shared<plapoint::search::KdTree<double, plamatrix::Device::CPU>>();
-    tree->setInputCloud(cloud);
-    tree->build();
-    return {tree, cloud};
-}
-
-plapoint::PointCloud<double, plamatrix::Device::CPU> buildPlaCloud(
-    const std::vector<SparsePointCloudPoint> &pts)
-{
-    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> matrix(
-        static_cast<plamatrix::Index>(pts.size()), 3);
-    for (size_t i = 0; i < pts.size(); ++i)
-    {
-        matrix(static_cast<plamatrix::Index>(i), 0) = pts[i].x;
-        matrix(static_cast<plamatrix::Index>(i), 1) = pts[i].y;
-        matrix(static_cast<plamatrix::Index>(i), 2) = pts[i].z;
-    }
-    return plapoint::PointCloud<double, plamatrix::Device::CPU>(std::move(matrix));
-}
+using Neighbor = SparsePointCloudNeighbor;
+using NeighborList = SparsePointCloudNeighborList;
 
 std::array<double, 3> pointToArray(const SparsePointCloudPoint &point)
 {
     return {point.x, point.y, point.z};
-}
-
-std::vector<NeighborList> buildKnnCache(const TreeAndCloud &tc, int k)
-{
-    auto &cloud = *tc.cloud;
-    std::vector<NeighborList> knnCache(cloud.size());
-    for (size_t i = 0; i < cloud.size(); ++i)
-    {
-        plamatrix::Vec3<double> query{
-            cloud.points()(static_cast<plamatrix::Index>(i), 0),
-            cloud.points()(static_cast<plamatrix::Index>(i), 1),
-            cloud.points()(static_cast<plamatrix::Index>(i), 2)
-        };
-        auto indices = tc.tree->nearestKSearch(query, k + 1); // +1 because self is included
-        NeighborList neighbors;
-        for (int idx : indices)
-        {
-            if (idx == static_cast<int>(i)) continue; // skip self
-            double dx = cloud.points()(static_cast<plamatrix::Index>(idx), 0) - query.x;
-            double dy = cloud.points()(static_cast<plamatrix::Index>(idx), 1) - query.y;
-            double dz = cloud.points()(static_cast<plamatrix::Index>(idx), 2) - query.z;
-            neighbors.push_back({idx, dx*dx + dy*dy + dz*dz});
-        }
-        knnCache[i] = std::move(neighbors);
-    }
-    return knnCache;
 }
 
 double medianValue(std::vector<double> values)
@@ -187,12 +123,13 @@ std::array<double, 3> estimateLocalNormal(const std::vector<SparsePointCloudPoin
     return {0.0, 0.0, 0.0};
 }
 
-std::vector<bool> computeStatisticalKeepMask(const std::vector<SparsePointCloudPoint> &points,
+std::vector<bool> computeStatisticalKeepMask(const SparsePointCloudWorkspace &workspace,
                                              int k,
                                              double stdDevMul,
                                              plapoint::ProcessingDevice processingDevice,
                                              int *removed)
 {
+    const std::vector<SparsePointCloudPoint> &points = workspace.points();
     std::vector<bool> keep(points.size(), true);
     if (removed)
     {
@@ -205,9 +142,8 @@ std::vector<bool> computeStatisticalKeepMask(const std::vector<SparsePointCloudP
 
     (void)processingDevice;
 
-    const TreeAndCloud tc = buildTree(points);
     const int actualK = std::min<int>(k, static_cast<int>(points.size()) - 1);
-    const std::vector<NeighborList> knnCache = buildKnnCache(tc, actualK);
+    const std::vector<NeighborList> knnCache = workspace.knnCache(actualK);
     std::vector<double> meanDistances;
     meanDistances.reserve(points.size());
     for (const NeighborList &neighbors : knnCache)
@@ -256,6 +192,12 @@ std::vector<bool> computeStatisticalKeepMask(const std::vector<SparsePointCloudP
         if (robustScale > 1e-12 && meanDistances[i] > threshold)
         {
             keep[i] = false;
+        }
+    }
+    for (bool keepPoint : keep)
+    {
+        if (!keepPoint)
+        {
             ++removedCount;
         }
     }
@@ -325,12 +267,13 @@ std::vector<bool> computeNormalConsistencyKeepMask(const std::vector<SparsePoint
     return keep;
 }
 
-std::vector<bool> computeDensityKeepMask(const std::vector<SparsePointCloudPoint> &points,
+std::vector<bool> computeDensityKeepMask(const SparsePointCloudWorkspace &workspace,
                                          double radius,
                                          int minNeighbors,
                                          plapoint::ProcessingDevice processingDevice,
                                          int *removed)
 {
+    const std::vector<SparsePointCloudPoint> &points = workspace.points();
     std::vector<bool> keep(points.size(), true);
     if (removed)
     {
@@ -341,10 +284,8 @@ std::vector<bool> computeDensityKeepMask(const std::vector<SparsePointCloudPoint
         return keep;
     }
 
-    auto cloud = buildPlaCloud(points);
-    std::vector<int> removed_indices;
-    plapoint::radiusOutlierRemoval(
-        cloud, radius, minNeighbors + 1, processingDevice, &removed_indices);
+    const std::vector<int> removed_indices =
+        workspace.radiusOutlierIndices(radius, minNeighbors + 1, processingDevice);
     for (int index : removed_indices)
     {
         if (index >= 0 && static_cast<std::size_t>(index) < keep.size())
@@ -407,19 +348,19 @@ SparsePointCloudFilterStats SparsePointCloudProcessor::filter(std::vector<Sparse
                                     options.filterByDensity;
     if (needsSpatialFilter && points->size() >= 2)
     {
-        std::optional<TreeAndCloud> tc;
+        const SparsePointCloudWorkspace workspace =
+            SparsePointCloudWorkspace::fromPoints(*points);
         std::vector<NeighborList> knnCache;
         const int normalK = std::max(6, std::min(options.statK, 20));
         if (options.filterByNormalConsistency)
         {
-            tc = buildTree(*points);
-            knnCache = buildKnnCache(*tc, normalK);
+            knnCache = workspace.knnCache(normalK);
         }
 
         std::vector<bool> keep(points->size(), true);
         if (options.filterByStatistical)
         {
-            const auto statKeep = computeStatisticalKeepMask(*points, options.statK, options.statStdDevMul,
+            const auto statKeep = computeStatisticalKeepMask(workspace, options.statK, options.statStdDevMul,
                                                              options.processingDevice,
                                                              &stats.removedByStatistical);
             for (size_t i = 0; i < keep.size(); ++i)
@@ -438,7 +379,7 @@ SparsePointCloudFilterStats SparsePointCloudProcessor::filter(std::vector<Sparse
         }
         if (options.filterByDensity)
         {
-            const auto densityKeep = computeDensityKeepMask(*points, options.densityRadius,
+            const auto densityKeep = computeDensityKeepMask(workspace, options.densityRadius,
                                                             options.densityMinNeighbors,
                                                             options.processingDevice,
                                                             &stats.removedByDensity);
@@ -448,16 +389,7 @@ SparsePointCloudFilterStats SparsePointCloudProcessor::filter(std::vector<Sparse
             }
         }
 
-        std::vector<SparsePointCloudPoint> filtered;
-        filtered.reserve(points->size());
-        for (size_t i = 0; i < points->size(); ++i)
-        {
-            if (keep[i])
-            {
-                filtered.push_back(points->at(i));
-            }
-        }
-        *points = std::move(filtered);
+        *points = workspace.filteredPoints(keep);
     }
 
     stats.outputPoints = static_cast<int>(points->size());
@@ -579,7 +511,8 @@ SparsePointCloudSpatialCleanupResult SparsePointCloudProcessor::spatialCleanup(
     }
     result.inputPoints = static_cast<int>(points->size());
 
-    const TreeAndCloud tc = buildTree(*points);
+    const SparsePointCloudWorkspace workspace =
+        SparsePointCloudWorkspace::fromPoints(*points);
     const int n = static_cast<int>(points->size());
 
     // ── 自动估算体素边长 ─────────────────────────────────────
@@ -590,18 +523,18 @@ SparsePointCloudSpatialCleanupResult SparsePointCloudProcessor::spatialCleanup(
         nn1Dists.reserve(static_cast<std::size_t>(n));
         for (int i = 0; i < n; ++i)
         {
-            plamatrix::Vec3<double> query{
-                tc.cloud->points()(i, 0),
-                tc.cloud->points()(i, 1),
-                tc.cloud->points()(i, 2)
+            const auto query = std::array<double, 3>{
+                workspace.cloud().points()(i, 0),
+                workspace.cloud().points()(i, 1),
+                workspace.cloud().points()(i, 2)
             };
-            auto indices = tc.tree->nearestKSearch(query, 2); // k=2: self + nearest neighbor
+            auto indices = workspace.nearestKSearch(query, 2); // k=2: self + nearest neighbor
             if (indices.size() >= 2)
             {
                 int nnIdx = (indices[0] == i) ? indices[1] : indices[0];
-                double dx = tc.cloud->points()(nnIdx, 0) - query.x;
-                double dy = tc.cloud->points()(nnIdx, 1) - query.y;
-                double dz = tc.cloud->points()(nnIdx, 2) - query.z;
+                double dx = workspace.cloud().points()(nnIdx, 0) - query[0];
+                double dy = workspace.cloud().points()(nnIdx, 1) - query[1];
+                double dz = workspace.cloud().points()(nnIdx, 2) - query[2];
                 nn1Dists.push_back(std::sqrt(dx*dx + dy*dy + dz*dz));
             }
         }
@@ -693,9 +626,8 @@ SparsePointCloudSpatialCleanupResult SparsePointCloudProcessor::spatialCleanup(
             if (removed[static_cast<std::size_t>(i)])
                 continue;
             const auto &p = (*points)[static_cast<std::size_t>(i)];
-            plamatrix::Vec3<double> query{p.x, p.y, p.z};
-            auto nbrs = tc.tree->radiusSearch(query,
-                                             options.deduplicationRadius);
+            const auto query = std::array<double, 3>{p.x, p.y, p.z};
+            auto nbrs = workspace.radiusSearch(query, options.deduplicationRadius);
             for (int nbIdx : nbrs)
             {
                 if (nbIdx != i && !removed[static_cast<std::size_t>(nbIdx)])

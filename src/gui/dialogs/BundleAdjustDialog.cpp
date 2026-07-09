@@ -428,6 +428,17 @@ void BundleAdjustDialog::onRun()
     options[QStringLiteral("finite_diff_eps")] = _finiteDiffSpin->value();
     options[QStringLiteral("step_tolerance")] = _stepTolSpin->value();
     options[QStringLiteral("refine_camera_pose")] = _refinePoseCheck->isChecked();
+    options[QStringLiteral("ba_backend")] = QStringLiteral("auto");
+    options[QStringLiteral("ba_cuda_device")] = 0;
+    options[QStringLiteral("ba_min_cuda_cameras")] = 50;
+    options[QStringLiteral("ba_min_cuda_observations")] = 500000;
+    options[QStringLiteral("ba_min_cpu_observations")] = 50000;
+    options[QStringLiteral("ba_max_ceres_point_only_observations")] = 100000;
+    options[QStringLiteral("ba_allow_backend_fallback")] = true;
+    options[QStringLiteral("ba_enable_backend_quality_gate")] = true;
+    options[QStringLiteral("ba_max_accepted_rms_growth")] = 1.25;
+    options[QStringLiteral("ba_min_accepted_valid_track_ratio")] = 0.60;
+    options[QStringLiteral("ba_compare_auto_backend_with_legacy")] = true;
     options[QStringLiteral("enable_laser_constraints")] = enableLaserConstraints;
     options[QStringLiteral("laser_constraint_cloud_path")] = laserCloudPath;
     options[QStringLiteral("laser_association_max_distance_m")] = _laserAssociationMaxDistanceSpin->value();
@@ -466,6 +477,23 @@ void BundleAdjustDialog::setRunResult(const QJsonObject &result)
     const int optimizedCount = result.value(QStringLiteral("optimized_count")).toInt();
     const double rmsBefore = result.value(QStringLiteral("mean_rms_before")).toDouble();
     const double rmsAfter = result.value(QStringLiteral("mean_rms_after")).toDouble();
+    const QString requestedBackend =
+        result.value(QStringLiteral("ba_requested_backend")).toString(QStringLiteral("legacy_cpu"));
+    const QString usedBackend =
+        result.value(QStringLiteral("ba_used_backend")).toString(QStringLiteral("legacy_cpu"));
+    const bool usedGpu = result.value(QStringLiteral("ba_used_gpu")).toBool(false);
+    const bool backendFallback = result.value(QStringLiteral("ba_backend_fallback")).toBool(false);
+    const QString linearSolver =
+        result.value(QStringLiteral("ba_ceres_linear_solver")).toString(QStringLiteral("none"));
+    const int observationCount = result.value(QStringLiteral("ba_observation_count")).toInt();
+    const double totalSeconds = result.value(QStringLiteral("ba_total_seconds")).toDouble();
+    const double validTrackRatio = result.value(QStringLiteral("ba_valid_track_ratio")).toDouble(0.0);
+    const QString backendReason =
+        result.value(QStringLiteral("ba_backend_selection_reason")).toString();
+    const bool qualityGateRejected =
+        result.value(QStringLiteral("ba_quality_gate_rejected")).toBool(false);
+    const QString qualityGateMessage =
+        result.value(QStringLiteral("ba_quality_gate_message")).toString();
 
     const QJsonObject filesObj = result.value(QStringLiteral("files")).toObject();
     const QString txtFile = filesObj.value(QStringLiteral("summary_txt")).toString();
@@ -473,16 +501,41 @@ void BundleAdjustDialog::setRunResult(const QJsonObject &result)
     const QString cameraCsv = filesObj.value(QStringLiteral("camera_csv")).toString();
     const QString runJson = filesObj.value(QStringLiteral("run_json")).toString();
 
-    _resultSummaryLabel->setText(
-        QStringLiteral("平差完成：轨迹 %1，成功优化 %2，平均 RMS: %3 -> %4\n输出：\n- %5\n- %6\n- %7\n- %8")
+    QString summary =
+        QStringLiteral("平差完成：轨迹 %1，成功优化 %2，平均 RMS: %3 -> %4\n"
+                       "BA 后端: %5 -> %6，GPU: %7，回退: %8\n"
+                       "观测: %9，有效轨迹比例: %10，求解器: %11，总耗时: %12 s\n"
+                       "输出：\n- %13\n- %14\n- %15\n- %16")
             .arg(trackCount)
             .arg(optimizedCount)
             .arg(rmsBefore, 0, 'f', 6)
             .arg(rmsAfter, 0, 'f', 6)
+            .arg(requestedBackend,
+                 usedBackend,
+                  usedGpu ? QStringLiteral("是") : QStringLiteral("否"),
+                  backendFallback ? QStringLiteral("是") : QStringLiteral("否"))
+            .arg(observationCount)
+            .arg(validTrackRatio, 0, 'f', 4)
+            .arg(linearSolver)
+            .arg(totalSeconds, 0, 'f', 3)
             .arg(txtFile)
             .arg(pointCsv)
             .arg(cameraCsv)
-            .arg(runJson));
+            .arg(runJson);
+    if (!backendReason.isEmpty())
+    {
+        summary += QStringLiteral("\n后端说明: %1").arg(backendReason);
+    }
+    if (qualityGateRejected || !qualityGateMessage.isEmpty())
+    {
+        summary += QStringLiteral("\n质量门控: %1")
+                       .arg(qualityGateRejected ? QStringLiteral("拒绝候选后端") : QStringLiteral("通过"));
+        if (!qualityGateMessage.isEmpty())
+        {
+            summary += QStringLiteral("，%1").arg(qualityGateMessage);
+        }
+    }
+    _resultSummaryLabel->setText(summary);
 
     const QJsonArray cams = result.value(QStringLiteral("camera_preview")).toArray();
     _resultCameraTable->setRowCount(cams.size());
@@ -572,6 +625,17 @@ void BundleAdjustDialog::emitSettingsNow()
     settings[QStringLiteral("finite_diff_eps")] = _finiteDiffSpin->value();
     settings[QStringLiteral("step_tolerance")] = _stepTolSpin->value();
     settings[QStringLiteral("refine_camera_pose")] = _refinePoseCheck->isChecked();
+    settings[QStringLiteral("ba_backend")] = QStringLiteral("auto");
+    settings[QStringLiteral("ba_cuda_device")] = 0;
+    settings[QStringLiteral("ba_min_cuda_cameras")] = 50;
+    settings[QStringLiteral("ba_min_cuda_observations")] = 500000;
+    settings[QStringLiteral("ba_min_cpu_observations")] = 50000;
+    settings[QStringLiteral("ba_max_ceres_point_only_observations")] = 100000;
+    settings[QStringLiteral("ba_allow_backend_fallback")] = true;
+    settings[QStringLiteral("ba_enable_backend_quality_gate")] = true;
+    settings[QStringLiteral("ba_max_accepted_rms_growth")] = 1.25;
+    settings[QStringLiteral("ba_min_accepted_valid_track_ratio")] = 0.60;
+    settings[QStringLiteral("ba_compare_auto_backend_with_legacy")] = true;
     settings[QStringLiteral("dry_run")] = _dryRunCheck->isChecked();
     settings[QStringLiteral("enable_laser_constraints")] = _enableLaserConstraintsCheck->isChecked();
     settings[QStringLiteral("laser_constraint_cloud_path")] = _laserConstraintCloudEdit->text().trimmed();

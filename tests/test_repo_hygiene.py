@@ -75,6 +75,13 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("$prepend + $vsDevPathEntries + $filtered", text)
         self.assertIn("$vsDevPathValue", text)
         self.assertIn("-ieq \"Path\"", text)
+        self.assertIn("Resolve-MsvcCompilerPathEntries", text)
+        self.assertIn("cl.exe", text)
+        self.assertIn("$msvcCompilerPathEntries", text)
+        self.assertIn("CMAKE_CUDA_HOST_COMPILER", text)
+        self.assertIn("$msvcCudaHostCompiler", text)
+        self.assertIn("CUDAHOSTCXX", text)
+        self.assertIn("--compiler-bindir", text)
 
     def test_libtorch_cuda_arches_are_not_set_before_torch_package_loads(self):
         cmake_path = ROOT / "cmake" / "PlascanPackages.cmake"
@@ -87,9 +94,24 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("TORCH_CUDA_ARCH_LIST", before_torch)
         self.assertNotRegex(before_torch, r"(?m)^\s*set\s*\(\s*CMAKE_CUDA_ARCHITECTURES\b")
         self.assertRegex(after_torch, r"(?m)^\s*set\s*\(\s*CMAKE_CUDA_ARCHITECTURES\b")
+        self.assertIn("PLAMATRIX_CUDA_ARCHITECTURES", after_torch)
+        self.assertIn("PLAPOINT_CUDA_ARCHITECTURES", after_torch)
+        self.assertIn("FORCE", after_torch)
         self.assertIn("kineto", text)
         self.assertIn("kineto_LIBRARY", text)
         self.assertIn("optional profiler backend skipped", text)
+
+    def test_cmake_preserves_command_line_cuda_flags_on_windows(self):
+        root_cmake = (ROOT / "CMakeLists.txt").read_text(encoding="utf-8")
+        dependency_paths = (ROOT / "cmake" / "PlascanDependencyPaths.cmake").read_text(encoding="utf-8")
+        packages = (ROOT / "cmake" / "PlascanPackages.cmake").read_text(encoding="utf-8")
+
+        self.assertNotIn('set(CMAKE_CUDA_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")', root_cmake)
+        self.assertIn('${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1', root_cmake)
+        self.assertIn('string(REPLACE "-B/usr/bin"', root_cmake)
+        self.assertIn("WIN32 OR APPLE OR NOT conda_prefix", dependency_paths)
+        self.assertIn("if(WIN32 OR NOT PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)", dependency_paths)
+        self.assertIn("AND NOT WIN32 AND NOT APPLE", packages)
 
     def test_plapoint_cuda_warning_sentinels_use_typed_infinity(self):
         knn_source = (ROOT / "3rdparty" / "plapoint" / "src" / "knn_gpu.cu").read_text(encoding="utf-8")
@@ -128,14 +150,46 @@ class RepoHygieneTest(unittest.TestCase):
         script_path = ROOT / "scripts" / "build_win" / "build_windows_cuda.ps1"
         text = script_path.read_text(encoding="utf-8")
 
+        self.assertIn("Sync-VcpkgRuntime", text)
+        self.assertIn("$TripletRoot \"bin\"", text)
+        self.assertIn("-Filter \"*.dll\"", text)
+        self.assertIn("vcpkg runtime DLLs", text)
+        self.assertIn("Sync-MsvcRuntime", text)
+        self.assertIn("Resolve-MsvcRedistRuntimeDlls", text)
+        self.assertIn("vcomp140.dll", text)
+        self.assertIn("MSVC runtime DLLs", text)
+        self.assertIn("Sync-CudaRuntime", text)
+        self.assertIn("$CudaPath \"bin\\x64\"", text)
+        self.assertIn("CUDA runtime DLLs", text)
+        self.assertIn("VCPKG_APPLOCAL_DEPS=OFF", text)
         self.assertIn("EnableOpenCvDnnCuda", text)
+        self.assertIn("EnableCeresCudaBa", text)
+        self.assertIn("-UVCPKG_MANIFEST_FEATURES", text)
         self.assertIn("VCPKG_MANIFEST_FEATURES=opencv-dnn-cuda", text)
+        self.assertIn("manifestFeaturesValue", text)
+        self.assertIn('$manifestFeaturesValue = "$manifestFeaturesValue;ceres-cuda"', text)
         self.assertIn("Assert-OpenCvDnnCudaFeatures", text)
+        self.assertIn("Assert-CeresCudaFeatures", text)
+        self.assertIn(
+            "if ($EnableCeresCudaBa)\n{\n    $vcpkgOverlayPortsCMake = Convert-ToCMakePath "
+            "(Ensure-CeresCuda13OverlayPort",
+            text,
+        )
         self.assertIn("CudnnRoot", text)
         self.assertIn("CUDNN_ROOT_DIR", text)
         self.assertIn("build\\env\\cudnn-cu13", text)
         self.assertIn("VCPKG_OVERLAY_TRIPLETS", text)
         self.assertIn("VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN cudnn", text)
+        self.assertIn("Ensure-CeresCuda13OverlayPort", text)
+        self.assertIn("CMAKE_CUDA_STANDARD=17", text)
+        self.assertIn("CMAKE_CUDA_FLAGS=--std=c++17", text)
+        self.assertIn("CMAKE_CUDA_ARCHITECTURES=75\\;86\\;89\\;120", text)
+        self.assertIn("Ensure-OpenCvCuda13OverlayPort", text)
+        self.assertIn("0024-cuda13-device-props.patch", text)
+        self.assertIn("VCPKG_OVERLAY_PORTS", text)
+        self.assertIn('if (-not [string]::IsNullOrWhiteSpace($vcpkgOverlayPortsCMake))', text)
+        self.assertIn("CUDA_ARCH_BIN=75\\;86\\;89\\;120", text)
+        self.assertIn("BUILD_opencv_videostab=OFF", text)
         self.assertIn("OpenCV DNN CUDA", text)
 
     def test_laser_photogrammetry_dataset_notes_capture_future_ba_inputs(self):

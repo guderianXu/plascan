@@ -43,7 +43,7 @@ endif()
 if(NOT PLASCAN_APPLE_SILICON)
   # CUDA 架构 (仅 Linux/Windows NVIDIA GPU)
   if(NOT DEFINED PLASCAN_CUDA_ARCHITECTURES)
-    set(PLASCAN_CUDA_ARCHITECTURES "75;86;89" CACHE STRING "Target CUDA architectures")
+    set(PLASCAN_CUDA_ARCHITECTURES "75;86;89;120" CACHE STRING "Target CUDA architectures")
   endif()
   # 防止 Caffe2 自动检测, 避免 nvcc 13.1 不支持的 compute_50
   # TORCH_CUDA_ARCH_LIST 格式为 "7.5;8.6;8.9" (带小数点)
@@ -60,7 +60,7 @@ endif()
 option(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH
   "Temporarily use /usr/bin/ld while finding LibTorch in mixed system/conda builds"
   ON)
-if(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH AND DEFINED ENV{CONDA_PREFIX} AND NOT APPLE)
+if(PLASCAN_USE_SYSTEM_LINKER_FOR_TORCH AND DEFINED ENV{CONDA_PREFIX} AND NOT WIN32 AND NOT APPLE)
   set(PLASCAN_ORIGINAL_CMAKE_LINKER ${CMAKE_LINKER})
   set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "System linker" FORCE)
   message(STATUS "plascan: Using system linker")
@@ -105,7 +105,12 @@ find_package(Torch REQUIRED)
 message(STATUS "plascan: found LibTorch")
 
 if(NOT PLASCAN_APPLE_SILICON)
-  set(CMAKE_CUDA_ARCHITECTURES ${PLASCAN_CUDA_ARCHITECTURES})
+  set(CMAKE_CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
+    CACHE STRING "CUDA architectures for PlaScan CUDA targets" FORCE)
+  set(PLAMATRIX_CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
+    CACHE STRING "CUDA architectures for PlaMatrix" FORCE)
+  set(PLAPOINT_CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
+    CACHE STRING "CUDA architectures for PlaPoint" FORCE)
   message(STATUS "plascan: CUDA architectures set to ${CMAKE_CUDA_ARCHITECTURES}")
 endif()
 
@@ -118,7 +123,7 @@ else()
   message(STATUS "plascan: LibTorch CUDA support disabled")
 endif()
 
-if(DEFINED PLASCAN_ORIGINAL_CMAKE_LINKER AND NOT APPLE)
+if(DEFINED PLASCAN_ORIGINAL_CMAKE_LINKER AND NOT WIN32 AND NOT APPLE)
   if(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN AND EXISTS "/usr/bin/ld")
     set(CMAKE_LINKER "/usr/bin/ld" CACHE FILEPATH "Linker" FORCE)
   else()

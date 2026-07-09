@@ -97,7 +97,7 @@ public:
     /** @brief 返回"重置视图"动作。 */
     QAction *resetViewAction() const;
 
-    /** @brief 返回"显示操控球"切换动作（可检查状态）。 */
+    /** @brief 返回"显示轨迹球"切换动作（可检查状态）。 */
     QAction *toggleGizmoAction() const;
 
     /** @brief 返回"显示相机"切换动作（可检查状态）。 */
@@ -109,7 +109,7 @@ public:
     /** @brief 返回"显示缩略图"切换动作，用于控制相机影像平面显示模式。 */
     QAction *toggleCameraThumbnailsAction() const;
 
-    /** @brief 返回"显示本地轴"切换动作，用于工具栏相机菜单，状态与操控球显示同步。 */
+    /** @brief 返回"显示本地轴"切换动作，用于工具栏相机菜单，状态与轨迹球显示同步。 */
     QAction *toggleLocalAxesAction() const;
 
     /** @brief 返回"显示图像"切换动作，用于控制当前相机图像平面。 */
@@ -254,7 +254,7 @@ private:
     QAction *_zoomInAct{};    ///< 放大视图
     QAction *_zoomOutAct{};   ///< 缩小视图
     QAction *_resetViewAct{}; ///< 重置视图到原始比例
-    QAction *_toggleGizmoAct{}; ///< 显示/隐藏操控球
+    QAction *_toggleGizmoAct{}; ///< 显示/隐藏轨迹球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
     QAction *_toggleDependentCamerasAct{}; ///< 显示/隐藏从属相机（当前仅保留菜单占位）
     QAction *_toggleCameraThumbnailsAct{}; ///< 相机影像平面显示缩略图

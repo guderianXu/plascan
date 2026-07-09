@@ -2,8 +2,8 @@ cmake_minimum_required(VERSION 3.16)
 
 # 必须在 project() 之前设置, 覆盖 conda gcc 的旧 ABI 默认值
 # conda OpenCV/GTest 用新 ABI, PyTorch 2.5.1 也跟随
-set(CMAKE_CXX_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")
-set(CMAKE_CUDA_FLAGS "-D_GLIBCXX_USE_CXX11_ABI=1")
+set(CMAKE_CXX_FLAGS "${CMAKE_CXX_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
+set(CMAKE_CUDA_FLAGS "${CMAKE_CUDA_FLAGS} -D_GLIBCXX_USE_CXX11_ABI=1")
 
 project(PlaScan VERSION 1.1.6 LANGUAGES CXX)
 set(CMAKE_POSITION_INDEPENDENT_CODE ON)
@@ -28,6 +28,17 @@ if(MSVC)
     $<$<COMPILE_LANGUAGE:CUDA>:-Xcompiler=/permissive->
   )
   add_compile_definitions(_USE_MATH_DEFINES NOMINMAX)
+endif()
+
+if(WIN32)
+  foreach(_plascan_link_flag_var IN ITEMS
+      CMAKE_EXE_LINKER_FLAGS
+      CMAKE_SHARED_LINKER_FLAGS
+      CMAKE_MODULE_LINKER_FLAGS)
+    string(REPLACE "-B/usr/bin " "" ${_plascan_link_flag_var} "${${_plascan_link_flag_var}}")
+    string(REPLACE "-B/usr/bin" "" ${_plascan_link_flag_var} "${${_plascan_link_flag_var}}")
+    set(${_plascan_link_flag_var} "${${_plascan_link_flag_var}}" CACHE STRING "" FORCE)
+  endforeach()
 endif()
 
 list(APPEND CMAKE_MODULE_PATH "${CMAKE_SOURCE_DIR}/cmake")
@@ -86,7 +97,7 @@ elseif(PLASCAN_CONDA_PREFIX)
   message(STATUS "plascan: skipping system library path injection for conda toolchain")
 endif()
 
-set(PLASCAN_CUDA_ARCHITECTURES "75;86;89" CACHE STRING "Default CUDA architectures for PlaScan targets")
+set(PLASCAN_CUDA_ARCHITECTURES "75;86;89;120" CACHE STRING "Default CUDA architectures for PlaScan targets")
 if(DEFINED CMAKE_CUDA_ARCHITECTURES)
   unset(CMAKE_CUDA_ARCHITECTURES CACHE)
 endif()

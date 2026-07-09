@@ -141,6 +141,19 @@ target_include_directories(test_sparse_point_cloud_processor PRIVATE
 gtest_discover_tests(test_sparse_point_cloud_processor)
 
 # ==============================================================================
+# test_sparse_point_cloud_workspace — SfM 与 plapoint 点云桥接
+# ==============================================================================
+add_executable(test_sparse_point_cloud_workspace test_sparse_point_cloud_workspace.cpp)
+target_link_libraries(test_sparse_point_cloud_workspace PRIVATE
+    sfm
+    GTest::gtest_main
+)
+target_include_directories(test_sparse_point_cloud_workspace PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+)
+gtest_discover_tests(test_sparse_point_cloud_workspace)
+
+# ==============================================================================
 # test_mvs_types — MVS 类型与参数验证
 # ==============================================================================
 add_executable(test_mvs_types test_mvs_types.cpp)
@@ -534,6 +547,75 @@ target_include_directories(test_bundle_adjust_lidar_constraints PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/camera
 )
 gtest_discover_tests(test_bundle_adjust_lidar_constraints)
+
+# ==============================================================================
+# test_bundle_adjust_projection — BA AutoDiff 投影模型与 Camera 投影一致性
+# ==============================================================================
+add_executable(test_bundle_adjust_projection
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_projection.cpp
+)
+target_link_libraries(test_bundle_adjust_projection PRIVATE
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_projection PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_bundle_adjust_projection)
+
+# ==============================================================================
+# test_bundle_adjust_ceres_backend — BA Ceres/GPU 后端选择与回退
+# ==============================================================================
+if(NOT TARGET Ceres::ceres)
+    find_package(Ceres CONFIG QUIET)
+endif()
+if(TARGET Ceres::ceres)
+    add_executable(test_bundle_adjust_ceres_backend
+        ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_ceres_backend.cpp
+    )
+    target_link_libraries(test_bundle_adjust_ceres_backend PRIVATE
+        bundle_adjust
+        camera
+        GTest::gtest_main
+    )
+    target_include_directories(test_bundle_adjust_ceres_backend PRIVATE
+        ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+        ${CMAKE_SOURCE_DIR}/src/core/camera
+    )
+    gtest_discover_tests(test_bundle_adjust_ceres_backend)
+else()
+    message(STATUS "tests: Ceres 未找到，跳过 test_bundle_adjust_ceres_backend")
+endif()
+
+add_executable(test_bundle_adjust_backend_selection
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_backend_selection.cpp
+)
+target_link_libraries(test_bundle_adjust_backend_selection PRIVATE
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_backend_selection PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_bundle_adjust_backend_selection)
+
+add_executable(test_bundle_adjust_quality_gate
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_quality_gate.cpp
+)
+target_link_libraries(test_bundle_adjust_quality_gate PRIVATE
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_quality_gate PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_bundle_adjust_quality_gate)
 
 # ==============================================================================
 # test_reference_terrain_prior — DEM/LiDAR height surface soft priors for BA

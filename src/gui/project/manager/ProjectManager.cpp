@@ -1803,6 +1803,56 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     opts.baOpt.damping             = extraSettings.value(QStringLiteral("damping")).toDouble(1e-3);
     opts.baOpt.stepTolerance       = extraSettings.value(QStringLiteral("step_tolerance")).toDouble(1e-8);
     opts.baOpt.numThreads          = threads;
+    const QString baBackendName =
+        extraSettings.value(QStringLiteral("ba_backend")).toString(QStringLiteral("auto")).trimmed().toLower();
+    if (baBackendName == QLatin1String("auto"))
+    {
+        opts.baOpt.backend = xjw::BABackend::Auto;
+    }
+    else if (baBackendName == QLatin1String("legacy_cpu"))
+    {
+        opts.baOpt.backend = xjw::BABackend::LegacyCpu;
+    }
+    else if (baBackendName == QLatin1String("ceres_cpu"))
+    {
+        opts.baOpt.backend = xjw::BABackend::CeresCpu;
+    }
+    else
+    {
+        opts.baOpt.backend = xjw::BABackend::CeresCuda;
+    }
+    opts.baOpt.ceresCudaDevice = qMax(
+        0,
+        extraSettings.value(QStringLiteral("ba_cuda_device")).toInt(0));
+    opts.baOpt.minCeresCudaCameras = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_min_cuda_cameras")).toInt(opts.baOpt.minCeresCudaCameras));
+    opts.baOpt.minCeresCudaObservations = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_min_cuda_observations")).toInt(
+            opts.baOpt.minCeresCudaObservations));
+    opts.baOpt.minCeresCpuObservations = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_min_cpu_observations")).toInt(
+            opts.baOpt.minCeresCpuObservations));
+    opts.baOpt.maxCeresPointOnlyObservations = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_max_ceres_point_only_observations")).toInt(
+            opts.baOpt.maxCeresPointOnlyObservations));
+    opts.baOpt.allowBackendFallback =
+        extraSettings.value(QStringLiteral("ba_allow_backend_fallback")).toBool(true);
+    opts.baOpt.enableBackendQualityGate =
+        extraSettings.value(QStringLiteral("ba_enable_backend_quality_gate")).toBool(true);
+    opts.baOpt.maxAcceptedRmsGrowth = qMax(
+        0.0,
+        extraSettings.value(QStringLiteral("ba_max_accepted_rms_growth")).toDouble(
+            opts.baOpt.maxAcceptedRmsGrowth));
+    opts.baOpt.minAcceptedValidTrackRatio = qMax(
+        0.0,
+        extraSettings.value(QStringLiteral("ba_min_accepted_valid_track_ratio")).toDouble(
+            opts.baOpt.minAcceptedValidTrackRatio));
+    opts.baOpt.compareAutoBackendWithLegacy =
+        extraSettings.value(QStringLiteral("ba_compare_auto_backend_with_legacy")).toBool(true);
     opts.baOpt.enablePointFilter    = true;
     opts.baOpt.filterMaxReprojError = extraSettings.value(QStringLiteral("filter_max_reproj_error")).toDouble(2.5);
     opts.baOpt.filterSigmaFactor   = extraSettings.value(QStringLiteral("filter_sigma_factor")).toDouble(3.0);

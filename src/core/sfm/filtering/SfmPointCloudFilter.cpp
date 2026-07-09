@@ -1,8 +1,6 @@
 #include "SfmPointCloudFilter.h"
 
-#include <plamatrix/dense/dense_matrix.h>
-#include <plapoint/core/point_cloud.h>
-#include <plapoint/filters/preprocessing.h>
+#include "SparsePointCloudWorkspace.h"
 
 #include <algorithm>
 #include <cmath>
@@ -264,49 +262,22 @@ int SfmPointCloudFilter::filterByStatistical(int k,
                                              double stdDevMul,
                                              plapoint::ProcessingDevice processingDevice)
 {
-    // 收集所有点的坐标
-    auto allIds = reconstruction_.allPoint3DIds();
-    const int n = static_cast<int>(allIds.size());
-    if (n <= k)
+    const SparsePointCloudWorkspace workspace =
+        SparsePointCloudWorkspace::fromReconstruction(reconstruction_);
+    if (workspace.size() <= static_cast<std::size_t>(std::max(0, k)))
     {
         return 0;
     }
 
-    std::vector<Point3DId> pointIds;
-    pointIds.reserve(n);
-    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> points(
-        static_cast<plamatrix::Index>(n), 3);
-    for (Point3DId pid : allIds)
-    {
-        if (!reconstruction_.hasPoint3D(pid))
-        {
-            continue;
-        }
-        const auto &pt = reconstruction_.point3D(pid);
-        const auto row = static_cast<plamatrix::Index>(pointIds.size());
-        points(row, 0) = pt.xyz[0];
-        points(row, 1) = pt.xyz[1];
-        points(row, 2) = pt.xyz[2];
-        pointIds.push_back(pid);
-    }
-
-    const int numPts = static_cast<int>(pointIds.size());
-    if (numPts <= k)
-    {
-        return 0;
-    }
-
-    plapoint::PointCloud<double, plamatrix::Device::CPU> cloud(std::move(points));
-    std::vector<int> removedIndices;
-    plapoint::statisticalOutlierRemoval(
-        cloud, k, stdDevMul, processingDevice, &removedIndices);
+    const std::vector<int> removedIndices =
+        workspace.statisticalOutlierIndices(k, stdDevMul, processingDevice);
 
     int removed = 0;
     for (int index : removedIndices)
     {
-        if (index >= 0 && index < numPts)
+        if (index >= 0 && static_cast<std::size_t>(index) < workspace.pointIds().size())
         {
-            reconstruction_.deletePoint3D(pointIds[static_cast<std::size_t>(index)]);
+            reconstruction_.deletePoint3D(workspace.pointIds()[static_cast<std::size_t>(index)]);
             ++removed;
         }
     }

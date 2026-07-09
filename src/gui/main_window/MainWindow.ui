@@ -328,10 +328,10 @@
     <bool>true</bool>
    </property>
    <property name="text">
-    <string>显示操控球</string>
+    <string>显示轨迹球</string>
    </property>
    <property name="toolTip">
-    <string>显示或隐藏 3D 视图中的旋转操控球</string>
+    <string>显示或隐藏 3D 视图中的旋转轨迹球</string>
    </property>
   </action>
   <action name="actionToggleCameras">

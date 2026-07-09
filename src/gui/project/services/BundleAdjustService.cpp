@@ -257,10 +257,45 @@ BaServiceResult BundleAdjustService::run(
     saveObj[QStringLiteral("mean_rms_after")]       = baResult.meanRmsAfter;
     saveObj[QStringLiteral("threads")]              = opts.threads;
     saveObj[QStringLiteral("refined_camera_count")] = baResult.refinedCameraCount;
+    saveObj[QStringLiteral("ba_requested_backend")] =
+        QString::fromLatin1(xjw::BundleAdjust::backendName(baResult.requestedBackend));
+    saveObj[QStringLiteral("ba_used_backend")] =
+        QString::fromLatin1(xjw::BundleAdjust::backendName(baResult.usedBackend));
+    saveObj[QStringLiteral("ba_used_gpu")] = baResult.usedGpu;
+    saveObj[QStringLiteral("ba_backend_fallback")] = baResult.backendFallback;
+    saveObj[QStringLiteral("ba_backend_message")] =
+        QString::fromUtf8(baResult.backendMessage.c_str());
+    saveObj[QStringLiteral("ba_backend_selection_reason")] =
+        QString::fromUtf8(baResult.backendSelectionReason.c_str());
+    saveObj[QStringLiteral("ba_quality_gate_rejected")] = baResult.qualityGateRejected;
+    saveObj[QStringLiteral("ba_quality_gate_message")] =
+        QString::fromUtf8(baResult.qualityGateMessage.c_str());
+    saveObj[QStringLiteral("ba_valid_track_ratio")] = baResult.validTrackRatio;
+    saveObj[QStringLiteral("ba_ceres_linear_solver")] =
+        QString::fromStdString(baResult.ceresLinearSolverName);
+    saveObj[QStringLiteral("ba_setup_seconds")] = baResult.setupSeconds;
+    saveObj[QStringLiteral("ba_solve_seconds")] = baResult.solveSeconds;
+    saveObj[QStringLiteral("ba_total_seconds")] = baResult.totalSeconds;
+    saveObj[QStringLiteral("ba_observation_count")] = baResult.observationCount;
 
     // BA 选项回存（便于复现）
     {
         QJsonObject optObj;
+        optObj[QStringLiteral("ba_backend")] =
+            QString::fromLatin1(xjw::BundleAdjust::backendName(baOptions.backend));
+        optObj[QStringLiteral("ba_cuda_device")] = baOptions.ceresCudaDevice;
+        optObj[QStringLiteral("ba_min_cuda_cameras")] = baOptions.minCeresCudaCameras;
+        optObj[QStringLiteral("ba_min_cuda_observations")] = baOptions.minCeresCudaObservations;
+        optObj[QStringLiteral("ba_min_cpu_observations")] = baOptions.minCeresCpuObservations;
+        optObj[QStringLiteral("ba_max_ceres_point_only_observations")] =
+            baOptions.maxCeresPointOnlyObservations;
+        optObj[QStringLiteral("ba_allow_backend_fallback")] = baOptions.allowBackendFallback;
+        optObj[QStringLiteral("ba_enable_backend_quality_gate")] = baOptions.enableBackendQualityGate;
+        optObj[QStringLiteral("ba_max_accepted_rms_growth")] = baOptions.maxAcceptedRmsGrowth;
+        optObj[QStringLiteral("ba_min_accepted_valid_track_ratio")] =
+            baOptions.minAcceptedValidTrackRatio;
+        optObj[QStringLiteral("ba_compare_auto_backend_with_legacy")] =
+            baOptions.compareAutoBackendWithLegacy;
         optObj[QStringLiteral("max_iterations")]       = opts.baOpt.maxIterations;
         optObj[QStringLiteral("max_point_iterations")] = opts.baOpt.maxPointIterations;
         optObj[QStringLiteral("max_camera_iterations")]= opts.baOpt.maxCameraIterations;
@@ -541,8 +576,39 @@ BaServiceResult BundleAdjustService::run(
             ts << "相机数量: "       << cameras.size()                  << "\n";
             ts << "轨迹总数: "       << baResult.totalTracks            << "\n";
             ts << "有效优化轨迹: "   << baResult.optimizedTracks        << "\n";
+            ts << "有效轨迹比例: "   << baResult.validTrackRatio        << "\n";
             ts << "平均 RMS（前）: " << baResult.meanRmsBefore          << "\n";
             ts << "平均 RMS（后）: " << baResult.meanRmsAfter           << "\n";
+            ts << "请求 BA 后端: "   << QString::fromLatin1(xjw::BundleAdjust::backendName(baResult.requestedBackend))
+               << "\n";
+            ts << "实际 BA 后端: "   << QString::fromLatin1(xjw::BundleAdjust::backendName(baResult.usedBackend))
+               << "\n";
+            ts << "实际使用 GPU: "   << (baResult.usedGpu ? QStringLiteral("是") : QStringLiteral("否"))
+               << "\n";
+            ts << "Ceres 线性求解器: " << QString::fromStdString(baResult.ceresLinearSolverName) << "\n";
+            ts << "观测数量: "       << baResult.observationCount          << "\n";
+            ts << "后端总耗时(s): "  << baResult.totalSeconds             << "\n";
+            ts << "问题构建耗时(s): " << baResult.setupSeconds             << "\n";
+            ts << "求解耗时(s): "    << baResult.solveSeconds             << "\n";
+            if (!baResult.backendSelectionReason.empty())
+            {
+                ts << "后端选择说明: " << QString::fromUtf8(baResult.backendSelectionReason.c_str()) << "\n";
+            }
+            if (baResult.qualityGateRejected || !baResult.qualityGateMessage.empty())
+            {
+                ts << "质量门控: "
+                   << (baResult.qualityGateRejected ? QStringLiteral("拒绝候选后端") : QStringLiteral("通过"))
+                   << "\n";
+                if (!baResult.qualityGateMessage.empty())
+                {
+                    ts << "质量门控说明: " << QString::fromUtf8(baResult.qualityGateMessage.c_str()) << "\n";
+                }
+            }
+            if (baResult.backendFallback)
+            {
+                ts << "后端回退: 是\n";
+                ts << "回退说明: " << QString::fromUtf8(baResult.backendMessage.c_str()) << "\n";
+            }
             ts << "\n主要输出文件：\n";
             ts << "  " << summaryTxtPath  << "\n";
             ts << "  " << pointsCsvPath   << "\n";

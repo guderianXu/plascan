@@ -14,11 +14,48 @@
 #include <atomic>
 #include <functional>
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "Camera.h"
 
 namespace xjw {
+
+/**
+ * @brief BA 求解后端。
+ *
+ * LegacyCpu 为项目原有的手写 CPU/OpenMP 求解器；CeresCpu/CeresCuda 使用
+ * Ceres 构建同一个非线性最小二乘问题，其中 CeresCuda 仅在 Ceres 本身
+ * 编译了 CUDA 支持时才会实际启用 GPU 线性代数求解。
+ */
+enum class BABackend
+{
+    Auto,
+    LegacyCpu,
+    CeresCpu,
+    CeresCuda,
+};
+
+/**
+ * @brief Ceres 内部线性求解策略。
+ */
+enum class BACeresLinearSolver
+{
+    Auto,
+    DenseSchurCpu,
+    DenseSchurCuda,
+    SparseSchurCpu,
+};
+
+/**
+ * @brief BA 问题规模摘要，用于自动后端选择和日志诊断。
+ */
+struct BAProblemStats
+{
+    int cameraCount = 0;
+    int trackCount = 0;
+    int observationCount = 0;
+};
 
 /**
  * @brief 单条观测：某个三维点在某台相机中对应的像点坐标。
@@ -103,6 +140,7 @@ struct BATrack
  */
 struct BAOptions
 {
+    BABackend backend = BABackend::LegacyCpu; ///< BA 求解后端，默认保持原有 CPU 行为
     int maxIterations = 20;       ///< 外层交替优化最大迭代轮数（点+相机各一次为一轮）
     int maxPointIterations = 12;  ///< 每轮内点位置优化的最大迭代次数
     int maxCameraIterations = 10; ///< 每轮内相机位姿优化的最大迭代次数
@@ -151,6 +189,30 @@ struct BAOptions
     /// OpenMP 线程数；0 表示使用系统默认（OMP_NUM_THREADS 或 CPU 核心数）。
     int numThreads = 0;
 
+    // ── Ceres/GPU 后端 ─────────────────────────────────────────────────────
+    /// Ceres CUDA 求解使用的 GPU 设备 ID。当前仅在 Ceres 编译了 CUDA 支持时生效。
+    int ceresCudaDevice = 0;
+    /// 参考 COLMAP：问题太小时 GPU 数据搬运开销通常不划算，低于该相机数则回退 Ceres CPU。
+    int minCeresCudaCameras = 50;
+    /// 低于该观测数时，即使 CUDA 可用也优先使用 CPU，避免 GPU 调度/搬运开销大于收益。
+    int minCeresCudaObservations = 500000;
+    /// 低于该观测数时，Auto 下的 Ceres CPU 通常也不如 legacy 交替 BA 划算。
+    int minCeresCpuObservations = 50000;
+    /// point-only Ceres 使用 dense QR；超出该观测规模时默认回退 legacy，避免大矩阵内存/稳定性问题。
+    int maxCeresPointOnlyObservations = 100000;
+    /// Ceres 线性求解策略。Auto 会根据是否实际使用 CUDA 选择 dense schur CPU/GPU。
+    BACeresLinearSolver ceresLinearSolver = BACeresLinearSolver::Auto;
+    /// 请求 Ceres/GPU 后端不可用时是否回退到可用后端。
+    bool allowBackendFallback = true;
+    /// Auto 后端是否启用质量门控；显式指定 Ceres/CUDA 时不自动替用户回退质量。
+    bool enableBackendQualityGate = true;
+    /// Auto 候选后端允许的最大 RMS 增长倍率；超过则回退 legacy。
+    double maxAcceptedRmsGrowth = 1.25;
+    /// Auto 候选后端最少有效 track 比例；低于该比例则回退 legacy。
+    double minAcceptedValidTrackRatio = 0.60;
+    /// Auto 候选为 Ceres/CUDA 时是否运行 legacy 对照，保证默认路径优先质量。
+    bool compareAutoBackendWithLegacy = true;
+
     // ── 任务控制 ──────────────────────────────────────────────────────────
     /// 外部取消标志；GUI/CLI 长任务可在外层迭代边界中止 BA。
     std::shared_ptr<std::atomic<bool>> cancelFlag;
@@ -180,6 +242,21 @@ struct BARefinedPoint
  */
 struct BAResult
 {
+    BABackend requestedBackend = BABackend::LegacyCpu; ///< 调用方请求的 BA 后端
+    BABackend usedBackend = BABackend::LegacyCpu;      ///< 实际执行的 BA 后端
+    bool usedGpu = false;                              ///< 本次 BA 是否实际启用了 GPU 求解
+    bool backendFallback = false;                      ///< 请求后端不可用时是否发生回退
+    std::string backendMessage;                        ///< 后端选择/回退说明，便于 GUI 和日志展示
+    std::string backendSelectionReason;                ///< Auto 后端选择、拒绝或回退原因
+    bool qualityGateRejected = false;                  ///< Auto 候选后端是否被质量门控拒绝
+    std::string qualityGateMessage;                    ///< 质量门控拒绝细节
+    double validTrackRatio = 0.0;                      ///< optimizedTracks / totalTracks
+    std::string ceresLinearSolverName = "none";        ///< Ceres 实际线性求解器名称，legacy 为 none
+    double setupSeconds = 0.0;                         ///< Ceres 问题构建耗时或 legacy 前处理耗时
+    double solveSeconds = 0.0;                         ///< 非线性求解主体耗时
+    double totalSeconds = 0.0;                         ///< BA 后端总耗时
+    int observationCount = 0;                          ///< 输入观测总数
+
     int totalTracks = 0;        ///< 输入轨迹总数
     int optimizedTracks = 0;    ///< 成功优化的轨迹数
     double meanRmsBefore = 0.0; ///< 优化前所有轩迹重投影 RMS 的均値
@@ -213,6 +290,20 @@ struct BAResult
 class BundleAdjust
 {
 public:
+    /// 返回指定 BA 后端在当前编译产物中是否可用。
+    static bool isBackendAvailable(BABackend backend);
+
+    /// 返回后端稳定名称，供日志、JSON 和测试输出使用。
+    static const char *backendName(BABackend backend);
+
+    /// 统计 BA 输入规模。
+    static BAProblemStats summarizeProblem(const std::vector<Camera> &cameras,
+                                           const std::vector<BATrack> &tracks);
+
+    /// 根据问题规模与配置选择实际执行后端。
+    static BABackend selectBackendForProblem(const BAProblemStats &stats,
+                                             const BAOptions &options);
+
     /**
      * @brief 执行光束法平差优化（交替优化点位置和相机位姿）。
      *

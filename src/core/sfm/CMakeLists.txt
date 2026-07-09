@@ -36,6 +36,7 @@ set(SFM_SOURCES
 
     # ---- 点云过滤 ----
     filtering/SfmPointCloudFilter.cpp
+    filtering/SparsePointCloudWorkspace.cpp
     filtering/SparsePointCloudProcessor.cpp
 )
 
@@ -54,6 +55,7 @@ set(SFM_HEADERS
     ReferenceTerrainPrior.h
     TriangulationService.h
     filtering/SfmPointCloudFilter.h
+    filtering/SparsePointCloudWorkspace.h
     filtering/SparsePointCloudProcessor.h
 )
 

@@ -108,7 +108,7 @@ function(plascan_append_unique_flag var_name flag)
 endfunction()
 
 function(plascan_configure_mixed_toolchain_binutils conda_prefix)
-    if(APPLE OR NOT conda_prefix OR NOT EXISTS "${conda_prefix}")
+    if(WIN32 OR APPLE OR NOT conda_prefix OR NOT EXISTS "${conda_prefix}")
         set(PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN OFF CACHE BOOL
             "Use system binutils when system compilers are combined with conda dependencies" FORCE)
         return()
@@ -153,7 +153,7 @@ function(plascan_configure_mixed_toolchain_binutils conda_prefix)
 endfunction()
 
 function(plascan_apply_mixed_toolchain_binutils_to_scope)
-    if(NOT PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)
+    if(WIN32 OR NOT PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)
         return()
     endif()
 

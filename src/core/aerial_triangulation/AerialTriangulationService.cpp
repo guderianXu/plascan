@@ -41,6 +41,7 @@
 #include "ProjectSupportUtils.h"
 #include "Logger.h"
 #include "Camera.h"
+#include "BundleAdjust.h"
 #include "OverlapAnalyzer.h"
 #include "project/SparseResultQuality.h"
 #include "pipeline/IncrementalSfm.h"
@@ -4764,6 +4765,28 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
     sfmOpts.localBAInterval   = presets.localBAInterval;
     sfmOpts.globalBAInterval  = presets.globalBAInterval;
     sfmOpts.baOptions.cancelFlag = opts.cancelFlag;
+    sfmOpts.baOptions.numThreads = std::max(1, opts.threads);
+    if (useCuda)
+    {
+        // CUDA 模式下 SfM 的局部/全局 BA 先请求自动后端选择：
+        // 小规模局部 BA 通常 CPU 更快，观测量足够大的全局 BA 才切到 Ceres CUDA。
+        sfmOpts.baOptions.backend = xjw::BABackend::Auto;
+        sfmOpts.baOptions.ceresCudaDevice = 0;
+        sfmOpts.baOptions.minCeresCudaObservations = 500000;
+        sfmOpts.baOptions.minCeresCpuObservations = 50000;
+        sfmOpts.baOptions.enableBackendQualityGate = true;
+        sfmOpts.baOptions.maxAcceptedRmsGrowth = 1.25;
+        sfmOpts.baOptions.minAcceptedValidTrackRatio = 0.60;
+        sfmOpts.baOptions.compareAutoBackendWithLegacy = true;
+        sfmOpts.baOptions.allowBackendFallback = true;
+    }
+    LOG_INFO(QStringLiteral("SFM BA 后端请求: %1, Ceres CUDA 最小相机数=%2, CUDA 最小观测数=%3, "
+                            "Ceres CPU 最小观测数=%4, 质量门控=%5")
+        .arg(QString::fromLatin1(BundleAdjust::backendName(sfmOpts.baOptions.backend)))
+        .arg(sfmOpts.baOptions.minCeresCudaCameras)
+        .arg(sfmOpts.baOptions.minCeresCudaObservations)
+        .arg(sfmOpts.baOptions.minCeresCpuObservations)
+        .arg(sfmOpts.baOptions.enableBackendQualityGate ? QStringLiteral("开启") : QStringLiteral("关闭")));
 
     // 根据精度等级调整过滤参数：高精度/最高精度更严格
     if (opts.quality >= 2) 

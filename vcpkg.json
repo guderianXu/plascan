@@ -14,6 +14,7 @@
         "zstd"
       ]
     },
+    "ceres",
     "gtest",
     {
       "name": "libxkbcommon",
@@ -83,6 +84,17 @@
     }
   ],
   "features": {
+    "ceres-cuda": {
+      "description": "Enable Ceres CUDA dense linear algebra for bundle adjustment.",
+      "dependencies": [
+        {
+          "name": "ceres",
+          "features": [
+            "cuda"
+          ]
+        }
+      ]
+    },
     "opencv-dnn-cuda": {
       "description": "Enable OpenCV DNN CUDA backend for ONNX inference such as U2Net masks.",
       "dependencies": [

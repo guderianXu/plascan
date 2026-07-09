@@ -69,6 +69,10 @@ Windows CUDA 开发机推荐固定使用 `scripts/build_win/build_windows_cuda.p
 `build/windows-vcpkg-cuda-release`，并使用该目录自己的 `vcpkg_installed`、CUDA 13.1 和
 `build/env/libtorch-cu130/libtorch`，避免旧 CPU LibTorch 或其它 build cache 混入运行时 PATH。
 
+同一脚本默认启用 `ceres-cuda` manifest feature，用于 SfM/光束法平差中的 Ceres CUDA 后端。
+如果只想构建 CPU/legacy BA，可传 `-EnableCeresCudaBa:$false`。已有 `vcpkg_installed` 若仍是
+CPU 版 Ceres，脚本会提示重新运行 `-InstallDeps`，避免界面显示 CUDA 但实际只跑 CPU。
+
 U2Net ONNX 蒙版的 CPU 推理只需要标准 OpenCV DNN。若要启用 OpenCV DNN CUDA 后端，需要让 vcpkg
 额外安装 `opencv-dnn-cuda` manifest feature：
 
@@ -179,6 +183,33 @@ build/bin/three_d_reconstruction_cli path/to/input.lis \
 需要强制 CPU 时再传 `--device cpu`。`--feature-max-image-dim 0` 表示使用质量档位的默认设置；
 最高质量档不会自动把 DISK/ALIKED 输入缩回 1200 px。显存紧张时可手动调小，
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
+
+`bundle_adjust_cli` 默认请求 `--ba-backend auto`。BA 会先统计相机数、track 数和观测数：
+小规模局部 BA 优先使用 legacy/OpenMP 或 Ceres CPU，观测量足够大且 Ceres 编译了 CUDA 时才切到
+Ceres CUDA dense Schur。`ba_run_summary.json` 会写入 `ba_requested_backend`、`ba_used_backend`、
+`ba_used_gpu`、`ba_ceres_linear_solver`、`ba_valid_track_ratio`、setup/solve/total 耗时和质量门控/回退原因。
+Auto 后端会优先保证 RMS 和有效 track 比例；CUDA 候选若比 legacy 明显变差，会自动回退而不是强行使用 GPU。
+point-only BA 默认走 legacy，显式请求大规模 point-only Ceres 时也会按安全阈值回退，避免 dense QR 大矩阵不稳定。
+需要复现旧路径时可传
+`--ba-backend legacy_cpu`；需要强制 Ceres CPU 或 CUDA 时分别传 `--ba-backend ceres_cpu` /
+`--ba-backend ceres_cuda`。可用 `--ba-min-cuda-cameras` 和 `--ba-min-cuda-observations`
+调整自动选择阈值；默认需要至少 50 台相机和 500000 条观测才自动选择 Ceres CUDA。
+Ceres CUDA 当前加速的是 Ceres dense Schur 线性求解环节，不加速 residual/Jacobian 构建和 BA 输入构建。
+
+BA 后端基准可单独运行：
+
+```bash
+cmake --build build/windows-vcpkg-cuda-release --target ba_backend_benchmark -j32
+python scripts/bench/run_ba_backend_benchmark.py \
+  --exe build/windows-vcpkg-cuda-release/bin/ba_backend_benchmark.exe \
+  --out build/ba_benchmarks/ba_backend_benchmark.csv \
+  --summary-json build/ba_benchmarks/ba_backend_benchmark.json \
+  --cases small,medium,large \
+  --backends legacy_cpu,ceres_cpu,ceres_cuda,auto \
+  --repeat 3 \
+  --iterations 8 \
+  --threads 32
+```
 
 调试和 benchmark 时可分阶段运行：`--stop-after-sfm` 只生成稀疏结果，`--skip-mvs` 在 SfM 后写报告并跳过后续阶段，
 `--mvs-depth-only` 只生成 MVS 深度图、raw depth、confidence、valid mask 和 manifest，并在融合、网格和 terrain 前停止；

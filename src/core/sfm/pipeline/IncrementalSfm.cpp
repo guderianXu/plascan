@@ -2003,12 +2003,65 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     // 执行 BA
     const BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
 
-    // 回写优化后的相机位姿（跳过被 gauge 固定的相机）
-    for (size_t i = 0; i < baImageIds.size(); ++i)
+    bool applyBaResult = true;
+    const bool knownPoseGlobalBa = _sfmOptions.useKnownCameraPoses && !localOnly &&
+                                   baOpt.refineCameraPose && !baOpt.cameraPosePriors.empty();
+    if (knownPoseGlobalBa)
     {
-        if (i < baResult.refinedCameras.size())
+        if (!std::isfinite(baResult.meanRmsAfter) ||
+            baResult.meanRmsAfter > _sfmOptions.filterMaxReprojError)
         {
-            _reconstruction->camera(baImageIds[i]) = baResult.refinedCameras[i];
+            applyBaResult = false;
+        }
+        for (size_t i = 0; applyBaResult && i < baImageIds.size() &&
+                            i < baCameras.size() &&
+                            i < baResult.refinedCameras.size() &&
+                            i < baOpt.cameraPosePriors.size(); ++i)
+        {
+            const int cameraIndex = static_cast<int>(i);
+            if (std::find(baOpt.fixedCameraIndices.begin(),
+                          baOpt.fixedCameraIndices.end(),
+                          cameraIndex) != baOpt.fixedCameraIndices.end())
+            {
+                continue;
+            }
+            const BACameraPosePrior &prior = baOpt.cameraPosePriors[i];
+            if (!prior.enabled)
+            {
+                continue;
+            }
+            const auto beforeCenter = baCameras[i].cameraCenter();
+            const auto afterCenter = baResult.refinedCameras[i].cameraCenter();
+            const double beforeDistance = std::sqrt(
+                (beforeCenter[0] - prior.cameraCenter[0]) * (beforeCenter[0] - prior.cameraCenter[0]) +
+                (beforeCenter[1] - prior.cameraCenter[1]) * (beforeCenter[1] - prior.cameraCenter[1]) +
+                (beforeCenter[2] - prior.cameraCenter[2]) * (beforeCenter[2] - prior.cameraCenter[2]));
+            const double afterDistance = std::sqrt(
+                (afterCenter[0] - prior.cameraCenter[0]) * (afterCenter[0] - prior.cameraCenter[0]) +
+                (afterCenter[1] - prior.cameraCenter[1]) * (afterCenter[1] - prior.cameraCenter[1]) +
+                (afterCenter[2] - prior.cameraCenter[2]) * (afterCenter[2] - prior.cameraCenter[2]));
+            const double tolerance = std::max(1e-3, prior.positionSigmaMeters * 3.0);
+            if (afterDistance > std::max(beforeDistance + tolerance, beforeDistance * 2.0 + 1e-3))
+            {
+                applyBaResult = false;
+            }
+        }
+        if (!applyBaResult)
+        {
+            Logger::instance()->info(
+                "[SFM] Known-pose BA result rejected by prior/RMS gate; keeping pre-BA cameras and points");
+        }
+    }
+
+    // 回写优化后的相机位姿（跳过被 gauge 固定的相机）
+    if (applyBaResult)
+    {
+        for (size_t i = 0; i < baImageIds.size(); ++i)
+        {
+            if (i < baResult.refinedCameras.size())
+            {
+                _reconstruction->camera(baImageIds[i]) = baResult.refinedCameras[i];
+            }
         }
     }
 
@@ -2019,6 +2072,10 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     int removedObs = 0;
     for (size_t ti = 0; ti < baTracks.size() && ti < baResult.points.size(); ++ti)
     {
+        if (!applyBaResult)
+        {
+            continue;
+        }
         const Point3DId pid = trackToPid[ti];
         if (!_reconstruction->hasPoint3D(pid))
             continue;

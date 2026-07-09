@@ -130,6 +130,26 @@ cv::Mat normalizeProbability(const cv::Mat &scores)
     return floatScores;
 }
 
+cv::Mat forwardFusedOutput(cv::dnn::Net &net)
+{
+    const std::vector<std::string> outputNames = net.getUnconnectedOutLayersNames();
+    if (outputNames.empty())
+    {
+        return net.forward();
+    }
+
+    std::vector<cv::Mat> outputs;
+    net.forward(outputs, outputNames);
+    if (outputs.empty())
+    {
+        return {};
+    }
+
+    // U2Net exports the fused final saliency map first, followed by side outputs.
+    // cv::dnn::Net::forward() may return a different unconnected output for multi-output ONNX models.
+    return outputs.front();
+}
+
 cv::Mat filterForeground(const cv::Mat &foreground,
                          int morphologyRadius,
                          int minComponentArea,
@@ -237,11 +257,13 @@ U2NetDnnCapabilities detectU2NetDnnCapabilities()
 {
     U2NetDnnCapabilities capabilities;
     const std::string buildInfo = cv::getBuildInformation();
-    capabilities.opencvBuiltWithCuda = buildInfoFlagEnabled(buildInfo, "NVIDIA CUDA");
-    capabilities.opencvBuiltWithCudnn = buildInfoFlagEnabled(buildInfo, "cuDNN");
     capabilities.cudaDeviceCount = cudaDeviceCount();
     capabilities.hasCudaDevice = capabilities.cudaDeviceCount > 0;
     const bool hasDnnCudaTarget = dnnCudaTargetAvailable();
+    const bool buildInfoReportsCuda = buildInfoFlagEnabled(buildInfo, "NVIDIA CUDA");
+
+    capabilities.opencvBuiltWithCuda = buildInfoReportsCuda || capabilities.hasCudaDevice || hasDnnCudaTarget;
+    capabilities.opencvBuiltWithCudnn = buildInfoFlagEnabled(buildInfo, "cuDNN");
     capabilities.hasDnnCudaBackend = hasDnnCudaTarget && capabilities.hasCudaDevice;
 
     std::ostringstream out;
@@ -290,12 +312,6 @@ void U2NetMaskGenerator::loadNet(bool useCuda)
         {
             throw std::runtime_error(
                 "OpenCV was not built with CUDA support. Rebuild with vcpkg feature opencv-dnn-cuda.");
-        }
-        if (!capabilities.hasDnnCudaBackend && capabilities.hasCudaDevice)
-        {
-            throw std::runtime_error(
-                "OpenCV DNN CUDA target is not available. Rebuild with vcpkg feature opencv-dnn-cuda. " +
-                capabilities.summary);
         }
         if (capabilities.cudaDeviceCount <= 0)
         {
@@ -355,7 +371,7 @@ U2NetMaskResult U2NetMaskGenerator::runForward(const cv::Mat &image)
     const cv::Mat blob = makeU2NetBlob(image, _config.inputSize);
     _net.setInput(blob);
 
-    cv::Mat output = _net.forward();
+    cv::Mat output = forwardFusedOutput(_net);
     cv::Mat probability = normalizeProbability(firstOutputPlane(output));
     if (probability.empty())
     {

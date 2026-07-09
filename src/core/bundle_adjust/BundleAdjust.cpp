@@ -13,6 +13,7 @@
 
 #include "BundleAdjust.h"
 
+#include "BundleAdjustCeres.h"
 #include "log/Logger.h"
 #include "math/Vec3Ops.h"
 
@@ -21,6 +22,7 @@
 #endif
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <cstdio>
 #include <limits>
@@ -143,7 +145,7 @@ std::array<double, 6> cameraPosePriorResidual(const Camera &cam,
                                               const BACameraPosePrior &prior)
 {
     std::array<double, 6> residual{{0.0, 0.0, 0.0, 0.0, 0.0, 0.0}};
-    const double rotationSigmaRad = prior.rotationSigmaDegrees * M_PI / 180.0;
+    const double rotationSigmaRad = prior.rotationSigmaDegrees * 3.14159265358979323846 / 180.0;
     if (rotationSigmaRad > 1e-12)
     {
         const auto relativeRotation =
@@ -1135,18 +1137,141 @@ static bool isCancelled(const BAOptions &options)
     return options.cancelFlag && options.cancelFlag->load(std::memory_order_relaxed);
 }
 
-BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
-                                      const std::vector<BATrack> &tracks,
-                                      const BAOptions &options)
+int countObservations(const std::vector<BATrack> &tracks)
 {
+    int count = 0;
+    for (const BATrack &track : tracks)
+    {
+        count += static_cast<int>(track.observations.size());
+    }
+    return count;
+}
+
+void updateDerivedResultStats(BAResult &result)
+{
+    result.validTrackRatio = result.totalTracks > 0
+                                 ? static_cast<double>(result.optimizedTracks) /
+                                       static_cast<double>(result.totalTracks)
+                                 : 0.0;
+}
+
+bool resultFailsQualityGate(const BAResult &result,
+                            const BAOptions &options,
+                            std::string *message)
+{
+    if (!options.enableBackendQualityGate)
+    {
+        return false;
+    }
+
+    if (!std::isfinite(result.meanRmsAfter))
+    {
+        if (message)
+        {
+            *message = "质量门控拒绝: BA 后 RMS 非有限";
+        }
+        return true;
+    }
+
+    if (result.totalTracks > 0 &&
+        result.validTrackRatio < std::max(0.0, options.minAcceptedValidTrackRatio))
+    {
+        if (message)
+        {
+            *message = "质量门控拒绝: 有效 track 比例过低";
+        }
+        return true;
+    }
+
+    const double maxGrowth = std::max(0.0, options.maxAcceptedRmsGrowth);
+    if (maxGrowth > 0.0 && std::isfinite(result.meanRmsBefore))
+    {
+        if (result.meanRmsBefore > 1e-12)
+        {
+            const double maxAccepted = result.meanRmsBefore * maxGrowth;
+            if (result.meanRmsAfter > maxAccepted)
+            {
+                if (message)
+                {
+                    *message = "质量门控拒绝: BA 后 RMS 增长超过阈值";
+                }
+                return true;
+            }
+        }
+        else if (result.meanRmsAfter > 1e-9)
+        {
+            if (message)
+            {
+                *message = "质量门控拒绝: 零残差输入被优化为非零残差";
+            }
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool legacyIsBetterThanCandidate(const BAResult &candidate,
+                                 const BAResult &legacy,
+                                 const BAOptions &options,
+                                 std::string *message)
+{
+    if (!options.enableBackendQualityGate ||
+        !options.compareAutoBackendWithLegacy ||
+        legacy.totalTracks <= 0 ||
+        legacy.optimizedTracks <= 0 ||
+        !std::isfinite(legacy.meanRmsAfter))
+    {
+        return false;
+    }
+
+    const double maxGrowth = std::max(1.0, options.maxAcceptedRmsGrowth);
+    if (std::isfinite(candidate.meanRmsAfter) &&
+        candidate.meanRmsAfter > legacy.meanRmsAfter * maxGrowth)
+    {
+        if (message)
+        {
+            *message = "质量门控拒绝: 候选后端 RMS 明显差于 legacy_cpu";
+        }
+        return true;
+    }
+
+    if (candidate.validTrackRatio + 1e-12 < legacy.validTrackRatio &&
+        candidate.validTrackRatio < std::max(0.0, options.minAcceptedValidTrackRatio))
+    {
+        if (message)
+        {
+            *message = "质量门控拒绝: 候选后端有效 track 比例低于 legacy_cpu";
+        }
+        return true;
+    }
+
+    return false;
+}
+
+BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
+                                  const std::vector<BATrack> &tracks,
+                                  const BAOptions &options)
+{
+    const auto totalStart = std::chrono::steady_clock::now();
     BAResult result;
     result.totalTracks = static_cast<int>(tracks.size());
+    result.observationCount = countObservations(tracks);
+    result.ceresLinearSolverName = "none";
     // 将相机列表拷贝到结果中，在优化过程中来回修改
     result.refinedCameras = cameras;
     result.points.resize(tracks.size());
 
-    if (cameras.empty() || tracks.empty()) return result;
-    if (isCancelled(options)) return result;
+    auto finishResult = [&]() -> BAResult {
+        const auto totalEnd = std::chrono::steady_clock::now();
+        result.totalSeconds = std::chrono::duration<double>(totalEnd - totalStart).count();
+        result.solveSeconds = result.totalSeconds;
+        updateDerivedResultStats(result);
+        return result;
+    };
+
+    if (cameras.empty() || tracks.empty()) return finishResult();
+    if (isCancelled(options)) return finishResult();
 
     if (options.enableLaserPlaneConstraints)
     {
@@ -1192,7 +1317,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     if (isCancelled(options))
     {
         Logger::instance()->info("[BA] 已请求取消，跳过光束法平差优化");
-        return result;
+        return finishResult();
     }
 
     // 外层交替优化：先点后相机，重复迭代直到达到最大次数或收敛
@@ -1366,7 +1491,293 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         result.scaleBarConstraintCount = afterScaleBars.count;
         result.scaleBarRmsAfterMeters = afterScaleBars.rms;
     }
-    return result;
+    return finishResult();
+}
+
+const char *BundleAdjust::backendName(BABackend backend)
+{
+    switch (backend)
+    {
+    case BABackend::Auto:
+        return "auto";
+    case BABackend::LegacyCpu:
+        return "legacy_cpu";
+    case BABackend::CeresCpu:
+        return "ceres_cpu";
+    case BABackend::CeresCuda:
+        return "ceres_cuda";
+    }
+    return "unknown";
+}
+
+bool BundleAdjust::isBackendAvailable(BABackend backend)
+{
+    switch (backend)
+    {
+    case BABackend::Auto:
+        return true;
+    case BABackend::LegacyCpu:
+        return true;
+    case BABackend::CeresCpu:
+        return detail::isCeresBackendCompiled();
+    case BABackend::CeresCuda:
+        return detail::isCeresCudaBackendCompiled();
+    }
+    return false;
+}
+
+BAProblemStats BundleAdjust::summarizeProblem(const std::vector<Camera> &cameras,
+                                              const std::vector<BATrack> &tracks)
+{
+    BAProblemStats stats;
+    stats.cameraCount = static_cast<int>(cameras.size());
+    stats.trackCount = static_cast<int>(tracks.size());
+    stats.observationCount = countObservations(tracks);
+    return stats;
+}
+
+BABackend BundleAdjust::selectBackendForProblem(const BAProblemStats &stats,
+                                                const BAOptions &options)
+{
+    if (options.backend != BABackend::Auto)
+    {
+        return options.backend;
+    }
+    if (!options.refineCameraPose)
+    {
+        return BABackend::LegacyCpu;
+    }
+    if (isBackendAvailable(BABackend::CeresCuda) &&
+        stats.cameraCount >= std::max(1, options.minCeresCudaCameras) &&
+        stats.observationCount >= std::max(1, options.minCeresCudaObservations))
+    {
+        return BABackend::CeresCuda;
+    }
+    if (isBackendAvailable(BABackend::CeresCpu) &&
+        stats.observationCount >= std::max(1, options.minCeresCpuObservations))
+    {
+        return BABackend::CeresCpu;
+    }
+    return BABackend::LegacyCpu;
+}
+
+BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
+                                      const std::vector<BATrack> &tracks,
+                                      const BAOptions &options)
+{
+    auto runLegacy = [&](const std::string &fallbackMessage) {
+        BAResult result = optimizePointsLegacyImpl(cameras, tracks, options);
+        result.requestedBackend = options.backend;
+        result.usedBackend = BABackend::LegacyCpu;
+        result.usedGpu = false;
+        result.backendFallback = options.backend != BABackend::LegacyCpu;
+        result.backendMessage = fallbackMessage;
+        result.backendSelectionReason = fallbackMessage;
+        updateDerivedResultStats(result);
+        return result;
+    };
+
+    auto pointOnlyCeresTooLarge = [&]() {
+        if (options.refineCameraPose)
+        {
+            return false;
+        }
+        const BAProblemStats stats = summarizeProblem(cameras, tracks);
+        return stats.observationCount > std::max(1, options.maxCeresPointOnlyObservations);
+    };
+
+    if (options.backend == BABackend::Auto)
+    {
+        const BAProblemStats stats = summarizeProblem(cameras, tracks);
+        BAOptions selectedOptions = options;
+        selectedOptions.backend = selectBackendForProblem(stats, options);
+        const std::string selectedName = backendName(selectedOptions.backend);
+
+        if (selectedOptions.backend == BABackend::LegacyCpu)
+        {
+            BAResult result = optimizePointsLegacyImpl(cameras, tracks, selectedOptions);
+            result.requestedBackend = BABackend::Auto;
+            result.usedBackend = BABackend::LegacyCpu;
+            result.usedGpu = false;
+            result.backendFallback = false;
+            result.backendSelectionReason = options.refineCameraPose
+                                                ? "自动选择 legacy_cpu: 问题规模低于 Ceres/CUDA 阈值"
+                                                : "自动选择 legacy_cpu: point-only BA 优先使用 legacy";
+            result.backendMessage = result.backendSelectionReason;
+            updateDerivedResultStats(result);
+            return result;
+        }
+
+        BAResult candidate = optimizePoints(cameras, tracks, selectedOptions);
+        candidate.requestedBackend = BABackend::Auto;
+        updateDerivedResultStats(candidate);
+
+        std::string qualityMessage;
+        bool rejectCandidate = resultFailsQualityGate(candidate, options, &qualityMessage);
+        BAResult legacy;
+        bool comparedWithLegacy = false;
+        if (!rejectCandidate &&
+            options.enableBackendQualityGate &&
+            options.compareAutoBackendWithLegacy)
+        {
+            BAOptions legacyOptions = options;
+            legacyOptions.backend = BABackend::LegacyCpu;
+            legacy = optimizePointsLegacyImpl(cameras, tracks, legacyOptions);
+            legacy.requestedBackend = BABackend::Auto;
+            legacy.usedBackend = BABackend::LegacyCpu;
+            legacy.usedGpu = false;
+            updateDerivedResultStats(legacy);
+            comparedWithLegacy = true;
+            rejectCandidate = legacyIsBetterThanCandidate(candidate, legacy, options, &qualityMessage);
+        }
+
+        if (rejectCandidate)
+        {
+            if (legacy.totalTracks <= 0)
+            {
+                BAOptions legacyOptions = options;
+                legacyOptions.backend = BABackend::LegacyCpu;
+                legacy = optimizePointsLegacyImpl(cameras, tracks, legacyOptions);
+                legacy.requestedBackend = BABackend::Auto;
+                legacy.usedBackend = BABackend::LegacyCpu;
+                legacy.usedGpu = false;
+                updateDerivedResultStats(legacy);
+            }
+            legacy.setupSeconds += candidate.setupSeconds;
+            legacy.solveSeconds += candidate.solveSeconds;
+            legacy.totalSeconds += candidate.totalSeconds;
+            legacy.backendFallback = true;
+            legacy.qualityGateRejected = true;
+            legacy.qualityGateMessage = qualityMessage;
+            legacy.backendSelectionReason = "自动候选 " + selectedName +
+                                            " 被质量门控拒绝，回退 legacy_cpu";
+            legacy.backendMessage = legacy.backendSelectionReason + "；" + qualityMessage;
+            return legacy;
+        }
+
+        candidate.backendSelectionReason = "自动选择 " + selectedName +
+                                           ": 通过 BA 质量门控";
+        if (comparedWithLegacy)
+        {
+            candidate.setupSeconds += legacy.setupSeconds;
+            candidate.solveSeconds += legacy.solveSeconds;
+            candidate.totalSeconds += legacy.totalSeconds;
+        }
+        if (!candidate.backendMessage.empty())
+        {
+            candidate.backendMessage = candidate.backendSelectionReason + "；" + candidate.backendMessage;
+        }
+        else
+        {
+            candidate.backendMessage = candidate.backendSelectionReason;
+        }
+        return candidate;
+    }
+
+    if (options.backend == BABackend::LegacyCpu)
+    {
+        BAResult result = optimizePointsLegacyImpl(cameras, tracks, options);
+        result.requestedBackend = BABackend::LegacyCpu;
+        result.usedBackend = BABackend::LegacyCpu;
+        result.usedGpu = false;
+        updateDerivedResultStats(result);
+        return result;
+    }
+
+    if (options.backend == BABackend::CeresCpu)
+    {
+        if (pointOnlyCeresTooLarge())
+        {
+            const std::string message =
+                "point-only Ceres BA 观测数超过安全阈值，已回退到 legacy_cpu";
+            if (!options.allowBackendFallback)
+            {
+                BAResult result;
+                result.requestedBackend = BABackend::CeresCpu;
+                result.backendMessage = message + "，但当前禁止回退";
+                updateDerivedResultStats(result);
+                return result;
+            }
+            return runLegacy(message);
+        }
+        if (detail::isCeresBackendCompiled())
+        {
+            BAResult result = detail::optimizePointsWithCeres(cameras, tracks, options, false);
+            result.requestedBackend = BABackend::CeresCpu;
+            result.usedBackend = BABackend::CeresCpu;
+            result.usedGpu = false;
+            updateDerivedResultStats(result);
+            return result;
+        }
+        if (!options.allowBackendFallback)
+        {
+            BAResult result;
+            result.requestedBackend = BABackend::CeresCpu;
+            result.backendMessage = "Ceres CPU 后端不可用，且禁止回退";
+            updateDerivedResultStats(result);
+            return result;
+        }
+        return runLegacy("Ceres CPU 后端不可用，已回退到 legacy_cpu");
+    }
+
+    if (options.backend == BABackend::CeresCuda)
+    {
+        if (pointOnlyCeresTooLarge())
+        {
+            const std::string message =
+                "point-only Ceres CUDA BA 观测数超过安全阈值，已回退到 legacy_cpu";
+            if (!options.allowBackendFallback)
+            {
+                BAResult result;
+                result.requestedBackend = BABackend::CeresCuda;
+                result.backendMessage = message + "，但当前禁止回退";
+                updateDerivedResultStats(result);
+                return result;
+            }
+            return runLegacy(message);
+        }
+        if (detail::isCeresCudaBackendCompiled() &&
+            static_cast<int>(cameras.size()) >= std::max(1, options.minCeresCudaCameras))
+        {
+            BAResult result = detail::optimizePointsWithCeres(cameras, tracks, options, true);
+            result.requestedBackend = BABackend::CeresCuda;
+            updateDerivedResultStats(result);
+            return result;
+        }
+
+        if (!options.allowBackendFallback)
+        {
+            BAResult result;
+            result.requestedBackend = BABackend::CeresCuda;
+            result.backendMessage = "Ceres CUDA 后端不可用或未达到 GPU 求解阈值，且禁止回退";
+            updateDerivedResultStats(result);
+            return result;
+        }
+
+        if (detail::isCeresBackendCompiled())
+        {
+            BAOptions cpuOptions = options;
+            cpuOptions.backend = BABackend::CeresCpu;
+            BAResult result = detail::optimizePointsWithCeres(cameras, tracks, cpuOptions, false);
+            result.requestedBackend = BABackend::CeresCuda;
+            result.usedBackend = BABackend::CeresCpu;
+            result.usedGpu = false;
+            result.backendFallback = true;
+            if (!detail::isCeresCudaBackendCompiled())
+            {
+                result.backendMessage = "Ceres 未启用 CUDA，已回退到 ceres_cpu；" + result.backendMessage;
+            }
+            else
+            {
+                result.backendMessage = "相机数量低于 Ceres CUDA 阈值，已回退到 ceres_cpu；" + result.backendMessage;
+            }
+            updateDerivedResultStats(result);
+            return result;
+        }
+        return runLegacy("Ceres CUDA/CPU 后端均不可用，已回退到 legacy_cpu");
+    }
+
+    return runLegacy("未知 BA 后端，已回退到 legacy_cpu");
 }
 
 } // namespace xjw
