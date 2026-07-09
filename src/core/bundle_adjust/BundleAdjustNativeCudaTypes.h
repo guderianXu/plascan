@@ -53,4 +53,17 @@ struct Workset
     std::string rejectionReason;
 };
 
+struct HostSolveSummary
+{
+    bool ok = false;
+    double meanRmsBefore = 0.0;
+    double meanRmsAfter = 0.0;
+    int optimizedTracks = 0;
+    int pcgIterations = 0;
+    double linearResidual = 0.0;
+    int acceptedSteps = 0;
+    int rejectedSteps = 0;
+    std::string message;
+};
+
 } // namespace xjw::detail::native_cuda

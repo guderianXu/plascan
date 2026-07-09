@@ -4,10 +4,66 @@
 #  include "BundleAdjustNativeCudaKernels.cuh"
 #endif
 
+#include "BundleAdjustNativeCudaMath.h"
 #include "BundleAdjustNativeCudaWorkset.h"
+
+#include <algorithm>
+#include <cmath>
+#include <limits>
 
 namespace xjw::detail
 {
+
+namespace
+{
+
+bool finitePoint(const std::array<double, 3> &point)
+{
+    return std::isfinite(point[0]) &&
+           std::isfinite(point[1]) &&
+           std::isfinite(point[2]);
+}
+
+double computePointRms(const native_cuda::Workset &workset,
+                       const native_cuda::HostPoint &point)
+{
+    double sum = 0.0;
+    int count = 0;
+    for (int local = 0; local < point.observationCount; ++local)
+    {
+        const int observationIndex = point.observationBegin + local;
+        if (observationIndex < 0 ||
+            observationIndex >= static_cast<int>(workset.observations.size()))
+        {
+            continue;
+        }
+
+        const native_cuda::HostObservation &observation =
+            workset.observations[static_cast<size_t>(observationIndex)];
+        if (observation.cameraIndex < 0 ||
+            observation.cameraIndex >= static_cast<int>(workset.cameras.size()))
+        {
+            continue;
+        }
+
+        const native_cuda::ProjectionResult projection =
+            native_cuda::projectHost(workset.cameras[static_cast<size_t>(observation.cameraIndex)],
+                                     point.xyz);
+        if (!projection.ok)
+        {
+            continue;
+        }
+
+        const double du = projection.pixel[0] - observation.u;
+        const double dv = projection.pixel[1] - observation.v;
+        const double weight = std::isfinite(observation.weight) ? std::max(0.0, observation.weight) : 0.0;
+        sum += weight * (du * du + dv * dv);
+        count += 2;
+    }
+    return count > 0 ? std::sqrt(sum / static_cast<double>(count)) : std::numeric_limits<double>::infinity();
+}
+
+} // namespace
 
 bool isNativeCudaBackendCompiled()
 {
@@ -85,7 +141,67 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.nativeCudaLinearResidual = summary.linearResidual;
     result.nativeCudaAcceptedSteps = summary.acceptedSteps;
     result.nativeCudaRejectedSteps = summary.rejectedSteps;
-    result.backendMessage = "native_cuda kernel smoke path completed";
+    result.backendMessage = summary.message;
+    result.refinedCameraCount = 0;
+
+    double sumBefore = 0.0;
+    double sumAfter = 0.0;
+    int countBefore = 0;
+    int countAfter = 0;
+    for (size_t pointIndex = 0; pointIndex < workset.points.size(); ++pointIndex)
+    {
+        const native_cuda::HostPoint &initialPoint = build.workset.points[pointIndex];
+        const native_cuda::HostPoint &optimizedPoint = workset.points[pointIndex];
+        if (optimizedPoint.originalTrackIndex < 0 ||
+            optimizedPoint.originalTrackIndex >= static_cast<int>(result.points.size()))
+        {
+            continue;
+        }
+
+        BARefinedPoint refined;
+        refined.point = optimizedPoint.xyz;
+        refined.valid = finitePoint(refined.point);
+        refined.converged = summary.ok;
+        refined.iterations = options.maxIterations;
+        refined.rmsBefore = computePointRms(build.workset, initialPoint);
+        refined.rmsAfter = computePointRms(workset, optimizedPoint);
+        if (std::isfinite(refined.rmsBefore))
+        {
+            sumBefore += refined.rmsBefore;
+            ++countBefore;
+        }
+        if (refined.valid)
+        {
+            refined.valid = std::isfinite(refined.rmsAfter);
+        }
+        if (refined.valid && options.enablePointFilter &&
+            refined.rmsAfter > options.filterMaxReprojError)
+        {
+            refined.valid = false;
+        }
+        if (refined.valid)
+        {
+            sumAfter += refined.rmsAfter;
+            ++countAfter;
+            ++result.optimizedTracks;
+        }
+        result.points[static_cast<size_t>(optimizedPoint.originalTrackIndex)] = refined;
+    }
+
+    result.meanRmsBefore = countBefore > 0 ? sumBefore / static_cast<double>(countBefore) : 0.0;
+    result.meanRmsAfter = countAfter > 0 ? sumAfter / static_cast<double>(countAfter) : 0.0;
+    result.refinedCameras = cameras;
+    for (const native_cuda::HostCamera &hostCamera : workset.cameras)
+    {
+        if (hostCamera.originalIndex < 0 ||
+            hostCamera.originalIndex >= static_cast<int>(result.refinedCameras.size()))
+        {
+            continue;
+        }
+        Camera camera = result.refinedCameras[static_cast<size_t>(hostCamera.originalIndex)];
+        camera.setPose(hostCamera.cameraToWorldRotation, hostCamera.cameraCenter);
+        result.refinedCameras[static_cast<size_t>(hostCamera.originalIndex)] = camera;
+    }
     return result;
 #endif
 
