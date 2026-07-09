@@ -4,6 +4,7 @@ add_library(bundle_adjust STATIC
     BundleAdjust.cpp
     BundleAdjustCeres.cpp
     BundleAdjustNativeCuda.cpp
+    BundleAdjustNativeCudaMath.cpp
     BundleAdjustNativeCudaWorkset.cpp
 )
 
