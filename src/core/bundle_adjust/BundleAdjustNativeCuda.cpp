@@ -8,6 +8,7 @@
 #include "BundleAdjustNativeCudaWorkset.h"
 
 #include <algorithm>
+#include <chrono>
 #include <cmath>
 #include <limits>
 
@@ -101,6 +102,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
                                       const std::vector<BATrack> &tracks,
                                       const BAOptions &options)
 {
+    const auto totalStart = std::chrono::steady_clock::now();
     BAResult result;
     result.requestedBackend = options.backend;
     result.usedBackend = BABackend::NativeCuda;
@@ -110,9 +112,12 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.points.resize(tracks.size());
 
     const auto build = native_cuda::buildWorkset(cameras, tracks, options);
+    const auto setupEnd = std::chrono::steady_clock::now();
+    result.setupSeconds = std::chrono::duration<double>(setupEnd - totalStart).count();
     if (!build.ok)
     {
         result.backendMessage = build.message;
+        result.totalSeconds = result.setupSeconds;
         return result;
     }
 
@@ -122,6 +127,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.observationCount = result.nativeCudaActiveObservations;
 
 #ifdef PLASCAN_BA_HAS_NATIVE_CUDA
+    const auto solveStart = std::chrono::steady_clock::now();
     auto workset = build.workset;
     const native_cuda::KernelRunSummary summary =
         native_cuda::runNativeCudaBundleAdjust(&workset,
@@ -131,6 +137,9 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
                                                options.nativeCudaPcgTolerance,
                                                options.huberDelta,
                                                options.damping);
+    const auto solveEnd = std::chrono::steady_clock::now();
+    result.solveSeconds = std::chrono::duration<double>(solveEnd - solveStart).count();
+    result.totalSeconds = std::chrono::duration<double>(solveEnd - totalStart).count();
     if (!summary.ok)
     {
         result.backendMessage = summary.message;
@@ -207,6 +216,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
 #endif
 
     result.backendMessage = "native_cuda 后端尚未完成求解路径";
+    result.totalSeconds = result.setupSeconds;
     return result;
 }
 

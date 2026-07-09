@@ -49,6 +49,8 @@ TEST(NativeCudaBackendTest, ExplicitBackendReportsActiveWorkset)
     EXPECT_EQ(result.nativeCudaActiveTracks, 1);
     EXPECT_EQ(result.nativeCudaActiveObservations, 3);
     EXPECT_EQ(result.observationCount, 3);
+    EXPECT_GT(result.totalSeconds, 0.0);
+    EXPECT_GE(result.totalSeconds, result.solveSeconds);
 }
 
 TEST(NativeCudaBackendTest, ReducesReprojectionRmsOnSyntheticGlobalProblem)

@@ -185,16 +185,24 @@ build/bin/three_d_reconstruction_cli path/to/input.lis \
 例如 `--feature-max-image-dim 1600`；传负数也会关闭缩放保护。
 
 `bundle_adjust_cli` 默认请求 `--ba-backend auto`。BA 会先统计相机数、track 数和观测数：
-小规模局部 BA 优先使用 legacy/OpenMP 或 Ceres CPU，观测量足够大且 Ceres 编译了 CUDA 时才切到
-Ceres CUDA dense Schur。`ba_run_summary.json` 会写入 `ba_requested_backend`、`ba_used_backend`、
-`ba_used_gpu`、`ba_ceres_linear_solver`、`ba_valid_track_ratio`、setup/solve/total 耗时和质量门控/回退原因。
-Auto 后端会优先保证 RMS 和有效 track 比例；CUDA 候选若比 legacy 明显变差，会自动回退而不是强行使用 GPU。
-point-only BA 默认走 legacy，显式请求大规模 point-only Ceres 时也会按安全阈值回退，避免 dense QR 大矩阵不稳定。
+point-only BA 和小规模局部 BA 优先使用 legacy/OpenMP 或 Ceres CPU；需要相机位姿优化且问题规模足够大时，
+Auto 会先尝试 PlaScan 自研 `native_cuda`，不可用或不满足阈值时再尝试 Ceres CUDA dense Schur。
+`ba_run_summary.json` 会写入 `ba_requested_backend`、`ba_used_backend`、`ba_used_gpu`、
+`ba_ceres_linear_solver`、`ba_valid_track_ratio`、setup/solve/total 耗时、native CUDA 活动工作集统计、
+质量门控和回退原因。Auto 后端会优先保证 RMS 和有效 track 比例；CUDA 候选若比 legacy 明显变差，
+会自动回退而不是强行使用 GPU。显式请求大规模 point-only Ceres 时也会按安全阈值回退，
+避免 dense QR 大矩阵不稳定。
 需要复现旧路径时可传
 `--ba-backend legacy_cpu`；需要强制 Ceres CPU 或 CUDA 时分别传 `--ba-backend ceres_cpu` /
-`--ba-backend ceres_cuda`。可用 `--ba-min-cuda-cameras` 和 `--ba-min-cuda-observations`
-调整自动选择阈值；默认需要至少 50 台相机和 500000 条观测才自动选择 Ceres CUDA。
+`--ba-backend ceres_cuda`；需要强制自研 CUDA 路径时传 `--ba-backend native_cuda`。
+可用 `--ba-min-native-cuda-cameras`、`--ba-min-native-cuda-observations`、
+`--ba-native-cuda-device`、`--ba-native-cuda-max-pcg-iterations` 和
+`--ba-native-cuda-pcg-tolerance` 调整 native CUDA 候选条件和设备参数；默认需要至少 50 台相机和
+500000 条观测才自动选择 native CUDA。`--ba-min-cuda-cameras` 和 `--ba-min-cuda-observations`
+仍用于 Ceres CUDA 阈值。
 Ceres CUDA 当前加速的是 Ceres dense Schur 线性求解环节，不加速 residual/Jacobian 构建和 BA 输入构建。
+native CUDA 当前首期接入的是固定相机投影下的 GPU 三维点块求解，并接入 Auto 质量门控；
+相机 Schur/PCG 更新尚未作为已完成能力发布。
 
 BA 后端基准可单独运行：
 
@@ -205,7 +213,7 @@ python scripts/bench/run_ba_backend_benchmark.py \
   --out build/ba_benchmarks/ba_backend_benchmark.csv \
   --summary-json build/ba_benchmarks/ba_backend_benchmark.json \
   --cases small,medium,large \
-  --backends legacy_cpu,ceres_cpu,ceres_cuda,auto \
+  --backends legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto \
   --repeat 3 \
   --iterations 8 \
   --threads 32

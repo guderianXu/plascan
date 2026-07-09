@@ -151,6 +151,9 @@ core/
 │   ├── BundleAdjust.h/cpp      # BA 公共接口、自动后端选择、legacy CPU 后端调度、后端状态回传
 │   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，记录 dense Schur CPU/GPU、setup/solve 耗时和回退原因
 │   ├── BundleAdjustProjection.h # 与 Camera 一致的模板投影模型，供 Ceres AutoDiff 固定相机残差复用
+│   ├── BundleAdjustNativeCuda.h/cpp/.cu # PlaScan 自研 CUDA 后端入口和 GPU 点块求解
+│   ├── BundleAdjustNativeCudaWorkset.h/cpp # 将 Camera/BATrack 扁平化为 CUDA 连续工作集
+│   ├── BundleAdjustNativeCudaTypes.h / *Kernels.cuh # CUDA 侧数据类型、点块 kernel 和设备函数
 │   ├── tools/                  # BA 后端基准工具，例如 ba_backend_benchmark
 │   └── tests/                  # BA 模块级后端、投影模型、自动选择和约束回归测试
 │
@@ -267,6 +270,11 @@ core/
 
 `sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
 不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
+
+`bundle_adjust` 的 `native_cuda` 后端已接入统一 BA 接口、Auto 选择和质量门控。当前首期实现把有效
+Camera/BATrack 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块，并把 setup/solve/total、
+活动相机/track/观测数、接受步和线性残差写回报告。相机 Schur/PCG 更新尚未作为已完成能力发布，
+因此文档和 UI 只把它描述为首期 native CUDA BA 加速路径。
 
 `aerial_triangulation/AerialTriangulationService.cpp` 在匹配阶段写出 `assets/reports/matching_quality_report.json` 和
 `assets/reports/matching_quality_report.csv`。报告记录候选图/实际匹配图连通性、pair 来源统计、优先级、pending/failed/skipped
