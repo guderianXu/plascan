@@ -14,6 +14,7 @@
 #include "BundleAdjust.h"
 
 #include "BundleAdjustCeres.h"
+#include "BundleAdjustNativeCuda.h"
 #include "log/Logger.h"
 #include "math/Vec3Ops.h"
 
@@ -1525,7 +1526,10 @@ bool BundleAdjust::isBackendAvailable(BABackend backend)
     case BABackend::CeresCuda:
         return detail::isCeresCudaBackendCompiled();
     case BABackend::NativeCuda:
-        return false;
+    {
+        std::string message;
+        return detail::isNativeCudaRuntimeAvailable(0, &message);
+    }
     }
     return false;
 }
@@ -1691,6 +1695,28 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         result.requestedBackend = BABackend::LegacyCpu;
         result.usedBackend = BABackend::LegacyCpu;
         result.usedGpu = false;
+        updateDerivedResultStats(result);
+        return result;
+    }
+
+    if (options.backend == BABackend::NativeCuda)
+    {
+        std::string message;
+        if (!detail::isNativeCudaRuntimeAvailable(options.nativeCudaDevice, &message))
+        {
+            if (!options.allowBackendFallback)
+            {
+                BAResult result;
+                result.requestedBackend = BABackend::NativeCuda;
+                result.backendMessage = message + "，且禁止回退";
+                updateDerivedResultStats(result);
+                return result;
+            }
+            return runLegacy(message);
+        }
+
+        BAResult result = detail::optimizePointsWithNativeCuda(cameras, tracks, options);
+        result.requestedBackend = BABackend::NativeCuda;
         updateDerivedResultStats(result);
         return result;
     }

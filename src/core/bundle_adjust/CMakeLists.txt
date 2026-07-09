@@ -3,6 +3,7 @@ find_package(Ceres CONFIG QUIET)
 add_library(bundle_adjust STATIC
     BundleAdjust.cpp
     BundleAdjustCeres.cpp
+    BundleAdjustNativeCuda.cpp
 )
 
 target_include_directories(bundle_adjust PUBLIC

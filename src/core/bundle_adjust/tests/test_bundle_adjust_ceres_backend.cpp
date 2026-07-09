@@ -225,6 +225,36 @@ TEST(BundleAdjustCeresBackendTest, CeresCudaRequestFallsBackWhenCudaSolverIsUnav
     }
 }
 
+TEST(BundleAdjustCeresBackendTest, NativeCudaRequestFallsBackWhenBackendUnavailable)
+{
+    const std::vector<xjw::Camera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(1.0, 0.0, 0.0),
+    };
+
+    xjw::BATrack track;
+    track.initialPoint = {{0.0, 0.0, 5.0}};
+    track.observations.push_back(xjw::BAObservation{0, 320.0, 240.0, 1.0});
+    track.observations.push_back(xjw::BAObservation{1, 300.0, 240.0, 1.0});
+
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::NativeCuda;
+    options.refineCameraPose = true;
+    options.allowBackendFallback = true;
+    options.maxIterations = 1;
+
+    const xjw::BAResult result = xjw::BundleAdjust::optimizePoints(cameras, {track}, options);
+
+    EXPECT_EQ(result.requestedBackend, xjw::BABackend::NativeCuda);
+    if (!xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::NativeCuda))
+    {
+        EXPECT_EQ(result.usedBackend, xjw::BABackend::LegacyCpu);
+        EXPECT_TRUE(result.backendFallback);
+        EXPECT_FALSE(result.backendMessage.empty());
+        EXPECT_NE(result.backendMessage.find("native_cuda"), std::string::npos);
+    }
+}
+
 TEST(BundleAdjustCeresBackendTest, CeresCpuReportsControlPointConstraintStats)
 {
     xjw::BATrack track;
