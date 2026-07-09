@@ -298,10 +298,10 @@ QStringList projectFeatureSuffixes(const QString &plascanPath, const QJsonObject
 {
     QSet<QString> availableSuffixes = collectProjectFeatureSuffixes(plascanPath, meta);
     static const QStringList preferredOrder = {
+        QStringLiteral(".sift"),
         QStringLiteral(".dsk"),
         QStringLiteral(".alk"),
         QStringLiteral(".sp"),
-        QStringLiteral(".sift"),
         QStringLiteral(".orb"),
         QStringLiteral(".akz"),
         QStringLiteral(".dedode")

@@ -432,6 +432,11 @@ void BundleAdjustDialog::onRun()
     options[QStringLiteral("ba_cuda_device")] = 0;
     options[QStringLiteral("ba_min_cuda_cameras")] = 50;
     options[QStringLiteral("ba_min_cuda_observations")] = 500000;
+    options[QStringLiteral("ba_native_cuda_device")] = 0;
+    options[QStringLiteral("ba_min_native_cuda_cameras")] = 50;
+    options[QStringLiteral("ba_min_native_cuda_observations")] = 500000;
+    options[QStringLiteral("ba_native_cuda_max_pcg_iterations")] = 100;
+    options[QStringLiteral("ba_native_cuda_pcg_tolerance")] = 1e-4;
     options[QStringLiteral("ba_min_cpu_observations")] = 50000;
     options[QStringLiteral("ba_max_ceres_point_only_observations")] = 100000;
     options[QStringLiteral("ba_allow_backend_fallback")] = true;
@@ -629,6 +634,11 @@ void BundleAdjustDialog::emitSettingsNow()
     settings[QStringLiteral("ba_cuda_device")] = 0;
     settings[QStringLiteral("ba_min_cuda_cameras")] = 50;
     settings[QStringLiteral("ba_min_cuda_observations")] = 500000;
+    settings[QStringLiteral("ba_native_cuda_device")] = 0;
+    settings[QStringLiteral("ba_min_native_cuda_cameras")] = 50;
+    settings[QStringLiteral("ba_min_native_cuda_observations")] = 500000;
+    settings[QStringLiteral("ba_native_cuda_max_pcg_iterations")] = 100;
+    settings[QStringLiteral("ba_native_cuda_pcg_tolerance")] = 1e-4;
     settings[QStringLiteral("ba_min_cpu_observations")] = 50000;
     settings[QStringLiteral("ba_max_ceres_point_only_observations")] = 100000;
     settings[QStringLiteral("ba_allow_backend_fallback")] = true;

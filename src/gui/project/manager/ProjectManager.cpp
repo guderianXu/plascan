@@ -1817,9 +1817,17 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
     {
         opts.baOpt.backend = xjw::BABackend::CeresCpu;
     }
-    else
+    else if (baBackendName == QLatin1String("ceres_cuda"))
     {
         opts.baOpt.backend = xjw::BABackend::CeresCuda;
+    }
+    else if (baBackendName == QLatin1String("native_cuda"))
+    {
+        opts.baOpt.backend = xjw::BABackend::NativeCuda;
+    }
+    else
+    {
+        opts.baOpt.backend = xjw::BABackend::Auto;
     }
     opts.baOpt.ceresCudaDevice = qMax(
         0,
@@ -1831,6 +1839,25 @@ void ProjectManager::startBundleAdjustAsync(const QStringList &images,
         1,
         extraSettings.value(QStringLiteral("ba_min_cuda_observations")).toInt(
             opts.baOpt.minCeresCudaObservations));
+    opts.baOpt.nativeCudaDevice = qMax(
+        0,
+        extraSettings.value(QStringLiteral("ba_native_cuda_device")).toInt(opts.baOpt.nativeCudaDevice));
+    opts.baOpt.minNativeCudaCameras = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_min_native_cuda_cameras")).toInt(
+            opts.baOpt.minNativeCudaCameras));
+    opts.baOpt.minNativeCudaObservations = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_min_native_cuda_observations")).toInt(
+            opts.baOpt.minNativeCudaObservations));
+    opts.baOpt.nativeCudaMaxPcgIterations = qMax(
+        1,
+        extraSettings.value(QStringLiteral("ba_native_cuda_max_pcg_iterations")).toInt(
+            opts.baOpt.nativeCudaMaxPcgIterations));
+    opts.baOpt.nativeCudaPcgTolerance = qMax(
+        1e-12,
+        extraSettings.value(QStringLiteral("ba_native_cuda_pcg_tolerance")).toDouble(
+            opts.baOpt.nativeCudaPcgTolerance));
     opts.baOpt.minCeresCpuObservations = qMax(
         1,
         extraSettings.value(QStringLiteral("ba_min_cpu_observations")).toInt(

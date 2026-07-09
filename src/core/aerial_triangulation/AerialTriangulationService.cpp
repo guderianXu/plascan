@@ -4772,6 +4772,11 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         // 小规模局部 BA 通常 CPU 更快，观测量足够大的全局 BA 才切到 Ceres CUDA。
         sfmOpts.baOptions.backend = xjw::BABackend::Auto;
         sfmOpts.baOptions.ceresCudaDevice = 0;
+        sfmOpts.baOptions.nativeCudaDevice = 0;
+        sfmOpts.baOptions.minNativeCudaCameras = 50;
+        sfmOpts.baOptions.minNativeCudaObservations = 500000;
+        sfmOpts.baOptions.nativeCudaMaxPcgIterations = 100;
+        sfmOpts.baOptions.nativeCudaPcgTolerance = 1e-4;
         sfmOpts.baOptions.minCeresCudaObservations = 500000;
         sfmOpts.baOptions.minCeresCpuObservations = 50000;
         sfmOpts.baOptions.enableBackendQualityGate = true;
@@ -4780,9 +4785,15 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         sfmOpts.baOptions.compareAutoBackendWithLegacy = true;
         sfmOpts.baOptions.allowBackendFallback = true;
     }
-    LOG_INFO(QStringLiteral("SFM BA 后端请求: %1, Ceres CUDA 最小相机数=%2, CUDA 最小观测数=%3, "
-                            "Ceres CPU 最小观测数=%4, 质量门控=%5")
+    LOG_INFO(QStringLiteral("SFM BA 后端请求: %1, native CUDA 最小相机数=%2, "
+                            "native CUDA 最小观测数=%3, native CUDA PCG=%4/%5, "
+                            "Ceres CUDA 最小相机数=%6, Ceres CUDA 最小观测数=%7, "
+                            "Ceres CPU 最小观测数=%8, 质量门控=%9")
         .arg(QString::fromLatin1(BundleAdjust::backendName(sfmOpts.baOptions.backend)))
+        .arg(sfmOpts.baOptions.minNativeCudaCameras)
+        .arg(sfmOpts.baOptions.minNativeCudaObservations)
+        .arg(sfmOpts.baOptions.nativeCudaMaxPcgIterations)
+        .arg(sfmOpts.baOptions.nativeCudaPcgTolerance)
         .arg(sfmOpts.baOptions.minCeresCudaCameras)
         .arg(sfmOpts.baOptions.minCeresCudaObservations)
         .arg(sfmOpts.baOptions.minCeresCpuObservations)

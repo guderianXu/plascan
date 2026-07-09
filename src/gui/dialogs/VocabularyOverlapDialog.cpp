@@ -763,10 +763,10 @@ void VocabularyOverlapDialog::setupUi()
     _referenceBodyCombo->addItem(QStringLiteral("火星 (3389500 m)"), QStringLiteral("mars"));
 
     _featureAlgorithmCombo->clear();
+    _featureAlgorithmCombo->addItem(QStringLiteral("SIFT (.sift)"), QStringLiteral(".sift"));
     _featureAlgorithmCombo->addItem(QStringLiteral("DISK (.dsk)"), QStringLiteral(".dsk"));
     _featureAlgorithmCombo->addItem(QStringLiteral("ALIKED (.alk)"), QStringLiteral(".alk"));
     _featureAlgorithmCombo->addItem(QStringLiteral("SuperPoint (.sp)"), QStringLiteral(".sp"));
-    _featureAlgorithmCombo->addItem(QStringLiteral("SIFT (.sift)"), QStringLiteral(".sift"));
     _featureAlgorithmCombo->addItem(QStringLiteral("ORB (.orb)"), QStringLiteral(".orb"));
 
     _geometryModelCombo->clear();
@@ -882,7 +882,7 @@ void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
         _overlapMethodCombo->setCurrentIndex(methodIndex);
     }
 
-    const QString suffix = settings.value(QStringLiteral("feature_suffix")).toString(QStringLiteral(".dsk"));
+    const QString suffix = settings.value(QStringLiteral("feature_suffix")).toString(defaultFeatureSuffix());
     const int algorithmIndex = _featureAlgorithmCombo->findData(suffix);
     if (algorithmIndex >= 0)
     {
@@ -1136,7 +1136,8 @@ void VocabularyOverlapDialog::onResetDefaults()
     const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
     const QString outputDir = defaultOverlapOutputDir(projectPath);
 
-    const int diskIndex = _featureAlgorithmCombo->findData(QStringLiteral(".dsk"));
+    const QString defaultSuffix = defaultFeatureSuffix();
+    const int defaultFeatureIndex = _featureAlgorithmCombo->findData(defaultSuffix);
     const int vocabIndex = _overlapMethodCombo->findData(QStringLiteral("vocabulary"));
     const int earthIndex = _referenceBodyCombo->findData(QStringLiteral("earth"));
     _overlapMethodCombo->setCurrentIndex(vocabIndex >= 0 ? vocabIndex : 0);
@@ -1144,7 +1145,7 @@ void VocabularyOverlapDialog::onResetDefaults()
     _autoReferenceElevationCheck->setChecked(true);
     _referenceElevationSpin->setValue(0.0);
     _cameraNeighborFactorSpin->setValue(2.0);
-    _featureAlgorithmCombo->setCurrentIndex(diskIndex >= 0 ? diskIndex : 0);
+    _featureAlgorithmCombo->setCurrentIndex(defaultFeatureIndex >= 0 ? defaultFeatureIndex : 0);
     _featureDirEdit->setText(projectPath.isEmpty() ? QString() : ProjectIO::ipfindOutputDir(projectPath));
     _branchFactorSpin->setValue(10);
     _treeDepthSpin->setValue(3);
@@ -1252,10 +1253,18 @@ QJsonObject VocabularyOverlapDialog::collectSettings() const
     return settings;
 }
 
+QString VocabularyOverlapDialog::defaultFeatureSuffix() const
+{
+    const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
+    const QJsonObject projectMeta = _projectManager ? _projectManager->currentMeta() : QJsonObject();
+    const QString suffix = xjw::gui::project::inferPreferredFeatureSuffix(projectPath, projectMeta);
+    return suffix.isEmpty() ? QStringLiteral(".sift") : suffix;
+}
+
 QString VocabularyOverlapDialog::selectedFeatureSuffix() const
 {
     const QString suffix = _featureAlgorithmCombo->currentData().toString();
-    return suffix.isEmpty() ? QStringLiteral(".dsk") : suffix;
+    return suffix.isEmpty() ? defaultFeatureSuffix() : suffix;
 }
 
 QStringList VocabularyOverlapDialog::checkedImages() const

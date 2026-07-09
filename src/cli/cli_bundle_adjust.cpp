@@ -76,8 +76,13 @@ xjw::BABackend parseBaBackendName(const QString &raw)
     {
         return xjw::BABackend::CeresCuda;
     }
+    if (value == QLatin1String("native_cuda"))
+    {
+        return xjw::BABackend::NativeCuda;
+    }
 
-    fatalQt(QStringLiteral("未知 BA 后端: %1，可选 auto / legacy_cpu / ceres_cpu / ceres_cuda").arg(raw));
+    fatalQt(QStringLiteral("未知 BA 后端: %1，可选 auto / legacy_cpu / ceres_cpu / ceres_cuda / native_cuda")
+                .arg(raw));
     return xjw::BABackend::LegacyCpu;
 }
 
@@ -451,12 +456,17 @@ int main(int argc, char *argv[])
     int baCudaDevice = 0;
     int baMinCudaCameras = 50;
     int baMinCudaObservations = 500000;
+    int baNativeCudaDevice = 0;
+    int baMinNativeCudaCameras = 50;
+    int baMinNativeCudaObservations = 500000;
+    int baNativeCudaMaxPcgIterations = 100;
     int baMinCpuObservations = 50000;
     int baMaxCeresPointOnlyObservations = 100000;
     double huberDelta = 3.0;
     double damping = 1e-3;
     double finiteDiffEps = 1e-6;
     double stepTolerance = 1e-8;
+    double baNativeCudaPcgTolerance = 1e-4;
     double baMaxAcceptedRmsGrowth = 1.25;
     double baMinAcceptedValidTrackRatio = 0.60;
     bool refinePose = true;
@@ -491,7 +501,9 @@ int main(int argc, char *argv[])
     app.add_option("--damping", damping, "LM 阻尼初值");
     app.add_option("--finite-diff-eps", finiteDiffEps, "有限差分步长");
     app.add_option("--step-tolerance", stepTolerance, "收敛步长阈值");
-    app.add_option("--ba-backend", baBackendRaw, "BA 求解后端: auto / legacy_cpu / ceres_cpu / ceres_cuda");
+    app.add_option("--ba-backend",
+                   baBackendRaw,
+                   "BA 求解后端: auto / legacy_cpu / ceres_cpu / ceres_cuda / native_cuda");
     app.add_option("--ba-cuda-device", baCudaDevice, "Ceres CUDA BA 使用的 GPU 设备 ID");
     app.add_option("--ba-min-cuda-cameras", baMinCudaCameras, "低于该相机数时 Ceres CUDA BA 回退到 CPU");
     app.add_option("--ba-min-cuda-observations",
@@ -500,6 +512,19 @@ int main(int argc, char *argv[])
     app.add_option("--ba-min-cpu-observations",
                    baMinCpuObservations,
                    "低于该观测数时自动 BA 不选择 Ceres CPU");
+    app.add_option("--ba-native-cuda-device", baNativeCudaDevice, "native_cuda BA 使用的 GPU 设备 ID");
+    app.add_option("--ba-min-native-cuda-cameras",
+                   baMinNativeCudaCameras,
+                   "低于该相机数时 Auto 不选择 native_cuda");
+    app.add_option("--ba-min-native-cuda-observations",
+                   baMinNativeCudaObservations,
+                   "低于该观测数时 Auto 不选择 native_cuda");
+    app.add_option("--ba-native-cuda-max-pcg-iterations",
+                   baNativeCudaMaxPcgIterations,
+                   "native_cuda 相机 Schur PCG 最大迭代次数");
+    app.add_option("--ba-native-cuda-pcg-tolerance",
+                   baNativeCudaPcgTolerance,
+                   "native_cuda 相机 Schur PCG 相对残差阈值");
     app.add_option("--ba-max-ceres-point-only-observations",
                    baMaxCeresPointOnlyObservations,
                    "point-only Ceres BA 超过该观测数时回退 legacy_cpu");
@@ -584,6 +609,11 @@ int main(int argc, char *argv[])
     baOptions.ceresCudaDevice = std::max(0, baCudaDevice);
     baOptions.minCeresCudaCameras = std::max(1, baMinCudaCameras);
     baOptions.minCeresCudaObservations = std::max(1, baMinCudaObservations);
+    baOptions.nativeCudaDevice = std::max(0, baNativeCudaDevice);
+    baOptions.minNativeCudaCameras = std::max(1, baMinNativeCudaCameras);
+    baOptions.minNativeCudaObservations = std::max(1, baMinNativeCudaObservations);
+    baOptions.nativeCudaMaxPcgIterations = std::max(1, baNativeCudaMaxPcgIterations);
+    baOptions.nativeCudaPcgTolerance = std::max(1e-12, baNativeCudaPcgTolerance);
     baOptions.minCeresCpuObservations = std::max(1, baMinCpuObservations);
     baOptions.maxCeresPointOnlyObservations = std::max(1, baMaxCeresPointOnlyObservations);
     baOptions.allowBackendFallback = baBackendFallback;

@@ -119,6 +119,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.nativeCudaActiveCameras = static_cast<int>(build.workset.cameras.size());
     result.nativeCudaActiveTracks = static_cast<int>(build.workset.points.size());
     result.nativeCudaActiveObservations = static_cast<int>(build.workset.observations.size());
+    result.observationCount = result.nativeCudaActiveObservations;
 
 #ifdef PLASCAN_BA_HAS_NATIVE_CUDA
     auto workset = build.workset;

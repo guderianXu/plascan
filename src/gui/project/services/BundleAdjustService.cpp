@@ -277,6 +277,13 @@ BaServiceResult BundleAdjustService::run(
     saveObj[QStringLiteral("ba_solve_seconds")] = baResult.solveSeconds;
     saveObj[QStringLiteral("ba_total_seconds")] = baResult.totalSeconds;
     saveObj[QStringLiteral("ba_observation_count")] = baResult.observationCount;
+    saveObj[QStringLiteral("ba_native_cuda_pcg_iterations")] = baResult.nativeCudaPcgIterations;
+    saveObj[QStringLiteral("ba_native_cuda_linear_residual")] = baResult.nativeCudaLinearResidual;
+    saveObj[QStringLiteral("ba_native_cuda_accepted_steps")] = baResult.nativeCudaAcceptedSteps;
+    saveObj[QStringLiteral("ba_native_cuda_rejected_steps")] = baResult.nativeCudaRejectedSteps;
+    saveObj[QStringLiteral("ba_native_cuda_active_cameras")] = baResult.nativeCudaActiveCameras;
+    saveObj[QStringLiteral("ba_native_cuda_active_tracks")] = baResult.nativeCudaActiveTracks;
+    saveObj[QStringLiteral("ba_native_cuda_active_observations")] = baResult.nativeCudaActiveObservations;
 
     // BA 选项回存（便于复现）
     {
@@ -286,6 +293,11 @@ BaServiceResult BundleAdjustService::run(
         optObj[QStringLiteral("ba_cuda_device")] = baOptions.ceresCudaDevice;
         optObj[QStringLiteral("ba_min_cuda_cameras")] = baOptions.minCeresCudaCameras;
         optObj[QStringLiteral("ba_min_cuda_observations")] = baOptions.minCeresCudaObservations;
+        optObj[QStringLiteral("ba_native_cuda_device")] = baOptions.nativeCudaDevice;
+        optObj[QStringLiteral("ba_min_native_cuda_cameras")] = baOptions.minNativeCudaCameras;
+        optObj[QStringLiteral("ba_min_native_cuda_observations")] = baOptions.minNativeCudaObservations;
+        optObj[QStringLiteral("ba_native_cuda_max_pcg_iterations")] = baOptions.nativeCudaMaxPcgIterations;
+        optObj[QStringLiteral("ba_native_cuda_pcg_tolerance")] = baOptions.nativeCudaPcgTolerance;
         optObj[QStringLiteral("ba_min_cpu_observations")] = baOptions.minCeresCpuObservations;
         optObj[QStringLiteral("ba_max_ceres_point_only_observations")] =
             baOptions.maxCeresPointOnlyObservations;
@@ -587,6 +599,14 @@ BaServiceResult BundleAdjustService::run(
                << "\n";
             ts << "Ceres 线性求解器: " << QString::fromStdString(baResult.ceresLinearSolverName) << "\n";
             ts << "观测数量: "       << baResult.observationCount          << "\n";
+            ts << "native CUDA 活动相机/轨迹/观测: "
+               << baResult.nativeCudaActiveCameras << "/"
+               << baResult.nativeCudaActiveTracks << "/"
+               << baResult.nativeCudaActiveObservations << "\n";
+            ts << "native CUDA PCG 迭代: " << baResult.nativeCudaPcgIterations
+               << ", 线性残差: " << baResult.nativeCudaLinearResidual
+               << ", 接受步: " << baResult.nativeCudaAcceptedSteps
+               << ", 拒绝步: " << baResult.nativeCudaRejectedSteps << "\n";
             ts << "后端总耗时(s): "  << baResult.totalSeconds             << "\n";
             ts << "问题构建耗时(s): " << baResult.setupSeconds             << "\n";
             ts << "求解耗时(s): "    << baResult.solveSeconds             << "\n";

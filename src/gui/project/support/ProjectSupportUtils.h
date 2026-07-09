@@ -52,7 +52,7 @@ QString resolveFeaturePathBySuffix(const QString &plascanPath, const QJsonObject
 QStringList projectFeatureSuffixes(const QString &plascanPath, const QJsonObject &meta);
 
 // 根据项目中已存在的特征文件推断默认显示后缀。
-// 优先级面向当前默认流程：.dsk, .alk, .sp, .sift, .orb, .akz, .dedode。
+// 优先级面向当前默认流程：.sift, .dsk, .alk, .sp, .orb, .akz, .dedode。
 QString inferPreferredFeatureSuffix(const QString &plascanPath, const QJsonObject &meta);
 
 // 判断项目中是否存在指定后缀的特征文件；suffix 可传 ".dsk" 或 "dsk"。

@@ -48,6 +48,7 @@ TEST(NativeCudaBackendTest, ExplicitBackendReportsActiveWorkset)
     EXPECT_EQ(result.nativeCudaActiveCameras, 3);
     EXPECT_EQ(result.nativeCudaActiveTracks, 1);
     EXPECT_EQ(result.nativeCudaActiveObservations, 3);
+    EXPECT_EQ(result.observationCount, 3);
 }
 
 TEST(NativeCudaBackendTest, ReducesReprojectionRmsOnSyntheticGlobalProblem)

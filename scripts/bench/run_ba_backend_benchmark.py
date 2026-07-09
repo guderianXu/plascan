@@ -33,6 +33,9 @@ DEFAULT_FIELDS = [
     "quality_rejected",
     "backend_reason",
     "quality_message",
+    "native_pcg_iterations",
+    "native_linear_residual",
+    "native_active_observations",
     "setup_seconds",
     "solve_seconds",
     "total_seconds",
@@ -149,7 +152,7 @@ def main() -> int:
     parser.add_argument("--out", required=True, type=Path)
     parser.add_argument("--summary-json", type=Path)
     parser.add_argument("--cases", default="medium", help="逗号分隔: small,medium,large")
-    parser.add_argument("--backends", default="legacy_cpu,ceres_cpu,ceres_cuda,auto")
+    parser.add_argument("--backends", default="legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto")
     parser.add_argument("--repeat", default=3, type=int)
     parser.add_argument("--iterations", default=8, type=int)
     parser.add_argument("--threads", default=32, type=int)

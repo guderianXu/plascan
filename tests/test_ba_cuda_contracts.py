@@ -80,6 +80,17 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("minNativeCudaObservations", header)
         self.assertIn("nativeCudaPcgIterations", header)
 
+    def test_service_reports_native_cuda_metrics(self):
+        source = self.read_text("src/gui/project/services/BundleAdjustService.cpp")
+        self.assertIn("ba_native_cuda_pcg_iterations", source)
+        self.assertIn("ba_native_cuda_linear_residual", source)
+        self.assertIn("ba_native_cuda_active_observations", source)
+
+    def test_benchmark_supports_native_cuda(self):
+        source = self.read_text("src/core/bundle_adjust/tools/ba_backend_benchmark.cpp")
+        self.assertIn("native_cuda", source)
+        self.assertIn("BABackend::NativeCuda", source)
+
 
 if __name__ == "__main__":
     unittest.main()

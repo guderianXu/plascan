@@ -63,6 +63,7 @@ private:
     void emitSettingsNow();
     void refreshFeatureStatus();
     QJsonObject collectSettings() const;
+    QString defaultFeatureSuffix() const;
     QString selectedFeatureSuffix() const;
     QStringList checkedImages() const;
     QString pairTokenForImage(const QString &imagePath) const;

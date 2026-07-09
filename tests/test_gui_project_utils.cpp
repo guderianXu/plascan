@@ -991,6 +991,42 @@ TEST(ProjectSupportUtilsTest, InfersDiskFeatureSuffixWhenProjectHasOnlyDskOutput
               QStringLiteral(".dsk"));
 }
 
+TEST(ProjectSupportUtilsTest, InfersSiftFeatureSuffixBeforeLegacyDskOutputs)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
+    const QString ipDir = ProjectIO::ipfindOutputDir(projectPath);
+    ASSERT_TRUE(QDir().mkpath(ipDir));
+
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("img");
+    imageFile.close();
+
+    for (const QString &suffix : {QStringLiteral(".dsk"), QStringLiteral(".sift")})
+    {
+        QFile featureFile(QDir(ipDir).filePath(QStringLiteral("66") + suffix));
+        ASSERT_TRUE(featureFile.open(QIODevice::WriteOnly));
+        featureFile.write("feature");
+        featureFile.close();
+    }
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), imagePath}}
+    };
+
+    EXPECT_EQ(xjw::gui::project::inferPreferredFeatureSuffix(projectPath, meta),
+              QStringLiteral(".sift"));
+
+    const QStringList suffixes = xjw::gui::project::projectFeatureSuffixes(projectPath, meta);
+    ASSERT_FALSE(suffixes.isEmpty());
+    EXPECT_EQ(suffixes.first(), QStringLiteral(".sift"));
+}
+
 TEST(ProjectSupportUtilsTest, DetectsWhetherProjectHasRequestedFeatureSuffix)
 {
     QTemporaryDir tempDir;
@@ -14396,6 +14432,18 @@ TEST(VocabularyOverlapDialogTest, DialogKeyIsAvailableForPersistence)
 
     EXPECT_TRUE(source.contains(QStringLiteral("VocabularyOverlap")));
     EXPECT_TRUE(source.contains(QStringLiteral("vocabulary_overlap")));
+}
+
+TEST(VocabularyOverlapDialogTest, DefaultsToSiftInsteadOfLegacyDsk)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/VocabularyOverlapDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("QStringLiteral(\"SIFT (.sift)\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("inferPreferredFeatureSuffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QStringLiteral(\".sift\")")))
+        << "词汇树重叠对规划没有已有特征时应默认 SIFT，而不是旧 DISK .dsk。";
+    EXPECT_FALSE(source.contains(QStringLiteral("return suffix.isEmpty() ? QStringLiteral(\".dsk\") : suffix;")));
 }
 
 TEST(VocabularyOverlapDialogTest, RetrievalRunsAsynchronously)

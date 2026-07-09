@@ -142,6 +142,8 @@ void runCase(const char *name,
     options.minCeresCudaCameras = 1;
     options.minCeresCudaObservations = 1;
     options.minCeresCpuObservations = 1;
+    options.minNativeCudaCameras = 1;
+    options.minNativeCudaObservations = 1;
     options.allowBackendFallback = true;
     options.enableBackendQualityGate = true;
     options.compareAutoBackendWithLegacy = true;
@@ -171,6 +173,9 @@ void runCase(const char *name,
               << ",quality_rejected=" << (result.qualityGateRejected ? "true" : "false")
               << ",backend_reason=" << sanitizeField(result.backendSelectionReason)
               << ",quality_message=" << sanitizeField(result.qualityGateMessage)
+              << ",native_pcg_iterations=" << result.nativeCudaPcgIterations
+              << ",native_linear_residual=" << result.nativeCudaLinearResidual
+              << ",native_active_observations=" << result.nativeCudaActiveObservations
               << ",setup_seconds=" << result.setupSeconds
               << ",solve_seconds=" << result.solveSeconds
               << ",total_seconds=" << result.totalSeconds
@@ -190,7 +195,7 @@ int main(int argc, char **argv)
     const int threads = argc > 5 ? std::max(1, std::atoi(argv[5])) : 32;
     const bool refinePose = argc > 6 ? std::atoi(argv[6]) != 0 : false;
     const std::vector<std::string> requestedBackends =
-        splitBackends(argc > 7 ? argv[7] : "legacy_cpu,ceres_cpu,ceres_cuda,auto");
+        splitBackends(argc > 7 ? argv[7] : "legacy_cpu,ceres_cpu,ceres_cuda,native_cuda,auto");
 
     const auto cameras = makeCameras(cameraCount);
     const auto tracks = makeTracks(cameras, trackCount, viewsPerTrack);
@@ -212,6 +217,10 @@ int main(int argc, char **argv)
     if (shouldRunBackend(requestedBackends, "ceres_cuda"))
     {
         runCase("ceres_cuda", xjw::BABackend::CeresCuda, cameras, tracks, threads, iterations, refinePose);
+    }
+    if (shouldRunBackend(requestedBackends, "native_cuda"))
+    {
+        runCase("native_cuda", xjw::BABackend::NativeCuda, cameras, tracks, threads, iterations, refinePose);
     }
     if (shouldRunBackend(requestedBackends, "auto"))
     {
