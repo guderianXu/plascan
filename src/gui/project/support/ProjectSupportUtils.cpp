@@ -332,6 +332,26 @@ QString inferPreferredFeatureSuffix(const QString &plascanPath, const QJsonObjec
     return QString();
 }
 
+QString resolvePreferredFeatureSuffix(const QString &plascanPath,
+                                      const QJsonObject &meta,
+                                      const QString &requestedSuffix,
+                                      const QString &fallbackSuffix)
+{
+    const QString requested = normalizedFeatureSuffix(requestedSuffix);
+    const QStringList availableSuffixes = projectFeatureSuffixes(plascanPath, meta);
+    if (!requested.isEmpty() && availableSuffixes.contains(requested))
+    {
+        return requested;
+    }
+    if (!availableSuffixes.isEmpty())
+    {
+        return availableSuffixes.first();
+    }
+
+    const QString fallback = normalizedFeatureSuffix(fallbackSuffix);
+    return fallback.isEmpty() ? QStringLiteral(".sift") : fallback;
+}
+
 bool projectHasFeatureSuffix(const QString &plascanPath, const QJsonObject &meta, const QString &suffix)
 {
     const QString normalized = normalizedFeatureSuffix(suffix);

@@ -142,6 +142,8 @@ struct IncrementalSfmResult
     int baTracksTotal = 0;     ///< 最终全局 BA 参与轨迹总数
     int baTracksOptimized = 0; ///< 最终全局 BA 成功优化轨迹数
     int baTracksFiltered = 0;  ///< 最终全局 BA 过滤的离群点数
+    int baRefinedIntrinsicCount = 0;    ///< 最终全局 BA 中发生共享内参更新的相机数量
+    double baSharedFocalScale = 1.0;    ///< 最终全局 BA 后焦距相对输入焦距的平均尺度
 
     /// 重建容器的指针（调用方获得所有权）
     std::shared_ptr<SfmReconstruction> reconstruction;
@@ -265,6 +267,8 @@ class IncrementalSfm
     int _lastGlobalBATracksTotal = 0;
     int _lastGlobalBATracksOptimized = 0;
     int _lastGlobalBATracksFiltered = 0;
+    int _lastGlobalBARefinedIntrinsicCount = 0;
+    double _lastGlobalBASharedFocalScale = 1.0;
 
     /// 增量维护的可见三维点计数缓存（imageId → 可见已三角化点数）
     std::unordered_map<ImageId, size_t> _visibilityCache;
@@ -273,6 +277,8 @@ class IncrementalSfm
 
     /// 图像注册失败次数（imageId → 连续失败次数）
     std::unordered_map<ImageId, int> _registerFailCount;
+    /// 当前注册轮次内暂缓重试的图像，避免同一张高重叠坏候选连续耗尽重试次数
+    std::unordered_set<ImageId> _deferredFailedImages;
     /// 永久失败图像集合（超过最大重试次数后移入）
     std::unordered_set<ImageId> _permanentlyFailedImages;
 

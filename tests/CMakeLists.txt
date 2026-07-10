@@ -105,6 +105,18 @@ if(TARGET dense_cloud_refine_cli)
     )
     add_dependencies(test_cli_contracts dense_cloud_refine_cli)
 endif()
+if(TARGET match_photos_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_MATCH_PHOTOS_CLI_PATH="$<TARGET_FILE:match_photos_cli>"
+    )
+    add_dependencies(test_cli_contracts match_photos_cli)
+endif()
+if(TARGET aerial_triangulation_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_AERIAL_TRIANGULATION_CLI_PATH="$<TARGET_FILE:aerial_triangulation_cli>"
+    )
+    add_dependencies(test_cli_contracts aerial_triangulation_cli)
+endif()
 gtest_discover_tests(test_cli_contracts)
 
 # ==============================================================================
@@ -566,6 +578,23 @@ target_include_directories(test_bundle_adjust_projection PRIVATE
 gtest_discover_tests(test_bundle_adjust_projection)
 
 # ==============================================================================
+# test_bundle_adjust_shared_focal — BA 无相机自标定的共享焦距优化
+# ==============================================================================
+add_executable(test_bundle_adjust_shared_focal
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust/tests/test_bundle_adjust_shared_focal.cpp
+)
+target_link_libraries(test_bundle_adjust_shared_focal PRIVATE
+    bundle_adjust
+    camera
+    GTest::gtest_main
+)
+target_include_directories(test_bundle_adjust_shared_focal PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+)
+gtest_discover_tests(test_bundle_adjust_shared_focal)
+
+# ==============================================================================
 # test_bundle_adjust_ceres_backend — BA Ceres/GPU 后端选择与回退
 # ==============================================================================
 if(NOT TARGET Ceres::ceres)
@@ -828,6 +857,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchValidityAnalyzer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WindowPanel.cpp
 )

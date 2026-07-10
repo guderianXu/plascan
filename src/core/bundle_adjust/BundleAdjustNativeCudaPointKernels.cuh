@@ -50,6 +50,79 @@ __device__ inline bool projectDevice(const DeviceCamera &camera, const double po
     return isfinite(pixel[0]) && isfinite(pixel[1]);
 }
 
+__device__ inline bool pointProjectionJacobianDevice(const DeviceCamera &camera,
+                                                     const double point[3],
+                                                     double jacobian[6])
+{
+    const double dx = point[0] - camera.cameraCenter[0];
+    const double dy = point[1] - camera.cameraCenter[1];
+    const double dz = point[2] - camera.cameraCenter[2];
+
+    const double xCam = camera.cameraToWorldRotation[0] * dx +
+                        camera.cameraToWorldRotation[3] * dy +
+                        camera.cameraToWorldRotation[6] * dz;
+    const double yCam = camera.cameraToWorldRotation[1] * dx +
+                        camera.cameraToWorldRotation[4] * dy +
+                        camera.cameraToWorldRotation[7] * dz;
+    const double zCam = camera.cameraToWorldRotation[2] * dx +
+                        camera.cameraToWorldRotation[5] * dy +
+                        camera.cameraToWorldRotation[8] * dz;
+    if (!(zCam > 1e-9))
+    {
+        return false;
+    }
+
+    const double x = xCam / zCam;
+    const double y = yCam / zCam;
+    const double r2 = x * x + y * y;
+    const double r4 = r2 * r2;
+    const double radial = 1.0 +
+                          camera.radialK1 * r2 +
+                          camera.radialK2 * r4 +
+                          camera.radialK3 * r4 * r2;
+    const double radialPrime = camera.radialK1 +
+                               2.0 * camera.radialK2 * r2 +
+                               3.0 * camera.radialK3 * r4;
+    const double dradialDx = 2.0 * x * radialPrime;
+    const double dradialDy = 2.0 * y * radialPrime;
+
+    const double dxdDx = radial + x * dradialDx + 2.0 * camera.tangentialP1 * y +
+                         6.0 * camera.tangentialP2 * x;
+    const double dxdDy = x * dradialDy + 2.0 * camera.tangentialP1 * x +
+                         2.0 * camera.tangentialP2 * y;
+    const double dydDx = y * dradialDx + 2.0 * camera.tangentialP1 * x +
+                         2.0 * camera.tangentialP2 * y;
+    const double dydDy = radial + y * dradialDy + 6.0 * camera.tangentialP1 * y +
+                         2.0 * camera.tangentialP2 * x;
+
+    const double duDx = static_cast<double>(camera.uAxisSign) * camera.focalX * dxdDx;
+    const double duDy = static_cast<double>(camera.uAxisSign) * camera.focalX * dxdDy;
+    const double dvDx = static_cast<double>(camera.vAxisSign) * camera.focalY * dydDx;
+    const double dvDy = static_cast<double>(camera.vAxisSign) * camera.focalY * dydDy;
+
+    const double invZ = 1.0 / zCam;
+    const double duDxc = duDx * invZ;
+    const double duDyc = duDy * invZ;
+    const double duDzc = -(duDx * x + duDy * y) * invZ;
+    const double dvDxc = dvDx * invZ;
+    const double dvDyc = dvDy * invZ;
+    const double dvDzc = -(dvDx * x + dvDy * y) * invZ;
+
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        const double r0 = camera.cameraToWorldRotation[axis * 3 + 0];
+        const double r1 = camera.cameraToWorldRotation[axis * 3 + 1];
+        const double r2v = camera.cameraToWorldRotation[axis * 3 + 2];
+        jacobian[axis] = duDxc * r0 + duDyc * r1 + duDzc * r2v;
+        jacobian[3 + axis] = dvDxc * r0 + dvDyc * r1 + dvDzc * r2v;
+        if (!isfinite(jacobian[axis]) || !isfinite(jacobian[3 + axis]))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
 __device__ inline double robustScale(double residualU, double residualV, double weight, double huberDelta)
 {
     if (!(weight > 0.0) || !isfinite(weight))
@@ -201,29 +274,13 @@ __global__ void optimizePointsKernel(const DeviceCamera *cameras,
 
             const double residual[2] = {scale * du, scale * dv};
             double jacobian[6] = {0.0};
-            const double eps = 1.0e-6;
-            bool jacobianOk = true;
-            for (int axis = 0; axis < 3; ++axis)
-            {
-                double plus[3] = {xyz[0], xyz[1], xyz[2]};
-                double minus[3] = {xyz[0], xyz[1], xyz[2]};
-                plus[axis] += eps;
-                minus[axis] -= eps;
-
-                double pixelPlus[2] = {0.0, 0.0};
-                double pixelMinus[2] = {0.0, 0.0};
-                if (!projectDevice(camera, plus, pixelPlus) ||
-                    !projectDevice(camera, minus, pixelMinus))
-                {
-                    jacobianOk = false;
-                    break;
-                }
-                jacobian[axis] = scale * (pixelPlus[0] - pixelMinus[0]) / (2.0 * eps);
-                jacobian[3 + axis] = scale * (pixelPlus[1] - pixelMinus[1]) / (2.0 * eps);
-            }
-            if (!jacobianOk)
+            if (!pointProjectionJacobianDevice(camera, xyz, jacobian))
             {
                 continue;
+            }
+            for (int i = 0; i < 6; ++i)
+            {
+                jacobian[i] *= scale;
             }
 
             currentCost += residual[0] * residual[0] + residual[1] * residual[1];

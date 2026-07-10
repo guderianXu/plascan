@@ -1107,6 +1107,247 @@ bool optimizeOneCamera(Camera *cam,
     return anyUpdated;
 }
 
+double averageSharedFocalScale(const std::vector<Camera> &cameras,
+                               const std::vector<Camera> &referenceCameras)
+{
+    double sum = 0.0;
+    int count = 0;
+    const size_t n = std::min(cameras.size(), referenceCameras.size());
+    for (size_t i = 0; i < n; ++i)
+    {
+        const Camera &camera = cameras[i];
+        const Camera &reference = referenceCameras[i];
+        if (std::isfinite(camera.focalX()) && std::isfinite(reference.focalX()) &&
+            std::abs(reference.focalX()) > 1e-12)
+        {
+            sum += camera.focalX() / reference.focalX();
+            ++count;
+        }
+        if (std::isfinite(camera.focalY()) && std::isfinite(reference.focalY()) &&
+            std::abs(reference.focalY()) > 1e-12)
+        {
+            sum += camera.focalY() / reference.focalY();
+            ++count;
+        }
+    }
+    return count > 0 ? sum / static_cast<double>(count) : 1.0;
+}
+
+void applySharedFocalScale(std::vector<Camera> *cameras, double scale)
+{
+    if (!cameras || !(scale > 0.0) || !std::isfinite(scale))
+    {
+        return;
+    }
+
+    for (Camera &camera : *cameras)
+    {
+        camera.setIntrinsics(camera.focalX() * scale,
+                             camera.focalY() * scale,
+                             camera.principalX(),
+                             camera.principalY());
+    }
+}
+
+double computeSharedFocalRms(const std::vector<Camera> &cameras,
+                             const std::vector<BATrack> &tracks,
+                             const std::vector<BARefinedPoint> &points)
+{
+    double sum2 = 0.0;
+    int count = 0;
+    for (size_t ti = 0; ti < tracks.size() && ti < points.size(); ++ti)
+    {
+        const BARefinedPoint &point = points[ti];
+        if (!point.valid)
+        {
+            continue;
+        }
+
+        const BATrack &track = tracks[ti];
+        for (const BAObservation &observation : track.observations)
+        {
+            if (observation.cameraIndex < 0 ||
+                observation.cameraIndex >= static_cast<int>(cameras.size()))
+            {
+                continue;
+            }
+            double uv[2] = {0.0, 0.0};
+            if (!projectPoint(cameras[static_cast<size_t>(observation.cameraIndex)],
+                              point.point,
+                              uv))
+            {
+                continue;
+            }
+
+            const double du = uv[0] - observation.u;
+            const double dv = uv[1] - observation.v;
+            const double w = observationWeight(observation);
+            sum2 += w * (du * du + dv * dv);
+            count += 2;
+        }
+    }
+    return count > 0 ? std::sqrt(sum2 / static_cast<double>(count))
+                     : std::numeric_limits<double>::infinity();
+}
+
+void recomputePointRmsForCurrentCameras(const std::vector<Camera> &cameras,
+                                        const std::vector<BATrack> &tracks,
+                                        std::vector<BARefinedPoint> *points)
+{
+    if (!points)
+    {
+        return;
+    }
+
+    const size_t n = std::min(tracks.size(), points->size());
+    for (size_t i = 0; i < n; ++i)
+    {
+        BARefinedPoint &point = (*points)[i];
+        if (!point.valid)
+        {
+            continue;
+        }
+        point.rmsAfter = computeTrackRms(cameras, tracks[i], point.point);
+        point.valid = vec3::isFinite(point.point) && std::isfinite(point.rmsAfter);
+    }
+}
+
+struct SharedFocalOptimizationResult
+{
+    bool updated = false;
+    int updatedCameraCount = 0;
+    double sharedScale = 1.0;
+};
+
+SharedFocalOptimizationResult optimizeSharedFocalScale(std::vector<Camera> *cameras,
+                                                       const std::vector<Camera> &referenceCameras,
+                                                       const std::vector<BATrack> &tracks,
+                                                       std::vector<BARefinedPoint> *points,
+                                                       const BAOptions &opt)
+{
+    SharedFocalOptimizationResult result;
+    if (!cameras || !points || !opt.refineSharedFocalLength ||
+        cameras->size() < 2 || tracks.empty())
+    {
+        return result;
+    }
+
+    const double minScale = std::max(1e-3, opt.minSharedFocalScale);
+    const double maxScale = std::max(minScale, opt.maxSharedFocalScale);
+    const double maxStepScale = std::max(1.01, opt.maxSharedFocalStepScale);
+    const double maxLogStep = std::log(maxStepScale);
+
+    double currentScale = std::clamp(averageSharedFocalScale(*cameras, referenceCameras),
+                                     minScale,
+                                     maxScale);
+    double currentCost = computeSharedFocalRms(*cameras, tracks, *points);
+    if (!std::isfinite(currentCost))
+    {
+        return result;
+    }
+
+    double lambda = std::max(opt.damping, 1e-12);
+    for (int iter = 0; iter < std::max(1, opt.maxSharedFocalIterations); ++iter)
+    {
+        double H = 0.0;
+        double g = 0.0;
+        int used = 0;
+
+        for (size_t ti = 0; ti < tracks.size() && ti < points->size(); ++ti)
+        {
+            const BARefinedPoint &point = (*points)[ti];
+            if (!point.valid)
+            {
+                continue;
+            }
+
+            const BATrack &track = tracks[ti];
+            for (const BAObservation &observation : track.observations)
+            {
+                if (observation.cameraIndex < 0 ||
+                    observation.cameraIndex >= static_cast<int>(cameras->size()))
+                {
+                    continue;
+                }
+
+                const Camera &camera = (*cameras)[static_cast<size_t>(observation.cameraIndex)];
+                double uv[2] = {0.0, 0.0};
+                if (!projectPoint(camera, point.point, uv))
+                {
+                    continue;
+                }
+
+                const double residualU = uv[0] - observation.u;
+                const double residualV = uv[1] - observation.v;
+                const double residualNorm = std::sqrt(residualU * residualU + residualV * residualV);
+                const double weight = observationWeight(observation) *
+                    huberWeight(residualNorm, opt.huberDelta);
+                if (!(weight > 0.0))
+                {
+                    continue;
+                }
+
+                // 用 log(scale) 做 1D 参数。对当前投影，d(u)/dlogf = u - cu，
+                // d(v)/dlogf = v - cv；主点和畸变保持固定。
+                const double jacU = uv[0] - camera.principalX();
+                const double jacV = uv[1] - camera.principalY();
+                H += weight * (jacU * jacU + jacV * jacV);
+                g += weight * (jacU * residualU + jacV * residualV);
+                ++used;
+            }
+        }
+
+        if (used < 3 || !(H > 1e-12))
+        {
+            break;
+        }
+
+        double delta = -g / (H + lambda * std::max(H, 1e-12));
+        delta = std::clamp(delta, -maxLogStep, maxLogStep);
+        if (currentScale * std::exp(delta) < minScale)
+        {
+            delta = std::log(minScale / std::max(currentScale, 1e-12));
+        }
+        if (currentScale * std::exp(delta) > maxScale)
+        {
+            delta = std::log(maxScale / std::max(currentScale, 1e-12));
+        }
+        if (std::abs(delta) < opt.stepTolerance)
+        {
+            break;
+        }
+
+        std::vector<Camera> trialCameras = *cameras;
+        const double trialStepScale = std::exp(delta);
+        applySharedFocalScale(&trialCameras, trialStepScale);
+        const double trialCost = computeSharedFocalRms(trialCameras, tracks, *points);
+        if (std::isfinite(trialCost) && trialCost < currentCost)
+        {
+            *cameras = std::move(trialCameras);
+            currentScale *= trialStepScale;
+            currentCost = trialCost;
+            lambda = std::max(lambda * 0.33, 1e-12);
+            result.updated = true;
+        }
+        else
+        {
+            lambda *= 5.0;
+            if (lambda > 1e8)
+            {
+                break;
+            }
+        }
+    }
+
+    if (result.updated)
+    {
+        recomputePointRmsForCurrentCameras(*cameras, tracks, points);
+        result.updatedCameraCount = static_cast<int>(cameras->size());
+    }
+    result.sharedScale = averageSharedFocalScale(*cameras, referenceCameras);
+    return result;
+}
+
 } // namespace
 
 // ---- 辅助：判断相机是否被 gauge 固定 ----
@@ -1373,6 +1614,23 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
             }
             result.refinedCameraCount = refinedCnt;
         }
+
+        // 阶段二补充：无相机参数空三可只释放所有影像共享的焦距尺度。
+        // 这里不优化主点/畸变，避免转台或弱基线数据把几何误差吸收到过多内参自由度里。
+        if (options.refineSharedFocalLength)
+        {
+            const SharedFocalOptimizationResult focalResult =
+                optimizeSharedFocalScale(&result.refinedCameras,
+                                         cameras,
+                                         tracks,
+                                         &result.points,
+                                         options);
+            if (focalResult.updated)
+            {
+                result.refinedIntrinsicCount = focalResult.updatedCameraCount;
+                result.refinedSharedFocalScale = focalResult.sharedScale;
+            }
+        }
         if (isCancelled(options))
         {
             Logger::instance()->info("[BA] 已请求取消，相机优化阶段后终止");
@@ -1471,6 +1729,13 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
 
     result.meanRmsBefore = (cntBefore > 0) ? (sumBefore / cntBefore) : 0.0;
     result.meanRmsAfter  = (cntAfter  > 0) ? (sumAfter  / cntAfter)  : 0.0;
+    result.refinedSharedFocalScale = averageSharedFocalScale(result.refinedCameras, cameras);
+    if (options.refineSharedFocalLength &&
+        std::abs(result.refinedSharedFocalScale - 1.0) > 1e-6 &&
+        result.refinedIntrinsicCount == 0)
+    {
+        result.refinedIntrinsicCount = static_cast<int>(result.refinedCameras.size());
+    }
 
     if (options.enableLaserPlaneConstraints)
     {
@@ -1551,6 +1816,10 @@ BABackend BundleAdjust::selectBackendForProblem(const BAProblemStats &stats,
     {
         return options.backend;
     }
+    if (options.refineSharedFocalLength)
+    {
+        return BABackend::LegacyCpu;
+    }
     if (!options.refineCameraPose)
     {
         return BABackend::LegacyCpu;
@@ -1600,6 +1869,23 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
         const BAProblemStats stats = summarizeProblem(cameras, tracks);
         return stats.observationCount > std::max(1, options.maxCeresPointOnlyObservations);
     };
+
+    if (options.refineSharedFocalLength &&
+        options.backend != BABackend::LegacyCpu &&
+        options.backend != BABackend::Auto)
+    {
+        const std::string message =
+            "共享焦距自标定目前仅由 legacy_cpu BA 支持，已回退到 legacy_cpu";
+        if (!options.allowBackendFallback)
+        {
+            BAResult result;
+            result.requestedBackend = options.backend;
+            result.backendMessage = message + "，但当前禁止回退";
+            updateDerivedResultStats(result);
+            return result;
+        }
+        return runLegacy(message);
+    }
 
     if (options.backend == BABackend::Auto)
     {

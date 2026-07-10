@@ -251,6 +251,179 @@ TEST(SfmSourceContractTest, TwoStageMatchingUsesSkeletonThenGuidedFill)
     });
 }
 
+TEST(SfmSourceContractTest, AerialTriangulationUsesDenseSiftForTiePointGeneration)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    expectContainsAll(source, {
+        "siftDetectionThresholdForAerialTiePoints",
+        "0.0005f",
+        "opts.tiePointFeatureMaxKeypoints",
+        "opts.tiePointKeypointLimitPerMegapixel",
+    });
+    expectNotContainsAll(source, {
+        "extractorCfg.maxKeypoints  = presets.featureMaxKeypoints",
+    });
+}
+
+TEST(SfmSourceContractTest, AerialTriangulationLightGlueBudgetUsesTiePointFrontendBudget)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+    const QString budgetBody = sectionBetween(source,
+                                              "const bool use_skeleton_feature_budget",
+                                              "// 每个工作线程独立持有一个 LightGlueMatcher");
+
+    expectContainsAll(budgetBody, {
+        "opts.tiePointFeatureMaxKeypoints",
+        "configuredLightGlueKeypointBudget",
+    });
+    expectNotContainsAll(budgetBody, {
+        "use_skeleton_feature_budget ? two_stage_skeleton_keypoint_limit : presets.featureMaxKeypoints",
+    });
+}
+
+TEST(SfmSourceContractTest, AerialTriangulationMatchCacheTracksTiePointFrontendVersion)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    expectContainsAll(source, {
+        "tie_point_frontend_version",
+        "tie_point_feature_max_keypoints",
+        "tie_point_keypoint_limit_per_megapixel",
+        "dense_sift_threshold",
+    });
+}
+
+TEST(SfmSourceContractTest, AerialTriangulationRejectsWeakLoadedMatchCachesForCurrentQuality)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    expectContainsAll(source, {
+        "rejectLoadedMatchCacheBelowCurrentInlierThreshold",
+        "static_cast<int>(pd->matches.size()) >= minInliers",
+        "presets.minInliers",
+        "pd.skippedByNoMatchCache = true",
+        "result.failedPairs.append(fpr)",
+        "cached_match_below_current_inlier_threshold",
+    });
+    expectNotContainsAll(source, {
+        "不再检查 match_threshold",
+    });
+}
+
+TEST(SfmSourceContractTest, AerialTriangulationAdaptiveCameraModelRunsFocalSweep)
+{
+    const QString header = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.h"));
+    const QString source = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    expectContainsAll(header, {
+        "adaptiveCameraModelFitting",
+    });
+    expectContainsAll(source, {
+        "adaptiveFocalScaleCandidates",
+        "shouldRunAdaptiveFocalSweep",
+        "runAdaptiveFocalSweep",
+        "scoreAdaptiveFocalResult",
+        "refineSharedFocalLength",
+        "shared_focal_scale",
+        "adaptive_focal_scale",
+        "adaptive_focal_px",
+    });
+}
+
+TEST(SfmSourceContractTest, AerialTriangulationRetriesAdaptiveFocalForLowNoCameraCoverage)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    expectContainsAll(source, {
+        "shouldRetrySfmWithAdaptiveFocal",
+        "!opts.adaptiveCameraModelFitting",
+        "!primarySfmResultHasProductionSparseCloud(opts, result)",
+        "retryOptions.adaptiveCameraModelFitting = true",
+        "runAdaptiveFocalSweep(retryOptions)",
+        "adaptive_retry_reason",
+        "low_registered_image_coverage_without_camera_prior",
+    });
+}
+
+TEST(SfmSourceContractTest, SfmInitialPairSelectionPenalizesNearDuplicateCoverage)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfm.cpp"));
+    const QString selectionBody = sectionBetween(source,
+                                                 "std::vector<std::pair<ImageId, ImageId>> "
+                                                 "IncrementalSfm::selectInitialPairCandidates",
+                                                 "// COLMAP 式退化对过滤");
+
+    expectContainsAll(selectionBody, {
+        "initialPairScore",
+        "matchCoverage",
+        "std::min(img1.keypoints.size(), img2.keypoints.size())",
+        "coverage > 0.75",
+        "score *= 0.25",
+        "a.initialPairScore > b.initialPairScore",
+        "return a.numMatches > b.numMatches",
+    });
+}
+
+TEST(SfmSourceContractTest, SfmInitialPairSelectionUsesGraphConnectivity)
+{
+    const QString source = readSourceFile(QStringLiteral("src/core/sfm/pipeline/IncrementalSfm.cpp"));
+    const QString selectionBody = sectionBetween(source,
+                                                 "std::vector<std::pair<ImageId, ImageId>> "
+                                                 "IncrementalSfm::selectInitialPairCandidates",
+                                                 "// COLMAP 式退化对过滤");
+
+    expectContainsAll(selectionBody, {
+        "localGraphReach",
+        "endpointDegree",
+        "initGraph[pair.id1].push_back(pair.id2)",
+        "initGraph[pair.id2].push_back(pair.id1)",
+        "graphConnectivityFactor",
+        "pair.initialPairScore *= graphConnectivityFactor",
+        "容易初始化成功后困在小团里",
+    });
+}
+
+TEST(SfmSourceContractTest, NoCameraAerialTriangulationUsesStrictPnpRegistration)
+{
+    const QString pnpHeader = readSourceFile(QStringLiteral("src/core/sfm/pose/PnpSolver.h"));
+    const QString pnpSource = readSourceFile(QStringLiteral("src/core/sfm/pose/PnpSolver.cpp"));
+    const QString service = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    expectContainsAll(pnpHeader, {
+        "allowRelaxedInlierRatio = false",
+    });
+    expectContainsAll(pnpSource, {
+        "options.allowRelaxedInlierRatio",
+        "passesConfiguredRatio",
+        "passesAbsoluteSupport",
+    });
+    expectContainsAll(service, {
+        "if (!sfmOpts.useKnownCameraPoses)",
+        "sfmOpts.pnpOptions.allowRelaxedInlierRatio = false",
+        "sfmOpts.pnpOptions.minInlierRatio = std::max(sfmOpts.pnpOptions.minInlierRatio, 0.25)",
+        "sfmOpts.pnpOptions.minNumInliers = std::max(sfmOpts.pnpOptions.minNumInliers, 20)",
+    });
+}
+
+TEST(SfmSourceContractTest, AerialTriangulationUsesExifCameraMetaAsIntrinsicsOnly)
+{
+    const QString service = readSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
+
+    expectContainsAll(service, {
+        "projectCameraMetaHasUsablePose",
+        "pose_initialized_as_identity",
+        "projectCameraPoseMap",
+        "hasCompleteProjectPoseCameras",
+        "sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectPoseCameras",
+        "projectCameraMap.find(normImgPath)",
+        "sfm.addImageWithCamera(id, xjw::common::io::toUtf8Path(idToPath[id]), cam, kpts)",
+    });
+    expectNotContainsAll(service, {
+        "sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras",
+    });
+}
+
 TEST(SfmSourceContractTest, CudaSiftMatchingIsDedicatedModule)
 {
     const QString header = readSourceFile(QStringLiteral("src/core/feature_match/tradition/CudaSiftMatcher.h"));
@@ -671,13 +844,101 @@ TEST(GuiAlgorithmAlignmentContractTest, MvsDepthMetadataAndDialogContractsAreAli
 
 TEST(GuiAlgorithmAlignmentContractTest, MeshDecimationReachesReconstructionConfig)
 {
-    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
 
-    expectContainsAll(manager, {
+    expectContainsAll(workflow, {
         R"(settings.value(QStringLiteral("decimate")).toBool(false))",
         R"(settings.value(QStringLiteral("decimateRatio"))",
-        "cfg.simplifyTargetFaces = std::max(",
-        "std::lround(cfg.simplifyTargetFaces * decimateRatio)",
+        "config.simplifyTargetFaces =",
+        "std::lround(config.simplifyTargetFaces * decimateRatio)",
+    });
+}
+
+TEST(GuiAlgorithmAlignmentContractTest, GenerateModelAcceptsDepthMapsAsMetashapeStyleSource)
+{
+    const QString controller =
+        readSourceFile(QStringLiteral("src/gui/main_window/ReconstructionWorkflowController.cpp"));
+    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/GenerateModelDialog.cpp"));
+    const QString manager = readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+
+    const QString depthBlock =
+        sectionBetween(controller,
+                       "const QJsonArray depthResults",
+                       "const QJsonArray modelResults");
+    expectContainsAll(depthBlock, {
+        R"(QStringLiteral("depth_maps"))",
+        R"(QStringLiteral("深度图"))",
+        "true,",
+        "深度图将作为生成模型入口",
+    });
+    expectNotContainsAll(depthBlock, {
+        "当前版本还不能直接从深度图生成模型",
+    });
+
+    const QString meshBlock =
+        sectionBetween(manager,
+                       "void ProjectModelManager::startMeshReconstructionAsync",
+                       "void ProjectModelManager::startTextureMappingAsync");
+    expectContainsAll(meshBlock, {
+        "resolveModelSourceForMeshing",
+        "resolvedSource.sourcePointCloudPath",
+        "resolvedSource.outputRoot",
+        "reconstructionConfigFromModelSettings",
+    });
+    expectNotContainsAll(meshBlock, {
+        "当前版本还不能直接从深度图生成模型",
+    });
+
+    expectContainsAll(dialog, {
+        R"(_reuseDepthMapsCheck->setChecked(true))",
+        R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
+        "使用严格的体积掩模",
+    });
+    expectNotContainsAll(dialog, {
+        "使用严格的体积掩摸",
+    });
+}
+
+TEST(GuiAlgorithmAlignmentContractTest, GenerateModelDepthMapsUseDirectMeshWorkflow)
+{
+    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/GenerateModelDialog.cpp"));
+    const QString manager =
+        readSourceFile(QStringLiteral("src/gui/project/manager/ProjectModelManager.cpp"));
+    const QString workflow = readSourceFile(QStringLiteral("src/core/mesh/ModelWorkflowService.cpp"));
+
+    expectContainsAll(dialog, {
+        R"(settings[QStringLiteral("depthMapSourcePath")] = sourcePath)",
+        R"(settings[QStringLiteral("reuseDepthMaps")] = _reuseDepthMapsCheck->isChecked())",
+    });
+
+    expectContainsAll(manager, {
+        "xjw::mesh::workflow::DepthMapMeshBuildRequest depthRequest",
+        "depthRequest.depthMapSourcePath",
+        "buildMeshFromDepthMaps(depthRequest)",
+        "settings.value(QStringLiteral(\"source_data\")).toString(QStringLiteral(\"point_cloud\"))",
+    });
+
+    expectContainsAll(workflow, {
+        "WorkflowResult buildMeshFromDepthMaps",
+        "DepthMapMeshBuilder",
+        "request.depthMapSourcePath",
+    });
+
+    expectNotContainsAll(manager, {
+        "深度图源需要先融合为密集点云，但未找到可复用的 dense_cloud.ply",
+    });
+}
+
+TEST(GuiAlgorithmAlignmentContractTest, GenerateModelBlockControlsAreBoundToSettings)
+{
+    const QString dialog = readSourceFile(QStringLiteral("src/gui/dialogs/GenerateModelDialog.cpp"));
+
+    expectContainsAll(dialog, {
+        "_splitRegionCheck",
+        "_blockSizeSpin",
+        R"(settings[QStringLiteral("splitIntoBlocks")] = _splitRegionCheck->isChecked())",
+        R"(settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value())",
+        "updateBlockControlsAvailability",
     });
 }
 

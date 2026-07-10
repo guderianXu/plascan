@@ -6,6 +6,7 @@
 
 class QCheckBox;
 class QComboBox;
+class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
 class QToolButton;
@@ -43,6 +44,7 @@ private:
     void refreshSourceItems();
     void setAdvancedExpanded(bool expanded);
     void updateAvailability();
+    void updateBlockControlsAvailability();
 
     QJsonArray _candidates;
     QString _pendingSourceData;
@@ -54,6 +56,9 @@ private:
     QComboBox *_qualityCombo = nullptr;
     QComboBox *_faceCountCombo = nullptr;
     QCheckBox *_saveEachStepCheck = nullptr;
+    QCheckBox *_splitRegionCheck = nullptr;
+    QDoubleSpinBox *_blockSizeSpin = nullptr;
+    QCheckBox *_skipBoundaryBlocksCheck = nullptr;
     QToolButton *_advancedToggle = nullptr;
     QWidget *_advancedContent = nullptr;
     QComboBox *_interpolationCombo = nullptr;

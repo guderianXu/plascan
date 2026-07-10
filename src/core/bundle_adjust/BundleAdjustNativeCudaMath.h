@@ -21,6 +21,10 @@ struct ObservationLinearization
 
 ProjectionResult projectHost(const HostCamera &camera, const std::array<double, 3> &point);
 
+bool pointProjectionJacobianHost(const HostCamera &camera,
+                                 const std::array<double, 3> &point,
+                                 double jacobian[6]);
+
 bool linearizeObservationHost(const HostCamera &camera,
                               const std::array<double, 3> &point,
                               double observedU,

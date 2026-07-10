@@ -88,6 +88,8 @@ namespace gui
 namespace
 {
 
+constexpr int kAerialTiePointFrontendVersion = 2;
+
 // ── 路径工具 ─────────────────────────────────────────────────────────────────
 
 QString normalizePath(const QString &path)
@@ -350,6 +352,23 @@ std::array<double, 3> cameraViewingDirection(const Camera &camera)
     return {rotation[2], rotation[5], rotation[8]};
 }
 
+bool projectCameraMetaHasUsablePose(const QJsonObject &cameraObject)
+{
+    if (cameraObject.isEmpty())
+    {
+        return false;
+    }
+
+    // EXIF/手工内参初始化会写入 R=I、C=[0,0,0] 作为占位外参。
+    // 这类 camera 元数据只能作为内参初值，不能触发“已知相机位姿”模式。
+    if (cameraObject.value(QStringLiteral("pose_initialized_as_identity")).toBool(false))
+    {
+        return false;
+    }
+
+    return true;
+}
+
 std::vector<std::array<double, 3>> loadKnownCameraCentersFromPaths(const QStringList &images,
                                                                    const QStringList &cameraPaths,
                                                                    QString *errorMessage)
@@ -467,8 +486,12 @@ std::vector<std::array<double, 3>> loadKnownCameraCentersFromProjectMeta(const Q
     {
         const QString normalizedImagePath = xjw::gui::project::normalizePath(imagePath);
         const QJsonObject imageMeta = imageMetaByPath.value(normalizedImagePath);
+        const QJsonObject cameraObject = imageMeta.value(QStringLiteral("camera")).toObject();
         Camera camera;
-        if (imageMeta.isEmpty() || !xjw::gui::project::imageCameraFromEntry(imageMeta, &camera) || !camera.isValid())
+        if (imageMeta.isEmpty() ||
+            !projectCameraMetaHasUsablePose(cameraObject) ||
+            !xjw::gui::project::cameraFromJson(cameraObject, &camera) ||
+            !camera.isValid())
         {
             centers.clear();
             if (matchedCount)
@@ -516,8 +539,12 @@ std::vector<std::array<double, 3>> loadKnownCameraViewingDirectionsFromProjectMe
     {
         const QString normalizedImagePath = xjw::gui::project::normalizePath(imagePath);
         const QJsonObject imageMeta = imageMetaByPath.value(normalizedImagePath);
+        const QJsonObject cameraObject = imageMeta.value(QStringLiteral("camera")).toObject();
         Camera camera;
-        if (imageMeta.isEmpty() || !xjw::gui::project::imageCameraFromEntry(imageMeta, &camera) || !camera.isValid())
+        if (imageMeta.isEmpty() ||
+            !projectCameraMetaHasUsablePose(cameraObject) ||
+            !xjw::gui::project::cameraFromJson(cameraObject, &camera) ||
+            !camera.isValid())
         {
             directions.clear();
             if (matchedCount)
@@ -1451,6 +1478,98 @@ QualityPresets presetsForLevel(int quality)
     case 3:
     default: return {      30,    5,  3,  10,   0.001f,   -1,  2,  2,   0,  0.00f,    0,  0.20f, 200,  2.0,    25  };   // 最高精度 — 不缩放
     }
+}
+
+float siftDetectionThresholdForAerialTiePoints(const AerialTriangulationServiceOptions &opts,
+                                               const QualityPresets &presets)
+{
+    if (opts.featureAlgorithm.trimmed().toLower() == QStringLiteral("sift") &&
+        opts.useTiePointDenseSift)
+    {
+        // 与“创建连接点”模块保持一致。空三前端需要密集连接点，低质量只应影响速度，
+        // 不应把 SIFT 压到每张几十到几百个点。
+        return 0.0005f;
+    }
+    return presets.featureDetectionThreshold;
+}
+
+int resolveTiePointFeatureMaxKeypoints(const AerialTriangulationServiceOptions &opts,
+                                       const QualityPresets &presets,
+                                       int imageWidth,
+                                       int imageHeight)
+{
+    int limit = opts.tiePointFeatureMaxKeypoints > 0
+        ? opts.tiePointFeatureMaxKeypoints
+        : presets.featureMaxKeypoints;
+
+    if (opts.tiePointKeypointLimitPerMegapixel > 0 && imageWidth > 0 && imageHeight > 0)
+    {
+        const double megapixels = static_cast<double>(imageWidth) *
+            static_cast<double>(imageHeight) / 1000000.0;
+        const int perMegapixelLimit = std::max(
+            1,
+            static_cast<int>(std::ceil(megapixels *
+                                       static_cast<double>(opts.tiePointKeypointLimitPerMegapixel))));
+        limit = limit > 0 ? std::min(limit, perMegapixelLimit) : perMegapixelLimit;
+    }
+
+    return limit;
+}
+
+bool requiresTiePointFrontendSignature(const AerialTriangulationServiceOptions &opts)
+{
+    return opts.featureAlgorithm.trimmed().toLower() == QStringLiteral("sift") &&
+        opts.useTiePointDenseSift;
+}
+
+QJsonValue tiePointFrontendSignatureValue(const QJsonObject &object, const QString &key)
+{
+    if (object.contains(key))
+    {
+        return object.value(key);
+    }
+    return object.value(QStringLiteral("settings")).toObject().value(key);
+}
+
+void appendTiePointFrontendSignature(QJsonObject &object,
+                                     const AerialTriangulationServiceOptions &opts,
+                                     const QualityPresets &presets)
+{
+    object[QStringLiteral("tie_point_frontend_version")] = kAerialTiePointFrontendVersion;
+    object[QStringLiteral("tie_point_feature_max_keypoints")] = opts.tiePointFeatureMaxKeypoints;
+    object[QStringLiteral("tie_point_keypoint_limit_per_megapixel")] =
+        opts.tiePointKeypointLimitPerMegapixel;
+    object[QStringLiteral("dense_sift_threshold")] =
+        static_cast<double>(siftDetectionThresholdForAerialTiePoints(opts, presets));
+}
+
+bool tiePointFrontendSignatureCompatible(const QJsonObject &object,
+                                         const AerialTriangulationServiceOptions &opts,
+                                         const QualityPresets &presets)
+{
+    if (!requiresTiePointFrontendSignature(opts))
+    {
+        return true;
+    }
+
+    const int version = tiePointFrontendSignatureValue(
+        object,
+        QStringLiteral("tie_point_frontend_version")).toInt(-1);
+    const int maxKeypoints = tiePointFrontendSignatureValue(
+        object,
+        QStringLiteral("tie_point_feature_max_keypoints")).toInt(-1);
+    const int perMegapixel = tiePointFrontendSignatureValue(
+        object,
+        QStringLiteral("tie_point_keypoint_limit_per_megapixel")).toInt(-1);
+    const double denseSiftThreshold = tiePointFrontendSignatureValue(
+        object,
+        QStringLiteral("dense_sift_threshold")).toDouble(-1.0);
+
+    return version == kAerialTiePointFrontendVersion &&
+        maxKeypoints == opts.tiePointFeatureMaxKeypoints &&
+        perMegapixel == opts.tiePointKeypointLimitPerMegapixel &&
+        std::abs(denseSiftThreshold -
+                 static_cast<double>(siftDetectionThresholdForAerialTiePoints(opts, presets))) < 1e-9;
 }
 
 int safeDefaultFeatureMaxImageDim(const QString &featureAlgorithm)
@@ -2606,6 +2725,42 @@ bool appendIndexedMatchesFromSidecar(const QJsonObject &sidecar,
     return matches->size() > originalSize;
 }
 
+bool rejectLoadedMatchCacheBelowCurrentInlierThreshold(PairMatchData *pd,
+                                                       const QMap<ImageId, QString> &idToPath,
+                                                       int minInliers,
+                                                       const QString &matchPath,
+                                                       QVector<FailedPairRecord> *failedPairs)
+{
+    if (!pd || !pd->loaded || pd->skippedByNoMatchCache)
+    {
+        return false;
+    }
+
+    if (static_cast<int>(pd->matches.size()) >= minInliers)
+    {
+        return false;
+    }
+
+    LOG_INFO(QStringLiteral(
+        "  匹配缓存低于当前质量阈值，按无有效匹配处理: %1 内点=%2 阈值=%3 reason=cached_match_below_current_inlier_threshold")
+        .arg(matchPath)
+        .arg(pd->matches.size())
+        .arg(minInliers));
+
+    if (failedPairs)
+    {
+        FailedPairRecord fpr;
+        fpr.imagePath0 = idToPath.value(pd->idA);
+        fpr.imagePath1 = idToPath.value(pd->idB);
+        failedPairs->append(fpr);
+    }
+
+    pd->matches.clear();
+    pd->loaded = true;
+    pd->skippedByNoMatchCache = true;
+    return true;
+}
+
 QString guidedPairKey(ImageId imageA, ImageId imageB)
 {
     const ImageId a = std::min(imageA, imageB);
@@ -3001,6 +3156,15 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
     {
         LOG_INFO(QStringLiteral("SFM 特征提取图像最长边: 自动自适应（先尝试原始尺寸，CUDA OOM 时自动降低）"));
     }
+    LOG_INFO(QStringLiteral("SFM 连接点前端: %1 + %2，关键点上限 %3，每百万像素 %4，SIFT阈值 %5")
+        .arg(featureAlgorithm,
+             matchAlgorithm)
+        .arg(opts.tiePointFeatureMaxKeypoints)
+        .arg(opts.tiePointKeypointLimitPerMegapixel)
+        .arg(static_cast<double>(siftDetectionThresholdForAerialTiePoints(opts, presets)),
+             0,
+             'f',
+             6));
 
     // ══════════════════════════════════════════════════════════════════════════
     // 2. 设置目录
@@ -3107,8 +3271,8 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
 
             ExtractorConfig extractorCfg;
             extractorCfg.modelPath     = xjw::common::io::toUtf8Path(extractorModelPath);
-            extractorCfg.maxKeypoints  = presets.featureMaxKeypoints;
-            extractorCfg.detThreshold  = presets.featureDetectionThreshold;
+            extractorCfg.maxKeypoints  = resolveTiePointFeatureMaxKeypoints(opts, presets, 0, 0);
+            extractorCfg.detThreshold  = siftDetectionThresholdForAerialTiePoints(opts, presets);
             extractorCfg.nmsRadius     = presets.featureNmsRadius;
             extractorCfg.removeBorder  = presets.featureRemoveBorders;
             extractorCfg.maxImageDim   = featureMaxImageDim;
@@ -3117,8 +3281,9 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
             extractorCfg.useCuda       = useCuda;
             extractorCfg.cudaDevice    = 0;
 
-            std::unique_ptr<IExtractor> extractor =
-                xjw::feature_extractors::createExtractor(featureAlgorithm.toStdString(), extractorCfg);
+            const std::string baseModelPath = extractorCfg.modelPath;
+            const float baseDetThreshold = extractorCfg.detThreshold;
+            std::unique_ptr<IExtractor> extractor;
 
             int featureDoneCount = 0;
             const int featureTotalCount = static_cast<int>(missingFeatureIds.size());
@@ -3149,6 +3314,24 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                     LOG_WARN(QStringLiteral("  无法读取图像: %1").arg(fi.fileName()));
                     continue;
                 }
+
+                const int imageMaxKeypoints = resolveTiePointFeatureMaxKeypoints(opts,
+                                                                                 presets,
+                                                                                 image.cols,
+                                                                                 image.rows);
+                if (extractorCfg.maxKeypoints != imageMaxKeypoints ||
+                    std::abs(extractorCfg.detThreshold - baseDetThreshold) > 1e-9f ||
+                    extractorCfg.maxImageDim != featureMaxImageDim ||
+                    extractorCfg.useCuda != useCuda ||
+                    extractorCfg.modelPath != baseModelPath)
+                {
+                    extractor = nullptr;
+                }
+                extractorCfg.maxKeypoints = imageMaxKeypoints;
+                extractorCfg.detThreshold = baseDetThreshold;
+                extractorCfg.maxImageDim = featureMaxImageDim;
+                extractorCfg.useCuda = useCuda;
+                extractorCfg.modelPath = baseModelPath;
 
                 FeatureOutput featureOut = extractFeatureWithAdaptiveRetry(featureAlgorithm,
                                                                            fi.fileName(),
@@ -3211,6 +3394,34 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         // 图像尺寸未知，Phase 2 匹配时按需读取
     }
 
+    QJsonObject featureKeypointStats;
+    if (!featureCache.isEmpty())
+    {
+        int minCount = std::numeric_limits<int>::max();
+        int maxCount = 0;
+        qint64 totalCount = 0;
+        for (auto it = featureCache.constBegin(); it != featureCache.constEnd(); ++it)
+        {
+            const int count = static_cast<int>(it.value().featureOutput.keypoints.size());
+            minCount = std::min(minCount, count);
+            maxCount = std::max(maxCount, count);
+            totalCount += count;
+        }
+        const int featureCacheSize = static_cast<int>(featureCache.size());
+        const double avgCount = static_cast<double>(totalCount) /
+            static_cast<double>(std::max(1, featureCacheSize));
+        featureKeypointStats[QStringLiteral("count")] = featureCacheSize;
+        featureKeypointStats[QStringLiteral("min_keypoints")] = minCount;
+        featureKeypointStats[QStringLiteral("max_keypoints")] = maxCount;
+        featureKeypointStats[QStringLiteral("avg_keypoints")] = avgCount;
+        featureKeypointStats[QStringLiteral("frontend")] =
+            QStringLiteral("%1-%2").arg(featureAlgorithm, matchAlgorithm);
+        featureKeypointStats[QStringLiteral("tie_point_feature_max_keypoints")] =
+            opts.tiePointFeatureMaxKeypoints;
+        featureKeypointStats[QStringLiteral("tie_point_keypoint_limit_per_megapixel")] =
+            opts.tiePointKeypointLimitPerMegapixel;
+    }
+
     // 1d. 检查可用特征数量
     if (featureCache.size() < 2) 
     {
@@ -3259,6 +3470,10 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                 const QString recMatchAlgorithm =
                     o.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
                 if (recFeatureAlgorithm != featureAlgorithm || recMatchAlgorithm != matchAlgorithm)
+                {
+                    continue;
+                }
+                if (!tiePointFrontendSignatureCompatible(o, opts, presets))
                 {
                     continue;
                 }
@@ -3545,6 +3760,10 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         {
             return false;
         }
+        if (!tiePointFrontendSignatureCompatible(sc, opts, presets))
+        {
+            return false;
+        }
 
         QString feature0 = sc.value(QStringLiteral("feature0_path")).toString().trimmed();
         QString feature1 = sc.value(QStringLiteral("feature1_path")).toString().trimmed();
@@ -3741,9 +3960,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                 foundPath.clear();
             }
 
-            // 检查 .match 文件是否过期：仅当特征文件比 .match 更新时才视为过期
-            // （即特征点重新提取后，旧匹配结果失效）
-            // 注意：不再检查 match_threshold，避免因参数变化引发全量重匹配
+            // 检查 .match 文件是否过期：特征更新会让索引失效，当前质量阈值则在读取后重验。
             if (!foundPath.isEmpty()) 
             {
                 const QDateTime matchTime = QFileInfo(foundPath).lastModified();
@@ -3791,6 +4008,11 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                 {
                     pd.loaded = true;
                     ++metaReadOkCount;
+                    rejectLoadedMatchCacheBelowCurrentInlierThreshold(&pd,
+                                                                      idToPath,
+                                                                      presets.minInliers,
+                                                                      foundPath,
+                                                                      &result.failedPairs);
                 }
                 else if (metaMatchPathByPair.contains(canonicalPairKey(idToPath.value(idA), idToPath.value(idB))))
                 {
@@ -4161,9 +4383,9 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                 ? std::min(presets.featureMaxKeypoints, opts.skeletonFeatureMaxKeypoints)
                 : (use_skeleton_feature_budget
                        ? opts.skeletonFeatureMaxKeypoints
-                       : presets.featureMaxKeypoints);
+                       : opts.tiePointFeatureMaxKeypoints);
         const int configuredLightGlueKeypointBudget =
-            use_skeleton_feature_budget ? two_stage_skeleton_keypoint_limit : presets.featureMaxKeypoints;
+            use_skeleton_feature_budget ? two_stage_skeleton_keypoint_limit : opts.tiePointFeatureMaxKeypoints;
         xjw::pipeline::LightGlueGpuMemoryInfo lightGlueGpuMemory;
         if (useLightGlueSfmMatch)
         {
@@ -4205,7 +4427,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
             LOG_INFO(QStringLiteral("  LightGlue keypoint budget: algo=%1 budget=%2 configured=%3 gpu_memory=%4")
                 .arg(featureAlgorithm)
                 .arg(lightGlueKeypointBudget)
-                .arg(presets.featureMaxKeypoints)
+                .arg(configuredLightGlueKeypointBudget)
                 .arg(lightGlueGpuMemorySummary(lightGlueGpuMemory)));
         }
 
@@ -4493,6 +4715,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                     sidecar[QStringLiteral("feature_format_version")] = 2;
                     sidecar[QStringLiteral("num_matches")]     = mr.numMatches;
                     sidecar[QStringLiteral("match_threshold")] = static_cast<double>(activeMatchThreshold);
+                    appendTiePointFrontendSignature(sidecar, opts, presets);
                     if (useLightGlueSfmMatch)
                     {
                         sidecar[QStringLiteral("lightglue_keypoint_budget")] = lightGlueBudgetUsed;
@@ -4573,6 +4796,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                     pairSettings[QStringLiteral("sp1_path")]     = featureFilePaths.value(idB);
                     pairSettings[QStringLiteral("feature_algorithm")] = featureAlgorithm;
                     pairSettings[QStringLiteral("match_algorithm")] = matchAlgorithm;
+                    appendTiePointFrontendSignature(pairSettings, opts, presets);
                     if (usedLightGlueHalfTurnRetry)
                     {
                         pairSettings[QStringLiteral("lightglue_rotation_retry")] =
@@ -4659,6 +4883,10 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                 {
                     continue;
                 }
+                if (!tiePointFrontendSignatureCompatible(o, opts, presets))
+                {
+                    continue;
+                }
                 existingKeys.insert(o[QStringLiteral("image0")].toString() +
                                     QStringLiteral("|") +
                                     o[QStringLiteral("image1")].toString());
@@ -4675,6 +4903,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                     o[QStringLiteral("checked_at")]  = ts;
                     o[QStringLiteral("feature_algorithm")] = featureAlgorithm;
                     o[QStringLiteral("match_algorithm")] = matchAlgorithm;
+                    appendTiePointFrontendSignature(o, opts, presets);
                     existing.append(o);
                     existingKeys.insert(key);
                 }
@@ -4701,6 +4930,12 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                                                         pairPlan,
                                                         idToPath,
                                                         result.failedPairs);
+    if (!featureKeypointStats.isEmpty())
+    {
+        QJsonObject diagnostics = result.sfmDiagnostics;
+        diagnostics[QStringLiteral("feature_keypoint_stats")] = featureKeypointStats;
+        result.sfmDiagnostics = diagnostics;
+    }
     const QJsonObject matchingQualityReportFiles =
         writeSfmMatchingQualityReports(assetsDir,
                                        result.sfmDiagnostics,
@@ -4814,42 +5049,56 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
     const bool hasCameraPaths = (!opts.cameraPaths.isEmpty()
                                  && opts.cameraPaths.size() == opts.images.size());
 
-    // 从 projectMeta 中预构建 imagePath → cameraJson 映射。项目元数据里的相机通常来自 EXIF/GPS
-    // 或前置估计，只作为增量 SfM 的相机初值/内参；只有显式 .tsai 列表才触发固定外参模式。
+    // 从 projectMeta 中预构建 imagePath → cameraJson 映射。
+    // projectCameraMap 保存所有可用内参；projectCameraPoseMap 只保存真实外参。
+    // EXIF/手工内参初始化会写入 identity pose 占位，只能作为内参初值使用。
+    // 重置当前对齐时不能复用项目 camera 元数据：这些 camera 往往是上一轮空三写回的解，
+    // 如果重新注入 SfM，会把当前解算锁定在旧的失败状态。
     QMap<QString, QJsonObject> projectCameraMap;
-    if (!opts.projectMeta.isEmpty())
+    QMap<QString, QJsonObject> projectCameraPoseMap;
+    if (opts.useProjectMetaCameras && !opts.projectMeta.isEmpty())
     {
         const QMap<QString, QJsonObject> projectImageMetaByPath =
             xjw::gui::project::projectImageMetaByPath(opts.projectMeta, true);
         for (auto it = projectImageMetaByPath.constBegin(); it != projectImageMetaByPath.constEnd(); ++it)
         {
-            Camera camera;
-            if (!xjw::gui::project::imageCameraFromEntry(it.value(), &camera) || !camera.isValid())
+            const QJsonObject camObj = it.value().value(QStringLiteral("camera")).toObject();
+            if (camObj.isEmpty())
             {
                 continue;
             }
 
-            const QJsonObject camObj = it.value().value(QStringLiteral("camera")).toObject();
-            if (!camObj.isEmpty())
+            Camera camera;
+            if (!xjw::gui::project::cameraFromJson(camObj, &camera) || !camera.isValid())
             {
-                projectCameraMap.insert(it.key(), camObj);
+                continue;
+            }
+
+            projectCameraMap.insert(it.key(), camObj);
+            if (projectCameraMetaHasUsablePose(camObj))
+            {
+                projectCameraPoseMap.insert(it.key(), camObj);
             }
         }
     }
+    else if (!opts.useProjectMetaCameras && !opts.projectMeta.isEmpty())
+    {
+        LOG_INFO(QStringLiteral("  重置当前对齐: 忽略项目中已有 camera 元数据，避免复用上一轮空三外参"));
+    }
 
-    int projectMetaKnownCameraCount = 0;
-    bool hasCompleteProjectMetaCameras = !opts.images.isEmpty() && !projectCameraMap.isEmpty();
-    if (hasCompleteProjectMetaCameras)
+    int projectMetaKnownPoseCameraCount = 0;
+    bool hasCompleteProjectPoseCameras = !opts.images.isEmpty() && !projectCameraPoseMap.isEmpty();
+    if (hasCompleteProjectPoseCameras)
     {
         for (const QString &imagePath : opts.images)
         {
             const QString normImgPath = normalizePath(imagePath);
-            if (!projectCameraMap.contains(normImgPath))
+            if (!projectCameraPoseMap.contains(normImgPath))
             {
-                hasCompleteProjectMetaCameras = false;
+                hasCompleteProjectPoseCameras = false;
                 break;
             }
-            ++projectMetaKnownCameraCount;
+            ++projectMetaKnownPoseCameraCount;
         }
     }
 
@@ -4865,11 +5114,37 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
             }
         }
     }
-    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras;
+    sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectPoseCameras;
     sfmOpts.maxKnownPoseTracksPerImage = opts.maxTiePointsPerImage;
     sfmOpts.maxKnownPoseTracksPerGridCell = opts.maxTiePointsPerGridCell;
     sfmOpts.trackThinningGridColumns = opts.tiePointGridColumns;
     sfmOpts.trackThinningGridRows = opts.tiePointGridRows;
+    if (!sfmOpts.useKnownCameraPoses)
+    {
+        // 无相机文件时，错误 PnP 位姿一旦进入增量模型，会在后续 BA 中把环拍几何拉偏。
+        // 因此这里禁用“低内点率但绝对内点够多”的宽松通过，并提高最小内点数。
+        sfmOpts.pnpOptions.allowRelaxedInlierRatio = false;
+        sfmOpts.pnpOptions.minInlierRatio = std::max(sfmOpts.pnpOptions.minInlierRatio, 0.25);
+        sfmOpts.pnpOptions.minNumInliers = std::max(sfmOpts.pnpOptions.minNumInliers, 20);
+        LOG_INFO(QStringLiteral("  无相机增量 SfM: PnP 使用严格内点率 %1，最少内点 %2")
+            .arg(sfmOpts.pnpOptions.minInlierRatio, 0, 'f', 2)
+            .arg(sfmOpts.pnpOptions.minNumInliers)
+        );
+    }
+    if (opts.adaptiveCameraModelFitting && !sfmOpts.useKnownCameraPoses)
+    {
+        // 无相机文件时，Metashape 的“自适应相机模型拟合”并不是只换一个焦距初值；
+        // BA 中还需要释放共享焦距。这里先只优化 fu/fv 公共尺度，主点/畸变保持固定，
+        // 避免转台、弱基线或小数据集让内参吸收过多位姿误差。
+        sfmOpts.baOptions.refineSharedFocalLength = true;
+        sfmOpts.baOptions.minSharedFocalScale = 0.65;
+        sfmOpts.baOptions.maxSharedFocalScale = 1.55;
+        sfmOpts.baOptions.maxSharedFocalStepScale = 1.12;
+        sfmOpts.baOptions.maxSharedFocalIterations = 6;
+        LOG_INFO(QStringLiteral("  自适应相机模型拟合: BA 释放共享焦距尺度 [%1, %2]")
+            .arg(sfmOpts.baOptions.minSharedFocalScale, 0, 'f', 2)
+            .arg(sfmOpts.baOptions.maxSharedFocalScale, 0, 'f', 2));
+    }
     if (sfmOpts.useKnownCameraPoses)
     {
         sfmOpts.baOptions.progressCallback =
@@ -4908,15 +5183,15 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         }
         else
         {
-            LOG_WARN(hasCompleteProjectMetaCameras
+            LOG_WARN(hasCompleteProjectPoseCameras
                 ? QStringLiteral("  相机文件列表不完整，将使用项目元数据已知外参模式")
                 : QStringLiteral("  相机文件列表不完整，回退到增量 SfM 估计位姿"));
         }
     } 
-    if (hasCompleteProjectMetaCameras)
+    if (hasCompleteProjectPoseCameras)
     {
         LOG_INFO(QStringLiteral("  使用项目元数据已知外参初值模式：相机位姿参与全局 BA 微调 (%1/%2)")
-            .arg(projectMetaKnownCameraCount)
+            .arg(projectMetaKnownPoseCameraCount)
             .arg(opts.images.size()));
     }
     else if (!projectCameraMap.isEmpty())
@@ -5534,6 +5809,8 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
             baSummary[QStringLiteral("tracks_total")] = result.baTracksTotal;
             baSummary[QStringLiteral("tracks_optimized")] = result.baTracksOptimized;
             baSummary[QStringLiteral("tracks_filtered")] = result.baTracksFiltered;
+            baSummary[QStringLiteral("refined_intrinsic_count")] = sfmResult.baRefinedIntrinsicCount;
+            baSummary[QStringLiteral("shared_focal_scale")] = sfmResult.baSharedFocalScale;
 
             QJsonObject diagnostics = result.sfmDiagnostics;
             diagnostics[QStringLiteral("sparse_quality")] = sparseQuality;
@@ -5785,9 +6062,282 @@ bool shouldRetrySfmWithSiftFallback(const AerialTriangulationServiceOptions &opt
     return largestRatio < 0.95;
 }
 
+QVector<double> adaptiveFocalScaleCandidates()
+{
+    // 无相机参数时固定 1.2 * max(w,h) 对窄视场/转台数据偏短。
+    // 这里先用少量共享焦距初值扫描，后续 BA 再围绕最佳初值优化位姿和点。
+    return {1.2, 1.6, 2.0, 2.4, 2.8, 3.2};
+}
+
+bool hasCompleteCameraFilesForAdaptive(const AerialTriangulationServiceOptions &opts)
+{
+    if (opts.cameraPaths.size() != opts.images.size() || opts.cameraPaths.isEmpty())
+    {
+        return false;
+    }
+
+    for (const QString &cameraPath : opts.cameraPaths)
+    {
+        if (cameraPath.isEmpty() || !QFileInfo::exists(cameraPath))
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+bool hasCompleteProjectCameraCentersForAdaptive(const AerialTriangulationServiceOptions &opts)
+{
+    if (opts.projectMeta.isEmpty() || opts.images.isEmpty())
+    {
+        return false;
+    }
+
+    int cameraCenterCount = 0;
+    const std::vector<std::array<double, 3>> centers =
+        loadKnownCameraCentersFromProjectMeta(opts.images, opts.projectMeta, &cameraCenterCount);
+    return hasCompleteKnownCameraCenters(static_cast<int>(opts.images.size()), centers);
+}
+
+bool shouldRunAdaptiveFocalSweep(const AerialTriangulationServiceOptions &opts)
+{
+    if (!opts.adaptiveCameraModelFitting || opts.baOnly || opts.images.size() < 2)
+    {
+        return false;
+    }
+    if (opts.userFu > 0.0 && opts.userFv > 0.0)
+    {
+        return false;
+    }
+    if (hasCompleteCameraFilesForAdaptive(opts) || hasCompleteProjectCameraCentersForAdaptive(opts))
+    {
+        return false;
+    }
+    return true;
+}
+
+int referenceImageMaxDimensionForAdaptiveFocal(const AerialTriangulationServiceOptions &opts)
+{
+    for (const QString &imagePath : opts.images)
+    {
+        QImageReader reader(imagePath);
+        const QSize size = reader.size();
+        if (size.isValid() && size.width() > 0 && size.height() > 0)
+        {
+            return std::max(size.width(), size.height());
+        }
+    }
+    return 0;
+}
+
+double scoreAdaptiveFocalResult(const AerialTriangulationServiceOptions &opts,
+                                const AerialTriangulationServiceResult &result)
+{
+    const int minUsablePoints = minimumUsableSparsePointCountForSiftFallback(opts, result);
+    const bool enoughPoints = result.numPoints3D >= minUsablePoints;
+    const double rms = std::isfinite(result.meanReprojError)
+        ? std::max(0.0, result.meanReprojError)
+        : 1000.0;
+
+    double score = static_cast<double>(std::max(0, result.numRegisteredImages)) * 1.0e9;
+    if (result.success)
+    {
+        score += 1.0e8;
+    }
+    if (enoughPoints)
+    {
+        score += 1.0e7;
+    }
+    score -= std::min(rms, 1000.0) * 1.0e6;
+    score += static_cast<double>(std::min(result.numPoints3D, minUsablePoints * 4)) * 10.0;
+    return score;
+}
+
+QJsonObject adaptiveFocalAttemptSummary(double scale,
+                                        double focalPx,
+                                        const AerialTriangulationServiceResult &result,
+                                        double score)
+{
+    QJsonObject object;
+    object[QStringLiteral("adaptive_focal_scale")] = scale;
+    object[QStringLiteral("adaptive_focal_px")] = focalPx;
+    object[QStringLiteral("success")] = result.success;
+    object[QStringLiteral("registered_images")] = result.numRegisteredImages;
+    object[QStringLiteral("points3d")] = result.numPoints3D;
+    object[QStringLiteral("mean_reproj_error")] = result.meanReprojError;
+    object[QStringLiteral("score")] = score;
+    return object;
+}
+
+void annotateAdaptiveFocalResult(AerialTriangulationServiceResult *result,
+                                 double scale,
+                                 double focalPx,
+                                 double score,
+                                 const QJsonArray &attempts)
+{
+    if (!result)
+    {
+        return;
+    }
+
+    QJsonObject diagnostics = result->sfmDiagnostics;
+    diagnostics[QStringLiteral("adaptive_camera_model_fitting")] = true;
+    diagnostics[QStringLiteral("adaptive_focal_scale")] = scale;
+    diagnostics[QStringLiteral("adaptive_focal_px")] = focalPx;
+    diagnostics[QStringLiteral("adaptive_focal_score")] = score;
+    diagnostics[QStringLiteral("adaptive_focal_attempts")] = attempts;
+    result->sfmDiagnostics = diagnostics;
+    QJsonObject recordExtra = result->resultRecordExtra;
+    if (!recordExtra.isEmpty())
+    {
+        recordExtra[QStringLiteral("sfm_diagnostics")] = diagnostics;
+        result->resultRecordExtra = recordExtra;
+    }
+}
+
+AerialTriangulationServiceResult runAdaptiveFocalSweep(const AerialTriangulationServiceOptions &opts)
+{
+    const int referenceMaxDim = referenceImageMaxDimensionForAdaptiveFocal(opts);
+    if (referenceMaxDim <= 0)
+    {
+        LOG_WARN(QStringLiteral("自适应相机模型拟合跳过：无法读取影像尺寸，回退默认焦距估计"));
+        return runSingleSfmAttempt(opts);
+    }
+
+    QJsonArray attempts;
+    AerialTriangulationServiceResult bestResult;
+    AerialTriangulationServiceOptions bestOptions = opts;
+    double bestScore = -std::numeric_limits<double>::infinity();
+    double bestScale = 0.0;
+    double bestFocalPx = 0.0;
+    int bestIndex = -1;
+    int lastIndex = -1;
+
+    const QVector<double> scales = adaptiveFocalScaleCandidates();
+    for (int i = 0; i < scales.size(); ++i)
+    {
+        if (opts.cancelFlag && opts.cancelFlag->load())
+        {
+            break;
+        }
+
+        const double scale = scales[i];
+        const double focalPx = static_cast<double>(referenceMaxDim) * scale;
+        AerialTriangulationServiceOptions attemptOptions = opts;
+        attemptOptions.userFu = focalPx;
+        attemptOptions.userFv = focalPx;
+        attemptOptions.userCu = 0.0;
+        attemptOptions.userCv = 0.0;
+        attemptOptions.userPitch = 0.0;
+
+        LOG_INFO(QStringLiteral("SFM 自适应焦距尝试 %1/%2: scale=%3, focal=%4 px")
+            .arg(i + 1)
+            .arg(scales.size())
+            .arg(scale, 0, 'f', 2)
+            .arg(focalPx, 0, 'f', 2));
+        AerialTriangulationServiceResult attempt = runSingleSfmAttempt(attemptOptions);
+        const double score = scoreAdaptiveFocalResult(opts, attempt);
+        attempts.append(adaptiveFocalAttemptSummary(scale, focalPx, attempt, score));
+        lastIndex = i;
+
+        LOG_INFO(QStringLiteral("SFM 自适应焦距结果: scale=%1, registered=%2/%3, points=%4, rms=%5, score=%6")
+            .arg(scale, 0, 'f', 2)
+            .arg(attempt.numRegisteredImages)
+            .arg(opts.images.size())
+            .arg(attempt.numPoints3D)
+            .arg(attempt.meanReprojError, 0, 'f', 4)
+            .arg(score, 0, 'f', 2));
+
+        if (score > bestScore)
+        {
+            bestScore = score;
+            bestScale = scale;
+            bestFocalPx = focalPx;
+            bestOptions = attemptOptions;
+            bestResult = attempt;
+            bestIndex = i;
+        }
+    }
+
+    if (bestIndex < 0)
+    {
+        return bestResult;
+    }
+
+    // 多个候选共用输出路径，若最佳值不是最后一次尝试，需要重放最佳焦距，
+    // 确保最终写出的稀疏点云、相机更新和 report 一致。
+    if (bestIndex != lastIndex && !(opts.cancelFlag && opts.cancelFlag->load()))
+    {
+        LOG_INFO(QStringLiteral("SFM 自适应焦距重放最佳结果: scale=%1, focal=%2 px")
+            .arg(bestScale, 0, 'f', 2)
+            .arg(bestFocalPx, 0, 'f', 2));
+        bestResult = runSingleSfmAttempt(bestOptions);
+        bestScore = scoreAdaptiveFocalResult(opts, bestResult);
+    }
+
+    annotateAdaptiveFocalResult(&bestResult, bestScale, bestFocalPx, bestScore, attempts);
+    LOG_INFO(QStringLiteral("SFM 自适应焦距选择: scale=%1, focal=%2 px, registered=%3/%4, points=%5, rms=%6")
+        .arg(bestScale, 0, 'f', 2)
+        .arg(bestFocalPx, 0, 'f', 2)
+        .arg(bestResult.numRegisteredImages)
+        .arg(opts.images.size())
+        .arg(bestResult.numPoints3D)
+        .arg(bestResult.meanReprojError, 0, 'f', 4));
+    return bestResult;
+}
+
+bool shouldRetrySfmWithAdaptiveFocal(const AerialTriangulationServiceOptions &opts,
+                                     const AerialTriangulationServiceResult &result)
+{
+    const bool adaptiveWasDisabled = !opts.adaptiveCameraModelFitting;
+    if (!adaptiveWasDisabled || opts.baOnly || opts.images.size() < 2)
+    {
+        return false;
+    }
+    if (opts.userFu > 0.0 && opts.userFv > 0.0)
+    {
+        return false;
+    }
+    if (hasCompleteCameraFilesForAdaptive(opts) || hasCompleteProjectCameraCentersForAdaptive(opts))
+    {
+        return false;
+    }
+    if (opts.cancelFlag && opts.cancelFlag->load())
+    {
+        return false;
+    }
+    return !primarySfmResultHasProductionSparseCloud(opts, result);
+}
+
 AerialTriangulationServiceResult AerialTriangulationService::run(const AerialTriangulationServiceOptions &opts)
 {
-    AerialTriangulationServiceResult firstResult = runSingleSfmAttempt(opts);
+    AerialTriangulationServiceResult firstResult = shouldRunAdaptiveFocalSweep(opts)
+        ? runAdaptiveFocalSweep(opts)
+        : runSingleSfmAttempt(opts);
+    if (shouldRetrySfmWithAdaptiveFocal(opts, firstResult))
+    {
+        LOG_WARN(QStringLiteral(
+            "SFM 无相机先验且注册覆盖率不足，自动启用自适应相机模型重试一次"));
+        AerialTriangulationServiceOptions retryOptions = opts;
+        retryOptions.adaptiveCameraModelFitting = true;
+        AerialTriangulationServiceResult retryResult = runAdaptiveFocalSweep(retryOptions);
+        QJsonObject diagnostics = retryResult.sfmDiagnostics;
+        diagnostics[QStringLiteral("adaptive_retry_reason")] =
+            QStringLiteral("low_registered_image_coverage_without_camera_prior");
+        diagnostics[QStringLiteral("adaptive_retry_previous_registered_images")] =
+            firstResult.numRegisteredImages;
+        diagnostics[QStringLiteral("adaptive_retry_previous_points3d")] = firstResult.numPoints3D;
+        diagnostics[QStringLiteral("adaptive_retry_previous_mean_reproj_error")] =
+            firstResult.meanReprojError;
+        retryResult.sfmDiagnostics = diagnostics;
+        QJsonObject recordExtra = retryResult.resultRecordExtra;
+        if (!recordExtra.isEmpty())
+        {
+            recordExtra[QStringLiteral("sfm_diagnostics")] = diagnostics;
+            retryResult.resultRecordExtra = recordExtra;
+        }
+        return retryResult;
+    }
     if (!shouldRetrySfmWithSiftFallback(opts, firstResult))
     {
         return firstResult;

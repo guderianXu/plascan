@@ -85,11 +85,17 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("ba_native_cuda_pcg_iterations", source)
         self.assertIn("ba_native_cuda_linear_residual", source)
         self.assertIn("ba_native_cuda_active_observations", source)
+        self.assertIn("ba_native_cuda_kernel_seconds", source)
+        self.assertIn("ba_native_cuda_upload_seconds", source)
+        self.assertIn("ba_native_cuda_staging_seconds", source)
+        self.assertIn("ba_native_cuda_release_seconds", source)
 
     def test_benchmark_supports_native_cuda(self):
         source = self.read_text("src/core/bundle_adjust/tools/ba_backend_benchmark.cpp")
         self.assertIn("native_cuda", source)
         self.assertIn("BABackend::NativeCuda", source)
+        self.assertIn("native_kernel_seconds", source)
+        self.assertIn("native_staging_seconds", source)
 
 
 if __name__ == "__main__":

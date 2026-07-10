@@ -138,6 +138,38 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
     QJsonArray candidates;
     QStringList seenPaths;
 
+    const QJsonArray depthResults = metadata.value(QStringLiteral("depth_map_results")).toArray();
+    QStringList seenDepthDirs;
+    for (int index = depthResults.size() - 1; index >= 0; --index)
+    {
+        const QJsonObject record = depthResults.at(index).toObject();
+        QString depthPath = record.value(QStringLiteral("mvs_output_dir")).toString();
+        if (depthPath.isEmpty())
+        {
+            depthPath = record.value(QStringLiteral("raw_depth_path")).toString();
+        }
+        if (depthPath.isEmpty())
+        {
+            depthPath = record.value(QStringLiteral("depth_png")).toString();
+        }
+
+        const QString cleanPath = existingCleanPath(depthPath);
+        const QString depthKey = QFileInfo(cleanPath).isDir() ? cleanPath : QFileInfo(cleanPath).absolutePath();
+        if (cleanPath.isEmpty() || seenDepthDirs.contains(depthKey))
+        {
+            continue;
+        }
+        seenDepthDirs.push_back(depthKey);
+        appendModelSourceCandidate(
+            &candidates,
+            QStringLiteral("depth_maps"),
+            QStringLiteral("深度图"),
+            cleanPath,
+            QStringLiteral("深度图"),
+            true,
+            QStringLiteral("深度图将作为生成模型入口；若该深度图目录已有融合点云，将直接复用并生成网格。"));
+    }
+
     const QJsonArray denseResults = metadata.value(QStringLiteral("dense_cloud_results")).toArray();
     for (int index = denseResults.size() - 1; index >= 0; --index)
     {
@@ -174,38 +206,6 @@ QJsonArray buildGenerateModelSourceCandidates(const QJsonObject &metadata)
                                    QStringLiteral("连接点"),
                                    true,
                                    QStringLiteral("连接点生成的是快速预览级模型，细节质量低于点云或深度图。"));
-    }
-
-    const QJsonArray depthResults = metadata.value(QStringLiteral("depth_map_results")).toArray();
-    QStringList seenDepthDirs;
-    for (int index = depthResults.size() - 1; index >= 0; --index)
-    {
-        const QJsonObject record = depthResults.at(index).toObject();
-        QString depthPath = record.value(QStringLiteral("mvs_output_dir")).toString();
-        if (depthPath.isEmpty())
-        {
-            depthPath = record.value(QStringLiteral("raw_depth_path")).toString();
-        }
-        if (depthPath.isEmpty())
-        {
-            depthPath = record.value(QStringLiteral("depth_png")).toString();
-        }
-
-        const QString cleanPath = existingCleanPath(depthPath);
-        const QString depthKey = QFileInfo(cleanPath).isDir() ? cleanPath : QFileInfo(cleanPath).absolutePath();
-        if (cleanPath.isEmpty() || seenDepthDirs.contains(depthKey))
-        {
-            continue;
-        }
-        seenDepthDirs.push_back(depthKey);
-        appendModelSourceCandidate(
-            &candidates,
-            QStringLiteral("depth_maps"),
-            QStringLiteral("深度图"),
-            cleanPath,
-            QStringLiteral("深度图"),
-            false,
-            QStringLiteral("当前版本还不能直接从深度图生成模型；请先执行“深度图融合生成密集点云”，再选择点云作为源数据。"));
     }
 
     const QJsonArray modelResults = metadata.value(QStringLiteral("model_results")).toArray();

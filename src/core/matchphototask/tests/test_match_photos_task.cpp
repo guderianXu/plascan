@@ -44,6 +44,7 @@
 #include <QCoreApplication>
 #include <QFile>
 #include <QFileInfo>
+#include <QJsonDocument>
 #include <QTextStream>
 #include <QTemporaryDir>
 
@@ -136,6 +137,31 @@ TEST(MatchPhotosTaskTest, RunsPairSelectionAndReportsStageSkeleton)
     EXPECT_EQ(result.stages.at(3).stageId, QStringLiteral("reference_preselection"));
     EXPECT_EQ(result.stages.at(4).stageId, QStringLiteral("pair_selection"));
     EXPECT_EQ(result.stages.at(1).status, xjw::matchphotos::MatchPhotosStageStatus::Skipped);
+}
+
+TEST(MatchPhotosTaskTest, ExplicitSequenceModeSurvivesDisabledPreselection)
+{
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.planOnly = true;
+    options.useGenericPreselection = false;
+    options.useReferencePreselection = false;
+    options.pairPolicy.mode = xjw::matchphotos::PairSelectionMode::Sequence;
+    options.pairPolicy.sequenceWindow = 1;
+
+    xjw::matchphotos::MatchPhotosContext context;
+    context.pairInput.images = makeImages(5);
+
+    const xjw::matchphotos::MatchPhotosTask task(options);
+    const xjw::matchphotos::MatchPhotosResult result = task.run(context);
+
+    EXPECT_TRUE(result.success) << result.errorMessage.toStdString();
+    EXPECT_TRUE(result.pairSelection.restrictPairs);
+    EXPECT_EQ(result.pairSelection.allPairCount, 10);
+    ASSERT_EQ(result.pairSelection.candidates.size(), 4);
+    for (const xjw::matchphotos::PairCandidate &candidate : result.pairSelection.candidates)
+    {
+        EXPECT_EQ(candidate.pair.indexB - candidate.pair.indexA, 1);
+    }
 }
 
 TEST(MatchPhotosTaskTest, ReportsDetailedProgressThroughContextCallback)
@@ -234,9 +260,11 @@ TEST(MatchPhotosTaskTest, FeatureStageUsesDenseSiftThresholdForTiePointExtractio
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("imageConfig.detectionThreshold")));
-    EXPECT_TRUE(source.contains(QStringLiteral("0.001f")))
+    EXPECT_TRUE(source.contains(QStringLiteral("0.0005f")))
         << "连接点生成使用 CUDA SIFT 时不能沿用 TraditionalFeatureConfig 默认 0.005，"
-           "否则 Hayabusa2 这类小天体影像会只保留几百个关键点。";
+           "Dino/Hayabusa2 这类低纹理影像需要更低阈值保证足够连接点候选。";
+    EXPECT_TRUE(source.contains(QStringLiteral("0.003f")))
+        << "快速模式仍应保留较高阈值，避免大项目生成过密候选点。";
 }
 
 TEST(MatchPhotosTaskTest, ExplicitCudaSiftDoesNotSilentlyFallBackToCpu)
@@ -360,6 +388,63 @@ TEST(MatchPhotosTaskTest, MatchingStageUsesMemoryAwareLightGlueBudget)
     EXPECT_TRUE(source.contains(QStringLiteral("budgetFeatureDataForLightGlue")));
     EXPECT_TRUE(source.contains(QStringLiteral("remapLightGlueMatchResultToOriginal")));
     EXPECT_TRUE(source.contains(QStringLiteral("lightglue_keypoint_budget")));
+}
+
+TEST(MatchPhotosTaskTest, MatchSidecarCarriesAerialTiePointFrontendSignature)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString image0 = QDir(tempDir.path()).filePath(QStringLiteral("left.png"));
+    const QString image1 = QDir(tempDir.path()).filePath(QStringLiteral("right.png"));
+    const QString feature0Path = QDir(tempDir.path()).filePath(QStringLiteral("left.sift"));
+    const QString feature1Path = QDir(tempDir.path()).filePath(QStringLiteral("right.sift"));
+    const QString matchPath = QDir(tempDir.path()).filePath(QStringLiteral("left__right_lightglue.match"));
+    const QString sidecarPath = matchPath + QStringLiteral(".json");
+
+    xjw::matchphotos::ResolvedImagePair pair;
+    pair.image0Path = image0;
+    pair.image1Path = image1;
+    pair.pairName = QStringLiteral("left__right");
+    pair.pairKey = QStringLiteral("left\nright");
+
+    xjw::feature_extractors::FeatureData feature0;
+    feature0.keypoints = {cv::KeyPoint(cv::Point2f(10.0f, 11.0f), 1.0f)};
+    xjw::feature_extractors::FeatureData feature1;
+    feature1.keypoints = {cv::KeyPoint(cv::Point2f(12.0f, 13.0f), 1.0f)};
+
+    xjw::feature_match::MatchResult matchResult =
+        xjw::feature_match::MatchResult::fromCvMatches({cv::DMatch(0, 0, 0.1f)}, 1, 1, "lightglue");
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.featureAlgorithm = QStringLiteral("sift");
+    options.matcherAlgorithm = QStringLiteral("lightglue");
+    options.maxKeypoints = 40000;
+    options.keypointLimitPerMegapixel = 0;
+    options.matchThreshold = 0.15f;
+
+    xjw::matchphotos::MatchPhotosAlgorithmPlan plan =
+        xjw::matchphotos::MatchPhotosAlgorithmSelector::select(options);
+
+    ASSERT_TRUE(xjw::matchphotos::writeMatchPhotosSidecar(sidecarPath,
+                                                          pair,
+                                                          feature0Path,
+                                                          feature1Path,
+                                                          matchPath,
+                                                          feature0,
+                                                          feature1,
+                                                          matchResult,
+                                                          plan,
+                                                          options));
+
+    QFile sidecarFile(sidecarPath);
+    ASSERT_TRUE(sidecarFile.open(QIODevice::ReadOnly));
+    const QJsonObject sidecar = QJsonDocument::fromJson(sidecarFile.readAll()).object();
+
+    EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_frontend_version")).toInt(), 2);
+    EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_feature_max_keypoints")).toInt(), 40000);
+    EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_keypoint_limit_per_megapixel")).toInt(), 0);
+    EXPECT_NEAR(sidecar.value(QStringLiteral("dense_sift_threshold")).toDouble(), 0.0005, 1e-9);
 }
 
 TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)

@@ -370,10 +370,10 @@ float localPlaneResidual(const plapoint::io::PlyVertexPoint &point, const LocalP
 }
 
 template <typename Func>
-void forEachBinaryPlyPoint(const std::string &input_path,
-                           const plapoint::io::PlyVertexStreamHeader &header,
-                           int chunk_bytes,
-                           Func &&func)
+void forEachBinaryPlyRecord(const std::string &input_path,
+                            const plapoint::io::PlyVertexStreamHeader &header,
+                            int chunk_bytes,
+                            Func &&func)
 {
     std::ifstream file = xjw::common::io::openInputFile(input_path);
     if (!file)
@@ -395,9 +395,24 @@ void forEachBinaryPlyPoint(const std::string &input_path,
         {
             const char *record =
                 buffer.data() + static_cast<std::size_t>(i) * static_cast<std::size_t>(header.vertexStride);
-            func(plapoint::io::readPlyVertexPoint(record, header));
+            const plapoint::io::PlyVertexPoint point = plapoint::io::readPlyVertexPoint(record, header);
+            func(record, point);
         }
     }
+}
+
+template <typename Func>
+void forEachBinaryPlyPoint(const std::string &input_path,
+                           const plapoint::io::PlyVertexStreamHeader &header,
+                           int chunk_bytes,
+                           Func &&func)
+{
+    forEachBinaryPlyRecord(input_path,
+                           header,
+                           chunk_bytes,
+                           [&](const char *, const plapoint::io::PlyVertexPoint &point) {
+                               func(point);
+                           });
 }
 
 void fillCellStats(std::vector<CellStats> *cells)
@@ -634,55 +649,51 @@ bool shouldKeepPointWithLocalPlane(const plapoint::io::PlyVertexPoint &point,
     return localPlaneResidual(point, gate) <= gate.threshold;
 }
 
+const char *plyScalarTypeName(plapoint::io::PlyVertexScalarType type)
+{
+    switch (type)
+    {
+    case plapoint::io::PlyVertexScalarType::Int8:
+        return "char";
+    case plapoint::io::PlyVertexScalarType::UInt8:
+        return "uchar";
+    case plapoint::io::PlyVertexScalarType::Int16:
+        return "short";
+    case plapoint::io::PlyVertexScalarType::UInt16:
+        return "ushort";
+    case plapoint::io::PlyVertexScalarType::Int32:
+        return "int";
+    case plapoint::io::PlyVertexScalarType::UInt32:
+        return "uint";
+    case plapoint::io::PlyVertexScalarType::Float32:
+        return "float";
+    case plapoint::io::PlyVertexScalarType::Float64:
+        return "double";
+    default:
+        return "float";
+    }
+}
+
 void writeBinaryPlyHeader(std::ofstream &out,
                           std::size_t vertex_count,
                           const plapoint::io::PlyVertexStreamHeader &input_header)
 {
     out << "ply\n"
         << "format binary_little_endian 1.0\n"
-        << "comment PlaScan dense_cloud_refine_cli streaming output\n"
-        << "element vertex " << vertex_count << "\n"
-        << "property float x\n"
-        << "property float y\n"
-        << "property float z\n";
-    if (input_header.hasColors())
+        << "comment PlaScan dense_cloud_refine_cli streaming output; vertex scalar properties preserved\n"
+        << "element vertex " << vertex_count << "\n";
+    for (const plapoint::io::PlyVertexStreamProperty &property : input_header.properties)
     {
-        out << "property uchar red\n"
-            << "property uchar green\n"
-            << "property uchar blue\n";
-    }
-    if (input_header.hasNormals())
-    {
-        out << "property float nx\n"
-            << "property float ny\n"
-            << "property float nz\n";
+        out << "property " << plyScalarTypeName(property.type) << ' ' << property.name << "\n";
     }
     out << "end_header\n";
 }
 
-void writeFloat(std::ofstream &out, float value)
+void writeBinaryPlyPointRecord(std::ofstream &out,
+                               const char *record,
+                               const plapoint::io::PlyVertexStreamHeader &input_header)
 {
-    out.write(reinterpret_cast<const char *>(&value), sizeof(value));
-}
-
-void writeBinaryPlyPoint(std::ofstream &out,
-                         const plapoint::io::PlyVertexPoint &point,
-                         const plapoint::io::PlyVertexStreamHeader &input_header)
-{
-    writeFloat(out, point.x);
-    writeFloat(out, point.y);
-    writeFloat(out, point.z);
-    if (input_header.hasColors())
-    {
-        const std::uint8_t color[3] = {point.r, point.g, point.b};
-        out.write(reinterpret_cast<const char *>(color), sizeof(color));
-    }
-    if (input_header.hasNormals())
-    {
-        writeFloat(out, point.nx);
-        writeFloat(out, point.ny);
-        writeFloat(out, point.nz);
-    }
+    out.write(record, input_header.vertexStride);
 }
 
 bool refineBinaryPlyStreaming(const std::string &input_path,
@@ -789,10 +800,13 @@ bool refineBinaryPlyStreaming(const std::string &input_path,
     }
     writeBinaryPlyHeader(out, kept_count, header);
 
-    forEachBinaryPlyPoint(input_path, header, chunk_bytes, [&](const plapoint::io::PlyVertexPoint &point) {
+    forEachBinaryPlyRecord(input_path,
+                           header,
+                           chunk_bytes,
+                           [&](const char *record, const plapoint::io::PlyVertexPoint &point) {
         if (shouldKeepPointWithLocalPlane(point, bounds, gates, plane_gates, options))
         {
-            writeBinaryPlyPoint(out, point, header);
+            writeBinaryPlyPointRecord(out, record, header);
         }
     });
 

@@ -2,6 +2,7 @@
 
 #include <QString>
 
+#include <array>
 #include <vector>
 
 namespace xjw::qc
@@ -17,6 +18,9 @@ struct Point3D
 struct SimilarityTransform
 {
     double scale = 1.0;
+    std::array<double, 9> rotation{{1.0, 0.0, 0.0,
+                                    0.0, 1.0, 0.0,
+                                    0.0, 0.0, 1.0}};
     Point3D translation;
 };
 

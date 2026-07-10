@@ -2,7 +2,7 @@
 // 文件: MatchPairSelectorDialog.h
 // 说明: 匹配对选择器对话框的声明（类似 Metashape 在线比对面板）。
 //       通过下拉框选择当前查看的影像，在表格中展示与其存在匹配关系的所有
-//       其他影像及匹配点统计（总数/有效/无效），支持双击或按钮打开详细
+//       其他影像及匹配点统计（原始匹配/有效连接点/无效匹配），支持双击或按钮打开详细
 //       匹配视图（MatchViewerDialog）。
 // =============================================================================
 #pragma once
@@ -33,7 +33,7 @@ class ProjectManager;
 // 功能：
 // - 顶部下拉框：选择当前查看的图像
 // - 中间表格：显示与该图像匹配的所有其他图像
-//   列：图像名称、总计、有效、无效、最佳算法、状态
+//   列：图像名称、原始匹配、有效连接点、无效匹配、最佳算法、状态
 // - 底部按钮：查看详细匹配（打开 MatchViewerDialog）
 class MatchPairSelectorDialog : public QDialog
 {
@@ -77,14 +77,16 @@ private:
         QJsonObject meta;
     };
 
-    // 匹配信息结构体，描述与某张影像之间的匹配统计
+    // 匹配信息结构体，描述与某张影像之间的匹配统计。
+    // totalPoints 对应匹配器原始输出；valid/invalid 优先表示最终有效连接点，
+    // 否则表示几何验证内点/外点，用于避免把原始匹配数和连接点数量混淆。
     struct MatchInfo {
         QString imagePath;       // 匹配影像的完整路径
         QString imageName;       // 匹配影像的文件名（用于显示）
         QString algorithm;       // 匹配算法名 (superglue/lightglue/loftr/...)
-        int totalPoints = 0;     // 总匹配点数
-        int validPoints = 0;     // 有效（内点）匹配点数
-        int invalidPoints = 0;   // 无效（外点）匹配点数
+        int totalPoints = 0;     // 原始匹配点数
+        int validPoints = 0;     // 有效连接点或几何验证内点数
+        int invalidPoints = 0;   // 未被几何验证或空三最终轨迹接受的匹配数
         QString matchFilePath;   // 对应 .match 文件的完整路径
         QVector<xjw::pipeline::MatchVariant> variants; // 同一影像对的全部算法结果
         bool hasInlierStats = false; // true 表示 validPoints 来自几何验证内点统计
@@ -172,7 +174,7 @@ private:
     
     // 顶部影像选择下拉框
     QComboBox *_imageComboBox;
-    // 匹配对信息表格（图像名 | 总计 | 有效 | 无效）
+    // 匹配对信息表格（图像名 | 原始匹配 | 有效连接点 | 无效匹配）
     QTableWidget *_matchTable;
     // 打开详细匹配查看器的按钮（有选中行时启用）
     QPushButton *_viewDetailBtn;

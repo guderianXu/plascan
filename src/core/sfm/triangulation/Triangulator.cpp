@@ -5,6 +5,7 @@
 #include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
+#include <algorithm>
 #include <cmath>
 #include <limits>
 
@@ -633,6 +634,17 @@ int Triangulator::completeTracks(const TriangulatorOptions &options)
                 }
 
                 const auto &pt = _reconstruction.point3D(p3dId);
+                const bool alreadyHasObservationInImage =
+                    std::any_of(pt.track.elements.begin(),
+                                pt.track.elements.end(),
+                                [imgId](const TrackElement &element)
+                                {
+                                    return element.imageId == imgId;
+                                });
+                if (alreadyHasObservationInImage)
+                {
+                    continue;
+                }
 
                 // 检查重投影误差
                 double reprErr = computeReprojError(pt.xyz, imgId, fi);

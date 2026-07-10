@@ -3,9 +3,34 @@
 #include <gtest/gtest.h>
 
 #include <cmath>
+#include <vector>
 
 using xjw::qc::Point3D;
 using xjw::qc::PointCloudAlignment;
+
+namespace
+{
+
+Point3D rotateZAndTranslate(const Point3D &point, double radians, const Point3D &translation)
+{
+    const double c = std::cos(radians);
+    const double s = std::sin(radians);
+    return {
+        c * point.x - s * point.y + translation.x,
+        s * point.x + c * point.y + translation.y,
+        point.z + translation.z
+    };
+}
+
+double pointDistance(const Point3D &a, const Point3D &b)
+{
+    const double dx = a.x - b.x;
+    const double dy = a.y - b.y;
+    const double dz = a.z - b.z;
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
+} // namespace
 
 TEST(PointCloudAlignment, RecoversScaleAndTranslationForPairedClouds)
 {
@@ -66,7 +91,7 @@ TEST(PointCloudAlignment, AlignsUnpairedCloudsWithNearestNeighborTranslation)
     const auto result = PointCloudAlignment::alignNearestNeighborTranslation(source, reference);
 
     ASSERT_TRUE(result.success) << result.error.toStdString();
-    EXPECT_EQ(result.method, QStringLiteral("nearest_neighbor_translation"));
+    EXPECT_EQ(result.method, QStringLiteral("nearest_neighbor_icp"));
     EXPECT_EQ(result.pairCount, 4);
     EXPECT_NEAR(result.transform.scale, 1.0, 1e-9);
     EXPECT_NEAR(result.transform.translation.x, 10.0, 1e-9);
@@ -74,4 +99,39 @@ TEST(PointCloudAlignment, AlignsUnpairedCloudsWithNearestNeighborTranslation)
     EXPECT_NEAR(result.transform.translation.z, 1.5, 1e-9);
     EXPECT_GT(result.before.rmse, 1.0);
     EXPECT_NEAR(result.after.rmse, 0.0, 1e-9);
+}
+
+TEST(PointCloudAlignment, AlignsUnpairedCloudsWithPlaPointIcpRotation)
+{
+    std::vector<Point3D> source;
+    source.reserve(30);
+    for (int i = 0; i < 30; ++i)
+    {
+        const double x = static_cast<double>(i % 6) - 2.5 + 0.03 * static_cast<double>(i / 6);
+        const double y = static_cast<double>(i / 6) - 2.0 + 0.05 * static_cast<double>((i * 3) % 5);
+        const double z = 0.08 * static_cast<double>((i * i) % 7) - 0.2;
+        source.push_back({x, y, z});
+    }
+
+    const double angle = 0.16;
+    const Point3D translation{0.12, -0.08, 0.04};
+    std::vector<Point3D> reference;
+    reference.reserve(source.size());
+    for (const Point3D &point : source)
+    {
+        reference.push_back(rotateZAndTranslate(point, angle, translation));
+    }
+
+    const auto result = PointCloudAlignment::alignNearestNeighborTranslation(source, reference, 40);
+
+    ASSERT_TRUE(result.success) << result.error.toStdString();
+    EXPECT_EQ(result.method, QStringLiteral("nearest_neighbor_icp"));
+    EXPECT_LT(result.after.rmse, result.before.rmse * 0.05);
+    EXPECT_LT(result.after.rmse, 1.0e-5);
+
+    for (std::size_t i = 0; i < source.size(); ++i)
+    {
+        const Point3D aligned = PointCloudAlignment::apply(result.transform, source[i]);
+        EXPECT_LT(pointDistance(aligned, reference[i]), 1.0e-4);
+    }
 }

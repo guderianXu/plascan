@@ -340,8 +340,8 @@ QSet<QString> validPairsFromSparseSidecar(const QString &sidecarPath,
             *hasObservationSchema = true;
         }
 
-        QVector<int> indicesA;
-        QVector<int> indicesB;
+        QSet<int> indicesA;
+        QSet<int> indicesB;
         for (const QJsonValue &observationValue : observations)
         {
             const QJsonObject observation = observationValue.toObject();
@@ -355,20 +355,20 @@ QSet<QString> validPairsFromSparseSidecar(const QString &sidecarPath,
             const QString imageName = observation.value(QStringLiteral("image_name")).toString();
             if (imageTokenMatches(imagePath, imageName, displayImageA))
             {
-                indicesA.append(featureIndex);
+                indicesA.insert(featureIndex);
             }
             if (imageTokenMatches(imagePath, imageName, displayImageB))
             {
-                indicesB.append(featureIndex);
+                indicesB.insert(featureIndex);
             }
         }
 
-        for (int indexA : indicesA)
+        // 最终 SfM 点在同一张影像里理论上只能有一个 feature 观测。
+        // 若出现多个不同 feature，说明该点或导出记录存在歧义，不能做交叉组合，
+        // 否则会把实际不存在的匹配对误标成“有效”。
+        if (indicesA.size() == 1 && indicesB.size() == 1)
         {
-            for (int indexB : indicesB)
-            {
-                validPairs.insert(matchPairKey(indexA, indexB));
-            }
+            validPairs.insert(matchPairKey(*indicesA.constBegin(), *indicesB.constBegin()));
         }
     }
 

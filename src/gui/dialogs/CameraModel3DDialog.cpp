@@ -24,6 +24,7 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
+#include <QTransform>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QCursor>
@@ -213,6 +214,34 @@ int plyScalarTypeSize(PlyScalarType type)
     default:
         return 0;
     }
+}
+
+bool drawImageOnCameraPlane(QPainter &painter, const QPolygonF &imagePlane, const QImage &image)
+{
+    if (image.isNull() || imagePlane.size() != 4)
+    {
+        return false;
+    }
+
+    QPolygonF sourceQuad;
+    // 目标平面点序为右上、左上、左下、右下，因此源图像也使用相同语义顺序。
+    sourceQuad << QPointF(float(image.width()), 0.0f)
+               << QPointF(0.0f, 0.0f)
+               << QPointF(0.0f, float(image.height()))
+               << QPointF(float(image.width()), float(image.height()));
+
+    QTransform imageToPlane;
+    if (!QTransform::quadToQuad(sourceQuad, imagePlane, imageToPlane))
+    {
+        return false;
+    }
+
+    painter.save();
+    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
+    painter.setWorldTransform(imageToPlane, true);
+    painter.drawImage(QPointF(0.0, 0.0), image);
+    painter.restore();
+    return true;
 }
 
 quint64 availableSystemMemoryBytes()
@@ -1575,10 +1604,7 @@ void CameraSceneWidget::drawSelectedCameraImage(QPainter &painter,
 
     if (!displayImage.isNull())
     {
-        QPainterPath clipPath;
-        clipPath.addPolygon(imagePlane);
-        painter.setClipPath(clipPath);
-        painter.drawImage(imagePlane.boundingRect(), displayImage);
+        drawImageOnCameraPlane(painter, imagePlane, displayImage);
     }
     else
     {
@@ -2498,14 +2524,13 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
                 painter.setPen(Qt::NoPen);
                 if (!planeImage.isNull())
                 {
-                    QPainterPath clipPath;
-                    clipPath.addPolygon(imagePlane);
-                    painter.save();
-                    painter.setClipPath(clipPath);
-                    painter.drawImage(imagePlane.boundingRect(), planeImage);
-                    painter.restore();
-
-                    if (highlighted)
+                    const bool imageDrawn = drawImageOnCameraPlane(painter, imagePlane, planeImage);
+                    if (!imageDrawn)
+                    {
+                        painter.setBrush(highlighted ? selectedCameraFill : normalCameraFill);
+                        painter.drawPolygon(imagePlane);
+                    }
+                    else if (highlighted)
                     {
                         painter.setBrush(QColor(255, 86, 104, 55));
                         painter.drawPolygon(imagePlane);

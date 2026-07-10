@@ -61,8 +61,12 @@ private slots:
 private:
     void populateFromMeta(const QJsonObject &meta);
     QJsonObject normalizeMeta(const QJsonObject &meta) const;
+    QStandardItem *createSection(const QString &label);
     QStandardItem *createSection(const QString &title, int count);
-    void appendItemRow(QStandardItem *parent, const QString &name, const QString &path, const QString &storage);
+    void appendItemRow(QStandardItem *parent,
+                       const QString &name,
+                       const QString &path,
+                       const QString &storage);
     void sortSectionChildrenByFileName(QStandardItem *section);
     bool resourceFromIndex(const QModelIndex &index, QString *section, QString *resourcePath) const;
     QString resolveResourcePath(const QString &resourcePath) const;

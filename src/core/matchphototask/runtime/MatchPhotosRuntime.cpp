@@ -19,6 +19,8 @@ namespace matchphotos
 namespace
 {
 
+constexpr int kTiePointFrontendVersion = 2;
+
 QString cleanPath(const QString &path)
 {
     return QDir::cleanPath(QDir::fromNativeSeparators(path.trimmed()));
@@ -112,6 +114,17 @@ float scoreForMatch(const xjw::feature_match::MatchResult &matchResult, int inde
         return 1.0f / (1.0f + std::max(0.0f, distance));
     }
     return 1.0f;
+}
+
+float denseSiftThresholdForTiePointFrontend(const MatchPhotosAlgorithmPlan &plan)
+{
+    if (plan.featureAlgorithm.trimmed().toLower() == QStringLiteral("sift") &&
+        plan.matcherAlgorithm.trimmed().toLower() == QStringLiteral("lightglue"))
+    {
+        // 与空三 SfM 前端保持一致：SIFT+LightGlue 用更低阈值生成密集连接点。
+        return 0.0005f;
+    }
+    return 0.0f;
 }
 
 } // namespace
@@ -337,6 +350,11 @@ QJsonObject makeMatchRecordSettings(const MatchPhotosAlgorithmPlan &plan,
     settings[QStringLiteral("match_threshold")] = static_cast<double>(options.matchThreshold);
     settings[QStringLiteral("keypoint_limit")] = options.maxKeypoints;
     settings[QStringLiteral("keypoint_limit_per_mpx")] = options.keypointLimitPerMegapixel;
+    settings[QStringLiteral("tie_point_frontend_version")] = kTiePointFrontendVersion;
+    settings[QStringLiteral("tie_point_feature_max_keypoints")] = plan.maxKeypoints;
+    settings[QStringLiteral("tie_point_keypoint_limit_per_megapixel")] = options.keypointLimitPerMegapixel;
+    settings[QStringLiteral("dense_sift_threshold")] =
+        static_cast<double>(denseSiftThresholdForTiePointFrontend(plan));
     settings[QStringLiteral("guided_image_matching")] = plan.enableGuidedMatching;
     settings[QStringLiteral("mask_apply_mode")] = options.maskApplyMode.trimmed().toLower();
     settings[QStringLiteral("tiepoint_limit")] = options.maxTiePointsPerImage;

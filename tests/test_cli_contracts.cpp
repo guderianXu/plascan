@@ -182,6 +182,11 @@ void writeUInt32LE(QFile *file, quint32 value)
     file->write(reinterpret_cast<const char *>(&value), sizeof(value));
 }
 
+void writeUInt16LE(QFile *file, quint16 value)
+{
+    file->write(reinterpret_cast<const char *>(&value), sizeof(value));
+}
+
 void writeFloatLE(QFile *file, float value)
 {
     file->write(reinterpret_cast<const char *>(&value), sizeof(value));
@@ -240,6 +245,51 @@ void writeBinaryPly(const QString &path, const QVector<Point3f> &points)
     }
 }
 
+void writeBinaryPlyWithScalarProperties(const QString &path, const QVector<Point3f> &points)
+{
+    QFile file(path);
+    ASSERT_TRUE(file.open(QIODevice::WriteOnly)) << qPrintable(path);
+    const QByteArray header = QStringLiteral("ply\n"
+                                            "format binary_little_endian 1.0\n"
+                                            "element vertex %1\n"
+                                            "property float x\n"
+                                            "property float y\n"
+                                            "property float z\n"
+                                            "property ushort intensity\n"
+                                            "property float confidence\n"
+                                            "end_header\n")
+                                  .arg(points.size())
+                                  .toUtf8();
+    file.write(header);
+    for (int i = 0; i < points.size(); ++i)
+    {
+        const Point3f &point = points.at(i);
+        writeFloatLE(&file, point.x);
+        writeFloatLE(&file, point.y);
+        writeFloatLE(&file, point.z);
+        writeUInt16LE(&file, static_cast<quint16>(1000 + i));
+        writeFloatLE(&file, 0.5f + 0.1f * static_cast<float>(i));
+    }
+}
+
+QString readPlyHeader(const QString &path)
+{
+    QFile file(path);
+    EXPECT_TRUE(file.open(QIODevice::ReadOnly)) << qPrintable(path);
+    if (!file.isOpen())
+    {
+        return QString();
+    }
+    const QByteArray prefix = file.read(4096);
+    const int endHeader = prefix.indexOf("end_header\n");
+    EXPECT_GE(endHeader, 0) << qPrintable(path);
+    if (endHeader < 0)
+    {
+        return QString::fromUtf8(prefix);
+    }
+    return QString::fromUtf8(prefix.left(endHeader + static_cast<int>(QByteArray("end_header\n").size())));
+}
+
 void writeZipEntry(const QString &zipPath, const QString &entryName, const QByteArray &contents)
 {
     int errorCode = 0;
@@ -274,6 +324,14 @@ void writeZipEntry(const QString &zipPath, const QString &entryName, const QByte
 #define PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH ""
 #endif
 
+#ifndef PLASCAN_MATCH_PHOTOS_CLI_PATH
+#define PLASCAN_MATCH_PHOTOS_CLI_PATH ""
+#endif
+
+#ifndef PLASCAN_AERIAL_TRIANGULATION_CLI_PATH
+#define PLASCAN_AERIAL_TRIANGULATION_CLI_PATH ""
+#endif
+
 } // namespace
 
 TEST(ReconstructPipelineCliGTest, SourceUsesUtf8ProgressAndCapsLargeDenseRefineInput)
@@ -290,6 +348,27 @@ TEST(ReconstructPipelineCliGTest, SourceUsesUtf8ProgressAndCapsLargeDenseRefineI
         "constexpr std::size_t kMaxRefineInputPoints = 250000;",
         "constexpr int kMaxPasses = 6;",
         "targetPoints=%zu",
+    });
+}
+
+TEST(ReconstructPipelineCliGTest, FusedPreAggregationUsesPlaPointVoxelGrid)
+{
+    const QString source = readSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+    const int start = source.indexOf(
+        QStringLiteral("std::vector<xjw::mvs::FusedPoint> voxelDownsampleFusedPoints("));
+    const int end = source.indexOf(QStringLiteral("struct FusedVoxelDownsampleResult"), start);
+
+    ASSERT_GE(start, 0);
+    ASSERT_GT(end, start);
+    const QString body = source.mid(start, end - start);
+
+    expectContainsAll(body, {
+        "fusedPointsToPointCloud",
+        "plapoint::voxelDownsample",
+        "pointCloudToFusedPoints",
+    });
+    expectNotContainsAll(body, {
+        "std::unordered_map<FusedVoxelKey",
     });
 }
 
@@ -347,6 +426,124 @@ TEST(ReconstructPipelineCliGTest, QuotedLisPathsSupportSpacesCommasAndUnicode)
     EXPECT_NE(csvResult.exitCode, 0);
     expectContainsAll(combinedOutput(csvResult), {"至少需要 2 组"});
     expectNotContainsAll(combinedOutput(csvResult), {"影像不存在"});
+}
+
+TEST(PhotogrammetryWorkflowCliGTest, DedicatedCliTargetsExposeCurrentWorkflowOptions)
+{
+    const QString cmake = readSourceFile(QStringLiteral("src/cli/CMakeLists.txt"));
+    const QString common = readSourceFile(QStringLiteral("src/cli/cli_photogrammetry_common.h"));
+    const QString matchSource = readSourceFile(QStringLiteral("src/cli/cli_match_photos.cpp"));
+    const QString atSource = readSourceFile(QStringLiteral("src/cli/cli_aerial_triangulation.cpp"));
+
+    expectContainsAll(cmake, {
+        "match_photos_cli",
+        "cli_match_photos.cpp",
+        "aerial_triangulation_cli",
+        "cli_aerial_triangulation.cpp",
+        "matchphototask",
+        "AerialTriangulationWorkflow.cpp",
+    });
+    expectContainsAll(common, {
+        "readPhotogrammetryImageList",
+        "allowImageOnlyRows",
+        "cameraPathsForService",
+    });
+    expectContainsAll(matchSource, {
+        "MatchPhotosTask task",
+        "--keypoint-limit",
+        "--keypoint-limit-per-mpx",
+        "--tiepoint-limit",
+        "--mask-apply-mode",
+        "--guided-image-matching",
+        "match_photos_report.json",
+    });
+    expectContainsAll(atSource, {
+        "AerialTriangulationWorkflow::run",
+        "--dry-run-config",
+        "--reference-mode",
+        "--auto-generate-missing-matches",
+        "--no-adaptive-camera-model-fitting",
+        "aerial_triangulation_cli_report.json",
+    });
+}
+
+TEST(PhotogrammetryWorkflowCliGTest, MatchPhotosCliAcceptsImageOnlyListInPlanMode)
+{
+    const QString exe = executablePath(PLASCAN_MATCH_PHOTOS_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString root = tempDir.path();
+    const QString image0 = QDir(root).filePath(QStringLiteral("temple 0001.png"));
+    const QString image1 = QDir(root).filePath(QStringLiteral("temple 0002.png"));
+    writeBytesFile(image0, QByteArray("placeholder"));
+    writeBytesFile(image1, QByteArray("placeholder"));
+
+    const QString list = QDir(root).filePath(QStringLiteral("images_only.lis"));
+    writeTextFile(list, QStringLiteral("'temple 0001.png'\n\"temple 0002.png\"\n"));
+
+    const QString outputDir = QDir(root).filePath(QStringLiteral("match_out"));
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), list,
+        QStringLiteral("--output-dir"), outputDir,
+        QStringLiteral("--project"), QDir(root).filePath(QStringLiteral("headless.plascan")),
+        QStringLiteral("--plan-only"),
+        QStringLiteral("--force"),
+    });
+
+    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
+    expectContainsAll(combinedOutput(result), {"match_photos_report.json"});
+    expectNotContainsAll(combinedOutput(result), {"需要 '<image> <camera.tsai>'"});
+    const QJsonObject report = readJsonObject(QDir(outputDir).filePath(QStringLiteral("match_photos_report.json")));
+    EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
+    EXPECT_EQ(report.value(QStringLiteral("image_count")).toInt(), 2);
+}
+
+TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListForDryRun)
+{
+    const QString exe = executablePath(PLASCAN_AERIAL_TRIANGULATION_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString root = tempDir.path();
+    const QString image0 = QDir(root).filePath(QStringLiteral("templeSR0001.png"));
+    const QString image1 = QDir(root).filePath(QStringLiteral("templeSR0002.png"));
+    writeBytesFile(image0, QByteArray("placeholder"));
+    writeBytesFile(image1, QByteArray("placeholder"));
+
+    const QString list = QDir(root).filePath(QStringLiteral("images_only.lis"));
+    writeTextFile(list, QStringLiteral("templeSR0001.png\ntempleSR0002.png\n"));
+
+    const QString outputDir = QDir(root).filePath(QStringLiteral("at_out"));
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), list,
+        QStringLiteral("--output-dir"), outputDir,
+        QStringLiteral("--project"), QDir(root).filePath(QStringLiteral("headless.plascan")),
+        QStringLiteral("--dry-run-config"),
+        QStringLiteral("--quality"), QStringLiteral("highest"),
+        QStringLiteral("--keypoint-limit"), QStringLiteral("40000"),
+        QStringLiteral("--tiepoint-limit"), QStringLiteral("4000"),
+        QStringLiteral("--force"),
+    });
+
+    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
+    expectContainsAll(combinedOutput(result), {"aerial_triangulation_cli_report.json", "dry_run"});
+    expectNotContainsAll(combinedOutput(result), {"需要 '<image> <camera.tsai>'"});
+    const QJsonObject report =
+        readJsonObject(QDir(outputDir).filePath(QStringLiteral("aerial_triangulation_cli_report.json")));
+    EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
+    EXPECT_TRUE(report.value(QStringLiteral("dry_run")).toBool());
+    EXPECT_EQ(report.value(QStringLiteral("image_count")).toInt(), 2);
+    const QJsonObject resolved = report.value(QStringLiteral("resolved_settings")).toObject();
+    EXPECT_EQ(resolved.value(QStringLiteral("quality")).toString(), QStringLiteral("highest"));
+    EXPECT_EQ(resolved.value(QStringLiteral("resolved_keypoint_budget")).toInt(), 40000);
+    EXPECT_EQ(resolved.value(QStringLiteral("resolved_tiepoint_limit")).toInt(), 4000);
+    const QJsonObject serviceOptions = report.value(QStringLiteral("service_options")).toObject();
+    EXPECT_TRUE(serviceOptions.contains(QStringLiteral("tie_point_feature_max_keypoints")));
+    EXPECT_TRUE(serviceOptions.contains(QStringLiteral("tie_point_keypoint_limit_per_megapixel")));
+    EXPECT_TRUE(serviceOptions.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
 }
 
 TEST(BundleAdjustCliGTest, SourceExposesLidarCompareOptionsAndHeadlessDefaults)
@@ -539,6 +736,45 @@ TEST(DenseCloudRefineCliGTest, StreamingCliAppliesLocalPlaneFilter)
                   .value(QStringLiteral("local_plane_removed_points")).toInt(),
               1);
     EXPECT_TRUE(QFileInfo::exists(outputPly));
+}
+
+TEST(DenseCloudRefineCliGTest, StreamingCliPreservesPlyScalarProperties)
+{
+    const QString exe = executablePath(PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString inputPly = QDir(tempDir.path()).filePath(QStringLiteral("attributed_binary.ply"));
+    const QString outputPly = QDir(tempDir.path()).filePath(QStringLiteral("refined_attributed.ply"));
+    const QString reportJson = QDir(tempDir.path()).filePath(QStringLiteral("report_attributed.json"));
+
+    writeBinaryPlyWithScalarProperties(inputPly, {
+        {0.0f, 0.0f, 0.0f},
+        {1.0f, 0.0f, 0.0f},
+        {0.0f, 1.0f, 0.0f},
+        {1.0f, 1.0f, 0.0f}
+    });
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), inputPly,
+        QStringLiteral("--output"), outputPly,
+        QStringLiteral("--report-json"), reportJson,
+        QStringLiteral("--disable-terrain-spike-filter"),
+        QStringLiteral("--terrain-filter-passes"), QStringLiteral("1"),
+    }, 120000);
+
+    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
+    const QString outputHeader = readPlyHeader(outputPly);
+    expectContainsAll(outputHeader, {
+        "property ushort intensity",
+        "property float confidence",
+    });
+
+    const QJsonObject report = readJsonObject(reportJson);
+    EXPECT_EQ(report.value(QStringLiteral("mode")).toString(), QStringLiteral("streaming"));
+    EXPECT_EQ(report.value(QStringLiteral("input_points")).toInt(), 4);
+    EXPECT_EQ(report.value(QStringLiteral("output_points")).toInt(), 4);
 }
 
 TEST(CameraConvertCliGTest, ListsFormatsAndRejectsExistingOutputWithoutOverwrite)

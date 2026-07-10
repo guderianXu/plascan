@@ -505,7 +505,7 @@ MatchPhotosResult MatchPhotosTask::run(const MatchPhotosContext &context) const
     pairPolicy.includeVocabularyOverlap = effectiveOptions.useGenericPreselection;
     pairPolicy.includeCameraOverlap = effectiveOptions.useReferencePreselection;
     if (!effectiveOptions.useGenericPreselection && !effectiveOptions.useReferencePreselection &&
-        pairPolicy.mode != PairSelectionMode::ManualOnly)
+        pairPolicy.mode == PairSelectionMode::Auto)
     {
         pairPolicy.mode = PairSelectionMode::Exhaustive;
     }

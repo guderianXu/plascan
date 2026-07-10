@@ -50,6 +50,10 @@ struct AerialTriangulationServiceOptions
     // ── 项目元数据（备用；目前优先目录扫描）─────────────────────────────
     QJsonObject         projectMeta;        ///< project_files.json 内容
 
+    /// 是否允许把项目里已有的 camera 元数据作为 SfM 相机初值。
+    /// 重置当前对齐时应关闭，避免把上一轮空三写回的外参重新注入本次解算。
+    bool                useProjectMetaCameras = true;
+
     // ── 输出目录 ───────────────────────────────────────────────────────────
     QString             outputDir;          ///< 空三成果和稀疏观测输出文件的根目录
 
@@ -92,6 +96,10 @@ struct AerialTriangulationServiceOptions
     /// 若为 true，则 Phase 2 只处理 allowedPairs 中显式给出的影像对。
     /// 若 allowedPairs 为空，则视为没有可用配对约束并直接失败。
     bool                restrictPairs = false;
+
+    /// 无相机参数场景下启用自适应相机模型拟合。
+    /// 当前先做共享焦距初值扫描，后续 BA 可在此基础上释放更多内参。
+    bool                adaptiveCameraModelFitting = false;
 
     /// 允许参与匹配的影像对集合。每项为按路径规范化后、稳定排序的 pair key。
     /// key 格式: minPath + "\n" + maxPath。
@@ -141,6 +149,16 @@ struct AerialTriangulationServiceOptions
 
     /// 两阶段第一阶段的关键点上限。<=0 表示沿用质量档位。
     int                 skeletonFeatureMaxKeypoints = 2048;
+
+    /// 连接点前端的每张影像关键点上限。空三自动补齐连接点时必须使用这个预算，
+    /// 不能被低质量 SfM 骨架预算覆盖；<=0 表示沿用质量档位。
+    int                 tiePointFeatureMaxKeypoints = 40000;
+
+    /// 每百万像素关键点限制。>0 时与 tiePointFeatureMaxKeypoints 共同取较小值。
+    int                 tiePointKeypointLimitPerMegapixel = 0;
+
+    /// 是否使用创建连接点同款密集 SIFT 阈值。无相机/通用预选空三默认开启。
+    bool                useTiePointDenseSift = true;
 
     /// Guided 二次结果至少需要带来的点数增益比例，否则拒绝写回。
     double              guidedFillMinPointGainRatio = 0.03;

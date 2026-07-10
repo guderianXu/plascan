@@ -55,6 +55,12 @@ QStringList projectFeatureSuffixes(const QString &plascanPath, const QJsonObject
 // 优先级面向当前默认流程：.sift, .dsk, .alk, .sp, .orb, .akz, .dedode。
 QString inferPreferredFeatureSuffix(const QString &plascanPath, const QJsonObject &meta);
 
+// 恢复持久化设置时解析实际可用的特征后缀；旧设置不可用时回退到项目已有后缀或 .sift。
+QString resolvePreferredFeatureSuffix(const QString &plascanPath,
+                                      const QJsonObject &meta,
+                                      const QString &requestedSuffix,
+                                      const QString &fallbackSuffix = QString());
+
 // 判断项目中是否存在指定后缀的特征文件；suffix 可传 ".dsk" 或 "dsk"。
 bool projectHasFeatureSuffix(const QString &plascanPath, const QJsonObject &meta, const QString &suffix);
 

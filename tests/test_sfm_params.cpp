@@ -14,6 +14,54 @@
 
 using namespace xjw;
 
+namespace
+{
+
+struct LowRatioPnpCase
+{
+    std::vector<std::array<double, 3>> worldPoints;
+    std::vector<std::array<double, 2>> imagePoints;
+    double fu = 768.0;
+    double fv = 768.0;
+    double cu = 320.0;
+    double cv = 240.0;
+};
+
+LowRatioPnpCase makeLowRatioPnpCase()
+{
+    LowRatioPnpCase data;
+    data.worldPoints.reserve(85);
+    data.imagePoints.reserve(85);
+
+    for (int i = 0; i < 20; ++i)
+    {
+        const double x = (static_cast<double>(i % 5) - 2.0) * 0.35;
+        const double y = (static_cast<double>(i / 5) - 1.5) * 0.28;
+        const double z = 5.0 + static_cast<double>(i % 4) * 0.2;
+        data.worldPoints.push_back({{x, y, z}});
+        data.imagePoints.push_back({{
+            data.fu * x / z + data.cu + (i % 2 == 0 ? 0.2 : -0.2),
+            data.fv * y / z + data.cv + (i % 3 == 0 ? -0.15 : 0.15),
+        }});
+    }
+
+    for (int i = 0; i < 65; ++i)
+    {
+        const double x = -2.0 + static_cast<double>(i % 13) * 0.31;
+        const double y = -1.8 + static_cast<double>(i % 11) * 0.29;
+        const double z = 4.5 + static_cast<double>(i % 7) * 0.35;
+        data.worldPoints.push_back({{x, y, z}});
+        data.imagePoints.push_back({{
+            40.0 + static_cast<double>((i * 37) % 560),
+            30.0 + static_cast<double>((i * 53) % 420),
+        }});
+    }
+
+    return data;
+}
+
+} // namespace
+
 // ─── Triangulator 参数验证 ──────────────────────────────────────
 
 TEST(TriangulatorParamsTest, DefaultsAreTightened)
@@ -70,6 +118,55 @@ TEST(PnpParamsTest, MaxReprojErrorTightened)
     // 从 8.0 收紧到 4.0
     EXPECT_LE(opts.maxReprojError, 4.0)
         << "PnP maxReprojError should be <= 4.0 to reduce registration outliers";
+}
+
+TEST(PnpParamsTest, AcceptsLowRatioWhenAbsoluteInlierSupportIsEnough)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+
+    PnpOptions opts;
+    opts.maxIterations = 50000;
+    opts.minNumInliers = 10;
+    opts.allowRelaxedInlierRatio = true;
+
+    const PnpResult result = PnpSolver::solve(data.worldPoints,
+                                              data.imagePoints,
+                                              data.fu,
+                                              data.fv,
+                                              data.cu,
+                                              data.cv,
+                                              1,
+                                              1,
+                                              false,
+                                              opts);
+
+    EXPECT_TRUE(result.success);
+    EXPECT_GE(result.numInliers, 18);
+    EXPECT_LT(static_cast<double>(20) / static_cast<double>(data.worldPoints.size()), 0.25);
+}
+
+TEST(PnpParamsTest, RejectsLowRatioByDefault)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+
+    PnpOptions opts;
+    opts.maxIterations = 50000;
+    opts.minNumInliers = 10;
+
+    const PnpResult result = PnpSolver::solve(data.worldPoints,
+                                              data.imagePoints,
+                                              data.fu,
+                                              data.fv,
+                                              data.cu,
+                                              data.cv,
+                                              1,
+                                              1,
+                                              false,
+                                              opts);
+
+    EXPECT_FALSE(result.success);
+    EXPECT_GE(result.numInliers, 18);
+    EXPECT_LT(result.inlierRatio, opts.minInlierRatio);
 }
 
 // ─── BundleAdjust 参数验证 ──────────────────────────────────────

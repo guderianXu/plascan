@@ -250,10 +250,10 @@ QString variantsTooltip(const QVector<xjw::pipeline::MatchVariant> &variants)
     for (const xjw::pipeline::MatchVariant &variant : variants)
     {
         const QString counts = variant.hasInlierStats
-            ? QStringLiteral("内点 %1 / 总 %2")
+            ? QStringLiteral("几何内点 %1 / 原始匹配 %2")
                   .arg(variant.geometricVerifiedInliers)
                   .arg(variant.totalMatches)
-            : QStringLiteral("总 %1").arg(variant.totalMatches);
+            : QStringLiteral("原始匹配 %1").arg(variant.totalMatches);
         lines.append(QStringLiteral("%1：%2，%3")
                          .arg(matchVariantAlgorithmLabel(variant),
                               matchVariantReasonLabel(variant),
@@ -497,14 +497,15 @@ void MatchPairSelectorDialog::setupTable()
     _matchTable->setColumnCount(6);
 
     QStringList headers;
-    headers << tr("图像") << tr("总计") << tr("有效")
-            << tr("无效") << tr("最佳算法") << tr("状态");
+    headers << tr("图像") << tr("原始匹配")
+            << tr("有效连接点") << tr("无效匹配")
+            << tr("最佳算法") << tr("状态");
     _matchTable->setHorizontalHeaderLabels(headers);
 
     // 设置列宽
     _matchTable->setColumnWidth(0, 320);
-    _matchTable->setColumnWidth(1, 90);
-    _matchTable->setColumnWidth(2, 90);
+    _matchTable->setColumnWidth(1, 110);
+    _matchTable->setColumnWidth(2, 110);
     _matchTable->setColumnWidth(3, 90);
     _matchTable->setColumnWidth(4, 170);
     _matchTable->setColumnWidth(5, 160);
@@ -621,7 +622,7 @@ void MatchPairSelectorDialog::populateMatchTable()
         nameItem->setToolTip(info.imagePath);
         _matchTable->setItem(i, 0, nameItem);
 
-        // 总计
+        // 原始匹配：LightGlue/传统匹配直接输出的两两匹配数量。
         QTableWidgetItem *totalItem = new QTableWidgetItem(
             info.matchFilePath.isEmpty()
                 ? tr("未匹配")
@@ -629,8 +630,9 @@ void MatchPairSelectorDialog::populateMatchTable()
         totalItem->setTextAlignment(Qt::AlignCenter);
         _matchTable->setItem(i, 1, totalItem);
 
-        // 有效：优先使用空三最终轨迹统计，其次使用几何验证内点统计
-        const bool hasValidityStats = info.hasTrackValidity || info.hasInlierStats;
+        // 有效连接点：按 Metashape View Matches 语义，只使用空三后保留下来的 tie point。
+        // 两视图几何验证内点仍保留在算法变体摘要中，不混入有效连接点统计。
+        const bool hasValidityStats = info.hasTrackValidity;
         QTableWidgetItem *validItem = new QTableWidgetItem(
             info.matchFilePath.isEmpty() || !hasValidityStats
                 ? QStringLiteral("-")
@@ -638,7 +640,7 @@ void MatchPairSelectorDialog::populateMatchTable()
         validItem->setTextAlignment(Qt::AlignCenter);
         _matchTable->setItem(i, 2, validItem);
 
-        // 无效：总匹配中没有进入最终轨迹/几何验证的部分
+        // 无效匹配：原始匹配中没有进入最终空三轨迹的部分。
         QTableWidgetItem *invalidItem = new QTableWidgetItem(
             info.matchFilePath.isEmpty() || !hasValidityStats
                 ? QStringLiteral("-")
@@ -1009,7 +1011,9 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
     // ── 方式一：通过 Catalog 扫描 matchDir/*.match 文件并按影像对聚合 ────────
     QSet<QString> seenMatchFiles;
     QSet<QString> seenPairKeys;
-    MatchValidityContext validityContext;
+    const MatchValidityContext validityContext = snapshot.matchDir.isEmpty()
+        ? MatchValidityContext{}
+        : buildMatchValidityContextForMatchDirectory(snapshot.matchDir);
 
     if (!snapshot.matchDir.isEmpty())
     {
@@ -1018,8 +1022,6 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
         config.progressCallback = progressCallback;
         const xjw::pipeline::MatchResultCatalogSummary summary =
             xjw::pipeline::MatchResultCatalog(config).scan();
-
-        validityContext = buildMatchValidityContextForMatchDirectory(snapshot.matchDir);
 
         for (const xjw::pipeline::MatchPairGroup &group : summary.pairGroups)
         {
@@ -1467,10 +1469,10 @@ void MatchPairSelectorDialog::onMatchPairSelected(int row, int column)
     else
     {
         const QString algorithm = info.algorithm.isEmpty() ? tr("(旧格式)") : info.algorithm;
-        const bool hasValidityStats = info.hasTrackValidity || info.hasInlierStats;
+        const bool hasValidityStats = info.hasTrackValidity;
         if (hasValidityStats)
         {
-            _statusLabel->setText(tr("已选择：%1（%2，总计 %3，有效 %4，无效 %5）")
+            _statusLabel->setText(tr("已选择：%1（%2，原始 %3，有效连接点 %4，无效匹配 %5）")
                 .arg(info.imageName)
                 .arg(algorithm)
                 .arg(info.totalPoints)

@@ -284,6 +284,13 @@ BaServiceResult BundleAdjustService::run(
     saveObj[QStringLiteral("ba_native_cuda_active_cameras")] = baResult.nativeCudaActiveCameras;
     saveObj[QStringLiteral("ba_native_cuda_active_tracks")] = baResult.nativeCudaActiveTracks;
     saveObj[QStringLiteral("ba_native_cuda_active_observations")] = baResult.nativeCudaActiveObservations;
+    saveObj[QStringLiteral("ba_native_cuda_upload_seconds")] = baResult.nativeCudaUploadSeconds;
+    saveObj[QStringLiteral("ba_native_cuda_kernel_seconds")] = baResult.nativeCudaKernelSeconds;
+    saveObj[QStringLiteral("ba_native_cuda_download_seconds")] = baResult.nativeCudaDownloadSeconds;
+    saveObj[QStringLiteral("ba_native_cuda_host_cost_seconds")] = baResult.nativeCudaHostCostSeconds;
+    saveObj[QStringLiteral("ba_native_cuda_device_select_seconds")] = baResult.nativeCudaDeviceSelectSeconds;
+    saveObj[QStringLiteral("ba_native_cuda_staging_seconds")] = baResult.nativeCudaStagingSeconds;
+    saveObj[QStringLiteral("ba_native_cuda_release_seconds")] = baResult.nativeCudaReleaseSeconds;
 
     // BA 选项回存（便于复现）
     {
@@ -607,6 +614,12 @@ BaServiceResult BundleAdjustService::run(
                << ", 线性残差: " << baResult.nativeCudaLinearResidual
                << ", 接受步: " << baResult.nativeCudaAcceptedSteps
                << ", 拒绝步: " << baResult.nativeCudaRejectedSteps << "\n";
+            ts << "native CUDA 分解耗时(s): 上传 " << baResult.nativeCudaUploadSeconds
+               << ", kernel " << baResult.nativeCudaKernelSeconds
+               << ", 下载 " << baResult.nativeCudaDownloadSeconds
+               << ", host cost " << baResult.nativeCudaHostCostSeconds
+               << ", staging " << baResult.nativeCudaStagingSeconds
+               << ", release " << baResult.nativeCudaReleaseSeconds << "\n";
             ts << "后端总耗时(s): "  << baResult.totalSeconds             << "\n";
             ts << "问题构建耗时(s): " << baResult.setupSeconds             << "\n";
             ts << "求解耗时(s): "    << baResult.solveSeconds             << "\n";

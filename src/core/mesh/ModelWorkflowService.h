@@ -21,6 +21,17 @@ struct MeshBuildRequest
     std::function<void(const QString &, int)> progress;
 };
 
+struct DepthMapMeshBuildRequest
+{
+    QString depthMapSourcePath;
+    QString outputRoot;
+    QJsonObject settings;
+    xjw::mesh::ReconstructionConfig reconstruction;
+    bool exportObj = false;
+    xjw::mesh::TextureMappingConfig texture;
+    std::function<void(const QString &, int)> progress;
+};
+
 struct TextureBuildRequest
 {
     QString meshPath;
@@ -44,6 +55,7 @@ struct PointCloudQualityReport
 };
 
 int meshResolutionFromSettings(const QJsonObject &settings);
+xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings);
 int holeFillPassesFromArea(double maxHoleArea);
 xjw::mesh::TextureMappingConfig defaultTextureConfig();
 xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &settings);
@@ -52,6 +64,7 @@ PointCloudQualityReport evaluatePointCloudQuality(const QString &pointCloudPath,
                                                   qint64 recommendedMinimum = 200);
 
 WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request);
+WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request);
 WorkflowResult buildTextureOnly(const TextureBuildRequest &request);
 
 } // namespace xjw::mesh::workflow

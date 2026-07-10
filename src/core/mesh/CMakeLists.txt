@@ -5,6 +5,7 @@ add_library(meshing STATIC
     PointCloudPreprocess.cpp
     SurfaceReconstructorPostprocess.cpp
     SurfaceReconstructorHeightGrid.cpp
+    DepthMapMeshBuilder.cpp
     MeshIO.cpp
     TextureMapper.cpp
     ModelWorkflowService.cpp

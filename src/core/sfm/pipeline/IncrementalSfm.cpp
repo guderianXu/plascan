@@ -11,6 +11,7 @@
 #include <cmath>
 #include <numeric>
 #include <sstream>
+#include <unordered_map>
 #include <unordered_set>
 
 namespace xjw
@@ -601,12 +602,22 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
         ImageId nextId = selectNextImage();
         if (nextId == kInvalidImageId)
         {
+            if (!_deferredFailedImages.empty())
+            {
+                Logger::instance()->infof(
+                    "[SFM] Registration pass exhausted %zu deferred candidate(s); retrying with current model",
+                    _deferredFailedImages.size());
+                _deferredFailedImages.clear();
+                continue;
+            }
+
             Logger::instance()->warnf(
                 "[SFM] Registration stopped: no selectable next image (registered=%d/%d, points=%zu, "
-                "permanentlyFailed=%zu, minPnPInliers=%d)",
+                "deferred=%zu, permanentlyFailed=%zu, minPnPInliers=%d)",
                 regCount,
                 totalImages,
                 _reconstruction->numPoints3D(),
+                _deferredFailedImages.size(),
                 _permanentlyFailedImages.size(),
                 _sfmOptions.pnpOptions.minNumInliers);
             break; // 无更多可注册图像
@@ -625,20 +636,27 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
             if (failCount >= kMaxRetries)
             {
                 _permanentlyFailedImages.insert(nextId);
+                _deferredFailedImages.erase(nextId);
                 Logger::instance()->warnf(
                     "[SFM] Image %u permanently skipped after %d failed registration attempts",
                     nextId, failCount);
             }
             else
             {
+                // 这类失败通常是当前 3D 模型还不足或外点比例过高。
+                // 先把该图像放到本轮末尾，允许其它候选先注册并扩展模型；
+                // 若没有其它候选可用，再进入下一轮重试。
+                _deferredFailedImages.insert(nextId);
                 Logger::instance()->infof(
-                    "[SFM] Image %u registration attempt %d/%d failed, will retry later",
+                    "[SFM] Image %u registration attempt %d/%d failed, deferred until the model grows",
                     nextId, failCount, kMaxRetries);
             }
             continue;
         }
         // 注册成功，清除失败计数
         _registerFailCount.erase(nextId);
+        // 新图像注册后可见三维点集合发生变化，之前暂缓的候选需要重新参与排序。
+        _deferredFailedImages.clear();
 
         regCount = static_cast<int>(_reconstruction->numRegisteredImages());
 
@@ -718,6 +736,8 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
     result.baTracksTotal = _lastGlobalBATracksTotal;
     result.baTracksOptimized = _lastGlobalBATracksOptimized;
     result.baTracksFiltered = _lastGlobalBATracksFiltered;
+    result.baRefinedIntrinsicCount = _lastGlobalBARefinedIntrinsicCount;
+    result.baSharedFocalScale = _lastGlobalBASharedFocalScale;
 
     return result;
 }
@@ -982,6 +1002,8 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
     result.baTracksTotal = _lastGlobalBATracksTotal;
     result.baTracksOptimized = _lastGlobalBATracksOptimized;
     result.baTracksFiltered = _lastGlobalBATracksFiltered;
+    result.baRefinedIntrinsicCount = _lastGlobalBARefinedIntrinsicCount;
+    result.baSharedFocalScale = _lastGlobalBASharedFocalScale;
 
     int finalLongTrackCount = 0;
     int finalTwoViewTrackCount = 0;
@@ -1337,6 +1359,10 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
         ImageId id1;
         ImageId id2;
         size_t numMatches;
+        double initialPairScore;
+        double matchCoverage;
+        size_t endpointDegree = 0;
+        size_t localGraphReach = 0;
     };
     std::vector<PairInfo> pairs;
 
@@ -1348,14 +1374,78 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
             size_t nm = _correspondenceGraph.numMatchesBetween(allIds[i], allIds[j]);
             if (nm >= static_cast<size_t>(_sfmOptions.initMinNumMatches))
             {
-                pairs.push_back({allIds[i], allIds[j], nm});
+                const ImageData &img1 = _reconstruction->image(allIds[i]);
+                const ImageData &img2 = _reconstruction->image(allIds[j]);
+                const size_t minKeypoints = std::min(img1.keypoints.size(), img2.keypoints.size());
+                const double coverage = minKeypoints > 0
+                    ? static_cast<double>(nm) / static_cast<double>(minKeypoints)
+                    : 0.0;
+                double score = static_cast<double>(nm);
+                if (coverage > 0.75)
+                {
+                    // 高覆盖匹配通常意味着两图极高重叠甚至近重复。它们对后续补点有价值，
+                    // 但作为初始像对基线很弱，容易把无相机 SfM 初始化到病态解。
+                    score *= 0.25;
+                }
+                pairs.push_back({allIds[i], allIds[j], nm, score, coverage});
             }
         }
     }
 
-    // 按匹配数降序排序
+    std::unordered_map<ImageId, std::vector<ImageId>> initGraph;
+    initGraph.reserve(pairs.size() * 2);
+    for (const auto &pair : pairs)
+    {
+        initGraph[pair.id1].push_back(pair.id2);
+        initGraph[pair.id2].push_back(pair.id1);
+    }
+
+    for (auto &pair : pairs)
+    {
+        std::unordered_set<ImageId> localReach;
+        localReach.reserve(16);
+        localReach.insert(pair.id1);
+        localReach.insert(pair.id2);
+
+        const auto addNeighbors = [&](ImageId imageId)
+        {
+            const auto it = initGraph.find(imageId);
+            if (it == initGraph.end())
+            {
+                return size_t{0};
+            }
+            for (ImageId neighborId : it->second)
+            {
+                localReach.insert(neighborId);
+            }
+            return it->second.size();
+        };
+
+        const size_t degree1 = addNeighbors(pair.id1);
+        const size_t degree2 = addNeighbors(pair.id2);
+        pair.endpointDegree = degree1 + degree2;
+        pair.localGraphReach = localReach.size();
+
+        // 初始像对不能只看两图之间的匹配数，还要看它能否把增量 SfM 带到
+        // 更大的连通区域。局部可达影像少的强匹配对容易初始化成功后困在小团里。
+        const double reachBonus =
+            std::min(1.0, static_cast<double>(pair.localGraphReach > 2 ? pair.localGraphReach - 2 : 0) / 8.0);
+        const double degreeBonus = std::min(1.0, static_cast<double>(pair.endpointDegree) / 12.0);
+        const double graphConnectivityFactor = 1.0 + 0.35 * reachBonus + 0.20 * degreeBonus;
+        pair.initialPairScore *= graphConnectivityFactor;
+    }
+
+    // 按“可用于初始化的分数”降序排序，而不是只看匹配数。
+    // 近重复视角可能匹配数最高，但不是好的初始基线。
     std::sort(pairs.begin(), pairs.end(),
-              [](const PairInfo &a, const PairInfo &b) { return a.numMatches > b.numMatches; });
+              [](const PairInfo &a, const PairInfo &b)
+              {
+                  if (std::abs(a.initialPairScore - b.initialPairScore) > 1e-9)
+                  {
+                      return a.initialPairScore > b.initialPairScore;
+                  }
+                  return a.numMatches > b.numMatches;
+              });
 
     // COLMAP 式退化对过滤：计算 H_inlier / F_inlier 比值，
     // 比值过高说明像对接近纯旋转或平面场景，对极几何退化，提前拒绝。
@@ -1406,8 +1496,18 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
 
         double hfRatio = (fInliers > 0) ? static_cast<double>(hInliers) / fInliers : 1.0;
 
-        Logger::instance()->debugf("[SFM] Pair (%u, %u): F_inliers=%d, H_inliers=%d, H/F=%.3f",
-                                   pair.id1, pair.id2, fInliers, hInliers, hfRatio);
+        Logger::instance()->debugf("[SFM] Pair (%u, %u): matches=%zu, coverage=%.3f, localReach=%zu, "
+                                   "endpointDegree=%zu, initScore=%.1f, F_inliers=%d, H_inliers=%d, H/F=%.3f",
+                                   pair.id1,
+                                   pair.id2,
+                                   pair.numMatches,
+                                   pair.matchCoverage,
+                                   pair.localGraphReach,
+                                   pair.endpointDegree,
+                                   pair.initialPairScore,
+                                   fInliers,
+                                   hInliers,
+                                   hfRatio);
 
         if (hfRatio > maxHFRatio)
         {
@@ -1768,6 +1868,8 @@ ImageId IncrementalSfm::selectNextImage() const
     {
         if (_reconstruction->isRegistered(id))
             continue;
+        if (_deferredFailedImages.count(id))
+            continue;
         if (_permanentlyFailedImages.count(id))
             continue;
         if (count > bestVisible)
@@ -1782,21 +1884,23 @@ ImageId IncrementalSfm::selectNextImage() const
     {
         Logger::instance()->warnf(
             "[SFM] selectNextImage rejected all candidates: bestId=%u, bestVisible=%zu, minPnPInliers=%d, "
-            "registered=%zu/%zu, points=%zu, permanentlyFailed=%zu",
+            "registered=%zu/%zu, points=%zu, deferred=%zu, permanentlyFailed=%zu",
             bestId,
             bestVisible,
             _sfmOptions.pnpOptions.minNumInliers,
             _reconstruction->numRegisteredImages(),
             _reconstruction->numImages(),
             _reconstruction->numPoints3D(),
+            _deferredFailedImages.size(),
             _permanentlyFailedImages.size());
         return kInvalidImageId;
     }
 
-    Logger::instance()->infof("[SFM] selectNextImage: id=%u, visible3D=%zu, minPnPInliers=%d",
+    Logger::instance()->infof("[SFM] selectNextImage: id=%u, visible3D=%zu, minPnPInliers=%d, deferred=%zu",
                               bestId,
                               bestVisible,
-                              _sfmOptions.pnpOptions.minNumInliers);
+                              _sfmOptions.pnpOptions.minNumInliers,
+                              _deferredFailedImages.size());
     return bestId;
 }
 
@@ -2231,6 +2335,8 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         _lastGlobalBATracksFiltered = (int)baTracks.size() - baResult.optimizedTracks;
         if (_lastGlobalBATracksFiltered < 0)
             _lastGlobalBATracksFiltered = deletedPts;
+        _lastGlobalBARefinedIntrinsicCount = baResult.refinedIntrinsicCount;
+        _lastGlobalBASharedFocalScale = baResult.refinedSharedFocalScale;
     }
 }
 

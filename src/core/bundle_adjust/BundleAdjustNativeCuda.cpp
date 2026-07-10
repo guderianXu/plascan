@@ -111,7 +111,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.refinedCameras = cameras;
     result.points.resize(tracks.size());
 
-    const auto build = native_cuda::buildWorkset(cameras, tracks, options);
+    auto build = native_cuda::buildWorkset(cameras, tracks, options);
     const auto setupEnd = std::chrono::steady_clock::now();
     result.setupSeconds = std::chrono::duration<double>(setupEnd - totalStart).count();
     if (!build.ok)
@@ -128,9 +128,9 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
 
 #ifdef PLASCAN_BA_HAS_NATIVE_CUDA
     const auto solveStart = std::chrono::steady_clock::now();
-    auto workset = build.workset;
+    const std::vector<native_cuda::HostPoint> initialPoints = build.workset.points;
     const native_cuda::KernelRunSummary summary =
-        native_cuda::runNativeCudaBundleAdjust(&workset,
+        native_cuda::runNativeCudaBundleAdjust(&build.workset,
                                                options.nativeCudaDevice,
                                                options.maxIterations,
                                                options.nativeCudaMaxPcgIterations,
@@ -151,6 +151,13 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.nativeCudaLinearResidual = summary.linearResidual;
     result.nativeCudaAcceptedSteps = summary.acceptedSteps;
     result.nativeCudaRejectedSteps = summary.rejectedSteps;
+    result.nativeCudaUploadSeconds = summary.uploadSeconds;
+    result.nativeCudaKernelSeconds = summary.kernelSeconds;
+    result.nativeCudaDownloadSeconds = summary.downloadSeconds;
+    result.nativeCudaHostCostSeconds = summary.hostCostSeconds;
+    result.nativeCudaDeviceSelectSeconds = summary.deviceSelectSeconds;
+    result.nativeCudaStagingSeconds = summary.stagingSeconds;
+    result.nativeCudaReleaseSeconds = summary.releaseSeconds;
     result.backendMessage = summary.message;
     result.refinedCameraCount = 0;
 
@@ -158,10 +165,10 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     double sumAfter = 0.0;
     int countBefore = 0;
     int countAfter = 0;
-    for (size_t pointIndex = 0; pointIndex < workset.points.size(); ++pointIndex)
+    for (size_t pointIndex = 0; pointIndex < build.workset.points.size(); ++pointIndex)
     {
-        const native_cuda::HostPoint &initialPoint = build.workset.points[pointIndex];
-        const native_cuda::HostPoint &optimizedPoint = workset.points[pointIndex];
+        const native_cuda::HostPoint &initialPoint = initialPoints[pointIndex];
+        const native_cuda::HostPoint &optimizedPoint = build.workset.points[pointIndex];
         if (optimizedPoint.originalTrackIndex < 0 ||
             optimizedPoint.originalTrackIndex >= static_cast<int>(result.points.size()))
         {
@@ -174,7 +181,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
         refined.converged = summary.ok;
         refined.iterations = options.maxIterations;
         refined.rmsBefore = computePointRms(build.workset, initialPoint);
-        refined.rmsAfter = computePointRms(workset, optimizedPoint);
+        refined.rmsAfter = computePointRms(build.workset, optimizedPoint);
         if (std::isfinite(refined.rmsBefore))
         {
             sumBefore += refined.rmsBefore;
@@ -201,7 +208,7 @@ BAResult optimizePointsWithNativeCuda(const std::vector<Camera> &cameras,
     result.meanRmsBefore = countBefore > 0 ? sumBefore / static_cast<double>(countBefore) : 0.0;
     result.meanRmsAfter = countAfter > 0 ? sumAfter / static_cast<double>(countAfter) : 0.0;
     result.refinedCameras = cameras;
-    for (const native_cuda::HostCamera &hostCamera : workset.cameras)
+    for (const native_cuda::HostCamera &hostCamera : build.workset.cameras)
     {
         if (hostCamera.originalIndex < 0 ||
             hostCamera.originalIndex >= static_cast<int>(result.refinedCameras.size()))

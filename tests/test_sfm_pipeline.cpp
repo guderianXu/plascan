@@ -24,6 +24,7 @@
 #include "BundleAdjust.h"
 #include "triangulation/Triangulator.h"
 
+#include <algorithm>
 #include <array>
 #include <cmath>
 #include <random>
@@ -172,6 +173,55 @@ void buildKnownPoseTracks(const std::vector<Camera> &cameras,
         matches12.push_back({idx, idx});
         matches02.push_back({idx, idx});
     }
+}
+
+void buildIndexedKeypoints(const std::vector<Camera> &cameras,
+                           const std::vector<SyntheticPoint> &points3D,
+                           std::vector<std::vector<FeatureKeypoint>> &keypoints)
+{
+    keypoints.assign(cameras.size(), {});
+
+    for (const auto &point : points3D)
+    {
+        std::vector<std::pair<double, double>> projections;
+        projections.reserve(cameras.size());
+
+        bool visibleInAll = true;
+        for (const Camera &camera : cameras)
+        {
+            double u = 0.0;
+            double v = 0.0;
+            if (!projectPoint(camera, point.x, point.y, point.z, u, v) ||
+                u < 0.0 || u > 1024.0 || v < 0.0 || v > 768.0)
+            {
+                visibleInAll = false;
+                break;
+            }
+            projections.emplace_back(u, v);
+        }
+
+        if (!visibleInAll)
+        {
+            continue;
+        }
+
+        for (size_t cameraIndex = 0; cameraIndex < cameras.size(); ++cameraIndex)
+        {
+            keypoints[cameraIndex].push_back({static_cast<float>(projections[cameraIndex].first),
+                                              static_cast<float>(projections[cameraIndex].second)});
+        }
+    }
+}
+
+std::vector<FeatureMatch> makeIndexedMatches(int beginInclusive, int endExclusive)
+{
+    std::vector<FeatureMatch> matches;
+    matches.reserve(static_cast<size_t>(std::max(0, endExclusive - beginInclusive)));
+    for (int idx = beginInclusive; idx < endExclusive; ++idx)
+    {
+        matches.push_back({static_cast<FeatureIdx>(idx), static_cast<FeatureIdx>(idx)});
+    }
+    return matches;
 }
 
 } // anonymous namespace
@@ -917,6 +967,75 @@ TEST_F(SfmPipelineTest, ThreeImageIncremental)
     EXPECT_GT(result.numPoints3D, 0);
 }
 
+TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)
+{
+    opts.autoSelectInitPair = false;
+    opts.initImageId1 = 0;
+    opts.initImageId2 = 1;
+    opts.initMinNumMatches = 80;
+    opts.initMinNumInliers = 40;
+    opts.initMinChiralityInliers = 20;
+    opts.pnpOptions.minNumInliers = 25;
+    opts.pnpOptions.minInlierRatio = 0.25;
+    opts.pnpOptions.maxReprojError = 3.0;
+    opts.localBAInterval = 100;
+    opts.globalBAInterval = 100;
+    opts.iterativeBARounds = 1;
+    opts.filterMinTrackLen = 1;
+    opts.filterMaxReprojError = 8.0;
+    opts.triangulatorOptions.maxReprojError = 8.0;
+    opts.triangulatorOptions.continueMaxReprojError = 8.0;
+    opts.triangulatorOptions.completeMaxReprojError = 8.0;
+
+    const std::vector<Camera> cameras = {
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(6.0, 0.0, 0.0),
+        makeCamera(12.0, 0.0, 0.0),
+        makeCamera(18.0, 0.0, 0.0),
+    };
+    const auto points = generatePoints(360, 9.0, 0.0, 70.0, 2.5, 2026);
+
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    buildIndexedKeypoints(cameras, points, keypoints);
+    ASSERT_GE(keypoints[0].size(), 300u);
+
+    // image2 在初始模型上有更多“可见三维点”，因此会被优先选择。
+    // 但这些观测坐标被刻意打乱，PnP 应失败；等 image3 注册后，
+    // image2 才能通过 image3 提供的正确轨迹完成注册。
+    for (int idx = 0; idx < 180; ++idx)
+    {
+        keypoints[2][static_cast<size_t>(idx)] = {
+            static_cast<float>(80 + (idx * 37) % 860),
+            static_cast<float>(70 + (idx * 53) % 610),
+        };
+    }
+
+    const auto initialMatches = makeIndexedMatches(0, 300);
+    const auto image2BadMatches = makeIndexedMatches(0, 180);
+    const auto image3GoodMatches = makeIndexedMatches(180, 270);
+    const auto image2DelayedGoodMatches = makeIndexedMatches(180, 270);
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "schedule_0.png", cameras[0], keypoints[0]);
+    sfm.addImageWithCamera(1, "schedule_1.png", cameras[1], keypoints[1]);
+    sfm.addImageWithCamera(2, "schedule_2.png", cameras[2], keypoints[2]);
+    sfm.addImageWithCamera(3, "schedule_3.png", cameras[3], keypoints[3]);
+    sfm.addMatches(0, 1, initialMatches);
+    sfm.addMatches(0, 2, image2BadMatches);
+    sfm.addMatches(1, 2, image2BadMatches);
+    sfm.addMatches(0, 3, image3GoodMatches);
+    sfm.addMatches(1, 3, image3GoodMatches);
+    sfm.addMatches(2, 3, image2DelayedGoodMatches);
+
+    const auto result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    ASSERT_NE(result.reconstruction, nullptr);
+    EXPECT_TRUE(result.reconstruction->isRegistered(2))
+        << "A temporarily failed high-overlap image must be retried after another image expands the 3D model";
+    EXPECT_EQ(result.numRegisteredImages, 4);
+}
+
 // 2. 进度回调正常工作
 TEST_F(SfmPipelineTest, ProgressCallbackWorks)
 {
@@ -1476,6 +1595,52 @@ TEST_F(RetriangulationTest, CompleteTracksSkipsNegativeDepth)
     for (const auto &elem : pt.track.elements) {
         EXPECT_NE(elem.imageId, 3u) << "Should not extend track to camera with negative depth";
     }
+}
+
+TEST_F(RetriangulationTest, CompleteTracksDoesNotAddSecondFeatureFromSameImage)
+{
+    addRegisteredImage(0, cam0, 5);
+    addRegisteredImage(1, cam1, 5);
+
+    const double trueX = 5.0;
+    const double trueY = 0.0;
+    const double trueZ = 50.0;
+
+    double u0 = 0.0, v0 = 0.0, u1 = 0.0, v1 = 0.0;
+    ASSERT_TRUE(projectPoint(cam0, trueX, trueY, trueZ, u0, v0));
+    ASSERT_TRUE(projectPoint(cam1, trueX, trueY, trueZ, u1, v1));
+
+    auto &img0 = recon.image(0);
+    auto &img1 = recon.image(1);
+    img0.keypoints[0] = {static_cast<float>(u0), static_cast<float>(v0)};
+    img0.keypoints[1] = {static_cast<float>(u0), static_cast<float>(v0)};
+    img1.keypoints[0] = {static_cast<float>(u1), static_cast<float>(v1)};
+
+    const Point3DId pid = addPointWithTrack(trueX, trueY, trueZ, {{0, 0}, {1, 0}});
+
+    FeatureMatch match;
+    match.idx1 = 1;
+    match.idx2 = 0;
+    graph.addMatches(0, 1, {match});
+    graph.buildCorrespondences();
+
+    Triangulator tri(recon, graph);
+    TriangulatorOptions opts;
+    opts.completeMaxReprojError = 0.5;
+    const int completed = tri.completeTracks(opts);
+
+    EXPECT_EQ(completed, 0);
+    const auto &pt = recon.point3D(pid);
+    int image0ObservationCount = 0;
+    for (const auto &elem : pt.track.elements)
+    {
+        if (elem.imageId == 0u)
+        {
+            ++image0ObservationCount;
+        }
+    }
+    EXPECT_EQ(image0ObservationCount, 1);
+    EXPECT_EQ(recon.image(0).point3DIds[1], kInvalidPoint3DId);
 }
 
 TEST_F(RetriangulationTest, CompleteTracksUsesWorldToCameraDepthForRotatedCamera)

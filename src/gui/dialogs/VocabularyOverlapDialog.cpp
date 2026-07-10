@@ -882,7 +882,12 @@ void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
         _overlapMethodCombo->setCurrentIndex(methodIndex);
     }
 
-    const QString suffix = settings.value(QStringLiteral("feature_suffix")).toString(defaultFeatureSuffix());
+    const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
+    const QJsonObject projectMeta = _projectManager ? _projectManager->currentMeta() : QJsonObject();
+    const QString requestedSuffix = settings.value(QStringLiteral("feature_suffix")).toString(QString());
+    const QString suffix = xjw::gui::project::resolvePreferredFeatureSuffix(projectPath,
+                                                                             projectMeta,
+                                                                             requestedSuffix);
     const int algorithmIndex = _featureAlgorithmCombo->findData(suffix);
     if (algorithmIndex >= 0)
     {
@@ -1257,8 +1262,11 @@ QString VocabularyOverlapDialog::defaultFeatureSuffix() const
 {
     const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
     const QJsonObject projectMeta = _projectManager ? _projectManager->currentMeta() : QJsonObject();
-    const QString suffix = xjw::gui::project::inferPreferredFeatureSuffix(projectPath, projectMeta);
-    return suffix.isEmpty() ? QStringLiteral(".sift") : suffix;
+    const QString inferred = xjw::gui::project::inferPreferredFeatureSuffix(projectPath, projectMeta);
+    return xjw::gui::project::resolvePreferredFeatureSuffix(projectPath,
+                                                            projectMeta,
+                                                            inferred,
+                                                            QStringLiteral(".sift"));
 }
 
 QString VocabularyOverlapDialog::selectedFeatureSuffix() const

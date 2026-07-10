@@ -1,5 +1,6 @@
 #include <gtest/gtest.h>
 
+#include "DepthMapMeshBuilder.h"
 #include "ModelWorkflowService.h"
 #include "SurfaceReconstructor.h"
 #include "SurfaceReconstructorPostprocess.h"
@@ -415,6 +416,121 @@ TEST(MeshWorkflowServiceTest, RecordsActualFallbackAlgorithmInPayload)
     ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
     EXPECT_EQ(result.payload.value(QStringLiteral("mesh_algorithm")).toString().toStdString(), "height_grid");
     EXPECT_TRUE(fs::exists(result.payload.value(QStringLiteral("model_ply")).toString().toStdString()));
+}
+
+TEST(MeshWorkflowSettingsTest, HeightFieldSourceDisablesPoissonAndMapsFiltering)
+{
+    QJsonObject settings;
+    settings[QStringLiteral("surface_type")] = QStringLiteral("height_field");
+    settings[QStringLiteral("quality")] = QStringLiteral("ultra");
+    settings[QStringLiteral("qualityProfile")] = QStringLiteral("detail");
+    settings[QStringLiteral("meshResolution")] = 384;
+    settings[QStringLiteral("octreeDepth")] = 11;
+    settings[QStringLiteral("targetFaces")] = 0;
+    settings[QStringLiteral("interpolation")] = QStringLiteral("disabled");
+    settings[QStringLiteral("depthFiltering")] = QStringLiteral("aggressive");
+
+    const auto config = xjw::mesh::workflow::reconstructionConfigFromModelSettings(settings);
+
+    EXPECT_FALSE(config.forcePoisson);
+    EXPECT_GE(config.resolution, 384);
+    EXPECT_FALSE(config.fillHoles);
+    EXPECT_TRUE(config.enableDenoise);
+    EXPECT_LE(config.denoiseStdMul, 0.95f);
+    EXPECT_EQ(config.simplifyTargetFaces, 0);
+}
+
+TEST(MeshWorkflowSettingsTest, ArbitrarySourceKeepsPoissonAndHonorsFaceBudget)
+{
+    QJsonObject settings;
+    settings[QStringLiteral("surface_type")] = QStringLiteral("arbitrary_3d");
+    settings[QStringLiteral("quality")] = QStringLiteral("high");
+    settings[QStringLiteral("qualityProfile")] = QStringLiteral("detail");
+    settings[QStringLiteral("meshResolution")] = 320;
+    settings[QStringLiteral("octreeDepth")] = 10;
+    settings[QStringLiteral("targetFaces")] = 240000;
+    settings[QStringLiteral("interpolation")] = QStringLiteral("extrapolated");
+    settings[QStringLiteral("depthFiltering")] = QStringLiteral("mild");
+
+    const auto config = xjw::mesh::workflow::reconstructionConfigFromModelSettings(settings);
+
+    EXPECT_TRUE(config.forcePoisson);
+    EXPECT_GE(config.poissonDepth, 10);
+    EXPECT_TRUE(config.fillHoles);
+    EXPECT_GE(config.holeFillPasses, 16);
+    EXPECT_EQ(config.simplifyTargetFaces, 240000);
+    EXPECT_FALSE(config.enableDownsample);
+    EXPECT_GE(config.kNormals, 18);
+}
+
+TEST(MeshWorkflowSettingsTest, DepthMapMeshRequestPreservesSourceAndSettings)
+{
+    xjw::mesh::workflow::DepthMapMeshBuildRequest request;
+    request.depthMapSourcePath = QStringLiteral("E:/tmp/mvs_output");
+    request.outputRoot = QStringLiteral("E:/tmp/model");
+    request.settings[QStringLiteral("surface_type")] = QStringLiteral("height_field");
+    request.settings[QStringLiteral("quality")] = QStringLiteral("high");
+    request.settings[QStringLiteral("reuseDepthMaps")] = true;
+
+    EXPECT_EQ(request.depthMapSourcePath, QStringLiteral("E:/tmp/mvs_output"));
+    EXPECT_EQ(request.outputRoot, QStringLiteral("E:/tmp/model"));
+    EXPECT_TRUE(request.settings.value(QStringLiteral("reuseDepthMaps")).toBool());
+}
+
+TEST(DepthMapMeshBuilderTest, DiscoversDepthFramesFromOutputDirectory)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_discovery_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream(root / "depth_001.raw").put('\0');
+    std::ofstream(root / "confidence_001.raw").put('\0');
+    std::ofstream(root / "depth_002.raw").put('\0');
+
+    const auto frames =
+        xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(QString::fromStdString(root.string()));
+
+    ASSERT_EQ(frames.size(), 2);
+    EXPECT_TRUE(frames.at(0).depthPath.endsWith(QStringLiteral("depth_001.raw")));
+    EXPECT_TRUE(frames.at(0).confidencePath.endsWith(QStringLiteral("confidence_001.raw")));
+    EXPECT_TRUE(frames.at(1).depthPath.endsWith(QStringLiteral("depth_002.raw")));
+}
+
+TEST(DepthMapMeshBuilderTest, UsesExistingDenseCloudWhenPresent)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_existing_dense_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path densePath = writeDenseGridPointCloud(root);
+    fs::rename(densePath, root / "dense_cloud.ply");
+
+    QString error;
+    const QString resolved = xjw::mesh::DepthMapMeshBuilder::resolveReusableDenseCloud(
+        QString::fromStdString(root.string()),
+        &error);
+
+    EXPECT_TRUE(error.isEmpty());
+    EXPECT_TRUE(resolved.endsWith(QStringLiteral("dense_cloud.ply")));
+}
+
+TEST(DepthMapMeshBuilderTest, ReportsActionableErrorWhenDepthFramesCannotBeFused)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_no_dense_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream(root / "depth_001.raw").put('\0');
+
+    xjw::mesh::workflow::DepthMapMeshBuildRequest request;
+    request.depthMapSourcePath = QString::fromStdString(root.string());
+    request.outputRoot = QString::fromStdString(root.string());
+    request.reconstruction = fallbackMeshConfig();
+
+    const auto result = xjw::mesh::workflow::buildMeshFromDepthMaps(request);
+
+    EXPECT_FALSE(result.ok);
+    EXPECT_TRUE(result.errorMessage.contains(QStringLiteral("缺少深度图 metadata")));
 }
 
 TEST(TextureMapperTest, ReadsPlyMeshFacesForTextureMapping)

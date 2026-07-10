@@ -123,7 +123,7 @@ void AerialTriangulationDialog::setupUi()
 
     _ui->m_genericPreselectionCheck->setChecked(true);
     _ui->m_referencePreselectionCheck->setChecked(false);
-    _ui->m_referenceSourceCombo->setEnabled(false);
+    _ui->m_referenceSourceCombo->setEnabled(true);
     _ui->m_resetAlignmentCheck->setChecked(true);
     _ui->m_saveAfterEachStepCheck->setChecked(false);
     _ui->m_keypointLimitSpin->setRange(0, 1000000);
@@ -132,7 +132,7 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_tiepointLimitSpin->setValue(4000);
     _ui->m_excludeFixedTiePointsCheck->setChecked(true);
     _ui->m_guidedImageMatchingCheck->setChecked(false);
-    _ui->m_adaptiveCameraModelCheck->setChecked(false);
+    _ui->m_adaptiveCameraModelCheck->setChecked(true);
     stabilizeInputControl(_ui->m_qualityCombo);
     stabilizeInputControl(_ui->m_referenceSourceCombo);
     stabilizeInputControl(_ui->m_keypointLimitSpin);
@@ -157,20 +157,22 @@ void AerialTriangulationDialog::setupUi()
 
     connect(_ui->m_referencePreselectionCheck, &QCheckBox::toggled, this, [this](bool enabled)
     {
-        if (!_referencePreselectionAvailable && enabled)
-        {
-            const QSignalBlocker blocker(_ui->m_referencePreselectionCheck);
-            _ui->m_referencePreselectionCheck->setChecked(false);
-            enabled = false;
-        }
-        _ui->m_referenceSourceCombo->setEnabled(enabled && _referencePreselectionAvailable);
+        Q_UNUSED(enabled)
         emitSettingsChanged();
     });
 
     connect(_ui->m_qualityCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &AerialTriangulationDialog::emitSettingsChanged);
     connect(_ui->m_referenceSourceCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
-            this, &AerialTriangulationDialog::emitSettingsChanged);
+            this, [this]()
+    {
+        if (!_applyingSettings && !_ui->m_referencePreselectionCheck->isChecked())
+        {
+            _ui->m_referencePreselectionCheck->setChecked(true);
+            return;
+        }
+        emitSettingsChanged();
+    });
     connect(_ui->m_maskApplyCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &AerialTriangulationDialog::emitSettingsChanged);
 
@@ -219,21 +221,16 @@ void AerialTriangulationDialog::setReferencePreselectionAvailable(bool available
         return;
     }
 
-    const QSignalBlocker blockReference(_ui->m_referencePreselectionCheck);
-    if (!available)
-    {
-        _ui->m_referencePreselectionCheck->setChecked(false);
-    }
-    _ui->m_referencePreselectionCheck->setEnabled(available);
+    _ui->m_referencePreselectionCheck->setEnabled(true);
     _ui->m_referencePreselectionCheck->setToolTip(
         available
             ? QStringLiteral("使用已导入相机外方位/相机文件生成候选匹配对。")
-            : QStringLiteral("当前项目没有完整可用的相机文件，参考预选不可用。"));
-    _ui->m_referenceSourceCombo->setEnabled(available && _ui->m_referencePreselectionCheck->isChecked());
+            : QStringLiteral("当前项目没有完整可用的相机文件；仍可选择照片序列等参考预选来源，运行前会校验需要相机文件的来源。"));
+    _ui->m_referenceSourceCombo->setEnabled(true);
     _ui->m_referenceSourceCombo->setToolTip(
         available
             ? QStringLiteral("选择参考预选的候选对来源。")
-            : QStringLiteral("需要先为全部影像导入相机文件；当前相机 %1/%2。")
+            : QStringLiteral("相机参考不完整：当前相机 %1/%2。选择需要相机文件的来源时，运行前会自动关闭并提示。")
                   .arg(qMax(0, cameraCount))
                   .arg(qMax(0, imageCount)));
 }
@@ -258,7 +255,6 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     _ui->m_genericPreselectionCheck->setChecked(
         settings.value(QStringLiteral("generic_preselection")).toBool(true));
     _ui->m_referencePreselectionCheck->setChecked(
-        _referencePreselectionAvailable &&
         settings.value(QStringLiteral("reference_preselection")).toBool(false));
     const QString referenceSource = normalizeReferenceSource(
         settings.value(QStringLiteral("reference_preselection_source")).toString(QStringLiteral("source_code")));
@@ -276,10 +272,9 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     _ui->m_guidedImageMatchingCheck->setChecked(
         settings.value(QStringLiteral("guided_image_matching")).toBool(false));
     _ui->m_adaptiveCameraModelCheck->setChecked(
-        settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(false));
+        settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(true));
 
-    _ui->m_referenceSourceCombo->setEnabled(
-        _referencePreselectionAvailable && _ui->m_referencePreselectionCheck->isChecked());
+    _ui->m_referenceSourceCombo->setEnabled(true);
     _applyingSettings = false;
 }
 
@@ -289,8 +284,7 @@ QJsonObject AerialTriangulationDialog::collectSettings() const
     settings[QStringLiteral("workflow_kind")] = QStringLiteral("aerial_triangulation_dialog_only");
     settings[QStringLiteral("quality")] = comboDataOr(_ui->m_qualityCombo, QStringLiteral("high"));
     settings[QStringLiteral("generic_preselection")] = _ui->m_genericPreselectionCheck->isChecked();
-    settings[QStringLiteral("reference_preselection")] =
-        _referencePreselectionAvailable && _ui->m_referencePreselectionCheck->isChecked();
+    settings[QStringLiteral("reference_preselection")] = _ui->m_referencePreselectionCheck->isChecked();
     settings[QStringLiteral("reference_preselection_source")] =
         comboDataOr(_ui->m_referenceSourceCombo, QStringLiteral("source_code"));
     settings[QStringLiteral("reset_current_alignment")] = _ui->m_resetAlignmentCheck->isChecked();

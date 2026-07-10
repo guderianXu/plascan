@@ -75,3 +75,26 @@ TEST(NativeCudaMathTest, PointJacobianMatchesFiniteDifference)
         }
     }
 }
+
+TEST(NativeCudaMathTest, AnalyticPointJacobianMatchesFiniteDifferenceWithDistortion)
+{
+    nc::HostCamera camera = makeCamera();
+    camera.radialK1 = -0.02;
+    camera.radialK2 = 0.001;
+    camera.radialK3 = -0.0001;
+    camera.tangentialP1 = 0.0005;
+    camera.tangentialP2 = -0.0003;
+
+    const std::array<double, 3> point{{0.9, -0.4, 7.5}};
+    double jacobian[6] = {0.0};
+    ASSERT_TRUE(nc::pointProjectionJacobianHost(camera, point, jacobian));
+
+    for (int pixelAxis = 0; pixelAxis < 2; ++pixelAxis)
+    {
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const double numeric = numericPointDerivative(camera, point, axis, pixelAxis);
+            EXPECT_NEAR(jacobian[pixelAxis * 3 + axis], numeric, 1e-3);
+        }
+    }
+}

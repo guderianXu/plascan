@@ -56,7 +56,6 @@
 #include <iterator>
 #include <limits>
 #include <memory>
-#include <unordered_map>
 #include <vector>
 
 namespace
@@ -636,6 +635,51 @@ PlaCloud fusedPointsToPointCloud(const std::vector<xjw::mvs::FusedPoint> &cloud,
     return pointCloud;
 }
 
+std::vector<xjw::mvs::FusedPoint> pointCloudToFusedPoints(const PlaCloud &cloud)
+{
+    std::vector<xjw::mvs::FusedPoint> points;
+    points.reserve(cloud.size());
+    for (std::size_t i = 0; i < cloud.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        xjw::mvs::FusedPoint point;
+        point.x = cloud.points().getValue(row, 0);
+        point.y = cloud.points().getValue(row, 1);
+        point.z = cloud.points().getValue(row, 2);
+
+        if (cloud.hasNormals())
+        {
+            float nx = cloud.normals()->getValue(row, 0);
+            float ny = cloud.normals()->getValue(row, 1);
+            float nz = cloud.normals()->getValue(row, 2);
+            const float length = std::sqrt(nx * nx + ny * ny + nz * nz);
+            if (std::isfinite(length) && length > 1.0e-12f)
+            {
+                point.nx = nx / length;
+                point.ny = ny / length;
+                point.nz = nz / length;
+            }
+            else
+            {
+                point.nz = 1.0f;
+            }
+        }
+        else
+        {
+            point.nz = 1.0f;
+        }
+
+        if (cloud.hasColors())
+        {
+            point.r = cloud.colors()->getValue(row, 0);
+            point.g = cloud.colors()->getValue(row, 1);
+            point.b = cloud.colors()->getValue(row, 2);
+        }
+        points.push_back(point);
+    }
+    return points;
+}
+
 PlaCloud cloneCloudValue(const PlaCloud &cloud, bool includeNormals = true)
 {
     plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(cloud.size(), 3);
@@ -861,48 +905,6 @@ float adaptivePreSorVoxelSize(const std::vector<xjw::mvs::FusedPoint> &cloud,
     return std::max(minimumLeafSize, static_cast<float>(diag / 4096.0));
 }
 
-struct FusedVoxelKey
-{
-    std::int64_t ix = 0;
-    std::int64_t iy = 0;
-    std::int64_t iz = 0;
-
-    bool operator==(const FusedVoxelKey &other) const
-    {
-        return ix == other.ix && iy == other.iy && iz == other.iz;
-    }
-};
-
-struct FusedVoxelKeyHash
-{
-    std::size_t operator()(const FusedVoxelKey &key) const
-    {
-        std::size_t seed = 0;
-        const auto mix = [&seed](std::int64_t value) {
-            const auto hashed = std::hash<std::int64_t>{}(value);
-            seed ^= hashed + 0x9e3779b97f4a7c15ull + (seed << 6) + (seed >> 2);
-        };
-        mix(key.ix);
-        mix(key.iy);
-        mix(key.iz);
-        return seed;
-    }
-};
-
-struct FusedVoxelAccumulator
-{
-    double x = 0.0;
-    double y = 0.0;
-    double z = 0.0;
-    double nx = 0.0;
-    double ny = 0.0;
-    double nz = 0.0;
-    double r = 0.0;
-    double g = 0.0;
-    double b = 0.0;
-    std::uint32_t count = 0;
-};
-
 std::vector<xjw::mvs::FusedPoint> voxelDownsampleFusedPoints(
     const std::vector<xjw::mvs::FusedPoint> &cloud,
     float leafSize)
@@ -912,94 +914,24 @@ std::vector<xjw::mvs::FusedPoint> voxelDownsampleFusedPoints(
         return cloud;
     }
 
-    float minX = std::numeric_limits<float>::max();
-    float minY = std::numeric_limits<float>::max();
-    float minZ = std::numeric_limits<float>::max();
+    std::vector<xjw::mvs::FusedPoint> finiteCloud;
+    finiteCloud.reserve(cloud.size());
     for (const auto &point : cloud)
     {
         if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
         {
             continue;
         }
-        minX = std::min(minX, point.x);
-        minY = std::min(minY, point.y);
-        minZ = std::min(minZ, point.z);
+        finiteCloud.push_back(point);
     }
-    if (minX == std::numeric_limits<float>::max())
+    if (finiteCloud.empty())
     {
         return {};
     }
 
-    std::unordered_map<FusedVoxelKey, FusedVoxelAccumulator, FusedVoxelKeyHash> voxels;
-    voxels.reserve(std::min<std::size_t>(cloud.size(), 1000000));
-    const double invLeaf = 1.0 / static_cast<double>(leafSize);
-    for (const auto &point : cloud)
-    {
-        if (!std::isfinite(point.x) || !std::isfinite(point.y) || !std::isfinite(point.z))
-        {
-            continue;
-        }
-
-        const FusedVoxelKey key{
-            static_cast<std::int64_t>(std::floor((static_cast<double>(point.x) - minX) * invLeaf)),
-            static_cast<std::int64_t>(std::floor((static_cast<double>(point.y) - minY) * invLeaf)),
-            static_cast<std::int64_t>(std::floor((static_cast<double>(point.z) - minZ) * invLeaf))
-        };
-
-        auto &acc = voxels[key];
-        acc.x += point.x;
-        acc.y += point.y;
-        acc.z += point.z;
-        if (std::isfinite(point.nx) && std::isfinite(point.ny) && std::isfinite(point.nz))
-        {
-            acc.nx += point.nx;
-            acc.ny += point.ny;
-            acc.nz += point.nz;
-        }
-        acc.r += point.r;
-        acc.g += point.g;
-        acc.b += point.b;
-        ++acc.count;
-    }
-
-    std::vector<xjw::mvs::FusedPoint> output;
-    output.reserve(voxels.size());
-    for (const auto &[key, acc] : voxels)
-    {
-        Q_UNUSED(key);
-        if (acc.count == 0)
-        {
-            continue;
-        }
-        const double invCount = 1.0 / static_cast<double>(acc.count);
-        xjw::mvs::FusedPoint point;
-        point.x = static_cast<float>(acc.x * invCount);
-        point.y = static_cast<float>(acc.y * invCount);
-        point.z = static_cast<float>(acc.z * invCount);
-
-        const double normalLength = std::sqrt(acc.nx * acc.nx + acc.ny * acc.ny + acc.nz * acc.nz);
-        if (std::isfinite(normalLength) && normalLength > 1e-12)
-        {
-            point.nx = static_cast<float>(acc.nx / normalLength);
-            point.ny = static_cast<float>(acc.ny / normalLength);
-            point.nz = static_cast<float>(acc.nz / normalLength);
-        }
-        else
-        {
-            point.nz = 1.0f;
-        }
-
-        const auto toByte = [invCount](double value) {
-            return static_cast<std::uint8_t>(
-                std::clamp(static_cast<int>(std::lround(value * invCount)), 0, 255));
-        };
-        point.r = toByte(acc.r);
-        point.g = toByte(acc.g);
-        point.b = toByte(acc.b);
-        output.push_back(point);
-    }
-
-    return output;
+    PlaCloud input = fusedPointsToPointCloud(finiteCloud, true, true);
+    PlaCloud output = plapoint::voxelDownsample(input, leafSize);
+    return pointCloudToFusedPoints(output);
 }
 
 struct FusedVoxelDownsampleResult

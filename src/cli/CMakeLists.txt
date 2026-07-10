@@ -65,6 +65,110 @@ if(TARGET superglue_matcher)
         "${CMAKE_SOURCE_DIR}/src/core/feature_match/superglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue;${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition;${CMAKE_SOURCE_DIR}/src/core/feature_match/loftr;${CMAKE_SOURCE_DIR}/src/core/feature_match;${CMAKE_SOURCE_DIR}/src/core/feature_extractors")
 endif()
 
+# ── Metashape-like 创建连接点：SIFT + LightGlue + 几何验证 + track 构建 ──
+if(TARGET matchphototask)
+    add_executable(match_photos_cli
+        cli_match_photos.cpp
+        cli_photogrammetry_common.cpp
+        cli_photogrammetry_common.h
+    )
+    target_link_libraries(match_photos_cli PRIVATE
+        matchphototask
+        camera
+        plascan_common_io
+        Qt6::Core
+        ${TORCH_LIBRARIES}
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(match_photos_cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/common
+        ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+        ${CMAKE_SOURCE_DIR}/src/core/matchphototask/algorithm
+        ${CMAKE_SOURCE_DIR}/src/core/matchphototask/pair_selection
+        ${CMAKE_SOURCE_DIR}/src/core/matchphototask/runtime
+        ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+        ${TORCH_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_compile_definitions(match_photos_cli PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    set_target_properties(match_photos_cli PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        BUILD_RPATH_USE_ORIGIN TRUE
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+    if(PLASCAN_EXTRA_NVRTC_RPATHS)
+        set_property(TARGET match_photos_cli APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
+    endif()
+endif()
+
+# ── 对齐照片式空中三角测量：自动补齐连接点 -> SfM -> BA ──
+if(TARGET matchphototask AND TARGET feature_extractors_traditional AND TARGET feature_match_traditional AND TARGET lightglue_matcher AND TARGET sfm)
+    add_executable(aerial_triangulation_cli
+        cli_aerial_triangulation.cpp
+        cli_photogrammetry_common.cpp
+        cli_photogrammetry_common.h
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationWorkflow.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/GuidedRematchService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/MatchResultCatalog.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
+    )
+    target_link_libraries(aerial_triangulation_cli PRIVATE
+        sfm
+        matchphototask
+        lightglue_matcher
+        feature_match_traditional
+        feature_extractors_traditional
+        feature_match_common
+        camera
+        overlap
+        Qt6::Core
+        Qt6::Concurrent
+        Qt6::Gui
+        plascan_common_log
+        plascan_common_io
+        ${TORCH_LIBRARIES}
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(aerial_triangulation_cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/common
+        ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked
+        ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match/lightglue
+        ${CMAKE_SOURCE_DIR}/src/core/feature_match/tradition
+        ${CMAKE_SOURCE_DIR}/src/core/matchphototask
+        ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
+        ${CMAKE_SOURCE_DIR}/src/core/overlap
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
+        ${CMAKE_SOURCE_DIR}/src/core/pipeline
+        ${CMAKE_SOURCE_DIR}/src/core/sfm
+        ${CMAKE_SOURCE_DIR}/src/gui
+        ${CMAKE_SOURCE_DIR}/src/gui/compat
+        ${CMAKE_SOURCE_DIR}/src/gui/project/io
+        ${CMAKE_SOURCE_DIR}/src/gui/project/support
+        ${TORCH_INCLUDE_DIRS}
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    target_compile_definitions(aerial_triangulation_cli PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
+    set_target_properties(aerial_triangulation_cli PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+        BUILD_RPATH_USE_ORIGIN TRUE
+        INSTALL_RPATH_USE_LINK_PATH TRUE
+    )
+    if(PLASCAN_EXTRA_NVRTC_RPATHS)
+        set_property(TARGET aerial_triangulation_cli APPEND PROPERTY BUILD_RPATH "${PLASCAN_EXTRA_NVRTC_RPATHS}")
+    endif()
+endif()
+
 # ── 光束法平差：可选 LiDAR 点到面约束与 A/B 对比 ──
 if(TARGET sfm AND TARGET bundle_adjust AND TARGET lidar)
     add_executable(bundle_adjust_cli

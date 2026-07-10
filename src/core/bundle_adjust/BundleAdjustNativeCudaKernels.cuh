@@ -15,6 +15,13 @@ struct KernelRunSummary
     double linearResidual = 0.0;
     int acceptedSteps = 0;
     int rejectedSteps = 0;
+    double uploadSeconds = 0.0;
+    double kernelSeconds = 0.0;
+    double downloadSeconds = 0.0;
+    double hostCostSeconds = 0.0;
+    double deviceSelectSeconds = 0.0;
+    double stagingSeconds = 0.0;
+    double releaseSeconds = 0.0;
     char message[256] = {};
 };
 

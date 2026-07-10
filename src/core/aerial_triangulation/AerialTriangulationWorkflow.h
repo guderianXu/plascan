@@ -36,7 +36,7 @@ struct AerialTriangulationWorkflowOptions
     QString maskApplyMode = QStringLiteral("none");
     bool excludeFixedTiePoints = true;
     bool guidedImageMatching = false;
-    bool adaptiveCameraModelFitting = false;
+    bool adaptiveCameraModelFitting = true;
 
     QString featureAlgorithm = QStringLiteral("sift");
     QString matchAlgorithm = QStringLiteral("lightglue");

@@ -204,6 +204,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     service.cameraPaths = options.cameraPaths;
     service.plascanPath = options.projectPath;
     service.projectMeta = options.projectMeta;
+    service.useProjectMetaCameras = !options.resetAlignment;
     service.outputDir = QDir(QDir::cleanPath(options.outputDir)).filePath(QStringLiteral("sfm_sparse"));
     service.quality = preset.sfmQuality;
     service.threads = std::max(1, options.threads);
@@ -216,8 +217,18 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     service.autoGenerateMissingMatches = options.autoGenerateMissingMatches;
     service.restrictPairs = options.restrictPairs;
     service.allowedPairs = options.allowedPairs;
+    service.adaptiveCameraModelFitting = options.adaptiveCameraModelFitting;
     service.enableTwoStageMatching = true;
     service.enableGuidedRematching = options.guidedImageMatching || preset.enableGuidedByDefault;
+    const bool useGuidedKeypointDensity = options.guidedImageMatching;
+    service.tiePointFeatureMaxKeypoints = useGuidedKeypointDensity
+        ? 0
+        : std::max(0, options.keypointLimit);
+    service.tiePointKeypointLimitPerMegapixel = useGuidedKeypointDensity
+        ? std::max(0, options.keypointLimit)
+        : 0;
+    service.useTiePointDenseSift = featureAlgorithm == QStringLiteral("sift") &&
+        matchAlgorithm == QStringLiteral("lightglue");
     service.skeletonFeatureMaxKeypoints = scaledLimit(options.keypointLimit, preset.budgetScale);
     service.maxTiePointsPerImage = scaledLimit(options.tiepointLimit, preset.budgetScale);
     service.tiePointGridColumns = 8;
@@ -241,6 +252,10 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     resolved.resolvedSettings.insert(QStringLiteral("match_algorithm"), matchAlgorithm);
     resolved.resolvedSettings.insert(QStringLiteral("keypoint_limit"), options.keypointLimit);
     resolved.resolvedSettings.insert(QStringLiteral("resolved_keypoint_budget"),
+                                     service.tiePointFeatureMaxKeypoints);
+    resolved.resolvedSettings.insert(QStringLiteral("resolved_keypoint_limit_per_megapixel"),
+                                     service.tiePointKeypointLimitPerMegapixel);
+    resolved.resolvedSettings.insert(QStringLiteral("skeleton_keypoint_budget"),
                                      service.skeletonFeatureMaxKeypoints);
     resolved.resolvedSettings.insert(QStringLiteral("tiepoint_limit"), options.tiepointLimit);
     resolved.resolvedSettings.insert(QStringLiteral("resolved_tiepoint_limit"), service.maxTiePointsPerImage);
@@ -248,6 +263,8 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
                                      normalizedToken(options.maskApplyMode, QStringLiteral("none")));
     resolved.resolvedSettings.insert(QStringLiteral("exclude_fixed_tie_points"), options.excludeFixedTiePoints);
     resolved.resolvedSettings.insert(QStringLiteral("reset_current_alignment"), options.resetAlignment);
+    resolved.resolvedSettings.insert(QStringLiteral("use_project_camera_metadata"),
+                                     service.useProjectMetaCameras);
     resolved.resolvedSettings.insert(QStringLiteral("save_project_after_each_step"), options.saveAfterEachStep);
     resolved.resolvedSettings.insert(QStringLiteral("adaptive_camera_model_fitting"), options.adaptiveCameraModelFitting);
     resolved.resolvedSettings.insert(QStringLiteral("adaptive_known_pose_soft_prior"), true);

@@ -16,7 +16,10 @@
 #include <QMessageBox>
 #include <QImageReader>
 #include <QStyle>
+#include <QSet>
 #include <QVector>
+
+#include <initializer_list>
 
 // DataTreeWidget 的实现：
 // - 只消费 ProjectData/ProjectManager 提供的内存元数据快照
@@ -239,6 +242,186 @@ QString referenceDatasetRoleLabel(QString role)
     return role;
 }
 
+QString resultPath(const QJsonObject &record, std::initializer_list<const char *> keys)
+{
+    for (const char *key : keys)
+    {
+        const QString path = record.value(QString::fromLatin1(key)).toString().trimmed();
+        if (!path.isEmpty())
+        {
+            return path;
+        }
+    }
+    return QString();
+}
+
+int countObjectsWithPath(const QJsonArray &records, std::initializer_list<const char *> keys)
+{
+    int count = 0;
+    for (const QJsonValue &value : records)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+        if (!resultPath(value.toObject(), keys).isEmpty())
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int displayableMvsDepthResultCount(const QJsonArray &depthResults)
+{
+    int count = 0;
+    for (const QJsonValue &value : depthResults)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+
+        const QJsonObject record = value.toObject();
+        if (depthResultKind(record) != QStringLiteral("mvs_depth"))
+        {
+            continue;
+        }
+        if (!record.value(QStringLiteral("depth_png")).toString().trimmed().isEmpty())
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+int displayableSparseResultCount(const QJsonArray &atResults)
+{
+    int count = 0;
+    for (const QJsonValue &value : atResults)
+    {
+        if (!value.isObject())
+        {
+            continue;
+        }
+
+        const QJsonObject files = value.toObject().value(QStringLiteral("files")).toObject();
+        if (!files.value(QStringLiteral("sparse_cloud_xyz")).toString().trimmed().isEmpty())
+        {
+            ++count;
+        }
+    }
+    return count;
+}
+
+QString imagePathFromValue(const QJsonValue &value)
+{
+    if (value.isString())
+    {
+        return value.toString();
+    }
+    if (!value.isObject())
+    {
+        return QString();
+    }
+
+    const QJsonObject object = value.toObject();
+    QString path = object.value(QStringLiteral("path")).toString();
+    if (path.isEmpty()) path = object.value(QStringLiteral("image_path")).toString();
+    if (path.isEmpty()) path = object.value(QStringLiteral("file_path")).toString();
+    if (path.isEmpty()) path = object.value(QStringLiteral("source_path")).toString();
+    return path;
+}
+
+QString imagePathKey(QString path)
+{
+    path = QDir::cleanPath(path.trimmed());
+    path.replace(QLatin1Char('\\'), QLatin1Char('/'));
+    return path.toCaseFolded();
+}
+
+bool jsonArrayHasAtLeast(const QJsonValue &value, int size)
+{
+    return value.isArray() && value.toArray().size() >= size;
+}
+
+bool objectHasTrueFlag(const QJsonObject &object, std::initializer_list<const char *> keys)
+{
+    for (const char *key : keys)
+    {
+        const QJsonValue value = object.value(QString::fromLatin1(key));
+        if (value.isBool() && value.toBool())
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool objectHasAlignedStatus(const QJsonObject &object)
+{
+    for (const char *key : {"status", "alignment_status", "orientation_status", "pose_status"})
+    {
+        const QString status = object.value(QString::fromLatin1(key)).toString().trimmed().toLower();
+        if (status == QStringLiteral("aligned") ||
+            status == QStringLiteral("registered") ||
+            status == QStringLiteral("oriented") ||
+            status == QStringLiteral("estimated") ||
+            status == QStringLiteral("已对齐") ||
+            status == QStringLiteral("已定向"))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+bool cameraHasPose(const QJsonObject &camera)
+{
+    if (camera.isEmpty() || camera.value(QStringLiteral("pose_initialized_as_identity")).toBool(false))
+    {
+        return false;
+    }
+
+    if (objectHasTrueFlag(camera, {"aligned", "is_aligned", "registered", "oriented", "has_pose"}) ||
+        objectHasAlignedStatus(camera))
+    {
+        return true;
+    }
+
+    if (jsonArrayHasAtLeast(camera.value(QStringLiteral("C")), 3) &&
+        jsonArrayHasAtLeast(camera.value(QStringLiteral("R")), 9))
+    {
+        return true;
+    }
+
+    return camera.value(QStringLiteral("pose")).isObject()
+        || camera.value(QStringLiteral("camera_pose")).isObject()
+        || camera.value(QStringLiteral("extrinsics")).isObject()
+        || camera.value(QStringLiteral("transform")).isObject();
+}
+
+bool imageObjectHasAlignedPose(const QJsonObject &image)
+{
+    if (objectHasTrueFlag(image, {"aligned", "is_aligned", "registered", "oriented", "has_pose"}) ||
+        objectHasAlignedStatus(image))
+    {
+        return true;
+    }
+    return cameraHasPose(image.value(QStringLiteral("camera")).toObject());
+}
+
+bool imageIsAligned(const QJsonValue &image, const QSet<QString> &alignedImageKeys)
+{
+    const QString key = imagePathKey(imagePathFromValue(image));
+    if (!key.isEmpty() && alignedImageKeys.contains(key))
+    {
+        return true;
+    }
+
+    return image.isObject() && imageObjectHasAlignedPose(image.toObject());
+}
+
 } // namespace
 
 DataTreeWidget::DataTreeWidget(QWidget *parent)
@@ -424,9 +607,8 @@ QJsonObject DataTreeWidget::normalizeMeta(const QJsonObject &meta) const
     return normalized;
 }
 
-QStandardItem *DataTreeWidget::createSection(const QString &title, int count)
+QStandardItem *DataTreeWidget::createSection(const QString &label)
 {
-    const QString label = QStringLiteral("%1 (%2)").arg(title).arg(count);
     auto *nameItem = new QStandardItem(label);
     nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
     nameItem->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
@@ -440,7 +622,15 @@ QStandardItem *DataTreeWidget::createSection(const QString &title, int count)
     return nameItem;
 }
 
-void DataTreeWidget::appendItemRow(QStandardItem *parent, const QString &name, const QString &path, const QString &storage)
+QStandardItem *DataTreeWidget::createSection(const QString &title, int count)
+{
+    return createSection(QStringLiteral("%1 (%2)").arg(title).arg(count));
+}
+
+void DataTreeWidget::appendItemRow(QStandardItem *parent,
+                                   const QString &name,
+                                   const QString &path,
+                                   const QString &storage)
 {
     if (!parent) return;
     auto *nameItem = new QStandardItem(name);
@@ -585,8 +775,8 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
 
     // 最近一次 AT 的总稀疏点数（用于"连接点"括号里显示）
     int totalSparsePoints = -1;
-    // 已做过 AT 的影像集合（用于判断每张照片是否已定向）
-    QSet<QString> atProcessedImages;
+    // 已做过 AT 的影像集合（用于判断每张照片是否已对齐）
+    QSet<QString> alignedImageKeys;
     for (const QJsonValue &v : atResults) {
         if (!v.isObject()) continue;
         const QJsonObject obj = v.toObject();
@@ -595,20 +785,33 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         if (pts >= 0) totalSparsePoints = pts;
         // 收集该 AT 使用过的影像
         for (const QJsonValue &imgV : obj.value(QStringLiteral("selected_images")).toArray())
-            atProcessedImages.insert(imgV.toString());
+        {
+            const QString key = imagePathKey(imagePathFromValue(imgV));
+            if (!key.isEmpty())
+            {
+                alignedImageKeys.insert(key);
+            }
+        }
     }
 
-    // ── 哪些影像已有相机参数（来自 AT 或手动导入）──────────────────────
-    QSet<QString> cameraImages;
-    for (const QJsonValue &v : images) {
-        if (!v.isObject()) continue;
-        const QJsonObject o = v.toObject();
-        if (!o.value(QStringLiteral("camera")).toObject().isEmpty())
-            cameraImages.insert(o.value(QStringLiteral("path")).toString());
+    int alignedImageCount = 0;
+    for (const QJsonValue &v : images)
+    {
+        if (imageIsAligned(v, alignedImageKeys))
+        {
+            ++alignedImageCount;
+        }
     }
 
-    const int denseCount = denseResults.size();
+    const int sparseResultCount = displayableSparseResultCount(atResults);
+    const int depthMapCount = displayableMvsDepthResultCount(depthResults);
+    const int denseCount = countObjectsWithPath(denseResults, {"dense_cloud_xyz", "source_sparse_cloud"});
     const int modelCount = displayableMeshResultCount(modelResults) + _transientModels.size();
+    const int demCount = countObjectsWithPath(demResults, {"dem_tif", "dem_path"});
+    const int orthoCount = countObjectsWithPath(orthoResults, {"output_path"});
+    const int reportCount = countObjectsWithPath(reportResults, {"path", "json_path", "report_path"});
+    const int referenceCount = countObjectsWithPath(referenceDatasets, {"path", "file_path", "dem_path",
+                                                                        "lidar_path", "cloud_path"});
 
     // ── 保存展开状态 ──────────────────────────────────────────────────────
     QSet<QString> expandedSections;
@@ -627,16 +830,18 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     // "连接点" 括号里显示稀疏点总数（若有AT结果），否则显示文件数
     const int matchesCount = (totalSparsePoints >= 0) ? totalSparsePoints : atResults.size();
 
-    auto *photos    = createSection(QStringLiteral("照片"),    images.size());
-    auto *obsNet    = createSection(QStringLiteral("观测网络"), obsNetResults.size());
-    auto *matches   = createSection(QStringLiteral("连接点"),  matchesCount);
-    auto *depthMaps = createSection(QStringLiteral("深度图"),  mvsDepthResultCount(depthResults));
-    auto *denseCloud= createSection(QStringLiteral("稠密点云"),denseCount);
-    auto *model3d   = createSection(QStringLiteral("3D模型"),  modelCount);
-    auto *dem       = createSection(QStringLiteral("DEM"),      demResults.size());
-    auto *ortho     = createSection(QStringLiteral("正射影像"),orthoResults.size());
-    auto *references= createSection(QStringLiteral("参考数据"), referenceDatasets.size());
-    auto *reports   = createSection(QStringLiteral("报告"),     reportResults.size());
+    auto *photos = images.isEmpty()
+        ? nullptr
+        : createSection(QStringLiteral("照片 (%1/%2 对齐)").arg(alignedImageCount).arg(images.size()));
+    auto *obsNet = obsNetResults.isEmpty() ? nullptr : createSection(QStringLiteral("观测网络"), obsNetResults.size());
+    auto *matches = sparseResultCount <= 0 ? nullptr : createSection(QStringLiteral("连接点"), matchesCount);
+    auto *depthMaps = depthMapCount <= 0 ? nullptr : createSection(QStringLiteral("深度图"), depthMapCount);
+    auto *denseCloud = denseCount <= 0 ? nullptr : createSection(QStringLiteral("稠密点云"), denseCount);
+    auto *model3d = modelCount <= 0 ? nullptr : createSection(QStringLiteral("3D模型"), modelCount);
+    auto *dem = demCount <= 0 ? nullptr : createSection(QStringLiteral("DEM"), demCount);
+    auto *ortho = orthoCount <= 0 ? nullptr : createSection(QStringLiteral("正射影像"), orthoCount);
+    auto *references = referenceCount <= 0 ? nullptr : createSection(QStringLiteral("参考数据"), referenceCount);
+    auto *reports = reportCount <= 0 ? nullptr : createSection(QStringLiteral("报告"), reportCount);
 
     Q_UNUSED(ipfindResults);
     Q_UNUSED(ipmatchResults);
@@ -647,18 +852,20 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         QString storage;
         if (v.isObject()) {
             QJsonObject o = v.toObject();
-            path    = o.value("path").toString();
+            path    = imagePathFromValue(v);
             storage = o.value("storage").toString();
         } else if (v.isString()) {
-            path    = v.toString();
+            path    = imagePathFromValue(v);
             storage = QStringLiteral("internal");
         }
         QFileInfo fi(path);
         QString name = fi.fileName();
         if (name.isEmpty()) name = path;
-        // 相机状态标记：✓ = 有相机参数（AT完成）
-        if (cameraImages.contains(path) || atProcessedImages.contains(path))
+        // 相机状态标记：✓ = 已对齐/已定向
+        if (imageIsAligned(v, alignedImageKeys))
+        {
             name += QStringLiteral("  [✓]");
+        }
         appendItemRow(photos, name, path, storage);
     }
 

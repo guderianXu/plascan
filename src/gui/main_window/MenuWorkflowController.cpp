@@ -1906,7 +1906,7 @@ void MenuWorkflowController::launchAerialTriangulationSfm(const QJsonObject &set
     workflowOptions.excludeFixedTiePoints = settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool(true);
     workflowOptions.guidedImageMatching = settings.value(QStringLiteral("guided_image_matching")).toBool(false);
     workflowOptions.adaptiveCameraModelFitting =
-        settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(false);
+        settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(true);
     workflowOptions.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
                                            .toString(QStringLiteral("sift"))
                                            .trimmed()

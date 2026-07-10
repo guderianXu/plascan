@@ -1,11 +1,16 @@
 #include "PointCloudAlignment.h"
 
+#include <plapoint/core/point_cloud.h>
+#include <plapoint/registration/icp.h>
 #include <plapoint/search/spatial_kdtree.h>
+#include <plamatrix/dense/dense_matrix.h>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <memory>
 #include <numeric>
+#include <stdexcept>
 
 namespace xjw::qc
 {
@@ -14,6 +19,7 @@ namespace
 {
 
 using AlignmentKdTree = plapoint::search::SpatialKdTree<3, double>;
+using AlignmentCloud = plapoint::PointCloud<double, plamatrix::Device::CPU>;
 
 Point3D operator+(const Point3D &a, const Point3D &b)
 {
@@ -144,11 +150,123 @@ std::vector<double> nearestNeighborErrors(const std::vector<Point3D> &source,
     return errors;
 }
 
+std::shared_ptr<AlignmentCloud> makeAlignmentCloud(const std::vector<Point3D> &points)
+{
+    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> matrix(points.size(), 3);
+    for (std::size_t i = 0; i < points.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        matrix(row, 0) = points[i].x;
+        matrix(row, 1) = points[i].y;
+        matrix(row, 2) = points[i].z;
+    }
+    return std::make_shared<AlignmentCloud>(std::move(matrix));
+}
+
+plamatrix::DenseMatrix<double, plamatrix::Device::CPU>
+matrixFromTransform(const SimilarityTransform &transform)
+{
+    plamatrix::DenseMatrix<double, plamatrix::Device::CPU> matrix(4, 4);
+    matrix.fill(0.0);
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            matrix(row, col) = transform.scale * transform.rotation[static_cast<std::size_t>(row * 3 + col)];
+        }
+    }
+    matrix(0, 3) = transform.translation.x;
+    matrix(1, 3) = transform.translation.y;
+    matrix(2, 3) = transform.translation.z;
+    matrix(3, 3) = 1.0;
+    return matrix;
+}
+
+SimilarityTransform transformFromMatrix(const plamatrix::DenseMatrix<double, plamatrix::Device::CPU> &matrix)
+{
+    if (matrix.rows() != 4 || matrix.cols() != 4)
+    {
+        throw std::runtime_error("点云 ICP 返回了无效的 4x4 变换矩阵");
+    }
+
+    SimilarityTransform transform;
+    transform.scale = 1.0;
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            transform.rotation[static_cast<std::size_t>(row * 3 + col)] = matrix.getValue(row, col);
+        }
+    }
+    transform.translation = {
+        matrix.getValue(0, 3),
+        matrix.getValue(1, 3),
+        matrix.getValue(2, 3)
+    };
+    return transform;
+}
+
+PointCloudAlignmentResult alignNearestNeighborTranslationFallback(const std::vector<Point3D> &source,
+                                                                  const std::vector<Point3D> &reference,
+                                                                  int maxIterations)
+{
+    PointCloudAlignmentResult result;
+    result.method = QStringLiteral("nearest_neighbor_translation");
+    if (source.empty() || reference.empty())
+    {
+        result.error = QStringLiteral("源点云和参考点云不能为空");
+        return result;
+    }
+
+    SimilarityTransform transform;
+    transform.scale = 1.0;
+    const AlignmentKdTree referenceTree = buildAlignmentTree(reference);
+
+    const int iterations = std::max(1, maxIterations);
+    for (int iter = 0; iter < iterations; ++iter)
+    {
+        std::vector<double> dx;
+        std::vector<double> dy;
+        std::vector<double> dz;
+        dx.reserve(source.size());
+        dy.reserve(source.size());
+        dz.reserve(source.size());
+
+        for (const Point3D &point : source)
+        {
+            const Point3D aligned = PointCloudAlignment::apply(transform, point);
+            const Point3D nearest = nearestPoint(reference, referenceTree, aligned);
+            dx.push_back(nearest.x - aligned.x);
+            dy.push_back(nearest.y - aligned.y);
+            dz.push_back(nearest.z - aligned.z);
+        }
+
+        const Point3D delta{median(dx), median(dy), median(dz)};
+        transform.translation = transform.translation + delta;
+        if (squaredNorm(delta) <= 1e-18)
+        {
+            break;
+        }
+    }
+
+    result.transform = transform;
+    result.pairCount = static_cast<int>(source.size());
+    result.before = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, nullptr));
+    result.after = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, &result.transform));
+    result.success = true;
+    return result;
+}
+
 } // namespace
 
 Point3D PointCloudAlignment::apply(const SimilarityTransform &transform, const Point3D &point)
 {
-    return transform.scale * point + transform.translation;
+    const Point3D rotated{
+        transform.rotation[0] * point.x + transform.rotation[1] * point.y + transform.rotation[2] * point.z,
+        transform.rotation[3] * point.x + transform.rotation[4] * point.y + transform.rotation[5] * point.z,
+        transform.rotation[6] * point.x + transform.rotation[7] * point.y + transform.rotation[8] * point.z
+    };
+    return transform.scale * rotated + transform.translation;
 }
 
 PointCloudAlignmentResult PointCloudAlignment::alignPairedSimilarity(const std::vector<Point3D> &source,
@@ -208,51 +326,50 @@ PointCloudAlignmentResult PointCloudAlignment::alignNearestNeighborTranslation(c
                                                                                const std::vector<Point3D> &reference,
                                                                                int maxIterations)
 {
-    PointCloudAlignmentResult result;
-    result.method = QStringLiteral("nearest_neighbor_translation");
-    if (source.empty() || reference.empty())
+    PointCloudAlignmentResult seed = alignNearestNeighborTranslationFallback(source, reference, maxIterations);
+    if (!seed.success)
     {
-        result.error = QStringLiteral("源点云和参考点云不能为空");
+        return seed;
+    }
+
+    try
+    {
+        auto sourceCloud = makeAlignmentCloud(source);
+        auto referenceCloud = makeAlignmentCloud(reference);
+
+        plapoint::IterativeClosestPoint<double, plamatrix::Device::CPU> icp;
+        icp.setInputSource(sourceCloud);
+        icp.setInputTarget(referenceCloud);
+        icp.setMaximumIterations(std::max(1, maxIterations));
+        icp.setTransformationEpsilon(1.0e-10);
+        icp.setTransformationRotationEpsilon(1.0e-10);
+        icp.setEuclideanFitnessEpsilon(1.0e-12);
+        icp.setMaxCorrespondenceDistance(std::numeric_limits<double>::infinity());
+        icp.setMinFitnessScore(0.0);
+
+        AlignmentCloud aligned;
+        const auto initialGuess = matrixFromTransform(seed.transform);
+        icp.align(aligned, initialGuess);
+
+        PointCloudAlignmentResult result;
+        result.method = QStringLiteral("nearest_neighbor_icp");
+        result.transform = transformFromMatrix(icp.getFinalTransformation());
+        result.pairCount = static_cast<int>(source.size());
+
+        const AlignmentKdTree referenceTree = buildAlignmentTree(reference);
+        result.before = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, nullptr));
+        result.after = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, &result.transform));
+        result.success = result.after.rmse <= seed.after.rmse || icp.hasConverged();
+        if (!result.success)
+        {
+            return seed;
+        }
         return result;
     }
-
-    SimilarityTransform transform;
-    transform.scale = 1.0;
-    const AlignmentKdTree referenceTree = buildAlignmentTree(reference);
-
-    const int iterations = std::max(1, maxIterations);
-    for (int iter = 0; iter < iterations; ++iter)
+    catch (const std::exception &)
     {
-        std::vector<double> dx;
-        std::vector<double> dy;
-        std::vector<double> dz;
-        dx.reserve(source.size());
-        dy.reserve(source.size());
-        dz.reserve(source.size());
-
-        for (const Point3D &point : source)
-        {
-            const Point3D aligned = apply(transform, point);
-            const Point3D nearest = nearestPoint(reference, referenceTree, aligned);
-            dx.push_back(nearest.x - aligned.x);
-            dy.push_back(nearest.y - aligned.y);
-            dz.push_back(nearest.z - aligned.z);
-        }
-
-        const Point3D delta{median(dx), median(dy), median(dz)};
-        transform.translation = transform.translation + delta;
-        if (squaredNorm(delta) <= 1e-18)
-        {
-            break;
-        }
+        return seed;
     }
-
-    result.transform = transform;
-    result.pairCount = static_cast<int>(source.size());
-    result.before = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, nullptr));
-    result.after = summarizeErrors(nearestNeighborErrors(source, reference, referenceTree, &result.transform));
-    result.success = true;
-    return result;
 }
 
 } // namespace xjw::qc

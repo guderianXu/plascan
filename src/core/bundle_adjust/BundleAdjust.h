@@ -19,7 +19,8 @@
 
 #include "Camera.h"
 
-namespace xjw {
+namespace xjw
+{
 
 /**
  * @brief BA 求解后端。
@@ -146,6 +147,19 @@ struct BAOptions
     int maxPointIterations = 12;  ///< 每轮内点位置优化的最大迭代次数
     int maxCameraIterations = 10; ///< 每轮内相机位姿优化的最大迭代次数
     bool refineCameraPose = true; ///< 是否同时优化相机位姿（false 则仅优化三维点）
+
+    // ── 内参自标定 ────────────────────────────────────────────────────────
+    /// 是否优化所有相机共享的焦距尺度。该选项面向无相机文件/无 EXIF 的空三，
+    /// 当前只释放 fu/fv 的公共 scale，主点和畸变保持固定，避免弱几何下过拟合。
+    bool refineSharedFocalLength = false;
+    /// 共享焦距相对输入焦距的最小尺度。
+    double minSharedFocalScale = 0.5;
+    /// 共享焦距相对输入焦距的最大尺度。
+    double maxSharedFocalScale = 4.0;
+    /// 单次 LM 试探允许的最大焦距倍率，限制内参更新步长。
+    double maxSharedFocalStepScale = 1.20;
+    /// 每轮外层 BA 中共享焦距优化的最大内部迭代次数。
+    int maxSharedFocalIterations = 6;
 
     double huberDelta = 3.0;        ///< Huber 损失阈值（像素），残差>delta 则降低权重以抑制粗差
     double finiteDiffEps = 1e-6;   ///< 有限差分步长（中央差分: ±eps），用于近似雅可比
@@ -276,12 +290,21 @@ struct BAResult
     int nativeCudaActiveCameras = 0;                   ///< native_cuda 工作集中的活动相机数
     int nativeCudaActiveTracks = 0;                    ///< native_cuda 工作集中的活动 track 数
     int nativeCudaActiveObservations = 0;              ///< native_cuda 工作集中的活动观测数
+    double nativeCudaUploadSeconds = 0.0;              ///< native_cuda H2D 上传和设备缓冲准备耗时
+    double nativeCudaKernelSeconds = 0.0;              ///< native_cuda CUDA kernel 同步耗时
+    double nativeCudaDownloadSeconds = 0.0;            ///< native_cuda D2H 结果回传耗时
+    double nativeCudaHostCostSeconds = 0.0;            ///< native_cuda CPU 侧代价统计耗时
+    double nativeCudaDeviceSelectSeconds = 0.0;        ///< native_cuda cudaSetDevice 耗时
+    double nativeCudaStagingSeconds = 0.0;             ///< native_cuda CPU 侧设备输入打包耗时
+    double nativeCudaReleaseSeconds = 0.0;             ///< native_cuda 设备缓冲释放耗时
 
     int totalTracks = 0;        ///< 输入轨迹总数
     int optimizedTracks = 0;    ///< 成功优化的轨迹数
     double meanRmsBefore = 0.0; ///< 优化前所有轩迹重投影 RMS 的均値
     double meanRmsAfter = 0.0;  ///< 优化后所有轨迹重投影 RMS 的均値
     int refinedCameraCount = 0; ///< 最后一轮中实际被更新的相机数量
+    int refinedIntrinsicCount = 0;        ///< 发生共享焦距更新的相机数量
+    double refinedSharedFocalScale = 1.0; ///< 优化后焦距相对输入焦距的平均尺度
 
     int laserConstraintCount = 0;          ///< 参与统计/优化的 LiDAR 点到面约束数量
     double laserRmsBeforeMeters = 0.0;     ///< 优化前 LiDAR 点到面 RMS（米）

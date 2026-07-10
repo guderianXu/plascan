@@ -52,6 +52,13 @@ struct GenerateModelTaskInput
     bool exportObj = true;
 };
 
+struct ResolvedModelSource
+{
+    QString sourcePointCloudPath;
+    QString requestedSourcePath;
+    QString outputRoot;
+};
+
 QString utcNowIso()
 {
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
@@ -195,7 +202,10 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
 {
     const QString sourceData = settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
     const QString sourcePath = settings.value(QStringLiteral("source_path")).toString(denseCloudPath);
-    const QString sourceDenseCloud = sourceData == QStringLiteral("point_cloud") ? sourcePath : QString();
+    const QString sourceDenseCloud =
+        (sourceData == QStringLiteral("point_cloud") || sourceData == QStringLiteral("depth_maps"))
+            ? denseCloudPath
+            : QString();
 
     QJsonObject modelRecord = xjw::gui::project::makeModelResultRecord(
         utcNowIso(),
@@ -268,6 +278,135 @@ QString modelGenerationSuccessMessage(const QJsonObject &terrainResult)
         .arg(terrainResult.value(QStringLiteral("final_model_path")).toString())
         .arg(terrainResult.value(QStringLiteral("vertex_count")).toInt(-1))
         .arg(terrainResult.value(QStringLiteral("face_count")).toInt(-1));
+}
+
+QString existingDenseCloudPathFromRecord(const QJsonObject &record)
+{
+    const QString path = QDir::cleanPath(record.value(QStringLiteral("dense_cloud_xyz")).toString().trimmed());
+    if (path.isEmpty() || !QFileInfo::exists(path))
+    {
+        return QString();
+    }
+    return path;
+}
+
+QString depthSourceRoot(const QString &sourcePath)
+{
+    const QFileInfo info(sourcePath);
+    if (info.isDir())
+    {
+        return QDir::cleanPath(info.absoluteFilePath());
+    }
+    return QDir::cleanPath(info.absolutePath());
+}
+
+QString findDenseCloudForDepthSource(ProjectData *projectData, const QString &depthSourcePath)
+{
+    const QString root = depthSourceRoot(depthSourcePath);
+    if (!root.isEmpty())
+    {
+        const QString canonical = QDir(root).filePath(QStringLiteral("dense_cloud.ply"));
+        if (QFileInfo::exists(canonical))
+        {
+            return QDir::cleanPath(canonical);
+        }
+    }
+
+    const QJsonArray denseResults = projectData
+        ? projectData->metadata().value(QStringLiteral("dense_cloud_results")).toArray()
+        : QJsonArray();
+    for (int index = denseResults.size() - 1; index >= 0; --index)
+    {
+        const QString densePath = existingDenseCloudPathFromRecord(denseResults.at(index).toObject());
+        if (densePath.isEmpty())
+        {
+            continue;
+        }
+        if (!root.isEmpty() && QFileInfo(densePath).absolutePath() == root)
+        {
+            return densePath;
+        }
+    }
+
+    QString latestDensePath;
+    QString ignoredError;
+    if (projectData && resolveLatestDenseCloudPath(projectData, &latestDensePath, &ignoredError))
+    {
+        return latestDensePath;
+    }
+    return QString();
+}
+
+bool resolveModelSourceForMeshing(ProjectData *projectData,
+                                  const QJsonObject &settings,
+                                  ResolvedModelSource *resolvedSource,
+                                  QString *errorMessage)
+{
+    if (!resolvedSource)
+    {
+        return false;
+    }
+
+    const QString sourceData = settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
+    const QString sourcePath = QDir::cleanPath(
+        settings.value(QStringLiteral("source_path"))
+            .toString(settings.value(QStringLiteral("denseCloudPath")).toString())
+            .trimmed());
+
+    resolvedSource->requestedSourcePath = sourcePath;
+
+    if (sourceData == QStringLiteral("depth_maps"))
+    {
+        if (sourcePath.isEmpty() || !QFileInfo::exists(sourcePath))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("所选深度图源不存在：\n%1").arg(sourcePath);
+            }
+            return false;
+        }
+
+        resolvedSource->sourcePointCloudPath = findDenseCloudForDepthSource(projectData, sourcePath);
+        resolvedSource->outputRoot = depthSourceRoot(sourcePath);
+        if (resolvedSource->outputRoot.isEmpty())
+        {
+            resolvedSource->outputRoot = resolvedSource->sourcePointCloudPath.isEmpty()
+                ? QFileInfo(sourcePath).absolutePath()
+                : QFileInfo(resolvedSource->sourcePointCloudPath).absolutePath();
+        }
+        return true;
+    }
+
+    if (!sourcePath.isEmpty())
+    {
+        if (!QFileInfo::exists(sourcePath))
+        {
+            if (errorMessage)
+            {
+                *errorMessage = QStringLiteral("所选源数据文件不存在：\n%1").arg(sourcePath);
+            }
+            return false;
+        }
+        resolvedSource->sourcePointCloudPath = sourcePath;
+        resolvedSource->outputRoot = QFileInfo(sourcePath).absolutePath();
+        return true;
+    }
+
+    QString latestDensePath;
+    QString latestError;
+    if (!resolveLatestDenseCloudPath(projectData, &latestDensePath, &latestError))
+    {
+        if (errorMessage)
+        {
+            *errorMessage = QStringLiteral("%1\n请先完成密集点云生成。").arg(latestError);
+        }
+        return false;
+    }
+
+    resolvedSource->sourcePointCloudPath = latestDensePath;
+    resolvedSource->requestedSourcePath = latestDensePath;
+    resolvedSource->outputRoot = QFileInfo(latestDensePath).absolutePath();
+    return true;
 }
 
 template <typename OnSuccess>
@@ -383,55 +522,27 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         return;
     }
 
-    const QString sourceData = settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
-    if (sourceData == QStringLiteral("depth_maps"))
-    {
-        QMessageBox::warning(_parentWidget,
-                             QStringLiteral("生成模型"),
-                             QStringLiteral("当前版本还不能直接从深度图生成模型。\n"
-                                            "请先执行“深度图融合生成密集点云”，再选择点云作为源数据。"));
-        return;
-    }
-
-    QString inputPointCloudPath = QDir::cleanPath(
-        settings.value(QStringLiteral("source_path"))
-            .toString(settings.value(QStringLiteral("denseCloudPath")).toString())
-            .trimmed());
     const QString dialogTitle = settings.contains(QStringLiteral("source_data"))
         ? QStringLiteral("生成模型")
         : QStringLiteral("网格重建");
 
-    if (!inputPointCloudPath.isEmpty())
+    ResolvedModelSource resolvedSource;
+    QString sourceError;
+    if (!resolveModelSourceForMeshing(_projectData, settings, &resolvedSource, &sourceError))
     {
-        if (!QFileInfo::exists(inputPointCloudPath))
-        {
-            QMessageBox::warning(_parentWidget,
-                                 dialogTitle,
-                                 QStringLiteral("所选源数据文件不存在：\n%1").arg(inputPointCloudPath));
-            return;
-        }
+        QMessageBox::warning(_parentWidget, dialogTitle, sourceError);
+        return;
     }
-    else
-    {
-        QString errorMessage;
-        if (!resolveLatestDenseCloudPath(_projectData, &inputPointCloudPath, &errorMessage))
-        {
-            QMessageBox::warning(_parentWidget,
-                                 dialogTitle,
-                                 QStringLiteral("%1\n请先完成密集点云生成。").arg(errorMessage));
-            return;
-        }
-    }
+
+    QJsonObject effectiveSettings = settings;
+    effectiveSettings[QStringLiteral("source_path")] = resolvedSource.requestedSourcePath;
+    effectiveSettings[QStringLiteral("resolved_point_cloud_path")] = resolvedSource.sourcePointCloudPath;
 
     {
         QJsonObject meta = _projectData->metadata();
-        QJsonObject effectiveSettings = settings;
-        effectiveSettings[QStringLiteral("source_path")] = inputPointCloudPath;
         meta[QStringLiteral("mesh_reconstruction_settings")] = effectiveSettings;
         xjw::gui::project::persistProjectMeta(_projectData, meta, false);
     }
-
-    const QString outputRoot = QFileInfo(inputPointCloudPath).absolutePath();
 
     emit meshProgressChanged(tr("正在初始化模型生成..."), 0);
     QPointer<ProjectModelManager> self(this);
@@ -439,7 +550,7 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     runModelAsyncTask(
         this,
-        [self, ownerGuard, inputPointCloudPath, outputRoot, settings, projectPath]() -> ModelTaskResult {
+        [self, ownerGuard, resolvedSource, effectiveSettings, projectPath]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
             {
@@ -447,128 +558,49 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 return task;
             }
 
-            xjw::mesh::ReconstructionConfig cfg;
-            cfg.resolution = xjw::mesh::workflow::meshResolutionFromSettings(settings);
-            cfg.smoothIterations = qBound(0, settings.value(QStringLiteral("smoothIter")).toInt(3), 50);
-            cfg.smoothLambda = 0.5f;
-            cfg.padding = 0.05f;
-            cfg.forcePoisson = settings.value(QStringLiteral("method"))
-                                   .toString(QStringLiteral("Poisson Surface"))
-                                   .contains(QStringLiteral("Poisson"), Qt::CaseInsensitive);
-            cfg.poissonDepth = qBound(7, settings.value(QStringLiteral("octreeDepth")).toInt(10), 12);
-            cfg.poissonThreads = qBound(1, settings.value(QStringLiteral("threads")).toInt(8), 128);
-            const double point_weight = settings.value(QStringLiteral("poissonPointWeight"))
-                                            .toDouble(cfg.poissonPointWeight);
-            cfg.poissonPointWeight = std::clamp(static_cast<float>(point_weight), 0.0f, 8.0f);
-            const double poisson_trim = settings.value(QStringLiteral("poissonTrim")).toDouble(cfg.poissonTrim);
-            cfg.poissonTrim = std::clamp(static_cast<float>(poisson_trim), 0.0f, 12.0f);
-            cfg.fillHoles = settings.value(QStringLiteral("holeFill")).toBool(true);
-            cfg.holeFillPasses =
-                xjw::mesh::workflow::holeFillPassesFromArea(
-                    settings.value(QStringLiteral("maxHoleSize")).toDouble(100.0));
-            cfg.cleanSmallComponents = settings.value(QStringLiteral("cleanSmall")).toBool(true);
-            cfg.minComponentFaces = qBound(2,
-                                           settings.value(QStringLiteral("minFaces")).toInt(100),
-                                           100000);
+            xjw::mesh::ReconstructionConfig cfg =
+                xjw::mesh::workflow::reconstructionConfigFromModelSettings(effectiveSettings);
 
-            const QString qualityProfile = settings.contains(QStringLiteral("qualityProfile"))
-                ? settings.value(QStringLiteral("qualityProfile")).toString()
-                : QStringLiteral("balanced");
-            const QString voxelDensity =
-                settings.value(QStringLiteral("voxelDensity")).toString(QStringLiteral("medium"));
+            const QString sourceData =
+                effectiveSettings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
+            if (sourceData == QStringLiteral("depth_maps"))
+            {
+                xjw::mesh::workflow::DepthMapMeshBuildRequest depthRequest;
+                depthRequest.depthMapSourcePath =
+                    effectiveSettings.value(QStringLiteral("depthMapSourcePath"))
+                        .toString(effectiveSettings.value(QStringLiteral("source_path")).toString());
+                depthRequest.outputRoot = resolvedSource.outputRoot;
+                depthRequest.settings = effectiveSettings;
+                depthRequest.reconstruction = cfg;
+                depthRequest.exportObj = xjw::mesh::workflow::exportObjRequested(effectiveSettings);
+                depthRequest.texture = xjw::mesh::workflow::defaultTextureConfig();
+                depthRequest.progress = makeProgressReporter(self, ownerGuard, projectPath);
 
-            if (qualityProfile == QStringLiteral("detail"))
-            {
-                cfg.resolution = std::max(cfg.resolution, 320);
-                cfg.poissonDepth = std::max(cfg.poissonDepth, 10);
-                cfg.poissonPointWeight = std::max(cfg.poissonPointWeight, 4.8f);
-                cfg.poissonTrim = std::max(cfg.poissonTrim, 9.0f);
-                cfg.simplifyTargetFaces = std::max(cfg.simplifyTargetFaces, 65000);
-                cfg.enableDownsample = false;
-                cfg.voxelSimplifyFactor = 1.15f;
-                cfg.kNormals = std::max(cfg.kNormals, 18);
-                cfg.smoothIterations = std::max(0, cfg.smoothIterations - 1);
-                cfg.smoothLambda = 0.36f;
+                const xjw::mesh::workflow::WorkflowResult workflowResult =
+                    xjw::mesh::workflow::buildMeshFromDepthMaps(depthRequest);
+                applyWorkflowResult(&task, workflowResult);
+                task.result[QStringLiteral("source_path")] = depthRequest.depthMapSourcePath;
+                task.result[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+                return task;
             }
-            else if (qualityProfile == QStringLiteral("lite"))
-            {
-                cfg.resolution = std::min(cfg.resolution, 224);
-                cfg.poissonDepth = std::min(cfg.poissonDepth, 9);
-                cfg.poissonPointWeight = std::min(cfg.poissonPointWeight, 3.2f);
-                cfg.poissonTrim = std::min(cfg.poissonTrim, 8.4f);
-                cfg.simplifyTargetFaces = 16000;
-                cfg.enableDownsample = true;
-                cfg.downsampleVoxelScale = 1.0f;
-                cfg.voxelSimplifyFactor = 2.5f;
-                cfg.smoothIterations = std::min(3, cfg.smoothIterations + 1);
-                cfg.smoothLambda = 0.55f;
-            }
-            else if (voxelDensity == QStringLiteral("coarse"))
-            {
-                cfg.voxelSimplifyFactor = 2.6f;
-                cfg.enableDownsample = true;
-                cfg.downsampleVoxelScale = 1.0f;
-                cfg.poissonPointWeight = std::min(cfg.poissonPointWeight, 3.6f);
-                cfg.simplifyTargetFaces = 14000;
-            }
-            else if (voxelDensity == QStringLiteral("fine"))
-            {
-                cfg.voxelSimplifyFactor = 1.25f;
-                cfg.enableDownsample = false;
-                cfg.denoiseStdMul = 1.8f;
-                cfg.kNormals = 18;
-                cfg.poissonPointWeight = std::max(cfg.poissonPointWeight, 4.6f);
-                cfg.poissonTrim = std::max(8.0f, cfg.poissonTrim);
-                cfg.simplifyTargetFaces = 60000;
-            }
-            else
-            {
-                cfg.voxelSimplifyFactor = 1.8f;
-                cfg.enableDownsample = true;
-                cfg.downsampleVoxelScale = 0.8f;
-                cfg.simplifyTargetFaces = 28000;
-            }
-
-            const int targetFaces = settings.value(QStringLiteral("simplifyTargetFaces"))
-                                        .toInt(settings.value(QStringLiteral("targetFaces")).toInt(0));
-            if (targetFaces > 0)
-            {
-                cfg.simplifyTargetFaces = qBound(1000, targetFaces, 2000000);
-            }
-
-            const bool decimate = settings.value(QStringLiteral("decimate")).toBool(false);
-            if (decimate)
-            {
-                const double decimateRatio = std::clamp(
-                    settings.value(QStringLiteral("decimateRatio")).toDouble(0.5),
-                    0.05,
-                    1.0);
-                cfg.simplifyTargetFaces = std::max(
-                    1000,
-                    static_cast<int>(std::lround(cfg.simplifyTargetFaces * decimateRatio)));
-                cfg.enableDownsample = true;
-                cfg.voxelSimplifyFactor = std::max(cfg.voxelSimplifyFactor,
-                                                   static_cast<float>(1.0 / decimateRatio));
-            }
-            cfg.verbose = false;
 
             xjw::mesh::workflow::MeshBuildRequest request;
-            request.pointCloudPath = inputPointCloudPath;
-            request.outputRoot = outputRoot;
+            request.pointCloudPath = resolvedSource.sourcePointCloudPath;
+            request.outputRoot = resolvedSource.outputRoot;
             request.reconstruction = cfg;
-            request.exportObj = xjw::mesh::workflow::exportObjRequested(settings);
+            request.exportObj = xjw::mesh::workflow::exportObjRequested(effectiveSettings);
             request.texture = xjw::mesh::workflow::defaultTextureConfig();
             request.progress = makeProgressReporter(self, ownerGuard, projectPath);
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
             applyWorkflowResult(&task, workflowResult);
-            task.result[QStringLiteral("source_path")] = inputPointCloudPath;
-            task.result[QStringLiteral("source_data")] =
-                settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
+            task.result[QStringLiteral("source_path")] = resolvedSource.requestedSourcePath;
+            task.result[QStringLiteral("source_point_cloud_path")] = resolvedSource.sourcePointCloudPath;
+            task.result[QStringLiteral("source_data")] = sourceData;
             return task;
         },
-        [self, ownerGuard, inputPointCloudPath, settings, projectPath, dialogTitle](const ModelTaskResult &task) {
+        [self, ownerGuard, resolvedSource, effectiveSettings, projectPath, dialogTitle](const ModelTaskResult &task) {
             if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {
                 return;
@@ -578,16 +610,19 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                              dialogTitle,
                              QStringLiteral("模型生成失败"),
                              task,
-                             [self, inputPointCloudPath, settings, dialogTitle](const QJsonObject &taskResult) {
+                             [self, resolvedSource, effectiveSettings, dialogTitle](const QJsonObject &taskResult) {
                 if (!self)
                 {
                     return;
                 }
+                const QString sourcePointCloudPath =
+                    taskResult.value(QStringLiteral("source_point_cloud_path"))
+                        .toString(resolvedSource.sourcePointCloudPath);
                 const QJsonObject modelRecord = buildMeshReconstructionRecord(taskResult,
-                                                                               inputPointCloudPath,
-                                                                               settings);
+                                                                               sourcePointCloudPath,
+                                                                               effectiveSettings);
                 persistModelResult(self->_projectData, modelRecord);
-                if (!settings.value(QStringLiteral("pipeline_mode")).toBool(false))
+                if (!effectiveSettings.value(QStringLiteral("pipeline_mode")).toBool(false))
                 {
                     QMessageBox::information(self->_parentWidget,
                                              dialogTitle,

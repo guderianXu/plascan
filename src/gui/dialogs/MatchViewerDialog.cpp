@@ -55,10 +55,10 @@ QString variantAlgorithmLabel(const xjw::pipeline::MatchVariant &variant)
 QString variantComboLabel(const xjw::pipeline::MatchVariant &variant)
 {
     const QString counts = variant.hasInlierStats
-        ? QStringLiteral("内点 %1 / 总 %2")
+        ? QStringLiteral("几何内点 %1 / 原始 %2")
               .arg(variant.geometricVerifiedInliers)
               .arg(variant.totalMatches)
-        : QStringLiteral("总 %1").arg(variant.totalMatches);
+        : QStringLiteral("原始 %1").arg(variant.totalMatches);
     return QStringLiteral("%1 · %2").arg(variantAlgorithmLabel(variant), counts);
 }
 
@@ -460,7 +460,7 @@ void MatchViewerDialog::onMatchValidityLoaded(int validCount, int invalidCount)
         }
         _showOnlyInliersChk->setToolTip(
             hasTrackValidity
-                ? tr("只显示空三后进入最终连接点轨迹的有效匹配")
+                ? tr("只显示空三后保留下来的有效连接点")
                 : tr("完成空中三角测量后可按有效连接点过滤"));
     }
 
@@ -480,7 +480,7 @@ void MatchViewerDialog::updateStatusBar()
     QString status = tr("总匹配点数：%1").arg(_totalMatches);
     if (_validMatches >= 0 && _invalidMatches >= 0)
     {
-        status += tr(" | 有效：%1 | 无效：%2").arg(_validMatches).arg(_invalidMatches);
+        status += tr(" | 有效连接点：%1 | 无效匹配：%2").arg(_validMatches).arg(_invalidMatches);
     }
     if (!_currentVariantSummary.isEmpty())
     {

@@ -40,6 +40,7 @@
 #include "DataTreeWidget.h"
 #include "PhotoStripWidget.h"
 #include "ProjectDashboardWidget.h"
+#include "MatchValidityAnalyzer.h"
 #include "MainMenu.h"
 #include "TaskStatusWidget.h"
 
@@ -90,6 +91,7 @@
 #include <QSignalSpy>
 #include <QTableWidget>
 #include <QThread>
+#include <QtTest/QTest>
 #include <QtEndian>
 
 #include <array>
@@ -1025,6 +1027,37 @@ TEST(ProjectSupportUtilsTest, InfersSiftFeatureSuffixBeforeLegacyDskOutputs)
     const QStringList suffixes = xjw::gui::project::projectFeatureSuffixes(projectPath, meta);
     ASSERT_FALSE(suffixes.isEmpty());
     EXPECT_EQ(suffixes.first(), QStringLiteral(".sift"));
+}
+
+TEST(ProjectSupportUtilsTest, ResolvesUnavailableLegacyDskSuffixToAvailableSiftFeature)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString projectPath = QDir(tempDir.path()).filePath(QStringLiteral("demo.plascan"));
+    const QString ipDir = ProjectIO::ipfindOutputDir(projectPath);
+    ASSERT_TRUE(QDir().mkpath(ipDir));
+
+    const QString imagePath = QDir(tempDir.path()).filePath(QStringLiteral("66.png"));
+    QFile imageFile(imagePath);
+    ASSERT_TRUE(imageFile.open(QIODevice::WriteOnly));
+    imageFile.write("img");
+    imageFile.close();
+
+    QFile siftFile(QDir(ipDir).filePath(QStringLiteral("66.sift")));
+    ASSERT_TRUE(siftFile.open(QIODevice::WriteOnly));
+    siftFile.write("sift");
+    siftFile.close();
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray{
+        QJsonObject{{QStringLiteral("path"), imagePath}}
+    };
+
+    EXPECT_EQ(xjw::gui::project::resolvePreferredFeatureSuffix(projectPath,
+                                                               meta,
+                                                               QStringLiteral(".dsk")),
+              QStringLiteral(".sift"));
 }
 
 TEST(ProjectSupportUtilsTest, DetectsWhetherProjectHasRequestedFeatureSuffix)
@@ -9188,6 +9221,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
 
     EXPECT_TRUE(genericPreselectionCheck->isChecked());
     EXPECT_FALSE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(referenceSourceCombo->isEnabled());
     EXPECT_TRUE(resetAlignmentCheck->isChecked());
     EXPECT_FALSE(saveAfterEachStepCheck->isChecked());
     EXPECT_EQ(keypointLimitSpin->value(), 40000);
@@ -9195,7 +9229,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_EQ(maskApplyCombo->currentData().toString(), QStringLiteral("keypoints"));
     EXPECT_TRUE(excludeFixedTiePointsCheck->isChecked());
     EXPECT_FALSE(guidedImageMatchingCheck->isChecked());
-    EXPECT_FALSE(adaptiveCameraModelCheck->isChecked());
+    EXPECT_TRUE(adaptiveCameraModelCheck->isChecked());
 
     QJsonObject settings = dialog.collectSettings();
     EXPECT_EQ(settings.value(QStringLiteral("workflow_kind")).toString(),
@@ -9206,6 +9240,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_EQ(settings.value(QStringLiteral("keypoint_limit")).toInt(), 40000);
     EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 4000);
     EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("keypoints"));
+    EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
 
     QJsonObject appliedSettings;
     appliedSettings[QStringLiteral("quality")] = QStringLiteral("highest");
@@ -9238,7 +9273,7 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
 }
 
-TEST(AerialTriangulationDialogTest, ReferencePreselectionRequiresCompleteCameras)
+TEST(AerialTriangulationDialogTest, ReferencePreselectionStaysClickableWhenCamerasAreIncomplete)
 {
     AerialTriangulationDialog dialog;
     dialog.setImageCount(3);
@@ -9254,11 +9289,11 @@ TEST(AerialTriangulationDialogTest, ReferencePreselectionRequiresCompleteCameras
     requested[QStringLiteral("reference_preselection_source")] = QStringLiteral("sequence");
 
     dialog.applySettings(requested);
-    EXPECT_FALSE(referencePreselectionCheck->isEnabled());
-    EXPECT_FALSE(referencePreselectionCheck->isChecked());
-    EXPECT_FALSE(referenceSourceCombo->isEnabled());
-    EXPECT_FALSE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool())
-        << "参考预选没有完整相机文件时不能从历史设置恢复为启用。";
+    EXPECT_TRUE(referencePreselectionCheck->isEnabled())
+        << "参考预选入口应保持可点击，不能让用户误以为 checkbox 坏掉。";
+    EXPECT_TRUE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(referenceSourceCombo->isEnabled());
+    EXPECT_TRUE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
 
     dialog.setReferencePreselectionAvailable(true, 3, 3);
     dialog.applySettings(requested);
@@ -9268,11 +9303,73 @@ TEST(AerialTriangulationDialogTest, ReferencePreselectionRequiresCompleteCameras
     EXPECT_TRUE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
 
     dialog.setReferencePreselectionAvailable(false, 1, 3);
-    EXPECT_FALSE(referencePreselectionCheck->isEnabled());
-    EXPECT_FALSE(referencePreselectionCheck->isChecked());
-    EXPECT_FALSE(referenceSourceCombo->isEnabled());
-    EXPECT_FALSE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
+    EXPECT_TRUE(referencePreselectionCheck->isEnabled());
+    EXPECT_TRUE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(referenceSourceCombo->isEnabled());
+    EXPECT_TRUE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
     EXPECT_TRUE(referencePreselectionCheck->toolTip().contains(QStringLiteral("相机")));
+
+    referencePreselectionCheck->setChecked(false);
+    EXPECT_FALSE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(referenceSourceCombo->isEnabled());
+    EXPECT_FALSE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
+}
+
+TEST(AerialTriangulationDialogTest, ReferencePreselectionTogglesFromVisibleCheckboxClick)
+{
+    AerialTriangulationDialog dialog;
+    dialog.setReferencePreselectionAvailable(true, 3, 3);
+    dialog.show();
+    QApplication::processEvents();
+
+    auto *referencePreselectionCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_referencePreselectionCheck"));
+    auto *referenceSourceCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_referenceSourceCombo"));
+    ASSERT_NE(referencePreselectionCheck, nullptr);
+    ASSERT_NE(referenceSourceCombo, nullptr);
+    ASSERT_TRUE(referencePreselectionCheck->isVisibleTo(&dialog));
+    ASSERT_TRUE(referencePreselectionCheck->isEnabled());
+    ASSERT_FALSE(referencePreselectionCheck->isChecked());
+
+    const QPoint clickPoint(referencePreselectionCheck->rect().left() + 56,
+                            referencePreselectionCheck->rect().center().y());
+    QTest::mouseClick(referencePreselectionCheck, Qt::LeftButton, Qt::NoModifier, clickPoint);
+    QApplication::processEvents();
+
+    EXPECT_TRUE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(referenceSourceCombo->isEnabled());
+    EXPECT_TRUE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
+
+    QTest::mouseClick(referencePreselectionCheck, Qt::LeftButton, Qt::NoModifier, clickPoint);
+    QApplication::processEvents();
+
+    EXPECT_FALSE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(referenceSourceCombo->isEnabled());
+    EXPECT_FALSE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
+}
+
+TEST(AerialTriangulationDialogTest, SelectingReferenceSourceEnablesReferencePreselection)
+{
+    AerialTriangulationDialog dialog;
+    dialog.setReferencePreselectionAvailable(true, 3, 3);
+
+    auto *referencePreselectionCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_referencePreselectionCheck"));
+    auto *referenceSourceCombo = dialog.findChild<QComboBox *>(QStringLiteral("m_referenceSourceCombo"));
+    ASSERT_NE(referencePreselectionCheck, nullptr);
+    ASSERT_NE(referenceSourceCombo, nullptr);
+    ASSERT_FALSE(referencePreselectionCheck->isChecked());
+    ASSERT_TRUE(referenceSourceCombo->isEnabled())
+        << "参考来源下拉框必须可点，否则用户会以为“导入参考”这一行坏了。";
+
+    const int sequenceIndex = referenceSourceCombo->findData(QStringLiteral("sequence"));
+    ASSERT_GE(sequenceIndex, 0);
+    referenceSourceCombo->setCurrentIndex(sequenceIndex);
+
+    EXPECT_TRUE(referencePreselectionCheck->isChecked());
+    EXPECT_TRUE(dialog.collectSettings().value(QStringLiteral("reference_preselection")).toBool());
+    EXPECT_EQ(dialog.collectSettings().value(QStringLiteral("reference_preselection_source")).toString(),
+              QStringLiteral("sequence"));
 }
 
 TEST(AerialTriangulationDialogTest, InputControlsHaveReadableHeights)
@@ -10650,14 +10747,16 @@ TEST(AerialTriangulationServicePairPlanningTest, ProjectMetaCamerasEnableBounded
     EXPECT_TRUE(source.contains(QStringLiteral("pairKey.split(QStringLiteral(\"\\n\"))")));
 }
 
-TEST(AerialTriangulationServiceKnownPoseModeTest, CompleteProjectMetaCamerasEnableKnownPoseMode)
+TEST(AerialTriangulationServiceKnownPoseModeTest, CompleteProjectPoseCamerasEnableKnownPoseMode)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/core/aerial_triangulation/AerialTriangulationService.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("hasCompleteProjectMetaCameras")));
+    EXPECT_TRUE(source.contains(QStringLiteral("hasCompleteProjectPoseCameras")));
     EXPECT_TRUE(source.contains(QStringLiteral(
-        "sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectMetaCameras")));
+        "sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectPoseCameras")));
+    EXPECT_TRUE(source.contains(QStringLiteral("projectCameraMetaHasUsablePose")));
+    EXPECT_TRUE(source.contains(QStringLiteral("pose_initialized_as_identity")));
     EXPECT_TRUE(source.contains(QStringLiteral("projectImageMetaByPath(opts.projectMeta, true)")));
     EXPECT_TRUE(source.contains(QStringLiteral("使用项目元数据已知外参初值模式")));
     EXPECT_TRUE(source.contains(QStringLiteral("相机位姿参与全局 BA 微调")));
@@ -12273,8 +12372,70 @@ TEST(MatchViewerValidityTest, UsesFinalSparseTrackValidity)
     EXPECT_TRUE(dualSource.contains(QStringLiteral("emit matchValidityLoaded")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("const QColor inlierColor(0, 80, 255);")));
     EXPECT_TRUE(overlaySource.contains(QStringLiteral("const QColor outlierColor(255, 0, 0);")));
-    EXPECT_TRUE(dialogSource.contains(QStringLiteral("有效：%1 | 无效：%2")));
+    EXPECT_TRUE(dialogSource.contains(QStringLiteral("有效连接点：%1 | 无效匹配：%2")));
     EXPECT_TRUE(guiSources.contains(QStringLiteral("widgets/MatchValidityAnalyzer.cpp")));
+}
+
+TEST(MatchViewerValidityTest, IgnoresSparsePointsWithDuplicateImageObservations)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("imageA.png"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("imageB.png"));
+    const QString matchFile = QDir(tempDir.path()).filePath(QStringLiteral("imageA__imageB_lightglue.match"));
+    const QString sparseSidecar = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
+
+    QJsonObject matchSidecar;
+    matchSidecar.insert(QStringLiteral("feature_format_version"), 2);
+    matchSidecar.insert(QStringLiteral("image0_path"), imageA);
+    matchSidecar.insert(QStringLiteral("image0_name"), QStringLiteral("imageA"));
+    matchSidecar.insert(QStringLiteral("image1_path"), imageB);
+    matchSidecar.insert(QStringLiteral("image1_name"), QStringLiteral("imageB"));
+    matchSidecar.insert(QStringLiteral("matched_indices0"), QJsonArray{10, 11});
+    matchSidecar.insert(QStringLiteral("matched_indices1"), QJsonArray{20, 20});
+
+    QFile matchSidecarFile(matchFile + QStringLiteral(".json"));
+    ASSERT_TRUE(matchSidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    matchSidecarFile.write(QJsonDocument(matchSidecar).toJson(QJsonDocument::Compact));
+    matchSidecarFile.close();
+
+    QJsonArray duplicateObservations;
+    duplicateObservations.append(QJsonObject{
+        {QStringLiteral("image_path"), imageA},
+        {QStringLiteral("image_name"), QStringLiteral("imageA")},
+        {QStringLiteral("feature_idx"), 10}
+    });
+    duplicateObservations.append(QJsonObject{
+        {QStringLiteral("image_path"), imageA},
+        {QStringLiteral("image_name"), QStringLiteral("imageA")},
+        {QStringLiteral("feature_idx"), 11}
+    });
+    duplicateObservations.append(QJsonObject{
+        {QStringLiteral("image_path"), imageB},
+        {QStringLiteral("image_name"), QStringLiteral("imageB")},
+        {QStringLiteral("feature_idx"), 20}
+    });
+    QJsonObject sparseRoot;
+    sparseRoot.insert(QStringLiteral("points"), QJsonArray{
+        QJsonObject{{QStringLiteral("observations"), duplicateObservations}}
+    });
+
+    QFile sparseFile(sparseSidecar);
+    ASSERT_TRUE(sparseFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    sparseFile.write(QJsonDocument(sparseRoot).toJson(QJsonDocument::Compact));
+    sparseFile.close();
+
+    MatchValidityContext context;
+    context.sparseSidecarPaths = QStringList{sparseSidecar};
+    const MatchValidityResult result = analyzeMatchTrackValidity(matchFile, imageA, imageB, context);
+
+    ASSERT_TRUE(result.hasTrackValidity);
+    ASSERT_EQ(result.inlierMask.size(), 2);
+    EXPECT_FALSE(result.inlierMask.at(0));
+    EXPECT_FALSE(result.inlierMask.at(1));
+    EXPECT_EQ(result.validCount, 0);
+    EXPECT_EQ(result.invalidCount, 2);
 }
 
 TEST(MatchPairSelectorOverlapCandidatesTest, ListsOverlapPairsEvenWhenNoMatchFileExists)
@@ -12301,14 +12462,19 @@ TEST(MatchPairSelectorTrackValidityTest, ShowsMetashapeStyleCounts)
 
     EXPECT_TRUE(header.contains(QStringLiteral("bool hasTrackValidity = false;")));
     EXPECT_TRUE(source.contains(QStringLiteral("#include \"MatchValidityAnalyzer.h\"")));
-    EXPECT_TRUE(source.contains(QStringLiteral("headers << tr(\"图像\") << tr(\"总计\") << tr(\"有效\")")));
-    EXPECT_TRUE(source.contains(QStringLiteral("<< tr(\"无效\") << tr(\"最佳算法\") << tr(\"状态\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("headers << tr(\"图像\") << tr(\"原始匹配\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("<< tr(\"有效连接点\") << tr(\"无效匹配\")")));
+    EXPECT_TRUE(source.contains(QStringLiteral("<< tr(\"最佳算法\") << tr(\"状态\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("const MatchValidityContext validityContext")))
         << "Sparse-track sidecar discovery must be done once per selector scan, not once per table row.";
     EXPECT_TRUE(source.contains(QStringLiteral("analyzeMatchTrackValidity")));
     EXPECT_TRUE(source.contains(QStringLiteral("info.hasTrackValidity = true;")));
-    EXPECT_TRUE(source.contains(QStringLiteral("总计 %3，有效 %4，无效 %5")));
+    EXPECT_TRUE(source.contains(QStringLiteral("原始 %3，有效连接点 %4，无效匹配 %5")));
     EXPECT_TRUE(source.contains(QStringLiteral("已对齐")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const bool hasValidityStats = info.hasTrackValidity;")))
+        << "Metashape 风格的有效点必须来自空三后保留的 tie point，不能回退到两视图几何内点。";
+    EXPECT_FALSE(source.contains(QStringLiteral("info.hasTrackValidity || info.hasInlierStats")))
+        << "几何验证内点不是 Metashape View Matches 里的有效连接点。";
 }
 
 TEST(MatchPairSelectorResponsivenessTest, DefersHeavyMatchScanToBackgroundWorker)
@@ -12479,7 +12645,7 @@ TEST(MatchViewerVariantSwitchTest, ExposesCompactVariantComboAndReloadsSparseMat
     EXPECT_TRUE(source.contains(QStringLiteral("onVariantChanged")));
     EXPECT_TRUE(source.contains(QStringLiteral("_variantCombo->setVisible(_variantCombo->count() > 1)")));
     EXPECT_TRUE(source.contains(QStringLiteral("loadMatchPair(_imageA, _imageB, _matchFile)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("内点 %1 / 总 %2")));
+    EXPECT_TRUE(source.contains(QStringLiteral("几何内点 %1 / 原始 %2")));
 }
 
 TEST(MatchViewerResponsivenessTest, LimitsDefaultSparseRenderingWork)
@@ -12744,14 +12910,13 @@ TEST(DataTreeWidgetTest, ShowsTemporaryDroppedModelUntilCleared)
     for (int row = 0; row < model->rowCount(); ++row)
     {
         QStandardItem *item = model->item(row, 0);
-        if (item && item->text().startsWith(QStringLiteral("3D模型 (0)")))
+        if (item && item->text().startsWith(QStringLiteral("3D模型")))
         {
             foundClearedModelSection = true;
-            EXPECT_EQ(item->rowCount(), 0);
             break;
         }
     }
-    EXPECT_TRUE(foundClearedModelSection);
+    EXPECT_FALSE(foundClearedModelSection);
 }
 
 TEST(DataTreeWidgetTest, DoesNotShowPointOnlyModelRecordAsThreeDModel)
@@ -12799,9 +12964,81 @@ TEST(DataTreeWidgetTest, DoesNotShowPointOnlyModelRecordAsThreeDModel)
     ASSERT_EQ(denseSection->rowCount(), 1);
     EXPECT_EQ(denseSection->child(0, 1)->text(), QStringLiteral("/tmp/mvs_output/dense_cloud.ply"));
 
-    QStandardItem *modelSection = findSection(QStringLiteral("3D模型 (0)"));
-    ASSERT_NE(modelSection, nullptr);
-    EXPECT_EQ(modelSection->rowCount(), 0);
+    QStandardItem *modelSection = findSection(QStringLiteral("3D模型"));
+    EXPECT_EQ(modelSection, nullptr);
+}
+
+TEST(DataTreeWidgetTest, ShowsAlignedPhotoRatioAndHidesEmptySections)
+{
+    DataTreeWidget tree;
+
+    QJsonObject alignedCamera;
+    alignedCamera[QStringLiteral("C")] = QJsonArray{0.0, 0.0, 0.0};
+    alignedCamera[QStringLiteral("R")] = QJsonArray{1.0, 0.0, 0.0,
+                                                    0.0, 1.0, 0.0,
+                                                    0.0, 0.0, 1.0};
+
+    QJsonObject image0;
+    image0[QStringLiteral("path")] = QStringLiteral("/tmp/images/image_001.jpg");
+    image0[QStringLiteral("camera")] = alignedCamera;
+
+    QJsonObject image1;
+    image1[QStringLiteral("path")] = QStringLiteral("/tmp/images/image_002.jpg");
+
+    QJsonObject image2;
+    image2[QStringLiteral("path")] = QStringLiteral("/tmp/images/image_003.jpg");
+
+    QJsonObject atRecord;
+    atRecord[QStringLiteral("sparse_point_count")] = 1873;
+    atRecord[QStringLiteral("selected_images")] = QJsonArray{
+        QStringLiteral("/tmp/images/image_002.jpg")
+    };
+    atRecord[QStringLiteral("files")] = QJsonObject{
+        {QStringLiteral("sparse_cloud_xyz"), QStringLiteral("/tmp/sfm/sparse.xyz")}
+    };
+
+    QJsonObject reportRecord;
+    reportRecord[QStringLiteral("path")] = QStringLiteral("/tmp/reports/quality.json");
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray{image0, image1, image2};
+    meta[QStringLiteral("aerial_triangulation_results")] = QJsonArray{atRecord};
+    meta[QStringLiteral("depth_map_results")] = QJsonArray{
+        QJsonObject{{QStringLiteral("result_type"), QStringLiteral("mvs_depth")}}
+    };
+    meta[QStringLiteral("dense_cloud_results")] = QJsonArray{QJsonObject{}};
+    meta[QStringLiteral("model_results")] = QJsonArray{QJsonObject{}};
+    meta[QStringLiteral("dem_results")] = QJsonArray{QJsonObject{}};
+    meta[QStringLiteral("ortho_results")] = QJsonArray{QJsonObject{}};
+    meta[QStringLiteral("reference_datasets")] = QJsonArray{QJsonObject{}};
+    meta[QStringLiteral("report_results")] = QJsonArray{reportRecord};
+    tree.loadFromJson(meta);
+
+    auto *view = tree.findChild<QTreeView *>();
+    ASSERT_NE(view, nullptr);
+    auto *model = qobject_cast<QStandardItemModel *>(view->model());
+    ASSERT_NE(model, nullptr);
+
+    QStringList sections;
+    for (int row = 0; row < model->rowCount(); ++row)
+    {
+        QStandardItem *item = model->item(row, 0);
+        if (item)
+        {
+            sections.append(item->text());
+        }
+    }
+
+    EXPECT_TRUE(sections.contains(QStringLiteral("照片 (2/3 对齐)")));
+    EXPECT_TRUE(sections.contains(QStringLiteral("连接点 (1873)")));
+    EXPECT_TRUE(sections.contains(QStringLiteral("报告 (1)")));
+    EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("观测网络")));
+    EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("深度图")));
+    EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("稠密点云")));
+    EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("3D模型")));
+    EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("DEM")));
+    EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("正射影像")));
+    EXPECT_FALSE(sections.join(QLatin1Char('|')).contains(QStringLiteral("参考数据")));
 }
 
 TEST(ProjectMetadataOperationsTest, ResolveLatestDenseCloudPrefersCleanedProductionCloudForMeshing)
@@ -13039,7 +13276,7 @@ TEST(DataTreeWidgetTest, ResourceRowsAreSortedByFileNameAscending)
         return nullptr;
     };
 
-    QStandardItem *photoSection = findSection(QStringLiteral("照片 (3)"));
+    QStandardItem *photoSection = findSection(QStringLiteral("照片 (0/3 对齐)"));
     ASSERT_NE(photoSection, nullptr);
     ASSERT_EQ(photoSection->rowCount(), 3);
     EXPECT_EQ(photoSection->child(0, 0)->text(), QStringLiteral("image_001.jpg"));
@@ -13694,7 +13931,7 @@ TEST(ProjectReferenceDatasetsTest, QualityReportAlignsUnpairedReferenceCloudByNe
     ASSERT_TRUE(result.saved) << result.errorMessage.toStdString();
     EXPECT_TRUE(result.record.value(QStringLiteral("cloud_difference_available")).toBool());
     EXPECT_EQ(result.record.value(QStringLiteral("cloud_alignment_method")).toString(),
-              QStringLiteral("nearest_neighbor_translation"));
+              QStringLiteral("nearest_neighbor_icp"));
     EXPECT_EQ(result.record.value(QStringLiteral("cloud_pair_count")).toInt(), 4);
     EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_scale")).toDouble(), 1.0, 1e-9);
     EXPECT_NEAR(result.record.value(QStringLiteral("cloud_alignment_tx_m")).toDouble(), 10.0, 1e-9);
@@ -13942,7 +14179,7 @@ TEST(DataTreeWidgetTest, SelectionClickDoesNotActivateImageUntilItemActivation)
     for (int row = 0; row < model->rowCount(); ++row)
     {
         QStandardItem *item = model->item(row, 0);
-        if (item && item->text().startsWith(QStringLiteral("照片 (1)")))
+        if (item && item->text().startsWith(QStringLiteral("照片 (0/1 对齐)")))
         {
             photoSection = item;
             break;
@@ -14160,6 +14397,17 @@ TEST(CameraModel3DDialogTest, UsesCameraToWorldRotationWithoutTransposeForFrustu
     const QString combined = dialogSource + workspaceSource;
     EXPECT_FALSE(combined.contains(QStringLiteral("pose.rotation = rot.transposed();")));
     EXPECT_TRUE(combined.contains(QStringLiteral("pose.rotation = rot;")));
+}
+
+TEST(CameraModel3DDialogTest, CameraPhotoPlanesUseQuadTransformInsteadOfBoundingRect)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("drawImageOnCameraPlane")));
+    EXPECT_TRUE(source.contains(QStringLiteral("QTransform::quadToQuad")));
+    EXPECT_TRUE(source.contains(QStringLiteral("sourceQuad << QPointF(float(image.width()), 0.0f)")));
+    EXPECT_FALSE(source.contains(QStringLiteral("drawImage(imagePlane.boundingRect()")));
 }
 
 TEST(CameraModel3DDialogTest, LargeBinaryPlyLoadsAsBoundedStreamingPreview)
@@ -14441,9 +14689,13 @@ TEST(VocabularyOverlapDialogTest, DefaultsToSiftInsteadOfLegacyDsk)
 
     EXPECT_TRUE(source.contains(QStringLiteral("QStringLiteral(\"SIFT (.sift)\")")));
     EXPECT_TRUE(source.contains(QStringLiteral("inferPreferredFeatureSuffix")));
+    EXPECT_TRUE(source.contains(QStringLiteral("resolvePreferredFeatureSuffix")))
+        << "恢复旧对话框设置时必须校验项目已有特征，不能继续强制使用已保存的 .dsk。";
     EXPECT_TRUE(source.contains(QStringLiteral("QStringLiteral(\".sift\")")))
         << "词汇树重叠对规划没有已有特征时应默认 SIFT，而不是旧 DISK .dsk。";
     EXPECT_FALSE(source.contains(QStringLiteral("return suffix.isEmpty() ? QStringLiteral(\".dsk\") : suffix;")));
+    EXPECT_FALSE(source.contains(
+        QStringLiteral("settings.value(QStringLiteral(\"feature_suffix\")).toString(defaultFeatureSuffix())")));
 }
 
 TEST(VocabularyOverlapDialogTest, RetrievalRunsAsynchronously)

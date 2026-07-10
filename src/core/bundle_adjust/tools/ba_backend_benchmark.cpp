@@ -176,6 +176,13 @@ void runCase(const char *name,
               << ",native_pcg_iterations=" << result.nativeCudaPcgIterations
               << ",native_linear_residual=" << result.nativeCudaLinearResidual
               << ",native_active_observations=" << result.nativeCudaActiveObservations
+              << ",native_upload_seconds=" << result.nativeCudaUploadSeconds
+              << ",native_kernel_seconds=" << result.nativeCudaKernelSeconds
+              << ",native_download_seconds=" << result.nativeCudaDownloadSeconds
+              << ",native_host_cost_seconds=" << result.nativeCudaHostCostSeconds
+              << ",native_device_select_seconds=" << result.nativeCudaDeviceSelectSeconds
+              << ",native_staging_seconds=" << result.nativeCudaStagingSeconds
+              << ",native_release_seconds=" << result.nativeCudaReleaseSeconds
               << ",setup_seconds=" << result.setupSeconds
               << ",solve_seconds=" << result.solveSeconds
               << ",total_seconds=" << result.totalSeconds

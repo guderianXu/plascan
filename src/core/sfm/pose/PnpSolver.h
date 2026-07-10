@@ -39,6 +39,10 @@ struct PnpOptions
     /// 最小内点比例
     double minInlierRatio = 0.25;
 
+    /// 是否允许低于 minInlierRatio 但绝对内点数足够的宽松通过。
+    /// 无相机增量 SfM 默认应关闭，避免弱约束位姿过早进入模型。
+    bool allowRelaxedInlierRatio = false;
+
     /// RANSAC 置信度
     double confidence = 0.999;
 };

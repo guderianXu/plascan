@@ -6,8 +6,11 @@
 #include <cuda_runtime_api.h>
 
 #include <algorithm>
+#include <chrono>
+#include <cstddef>
 #include <cmath>
 #include <cstdio>
+#include <type_traits>
 #include <vector>
 
 namespace xjw::detail::native_cuda
@@ -15,6 +18,27 @@ namespace xjw::detail::native_cuda
 
 namespace
 {
+
+using Clock = std::chrono::steady_clock;
+
+static_assert(std::is_standard_layout<HostObservation>::value, "HostObservation must be standard layout");
+static_assert(std::is_standard_layout<DeviceObservation>::value, "DeviceObservation must be standard layout");
+static_assert(sizeof(HostObservation) == sizeof(DeviceObservation), "Host/Device observation layout size mismatch");
+static_assert(offsetof(HostObservation, cameraIndex) == offsetof(DeviceObservation, cameraIndex),
+              "cameraIndex layout mismatch");
+static_assert(offsetof(HostObservation, pointIndex) == offsetof(DeviceObservation, pointIndex),
+              "pointIndex layout mismatch");
+static_assert(offsetof(HostObservation, u) == offsetof(DeviceObservation, u),
+              "u layout mismatch");
+static_assert(offsetof(HostObservation, v) == offsetof(DeviceObservation, v),
+              "v layout mismatch");
+static_assert(offsetof(HostObservation, weight) == offsetof(DeviceObservation, weight),
+              "weight layout mismatch");
+
+double elapsedSeconds(Clock::time_point start, Clock::time_point end)
+{
+    return std::chrono::duration<double>(end - start).count();
+}
 
 template <typename T>
 bool copyToDevice(const std::vector<T> &host, T **device, KernelRunSummary *summary, const char *label)
@@ -43,6 +67,40 @@ bool copyToDevice(const std::vector<T> &host, T **device, KernelRunSummary *summ
                       sizeof(summary->message),
                       "cudaMemcpy %s 失败: %s",
                       label,
+                      cudaGetErrorString(status));
+        cudaFree(*device);
+        *device = nullptr;
+        return false;
+    }
+    return true;
+}
+
+bool copyObservationsToDevice(const std::vector<HostObservation> &host,
+                              DeviceObservation **device,
+                              KernelRunSummary *summary)
+{
+    *device = nullptr;
+    if (host.empty())
+    {
+        return true;
+    }
+
+    cudaError_t status = cudaMalloc(reinterpret_cast<void **>(device), host.size() * sizeof(DeviceObservation));
+    if (status != cudaSuccess)
+    {
+        std::snprintf(summary->message,
+                      sizeof(summary->message),
+                      "cudaMalloc observations 失败: %s",
+                      cudaGetErrorString(status));
+        return false;
+    }
+
+    status = cudaMemcpy(*device, host.data(), host.size() * sizeof(DeviceObservation), cudaMemcpyHostToDevice);
+    if (status != cudaSuccess)
+    {
+        std::snprintf(summary->message,
+                      sizeof(summary->message),
+                      "cudaMemcpy observations 失败: %s",
                       cudaGetErrorString(status));
         cudaFree(*device);
         *device = nullptr;
@@ -108,10 +166,10 @@ bool projectHostDeviceCamera(const DeviceCamera &camera, const DevicePoint &poin
 
 double hostCost(const std::vector<DeviceCamera> &cameras,
                 const std::vector<DevicePoint> &points,
-                const std::vector<DeviceObservation> &observations)
+                const std::vector<HostObservation> &observations)
 {
     double cost = 0.0;
-    for (const DeviceObservation &observation : observations)
+    for (const HostObservation &observation : observations)
     {
         const DeviceCamera &camera = cameras[static_cast<size_t>(observation.cameraIndex)];
         const DevicePoint &point = points[static_cast<size_t>(observation.pointIndex)];
@@ -132,12 +190,18 @@ double hostCost(const std::vector<DeviceCamera> &cameras,
 void freeDeviceBuffers(DeviceCamera *cameras,
                        DevicePoint *points,
                        DeviceObservation *observations,
-                       int *acceptedIterations)
+                       int *acceptedIterations,
+                       KernelRunSummary *summary)
 {
+    const auto releaseStart = Clock::now();
     cudaFree(cameras);
     cudaFree(points);
     cudaFree(observations);
     cudaFree(acceptedIterations);
+    if (summary)
+    {
+        summary->releaseSeconds += elapsedSeconds(releaseStart, Clock::now());
+    }
 }
 
 } // namespace
@@ -162,7 +226,9 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
         return summary;
     }
 
+    const auto deviceSelectStart = Clock::now();
     const cudaError_t setDeviceStatus = cudaSetDevice(deviceId);
+    summary.deviceSelectSeconds += elapsedSeconds(deviceSelectStart, Clock::now());
     if (setDeviceStatus != cudaSuccess)
     {
         std::snprintf(summary.message,
@@ -172,6 +238,7 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
         return summary;
     }
 
+    const auto stagingStart = Clock::now();
     std::vector<DeviceCamera> hostCameras;
     hostCameras.reserve(workset->cameras.size());
     for (const HostCamera &camera : workset->cameras)
@@ -185,25 +252,23 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     {
         hostPoints.push_back(makeDevicePoint(point));
     }
+    summary.stagingSeconds += elapsedSeconds(stagingStart, Clock::now());
 
-    std::vector<DeviceObservation> hostObservations;
-    hostObservations.reserve(workset->observations.size());
-    for (const HostObservation &observation : workset->observations)
-    {
-        hostObservations.push_back(makeDeviceObservation(observation));
-    }
-
-    summary.initialCost = hostCost(hostCameras, hostPoints, hostObservations);
+    auto hostCostStart = Clock::now();
+    summary.initialCost = hostCost(hostCameras, hostPoints, workset->observations);
+    summary.hostCostSeconds += elapsedSeconds(hostCostStart, Clock::now());
 
     DeviceCamera *deviceCameras = nullptr;
     DevicePoint *devicePoints = nullptr;
     DeviceObservation *deviceObservations = nullptr;
     int *deviceAcceptedIterations = nullptr;
+    const auto uploadStart = Clock::now();
     if (!copyToDevice(hostCameras, &deviceCameras, &summary, "cameras") ||
         !copyToDevice(hostPoints, &devicePoints, &summary, "points") ||
-        !copyToDevice(hostObservations, &deviceObservations, &summary, "observations"))
+        !copyObservationsToDevice(workset->observations, &deviceObservations, &summary))
     {
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+        summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
         return summary;
     }
 
@@ -211,20 +276,24 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
         cudaMalloc(reinterpret_cast<void **>(&deviceAcceptedIterations), hostPoints.size() * sizeof(int));
     if (setCudaError(&summary, status, "cudaMalloc acceptedIterations"))
     {
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+        summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
         return summary;
     }
 
     status = cudaMemset(deviceAcceptedIterations, 0, hostPoints.size() * sizeof(int));
     if (setCudaError(&summary, status, "cudaMemset acceptedIterations"))
     {
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+        summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
         return summary;
     }
+    summary.uploadSeconds += elapsedSeconds(uploadStart, Clock::now());
 
     const int pointCount = static_cast<int>(hostPoints.size());
     const int blockSize = 128;
     const int gridSize = (pointCount + blockSize - 1) / blockSize;
+    const auto kernelStart = Clock::now();
     optimizePointsKernel<<<gridSize, blockSize>>>(deviceCameras,
                                                   devicePoints,
                                                   deviceObservations,
@@ -236,24 +305,29 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
     status = cudaGetLastError();
     if (setCudaError(&summary, status, "native_cuda optimizePointsKernel"))
     {
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+        summary.kernelSeconds += elapsedSeconds(kernelStart, Clock::now());
+        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
         return summary;
     }
 
     status = cudaDeviceSynchronize();
     if (setCudaError(&summary, status, "cudaDeviceSynchronize"))
     {
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+        summary.kernelSeconds += elapsedSeconds(kernelStart, Clock::now());
+        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
         return summary;
     }
+    summary.kernelSeconds += elapsedSeconds(kernelStart, Clock::now());
 
+    const auto downloadStart = Clock::now();
     status = cudaMemcpy(hostPoints.data(),
                         devicePoints,
                         hostPoints.size() * sizeof(DevicePoint),
                         cudaMemcpyDeviceToHost);
     if (setCudaError(&summary, status, "cudaMemcpy points back"))
     {
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+        summary.downloadSeconds += elapsedSeconds(downloadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
         return summary;
     }
 
@@ -264,10 +338,12 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
                         cudaMemcpyDeviceToHost);
     if (setCudaError(&summary, status, "cudaMemcpy acceptedIterations back"))
     {
-        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+        summary.downloadSeconds += elapsedSeconds(downloadStart, Clock::now());
+        freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
         return summary;
     }
-    freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations);
+    summary.downloadSeconds += elapsedSeconds(downloadStart, Clock::now());
+    freeDeviceBuffers(deviceCameras, devicePoints, deviceObservations, deviceAcceptedIterations, &summary);
 
     for (size_t i = 0; i < hostPoints.size(); ++i)
     {
@@ -275,7 +351,9 @@ KernelRunSummary runNativeCudaBundleAdjust(Workset *workset,
         summary.acceptedSteps += acceptedIterations[i];
     }
 
-    summary.finalCost = hostCost(hostCameras, hostPoints, hostObservations);
+    hostCostStart = Clock::now();
+    summary.finalCost = hostCost(hostCameras, hostPoints, workset->observations);
+    summary.hostCostSeconds += elapsedSeconds(hostCostStart, Clock::now());
     summary.ok = true;
     summary.activeObservations = static_cast<int>(workset->observations.size());
     summary.pcgIterations = 0;

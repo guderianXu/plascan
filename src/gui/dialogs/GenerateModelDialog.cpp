@@ -3,6 +3,7 @@
 #include <QCheckBox>
 #include <QComboBox>
 #include <QDialogButtonBox>
+#include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
 #include <QHBoxLayout>
@@ -135,21 +136,22 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
 
     auto *regionGroup = new QGroupBox(tr("区域"), this);
     auto *regionForm = new QFormLayout(regionGroup);
-    auto *splitRegionCheck = new QCheckBox(tr("分割成区块"), regionGroup);
+    _splitRegionCheck = new QCheckBox(tr("分割成区块"), regionGroup);
     auto *coordinateLabel = new QLabel(tr("Local Coordinates (m)"), regionGroup);
-    auto *blockSizeLabel = new QLabel(tr("250"), regionGroup);
+    _blockSizeSpin = new QDoubleSpinBox(regionGroup);
+    _blockSizeSpin->setRange(1.0, 100000.0);
+    _blockSizeSpin->setDecimals(1);
+    _blockSizeSpin->setValue(250.0);
+    _blockSizeSpin->setSuffix(tr(" m"));
     auto *originLabel = new QLabel(tr("X: -5    Y: -5"), regionGroup);
-    auto *skipBoundaryCheck = new QCheckBox(tr("跳过边界外的块"), regionGroup);
-    splitRegionCheck->setEnabled(false);
+    _skipBoundaryBlocksCheck = new QCheckBox(tr("跳过边界外的块"), regionGroup);
     coordinateLabel->setEnabled(false);
-    blockSizeLabel->setEnabled(false);
     originLabel->setEnabled(false);
-    skipBoundaryCheck->setEnabled(false);
-    regionForm->addRow(QString(), splitRegionCheck);
+    regionForm->addRow(QString(), _splitRegionCheck);
     regionForm->addRow(tr("坐标系统:"), coordinateLabel);
-    regionForm->addRow(tr("区块大小 (米):"), blockSizeLabel);
+    regionForm->addRow(tr("区块大小 (米):"), _blockSizeSpin);
     regionForm->addRow(tr("网格原点:"), originLabel);
-    regionForm->addRow(QString(), skipBoundaryCheck);
+    regionForm->addRow(QString(), _skipBoundaryBlocksCheck);
     mainLayout->addWidget(regionGroup);
 
     _advancedToggle = new QToolButton(this);
@@ -178,10 +180,11 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     _depthFilterCombo->addItem(tr("禁用"), QStringLiteral("disabled"));
 
     _calculateColorsCheck = new QCheckBox(tr("计算顶点颜色"), _advancedContent);
-    _strictMasksCheck = new QCheckBox(tr("使用严格的体积掩摸"), _advancedContent);
+    _strictMasksCheck = new QCheckBox(tr("使用严格的体积掩模"), _advancedContent);
     _reuseDepthMapsCheck = new QCheckBox(tr("重用深度图"), _advancedContent);
     _replaceDefaultCheck = new QCheckBox(tr("要替换默认模型吗"), _advancedContent);
     _calculateColorsCheck->setChecked(true);
+    _reuseDepthMapsCheck->setChecked(true);
 
     advancedForm->addRow(tr("插值:"), _interpolationCombo);
     advancedForm->addRow(tr("深度过滤:"), _depthFilterCombo);
@@ -219,6 +222,14 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     connect(_faceCountCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &GenerateModelDialog::emitSettingsNow);
     connect(_saveEachStepCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
+    connect(_splitRegionCheck, &QCheckBox::toggled, this, [this]()
+    {
+        updateBlockControlsAvailability();
+        emitSettingsNow();
+    });
+    connect(_blockSizeSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &GenerateModelDialog::emitSettingsNow);
+    connect(_skipBoundaryBlocksCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
     connect(_interpolationCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
             this, &GenerateModelDialog::emitSettingsNow);
     connect(_depthFilterCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -320,6 +331,9 @@ QJsonObject GenerateModelDialog::collectSettings() const
         : QStringLiteral("Poisson Surface");
     settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
     settings[QStringLiteral("saveAfterEachStep")] = _saveEachStepCheck->isChecked();
+    settings[QStringLiteral("splitIntoBlocks")] = _splitRegionCheck->isChecked();
+    settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value();
+    settings[QStringLiteral("skipBoundaryBlocks")] = _skipBoundaryBlocksCheck->isChecked();
     settings[QStringLiteral("interpolation")] = _interpolationCombo->currentData().toString();
     settings[QStringLiteral("depthFiltering")] = _depthFilterCombo->currentData().toString();
     settings[QStringLiteral("calculateVertexColors")] = _calculateColorsCheck->isChecked();
@@ -332,6 +346,10 @@ QJsonObject GenerateModelDialog::collectSettings() const
         || sourceData == QStringLiteral("model"))
     {
         settings[QStringLiteral("denseCloudPath")] = sourcePath;
+    }
+    if (sourceData == QStringLiteral("depth_maps"))
+    {
+        settings[QStringLiteral("depthMapSourcePath")] = sourcePath;
     }
 
     return settings;
@@ -451,6 +469,7 @@ void GenerateModelDialog::updateAvailability()
     const QString note = candidate.value(QLatin1String(kNote)).toString();
     const bool hasCandidate = !sourceData.isEmpty();
 
+    updateBlockControlsAvailability();
     _okButton->setEnabled(hasCandidate && supported);
     if (!hasCandidate)
     {
@@ -467,6 +486,17 @@ void GenerateModelDialog::updateAvailability()
     _statusLabel->setText(note.isEmpty()
         ? tr("输出: 项目目录下的 model/products/model_from_mesh.ply")
         : note);
+}
+
+void GenerateModelDialog::updateBlockControlsAvailability()
+{
+    const QString sourceData = _sourceCombo->currentData().toString();
+    const bool blockCapable =
+        sourceData == QStringLiteral("depth_maps") || sourceData == QStringLiteral("point_cloud");
+
+    _splitRegionCheck->setEnabled(blockCapable);
+    _blockSizeSpin->setEnabled(blockCapable && _splitRegionCheck->isChecked());
+    _skipBoundaryBlocksCheck->setEnabled(blockCapable && _splitRegionCheck->isChecked());
 }
 
 void GenerateModelDialog::emitSettingsNow()

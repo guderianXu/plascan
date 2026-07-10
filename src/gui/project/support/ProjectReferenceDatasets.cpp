@@ -311,6 +311,12 @@ bool writePointCloudTransformJson(const QString &path,
     object[QStringLiteral("type")] = QStringLiteral("sim3_point_to_point");
     object[QStringLiteral("scale")] = transform.scale;
     object[QStringLiteral("translation")] = translation;
+    QJsonArray rotation;
+    for (double value : transform.rotation)
+    {
+        rotation.append(value);
+    }
+    object[QStringLiteral("rotation")] = rotation;
 
     QDir().mkpath(QFileInfo(path).absolutePath());
     QFile file(path);

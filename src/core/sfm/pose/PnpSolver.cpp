@@ -3,6 +3,7 @@
 #include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
+#include <algorithm>
 #include <cmath>
 
 namespace xjw
@@ -51,8 +52,19 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
         return result;
     }
 
-    double inlierRatio = static_cast<double>(inliers.rows) / static_cast<double>(n);
-    if (inlierRatio < options.minInlierRatio)
+    const double inlierRatio = static_cast<double>(inliers.rows) / static_cast<double>(n);
+    result.numInliers = inliers.rows;
+    result.inlierRatio = inlierRatio;
+
+    // 无相机先验的环拍数据里，候选 2D-3D 对应常混入大量外点。
+    // 此时不能只按比例拒绝，只要 RANSAC 给出足够绝对内点且比例不至于过低，
+    // 后续三角化和 BA 还能继续做几何约束。
+    constexpr double kRelaxedMinInlierRatio = 0.10;
+    const int relaxedAbsoluteMinInliers = std::max(options.minNumInliers, 15);
+    const bool passesConfiguredRatio = inlierRatio >= options.minInlierRatio;
+    const bool passesAbsoluteSupport = options.allowRelaxedInlierRatio &&
+        inliers.rows >= relaxedAbsoluteMinInliers && inlierRatio >= kRelaxedMinInlierRatio;
+    if (!passesConfiguredRatio && !passesAbsoluteSupport)
     {
         return result;
     }
@@ -94,9 +106,6 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
         }
         result.C[i] = C_cv.at<double>(i, 0);
     }
-
-    result.numInliers = inliers.rows;
-    result.inlierRatio = inlierRatio;
 
     // 构建完整内点掩码
     result.inlierMask.resize(n, 0);

@@ -1,5 +1,6 @@
 #include "ModelWorkflowService.h"
 
+#include "DepthMapMeshBuilder.h"
 #include "SurfaceReconstructor.h"
 #include "io/PathIO.h"
 
@@ -8,6 +9,7 @@
 #include <QFileInfo>
 #include <QTextStream>
 
+#include <algorithm>
 #include <cmath>
 
 namespace xjw::mesh::workflow
@@ -67,6 +69,160 @@ int meshResolutionFromSettings(const QJsonObject &settings)
     const int octreeDepth = settings.value(QStringLiteral("octreeDepth")).toInt(10);
     const int depth = qBound(4, octreeDepth, 14);
     return qBound(64, 1 << (depth - 2), 1024);
+}
+
+xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings)
+{
+    xjw::mesh::ReconstructionConfig config;
+
+    const QString surfaceType =
+        settings.value(QStringLiteral("surface_type")).toString(QStringLiteral("arbitrary_3d"));
+    config.resolution = meshResolutionFromSettings(settings);
+    config.smoothIterations = qBound(0, settings.value(QStringLiteral("smoothIter")).toInt(3), 50);
+    config.smoothLambda = 0.5f;
+    config.padding = 0.05f;
+    config.forcePoisson =
+        surfaceType != QStringLiteral("height_field") &&
+        settings.value(QStringLiteral("method"))
+            .toString(QStringLiteral("Poisson Surface"))
+            .contains(QStringLiteral("Poisson"), Qt::CaseInsensitive);
+    config.poissonDepth = qBound(7, settings.value(QStringLiteral("octreeDepth")).toInt(10), 12);
+    config.poissonThreads = qBound(1, settings.value(QStringLiteral("threads")).toInt(8), 128);
+
+    const double pointWeight =
+        settings.value(QStringLiteral("poissonPointWeight")).toDouble(config.poissonPointWeight);
+    config.poissonPointWeight = std::clamp(static_cast<float>(pointWeight), 0.0f, 8.0f);
+
+    const double poissonTrim = settings.value(QStringLiteral("poissonTrim")).toDouble(config.poissonTrim);
+    config.poissonTrim = std::clamp(static_cast<float>(poissonTrim), 0.0f, 12.0f);
+
+    const QString interpolation =
+        settings.value(QStringLiteral("interpolation")).toString(QStringLiteral("enabled"));
+    config.fillHoles = interpolation != QStringLiteral("disabled") &&
+                       settings.value(QStringLiteral("holeFill")).toBool(true);
+    if (interpolation == QStringLiteral("extrapolated"))
+    {
+        config.holeFillPasses = std::max(16, holeFillPassesFromArea(
+            settings.value(QStringLiteral("maxHoleSize")).toDouble(400.0)));
+    }
+    else
+    {
+        config.holeFillPasses =
+            holeFillPassesFromArea(settings.value(QStringLiteral("maxHoleSize")).toDouble(100.0));
+    }
+
+    config.cleanSmallComponents = settings.value(QStringLiteral("cleanSmall")).toBool(true);
+    config.minComponentFaces = qBound(2, settings.value(QStringLiteral("minFaces")).toInt(100), 100000);
+
+    const QString qualityProfile = settings.contains(QStringLiteral("qualityProfile"))
+        ? settings.value(QStringLiteral("qualityProfile")).toString()
+        : QStringLiteral("balanced");
+    const QString quality = settings.value(QStringLiteral("quality")).toString();
+    const QString voxelDensity = settings.value(QStringLiteral("voxelDensity")).toString(QStringLiteral("medium"));
+
+    if (qualityProfile == QStringLiteral("detail"))
+    {
+        config.resolution = std::max(config.resolution, quality == QStringLiteral("ultra") ? 384 : 320);
+        config.poissonDepth = std::max(config.poissonDepth, quality == QStringLiteral("ultra") ? 11 : 10);
+        config.poissonPointWeight = std::max(config.poissonPointWeight, 4.8f);
+        config.poissonTrim = std::max(config.poissonTrim, 9.0f);
+        config.simplifyTargetFaces = std::max(config.simplifyTargetFaces, 65000);
+        config.enableDownsample = false;
+        config.voxelSimplifyFactor = 1.15f;
+        config.kNormals = std::max(config.kNormals, 18);
+        config.smoothIterations = std::max(0, config.smoothIterations - 1);
+        config.smoothLambda = 0.36f;
+    }
+    else if (qualityProfile == QStringLiteral("lite"))
+    {
+        config.resolution = std::min(config.resolution, 224);
+        config.poissonDepth = std::min(config.poissonDepth, 9);
+        config.poissonPointWeight = std::min(config.poissonPointWeight, 3.2f);
+        config.poissonTrim = std::min(config.poissonTrim, 8.4f);
+        config.simplifyTargetFaces = 16000;
+        config.enableDownsample = true;
+        config.downsampleVoxelScale = 1.0f;
+        config.voxelSimplifyFactor = 2.5f;
+        config.smoothIterations = std::min(3, config.smoothIterations + 1);
+        config.smoothLambda = 0.55f;
+    }
+    else if (voxelDensity == QStringLiteral("coarse"))
+    {
+        config.voxelSimplifyFactor = 2.6f;
+        config.enableDownsample = true;
+        config.downsampleVoxelScale = 1.0f;
+        config.poissonPointWeight = std::min(config.poissonPointWeight, 3.6f);
+        config.simplifyTargetFaces = 14000;
+    }
+    else if (voxelDensity == QStringLiteral("fine"))
+    {
+        config.voxelSimplifyFactor = 1.25f;
+        config.enableDownsample = false;
+        config.denoiseStdMul = 1.8f;
+        config.kNormals = 18;
+        config.poissonPointWeight = std::max(config.poissonPointWeight, 4.6f);
+        config.poissonTrim = std::max(8.0f, config.poissonTrim);
+        config.simplifyTargetFaces = 60000;
+    }
+    else
+    {
+        config.voxelSimplifyFactor = 1.8f;
+        config.enableDownsample = true;
+        config.downsampleVoxelScale = 0.8f;
+        config.simplifyTargetFaces = 28000;
+    }
+
+    const int targetFaces =
+        settings.value(QStringLiteral("simplifyTargetFaces"))
+            .toInt(settings.value(QStringLiteral("targetFaces")).toInt(0));
+    if (targetFaces > 0)
+    {
+        config.simplifyTargetFaces = qBound(1000, targetFaces, 2000000);
+    }
+    else if (settings.contains(QStringLiteral("targetFaces")))
+    {
+        config.simplifyTargetFaces = 0;
+    }
+
+    const QString depthFiltering =
+        settings.value(QStringLiteral("depthFiltering")).toString(QStringLiteral("moderate"));
+    if (depthFiltering == QStringLiteral("disabled"))
+    {
+        config.enableDenoise = false;
+    }
+    else if (depthFiltering == QStringLiteral("mild"))
+    {
+        config.enableDenoise = true;
+        config.denoiseK = 16;
+        config.denoiseStdMul = std::max(config.denoiseStdMul, 1.6f);
+    }
+    else if (depthFiltering == QStringLiteral("aggressive"))
+    {
+        config.enableDenoise = true;
+        config.denoiseK = std::max(config.denoiseK, 28);
+        config.denoiseStdMul = std::min(config.denoiseStdMul, 0.95f);
+    }
+    else
+    {
+        config.enableDenoise = true;
+        config.denoiseK = std::max(config.denoiseK, 20);
+        config.denoiseStdMul = std::min(config.denoiseStdMul, 1.25f);
+    }
+
+    const bool decimate = settings.value(QStringLiteral("decimate")).toBool(false);
+    if (decimate && config.simplifyTargetFaces > 0)
+    {
+        const double decimateRatio =
+            std::clamp(settings.value(QStringLiteral("decimateRatio")).toDouble(0.5), 0.05, 1.0);
+        config.simplifyTargetFaces =
+            std::max(1000, static_cast<int>(std::lround(config.simplifyTargetFaces * decimateRatio)));
+        config.enableDownsample = true;
+        config.voxelSimplifyFactor =
+            std::max(config.voxelSimplifyFactor, static_cast<float>(1.0 / decimateRatio));
+    }
+
+    config.verbose = false;
+    return config;
 }
 
 int holeFillPassesFromArea(double maxHoleArea)
@@ -243,6 +399,53 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
 
     assignFinalModelFields(&result.payload, request.exportObj);
     result.ok = true;
+    return result;
+}
+
+WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
+{
+    WorkflowResult result;
+    if (request.depthMapSourcePath.trimmed().isEmpty())
+    {
+        result.errorMessage = QStringLiteral("深度图源路径为空");
+        return result;
+    }
+
+    QString resolveError;
+    const QString densePath =
+        xjw::mesh::DepthMapMeshBuilder::resolveReusableDenseCloud(request.depthMapSourcePath, &resolveError);
+    if (densePath.isEmpty())
+    {
+        const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
+        if (frames.isEmpty())
+        {
+            result.errorMessage = QStringLiteral("未找到可用于生成模型的深度图文件");
+            return result;
+        }
+
+        result.errorMessage = QStringLiteral(
+            "缺少深度图 metadata，无法从 raw depth 直接恢复相机、尺寸和尺度；"
+            "请重新运行深度图估计或先执行深度图融合。");
+        return result;
+    }
+
+    MeshBuildRequest meshRequest;
+    meshRequest.pointCloudPath = densePath;
+    meshRequest.outputRoot = request.outputRoot.isEmpty()
+        ? QFileInfo(densePath).absolutePath()
+        : request.outputRoot;
+    meshRequest.reconstruction = request.reconstruction;
+    meshRequest.exportObj = request.exportObj;
+    meshRequest.texture = request.texture;
+    meshRequest.progress = request.progress;
+
+    result = buildMeshAndOptionalTexture(meshRequest);
+    if (result.ok)
+    {
+        result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
+        result.payload[QStringLiteral("source_point_cloud_path")] = densePath;
+        result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    }
     return result;
 }
 
