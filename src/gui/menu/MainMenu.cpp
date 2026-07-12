@@ -21,6 +21,7 @@
 #include <QFileInfo>
 #include <QIcon>
 #include <QPainter>
+#include <QPainterPath>
 #include <QPaintEvent>
 #include <QPixmap>
 #include <QPolygonF>
@@ -110,6 +111,47 @@ protected:
     {
         QToolButton::leaveEvent(event);
         update();
+    }
+};
+
+class ToolbarIconButton : public QToolButton
+{
+public:
+    explicit ToolbarIconButton(QWidget *parent = nullptr)
+        : QToolButton(parent)
+    {
+        setAutoRaise(true);
+        setToolButtonStyle(Qt::ToolButtonIconOnly);
+        setFocusPolicy(Qt::NoFocus);
+        setIconSize(QSize(44, 44));
+        setFixedSize(QSize(48, 48));
+    }
+
+protected:
+    void paintEvent(QPaintEvent *event) override
+    {
+        Q_UNUSED(event)
+
+        QPainter painter(this);
+        painter.setRenderHint(QPainter::Antialiasing, true);
+        const bool active = isDown() || underMouse();
+        const QColor background = isEnabled()
+            ? (active ? QColor(238, 243, 248) : QColor(248, 250, 252))
+            : QColor(238, 242, 246);
+        const QColor border = active ? QColor(200, 212, 224) : QColor(214, 221, 231);
+        painter.setPen(QPen(border, 1.0));
+        painter.setBrush(background);
+        painter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 3.0, 3.0);
+
+        QRect iconRect = rect();
+        iconRect.adjust(2, 2, -2, -2);
+        const QSize drawSize(qMin(iconSize().width(), iconRect.width()),
+                             qMin(iconSize().height(), iconRect.height()));
+        const QPoint iconTopLeft(iconRect.left() + (iconRect.width() - drawSize.width()) / 2,
+                                 iconRect.top() + (iconRect.height() - drawSize.height()) / 2);
+        const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
+        const QPixmap pixmap = icon().pixmap(drawSize, mode, QIcon::Off);
+        painter.drawPixmap(iconTopLeft, pixmap);
     }
 };
 
@@ -277,6 +319,56 @@ QIcon makeCameraImageToolbarIcon()
 
     const QRectF imageSunRect(36.0, 15.0, 7.0, 7.0);
     painter.drawEllipse(imageSunRect);
+
+    return QIcon(pixmap);
+}
+
+QIcon makeImageRotationToolbarIcon(bool rotateLeft)
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor iconColor(126, 131, 136);
+    painter.setPen(QPen(iconColor, 3.5, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+
+    QPainterPath arrowPath;
+    if (rotateLeft)
+    {
+        arrowPath.moveTo(49.0, 18.0);
+        arrowPath.cubicTo(44.0, 1.0, 12.0, 1.0, 7.0, 18.0);
+    }
+    else
+    {
+        arrowPath.moveTo(7.0, 18.0);
+        arrowPath.cubicTo(12.0, 1.0, 44.0, 1.0, 49.0, 18.0);
+    }
+    painter.drawPath(arrowPath);
+
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(iconColor);
+    QPolygonF arrowHead;
+    if (rotateLeft)
+    {
+        arrowHead << QPointF(7.0, 20.0) << QPointF(1.0, 9.0) << QPointF(19.0, 13.0);
+    }
+    else
+    {
+        arrowHead << QPointF(49.0, 20.0) << QPointF(37.0, 13.0) << QPointF(55.0, 9.0);
+    }
+    painter.drawPolygon(arrowHead);
+
+    painter.drawRoundedRect(QRectF(4.0, 22.0, 48.0, 33.0), 2.5, 2.5);
+    painter.setBrush(QColor(218, 221, 224));
+    painter.drawRect(QRectF(9.0, 27.0, 38.0, 23.0));
+    painter.setBrush(iconColor);
+    QPolygonF mountain;
+    mountain << QPointF(9.0, 50.0) << QPointF(20.0, 34.0)
+             << QPointF(28.0, 43.0) << QPointF(35.0, 37.0) << QPointF(47.0, 50.0);
+    painter.drawPolygon(mountain);
+    painter.drawEllipse(QRectF(38.0, 29.0, 6.0, 6.0));
 
     return QIcon(pixmap);
 }
@@ -562,11 +654,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
         if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
         {
-            _toolBar->insertWidget(_manualPointCloudPruneAct, button);
+            _cameraToolbarWidgetAct = _toolBar->insertWidget(_manualPointCloudPruneAct, button);
         }
         else
         {
-            _toolBar->addWidget(button);
+            _cameraToolbarWidgetAct = _toolBar->addWidget(button);
         }
     };
 
@@ -608,12 +700,50 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
         if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
         {
-            _toolBar->insertWidget(_manualPointCloudPruneAct, button);
+            _cameraImageToolbarWidgetAct = _toolBar->insertWidget(_manualPointCloudPruneAct, button);
         }
         else
         {
-            _toolBar->addWidget(button);
+            _cameraImageToolbarWidgetAct = _toolBar->addWidget(button);
         }
+    };
+
+    auto installImageRotationToolbarButtons = [this]()
+    {
+        if (!_toolBar || !_rotateImageLeftAct || !_rotateImageRightAct)
+        {
+            return;
+        }
+
+        auto installButton = [this](QAction *action,
+                                    const QString &objectName,
+                                    QAction *&toolbarWidgetAction)
+        {
+            if (_toolBar->findChild<QToolButton *>(objectName))
+            {
+                return;
+            }
+
+            auto *button = new ToolbarIconButton(_toolBar);
+            button->setObjectName(objectName);
+            button->setDefaultAction(action);
+
+            if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
+            {
+                toolbarWidgetAction = _toolBar->insertWidget(_manualPointCloudPruneAct, button);
+            }
+            else
+            {
+                toolbarWidgetAction = _toolBar->addWidget(button);
+            }
+        };
+
+        installButton(_rotateImageLeftAct,
+                      QStringLiteral("toolButtonRotateImageLeft"),
+                      _rotateImageLeftToolbarWidgetAct);
+        installButton(_rotateImageRightAct,
+                      QStringLiteral("toolButtonRotateImageRight"),
+                      _rotateImageRightToolbarWidgetAct);
     };
 
     if (findNamedChild<QAction>(_mainWindow, "actionNewProject"))
@@ -637,6 +767,27 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _zoomInAct = findNamedChild<QAction>(_mainWindow, "actionZoomIn");
         _zoomOutAct = findNamedChild<QAction>(_mainWindow, "actionZoomOut");
         _resetViewAct = findNamedChild<QAction>(_mainWindow, "actionResetView");
+        QObject *rotationActionParent = viewMenu
+            ? static_cast<QObject *>(viewMenu)
+            : static_cast<QObject *>(_mainWindow);
+        _rotateImageLeftAct = ensurePlainAction(_mainWindow,
+                                                rotationActionParent,
+                                                viewMenu,
+                                                QStringLiteral("actionRotateImageLeft"),
+                                                tr("向左旋转"),
+                                                _zoomInAct);
+        _rotateImageRightAct = ensurePlainAction(_mainWindow,
+                                                 rotationActionParent,
+                                                 viewMenu,
+                                                 QStringLiteral("actionRotateImageRight"),
+                                                 tr("向右旋转"),
+                                                 _zoomInAct);
+        _rotateImageLeftAct->setToolTip(tr("向左旋转"));
+        _rotateImageRightAct->setToolTip(tr("向右旋转"));
+        _rotateImageLeftAct->setIcon(makeImageRotationToolbarIcon(true));
+        _rotateImageRightAct->setIcon(makeImageRotationToolbarIcon(false));
+        _rotateImageLeftAct->setEnabled(false);
+        _rotateImageRightAct->setEnabled(false);
         _toggleGizmoAct = findNamedChild<QAction>(_mainWindow, "actionToggleGizmo");
         _toggleCamerasAct = findNamedChild<QAction>(_mainWindow, "actionToggleCameras");
         _toggleHenanUniversityBrandAct =
@@ -1031,6 +1182,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
         installCameraToolbarButton();
         installCameraImageToolbarButton();
+        installImageRotationToolbarButtons();
+        setContextualToolbarVisibility(true, false);
 
         return;
     }
@@ -1056,6 +1209,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
 
     // ---- 视图菜单 ----
     auto *viewMenu = _mainWindow->menuBar()->addMenu(tr("视图"));
+    _rotateImageLeftAct = viewMenu->addAction(makeImageRotationToolbarIcon(true), tr("向左旋转"));
+    _rotateImageRightAct = viewMenu->addAction(makeImageRotationToolbarIcon(false), tr("向右旋转"));
+    _rotateImageLeftAct->setObjectName(QStringLiteral("actionRotateImageLeft"));
+    _rotateImageRightAct->setObjectName(QStringLiteral("actionRotateImageRight"));
+    _rotateImageLeftAct->setToolTip(tr("向左旋转"));
+    _rotateImageRightAct->setToolTip(tr("向右旋转"));
+    _rotateImageLeftAct->setEnabled(false);
+    _rotateImageRightAct->setEnabled(false);
     _zoomInAct    = viewMenu->addAction(tr("放大"));
     _zoomOutAct   = viewMenu->addAction(tr("缩小"));
     _resetViewAct = viewMenu->addAction(tr("重置视图"));
@@ -1275,11 +1436,39 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
         installCameraToolbarButton();
         installCameraImageToolbarButton();
+        installImageRotationToolbarButtons();
+        setContextualToolbarVisibility(true, false);
     }
 }
 
 /** @brief 析构函数（默认实现，所有成员由 Qt 对象树释放）。 */
 MainMenu::~MainMenu() = default;
+
+void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImageTools)
+{
+    if (!_toolBar)
+    {
+        return;
+    }
+
+    auto setButtonVisible = [this](QAction *toolbarAction, bool visible)
+    {
+        if (!toolbarAction)
+        {
+            return;
+        }
+        toolbarAction->setVisible(visible);
+        if (QWidget *widget = _toolBar->widgetForAction(toolbarAction))
+        {
+            widget->setVisible(visible);
+        }
+    };
+
+    setButtonVisible(_cameraToolbarWidgetAct, showModelTools);
+    setButtonVisible(_cameraImageToolbarWidgetAct, showModelTools);
+    setButtonVisible(_rotateImageLeftToolbarWidgetAct, showImageTools);
+    setButtonVisible(_rotateImageRightToolbarWidgetAct, showImageTools);
+}
 
 // ============================================================
 //  最近打开子菜单的动态重建
@@ -1341,6 +1530,8 @@ QAction *MainMenu::exitAction() const { return _exitAct; }
 QAction *MainMenu::zoomInAction() const    { return _zoomInAct; }
 QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }
 QAction *MainMenu::resetViewAction() const { return _resetViewAct; }
+QAction *MainMenu::rotateImageLeftAction() const { return _rotateImageLeftAct; }
+QAction *MainMenu::rotateImageRightAction() const { return _rotateImageRightAct; }
 QAction *MainMenu::toggleGizmoAction() const { return _toggleGizmoAct; }
 QAction *MainMenu::toggleCamerasAction() const { return _toggleCamerasAct; }
 QAction *MainMenu::toggleDependentCamerasAction() const { return _toggleDependentCamerasAct; }

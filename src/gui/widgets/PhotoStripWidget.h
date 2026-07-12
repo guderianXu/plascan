@@ -6,6 +6,7 @@
 #include <QJsonObject>
 #include <QList>
 #include <QSet>
+#include <QStringList>
 #include <QWidget>
 
 class QListWidget;
@@ -27,6 +28,10 @@ public slots:
 signals:
     void photoSelected(const QString &imagePath);
     void photoActivated(const QString &imagePath);
+    void generateMaskRequested(const QStringList &imagePaths);
+
+private slots:
+    void showPhotoContextMenu(const QPoint &position);
 
 private:
     struct ThumbnailResult
@@ -39,6 +44,7 @@ private:
     QListWidgetItem *createItem(const QJsonObject &entry);
     void startThumbnailLoad(const QString &imagePath);
     void applyThumbnail(const ThumbnailResult &result);
+    QStringList selectedPhotoPaths() const;
     QString resolveImagePath(const QString &imagePath) const;
     QString normalizedPath(const QString &imagePath) const;
     static ThumbnailResult loadThumbnail(const QString &imagePath, const QString &projectPath);

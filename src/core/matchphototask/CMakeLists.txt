@@ -24,6 +24,8 @@ add_library(matchphototask STATIC
     stages/GuidedMatchStage.h
     stages/MatchingStage.cpp
     stages/MatchingStage.h
+    stages/SiftLightGlueRecovery.cpp
+    stages/SiftLightGlueRecovery.h
     stages/TrackBuildStage.cpp
     stages/TrackBuildStage.h
     tie_points/TiePointTrackManager.cpp
@@ -59,6 +61,7 @@ target_link_libraries(matchphototask PUBLIC
     overlap
     feature_extractors_traditional
     feature_match_common
+    feature_match_traditional
     lightglue_matcher
     plascan_common_io
     sfm

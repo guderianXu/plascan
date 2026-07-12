@@ -28,6 +28,19 @@
 #include <QVector>
 #include <QGraphicsPixmapItem>
 #include "Logger.h"
+#include "ImageViewRotationSettings.h"
+
+namespace
+{
+
+bool isDepthMapPreviewPath(const QString &path)
+{
+    const QString fileName = QFileInfo(path).fileName();
+    return fileName.startsWith(QLatin1String("depth_"), Qt::CaseInsensitive)
+        && fileName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive);
+}
+
+} // namespace
 
 // CanvasWidget 实现：创建并持有一个 QGraphicsScene，作为渲染的起点
 
@@ -59,7 +72,8 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
     _currentFeatureOpts = opts;
     _layerRenderer->setFeatureDisplayOptions(opts);
     // Use the options' showPoints to control visibility: 当 opts.showPoints 为 true 时加载特征点，否则清除
-    if (opts.showPoints && !_currentImagePath.trimmed().isEmpty()) {
+    if (opts.showPoints && !_currentImagePath.trimmed().isEmpty()
+        && !isDepthMapPreviewPath(_currentImagePath)) {
         _layerRenderer->clearFeatureLayers();
         startSpLoadForImage(_currentImagePath);
     } else {
@@ -85,6 +99,12 @@ void CanvasWidget::showImage(const QString &path)
         return;
     }
 
+    _singleImageReady = false;
+    _viewRotationDegrees = 0;
+    _zoomFactor = 1.0;
+    resetTransform();
+    emit displayImageReadyChanged(false);
+
     // 清理旧覆盖层；影像图层在新影像加载完成后替换，避免磁盘解码期间界面空白。
     // NOTE: 不调用 scene()->clear() —— 那会使 QGraphicsScene 删除所有 items，
     // 导致 LayerRenderer 持有的指针变为悬空并在后续删除时造成双重释放。
@@ -95,7 +115,10 @@ void CanvasWidget::showImage(const QString &path)
 
     if (path.trimmed().isEmpty())
     {
+        _currentImagePath.clear();
         _layerRenderer->clear();
+        resetTransform();
+        _zoomFactor = 1.0;
         return;
     }
 
@@ -147,7 +170,14 @@ void CanvasWidget::showImage(const QString &path)
         {
             return;
         }
-        self->reloadMaskOverlay();
+        const bool isDepthMap = isDepthMapPreviewPath(loadedPath);
+        if (!isDepthMap)
+        {
+            self->reloadMaskOverlay();
+        }
+
+        self->_singleImageReady = true;
+        emit self->displayImageReadyChanged(true);
 
         // 通知外部当前活跃影像已变更（MainWindow 据此持久化状态）
         emit self->activeImageChanged(loadedPath);
@@ -161,9 +191,6 @@ void CanvasWidget::showImage(const QString &path)
 
         // 自动加载特征点（默认启用）
         // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
-        const QString fileName = QFileInfo(loadedPath).fileName();
-        const bool isDepthMap = fileName.startsWith(QLatin1String("depth_"), Qt::CaseInsensitive)
-                             && fileName.endsWith(QLatin1String(".png"), Qt::CaseInsensitive);
         if (!isDepthMap) {
             self->startSpLoadForImage(loadedPath);
         }
@@ -177,6 +204,12 @@ void CanvasWidget::showImage(const QString &path)
 void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile)
 {
     if (!scene() || !_layerRenderer) return;
+
+    _singleImageReady = false;
+    _viewRotationDegrees = 0;
+    _currentImagePath.clear();
+    emit displayImageReadyChanged(false);
+    resetTransform();
 
     LOG_DEBUG(QStringLiteral("showMatchedPair: imgA=%1 imgB=%2 match=%3").arg(imgA, imgB, matchFile));
 
@@ -642,6 +675,10 @@ void CanvasWidget::reloadMaskOverlay()
     {
         return;
     }
+    if (isDepthMapPreviewPath(_currentImagePath))
+    {
+        return;
+    }
 
     const QString projectPath = property("currentProjectPath").toString();
     const QString maskPath = ProjectIO::findMaskForImage(projectPath, _currentImagePath);
@@ -846,12 +883,55 @@ void CanvasWidget::zoomOut()
 
 void CanvasWidget::resetView()
 {
-    // 恢复为默认变换并居中场景
     resetTransform();
+    rotate(_viewRotationDegrees);
     _zoomFactor = 1.0;
     if (scene()) {
         fitInView(scene()->sceneRect(), Qt::KeepAspectRatio);
     }
+}
+
+void CanvasWidget::rotateLeft()
+{
+    if (!_singleImageReady)
+    {
+        return;
+    }
+
+    setViewRotationDegrees(_viewRotationDegrees - 90);
+    emit viewRotationChanged(_currentImagePath, _viewRotationDegrees);
+}
+
+void CanvasWidget::rotateRight()
+{
+    if (!_singleImageReady)
+    {
+        return;
+    }
+
+    setViewRotationDegrees(_viewRotationDegrees + 90);
+    emit viewRotationChanged(_currentImagePath, _viewRotationDegrees);
+}
+
+void CanvasWidget::setViewRotationDegrees(int degrees)
+{
+    const int normalized = xjw::gui::config::normalizeImageViewRotationDegrees(degrees);
+    if (normalized == _viewRotationDegrees)
+    {
+        return;
+    }
+
+    const int delta = normalized - _viewRotationDegrees;
+    _viewRotationDegrees = normalized;
+    if (!_singleImageReady)
+    {
+        return;
+    }
+
+    const QPoint viewportCenter = viewport()->rect().center();
+    const QPointF sceneCenter = mapToScene(viewportCenter);
+    rotate(delta);
+    centerOn(sceneCenter);
 }
 
 void CanvasWidget::wheelEvent(QWheelEvent *event)

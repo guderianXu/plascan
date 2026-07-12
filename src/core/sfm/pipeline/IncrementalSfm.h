@@ -29,6 +29,7 @@
 #include "Camera.h"
 
 #include <functional>
+#include <limits>
 #include <memory>
 #include <string>
 #include <unordered_set>
@@ -39,11 +40,20 @@ namespace xjw
 
 // ---- 选项 ----
 
+enum class SfmExecutionProfile
+{
+    FullRefinement,
+    CoarseEvaluation
+};
+
 /**
  * @brief 增量 SfM 全局选项。
  */
 struct IncrementalSfmOptions
 {
+    /// 正式精化或候选粗筛。粗筛会统一收紧高成本 BA 参数。
+    SfmExecutionProfile executionProfile = SfmExecutionProfile::FullRefinement;
+
     // --- 初始化选项 ---
     /// 初始像对最少匹配数
     int initMinNumMatches = 100;
@@ -69,10 +79,40 @@ struct IncrementalSfmOptions
     double knownPosePriorRotationSigmaDegrees = 2.0;
     /// 自动选择初始像对时的最大候选对数量（参考 COLMAP 多候选重试策略）
     int maxInitPairCandidates = 10;
+    /// 小型无相机数据集是否完整评估多个初始像对模型，避免第一个可初始化 seed 困在局部子图。
+    bool evaluateMultipleInitialPairModels = true;
+    /// 多初始模型评估只在图像数不超过该阈值时启用，避免大工程重复跑完整 SfM。
+    int multiInitialPairMaxImages = 32;
 
     // --- 注册选项 ---
     PnpOptions pnpOptions;
-
+    /// PnP 注册新影像时，3D 点至少需要的轨迹长度。无相机序列建议使用 3，
+    /// 避免大量两视点把新相机吸附到错误环段；注册影像少于 3 张时内部仍允许两视点启动模型。
+    int pnpMinTrackLength = 2;
+    /// 照片序列模式下，PnP 后检查相邻序号相机中心距离，避免闭环序列被错误跨接。
+    bool enforceSequencePoseConsistency = false;
+    /// 序列首尾是否按闭环相邻处理。
+    bool sequenceLoopClosure = true;
+    /// 估计相邻距离中位数至少需要的已注册相邻边数量。
+    int sequencePoseConsistencyMinSamples = 3;
+    /// 新相机到已注册相邻序号相机的距离不能低于中位相邻距离的该倍率。
+    double sequenceAdjacentDistanceMinFactor = 0.15;
+    /// 新相机到已注册相邻序号相机的距离不能高于中位相邻距离的该倍率。
+    double sequenceAdjacentDistanceMaxFactor = 3.0;
+    /// 当前后紧邻序列相机均已注册时，允许以强绝对内点支撑放宽 PnP 内点率。
+    bool allowBracketedSequencePnpRelaxation = true;
+    /// 仅有一侧序列邻居时，使用相邻位姿外推、初值预过滤和绝对内点门槛恢复连续缺口。
+    bool allowOneSidedSequencePoseRecovery = true;
+    /// 单侧外推旋转误差通常大于夹逼插值，预过滤采用更宽的像素门槛。
+    double oneSidedSequencePosePrefilterMaxReprojError = 128.0;
+    /// 夹逼式序列 PnP 的最低内点率；仍需同时满足绝对内点数和序列距离检查。
+    double bracketedSequencePnpMinInlierRatio = 0.025;
+    /// 夹逼式序列 PnP 的最低绝对内点数。
+    int bracketedSequencePnpMinInliers = 28;
+    /// 最终全局 BA 收敛后，是否用更新后的三维点和相机位姿重试未注册影像。
+    bool retryUnregisteredAfterFinalBA = true;
+    /// 最终 BA 后最多执行的缺口注册轮数。
+    int maxFinalRegistrationRetryPasses = 2;
     // --- 三角化选项 ---
     TriangulatorOptions triangulatorOptions;
 
@@ -111,6 +151,11 @@ struct IncrementalSfmOptions
     int filterMinTrackLen = 2;
 };
 
+/**
+ * @brief 根据执行模式生成实际生效的 SfM 参数。
+ */
+IncrementalSfmOptions effectiveSfmOptions(const IncrementalSfmOptions &options);
+
 // ---- 回调 ----
 
 /**
@@ -135,6 +180,8 @@ struct IncrementalSfmResult
     int numPoints3D = 0;          ///< 三维点数
     double meanReprojError = 0.0; ///< 平均重投影误差（像素，最终 BA 后）
     std::string summary;          ///< 可读结果摘要
+    ImageId selectedInitialImageId1 = kInvalidImageId; ///< 最终采用的初始像对第一幅影像
+    ImageId selectedInitialImageId2 = kInvalidImageId; ///< 最终采用的初始像对第二幅影像
 
     // ── 光束法平差统计（最终一轮全局 BA 的结果）──
     double baRmsBefore = 0.0;  ///< 最终 BA 前的平均重投影 RMS（px）
@@ -344,6 +391,17 @@ class IncrementalSfm
     bool initializeFromPair(ImageId id1, ImageId id2);
 
     /**
+     * @brief 初始像对已经注册后，执行后续增量注册、BA 和结果组装。
+     */
+    IncrementalSfmResult runRegistrationFromCurrentInitialization(int totalImages,
+                                                                  SfmProgressCallback progressCb);
+
+    /**
+     * @brief 清理一次初始像对试跑产生的运行态，并恢复到同一份输入影像/匹配。
+     */
+    void resetForInitialPairTrial(const SfmReconstruction &baseReconstruction);
+
+    /**
      * @brief 选择下一幅最佳待注册图像。
      *
      * 策略：在所有未注册图像中，选择能看到最多已三角化三维点的图像。
@@ -361,6 +419,43 @@ class IncrementalSfm
      * @return 成功返回 true
      */
     bool registerImage(ImageId imageId);
+
+    /**
+     * @brief 最终全局 BA 后重试仍未注册、且已有序列邻居的影像。
+     *
+     * 仅接受真实 PnP 位姿；成功后重新三角化并再次执行全局 BA。
+     */
+    int retryUnregisteredImagesAfterFinalBA(int totalImages);
+
+    /**
+     * @brief 用最近的已注册序列相机辅助连续缺口补位。
+     */
+    bool findRegisteredSequenceNeighbor(ImageId imageId,
+                                        int direction,
+                                        ImageId *neighborOut,
+                                        int *stepsOut) const;
+
+    /**
+     * @brief 序列模式下判断待注册影像是否至少有一个已注册的前/后序号邻居。
+     */
+    bool hasRegisteredSequenceNeighbor(ImageId imageId) const;
+
+    /**
+     * @brief 计算已注册相邻序号相机中心距离的中位数。
+     */
+    double registeredSequenceAdjacentDistanceMedian(ImageId excludedImageId) const;
+
+    /**
+     * @brief 检查 PnP 结果是否破坏照片序列的局部相机中心距离。
+     */
+    bool validateSequencePoseConsistency(ImageId imageId,
+                                         const Camera &candidateCamera,
+                                         std::string *reason) const;
+
+    /**
+     * @brief 使用已注册的序列相邻相机为 PnP 生成外参初值。
+     */
+    bool makeSequenceInitialPoseGuess(ImageId imageId, Camera *guessCamera) const;
 
     /**
      * @brief 执行光束法平差。

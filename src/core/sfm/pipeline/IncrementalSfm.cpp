@@ -4,11 +4,13 @@
 
 #include "log/Logger.h"
 
+#include "DeterministicOpenCvRansac.h"
 #include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
 #include <algorithm>
 #include <cmath>
+#include <limits>
 #include <numeric>
 #include <sstream>
 #include <unordered_map>
@@ -35,6 +37,59 @@ constexpr int kKnownPoseMinLongInputTracksForQualityGate = 10;
 constexpr int kKnownPoseMinPointsForTrackRatioGate = 20;
 constexpr double kKnownPoseMaxTwoViewTrackRatio = 0.95;
 
+bool shouldEvaluateMultipleInitialPairModels(const IncrementalSfmOptions &options,
+                                             int totalImages,
+                                             std::size_t candidateCount)
+{
+    return options.autoSelectInitPair &&
+           options.evaluateMultipleInitialPairModels &&
+           candidateCount > 1 &&
+           totalImages >= 3 &&
+           totalImages <= std::max(2, options.multiInitialPairMaxImages);
+}
+
+double scoreInitialPairTrial(const IncrementalSfmResult &result, int totalImages)
+{
+    const int registered = std::max(0, result.numRegisteredImages);
+    const int missing = std::max(0, totalImages - registered);
+    const double reprojPenalty = std::isfinite(result.meanReprojError)
+        ? result.meanReprojError * 1000.0
+        : 1000000.0;
+    return static_cast<double>(registered) * 1000000000.0 -
+           static_cast<double>(missing) * 1000000.0 +
+           static_cast<double>(std::max(0, result.numPoints3D)) -
+           reprojPenalty;
+}
+
+int effectivePnpMinTrackLength(const IncrementalSfmOptions &options, std::size_t registeredImageCount)
+{
+    if (registeredImageCount < 3)
+    {
+        return 2;
+    }
+    return std::max(2, options.pnpMinTrackLength);
+}
+
+bool pointUsableForPnp(const SfmReconstruction &reconstruction,
+                       Point3DId pointId,
+                       int minTrackLength)
+{
+    if (pointId == kInvalidPoint3DId || !reconstruction.hasPoint3D(pointId))
+    {
+        return false;
+    }
+    const ScenePoint3D &point = reconstruction.point3D(pointId);
+    return point.track.length() >= static_cast<std::size_t>(std::max(2, minTrackLength));
+}
+
+double distance3d(const std::array<double, 3> &a, const std::array<double, 3> &b)
+{
+    const double dx = a[0] - b[0];
+    const double dy = a[1] - b[1];
+    const double dz = a[2] - b[2];
+    return std::sqrt(dx * dx + dy * dy + dz * dz);
+}
+
 double percentile(std::vector<double> values, double ratio)
 {
     if (values.empty())
@@ -46,6 +101,123 @@ double percentile(std::vector<double> values, double ratio)
     const double clampedRatio = std::max(0.0, std::min(1.0, ratio));
     const auto index = static_cast<size_t>(std::round(clampedRatio * static_cast<double>(values.size() - 1)));
     return values[index];
+}
+
+std::array<double, 4> rotationToQuaternion(const std::array<double, 9> &rotation)
+{
+    std::array<double, 4> quaternion{}; // w, x, y, z
+    const double trace = rotation[0] + rotation[4] + rotation[8];
+    if (trace > 0.0)
+    {
+        const double scale = std::sqrt(trace + 1.0) * 2.0;
+        quaternion = {{0.25 * scale,
+                       (rotation[7] - rotation[5]) / scale,
+                       (rotation[2] - rotation[6]) / scale,
+                       (rotation[3] - rotation[1]) / scale}};
+    }
+    else if (rotation[0] > rotation[4] && rotation[0] > rotation[8])
+    {
+        const double scale = std::sqrt(1.0 + rotation[0] - rotation[4] - rotation[8]) * 2.0;
+        quaternion = {{(rotation[7] - rotation[5]) / scale,
+                       0.25 * scale,
+                       (rotation[1] + rotation[3]) / scale,
+                       (rotation[2] + rotation[6]) / scale}};
+    }
+    else if (rotation[4] > rotation[8])
+    {
+        const double scale = std::sqrt(1.0 + rotation[4] - rotation[0] - rotation[8]) * 2.0;
+        quaternion = {{(rotation[2] - rotation[6]) / scale,
+                       (rotation[1] + rotation[3]) / scale,
+                       0.25 * scale,
+                       (rotation[5] + rotation[7]) / scale}};
+    }
+    else
+    {
+        const double scale = std::sqrt(1.0 + rotation[8] - rotation[0] - rotation[4]) * 2.0;
+        quaternion = {{(rotation[3] - rotation[1]) / scale,
+                       (rotation[2] + rotation[6]) / scale,
+                       (rotation[5] + rotation[7]) / scale,
+                       0.25 * scale}};
+    }
+
+    const double norm = std::sqrt(std::inner_product(quaternion.begin(),
+                                                     quaternion.end(),
+                                                     quaternion.begin(),
+                                                     0.0));
+    if (norm > 1e-12)
+    {
+        for (double &value : quaternion)
+        {
+            value /= norm;
+        }
+    }
+    return quaternion;
+}
+
+std::array<double, 9> quaternionToRotation(const std::array<double, 4> &quaternion)
+{
+    const double w = quaternion[0];
+    const double x = quaternion[1];
+    const double y = quaternion[2];
+    const double z = quaternion[3];
+    return {{1.0 - 2.0 * (y * y + z * z), 2.0 * (x * y - z * w), 2.0 * (x * z + y * w),
+             2.0 * (x * y + z * w), 1.0 - 2.0 * (x * x + z * z), 2.0 * (y * z - x * w),
+             2.0 * (x * z - y * w), 2.0 * (y * z + x * w), 1.0 - 2.0 * (x * x + y * y)}};
+}
+
+std::array<double, 9> interpolateCameraRotation(const std::array<double, 9> &rotationA,
+                                                const std::array<double, 9> &rotationB,
+                                                double ratio)
+{
+    std::array<double, 4> quaternionA = rotationToQuaternion(rotationA);
+    std::array<double, 4> quaternionB = rotationToQuaternion(rotationB);
+    double dot = std::inner_product(quaternionA.begin(),
+                                    quaternionA.end(),
+                                    quaternionB.begin(),
+                                    0.0);
+    if (dot < 0.0)
+    {
+        dot = -dot;
+        for (double &value : quaternionB)
+        {
+            value = -value;
+        }
+    }
+
+    // 区间内用于 SLERP；单侧序列恢复允许最多再外推一个帧间旋转。
+    const double t = std::clamp(ratio, -2.0, 2.0);
+    std::array<double, 4> interpolated{};
+    if (dot > 0.9995)
+    {
+        for (std::size_t index = 0; index < interpolated.size(); ++index)
+        {
+            interpolated[index] = quaternionA[index] + t * (quaternionB[index] - quaternionA[index]);
+        }
+    }
+    else
+    {
+        const double theta = std::acos(std::clamp(dot, -1.0, 1.0));
+        const double sinTheta = std::sin(theta);
+        const double weightA = std::sin((1.0 - t) * theta) / sinTheta;
+        const double weightB = std::sin(t * theta) / sinTheta;
+        for (std::size_t index = 0; index < interpolated.size(); ++index)
+        {
+            interpolated[index] = weightA * quaternionA[index] + weightB * quaternionB[index];
+        }
+    }
+
+    const double norm = std::sqrt(std::inner_product(interpolated.begin(),
+                                                     interpolated.end(),
+                                                     interpolated.begin(),
+                                                     0.0));
+    if (norm > 1e-12)
+    {
+        for (double &value : interpolated)
+        {
+            value /= norm;
+        }
+    }
+    return quaternionToRotation(interpolated);
 }
 
 KnownPoseTriangulationPolicy resolveKnownPoseTriangulationPolicy(
@@ -451,12 +623,33 @@ SimilarityTransform3d estimateRobustCameraCenterSimilarity(
 
 } // namespace
 
+IncrementalSfmOptions effectiveSfmOptions(const IncrementalSfmOptions &options)
+{
+    IncrementalSfmOptions effective = options;
+    if (effective.executionProfile != SfmExecutionProfile::CoarseEvaluation)
+    {
+        return effective;
+    }
+
+    // 转台闭环种子（首尾影像）在按内点排序时可能落到第 4～6 位，
+    // 粗筛保留六个轻量种子，避免只看前三名而丢失能够扩展完整环路的模型。
+    effective.maxInitPairCandidates = std::min(effective.maxInitPairCandidates, 6);
+    effective.baOptions.maxIterations = std::min(effective.baOptions.maxIterations, 5);
+    effective.iterativeBARounds = 1;
+    effective.localBAInterval = std::max(effective.localBAInterval, 6);
+    effective.globalBAInterval = std::numeric_limits<int>::max();
+    effective.baOptions.refineSharedFocalLength = false;
+    effective.baOptions.logIterationProgress = false;
+    effective.retryUnregisteredAfterFinalBA = false;
+    return effective;
+}
+
 // ============================================================
 // 构造
 // ============================================================
 
 IncrementalSfm::IncrementalSfm(const IncrementalSfmOptions &options)
-    : _sfmOptions(options), _reconstruction(std::make_shared<SfmReconstruction>())
+    : _sfmOptions(effectiveSfmOptions(options)), _reconstruction(std::make_shared<SfmReconstruction>())
 {
 }
 
@@ -523,13 +716,14 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
 
     Logger::instance()->infof(
         "[SFM] Incremental run started: images=%d, useKnownCameraPoses=%s, initMinMatches=%d, "
-        "initMinInliers=%d, initMinTriAngle=%.3f, pnpMinInliers=%d, pnpMaxReproj=%.3f",
+        "initMinInliers=%d, initMinTriAngle=%.3f, pnpMinInliers=%d, pnpMinTrackLength=%d, pnpMaxReproj=%.3f",
         totalImages,
         _sfmOptions.useKnownCameraPoses ? "true" : "false",
         _sfmOptions.initMinNumMatches,
         _sfmOptions.initMinNumInliers,
         _sfmOptions.initMinTriAngle,
         _sfmOptions.pnpOptions.minNumInliers,
+        _sfmOptions.pnpMinTrackLength,
         _sfmOptions.pnpOptions.maxReprojError);
 
     // ---- 步骤 0：构建对应关系图 ----
@@ -547,49 +741,119 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
     }
 
     // ---- 步骤 1：选择并初始化初始像对 ----
-    ImageId initId1, initId2;
-    bool initOk = false;
-
     if (_sfmOptions.autoSelectInitPair)
     {
-        // ── COLMAP 式多候选重试 ──
-        auto candidates = selectInitialPairCandidates(_sfmOptions.maxInitPairCandidates);
+        const auto candidates = selectInitialPairCandidates(_sfmOptions.maxInitPairCandidates);
         if (candidates.empty())
         {
             result.summary = "Failed to find a suitable initial image pair";
             return result;
         }
+
+        const bool evaluateMultipleSeeds =
+            shouldEvaluateMultipleInitialPairModels(_sfmOptions, totalImages, candidates.size());
+        const SfmReconstruction baseReconstruction = *_reconstruction;
+        IncrementalSfmResult bestTrialResult;
+        double bestScore = -std::numeric_limits<double>::infinity();
+        bool anyInitialized = false;
+
         for (size_t ci = 0; ci < candidates.size(); ++ci)
         {
-            initId1 = candidates[ci].first;
-            initId2 = candidates[ci].second;
-            Logger::instance()->infof("[SFM] Trying init pair candidate %zu/%zu: (%u, %u)", ci + 1,
-                                      candidates.size(), initId1, initId2);
-            if (initializeFromPair(initId1, initId2))
+            resetForInitialPairTrial(baseReconstruction);
+            const ImageId initId1 = candidates[ci].first;
+            const ImageId initId2 = candidates[ci].second;
+            Logger::instance()->infof("[SFM] Trying init pair candidate %zu/%zu: (%u, %u)",
+                                      ci + 1,
+                                      candidates.size(),
+                                      initId1,
+                                      initId2);
+            if (!initializeFromPair(initId1, initId2))
             {
-                initOk = true;
+                Logger::instance()->warnf("[SFM] Candidate (%u, %u) failed: %s",
+                                          initId1,
+                                          initId2,
+                                          _lastErrorMessage.c_str());
+                continue;
+            }
+
+            anyInitialized = true;
+            if (!reportProgress(2, totalImages, "Initialized from pair", progressCb))
+            {
+                return result;
+            }
+
+            IncrementalSfmResult trialResult =
+                runRegistrationFromCurrentInitialization(totalImages, progressCb);
+            trialResult.selectedInitialImageId1 = initId1;
+            trialResult.selectedInitialImageId2 = initId2;
+            const double trialScore = scoreInitialPairTrial(trialResult, totalImages);
+            Logger::instance()->infof("[SFM] Init pair trial (%u, %u): registered=%d/%d, points=%d, "
+                                      "rms=%.4f, score=%.1f",
+                                      initId1,
+                                      initId2,
+                                      trialResult.numRegisteredImages,
+                                      totalImages,
+                                      trialResult.numPoints3D,
+                                      trialResult.meanReprojError,
+                                      trialScore);
+
+            if (!evaluateMultipleSeeds)
+            {
+                return trialResult;
+            }
+
+            if (trialScore > bestScore)
+            {
+                bestScore = trialScore;
+                bestTrialResult = trialResult;
+            }
+            if (trialResult.numRegisteredImages >= totalImages)
+            {
                 break;
             }
-            Logger::instance()->warnf("[SFM] Candidate (%u, %u) failed: %s", initId1, initId2,
-                                      _lastErrorMessage.c_str());
         }
-    }
-    else
-    {
-        initId1 = _sfmOptions.initImageId1;
-        initId2 = _sfmOptions.initImageId2;
-        initOk = initializeFromPair(initId1, initId2);
+
+        if (!anyInitialized)
+        {
+            result.summary = "Failed to initialize from image pair: " + _lastErrorMessage;
+            return result;
+        }
+
+        if (bestTrialResult.reconstruction)
+        {
+            _reconstruction = bestTrialResult.reconstruction;
+            Logger::instance()->infof("[SFM] Selected best initial-pair trial: registered=%d/%d, points=%d, "
+                                      "rms=%.4f, score=%.1f",
+                                      bestTrialResult.numRegisteredImages,
+                                      totalImages,
+                                      bestTrialResult.numPoints3D,
+                                      bestTrialResult.meanReprojError,
+                                      bestScore);
+        }
+        return bestTrialResult;
     }
 
-    if (!initOk)
+    if (!initializeFromPair(_sfmOptions.initImageId1, _sfmOptions.initImageId2))
     {
         result.summary = "Failed to initialize from image pair: " + _lastErrorMessage;
         return result;
     }
-
     if (!reportProgress(2, totalImages, "Initialized from pair", progressCb))
+    {
         return result;
+    }
+    IncrementalSfmResult explicitPairResult =
+        runRegistrationFromCurrentInitialization(totalImages, progressCb);
+    explicitPairResult.selectedInitialImageId1 = _sfmOptions.initImageId1;
+    explicitPairResult.selectedInitialImageId2 = _sfmOptions.initImageId2;
+    return explicitPairResult;
+}
 
+IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
+    int totalImages,
+    SfmProgressCallback progressCb)
+{
+    IncrementalSfmResult result;
     rebuildVisibilityCache();
 
     // ---- 步骤 2：逐帧注册循环 ----
@@ -698,6 +962,7 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
     if (!_isAborted && _reconstruction->numRegisteredImages() >= 2)
     {
         iterativeGlobalBA();
+        retryUnregisteredImagesAfterFinalBA(totalImages);
 
         // 过滤轨迹长度过短的不可靠三维点
         Triangulator finalTri(*_reconstruction, _correspondenceGraph);
@@ -740,6 +1005,103 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
     result.baSharedFocalScale = _lastGlobalBASharedFocalScale;
 
     return result;
+}
+
+int IncrementalSfm::retryUnregisteredImagesAfterFinalBA(int totalImages)
+{
+    if (!_sfmOptions.retryUnregisteredAfterFinalBA || !_reconstruction ||
+        _isAborted || _reconstruction->numRegisteredImages() < 3 ||
+        static_cast<int>(_reconstruction->numRegisteredImages()) >= totalImages)
+    {
+        return 0;
+    }
+
+    int registeredByRetry = 0;
+    const int maxPasses = std::clamp(_sfmOptions.maxFinalRegistrationRetryPasses, 1, 3);
+    for (int pass = 0; pass < maxPasses && !_isAborted; ++pass)
+    {
+        std::vector<ImageId> candidates;
+        const ImageId imageCount = static_cast<ImageId>(_reconstruction->numImages());
+        for (ImageId imageId = 0; imageId < imageCount; ++imageId)
+        {
+            if (!_reconstruction->isRegistered(imageId) && hasRegisteredSequenceNeighbor(imageId))
+            {
+                candidates.push_back(imageId);
+            }
+        }
+        if (candidates.empty())
+        {
+            break;
+        }
+
+        _registerFailCount.clear();
+        _deferredFailedImages.clear();
+        _permanentlyFailedImages.clear();
+        rebuildVisibilityCache();
+        std::stable_sort(candidates.begin(), candidates.end(), [&](ImageId lhs, ImageId rhs)
+        {
+            return _visibilityCache[lhs] > _visibilityCache[rhs];
+        });
+
+        int registeredThisPass = 0;
+        for (ImageId imageId : candidates)
+        {
+            if (!registerImage(imageId))
+            {
+                Logger::instance()->warnf(
+                    "[SFM] Final-BA retry rejected image %u: %s",
+                    imageId,
+                    _lastErrorMessage.empty() ? "unknown error" : _lastErrorMessage.c_str());
+                continue;
+            }
+
+            std::vector<Point3DId> previousPointIds = _reconstruction->image(imageId).point3DIds;
+            Triangulator triangulator(*_reconstruction, _correspondenceGraph);
+            triangulator.triangulateImage(imageId, _sfmOptions.triangulatorOptions);
+            updateVisibilityCacheForImage(imageId, previousPointIds);
+            ++registeredThisPass;
+            ++registeredByRetry;
+            Logger::instance()->infof(
+                "[SFM] Final-BA retry registered image %u (%zu/%d)",
+                imageId,
+                _reconstruction->numRegisteredImages(),
+                totalImages);
+        }
+
+        if (registeredThisPass == 0)
+        {
+            break;
+        }
+
+        iterativeGlobalBA();
+        invalidateVisibilityCache();
+        if (static_cast<int>(_reconstruction->numRegisteredImages()) >= totalImages)
+        {
+            break;
+        }
+    }
+    return registeredByRetry;
+}
+
+void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseReconstruction)
+{
+    // 多初始像对评估时，每个 seed 必须重置到同一份输入影像/匹配，
+    // 否则前一个 seed 产生的相机、三维点和 point3DIds 会污染后续试跑。
+    _reconstruction = std::make_shared<SfmReconstruction>(baseReconstruction);
+    _lastErrorMessage.clear();
+    _isAborted = false;
+    _lastGlobalBARmsBefore = 0.0;
+    _lastGlobalBARmsAfter = 0.0;
+    _lastGlobalBATracksTotal = 0;
+    _lastGlobalBATracksOptimized = 0;
+    _lastGlobalBATracksFiltered = 0;
+    _lastGlobalBARefinedIntrinsicCount = 0;
+    _lastGlobalBASharedFocalScale = 1.0;
+    _visibilityCache.clear();
+    _visibilityCacheDirty = true;
+    _registerFailCount.clear();
+    _deferredFailedImages.clear();
+    _permanentlyFailedImages.clear();
 }
 
 IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgressCallback progressCb)
@@ -1488,8 +1850,17 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
         }
 
         cv::Mat maskF, maskH;
-        cv::findFundamentalMat(pts1, pts2, cv::FM_RANSAC, ransacThresh, 0.999, maskF);
-        cv::findHomography(pts1, pts2, cv::RANSAC, ransacThresh, maskH);
+        const int pairSeed = opencv_compat::stableRansacSeed(pair.id1, pair.id2, 0x53454c45u);
+        opencv_compat::runDeterministicRansac(pairSeed, [&]()
+        {
+            cv::findFundamentalMat(pts1, pts2, cv::FM_RANSAC, ransacThresh, 0.999, maskF);
+            return 0;
+        });
+        opencv_compat::runDeterministicRansac(pairSeed ^ 0x484f4d4fu, [&]()
+        {
+            cv::findHomography(pts1, pts2, cv::RANSAC, ransacThresh, maskH);
+            return 0;
+        });
 
         int fInliers = maskF.empty() ? 0 : cv::countNonZero(maskF);
         int hInliers = maskH.empty() ? 0 : cv::countNonZero(maskH);
@@ -1612,10 +1983,18 @@ bool IncrementalSfm::initializeFromPair(ImageId id1, ImageId id2)
     const double ransacThresh = 1.0; // 像素
     cv::Mat maskE, maskH;
 
-    cv::Mat E = xjw::opencv_compat::findEssentialMat(pts1, pts2, K, cv::RANSAC, 0.999, ransacThresh, maskE);
+    const int pairSeed = opencv_compat::stableRansacSeed(id1, id2, 0x494e4954u);
+    cv::Mat E = opencv_compat::runDeterministicRansac(pairSeed, [&]()
+    {
+        return xjw::opencv_compat::findEssentialMat(
+            pts1, pts2, K, cv::RANSAC, 0.999, ransacThresh, maskE);
+    });
     int E_inliers = cv::countNonZero(maskE);
 
-    cv::Mat H = cv::findHomography(pts1, pts2, cv::RANSAC, ransacThresh, maskH);
+    cv::Mat H = opencv_compat::runDeterministicRansac(pairSeed ^ 0x484f4d4fu, [&]()
+    {
+        return cv::findHomography(pts1, pts2, cv::RANSAC, ransacThresh, maskH);
+    });
     int H_inliers = cv::countNonZero(maskH);
 
     Logger::instance()->infof("[SFM] E_inliers=%d, H_inliers=%d, ratio=%.3f", E_inliers, H_inliers,
@@ -1872,6 +2251,12 @@ ImageId IncrementalSfm::selectNextImage() const
             continue;
         if (_permanentlyFailedImages.count(id))
             continue;
+        if (_sfmOptions.enforceSequencePoseConsistency &&
+            _reconstruction->numRegisteredImages() >= 3 &&
+            !hasRegisteredSequenceNeighbor(id))
+        {
+            continue;
+        }
         if (count > bestVisible)
         {
             bestVisible = count;
@@ -1925,38 +2310,41 @@ bool IncrementalSfm::registerImage(ImageId imageId)
     std::vector<std::array<double, 2>> imagePts;
 
     auto neighbors = _correspondenceGraph.connectedImages(imageId);
-    // 用 set 避免重复添加同一个三维点
+    const int minTrackLengthForPnp =
+        effectivePnpMinTrackLength(_sfmOptions, _reconstruction->numRegisteredImages());
     std::unordered_set<Point3DId> addedPoints;
+    std::unordered_set<FeatureIdx> addedFeatures;
 
     for (ImageId nid : neighbors)
     {
         if (!_reconstruction->isRegistered(nid))
+        {
             continue;
+        }
         const auto &matches = _correspondenceGraph.matchesBetween(imageId, nid);
         const ImageData &nimg = _reconstruction->image(nid);
 
         for (const auto &m : matches)
         {
-            FeatureIdx myFeat = (imageId < nid) ? m.idx1 : m.idx2;
-            FeatureIdx nFeat = (imageId < nid) ? m.idx2 : m.idx1;
-
+            const FeatureIdx myFeat = (imageId < nid) ? m.idx1 : m.idx2;
+            const FeatureIdx nFeat = (imageId < nid) ? m.idx2 : m.idx1;
             if (nFeat >= nimg.point3DIds.size())
+            {
                 continue;
-            Point3DId p3dId = nimg.point3DIds[nFeat];
-            if (p3dId == kInvalidPoint3DId)
+            }
+            const Point3DId p3dId = nimg.point3DIds[nFeat];
+            if (!pointUsableForPnp(*_reconstruction, p3dId, minTrackLengthForPnp) ||
+                addedPoints.count(p3dId) != 0 || addedFeatures.count(myFeat) != 0 ||
+                myFeat >= img.keypoints.size())
+            {
                 continue;
-            if (!_reconstruction->hasPoint3D(p3dId))
-                continue;
-            if (addedPoints.count(p3dId))
-                continue;
-
-            if (myFeat >= img.keypoints.size())
-                continue;
+            }
 
             addedPoints.insert(p3dId);
+            addedFeatures.insert(myFeat);
             worldPts.push_back(_reconstruction->point3D(p3dId).xyz);
-            imagePts.push_back(
-                {static_cast<double>(img.keypoints[myFeat].x), static_cast<double>(img.keypoints[myFeat].y)});
+            imagePts.push_back({static_cast<double>(img.keypoints[myFeat].x),
+                                static_cast<double>(img.keypoints[myFeat].y)});
         }
     }
 
@@ -1965,13 +2353,72 @@ bool IncrementalSfm::registerImage(ImageId imageId)
         std::ostringstream oss;
         oss << "not enough 2D-3D observations for PnP: observations=" << worldPts.size()
             << ", minPnPInliers=" << _sfmOptions.pnpOptions.minNumInliers
+            << ", minTrackLength=" << minTrackLengthForPnp
             << ", connectedNeighbors=" << neighbors.size();
         _lastErrorMessage = oss.str();
         return false;
     }
 
-    // PnP 求解
-    auto pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, _sfmOptions.pnpOptions);
+    // PnP 求解。照片序列模式下优先使用相邻相机外推/插值得到的初值，
+    // 避免弱纹理转台数据落入错误环段的 PnP 局部解。
+    PnpOptions pnpOptions = _sfmOptions.pnpOptions;
+    Camera sequenceGuessCamera = cam;
+    const bool hasSequenceGuess = makeSequenceInitialPoseGuess(imageId, &sequenceGuessCamera);
+    if (hasSequenceGuess)
+    {
+        pnpOptions.useInitialPose = true;
+        pnpOptions.initialCameraToWorldRotation = sequenceGuessCamera.cameraToWorldRotation();
+        pnpOptions.initialCameraCenter = sequenceGuessCamera.cameraCenter();
+
+        ImageId previousImageId = kInvalidImageId;
+        ImageId nextImageId = kInvalidImageId;
+        int previousSteps = 0;
+        int nextSteps = 0;
+        const bool hasPrevious = findRegisteredSequenceNeighbor(imageId,
+                                                                 -1,
+                                                                 &previousImageId,
+                                                                 &previousSteps);
+        const bool hasNext = findRegisteredSequenceNeighbor(imageId,
+                                                             1,
+                                                             &nextImageId,
+                                                             &nextSteps);
+        const bool isDirectlyBracketed = hasPrevious && hasNext &&
+            previousSteps == 1 && nextSteps == 1;
+        const bool useOneSidedRecovery = _sfmOptions.allowOneSidedSequencePoseRecovery &&
+            (hasPrevious != hasNext);
+        if (isDirectlyBracketed || useOneSidedRecovery)
+        {
+            pnpOptions.useInitialPosePrefilter = true;
+            pnpOptions.initialPosePrefilterMaxReprojError = std::max(
+                pnpOptions.initialPosePrefilterMaxReprojError,
+                isDirectlyBracketed
+                    ? pnpOptions.maxReprojError * 12.0
+                    : _sfmOptions.oneSidedSequencePosePrefilterMaxReprojError);
+            pnpOptions.initialPosePrefilterMinCandidates = std::max(
+                pnpOptions.minNumInliers,
+                _sfmOptions.bracketedSequencePnpMinInliers);
+        }
+        if (_sfmOptions.allowBracketedSequencePnpRelaxation &&
+            (isDirectlyBracketed || useOneSidedRecovery))
+        {
+            // 两侧紧邻位姿为当前相机提供了强序列约束。此时允许大量候选 2D-3D
+            // 对应中的低比例真实内点通过，但仍要求足够绝对内点并在随后检查相机距离。
+            pnpOptions.allowRelaxedInlierRatio = true;
+            pnpOptions.relaxedMinInlierRatio =
+                std::clamp(_sfmOptions.bracketedSequencePnpMinInlierRatio,
+                           0.0,
+                           pnpOptions.minInlierRatio);
+            pnpOptions.relaxedMinNumInliers =
+                std::max(pnpOptions.minNumInliers,
+                         _sfmOptions.bracketedSequencePnpMinInliers);
+        }
+    }
+
+    pnpOptions.ransacSeed = opencv_compat::stableRansacSeed(
+        imageId,
+        static_cast<std::uint32_t>(_reconstruction->numRegisteredImages()),
+        static_cast<std::uint32_t>(worldPts.size()));
+    const PnpResult pnpResult = PnpSolver::solveWithCamera(worldPts, imagePts, cam, pnpOptions);
     if (!pnpResult.success)
     {
         std::ostringstream oss;
@@ -1979,24 +2426,364 @@ bool IncrementalSfm::registerImage(ImageId imageId)
             << ", inliers=" << pnpResult.numInliers
             << ", inlierRatio=" << pnpResult.inlierRatio
             << ", minPnPInliers=" << _sfmOptions.pnpOptions.minNumInliers
+            << ", minTrackLength=" << minTrackLengthForPnp
             << ", minInlierRatio=" << _sfmOptions.pnpOptions.minInlierRatio
+            << ", posePrefilter=" << (pnpResult.usedInitialPosePrefilter ? "true" : "false")
+            << ", prefilterCandidates=" << pnpResult.prefilterCandidateCount
             << ", maxReprojError=" << _sfmOptions.pnpOptions.maxReprojError;
         _lastErrorMessage = oss.str();
         return false;
     }
 
-    Logger::instance()->infof("[SFM] Image %u PnP success: observations=%zu, inliers=%d, inlierRatio=%.3f",
+    Logger::instance()->infof("[SFM] Image %u PnP success: observations=%zu, inliers=%d, inlierRatio=%.3f, "
+                              "minTrackLength=%d, posePrefilter=%s, prefilterCandidates=%d",
                               imageId,
                               worldPts.size(),
                               pnpResult.numInliers,
-                              pnpResult.inlierRatio);
+                              pnpResult.inlierRatio,
+                              minTrackLengthForPnp,
+                              pnpResult.usedInitialPosePrefilter ? "true" : "false",
+                              pnpResult.prefilterCandidateCount);
 
     // 应用 PnP 结果更新相机外参
     cam.setPose(pnpResult.R, pnpResult.C);
+    std::string sequenceConsistencyReason;
+    if (!validateSequencePoseConsistency(imageId, cam, &sequenceConsistencyReason))
+    {
+        _lastErrorMessage = "sequence distance check failed: " + sequenceConsistencyReason;
+        Logger::instance()->warnf("[SFM] Image %u sequence distance rejected: %s",
+                                  imageId,
+                                  sequenceConsistencyReason.c_str());
+        return false;
+    }
 
     // 注册到重建
     _reconstruction->registerImage(imageId, cam);
 
+    return true;
+}
+
+bool IncrementalSfm::findRegisteredSequenceNeighbor(ImageId imageId,
+                                                    int direction,
+                                                    ImageId *neighborOut,
+                                                    int *stepsOut) const
+{
+    if (!neighborOut || !stepsOut || !_reconstruction || direction == 0)
+    {
+        return false;
+    }
+
+    *neighborOut = kInvalidImageId;
+    *stepsOut = 0;
+
+    const ImageId imageCount = static_cast<ImageId>(_reconstruction->numImages());
+    if (imageCount < 2 || imageId >= imageCount)
+    {
+        return false;
+    }
+
+    auto hasRegisteredCamera = [&](ImageId candidate)
+    {
+        return candidate < imageCount &&
+               _reconstruction->isRegistered(candidate) &&
+               _reconstruction->hasCamera(candidate);
+    };
+
+    const int signedImageCount = static_cast<int>(imageCount);
+    const int start = static_cast<int>(imageId);
+    const int stepDirection = direction < 0 ? -1 : 1;
+    for (ImageId step = 1; step < imageCount; ++step)
+    {
+        int candidateIndex = start + stepDirection * static_cast<int>(step);
+        if (candidateIndex < 0 || candidateIndex >= signedImageCount)
+        {
+            if (!_sfmOptions.sequenceLoopClosure)
+            {
+                break;
+            }
+            candidateIndex = (candidateIndex % signedImageCount + signedImageCount) % signedImageCount;
+        }
+
+        const ImageId candidate = static_cast<ImageId>(candidateIndex);
+        if (hasRegisteredCamera(candidate))
+        {
+            *neighborOut = candidate;
+            *stepsOut = static_cast<int>(step);
+            return true;
+        }
+    }
+
+    return false;
+}
+
+bool IncrementalSfm::hasRegisteredSequenceNeighbor(ImageId imageId) const
+{
+    if (!_sfmOptions.enforceSequencePoseConsistency || !_reconstruction)
+    {
+        return true;
+    }
+
+    const ImageId imageCount = static_cast<ImageId>(_reconstruction->numImages());
+    if (imageCount == 0)
+    {
+        return false;
+    }
+
+    std::vector<ImageId> neighbors;
+    if (imageId > 0)
+    {
+        neighbors.push_back(imageId - 1);
+    }
+    if (imageId + 1 < imageCount)
+    {
+        neighbors.push_back(imageId + 1);
+    }
+    if (_sfmOptions.sequenceLoopClosure && imageCount > 2)
+    {
+        if (imageId == 0)
+        {
+            neighbors.push_back(imageCount - 1);
+        }
+        else if (imageId + 1 == imageCount)
+        {
+            neighbors.push_back(0);
+        }
+    }
+
+    for (ImageId neighborId : neighbors)
+    {
+        if (_reconstruction->isRegistered(neighborId) && _reconstruction->hasCamera(neighborId))
+        {
+            return true;
+        }
+    }
+    return false;
+}
+
+double IncrementalSfm::registeredSequenceAdjacentDistanceMedian(ImageId excludedImageId) const
+{
+    if (!_reconstruction)
+    {
+        return 0.0;
+    }
+
+    const ImageId imageCount = static_cast<ImageId>(_reconstruction->numImages());
+    if (imageCount < 2)
+    {
+        return 0.0;
+    }
+
+    std::vector<double> distances;
+    distances.reserve(static_cast<std::size_t>(imageCount));
+    auto addDistance = [&](ImageId a, ImageId b)
+    {
+        if (a == excludedImageId || b == excludedImageId ||
+            !_reconstruction->isRegistered(a) || !_reconstruction->isRegistered(b) ||
+            !_reconstruction->hasCamera(a) || !_reconstruction->hasCamera(b))
+        {
+            return;
+        }
+        const double distance = distance3d(_reconstruction->camera(a).cameraCenter(),
+                                           _reconstruction->camera(b).cameraCenter());
+        if (std::isfinite(distance) && distance > 1e-9)
+        {
+            distances.push_back(distance);
+        }
+    };
+
+    for (ImageId imageId = 0; imageId + 1 < imageCount; ++imageId)
+    {
+        addDistance(imageId, imageId + 1);
+    }
+    if (_sfmOptions.sequenceLoopClosure && imageCount > 2)
+    {
+        addDistance(imageCount - 1, 0);
+    }
+
+    if (distances.size() < static_cast<std::size_t>(std::max(1, _sfmOptions.sequencePoseConsistencyMinSamples)))
+    {
+        return 0.0;
+    }
+    return percentile(distances, 0.5);
+}
+
+bool IncrementalSfm::validateSequencePoseConsistency(ImageId imageId,
+                                                     const Camera &candidateCamera,
+                                                     std::string *reason) const
+{
+    if (!_sfmOptions.enforceSequencePoseConsistency || !_reconstruction ||
+        _reconstruction->numRegisteredImages() < 3)
+    {
+        return true;
+    }
+
+    const ImageId imageCount = static_cast<ImageId>(_reconstruction->numImages());
+    std::vector<ImageId> neighbors;
+    if (imageId > 0)
+    {
+        neighbors.push_back(imageId - 1);
+    }
+    if (imageId + 1 < imageCount)
+    {
+        neighbors.push_back(imageId + 1);
+    }
+    if (_sfmOptions.sequenceLoopClosure && imageCount > 2)
+    {
+        if (imageId == 0)
+        {
+            neighbors.push_back(imageCount - 1);
+        }
+        else if (imageId + 1 == imageCount)
+        {
+            neighbors.push_back(0);
+        }
+    }
+
+    std::vector<ImageId> registeredNeighbors;
+    for (ImageId neighborId : neighbors)
+    {
+        if (_reconstruction->isRegistered(neighborId) && _reconstruction->hasCamera(neighborId))
+        {
+            registeredNeighbors.push_back(neighborId);
+        }
+    }
+
+    if (registeredNeighbors.empty())
+    {
+        if (reason)
+        {
+            *reason = "no registered sequence neighbor";
+        }
+        return false;
+    }
+
+    const double medianDistance = registeredSequenceAdjacentDistanceMedian(imageId);
+    if (!(medianDistance > 0.0) || !std::isfinite(medianDistance))
+    {
+        return true;
+    }
+
+    const double minDistance = medianDistance * std::max(0.0, _sfmOptions.sequenceAdjacentDistanceMinFactor);
+    const double maxDistance = medianDistance * std::max(_sfmOptions.sequenceAdjacentDistanceMinFactor,
+                                                         _sfmOptions.sequenceAdjacentDistanceMaxFactor);
+    const auto candidateCenter = candidateCamera.cameraCenter();
+    for (ImageId neighborId : registeredNeighbors)
+    {
+        const double distance = distance3d(candidateCenter, _reconstruction->camera(neighborId).cameraCenter());
+        if (!std::isfinite(distance) || distance < minDistance || distance > maxDistance)
+        {
+            if (reason)
+            {
+                std::ostringstream oss;
+                oss << "image=" << imageId
+                    << ", neighbor=" << neighborId
+                    << ", distance=" << distance
+                    << ", median=" << medianDistance
+                    << ", allowed=[" << minDistance << "," << maxDistance << "]";
+                *reason = oss.str();
+            }
+            return false;
+        }
+    }
+    return true;
+}
+
+bool IncrementalSfm::makeSequenceInitialPoseGuess(ImageId imageId, Camera *guessCamera) const
+{
+    if (!guessCamera || !_sfmOptions.enforceSequencePoseConsistency || !_reconstruction ||
+        _reconstruction->numRegisteredImages() < 2)
+    {
+        return false;
+    }
+
+    const ImageId imageCount = static_cast<ImageId>(_reconstruction->numImages());
+    if (imageCount < 3)
+    {
+        return false;
+    }
+
+    auto hasRegisteredCamera = [&](ImageId id)
+    {
+        return id < imageCount && _reconstruction->isRegistered(id) && _reconstruction->hasCamera(id);
+    };
+    auto centerAdd = [](const std::array<double, 3> &a, const std::array<double, 3> &b)
+    {
+        return std::array<double, 3>{{a[0] + b[0], a[1] + b[1], a[2] + b[2]}};
+    };
+    auto centerSub = [](const std::array<double, 3> &a, const std::array<double, 3> &b)
+    {
+        return std::array<double, 3>{{a[0] - b[0], a[1] - b[1], a[2] - b[2]}};
+    };
+    auto centerScale = [](const std::array<double, 3> &a, double scale)
+    {
+        return std::array<double, 3>{{a[0] * scale, a[1] * scale, a[2] * scale}};
+    };
+
+    ImageId prev = kInvalidImageId;
+    ImageId next = kInvalidImageId;
+    int prevSteps = 0;
+    int nextSteps = 0;
+    const bool prevRegistered = findRegisteredSequenceNeighbor(imageId, -1, &prev, &prevSteps);
+    const bool nextRegistered = findRegisteredSequenceNeighbor(imageId, 1, &next, &nextSteps);
+
+    std::array<double, 3> center{};
+    std::array<double, 9> rotation{};
+    if (prevRegistered && nextRegistered)
+    {
+        const double denom = static_cast<double>(std::max(1, prevSteps + nextSteps));
+        const double t = static_cast<double>(prevSteps) / denom;
+        const auto prevCenter = _reconstruction->camera(prev).cameraCenter();
+        const auto nextCenter = _reconstruction->camera(next).cameraCenter();
+        // 连续缺口按序列步长插值中心，并对 camera-to-world 旋转执行 SLERP；
+        // 直接复制一侧旋转会给环拍相邻帧引入一个完整帧间角度的 PnP 初值偏差。
+        center = centerAdd(centerScale(prevCenter, 1.0 - t), centerScale(nextCenter, t));
+        rotation = interpolateCameraRotation(
+            _reconstruction->camera(prev).cameraToWorldRotation(),
+            _reconstruction->camera(next).cameraToWorldRotation(),
+            t);
+    }
+    else if (prevRegistered)
+    {
+        ImageId prev2 = kInvalidImageId;
+        int prev2Steps = 0;
+        if (!findRegisteredSequenceNeighbor(prev, -1, &prev2, &prev2Steps) || !hasRegisteredCamera(prev2))
+        {
+            return false;
+        }
+        const auto prevCenter = _reconstruction->camera(prev).cameraCenter();
+        const auto delta = centerSub(prevCenter, _reconstruction->camera(prev2).cameraCenter());
+        const double scale = static_cast<double>(std::max(1, prevSteps)) /
+                             static_cast<double>(std::max(1, prev2Steps));
+        center = centerAdd(prevCenter, centerScale(delta, scale));
+        rotation = interpolateCameraRotation(
+            _reconstruction->camera(prev2).cameraToWorldRotation(),
+            _reconstruction->camera(prev).cameraToWorldRotation(),
+            1.0 + scale);
+    }
+    else if (nextRegistered)
+    {
+        ImageId next2 = kInvalidImageId;
+        int next2Steps = 0;
+        if (!findRegisteredSequenceNeighbor(next, 1, &next2, &next2Steps) || !hasRegisteredCamera(next2))
+        {
+            return false;
+        }
+        const auto nextCenter = _reconstruction->camera(next).cameraCenter();
+        const auto delta = centerSub(nextCenter, _reconstruction->camera(next2).cameraCenter());
+        const double scale = static_cast<double>(std::max(1, nextSteps)) /
+                             static_cast<double>(std::max(1, next2Steps));
+        center = centerAdd(nextCenter, centerScale(delta, scale));
+        rotation = interpolateCameraRotation(
+            _reconstruction->camera(next2).cameraToWorldRotation(),
+            _reconstruction->camera(next).cameraToWorldRotation(),
+            1.0 + scale);
+    }
+    else
+    {
+        return false;
+    }
+
+    guessCamera->setPose(rotation, center);
     return true;
 }
 
@@ -2106,6 +2893,18 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
 
     // 执行 BA
     const BAResult baResult = BundleAdjust::optimizePoints(baCameras, baTracks, baOpt);
+    if (baOpt.logIterationProgress)
+    {
+        const BAProblemStats stats = BundleAdjust::summarizeProblem(baCameras, baTracks);
+        Logger::instance()->infof(
+            "[BA] problem cameras=%d tracks=%d observations=%d threads=%d backend=%s reason=%s",
+            stats.cameraCount,
+            stats.trackCount,
+            stats.observationCount,
+            baOpt.numThreads,
+            BundleAdjust::backendName(baResult.usedBackend),
+            baResult.backendSelectionReason.c_str());
+    }
 
     bool applyBaResult = true;
     const bool knownPoseGlobalBa = _sfmOptions.useKnownCameraPoses && !localOnly &&
@@ -2491,6 +3290,8 @@ void IncrementalSfm::rebuildVisibilityCache()
 
         size_t numVisible = 0;
         auto neighbors = _correspondenceGraph.connectedImages(id);
+        const int minTrackLengthForPnp =
+            effectivePnpMinTrackLength(_sfmOptions, _reconstruction->numRegisteredImages());
         for (ImageId nid : neighbors)
         {
             if (!_reconstruction->isRegistered(nid))
@@ -2503,7 +3304,8 @@ void IncrementalSfm::rebuildVisibilityCache()
             for (const auto &m : matches)
             {
                 FeatureIdx nfeat = (id < nid) ? m.idx2 : m.idx1;
-                if (nfeat < nimg.point3DIds.size() && nimg.point3DIds[nfeat] != kInvalidPoint3DId)
+                if (nfeat < nimg.point3DIds.size() &&
+                    pointUsableForPnp(*_reconstruction, nimg.point3DIds[nfeat], minTrackLengthForPnp))
                 {
                     ++numVisible;
                 }
@@ -2540,6 +3342,12 @@ void IncrementalSfm::updateVisibilityCacheForImage(ImageId imageId, const std::v
         }
 
         const ScenePoint3D &point = _reconstruction->point3D(currentId);
+        const int minTrackLengthForPnp =
+            effectivePnpMinTrackLength(_sfmOptions, _reconstruction->numRegisteredImages());
+        if (!pointUsableForPnp(*_reconstruction, currentId, minTrackLengthForPnp))
+        {
+            continue;
+        }
         for (const auto &trackElem : point.track.elements)
         {
             auto correspondences = _correspondenceGraph.findCorrespondences(trackElem.imageId, trackElem.featureIdx);

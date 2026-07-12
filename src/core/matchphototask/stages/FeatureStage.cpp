@@ -45,7 +45,7 @@ float siftDetectionThresholdForTiePoints(const MatchPhotosOptions &options)
 {
     // CUDA SIFT 内部阈值量纲约为 UI 阈值 * 1000。空三连接点需要比通用特征提取
     // 更密的候选点；Dino/Hayabusa2 这类低纹理影像在 0.001 时会明显少于 Metashape。
-    return options.profile == MatchPhotosProfile::Fast ? 0.003f : 0.0005f;
+    return options.profile == MatchPhotosProfile::Fast ? 0.003f : 0.0001f;
 }
 
 cv::Mat resizeForFeatureExtraction(const cv::Mat &grayImage,

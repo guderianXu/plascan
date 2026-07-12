@@ -2,6 +2,7 @@
 
 #include "ui_DataTreeWidget.h"
 #include "ProjectWorkflowUtils.h"
+#include "WorkspaceSectionIcons.h"
 
 #include <QTreeView>
 #include <QStandardItemModel>
@@ -13,9 +14,9 @@
 #include <QFileInfo>
 #include <QDir>
 #include <QItemSelectionModel>
+#include <QLocale>
 #include <QMessageBox>
 #include <QImageReader>
-#include <QStyle>
 #include <QSet>
 #include <QVector>
 
@@ -28,6 +29,9 @@
 
 namespace
 {
+
+constexpr int SectionRole = Qt::UserRole + 1;
+constexpr int ResourcePathRole = Qt::UserRole + 2;
 
 QString depthResultKind(const QJsonObject &record)
 {
@@ -438,6 +442,7 @@ DataTreeWidget::DataTreeWidget(QWidget *parent)
     _model->setHorizontalHeaderLabels({QObject::tr("名称"), QObject::tr("路径"), QObject::tr("存储")});
 
     _view->setModel(_model);
+    _view->setIconSize(QSize(18, 18));
     // 隐藏“路径/存储”两列
     _view->setColumnHidden(1, true);
     _view->setColumnHidden(2, true);
@@ -607,11 +612,13 @@ QJsonObject DataTreeWidget::normalizeMeta(const QJsonObject &meta) const
     return normalized;
 }
 
-QStandardItem *DataTreeWidget::createSection(const QString &label)
+QStandardItem *DataTreeWidget::createSection(
+    const QString &label,
+    xjw::gui::widgets::WorkspaceSection section)
 {
     auto *nameItem = new QStandardItem(label);
     nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
-    nameItem->setIcon(style()->standardIcon(QStyle::SP_DirIcon));
+    nameItem->setIcon(xjw::gui::widgets::workspaceSectionIcon(section));
 
     auto *pathItem = new QStandardItem(QString());
     auto *storageItem = new QStandardItem(QString());
@@ -622,9 +629,12 @@ QStandardItem *DataTreeWidget::createSection(const QString &label)
     return nameItem;
 }
 
-QStandardItem *DataTreeWidget::createSection(const QString &title, int count)
+QStandardItem *DataTreeWidget::createSection(
+    const QString &title,
+    int count,
+    xjw::gui::widgets::WorkspaceSection section)
 {
-    return createSection(QStringLiteral("%1 (%2)").arg(title).arg(count));
+    return createSection(QStringLiteral("%1 (%2)").arg(title).arg(count), section);
 }
 
 void DataTreeWidget::appendItemRow(QStandardItem *parent,
@@ -640,6 +650,26 @@ void DataTreeWidget::appendItemRow(QStandardItem *parent,
     pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
     parent->appendRow({nameItem, pathItem, storageItem});
+}
+
+QStandardItem *DataTreeWidget::appendTopLevelResource(
+    const QString &name,
+    xjw::gui::widgets::WorkspaceSection section,
+    const QString &sectionName,
+    const QString &path,
+    const QString &storage)
+{
+    auto *nameItem = new QStandardItem(name);
+    auto *pathItem = new QStandardItem(path);
+    auto *storageItem = new QStandardItem(storage);
+    nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
+    pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
+    storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
+    nameItem->setIcon(xjw::gui::widgets::workspaceSectionIcon(section));
+    nameItem->setData(sectionName, SectionRole);
+    nameItem->setData(path, ResourcePathRole);
+    _model->appendRow({nameItem, pathItem, storageItem});
+    return nameItem;
 }
 
 void DataTreeWidget::sortSectionChildrenByFileName(QStandardItem *section)
@@ -710,6 +740,21 @@ bool DataTreeWidget::resourceFromIndex(const QModelIndex &index, QString *sectio
 
     const QModelIndex nameIndex = index.sibling(index.row(), 0);
     const QModelIndex parentIndex = nameIndex.parent();
+    const QString topLevelPath = _model->data(nameIndex, ResourcePathRole).toString();
+    const QString topLevelSection = _model->data(nameIndex, SectionRole).toString();
+    if (!topLevelPath.trimmed().isEmpty() && !topLevelSection.trimmed().isEmpty())
+    {
+        if (section)
+        {
+            *section = topLevelSection;
+        }
+        if (resourcePath)
+        {
+            *resourcePath = resolveResourcePath(topLevelPath);
+        }
+        return true;
+    }
+
     if (!parentIndex.isValid())
     {
         return false;
@@ -773,20 +818,44 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     QJsonArray reportResults = normalized.value("report_results").toArray();
     QJsonArray referenceDatasets = normalized.value("reference_datasets").toArray();
 
-    // 最近一次 AT 的总稀疏点数（用于"连接点"括号里显示）
+    QJsonObject currentTiePointRecord;
+    QString currentTiePointPath;
     int totalSparsePoints = -1;
-    // 已做过 AT 的影像集合（用于判断每张照片是否已对齐）
     QSet<QString> alignedImageKeys;
-    for (const QJsonValue &v : atResults) {
-        if (!v.isObject()) continue;
-        const QJsonObject obj = v.toObject();
-        // 更新总点数（取最后一次 AT 的结果）
-        const int pts = obj.value(QStringLiteral("sparse_point_count")).toInt(-1);
-        if (pts >= 0) totalSparsePoints = pts;
-        // 收集该 AT 使用过的影像
-        for (const QJsonValue &imgV : obj.value(QStringLiteral("selected_images")).toArray())
+    for (int index = atResults.size() - 1; index >= 0; --index)
+    {
+        const QJsonObject candidate = atResults.at(index).toObject();
+        const QString sparsePath = candidate.value(QStringLiteral("files"))
+                                       .toObject()
+                                       .value(QStringLiteral("sparse_cloud_xyz"))
+                                       .toString()
+                                       .trimmed();
+        if (!sparsePath.isEmpty())
         {
-            const QString key = imagePathKey(imagePathFromValue(imgV));
+            currentTiePointRecord = candidate;
+            currentTiePointPath = sparsePath;
+            break;
+        }
+    }
+
+    if (!currentTiePointRecord.isEmpty())
+    {
+        totalSparsePoints = currentTiePointRecord.value(QStringLiteral("sparse_point_count")).toInt(-1);
+        if (totalSparsePoints < 0)
+        {
+            totalSparsePoints = currentTiePointRecord.value(QStringLiteral("point_count")).toInt(-1);
+        }
+        if (totalSparsePoints < 0)
+        {
+            totalSparsePoints = currentTiePointRecord.value(QStringLiteral("quality"))
+                                    .toObject()
+                                    .value(QStringLiteral("point_count"))
+                                    .toInt(-1);
+        }
+        for (const QJsonValue &imageValue :
+             currentTiePointRecord.value(QStringLiteral("selected_images")).toArray())
+        {
+            const QString key = imagePathKey(imagePathFromValue(imageValue));
             if (!key.isEmpty())
             {
                 alignedImageKeys.insert(key);
@@ -803,7 +872,6 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         }
     }
 
-    const int sparseResultCount = displayableSparseResultCount(atResults);
     const int depthMapCount = displayableMvsDepthResultCount(depthResults);
     const int denseCount = countObjectsWithPath(denseResults, {"dense_cloud_xyz", "source_sparse_cloud"});
     const int modelCount = displayableMeshResultCount(modelResults) + _transientModels.size();
@@ -827,21 +895,49 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     
     _model->removeRows(0, _model->rowCount());
 
-    // "连接点" 括号里显示稀疏点总数（若有AT结果），否则显示文件数
-    const int matchesCount = (totalSparsePoints >= 0) ? totalSparsePoints : atResults.size();
-
+    using xjw::gui::widgets::WorkspaceSection;
     auto *photos = images.isEmpty()
         ? nullptr
-        : createSection(QStringLiteral("照片 (%1/%2 对齐)").arg(alignedImageCount).arg(images.size()));
-    auto *obsNet = obsNetResults.isEmpty() ? nullptr : createSection(QStringLiteral("观测网络"), obsNetResults.size());
-    auto *matches = sparseResultCount <= 0 ? nullptr : createSection(QStringLiteral("连接点"), matchesCount);
-    auto *depthMaps = depthMapCount <= 0 ? nullptr : createSection(QStringLiteral("深度图"), depthMapCount);
-    auto *denseCloud = denseCount <= 0 ? nullptr : createSection(QStringLiteral("稠密点云"), denseCount);
-    auto *model3d = modelCount <= 0 ? nullptr : createSection(QStringLiteral("3D模型"), modelCount);
-    auto *dem = demCount <= 0 ? nullptr : createSection(QStringLiteral("DEM"), demCount);
-    auto *ortho = orthoCount <= 0 ? nullptr : createSection(QStringLiteral("正射影像"), orthoCount);
-    auto *references = referenceCount <= 0 ? nullptr : createSection(QStringLiteral("参考数据"), referenceCount);
-    auto *reports = reportCount <= 0 ? nullptr : createSection(QStringLiteral("报告"), reportCount);
+        : createSection(QStringLiteral("照片 (%1/%2 对齐)").arg(alignedImageCount).arg(images.size()),
+                        WorkspaceSection::Photos);
+    auto *obsNet = obsNetResults.isEmpty()
+        ? nullptr
+        : createSection(QStringLiteral("观测网络"), obsNetResults.size(), WorkspaceSection::ObservationNetwork);
+    if (!currentTiePointPath.isEmpty())
+    {
+        QString tiePointLabel = QStringLiteral("连接点");
+        if (totalSparsePoints >= 0)
+        {
+            tiePointLabel = QStringLiteral("连接点（%1个点）")
+                                .arg(QLocale().toString(totalSparsePoints));
+        }
+        appendTopLevelResource(tiePointLabel,
+                               WorkspaceSection::TiePoints,
+                               QStringLiteral("连接点"),
+                               currentTiePointPath,
+                               QStringLiteral("generated"));
+    }
+    auto *depthMaps = depthMapCount <= 0
+        ? nullptr
+        : createSection(QStringLiteral("深度图"), depthMapCount, WorkspaceSection::DepthMaps);
+    auto *denseCloud = denseCount <= 0
+        ? nullptr
+        : createSection(QStringLiteral("稠密点云"), denseCount, WorkspaceSection::DenseCloud);
+    auto *model3d = modelCount <= 0
+        ? nullptr
+        : createSection(QStringLiteral("3D模型"), modelCount, WorkspaceSection::Model3D);
+    auto *dem = demCount <= 0
+        ? nullptr
+        : createSection(QStringLiteral("DEM"), demCount, WorkspaceSection::Dem);
+    auto *ortho = orthoCount <= 0
+        ? nullptr
+        : createSection(QStringLiteral("正射影像"), orthoCount, WorkspaceSection::Orthomosaic);
+    auto *references = referenceCount <= 0
+        ? nullptr
+        : createSection(QStringLiteral("参考数据"), referenceCount, WorkspaceSection::ReferenceData);
+    auto *reports = reportCount <= 0
+        ? nullptr
+        : createSection(QStringLiteral("报告"), reportCount, WorkspaceSection::Reports);
 
     Q_UNUSED(ipfindResults);
     Q_UNUSED(ipmatchResults);
@@ -881,40 +977,6 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         QString name = QStringLiteral("%1  [N:%2 E:%3]").arg(algo).arg(nodes).arg(edges);
         if (!ts.isEmpty()) name += QStringLiteral("  %1").arg(ts.left(10));
         appendItemRow(obsNet, name, QString::number(i), QStringLiteral("generated"));
-    }
-
-    // ── 连接点（稀疏点云文件） ────────────────────────────────────────────
-    for (int i = 0; i < atResults.size(); ++i) {
-        const QJsonObject obj = atResults.at(i).toObject();
-        const QJsonObject files = obj.value(QStringLiteral("files")).toObject();
-        const QString sparsePath = files.value(QStringLiteral("sparse_cloud_xyz")).toString();
-        if (sparsePath.isEmpty()) {
-            continue;
-        }
-
-        const QString operation = obj.value(QStringLiteral("operation")).toString(QStringLiteral("triangulation"));
-        QString operationLabel = obj.value(QStringLiteral("operation_display_name")).toString();
-        if (operationLabel.isEmpty()) {
-            operationLabel = xjw::gui::project::sparseOperationDisplayName(operation);
-        }
-
-        QString name = QStringLiteral("#%1 %2").arg(i).arg(operationLabel);
-        const int pts = obj.value(QStringLiteral("sparse_point_count")).toInt(-1);
-        if (pts >= 0) {
-            name += QStringLiteral("  [点: %1]").arg(pts);
-        }
-        const int sourceIndex = obj.value(QStringLiteral("source_result_index")).toInt(-1);
-        if (sourceIndex >= 0) {
-            name += QStringLiteral("  [源 #%1]").arg(sourceIndex);
-        }
-        const QString dirName = QFileInfo(obj.value(QStringLiteral("output_dir")).toString()).fileName();
-        if (!dirName.isEmpty()) {
-            name += QStringLiteral("  (%1)").arg(dirName);
-        }
-        if (i == atResults.size() - 1) {
-            name += QStringLiteral("  [当前]");
-        }
-        appendItemRow(matches, name, sparsePath, QStringLiteral("generated"));
     }
 
     // ── 3D 模型 ───────────────────────────────────────────────────────────
@@ -1126,18 +1188,12 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
     QList<QModelIndex> rows;
     QString sectionName;
     bool sameSection = true;
-    bool hasSectionRoot = false;
     for (const QModelIndex &i : uniqueRows) {
-        if (!i.parent().isValid()) {
-            hasSectionRoot = true;
-            continue;
-        }
-        QModelIndex pathIdx = i.sibling(i.row(), 1);
-        if (pathIdx.isValid()) {
-            paths << resolveResourcePath(_model->data(pathIdx).toString());
+        QString rowSection;
+        QString rowPath;
+        if (resourceFromIndex(i, &rowSection, &rowPath)) {
+            paths << rowPath;
             rows.append(i);
-
-            const QString rowSection = _model->data(i.parent()).toString().section(' ', 0, 0);
             if (sectionName.isEmpty()) {
                 sectionName = rowSection;
             } else if (sectionName != rowSection) {
@@ -1146,7 +1202,7 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
         }
     }
 
-    if (rows.isEmpty() && hasSectionRoot) {
+    if (rows.isEmpty()) {
         return;
     }
 

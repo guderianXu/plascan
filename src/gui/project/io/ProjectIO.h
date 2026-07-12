@@ -30,6 +30,10 @@ public:
     // 从 .plascan 文件路径推导出项目根目录（即 .plascan 所在目录）
     static QString projectRootFromPlascan(const QString &plascanPath);
 
+    // 将项目元数据中的相对资源路径解析为以 .plascan 所在目录为基准的绝对路径。
+    static QString resolveProjectResourcePath(const QString &plascanPath,
+                                              const QString &resourcePath);
+
     // 返回 assets/ 目录的绝对路径
     static QString projectAssetsDir(const QString &plascanPath);
 

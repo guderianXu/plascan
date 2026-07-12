@@ -3,12 +3,16 @@
 #include <QDialog>
 #include <QJsonArray>
 #include <QJsonObject>
+#include <QMetaObject>
 
 class QCheckBox;
 class QComboBox;
 class QDoubleSpinBox;
 class QLabel;
 class QPushButton;
+class QScrollArea;
+class QScreen;
+class QShowEvent;
 class QToolButton;
 class QWidget;
 
@@ -32,6 +36,9 @@ signals:
     void runRequested(const QJsonObject &settings);
     void settingsChanged(const QJsonObject &settings);
 
+protected:
+    void showEvent(QShowEvent *event) override;
+
 private slots:
     void emitSettingsNow();
     void onRun();
@@ -43,8 +50,11 @@ private:
     void refreshSourceTypes();
     void refreshSourceItems();
     void setAdvancedExpanded(bool expanded);
+    void bindScreenGeometryUpdates(QScreen *targetScreen);
+    void refreshScrollableDialogSize();
     void updateAvailability();
     void updateBlockControlsAvailability();
+    void updateScrollableContentHeight();
 
     QJsonArray _candidates;
     QString _pendingSourceData;
@@ -57,8 +67,13 @@ private:
     QComboBox *_faceCountCombo = nullptr;
     QCheckBox *_saveEachStepCheck = nullptr;
     QCheckBox *_splitRegionCheck = nullptr;
+    QLabel *_coordinateLabel = nullptr;
     QDoubleSpinBox *_blockSizeSpin = nullptr;
+    QLabel *_originLabel = nullptr;
     QCheckBox *_skipBoundaryBlocksCheck = nullptr;
+    QScrollArea *_contentScrollArea = nullptr;
+    QMetaObject::Connection _screenGeometryConnection;
+    bool _screenChangeConnected = false;
     QToolButton *_advancedToggle = nullptr;
     QWidget *_advancedContent = nullptr;
     QComboBox *_interpolationCombo = nullptr;

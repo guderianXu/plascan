@@ -178,6 +178,55 @@ TEST(ProjectDataTest, CreateSaveOpenSupportsChineseProjectPath)
               QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath()));
 }
 
+TEST(ProjectDataCameraTest, ReplaceImageCamerasClearsStaleAlignmentOutsideNewSolution)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    const QString image1 = QDir(dir.path()).filePath(QStringLiteral("image_1.png"));
+    const QString image2 = QDir(dir.path()).filePath(QStringLiteral("image_2.png"));
+    const QString image3 = QDir(dir.path()).filePath(QStringLiteral("image_3.png"));
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("camera_replace")));
+    ASSERT_TRUE(project.addImages({image1, image2, image3}));
+
+    const QJsonObject oldCamera{{QStringLiteral("model"), QStringLiteral("pinhole")},
+                                {QStringLiteral("aligned"), true}};
+    int updatedCount = 0;
+    QString error;
+    ASSERT_TRUE(project.setImageCameras({{image1, oldCamera},
+                                         {image2, oldCamera},
+                                         {image3, oldCamera}},
+                                        &updatedCount,
+                                        &error))
+        << qPrintable(error);
+    ASSERT_EQ(updatedCount, 3);
+
+    const QJsonObject newCamera{{QStringLiteral("model"), QStringLiteral("pinhole")},
+                                {QStringLiteral("aligned"), true},
+                                {QStringLiteral("solution"), QStringLiteral("current")}};
+    int clearedCount = 0;
+    ASSERT_TRUE(project.replaceImageCameras({image1, image2, image3},
+                                             {{image1, newCamera}, {image2, newCamera}},
+                                             &updatedCount,
+                                             &clearedCount,
+                                             &error))
+        << qPrintable(error);
+    EXPECT_EQ(updatedCount, 2);
+    EXPECT_EQ(clearedCount, 1);
+
+    const QJsonArray images = project.coreFilesMeta().value(QStringLiteral("images")).toArray();
+    ASSERT_EQ(images.size(), 3);
+    EXPECT_EQ(images.at(0).toObject().value(QStringLiteral("camera")).toObject()
+                  .value(QStringLiteral("solution")).toString(),
+              QStringLiteral("current"));
+    EXPECT_EQ(images.at(1).toObject().value(QStringLiteral("camera")).toObject()
+                  .value(QStringLiteral("solution")).toString(),
+              QStringLiteral("current"));
+    EXPECT_FALSE(images.at(2).toObject().contains(QStringLiteral("camera")));
+}
+
 TEST(ProjectDataTest, SaveProjectWritesWorkflowResultsToResultsEntryOnly)
 {
     QTemporaryDir dir;

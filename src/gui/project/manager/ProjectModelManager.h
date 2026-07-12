@@ -18,8 +18,9 @@ public:
                                  QObject *parent = nullptr);
 
     void startGenerateModelAsync();
-    void startMeshReconstructionAsync(const QJsonObject &settings);
+    bool startMeshReconstructionAsync(const QJsonObject &settings);
     void startTextureMappingAsync(const QJsonObject &settings);
+    bool isRunning() const;
 
 signals:
     void meshProgressChanged(const QString &stage, int percent);
@@ -35,4 +36,5 @@ private:
     ProjectManager *_owner = nullptr;
     ProjectData *_projectData = nullptr;
     QWidget *_parentWidget = nullptr;
+    bool _isRunning = false;
 };

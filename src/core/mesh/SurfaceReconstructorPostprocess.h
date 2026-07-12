@@ -12,8 +12,10 @@ namespace detail
 void simplifyVoxelMeshAdaptive(TriMesh *mesh,
                                const ReconstructionConfig &config,
                                float voxelStep);
+void weldCoincidentVertices(TriMesh *mesh, float relativeTolerance);
 void removeDegenerateFaces(TriMesh *mesh);
 void removeSmallConnectedComponents(TriMesh *mesh, int minFaces);
+int fillSmallBoundaryHoles(TriMesh *mesh, int maxBoundaryEdges);
 void taubinSmooth(TriMesh *mesh, int iterations, float lambda);
 void recomputeNormals(TriMesh *mesh);
 

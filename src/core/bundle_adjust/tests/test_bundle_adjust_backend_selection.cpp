@@ -19,6 +19,28 @@ TEST(BundleAdjustBackendSelectionTest, SmallProblemUsesLegacyCpu)
     EXPECT_EQ(selected, xjw::BABackend::LegacyCpu);
 }
 
+TEST(BundleAdjustBackendSelectionTest, SmallProblemExplainsWhyCudaIsNotUsed)
+{
+    xjw::BAOptions options;
+    options.backend = xjw::BABackend::Auto;
+    options.minNativeCudaCameras = 50;
+    options.minNativeCudaObservations = 500000;
+    options.minCeresCudaCameras = 50;
+    options.minCeresCudaObservations = 500000;
+    options.minCeresCpuObservations = 50000;
+
+    xjw::BAProblemStats stats;
+    stats.cameraCount = 16;
+    stats.trackCount = 4021;
+    stats.observationCount = 12000;
+
+    const xjw::BABackendDecision decision =
+        xjw::BundleAdjust::decideBackendForProblem(stats, options);
+
+    EXPECT_EQ(decision.backend, xjw::BABackend::LegacyCpu);
+    EXPECT_EQ(decision.reason, "below_accelerated_problem_size");
+}
+
 TEST(BundleAdjustBackendSelectionTest, LargeProblemCanSelectCudaWhenAvailable)
 {
     xjw::BAOptions options;

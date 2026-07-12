@@ -1,5 +1,7 @@
 #pragma once
 
+#include "ProjectTiePointResultService.h"
+
 #include <QJsonObject>
 #include <QString>
 #include <QStringList>
@@ -33,13 +35,12 @@ void replaceProjectRecordWithLatest(ProjectData *projectData,
                                     const QJsonObject &record,
                                     bool markDirty = true);
 
-void appendAtResult(ProjectData *projectData,
-                    const QString &sparseCloudPath,
-                    int sparsePointCount,
-                    const QStringList &selectedImages,
-                    const QString &outputDir,
-                    const QJsonObject &extraRecord = {},
-                    int replaceIndex = -1);
+TiePointMutationResult replaceTiePointResult(ProjectData *projectData,
+                                             const QString &sparseCloudPath,
+                                             int sparsePointCount,
+                                             const QStringList &selectedImages,
+                                             const QString &outputDir,
+                                             const QJsonObject &extraRecord = {});
 
 void appendObsNetResult(ProjectData *projectData,
                         int nodeCount,

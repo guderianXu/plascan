@@ -1,5 +1,6 @@
 #include "DepthFrameUtils.h"
 
+#include "DepthMapGenerator.h"
 #include "io/PathIO.h"
 
 #include <QDir>
@@ -123,6 +124,75 @@ int frameIndexFromPath(const QString &path)
     const QRegularExpression re(QStringLiteral("(\\d+)(?!.*\\d)"));
     const QRegularExpressionMatch match = re.match(QFileInfo(path).completeBaseName());
     return match.hasMatch() ? match.captured(1).toInt() : std::numeric_limits<int>::max();
+}
+
+QString normalizedDirectoryPath(const QString &path)
+{
+    const QFileInfo path_info(path);
+    const QString directory_path = path_info.isDir()
+        ? path_info.absoluteFilePath()
+        : path_info.absolutePath();
+    return QDir::cleanPath(directory_path);
+}
+
+StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &depth_results,
+                                                            const QString &batch_directory)
+{
+    StoredDepthFramesResult result;
+    const QString normalized_batch_directory = normalizedDirectoryPath(batch_directory);
+    if (normalized_batch_directory.isEmpty())
+    {
+        result.status = {false, QStringLiteral("深度图批次目录为空")};
+        return result;
+    }
+
+    for (const QJsonValue &value : depth_results)
+    {
+        const QJsonObject record = value.toObject();
+        const QString depth_png = record.value(QStringLiteral("depth_png")).toString();
+        const QString raw_depth_path = resolveExistingRawDepthPath(
+            depth_png,
+            record.value(QStringLiteral("raw_depth_path")).toString());
+        if (raw_depth_path.isEmpty() ||
+            normalizedDirectoryPath(raw_depth_path).compare(normalized_batch_directory,
+                                                              Qt::CaseInsensitive) != 0)
+        {
+            continue;
+        }
+
+        StoredDepthFrameRecord frame;
+        frame.refImage = record.value(QStringLiteral("ref_image")).toString();
+        frame.depthPng = depth_png;
+        frame.rawDepthPath = raw_depth_path;
+        frame.rawConfidencePath = resolveExistingRawConfidencePath(
+            frame.depthPng,
+            record.value(QStringLiteral("raw_confidence_path")).toString());
+        frame.configHash = record.value(QStringLiteral("config_hash")).toString();
+        frame.projectInputSignature =
+            record.value(QStringLiteral("project_input_signature")).toString();
+        frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
+        frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
+        if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))
+        {
+            result.frames.push_back(std::move(frame));
+        }
+    }
+
+    std::sort(result.frames.begin(), result.frames.end(), [](const StoredDepthFrameRecord &lhs,
+                                                              const StoredDepthFrameRecord &rhs) {
+        return frameIndexFromPath(lhs.rawDepthPath) < frameIndexFromPath(rhs.rawDepthPath);
+    });
+    result.batchDir = normalized_batch_directory;
+    if (result.frames.empty())
+    {
+        result.status = {false,
+                         QStringLiteral("所选目录不包含可复用的原始深度图：%1")
+                             .arg(normalized_batch_directory)};
+        return result;
+    }
+
+    result.status = {true, QString()};
+    return result;
 }
 
 } // namespace
@@ -259,51 +329,15 @@ StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projec
         return result;
     }
 
-    for (const QJsonValue &value : depthResults)
-    {
-        const QJsonObject record = value.toObject();
-        const QString depthPng = record.value(QStringLiteral("depth_png")).toString();
-        const QString rawDepthPath = resolveExistingRawDepthPath(
-            depthPng,
-            record.value(QStringLiteral("raw_depth_path")).toString());
-        if (rawDepthPath.isEmpty())
-        {
-            continue;
-        }
-        if (QFileInfo(rawDepthPath).absolutePath() != latestDir)
-        {
-            continue;
-        }
+    return collectStoredDepthFramesInDirectory(depthResults, latestDir);
+}
 
-        StoredDepthFrameRecord frame;
-        frame.refImage = record.value(QStringLiteral("ref_image")).toString();
-        frame.depthPng = depthPng;
-        frame.rawDepthPath = rawDepthPath;
-        frame.rawConfidencePath = resolveExistingRawConfidencePath(
-            frame.depthPng,
-            record.value(QStringLiteral("raw_confidence_path")).toString());
-        frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();
-        frame.gridHeight = record.value(QStringLiteral("grid_height")).toInt();
-        if (!frame.refImage.isEmpty() && depthFrameArtifactsExist(frame))
-        {
-            result.frames.push_back(std::move(frame));
-        }
-    }
-
-    std::sort(result.frames.begin(), result.frames.end(), [](const StoredDepthFrameRecord &lhs,
-                                                              const StoredDepthFrameRecord &rhs) {
-        return frameIndexFromPath(lhs.rawDepthPath) < frameIndexFromPath(rhs.rawDepthPath);
-    });
-
-    result.batchDir = latestDir;
-    if (result.frames.empty())
-    {
-        result.status = {false, QStringLiteral("最近一次深度图批次不包含可用帧")};
-        return result;
-    }
-
-    result.status = {true, QString()};
-    return result;
+StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &projectMeta,
+                                                             const QString &batchDirectory)
+{
+    return collectStoredDepthFramesInDirectory(
+        projectMeta.value(QStringLiteral("depth_map_results")).toArray(),
+        batchDirectory);
 }
 
 xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(
@@ -368,7 +402,7 @@ bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
 
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
                                               const xjw::Camera &camera,
-                                              float confidenceThreshold,
+                                              const xjw::mvs::FusionConfig &fusionConfig,
                                               int viewCount,
                                               int fusionMaxImageDim)
 {
@@ -385,36 +419,19 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
         return result;
     }
 
-    const float effectiveThreshold = (viewCount <= 2) ? 0.0f : confidenceThreshold;
-    const bool shouldLoadConfidence = effectiveThreshold > 0.0f;
-    if (shouldLoadConfidence)
+    const QString rawConfidencePath = resolveExistingRawConfidencePath(stored.depthPng,
+                                                                       stored.rawConfidencePath);
+    if (!rawConfidencePath.isEmpty())
     {
-        const QString rawConfidencePath = resolveExistingRawConfidencePath(stored.depthPng, stored.rawConfidencePath);
-        if (!rawConfidencePath.isEmpty())
-        {
-            (void)loadDepthMatStorage(rawConfidencePath, &result.frame.confidence);
-        }
+        (void)loadDepthMatStorage(rawConfidencePath, &result.frame.confidence);
     }
 
-    if (shouldLoadConfidence &&
-        !result.frame.confidence.empty() &&
-        result.frame.confidence.size() == result.frame.depthMap.size() &&
-        result.frame.confidence.type() == CV_32F &&
-        result.frame.depthMap.type() == CV_32F)
-    {
-        for (int row = 0; row < result.frame.depthMap.rows; ++row)
-        {
-            float *depthRow = result.frame.depthMap.ptr<float>(row);
-            const float *confRow = result.frame.confidence.ptr<float>(row);
-            for (int col = 0; col < result.frame.depthMap.cols; ++col)
-            {
-                if (confRow[col] < effectiveThreshold)
-                {
-                    depthRow[col] = 0.0f;
-                }
-            }
-        }
-    }
+    result.frame.depthPostprocess = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
+        result.frame.depthMap,
+        result.frame.confidence,
+        fusionConfig,
+        frameIndexFromPath(stored.rawDepthPath),
+        viewCount);
 
     downsampleFusionFrameForMaxDimension(&result.frame, fusionMaxImageDim);
     result.frame.confidence.release();

@@ -45,17 +45,6 @@ target_include_directories(test_torchscript_model_resolver PRIVATE
 )
 gtest_discover_tests(test_torchscript_model_resolver)
 
-add_executable(test_mask_generation test_mask_generation.cpp)
-target_link_libraries(test_mask_generation PRIVATE
-    mask
-    ${OpenCV_LIBS}
-    GTest::gtest_main
-)
-target_include_directories(test_mask_generation PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/mask
-)
-gtest_discover_tests(test_mask_generation)
-
 add_executable(test_source_contracts test_source_contracts.cpp)
 target_link_libraries(test_source_contracts PRIVATE
     Qt6::Core
@@ -104,6 +93,12 @@ if(TARGET dense_cloud_refine_cli)
         PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH="$<TARGET_FILE:dense_cloud_refine_cli>"
     )
     add_dependencies(test_cli_contracts dense_cloud_refine_cli)
+endif()
+if(TARGET mesh_reconstruct_cli)
+    target_compile_definitions(test_cli_contracts PRIVATE
+        PLASCAN_MESH_RECONSTRUCT_CLI_PATH="$<TARGET_FILE:mesh_reconstruct_cli>"
+    )
+    add_dependencies(test_cli_contracts mesh_reconstruct_cli)
 endif()
 if(TARGET match_photos_cli)
     target_compile_definitions(test_cli_contracts PRIVATE
@@ -296,6 +291,18 @@ target_include_directories(test_sfm_pair_planner PRIVATE
 )
 gtest_discover_tests(test_sfm_pair_planner)
 
+add_executable(test_sfm_search_policy
+    test_sfm_search_policy.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/SfmSearchPolicy.cpp
+)
+target_link_libraries(test_sfm_search_policy PRIVATE
+    GTest::gtest_main
+)
+target_include_directories(test_sfm_search_policy PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
+)
+gtest_discover_tests(test_sfm_search_policy)
+
 add_executable(test_reconstruction_prerequisites
     test_reconstruction_prerequisites.cpp
     ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/ReconstructionPrerequisiteReport.cpp
@@ -330,6 +337,7 @@ add_executable(test_aerial_triangulation_workflow
 )
 target_link_libraries(test_aerial_triangulation_workflow PRIVATE
     Qt6::Core
+    matchphototask
     sfm
     camera
     intersection
@@ -827,6 +835,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/BundleAdjustDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/AboutDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateMaskDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateModelDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/WorkflowParameterDialogStyle.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/SurveyControlDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CreateTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThinTiePointsDialog.cpp
@@ -839,6 +849,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDashboardSummary.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelWorkflowPolicy.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectMetadataOperations.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
@@ -847,14 +858,24 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSurveyControl.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTiePointResultService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectResultRecords.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ImageViewRotationSettings.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/PythonRuntimeBinding.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerFeatureLoader.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/LayerStitchedDebug.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/CanvasWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkspaceSectionIcons.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchValidityAnalyzer.cpp
@@ -897,6 +918,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/gui/menu
     ${CMAKE_SOURCE_DIR}/src/gui/main_window
+    ${CMAKE_SOURCE_DIR}/src/gui/tasks
     ${CMAKE_SOURCE_DIR}/src/gui/project
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
@@ -909,6 +931,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/sfm
     ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/feature_match
+    ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/qc
@@ -928,6 +951,73 @@ gtest_discover_tests(test_gui_project_utils
     PROPERTIES
         ENVIRONMENT
             "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+
+add_executable(test_workspace_section_icons
+    test_workspace_section_icons.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkspaceSectionIcons.cpp
+)
+set_target_properties(test_workspace_section_icons PROPERTIES
+    AUTOMOC ON
+    AUTOUIC ON
+)
+target_link_libraries(test_workspace_section_icons PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Widgets
+    GTest::gtest
+)
+target_include_directories(test_workspace_section_icons PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/project/support
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets
+    ${CMAKE_SOURCE_DIR}/src/core
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+gtest_discover_tests(test_workspace_section_icons
+    DISCOVERY_TIMEOUT 60
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+
+add_executable(test_workflow_parameter_dialog_style
+    test_workflow_parameter_dialog_style.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/GenerateModelDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/WorkflowParameterDialogStyle.cpp
+)
+set_target_properties(test_workflow_parameter_dialog_style PROPERTIES
+    AUTOMOC ON
+)
+target_link_libraries(test_workflow_parameter_dialog_style PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Test
+    Qt6::Widgets
+    GTest::gtest
+)
+target_include_directories(test_workflow_parameter_dialog_style PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+)
+target_compile_definitions(test_workflow_parameter_dialog_style PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+gtest_discover_tests(test_workflow_parameter_dialog_style
+    DISCOVERY_TIMEOUT 60
+    DISCOVERY_MODE PRE_TEST
+    PROPERTIES
+        ENVIRONMENT
+            "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH}")
+
+add_test(
+    NAME WorkflowParameterDialogStyleDpi200
+    COMMAND $<TARGET_FILE:test_workflow_parameter_dialog_style>
+            --gtest_filter=WorkflowParameterDialogStyleTest.AdvancedSectionAndRegionControlsKeepBehavior
+)
+set_tests_properties(WorkflowParameterDialogStyleDpi200 PROPERTIES
+    ENVIRONMENT
+        "QT_QPA_PLATFORM=offscreen;QT_QPA_PLATFORM_PLUGIN_PATH=${PLASCAN_QT_PLATFORM_PLUGIN_PATH};QT_SCALE_FACTOR=2.0"
+)
 
 add_executable(test_layer_renderer_batched_overlay
     test_layer_renderer_batched_overlay.cpp

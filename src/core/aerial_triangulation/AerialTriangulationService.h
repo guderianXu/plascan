@@ -47,6 +47,12 @@ struct AerialTriangulationServiceOptions
     // ── 项目路径（用于查找已有特征 / .match 文件）────────────────────────
     QString             plascanPath;        ///< 当前 .plascan 项目路径
 
+    /// 连接点阶段与 SfM 共用的缓存目录。为空时回退到项目 assets 目录；
+    /// 统一 workflow 应显式传入，避免两个阶段分别读写不同缓存。
+    QString             assetsDir;
+    QString             featureDir;
+    QString             matchDir;
+
     // ── 项目元数据（备用；目前优先目录扫描）─────────────────────────────
     QJsonObject         projectMeta;        ///< project_files.json 内容
 
@@ -66,6 +72,17 @@ struct AerialTriangulationServiceOptions
     /// 仅执行 Phase 1（特征检测）+ Phase 2（特征匹配），不做相机注册和 BA。
     /// 用于光束法平差模式：先自动保证特征/匹配存在，再由外部做 BA。
     bool                baOnly  = false;
+
+    /// 内部候选粗筛关闭成果写出；正式调用保持 true。
+    bool                writeSfmOutputs = true;
+    /// SfM 执行强度：正式精化或候选粗筛。
+    SfmExecutionProfile sfmExecutionProfile = SfmExecutionProfile::FullRefinement;
+    /// 正式重放是否使用粗筛选出的初始像对。
+    bool                useInitialPairHint = false;
+    ImageId             initialImageId1 = kInvalidImageId;
+    ImageId             initialImageId2 = kInvalidImageId;
+    /// 并发粗筛日志使用的稳定候选标识。
+    QString             searchCandidateId;
 
     // ── 进度回调（在调用线程中同步调用，UI层应使用 Qt::QueuedConnection 转发）────
     /// @param stage    当前阶段名称，例如 "特征提取 3/20"
@@ -139,6 +156,11 @@ struct AerialTriangulationServiceOptions
     /// 是否自动补全缺失匹配对。
     /// true: 对缺失匹配自动调用配置的匹配器生成；false: 仅复用已有 .match 文件。
     bool                autoGenerateMissingMatches = true;
+
+    /// 是否读写 matchDir/no_match_pairs.json。
+    /// 普通运行保留该缓存以跳过稳定无效的影像对；自适应焦距 sweep 会关闭，
+    /// 避免一个焦距假设下的失败配对污染后续焦距尝试。
+    bool                useNoMatchCache = true;
 
     /// 是否在初始 SfM 后启用 guided rematching 第二轮候选规划。
     /// 默认关闭；开启后只补充弱匹配/无匹配但相机已注册的 pair，不替换已有稳定匹配。

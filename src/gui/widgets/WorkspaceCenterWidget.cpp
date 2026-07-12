@@ -53,6 +53,11 @@ WorkspaceCenterWidget::WorkspaceCenterWidget(QWidget *parent)
     _dualImageViewer = _ui->m_dualImageViewer;
     _obsNetView = _ui->m_obsNetView;
 
+    connect(_stack, &QStackedWidget::currentChanged, this, [this](int)
+    {
+        emit viewModeChanged(currentViewMode());
+    });
+
     connect(_modelBtn, &QPushButton::clicked, this, &WorkspaceCenterWidget::showModelView);
     connect(_imageBtn, &QPushButton::clicked, this, [this]()
     {
@@ -125,6 +130,31 @@ CanvasWidget *WorkspaceCenterWidget::canvas() const
 CameraSceneWidget *WorkspaceCenterWidget::modelView() const
 {
     return _modelView;
+}
+
+WorkspaceCenterWidget::ViewMode WorkspaceCenterWidget::currentViewMode() const
+{
+    if (!_stack)
+    {
+        return ViewMode::None;
+    }
+    if (_stack->currentWidget() == _modelView)
+    {
+        return ViewMode::Model;
+    }
+    if (_stack->currentWidget() == _canvas)
+    {
+        return ViewMode::Image;
+    }
+    if (_stack->currentWidget() == _dualImageViewer)
+    {
+        return ViewMode::Compare;
+    }
+    if (_stack->currentWidget() == _obsNetView)
+    {
+        return ViewMode::ObservationNetwork;
+    }
+    return ViewMode::None;
 }
 
 void WorkspaceCenterWidget::showModelView()

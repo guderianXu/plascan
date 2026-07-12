@@ -950,6 +950,94 @@ bool ProjectData::setImageCameras(const QMap<QString, QJsonObject> &cameraMetaBy
     return true;
 }
 
+bool ProjectData::replaceImageCameras(const QStringList &targetImagePaths,
+                                      const QMap<QString, QJsonObject> &cameraMetaByImage,
+                                      int *updatedCount,
+                                      int *clearedCount,
+                                      QString *errorMsg)
+{
+    if (updatedCount) *updatedCount = 0;
+    if (clearedCount) *clearedCount = 0;
+
+    if (_projectPath.isEmpty())
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("没有打开的项目");
+        return false;
+    }
+    if (targetImagePaths.isEmpty())
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("没有指定要替换相机结果的影像");
+        return false;
+    }
+
+    QSet<QString> normalizedTargets;
+    for (const QString &path : targetImagePaths)
+    {
+        normalizedTargets.insert(QDir::cleanPath(QFileInfo(path).absoluteFilePath()));
+    }
+
+    QMap<QString, QJsonObject> normalizedCameras;
+    for (auto it = cameraMetaByImage.constBegin(); it != cameraMetaByImage.constEnd(); ++it)
+    {
+        normalizedCameras.insert(QDir::cleanPath(QFileInfo(it.key()).absoluteFilePath()), it.value());
+    }
+
+    QJsonObject core = _filesManager.coreData();
+    QJsonArray images = core.value(QStringLiteral("images")).toArray();
+    int foundTargets = 0;
+    int updated = 0;
+    int cleared = 0;
+    for (int index = 0; index < images.size(); ++index)
+    {
+        if (!images[index].isObject())
+        {
+            continue;
+        }
+
+        QJsonObject image = images[index].toObject();
+        const QString imagePath = QDir::cleanPath(
+            QFileInfo(image.value(QStringLiteral("path")).toString()).absoluteFilePath());
+        if (!normalizedTargets.contains(imagePath))
+        {
+            continue;
+        }
+        ++foundTargets;
+
+        const auto cameraIt = normalizedCameras.constFind(imagePath);
+        if (cameraIt != normalizedCameras.constEnd())
+        {
+            image.remove(QStringLiteral("camera_file"));
+            image[QStringLiteral("camera")] = cameraIt.value();
+            ++updated;
+        }
+        else if (image.contains(QStringLiteral("camera")) ||
+                 image.contains(QStringLiteral("camera_file")))
+        {
+            image.remove(QStringLiteral("camera"));
+            image.remove(QStringLiteral("camera_file"));
+            ++cleared;
+        }
+        images[index] = image;
+    }
+
+    if (foundTargets <= 0)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("未找到可匹配的影像记录");
+        return false;
+    }
+
+    // 一次提交并只发出一次 metadataChanged，避免界面短暂显示新旧位姿混合状态。
+    core[QStringLiteral("images")] = images;
+    _filesManager.setCoreData(core);
+    markDirtyIfRequested(true);
+    emitCurrentMetadataChanged();
+    scheduleArchiveSync(true, false, true);
+
+    if (updatedCount) *updatedCount = updated;
+    if (clearedCount) *clearedCount = cleared;
+    return true;
+}
+
 // ---------- 清除相机参数 ----------
 
 bool ProjectData::clearImageCameras(const QStringList &imagePaths,

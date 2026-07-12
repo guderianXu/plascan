@@ -50,6 +50,8 @@ struct ReconstructionConfig
     float downsampleVoxelScale = 0.8f;
     plapoint::ProcessingDevice preprocessingDevice = plapoint::ProcessingDevice::Auto;
     bool  forcePoisson     = true;
+    bool  allowHeightGridFallback = true;
+    bool  orientNormalsForClosedSurface = false;
     int   poissonDepth     = 9;
     float poissonPointWeight = 4.0f;
     float poissonTrim      = 9.5f;

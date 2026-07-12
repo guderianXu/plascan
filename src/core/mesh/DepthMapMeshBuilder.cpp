@@ -14,25 +14,35 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
     QVector<DepthFrameArtifact> frames;
 
     const QStringList depthFiles =
-        dir.entryList(QStringList() << QStringLiteral("depth_*.raw"), QDir::Files, QDir::Name);
+        dir.entryList(QStringList() << QStringLiteral("depth_*.bin"), QDir::Files, QDir::Name);
     frames.reserve(depthFiles.size());
     for (const QString &fileName : depthFiles)
     {
-        const QString suffix = fileName.mid(QStringLiteral("depth_").size());
+        if (fileName.endsWith(QStringLiteral("_conf.bin")))
+        {
+            continue;
+        }
+
         DepthFrameArtifact frame;
         frame.depthPath = dir.filePath(fileName);
+        const QString base_name = QFileInfo(fileName).completeBaseName();
 
-        const QString confidenceName = QStringLiteral("confidence_%1").arg(suffix);
+        const QString confidenceName = base_name + QStringLiteral("_conf.bin");
         if (QFileInfo::exists(dir.filePath(confidenceName)))
         {
             frame.confidencePath = dir.filePath(confidenceName);
         }
 
-        const QString previewName =
-            QStringLiteral("depth_%1.png").arg(QFileInfo(suffix).completeBaseName());
+        const QString previewName = base_name + QStringLiteral(".png");
         if (QFileInfo::exists(dir.filePath(previewName)))
         {
             frame.previewPath = dir.filePath(previewName);
+        }
+
+        const QString valid_mask_name = base_name + QStringLiteral("_mask.png");
+        if (QFileInfo::exists(dir.filePath(valid_mask_name)))
+        {
+            frame.validMaskPath = dir.filePath(valid_mask_name);
         }
 
         frames.push_back(frame);

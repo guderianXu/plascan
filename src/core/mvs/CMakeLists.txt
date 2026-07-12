@@ -48,6 +48,7 @@ set(MVS_HEADERS
     DepthFrameUtils.h
     DenseCloudBuilder.h
     DepthMapGenerator.h
+    PatchMatchPhotometricCost.h
     DensePointCloudCUDA.h
     EpipolarRectifier.h
     SparseCloudValidator.h
@@ -185,5 +186,16 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_dense_cloud_quality_filter)
+
+        add_executable(test_patchmatch_photometric_cost
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_patchmatch_photometric_cost.cpp
+        )
+        target_link_libraries(test_patchmatch_photometric_cost PRIVATE
+            GTest::gtest_main
+        )
+        target_include_directories(test_patchmatch_photometric_cost PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_patchmatch_photometric_cost)
     endif()
 endif()

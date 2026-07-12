@@ -1,0 +1,35 @@
+#pragma once
+
+#include <QJsonObject>
+#include <QString>
+
+namespace xjw::gui::project
+{
+
+enum class ModelWorkflowAction
+{
+    RunMeshDirectly,
+    FuseDepthMapsThenMesh,
+    GenerateDenseCloudThenMesh
+};
+
+struct ModelWorkflowDecision
+{
+    ModelWorkflowAction action = ModelWorkflowAction::RunMeshDirectly;
+    QJsonObject modelSettings;
+    QJsonObject denseSettings;
+    QString depthMapSourcePath;
+    QString reusableDenseCloudPath;
+    QString reason;
+};
+
+ModelWorkflowDecision decideModelGenerationWorkflow(const QJsonObject &settings,
+                                                     const QJsonObject &project_metadata);
+
+QJsonObject denseSettingsFromModelSettings(const QJsonObject &settings,
+                                             const QString &depth_map_source_path);
+
+QString projectDepthInputSignature(const QJsonObject &project_metadata,
+                                   int aerial_triangulation_result_index = -1);
+
+} // namespace xjw::gui::project

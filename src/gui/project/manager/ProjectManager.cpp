@@ -13,6 +13,7 @@
 #include "ProjectCameraInitialization.h"
 #include "ProjectDenseWorkflowConfig.h"
 #include "ProjectResourceCleanupService.h"
+#include "ProjectTiePointResultService.h"
 
 #include "DenseMatchRunner.h"
 #include "ProjectMetadataOperations.h"
@@ -51,6 +52,7 @@
 #include <QCoreApplication>
 #include <QDir>
 #include <QFileDialog>
+#include <QHash>
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QPointer>
@@ -504,7 +506,14 @@ ProjectManager::ProjectManager(ProjectData *projectData, QWidget *parent)
         connect(_projectData, &ProjectData::projectClosed,
                 this, &ProjectManager::projectClosed);
         connect(_projectData, &ProjectData::metadataChanged,
-                this, &ProjectManager::projectMetadataChanged);
+                this,
+                [this](const QJsonObject &meta)
+                {
+                    emit projectMetadataChanged(
+                        xjw::gui::project::ProjectTiePointResultService::metadataWithCurrentOnly(
+                            meta,
+                            currentProjectPath()));
+                });
         connect(_projectData, &ProjectData::dirtyStateChanged,
                 this, &ProjectManager::metadataDirtyChanged);
     }
@@ -1089,6 +1098,12 @@ void ProjectManager::installSam21Model(const QString &variantToken, GenerateMask
 
 void ProjectManager::openGenerateMaskDialog()
 {
+    const QStringList allImages = _projectData ? _projectData->getAllImages() : QStringList();
+    openGenerateMaskDialogForImages(allImages);
+}
+
+void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requestedImages)
+{
     if (!ensureProjectOpen(QStringLiteral("请先打开项目，再生成照片蒙版。")))
     {
         return;
@@ -1107,8 +1122,44 @@ void ProjectManager::openGenerateMaskDialog()
         return;
     }
 
-    const QString currentImage = allImages.contains(_activeImagePath) ? _activeImagePath : QString();
-    GenerateMaskDialog dialog(allImages, currentImage, _parent);
+    const QString projectPath = currentProjectPath();
+    QHash<QString, QString> projectImages;
+    QStringList resolvedAllImages;
+    QSet<QString> projectImageKeys;
+    for (const QString &imagePath : allImages)
+    {
+        const QString resolvedPath = ProjectIO::resolveProjectResourcePath(projectPath, imagePath);
+        const QString key = normalizePath(resolvedPath);
+        if (key.isEmpty() || projectImageKeys.contains(key))
+        {
+            continue;
+        }
+        projectImageKeys.insert(key);
+        projectImages.insert(key, resolvedPath);
+        resolvedAllImages.push_back(resolvedPath);
+    }
+
+    QStringList selectedImages;
+    QSet<QString> seen;
+    for (const QString &requestedPath : requestedImages)
+    {
+        const QString resolvedPath = ProjectIO::resolveProjectResourcePath(projectPath, requestedPath);
+        const QString key = normalizePath(resolvedPath);
+        if (!key.isEmpty() && projectImages.contains(key) && !seen.contains(key))
+        {
+            seen.insert(key);
+            selectedImages.push_back(projectImages.value(key));
+        }
+    }
+    if (selectedImages.isEmpty())
+    {
+        showWarning(QStringLiteral("没有选中可生成蒙版的照片。"), QStringLiteral("生成蒙版"));
+        return;
+    }
+
+    const QString activeImage = ProjectIO::resolveProjectResourcePath(projectPath, _activeImagePath);
+    const QString currentImage = projectImages.value(normalizePath(activeImage));
+    GenerateMaskDialog dialog(selectedImages, currentImage, _parent);
     connect(&dialog, &GenerateMaskDialog::sam21InstallRequested,
             this,
             [this, &dialog](const QString &variantToken)
@@ -1121,14 +1172,13 @@ void ProjectManager::openGenerateMaskDialog()
     }
 
     const QJsonObject settings = dialog.collectSettings();
-    const QStringList targetImages = maskTargetsFromSettings(settings, allImages);
+    const QStringList targetImages = maskTargetsFromSettings(settings, resolvedAllImages);
     if (targetImages.isEmpty())
     {
         showWarning(QStringLiteral("没有选中可生成蒙版的照片。"), QStringLiteral("生成蒙版"));
         return;
     }
 
-    const QString projectPath = currentProjectPath();
     const QString masksDir = ProjectIO::maskOutputDir(projectPath);
     if (masksDir.isEmpty() || !QDir().mkpath(masksDir))
     {
@@ -1345,7 +1395,10 @@ void ProjectManager::openGenerateMaskDialog()
             for (int i = 0; i < images.size(); ++i)
             {
                 QJsonObject image = images.at(i).toObject();
-                const QString normalized = normalizePath(image.value(QStringLiteral("path")).toString());
+                const QString imagePath = ProjectIO::resolveProjectResourcePath(
+                    projectPath,
+                    image.value(QStringLiteral("path")).toString());
+                const QString normalized = normalizePath(imagePath);
                 if (!result.maskRecordsByImage.contains(normalized))
                 {
                     continue;
@@ -1571,6 +1624,24 @@ void ProjectManager::deleteGeneratedData(const QString &section, const QStringLi
         return;
     }
 
+    if (section == QStringLiteral("连接点"))
+    {
+        const auto result = xjw::gui::project::ProjectTiePointResultService::deleteAll(_projectData);
+        if (!result.success)
+        {
+            QMessageBox::warning(_parent,
+                                 QStringLiteral("删除数据"),
+                                 QStringLiteral("删除失败：%1").arg(result.errorMessage));
+            return;
+        }
+
+        refreshReconstructionQualityReport();
+        QMessageBox::information(_parent,
+                                 QStringLiteral("删除数据"),
+                                 QStringLiteral("已删除连接点数据及其关联生成文件。"));
+        return;
+    }
+
     const auto cleanupResult = xjw::gui::project::ProjectResourceCleanupService::cleanupGeneratedData(_projectData,
                                                                                                        section,
                                                                                                        resourcePaths);
@@ -1651,7 +1722,14 @@ QString ProjectManager::currentProjectPath() const
 
 QJsonObject ProjectManager::currentMeta() const
 {
-    return _projectData ? _projectData->metadata() : QJsonObject();
+    if (!_projectData)
+    {
+        return {};
+    }
+
+    return xjw::gui::project::ProjectTiePointResultService::metadataWithCurrentOnly(
+        _projectData->metadata(),
+        _projectData->currentProjectPath());
 }
 
 QJsonObject ProjectManager::coreProjectMeta() const
@@ -2151,6 +2229,26 @@ bool ProjectManager::setImageCameras(const QMap<QString, QJsonObject> &cameras,
     return _projectData->setImageCameras(cameras, updatedCount, errorMsg);
 }
 
+bool ProjectManager::replaceImageCameras(const QStringList &targetImagePaths,
+                                         const QMap<QString, QJsonObject> &cameras,
+                                         int *updatedCount,
+                                         int *clearedCount,
+                                         QString *errorMsg)
+{
+    if (!_projectData)
+    {
+        if (errorMsg) *errorMsg = QStringLiteral("ProjectData 未初始化");
+        if (updatedCount) *updatedCount = 0;
+        if (clearedCount) *clearedCount = 0;
+        return false;
+    }
+    return _projectData->replaceImageCameras(targetImagePaths,
+                                             cameras,
+                                             updatedCount,
+                                             clearedCount,
+                                             errorMsg);
+}
+
 bool ProjectManager::clearImageCameras(const QStringList &imagePaths,
                                        int    *updatedCount,
                                        QString *errorMsg)
@@ -2210,6 +2308,11 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
 void ProjectManager::startGenerateModelAsync()
 {
     _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateModel);
+}
+
+void ProjectManager::startGenerateModelAsync(const QJsonObject &settings)
+{
+    _taskDispatcher->startReconstructionTask(ProjectReconstructionManager::Task::GenerateModel, settings);
 }
 
 void ProjectManager::startMeshReconstructionAsync(const QJsonObject &settings)
@@ -2306,11 +2409,11 @@ bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
     }
     if (artifactsResult.sparseCloudExport.exported)
     {
-        appendAtResult(artifactsResult.sparseCloudExport.sparseCloudPath,
-                       artifactsResult.sparseCloudExport.pointCount,
-                       allImages,
-                       artifactsResult.sparseCloudExport.outputDir,
-                       artifactsResult.sparseCloudExport.extraRecord);
+        replaceTiePointResult(artifactsResult.sparseCloudExport.sparseCloudPath,
+                              artifactsResult.sparseCloudExport.pointCount,
+                              allImages,
+                              artifactsResult.sparseCloudExport.outputDir,
+                              artifactsResult.sparseCloudExport.extraRecord);
         LOG_INFO(QStringLiteral("BA 精化点云已写入 AT 结果：%1 个点，路径=%2")
                      .arg(artifactsResult.sparseCloudExport.pointCount)
                      .arg(artifactsResult.sparseCloudExport.sparseCloudPath));
@@ -2390,11 +2493,11 @@ void ProjectManager::applyBundleAdjustForAt(const QString     &assetsDir,
 
     if (artifactsResult.sparseCloudExport.exported)
     {
-        appendAtResult(artifactsResult.sparseCloudExport.sparseCloudPath,
-                       artifactsResult.sparseCloudExport.pointCount,
-                       images,
-                       artifactsResult.sparseCloudExport.outputDir,
-                       artifactsResult.sparseCloudExport.extraRecord);
+        replaceTiePointResult(artifactsResult.sparseCloudExport.sparseCloudPath,
+                              artifactsResult.sparseCloudExport.pointCount,
+                              images,
+                              artifactsResult.sparseCloudExport.outputDir,
+                              artifactsResult.sparseCloudExport.extraRecord);
     }
     else if (!artifactsResult.sparseCloudExport.errorMessage.isEmpty())
     {
@@ -2458,21 +2561,33 @@ bool ProjectManager::ensureProjectOpen(const QString &message, const QString &ti
     return false;
 }
 
-void ProjectManager::appendAtResult(const QString &sparseCloudPath,
-                                    int sparsePointCount,
-                                    const QStringList &selectedImages,
-                                    const QString &outputDir,
-                                    const QJsonObject &extraRecord,
-                                    int replaceIndex)
+bool ProjectManager::replaceTiePointResult(const QString &sparseCloudPath,
+                                           int sparsePointCount,
+                                           const QStringList &selectedImages,
+                                           const QString &outputDir,
+                                           const QJsonObject &extraRecord)
 {
-    xjw::gui::project::appendAtResult(_projectData,
-                                      sparseCloudPath,
-                                      sparsePointCount,
-                                      selectedImages,
-                                      outputDir,
-                                      extraRecord,
-                                      replaceIndex);
+    const auto result = xjw::gui::project::replaceTiePointResult(_projectData,
+                                                                 sparseCloudPath,
+                                                                 sparsePointCount,
+                                                                 selectedImages,
+                                                                 outputDir,
+                                                                 extraRecord);
+    if (!result.success)
+    {
+        LOG_ERROR(QStringLiteral("替换当前连接点失败: %1").arg(result.errorMessage));
+        showWarning(result.errorMessage, QStringLiteral("连接点写入失败"));
+        return false;
+    }
+    if (!result.cleanupWarnings.isEmpty())
+    {
+        LOG_WARN(QStringLiteral("当前连接点已更新，但旧文件清理失败: %1")
+                     .arg(result.cleanupWarnings.join(QStringLiteral("；"))));
+    }
+    LOG_INFO(QStringLiteral("空三代次已更新为 %1；旧深度图、稠密点云、模型、DEM 和正射结果已失效")
+                 .arg(result.reconstructionGenerationId));
     refreshReconstructionQualityReport();
+    return true;
 }
 
 void ProjectManager::appendObsNetResult(int nodeCount,

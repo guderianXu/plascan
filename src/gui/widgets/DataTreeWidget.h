@@ -8,6 +8,11 @@
 class QTreeView;
 class QStandardItemModel;
 
+namespace xjw::gui::widgets
+{
+enum class WorkspaceSection;
+}
+
 // DataTreeWidget: 显示项目中的资源（影像/图层等）的树状视图
 // 设计要点：
 // - 仅负责视图显示与用户交互（选择/右键菜单），不做磁盘 I/O 或归档写操作
@@ -61,12 +66,20 @@ private slots:
 private:
     void populateFromMeta(const QJsonObject &meta);
     QJsonObject normalizeMeta(const QJsonObject &meta) const;
-    QStandardItem *createSection(const QString &label);
-    QStandardItem *createSection(const QString &title, int count);
+    QStandardItem *createSection(const QString &label,
+                                 xjw::gui::widgets::WorkspaceSection section);
+    QStandardItem *createSection(const QString &title,
+                                 int count,
+                                 xjw::gui::widgets::WorkspaceSection section);
     void appendItemRow(QStandardItem *parent,
                        const QString &name,
                        const QString &path,
                        const QString &storage);
+    QStandardItem *appendTopLevelResource(const QString &name,
+                                          xjw::gui::widgets::WorkspaceSection section,
+                                          const QString &sectionName,
+                                          const QString &path,
+                                          const QString &storage);
     void sortSectionChildrenByFileName(QStandardItem *section);
     bool resourceFromIndex(const QModelIndex &index, QString *section, QString *resourcePath) const;
     QString resolveResourcePath(const QString &resourcePath) const;

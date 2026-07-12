@@ -20,6 +20,10 @@
 #include <cmath>
 #include <initializer_list>
 
+#ifndef PLASCAN_MESH_RECONSTRUCT_CLI_PATH
+#define PLASCAN_MESH_RECONSTRUCT_CLI_PATH ""
+#endif
+
 namespace
 {
 
@@ -372,6 +376,26 @@ TEST(ReconstructPipelineCliGTest, FusedPreAggregationUsesPlaPointVoxelGrid)
     });
 }
 
+TEST(ReconstructPipelineCliGTest, SmallRingBatchesUseAdaptiveFusionConsensus)
+{
+    const QString source = readSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+
+    expectContainsAll(source, {
+        "frameCount <= 32",
+        "std::min(fusionCfg.minNumPixels, 2)",
+    });
+}
+
+TEST(ReconstructPipelineCliGTest, Arbitrary3dMeshNeverFallsBackToHeightGrid)
+{
+    const QString source = readSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+
+    expectContainsAll(source, {
+        "meshRequest.reconstruction.allowHeightGridFallback = false;",
+        "meshRequest.reconstruction.orientNormalsForClosedSurface = true;",
+    });
+}
+
 TEST(ReconstructPipelineCliGTest, NonEmptyOutputDirRequiresForce)
 {
     const QString exe = executablePath(PLASCAN_RECONSTRUCT_PIPELINE_CLI_PATH);
@@ -462,6 +486,13 @@ TEST(PhotogrammetryWorkflowCliGTest, DedicatedCliTargetsExposeCurrentWorkflowOpt
         "--dry-run-config",
         "--reference-mode",
         "--auto-generate-missing-matches",
+        "--no-reset-alignment",
+        "--mask-dir",
+        "options.assetsDir",
+        "options.featureDir",
+        "options.matchDir",
+        "options.maskPaths = xjw::cli::maskPathsFromDirectory",
+        "tie_point_preparation_executed",
         "--no-adaptive-camera-model-fitting",
         "aerial_triangulation_cli_report.json",
     });
@@ -479,7 +510,6 @@ TEST(PhotogrammetryWorkflowCliGTest, MatchPhotosCliAcceptsImageOnlyListInPlanMod
     const QString image1 = QDir(root).filePath(QStringLiteral("temple 0002.png"));
     writeBytesFile(image0, QByteArray("placeholder"));
     writeBytesFile(image1, QByteArray("placeholder"));
-
     const QString list = QDir(root).filePath(QStringLiteral("images_only.lis"));
     writeTextFile(list, QStringLiteral("'temple 0001.png'\n\"temple 0002.png\"\n"));
 
@@ -512,6 +542,10 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     const QString image1 = QDir(root).filePath(QStringLiteral("templeSR0002.png"));
     writeBytesFile(image0, QByteArray("placeholder"));
     writeBytesFile(image1, QByteArray("placeholder"));
+    const QString maskDir = QDir(root).filePath(QStringLiteral("masks"));
+    ASSERT_TRUE(QDir().mkpath(maskDir));
+    writeBytesFile(QDir(maskDir).filePath(QStringLiteral("templeSR0001_mask.png")), QByteArray("mask"));
+    writeBytesFile(QDir(maskDir).filePath(QStringLiteral("templeSR0002_mask.png")), QByteArray("mask"));
 
     const QString list = QDir(root).filePath(QStringLiteral("images_only.lis"));
     writeTextFile(list, QStringLiteral("templeSR0001.png\ntempleSR0002.png\n"));
@@ -525,6 +559,10 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
         QStringLiteral("--quality"), QStringLiteral("highest"),
         QStringLiteral("--keypoint-limit"), QStringLiteral("40000"),
         QStringLiteral("--tiepoint-limit"), QStringLiteral("4000"),
+        QStringLiteral("--mask-dir"), maskDir,
+        QStringLiteral("--mask-apply-mode"), QStringLiteral("keypoints"),
+        QStringLiteral("--no-reset-alignment"),
+        QStringLiteral("--no-auto-generate-missing-matches"),
         QStringLiteral("--force"),
     });
 
@@ -540,10 +578,56 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     EXPECT_EQ(resolved.value(QStringLiteral("quality")).toString(), QStringLiteral("highest"));
     EXPECT_EQ(resolved.value(QStringLiteral("resolved_keypoint_budget")).toInt(), 40000);
     EXPECT_EQ(resolved.value(QStringLiteral("resolved_tiepoint_limit")).toInt(), 4000);
+    EXPECT_EQ(resolved.value(QStringLiteral("tie_point_preparation")).toString(),
+              QStringLiteral("skipped_reuse_only"));
+    const QJsonObject tiePointContext = report.value(QStringLiteral("tie_point_context")).toObject();
+    EXPECT_EQ(tiePointContext.value(QStringLiteral("mask_count")).toInt(), 6);
+    EXPECT_TRUE(tiePointContext.value(QStringLiteral("feature_dir")).toString()
+                    .endsWith(QStringLiteral("assets/ip")));
+    EXPECT_TRUE(tiePointContext.value(QStringLiteral("match_dir")).toString()
+                    .endsWith(QStringLiteral("assets/matches")));
     const QJsonObject serviceOptions = report.value(QStringLiteral("service_options")).toObject();
     EXPECT_TRUE(serviceOptions.contains(QStringLiteral("tie_point_feature_max_keypoints")));
     EXPECT_TRUE(serviceOptions.contains(QStringLiteral("tie_point_keypoint_limit_per_megapixel")));
     EXPECT_TRUE(serviceOptions.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
+}
+
+TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAllowsSequenceReferenceWithoutCameraFiles)
+{
+    const QString exe = executablePath(PLASCAN_AERIAL_TRIANGULATION_CLI_PATH);
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString root = tempDir.path();
+    const QString image0 = QDir(root).filePath(QStringLiteral("dinoSR0001.png"));
+    const QString image1 = QDir(root).filePath(QStringLiteral("dinoSR0002.png"));
+    const QString image2 = QDir(root).filePath(QStringLiteral("dinoSR0003.png"));
+    writeBytesFile(image0, QByteArray("placeholder"));
+    writeBytesFile(image1, QByteArray("placeholder"));
+    writeBytesFile(image2, QByteArray("placeholder"));
+
+    const QString list = QDir(root).filePath(QStringLiteral("sequence_images.lis"));
+    writeTextFile(list, QStringLiteral("dinoSR0001.png\ndinoSR0002.png\ndinoSR0003.png\n"));
+
+    const QString outputDir = QDir(root).filePath(QStringLiteral("at_sequence_out"));
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--input"), list,
+        QStringLiteral("--output-dir"), outputDir,
+        QStringLiteral("--project"), QDir(root).filePath(QStringLiteral("headless.plascan")),
+        QStringLiteral("--dry-run-config"),
+        QStringLiteral("--reference-preselection"),
+        QStringLiteral("--reference-mode"), QStringLiteral("sequence"),
+        QStringLiteral("--force"),
+    });
+
+    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
+    expectNotContainsAll(combinedOutput(result), {"参考预选需要完整相机文件"});
+    const QJsonObject report =
+        readJsonObject(QDir(outputDir).filePath(QStringLiteral("aerial_triangulation_cli_report.json")));
+    EXPECT_TRUE(report.value(QStringLiteral("success")).toBool());
+    const QJsonObject serviceOptions = report.value(QStringLiteral("service_options")).toObject();
+    EXPECT_TRUE(serviceOptions.value(QStringLiteral("known_camera_sequence_loop_closure")).toBool());
 }
 
 TEST(BundleAdjustCliGTest, SourceExposesLidarCompareOptionsAndHeadlessDefaults)
@@ -687,6 +771,80 @@ TEST(DenseCloudRefineCliGTest, SourceExposesQualityFilterOptions)
         "local_plane_removed_points",
     });
     expectNotContainsAll(source, {"streamingOptions.localPlaneFilterEnabled = false"});
+}
+
+TEST(MeshReconstructCliGTest, UsesSharedModelWorkflowEntry)
+{
+    const QString cmake = readSourceFile(QStringLiteral("src/cli/CMakeLists.txt"));
+    const QString source = readSourceFile(QStringLiteral("src/cli/cli_mesh_reconstruct.cpp"));
+
+    expectContainsAll(cmake, {
+        "mesh_reconstruct_cli",
+        "cli_mesh_reconstruct.cpp",
+        "meshing",
+    });
+    expectContainsAll(source, {
+        "--source-data",
+        "--point-cloud",
+        "--depth-map-dir",
+        "--dense-cloud",
+        "--output-dir",
+        "--settings-json",
+        "--settings-key",
+        "xjw::mesh::workflow::ModelBuildRequest",
+        "xjw::mesh::workflow::buildModel",
+    });
+}
+
+TEST(MeshReconstructCliGTest, BuildsModelFromGuiStyleSettingsJson)
+{
+    const QString exe = executablePath(PLASCAN_MESH_RECONSTRUCT_CLI_PATH);
+    ASSERT_FALSE(exe.isEmpty()) << "mesh_reconstruct_cli target is unavailable";
+    SKIP_IF_MISSING_EXECUTABLE(exe);
+
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+    const QString input_ply = QDir(temp_dir.path()).filePath(QStringLiteral("grid.ply"));
+    const QString output_dir = QDir(temp_dir.path()).filePath(QStringLiteral("model"));
+    const QString settings_path = QDir(temp_dir.path()).filePath(QStringLiteral("settings.json"));
+
+    QVector<Point3f> points;
+    for (int y = 0; y < 20; ++y)
+    {
+        for (int x = 0; x < 20; ++x)
+        {
+            points.push_back(Point3f{static_cast<float>(x),
+                                     static_cast<float>(y),
+                                     0.05f * static_cast<float>(x + y)});
+        }
+    }
+    writeBinaryPly(input_ply, points);
+
+    QJsonObject settings;
+    settings[QStringLiteral("source_data")] = QStringLiteral("point_cloud");
+    settings[QStringLiteral("surface_type")] = QStringLiteral("height_field");
+    settings[QStringLiteral("method")] = QStringLiteral("Height Grid");
+    settings[QStringLiteral("meshResolution")] = 64;
+    settings[QStringLiteral("depthFiltering")] = QStringLiteral("disabled");
+    QJsonObject root;
+    root[QStringLiteral("generate_model")] = settings;
+    writeTextFile(settings_path,
+                  QString::fromUtf8(QJsonDocument(root).toJson(QJsonDocument::Indented)));
+
+    const CliResult result = runCli(exe, {
+        QStringLiteral("--source-data"), QStringLiteral("point_cloud"),
+        QStringLiteral("--point-cloud"), input_ply,
+        QStringLiteral("--output-dir"), output_dir,
+        QStringLiteral("--settings-json"), settings_path,
+        QStringLiteral("--settings-key"), QStringLiteral("generate_model"),
+    }, 120000);
+
+    EXPECT_EQ(result.exitCode, 0) << qPrintable(combinedOutput(result));
+    expectContainsAll(result.stdoutText, {
+        R"("ok": true)",
+        R"("mesh_algorithm": "height_grid")",
+    });
+    EXPECT_TRUE(QFileInfo::exists(QDir(output_dir).filePath(QStringLiteral("products/model_from_mesh.ply"))));
 }
 
 TEST(DenseCloudRefineCliGTest, StreamingCliAppliesLocalPlaneFilter)

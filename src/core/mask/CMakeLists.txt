@@ -14,3 +14,7 @@ target_link_libraries(mask PUBLIC
     ${OpenCV_LIBS}
     ${TORCH_LIBRARIES}
 )
+
+if(BUILD_TESTS)
+    add_subdirectory(tests)
+endif()

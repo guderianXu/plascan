@@ -1,5 +1,6 @@
 #include "PnpSolver.h"
 
+#include "DeterministicOpenCvRansac.h"
 #include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
@@ -8,6 +9,59 @@
 
 namespace xjw
 {
+namespace
+{
+
+cv::Mat cameraToWorldRotationToOpenCvRvec(const std::array<double, 9> &cameraToWorldRotation,
+                                          bool depthFlipped)
+{
+    cv::Mat R_c2w = cv::Mat::eye(3, 3, CV_64F);
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            R_c2w.at<double>(row, col) = cameraToWorldRotation[static_cast<size_t>(row * 3 + col)];
+        }
+    }
+
+    cv::Mat R_cv = R_c2w.t();
+    if (depthFlipped)
+    {
+        R_cv.at<double>(0, 2) *= -1;
+        R_cv.at<double>(1, 2) *= -1;
+        R_cv.at<double>(2, 0) *= -1;
+        R_cv.at<double>(2, 1) *= -1;
+    }
+
+    cv::Mat rvec;
+    cv::Rodrigues(R_cv, rvec);
+    return rvec;
+}
+
+cv::Mat cameraCenterToOpenCvTvec(const std::array<double, 9> &cameraToWorldRotation,
+                                 const std::array<double, 3> &cameraCenter,
+                                 bool depthFlipped)
+{
+    cv::Mat R_c2w = cv::Mat::eye(3, 3, CV_64F);
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int col = 0; col < 3; ++col)
+        {
+            R_c2w.at<double>(row, col) = cameraToWorldRotation[static_cast<size_t>(row * 3 + col)];
+        }
+    }
+
+    cv::Mat R_cv = R_c2w.t();
+    cv::Mat C = (cv::Mat_<double>(3, 1) << cameraCenter[0], cameraCenter[1], cameraCenter[2]);
+    cv::Mat tvec = -R_cv * C;
+    if (depthFlipped)
+    {
+        tvec.at<double>(2) *= -1;
+    }
+    return tvec;
+}
+
+} // namespace
 
 PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints,
                            const std::vector<std::array<double, 2>> &imagePoints, double fu, double fv, double cu,
@@ -15,6 +69,7 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
 {
     PnpResult result;
     const size_t n = worldPoints.size();
+    result.inputCandidateCount = static_cast<int>(n);
     if (n < 4 || n != imagePoints.size())
         return result;
 
@@ -40,12 +95,67 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
 
     cv::Mat rvec, tvec;
     cv::Mat inliers;
+    const bool useExtrinsicGuess = options.useInitialPose;
+    if (useExtrinsicGuess)
+    {
+        rvec = cameraToWorldRotationToOpenCvRvec(options.initialCameraToWorldRotation, depthFlipped);
+        tvec = cameraCenterToOpenCvTvec(options.initialCameraToWorldRotation,
+                                        options.initialCameraCenter,
+                                        depthFlipped);
+    }
+
+    const std::vector<cv::Point3d> *ransacObjPts = &objPts;
+    const std::vector<cv::Point2d> *ransacImgPts = &imgPts;
+    std::vector<cv::Point3d> guidedObjPts;
+    std::vector<cv::Point2d> guidedImgPts;
+    std::vector<int> guidedOriginalIndices;
+    if (useExtrinsicGuess && options.useInitialPosePrefilter)
+    {
+        std::vector<cv::Point2d> projected;
+        cv::projectPoints(objPts, rvec, tvec, cameraMatrix, distCoeffs, projected);
+        const double maxError = std::max(options.maxReprojError,
+                                         options.initialPosePrefilterMaxReprojError);
+        const double maxErrorSquared = maxError * maxError;
+        guidedObjPts.reserve(n);
+        guidedImgPts.reserve(n);
+        guidedOriginalIndices.reserve(n);
+        for (std::size_t index = 0; index < n; ++index)
+        {
+            const double dx = projected[index].x - imgPts[index].x;
+            const double dy = projected[index].y - imgPts[index].y;
+            if (dx * dx + dy * dy > maxErrorSquared)
+            {
+                continue;
+            }
+            guidedObjPts.push_back(objPts[index]);
+            guidedImgPts.push_back(imgPts[index]);
+            guidedOriginalIndices.push_back(static_cast<int>(index));
+        }
+        const int minCandidates = std::max(4, options.initialPosePrefilterMinCandidates);
+        result.prefilterCandidateCount = static_cast<int>(guidedObjPts.size());
+        if (static_cast<int>(guidedObjPts.size()) >= minCandidates)
+        {
+            ransacObjPts = &guidedObjPts;
+            ransacImgPts = &guidedImgPts;
+            result.usedInitialPosePrefilter = true;
+        }
+        else
+        {
+            guidedOriginalIndices.clear();
+        }
+    }
 
     // ---- 调用 OpenCV PnP RANSAC ----
-    bool ok = cv::solvePnPRansac(objPts, imgPts, cameraMatrix, distCoeffs, rvec, tvec,
-                                 false, // useExtrinsicGuess
-                                 options.maxIterations, static_cast<float>(options.maxReprojError), options.confidence,
-                                 inliers, cv::SOLVEPNP_ITERATIVE);
+    const bool ok = opencv_compat::runDeterministicRansac(options.ransacSeed, [&]()
+    {
+        return cv::solvePnPRansac(*ransacObjPts, *ransacImgPts, cameraMatrix, distCoeffs, rvec, tvec,
+                                 useExtrinsicGuess,
+                                 options.maxIterations,
+                                 static_cast<float>(options.maxReprojError),
+                                 options.confidence,
+                                 inliers,
+                                 cv::SOLVEPNP_ITERATIVE);
+    });
 
     if (!ok || inliers.rows < options.minNumInliers)
     {
@@ -59,11 +169,13 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
     // 无相机先验的环拍数据里，候选 2D-3D 对应常混入大量外点。
     // 此时不能只按比例拒绝，只要 RANSAC 给出足够绝对内点且比例不至于过低，
     // 后续三角化和 BA 还能继续做几何约束。
-    constexpr double kRelaxedMinInlierRatio = 0.10;
-    const int relaxedAbsoluteMinInliers = std::max(options.minNumInliers, 15);
+    const double relaxedMinInlierRatio = std::clamp(options.relaxedMinInlierRatio, 0.0, options.minInlierRatio);
+    const int relaxedAbsoluteMinInliers = options.relaxedMinNumInliers > 0
+        ? options.relaxedMinNumInliers
+        : std::max(options.minNumInliers, 15);
     const bool passesConfiguredRatio = inlierRatio >= options.minInlierRatio;
     const bool passesAbsoluteSupport = options.allowRelaxedInlierRatio &&
-        inliers.rows >= relaxedAbsoluteMinInliers && inlierRatio >= kRelaxedMinInlierRatio;
+        inliers.rows >= relaxedAbsoluteMinInliers && inlierRatio >= relaxedMinInlierRatio;
     if (!passesConfiguredRatio && !passesAbsoluteSupport)
     {
         return result;
@@ -112,6 +224,11 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
     for (int i = 0; i < inliers.rows; ++i)
     {
         int idx = inliers.at<int>(i, 0);
+        if (!guidedOriginalIndices.empty() &&
+            idx >= 0 && idx < static_cast<int>(guidedOriginalIndices.size()))
+        {
+            idx = guidedOriginalIndices[static_cast<std::size_t>(idx)];
+        }
         if (idx >= 0 && static_cast<size_t>(idx) < n)
         {
             result.inlierMask[idx] = 1;

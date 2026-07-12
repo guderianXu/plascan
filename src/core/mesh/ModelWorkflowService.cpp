@@ -86,6 +86,8 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
         settings.value(QStringLiteral("method"))
             .toString(QStringLiteral("Poisson Surface"))
             .contains(QStringLiteral("Poisson"), Qt::CaseInsensitive);
+    config.allowHeightGridFallback = surfaceType == QStringLiteral("height_field");
+    config.orientNormalsForClosedSurface = surfaceType == QStringLiteral("arbitrary_3d");
     config.poissonDepth = qBound(7, settings.value(QStringLiteral("octreeDepth")).toInt(10), 12);
     config.poissonThreads = qBound(1, settings.value(QStringLiteral("threads")).toInt(8), 128);
 
@@ -130,7 +132,7 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
         config.enableDownsample = false;
         config.voxelSimplifyFactor = 1.15f;
         config.kNormals = std::max(config.kNormals, 18);
-        config.smoothIterations = std::max(0, config.smoothIterations - 1);
+        config.smoothIterations = std::max(config.smoothIterations, 4);
         config.smoothLambda = 0.36f;
     }
     else if (qualityProfile == QStringLiteral("lite"))
@@ -182,6 +184,26 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
     else if (settings.contains(QStringLiteral("targetFaces")))
     {
         config.simplifyTargetFaces = 0;
+    }
+
+    if (config.forcePoisson)
+    {
+        // PlaPoint's current octree solver is capped at depth 8. Feeding tens of
+        // millions of nearly redundant samples only increases solve time and
+        // memory pressure; it cannot raise the octree resolution. Keep enough
+        // samples to support the requested face budget while preserving a
+        // bounded production runtime.
+        if (config.simplifyTargetFaces > 0)
+        {
+            const long long requested_samples =
+                static_cast<long long>(config.simplifyTargetFaces) * 5LL / 2LL;
+            config.maxInputPointsForMeshing = static_cast<int>(
+                std::clamp(requested_samples, 250000LL, 400000LL));
+        }
+        else
+        {
+            config.maxInputPointsForMeshing = 400000;
+        }
     }
 
     const QString depthFiltering =
@@ -412,8 +434,18 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
     }
 
     QString resolveError;
-    const QString densePath =
-        xjw::mesh::DepthMapMeshBuilder::resolveReusableDenseCloud(request.depthMapSourcePath, &resolveError);
+    QString densePath = request.reusableDenseCloudPath.trimmed();
+    if (!densePath.isEmpty() && !QFileInfo::exists(densePath))
+    {
+        resolveError = QStringLiteral("指定的可复用密集点云不存在: %1").arg(densePath);
+        densePath.clear();
+    }
+    if (densePath.isEmpty())
+    {
+        densePath = xjw::mesh::DepthMapMeshBuilder::resolveReusableDenseCloud(
+            request.depthMapSourcePath,
+            &resolveError);
+    }
     if (densePath.isEmpty())
     {
         const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
@@ -445,6 +477,60 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
         result.payload[QStringLiteral("source_point_cloud_path")] = densePath;
         result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    }
+    return result;
+}
+
+WorkflowResult buildModel(const ModelBuildRequest &request)
+{
+    const QString source_data = request.sourceData.trimmed().isEmpty()
+        ? QStringLiteral("point_cloud")
+        : request.sourceData.trimmed();
+    const ReconstructionConfig reconstruction =
+        reconstructionConfigFromModelSettings(request.settings);
+
+    WorkflowResult result;
+    if (source_data == QStringLiteral("depth_maps"))
+    {
+        DepthMapMeshBuildRequest depth_request;
+        depth_request.depthMapSourcePath = request.depthMapSourcePath.trimmed().isEmpty()
+            ? request.requestedSourcePath
+            : request.depthMapSourcePath;
+        depth_request.reusableDenseCloudPath = request.sourcePointCloudPath;
+        depth_request.outputRoot = request.outputRoot;
+        depth_request.settings = request.settings;
+        depth_request.reconstruction = reconstruction;
+        depth_request.exportObj = exportObjRequested(request.settings);
+        depth_request.texture = defaultTextureConfig();
+        depth_request.progress = request.progress;
+        result = buildMeshFromDepthMaps(depth_request);
+    }
+    else
+    {
+        MeshBuildRequest mesh_request;
+        mesh_request.pointCloudPath = request.sourcePointCloudPath.trimmed().isEmpty()
+            ? request.requestedSourcePath
+            : request.sourcePointCloudPath;
+        mesh_request.outputRoot = request.outputRoot;
+        mesh_request.reconstruction = reconstruction;
+        mesh_request.exportObj = exportObjRequested(request.settings);
+        mesh_request.texture = defaultTextureConfig();
+        mesh_request.progress = request.progress;
+        result = buildMeshAndOptionalTexture(mesh_request);
+    }
+
+    if (result.ok)
+    {
+        result.payload[QStringLiteral("source_data")] = source_data;
+        result.payload[QStringLiteral("source_path")] = request.requestedSourcePath;
+        result.payload[QStringLiteral("source_point_cloud_path")] = request.sourcePointCloudPath;
+        if (source_data == QStringLiteral("depth_maps"))
+        {
+            result.payload[QStringLiteral("depth_map_source_path")] =
+                request.depthMapSourcePath.trimmed().isEmpty()
+                    ? request.requestedSourcePath
+                    : request.depthMapSourcePath;
+        }
     }
     return result;
 }

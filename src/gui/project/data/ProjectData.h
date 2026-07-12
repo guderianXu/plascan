@@ -110,6 +110,12 @@ public:
     bool setImageCameras(const QMap<QString, QJsonObject> &cameraMetaByImage,
                          int *updatedCount = nullptr,
                          QString *errorMsg = nullptr);
+    /// 用一轮 SfM 的结果原子替换目标影像的相机集合；未出现在结果中的目标影像会清除旧相机。
+    bool replaceImageCameras(const QStringList &targetImagePaths,
+                             const QMap<QString, QJsonObject> &cameraMetaByImage,
+                             int *updatedCount = nullptr,
+                             int *clearedCount = nullptr,
+                             QString *errorMsg = nullptr);
     /// 清除指定影像的相机参数（从元数据中移除 camera 字段）
     bool clearImageCameras(const QStringList &imagePaths,
                            int *clearedCount = nullptr,

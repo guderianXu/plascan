@@ -8,6 +8,7 @@
 // =============================================================================
 
 #include "PatchMatchCUDA.h"
+#include "PatchMatchPhotometricCost.h"
 #include <opencv2/imgproc.hpp>
 #include <cuda_runtime.h>
 #include <device_launch_parameters.h>
@@ -384,26 +385,20 @@ float cpuEvalHypCost(int col,
         return 2.f;
     }
 
-    float sumScore = 0.f;
-    int goodSrc = 0;
-    for (int srcIndex = 0; srcIndex < static_cast<int>(srcImages.size()); ++srcIndex)
+    std::array<float, kMaxPatchMatchSourceViews> scores{};
+    const int source_count = std::min(static_cast<int>(srcImages.size()),
+                                      kMaxPatchMatchSourceViews);
+    for (int srcIndex = 0; srcIndex < source_count; ++srcIndex)
     {
         const float *srcData = srcDatas.data() + srcIndex * 16;
         const float ncc = cpuComputeHomographyNcc(col, row, depth, normal,
                                                   refImage, srcImages[srcIndex], srcData,
                                                   invK, patchHalf);
-        if (ncc > 0.05f)
-        {
-            sumScore += ncc;
-            ++goodSrc;
-        }
+        scores[static_cast<size_t>(srcIndex)] = ncc;
     }
 
-    if (goodSrc == 0)
-    {
-        return 2.f;
-    }
-    return 2.f - 2.f * (sumScore / static_cast<float>(goodSrc));
+    const float robust_ncc = robustMultiSourceNcc(scores.data(), source_count);
+    return 2.f - 2.f * robust_ncc;
 }
 
 template <typename Fn>
@@ -992,9 +987,11 @@ __device__ float evalHypCost(
     int patchHalf)
 {
     if (depth <= 0.f) return 2.f;
-    float sumScore = 0.f;
-    int   goodSrc  = 0;
-    for (int si = 0; si < numSrc; ++si) 
+    float scores[kMaxPatchMatchSourceViews] = {};
+    const int source_count = numSrc < kMaxPatchMatchSourceViews
+                                 ? numSrc
+                                 : kMaxPatchMatchSourceViews;
+    for (int si = 0; si < source_count; ++si)
     {
         const float *srcImg = srcImgs[si];
         float ncc = computeHomographyNCC(
@@ -1003,10 +1000,10 @@ __device__ float evalHypCost(
             srcImg, srcW, srcH,
             srcDatas + si * 16,
             patchHalf);
-        if (ncc > 0.05f) { sumScore += ncc; ++goodSrc; }
+        scores[si] = ncc;
     }
-    if (goodSrc == 0) return 2.f;
-    return 2.f - 2.f * (sumScore / goodSrc);  // [0,2]
+    const float robust_ncc = robustMultiSourceNcc(scores, source_count);
+    return 2.f - 2.f * robust_ncc;  // [0,2]
 }
 
 // =============================================================================

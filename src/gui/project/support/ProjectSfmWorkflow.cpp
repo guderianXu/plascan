@@ -66,12 +66,18 @@ InitPoseFinalizeResult finalizeInitializedCameraPoses(ProjectData *projectData,
 
     if (!result.sparseCloudPath.isEmpty())
     {
-        appendAtResult(projectData,
-                       result.sparseCloudPath,
-                       result.numPoints3D,
-                       allImages,
-                       outputDir,
-                       result.resultRecordExtra);
+        const TiePointMutationResult tiePointResult = replaceTiePointResult(projectData,
+                                                                            result.sparseCloudPath,
+                                                                            result.numPoints3D,
+                                                                            allImages,
+                                                                            outputDir,
+                                                                            result.resultRecordExtra);
+        if (!tiePointResult.success)
+        {
+            finalizeResult.errorMessage = QStringLiteral("SFM 已完成，但写入连接点结果失败: %1")
+                                              .arg(tiePointResult.errorMessage);
+            return finalizeResult;
+        }
     }
 
     finalizeResult.success = true;

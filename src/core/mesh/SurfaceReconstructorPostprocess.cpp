@@ -2,8 +2,10 @@
 
 #include <algorithm>
 #include <array>
+#include <cmath>
 #include <cstddef>
 #include <cstdint>
+#include <limits>
 #include <queue>
 #include <unordered_map>
 #include <vector>
@@ -23,6 +25,29 @@ namespace
 {
 
 using PlaMesh = plapoint::PointCloud<float, plamatrix::Device::CPU>;
+
+struct VertexCell
+{
+    std::int64_t x = 0;
+    std::int64_t y = 0;
+    std::int64_t z = 0;
+
+    bool operator==(const VertexCell &other) const
+    {
+        return x == other.x && y == other.y && z == other.z;
+    }
+};
+
+struct VertexCellHash
+{
+    std::size_t operator()(const VertexCell &cell) const
+    {
+        std::size_t seed = std::hash<std::int64_t>{}(cell.x);
+        seed ^= std::hash<std::int64_t>{}(cell.y) + 0x9e3779b9u + (seed << 6) + (seed >> 2);
+        seed ^= std::hash<std::int64_t>{}(cell.z) + 0x9e3779b9u + (seed << 6) + (seed >> 2);
+        return seed;
+    }
+};
 
 PlaMesh toPlaMesh(const TriMesh &mesh)
 {
@@ -226,6 +251,109 @@ void keepLargestConnectedComponent(TriMesh *mesh)
 
 } // namespace
 
+void weldCoincidentVertices(TriMesh *mesh, float relativeTolerance)
+{
+    if (!mesh || mesh->vertices.empty() || relativeTolerance <= 0.0f)
+    {
+        return;
+    }
+
+    float min_x = std::numeric_limits<float>::max();
+    float min_y = std::numeric_limits<float>::max();
+    float min_z = std::numeric_limits<float>::max();
+    float max_x = std::numeric_limits<float>::lowest();
+    float max_y = std::numeric_limits<float>::lowest();
+    float max_z = std::numeric_limits<float>::lowest();
+    for (const MeshVertex &vertex : mesh->vertices)
+    {
+        if (!std::isfinite(vertex.x) || !std::isfinite(vertex.y) || !std::isfinite(vertex.z))
+        {
+            return;
+        }
+        min_x = std::min(min_x, vertex.x);
+        min_y = std::min(min_y, vertex.y);
+        min_z = std::min(min_z, vertex.z);
+        max_x = std::max(max_x, vertex.x);
+        max_y = std::max(max_y, vertex.y);
+        max_z = std::max(max_z, vertex.z);
+    }
+
+    const float span = std::max({max_x - min_x, max_y - min_y, max_z - min_z, 1.0e-6f});
+    const float tolerance = std::max(span * relativeTolerance, 1.0e-8f);
+    const float tolerance_squared = tolerance * tolerance;
+
+    std::unordered_map<VertexCell, std::vector<int>, VertexCellHash> cells;
+    cells.reserve(mesh->vertices.size());
+    std::vector<MeshVertex> welded_vertices;
+    welded_vertices.reserve(mesh->vertices.size());
+    std::vector<int> old_to_new(mesh->vertices.size(), -1);
+
+    auto cell_for = [&](const MeshVertex &vertex) -> VertexCell
+    {
+        return VertexCell{
+            static_cast<std::int64_t>(std::floor((vertex.x - min_x) / tolerance)),
+            static_cast<std::int64_t>(std::floor((vertex.y - min_y) / tolerance)),
+            static_cast<std::int64_t>(std::floor((vertex.z - min_z) / tolerance))};
+    };
+
+    for (std::size_t old_index = 0; old_index < mesh->vertices.size(); ++old_index)
+    {
+        const MeshVertex &vertex = mesh->vertices[old_index];
+        const VertexCell cell = cell_for(vertex);
+        int match = -1;
+        for (int dz = -1; dz <= 1 && match < 0; ++dz)
+        {
+            for (int dy = -1; dy <= 1 && match < 0; ++dy)
+            {
+                for (int dx = -1; dx <= 1 && match < 0; ++dx)
+                {
+                    const VertexCell neighbor{cell.x + dx, cell.y + dy, cell.z + dz};
+                    const auto it = cells.find(neighbor);
+                    if (it == cells.end())
+                    {
+                        continue;
+                    }
+                    for (int candidate : it->second)
+                    {
+                        const MeshVertex &existing = welded_vertices[static_cast<std::size_t>(candidate)];
+                        const float delta_x = vertex.x - existing.x;
+                        const float delta_y = vertex.y - existing.y;
+                        const float delta_z = vertex.z - existing.z;
+                        if (delta_x * delta_x + delta_y * delta_y + delta_z * delta_z <=
+                            tolerance_squared)
+                        {
+                            match = candidate;
+                            break;
+                        }
+                    }
+                }
+            }
+        }
+
+        if (match < 0)
+        {
+            match = static_cast<int>(welded_vertices.size());
+            welded_vertices.push_back(vertex);
+            cells[cell].push_back(match);
+        }
+        old_to_new[old_index] = match;
+    }
+
+    for (Triangle &face : mesh->faces)
+    {
+        for (int corner = 0; corner < 3; ++corner)
+        {
+            const int old_index = face.v[corner];
+            if (old_index < 0 || static_cast<std::size_t>(old_index) >= old_to_new.size())
+            {
+                return;
+            }
+            face.v[corner] = old_to_new[static_cast<std::size_t>(old_index)];
+        }
+    }
+    mesh->vertices = std::move(welded_vertices);
+}
+
 void removeDegenerateFaces(TriMesh *mesh)
 {
     if (!mesh)
@@ -251,6 +379,142 @@ void removeSmallConnectedComponents(TriMesh *mesh, int minFaces)
     }
 
     keepLargestConnectedComponent(mesh);
+}
+
+int fillSmallBoundaryHoles(TriMesh *mesh, int maxBoundaryEdges)
+{
+    if (!mesh || mesh->faces.empty() || mesh->vertices.empty() || maxBoundaryEdges < 3)
+    {
+        return 0;
+    }
+
+    const auto edge_key = [](int first, int second) {
+        const auto low = static_cast<std::uint32_t>(std::min(first, second));
+        const auto high = static_cast<std::uint32_t>(std::max(first, second));
+        return (static_cast<std::uint64_t>(low) << 32U) | static_cast<std::uint64_t>(high);
+    };
+
+    std::unordered_map<std::uint64_t, int> edge_counts;
+    edge_counts.reserve(mesh->faces.size() * 3);
+    for (const Triangle &face : mesh->faces)
+    {
+        ++edge_counts[edge_key(face.v[0], face.v[1])];
+        ++edge_counts[edge_key(face.v[1], face.v[2])];
+        ++edge_counts[edge_key(face.v[2], face.v[0])];
+    }
+
+    std::vector<std::vector<int>> boundary_neighbors(mesh->vertices.size());
+    for (const Triangle &face : mesh->faces)
+    {
+        const std::array<std::array<int, 2>, 3> edges{{
+            {{face.v[0], face.v[1]}},
+            {{face.v[1], face.v[2]}},
+            {{face.v[2], face.v[0]}}
+        }};
+        for (const auto &edge : edges)
+        {
+            if (edge_counts[edge_key(edge[0], edge[1])] == 1)
+            {
+                boundary_neighbors[static_cast<std::size_t>(edge[0])].push_back(edge[1]);
+                boundary_neighbors[static_cast<std::size_t>(edge[1])].push_back(edge[0]);
+            }
+        }
+    }
+
+    std::unordered_map<std::uint64_t, bool> visited_edges;
+    visited_edges.reserve(edge_counts.size());
+    std::vector<Triangle> added_faces;
+    int filled_holes = 0;
+    for (int start_vertex = 0; start_vertex < static_cast<int>(boundary_neighbors.size()); ++start_vertex)
+    {
+        const auto &start_neighbors = boundary_neighbors[static_cast<std::size_t>(start_vertex)];
+        if (start_neighbors.size() != 2)
+        {
+            continue;
+        }
+
+        for (const int first_neighbor : start_neighbors)
+        {
+            if (visited_edges[edge_key(start_vertex, first_neighbor)])
+            {
+                continue;
+            }
+
+            std::vector<int> loop{start_vertex};
+            int previous = start_vertex;
+            int current = first_neighbor;
+            bool closed = false;
+            visited_edges[edge_key(previous, current)] = true;
+            while (static_cast<int>(loop.size()) <= maxBoundaryEdges)
+            {
+                if (current == start_vertex)
+                {
+                    closed = true;
+                    break;
+                }
+                loop.push_back(current);
+
+                const auto &current_neighbors = boundary_neighbors[static_cast<std::size_t>(current)];
+                if (current_neighbors.size() != 2)
+                {
+                    break;
+                }
+                const int next = current_neighbors[0] == previous
+                                     ? current_neighbors[1]
+                                     : current_neighbors[0];
+                const std::uint64_t next_key = edge_key(current, next);
+                if (next != start_vertex && visited_edges[next_key])
+                {
+                    break;
+                }
+                previous = current;
+                current = next;
+                visited_edges[next_key] = true;
+            }
+
+            if (!closed || loop.size() < 3 || static_cast<int>(loop.size()) > maxBoundaryEdges)
+            {
+                continue;
+            }
+
+            MeshVertex center;
+            int red_sum = 0;
+            int green_sum = 0;
+            int blue_sum = 0;
+            for (const int vertex_index : loop)
+            {
+                const MeshVertex &vertex = mesh->vertices[static_cast<std::size_t>(vertex_index)];
+                center.x += vertex.x;
+                center.y += vertex.y;
+                center.z += vertex.z;
+                red_sum += vertex.r;
+                green_sum += vertex.g;
+                blue_sum += vertex.b;
+            }
+            const float inverse_loop_size = 1.0f / static_cast<float>(loop.size());
+            center.x *= inverse_loop_size;
+            center.y *= inverse_loop_size;
+            center.z *= inverse_loop_size;
+            center.r = static_cast<std::uint8_t>(red_sum / static_cast<int>(loop.size()));
+            center.g = static_cast<std::uint8_t>(green_sum / static_cast<int>(loop.size()));
+            center.b = static_cast<std::uint8_t>(blue_sum / static_cast<int>(loop.size()));
+            const int center_index = static_cast<int>(mesh->vertices.size());
+            mesh->vertices.push_back(center);
+
+            for (std::size_t edge_index = 0; edge_index < loop.size(); ++edge_index)
+            {
+                Triangle face;
+                face.v[0] = loop[edge_index];
+                face.v[1] = loop[(edge_index + 1) % loop.size()];
+                face.v[2] = center_index;
+                added_faces.push_back(face);
+            }
+            ++filled_holes;
+        }
+    }
+
+    mesh->faces.insert(mesh->faces.end(), added_faces.begin(), added_faces.end());
+    return filled_holes;
 }
 
 void simplifyVoxelMeshAdaptive(TriMesh *mesh,

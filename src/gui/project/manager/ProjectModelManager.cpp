@@ -515,11 +515,18 @@ void ProjectModelManager::startGenerateModelAsync()
     startMeshReconstructionAsync(settings);
 }
 
-void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settings)
+bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settings)
 {
     if (!ensureProjectOpen(QStringLiteral("请先打开项目"), QStringLiteral("提示")))
     {
-        return;
+        return false;
+    }
+    if (_isRunning)
+    {
+        QMessageBox::information(_parentWidget,
+                                 QStringLiteral("生成模型"),
+                                 QStringLiteral("已有模型或纹理任务正在运行，请等待其完成。"));
+        return false;
     }
 
     const QString dialogTitle = settings.contains(QStringLiteral("source_data"))
@@ -531,7 +538,7 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     if (!resolveModelSourceForMeshing(_projectData, settings, &resolvedSource, &sourceError))
     {
         QMessageBox::warning(_parentWidget, dialogTitle, sourceError);
-        return;
+        return false;
     }
 
     QJsonObject effectiveSettings = settings;
@@ -544,6 +551,7 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
         xjw::gui::project::persistProjectMeta(_projectData, meta, false);
     }
 
+    _isRunning = true;
     emit meshProgressChanged(tr("正在初始化模型生成..."), 0);
     QPointer<ProjectModelManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
@@ -558,51 +566,33 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 return task;
             }
 
-            xjw::mesh::ReconstructionConfig cfg =
-                xjw::mesh::workflow::reconstructionConfigFromModelSettings(effectiveSettings);
-
-            const QString sourceData =
-                effectiveSettings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
-            if (sourceData == QStringLiteral("depth_maps"))
-            {
-                xjw::mesh::workflow::DepthMapMeshBuildRequest depthRequest;
-                depthRequest.depthMapSourcePath =
-                    effectiveSettings.value(QStringLiteral("depthMapSourcePath"))
-                        .toString(effectiveSettings.value(QStringLiteral("source_path")).toString());
-                depthRequest.outputRoot = resolvedSource.outputRoot;
-                depthRequest.settings = effectiveSettings;
-                depthRequest.reconstruction = cfg;
-                depthRequest.exportObj = xjw::mesh::workflow::exportObjRequested(effectiveSettings);
-                depthRequest.texture = xjw::mesh::workflow::defaultTextureConfig();
-                depthRequest.progress = makeProgressReporter(self, ownerGuard, projectPath);
-
-                const xjw::mesh::workflow::WorkflowResult workflowResult =
-                    xjw::mesh::workflow::buildMeshFromDepthMaps(depthRequest);
-                applyWorkflowResult(&task, workflowResult);
-                task.result[QStringLiteral("source_path")] = depthRequest.depthMapSourcePath;
-                task.result[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-                return task;
-            }
-
-            xjw::mesh::workflow::MeshBuildRequest request;
-            request.pointCloudPath = resolvedSource.sourcePointCloudPath;
+            xjw::mesh::workflow::ModelBuildRequest request;
+            request.sourceData =
+                effectiveSettings.value(QStringLiteral("source_data"))
+                    .toString(QStringLiteral("point_cloud"));
+            request.requestedSourcePath = resolvedSource.requestedSourcePath;
+            request.sourcePointCloudPath = resolvedSource.sourcePointCloudPath;
+            request.depthMapSourcePath =
+                effectiveSettings.value(QStringLiteral("depthMapSourcePath"))
+                    .toString(effectiveSettings.value(QStringLiteral("source_path")).toString());
             request.outputRoot = resolvedSource.outputRoot;
-            request.reconstruction = cfg;
-            request.exportObj = xjw::mesh::workflow::exportObjRequested(effectiveSettings);
-            request.texture = xjw::mesh::workflow::defaultTextureConfig();
+            request.settings = effectiveSettings;
             request.progress = makeProgressReporter(self, ownerGuard, projectPath);
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
-                xjw::mesh::workflow::buildMeshAndOptionalTexture(request);
+                xjw::mesh::workflow::buildModel(request);
             applyWorkflowResult(&task, workflowResult);
-            task.result[QStringLiteral("source_path")] = resolvedSource.requestedSourcePath;
-            task.result[QStringLiteral("source_point_cloud_path")] = resolvedSource.sourcePointCloudPath;
-            task.result[QStringLiteral("source_data")] = sourceData;
             return task;
         },
         [self, ownerGuard, resolvedSource, effectiveSettings, projectPath, dialogTitle](const ModelTaskResult &task) {
-            if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!self)
             {
+                return;
+            }
+            self->_isRunning = false;
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                emit self->meshProgressFinished(false);
                 return;
             }
             emit self->meshProgressFinished(task.ok);
@@ -630,12 +620,20 @@ void ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 }
             });
         });
+    return true;
 }
 
 void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
 {
     if (!ensureProjectOpen(QStringLiteral("请先打开项目"), QStringLiteral("提示")))
     {
+        return;
+    }
+    if (_isRunning)
+    {
+        QMessageBox::information(_parentWidget,
+                                 QStringLiteral("纹理映射"),
+                                 QStringLiteral("已有模型或纹理任务正在运行，请等待其完成。"));
         return;
     }
 
@@ -667,6 +665,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
 
     const QString productsDir = QFileInfo(meshPath).absolutePath();
 
+    _isRunning = true;
     emit meshProgressChanged(tr("正在初始化纹理映射..."), 0);
     QPointer<ProjectModelManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
@@ -693,8 +692,14 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             return task;
         },
         [self, ownerGuard, meshPath, baseRecord, projectPath](const ModelTaskResult &task) {
-            if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            if (!self)
             {
+                return;
+            }
+            self->_isRunning = false;
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                emit self->meshProgressFinished(false);
                 return;
             }
             emit self->meshProgressFinished(task.ok);
@@ -716,6 +721,11 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
                                          textureMappingSuccessMessage(taskResult));
             });
         });
+}
+
+bool ProjectModelManager::isRunning() const
+{
+    return _isRunning;
 }
 
 void ProjectModelManager::finalizeModelGenerationSuccess(const QJsonObject &terrainResult,

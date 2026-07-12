@@ -69,6 +69,9 @@ public:
     /** @brief 返回主工具栏指针，外部可向其添加额外的操作按钮。 */
     QToolBar *toolBar() const;
 
+    /** @brief 根据中央工作区类型切换三维与影像专属工具组。 */
+    void setContextualToolbarVisibility(bool showModelTools, bool showImageTools);
+
     // ==== 文件/项目菜单动作 ====
 
     /** @brief 返回"新建项目"动作。 */
@@ -96,6 +99,12 @@ public:
 
     /** @brief 返回"重置视图"动作。 */
     QAction *resetViewAction() const;
+
+    /** @brief 返回当前影像向左旋转 90 度的动作。 */
+    QAction *rotateImageLeftAction() const;
+
+    /** @brief 返回当前影像向右旋转 90 度的动作。 */
+    QAction *rotateImageRightAction() const;
 
     /** @brief 返回"显示轨迹球"切换动作（可检查状态）。 */
     QAction *toggleGizmoAction() const;
@@ -254,6 +263,12 @@ private:
     QAction *_zoomInAct{};    ///< 放大视图
     QAction *_zoomOutAct{};   ///< 缩小视图
     QAction *_resetViewAct{}; ///< 重置视图到原始比例
+    QAction *_rotateImageLeftAct{}; ///< 当前影像向左旋转 90 度
+    QAction *_rotateImageRightAct{}; ///< 当前影像向右旋转 90 度
+    QAction *_cameraToolbarWidgetAct{}; ///< 三维相机工具按钮的工具栏包装动作
+    QAction *_cameraImageToolbarWidgetAct{}; ///< 三维图像工具按钮的工具栏包装动作
+    QAction *_rotateImageLeftToolbarWidgetAct{}; ///< 左转按钮的工具栏包装动作
+    QAction *_rotateImageRightToolbarWidgetAct{}; ///< 右转按钮的工具栏包装动作
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏轨迹球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
     QAction *_toggleDependentCamerasAct{}; ///< 显示/隐藏从属相机（当前仅保留菜单占位）

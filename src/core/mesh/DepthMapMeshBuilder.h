@@ -11,6 +11,7 @@ struct DepthFrameArtifact
     QString depthPath;
     QString confidencePath;
     QString previewPath;
+    QString validMaskPath;
 };
 
 class DepthMapMeshBuilder

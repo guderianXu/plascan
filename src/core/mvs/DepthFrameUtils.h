@@ -24,6 +24,8 @@ struct StoredDepthFrameRecord
     QString depthPng;
     QString rawDepthPath;
     QString rawConfidencePath;
+    QString configHash;
+    QString projectInputSignature;
     int gridWidth = 0;
     int gridHeight = 0;
 };
@@ -49,6 +51,8 @@ bool depthFrameArtifactsExist(const QString &pngPath, bool requireConfidence = f
 bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireConfidence = false);
 
 StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projectMeta);
+StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &projectMeta,
+                                                             const QString &batchDirectory);
 xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(
     const xjw::mvs::PositiveDepthCameraModel &camera,
     double scaleX,
@@ -57,7 +61,7 @@ bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
                                           int fusionMaxImageDim);
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,
                                               const xjw::Camera &camera,
-                                              float confidenceThreshold,
+                                              const xjw::mvs::FusionConfig &fusionConfig,
                                               int viewCount,
                                               int fusionMaxImageDim = 0);
 

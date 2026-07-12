@@ -6,6 +6,7 @@
 // ============================================================
 
 #include <gtest/gtest.h>
+#include <opencv2/core.hpp>
 #include "triangulation/Triangulator.h"
 #include "pipeline/IncrementalSfm.h"
 #include "pose/PnpSolver.h"
@@ -60,6 +61,19 @@ LowRatioPnpCase makeLowRatioPnpCase()
     return data;
 }
 
+std::array<double, 2> projectWithCameraCenter(const std::array<double, 3> &point,
+                                              const std::array<double, 3> &cameraCenter,
+                                              double fu,
+                                              double fv,
+                                              double cu,
+                                              double cv)
+{
+    const double x = point[0] - cameraCenter[0];
+    const double y = point[1] - cameraCenter[1];
+    const double z = point[2] - cameraCenter[2];
+    return {{fu * x / z + cu, fv * y / z + cv}};
+}
+
 } // namespace
 
 // ─── Triangulator 参数验证 ──────────────────────────────────────
@@ -109,6 +123,27 @@ TEST(IncrementalSfmParamsTest, BAIntervals)
     EXPECT_GT(opts.localBANumImages, 0);
 }
 
+TEST(IncrementalSfmParamsTest, BracketedSequencePnpRequiresAbsoluteGeometricSupport)
+{
+    IncrementalSfmOptions opts;
+
+    EXPECT_TRUE(opts.allowBracketedSequencePnpRelaxation);
+    EXPECT_TRUE(opts.allowOneSidedSequencePoseRecovery);
+    EXPECT_GE(opts.oneSidedSequencePosePrefilterMaxReprojError, 96.0);
+    EXPECT_GE(opts.bracketedSequencePnpMinInliers, 28);
+    EXPECT_GE(opts.bracketedSequencePnpMinInlierRatio, 0.02);
+    EXPECT_LE(opts.bracketedSequencePnpMinInlierRatio, 0.05);
+}
+
+TEST(IncrementalSfmParamsTest, FinalGlobalBaRetriesUnregisteredImages)
+{
+    const xjw::IncrementalSfmOptions opts;
+
+    EXPECT_TRUE(opts.retryUnregisteredAfterFinalBA);
+    EXPECT_GE(opts.maxFinalRegistrationRetryPasses, 1);
+    EXPECT_LE(opts.maxFinalRegistrationRetryPasses, 3);
+}
+
 // ─── PnP 参数验证 ──────────────────────────────────────────────
 
 TEST(PnpParamsTest, MaxReprojErrorTightened)
@@ -118,6 +153,119 @@ TEST(PnpParamsTest, MaxReprojErrorTightened)
     // 从 8.0 收紧到 4.0
     EXPECT_LE(opts.maxReprojError, 4.0)
         << "PnP maxReprojError should be <= 4.0 to reduce registration outliers";
+    EXPECT_LE(opts.initialPosePrefilterMaxReprojError, 48.0);
+}
+
+TEST(PnpParamsTest, InitialPoseGuessUsesCameraCenterConvention)
+{
+    std::vector<std::array<double, 3>> worldPoints;
+    std::vector<std::array<double, 2>> imagePoints;
+    const std::array<double, 3> trueCenter{{0.25, -0.15, 0.80}};
+    const double fu = 900.0;
+    const double fv = 910.0;
+    const double cu = 320.0;
+    const double cv = 240.0;
+
+    for (int i = 0; i < 30; ++i)
+    {
+        const double x = -1.2 + static_cast<double>(i % 6) * 0.45;
+        const double y = -0.8 + static_cast<double>(i / 6) * 0.35;
+        const double z = 4.5 + static_cast<double>(i % 5) * 0.25;
+        const std::array<double, 3> point{{x, y, z}};
+        worldPoints.push_back(point);
+        imagePoints.push_back(projectWithCameraCenter(point, trueCenter, fu, fv, cu, cv));
+    }
+
+    PnpOptions opts;
+    opts.minNumInliers = 12;
+    opts.maxIterations = 1000;
+    opts.useInitialPose = true;
+    opts.initialCameraCenter = trueCenter;
+    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0}};
+
+    const PnpResult result = PnpSolver::solve(worldPoints,
+                                              imagePoints,
+                                              fu,
+                                              fv,
+                                              cu,
+                                              cv,
+                                              1,
+                                              1,
+                                              false,
+                                              opts);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_GE(result.numInliers, 25);
+    EXPECT_NEAR(result.C[0], trueCenter[0], 1e-4);
+    EXPECT_NEAR(result.C[1], trueCenter[1], 1e-4);
+    EXPECT_NEAR(result.C[2], trueCenter[2], 1e-4);
+}
+
+TEST(PnpParamsTest, InitialPosePrefilterRecoversLowRatioInliers)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+    PnpOptions opts;
+    opts.maxIterations = 100;
+    opts.minNumInliers = 10;
+    opts.allowRelaxedInlierRatio = true;
+    opts.relaxedMinInlierRatio = 0.20;
+    opts.useInitialPose = true;
+    opts.useInitialPosePrefilter = true;
+    opts.initialPosePrefilterMaxReprojError = 12.0;
+    opts.initialPosePrefilterMinCandidates = 10;
+    opts.initialCameraCenter = {{0.0, 0.0, 0.0}};
+    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0}};
+
+    const PnpResult result = PnpSolver::solve(data.worldPoints,
+                                              data.imagePoints,
+                                              data.fu,
+                                              data.fv,
+                                              data.cu,
+                                              data.cv,
+                                              1,
+                                              1,
+                                              false,
+                                              opts);
+
+    EXPECT_TRUE(result.success);
+    EXPECT_GE(result.numInliers, 18);
+    EXPECT_EQ(result.inlierMask.size(), data.worldPoints.size());
+    EXPECT_TRUE(result.usedInitialPosePrefilter);
+    EXPECT_GE(result.prefilterCandidateCount, result.numInliers);
+    EXPECT_LT(result.prefilterCandidateCount, static_cast<int>(data.worldPoints.size()));
+}
+
+TEST(PnpParamsTest, InitialPosePrefilterReportsCandidatesBelowActivationThreshold)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+    PnpOptions opts;
+    opts.useInitialPose = true;
+    opts.useInitialPosePrefilter = true;
+    opts.initialPosePrefilterMaxReprojError = 12.0;
+    opts.initialPosePrefilterMinCandidates = 1000;
+    opts.initialCameraCenter = {{0.0, 0.0, 0.0}};
+    opts.initialCameraToWorldRotation = {{1.0, 0.0, 0.0,
+                                          0.0, 1.0, 0.0,
+                                          0.0, 0.0, 1.0}};
+
+    const PnpResult result = PnpSolver::solve(data.worldPoints,
+                                              data.imagePoints,
+                                              data.fu,
+                                              data.fv,
+                                              data.cu,
+                                              data.cv,
+                                              1,
+                                              1,
+                                              false,
+                                              opts);
+
+    EXPECT_FALSE(result.usedInitialPosePrefilter);
+    EXPECT_GT(result.prefilterCandidateCount, 0);
+    EXPECT_LT(result.prefilterCandidateCount, opts.initialPosePrefilterMinCandidates);
 }
 
 TEST(PnpParamsTest, AcceptsLowRatioWhenAbsoluteInlierSupportIsEnough)
@@ -145,6 +293,50 @@ TEST(PnpParamsTest, AcceptsLowRatioWhenAbsoluteInlierSupportIsEnough)
     EXPECT_LT(static_cast<double>(20) / static_cast<double>(data.worldPoints.size()), 0.25);
 }
 
+TEST(PnpParamsTest, RelaxedInlierRatioThresholdIsConfigurable)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+
+    PnpOptions strictRelaxedOpts;
+    strictRelaxedOpts.maxIterations = 50000;
+    strictRelaxedOpts.minNumInliers = 10;
+    strictRelaxedOpts.allowRelaxedInlierRatio = true;
+    strictRelaxedOpts.relaxedMinInlierRatio = 0.24;
+
+    const PnpResult strictRelaxed = PnpSolver::solve(data.worldPoints,
+                                                     data.imagePoints,
+                                                     data.fu,
+                                                     data.fv,
+                                                     data.cu,
+                                                     data.cv,
+                                                     1,
+                                                     1,
+                                                     false,
+                                                     strictRelaxedOpts);
+
+    EXPECT_FALSE(strictRelaxed.success);
+    EXPECT_GE(strictRelaxed.numInliers, 18);
+    EXPECT_LT(strictRelaxed.inlierRatio, strictRelaxedOpts.relaxedMinInlierRatio);
+
+    PnpOptions looseRelaxedOpts = strictRelaxedOpts;
+    looseRelaxedOpts.relaxedMinInlierRatio = 0.20;
+
+    const PnpResult looseRelaxed = PnpSolver::solve(data.worldPoints,
+                                                    data.imagePoints,
+                                                    data.fu,
+                                                    data.fv,
+                                                    data.cu,
+                                                    data.cv,
+                                                    1,
+                                                    1,
+                                                    false,
+                                                    looseRelaxedOpts);
+
+    EXPECT_TRUE(looseRelaxed.success);
+    EXPECT_GE(looseRelaxed.inlierRatio, looseRelaxedOpts.relaxedMinInlierRatio);
+    EXPECT_LT(looseRelaxed.inlierRatio, looseRelaxedOpts.minInlierRatio);
+}
+
 TEST(PnpParamsTest, RejectsLowRatioByDefault)
 {
     const LowRatioPnpCase data = makeLowRatioPnpCase();
@@ -167,6 +359,57 @@ TEST(PnpParamsTest, RejectsLowRatioByDefault)
     EXPECT_FALSE(result.success);
     EXPECT_GE(result.numInliers, 18);
     EXPECT_LT(result.inlierRatio, opts.minInlierRatio);
+}
+
+TEST(PnpParamsTest, DeterministicSeedIsIndependentOfExternalOpenCvRngState)
+{
+    const LowRatioPnpCase data = makeLowRatioPnpCase();
+
+    PnpOptions opts;
+    opts.maxIterations = 50000;
+    opts.minNumInliers = 10;
+    opts.allowRelaxedInlierRatio = true;
+    opts.ransacSeed = 20260711;
+
+    cv::setRNGSeed(17);
+    const PnpResult first = PnpSolver::solve(data.worldPoints,
+                                             data.imagePoints,
+                                             data.fu,
+                                             data.fv,
+                                             data.cu,
+                                             data.cv,
+                                             1,
+                                             1,
+                                             false,
+                                             opts);
+
+    cv::setRNGSeed(918273);
+    for (int i = 0; i < 1000; ++i)
+    {
+        static_cast<void>(cv::theRNG().next());
+    }
+    const PnpResult second = PnpSolver::solve(data.worldPoints,
+                                              data.imagePoints,
+                                              data.fu,
+                                              data.fv,
+                                              data.cu,
+                                              data.cv,
+                                              1,
+                                              1,
+                                              false,
+                                              opts);
+
+    ASSERT_EQ(first.success, second.success);
+    ASSERT_EQ(first.numInliers, second.numInliers);
+    EXPECT_EQ(first.inlierMask, second.inlierMask);
+    for (std::size_t i = 0; i < first.C.size(); ++i)
+    {
+        EXPECT_DOUBLE_EQ(first.C[i], second.C[i]);
+    }
+    for (std::size_t i = 0; i < first.R.size(); ++i)
+    {
+        EXPECT_DOUBLE_EQ(first.R[i], second.R[i]);
+    }
 }
 
 // ─── BundleAdjust 参数验证 ──────────────────────────────────────

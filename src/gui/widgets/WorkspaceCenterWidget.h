@@ -21,6 +21,16 @@ class WorkspaceCenterWidget : public QWidget
 {
     Q_OBJECT
 public:
+    enum class ViewMode
+    {
+        None,
+        Model,
+        Image,
+        Compare,
+        ObservationNetwork
+    };
+    Q_ENUM(ViewMode)
+
     explicit WorkspaceCenterWidget(QWidget *parent = nullptr);
     ~WorkspaceCenterWidget() override;
 
@@ -29,6 +39,10 @@ public:
 
     CanvasWidget *canvas() const;
     CameraSceneWidget *modelView() const;
+    ViewMode currentViewMode() const;
+
+signals:
+    void viewModeChanged(ViewMode mode);
 
 public slots:
     void showModelView();

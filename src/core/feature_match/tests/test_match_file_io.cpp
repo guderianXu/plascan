@@ -1,4 +1,5 @@
 #include "MatchFileIO.h"
+#include "MatchGeometryFilter.h"
 
 #include <gtest/gtest.h>
 
@@ -60,4 +61,54 @@ TEST(MatchFileIOTest, IndexedMatchRoundTrips)
     EXPECT_EQ(loaded.cvMatches[1].queryIdx, 2);
     EXPECT_EQ(loaded.cvMatches[1].trainIdx, 0);
     EXPECT_FLOAT_EQ(loaded.cvMatches[1].distance, 0.25f);
+}
+
+TEST(MatchGeometryFilterTest, RejectsPairWhenGeometricInliersAreBelowConfiguredMinimum)
+{
+    constexpr int matchCount = 30;
+    std::vector<cv::KeyPoint> keypoints0;
+    std::vector<cv::KeyPoint> keypoints1;
+    std::vector<cv::DMatch> matches;
+    keypoints0.reserve(matchCount);
+    keypoints1.reserve(matchCount);
+    matches.reserve(matchCount);
+
+    for (int index = 0; index < matchCount; ++index)
+    {
+        const float x = static_cast<float>((index % 6) * 30 + 10);
+        const float y = static_cast<float>((index / 6) * 25 + 15);
+        keypoints0.emplace_back(cv::Point2f(x, y), 8.0f);
+        keypoints1.emplace_back(cv::Point2f(x + 12.0f, y + 3.0f), 8.0f);
+        matches.emplace_back(index, index, 0.1f);
+    }
+
+    const xjw::feature_match::MatchResult input =
+        xjw::feature_match::MatchResult::fromCvMatches(matches,
+                                                       matchCount,
+                                                       matchCount,
+                                                       "lightglue");
+    xjw::feature_match::OutlierFilterConfig config;
+    config.method = xjw::feature_match::OutlierMethod::FundamentalUsacMagsac;
+    config.reprojThreshold = 1.0;
+    config.minInliers = matchCount + 1;
+
+    int inlierCount = -1;
+    const xjw::feature_match::MatchResult filtered =
+        xjw::feature_match::MatchGeometryFilter::filter(input,
+                                                        keypoints0,
+                                                        keypoints1,
+                                                        config,
+                                                        &inlierCount);
+
+    EXPECT_LT(inlierCount, config.minInliers);
+    EXPECT_TRUE(filtered.empty());
+    EXPECT_TRUE(filtered.cvMatches.empty());
+}
+
+TEST(MatchGeometryFilterTest, ExposesDeterministicRansacSeed)
+{
+    xjw::feature_match::OutlierFilterConfig config;
+    config.randomSeed = 20260711;
+
+    EXPECT_EQ(config.randomSeed, 20260711);
 }

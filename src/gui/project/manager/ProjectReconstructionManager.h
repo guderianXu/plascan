@@ -11,6 +11,7 @@ class ProjectManager;
 class ProjectSparseReconstructionManager;
 class ProjectDenseReconstructionManager;
 class ProjectModelManager;
+class ProjectModelGenerationWorkflow;
 
 class ProjectReconstructionManager : public QObject
 {
@@ -54,4 +55,5 @@ private:
     ProjectSparseReconstructionManager *_sparseManager = nullptr;
     ProjectDenseReconstructionManager *_denseManager = nullptr;
     ProjectModelManager *_modelManager = nullptr;
+    ProjectModelGenerationWorkflow *_modelWorkflow = nullptr;
 };

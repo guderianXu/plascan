@@ -5,6 +5,7 @@
 #include "ProjectDenseWorkflowConfig.h"
 #include "DepthFrameUtils.h"
 #include "ProjectMetadataOperations.h"
+#include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
 #include "ProjectSupportUtils.h"
 #include "ProjectWorkflowUtils.h"
@@ -61,10 +62,12 @@ using xjw::gui::project::makeDepthResultRecord;
 using xjw::gui::project::sparseResultBlockingReason;
 using xjw::core::project::buildStoredFusionFrame;
 using xjw::core::project::collectLatestStoredDepthFrames;
+using xjw::core::project::collectStoredDepthFramesForDirectory;
 using xjw::core::project::depthFrameArtifactsExist;
 using xjw::core::project::FusionFrameBuildResult;
 using xjw::gui::project::normalizePath;
 using xjw::gui::project::persistProjectMeta;
+using xjw::gui::project::projectDepthInputSignature;
 using xjw::core::project::rawConfidenceStoragePath;
 using xjw::core::project::rawDepthStoragePath;
 using xjw::gui::project::resolveLatestDenseCloudPath;
@@ -299,13 +302,13 @@ class DepthFrameLruCache
 public:
     DepthFrameLruCache(const std::vector<StoredDepthFrameRecord> &records,
                        const QMap<QString, xjw::Camera> &camMap,
-                       float confidenceThreshold,
+                       const xjw::mvs::FusionConfig &fusionConfig,
                        int viewCount,
                        int fusionMaxImageDim,
                        int capacity)
         : _records(records)
         , _cameraMap(camMap)
-        , _confidenceThreshold(confidenceThreshold)
+        , _fusionConfig(fusionConfig)
         , _viewCount(viewCount)
         , _fusionMaxImageDim(std::max(0, fusionMaxImageDim))
         , _capacity(std::max(1, capacity))
@@ -339,7 +342,7 @@ public:
 
         FusionFrameBuildResult loaded = buildStoredFusionFrame(_records[index],
                                                                camera,
-                                                               _confidenceThreshold,
+                                                               _fusionConfig,
                                                                _viewCount,
                                                                _fusionMaxImageDim);
         if (!loaded.status.ok)
@@ -382,7 +385,7 @@ private:
 
     const std::vector<StoredDepthFrameRecord> &_records;
     const QMap<QString, xjw::Camera> &_cameraMap;
-    float _confidenceThreshold = 0.0f;
+    xjw::mvs::FusionConfig _fusionConfig;
     int _viewCount = 0;
     int _fusionMaxImageDim = 0;
     int _capacity = 1;
@@ -415,36 +418,6 @@ QString validMaskStoragePath(const QString &pngPath)
 {
     const QFileInfo info(pngPath);
     return QDir(info.absolutePath()).filePath(QStringLiteral("%1_mask.png").arg(info.completeBaseName()));
-}
-
-QJsonObject existingDepthRecordForPath(const QJsonObject &meta, const QString &pngPath)
-{
-    const QString target = QDir::cleanPath(pngPath);
-    const QJsonArray records = meta.value(QStringLiteral("depth_map_results")).toArray();
-    for (const QJsonValue &value : records)
-    {
-        const QJsonObject record = value.toObject();
-        const QString existing = QDir::cleanPath(record.value(QStringLiteral("depth_png")).toString());
-        if (!existing.isEmpty() && existing == target)
-        {
-            return record;
-        }
-    }
-    return {};
-}
-
-void setDepthRecordDefault(QJsonObject *record, const QString &key, const QJsonValue &value)
-{
-    if (!record)
-    {
-        return;
-    }
-
-    const QJsonValue current = record->value(key);
-    if (current.isUndefined() || current.isNull() || (current.isString() && current.toString().isEmpty()))
-    {
-        (*record)[key] = value;
-    }
 }
 
 ExistingDepthAction askExistingDepthAction(QWidget *parent,
@@ -495,69 +468,12 @@ void removeDepthArtifactsForIndices(const QString &outputDir, const QSet<int> &i
     }
 }
 
-void upsertExistingDepthRecords(ProjectData *projectData,
-                                const QStringList &selectedImages,
-                                const QString &sparseXyz,
-                                const QString &outputDir,
-                                const QSet<int> &indices)
-{
-    if (!projectData || indices.isEmpty())
-    {
-        return;
-    }
-
-    QJsonObject meta = projectData->metadata();
-    bool changed = false;
-
-    for (const int index : indices)
-    {
-        if (index < 0 || index >= selectedImages.size())
-        {
-            continue;
-        }
-
-        const QString pngPath = QDir(outputDir).filePath(QStringLiteral("depth_%1.png").arg(index));
-        if (!depthFrameArtifactsExist(pngPath))
-        {
-            continue;
-        }
-
-        QJsonObject depthResult = existingDepthRecordForPath(meta, pngPath);
-        if (depthResult.isEmpty())
-        {
-            depthResult = makeDepthResultRecord(utcNowIso(),
-                                                pngPath,
-                                                0,
-                                                0,
-                                                sparseXyz,
-                                                selectedImages.at(index));
-        }
-        setDepthRecordDefault(&depthResult, QStringLiteral("created_at"), utcNowIso());
-        depthResult[QStringLiteral("depth_png")] = pngPath;
-        setDepthRecordDefault(&depthResult, QStringLiteral("result_type"), QStringLiteral("mvs_depth"));
-        setDepthRecordDefault(&depthResult, QStringLiteral("source_sparse_cloud"), sparseXyz);
-        setDepthRecordDefault(&depthResult, QStringLiteral("ref_image"), selectedImages.at(index));
-        setDepthRecordDefault(&depthResult, QStringLiteral("raw_depth_path"), rawDepthStoragePath(pngPath));
-        setDepthRecordDefault(&depthResult, QStringLiteral("raw_confidence_path"), rawConfidenceStoragePath(pngPath));
-        setDepthRecordDefault(&depthResult, QStringLiteral("valid_mask_path"), validMaskStoragePath(pngPath));
-        setDepthRecordDefault(&depthResult, QStringLiteral("mvs_output_dir"), outputDir);
-        setDepthRecordDefault(&depthResult, QStringLiteral("status"), QStringLiteral("completed"));
-        upsertMetaArrayRecordByPath(&meta,
-                                    QStringLiteral("depth_map_results"),
-                                    QStringLiteral("depth_png"),
-                                    depthResult);
-        changed = true;
-    }
-
-    if (changed)
-    {
-        persistProjectMeta(projectData, meta, true);
-    }
-}
-
 QJsonObject makeProjectDepthRecordFromArtifact(const QJsonObject &artifact,
                                                const QString &sparseXyz,
-                                               const QString &mvsOutputDir)
+                                               const QString &mvsOutputDir,
+                                               int batch_frame_count,
+                                               const QString &project_input_signature,
+                                               const QString &reconstruction_generation_id)
 {
     const QString pngPath = artifact.value(QStringLiteral("depth_png")).toString();
     if (pngPath.trimmed().isEmpty())
@@ -596,6 +512,10 @@ QJsonObject makeProjectDepthRecordFromArtifact(const QJsonObject &artifact,
     {
         depthResult[QStringLiteral("status")] = QStringLiteral("completed");
     }
+    depthResult[QStringLiteral("batch_frame_count")] = batch_frame_count;
+    depthResult[QStringLiteral("project_input_signature")] = project_input_signature;
+    depthResult[QStringLiteral("reconstruction_generation_id")] =
+        reconstruction_generation_id;
 
     return depthResult;
 }
@@ -1288,6 +1208,13 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     {
         return;
     }
+    if (isMvsRunning())
+    {
+        QMessageBox::information(_parentWidget,
+                                 QStringLiteral("深度图估计"),
+                                 QStringLiteral("已有深度图或密集点云任务正在运行，请先等待或取消当前任务。"));
+        return;
+    }
 
     const xjw::gui::project::DenseGenerationSettings request = denseGenerationSettingsFromJson(settings);
     const QJsonObject meta = _projectData->metadata();
@@ -1311,6 +1238,9 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         return;
     }
     const QJsonObject atResult = atArr[realIdx].toObject();
+    const QString project_input_signature = projectDepthInputSignature(meta, realIdx);
+    const QString reconstruction_generation_id =
+        atResult.value(QStringLiteral("reconstruction_generation_id")).toString();
     if (!xjw::gui::project::isProductionSparseResult(atResult))
     {
         const QString reason = sparseResultBlockingReason(atResult);
@@ -1341,7 +1271,6 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     const QSet<int> existingIndices = collectExistingDepthFrameIndices(mvsOutDir, selectedImages.size());
-    QSet<int> skipIndices;
     if (!existingIndices.isEmpty())
     {
         const ExistingDepthAction action = askExistingDepthAction(_parentWidget,
@@ -1360,20 +1289,9 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         }
         else if (action == ExistingDepthAction::ContinueMissing)
         {
-            skipIndices = existingIndices;
-            upsertExistingDepthRecords(_projectData, selectedImages, sparseXyz, mvsOutDir, skipIndices);
-
-            if (skipIndices.size() >= selectedImages.size())
-            {
-                QMessageBox::information(_parentWidget,
-                                         QStringLiteral("深度图估计"),
-                                         QStringLiteral("当前影像的深度图已全部存在，无需继续生成。"));
-                return;
-            }
-
-            LOG_INFO(QStringLiteral("[MVS] 用户选择续跑：已存在 %1 帧，将继续生成剩余 %2 帧")
-                         .arg(skipIndices.size())
-                         .arg(selectedImages.size() - skipIndices.size()));
+            LOG_INFO(QStringLiteral("[MVS] 用户选择续跑：发现 %1 个深度文件，"
+                                    "将由 manifest 校验影像、相机与参数后决定可复用帧")
+                         .arg(existingIndices.size()));
         }
     }
 
@@ -1405,6 +1323,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     }
 
     DepthGenConfig genCfg = buildDepthGenConfig(request, static_cast<int>(views.size()));
+    genCfg.inputSignature = project_input_signature.toStdString();
     genCfg.runFusion = false;
     genCfg.saveIntermediateDepthMaps = true;
     genCfg.intermediateDir = xjw::common::io::toUtf8Path(mvsOutDir);
@@ -1412,24 +1331,14 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     auto *gen = new DepthMapGenerator(this);
     gen->setViews(views);
-    if (!skipIndices.isEmpty())
-    {
-        std::vector<int> skipVector;
-        skipVector.reserve(static_cast<size_t>(skipIndices.size()));
-        for (const int index : skipIndices)
-        {
-            skipVector.push_back(index);
-        }
-        std::sort(skipVector.begin(), skipVector.end());
-        gen->setSkippedFrameIndices(skipVector);
-    }
     gen->setConfig(genCfg);
     gen->setOutputDir(xjw::common::io::toUtf8Path(mvsOutDir));
 
     QPointer<ProjectDenseReconstructionManager> self(this);
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
-                     [self](const QString &stage, float ratio) {
-        if (!self)
+                     [self, projectPath](const QString &stage, float ratio) {
+        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
         {
             return;
         }
@@ -1439,12 +1348,24 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         qWarning() << "[MVS] 错误:" << msg;
     });
     connect(gen, &DepthMapGenerator::depthMapArtifactSaved, this,
-            [self, sparseXyz, mvsOutDir](const QJsonObject &artifact) {
-        if (!self)
+            [self,
+             sparseXyz,
+             mvsOutDir,
+             projectPath,
+             project_input_signature,
+             reconstruction_generation_id,
+             batch_frame_count = selectedImages.size()](const QJsonObject &artifact) {
+        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
         {
             return;
         }
-        const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(artifact, sparseXyz, mvsOutDir);
+        const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(
+            artifact,
+            sparseXyz,
+            mvsOutDir,
+            batch_frame_count,
+            project_input_signature,
+            reconstruction_generation_id);
         if (depthResult.isEmpty())
         {
             return;
@@ -1454,20 +1375,25 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                                   QStringLiteral("depth_png"),
                                   depthResult);
     });
-    connect(gen, &DepthMapGenerator::finished, this, [self](bool success) {
+    connect(gen, &DepthMapGenerator::finished, this, [self, projectPath](bool success) {
         if (!self)
         {
             return;
         }
-        if (success && self->_owner)
+        const bool project_matches = self->_owner &&
+            self->_owner->currentProjectPath() == projectPath;
+        if (success && project_matches)
         {
             self->_owner->refreshReconstructionQualityReport();
         }
-        emit self->mvsProgressFinished(success);
-        QMessageBox::information(self->_parentWidget,
-                                 QStringLiteral("深度图估计"),
-                                 success ? QStringLiteral("深度图估计完成。")
-                                         : QStringLiteral("深度图估计失败或被取消。"));
+        emit self->mvsProgressFinished(success && project_matches);
+        if (project_matches)
+        {
+            QMessageBox::information(self->_parentWidget,
+                                     QStringLiteral("深度图估计"),
+                                     success ? QStringLiteral("深度图估计完成。")
+                                             : QStringLiteral("深度图估计失败或被取消。"));
+        }
         if (self->_activeMvsGenerator)
         {
             self->_activeMvsGenerator->deleteLater();
@@ -1477,7 +1403,6 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
 
     _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QPointer<DepthMapGenerator> genSelf(gen);
     (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]() {
         SparseCloud sparse;
@@ -1508,6 +1433,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                     self->_activeMvsGenerator = nullptr;
                 }
                 genSelf->deleteLater();
+                emit self->mvsProgressFinished(false);
                 return;
             }
             if (genSelf->isCancelled())
@@ -1521,20 +1447,35 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     });
 }
 
-void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObject &settings)
+bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObject &settings)
 {
     using namespace xjw::mvs;
 
     if (!ensureProjectOpen(QStringLiteral("请先打开一个项目。"), QStringLiteral("深度图融合")))
     {
-        return;
+        return false;
+    }
+    if (isMvsRunning())
+    {
+        QMessageBox::information(_parentWidget,
+                                 QStringLiteral("深度图融合"),
+                                 QStringLiteral("已有深度图或密集点云任务正在运行，请先等待或取消当前任务。"));
+        return false;
     }
 
     const xjw::gui::project::DenseGenerationSettings request = denseGenerationSettingsFromJson(settings);
+    const bool transientForModel = settings.value(QStringLiteral("transient_for_model")).toBool(false);
     const bool keepColor = settings.value(QStringLiteral("keepColor")).toBool(true);
     const bool keepNormals = settings.value(QStringLiteral("keepNormals")).toBool(true);
 
-    const auto storedFramesResult = collectLatestStoredDepthFrames(_projectData->metadata());
+    const QString requested_output_dir = request.outputDir.trimmed().isEmpty()
+        ? QString()
+        : resolveProjectOutputDir(_owner->currentProjectPath(),
+                                  request.outputDir,
+                                  QStringLiteral("mvs_output"));
+    const auto storedFramesResult = requested_output_dir.isEmpty()
+        ? collectLatestStoredDepthFrames(_projectData->metadata())
+        : collectStoredDepthFramesForDirectory(_projectData->metadata(), requested_output_dir);
     const std::vector<StoredDepthFrameRecord> &storedFrames = storedFramesResult.frames;
     if (storedFrames.size() < 2)
     {
@@ -1543,7 +1484,7 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                              storedFrames.empty()
                                  ? storedFramesResult.status.errorMessage
                                  : QStringLiteral("可用深度图数量不足（至少需要2张）。"));
-        return;
+        return false;
     }
 
     QStringList imagePaths;
@@ -1559,13 +1500,14 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图融合"),
                              QStringLiteral("部分深度图对应影像缺少相机参数，无法执行融合。"));
-        return;
+        return false;
     }
 
-    const QString outputDir = request.outputDir.trimmed().isEmpty()
+    const QString outputDir = requested_output_dir.isEmpty()
         ? storedFramesResult.batchDir
-        : resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
+        : requested_output_dir;
     const QString outputPly = QDir(outputDir).filePath(QStringLiteral("dense_cloud.ply"));
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     const auto cancelFlag = createActiveMvsCancelFlag();
 
     emit mvsProgressChanged(QStringLiteral("正在加载深度图批次..."), 0);
@@ -1579,13 +1521,39 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                        keepColor,
                        keepNormals,
                        outputPly,
+                       source_depth_map_dir = storedFramesResult.batchDir,
+                       transientForModel,
                        pipelineMode,
+                       projectPath,
                        cancelFlag]()
     {
         if (!self)
         {
             return;
         }
+        const auto reportException = [self, cancelFlag, projectPath](const QString &message) {
+            if (!self)
+            {
+                return;
+            }
+            QMetaObject::invokeMethod(self.data(), [self, cancelFlag, projectPath, message]() {
+                if (!self)
+                {
+                    return;
+                }
+                self->clearActiveMvsCancelFlag(cancelFlag);
+                emit self->mvsProgressFinished(false);
+                if (self->_owner && self->_owner->currentProjectPath() == projectPath)
+                {
+                    QMessageBox::warning(self->_parentWidget,
+                                         QStringLiteral("深度图融合"),
+                                         QStringLiteral("深度图融合异常终止：%1").arg(message));
+                }
+            }, Qt::QueuedConnection);
+        };
+
+        try
+        {
         const auto isCancelled = [cancelFlag]() {
             return cancelFlag && cancelFlag->load(std::memory_order_relaxed);
         };
@@ -1607,9 +1575,10 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
 
         const int totalFrames = static_cast<int>(storedFrames.size());
         const int neighborCount = streamFusionWindowSize(request, totalFrames);
+        const xjw::mvs::FusionConfig fusionConfig = buildDepthGenConfig(request, totalFrames).fusion;
         DepthFrameLruCache depthFrameCache(storedFrames,
                                            camMap,
-                                           request.fusionMinConfidence,
+                                           fusionConfig,
                                            totalFrames,
                                            request.fusionMaxImageDim,
                                            fusionWindowCacheCapacity(neighborCount));
@@ -1830,16 +1799,74 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         {
             return;
         }
-        QMetaObject::invokeMethod(self.data(), [self, outputPly, pointCount, pipelineMode, cancelFlag]() {
+        const int source_depth_map_count = static_cast<int>(storedFrames.size());
+        QString source_depth_config_hash;
+        QString source_project_input_signature;
+        bool depth_config_consistent = true;
+        bool project_input_consistent = true;
+        for (const auto &frame : storedFrames)
+        {
+            if (source_depth_config_hash.isEmpty())
+            {
+                source_depth_config_hash = frame.configHash;
+            }
+            else if (source_depth_config_hash != frame.configHash)
+            {
+                depth_config_consistent = false;
+            }
+            if (source_project_input_signature.isEmpty())
+            {
+                source_project_input_signature = frame.projectInputSignature;
+            }
+            else if (source_project_input_signature != frame.projectInputSignature)
+            {
+                project_input_consistent = false;
+            }
+        }
+        if (!depth_config_consistent)
+        {
+            source_depth_config_hash.clear();
+        }
+        if (!project_input_consistent)
+        {
+            source_project_input_signature.clear();
+        }
+        QMetaObject::invokeMethod(self.data(),
+                                  [self,
+                                   outputPly,
+                                   pointCount,
+                                    source_depth_map_dir,
+                                    source_depth_map_count,
+                                    source_depth_config_hash,
+                                    source_project_input_signature,
+                                    transientForModel,
+                                    pipelineMode,
+                                    projectPath,
+                                    cancelFlag]() {
             if (!self)
             {
                 return;
             }
+            if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+            {
+                self->clearActiveMvsCancelFlag(cancelFlag);
+                emit self->mvsProgressFinished(false);
+                return;
+            }
             self->clearActiveMvsCancelFlag(cancelFlag);
-            upsertProjectRecordByPath(self->_projectData,
-                                      QStringLiteral("dense_cloud_results"),
-                                      QStringLiteral("dense_cloud_xyz"),
-                                      makeDenseResultRecord(utcNowIso(), outputPly, pointCount));
+            QJsonObject denseResult = makeDenseResultRecord(utcNowIso(), outputPly, pointCount);
+            denseResult[QStringLiteral("source_depth_map_dir")] = source_depth_map_dir;
+            denseResult[QStringLiteral("source_depth_map_count")] = source_depth_map_count;
+            denseResult[QStringLiteral("source_depth_config_hash")] = source_depth_config_hash;
+            denseResult[QStringLiteral("source_project_input_signature")] =
+                source_project_input_signature;
+            if (!transientForModel)
+            {
+                upsertProjectRecordByPath(self->_projectData,
+                                          QStringLiteral("dense_cloud_results"),
+                                          QStringLiteral("dense_cloud_xyz"),
+                                          denseResult);
+            }
             emit self->denseCloudResultReady(outputPly, pointCount);
             emit self->mvsProgressFinished(true);
             if (!pipelineMode)
@@ -1849,23 +1876,41 @@ void ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                                          QStringLiteral("密集点云生成完成，共 %1 个点。").arg(pointCount));
             }
         }, Qt::QueuedConnection);
+        }
+        catch (const std::exception &error)
+        {
+            reportException(QString::fromUtf8(error.what()));
+        }
+        catch (...)
+        {
+            reportException(QStringLiteral("未知后台异常"));
+        }
     };
 
     xjw::gui::tasks::runGuarded(this,
                                 std::move(fusionWork),
                                 [](ProjectDenseReconstructionManager *) {});
+    return true;
 }
 
-void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJsonObject &settings)
+bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJsonObject &settings)
 {
     using namespace xjw::mvs;
 
     if (!ensureProjectOpen(QStringLiteral("请先打开一个项目。"), QStringLiteral("稠密重建")))
     {
-        return;
+        return false;
+    }
+    if (isMvsRunning())
+    {
+        QMessageBox::information(_parentWidget,
+                                 QStringLiteral("稠密重建"),
+                                 QStringLiteral("已有深度图或密集点云任务正在运行，请先等待或取消当前任务。"));
+        return false;
     }
 
     const xjw::gui::project::DenseGenerationSettings request = denseGenerationSettingsFromJson(settings);
+    const bool transientForModel = settings.value(QStringLiteral("transient_for_model")).toBool(false);
     const QJsonObject meta = _projectData->metadata();
     const QJsonArray atArr = meta.value(QStringLiteral("aerial_triangulation_results")).toArray();
     if (atArr.isEmpty())
@@ -1873,7 +1918,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("未找到空三结果，请先执行空中三角测量。"));
-        return;
+        return false;
     }
 
     const int realIdx = (request.atIndex >= 0 && request.atIndex < atArr.size())
@@ -1884,9 +1929,12 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三。"));
-        return;
+        return false;
     }
     const QJsonObject atResult = atArr[realIdx].toObject();
+    const QString project_input_signature = projectDepthInputSignature(meta, realIdx);
+    const QString reconstruction_generation_id =
+        atResult.value(QStringLiteral("reconstruction_generation_id")).toString();
     if (!xjw::gui::project::isProductionSparseResult(atResult))
     {
         const QString reason = sparseResultBlockingReason(atResult);
@@ -1895,7 +1943,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                              reason.isEmpty()
                                  ? QStringLiteral("所选稀疏点云不是正式 SfM/BA 结果。")
                                  : reason);
-        return;
+        return false;
     }
     const QJsonArray selImgArr = atResult.value(QStringLiteral("selected_images")).toArray();
     const QJsonObject files = atResult.value(QStringLiteral("files")).toObject();
@@ -1911,7 +1959,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("空三结果中影像数量不足（至少需要2张）。"));
-        return;
+        return false;
     }
 
     bool allCams = false;
@@ -1921,7 +1969,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("稠密重建"),
                              QStringLiteral("部分影像缺少相机参数，无法执行稠密重建。"));
-        return;
+        return false;
     }
 
     std::vector<CameraView> views;
@@ -1934,13 +1982,14 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             QMessageBox::warning(_parentWidget,
                                  QStringLiteral("稠密重建"),
                                  QStringLiteral("影像缺少相机参数：%1").arg(QDir::toNativeSeparators(imgPath)));
-            return;
+            return false;
         }
         applyImageSizeToMvsView(imgPath, &view);
         views.push_back(std::move(view));
     }
 
     DepthGenConfig genCfg = buildDepthGenConfig(request, static_cast<int>(views.size()));
+    genCfg.inputSignature = project_input_signature.toStdString();
     genCfg.saveIntermediateDepthMaps = true;
     const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     genCfg.intermediateDir = xjw::common::io::toUtf8Path(mvsOutDir);
@@ -1952,16 +2001,22 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     }
 
     const QSet<int> existingIndices = collectExistingDepthFrameIndices(mvsOutDir, selectedImages.size());
-    QSet<int> skipIndices;
     bool continueMissingMode = false;
     if (!existingIndices.isEmpty())
     {
         ExistingDepthAction action;
         if (request.pipelineMode)
         {
-            // 流水线模式：静默续跑，不弹对话框
-            action = ExistingDepthAction::ContinueMissing;
-            LOG_INFO(QStringLiteral("[MVS][pipeline] 检测到已有深度图 %1 帧，自动续跑").arg(existingIndices.size()));
+            const bool force_depth_recompute =
+                settings.value(QStringLiteral("force_depth_recompute")).toBool(false);
+            action = force_depth_recompute
+                ? ExistingDepthAction::Overwrite
+                : ExistingDepthAction::ContinueMissing;
+            LOG_INFO(force_depth_recompute
+                         ? QStringLiteral("[MVS][pipeline] 检测到已有深度图 %1 帧，按模型设置强制重算")
+                               .arg(existingIndices.size())
+                         : QStringLiteral("[MVS][pipeline] 检测到已有深度图 %1 帧，自动续跑")
+                               .arg(existingIndices.size()));
         }
         else
         {
@@ -1972,7 +2027,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         }
         if (action == ExistingDepthAction::Cancel)
         {
-            return;
+            return false;
         }
 
         if (action == ExistingDepthAction::Overwrite)
@@ -1983,43 +2038,23 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         else if (action == ExistingDepthAction::ContinueMissing)
         {
             continueMissingMode = true;
-            skipIndices = existingIndices;
-            upsertExistingDepthRecords(_projectData, selectedImages, sparseXyz, mvsOutDir, skipIndices);
-
-            if (skipIndices.size() >= selectedImages.size())
-            {
-                LOG_INFO(QStringLiteral("[MVS] 深度图已全部存在，直接进入融合阶段"));
-                startFuseDepthMapsAsync(settings);
-                return;
-            }
-
             genCfg.runFusion = false;
-            LOG_INFO(QStringLiteral("[MVS] 用户选择续跑：已存在 %1 帧，将继续生成剩余 %2 帧；完成后自动执行融合")
-                         .arg(skipIndices.size())
-                         .arg(selectedImages.size() - skipIndices.size()));
+            LOG_INFO(QStringLiteral("[MVS] 发现 %1 个深度文件，"
+                                    "将由 manifest 校验影像、相机与参数；完成后自动执行融合")
+                         .arg(existingIndices.size()));
         }
     }
 
     auto *gen = new DepthMapGenerator(this);
     gen->setViews(views);
-    if (!skipIndices.isEmpty())
-    {
-        std::vector<int> skipVector;
-        skipVector.reserve(static_cast<size_t>(skipIndices.size()));
-        for (const int index : skipIndices)
-        {
-            skipVector.push_back(index);
-        }
-        std::sort(skipVector.begin(), skipVector.end());
-        gen->setSkippedFrameIndices(skipVector);
-    }
     gen->setConfig(genCfg);
     gen->setOutputDir(xjw::common::io::toUtf8Path(mvsOutDir));
 
     QPointer<ProjectDenseReconstructionManager> self(this);
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
-                     [self](const QString &stage, float ratio) {
-        if (!self)
+                     [self, projectPath](const QString &stage, float ratio) {
+        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
         {
             return;
         }
@@ -2029,12 +2064,24 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         qWarning() << "[MVS] 错误:" << msg;
     });
     connect(gen, &DepthMapGenerator::depthMapArtifactSaved, this,
-            [self, sparseXyz, mvsOutDir](const QJsonObject &artifact) {
-        if (!self)
+            [self,
+             sparseXyz,
+             mvsOutDir,
+             projectPath,
+             project_input_signature,
+             reconstruction_generation_id,
+             batch_frame_count = selectedImages.size()](const QJsonObject &artifact) {
+        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
         {
             return;
         }
-        const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(artifact, sparseXyz, mvsOutDir);
+        const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(
+            artifact,
+            sparseXyz,
+            mvsOutDir,
+            batch_frame_count,
+            project_input_signature,
+            reconstruction_generation_id);
         if (depthResult.isEmpty())
         {
             return;
@@ -2045,8 +2092,14 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                                   depthResult);
     });
     connect(gen, &DepthMapGenerator::pointCloudReady, this,
-            [self, mvsOutDir](const std::vector<DensePoint> &cloud) {
-        if (!self)
+            [self,
+             mvsOutDir,
+             projectPath,
+             project_input_signature,
+             reconstruction_generation_id,
+             transientForModel,
+             source_depth_map_count = static_cast<int>(selectedImages.size())](const std::vector<DensePoint> &cloud) {
+        if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
         {
             return;
         }
@@ -2059,10 +2112,49 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         QString saveErr;
         if (writePointCloudPly(plyPath, pointCloud, false, &saveErr))
         {
-            upsertProjectRecordByPath(self->_projectData,
-                                      QStringLiteral("dense_cloud_results"),
-                                      QStringLiteral("dense_cloud_xyz"),
-                                      makeDenseResultRecord(utcNowIso(), plyPath, static_cast<int>(cloud.size())));
+            QJsonObject denseResult = makeDenseResultRecord(
+                utcNowIso(),
+                plyPath,
+                static_cast<int>(cloud.size()));
+            denseResult[QStringLiteral("source_depth_map_dir")] = mvsOutDir;
+            const auto stored_frames = collectStoredDepthFramesForDirectory(
+                self->_projectData->metadata(),
+                mvsOutDir);
+            const int persisted_depth_map_count = stored_frames.status.ok
+                ? static_cast<int>(stored_frames.frames.size())
+                : source_depth_map_count;
+            denseResult[QStringLiteral("source_depth_map_count")] =
+                persisted_depth_map_count;
+            QString source_depth_config_hash;
+            if (stored_frames.status.ok)
+            {
+                for (const auto &frame : stored_frames.frames)
+                {
+                    if (source_depth_config_hash.isEmpty())
+                    {
+                        source_depth_config_hash = frame.configHash;
+                    }
+                    else if (source_depth_config_hash != frame.configHash)
+                    {
+                        source_depth_config_hash.clear();
+                        break;
+                    }
+                }
+            }
+            denseResult[QStringLiteral("source_depth_config_hash")] =
+                source_depth_config_hash;
+            denseResult[QStringLiteral("source_project_input_signature")] =
+                project_input_signature;
+            denseResult[QStringLiteral("source_reconstruction_generation_id")] =
+                reconstruction_generation_id;
+            if (!transientForModel)
+            {
+                upsertProjectRecordByPath(self->_projectData,
+                                          QStringLiteral("dense_cloud_results"),
+                                          QStringLiteral("dense_cloud_xyz"),
+                                          denseResult);
+            }
+            emit self->denseCloudResultReady(plyPath, static_cast<int>(cloud.size()));
             if (self->_owner)
             {
                 self->_owner->refreshReconstructionQualityReport();
@@ -2076,7 +2168,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     connect(gen,
             &DepthMapGenerator::finished,
             this,
-            [self, settings, continueMissingMode](bool success)
+            [self, settings, continueMissingMode, projectPath](bool success)
     {
         if (!self)
         {
@@ -2086,6 +2178,12 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         {
             self->_activeMvsGenerator->deleteLater();
             self->_activeMvsGenerator = nullptr;
+        }
+
+        if (!self->_owner || self->_owner->currentProjectPath() != projectPath)
+        {
+            emit self->mvsProgressFinished(false);
+            return;
         }
 
         const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
@@ -2098,6 +2196,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
         if (shouldStartFusion)
         {
+            self->_mvsTransitionPending = true;
             if (!pipelineMode)
             {
                 QMessageBox::information(self->_parentWidget,
@@ -2105,12 +2204,22 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                                          QStringLiteral("缺失深度图补齐完成，正在开始融合。"));
             }
             QMetaObject::invokeMethod(self.data(),
-                                      [self, settings]() {
-                                          if (!self)
+                                      [self, settings, projectPath]() {
+                                          if (!self || !self->_mvsTransitionPending)
                                           {
                                               return;
                                           }
-                                          self->startFuseDepthMapsAsync(settings);
+                                          self->_mvsTransitionPending = false;
+                                          if (!self->_owner ||
+                                              self->_owner->currentProjectPath() != projectPath)
+                                          {
+                                              emit self->mvsProgressFinished(false);
+                                              return;
+                                          }
+                                          if (!self->startFuseDepthMapsAsync(settings))
+                                          {
+                                              emit self->mvsProgressFinished(false);
+                                          }
                                       },
                                       Qt::QueuedConnection);
         }
@@ -2125,7 +2234,6 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
 
     _activeMvsGenerator = gen;
     emit mvsProgressChanged(QStringLiteral("正在加载稀疏点云..."), 0);
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QPointer<DepthMapGenerator> genSelf(gen);
     (void)QtConcurrent::run([self, genSelf, sparseXyz, views, request, projectPath]() {
         SparseCloud sparse;
@@ -2156,6 +2264,7 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                     self->_activeMvsGenerator = nullptr;
                 }
                 genSelf->deleteLater();
+                emit self->mvsProgressFinished(false);
                 return;
             }
             if (genSelf->isCancelled())
@@ -2167,12 +2276,20 @@ void ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             genSelf->start();
         }, Qt::QueuedConnection);
     });
+    return true;
 }
 
 void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonObject &settings)
 {
     if (!ensureProjectOpen(QStringLiteral("请先打开一个项目。"), QStringLiteral("密集点云后处理")))
     {
+        return;
+    }
+    if (isMvsRunning())
+    {
+        QMessageBox::information(_parentWidget,
+                                 QStringLiteral("密集点云后处理"),
+                                 QStringLiteral("已有深度图或密集点云任务正在运行，请先等待或取消当前任务。"));
         return;
     }
 
@@ -2632,6 +2749,14 @@ void ProjectDenseReconstructionManager::startDenseCloudRefineAsync(const QJsonOb
 
 void ProjectDenseReconstructionManager::cancelMvs()
 {
+    if (_mvsTransitionPending)
+    {
+        _mvsTransitionPending = false;
+        qDebug() << "[MVS] 已取消待启动的深度图融合";
+        emit mvsProgressFinished(false);
+        return;
+    }
+
     bool requestedCancel = false;
     if (_activeMvsCancelFlag)
     {
@@ -2660,4 +2785,10 @@ void ProjectDenseReconstructionManager::cancelMvs()
     {
         qDebug() << "[MVS] 已请求取消";
     }
+}
+
+bool ProjectDenseReconstructionManager::isMvsRunning() const
+{
+    return !_activeMvsGenerator.isNull() || static_cast<bool>(_activeMvsCancelFlag) ||
+        _mvsTransitionPending;
 }

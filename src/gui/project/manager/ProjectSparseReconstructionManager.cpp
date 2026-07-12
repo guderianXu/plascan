@@ -134,7 +134,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
         {
             return xjw::core::project::TriangulationService::run(mergedMeta, selectedImages, options);
         },
-        [selectedImages, options, replaceIndex, ownerGuard, projectPath](
+        [selectedImages, options, ownerGuard, projectPath](
             ProjectSparseReconstructionManager *self,
             const xjw::core::project::TriangulationServiceResult &result)
         {
@@ -151,7 +151,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
                                      result.errorMessage);
                 return;
             }
-            self->finalizeTriangulationSuccess(result, selectedImages, options, replaceIndex);
+            self->finalizeTriangulationSuccess(result, selectedImages, options);
         });
 }
 
@@ -173,8 +173,7 @@ void ProjectSparseReconstructionManager::startSparseCloudRefineAsync(const QJson
 void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
     const xjw::core::project::TriangulationServiceResult &result,
     const QStringList &selectedImages,
-    const xjw::core::project::TriangulationServiceOptions &options,
-    int replaceIndex)
+    const xjw::core::project::TriangulationServiceOptions &options)
 {
     QJsonObject extraRecord;
     QJsonObject files;
@@ -198,12 +197,15 @@ void ProjectSparseReconstructionManager::finalizeTriangulationSuccess(
         extraRecord = mergeSparseQualityIntoRecord(extraRecord, quality);
     }
 
-    _owner->appendAtResult(result.sparseCloudPath,
-                            result.exportedPointCount,
-                            selectedImages,
-                            options.outputDir,
-                            extraRecord,
-                            replaceIndex);
+    if (!_owner->replaceTiePointResult(result.sparseCloudPath,
+                                       result.exportedPointCount,
+                                       selectedImages,
+                                       options.outputDir,
+                                       extraRecord))
+    {
+        emit atProgressFinished(false);
+        return;
+    }
 
     LOG_INFO(QStringLiteral("三角化完成: 候选轨迹=%1 导出点数=%2 输出=%3")
                  .arg(result.candidateTrackCount)
@@ -291,11 +293,15 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
 
             const SparsePointOperationResult &operationResult = workflowResult.operation;
 
-            self->_owner->appendAtResult(operationResult.sparseCloudPath,
-                                          operationResult.outputCount,
-                                          context.selectedImages,
-                                          operationResult.outputDir,
-                                          operationResult.extraRecord);
+            if (!self->_owner->replaceTiePointResult(operationResult.sparseCloudPath,
+                                                      operationResult.outputCount,
+                                                      context.selectedImages,
+                                                      operationResult.outputDir,
+                                                      operationResult.extraRecord))
+            {
+                emit self->atProgressFinished(false);
+                return;
+            }
 
             emit self->atProgressFinished(true);
             QMessageBox::information(self->_parentWidget,

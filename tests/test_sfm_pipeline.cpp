@@ -905,6 +905,43 @@ TEST_F(BAFilterTest, ObservationWeightsReduceInfluenceOfLowConfidenceOutlier)
 // 测试组 4：SFM 管线完整流程
 // ═══════════════════════════════════════════════════════════════
 
+TEST(IncrementalSfmOptionsTest, CoarseExecutionProfileCapsExpensiveRefinement)
+{
+    IncrementalSfmOptions options;
+    options.executionProfile = SfmExecutionProfile::CoarseEvaluation;
+    options.maxInitPairCandidates = 10;
+    options.baOptions.maxIterations = 20;
+    options.iterativeBARounds = 4;
+    options.globalBAInterval = 10;
+    options.baOptions.refineSharedFocalLength = true;
+    options.baOptions.logIterationProgress = true;
+
+    const IncrementalSfmOptions effective = effectiveSfmOptions(options);
+
+    EXPECT_EQ(effective.maxInitPairCandidates, 6);
+    EXPECT_EQ(effective.baOptions.maxIterations, 5);
+    EXPECT_EQ(effective.iterativeBARounds, 1);
+    EXPECT_EQ(effective.globalBAInterval, std::numeric_limits<int>::max());
+    EXPECT_EQ(effective.localBAInterval, 6);
+    EXPECT_FALSE(effective.baOptions.refineSharedFocalLength);
+    EXPECT_FALSE(effective.baOptions.logIterationProgress);
+}
+
+TEST(IncrementalSfmOptionsTest, FullExecutionProfilePreservesConfiguredRefinement)
+{
+    IncrementalSfmOptions options;
+    options.executionProfile = SfmExecutionProfile::FullRefinement;
+    options.maxInitPairCandidates = 7;
+    options.baOptions.maxIterations = 12;
+    options.iterativeBARounds = 3;
+
+    const IncrementalSfmOptions effective = effectiveSfmOptions(options);
+
+    EXPECT_EQ(effective.maxInitPairCandidates, 7);
+    EXPECT_EQ(effective.baOptions.maxIterations, 12);
+    EXPECT_EQ(effective.iterativeBARounds, 3);
+}
+
 class SfmPipelineTest : public ::testing::Test {
 protected:
     IncrementalSfmOptions opts;
@@ -1028,6 +1065,9 @@ TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)
     sfm.addMatches(2, 3, image2DelayedGoodMatches);
 
     const auto result = sfm.run();
+
+    EXPECT_EQ(result.selectedInitialImageId1, 0u);
+    EXPECT_EQ(result.selectedInitialImageId2, 1u);
 
     ASSERT_TRUE(result.success) << result.summary;
     ASSERT_NE(result.reconstruction, nullptr);

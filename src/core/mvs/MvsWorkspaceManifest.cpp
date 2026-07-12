@@ -357,25 +357,45 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     patch.insert(QStringLiteral("median_blur"), config.patchMatch.doMedianBlur);
     patch.insert(QStringLiteral("median_kernel"), config.patchMatch.medianKernelSize);
     patch.insert(QStringLiteral("bilateral"), config.patchMatch.doBilateralFilter);
+    patch.insert(QStringLiteral("bilateral_d"), config.patchMatch.bilateralD);
+    patch.insert(QStringLiteral("bilateral_sigma_color"), config.patchMatch.bilateralSigmaColor);
+    patch.insert(QStringLiteral("bilateral_sigma_space"), config.patchMatch.bilateralSigmaSpace);
     patch.insert(QStringLiteral("geom_consistency"), config.patchMatch.geomConsistency);
     patch.insert(QStringLiteral("geom_consistency_max_err"), config.patchMatch.geomConsistencyMaxErr);
     patch.insert(QStringLiteral("epipolar_rectified"), config.patchMatch.epipolarRectified);
+    patch.insert(QStringLiteral("cuda_parallel_sweep"), config.patchMatch.cudaUseParallelSweep);
+    patch.insert(QStringLiteral("cuda_fallback_to_cpu"), config.patchMatch.cudaFallbackToCpu);
 
     QJsonObject fusion;
     fusion.insert(QStringLiteral("min_consistent_views"), config.fusion.minConsistentViews);
     fusion.insert(QStringLiteral("rel_depth_thresh"), config.fusion.relDepthThresh);
     fusion.insert(QStringLiteral("pixel_thresh"), config.fusion.pixelThresh);
     fusion.insert(QStringLiteral("confidence_thresh"), config.fusion.confidenceThresh);
+    fusion.insert(QStringLiteral("adaptive_confidence"), config.fusion.enableAdaptiveConfidenceFilter);
+    fusion.insert(QStringLiteral("adaptive_full_coverage"), config.fusion.adaptiveFullCoverageThreshold);
+    fusion.insert(QStringLiteral("adaptive_low_mean_confidence"),
+                  config.fusion.adaptiveLowMeanConfidenceThreshold);
+    fusion.insert(QStringLiteral("adaptive_strict_confidence"),
+                  config.fusion.adaptiveStrictConfidenceThreshold);
+    fusion.insert(QStringLiteral("sigma_fusion"), config.fusion.doSigmaFusion);
+    fusion.insert(QStringLiteral("sigma_multiplier"), config.fusion.sigmaMultiplier);
+    fusion.insert(QStringLiteral("inpaint"), config.fusion.doInpaint);
+    fusion.insert(QStringLiteral("inpaint_radius_factor"), config.fusion.inpaintRadiusFactor);
+    fusion.insert(QStringLiteral("inpaint_radius"), config.fusion.inpaintRadius);
     fusion.insert(QStringLiteral("local_outlier"), config.fusion.enableLocalDepthOutlierFilter);
     fusion.insert(QStringLiteral("local_outlier_kernel"), config.fusion.localDepthOutlierKernelSize);
     fusion.insert(QStringLiteral("local_outlier_rel_thresh"), config.fusion.localDepthOutlierRelThresh);
+    fusion.insert(QStringLiteral("local_outlier_max_removal_ratio"),
+                  config.fusion.maxLocalDepthOutlierRemovalRatio);
     fusion.insert(QStringLiteral("speckle_filter"), config.fusion.enableSpeckleFilter);
     fusion.insert(QStringLiteral("speckle_min_area"), config.fusion.minSpeckleComponentArea);
     fusion.insert(QStringLiteral("speckle_max_removal_ratio"), config.fusion.maxSpeckleRemovalRatio);
 
     QJsonObject root;
-    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.depth.config.v1"));
+    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.depth.config.v3"));
     root.insert(QStringLiteral("view_count"), viewCount);
+    root.insert(QStringLiteral("input_signature"),
+                QString::fromStdString(config.inputSignature));
     root.insert(QStringLiteral("num_source_views"), config.numSourceViews);
     root.insert(QStringLiteral("z_near_scale"), config.zNearScale);
     root.insert(QStringLiteral("z_far_scale"), config.zFarScale);

@@ -151,6 +151,7 @@ public:
     bool _metadataRefreshQueued{};                     // 已有 metadataChanged 刷新任务排队
     int _metadataRefreshGeneration{};                  // 丢弃过期的延迟刷新任务
     QJsonObject _pendingMetadataRefresh;               // 最近一次待刷新的项目元数据
+    QJsonObject _imageViewRotations;                   // 按影像路径保存的查看旋转角度
     
     QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
 

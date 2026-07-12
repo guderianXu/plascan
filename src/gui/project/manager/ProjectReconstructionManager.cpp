@@ -1,8 +1,11 @@
 #include "ProjectReconstructionManager.h"
 
 #include "ProjectDenseReconstructionManager.h"
+#include "ProjectModelGenerationWorkflow.h"
 #include "ProjectModelManager.h"
 #include "ProjectSparseReconstructionManager.h"
+
+#include <QDebug>
 
 ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner,
                                                            ProjectData *projectData,
@@ -12,22 +15,44 @@ ProjectReconstructionManager::ProjectReconstructionManager(ProjectManager *owner
     , _sparseManager(new ProjectSparseReconstructionManager(owner, projectData, parentWidget, this))
     , _denseManager(new ProjectDenseReconstructionManager(owner, projectData, parentWidget, this))
     , _modelManager(new ProjectModelManager(owner, projectData, parentWidget, this))
+    , _modelWorkflow(new ProjectModelGenerationWorkflow(owner,
+                                                        projectData,
+                                                        parentWidget,
+                                                        _denseManager,
+                                                        _modelManager,
+                                                        this))
 {
     connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressChanged,
             this, &ProjectReconstructionManager::atProgressChanged);
     connect(_sparseManager, &ProjectSparseReconstructionManager::atProgressFinished,
             this, &ProjectReconstructionManager::atProgressFinished);
 
-    connect(_denseManager, &ProjectDenseReconstructionManager::mvsProgressChanged,
-            this, &ProjectReconstructionManager::mvsProgressChanged);
-    connect(_denseManager, &ProjectDenseReconstructionManager::mvsProgressFinished,
-            this, &ProjectReconstructionManager::mvsProgressFinished);
+    connect(_denseManager,
+            &ProjectDenseReconstructionManager::mvsProgressChanged,
+            this,
+            [this](const QString &stage, int percent)
+    {
+        if (!_modelWorkflow->isPreparingDenseCloud())
+        {
+            emit mvsProgressChanged(stage, percent);
+        }
+    });
+    connect(_denseManager,
+            &ProjectDenseReconstructionManager::mvsProgressFinished,
+            this,
+            [this](bool success)
+    {
+        if (!_modelWorkflow->consumeInternalMvsFinished())
+        {
+            emit mvsProgressFinished(success);
+        }
+    });
     connect(_denseManager, &ProjectDenseReconstructionManager::denseCloudResultReady,
             this, &ProjectReconstructionManager::denseCloudResultReady);
 
-    connect(_modelManager, &ProjectModelManager::meshProgressChanged,
+    connect(_modelWorkflow, &ProjectModelGenerationWorkflow::meshProgressChanged,
             this, &ProjectReconstructionManager::meshProgressChanged);
-    connect(_modelManager, &ProjectModelManager::meshProgressFinished,
+    connect(_modelWorkflow, &ProjectModelGenerationWorkflow::meshProgressFinished,
             this, &ProjectReconstructionManager::meshProgressFinished);
 }
 
@@ -38,10 +63,35 @@ QJsonArray ProjectReconstructionManager::getAvailableAtResults() const
 
 void ProjectReconstructionManager::startTask(Task task, const QJsonObject &settings)
 {
+    const bool is_mvs_task = task == Task::EstimateDepthMaps ||
+        task == Task::FuseDepthMaps ||
+        task == Task::GenerateDenseCloud ||
+        task == Task::RefineDenseCloud;
+    const bool is_model_task = task == Task::GenerateModel ||
+        task == Task::MeshReconstruction ||
+        task == Task::TextureMapping;
+    if (is_mvs_task && (_modelManager->isRunning() || _modelWorkflow->isRunning()))
+    {
+        qWarning() << "[Reconstruction] 模型任务运行期间不能启动 MVS 任务";
+        return;
+    }
+    if (is_model_task && _denseManager->isMvsRunning())
+    {
+        qWarning() << "[Reconstruction] MVS 任务运行期间不能启动模型任务";
+        return;
+    }
+
     switch (task)
     {
     case Task::GenerateModel:
-        _modelManager->startGenerateModelAsync();
+        if (settings.isEmpty())
+        {
+            _modelManager->startGenerateModelAsync();
+        }
+        else
+        {
+            _modelWorkflow->start(settings);
+        }
         break;
     case Task::MeshReconstruction:
         _modelManager->startMeshReconstructionAsync(settings);

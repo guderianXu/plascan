@@ -122,7 +122,7 @@ float denseSiftThresholdForTiePointFrontend(const MatchPhotosAlgorithmPlan &plan
         plan.matcherAlgorithm.trimmed().toLower() == QStringLiteral("lightglue"))
     {
         // 与空三 SfM 前端保持一致：SIFT+LightGlue 用更低阈值生成密集连接点。
-        return 0.0005f;
+        return 0.0001f;
     }
     return 0.0f;
 }

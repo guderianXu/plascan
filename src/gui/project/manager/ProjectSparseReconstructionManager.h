@@ -39,8 +39,7 @@ private:
                            const QString &title) const;
     void finalizeTriangulationSuccess(const xjw::core::project::TriangulationServiceResult &result,
                                       const QStringList &selectedImages,
-                                      const xjw::core::project::TriangulationServiceOptions &options,
-                                      int replaceIndex);
+                                      const xjw::core::project::TriangulationServiceOptions &options);
     void startSparsePointWorkflow(xjw::gui::project::SparsePointWorkflowKind kind,
                                   const QJsonObject &settings);
 

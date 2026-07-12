@@ -31,15 +31,16 @@ QString profileId(MatchPhotosProfile profile)
 
 bool shouldPreferCuda(const MatchPhotosOptions &options)
 {
-    if (options.device == ComputeDevice::Cpu)
+    if (options.device == ComputeDevice::Cpu ||
+        (options.device == ComputeDevice::Auto &&
+         options.profile == MatchPhotosProfile::CpuCompatible))
     {
         return false;
     }
-    if (options.device == ComputeDevice::Cuda)
-    {
-        return true;
-    }
-    return options.profile == MatchPhotosProfile::CudaAccelerated;
+
+    // Auto 表示优先使用可用加速设备，而不是默认 CPU。运行阶段会在 CUDA 不可用时
+    // 自动回退；只有用户显式选择 CUDA 时才禁止静默回退。
+    return true;
 }
 
 int defaultMaxKeypoints(MatchPhotosProfile profile)
@@ -72,13 +73,6 @@ int resolveMaxKeypoints(const MatchPhotosOptions &options)
     return defaultMaxKeypoints(options.profile);
 }
 
-bool defaultGuidedMatching(MatchPhotosProfile profile, bool requested)
-{
-    return requested ||
-        profile == MatchPhotosProfile::HighAccuracy ||
-        profile == MatchPhotosProfile::DifficultTexture;
-}
-
 } // namespace
 
 MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosOptions &options)
@@ -97,7 +91,9 @@ MatchPhotosAlgorithmPlan MatchPhotosAlgorithmSelector::select(const MatchPhotosO
     plan.endToEndMatcher = false;
     plan.preferCuda = shouldPreferCuda(options);
     plan.rotationRobust = true;
-    plan.enableGuidedMatching = defaultGuidedMatching(options.profile, options.enableGuidedMatching);
+    // 指导匹配是用户可见的显式开关。质量档只调整数值预算，不能覆盖未勾选状态，
+    // 否则匹配 sidecar 与后续 SfM 的缓存契约会出现同一任务内不一致。
+    plan.enableGuidedMatching = options.enableGuidedMatching;
     plan.maxImageDim = options.maxImageDim;
     plan.maxKeypoints = resolveMaxKeypoints(options);
     plan.reason = QStringLiteral("采用 SIFT 作为特征提取器以保留尺度和旋转鲁棒性，"

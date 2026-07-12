@@ -6,6 +6,7 @@
 
 #include "MeshTypes.h"
 
+#include <cstddef>
 #include <string>
 
 namespace xjw {
@@ -13,6 +14,8 @@ namespace mesh {
 
 class SurfaceReconstructor {
 public:
+    static int recommendedPoissonDepth(std::size_t point_count, int requested_depth);
+
     // 从点云文件（.ply/.xyz/.txt）重建三角网格
     static bool reconstructFromPointCloudFile(const std::string &cloudPath,
                                               const ReconstructionConfig &config,

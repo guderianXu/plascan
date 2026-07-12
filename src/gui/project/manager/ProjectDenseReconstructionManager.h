@@ -23,10 +23,11 @@ public:
                                                QObject *parent = nullptr);
 
     void startEstimateDepthMapsAsync(const QJsonObject &settings);
-    void startFuseDepthMapsAsync(const QJsonObject &settings);
-    void startGenerateDenseCloudAsync(const QJsonObject &settings);
+    bool startFuseDepthMapsAsync(const QJsonObject &settings);
+    bool startGenerateDenseCloudAsync(const QJsonObject &settings);
     void startDenseCloudRefineAsync(const QJsonObject &settings);
     void cancelMvs();
+    bool isMvsRunning() const;
 
 signals:
     void mvsProgressChanged(const QString &stage, int percent);
@@ -44,4 +45,5 @@ private:
     QWidget *_parentWidget = nullptr;
     QPointer<QObject> _activeMvsGenerator;
     std::shared_ptr<std::atomic_bool> _activeMvsCancelFlag;
+    bool _mvsTransitionPending = false;
 };

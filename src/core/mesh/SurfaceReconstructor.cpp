@@ -7,6 +7,7 @@
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/mesh/poisson_reconstruction.h>
+#include <plapoint/search/kdtree.h>
 #include <plamatrix/dense/dense_matrix.h>
 
 #include <algorithm>
@@ -1008,6 +1009,155 @@ std::vector<detail::PointXYZRGB> cloudToPointXYZRGB(const PlaPointCloud &cloud)
     return points;
 }
 
+void orientNormalsOutwardFromCentroid(std::vector<detail::PointXYZRGB> *points,
+                                      int thread_count)
+{
+    if (!points || points->empty() ||
+        !std::all_of(points->begin(), points->end(), [](const detail::PointXYZRGB &point)
+        {
+            return point.hasNormal;
+        }))
+    {
+        return;
+    }
+
+    double center_x = 0.0;
+    double center_y = 0.0;
+    double center_z = 0.0;
+    for (const detail::PointXYZRGB &point : *points)
+    {
+        center_x += point.x;
+        center_y += point.y;
+        center_z += point.z;
+    }
+    const double inverse_count = 1.0 / static_cast<double>(points->size());
+    center_x *= inverse_count;
+    center_y *= inverse_count;
+    center_z *= inverse_count;
+
+    for (detail::PointXYZRGB &point : *points)
+    {
+        float length = std::sqrt(point.nx * point.nx +
+                                 point.ny * point.ny +
+                                 point.nz * point.nz);
+        if (!std::isfinite(length) || length <= 1.0e-8f)
+        {
+            point.nx = static_cast<float>(static_cast<double>(point.x) - center_x);
+            point.ny = static_cast<float>(static_cast<double>(point.y) - center_y);
+            point.nz = static_cast<float>(static_cast<double>(point.z) - center_z);
+            length = std::sqrt(point.nx * point.nx +
+                               point.ny * point.ny +
+                               point.nz * point.nz);
+            if (!std::isfinite(length) || length <= 1.0e-8f)
+            {
+                point.nx = 0.0f;
+                point.ny = 0.0f;
+                point.nz = 1.0f;
+                length = 1.0f;
+            }
+        }
+        point.nx /= length;
+        point.ny /= length;
+        point.nz /= length;
+    }
+
+    const int point_count = static_cast<int>(points->size());
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> coordinates(point_count, 3);
+    for (int point_index = 0; point_index < point_count; ++point_index)
+    {
+        const detail::PointXYZRGB &point = (*points)[static_cast<std::size_t>(point_index)];
+        coordinates(point_index, 0) = point.x;
+        coordinates(point_index, 1) = point.y;
+        coordinates(point_index, 2) = point.z;
+    }
+
+    auto cloud = std::make_shared<PlaPointCloud>(std::move(coordinates));
+    std::shared_ptr<const PlaPointCloud> const_cloud = cloud;
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> tree;
+    tree.setInputCloud(const_cloud);
+    tree.build();
+
+    const int neighbor_count = std::min(12, point_count);
+    std::vector<std::vector<int>> neighbors(static_cast<std::size_t>(point_count));
+    const int worker_count = std::clamp(thread_count > 0 ? thread_count : resolveStreamingThreadCount({}),
+                                        1,
+                                        64);
+#if defined(MESHING_OPENMP)
+#pragma omp parallel for schedule(dynamic, 256) num_threads(worker_count)
+#endif
+    for (int point_index = 0; point_index < point_count; ++point_index)
+    {
+        const detail::PointXYZRGB &point = (*points)[static_cast<std::size_t>(point_index)];
+        const plamatrix::Vec3<float> query{point.x, point.y, point.z};
+        neighbors[static_cast<std::size_t>(point_index)] = tree.nearestKSearch(query, neighbor_count);
+    }
+
+    std::vector<std::uint8_t> visited(static_cast<std::size_t>(point_count), 0);
+    std::vector<int> queue;
+    std::vector<int> component;
+    queue.reserve(static_cast<std::size_t>(point_count));
+    component.reserve(static_cast<std::size_t>(point_count));
+    for (int seed_index = 0; seed_index < point_count; ++seed_index)
+    {
+        if (visited[static_cast<std::size_t>(seed_index)] != 0)
+        {
+            continue;
+        }
+
+        queue.clear();
+        component.clear();
+        queue.push_back(seed_index);
+        visited[static_cast<std::size_t>(seed_index)] = 1;
+        for (std::size_t queue_offset = 0; queue_offset < queue.size(); ++queue_offset)
+        {
+            const int current_index = queue[queue_offset];
+            component.push_back(current_index);
+            const detail::PointXYZRGB &current = (*points)[static_cast<std::size_t>(current_index)];
+            for (const int neighbor_index : neighbors[static_cast<std::size_t>(current_index)])
+            {
+                if (neighbor_index < 0 || neighbor_index >= point_count || neighbor_index == current_index ||
+                    visited[static_cast<std::size_t>(neighbor_index)] != 0)
+                {
+                    continue;
+                }
+
+                detail::PointXYZRGB &neighbor = (*points)[static_cast<std::size_t>(neighbor_index)];
+                const float normal_dot = current.nx * neighbor.nx +
+                                         current.ny * neighbor.ny +
+                                         current.nz * neighbor.nz;
+                if (normal_dot < 0.0f)
+                {
+                    neighbor.nx = -neighbor.nx;
+                    neighbor.ny = -neighbor.ny;
+                    neighbor.nz = -neighbor.nz;
+                }
+                visited[static_cast<std::size_t>(neighbor_index)] = 1;
+                queue.push_back(neighbor_index);
+            }
+        }
+
+        double component_outward_score = 0.0;
+        for (const int point_index : component)
+        {
+            const detail::PointXYZRGB &point = (*points)[static_cast<std::size_t>(point_index)];
+            component_outward_score +=
+                (static_cast<double>(point.x) - center_x) * point.nx +
+                (static_cast<double>(point.y) - center_y) * point.ny +
+                (static_cast<double>(point.z) - center_z) * point.nz;
+        }
+        if (component_outward_score < 0.0)
+        {
+            for (const int point_index : component)
+            {
+                detail::PointXYZRGB &point = (*points)[static_cast<std::size_t>(point_index)];
+                point.nx = -point.nx;
+                point.ny = -point.ny;
+                point.nz = -point.nz;
+            }
+        }
+    }
+}
+
 PlaPointCloud pointXYZRGBToCloud(const std::vector<detail::PointXYZRGB> &points)
 {
     const auto n = static_cast<plamatrix::Index>(points.size());
@@ -1082,8 +1232,9 @@ std::vector<detail::PointXYZRGB> loadPointsForMeshing(const std::string &cloudPa
 }
 
 bool convertPoissonResultToMesh(const plamatrix::DenseMatrix<float, plamatrix::Device::CPU> &verts,
-                                 const plamatrix::DenseMatrix<float, plamatrix::Device::CPU> &faces,
-                                 TriMesh *mesh)
+                                const plamatrix::DenseMatrix<float, plamatrix::Device::CPU> &faces,
+                                const std::shared_ptr<const PlaPointCloud> &source_cloud,
+                                TriMesh *mesh)
 {
     if (!mesh)
     {
@@ -1119,10 +1270,57 @@ bool convertPoissonResultToMesh(const plamatrix::DenseMatrix<float, plamatrix::D
         mesh->faces.push_back(t);
     }
 
+    if (!source_cloud || !source_cloud->hasColors() || source_cloud->size() == 0 || mesh->vertices.empty())
+    {
+        return true;
+    }
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> queries(
+        static_cast<plamatrix::Index>(mesh->vertices.size()), 3);
+    for (std::size_t i = 0; i < mesh->vertices.size(); ++i)
+    {
+        const auto row = static_cast<plamatrix::Index>(i);
+        queries(row, 0) = mesh->vertices[i].x;
+        queries(row, 1) = mesh->vertices[i].y;
+        queries(row, 2) = mesh->vertices[i].z;
+    }
+
+    plapoint::search::KdTree<float, plamatrix::Device::CPU> color_tree;
+    color_tree.setInputCloud(source_cloud);
+    color_tree.build();
+    const auto nearest = color_tree.batchNearestKSearch(queries, 1);
+    const auto *source_colors = source_cloud->colors();
+    for (std::size_t i = 0; i < mesh->vertices.size(); ++i)
+    {
+        if (nearest[i].empty())
+        {
+            continue;
+        }
+        const auto source_row = static_cast<plamatrix::Index>(nearest[i].front());
+        mesh->vertices[i].r = (*source_colors)(source_row, 0);
+        mesh->vertices[i].g = (*source_colors)(source_row, 1);
+        mesh->vertices[i].b = (*source_colors)(source_row, 2);
+    }
+
     return true;
 }
 
 } // namespace
+
+int SurfaceReconstructor::recommendedPoissonDepth(std::size_t point_count,
+                                                  int requested_depth)
+{
+    int depth = std::clamp(requested_depth, 1, 8);
+    if (point_count < 100000)
+    {
+        depth = std::min(depth, 6);
+    }
+    else if (point_count < 500000)
+    {
+        depth = std::min(depth, 7);
+    }
+    return depth;
+}
 
 bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &cloudPath,
                                                          const ReconstructionConfig &config,
@@ -1156,22 +1354,32 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     if (hasStreamingHeader && maxInputPoints > 0 &&
         streamingHeader.vertexCount > static_cast<std::uint64_t>(maxInputPoints))
     {
-        progress("检测到超大密集点云(" + std::to_string(streamingHeader.vertexCount) +
-                     " > " + std::to_string(maxInputPoints) +
-                     ")，自动切换为流式地形网格...",
-                 0.03f);
-        if (!reconstructStreamingHeightGridFromPly(cloudPath,
-                                                   streamingHeader,
-                                                   config,
-                                                   &mesh,
-                                                   errorMsg,
-                                                   progress))
+        if (config.forcePoisson && !config.allowHeightGridFallback)
         {
-            return false;
+            progress("检测到超大任意 3D 点云(" + std::to_string(streamingHeader.vertexCount) +
+                         " > " + std::to_string(maxInputPoints) +
+                         ")，将为 Poisson 流式均匀抽样...",
+                     0.03f);
         }
-        selectedAlgorithm = "streaming_tiled_height_grid";
-        usedHeightGridFallback = true;
-        streamingMeshBuilt = true;
+        else
+        {
+            progress("检测到超大密集点云(" + std::to_string(streamingHeader.vertexCount) +
+                         " > " + std::to_string(maxInputPoints) +
+                         ")，自动切换为流式地形网格...",
+                     0.03f);
+            if (!reconstructStreamingHeightGridFromPly(cloudPath,
+                                                       streamingHeader,
+                                                       config,
+                                                       &mesh,
+                                                       errorMsg,
+                                                       progress))
+            {
+                return false;
+            }
+            selectedAlgorithm = "streaming_tiled_height_grid";
+            usedHeightGridFallback = true;
+            streamingMeshBuilt = true;
+        }
     }
     else if (!hasStreamingHeader && maxInputPoints > 0 &&
              streamingHeader.vertexCount > static_cast<std::uint64_t>(maxInputPoints))
@@ -1255,24 +1463,36 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
             return false;
         }
 
+        std::string poissonFailureReason;
         if (config.forcePoisson)
         {
             progress("正在执行 Poisson 重建...", 0.30f);
             try
             {
+                if (config.orientNormalsForClosedSurface)
+                {
+                    progress("正在统一闭合曲面法线方向...", 0.31f);
+                    orientNormalsOutwardFromCentroid(&points, config.poissonThreads);
+                }
                 PlaPointCloud poissonCloud = pointXYZRGBToCloud(points);
                 auto poissonCloudPtr = std::make_shared<const PlaPointCloud>(std::move(poissonCloud));
                 plapoint::mesh::PoissonReconstruction<float> poisson;
                 poisson.setInputCloud(poissonCloudPtr);
-                poisson.setDepth(std::clamp(config.poissonDepth, 1, 8));
+                poisson.setDepth(recommendedPoissonDepth(points.size(), config.poissonDepth));
                 auto [verts, faces] = poisson.reconstruct();
-                convertPoissonResultToMesh(verts, faces, &mesh);
+                progress("正在传递网格顶点颜色...", 0.50f);
+                convertPoissonResultToMesh(verts, faces, poissonCloudPtr, &mesh);
+                detail::weldCoincidentVertices(&mesh, 1.0e-6f);
             }
             catch (const std::exception &e)
             {
                 mesh = TriMesh{};
                 const std::string reason = std::string(e.what()).empty() ? "unknown error" : e.what();
-                progress("Poisson 重建失败(" + reason + ")，改用高度格网...", 0.34f);
+                poissonFailureReason = reason;
+                if (config.allowHeightGridFallback)
+                {
+                    progress("Poisson 重建失败(" + reason + ")，改用高度格网...", 0.34f);
+                }
             }
 
             if (!mesh.empty())
@@ -1295,6 +1515,18 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
 
         if (mesh.empty())
         {
+            if (!config.allowHeightGridFallback)
+            {
+                if (errorMsg)
+                {
+                    const std::string reason = poissonFailureReason.empty()
+                        ? "结果为空"
+                        : poissonFailureReason;
+                    *errorMsg = "Poisson 重建失败(" + reason +
+                                ")；任意 3D 模式禁止回退为高度格网";
+                }
+                return false;
+            }
             if (!buildHeightGridMesh(0.10f, 0.30f, 0.50f))
             {
                 if (errorMsg && errorMsg->empty())
@@ -1324,6 +1556,14 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
         detail::removeSmallConnectedComponents(&mesh, std::max(2, config.minComponentFaces));
         if (selectedAlgorithm == "poisson" && mesh.faceCount() < minUsefulPoissonFaces())
         {
+            if (!config.allowHeightGridFallback)
+            {
+                if (errorMsg)
+                {
+                    *errorMsg = "Poisson 网格清理后主体过小；任意 3D 模式禁止回退为高度格网";
+                }
+                return false;
+            }
             progress("Poisson 网格主体过小，改用高度格网...", 0.72f);
             mesh = TriMesh{};
             usedLateHeightGridFallback = true;
@@ -1346,6 +1586,14 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
             }
             return false;
         }
+    }
+
+    if (selectedAlgorithm == "poisson" && config.fillHoles)
+    {
+        progress("正在修复小边界孔洞...", 0.73f);
+        const int max_boundary_edges = std::clamp(config.holeFillPasses * 8, 16, 256);
+        detail::fillSmallBoundaryHoles(&mesh, max_boundary_edges);
+        detail::removeDegenerateFaces(&mesh);
     }
 
     progress("正在平滑网格...", usedLateHeightGridFallback ? 0.80f : 0.75f);

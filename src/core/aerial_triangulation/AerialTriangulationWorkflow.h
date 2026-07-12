@@ -1,8 +1,10 @@
 #pragma once
 
 #include "AerialTriangulationService.h"
+#include "matchphototask/task/MatchPhotosTask.h"
 
 #include <QJsonObject>
+#include <QMap>
 #include <QString>
 #include <QStringList>
 
@@ -46,6 +48,11 @@ struct AerialTriangulationWorkflowOptions
     bool autoGenerateMissingMatches = false;
     bool restrictPairs = false;
     QStringList allowedPairs;
+    QString assetsDir;
+    QString featureDir;
+    QString matchDir;
+    QMap<QString, QString> maskPaths;
+    QMap<QString, Camera> referenceCameras;
     float featureGrayscaleMin = 5.0f / 255.0f;
     float featureGrayscaleMax = 1.0f;
 
@@ -58,6 +65,10 @@ struct AerialTriangulationResolvedConfig
 {
     // 已解析为可直接传入空三服务的算法级配置。
     AerialTriangulationServiceOptions serviceOptions;
+    matchphotos::MatchPhotosOptions tiePointOptions;
+    matchphotos::MatchPhotosContext tiePointContext;
+    bool prepareTiePoints = false;
+    bool forceRebuildTiePoints = false;
     QJsonObject resolvedSettings;
 };
 
@@ -65,6 +76,8 @@ struct AerialTriangulationWorkflowResult
 {
     AerialTriangulationResolvedConfig config;
     AerialTriangulationServiceResult serviceResult;
+    bool tiePointPreparationExecuted = false;
+    matchphotos::MatchPhotosResult tiePointResult;
 };
 
 class AerialTriangulationWorkflow
@@ -72,11 +85,15 @@ class AerialTriangulationWorkflow
 public:
     using ServiceRunner =
         std::function<AerialTriangulationServiceResult(const AerialTriangulationServiceOptions &options)>;
+    using TiePointRunner = std::function<matchphotos::MatchPhotosResult(
+        const matchphotos::MatchPhotosOptions &options,
+        const matchphotos::MatchPhotosContext &context)>;
 
     static AerialTriangulationResolvedConfig resolveConfig(const AerialTriangulationWorkflowOptions &options);
 
     static AerialTriangulationWorkflowResult run(const AerialTriangulationWorkflowOptions &options,
-                                                const ServiceRunner &runner);
+                                                 const ServiceRunner &runner,
+                                                 const TiePointRunner &tiePointRunner = {});
 };
 
 } // namespace xjw::gui

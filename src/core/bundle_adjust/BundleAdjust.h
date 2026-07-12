@@ -59,6 +59,12 @@ struct BAProblemStats
     int observationCount = 0;
 };
 
+struct BABackendDecision
+{
+    BABackend backend = BABackend::LegacyCpu;
+    std::string reason;
+};
+
 /**
  * @brief 单条观测：某个三维点在某台相机中对应的像点坐标。
  *
@@ -203,6 +209,8 @@ struct BAOptions
     // ── 并行计算 ───────────────────────────────────────────
     /// OpenMP 线程数；0 表示使用系统默认（OMP_NUM_THREADS 或 CPU 核心数）。
     int numThreads = 0;
+    /// 是否把每一轮 BA 迭代写入 INFO 日志；候选粗筛关闭以避免日志洪泛。
+    bool logIterationProgress = true;
 
     // ── Ceres/GPU 后端 ─────────────────────────────────────────────────────
     /// Ceres CUDA 求解使用的 GPU 设备 ID。当前仅在 Ceres 编译了 CUDA 支持时生效。
@@ -346,6 +354,10 @@ public:
     /// 根据问题规模与配置选择实际执行后端。
     static BABackend selectBackendForProblem(const BAProblemStats &stats,
                                              const BAOptions &options);
+
+    /// 返回自动后端及机器可读原因，供日志解释 CPU/CUDA 选择。
+    static BABackendDecision decideBackendForProblem(const BAProblemStats &stats,
+                                                      const BAOptions &options);
 
     /**
      * @brief 执行光束法平差优化（交替优化点位置和相机位姿）。

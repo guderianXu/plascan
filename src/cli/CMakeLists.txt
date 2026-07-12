@@ -50,6 +50,13 @@ if(TARGET mvs)
         "${CMAKE_SOURCE_DIR}/src/core/mvs")
 endif()
 
+# ── GUI 等价模型生成：点云/深度图 -> 共享 ModelWorkflowService -> 网格 ──
+if(TARGET meshing)
+    add_plascan_cli(mesh_reconstruct_cli cli_mesh_reconstruct.cpp
+        "meshing;plapoint::plapoint;plascan_common_io;Qt6::Core;Qt6::Gui"
+        "${CMAKE_SOURCE_DIR}/src/common;${CMAKE_SOURCE_DIR}/src/core/mesh")
+endif()
+
 # ── 特征提取 ──
 if(TARGET superpoint)
     add_plascan_cli(feature_extract_cli cli_feature_extract.cpp
@@ -111,6 +118,7 @@ if(TARGET matchphototask AND TARGET feature_extractors_traditional AND TARGET fe
         cli_photogrammetry_common.h
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationWorkflow.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/SfmSearchPolicy.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/GuidedRematchService.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/MatchResultCatalog.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
@@ -218,6 +226,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
     add_executable(reconstruct_pipeline_cli
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/SfmSearchPolicy.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/GuidedRematchService.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/MatchResultCatalog.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
@@ -286,6 +295,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
     add_executable(three_d_reconstruction_cli
         cli_reconstruct_pipeline.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationService.cpp
+        ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/SfmSearchPolicy.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/GuidedRematchService.cpp
         ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/MatchResultCatalog.cpp
         ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp

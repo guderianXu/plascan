@@ -63,7 +63,7 @@ struct MvsSourcePlannerOptions
     bool allowSequenceFallback = true;
     bool rejectAngleOutliers = false;
     float minTriangulationAngleDeg = 0.2f;
-    float maxTriangulationAngleDeg = 65.0f;
+    float maxTriangulationAngleDeg = 35.0f;
     float preferredTriangulationAngleDeg = 10.0f;
     float softMaxTriangulationAngleDeg = 25.0f;
     int minSharedTracks = 0;

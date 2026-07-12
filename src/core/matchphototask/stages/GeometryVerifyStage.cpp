@@ -32,7 +32,11 @@
 #include "FeatureFileIO.h"
 #include "MatchFileIO.h"
 #include "MatchGeometryFilter.h"
+#include "MatchPhotosAlgorithmSelector.h"
 #include "MatchPhotosRuntime.h"
+#include "SiftLightGlueRecovery.h"
+
+#include <QSet>
 
 namespace xjw
 {
@@ -73,6 +77,43 @@ void normalizeMatchResult(xjw::feature_match::MatchResult *matchResult,
     matchResult->numMatches = static_cast<int>(matchResult->cvMatches.size());
 }
 
+void applyVerifiedMatch(MatchPhotosMatchRecord *record,
+                        const xjw::feature_match::MatchResult &filteredMatch,
+                        int minimumInliers)
+{
+    if (!record)
+    {
+        return;
+    }
+
+    record->geometricInlierCount = filteredMatch.numMatches;
+    record->passedGeometry = filteredMatch.numMatches >= minimumInliers;
+    record->inlierIndexPairs.clear();
+    if (record->passedGeometry)
+    {
+        record->inlierIndexPairs.reserve(filteredMatch.cvMatches.size());
+        for (const cv::DMatch &match : filteredMatch.cvMatches)
+        {
+            record->inlierIndexPairs.push_back({match.queryIdx, match.trainIdx});
+        }
+    }
+    record->settings[QStringLiteral("geometry_verified")] = record->passedGeometry;
+    record->settings[QStringLiteral("geometric_inliers")] = record->geometricInlierCount;
+}
+
+xjw::feature_match::MatchResult filterGeometry(
+    const xjw::feature_match::MatchResult &rawMatch,
+    const xjw::feature_extractors::FeatureData &feature0,
+    const xjw::feature_extractors::FeatureData &feature1,
+    const xjw::feature_match::OutlierFilterConfig &filterConfig)
+{
+    int inlierCount = 0;
+    xjw::feature_match::MatchResult filtered = xjw::feature_match::MatchGeometryFilter::filter(
+        rawMatch, feature0.keypoints, feature1.keypoints, filterConfig, &inlierCount);
+    normalizeMatchResult(&filtered, feature0.size(), feature1.size());
+    return filtered;
+}
+
 } // namespace
 
 MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &context,
@@ -99,10 +140,13 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
     filterConfig.method = xjw::feature_match::OutlierMethod::FundamentalUsacMagsac;
     filterConfig.reprojThreshold = options.geometryReprojThreshold;
     filterConfig.minInliers = options.geometryMinInliers;
+    const MatchPhotosAlgorithmPlan plan = MatchPhotosAlgorithmSelector::select(options);
 
     int passedPairs = 0;
     int failedPairs = 0;
     int totalInliers = 0;
+    int denseRecoveredPairs = 0;
+    int connectivityRecoveredPairs = 0;
     for (MatchPhotosMatchRecord &record : *matchRecords)
     {
         if (shouldCancelMatchPhotos(context))
@@ -128,44 +172,133 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
         }
 
         normalizeMatchResult(&rawMatch, feature0.size(), feature1.size());
-        int inlierCount = 0;
-        xjw::feature_match::MatchResult filteredMatch = xjw::feature_match::MatchGeometryFilter::filter(
-            rawMatch,
-            feature0.keypoints,
-            feature1.keypoints,
-            filterConfig,
-            &inlierCount);
-        normalizeMatchResult(&filteredMatch, feature0.size(), feature1.size());
+        xjw::feature_match::MatchResult filteredMatch =
+            filterGeometry(rawMatch, feature0, feature1, filterConfig);
+        const int primaryInliers = filteredMatch.numMatches;
+        applyVerifiedMatch(&record, filteredMatch, options.geometryMinInliers);
 
-        record.geometricInlierCount = inlierCount;
-        record.passedGeometry = inlierCount >= options.geometryMinInliers &&
-            filteredMatch.numMatches >= options.geometryMinInliers;
-        record.inlierIndexPairs.clear();
+        if (shouldAugmentDenseSiftPair(options, record, rawMatch.numMatches))
+        {
+            xjw::feature_match::MatchResult recoveredRaw;
+            xjw::feature_match::MatchResult recoveredFiltered;
+            bool usedCuda = false;
+            if (runFullSiftRecovery(options,
+                                    feature0,
+                                    feature1,
+                                    filterConfig,
+                                    &recoveredRaw,
+                                    &recoveredFiltered,
+                                    &usedCuda) &&
+                recoveredFiltered.numMatches > filteredMatch.numMatches &&
+                persistRecoveredMatch(options,
+                                      plan,
+                                      feature0,
+                                      feature1,
+                                      recoveredRaw,
+                                      QStringLiteral("dense_overlap_budget_truncation"),
+                                      rawMatch.numMatches,
+                                      primaryInliers,
+                                      recoveredFiltered.numMatches,
+                                      usedCuda,
+                                      &record))
+            {
+                applyVerifiedMatch(&record, recoveredFiltered, options.geometryMinInliers);
+                ++denseRecoveredPairs;
+            }
+        }
+
         if (record.passedGeometry)
         {
-            record.inlierIndexPairs.reserve(filteredMatch.cvMatches.size());
-            for (const cv::DMatch &match : filteredMatch.cvMatches)
-            {
-                record.inlierIndexPairs.push_back({match.queryIdx, match.trainIdx});
-            }
             ++passedPairs;
-            totalInliers += static_cast<int>(record.inlierIndexPairs.size());
+            totalInliers += record.geometricInlierCount;
         }
         else
         {
             ++failedPairs;
         }
-
-        record.settings[QStringLiteral("geometry_verified")] = record.passedGeometry;
-        record.settings[QStringLiteral("geometric_inliers")] = record.geometricInlierCount;
         record.settings[QStringLiteral("geometry_reproj_threshold")] = options.geometryReprojThreshold;
     }
 
+    // 先使用 LightGlue 形成实际匹配图；只对跨连通分量的失败边做全量 SIFT 恢复。
+    // 每恢复一条边就重算分量，图已连通后立即停止，避免对所有失败像对运行昂贵全量匹配。
+    QSet<int> attemptedRecovery;
+    while (true)
+    {
+        const std::vector<int> candidates =
+            disconnectedRecoveryCandidates(*matchRecords, attemptedRecovery);
+        if (candidates.empty())
+        {
+            break;
+        }
+
+        bool recoveredOne = false;
+        for (const int index : candidates)
+        {
+            attemptedRecovery.insert(index);
+            MatchPhotosMatchRecord &record = (*matchRecords)[static_cast<std::size_t>(index)];
+            const QString feature0Path = record.settings.value(QStringLiteral("feature0_path")).toString();
+            const QString feature1Path = record.settings.value(QStringLiteral("feature1_path")).toString();
+            QString image0Name;
+            QString image1Name;
+            xjw::feature_extractors::FeatureData feature0;
+            xjw::feature_extractors::FeatureData feature1;
+            if (!FeatureFileIO::readData(feature0Path, image0Name, feature0) ||
+                !FeatureFileIO::readData(feature1Path, image1Name, feature1))
+            {
+                continue;
+            }
+
+            xjw::feature_match::MatchResult recoveredRaw;
+            xjw::feature_match::MatchResult recoveredFiltered;
+            bool usedCuda = false;
+            const int primaryRawCount = record.matchCount;
+            const int primaryInlierCount = record.geometricInlierCount;
+            if (!runFullSiftRecovery(options,
+                                     feature0,
+                                     feature1,
+                                     filterConfig,
+                                     &recoveredRaw,
+                                     &recoveredFiltered,
+                                     &usedCuda) ||
+                recoveredFiltered.numMatches < options.geometryMinInliers ||
+                !persistRecoveredMatch(options,
+                                       plan,
+                                       feature0,
+                                       feature1,
+                                       recoveredRaw,
+                                       QStringLiteral("disconnected_match_graph"),
+                                       primaryRawCount,
+                                       primaryInlierCount,
+                                       recoveredFiltered.numMatches,
+                                       usedCuda,
+                                       &record))
+            {
+                continue;
+            }
+
+            applyVerifiedMatch(&record, recoveredFiltered, options.geometryMinInliers);
+            record.settings[QStringLiteral("geometry_reproj_threshold")] = options.geometryReprojThreshold;
+            ++passedPairs;
+            --failedPairs;
+            totalInliers += record.geometricInlierCount;
+            ++connectivityRecoveredPairs;
+            recoveredOne = true;
+            break;
+        }
+        if (!recoveredOne)
+        {
+            break;
+        }
+    }
+
     return makeGeometryReport(MatchPhotosStageStatus::Completed,
-                              QStringLiteral("几何验证完成：通过 %1 对，失败 %2 对，内点 %3")
+                              QStringLiteral("几何验证完成：通过 %1 对，失败 %2 对，内点 %3，"
+                                             "强重叠增强 %4 对，断图恢复 %5 对")
                                   .arg(passedPairs)
                                   .arg(failedPairs)
-                                  .arg(totalInliers),
+                                  .arg(totalInliers)
+                                  .arg(denseRecoveredPairs)
+                                  .arg(connectivityRecoveredPairs),
                               passedPairs);
 }
 

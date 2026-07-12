@@ -60,7 +60,7 @@ float cudaSiftThreshold(const SuperPointConfig &config)
     {
         return config.detection_threshold;
     }
-    return std::clamp(config.detection_threshold * 1000.0f, 0.5f, 20.0f);
+    return std::clamp(config.detection_threshold * 1000.0f, 0.1f, 20.0f);
 }
 
 #if defined(PLASCAN_HAS_CUDA_SIFT)

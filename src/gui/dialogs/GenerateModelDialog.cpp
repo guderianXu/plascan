@@ -1,4 +1,5 @@
 #include "GenerateModelDialog.h"
+#include "WorkflowParameterDialogStyle.h"
 
 #include <QCheckBox>
 #include <QComboBox>
@@ -6,11 +7,15 @@
 #include <QDoubleSpinBox>
 #include <QFormLayout>
 #include <QGroupBox>
-#include <QHBoxLayout>
 #include <QLabel>
 #include <QPushButton>
+#include <QScreen>
+#include <QScrollArea>
+#include <QShowEvent>
+#include <QSizePolicy>
 #include <QToolButton>
 #include <QVBoxLayout>
+#include <QWindow>
 
 namespace
 {
@@ -96,13 +101,24 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     : QDialog(parent)
 {
     setWindowTitle(tr("生成模型"));
-    setMinimumWidth(520);
+    xjw::gui::dialogs::configureWorkflowParameterDialog(this);
 
     auto *mainLayout = new QVBoxLayout(this);
+    xjw::gui::dialogs::configureWorkflowDialogLayout(mainLayout);
 
-    auto *generalGroup = new QGroupBox(tr("一般"), this);
+    _contentScrollArea = new QScrollArea(this);
+    _contentScrollArea->setObjectName(QStringLiteral("workflowParameterScrollArea"));
+    xjw::gui::dialogs::configureWorkflowScrollArea(_contentScrollArea);
+    auto *contentWidget = new QWidget(_contentScrollArea);
+    contentWidget->setObjectName(QStringLiteral("workflowParameterContent"));
+    auto *contentLayout = new QVBoxLayout(contentWidget);
+    contentLayout->setContentsMargins(0, 0, 0, 0);
+    contentLayout->setSpacing(9);
+
+    auto *generalGroup = new QGroupBox(tr("一般"), contentWidget);
+    generalGroup->setObjectName(QStringLiteral("workflowGeneralGroup"));
     auto *generalForm = new QFormLayout(generalGroup);
-    generalForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
+    xjw::gui::dialogs::configureWorkflowForm(generalForm);
 
     _sourceCombo = new QComboBox(generalGroup);
     _sourceItemCombo = new QComboBox(generalGroup);
@@ -110,6 +126,17 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     _qualityCombo = new QComboBox(generalGroup);
     _faceCountCombo = new QComboBox(generalGroup);
     _saveEachStepCheck = new QCheckBox(tr("在每个步骤完成后保存项目"), generalGroup);
+
+    _sourceCombo->setObjectName(QStringLiteral("modelSourceCombo"));
+    _sourceItemCombo->setObjectName(QStringLiteral("modelSourceItemCombo"));
+    _surfaceTypeCombo->setObjectName(QStringLiteral("modelSurfaceTypeCombo"));
+    _qualityCombo->setObjectName(QStringLiteral("modelQualityCombo"));
+    _faceCountCombo->setObjectName(QStringLiteral("modelFaceCountCombo"));
+    for (QComboBox *comboBox : {
+             _sourceCombo, _sourceItemCombo, _surfaceTypeCombo, _qualityCombo, _faceCountCombo})
+    {
+        xjw::gui::dialogs::configureWorkflowComboBox(comboBox);
+    }
 
     _surfaceTypeCombo->addItem(tr("任意 (3D)"), QStringLiteral("arbitrary_3d"));
     _surfaceTypeCombo->addItem(tr("高度场 (2.5D)"), QStringLiteral("height_field"));
@@ -132,57 +159,68 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     generalForm->addRow(tr("质量:"), _qualityCombo);
     generalForm->addRow(tr("面数:"), _faceCountCombo);
     generalForm->addRow(QString(), _saveEachStepCheck);
-    mainLayout->addWidget(generalGroup);
+    contentLayout->addWidget(generalGroup);
 
-    auto *regionGroup = new QGroupBox(tr("区域"), this);
+    auto *regionGroup = new QGroupBox(tr("区域"), contentWidget);
+    regionGroup->setObjectName(QStringLiteral("workflowRegionGroup"));
     auto *regionForm = new QFormLayout(regionGroup);
+    xjw::gui::dialogs::configureWorkflowForm(regionForm);
     _splitRegionCheck = new QCheckBox(tr("分割成区块"), regionGroup);
-    auto *coordinateLabel = new QLabel(tr("Local Coordinates (m)"), regionGroup);
+    _splitRegionCheck->setObjectName(QStringLiteral("splitRegionCheck"));
+    _coordinateLabel = new QLabel(tr("Local Coordinates (m)"), regionGroup);
+    _coordinateLabel->setObjectName(QStringLiteral("coordinateSystemLabel"));
     _blockSizeSpin = new QDoubleSpinBox(regionGroup);
+    _blockSizeSpin->setObjectName(QStringLiteral("blockSizeSpin"));
     _blockSizeSpin->setRange(1.0, 100000.0);
     _blockSizeSpin->setDecimals(1);
     _blockSizeSpin->setValue(250.0);
     _blockSizeSpin->setSuffix(tr(" m"));
-    auto *originLabel = new QLabel(tr("X: -5    Y: -5"), regionGroup);
+    _originLabel = new QLabel(tr("X: -5    Y: -5"), regionGroup);
+    _originLabel->setObjectName(QStringLiteral("gridOriginLabel"));
     _skipBoundaryBlocksCheck = new QCheckBox(tr("跳过边界外的块"), regionGroup);
-    coordinateLabel->setEnabled(false);
-    originLabel->setEnabled(false);
+    _coordinateLabel->setEnabled(false);
+    _originLabel->setEnabled(false);
     regionForm->addRow(QString(), _splitRegionCheck);
-    regionForm->addRow(tr("坐标系统:"), coordinateLabel);
+    regionForm->addRow(tr("坐标系统:"), _coordinateLabel);
     regionForm->addRow(tr("区块大小 (米):"), _blockSizeSpin);
-    regionForm->addRow(tr("网格原点:"), originLabel);
+    regionForm->addRow(tr("网格原点:"), _originLabel);
     regionForm->addRow(QString(), _skipBoundaryBlocksCheck);
-    mainLayout->addWidget(regionGroup);
+    contentLayout->addWidget(regionGroup);
 
-    _advancedToggle = new QToolButton(this);
+    _advancedToggle = new QToolButton(contentWidget);
+    _advancedToggle->setObjectName(QStringLiteral("workflowAdvancedToggle"));
     _advancedToggle->setText(tr("高级"));
     _advancedToggle->setCheckable(true);
     _advancedToggle->setChecked(false);
     _advancedToggle->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
     _advancedToggle->setArrowType(Qt::RightArrow);
-    mainLayout->addWidget(_advancedToggle);
+    _advancedToggle->setSizePolicy(QSizePolicy::Expanding, QSizePolicy::Fixed);
+    contentLayout->addWidget(_advancedToggle);
 
-    _advancedContent = new QWidget(this);
+    _advancedContent = new QGroupBox(tr("高级参数"), contentWidget);
+    _advancedContent->setObjectName(QStringLiteral("workflowAdvancedGroup"));
     auto *advancedForm = new QFormLayout(_advancedContent);
-    advancedForm->setFieldGrowthPolicy(QFormLayout::AllNonFixedFieldsGrow);
-    advancedForm->setContentsMargins(0, 0, 0, 0);
-    advancedForm->setVerticalSpacing(8);
+    xjw::gui::dialogs::configureWorkflowForm(advancedForm);
 
     _interpolationCombo = new QComboBox(_advancedContent);
+    _interpolationCombo->setObjectName(QStringLiteral("modelInterpolationCombo"));
     _interpolationCombo->addItem(tr("已启用 (默认)"), QStringLiteral("enabled"));
     _interpolationCombo->addItem(tr("已禁用"), QStringLiteral("disabled"));
     _interpolationCombo->addItem(tr("外推"), QStringLiteral("extrapolated"));
 
     _depthFilterCombo = new QComboBox(_advancedContent);
+    _depthFilterCombo->setObjectName(QStringLiteral("modelDepthFilterCombo"));
     _depthFilterCombo->addItem(tr("温和"), QStringLiteral("mild"));
     _depthFilterCombo->addItem(tr("中等"), QStringLiteral("moderate"));
     _depthFilterCombo->addItem(tr("强"), QStringLiteral("aggressive"));
     _depthFilterCombo->addItem(tr("禁用"), QStringLiteral("disabled"));
+    xjw::gui::dialogs::configureWorkflowComboBox(_interpolationCombo);
+    xjw::gui::dialogs::configureWorkflowComboBox(_depthFilterCombo);
 
     _calculateColorsCheck = new QCheckBox(tr("计算顶点颜色"), _advancedContent);
     _strictMasksCheck = new QCheckBox(tr("使用严格的体积掩模"), _advancedContent);
     _reuseDepthMapsCheck = new QCheckBox(tr("重用深度图"), _advancedContent);
-    _replaceDefaultCheck = new QCheckBox(tr("要替换默认模型吗"), _advancedContent);
+    _replaceDefaultCheck = new QCheckBox(tr("替换默认模型"), _advancedContent);
     _calculateColorsCheck->setChecked(true);
     _reuseDepthMapsCheck->setChecked(true);
 
@@ -192,16 +230,19 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     advancedForm->addRow(QString(), _strictMasksCheck);
     advancedForm->addRow(QString(), _reuseDepthMapsCheck);
     advancedForm->addRow(QString(), _replaceDefaultCheck);
-    mainLayout->addWidget(_advancedContent);
+    contentLayout->addWidget(_advancedContent);
 
-    _statusLabel = new QLabel(this);
+    _statusLabel = new QLabel(contentWidget);
+    _statusLabel->setObjectName(QStringLiteral("workflowStatusLabel"));
     _statusLabel->setWordWrap(true);
-    mainLayout->addWidget(_statusLabel);
+    contentLayout->addWidget(_statusLabel);
+    _contentScrollArea->setWidget(contentWidget);
+    mainLayout->addWidget(_contentScrollArea);
 
     auto *buttonBox = new QDialogButtonBox(QDialogButtonBox::Ok | QDialogButtonBox::Cancel, this);
+    buttonBox->setObjectName(QStringLiteral("workflowButtonBox"));
+    xjw::gui::dialogs::configureWorkflowButtonBox(buttonBox);
     _okButton = buttonBox->button(QDialogButtonBox::Ok);
-    _okButton->setText(tr("OK"));
-    buttonBox->button(QDialogButtonBox::Cancel)->setText(tr("Cancel"));
     mainLayout->addWidget(buttonBox);
 
     connect(buttonBox, &QDialogButtonBox::accepted, this, &GenerateModelDialog::onRun);
@@ -243,6 +284,23 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     refreshSourceTypes();
 }
 
+void GenerateModelDialog::showEvent(QShowEvent *event)
+{
+    QDialog::showEvent(event);
+    if (!_screenChangeConnected && windowHandle())
+    {
+        connect(windowHandle(), &QWindow::screenChanged, this, [this](QScreen *targetScreen)
+        {
+            bindScreenGeometryUpdates(targetScreen);
+            refreshScrollableDialogSize();
+        });
+        _screenChangeConnected = true;
+    }
+
+    bindScreenGeometryUpdates(screen());
+    refreshScrollableDialogSize();
+}
+
 void GenerateModelDialog::applySettings(const QJsonObject &settings)
 {
     _pendingSourceData = settings.value(QLatin1String(kSourceData)).toString();
@@ -281,13 +339,34 @@ void GenerateModelDialog::applySettings(const QJsonObject &settings)
     _saveEachStepCheck->setChecked(settings.value(QStringLiteral("saveAfterEachStep")).toBool(false));
     _calculateColorsCheck->setChecked(settings.value(QStringLiteral("calculateVertexColors")).toBool(true));
     _strictMasksCheck->setChecked(settings.value(QStringLiteral("strictVolumetricMasks")).toBool(false));
-    _reuseDepthMapsCheck->setChecked(settings.value(QStringLiteral("reuseDepthMaps")).toBool(false));
+    _reuseDepthMapsCheck->setChecked(settings.value(QStringLiteral("reuseDepthMaps")).toBool(true));
     _replaceDefaultCheck->setChecked(settings.value(QStringLiteral("replaceDefaultModel")).toBool(false));
 }
 
 void GenerateModelDialog::setSourceCandidates(const QJsonArray &candidates)
 {
     _candidates = candidates;
+    bool has_depth_maps = false;
+    for (const QJsonValue &value : _candidates)
+    {
+        if (value.toObject().value(QLatin1String(kSourceData)).toString() == QStringLiteral("depth_maps"))
+        {
+            has_depth_maps = true;
+            break;
+        }
+    }
+    if (!has_depth_maps)
+    {
+        QJsonObject automatic_depth_maps;
+        automatic_depth_maps[QLatin1String(kSourceData)] = QStringLiteral("depth_maps");
+        automatic_depth_maps[QLatin1String(kSourceLabel)] = tr("深度图");
+        automatic_depth_maps[QLatin1String(kSourcePath)] = QString();
+        automatic_depth_maps[QLatin1String(kDisplay)] = tr("自动生成深度图");
+        automatic_depth_maps[QLatin1String(kSupported)] = true;
+        automatic_depth_maps[QLatin1String(kNote)] =
+            tr("当前没有可复用深度图；生成模型时将自动估计深度图、融合密集点云并生成网格。");
+        _candidates.insert(0, automatic_depth_maps);
+    }
     refreshSourceTypes();
 }
 
@@ -453,12 +532,64 @@ void GenerateModelDialog::setAdvancedExpanded(bool expanded)
     _advancedToggle->setChecked(expanded);
     _advancedToggle->setArrowType(expanded ? Qt::DownArrow : Qt::RightArrow);
     _advancedContent->setVisible(expanded);
-    setMinimumHeight(expanded ? 620 : 430);
+    if (_contentScrollArea && _contentScrollArea->widget() && _contentScrollArea->widget()->layout())
+    {
+        _contentScrollArea->widget()->layout()->invalidate();
+        _contentScrollArea->widget()->layout()->activate();
+        _contentScrollArea->widget()->adjustSize();
+    }
+    refreshScrollableDialogSize();
+}
+
+void GenerateModelDialog::bindScreenGeometryUpdates(QScreen *targetScreen)
+{
+    if (_screenGeometryConnection)
+    {
+        QObject::disconnect(_screenGeometryConnection);
+        _screenGeometryConnection = {};
+    }
+    if (!targetScreen)
+    {
+        return;
+    }
+
+    _screenGeometryConnection = connect(targetScreen, &QScreen::availableGeometryChanged, this, [this]()
+    {
+        refreshScrollableDialogSize();
+    });
+}
+
+void GenerateModelDialog::refreshScrollableDialogSize()
+{
+    const int visibleWidth = isVisible() ? width() : 0;
+    updateScrollableContentHeight();
     if (layout())
     {
         layout()->invalidate();
+        layout()->activate();
     }
     adjustSize();
+    if (visibleWidth > 0)
+    {
+        resize(visibleWidth, height());
+    }
+}
+
+void GenerateModelDialog::updateScrollableContentHeight()
+{
+    if (!_contentScrollArea || !_contentScrollArea->widget())
+    {
+        return;
+    }
+
+    const int preferredHeight = _contentScrollArea->widget()->sizeHint().height();
+    const QScreen *targetScreen = screen();
+    const int availableHeight = targetScreen ? targetScreen->availableGeometry().height() : preferredHeight;
+    const int maximumContentHeight = qMax(240, availableHeight - 70);
+    const int contentHeight = qMin(preferredHeight + 24, maximumContentHeight);
+    _contentScrollArea->setMinimumHeight(contentHeight);
+    _contentScrollArea->setMaximumHeight(contentHeight);
+    _contentScrollArea->updateGeometry();
 }
 
 void GenerateModelDialog::updateAvailability()
@@ -483,6 +614,13 @@ void GenerateModelDialog::updateAvailability()
             : note);
         return;
     }
+    if (sourceData == QStringLiteral("depth_maps"))
+    {
+        _statusLabel->setText(
+            tr("缺少深度图时将自动估计深度图；已有兼容深度图时将按“重用深度图”设置复用，"
+               "随后自动融合密集点云并生成模型。"));
+        return;
+    }
     _statusLabel->setText(note.isEmpty()
         ? tr("输出: 项目目录下的 model/products/model_from_mesh.ply")
         : note);
@@ -493,10 +631,13 @@ void GenerateModelDialog::updateBlockControlsAvailability()
     const QString sourceData = _sourceCombo->currentData().toString();
     const bool blockCapable =
         sourceData == QStringLiteral("depth_maps") || sourceData == QStringLiteral("point_cloud");
+    const bool splitEnabled = blockCapable && _splitRegionCheck->isChecked();
 
     _splitRegionCheck->setEnabled(blockCapable);
-    _blockSizeSpin->setEnabled(blockCapable && _splitRegionCheck->isChecked());
-    _skipBoundaryBlocksCheck->setEnabled(blockCapable && _splitRegionCheck->isChecked());
+    _coordinateLabel->setEnabled(splitEnabled);
+    _blockSizeSpin->setEnabled(splitEnabled);
+    _originLabel->setEnabled(splitEnabled);
+    _skipBoundaryBlocksCheck->setEnabled(splitEnabled);
 }
 
 void GenerateModelDialog::emitSettingsNow()

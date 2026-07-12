@@ -126,18 +126,12 @@ private:
     void runFeatureExtraction(const QJsonObject &config, const QStringList &inputs);
 
     void startAerialTriangulationWorkflow(const QJsonObject &settings);
-    void launchAerialTriangulationSfm(const QJsonObject &settings,
-                                      const QStringList &images,
-                                      const QString &projectPath,
-                                      const QJsonObject &projectMeta,
-                                      const QString &outputRoot,
-                                      bool autoFillMissing,
-                                      bool prepareTiePoints);
-    void prepareAerialTriangulationTiePoints(const QJsonObject &settings,
-                                             const QStringList &images,
-                                             const QString &projectPath,
-                                             const QString &outputRoot,
-                                             bool autoFillMissing);
+    void runUnifiedAerialTriangulation(const QJsonObject &settings,
+                                       const QStringList &images,
+                                       const QString &projectPath,
+                                       const QJsonObject &projectMeta,
+                                       const QString &outputRoot,
+                                       bool fillMissingTiePoints);
     void startThreeDReconstructionWorkflow(const QJsonObject &settings);
     void startThreeDReconstructionDenseStage(const QJsonObject &settings);
     void startThreeDReconstructionDenseRefineStage(const QJsonObject &settings);

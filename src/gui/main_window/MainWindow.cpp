@@ -40,6 +40,7 @@
 
 #include "AlgorithmCompat.h"
 #include "CanvasWidget.h"
+#include "ImageViewRotationSettings.h"
 #include "ProjectSupportUtils.h"
 #include "LogPanel.h"
 #include "MainMenu.h"
@@ -480,6 +481,21 @@ void MainWindow::setupMenuConnections()
         return;
     }
 
+    if (_workspaceCenter)
+    {
+        auto updateContextualToolbar = [this](WorkspaceCenterWidget::ViewMode mode)
+        {
+            const bool showModelTools = mode == WorkspaceCenterWidget::ViewMode::Model;
+            const bool showImageTools = mode == WorkspaceCenterWidget::ViewMode::Image;
+            _mainMenu->setContextualToolbarVisibility(showModelTools, showImageTools);
+        };
+        connect(_workspaceCenter,
+                &WorkspaceCenterWidget::viewModeChanged,
+                this,
+                updateContextualToolbar);
+        updateContextualToolbar(_workspaceCenter->currentViewMode());
+    }
+
     if (_mainMenu->zoomInAction())
     {
         connect(_mainMenu->zoomInAction(), &QAction::triggered, _canvas, &CanvasWidget::zoomIn);
@@ -491,6 +507,30 @@ void MainWindow::setupMenuConnections()
     if (_mainMenu->resetViewAction())
     {
         connect(_mainMenu->resetViewAction(), &QAction::triggered, _canvas, &CanvasWidget::resetView);
+    }
+    if (_mainMenu->rotateImageLeftAction())
+    {
+        connect(_mainMenu->rotateImageLeftAction(),
+                &QAction::triggered, _canvas, &CanvasWidget::rotateLeft);
+    }
+    if (_mainMenu->rotateImageRightAction())
+    {
+        connect(_mainMenu->rotateImageRightAction(),
+                &QAction::triggered, _canvas, &CanvasWidget::rotateRight);
+    }
+    if (_canvas)
+    {
+        connect(_canvas, &CanvasWidget::displayImageReadyChanged, this, [this](bool ready)
+        {
+            if (_mainMenu->rotateImageLeftAction())
+            {
+                _mainMenu->rotateImageLeftAction()->setEnabled(ready);
+            }
+            if (_mainMenu->rotateImageRightAction())
+            {
+                _mainMenu->rotateImageRightAction()->setEnabled(ready);
+            }
+        });
     }
 
     if (_mainMenu->toggleLogAction())
@@ -673,17 +713,38 @@ void MainWindow::setupProjectManager()
         {
             selectPhoto(path, true);
         });
+        connect(_photoStrip,
+                &PhotoStripWidget::generateMaskRequested,
+                this,
+                [this](const QStringList &imagePaths)
+                {
+                    if (_projectManager)
+                    {
+                        _projectManager->openGenerateMaskDialogForImages(imagePaths);
+                    }
+                });
     }
     // 画布切换影像时，通过 DialogSettingStore 持久化活跃影像路径
     if (_canvas)
     {
         connect(_canvas, &CanvasWidget::activeImageChanged, this, [this](const QString &path)
         {
+            _canvas->setViewRotationDegrees(
+                xjw::gui::config::imageViewRotationForPath(_imageViewRotations, path));
             saveUiSetting(QJsonObject{{QStringLiteral("active_image_path"), path}});
             if (_projectManager)
             {
                 _projectManager->setActiveImagePath(path);
             }
+        });
+        connect(_canvas, &CanvasWidget::viewRotationChanged, this,
+                [this](const QString &path, int degrees)
+        {
+            _imageViewRotations = xjw::gui::config::withImageViewRotation(
+                _imageViewRotations, path, degrees);
+            saveUiSetting(QJsonObject{
+                {QStringLiteral("image_view_rotations"), _imageViewRotations}
+            });
         });
     }
 
@@ -2265,6 +2326,7 @@ QJsonObject MainWindow::currentUiSettingsSnapshot() const
     {
         settings[QStringLiteral("henu_brand_visible")] = _henuBrandAction->isVisible();
     }
+    settings[QStringLiteral("image_view_rotations")] = _imageViewRotations;
 
     return settings;
 }
@@ -2755,6 +2817,18 @@ void MainWindow::scheduleProjectUiHydration(const QString &plascanPath)
 void MainWindow::onProjectClosed()
 {
     persistCurrentUiSettings();
+    _imageViewRotations = QJsonObject{};
+    if (_mainMenu)
+    {
+        if (_mainMenu->rotateImageLeftAction())
+        {
+            _mainMenu->rotateImageLeftAction()->setEnabled(false);
+        }
+        if (_mainMenu->rotateImageRightAction())
+        {
+            _mainMenu->rotateImageRightAction()->setEnabled(false);
+        }
+    }
     if (_uiSetting)
     {
         _uiSetting->setProjectPath(QString());
@@ -2778,6 +2852,7 @@ void MainWindow::onProjectClosed()
 void MainWindow::applyUiSettings(const QJsonObject &ui)
 {
     QScopedValueRollback<bool> applyingRollback(_applyingUiSettings, true);
+    _imageViewRotations = ui.value(QStringLiteral("image_view_rotations")).toObject();
 
     // 特征后缀恢复不能依赖主窗口 UI 设置存在；旧项目可能只有 assets/ip/*.dsk。
     if (_menuWorkflowController)

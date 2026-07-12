@@ -14,6 +14,8 @@
 #include "io/PathIO.h"
 #include <QtConcurrent/QtConcurrent>
 #include <QDir>
+#include <QCryptographicHash>
+#include <QDateTime>
 #include <QFile>
 #include <QFileInfo>
 #include <QJsonArray>
@@ -99,6 +101,100 @@ QString normalizedMvsPathKey(const std::string &path)
     }
 
     return QDir::cleanPath(absolutePath).replace(QLatin1Char('\\'), QLatin1Char('/')).toCaseFolded();
+}
+
+template <typename T>
+void addHashValue(QCryptographicHash *hash, const T &value)
+{
+    hash->addData(reinterpret_cast<const char *>(&value),
+                  static_cast<qsizetype>(sizeof(value)));
+}
+
+QString makeMvsDepthInputHash(const DepthGenConfig &config,
+                              const std::vector<CameraView> &views,
+                              const SparseCloud &sparse)
+{
+    QCryptographicHash hash(QCryptographicHash::Sha256);
+    hash.addData(makeMvsDepthConfigHash(config, static_cast<int>(views.size())).toUtf8());
+    for (const CameraView &view : views)
+    {
+        const QByteArray image_path = QByteArray::fromStdString(view.imagePath);
+        hash.addData(image_path);
+        const char separator = '\0';
+        addHashValue(&hash, separator);
+        addHashValue(&hash, view.imageWidth);
+        addHashValue(&hash, view.imageHeight);
+        const QFileInfo image_info(QString::fromStdString(view.imagePath));
+        const qint64 image_size = image_info.exists() ? image_info.size() : -1;
+        const qint64 image_modified = image_info.exists()
+            ? image_info.lastModified().toMSecsSinceEpoch()
+            : -1;
+        addHashValue(&hash, image_size);
+        addHashValue(&hash, image_modified);
+
+        const xjw::Camera::Intrinsics intrinsics = view.camera.intrinsics();
+        addHashValue(&hash, intrinsics.focalX);
+        addHashValue(&hash, intrinsics.focalY);
+        addHashValue(&hash, intrinsics.principalX);
+        addHashValue(&hash, intrinsics.principalY);
+        addHashValue(&hash, intrinsics.pixelPitch);
+        addHashValue(&hash, intrinsics.uAxisSign);
+        addHashValue(&hash, intrinsics.vAxisSign);
+
+        const xjw::Camera::Distortion distortion = view.camera.distortion();
+        addHashValue(&hash, distortion.radialK1);
+        addHashValue(&hash, distortion.radialK2);
+        addHashValue(&hash, distortion.radialK3);
+        addHashValue(&hash, distortion.tangentialP1);
+        addHashValue(&hash, distortion.tangentialP2);
+
+        const auto rotation = view.camera.cameraToWorldRotation();
+        const auto center = view.camera.cameraCenter();
+        for (const double value : rotation)
+        {
+            addHashValue(&hash, value);
+        }
+        for (const double value : center)
+        {
+            addHashValue(&hash, value);
+        }
+        const bool depth_axis_flipped = view.camera.depthAxisFlipped();
+        addHashValue(&hash, depth_axis_flipped);
+    }
+
+    addHashValue(&hash, config.requireVerifiedSourcePairs);
+    addHashValue(&hash, config.minSourcePairGeometricInliers);
+    const std::size_t pair_quality_count = config.sourcePairQualities.size();
+    addHashValue(&hash, pair_quality_count);
+    for (const MvsSourcePairQuality &quality : config.sourcePairQualities)
+    {
+        hash.addData(QByteArray::fromStdString(quality.imageA));
+        hash.addData(QByteArray(1, '\0'));
+        hash.addData(QByteArray::fromStdString(quality.imageB));
+        hash.addData(QByteArray(1, '\0'));
+        addHashValue(&hash, quality.totalMatches);
+        addHashValue(&hash, quality.geometricInliers);
+        addHashValue(&hash, quality.verified);
+    }
+
+    const std::size_t sparse_point_count = sparse.points.size();
+    addHashValue(&hash, sparse_point_count);
+    for (const float value : sparse.minPt)
+    {
+        addHashValue(&hash, value);
+    }
+    for (const float value : sparse.maxPt)
+    {
+        addHashValue(&hash, value);
+    }
+    for (const auto &point : sparse.points)
+    {
+        for (const float coordinate : point)
+        {
+            addHashValue(&hash, coordinate);
+        }
+    }
+    return QString::fromLatin1(hash.result().toHex());
 }
 
 std::string mvsSourcePairKey(const std::string &imageA, const std::string &imageB)
@@ -766,19 +862,10 @@ PatchMatchConfig makeFinePatchMatchConfig(const PatchMatchConfig &baseConfig,
                                           bool useRectified,
                                           float hintCoverage)
 {
+    (void)hintCoverage;
     PatchMatchConfig fineConfig = baseConfig;
     fineConfig.numIterations = clampPatchMatchIterations(baseConfig.numIterations);
     fineConfig.epipolarRectified = useRectified;
-
-    if (hintCoverage > 0.35f)
-    {
-        fineConfig.numIterations = std::max(1, fineConfig.numIterations - 1);
-    }
-    if (hintCoverage > 0.55f)
-    {
-        fineConfig.numIterations = std::max(1, fineConfig.numIterations - 1);
-    }
-
     return fineConfig;
 }
 
@@ -1119,7 +1206,7 @@ void DepthMapGenerator::initializeWorkspaceManifest()
     {
         std::lock_guard<std::mutex> lock(_workspaceManifestMutex);
         _workspaceManifestPath = manifestPathForOutput(_config, _outputDir);
-        _depthConfigHash = makeMvsDepthConfigHash(_config, static_cast<int>(_views.size()));
+        _depthConfigHash = makeMvsDepthInputHash(_config, _views, _sparse);
         manifestPathForLog = _workspaceManifestPath;
         depthConfigHashForLog = _depthConfigHash;
         _workspaceManifest.clear();
@@ -1508,7 +1595,7 @@ void DepthMapGenerator::prepareFrameCaches()
         plannerOptions.maxSources = desiredSourceCount;
         plannerOptions.rejectAngleOutliers = true;
         plannerOptions.minTriangulationAngleDeg = 0.2f;
-        plannerOptions.maxTriangulationAngleDeg = 70.0f;
+        plannerOptions.maxTriangulationAngleDeg = 35.0f;
         if (requireVerifiedSourcePairs)
         {
             plannerOptions.minGeometricInliers = minVerifiedPairInliers;
@@ -2561,6 +2648,9 @@ int DepthMapGenerator::removeLocalDepthOutliers(cv::Mat &depthMap,
     cv::medianBlur(depthMap, localMedian, medianKernel);
 
     cv::Mat outlierMask = cv::Mat::zeros(depthMap.size(), CV_8U);
+#if defined(HAS_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
     for (int y = 0; y < depthMap.rows; ++y)
     {
         const float *depthRow = depthMap.ptr<float>(y);
@@ -2779,6 +2869,9 @@ DepthPostProcessStats DepthMapGenerator::postprocessFusionDepthMap(cv::Mat &dept
         if (confThresh > 0.0f)
         {
             cv::Mat beforeConfidence = depthMap.clone();
+#if defined(HAS_OPENMP)
+#pragma omp parallel for schedule(static)
+#endif
             for (int v = 0; v < depthMap.rows; ++v)
             {
                 float *depthRow = depthMap.ptr<float>(v);

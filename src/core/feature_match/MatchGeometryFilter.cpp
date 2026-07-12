@@ -152,7 +152,10 @@ MatchResult MatchGeometryFilter::filter(const MatchResult &input,
             usacParams.loMethod = cv::LOCAL_OPTIM_SIGMA;
             usacParams.loIterations = 10;
             usacParams.loSampleSize = 14;
-            usacParams.isParallel = true;
+            usacParams.randomGeneratorState = config.randomSeed;
+            // USAC 内部并行会使临界像对的内点数随线程调度波动。
+            // 上层已按像对并行，这里串行采样以保证匹配图可重复。
+            usacParams.isParallel = false;
             cv::findFundamentalMat(points0, points1, inlierMask, usacParams);
         }
         catch (const cv::Exception &)
@@ -202,7 +205,11 @@ MatchResult MatchGeometryFilter::filter(const MatchResult &input,
 
     if (inlierMask.empty())
     {
-        return input;
+        if (inlierCount)
+        {
+            *inlierCount = 0;
+        }
+        return rebuildFilteredResult(input, {});
     }
 
     std::vector<int> keptIndices;
@@ -222,7 +229,9 @@ MatchResult MatchGeometryFilter::filter(const MatchResult &input,
 
     if (keptIndices.empty() || static_cast<int>(keptIndices.size()) < config.minInliers)
     {
-        return input;
+        // 已请求几何验证时，低于最小内点数代表该像对验证失败。
+        // 返回原始匹配会把 RANSAC 判定的粗差重新送入 SfM，污染全局轨迹。
+        return rebuildFilteredResult(input, {});
     }
 
     return rebuildFilteredResult(input, keptIndices);

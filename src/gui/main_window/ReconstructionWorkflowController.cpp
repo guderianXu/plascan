@@ -1186,7 +1186,7 @@ void ReconstructionWorkflowController::openGenerateModelDialog()
             return;
         }
 
-        _projectManager->startMeshReconstructionAsync(settings);
+        _projectManager->startGenerateModelAsync(settings);
     });
 
     dlg->exec();

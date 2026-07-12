@@ -1410,6 +1410,10 @@ bool fuseDepthMapsStreamingFromDisk(const QString &mvsDir,
         fusionCfg.useColor = true;
         fusionCfg.colorCacheCapacity = 2;
         fusionCfg.fuseOnlyFirstFrame = true;
+        if (frameCount <= 32)
+        {
+            fusionCfg.minNumPixels = std::min(fusionCfg.minNumPixels, 2);
+        }
         if (frames.size() <= 2)
         {
             fusionCfg.minNumPixels = 1;
@@ -2493,6 +2497,8 @@ int main(int argc, char *argv[])
         meshRequest.reconstruction.resolution = qBound(64, meshResolution, 1024);
         meshRequest.reconstruction.poissonDepth = 9;
         meshRequest.reconstruction.simplifyTargetFaces = 28000;
+        meshRequest.reconstruction.allowHeightGridFallback = false;
+        meshRequest.reconstruction.orientNormalsForClosedSurface = true;
         meshRequest.progress = [lastMeshProgressPercent = -1,
                                 lastMeshProgressStage = QString()](const QString &stage, int percent) mutable {
             if (percent == lastMeshProgressPercent && stage == lastMeshProgressStage)

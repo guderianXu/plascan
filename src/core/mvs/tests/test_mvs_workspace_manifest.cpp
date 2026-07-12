@@ -278,6 +278,44 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
     config.patchMatch.downsampleFactor = 4;
     const QString hashC = xjw::mvs::makeMvsDepthConfigHash(config, 444);
     EXPECT_NE(hashA, hashC);
+
+    const auto expect_hash_change = [&config, &hashC](const auto &mutator) {
+        xjw::mvs::DepthGenConfig changed = config;
+        mutator(changed);
+        EXPECT_NE(hashC, xjw::mvs::makeMvsDepthConfigHash(changed, 444));
+    };
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.bilateralD += 2;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.bilateralSigmaColor += 1.0f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.bilateralSigmaSpace += 1.0f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.patchMatch.cudaUseParallelSweep = !changed.patchMatch.cudaUseParallelSweep;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.fusion.enableAdaptiveConfidenceFilter =
+            !changed.fusion.enableAdaptiveConfidenceFilter;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.fusion.adaptiveFullCoverageThreshold -= 0.01f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.fusion.adaptiveLowMeanConfidenceThreshold -= 0.01f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.fusion.adaptiveStrictConfidenceThreshold -= 0.01f;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.fusion.maxLocalDepthOutlierRemovalRatio -= 0.01f;
+    });
+
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.inputSignature = "at-generation-2";
+    });
 }
 
 TEST(MvsDepthPostprocess, RemovesIsolatedDepthSpikeAndConfidence)

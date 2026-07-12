@@ -51,7 +51,10 @@ std::filesystem::path writeNoNormalsPointCloud(const std::filesystem::path &root
     return plyPath;
 }
 
-std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::path &root)
+std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::path &root,
+                                                       bool alternateNormalDirection = false,
+                                                       bool injectInvalidNormals = false,
+                                                       bool varyColors = false)
 {
     namespace fs = std::filesystem;
     fs::remove_all(root);
@@ -80,14 +83,38 @@ std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::pa
             points(row, 0) = 2.0f * nx;
             points(row, 1) = 2.0f * ny;
             points(row, 2) = 2.0f * nz;
-            normals(row, 0) = nx;
-            normals(row, 1) = ny;
-            normals(row, 2) = nz;
-            colors(row, 0) = 180;
-            colors(row, 1) = 190;
-            colors(row, 2) = 210;
+            const float normal_sign = alternateNormalDirection && (row % 2 != 0) ? -1.0f : 1.0f;
+            normals(row, 0) = normal_sign * nx;
+            normals(row, 1) = normal_sign * ny;
+            normals(row, 2) = normal_sign * nz;
+            if (varyColors && nx < 0.0f)
+            {
+                colors(row, 0) = 240;
+                colors(row, 1) = 40;
+                colors(row, 2) = 30;
+            }
+            else if (varyColors)
+            {
+                colors(row, 0) = 30;
+                colors(row, 1) = 60;
+                colors(row, 2) = 240;
+            }
+            else
+            {
+                colors(row, 0) = 180;
+                colors(row, 1) = 190;
+                colors(row, 2) = 210;
+            }
             ++row;
         }
+    }
+
+    if (injectInvalidNormals)
+    {
+        normals(0, 0) = 0.0f;
+        normals(0, 1) = 0.0f;
+        normals(0, 2) = 0.0f;
+        normals(1, 0) = std::numeric_limits<float>::quiet_NaN();
     }
 
     plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
@@ -236,6 +263,41 @@ TEST(MeshReconstructorTest, UsesStreamingHeightGridForOversizedPly)
     EXPECT_NE(tiled, progressMessages.end());
 }
 
+TEST(MeshReconstructorTest, OversizedArbitraryCloudUsesBoundedPoissonSample)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_bounded_poisson_sample_test";
+    const fs::path plyPath = writeSpherePointCloudWithNormals(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.poissonDepth = 4;
+    config.allowHeightGridFallback = false;
+    config.orientNormalsForClosedSurface = true;
+    config.maxInputPointsForMeshing = 240;
+    std::vector<std::string> progressMessages;
+    config.progressFn = [&](const std::string &stage, float) {
+        progressMessages.push_back(stage);
+    };
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_EQ(algorithmUsed, "poisson");
+    EXPECT_GT(mesh.faceCount(), 0);
+    EXPECT_NE(std::find_if(progressMessages.begin(), progressMessages.end(), [](const std::string &message) {
+                  return message.find("Poisson") != std::string::npos
+                      && message.find("抽样") != std::string::npos;
+              }),
+              progressMessages.end());
+}
+
 TEST(MeshReconstructorTest, StreamingHeightGridSuppressesSparseVerticalSpikes)
 {
     namespace fs = std::filesystem;
@@ -295,6 +357,98 @@ TEST(MeshReconstructorTest, ForcePoissonUsesInputNormalsWhenPresent)
     EXPECT_EQ(algorithmUsed, "poisson");
 }
 
+TEST(MeshReconstructorTest, PoissonTransfersSourceColorsToMeshVertices)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_color_test";
+    const fs::path plyPath = writeSpherePointCloudWithNormals(root, false, false, true);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.poissonDepth = 4;
+    config.allowHeightGridFallback = false;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    ASSERT_FALSE(mesh.vertices.empty());
+    EXPECT_EQ(algorithmUsed, "poisson");
+
+    int red_dominant = 0;
+    int blue_dominant = 0;
+    for (const auto &vertex : mesh.vertices)
+    {
+        red_dominant += vertex.r > vertex.b ? 1 : 0;
+        blue_dominant += vertex.b > vertex.r ? 1 : 0;
+    }
+    EXPECT_GT(red_dominant, 0);
+    EXPECT_GT(blue_dominant, 0);
+}
+
+TEST(MeshReconstructorTest, PoissonDepthAdaptsToPointCloudDensity)
+{
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(50000, 8), 6);
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(250000, 8), 7);
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(1000000, 8), 8);
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(50000, 5), 5);
+}
+
+TEST(MeshReconstructorTest, PoissonOrientsMixedNormalsForClosedSurface)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_mixed_normals_test";
+    const fs::path plyPath = writeSpherePointCloudWithNormals(root, true);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.poissonDepth = 4;
+    config.allowHeightGridFallback = false;
+    config.orientNormalsForClosedSurface = true;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_GT(mesh.faceCount(), 0);
+    EXPECT_EQ(algorithmUsed, "poisson");
+}
+
+TEST(MeshReconstructorTest, PoissonRepairsInvalidNormalsBeforeReconstruction)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_invalid_normals_test";
+    const fs::path plyPath = writeSpherePointCloudWithNormals(root, false, true);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.poissonDepth = 4;
+    config.allowHeightGridFallback = false;
+    config.orientNormalsForClosedSurface = true;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    ASSERT_TRUE(ok) << error;
+    EXPECT_GT(mesh.faceCount(), 0);
+    EXPECT_EQ(algorithmUsed, "poisson");
+}
+
 TEST(MeshReconstructorTest, SmallComponentCleanupKeepsLargestComponent)
 {
     xjw::mesh::TriMesh mesh;
@@ -321,7 +475,52 @@ TEST(MeshReconstructorTest, SmallComponentCleanupKeepsLargestComponent)
     EXPECT_EQ(mesh.vertexCount(), 4);
 }
 
-TEST(MeshReconstructorTest, FallsBackToHeightGridWhenPoissonCleanupLeavesTinyMesh)
+TEST(MeshReconstructorTest, SmallBoundaryHoleFillingClosesTetrahedronOpening)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(4);
+    mesh.vertices[0].x = 0.0f; mesh.vertices[0].y = 0.0f; mesh.vertices[0].z = 0.0f;
+    mesh.vertices[1].x = 1.0f; mesh.vertices[1].y = 0.0f; mesh.vertices[1].z = 0.0f;
+    mesh.vertices[2].x = 0.0f; mesh.vertices[2].y = 1.0f; mesh.vertices[2].z = 0.0f;
+    mesh.vertices[3].x = 0.0f; mesh.vertices[3].y = 0.0f; mesh.vertices[3].z = 1.0f;
+    mesh.faces = {
+        xjw::mesh::Triangle{{0, 1, 3}},
+        xjw::mesh::Triangle{{1, 2, 3}},
+        xjw::mesh::Triangle{{2, 0, 3}},
+    };
+
+    const int filled = xjw::mesh::detail::fillSmallBoundaryHoles(&mesh, 8);
+
+    EXPECT_EQ(filled, 1);
+    EXPECT_EQ(mesh.vertexCount(), 5);
+    EXPECT_EQ(mesh.faceCount(), 6);
+}
+
+TEST(MeshPostprocessTest, WeldsCoincidentVerticesBeforeComponentFiltering)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(6);
+    mesh.vertices[0].x = 0.0f; mesh.vertices[0].y = 0.0f;
+    mesh.vertices[1].x = 1.0f; mesh.vertices[1].y = 0.0f;
+    mesh.vertices[2].x = 0.0f; mesh.vertices[2].y = 1.0f;
+    mesh.vertices[3].x = 1.0f; mesh.vertices[3].y = 0.0f;
+    mesh.vertices[4].x = 1.0f; mesh.vertices[4].y = 1.0f;
+    mesh.vertices[5].x = 0.0f; mesh.vertices[5].y = 1.0f;
+
+    xjw::mesh::Triangle first;
+    first.v[0] = 0; first.v[1] = 1; first.v[2] = 2;
+    xjw::mesh::Triangle second;
+    second.v[0] = 3; second.v[1] = 4; second.v[2] = 5;
+    mesh.faces = {first, second};
+
+    xjw::mesh::detail::weldCoincidentVertices(&mesh, 1.0e-6f);
+    xjw::mesh::detail::removeSmallConnectedComponents(&mesh, 2);
+
+    EXPECT_EQ(mesh.vertexCount(), 4);
+    EXPECT_EQ(mesh.faceCount(), 2);
+}
+
+TEST(MeshReconstructorTest, WeldedPoissonMeshSurvivesOversizedComponentThreshold)
 {
     namespace fs = std::filesystem;
     const fs::path root = fs::temp_directory_path() / "plascan_mesh_poisson_tiny_cleanup_test";
@@ -342,7 +541,7 @@ TEST(MeshReconstructorTest, FallsBackToHeightGridWhenPoissonCleanupLeavesTinyMes
                                                                                    &algorithmUsed);
 
     ASSERT_TRUE(ok) << error;
-    EXPECT_EQ(algorithmUsed, "height_grid");
+    EXPECT_EQ(algorithmUsed, "poisson");
     EXPECT_GT(mesh.faceCount(), 100);
 }
 
@@ -368,6 +567,31 @@ TEST(MeshReconstructorTest, ForcePoissonFallsBackWhenCloudHasNoNormals)
     EXPECT_GT(mesh.vertexCount(), 0);
     EXPECT_GT(mesh.faceCount(), 0);
     EXPECT_EQ(algorithmUsed, "height_grid");
+}
+
+TEST(MeshReconstructorTest, Arbitrary3dRejectsHeightGridFallbackWhenPoissonCannotRun)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_mesh_no_arbitrary_fallback_test";
+    const fs::path plyPath = writeNoNormalsPointCloud(root);
+
+    xjw::mesh::ReconstructionConfig config = fallbackMeshConfig();
+    config.allowHeightGridFallback = false;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    std::string algorithmUsed;
+    const bool ok = xjw::mesh::SurfaceReconstructor::reconstructFromPointCloudFile(plyPath.string(),
+                                                                                   config,
+                                                                                   mesh,
+                                                                                   &error,
+                                                                                   &algorithmUsed);
+
+    EXPECT_FALSE(ok);
+    EXPECT_TRUE(mesh.empty());
+    EXPECT_TRUE(algorithmUsed.empty());
+    EXPECT_NE(error.find("Poisson"), std::string::npos);
+    EXPECT_NE(error.find("高度格网"), std::string::npos);
 }
 
 TEST(MeshReconstructorTest, PoissonFallbackProgressIncludesFailureReason)
@@ -418,6 +642,35 @@ TEST(MeshWorkflowServiceTest, RecordsActualFallbackAlgorithmInPayload)
     EXPECT_TRUE(fs::exists(result.payload.value(QStringLiteral("model_ply")).toString().toStdString()));
 }
 
+TEST(MeshWorkflowServiceTest, SharedModelEntryMapsSettingsAndBuildsPointCloudSource)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_shared_model_entry_test";
+    const fs::path plyPath = writeDenseGridPointCloud(root);
+
+    xjw::mesh::workflow::ModelBuildRequest request;
+    request.sourceData = QStringLiteral("point_cloud");
+    request.requestedSourcePath = QString::fromStdString(plyPath.string());
+    request.sourcePointCloudPath = request.requestedSourcePath;
+    request.outputRoot = QString::fromStdString((root / "model").string());
+    request.settings[QStringLiteral("surface_type")] = QStringLiteral("height_field");
+    request.settings[QStringLiteral("method")] = QStringLiteral("Height Grid");
+    request.settings[QStringLiteral("octreeDepth")] = 7;
+    request.settings[QStringLiteral("cleanSmall")] = false;
+    request.settings[QStringLiteral("smoothIter")] = 0;
+    request.settings[QStringLiteral("depthFiltering")] = QStringLiteral("disabled");
+    request.settings[QStringLiteral("qualityProfile")] = QStringLiteral("detail");
+
+    const auto result = xjw::mesh::workflow::buildModel(request);
+
+    ASSERT_TRUE(result.ok) << result.errorMessage.toStdString();
+    EXPECT_EQ(result.payload.value(QStringLiteral("source_data")).toString(),
+              QStringLiteral("point_cloud"));
+    EXPECT_EQ(result.payload.value(QStringLiteral("source_point_cloud_path")).toString(),
+              request.sourcePointCloudPath);
+    EXPECT_TRUE(fs::exists(result.payload.value(QStringLiteral("mesh_ply")).toString().toStdString()));
+}
+
 TEST(MeshWorkflowSettingsTest, HeightFieldSourceDisablesPoissonAndMapsFiltering)
 {
     QJsonObject settings;
@@ -455,24 +708,30 @@ TEST(MeshWorkflowSettingsTest, ArbitrarySourceKeepsPoissonAndHonorsFaceBudget)
     const auto config = xjw::mesh::workflow::reconstructionConfigFromModelSettings(settings);
 
     EXPECT_TRUE(config.forcePoisson);
+    EXPECT_FALSE(config.allowHeightGridFallback);
+    EXPECT_TRUE(config.orientNormalsForClosedSurface);
     EXPECT_GE(config.poissonDepth, 10);
     EXPECT_TRUE(config.fillHoles);
     EXPECT_GE(config.holeFillPasses, 16);
     EXPECT_EQ(config.simplifyTargetFaces, 240000);
+    EXPECT_EQ(config.maxInputPointsForMeshing, 400000);
     EXPECT_FALSE(config.enableDownsample);
     EXPECT_GE(config.kNormals, 18);
+    EXPECT_GE(config.smoothIterations, 4);
 }
 
 TEST(MeshWorkflowSettingsTest, DepthMapMeshRequestPreservesSourceAndSettings)
 {
     xjw::mesh::workflow::DepthMapMeshBuildRequest request;
     request.depthMapSourcePath = QStringLiteral("E:/tmp/mvs_output");
+    request.reusableDenseCloudPath = QStringLiteral("E:/tmp/mvs_output/dense_cloud.ply");
     request.outputRoot = QStringLiteral("E:/tmp/model");
     request.settings[QStringLiteral("surface_type")] = QStringLiteral("height_field");
     request.settings[QStringLiteral("quality")] = QStringLiteral("high");
     request.settings[QStringLiteral("reuseDepthMaps")] = true;
 
     EXPECT_EQ(request.depthMapSourcePath, QStringLiteral("E:/tmp/mvs_output"));
+    EXPECT_EQ(request.reusableDenseCloudPath, QStringLiteral("E:/tmp/mvs_output/dense_cloud.ply"));
     EXPECT_EQ(request.outputRoot, QStringLiteral("E:/tmp/model"));
     EXPECT_TRUE(request.settings.value(QStringLiteral("reuseDepthMaps")).toBool());
 }
@@ -483,17 +742,21 @@ TEST(DepthMapMeshBuilderTest, DiscoversDepthFramesFromOutputDirectory)
     const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_discovery_test";
     fs::remove_all(root);
     fs::create_directories(root);
-    std::ofstream(root / "depth_001.raw").put('\0');
-    std::ofstream(root / "confidence_001.raw").put('\0');
-    std::ofstream(root / "depth_002.raw").put('\0');
+    std::ofstream(root / "depth_001.bin").put('\0');
+    std::ofstream(root / "depth_001_conf.bin").put('\0');
+    std::ofstream(root / "depth_001.png").put('\0');
+    std::ofstream(root / "depth_001_mask.png").put('\0');
+    std::ofstream(root / "depth_002.bin").put('\0');
 
     const auto frames =
         xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(QString::fromStdString(root.string()));
 
     ASSERT_EQ(frames.size(), 2);
-    EXPECT_TRUE(frames.at(0).depthPath.endsWith(QStringLiteral("depth_001.raw")));
-    EXPECT_TRUE(frames.at(0).confidencePath.endsWith(QStringLiteral("confidence_001.raw")));
-    EXPECT_TRUE(frames.at(1).depthPath.endsWith(QStringLiteral("depth_002.raw")));
+    EXPECT_TRUE(frames.at(0).depthPath.endsWith(QStringLiteral("depth_001.bin")));
+    EXPECT_TRUE(frames.at(0).confidencePath.endsWith(QStringLiteral("depth_001_conf.bin")));
+    EXPECT_TRUE(frames.at(0).previewPath.endsWith(QStringLiteral("depth_001.png")));
+    EXPECT_TRUE(frames.at(0).validMaskPath.endsWith(QStringLiteral("depth_001_mask.png")));
+    EXPECT_TRUE(frames.at(1).depthPath.endsWith(QStringLiteral("depth_002.bin")));
 }
 
 TEST(DepthMapMeshBuilderTest, UsesExistingDenseCloudWhenPresent)
@@ -520,7 +783,7 @@ TEST(DepthMapMeshBuilderTest, ReportsActionableErrorWhenDepthFramesCannotBeFused
     const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_no_dense_test";
     fs::remove_all(root);
     fs::create_directories(root);
-    std::ofstream(root / "depth_001.raw").put('\0');
+    std::ofstream(root / "depth_001.bin").put('\0');
 
     xjw::mesh::workflow::DepthMapMeshBuildRequest request;
     request.depthMapSourcePath = QString::fromStdString(root.string());

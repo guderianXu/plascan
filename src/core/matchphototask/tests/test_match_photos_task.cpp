@@ -260,7 +260,7 @@ TEST(MatchPhotosTaskTest, FeatureStageUsesDenseSiftThresholdForTiePointExtractio
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("imageConfig.detectionThreshold")));
-    EXPECT_TRUE(source.contains(QStringLiteral("0.0005f")))
+    EXPECT_TRUE(source.contains(QStringLiteral("0.0001f")))
         << "连接点生成使用 CUDA SIFT 时不能沿用 TraditionalFeatureConfig 默认 0.005，"
            "Dino/Hayabusa2 这类低纹理影像需要更低阈值保证足够连接点候选。";
     EXPECT_TRUE(source.contains(QStringLiteral("0.003f")))
@@ -444,7 +444,7 @@ TEST(MatchPhotosTaskTest, MatchSidecarCarriesAerialTiePointFrontendSignature)
     EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_frontend_version")).toInt(), 2);
     EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_feature_max_keypoints")).toInt(), 40000);
     EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_keypoint_limit_per_megapixel")).toInt(), 0);
-    EXPECT_NEAR(sidecar.value(QStringLiteral("dense_sift_threshold")).toDouble(), 0.0005, 1e-9);
+    EXPECT_NEAR(sidecar.value(QStringLiteral("dense_sift_threshold")).toDouble(), 0.0001, 1e-9);
 }
 
 TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
@@ -473,6 +473,26 @@ TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
     EXPECT_TRUE(tiePointSource.contains(QStringLiteral("latest_tie_points.json")));
     EXPECT_TRUE(tiePointSource.contains(QStringLiteral("plascan_tie_points")));
     EXPECT_FALSE(trackSource.contains(QStringLiteral("轨迹构建阶段尚未接入")));
+}
+
+TEST(MatchPhotosTaskTest, GeometryStageRecoversDenseAndDisconnectedSiftLightGluePairs)
+{
+    const QString geometrySource =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/GeometryVerifyStage.cpp"));
+    const QString recoverySource =
+        readProjectSourceFile(QStringLiteral("src/core/matchphototask/stages/SiftLightGlueRecovery.cpp"));
+    ASSERT_FALSE(geometrySource.isEmpty());
+    ASSERT_FALSE(recoverySource.isEmpty());
+
+    // LightGlue 仍是主匹配器；只有在高精度强重叠像对被预算截断，或实际匹配图
+    // 不连通时，才使用全量 SIFT 描述子做按需恢复。
+    EXPECT_TRUE(recoverySource.contains(QStringLiteral("TraditionalFeatureMatcher::match")));
+    EXPECT_TRUE(geometrySource.contains(QStringLiteral("shouldAugmentDenseSiftPair")));
+    EXPECT_TRUE(geometrySource.contains(QStringLiteral("disconnectedRecoveryCandidates")));
+
+    // 恢复结果必须同步落盘，否则后续空三服务会继续读到旧的弱匹配缓存。
+    EXPECT_TRUE(recoverySource.contains(QStringLiteral("writeIndexedMatchFile")));
+    EXPECT_TRUE(recoverySource.contains(QStringLiteral("writeMatchPhotosSidecar")));
 }
 
 TEST(MatchPhotosTaskTest, GuidedKeypointLimitPerMegapixelScalesByImageSize)

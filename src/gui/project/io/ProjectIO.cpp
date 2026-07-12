@@ -9,6 +9,25 @@ QString ProjectIO::projectRootFromPlascan(const QString &plascanPath)
     return QFileInfo(plascanPath).absolutePath();
 }
 
+QString ProjectIO::resolveProjectResourcePath(const QString &plascanPath,
+                                              const QString &resourcePath)
+{
+    const QString cleanPath = QDir::cleanPath(resourcePath.trimmed());
+    if (cleanPath.isEmpty() || cleanPath == QLatin1String("."))
+    {
+        return QString();
+    }
+    if (QFileInfo(cleanPath).isAbsolute())
+    {
+        return cleanPath;
+    }
+
+    const QString root = projectRootFromPlascan(plascanPath);
+    return root.isEmpty()
+        ? QString()
+        : QDir::cleanPath(QDir(root).absoluteFilePath(cleanPath));
+}
+
 QString ProjectIO::projectAssetsDir(const QString &plascanPath)
 {
     const QString root = projectRootFromPlascan(plascanPath);

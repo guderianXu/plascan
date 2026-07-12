@@ -3,6 +3,7 @@
 set(GUI_SOURCES
   main.cpp
   config/AppConfigManager.cpp
+  config/ImageViewRotationSettings.cpp
   config/JsonMergeUtil.cpp
   config/ProjectUiConfigManager.cpp
   config/ProjectWorkflowConfigManager.cpp
@@ -28,12 +29,14 @@ set(GUI_SOURCES
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
+  project/services/ProjectTiePointResultService.cpp
   project/support/ProjectSupportUtils.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
   project/support/ProjectDenseWorkflowConfig.cpp
+  project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectReferenceDatasets.cpp
   project/support/ProjectReferenceTerrainBa.cpp
@@ -46,6 +49,7 @@ set(GUI_SOURCES
   project/manager/ProjectManager.cpp
   project/manager/ProjectDenseReconstructionManager.cpp
   project/manager/ProjectModelManager.cpp
+  project/manager/ProjectModelGenerationWorkflow.cpp
   project/manager/ProjectReconstructionManager.cpp
   project/manager/ProjectTaskDispatcher.cpp
   project/manager/ProjectUiCommands.cpp
@@ -62,6 +66,7 @@ set(GUI_SOURCES
   widgets/CanvasWidget.cpp
   widgets/DataTreeWidget.cpp
   widgets/DataTreeWidget.ui
+  widgets/WorkspaceSectionIcons.cpp
   widgets/PhotoStripWidget.cpp
   widgets/ProjectDashboardWidget.cpp
   widgets/ReferencePanelWidget.cpp
@@ -117,6 +122,7 @@ set(GUI_SOURCES
   dialogs/DepthMapEstimateDialog.cpp
   dialogs/DepthFusionDialog.cpp
   dialogs/DenseCloudRefineDialog.cpp
+  dialogs/WorkflowParameterDialogStyle.cpp
   dialogs/GenerateModelDialog.cpp
   dialogs/MeshReconstructionDialog.cpp
   dialogs/TextureMappingDialog.cpp
@@ -132,6 +138,7 @@ list(APPEND GUI_SOURCES
 
 set(GUI_HEADERS
   config/AppConfigManager.h
+  config/ImageViewRotationSettings.h
   config/JsonMergeUtil.h
   config/ProjectUiConfigManager.h
   config/ProjectWorkflowConfigManager.h
@@ -158,12 +165,14 @@ set(GUI_HEADERS
   project/services/BundleAdjustService.h
   project/services/ProjectCameraImportService.h
   project/services/ProjectResourceCleanupService.h
+  project/services/ProjectTiePointResultService.h
   project/support/ProjectSupportUtils.h
   project/support/ProjectBundleAdjustExecution.h
   project/support/ProjectBundleAdjustWorkflow.h
   project/support/ProjectCameraInitialization.h
   project/support/ProjectDashboardSummary.h
   project/support/ProjectDenseWorkflowConfig.h
+  project/support/ProjectModelWorkflowPolicy.h
   project/support/ProjectMetadataOperations.h
   project/support/ProjectReferenceDatasets.h
   project/support/ProjectReferenceTerrainBa.h
@@ -176,6 +185,7 @@ set(GUI_HEADERS
   project/manager/ProjectManager.h
   project/manager/ProjectDenseReconstructionManager.h
   project/manager/ProjectModelManager.h
+  project/manager/ProjectModelGenerationWorkflow.h
   project/manager/ProjectReconstructionManager.h
   project/manager/ProjectTaskDispatcher.h
   project/manager/ProjectUiCommands.h
@@ -192,6 +202,7 @@ set(GUI_HEADERS
   views/LayerStitchedDebug.h
   widgets/CanvasWidget.h
   widgets/DataTreeWidget.h
+  widgets/WorkspaceSectionIcons.h
   widgets/PhotoStripWidget.h
   widgets/ProjectDashboardWidget.h
   widgets/ReferencePanelWidget.h
@@ -239,6 +250,7 @@ set(GUI_HEADERS
   dialogs/DepthMapEstimateDialog.h
   dialogs/DepthFusionDialog.h
   dialogs/DenseCloudRefineDialog.h
+  dialogs/WorkflowParameterDialogStyle.h
   dialogs/GenerateModelDialog.h
   dialogs/MeshReconstructionDialog.h
   dialogs/TextureMappingDialog.h
@@ -254,12 +266,14 @@ set(GUI_PROJECT_SOURCES
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
+  project/services/ProjectTiePointResultService.cpp
   project/support/ProjectSupportUtils.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
   project/support/ProjectDashboardSummary.cpp
   project/support/ProjectDenseWorkflowConfig.cpp
+  project/support/ProjectModelWorkflowPolicy.cpp
   project/support/ProjectMetadataOperations.cpp
   project/support/ProjectReferenceDatasets.cpp
   project/support/ProjectReferenceTerrainBa.cpp
@@ -272,6 +286,7 @@ set(GUI_PROJECT_SOURCES
   project/manager/ProjectManager.cpp
   project/manager/ProjectDenseReconstructionManager.cpp
   project/manager/ProjectModelManager.cpp
+  project/manager/ProjectModelGenerationWorkflow.cpp
   project/manager/ProjectReconstructionManager.cpp
   project/manager/ProjectTaskDispatcher.cpp
   project/manager/ProjectUiCommands.cpp
@@ -287,6 +302,7 @@ set(GUI_TASK_SOURCES
   ../core/pipeline/FeatureMatchRunner.cpp
   ../core/aerial_triangulation/ReconstructionPrerequisiteReport.cpp
   ../core/aerial_triangulation/AerialTriangulationService.cpp
+  ../core/aerial_triangulation/SfmSearchPolicy.cpp
 )
 
 set(GUI_DIALOG_SOURCES

@@ -31,6 +31,7 @@
 #include <QJsonArray>
 #include <QMap>
 #include <QPointer>
+#include <QStringList>
 
 #include <atomic>
 #include <memory>
@@ -170,6 +171,8 @@ public slots:
     void setActiveImagePath(const QString &imagePath);
     // 生成照片蒙版，并将 mask_path 写入对应影像元数据。
     void openGenerateMaskDialog();
+    // 为照片面板当前选择生成蒙版；对话框默认作用于传入照片。
+    void openGenerateMaskDialogForImages(const QStringList &selectedImages);
     // 取消正在运行的照片蒙版生成任务。
     void cancelMaskGeneration();
     // 生成参考 DEM/LiDAR 与当前项目成果的精度检查准备报告。
@@ -225,6 +228,12 @@ public slots:
     bool setImageCameras(const QMap<QString, QJsonObject> &cameras,
                          int *updatedCount = nullptr,
                          QString *errorMsg  = nullptr);
+    /// 原子替换本轮 SfM 的对齐相机集合，并清除本轮未注册影像的旧位姿。
+    bool replaceImageCameras(const QStringList &targetImagePaths,
+                             const QMap<QString, QJsonObject> &cameras,
+                             int *updatedCount = nullptr,
+                             int *clearedCount = nullptr,
+                             QString *errorMsg = nullptr);
     /// 清除指定影像的相机参数
     bool clearImageCameras(const QStringList &imagePaths,
                          int    *updatedCount = nullptr,
@@ -280,6 +289,7 @@ public slots:
                               double resolution);
     // 异步启动模型生成（密集重建 → 网格 → 纹理 全流程）
     void startGenerateModelAsync();
+    void startGenerateModelAsync(const QJsonObject &settings);
     // 异步执行网格重建（从最近一次密集点云生成三角网格）
     void startMeshReconstructionAsync(const QJsonObject &settings);
     // 异步执行纹理映射（从最近一次网格生成 OBJ+MTL+PNG）
@@ -330,13 +340,12 @@ public slots:
                                 const QStringList &images,
                                 const QString &outputDir,
                                 const QMap<QString, QJsonObject> &beforeCameras);
-    // 追加空三（SFM）结果到 aerial_triangulation_results，并刷新 DataTree
-    void appendAtResult(const QString &sparseCloudPath,
-                        int sparsePointCount,
-                        const QStringList &selectedImages,
-                        const QString &outputDir,
-                        const QJsonObject &extraRecord = {},
-                        int replaceIndex = -1);
+    // 用最新空三（SFM）结果替换当前连接点，并刷新 DataTree
+    bool replaceTiePointResult(const QString &sparseCloudPath,
+                               int sparsePointCount,
+                               const QStringList &selectedImages,
+                               const QString &outputDir,
+                               const QJsonObject &extraRecord = {});
 
     /// 追加观测网络构建结果到 observation_network_results，并刷新 DataTree
     void appendObsNetResult(int nodeCount, int edgeCount,

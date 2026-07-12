@@ -132,6 +132,9 @@ QJsonObject serviceOptionsToJson(const xjw::gui::AerialTriangulationServiceOptio
 {
     QJsonObject object;
     object[QStringLiteral("output_dir")] = service.outputDir;
+    object[QStringLiteral("assets_dir")] = service.assetsDir;
+    object[QStringLiteral("feature_dir")] = service.featureDir;
+    object[QStringLiteral("match_dir")] = service.matchDir;
     object[QStringLiteral("plascan_path")] = service.plascanPath;
     object[QStringLiteral("image_count")] = service.images.size();
     object[QStringLiteral("camera_path_count")] = service.cameraPaths.size();
@@ -160,6 +163,19 @@ QJsonObject serviceOptionsToJson(const xjw::gui::AerialTriangulationServiceOptio
     return object;
 }
 
+QJsonObject tiePointContextToJson(const xjw::gui::AerialTriangulationResolvedConfig &config)
+{
+    QJsonObject object;
+    object[QStringLiteral("preparation_required")] = config.prepareTiePoints;
+    object[QStringLiteral("force_rebuild")] = config.forceRebuildTiePoints;
+    object[QStringLiteral("working_dir")] = config.tiePointContext.workingDirectory;
+    object[QStringLiteral("feature_dir")] = config.tiePointContext.featureDirectory;
+    object[QStringLiteral("match_dir")] = config.tiePointContext.matchDirectory;
+    object[QStringLiteral("mask_count")] = config.tiePointContext.maskPaths.size();
+    object[QStringLiteral("reference_camera_count")] = config.tiePointContext.referenceCameras.size();
+    return object;
+}
+
 QJsonObject makeDryRunReport(const xjw::gui::AerialTriangulationResolvedConfig &config,
                              const QString &outputDir,
                              int imageCount,
@@ -174,6 +190,8 @@ QJsonObject makeDryRunReport(const xjw::gui::AerialTriangulationResolvedConfig &
     report[QStringLiteral("generated_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     report[QStringLiteral("resolved_settings")] = config.resolvedSettings;
     report[QStringLiteral("service_options")] = serviceOptionsToJson(config.serviceOptions);
+    report[QStringLiteral("tie_point_context")] = tiePointContextToJson(config);
+    report[QStringLiteral("tie_point_preparation_executed")] = false;
     return report;
 }
 
@@ -193,6 +211,15 @@ QJsonObject makeRunReport(const xjw::gui::AerialTriangulationWorkflowResult &res
     report[QStringLiteral("generated_at")] = QDateTime::currentDateTimeUtc().toString(Qt::ISODateWithMs);
     report[QStringLiteral("resolved_settings")] = result.config.resolvedSettings;
     report[QStringLiteral("service_options")] = serviceOptionsToJson(result.config.serviceOptions);
+    report[QStringLiteral("tie_point_context")] = tiePointContextToJson(result.config);
+    report[QStringLiteral("tie_point_preparation_executed")] = result.tiePointPreparationExecuted;
+    report[QStringLiteral("tie_point_success")] = result.tiePointResult.success;
+    report[QStringLiteral("tie_point_path")] = result.tiePointResult.tiePointPath;
+    report[QStringLiteral("tie_point_track_count")] = result.tiePointResult.trackCount;
+    report[QStringLiteral("tie_point_match_count")] =
+        static_cast<int>(result.tiePointResult.matches.size());
+    report[QStringLiteral("tie_point_candidate_pair_count")] =
+        static_cast<int>(result.tiePointResult.pairSelection.candidates.size());
     report[QStringLiteral("service_result")] = serviceResultToJson(result.serviceResult);
     report[QStringLiteral("registered_images")] = result.serviceResult.numRegisteredImages;
     report[QStringLiteral("points3d")] = result.serviceResult.numPoints3D;
@@ -220,6 +247,7 @@ int main(int argc, char *argv[])
     std::string matchAlgorithmArg = "lightglue";
     std::string matchPipelineArg;
     std::string maskApplyModeArg = "none";
+    std::string maskDirArg;
     int keypointLimit = 40000;
     int tiepointLimit = 4000;
     int threads = std::max(1u, std::thread::hardware_concurrency());
@@ -227,6 +255,7 @@ int main(int argc, char *argv[])
     bool noGenericPreselection = false;
     bool referencePreselection = false;
     bool resetAlignment = true;
+    bool noResetAlignment = false;
     bool saveAfterEachStep = false;
     bool guidedImageMatching = false;
     bool adaptiveCameraModelFitting = true;
@@ -250,10 +279,12 @@ int main(int argc, char *argv[])
     app.add_option("--keypoint-limit", keypointLimit, "关键点限制");
     app.add_option("--tiepoint-limit", tiepointLimit, "连接点限制");
     app.add_option("--mask-apply-mode", maskApplyModeArg, "蒙版应用阶段: none, keypoints, tiepoints");
+    app.add_option("--mask-dir", maskDirArg, "蒙版目录，按影像文件名或 *_mask 文件名匹配");
     app.add_flag("--generic-preselection", genericPreselection, "启用通用预选");
     app.add_flag("--no-generic-preselection", noGenericPreselection, "禁用通用预选");
-    app.add_flag("--reference-preselection", referencePreselection, "启用参考预选；没有相机文件时不可用");
+    app.add_flag("--reference-preselection", referencePreselection, "启用参考预选；source/estimated 需要相机文件，sequence 可无相机");
     app.add_flag("--reset-alignment", resetAlignment, "重置当前对齐并重新准备连接点");
+    app.add_flag("--no-reset-alignment", noResetAlignment, "保留当前对齐；可与仅复用缓存模式组合使用");
     app.add_flag("--save-after-each-step", saveAfterEachStep, "每个步骤完成后保存项目");
     app.add_flag("--guided-image-matching", guidedImageMatching, "启用指导图像匹配");
     app.add_flag("--adaptive-camera-model-fitting", adaptiveCameraModelFitting, "启用自适应相机模型拟合");
@@ -285,7 +316,7 @@ int main(int argc, char *argv[])
     xjw::cli::PhotogrammetryListOptions listOptions;
     listOptions.allowImageOnlyRows = true;
     listOptions.requireExistingCameras = true;
-    listOptions.loadCameras = false;
+    listOptions.loadCameras = referencePreselection;
     std::vector<xjw::cli::PhotogrammetryInputItem> items;
     if (!xjw::cli::readPhotogrammetryImageList(inputList, listOptions, &items, &errorMessage))
     {
@@ -306,11 +337,16 @@ int main(int argc, char *argv[])
     {
         autoGenerateMissingMatches = false;
     }
+    if (noResetAlignment)
+    {
+        resetAlignment = false;
+    }
     if (noAdaptiveCameraModelFitting)
     {
         adaptiveCameraModelFitting = false;
     }
-    if (referencePreselection && cameras.isEmpty())
+    const QString requestedReferenceMode = referenceModeFromToken(fromStdPath(referenceModeArg));
+    if (referencePreselection && cameras.isEmpty() && requestedReferenceMode != QStringLiteral("sequence"))
     {
         std::fprintf(stderr, "错误: 参考预选需要完整相机文件；无相机场景请使用通用预选或序列策略。\n");
         return cli::EXIT_ARG_ERR;
@@ -321,12 +357,15 @@ int main(int argc, char *argv[])
     options.images = xjw::cli::imagePaths(items);
     options.cameraPaths = cameras;
     options.projectPath = projectPath;
-    options.outputDir = QDir(outputDir).filePath(QStringLiteral("assets/aerial_triangulation"));
+    options.assetsDir = QDir(outputDir).filePath(QStringLiteral("assets"));
+    options.featureDir = QDir(options.assetsDir).filePath(QStringLiteral("ip"));
+    options.matchDir = QDir(options.assetsDir).filePath(QStringLiteral("matches"));
+    options.outputDir = QDir(options.assetsDir).filePath(QStringLiteral("aerial_triangulation"));
     options.projectMeta = xjw::cli::projectMetaFromInputItems(items);
     options.quality = normalizedToken(fromStdPath(qualityArg), QStringLiteral("high"));
     options.genericPreselection = genericPreselection;
     options.referencePreselection = referencePreselection;
-    options.referenceMode = referenceModeFromToken(fromStdPath(referenceModeArg));
+    options.referenceMode = requestedReferenceMode;
     options.resetAlignment = resetAlignment;
     options.saveAfterEachStep = saveAfterEachStep;
     options.keypointLimit = std::max(0, keypointLimit);
@@ -341,6 +380,8 @@ int main(int argc, char *argv[])
     options.device = normalizedToken(fromStdPath(deviceArg), QStringLiteral("auto"));
     options.threads = std::max(1, threads);
     options.autoGenerateMissingMatches = autoGenerateMissingMatches;
+    options.referenceCameras = xjw::cli::referenceCameraMap(items);
+    options.maskPaths = xjw::cli::maskPathsFromDirectory(fromStdPath(maskDirArg), options.images);
     options.cancelFlag = cancelFlag;
     options.progressFn = [](const QString &stage, int percent)
     {

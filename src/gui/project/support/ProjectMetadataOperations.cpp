@@ -216,17 +216,18 @@ void replaceProjectRecordWithLatest(ProjectData *projectData,
     projectData->replaceResultRecordWithLatest(arrayKey, record, markDirty);
 }
 
-void appendAtResult(ProjectData *projectData,
-                    const QString &sparseCloudPath,
-                    int sparsePointCount,
-                    const QStringList &selectedImages,
-                    const QString &outputDir,
-                    const QJsonObject &extraRecord,
-                    int replaceIndex)
+TiePointMutationResult replaceTiePointResult(ProjectData *projectData,
+                                             const QString &sparseCloudPath,
+                                             int sparsePointCount,
+                                             const QStringList &selectedImages,
+                                             const QString &outputDir,
+                                             const QJsonObject &extraRecord)
 {
     if (!projectData || !projectData->hasProject())
     {
-        return;
+        TiePointMutationResult result;
+        result.errorMessage = QStringLiteral("项目数据未初始化");
+        return result;
     }
 
     QJsonObject entry = makeAtResultRecord(QDateTime::currentDateTimeUtc().toString(Qt::ISODate),
@@ -238,10 +239,7 @@ void appendAtResult(ProjectData *projectData,
     entry[QStringLiteral("operation_display_name")] =
         sparseOperationDisplayName(entry.value(QStringLiteral("operation")).toString());
 
-    projectData->upsertResultRecordByIndex(QStringLiteral("aerial_triangulation_results"),
-                                           entry,
-                                           replaceIndex,
-                                           true);
+    return ProjectTiePointResultService::replaceCurrent(projectData, entry);
 }
 
 void appendObsNetResult(ProjectData *projectData,

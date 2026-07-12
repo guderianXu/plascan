@@ -40,6 +40,7 @@ plascan/
 
 ```
 common/
+├── DeterministicOpenCvRansac.h # OpenCV 鲁棒估计的稳定种子和并发临界区
 ├── log/
 │   ├── Logger.h/cpp        # 全局日志单例 (LOG_INFO/LOG_ERROR/LOG_DEBUG 宏)
 ├── math/
@@ -141,6 +142,7 @@ core/
 │   │   ├── FeatureStage.h/cpp       # SIFT 特征提取/复用，输出 assets/ip/*.sift
 │   │   ├── MatchingStage.h/cpp      # SIFT + LightGlue 两两匹配，输出 assets/matches/*.match + JSON sidecar
 │   │   ├── GeometryVerifyStage.h/cpp # 调用 MatchGeometryFilter 做基础矩阵几何验证
+│   │   ├── SiftLightGlueRecovery.h/cpp # 高精度预算截断增强与断图跨分量恢复
 │   │   ├── TrackBuildStage.h/cpp    # 连接点轨迹阶段边界，委托 tie_points 管理最终多视图 track
 │   │   └── GuidedMatchStage.h/cpp   # 引导重匹配阶段占位
 │   ├── tie_points/
@@ -188,13 +190,13 @@ core/
 │
 ├── mvs/                        # Multi-View Stereo：深度图 manifest、source planning、流式融合
 │   ├── MvsTypes.h              # MVS 公共类型
-│   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、配置 hash 和 source plan
+│   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash 和 source plan
 │   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源
 │   ├── PatchMatchCUDA.cu/h     # PatchMatch CUDA 实现
 │   ├── PatchMatchNoCUDA.cpp    # PatchMatch CPU 回退
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/valid mask 写盘
 │   ├── DepthMapFusion.h/cpp    # 深度图融合 → 密集点云，支持 manifest source plan 和流式融合
-│   ├── DepthFrameUtils.h/cpp   # 深度帧工具
+│   ├── DepthFrameUtils.h/cpp   # 深度帧存储与按指定输出目录选择批次
 │   ├── EpipolarRectifier.h/cpp # 极线校正
 │   ├── DisparityFilter.h/cpp   # 视差滤波
 │   ├── DisparityTriangulator.h/cpp  # 视差三角化
@@ -255,8 +257,9 @@ core/
 │   └── DemDifference.h/cpp     # DEM 差分、绝对差分和统计报告
 │
 ├── aerial_triangulation/       # 对齐照片式空中三角测量，职责对应 Metashape Align Photos
-│   ├── AerialTriangulationWorkflow.h/cpp  # 用户级空三参数解析、预选策略映射、服务调用封装
+│   ├── AerialTriangulationWorkflow.h/cpp  # GUI/CLI 共用入口：连接点准备、预选策略、SfM 服务编排
 │   ├── AerialTriangulationService.h/cpp   # 特征/匹配检查、相机注册、BA、空三成果和质量记录
+│   ├── SfmSearchPolicy.h/cpp              # 无相机焦距候选的并发预算、质量排序和正式重放策略
 │   ├── GuidedRematchService.h/cpp         # 基于已注册相机的 guided rematching 候选补匹配
 │   ├── MatchResultCatalog.h/cpp           # 匹配缓存多算法 variant 编目、兼容性状态与最佳结果选择
 │   ├── ReconstructionPrerequisiteReport.h/cpp # 空三前置数据完整性、匹配图连通性和补齐建议
@@ -268,6 +271,12 @@ core/
     └── LightGlueFeatureBudget.h  # LightGlue/SIFT 显存感知关键点预算工具
 ```
 
+`AerialTriangulationWorkflow` 是“空中三角测量/对齐照片”的唯一用户级入口。重置当前对齐时，workflow
+先用 `MatchPhotosTask` 重新提取 SIFT、执行 LightGlue 匹配并整理多视连接点，再把同一组
+`assetsDir/featureDir/matchDir` 和实际候选对交给 `AerialTriangulationService`。GUI 与
+`aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，也不允许 SfM 回退读取另一套项目缓存。
+合法的 V2 零匹配 sidecar 作为已确认负缓存消费，不重复扫描或生成。
+
 `sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
 不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
 
@@ -275,6 +284,13 @@ core/
 Camera/BATrack 观测扁平化为 CUDA 工作集，在固定相机投影下优化三维点块，并把 setup/solve/total、
 活动相机/track/观测数、接受步和线性残差写回报告。相机 Schur/PCG 更新尚未作为已完成能力发布，
 因此文档和 UI 只把它描述为首期 native CUDA BA 加速路径。
+
+无相机文件且没有用户内参时，`AerialTriangulationService` 直接进入粗筛到精化的焦距搜索，不再先运行一次完整的
+默认焦距 SfM。六个焦距候选按 `SfmSearchPolicy` 的有界 worker 预算并发执行，每个候选最多评估六个轻量初始像对，
+然后按注册覆盖、有限 RMS 和点数排序。正式阶段只重放最高质量焦距，并重新自动选择初始像对，使 Guided matching
+能够基于更新后的匹配图选择闭环种子。粗筛不写 PLY、项目结果或匹配质量报告，也不生成共享匹配缓存。
+E/F/H 和 PnP 的 OpenCV RANSAC 调用由稳定种子保护，结果不应随粗筛 worker 数变化。照片序列外推/插值仅作为
+PnP 初值，未经 3D-2D 几何验证的相机不会计入正式注册覆盖率。
 
 `aerial_triangulation/AerialTriangulationService.cpp` 在匹配阶段写出 `assets/reports/matching_quality_report.json` 和
 `assets/reports/matching_quality_report.csv`。报告记录候选图/实际匹配图连通性、pair 来源统计、优先级、pending/failed/skipped
@@ -297,7 +313,7 @@ gui/
 │   └── ReconstructionWorkflowController.h/cpp  # "重建" 菜单业务控制器
 │
 ├── menu/
-│   └── MainMenu.h/cpp          # 菜单栏/工具栏构建 (所有 QAction 创建)
+│   └── MainMenu.h/cpp          # 菜单栏/工具栏构建；按工作区模式切换三维与影像专属工具组
 │
 ├── dialogs/                    # 对话框 (31 个)
 │   ├── FeatureMatchingDialog.h/cpp          # 特征匹配参数
@@ -336,7 +352,7 @@ gui/
 │   └── settings/                            # 对话框设置持久化支持
 │
 ├── widgets/                    # 自定义 Qt 控件 (10 个)
-│   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布 (QGraphicsView)
+│   ├── CanvasWidget.h/cpp              # 2D 影像/图层渲染画布；整体视图旋转不修改影像或摄影测量坐标
 │   ├── ImageViewWidget.h/cpp           # 2D 影像缩放/平移控件
 │   ├── DualImageViewer.h/cpp           # 双图并列查看器 (左右影像 + 匹配线)
 │   ├── MatchLineOverlay.h/cpp          # 匹配线叠加层 (稀疏 → 连线)
@@ -345,7 +361,7 @@ gui/
 │   ├── ReferencePanelWidget.h/cpp      # 参考信息面板
 │   ├── WindowPanel.h/cpp               # 窗口面板组件
 │   ├── ObservationNetworkView.h/cpp    # 观测网络可视化
-│   └── WorkspaceCenterWidget.h/cpp     # 工作区布局管理
+│   └── WorkspaceCenterWidget.h/cpp     # 工作区布局管理及模型/影像/对比/观测网络模式通知
 │
 ├── project/                    # 项目管理层
 │   ├── data/
@@ -360,6 +376,7 @@ gui/
 │   │   ├── ProjectReconstructionManager.h/cpp       # 重建任务管理
 │   │   ├── ProjectSparseReconstructionManager.h/cpp  # 稀疏重建管理
 │   │   ├── ProjectDenseReconstructionManager.h/cpp   # 密集重建管理
+│   │   ├── ProjectModelGenerationWorkflow.h/cpp      # 生成模型编排：自动深度估计、融合、网格
 │   │   ├── ProjectModelManager.h/cpp                 # 模型管理
 │   │   ├── ProjectTerrainProductsManager.h/cpp       # 地形产品管理
 │   │   ├── ProjectCameraSetupManager.h/cpp           # 相机设置管理
@@ -370,13 +387,15 @@ gui/
 │   │   ├── ProjectBaInputBuilder.h/cpp               # BA 输入构建
 │   │   ├── ProjectCameraImportService.h/cpp          # 相机导入
 │   │   ├── ProjectTriangulationService.h/cpp         # 三角化服务
-│   │   └── ProjectResourceCleanupService.h/cpp       # 资源清理
+│   │   ├── ProjectResourceCleanupService.h/cpp       # 通用资源清理
+│   │   └── ProjectTiePointResultService.h/cpp        # 单一当前连接点、覆盖清理与真实删除
 │   └── support/                 # 支持/辅助类
 │       ├── ProjectSupportUtils.h/cpp               # 通用工具
 │       ├── ProjectBundleAdjustExecution.h/cpp       # BA 执行
 │       ├── ProjectBundleAdjustWorkflow.h/cpp        # BA 工作流
 │       ├── ProjectCameraInitialization.h/cpp        # 相机初始化
 │       ├── ProjectDenseWorkflowConfig.h/cpp         # 密集工作流配置
+│       ├── ProjectModelWorkflowPolicy.h/cpp         # 模型源判定、输入签名校验、深度批次复用与质量参数映射
 │       ├── ProjectMetadataOperations.h/cpp          # 元数据操作
 │       ├── ProjectResultRecords.h/cpp               # 结果记录
 │       ├── ProjectSfmWorkflow.h/cpp                 # SfM 工作流
@@ -395,6 +414,7 @@ gui/
 │
 ├── config/                     # 配置管理
 │   ├── AppConfigManager.h/cpp          # 应用配置
+│   ├── ImageViewRotationSettings.h/cpp # 项目级、按影像路径索引的查看旋转角度
 │   ├── ProjectConfigManager.h/cpp      # 项目配置
 │   ├── ProjectUiConfigManager.h/cpp    # UI 配置
 │   ├── ProjectWorkflowConfigManager.h/cpp  # 工作流配置
@@ -462,7 +482,7 @@ gui/
   │
   ├─ 4. 密集重建
   │     ├─ 密集匹配 (dense_match)          → 逐像素视差图
-  │     ├─ 深度图估计 (PatchMatch)          → 深度图
+  │     ├─ 深度图估计 (PatchMatch)          → 深度图（生成模型缺失时自动执行）
   │     ├─ 深度图融合                       → 密集点云
   │     └─ 密集点云后处理
   │
@@ -472,6 +492,12 @@ gui/
         ├─ DEM 生成                         → 数字高程模型
         └─ DOM 正射影像生成                 → 正射影像
 ```
+
+深度图的磁盘 manifest 哈希覆盖估计参数、影像路径/大小/修改时间、相机内外参、
+匹配对质量约束和稀疏点云内容。项目结果中的深度批次还记录当前影像、相机与正式空三结果的
+输入签名；重新平差、修改相机或切换空三结果后，旧深度图不会直接参与融合或模型生成。
+可复用的密集点云必须与深度批次的目录、数量、配置哈希和输入签名一致，并通过 PLY 头与
+非零顶点数检查。
 
 ---
 
@@ -486,6 +512,7 @@ cli/
 ├── cli_dense_match.cpp       # 密集匹配 CLI
 ├── cli_camera_convert.cpp    # 外部相机格式转换 CLI
 ├── cli_reconstruct_pipeline.cpp # GUI 等价一键重建 / 三维重建 CLI
+├── cli_mesh_reconstruct.cpp # 与 GUI 共用 ModelWorkflowService 的模型生成回归 CLI
 ├── cli_feature_extract.cpp   # 特征提取 CLI (8 种算法, 工厂模式)
 ├── cli_feature_match.cpp     # 特征匹配 CLI (工厂模式, 自动检测算法)
 ├── cli_bundle_adjust.cpp      # 光束法平差 CLI (支持 LiDAR 约束和 A/B 对比)

@@ -1679,8 +1679,11 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
             double relChange = (prevTotalCost > 1e-12)
                 ? std::fabs(prevTotalCost - avgCost) / prevTotalCost : 1.0;
 
-            Logger::instance()->infof("[BA] iter %d/%d: avgRMS=%.6f, relChange=%.6f, validPts=%d", outer + 1,
-                                      maxOuterIterations, avgCost, relChange, costCnt);
+            if (options.logIterationProgress)
+            {
+                Logger::instance()->infof("[BA] iter %d/%d: avgRMS=%.6f, relChange=%.6f, validPts=%d", outer + 1,
+                                           maxOuterIterations, avgCost, relChange, costCnt);
+            }
 
             if (options.progressCallback &&
                 !options.progressCallback(outer + 1, maxOuterIterations, avgCost, costCnt))
@@ -1809,40 +1812,46 @@ BAProblemStats BundleAdjust::summarizeProblem(const std::vector<Camera> &cameras
     return stats;
 }
 
-BABackend BundleAdjust::selectBackendForProblem(const BAProblemStats &stats,
-                                                const BAOptions &options)
+BABackendDecision BundleAdjust::decideBackendForProblem(const BAProblemStats &stats,
+                                                        const BAOptions &options)
 {
     if (options.backend != BABackend::Auto)
     {
-        return options.backend;
+        return {options.backend, "explicit_backend"};
     }
     if (options.refineSharedFocalLength)
     {
-        return BABackend::LegacyCpu;
+        return {BABackend::LegacyCpu, "shared_focal_requires_legacy_cpu"};
     }
     if (!options.refineCameraPose)
     {
-        return BABackend::LegacyCpu;
+        return {BABackend::LegacyCpu, "point_only_prefers_legacy_cpu"};
     }
     if (options.refineCameraPose &&
         isBackendAvailable(BABackend::NativeCuda) &&
         stats.cameraCount >= options.minNativeCudaCameras &&
         stats.observationCount >= options.minNativeCudaObservations)
     {
-        return BABackend::NativeCuda;
+        return {BABackend::NativeCuda, "native_cuda_problem_size"};
     }
     if (isBackendAvailable(BABackend::CeresCuda) &&
         stats.cameraCount >= std::max(1, options.minCeresCudaCameras) &&
         stats.observationCount >= std::max(1, options.minCeresCudaObservations))
     {
-        return BABackend::CeresCuda;
+        return {BABackend::CeresCuda, "ceres_cuda_problem_size"};
     }
     if (isBackendAvailable(BABackend::CeresCpu) &&
         stats.observationCount >= std::max(1, options.minCeresCpuObservations))
     {
-        return BABackend::CeresCpu;
+        return {BABackend::CeresCpu, "ceres_cpu_problem_size"};
     }
-    return BABackend::LegacyCpu;
+    return {BABackend::LegacyCpu, "below_accelerated_problem_size"};
+}
+
+BABackend BundleAdjust::selectBackendForProblem(const BAProblemStats &stats,
+                                                 const BAOptions &options)
+{
+    return decideBackendForProblem(stats, options).backend;
 }
 
 BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
@@ -1891,7 +1900,8 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
     {
         const BAProblemStats stats = summarizeProblem(cameras, tracks);
         BAOptions selectedOptions = options;
-        selectedOptions.backend = selectBackendForProblem(stats, options);
+        const BABackendDecision decision = decideBackendForProblem(stats, options);
+        selectedOptions.backend = decision.backend;
         const std::string selectedName = backendName(selectedOptions.backend);
 
         if (selectedOptions.backend == BABackend::LegacyCpu)
@@ -1901,9 +1911,7 @@ BAResult BundleAdjust::optimizePoints(const std::vector<Camera> &cameras,
             result.usedBackend = BABackend::LegacyCpu;
             result.usedGpu = false;
             result.backendFallback = false;
-            result.backendSelectionReason = options.refineCameraPose
-                                                ? "自动选择 legacy_cpu: 问题规模低于 Ceres/CUDA 阈值"
-                                                : "自动选择 legacy_cpu: point-only BA 优先使用 legacy";
+            result.backendSelectionReason = "自动选择 legacy_cpu: " + decision.reason;
             result.backendMessage = result.backendSelectionReason;
             updateDerivedResultStats(result);
             return result;

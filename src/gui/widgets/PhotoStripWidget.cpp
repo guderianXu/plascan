@@ -5,6 +5,7 @@
 #include "../views/LayerImageLoader.h"
 
 #include <QAbstractItemView>
+#include <QAction>
 #include <QColor>
 #include <QDir>
 #include <QFileInfo>
@@ -16,6 +17,7 @@
 #include <QListView>
 #include <QListWidget>
 #include <QListWidgetItem>
+#include <QMenu>
 #include <QPainter>
 #include <QPen>
 #include <QPointF>
@@ -104,9 +106,10 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
     _list->setWrapping(true);
     _list->setMovement(QListView::Static);
     _list->setResizeMode(QListView::Adjust);
-    _list->setSelectionMode(QAbstractItemView::SingleSelection);
+    _list->setSelectionMode(QAbstractItemView::ExtendedSelection);
     _list->setSelectionBehavior(QAbstractItemView::SelectItems);
     _list->setEditTriggers(QAbstractItemView::NoEditTriggers);
+    _list->setContextMenuPolicy(Qt::CustomContextMenu);
     _list->setIconSize(QSize(ThumbWidth, ThumbHeight));
     _list->setGridSize(QSize(GridWidth, GridHeight));
     _list->setSpacing(6);
@@ -118,7 +121,7 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
 
     connect(_list, &QListWidget::itemClicked, this, [this](QListWidgetItem *item)
     {
-        if (!item)
+        if (!item || !item->isSelected())
         {
             return;
         }
@@ -132,6 +135,10 @@ PhotoStripWidget::PhotoStripWidget(QWidget *parent)
         }
         emit photoActivated(item->data(PathRole).toString());
     });
+    connect(_list,
+            &QListWidget::customContextMenuRequested,
+            this,
+            &PhotoStripWidget::showPhotoContextMenu);
 }
 
 void PhotoStripWidget::setProjectPath(const QString &plascanPath)
@@ -218,8 +225,74 @@ void PhotoStripWidget::setCurrentPhoto(const QString &imagePath)
     }
 
     QListWidgetItem *item = items.first();
-    _list->setCurrentItem(item, QItemSelectionModel::ClearAndSelect);
+    const QItemSelectionModel::SelectionFlags command = item->isSelected()
+        ? QItemSelectionModel::NoUpdate
+        : QItemSelectionModel::ClearAndSelect;
+    _list->setCurrentItem(item, command);
     _list->scrollToItem(item, QAbstractItemView::PositionAtCenter);
+}
+
+QStringList PhotoStripWidget::selectedPhotoPaths() const
+{
+    QStringList paths;
+    QSet<QString> seen;
+    if (!_list)
+    {
+        return paths;
+    }
+
+    for (int row = 0; row < _list->count(); ++row)
+    {
+        QListWidgetItem *item = _list->item(row);
+        if (!item || !item->isSelected())
+        {
+            continue;
+        }
+
+        const QString path = item->data(PathRole).toString().trimmed();
+        const QString key = normalizedPath(path);
+        if (!path.isEmpty() && !key.isEmpty() && !seen.contains(key))
+        {
+            seen.insert(key);
+            paths.push_back(path);
+        }
+    }
+    return paths;
+}
+
+void PhotoStripWidget::showPhotoContextMenu(const QPoint &position)
+{
+    if (!_list)
+    {
+        return;
+    }
+
+    QListWidgetItem *item = _list->itemAt(position);
+    if (!item)
+    {
+        return;
+    }
+
+    const QItemSelectionModel::SelectionFlags command = item->isSelected()
+        ? QItemSelectionModel::NoUpdate
+        : QItemSelectionModel::ClearAndSelect;
+    _list->setCurrentItem(item, command);
+    emit photoSelected(item->data(PathRole).toString());
+
+    const QStringList imagePaths = selectedPhotoPaths();
+    if (imagePaths.isEmpty())
+    {
+        return;
+    }
+
+    auto *menu = new QMenu(this);
+    menu->setAttribute(Qt::WA_DeleteOnClose);
+    QAction *generateAction = menu->addAction(tr("生成蒙版..."));
+    connect(generateAction, &QAction::triggered, this, [this, imagePaths]()
+    {
+        emit generateMaskRequested(imagePaths);
+    });
+    menu->popup(_list->viewport()->mapToGlobal(position));
 }
 
 void PhotoStripWidget::clearPhotos()

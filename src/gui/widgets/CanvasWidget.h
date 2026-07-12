@@ -25,6 +25,11 @@ public:
     void zoomIn();
     void zoomOut();
     void resetView();
+    void rotateLeft();
+    void rotateRight();
+    void setViewRotationDegrees(int degrees);
+    int viewRotationDegrees() const { return _viewRotationDegrees; }
+    bool hasDisplayImage() const { return _singleImageReady; }
 
 public slots:
     // 应用兴趣点显示设置到内部渲染器
@@ -75,6 +80,8 @@ signals:
     void featuresLoaded(const QString &imagePath, int count);
     // emitted when the active display image changes (for UI state persistence)
     void activeImageChanged(const QString &imagePath);
+    void viewRotationChanged(const QString &imagePath, int degrees);
+    void displayImageReadyChanged(bool ready);
 
 private:
     // 启动异步加载特征文件的通用方法（在主线程调度后台任务）
@@ -102,6 +109,8 @@ private:
     // cache: imagePath -> (lastModified, keypoints)
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;
     int _featureLoadGeneration{0};
+    int _viewRotationDegrees{0};
+    bool _singleImageReady{false};
 
     // 缩放限制（避免无限放大/缩小导致精度或性能问题）
     double _zoomFactor{1.0};

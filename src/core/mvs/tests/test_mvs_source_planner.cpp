@@ -135,6 +135,30 @@ TEST(MvsSourcePlanner, AllowsKnownOverlapPairsWithWeakGeometryAfterStrongPairs)
     EXPECT_FALSE(plan.usedSequenceFallback);
 }
 
+TEST(MvsSourcePlanner, ProductionDefaultsRejectWideBaselineSources)
+{
+    MvsSourcePlannerOptions options;
+    options.refIndex = 4;
+    options.viewCount = 12;
+    options.maxSources = 4;
+    options.rejectAngleOutliers = true;
+
+    const auto plan = planMvsSourceViews({
+        candidate(3, 180, 170, 7.0f, 0.80f, 0.35f, true),
+        candidate(5, 175, 165, 22.0f, 0.75f, 0.70f, true),
+        candidate(6, 210, 195, 44.0f, 0.90f, 1.00f, true),
+        candidate(7, 220, 205, 53.0f, 0.92f, 1.00f, true),
+    }, options);
+
+    ASSERT_EQ(plan.selected.size(), 2u);
+    EXPECT_EQ(plan.selected[0].viewIndex, 3);
+    EXPECT_EQ(plan.selected[1].viewIndex, 5);
+    EXPECT_TRUE(std::all_of(plan.selected.begin(), plan.selected.end(), [](const auto &entry)
+    {
+        return entry.medianTriangulationAngleDeg <= 35.0f;
+    }));
+}
+
 TEST(MvsSourcePlanner, ProductionGateRejectsKnownOverlapWithoutGeometryEvidence)
 {
     MvsSourcePlannerOptions options;

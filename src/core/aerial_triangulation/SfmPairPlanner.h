@@ -445,10 +445,12 @@ inline SfmPairPlan planSfmMatchPairs(
         return plan;
     }
 
+    const bool hasSequenceRestriction = options.knownCameraSequenceLoopClosure;
     const bool hasRestrictionInputs =
         hasCompleteCameraPathList(images, cameraPaths) ||
         hasCompleteKnownCameraCenters(imageCount, options.knownCameraCenters) ||
-        !options.knownCameraOverlapPairs.empty();
+        !options.knownCameraOverlapPairs.empty() ||
+        hasSequenceRestriction;
 
     if (!options.autoRestrictKnownCameraPairs ||
         imageCount <= std::max(0, options.knownCameraAllPairsMaxImages) ||
@@ -549,6 +551,12 @@ inline SfmPairPlan planSfmMatchPairs(
                 const int j = (i + distance) % imageCount;
                 if (j > i || j == i)
                 {
+                    continue;
+                }
+                if (i - j <= window)
+                {
+                    // 非跨界的序列窗口边已经在上面的 sliding window 中加入。
+                    // 再作为闭环边累计分数会把半圈远距离 pair 排到相邻 pair 前面，破坏 SfM 初始化。
                     continue;
                 }
 

@@ -24,6 +24,7 @@ struct MeshBuildRequest
 struct DepthMapMeshBuildRequest
 {
     QString depthMapSourcePath;
+    QString reusableDenseCloudPath;
     QString outputRoot;
     QJsonObject settings;
     xjw::mesh::ReconstructionConfig reconstruction;
@@ -37,6 +38,17 @@ struct TextureBuildRequest
     QString meshPath;
     QString outputDir;
     xjw::mesh::TextureMappingConfig texture;
+    std::function<void(const QString &, int)> progress;
+};
+
+struct ModelBuildRequest
+{
+    QString sourceData = QStringLiteral("point_cloud");
+    QString requestedSourcePath;
+    QString sourcePointCloudPath;
+    QString depthMapSourcePath;
+    QString outputRoot;
+    QJsonObject settings;
     std::function<void(const QString &, int)> progress;
 };
 
@@ -65,6 +77,7 @@ PointCloudQualityReport evaluatePointCloudQuality(const QString &pointCloudPath,
 
 WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request);
 WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request);
+WorkflowResult buildModel(const ModelBuildRequest &request);
 WorkflowResult buildTextureOnly(const TextureBuildRequest &request);
 
 } // namespace xjw::mesh::workflow
