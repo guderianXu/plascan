@@ -167,6 +167,15 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
         frame.rawConfidencePath = resolveExistingRawConfidencePath(
             frame.depthPng,
             record.value(QStringLiteral("raw_confidence_path")).toString());
+        const QJsonArray source_images = record.value(QStringLiteral("source_images")).toArray();
+        for (const QJsonValue &source_image : source_images)
+        {
+            const QString path = source_image.toString().trimmed();
+            if (!path.isEmpty())
+            {
+                frame.sourceImages.push_back(QDir::cleanPath(path));
+            }
+        }
         frame.configHash = record.value(QStringLiteral("config_hash")).toString();
         frame.projectInputSignature =
             record.value(QStringLiteral("project_input_signature")).toString();
@@ -338,6 +347,37 @@ StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &
     return collectStoredDepthFramesInDirectory(
         projectMeta.value(QStringLiteral("depth_map_results")).toArray(),
         batchDirectory);
+}
+
+std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRecord> &frames,
+                                           int referenceIndex)
+{
+    std::vector<int> indices;
+    if (referenceIndex < 0 || referenceIndex >= static_cast<int>(frames.size()))
+    {
+        return indices;
+    }
+
+    const QStringList &source_images = frames[static_cast<std::size_t>(referenceIndex)].sourceImages;
+    indices.reserve(static_cast<std::size_t>(source_images.size()));
+    for (const QString &source_image : source_images)
+    {
+        const QString normalized_source = QDir::cleanPath(source_image);
+        for (int index = 0; index < static_cast<int>(frames.size()); ++index)
+        {
+            if (index == referenceIndex)
+            {
+                continue;
+            }
+            if (QDir::cleanPath(frames[static_cast<std::size_t>(index)].refImage)
+                    .compare(normalized_source, Qt::CaseInsensitive) == 0)
+            {
+                indices.push_back(index);
+                break;
+            }
+        }
+    }
+    return indices;
 }
 
 xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(

@@ -231,12 +231,12 @@
     <bool>false</bool>
    </property>
    <property name="toolButtonStyle">
-    <enum>Qt::ToolButtonTextBesideIcon</enum>
+    <enum>Qt::ToolButtonIconOnly</enum>
    </property>
    <property name="iconSize">
     <size>
-     <width>18</width>
-     <height>18</height>
+     <width>26</width>
+     <height>26</height>
     </size>
    </property>
    <attribute name="toolBarArea">
@@ -245,17 +245,6 @@
    <attribute name="toolBarBreak">
     <bool>false</bool>
    </attribute>
-   <addaction name="actionSaveProject"/>
-   <addaction name="separator"/>
-   <addaction name="actionAddPhoto"/>
-   <addaction name="actionAddFolder"/>
-   <addaction name="separator"/>
-   <addaction name="actionWorkflowAerialTriangulation"/>
-   <addaction name="actionThreeDReconstruction"/>
-   <addaction name="actionCreateDEM"/>
-   <addaction name="actionGenerateOrtho"/>
-   <addaction name="separator"/>
-   <addaction name="actionManualPointCloudPrune"/>
   </widget>
   <widget class="QDockWidget" name="logDock">
    <property name="windowTitle">
@@ -309,10 +298,16 @@
    <property name="text">
     <string>放大</string>
    </property>
+   <property name="shortcut">
+    <string>Ctrl++</string>
+   </property>
   </action>
   <action name="actionZoomOut">
    <property name="text">
     <string>缩小</string>
+   </property>
+   <property name="shortcut">
+    <string>Ctrl+-</string>
    </property>
   </action>
   <action name="actionResetView">

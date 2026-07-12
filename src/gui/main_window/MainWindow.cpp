@@ -498,11 +498,39 @@ void MainWindow::setupMenuConnections()
 
     if (_mainMenu->zoomInAction())
     {
-        connect(_mainMenu->zoomInAction(), &QAction::triggered, _canvas, &CanvasWidget::zoomIn);
+        connect(_mainMenu->zoomInAction(), &QAction::triggered, this, [this]()
+        {
+            if (!_workspaceCenter)
+            {
+                return;
+            }
+            if (_workspaceCenter->currentViewMode() == WorkspaceCenterWidget::ViewMode::Image)
+            {
+                _canvas->zoomIn();
+            }
+            else if (_workspaceCenter->currentViewMode() == WorkspaceCenterWidget::ViewMode::Model)
+            {
+                _workspaceCenter->modelView()->zoomIn();
+            }
+        });
     }
     if (_mainMenu->zoomOutAction())
     {
-        connect(_mainMenu->zoomOutAction(), &QAction::triggered, _canvas, &CanvasWidget::zoomOut);
+        connect(_mainMenu->zoomOutAction(), &QAction::triggered, this, [this]()
+        {
+            if (!_workspaceCenter)
+            {
+                return;
+            }
+            if (_workspaceCenter->currentViewMode() == WorkspaceCenterWidget::ViewMode::Image)
+            {
+                _canvas->zoomOut();
+            }
+            else if (_workspaceCenter->currentViewMode() == WorkspaceCenterWidget::ViewMode::Model)
+            {
+                _workspaceCenter->modelView()->zoomOut();
+            }
+        });
     }
     if (_mainMenu->resetViewAction())
     {

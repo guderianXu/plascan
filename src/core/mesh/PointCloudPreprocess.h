@@ -1,5 +1,6 @@
 #pragma once
 
+#include <cstddef>
 #include <cstdint>
 #include <vector>
 
@@ -40,6 +41,8 @@ std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB>
                                                     float gridCellSize,
                                                     plapoint::ProcessingDevice device =
                                                         plapoint::ProcessingDevice::Auto);
+
+std::size_t removeInvalidPoissonPoints(std::vector<PointXYZRGB> *points);
 
 } // namespace detail
 } // namespace mesh

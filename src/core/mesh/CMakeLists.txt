@@ -6,6 +6,7 @@ add_library(meshing STATIC
     SurfaceReconstructorPostprocess.cpp
     SurfaceReconstructorHeightGrid.cpp
     DepthMapMeshBuilder.cpp
+    VisualHullReconstructor.cpp
     MeshIO.cpp
     TextureMapper.cpp
     ModelWorkflowService.cpp
@@ -14,16 +15,20 @@ add_library(meshing STATIC
 target_include_directories(meshing PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_SOURCE_DIR}/src/common
+    ${CMAKE_SOURCE_DIR}/src/core/camera
     ${CMAKE_SOURCE_DIR}/src/core/mvs
 )
 
 target_link_libraries(meshing
+    PUBLIC
+        camera
+        ${OpenCV_LIBS}
     PRIVATE
+        mvs
         plapoint::plapoint
         plascan_common_io
         Qt6::Core
         Qt6::Gui
-        ${OpenCV_LIBS}
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 

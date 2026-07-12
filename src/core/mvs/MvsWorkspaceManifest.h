@@ -24,6 +24,7 @@ struct MvsDepthFrameRecord
     int validPixelCount = 0;
     QJsonObject depthQuality;
     QJsonObject depthPostprocess;
+    QJsonObject cameraModel;
     QString status;
     QString device;
     QString depthPng;

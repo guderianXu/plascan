@@ -3122,11 +3122,26 @@ void CameraSceneWidget::wheelEvent(QWheelEvent *event)
     const QPoint angle = event->angleDelta();
     if (!angle.isNull()) {
         const float factor = (angle.y() > 0) ? 1.10f : 0.90f;
-        _zoomScale = _zoomScale * factor;   // 无缩放上下限
-        clampSceneOffset();
-        update();
+        applyZoomFactor(factor);
     }
     event->accept();
+}
+
+void CameraSceneWidget::zoomIn()
+{
+    applyZoomFactor(1.10f);
+}
+
+void CameraSceneWidget::zoomOut()
+{
+    applyZoomFactor(0.90f);
+}
+
+void CameraSceneWidget::applyZoomFactor(float factor)
+{
+    _zoomScale *= factor;
+    clampSceneOffset();
+    update();
 }
 
 void CameraSceneWidget::keyPressEvent(QKeyEvent *event)

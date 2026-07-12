@@ -7,6 +7,7 @@
 
 #include <QJsonObject>
 #include <QString>
+#include <QStringList>
 
 #include <vector>
 
@@ -24,6 +25,7 @@ struct StoredDepthFrameRecord
     QString depthPng;
     QString rawDepthPath;
     QString rawConfidencePath;
+    QStringList sourceImages;
     QString configHash;
     QString projectInputSignature;
     int gridWidth = 0;
@@ -53,6 +55,8 @@ bool depthFrameArtifactsExist(const StoredDepthFrameRecord &frame, bool requireC
 StoredDepthFramesResult collectLatestStoredDepthFrames(const QJsonObject &projectMeta);
 StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &projectMeta,
                                                              const QString &batchDirectory);
+std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRecord> &frames,
+                                           int referenceIndex);
 xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(
     const xjw::mvs::PositiveDepthCameraModel &camera,
     double scaleX,

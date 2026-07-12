@@ -2,9 +2,11 @@
 
 #include "DepthMapMeshBuilder.h"
 #include "ModelWorkflowService.h"
+#include "PointCloudPreprocess.h"
 #include "SurfaceReconstructor.h"
 #include "SurfaceReconstructorPostprocess.h"
 #include "TextureMapper.h"
+#include "VisualHullReconstructor.h"
 
 #include <plapoint/filters/preprocessing.h>
 
@@ -12,6 +14,10 @@
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
 
+#include <opencv2/imgproc.hpp>
+#include <opencv2/imgcodecs.hpp>
+
+#include <array>
 #include <cmath>
 #include <cstdint>
 #include <filesystem>
@@ -111,10 +117,12 @@ std::filesystem::path writeSpherePointCloudWithNormals(const std::filesystem::pa
 
     if (injectInvalidNormals)
     {
-        normals(0, 0) = 0.0f;
-        normals(0, 1) = 0.0f;
-        normals(0, 2) = 0.0f;
-        normals(1, 0) = std::numeric_limits<float>::quiet_NaN();
+        for (int invalid_index = 0; invalid_index < 32; ++invalid_index)
+        {
+            normals(invalid_index, 0) = 0.0f;
+            normals(invalid_index, 1) = 0.0f;
+            normals(invalid_index, 2) = 0.0f;
+        }
     }
 
     plapoint::PointCloud<float, plamatrix::Device::CPU> cloud(std::move(points));
@@ -219,7 +227,99 @@ xjw::mesh::ReconstructionConfig fallbackMeshConfig()
     return config;
 }
 
+xjw::PositiveDepthCameraModel makeLookAtCamera(const std::array<float, 3> &center)
+{
+    auto normalize = [](std::array<float, 3> value)
+    {
+        const float length = std::sqrt(value[0] * value[0] +
+                                       value[1] * value[1] +
+                                       value[2] * value[2]);
+        for (float &component : value)
+        {
+            component /= length;
+        }
+        return value;
+    };
+    auto cross = [](const std::array<float, 3> &lhs, const std::array<float, 3> &rhs)
+    {
+        return std::array<float, 3>{
+            lhs[1] * rhs[2] - lhs[2] * rhs[1],
+            lhs[2] * rhs[0] - lhs[0] * rhs[2],
+            lhs[0] * rhs[1] - lhs[1] * rhs[0]};
+    };
+
+    const std::array<float, 3> forward = normalize({-center[0], -center[1], -center[2]});
+    const std::array<float, 3> provisional_up = std::fabs(forward[1]) > 0.9f
+        ? std::array<float, 3>{0.0f, 0.0f, 1.0f}
+        : std::array<float, 3>{0.0f, 1.0f, 0.0f};
+    const std::array<float, 3> right = normalize(cross(forward, provisional_up));
+    const std::array<float, 3> down = normalize(cross(forward, right));
+
+    xjw::PositiveDepthCameraModel camera;
+    camera.fx = 100.0f;
+    camera.fy = 100.0f;
+    camera.cx = 64.0f;
+    camera.cy = 64.0f;
+    const std::array<std::array<float, 3>, 3> rows{right, down, forward};
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            camera.R_cw[row * 3 + column] = rows[static_cast<std::size_t>(row)][column];
+        }
+        camera.T[row] = -(camera.R_cw[row * 3] * center[0] +
+                          camera.R_cw[row * 3 + 1] * center[1] +
+                          camera.R_cw[row * 3 + 2] * center[2]);
+        camera.C[row] = center[static_cast<std::size_t>(row)];
+    }
+    return camera;
+}
+
 } // namespace
+
+TEST(VisualHullReconstructorTest, ReconstructsClosedBodyFromSixSilhouettes)
+{
+    const std::array<std::array<float, 3>, 6> centers{{
+        {{3.0f, 0.0f, 0.0f}}, {{-3.0f, 0.0f, 0.0f}},
+        {{0.0f, 3.0f, 0.0f}}, {{0.0f, -3.0f, 0.0f}},
+        {{0.0f, 0.0f, 3.0f}}, {{0.0f, 0.0f, -3.0f}}}};
+
+    std::vector<xjw::mesh::VisualHullView> views;
+    for (const auto &center : centers)
+    {
+        xjw::mesh::VisualHullView view;
+        view.camera = makeLookAtCamera(center);
+        view.silhouetteMask = cv::Mat::zeros(128, 128, CV_8UC1);
+        cv::circle(view.silhouetteMask, cv::Point(64, 64), 21, cv::Scalar(255), cv::FILLED);
+        views.push_back(std::move(view));
+    }
+
+    xjw::mesh::VisualHullConfig config;
+    config.boundsMin = {-1.0f, -1.0f, -1.0f};
+    config.boundsMax = {1.0f, 1.0f, 1.0f};
+    config.resolution = 32;
+    config.minimumVisibleViews = 4;
+    config.allowedSilhouetteViolations = 0;
+
+    xjw::mesh::TriMesh mesh;
+    std::string error;
+    ASSERT_TRUE(xjw::mesh::VisualHullReconstructor::reconstruct(views, config, &mesh, &error)) << error;
+    ASSERT_FALSE(mesh.empty());
+    EXPECT_GT(mesh.vertexCount(), 500);
+    EXPECT_GT(mesh.faceCount(), 500);
+
+    float min_x = std::numeric_limits<float>::max();
+    float max_x = std::numeric_limits<float>::lowest();
+    for (const xjw::mesh::MeshVertex &vertex : mesh.vertices)
+    {
+        min_x = std::min(min_x, vertex.x);
+        max_x = std::max(max_x, vertex.x);
+    }
+    EXPECT_LT(min_x, -0.45f);
+    EXPECT_GT(max_x, 0.45f);
+    EXPECT_GT(min_x, -0.85f);
+    EXPECT_LT(max_x, 0.85f);
+}
 
 TEST(MeshReconstructorTest, UsesStreamingHeightGridForOversizedPly)
 {
@@ -273,6 +373,8 @@ TEST(MeshReconstructorTest, OversizedArbitraryCloudUsesBoundedPoissonSample)
     config.poissonDepth = 4;
     config.allowHeightGridFallback = false;
     config.orientNormalsForClosedSurface = true;
+    config.enableDenoise = false;
+    config.enableDownsample = false;
     config.maxInputPointsForMeshing = 240;
     std::vector<std::string> progressMessages;
     config.progressFn = [&](const std::string &stage, float) {
@@ -393,10 +495,30 @@ TEST(MeshReconstructorTest, PoissonTransfersSourceColorsToMeshVertices)
 
 TEST(MeshReconstructorTest, PoissonDepthAdaptsToPointCloudDensity)
 {
-    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(50000, 8), 6);
-    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(250000, 8), 7);
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(4000, 8), 6);
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(20000, 8), 7);
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(50000, 8), 8);
+    EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(250000, 8), 8);
     EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(1000000, 8), 8);
     EXPECT_EQ(xjw::mesh::SurfaceReconstructor::recommendedPoissonDepth(50000, 5), 5);
+}
+
+TEST(MeshReconstructorTest, PoissonInputDropsOnlyPointsWithInvalidNormals)
+{
+    std::vector<xjw::mesh::detail::PointXYZRGB> points(3);
+    for (auto &point : points)
+    {
+        point.hasNormal = true;
+        point.nz = 2.0f;
+    }
+    points[1].nx = 0.0f;
+    points[1].ny = 0.0f;
+    points[1].nz = 0.0f;
+    points[2].nx = std::numeric_limits<float>::quiet_NaN();
+
+    EXPECT_EQ(xjw::mesh::detail::removeInvalidPoissonPoints(&points), 2u);
+    ASSERT_EQ(points.size(), 1u);
+    EXPECT_NEAR(points.front().nz, 1.0f, 1.0e-6f);
 }
 
 TEST(MeshReconstructorTest, PoissonOrientsMixedNormalsForClosedSurface)
@@ -434,6 +556,8 @@ TEST(MeshReconstructorTest, PoissonRepairsInvalidNormalsBeforeReconstruction)
     config.poissonDepth = 4;
     config.allowHeightGridFallback = false;
     config.orientNormalsForClosedSurface = true;
+    config.enableDenoise = false;
+    config.enableDownsample = false;
 
     xjw::mesh::TriMesh mesh;
     std::string error;
@@ -757,6 +881,85 @@ TEST(DepthMapMeshBuilderTest, DiscoversDepthFramesFromOutputDirectory)
     EXPECT_TRUE(frames.at(0).previewPath.endsWith(QStringLiteral("depth_001.png")));
     EXPECT_TRUE(frames.at(0).validMaskPath.endsWith(QStringLiteral("depth_001_mask.png")));
     EXPECT_TRUE(frames.at(1).depthPath.endsWith(QStringLiteral("depth_002.bin")));
+}
+
+TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_manifest_camera_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream(root / "depth_0.bin").put('\0');
+    std::ofstream manifest(root / "mvs_manifest.json");
+    manifest << R"({
+        "frames": [{
+            "ref_index": 0,
+            "status": "completed",
+            "ref_image": "frame.png",
+            "raw_depth_path": "depth_0.bin",
+            "grid_width": 320,
+            "grid_height": 240,
+            "camera_model": {
+                "fx": 250.0,
+                "fy": 252.0,
+                "cx": 160.0,
+                "cy": 120.0,
+                "rotation_world_to_camera": [1,0,0,0,1,0,0,0,1],
+                "translation_world_to_camera": [0,0,3],
+                "camera_center": [0,0,-3]
+            }
+        }]
+    })";
+    manifest.close();
+
+    const auto frames =
+        xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(QString::fromStdString(root.string()));
+
+    ASSERT_EQ(frames.size(), 1);
+    EXPECT_TRUE(frames.front().hasCameraModel);
+    EXPECT_FLOAT_EQ(frames.front().cameraModel.fx, 250.0f);
+    EXPECT_FLOAT_EQ(frames.front().cameraModel.cy, 120.0f);
+    EXPECT_EQ(frames.front().gridWidth, 320);
+    EXPECT_EQ(frames.front().gridHeight, 240);
+}
+
+TEST(DepthMapMeshBuilderTest, DoesNotTreatFullFrameAerialImagesAsStudioSilhouettes)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() / "plascan_depth_mesh_aerial_branch_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    std::ofstream manifest(root / "mvs_manifest.json");
+    manifest << "{\"frames\":[";
+    for (int index = 0; index < 6; ++index)
+    {
+        const std::string image_name = "aerial_" + std::to_string(index) + ".png";
+        const std::string depth_name = "depth_" + std::to_string(index) + ".bin";
+        cv::Mat aerial_image(48, 64, CV_8UC3, cv::Scalar(70, 150, 90));
+        ASSERT_TRUE(cv::imwrite((root / image_name).string(), aerial_image));
+        std::ofstream(root / depth_name).put('\0');
+        if (index > 0)
+        {
+            manifest << ',';
+        }
+        manifest << "{\"ref_index\":" << index
+                 << ",\"status\":\"completed\",\"ref_image\":\"" << image_name
+                 << "\",\"raw_depth_path\":\"" << depth_name
+                 << "\",\"grid_width\":64,\"grid_height\":48,\"camera_model\":{"
+                    "\"fx\":50,\"fy\":50,\"cx\":32,\"cy\":24,"
+                    "\"rotation_world_to_camera\":[1,0,0,0,1,0,0,0,1],"
+                    "\"translation_world_to_camera\":[0,0,3],"
+                    "\"camera_center\":[0,0,-3]}}";
+    }
+    manifest << "]}";
+    manifest.close();
+
+    const auto result = xjw::mesh::DepthMapMeshBuilder::buildVisualHull(
+        QString::fromStdString(root.string()), 96);
+
+    EXPECT_FALSE(result.applicable);
+    EXPECT_FALSE(result.ok);
+    EXPECT_EQ(result.usableViewCount, 0);
 }
 
 TEST(DepthMapMeshBuilderTest, UsesExistingDenseCloudWhenPresent)

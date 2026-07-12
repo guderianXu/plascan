@@ -132,6 +132,8 @@ public:
     bool isCameraImageVisible() const { return _showCameraImage; }
     CameraImageDisplayLayer cameraImageDisplayLayer() const { return _cameraImageDisplayLayer; }
     bool isCameraImageLocked() const { return _cameraImageLocked; }
+    void zoomIn();
+    void zoomOut();
 
 signals:
     void plyLoadProgressChanged(int generation, int percent, const QString &statusText);
@@ -183,6 +185,7 @@ private:
         Z     // 绕 Z 轴旋转（蓝色环）
     };
     struct CameraPlaneImageResult;
+    void applyZoomFactor(float factor);
 
     // 将三维世界点投影到屏幕像素坐标（考虑当前视图旋转、投影、平移偏移）
     // ok 为 nullptr 或 false 时表示点在裁剪空间外

@@ -7,6 +7,7 @@
  */
 #include "MainMenu.h"
 #include "AboutDialog.h"
+#include "ToolbarButton.h"
 #include "WindowPanel.h"
 
 #include <QDir>
@@ -22,138 +23,14 @@
 #include <QIcon>
 #include <QPainter>
 #include <QPainterPath>
-#include <QPaintEvent>
 #include <QPixmap>
 #include <QPolygonF>
 #include <QSize>
-#include <QSizePolicy>
 #include <QStyle>
 #include <QToolButton>
 #include <Qt>
 
 namespace {
-
-constexpr int ToolbarSplitButtonMenuWidth = 18;
-
-void drawToolbarSplitButtonArrow(QPainter &painter, const QRect &arrowRect, const QColor &color)
-{
-    const QPoint center = arrowRect.center();
-    QPolygonF arrow;
-    arrow << QPointF(center.x() - 3.5, center.y() - 1.5)
-          << QPointF(center.x() + 3.5, center.y() - 1.5)
-          << QPointF(center.x(), center.y() + 3.0);
-    painter.setBrush(color);
-    painter.setPen(Qt::NoPen);
-    painter.drawPolygon(arrow);
-}
-
-class ToolbarSplitButton : public QToolButton
-{
-public:
-    explicit ToolbarSplitButton(QWidget *parent = nullptr)
-        : QToolButton(parent)
-    {
-        setAutoRaise(true);
-        setPopupMode(QToolButton::MenuButtonPopup);
-        setToolButtonStyle(Qt::ToolButtonIconOnly);
-        setFocusPolicy(Qt::NoFocus);
-        setIconSize(QSize(44, 44));
-        setMinimumSize(QSize(66, 48));
-        setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
-    }
-
-protected:
-    void paintEvent(QPaintEvent *event) override
-    {
-        Q_UNUSED(event)
-
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-
-        const QRect buttonRect = rect().adjusted(0, 0, -1, -1);
-        const bool active = isDown() || underMouse();
-        const QColor borderColor = active ? QColor(200, 212, 224) : QColor(214, 221, 231);
-        const QColor buttonColor = active ? QColor(238, 243, 248) : QColor(248, 250, 252);
-        const QColor menuColor = active ? QColor(226, 232, 240) : QColor(238, 242, 246);
-
-        painter.setPen(QPen(borderColor, 1.0));
-        painter.setBrush(buttonColor);
-        painter.drawRoundedRect(buttonRect, 3.0, 3.0);
-
-        QRect menuRect = rect();
-        menuRect.setLeft(width() - ToolbarSplitButtonMenuWidth);
-        painter.setPen(Qt::NoPen);
-        painter.setBrush(menuColor);
-        painter.drawRect(menuRect.adjusted(0, 1, -1, -1));
-        painter.setPen(QPen(QColor(201, 210, 220), 1.0));
-        painter.drawLine(menuRect.topLeft() + QPoint(0, 1), menuRect.bottomLeft() - QPoint(0, 1));
-        drawToolbarSplitButtonArrow(painter, menuRect, QColor(86, 101, 116));
-
-        QRect iconArea = rect();
-        iconArea.setRight(width() - ToolbarSplitButtonMenuWidth - 1);
-        const QSize drawSize(qMin(iconSize().width(), iconArea.width() - 2),
-                             qMin(iconSize().height(), iconArea.height() - 2));
-        const QPoint iconTopLeft(iconArea.left() + (iconArea.width() - drawSize.width()) / 2,
-                                 iconArea.top() + (iconArea.height() - drawSize.height()) / 2);
-        const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
-        const QIcon::State state = isChecked() ? QIcon::On : QIcon::Off;
-        const QPixmap pixmap = icon().pixmap(drawSize, mode, state);
-        painter.drawPixmap(iconTopLeft, pixmap);
-    }
-
-    void enterEvent(QEnterEvent *event) override
-    {
-        QToolButton::enterEvent(event);
-        update();
-    }
-
-    void leaveEvent(QEvent *event) override
-    {
-        QToolButton::leaveEvent(event);
-        update();
-    }
-};
-
-class ToolbarIconButton : public QToolButton
-{
-public:
-    explicit ToolbarIconButton(QWidget *parent = nullptr)
-        : QToolButton(parent)
-    {
-        setAutoRaise(true);
-        setToolButtonStyle(Qt::ToolButtonIconOnly);
-        setFocusPolicy(Qt::NoFocus);
-        setIconSize(QSize(44, 44));
-        setFixedSize(QSize(48, 48));
-    }
-
-protected:
-    void paintEvent(QPaintEvent *event) override
-    {
-        Q_UNUSED(event)
-
-        QPainter painter(this);
-        painter.setRenderHint(QPainter::Antialiasing, true);
-        const bool active = isDown() || underMouse();
-        const QColor background = isEnabled()
-            ? (active ? QColor(238, 243, 248) : QColor(248, 250, 252))
-            : QColor(238, 242, 246);
-        const QColor border = active ? QColor(200, 212, 224) : QColor(214, 221, 231);
-        painter.setPen(QPen(border, 1.0));
-        painter.setBrush(background);
-        painter.drawRoundedRect(rect().adjusted(0, 0, -1, -1), 3.0, 3.0);
-
-        QRect iconRect = rect();
-        iconRect.adjust(2, 2, -2, -2);
-        const QSize drawSize(qMin(iconSize().width(), iconRect.width()),
-                             qMin(iconSize().height(), iconRect.height()));
-        const QPoint iconTopLeft(iconRect.left() + (iconRect.width() - drawSize.width()) / 2,
-                                 iconRect.top() + (iconRect.height() - drawSize.height()) / 2);
-        const QIcon::Mode mode = isEnabled() ? QIcon::Normal : QIcon::Disabled;
-        const QPixmap pixmap = icon().pixmap(drawSize, mode, QIcon::Off);
-        painter.drawPixmap(iconTopLeft, pixmap);
-    }
-};
 
 template <typename T>
 T *findNamedChild(QObject *root, const char *name)
@@ -373,51 +250,68 @@ QIcon makeImageRotationToolbarIcon(bool rotateLeft)
     return QIcon(pixmap);
 }
 
-QString toolbarSplitButtonStyleSheet()
+QIcon makeZoomToolbarIcon(bool zoomIn)
 {
-    return QStringLiteral(
-        "QToolButton {"
-        "  background: transparent;"
-        "  border: 1px solid transparent;"
-        "  border-radius: 3px;"
-        "  padding: 0px 18px 0px 0px;"
-        "  min-width: 66px;"
-        "  min-height: 48px;"
-        "  outline: none;"
-        "}"
-        "QToolButton:hover {"
-        "  background: #eef3f8;"
-        "  border-color: #c8d4e0;"
-        "}"
-        "QToolButton:pressed {"
-        "  background: #e2e8f0;"
-        "  border-color: #b6c4d2;"
-        "}"
-        "QToolButton:checked {"
-        "  background: transparent;"
-        "  border-color: transparent;"
-        "  color: #102a43;"
-        "}"
-        "QToolButton:checked:hover {"
-        "  background: #eef3f8;"
-        "  border-color: #c8d4e0;"
-        "}"
-        "QToolButton::menu-button {"
-        "  subcontrol-origin: border;"
-        "  subcontrol-position: top right;"
-        "  width: 18px;"
-        "  border-left: 1px solid #c9d2dc;"
-        "  background: #eef2f6;"
-        "  border-top-right-radius: 3px;"
-        "  border-bottom-right-radius: 3px;"
-        "}"
-        "QToolButton::menu-button:hover {"
-        "  background: #e2e8f0;"
-        "}"
-        "QToolButton::menu-arrow {"
-        "  width: 7px;"
-        "  height: 7px;"
-        "}");
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor iconColor(142, 145, 148);
+    painter.setPen(QPen(iconColor, 4.0, Qt::SolidLine, Qt::RoundCap, Qt::RoundJoin));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawEllipse(QRectF(4.0, 4.0, 36.0, 36.0));
+    painter.drawLine(QPointF(34.0, 34.0), QPointF(53.0, 53.0));
+    painter.drawLine(QPointF(13.0, 22.0), QPointF(31.0, 22.0));
+    if (zoomIn)
+    {
+        painter.drawLine(QPointF(22.0, 13.0), QPointF(22.0, 31.0));
+    }
+
+    return QIcon(pixmap);
+}
+
+QIcon makeSaveToolbarIcon()
+{
+    QPixmap pixmap(32, 32);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor iconColor(135, 140, 145);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(iconColor);
+    painter.drawRoundedRect(QRectF(4.0, 3.0, 24.0, 26.0), 1.5, 1.5);
+    painter.setBrush(QColor(230, 232, 234));
+    painter.drawRect(QRectF(8.0, 4.0, 14.0, 9.0));
+    painter.drawRoundedRect(QRectF(8.0, 18.0, 16.0, 10.0), 1.0, 1.0);
+    painter.setBrush(iconColor);
+    painter.drawRect(QRectF(18.0, 5.0, 3.0, 7.0));
+
+    return QIcon(pixmap);
+}
+
+QIcon makePointCloudPruneToolbarIcon()
+{
+    QPixmap pixmap(32, 32);
+    pixmap.fill(Qt::transparent);
+
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor iconColor(135, 140, 145);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(iconColor);
+    for (const QPointF &point : {QPointF(6.0, 7.0), QPointF(15.0, 5.0), QPointF(24.0, 8.0),
+                                 QPointF(8.0, 16.0), QPointF(17.0, 14.0), QPointF(25.0, 18.0),
+                                 QPointF(6.0, 25.0), QPointF(15.0, 23.0)})
+    {
+        painter.drawEllipse(point, 2.2, 2.2);
+    }
+    painter.setPen(QPen(iconColor, 3.0, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(20.0, 22.0), QPointF(29.0, 31.0));
+    painter.drawLine(QPointF(29.0, 22.0), QPointF(20.0, 31.0));
+
+    return QIcon(pixmap);
 }
 
 } // namespace
@@ -633,33 +527,17 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     showLocalAxes);
         _toggleLocalAxesAct->setToolTip(tr("显示或隐藏模型视图中的本地轴"));
 
-        auto *button = new ToolbarSplitButton(_toolBar);
-        button->setObjectName(QStringLiteral("toolButtonModelCameraVisibility"));
-        button->setAutoRaise(true);
-        button->setDefaultAction(_toggleCamerasAct);
-        button->setPopupMode(QToolButton::MenuButtonPopup);
-        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setIconSize(QSize(44, 44));
-        button->setMinimumSize(QSize(66, 48));
-        button->setStyleSheet(toolbarSplitButtonStyleSheet());
-        button->setToolTip(tr("显示相机"));
-
-        auto *cameraMenu = new QMenu(button);
+        auto *cameraMenu = new QMenu(_toolBar);
         cameraMenu->setObjectName(QStringLiteral("menuToolbarCameraVisibility"));
         cameraMenu->addAction(_toggleCameraThumbnailsAct);
         cameraMenu->addAction(_toggleDependentCamerasAct);
         cameraMenu->addAction(_toggleLocalAxesAct);
-        button->setMenu(cameraMenu);
-
-        if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
-        {
-            _cameraToolbarWidgetAct = _toolBar->insertWidget(_manualPointCloudPruneAct, button);
-        }
-        else
-        {
-            _cameraToolbarWidgetAct = _toolBar->addWidget(button);
-        }
+        _cameraToolbarWidgetAct = xjw::gui::toolbar::createToolbarSplitButton(
+            _toolBar,
+            _toggleCamerasAct,
+            cameraMenu,
+            QStringLiteral("toolButtonModelCameraVisibility"),
+            _toolbarEditingSeparatorAct);
     };
 
     auto installCameraImageToolbarButton = [this]()
@@ -678,34 +556,18 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _toggleCameraImagesAct->setText(tr("显示图像"));
         _toggleCameraImagesAct->setToolTip(tr("显示图像"));
 
-        auto *button = new ToolbarSplitButton(_toolBar);
-        button->setObjectName(QStringLiteral("toolButtonModelCameraImageVisibility"));
-        button->setAutoRaise(true);
-        button->setDefaultAction(_toggleCameraImagesAct);
-        button->setPopupMode(QToolButton::MenuButtonPopup);
-        button->setToolButtonStyle(Qt::ToolButtonIconOnly);
-        button->setFocusPolicy(Qt::NoFocus);
-        button->setIconSize(QSize(44, 44));
-        button->setMinimumSize(QSize(66, 48));
-        button->setStyleSheet(toolbarSplitButtonStyleSheet());
-        button->setToolTip(tr("显示图像"));
-
-        auto *imageMenu = new QMenu(button);
+        auto *imageMenu = new QMenu(_toolBar);
         imageMenu->setObjectName(QStringLiteral("menuToolbarCameraImageVisibility"));
         imageMenu->addAction(_showCameraImagesInForegroundAct);
         imageMenu->addAction(_showCameraImagesInBackgroundAct);
         imageMenu->addSeparator();
         imageMenu->addAction(_lockCameraImageAct);
-        button->setMenu(imageMenu);
-
-        if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
-        {
-            _cameraImageToolbarWidgetAct = _toolBar->insertWidget(_manualPointCloudPruneAct, button);
-        }
-        else
-        {
-            _cameraImageToolbarWidgetAct = _toolBar->addWidget(button);
-        }
+        _cameraImageToolbarWidgetAct = xjw::gui::toolbar::createToolbarSplitButton(
+            _toolBar,
+            _toggleCameraImagesAct,
+            imageMenu,
+            QStringLiteral("toolButtonModelCameraImageVisibility"),
+            _toolbarEditingSeparatorAct);
     };
 
     auto installImageRotationToolbarButtons = [this]()
@@ -724,18 +586,8 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 return;
             }
 
-            auto *button = new ToolbarIconButton(_toolBar);
-            button->setObjectName(objectName);
-            button->setDefaultAction(action);
-
-            if (_manualPointCloudPruneAct && _toolBar->actions().contains(_manualPointCloudPruneAct))
-            {
-                toolbarWidgetAction = _toolBar->insertWidget(_manualPointCloudPruneAct, button);
-            }
-            else
-            {
-                toolbarWidgetAction = _toolBar->addWidget(button);
-            }
+            toolbarWidgetAction = xjw::gui::toolbar::createToolbarButton(
+                _toolBar, action, objectName, _toolbarEditingSeparatorAct);
         };
 
         installButton(_rotateImageLeftAct,
@@ -744,6 +596,60 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         installButton(_rotateImageRightAct,
                       QStringLiteral("toolButtonRotateImageRight"),
                       _rotateImageRightToolbarWidgetAct);
+    };
+
+    auto installZoomToolbarButtons = [this]()
+    {
+        if (!_toolBar || !_zoomInAct || !_zoomOutAct)
+        {
+            return;
+        }
+
+        auto installButton = [this](QAction *action,
+                                    const QString &objectName,
+                                    QAction *&toolbarWidgetAction)
+        {
+            if (_toolBar->findChild<QToolButton *>(objectName))
+            {
+                return;
+            }
+
+            toolbarWidgetAction = xjw::gui::toolbar::createToolbarButton(
+                _toolBar, action, objectName, _toolbarEditingSeparatorAct);
+        };
+
+        installButton(_zoomInAct, QStringLiteral("toolButtonZoomIn"), _zoomInToolbarWidgetAct);
+        installButton(_zoomOutAct, QStringLiteral("toolButtonZoomOut"), _zoomOutToolbarWidgetAct);
+    };
+
+    auto initializeToolbar = [this, &installZoomToolbarButtons]()
+    {
+        if (!_toolBar)
+        {
+            return;
+        }
+
+        _toolBar->clear();
+        xjw::gui::toolbar::configureToolbar(_toolBar);
+        if (_saveAct)
+        {
+            _saveAct->setIcon(makeSaveToolbarIcon());
+            _saveAct->setToolTip(tr("保存项目"));
+            _saveToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
+                _toolBar, _saveAct, QStringLiteral("toolButtonSaveProject"));
+        }
+        _toolBar->addSeparator();
+        installZoomToolbarButtons();
+        _toolbarEditingSeparatorAct = _toolBar->addSeparator();
+        if (_manualPointCloudPruneAct)
+        {
+            _manualPointCloudPruneAct->setIcon(makePointCloudPruneToolbarIcon());
+            _manualPointCloudPruneAct->setToolTip(tr("手动点云剔除"));
+            _manualPointCloudPruneToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
+                _toolBar,
+                _manualPointCloudPruneAct,
+                QStringLiteral("toolButtonManualPointCloudPrune"));
+        }
     };
 
     if (findNamedChild<QAction>(_mainWindow, "actionNewProject"))
@@ -767,6 +673,18 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _zoomInAct = findNamedChild<QAction>(_mainWindow, "actionZoomIn");
         _zoomOutAct = findNamedChild<QAction>(_mainWindow, "actionZoomOut");
         _resetViewAct = findNamedChild<QAction>(_mainWindow, "actionResetView");
+        if (_zoomInAct)
+        {
+            _zoomInAct->setIcon(makeZoomToolbarIcon(true));
+            _zoomInAct->setToolTip(tr("放大"));
+            _zoomInAct->setShortcuts({QKeySequence::ZoomIn});
+        }
+        if (_zoomOutAct)
+        {
+            _zoomOutAct->setIcon(makeZoomToolbarIcon(false));
+            _zoomOutAct->setToolTip(tr("缩小"));
+            _zoomOutAct->setShortcuts({QKeySequence::ZoomOut});
+        }
         QObject *rotationActionParent = viewMenu
             ? static_cast<QObject *>(viewMenu)
             : static_cast<QObject *>(_mainWindow);
@@ -1130,17 +1048,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         }
 
         _toolBar = findNamedChild<QToolBar>(_mainWindow, "mainToolBar");
-        if (_toolBar)
-        {
-            _toolBar->setMovable(false);
-            _toolBar->setFloatable(false);
-            _toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-            _toolBar->setIconSize(QSize(18, 18));
-        }
-        if (_saveAct)
-        {
-            _saveAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DialogSaveButton));
-        }
         if (_addPhotoAct)
         {
             _addPhotoAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_FileIcon));
@@ -1152,17 +1059,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         if (_workflowAerialTriangulationAct)
         {
             _workflowAerialTriangulationAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
-            if (_toolBar && !_toolBar->actions().contains(_workflowAerialTriangulationAct))
-            {
-                if (_threeDReconstructionAct)
-                {
-                    _toolBar->insertAction(_threeDReconstructionAct, _workflowAerialTriangulationAct);
-                }
-                else
-                {
-                    _toolBar->addAction(_workflowAerialTriangulationAct);
-                }
-            }
         }
         if (_threeDReconstructionAct)
         {
@@ -1176,10 +1072,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             _generateOrthoAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DesktopIcon));
         }
-        if (_manualPointCloudPruneAct)
-        {
-            _manualPointCloudPruneAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_CommandLink));
-        }
+        initializeToolbar();
         installCameraToolbarButton();
         installCameraImageToolbarButton();
         installImageRotationToolbarButtons();
@@ -1220,6 +1113,12 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _zoomInAct    = viewMenu->addAction(tr("放大"));
     _zoomOutAct   = viewMenu->addAction(tr("缩小"));
     _resetViewAct = viewMenu->addAction(tr("重置视图"));
+    _zoomInAct->setIcon(makeZoomToolbarIcon(true));
+    _zoomOutAct->setIcon(makeZoomToolbarIcon(false));
+    _zoomInAct->setToolTip(tr("放大"));
+    _zoomOutAct->setToolTip(tr("缩小"));
+    _zoomInAct->setShortcuts({QKeySequence::ZoomIn});
+    _zoomOutAct->setShortcuts({QKeySequence::ZoomOut});
     viewMenu->addSeparator();
     // 轨迹球显示/隐藏切换
     _toggleGizmoAct = new QAction(tr("显示轨迹球"), viewMenu);
@@ -1386,54 +1285,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _toolBar = _mainWindow->addToolBar(tr("工具"));
     if (_toolBar)
     {
-        _toolBar->setMovable(false);
-        _toolBar->setFloatable(false);
-        _toolBar->setToolButtonStyle(Qt::ToolButtonTextBesideIcon);
-        _toolBar->setIconSize(QSize(18, 18));
-
-        if (_saveAct)
-        {
-            _saveAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DialogSaveButton));
-            _toolBar->addAction(_saveAct);
-        }
-        _toolBar->addSeparator();
-        if (_addPhotoAct)
-        {
-            _addPhotoAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_FileIcon));
-            _toolBar->addAction(_addPhotoAct);
-        }
-        if (_addFolderAct)
-        {
-            _addFolderAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DirOpenIcon));
-            _toolBar->addAction(_addFolderAct);
-        }
-        _toolBar->addSeparator();
-        if (_workflowAerialTriangulationAct)
-        {
-            _workflowAerialTriangulationAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
-            _toolBar->addAction(_workflowAerialTriangulationAct);
-        }
-        if (_threeDReconstructionAct)
-        {
-            _threeDReconstructionAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
-            _toolBar->addAction(_threeDReconstructionAct);
-        }
-        if (_createDEMAct)
-        {
-            _createDEMAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DriveHDIcon));
-            _toolBar->addAction(_createDEMAct);
-        }
-        if (_generateOrthoAct)
-        {
-            _generateOrthoAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DesktopIcon));
-            _toolBar->addAction(_generateOrthoAct);
-        }
-        _toolBar->addSeparator();
-        if (_manualPointCloudPruneAct)
-        {
-            _manualPointCloudPruneAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_CommandLink));
-            _toolBar->addAction(_manualPointCloudPruneAct);
-        }
+        initializeToolbar();
         installCameraToolbarButton();
         installCameraImageToolbarButton();
         installImageRotationToolbarButtons();
@@ -1457,10 +1309,36 @@ void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImag
         {
             return;
         }
-        toolbarAction->setVisible(visible);
+        const bool isInToolbar = _toolBar->actions().contains(toolbarAction);
+        if (!visible)
+        {
+            if (isInToolbar)
+            {
+                _toolBar->removeAction(toolbarAction);
+            }
+            return;
+        }
+        if (isInToolbar)
+        {
+            toolbarAction->setVisible(true);
+            if (QWidget *widget = _toolBar->widgetForAction(toolbarAction))
+            {
+                widget->setVisible(true);
+            }
+            return;
+        }
+        if (_toolbarEditingSeparatorAct && _toolBar->actions().contains(_toolbarEditingSeparatorAct))
+        {
+            _toolBar->insertAction(_toolbarEditingSeparatorAct, toolbarAction);
+        }
+        else
+        {
+            _toolBar->addAction(toolbarAction);
+        }
+        toolbarAction->setVisible(true);
         if (QWidget *widget = _toolBar->widgetForAction(toolbarAction))
         {
-            widget->setVisible(visible);
+            widget->setVisible(true);
         }
     };
 
@@ -1468,6 +1346,9 @@ void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImag
     setButtonVisible(_cameraImageToolbarWidgetAct, showModelTools);
     setButtonVisible(_rotateImageLeftToolbarWidgetAct, showImageTools);
     setButtonVisible(_rotateImageRightToolbarWidgetAct, showImageTools);
+    const bool zoomEnabled = showModelTools || showImageTools;
+    _zoomInAct->setEnabled(zoomEnabled);
+    _zoomOutAct->setEnabled(zoomEnabled);
 }
 
 // ============================================================

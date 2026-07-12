@@ -7,7 +7,7 @@
 ```
 plascan/
 ├── src/            # 所有源代码
-│   ├── common/     # 通用工具库 (日志, 数学, 空间索引)
+│   ├── common/     # 通用工具库 (日志, IO, 模型与项目公共能力)
 │   ├── core/       # 核心算法库 (相机, 特征, 匹配, SfM, MVS, LiDAR, 蒙版, 网格, 地形, 密集匹配)
 │   └── gui/        # Qt6 图形界面
 ├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
@@ -43,9 +43,6 @@ common/
 ├── DeterministicOpenCvRansac.h # OpenCV 鲁棒估计的稳定种子和并发临界区
 ├── log/
 │   ├── Logger.h/cpp        # 全局日志单例 (LOG_INFO/LOG_ERROR/LOG_DEBUG 宏)
-├── math/
-│   ├── Vec.h               # 向量运算模板
-│   └── Vec3Ops.h           # 3D 向量特化
 ├── io/
 │   └── PathIO.h/cpp        # UTF-8/本机路径转换、原子文件写入和 OpenCV 图像读写封装
 ├── model/
@@ -313,7 +310,8 @@ gui/
 │   └── ReconstructionWorkflowController.h/cpp  # "重建" 菜单业务控制器
 │
 ├── menu/
-│   └── MainMenu.h/cpp          # 菜单栏/工具栏构建；按工作区模式切换三维与影像专属工具组
+│   ├── MainMenu.h/cpp          # 菜单栏/工具栏动作编排；按工作区模式切换三维与影像专属工具组
+│   └── ToolbarButton.h/cpp     # 统一快捷栏模板：尺寸、绘制状态、普通/下拉按钮工厂
 │
 ├── dialogs/                    # 对话框 (31 个)
 │   ├── FeatureMatchingDialog.h/cpp          # 特征匹配参数

@@ -1,6 +1,7 @@
 #include "InitialSparsePointCloudTriangulator.h"
 
-#include "math/Vec3Ops.h"
+#include <plamatrix/ops/vector.h>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -144,7 +145,7 @@ InitialSparseTriangulationResult InitialSparsePointCloudFilter::triangulate(
             continue;
         }
 
-        if (!vec3::isFinite(track.initialPoint))
+        if (!plamatrix::isFinite(plamatrix::Vec3<double>(track.initialPoint)))
         {
             ++result.rejectedByReprojCount;
             continue;

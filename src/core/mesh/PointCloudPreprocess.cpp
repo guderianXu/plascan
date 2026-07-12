@@ -151,6 +151,35 @@ std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB>
     return filtered.size() >= 100 ? filtered : points;
 }
 
+std::size_t removeInvalidPoissonPoints(std::vector<PointXYZRGB> *points)
+{
+    if (!points)
+    {
+        return 0;
+    }
+
+    const std::size_t original_size = points->size();
+    points->erase(std::remove_if(points->begin(), points->end(), [](PointXYZRGB &point)
+    {
+        const bool finite_position = std::isfinite(point.x) &&
+                                     std::isfinite(point.y) &&
+                                     std::isfinite(point.z);
+        const float normal_length = std::sqrt(point.nx * point.nx +
+                                              point.ny * point.ny +
+                                              point.nz * point.nz);
+        if (!finite_position || !point.hasNormal ||
+            !std::isfinite(normal_length) || normal_length <= 1.0e-8f)
+        {
+            return true;
+        }
+        point.nx /= normal_length;
+        point.ny /= normal_length;
+        point.nz /= normal_length;
+        return false;
+    }), points->end());
+    return original_size - points->size();
+}
+
 } // namespace detail
 } // namespace mesh
 } // namespace xjw

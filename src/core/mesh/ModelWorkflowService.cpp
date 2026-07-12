@@ -56,6 +56,67 @@ void assignFinalModelFields(QJsonObject *result, bool exportObj)
     (*result)[QStringLiteral("final_model_path")] = plyPath;
 }
 
+WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
+                                          const std::string &mesh_algorithm,
+                                          const QString &output_root,
+                                          bool export_obj,
+                                          const xjw::mesh::TextureMappingConfig &texture,
+                                          const std::function<void(const QString &, int)> &progress)
+{
+    WorkflowResult result;
+    const QString products_dir = QDir(output_root).filePath(QStringLiteral("products"));
+    QDir().mkpath(products_dir);
+    const QString mesh_ply_path = QDir(products_dir).filePath(QStringLiteral("model_from_mesh.ply"));
+    std::string mesh_error;
+    if (!mesh.savePLY(xjw::common::io::toUtf8Path(mesh_ply_path), &mesh_error))
+    {
+        result.errorMessage = QStringLiteral("网格保存失败: %1").arg(QString::fromStdString(mesh_error));
+        return result;
+    }
+
+    result.payload[QStringLiteral("mesh_ply")] = mesh_ply_path;
+    result.payload[QStringLiteral("model_ply")] = mesh_ply_path;
+    result.payload[QStringLiteral("vertex_count")] = mesh.vertexCount();
+    result.payload[QStringLiteral("face_count")] = mesh.faceCount();
+    result.payload[QStringLiteral("mesh_algorithm")] =
+        QString::fromStdString(mesh_algorithm.empty() ? "unknown" : mesh_algorithm);
+
+    if (export_obj)
+    {
+        std::string texture_error;
+        xjw::mesh::TextureMappingConfig texture_config = texture;
+        if (progress)
+        {
+            texture_config.progressFn = [progress](const std::string &stage, int percent)
+            {
+                progress(QString::fromStdString(stage), percent);
+            };
+        }
+        xjw::mesh::TextureMappingResult texture_result;
+        if (xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
+                xjw::common::io::toUtf8Path(mesh_ply_path),
+                xjw::common::io::toUtf8Path(products_dir),
+                texture_config,
+                &texture_result,
+                &texture_error))
+        {
+            const QJsonObject texture_json = textureResultToJson(texture_result);
+            for (auto it = texture_json.begin(); it != texture_json.end(); ++it)
+            {
+                result.payload[it.key()] = it.value();
+            }
+        }
+        else if (!texture_error.empty())
+        {
+            result.payload[QStringLiteral("texture_warning")] = QString::fromStdString(texture_error);
+        }
+    }
+
+    assignFinalModelFields(&result.payload, export_obj);
+    result.ok = true;
+    return result;
+}
+
 } // namespace
 
 int meshResolutionFromSettings(const QJsonObject &settings)
@@ -372,56 +433,12 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
         return result;
     }
 
-    const QString productsDir = QDir(request.outputRoot).filePath(QStringLiteral("products"));
-    QDir().mkpath(productsDir);
-    const QString meshPlyPath = QDir(productsDir).filePath(QStringLiteral("model_from_mesh.ply"));
-    if (!mesh.savePLY(xjw::common::io::toUtf8Path(meshPlyPath), &meshError))
-    {
-        result.errorMessage = QStringLiteral("网格保存失败: %1").arg(QString::fromStdString(meshError));
-        return result;
-    }
-
-    result.payload[QStringLiteral("mesh_ply")] = meshPlyPath;
-    result.payload[QStringLiteral("model_ply")] = meshPlyPath;
-    result.payload[QStringLiteral("vertex_count")] = mesh.vertexCount();
-    result.payload[QStringLiteral("face_count")] = mesh.faceCount();
-    result.payload[QStringLiteral("mesh_algorithm")] =
-        QString::fromStdString(meshAlgorithm.empty() ? "unknown" : meshAlgorithm);
-
-    if (request.exportObj)
-    {
-        std::string textureError;
-        xjw::mesh::TextureMappingConfig textureConfig = request.texture;
-        if (request.progress)
-        {
-            textureConfig.progressFn = [cb = request.progress](const std::string &stage, int percent) {
-                cb(QString::fromStdString(stage), percent);
-            };
-        }
-
-        xjw::mesh::TextureMappingResult textureResult;
-        if (xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
-                xjw::common::io::toUtf8Path(meshPlyPath),
-                xjw::common::io::toUtf8Path(productsDir),
-                textureConfig,
-                &textureResult,
-                &textureError))
-        {
-            const QJsonObject textureJson = textureResultToJson(textureResult);
-            for (auto it = textureJson.begin(); it != textureJson.end(); ++it)
-            {
-                result.payload[it.key()] = it.value();
-            }
-        }
-        else if (!textureError.empty())
-        {
-            result.payload[QStringLiteral("texture_warning")] = QString::fromStdString(textureError);
-        }
-    }
-
-    assignFinalModelFields(&result.payload, request.exportObj);
-    result.ok = true;
-    return result;
+    return saveMeshAndOptionalTexture(mesh,
+                                      meshAlgorithm,
+                                      request.outputRoot,
+                                      request.exportObj,
+                                      request.texture,
+                                      request.progress);
 }
 
 WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
@@ -430,6 +447,33 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
     if (request.depthMapSourcePath.trimmed().isEmpty())
     {
         result.errorMessage = QStringLiteral("深度图源路径为空");
+        return result;
+    }
+
+    const QFileInfo depth_source_info(request.depthMapSourcePath);
+    const QString output_root = request.outputRoot.isEmpty()
+        ? (depth_source_info.isDir()
+               ? depth_source_info.absoluteFilePath()
+               : depth_source_info.absolutePath())
+        : request.outputRoot;
+    DepthMapVisualHullResult visual_hull = DepthMapMeshBuilder::buildVisualHull(
+        request.depthMapSourcePath,
+        request.reconstruction.resolution,
+        request.progress);
+    if (visual_hull.applicable && visual_hull.ok)
+    {
+        result = saveMeshAndOptionalTexture(visual_hull.mesh,
+                                            "depth_constrained_visual_hull",
+                                            output_root,
+                                            request.exportObj,
+                                            request.texture,
+                                            request.progress);
+        if (result.ok)
+        {
+            result.payload[QStringLiteral("visual_hull_views")] = visual_hull.usableViewCount;
+            result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
+            result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+        }
         return result;
     }
 
@@ -463,9 +507,7 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
 
     MeshBuildRequest meshRequest;
     meshRequest.pointCloudPath = densePath;
-    meshRequest.outputRoot = request.outputRoot.isEmpty()
-        ? QFileInfo(densePath).absolutePath()
-        : request.outputRoot;
+    meshRequest.outputRoot = output_root;
     meshRequest.reconstruction = request.reconstruction;
     meshRequest.exportObj = request.exportObj;
     meshRequest.texture = request.texture;
@@ -477,6 +519,10 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
         result.payload[QStringLiteral("source_point_cloud_path")] = densePath;
         result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+        if (visual_hull.applicable && !visual_hull.message.isEmpty())
+        {
+            result.payload[QStringLiteral("visual_hull_warning")] = visual_hull.message;
+        }
     }
     return result;
 }

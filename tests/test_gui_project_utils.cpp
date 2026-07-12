@@ -47,6 +47,7 @@
 #include "ProjectDashboardWidget.h"
 #include "MatchValidityAnalyzer.h"
 #include "MainMenu.h"
+#include "HenuBrandWidget.h"
 #include "TaskStatusWidget.h"
 
 #include "Camera.h"
@@ -75,6 +76,7 @@
 #include <QLabel>
 #include <QLineEdit>
 #include <QListWidget>
+#include <QKeySequence>
 #include <QMainWindow>
 #include <QMenu>
 #include <QMenuBar>
@@ -1220,6 +1222,8 @@ TEST(DepthFrameUtilsTest, StoredDepthCollectionRequiresCurrentBinaryDepth)
 
     QJsonObject record;
     record[QStringLiteral("ref_image")] = QStringLiteral("image_5.jpg");
+    record[QStringLiteral("source_images")] =
+        QJsonArray{QStringLiteral("image_4.jpg"), QStringLiteral("image_6.jpg")};
     record[QStringLiteral("depth_png")] = pngPath;
     record[QStringLiteral("raw_depth_path")] = xjw::core::project::rawDepthStoragePath(pngPath);
 
@@ -1239,6 +1243,21 @@ TEST(DepthFrameUtilsTest, StoredDepthCollectionRequiresCurrentBinaryDepth)
     ASSERT_TRUE(refreshedResult.status.ok) << refreshedResult.status.errorMessage.toStdString();
     ASSERT_EQ(refreshedResult.frames.size(), 1u);
     EXPECT_EQ(refreshedResult.frames.front().rawDepthPath, xjw::core::project::rawDepthStoragePath(pngPath));
+    EXPECT_EQ(refreshedResult.frames.front().sourceImages,
+              QStringList({QStringLiteral("image_4.jpg"), QStringLiteral("image_6.jpg")}));
+}
+
+TEST(DepthFrameUtilsTest, ResolvesPlannedFusionSourcesWithinStoredBatch)
+{
+    std::vector<xjw::core::project::StoredDepthFrameRecord> frames(3);
+    frames[0].refImage = QStringLiteral("E:/images/ref.jpg");
+    frames[0].sourceImages = {QStringLiteral("E:/images/right.jpg"),
+                              QStringLiteral("E:/images/missing.jpg")};
+    frames[1].refImage = QStringLiteral("E:/images/left.jpg");
+    frames[2].refImage = QStringLiteral("E:/images/right.jpg");
+
+    EXPECT_EQ(xjw::core::project::storedFusionSourceIndices(frames, 0),
+              std::vector<int>({2}));
 }
 
 TEST(DepthFrameUtilsTest, StoredDepthCollectionCanSelectRequestedBatchDirectory)
@@ -1382,6 +1401,8 @@ TEST(ModelWorkflowPolicyTest, DepthMapsWithReusableDenseCloudRunMeshDirectly)
     dense_record[QStringLiteral("source_depth_map_dir")] = temp_dir.path();
     dense_record[QStringLiteral("source_depth_map_count")] = 2;
     dense_record[QStringLiteral("source_depth_config_hash")] = QStringLiteral("config-a");
+    dense_record[QStringLiteral("fusion_pipeline_version")] =
+        xjw::gui::project::kDenseFusionPipelineVersion;
     dense_record[QStringLiteral("point_count")] = 1;
     QJsonObject metadata;
     metadata[QStringLiteral("depth_map_results")] = depth_records;
@@ -1401,6 +1422,14 @@ TEST(ModelWorkflowPolicyTest, DepthMapsWithReusableDenseCloudRunMeshDirectly)
               QStringLiteral("depth_maps"));
     EXPECT_EQ(decision.modelSettings.value(QStringLiteral("source_point_cloud_path")).toString(),
               dense_cloud);
+
+    dense_record.remove(QStringLiteral("fusion_pipeline_version"));
+    metadata[QStringLiteral("dense_cloud_results")] = QJsonArray{dense_record};
+    const auto legacy_decision =
+        xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
+    EXPECT_EQ(legacy_decision.action,
+              xjw::gui::project::ModelWorkflowAction::FuseDepthMapsThenMesh);
+    EXPECT_TRUE(legacy_decision.reusableDenseCloudPath.isEmpty());
 }
 
 TEST(ModelWorkflowPolicyTest, InvalidDenseCloudIsNotReused)
@@ -7281,16 +7310,17 @@ TEST(MainMenuImageRotationTest, ExposesViewActionsAndStableToolbarButtons)
 
     QToolBar *toolBar = menu.toolBar();
     ASSERT_NE(toolBar, nullptr);
+    menu.setContextualToolbarVisibility(false, true);
     auto *leftButton = toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageLeft"));
     auto *rightButton = toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageRight"));
     ASSERT_NE(leftButton, nullptr);
     ASSERT_NE(rightButton, nullptr);
     EXPECT_EQ(leftButton->defaultAction(), rotateLeft);
     EXPECT_EQ(rightButton->defaultAction(), rotateRight);
-    EXPECT_GE(leftButton->minimumWidth(), 48);
-    EXPECT_GE(leftButton->minimumHeight(), 48);
-    EXPECT_GE(rightButton->minimumWidth(), 48);
-    EXPECT_GE(rightButton->minimumHeight(), 48);
+    EXPECT_EQ(leftButton->width(), 36);
+    EXPECT_EQ(leftButton->height(), 36);
+    EXPECT_EQ(rightButton->width(), 36);
+    EXPECT_EQ(rightButton->height(), 36);
     auto opaqueBounds = [](const QIcon &icon)
     {
         const QImage image = icon.pixmap(QSize(56, 56)).toImage().convertToFormat(QImage::Format_ARGB32);
@@ -7312,49 +7342,215 @@ TEST(MainMenuImageRotationTest, ExposesViewActionsAndStableToolbarButtons)
         return bounds;
     };
 
-    EXPECT_GE(leftButton->iconSize().width(), 44);
-    EXPECT_GE(rightButton->iconSize().width(), 44);
+    EXPECT_EQ(leftButton->iconSize(), QSize(26, 26));
+    EXPECT_EQ(rightButton->iconSize(), QSize(26, 26));
     EXPECT_GE(opaqueBounds(rotateLeft->icon()).width(), 50);
     EXPECT_GE(opaqueBounds(rotateLeft->icon()).height(), 50);
     EXPECT_GE(opaqueBounds(rotateRight->icon()).width(), 50);
     EXPECT_GE(opaqueBounds(rotateRight->icon()).height(), 50);
 
+    window.show();
+    QCoreApplication::processEvents();
+    menu.setContextualToolbarVisibility(false, true);
+
+    EXPECT_TRUE(leftButton->isVisible());
+    EXPECT_TRUE(rightButton->isVisible());
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraVisibility")),
+              nullptr);
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility")),
+              nullptr);
+
+    menu.setContextualToolbarVisibility(true, false);
     auto *cameraButton =
         toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraVisibility"));
     auto *cameraImageButton =
         toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility"));
     ASSERT_NE(cameraButton, nullptr);
     ASSERT_NE(cameraImageButton, nullptr);
-    window.show();
-    QCoreApplication::processEvents();
-
-    menu.setContextualToolbarVisibility(true, false);
     EXPECT_TRUE(cameraButton->isVisible());
     EXPECT_TRUE(cameraImageButton->isVisible());
-    EXPECT_FALSE(leftButton->isVisible());
-    EXPECT_FALSE(rightButton->isVisible());
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageLeft")), nullptr);
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageRight")), nullptr);
 
     menu.setContextualToolbarVisibility(false, true);
-    EXPECT_FALSE(cameraButton->isVisible());
-    EXPECT_FALSE(cameraImageButton->isVisible());
+    leftButton = toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageLeft"));
+    rightButton = toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageRight"));
+    ASSERT_NE(leftButton, nullptr);
+    ASSERT_NE(rightButton, nullptr);
     EXPECT_TRUE(leftButton->isVisible());
     EXPECT_TRUE(rightButton->isVisible());
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraVisibility")),
+              nullptr);
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility")),
+              nullptr);
 
     menu.setContextualToolbarVisibility(false, false);
-    EXPECT_FALSE(cameraButton->isVisible());
-    EXPECT_FALSE(cameraImageButton->isVisible());
-    EXPECT_FALSE(leftButton->isVisible());
-    EXPECT_FALSE(rightButton->isVisible());
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraVisibility")),
+              nullptr);
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonModelCameraImageVisibility")),
+              nullptr);
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageLeft")), nullptr);
+    EXPECT_EQ(toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonRotateImageRight")), nullptr);
 }
 
 TEST(MainMenuImageRotationTest, RotationButtonsUseDedicatedFullAreaPainter)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/ToolbarButton.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("class ToolbarIconButton : public QToolButton")));
-    EXPECT_TRUE(source.contains(QStringLiteral("QRect iconRect = rect();")));
+    EXPECT_TRUE(source.contains(QStringLiteral("ToolbarButton::paintEvent")));
+    EXPECT_TRUE(source.contains(QStringLiteral("paintButtonIcon(painter, this, rect());")));
     EXPECT_TRUE(source.contains(QStringLiteral("painter.drawPixmap(iconTopLeft, pixmap);")));
+}
+
+TEST(MainMenuZoomTest, ExposesLargeToolbarButtonsAndStandardShortcuts)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+
+    QAction *zoomIn = menu.zoomInAction();
+    QAction *zoomOut = menu.zoomOutAction();
+    ASSERT_NE(zoomIn, nullptr);
+    ASSERT_NE(zoomOut, nullptr);
+    EXPECT_TRUE(zoomIn->shortcuts().contains(QKeySequence::ZoomIn));
+    EXPECT_TRUE(zoomOut->shortcuts().contains(QKeySequence::ZoomOut));
+    EXPECT_EQ(zoomIn->toolTip(), QStringLiteral("放大"));
+    EXPECT_EQ(zoomOut->toolTip(), QStringLiteral("缩小"));
+    EXPECT_FALSE(zoomIn->icon().isNull());
+    EXPECT_FALSE(zoomOut->icon().isNull());
+
+    QToolBar *toolBar = menu.toolBar();
+    ASSERT_NE(toolBar, nullptr);
+    auto *zoomInButton = toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonZoomIn"));
+    auto *zoomOutButton = toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonZoomOut"));
+    ASSERT_NE(zoomInButton, nullptr);
+    ASSERT_NE(zoomOutButton, nullptr);
+    EXPECT_EQ(zoomInButton->defaultAction(), zoomIn);
+    EXPECT_EQ(zoomOutButton->defaultAction(), zoomOut);
+    EXPECT_EQ(zoomInButton->size(), QSize(36, 36));
+    EXPECT_EQ(zoomOutButton->size(), QSize(36, 36));
+    EXPECT_EQ(zoomInButton->iconSize(), QSize(26, 26));
+    EXPECT_EQ(zoomOutButton->iconSize(), QSize(26, 26));
+}
+
+TEST(MainMenuToolbarTemplateTest, UsesOneCompactTemplateForEveryToolbarCommand)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+    QToolBar *toolBar = menu.toolBar();
+    ASSERT_NE(toolBar, nullptr);
+    menu.setContextualToolbarVisibility(true, false);
+
+    const QStringList compactButtonNames = {
+        QStringLiteral("toolButtonSaveProject"),
+        QStringLiteral("toolButtonZoomIn"),
+        QStringLiteral("toolButtonZoomOut"),
+        QStringLiteral("toolButtonManualPointCloudPrune")
+    };
+    for (const QString &name : compactButtonNames)
+    {
+        auto *button = toolBar->findChild<QToolButton *>(name);
+        ASSERT_NE(button, nullptr) << name.toStdString();
+        EXPECT_EQ(button->size(), QSize(36, 36));
+        EXPECT_EQ(button->iconSize(), QSize(26, 26));
+        EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+    }
+
+    const QStringList splitButtonNames = {
+        QStringLiteral("toolButtonModelCameraVisibility"),
+        QStringLiteral("toolButtonModelCameraImageVisibility")
+    };
+    for (const QString &name : splitButtonNames)
+    {
+        auto *button = toolBar->findChild<QToolButton *>(name);
+        ASSERT_NE(button, nullptr) << name.toStdString();
+        EXPECT_EQ(button->size(), QSize(50, 36));
+        EXPECT_EQ(button->iconSize(), QSize(26, 26));
+        EXPECT_EQ(button->toolButtonStyle(), Qt::ToolButtonIconOnly);
+    }
+
+    EXPECT_FALSE(toolBar->actions().contains(menu.saveAction()));
+    EXPECT_FALSE(toolBar->actions().contains(menu.manualPointCloudPruneAction()));
+}
+
+TEST(MainMenuToolbarTemplateTest, ExtractsReusableToolbarComponentsFromMainMenu)
+{
+    const QString header = readProjectSourceFile(QStringLiteral("src/gui/menu/ToolbarButton.h"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/ToolbarButton.cpp"));
+    const QString mainMenuSource = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    ASSERT_FALSE(header.isEmpty());
+    ASSERT_FALSE(source.isEmpty());
+    ASSERT_FALSE(mainMenuSource.isEmpty());
+
+    EXPECT_TRUE(header.contains(QStringLiteral("struct ToolbarMetrics")));
+    EXPECT_TRUE(header.contains(QStringLiteral("ButtonExtent = 36")));
+    EXPECT_TRUE(header.contains(QStringLiteral("IconExtent = 26")));
+    EXPECT_TRUE(header.contains(QStringLiteral("SplitButtonWidth = 50")));
+    EXPECT_TRUE(header.contains(QStringLiteral("createToolbarButton")));
+    EXPECT_TRUE(header.contains(QStringLiteral("createToolbarSplitButton")));
+    EXPECT_TRUE(source.contains(QStringLiteral("backgroundColor")));
+    EXPECT_TRUE(source.contains(QStringLiteral("Qt::NoPen")));
+    EXPECT_FALSE(mainMenuSource.contains(QStringLiteral("class ToolbarIconButton")));
+    EXPECT_FALSE(mainMenuSource.contains(QStringLiteral("class ToolbarSplitButton")));
+}
+
+TEST(MainMenuToolbarTemplateTest, BrandWidgetFitsCompactToolbarHeight)
+{
+    HenuBrandWidget brand;
+    EXPECT_LE(brand.minimumSizeHint().height(), 40);
+    EXPECT_LE(brand.sizeHint().height(), 40);
+}
+
+TEST(MainMenuZoomTest, WorkflowCommandsRemainInMenusButAreRemovedFromToolbar)
+{
+    QMainWindow window;
+    MainMenu menu(&window);
+    QToolBar *toolBar = menu.toolBar();
+    ASSERT_NE(toolBar, nullptr);
+
+    const QList<QAction *> removedToolbarActions = {
+        menu.addPhotoAction(),
+        menu.addFolderAction(),
+        menu.workflowAerialTriangulationAction(),
+        menu.threeDReconstructionAction(),
+        menu.createDEMAction(),
+        menu.generateOrthoAction()
+    };
+    for (QAction *action : removedToolbarActions)
+    {
+        ASSERT_NE(action, nullptr);
+        EXPECT_FALSE(toolBar->actions().contains(action));
+    }
+
+    QMenu *workflowMenu = findTopLevelMenuByTitle(window.menuBar(), QStringLiteral("工作流程"));
+    ASSERT_NE(workflowMenu, nullptr);
+    for (QAction *action : removedToolbarActions)
+    {
+        EXPECT_TRUE(workflowMenu->actions().contains(action));
+    }
+}
+
+TEST(MainWindowZoomTest, DispatchesZoomToActiveImageOrModelView)
+{
+    const QString sceneHeader =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));
+    const QString sceneSource =
+        readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const QString mainWindowSource =
+        readProjectSourceFile(QStringLiteral("src/gui/main_window/MainWindow.cpp"));
+    ASSERT_FALSE(sceneHeader.isEmpty());
+    ASSERT_FALSE(sceneSource.isEmpty());
+    ASSERT_FALSE(mainWindowSource.isEmpty());
+
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void zoomIn();")));
+    EXPECT_TRUE(sceneHeader.contains(QStringLiteral("void zoomOut();")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("void CameraSceneWidget::zoomIn()")));
+    EXPECT_TRUE(sceneSource.contains(QStringLiteral("void CameraSceneWidget::zoomOut()")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("ViewMode::Image")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_canvas->zoomIn();")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_canvas->zoomOut();")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_workspaceCenter->modelView()->zoomIn();")));
+    EXPECT_TRUE(mainWindowSource.contains(QStringLiteral("_workspaceCenter->modelView()->zoomOut();")));
 }
 
 TEST(MainWindowImageRotationTest, ConnectsActionsAndPersistsPerImageRotation)
@@ -8561,13 +8757,9 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleCameraVisibilityButton)
     EXPECT_EQ(cameraButton->defaultAction(), menu.toggleCamerasAction());
     EXPECT_EQ(cameraButton->popupMode(), QToolButton::MenuButtonPopup);
     EXPECT_EQ(cameraButton->toolTip(), QStringLiteral("显示相机"));
-    EXPECT_GE(cameraButton->iconSize().width(), 44);
-    EXPECT_GE(cameraButton->iconSize().height(), 44);
-    EXPECT_GE(cameraButton->minimumSize().width(), 66);
-    EXPECT_GE(cameraButton->minimumSize().height(), 48);
-    EXPECT_TRUE(cameraButton->styleSheet().contains(QStringLiteral("QToolButton:checked")));
-    EXPECT_TRUE(cameraButton->styleSheet().contains(QStringLiteral("QToolButton::menu-button")));
-    EXPECT_FALSE(cameraButton->styleSheet().contains(QStringLiteral("#2563eb")));
+    EXPECT_EQ(cameraButton->iconSize(), QSize(26, 26));
+    EXPECT_EQ(cameraButton->size(), QSize(50, 36));
+    EXPECT_TRUE(cameraButton->styleSheet().isEmpty());
     ASSERT_NE(cameraButton->menu(), nullptr);
     EXPECT_FALSE(cameraButton->icon().isNull());
 
@@ -8597,13 +8789,9 @@ TEST(MainMenuTest, ToolbarExposesMetashapeStyleImageVisibilityButton)
     EXPECT_EQ(imageButton->defaultAction(), menu.toggleCameraImagesAction());
     EXPECT_EQ(imageButton->popupMode(), QToolButton::MenuButtonPopup);
     EXPECT_EQ(imageButton->toolTip(), QStringLiteral("显示图像"));
-    EXPECT_GE(imageButton->iconSize().width(), 44);
-    EXPECT_GE(imageButton->iconSize().height(), 44);
-    EXPECT_GE(imageButton->minimumSize().width(), 66);
-    EXPECT_GE(imageButton->minimumSize().height(), 48);
-    EXPECT_TRUE(imageButton->styleSheet().contains(QStringLiteral("QToolButton:checked")));
-    EXPECT_TRUE(imageButton->styleSheet().contains(QStringLiteral("QToolButton::menu-button")));
-    EXPECT_FALSE(imageButton->styleSheet().contains(QStringLiteral("#2563eb")));
+    EXPECT_EQ(imageButton->iconSize(), QSize(26, 26));
+    EXPECT_EQ(imageButton->size(), QSize(50, 36));
+    EXPECT_TRUE(imageButton->styleSheet().isEmpty());
     ASSERT_NE(imageButton->menu(), nullptr);
     EXPECT_FALSE(imageButton->icon().isNull());
 
@@ -8624,7 +8812,7 @@ TEST(MainMenuTest, ToolbarCameraButtonUsesStillCameraIcon)
 
     const int iconStart = source.indexOf(QStringLiteral("QIcon makeCameraToolbarIcon()"));
     ASSERT_GE(iconStart, 0);
-    const int iconEnd = source.indexOf(QStringLiteral("} // namespace"), iconStart);
+    const int iconEnd = source.indexOf(QStringLiteral("QIcon makeCameraImageToolbarIcon()"), iconStart);
     ASSERT_GT(iconEnd, iconStart);
     const QString iconBody = source.mid(iconStart, iconEnd - iconStart);
 
@@ -8657,15 +8845,14 @@ TEST(MainMenuTest, ToolbarImageButtonUsesPictureIcon)
 
 TEST(MainMenuTest, ToolbarSplitButtonsPaintIconsAcrossButtonArea)
 {
-    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/MainMenu.cpp"));
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/menu/ToolbarButton.cpp"));
     ASSERT_FALSE(source.isEmpty());
 
-    EXPECT_TRUE(source.contains(QStringLiteral("class ToolbarSplitButton : public QToolButton")))
+    EXPECT_TRUE(source.contains(QStringLiteral("ToolbarSplitButton::paintEvent")))
         << "相机/图像快捷按钮必须自绘图标区域，不能继续依赖 Qt 默认小图标绘制。";
-    EXPECT_TRUE(source.contains(QStringLiteral("void paintEvent(QPaintEvent *event) override")));
     EXPECT_TRUE(source.contains(QStringLiteral("drawToolbarSplitButtonArrow")));
     EXPECT_TRUE(source.contains(QStringLiteral("painter.drawPixmap(iconTopLeft, pixmap)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("new ToolbarSplitButton(_toolBar)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("new ToolbarSplitButton(toolBar)")));
 }
 
 TEST(MainWindowTest, CameraToolbarLocalAxesActionConnectsToModelView)
@@ -13698,7 +13885,7 @@ TEST(ModelGenerationWorkflowTest, DepthMapMeshingUsesTransientIntermediateDenseC
         << "Depth-map meshing may use an internal fused point cloud, but it must not publish it as a dense-cloud product.";
 }
 
-TEST(ModelGenerationWorkflowTest, ProductionDepthMapMeshingKeepsConfiguredFusionConsensus)
+TEST(ModelGenerationWorkflowTest, SmallDepthMapBatchesFallbackOnlyAfterStrictFusionCollapses)
 {
     const QString denseSource = readProjectSourceFile(
         QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
@@ -13714,9 +13901,10 @@ TEST(ModelGenerationWorkflowTest, ProductionDepthMapMeshingKeepsConfiguredFusion
 
     EXPECT_TRUE(block.contains(QStringLiteral(
         "fusionCfg.minNumPixels = std::max(1, request.minConsistentViews)")));
-    EXPECT_FALSE(block.contains(QStringLiteral("transientForModel && totalFrames <= 32")));
+    EXPECT_TRUE(block.contains(QStringLiteral(
+        "fusionCfg.enableLowYieldFallback = totalFrames <= 32")));
     EXPECT_FALSE(block.contains(QStringLiteral("std::min(fusionCfg.minNumPixels, 2)")))
-        << "Model generation must not silently weaken production multi-view consensus.";
+        << "Small projects must try the configured production consensus before an observed low-yield fallback.";
 }
 
 TEST(MatchViewerSidecarOrderTest, ReordersCachedPointsWhenDisplayOrderIsReversed)

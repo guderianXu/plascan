@@ -30,6 +30,7 @@ target_link_libraries(bundle_adjust
         camera
         plascan_common_log
     PRIVATE
+        plamatrix::plamatrix
         $<$<BOOL:${OpenMP_CXX_FOUND}>:OpenMP::OpenMP_CXX>
 )
 

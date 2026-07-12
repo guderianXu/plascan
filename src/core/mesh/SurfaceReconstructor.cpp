@@ -1158,6 +1158,58 @@ void orientNormalsOutwardFromCentroid(std::vector<detail::PointXYZRGB> *points,
     }
 }
 
+float normalDirectionCoherence(const std::vector<detail::PointXYZRGB> &points)
+{
+    double sum_x = 0.0;
+    double sum_y = 0.0;
+    double sum_z = 0.0;
+    std::size_t valid_count = 0;
+    for (const detail::PointXYZRGB &point : points)
+    {
+        if (!point.hasNormal)
+        {
+            continue;
+        }
+        const double length = std::sqrt(static_cast<double>(point.nx) * point.nx +
+                                        static_cast<double>(point.ny) * point.ny +
+                                        static_cast<double>(point.nz) * point.nz);
+        if (!std::isfinite(length) || length <= 1.0e-8)
+        {
+            continue;
+        }
+        sum_x += point.nx / length;
+        sum_y += point.ny / length;
+        sum_z += point.nz / length;
+        ++valid_count;
+    }
+    if (valid_count == 0)
+    {
+        return 0.0f;
+    }
+    const double inverse_count = 1.0 / static_cast<double>(valid_count);
+    return static_cast<float>(std::sqrt(sum_x * sum_x + sum_y * sum_y + sum_z * sum_z) *
+                              inverse_count);
+}
+
+std::size_t validPoissonPointCount(const std::vector<detail::PointXYZRGB> &points)
+{
+    return static_cast<std::size_t>(std::count_if(points.begin(), points.end(),
+                                                  [](const detail::PointXYZRGB &point)
+    {
+        if (!point.hasNormal ||
+            !std::isfinite(point.x) ||
+            !std::isfinite(point.y) ||
+            !std::isfinite(point.z))
+        {
+            return false;
+        }
+        const float normal_length = std::sqrt(point.nx * point.nx +
+                                              point.ny * point.ny +
+                                              point.nz * point.nz);
+        return std::isfinite(normal_length) && normal_length > 1.0e-8f;
+    }));
+}
+
 PlaPointCloud pointXYZRGBToCloud(const std::vector<detail::PointXYZRGB> &points)
 {
     const auto n = static_cast<plamatrix::Index>(points.size());
@@ -1311,11 +1363,11 @@ int SurfaceReconstructor::recommendedPoissonDepth(std::size_t point_count,
                                                   int requested_depth)
 {
     int depth = std::clamp(requested_depth, 1, 8);
-    if (point_count < 100000)
+    if (point_count < 5000)
     {
         depth = std::min(depth, 6);
     }
-    else if (point_count < 500000)
+    else if (point_count < 25000)
     {
         depth = std::min(depth, 7);
     }
@@ -1469,10 +1521,30 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
             progress("正在执行 Poisson 重建...", 0.30f);
             try
             {
+                if (validPoissonPointCount(points) < 120)
+                {
+                    throw std::runtime_error("Poisson: valid oriented points are insufficient");
+                }
+                const std::size_t removed_invalid_points =
+                    detail::removeInvalidPoissonPoints(&points);
+                if (removed_invalid_points > 0)
+                {
+                    progress("已剔除 " + std::to_string(removed_invalid_points) +
+                                 " 个坐标或法线无效点...",
+                             0.305f);
+                }
                 if (config.orientNormalsForClosedSurface)
                 {
-                    progress("正在统一闭合曲面法线方向...", 0.31f);
-                    orientNormalsOutwardFromCentroid(&points, config.poissonThreads);
+                    const float normal_coherence = normalDirectionCoherence(points);
+                    if (normal_coherence < 0.72f)
+                    {
+                        progress("正在统一闭合曲面法线方向...", 0.31f);
+                        orientNormalsOutwardFromCentroid(&points, config.poissonThreads);
+                    }
+                    else
+                    {
+                        progress("检测到单侧地表，保留一致法线方向...", 0.31f);
+                    }
                 }
                 PlaPointCloud poissonCloud = pointXYZRGBToCloud(points);
                 auto poissonCloudPtr = std::make_shared<const PlaPointCloud>(std::move(poissonCloud));

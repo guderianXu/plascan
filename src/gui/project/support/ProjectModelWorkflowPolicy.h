@@ -6,6 +6,8 @@
 namespace xjw::gui::project
 {
 
+inline constexpr int kDenseFusionPipelineVersion = 2;
+
 enum class ModelWorkflowAction
 {
     RunMeshDirectly,

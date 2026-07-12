@@ -1,4 +1,5 @@
 #include "MvsWorkspaceManifest.h"
+#include "DepthFrameUtils.h"
 #include "DepthMapGenerator.h"
 #include "MvsQualityReport.h"
 #include "MvsTypes.h"
@@ -39,6 +40,16 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     source_plan_entry.insert(QStringLiteral("geometric_inliers"), 39);
     source_plan_entry.insert(QStringLiteral("score"), 123.0);
     record.sourcePlan.append(source_plan_entry);
+    record.cameraModel = QJsonObject{
+        {QStringLiteral("fx"), 1200.0},
+        {QStringLiteral("fy"), 1210.0},
+        {QStringLiteral("cx"), 640.0},
+        {QStringLiteral("cy"), 360.0},
+        {QStringLiteral("rotation_world_to_camera"),
+         QJsonArray{1.0, 0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0, 1.0}},
+        {QStringLiteral("translation_world_to_camera"), QJsonArray{0.0, 0.0, 2.0}},
+        {QStringLiteral("camera_center"), QJsonArray{0.0, 0.0, -2.0}}
+    };
     return record;
 }
 
@@ -72,6 +83,12 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     EXPECT_EQ(loaded.frames().front().gridWidth, 6000);
     EXPECT_EQ(loaded.frames().front().gridHeight, 4000);
     EXPECT_EQ(loaded.configHash(), QStringLiteral("cfg-a"));
+    EXPECT_DOUBLE_EQ(loaded.frames().front().cameraModel.value(QStringLiteral("fx")).toDouble(), 1200.0);
+    EXPECT_EQ(loaded.frames().front().cameraModel
+                  .value(QStringLiteral("rotation_world_to_camera"))
+                  .toArray()
+                  .size(),
+              9);
     ASSERT_EQ(loaded.frames().front().sourcePlan.size(), 1);
     EXPECT_EQ(loaded.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("shared_tracks")).toInt(), 42);
 }
@@ -250,6 +267,29 @@ TEST(MvsWorkspaceManifest, PreservesDepthPostprocessDiagnostics)
                   .value(QStringLiteral("valid_after"))
                   .toInt(),
               848);
+}
+
+TEST(MvsDepthFrameLoading, EstimatesWorkingSetAndAdaptsWorkerCountToMemory)
+{
+    constexpr std::uint64_t gib = 1024ULL * 1024ULL * 1024ULL;
+    const std::uint64_t frame_bytes =
+        xjw::core::project::estimateFusionFrameWorkingSetBytes(6000, 4000, 0);
+
+    EXPECT_GE(frame_bytes, 6000ULL * 4000ULL * 16ULL);
+    EXPECT_EQ(xjw::core::project::recommendedDepthFrameLoadWorkers(16, 64ULL * gib, frame_bytes), 4);
+    EXPECT_EQ(xjw::core::project::recommendedDepthFrameLoadWorkers(3, 64ULL * gib, frame_bytes), 3);
+    EXPECT_EQ(xjw::core::project::recommendedDepthFrameLoadWorkers(4, gib, frame_bytes), 1);
+}
+
+TEST(MvsDepthFrameLoading, AccountsForConfiguredFusionResize)
+{
+    const std::uint64_t full =
+        xjw::core::project::estimateFusionFrameWorkingSetBytes(6000, 4000, 0);
+    const std::uint64_t resized =
+        xjw::core::project::estimateFusionFrameWorkingSetBytes(6000, 4000, 2048);
+
+    EXPECT_GT(full, resized);
+    EXPECT_GE(resized, 2048ULL * 1365ULL * 16ULL);
 }
 
 TEST(MvsWorkspaceManifest, CompletedFrameIsNotReusableWhenArtifactsAreMissing)

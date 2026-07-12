@@ -67,6 +67,7 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("valid_pixel_count"), validPixelCount);
     object.insert(QStringLiteral("depth_quality"), depthQuality);
     object.insert(QStringLiteral("depth_postprocess"), depthPostprocess);
+    object.insert(QStringLiteral("camera_model"), cameraModel);
     object.insert(QStringLiteral("status"), status);
     object.insert(QStringLiteral("device"), device);
     object.insert(QStringLiteral("depth_png"), depthPng);
@@ -95,6 +96,7 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.validPixelCount = object.value(QStringLiteral("valid_pixel_count")).toInt(0);
     record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
     record.depthPostprocess = object.value(QStringLiteral("depth_postprocess")).toObject();
+    record.cameraModel = object.value(QStringLiteral("camera_model")).toObject();
     record.status = object.value(QStringLiteral("status")).toString();
     record.device = object.value(QStringLiteral("device")).toString();
     record.depthPng = object.value(QStringLiteral("depth_png")).toString();
@@ -282,6 +284,10 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     if (completed.depthPostprocess.isEmpty() && index >= 0)
     {
         completed.depthPostprocess = _frames[index].depthPostprocess;
+    }
+    if (completed.cameraModel.isEmpty() && index >= 0)
+    {
+        completed.cameraModel = _frames[index].cameraModel;
     }
     completed.status = QStringLiteral("completed");
     completed.error.clear();

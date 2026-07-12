@@ -1,7 +1,8 @@
 #include "BundleAdjustCeres.h"
 
 #include "BundleAdjustProjection.h"
-#include "math/Vec3Ops.h"
+
+#include <plamatrix/ops/vector.h>
 
 #ifdef PLASCAN_BA_HAS_CERES
 #  include <ceres/ceres.h>
@@ -558,7 +559,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
     int activeTrackCount = 0;
     for (size_t ti = 0; ti < tracks.size(); ++ti)
     {
-        if (!vec3::isFinite(tracks[ti].initialPoint))
+        if (!plamatrix::isFinite(plamatrix::Vec3<double>(tracks[ti].initialPoint)))
         {
             continue;
         }
@@ -812,7 +813,7 @@ BAResult optimizePointsWithCeres(const std::vector<Camera> &cameras,
         }
 
         point.point = pointParams[ti];
-        point.valid = vec3::isFinite(point.point);
+        point.valid = plamatrix::isFinite(plamatrix::Vec3<double>(point.point));
         point.converged = summary.termination_type == ceres::CONVERGENCE ||
                           summary.termination_type == ceres::USER_SUCCESS;
         point.iterations = static_cast<int>(summary.iterations.size());

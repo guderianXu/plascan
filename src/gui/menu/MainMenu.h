@@ -263,12 +263,17 @@ private:
     QAction *_zoomInAct{};    ///< 放大视图
     QAction *_zoomOutAct{};   ///< 缩小视图
     QAction *_resetViewAct{}; ///< 重置视图到原始比例
+    QAction *_saveToolbarWidgetAct{}; ///< 保存项目按钮的工具栏包装动作
+    QAction *_zoomInToolbarWidgetAct{}; ///< 放大按钮的工具栏包装动作
+    QAction *_zoomOutToolbarWidgetAct{}; ///< 缩小按钮的工具栏包装动作
     QAction *_rotateImageLeftAct{}; ///< 当前影像向左旋转 90 度
     QAction *_rotateImageRightAct{}; ///< 当前影像向右旋转 90 度
     QAction *_cameraToolbarWidgetAct{}; ///< 三维相机工具按钮的工具栏包装动作
     QAction *_cameraImageToolbarWidgetAct{}; ///< 三维图像工具按钮的工具栏包装动作
     QAction *_rotateImageLeftToolbarWidgetAct{}; ///< 左转按钮的工具栏包装动作
     QAction *_rotateImageRightToolbarWidgetAct{}; ///< 右转按钮的工具栏包装动作
+    QAction *_toolbarEditingSeparatorAct{}; ///< 视图操作组与编辑操作组之间的分隔符
+    QAction *_manualPointCloudPruneToolbarWidgetAct{}; ///< 点云剔除按钮的工具栏包装动作
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏轨迹球
     QAction *_toggleCamerasAct{}; ///< 显示/隐藏 3D 相机覆盖层
     QAction *_toggleDependentCamerasAct{}; ///< 显示/隐藏从属相机（当前仅保留菜单占位）

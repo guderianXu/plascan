@@ -16,7 +16,8 @@
 #include "BundleAdjustCeres.h"
 #include "BundleAdjustNativeCuda.h"
 #include "log/Logger.h"
-#include "math/Vec3Ops.h"
+
+#include <plamatrix/ops/vector.h>
 
 #ifdef _OPENMP
 #  include <omp.h>
@@ -343,7 +344,7 @@ bool pointFromRefinedOrInitial(const std::vector<BATrack> &tracks,
     {
         *point = tracks[static_cast<std::size_t>(trackIndex)].initialPoint;
     }
-    return vec3::isFinite(*point);
+    return plamatrix::isFinite(plamatrix::Vec3<double>(*point));
 }
 
 double pointDistance(const std::array<double, 3> &a, const std::array<double, 3> &b)
@@ -380,7 +381,7 @@ bool scaleBarOtherEndpoint(const BAScaleBarConstraint &constraint,
     }
 
     const BARefinedPoint &otherPoint = pointSnapshot[static_cast<std::size_t>(otherIndex)];
-    if (!otherPoint.valid || !vec3::isFinite(otherPoint.point))
+    if (!otherPoint.valid || !plamatrix::isFinite(plamatrix::Vec3<double>(otherPoint.point)))
     {
         return false;
     }
@@ -668,7 +669,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
 {
     BARefinedPoint out;
     out.point = track.initialPoint;
-    if (!vec3::isFinite(out.point) || track.observations.size() < 2) return out;
+    if (!plamatrix::isFinite(plamatrix::Vec3<double>(out.point)) || track.observations.size() < 2) return out;
 
     out.rmsBefore = computeTrackRms(cams, track, out.point);
     std::array<double, 3> X = out.point;
@@ -890,7 +891,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
         }
         out.iterations = iter + 1;
 
-        const double step = vec3::norm({{dx[0], dx[1], dx[2]}});
+        const double step = plamatrix::norm(plamatrix::Vec3<double>{dx[0], dx[1], dx[2]});
         if (step < opt.stepTolerance) {
             out.converged = true;
             break;
@@ -899,7 +900,7 @@ BARefinedPoint optimizeOnePoint(const std::vector<Camera> &cams,
 
     out.point = X;
     out.rmsAfter = computeTrackRms(cams, track, X);
-    out.valid = vec3::isFinite(X) && std::isfinite(out.rmsAfter);
+    out.valid = plamatrix::isFinite(plamatrix::Vec3<double>(X)) && std::isfinite(out.rmsAfter);
     return out;
 }
 
@@ -1208,7 +1209,7 @@ void recomputePointRmsForCurrentCameras(const std::vector<Camera> &cameras,
             continue;
         }
         point.rmsAfter = computeTrackRms(cameras, tracks[i], point.point);
-        point.valid = vec3::isFinite(point.point) && std::isfinite(point.rmsAfter);
+        point.valid = plamatrix::isFinite(plamatrix::Vec3<double>(point.point)) && std::isfinite(point.rmsAfter);
     }
 }
 
@@ -1551,7 +1552,8 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
     {
         if (isCancelled(options)) continue;
         result.points[static_cast<size_t>(i)].point  = tracks[static_cast<size_t>(i)].initialPoint;
-        result.points[static_cast<size_t>(i)].valid  = vec3::isFinite(tracks[static_cast<size_t>(i)].initialPoint);
+        result.points[static_cast<size_t>(i)].valid = plamatrix::isFinite(
+            plamatrix::Vec3<double>(tracks[static_cast<size_t>(i)].initialPoint));
         result.points[static_cast<size_t>(i)].rmsBefore = computeTrackRms(
             result.refinedCameras, tracks[static_cast<size_t>(i)],
             tracks[static_cast<size_t>(i)].initialPoint);
@@ -1585,7 +1587,7 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
             if (!result.points[si].valid) continue;   // 离群点跳过
             BARefinedPoint p = optimizeOnePoint(result.refinedCameras, tracks[si], options, i, &pointSnapshot);
             // 优化失败时回落到初始坐标
-            if (!p.valid && vec3::isFinite(tracks[si].initialPoint))
+            if (!p.valid && plamatrix::isFinite(plamatrix::Vec3<double>(tracks[si].initialPoint)))
             {
                 p.point    = tracks[si].initialPoint;
                 p.rmsAfter = p.rmsBefore;
@@ -1715,7 +1717,7 @@ BAResult optimizePointsLegacyImpl(const std::vector<Camera> &cameras,
 
         // 用最终相机位姿重新计算 rmsAfter，确保全局一致性
         p.rmsAfter = computeTrackRms(result.refinedCameras, tracks[i], p.point);
-        p.valid    = vec3::isFinite(p.point) && std::isfinite(p.rmsAfter);
+        p.valid = plamatrix::isFinite(plamatrix::Vec3<double>(p.point)) && std::isfinite(p.rmsAfter);
         if (p.valid) {
             // 若本点 rmsAfter 超过自适应阈值，仍标记为无效
             if (options.enablePointFilter &&

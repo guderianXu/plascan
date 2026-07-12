@@ -55,6 +55,29 @@ namespace mvs
 namespace
 {
 
+QJsonArray floatArrayToJson(const float *values, int count)
+{
+    QJsonArray array;
+    for (int index = 0; index < count; ++index)
+    {
+        array.append(values[index]);
+    }
+    return array;
+}
+
+QJsonObject positiveDepthCameraModelToJson(const PositiveDepthCameraModel &camera)
+{
+    return QJsonObject{
+        {QStringLiteral("fx"), camera.fx},
+        {QStringLiteral("fy"), camera.fy},
+        {QStringLiteral("cx"), camera.cx},
+        {QStringLiteral("cy"), camera.cy},
+        {QStringLiteral("rotation_world_to_camera"), floatArrayToJson(camera.R_cw, 9)},
+        {QStringLiteral("translation_world_to_camera"), floatArrayToJson(camera.T, 3)},
+        {QStringLiteral("camera_center"), floatArrayToJson(camera.C, 3)}
+    };
+}
+
 constexpr float kSkipContentMaskCoverage = 0.985f;
 constexpr std::size_t kMaxInlineDenseFilterPoints = 500000;
 constexpr std::size_t kMaxProjectedDepthQuantileSamples = 8192;
@@ -3470,6 +3493,14 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 
     result.depthMap   = QSharedPointer<cv::Mat>::create(depthMap);
     result.confidence = QSharedPointer<cv::Mat>::create(confMap);
+    result.cameraModel = refCam;
+    if (!depthMap.empty() && (depthMap.cols != W || depthMap.rows != H))
+    {
+        result.cameraModel = xjw::core::project::scalePositiveDepthCameraModel(
+            refCam,
+            static_cast<double>(depthMap.cols) / std::max(1, W),
+            static_cast<double>(depthMap.rows) / std::max(1, H));
+    }
     result.success    = true;
     return result;
 }
@@ -3478,7 +3509,9 @@ DepthFrameResult DepthMapGenerator::computeDepthForView(int refIdx, const DepthG
 FusionFrameInput DepthMapGenerator::buildFusionFrame(const DepthFrameResult &res) const
 {
     FusionFrameInput frame;
-    frame.cameraModel = _views[res.refViewIdx].positiveDepthModel();
+    frame.cameraModel = res.cameraModel.valid()
+        ? res.cameraModel
+        : _views[res.refViewIdx].positiveDepthModel();
     frame.viewIndex = res.refViewIdx;
     frame.sourceImageIndices = res.sourceViewIndices;
     frame.imgW = res.depthMap ? res.depthMap->cols : 0;
@@ -3887,6 +3920,10 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("valid_pixel_count")] = depthConfidenceSummary.validPixelCount;
         artifact[QStringLiteral("depth_quality")] = depthQualityJson;
         artifact[QStringLiteral("depth_postprocess")] = depthPostprocessJson;
+        artifact[QStringLiteral("camera_model")] =
+            positiveDepthCameraModelToJson(result.cameraModel.valid()
+                                               ? result.cameraModel
+                                               : _views[frameIndex].positiveDepthModel());
         artifact[QStringLiteral("status")] = QStringLiteral("completed");
         artifact[QStringLiteral("stage")] = stageLabel;
         artifact[QStringLiteral("device")] = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
@@ -3909,6 +3946,9 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.validPixelCount = depthConfidenceSummary.validPixelCount;
         record.depthQuality = depthQualityJson;
         record.depthPostprocess = depthPostprocessJson;
+        record.cameraModel = positiveDepthCameraModelToJson(result.cameraModel.valid()
+                                                                ? result.cameraModel
+                                                                : _views[frameIndex].positiveDepthModel());
         record.status = QStringLiteral("completed");
         record.device = QString::fromStdString(result.device.empty() ? "unknown" : result.device);
         record.depthPng = QString::fromStdString(pngPath);

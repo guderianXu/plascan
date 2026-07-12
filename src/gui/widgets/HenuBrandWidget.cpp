@@ -19,12 +19,12 @@ HenuBrandWidget::HenuBrandWidget(QWidget *parent)
 
 QSize HenuBrandWidget::minimumSizeHint() const
 {
-    return QSize(268, 52);
+    return QSize(230, 40);
 }
 
 QSize HenuBrandWidget::sizeHint() const
 {
-    return QSize(326, 58);
+    return QSize(250, 40);
 }
 
 void HenuBrandWidget::paintEvent(QPaintEvent *event)
@@ -35,15 +35,15 @@ void HenuBrandWidget::paintEvent(QPaintEvent *event)
     painter.setRenderHint(QPainter::Antialiasing, true);
     painter.setRenderHint(QPainter::TextAntialiasing, true);
 
-    const QRectF contentRect = rect().adjusted(0.5, 3.0, -0.5, -3.0);
+    const QRectF contentRect = rect().adjusted(0.5, 1.5, -0.5, -1.5);
     painter.setPen(QPen(QColor(198, 212, 229), 1.0));
     painter.setBrush(QColor(255, 255, 255));
-    painter.drawRoundedRect(contentRect, 6.0, 6.0);
+    painter.drawRoundedRect(contentRect, 4.0, 4.0);
 
-    const QRectF emblemRect(contentRect.left() + 9.0,
-                            contentRect.top() + 5.0,
-                            contentRect.height() - 10.0,
-                            contentRect.height() - 10.0);
+    const QRectF emblemRect(contentRect.left() + 6.0,
+                            contentRect.top() + 3.0,
+                            contentRect.height() - 6.0,
+                            contentRect.height() - 6.0);
     if (!_emblemPixmap.isNull())
     {
         painter.drawPixmap(emblemRect.toRect(), _emblemPixmap);
@@ -53,28 +53,28 @@ void HenuBrandWidget::paintEvent(QPaintEvent *event)
         drawHenuEmblem(painter, emblemRect);
     }
 
-    const QRectF textRect(emblemRect.right() + 9.0,
-                          contentRect.top() + 7.0,
-                          contentRect.right() - emblemRect.right() - 17.0,
-                          contentRect.height() - 14.0);
+    const QRectF textRect(emblemRect.right() + 7.0,
+                          contentRect.top() + 3.0,
+                          contentRect.right() - emblemRect.right() - 12.0,
+                          contentRect.height() - 6.0);
 
     QFont titleFont = font();
     titleFont.setBold(true);
-    titleFont.setPointSize(qMax(10, titleFont.pointSize() + 1));
+    titleFont.setPointSize(qMax(9, titleFont.pointSize()));
     painter.setFont(titleFont);
     painter.setPen(QColor(20, 46, 89));
-    painter.drawText(QRectF(textRect.left(), textRect.top(), textRect.width(), 17.0),
+    painter.drawText(QRectF(textRect.left(), textRect.top(), textRect.width(), 14.0),
                      Qt::AlignLeft | Qt::AlignVCenter,
                      QStringLiteral("河南大学"));
 
     QFont subFont = font();
-    subFont.setPointSize(qMax(8, subFont.pointSize() - 1));
+    subFont.setPointSize(qMax(7, subFont.pointSize() - 2));
     painter.setFont(subFont);
     painter.setPen(QColor(79, 91, 112));
     const QString subtitle = fontMetrics().elidedText(QStringLiteral("HENU · PlaScan 三维重建"),
                                                       Qt::ElideRight,
                                                       qMax(10, int(textRect.width())));
-    painter.drawText(QRectF(textRect.left(), textRect.top() + 18.0, textRect.width(), 16.0),
+    painter.drawText(QRectF(textRect.left(), textRect.top() + 14.0, textRect.width(), 13.0),
                      Qt::AlignLeft | Qt::AlignVCenter,
                      subtitle);
 }

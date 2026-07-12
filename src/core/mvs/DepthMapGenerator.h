@@ -43,6 +43,7 @@ struct DepthFrameResult
 {
     int refViewIdx = -1;  ///< 参考帧在 views 数组中的下标
     bool depthFlippedZ = false;
+    PositiveDepthCameraModel cameraModel;  ///< 与输出深度栅格严格对应的正深度相机模型
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)

@@ -20,6 +20,7 @@ set(GUI_SOURCES
   main_window/ModelDropSupport.cpp
   main_window/MenuWorkflowController.cpp
   main_window/ReconstructionWorkflowController.cpp
+  menu/ToolbarButton.cpp
   menu/MainMenu.cpp
   panels/LogPanel.cpp
   project/archive/PlascanArchive.cpp
@@ -156,6 +157,7 @@ set(GUI_HEADERS
   main_window/ModelDropSupport.h
   main_window/MenuWorkflowController.h
   main_window/ReconstructionWorkflowController.h
+  menu/ToolbarButton.h
   menu/MainMenu.h
   panels/LogPanel.h
   project/archive/PlascanArchive.h

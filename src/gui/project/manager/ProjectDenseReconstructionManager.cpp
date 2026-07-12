@@ -349,6 +349,8 @@ public:
         {
             return loaded;
         }
+        loaded.frame.viewIndex = index;
+        loaded.frame.sourceImageIndices = storedFusionSourceIndices(_records, index);
 
         _lru.push_front(index);
         CacheEntry entry;
@@ -1660,6 +1662,7 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             fusionCfg.useColor = keepColor;
             fusionCfg.colorCacheCapacity = keepColor ? 2 : 0;
             fusionCfg.fuseOnlyFirstFrame = true;
+            fusionCfg.enableLowYieldFallback = totalFrames <= 32;
             fusionCfg.cancelFlag = cancelFlag;
             if (static_cast<int>(frames.size()) <= 2)
             {
@@ -1860,6 +1863,8 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             denseResult[QStringLiteral("source_depth_config_hash")] = source_depth_config_hash;
             denseResult[QStringLiteral("source_project_input_signature")] =
                 source_project_input_signature;
+            denseResult[QStringLiteral("fusion_pipeline_version")] =
+                xjw::gui::project::kDenseFusionPipelineVersion;
             if (!transientForModel)
             {
                 upsertProjectRecordByPath(self->_projectData,
@@ -2145,6 +2150,8 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
                 source_depth_config_hash;
             denseResult[QStringLiteral("source_project_input_signature")] =
                 project_input_signature;
+            denseResult[QStringLiteral("fusion_pipeline_version")] =
+                xjw::gui::project::kDenseFusionPipelineVersion;
             denseResult[QStringLiteral("source_reconstruction_generation_id")] =
                 reconstruction_generation_id;
             if (!transientForModel)

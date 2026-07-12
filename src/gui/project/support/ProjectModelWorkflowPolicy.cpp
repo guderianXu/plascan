@@ -263,6 +263,8 @@ QString reusableDenseCloudForDepthSource(
                 static_cast<int>(stored_frames.frames.size()) ||
             record.value(QStringLiteral("source_depth_config_hash")).toString() !=
                 depth_config_hash ||
+            record.value(QStringLiteral("fusion_pipeline_version")).toInt() !=
+                kDenseFusionPipelineVersion ||
             (!project_input_signature.isEmpty() &&
              record.value(QStringLiteral("source_project_input_signature")).toString() !=
                  project_input_signature) ||

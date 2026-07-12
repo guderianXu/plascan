@@ -76,6 +76,7 @@ target_link_libraries(sfm
     PRIVATE
         intersection
         bundle_adjust
+        plamatrix::plamatrix
         Qt6::Core
         Qt6::Gui
         plascan_common_log
