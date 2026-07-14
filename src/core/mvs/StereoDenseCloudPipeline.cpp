@@ -1,5 +1,6 @@
 #include "StereoDenseCloudPipeline.h"
 
+#include "MvsImagePreprocessor.h"
 #include "StereoDenseCloudPipelinePaths.h"
 #include "io/PathIO.h"
 
@@ -99,17 +100,67 @@ bool StereoDenseCloudPipeline::run(const cv::Mat &leftImage,
     emit progressChanged("Preprocessing", 0.0f);
     cv::Mat grayL = toGray8U(leftImage);
     cv::Mat grayR = toGray8U(rightImage);
+    cv::Mat preparedLeft;
+    cv::Mat preparedRight;
+    Camera preparedLeftCamera;
+    Camera preparedRightCamera;
+    std::string preprocessError;
+    if (!prepareMvsImage(grayL,
+                         leftCamera,
+                         &preparedLeft,
+                         &preparedLeftCamera,
+                         &preprocessError))
+    {
+        res.errorMsg = "Left image preprocessing failed: " + preprocessError;
+        if (result)
+        {
+            *result = res;
+        }
+        emit finished(false);
+        return false;
+    }
+    if (!prepareMvsImage(grayR,
+                         rightCamera,
+                         &preparedRight,
+                         &preparedRightCamera,
+                         &preprocessError))
+    {
+        res.errorMsg = "Right image preprocessing failed: " + preprocessError;
+        if (result)
+        {
+            *result = res;
+        }
+        emit finished(false);
+        return false;
+    }
+
+    grayL = std::move(preparedLeft);
+    grayR = std::move(preparedRight);
     std::fprintf(stderr, "[StereoPipeline] Images: L=%dx%d R=%dx%d\n",
                  grayL.cols, grayL.rows, grayR.cols, grayR.rows);
 
     bool ok = false;
     if (_config.geometryMode == StereoPipelineGeometryMode::OriginalDepth)
     {
-        ok = runOriginalDepthPath(grayL, grayR, leftCamera, rightCamera, outputDir, _config, res, this);
+        ok = runOriginalDepthPath(grayL,
+                                  grayR,
+                                  preparedLeftCamera,
+                                  preparedRightCamera,
+                                  outputDir,
+                                  _config,
+                                  res,
+                                  this);
     }
     else
     {
-        ok = runRectifiedDisparityPath(grayL, grayR, leftCamera, rightCamera, outputDir, _config, res, this);
+        ok = runRectifiedDisparityPath(grayL,
+                                       grayR,
+                                       preparedLeftCamera,
+                                       preparedRightCamera,
+                                       outputDir,
+                                       _config,
+                                       res,
+                                       this);
     }
 
     if (result)

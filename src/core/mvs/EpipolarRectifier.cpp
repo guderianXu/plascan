@@ -12,32 +12,35 @@ namespace xjw
 namespace mvs
 {
 
-static cv::Mat buildK(const PositiveDepthCameraModel &cam)
+static cv::Mat buildK(const Camera &camera)
 {
+    const Camera::Intrinsics intrinsics = camera.intrinsics();
     cv::Mat K = cv::Mat::eye(3, 3, CV_64F);
-    K.at<double>(0, 0) = cam.fx;
-    K.at<double>(0, 2) = cam.cx;
-    K.at<double>(1, 1) = cam.fy;
-    K.at<double>(1, 2) = cam.cy;
+    K.at<double>(0, 0) = intrinsics.focalX;
+    K.at<double>(0, 2) = intrinsics.principalX;
+    K.at<double>(1, 1) = intrinsics.focalY;
+    K.at<double>(1, 2) = intrinsics.principalY;
     return K;
 }
 
-static cv::Mat buildRcw(const PositiveDepthCameraModel &cam)
+static cv::Mat buildRcw(const Camera &camera)
 {
+    const std::array<double, 9> rotation = camera.worldToCameraRotation();
     cv::Mat R(3, 3, CV_64F);
     for (int i = 0; i < 9; ++i)
     {
-        R.at<double>(i / 3, i % 3) = cam.R_cw[i];
+        R.at<double>(i / 3, i % 3) = rotation[i];
     }
     return R;
 }
 
-static cv::Mat buildT(const PositiveDepthCameraModel &cam)
+static cv::Mat buildT(const Camera &camera)
 {
+    const std::array<double, 3> translation = camera.worldToCameraTranslation();
     cv::Mat t(3, 1, CV_64F);
-    t.at<double>(0) = cam.T[0];
-    t.at<double>(1) = cam.T[1];
-    t.at<double>(2) = cam.T[2];
+    t.at<double>(0) = translation[0];
+    t.at<double>(1) = translation[1];
+    t.at<double>(2) = translation[2];
     return t;
 }
 
@@ -54,41 +57,69 @@ static std::array<double, 9> toArray9(const cv::Mat &matrix)
     return values;
 }
 
-static PositiveDepthCameraModel buildRectifiedCamera(const PositiveDepthCameraModel &source,
-                                                     const cv::Mat &rectRotation,
-                                                     const cv::Mat &projection)
+static bool hasLensDistortion(const Camera &camera)
 {
-    PositiveDepthCameraModel rectified = source;
+    const Camera::Distortion distortion = camera.distortion();
+    constexpr double epsilon = 1e-15;
+    return std::fabs(distortion.radialK1) > epsilon
+        || std::fabs(distortion.radialK2) > epsilon
+        || std::fabs(distortion.radialK3) > epsilon
+        || std::fabs(distortion.tangentialP1) > epsilon
+        || std::fabs(distortion.tangentialP2) > epsilon;
+}
 
-    rectified.fx = static_cast<float>(projection.at<double>(0, 0));
-    rectified.fy = static_cast<float>(projection.at<double>(1, 1));
-    rectified.cx = static_cast<float>(projection.at<double>(0, 2));
-    rectified.cy = static_cast<float>(projection.at<double>(1, 2));
+static Camera cameraFromWorldToCamera(const Camera &source,
+                                     const cv::Mat &rotationWorldToCamera,
+                                     double focalX,
+                                     double focalY,
+                                     double principalX,
+                                     double principalY)
+{
+    Camera result;
+    result.setIntrinsics(focalX, focalY, principalX, principalY);
+    result.setPixelPitch(source.pixelPitch());
+    result.setPose(toArray9(rotationWorldToCamera.t()), source.cameraCenter());
+    result.setAxisDirections(1, 1);
+    result.setDepthAxisFlipped(false);
+    result.setDistortion(Camera::Distortion{});
+    return result;
+}
 
+static Camera buildRectifiedCamera(const Camera &source,
+                                   const cv::Mat &rectRotation,
+                                   const cv::Mat &projection)
+{
     const cv::Mat sourceRcw = buildRcw(source);
-    const cv::Mat sourceT = buildT(source);
     const cv::Mat rectifiedRcw = rectRotation * sourceRcw;
-    const cv::Mat rectifiedT = rectRotation * sourceT;
+    return cameraFromWorldToCamera(source,
+                                   rectifiedRcw,
+                                   projection.at<double>(0, 0),
+                                   projection.at<double>(1, 1),
+                                   projection.at<double>(0, 2),
+                                   projection.at<double>(1, 2));
+}
 
-    for (int i = 0; i < 9; ++i)
+static Camera transposeRectifiedCamera(const Camera &source)
+{
+    cv::Mat rotation = buildRcw(source);
+    for (int column = 0; column < 3; ++column)
     {
-        rectified.R_cw[i] = static_cast<float>(rectifiedRcw.at<double>(i / 3, i % 3));
+        std::swap(rotation.at<double>(0, column), rotation.at<double>(1, column));
     }
-
-    for (int i = 0; i < 3; ++i)
-    {
-        rectified.T[i] = static_cast<float>(rectifiedT.at<double>(i));
-        rectified.C[i] = source.C[i];
-    }
-
-    return rectified;
+    const Camera::Intrinsics intrinsics = source.intrinsics();
+    return cameraFromWorldToCamera(source,
+                                   rotation,
+                                   intrinsics.focalY,
+                                   intrinsics.focalX,
+                                   intrinsics.principalY,
+                                   intrinsics.principalX);
 }
 
 bool EpipolarRectifier::rectify(
     const cv::Mat &imgLeft,
     const cv::Mat &imgRight,
-    const PositiveDepthCameraModel &camLeft,
-    const PositiveDepthCameraModel &camRight,
+    const Camera &camLeft,
+    const Camera &camRight,
     RectifiedPair &result,
     std::string *errorMsg)
 {
@@ -101,6 +132,22 @@ bool EpipolarRectifier::rectify(
     if (imgLeft.size() != imgRight.size())
     {
         if (errorMsg) *errorMsg = "Input image sizes do not match";
+        return false;
+    }
+    if (!camLeft.isValid() || !camRight.isValid())
+    {
+        if (errorMsg) *errorMsg = "输入相机无效";
+        return false;
+    }
+    if (hasLensDistortion(camLeft) || hasLensDistortion(camRight))
+    {
+        if (errorMsg) *errorMsg = "极线校正要求输入影像先完成镜头去畸变";
+        return false;
+    }
+    if (camLeft.uAxisSign() != 1 || camLeft.vAxisSign() != 1 || camLeft.depthAxisFlipped()
+        || camRight.uAxisSign() != 1 || camRight.vAxisSign() != 1 || camRight.depthAxisFlipped())
+    {
+        if (errorMsg) *errorMsg = "极线校正要求正深度规范化 Camera";
         return false;
     }
 
@@ -146,6 +193,29 @@ bool EpipolarRectifier::rectify(
                       &roi1,
                       &roi2);
 
+    const cv::Rect common_roi = roi1 & roi2;
+    const double image_area = static_cast<double>(imageSize.area());
+    const double common_coverage = image_area > 0.0
+        ? static_cast<double>(common_roi.area()) / image_area
+        : 0.0;
+    constexpr double minimum_common_coverage = 0.05;
+    if (roi1.empty() || roi2.empty() || common_coverage < minimum_common_coverage)
+    {
+        if (errorMsg)
+        {
+            *errorMsg = "极线校正后的共同有效区域不足";
+        }
+        std::fprintf(stderr,
+                     "[MVS] Stereo rectification rejected: roiL=%dx%d roiR=%dx%d "
+                     "common=%.1f%%\n",
+                     roi1.width,
+                     roi1.height,
+                     roi2.width,
+                     roi2.height,
+                     common_coverage * 100.0);
+        return false;
+    }
+
     const cv::Mat Krect1 = P1(cv::Rect(0, 0, 3, 3)).clone();
     const cv::Mat Krect2 = P2(cv::Rect(0, 0, 3, 3)).clone();
 
@@ -187,29 +257,8 @@ bool EpipolarRectifier::rectify(
         result.H1inv = result.H1.inv();
         result.H2inv = result.H2.inv();
 
-        PositiveDepthCameraModel transposedLeft = result.rectCamLeft;
-        transposedLeft.fx = result.rectCamLeft.fy;
-        transposedLeft.fy = result.rectCamLeft.fx;
-        transposedLeft.cx = result.rectCamLeft.cy;
-        transposedLeft.cy = result.rectCamLeft.cx;
-        for (int c = 0; c < 3; ++c)
-        {
-            std::swap(transposedLeft.R_cw[c], transposedLeft.R_cw[3 + c]);
-        }
-        std::swap(transposedLeft.T[0], transposedLeft.T[1]);
-        result.rectCamLeft = transposedLeft;
-
-        PositiveDepthCameraModel transposedRight = result.rectCamRight;
-        transposedRight.fx = result.rectCamRight.fy;
-        transposedRight.fy = result.rectCamRight.fx;
-        transposedRight.cx = result.rectCamRight.cy;
-        transposedRight.cy = result.rectCamRight.cx;
-        for (int c = 0; c < 3; ++c)
-        {
-            std::swap(transposedRight.R_cw[c], transposedRight.R_cw[3 + c]);
-        }
-        std::swap(transposedRight.T[0], transposedRight.T[1]);
-        result.rectCamRight = transposedRight;
+        result.rectCamLeft = transposeRectifiedCamera(result.rectCamLeft);
+        result.rectCamRight = transposeRectifiedCamera(result.rectCamRight);
     }
 
     std::fprintf(stderr,

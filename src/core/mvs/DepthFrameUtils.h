@@ -9,6 +9,7 @@
 #include <QString>
 #include <QStringList>
 
+#include <cstdint>
 #include <vector>
 
 namespace cv
@@ -43,7 +44,18 @@ struct FusionFrameBuildResult
 {
     xjw::common::OperationResult status;
     xjw::mvs::FusionFrameInput frame;
+    double readMs = 0.0;
+    double postprocessMs = 0.0;
+    double resizeMs = 0.0;
+    double totalMs = 0.0;
 };
+
+std::uint64_t estimateFusionFrameWorkingSetBytes(int width,
+                                                 int height,
+                                                 int fusionMaxImageDim);
+int recommendedDepthFrameLoadWorkers(int requestedWorkers,
+                                     std::uint64_t availableMemoryBytes,
+                                     std::uint64_t frameWorkingSetBytes);
 
 QString rawDepthStoragePath(const QString &pngPath);
 QString rawConfidenceStoragePath(const QString &pngPath);
@@ -57,10 +69,6 @@ StoredDepthFramesResult collectStoredDepthFramesForDirectory(const QJsonObject &
                                                              const QString &batchDirectory);
 std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRecord> &frames,
                                            int referenceIndex);
-xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(
-    const xjw::mvs::PositiveDepthCameraModel &camera,
-    double scaleX,
-    double scaleY);
 bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
                                           int fusionMaxImageDim);
 FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stored,

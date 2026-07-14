@@ -11,6 +11,8 @@
 #include <QJsonObject>
 #include <QTemporaryDir>
 
+#include <chrono>
+
 using xjw::mvs::MvsDepthFrameRecord;
 using xjw::mvs::MvsWorkspaceManifest;
 using xjw::mvs::DepthMapGenerator;
@@ -230,6 +232,67 @@ TEST(MvsWorkspaceManifest, PreservesDepthQualityDiagnostics)
                      1.0);
 }
 
+TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)
+{
+    QTemporaryDir temp_dir;
+    ASSERT_TRUE(temp_dir.isValid());
+
+    const QString manifest_path = QDir(temp_dir.path()).filePath(
+        QStringLiteral("mvs_manifest.json"));
+    MvsDepthFrameRecord record = makeRecord(
+        10,
+        QStringLiteral("image_010.jpg"),
+        QStringLiteral("completed"));
+    record.qualityDecision = QJsonObject{
+        {QStringLiteral("acceptance"), QStringLiteral("accepted")},
+        {QStringLiteral("calibrated_confidence"), 0.72}
+    };
+    record.sceneProfile = QStringLiteral("orbital_object");
+    record.filterMode = QStringLiteral("mild");
+    record.acceptance = QStringLiteral("accepted");
+    record.pyramidLevels = QJsonArray{
+        QJsonObject{
+            {QStringLiteral("level"), 3},
+            {QStringLiteral("downsample_factor"), 4}
+        },
+        QJsonObject{
+            {QStringLiteral("level"), 2},
+            {QStringLiteral("downsample_factor"), 2}
+        },
+        QJsonObject{
+            {QStringLiteral("level"), 1},
+            {QStringLiteral("downsample_factor"), 1}
+        }
+    };
+
+    MvsWorkspaceManifest manifest;
+    manifest.setConfigHash(QStringLiteral("cfg-a"));
+    manifest.markCompleted(record);
+
+    QString error;
+    ASSERT_TRUE(manifest.saveAtomic(manifest_path, &error)) << error.toStdString();
+
+    MvsWorkspaceManifest loaded;
+    ASSERT_TRUE(loaded.load(manifest_path, &error)) << error.toStdString();
+    ASSERT_EQ(loaded.frames().size(), 1);
+    EXPECT_EQ(loaded.frames().front().qualityDecision
+                  .value(QStringLiteral("acceptance"))
+                  .toString(),
+              QStringLiteral("accepted"));
+    ASSERT_EQ(loaded.frames().front().pyramidLevels.size(), 3);
+    EXPECT_EQ(loaded.frames().front().sceneProfile,
+              QStringLiteral("orbital_object"));
+    EXPECT_EQ(loaded.frames().front().filterMode, QStringLiteral("mild"));
+    EXPECT_EQ(loaded.frames().front().acceptance, QStringLiteral("accepted"));
+    EXPECT_EQ(loaded.frames().front().pyramidLevels.at(2)
+                  .toObject()
+                  .value(QStringLiteral("level"))
+                  .toInt(),
+              1);
+    EXPECT_EQ(loaded.toJson().value(QStringLiteral("schema")).toString(),
+              QStringLiteral("plascan.mvs.workspace.v2"));
+}
+
 TEST(MvsWorkspaceManifest, PreservesDepthPostprocessDiagnostics)
 {
     QTemporaryDir tempDir;
@@ -350,6 +413,12 @@ TEST(MvsWorkspaceManifest, DepthConfigHashChangesWhenRelevantSettingsChange)
         changed.fusion.adaptiveStrictConfidenceThreshold -= 0.01f;
     });
     expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.sceneProfile = xjw::mvs::MvsSceneProfile::AerialTerrain;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
+        changed.depthFilterMode = xjw::mvs::DepthFilterMode::Aggressive;
+    });
+    expect_hash_change([](xjw::mvs::DepthGenConfig &changed) {
         changed.fusion.maxLocalDepthOutlierRemovalRatio -= 0.01f;
     });
 
@@ -399,6 +468,39 @@ TEST(MvsDepthPostprocess, RemovesSmallConnectedDepthComponentAndConfidence)
     EXPECT_EQ(confidence.at<float>(0, 0), 0.0f);
     EXPECT_EQ(depth.at<float>(5, 5), 10.0f);
     EXPECT_EQ(confidence.at<float>(5, 5), 1.0f);
+}
+
+TEST(MvsDepthPostprocess, RemovesManySmallComponentsWithoutRepeatedFullImageScans)
+{
+    constexpr int kImageSize = 1024;
+    cv::Mat depth(kImageSize, kImageSize, CV_32F, cv::Scalar(0.0f));
+    cv::Mat confidence(kImageSize, kImageSize, CV_32F, cv::Scalar(0.0f));
+    int component_count = 0;
+    for (int y = 8; y < kImageSize; y += 16)
+    {
+        for (int x = 8; x < kImageSize; x += 16)
+        {
+            depth.at<float>(y, x) = 10.0f;
+            confidence.at<float>(y, x) = 1.0f;
+            ++component_count;
+        }
+    }
+
+    const auto start = std::chrono::steady_clock::now();
+    const int removed = DepthMapGenerator::removeSmallDepthComponents(
+        depth,
+        confidence,
+        4,
+        1.0f,
+        6);
+    const auto elapsed = std::chrono::duration_cast<std::chrono::milliseconds>(
+        std::chrono::steady_clock::now() - start);
+
+    EXPECT_EQ(removed, component_count);
+    EXPECT_EQ(cv::countNonZero(depth > 0.0f), 0);
+    EXPECT_EQ(cv::countNonZero(confidence > 0.0f), 0);
+    EXPECT_LT(elapsed.count(), 5000)
+        << "Speckle filtering should remain linear in pixel and component counts.";
 }
 
 TEST(MvsDepthPostprocess, PostprocessReportsSmallComponentRemoval)

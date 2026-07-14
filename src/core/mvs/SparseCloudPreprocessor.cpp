@@ -7,8 +7,8 @@
 #include <plapoint/search/kdtree.h>
 #include "log/Logger.h"
 #include "io/PathIO.h"
+#include "string_utils/StringTransform.h"
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <limits>
 #include <chrono>
@@ -23,6 +23,8 @@ namespace xjw
 namespace mvs
 {
 
+using common::string_utils::endsWithAsciiIgnoreCase;
+
 namespace
 {
 
@@ -30,19 +32,6 @@ using SparsePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
 
 constexpr std::size_t kMaxMedianSpacingSamples = 65536;
 constexpr std::ptrdiff_t kParallelLinearPassThreshold = 4096;
-
-bool endsWithIgnoreCase(const std::string &text, const std::string &suffix)
-{
-    if (text.size() < suffix.size())
-    {
-        return false;
-    }
-    return std::equal(suffix.rbegin(), suffix.rend(), text.rbegin(),
-                      [](char a, char b) {
-                          return std::tolower(static_cast<unsigned char>(a)) ==
-                                 std::tolower(static_cast<unsigned char>(b));
-                      });
-}
 
 SparsePlaCloud toPlaCloud(const std::vector<std::array<float,3>> &pts)
 {
@@ -168,7 +157,7 @@ bool SparseCloudPreprocessor::loadXYZ(const std::string &path,
     try
     {
         std::shared_ptr<SparsePlaCloud> cloud;
-        if (endsWithIgnoreCase(path, ".ply"))
+        if (endsWithAsciiIgnoreCase(path, ".ply"))
         {
             cloud = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(path));
         }

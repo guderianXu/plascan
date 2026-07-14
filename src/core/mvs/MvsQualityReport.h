@@ -4,6 +4,8 @@
 
 #include <opencv2/core.hpp>
 
+#include "DepthFrameQualityGate.h"
+
 namespace xjw
 {
 namespace mvs
@@ -19,6 +21,8 @@ struct DepthMapQualityMetrics
     float meanConfidence = 0.0f;
     float p50Confidence = 0.0f;
     float p75Confidence = 0.0f;
+    float largestComponentRatio = 0.0f;
+    float depthAtSearchBoundaryRatio = 0.0f;
     bool lowConfidenceFullCoverage = false;
     int localDepthOutlierCount = 0;
     float localDepthOutlierRatio = 0.0f;
@@ -28,9 +32,13 @@ struct DepthMapQualityMetrics
 
 DepthMapQualityMetrics analyzeDepthMapQuality(const cv::Mat &depthMap,
                                               const cv::Mat &confidenceMap,
-                                              int sourceViewCount);
+                                              int sourceViewCount,
+                                              float depthNear = 0.0f,
+                                              float depthFar = 0.0f);
 
 QJsonObject depthMapQualityMetricsToJson(const DepthMapQualityMetrics &metrics);
+
+QJsonObject depthFrameQualityDecisionToJson(const DepthFrameQualityDecision &decision);
 
 } // namespace mvs
 } // namespace xjw

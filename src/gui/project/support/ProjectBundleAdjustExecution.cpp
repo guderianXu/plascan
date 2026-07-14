@@ -2,8 +2,12 @@
 
 #include "PlascanArchive.h"
 #include "ProjectFilesManager.h"
+#include "ProjectIO.h"
 #include "ProjectReferenceTerrainBa.h"
+#include "io/MarkerSetStore.h"
 
+#include <QFileInfo>
+#include <QJsonArray>
 #include <QJsonDocument>
 
 namespace xjw::gui::project {
@@ -54,8 +58,37 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
 
     const QJsonObject meta = loadBundleAdjustMeta(coreData, plascanPath);
 
+    xjw::core::project::MarkerBaInput markerInput;
+    control_points::MarkerSet markerSet;
+    const QString markerSetPath = ProjectIO::markerSetPath(plascanPath);
+    if (QFileInfo::exists(markerSetPath))
+    {
+        const control_points::MarkerSetIoResult loaded =
+            control_points::MarkerSetStore(markerSetPath).load();
+        if (!loaded.ok)
+        {
+            result.serviceResult.errorMessage = QStringLiteral("读取标记 sidecar 失败: %1")
+                                                    .arg(loaded.error);
+            return result;
+        }
+        markerSet = loaded.markerSet;
+        markerInput.markerSet = &markerSet;
+        for (const QJsonValue &value : meta.value(QStringLiteral("images")).toArray())
+        {
+            const QJsonObject image = value.toObject();
+            const QString imageId = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+            const QString imagePath = image.value(QStringLiteral("path")).toString().trimmed();
+            if (!imageId.isEmpty() && !imagePath.isEmpty())
+            {
+                markerInput.imagePathById.insert(imageId, imagePath);
+            }
+        }
+    }
+
     BaInputBuildResult baInput;
-    result.buildStatus = buildBaInputFromMeta(meta, selectedImages, minMatches, &baInput);
+    result.buildStatus = buildBaInputFromMeta(
+        meta, selectedImages, minMatches, &baInput,
+        markerInput.markerSet ? &markerInput : nullptr);
     if (result.buildStatus != BaInputBuildStatus::Ok)
     {
         return result;
@@ -64,14 +97,40 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
     result.beforeCamMeta = baInput.beforeCamMeta;
     options.imagePathByIndex = baInput.imagePathByIndex;
     options.beforeCamMeta = baInput.beforeCamMeta;
-    if (baInput.surveyControlTrackCount > 0)
+    if (baInput.surveyControlTrackCount > 0 || baInput.markerControlPointConstraintCount > 0)
     {
         options.baOpt.enableControlPointConstraints = true;
+        if (baInput.markerControlPointConstraintCount > 0
+            && xjw::BundleAdjust::isBackendAvailable(xjw::BABackend::CeresCpu))
+        {
+            options.baOpt.backend = xjw::BABackend::CeresCpu;
+        }
     }
     if (!baInput.scaleBarConstraints.empty())
     {
         options.baOpt.enableScaleBarConstraints = true;
         options.baOpt.scaleBarConstraints = baInput.scaleBarConstraints;
+    }
+    for (const BaInputBuildResult::MarkerTrackBinding &binding : baInput.markerTrackBindings)
+    {
+        xjw::gui::BaServiceOptions::MarkerTrackQualityInput quality;
+        quality.markerId = binding.markerId;
+        quality.role = binding.role;
+        quality.trackIndex = binding.trackIndex;
+        quality.referencePoint = binding.referencePoint;
+        quality.sigma = binding.sigma;
+        quality.usedAsConstraint = binding.usedAsConstraint;
+        options.markerTrackQualityInputs.push_back(quality);
+    }
+    for (const BaInputBuildResult::MarkerScaleBarBinding &binding : baInput.markerScaleBarBindings)
+    {
+        xjw::gui::BaServiceOptions::MarkerScaleBarQualityInput quality;
+        quality.scaleBarId = binding.scaleBarId;
+        quality.role = binding.role;
+        quality.trackIndexA = binding.trackIndexA;
+        quality.trackIndexB = binding.trackIndexB;
+        quality.measuredDistance = binding.measuredDistance;
+        options.markerScaleBarQualityInputs.push_back(quality);
     }
 
     const ReferenceTerrainBaApplyResult terrainPriorResult =

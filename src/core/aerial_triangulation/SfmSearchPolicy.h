@@ -22,6 +22,10 @@ struct SfmCandidateSummary
     int points3D = 0;
     double meanReprojError = 0.0;
     bool success = false;
+    bool hasNetworkQuality = false;
+    double medianTriangulationAngleDeg = 0.0;
+    double twoViewTrackRatio = 1.0;
+    double observationGridCoverage = 0.0;
 };
 
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads);

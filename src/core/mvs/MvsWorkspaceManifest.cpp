@@ -66,6 +66,11 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("depth_confidence_mean"), meanDepthConfidence);
     object.insert(QStringLiteral("valid_pixel_count"), validPixelCount);
     object.insert(QStringLiteral("depth_quality"), depthQuality);
+    object.insert(QStringLiteral("quality_decision"), qualityDecision);
+    object.insert(QStringLiteral("pyramid_levels"), pyramidLevels);
+    object.insert(QStringLiteral("scene_profile"), sceneProfile);
+    object.insert(QStringLiteral("filter_mode"), filterMode);
+    object.insert(QStringLiteral("acceptance"), acceptance);
     object.insert(QStringLiteral("depth_postprocess"), depthPostprocess);
     object.insert(QStringLiteral("camera_model"), cameraModel);
     object.insert(QStringLiteral("status"), status);
@@ -95,6 +100,12 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.meanDepthConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(0.0);
     record.validPixelCount = object.value(QStringLiteral("valid_pixel_count")).toInt(0);
     record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
+    record.qualityDecision = object.value(QStringLiteral("quality_decision")).toObject();
+    record.pyramidLevels = object.value(QStringLiteral("pyramid_levels")).toArray();
+    record.sceneProfile = object.value(QStringLiteral("scene_profile")).toString();
+    record.filterMode = object.value(QStringLiteral("filter_mode")).toString();
+    record.acceptance = object.value(QStringLiteral("acceptance")).toString(
+        record.qualityDecision.value(QStringLiteral("acceptance")).toString());
     record.depthPostprocess = object.value(QStringLiteral("depth_postprocess")).toObject();
     record.cameraModel = object.value(QStringLiteral("camera_model")).toObject();
     record.status = object.value(QStringLiteral("status")).toString();
@@ -110,6 +121,16 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
                                           : static_cast<qint64>(elapsed.toDouble(0.0));
     record.error = object.value(QStringLiteral("error")).toString();
     record.configHash = object.value(QStringLiteral("config_hash")).toString();
+    if (record.pyramidLevels.isEmpty() && record.gridWidth > 0 && record.gridHeight > 0)
+    {
+        record.pyramidLevels.append(QJsonObject{
+            {QStringLiteral("level"), 1},
+            {QStringLiteral("downsample_factor"), 1},
+            {QStringLiteral("grid_width"), record.gridWidth},
+            {QStringLiteral("grid_height"), record.gridHeight},
+            {QStringLiteral("legacy_single_level"), true}
+        });
+    }
     return record;
 }
 
@@ -281,6 +302,26 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     {
         completed.depthQuality = _frames[index].depthQuality;
     }
+    if (completed.qualityDecision.isEmpty() && index >= 0)
+    {
+        completed.qualityDecision = _frames[index].qualityDecision;
+    }
+    if (completed.pyramidLevels.isEmpty() && index >= 0)
+    {
+        completed.pyramidLevels = _frames[index].pyramidLevels;
+    }
+    if (completed.sceneProfile.isEmpty() && index >= 0)
+    {
+        completed.sceneProfile = _frames[index].sceneProfile;
+    }
+    if (completed.filterMode.isEmpty() && index >= 0)
+    {
+        completed.filterMode = _frames[index].filterMode;
+    }
+    if (completed.acceptance.isEmpty() && index >= 0)
+    {
+        completed.acceptance = _frames[index].acceptance;
+    }
     if (completed.depthPostprocess.isEmpty() && index >= 0)
     {
         completed.depthPostprocess = _frames[index].depthPostprocess;
@@ -327,7 +368,7 @@ bool MvsWorkspaceManifest::hasReusableCompletedFrame(int refIndex, const QString
 QJsonObject MvsWorkspaceManifest::toJson() const
 {
     QJsonObject root;
-    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.workspace.v1"));
+    root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.workspace.v2"));
     root.insert(QStringLiteral("config_hash"), _configHash);
 
     QJsonArray frames;
@@ -405,6 +446,11 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(QStringLiteral("num_source_views"), config.numSourceViews);
     root.insert(QStringLiteral("z_near_scale"), config.zNearScale);
     root.insert(QStringLiteral("z_far_scale"), config.zFarScale);
+    root.insert(QStringLiteral("scene_profile"), static_cast<int>(config.sceneProfile));
+    root.insert(QStringLiteral("depth_filter_mode"), static_cast<int>(config.depthFilterMode));
+    root.insert(QStringLiteral("adaptive_depth_filter_mode"), config.adaptiveDepthFilterMode);
+    root.insert(QStringLiteral("save_intermediate_pyramid_levels"),
+                config.saveIntermediatePyramidLevels);
     root.insert(QStringLiteral("patch_match"), patch);
     root.insert(QStringLiteral("fusion"), fusion);
 

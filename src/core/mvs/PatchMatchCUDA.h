@@ -48,40 +48,46 @@ public:
     // depthOut     [out] 深度图 (CV_32F, 0=无效)
     // confOut      [out, 可选] 置信度图 (CV_32F, 0~1)
     // errorMsg     [out, 可选] 错误信息
-    // hintDepth    [可选] 稀疏提示深度图 (CV_32F, 0=无)
+    // hintDepth    [可选] 逐像素提示深度图 (CV_32F, 0=无)
+    // hintRadius   [可选] 逐像素搜索半径 (CV_32F, <=0=自动半径)
     static bool estimate(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
-        const PositiveDepthCameraModel         &refCam,
-        const std::vector<PositiveDepthCameraModel> &srcCams,
+        const Camera                           &refCam,
+        const std::vector<Camera>              &srcCams,
         float                                   zNear,
         float                                   zFar,
         const PatchMatchConfig                 &config,
         cv::Mat                                &depthOut,
         cv::Mat                                *confOut    = nullptr,
         std::string                            *errorMsg   = nullptr,
-        const cv::Mat                          *hintDepth  = nullptr);
+        const cv::Mat                          *hintDepth  = nullptr,
+        const cv::Mat                          *hintRadius = nullptr);
 
 private:
     static bool estimateGPU(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
-        const PositiveDepthCameraModel         &refCam,
-        const std::vector<PositiveDepthCameraModel> &srcCams,
+        const Camera                           &refCam,
+        const std::vector<Camera>              &srcCams,
         float zNear, float zFar,
         const PatchMatchConfig       &config,
         cv::Mat &depthOut, cv::Mat *confOut,
-        std::string *errorMsg, const cv::Mat *hintDepth);
+        std::string *errorMsg,
+        const cv::Mat *hintDepth,
+        const cv::Mat *hintRadius);
 
     static bool estimateCPU(
         const cv::Mat                          &refGray,
         const std::vector<cv::Mat>             &srcGrays,
-        const PositiveDepthCameraModel         &refCam,
-        const std::vector<PositiveDepthCameraModel> &srcCams,
+        const Camera                           &refCam,
+        const std::vector<Camera>              &srcCams,
         float zNear, float zFar,
         const PatchMatchConfig       &config,
         cv::Mat &depthOut, cv::Mat *confOut,
-        std::string *errorMsg, const cv::Mat *hintDepth);
+        std::string *errorMsg,
+        const cv::Mat *hintDepth,
+        const cv::Mat *hintRadius);
 };
 
 } // namespace mvs

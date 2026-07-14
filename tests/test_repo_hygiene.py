@@ -113,13 +113,14 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("if(WIN32 OR NOT PLASCAN_USE_SYSTEM_BINUTILS_FOR_MIXED_TOOLCHAIN)", dependency_paths)
         self.assertIn("AND NOT WIN32 AND NOT APPLE", packages)
 
-    def test_plapoint_cuda_warning_sentinels_use_typed_infinity(self):
+    def test_plapoint_cuda_warning_sentinels_use_device_safe_values(self):
         knn_source = (ROOT / "3rdparty" / "plapoint" / "src" / "knn_gpu.cu").read_text(encoding="utf-8")
         icp_source = (ROOT / "3rdparty" / "plapoint" / "src" / "icp_gpu.cu").read_text(encoding="utf-8")
 
         self.assertNotIn("HUGE_VAL", knn_source)
         self.assertNotRegex(icp_source, r"\bINFINITY\b")
-        self.assertIn("std::numeric_limits<double>::infinity()", knn_source)
+        self.assertIn("return CUDART_INF;", knn_source)
+        self.assertIn("return DBL_MAX;", knn_source)
         self.assertIn("std::numeric_limits<double>::infinity()", icp_source)
         self.assertIn("markSharedTransformMaybeUnused", icp_source)
         self.assertIn("(void)min_z;", icp_source)
@@ -179,7 +180,11 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertIn("CUDNN_ROOT_DIR", text)
         self.assertIn("build\\env\\cudnn-cu13", text)
         self.assertIn("VCPKG_OVERLAY_TRIPLETS", text)
-        self.assertIn("VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN cudnn", text)
+        self.assertIn(
+            "VCPKG_ENV_PASSTHROUGH CUDNN_ROOT_DIR CUDNN CUDNN_PATH "
+            "CUDNN_INCLUDE_DIR CUDNN_LIBRARY cudnn",
+            text,
+        )
         self.assertIn("Ensure-CeresCuda13OverlayPort", text)
         self.assertIn("CMAKE_CUDA_STANDARD=17", text)
         self.assertIn("CMAKE_CUDA_FLAGS=--std=c++17", text)

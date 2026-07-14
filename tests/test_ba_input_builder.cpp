@@ -2,6 +2,7 @@
 
 #include "BaInputBuilder.h"
 #include "Camera.h"
+#include "model/MarkerSet.h"
 
 #include <QJsonArray>
 #include <QJsonObject>
@@ -57,6 +58,21 @@ QJsonObject imageEntry(const QString &path, const xjw::Camera &camera)
     object[QStringLiteral("path")] = path;
     object[QStringLiteral("camera")] = cameraToJson(camera);
     return object;
+}
+
+QPointF project(const xjw::Camera &camera, const std::array<double, 3> &point)
+{
+    const double xyz[3] = {point[0], point[1], point[2]};
+    double uv[2] = {0.0, 0.0};
+    EXPECT_TRUE(camera.projectWorldPoint(xyz, uv));
+    return QPointF(uv[0], uv[1]);
+}
+
+std::array<double, 3> controlReference(const std::array<double, 3> &local)
+{
+    return {{100.0 + 3.0 * local[0],
+             200.0 + 3.0 * local[1],
+             50.0 + 3.0 * local[2]}};
 }
 
 } // namespace
@@ -170,4 +186,102 @@ TEST(BaInputBuilderSurveyControl, BuildsScaleBarConstraintsBetweenSurveyControlT
     EXPECT_EQ(result.scaleBarConstraints.front().trackIndexB, 1);
     EXPECT_NEAR(result.scaleBarConstraints.front().measuredDistanceMeters, 9.5, 1e-12);
     EXPECT_NEAR(result.scaleBarConstraints.front().sigmaMeters, 0.02, 1e-12);
+}
+
+TEST(BaInputBuilderMarkerSet, AppliesAbsoluteOrientationAndExcludesChecksFromConstraints)
+{
+    const QString image0 = QStringLiteral("E:/images/img_001.jpg");
+    const QString image1 = QStringLiteral("E:/images/img_002.jpg");
+    const QString image2 = QStringLiteral("E:/images/img_003.jpg");
+    const std::vector<xjw::Camera> cameras = {
+        makeCamera(-2.0), makeCamera(0.0), makeCamera(2.0)};
+    const QStringList image_paths{image0, image1, image2};
+    const QStringList image_ids{QStringLiteral("uuid-0"),
+                                QStringLiteral("uuid-1"),
+                                QStringLiteral("uuid-2")};
+
+    xjw::control_points::MarkerSet marker_set;
+    const std::vector<std::array<double, 3>> points = {
+        {{-1.0, -0.5, 20.0}},
+        {{1.0, -0.5, 20.0}},
+        {{-0.5, 1.0, 20.5}},
+        {{0.5, 0.5, 22.0}},
+        {{0.0, 0.0, 21.0}},
+    };
+    QVector<xjw::control_points::MarkerId> marker_ids;
+    for (int point_index = 0; point_index < static_cast<int>(points.size()); ++point_index)
+    {
+        const auto role = point_index < 4
+            ? xjw::control_points::MarkerRole::ControlPoint
+            : xjw::control_points::MarkerRole::CheckPoint;
+        const auto marker_id = marker_set.addMarker(
+            QStringLiteral("M%1").arg(point_index + 1), role);
+        marker_ids.push_back(marker_id);
+
+        xjw::control_points::ReferenceCoordinate reference;
+        const auto reference_point = controlReference(points[static_cast<std::size_t>(point_index)]);
+        reference.x = reference_point[0];
+        reference.y = reference_point[1];
+        reference.z = reference_point[2];
+        reference.sigmaX = 0.01;
+        reference.sigmaY = 0.01;
+        reference.sigmaZ = 0.01;
+        reference.sourceCrs = QStringLiteral("EPSG:4978");
+        reference.verticalDatum = QStringLiteral("ellipsoidal");
+        reference.verticalUnit = QStringLiteral("m");
+        marker_set.setReferenceCoordinate(marker_id, reference);
+        ASSERT_TRUE(marker_set.marker(marker_id).referenceCoordinate->referenceUsable)
+            << qPrintable(marker_set.marker(marker_id).referenceCoordinate->referenceError);
+
+        for (int camera_index = 0; camera_index < static_cast<int>(cameras.size()); ++camera_index)
+        {
+            xjw::control_points::MarkerProjection projection;
+            projection.imageId = image_ids[camera_index];
+            projection.imagePathSnapshot = image_paths[camera_index];
+            projection.xy = project(cameras[static_cast<std::size_t>(camera_index)],
+                                    points[static_cast<std::size_t>(point_index)]);
+            projection.state = xjw::control_points::ProjectionState::ManualPinned;
+            marker_set.upsertProjection(marker_id, projection);
+        }
+    }
+    marker_set.addScaleBar(QStringLiteral("control-scale"),
+                           marker_ids[0], marker_ids[1], 6.0, 0.01,
+                           xjw::control_points::ScaleBarRole::Control);
+    marker_set.addScaleBar(QStringLiteral("check-scale"),
+                           marker_ids[2], marker_ids[3], 1.0, 0.01,
+                           xjw::control_points::ScaleBarRole::Check);
+
+    QJsonObject meta;
+    meta[QStringLiteral("images")] = QJsonArray{
+        imageEntry(image0, cameras[0]),
+        imageEntry(image1, cameras[1]),
+        imageEntry(image2, cameras[2]),
+    };
+    xjw::core::project::MarkerBaInput marker_input;
+    marker_input.markerSet = &marker_set;
+    for (int index = 0; index < image_ids.size(); ++index)
+    {
+        marker_input.imagePathById.insert(image_ids[index], image_paths[index]);
+    }
+
+    xjw::core::project::BaInputBuildResult result;
+    const auto status = xjw::core::project::buildBaInputFromMeta(
+        meta, image_paths, 1, &result, &marker_input);
+
+    ASSERT_EQ(status, xjw::core::project::BaInputBuildStatus::Ok);
+    EXPECT_TRUE(result.markerControlNetwork.ok)
+        << result.markerControlNetwork.error.toStdString();
+    EXPECT_EQ(result.markerControlTrackCount, 4);
+    EXPECT_EQ(result.markerCheckTrackCount, 1);
+    EXPECT_EQ(result.markerControlPointConstraintCount, 4);
+    EXPECT_EQ(result.markerControlScaleBarConstraintCount, 1);
+    EXPECT_EQ(result.markerCheckScaleBarCount, 1);
+    ASSERT_EQ(result.tracks.size(), 5u);
+    EXPECT_TRUE(result.tracks.back().controlPointConstraints.empty());
+    const auto center = result.cameras.front().cameraCenter();
+    const auto expected_center = controlReference({{-2.0, 0.0, 0.0}});
+    for (int axis = 0; axis < 3; ++axis)
+    {
+        EXPECT_NEAR(center[axis], expected_center[axis], 1.0e-5);
+    }
 }

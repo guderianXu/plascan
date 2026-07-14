@@ -1,5 +1,6 @@
 #include "IncrementalSfm.h"
 #include "Intersection.h"
+#include "tracks/CorrespondenceTrackThinner.h"
 #include "tracks/MultiViewTrackBuilder.h"
 
 #include "log/Logger.h"
@@ -698,6 +699,322 @@ void IncrementalSfm::addMatches(ImageId id1, ImageId id2, const std::vector<Feat
     _correspondenceGraph.addMatches(id1, id2, matches);
 }
 
+void IncrementalSfm::addPriorTrack(const control_points::PriorTrack &track)
+{
+    if (_priorTracksMaterialized)
+    {
+        throw std::logic_error("Prior tracks must be added before IncrementalSfm::run");
+    }
+    _pendingPriorTracks.push_back(track);
+}
+
+void IncrementalSfm::addPriorScaleBar(const control_points::PriorScaleBar &scaleBar)
+{
+    if (_priorTracksMaterialized)
+    {
+        throw std::logic_error("Prior scale bars must be added before IncrementalSfm::run");
+    }
+    _pendingPriorScaleBars.push_back(scaleBar);
+}
+
+void IncrementalSfm::materializePriorTracks()
+{
+    if (_priorTracksMaterialized) return;
+    _priorTracksMaterialized = true;
+    _priorTrackDiagnostics = {};
+    _materializedPriorTracks.clear();
+    _priorTrackDiagnostics.tracksSubmitted = static_cast<int>(_pendingPriorTracks.size());
+
+    std::unordered_set<std::string> marker_ids;
+    for (const control_points::PriorTrack &priorTrack : _pendingPriorTracks)
+    {
+        const auto rejectTrack = [&](const std::string &reason)
+        {
+            ++_priorTrackDiagnostics.tracksRejected;
+            _priorTrackDiagnostics.messages.push_back(priorTrack.markerId + ": " + reason);
+        };
+
+        if (priorTrack.markerId.empty() || !marker_ids.insert(priorTrack.markerId).second)
+        {
+            rejectTrack("empty or duplicate marker id");
+            continue;
+        }
+
+        std::vector<const control_points::PriorObservation *> accepted_observations;
+        std::unordered_set<ImageId> image_ids;
+        bool duplicate_image = false;
+        for (const control_points::PriorObservation &observation : priorTrack.observations)
+        {
+            const bool usable_state = control_points::priorObservationParticipates(observation.state);
+            const bool finite = std::isfinite(observation.x) && std::isfinite(observation.y)
+                && std::isfinite(observation.confidence) && observation.confidence >= 0.0;
+            if (!usable_state || observation.stale || !finite
+                || !_reconstruction->hasImage(observation.imageId))
+            {
+                ++_priorTrackDiagnostics.observationsRejected;
+                continue;
+            }
+            if (!image_ids.insert(observation.imageId).second)
+            {
+                duplicate_image = true;
+                break;
+            }
+            accepted_observations.push_back(&observation);
+        }
+
+        if (duplicate_image || accepted_observations.size() < 2)
+        {
+            rejectTrack(duplicate_image ? "duplicate image observation"
+                                        : "fewer than two usable observations");
+            continue;
+        }
+
+        std::vector<TrackElement> graph_observations;
+        graph_observations.reserve(accepted_observations.size());
+        for (const control_points::PriorObservation *observation : accepted_observations)
+        {
+            ImageData &image = _reconstruction->image(observation->imageId);
+            const bool conflicts_with_feature = std::any_of(
+                image.keypoints.begin(), image.keypoints.end(), [observation](const FeatureKeypoint &keypoint)
+                {
+                    const double dx = static_cast<double>(keypoint.x) - observation->x;
+                    const double dy = static_cast<double>(keypoint.y) - observation->y;
+                    return dx * dx + dy * dy <= 0.25;
+                });
+            if (conflicts_with_feature) ++_priorTrackDiagnostics.observationConflicts;
+
+            const FeatureIdx feature_index = static_cast<FeatureIdx>(image.keypoints.size());
+            image.keypoints.push_back({static_cast<float>(observation->x),
+                                       static_cast<float>(observation->y)});
+            image.point3DIds.push_back(kInvalidPoint3DId);
+            _correspondenceGraph.addImage(observation->imageId, image.keypoints.size());
+            graph_observations.push_back({observation->imageId, feature_index});
+        }
+
+        const float confidence = static_cast<float>(std::clamp(priorTrack.confidence, 0.0, 1.0));
+        if (!_correspondenceGraph.addPriorTrack(priorTrack.markerId,
+                                                graph_observations,
+                                                confidence))
+        {
+            for (auto it = graph_observations.rbegin(); it != graph_observations.rend(); ++it)
+            {
+                ImageData &image = _reconstruction->image(it->imageId);
+                image.keypoints.pop_back();
+                image.point3DIds.pop_back();
+                _correspondenceGraph.addImage(it->imageId, image.keypoints.size());
+            }
+            rejectTrack("correspondence graph rejected synthetic observations");
+            continue;
+        }
+
+        ++_priorTrackDiagnostics.tracksAccepted;
+        _priorTrackDiagnostics.observationsAccepted +=
+            static_cast<int>(accepted_observations.size());
+        Track materialized_track;
+        materialized_track.elements = graph_observations;
+        materialized_track.confidence = confidence;
+        materialized_track.source = TrackSource::PriorMarker;
+        materialized_track.sourceId = priorTrack.markerId;
+        _materializedPriorTracks.push_back(std::move(materialized_track));
+    }
+
+    Logger::instance()->infof(
+        "[SFM] Prior tracks: submitted=%d accepted=%d rejected=%d observations=%d conflicts=%d",
+        _priorTrackDiagnostics.tracksSubmitted,
+        _priorTrackDiagnostics.tracksAccepted,
+        _priorTrackDiagnostics.tracksRejected,
+        _priorTrackDiagnostics.observationsAccepted,
+        _priorTrackDiagnostics.observationConflicts);
+}
+
+void IncrementalSfm::applyPriorTrackDiagnostics(IncrementalSfmResult *result) const
+{
+    if (!result) return;
+    result->priorTracksAccepted = _priorTrackDiagnostics.tracksAccepted;
+    result->priorTracksRejected = _priorTrackDiagnostics.tracksRejected;
+    result->priorObservationsAccepted = _priorTrackDiagnostics.observationsAccepted;
+    result->priorObservationConflicts = _priorTrackDiagnostics.observationConflicts;
+    result->priorTrackDiagnostics = _priorTrackDiagnostics.messages;
+}
+
+void IncrementalSfm::applyControlNetworkDiagnostics(IncrementalSfmResult *result) const
+{
+    if (!result) return;
+    result->controlNetworkApplied = _controlNetworkApplied;
+    result->controlPointConstraintCount = _lastControlPointConstraintCount;
+    result->checkPointResidualCount = _controlNetworkResult.checkPointResiduals.size();
+    result->controlPointRms = _controlNetworkResult.controlInlierRms;
+    double check_sum_squared = 0.0;
+    for (const control_points::MarkerResidual &residual : _controlNetworkResult.checkPointResiduals)
+    {
+        check_sum_squared += residual.total * residual.total;
+    }
+    result->checkPointRms = _controlNetworkResult.checkPointResiduals.isEmpty()
+        ? 0.0
+        : std::sqrt(check_sum_squared
+                    / static_cast<double>(_controlNetworkResult.checkPointResiduals.size()));
+    result->controlScaleBarConstraintCount = _lastControlScaleBarConstraintCount;
+    double control_scale_sum_squared = 0.0;
+    double check_scale_sum_squared = 0.0;
+    int control_scale_count = 0;
+    int check_scale_count = 0;
+    const auto marker_point = [this](const std::string &marker_id,
+                                     std::array<double, 3> *point)
+    {
+        if (!point) return false;
+        for (Point3DId point_id : _reconstruction->allPoint3DIds())
+        {
+            if (!_reconstruction->hasPoint3D(point_id)) continue;
+            const ScenePoint3D &candidate = _reconstruction->point3D(point_id);
+            if (candidate.track.source == TrackSource::PriorMarker
+                && candidate.track.sourceId == marker_id)
+            {
+                *point = candidate.xyz;
+                return true;
+            }
+        }
+        return false;
+    };
+    for (const control_points::PriorScaleBar &scale_bar : _pendingPriorScaleBars)
+    {
+        if (!scale_bar.enabled || !std::isfinite(scale_bar.measuredDistance)
+            || scale_bar.measuredDistance <= 0.0)
+        {
+            continue;
+        }
+        std::array<double, 3> first{};
+        std::array<double, 3> second{};
+        if (!marker_point(scale_bar.firstMarkerId, &first)
+            || !marker_point(scale_bar.secondMarkerId, &second))
+        {
+            continue;
+        }
+        const double dx = first[0] - second[0];
+        const double dy = first[1] - second[1];
+        const double dz = first[2] - second[2];
+        const double residual = std::sqrt(dx * dx + dy * dy + dz * dz)
+            - scale_bar.measuredDistance;
+        if (scale_bar.role == control_points::ScaleBarRole::Control)
+        {
+            control_scale_sum_squared += residual * residual;
+            ++control_scale_count;
+        }
+        else
+        {
+            check_scale_sum_squared += residual * residual;
+            ++check_scale_count;
+        }
+    }
+    result->checkScaleBarResidualCount = check_scale_count;
+    result->controlScaleBarRms = control_scale_count > 0
+        ? std::sqrt(control_scale_sum_squared / static_cast<double>(control_scale_count))
+        : 0.0;
+    result->checkScaleBarRms = check_scale_count > 0
+        ? std::sqrt(check_scale_sum_squared / static_cast<double>(check_scale_count))
+        : 0.0;
+    result->controlNetworkError = _controlNetworkResult.error.toStdString();
+}
+
+const control_points::PriorTrack *IncrementalSfm::priorTrack(const std::string &markerId) const
+{
+    const auto it = std::find_if(_pendingPriorTracks.cbegin(),
+                                 _pendingPriorTracks.cend(),
+                                 [&markerId](const control_points::PriorTrack &track)
+                                 {
+                                     return track.markerId == markerId;
+                                 });
+    return it == _pendingPriorTracks.cend() ? nullptr : &*it;
+}
+
+bool IncrementalSfm::tryApplyControlNetwork(const std::vector<ImageId> &baImageIds,
+                                            std::vector<Camera> *baCameras)
+{
+    if (_controlNetworkApplied || !baCameras || baImageIds.size() != baCameras->size())
+    {
+        return _controlNetworkApplied;
+    }
+
+    control_points::ControlNetworkInput input;
+    int usable_control_count = 0;
+    for (Point3DId point_id : _reconstruction->allPoint3DIds())
+    {
+        if (!_reconstruction->hasPoint3D(point_id)) continue;
+        const ScenePoint3D &point = _reconstruction->point3D(point_id);
+        if (point.track.source != TrackSource::PriorMarker) continue;
+        const control_points::PriorTrack *prior = priorTrack(point.track.sourceId);
+        if (!prior || !prior->hasReference || !prior->referenceUsable) continue;
+
+        control_points::ControlNetworkPoint network_point;
+        network_point.markerId = QString::fromStdString(prior->markerId);
+        network_point.role = prior->role;
+        network_point.estimatedPoint = point.xyz;
+        network_point.referencePoint = prior->referencePoint;
+        network_point.sigma = prior->referenceSigma;
+        input.points.push_back(network_point);
+        if (prior->role == control_points::MarkerRole::ControlPoint) ++usable_control_count;
+    }
+    if (usable_control_count < 3) return false;
+
+    _controlNetworkResult = control_points::solveControlNetwork(input);
+    if (!_controlNetworkResult.ok)
+    {
+        Logger::instance()->warnf("[SFM] Control-network absolute orientation rejected: %s",
+                                  _controlNetworkResult.error.toUtf8().constData());
+        return false;
+    }
+
+    _controlNetworkTransform = _controlNetworkResult.transform;
+    for (ImageId image_id : _reconstruction->registeredImageIds())
+    {
+        if (!_reconstruction->hasCamera(image_id)) continue;
+        Camera &camera = _reconstruction->camera(image_id);
+        camera.setPose(_controlNetworkTransform.rotate(camera.cameraToWorldRotation()),
+                       _controlNetworkTransform.apply(camera.cameraCenter()));
+    }
+    for (Point3DId point_id : _reconstruction->allPoint3DIds())
+    {
+        if (_reconstruction->hasPoint3D(point_id))
+        {
+            ScenePoint3D &point = _reconstruction->point3D(point_id);
+            point.xyz = _controlNetworkTransform.apply(point.xyz);
+        }
+    }
+    for (std::size_t index = 0; index < baImageIds.size(); ++index)
+    {
+        if (_reconstruction->hasCamera(baImageIds[index]))
+        {
+            (*baCameras)[index] = _reconstruction->camera(baImageIds[index]);
+        }
+    }
+    _controlNetworkApplied = true;
+    Logger::instance()->infof(
+        "[SFM] Control-network absolute orientation: controls=%d inliers=%d checks=%d scale=%.9f rms=%.6f",
+        usable_control_count,
+        _controlNetworkResult.controlInlierCount,
+        _controlNetworkResult.checkPointResiduals.size(),
+        _controlNetworkTransform.scale,
+        _controlNetworkResult.controlInlierRms);
+    return true;
+}
+
+void IncrementalSfm::tagPriorTrackSource(Track *track) const
+{
+    if (!track || track->elements.empty()) return;
+    std::string source_id;
+    for (const TrackElement &element : track->elements)
+    {
+        const std::string current = _correspondenceGraph.priorTrackId(element.imageId,
+                                                                      element.featureIdx);
+        if (current.empty() || (!source_id.empty() && current != source_id)) return;
+        source_id = current;
+    }
+    if (!source_id.empty())
+    {
+        track->source = TrackSource::PriorMarker;
+        track->sourceId = source_id;
+    }
+}
+
 // ============================================================
 // 主流程
 // ============================================================
@@ -726,7 +1043,30 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
         _sfmOptions.pnpMinTrackLength,
         _sfmOptions.pnpOptions.maxReprojError);
 
-    // ---- 步骤 0：构建对应关系图 ----
+    // ---- 步骤 0：筛选输入多视轨迹并构建对应关系图 ----
+    if (!_sfmOptions.useKnownCameraPoses &&
+        (_sfmOptions.maxTracksPerImage > 0 || _sfmOptions.maxTracksPerGridCell > 0))
+    {
+        CorrespondenceTrackThinningOptions thinningOptions;
+        thinningOptions.maxTracksPerImage = _sfmOptions.maxTracksPerImage;
+        thinningOptions.maxTracksPerGridCell = _sfmOptions.maxTracksPerGridCell;
+        thinningOptions.gridColumns = _sfmOptions.trackThinningGridColumns;
+        thinningOptions.gridRows = _sfmOptions.trackThinningGridRows;
+        const CorrespondenceTrackThinningResult thinning =
+            thinCorrespondenceTracks(*_reconstruction, &_correspondenceGraph, thinningOptions);
+        Logger::instance()->infof(
+            "[SFM] Input multiview track thinning: tracks=%d retained=%d pruned=%d "
+            "removedMatches=%zu retainedMatches=%zu perImageLimit=%d perCellLimit=%d",
+            thinning.inputTrackCount,
+            thinning.retainedTrackCount,
+            thinning.prunedTrackCount,
+            thinning.removedMatchCount,
+            thinning.retainedMatchCount,
+            _sfmOptions.maxTracksPerImage,
+            _sfmOptions.maxTracksPerGridCell);
+    }
+    materializePriorTracks();
+    applyPriorTrackDiagnostics(&result);
     _correspondenceGraph.buildCorrespondences();
     Logger::instance()->infof("[SFM] Correspondence graph ready: images=%zu, imagePairs=%zu",
                               _correspondenceGraph.numImages(),
@@ -737,7 +1077,10 @@ IncrementalSfmResult IncrementalSfm::run(SfmProgressCallback progressCb)
 
     if (_sfmOptions.useKnownCameraPoses)
     {
-        return runKnownCameraPoseReconstruction(progressCb);
+        IncrementalSfmResult known_pose_result = runKnownCameraPoseReconstruction(progressCb);
+        applyPriorTrackDiagnostics(&known_pose_result);
+        applyControlNetworkDiagnostics(&known_pose_result);
+        return known_pose_result;
     }
 
     // ---- 步骤 1：选择并初始化初始像对 ----
@@ -854,6 +1197,7 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     SfmProgressCallback progressCb)
 {
     IncrementalSfmResult result;
+    applyPriorTrackDiagnostics(&result);
     rebuildVisibilityCache();
 
     // ---- 步骤 2：逐帧注册循环 ----
@@ -1003,6 +1347,7 @@ IncrementalSfmResult IncrementalSfm::runRegistrationFromCurrentInitialization(
     result.baTracksFiltered = _lastGlobalBATracksFiltered;
     result.baRefinedIntrinsicCount = _lastGlobalBARefinedIntrinsicCount;
     result.baSharedFocalScale = _lastGlobalBASharedFocalScale;
+    applyControlNetworkDiagnostics(&result);
 
     return result;
 }
@@ -1097,6 +1442,11 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
     _lastGlobalBATracksFiltered = 0;
     _lastGlobalBARefinedIntrinsicCount = 0;
     _lastGlobalBASharedFocalScale = 1.0;
+    _controlNetworkApplied = false;
+    _controlNetworkResult = {};
+    _controlNetworkTransform = {};
+    _lastControlPointConstraintCount = 0;
+    _lastControlScaleBarConstraintCount = 0;
     _visibilityCache.clear();
     _visibilityCacheDirty = true;
     _registerFailCount.clear();
@@ -1107,6 +1457,7 @@ void IncrementalSfm::resetForInitialPairTrial(const SfmReconstruction &baseRecon
 IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgressCallback progressCb)
 {
     IncrementalSfmResult result;
+    applyPriorTrackDiagnostics(&result);
     const int totalImages = static_cast<int>(_reconstruction->numImages());
 
     auto imageIds = _reconstruction->allImageIds();
@@ -1228,16 +1579,29 @@ IncrementalSfmResult IncrementalSfm::runKnownCameraPoseReconstruction(SfmProgres
 
     MultiViewTrackBuilder::BuildOptions trackBuildOptions;
     trackBuildOptions.enableQualityThinning =
-        _sfmOptions.maxKnownPoseTracksPerImage > 0 ||
-        _sfmOptions.maxKnownPoseTracksPerGridCell > 0;
-    trackBuildOptions.maxTracksPerImage = _sfmOptions.maxKnownPoseTracksPerImage;
-    trackBuildOptions.maxTracksPerGridCell = _sfmOptions.maxKnownPoseTracksPerGridCell;
+        _sfmOptions.maxTracksPerImage > 0 ||
+        _sfmOptions.maxTracksPerGridCell > 0;
+    trackBuildOptions.maxTracksPerImage = _sfmOptions.maxTracksPerImage;
+    trackBuildOptions.maxTracksPerGridCell = _sfmOptions.maxTracksPerGridCell;
     trackBuildOptions.gridColumns = _sfmOptions.trackThinningGridColumns;
     trackBuildOptions.gridRows = _sfmOptions.trackThinningGridRows;
     trackBuildOptions.imageWidth = std::max(1.0f, maxKeypointX + 1.0f);
     trackBuildOptions.imageHeight = std::max(1.0f, maxKeypointY + 1.0f);
 
-    const MultiViewTrackBuildResult multiViewTracks = trackBuilder.build(trackBuildOptions);
+    MultiViewTrackBuildResult multiViewTracks = trackBuilder.build(trackBuildOptions);
+    multiViewTracks.tracks.erase(
+        std::remove_if(multiViewTracks.tracks.begin(), multiViewTracks.tracks.end(), [this](const Track &track)
+        {
+            return std::any_of(track.elements.begin(), track.elements.end(), [this](const TrackElement &element)
+            {
+                return !_correspondenceGraph.priorTrackId(element.imageId, element.featureIdx).empty();
+            });
+        }),
+        multiViewTracks.tracks.end());
+    multiViewTracks.tracks.insert(multiViewTracks.tracks.end(),
+                                  _materializedPriorTracks.begin(),
+                                  _materializedPriorTracks.end());
+    for (Track &track : multiViewTracks.tracks) tagPriorTrackSource(&track);
     if (!multiViewTracks.tracks.empty())
     {
         std::ostringstream trackLengthHistogram;
@@ -2830,16 +3194,23 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         baCameras.push_back(_reconstruction->camera(baImageIds[i]));
     }
 
-    if (_sfmOptions.useKnownCameraPoses && !localOnly)
+    if (_sfmOptions.useKnownCameraPoses && !localOnly && !_controlNetworkApplied)
     {
         alignReconstructionToKnownPosePriors(baImageIds, &baCameras);
+    }
+    if (!localOnly)
+    {
+        // 控制网绝对定向必须在构造 BA 点之前执行，使相机、普通点和标记点处于同一物方坐标系。
+        tryApplyControlNetwork(baImageIds, &baCameras);
     }
 
     // 收集轨迹（同时记录 trackIdx → Point3DId 的映射，用于回写和过滤）
     std::vector<BATrack> baTracks;
     std::vector<Point3DId> trackToPid; // 与 baTracks 索引对应
+    std::unordered_map<std::string, int> marker_track_indices;
 
     const auto allPtIds = _reconstruction->allPoint3DIds();
+    int control_constraint_count = 0;
     for (Point3DId pid : allPtIds)
     {
         if (!_reconstruction->hasPoint3D(pid))
@@ -2847,6 +3218,44 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         const ScenePoint3D &pt = _reconstruction->point3D(pid);
         BATrack track;
         track.initialPoint = pt.xyz;
+
+        if (_controlNetworkApplied && pt.track.source == TrackSource::PriorMarker)
+        {
+            const control_points::PriorTrack *prior = priorTrack(pt.track.sourceId);
+            const auto residual = std::find_if(
+                _controlNetworkResult.controlResiduals.cbegin(),
+                _controlNetworkResult.controlResiduals.cend(),
+                [&pt](const control_points::MarkerResidual &value)
+                {
+                    return value.markerId == QString::fromStdString(pt.track.sourceId);
+                });
+            if (prior && prior->role == control_points::MarkerRole::ControlPoint
+                && prior->hasReference && prior->referenceUsable
+                && residual != _controlNetworkResult.controlResiduals.cend() && residual->inlier)
+            {
+                double sigma_sum_squared = 0.0;
+                int sigma_count = 0;
+                for (double sigma : prior->referenceSigma)
+                {
+                    if (std::isfinite(sigma) && sigma > 0.0)
+                    {
+                        sigma_sum_squared += sigma * sigma;
+                        ++sigma_count;
+                    }
+                }
+                BAControlPointConstraint constraint;
+                constraint.point = prior->referencePoint;
+                constraint.sigmaMeters = sigma_count > 0
+                    ? std::sqrt(sigma_sum_squared / static_cast<double>(sigma_count))
+                    : 1.0;
+                constraint.weight = 1.0;
+                constraint.sourceIndex = static_cast<int>(
+                    prior - static_cast<const control_points::PriorTrack *>(
+                                _pendingPriorTracks.data()));
+                track.controlPointConstraints.push_back(constraint);
+                ++control_constraint_count;
+            }
+        }
 
         for (const auto &elem : pt.track.elements)
         {
@@ -2869,6 +3278,10 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
         // 至少 2 个观测才有意义
         if (track.observations.size() >= 2)
         {
+            if (pt.track.source == TrackSource::PriorMarker && !pt.track.sourceId.empty())
+            {
+                marker_track_indices[pt.track.sourceId] = static_cast<int>(baTracks.size());
+            }
             baTracks.push_back(std::move(track));
             trackToPid.push_back(pid);
         }
@@ -2881,10 +3294,66 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     //   - 全局 BA 固定 index=0 的相机（gauge 固定，消除坐标系漂移）
     //   - 局部 BA 不固定（局部块坐标由全局约束）
     BAOptions baOpt = _sfmOptions.baOptions;
+    int control_scale_bar_count = 0;
+    for (std::size_t scale_index = 0; scale_index < _pendingPriorScaleBars.size(); ++scale_index)
+    {
+        const control_points::PriorScaleBar &scale_bar = _pendingPriorScaleBars[scale_index];
+        if (!scale_bar.enabled || scale_bar.role != control_points::ScaleBarRole::Control
+            || !std::isfinite(scale_bar.measuredDistance) || scale_bar.measuredDistance <= 0.0
+            || !std::isfinite(scale_bar.sigma) || scale_bar.sigma <= 0.0)
+        {
+            continue;
+        }
+        const auto first = marker_track_indices.find(scale_bar.firstMarkerId);
+        const auto second = marker_track_indices.find(scale_bar.secondMarkerId);
+        if (first == marker_track_indices.end() || second == marker_track_indices.end()
+            || first->second == second->second)
+        {
+            continue;
+        }
+        BAScaleBarConstraint constraint;
+        constraint.trackIndexA = first->second;
+        constraint.trackIndexB = second->second;
+        constraint.measuredDistanceMeters = scale_bar.measuredDistance;
+        constraint.sigmaMeters = scale_bar.sigma;
+        constraint.weight = 1.0;
+        constraint.sourceIndex = static_cast<int>(scale_index);
+        baOpt.scaleBarConstraints.push_back(constraint);
+        ++control_scale_bar_count;
+    }
     if (_sfmOptions.useKnownCameraPoses && baOpt.cameraPosePriors.empty())
     {
         baOpt.cameraPosePriors = buildCameraPosePriorsFromInputCameras(baImageIds);
         baOpt.refineCameraPose = _sfmOptions.refineKnownCameraPoseWithSoftPrior;
+    }
+    if (_controlNetworkApplied)
+    {
+        // 已知位姿先验原本位于 SfM 局部坐标系，绝对定向后必须同步变换。
+        for (BACameraPosePrior &prior : baOpt.cameraPosePriors)
+        {
+            if (!prior.enabled) continue;
+            prior.cameraCenter = _controlNetworkTransform.apply(prior.cameraCenter);
+            prior.cameraToWorldRotation =
+                _controlNetworkTransform.rotate(prior.cameraToWorldRotation);
+            prior.positionSigmaMeters *= _controlNetworkTransform.scale;
+        }
+    }
+    if (control_constraint_count > 0)
+    {
+        baOpt.enableControlPointConstraints = true;
+        // 当前阶段控制点约束统一走 Ceres CPU；原生 CUDA 约束雅可比在后续任务补齐。
+        if (BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
+        {
+            baOpt.backend = BABackend::CeresCpu;
+        }
+    }
+    if (control_scale_bar_count > 0)
+    {
+        baOpt.enableScaleBarConstraints = true;
+        if (BundleAdjust::isBackendAvailable(BABackend::CeresCpu))
+        {
+            baOpt.backend = BABackend::CeresCpu;
+        }
     }
     if (!localOnly && !baImageIds.empty())
     {
@@ -3127,6 +3596,8 @@ void IncrementalSfm::runBundleAdjust(bool localOnly, const std::vector<ImageId> 
     // 全局 BA：记录统计供最终结果使用（lastGlobalBA* 成员变量）
     if (!localOnly)
     {
+        _lastControlPointConstraintCount = control_constraint_count;
+        _lastControlScaleBarConstraintCount = control_scale_bar_count;
         _lastGlobalBARmsBefore = baResult.meanRmsBefore;
         _lastGlobalBARmsAfter = baResult.meanRmsAfter;
         _lastGlobalBATracksTotal = baResult.totalTracks;

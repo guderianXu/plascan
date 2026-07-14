@@ -456,14 +456,18 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                ? depth_source_info.absoluteFilePath()
                : depth_source_info.absolutePath())
         : request.outputRoot;
+    DepthMapVisualHullOptions visual_hull_options;
+    visual_hull_options.strictVolumetricMasks =
+        request.settings.value(QStringLiteral("strictVolumetricMasks")).toBool(false);
     DepthMapVisualHullResult visual_hull = DepthMapMeshBuilder::buildVisualHull(
         request.depthMapSourcePath,
         request.reconstruction.resolution,
+        visual_hull_options,
         request.progress);
     if (visual_hull.applicable && visual_hull.ok)
     {
         result = saveMeshAndOptionalTexture(visual_hull.mesh,
-                                            "depth_constrained_visual_hull",
+                                            visual_hull.actualAlgorithm.toStdString(),
                                             output_root,
                                             request.exportObj,
                                             request.texture,
@@ -471,9 +475,40 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
         if (result.ok)
         {
             result.payload[QStringLiteral("visual_hull_views")] = visual_hull.usableViewCount;
+            result.payload[QStringLiteral("visual_hull_depth_views")] = visual_hull.depthViewCount;
+            result.payload[QStringLiteral("visual_hull_depth_carving")] =
+                visual_hull.usedDepthFreeSpaceCarving;
+            result.payload[QStringLiteral("visual_hull_retried_without_depth_carving")] =
+                visual_hull.retriedWithoutDepthCarving;
+            result.payload[QStringLiteral("visual_hull_component_count")] =
+                visual_hull.connectivity.componentCount;
+            result.payload[QStringLiteral("visual_hull_removed_satellite_components")] =
+                visual_hull.removedSatelliteComponentCount;
+            result.payload[QStringLiteral("visual_hull_largest_component_ratio")] =
+                visual_hull.connectivity.largestComponentFaceRatio;
+            result.payload[QStringLiteral("actual_mesh_algorithm")] = visual_hull.actualAlgorithm;
+            if (!visual_hull.fallbackReason.isEmpty())
+            {
+                result.payload[QStringLiteral("visual_hull_fallback_reason")] =
+                    visual_hull.fallbackReason;
+            }
             result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
             result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
         }
+        return result;
+    }
+    if (visual_hull.applicable && visual_hull.qualityRejected)
+    {
+        result.payload[QStringLiteral("actual_mesh_algorithm")] = visual_hull.actualAlgorithm;
+        result.payload[QStringLiteral("visual_hull_component_count")] =
+            visual_hull.connectivity.componentCount;
+        result.payload[QStringLiteral("visual_hull_largest_component_ratio")] =
+            visual_hull.connectivity.largestComponentFaceRatio;
+        result.payload[QStringLiteral("visual_hull_quality_rejected")] = true;
+        result.errorMessage = QStringLiteral(
+            "深度图模型质量门控未通过：%1。请重新运行空中三角测量，优先使用已导入参考相机作为软约束，"
+            "并在重算深度图后再次生成模型。")
+                                  .arg(visual_hull.message);
         return result;
     }
 

@@ -5,6 +5,8 @@
 #include <plapoint/search/spatial_kdtree.h>
 #include <plamatrix/dense/dense_matrix.h>
 
+#include <opencv2/core.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -289,10 +291,27 @@ PointCloudAlignmentResult PointCloudAlignment::alignPairedSimilarity(const std::
 
     double sourceVariance = 0.0;
     double referenceVariance = 0.0;
+    cv::Matx33d covariance = cv::Matx33d::zeros();
     for (std::size_t i = 0; i < source.size(); ++i)
     {
-        sourceVariance += squaredNorm(source[i] - sourceCenter);
-        referenceVariance += squaredNorm(reference[i] - referenceCenter);
+        const Point3D centered_source = source[i] - sourceCenter;
+        const Point3D centered_reference = reference[i] - referenceCenter;
+        sourceVariance += squaredNorm(centered_source);
+        referenceVariance += squaredNorm(centered_reference);
+        const std::array<double, 3> source_values{{centered_source.x,
+                                                   centered_source.y,
+                                                   centered_source.z}};
+        const std::array<double, 3> reference_values{{centered_reference.x,
+                                                      centered_reference.y,
+                                                      centered_reference.z}};
+        for (int row = 0; row < 3; ++row)
+        {
+            for (int column = 0; column < 3; ++column)
+            {
+                covariance(row, column) += source_values[static_cast<std::size_t>(row)] *
+                                           reference_values[static_cast<std::size_t>(column)];
+            }
+        }
     }
 
     if (sourceVariance <= 1e-15 || referenceVariance <= 1e-15)
@@ -301,8 +320,53 @@ PointCloudAlignmentResult PointCloudAlignment::alignPairedSimilarity(const std::
         return result;
     }
 
-    result.transform.scale = std::sqrt(referenceVariance / sourceVariance);
-    result.transform.translation = referenceCenter - result.transform.scale * sourceCenter;
+    cv::Mat singular_values;
+    cv::Mat left_vectors;
+    cv::Mat right_vectors_transposed;
+    cv::SVD::compute(cv::Mat(covariance), singular_values, left_vectors,
+                     right_vectors_transposed, cv::SVD::FULL_UV);
+    cv::Mat correction = cv::Mat::eye(3, 3, CV_64F);
+    const cv::Mat initial_rotation = right_vectors_transposed.t() * left_vectors.t();
+    if (cv::determinant(initial_rotation) < 0.0)
+    {
+        correction.at<double>(2, 2) = -1.0;
+    }
+    const cv::Mat rotation = right_vectors_transposed.t() * correction * left_vectors.t();
+    for (int row = 0; row < 3; ++row)
+    {
+        for (int column = 0; column < 3; ++column)
+        {
+            result.transform.rotation[static_cast<std::size_t>(row * 3 + column)] =
+                rotation.at<double>(row, column);
+        }
+    }
+
+    double scale_numerator = 0.0;
+    for (std::size_t i = 0; i < source.size(); ++i)
+    {
+        const Point3D centered_source = source[i] - sourceCenter;
+        const Point3D centered_reference = reference[i] - referenceCenter;
+        SimilarityTransform rotation_only = result.transform;
+        rotation_only.scale = 1.0;
+        rotation_only.translation = {};
+        const Point3D rotated = apply(rotation_only, centered_source);
+        scale_numerator += rotated.x * centered_reference.x +
+                           rotated.y * centered_reference.y +
+                           rotated.z * centered_reference.z;
+    }
+    result.transform.scale = scale_numerator / sourceVariance;
+    const Point3D rotated_source_center{
+        result.transform.rotation[0] * sourceCenter.x +
+            result.transform.rotation[1] * sourceCenter.y +
+            result.transform.rotation[2] * sourceCenter.z,
+        result.transform.rotation[3] * sourceCenter.x +
+            result.transform.rotation[4] * sourceCenter.y +
+            result.transform.rotation[5] * sourceCenter.z,
+        result.transform.rotation[6] * sourceCenter.x +
+            result.transform.rotation[7] * sourceCenter.y +
+            result.transform.rotation[8] * sourceCenter.z};
+    result.transform.translation =
+        referenceCenter - result.transform.scale * rotated_source_center;
     result.method = QStringLiteral("paired_similarity");
 
     std::vector<double> beforeErrors;

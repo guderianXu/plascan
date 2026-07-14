@@ -80,6 +80,10 @@ void FeaturePointVisualizationDialog::setupUi()
     _showScaleChk = ui.m_showScaleChk;
     _showOrientationChk = ui.m_showOrientationChk;
     _useFillChk = ui.m_useFillChk;
+    _showResidualsChk = ui.m_showResidualsChk;
+    _residualScaleSpin = ui.m_residualScaleSpin;
+    _minimumResidualSpin = ui.m_minimumResidualSpin;
+    _maximumResidualLengthSpin = ui.m_maximumResidualLengthSpin;
     _pointSizeSpin = ui.m_pointSizeSpin;
     _scaleMultiplierSpin = ui.m_scaleMultiplierSpin;
     _opacitySlider = ui.m_opacitySlider;
@@ -87,6 +91,7 @@ void FeaturePointVisualizationDialog::setupUi()
     _pointColorBtn = ui.m_pointColorBtn;
     _scaleColorBtn = ui.m_scaleColorBtn;
     _orientColorBtn = ui.m_orientColorBtn;
+    _residualColorBtn = ui.m_residualColorBtn;
     _markerShapeCombo = ui.m_markerShapeCombo;
     _maxDisplaySpin = ui.m_maxDisplaySpin;
     _showTopScoresChk = ui.m_showTopScoresChk;
@@ -101,6 +106,8 @@ void FeaturePointVisualizationDialog::setupUi()
         .arg(_scaleColor.red()).arg(_scaleColor.green()).arg(_scaleColor.blue()));
     _orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
         .arg(_orientColor.red()).arg(_orientColor.green()).arg(_orientColor.blue()));
+    _residualColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_residualColor.red()).arg(_residualColor.green()).arg(_residualColor.blue()));
     _applyBtn->setDefault(true);
 }
 
@@ -121,6 +128,13 @@ void FeaturePointVisualizationDialog::setupConnections()
     connect(_showScaleChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
     connect(_showOrientationChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
     connect(_useFillChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_showResidualsChk, &QCheckBox::toggled, this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_residualScaleSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_minimumResidualSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &FeaturePointVisualizationDialog::updatePreview);
+    connect(_maximumResidualLengthSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged),
+            this, &FeaturePointVisualizationDialog::updatePreview);
     
     // 样式变化
     connect(_markerShapeCombo, QOverload<int>::of(&QComboBox::currentIndexChanged),
@@ -164,6 +178,15 @@ void FeaturePointVisualizationDialog::setupConnections()
             updatePreview();
         }
     });
+    connect(_residualColorBtn, &QPushButton::clicked, this, [this]() {
+        const QColor color = QColorDialog::getColor(_residualColor, this, tr("选择残差向量颜色"));
+        if (color.isValid()) {
+            _residualColor = color;
+            _residualColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+                .arg(color.red()).arg(color.green()).arg(color.blue()));
+            updatePreview();
+        }
+    });
     
     // 过滤变化
     connect(_maxDisplaySpin, QOverload<int>::of(&QSpinBox::valueChanged),
@@ -190,6 +213,11 @@ LayerRenderer::FeatureDisplayOptions FeaturePointVisualizationDialog::getDisplay
     opts.showScale = _showScaleChk->isChecked();
     opts.showOrientation = _showOrientationChk->isChecked();
     opts.useFill = _useFillChk->isChecked();
+    opts.showResiduals = _showResidualsChk->isChecked();
+    opts.residualScale = _residualScaleSpin->value();
+    opts.minimumResidualPx = _minimumResidualSpin->value();
+    opts.maximumResidualLengthPx = _maximumResidualLengthSpin->value();
+    opts.residualColor = _residualColor;
     
     opts.pointSize = _pointSizeSpin->value();
     opts.scaleMultiplier = _scaleMultiplierSpin->value();
@@ -221,6 +249,13 @@ void FeaturePointVisualizationDialog::setDisplayOptions(const LayerRenderer::Fea
     _showScaleChk->setChecked(opts.showScale);
     _showOrientationChk->setChecked(opts.showOrientation);
     _useFillChk->setChecked(opts.useFill);
+    _showResidualsChk->setChecked(opts.showResiduals);
+    _residualScaleSpin->setValue(opts.residualScale);
+    _minimumResidualSpin->setValue(opts.minimumResidualPx);
+    _maximumResidualLengthSpin->setValue(opts.maximumResidualLengthPx);
+    _residualColor = opts.residualColor;
+    _residualColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_residualColor.red()).arg(_residualColor.green()).arg(_residualColor.blue()));
     
     _pointSizeSpin->setValue(opts.pointSize);
     _scaleMultiplierSpin->setValue(opts.scaleMultiplier);
@@ -272,6 +307,10 @@ void FeaturePointVisualizationDialog::onResetDefaults()
     _showScaleChk->setChecked(false);
     _showOrientationChk->setChecked(false);
     _useFillChk->setChecked(false);
+    _showResidualsChk->setChecked(false);
+    _residualScaleSpin->setValue(10.0);
+    _minimumResidualSpin->setValue(0.0);
+    _maximumResidualLengthSpin->setValue(80.0);
     
     _markerShapeCombo->setCurrentIndex(2); // 默认：十字
     _pointSizeSpin->setValue(1);
@@ -281,6 +320,7 @@ void FeaturePointVisualizationDialog::onResetDefaults()
     _pointColor = QColor(0, 120, 255);
     _scaleColor = QColor(255, 255, 0);
     _orientColor = QColor(255, 0, 0);
+    _residualColor = QColor(255, 80, 80);
     
     _pointColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
         .arg(_pointColor.red()).arg(_pointColor.green()).arg(_pointColor.blue()));
@@ -288,6 +328,8 @@ void FeaturePointVisualizationDialog::onResetDefaults()
         .arg(_scaleColor.red()).arg(_scaleColor.green()).arg(_scaleColor.blue()));
     _orientColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
         .arg(_orientColor.red()).arg(_orientColor.green()).arg(_orientColor.blue()));
+    _residualColorBtn->setStyleSheet(QString("background-color: rgb(%1, %2, %3);")
+        .arg(_residualColor.red()).arg(_residualColor.green()).arg(_residualColor.blue()));
     
     _maxDisplaySpin->setValue(0);
     _showTopScoresChk->setChecked(true);
@@ -304,6 +346,7 @@ void FeaturePointVisualizationDialog::updatePreview()
     if (_showPointsChk->isChecked()) desc += tr("显示点 ");
     if (_showScaleChk->isChecked()) desc += tr("显示尺度 ");
     if (_showOrientationChk->isChecked()) desc += tr("显示方向 ");
+    if (_showResidualsChk->isChecked()) desc += tr("显示残差向量 ");
     
     if (_maxDisplaySpin->value() > 0) {
         desc += tr("(最多 %1 个)").arg(_maxDisplaySpin->value());

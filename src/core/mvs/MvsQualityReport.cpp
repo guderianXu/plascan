@@ -1,10 +1,13 @@
 #include "MvsQualityReport.h"
 
+#include <QJsonArray>
 #include <QJsonObject>
 
 #include <algorithm>
 #include <cmath>
 #include <vector>
+
+#include <opencv2/imgproc.hpp>
 
 namespace xjw
 {
@@ -13,6 +16,29 @@ namespace mvs
 
 namespace
 {
+
+constexpr int kMaxQualitySamplePixels = 1024 * 1024;
+
+cv::Mat boundedQualitySample(const cv::Mat &matrix)
+{
+    if (matrix.empty() || matrix.total() <= kMaxQualitySamplePixels)
+    {
+        return matrix;
+    }
+
+    const double scale = std::sqrt(
+        static_cast<double>(kMaxQualitySamplePixels) /
+        static_cast<double>(matrix.total()));
+    cv::Mat sampled;
+    cv::resize(matrix,
+               sampled,
+               cv::Size(std::max(1, static_cast<int>(std::round(matrix.cols * scale))),
+                        std::max(1, static_cast<int>(std::round(matrix.rows * scale)))),
+               0.0,
+               0.0,
+               cv::INTER_NEAREST);
+    return sampled;
+}
 
 float percentile(std::vector<float> values, float ratio)
 {
@@ -115,11 +141,73 @@ int countLocalDepthOutliers(const cv::Mat &depthMap)
     return outliers;
 }
 
+float largestValidComponentRatio(const cv::Mat &depthMap, int validPixelCount)
+{
+    if (validPixelCount <= 0)
+    {
+        return 0.0f;
+    }
+
+    cv::Mat valid_mask;
+    cv::compare(depthMap, 0.0f, valid_mask, cv::CMP_GT);
+    cv::Mat labels;
+    cv::Mat stats;
+    cv::Mat centroids;
+    const int component_count = cv::connectedComponentsWithStats(
+        valid_mask,
+        labels,
+        stats,
+        centroids,
+        8,
+        CV_32S);
+
+    int largest_area = 0;
+    for (int component = 1; component < component_count; ++component)
+    {
+        largest_area = std::max(largest_area, stats.at<int>(component, cv::CC_STAT_AREA));
+    }
+    return static_cast<float>(largest_area) / static_cast<float>(validPixelCount);
+}
+
+float searchBoundaryRatio(const cv::Mat &depthMap,
+                          int validPixelCount,
+                          float depthNear,
+                          float depthFar)
+{
+    const float depth_range = depthFar - depthNear;
+    if (validPixelCount <= 0 || depthNear <= 0.0f || depth_range <= 0.0f)
+    {
+        return 0.0f;
+    }
+
+    const float boundary_width = std::max(1.0e-5f, depth_range * 0.02f);
+    int boundary_count = 0;
+    for (int row = 0; row < depthMap.rows; ++row)
+    {
+        const float *depth_row = depthMap.ptr<float>(row);
+        for (int column = 0; column < depthMap.cols; ++column)
+        {
+            const float depth = depth_row[column];
+            if (depth <= 0.0f || !std::isfinite(depth))
+            {
+                continue;
+            }
+            if (depth <= depthNear + boundary_width || depth >= depthFar - boundary_width)
+            {
+                ++boundary_count;
+            }
+        }
+    }
+    return static_cast<float>(boundary_count) / static_cast<float>(validPixelCount);
+}
+
 } // namespace
 
 DepthMapQualityMetrics analyzeDepthMapQuality(const cv::Mat &depthMap,
                                               const cv::Mat &confidenceMap,
-                                              int sourceViewCount)
+                                              int sourceViewCount,
+                                              float depthNear,
+                                              float depthFar)
 {
     DepthMapQualityMetrics metrics;
     metrics.sourceViewCount = std::max(0, sourceViewCount);
@@ -133,10 +221,22 @@ DepthMapQualityMetrics analyzeDepthMapQuality(const cv::Mat &depthMap,
     const int totalPixels = std::max(1, depthMap.rows * depthMap.cols);
     metrics.validPixelCount = cv::countNonZero(depthMap > 0.0f);
     metrics.validCoverage = static_cast<float>(metrics.validPixelCount) / static_cast<float>(totalPixels);
-    metrics.localDepthOutlierCount = countLocalDepthOutliers(depthMap);
-    metrics.localDepthOutlierRatio = metrics.validPixelCount > 0
-        ? static_cast<float>(metrics.localDepthOutlierCount) / static_cast<float>(metrics.validPixelCount)
+    const cv::Mat sampled_depth = boundedQualitySample(depthMap);
+    const int sampled_valid_count = cv::countNonZero(sampled_depth > 0.0f);
+    metrics.largestComponentRatio = largestValidComponentRatio(sampled_depth,
+                                                               sampled_valid_count);
+    metrics.depthAtSearchBoundaryRatio = searchBoundaryRatio(
+        sampled_depth,
+        sampled_valid_count,
+        depthNear,
+        depthFar);
+    const int sampled_outlier_count = countLocalDepthOutliers(sampled_depth);
+    metrics.localDepthOutlierRatio = sampled_valid_count > 0
+        ? static_cast<float>(sampled_outlier_count) / static_cast<float>(sampled_valid_count)
         : 0.0f;
+    metrics.localDepthOutlierCount = static_cast<int>(std::llround(
+        static_cast<double>(metrics.localDepthOutlierRatio) *
+        static_cast<double>(metrics.validPixelCount)));
     metrics.hasLocalDepthOutliers = metrics.localDepthOutlierCount > 0;
 
     const bool hasConfidence = !confidenceMap.empty()
@@ -148,14 +248,15 @@ DepthMapQualityMetrics analyzeDepthMapQuality(const cv::Mat &depthMap,
         return metrics;
     }
 
+    const cv::Mat sampled_confidence = boundedQualitySample(confidenceMap);
     std::vector<float> values;
-    values.reserve(static_cast<std::size_t>(metrics.validPixelCount));
+    values.reserve(static_cast<std::size_t>(sampled_valid_count));
     double sum = 0.0;
-    for (int row = 0; row < depthMap.rows; ++row)
+    for (int row = 0; row < sampled_depth.rows; ++row)
     {
-        const float *depthRow = depthMap.ptr<float>(row);
-        const float *confRow = confidenceMap.ptr<float>(row);
-        for (int col = 0; col < depthMap.cols; ++col)
+        const float *depthRow = sampled_depth.ptr<float>(row);
+        const float *confRow = sampled_confidence.ptr<float>(row);
+        for (int col = 0; col < sampled_depth.cols; ++col)
         {
             if (depthRow[col] <= 0.0f)
             {
@@ -202,11 +303,36 @@ QJsonObject depthMapQualityMetricsToJson(const DepthMapQualityMetrics &metrics)
     object.insert(QStringLiteral("mean_confidence"), rounded(metrics.meanConfidence));
     object.insert(QStringLiteral("p50_confidence"), rounded(metrics.p50Confidence));
     object.insert(QStringLiteral("p75_confidence"), rounded(metrics.p75Confidence));
+    object.insert(QStringLiteral("largest_component_ratio"), rounded(metrics.largestComponentRatio));
+    object.insert(QStringLiteral("depth_at_search_boundary_ratio"),
+                  rounded(metrics.depthAtSearchBoundaryRatio));
     object.insert(QStringLiteral("low_confidence_full_coverage"), metrics.lowConfidenceFullCoverage);
     object.insert(QStringLiteral("local_depth_outlier_count"), metrics.localDepthOutlierCount);
     object.insert(QStringLiteral("local_depth_outlier_ratio"), rounded(metrics.localDepthOutlierRatio));
     object.insert(QStringLiteral("has_local_depth_outliers"), metrics.hasLocalDepthOutliers);
     object.insert(QStringLiteral("recommended_fusion_confidence"), rounded(metrics.recommendedFusionConfidence));
+    return object;
+}
+
+QJsonObject depthFrameQualityDecisionToJson(const DepthFrameQualityDecision &decision)
+{
+    QJsonObject object;
+    object.insert(QStringLiteral("acceptance"),
+                  QString::fromLatin1(depthFrameAcceptanceId(decision.acceptance)));
+    object.insert(QStringLiteral("calibrated_confidence"), decision.calibratedConfidence);
+    object.insert(QStringLiteral("min_component_area"),
+                  decision.filterSettings.minComponentArea);
+    object.insert(QStringLiteral("local_depth_outlier_rel_threshold"),
+                  decision.filterSettings.localDepthOutlierRelThreshold);
+    object.insert(QStringLiteral("min_consistent_views"),
+                  decision.filterSettings.minConsistentViews);
+
+    QJsonArray reasons;
+    for (const std::string &reason : decision.reasons)
+    {
+        reasons.append(QString::fromStdString(reason));
+    }
+    object.insert(QStringLiteral("reasons"), reasons);
     return object;
 }
 

@@ -1,7 +1,7 @@
 #pragma once
 
+#include "Camera.h"
 #include "MeshTypes.h"
-#include "PositiveDepthCameraModel.h"
 
 #include <opencv2/core.hpp>
 
@@ -15,7 +15,7 @@ namespace xjw::mesh
 
 struct VisualHullView
 {
-    xjw::PositiveDepthCameraModel camera;
+    xjw::Camera camera;
     cv::Mat silhouetteMask;
     cv::Mat depthMap;
     cv::Mat colorImage;
@@ -29,12 +29,19 @@ struct VisualHullConfig
     int resolution = 96;
     int minimumVisibleViews = 4;
     int allowedSilhouetteViolations = 1;
-    bool enableDepthFreeSpaceCarving = true;
+    bool enableDepthFreeSpaceCarving = false;
     int minimumDepthFreeSpaceViolations = 2;
     float relativeDepthTolerance = 0.01f;
     int workerCount = 0;
     std::function<bool()> isCancelled;
     std::function<void(const std::string &, float)> progressFn;
+};
+
+struct MeshConnectivityStats
+{
+    int componentCount = 0;
+    std::size_t largestComponentFaceCount = 0;
+    double largestComponentFaceRatio = 0.0;
 };
 
 class VisualHullReconstructor
@@ -44,6 +51,11 @@ public:
                             const VisualHullConfig &config,
                             TriMesh *mesh,
                             std::string *errorMessage = nullptr);
+    static MeshConnectivityStats analyzeConnectivity(const TriMesh &mesh);
+    static bool requiresSilhouetteOnlyRetry(const MeshConnectivityStats &stats,
+                                            double minimumLargestComponentFaceRatio,
+                                            int maximumConnectedComponents);
+    static bool retainLargestConnectedComponent(TriMesh *mesh);
 };
 
 } // namespace xjw::mesh

@@ -16,12 +16,15 @@
 
 #include "BundleAdjust.h"
 #include "Camera.h"
+#include "quality/MarkerQualityReport.h"
 
 #include <QJsonObject>
 #include <QMap>
 #include <QString>
 #include <QStringList>
+#include <QVector>
 
+#include <array>
 #include <vector>
 
 namespace xjw
@@ -34,6 +37,23 @@ namespace gui
 // ──────────────────────────────────────────────────────────────────────────────
 struct BaServiceOptions
 {
+    struct MarkerTrackQualityInput
+    {
+        control_points::MarkerId markerId;
+        control_points::MarkerRole role = control_points::MarkerRole::TieMarker;
+        int trackIndex = -1;
+        std::array<double, 3> referencePoint{{0.0, 0.0, 0.0}};
+        std::array<double, 3> sigma{{1.0, 1.0, 1.0}};
+        bool usedAsConstraint = false;
+    };
+    struct MarkerScaleBarQualityInput
+    {
+        control_points::ScaleBarId scaleBarId;
+        control_points::ScaleBarRole role = control_points::ScaleBarRole::Control;
+        int trackIndexA = -1;
+        int trackIndexB = -1;
+        double measuredDistance = 0.0;
+    };
     // ── 匹配 BA 求解器参数 ─────────────────────────────────────────────────
     xjw::BAOptions      baOpt;              ///< BA 求解器配置（迭代次数、鲁棒核、收敛阈值等）
 
@@ -41,6 +61,8 @@ struct BaServiceOptions
     QStringList         imagePathByIndex;   ///< 与 cameras 列表一一对应的影像绝对路径
     QStringList         selectedImages;     ///< 用户选中的全部影像路径（用于输出 JSON）
     QMap<QString, QJsonObject> beforeCamMeta; ///< 平差前各影像的相机 JSON，用于度量位移
+    QVector<MarkerTrackQualityInput> markerTrackQualityInputs;
+    QVector<MarkerScaleBarQualityInput> markerScaleBarQualityInputs;
 
     // ── LiDAR 点到面软约束 ────────────────────────────────────────────────
     bool                enableLaserConstraints = false; ///< 是否从 LiDAR 点云生成 BA 点到面约束

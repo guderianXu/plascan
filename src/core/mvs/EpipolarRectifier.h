@@ -16,8 +16,8 @@ public:
     {
         cv::Mat rectLeft;
         cv::Mat rectRight;
-        PositiveDepthCameraModel rectCamLeft;
-        PositiveDepthCameraModel rectCamRight;
+        Camera rectCamLeft;
+        Camera rectCamRight;
         cv::Mat H1;
         cv::Mat H2;
         cv::Mat H1inv;
@@ -31,8 +31,8 @@ public:
     static bool rectify(
         const cv::Mat &imgLeft,
         const cv::Mat &imgRight,
-        const PositiveDepthCameraModel &camLeft,
-        const PositiveDepthCameraModel &camRight,
+        const Camera &camLeft,
+        const Camera &camRight,
         RectifiedPair &result,
         std::string *errorMsg = nullptr);
 

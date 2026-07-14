@@ -256,6 +256,23 @@ target_include_directories(test_sfm_pipeline PRIVATE
 )
 gtest_discover_tests(test_sfm_pipeline)
 
+add_executable(test_sfm_prior_tracks test_sfm_prior_tracks.cpp)
+target_link_libraries(test_sfm_prior_tracks PRIVATE
+    sfm
+    camera
+    intersection
+    bundle_adjust
+    GTest::gtest_main
+)
+target_include_directories(test_sfm_prior_tracks PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+    ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/core/intersection
+    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
+    ${CMAKE_SOURCE_DIR}/src/core/control_points
+)
+gtest_discover_tests(test_sfm_prior_tracks)
+
 # ==============================================================================
 # test_ba_input_builder — BA 输入构建与测绘控制点观测接入
 # ==============================================================================
@@ -727,6 +744,7 @@ target_link_libraries(test_bundle_adjust_service_lidar PRIVATE
     lidar
     bundle_adjust
     camera
+    control_points
     Qt6::Core
     Qt6::Gui
     GTest::gtest_main
@@ -738,6 +756,7 @@ target_include_directories(test_bundle_adjust_service_lidar PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/lidar
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
+    ${CMAKE_SOURCE_DIR}/src/core/control_points
     ${CMAKE_SOURCE_DIR}/src/common/log
     ${CMAKE_SOURCE_DIR}/src/common
 )
@@ -814,8 +833,36 @@ gtest_discover_tests(test_project_data)
 # ==============================================================================
 # test_gui_project_utils — GUI project 工具与三角化服务
 # ==============================================================================
+set(MARKER_PANEL_TEST_SOURCES)
+set(MARKER_PANEL_REQUIRED_FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/test_marker_panels.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerProjectionPanel.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerReferencePanel.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerFocusMeasurementDialog.cpp
+)
+set(MARKER_PANEL_FILES_COMPLETE TRUE)
+foreach(marker_panel_file IN LISTS MARKER_PANEL_REQUIRED_FILES)
+    if(NOT EXISTS "${marker_panel_file}")
+        set(MARKER_PANEL_FILES_COMPLETE FALSE)
+    endif()
+endforeach()
+if(MARKER_PANEL_FILES_COMPLETE)
+    list(APPEND MARKER_PANEL_TEST_SOURCES ${MARKER_PANEL_REQUIRED_FILES})
+    list(APPEND MARKER_PANEL_TEST_SOURCES
+        ${CMAKE_SOURCE_DIR}/src/gui/markers/DetectMarkersDialog.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerTaskRunner.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerDetectionJobBuilder.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerDetectionReviewDialog.cpp
+        ${CMAKE_SOURCE_DIR}/src/gui/markers/PrintMarkersDialog.cpp
+    )
+else()
+    message(STATUS "plascan tests: marker panel tests skipped until all panel sources are present")
+endif()
+
 add_executable(test_gui_project_utils
     test_gui_project_utils.cpp
+    test_marker_canvas_interaction.cpp
+    ${MARKER_PANEL_TEST_SOURCES}
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeatureExtractionDialog.ui
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeaturePairPlanner.cpp
@@ -871,10 +918,23 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerFeatureLoader.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/FeatureResidualLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerStitchedDebug.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/CanvasWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerOverlayItems.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceController.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceDetection.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerWorkspaceView.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerUndoCommand.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/ProjectMarkerRepository.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DualImageViewer.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DualImageViewer.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/ImageViewWidget.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/ImageViewWidget.ui
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchLineOverlay.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DisparityHeatmapOverlay.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/DataTreeWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/WorkspaceSectionIcons.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/PhotoStripWidget.cpp
@@ -898,6 +958,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     intersection
     bundle_adjust
     qc
+    control_points
     terrain
     mask
     Qt6::Core
@@ -909,6 +970,7 @@ target_link_libraries(test_gui_project_utils PRIVATE
     ${PLASCAN_LIBZIP_TARGET}
     ${PLASCAN_GDAL_TARGET}
     plascan_common_io
+    plascan_common_string_utils
     plascan_common_model
     GTest::gtest
 )
@@ -920,6 +982,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/gui/menu
     ${CMAKE_SOURCE_DIR}/src/gui/main_window
+    ${CMAKE_SOURCE_DIR}/src/gui/markers
     ${CMAKE_SOURCE_DIR}/src/gui/tasks
     ${CMAKE_SOURCE_DIR}/src/gui/project
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive
@@ -937,6 +1000,7 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/intersection
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/qc
+    ${CMAKE_SOURCE_DIR}/src/core/control_points
     ${CMAKE_SOURCE_DIR}/src/core/terrain
     ${CMAKE_SOURCE_DIR}/src/core/mvs
     ${CMAKE_SOURCE_DIR}/src/core/mask
@@ -1044,6 +1108,7 @@ target_link_libraries(test_layer_renderer_batched_overlay PRIVATE
     ${TORCH_LIBRARIES}
     ${PLASCAN_GDAL_TARGET}
     plascan_common_io
+    plascan_common_string_utils
     mask
     GTest::gtest
 )
@@ -1286,6 +1351,7 @@ add_executable(test_feature_file_io
 target_link_libraries(test_feature_file_io PRIVATE
     Qt6::Core
     GTest::gtest_main
+    plascan_common_string_utils
     ${TORCH_LIBRARIES}
     ${OpenCV_LIBS}
 )
@@ -1294,3 +1360,116 @@ target_include_directories(test_feature_file_io PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
 )
 gtest_discover_tests(test_feature_file_io)
+
+# ==============================================================================
+# test_camera_scene_view_math — 三维相机视角选择、深度排序与校准投影
+# ==============================================================================
+add_executable(test_camera_scene_view_math
+    test_camera_scene_view_math.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CameraSceneViewMath.cpp
+)
+target_link_libraries(test_camera_scene_view_math PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    GTest::gtest_main
+)
+target_include_directories(test_camera_scene_view_math PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs
+)
+gtest_discover_tests(test_camera_scene_view_math)
+
+add_executable(test_camera_scene_render_contracts
+    test_camera_scene_render_contracts.cpp
+)
+target_link_libraries(test_camera_scene_render_contracts PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+target_compile_definitions(test_camera_scene_render_contracts PRIVATE
+    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
+)
+gtest_discover_tests(test_camera_scene_render_contracts)
+
+# ==============================================================================
+# test_marker_task_runner — 标靶后台检测、真实进度与取消
+# ==============================================================================
+add_executable(test_marker_task_runner
+    test_marker_task_runner.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerTaskRunner.cpp
+)
+set_target_properties(test_marker_task_runner PROPERTIES AUTOMOC ON)
+target_link_libraries(test_marker_task_runner PRIVATE
+    control_points
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent
+    GTest::gtest
+)
+target_include_directories(test_marker_task_runner PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/gui/markers
+    ${CMAKE_SOURCE_DIR}/src/core/control_points
+)
+gtest_discover_tests(test_marker_task_runner DISCOVERY_MODE PRE_TEST)
+
+# ==============================================================================
+# test_marker_detection_job_builder — 将项目影像/蒙版元数据转换为自动检测任务
+# ==============================================================================
+add_executable(test_marker_detection_job_builder
+    test_marker_detection_job_builder.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/markers/MarkerDetectionJobBuilder.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
+    ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
+)
+set_target_properties(test_marker_detection_job_builder PROPERTIES AUTOMOC ON)
+target_link_libraries(test_marker_detection_job_builder PRIVATE
+    control_points
+    Qt6::Core
+    Qt6::Gui
+    Qt6::Concurrent
+    ${PLASCAN_LIBZIP_TARGET}
+    GTest::gtest_main
+)
+target_include_directories(test_marker_detection_job_builder PRIVATE
+    ${CMAKE_SOURCE_DIR}/src/common/log
+    ${CMAKE_SOURCE_DIR}/src/gui/config
+    ${CMAKE_SOURCE_DIR}/src/gui/markers
+    ${CMAKE_SOURCE_DIR}/src/gui/project/archive
+    ${CMAKE_SOURCE_DIR}/src/gui/project/data
+    ${CMAKE_SOURCE_DIR}/src/gui/project/io
+    ${CMAKE_SOURCE_DIR}/src/core/control_points
+)
+gtest_discover_tests(test_marker_detection_job_builder DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_marker_detect_cli test_marker_detect_cli.cpp)
+target_link_libraries(test_marker_detect_cli PRIVATE
+    Qt6::Core
+    Qt6::Gui
+    GTest::gtest_main
+)
+if(TARGET marker_detect_cli)
+    target_compile_definitions(test_marker_detect_cli PRIVATE
+        PLASCAN_MARKER_DETECT_CLI_PATH="$<TARGET_FILE:marker_detect_cli>"
+    )
+    add_dependencies(test_marker_detect_cli marker_detect_cli)
+endif()
+gtest_discover_tests(test_marker_detect_cli DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_marker_print_cli test_marker_print_cli.cpp)
+target_link_libraries(test_marker_print_cli PRIVATE
+    Qt6::Core
+    GTest::gtest_main
+)
+if(TARGET marker_print_cli)
+    target_compile_definitions(test_marker_print_cli PRIVATE
+        PLASCAN_MARKER_PRINT_CLI_PATH="$<TARGET_FILE:marker_print_cli>"
+    )
+    add_dependencies(test_marker_print_cli marker_print_cli)
+endif()
+gtest_discover_tests(test_marker_print_cli DISCOVERY_MODE PRE_TEST)

@@ -6,8 +6,8 @@
    <rect>
     <x>0</x>
     <y>0</y>
-    <width>500</width>
-    <height>640</height>
+    <width>560</width>
+    <height>680</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -28,8 +28,49 @@
         <property name="buddy">
          <cstring>m_suffixCombo</cstring>
         </property>
-       </widget>
-      </item>
+   </widget>
+  </item>
+  <item>
+   <widget class="QGroupBox" name="residualGroup">
+    <property name="title">
+     <string>重投影残差</string>
+    </property>
+    <layout class="QFormLayout" name="residualForm">
+     <item row="0" column="1">
+      <widget class="QCheckBox" name="m_showResidualsChk">
+       <property name="text"><string>显示点残差</string></property>
+       <property name="toolTip"><string>绘制观测像素到三维点重投影像素的真实残差向量</string></property>
+      </widget>
+     </item>
+     <item row="1" column="0"><widget class="QLabel" name="residualScaleLabel"><property name="text"><string>向量倍率:</string></property></widget></item>
+     <item row="1" column="1">
+      <widget class="QDoubleSpinBox" name="m_residualScaleSpin">
+       <property name="minimum"><double>0.100000000000000</double></property>
+       <property name="maximum"><double>100.000000000000000</double></property>
+       <property name="value"><double>10.000000000000000</double></property>
+      </widget>
+     </item>
+     <item row="2" column="0"><widget class="QLabel" name="minimumResidualLabel"><property name="text"><string>最小残差:</string></property></widget></item>
+     <item row="2" column="1">
+      <widget class="QDoubleSpinBox" name="m_minimumResidualSpin">
+       <property name="suffix"><string> px</string></property>
+       <property name="maximum"><double>1000.000000000000000</double></property>
+      </widget>
+     </item>
+     <item row="3" column="0"><widget class="QLabel" name="maximumResidualLengthLabel"><property name="text"><string>最大绘制长度:</string></property></widget></item>
+     <item row="3" column="1">
+      <widget class="QDoubleSpinBox" name="m_maximumResidualLengthSpin">
+       <property name="suffix"><string> px</string></property>
+       <property name="specialValueText"><string>不限</string></property>
+       <property name="maximum"><double>1000.000000000000000</double></property>
+       <property name="value"><double>80.000000000000000</double></property>
+      </widget>
+     </item>
+     <item row="4" column="0"><widget class="QLabel" name="residualColorLabel"><property name="text"><string>残差颜色:</string></property></widget></item>
+     <item row="4" column="1"><widget class="QPushButton" name="m_residualColorBtn"><property name="text"><string>    </string></property></widget></item>
+    </layout>
+   </widget>
+  </item>
       <item>
        <widget class="QComboBox" name="m_suffixCombo">
         <property name="toolTip">
@@ -370,7 +411,7 @@ SuperPoint默认无方向</string>
       <item>
        <widget class="QLabel" name="m_previewLabel">
         <property name="minimumHeight">
-         <number>80</number>
+         <number>36</number>
         </property>
         <property name="frameShape">
          <enum>QFrame::Panel</enum>

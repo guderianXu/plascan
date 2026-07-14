@@ -1,8 +1,8 @@
 #include "TraditionalFeatureMatcher.h"
 #include "CudaSiftMatcher.h"
+#include "string_utils/StringTransform.h"
 
 #include <algorithm>
-#include <cctype>
 #include <stdexcept>
 
 namespace
@@ -56,11 +56,7 @@ namespace xjw::feature_match::tradition
 
 std::string TraditionalFeatureMatcher::normalizeAlgorithmName(const std::string &algorithmName)
 {
-    std::string normalized = algorithmName;
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(), [](unsigned char c)
-    {
-        return static_cast<char>(std::tolower(c));
-    });
+    const std::string normalized = xjw::common::string_utils::asciiLowerCopy(algorithmName);
 
     if (normalized == "orb_bf_hamming" ||
         normalized == "sift_bf_l2" ||

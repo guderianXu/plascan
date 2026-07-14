@@ -12,6 +12,7 @@
 #include "ExtractorFactory.h"
 #include "FeatureFileIO.h"
 #include "io/PathIO.h"
+#include "string_utils/StringTransform.h"
 
 #include <opencv2/imgcodecs.hpp>
 #include <QFileInfo>
@@ -20,8 +21,6 @@
 #include <QCoreApplication>
 #include <QProcess>
 #include <QStandardPaths>
-#include <algorithm>
-#include <cctype>
 #include <memory>
 
 namespace
@@ -219,9 +218,7 @@ int main(int argc, char *argv[])
 
     // 自动追加算法后缀
     std::string norm = xjw::feature_extractors::TraditionalFeatureExtractor::normalizeAlgorithmName(algo);
-    std::string requestedAlgo = algo;
-    std::transform(requestedAlgo.begin(), requestedAlgo.end(), requestedAlgo.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string requestedAlgo = xjw::common::string_utils::asciiLowerCopy(algo);
     if (requestedAlgo == "dedode")
     {
         norm = "dedode";

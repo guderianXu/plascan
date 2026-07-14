@@ -1,6 +1,6 @@
 # PlaScan 项目架构文档
 
-行星表面摄影测量处理系统。最后更新: 2026-07-07。
+行星表面摄影测量处理系统。最后更新: 2026-07-14。
 
 ## 顶层目录
 
@@ -8,7 +8,7 @@
 plascan/
 ├── src/            # 所有源代码
 │   ├── common/     # 通用工具库 (日志, IO, 模型与项目公共能力)
-│   ├── core/       # 核心算法库 (相机, 特征, 匹配, SfM, MVS, LiDAR, 蒙版, 网格, 地形, 密集匹配)
+│   ├── core/       # 核心算法库 (相机, 特征, 匹配, 标记控制网, SfM, MVS, LiDAR, 蒙版, 网格, 地形)
 │   └── gui/        # Qt6 图形界面
 ├── cmake/          # 全局 CMake 模块 (依赖查找, 包管理)
 ├── 3rdparty/       # 第三方库源码 (LightGlue)
@@ -51,6 +51,13 @@ common/
 │   └── U2NetModelCatalog.h/cpp # U2Net ONNX 文件名和安装状态
 ├── project/
 │   └── ProjectCommonUtils.h # 项目通用工具
+├── string_utils/
+│   ├── StringParsing.h/cpp # 文本中的 double 数值子串尽力提取
+│   ├── StringTransform.h/cpp # ASCII 小写、空白裁剪和后缀比较
+│   └── test/
+│       ├── CMakeLists.txt # 字符串模块测试目标
+│       ├── StringParsing_tests.cpp # double 数值子串提取测试
+│       └── StringTransform_tests.cpp # ASCII 转换与比较测试
 ├── result/
 │   └── OperationResult.h   # 操作结果包装 (成功/失败 + 错误信息)
 └── CMakeLists.txt
@@ -67,10 +74,13 @@ core/
 ├── CMakeLists.txt              # 注册所有子模块
 │
 ├── camera/                     # 相机模型
-│   ├── Camera.h/cpp            # 通用相机 (Pinhole + 位姿)
+│   ├── Camera.h/cpp            # 唯一相机模型：内参、Brown-Conrady 畸变、位姿和正深度归一化
 │   ├── CameraFormatConverter.h/cpp # Middlebury/EPFL 等外部相机 -> tsai + image_camera.lis
-│   ├── PositiveDepthCameraModel.h/cpp  # 正深度约束相机
-│   └── Camera_tests.cpp
+│   └── test/                      # 相机测试与诊断程序
+│       ├── Camera_tests.cpp
+│       ├── CameraFormatConverter_tests.cpp
+│       ├── test_tsai_loader.cpp
+│       └── test.cpp
 │
 ├── feature_extractors/         # 特征点检测 (8 种算法)
 │   ├── IExtractor.h             # 提取器虚接口
@@ -146,6 +156,18 @@ core/
 │   │   └── TiePointTrackManager.h/cpp # 最终多视图连接点 track 构建、筛选和统计摘要
 │   └── tests/                       # matchphototask 模块级测试
 │
+├── control_points/             # Metashape-like 标记点与测绘控制网络
+│   ├── model/                   # MarkerSet、投影状态、控制/检查点和比例尺
+│   ├── io/                      # marker_set.json、CSV 和旧 survey_control 单次迁移
+│   ├── commands/                # 可撤销 MarkerChangeSet
+│   ├── detection/               # AprilTag/非编码检测、合并和 detection_review.json
+│   ├── geometry/                # 三角化、预测投影与亚像素几何
+│   ├── reference/               # CRS、轴序和坐标转换
+│   ├── registration/            # PriorTrack、绝对定向和控制网络解算
+│   ├── quality/                 # 投影、控制点、检查点和比例尺质量报告
+│   ├── print/                   # 共享标靶页面渲染与 PDF 输出
+│   └── README.md                # 工作流、支持族、sidecar 和 CLI 说明
+│
 ├── bundle_adjust/              # 光束法平差
 │   ├── BundleAdjust.h/cpp      # BA 公共接口、自动后端选择、legacy CPU 后端调度、后端状态回传
 │   ├── BundleAdjustCeres.h/cpp # Ceres CPU/CUDA 后端，记录 dense Schur CPU/GPU、setup/solve 耗时和回退原因
@@ -172,6 +194,9 @@ core/
 │   ├── graph/
 │   │   ├── CorrespondenceGraph.h/cpp      # 对应关系图
 │   │   └── ObservationNetworkBuilder.h/cpp # 观测网络构建
+│   ├── tracks/
+│   │   ├── MultiViewTrackBuilder.h/cpp     # 多视轨迹合并、冲突消解和长轨迹优先筛选
+│   │   └── CorrespondenceTrackThinner.h/cpp # 按每影像/网格限额筛选 SfM 输入匹配图
 │   ├── pose/PnpSolver.h/cpp    # PnP 位姿解算
 │   ├── triangulation/
 │   │   ├── Triangulator.h/cpp  # 基础三角化
@@ -189,6 +214,13 @@ core/
 │   ├── MvsTypes.h              # MVS 公共类型
 │   ├── MvsWorkspaceManifest.h/cpp # 深度帧状态、产物路径、相机/影像/配置 hash 和 source plan
 │   ├── MvsSourcePlanner.h/cpp  # shared tracks / 几何内点 / 覆盖率 / baseline 选源
+│   ├── MvsImagePreprocessor.h/cpp # 原图去畸变并生成正深度、零畸变的 Camera 工作值
+│   ├── DepthPyramidPolicy.h/cpp # 从最终质量档生成 4D/2D/D 三级 PatchMatch 调度
+│   ├── MvsSceneClassifier.h/cpp # 根据相机布局、光轴和稀疏云厚度判定环拍/航测场景
+│   ├── DepthPyramidPropagation.h/cpp # 父层深度中心、不确定半径和边缘感知传播
+│   ├── DepthPyramidEstimator.h/cpp # Level 3/2/1 编排与逐层摘要
+│   ├── DepthFrameQualityGate.h/cpp # 深度帧 Accepted/ValidationOnly/Rejected 质量门控
+│   ├── DepthConsistencyCache.h/cpp # 有内存预算的 LRU source 邻域多视一致性缓存
 │   ├── PatchMatchCUDA.cu/h     # PatchMatch CUDA 实现
 │   ├── PatchMatchNoCUDA.cpp    # PatchMatch CPU 回退
 │   ├── DepthMapGenerator.h/cpp # 深度图估计、取消检查、raw depth/confidence/valid mask 写盘
@@ -250,7 +282,11 @@ core/
 │   ├── ReconstructionQualityReport.h/cpp # 注册影像、track、重投影、MVS/DEM 覆盖率、GCP/检查点/比例尺报告
 │   ├── SurveyControlImport.h/cpp # GCP/检查点/比例尺 CSV 导入为 survey_control metadata
 │   ├── SurveyControlReport.h/cpp # GCP/检查点/比例尺 metadata 统计和残差状态汇总
-│   ├── PointCloudAlignment.h/cpp # 点云 Sim3 / 最近邻平移配准与 beg/end error CSV
+│   ├── PointCloudAlignment.h/cpp # 点云完整 Sim3 / 最近邻 ICP 配准与 beg/end error CSV
+│   ├── ModelMeshRenderer.h/cpp # CPU tile 并行 z-buffer，将 PLY 网格投影到 MVS 实际相机
+│   ├── ModelImageMetrics.h/cpp # 轮廓、覆盖、边缘、SSIM/PSNR 影像空间指标
+│   ├── ModelGeometryComparator.h/cpp # 连通分量与参考点云双向最近邻 A+C 几何验收
+│   ├── ModelImageQualityEvaluator.h/cpp # GUI/CLI 可复用的统一门控、诊断图和 JSON/CSV 报告
 │   └── DemDifference.h/cpp     # DEM 差分、绝对差分和统计报告
 │
 ├── aerial_triangulation/       # 对齐照片式空中三角测量，职责对应 Metashape Align Photos
@@ -273,6 +309,10 @@ core/
 `assetsDir/featureDir/matchDir` 和实际候选对交给 `AerialTriangulationService`。GUI 与
 `aerial_triangulation_cli` 不再各自实现连接点补齐逻辑，也不允许 SfM 回退读取另一套项目缓存。
 合法的 V2 零匹配 sidecar 作为已确认负缓存消费，不重复扫描或生成。
+
+无相机 `IncrementalSfm` 会在构建对应关系索引前再次按用户的连接点限制执行轨迹级筛选，确保
+SfM、BA 和创建连接点阶段使用相同的每影像限额语义。焦距粗筛首先保证注册覆盖，再按多视比例、
+三角交会角、空间覆盖和 RMS 选择正式重放候选；最终质量报告对两视轨迹比例执行 0.70 advisory / 0.85 blocking 门控。
 
 `sfm/ReferenceTerrainPrior.h/cpp` 把参考 DEM 或 LiDAR 局部高度面接入 BA soft prior。参考地形默认作为软约束参与诊断，
 不把已知外参硬固定；BA 报告应记录 pose prior / terrain prior 优化前后的残差。
@@ -312,6 +352,15 @@ gui/
 ├── menu/
 │   ├── MainMenu.h/cpp          # 菜单栏/工具栏动作编排；按工作区模式切换三维与影像专属工具组
 │   └── ToolbarButton.h/cpp     # 统一快捷栏模板：尺寸、绘制状态、普通/下拉按钮工厂
+│
+├── markers/                    # 标记点 GUI、工程 repository 与后台检测
+│   ├── MarkerWorkspaceController.h/cpp # 右键编辑、撤销、检测合并和 sidecar 协调
+│   ├── MarkerReferencePanel.h/cpp      # 标记角色、参考坐标和精度编辑
+│   ├── MarkerProjectionPanel.h/cpp     # 多影像投影状态查看
+│   ├── MarkerFocusMeasurementDialog.h/cpp # 双影像聚焦量测和预测确认
+│   ├── DetectMarkersDialog.h/cpp       # 项目级后台检测、整体进度和取消
+│   ├── MarkerDetectionReviewDialog.h/cpp # 候选预览、归入已有标记或丢弃
+│   └── PrintMarkersDialog.h/cpp        # 标靶物理布局和 PDF 输出
 │
 ├── dialogs/                    # 对话框 (31 个)
 │   ├── FeatureMatchingDialog.h/cpp          # 特征匹配参数
@@ -408,7 +457,10 @@ gui/
 │   └── ../core/pipeline/FeatureMatchRunner.h/cpp  # 特征匹配异步执行
 │
 ├── views/
-│   └── LayerRenderer.h/cpp     # 图层渲染器
+│   ├── LayerRenderer.h/cpp             # 图层渲染器
+│   ├── LayerOverlayItems.h/cpp          # 批量特征点、残差向量与匹配覆盖层
+│   ├── LayerFeatureLoader.h/cpp         # 特征文件解析与关键点加载
+│   └── FeatureResidualLoader.h/cpp      # 按当前影像异步筛选真实重投影残差
 │
 ├── config/                     # 配置管理
 │   ├── AppConfigManager.h/cpp          # 应用配置
@@ -514,6 +566,8 @@ cli/
 ├── cli_feature_extract.cpp   # 特征提取 CLI (8 种算法, 工厂模式)
 ├── cli_feature_match.cpp     # 特征匹配 CLI (工厂模式, 自动检测算法)
 ├── cli_bundle_adjust.cpp      # 光束法平差 CLI (支持 LiDAR 约束和 A/B 对比)
+├── marker_detect_cli.cpp      # 编码/非编码标靶检测，输出稳定 JSON
+├── marker_print_cli.cpp       # 按物理尺寸生成标靶 PDF
 └── tests/                    # CLI 端到端测试脚本
 ```
 
@@ -539,6 +593,8 @@ cli/
   ├─ feature_extract_cli  特征提取    → .sp/.dsk/.alk 等
   ├─ feature_match_cli    特征匹配    → .match 文件 + .match.json sidecar
   ├─ bundle_adjust_cli    光束法平差  → ba_run_summary.json / A-B 对比 JSON
+  ├─ marker_detect_cli    标靶检测    → plascan.marker-detections.v1 JSON
+  ├─ marker_print_cli     标靶打印    → A4/Letter PDF
   ├─ rectify_cli          极线校正    → 校正影像对 + 单应矩阵 .xml
   ├─ dense_match_cli      密集匹配    → 视差图 .tif
   └─ triangulate_cli      视差三角化  → 密集点云 .ply

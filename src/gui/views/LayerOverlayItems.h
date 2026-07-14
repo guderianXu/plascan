@@ -18,6 +18,11 @@ QGraphicsItem *createFeatureOverlayItem(const std::vector<cv::KeyPoint> &keypoin
                                         const LayerRenderer::FeatureDisplayOptions &options,
                                         const QRectF &imageBounds);
 
+QGraphicsItem *createFeatureResidualOverlayItem(
+    const QVector<FeatureResidualVector> &residuals,
+    const LayerRenderer::FeatureDisplayOptions &options,
+    const QRectF &imageBounds);
+
 QList<QGraphicsItem *> createMatchOverlayItems(const QVector<QPointF> &ptsA,
                                                const QVector<QPointF> &ptsB,
                                                const LayerRenderer::MatchDisplayOptions &options,

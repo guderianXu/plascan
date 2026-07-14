@@ -47,6 +47,9 @@ struct AerialTriangulationServiceOptions
     // ── 项目路径（用于查找已有特征 / .match 文件）────────────────────────
     QString             plascanPath;        ///< 当前 .plascan 项目路径
 
+    /// 标记 sidecar 路径。为空时从 plascanPath 自动解析；不存在时按无人工标记运行。
+    QString             markerSetPath;
+
     /// 连接点阶段与 SfM 共用的缓存目录。为空时回退到项目 assets 目录；
     /// 统一 workflow 应显式传入，避免两个阶段分别读写不同缓存。
     QString             assetsDir;

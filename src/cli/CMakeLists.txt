@@ -15,6 +15,16 @@ function(add_plascan_cli name src_file libs include_dirs)
     )
 endfunction()
 
+# ── 编码/非编码标靶检测：与 GUI 共用 control_points 检测器 ──
+if(TARGET control_points)
+    add_plascan_cli(marker_detect_cli marker_detect_cli.cpp
+        "control_points;Qt6::Core;Qt6::Gui"
+        "${CMAKE_SOURCE_DIR}/src/core/control_points")
+    add_plascan_cli(marker_print_cli marker_print_cli.cpp
+        "control_points;Qt6::Core;Qt6::Gui"
+        "${CMAKE_SOURCE_DIR}/src/core/control_points")
+endif()
+
 # ── 通用相机格式转换 ──
 if(TARGET camera)
     add_plascan_cli(camera_convert_cli cli_camera_convert.cpp
@@ -57,10 +67,38 @@ if(TARGET meshing)
         "${CMAKE_SOURCE_DIR}/src/common;${CMAKE_SOURCE_DIR}/src/core/mesh")
 endif()
 
+# ── 模型影像回归验收：留出相机渲染 + 可选参考点云 ──
+if(TARGET qc AND TARGET meshing AND TARGET camera)
+    add_executable(model_quality_cli
+        cli_model_quality.cpp
+        cli_photogrammetry_common.cpp
+        cli_photogrammetry_common.h
+    )
+    target_link_libraries(model_quality_cli PRIVATE
+        qc
+        meshing
+        camera
+        plascan_common_io
+        Qt6::Core
+        ${OpenCV_LIBS}
+    )
+    target_include_directories(model_quality_cli PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/common
+        ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/mesh
+        ${CMAKE_SOURCE_DIR}/src/core/qc
+        ${OpenCV_INCLUDE_DIRS}
+    )
+    set_target_properties(model_quality_cli PROPERTIES
+        RUNTIME_OUTPUT_DIRECTORY "${CMAKE_BINARY_DIR}/bin"
+    )
+endif()
+
 # ── 特征提取 ──
 if(TARGET superpoint)
     add_plascan_cli(feature_extract_cli cli_feature_extract.cpp
-        "superpoint;feature_extractors_disk;feature_extractors_aliked;feature_extractors_traditional;plascan_common_io;Qt6::Core;${TORCH_LIBRARIES}"
+        "superpoint;feature_extractors_disk;feature_extractors_aliked;feature_extractors_traditional;plascan_common_io;plascan_common_string_utils;Qt6::Core;${TORCH_LIBRARIES}"
         "${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint;${CMAKE_SOURCE_DIR}/src/core/feature_extractors;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/tradition;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk;${CMAKE_SOURCE_DIR}/src/core/feature_extractors/aliked")
     target_compile_definitions(feature_extract_cli PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 endif()
@@ -132,6 +170,7 @@ if(TARGET matchphototask AND TARGET feature_extractors_traditional AND TARGET fe
         feature_extractors_traditional
         feature_match_common
         camera
+        control_points
         overlap
         Qt6::Core
         Qt6::Concurrent
@@ -145,6 +184,7 @@ if(TARGET matchphototask AND TARGET feature_extractors_traditional AND TARGET fe
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/common
         ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/control_points
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
@@ -244,6 +284,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
         feature_extractors_traditional
         feature_match_common
         camera
+        control_points
         overlap
         Qt6::Core
         Qt6::Concurrent
@@ -257,6 +298,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/common
         ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/control_points
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk
@@ -312,6 +354,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
         feature_extractors_traditional
         feature_match_common
         camera
+        control_points
         overlap
         Qt6::Core
         Qt6::Concurrent
@@ -325,6 +368,7 @@ if(TARGET feature_extractors_traditional AND TARGET feature_match_traditional AN
         ${CMAKE_CURRENT_SOURCE_DIR}
         ${CMAKE_SOURCE_DIR}/src/common
         ${CMAKE_SOURCE_DIR}/src/core/camera
+        ${CMAKE_SOURCE_DIR}/src/core/control_points
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/superpoint
         ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/disk

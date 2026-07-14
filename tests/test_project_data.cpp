@@ -178,6 +178,32 @@ TEST(ProjectDataTest, CreateSaveOpenSupportsChineseProjectPath)
               QDir::cleanPath(QFileInfo(projectPath).absoluteFilePath()));
 }
 
+TEST(ProjectDataTest, AssignsStableUuidToImportedImages)
+{
+    QTemporaryDir dir;
+    ASSERT_TRUE(dir.isValid());
+
+    const QString projectPath = tempProjectPath(dir);
+    const QString imagePath = QDir(dir.path()).filePath(QStringLiteral("a.jpg"));
+    ProjectData project;
+    ASSERT_TRUE(project.createProject(projectPath, QStringLiteral("image_identity")));
+    ASSERT_TRUE(project.addImages({imagePath}));
+
+    const QJsonArray initialImages = project.coreFilesMeta().value(QStringLiteral("images")).toArray();
+    ASSERT_EQ(initialImages.size(), 1);
+    const QString firstId = initialImages[0].toObject().value(QStringLiteral("image_uuid")).toString();
+    ASSERT_FALSE(firstId.isEmpty());
+
+    QString error;
+    ASSERT_TRUE(project.saveProject(&error)) << qPrintable(error);
+
+    ProjectData reopened;
+    ASSERT_TRUE(reopened.openProject(projectPath, &error)) << qPrintable(error);
+    const QJsonArray reopenedImages = reopened.coreFilesMeta().value(QStringLiteral("images")).toArray();
+    ASSERT_EQ(reopenedImages.size(), 1);
+    EXPECT_EQ(reopenedImages[0].toObject().value(QStringLiteral("image_uuid")).toString(), firstId);
+}
+
 TEST(ProjectDataCameraTest, ReplaceImageCamerasClearsStaleAlignmentOutsideNewSolution)
 {
     QTemporaryDir dir;

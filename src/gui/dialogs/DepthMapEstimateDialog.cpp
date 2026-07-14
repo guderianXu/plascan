@@ -10,6 +10,8 @@
 #include <QDialogButtonBox>
 #include <QPushButton>
 
+#include <iterator>
+
 namespace
 {
 
@@ -82,10 +84,32 @@ DepthMapEstimateDialog::DepthMapEstimateDialog(QWidget *parent)
     _depthMaxSpin = form.m_depthMaxSpin;
     _confidenceSpin = form.m_confidenceSpin;
     _normalMapCheck = form.m_normalMapCheck;
+    _sceneProfileCombo = form.m_sceneProfileCombo;
+    _depthFilterCombo = form.m_depthFilterCombo;
+    _savePyramidLevelsCheck = form.m_savePyramidLevelsCheck;
     _cudaCheck = form.m_cudaCheck;
     _tileWSpin = form.m_tileWSpin;
     _tileHSpin = form.m_tileHSpin;
     _threadsSpin = form.m_threadsSpin;
+
+    _presetCombo->clear();
+    _presetCombo->addItem(tr("最高"), QStringLiteral("highest"));
+    _presetCombo->addItem(tr("高"), QStringLiteral("high"));
+    _presetCombo->addItem(tr("中"), QStringLiteral("medium"));
+    _presetCombo->addItem(tr("低"), QStringLiteral("low"));
+    _presetCombo->addItem(tr("最低"), QStringLiteral("lowest"));
+    _presetCombo->addItem(tr("自定义"), QStringLiteral("custom"));
+
+    _sceneProfileCombo->clear();
+    _sceneProfileCombo->addItem(tr("自动识别"), QStringLiteral("auto"));
+    _sceneProfileCombo->addItem(tr("环拍任意 3D"), QStringLiteral("orbital_object"));
+    _sceneProfileCombo->addItem(tr("航测地形"), QStringLiteral("aerial_terrain"));
+
+    _depthFilterCombo->clear();
+    _depthFilterCombo->addItem(tr("自动"), QStringLiteral("auto"));
+    _depthFilterCombo->addItem(tr("温和"), QStringLiteral("mild"));
+    _depthFilterCombo->addItem(tr("中等"), QStringLiteral("moderate"));
+    _depthFilterCombo->addItem(tr("强过滤"), QStringLiteral("aggressive"));
 
     _estimateLabel = nullptr; // 占位，不再显示"预计: -"
     form.buttonBox->button(QDialogButtonBox::Ok)->setText(tr("开始估计"));
@@ -101,7 +125,7 @@ DepthMapEstimateDialog::DepthMapEstimateDialog(QWidget *parent)
         if (!_applyingPreset)
         {
             _presetCombo->blockSignals(true);
-            _presetCombo->setCurrentIndex(3);
+            _presetCombo->setCurrentIndex(_presetCombo->findData(QStringLiteral("custom")));
             _presetCombo->blockSignals(false);
         }
         emitSettingsNow();
@@ -121,6 +145,9 @@ DepthMapEstimateDialog::DepthMapEstimateDialog(QWidget *parent)
     connect(_depthMaxSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
     connect(_confidenceSpin, QOverload<double>::of(&QDoubleSpinBox::valueChanged), this, changed);
     connect(_normalMapCheck, &QCheckBox::toggled, this, changed);
+    connect(_sceneProfileCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_depthFilterCombo, QOverload<int>::of(&QComboBox::currentIndexChanged), this, changed);
+    connect(_savePyramidLevelsCheck, &QCheckBox::toggled, this, changed);
     connect(_cudaCheck, &QCheckBox::toggled, this, changed);
     connect(_tileWSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
     connect(_tileHSpin, QOverload<int>::of(&QSpinBox::valueChanged), this, changed);
@@ -129,7 +156,7 @@ DepthMapEstimateDialog::DepthMapEstimateDialog(QWidget *parent)
     connect(form.buttonBox, &QDialogButtonBox::accepted, this, &DepthMapEstimateDialog::onRun);
     connect(form.buttonBox, &QDialogButtonBox::rejected, this, &QDialog::reject);
 
-    onPresetChanged(1);
+    onPresetChanged(_presetCombo->findData(QStringLiteral("medium")));
 }
 
 void DepthMapEstimateDialog::setAvailableAtResults(const QJsonArray &atResults)
@@ -191,7 +218,7 @@ void DepthMapEstimateDialog::setAvailableAtResults(const QJsonArray &atResults)
 
 void DepthMapEstimateDialog::onPresetChanged(int index)
 {
-    if (index == 3)
+    if (index < 0 || _presetCombo->itemData(index).toString() == QStringLiteral("custom"))
     {
         return;
     }
@@ -206,10 +233,16 @@ void DepthMapEstimateDialog::onPresetChanged(int index)
         double co;
     };
     static const P kP[] = {
-        {0.25, 3, 0, 0, 7,  2, 0.3},
-        {0.50, 6, 0, 0, 11, 3, 0.5},
-        {1.00, 10,0, 0, 15, 4, 0.7},
+        {1.0000, 16, 0, 0, 15, 8, 0.72},
+        {0.5000, 12, 0, 0, 13, 7, 0.68},
+        {0.2500, 8,  0, 0, 11, 6, 0.60},
+        {0.1250, 4,  0, 0, 9,  3, 0.30},
+        {0.0625, 3,  0, 0, 7,  2, 0.22},
     };
+    if (index >= static_cast<int>(std::size(kP)))
+    {
+        return;
+    }
     const auto &p = kP[index];
     _applyingPreset = true;
     _resScaleSpin->setValue(p.rs);
@@ -231,6 +264,7 @@ QJsonObject DepthMapEstimateDialog::collectSettings() const
     o["at_index"] = atIndex;
     o["at_selection_mode"] = (atIndex < 0) ? QStringLiteral("latest") : QStringLiteral("fixed");
     o["preset"] = _presetCombo->currentText();
+    o["qualityProfile"] = _presetCombo->currentData().toString();
     o["resScale"] = _resScaleSpin->value();
     o["iterations"] = _iterationsSpin->value();
     o["costFunction"] = _costFuncCombo->currentText();
@@ -241,6 +275,9 @@ QJsonObject DepthMapEstimateDialog::collectSettings() const
     o["depthMax"] = _depthMaxSpin->value();
     o["confidence"] = _confidenceSpin->value();
     o["normalMap"] = _normalMapCheck->isChecked();
+    o["sceneProfile"] = _sceneProfileCombo->currentData().toString();
+    o["depthFilterMode"] = _depthFilterCombo->currentData().toString();
+    o["saveIntermediatePyramidLevels"] = _savePyramidLevelsCheck->isChecked();
     o["cuda"] = _cudaCheck->isChecked();
     o["tileWidth"] = _tileWSpin->value();
     o["tileHeight"] = _tileHSpin->value();
@@ -250,6 +287,17 @@ QJsonObject DepthMapEstimateDialog::collectSettings() const
 
 void DepthMapEstimateDialog::applySettings(const QJsonObject &s)
 {
+    _applyingPreset = true;
+    const QString profile_id = s.value(QStringLiteral("qualityProfile")).toString();
+    if (!profile_id.isEmpty())
+    {
+        const int profile_index = _presetCombo->findData(profile_id);
+        if (profile_index >= 0)
+        {
+            _presetCombo->setCurrentIndex(profile_index);
+        }
+    }
+
     if (s.contains("at_selection_mode") && s.value("at_selection_mode").toString() == QStringLiteral("latest"))
     {
         _pendingAtIndex = -1;
@@ -316,6 +364,26 @@ void DepthMapEstimateDialog::applySettings(const QJsonObject &s)
     {
         _normalMapCheck->setChecked(s["normalMap"].toBool());
     }
+    if (s.contains("sceneProfile"))
+    {
+        const int index = _sceneProfileCombo->findData(s["sceneProfile"].toString());
+        if (index >= 0)
+        {
+            _sceneProfileCombo->setCurrentIndex(index);
+        }
+    }
+    if (s.contains("depthFilterMode"))
+    {
+        const int index = _depthFilterCombo->findData(s["depthFilterMode"].toString());
+        if (index >= 0)
+        {
+            _depthFilterCombo->setCurrentIndex(index);
+        }
+    }
+    if (s.contains("saveIntermediatePyramidLevels"))
+    {
+        _savePyramidLevelsCheck->setChecked(s["saveIntermediatePyramidLevels"].toBool());
+    }
     if (s.contains("cuda"))
     {
         _cudaCheck->setChecked(s["cuda"].toBool());
@@ -332,6 +400,8 @@ void DepthMapEstimateDialog::applySettings(const QJsonObject &s)
     {
         _threadsSpin->setValue(s["threads"].toInt());
     }
+    _applyingPreset = false;
+    emitSettingsNow();
 }
 
 void DepthMapEstimateDialog::emitSettingsNow()

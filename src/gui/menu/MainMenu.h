@@ -105,6 +105,9 @@ public:
 
     /** @brief 返回当前影像向右旋转 90 度的动作。 */
     QAction *rotateImageRightAction() const;
+    QAction *showFeaturePointsAction() const;
+    QAction *showFeatureResidualsAction() const;
+    QAction *showMaskOverlayAction() const;
 
     /** @brief 返回"显示轨迹球"切换动作（可检查状态）。 */
     QAction *toggleGizmoAction() const;
@@ -189,6 +192,9 @@ public:
     QAction *cameraConvertAction() const;
     QAction *generateMaskAction() const;
     QAction *surveyControlAction() const;
+    QAction *detectMarkersAction() const;
+    QAction *reviewMarkerDetectionsAction() const;
+    QAction *printMarkersAction() const;
     QAction *importReferenceDatasetAction() const;
     QAction *referenceQualityCheckAction() const;
     QAction *referenceTerrainBundleAdjustAction() const;
@@ -252,6 +258,9 @@ private:
     /** @brief "模型 / 显示/隐藏项目"子菜单。 */
     QMenu *_modelDisplayHideMenu{};
 
+    /** @brief "工具 / 标记"子菜单。 */
+    QMenu *_markersMenu{};
+
     // ---- 项目菜单中的固定动作 ----
     QAction *_newAct{};   ///< 新建项目
     QAction *_openAct{};  ///< 打开项目
@@ -268,10 +277,16 @@ private:
     QAction *_zoomOutToolbarWidgetAct{}; ///< 缩小按钮的工具栏包装动作
     QAction *_rotateImageLeftAct{}; ///< 当前影像向左旋转 90 度
     QAction *_rotateImageRightAct{}; ///< 当前影像向右旋转 90 度
+    QAction *_showFeaturePointsAct{};
+    QAction *_showFeatureResidualsAct{};
+    QAction *_showMaskOverlayAct{};
     QAction *_cameraToolbarWidgetAct{}; ///< 三维相机工具按钮的工具栏包装动作
     QAction *_cameraImageToolbarWidgetAct{}; ///< 三维图像工具按钮的工具栏包装动作
     QAction *_rotateImageLeftToolbarWidgetAct{}; ///< 左转按钮的工具栏包装动作
     QAction *_rotateImageRightToolbarWidgetAct{}; ///< 右转按钮的工具栏包装动作
+    QAction *_showFeaturePointsToolbarWidgetAct{};
+    QAction *_showMaskOverlayToolbarWidgetAct{};
+    QAction *_resetImageViewToolbarWidgetAct{};
     QAction *_toolbarEditingSeparatorAct{}; ///< 视图操作组与编辑操作组之间的分隔符
     QAction *_manualPointCloudPruneToolbarWidgetAct{}; ///< 点云剔除按钮的工具栏包装动作
     QAction *_toggleGizmoAct{}; ///< 显示/隐藏轨迹球
@@ -317,6 +332,9 @@ private:
     QAction *_cameraConvertAct{};             ///< 通用相机格式转换
     QAction *_generateMaskAct{};              ///< 生成照片蒙版
     QAction *_surveyControlAct{};             ///< 控制点/检查点/比例尺管理
+    QAction *_detectMarkersAct{};              ///< 自动检测编码或非编码标靶
+    QAction *_reviewMarkerDetectionsAct{};     ///< 人工复核检测候选与身份冲突
+    QAction *_printMarkersAct{};               ///< 生成物理尺寸明确的标靶 PDF
     QAction *_importReferenceDatasetAct{};    ///< 导入外部 DEM/LiDAR 参考数据
     QAction *_referenceQualityCheckAct{};     ///< 使用参考数据生成精度检查报告
     QAction *_referenceTerrainBundleAdjustAct{}; ///< 参考地形软约束 BA 前置检查

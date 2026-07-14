@@ -35,6 +35,7 @@ target_include_directories(feature_extractors_traditional
 
 target_link_libraries(feature_extractors_traditional
   PRIVATE
+    plascan_common_string_utils
     ${TORCH_LIBRARIES}
     ${OpenCV_LIBS}
 )

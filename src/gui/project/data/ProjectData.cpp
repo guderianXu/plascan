@@ -28,7 +28,9 @@
 #include <QJsonDocument>
 #include <QJsonArray>
 #include <QDateTime>
+#include <QSet>
 #include <QTimer>
+#include <QUuid>
 
 namespace {
 
@@ -115,6 +117,41 @@ QJsonObject readJsonObjectEntry(PlascanArchive &archive, const QString &entryNam
 
     const QJsonDocument doc = parseJsonOrCompressedJson(bytes);
     return doc.isObject() ? doc.object() : QJsonObject();
+}
+
+bool ensureImageUuids(QJsonObject *core)
+{
+    if (!core)
+    {
+        return false;
+    }
+
+    QJsonArray images = core->value(QStringLiteral("images")).toArray();
+    QSet<QString> used_ids;
+    bool changed = false;
+    for (int index = 0; index < images.size(); ++index)
+    {
+        QJsonObject image = images[index].toObject();
+        QString image_id = image.value(QStringLiteral("image_uuid")).toString().trimmed();
+        if (image_id.isEmpty() || used_ids.contains(image_id))
+        {
+            do
+            {
+                image_id = QUuid::createUuid().toString(QUuid::WithoutBraces);
+            }
+            while (used_ids.contains(image_id));
+            image[QStringLiteral("image_uuid")] = image_id;
+            images[index] = image;
+            changed = true;
+        }
+        used_ids.insert(image_id);
+    }
+
+    if (changed)
+    {
+        (*core)[QStringLiteral("images")] = images;
+    }
+    return changed;
 }
 
 } // namespace
@@ -277,6 +314,15 @@ bool ProjectData::openProject(const QString &plascanPath, QString *errorMsg)
         }
     }
 
+    QJsonObject core = _filesManager.coreData();
+    if (ensureImageUuids(&core))
+    {
+        _filesManager.setCoreData(core);
+        markDirtyIfRequested(true);
+        scheduleArchiveSync(true, false, true);
+        LOG_INFO(QStringLiteral("已为旧工程影像补齐稳定 UUID"));
+    }
+
     LOG_INFO(QStringLiteral("项目核心数据加载完成: %1").arg(plascanPath));
     emit projectOpened(plascanPath);
 
@@ -433,12 +479,21 @@ bool ProjectData::openProjectFromSnapshot(const ProjectOpenSnapshot &snapshot, Q
         _filesManager.setCoreData(filesMeta);
     }
 
+    QJsonObject core = _filesManager.coreData();
+    const bool assignedImageUuids = ensureImageUuids(&core);
+    if (assignedImageUuids)
+    {
+        _filesManager.setCoreData(core);
+        markDirtyIfRequested(true);
+        scheduleArchiveSync(true, false, true);
+    }
+
     const QJsonObject configMeta = snapshot.configMeta.isEmpty()
         ? ProjectConfigManager::defaultConfig()
         : ProjectConfigManager::mergeWithDefaults(snapshot.configMeta);
     updateConfig(configMeta, false);
 
-    emit dirtyStateChanged(false);
+    emit dirtyStateChanged(_isDirty);
     emit projectOpened(_projectPath);
     return true;
 }
@@ -597,6 +652,12 @@ void ProjectData::updateMetadata(const QJsonObject &meta, bool markDirty)
     const QJsonObject existingResults = preserveLoadedResults ? _filesManager.resultsData() : QJsonObject();
 
     _filesManager.setData(meta);
+
+    QJsonObject core = _filesManager.coreData();
+    if (ensureImageUuids(&core))
+    {
+        _filesManager.setCoreData(core);
+    }
 
     if (hasResults) {
         _resultsLoaded = true;
@@ -803,6 +864,7 @@ bool ProjectData::addImages(const QStringList &imagePaths, QString *errorMsg)
         //   type:     "reference" 表示外部引用（不打包到归档）
         //   added_at: UTC 时间戳，方便排序和溯源
         QJsonObject imgObj;
+        imgObj["image_uuid"] = QUuid::createUuid().toString(QUuid::WithoutBraces);
         imgObj["path"] = absPath;
         imgObj["type"] = "reference";
         imgObj["added_at"] = QDateTime::currentDateTimeUtc().toString(Qt::ISODate);

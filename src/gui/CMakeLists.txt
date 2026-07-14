@@ -43,6 +43,8 @@ qt_add_shaders(plascan_gui camera_scene_shaders
     shaders/camera_scene_color.frag
     shaders/camera_scene_mesh.vert
     shaders/camera_scene_mesh.frag
+    shaders/camera_scene_image.vert
+    shaders/camera_scene_image.frag
 )
 
 # 包含目录
@@ -52,6 +54,7 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_CURRENT_SOURCE_DIR}/config/settings
   ${CMAKE_CURRENT_SOURCE_DIR}/main_window
   ${CMAKE_CURRENT_SOURCE_DIR}/menu
+  ${CMAKE_CURRENT_SOURCE_DIR}/markers
   ${CMAKE_CURRENT_SOURCE_DIR}/panels
   ${CMAKE_CURRENT_SOURCE_DIR}/project
   ${CMAKE_CURRENT_SOURCE_DIR}/project/archive
@@ -70,6 +73,7 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/core/lidar
   ${CMAKE_SOURCE_DIR}/src/core/mask
   ${CMAKE_SOURCE_DIR}/src/core/qc
+  ${CMAKE_SOURCE_DIR}/src/core/control_points
   ${CMAKE_SOURCE_DIR}/src/core/overlap
   ${CMAKE_SOURCE_DIR}/src/core/terrain
   ${CMAKE_SOURCE_DIR}/src/core/sfm

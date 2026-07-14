@@ -6,6 +6,27 @@
 namespace xjw::sfm_search
 {
 
+namespace
+{
+
+double networkQualityScore(const SfmCandidateSummary &candidate)
+{
+    const double angleQuality = std::clamp(candidate.medianTriangulationAngleDeg / 10.0, 0.0, 1.0);
+    const double multiViewQuality = std::clamp(1.0 - candidate.twoViewTrackRatio, 0.0, 1.0);
+    const double coverageQuality = std::clamp(candidate.observationGridCoverage / 0.25, 0.0, 1.0);
+    const double reprojectionQuality = std::isfinite(candidate.meanReprojError)
+        ? 1.0 / (1.0 + std::max(0.0, candidate.meanReprojError))
+        : 0.0;
+
+    // 三角交会角和多视轨迹决定摄影测量网刚性；空间覆盖和 RMS 用于细化排序。
+    return 0.35 * angleQuality +
+           0.30 * multiViewQuality +
+           0.20 * coverageQuality +
+           0.15 * reprojectionQuality;
+}
+
+} // namespace
+
 SfmWorkerBudget allocateWorkers(int candidateCount, int totalThreads)
 {
     if (candidateCount <= 0)
@@ -28,6 +49,19 @@ bool isBetterCandidate(const SfmCandidateSummary &candidate,
     if (candidate.success != reference.success)
     {
         return candidate.success;
+    }
+    if (candidate.hasNetworkQuality != reference.hasNetworkQuality)
+    {
+        return candidate.hasNetworkQuality;
+    }
+    if (candidate.hasNetworkQuality)
+    {
+        const double candidateNetworkScore = networkQualityScore(candidate);
+        const double referenceNetworkScore = networkQualityScore(reference);
+        if (std::abs(candidateNetworkScore - referenceNetworkScore) > 1e-9)
+        {
+            return candidateNetworkScore > referenceNetworkScore;
+        }
     }
     const bool candidateRmsFinite = std::isfinite(candidate.meanReprojError);
     const bool referenceRmsFinite = std::isfinite(reference.meanReprojError);

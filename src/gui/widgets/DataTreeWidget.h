@@ -71,10 +71,10 @@ private:
     QStandardItem *createSection(const QString &title,
                                  int count,
                                  xjw::gui::widgets::WorkspaceSection section);
-    void appendItemRow(QStandardItem *parent,
-                       const QString &name,
-                       const QString &path,
-                       const QString &storage);
+    QStandardItem *appendItemRow(QStandardItem *parent,
+                                 const QString &name,
+                                 const QString &path,
+                                 const QString &storage);
     QStandardItem *appendTopLevelResource(const QString &name,
                                           xjw::gui::widgets::WorkspaceSection section,
                                           const QString &sectionName,

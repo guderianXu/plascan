@@ -52,6 +52,8 @@
 #include <plapoint/core/point_cloud.h>
 #include <plapoint/io/ply_io.h>
 #include "io/PathIO.h"
+#include "io/MarkerSetStore.h"
+#include "registration/PriorTrack.h"
 
 #include <QDir>
 #include <QFile>
@@ -353,6 +355,119 @@ std::array<double, 3> cameraViewingDirection(const Camera &camera)
 {
     const auto rotation = camera.cameraToWorldRotation();
     return {rotation[2], rotation[5], rotation[8]};
+}
+
+struct MarkerPriorTrackLoadResult
+{
+    bool ok = true;
+    QString error;
+    std::vector<control_points::PriorTrack> tracks;
+    std::vector<control_points::PriorScaleBar> scaleBars;
+};
+
+control_points::PriorObservationState priorState(control_points::ProjectionState state)
+{
+    switch (state)
+    {
+    case control_points::ProjectionState::ManualPinned:
+        return control_points::PriorObservationState::ManualPinned;
+    case control_points::ProjectionState::AutoDetected:
+        return control_points::PriorObservationState::AutoDetected;
+    case control_points::ProjectionState::Blocked:
+        return control_points::PriorObservationState::Blocked;
+    case control_points::ProjectionState::Disabled:
+        return control_points::PriorObservationState::Disabled;
+    case control_points::ProjectionState::Predicted:
+        return control_points::PriorObservationState::Predicted;
+    }
+    return control_points::PriorObservationState::Predicted;
+}
+
+MarkerPriorTrackLoadResult loadMarkerPriorTracks(
+    const QString &path,
+    const QJsonObject &projectMeta,
+    const QMap<QString, ImageId> &imageIdByPath)
+{
+    MarkerPriorTrackLoadResult result;
+    if (path.trimmed().isEmpty() || !QFileInfo::exists(path)) return result;
+
+    const control_points::MarkerSetIoResult loaded =
+        control_points::MarkerSetStore(path).load();
+    if (!loaded.ok)
+    {
+        result.ok = false;
+        result.error = QStringLiteral("无法读取空三人工标记 sidecar: %1").arg(loaded.error);
+        return result;
+    }
+
+    QHash<QString, QString> path_by_uuid;
+    QHash<QString, QString> signature_by_path;
+    const QMap<QString, QJsonObject> image_meta_by_path =
+        xjw::gui::project::projectImageMetaByPath(projectMeta, true);
+    for (auto it = image_meta_by_path.cbegin(); it != image_meta_by_path.cend(); ++it)
+    {
+        const QString normalized_path = normalizePath(it.key());
+        const QString image_uuid = it.value().value(QStringLiteral("image_uuid")).toString().trimmed();
+        if (!image_uuid.isEmpty()) path_by_uuid.insert(image_uuid, normalized_path);
+        QString signature = it.value().value(QStringLiteral("image_content_signature")).toString();
+        if (signature.isEmpty())
+        {
+            signature = it.value().value(QStringLiteral("content_signature")).toString();
+        }
+        if (!signature.isEmpty()) signature_by_path.insert(normalized_path, signature);
+    }
+
+    result.tracks.reserve(static_cast<std::size_t>(loaded.markerSet.markers().size()));
+    for (const control_points::Marker &marker : loaded.markerSet.markers())
+    {
+        if (!marker.enabled) continue;
+        control_points::PriorTrack track;
+        track.markerId = marker.id.toStdString();
+        track.confidence = 1.0;
+        track.role = marker.role;
+        if (marker.referenceCoordinate.has_value())
+        {
+            const control_points::ReferenceCoordinate &reference = *marker.referenceCoordinate;
+            track.hasReference = true;
+            track.referenceUsable = reference.referenceUsable;
+            track.referencePoint = {{reference.x, reference.y, reference.z}};
+            track.referenceSigma = {{reference.sigmaX, reference.sigmaY, reference.sigmaZ}};
+        }
+        track.observations.reserve(static_cast<std::size_t>(marker.projections.size()));
+        for (const control_points::MarkerProjection &projection : marker.projections)
+        {
+            QString image_path = path_by_uuid.value(projection.imageId);
+            if (image_path.isEmpty()) image_path = normalizePath(projection.imagePathSnapshot);
+
+            control_points::PriorObservation observation;
+            observation.imageId = imageIdByPath.value(image_path, kInvalidImageId);
+            observation.x = projection.xy.x();
+            observation.y = projection.xy.y();
+            observation.state = priorState(projection.state);
+            observation.confidence = projection.state == control_points::ProjectionState::ManualPinned
+                ? 1.0 : std::clamp(projection.confidence, 0.0, 1.0);
+            const QString current_signature = signature_by_path.value(image_path);
+            observation.stale = !projection.imageContentSignature.isEmpty()
+                && !current_signature.isEmpty()
+                && projection.imageContentSignature != current_signature;
+            track.observations.push_back(observation);
+        }
+        if (!track.observations.empty()) result.tracks.push_back(std::move(track));
+    }
+    result.scaleBars.reserve(static_cast<std::size_t>(loaded.markerSet.scaleBars().size()));
+    for (const control_points::ScaleBar &scale_bar : loaded.markerSet.scaleBars())
+    {
+        control_points::PriorScaleBar prior;
+        prior.scaleBarId = scale_bar.id.toStdString();
+        prior.firstMarkerId = scale_bar.firstMarkerId.toStdString();
+        prior.secondMarkerId = scale_bar.secondMarkerId.toStdString();
+        prior.role = scale_bar.role;
+        prior.enabled = scale_bar.enabled;
+        prior.measuredDistance = scale_bar.measuredDistance;
+        prior.sigma = scale_bar.sigma;
+        result.scaleBars.push_back(std::move(prior));
+    }
+    return result;
 }
 
 bool projectCameraMetaHasUsablePose(const QJsonObject &cameraObject)
@@ -2648,6 +2763,52 @@ QSize inferSfmQualityImageSize(const SfmReconstruction &reconstruction, const QS
         return QSize(static_cast<int>(std::ceil(maxX + 1.0)), static_cast<int>(std::ceil(maxY + 1.0)));
     }
     return QSize();
+}
+
+QJsonObject buildCoarseSparseNetworkQuality(const SfmReconstruction &reconstruction,
+                                            double meanReprojectionError)
+{
+    std::vector<double> triangulationAngles;
+    int pointCount = 0;
+    int twoViewTrackCount = 0;
+    for (Point3DId pointId : reconstruction.allPoint3DIds())
+    {
+        if (!reconstruction.hasPoint3D(pointId))
+        {
+            continue;
+        }
+        const ScenePoint3D &point = reconstruction.point3D(pointId);
+        ++pointCount;
+        if (point.track.length() == 2)
+        {
+            ++twoViewTrackCount;
+        }
+        triangulationAngles.push_back(
+            computeTrackMaxTriangulationAngleDeg(reconstruction, point));
+    }
+
+    std::sort(triangulationAngles.begin(), triangulationAngles.end());
+    double medianAngle = 0.0;
+    if (!triangulationAngles.empty())
+    {
+        const std::size_t middle = triangulationAngles.size() / 2;
+        medianAngle = triangulationAngles.size() % 2 == 0
+            ? 0.5 * (triangulationAngles[middle - 1] + triangulationAngles[middle])
+            : triangulationAngles[middle];
+    }
+
+    QJsonObject angleSummary;
+    angleSummary[QStringLiteral("count")] = static_cast<int>(triangulationAngles.size());
+    angleSummary[QStringLiteral("p50")] = medianAngle;
+
+    QJsonObject quality;
+    quality[QStringLiteral("point_count")] = pointCount;
+    quality[QStringLiteral("two_view_track_count")] = twoViewTrackCount;
+    quality[QStringLiteral("triangulation_angle")] = angleSummary;
+    quality[QStringLiteral("observation_grid_coverage")] =
+        QJsonObject{{QStringLiteral("mean"), 0.0}};
+    quality[QStringLiteral("mean_reprojection_error_px")] = meanReprojectionError;
+    return quality;
 }
 
 void logSfmMatchDiagnostics(const QString &label,
@@ -5316,8 +5477,8 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         }
     }
     sfmOpts.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectPoseCameras;
-    sfmOpts.maxKnownPoseTracksPerImage = opts.maxTiePointsPerImage;
-    sfmOpts.maxKnownPoseTracksPerGridCell = opts.maxTiePointsPerGridCell;
+    sfmOpts.maxTracksPerImage = opts.maxTiePointsPerImage;
+    sfmOpts.maxTracksPerGridCell = opts.maxTiePointsPerGridCell;
     sfmOpts.trackThinningGridColumns = opts.tiePointGridColumns;
     sfmOpts.trackThinningGridRows = opts.tiePointGridRows;
     if (!sfmOpts.useKnownCameraPoses)
@@ -5554,6 +5715,31 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
     LOG_INFO(QStringLiteral("  相机来源: file=%1, meta=%2, user=%3, estimated=%4")
         .arg(cameraFromFile).arg(cameraFromMeta).arg(cameraFromUser).arg(cameraEstimated));
 
+    const QString marker_set_path = opts.markerSetPath.trimmed().isEmpty()
+        ? ProjectIO::markerSetPath(opts.plascanPath)
+        : QDir::cleanPath(opts.markerSetPath);
+    const MarkerPriorTrackLoadResult marker_tracks =
+        loadMarkerPriorTracks(marker_set_path, opts.projectMeta, imageIdMap);
+    if (!marker_tracks.ok)
+    {
+        result.errorMessage = marker_tracks.error;
+        return result;
+    }
+    for (const control_points::PriorTrack &track : marker_tracks.tracks)
+    {
+        sfm.addPriorTrack(track);
+    }
+    for (const control_points::PriorScaleBar &scale_bar : marker_tracks.scaleBars)
+    {
+        sfm.addPriorScaleBar(scale_bar);
+    }
+    if (!marker_tracks.tracks.empty())
+    {
+        LOG_INFO(QStringLiteral("  人工/自动标记轨迹: %1 条，来源 %2")
+            .arg(marker_tracks.tracks.size())
+            .arg(marker_set_path));
+    }
+
     // 3b. 添加匹配
     for (const auto &pd : allPairs) {
         if (!pd.loaded || pd.matches.empty()) continue;
@@ -5610,7 +5796,44 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
         result.baTracksOptimized   = sfmResult.baTracksOptimized;
         result.baTracksFiltered    = sfmResult.baTracksFiltered;
     };
+    auto applyMarkerDiagnostics = [&]()
+    {
+        QJsonObject diagnostics = result.sfmDiagnostics;
+        QJsonObject prior_track_summary;
+        prior_track_summary[QStringLiteral("accepted_tracks")] = sfmResult.priorTracksAccepted;
+        prior_track_summary[QStringLiteral("rejected_tracks")] = sfmResult.priorTracksRejected;
+        prior_track_summary[QStringLiteral("accepted_observations")] = sfmResult.priorObservationsAccepted;
+        prior_track_summary[QStringLiteral("observation_conflicts")] = sfmResult.priorObservationConflicts;
+        QJsonArray prior_track_messages;
+        for (const std::string &message : sfmResult.priorTrackDiagnostics)
+        {
+            prior_track_messages.append(QString::fromStdString(message));
+        }
+        prior_track_summary[QStringLiteral("messages")] = prior_track_messages;
+        diagnostics[QStringLiteral("prior_tracks")] = prior_track_summary;
+
+        QJsonObject control_network;
+        control_network[QStringLiteral("applied")] = sfmResult.controlNetworkApplied;
+        control_network[QStringLiteral("control_constraints")] =
+            sfmResult.controlPointConstraintCount;
+        control_network[QStringLiteral("check_points")] = sfmResult.checkPointResidualCount;
+        control_network[QStringLiteral("control_scale_bar_constraints")] =
+            sfmResult.controlScaleBarConstraintCount;
+        control_network[QStringLiteral("check_scale_bars")] =
+            sfmResult.checkScaleBarResidualCount;
+        control_network[QStringLiteral("control_rms")] = sfmResult.controlPointRms;
+        control_network[QStringLiteral("check_rms")] = sfmResult.checkPointRms;
+        control_network[QStringLiteral("control_scale_bar_rms")] =
+            sfmResult.controlScaleBarRms;
+        control_network[QStringLiteral("check_scale_bar_rms")] =
+            sfmResult.checkScaleBarRms;
+        control_network[QStringLiteral("error")] =
+            QString::fromStdString(sfmResult.controlNetworkError);
+        diagnostics[QStringLiteral("control_network")] = control_network;
+        result.sfmDiagnostics = diagnostics;
+    };
     applySfmResultStats();
+    applyMarkerDiagnostics();
     result.durationSeconds   = elapsedTimer.elapsed() / 1000.0;
 
     QJsonObject sfmAttemptDiagnostics = result.sfmDiagnostics;
@@ -5621,11 +5844,24 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
     sfmAttemptDiagnostics[QStringLiteral("selected_initial_pair")] = QJsonArray{
         static_cast<int>(sfmResult.selectedInitialImageId1),
         static_cast<int>(sfmResult.selectedInitialImageId2)};
+    sfmAttemptDiagnostics[QStringLiteral("prior_tracks")] =
+        result.sfmDiagnostics.value(QStringLiteral("prior_tracks"));
+    sfmAttemptDiagnostics[QStringLiteral("control_network")] =
+        result.sfmDiagnostics.value(QStringLiteral("control_network"));
     if (!opts.searchCandidateId.isEmpty())
     {
         sfmAttemptDiagnostics[QStringLiteral("search_candidate_id")] = opts.searchCandidateId;
     }
     result.sfmDiagnostics = sfmAttemptDiagnostics;
+
+    if (!opts.writeSfmOutputs && sfmResult.success && sfmResult.reconstruction)
+    {
+        QJsonObject diagnostics = result.sfmDiagnostics;
+        diagnostics[QStringLiteral("sparse_quality")] = buildCoarseSparseNetworkQuality(
+            *sfmResult.reconstruction,
+            sfmResult.meanReprojError);
+        result.sfmDiagnostics = diagnostics;
+    }
 
     if (!opts.writeSfmOutputs)
     {
@@ -5836,6 +6072,14 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                         guidedSfm.addMatches(pair.idA, pair.idB, pair.matches);
                         ++guidedLoadedPairs;
                     }
+                    for (const control_points::PriorTrack &track : marker_tracks.tracks)
+                    {
+                        guidedSfm.addPriorTrack(track);
+                    }
+                    for (const control_points::PriorScaleBar &scale_bar : marker_tracks.scaleBars)
+                    {
+                        guidedSfm.addPriorScaleBar(scale_bar);
+                    }
 
                     IncrementalSfmResult guidedSfmResult =
                         guidedSfm.run([&reportProgress, &isCancelled](int registered,
@@ -5901,6 +6145,7 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                             .arg(guided_rms, 0, 'f', 4));
                         sfmResult = std::move(guidedSfmResult);
                         applySfmResultStats();
+                        applyMarkerDiagnostics();
                         recon = sfmResult.reconstruction.get();
 
                         result.pendingCamUpdates.clear();
@@ -6128,6 +6373,24 @@ AerialTriangulationServiceResult runSingleSfmAttempt(const AerialTriangulationSe
                     observation[QStringLiteral("image_name")] = QFileInfo(imagePath).fileName();
                     observation[QStringLiteral("feature_idx")] = static_cast<int>(elem.featureIdx);
                     observation[QStringLiteral("xy")] = QJsonArray{keypoint.pt.x, keypoint.pt.y};
+                    if (recon->hasCamera(elem.imageId))
+                    {
+                        double projected[2] = {0.0, 0.0};
+                        const Camera &camera = recon->camera(elem.imageId);
+                        const bool projectedOk = camera.projectWorldPoint(pt.xyz.data(), projected)
+                            || camera.projectWorldPointSigned(pt.xyz.data(), projected);
+                        if (projectedOk && std::isfinite(projected[0]) && std::isfinite(projected[1]))
+                        {
+                            const double residualX = projected[0] - keypoint.pt.x;
+                            const double residualY = projected[1] - keypoint.pt.y;
+                            observation[QStringLiteral("projected_xy")] =
+                                QJsonArray{projected[0], projected[1]};
+                            observation[QStringLiteral("residual_xy")] =
+                                QJsonArray{residualX, residualY};
+                            observation[QStringLiteral("residual_norm_px")] =
+                                std::hypot(residualX, residualY);
+                        }
+                    }
                     observations.append(observation);
                 }
 
@@ -6413,6 +6676,21 @@ QJsonObject adaptiveFocalAttemptSummary(double scale,
     object[QStringLiteral("points3d")] = result.numPoints3D;
     object[QStringLiteral("mean_reproj_error")] = result.meanReprojError;
     object[QStringLiteral("score")] = score;
+    const QJsonObject sparseQuality =
+        result.sfmDiagnostics.value(QStringLiteral("sparse_quality")).toObject();
+    const int qualityPointCount = sparseQuality.value(QStringLiteral("point_count")).toInt();
+    const int twoViewTrackCount = sparseQuality.value(QStringLiteral("two_view_track_count")).toInt();
+    if (qualityPointCount > 0)
+    {
+        object[QStringLiteral("two_view_track_ratio")] =
+            static_cast<double>(twoViewTrackCount) / static_cast<double>(qualityPointCount);
+    }
+    object[QStringLiteral("median_triangulation_angle_deg")] =
+        sparseQuality.value(QStringLiteral("triangulation_angle")).toObject()
+            .value(QStringLiteral("p50")).toDouble();
+    object[QStringLiteral("observation_grid_coverage")] =
+        sparseQuality.value(QStringLiteral("observation_grid_coverage")).toObject()
+            .value(QStringLiteral("mean")).toDouble();
     return object;
 }
 
@@ -6575,14 +6853,32 @@ AerialTriangulationServiceResult runAdaptiveFocalSweep(const AerialTriangulation
             ? static_cast<ImageId>(pair.at(0).toInt(-1)) : kInvalidImageId;
         const ImageId id2 = pair.size() >= 2
             ? static_cast<ImageId>(pair.at(1).toInt(-1)) : kInvalidImageId;
-        summaries.push_back({outcome.candidateIndex,
-                             outcome.scale,
-                             id1,
-                             id2,
-                             outcome.result.numRegisteredImages,
-                             outcome.result.numPoints3D,
-                             outcome.result.meanReprojError,
-                             outcome.result.success});
+        sfm_search::SfmCandidateSummary summary{
+            outcome.candidateIndex,
+            outcome.scale,
+            id1,
+            id2,
+            outcome.result.numRegisteredImages,
+            outcome.result.numPoints3D,
+            outcome.result.meanReprojError,
+            outcome.result.success};
+        const QJsonObject sparseQuality =
+            outcome.result.sfmDiagnostics.value(QStringLiteral("sparse_quality")).toObject();
+        const int qualityPointCount = sparseQuality.value(QStringLiteral("point_count")).toInt();
+        const int twoViewTrackCount = sparseQuality.value(QStringLiteral("two_view_track_count")).toInt();
+        const QJsonObject angleSummary =
+            sparseQuality.value(QStringLiteral("triangulation_angle")).toObject();
+        summary.hasNetworkQuality = qualityPointCount > 0 &&
+            angleSummary.value(QStringLiteral("count")).toInt() > 0;
+        summary.medianTriangulationAngleDeg =
+            angleSummary.value(QStringLiteral("p50")).toDouble();
+        summary.twoViewTrackRatio = qualityPointCount > 0
+            ? static_cast<double>(twoViewTrackCount) / static_cast<double>(qualityPointCount)
+            : 1.0;
+        summary.observationGridCoverage =
+            sparseQuality.value(QStringLiteral("observation_grid_coverage")).toObject()
+                .value(QStringLiteral("mean")).toDouble();
+        summaries.push_back(summary);
         const double score = scoreAdaptiveFocalResult(opts, outcome.result);
         attempts.append(adaptiveFocalAttemptSummary(
             outcome.scale, outcome.focalPx, outcome.result, score));

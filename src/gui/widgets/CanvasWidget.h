@@ -30,6 +30,13 @@ public:
     void setViewRotationDegrees(int degrees);
     int viewRotationDegrees() const { return _viewRotationDegrees; }
     bool hasDisplayImage() const { return _singleImageReady; }
+    bool showsInterestPoints() const { return _showInterestPoints; }
+    bool showsFeatureResiduals() const { return _currentFeatureOpts.showResiduals; }
+    bool showsMaskOverlay() const { return _showMaskOverlay; }
+    QRectF imageBounds() const
+    {
+        return _layerRenderer ? _layerRenderer->imageBounds() : QRectF();
+    }
 
 public slots:
     // 应用兴趣点显示设置到内部渲染器
@@ -51,6 +58,7 @@ public slots:
 public slots:
     // 控制是否在视图上叠加显示兴趣点
     void setShowInterestPoints(bool show);
+    void setShowFeatureResiduals(bool show);
 
     // 切换当前显示的特征提取器后缀 (.sp/.dsk/.alk 等), 重新加载特征点
     void setActiveFeatureSuffix(const QString &suffix);
@@ -82,10 +90,17 @@ signals:
     void activeImageChanged(const QString &imagePath);
     void viewRotationChanged(const QString &imagePath, int degrees);
     void displayImageReadyChanged(bool ready);
+    void interestPointsVisibilityChanged(bool visible);
+    void featureResidualVisibilityChanged(bool visible);
+    void maskOverlayVisibilityChanged(bool visible);
+    void featureResidualAvailabilityChanged(bool available);
+    // 照片区域被右键时发送原始影像像素坐标；视图旋转和缩放不会改变该坐标。
+    void imageContextRequested(const QString &imagePath, const QPointF &originalPixel);
 
 private:
     // 启动异步加载特征文件的通用方法（在主线程调度后台任务）
     void startSpLoadForImage(const QString &imagePath);
+    void startResidualLoadForImage(const QString &imagePath);
 
 protected:
     // 当控件变为可见时（如被 QStackedWidget 切换到前台），重新 fitInView 以修正首次显示尺寸
@@ -96,6 +111,7 @@ protected:
     void mousePressEvent(QMouseEvent *event) override;
     void mouseMoveEvent(QMouseEvent *event) override;
     void mouseReleaseEvent(QMouseEvent *event) override;
+    void contextMenuEvent(QContextMenuEvent *event) override;
 
 private:
     LayerRenderer *_layerRenderer{};
@@ -109,6 +125,7 @@ private:
     // cache: imagePath -> (lastModified, keypoints)
     std::map<QString, std::pair<QDateTime, std::vector<cv::KeyPoint>>> _spCache;
     int _featureLoadGeneration{0};
+    int _residualLoadGeneration{0};
     int _viewRotationDegrees{0};
     bool _singleImageReady{false};
 

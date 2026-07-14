@@ -20,4 +20,6 @@ SurveyControlProjectImportResult importSurveyControlCsv(ProjectData *projectData
                                                         const QString &csvPath,
                                                         const QString &defaultRole);
 
+SurveyControlProjectImportResult migrateLegacySurveyControl(ProjectData *projectData);
+
 } // namespace xjw::gui::project

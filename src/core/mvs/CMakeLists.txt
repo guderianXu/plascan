@@ -16,10 +16,17 @@ endif()
 # ── 源文件 ────────────────────────────────────────────────────────────────────
 set(MVS_CXX_SOURCES
     DenseCloudQualityFilter.cpp
+    DepthConsistencyCache.cpp
     DepthMapFusion.cpp
+    DepthFrameQualityGate.cpp
+    DepthPyramidPolicy.cpp
+    DepthPyramidEstimator.cpp
+    DepthPyramidPropagation.cpp
     DepthFrameUtils.cpp
     MvsSourcePlanner.cpp
     MvsQualityReport.cpp
+    MvsSceneClassifier.cpp
+    MvsImagePreprocessor.cpp
     MvsWorkspaceManifest.cpp
     DenseCloudBuilder.cpp
     DepthMapGenerator.cpp
@@ -38,13 +45,20 @@ set(MVS_CXX_SOURCES
 
 set(MVS_HEADERS
     DenseCloudQualityFilter.h
+    DepthConsistencyCache.h
     MvsTypes.h
     MvsSourcePlanner.h
     MvsQualityReport.h
+    MvsSceneClassifier.h
+    MvsImagePreprocessor.h
     MvsViewSelection.h
     MvsWorkspaceManifest.h
     PatchMatchCUDA.h
     DepthMapFusion.h
+    DepthFrameQualityGate.h
+    DepthPyramidPolicy.h
+    DepthPyramidEstimator.h
+    DepthPyramidPropagation.h
     DepthFrameUtils.h
     DenseCloudBuilder.h
     DepthMapGenerator.h
@@ -119,6 +133,7 @@ target_link_libraries(mvs
         plapoint::plapoint
         Qt6::Core
     PRIVATE
+        plascan_common_string_utils
         Qt6::Concurrent
         ${OpenCV_LIBS}
         ${PLASCAN_GDAL_TARGET}
@@ -146,6 +161,19 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/camera
         )
         gtest_discover_tests(test_mvs_rectifier_unit)
+
+        add_executable(test_mvs_image_preprocessor
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_image_preprocessor.cpp
+        )
+        target_link_libraries(test_mvs_image_preprocessor PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_image_preprocessor PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_image_preprocessor)
 
         add_executable(test_mvs_workspace_manifest
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_workspace_manifest.cpp

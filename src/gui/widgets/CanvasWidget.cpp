@@ -1,6 +1,7 @@
 #include "CanvasWidget.h"
 
 #include "LayerFeatureLoader.h"
+#include "FeatureResidualLoader.h"
 #include "LayerRenderer.h"
 #include "ProjectIO.h"
 #include "GuiTaskRunner.h"
@@ -19,6 +20,7 @@
 #include <QFileInfo>
 #include <QWheelEvent>
 #include <QMouseEvent>
+#include <QContextMenuEvent>
 #include <QScrollBar>
 #include <QVariant>
 #include <QVariantMap>
@@ -70,6 +72,8 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
     if (!_layerRenderer) return;
     // 保存当前选项并立即注入渲染器
     _currentFeatureOpts = opts;
+    const bool pointsChanged = _showInterestPoints != opts.showPoints;
+    _showInterestPoints = opts.showPoints;
     _layerRenderer->setFeatureDisplayOptions(opts);
     // Use the options' showPoints to control visibility: 当 opts.showPoints 为 true 时加载特征点，否则清除
     if (opts.showPoints && !_currentImagePath.trimmed().isEmpty()
@@ -79,6 +83,17 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
     } else {
         _layerRenderer->clearFeatureLayers();
     }
+    _layerRenderer->clearFeatureResidualLayers();
+    if (opts.showResiduals && !_currentImagePath.trimmed().isEmpty()
+        && !isDepthMapPreviewPath(_currentImagePath))
+    {
+        startResidualLoadForImage(_currentImagePath);
+    }
+    if (pointsChanged)
+    {
+        emit interestPointsVisibilityChanged(_showInterestPoints);
+    }
+    emit featureResidualVisibilityChanged(opts.showResiduals);
 }
 
 // 当控件从隐藏变为可见时触发（如 QStackedWidget 切换到本页面）。
@@ -109,6 +124,7 @@ void CanvasWidget::showImage(const QString &path)
     // NOTE: 不调用 scene()->clear() —— 那会使 QGraphicsScene 删除所有 items，
     // 导致 LayerRenderer 持有的指针变为悬空并在后续删除时造成双重释放。
     _layerRenderer->clearFeatureLayers();
+    _layerRenderer->clearFeatureResidualLayers();
     // 确保清除上一次的匹配连线层，避免其干扰新的场景布局
     _layerRenderer->clearMatchLayers();
     _layerRenderer->clearMaskLayers();
@@ -192,7 +208,14 @@ void CanvasWidget::showImage(const QString &path)
         // 自动加载特征点（默认启用）
         // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
         if (!isDepthMap) {
-            self->startSpLoadForImage(loadedPath);
+            if (self->_showInterestPoints)
+            {
+                self->startSpLoadForImage(loadedPath);
+            }
+            if (self->_currentFeatureOpts.showResiduals)
+            {
+                self->startResidualLoadForImage(loadedPath);
+            }
         }
     });
     QFuture<QImage> future = QtConcurrent::run([pathCopy, projectPath]() {
@@ -506,7 +529,16 @@ QStringList CanvasWidget::availableFeatureSuffixes() const
 
 void CanvasWidget::setShowInterestPoints(bool show)
 {
+    if (_showInterestPoints == show && _currentFeatureOpts.showPoints == show)
+    {
+        return;
+    }
     _showInterestPoints = show;
+    _currentFeatureOpts.showPoints = show;
+    if (_layerRenderer)
+    {
+        _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
+    }
     if (!_layerRenderer) return;
 
     if (_showInterestPoints && !_currentImagePath.trimmed().isEmpty())
@@ -519,6 +551,28 @@ void CanvasWidget::setShowInterestPoints(bool show)
     {
         _layerRenderer->clearFeatureLayers();
     }
+    emit interestPointsVisibilityChanged(show);
+}
+
+void CanvasWidget::setShowFeatureResiduals(bool show)
+{
+    if (_currentFeatureOpts.showResiduals == show)
+    {
+        return;
+    }
+    _currentFeatureOpts.showResiduals = show;
+    if (!_layerRenderer)
+    {
+        return;
+    }
+    _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
+    _layerRenderer->clearFeatureResidualLayers();
+    if (show && !_currentImagePath.trimmed().isEmpty()
+        && !isDepthMapPreviewPath(_currentImagePath))
+    {
+        startResidualLoadForImage(_currentImagePath);
+    }
+    emit featureResidualVisibilityChanged(show);
 }
 
 void CanvasWidget::startSpLoadForImage(const QString &imagePath)
@@ -689,10 +743,55 @@ void CanvasWidget::reloadMaskOverlay()
     _layerRenderer->addMaskContourLayer(maskPath);
 }
 
+void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
+{
+    if (imagePath.trimmed().isEmpty())
+    {
+        return;
+    }
+
+    const QString projectPath = property("currentProjectPath").toString();
+    const QString imagePathCopy = imagePath;
+    const int generation = ++_residualLoadGeneration;
+    QPointer<CanvasWidget> self(this);
+    xjw::gui::tasks::runGuarded(
+        this,
+        [projectPath, imagePathCopy]()
+        {
+            return xjw::gui::views::loadFeatureResidualsForImage(projectPath, imagePathCopy);
+        },
+        [self, imagePathCopy, generation](CanvasWidget *widget,
+                                          QVector<xjw::gui::views::FeatureResidualVector> residuals)
+        {
+            if (!self || widget != self.data() || generation != self->_residualLoadGeneration)
+            {
+                return;
+            }
+            if (QDir::cleanPath(imagePathCopy) != QDir::cleanPath(self->_currentImagePath)
+                || !self->_layerRenderer)
+            {
+                return;
+            }
+
+            self->_layerRenderer->setFeatureDisplayOptions(self->_currentFeatureOpts);
+            self->_layerRenderer->clearFeatureResidualLayers();
+            if (self->_currentFeatureOpts.showResiduals && !residuals.isEmpty())
+            {
+                self->_layerRenderer->addFeatureResidualItems(residuals);
+            }
+            emit self->featureResidualAvailabilityChanged(!residuals.isEmpty());
+        });
+}
+
 void CanvasWidget::setShowMaskOverlay(bool show)
 {
+    if (_showMaskOverlay == show)
+    {
+        return;
+    }
     _showMaskOverlay = show;
     reloadMaskOverlay();
+    emit maskOverlayVisibilityChanged(show);
 }
 
 void CanvasWidget::reloadInterestPoints(const QString &imagePath)
@@ -1027,4 +1126,23 @@ void CanvasWidget::mouseReleaseEvent(QMouseEvent *event)
     }
 
     QGraphicsView::mouseReleaseEvent(event);
+}
+
+void CanvasWidget::contextMenuEvent(QContextMenuEvent *event)
+{
+    if (!event || !_singleImageReady || _currentImagePath.trimmed().isEmpty() || !_layerRenderer)
+    {
+        QGraphicsView::contextMenuEvent(event);
+        return;
+    }
+
+    const QPointF original_pixel = mapToScene(event->pos());
+    if (!_layerRenderer->imageBounds().contains(original_pixel))
+    {
+        event->ignore();
+        return;
+    }
+
+    emit imageContextRequested(_currentImagePath, original_pixel);
+    event->accept();
 }

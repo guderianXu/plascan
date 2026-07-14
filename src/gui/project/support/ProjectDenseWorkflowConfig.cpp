@@ -10,6 +10,38 @@ namespace xjw::gui::project {
 namespace
 {
 
+struct DepthQualityDefaults
+{
+    double resScale;
+    int iterations;
+    int patchSize;
+    int minViews;
+    float patchMatchConfidence;
+    float fusionMinConfidence;
+    int minConsistentViews;
+    float fusionRelDepthThreshold;
+    float depthConsistency;
+    float maxReprojError;
+};
+
+DepthQualityDefaults depthQualityDefaults(DepthQualityProfile profile)
+{
+    switch (profile)
+    {
+    case DepthQualityProfile::Highest:
+        return {1.0, 16, 15, 8, 0.72f, 0.75f, 4, 0.015f, 0.8f, 0.8f};
+    case DepthQualityProfile::High:
+        return {0.5, 12, 13, 7, 0.68f, 0.70f, 4, 0.020f, 1.0f, 1.0f};
+    case DepthQualityProfile::Low:
+        return {0.125, 4, 9, 3, 0.30f, 0.30f, 2, 0.050f, 2.0f, 2.0f};
+    case DepthQualityProfile::Lowest:
+        return {0.0625, 3, 7, 2, 0.22f, 0.25f, 1, 0.070f, 2.5f, 2.5f};
+    case DepthQualityProfile::Medium:
+    default:
+        return {0.25, 8, 11, 6, 0.60f, 0.65f, 3, 0.030f, 1.5f, 1.5f};
+    }
+}
+
 plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
 {
     const QString normalized = value.trimmed().toLower();
@@ -22,6 +54,34 @@ plapoint::ProcessingDevice processingDeviceFromString(const QString &value)
         return plapoint::ProcessingDevice::GPU;
     }
     return plapoint::ProcessingDevice::Auto;
+}
+
+xjw::mvs::MvsSceneProfile sceneProfileFromString(const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized == QStringLiteral("orbital_object"))
+    {
+        return xjw::mvs::MvsSceneProfile::OrbitalObject;
+    }
+    if (normalized == QStringLiteral("aerial_terrain"))
+    {
+        return xjw::mvs::MvsSceneProfile::AerialTerrain;
+    }
+    return xjw::mvs::MvsSceneProfile::Auto;
+}
+
+xjw::mvs::DepthFilterMode depthFilterModeFromString(const QString &value)
+{
+    const QString normalized = value.trimmed().toLower();
+    if (normalized == QStringLiteral("mild"))
+    {
+        return xjw::mvs::DepthFilterMode::Mild;
+    }
+    if (normalized == QStringLiteral("aggressive"))
+    {
+        return xjw::mvs::DepthFilterMode::Aggressive;
+    }
+    return xjw::mvs::DepthFilterMode::Moderate;
 }
 
 int autoGpuFrameWorkers(int threads, int viewCount)
@@ -52,14 +112,21 @@ bool hasAnyKey(const QJsonObject &settings, std::initializer_list<const char *> 
 }
 
 void applyDenseQualityProfile(DenseGenerationSettings *parsed,
-                              const QJsonObject &settings)
+                               const QJsonObject &settings)
 {
     if (!parsed)
     {
         return;
     }
 
-    const QString profile = parsed->qualityProfile.trimmed().toLower();
+    const QString raw_profile = parsed->qualityProfile.trimmed().toLower();
+    const bool custom_profile = raw_profile == QStringLiteral("custom");
+    const DepthQualityProfile profile = depthQualityProfileFromId(raw_profile);
+    const DepthQualityDefaults defaults = depthQualityDefaults(profile);
+    parsed->qualityProfile = custom_profile ? QStringLiteral("custom") : depthQualityProfileId(profile);
+    const bool hasResScale = hasAnyKey(settings, {"resScale"});
+    const bool hasIterations = hasAnyKey(settings, {"iterations"});
+    const bool hasPatchSize = hasAnyKey(settings, {"patchSize"});
     const bool hasMinViews = hasAnyKey(settings, {"minViews"});
     const bool hasPatchConfidence = hasAnyKey(settings, {"confidence", "min_confidence"});
     const bool hasFusionConfidence = hasAnyKey(settings, {"minConfidence"});
@@ -68,41 +135,80 @@ void applyDenseQualityProfile(DenseGenerationSettings *parsed,
     const bool hasDepthConsistency = hasAnyKey(settings, {"depthConsistency"});
     const bool hasMaxReprojError = hasAnyKey(settings, {"maxReprojError"});
 
-    if (profile == QStringLiteral("fast_preview"))
+    if (!hasResScale) parsed->resScale = defaults.resScale;
+    if (!hasIterations) parsed->iterations = defaults.iterations;
+    if (!hasPatchSize) parsed->patchSize = defaults.patchSize;
+    if (!hasMinViews) parsed->minViews = defaults.minViews;
+    if (!hasPatchConfidence) parsed->patchMatchConfidence = defaults.patchMatchConfidence;
+    if (!hasFusionConfidence) parsed->fusionMinConfidence = defaults.fusionMinConfidence;
+    if (!hasMinConsistentViews) parsed->minConsistentViews = defaults.minConsistentViews;
+    if (!hasFusionRelDepthThreshold)
     {
-        if (!hasMinViews) parsed->minViews = 3;
-        if (!hasPatchConfidence) parsed->patchMatchConfidence = 0.30f;
-        if (!hasFusionConfidence) parsed->fusionMinConfidence = 0.30f;
-        if (!hasMinConsistentViews) parsed->minConsistentViews = 2;
-        if (!hasFusionRelDepthThreshold) parsed->fusionRelDepthThreshold = 0.05f;
-        if (!hasDepthConsistency) parsed->depthConsistency = 2.0f;
-        if (!hasMaxReprojError) parsed->maxReprojError = 2.0f;
-        return;
+        parsed->fusionRelDepthThreshold = defaults.fusionRelDepthThreshold;
     }
-
-    if (profile == QStringLiteral("high_quality"))
-    {
-        parsed->minViews = std::max(parsed->minViews, 7);
-        parsed->patchMatchConfidence = std::max(parsed->patchMatchConfidence, 0.70f);
-        parsed->fusionMinConfidence = std::max(parsed->fusionMinConfidence, 0.70f);
-        parsed->minConsistentViews = std::max(parsed->minConsistentViews, 4);
-        if (!hasFusionRelDepthThreshold) parsed->fusionRelDepthThreshold = 0.02f;
-        if (!hasDepthConsistency) parsed->depthConsistency = 1.0f;
-        if (!hasMaxReprojError) parsed->maxReprojError = 1.0f;
-        return;
-    }
-
-    parsed->qualityProfile = QStringLiteral("standard");
-    parsed->minViews = std::max(parsed->minViews, 6);
-    parsed->patchMatchConfidence = std::max(parsed->patchMatchConfidence, 0.60f);
-    parsed->fusionMinConfidence = std::max(parsed->fusionMinConfidence, 0.65f);
-    parsed->minConsistentViews = std::max(parsed->minConsistentViews, 3);
-    if (!hasFusionRelDepthThreshold) parsed->fusionRelDepthThreshold = 0.03f;
-    if (!hasDepthConsistency) parsed->depthConsistency = 1.5f;
-    if (!hasMaxReprojError) parsed->maxReprojError = 1.5f;
+    if (!hasDepthConsistency) parsed->depthConsistency = defaults.depthConsistency;
+    if (!hasMaxReprojError) parsed->maxReprojError = defaults.maxReprojError;
 }
 
 } // namespace
+
+QString depthQualityProfileId(DepthQualityProfile profile)
+{
+    switch (profile)
+    {
+    case DepthQualityProfile::Highest:
+        return QStringLiteral("highest");
+    case DepthQualityProfile::High:
+        return QStringLiteral("high");
+    case DepthQualityProfile::Low:
+        return QStringLiteral("low");
+    case DepthQualityProfile::Lowest:
+        return QStringLiteral("lowest");
+    case DepthQualityProfile::Medium:
+    default:
+        return QStringLiteral("medium");
+    }
+}
+
+DepthQualityProfile depthQualityProfileFromId(const QString &profileId)
+{
+    const QString normalized = profileId.trimmed().toLower();
+    if (normalized == QStringLiteral("highest"))
+    {
+        return DepthQualityProfile::Highest;
+    }
+    if (normalized == QStringLiteral("high") || normalized == QStringLiteral("high_quality"))
+    {
+        return DepthQualityProfile::High;
+    }
+    if (normalized == QStringLiteral("low") || normalized == QStringLiteral("fast_preview"))
+    {
+        return DepthQualityProfile::Low;
+    }
+    if (normalized == QStringLiteral("lowest"))
+    {
+        return DepthQualityProfile::Lowest;
+    }
+    return DepthQualityProfile::Medium;
+}
+
+int depthQualityDownsample(DepthQualityProfile profile)
+{
+    switch (profile)
+    {
+    case DepthQualityProfile::Highest:
+        return 1;
+    case DepthQualityProfile::High:
+        return 2;
+    case DepthQualityProfile::Low:
+        return 8;
+    case DepthQualityProfile::Lowest:
+        return 16;
+    case DepthQualityProfile::Medium:
+    default:
+        return 4;
+    }
+}
 
 DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &settings)
 {
@@ -135,7 +241,11 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.depthConsistency = static_cast<float>(settings.value(QStringLiteral("depthConsistency")).toDouble(2.0));
     parsed.maxReprojError = static_cast<float>(settings.value(QStringLiteral("maxReprojError")).toDouble(2.0));
     parsed.speckleMinArea = std::max(0, settings.value(QStringLiteral("speckleMinArea")).toInt(16));
-    parsed.qualityProfile = settings.value(QStringLiteral("qualityProfile")).toString(QStringLiteral("standard"));
+    parsed.qualityProfile = settings.value(QStringLiteral("qualityProfile")).toString(QStringLiteral("medium"));
+    parsed.sceneProfile = settings.value(QStringLiteral("sceneProfile")).toString(QStringLiteral("auto"));
+    parsed.depthFilterMode = settings.value(QStringLiteral("depthFilterMode")).toString(QStringLiteral("auto"));
+    parsed.saveIntermediatePyramidLevels =
+        settings.value(QStringLiteral("saveIntermediatePyramidLevels")).toBool(false);
     parsed.processingDevice = processingDeviceFromString(
         settings.value(QStringLiteral("processingDevice")).toString(QStringLiteral("auto")));
     parsed.pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
@@ -182,6 +292,11 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     config.fusion.enableAdaptiveConfidenceFilter = true;
     config.fusion.enableSpeckleFilter = settings.speckleMinArea > 0;
     config.fusion.minSpeckleComponentArea = std::max(0, settings.speckleMinArea);
+    config.sceneProfile = sceneProfileFromString(settings.sceneProfile);
+    config.depthFilterMode = depthFilterModeFromString(settings.depthFilterMode);
+    config.adaptiveDepthFilterMode = settings.depthFilterMode.trimmed().compare(
+        QStringLiteral("auto"), Qt::CaseInsensitive) == 0;
+    config.saveIntermediatePyramidLevels = settings.saveIntermediatePyramidLevels;
 
     if (viewCount <= 2)
     {

@@ -23,6 +23,7 @@ from env_common import default_output_dir, host_platform, repo_root as detect_re
 BASE_PACKAGES = [
     "numpy",
     "opencv-python",
+    "pymupdf",
     "kornia",
     "git+https://github.com/cvg/LightGlue.git",
 ]

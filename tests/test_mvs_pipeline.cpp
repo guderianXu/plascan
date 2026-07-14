@@ -8,7 +8,13 @@
 #include "PatchMatchCUDA.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
+#include "DepthPyramidEstimator.h"
+#include "DepthPyramidPropagation.h"
 #include "DenseCloudBuilder.h"
+#include "DepthPyramidPolicy.h"
+#include "DepthFrameQualityGate.h"
+#include "DepthConsistencyCache.h"
+#include "MvsSceneClassifier.h"
 #include "MvsQualityReport.h"
 #include "SparseCloudPreprocessor.h"
 #include "Camera.h"
@@ -56,10 +62,10 @@ cv::Mat makeShifted(const cv::Mat &src, int d)
     return dst;
 }
 
-xjw::mvs::PositiveDepthCameraModel makePosCam(double fu, double fv,
-                                               double cu, double cv,
-                                               const double Rwc[9],
-                                               const double C[3])
+xjw::Camera makeMvsCamera(double fu, double fv,
+                          double cu, double cv,
+                          const double Rwc[9],
+                          const double C[3])
 {
     xjw::Camera cam;
     std::array<double, 9> R{Rwc[0],Rwc[1],Rwc[2],Rwc[3],Rwc[4],Rwc[5],Rwc[6],Rwc[7],Rwc[8]};
@@ -68,10 +74,257 @@ xjw::mvs::PositiveDepthCameraModel makePosCam(double fu, double fv,
     cam.setPose(R, Cv);
     cam.setAxisDirections(1, 1);
     cam.setDepthAxisFlipped(false);
-    return cam.toPositiveDepthModel();
+    return cam.normalizedForPositiveDepth();
+}
+
+std::vector<xjw::mvs::CameraView> makeDownLookingGridViews(int columns, int rows)
+{
+    std::vector<xjw::mvs::CameraView> views;
+    views.reserve(static_cast<size_t>(columns * rows));
+
+    for (int row = 0; row < rows; ++row)
+    {
+        for (int column = 0; column < columns; ++column)
+        {
+            xjw::mvs::CameraView view;
+            view.imageWidth = 640;
+            view.imageHeight = 480;
+            view.camera.setIntrinsics(500.0, 500.0, 320.0, 240.0);
+            view.camera.setPose(
+                std::array<double, 9>{1.0, 0.0, 0.0,
+                                      0.0, 1.0, 0.0,
+                                      0.0, 0.0, 1.0},
+                std::array<double, 3>{static_cast<double>(column - columns / 2),
+                                      static_cast<double>(row - rows / 2),
+                                      -10.0});
+            view.camera.setAxisDirections(1, 1);
+            view.camera.setDepthAxisFlipped(false);
+            views.push_back(std::move(view));
+        }
+    }
+    return views;
+}
+
+xjw::mvs::SparseCloud makePlanarSparseCloud()
+{
+    xjw::mvs::SparseCloud sparse;
+    for (int y = -5; y <= 5; ++y)
+    {
+        for (int x = -5; x <= 5; ++x)
+        {
+            sparse.points.push_back({static_cast<float>(x),
+                                     static_cast<float>(y),
+                                     0.01f * static_cast<float>((x + y) % 3)});
+        }
+    }
+    return sparse;
+}
+
+class RecordingPatchMatchBackend final : public xjw::mvs::IPatchMatchBackend
+{
+public:
+    bool estimate(const xjw::mvs::PatchMatchBackendRequest &request,
+                  xjw::mvs::DepthLevelResult &result,
+                  std::string *error_message) override
+    {
+        _downsampleCalls.push_back(request.levelConfig.patchMatch.downsampleFactor);
+        result.level = request.levelConfig.level;
+        result.downsampleFactor = request.levelConfig.patchMatch.downsampleFactor;
+        result.depth = cv::Mat(request.referenceImage.size(), CV_32F, cv::Scalar(10.0f));
+        result.confidence = cv::Mat(request.referenceImage.size(), CV_32F, cv::Scalar(0.8f));
+        result.uncertainty = cv::Mat(request.referenceImage.size(), CV_32F, cv::Scalar(0.2f));
+        result.validMask = cv::Mat(request.referenceImage.size(), CV_8U, cv::Scalar(255));
+        if (error_message)
+        {
+            error_message->clear();
+        }
+        return true;
+    }
+
+    const std::vector<int> &downsampleCalls() const
+    {
+        return _downsampleCalls;
+    }
+
+private:
+    std::vector<int> _downsampleCalls;
+};
+
+xjw::mvs::DepthPyramidRequest makeSyntheticPyramidRequest()
+{
+    xjw::mvs::DepthPyramidRequest request;
+    request.referenceImage = cv::Mat(640, 800, CV_8U, cv::Scalar(128));
+    request.sourceImages = {cv::Mat(640, 800, CV_8U, cv::Scalar(128))};
+    request.guideImage = request.referenceImage;
+    xjw::mvs::PatchMatchConfig base;
+    base.downsampleFactor = 1;
+    request.pyramidConfig = xjw::mvs::makeDepthPyramidConfig(base, 800, 640);
+    request.zNear = 1.0f;
+    request.zFar = 20.0f;
+    return request;
 }
 
 } // namespace
+
+TEST(DepthPyramidPolicyTest, BuildsStrictThreeLevelSchedule)
+{
+    xjw::mvs::PatchMatchConfig base;
+    base.downsampleFactor = 1;
+
+    const xjw::mvs::DepthPyramidConfig pyramid =
+        xjw::mvs::makeDepthPyramidConfig(base, 800, 640);
+
+    ASSERT_EQ(pyramid.levels.size(), 3u);
+    EXPECT_EQ(pyramid.activeLevelCount, 3);
+    EXPECT_EQ(pyramid.levels[0].level, 3);
+    EXPECT_EQ(pyramid.levels[0].patchMatch.downsampleFactor, 4);
+    EXPECT_EQ(pyramid.levels[1].patchMatch.downsampleFactor, 2);
+    EXPECT_EQ(pyramid.levels[2].patchMatch.downsampleFactor, 1);
+    EXPECT_TRUE(pyramid.degradedReason.empty());
+}
+
+TEST(DepthPyramidPolicyTest, DegradesCleanlyForTinyImages)
+{
+    xjw::mvs::PatchMatchConfig base;
+    base.downsampleFactor = 1;
+
+    const xjw::mvs::DepthPyramidConfig pyramid =
+        xjw::mvs::makeDepthPyramidConfig(base, 200, 120);
+
+    EXPECT_GE(pyramid.activeLevelCount, 1);
+    EXPECT_LT(pyramid.activeLevelCount, 3);
+    EXPECT_FALSE(pyramid.degradedReason.empty());
+    for (int index = 1; index < pyramid.activeLevelCount; ++index)
+    {
+        EXPECT_GT(pyramid.levels[index - 1].patchMatch.downsampleFactor,
+                  pyramid.levels[index].patchMatch.downsampleFactor);
+    }
+}
+
+TEST(DepthPyramidPolicyTest, UsesNativeWorkingResolutionForStoredIntermediateLevels)
+{
+    EXPECT_EQ(xjw::mvs::depthPyramidWorkingSize(6000, 4000, 16), cv::Size(375, 250));
+    EXPECT_EQ(xjw::mvs::depthPyramidWorkingSize(6000, 4000, 8), cv::Size(750, 500));
+    EXPECT_EQ(xjw::mvs::depthPyramidWorkingSize(6000, 4000, 0), cv::Size(6000, 4000));
+}
+
+TEST(MvsSceneClassifierTest, DetectsAerialCameraLayout)
+{
+    const std::vector<xjw::mvs::CameraView> views = makeDownLookingGridViews(3, 3);
+    const xjw::mvs::SparseCloud sparse = makePlanarSparseCloud();
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, sparse);
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::AerialTerrain);
+    EXPECT_GE(classification.downLookingConsistency, 0.75f);
+    EXPECT_LE(classification.planeThicknessRatio, 0.20f);
+    EXPECT_FALSE(classification.reason.empty());
+}
+
+TEST(MvsSceneClassifierTest, FallsBackToOrbitalForNonPlanarCloud)
+{
+    const std::vector<xjw::mvs::CameraView> views = makeDownLookingGridViews(3, 3);
+    xjw::mvs::SparseCloud sparse;
+    for (int z = -4; z <= 4; ++z)
+    {
+        for (int y = -4; y <= 4; ++y)
+        {
+            for (int x = -4; x <= 4; ++x)
+            {
+                sparse.points.push_back({static_cast<float>(x),
+                                         static_cast<float>(y),
+                                         static_cast<float>(z)});
+            }
+        }
+    }
+
+    const xjw::mvs::MvsSceneClassification classification =
+        xjw::mvs::classifyMvsScene(views, sparse);
+
+    EXPECT_EQ(classification.profile, xjw::mvs::MvsSceneProfile::OrbitalObject);
+    EXPECT_GT(classification.planeThicknessRatio, 0.20f);
+}
+
+TEST(MvsSceneClassifierTest, RecommendsSceneAwareSourceViewPool)
+{
+    using xjw::mvs::MvsSceneProfile;
+    using xjw::mvs::recommendedMvsSourceViewCount;
+
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 3, 9), 8);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 4, 3, 9), 6);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 3, 16), 6);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 4, 3, 16), 4);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 3, 5), 4);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 10, 16), 10);
+}
+
+TEST(DepthPyramidPropagationTest, PreservesDepthStepAndExpandsLowConfidenceRadius)
+{
+    xjw::mvs::DepthLevelResult parent;
+    parent.level = 3;
+    parent.downsampleFactor = 2;
+    parent.depth = cv::Mat(6, 8, CV_32F);
+    parent.confidence = cv::Mat(6, 8, CV_32F);
+    parent.uncertainty = cv::Mat(6, 8, CV_32F, cv::Scalar(0.5f));
+    parent.validMask = cv::Mat(6, 8, CV_8U, cv::Scalar(255));
+    for (int row = 0; row < parent.depth.rows; ++row)
+    {
+        for (int column = 0; column < parent.depth.cols; ++column)
+        {
+            const bool left = column < parent.depth.cols / 2;
+            parent.depth.at<float>(row, column) = left ? 10.0f : 20.0f;
+            parent.confidence.at<float>(row, column) = left ? 0.9f : 0.2f;
+        }
+    }
+
+    cv::Mat guide(12, 16, CV_8U);
+    guide.colRange(0, 8).setTo(cv::Scalar(24));
+    guide.colRange(8, 16).setTo(cv::Scalar(224));
+
+    const xjw::mvs::DepthSearchPrior prior =
+        xjw::mvs::propagateDepthPrior(parent, guide, guide.size());
+
+    ASSERT_EQ(prior.center.size(), guide.size());
+    ASSERT_EQ(prior.radius.size(), guide.size());
+    EXPECT_LT(prior.center.at<float>(6, 7), 12.0f);
+    EXPECT_GT(prior.center.at<float>(6, 9), 18.0f);
+    EXPECT_GT(prior.radius.at<float>(6, 12), prior.radius.at<float>(6, 3));
+    EXPECT_EQ(prior.validMask.at<uint8_t>(6, 7), 255);
+}
+
+TEST(DepthPyramidEstimatorTest, RunsCoarseMiddleFineAndReturnsFinalLevel)
+{
+    RecordingPatchMatchBackend backend;
+    xjw::mvs::DepthPyramidEstimator estimator(&backend);
+
+    const xjw::mvs::DepthPyramidResult result = estimator.estimate(makeSyntheticPyramidRequest());
+
+    EXPECT_EQ(backend.downsampleCalls(), (std::vector<int>{4, 2, 1}));
+    ASSERT_TRUE(result.success) << result.errorMessage;
+    EXPECT_EQ(result.finalLevel.level, 1);
+    EXPECT_EQ(result.levelSummaries.size(), 3u);
+    EXPECT_TRUE(result.intermediateLevels.empty());
+    EXPECT_EQ(result.levelSummaries[0].validPixelCount, 200 * 160);
+    EXPECT_EQ(result.levelSummaries[1].validPixelCount, 400 * 320);
+    EXPECT_EQ(result.levelSummaries[2].validPixelCount, 800 * 640);
+}
+
+TEST(DepthPyramidEstimatorTest, RetainsCoarseAndMiddleLevelsOnlyWhenRequested)
+{
+    RecordingPatchMatchBackend backend;
+    xjw::mvs::DepthPyramidEstimator estimator(&backend);
+    xjw::mvs::DepthPyramidRequest request = makeSyntheticPyramidRequest();
+    request.pyramidConfig.saveIntermediateLevels = true;
+
+    const xjw::mvs::DepthPyramidResult result = estimator.estimate(request);
+
+    ASSERT_TRUE(result.success) << result.errorMessage;
+    ASSERT_EQ(result.intermediateLevels.size(), 2u);
+    EXPECT_EQ(result.intermediateLevels[0].level, 3);
+    EXPECT_EQ(result.intermediateLevels[1].level, 2);
+    EXPECT_EQ(result.finalLevel.level, 1);
+}
 
 TEST(MvsPipelineTest, SparseCloudPreprocessorReadsBinaryPly)
 {
@@ -111,8 +364,8 @@ TEST(MvsPipelineTest, PatchMatchCpuOutputValid)
 
     const double I[9]={1,0,0,0,1,0,0,0,1};
     const double C0[3]={0,0,0}, C1[3]={BASELINE,0,0};
-    auto refCam = makePosCam(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
-    auto srcCam = makePosCam(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
+    auto refCam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
+    auto srcCam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
 
     xjw::mvs::PatchMatchConfig cfg;
     cfg.useCuda           = false;
@@ -144,6 +397,61 @@ TEST(MvsPipelineTest, PatchMatchCpuOutputValid)
         << "CPU PatchMatch should yield > 30% valid pixels in ROI";
 }
 
+TEST(MvsPipelineTest, PatchMatchCpuHonorsPerPixelDepthRadius)
+{
+    constexpr int width = 64;
+    constexpr int height = 48;
+    constexpr double focal = 52.0;
+    constexpr double baseline = 1.0;
+
+    cv::Mat reference = makeSyntheticGray(width, height);
+    cv::Mat source = makeShifted(reference, 5);
+    const double identity[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const double center_reference[3] = {0, 0, 0};
+    const double center_source[3] = {baseline, 0, 0};
+    const auto reference_camera = makeMvsCamera(
+        focal, focal, width * 0.5, height * 0.5, identity, center_reference);
+    const auto source_camera = makeMvsCamera(
+        focal, focal, width * 0.5, height * 0.5, identity, center_source);
+
+    xjw::mvs::PatchMatchConfig config;
+    config.useCuda = false;
+    config.downsampleFactor = 2;
+    config.patchHalf = 2;
+    config.numIterations = 2;
+    config.confidenceThresh = 0.0f;
+    config.doMedianBlur = false;
+    config.doBilateralFilter = false;
+
+    cv::Mat hint_depth(height / 2, width / 2, CV_32F, cv::Scalar(10.0f));
+    cv::Mat hint_radius(height / 2, width / 2, CV_32F, cv::Scalar(0.2f));
+    cv::Mat depth;
+    cv::Mat confidence;
+    std::string error;
+    ASSERT_TRUE(xjw::mvs::PatchMatchDepthEstimator::estimate(
+        reference,
+        {source},
+        reference_camera,
+        {source_camera},
+        2.0f,
+        20.0f,
+        config,
+        depth,
+        &confidence,
+        &error,
+        &hint_depth,
+        &hint_radius)) << error;
+
+    ASSERT_FALSE(depth.empty());
+    const cv::Mat valid_mask = depth > 0.0f;
+    ASSERT_GT(cv::countNonZero(valid_mask), 0);
+    double minimum_depth = 0.0;
+    double maximum_depth = 0.0;
+    cv::minMaxLoc(depth, &minimum_depth, &maximum_depth, nullptr, nullptr, valid_mask);
+    EXPECT_GE(minimum_depth, 9.8 - 1e-4);
+    EXPECT_LE(maximum_depth, 10.2 + 1e-4);
+}
+
 // ---------------------------------------------------------------------------
 // Test 2: DepthMapFusion 双帧融合输出非空点云
 // ---------------------------------------------------------------------------
@@ -165,11 +473,11 @@ TEST(MvsPipelineTest, DepthMapFusionTwoFrames)
 
     xjw::mvs::FusionFrameInput fr0, fr1;
     fr0.depthMap    = d0;
-    fr0.cameraModel = makePosCam(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
+    fr0.cameraModel = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
     fr0.imgW = W; fr0.imgH = H;
 
     fr1.depthMap    = d1;
-    fr1.cameraModel = makePosCam(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
+    fr1.cameraModel = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
     fr1.imgW = W; fr1.imgH = H;
 
     xjw::mvs::StereoFusionConfig fcfg;
@@ -199,7 +507,7 @@ TEST(MvsPipelineTest, DepthMapFusionCancelBeforeWorkClearsStaleOutput)
 
     xjw::mvs::FusionFrameInput frame;
     frame.depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-    frame.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    frame.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
     frame.imgW = W;
     frame.imgH = H;
 
@@ -236,12 +544,12 @@ TEST(MvsPipelineTest, DepthMapFusionTwoViewSingleObservationUsesFastParallelPath
 
     xjw::mvs::FusionFrameInput fr0, fr1;
     fr0.depthMap = d0;
-    fr0.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    fr0.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
     fr0.imgW = W;
     fr0.imgH = H;
 
     fr1.depthMap = d1;
-    fr1.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
+    fr1.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
     fr1.imgW = W;
     fr1.imgH = H;
 
@@ -279,12 +587,12 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionRejectsDepthsWithoutNeighborAgree
 
     std::vector<xjw::mvs::FusionFrameInput> frames(2);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[0].imgW = W;
     frames[0].imgH = H;
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
-    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
@@ -316,18 +624,18 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionKeepsProductionStrictWhenFallback
 
     std::vector<xjw::mvs::FusionFrameInput> frames(3);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[0].imgW = W;
     frames[0].imgH = H;
     frames[0].sourceImageIndices = {1, 2};
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
     frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
-    frames[2].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[2].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[2].imgW = W;
     frames[2].imgH = H;
 
@@ -359,18 +667,18 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionFallsBackToTwoViewAgreementWhenSt
 
     std::vector<xjw::mvs::FusionFrameInput> frames(3);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[0].imgW = W;
     frames[0].imgH = H;
     frames[0].sourceImageIndices = {1, 2};
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(8.0f));
-    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
     frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(12.0f));
-    frames[2].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+    frames[2].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
     frames[2].imgW = W;
     frames[2].imgH = H;
 
@@ -411,7 +719,7 @@ TEST(MvsPipelineTest, DepthMapFusionFilteredDepthsIncludeAllAcceptedObservations
     for (auto &frame : frames)
     {
         frame.depthMap = depth.clone();
-        frame.cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+        frame.cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
         frame.imgW = W;
         frame.imgH = H;
     }
@@ -455,18 +763,18 @@ TEST(MvsPipelineTest, DepthMapFusionUsesPlannedSourceImagesBeforeNearestCenters)
 
     std::vector<xjw::mvs::FusionFrameInput> frames(3);
     frames[0].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-    frames[0].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
+    frames[0].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C0);
     frames[0].imgW = W;
     frames[0].imgH = H;
     frames[0].sourceImageIndices = {2};
 
     frames[1].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(0.0f));
-    frames[1].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
+    frames[1].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C1);
     frames[1].imgW = W;
     frames[1].imgH = H;
 
     frames[2].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-    frames[2].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C2);
+    frames[2].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C2);
     frames[2].imgW = W;
     frames[2].imgH = H;
     frames[2].sourceImageIndices = {0};
@@ -504,6 +812,157 @@ TEST(MvsPipelineTest, MvsQualityReportFlagsLowConfidenceFullCoverageDepthMap)
     const QJsonObject json = xjw::mvs::depthMapQualityMetricsToJson(metrics);
     EXPECT_TRUE(json.value(QStringLiteral("low_confidence_full_coverage")).toBool());
     EXPECT_GE(json.value(QStringLiteral("recommended_fusion_confidence")).toDouble(), 0.65);
+}
+
+TEST(MvsPipelineTest, MvsQualityReportMeasuresConnectedSupportAndBoundaryCollapse)
+{
+    cv::Mat depth = cv::Mat::zeros(20, 30, CV_32F);
+    depth(cv::Rect(2, 3, 12, 10)).setTo(10.0f);
+    depth(cv::Rect(25, 16, 2, 2)).setTo(19.9f);
+    cv::Mat confidence(20, 30, CV_32F, cv::Scalar(0.8f));
+
+    const xjw::mvs::DepthMapQualityMetrics metrics =
+        xjw::mvs::analyzeDepthMapQuality(depth, confidence, 4, 5.0f, 20.0f);
+
+    EXPECT_GT(metrics.largestComponentRatio, 0.95f);
+    EXPECT_NEAR(metrics.depthAtSearchBoundaryRatio, 4.0f / 124.0f, 1.0e-5f);
+
+    const QJsonObject json = xjw::mvs::depthMapQualityMetricsToJson(metrics);
+    EXPECT_GT(json.value(QStringLiteral("largest_component_ratio")).toDouble(), 0.95);
+    EXPECT_GT(json.value(QStringLiteral("depth_at_search_boundary_ratio")).toDouble(), 0.03);
+}
+
+TEST(DepthFrameQualityGateTest, RejectsDepthSearchBoundaryCollapse)
+{
+    xjw::mvs::DepthFrameQualityInput input;
+    input.sceneProfile = xjw::mvs::MvsSceneProfile::OrbitalObject;
+    input.sourceViewCount = 4;
+    input.validCoverage = 0.42f;
+    input.largestComponentRatio = 0.85f;
+    input.meanConfidence = 0.78f;
+    input.multiViewConsistency = 0.81f;
+    input.depthAtSearchBoundaryRatio = 0.72f;
+
+    const xjw::mvs::DepthFrameQualityDecision decision =
+        xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_NE(std::find(decision.reasons.begin(),
+                        decision.reasons.end(),
+                        std::string("depth_search_boundary_collapse")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest, RejectsLowConfidenceFullCoverage)
+{
+    xjw::mvs::DepthFrameQualityInput input;
+    input.sceneProfile = xjw::mvs::MvsSceneProfile::AerialTerrain;
+    input.sourceViewCount = 5;
+    input.validCoverage = 0.99f;
+    input.largestComponentRatio = 0.99f;
+    input.meanConfidence = 0.31f;
+    input.multiViewConsistency = 0.28f;
+
+    const xjw::mvs::DepthFrameQualityDecision decision =
+        xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_NE(std::find(decision.reasons.begin(),
+                        decision.reasons.end(),
+                        std::string("low_confidence_full_coverage")),
+              decision.reasons.end());
+}
+
+TEST(DepthFrameQualityGateTest, AcceptsStableOrbitalObjectWithPartialCoverage)
+{
+    xjw::mvs::DepthFrameQualityInput input;
+    input.sceneProfile = xjw::mvs::MvsSceneProfile::OrbitalObject;
+    input.sourceViewCount = 4;
+    input.validCoverage = 0.18f;
+    input.largestComponentRatio = 0.82f;
+    input.meanConfidence = 0.76f;
+    input.multiViewConsistency = 0.73f;
+    input.sparseDepthMedianRelativeError = 0.04f;
+
+    const xjw::mvs::DepthFrameQualityDecision decision =
+        xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Accepted);
+}
+
+TEST(DepthFrameQualityGateTest, AcceptsAerialEdgeFrameWithModerateConsistency)
+{
+    xjw::mvs::DepthFrameQualityInput input;
+    input.sceneProfile = xjw::mvs::MvsSceneProfile::AerialTerrain;
+    input.sourceViewCount = 5;
+    input.validCoverage = 0.38f;
+    input.largestComponentRatio = 0.94f;
+    input.meanConfidence = 0.54f;
+    input.multiViewConsistency = 0.516f;
+    input.depthAtSearchBoundaryRatio = 0.08f;
+
+    const xjw::mvs::DepthFrameQualityDecision decision =
+        xjw::mvs::evaluateDepthFrame(input);
+
+    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Accepted);
+
+    input.sourceViewCount = 8;
+    const xjw::mvs::DepthFrameQualityDecision interior_decision =
+        xjw::mvs::evaluateDepthFrame(input);
+    EXPECT_EQ(interior_decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+}
+
+TEST(DepthFrameQualityGateTest, CalibratesConfidenceAndCapsFilterViews)
+{
+    xjw::mvs::DepthConfidenceComponents components;
+    components.photometric = 0.90f;
+    components.support = 0.80f;
+    components.uniqueness = 0.75f;
+    components.geometry = 0.70f;
+    components.texture = 0.60f;
+
+    EXPECT_NEAR(xjw::mvs::calibrateDepthConfidence(components), 0.2268f, 1.0e-5f);
+
+    const xjw::mvs::DepthFilterSettings settings =
+        xjw::mvs::depthFilterSettings(xjw::mvs::DepthFilterMode::Aggressive, 2);
+    EXPECT_EQ(settings.minComponentArea, 64);
+    EXPECT_FLOAT_EQ(settings.localDepthOutlierRelThreshold, 0.15f);
+    EXPECT_EQ(settings.minConsistentViews, 2);
+}
+
+TEST(DepthConsistencyCacheTest, EvictsUnpinnedFramesWithinByteBudget)
+{
+    constexpr std::size_t frame_bytes = 12 * 16 * sizeof(float);
+    int load_count = 0;
+    xjw::mvs::DepthConsistencyCache cache(
+        [&load_count](int frame_index,
+                      xjw::mvs::DepthConsistencyFrame &frame,
+                      std::string *)
+        {
+            ++load_count;
+            frame.frameIndex = frame_index;
+            frame.depth = cv::Mat(12, 16, CV_32F, cv::Scalar(10.0f + frame_index));
+            return true;
+        },
+        frame_bytes * 2);
+
+    std::string error;
+    auto reference = cache.acquire(0, &error);
+    ASSERT_TRUE(reference) << error;
+    {
+        auto source = cache.acquire(1, &error);
+        ASSERT_TRUE(source) << error;
+    }
+    {
+        auto source = cache.acquire(2, &error);
+        ASSERT_TRUE(source) << error;
+    }
+
+    EXPECT_LE(cache.currentBytes(), frame_bytes * 2);
+    EXPECT_LE(cache.peakBytes(), frame_bytes * 2);
+    EXPECT_EQ(cache.acquire(0, &error).get(), reference.get());
+    EXPECT_EQ(load_count, 3);
 }
 
 TEST(MvsPipelineTest, SparseSupportMaskTracksProjectedSparseStructure)
@@ -585,7 +1044,7 @@ TEST(MvsPipelineTest, ProjectedSparseSamplesFeedHintAndSupportReuse)
 
     const std::vector<xjw::mvs::ProjectedSparseDepthSample> samples =
         xjw::mvs::DepthMapGenerator::collectProjectedSparseDepthSamples(
-            sparse, view.positiveDepthModel(), W, H, indices);
+            sparse, view.camera.normalizedForPositiveDepth(), W, H, indices);
 
     EXPECT_EQ(samples.size(), indices.size() - 1)
         << "The depth outlier should be excluded once before building hint/support rasters.";
@@ -750,7 +1209,7 @@ TEST(MvsPipelineTest, StreamingFirstFrameFusionEstimatesNormalsWhenNormalMapMiss
     for (int i = 0; i < 3; ++i)
     {
         frames[static_cast<size_t>(i)].depthMap = cv::Mat(H, W, CV_32F, cv::Scalar(DEPTH_VAL));
-        frames[static_cast<size_t>(i)].cameraModel = makePosCam(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
+        frames[static_cast<size_t>(i)].cameraModel = makeMvsCamera(FOCAL, FOCAL, W * 0.5, H * 0.5, I, C);
         frames[static_cast<size_t>(i)].imgW = W;
         frames[static_cast<size_t>(i)].imgH = H;
     }
@@ -829,7 +1288,7 @@ TEST(MvsPipelineTest, DenseCloudBuilderUnprojectBasic)
 
     const double I[9]={1,0,0,0,1,0,0,0,1};
     const double C0[3]={0,0,0};
-    auto cam = makePosCam(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
+    auto cam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
 
     xjw::mvs::DenseCloudOptions opt;
     opt.minDepth = 0.1f;
@@ -873,8 +1332,8 @@ TEST(MvsPipelineTest, PatchMatchToDenseCloudEndToEnd)
 
     const double I[9]={1,0,0,0,1,0,0,0,1};
     const double C0[3]={0,0,0}, C1[3]={BASELINE,0,0};
-    auto refCam = makePosCam(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
-    auto srcCam = makePosCam(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
+    auto refCam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C0);
+    auto srcCam = makeMvsCamera(FOCAL, FOCAL, W*0.5, H*0.5, I, C1);
 
     xjw::mvs::PatchMatchConfig cfg;
     cfg.useCuda           = false;

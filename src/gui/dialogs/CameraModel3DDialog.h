@@ -22,6 +22,7 @@
 #include <QRhiWidget>
 #include <QScopedPointer>
 #include <QSet>
+#include <QSize>
 #include <QVector>
 #include <QVector2D>
 #include <QVector3D>
@@ -43,7 +44,9 @@ class QRhiBuffer;
 class QRhiCommandBuffer;
 class QRhiGraphicsPipeline;
 class QRhiResourceUpdateBatch;
+class QRhiSampler;
 class QRhiShaderResourceBindings;
+class QRhiTexture;
 class QResizeEvent;
 
 // =============================================================================
@@ -71,6 +74,15 @@ public:
         QString imagePath;  // 影像路径（用于与影像列表联动高亮）
         QVector3D center;   // 相机光心世界坐标
         QMatrix3x3 rotation; // 相机旋转矩阵（right/up/forward 列向量）
+        float focalX = 0.0f;
+        float focalY = 0.0f;
+        float principalX = 0.0f;
+        float principalY = 0.0f;
+        int imageWidth = 0;
+        int imageHeight = 0;
+        int uAxisSign = 1;
+        int vAxisSign = 1;
+        bool depthAxisFlipped = false;
     };
 
     enum class CameraImagePlaneMode
@@ -184,12 +196,18 @@ private:
         Y,    // 绕 Y 轴旋转（绿色环）
         Z     // 绕 Z 轴旋转（蓝色环）
     };
+    struct SceneMatrices
+    {
+        QMatrix4x4 modelView;
+        QMatrix4x4 projection;
+    };
     struct CameraPlaneImageResult;
     void applyZoomFactor(float factor);
 
     // 将三维世界点投影到屏幕像素坐标（考虑当前视图旋转、投影、平移偏移）
     // ok 为 nullptr 或 false 时表示点在裁剪空间外
     QPointF projectToScreen(const QVector3D &p, bool *ok = nullptr) const;
+    SceneMatrices sceneMatrices() const;
 
     // 将向量从本地空间旋转到当前视图空间（应用 _viewRot）
     QVector3D applyViewRotation(const QVector3D &v) const;
@@ -238,11 +256,8 @@ private:
     void requestCameraPlaneImage(const QString &imagePath, CameraImagePlaneMode mode);
     void applyCameraPlaneImage(const CameraPlaneImageResult &result);
     int displayedCameraImagePoseIndex() const;
+    void updateActiveCameraForView();
     void refreshLockedCameraImage();
-    void drawSelectedCameraImage(QPainter &painter,
-                                 CameraImageDisplayLayer layer,
-                                 float thumbnailHalfExtent,
-                                 float thumbnailHalfHeight);
     void drawFloorPivotCross(QPainter &painter) const;
 
     // 在普通透明 QWidget 覆盖层中绘制 2D 标注：
@@ -285,6 +300,18 @@ private:
         QString fragmentShaderPath;
     };
 
+    struct RhiImagePipelineSet
+    {
+        QScopedPointer<QRhiBuffer> vertexBuffer;
+        QScopedPointer<QRhiBuffer> uniformBuffer;
+        QScopedPointer<QRhiTexture> texture;
+        QScopedPointer<QRhiSampler> sampler;
+        QScopedPointer<QRhiShaderResourceBindings> bindings;
+        QScopedPointer<QRhiGraphicsPipeline> pipeline;
+        QSize textureSize;
+        QString uploadedImageKey;
+    };
+
     struct SceneUniforms
     {
         QMatrix4x4 mvp;
@@ -293,10 +320,17 @@ private:
         QVector4D lightDirPointSize;
     };
 
+    struct ImagePlaneUniforms
+    {
+        QMatrix4x4 mvp;
+    };
+
     struct CameraPlaneImageResult
     {
         QString path;
         QImage image;
+        QSize originalSize;
+        QString errorMessage;
         CameraImagePlaneMode mode = CameraImagePlaneMode::Solid;
         int generation = 0;
         bool loaded = false;
@@ -314,10 +348,13 @@ private:
 
     bool ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates);
     bool ensurePipeline(RhiPipelineSet *pipeline, int topology, int strideBytes, bool hasNormals);
+    bool ensureImagePipeline(QRhiResourceUpdateBatch *updates);
     void drawRhiBuffer(QRhiCommandBuffer *cb,
                        RhiBufferSet *buffer,
                        RhiPipelineSet *pipeline,
                        const SceneUniforms &uniforms);
+    void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
+    void drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &uniforms);
 
     // 点云 GPU 资源
     RhiBufferSet _pointBuffer;
@@ -342,6 +379,7 @@ private:
     RhiPipelineSet _modelPointPipeline;
     RhiPipelineSet _meshTrianglePipeline;
     RhiPipelineSet _meshPointPipeline;
+    RhiImagePipelineSet _imagePipeline;
 
     QVector<CameraPose> _poses;             // 当前相机姿态列表
     RenderCloud _cloud;     // 当前显示的点云或网格（源自文件或外部调用）
@@ -379,10 +417,12 @@ private:
     bool _showCameraImage = false;
     CameraImageDisplayLayer _cameraImageDisplayLayer = CameraImageDisplayLayer::Foreground;
     bool _cameraImageLocked = false;
+    int _activeCameraImagePoseIndex = -1;
     QString _lockedCameraImagePath;
     QString _lockedCameraImageName;
     QHash<QString, QImage> _cameraImageCache;
     QSet<QString> _cameraImageLoadsInFlight;
+    QSet<QString> _cameraImageLoadFailures;
     int _cameraImageLoadGeneration = 0;
     QString _highlightedCameraPath;
     QString _highlightedCameraName;

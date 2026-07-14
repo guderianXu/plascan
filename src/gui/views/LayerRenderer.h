@@ -11,6 +11,8 @@
 #include <QString>
 #include <QRectF>
 
+#include "FeatureResidualLoader.h"
+
 class QGraphicsScene;
 class QGraphicsPixmapItem;
 class QGraphicsItem;
@@ -61,6 +63,11 @@ public:
         int maxDisplayCount = 0; // 0=all
         bool showTopScores = true;
         bool useFill = false; // 是否使用实心填充(默认空心)
+        bool showResiduals = false;
+        double residualScale = 10.0;
+        double minimumResidualPx = 0.0;
+        double maximumResidualLengthPx = 80.0;
+        QColor residualColor = QColor(255, 80, 80);
     };
 
     void setFeatureDisplayOptions(const FeatureDisplayOptions &opts);
@@ -92,11 +99,17 @@ public:
 
     // 由主线程调用：接收解析好的兴趣点列表并在 scene 上绘制（安全）
     void addFeatureItems(const std::vector<cv::KeyPoint> &keypoints);
+    void addFeatureResidualItems(const QVector<xjw::gui::views::FeatureResidualVector> &residuals);
+    void clearFeatureResidualLayers();
+
+    // 当前单幅或拼接影像在场景坐标系中的边界。调用方只读使用，避免在空白区创建量测。
+    QRectF imageBounds() const noexcept { return _imageBounds; }
 
 private:
     QGraphicsScene *_scene{};
     QList<QGraphicsPixmapItem *> _layers{};
     QList<QGraphicsItem *> _featureItems{};
+    QList<QGraphicsItem *> _featureResidualItems{};
     QList<QGraphicsItem *> _matchItems{};
     QList<QGraphicsItem *> _maskItems{};
     QRectF _imageBounds{};

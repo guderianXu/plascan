@@ -227,7 +227,7 @@ xjw::mesh::ReconstructionConfig fallbackMeshConfig()
     return config;
 }
 
-xjw::PositiveDepthCameraModel makeLookAtCamera(const std::array<float, 3> &center)
+xjw::Camera makeLookAtCamera(const std::array<float, 3> &center)
 {
     auto normalize = [](std::array<float, 3> value)
     {
@@ -255,23 +255,20 @@ xjw::PositiveDepthCameraModel makeLookAtCamera(const std::array<float, 3> &cente
     const std::array<float, 3> right = normalize(cross(forward, provisional_up));
     const std::array<float, 3> down = normalize(cross(forward, right));
 
-    xjw::PositiveDepthCameraModel camera;
-    camera.fx = 100.0f;
-    camera.fy = 100.0f;
-    camera.cx = 64.0f;
-    camera.cy = 64.0f;
     const std::array<std::array<float, 3>, 3> rows{right, down, forward};
+    std::array<double, 9> cameraToWorld{};
     for (int row = 0; row < 3; ++row)
     {
         for (int column = 0; column < 3; ++column)
         {
-            camera.R_cw[row * 3 + column] = rows[static_cast<std::size_t>(row)][column];
+            cameraToWorld[static_cast<std::size_t>(column * 3 + row)] =
+                rows[static_cast<std::size_t>(row)][column];
         }
-        camera.T[row] = -(camera.R_cw[row * 3] * center[0] +
-                          camera.R_cw[row * 3 + 1] * center[1] +
-                          camera.R_cw[row * 3 + 2] * center[2]);
-        camera.C[row] = center[static_cast<std::size_t>(row)];
     }
+    xjw::Camera camera;
+    camera.setIntrinsics(100.0, 100.0, 64.0, 64.0);
+    camera.setPose(cameraToWorld,
+                   {center[0], center[1], center[2]});
     return camera;
 }
 
@@ -319,6 +316,37 @@ TEST(VisualHullReconstructorTest, ReconstructsClosedBodyFromSixSilhouettes)
     EXPECT_GT(max_x, 0.45f);
     EXPECT_GT(min_x, -0.85f);
     EXPECT_LT(max_x, 0.85f);
+}
+
+TEST(VisualHullReconstructorTest, KeepsDepthCarvingDisabledByDefault)
+{
+    const xjw::mesh::VisualHullConfig config;
+    EXPECT_FALSE(config.enableDepthFreeSpaceCarving);
+}
+
+TEST(VisualHullReconstructorTest, DetectsFragmentedMeshForSafeRetry)
+{
+    xjw::mesh::TriMesh mesh;
+    mesh.vertices.resize(6);
+    mesh.faces = {
+        {{0, 1, 2}},
+        {{3, 4, 5}}
+    };
+
+    const xjw::mesh::MeshConnectivityStats stats =
+        xjw::mesh::VisualHullReconstructor::analyzeConnectivity(mesh);
+    EXPECT_EQ(stats.componentCount, 2);
+    EXPECT_DOUBLE_EQ(stats.largestComponentFaceRatio, 0.5);
+    EXPECT_TRUE(xjw::mesh::VisualHullReconstructor::requiresSilhouetteOnlyRetry(
+        stats, 0.85, 12));
+
+    EXPECT_TRUE(xjw::mesh::VisualHullReconstructor::retainLargestConnectedComponent(&mesh));
+    EXPECT_EQ(mesh.faces.size(), 1);
+    EXPECT_EQ(mesh.vertices.size(), 3);
+    const xjw::mesh::MeshConnectivityStats cleaned =
+        xjw::mesh::VisualHullReconstructor::analyzeConnectivity(mesh);
+    EXPECT_EQ(cleaned.componentCount, 1);
+    EXPECT_DOUBLE_EQ(cleaned.largestComponentFaceRatio, 1.0);
 }
 
 TEST(MeshReconstructorTest, UsesStreamingHeightGridForOversizedPly)
@@ -917,8 +945,8 @@ TEST(DepthMapMeshBuilderTest, LoadsDepthGridCameraFromWorkspaceManifest)
 
     ASSERT_EQ(frames.size(), 1);
     EXPECT_TRUE(frames.front().hasCameraModel);
-    EXPECT_FLOAT_EQ(frames.front().cameraModel.fx, 250.0f);
-    EXPECT_FLOAT_EQ(frames.front().cameraModel.cy, 120.0f);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel.focalX(), 250.0);
+    EXPECT_DOUBLE_EQ(frames.front().cameraModel.principalY(), 120.0);
     EXPECT_EQ(frames.front().gridWidth, 320);
     EXPECT_EQ(frames.front().gridHeight, 240);
 }

@@ -1,9 +1,23 @@
 #include "CorrespondenceGraph.h"
 
 #include <algorithm>
+#include <cmath>
+#include <limits>
+#include <map>
 
 namespace xjw
 {
+
+namespace
+{
+
+std::uint64_t observationKey(ImageId imageId, FeatureIdx featureIdx)
+{
+    return (static_cast<std::uint64_t>(imageId) << 32)
+        | static_cast<std::uint64_t>(featureIdx);
+}
+
+} // namespace
 
 // 静态空匹配列表
 const std::vector<FeatureMatch> CorrespondenceGraph::EMPTY_MATCHES;
@@ -33,7 +47,59 @@ void CorrespondenceGraph::addMatches(
 
     ImagePair pair(id1, id2);
     auto &storedMatches = pairMatches[pair];
-    storedMatches.insert(storedMatches.end(), matches.begin(), matches.end());
+    if (id1 <= id2)
+    {
+        storedMatches.insert(storedMatches.end(), matches.begin(), matches.end());
+        return;
+    }
+
+    // ImagePair 始终按图像 ID 升序存储，反向输入时必须同步交换特征索引。
+    storedMatches.reserve(storedMatches.size() + matches.size());
+    for (const FeatureMatch &match : matches)
+    {
+        storedMatches.push_back({match.idx2, match.idx1, match.score});
+    }
+}
+
+bool CorrespondenceGraph::addPriorTrack(const std::string &sourceId,
+                                        const std::vector<TrackElement> &observations,
+                                        float confidence)
+{
+    if (sourceId.empty() || observations.size() < 2 || !std::isfinite(confidence))
+    {
+        return false;
+    }
+
+    std::unordered_set<ImageId> image_ids;
+    for (const TrackElement &observation : observations)
+    {
+        const auto image_it = imageFeatureCounts.find(observation.imageId);
+        const std::uint64_t key = observationKey(observation.imageId, observation.featureIdx);
+        if (image_it == imageFeatureCounts.end() || observation.featureIdx >= image_it->second
+            || !image_ids.insert(observation.imageId).second
+            || priorTrackByObservation.find(key) != priorTrackByObservation.end())
+        {
+            return false;
+        }
+    }
+
+    for (const TrackElement &observation : observations)
+    {
+        priorTrackByObservation.emplace(observationKey(observation.imageId, observation.featureIdx),
+                                        sourceId);
+    }
+    for (std::size_t first = 0; first < observations.size(); ++first)
+    {
+        for (std::size_t second = first + 1; second < observations.size(); ++second)
+        {
+            addMatches(observations[first].imageId,
+                       observations[second].imageId,
+                       {{observations[first].featureIdx,
+                         observations[second].featureIdx,
+                         confidence}});
+        }
+    }
+    return true;
 }
 
 /**
@@ -77,6 +143,82 @@ void CorrespondenceGraph::buildCorrespondences()
             }
         }
     }
+}
+
+std::vector<ImagePair> CorrespondenceGraph::imagePairs() const
+{
+    std::vector<ImagePair> result;
+    result.reserve(pairMatches.size());
+    for (const auto &entry : pairMatches)
+    {
+        if (!entry.second.empty())
+        {
+            result.push_back(entry.first);
+        }
+    }
+    std::sort(result.begin(), result.end(), [](const ImagePair &left, const ImagePair &right)
+    {
+        if (left.first != right.first)
+        {
+            return left.first < right.first;
+        }
+        return left.second < right.second;
+    });
+    return result;
+}
+
+std::size_t CorrespondenceGraph::retainMatchesInTracks(const std::vector<Track> &tracks)
+{
+    using Observation = std::pair<ImageId, FeatureIdx>;
+    constexpr std::size_t kAmbiguousTrack = std::numeric_limits<std::size_t>::max();
+
+    std::map<Observation, std::size_t> trackByObservation;
+    for (std::size_t trackIndex = 0; trackIndex < tracks.size(); ++trackIndex)
+    {
+        for (const TrackElement &element : tracks[trackIndex].elements)
+        {
+            const Observation observation{element.imageId, element.featureIdx};
+            const auto [it, inserted] = trackByObservation.emplace(observation, trackIndex);
+            if (!inserted && it->second != trackIndex)
+            {
+                it->second = kAmbiguousTrack;
+            }
+        }
+    }
+
+    std::size_t removedCount = 0;
+    for (auto pairIt = pairMatches.begin(); pairIt != pairMatches.end();)
+    {
+        const ImagePair &pair = pairIt->first;
+        std::vector<FeatureMatch> &matches = pairIt->second;
+        const auto newEnd = std::remove_if(matches.begin(), matches.end(), [&](const FeatureMatch &match)
+        {
+            const auto firstIt = trackByObservation.find({pair.first, match.idx1});
+            const auto secondIt = trackByObservation.find({pair.second, match.idx2});
+            const bool keep = firstIt != trackByObservation.end() &&
+                secondIt != trackByObservation.end() &&
+                firstIt->second != kAmbiguousTrack &&
+                firstIt->second == secondIt->second;
+            if (!keep)
+            {
+                ++removedCount;
+            }
+            return !keep;
+        });
+        matches.erase(newEnd, matches.end());
+
+        if (matches.empty())
+        {
+            pairIt = pairMatches.erase(pairIt);
+        }
+        else
+        {
+            ++pairIt;
+        }
+    }
+
+    correspondences.clear();
+    return removedCount;
 }
 
 // ---- 查询接口 ----
@@ -170,6 +312,12 @@ CorrespondenceGraph::topConnectedImages(
     }
 
     return result;
+}
+
+std::string CorrespondenceGraph::priorTrackId(ImageId imageId, FeatureIdx featureIdx) const
+{
+    const auto it = priorTrackByObservation.find(observationKey(imageId, featureIdx));
+    return it == priorTrackByObservation.end() ? std::string() : it->second;
 }
 
 } // namespace xjw

@@ -4,8 +4,8 @@
 // 测试内容：
 //   1. PatchMatchConfig 默认值验证（优化后的参数）
 //   2. FusionConfig 默认值验证
-//   3. Camera::PositiveDepthModel 构造与投影
-//   4. Camera::PositiveDepthModel 投影-反投影一致性
+//   3. Camera 正深度归一化与投影
+//   4. Camera 投影-反投影一致性
 //   5. 深度图后处理参数验证
 // ============================================================
 
@@ -246,10 +246,10 @@ TEST(MvsQualityReportTest, DetectsLocalDepthSpikesEvenWithHighConfidence)
     EXPECT_TRUE(json.value(QStringLiteral("has_local_depth_outliers")).toBool(false));
 }
 
-// ─── Camera::PositiveDepthModel 测试 ───────────────────────────
+// ─── Camera 正深度归一化测试 ────────────────────────────────
 
 // 从显式 ASP/Tsai 语义参数构造正深度模型
-TEST(PositiveDepthCameraModelTest, FromCameraBasic)
+TEST(CameraPositiveDepthTest, FromCameraBasic)
 {
     // 简单单位相机：焦距 1000px，主点 (512,384)，无翻转
     double R_wc[9] = {1,0,0, 0,1,0, 0,0,1}; // identity
@@ -261,83 +261,81 @@ TEST(PositiveDepthCameraModelTest, FromCameraBasic)
         1, 1,
         R_wc, C,
         false);
-    auto cam = camera.toPositiveDepthModel();
+    const xjw::Camera cam = camera.normalizedForPositiveDepth();
 
-    EXPECT_TRUE(cam.valid());
-    EXPECT_FLOAT_EQ(cam.fx, 1000.f);
-    EXPECT_FLOAT_EQ(cam.fy, 1000.f);
-    EXPECT_FLOAT_EQ(cam.cx, 512.f);
-    EXPECT_FLOAT_EQ(cam.cy, 384.f);
+    EXPECT_TRUE(cam.isValid());
+    EXPECT_DOUBLE_EQ(cam.focalX(), 1000.0);
+    EXPECT_DOUBLE_EQ(cam.focalY(), 1000.0);
+    EXPECT_DOUBLE_EQ(cam.principalX(), 512.0);
+    EXPECT_DOUBLE_EQ(cam.principalY(), 384.0);
 }
 
 // 投影测试：光轴上的点应投影到主点
-TEST(PositiveDepthCameraModelTest, ProjectOnAxis)
+TEST(CameraPositiveDepthTest, ProjectOnAxis)
 {
     double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};
     double C[3] = {0, 0, 0};
 
     auto cam = makeCamera(
         1000.0, 1000.0, 512.0, 384.0,
-        1, 1, R_wc, C, false).toPositiveDepthModel();
+        1, 1, R_wc, C, false).normalizedForPositiveDepth();
 
-    float u, v;
-    bool ok = cam.project(0.f, 0.f, 10.f, u, v);
+    const double world[3] = {0.0, 0.0, 10.0};
+    double pixel[2] = {};
+    bool ok = cam.projectWorldPoint(world, pixel);
     EXPECT_TRUE(ok) << "Point on optical axis should project successfully";
-    EXPECT_NEAR(u, 512.f, 0.01f) << "Should project to principal point u";
-    EXPECT_NEAR(v, 384.f, 0.01f) << "Should project to principal point v";
+    EXPECT_NEAR(pixel[0], 512.0, 0.01) << "Should project to principal point u";
+    EXPECT_NEAR(pixel[1], 384.0, 0.01) << "Should project to principal point v";
 }
 
 // 投影-反投影往返一致性
-TEST(PositiveDepthCameraModelTest, ProjectUnprojectRoundtrip)
+TEST(CameraPositiveDepthTest, ProjectUnprojectRoundtrip)
 {
     double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};
     double C[3] = {5, 3, -2};
 
     auto cam = makeCamera(
         800.0, 800.0, 400.0, 300.0,
-        1, 1, R_wc, C, false).toPositiveDepthModel();
+        1, 1, R_wc, C, false).normalizedForPositiveDepth();
 
     // 测试点
-    float Xw = 10.f, Yw = 5.f, Zw = 20.f;
+    const double world[3] = {10.0, 5.0, 20.0};
 
     // 正向投影
-    float u, v;
-    bool ok = cam.project(Xw, Yw, Zw, u, v);
+    double pixel[2] = {};
+    double depth = 0.0;
+    bool ok = cam.projectWorldPointWithDepth(world, pixel, depth);
     ASSERT_TRUE(ok) << "Projection should succeed for visible point";
-
-    // 计算深度 (Zc)
-    float Xc = cam.R_cw[0]*Xw + cam.R_cw[1]*Yw + cam.R_cw[2]*Zw + cam.T[0];
-    float Yc = cam.R_cw[3]*Xw + cam.R_cw[4]*Yw + cam.R_cw[5]*Zw + cam.T[1];
-    float Zc = cam.R_cw[6]*Xw + cam.R_cw[7]*Yw + cam.R_cw[8]*Zw + cam.T[2];
-    ASSERT_GT(Zc, 0) << "Point should be in front of camera";
+    ASSERT_GT(depth, 0.0) << "Point should be in front of camera";
 
     // 反投影
-    float Xw2, Yw2, Zw2;
-    cam.unproject(u, v, Zc, Xw2, Yw2, Zw2);
+    double reconstructed[3] = {};
+    ASSERT_TRUE(cam.unprojectPixel(pixel, depth, reconstructed));
 
-    EXPECT_NEAR(Xw2, Xw, 0.05f) << "Roundtrip X should match";
-    EXPECT_NEAR(Yw2, Yw, 0.05f) << "Roundtrip Y should match";
-    EXPECT_NEAR(Zw2, Zw, 0.05f) << "Roundtrip Z should match";
+    EXPECT_NEAR(reconstructed[0], world[0], 0.05) << "Roundtrip X should match";
+    EXPECT_NEAR(reconstructed[1], world[1], 0.05) << "Roundtrip Y should match";
+    EXPECT_NEAR(reconstructed[2], world[2], 0.05) << "Roundtrip Z should match";
 }
 
 // 点在相机后方 → project 返回 false
-TEST(PositiveDepthCameraModelTest, ProjectBehindCamera)
+TEST(CameraPositiveDepthTest, ProjectBehindCamera)
 {
     double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};
     double C[3] = {0, 0, 0};
 
     auto cam = makeCamera(
         1000.0, 1000.0, 512.0, 384.0,
-        1, 1, R_wc, C, false).toPositiveDepthModel();
+        1, 1, R_wc, C, false).normalizedForPositiveDepth();
 
-    float u, v;
+    const double world[3] = {0.0, 0.0, -10.0};
+    double pixel[2] = {};
     // Z = -10 在相机后方
-    bool ok = cam.project(0.f, 0.f, -10.f, u, v);
+    bool ok = cam.projectWorldPoint(world, pixel);
     EXPECT_FALSE(ok) << "Point behind camera should fail projection";
 }
 
 // depthFlippedZ 参数测试
-TEST(PositiveDepthCameraModelTest, DepthFlippedZ)
+TEST(CameraPositiveDepthTest, DepthFlippedZ)
 {
     double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};
     double C[3] = {0, 0, 0};
@@ -345,26 +343,28 @@ TEST(PositiveDepthCameraModelTest, DepthFlippedZ)
     // 正常模式
     auto camNormal = makeCamera(
         1000.0, 1000.0, 512.0, 384.0,
-        1, 1, R_wc, C, false).toPositiveDepthModel();
+        1, 1, R_wc, C, false).normalizedForPositiveDepth();
 
     // Z 翻转模式
     auto camFlipped = makeCamera(
         1000.0, 1000.0, 512.0, 384.0,
-        1, 1, R_wc, C, true).toPositiveDepthModel();
+        1, 1, R_wc, C, true).normalizedForPositiveDepth();
 
     // 正常模式下 Z>0 的点可以投影
-    float u1, v1;
-    EXPECT_TRUE(camNormal.project(1.f, 1.f, 10.f, u1, v1));
+    const double normalWorld[3] = {1.0, 1.0, 10.0};
+    double normalPixel[2] = {};
+    EXPECT_TRUE(camNormal.projectWorldPoint(normalWorld, normalPixel));
 
     // Z 翻转模式下同一点（世界坐标 Z>0）在翻转后 Zc < 0，应该不能投影
     // 但翻转后 Z<0 的世界点 （Zc > 0）应该可以投影
-    float u2, v2;
-    bool okFlipped = camFlipped.project(1.f, 1.f, -10.f, u2, v2);
+    const double flippedWorld[3] = {1.0, 1.0, -10.0};
+    double flippedPixel[2] = {};
+    bool okFlipped = camFlipped.projectWorldPoint(flippedWorld, flippedPixel);
     EXPECT_TRUE(okFlipped) << "In flipped mode, negative-Z world point should project";
 }
 
 // 从真实 .tsai 构造正深度模型
-TEST(PositiveDepthCameraModelTest, FromRealTsaiCamera)
+TEST(CameraPositiveDepthTest, FromRealTsaiCamera)
 {
     xjw::Camera cam;
     std::string path;
@@ -379,18 +379,18 @@ TEST(PositiveDepthCameraModelTest, FromRealTsaiCamera)
     }
 
     auto C = cam.cameraCenter();
-    auto R = cam.cameraToWorldRotation();
 
-    auto ccam = cam.toPositiveDepthModel();
+    const xjw::Camera ccam = cam.normalizedForPositiveDepth();
 
-    EXPECT_TRUE(ccam.valid());
-    EXPECT_GT(ccam.fx, 0.f);
-    EXPECT_GT(ccam.fy, 0.f);
+    EXPECT_TRUE(ccam.isValid());
+    EXPECT_GT(ccam.focalX(), 0.0);
+    EXPECT_GT(ccam.focalY(), 0.0);
 
     // 相机中心应一致
-    EXPECT_NEAR(ccam.C[0], static_cast<float>(C[0]), 0.1f);
-    EXPECT_NEAR(ccam.C[1], static_cast<float>(C[1]), 0.1f);
-    EXPECT_NEAR(ccam.C[2], static_cast<float>(C[2]), 0.1f);
+    const std::array<double, 3> normalizedCenter = ccam.cameraCenter();
+    EXPECT_NEAR(normalizedCenter[0], C[0], 0.1);
+    EXPECT_NEAR(normalizedCenter[1], C[1], 0.1);
+    EXPECT_NEAR(normalizedCenter[2], C[2], 0.1);
 }
 
 // ─── DepthGenConfig 复合配置 ────────────────────────────────────

@@ -7,8 +7,8 @@
 // =============================================================================
 #include "cli_common.h"
 #include "EpipolarRectifier.h"
+#include "MvsImagePreprocessor.h"
 #include "Camera.h"
-#include "PositiveDepthCameraModel.h"
 #include "io/PathIO.h"
 
 #include <opencv2/imgcodecs.hpp>
@@ -51,13 +51,35 @@ int main(int argc, char *argv[])
     if (verbose)
         fprintf(stdout, "  尺寸: %dx%d\n", left.cols, left.rows);
 
-    // 校正
+    cv::Mat preparedLeft;
+    cv::Mat preparedRight;
+    xjw::Camera preparedLeftCamera;
+    xjw::Camera preparedRightCamera;
+    std::string preprocessError;
+    if (!xjw::mvs::prepareMvsImage(left,
+                                   camLObj,
+                                   &preparedLeft,
+                                   &preparedLeftCamera,
+                                   &preprocessError))
+    {
+        cli::fatal("左影像去畸变失败: " + preprocessError, cli::EXIT_ALGO_ERR);
+    }
+    if (!xjw::mvs::prepareMvsImage(right,
+                                   camRObj,
+                                   &preparedRight,
+                                   &preparedRightCamera,
+                                   &preprocessError))
+    {
+        cli::fatal("右影像去畸变失败: " + preprocessError, cli::EXIT_ALGO_ERR);
+    }
+
+    // 极线校正只接收已经去畸变、正深度归一化的影像与相机。
     xjw::mvs::EpipolarRectifier::RectifiedPair result;
     std::string errMsg;
     bool ok = xjw::mvs::EpipolarRectifier::rectify(
-        left, right,
-        camLObj.toPositiveDepthModel(),
-        camRObj.toPositiveDepthModel(),
+        preparedLeft, preparedRight,
+        preparedLeftCamera,
+        preparedRightCamera,
         result, &errMsg);
 
     if (!ok)

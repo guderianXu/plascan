@@ -50,6 +50,88 @@ QString depthResultKind(const QJsonObject &record)
     return QStringLiteral("legacy_preview");
 }
 
+QString depthPyramidDisplayLabel(const QJsonArray &levels)
+{
+    QStringList labels;
+    for (const QJsonValue &value : levels)
+    {
+        const int level = value.toObject().value(QStringLiteral("level")).toInt(0);
+        const QString label = level > 0 ? QStringLiteral("L%1").arg(level) : QString();
+        if (!label.isEmpty() && !labels.contains(label))
+        {
+            labels.append(label);
+        }
+    }
+    return labels.join(QLatin1Char('/'));
+}
+
+QString depthSceneDisplayLabel(const QString &scene_profile)
+{
+    if (scene_profile == QStringLiteral("aerial_terrain"))
+    {
+        return QStringLiteral("航测地形");
+    }
+    if (scene_profile == QStringLiteral("orbital_object"))
+    {
+        return QStringLiteral("环拍物体");
+    }
+    if (scene_profile == QStringLiteral("custom"))
+    {
+        return QStringLiteral("自定义场景");
+    }
+    return {};
+}
+
+QString depthFilterDisplayLabel(const QString &filter_mode)
+{
+    if (filter_mode == QStringLiteral("mild"))
+    {
+        return QStringLiteral("温和过滤");
+    }
+    if (filter_mode == QStringLiteral("moderate"))
+    {
+        return QStringLiteral("中等过滤");
+    }
+    if (filter_mode == QStringLiteral("aggressive"))
+    {
+        return QStringLiteral("强过滤");
+    }
+    return {};
+}
+
+QString depthAcceptanceDisplayLabel(const QJsonObject &record)
+{
+    QString acceptance = record.value(QStringLiteral("acceptance")).toString();
+    if (acceptance.isEmpty())
+    {
+        acceptance = record.value(QStringLiteral("quality_decision"))
+                         .toObject()
+                         .value(QStringLiteral("acceptance"))
+                         .toString();
+    }
+    if (acceptance == QStringLiteral("accepted"))
+    {
+        return QStringLiteral("通过");
+    }
+    if (acceptance == QStringLiteral("validation_only"))
+    {
+        return QStringLiteral("仅验证");
+    }
+    if (acceptance == QStringLiteral("rejected"))
+    {
+        return QStringLiteral("拒绝融合");
+    }
+    return {};
+}
+
+void appendDepthDiagnosticLabel(QString &name, const QString &label)
+{
+    if (!label.isEmpty())
+    {
+        name += QStringLiteral("  [%1]").arg(label);
+    }
+}
+
 int mvsDepthResultCount(const QJsonArray &depthResults)
 {
     int count = 0;
@@ -637,12 +719,12 @@ QStandardItem *DataTreeWidget::createSection(
     return createSection(QStringLiteral("%1 (%2)").arg(title).arg(count), section);
 }
 
-void DataTreeWidget::appendItemRow(QStandardItem *parent,
-                                   const QString &name,
-                                   const QString &path,
-                                   const QString &storage)
+QStandardItem *DataTreeWidget::appendItemRow(QStandardItem *parent,
+                                             const QString &name,
+                                             const QString &path,
+                                             const QString &storage)
 {
-    if (!parent) return;
+    if (!parent) return nullptr;
     auto *nameItem = new QStandardItem(name);
     auto *pathItem = new QStandardItem(path);
     auto *storageItem = new QStandardItem(storage);
@@ -650,6 +732,7 @@ void DataTreeWidget::appendItemRow(QStandardItem *parent,
     pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
     storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
     parent->appendRow({nameItem, pathItem, storageItem});
+    return nameItem;
 }
 
 QStandardItem *DataTreeWidget::appendTopLevelResource(
@@ -1035,12 +1118,51 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
             {
                 name += QStringLiteral("  [%1]").arg(device);
             }
+            appendDepthDiagnosticLabel(
+                name,
+                depthPyramidDisplayLabel(obj.value(QStringLiteral("pyramid_levels")).toArray()));
+            appendDepthDiagnosticLabel(
+                name,
+                depthSceneDisplayLabel(obj.value(QStringLiteral("scene_profile")).toString()));
+            appendDepthDiagnosticLabel(
+                name,
+                depthFilterDisplayLabel(obj.value(QStringLiteral("filter_mode")).toString()));
+            appendDepthDiagnosticLabel(name, depthAcceptanceDisplayLabel(obj));
             const QString status = obj.value(QStringLiteral("status")).toString();
             if (!status.isEmpty() && status != QStringLiteral("completed"))
             {
                 name += QStringLiteral("  [%1]").arg(status);
             }
-            appendItemRow(depthMaps, name, path, QStringLiteral("generated"));
+            QStandardItem *depth_frame_item =
+                appendItemRow(depthMaps, name, path, QStringLiteral("generated"));
+            const QJsonArray pyramid_levels = obj.value(QStringLiteral("pyramid_levels")).toArray();
+            for (const QJsonValue &level_value : pyramid_levels)
+            {
+                const QJsonObject level_object = level_value.toObject();
+                const int level = level_object.value(QStringLiteral("level")).toInt();
+                if (level <= 1)
+                {
+                    continue;
+                }
+
+                const QString level_prefix = QStringLiteral("Level %1").arg(level);
+                const auto append_level_preview = [this, depth_frame_item, level_prefix, level_object](
+                                                      const QString &key,
+                                                      const QString &label)
+                {
+                    const QString preview_path = level_object.value(key).toString();
+                    if (!preview_path.isEmpty())
+                    {
+                        appendItemRow(depth_frame_item,
+                                      QStringLiteral("%1 %2").arg(level_prefix, label),
+                                      preview_path,
+                                      QStringLiteral("generated"));
+                    }
+                };
+                append_level_preview(QStringLiteral("preview_path"), QStringLiteral("深度"));
+                append_level_preview(QStringLiteral("confidence_preview_path"),
+                                     QStringLiteral("置信度"));
+            }
         }
     }
 

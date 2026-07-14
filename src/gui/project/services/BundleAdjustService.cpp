@@ -400,6 +400,113 @@ BaServiceResult BundleAdjustService::run(
         saveObj[QStringLiteral("scale_bar_constraints_summary")] = scaleBarSummary;
     }
 
+    if (!opts.markerTrackQualityInputs.isEmpty() || !opts.markerScaleBarQualityInputs.isEmpty())
+    {
+        control_points::ControlNetworkResult marker_network;
+        marker_network.ok = true;
+        QJsonArray marker_details;
+        for (const BaServiceOptions::MarkerTrackQualityInput &input : opts.markerTrackQualityInputs)
+        {
+            if (input.trackIndex < 0
+                || input.trackIndex >= static_cast<int>(baResult.points.size()))
+            {
+                continue;
+            }
+            const std::array<double, 3> &point =
+                baResult.points[static_cast<std::size_t>(input.trackIndex)].point;
+            control_points::MarkerResidual residual;
+            residual.markerId = input.markerId;
+            residual.role = input.role;
+            double sigma_sum_squared = 0.0;
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                residual.delta[axis] = point[axis] - input.referencePoint[axis];
+                residual.total += residual.delta[axis] * residual.delta[axis];
+                sigma_sum_squared += input.sigma[axis] * input.sigma[axis];
+            }
+            residual.total = std::sqrt(residual.total);
+            const double sigma = std::sqrt(sigma_sum_squared / 3.0);
+            residual.normalized = residual.total / std::max(1.0e-9, sigma);
+            residual.inlier = input.usedAsConstraint;
+            if (input.role == control_points::MarkerRole::ControlPoint)
+            {
+                marker_network.controlResiduals.push_back(residual);
+            }
+            else if (input.role == control_points::MarkerRole::CheckPoint)
+            {
+                marker_network.checkPointResiduals.push_back(residual);
+            }
+
+            QJsonObject detail;
+            detail[QStringLiteral("marker_id")] = input.markerId;
+            detail[QStringLiteral("role")] = input.role == control_points::MarkerRole::ControlPoint
+                ? QStringLiteral("control") : QStringLiteral("check");
+            detail[QStringLiteral("track_index")] = input.trackIndex;
+            detail[QStringLiteral("used_as_constraint")] = input.usedAsConstraint;
+            detail[QStringLiteral("dx")] = residual.delta[0];
+            detail[QStringLiteral("dy")] = residual.delta[1];
+            detail[QStringLiteral("dz")] = residual.delta[2];
+            detail[QStringLiteral("total")] = residual.total;
+            detail[QStringLiteral("normalized")] = residual.normalized;
+            marker_details.append(detail);
+        }
+
+        QVector<control_points::ScaleBarResidual> scale_residuals;
+        QJsonArray scale_details;
+        for (const BaServiceOptions::MarkerScaleBarQualityInput &input :
+             opts.markerScaleBarQualityInputs)
+        {
+            if (input.trackIndexA < 0 || input.trackIndexB < 0
+                || input.trackIndexA >= static_cast<int>(baResult.points.size())
+                || input.trackIndexB >= static_cast<int>(baResult.points.size()))
+            {
+                continue;
+            }
+            const auto &first = baResult.points[static_cast<std::size_t>(input.trackIndexA)].point;
+            const auto &second = baResult.points[static_cast<std::size_t>(input.trackIndexB)].point;
+            const double dx = first[0] - second[0];
+            const double dy = first[1] - second[1];
+            const double dz = first[2] - second[2];
+            const double estimated = std::sqrt(dx * dx + dy * dy + dz * dz);
+            scale_residuals.push_back({input.scaleBarId,
+                                       input.role,
+                                       input.measuredDistance,
+                                       estimated,
+                                       estimated - input.measuredDistance});
+            QJsonObject detail;
+            detail[QStringLiteral("scale_bar_id")] = input.scaleBarId;
+            detail[QStringLiteral("role")] = input.role == control_points::ScaleBarRole::Control
+                ? QStringLiteral("control") : QStringLiteral("check");
+            detail[QStringLiteral("measured_distance")] = input.measuredDistance;
+            detail[QStringLiteral("estimated_distance")] = estimated;
+            detail[QStringLiteral("residual")] = estimated - input.measuredDistance;
+            scale_details.append(detail);
+        }
+
+        const control_points::MarkerQualityReport marker_report =
+            control_points::buildMarkerQualityReport(marker_network, scale_residuals);
+        const auto statistics_json = [](const control_points::ResidualStatistics &statistics)
+        {
+            return QJsonObject{
+                {QStringLiteral("count"), statistics.totalCount},
+                {QStringLiteral("inlier_count"), statistics.inlierCount},
+                {QStringLiteral("mean"), statistics.mean},
+                {QStringLiteral("rms"), statistics.rms},
+                {QStringLiteral("maximum"), statistics.maximum},
+            };
+        };
+        QJsonObject quality;
+        quality[QStringLiteral("controls")] = statistics_json(marker_report.controls);
+        quality[QStringLiteral("check_points")] = statistics_json(marker_report.checkPoints);
+        quality[QStringLiteral("control_scale_bars")] =
+            statistics_json(marker_report.controlScaleBars);
+        quality[QStringLiteral("check_scale_bars")] =
+            statistics_json(marker_report.checkScaleBars);
+        quality[QStringLiteral("marker_residuals")] = marker_details;
+        quality[QStringLiteral("scale_bar_residuals")] = scale_details;
+        saveObj[QStringLiteral("marker_quality_report")] = quality;
+    }
+
     // ── 点位精度统计写入 JSON 数组 ─────────────────────────────────────────
     QJsonArray pointsArr;
     for (int i = 0; i < static_cast<int>(baResult.points.size()); ++i)
@@ -418,6 +525,38 @@ BaServiceResult BundleAdjustService::run(
         xyz.append(p.point[1]);
         xyz.append(p.point[2]);
         one[QStringLiteral("point_xyz")] = xyz;
+        QJsonArray observations;
+        for (const BAObservation &observation : tracks[static_cast<size_t>(i)].observations)
+        {
+            if (observation.cameraIndex < 0
+                || observation.cameraIndex >= static_cast<int>(cameras.size())
+                || observation.cameraIndex >= opts.imagePathByIndex.size())
+            {
+                continue;
+            }
+            const Camera &camera = observation.cameraIndex < static_cast<int>(baResult.refinedCameras.size())
+                ? baResult.refinedCameras[static_cast<size_t>(observation.cameraIndex)]
+                : cameras[static_cast<size_t>(observation.cameraIndex)];
+            double projected[2] = {0.0, 0.0};
+            const bool projectedOk = camera.projectWorldPoint(p.point.data(), projected)
+                || camera.projectWorldPointSigned(p.point.data(), projected);
+            if (!projectedOk || !std::isfinite(projected[0]) || !std::isfinite(projected[1]))
+            {
+                continue;
+            }
+            const double residualX = projected[0] - observation.u;
+            const double residualY = projected[1] - observation.v;
+            QJsonObject observationObject;
+            observationObject[QStringLiteral("image_id")] = observation.cameraIndex;
+            observationObject[QStringLiteral("image_path")] =
+                opts.imagePathByIndex.at(observation.cameraIndex);
+            observationObject[QStringLiteral("xy")] = QJsonArray{observation.u, observation.v};
+            observationObject[QStringLiteral("projected_xy")] = QJsonArray{projected[0], projected[1]};
+            observationObject[QStringLiteral("residual_xy")] = QJsonArray{residualX, residualY};
+            observationObject[QStringLiteral("residual_norm_px")] = std::hypot(residualX, residualY);
+            observations.append(observationObject);
+        }
+        one[QStringLiteral("observations")] = observations;
         pointsArr.append(one);
     }
     saveObj[QStringLiteral("points")] = pointsArr;

@@ -59,6 +59,26 @@ TEST(SfmSearchPolicyTest, LowerRmsDominatesPointCountAfterEqualCoverage)
     EXPECT_TRUE(xjw::sfm_search::isBetterCandidate(lowerRms, morePoints));
 }
 
+TEST(SfmSearchPolicyTest, StrongerPhotogrammetricNetworkDominatesMarginalRmsGain)
+{
+    SfmCandidateSummary strongNetwork{
+        0, 1.2, 0, 1, 9, 12451, 0.554, true};
+    strongNetwork.hasNetworkQuality = true;
+    strongNetwork.medianTriangulationAngleDeg = 8.4;
+    strongNetwork.twoViewTrackRatio = 0.70;
+    strongNetwork.observationGridCoverage = 0.13;
+
+    SfmCandidateSummary weakNetwork{
+        1, 5.2, 6, 7, 9, 5088, 0.548, true};
+    weakNetwork.hasNetworkQuality = true;
+    weakNetwork.medianTriangulationAngleDeg = 2.8;
+    weakNetwork.twoViewTrackRatio = 0.77;
+    weakNetwork.observationGridCoverage = 0.13;
+
+    EXPECT_TRUE(xjw::sfm_search::isBetterCandidate(strongNetwork, weakNetwork));
+    EXPECT_FALSE(xjw::sfm_search::isBetterCandidate(weakNetwork, strongNetwork));
+}
+
 TEST(SfmSearchPolicyTest, RankingIsDeterministicAndReplayIsLimitedToThree)
 {
     const std::vector<SfmCandidateSummary> candidates{

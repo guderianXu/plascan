@@ -6,6 +6,8 @@
 #include <QPointF>
 #include <QPointer>
 
+#include <optional>
+
 class ImageViewWidget;
 class MatchLineOverlay;
 class DisparityHeatmapOverlay;
@@ -33,6 +35,12 @@ public:
     void loadMatchPair(const QString &imgA, const QString &imgB,
                        const QVector<QPointF> &ptsA,
                        const QVector<QPointF> &ptsB);
+
+    // 标记量测模式：仅显示可靠投影与当前候选，不读取或解析匹配文件。
+    void setMarkerMeasurement(const QString &anchorImage,
+                              const QString &candidateImage,
+                              const QPointF &anchorPixel,
+                              const std::optional<QPointF> &candidatePixel);
     
     // 同步模式控制
     void setSyncMode(bool enabled);
@@ -70,6 +78,7 @@ signals:
     
     // 同步模式变化
     void syncModeChanged(bool enabled);
+    void markerCandidatePicked(const QPointF &pixel);
 
 protected:
     void resizeEvent(QResizeEvent *event) override;

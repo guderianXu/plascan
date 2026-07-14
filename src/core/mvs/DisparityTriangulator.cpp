@@ -264,7 +264,7 @@ TriangulationResult DisparityTriangulator::triangulateFromDepth(
     const cv::Mat &H1inv,
     const Camera &camL,
     const Camera &camR,
-    const PositiveDepthCameraModel &rectCam,
+    const Camera &rectCam,
     const TriangulationConfig &cfg)
 {
     TriangulationResult result;
@@ -293,11 +293,12 @@ TriangulationResult DisparityTriangulator::triangulateFromDepth(
                 float depth = depthMap.at<float>(r, c);
                 if (!std::isfinite(depth) || depth <= 0.0f) continue;
 
-                float wx, wy, wz;
-                rectCam.unproject(static_cast<float>(c), static_cast<float>(r),
-                                  depth, wx, wy, wz);
-
-                double world[3] = {wx, wy, wz};
+                const double pixel[2] = {static_cast<double>(c), static_cast<double>(r)};
+                double world[3] = {0.0, 0.0, 0.0};
+                if (!rectCam.unprojectPixel(pixel, static_cast<double>(depth), world))
+                {
+                    continue;
+                }
                 double uv1[2];
                 float errL = 0.0f;
 
@@ -316,13 +317,13 @@ TriangulationResult DisparityTriangulator::triangulateFromDepth(
                 {
                     fprintf(stderr, "[Tri dbg] pix(%d,%d) depth=%.4f "
                             "world=(%.6f,%.6f,%.6f) reproj_err=%.4f\n",
-                            c, r, depth, wx, wy, wz, errL);
+                            c, r, depth, world[0], world[1], world[2], errL);
                     ++dbgCount;
                 }
 
-                rawPoints[idx] = {static_cast<double>(wx),
-                                  static_cast<double>(wy),
-                                  static_cast<double>(wz),
+                rawPoints[idx] = {world[0],
+                                  world[1],
+                                  world[2],
                                   errL, true};
             }
         }

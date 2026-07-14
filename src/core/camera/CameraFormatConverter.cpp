@@ -1,5 +1,17 @@
+// ============================================================
+// 文件：CameraFormatConverter.cpp
+// 功能：把 Middlebury、EPFL/Strecha、COLMAP text 和 Metashape 工程
+//       统一转换为 PlaScan 可消费的 Tsai 相机数据集。
+//
+// 转换分为五步：识别格式 -> 解析为 CameraRecord -> 定位影像目录 ->
+// 写出 cameras/*.tsai 与 image_camera.lis -> 汇总 summary.json。
+// 不能无损表达的外部参数进入 warnings；输入/写出异常由公开入口捕获并
+// 写入 CameraConversionResult，而内部辅助函数使用异常保持失败上下文。
+// ============================================================
+
 #include "CameraFormatConverter.h"
 #include "io/PathIO.h"
+#include "string_utils/StringTransform.h"
 
 #include <algorithm>
 #include <array>
@@ -16,12 +28,26 @@
 
 namespace xjw::camera
 {
+using common::string_utils::asciiLowerCopy;
+using common::string_utils::trimAsciiWhitespace;
+
 namespace
 {
 
+// ---------- 跨格式统一中间表示 ----------
+
+/**
+ * @brief 一张影像及其相机参数的规范化记录。
+ *
+ * `k` 是行优先 3×3 像素内参矩阵；`distortion` 顺序固定为
+ * `[k1, k2, k3, p1, p2]`。外参统一为 camera-to-world 旋转和世界系
+ * 相机中心，使所有输入格式最终都能直接映射到 PlaScan Tsai 语义。
+ */
 struct CameraRecord
 {
+    /// 相对于最终 `sourceDir` 的影像名或子路径。
     std::string imageName;
+    /// 输出到 `cameras/` 下的目标 Tsai 文件名，通常由影像 stem 派生。
     std::string cameraFileName;
     std::array<double, 9> k{{0.0, 0.0, 0.0,
                              0.0, 0.0, 0.0,
@@ -31,9 +57,11 @@ struct CameraRecord
                                                  0.0, 1.0, 0.0,
                                                  0.0, 0.0, 1.0}};
     std::array<double, 3> center{{0.0, 0.0, 0.0}};
+    /// 该记录在有损转换中无法表达的信息，最终会加上影像名前缀汇总。
     std::vector<std::string> warnings;
 };
 
+/// COLMAP 的 cameras.txt 只定义共享内参，因此先按 CAMERA_ID 独立缓存。
 struct ColmapCameraModel
 {
     std::array<double, 9> k{{0.0, 0.0, 0.0,
@@ -42,6 +70,7 @@ struct ColmapCameraModel
     std::vector<std::string> warnings;
 };
 
+/// Metashape chunk 既可能是展开的 doc.xml，也可能封装在 chunk.zip 中。
 struct MetashapeProject
 {
     std::filesystem::path docPath;
@@ -49,6 +78,7 @@ struct MetashapeProject
     std::filesystem::path searchRoot;
 };
 
+/// Metashape sensor 保存可被多个 camera 实例复用的标定参数。
 struct MetashapeSensor
 {
     std::array<double, 9> k{{0.0, 0.0, 0.0,
@@ -58,35 +88,18 @@ struct MetashapeSensor
     std::vector<std::string> warnings;
 };
 
-std::string trim(const std::string &text)
-{
-    const auto begin = std::find_if_not(text.begin(), text.end(),
-                                        [](unsigned char ch) { return std::isspace(ch) != 0; });
-    const auto end = std::find_if_not(text.rbegin(), text.rend(),
-                                      [](unsigned char ch) { return std::isspace(ch) != 0; }).base();
-    if (begin >= end)
-    {
-        return {};
-    }
-    return std::string(begin, end);
-}
-
-std::string toLower(std::string text)
-{
-    std::transform(text.begin(), text.end(), text.begin(),
-                   [](unsigned char ch) { return static_cast<char>(std::tolower(ch)); });
-    return text;
-}
+// ---------- 文本规范化与输出转义 ----------
 
 std::string normalizedFormatName(std::string name)
 {
-    name = toLower(trim(name));
+    name = asciiLowerCopy(trimAsciiWhitespace(name));
     std::replace(name.begin(), name.end(), '_', '-');
     return name;
 }
 
 std::string formatNumber(double value)
 {
+    // 把舍入后接近零的值稳定写为 0，避免 summary/Tsai 出现难读的 -0 或微小噪声。
     if (std::abs(value) < 1e-14)
     {
         value = 0.0;
@@ -98,6 +111,7 @@ std::string formatNumber(double value)
 
 std::string jsonEscape(const std::string &value)
 {
+    // summary 只写字符串标量，因此覆盖 JSON 字符串中必须处理的常见转义字符。
     std::string escaped;
     escaped.reserve(value.size());
     for (const char ch : value)
@@ -129,6 +143,8 @@ std::string jsonEscape(const std::string &value)
 
 std::string shellQuote(const std::string &value)
 {
+    // image_camera.lis 采用空白分隔 token；含空格或引号的路径按 POSIX shell
+    // 单引号规则保护，简单路径保持原样以提高人工可读性。
     if (value.empty())
     {
         return "''";
@@ -158,6 +174,8 @@ std::string shellQuote(const std::string &value)
     return quoted;
 }
 
+// ---------- 小型线性代数辅助函数（全部为行优先 3×3） ----------
+
 std::array<double, 9> transpose(const std::array<double, 9> &matrix)
 {
     return std::array<double, 9>{{
@@ -179,6 +197,8 @@ std::array<double, 3> matVecMul(const std::array<double, 9> &matrix,
 
 std::array<double, 9> colmapQvecToWorldToCameraRotation(double qw, double qx, double qy, double qz)
 {
+    // COLMAP images.txt 的 qvec 表示 world-to-camera。先归一化可消除
+    // 文本精度或上游计算带来的轻微单位四元数误差。
     const double norm = std::sqrt(qw * qw + qx * qx + qy * qy + qz * qz);
     if (norm <= 0.0)
     {
@@ -202,8 +222,11 @@ std::array<double, 9> colmapQvecToWorldToCameraRotation(double qw, double qx, do
     }};
 }
 
+// ---------- 通用文件、ZIP 与轻量 XML 读取 ----------
+
 std::vector<std::string> readDataLines(const std::filesystem::path &path)
 {
+    // Middlebury/EPFL/COLMAP 的数据行均允许空行和 # 注释，在解析器前统一过滤。
     std::ifstream in = xjw::common::io::openInputFile(path, std::ios::in);
     if (!in)
     {
@@ -214,7 +237,7 @@ std::vector<std::string> readDataLines(const std::filesystem::path &path)
     std::string line;
     while (std::getline(in, line))
     {
-        line = trim(line);
+        line = trimAsciiWhitespace(line);
         if (line.empty() || line.rfind("#", 0) == 0)
         {
             continue;
@@ -226,6 +249,8 @@ std::vector<std::string> readDataLines(const std::filesystem::path &path)
 
 std::vector<double> parseNumericLine(const std::string &line, int expectedCount)
 {
+    // expectedCount < 0 表示接受可变长度；其它情况严格校验字段数量，
+    // 使格式错误在接近来源的位置失败。
     std::istringstream in(line);
     std::vector<double> values;
     double value = 0.0;
@@ -262,6 +287,8 @@ std::string zipErrorMessage(zip_error_t *zipError)
 zip_t *openZipArchive(const std::filesystem::path &zipPath, std::string *error)
 {
 #ifdef _WIN32
+    // Windows 使用宽字符 source，避免含中文或其它 Unicode 字符的工程路径
+    // 在 libzip 的窄字符入口发生本地代码页损失。
     zip_error_t zipError;
     zip_error_init(&zipError);
     zip_source_t *source = zip_source_win32w_create(zipPath.wstring().c_str(), 0, -1, &zipError);
@@ -307,6 +334,7 @@ zip_t *openZipArchive(const std::filesystem::path &zipPath, std::string *error)
 std::string readZipEntryText(const std::filesystem::path &zipPath,
                              const std::string &entryPath)
 {
+    // archive/file 两层句柄在每条失败路径都显式关闭，避免转换批次泄漏资源。
     std::string openError;
     zip_t *archive = openZipArchive(zipPath, &openError);
     if (!archive)
@@ -349,6 +377,8 @@ std::string readZipEntryText(const std::filesystem::path &zipPath,
 std::vector<std::string> xmlBlocks(const std::string &xml,
                                    const std::string &tag)
 {
+    // 这里只处理 Metashape doc.xml 中结构稳定的小片段，不试图实现通用 XML
+    // 解析器；`[\s\S]` 允许块内容跨行。
     std::vector<std::string> blocks;
     const std::regex re("<" + tag + "\\b[^>]*>[\\s\\S]*?</" + tag + ">");
     for (auto it = std::sregex_iterator(xml.begin(), xml.end(), re);
@@ -368,7 +398,7 @@ std::optional<std::string> xmlElementText(const std::string &xml,
     {
         return std::nullopt;
     }
-    return trim(match[1].str());
+    return trimAsciiWhitespace(match[1].str());
 }
 
 std::optional<std::string> xmlAttribute(const std::string &xml,
@@ -418,10 +448,13 @@ void warnIfUnsupportedSkew(const std::array<double, 9> &k,
     }
     if (std::abs(k[1]) > 1e-12 || std::abs(k[3]) > 1e-12)
     {
+        // PlaScan Tsai 输出只写 fx/fy/cx/cy，非零 K01/K10 不能静默丢失。
         warnings->push_back("camera skew terms are not represented in PlaScan tsai output "
                             "(k01=" + formatNumber(k[1]) + ", k10=" + formatNumber(k[3]) + ")");
     }
 }
+
+// ---------- Middlebury 与 EPFL/Strecha 解析 ----------
 
 std::string cameraFileNameFromStem(const std::string &imageName)
 {
@@ -431,6 +464,7 @@ std::string cameraFileNameFromStem(const std::string &imageName)
 
 CameraRecord parseMiddleburyCameraLine(const std::string &line)
 {
+    // Middlebury 每行布局为 imageName + K(9) + R_wc(9) + t_wc(3)。
     std::istringstream in(line);
     CameraRecord record;
     if (!(in >> record.imageName))
@@ -456,6 +490,8 @@ CameraRecord parseMiddleburyCameraLine(const std::string &line)
         values[18], values[19], values[20]
     }};
 
+    // 输入外参满足 Xc = R_wc*Xw + t_wc，因此输出所需的
+    // R_cw = R_wc^T，世界系相机中心 C = -R_cw*t_wc。
     record.rotationCameraToWorld = transpose(rotationWorldToCamera);
     const auto centerRaw = matVecMul(record.rotationCameraToWorld, translation);
     record.center = std::array<double, 3>{{
@@ -476,6 +512,7 @@ std::vector<CameraRecord> parseMiddleburyPar(const std::filesystem::path &path)
         std::string trailing;
         if ((first >> ignoredCount) && !(first >> trailing))
         {
+            // 官方 par 文件首行可仅包含相机数量；实际记录数仍以成功解析的行数为准。
             lines.erase(lines.begin());
         }
     }
@@ -495,6 +532,8 @@ std::vector<CameraRecord> parseMiddleburyPar(const std::filesystem::path &path)
 
 CameraRecord parseEpflCameraFile(const std::filesystem::path &path)
 {
+    // EPFL/Strecha .camera 已直接给出 K、camera-to-world R 和世界系中心 C，
+    // 无需像 Middlebury/COLMAP 那样从 t_wc 反求中心。
     const std::vector<std::string> lines = readDataLines(path);
     if (lines.size() < 8)
     {
@@ -514,6 +553,8 @@ CameraRecord parseEpflCameraFile(const std::filesystem::path &path)
     const auto radial = parseNumericLine(lines[3], 3);
     if (std::any_of(radial.begin(), radial.end(), [](double value) { return std::abs(value) > 1e-12; }))
     {
+        // 该三元素 EPFL 径向模型与 PlaScan 当前五参数约定没有可靠的一一映射，
+        // 因而保留告警而不猜测系数含义。
         record.warnings.push_back("radial distortion terms are not exported to PlaScan tsai output");
     }
 
@@ -545,6 +586,8 @@ CameraRecord parseEpflCameraFile(const std::filesystem::path &path)
     return record;
 }
 
+// ---------- COLMAP text 解析 ----------
+
 void warnIfColmapDistortion(const std::string &model,
                             const std::vector<double> &params,
                             size_t firstDistortionIndex,
@@ -560,12 +603,16 @@ void warnIfColmapDistortion(const std::string &model,
                                            [](double value) { return std::abs(value) > 1e-12; });
     if (hasDistortion)
     {
+        // COLMAP 的相机模型族包含多种径向/切向/鱼眼参数排列；当前转换器
+        // 只保留兼容的针孔 K，明确报告其余非零项以避免误认为无损转换。
         warnings->push_back("COLMAP " + model + " distortion terms are not exported to PlaScan tsai output");
     }
 }
 
 ColmapCameraModel parseColmapCameraLine(const std::string &line)
 {
+    // cameras.txt 行格式：CAMERA_ID MODEL WIDTH HEIGHT PARAMS[]。
+    // width/height 用于验证语法但不写入当前 Tsai 输出。
     std::istringstream in(line);
     int cameraId = 0;
     std::string model;
@@ -584,6 +631,7 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
     }
 
     ColmapCameraModel camera;
+    // 每个分支按 COLMAP 官方参数顺序提取 fx/fy/cx/cy；简单模型共享单焦距。
     if (model == "SIMPLE_PINHOLE")
     {
         if (params.size() != 3)
@@ -649,6 +697,7 @@ ColmapCameraModel parseColmapCameraLine(const std::string &line)
 
 std::unordered_map<int, ColmapCameraModel> parseColmapCameras(const std::filesystem::path &path)
 {
+    // CAMERA_ID 是 images.txt 关联共享内参的唯一键。
     std::unordered_map<int, ColmapCameraModel> cameras;
     for (const std::string &line : readDataLines(path))
     {
@@ -670,6 +719,7 @@ std::unordered_map<int, ColmapCameraModel> parseColmapCameras(const std::filesys
 CameraRecord parseColmapImageLine(const std::string &line,
                                   const std::unordered_map<int, ColmapCameraModel> &cameras)
 {
+    // images.txt 头行格式：IMAGE_ID QW QX QY QZ TX TY TZ CAMERA_ID IMAGE_NAME。
     std::istringstream in(line);
     int imageId = 0;
     double qw = 0.0;
@@ -685,7 +735,7 @@ CameraRecord parseColmapImageLine(const std::string &line,
 
     std::string imageName;
     std::getline(in, imageName);
-    imageName = trim(imageName);
+    imageName = trimAsciiWhitespace(imageName);
     if (imageName.empty())
     {
         throw std::runtime_error("COLMAP images.txt 影像行缺少影像名: " + line);
@@ -702,6 +752,8 @@ CameraRecord parseColmapImageLine(const std::string &line,
     record.k = cameraIt->second.k;
     record.warnings = cameraIt->second.warnings;
 
+    // COLMAP 位姿满足 Xc = R_wc*Xw+t_wc；PlaScan 需要 R_cw 和 C，故：
+    // R_cw = R_wc^T，C = -R_cw*t_wc。
     const std::array<double, 9> rotationWorldToCamera = colmapQvecToWorldToCameraRotation(qw, qx, qy, qz);
     record.rotationCameraToWorld = transpose(rotationWorldToCamera);
     const auto centerRaw = matVecMul(record.rotationCameraToWorld, t);
@@ -727,7 +779,7 @@ std::vector<CameraRecord> parseColmapImages(const std::filesystem::path &path,
     while (std::getline(in, line))
     {
         ++lineNumber;
-        const std::string header = trim(line);
+        const std::string header = trimAsciiWhitespace(line);
         if (header.empty() || header.rfind("#", 0) == 0)
         {
             continue;
@@ -735,6 +787,8 @@ std::vector<CameraRecord> parseColmapImages(const std::filesystem::path &path,
 
         records.push_back(parseColmapImageLine(header, cameras));
 
+        // COLMAP 每个影像头行后固定跟一行 POINTS2D。转换只需外参，
+        // 但仍消费该行以保持下一次循环落在正确记录边界。
         if (!std::getline(in, line))
         {
             throw std::runtime_error("COLMAP images.txt 第 " + std::to_string(lineNumber)
@@ -752,11 +806,15 @@ std::vector<CameraRecord> parseColmapImages(const std::filesystem::path &path,
 
 void sortRecordsByImageName(std::vector<CameraRecord> *records)
 {
+    // 稳定、大小写不敏感排序使 image_camera.lis 与文件系统遍历顺序无关，
+    // 同时为相同规范名保留输入顺序。
     std::stable_sort(records->begin(), records->end(), [](const CameraRecord &lhs, const CameraRecord &rhs) {
-        return toLower(std::filesystem::path(lhs.imageName).generic_string())
-            < toLower(std::filesystem::path(rhs.imageName).generic_string());
+        return asciiLowerCopy(std::filesystem::path(lhs.imageName).generic_string())
+            < asciiLowerCopy(std::filesystem::path(rhs.imageName).generic_string());
     });
 }
+
+// ---------- Middlebury、EPFL 与 COLMAP 来源发现 ----------
 
 bool hasExtension(const std::filesystem::path &path, const std::string &extension)
 {
@@ -790,6 +848,7 @@ std::vector<std::filesystem::path> findFiles(const std::filesystem::path &direct
 
 std::filesystem::path findMiddleburyParFile(const std::filesystem::path &inputPath)
 {
+    // 允许用户直接指定唯一主文件；目录模式在多候选时拒绝猜测。
     if (std::filesystem::is_regular_file(inputPath))
     {
         const std::string name = inputPath.filename().string();
@@ -841,6 +900,7 @@ bool isColmapTextDirectory(const std::filesystem::path &path)
 
 std::filesystem::path findColmapTextDirectory(const std::filesystem::path &inputPath)
 {
+    // 兼容常见 COLMAP 布局：数据集根/sparse、sparse/0，以及用户直接传入 0 目录。
     if (std::filesystem::is_regular_file(inputPath))
     {
         const std::filesystem::path parent = inputPath.parent_path();
@@ -874,6 +934,8 @@ std::filesystem::path findColmapImageRoot(const std::filesystem::path &inputPath
                                           const std::filesystem::path &colmapDir,
                                           const std::vector<CameraRecord> &records)
 {
+    // 候选覆盖“输入根/images”、sparse 的一至两级父目录/images 和 sparse
+    // 相邻目录。只有包含全部记录影像的目录才会被接受，避免生成部分有效列表。
     std::vector<std::filesystem::path> candidates;
     if (std::filesystem::is_directory(inputPath))
     {
@@ -887,6 +949,7 @@ std::filesystem::path findColmapImageRoot(const std::filesystem::path &inputPath
     std::sort(candidates.begin(), candidates.end());
     candidates.erase(std::unique(candidates.begin(), candidates.end()), candidates.end());
 
+    // 排序去重保证不同输入入口得到确定的搜索次序。
     for (const std::filesystem::path &candidate : candidates)
     {
         if (!std::filesystem::is_directory(candidate))
@@ -905,25 +968,29 @@ std::filesystem::path findColmapImageRoot(const std::filesystem::path &inputPath
     throw std::runtime_error("未找到 COLMAP 影像目录，已检查 sparse 目录相邻 images 目录");
 }
 
+// ---------- Metashape 工程发现与 XML 标定解析 ----------
+
 bool isImageFile(const std::filesystem::path &path)
 {
-    const std::string ext = toLower(path.extension().string());
+    const std::string ext = asciiLowerCopy(path.extension().string());
     return ext == ".jpg" || ext == ".jpeg" || ext == ".png" || ext == ".tif" || ext == ".tiff" || ext == ".ppm";
 }
 
 std::filesystem::path metashapeSearchRootFrom(const std::filesystem::path &path)
 {
+    // 从 Project.files/0 或 Metashape 目录回退到数据集根，后续才能找到
+    // 常见的同级 Depthimages/Images 影像目录。
     if (path.filename() == "0" && path.parent_path().extension() == ".files")
     {
         const std::filesystem::path metashapeDir = path.parent_path().parent_path();
-        if (toLower(metashapeDir.filename().string()) == "metashape")
+        if (asciiLowerCopy(metashapeDir.filename().string()) == "metashape")
         {
             return metashapeDir.parent_path();
         }
         return metashapeDir;
     }
 
-    if (toLower(path.filename().string()) == "metashape")
+    if (asciiLowerCopy(path.filename().string()) == "metashape")
     {
         return path.parent_path();
     }
@@ -933,6 +1000,7 @@ std::filesystem::path metashapeSearchRootFrom(const std::filesystem::path &path)
 std::optional<MetashapeProject> makeMetashapeProjectFromFilesDir(const std::filesystem::path &filesDir,
                                                                   const std::filesystem::path &searchRoot)
 {
+    // Metashape 项目保存后可能保留展开 XML，也可能只保留压缩 chunk；二者语义等价。
     const std::filesystem::path chunkDir = filesDir / "0";
     if (std::filesystem::exists(chunkDir / "doc.xml"))
     {
@@ -947,6 +1015,8 @@ std::optional<MetashapeProject> makeMetashapeProjectFromFilesDir(const std::file
 
 std::optional<MetashapeProject> findMetashapeProject(const std::filesystem::path &inputPath)
 {
+    // 接受 doc.xml、chunk.zip、.psx 主文件以及数据集/Metashape 目录，
+    // 使 GUI 选择不同层级路径时仍能定位同一 chunk。
     if (std::filesystem::is_regular_file(inputPath))
     {
         const std::string fileName = inputPath.filename().string();
@@ -1027,6 +1097,7 @@ std::optional<MetashapeProject> findMetashapeProject(const std::filesystem::path
 
 std::string readMetashapeDocXml(const MetashapeProject &project)
 {
+    // 优先读取展开文件；压缩工程只提取 chunk 根下的 doc.xml 文本。
     if (!project.docPath.empty())
     {
         return readTextFile(project.docPath);
@@ -1040,6 +1111,8 @@ std::string readMetashapeDocXml(const MetashapeProject &project)
 
 std::unordered_map<int, MetashapeSensor> parseMetashapeSensors(const std::string &xml)
 {
+    // sensor 定义标定，camera 通过 sensor_id 复用它；先建立 ID 索引可避免
+    // 为每个 camera 重复解析 calibration 块。
     std::unordered_map<int, MetashapeSensor> sensors;
     for (const std::string &sensorBlock : xmlBlocks(xml, "sensor"))
     {
@@ -1078,6 +1151,7 @@ std::unordered_map<int, MetashapeSensor> parseMetashapeSensors(const std::string
             throw std::runtime_error("Metashape sensor 缺少 calibration");
         }
 
+        // adjusted 是 Metashape 优化后的最终标定；缺失时退回第一个原始标定块。
         std::string calibration = calibrationBlocks.front();
         for (const std::string &block : calibrationBlocks)
         {
@@ -1097,6 +1171,8 @@ std::unordered_map<int, MetashapeSensor> parseMetashapeSensors(const std::string
             throw std::runtime_error("Metashape calibration 缺少有效焦距");
         }
 
+        // Metashape cx/cy 以影像中心为原点，PlaScan/Tsai 主点使用左上角
+        // 像素坐标，因此需要加上 width/2、height/2。
         const double cx = xmlDoubleOr(calibration, "cx", 0.0);
         const double cy = xmlDoubleOr(calibration, "cy", 0.0);
 
@@ -1116,6 +1192,7 @@ std::unordered_map<int, MetashapeSensor> parseMetashapeSensors(const std::string
 
         if (xmlHasNonZeroTags(calibration, {"k4", "b1", "b2"}))
         {
+            // 当前 Tsai 记录只承载 k1..k3/p1/p2；其它非零标定项必须显式告警。
             sensor.warnings.push_back("unsupported Metashape calibration terms are not exported to PlaScan tsai output");
         }
         warnIfUnsupportedSkew(sensor.k, &sensor.warnings);
@@ -1131,6 +1208,8 @@ std::unordered_map<int, MetashapeSensor> parseMetashapeSensors(const std::string
 
 std::string stripMetashapeCameraSuffix(const std::string &label)
 {
+    // Metashape 可把重复/分组 camera 标为 IMG_0001_0；影像文件通常仍是
+    // IMG_0001.JPG，因此只剥离末尾纯数字后缀，不改动普通下划线名称。
     const size_t slash = label.find_last_of("/\\");
     const std::string filename = slash == std::string::npos ? label : label.substr(slash + 1);
     const std::filesystem::path path(filename);
@@ -1174,6 +1253,8 @@ std::optional<CameraRecord> parseMetashapeCameraBlock(
         throw std::runtime_error("Metashape camera 引用了不存在的 sensor_id: " + *sensorId);
     }
 
+    // camera transform 是行优先 4×4 camera-to-world 齐次矩阵。
+    // 左上 3×3 直接作为 R_cw，最后一列前三项是世界系相机中心 C。
     const std::vector<double> values = parseNumericLine(*transform, 16);
 
     CameraRecord record;
@@ -1221,6 +1302,7 @@ std::optional<std::filesystem::path> findMetashapeImage(const std::filesystem::p
     std::sort(stems.begin(), stems.end());
     stems.erase(std::unique(stems.begin(), stems.end()), stems.end());
 
+    // 先尝试 label 原值/去数字后缀和常见扩展名，可避免不必要的目录扫描。
     const std::vector<std::string> extensions{".JPG", ".jpg", ".JPEG", ".jpeg", ".PNG", ".png", ".TIF", ".tif", ".TIFF", ".tiff"};
     for (const std::string &stem : stems)
     {
@@ -1239,17 +1321,18 @@ std::optional<std::filesystem::path> findMetashapeImage(const std::filesystem::p
         }
     }
 
+    // 最后做一次大小写不敏感扫描，兼容 Windows/Linux 间迁移后扩展名或文件名大小写变化。
     for (const auto &entry : std::filesystem::directory_iterator(imageRoot))
     {
         if (!entry.is_regular_file() || !isImageFile(entry.path()))
         {
             continue;
         }
-        const std::string fileStem = toLower(entry.path().stem().string());
-        const std::string fileName = toLower(entry.path().filename().string());
+        const std::string fileStem = asciiLowerCopy(entry.path().stem().string());
+        const std::string fileName = asciiLowerCopy(entry.path().filename().string());
         for (const std::string &stem : stems)
         {
-            if (fileStem == toLower(stem) || fileName == toLower(stem))
+            if (fileStem == asciiLowerCopy(stem) || fileName == asciiLowerCopy(stem))
             {
                 return entry.path();
             }
@@ -1267,6 +1350,8 @@ std::filesystem::path assignMetashapeImageRoot(const std::filesystem::path &inpu
         throw std::runtime_error("内部错误：Metashape records 为空");
     }
 
+    // 候选覆盖数据集根、用户输入目录和 chunk 相邻位置下的
+    // Depthimages/depthimages/Images/images 变体。
     std::vector<std::filesystem::path> candidates;
     auto pushCandidates = [&](const std::filesystem::path &root) {
         if (root.empty())
@@ -1299,6 +1384,8 @@ std::filesystem::path assignMetashapeImageRoot(const std::filesystem::path &inpu
 
     for (const std::filesystem::path &candidate : candidates)
     {
+        // 必须为全部 camera 找到影像后才接受候选根，防止多个相似目录混合出
+        // 一份不完整或跨目录的 image_camera.lis。
         std::vector<std::filesystem::path> images;
         bool allFound = true;
         for (const CameraRecord &record : *records)
@@ -1331,6 +1418,7 @@ std::filesystem::path assignMetashapeImageRoot(const std::filesystem::path &inpu
 std::vector<CameraRecord> loadMetashapeRecords(const std::filesystem::path &inputPath,
                                                std::filesystem::path *sourceDir)
 {
+    // 位姿/标定来自工程 XML，影像名和最终 sourceDir 由完整影像匹配决定。
     const auto project = findMetashapeProject(inputPath);
     if (!project.has_value())
     {
@@ -1343,8 +1431,12 @@ std::vector<CameraRecord> loadMetashapeRecords(const std::filesystem::path &inpu
     return records;
 }
 
+// ---------- 格式识别与统一加载分派 ----------
+
 CameraFormat detectFormat(const std::filesystem::path &inputPath)
 {
+    // 探测优先级保持稳定：Middlebury -> EPFL -> COLMAP -> Metashape。
+    // 显式 --format 会绕过此函数，适合目录同时包含多种元数据的情况。
     if (std::filesystem::is_regular_file(inputPath))
     {
         const std::string name = inputPath.filename().string();
@@ -1409,6 +1501,8 @@ std::vector<CameraRecord> loadRecords(CameraFormat format,
         throw std::runtime_error("内部错误：sourceDir 为空");
     }
 
+    // sourceDir 最终必须指向影像相对路径的共同基准；不同格式解析器可在
+    // 找到真实影像根后覆盖初始值。
     *sourceDir = sourceDirectoryFor(inputPath);
     if (format == CameraFormat::MiddleburyPar)
     {
@@ -1442,9 +1536,13 @@ std::vector<CameraRecord> loadRecords(CameraFormat format,
     throw std::runtime_error("内部错误：不能直接加载 auto 格式");
 }
 
+// ---------- PlaScan Tsai、配对列表与 summary 输出 ----------
+
 std::string relativeToken(const std::filesystem::path &path,
                           const std::filesystem::path &baseDir)
 {
+    // 优先生成相对输出目录的可迁移 token；跨盘符等 relative 失败场景
+    // 回退绝对路径，保证列表仍能定位文件。
     std::error_code ec;
     std::filesystem::path rel = std::filesystem::relative(path, baseDir, ec);
     if (ec)
@@ -1462,6 +1560,8 @@ void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
         throw std::runtime_error("无法写入 tsai 文件: " + path.string());
     }
 
+    // CameraRecord 的 K 已是像素单位，因此写 pitch=1，使 Camera 读取时
+    // 除以 pitch 后仍得到原始 fx/fy/cx/cy。
     out << "VERSION_3\n";
     out << "PINHOLE\n";
     out << "TSAI\n";
@@ -1496,6 +1596,8 @@ void writeTsai(const std::filesystem::path &path, const CameraRecord &record)
 void writeSummary(const std::filesystem::path &summaryPath,
                   const CameraConversionResult &result)
 {
+    // summary 使用绝对路径便于日志诊断，image_camera.lis 则使用相对路径
+    // 支持整体移动输出目录；两者服务于不同消费场景。
     std::ofstream out = xjw::common::io::openOutputFile(summaryPath, std::ios::out | std::ios::trunc);
     if (!out)
     {
@@ -1548,6 +1650,7 @@ void prepareOutputDirectory(const std::filesystem::path &sourceDir,
     if (std::filesystem::exists(sourceDir, ec) && std::filesystem::exists(outputDir, ec)
         && std::filesystem::equivalent(sourceDir, outputDir, ec))
     {
+        // 该保护必须早于 remove_all，防止 overwrite 把输入相机/影像来源删除。
         throw std::runtime_error("输出目录不能等于输入相机目录: " + outputDir.string());
     }
 
@@ -1563,6 +1666,7 @@ void prepareOutputDirectory(const std::filesystem::path &sourceDir,
             {
                 throw std::runtime_error("输出目录非空，请使用 --overwrite 覆盖: " + outputDir.string());
             }
+            // overwrite 的契约是重建完整产物目录，而不是混合旧相机和新结果。
             std::filesystem::remove_all(outputDir);
         }
     }
@@ -1571,6 +1675,8 @@ void prepareOutputDirectory(const std::filesystem::path &sourceDir,
 }
 
 } // namespace
+
+// ---------- 公开格式与转换 API ----------
 
 std::vector<std::string> supportedFormatNames()
 {
@@ -1641,6 +1747,7 @@ std::optional<CameraFormat> parseCameraFormat(const std::string &name)
 
 CameraConversionResult convertCameraDataset(const CameraConversionOptions &options)
 {
+    // 先填入不依赖解析的输出路径，失败结果也能告诉调用方预期产物位置。
     CameraConversionResult result;
     result.outputDir = options.outputDir;
     result.imageCameraList = options.outputDir / "image_camera.lis";
@@ -1658,6 +1765,7 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
             throw std::runtime_error("输入路径不存在: " + options.inputPath.string());
         }
 
+        // Auto 只决定具体解析器，结果始终记录真正使用的格式而不是 Auto。
         result.inputFormat = options.format == CameraFormat::Auto
             ? detectFormat(options.inputPath)
             : options.format;
@@ -1673,6 +1781,8 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
             result.datasetId = result.sourceDir.filename().string();
         }
 
+        // 相机记录解析完成且影像根已定位后才触碰输出目录；逐记录影像存在性
+        // 仍在下方写出循环中验证，因此失败结果可能保留部分产物。
         prepareOutputDirectory(result.sourceDir, options.outputDir, options.overwrite);
 
         std::ofstream listFile = xjw::common::io::openOutputFile(result.imageCameraList,
@@ -1695,9 +1805,11 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
             writeTsai(tsaiPath, record);
             result.writtenCameraFiles.push_back(tsaiPath);
 
+            // 每行严格对应“影像 token + 相机 token”，路径相对输出根并独立转义。
             listFile << shellQuote(relativeToken(imagePath, options.outputDir)) << " "
                      << shellQuote(relativeToken(tsaiPath, options.outputDir)) << "\n";
 
+            // 在统一 summary 中加影像名前缀，便于用户定位有损转换来源。
             for (const std::string &warning : record.warnings)
             {
                 result.warnings.push_back(record.imageName + ": " + warning);
@@ -1711,6 +1823,8 @@ CameraConversionResult convertCameraDataset(const CameraConversionOptions &optio
     }
     catch (const std::exception &exc)
     {
+        // 公开 API 把内部异常折叠为结构化失败，GUI/CLI 无需跨线程传播异常。
+        // 已写出的部分文件不会在这里自动清理，调用方必须以 success 为准。
         result.errorMessage = exc.what();
         result.success = false;
     }

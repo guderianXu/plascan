@@ -12,6 +12,10 @@
 #include "MvsTypes.h"
 #include "PatchMatchCUDA.h"
 #include "DepthMapFusion.h"
+#include "DepthPyramidEstimator.h"
+#include "DepthFrameQualityGate.h"
+#include "MvsQualityReport.h"
+#include "MvsSceneClassifier.h"
 #include "DenseCloudBuilder.h"
 #include "DensePointCloudCUDA.h"
 #include "MvsSourcePlanner.h"
@@ -43,21 +47,36 @@ struct DepthFrameResult
 {
     int refViewIdx = -1;  ///< 参考帧在 views 数组中的下标
     bool depthFlippedZ = false;
-    PositiveDepthCameraModel cameraModel;  ///< 与输出深度栅格严格对应的正深度相机模型
+    Camera cameraModel;  ///< 与输出深度栅格严格对应的正深度、零畸变工作相机
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
     DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
+    std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
+    std::vector<DepthLevelResult> intermediatePyramidLevels; ///< 可选的 L3/L2 调试结果
+    DepthMapQualityMetrics qualityMetrics; ///< 帧级覆盖、连通性与搜索边界统计
+    DepthFrameQualityDecision qualityDecision; ///< 是否允许进入多视融合
     bool depthPostprocessApplied = false;   ///< true 表示 depthMap/confidence 已应用上述后处理
     bool success = false;
     double elapsedMs = 0.0;               ///< 单帧深度估计耗时，不含异步写盘
     std::string device;                   ///< 实际调度设备：GPU/CPU
     std::string errorMsg;
 
+    bool eligibleForFusion() const
+    {
+        return success && qualityDecision.acceptance == DepthFrameAcceptance::Accepted;
+    }
+
+    bool eligibleAsConsistencySource() const
+    {
+        return success && qualityDecision.acceptance != DepthFrameAcceptance::Rejected;
+    }
+
     void releasePixelStorage()
     {
         depthMap.clear();
         confidence.clear();
+        intermediatePyramidLevels.clear();
     }
 };
 
@@ -127,7 +146,7 @@ public:
     /// 将同一帧可见稀疏点投影一次，供 hint 与支撑掩码在不同工作分辨率复用
     static std::vector<ProjectedSparseDepthSample> collectProjectedSparseDepthSamples(
         const SparseCloud &sparse,
-        const PositiveDepthCameraModel &camera,
+        const Camera &camera,
         int imageWidth,
         int imageHeight,
         const std::vector<size_t> &visiblePointIndices);
@@ -256,7 +275,7 @@ private:
                                             int H,
                                             const std::vector<size_t> &visiblePointIndices) const;
     cv::Mat buildHintDepthForCamera(int refIdx,
-                                    const PositiveDepthCameraModel &camera,
+                                    const Camera &camera,
                                     int W,
                                     int H,
                                     const std::vector<size_t> &visiblePointIndices) const;
@@ -266,13 +285,14 @@ private:
                                                     int H,
                                                     const std::vector<size_t> &visiblePointIndices) const;
     cv::Mat buildSparseSupportMaskForCamera(int refIdx,
-                                            const PositiveDepthCameraModel &camera,
+                                            const Camera &camera,
                                             int W,
                                             int H,
                                             const std::vector<size_t> &visiblePointIndices) const;
 
     /// 双视图深度图左右一致性检查（剔除互不一致的深度像素）
     void crossCheckDepthConsistency();
+    bool crossCheckDepthConsistencyStreaming();
 
     /// 保存单帧深度图预览、原始深度和置信图，并通知 GUI 更新项目结果树
     bool saveDepthFrameArtifacts(int frameIndex,
@@ -290,9 +310,14 @@ private:
     std::vector<CameraView> _views;
     SparseCloud _sparse;
     DepthGenConfig _config;
+    MvsSceneClassification _sceneClassification;
+    MvsSceneProfile _effectiveSceneProfile = MvsSceneProfile::OrbitalObject;
+    DepthFilterMode _effectiveDepthFilterMode = DepthFilterMode::Mild;
     std::atomic<bool> _cancelled{false};
     QFuture<void> _backgroundFuture;
     std::string _outputDir;
+    std::string _consistencyDepthDirectory;
+    bool _streamConsistencyStorageEnabled = false;
 
     /// 缓存已估计的深度帧
     std::vector<DepthFrameResult> _depthFrames;

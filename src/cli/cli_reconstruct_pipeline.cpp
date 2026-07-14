@@ -14,6 +14,7 @@
 #include "Logger.h"
 #include "MatchResultCatalog.h"
 #include "ModelWorkflowService.h"
+#include "MvsSceneClassifier.h"
 #include "ProjectDenseWorkflowConfig.h"
 #include "AerialTriangulationService.h"
 #include "SparseCloudPreprocessor.h"
@@ -1200,10 +1201,13 @@ bool loadFusionFrameFromDepthMap(const QString &mvsDir,
         }
     }
 
-    frame->cameraModel = views[static_cast<std::size_t>(frameIndex)].positiveDepthModel();
+    const xjw::mvs::CameraView &view = views[static_cast<std::size_t>(frameIndex)];
+    frame->sourceCamera = view.camera;
+    frame->cameraModel = view.camera.normalizedForPositiveDepth();
+    frame->cameraModel.setDistortion(xjw::Camera::Distortion{});
     frame->imgW = depth.cols;
     frame->imgH = depth.rows;
-    frame->imagePath = views[static_cast<std::size_t>(frameIndex)].imagePath;
+    frame->imagePath = view.imagePath;
     frame->depthMap = std::move(depth);
     frame->confidence = std::move(confidence);
     const bool downsampled = xjw::core::project::downsampleFusionFrameForMaxDimension(
@@ -1755,6 +1759,10 @@ int main(int argc, char *argv[])
     int threads = 8;
     int cudaParallelPairs = 1;
     int featureMaxImageDim = 0;
+    std::string mvs_quality = "high";
+    std::string mvs_scene_profile = "auto";
+    std::string mvs_depth_filter = "auto";
+    bool mvs_save_levels = false;
     double mvsResScale = 0.5;
     int mvsIterations = 6;
     double mvsConfidence = 0.20;
@@ -1798,8 +1806,21 @@ int main(int argc, char *argv[])
     app.add_option("--cuda-parallel-pairs", cudaParallelPairs, "LightGlue CUDA parallel pair count");
     app.add_option("--feature-max-image-dim", featureMaxImageDim,
                    "deep feature max image side; 0 uses auto/adaptive quality preset, negative starts unbounded");
-    app.add_option("--mvs-res-scale", mvsResScale,
-                   "MVS depth resolution scale, e.g. 0.5 for half resolution");
+    app.add_option("--mvs-quality", mvs_quality,
+                   "MVS quality: highest, high, medium, low, lowest")
+        ->check(CLI::IsMember({"highest", "high", "medium", "low", "lowest"}));
+    app.add_option("--mvs-scene-profile", mvs_scene_profile,
+                   "MVS scene profile: auto, orbital_object, aerial_terrain")
+        ->check(CLI::IsMember({"auto", "orbital_object", "aerial_terrain"}));
+    app.add_option("--mvs-depth-filter", mvs_depth_filter,
+                   "MVS depth filter: auto, mild, moderate, aggressive")
+        ->check(CLI::IsMember({"auto", "mild", "moderate", "aggressive"}));
+    app.add_flag("--mvs-save-levels", mvs_save_levels,
+                 "save Level 2/3 raw depth results for diagnostics");
+    CLI::Option *mvs_res_scale_option = app.add_option(
+        "--mvs-res-scale",
+        mvsResScale,
+        "MVS depth resolution scale; explicitly overrides --mvs-quality resolution");
     app.add_option("--mvs-iterations", mvsIterations, "MVS PatchMatch iterations");
     app.add_option("--mvs-confidence", mvsConfidence, "MVS PatchMatch confidence threshold");
     app.add_option("--mvs-fusion-confidence", mvsFusionConfidence, "MVS fusion confidence threshold");
@@ -1836,6 +1857,13 @@ int main(int argc, char *argv[])
     if (skipMesh)
     {
         skipModel = true;
+    }
+    if (mvs_res_scale_option->count() == 0)
+    {
+        const auto profile = xjw::gui::project::depthQualityProfileFromId(
+            QString::fromStdString(mvs_quality));
+        mvsResScale = 1.0 / static_cast<double>(
+            xjw::gui::project::depthQualityDownsample(profile));
     }
     mvsResScale = std::clamp(mvsResScale, 0.05, 1.0);
     mvsIterations = std::max(1, mvsIterations);
@@ -2164,6 +2192,7 @@ int main(int argc, char *argv[])
     denseSettings.threads = std::max(1, threads);
     denseSettings.useCuda = (device == "cuda" || device == "auto");
     denseSettings.pipelineMode = true;
+    denseSettings.qualityProfile = QString::fromStdString(mvs_quality);
     denseSettings.resScale = mvsResScale;
     denseSettings.iterations = mvsIterations;
     denseSettings.patchMatchConfidence = mvsConfidence;
@@ -2179,6 +2208,44 @@ int main(int argc, char *argv[])
     denseSettings.depthConsistency = 1.0f;
     xjw::mvs::DepthGenConfig depthConfig =
         xjw::gui::project::buildDepthGenConfig(denseSettings, static_cast<int>(views.size()));
+    if (mvs_scene_profile == "aerial_terrain")
+    {
+        depthConfig.sceneProfile = xjw::mvs::MvsSceneProfile::AerialTerrain;
+    }
+    else if (mvs_scene_profile == "orbital_object")
+    {
+        depthConfig.sceneProfile = xjw::mvs::MvsSceneProfile::OrbitalObject;
+    }
+    else
+    {
+        depthConfig.sceneProfile = xjw::mvs::MvsSceneProfile::Auto;
+    }
+    const xjw::mvs::MvsSceneClassification sceneClassification =
+        xjw::mvs::classifyMvsScene(views, sparse);
+    const xjw::mvs::MvsSceneProfile effectiveSceneProfile =
+        depthConfig.sceneProfile == xjw::mvs::MvsSceneProfile::Auto
+            ? sceneClassification.profile
+            : depthConfig.sceneProfile;
+    depthConfig.numSourceViews = xjw::mvs::recommendedMvsSourceViewCount(
+        effectiveSceneProfile,
+        depthConfig.patchMatch.downsampleFactor,
+        depthConfig.numSourceViews,
+        static_cast<int>(views.size()));
+    depthConfig.patchMatch.numSourceViews = depthConfig.numSourceViews;
+    depthConfig.adaptiveDepthFilterMode = mvs_depth_filter == "auto";
+    if (mvs_depth_filter == "mild")
+    {
+        depthConfig.depthFilterMode = xjw::mvs::DepthFilterMode::Mild;
+    }
+    else if (mvs_depth_filter == "aggressive")
+    {
+        depthConfig.depthFilterMode = xjw::mvs::DepthFilterMode::Aggressive;
+    }
+    else
+    {
+        depthConfig.depthFilterMode = xjw::mvs::DepthFilterMode::Moderate;
+    }
+    depthConfig.saveIntermediatePyramidLevels = mvs_save_levels;
     depthConfig.runFusion = false;
     depthConfig.saveIntermediateDepthMaps = true;
     depthConfig.intermediateDir = xjw::common::io::toUtf8Path(mvsDir);

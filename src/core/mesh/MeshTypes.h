@@ -31,6 +31,7 @@ struct Triangle
 struct TriMesh {
     std::vector<MeshVertex> vertices;
     std::vector<Triangle>   faces;
+    bool hasVertexColors = true;
 
     bool empty() const { return vertices.empty() || faces.empty(); }
     int vertexCount() const { return static_cast<int>(vertices.size()); }
@@ -38,6 +39,9 @@ struct TriMesh {
 
     bool savePLY(const std::string &path, std::string *errorMsg = nullptr) const;
     bool saveOBJ(const std::string &path, std::string *errorMsg = nullptr) const;
+    static bool loadPLY(const std::string &path,
+                        TriMesh *mesh,
+                        std::string *errorMsg = nullptr);
 };
 
 struct ReconstructionConfig 

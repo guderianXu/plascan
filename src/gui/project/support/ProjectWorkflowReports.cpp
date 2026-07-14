@@ -188,6 +188,8 @@ BundleAdjustSparseCloudExport exportBundleAdjustSparseCloud(const QJsonObject &b
         sidecarPoint[QStringLiteral("rms_reproj_px")] = rmsAfter;
         sidecarPoint[QStringLiteral("track_len")] = trackLen;
         sidecarPoint[QStringLiteral("min_tri_angle_deg")] = 0.0;
+        sidecarPoint[QStringLiteral("index")] = point.value(QStringLiteral("index"));
+        sidecarPoint[QStringLiteral("observations")] = point.value(QStringLiteral("observations"));
         pointsForSidecar.append(sidecarPoint);
     }
 

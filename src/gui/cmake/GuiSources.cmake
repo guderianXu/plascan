@@ -22,6 +22,20 @@ set(GUI_SOURCES
   main_window/ReconstructionWorkflowController.cpp
   menu/ToolbarButton.cpp
   menu/MainMenu.cpp
+  markers/ProjectMarkerRepository.cpp
+  markers/MarkerUndoCommand.cpp
+  markers/MarkerOverlayItems.cpp
+  markers/MarkerWorkspaceController.cpp
+  markers/MarkerWorkspaceDetection.cpp
+  markers/MarkerWorkspaceView.cpp
+  markers/MarkerProjectionPanel.cpp
+  markers/MarkerReferencePanel.cpp
+   markers/MarkerFocusMeasurementDialog.cpp
+  markers/MarkerTaskRunner.cpp
+  markers/MarkerDetectionJobBuilder.cpp
+  markers/DetectMarkersDialog.cpp
+  markers/MarkerDetectionReviewDialog.cpp
+  markers/PrintMarkersDialog.cpp
   panels/LogPanel.cpp
   project/archive/PlascanArchive.cpp
   project/data/ProjectData.cpp
@@ -60,6 +74,7 @@ set(GUI_SOURCES
   tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
   views/LayerFeatureLoader.cpp
+  views/FeatureResidualLoader.cpp
   views/LayerImageLoader.cpp
   views/LayerOverlayItems.cpp
   views/LayerRenderer.cpp
@@ -94,6 +109,7 @@ set(GUI_SOURCES
   dialogs/MatchPairSelectorDialog.cpp
   dialogs/BundleAdjustDialog.cpp
   dialogs/CameraModel3DDialog.cpp
+  dialogs/CameraSceneViewMath.cpp
   dialogs/StereoProcessingDialog.cpp
   dialogs/OverlapAnalysisDialog.cpp
   dialogs/CreateDemDialog.cpp
@@ -159,6 +175,18 @@ set(GUI_HEADERS
   main_window/ReconstructionWorkflowController.h
   menu/ToolbarButton.h
   menu/MainMenu.h
+  markers/ProjectMarkerRepository.h
+  markers/MarkerUndoCommand.h
+  markers/MarkerOverlayItems.h
+  markers/MarkerWorkspaceController.h
+  markers/MarkerProjectionPanel.h
+  markers/MarkerReferencePanel.h
+   markers/MarkerFocusMeasurementDialog.h
+  markers/MarkerTaskRunner.h
+  markers/MarkerDetectionJobBuilder.h
+  markers/DetectMarkersDialog.h
+  markers/MarkerDetectionReviewDialog.h
+  markers/PrintMarkersDialog.h
   panels/LogPanel.h
   project/archive/PlascanArchive.h
   project/data/ProjectData.h
@@ -198,6 +226,7 @@ set(GUI_HEADERS
   tasks/FeatureExtractionRunner.h
   tasks/GuiTaskRunner.h
   views/LayerFeatureLoader.h
+  views/FeatureResidualLoader.h
   views/LayerImageLoader.h
   views/LayerOverlayItems.h
   views/LayerRenderer.h
@@ -227,6 +256,7 @@ set(GUI_HEADERS
   dialogs/MatchPairSelectorDialog.h
   dialogs/BundleAdjustDialog.h
   dialogs/CameraModel3DDialog.h
+  dialogs/CameraSceneViewMath.h
   dialogs/StereoProcessingDialog.h
   dialogs/OverlapAnalysisDialog.h
   dialogs/CreateDemDialog.h
@@ -316,6 +346,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/MatchPairSelectorDialog.cpp
   dialogs/BundleAdjustDialog.cpp
   dialogs/CameraModel3DDialog.cpp
+  dialogs/CameraSceneViewMath.cpp
   dialogs/StereoProcessingDialog.cpp
   dialogs/OverlapAnalysisDialog.cpp
   dialogs/CreateDemDialog.cpp

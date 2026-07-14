@@ -37,9 +37,9 @@
 
 无相机文件且没有用户内参时，空三服务使用两级搜索：
 
-- 粗筛阶段并发评估六个焦距尺度，每个 worker 持有独立 `IncrementalSfm`，最多使用六个初始像对。
+- 粗筛阶段并发评估九个焦距尺度，每个 worker 持有独立 `IncrementalSfm`，最多使用六个初始像对。
 - `SfmExecutionProfile::CoarseEvaluation` 将 BA 外层迭代限制为 5、全局精化限制为 1 轮，并把局部 BA 间隔放宽到 6 张影像。
-- 候选排序优先比较注册影像数，其次比较有限且更低的重投影 RMS，最后比较三维点数。
+- 候选排序首先比较注册影像数；注册率相同时综合三角交会角、多视轨迹比例、观测空间覆盖和重投影 RMS，避免用微小 RMS 优势选择弱基线模型。
 - 正式阶段只重放最佳焦距，但不锁死粗筛初始像对；Guided matching 改变匹配图后必须重新自动选种子。
 - 粗筛只读已经准备好的特征和匹配缓存，不写稀疏点云、项目记录或匹配质量报告。
 - 初始对 E/F/H 估计和增量 PnP 使用由影像 ID 派生的稳定 RANSAC 种子；并行粗筛不会再改变正式 SfM 的随机状态。
@@ -60,6 +60,15 @@
 `assetsDir`、`featureDir`、`matchDir`。`AerialTriangulationService` 只有在旧调用方未传目录时
 才回退到 `.plascan` 项目旁的 `assets/ip` 和 `assets/matches`。特征 sidecar 中记录的路径必须与
 SfM 实际加载的特征文件一致，否则索引不能进入观测网络。
+
+## 输入连接点限额与观测唯一性
+
+- 无相机增量 SfM 在构建 `CorrespondenceGraph` 索引前，使用 `CorrespondenceTrackThinner` 将已验证的两两匹配整理成多视轨迹。
+- `maxTracksPerImage` 是每幅影像参与的多视轨迹上限。筛选顺序为轨迹长度、匹配置信度和稳定输入顺序，不按单个影像对独立截断。
+- 筛选后只保留获选轨迹中原本存在的几何验证边，不合成未经验证的新 pairwise match。
+- 一个二维特征只能归属一个三维点。增量三角化不得在轨迹延续失败后复用已经被其它三维点占用的观测。
+
+质量报告对两视轨迹使用两级门控：比例超过 0.70 时输出 advisory，超过 0.85 时将 `acceptable_for_mvs` 置为 `false`。注册率和低 RMS 不能替代多视轨迹与交会角检查。
 
 匹配缓存中 `feature_format_version >= 2`、两侧索引数组为空且 `num_matches == 0` 的 sidecar
 表示该影像对已确认无匹配。它会作为负缓存计入已处理配对，不进入待生成队列；缺少明确

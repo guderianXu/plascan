@@ -9,6 +9,19 @@
 
 namespace xjw::gui::project {
 
+enum class DepthQualityProfile
+{
+    Highest,
+    High,
+    Medium,
+    Low,
+    Lowest
+};
+
+QString depthQualityProfileId(DepthQualityProfile profile);
+DepthQualityProfile depthQualityProfileFromId(const QString &profileId);
+int depthQualityDownsample(DepthQualityProfile profile);
+
 struct DenseGenerationSettings
 {
     int atIndex = -1;
@@ -30,7 +43,10 @@ struct DenseGenerationSettings
     float depthConsistency = 1.5f;
     float maxReprojError = 1.5f;
     int speckleMinArea = 16;
-    QString qualityProfile = QStringLiteral("standard");
+    QString qualityProfile = QStringLiteral("medium");
+    QString sceneProfile = QStringLiteral("auto");
+    QString depthFilterMode = QStringLiteral("auto");
+    bool saveIntermediatePyramidLevels = false;
     plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
     bool pipelineMode = false;  // 流水线模式：跳过所有交互对话框
 };

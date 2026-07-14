@@ -1128,6 +1128,11 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
             opts.showPoints = sv.value("showPoints").toBool(opts.showPoints);
             opts.showScale = sv.value("showScale").toBool(opts.showScale);
             opts.showOrientation = sv.value("showOrientation").toBool(opts.showOrientation);
+            opts.showResiduals = sv.value("showResiduals").toBool(opts.showResiduals);
+            opts.residualScale = sv.value("residualScale").toDouble(opts.residualScale);
+            opts.minimumResidualPx = sv.value("minimumResidualPx").toDouble(opts.minimumResidualPx);
+            opts.maximumResidualLengthPx =
+                sv.value("maximumResidualLengthPx").toDouble(opts.maximumResidualLengthPx);
             opts.useFill = sv.value("useFill").toBool(opts.useFill);
             opts.pointSize = sv.value("pointSize").toInt(opts.pointSize);
             opts.scaleMultiplier = sv.value("scaleMultiplier").toDouble(opts.scaleMultiplier);
@@ -1151,9 +1156,22 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
             {
                 opts.orientColor = QColor(oc["r"].toInt(), oc["g"].toInt(), oc["b"].toInt());
             }
+            QJsonObject rc = sv.value("residualColor").toObject();
+            if (!rc.isEmpty())
+            {
+                opts.residualColor = QColor(rc["r"].toInt(), rc["g"].toInt(), rc["b"].toInt());
+            }
 
             dlg->setDisplayOptions(opts);
         }
+    }
+
+    if (canvas)
+    {
+        LayerRenderer::FeatureDisplayOptions currentOptions = dlg->getDisplayOptions();
+        currentOptions.showPoints = canvas->showsInterestPoints();
+        currentOptions.showResiduals = canvas->showsFeatureResiduals();
+        dlg->setDisplayOptions(currentOptions);
     }
 
     // 连接实时更新信号
@@ -1170,6 +1188,10 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
                 sv["showPoints"] = opts.showPoints;
                 sv["showScale"] = opts.showScale;
                 sv["showOrientation"] = opts.showOrientation;
+                sv["showResiduals"] = opts.showResiduals;
+                sv["residualScale"] = opts.residualScale;
+                sv["minimumResidualPx"] = opts.minimumResidualPx;
+                sv["maximumResidualLengthPx"] = opts.maximumResidualLengthPx;
                 sv["useFill"] = opts.useFill;
                 sv["pointSize"] = opts.pointSize;
                 sv["scaleMultiplier"] = opts.scaleMultiplier;
@@ -1181,6 +1203,7 @@ void MenuWorkflowController::openFeaturePointVisualizationDialog()
                 sv["pointColor"] = colorToJson(opts.pointColor);
                 sv["scaleColor"] = colorToJson(opts.scaleColor);
                 sv["orientColor"] = colorToJson(opts.orientColor);
+                sv["residualColor"] = colorToJson(opts.residualColor);
 
                 _featurePointVisualizationSetting->save(sv);
             }
@@ -1240,6 +1263,11 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     opts.showPoints = sv.value("showPoints").toBool(opts.showPoints);
     opts.showScale = sv.value("showScale").toBool(opts.showScale);
     opts.showOrientation = sv.value("showOrientation").toBool(opts.showOrientation);
+    opts.showResiduals = sv.value("showResiduals").toBool(opts.showResiduals);
+    opts.residualScale = sv.value("residualScale").toDouble(opts.residualScale);
+    opts.minimumResidualPx = sv.value("minimumResidualPx").toDouble(opts.minimumResidualPx);
+    opts.maximumResidualLengthPx =
+        sv.value("maximumResidualLengthPx").toDouble(opts.maximumResidualLengthPx);
     opts.useFill = sv.value("useFill").toBool(opts.useFill);
     opts.pointSize = sv.value("pointSize").toInt(opts.pointSize);
     opts.scaleMultiplier = sv.value("scaleMultiplier").toDouble(opts.scaleMultiplier);
@@ -1261,6 +1289,11 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     if (!oc.isEmpty())
     {
         opts.orientColor = QColor(oc["r"].toInt(), oc["g"].toInt(), oc["b"].toInt());
+    }
+    QJsonObject rc = sv.value("residualColor").toObject();
+    if (!rc.isEmpty())
+    {
+        opts.residualColor = QColor(rc["r"].toInt(), rc["g"].toInt(), rc["b"].toInt());
     }
 
     emit requestApplyFeatureDisplayOptions(opts);

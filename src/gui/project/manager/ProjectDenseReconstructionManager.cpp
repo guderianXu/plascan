@@ -46,12 +46,25 @@
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <condition_variable>
+#include <cstdint>
+#include <deque>
 #include <functional>
+#include <future>
 #include <iterator>
 #include <list>
 #include <limits>
 #include <memory>
+#include <mutex>
+#include <thread>
 #include <unordered_map>
+#include <unordered_set>
+
+#if defined(Q_OS_WIN)
+#include <windows.h>
+#elif defined(Q_OS_LINUX)
+#include <sys/sysinfo.h>
+#endif
 
 using xjw::gui::project::buildDepthGenConfig;
 using xjw::gui::project::denseGenerationSettingsFromJson;
@@ -65,6 +78,8 @@ using xjw::core::project::collectLatestStoredDepthFrames;
 using xjw::core::project::collectStoredDepthFramesForDirectory;
 using xjw::core::project::depthFrameArtifactsExist;
 using xjw::core::project::FusionFrameBuildResult;
+using xjw::core::project::estimateFusionFrameWorkingSetBytes;
+using xjw::core::project::recommendedDepthFrameLoadWorkers;
 using xjw::gui::project::normalizePath;
 using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::projectDepthInputSignature;
@@ -225,6 +240,22 @@ int fusionWindowCacheCapacity(int neighborCount)
     return std::clamp(neighborCount * 2 + 2, 4, 34);
 }
 
+std::uint64_t availablePhysicalMemoryBytes()
+{
+#if defined(Q_OS_WIN)
+    MEMORYSTATUSEX status{};
+    status.dwLength = sizeof(status);
+    return GlobalMemoryStatusEx(&status) ? static_cast<std::uint64_t>(status.ullAvailPhys) : 0ULL;
+#elif defined(Q_OS_LINUX)
+    struct sysinfo status{};
+    return sysinfo(&status) == 0
+        ? static_cast<std::uint64_t>(status.freeram) * status.mem_unit
+        : 0ULL;
+#else
+    return 0ULL;
+#endif
+}
+
 double cameraCenterDistance(const xjw::Camera &lhs, const xjw::Camera &rhs)
 {
     const auto lhsCenter = lhs.cameraCenter();
@@ -300,19 +331,55 @@ std::vector<int> nearestFusionWindowIndices(const std::vector<StoredDepthFrameRe
 class DepthFrameLruCache
 {
 public:
+    struct LoadStats
+    {
+        int loadedCount = 0;
+        double readMs = 0.0;
+        double postprocessMs = 0.0;
+        double resizeMs = 0.0;
+        double totalMs = 0.0;
+    };
+
     DepthFrameLruCache(const std::vector<StoredDepthFrameRecord> &records,
                        const QMap<QString, xjw::Camera> &camMap,
                        const xjw::mvs::FusionConfig &fusionConfig,
                        int viewCount,
                        int fusionMaxImageDim,
-                       int capacity)
+                       int capacity,
+                       int workerCount,
+                       std::function<void(const LoadStats &)> loadProgress)
         : _records(records)
         , _cameraMap(camMap)
         , _fusionConfig(fusionConfig)
         , _viewCount(viewCount)
         , _fusionMaxImageDim(std::max(0, fusionMaxImageDim))
         , _capacity(std::max(1, capacity))
+        , _loadProgress(std::move(loadProgress))
     {
+        const int workers = std::clamp(workerCount, 1, 4);
+        _workers.reserve(static_cast<std::size_t>(workers));
+        for (int index = 0; index < workers; ++index)
+        {
+            _workers.emplace_back([this]() { workerLoop(); });
+        }
+    }
+
+    ~DepthFrameLruCache()
+    {
+        {
+            std::lock_guard<std::mutex> lock(_mutex);
+            _stopping = true;
+            _jobs.clear();
+            _inFlight.clear();
+        }
+        _jobReady.notify_all();
+        for (std::thread &worker : _workers)
+        {
+            if (worker.joinable())
+            {
+                worker.join();
+            }
+        }
     }
 
     FusionFrameBuildResult get(int index)
@@ -324,13 +391,77 @@ public:
             return result;
         }
 
-        auto it = _cache.find(index);
-        if (it != _cache.end())
         {
-            touch(it);
-            return it->second.result;
+            std::lock_guard<std::mutex> lock(_mutex);
+            auto it = _cache.find(index);
+            if (it != _cache.end())
+            {
+                touch(it);
+                return it->second.result;
+            }
         }
 
+        return schedule(index).get();
+    }
+
+    void prefetch(const std::vector<int> &indices)
+    {
+        for (const int index : indices)
+        {
+            if (index >= 0 && index < static_cast<int>(_records.size()))
+            {
+                (void)schedule(index);
+            }
+        }
+    }
+
+    LoadStats stats() const
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        return _stats;
+    }
+
+private:
+    struct CacheEntry
+    {
+        FusionFrameBuildResult result;
+        std::list<int>::iterator lruIt;
+    };
+
+    struct LoadJob
+    {
+        int index = -1;
+        std::shared_ptr<std::promise<FusionFrameBuildResult>> promise;
+    };
+
+    std::shared_future<FusionFrameBuildResult> schedule(int index)
+    {
+        std::lock_guard<std::mutex> lock(_mutex);
+        auto cached = _cache.find(index);
+        if (cached != _cache.end())
+        {
+            touch(cached);
+            std::promise<FusionFrameBuildResult> ready;
+            ready.set_value(cached->second.result);
+            return ready.get_future().share();
+        }
+
+        const auto in_flight = _inFlight.find(index);
+        if (in_flight != _inFlight.end())
+        {
+            return in_flight->second;
+        }
+
+        auto promise = std::make_shared<std::promise<FusionFrameBuildResult>>();
+        std::shared_future<FusionFrameBuildResult> future = promise->get_future().share();
+        _inFlight.emplace(index, future);
+        _jobs.push_back({index, std::move(promise)});
+        _jobReady.notify_one();
+        return future;
+    }
+
+    FusionFrameBuildResult load(int index) const
+    {
         xjw::Camera camera;
         if (!cameraForImagePath(_cameraMap, _records[index].refImage, &camera))
         {
@@ -345,28 +476,77 @@ public:
                                                                _fusionConfig,
                                                                _viewCount,
                                                                _fusionMaxImageDim);
-        if (!loaded.status.ok)
+        if (loaded.status.ok)
         {
-            return loaded;
+            loaded.frame.viewIndex = index;
+            loaded.frame.sourceImageIndices = storedFusionSourceIndices(_records, index);
         }
-        loaded.frame.viewIndex = index;
-        loaded.frame.sourceImageIndices = storedFusionSourceIndices(_records, index);
-
-        _lru.push_front(index);
-        CacheEntry entry;
-        entry.result = loaded;
-        entry.lruIt = _lru.begin();
-        _cache.emplace(index, std::move(entry));
-        evictIfNeeded();
         return loaded;
     }
 
-private:
-    struct CacheEntry
+    void workerLoop()
     {
-        FusionFrameBuildResult result;
-        std::list<int>::iterator lruIt;
-    };
+        while (true)
+        {
+            LoadJob job;
+            {
+                std::unique_lock<std::mutex> lock(_mutex);
+                _jobReady.wait(lock, [this]() { return _stopping || !_jobs.empty(); });
+                if (_stopping && _jobs.empty())
+                {
+                    return;
+                }
+                job = std::move(_jobs.front());
+                _jobs.pop_front();
+            }
+
+            FusionFrameBuildResult loaded;
+            try
+            {
+                loaded = load(job.index);
+            }
+            catch (const std::bad_alloc &)
+            {
+                loaded.status = {
+                    false,
+                    QStringLiteral("加载深度帧时内存不足，已停止当前融合任务；请降低融合分辨率或并发数")};
+            }
+            catch (const std::exception &exception)
+            {
+                loaded.status = {
+                    false,
+                    QStringLiteral("加载深度帧异常：%1").arg(QString::fromUtf8(exception.what()))};
+            }
+            LoadStats progress_stats;
+            {
+                std::lock_guard<std::mutex> lock(_mutex);
+                if (loaded.status.ok)
+                {
+                    _lru.push_front(job.index);
+                    CacheEntry entry;
+                    entry.result = loaded;
+                    entry.lruIt = _lru.begin();
+                    _cache.insert_or_assign(job.index, std::move(entry));
+                    evictIfNeeded();
+                    if (_loadedEver.insert(job.index).second)
+                    {
+                        ++_stats.loadedCount;
+                    }
+                    _stats.readMs += loaded.readMs;
+                    _stats.postprocessMs += loaded.postprocessMs;
+                    _stats.resizeMs += loaded.resizeMs;
+                    _stats.totalMs += loaded.totalMs;
+                }
+                _inFlight.erase(job.index);
+                progress_stats = _stats;
+            }
+            job.promise->set_value(std::move(loaded));
+            if (_loadProgress)
+            {
+                _loadProgress(progress_stats);
+            }
+        }
+    }
 
     void touch(std::unordered_map<int, CacheEntry>::iterator it)
     {
@@ -391,8 +571,17 @@ private:
     int _viewCount = 0;
     int _fusionMaxImageDim = 0;
     int _capacity = 1;
+    std::function<void(const LoadStats &)> _loadProgress;
+    mutable std::mutex _mutex;
+    std::condition_variable _jobReady;
+    bool _stopping = false;
+    std::deque<LoadJob> _jobs;
+    std::vector<std::thread> _workers;
     std::list<int> _lru;
     std::unordered_map<int, CacheEntry> _cache;
+    std::unordered_map<int, std::shared_future<FusionFrameBuildResult>> _inFlight;
+    std::unordered_set<int> _loadedEver;
+    LoadStats _stats;
 };
 
 enum class ExistingDepthAction
@@ -1578,20 +1767,90 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
         const int totalFrames = static_cast<int>(storedFrames.size());
         const int neighborCount = streamFusionWindowSize(request, totalFrames);
         const xjw::mvs::FusionConfig fusionConfig = buildDepthGenConfig(request, totalFrames).fusion;
+        std::uint64_t frame_working_set = 0;
+        for (const StoredDepthFrameRecord &record : storedFrames)
+        {
+            std::uint64_t record_working_set = 0;
+            if (record.gridWidth > 0 && record.gridHeight > 0)
+            {
+                record_working_set = estimateFusionFrameWorkingSetBytes(
+                    record.gridWidth, record.gridHeight, request.fusionMaxImageDim);
+            }
+            else
+            {
+                const qint64 raw_bytes = QFileInfo(record.rawDepthPath).size();
+                const std::uint64_t source_pixels = raw_bytes > 64
+                    ? static_cast<std::uint64_t>(raw_bytes - 64) / sizeof(float)
+                    : 0ULL;
+                record_working_set = source_pixels > 0
+                    ? source_pixels * 24ULL + 16ULL * 1024ULL * 1024ULL
+                    : 512ULL * 1024ULL * 1024ULL;
+            }
+            frame_working_set = std::max(frame_working_set, record_working_set);
+        }
+        const std::uint64_t available_memory = availablePhysicalMemoryBytes();
+        const int load_workers = recommendedDepthFrameLoadWorkers(
+            request.threads, available_memory, frame_working_set);
+        auto current_progress = std::make_shared<std::atomic_int>(1);
+        auto last_reported_load = std::make_shared<std::atomic_int>(0);
         DepthFrameLruCache depthFrameCache(storedFrames,
                                            camMap,
                                            fusionConfig,
                                            totalFrames,
                                            request.fusionMaxImageDim,
-                                           fusionWindowCacheCapacity(neighborCount));
+                                           fusionWindowCacheCapacity(neighborCount),
+                                           load_workers,
+                                           [self,
+                                            totalFrames,
+                                            current_progress,
+                                            last_reported_load](const DepthFrameLruCache::LoadStats &stats)
+                                           {
+                                               const int previous = last_reported_load->exchange(
+                                                   stats.loadedCount, std::memory_order_relaxed);
+                                               if (stats.loadedCount <= previous)
+                                               {
+                                                   return;
+                                               }
+                                               LOG_INFO(QStringLiteral(
+                                                            "[MVS] 深度帧加载 %1/%2: read=%3 ms postprocess=%4 ms resize=%5 ms total=%6 ms")
+                                                            .arg(stats.loadedCount)
+                                                            .arg(totalFrames)
+                                                            .arg(stats.readMs, 0, 'f', 1)
+                                                            .arg(stats.postprocessMs, 0, 'f', 1)
+                                                            .arg(stats.resizeMs, 0, 'f', 1)
+                                                            .arg(stats.totalMs, 0, 'f', 1));
+                                               if (!self)
+                                               {
+                                                   return;
+                                               }
+                                               QMetaObject::invokeMethod(
+                                                   self.data(),
+                                                   [self, stats, totalFrames, current_progress]()
+                                                   {
+                                                       if (self)
+                                                       {
+                                                           emit self->mvsProgressChanged(
+                                                               QStringLiteral("准备深度图：已加载 %1/%2")
+                                                                   .arg(stats.loadedCount)
+                                                                   .arg(totalFrames),
+                                                               current_progress->load(
+                                                                   std::memory_order_relaxed));
+                                                       }
+                                                   },
+                                                   Qt::QueuedConnection);
+                                           });
         std::vector<FusedPoint> fusedPoints;
         fusedPoints.reserve(100000);
 
-        LOG_INFO(QStringLiteral("[MVS] 流式深度图融合: frames=%1 neighborWindow=%2 fusionMaxImageDim=%3 cacheCapacity=%4")
+        LOG_INFO(QStringLiteral("[MVS] 流式深度图融合: frames=%1 neighborWindow=%2 fusionMaxImageDim=%3 "
+                                "cacheCapacity=%4 loadWorkers=%5 availableMemory=%6 MiB frameWorkingSet=%7 MiB")
                      .arg(totalFrames)
                      .arg(neighborCount)
                      .arg(request.fusionMaxImageDim)
-                     .arg(fusionWindowCacheCapacity(neighborCount)));
+                     .arg(fusionWindowCacheCapacity(neighborCount))
+                     .arg(load_workers)
+                     .arg(available_memory / (1024ULL * 1024ULL))
+                     .arg(frame_working_set / (1024ULL * 1024ULL)));
 
         for (int refIndex = 0; refIndex < totalFrames; ++refIndex)
         {
@@ -1631,12 +1890,20 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             }
             const auto loadDone = std::chrono::steady_clock::now();
 
+            if (refIndex + 1 < totalFrames)
+            {
+                const std::vector<int> next_window = nearestFusionWindowIndices(
+                    storedFrames, camMap, refIndex + 1, neighborCount);
+                depthFrameCache.prefetch(next_window);
+            }
+
             if (frames.size() < 2)
             {
                 continue;
             }
 
             const int baseProgress = std::clamp((refIndex * 90) / std::max(1, totalFrames), 1, 90);
+            current_progress->store(baseProgress, std::memory_order_relaxed);
             if (!self)
             {
                 return;
@@ -1676,12 +1943,14 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
             std::string fuseErr;
             const bool fuseOk = fusion.fuse(frames,
                                             batchPoints,
-                                            [self, refIndex, totalFrames](const std::string &stage, float ratio) {
+                                            [self, refIndex, totalFrames, current_progress](const std::string &stage, float ratio) {
                                                 if (!self)
                                                 {
                                                     return;
                                                 }
-                                                QMetaObject::invokeMethod(self.data(), [self, stage, ratio, refIndex, totalFrames]() {
+                                                QMetaObject::invokeMethod(
+                                                    self.data(),
+                                                    [self, stage, ratio, refIndex, totalFrames, current_progress]() {
                                                     if (!self)
                                                     {
                                                         return;
@@ -1691,13 +1960,16 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                                                                          static_cast<float>(std::max(1, totalFrames))),
                                                         1,
                                                         90);
+                                                    current_progress->store(progressValue,
+                                                                            std::memory_order_relaxed);
                                                     emit self->mvsProgressChanged(
                                                         QStringLiteral("流式深度图融合 %1/%2: %3")
                                                             .arg(refIndex + 1)
                                                             .arg(totalFrames)
                                                             .arg(QString::fromStdString(stage)),
                                                         progressValue);
-                                                }, Qt::QueuedConnection);
+                                                    },
+                                                    Qt::QueuedConnection);
                                             },
                                             &fuseErr);
             const auto fuseDone = std::chrono::steady_clock::now();
@@ -1705,14 +1977,20 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                 std::chrono::duration<double, std::milli>(loadDone - batchStart).count();
             const double fuseMs =
                 std::chrono::duration<double, std::milli>(fuseDone - loadDone).count();
-            LOG_INFO(QStringLiteral("[MVS] 流式深度图融合批次 %1/%2: ref=%3 window=%4 load=%5 ms fuse=%6 ms points=%7")
+            const DepthFrameLruCache::LoadStats load_stats = depthFrameCache.stats();
+            LOG_INFO(QStringLiteral("[MVS] 流式深度图融合批次 %1/%2: ref=%3 window=%4 wait=%5 ms fuse=%6 ms "
+                                    "points=%7 loaded=%8 readTotal=%9 ms postTotal=%10 ms resizeTotal=%11 ms")
                          .arg(refIndex + 1)
                          .arg(totalFrames)
                          .arg(QFileInfo(storedFrames[refIndex].refImage).fileName())
                          .arg(frames.size())
                          .arg(loadMs, 0, 'f', 1)
                          .arg(fuseMs, 0, 'f', 1)
-                         .arg(batchPoints.size()));
+                         .arg(batchPoints.size())
+                         .arg(load_stats.loadedCount)
+                         .arg(load_stats.readMs, 0, 'f', 1)
+                         .arg(load_stats.postprocessMs, 0, 'f', 1)
+                         .arg(load_stats.resizeMs, 0, 'f', 1));
 
             if (isCancelled())
             {

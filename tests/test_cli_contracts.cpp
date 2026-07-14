@@ -396,6 +396,35 @@ TEST(ReconstructPipelineCliGTest, Arbitrary3dMeshNeverFallsBackToHeightGrid)
     });
 }
 
+TEST(ReconstructPipelineCliGTest, ExposesAdaptiveDepthPyramidOptions)
+{
+    const QString source = readSourceFile(QStringLiteral("src/cli/cli_reconstruct_pipeline.cpp"));
+
+    expectContainsAll(source,
+                      {"--mvs-quality",
+                       "--mvs-scene-profile",
+                       "--mvs-depth-filter",
+                       "--mvs-save-levels",
+                       "denseSettings.qualityProfile",
+                       "depthConfig.sceneProfile",
+                       "depthConfig.depthFilterMode",
+                       "depthConfig.saveIntermediatePyramidLevels"});
+}
+
+TEST(ReconstructPipelineCliGTest, DepthPyramidRegressionScriptCoversDinoAndUav9)
+{
+    const QString script = readSourceFile(
+        QStringLiteral("scripts/validation/run_depth_pyramid_regression.ps1"));
+
+    expectContainsAll(script,
+                      {"middlebury_dino_sparse_ring",
+                       "agisoft_aerial_gcps_small",
+                       "--mvs-scene-profile",
+                       "--mvs-depth-filter",
+                       "--mvs-save-levels",
+                       "model_quality_cli.exe"});
+}
+
 TEST(ReconstructPipelineCliGTest, NonEmptyOutputDirRequiresForce)
 {
     const QString exe = executablePath(PLASCAN_RECONSTRUCT_PIPELINE_CLI_PATH);
@@ -793,6 +822,29 @@ TEST(MeshReconstructCliGTest, UsesSharedModelWorkflowEntry)
         "--settings-key",
         "xjw::mesh::workflow::ModelBuildRequest",
         "xjw::mesh::workflow::buildModel",
+    });
+}
+
+TEST(ModelQualityCliGTest, UsesSharedQualityEvaluator)
+{
+    const QString cmake = readSourceFile(QStringLiteral("src/cli/CMakeLists.txt"));
+    const QString source = readSourceFile(QStringLiteral("src/cli/cli_model_quality.cpp"));
+
+    expectContainsAll(cmake, {
+        "model_quality_cli",
+        "cli_model_quality.cpp",
+        "qc",
+    });
+    expectContainsAll(source, {
+        "--mesh",
+        "--image-camera-list",
+        "--mvs-workspace",
+        "--scene-type",
+        "--validation-split",
+        "--reference-cloud",
+        "--reference-camera-list",
+        "--output-dir",
+        "ModelImageQualityEvaluator",
     });
 }
 

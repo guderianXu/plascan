@@ -140,6 +140,10 @@ else()
 endif()
 message(STATUS "plascan: found GDAL, target=${PLASCAN_GDAL_TARGET}")
 
+# ── AprilTag ─────────────────────────────────────────────────────────────────
+find_package(apriltag CONFIG REQUIRED)
+message(STATUS "plascan: found AprilTag")
+
 # ── libtiff ───────────────────────────────────────────────────────────────────
 find_package(TIFF REQUIRED)
 if(TARGET TIFF::TIFF)

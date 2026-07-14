@@ -39,14 +39,14 @@ public:
     /// 将单帧深度图反投影为点云
     /// @param depth     融合后深度图 (CV_32F)
     /// @param mask      有效像素掩码 (CV_8U, 255=有效)
-    /// @param cameraModel 正深度相机模型
+    /// @param cameraModel 与深度图对应的正深度、零畸变 Camera 工作值
     /// @param colorImg  对应的彩色图像 (CV_8UC3 BGR) 或灰度 (CV_8UC1)，可为空
     /// @param options   选项
     /// @return 点云列表
     static std::vector<DensePoint> unproject(
         const cv::Mat            &depth,
         const cv::Mat            &mask,
-        const PositiveDepthCameraModel &cameraModel,
+        const Camera             &cameraModel,
         const cv::Mat            &colorImg,
         const DenseCloudOptions &options = DenseCloudOptions{});
 

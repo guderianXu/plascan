@@ -33,7 +33,7 @@ buildPointCloud(const std::vector<DensePoint> &cloud);
 std::vector<DensePoint> DenseCloudBuilder::unproject(
     const cv::Mat                 &depth,
     const cv::Mat                 &mask,
-    const PositiveDepthCameraModel &cam,
+    const Camera                   &cam,
     const cv::Mat                 &colorImg,
     const DenseCloudOptions &options)
 {
@@ -68,9 +68,15 @@ std::vector<DensePoint> DenseCloudBuilder::unproject(
                 continue;
             }
 
-            float Xw, Yw, Zw;
-            cam.unproject(static_cast<float>(u), static_cast<float>(v),
-                          d, Xw, Yw, Zw);
+            const double pixel[2] = {static_cast<double>(u), static_cast<double>(v)};
+            double world[3] = {0.0, 0.0, 0.0};
+            if (!cam.unprojectPixel(pixel, static_cast<double>(d), world))
+            {
+                continue;
+            }
+            const float Xw = static_cast<float>(world[0]);
+            const float Yw = static_cast<float>(world[1]);
+            const float Zw = static_cast<float>(world[2]);
 
             // AABB 裁剪
             if (options.clipAABB)

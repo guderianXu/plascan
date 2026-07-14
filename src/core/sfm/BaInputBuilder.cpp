@@ -482,12 +482,204 @@ void appendSurveyControlTracks(const QJsonObject &meta,
     }
 }
 
+int cameraIndexForMarkerProjection(const control_points::MarkerProjection &projection,
+                                   const MarkerBaInput &input,
+                                   const QMap<QString, int> &cameraIndexByPath)
+{
+    QString path = input.imagePathById.value(projection.imageId);
+    if (path.isEmpty()) path = projection.imagePathSnapshot;
+    return cameraIndexForSurveyObservation(path, cameraIndexByPath);
+}
+
+bool triangulateMarkerTrack(const xjw::BATrack &track,
+                            const std::vector<xjw::Camera> &cameras,
+                            std::array<double, 3> *point)
+{
+    if (!point) return false;
+    for (std::size_t first = 0; first + 1 < track.observations.size(); ++first)
+    {
+        const xjw::BAObservation &left = track.observations[first];
+        if (left.cameraIndex < 0 || left.cameraIndex >= static_cast<int>(cameras.size())) continue;
+        for (std::size_t second = first + 1; second < track.observations.size(); ++second)
+        {
+            const xjw::BAObservation &right = track.observations[second];
+            if (right.cameraIndex < 0 || right.cameraIndex >= static_cast<int>(cameras.size())
+                || left.cameraIndex == right.cameraIndex)
+            {
+                continue;
+            }
+            const PairIntersectionCandidate candidate = triangulatePairWithDirectionFallback(
+                cameras[static_cast<std::size_t>(left.cameraIndex)], QPointF(left.u, left.v),
+                cameras[static_cast<std::size_t>(right.cameraIndex)], QPointF(right.u, right.v));
+            if (candidate.valid)
+            {
+                *point = candidate.point;
+                return true;
+            }
+        }
+    }
+    return false;
+}
+
+double referenceSigmaRms(const control_points::ReferenceCoordinate &reference)
+{
+    return std::sqrt((reference.sigmaX * reference.sigmaX
+                      + reference.sigmaY * reference.sigmaY
+                      + reference.sigmaZ * reference.sigmaZ) / 3.0);
+}
+
+void appendMarkerTracks(const MarkerBaInput *input,
+                        const QMap<QString, int> &cameraIndexByPath,
+                        BaInputBuildResult *result)
+{
+    if (!input || !input->markerSet || !result) return;
+
+    QMap<control_points::MarkerId, int> track_index_by_marker;
+    control_points::ControlNetworkInput network_input;
+    for (const control_points::Marker &marker : input->markerSet->markers())
+    {
+        if (!marker.enabled)
+        {
+            ++result->rejectedMarkerTrackCount;
+            continue;
+        }
+
+        xjw::BATrack track;
+        QSet<int> used_cameras;
+        for (const control_points::MarkerProjection &projection : marker.projections)
+        {
+            if (!control_points::projectionParticipatesInAdjustment(projection.state)) continue;
+            const int camera_index = cameraIndexForMarkerProjection(
+                projection, *input, cameraIndexByPath);
+            if (camera_index < 0 || used_cameras.contains(camera_index)) continue;
+            track.observations.push_back({camera_index,
+                                          projection.xy.x(),
+                                          projection.xy.y(),
+                                          1.0 / std::max(1.0e-9,
+                                                         projection.sigmaPx * projection.sigmaPx)});
+            used_cameras.insert(camera_index);
+        }
+        if (track.observations.size() < 2
+            || !triangulateMarkerTrack(track, result->cameras, &track.initialPoint))
+        {
+            ++result->rejectedMarkerTrackCount;
+            continue;
+        }
+
+        const int track_index = static_cast<int>(result->tracks.size());
+        result->tracks.push_back(track);
+        track_index_by_marker.insert(marker.id, track_index);
+        if (marker.role == control_points::MarkerRole::ControlPoint)
+        {
+            ++result->markerControlTrackCount;
+        }
+        else if (marker.role == control_points::MarkerRole::CheckPoint)
+        {
+            ++result->markerCheckTrackCount;
+        }
+
+        if (marker.referenceCoordinate.has_value()
+            && marker.referenceCoordinate->referenceUsable
+            && marker.role != control_points::MarkerRole::TieMarker)
+        {
+            const control_points::ReferenceCoordinate &reference = *marker.referenceCoordinate;
+            control_points::ControlNetworkPoint point;
+            point.markerId = marker.id;
+            point.role = marker.role;
+            point.estimatedPoint = track.initialPoint;
+            point.referencePoint = {{reference.x, reference.y, reference.z}};
+            point.sigma = {{reference.sigmaX, reference.sigmaY, reference.sigmaZ}};
+            network_input.points.push_back(point);
+
+            BaInputBuildResult::MarkerTrackBinding binding;
+            binding.markerId = marker.id;
+            binding.role = marker.role;
+            binding.trackIndex = track_index;
+            binding.referencePoint = point.referencePoint;
+            binding.sigma = point.sigma;
+            result->markerTrackBindings.push_back(binding);
+        }
+    }
+
+    result->markerControlNetwork = control_points::solveControlNetwork(network_input);
+    if (!result->markerControlNetwork.ok) return;
+    const control_points::SimilarityTransform3D &transform =
+        result->markerControlNetwork.transform;
+    for (xjw::Camera &camera : result->cameras)
+    {
+        camera.setPose(transform.rotate(camera.cameraToWorldRotation()),
+                       transform.apply(camera.cameraCenter()));
+    }
+    for (xjw::BATrack &track : result->tracks)
+    {
+        track.initialPoint = transform.apply(track.initialPoint);
+    }
+
+    for (const control_points::MarkerResidual &residual :
+         result->markerControlNetwork.controlResiduals)
+    {
+        if (!residual.inlier || !track_index_by_marker.contains(residual.markerId)) continue;
+        const control_points::Marker &marker = input->markerSet->marker(residual.markerId);
+        if (!marker.referenceCoordinate.has_value()) continue;
+        const control_points::ReferenceCoordinate &reference = *marker.referenceCoordinate;
+        xjw::BAControlPointConstraint constraint;
+        constraint.point = {{reference.x, reference.y, reference.z}};
+        constraint.sigmaMeters = referenceSigmaRms(reference);
+        constraint.weight = 1.0;
+        constraint.sourceIndex = track_index_by_marker.value(residual.markerId);
+        result->tracks[static_cast<std::size_t>(constraint.sourceIndex)]
+            .controlPointConstraints.push_back(constraint);
+        for (BaInputBuildResult::MarkerTrackBinding &binding : result->markerTrackBindings)
+        {
+            if (binding.markerId == residual.markerId) binding.usedAsConstraint = true;
+        }
+        ++result->markerControlPointConstraintCount;
+    }
+
+    for (int scale_index = 0; scale_index < input->markerSet->scaleBars().size(); ++scale_index)
+    {
+        const control_points::ScaleBar &scale_bar = input->markerSet->scaleBars()[scale_index];
+        if (!scale_bar.enabled
+            || !track_index_by_marker.contains(scale_bar.firstMarkerId)
+            || !track_index_by_marker.contains(scale_bar.secondMarkerId))
+        {
+            ++result->rejectedMarkerScaleBarCount;
+            continue;
+        }
+        if (scale_bar.role == control_points::ScaleBarRole::Check)
+        {
+            ++result->markerCheckScaleBarCount;
+        }
+        else
+        {
+            xjw::BAScaleBarConstraint constraint;
+            constraint.trackIndexA = track_index_by_marker.value(scale_bar.firstMarkerId);
+            constraint.trackIndexB = track_index_by_marker.value(scale_bar.secondMarkerId);
+            constraint.measuredDistanceMeters = scale_bar.measuredDistance;
+            constraint.sigmaMeters = scale_bar.sigma;
+            constraint.weight = 1.0;
+            constraint.sourceIndex = scale_index;
+            result->scaleBarConstraints.push_back(constraint);
+            ++result->markerControlScaleBarConstraintCount;
+        }
+
+        BaInputBuildResult::MarkerScaleBarBinding binding;
+        binding.scaleBarId = scale_bar.id;
+        binding.role = scale_bar.role;
+        binding.trackIndexA = track_index_by_marker.value(scale_bar.firstMarkerId);
+        binding.trackIndexB = track_index_by_marker.value(scale_bar.secondMarkerId);
+        binding.measuredDistance = scale_bar.measuredDistance;
+        result->markerScaleBarBindings.push_back(binding);
+    }
+}
+
 } // namespace
 
 BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
                                         const QStringList &selectedImages,
                                         int minMatches,
-                                        BaInputBuildResult *result)
+                                        BaInputBuildResult *result,
+                                        const MarkerBaInput *markerInput)
 {
     if (!result)
     {
@@ -507,6 +699,16 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
     result->rejectedSurveyControlPointCount = 0;
     result->surveyScaleBarConstraintCount = 0;
     result->rejectedSurveyScaleBarCount = 0;
+    result->markerControlNetwork = {};
+    result->markerControlTrackCount = 0;
+    result->markerCheckTrackCount = 0;
+    result->rejectedMarkerTrackCount = 0;
+    result->markerControlPointConstraintCount = 0;
+    result->markerControlScaleBarConstraintCount = 0;
+    result->markerCheckScaleBarCount = 0;
+    result->rejectedMarkerScaleBarCount = 0;
+    result->markerTrackBindings.clear();
+    result->markerScaleBarBindings.clear();
 
     xjw::MultiViewTrackBuilder multiViewTrackBuilder;
     std::map<IndexedFeatureKey, IndexedObservation> observationsByIndexedFeature;
@@ -748,6 +950,7 @@ BaInputBuildStatus buildBaInputFromMeta(const QJsonObject &meta,
     }
 
     appendSurveyControlTracks(meta, cameraIndexByPath, result);
+    appendMarkerTracks(markerInput, cameraIndexByPath, result);
 
     if (result->tracks.empty())
     {

@@ -23,7 +23,9 @@
 #include "graph/CorrespondenceGraph.h"
 #include "pose/PnpSolver.h"
 #include "reconstruction/SfmReconstruction.h"
+#include "registration/ControlNetworkSolver.h"
 #include "triangulation/Triangulator.h"
+#include "registration/PriorTrack.h"
 
 #include "BundleAdjust.h"
 #include "Camera.h"
@@ -126,11 +128,11 @@ struct IncrementalSfmOptions
     /// BA 选项
     BAOptions baOptions;
 
-    // --- Known-pose track 质量管理 ---
+    // --- 输入多视轨迹质量管理 ---
     /// 每张影像最多保留的 tie points，<=0 表示不限制。
-    int maxKnownPoseTracksPerImage = 6000;
+    int maxTracksPerImage = 6000;
     /// 每张影像每个网格最多保留的 tie points，<=0 表示不限制。
-    int maxKnownPoseTracksPerGridCell = 300;
+    int maxTracksPerGridCell = 300;
     /// tie point 空间均匀化网格列数。
     int trackThinningGridColumns = 8;
     /// tie point 空间均匀化网格行数。
@@ -191,6 +193,21 @@ struct IncrementalSfmResult
     int baTracksFiltered = 0;  ///< 最终全局 BA 过滤的离群点数
     int baRefinedIntrinsicCount = 0;    ///< 最终全局 BA 中发生共享内参更新的相机数量
     double baSharedFocalScale = 1.0;    ///< 最终全局 BA 后焦距相对输入焦距的平均尺度
+    int priorTracksAccepted = 0;
+    int priorTracksRejected = 0;
+    int priorObservationsAccepted = 0;
+    int priorObservationConflicts = 0;
+    std::vector<std::string> priorTrackDiagnostics;
+    bool controlNetworkApplied = false;
+    int controlPointConstraintCount = 0;
+    int checkPointResidualCount = 0;
+    int controlScaleBarConstraintCount = 0;
+    int checkScaleBarResidualCount = 0;
+    double controlPointRms = 0.0;
+    double checkPointRms = 0.0;
+    double controlScaleBarRms = 0.0;
+    double checkScaleBarRms = 0.0;
+    std::string controlNetworkError;
 
     /// 重建容器的指针（调用方获得所有权）
     std::shared_ptr<SfmReconstruction> reconstruction;
@@ -262,6 +279,9 @@ class IncrementalSfm
      */
     void addMatches(ImageId id1, ImageId id2, const std::vector<FeatureMatch> &matches);
 
+    void addPriorTrack(const control_points::PriorTrack &track);
+    void addPriorScaleBar(const control_points::PriorScaleBar &scaleBar);
+
     // ---- 执行 ----
 
     /**
@@ -329,6 +349,17 @@ class IncrementalSfm
     /// 永久失败图像集合（超过最大重试次数后移入）
     std::unordered_set<ImageId> _permanentlyFailedImages;
 
+    std::vector<control_points::PriorTrack> _pendingPriorTracks;
+    std::vector<control_points::PriorScaleBar> _pendingPriorScaleBars;
+    std::vector<Track> _materializedPriorTracks;
+    control_points::PriorTrackDiagnostics _priorTrackDiagnostics;
+    bool _priorTracksMaterialized = false;
+    bool _controlNetworkApplied = false;
+    control_points::ControlNetworkResult _controlNetworkResult;
+    int _lastControlPointConstraintCount = 0;
+    int _lastControlScaleBarConstraintCount = 0;
+    control_points::SimilarityTransform3D _controlNetworkTransform;
+
     // ---- 内部流程 ----
 
     /**
@@ -342,6 +373,14 @@ class IncrementalSfm
      * @return 成功返回 true
      */
     bool getCamera(ImageId imageId, Camera &cam) const;
+
+    void materializePriorTracks();
+    void applyPriorTrackDiagnostics(IncrementalSfmResult *result) const;
+    void applyControlNetworkDiagnostics(IncrementalSfmResult *result) const;
+    bool tryApplyControlNetwork(const std::vector<ImageId> &baImageIds,
+                                std::vector<Camera> *baCameras);
+    const control_points::PriorTrack *priorTrack(const std::string &markerId) const;
+    void tagPriorTrackSource(Track *track) const;
 
     std::vector<BACameraPosePrior> buildCameraPosePriorsFromInputCameras(
         const std::vector<ImageId> &imageIds) const;

@@ -26,12 +26,13 @@ void PatchMatchDepthEstimator::cleanupGpuImageCache()
 bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat &,
     const std::vector<cv::Mat> &,
-    const PositiveDepthCameraModel &,
-    const std::vector<PositiveDepthCameraModel> &,
+    const Camera &,
+    const std::vector<Camera> &,
     float, float,
     const PatchMatchConfig &,
     cv::Mat &, cv::Mat *,
     std::string *errorMsg,
+    const cv::Mat *,
     const cv::Mat *)
 {
     if (errorMsg) *errorMsg = "CUDA 不可用（编译时未启用）";
@@ -43,7 +44,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
 std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
     const cv::Mat &,
     const cv::Mat &,
-    const PositiveDepthCameraModel &,
+    const Camera &,
     const cv::Mat &,
     float, float,
     std::string *errorMsg,
@@ -55,9 +56,9 @@ std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
 
 bool PatchMatchDepthEstimator::estimate(
     const cv::Mat &, const std::vector<cv::Mat> &,
-    const PositiveDepthCameraModel &, const std::vector<PositiveDepthCameraModel> &,
+    const Camera &, const std::vector<Camera> &,
     float, float, const PatchMatchConfig &,
-    cv::Mat &, cv::Mat *, std::string *errorMsg, const cv::Mat *)
+    cv::Mat &, cv::Mat *, std::string *errorMsg, const cv::Mat *, const cv::Mat *)
 {
     if (errorMsg) *errorMsg = "CUDA unavailable (PatchMatch requires CUDA)";
     return false;

@@ -44,7 +44,7 @@ cv::Mat buildGrayDisparityMask(const cv::Mat &disparity)
 bool writeOutputs(const cv::Mat &grayL,
                   const Camera &leftCamera,
                   const Camera &rightCamera,
-                  const PositiveDepthCameraModel &rectCam,
+                  const Camera &rectCam,
                   const std::string &outputDir,
                   const StereoPipelineConfig &config,
                   StereoPipelineResult &res,
@@ -111,8 +111,8 @@ bool runOriginalDepthPath(const cv::Mat &grayL,
 {
     QDir().mkpath(QString::fromStdString(outputDir));
 
-    auto pdmL = leftCamera.toPositiveDepthModel();
-    auto pdmR = rightCamera.toPositiveDepthModel();
+    const Camera &pdmL = leftCamera;
+    const Camera &pdmR = rightCamera;
 
     auto C1 = leftCamera.cameraCenter();
     auto C2 = rightCamera.cameraCenter();
@@ -175,17 +175,28 @@ bool runOriginalDepthPath(const cv::Mat &grayL,
             {
                 float dL = depthMap.at<float>(r, c);
                 if (dL <= 0) continue;
-                float wx, wy, wz;
-                pdmL.unproject(static_cast<float>(c), static_cast<float>(r), dL, wx, wy, wz);
-                float uR, vR;
-                if (!pdmR.project(wx, wy, wz, uR, vR))
+                const double pixelLeft[2] = {
+                    static_cast<double>(c),
+                    static_cast<double>(r)
+                };
+                double world[3] = {};
+                if (!pdmL.unprojectPixel(pixelLeft, static_cast<double>(dL), world))
+                {
+                    depthMap.at<float>(r, c) = 0.0f;
+                    ++lrRejected;
+                    ++lrOob;
+                    continue;
+                }
+                double pixelRight[2] = {};
+                double rightDepth = 0.0;
+                if (!pdmR.projectWorldPointWithDepth(world, pixelRight, rightDepth))
                 {
                     depthMap.at<float>(r, c) = 0.0f;
                     ++lrRejected; ++lrOob;
                     continue;
                 }
-                int cR = static_cast<int>(std::round(uR));
-                int rR = static_cast<int>(std::round(vR));
+                int cR = static_cast<int>(std::round(pixelRight[0]));
+                int rR = static_cast<int>(std::round(pixelRight[1]));
                 if (cR < 0 || cR >= depthMapR.cols || rR < 0 || rR >= depthMapR.rows)
                 {
                     depthMap.at<float>(r, c) = 0.0f;
@@ -344,8 +355,8 @@ bool runRectifiedDisparityPath(const cv::Mat &grayL,
     EpipolarRectifier::RectifiedPair rect;
     std::string rectErr;
     if (!EpipolarRectifier::rectify(grayL, grayR,
-                                    leftCamera.toPositiveDepthModel(),
-                                    rightCamera.toPositiveDepthModel(),
+                                    leftCamera,
+                                    rightCamera,
                                     rect, &rectErr))
     {
         res.errorMsg = "Rectification failed: " + rectErr;

@@ -130,16 +130,67 @@ TEST(SfmQualityReportTest, FlagsSparseCloudThatShouldNotFeedMvs)
     const xjw::SfmQualityReport report = xjw::analyzeSfmQuality(points, options);
 
     EXPECT_FALSE(report.acceptableForMvs);
-    EXPECT_EQ(report.qualityStatus, QStringLiteral("warn"));
+    EXPECT_EQ(report.qualityStatus, QStringLiteral("blocked"));
     EXPECT_TRUE(report.qualityWarnings.contains(QStringLiteral("low_registered_image_coverage")));
     EXPECT_TRUE(report.qualityWarnings.contains(QStringLiteral("too_many_two_view_tracks")));
     EXPECT_TRUE(report.qualityWarnings.contains(QStringLiteral("high_reprojection_error")));
 
     const QJsonObject gate = report.toJson().value(QStringLiteral("quality_gate")).toObject();
     EXPECT_FALSE(gate.value(QStringLiteral("acceptable_for_mvs")).toBool(true));
-    EXPECT_EQ(gate.value(QStringLiteral("status")).toString(), QStringLiteral("warn"));
+    EXPECT_EQ(gate.value(QStringLiteral("status")).toString(), QStringLiteral("blocked"));
     EXPECT_TRUE(gate.value(QStringLiteral("warnings")).toArray().contains(
         QStringLiteral("too_many_two_view_tracks")));
+}
+
+TEST(SfmQualityReportTest, AdvisesWhenTwoViewRatioIsHighButStillUsable)
+{
+    std::vector<xjw::SfmQualityPoint> points;
+    for (int index = 0; index < 6; ++index)
+    {
+        points.push_back(makeQualityPoint(2, 0.5, 6.0, {{0, 10.0, 10.0}, {1, 20.0, 20.0}}));
+    }
+    for (int index = 0; index < 2; ++index)
+    {
+        points.push_back(makeQualityPoint(
+            3, 0.5, 6.0, {{0, 10.0, 10.0}, {1, 20.0, 20.0}, {2, 30.0, 30.0}}));
+    }
+
+    xjw::SfmQualityReportOptions options;
+    options.totalImageCount = 3;
+    options.registeredImageCount = 3;
+    const xjw::SfmQualityReport report = xjw::analyzeSfmQuality(points, options);
+
+    EXPECT_TRUE(report.acceptableForMvs);
+    EXPECT_EQ(report.qualityStatus, QStringLiteral("warn"));
+    EXPECT_TRUE(report.qualityWarnings.isEmpty());
+    EXPECT_TRUE(report.qualityAdvisories.contains(QStringLiteral("high_two_view_track_ratio")));
+
+    const QJsonObject gate = report.toJson().value(QStringLiteral("quality_gate")).toObject();
+    EXPECT_TRUE(gate.value(QStringLiteral("acceptable_for_mvs")).toBool(false));
+    EXPECT_TRUE(gate.value(QStringLiteral("warnings")).toArray().isEmpty());
+    EXPECT_TRUE(gate.value(QStringLiteral("advisories")).toArray().contains(
+        QStringLiteral("high_two_view_track_ratio")));
+}
+
+TEST(SfmQualityReportTest, BlocksWhenTwoViewRatioExceedsProductionLimit)
+{
+    std::vector<xjw::SfmQualityPoint> points;
+    for (int index = 0; index < 7; ++index)
+    {
+        points.push_back(makeQualityPoint(2, 0.5, 6.0, {{0, 10.0, 10.0}, {1, 20.0, 20.0}}));
+    }
+    points.push_back(makeQualityPoint(
+        3, 0.5, 6.0, {{0, 10.0, 10.0}, {1, 20.0, 20.0}, {2, 30.0, 30.0}}));
+
+    xjw::SfmQualityReportOptions options;
+    options.totalImageCount = 3;
+    options.registeredImageCount = 3;
+    const xjw::SfmQualityReport report = xjw::analyzeSfmQuality(points, options);
+
+    EXPECT_FALSE(report.acceptableForMvs);
+    EXPECT_EQ(report.qualityStatus, QStringLiteral("blocked"));
+    EXPECT_TRUE(report.qualityWarnings.contains(QStringLiteral("too_many_two_view_tracks")));
+    EXPECT_FALSE(report.qualityAdvisories.contains(QStringLiteral("high_two_view_track_ratio")));
 }
 
 TEST(SfmQualityReportTest, FlagsPoorObservationSpatialCoverage)

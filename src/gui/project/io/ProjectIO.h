@@ -40,6 +40,11 @@ public:
     // 返回 assets/images/ 目录的绝对路径（预留给打包/复制进项目的影像）
     static QString projectImagesDir(const QString &plascanPath);
 
+    // 返回 assets/control_points/ 目录及标记 sidecar 的标准路径
+    static QString projectControlPointsDir(const QString &plascanPath);
+    static QString markerSetPath(const QString &plascanPath);
+    static QString markerDetectionReviewPath(const QString &plascanPath);
+
     // 返回 .plascan_tmp/ 临时目录的绝对路径
     static QString tmpDir(const QString &plascanPath);
 

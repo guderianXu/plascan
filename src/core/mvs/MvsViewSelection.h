@@ -27,8 +27,7 @@ inline int effectiveMvsViewWidth(const CameraView &view)
     {
         return view.imageWidth;
     }
-    const auto cam = view.positiveDepthModel();
-    return std::max(1, static_cast<int>(std::round(cam.cx * 2.0f)));
+    return std::max(1, static_cast<int>(std::round(view.camera.principalX() * 2.0)));
 }
 
 inline int effectiveMvsViewHeight(const CameraView &view)
@@ -37,8 +36,7 @@ inline int effectiveMvsViewHeight(const CameraView &view)
     {
         return view.imageHeight;
     }
-    const auto cam = view.positiveDepthModel();
-    return std::max(1, static_cast<int>(std::round(cam.cy * 2.0f)));
+    return std::max(1, static_cast<int>(std::round(view.camera.principalY() * 2.0)));
 }
 
 inline bool isMvsSparsePointVisibleInView(const CameraView &view,
@@ -47,35 +45,30 @@ inline bool isMvsSparsePointVisibleInView(const CameraView &view,
                                           int overrideHeight = -1,
                                           float *depthOut = nullptr)
 {
-    const auto cam = view.positiveDepthModel();
-    if (!cam.valid())
+    if (!view.camera.isValid())
     {
         return false;
     }
 
-    const float z = cam.R_cw[6] * point[0] + cam.R_cw[7] * point[1] + cam.R_cw[8] * point[2] + cam.T[2];
-    if (z <= 0.f)
-    {
-        return false;
-    }
-
-    float u = 0.f;
-    float v = 0.f;
-    if (!cam.project(point[0], point[1], point[2], u, v))
+    const double world[3] = {point[0], point[1], point[2]};
+    double pixel[2] = {0.0, 0.0};
+    double positive_depth = 0.0;
+    if (!view.camera.projectWorldPointWithDepth(world, pixel, positive_depth))
     {
         return false;
     }
 
     const int width = overrideWidth > 0 ? overrideWidth : effectiveMvsViewWidth(view);
     const int height = overrideHeight > 0 ? overrideHeight : effectiveMvsViewHeight(view);
-    if (u < 0.f || v < 0.f || u >= static_cast<float>(width) || v >= static_cast<float>(height))
+    if (pixel[0] < 0.0 || pixel[1] < 0.0
+        || pixel[0] >= static_cast<double>(width) || pixel[1] >= static_cast<double>(height))
     {
         return false;
     }
 
     if (depthOut)
     {
-        *depthOut = z;
+        *depthOut = static_cast<float>(positive_depth);
     }
     return true;
 }
@@ -84,15 +77,15 @@ inline float mvsTriangulationAngleDeg(const CameraView &a,
                                       const CameraView &b,
                                       const std::array<float, 3> &point)
 {
-    const auto ca = a.positiveDepthModel();
-    const auto cb = b.positiveDepthModel();
+    const std::array<double, 3> ca = a.camera.cameraCenter();
+    const std::array<double, 3> cb = b.camera.cameraCenter();
 
-    const float ax = point[0] - ca.C[0];
-    const float ay = point[1] - ca.C[1];
-    const float az = point[2] - ca.C[2];
-    const float bx = point[0] - cb.C[0];
-    const float by = point[1] - cb.C[1];
-    const float bz = point[2] - cb.C[2];
+    const float ax = point[0] - static_cast<float>(ca[0]);
+    const float ay = point[1] - static_cast<float>(ca[1]);
+    const float az = point[2] - static_cast<float>(ca[2]);
+    const float bx = point[0] - static_cast<float>(cb[0]);
+    const float by = point[1] - static_cast<float>(cb[1]);
+    const float bz = point[2] - static_cast<float>(cb[2]);
     const float an = std::sqrt(ax * ax + ay * ay + az * az);
     const float bn = std::sqrt(bx * bx + by * by + bz * bz);
     if (an <= 1e-6f || bn <= 1e-6f)

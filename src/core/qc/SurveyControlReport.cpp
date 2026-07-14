@@ -164,6 +164,34 @@ double thresholdValue(const QJsonObject &thresholds,
 QJsonObject buildSurveyControlSummary(const QJsonObject &projectMeta)
 {
     const QJsonObject survey = projectMeta.value(QStringLiteral("survey_control")).toObject();
+    if (survey.isEmpty())
+    {
+        const QJsonObject markerSet = projectMeta.value(QStringLiteral("marker_set")).toObject();
+        const int controlCount = markerSet.value(QStringLiteral("control_point_count")).toInt();
+        const int checkCount = markerSet.value(QStringLiteral("check_point_count")).toInt();
+        const int scaleBarCount = markerSet.value(QStringLiteral("scale_bar_count")).toInt();
+        const bool hasMarkerData = controlCount > 0 || checkCount > 0 || scaleBarCount > 0;
+
+        QJsonObject summary;
+        summary[QStringLiteral("control_point_count")] = controlCount;
+        summary[QStringLiteral("enabled_control_point_count")] = controlCount;
+        summary[QStringLiteral("control_point_residual_count")] = 0;
+        summary[QStringLiteral("control_point_rmse_m")] = 0.0;
+        summary[QStringLiteral("control_point_max_residual_m")] = 0.0;
+        summary[QStringLiteral("check_point_count")] = checkCount;
+        summary[QStringLiteral("enabled_check_point_count")] = checkCount;
+        summary[QStringLiteral("check_point_residual_count")] = 0;
+        summary[QStringLiteral("check_point_rmse_m")] = 0.0;
+        summary[QStringLiteral("check_point_max_residual_m")] = 0.0;
+        summary[QStringLiteral("scale_bar_count")] = scaleBarCount;
+        summary[QStringLiteral("enabled_scale_bar_count")] = scaleBarCount;
+        summary[QStringLiteral("scale_bar_residual_count")] = 0;
+        summary[QStringLiteral("scale_bar_rmse_m")] = 0.0;
+        summary[QStringLiteral("scale_bar_max_residual_m")] = 0.0;
+        summary[QStringLiteral("status")] = hasMarkerData
+            ? QStringLiteral("ok") : QStringLiteral("missing");
+        return summary;
+    }
     const QJsonArray controlPoints = survey.value(QStringLiteral("control_points")).toArray();
     const QJsonArray checkPoints = survey.value(QStringLiteral("check_points")).toArray();
     const QJsonArray scaleBars = survey.value(QStringLiteral("scale_bars")).toArray();

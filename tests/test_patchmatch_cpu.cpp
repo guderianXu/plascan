@@ -80,8 +80,8 @@ cv::Mat makeShiftedImage(const cv::Mat &image, int disparity)
 CudaPatchMatchRunStats executeCudaPatchMatchCase(
     const cv::Mat &refGray,
     const cv::Mat &srcGray,
-    const xjw::mvs::PositiveDepthCameraModel &refCam,
-    const xjw::mvs::PositiveDepthCameraModel &srcCam,
+    const xjw::Camera &refCam,
+    const xjw::Camera &srcCam,
     bool useParallelSweep,
     int iterations)
 {
@@ -103,7 +103,7 @@ CudaPatchMatchRunStats executeCudaPatchMatchCase(
         refGray,
         std::vector<cv::Mat>{srcGray},
         refCam,
-        std::vector<xjw::mvs::PositiveDepthCameraModel>{srcCam},
+        std::vector<xjw::Camera>{srcCam},
         5.0f,
         15.0f,
         config,
@@ -168,12 +168,12 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
                                    IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
                                    1, 1,
                                    identity, refCenter,
-                                   false).toPositiveDepthModel();
+                                   false).normalizedForPositiveDepth();
     const auto srcCam = makeCamera(FOCAL, FOCAL,
                                    IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
                                    1, 1,
                                    identity, srcCenter,
-                                   false).toPositiveDepthModel();
+                                   false).normalizedForPositiveDepth();
 
     xjw::mvs::PatchMatchConfig config;
     config.useCuda = false;
@@ -194,7 +194,7 @@ TEST(PatchMatchCpuRegressionTest, RecoversFrontoParallelPlaneAtExpectedDepth)
         refGray,
         std::vector<cv::Mat>{srcGray},
         refCam,
-        std::vector<xjw::mvs::PositiveDepthCameraModel>{srcCam},
+        std::vector<xjw::Camera>{srcCam},
         5.0f,
         15.0f,
         config,
@@ -260,12 +260,12 @@ CudaPatchMatchRunStats runCudaPatchMatchSmallPlane(bool useParallelSweep)
                                    IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
                                    1, 1,
                                    identity, refCenter,
-                                   false).toPositiveDepthModel();
+                                   false).normalizedForPositiveDepth();
     const auto srcCam = makeCamera(FOCAL, FOCAL,
                                    IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
                                    1, 1,
                                    identity, srcCenter,
-                                   false).toPositiveDepthModel();
+                                   false).normalizedForPositiveDepth();
 
     CudaPatchMatchRunStats stats = executeCudaPatchMatchCase(refGray,
                                                              srcGray,
@@ -324,12 +324,12 @@ TEST(PatchMatchCudaBenchmarkTest, DISABLED_CompareParallelAndLegacySweepAfterWar
                                    IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
                                    1, 1,
                                    identity, refCenter,
-                                   false).toPositiveDepthModel();
+                                   false).normalizedForPositiveDepth();
     const auto srcCam = makeCamera(FOCAL, FOCAL,
                                    IMAGE_WIDTH * 0.5, IMAGE_HEIGHT * 0.5,
                                    1, 1,
                                    identity, srcCenter,
-                                   false).toPositiveDepthModel();
+                                   false).normalizedForPositiveDepth();
 
     (void)executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, true, 4);
     (void)executeCudaPatchMatchCase(refGray, srcGray, refCam, srcCam, false, 4);

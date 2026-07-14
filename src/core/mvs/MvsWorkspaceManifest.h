@@ -23,6 +23,11 @@ struct MvsDepthFrameRecord
     double meanDepthConfidence = 0.0;
     int validPixelCount = 0;
     QJsonObject depthQuality;
+    QJsonObject qualityDecision;
+    QJsonArray pyramidLevels;
+    QString sceneProfile;
+    QString filterMode;
+    QString acceptance;
     QJsonObject depthPostprocess;
     QJsonObject cameraModel;
     QString status;

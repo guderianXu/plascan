@@ -271,6 +271,61 @@ QIcon makeZoomToolbarIcon(bool zoomIn)
     return QIcon(pixmap);
 }
 
+QIcon makeFeaturePointsToolbarIcon()
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(QColor(128, 132, 136));
+    for (const QPointF &point : {QPointF(13, 13), QPointF(28, 11), QPointF(43, 15),
+                                 QPointF(10, 29), QPointF(27, 28), QPointF(45, 31),
+                                 QPointF(15, 44), QPointF(31, 45), QPointF(46, 43)})
+    {
+        painter.drawEllipse(point, 4.2, 4.2);
+    }
+    return QIcon(pixmap);
+}
+
+QIcon makeMaskToolbarIcon()
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor color(132, 136, 140);
+    painter.setPen(QPen(color, 4.0));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRect(QRectF(6.0, 6.0, 44.0, 44.0));
+    painter.setBrush(color);
+    painter.setPen(Qt::NoPen);
+    painter.drawEllipse(QRectF(16.0, 16.0, 24.0, 24.0));
+    return QIcon(pixmap);
+}
+
+QIcon makeResetViewToolbarIcon()
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+    const QColor color(132, 136, 140);
+    painter.setPen(QPen(color, 3.5, Qt::SolidLine, Qt::RoundCap));
+    painter.drawLine(QPointF(28, 20), QPointF(28, 5));
+    painter.drawLine(QPointF(28, 36), QPointF(28, 51));
+    painter.drawLine(QPointF(20, 28), QPointF(5, 28));
+    painter.drawLine(QPointF(36, 28), QPointF(51, 28));
+    painter.setPen(Qt::NoPen);
+    painter.setBrush(color);
+    painter.drawPolygon(QPolygonF{QPointF(28, 3), QPointF(21, 12), QPointF(35, 12)});
+    painter.drawPolygon(QPolygonF{QPointF(28, 53), QPointF(21, 44), QPointF(35, 44)});
+    painter.drawPolygon(QPolygonF{QPointF(3, 28), QPointF(12, 21), QPointF(12, 35)});
+    painter.drawPolygon(QPolygonF{QPointF(53, 28), QPointF(44, 21), QPointF(44, 35)});
+    painter.drawRect(QRectF(22, 22, 12, 12));
+    return QIcon(pixmap);
+}
+
 QIcon makeSaveToolbarIcon()
 {
     QPixmap pixmap(32, 32);
@@ -455,7 +510,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                        QStringLiteral("actionToggleCameraImages"),
                                                        tr("显示图像"),
                                                        false);
-        _toggleCameraImagesAct->setToolTip(tr("显示或隐藏当前选中相机的图像平面"));
+        _toggleCameraImagesAct->setToolTip(tr("显示或隐藏与当前模型观察方向最接近的相机图像"));
 
         imageMenu->addSeparator();
 
@@ -465,7 +520,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                                  QStringLiteral("actionShowCameraImagesInForeground"),
                                                                  tr("在前景中显示"),
                                                                  true);
-        _showCameraImagesInForegroundAct->setToolTip(tr("将当前相机图像绘制在相机缩略图和标签前方"));
+        _showCameraImagesInForegroundAct->setToolTip(tr("将当前相机图像绘制在三维模型前方，图像覆盖模型"));
 
         _showCameraImagesInBackgroundAct = ensureCheckableAction(_mainWindow,
                                                                  imageMenu,
@@ -473,7 +528,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                                  QStringLiteral("actionShowCameraImagesInBackground"),
                                                                  tr("在后景中显示"),
                                                                  false);
-        _showCameraImagesInBackgroundAct->setToolTip(tr("将当前相机图像绘制在相机缩略图和标签后方"));
+        _showCameraImagesInBackgroundAct->setToolTip(tr("将当前相机图像绘制在三维模型后方，模型覆盖图像"));
 
         auto *displayLayerGroup =
             imageMenu->findChild<QActionGroup *>(QStringLiteral("actionGroupCameraImageDisplayLayer"));
@@ -500,7 +555,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     QStringLiteral("actionLockCameraImage"),
                                                     tr("锁定图像"),
                                                     false);
-        _lockCameraImageAct->setToolTip(tr("保持当前显示的相机图像，不随照片选择变化切换"));
+        _lockCameraImageAct->setToolTip(tr("固定当前相机图像；模型视角仍可自由旋转"));
     };
 
     auto installCameraToolbarButton = [this]()
@@ -596,6 +651,39 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         installButton(_rotateImageRightAct,
                       QStringLiteral("toolButtonRotateImageRight"),
                       _rotateImageRightToolbarWidgetAct);
+    };
+
+    auto installImageOverlayToolbarButtons = [this]()
+    {
+        if (!_toolBar || !_showFeaturePointsAct || !_showFeatureResidualsAct
+            || !_showMaskOverlayAct || !_resetViewAct || !_featureVisualizationAct)
+        {
+            return;
+        }
+
+        if (!_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonResetImageView")))
+        {
+            _resetImageViewToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
+                _toolBar, _resetViewAct, QStringLiteral("toolButtonResetImageView"),
+                _toolbarEditingSeparatorAct);
+        }
+        if (!_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonShowFeaturePoints")))
+        {
+            auto *pointsMenu = new QMenu(_toolBar);
+            pointsMenu->setObjectName(QStringLiteral("menuToolbarFeaturePoints"));
+            pointsMenu->addAction(_showFeatureResidualsAct);
+            pointsMenu->addSeparator();
+            pointsMenu->addAction(_featureVisualizationAct);
+            _showFeaturePointsToolbarWidgetAct = xjw::gui::toolbar::createToolbarSplitButton(
+                _toolBar, _showFeaturePointsAct, pointsMenu,
+                QStringLiteral("toolButtonShowFeaturePoints"), _toolbarEditingSeparatorAct);
+        }
+        if (!_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonShowMaskOverlay")))
+        {
+            _showMaskOverlayToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
+                _toolBar, _showMaskOverlayAct, QStringLiteral("toolButtonShowMaskOverlay"),
+                _toolbarEditingSeparatorAct);
+        }
     };
 
     auto installZoomToolbarButtons = [this]()
@@ -711,6 +799,25 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _toggleHenanUniversityBrandAct =
             findNamedChild<QAction>(_mainWindow, "actionToggleHenanUniversityBrand");
         _featureVisualizationAct = findNamedChild<QAction>(_mainWindow, "actionFeatureVisualization");
+        _showFeaturePointsAct = ensureCheckableAction(_mainWindow, _mainWindow, viewMenu,
+                                                      QStringLiteral("actionShowFeaturePoints"),
+                                                      tr("显示点"), true,
+                                                      _featureVisualizationAct);
+        _showFeatureResidualsAct = ensureCheckableAction(_mainWindow, _mainWindow, viewMenu,
+                                                         QStringLiteral("actionShowFeatureResiduals"),
+                                                         tr("显示点残差"), false,
+                                                         _featureVisualizationAct);
+        _showMaskOverlayAct = ensureCheckableAction(_mainWindow, _mainWindow, viewMenu,
+                                                    QStringLiteral("actionShowMaskOverlay"),
+                                                    tr("显示蒙版"), true,
+                                                    _featureVisualizationAct);
+        _showFeaturePointsAct->setIcon(makeFeaturePointsToolbarIcon());
+        _showMaskOverlayAct->setIcon(makeMaskToolbarIcon());
+        if (_resetViewAct)
+        {
+            _resetViewAct->setIcon(makeResetViewToolbarIcon());
+            _resetViewAct->setToolTip(tr("重置视图"));
+        }
         _toggleLogAct = findNamedChild<QAction>(_mainWindow, "actionToggleLog");
         QObject *windowActionParent = windowMenu
             ? static_cast<QObject *>(windowMenu)
@@ -792,6 +899,11 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _viewWorkflowReportAct = findNamedChild<QAction>(_mainWindow, "actionViewWorkflowReport");
         _cameraConvertAct = findNamedChild<QAction>(_mainWindow, "actionCameraConvert");
         _surveyControlAct = findNamedChild<QAction>(_mainWindow, "actionSurveyControl");
+        _detectMarkersAct = findNamedChild<QAction>(_mainWindow, "actionDetectMarkers");
+        _reviewMarkerDetectionsAct = findNamedChild<QAction>(
+            _mainWindow, "actionReviewMarkerDetections");
+        _printMarkersAct = findNamedChild<QAction>(_mainWindow, "actionPrintMarkers");
+        _markersMenu = findNamedChild<QMenu>(_mainWindow, "menuMarkers");
         _importReferenceDatasetAct = findNamedChild<QAction>(_mainWindow, "actionImportReferenceDataset");
         _referenceQualityCheckAct = findNamedChild<QAction>(_mainWindow, "actionReferenceQualityCheck");
         _referenceTerrainBundleAdjustAct = findNamedChild<QAction>(_mainWindow, "actionReferenceTerrainBundleAdjust");
@@ -979,6 +1091,62 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                 }
             }
         }
+        if (!_markersMenu && toolsMenu)
+        {
+            _markersMenu = new QMenu(tr("标记"), toolsMenu);
+            _markersMenu->setObjectName(QStringLiteral("menuMarkers"));
+            QAction *before = _surveyControlAct
+                ? _surveyControlAct
+                : (_importReferenceDatasetAct ? _importReferenceDatasetAct : _viewWorkflowReportAct);
+            if (before)
+            {
+                toolsMenu->insertMenu(before, _markersMenu);
+            }
+            else
+            {
+                toolsMenu->addMenu(_markersMenu);
+            }
+        }
+        if (!_detectMarkersAct)
+        {
+            QObject *action_parent = _markersMenu
+                ? static_cast<QObject *>(_markersMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _detectMarkersAct = new QAction(tr("检测标靶..."), action_parent);
+            _detectMarkersAct->setObjectName(QStringLiteral("actionDetectMarkers"));
+            _detectMarkersAct->setToolTip(tr("在项目照片中后台检测编码或非编码标靶"));
+        }
+        if (_markersMenu && !_markersMenu->actions().contains(_detectMarkersAct))
+        {
+            _markersMenu->addAction(_detectMarkersAct);
+        }
+        if (!_reviewMarkerDetectionsAct)
+        {
+            QObject *action_parent = _markersMenu
+                ? static_cast<QObject *>(_markersMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _reviewMarkerDetectionsAct = new QAction(tr("复核检测候选..."), action_parent);
+            _reviewMarkerDetectionsAct->setObjectName(
+                QStringLiteral("actionReviewMarkerDetections"));
+            _reviewMarkerDetectionsAct->setToolTip(tr("检查未归并候选和自动检测冲突"));
+        }
+        if (_markersMenu && !_markersMenu->actions().contains(_reviewMarkerDetectionsAct))
+        {
+            _markersMenu->addAction(_reviewMarkerDetectionsAct);
+        }
+        if (!_printMarkersAct)
+        {
+            QObject *action_parent = _markersMenu
+                ? static_cast<QObject *>(_markersMenu)
+                : static_cast<QObject *>(_mainWindow);
+            _printMarkersAct = new QAction(tr("打印标靶..."), action_parent);
+            _printMarkersAct->setObjectName(QStringLiteral("actionPrintMarkers"));
+            _printMarkersAct->setToolTip(tr("生成具有明确物理尺寸的编码或非编码标靶 PDF"));
+        }
+        if (_markersMenu && !_markersMenu->actions().contains(_printMarkersAct))
+        {
+            _markersMenu->addAction(_printMarkersAct);
+        }
         if (!_referenceQualityCheckAct)
         {
             QObject *actionParent = toolsMenu
@@ -1076,6 +1244,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         installCameraToolbarButton();
         installCameraImageToolbarButton();
         installImageRotationToolbarButtons();
+        installImageOverlayToolbarButtons();
         setContextualToolbarVisibility(true, false);
 
         return;
@@ -1144,6 +1313,22 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     viewMenu->addSeparator();
     // 特征点可视化设置对话框入口
     _featureVisualizationAct = viewMenu->addAction(tr("特征点 可视化设置..."));
+    _showFeaturePointsAct = ensureCheckableAction(_mainWindow, viewMenu, viewMenu,
+                                                  QStringLiteral("actionShowFeaturePoints"),
+                                                  tr("显示点"), true,
+                                                  _featureVisualizationAct);
+    _showFeatureResidualsAct = ensureCheckableAction(_mainWindow, viewMenu, viewMenu,
+                                                     QStringLiteral("actionShowFeatureResiduals"),
+                                                     tr("显示点残差"), false,
+                                                     _featureVisualizationAct);
+    _showMaskOverlayAct = ensureCheckableAction(_mainWindow, viewMenu, viewMenu,
+                                                QStringLiteral("actionShowMaskOverlay"),
+                                                tr("显示蒙版"), true,
+                                                _featureVisualizationAct);
+    _showFeaturePointsAct->setIcon(makeFeaturePointsToolbarIcon());
+    _showMaskOverlayAct->setIcon(makeMaskToolbarIcon());
+    _resetViewAct->setIcon(makeResetViewToolbarIcon());
+    _resetViewAct->setToolTip(tr("重置视图"));
     viewMenu->addSeparator();
 
     // 窗口面板子菜单：使用 QWidgetAction + WindowPanel 实现带复选框的面板开关列表
@@ -1241,6 +1426,19 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     installTiePointsMenu(toolsMenu);
     toolsMenu->addSeparator();
 
+    _markersMenu = toolsMenu->addMenu(tr("标记"));
+    _markersMenu->setObjectName(QStringLiteral("menuMarkers"));
+    _detectMarkersAct = _markersMenu->addAction(tr("检测标靶..."));
+    _detectMarkersAct->setObjectName(QStringLiteral("actionDetectMarkers"));
+    _detectMarkersAct->setToolTip(tr("在项目照片中后台检测编码或非编码标靶"));
+    _reviewMarkerDetectionsAct = _markersMenu->addAction(tr("复核检测候选..."));
+    _reviewMarkerDetectionsAct->setObjectName(
+        QStringLiteral("actionReviewMarkerDetections"));
+    _reviewMarkerDetectionsAct->setToolTip(tr("检查未归并候选和自动检测冲突"));
+    _printMarkersAct = _markersMenu->addAction(tr("打印标靶..."));
+    _printMarkersAct->setObjectName(QStringLiteral("actionPrintMarkers"));
+    _printMarkersAct->setToolTip(tr("生成具有明确物理尺寸的编码或非编码标靶 PDF"));
+
     // 质量检查工具
     _overlapAnalysisAct = toolsMenu->addAction(tr("重叠度获取"));
     QMenu *intersectionMenu = toolsMenu->addMenu(tr("前方交汇精度检验"));
@@ -1289,6 +1487,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         installCameraToolbarButton();
         installCameraImageToolbarButton();
         installImageRotationToolbarButtons();
+        installImageOverlayToolbarButtons();
         setContextualToolbarVisibility(true, false);
     }
 }
@@ -1346,6 +1545,9 @@ void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImag
     setButtonVisible(_cameraImageToolbarWidgetAct, showModelTools);
     setButtonVisible(_rotateImageLeftToolbarWidgetAct, showImageTools);
     setButtonVisible(_rotateImageRightToolbarWidgetAct, showImageTools);
+    setButtonVisible(_resetImageViewToolbarWidgetAct, showImageTools);
+    setButtonVisible(_showFeaturePointsToolbarWidgetAct, showImageTools);
+    setButtonVisible(_showMaskOverlayToolbarWidgetAct, showImageTools);
     const bool zoomEnabled = showModelTools || showImageTools;
     _zoomInAct->setEnabled(zoomEnabled);
     _zoomOutAct->setEnabled(zoomEnabled);
@@ -1413,6 +1615,9 @@ QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }
 QAction *MainMenu::resetViewAction() const { return _resetViewAct; }
 QAction *MainMenu::rotateImageLeftAction() const { return _rotateImageLeftAct; }
 QAction *MainMenu::rotateImageRightAction() const { return _rotateImageRightAct; }
+QAction *MainMenu::showFeaturePointsAction() const { return _showFeaturePointsAct; }
+QAction *MainMenu::showFeatureResidualsAction() const { return _showFeatureResidualsAct; }
+QAction *MainMenu::showMaskOverlayAction() const { return _showMaskOverlayAct; }
 QAction *MainMenu::toggleGizmoAction() const { return _toggleGizmoAct; }
 QAction *MainMenu::toggleCamerasAction() const { return _toggleCamerasAct; }
 QAction *MainMenu::toggleDependentCamerasAction() const { return _toggleDependentCamerasAct; }
@@ -1452,6 +1657,9 @@ QAction *MainMenu::manualPointCloudPruneAction() const      { return _manualPoin
 QAction *MainMenu::cameraConvertAction() const              { return _cameraConvertAct; }
 QAction *MainMenu::generateMaskAction() const               { return _generateMaskAct; }
 QAction *MainMenu::surveyControlAction() const              { return _surveyControlAct; }
+QAction *MainMenu::detectMarkersAction() const               { return _detectMarkersAct; }
+QAction *MainMenu::reviewMarkerDetectionsAction() const      { return _reviewMarkerDetectionsAct; }
+QAction *MainMenu::printMarkersAction() const                { return _printMarkersAct; }
 QAction *MainMenu::importReferenceDatasetAction() const     { return _importReferenceDatasetAct; }
 QAction *MainMenu::referenceQualityCheckAction() const      { return _referenceQualityCheckAct; }
 QAction *MainMenu::referenceTerrainBundleAdjustAction() const { return _referenceTerrainBundleAdjustAct; }

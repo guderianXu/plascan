@@ -59,8 +59,63 @@ Camera makeVerticalBaselineCamera(double cx, double cy, double ty)
     return cam;
 }
 
+Camera makeDinoRingCamera(const std::array<double, 9> &rotation_camera_to_world,
+                          const std::array<double, 3> &center)
+{
+    Camera camera;
+    camera.setIntrinsics(3310.4, 3325.5, 316.73, 200.55);
+    camera.setPose(rotation_camera_to_world, center);
+    return camera;
+}
+
 
 } // namespace
+
+TEST(EpipolarRectifier, RejectsImagesThatStillCarryLensDistortion)
+{
+    Camera left_camera = makeCamera(32.0, 24.0, 0.0);
+    Camera right_camera = makeCamera(32.0, 24.0, 0.2);
+    left_camera.setDistortion(0.1, 0.0, 0.0, 0.0, 0.0);
+
+    cv::Mat left_image(48, 64, CV_8U, cv::Scalar(64));
+    cv::Mat right_image(48, 64, CV_8U, cv::Scalar(96));
+    EpipolarRectifier::RectifiedPair rectified;
+    std::string error;
+    EXPECT_FALSE(EpipolarRectifier::rectify(left_image,
+                                            right_image,
+                                            left_camera.normalizedForPositiveDepth(),
+                                            right_camera.normalizedForPositiveDepth(),
+                                            rectified,
+                                            &error));
+    EXPECT_NE(error.find("去畸变"), std::string::npos);
+}
+
+TEST(EpipolarRectifier, RejectsConvergentPairWithoutUsableRectifiedCanvas)
+{
+    const Camera left_camera = makeDinoRingCamera(
+        {-0.143964578361, -0.903665806035, -0.403315364598,
+         0.969652632813, -0.0474333525503, -0.239841305752,
+         0.197606171538, -0.425604192333, 0.883069362015},
+        {0.243378250328, 0.170140221186, -0.604858522898});
+    const Camera right_camera = makeDinoRingCamera(
+        {-0.231436872629, -0.658608111657, -0.716012081872,
+         0.96422332027, -0.0574942602048, -0.258781378564,
+         0.129269371656, -0.750286404865, 0.648350496196},
+        {0.447988592591, 0.182631346554, -0.449273743884});
+
+    cv::Mat left_image(480, 640, CV_8U, cv::Scalar(64));
+    cv::Mat right_image(480, 640, CV_8U, cv::Scalar(96));
+    EpipolarRectifier::RectifiedPair rectified;
+    std::string error;
+
+    EXPECT_FALSE(EpipolarRectifier::rectify(left_image,
+                                            right_image,
+                                            left_camera.normalizedForPositiveDepth(),
+                                            right_camera.normalizedForPositiveDepth(),
+                                            rectified,
+                                            &error));
+    EXPECT_NE(error.find("有效区域"), std::string::npos);
+}
 
 TEST(EpipolarRectifier, RectificationMakesEpipolarRowsMatchAcrossDepths)
 {
@@ -74,8 +129,8 @@ TEST(EpipolarRectifier, RectificationMakesEpipolarRowsMatchAcrossDepths)
     std::string error;
     ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
                                            rightImage,
-                                           leftCamera.toPositiveDepthModel(),
-                                           rightCamera.toPositiveDepthModel(),
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
                                            rect,
                                            &error)) << error;
 
@@ -113,8 +168,8 @@ TEST(EpipolarRectifier, ParallelStereoKeepsPositiveRectifiedDisparity)
     std::string error;
     ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
                                            rightImage,
-                                           leftCamera.toPositiveDepthModel(),
-                                           rightCamera.toPositiveDepthModel(),
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
                                            rect,
                                            &error)) << error;
 
@@ -147,8 +202,8 @@ TEST(EpipolarRectifier, YawedStereoKeepsEpipolarRowsAlignedAcrossPoints)
     std::string error;
     ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
                                            rightImage,
-                                           leftCamera.toPositiveDepthModel(),
-                                           rightCamera.toPositiveDepthModel(),
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
                                            rect,
                                            &error)) << error;
 
@@ -194,8 +249,8 @@ TEST(EpipolarRectifier, VerticalBaselineSetsTransposedForHorizontalDisparity)
     std::string error;
     ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
                                            rightImage,
-                                           leftCamera.toPositiveDepthModel(),
-                                           rightCamera.toPositiveDepthModel(),
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
                                            rect,
                                            &error)) << error;
 
@@ -215,8 +270,8 @@ TEST(EpipolarRectifier, TransposedRectifiedCamerasProjectIntoTransposedPixels)
     std::string error;
     ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
                                            rightImage,
-                                           leftCamera.toPositiveDepthModel(),
-                                           rightCamera.toPositiveDepthModel(),
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
                                            rect,
                                            &error)) << error;
     ASSERT_TRUE(rect.transposed);
@@ -234,25 +289,15 @@ TEST(EpipolarRectifier, TransposedRectifiedCamerasProjectIntoTransposedPixels)
     applyHomography(rect.H1, leftPixel[0], leftPixel[1], leftRectX, leftRectY);
     applyHomography(rect.H2, rightPixel[0], rightPixel[1], rightRectX, rightRectY);
 
-    float leftProjX = 0.0f;
-    float leftProjY = 0.0f;
-    float rightProjX = 0.0f;
-    float rightProjY = 0.0f;
-    ASSERT_TRUE(rect.rectCamLeft.project(static_cast<float>(world[0]),
-                                         static_cast<float>(world[1]),
-                                         static_cast<float>(world[2]),
-                                         leftProjX,
-                                         leftProjY));
-    ASSERT_TRUE(rect.rectCamRight.project(static_cast<float>(world[0]),
-                                          static_cast<float>(world[1]),
-                                          static_cast<float>(world[2]),
-                                          rightProjX,
-                                          rightProjY));
+    double leftProjected[2] = {};
+    double rightProjected[2] = {};
+    ASSERT_TRUE(rect.rectCamLeft.projectWorldPoint(world, leftProjected));
+    ASSERT_TRUE(rect.rectCamRight.projectWorldPoint(world, rightProjected));
 
-    EXPECT_NEAR(leftProjX, static_cast<float>(leftRectX), 1.0f);
-    EXPECT_NEAR(leftProjY, static_cast<float>(leftRectY), 1.0f);
-    EXPECT_NEAR(rightProjX, static_cast<float>(rightRectX), 1.0f);
-    EXPECT_NEAR(rightProjY, static_cast<float>(rightRectY), 1.0f);
+    EXPECT_NEAR(leftProjected[0], leftRectX, 1.0);
+    EXPECT_NEAR(leftProjected[1], leftRectY, 1.0);
+    EXPECT_NEAR(rightProjected[0], rightRectX, 1.0);
+    EXPECT_NEAR(rightProjected[1], rightRectY, 1.0);
 }
 
 
@@ -268,41 +313,27 @@ TEST(EpipolarRectifier, TransposedRectifiedCameraRawFieldsMatchProjection)
     std::string error;
     ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
                                            rightImage,
-                                           leftCamera.toPositiveDepthModel(),
-                                           rightCamera.toPositiveDepthModel(),
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
                                            rect,
                                            &error)) << error;
     ASSERT_TRUE(rect.transposed);
 
     const double world[3] = {0.1, 0.05, 5.0};
 
-    float projX = 0.0f;
-    float projY = 0.0f;
-    ASSERT_TRUE(rect.rectCamLeft.project(static_cast<float>(world[0]),
-                                         static_cast<float>(world[1]),
-                                         static_cast<float>(world[2]),
-                                         projX,
-                                         projY));
+    double projected[2] = {0.0, 0.0};
+    double cameraZ = 0.0;
+    ASSERT_TRUE(rect.rectCamLeft.projectWorldPointWithDepth(world, projected, cameraZ));
 
-    const float cameraX = rect.rectCamLeft.R_cw[0] * static_cast<float>(world[0])
-                        + rect.rectCamLeft.R_cw[1] * static_cast<float>(world[1])
-                        + rect.rectCamLeft.R_cw[2] * static_cast<float>(world[2])
-                        + rect.rectCamLeft.T[0];
-    const float cameraY = rect.rectCamLeft.R_cw[3] * static_cast<float>(world[0])
-                        + rect.rectCamLeft.R_cw[4] * static_cast<float>(world[1])
-                        + rect.rectCamLeft.R_cw[5] * static_cast<float>(world[2])
-                        + rect.rectCamLeft.T[1];
-    const float cameraZ = rect.rectCamLeft.R_cw[6] * static_cast<float>(world[0])
-                        + rect.rectCamLeft.R_cw[7] * static_cast<float>(world[1])
-                        + rect.rectCamLeft.R_cw[8] * static_cast<float>(world[2])
-                        + rect.rectCamLeft.T[2];
-    ASSERT_GT(cameraZ, 0.0f);
+    double camera_point[3] = {0.0, 0.0, 0.0};
+    rect.rectCamLeft.worldToCamera(world, camera_point);
+    ASSERT_GT(cameraZ, 0.0);
+    const Camera::Intrinsics intrinsics = rect.rectCamLeft.intrinsics();
+    const double rawX = intrinsics.focalX * camera_point[0] / cameraZ + intrinsics.principalX;
+    const double rawY = intrinsics.focalY * camera_point[1] / cameraZ + intrinsics.principalY;
 
-    const float rawX = rect.rectCamLeft.fx * cameraX / cameraZ + rect.rectCamLeft.cx;
-    const float rawY = rect.rectCamLeft.fy * cameraY / cameraZ + rect.rectCamLeft.cy;
-
-    EXPECT_NEAR(rawX, projX, 1.0f);
-    EXPECT_NEAR(rawY, projY, 1.0f);
+    EXPECT_NEAR(rawX, projected[0], 1.0);
+    EXPECT_NEAR(rawY, projected[1], 1.0);
 }
 
 
@@ -319,8 +350,8 @@ TEST(DisparityTriangulator, TransposedRectifiedDepthTriangulationKeepsLowReproje
     std::string error;
     ASSERT_TRUE(EpipolarRectifier::rectify(leftImage,
                                            rightImage,
-                                           leftCamera.toPositiveDepthModel(),
-                                           rightCamera.toPositiveDepthModel(),
+                                           leftCamera.normalizedForPositiveDepth(),
+                                           rightCamera.normalizedForPositiveDepth(),
                                            rect,
                                            &error)) << error;
     ASSERT_TRUE(rect.transposed);
@@ -334,20 +365,19 @@ TEST(DisparityTriangulator, TransposedRectifiedDepthTriangulationKeepsLowReproje
         {0.0, -0.02, 5.0}
     };
 
-    float rectX = 0.0f;
-    float rectY = 0.0f;
-    float cameraZ = 0.0f;
+    double rectX = 0.0;
+    double rectY = 0.0;
+    double cameraZ = 0.0;
     bool foundWorld = false;
     for (const auto &world : candidateWorlds)
     {
-        if (!rect.rectCamLeft.project(static_cast<float>(world[0]),
-                                      static_cast<float>(world[1]),
-                                      static_cast<float>(world[2]),
-                                      rectX,
-                                      rectY))
+        double projected[2] = {0.0, 0.0};
+        if (!rect.rectCamLeft.projectWorldPointWithDepth(world, projected, cameraZ))
         {
             continue;
         }
+        rectX = projected[0];
+        rectY = projected[1];
 
         const int px = static_cast<int>(std::round(rectX));
         const int py = static_cast<int>(std::round(rectY));
@@ -356,11 +386,7 @@ TEST(DisparityTriangulator, TransposedRectifiedDepthTriangulationKeepsLowReproje
             continue;
         }
 
-        cameraZ = rect.rectCamLeft.R_cw[6] * static_cast<float>(world[0])
-                + rect.rectCamLeft.R_cw[7] * static_cast<float>(world[1])
-                + rect.rectCamLeft.R_cw[8] * static_cast<float>(world[2])
-                + rect.rectCamLeft.T[2];
-        ASSERT_GT(cameraZ, 0.0f);
+        ASSERT_GT(cameraZ, 0.0);
         foundWorld = true;
         break;
     }
@@ -371,7 +397,7 @@ TEST(DisparityTriangulator, TransposedRectifiedDepthTriangulationKeepsLowReproje
 
     cv::Mat depthMap(rect.rectLeft.rows, rect.rectLeft.cols, CV_32F, cv::Scalar(0.0f));
     cv::Mat validMask(rect.rectLeft.rows, rect.rectLeft.cols, CV_8U, cv::Scalar(0));
-    depthMap.at<float>(py, px) = cameraZ;
+    depthMap.at<float>(py, px) = static_cast<float>(cameraZ);
     validMask.at<uint8_t>(py, px) = 255;
 
     TriangulationConfig cfg;

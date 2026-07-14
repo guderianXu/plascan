@@ -25,6 +25,7 @@
 #include <atomic>
 #include <array>
 #include <random>
+#include <utility>
 
 #ifndef M_PI
 #define M_PI 3.14159265358979323846
@@ -50,6 +51,39 @@ namespace
 {
 
 using CpuNormal = std::array<float, 3>;
+
+struct HostPinholeCamera
+{
+    float focalX = 0.0f;
+    float focalY = 0.0f;
+    float principalX = 0.0f;
+    float principalY = 0.0f;
+    std::array<float, 9> rotationWorldToCamera{};
+    std::array<float, 3> translationWorldToCamera{};
+};
+
+HostPinholeCamera makeHostPinholeCamera(const Camera &camera, int downsampleFactor)
+{
+    const Camera::Intrinsics intrinsics = camera.intrinsics();
+    const std::array<double, 9> rotation = camera.worldToCameraRotation();
+    const std::array<double, 3> translation = camera.worldToCameraTranslation();
+    const float scale = 1.0f / static_cast<float>(std::max(1, downsampleFactor));
+
+    HostPinholeCamera result;
+    result.focalX = static_cast<float>(intrinsics.focalX) * scale;
+    result.focalY = static_cast<float>(intrinsics.focalY) * scale;
+    result.principalX = static_cast<float>(intrinsics.principalX) * scale;
+    result.principalY = static_cast<float>(intrinsics.principalY) * scale;
+    for (int index = 0; index < 9; ++index)
+    {
+        result.rotationWorldToCamera[index] = static_cast<float>(rotation[index]);
+    }
+    for (int index = 0; index < 3; ++index)
+    {
+        result.translationWorldToCamera[index] = static_cast<float>(translation[index]);
+    }
+    return result;
+}
 
 template <typename T>
 struct CudaDevicePtr
@@ -940,10 +974,47 @@ __device__ float computeHomographyNCC(
 // CUDA Kernels
 // =============================================================================
 
+__device__ inline void pixelDepthSearchBounds(
+    int idx,
+    const float *hintDepth,
+    const float *hintRadius,
+    float zNear,
+    float zFar,
+    float &localNear,
+    float &localFar)
+{
+    localNear = zNear;
+    localFar = zFar;
+    if (hintDepth == nullptr)
+    {
+        return;
+    }
+
+    const float center = hintDepth[idx];
+    if (!isfinite(center) || center <= 0.0f || center < zNear || center > zFar)
+    {
+        return;
+    }
+
+    float radius = hintRadius != nullptr ? hintRadius[idx] : 0.0f;
+    if (!isfinite(radius) || radius <= 0.0f)
+    {
+        radius = fmaxf(center * 0.3f, (zFar - zNear) * 0.01f);
+    }
+    localNear = fmaxf(zNear, center - radius);
+    localFar = fminf(zFar, center + radius);
+    if (localFar <= localNear)
+    {
+        localNear = zNear;
+        localFar = zFar;
+    }
+}
+
 /// 初始化深度图和法向量图
 __global__ void kernelInitDepthNormal(
     float *depthMap, float *normalMap,
     const float *hintDepth,
+    const float *hintRadius,
     int W, int H,
     float zNear, float zFar,
     unsigned long long seed)
@@ -956,18 +1027,16 @@ __global__ void kernelInitDepthNormal(
     curandState rs;
     curand_init(seed + idx, 0, 0, &rs);
 
-    float hint = (hintDepth != nullptr) ? hintDepth[idx] : 0.f;
-    float z;
-    if (hint > 0.f && hint >= zNear && hint <= zFar) 
-    {
-        float range = hint * 0.3f;
-        z = hint + (curand_uniform(&rs) * 2.f - 1.f) * range;
-        z = fmaxf(zNear, fminf(zFar, z));
-    } 
-    else 
-    {
-        z = zNear + curand_uniform(&rs) * (zFar - zNear);
-    }
+    float localNear = zNear;
+    float localFar = zFar;
+    pixelDepthSearchBounds(idx,
+                           hintDepth,
+                           hintRadius,
+                           zNear,
+                           zFar,
+                           localNear,
+                           localFar);
+    const float z = localNear + curand_uniform(&rs) * (localFar - localNear);
     depthMap[idx] = z;
 
     float normal[3];
@@ -1014,6 +1083,7 @@ __global__ void kernelSweepTB(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     float perturbation, unsigned long long seed)
 {
@@ -1030,18 +1100,28 @@ __global__ void kernelSweepTB(
     {
         int idx = row * W + col;
 
-        float currDepth     = depthMap[idx];
+        float localNear = zNear;
+        float localFar = zFar;
+        pixelDepthSearchBounds(idx,
+                               hintDepth,
+                               hintRadius,
+                               zNear,
+                               zFar,
+                               localNear,
+                               localFar);
+
+        float currDepth     = fmaxf(localNear, fminf(localFar, depthMap[idx]));
         float currNormal[3] = { normalMap[idx*3], normalMap[idx*3+1], normalMap[idx*3+2] };
 
         // 将上一行平面假设传播到当前行（平面-射线交点）
         float propDepth = (row > 0)
             ? propagateDepth(prevDepth, prevNormal, (float)(row-1), (float)col, (float)row, (float)col)
             : currDepth;
-        propDepth = fmaxf(zNear, fminf(zFar, propDepth));
+        propDepth = fmaxf(localNear, fminf(localFar, propDepth));
 
         // 随机扰动（退火）
         float randDepth = perturbDepth(perturbation, currDepth, &rs);
-        randDepth = fmaxf(zNear, fminf(zFar, randDepth));
+        randDepth = fmaxf(localNear, fminf(localFar, randDepth));
         float randNormal[3];
         perturbNormal(row, col, perturbation * (float)M_PI, currNormal, &rs, randNormal);
 
@@ -1093,6 +1173,7 @@ __global__ void kernelSweepBT(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     float perturbation, unsigned long long seed)
 {
@@ -1112,16 +1193,26 @@ __global__ void kernelSweepBT(
     {
         int idx = row * W + col;
 
-        float currDepth     = depthMap[idx];
+        float localNear = zNear;
+        float localFar = zFar;
+        pixelDepthSearchBounds(idx,
+                               hintDepth,
+                               hintRadius,
+                               zNear,
+                               zFar,
+                               localNear,
+                               localFar);
+
+        float currDepth     = fmaxf(localNear, fminf(localFar, depthMap[idx]));
         float currNormal[3] = { normalMap[idx*3], normalMap[idx*3+1], normalMap[idx*3+2] };
 
         float propDepth = (row < H - 1)
             ? propagateDepth(prevDepth, prevNormal, (float)(row+1), (float)col, (float)row, (float)col)
             : currDepth;
-        propDepth = fmaxf(zNear, fminf(zFar, propDepth));
+        propDepth = fmaxf(localNear, fminf(localFar, propDepth));
 
         float randDepth = perturbDepth(perturbation, currDepth, &rs);
-        randDepth = fmaxf(zNear, fminf(zFar, randDepth));
+        randDepth = fmaxf(localNear, fminf(localFar, randDepth));
         float randNormal[3];
         perturbNormal(row, col, perturbation * (float)M_PI, currNormal, &rs, randNormal);
 
@@ -1166,6 +1257,7 @@ __global__ void kernelSweepLR(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     float perturbation, unsigned long long seed)
 {
@@ -1182,16 +1274,26 @@ __global__ void kernelSweepLR(
     {
         int idx = row * W + col;
 
-        float currDepth     = depthMap[idx];
+        float localNear = zNear;
+        float localFar = zFar;
+        pixelDepthSearchBounds(idx,
+                               hintDepth,
+                               hintRadius,
+                               zNear,
+                               zFar,
+                               localNear,
+                               localFar);
+
+        float currDepth     = fmaxf(localNear, fminf(localFar, depthMap[idx]));
         float currNormal[3] = { normalMap[idx*3], normalMap[idx*3+1], normalMap[idx*3+2] };
 
         float propDepth = (col > 0)
             ? propagateDepth(prevDepth, prevNormal, (float)row, (float)(col-1), (float)row, (float)col)
             : currDepth;
-        propDepth = fmaxf(zNear, fminf(zFar, propDepth));
+        propDepth = fmaxf(localNear, fminf(localFar, propDepth));
 
         float randDepth = perturbDepth(perturbation, currDepth, &rs);
-        randDepth = fmaxf(zNear, fminf(zFar, randDepth));
+        randDepth = fmaxf(localNear, fminf(localFar, randDepth));
         float randNormal[3];
         perturbNormal(row, col, perturbation * (float)M_PI, currNormal, &rs, randNormal);
 
@@ -1236,6 +1338,7 @@ __global__ void kernelSweepRL(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     float perturbation, unsigned long long seed)
 {
@@ -1255,16 +1358,26 @@ __global__ void kernelSweepRL(
     {
         int idx = row * W + col;
 
-        float currDepth     = depthMap[idx];
+        float localNear = zNear;
+        float localFar = zFar;
+        pixelDepthSearchBounds(idx,
+                               hintDepth,
+                               hintRadius,
+                               zNear,
+                               zFar,
+                               localNear,
+                               localFar);
+
+        float currDepth     = fmaxf(localNear, fminf(localFar, depthMap[idx]));
         float currNormal[3] = { normalMap[idx*3], normalMap[idx*3+1], normalMap[idx*3+2] };
 
         float propDepth = (col < W - 1)
             ? propagateDepth(prevDepth, prevNormal, (float)row, (float)(col+1), (float)row, (float)col)
             : currDepth;
-        propDepth = fmaxf(zNear, fminf(zFar, propDepth));
+        propDepth = fmaxf(localNear, fminf(localFar, propDepth));
 
         float randDepth = perturbDepth(perturbation, currDepth, &rs);
-        randDepth = fmaxf(zNear, fminf(zFar, randDepth));
+        randDepth = fmaxf(localNear, fminf(localFar, randDepth));
         float randNormal[3];
         perturbNormal(row, col, perturbation * (float)M_PI, currNormal, &rs, randNormal);
 
@@ -1338,6 +1451,7 @@ __global__ void kernelCheckerboardSweep(
     float *depthMap, float *normalMap, float *confMap,
     const float *refImg, int W, int H,
     const float *const *srcImgs, const float *srcDatas, int srcW, int srcH, int numSrc,
+    const float *hintDepth, const float *hintRadius,
     float zNear, float zFar, int patchHalf,
     float perturbation, unsigned long long seed,
     int parity)
@@ -1354,7 +1468,16 @@ __global__ void kernelCheckerboardSweep(
     }
 
     const int idx = row * W + col;
-    float currDepth = depthMap[idx];
+    float localNear = zNear;
+    float localFar = zFar;
+    pixelDepthSearchBounds(idx,
+                           hintDepth,
+                           hintRadius,
+                           zNear,
+                           zFar,
+                           localNear,
+                           localFar);
+    float currDepth = fmaxf(localNear, fminf(localFar, depthMap[idx]));
     float currNormal[3] = {
         normalMap[idx * 3],
         normalMap[idx * 3 + 1],
@@ -1370,24 +1493,24 @@ __global__ void kernelCheckerboardSweep(
 
     uint32_t rngState = mixRngSeed(seed, idx, parity);
     float randDepth = perturbDepthFast(perturbation, currDepth, rngState);
-    randDepth = fmaxf(zNear, fminf(zFar, randDepth));
+    randDepth = fmaxf(localNear, fminf(localFar, randDepth));
     float randNormal[3];
     perturbNormalFast(row, col, perturbation * static_cast<float>(M_PI), currNormal, rngState, randNormal);
 
     considerHypothesis(col, row, randDepth, randNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
-                       zNear, zFar, patchHalf,
+                       localNear, localFar, patchHalf,
                        &bestCost, &bestDepth, bestNormal);
     considerHypothesis(col, row, currDepth, randNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
-                       zNear, zFar, patchHalf,
+                       localNear, localFar, patchHalf,
                        &bestCost, &bestDepth, bestNormal);
     considerHypothesis(col, row, randDepth, currNormal,
                        refImg, W, H,
                        srcImgs, srcDatas, srcW, srcH, numSrc,
-                       zNear, zFar, patchHalf,
+                       localNear, localFar, patchHalf,
                        &bestCost, &bestDepth, bestNormal);
 
     const int dRow[4] = { -1, 1, 0, 0 };
@@ -1422,7 +1545,7 @@ __global__ void kernelCheckerboardSweep(
         considerHypothesis(col, row, propDepth, neighborNormal,
                            refImg, W, H,
                            srcImgs, srcDatas, srcW, srcH, numSrc,
-                           zNear, zFar, patchHalf,
+                           localNear, localFar, patchHalf,
                            &bestCost, &bestDepth, bestNormal);
     }
 
@@ -1450,14 +1573,15 @@ __global__ void kernelFinalizeDepth(
 bool PatchMatchDepthEstimator::estimateGPU(
     const cv::Mat                &refGray,
     const std::vector<cv::Mat>   &srcGrays,
-    const PositiveDepthCameraModel &refCam,
-    const std::vector<PositiveDepthCameraModel> &srcCams,
+    const Camera                   &refCam,
+    const std::vector<Camera>      &srcCams,
     float zNear, float zFar,
     const PatchMatchConfig       &config,
     cv::Mat                      &depthOut,
     cv::Mat                      *confOut,
     std::string                  *errorMsg,
-    const cv::Mat                *hintDepth)
+    const cv::Mat                *hintDepth,
+    const cv::Mat                *hintRadius)
 {
     const int refW = refGray.cols, refH = refGray.rows;
     const int N    = (int)srcGrays.size();
@@ -1466,11 +1590,11 @@ bool PatchMatchDepthEstimator::estimateGPU(
     // ── 工作分辨率 ──────────────────────────────────────────────────
     // 参考图本身由 getOrUploadGrayImageGpu() 统一缩放/上传/缓存，避免这里先做一次重复 resize。
     cv::Mat hintScaled;
+    cv::Mat hintRadiusScaled;
     const int sW = std::max(1, refW / ds);
     const int sH = std::max(1, refH / ds);
 
-    PositiveDepthCameraModel refCamS = refCam;
-    if (ds > 1) { refCamS.fx/=ds; refCamS.fy/=ds; refCamS.cx/=ds; refCamS.cy/=ds; }
+    const HostPinholeCamera refCamS = makeHostPinholeCamera(refCam, ds);
 
     if (hintDepth && !hintDepth->empty())
     {
@@ -1483,12 +1607,28 @@ bool PatchMatchDepthEstimator::estimateGPU(
             cv::resize(*hintDepth, hintScaled, cv::Size(sW, sH), 0, 0, cv::INTER_NEAREST);
         }
     }
+    if (!hintScaled.empty() && hintRadius && !hintRadius->empty())
+    {
+        if (hintRadius->cols == sW && hintRadius->rows == sH)
+        {
+            hintRadiusScaled = *hintRadius;
+        }
+        else
+        {
+            cv::resize(*hintRadius,
+                       hintRadiusScaled,
+                       cv::Size(sW, sH),
+                       0,
+                       0,
+                       cv::INTER_NEAREST);
+        }
+    }
 
     // ── 设置常量内存 c_ref_inv_K ─────────────────────────────────
     float h_inv_K[4] = 
     {
-        1.f / refCamS.fx, -refCamS.cx / refCamS.fx,
-        1.f / refCamS.fy, -refCamS.cy / refCamS.fy
+        1.f / refCamS.focalX, -refCamS.principalX / refCamS.focalX,
+        1.f / refCamS.focalY, -refCamS.principalY / refCamS.focalY
     };
     CUDA_CHECK(cudaMemcpyToSymbol(c_ref_inv_K, h_inv_K, sizeof(float)*4));
 
@@ -1498,24 +1638,26 @@ bool PatchMatchDepthEstimator::estimateGPU(
 
     for (int si = 0; si < N; ++si) 
     {
-        PositiveDepthCameraModel sc = srcCams[si];
-        if (ds > 1) { sc.fx/=ds; sc.fy/=ds; sc.cx/=ds; sc.cy/=ds; }
+        const HostPinholeCamera sc = makeHostPinholeCamera(srcCams[si], ds);
 
         float *sd = srcDatas.data() + si * 16;
-        sd[0]=sc.fx; sd[1]=sc.cx; sd[2]=sc.fy; sd[3]=sc.cy;
+        sd[0]=sc.focalX; sd[1]=sc.principalX; sd[2]=sc.focalY; sd[3]=sc.principalY;
 
         float R_rel[9], T_rel[3];
         for (int r=0; r<3; ++r)
             for (int c=0; c<3; ++c) 
             {
                 float v=0;
-                for (int k=0; k<3; ++k) v += sc.R_cw[r*3+k] * refCamS.R_cw[c*3+k];
+                for (int k=0; k<3; ++k)
+                    v += sc.rotationWorldToCamera[r*3+k]
+                       * refCamS.rotationWorldToCamera[c*3+k];
                 R_rel[r*3+c] = v;
             }
         for (int r=0; r<3; ++r) 
         {
-            float v=sc.T[r];
-            for (int c=0; c<3; ++c) v -= R_rel[r*3+c] * refCamS.T[c];
+            float v=sc.translationWorldToCamera[r];
+            for (int c=0; c<3; ++c)
+                v -= R_rel[r*3+c] * refCamS.translationWorldToCamera[c];
             T_rel[r]=v;
         }
         for (int k=0; k<9; ++k) sd[4+k]=R_rel[k];
@@ -1542,6 +1684,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     CudaDevicePtr<float> d_normal;
     CudaDevicePtr<float> d_conf;
     CudaDevicePtr<float> d_hint;
+    CudaDevicePtr<float> d_hintRadius;
     CudaDevicePtr<float*> d_srcPtrs;
 
     CUDA_CHECK(cudaMalloc(d_srcData.out(), N*16    * sizeof(float)));
@@ -1587,6 +1730,16 @@ bool PatchMatchDepthEstimator::estimateGPU(
         CUDA_CHECK(cudaMalloc(d_hint.out(), refPx*sizeof(float)));
         CUDA_CHECK(cudaMemcpy(d_hint, hF.ptr<float>(), refPx*sizeof(float), cudaMemcpyHostToDevice));
     }
+    if (hasHint && !hintRadiusScaled.empty())
+    {
+        cv::Mat radius_float;
+        hintRadiusScaled.convertTo(radius_float, CV_32F);
+        CUDA_CHECK(cudaMalloc(d_hintRadius.out(), refPx * sizeof(float)));
+        CUDA_CHECK(cudaMemcpy(d_hintRadius,
+                              radius_float.ptr<float>(),
+                              refPx * sizeof(float),
+                              cudaMemcpyHostToDevice));
+    }
 
     // ── 初始化深度 + 法向量 ───────────────────────────────────────
     const int bW = config.cudaBlockW;
@@ -1596,7 +1749,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
     dim3 grid((sW + bW - 1) / bW, (sH + bH - 1) / bH);
 
     kernelInitDepthNormal<<<grid, block>>>(
-        d_depth, d_normal, d_hint, sW, sH, zNear, zFar, 42ULL);
+        d_depth, d_normal, d_hint, d_hintRadius, sW, sH, zNear, zFar, 42ULL);
     CUDA_CHECK(cudaGetLastError());
 
     // ── 迭代传播 + 精化 ───────────────────────────────────────
@@ -1624,6 +1777,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 perturbation, baseSeed,
                 0);
@@ -1633,6 +1787,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 perturbation, baseSeed + 111111ULL,
                 1);
@@ -1645,6 +1800,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 perturbation, baseSeed);
             CUDA_CHECK(cudaGetLastError());
@@ -1654,6 +1810,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 perturbation, baseSeed + 111111ULL);
             CUDA_CHECK(cudaGetLastError());
@@ -1663,6 +1820,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 perturbation, baseSeed + 222222ULL);
             CUDA_CHECK(cudaGetLastError());
@@ -1672,6 +1830,7 @@ bool PatchMatchDepthEstimator::estimateGPU(
                 d_depth, d_normal, d_conf,
                 d_ref, sW, sH,
                 d_srcPtrs, d_srcData, srcW, srcH2, N,
+                d_hint, d_hintRadius,
                 zNear, zFar, config.patchHalf,
                 perturbation, baseSeed + 333333ULL);
             CUDA_CHECK(cudaGetLastError());
@@ -1783,14 +1942,15 @@ bool PatchMatchDepthEstimator::estimateGPU(
 bool PatchMatchDepthEstimator::estimateCPU(
     const cv::Mat                &refGray,
     const std::vector<cv::Mat>   &srcGrays,
-    const PositiveDepthCameraModel &refCam,
-    const std::vector<PositiveDepthCameraModel> &srcCams,
+    const Camera                   &refCam,
+    const std::vector<Camera>      &srcCams,
     float zNear, float zFar,
     const PatchMatchConfig       &config,
     cv::Mat                      &depthOut,
     cv::Mat                      *confOut,
     std::string                  *errorMsg,
-    const cv::Mat                *hintDepth)
+    const cv::Mat                *hintDepth,
+    const cv::Mat                *hintRadius)
 {
     const int refW = refGray.cols;
     const int refH = refGray.rows;
@@ -1805,16 +1965,10 @@ bool PatchMatchDepthEstimator::estimateCPU(
     const int W = refScaled.cols;
     const int H = refScaled.rows;
 
-    PositiveDepthCameraModel refCamS = refCam;
-    if (ds > 1)
-    {
-        refCamS.fx /= ds;
-        refCamS.fy /= ds;
-        refCamS.cx /= ds;
-        refCamS.cy /= ds;
-    }
+    const HostPinholeCamera refCamS = makeHostPinholeCamera(refCam, ds);
 
     cv::Mat hintScaled;
+    cv::Mat hintRadiusScaled;
     if (hintDepth && !hintDepth->empty())
     {
         if (hintDepth->cols == W && hintDepth->rows == H)
@@ -1826,10 +1980,54 @@ bool PatchMatchDepthEstimator::estimateCPU(
             cv::resize(*hintDepth, hintScaled, cv::Size(W, H), 0, 0, cv::INTER_NEAREST);
         }
     }
+    if (!hintScaled.empty() && hintRadius && !hintRadius->empty())
+    {
+        if (hintRadius->cols == W && hintRadius->rows == H)
+        {
+            hintRadiusScaled = *hintRadius;
+        }
+        else
+        {
+            cv::resize(*hintRadius,
+                       hintRadiusScaled,
+                       cv::Size(W, H),
+                       0,
+                       0,
+                       cv::INTER_NEAREST);
+        }
+    }
+
+    auto depthBounds = [&](int row, int column)
+    {
+        float local_near = zNear;
+        float local_far = zFar;
+        if (!hintScaled.empty())
+        {
+            const float center = hintScaled.at<float>(row, column);
+            if (std::isfinite(center) && center > 0.0f && center >= zNear && center <= zFar)
+            {
+                float radius = !hintRadiusScaled.empty()
+                    ? hintRadiusScaled.at<float>(row, column)
+                    : 0.0f;
+                if (!std::isfinite(radius) || radius <= 0.0f)
+                {
+                    radius = std::max(center * 0.3f, (zFar - zNear) * 0.01f);
+                }
+                local_near = std::max(zNear, center - radius);
+                local_far = std::min(zFar, center + radius);
+                if (local_far <= local_near)
+                {
+                    local_near = zNear;
+                    local_far = zFar;
+                }
+            }
+        }
+        return std::make_pair(local_near, local_far);
+    };
 
     const float invK[4] = {
-        1.f / refCamS.fx, -refCamS.cx / refCamS.fx,
-        1.f / refCamS.fy, -refCamS.cy / refCamS.fy
+        1.f / refCamS.focalX, -refCamS.principalX / refCamS.focalX,
+        1.f / refCamS.focalY, -refCamS.principalY / refCamS.focalY
     };
 
     // float 化
@@ -1848,30 +2046,25 @@ bool PatchMatchDepthEstimator::estimateCPU(
     for (int si = 0; si < N; ++si)
     {
         float *sd = srcDatas.data() + si * 16;
-        PositiveDepthCameraModel sc = srcCams[si];
-        if (ds > 1)
-        {
-            sc.fx /= ds;
-            sc.fy /= ds;
-            sc.cx /= ds;
-            sc.cy /= ds;
-        }
-        sd[0] = sc.fx; sd[1] = sc.cx; sd[2] = sc.fy; sd[3] = sc.cy;
+        const HostPinholeCamera sc = makeHostPinholeCamera(srcCams[si], ds);
+        sd[0] = sc.focalX; sd[1] = sc.principalX;
+        sd[2] = sc.focalY; sd[3] = sc.principalY;
         float R_rel[9], T_rel[3];
         for (int r = 0; r < 3; ++r)
             for (int c = 0; c < 3; ++c)
             {
                 float v = 0;
                 for (int k = 0; k < 3; ++k)
-                    v += sc.R_cw[r * 3 + k] * refCamS.R_cw[c * 3 + k];
+                    v += sc.rotationWorldToCamera[r * 3 + k]
+                       * refCamS.rotationWorldToCamera[c * 3 + k];
                 R_rel[r * 3 + c] = v;
             }
         for (int r = 0; r < 3; ++r)
         {
-            float v = sc.T[r];
+            float v = sc.translationWorldToCamera[r];
             for (int c = 0; c < 3; ++c)
             {
-                v -= R_rel[r * 3 + c] * refCamS.T[c];
+                v -= R_rel[r * 3 + c] * refCamS.translationWorldToCamera[c];
             }
             T_rel[r] = v;
         }
@@ -1887,26 +2080,17 @@ bool PatchMatchDepthEstimator::estimateCPU(
         std::mt19937 rng(static_cast<uint32_t>(42ULL + static_cast<unsigned long long>(row)));
         for (int col = 0; col < W; ++col)
         {
-            const float hint = !hintScaled.empty() ? hintScaled.at<float>(row, col) : 0.f;
-            float depth = 0.f;
-            if (hint > 0.f && hint >= zNear && hint <= zFar)
-            {
-                const float range = hint * 0.3f;
-                depth = hint + cpuUniformSigned(rng) * range;
-                depth = std::max(zNear, std::min(zFar, depth));
-            }
-            else
-            {
-                depth = zNear + cpuUniformUnit(rng) * (zFar - zNear);
-            }
+            const auto [local_near, local_far] = depthBounds(row, col);
+            const float depth = local_near + cpuUniformUnit(rng) * (local_far - local_near);
             depthS.at<float>(row, col) = depth;
             const CpuNormal normal = cpuGenerateRandomNormal(row, col, invK, rng);
             normalS.at<cv::Vec3f>(row, col) = cv::Vec3f(normal[0], normal[1], normal[2]);
         }
     });
 
-    auto clampDepth = [&](float depth) {
-        return std::max(zNear, std::min(zFar, depth));
+    auto clampDepth = [&](int row, int column, float depth) {
+        const auto [local_near, local_far] = depthBounds(row, column);
+        return std::max(local_near, std::min(local_far, depth));
     };
 
     auto runColumnSweep = [&](bool topToBottom, unsigned long long seed, float perturbation) {
@@ -1934,14 +2118,19 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     propDepth = cpuPropagateDepth(prevDepth, prevNormal,
                                                   static_cast<float>(prevRow), static_cast<float>(col),
                                                   static_cast<float>(row), static_cast<float>(col), invK);
-                    propDepth = clampDepth(propDepth);
+                    propDepth = clampDepth(row, col, propDepth);
                 }
 
-                float randDepth = clampDepth(cpuPerturbDepth(perturbation, currDepth, rng));
+                const float boundedCurrDepth = clampDepth(row, col, currDepth);
+                float randDepth = clampDepth(
+                    row,
+                    col,
+                    cpuPerturbDepth(perturbation, boundedCurrDepth, rng));
                 CpuNormal randNormal = cpuPerturbNormal(row, col, perturbation * static_cast<float>(M_PI),
                                                         currNormal, invK, rng);
 
-                const std::array<float, 5> dep{currDepth, propDepth, randDepth, currDepth, randDepth};
+                const std::array<float, 5> dep{
+                    boundedCurrDepth, propDepth, randDepth, boundedCurrDepth, randDepth};
                 const std::array<CpuNormal, 5> nor{{
                     currNormal,
                     prevNormal,
@@ -2000,14 +2189,19 @@ bool PatchMatchDepthEstimator::estimateCPU(
                     propDepth = cpuPropagateDepth(prevDepth, prevNormal,
                                                   static_cast<float>(row), static_cast<float>(prevCol),
                                                   static_cast<float>(row), static_cast<float>(col), invK);
-                    propDepth = clampDepth(propDepth);
+                    propDepth = clampDepth(row, col, propDepth);
                 }
 
-                float randDepth = clampDepth(cpuPerturbDepth(perturbation, currDepth, rng));
+                const float boundedCurrDepth = clampDepth(row, col, currDepth);
+                float randDepth = clampDepth(
+                    row,
+                    col,
+                    cpuPerturbDepth(perturbation, boundedCurrDepth, rng));
                 CpuNormal randNormal = cpuPerturbNormal(row, col, perturbation * static_cast<float>(M_PI),
                                                         currNormal, invK, rng);
 
-                const std::array<float, 5> dep{currDepth, propDepth, randDepth, currDepth, randDepth};
+                const std::array<float, 5> dep{
+                    boundedCurrDepth, propDepth, randDepth, boundedCurrDepth, randDepth};
                 const std::array<CpuNormal, 5> nor{{
                     currNormal,
                     prevNormal,
@@ -2137,21 +2331,22 @@ void PatchMatchDepthEstimator::cleanupGpuImageCache()
 bool PatchMatchDepthEstimator::estimate(
     const cv::Mat                &refGray,
     const std::vector<cv::Mat>   &srcGrays,
-    const PositiveDepthCameraModel &refCam,
-    const std::vector<PositiveDepthCameraModel> &srcCams,
+    const Camera                   &refCam,
+    const std::vector<Camera>      &srcCams,
     float zNear, float zFar,
     const PatchMatchConfig       &config,
     cv::Mat                      &depthOut,
     cv::Mat                      *confOut,
     std::string                  *errorMsg,
-    const cv::Mat                *hintDepth)
+    const cv::Mat                *hintDepth,
+    const cv::Mat                *hintRadius)
 {
     if (srcGrays.empty() || srcCams.empty() || srcGrays.size() != srcCams.size()) 
     {
         if (errorMsg) *errorMsg = "source frame count mismatch or empty";
         return false;
     }
-    if (!refCam.valid()) 
+    if (!refCam.isValid())
     {
         if (errorMsg) *errorMsg = "reference camera parameters are invalid";
         return false;
@@ -2162,7 +2357,7 @@ bool PatchMatchDepthEstimator::estimate(
     if (config.useCuda && isCudaAvailable()) 
     {
         if (estimateGPU(refGray, srcGrays, refCam, srcCams,
-                        zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth))
+                        zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth, hintRadius))
         {
             return true;
         }
@@ -2178,7 +2373,7 @@ bool PatchMatchDepthEstimator::estimate(
         fprintf(stderr, "[PatchMatch] GPU failed, falling back to CPU\n");
     }
     return estimateCPU(refGray, srcGrays, refCam, srcCams,
-                       zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth);
+                       zNear, zFar, config, depthOut, confOut, errorMsg, hintDepth, hintRadius);
 }
 
 } // namespace mvs

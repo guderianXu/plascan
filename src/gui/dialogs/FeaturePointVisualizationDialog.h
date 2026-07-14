@@ -77,6 +77,10 @@ private:
     QCheckBox *_showScaleChk{nullptr};
     QCheckBox *_showOrientationChk{nullptr};
     QCheckBox *_useFillChk{nullptr};
+    QCheckBox *_showResidualsChk{nullptr};
+    QDoubleSpinBox *_residualScaleSpin{nullptr};
+    QDoubleSpinBox *_minimumResidualSpin{nullptr};
+    QDoubleSpinBox *_maximumResidualLengthSpin{nullptr};
 
     // ── 尺寸和透明度 ──────────────────────────────────────────────
     QSpinBox *_pointSizeSpin{nullptr};
@@ -88,6 +92,7 @@ private:
     QPushButton *_pointColorBtn{nullptr};
     QPushButton *_scaleColorBtn{nullptr};
     QPushButton *_orientColorBtn{nullptr};
+    QPushButton *_residualColorBtn{nullptr};
 
     // ── 形状和过滤 ────────────────────────────────────────────────
     QComboBox *_markerShapeCombo{nullptr};
@@ -104,4 +109,5 @@ private:
     QColor _pointColor{0, 120, 255};
     QColor _scaleColor{255, 255, 0};
     QColor _orientColor{255, 0, 0};
+    QColor _residualColor{255, 80, 80};
 };

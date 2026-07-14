@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <array>
+#include <chrono>
 #include <cmath>
 #include <cstring>
 #include <limits>
@@ -206,6 +207,49 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
 
 } // namespace
 
+std::uint64_t estimateFusionFrameWorkingSetBytes(int width,
+                                                 int height,
+                                                 int fusionMaxImageDim)
+{
+    if (width <= 0 || height <= 0)
+    {
+        return 64ULL * 1024ULL * 1024ULL;
+    }
+
+    const std::uint64_t source_pixels = static_cast<std::uint64_t>(width) *
+                                        static_cast<std::uint64_t>(height);
+    std::uint64_t target_pixels = source_pixels;
+    if (fusionMaxImageDim > 0 && std::max(width, height) > fusionMaxImageDim)
+    {
+        const double scale = static_cast<double>(fusionMaxImageDim) /
+                             static_cast<double>(std::max(width, height));
+        const int target_width = std::max(1, static_cast<int>(std::lround(width * scale)));
+        const int target_height = std::max(1, static_cast<int>(std::lround(height * scale)));
+        target_pixels = static_cast<std::uint64_t>(target_width) *
+                        static_cast<std::uint64_t>(target_height);
+    }
+
+    const std::uint64_t load_peak = source_pixels * 8ULL + target_pixels * 8ULL;
+    const std::uint64_t postprocess_peak = target_pixels * 24ULL;
+    return std::max(load_peak, postprocess_peak) + 16ULL * 1024ULL * 1024ULL;
+}
+
+int recommendedDepthFrameLoadWorkers(int requestedWorkers,
+                                     std::uint64_t availableMemoryBytes,
+                                     std::uint64_t frameWorkingSetBytes)
+{
+    const int requested = std::clamp(requestedWorkers > 0 ? requestedWorkers : 4, 1, 4);
+    if (availableMemoryBytes == 0 || frameWorkingSetBytes == 0)
+    {
+        return std::clamp(requested, 2, 4);
+    }
+
+    const std::uint64_t loading_budget = availableMemoryBytes / 2ULL;
+    const std::uint64_t memory_workers = loading_budget / frameWorkingSetBytes;
+    return static_cast<int>(std::clamp<std::uint64_t>(
+        std::min<std::uint64_t>(requested, memory_workers), 1ULL, 4ULL));
+}
+
 QString rawDepthStoragePath(const QString &pngPath)
 {
     const QFileInfo info(pngPath);
@@ -380,19 +424,6 @@ std::vector<int> storedFusionSourceIndices(const std::vector<StoredDepthFrameRec
     return indices;
 }
 
-xjw::mvs::PositiveDepthCameraModel scalePositiveDepthCameraModel(
-    const xjw::mvs::PositiveDepthCameraModel &camera,
-    double scaleX,
-    double scaleY)
-{
-    xjw::mvs::PositiveDepthCameraModel scaled = camera;
-    scaled.fx *= static_cast<float>(scaleX);
-    scaled.fy *= static_cast<float>(scaleY);
-    scaled.cx *= static_cast<float>(scaleX);
-    scaled.cy *= static_cast<float>(scaleY);
-    return scaled;
-}
-
 bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
                                           int fusionMaxImageDim)
 {
@@ -434,7 +465,7 @@ bool downsampleFusionFrameForMaxDimension(xjw::mvs::FusionFrameInput *frame,
 
     const double scaleX = static_cast<double>(targetSize.width) / static_cast<double>(oldWidth);
     const double scaleY = static_cast<double>(targetSize.height) / static_cast<double>(oldHeight);
-    frame->cameraModel = scalePositiveDepthCameraModel(frame->cameraModel, scaleX, scaleY);
+    frame->cameraModel = frame->cameraModel.scaledIntrinsics(scaleX, scaleY);
     frame->imgW = targetSize.width;
     frame->imgH = targetSize.height;
     return true;
@@ -447,12 +478,16 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
                                               int fusionMaxImageDim)
 {
     FusionFrameBuildResult result;
-    result.frame.cameraModel = camera.toPositiveDepthModel();
+    const auto total_start = std::chrono::steady_clock::now();
+    result.frame.sourceCamera = camera;
+    result.frame.cameraModel = camera.normalizedForPositiveDepth();
+    result.frame.cameraModel.setDistortion(xjw::Camera::Distortion{});
     result.frame.imgW = stored.gridWidth;
     result.frame.imgH = stored.gridHeight;
     result.frame.imagePath = xjw::common::io::toUtf8Path(stored.refImage);
 
     const QString rawDepthPath = resolveExistingRawDepthPath(stored.depthPng, stored.rawDepthPath);
+    const auto read_start = std::chrono::steady_clock::now();
     result.status = loadDepthMatStorage(rawDepthPath, &result.frame.depthMap);
     if (!result.status.ok)
     {
@@ -465,19 +500,30 @@ FusionFrameBuildResult buildStoredFusionFrame(const StoredDepthFrameRecord &stor
     {
         (void)loadDepthMatStorage(rawConfidencePath, &result.frame.confidence);
     }
+    const auto read_done = std::chrono::steady_clock::now();
 
+    const auto resize_start = read_done;
+    downsampleFusionFrameForMaxDimension(&result.frame, fusionMaxImageDim);
+    const auto resize_done = std::chrono::steady_clock::now();
+
+    const auto postprocess_start = resize_done;
     result.frame.depthPostprocess = xjw::mvs::DepthMapGenerator::postprocessFusionDepthMap(
         result.frame.depthMap,
         result.frame.confidence,
         fusionConfig,
         frameIndexFromPath(stored.rawDepthPath),
         viewCount);
-
-    downsampleFusionFrameForMaxDimension(&result.frame, fusionMaxImageDim);
+    const auto postprocess_done = std::chrono::steady_clock::now();
     result.frame.confidence.release();
     result.frame.imgW = result.frame.depthMap.cols;
     result.frame.imgH = result.frame.depthMap.rows;
     result.status = {true, QString()};
+    result.readMs = std::chrono::duration<double, std::milli>(read_done - read_start).count();
+    result.resizeMs = std::chrono::duration<double, std::milli>(resize_done - resize_start).count();
+    result.postprocessMs =
+        std::chrono::duration<double, std::milli>(postprocess_done - postprocess_start).count();
+    result.totalMs =
+        std::chrono::duration<double, std::milli>(postprocess_done - total_start).count();
     return result;
 }
 

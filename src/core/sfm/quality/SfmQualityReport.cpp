@@ -126,6 +126,7 @@ QJsonObject SfmQualityReport::toJson() const
     QJsonObject qualityGate;
     qualityGate.insert(QStringLiteral("acceptable_for_mvs"), acceptableForMvs);
     qualityGate.insert(QStringLiteral("status"), qualityStatus);
+    qualityGate.insert(QStringLiteral("advisories"), QJsonArray::fromStringList(qualityAdvisories));
     qualityGate.insert(QStringLiteral("warnings"), warnings);
 
     QJsonObject object;
@@ -224,6 +225,10 @@ SfmQualityReport analyzeSfmQuality(const std::vector<SfmQualityPoint> &points,
     {
         report.qualityWarnings.append(QStringLiteral("too_many_two_view_tracks"));
     }
+    else if (report.pointCount > 0 && twoViewRatio > options.warnTwoViewTrackRatioForMvs)
+    {
+        report.qualityAdvisories.append(QStringLiteral("high_two_view_track_ratio"));
+    }
     if (report.pointCount > 0 && highErrorRatio > options.maxHighReprojectionErrorRatioForMvs)
     {
         report.qualityWarnings.append(QStringLiteral("high_reprojection_error"));
@@ -240,9 +245,9 @@ SfmQualityReport analyzeSfmQuality(const std::vector<SfmQualityPoint> &points,
     }
 
     report.acceptableForMvs = report.qualityWarnings.isEmpty();
-    report.qualityStatus = report.acceptableForMvs
-        ? QStringLiteral("ok")
-        : QStringLiteral("warn");
+    report.qualityStatus = !report.acceptableForMvs
+        ? QStringLiteral("blocked")
+        : (report.qualityAdvisories.isEmpty() ? QStringLiteral("ok") : QStringLiteral("warn"));
     return report;
 }
 

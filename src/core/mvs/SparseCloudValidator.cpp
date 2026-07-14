@@ -5,9 +5,9 @@
 #include <plapoint/io/xyz_io.h>
 
 #include "io/PathIO.h"
+#include "string_utils/StringTransform.h"
 
 #include <algorithm>
-#include <cctype>
 #include <cmath>
 #include <memory>
 
@@ -16,23 +16,12 @@ namespace xjw
 namespace mvs
 {
 
+using common::string_utils::endsWithAsciiIgnoreCase;
+
 namespace
 {
 
 using SparsePlaCloud = plapoint::PointCloud<float, plamatrix::Device::CPU>;
-
-bool endsWithIgnoreCase(const std::string &text, const std::string &suffix)
-{
-    if (text.size() < suffix.size())
-    {
-        return false;
-    }
-    return std::equal(suffix.rbegin(), suffix.rend(), text.rbegin(),
-                      [](char a, char b) {
-                          return std::tolower(static_cast<unsigned char>(a)) ==
-                                 std::tolower(static_cast<unsigned char>(b));
-                      });
-}
 
 } // namespace
 
@@ -44,7 +33,7 @@ bool SparseCloudValidator::validate(const std::string &cloudPath,
     std::shared_ptr<SparsePlaCloud> cloud;
     try
     {
-        if (endsWithIgnoreCase(cloudPath, ".ply"))
+        if (endsWithAsciiIgnoreCase(cloudPath, ".ply"))
         {
             cloud = plapoint::io::readPly<float>(xjw::common::io::toNativeNarrowPath(cloudPath));
         }

@@ -160,6 +160,19 @@ void LayerRenderer::clearFeatureLayers()
     _featureItems.clear();
 }
 
+void LayerRenderer::clearFeatureResidualLayers()
+{
+    for (auto *item : std::as_const(_featureResidualItems))
+    {
+        if (item && _scene)
+        {
+            _scene->removeItem(item);
+            delete item;
+        }
+    }
+    _featureResidualItems.clear();
+}
+
 void LayerRenderer::clearMaskLayers()
 {
     for (auto *it : std::as_const(_maskItems))
@@ -193,9 +206,24 @@ void LayerRenderer::addFeatureItems(const std::vector<cv::KeyPoint> &keypoints)
                   .arg(_scene ? _scene->items().size() : 0));
 }
 
+void LayerRenderer::addFeatureResidualItems(
+    const QVector<xjw::gui::views::FeatureResidualVector> &residuals)
+{
+    if (!_scene || residuals.isEmpty() || !_featureOpts.showResiduals)
+    {
+        return;
+    }
+
+    auto *item = xjw::gui::views::createFeatureResidualOverlayItem(
+        residuals, _featureOpts, _imageBounds);
+    _scene->addItem(item);
+    _featureResidualItems.append(item);
+}
+
 void LayerRenderer::clear()
 {
     clearMaskLayers();
+    clearFeatureResidualLayers();
 
     for (auto *it: std::as_const(_layers))
     {

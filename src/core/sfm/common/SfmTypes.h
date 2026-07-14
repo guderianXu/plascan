@@ -103,6 +103,12 @@ struct TrackElement {
     FeatureIdx featureIdx = kInvalidFeatureIdx;    ///< 图像内特征索引
 };
 
+enum class TrackSource
+{
+    FeatureMatch,
+    PriorMarker
+};
+
 /**
  * @brief 多视图轨迹：同一三维点跨多幅图像的观测序列。
  *
@@ -111,6 +117,8 @@ struct TrackElement {
 struct Track {
     std::vector<TrackElement> elements;  ///< 观测元素列表
     double confidence = 1.0;             ///< 由匹配边分数聚合得到的轨迹置信度
+    TrackSource source = TrackSource::FeatureMatch;
+    std::string sourceId;
 
     /// 轨迹长度（观测数）
     std::size_t length() const { return elements.size(); }

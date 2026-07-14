@@ -1,9 +1,12 @@
 add_library(qc STATIC
     DemDifference.cpp
     PointCloudAlignment.cpp
-    SurveyControlImport.cpp
     ReconstructionQualityReport.cpp
     SurveyControlReport.cpp
+    ModelMeshRenderer.cpp
+    ModelImageMetrics.cpp
+    ModelGeometryComparator.cpp
+    ModelImageQualityEvaluator.cpp
 )
 
 target_include_directories(qc PUBLIC
@@ -12,7 +15,10 @@ target_include_directories(qc PUBLIC
 
 target_link_libraries(qc PUBLIC
     plapoint::plapoint
+    camera
+    meshing
     Qt6::Core
+    ${OpenCV_LIBS}
 )
 
 target_compile_features(qc PUBLIC cxx_std_17)
@@ -41,7 +47,7 @@ if(BUILD_TESTS)
     )
 
     target_link_libraries(test_survey_control_import PRIVATE
-        qc
+        control_points
         Qt6::Core
         GTest::gtest_main
     )
@@ -50,7 +56,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
 
-    gtest_discover_tests(test_survey_control_import)
+    gtest_discover_tests(test_survey_control_import DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_point_cloud_alignment
         tests/test_point_cloud_alignment.cpp
@@ -66,7 +72,7 @@ if(BUILD_TESTS)
         ${CMAKE_CURRENT_SOURCE_DIR}
     )
 
-    gtest_discover_tests(test_point_cloud_alignment)
+    gtest_discover_tests(test_point_cloud_alignment DISCOVERY_MODE PRE_TEST)
 
     add_executable(test_dem_difference
         tests/test_dem_difference.cpp
@@ -83,4 +89,22 @@ if(BUILD_TESTS)
     )
 
     gtest_discover_tests(test_dem_difference)
+
+    add_executable(test_model_image_quality
+        tests/test_model_image_quality.cpp
+    )
+
+    target_link_libraries(test_model_image_quality PRIVATE
+        qc
+        meshing
+        Qt6::Core
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_model_image_quality PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/core/mesh
+    )
+
+    gtest_discover_tests(test_model_image_quality DISCOVERY_MODE PRE_TEST)
 endif()

@@ -354,6 +354,8 @@ void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
 
         const std::array<double, 3> cameraCenter = camera.cameraCenter();
         const std::array<double, 9> cameraToWorldRotation = camera.cameraToWorldRotation();
+        const xjw::Camera::Intrinsics intrinsics = camera.intrinsics();
+        const QJsonObject camera_object = imageObject.value(QStringLiteral("camera")).toObject();
 
         CameraSceneWidget::CameraPose pose;
         pose.imagePath = imageObject.value(QStringLiteral("path")).toString();
@@ -369,6 +371,15 @@ void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
             float(cameraCenter[0]),
             float(cameraCenter[1]),
             float(cameraCenter[2]));
+        pose.focalX = static_cast<float>(intrinsics.focalX);
+        pose.focalY = static_cast<float>(intrinsics.focalY);
+        pose.principalX = static_cast<float>(intrinsics.principalX);
+        pose.principalY = static_cast<float>(intrinsics.principalY);
+        pose.imageWidth = camera_object.value(QStringLiteral("image_width")).toInt();
+        pose.imageHeight = camera_object.value(QStringLiteral("image_height")).toInt();
+        pose.uAxisSign = intrinsics.uAxisSign;
+        pose.vAxisSign = intrinsics.vAxisSign;
+        pose.depthAxisFlipped = camera.depthAxisFlipped();
 
         QMatrix3x3 rot;
         for (int row = 0; row < 3; ++row)

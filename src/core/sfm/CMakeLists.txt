@@ -13,6 +13,7 @@ set(SFM_SOURCES
     # ---- 图结构 ----
     graph/CorrespondenceGraph.cpp
     graph/ObservationNetworkBuilder.cpp
+    tracks/CorrespondenceTrackThinner.cpp
     tracks/MultiViewTrackBuilder.cpp
 
     # ---- 重建状态 ----
@@ -44,6 +45,7 @@ set(SFM_HEADERS
     common/SfmTypes.h
     graph/CorrespondenceGraph.h
     graph/ObservationNetworkBuilder.h
+    tracks/CorrespondenceTrackThinner.h
     tracks/MultiViewTrackBuilder.h
     reconstruction/SfmReconstruction.h
     quality/SfmQualityReport.h
@@ -66,12 +68,14 @@ target_include_directories(sfm PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
     ${CMAKE_CURRENT_SOURCE_DIR}/../intersection
     ${CMAKE_CURRENT_SOURCE_DIR}/../bundle_adjust
+    ${CMAKE_CURRENT_SOURCE_DIR}/../control_points
     ${CMAKE_SOURCE_DIR}/src/common
 )
 
 target_link_libraries(sfm
     PUBLIC
         camera
+        control_points
         plapoint::plapoint
     PRIVATE
         intersection

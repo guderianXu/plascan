@@ -1,6 +1,7 @@
 #include "FeatureData.h"
 
 #include "FeatureOutput.h" // 提供 FeatureOutput 定义
+#include "string_utils/StringTransform.h"
 
 #include <algorithm>
 #include <cmath>
@@ -135,9 +136,7 @@ cv::Mat FeatureData::toCvDescriptors(const std::string &matchAlgorithm) const
     CV_Assert(descriptors.type() == CV_32F);
 
     // 判断是否需要 bit-packed CV_8U（ORB Hamming 匹配）
-    std::string algo = matchAlgorithm;
-    std::transform(algo.begin(), algo.end(), algo.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string algo = xjw::common::string_utils::asciiLowerCopy(matchAlgorithm);
 
     const bool needBinary = (algo == "orb" || algo == "orb_bf_hamming" ||
                              algo == "hamming" || algo == "bf_hamming" || algo == "bf-hamming");
@@ -176,9 +175,7 @@ torch::Tensor FeatureData::cvDescriptorsToTensor(const cv::Mat &descriptors,
         return torch::empty({0, safeTargetDim}, torch::kFloat32);
     }
 
-    std::string algo = sourceFeatureAlgorithm;
-    std::transform(algo.begin(), algo.end(), algo.begin(),
-                   [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+    const std::string algo = xjw::common::string_utils::asciiLowerCopy(sourceFeatureAlgorithm);
 
     torch::Tensor output = torch::zeros({static_cast<int64_t>(descriptors.rows), safeTargetDim},
                                         torch::kFloat32);

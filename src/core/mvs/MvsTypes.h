@@ -32,8 +32,6 @@ namespace xjw
 namespace mvs
 {
 
-using PositiveDepthCameraModel = xjw::Camera::PositiveDepthModel;
-
 // =============================================================================
 // PatchMatch 配置
 // =============================================================================
@@ -120,7 +118,8 @@ struct FusionFrameInput
     cv::Mat   depthMap;    ///< CV_32F, 正深度（COLMAP 约定），0=无效
     cv::Mat   normalMap;   ///< CV_32FC3, 法线（相机坐标系），可为空
     cv::Mat   confidence;  ///< CV_32F, [0,1]，可为空
-    PositiveDepthCameraModel cameraModel;  ///< 正深度相机模型
+    Camera    cameraModel;  ///< 与深度栅格对应的正深度、零畸变工作相机
+    Camera    sourceCamera; ///< 与 imagePath 原始像素对应的完整相机，用于融合取色预处理
     int       viewIndex = -1; ///< 原始 CameraView 下标，用于将 source plan 重映射到融合帧下标
     int       imgW = 0;
     int       imgH = 0;
@@ -136,6 +135,39 @@ struct DensePoint
 {
     float   x = 0.f, y = 0.f, z = 0.f;
     uint8_t r = 0,   g = 0,   b = 0;
+};
+
+enum class MvsSceneProfile
+{
+    Auto,
+    OrbitalObject,
+    AerialTerrain,
+    Custom
+};
+
+enum class DepthFilterMode
+{
+    Mild,
+    Moderate,
+    Aggressive
+};
+
+struct DepthPyramidLevelConfig
+{
+    int level = 1;
+    PatchMatchConfig patchMatch;
+    int minSupportViews = 2;
+    float radiusScale = 1.0f;
+};
+
+struct DepthPyramidConfig
+{
+    std::array<DepthPyramidLevelConfig, 3> levels;
+    int activeLevelCount = 3;
+    MvsSceneProfile sceneProfile = MvsSceneProfile::Auto;
+    DepthFilterMode filterMode = DepthFilterMode::Moderate;
+    bool saveIntermediateLevels = false;
+    std::string degradedReason;
 };
 
 struct MvsSourcePairQuality
@@ -163,6 +195,7 @@ struct DepthGenConfig
     bool  runDepthEstimation    = true;
     bool  runFusion             = true;
     bool  saveIntermediateDepthMaps = false;
+    bool  saveIntermediatePyramidLevels = false; ///< Debug：保存 Level 2/3 原始深度结果
     std::string intermediateDir = "";
     bool  adaptiveDepthCacheMemory = true;      ///< 根据系统内存自动决定是否常驻 full-res 深度帧
     float maxDepthCacheRamFraction = 0.60f;     ///< full-res 深度帧缓存最多使用物理内存比例
@@ -171,6 +204,9 @@ struct DepthGenConfig
     std::vector<MvsSourcePairQuality> sourcePairQualities; ///< 直接影像对匹配/几何验证质量
     bool requireVerifiedSourcePairs = false; ///< 有 pair 质量时，MVS source 必须来自已验证匹配对
     int minSourcePairGeometricInliers = 20;  ///< source pair 几何内点最低门槛
+    MvsSceneProfile sceneProfile = MvsSceneProfile::Auto; ///< Auto 时根据相机与稀疏云几何分类
+    DepthFilterMode depthFilterMode = DepthFilterMode::Moderate; ///< 显式过滤预设
+    bool adaptiveDepthFilterMode = true; ///< Auto 场景下航测用中等、环拍物体用温和过滤
 };
 
 // =============================================================================
@@ -182,11 +218,6 @@ struct CameraView
     int         imageWidth  = 0;
     int         imageHeight = 0;
     xjw::Camera camera;
-
-    PositiveDepthCameraModel positiveDepthModel() const
-    {
-        return camera.toPositiveDepthModel();
-    }
 };
 
 // =============================================================================
@@ -196,6 +227,16 @@ struct SparseCloud
 {
     std::vector<std::array<float,3>> points;
     std::array<float,3> minPt = {}, maxPt = {};
+};
+
+struct MvsSceneClassification
+{
+    MvsSceneProfile profile = MvsSceneProfile::OrbitalObject;
+    float cameraCenterLinearity = 0.0f;
+    float opticalAxisConvergence = 0.0f;
+    float planeThicknessRatio = 1.0f;
+    float downLookingConsistency = 0.0f;
+    std::string reason;
 };
 
 // =============================================================================

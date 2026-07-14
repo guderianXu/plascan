@@ -18,6 +18,8 @@ target_link_libraries(feature_match_traditional
     PUBLIC
         ${TORCH_LIBRARIES}
         ${OpenCV_LIBS}
+    PRIVATE
+        plascan_common_string_utils
 )
 
 add_executable(traditional_feature_matcher_diagnostic

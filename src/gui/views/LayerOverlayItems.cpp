@@ -208,6 +208,72 @@ private:
     QRectF _bounds;
 };
 
+class BatchedFeatureResidualOverlayItem : public QGraphicsItem
+{
+public:
+    BatchedFeatureResidualOverlayItem(QVector<xjw::gui::views::FeatureResidualVector> residuals,
+                                      const LayerRenderer::FeatureDisplayOptions &options,
+                                      const QRectF &imageBounds)
+        : _residuals(std::move(residuals))
+        , _options(options)
+        , _bounds(imageBounds)
+    {
+        if (_options.maxDisplayCount > 0 && _residuals.size() > _options.maxDisplayCount)
+        {
+            std::sort(_residuals.begin(), _residuals.end(), [](const auto &left, const auto &right)
+            {
+                return left.magnitudePx > right.magnitudePx;
+            });
+            _residuals.resize(_options.maxDisplayCount);
+        }
+        setZValue(1001.0);
+    }
+
+    QRectF boundingRect() const override
+    {
+        return _bounds.adjusted(-4.0, -4.0, 4.0, 4.0);
+    }
+
+    void paint(QPainter *painter, const QStyleOptionGraphicsItem *, QWidget *) override
+    {
+        if (!painter || !_options.showResiduals)
+        {
+            return;
+        }
+
+        QColor color = _options.residualColor;
+        color.setAlpha(_options.opacity);
+        QPen pen(color, 1.0);
+        pen.setCosmetic(true);
+        painter->setPen(pen);
+        painter->setBrush(color);
+
+        for (const auto &residual : _residuals)
+        {
+            if (residual.magnitudePx < _options.minimumResidualPx || residual.magnitudePx <= 1e-9)
+            {
+                continue;
+            }
+
+            QPointF delta = residual.projected - residual.observed;
+            delta *= _options.residualScale;
+            const double length = std::hypot(delta.x(), delta.y());
+            if (_options.maximumResidualLengthPx > 0.0 && length > _options.maximumResidualLengthPx)
+            {
+                delta *= _options.maximumResidualLengthPx / length;
+            }
+            const QPointF end = residual.observed + delta;
+            painter->drawLine(residual.observed, end);
+            painter->drawEllipse(residual.observed, 1.5, 1.5);
+        }
+    }
+
+private:
+    QVector<xjw::gui::views::FeatureResidualVector> _residuals;
+    LayerRenderer::FeatureDisplayOptions _options;
+    QRectF _bounds;
+};
+
 } // namespace
 
 namespace xjw::gui::views
@@ -218,6 +284,14 @@ QGraphicsItem *createFeatureOverlayItem(const std::vector<cv::KeyPoint> &keypoin
                                         const QRectF &imageBounds)
 {
     return new BatchedFeatureOverlayItem(keypoints, options, imageBounds);
+}
+
+QGraphicsItem *createFeatureResidualOverlayItem(
+    const QVector<FeatureResidualVector> &residuals,
+    const LayerRenderer::FeatureDisplayOptions &options,
+    const QRectF &imageBounds)
+{
+    return new BatchedFeatureResidualOverlayItem(residuals, options, imageBounds);
 }
 
 QList<QGraphicsItem *> createMatchOverlayItems(const QVector<QPointF> &ptsA,

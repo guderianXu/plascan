@@ -38,7 +38,8 @@ struct SfmQualityReportOptions
     double minTriangulationAngleDeg = 2.0;
     double maxReprojectionErrorPx = 3.0;
     double minRegisteredImageRatioForMvs = 0.50;
-    double maxTwoViewTrackRatioForMvs = 0.95;
+    double warnTwoViewTrackRatioForMvs = 0.70;
+    double maxTwoViewTrackRatioForMvs = 0.85;
     double maxHighReprojectionErrorRatioForMvs = 0.30;
     double maxWeakTriangulationAngleRatioForMvs = 0.60;
     double minObservationGridCoverageMeanForMvs = 0.0;
@@ -72,6 +73,7 @@ struct SfmQualityReport
     double observationGridCoverageMean = 0.0;
     bool acceptableForMvs = true;
     QString qualityStatus = QStringLiteral("ok");
+    QStringList qualityAdvisories;
     QStringList qualityWarnings;
 
     SfmNumericSummary trackLength;

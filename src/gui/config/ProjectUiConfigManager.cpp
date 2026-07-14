@@ -47,6 +47,10 @@ QJsonObject ProjectUiConfigManager::defaultUiSettings()
     featureDisplay["showPoints"]        = true;    // 默认显示特征点
     featureDisplay["showScale"]         = false;   // 默认不显示尺度圆
     featureDisplay["showOrientation"]   = false;   // 默认不显示方向线
+    featureDisplay["showResiduals"]     = false;
+    featureDisplay["residualScale"]     = 10.0;
+    featureDisplay["minimumResidualPx"] = 0.0;
+    featureDisplay["maximumResidualLengthPx"] = 80.0;
     featureDisplay["useFill"]           = false;   // 默认不填充
     featureDisplay["pointSize"]         = 1;        // 默认标记大小为 1 像素
     QJsonObject pointColor;
@@ -54,6 +58,11 @@ QJsonObject ProjectUiConfigManager::defaultUiSettings()
     pointColor["g"] = 120;
     pointColor["b"] = 255;
     featureDisplay["pointColor"]        = pointColor; // 默认蓝色
+    QJsonObject residualColor;
+    residualColor["r"] = 255;
+    residualColor["g"] = 80;
+    residualColor["b"] = 80;
+    featureDisplay["residualColor"] = residualColor;
     featureDisplay["scaleMultiplier"]   = 1.0;     // 尺度圆半径不做额外放大
     featureDisplay["opacity"]           = 180;     // 约 70% 不透明
     featureDisplay["markerShape"]       = QStringLiteral("cross"); // 默认十字标记

@@ -16,6 +16,7 @@
 
 #include <unordered_map>
 #include <unordered_set>
+#include <string>
 #include <vector>
 
 namespace xjw {
@@ -64,6 +65,11 @@ public:
     void addMatches(ImageId id1, ImageId id2,
                     const std::vector<FeatureMatch> &matches);
 
+    /// 人工标记轨迹仅注入当前内存图，不改写任何特征或匹配缓存。
+    bool addPriorTrack(const std::string &sourceId,
+                       const std::vector<TrackElement> &observations,
+                       float confidence);
+
     /**
      * @brief 构建对应关系索引。
      *
@@ -82,6 +88,18 @@ public:
     {
         return pairMatches.size();
     }
+
+    /// 返回稳定排序的全部有效影像对。
+    std::vector<ImagePair> imagePairs() const;
+
+    /**
+     * @brief 只保留属于指定多视轨迹的原始匹配边。
+     *
+     * 不会为轨迹中没有直接匹配的影像对合成新边，确保进入 SfM 的每条边
+     * 都来自上游已经完成几何验证的 pairwise match。
+     * @return 被移除的匹配数量。
+     */
+    std::size_t retainMatchesInTracks(const std::vector<Track> &tracks);
 
     /**
      * @brief 获取两幅图像之间的匹配数量。
@@ -121,6 +139,8 @@ public:
     std::vector<std::pair<ImageId, size_t>> topConnectedImages(
         ImageId imageId, size_t topN) const;
 
+    std::string priorTrackId(ImageId imageId, FeatureIdx featureIdx) const;
+
 private:
     /// 每幅图像拥有的特征数量
     std::unordered_map<ImageId, size_t> imageFeatureCounts;
@@ -133,6 +153,8 @@ private:
     /// 外层 key 是图像 ID，内层 vector 按特征索引对齐（下标 = featureIdx）
     std::unordered_map<ImageId, std::vector<std::vector<Correspondence>>>
         correspondences;
+
+    std::unordered_map<std::uint64_t, std::string> priorTrackByObservation;
 
     /// 查询用的空匹配列表（避免返回悬空引用）
     static const std::vector<FeatureMatch> EMPTY_MATCHES;

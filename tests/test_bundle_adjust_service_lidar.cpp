@@ -264,6 +264,54 @@ TEST(BundleAdjustServiceLidarTest, RunWritesScaleBarConstraintSummary)
     EXPECT_DOUBLE_EQ(optionsJson.value(QStringLiteral("scale_bar_huber_delta_m")).toDouble(), 10.0);
 }
 
+TEST(BundleAdjustServiceMarkerTest, WritesSeparateControlAndCheckResiduals)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    std::vector<xjw::Camera> cameras{makeCamera(), makeCamera()};
+    std::vector<xjw::BATrack> tracks{makeTrack(), makeTrack()};
+    tracks[0].initialPoint = {{0.0, 0.0, 10.0}};
+    tracks[1].initialPoint = {{2.0, 0.0, 10.0}};
+    for (xjw::BAObservation &observation : tracks[1].observations)
+    {
+        observation.u = 712.0;
+    }
+
+    xjw::gui::BaServiceOptions options;
+    options.outputDir = QDir(tempDir.path()).filePath(QStringLiteral("ba"));
+    options.imagePathByIndex = QStringList{QStringLiteral("img0.jpg"), QStringLiteral("img1.jpg")};
+    options.exportTsai = false;
+    options.exportEvalPlot = false;
+    options.baOpt.refineCameraPose = false;
+    options.baOpt.enablePointFilter = false;
+    options.baOpt.maxIterations = 1;
+    options.markerTrackQualityInputs = {
+        {QStringLiteral("C1"), xjw::control_points::MarkerRole::ControlPoint,
+         0, {{0.0, 0.0, 10.0}}, {{0.01, 0.01, 0.01}}, true},
+        {QStringLiteral("K1"), xjw::control_points::MarkerRole::CheckPoint,
+         1, {{3.0, 0.0, 10.0}}, {{0.01, 0.01, 0.01}}, false},
+    };
+    options.markerScaleBarQualityInputs = {
+        {QStringLiteral("SB-C"), xjw::control_points::ScaleBarRole::Control, 0, 1, 2.0},
+        {QStringLiteral("SB-K"), xjw::control_points::ScaleBarRole::Check, 0, 1, 3.0},
+    };
+
+    const auto result = xjw::gui::BundleAdjustService::run(cameras, tracks, options);
+
+    ASSERT_TRUE(result.success) << qPrintable(result.errorMessage);
+    const QJsonObject report =
+        result.resultJson.value(QStringLiteral("marker_quality_report")).toObject();
+    EXPECT_EQ(report.value(QStringLiteral("controls")).toObject()
+                  .value(QStringLiteral("count")).toInt(), 1);
+    EXPECT_EQ(report.value(QStringLiteral("check_points")).toObject()
+                  .value(QStringLiteral("count")).toInt(), 1);
+    EXPECT_NEAR(report.value(QStringLiteral("check_points")).toObject()
+                    .value(QStringLiteral("rms")).toDouble(), 1.0, 1.0e-6);
+    EXPECT_NEAR(report.value(QStringLiteral("check_scale_bars")).toObject()
+                    .value(QStringLiteral("rms")).toDouble(), 1.0, 1.0e-6);
+}
+
 TEST(BundleAdjustServiceLidarTest, RunFailsClearlyWhenLaserCloudPathIsMissing)
 {
     QTemporaryDir tempDir;

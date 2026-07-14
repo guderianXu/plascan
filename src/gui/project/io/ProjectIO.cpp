@@ -42,6 +42,27 @@ QString ProjectIO::projectImagesDir(const QString &plascanPath)
     return QDir(assets).filePath(QStringLiteral("images"));
 }
 
+QString ProjectIO::projectControlPointsDir(const QString &plascanPath)
+{
+    const QString assets = projectAssetsDir(plascanPath);
+    if (assets.isEmpty()) return QString();
+    return QDir(assets).filePath(QStringLiteral("control_points"));
+}
+
+QString ProjectIO::markerSetPath(const QString &plascanPath)
+{
+    const QString directory = projectControlPointsDir(plascanPath);
+    if (directory.isEmpty()) return QString();
+    return QDir(directory).filePath(QStringLiteral("marker_set.json"));
+}
+
+QString ProjectIO::markerDetectionReviewPath(const QString &plascanPath)
+{
+    const QString directory = projectControlPointsDir(plascanPath);
+    if (directory.isEmpty()) return QString();
+    return QDir(directory).filePath(QStringLiteral("detection_review.json"));
+}
+
 QString ProjectIO::tmpDir(const QString &plascanPath)
 {
     const QString root = projectRootFromPlascan(plascanPath);

@@ -69,6 +69,9 @@ private:
     QDoubleSpinBox *_depthMaxSpin = nullptr;
     QDoubleSpinBox *_confidenceSpin = nullptr;    ///< 置信度阈值
     QCheckBox *_normalMapCheck = nullptr;         ///< 输出法向量图
+    QComboBox *_sceneProfileCombo = nullptr;      ///< 场景类型（自动/环拍物体/航测地形）
+    QComboBox *_depthFilterCombo = nullptr;       ///< 深度过滤强度
+    QCheckBox *_savePyramidLevelsCheck = nullptr; ///< 保存 Level 2/3 调试栅格
     QCheckBox *_cudaCheck = nullptr;
     QSpinBox *_tileWSpin = nullptr;               ///< Tile 宽
     QSpinBox *_tileHSpin = nullptr;               ///< Tile 高

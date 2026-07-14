@@ -3,6 +3,7 @@
 #include "Camera.h"
 #include "graph/CorrespondenceGraph.h"
 #include "reconstruction/SfmReconstruction.h"
+#include "tracks/CorrespondenceTrackThinner.h"
 #include "tracks/MultiViewTrackBuilder.h"
 #include "triangulation/Triangulator.h"
 
@@ -135,6 +136,78 @@ TEST(MultiViewTrackBuilderTest, QualityThinningKeepsSpatiallySeparatedTracks)
 
     ASSERT_EQ(result.tracks.size(), 2);
     EXPECT_EQ(result.prunedByQualityThinning, 0);
+}
+
+TEST(CorrespondenceGraphTrackRetentionTest, KeepsOnlyOriginalEdgesBelongingToSelectedTracks)
+{
+    xjw::CorrespondenceGraph graph;
+    graph.addImage(0, 2);
+    graph.addImage(1, 2);
+    graph.addImage(2, 1);
+    graph.addMatches(0, 1, {{0, 0, 0.9f}, {1, 1, 0.8f}});
+    graph.addMatches(1, 2, {{0, 0, 0.9f}});
+
+    xjw::Track selectedTrack;
+    selectedTrack.elements = {{0, 0}, {1, 0}, {2, 0}};
+
+    const std::size_t removed = graph.retainMatchesInTracks({selectedTrack});
+
+    EXPECT_EQ(removed, 1u);
+    EXPECT_EQ(graph.numImagePairs(), 2u);
+    ASSERT_EQ(graph.matchesBetween(0, 1).size(), 1u);
+    EXPECT_EQ(graph.matchesBetween(0, 1).front().idx1, 0u);
+    EXPECT_EQ(graph.matchesBetween(0, 1).front().idx2, 0u);
+    EXPECT_EQ(graph.matchesBetween(1, 2).size(), 1u);
+    EXPECT_TRUE(graph.matchesBetween(0, 2).empty());
+}
+
+TEST(CorrespondenceGraphTest, CanonicalizesFeatureIndicesForReversedImagePair)
+{
+    xjw::CorrespondenceGraph graph;
+    graph.addImage(0, 2);
+    graph.addImage(1, 3);
+    graph.addMatches(1, 0, {{2, 1, 0.8f}});
+    graph.buildCorrespondences();
+
+    ASSERT_EQ(graph.matchesBetween(0, 1).size(), 1u);
+    EXPECT_EQ(graph.matchesBetween(0, 1).front().idx1, 1u);
+    EXPECT_EQ(graph.matchesBetween(0, 1).front().idx2, 2u);
+
+    const auto correspondences = graph.findCorrespondences(0, 1);
+    ASSERT_EQ(correspondences.size(), 1u);
+    EXPECT_EQ(correspondences.front().imageId, 1u);
+    EXPECT_EQ(correspondences.front().featureIdx, 2u);
+}
+
+TEST(CorrespondenceTrackThinnerTest, EnforcesPerImageLimitAndPrefersLongTracks)
+{
+    xjw::SfmReconstruction reconstruction;
+    xjw::CorrespondenceGraph graph;
+    for (xjw::ImageId imageId = 0; imageId < 3; ++imageId)
+    {
+        xjw::ImageData image;
+        image.id = imageId;
+        image.keypoints = imageId < 2
+            ? std::vector<xjw::FeatureKeypoint>{{10.0f, 10.0f}, {20.0f, 20.0f}, {30.0f, 30.0f}}
+            : std::vector<xjw::FeatureKeypoint>{{10.0f, 10.0f}};
+        image.point3DIds.resize(image.keypoints.size(), xjw::kInvalidPoint3DId);
+        reconstruction.addImage(image);
+        graph.addImage(imageId, image.keypoints.size());
+    }
+    graph.addMatches(0, 1, {{0, 0, 0.50f}, {1, 1, 0.99f}, {2, 2, 0.98f}});
+    graph.addMatches(1, 2, {{0, 0, 0.50f}});
+
+    xjw::CorrespondenceTrackThinningOptions options;
+    options.maxTracksPerImage = 1;
+    const xjw::CorrespondenceTrackThinningResult result =
+        xjw::thinCorrespondenceTracks(reconstruction, &graph, options);
+
+    EXPECT_EQ(result.inputTrackCount, 3);
+    EXPECT_EQ(result.retainedTrackCount, 1);
+    EXPECT_EQ(result.prunedTrackCount, 2);
+    EXPECT_EQ(result.removedMatchCount, 2);
+    ASSERT_EQ(graph.matchesBetween(0, 1).size(), 1u);
+    EXPECT_EQ(graph.matchesBetween(1, 2).size(), 1u);
 }
 
 TEST(MultiViewTrackBuilderTest, ExcludesStationaryTracksWhenEnabled)
@@ -301,4 +374,49 @@ TEST(KnownPoseMultiViewTriangulationTest, RefinesNoisyThreeViewTrackBeforeReject
     const xjw::ScenePoint3D &point = reconstruction.points3D().begin()->second;
     EXPECT_EQ(point.track.length(), 3);
     EXPECT_LT(point.error, 0.32);
+}
+
+TEST(IncrementalTriangulationTest, DoesNotReuseObservationOwnedByExistingPoint)
+{
+    const xjw::Camera camera0 = makeCamera(0.0, 0.0, 0.0);
+    const xjw::Camera camera1 = makeCamera(8.0, 0.0, 0.0);
+    const std::array<double, 3> existingPoint = {0.5, 0.2, 40.0};
+    const std::array<double, 3> differentPoint = {6.0, 2.0, 35.0};
+
+    xjw::SfmReconstruction reconstruction;
+    xjw::ImageData image0;
+    image0.id = 0;
+    image0.keypoints.push_back(projectPoint(camera0, existingPoint));
+    image0.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+    reconstruction.addImage(image0);
+    reconstruction.registerImage(0, camera0);
+
+    xjw::ImageData image1;
+    image1.id = 1;
+    image1.keypoints.push_back(projectPoint(camera1, differentPoint));
+    image1.point3DIds.resize(1, xjw::kInvalidPoint3DId);
+    reconstruction.addImage(image1);
+    reconstruction.registerImage(1, camera1);
+
+    xjw::Track existingTrack;
+    existingTrack.elements.push_back({0, 0});
+    const xjw::Point3DId existingId = reconstruction.addPoint3DWithTrack(existingPoint, existingTrack);
+
+    xjw::CorrespondenceGraph graph;
+    graph.addImage(0, 1);
+    graph.addImage(1, 1);
+    graph.addMatches(0, 1, {xjw::FeatureMatch{0, 0}});
+    graph.buildCorrespondences();
+
+    xjw::Triangulator triangulator(reconstruction, graph);
+    xjw::TriangulatorOptions options;
+    options.minTriAngle = 0.1;
+    options.maxReprojError = 100.0;
+    options.continueMaxReprojError = 0.1;
+    const xjw::TriangulationStats stats = triangulator.triangulateImage(1, options);
+
+    EXPECT_EQ(stats.numCreated, 0);
+    EXPECT_EQ(reconstruction.numPoints3D(), 1u);
+    EXPECT_EQ(reconstruction.image(0).point3DIds[0], existingId);
+    EXPECT_EQ(reconstruction.image(1).point3DIds[0], xjw::kInvalidPoint3DId);
 }

@@ -8,6 +8,7 @@
 // =============================================================================
 
 #include "DepthMapFusion.h"
+#include "MvsImagePreprocessor.h"
 #include "io/PathIO.h"
 #include <opencv2/imgproc.hpp>
 #include <opencv2/imgcodecs.hpp>
@@ -66,6 +67,54 @@ float medianScalar2(float first, float second, bool hasSecond)
     return hasSecond ? std::max(first, second) : first;
 }
 
+bool projectWorldPoint(const Camera &camera,
+                       float worldX,
+                       float worldY,
+                       float worldZ,
+                       float &pixelX,
+                       float &pixelY)
+{
+    const double world[3] = {worldX, worldY, worldZ};
+    double pixel[2] = {0.0, 0.0};
+    double depth = 0.0;
+    if (!camera.projectWorldPointWithDepth(world, pixel, depth))
+    {
+        return false;
+    }
+    pixelX = static_cast<float>(pixel[0]);
+    pixelY = static_cast<float>(pixel[1]);
+    return true;
+}
+
+bool unprojectPixel(const Camera &camera,
+                    float pixelX,
+                    float pixelY,
+                    float depth,
+                    float &worldX,
+                    float &worldY,
+                    float &worldZ)
+{
+    const double pixel[2] = {pixelX, pixelY};
+    double world[3] = {0.0, 0.0, 0.0};
+    if (!camera.unprojectPixel(pixel, depth, world))
+    {
+        return false;
+    }
+    worldX = static_cast<float>(world[0]);
+    worldY = static_cast<float>(world[1]);
+    worldZ = static_cast<float>(world[2]);
+    return true;
+}
+
+float positiveDepth(const Camera &camera, float worldX, float worldY, float worldZ)
+{
+    const double world[3] = {worldX, worldY, worldZ};
+    double camera_point[3] = {0.0, 0.0, 0.0};
+    camera.worldToCamera(world, camera_point);
+    const double depth = camera.depthAxisFlipped() ? -camera_point[2] : camera_point[2];
+    return static_cast<float>(depth);
+}
+
 class ColorImageCache
 {
 public:
@@ -98,6 +147,22 @@ public:
         if (!path.empty())
         {
             image = xjw::common::io::readImage(path, cv::IMREAD_COLOR);
+        }
+        if (!image.empty())
+        {
+            const Camera &source_camera = m_frames[frameIdx].sourceCamera.isValid()
+                ? m_frames[frameIdx].sourceCamera
+                : m_frames[frameIdx].cameraModel;
+            cv::Mat prepared;
+            Camera prepared_camera;
+            if (prepareMvsImage(image, source_camera, &prepared, &prepared_camera))
+            {
+                image = std::move(prepared);
+            }
+            else
+            {
+                image.release();
+            }
         }
         if (!image.empty()
             && m_frames[frameIdx].imgW > 0
@@ -187,11 +252,14 @@ void DepthMapFusion::prepareGeometry(
 
     for (int fi = 0; fi < NF; ++fi)
     {
-        const PositiveDepthCameraModel &cam = frames[fi].cameraModel;
+        const Camera &cam = frames[fi].cameraModel;
         FrameGeometry &g = geom[fi];
         g.cameraModel = cam;
         g.W = frames[fi].imgW;
         g.H = frames[fi].imgH;
+        const Camera::Intrinsics intrinsics = cam.intrinsics();
+        const std::array<double, 9> rotation = cam.worldToCameraRotation();
+        const std::array<double, 3> translation = cam.worldToCameraTranslation();
 
         // 构造 3×4 投影矩阵 P = K * [R | T]
         // K = [[fx, 0, cx], [0, fy, cy], [0, 0, 1]]
@@ -202,41 +270,43 @@ void DepthMapFusion::prepareGeometry(
                 float kRow[3] = {0, 0, 0};
                 if (r == 0)
                 {
-                    kRow[0] = cam.fx;
-                    kRow[2] = cam.cx;
+                    kRow[0] = static_cast<float>(intrinsics.focalX);
+                    kRow[2] = static_cast<float>(intrinsics.principalX);
                 }
                 else if (r == 1)
                 {
-                    kRow[1] = cam.fy;
-                    kRow[2] = cam.cy;
+                    kRow[1] = static_cast<float>(intrinsics.focalY);
+                    kRow[2] = static_cast<float>(intrinsics.principalY);
                 }
                 else
                 {
                     kRow[2] = 1.0f;
                 }
 
-                g.P[r*4+c] = kRow[0]*cam.R_cw[0*3+c] +
-                              kRow[1]*cam.R_cw[1*3+c] +
-                              kRow[2]*cam.R_cw[2*3+c];
+                g.P[r*4+c] = kRow[0]*static_cast<float>(rotation[0*3+c]) +
+                              kRow[1]*static_cast<float>(rotation[1*3+c]) +
+                              kRow[2]*static_cast<float>(rotation[2*3+c]);
             }
             // T 列
             float kRow[3] = {0, 0, 0};
             if (r == 0)
             {
-                kRow[0] = cam.fx;
-                kRow[2] = cam.cx;
+                kRow[0] = static_cast<float>(intrinsics.focalX);
+                kRow[2] = static_cast<float>(intrinsics.principalX);
             }
             else if (r == 1)
             {
-                kRow[1] = cam.fy;
-                kRow[2] = cam.cy;
+                kRow[1] = static_cast<float>(intrinsics.focalY);
+                kRow[2] = static_cast<float>(intrinsics.principalY);
             }
             else
             {
                 kRow[2] = 1.0f;
             }
 
-            g.P[r*4+3] = kRow[0]*cam.T[0] + kRow[1]*cam.T[1] + kRow[2]*cam.T[2];
+            g.P[r*4+3] = kRow[0]*static_cast<float>(translation[0])
+                       + kRow[1]*static_cast<float>(translation[1])
+                       + kRow[2]*static_cast<float>(translation[2]);
         }
 
         // 逆旋转 R_wc = R_cw^T
@@ -244,7 +314,7 @@ void DepthMapFusion::prepareGeometry(
         {
             for (int c = 0; c < 3; ++c)
             {
-                g.invR[r*3+c] = cam.R_cw[c*3+r];
+                g.invR[r*3+c] = static_cast<float>(rotation[c*3+r]);
             }
         }
 
@@ -301,17 +371,17 @@ void DepthMapFusion::computeOverlappingImages(
         std::vector<OverlapInfo> candidates;
         candidates.reserve(NF - 1);
 
-        const float *C_fi = frames[fi].cameraModel.C;
+        const std::array<double, 3> C_fi = frames[fi].cameraModel.cameraCenter();
         for (int fj = 0; fj < NF; ++fj)
         {
             if (fj == fi)
             {
                 continue;
             }
-            const float *C_fj = frames[fj].cameraModel.C;
-            float dx = C_fj[0] - C_fi[0];
-            float dy = C_fj[1] - C_fi[1];
-            float dz = C_fj[2] - C_fi[2];
+            const std::array<double, 3> C_fj = frames[fj].cameraModel.cameraCenter();
+            float dx = static_cast<float>(C_fj[0] - C_fi[0]);
+            float dy = static_cast<float>(C_fj[1] - C_fi[1]);
+            float dz = static_cast<float>(C_fj[2] - C_fi[2]);
             float dist = std::sqrt(dx*dx + dy*dy + dz*dz);
             candidates.push_back({fj, dist});
         }
@@ -412,7 +482,7 @@ bool DepthMapFusion::fusePixel(
         {
             // 将参考点投影到当前帧
             float u_proj, v_proj;
-            if (!g.cameraModel.project(refX, refY, refZ, u_proj, v_proj))
+            if (!projectWorldPoint(g.cameraModel, refX, refY, refZ, u_proj, v_proj))
             {
                 continue;
             }
@@ -426,8 +496,7 @@ bool DepthMapFusion::fusePixel(
             }
 
             // 深度一致性：计算期望深度 vs 实测深度
-            float Zc_expect = g.cameraModel.R_cw[6]*refX + g.cameraModel.R_cw[7]*refY +
-                              g.cameraModel.R_cw[8]*refZ + g.cameraModel.T[2];
+            const float Zc_expect = positiveDepth(g.cameraModel, refX, refY, refZ);
             if (Zc_expect <= 0.f)
             {
                 continue;
@@ -470,7 +539,10 @@ bool DepthMapFusion::fusePixel(
 
         // 计算 3D 坐标
         float Xw, Yw, Zw;
-        g.cameraModel.unproject(static_cast<float>(c), static_cast<float>(r), d, Xw, Yw, Zw);
+        if (!unprojectPixel(g.cameraModel, static_cast<float>(c), static_cast<float>(r), d, Xw, Yw, Zw))
+        {
+            continue;
+        }
 
         // 包围盒检查
         if (_config.useBoundingBox)
@@ -562,7 +634,7 @@ bool DepthMapFusion::fusePixel(
                 const FrameGeometry &gO = geom[overlapIdx];
                 // 将当前 3D 点投影到重叠视图
                 float u_o, v_o;
-                if (!gO.cameraModel.project(Xw, Yw, Zw, u_o, v_o))
+                if (!projectWorldPoint(gO.cameraModel, Xw, Yw, Zw, u_o, v_o))
                 {
                     continue;
                 }
@@ -786,13 +858,16 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                         }
 
                         float x0, y0, z0;
-                        geom[fi].cameraModel.unproject(
-                            static_cast<float>(col),
-                            static_cast<float>(row),
-                            depth,
-                            x0,
-                            y0,
-                            z0);
+                        if (!unprojectPixel(geom[fi].cameraModel,
+                                            static_cast<float>(col),
+                                            static_cast<float>(row),
+                                            depth,
+                                            x0,
+                                            y0,
+                                            z0))
+                        {
+                            continue;
+                        }
                         if (!inBoundingBox(x0, y0, z0))
                         {
                             continue;
@@ -818,7 +893,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
 
                         float uOther = 0.f;
                         float vOther = 0.f;
-                        if (geom[other].cameraModel.project(x0, y0, z0, uOther, vOther))
+                        if (projectWorldPoint(geom[other].cameraModel, x0, y0, z0, uOther, vOther))
                         {
                             const int otherCol = static_cast<int>(std::round(uOther));
                             const int otherRow = static_cast<int>(std::round(vOther));
@@ -828,10 +903,8 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                                 const float du = uOther - static_cast<float>(otherCol);
                                 const float dv = vOther - static_cast<float>(otherRow);
                                 const float otherDepth = frames[other].depthMap.at<float>(otherRow, otherCol);
-                                const float zExpected = geom[other].cameraModel.R_cw[6] * x0 +
-                                                        geom[other].cameraModel.R_cw[7] * y0 +
-                                                        geom[other].cameraModel.R_cw[8] * z0 +
-                                                        geom[other].cameraModel.T[2];
+                                const float zExpected = positiveDepth(
+                                    geom[other].cameraModel, x0, y0, z0);
                                 bool consistent = otherDepth > 0.f &&
                                                   zExpected > 0.f &&
                                                   du * du + dv * dv <= maxReprojSq &&
@@ -848,14 +921,15 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                                 }
                                 if (consistent)
                                 {
-                                    geom[other].cameraModel.unproject(
+                                    consistent = unprojectPixel(
+                                        geom[other].cameraModel,
                                         static_cast<float>(otherCol),
                                         static_cast<float>(otherRow),
                                         otherDepth,
                                         x1,
                                         y1,
-                                        z1);
-                                    consistent = inBoundingBox(x1, y1, z1);
+                                        z1)
+                                        && inBoundingBox(x1, y1, z1);
                                 }
                                 if (consistent && tryClaim(other, otherIdx))
                                 {
@@ -1065,30 +1139,29 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
             return false;
         }
 
-        auto unprojectPixel = [&](int sampleRow, int sampleCol, float &x, float &y, float &z) {
+        auto unprojectSample = [&](int sampleRow, int sampleCol, float &x, float &y, float &z) {
             const float sampleDepth = frames[frameIdx].depthMap.at<float>(sampleRow, sampleCol);
             if (sampleDepth <= 0.0f)
             {
                 return false;
             }
-            frameGeom.cameraModel.unproject(
-                static_cast<float>(sampleCol),
-                static_cast<float>(sampleRow),
-                sampleDepth,
-                x,
-                y,
-                z);
-            return true;
+            return ::xjw::mvs::unprojectPixel(frameGeom.cameraModel,
+                                              static_cast<float>(sampleCol),
+                                              static_cast<float>(sampleRow),
+                                              sampleDepth,
+                                              x,
+                                              y,
+                                              z);
         };
 
         float xl = 0.0f, yl = 0.0f, zl = 0.0f;
         float xr = 0.0f, yr = 0.0f, zr = 0.0f;
         float xu = 0.0f, yu = 0.0f, zu = 0.0f;
         float xd = 0.0f, yd = 0.0f, zd = 0.0f;
-        if (!unprojectPixel(row, leftCol, xl, yl, zl) ||
-            !unprojectPixel(row, rightCol, xr, yr, zr) ||
-            !unprojectPixel(upRow, col, xu, yu, zu) ||
-            !unprojectPixel(downRow, col, xd, yd, zd))
+        if (!unprojectSample(row, leftCol, xl, yl, zl) ||
+            !unprojectSample(row, rightCol, xr, yr, zr) ||
+            !unprojectSample(upRow, col, xu, yu, zu) ||
+            !unprojectSample(downRow, col, xd, yd, zd))
         {
             return false;
         }
@@ -1158,13 +1231,16 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                     }
 
                     FusedPoint point;
-                    geom[fi].cameraModel.unproject(
-                        static_cast<float>(col),
-                        static_cast<float>(row),
-                        depth,
-                        point.x,
-                        point.y,
-                        point.z);
+                    if (!unprojectPixel(geom[fi].cameraModel,
+                                        static_cast<float>(col),
+                                        static_cast<float>(row),
+                                        depth,
+                                        point.x,
+                                        point.y,
+                                        point.z))
+                    {
+                        continue;
+                    }
 
                     if (_config.useBoundingBox &&
                         (point.x < _config.bboxMin[0] || point.x > _config.bboxMax[0] ||
@@ -1236,7 +1312,8 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                             const FrameGeometry &otherGeom = geom[otherFrame];
                             float uOther = 0.0f;
                             float vOther = 0.0f;
-                            if (!otherGeom.cameraModel.project(point.x, point.y, point.z, uOther, vOther))
+                            if (!projectWorldPoint(
+                                    otherGeom.cameraModel, point.x, point.y, point.z, uOther, vOther))
                             {
                                 continue;
                             }
@@ -1257,11 +1334,8 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
 
                             const float otherDepth =
                                 frames[otherFrame].depthMap.at<float>(otherRow, otherCol);
-                            const float expectedDepth =
-                                otherGeom.cameraModel.R_cw[6] * point.x +
-                                otherGeom.cameraModel.R_cw[7] * point.y +
-                                otherGeom.cameraModel.R_cw[8] * point.z +
-                                otherGeom.cameraModel.T[2];
+                            const float expectedDepth = positiveDepth(
+                                otherGeom.cameraModel, point.x, point.y, point.z);
                             if (otherDepth <= 0.0f || expectedDepth <= 0.0f ||
                                 std::fabs(otherDepth - expectedDepth) / expectedDepth > _config.maxDepthError)
                             {
@@ -1296,13 +1370,16 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                             float otherX = 0.0f;
                             float otherY = 0.0f;
                             float otherZ = 0.0f;
-                            otherGeom.cameraModel.unproject(
-                                static_cast<float>(otherCol),
-                                static_cast<float>(otherRow),
-                                otherDepth,
-                                otherX,
-                                otherY,
-                                otherZ);
+                            if (!unprojectPixel(otherGeom.cameraModel,
+                                                static_cast<float>(otherCol),
+                                                static_cast<float>(otherRow),
+                                                otherDepth,
+                                                otherX,
+                                                otherY,
+                                                otherZ))
+                            {
+                                continue;
+                            }
                             if (_config.useBoundingBox &&
                                 (otherX < _config.bboxMin[0] || otherX > _config.bboxMax[0] ||
                                  otherY < _config.bboxMin[1] || otherY > _config.bboxMax[1] ||

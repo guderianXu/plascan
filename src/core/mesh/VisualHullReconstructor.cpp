@@ -9,7 +9,9 @@
 #include <atomic>
 #include <cmath>
 #include <limits>
+#include <numeric>
 #include <thread>
+#include <unordered_map>
 
 #if defined(MESHING_OPENMP)
 #include <omp.h>
@@ -54,16 +56,16 @@ bool isOccupied(float worldX,
     int freeSpaceViolations = 0;
     for (const VisualHullView &view : views)
     {
-        float pixelX = 0.0f;
-        float pixelY = 0.0f;
-        float cameraDepth = 0.0f;
-        if (!view.camera.projectWithDepth(worldX, worldY, worldZ, pixelX, pixelY, cameraDepth))
+        const double world[3] = {worldX, worldY, worldZ};
+        double pixel[2] = {};
+        double cameraDepth = 0.0;
+        if (!view.camera.projectWorldPointWithDepth(world, pixel, cameraDepth))
         {
             continue;
         }
 
-        const int column = static_cast<int>(std::lround(pixelX));
-        const int row = static_cast<int>(std::lround(pixelY));
+        const int column = static_cast<int>(std::lround(pixel[0]));
+        const int row = static_cast<int>(std::lround(pixel[1]));
         if (row < 0 || column < 0 || row >= view.silhouetteMask.rows ||
             column >= view.silhouetteMask.cols)
         {
@@ -157,19 +159,19 @@ void recomputeNormalsAndColors(TriMesh *mesh, const std::vector<VisualHullView> 
                       cv::Scalar(std::numeric_limits<float>::infinity()));
         for (const MeshVertex &vertex : mesh->vertices)
         {
-            float pixelX = 0.0f;
-            float pixelY = 0.0f;
-            float cameraDepth = 0.0f;
-            if (!view.camera.projectWithDepth(vertex.x, vertex.y, vertex.z,
-                                              pixelX, pixelY, cameraDepth))
+            const double world[3] = {vertex.x, vertex.y, vertex.z};
+            double pixel[2] = {};
+            double cameraDepth = 0.0;
+            if (!view.camera.projectWorldPointWithDepth(world, pixel, cameraDepth))
             {
                 continue;
             }
-            const int column = static_cast<int>(std::lround(pixelX));
-            const int row = static_cast<int>(std::lround(pixelY));
+            const int column = static_cast<int>(std::lround(pixel[0]));
+            const int row = static_cast<int>(std::lround(pixel[1]));
             if (row >= 0 && column >= 0 && row < depth.rows && column < depth.cols)
             {
-                depth.at<float>(row, column) = std::min(depth.at<float>(row, column), cameraDepth);
+                depth.at<float>(row, column) = std::min(
+                    depth.at<float>(row, column), static_cast<float>(cameraDepth));
             }
         }
         cv::erode(depth, depth, cv::Mat::ones(3, 3, CV_8UC1));
@@ -236,16 +238,15 @@ void recomputeNormalsAndColors(TriMesh *mesh, const std::vector<VisualHullView> 
             {
                 continue;
             }
-            float pixelX = 0.0f;
-            float pixelY = 0.0f;
-            float depth = 0.0f;
-            if (!view.camera.projectWithDepth(vertex.x, vertex.y, vertex.z,
-                                              pixelX, pixelY, depth))
+            const double world[3] = {vertex.x, vertex.y, vertex.z};
+            double pixel[2] = {};
+            double depth = 0.0;
+            if (!view.camera.projectWorldPointWithDepth(world, pixel, depth))
             {
                 continue;
             }
-            const int column = static_cast<int>(std::lround(pixelX));
-            const int row = static_cast<int>(std::lround(pixelY));
+            const int column = static_cast<int>(std::lround(pixel[0]));
+            const int row = static_cast<int>(std::lround(pixel[1]));
             if (row < 0 || column < 0 || row >= view.colorImage.rows ||
                 column >= view.colorImage.cols)
             {
@@ -265,9 +266,10 @@ void recomputeNormalsAndColors(TriMesh *mesh, const std::vector<VisualHullView> 
                 }
             }
 
-            float directionX = view.camera.C[0] - vertex.x;
-            float directionY = view.camera.C[1] - vertex.y;
-            float directionZ = view.camera.C[2] - vertex.z;
+            const std::array<double, 3> center = view.camera.cameraCenter();
+            float directionX = static_cast<float>(center[0]) - vertex.x;
+            float directionY = static_cast<float>(center[1]) - vertex.y;
+            float directionZ = static_cast<float>(center[2]) - vertex.z;
             const float directionLength = std::sqrt(directionX * directionX +
                                                     directionY * directionY +
                                                     directionZ * directionZ);
@@ -319,6 +321,175 @@ void recomputeNormalsAndColors(TriMesh *mesh, const std::vector<VisualHullView> 
 
 } // namespace
 
+MeshConnectivityStats VisualHullReconstructor::analyzeConnectivity(const TriMesh &mesh)
+{
+    MeshConnectivityStats stats;
+    if (mesh.vertices.empty() || mesh.faces.empty())
+    {
+        return stats;
+    }
+
+    std::vector<int> parent(mesh.vertices.size());
+    std::iota(parent.begin(), parent.end(), 0);
+    const auto find_root = [&parent](int vertex)
+    {
+        int root = vertex;
+        while (parent[static_cast<std::size_t>(root)] != root)
+        {
+            root = parent[static_cast<std::size_t>(root)];
+        }
+        while (parent[static_cast<std::size_t>(vertex)] != vertex)
+        {
+            const int next = parent[static_cast<std::size_t>(vertex)];
+            parent[static_cast<std::size_t>(vertex)] = root;
+            vertex = next;
+        }
+        return root;
+    };
+    const auto unite = [&parent, &find_root](int left, int right)
+    {
+        const int left_root = find_root(left);
+        const int right_root = find_root(right);
+        if (left_root != right_root)
+        {
+            parent[static_cast<std::size_t>(right_root)] = left_root;
+        }
+    };
+
+    for (const Triangle &face : mesh.faces)
+    {
+        const int a = face.v[0];
+        const int b = face.v[1];
+        const int c = face.v[2];
+        if (a < 0 || b < 0 || c < 0 ||
+            a >= static_cast<int>(mesh.vertices.size()) ||
+            b >= static_cast<int>(mesh.vertices.size()) ||
+            c >= static_cast<int>(mesh.vertices.size()))
+        {
+            continue;
+        }
+        unite(a, b);
+        unite(a, c);
+    }
+
+    std::unordered_map<int, std::size_t> face_counts;
+    for (const Triangle &face : mesh.faces)
+    {
+        if (face.v[0] < 0 || face.v[0] >= static_cast<int>(mesh.vertices.size()))
+        {
+            continue;
+        }
+        ++face_counts[find_root(face.v[0])];
+    }
+    stats.componentCount = static_cast<int>(face_counts.size());
+    for (const auto &[root, face_count] : face_counts)
+    {
+        (void)root;
+        stats.largestComponentFaceCount = std::max(stats.largestComponentFaceCount, face_count);
+    }
+    stats.largestComponentFaceRatio = mesh.faces.empty()
+        ? 0.0
+        : static_cast<double>(stats.largestComponentFaceCount) /
+              static_cast<double>(mesh.faces.size());
+    return stats;
+}
+
+bool VisualHullReconstructor::requiresSilhouetteOnlyRetry(
+    const MeshConnectivityStats &stats,
+    double minimumLargestComponentFaceRatio,
+    int maximumConnectedComponents)
+{
+    return stats.componentCount <= 0 ||
+           stats.componentCount > std::max(1, maximumConnectedComponents) ||
+           stats.largestComponentFaceRatio <
+               std::clamp(minimumLargestComponentFaceRatio, 0.0, 1.0);
+}
+
+bool VisualHullReconstructor::retainLargestConnectedComponent(TriMesh *mesh)
+{
+    if (!mesh || mesh->vertices.empty() || mesh->faces.empty())
+    {
+        return false;
+    }
+
+    std::vector<int> parent(mesh->vertices.size());
+    std::iota(parent.begin(), parent.end(), 0);
+    const auto find_root = [&parent](int vertex)
+    {
+        while (parent[static_cast<std::size_t>(vertex)] != vertex)
+        {
+            parent[static_cast<std::size_t>(vertex)] =
+                parent[static_cast<std::size_t>(parent[static_cast<std::size_t>(vertex)])];
+            vertex = parent[static_cast<std::size_t>(vertex)];
+        }
+        return vertex;
+    };
+    const auto unite = [&parent, &find_root](int left, int right)
+    {
+        const int left_root = find_root(left);
+        const int right_root = find_root(right);
+        if (left_root != right_root)
+        {
+            parent[static_cast<std::size_t>(right_root)] = left_root;
+        }
+    };
+
+    for (const Triangle &face : mesh->faces)
+    {
+        unite(face.v[0], face.v[1]);
+        unite(face.v[0], face.v[2]);
+    }
+    std::unordered_map<int, std::size_t> face_counts;
+    for (const Triangle &face : mesh->faces)
+    {
+        ++face_counts[find_root(face.v[0])];
+    }
+    const auto largest = std::max_element(
+        face_counts.begin(), face_counts.end(), [](const auto &left, const auto &right)
+        {
+            return left.second < right.second;
+        });
+    if (largest == face_counts.end() || largest->second == mesh->faces.size())
+    {
+        return false;
+    }
+
+    std::vector<Triangle> retained_faces;
+    retained_faces.reserve(largest->second);
+    std::vector<bool> used_vertices(mesh->vertices.size(), false);
+    for (const Triangle &face : mesh->faces)
+    {
+        if (find_root(face.v[0]) == largest->first)
+        {
+            retained_faces.push_back(face);
+            used_vertices[static_cast<std::size_t>(face.v[0])] = true;
+            used_vertices[static_cast<std::size_t>(face.v[1])] = true;
+            used_vertices[static_cast<std::size_t>(face.v[2])] = true;
+        }
+    }
+
+    std::vector<int> remap(mesh->vertices.size(), -1);
+    std::vector<MeshVertex> retained_vertices;
+    retained_vertices.reserve(mesh->vertices.size());
+    for (std::size_t index = 0; index < mesh->vertices.size(); ++index)
+    {
+        if (used_vertices[index])
+        {
+            remap[index] = static_cast<int>(retained_vertices.size());
+            retained_vertices.push_back(mesh->vertices[index]);
+        }
+    }
+    for (Triangle &face : retained_faces)
+    {
+        face.v[0] = remap[static_cast<std::size_t>(face.v[0])];
+        face.v[1] = remap[static_cast<std::size_t>(face.v[1])];
+        face.v[2] = remap[static_cast<std::size_t>(face.v[2])];
+    }
+    mesh->vertices = std::move(retained_vertices);
+    mesh->faces = std::move(retained_faces);
+    return true;
+}
+
 bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &views,
                                           const VisualHullConfig &config,
                                           TriMesh *mesh,
@@ -337,7 +508,7 @@ bool VisualHullReconstructor::reconstruct(const std::vector<VisualHullView> &vie
     const int validViewCount = static_cast<int>(std::count_if(
         views.begin(), views.end(), [](const VisualHullView &view)
         {
-            return view.camera.valid() && view.silhouetteMask.type() == CV_8UC1 &&
+            return view.camera.isValid() && view.silhouetteMask.type() == CV_8UC1 &&
                    !view.silhouetteMask.empty();
         }));
     if (!validBounds(config) || config.resolution < 8 || validViewCount < 2)

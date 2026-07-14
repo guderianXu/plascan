@@ -30,7 +30,7 @@ public:
     static std::vector<DensePoint> unprojectGPU(
         const cv::Mat                 &depth,
         const cv::Mat                 &mask,
-        const PositiveDepthCameraModel &cameraModel,
+        const Camera                    &cameraModel,
         const cv::Mat                 &colorImg,
         float                          minDepth = 0.01f,
         float                          maxDepth = 1e6f,

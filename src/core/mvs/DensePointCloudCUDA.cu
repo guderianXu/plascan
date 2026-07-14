@@ -85,7 +85,7 @@ __global__ void kernelUnproject(
 std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
     const cv::Mat                 &depth,
     const cv::Mat                 &mask,
-    const PositiveDepthCameraModel &cam,
+    const Camera                    &cam,
     const cv::Mat                 &colorImg,
     float                          minDepth,
     float                          maxDepth,
@@ -150,10 +150,21 @@ std::vector<DensePoint> DensePointCloudCUDA::unprojectGPU(
 
     {
         CamParams cparam;
-        cparam.fx = cam.fx; cparam.cx = cam.cx;
-        cparam.fy = cam.fy; cparam.cy = cam.cy;
-        memcpy(cparam.R_cw, cam.R_cw, 9*sizeof(float));
-        memcpy(cparam.T,    cam.T,    3*sizeof(float));
+        const Camera::Intrinsics intrinsics = cam.intrinsics();
+        const std::array<double, 9> rotation = cam.worldToCameraRotation();
+        const std::array<double, 3> translation = cam.worldToCameraTranslation();
+        cparam.fx = static_cast<float>(intrinsics.focalX);
+        cparam.cx = static_cast<float>(intrinsics.principalX);
+        cparam.fy = static_cast<float>(intrinsics.focalY);
+        cparam.cy = static_cast<float>(intrinsics.principalY);
+        for (int index = 0; index < 9; ++index)
+        {
+            cparam.R_cw[index] = static_cast<float>(rotation[index]);
+        }
+        for (int index = 0; index < 3; ++index)
+        {
+            cparam.T[index] = static_cast<float>(translation[index]);
+        }
 
         const int bW = (options && options->cudaBlockW > 0) ? options->cudaBlockW : 16;
         const int bH = (options && options->cudaBlockH > 0) ? options->cudaBlockH : 16;

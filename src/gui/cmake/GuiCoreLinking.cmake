@@ -75,6 +75,13 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
     message(WARNING "plascan_core qc target not available - 重建质量报告功能将不可用")
   endif()
 
+  if(TARGET control_points)
+    message(STATUS "plascan_gui: linking against control_points target")
+    target_link_libraries(plascan_gui PRIVATE control_points)
+  else()
+    message(WARNING "plascan_core control_points target not available - 标记点系统将不可用")
+  endif()
+
   if(TARGET mask)
     message(STATUS "plascan_gui: linking against mask target")
     target_link_libraries(plascan_gui PRIVATE mask)

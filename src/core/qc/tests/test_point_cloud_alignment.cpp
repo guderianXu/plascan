@@ -101,6 +101,40 @@ TEST(PointCloudAlignment, AlignsUnpairedCloudsWithNearestNeighborTranslation)
     EXPECT_NEAR(result.after.rmse, 0.0, 1e-9);
 }
 
+TEST(PointCloudAlignment, RecoversRotationScaleAndTranslationForPairedClouds)
+{
+    const std::vector<Point3D> source = {
+        {0.0, 0.0, 0.0},
+        {1.0, 0.0, 0.0},
+        {0.0, 2.0, 0.0},
+        {0.0, 0.0, 3.0},
+        {1.0, 2.0, 3.0}
+    };
+    const double angle = 0.7;
+    const double scale = 2.5;
+    const Point3D translation{4.0, -3.0, 1.25};
+    std::vector<Point3D> reference;
+    for (const Point3D &point : source)
+    {
+        const Point3D rotated = rotateZAndTranslate(point, angle, {});
+        reference.push_back({scale * rotated.x + translation.x,
+                             scale * rotated.y + translation.y,
+                             scale * rotated.z + translation.z});
+    }
+
+    const auto result = PointCloudAlignment::alignPairedSimilarity(source, reference);
+
+    ASSERT_TRUE(result.success) << result.error.toStdString();
+    EXPECT_NEAR(result.transform.scale, scale, 1.0e-9);
+    EXPECT_LT(result.after.rmse, 1.0e-9);
+    for (std::size_t index = 0; index < source.size(); ++index)
+    {
+        EXPECT_LT(pointDistance(PointCloudAlignment::apply(result.transform, source[index]),
+                                reference[index]),
+                  1.0e-9);
+    }
+}
+
 TEST(PointCloudAlignment, AlignsUnpairedCloudsWithPlaPointIcpRotation)
 {
     std::vector<Point3D> source;

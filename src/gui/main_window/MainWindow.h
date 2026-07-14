@@ -51,6 +51,12 @@ class QDropEvent;
 class QWidgetAction;
 class HenuBrandWidget;
 
+namespace xjw::gui::markers
+{
+class MarkerWorkspaceController;
+class MarkerReferencePanel;
+}
+
 namespace Ui {
 class MainWindow;
 }
@@ -78,6 +84,7 @@ private:
     void setHenanUniversityBrandVisible(bool visible);
     void setupMenuConnections();  // 将菜单/工具栏 QAction 信号连接到对应的槽
     void setupProjectManager();   // 创建所有业务对象（ProjectManager 等）并完成全局信号/槽连接
+    void openMarkerFocusMeasurement(const QString &markerId, const QString &preferredImagePath = {});
     void refreshDashboardTaskSnapshots(); // 将状态栏任务快照同步到只读概览页
 
     // ---- UI 设置持久化辅助 ----
@@ -133,6 +140,8 @@ public:
     MenuWorkflowController* _menuWorkflowController{}; // 菜单业务流程控制器（对话框调用协调）
     ReconstructionWorkflowController* _reconController{}; // 重建菜单业务控制器
     ProjectManager*   _projectManager{};               // 项目生命周期管理（新建/打开/保存/关闭）
+    xjw::gui::markers::MarkerWorkspaceController *_markerWorkspaceController{};
+    xjw::gui::markers::MarkerReferencePanel *_markerReferencePanel{};
     QProgressDialog*  _openProgressDialog{};           // 打开项目期间显示的模态进度对话框
     QProgressDialog*  _saveProgressDialog{};           // 保存操作期间显示的模态进度对话框
     TaskStatusWidget* _mvsTaskStatus{};                 // MVS 状态栏任务状态

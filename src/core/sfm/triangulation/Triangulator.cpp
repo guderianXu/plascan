@@ -109,6 +109,16 @@ TriangulationStats Triangulator::triangulateImage(ImageId imageId, const Triangu
                 continue;
             }
 
+            // 新点只能使用尚未归属三维点的两端观测。若另一端已经属于已有点，
+            // 即使轨迹延续因重投影误差失败，也不能覆盖其 point3DId，否则同一
+            // 2D 特征会同时出现在多个三维点轨迹中。
+            const ImageData &otherImg = _reconstruction.image(corr.imageId);
+            if (corr.featureIdx >= otherImg.point3DIds.size() ||
+                otherImg.point3DIds[corr.featureIdx] != kInvalidPoint3DId)
+            {
+                continue;
+            }
+
             std::array<double, 3> xyz;
             if (triangulatePair(imageId, fi, corr.imageId, corr.featureIdx, options, xyz))
             {
@@ -116,6 +126,14 @@ TriangulationStats Triangulator::triangulateImage(ImageId imageId, const Triangu
                 Track track;
                 track.elements.push_back({imageId, fi});
                 track.elements.push_back({corr.imageId, corr.featureIdx});
+                const std::string first_source = _correspondenceGraph.priorTrackId(imageId, fi);
+                const std::string second_source =
+                    _correspondenceGraph.priorTrackId(corr.imageId, corr.featureIdx);
+                if (!first_source.empty() && first_source == second_source)
+                {
+                    track.source = TrackSource::PriorMarker;
+                    track.sourceId = first_source;
+                }
 
                 _reconstruction.addPoint3DWithTrack(xyz, track);
 
@@ -222,6 +240,10 @@ TriangulationStats Triangulator::triangulateTracks(const std::vector<Track> &tra
                 return Candidate{};
             }
 
+            // 内点重建不能丢失人工标记的来源，否则后续控制点/检查点角色无法传入 BA。
+            candidate.inlierTrack.confidence = track.confidence;
+            candidate.inlierTrack.source = track.source;
+            candidate.inlierTrack.sourceId = track.sourceId;
             candidate.xyz = xyz;
             candidate.rmsError = std::sqrt(squaredErrorSum / static_cast<double>(candidate.inlierTrack.length()));
             candidate.valid = true;

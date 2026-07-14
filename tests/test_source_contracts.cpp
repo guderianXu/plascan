@@ -1744,7 +1744,10 @@ TEST(MvsSchedulerContractTest, FrameWorkerControlsAndSchedulerBasics)
         "settings.gpuFrameWorkers",
         "return std::clamp",
     });
-    expectNotContainsAll(configCpp, {
+    const QString autoGpuWorkers = sectionBetween(configCpp,
+                                                  "int autoGpuFrameWorkers",
+                                                  "int autoCpuFrameWorkers");
+    expectNotContainsAll(autoGpuWorkers, {
         "return 1;",
         "Q_UNUSED(threads)",
     });
@@ -1813,7 +1816,8 @@ TEST(MvsSchedulerContractTest, DepthCacheAndArtifactLifecycleContracts)
         "view.imageHeight = 0;",
     });
     expectContainsAll(helper, {
-        "const bool shouldLoadConfidence",
+        "if (!rawConfidencePath.isEmpty())",
+        "loadDepthMatStorage(rawConfidencePath, &result.frame.confidence)",
         "result.frame.confidence.release();",
     });
     expectNotContainsAll(helper, {"cv::Mat filteredDepth = result.frame.depthMap.clone();"});
@@ -1954,10 +1958,11 @@ TEST(MvsSchedulerContractTest, VisibilityAndSourceViewCachesAvoidRedundantWork)
 
 TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMatchInputs)
 {
-    const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/PositiveDepthCameraModel.h"));
-    const QString cameraSource = readSourceFile(QStringLiteral("src/core/camera/PositiveDepthCameraModel.cpp"));
+    const QString cameraHeader = readSourceFile(QStringLiteral("src/core/camera/Camera.h"));
+    const QString cameraSource = readSourceFile(QStringLiteral("src/core/camera/Camera.cpp"));
     const QString header = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.h"));
     const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
+    const QString pyramid = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidEstimator.cpp"));
     const QString cuda = readSourceFile(QStringLiteral("src/core/mvs/PatchMatchCUDA.cu"));
 
     expectContainsAll(scheduler, {
@@ -1969,12 +1974,11 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
         "patchMatchWorkSize",
         "collectProjectedSparseDepthSamples",
         "buildHintDepthFromProjectedSamples",
-        "const cv::Size coarseHintSize = patchMatchWorkSize(workRefImg, coarseCfg);",
-        "const cv::Size fineHintSize = patchMatchWorkSize(workRefImg, fineCfg);",
-        "coarseHintSize.width",
-        "coarseHintSize.height",
-        "fineHintSize.width",
-        "fineHintSize.height",
+        "makeDepthPyramidConfig",
+        "pyramid_sparse_hints",
+        "const cv::Size hint_size = patchMatchWorkSize",
+        "hint_size.width",
+        "hint_size.height",
         "workRefSparseSamples",
         "buildHintDepthFromProjectedSamples(refIdx",
         "buildSparseSupportMaskFromProjectedSamples(refIdx",
@@ -1992,9 +1996,9 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
     const QString supportBlock =
         sectionBetween(scheduler, "const std::vector<ProjectedSparseDepthSample> workRefSparseSamples", "timing.hintMs = elapsedMs");
     expectContainsAll(supportBlock, {
-        "supportMaskCfg",
-        "makeFinePatchMatchConfig(pmCfg, useRectified, 0.0f)",
-        "const cv::Size supportMaskSize = patchMatchWorkSize(refImg, supportMaskCfg);",
+        "support_mask_config",
+        "pyramid_config.levels[pyramid_config.activeLevelCount - 1].patchMatch",
+        "const cv::Size supportMaskSize = patchMatchWorkSize(refImg, support_mask_config);",
     });
     expectNotContainsAll(supportBlock, {"patchMatchWorkSize(refImg, pmCfg)"});
 
@@ -2007,29 +2011,28 @@ TEST(MvsSchedulerContractTest, SparseHintsUseProjectedSamplesAndPrescaledPatchMa
         "depthQuantileSamples",
         "std::nth_element",
         "projectedCandidates",
-        "cam.projectWithDepth",
+        "camera.projectWorldPointWithDepth",
         "candidate.depth",
     });
     expectNotContainsAll(projectedBlock, {
         "std::sort(allZc",
         "allZc.reserve(visiblePointIndices.size())",
         "float Zc = cam.R_cw[6]*pt[0]",
-        "cam.project(pt[0]",
+        "camera.projectWorldPoint(world",
     });
     EXPECT_EQ(countOccurrences(projectedBlock, "for (size_t pointIndex : visiblePointIndices)"), 1);
 
-    expectContainsAll(cameraHeader, {"projectWithDepth"});
+    expectContainsAll(cameraHeader, {"projectWorldPointWithDepth"});
     expectContainsAll(cameraSource, {
-        "PositiveDepthCameraModel::projectWithDepth",
-        "return projectWithDepth",
+        "Camera::projectWorldPointWithDepth",
+        "return projectWorldPoint(world, pixel)",
     });
 
-    const QString fineBlock = sectionBetween(scheduler, "cv::resize(coarseDepth, fineHint", "const int hintValid");
-    expectContainsAll(fineBlock, {
-        "fineSparseSeedHint",
-        "fineSparseSeedHint.copyTo(fineHint",
+    expectContainsAll(pyramid, {
+        "propagateDepthPrior(parent, guide, target_size)",
+        "mergeSparseHint(prior, request.sparseDepthHints[index], target_size)",
+        "hint.copyTo(prior.center, sparse_mask)",
     });
-    expectNotContainsAll(fineBlock, {"buildHintDepthFromProjectedSamples(refIdx"});
 
     const QString hintBody =
         sectionBetween(scheduler, "cv::Mat DepthMapGenerator::buildHintDepthFromProjectedSamples", "cv::Mat DepthMapGenerator::buildSparseSeedDepthFromProjectedSamples");
@@ -2077,21 +2080,18 @@ TEST(MvsSchedulerContractTest, PatchMatchRequiresRobustMultiViewPhotometricSuppo
     });
 }
 
-TEST(MvsSchedulerContractTest, FinePatchMatchKeepsConfiguredIterationBudget)
+TEST(MvsSchedulerContractTest, FinalPyramidLevelKeepsConfiguredIterationBudget)
 {
-    const QString scheduler = readSourceFile(QStringLiteral("src/core/mvs/DepthMapGenerator.cpp"));
-    const QString fine_policy = sectionBetween(scheduler,
-                                               "PatchMatchConfig makeFinePatchMatchConfig",
-                                               "cv::Size patchMatchWorkSize");
+    const QString policy = readSourceFile(QStringLiteral("src/core/mvs/DepthPyramidPolicy.cpp"));
 
-    expectContainsAll(fine_policy, {
-        "clampPatchMatchIterations(baseConfig.numIterations)",
-        "fineConfig.epipolarRectified = useRectified",
+    expectContainsAll(policy, {
+        "result.patchMatch = base_config",
+        "result.minSupportViews = 3",
+        "result.radiusScale = 1.0f",
     });
-    expectNotContainsAll(fine_policy, {
-        "fineConfig.numIterations - 1",
-        "hintCoverage > 0.35f",
-        "hintCoverage > 0.55f",
+    expectNotContainsAll(policy, {
+        "base_config.numIterations - 1",
+        "hintCoverage",
     });
 }
 
@@ -2119,6 +2119,23 @@ TEST(MvsSchedulerContractTest, StoredDepthFramesUseSharedPostprocessBeforeFusion
         "removeLocalDepthOutliers",
         "postprocessFusionDepthMap",
     });
+}
+
+TEST(MvsSchedulerContractTest, StoredDepthFusionUsesBoundedParallelPrefetch)
+{
+    const QString manager = readSourceFile(
+        QStringLiteral("src/gui/project/manager/ProjectDenseReconstructionManager.cpp"));
+    const QString depth_utils = readSourceFile(QStringLiteral("src/core/mvs/DepthFrameUtils.cpp"));
+
+    ASSERT_FALSE(manager.isEmpty());
+    ASSERT_FALSE(depth_utils.isEmpty());
+    EXPECT_TRUE(manager.contains(QStringLiteral("recommendedDepthFrameLoadWorkers")));
+    EXPECT_TRUE(manager.contains(QStringLiteral("std::condition_variable")));
+    EXPECT_TRUE(manager.contains(QStringLiteral("depthFrameCache.prefetch(next_window)")));
+    EXPECT_TRUE(manager.contains(QStringLiteral("准备深度图：已加载 %1/%2")));
+    EXPECT_TRUE(manager.contains(QStringLiteral("readTotal=%9 ms postTotal=%10 ms resizeTotal=%11 ms")));
+    EXPECT_TRUE(depth_utils.contains(QStringLiteral("estimateFusionFrameWorkingSetBytes")));
+    EXPECT_TRUE(depth_utils.contains(QStringLiteral("downsampleFusionFrameForMaxDimension")));
 }
 
 TEST(MeshReconstructionContractTest, ClosedSurfaceNormalsUseNeighborhoodConsistency)
@@ -2197,7 +2214,7 @@ TEST(MvsSchedulerContractTest, DepthPostprocessAndFusionContracts)
         "limitMvsInputsForRegression",
     });
     expectMatches(scheduler,
-                  R"(if\s*\(\s*_config\.runFusion\s*&&\s*keepDepthFramesInMemory\.load\(\)\s*&&\s*\(\s*savePreviewPng\s*\|\|\s*saveRawDepth\s*\)\s*\))");
+                  R"(if\s*\(\s*keepDepthFramesInMemory\.load\(\)\s*&&\s*\(\s*savePreviewPng\s*\|\|\s*saveRawDepth\s*\)\s*\))");
 
     expectContainsAll(cli, {
         "QJsonArray depthArtifacts;",
@@ -2231,7 +2248,7 @@ TEST(MvsSchedulerContractTest, DepthPostprocessAndFusionContracts)
     });
     expectContainsAll(depthUtilsH, {"int fusionMaxImageDim"});
     expectContainsAll(depthUtils, {
-        "scalePositiveDepthCameraModel",
+        "frame->cameraModel.scaledIntrinsics",
         "downsampleFusionFrameForMaxDimension",
         "cv::resize(frame->depthMap",
         "cv::resize(frame->confidence",
@@ -2308,9 +2325,8 @@ TEST(MvsSchedulerContractTest, DepthConsistencyMetadataAndReuseContracts)
         "emit depthMapArtifactSaved(artifact)",
         R"(cancelled("深度范围估计后"))",
         R"(cancelled("极线校正后"))",
-        R"(cancelled("构建深度 hint 后"))",
-        R"(cancelled("粗层 PatchMatch 后"))",
-        R"(cancelled("精细层 PatchMatch 后"))",
+        R"(cancelled("构建三级深度先验后"))",
+        R"(cancelled("三级 PatchMatch 后"))",
         R"(cancelled("深度后处理后"))",
     });
     EXPECT_GT(indexOfOrFail(generator, R"(saveQueue.enqueue(i, res, QStringLiteral("过滤后")))"),
@@ -2412,8 +2428,12 @@ TEST(MvsSchedulerContractTest, ThreeDWorkflowDenseRefineAndDenseSettingsContract
         R"(settings.value(QStringLiteral("speckleMinArea")).toInt(16))",
         R"(settings.value(QStringLiteral("qualityProfile")))",
         "applyDenseQualityProfile",
+        R"(QStringLiteral("highest"))",
+        R"(QStringLiteral("high"))",
+        R"(QStringLiteral("medium"))",
+        R"(QStringLiteral("low"))",
+        R"(QStringLiteral("lowest"))",
         R"(QStringLiteral("fast_preview"))",
-        R"(QStringLiteral("standard"))",
         R"(QStringLiteral("high_quality"))",
         "config.patchMatch.geomConsistency = settings.geomConsistency",
         "config.fusion.minSpeckleComponentArea",

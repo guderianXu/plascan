@@ -49,7 +49,7 @@ public:
         const cv::Mat &H1inv,
         const Camera &camL,
         const Camera &camR,
-        const PositiveDepthCameraModel &rectCamL,
+        const Camera &rectCamL,
         const TriangulationConfig &cfg = {});
 };
 

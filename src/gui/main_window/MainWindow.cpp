@@ -75,6 +75,12 @@
 #include "LayerRenderer.h"
 #include "Logger.h"
 #include "ModelDropSupport.h"
+#include "MarkerWorkspaceController.h"
+#include "MarkerReferencePanel.h"
+#include "MarkerFocusMeasurementDialog.h"
+#include "DetectMarkersDialog.h"
+#include "MarkerDetectionReviewDialog.h"
+#include "PrintMarkersDialog.h"
 
 namespace
 {
@@ -332,6 +338,8 @@ void MainWindow::setupUi()
     _dashboard = _ui->dashboardWidget;
     _dataTree = _ui->dataTree;
     _referencePanel = _ui->referencePanel;
+    _markerReferencePanel = new xjw::gui::markers::MarkerReferencePanel(_leftTabs);
+    _leftTabs->addTab(_markerReferencePanel, QStringLiteral("标记"));
     _workspaceCenter = _ui->workspaceCenter;
     _canvas       = _workspaceCenter->canvas();
     if (centralWidget())
@@ -546,6 +554,21 @@ void MainWindow::setupMenuConnections()
         connect(_mainMenu->rotateImageRightAction(),
                 &QAction::triggered, _canvas, &CanvasWidget::rotateRight);
     }
+    if (_mainMenu->showFeaturePointsAction())
+    {
+        connect(_mainMenu->showFeaturePointsAction(), &QAction::toggled,
+                _canvas, &CanvasWidget::setShowInterestPoints);
+    }
+    if (_mainMenu->showFeatureResidualsAction())
+    {
+        connect(_mainMenu->showFeatureResidualsAction(), &QAction::toggled,
+                _canvas, &CanvasWidget::setShowFeatureResiduals);
+    }
+    if (_mainMenu->showMaskOverlayAction())
+    {
+        connect(_mainMenu->showMaskOverlayAction(), &QAction::toggled,
+                _canvas, &CanvasWidget::setShowMaskOverlay);
+    }
     if (_canvas)
     {
         connect(_canvas, &CanvasWidget::displayImageReadyChanged, this, [this](bool ready)
@@ -557,6 +580,30 @@ void MainWindow::setupMenuConnections()
             if (_mainMenu->rotateImageRightAction())
             {
                 _mainMenu->rotateImageRightAction()->setEnabled(ready);
+            }
+        });
+        connect(_canvas, &CanvasWidget::interestPointsVisibilityChanged, this, [this](bool visible)
+        {
+            if (QAction *action = _mainMenu->showFeaturePointsAction())
+            {
+                const QSignalBlocker blocker(action);
+                action->setChecked(visible);
+            }
+        });
+        connect(_canvas, &CanvasWidget::featureResidualVisibilityChanged, this, [this](bool visible)
+        {
+            if (QAction *action = _mainMenu->showFeatureResidualsAction())
+            {
+                const QSignalBlocker blocker(action);
+                action->setChecked(visible);
+            }
+        });
+        connect(_canvas, &CanvasWidget::maskOverlayVisibilityChanged, this, [this](bool visible)
+        {
+            if (QAction *action = _mainMenu->showMaskOverlayAction())
+            {
+                const QSignalBlocker blocker(action);
+                action->setChecked(visible);
             }
         });
     }
@@ -715,6 +762,92 @@ void MainWindow::setupProjectManager()
     _projectData = new ProjectData(this);
     _projectManager = new ProjectManager(_projectData, this);
     _projectManager->setObjectName(QStringLiteral("ProjectManager"));
+    _markerWorkspaceController = new xjw::gui::markers::MarkerWorkspaceController(
+        _canvas, _projectData, this);
+    _markerReferencePanel->setController(_markerWorkspaceController);
+    connect(_markerWorkspaceController,
+            &xjw::gui::markers::MarkerWorkspaceController::persistenceError,
+            this,
+            [this](const QString &message)
+    {
+        QMessageBox::warning(this, QStringLiteral("标记点"), message);
+    });
+    connect(_markerWorkspaceController,
+            &xjw::gui::markers::MarkerWorkspaceController::focusMeasurementRequested,
+            this,
+            &MainWindow::openMarkerFocusMeasurement);
+    connect(_markerReferencePanel,
+            &xjw::gui::markers::MarkerReferencePanel::focusMeasurementRequested,
+            this,
+            [this](const QString &markerId)
+    {
+        openMarkerFocusMeasurement(markerId, _canvas ? _canvas->currentImagePath() : QString());
+    });
+    if (_mainMenu && _mainMenu->detectMarkersAction())
+    {
+        connect(_mainMenu->detectMarkersAction(), &QAction::triggered, this, [this]()
+        {
+            if (!_projectData || !_projectData->hasProject())
+            {
+                QMessageBox::information(this,
+                                         QStringLiteral("检测标靶"),
+                                         QStringLiteral("请先创建或打开包含照片的项目"));
+                return;
+            }
+            xjw::gui::markers::DetectMarkersDialog dialog(this);
+            if (!dialog.setContext(_markerWorkspaceController, _projectData))
+            {
+                QMessageBox::information(this,
+                                         QStringLiteral("检测标靶"),
+                                         QStringLiteral("项目中没有可检测的照片"));
+                return;
+            }
+            dialog.exec();
+        });
+    }
+    if (_mainMenu && _mainMenu->reviewMarkerDetectionsAction())
+    {
+        QAction *review_action = _mainMenu->reviewMarkerDetectionsAction();
+        review_action->setEnabled(false);
+        connect(_markerWorkspaceController,
+                &xjw::gui::markers::MarkerWorkspaceController::detectionReviewChanged,
+                this,
+                [review_action](int count)
+        {
+            review_action->setEnabled(count > 0);
+            review_action->setText(count > 0
+                                       ? QStringLiteral("复核检测候选 (%1)...").arg(count)
+                                       : QStringLiteral("复核检测候选..."));
+        });
+        connect(review_action, &QAction::triggered, this, [this]()
+        {
+            if (!_markerWorkspaceController
+                || _markerWorkspaceController->detectionReviewQueue().entries.isEmpty())
+            {
+                return;
+            }
+            xjw::gui::markers::MarkerDetectionReviewDialog dialog(this);
+            dialog.setController(_markerWorkspaceController);
+            dialog.exec();
+        });
+    }
+    if (_mainMenu && _mainMenu->printMarkersAction())
+    {
+        connect(_mainMenu->printMarkersAction(), &QAction::triggered, this, [this]()
+        {
+            xjw::gui::markers::PrintMarkersDialog dialog(this);
+            if (_projectData && _projectData->hasProject())
+            {
+                dialog.setDefaultOutputDirectory(
+                    QFileInfo(_projectData->currentProjectPath()).absolutePath());
+            }
+            else
+            {
+                dialog.setDefaultOutputDirectory(QDir::homePath());
+            }
+            dialog.exec();
+        });
+    }
 
     _menuWorkflowController = new MenuWorkflowController(this, this);
     _menuWorkflowController->setProjectManager(_projectManager);
@@ -2662,6 +2795,16 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     {
         _canvas->setProperty("currentProjectPath", plascanPath);
     }
+    if (_markerWorkspaceController)
+    {
+        QString marker_error;
+        if (!_markerWorkspaceController->openProject(&marker_error))
+        {
+            QMessageBox::warning(this,
+                                 QStringLiteral("加载标记点"),
+                                 QStringLiteral("标记点数据未加载：%1").arg(marker_error));
+        }
+    }
     if (_workspaceCenter)
     {
         _workspaceCenter->showModelView();
@@ -2709,6 +2852,84 @@ void MainWindow::onProjectOpened(const QString &plascanPath)
     }
     applyUiSettings(ui);
     persistCurrentUiSettings();
+}
+
+void MainWindow::openMarkerFocusMeasurement(const QString &markerId,
+                                            const QString &preferredImagePath)
+{
+    if (!_markerWorkspaceController || !_projectData || markerId.isEmpty())
+    {
+        return;
+    }
+
+    QString anchor_path;
+    try
+    {
+        const auto &marker = _markerWorkspaceController->markerSet().marker(markerId);
+        auto paths_equal = [](const QString &left, const QString &right)
+        {
+#ifdef Q_OS_WIN
+            return QDir::cleanPath(left).compare(QDir::cleanPath(right), Qt::CaseInsensitive) == 0;
+#else
+            return QDir::cleanPath(left) == QDir::cleanPath(right);
+#endif
+        };
+        for (const auto &projection : marker.projections)
+        {
+            if (!preferredImagePath.isEmpty()
+                && paths_equal(projection.imagePathSnapshot, preferredImagePath)
+                && projection.state != xjw::control_points::ProjectionState::Blocked
+                && projection.state != xjw::control_points::ProjectionState::Disabled)
+            {
+                anchor_path = projection.imagePathSnapshot;
+                break;
+            }
+        }
+        if (anchor_path.isEmpty())
+        {
+            for (const auto &projection : marker.projections)
+            {
+                if (projection.state != xjw::control_points::ProjectionState::Blocked
+                    && projection.state != xjw::control_points::ProjectionState::Disabled)
+                {
+                    anchor_path = projection.imagePathSnapshot;
+                    break;
+                }
+            }
+        }
+    }
+    catch (const std::exception &exception)
+    {
+        QMessageBox::warning(this,
+                             QStringLiteral("聚焦标记量测"),
+                             QString::fromUtf8(exception.what()));
+        return;
+    }
+
+    if (anchor_path.isEmpty())
+    {
+        QMessageBox::information(this,
+                                 QStringLiteral("聚焦标记量测"),
+                                 QStringLiteral("该标记尚无可用投影，请先在照片中放置一次。"));
+        return;
+    }
+
+    auto *dialog = new xjw::gui::markers::MarkerFocusMeasurementDialog(this);
+    dialog->setAttribute(Qt::WA_DeleteOnClose);
+    if (!dialog->setContext(_markerWorkspaceController,
+                            _projectData,
+                            markerId,
+                            anchor_path))
+    {
+        dialog->deleteLater();
+        QMessageBox::information(this,
+                                 QStringLiteral("聚焦标记量测"),
+                                 QStringLiteral("没有可供量测的其他项目照片。"));
+        return;
+    }
+    dialog->show();
+    dialog->raise();
+    dialog->activateWindow();
 }
 
 void MainWindow::scheduleProjectMetadataRefresh(const QJsonObject &meta)
@@ -2846,6 +3067,10 @@ void MainWindow::onProjectClosed()
 {
     persistCurrentUiSettings();
     _imageViewRotations = QJsonObject{};
+    if (_markerWorkspaceController)
+    {
+        _markerWorkspaceController->closeProject();
+    }
     if (_mainMenu)
     {
         if (_mainMenu->rotateImageLeftAction())

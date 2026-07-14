@@ -4,6 +4,7 @@
 #include "FeatureData.h"
 
 #include "OpenCvCompat.h"
+#include "string_utils/StringTransform.h"
 
 #include <torch/torch.h>
 
@@ -81,12 +82,7 @@ TraditionalFeatureConfig traditionalFeatureConfigFromSuperPoint(const SuperPoint
 
 std::string TraditionalFeatureExtractor::normalizeAlgorithmName(const std::string &algorithmName)
 {
-    std::string normalized = algorithmName;
-    std::transform(normalized.begin(), normalized.end(), normalized.begin(),
-                   [](unsigned char c)
-                   {
-                       return static_cast<char>(std::tolower(c));
-                   });
+    const std::string normalized = xjw::common::string_utils::asciiLowerCopy(algorithmName);
 
     if (normalized == "orb" || normalized == "sift" || normalized == "superpoint"
         || normalized == "disk" || normalized == "aliked"

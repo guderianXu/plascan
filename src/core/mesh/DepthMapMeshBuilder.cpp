@@ -60,7 +60,7 @@ bool readJsonObject(const QString &path, QJsonObject *object)
     return true;
 }
 
-bool parseFloatArray(const QJsonValue &value, float *output, int count)
+bool parseDoubleArray(const QJsonValue &value, double *output, int count)
 {
     const QJsonArray array = value.toArray();
     if (!output || array.size() != count)
@@ -69,30 +69,48 @@ bool parseFloatArray(const QJsonValue &value, float *output, int count)
     }
     for (int index = 0; index < count; ++index)
     {
-        output[index] = static_cast<float>(array[index].toDouble());
+        output[index] = array[index].toDouble();
     }
     return true;
 }
 
-bool parseCameraModel(const QJsonObject &object, PositiveDepthCameraModel *camera)
+bool parseCameraModel(const QJsonObject &object, Camera *camera)
 {
     if (!camera || object.isEmpty())
     {
         return false;
     }
-    PositiveDepthCameraModel parsed;
-    parsed.fx = static_cast<float>(object.value(QStringLiteral("fx")).toDouble());
-    parsed.fy = static_cast<float>(object.value(QStringLiteral("fy")).toDouble());
-    parsed.cx = static_cast<float>(object.value(QStringLiteral("cx")).toDouble());
-    parsed.cy = static_cast<float>(object.value(QStringLiteral("cy")).toDouble());
+    std::array<double, 9> worldToCamera{};
+    std::array<double, 3> translation{};
+    std::array<double, 3> center{};
     const bool arrays_ok =
-        parseFloatArray(object.value(QStringLiteral("rotation_world_to_camera")), parsed.R_cw, 9) &&
-        parseFloatArray(object.value(QStringLiteral("translation_world_to_camera")), parsed.T, 3) &&
-        parseFloatArray(object.value(QStringLiteral("camera_center")), parsed.C, 3);
-    if (!arrays_ok || !parsed.valid())
+        parseDoubleArray(object.value(QStringLiteral("rotation_world_to_camera")),
+                         worldToCamera.data(),
+                         9) &&
+        parseDoubleArray(object.value(QStringLiteral("translation_world_to_camera")),
+                         translation.data(),
+                         3) &&
+        parseDoubleArray(object.value(QStringLiteral("camera_center")), center.data(), 3);
+    const double focalX = object.value(QStringLiteral("fx")).toDouble();
+    const double focalY = object.value(QStringLiteral("fy")).toDouble();
+    if (!arrays_ok || !std::isfinite(focalX) || !std::isfinite(focalY) ||
+        std::fabs(focalX) <= 1.0e-12 || std::fabs(focalY) <= 1.0e-12)
     {
         return false;
     }
+
+    std::array<double, 9> cameraToWorld{{
+        worldToCamera[0], worldToCamera[3], worldToCamera[6],
+        worldToCamera[1], worldToCamera[4], worldToCamera[7],
+        worldToCamera[2], worldToCamera[5], worldToCamera[8]
+    }};
+    Camera parsed;
+    parsed.setIntrinsics(focalX,
+                         focalY,
+                         object.value(QStringLiteral("cx")).toDouble(),
+                         object.value(QStringLiteral("cy")).toDouble());
+    parsed.setPose(cameraToWorld, center);
+    parsed.setDistortion(Camera::Distortion{});
     *camera = parsed;
     return true;
 }
@@ -146,19 +164,19 @@ void attachLegacyReportCameras(const QDir &directory, QVector<DepthFrameArtifact
         {
             continue;
         }
-        PositiveDepthCameraModel model(camera);
+        Camera model = camera.normalizedForPositiveDepth();
+        model.setDistortion(Camera::Distortion{});
         const cv::Mat image = xjw::common::io::readImage(
             xjw::common::io::toUtf8Path(frame.refImage), cv::IMREAD_GRAYSCALE);
         if (!image.empty() && frame.gridWidth > 0 && frame.gridHeight > 0 &&
             (image.cols != frame.gridWidth || image.rows != frame.gridHeight))
         {
-            model = xjw::core::project::scalePositiveDepthCameraModel(
-                model,
+            model = model.scaledIntrinsics(
                 static_cast<double>(frame.gridWidth) / image.cols,
                 static_cast<double>(frame.gridHeight) / image.rows);
         }
         frame.cameraModel = model;
-        frame.hasCameraModel = model.valid();
+        frame.hasCameraModel = model.isValid();
     }
 }
 
@@ -265,15 +283,15 @@ bool estimateBounds(const QVector<DepthFrameArtifact> &frames,
                 {
                     continue;
                 }
-                float x = 0.0f;
-                float y = 0.0f;
-                float z = 0.0f;
-                frame.cameraModel.unproject(column + 0.5f, row + 0.5f, value, x, y, z);
-                if (std::isfinite(x) && std::isfinite(y) && std::isfinite(z))
+                const double pixel[2] = {column + 0.5, row + 0.5};
+                double world[3] = {};
+                if (frame.cameraModel.unprojectPixel(pixel, value, world) &&
+                    std::isfinite(world[0]) && std::isfinite(world[1]) &&
+                    std::isfinite(world[2]))
                 {
-                    coordinates[0].push_back(x);
-                    coordinates[1].push_back(y);
-                    coordinates[2].push_back(z);
+                    coordinates[0].push_back(static_cast<float>(world[0]));
+                    coordinates[1].push_back(static_cast<float>(world[1]));
+                    coordinates[2].push_back(static_cast<float>(world[2]));
                 }
             }
         }
@@ -363,6 +381,15 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
     int resolution,
     const std::function<void(const QString &, int)> &progress)
 {
+    return buildVisualHull(source_path, resolution, DepthMapVisualHullOptions{}, progress);
+}
+
+DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
+    const QString &source_path,
+    int resolution,
+    const DepthMapVisualHullOptions &options,
+    const std::function<void(const QString &, int)> &progress)
+{
     DepthMapVisualHullResult result;
     const QVector<DepthFrameArtifact> frames = discoverDepthFrames(source_path);
     std::vector<VisualHullView> views;
@@ -410,6 +437,7 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
             }
             depth.setTo(0.0f, silhouette == 0);
             view.depthMap = depth;
+            ++result.depthViewCount;
         }
         views.push_back(std::move(view));
     }
@@ -431,9 +459,9 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
     config.resolution = std::clamp(resolution, 96, 192);
     config.minimumVisibleViews = std::max(4, result.usableViewCount / 3);
     config.allowedSilhouetteViolations = std::max(1, result.usableViewCount / 10);
-    // 低纹理深度图会有局部误差，因此只有多个视图同时判定为空闲空间时
-    // 才雕刻体素。轮廓仍是硬约束，深度只负责保守恢复可重复观测到的凹部。
-    config.enableDepthFreeSpaceCarving = true;
+    const int minimum_depth_views = std::max(4, result.usableViewCount / 3);
+    config.enableDepthFreeSpaceCarving =
+        options.strictVolumetricMasks && result.depthViewCount >= minimum_depth_views;
     config.minimumDepthFreeSpaceViolations = std::max(4, result.usableViewCount / 3);
     config.relativeDepthTolerance = 0.03f;
     if (progress)
@@ -446,9 +474,93 @@ DepthMapVisualHullResult DepthMapMeshBuilder::buildVisualHull(
     }
     std::string error;
     result.ok = VisualHullReconstructor::reconstruct(views, config, &result.mesh, &error);
-    result.message = result.ok
-        ? QStringLiteral("已使用 %1 个轮廓视图重建视觉外壳").arg(result.usableViewCount)
-        : QString::fromStdString(error);
+    result.usedDepthFreeSpaceCarving = config.enableDepthFreeSpaceCarving;
+    if (result.ok)
+    {
+        result.connectivity = VisualHullReconstructor::analyzeConnectivity(result.mesh);
+    }
+
+    if (result.ok && config.enableDepthFreeSpaceCarving &&
+        VisualHullReconstructor::requiresSilhouetteOnlyRetry(
+            result.connectivity,
+            options.minimumLargestComponentFaceRatio,
+            options.maximumConnectedComponents))
+    {
+        result.fallbackReason = QStringLiteral(
+            "深度雕刻结果碎片化：连通分量 %1，最大分量占比 %2%")
+                                    .arg(result.connectivity.componentCount)
+                                    .arg(result.connectivity.largestComponentFaceRatio * 100.0,
+                                         0,
+                                         'f',
+                                         1);
+        if (progress)
+        {
+            progress(QStringLiteral("深度雕刻结果碎片化，正在回退到轮廓视觉外壳..."), 5);
+        }
+        VisualHullConfig fallback_config = config;
+        fallback_config.enableDepthFreeSpaceCarving = false;
+        TriMesh fallback_mesh;
+        std::string fallback_error;
+        if (VisualHullReconstructor::reconstruct(
+                views, fallback_config, &fallback_mesh, &fallback_error))
+        {
+            const MeshConnectivityStats fallback_connectivity =
+                VisualHullReconstructor::analyzeConnectivity(fallback_mesh);
+            if (fallback_connectivity.largestComponentFaceRatio >=
+                result.connectivity.largestComponentFaceRatio)
+            {
+                result.mesh = std::move(fallback_mesh);
+                result.connectivity = fallback_connectivity;
+                result.usedDepthFreeSpaceCarving = false;
+                result.retriedWithoutDepthCarving = true;
+            }
+        }
+    }
+
+    if (result.ok && result.connectivity.componentCount > 1 &&
+        result.connectivity.largestComponentFaceRatio >=
+            options.minimumLargestComponentFaceRatio)
+    {
+        result.removedSatelliteComponentCount = result.connectivity.componentCount - 1;
+        if (VisualHullReconstructor::retainLargestConnectedComponent(&result.mesh))
+        {
+            result.connectivity = VisualHullReconstructor::analyzeConnectivity(result.mesh);
+        }
+    }
+
+    if (result.ok && VisualHullReconstructor::requiresSilhouetteOnlyRetry(
+            result.connectivity,
+            options.minimumLargestComponentFaceRatio,
+            options.maximumConnectedComponents))
+    {
+        result.qualityRejected = true;
+        result.ok = false;
+        const QString quality_reason = QStringLiteral(
+            "多视轮廓与相机姿态不一致：连通分量 %1，最大分量占比仅 %2%（要求至少 %3%）")
+                                           .arg(result.connectivity.componentCount)
+                                           .arg(result.connectivity.largestComponentFaceRatio * 100.0,
+                                                0,
+                                                'f',
+                                                1)
+                                           .arg(options.minimumLargestComponentFaceRatio * 100.0,
+                                                0,
+                                                'f',
+                                                0);
+        result.fallbackReason = result.fallbackReason.isEmpty()
+            ? quality_reason
+            : result.fallbackReason + QStringLiteral("；") + quality_reason;
+    }
+
+    result.actualAlgorithm = result.usedDepthFreeSpaceCarving
+        ? QStringLiteral("depth_constrained_visual_hull")
+        : QStringLiteral("silhouette_visual_hull");
+    result.message = result.qualityRejected
+        ? result.fallbackReason
+        : (result.ok
+        ? QStringLiteral("已使用 %1 个轮廓视图重建视觉外壳（最大连通分量 %2%）")
+              .arg(result.usableViewCount)
+              .arg(result.connectivity.largestComponentFaceRatio * 100.0, 0, 'f', 1)
+        : QString::fromStdString(error));
     return result;
 }
 

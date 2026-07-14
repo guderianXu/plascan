@@ -7,7 +7,7 @@
     <x>0</x>
     <y>0</y>
     <width>520</width>
-    <height>680</height>
+    <height>810</height>
    </rect>
   </property>
   <property name="windowTitle">
@@ -123,16 +123,16 @@
          <string>分辨率缩放：先把影像按该比例缩小后估计深度。数值越小越快、显存占用越低，但细节会减少；1.0 表示原始分辨率。</string>
         </property>
         <property name="decimals">
-         <number>2</number>
+         <number>4</number>
         </property>
         <property name="minimum">
-         <double>0.100000000000000</double>
+         <double>0.062500000000000</double>
         </property>
         <property name="maximum">
          <double>1.000000000000000</double>
         </property>
         <property name="singleStep">
-         <double>0.100000000000000</double>
+         <double>0.062500000000000</double>
         </property>
         <property name="value">
          <double>0.500000000000000</double>
@@ -392,6 +392,59 @@
         </property>
         <property name="checked">
          <bool>true</bool>
+        </property>
+       </widget>
+      </item>
+     </layout>
+   </widget>
+  </item>
+   <item>
+    <widget class="QGroupBox" name="depthPyramidGroup">
+     <property name="title">
+      <string>三级深度策略</string>
+     </property>
+     <layout class="QFormLayout" name="depthPyramidForm">
+      <item row="0" column="0">
+       <widget class="QLabel" name="sceneProfileLabel">
+        <property name="text">
+         <string>场景类型:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_sceneProfileCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="0" column="1">
+       <widget class="QComboBox" name="m_sceneProfileCombo">
+        <property name="toolTip">
+         <string>自动识别会根据相机轨迹和稀疏点云判断环拍物体或航测地形，并选择对应的三级传播与质量门控参数。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="0">
+       <widget class="QLabel" name="depthFilterLabel">
+        <property name="text">
+         <string>深度过滤:</string>
+        </property>
+        <property name="buddy">
+         <cstring>m_depthFilterCombo</cstring>
+        </property>
+       </widget>
+      </item>
+      <item row="1" column="1">
+       <widget class="QComboBox" name="m_depthFilterCombo">
+        <property name="toolTip">
+         <string>自动模式按场景选择过滤强度。温和适合环拍物体并保留薄结构；中等适合一般航测；强过滤用于抑制地形噪点，但可能减少边缘细节。</string>
+        </property>
+       </widget>
+      </item>
+      <item row="2" column="0" colspan="2">
+       <widget class="QCheckBox" name="m_savePyramidLevelsCheck">
+        <property name="toolTip">
+         <string>额外保存 Level 3 粗层和 Level 2 中层的原始深度与置信度，仅用于质量诊断；会增加磁盘占用。</string>
+        </property>
+        <property name="text">
+         <string>保存 Level 2/3 调试栅格</string>
         </property>
        </widget>
       </item>

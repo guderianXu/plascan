@@ -371,6 +371,30 @@ void DualImageViewer::connectSignals()
             this, forwardImageLoadFailure, Qt::QueuedConnection);
     connect(_rightView, &ImageViewWidget::imageLoadFailed,
             this, forwardImageLoadFailure, Qt::QueuedConnection);
+    connect(_rightView, &ImageViewWidget::viewRightClicked,
+            this, &DualImageViewer::markerCandidatePicked);
+}
+
+void DualImageViewer::setMarkerMeasurement(const QString &anchorImage,
+                                           const QString &candidateImage,
+                                           const QPointF &anchorPixel,
+                                           const std::optional<QPointF> &candidatePixel)
+{
+    const QVector<QPointF> anchor_points{anchorPixel};
+    const QVector<QPointF> candidate_points = candidatePixel.has_value()
+        ? QVector<QPointF>{candidatePixel.value()}
+        : QVector<QPointF>{};
+    _leftView->loadImage(anchorImage);
+    _rightView->loadImage(candidateImage);
+    _leftView->setMatchPoints(anchor_points);
+    _rightView->setMatchPoints(candidate_points);
+    _matchPtsA = candidatePixel.has_value() ? anchor_points : QVector<QPointF>{};
+    _matchPtsB = candidate_points;
+    _overlay->setMatches(_matchPtsA, _matchPtsB);
+    _overlay->setInlierMask(QVector<bool>());
+    _overlay->setVisible(candidatePixel.has_value());
+    updateOverlayGeometry();
+    updateOverlayNow();
 }
 
 bool DualImageViewer::loadMatchPair(const QString &imgA, const QString &imgB,
