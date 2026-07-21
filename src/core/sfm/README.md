@@ -1,49 +1,44 @@
 # core/sfm 模块结构
 
-当前 `sfm` 目录按职责逐步拆分为以下子模块：
+当前 `sfm` 目录按算法、后处理和项目适配三层组织：
 
-- `common/`
-  - `SfmTypes.h`
-- `graph/`
-  - `CorrespondenceGraph.*`
-  - `ObservationNetworkBuilder.*`
-- `reconstruction/`
-  - `SfmReconstruction.*`
-- `pipeline/`
-  - `IncrementalSfm.*`
-- `triangulation/`
-  - `Triangulator.*`
-  - `InitialSparsePointCloudTriangulator.*`
-- `pose/`
-  - `PnpSolver.*`
-- `filtering/`
-  - `SfmPointCloudFilter.*`
+- `common/`：SfM 公共类型和内部并查集。
+- `geometry/`：投影、三角化质量和 OpenCV 相机转换；投影约定只在这里定义。
+- `graph/`、`tracks/`：对应图、观测网络和多视轨迹。通用空间近邻统一使用 PlaPoint。
+- `reconstruction/`、`pose/`、`triangulation/`：重建状态、PnP、增量三角化和初始稀疏点过滤。
+- `pipeline/`：`IncrementalSfm` 对外保持一个入口，内部委托给初始像对、影像注册、已知位姿和 BA 协调组件。
+- `quality/`、`filtering/`：纯 C++ 质量指标和 PlaPoint 稀疏点云后处理。
+- `project/`：项目 JSON、控制点/标记适配、BA 输入构建和质量 JSON 序列化；Qt 仅允许出现在这一层。
+- `test/`：SfM 模块自有单元测试。跨模块工作流契约仍位于仓库根 `tests/`。
 
-当前已经完成从根目录兼容头到真实模块头的切换。
+构建目标与依赖方向如下：
 
-`sfm` 子模块内部和外部调用方现在统一直接引用新路径，例如：
+- `sfm_core`：核心算法，不链接 Qt；依赖 Camera、Intersection、BundleAdjust、纯 C++ `control_network`、OpenCV 和 PlaPoint/PlaMatrix。
+- `sfm_postprocess`：质量指标和稀疏点云后处理，不链接 Qt；依赖 `sfm_core` 和 PlaPoint。
+- `sfm_project`：项目文件和 JSON 适配，可链接 Qt；依赖前两层。
+- `sfm`：仅聚合以上三个目标的 `INTERFACE` target，不包含转发头、类型别名或兼容实现。
 
-- `common/SfmTypes.h`
-- `graph/CorrespondenceGraph.h`
-- `reconstruction/SfmReconstruction.h`
-- `pose/PnpSolver.h`
-- `triangulation/Triangulator.h`
-- `triangulation/InitialSparsePointCloudTriangulator.h`
-- `filtering/SfmPointCloudFilter.h`
+外部调用方必须直接包含真实模块路径，例如 `pipeline/IncrementalSfm.h`、
+`triangulation/InitialSparsePointFilter.h`、`quality/SfmQualityMetrics.h` 或
+`project/BaInputBuilder.h`。已删除的过滤器、旧命名和兼容别名不得恢复。
 
-根目录兼容头已清退，后续新增代码应直接使用这些模块化路径。
+`IncrementalSfm` 是正式多视 SfM 主流程；`TriangulationService` 和
+`InitialSparsePointFilter` 用于已有相机/匹配的预览或输入清理，不能替代影像注册、全局 BA 和正式质量门控。
 
 ## 无相机粗筛与正式精化
 
-无相机文件且没有用户内参时，空三服务使用两级搜索：
+无相机文件且没有用户内参时，`AerialTriangulationPipeline` 使用两级搜索：
 
-- 粗筛阶段并发评估九个焦距尺度，每个 worker 持有独立 `IncrementalSfm`，最多使用六个初始像对。
+- 默认焦距先执行一次正式尝试；注册覆盖不完整时，再评估 `0.70、0.85、1.15、1.35、1.55` 五个粗筛尺度。
+- 每个候选持有独立 `IncrementalSfm`，粗筛执行配置由 `SfmSearchPolicy` 约束。
+- 粗筛阶段固定每个候选焦距，禁止共享焦距 BA 在候选内部漂移；正式重放确定最佳候选后，才按用户设置释放共享焦距。
 - `SfmExecutionProfile::CoarseEvaluation` 将 BA 外层迭代限制为 5、全局精化限制为 1 轮，并把局部 BA 间隔放宽到 6 张影像。
 - 候选排序首先比较注册影像数；注册率相同时综合三角交会角、多视轨迹比例、观测空间覆盖和重投影 RMS，避免用微小 RMS 优势选择弱基线模型。
 - 正式阶段只重放最佳焦距，但不锁死粗筛初始像对；Guided matching 改变匹配图后必须重新自动选种子。
 - 粗筛只读已经准备好的特征和匹配缓存，不写稀疏点云、项目记录或匹配质量报告。
 - 初始对 E/F/H 估计和增量 PnP 使用由影像 ID 派生的稳定 RANSAC 种子；并行粗筛不会再改变正式 SfM 的随机状态。
 - 照片序列插值只用于生成 PnP 初值。没有通过真实 3D-2D PnP 与序列几何门控的影像保持未注册，不能作为正式相机写回项目。
+- “照片序列”参考预选只控制匹配候选和首尾闭环候选，不自动启用相机中心距离先验。位姿序列门控属于独立运动模型，转台数据不能由匹配预选隐式开启。
 
 小型 BA 保持使用 Legacy CPU/OpenMP。只有相机数和观测数达到现有 Auto 门槛时才选择 Ceres CUDA 或 native CUDA；
 正式 BA 日志会记录相机、轨迹、观测、线程、实际后端和选择原因。
@@ -57,12 +52,15 @@
 ## 匹配配对规划与诊断
 
 空三由 `AerialTriangulationWorkflow` 调用时，连接点阶段和 SfM 阶段必须共享显式的
-`assetsDir`、`featureDir`、`matchDir`。`AerialTriangulationService` 只有在旧调用方未传目录时
-才回退到 `.plascan` 项目旁的 `assets/ip` 和 `assets/matches`。特征 sidecar 中记录的路径必须与
-SfM 实际加载的特征文件一致，否则索引不能进入观测网络。
+`assetsDir`、`featureDir`、`matchDir`。Workflow 解析出唯一的
+`assets/tie_points/latest_tie_points.json`，`AerialTriangulationPipeline` 只消费该持久化连接点图，
+不再回退扫描特征或匹配目录。特征 sidecar 中记录的路径必须与连接点阶段实际加载的特征文件一致，
+否则索引不能进入观测网络。
 
 ## 输入连接点限额与观测唯一性
 
+- 当达到 60 个几何内点的强匹配边已经覆盖并连通全部影像时，空三服务仅把该强连通核心送入 SfM；弱边只有在维持图连通性所必需时才保留，避免重复纹理的低支持边错误合并多视轨迹。
+- 无相机环拍数据允许使用至少 12 个 3D-2D 观测注册桥接影像；原始候选少于 20 个时必须达到 0.80 内点率，不能通过绝对内点数宽松规则绕过小样本保护。
 - 无相机增量 SfM 在构建 `CorrespondenceGraph` 索引前，使用 `CorrespondenceTrackThinner` 将已验证的两两匹配整理成多视轨迹。
 - `maxTracksPerImage` 是每幅影像参与的多视轨迹上限。筛选顺序为轨迹长度、匹配置信度和稳定输入顺序，不按单个影像对独立截断。
 - 筛选后只保留获选轨迹中原本存在的几何验证边，不合成未经验证的新 pairwise match。
@@ -74,14 +72,18 @@ SfM 实际加载的特征文件一致，否则索引不能进入观测网络。
 表示该影像对已确认无匹配。它会作为负缓存计入已处理配对，不进入待生成队列；缺少明确
 `num_matches` 的旧空 sidecar 仍按无效缓存拒绝。
 
-`src/core/aerial_triangulation/SfmPairPlanner.h` 负责大规模项目的 SfM 匹配候选规划。大项目默认不做无约束 N^2 全匹配，而是按以下来源生成候选并合并去重：
+`src/core/aerial_triangulation/reconstruction/SfmPairPlanner.h` 描述大规模项目的 SfM 匹配候选规划。
+实际连接点候选生成由 `matchphototask/PairSelector` 执行，大项目默认不做无约束 N^2 全匹配，
+而是按以下来源生成候选并合并去重：
 
 - `known_camera_overlap`：已知相机足迹重叠候选，优先级最高。
 - `known_camera_spatial_neighbors`：已知相机中心邻域候选，用于跨航带/空间近邻补充。
 - `sequence_window`：文件序列窗口候选，用于航线内连续影像。
 - `manual_restricted`：调用方显式传入的配对列表。
 
-每个候选 pair 会记录 `sourceTypes`、`priorityScore`、序列距离、相机中心距离和各来源得分。`AerialTriangulationService` 按规划后的 `allowedPairKeys` 顺序检查和补生成匹配，因此高优先级 pair 会优先进入缓存检查、自动补匹配和后续诊断。
+每个候选 pair 会记录 `sourceTypes`、`priorityScore`、序列距离、相机中心距离和各来源得分。
+`AerialTriangulationWorkflow` 把显式 `allowedPairKeys` 交给 `MatchPhotosTask`，因此高优先级 pair
+会优先进入缓存检查、自动补匹配和后续诊断；SfM 本身不会重新生成匹配。
 
 SfM 匹配阶段会在项目 `assets/reports/` 下输出：
 

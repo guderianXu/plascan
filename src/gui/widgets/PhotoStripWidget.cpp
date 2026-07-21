@@ -1,6 +1,8 @@
 #include "PhotoStripWidget.h"
 
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 
 #include "../views/LayerImageLoader.h"
 
@@ -171,7 +173,7 @@ void PhotoStripWidget::loadFromJson(const QJsonObject &meta)
 
     clearPhotos();
 
-    const QJsonArray images = xjw::gui::project::projectImageEntries(meta);
+    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
     for (const QJsonValue &value : images)
     {
         QJsonObject entry;

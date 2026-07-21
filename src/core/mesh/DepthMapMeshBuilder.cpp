@@ -325,7 +325,8 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
         for (const QJsonValue &value : manifest.value(QStringLiteral("frames")).toArray())
         {
             const QJsonObject object = value.toObject();
-            if (object.value(QStringLiteral("status")).toString() != QStringLiteral("completed"))
+            const QString status = object.value(QStringLiteral("status")).toString();
+            if (!status.isEmpty() && status != QStringLiteral("completed"))
             {
                 continue;
             }
@@ -335,9 +336,41 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             frame.depthPath = resolveArtifactPath(directory, object.value(QStringLiteral("raw_depth_path")).toString());
             frame.confidencePath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("raw_confidence_path")).toString());
+            frame.geometrySupportPath = resolveArtifactPath(
+                directory, object.value(QStringLiteral("raw_geometry_support_path")).toString());
+            frame.geometrySourceMaskPath = resolveArtifactPath(
+                directory, object.value(QStringLiteral("raw_geometry_source_mask_path")).toString());
+            frame.inverseDepthMeanPath = resolveArtifactPath(
+                directory, object.value(QStringLiteral("raw_inverse_depth_mean_path")).toString());
+            frame.inverseDepthSpreadPath = resolveArtifactPath(
+                directory, object.value(QStringLiteral("raw_inverse_depth_spread_path")).toString());
+            frame.crossViewRepairedMaskPath = resolveArtifactPath(
+                directory, object.value(QStringLiteral("cross_view_repaired_mask_path")).toString());
+            for (const QJsonValue &source_value :
+                 object.value(QStringLiteral("source_indices")).toArray())
+            {
+                frame.sourceIndices.push_back(source_value.toInt(-1));
+            }
             frame.previewPath = resolveArtifactPath(directory, object.value(QStringLiteral("depth_png")).toString());
             frame.validMaskPath = resolveArtifactPath(
                 directory, object.value(QStringLiteral("valid_mask_path")).toString());
+            frame.supportMaskPath = resolveArtifactPath(
+                directory, object.value(QStringLiteral("support_mask_path")).toString());
+            frame.status = status;
+            frame.sceneProfile = object.value(QStringLiteral("scene_profile")).toString();
+            const QJsonObject depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
+            const QJsonObject qualityDecision = object.value(QStringLiteral("quality_decision")).toObject();
+            frame.acceptance = object.value(QStringLiteral("acceptance")).toString(
+                qualityDecision.value(QStringLiteral("acceptance")).toString());
+            frame.fusionEligible = object.contains(QStringLiteral("fusion_eligible"))
+                ? object.value(QStringLiteral("fusion_eligible")).toBool()
+                : frame.acceptance != QStringLiteral("rejected");
+            frame.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(
+                depthQuality.value(QStringLiteral("valid_coverage")).toDouble(-1.0));
+            frame.meanConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(
+                depthQuality.value(QStringLiteral("mean_confidence")).toDouble(-1.0));
+            frame.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(
+                depthQuality.value(QStringLiteral("source_view_count")).toInt(0));
             frame.gridWidth = object.value(QStringLiteral("grid_width")).toInt();
             frame.gridHeight = object.value(QStringLiteral("grid_height")).toInt();
             frame.hasCameraModel = parseCameraModel(
@@ -355,7 +388,13 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
             QStringList() << QStringLiteral("depth_*.bin"), QDir::Files, QDir::Name);
         for (const QString &file_name : depth_files)
         {
-            if (file_name.endsWith(QStringLiteral("_conf.bin")))
+            if (file_name.endsWith(QStringLiteral("_conf.bin")) ||
+                file_name.endsWith(QStringLiteral("_geometry_support.bin")) ||
+                file_name.endsWith(QStringLiteral("_geometry_source_mask.bin")) ||
+                file_name.endsWith(QStringLiteral("_inverse_depth_mean.bin")) ||
+                file_name.endsWith(QStringLiteral("_inverse_depth_spread.bin")) ||
+                file_name.endsWith(QStringLiteral("_support.bin")) ||
+                file_name.endsWith(QStringLiteral("_uncertainty.bin")))
             {
                 continue;
             }

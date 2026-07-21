@@ -50,6 +50,8 @@ class QDragEnterEvent;
 class QDropEvent;
 class QWidgetAction;
 class HenuBrandWidget;
+class WorkspacePanelController;
+class ProjectUiHydrator;
 
 namespace xjw::gui::markers
 {
@@ -88,7 +90,6 @@ private:
     void refreshDashboardTaskSnapshots(); // 将状态栏任务快照同步到只读概览页
 
     // ---- UI 设置持久化辅助 ----
-    void connectDockAction(QAction *action, QWidget *panel, const QString &settingKey);
     void selectPhoto(const QString &imagePath, bool openImage);
     void selectResource(const QString &section, const QString &resourcePath);
     bool isProjectPhotoPath(const QString &imagePath) const;
@@ -96,10 +97,8 @@ private:
     QJsonObject currentUiSettingsSnapshot() const;
     void restoreDefaultProjectDockLayout();
     void restoreProjectDockState(const QJsonObject &settings);
-    void ensureRequiredProjectDocksVisible();
     void persistCurrentUiSettings();
     void scheduleProjectMetadataRefresh(const QJsonObject &meta);
-    void scheduleProjectUiHydration(const QString &plascanPath);
     // saveUiSetting: 将 partial JSON 片段合并写入项目 UI 持久化设置（通过 DialogSettingStore）
     // 参数: partial - 仅包含需更新键值对的 JSON 对象
     void saveUiSetting(const QJsonObject &partial);
@@ -129,8 +128,12 @@ private:
     ReferencePanelWidget* _referencePanel{};           // 参考面板（相机参数外参导入）
     WorkspaceCenterWidget* _workspaceCenter{};         // 中央工作区（影像画布 + 三维模型视图）
     CanvasWidget*     _canvas{};                       // 影像画布（从 workspaceCenter 获取的直接引用）
+    WorkspacePanelController *_workspacePanels{};      // Dock/工具栏可见性与菜单动作统一管理
+    ProjectUiHydrator *_projectUiHydrator{};           // 分阶段刷新项目 UI，并丢弃过期请求
+    Qt::WindowStates _windowStateBeforeFullScreen{Qt::WindowNoState};
 public:
     CanvasWidget* canvas() const { return _canvas; }
+private:
     HenuBrandWidget*  _henuBrandWidget{};              // 主工具栏中的河南大学校徽品牌区
     QWidgetAction*    _henuBrandAction{};              // 控制品牌区在工具栏中的可见性
     LogPanel*         _log{};                          // 日志面板（日志 Dock 的内容 widget）
@@ -157,9 +160,6 @@ public:
     DialogSettingStore*   _featureMatchingSetting{};   // 特征匹配对话框记忆化设置
     DialogSettingStore*   _uiSetting{};                // 主窗口 UI 状态记忆化设置
     bool _applyingUiSettings{};                        // 正在恢复项目 UI，阻止中间态写回
-    bool _metadataRefreshQueued{};                     // 已有 metadataChanged 刷新任务排队
-    int _metadataRefreshGeneration{};                  // 丢弃过期的延迟刷新任务
-    QJsonObject _pendingMetadataRefresh;               // 最近一次待刷新的项目元数据
     QJsonObject _imageViewRotations;                   // 按影像路径保存的查看旋转角度
     
     QString           _lastSelectedImage;               // 最近一次被激活的影像路径（供关联操作使用）
@@ -183,9 +183,6 @@ private slots:
     // onToggleLogAction: 响应菜单「视图→日志」CheckAction 的勾选状态变化
     // 参数: on - true 表示勾选（显示日志）
     void onToggleLogAction(bool on);
-    // onLogVisiblePersist: 日志面板可见性变化时将状态持久化到项目 UI 设置
-    // 参数: on - true 表示日志面板可见
-    void onLogVisiblePersist(bool on);
     // onLogDisplayLevelChanged: 日志级别变化时将新级别写入项目 UI 设置
     // 参数: lvl - Logger::Level 枚举的整数值
     void onLogDisplayLevelChanged(int lvl);

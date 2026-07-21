@@ -43,6 +43,8 @@ qt_add_shaders(plascan_gui camera_scene_shaders
     shaders/camera_scene_color.frag
     shaders/camera_scene_mesh.vert
     shaders/camera_scene_mesh.frag
+    shaders/camera_scene_textured_mesh.vert
+    shaders/camera_scene_textured_mesh.frag
     shaders/camera_scene_image.vert
     shaders/camera_scene_image.frag
 )
@@ -84,7 +86,6 @@ target_include_directories(plascan_gui PRIVATE
   ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
   ${CMAKE_SOURCE_DIR}/src/core/dense_match
   ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-  ${CMAKE_SOURCE_DIR}/src/core/pipeline
   ${CMAKE_SOURCE_DIR}/src/common
   ${OpenCV_INCLUDE_DIRS}
   ${TORCH_INCLUDE_DIRS}

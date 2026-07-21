@@ -1,6 +1,8 @@
 #include "ModelWorkflowService.h"
 
 #include "DepthMapMeshBuilder.h"
+#include "DepthTsdfSurfaceBuilder.h"
+#include "MeshColorizer.h"
 #include "SurfaceReconstructor.h"
 #include "io/PathIO.h"
 
@@ -24,10 +26,18 @@ QJsonObject textureResultToJson(const xjw::mesh::TextureMappingResult &result)
     object[QStringLiteral("model_obj")] = xjw::common::io::fromUtf8Path(result.modelObjPath);
     object[QStringLiteral("model_mtl")] = xjw::common::io::fromUtf8Path(result.modelMtlPath);
     object[QStringLiteral("texture_png")] = xjw::common::io::fromUtf8Path(result.texturePngPath);
+    object[QStringLiteral("texture_image")] = xjw::common::io::fromUtf8Path(result.texturePngPath);
+    object[QStringLiteral("textured")] = !result.modelObjPath.empty()
+        && !result.texturePngPath.empty();
     object[QStringLiteral("texture_size")] = result.textureSize;
     object[QStringLiteral("texture_algorithm")] = QString::fromStdString(result.textureAlgorithm);
     object[QStringLiteral("uv_method")] = QString::fromStdString(result.uvMethod);
     object[QStringLiteral("blend_method")] = QString::fromStdString(result.blendMethod);
+    object[QStringLiteral("texture_source_view_count")] = result.sourceViewCount;
+    object[QStringLiteral("texture_mapped_face_count")] = result.mappedFaceCount;
+    object[QStringLiteral("texture_fallback_mapped_face_count")] =
+        result.fallbackMappedFaceCount;
+    object[QStringLiteral("texture_unmapped_face_count")] = result.unmappedFaceCount;
     return object;
 }
 
@@ -61,7 +71,8 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
                                           const QString &output_root,
                                           bool export_obj,
                                           const xjw::mesh::TextureMappingConfig &texture,
-                                          const std::function<void(const QString &, int)> &progress)
+                                          const std::function<void(const QString &, int)> &progress,
+                                          const QVector<MeshColorView> *camera_views = nullptr)
 {
     WorkflowResult result;
     const QString products_dir = QDir(output_root).filePath(QStringLiteral("products"));
@@ -93,12 +104,21 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
             };
         }
         xjw::mesh::TextureMappingResult texture_result;
-        if (xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
-                xjw::common::io::toUtf8Path(mesh_ply_path),
-                xjw::common::io::toUtf8Path(products_dir),
-                texture_config,
-                &texture_result,
-                &texture_error))
+        const bool texture_ok = camera_views && !camera_views->empty()
+            ? xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+                  xjw::common::io::toUtf8Path(mesh_ply_path),
+                  xjw::common::io::toUtf8Path(products_dir),
+                  texture_config,
+                  *camera_views,
+                  &texture_result,
+                  &texture_error)
+            : xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
+                  xjw::common::io::toUtf8Path(mesh_ply_path),
+                  xjw::common::io::toUtf8Path(products_dir),
+                  texture_config,
+                  &texture_result,
+                  &texture_error);
+        if (texture_ok)
         {
             const QJsonObject texture_json = textureResultToJson(texture_result);
             for (auto it = texture_json.begin(); it != texture_json.end(); ++it)
@@ -117,7 +137,254 @@ WorkflowResult saveMeshAndOptionalTexture(const xjw::mesh::TriMesh &mesh,
     return result;
 }
 
+xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
+                                                 int requested_resolution)
+{
+    xjw::mesh::DepthTsdfOptions options;
+    options.resolution = settings.contains(QStringLiteral("meshResolution"))
+        ? meshResolutionFromSettings(settings)
+        : requested_resolution;
+    options.calculateVertexColors =
+        settings.value(QStringLiteral("calculateVertexColors")).toBool(true);
+    options.compensateColorExposure = settings.value(
+        QStringLiteral("tsdfCompensateColorExposure")).toBool(false);
+    options.coherentFacePrimaryViewColors = settings.value(
+        QStringLiteral("tsdfCoherentFacePrimaryViewColors")).toBool(false);
+    options.enableQuadricSimplification = settings.value(
+        QStringLiteral("tsdfQuadricSimplification")).toBool(false);
+    options.simplifyTargetFaces = qBound(
+        0,
+        settings.value(QStringLiteral("simplifyTargetFaces"))
+            .toInt(settings.value(QStringLiteral("targetFaces")).toInt(0)),
+        2000000);
+    options.minimumInputFrames = 3;
+    const int automatic_camera_support = 2;
+    options.minimumDistinctCameraSupport = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfMinimumDistinctCameraSupport"))
+            .toInt(automatic_camera_support),
+        16);
+    options.minimumComponentFaces = qBound(
+        0,
+        settings.value(QStringLiteral("minFaces")).toInt(options.minimumComponentFaces),
+        100000);
+    options.minimumComponentFaceRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfMinimumComponentFaceRatio"))
+                               .toDouble(options.minimumComponentFaceRatio)),
+        0.0f,
+        1.0f);
+    options.workerCount = qBound(
+        0,
+        settings.value(QStringLiteral("threads")).toInt(options.workerCount),
+        128);
+
+    const QString filtering = settings.value(QStringLiteral("depthFiltering"))
+                                  .toString(QStringLiteral("moderate"));
+    if (filtering == QStringLiteral("disabled"))
+    {
+        options.minimumConfidence = 0.10f;
+        options.minimumSingleObservationWeight = 0.55f;
+    }
+    else if (filtering == QStringLiteral("mild"))
+    {
+        options.minimumConfidence = 0.20f;
+        options.minimumSingleObservationWeight = 0.60f;
+    }
+    else if (filtering == QStringLiteral("aggressive"))
+    {
+        options.minimumConfidence = 0.40f;
+        options.minimumSingleObservationWeight = 0.80f;
+    }
+    else
+    {
+        options.minimumConfidence = 0.25f;
+        options.minimumSingleObservationWeight = 0.70f;
+    }
+
+    options.truncationVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfTruncationVoxels"))
+                               .toDouble(options.truncationVoxels)),
+        1.0f,
+        12.0f);
+    options.surfaceSupportBandVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfSurfaceSupportBandVoxels"))
+                               .toDouble(options.surfaceSupportBandVoxels)),
+        0.0f,
+        12.0f);
+    options.minimumVoxelWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfMinimumVoxelWeight"))
+                               .toDouble(options.minimumVoxelWeight)),
+        0.05f,
+        20.0f);
+    options.minimumSingleObservationWeight = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMinimumSingleObservationWeight"))
+                               .toDouble(options.minimumSingleObservationWeight)),
+        0.05f,
+        1.0f);
+    options.allowGeometryVerifiedSingleObservation = settings.value(
+        QStringLiteral("tsdfAllowGeometryVerifiedSingleObservation")).toBool(
+            options.resolution >= 384);
+    options.minimumGeometryVerifiedObservationWeight = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMinimumGeometryVerifiedObservationWeight"))
+                               .toDouble(options.minimumGeometryVerifiedObservationWeight)),
+        0.05f,
+        1.0f);
+    options.minimumGeometrySupportCount = qBound(
+        2,
+        settings.value(QStringLiteral("tsdfMinimumGeometrySupportCount"))
+            .toInt(options.minimumGeometrySupportCount),
+        16);
+    options.enableDiscontinuityAwareSampling = settings.value(
+        QStringLiteral("tsdfDiscontinuityAwareSampling")).toBool(
+            options.resolution >= 384);
+    options.maximumInterpolationRelativeDepthSpread = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumInterpolationRelativeDepthSpread"))
+                               .toDouble(options.maximumInterpolationRelativeDepthSpread)),
+        0.001f,
+        0.10f);
+    options.maximumObservationInverseDepthSpread = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumObservationInverseDepthSpread"))
+                               .toDouble(options.maximumObservationInverseDepthSpread)),
+        0.0f,
+        0.10f);
+    options.allowInvalidNearestPixelRecovery = settings.value(
+        QStringLiteral("tsdfAllowInvalidNearestPixelRecovery")).toBool(
+            options.allowInvalidNearestPixelRecovery);
+    options.enableSurfacePatchSupport = settings.value(
+        QStringLiteral("tsdfSurfacePatchSupport")).toBool(false);
+    options.minimumSurfacePatchSourceCount = qBound(
+        2,
+        settings.value(QStringLiteral("tsdfMinimumSurfacePatchSourceCount"))
+            .toInt(options.minimumSurfacePatchSourceCount),
+        8);
+    options.minimumSurfacePatchCoreNeighborCount = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfMinimumSurfacePatchCoreNeighborCount"))
+            .toInt(options.minimumSurfacePatchCoreNeighborCount),
+        26);
+    options.maximumSurfacePatchInverseDepthSpread = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumSurfacePatchInverseDepthSpread"))
+                               .toDouble(options.maximumSurfacePatchInverseDepthSpread)),
+        0.001f,
+        0.05f);
+    options.maximumSurfacePatchNormalAngleDegrees = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumSurfacePatchNormalAngleDegrees"))
+                               .toDouble(options.maximumSurfacePatchNormalAngleDegrees)),
+        5.0f,
+        45.0f);
+    options.maximumSurfacePatchAbsoluteTsdf = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumSurfacePatchAbsoluteTsdf"))
+                               .toDouble(options.maximumSurfacePatchAbsoluteTsdf)),
+        0.05f,
+        0.95f);
+    options.minimumSurfacePatchWeightRatio = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMinimumSurfacePatchWeightRatio"))
+                               .toDouble(options.minimumSurfacePatchWeightRatio)),
+        0.01f,
+        1.0f);
+    options.enableSupportMaskFreeSpaceCarving = settings.value(
+        QStringLiteral("tsdfSupportMaskFreeSpaceCarving")).toBool(false);
+    options.maximumFreeSpaceVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfMaximumFreeSpaceVoxels"))
+                               .toDouble(options.maximumFreeSpaceVoxels)),
+        0.0f,
+        64.0f);
+    const int automatic_boundary_erosion = options.resolution >= 384 ? 2 : 1;
+    options.depthValidBoundaryErosionPixels = qBound(
+        0,
+        settings.value(QStringLiteral("tsdfDepthValidBoundaryErosionPixels"))
+            .toInt(automatic_boundary_erosion),
+        4);
+    options.supportMaskFreeSpaceWeight = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfSupportMaskFreeSpaceWeight"))
+                               .toDouble(options.supportMaskFreeSpaceWeight)),
+        0.0f,
+        1.0f);
+    options.minimumSupportMaskFreeSpaceViews = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfMinimumSupportMaskFreeSpaceViews"))
+            .toInt(options.minimumSupportMaskFreeSpaceViews),
+        16);
+
+    const QString interpolation = settings.value(
+        QStringLiteral("interpolation")).toString(QStringLiteral("enabled"));
+    options.fillSmallBoundaryHoles = interpolation != QStringLiteral("disabled")
+        && settings.value(QStringLiteral("holeFill")).toBool(true);
+    const double maximum_hole_area = std::max(
+        1.0, settings.value(QStringLiteral("maxHoleSize")).toDouble(100.0));
+    const int conservative_edges = std::clamp(
+        static_cast<int>(std::lround(std::sqrt(maximum_hole_area) * 1.6)),
+        8,
+        32);
+    options.maximumHoleBoundaryEdges = interpolation == QStringLiteral("extrapolated")
+        ? std::clamp(std::max(64, conservative_edges * 4), 64, 128)
+        : conservative_edges;
+    options.maximumHoleDiameterVoxels = interpolation == QStringLiteral("extrapolated")
+        ? 16.0f
+        : 4.0f;
+    options.maximumHoleBoundaryEdges = qBound(
+        3,
+        settings.value(QStringLiteral("tsdfMaximumHoleBoundaryEdges"))
+            .toInt(options.maximumHoleBoundaryEdges),
+        256);
+    options.maximumHoleDiameterVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfMaximumHoleDiameterVoxels"))
+                               .toDouble(options.maximumHoleDiameterVoxels)),
+        0.0f,
+        64.0f);
+    options.boundarySmoothingIterations = qBound(
+        0,
+        settings.value(QStringLiteral("tsdfBoundarySmoothingIterations")).toInt(1),
+        4);
+    options.boundarySmoothingLambda = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfBoundarySmoothingLambda"))
+                               .toDouble(options.boundarySmoothingLambda)),
+        0.0f,
+        0.5f);
+    options.maximumBoundarySmoothingDisplacementVoxels = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumBoundarySmoothingDisplacementVoxels"))
+                               .toDouble(options.maximumBoundarySmoothingDisplacementVoxels)),
+        0.0f,
+        1.0f);
+    const bool automatic_trim_weak_boundary_tips = options.resolution >= 384;
+    options.trimWeakBoundaryTips = settings.value(
+        QStringLiteral("tsdfTrimWeakBoundaryTips")).toBool(
+            automatic_trim_weak_boundary_tips);
+    options.weakBoundaryTipTrimPasses = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfWeakBoundaryTipTrimPasses")).toInt(1),
+        4);
+    return options;
+}
+
+void mergePayload(const QJsonObject &source, QJsonObject *target)
+{
+    if (!target)
+    {
+        return;
+    }
+    for (auto it = source.constBegin(); it != source.constEnd(); ++it)
+    {
+        (*target)[it.key()] = it.value();
+    }
+}
+
 } // namespace
+
+xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &settings,
+                                                         int requestedResolution)
+{
+    return makeDepthTsdfOptions(settings, requestedResolution);
+}
 
 int meshResolutionFromSettings(const QJsonObject &settings)
 {
@@ -130,6 +397,23 @@ int meshResolutionFromSettings(const QJsonObject &settings)
     const int octreeDepth = settings.value(QStringLiteral("octreeDepth")).toInt(10);
     const int depth = qBound(4, octreeDepth, 14);
     return qBound(64, 1 << (depth - 2), 1024);
+}
+
+QString depthReconstructionModeFromSettings(const QJsonObject &settings)
+{
+    const QString requested = settings.value(QStringLiteral("reconstruction_mode"))
+                                  .toString()
+                                  .trimmed()
+                                  .toLower();
+    if (!requested.isEmpty())
+    {
+        return requested;
+    }
+
+    return settings.value(QStringLiteral("surface_type")).toString()
+               == QStringLiteral("height_field")
+        ? QStringLiteral("poisson_legacy")
+        : QStringLiteral("depth_tsdf");
 }
 
 xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings)
@@ -308,6 +592,30 @@ xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJso
     return config;
 }
 
+xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedResolution,
+                                                                   bool aerialTerrain,
+                                                                   bool preserveDetail)
+{
+    xjw::mesh::ReconstructionConfig config;
+    config.resolution = qBound(64, requestedResolution, 1024);
+    config.poissonDepth = 9;
+    config.simplifyTargetFaces = 28000;
+    config.forcePoisson = !aerialTerrain;
+    config.allowHeightGridFallback = aerialTerrain;
+    config.orientNormalsForClosedSurface = !aerialTerrain;
+
+    if (aerialTerrain && preserveDetail)
+    {
+        config.resolution = std::max(config.resolution, 320);
+        config.enableDownsample = false;
+        config.simplifyTargetFaces = 65000;
+        config.smoothIterations = std::max(config.smoothIterations, 4);
+        config.smoothLambda = 0.36f;
+    }
+
+    return config;
+}
+
 int holeFillPassesFromArea(double maxHoleArea)
 {
     if (maxHoleArea <= 0.0)
@@ -444,6 +752,12 @@ WorkflowResult buildMeshAndOptionalTexture(const MeshBuildRequest &request)
 WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
 {
     WorkflowResult result;
+    const QString mode = depthReconstructionModeFromSettings(request.settings);
+    result.payload[QStringLiteral("actual_mesh_algorithm")] = mode;
+    result.payload[QStringLiteral("reconstruction_mode")] = mode;
+    result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
+    result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+
     if (request.depthMapSourcePath.trimmed().isEmpty())
     {
         result.errorMessage = QStringLiteral("深度图源路径为空");
@@ -456,59 +770,125 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
                ? depth_source_info.absoluteFilePath()
                : depth_source_info.absolutePath())
         : request.outputRoot;
-    DepthMapVisualHullOptions visual_hull_options;
-    visual_hull_options.strictVolumetricMasks =
-        request.settings.value(QStringLiteral("strictVolumetricMasks")).toBool(false);
-    DepthMapVisualHullResult visual_hull = DepthMapMeshBuilder::buildVisualHull(
-        request.depthMapSourcePath,
-        request.reconstruction.resolution,
-        visual_hull_options,
-        request.progress);
-    if (visual_hull.applicable && visual_hull.ok)
+
+    if (mode == QStringLiteral("depth_tsdf"))
     {
+        const QVector<DepthFrameArtifact> artifacts =
+            DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
+        const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+        if (!loaded.ok)
+        {
+            result.errorMessage = loaded.errorMessage;
+            return result;
+        }
+
+        DepthTsdfOptions options = depthTsdfOptionsFromSettings(
+            request.settings,
+            request.reconstruction.resolution);
+        const int orbital_frame_count = std::count_if(
+            artifacts.cbegin(),
+            artifacts.cend(),
+            [](const DepthFrameArtifact &artifact)
+            {
+                return artifact.sceneProfile == QStringLiteral("orbital_object");
+            });
+        const bool orbital_workspace = orbital_frame_count >=
+            std::max(3, static_cast<int>(artifacts.size() / 2));
+        if (orbital_workspace &&
+            !request.settings.contains(QStringLiteral("tsdfSupportMaskFreeSpaceCarving")))
+        {
+            options.enableSupportMaskFreeSpaceCarving = true;
+        }
+        if (orbital_workspace &&
+            !request.settings.contains(QStringLiteral("tsdfMinimumSupportMaskFreeSpaceViews")))
+        {
+            options.minimumSupportMaskFreeSpaceViews = 5;
+        }
+        options.progress = request.progress;
+        const DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(loaded.frames, options);
+        mergePayload(DepthTsdfSurfaceBuilder::statisticsToJson(tsdf), &result.payload);
+        result.payload[QStringLiteral("tsdf_resolution_x")] = tsdf.layout.cells[0];
+        result.payload[QStringLiteral("tsdf_resolution_y")] = tsdf.layout.cells[1];
+        result.payload[QStringLiteral("tsdf_resolution_z")] = tsdf.layout.cells[2];
+        result.payload[QStringLiteral("tsdf_required_bytes")] =
+            static_cast<double>(tsdf.layout.requiredBytes);
+        if (!tsdf.ok)
+        {
+            result.errorMessage = tsdf.errorMessage;
+            return result;
+        }
+
+        const QJsonObject diagnostics = result.payload;
+        QVector<MeshColorView> texture_views;
+        texture_views.reserve(loaded.frames.size());
+        for (const DepthTsdfFrame &frame : loaded.frames)
+        {
+            MeshColorView view;
+            view.camera = frame.camera;
+            view.colorBgr = frame.colorBgr;
+            view.depth = frame.depth;
+            view.confidence = frame.confidence;
+            view.depthValidMask = frame.depthValidMask;
+            view.supportMask = frame.supportMask;
+            view.qualityWeight = frame.frameQualityWeight;
+            texture_views.push_back(std::move(view));
+        }
+        result = saveMeshAndOptionalTexture(tsdf.mesh,
+                                            "depth_tsdf",
+                                            output_root,
+                                            request.exportObj,
+                                            request.texture,
+                                            request.progress,
+                                            &texture_views);
+        mergePayload(diagnostics, &result.payload);
+        return result;
+    }
+
+    if (mode != QStringLiteral("visual_hull") &&
+        mode != QStringLiteral("poisson_legacy"))
+    {
+        result.errorMessage = QStringLiteral("未知深度模型重建模式: %1").arg(mode);
+        return result;
+    }
+
+    if (mode == QStringLiteral("visual_hull"))
+    {
+        DepthMapVisualHullOptions visual_hull_options;
+        visual_hull_options.strictVolumetricMasks =
+            request.settings.value(QStringLiteral("strictVolumetricMasks")).toBool(false);
+        const DepthMapVisualHullResult visual_hull = DepthMapMeshBuilder::buildVisualHull(
+            request.depthMapSourcePath,
+            request.reconstruction.resolution,
+            visual_hull_options,
+            request.progress);
+        result.payload[QStringLiteral("visual_hull_views")] = visual_hull.usableViewCount;
+        result.payload[QStringLiteral("visual_hull_depth_views")] = visual_hull.depthViewCount;
+        result.payload[QStringLiteral("visual_hull_depth_carving")] =
+            visual_hull.usedDepthFreeSpaceCarving;
+        result.payload[QStringLiteral("visual_hull_retried_without_depth_carving")] =
+            visual_hull.retriedWithoutDepthCarving;
+        result.payload[QStringLiteral("visual_hull_component_count")] =
+            visual_hull.connectivity.componentCount;
+        result.payload[QStringLiteral("visual_hull_removed_satellite_components")] =
+            visual_hull.removedSatelliteComponentCount;
+        result.payload[QStringLiteral("visual_hull_largest_component_ratio")] =
+            visual_hull.connectivity.largestComponentFaceRatio;
+        if (!visual_hull.applicable || !visual_hull.ok)
+        {
+            result.errorMessage = visual_hull.message.isEmpty()
+                ? QStringLiteral("显式 Visual Hull 模式不可用于当前深度数据")
+                : visual_hull.message;
+            return result;
+        }
+
+        const QJsonObject diagnostics = result.payload;
         result = saveMeshAndOptionalTexture(visual_hull.mesh,
-                                            visual_hull.actualAlgorithm.toStdString(),
+                                            "silhouette_visual_hull",
                                             output_root,
                                             request.exportObj,
                                             request.texture,
                                             request.progress);
-        if (result.ok)
-        {
-            result.payload[QStringLiteral("visual_hull_views")] = visual_hull.usableViewCount;
-            result.payload[QStringLiteral("visual_hull_depth_views")] = visual_hull.depthViewCount;
-            result.payload[QStringLiteral("visual_hull_depth_carving")] =
-                visual_hull.usedDepthFreeSpaceCarving;
-            result.payload[QStringLiteral("visual_hull_retried_without_depth_carving")] =
-                visual_hull.retriedWithoutDepthCarving;
-            result.payload[QStringLiteral("visual_hull_component_count")] =
-                visual_hull.connectivity.componentCount;
-            result.payload[QStringLiteral("visual_hull_removed_satellite_components")] =
-                visual_hull.removedSatelliteComponentCount;
-            result.payload[QStringLiteral("visual_hull_largest_component_ratio")] =
-                visual_hull.connectivity.largestComponentFaceRatio;
-            result.payload[QStringLiteral("actual_mesh_algorithm")] = visual_hull.actualAlgorithm;
-            if (!visual_hull.fallbackReason.isEmpty())
-            {
-                result.payload[QStringLiteral("visual_hull_fallback_reason")] =
-                    visual_hull.fallbackReason;
-            }
-            result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
-            result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-        }
-        return result;
-    }
-    if (visual_hull.applicable && visual_hull.qualityRejected)
-    {
-        result.payload[QStringLiteral("actual_mesh_algorithm")] = visual_hull.actualAlgorithm;
-        result.payload[QStringLiteral("visual_hull_component_count")] =
-            visual_hull.connectivity.componentCount;
-        result.payload[QStringLiteral("visual_hull_largest_component_ratio")] =
-            visual_hull.connectivity.largestComponentFaceRatio;
-        result.payload[QStringLiteral("visual_hull_quality_rejected")] = true;
-        result.errorMessage = QStringLiteral(
-            "深度图模型质量门控未通过：%1。请重新运行空中三角测量，优先使用已导入参考相机作为软约束，"
-            "并在重算深度图后再次生成模型。")
-                                  .arg(visual_hull.message);
+        mergePayload(diagnostics, &result.payload);
         return result;
     }
 
@@ -527,16 +907,9 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
     }
     if (densePath.isEmpty())
     {
-        const auto frames = xjw::mesh::DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
-        if (frames.isEmpty())
-        {
-            result.errorMessage = QStringLiteral("未找到可用于生成模型的深度图文件");
-            return result;
-        }
-
-        result.errorMessage = QStringLiteral(
-            "缺少深度图 metadata，无法从 raw depth 直接恢复相机、尺寸和尺度；"
-            "请重新运行深度图估计或先执行深度图融合。");
+        result.errorMessage = resolveError.isEmpty()
+            ? QStringLiteral("显式 poisson_legacy 模式缺少可复用密集点云")
+            : resolveError;
         return result;
     }
 
@@ -548,17 +921,10 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
     meshRequest.texture = request.texture;
     meshRequest.progress = request.progress;
 
+    const QJsonObject diagnostics = result.payload;
     result = buildMeshAndOptionalTexture(meshRequest);
-    if (result.ok)
-    {
-        result.payload[QStringLiteral("depth_map_source_path")] = request.depthMapSourcePath;
-        result.payload[QStringLiteral("source_point_cloud_path")] = densePath;
-        result.payload[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-        if (visual_hull.applicable && !visual_hull.message.isEmpty())
-        {
-            result.payload[QStringLiteral("visual_hull_warning")] = visual_hull.message;
-        }
-    }
+    mergePayload(diagnostics, &result.payload);
+    result.payload[QStringLiteral("source_point_cloud_path")] = densePath;
     return result;
 }
 
@@ -636,12 +1002,47 @@ WorkflowResult buildTextureOnly(const TextureBuildRequest &request)
 
     xjw::mesh::TextureMappingResult textureResult;
     std::string textureError;
-    result.ok = xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
-        xjw::common::io::toUtf8Path(request.meshPath),
-        xjw::common::io::toUtf8Path(request.outputDir),
-        textureConfig,
-        &textureResult,
-        &textureError);
+    if (!request.depthMapSourcePath.trimmed().isEmpty())
+    {
+        const QVector<DepthFrameArtifact> artifacts =
+            DepthMapMeshBuilder::discoverDepthFrames(request.depthMapSourcePath);
+        const DepthTsdfFrameLoadResult loaded = DepthTsdfSurfaceBuilder::loadFrames(artifacts);
+        if (!loaded.ok)
+        {
+            result.errorMessage = QStringLiteral("无法加载相机纹理源: %1").arg(loaded.errorMessage);
+            return result;
+        }
+        QVector<MeshColorView> views;
+        views.reserve(loaded.frames.size());
+        for (const DepthTsdfFrame &frame : loaded.frames)
+        {
+            MeshColorView view;
+            view.camera = frame.camera;
+            view.colorBgr = frame.colorBgr;
+            view.depth = frame.depth;
+            view.confidence = frame.confidence;
+            view.depthValidMask = frame.depthValidMask;
+            view.supportMask = frame.supportMask;
+            view.qualityWeight = frame.frameQualityWeight;
+            views.push_back(std::move(view));
+        }
+        result.ok = xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+            xjw::common::io::toUtf8Path(request.meshPath),
+            xjw::common::io::toUtf8Path(request.outputDir),
+            textureConfig,
+            views,
+            &textureResult,
+            &textureError);
+    }
+    else
+    {
+        result.ok = xjw::mesh::TextureMapper::generateTexturedModelFromMeshFile(
+            xjw::common::io::toUtf8Path(request.meshPath),
+            xjw::common::io::toUtf8Path(request.outputDir),
+            textureConfig,
+            &textureResult,
+            &textureError);
+    }
 
     if (!result.ok)
     {

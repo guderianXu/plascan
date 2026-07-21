@@ -1,11 +1,15 @@
 #include "ProjectCameraImportService.h"
 
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 
 #include <QDir>
 #include <QFileInfo>
 
 namespace xjw::gui::project {
+
+using xjw::common::project::parseTsaiCamera;
 
 SingleCameraImportStatus buildSingleCameraImport(const QString &imagePath,
                                                  const QString &tsaiPath,

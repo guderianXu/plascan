@@ -2,8 +2,10 @@
 #include "ui_ForwardIntersectionCheckDialog.h"
 
 #include "ProjectManager.h"
-#include "ProjectIO.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectIO.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "Camera.h"
 #include "ImageViewWidget.h"
 #include "MatchLineOverlay.h"
@@ -34,20 +36,8 @@
 
 namespace {
 
-QString normalizePath(const QString &path)
-{
-    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-}
-
-bool pathTokenMatchesImage(const QString &token, const QString &imagePath)
-{
-    if (token.isEmpty() || imagePath.isEmpty()) return false;
-    const QString a = normalizePath(token);
-    const QString b = normalizePath(imagePath);
-    if (a == b) return true;
-    if (QFileInfo(token).fileName() == QFileInfo(imagePath).fileName()) return true;
-    return QFileInfo(token).completeBaseName() == QFileInfo(imagePath).completeBaseName();
-}
+using xjw::common::project::imageTokensReferToSameImage;
+using xjw::common::project::normalizePath;
 
 QStringList sidecarImageTokens(const QJsonObject &sidecar, int imageIndex)
 {
@@ -80,7 +70,7 @@ bool sidecarTokensMatchImage(const QStringList &tokens, const QString &imagePath
 {
     for (const QString &token : tokens)
     {
-        if (pathTokenMatchesImage(token, imagePath))
+        if (imageTokensReferToSameImage(token, imagePath))
         {
             return true;
         }
@@ -385,7 +375,7 @@ bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts
     // 不依赖惰性加载的 ipmatch_results，与 MatchPairSelectorDialog 保持一致
     const QString projectPath = _projectManager->currentProjectPath();
     if (!projectPath.isEmpty()) {
-        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
         const QString matchDirPath = QDir(assetsDir).filePath(QStringLiteral("matches"));
         QDir matchDir(matchDirPath);
         if (matchDir.exists()) {
@@ -418,8 +408,8 @@ bool ForwardIntersectionCheckDialog::collectAutoPointPairs(QVector<QPointF> *pts
         bool has2 = false;
         for (const QJsonValue &it : imageFiles) {
             const QString token = it.toString();
-            has1 = has1 || pathTokenMatchesImage(token, img1);
-            has2 = has2 || pathTokenMatchesImage(token, img2);
+            has1 = has1 || imageTokensReferToSameImage(token, img1);
+            has2 = has2 || imageTokensReferToSameImage(token, img2);
         }
         if (!(has1 && has2)) continue;
 
@@ -447,7 +437,7 @@ bool ForwardIntersectionCheckDialog::buildCameraFromImageMeta(const QJsonObject 
         return false;
     }
 
-    if (!xjw::gui::project::cameraFromJson(camObj, cam)) {
+    if (!xjw::common::project::cameraFromJson(camObj, cam)) {
         if (errorMsg) {
             *errorMsg = tr("相机参数解析失败（请检查单位字段、C/R 或 pitch）");
         }

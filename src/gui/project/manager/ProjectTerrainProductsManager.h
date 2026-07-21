@@ -1,11 +1,11 @@
 #pragma once
 
+#include "Camera.h"
+
+#include <QMap>
 #include <QObject>
 #include <QJsonObject>
 #include <QStringList>
-
-#include <array>
-#include <vector>
 
 class QWidget;
 class ProjectData;
@@ -52,13 +52,12 @@ signals:
 private:
     struct DemPipelineContext
     {
+        QString projectPath;
         QStringList images;
-        QStringList cameraPaths;
         QString outputDir;
-        QString featureAlgorithm;
-        QString matchAlgorithm;
-        std::vector<std::array<double, 3>> knownCameraCenters;
-        double demResolution;
+        QMap<QString, xjw::Camera> referenceCameras;
+        QMap<QString, QString> maskPaths;
+        double demResolution = 0.0;
         QString demType;
     };
 

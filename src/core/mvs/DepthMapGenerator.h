@@ -14,6 +14,7 @@
 #include "DepthMapFusion.h"
 #include "DepthPyramidEstimator.h"
 #include "DepthFrameQualityGate.h"
+#include "DepthCompletenessMetrics.h"
 #include "MvsQualityReport.h"
 #include "MvsSceneClassifier.h"
 #include "DenseCloudBuilder.h"
@@ -51,11 +52,29 @@ struct DepthFrameResult
     std::vector<int> sourceViewIndices;  ///< PatchMatch 实际使用的源视图下标，用于限制一致性检查范围
     QSharedPointer<cv::Mat> depthMap;    ///< 深度图 (CV_32F)
     QSharedPointer<cv::Mat> confidence;  ///< 置信图 (CV_32F)
+    QSharedPointer<cv::Mat> normalMap;   ///< 最终层法线图 (CV_32FC3)，可为空
+    QSharedPointer<cv::Mat> supportCount; ///< 最终层多视支持计数 (CV_16U)
+    QSharedPointer<cv::Mat> geometrySupportCount; ///< 参考帧+跨视几何确认数 (CV_16U)
+    QSharedPointer<cv::Mat> geometrySourceMask; ///< bit N 对应 sourceViewIndices 的第 N 个来源 (CV_16U)
+    QSharedPointer<cv::Mat> inverseDepthMean; ///< 几何确认观测的逆深度均值 (CV_32F)
+    QSharedPointer<cv::Mat> inverseDepthRelativeSpread; ///< 逆深度相对标准差 (CV_32F)
+    QSharedPointer<cv::Mat> crossViewRepairedMask; ///< 跨视图补回像素；不参与帧准入评分 (CV_8U)
+    QSharedPointer<cv::Mat> validMask;   ///< 最终输出空间的权威有效蒙版 (CV_8U)
+    QSharedPointer<cv::Mat> supportRegionMask; ///< 项目/内容允许参与重建的区域，不含深度孔洞
     DepthPostProcessStats depthPostprocess; ///< 融合前深度图后处理统计
+    DepthCompletenessDiagnostics depthCompleteness; ///< 蒙版内覆盖和逐阶段损失诊断
     std::vector<DepthLevelSummary> pyramidLevels; ///< 三级深度估计逐层摘要
     std::vector<DepthLevelResult> intermediatePyramidLevels; ///< 可选的 L3/L2 调试结果
     DepthMapQualityMetrics qualityMetrics; ///< 帧级覆盖、连通性与搜索边界统计
     DepthFrameQualityDecision qualityDecision; ///< 是否允许进入多视融合
+    std::string maskSource;                  ///< project/content/full_image
+    float maskCoverage = 1.0f;               ///< 参考影像中允许参与 MVS 的像素比例
+    int selectedLevel = 0;                   ///< 实际采用的深度金字塔层级
+    std::string fallbackReason;              ///< 层级减少或细层失败原因
+    int pyramidRequestedLevelCount = 3;
+    int pyramidActiveLevelCount = 0;
+    int pyramidMinimumShortSide = 0;
+    std::string pyramidDegradedReason;
     bool depthPostprocessApplied = false;   ///< true 表示 depthMap/confidence 已应用上述后处理
     bool success = false;
     double elapsedMs = 0.0;               ///< 单帧深度估计耗时，不含异步写盘
@@ -76,6 +95,15 @@ struct DepthFrameResult
     {
         depthMap.clear();
         confidence.clear();
+        normalMap.clear();
+        supportCount.clear();
+        geometrySupportCount.clear();
+        geometrySourceMask.clear();
+        inverseDepthMean.clear();
+        inverseDepthRelativeSpread.clear();
+        crossViewRepairedMask.clear();
+        validMask.clear();
+        supportRegionMask.clear();
         intermediatePyramidLevels.clear();
     }
 };
@@ -179,6 +207,16 @@ public:
                                     double *otsuThreshold = nullptr,
                                     int *adaptiveThreshold = nullptr);
 
+    /// 将项目蒙版转换为 MVS 有效区：项目蒙版非零=排除，返回值 255=有效
+    static cv::Mat projectMaskToValidMask(const cv::Mat &projectMask,
+                                          cv::Size targetSize);
+
+    /// 暗背景环拍物体可用内容亮度挖出项目蒙版内部开口；保护外轮廓并限制最大移除比例
+    static cv::Mat refineOrbitalProjectValidMask(const cv::Mat &gray,
+                                                 const cv::Mat &projectValidMask,
+                                                 bool *refined = nullptr,
+                                                 float *retainedRatio = nullptr);
+
     /// 稀疏点支撑只作为置信度软先验，不直接删除 PatchMatch 深度像素
     static void applySparseSupportPrior(cv::Mat &depthMap,
                                         cv::Mat &confidenceMap,
@@ -235,6 +273,8 @@ private:
         std::vector<size_t> sourceSharedPointIndices;
         std::vector<int> sourceViewIndices;
         std::vector<MvsSourcePlanEntry> sourceViewScores;
+        int requestedSourceViewCount = 0;
+        int sourceViewShortfall = 0;
     };
 
     /// 在 QtConcurrent 线程中运行的主函数
@@ -326,10 +366,9 @@ private:
     /// 图像缓存（灰度图，预加载一次复用多次）
     std::vector<cv::Mat> _grayCache;
 
-    /// 内容区域掩码（在 CLAHE 增强前基于原始图像计算，CV_8U 0/255）
-    /// gamma/CLAHE 会将黑边像素 (gray≈3) 提升到 37+，使暗区掩码失效
-    /// 因此必须在增强前计算真正的内容/黑边分界
-    std::vector<cv::Mat> _contentMasks;
+    /// 最终有效区域掩码（CV_8U，255=有效）。优先使用项目蒙版，无项目蒙版时回退内容检测。
+    std::vector<cv::Mat> _validRegionMasks;
+    std::vector<uint8_t> _projectMaskLoaded;
 
     /// MVS 稀疏点可见性与源视图缓存；runInBackground 中预计算一次，帧 worker 仅读取
     std::vector<FrameMvsCache> _frameCaches;

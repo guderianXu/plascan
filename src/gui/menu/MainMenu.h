@@ -25,6 +25,7 @@ class QMainWindow;
 class QAction;
 class QToolBar;
 class QMenu;
+class QActionGroup;
 
 /**
  * @class MainMenu
@@ -64,6 +65,9 @@ public:
     /** @brief 返回"照片面板"显示/隐藏切换动作（可检查状态的 QAction）。 */
     QAction *togglePhotosAction() const;
 
+    /** @brief 返回主工具栏显示/隐藏切换动作。 */
+    QAction *toggleMainToolbarAction() const;
+
     // ==== 工具栏 ====
 
     /** @brief 返回主工具栏指针，外部可向其添加额外的操作按钮。 */
@@ -71,6 +75,22 @@ public:
 
     /** @brief 根据中央工作区类型切换三维与影像专属工具组。 */
     void setContextualToolbarVisibility(bool showModelTools, bool showImageTools);
+
+    /** @brief 更新当前影像是否已完成解码并可执行影像操作。 */
+    void setImageDisplayReady(bool ready);
+
+    /** @brief 更新当前影像是否存在可显示的深度数据。 */
+    void setDepthOverlayAvailable(bool available);
+
+    /** @brief 分别更新最终层与 Level 1/2/3 深度栅格是否可显示。 */
+    void setDepthOverlayLevelsAvailable(bool finalAvailable,
+                                        bool level1Available,
+                                        bool level2Available,
+                                        bool level3Available,
+                                        const QString &finalReason = {},
+                                        const QString &level1Reason = {},
+                                        const QString &level2Reason = {},
+                                        const QString &level3Reason = {});
 
     // ==== 文件/项目菜单动作 ====
 
@@ -100,6 +120,9 @@ public:
     /** @brief 返回"重置视图"动作。 */
     QAction *resetViewAction() const;
 
+    /** @brief 返回全屏显示切换动作。 */
+    QAction *toggleFullScreenAction() const;
+
     /** @brief 返回当前影像向左旋转 90 度的动作。 */
     QAction *rotateImageLeftAction() const;
 
@@ -108,6 +131,12 @@ public:
     QAction *showFeaturePointsAction() const;
     QAction *showFeatureResidualsAction() const;
     QAction *showMaskOverlayAction() const;
+    QAction *showDepthOverlayAction() const;
+    QAction *depthOverlayAllLevelsAction() const;
+    QAction *depthOverlayLevel1Action() const;
+    QAction *depthOverlayLevel2Action() const;
+    QAction *depthOverlayLevel3Action() const;
+    QAction *showDepthIntensityAction() const;
 
     /** @brief 返回"显示轨迹球"切换动作（可检查状态）。 */
     QAction *toggleGizmoAction() const;
@@ -199,7 +228,7 @@ public:
     QAction *referenceQualityCheckAction() const;
     QAction *referenceTerrainBundleAdjustAction() const;
 
-    // ==== 重建菜单动作（稀疏/密集/模型） ====
+    // ==== 重建菜单动作（稀疏/密集） ====
 
     QAction *buildObsNetworkAction() const;
     QAction *initCameraPoseAction() const;
@@ -210,9 +239,6 @@ public:
     QAction *depthMapEstimateAction() const;
     QAction *fuseDepthMapsAction() const;
     QAction *refineDenseCloudAction() const;
-    QAction *meshReconstructAction() const;
-    QAction *textureMappingAction() const;
-    QAction *exportModelAction() const;
 
     /** @brief 返回“导出匹配对(.lis)”动作。 */
     QAction *exportMatchedPairsAction() const;
@@ -240,6 +266,8 @@ signals:
     void clearRecentRequested();
 
 private:
+    void updateImageActionAvailability();
+
     /** @brief 目标主窗口指针，用于 addMenu/addToolBar 等操作。 */
     QMainWindow *_mainWindow{};
 
@@ -257,6 +285,9 @@ private:
 
     /** @brief "模型 / 显示/隐藏项目"子菜单。 */
     QMenu *_modelDisplayHideMenu{};
+
+    /** @brief "视图 / 影像显示"子菜单。 */
+    QMenu *_imageDisplayMenu{};
 
     /** @brief "工具 / 标记"子菜单。 */
     QMenu *_markersMenu{};
@@ -280,12 +311,20 @@ private:
     QAction *_showFeaturePointsAct{};
     QAction *_showFeatureResidualsAct{};
     QAction *_showMaskOverlayAct{};
+    QAction *_showDepthOverlayAct{};
+    QAction *_depthOverlayAllLevelsAct{};
+    QAction *_depthOverlayLevel1Act{};
+    QAction *_depthOverlayLevel2Act{};
+    QAction *_depthOverlayLevel3Act{};
+    QAction *_showDepthIntensityAct{};
+    QActionGroup *_depthOverlayLevelGroup{};
     QAction *_cameraToolbarWidgetAct{}; ///< 三维相机工具按钮的工具栏包装动作
     QAction *_cameraImageToolbarWidgetAct{}; ///< 三维图像工具按钮的工具栏包装动作
     QAction *_rotateImageLeftToolbarWidgetAct{}; ///< 左转按钮的工具栏包装动作
     QAction *_rotateImageRightToolbarWidgetAct{}; ///< 右转按钮的工具栏包装动作
     QAction *_showFeaturePointsToolbarWidgetAct{};
     QAction *_showMaskOverlayToolbarWidgetAct{};
+    QAction *_showDepthOverlayToolbarWidgetAct{};
     QAction *_resetImageViewToolbarWidgetAct{};
     QAction *_toolbarEditingSeparatorAct{}; ///< 视图操作组与编辑操作组之间的分隔符
     QAction *_manualPointCloudPruneToolbarWidgetAct{}; ///< 点云剔除按钮的工具栏包装动作
@@ -304,6 +343,15 @@ private:
     QAction *_togglePropertiesAct{}; ///< 属性面板显示/隐藏
     QAction *_togglePhotosAct{}; ///< 照片面板显示/隐藏
     QAction *_toggleLogAct{}; ///< 日志面板显示/隐藏
+    QAction *_toggleMainToolbarAct{}; ///< 主工具栏显示/隐藏
+    QAction *_toggleFullScreenAct{}; ///< 全屏显示切换
+    bool _imageToolsVisible{};
+    bool _imageDisplayReady{};
+    bool _depthOverlayAvailable{};
+    bool _depthOverlayFinalAvailable{};
+    bool _depthOverlayLevel1Available{};
+    bool _depthOverlayLevel2Available{};
+    bool _depthOverlayLevel3Available{};
 
     // ---- 工作流程菜单动作 ----
     QAction *_addPhotoAct{};            ///< 添加单张照片
@@ -349,8 +397,5 @@ private:
     QAction *_depthMapEstimateAct{};        ///< 深度图估计
     QAction *_fuseDepthMapsAct{};           ///< 深度图融合
     QAction *_refineDenseCloudAct{};        ///< 密集点云后处理
-    QAction *_meshReconstructAct{};         ///< 网格重建
-    QAction *_textureMappingAct{};          ///< 纹理映射
-    QAction *_exportModelAct{};             ///< 模型导出
     QAction *_exportMatchedPairsAct{};      ///< 导出匹配影像对 .lis
 };

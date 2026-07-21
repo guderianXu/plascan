@@ -44,6 +44,10 @@ struct DepthFrameQualityInput
     float multiViewConsistency = 0.0f;
     float depthAtSearchBoundaryRatio = 0.0f;
     float sparseDepthMedianRelativeError = 0.0f;
+    bool hasConstrainedSupportMask = false;
+    float validWithinMaskRatio = -1.0f;
+    float outputFilterRetentionRatio = -1.0f;
+    float consistencyRetentionRatio = -1.0f;
 };
 
 struct DepthFrameQualityDecision
@@ -54,9 +58,25 @@ struct DepthFrameQualityDecision
     std::vector<std::string> reasons;
 };
 
+enum class DepthConsistencyEvidence
+{
+    Unverifiable,
+    Consistent,
+    Occluded,
+    Contradicted
+};
+
 float calibrateDepthConfidence(const DepthConfidenceComponents &components);
 
 DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourceViews);
+
+float depthConsistencyRelativeThreshold(MvsSceneProfile sceneProfile, int viewCount);
+
+bool useContradictionOnlyDepthConsistency(int sourceViewCount);
+
+DepthConsistencyEvidence classifyDepthConsistencyEvidence(float expectedDepth,
+                                                           float measuredDepth,
+                                                           float relativeThreshold);
 
 DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input);
 

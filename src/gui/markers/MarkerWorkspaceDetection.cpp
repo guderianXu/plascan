@@ -1,7 +1,7 @@
 #include "MarkerWorkspaceController.h"
 
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <QHash>
 #include <QJsonArray>
@@ -271,7 +271,7 @@ bool MarkerWorkspaceController::saveDetectionReview(
         return false;
     }
     const auto saved = control_points::DetectionReviewStore(
-                           ProjectIO::markerDetectionReviewPath(
+                           xjw::common::project::ProjectIO::markerDetectionReviewPath(
                                _projectData->currentProjectPath()))
                            .save(queue);
     if (!saved.ok)

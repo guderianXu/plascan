@@ -11,6 +11,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <optional>
 
 namespace xjw::qc
 {
@@ -178,7 +179,51 @@ QJsonArray unregisteredImages(const QJsonObject &projectMeta)
     return result;
 }
 
-double averageCompletedDepthCoverage(const QJsonObject &projectMeta)
+std::optional<double> depthCoverage(const QJsonObject &record)
+{
+    const auto finiteRatio = [](const QJsonValue &value) -> std::optional<double>
+    {
+        if (!value.isDouble())
+        {
+            return std::nullopt;
+        }
+        const double ratio = value.toDouble();
+        if (!std::isfinite(ratio) || ratio < 0.0 || ratio > 1.0)
+        {
+            return std::nullopt;
+        }
+        return ratio;
+    };
+
+    if (const auto value = finiteRatio(record.value(QStringLiteral("valid_coverage"))))
+    {
+        return value;
+    }
+    if (const auto value = finiteRatio(
+            record.value(QStringLiteral("depth_quality")).toObject().value(
+                QStringLiteral("valid_coverage"))))
+    {
+        return value;
+    }
+    if (const auto value = finiteRatio(record.value(QStringLiteral("valid_ratio"))))
+    {
+        return value;
+    }
+
+    const int width = record.value(QStringLiteral("grid_width")).toInt(0);
+    const int height = record.value(QStringLiteral("grid_height")).toInt(0);
+    const int valid = record.value(QStringLiteral("valid_pixel_count")).toInt(-1);
+    if (width > 0 && height > 0 && valid >= 0)
+    {
+        return std::clamp(static_cast<double>(valid) /
+                              static_cast<double>(width) / static_cast<double>(height),
+                          0.0,
+                          1.0);
+    }
+    return std::nullopt;
+}
+
+std::optional<double> averageCompletedDepthCoverage(const QJsonObject &projectMeta)
 {
     const QJsonArray depthResults = projectMeta.value(QStringLiteral("depth_map_results")).toArray();
     double sum = 0.0;
@@ -192,20 +237,17 @@ double averageCompletedDepthCoverage(const QJsonObject &projectMeta)
             continue;
         }
 
-        const QJsonValue ratioValue = record.value(QStringLiteral("valid_ratio"));
-        if (!ratioValue.isDouble())
+        const std::optional<double> coverage = depthCoverage(record);
+        if (!coverage)
         {
             continue;
         }
-
-        const double ratio = ratioValue.toDouble();
-        if (std::isfinite(ratio) && ratio >= 0.0)
-        {
-            sum += ratio;
-            ++count;
-        }
+        sum += *coverage;
+        ++count;
     }
-    return count > 0 ? sum / static_cast<double>(count) : 0.0;
+    return count > 0
+        ? std::optional<double>(sum / static_cast<double>(count))
+        : std::nullopt;
 }
 
 int completedDepthFrameCount(const QJsonObject &projectMeta)
@@ -327,7 +369,10 @@ QJsonObject ReconstructionQualityReport::buildFromProjectMeta(const QJsonObject 
     report[QStringLiteral("mvs_depth_frame_count")] =
         normalizedMeta.value(QStringLiteral("depth_map_results")).toArray().size();
     report[QStringLiteral("mvs_completed_depth_frame_count")] = completedDepthFrameCount(normalizedMeta);
-    report[QStringLiteral("mvs_valid_coverage")] = averageCompletedDepthCoverage(normalizedMeta);
+    if (const auto coverage = averageCompletedDepthCoverage(normalizedMeta))
+    {
+        report[QStringLiteral("mvs_valid_coverage")] = *coverage;
+    }
     report[QStringLiteral("dem_coverage")] = demCoverage(normalizedMeta);
 
     const QJsonObject surveySummary = buildSurveyControlSummary(normalizedMeta);

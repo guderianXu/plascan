@@ -4,7 +4,7 @@
 #include "DemDomIO.h"
 #include "PointCloudAlignment.h"
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <QDateTime>
 #include <QByteArray>
@@ -895,7 +895,7 @@ ReferenceDatasetQualityReportResult writeReferenceDatasetQualityReport(ProjectDa
         return result;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectData->currentProjectPath());
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectData->currentProjectPath());
     if (assetsDir.isEmpty())
     {
         result.errorMessage = QStringLiteral("无法解析项目 assets 目录");
@@ -1136,7 +1136,7 @@ ReferenceDatasetQualityReportResult writeReferenceTerrainPriorPreflightReport(Pr
         return result;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectData->currentProjectPath());
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectData->currentProjectPath());
     if (assetsDir.isEmpty())
     {
         result.errorMessage = QStringLiteral("无法解析项目 assets 目录");

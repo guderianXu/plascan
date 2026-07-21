@@ -15,8 +15,12 @@ endif()
 
 # ── 源文件 ────────────────────────────────────────────────────────────────────
 set(MVS_CXX_SOURCES
+    DenseCloudRefinementService.cpp
     DenseCloudQualityFilter.cpp
+    DepthCompletenessMetrics.cpp
     DepthConsistencyCache.cpp
+    DepthCrossViewHoleRepair.cpp
+    DepthGeometryConsistency.cpp
     DepthMapFusion.cpp
     DepthFrameQualityGate.cpp
     DepthPyramidPolicy.cpp
@@ -37,15 +41,21 @@ set(MVS_CXX_SOURCES
     DisparityFilter.cpp
     DisparityTriangulator.cpp
     PointCloudTifIO.cpp
+    PointCloudArtifactIO.cpp
     StereoDenseCloudPipelineOutput.cpp
     StereoDenseCloudPipelinePaths.cpp
     AspPointCloudMetrics.cpp
     StereoDenseCloudPipeline.cpp
+    StreamingDepthFusionService.cpp
 )
 
 set(MVS_HEADERS
+    DenseCloudRefinementService.h
     DenseCloudQualityFilter.h
+    DepthCompletenessMetrics.h
     DepthConsistencyCache.h
+    DepthCrossViewHoleRepair.h
+    DepthGeometryConsistency.h
     MvsTypes.h
     MvsSourcePlanner.h
     MvsQualityReport.h
@@ -71,10 +81,12 @@ set(MVS_HEADERS
     DisparityFilter.h
     DisparityTriangulator.h
     PointCloudTifIO.h
+    PointCloudArtifactIO.h
     StereoDenseCloudPipelineOutput.h
     StereoDenseCloudPipelinePaths.h
     AspPointCloudMetrics.h
     StereoDenseCloudPipeline.h
+    StreamingDepthFusionService.h
 )
 
 set(MVS_QOBJECT_HEADERS
@@ -149,7 +161,7 @@ if(BUILD_TESTS)
     if(GTest_FOUND)
         include(GoogleTest)
         add_executable(test_mvs_rectifier_unit
-            ${CMAKE_SOURCE_DIR}/src/core/mvs/EpipolarRectifier_tests.cpp
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_rectifier.cpp
         )
         target_link_libraries(test_mvs_rectifier_unit PRIVATE
             mvs
@@ -174,6 +186,97 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_mvs_image_preprocessor)
+
+        add_executable(test_mvs_depth_pyramid
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_pyramid.cpp
+        )
+        target_link_libraries(test_mvs_depth_pyramid PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_depth_pyramid PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_pyramid)
+
+        add_executable(test_mvs_depth_completeness
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_depth_completeness.cpp
+        )
+        set_target_properties(test_mvs_depth_completeness PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_depth_completeness PRIVATE
+            mvs
+            GTest::gtest_main
+            ${OpenCV_LIBS}
+        )
+        target_include_directories(test_mvs_depth_completeness PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_depth_completeness)
+
+        add_executable(test_mvs_cross_view_hole_repair
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_cross_view_hole_repair.cpp
+        )
+        set_target_properties(test_mvs_cross_view_hole_repair PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_cross_view_hole_repair PRIVATE
+            mvs
+            camera
+            ${OpenCV_LIBS}
+            GTest::gtest_main
+        )
+        target_include_directories(test_mvs_cross_view_hole_repair PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+            ${CMAKE_SOURCE_DIR}/src/core/camera
+        )
+        gtest_discover_tests(test_mvs_cross_view_hole_repair DISCOVERY_MODE PRE_TEST)
+
+        add_executable(test_mvs_types
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_types.cpp
+        )
+        set_target_properties(test_mvs_types PROPERTIES
+            RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+        )
+        target_link_libraries(test_mvs_types PRIVATE
+            mvs
+            camera
+            ${OpenCV_LIBS}
+            GTest::gtest_main
+        )
+        target_include_directories(test_mvs_types PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+            ${CMAKE_SOURCE_DIR}/src/core/camera
+            ${CMAKE_SOURCE_DIR}/src/core
+        )
+        gtest_discover_tests(test_mvs_types)
+
+        if(CMAKE_CUDA_COMPILER)
+            add_executable(test_mvs_pipeline
+                ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_pipeline.cpp
+            )
+            set_target_properties(test_mvs_pipeline PROPERTIES
+                CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
+                RUNTIME_OUTPUT_DIRECTORY ${CMAKE_BINARY_DIR}/tests
+            )
+            target_link_libraries(test_mvs_pipeline PRIVATE
+                mvs
+                camera
+                Qt6::Core
+                ${OpenCV_LIBS}
+                GTest::gtest_main
+            )
+            target_include_directories(test_mvs_pipeline PRIVATE
+                ${CMAKE_SOURCE_DIR}/src/core/mvs
+                ${CMAKE_SOURCE_DIR}/src/core/camera
+                ${CMAKE_SOURCE_DIR}/src/core
+            )
+            gtest_discover_tests(test_mvs_pipeline)
+        else()
+            message(WARNING "mvs: CUDA compiler not found, skipping test_mvs_pipeline")
+        endif()
 
         add_executable(test_mvs_workspace_manifest
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_workspace_manifest.cpp
@@ -214,6 +317,31 @@ if(BUILD_TESTS)
             ${CMAKE_SOURCE_DIR}/src/core/mvs
         )
         gtest_discover_tests(test_dense_cloud_quality_filter)
+
+        add_executable(test_mvs_dense_cloud_refinement
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_dense_cloud_refinement.cpp
+        )
+        target_link_libraries(test_mvs_dense_cloud_refinement PRIVATE
+            mvs
+            GTest::gtest_main
+            Qt6::Core
+        )
+        target_include_directories(test_mvs_dense_cloud_refinement PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_dense_cloud_refinement DISCOVERY_MODE PRE_TEST)
+
+        add_executable(test_mvs_streaming_depth_fusion
+            ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_mvs_streaming_depth_fusion.cpp
+        )
+        target_link_libraries(test_mvs_streaming_depth_fusion PRIVATE
+            mvs
+            GTest::gtest_main
+        )
+        target_include_directories(test_mvs_streaming_depth_fusion PRIVATE
+            ${CMAKE_SOURCE_DIR}/src/core/mvs
+        )
+        gtest_discover_tests(test_mvs_streaming_depth_fusion DISCOVERY_MODE PRE_TEST)
 
         add_executable(test_patchmatch_photometric_cost
             ${CMAKE_SOURCE_DIR}/src/core/mvs/tests/test_patchmatch_photometric_cost.cpp

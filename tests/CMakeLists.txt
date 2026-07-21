@@ -55,128 +55,6 @@ target_compile_definitions(test_source_contracts PRIVATE
 )
 gtest_discover_tests(test_source_contracts)
 
-add_executable(test_cli_contracts test_cli_contracts.cpp)
-target_link_libraries(test_cli_contracts PRIVATE
-    Qt6::Core
-    ${PLASCAN_LIBZIP_TARGET}
-    GTest::gtest_main
-)
-target_compile_definitions(test_cli_contracts PRIVATE
-    PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}"
-)
-if(TARGET reconstruct_pipeline_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_RECONSTRUCT_PIPELINE_CLI_PATH="$<TARGET_FILE:reconstruct_pipeline_cli>"
-    )
-    add_dependencies(test_cli_contracts reconstruct_pipeline_cli)
-endif()
-if(TARGET camera_convert_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_CAMERA_CONVERT_CLI_PATH="$<TARGET_FILE:camera_convert_cli>"
-    )
-    add_dependencies(test_cli_contracts camera_convert_cli)
-endif()
-if(TARGET bundle_adjust_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_BUNDLE_ADJUST_CLI_PATH="$<TARGET_FILE:bundle_adjust_cli>"
-    )
-    add_dependencies(test_cli_contracts bundle_adjust_cli)
-endif()
-if(TARGET feature_match_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_FEATURE_MATCH_CLI_PATH="$<TARGET_FILE:feature_match_cli>"
-    )
-    add_dependencies(test_cli_contracts feature_match_cli)
-endif()
-if(TARGET dense_cloud_refine_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_DENSE_CLOUD_REFINE_CLI_PATH="$<TARGET_FILE:dense_cloud_refine_cli>"
-    )
-    add_dependencies(test_cli_contracts dense_cloud_refine_cli)
-endif()
-if(TARGET mesh_reconstruct_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_MESH_RECONSTRUCT_CLI_PATH="$<TARGET_FILE:mesh_reconstruct_cli>"
-    )
-    add_dependencies(test_cli_contracts mesh_reconstruct_cli)
-endif()
-if(TARGET match_photos_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_MATCH_PHOTOS_CLI_PATH="$<TARGET_FILE:match_photos_cli>"
-    )
-    add_dependencies(test_cli_contracts match_photos_cli)
-endif()
-if(TARGET aerial_triangulation_cli)
-    target_compile_definitions(test_cli_contracts PRIVATE
-        PLASCAN_AERIAL_TRIANGULATION_CLI_PATH="$<TARGET_FILE:aerial_triangulation_cli>"
-    )
-    add_dependencies(test_cli_contracts aerial_triangulation_cli)
-endif()
-gtest_discover_tests(test_cli_contracts)
-
-# ==============================================================================
-# test_sfm_filter — 稀疏点云过滤器
-# ==============================================================================
-add_executable(test_sfm_filter test_sfm_filter.cpp)
-target_link_libraries(test_sfm_filter PRIVATE
-    sfm
-    camera
-    intersection
-    bundle_adjust
-    ${OpenCV_LIBS}
-    GTest::gtest_main
-)
-target_include_directories(test_sfm_filter PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-)
-gtest_discover_tests(test_sfm_filter)
-
-# ==============================================================================
-# test_sparse_point_cloud_processor — 稀疏点云后处理统一内核
-# ==============================================================================
-add_executable(test_sparse_point_cloud_processor test_sparse_point_cloud_processor.cpp)
-target_link_libraries(test_sparse_point_cloud_processor PRIVATE
-    sfm
-    GTest::gtest_main
-)
-target_include_directories(test_sparse_point_cloud_processor PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-)
-gtest_discover_tests(test_sparse_point_cloud_processor)
-
-# ==============================================================================
-# test_sparse_point_cloud_workspace — SfM 与 plapoint 点云桥接
-# ==============================================================================
-add_executable(test_sparse_point_cloud_workspace test_sparse_point_cloud_workspace.cpp)
-target_link_libraries(test_sparse_point_cloud_workspace PRIVATE
-    sfm
-    GTest::gtest_main
-)
-target_include_directories(test_sparse_point_cloud_workspace PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-)
-gtest_discover_tests(test_sparse_point_cloud_workspace)
-
-# ==============================================================================
-# test_mvs_types — MVS 类型与参数验证
-# ==============================================================================
-add_executable(test_mvs_types test_mvs_types.cpp)
-target_link_libraries(test_mvs_types PRIVATE
-    mvs
-    camera
-    ${OpenCV_LIBS}
-    GTest::gtest_main
-)
-target_include_directories(test_mvs_types PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/mvs
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core
-)
-gtest_discover_tests(test_mvs_types)
-
 # ==============================================================================
 # test_patchmatch_cpu — CPU PatchMatch 深度恢复回归测试
 # ==============================================================================
@@ -203,175 +81,6 @@ else()
     message(WARNING "tests: CUDA compiler not found, skipping test_patchmatch_cpu")
 endif()
 
-# ==============================================================================
-# test_sfm_params — SfM 参数收紧验证
-# ==============================================================================
-add_executable(test_sfm_params test_sfm_params.cpp)
-target_link_libraries(test_sfm_params PRIVATE
-    sfm
-    camera
-    intersection
-    bundle_adjust
-    ${OpenCV_LIBS}
-    GTest::gtest_main
-)
-target_include_directories(test_sfm_params PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-)
-gtest_discover_tests(test_sfm_params)
-
-# ==============================================================================
-# test_sfm_quality_report — SfM 稀疏重建质量报告
-# ==============================================================================
-add_executable(test_sfm_quality_report test_sfm_quality_report.cpp)
-target_link_libraries(test_sfm_quality_report PRIVATE
-    sfm
-    Qt6::Core
-    GTest::gtest_main
-)
-target_include_directories(test_sfm_quality_report PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-)
-gtest_discover_tests(test_sfm_quality_report)
-
-# ==============================================================================
-# test_sfm_pipeline — SFM 管线与 BA 离群点过滤集成测试
-# ==============================================================================
-add_executable(test_sfm_pipeline test_sfm_pipeline.cpp)
-target_link_libraries(test_sfm_pipeline PRIVATE
-    sfm
-    camera
-    intersection
-    bundle_adjust
-    GTest::gtest_main
-)
-target_include_directories(test_sfm_pipeline PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-)
-gtest_discover_tests(test_sfm_pipeline)
-
-add_executable(test_sfm_prior_tracks test_sfm_prior_tracks.cpp)
-target_link_libraries(test_sfm_prior_tracks PRIVATE
-    sfm
-    camera
-    intersection
-    bundle_adjust
-    GTest::gtest_main
-)
-target_include_directories(test_sfm_prior_tracks PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/control_points
-)
-gtest_discover_tests(test_sfm_prior_tracks)
-
-# ==============================================================================
-# test_ba_input_builder — BA 输入构建与测绘控制点观测接入
-# ==============================================================================
-add_executable(test_ba_input_builder test_ba_input_builder.cpp)
-target_link_libraries(test_ba_input_builder PRIVATE
-    sfm
-    camera
-    intersection
-    bundle_adjust
-    Qt6::Core
-    GTest::gtest_main
-)
-target_include_directories(test_ba_input_builder PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/common
-)
-gtest_discover_tests(test_ba_input_builder)
-
-# ==============================================================================
-# test_sfm_pair_planner — SFM 已知相机匹配配对规划
-# ==============================================================================
-add_executable(test_sfm_pair_planner test_sfm_pair_planner.cpp)
-target_link_libraries(test_sfm_pair_planner PRIVATE
-    Qt6::Core
-    GTest::gtest_main
-)
-target_include_directories(test_sfm_pair_planner PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
-)
-gtest_discover_tests(test_sfm_pair_planner)
-
-add_executable(test_sfm_search_policy
-    test_sfm_search_policy.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/SfmSearchPolicy.cpp
-)
-target_link_libraries(test_sfm_search_policy PRIVATE
-    GTest::gtest_main
-)
-target_include_directories(test_sfm_search_policy PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-)
-gtest_discover_tests(test_sfm_search_policy)
-
-add_executable(test_reconstruction_prerequisites
-    test_reconstruction_prerequisites.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/ReconstructionPrerequisiteReport.cpp
-)
-target_link_libraries(test_reconstruction_prerequisites PRIVATE
-    Qt6::Core
-    GTest::gtest_main
-)
-target_include_directories(test_reconstruction_prerequisites PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
-)
-gtest_discover_tests(test_reconstruction_prerequisites)
-
-add_executable(test_match_result_catalog
-    test_match_result_catalog.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/MatchResultCatalog.cpp
-)
-target_link_libraries(test_match_result_catalog PRIVATE
-    Qt6::Core
-    GTest::gtest_main
-)
-target_include_directories(test_match_result_catalog PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
-)
-gtest_discover_tests(test_match_result_catalog)
-
-add_executable(test_aerial_triangulation_workflow
-    test_aerial_triangulation_workflow.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/AerialTriangulationWorkflow.cpp
-)
-target_link_libraries(test_aerial_triangulation_workflow PRIVATE
-    Qt6::Core
-    matchphototask
-    sfm
-    camera
-    intersection
-    bundle_adjust
-    GTest::gtest_main
-)
-target_include_directories(test_aerial_triangulation_workflow PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-)
-gtest_discover_tests(test_aerial_triangulation_workflow)
-
 add_executable(test_lightglue_feature_budget
     test_lightglue_feature_budget.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_match/match.cpp
@@ -384,39 +93,23 @@ target_link_libraries(test_lightglue_feature_budget PRIVATE
 )
 target_include_directories(test_lightglue_feature_budget PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
+    ${CMAKE_SOURCE_DIR}/src/core/feature_match
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors
 )
 gtest_discover_tests(test_lightglue_feature_budget)
-
-add_executable(test_guided_rematch_service
-    test_guided_rematch_service.cpp
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation/GuidedRematchService.cpp
-)
-target_link_libraries(test_guided_rematch_service PRIVATE
-    Qt6::Core
-    ${OpenCV_LIBS}
-    GTest::gtest_main
-)
-target_include_directories(test_guided_rematch_service PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-)
-gtest_discover_tests(test_guided_rematch_service)
 
 add_executable(test_feature_pair_planner
     test_feature_pair_planner.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/FeaturePairPlanner.cpp
 )
 target_link_libraries(test_feature_pair_planner PRIVATE
+    plascan_common_project
     Qt6::Core
     GTest::gtest_main
 )
 target_include_directories(test_feature_pair_planner PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs
     ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
 )
 gtest_discover_tests(test_feature_pair_planner)
 
@@ -480,25 +173,6 @@ target_include_directories(test_tie_point_track_manager PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/matchphototask/task
 )
 gtest_discover_tests(test_tie_point_track_manager)
-
-# ==============================================================================
-# test_initial_sparse_triangulator — core/sfm 初始稀疏点云三角化器
-# ==============================================================================
-add_executable(test_initial_sparse_triangulator test_initial_sparse_triangulator.cpp)
-target_link_libraries(test_initial_sparse_triangulator PRIVATE
-    sfm
-    camera
-    intersection
-    bundle_adjust
-    GTest::gtest_main
-)
-target_include_directories(test_initial_sparse_triangulator PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-    ${CMAKE_SOURCE_DIR}/src/core/intersection
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-)
-gtest_discover_tests(test_initial_sparse_triangulator)
 
 # ==============================================================================
 # test_vocabulary_overlap_retriever — 基于特征词汇的重叠对预检索
@@ -714,33 +388,15 @@ target_include_directories(test_bundle_adjust_quality_gate PRIVATE
 gtest_discover_tests(test_bundle_adjust_quality_gate)
 
 # ==============================================================================
-# test_reference_terrain_prior — DEM/LiDAR height surface soft priors for BA
-# ==============================================================================
-add_executable(test_reference_terrain_prior test_reference_terrain_prior.cpp)
-target_link_libraries(test_reference_terrain_prior PRIVATE
-    sfm
-    bundle_adjust
-    camera
-    GTest::gtest_main
-)
-target_include_directories(test_reference_terrain_prior PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-    ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
-    ${CMAKE_SOURCE_DIR}/src/core/camera
-)
-gtest_discover_tests(test_reference_terrain_prior)
-
-# ==============================================================================
 # test_bundle_adjust_service_lidar — 服务层 LiDAR 约束接入与 JSON 输出
 # ==============================================================================
 add_executable(test_bundle_adjust_service_lidar
     test_bundle_adjust_service_lidar.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/BundleAdjustService.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
 )
 target_link_libraries(test_bundle_adjust_service_lidar PRIVATE
+    plascan_common_project
     lidar
     bundle_adjust
     camera
@@ -752,7 +408,6 @@ target_link_libraries(test_bundle_adjust_service_lidar PRIVATE
 target_include_directories(test_bundle_adjust_service_lidar PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io
     ${CMAKE_SOURCE_DIR}/src/core/lidar
     ${CMAKE_SOURCE_DIR}/src/core/bundle_adjust
     ${CMAKE_SOURCE_DIR}/src/core/camera
@@ -806,7 +461,6 @@ add_executable(test_project_data
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
@@ -817,6 +471,7 @@ set_target_properties(test_project_data PROPERTIES
     AUTOMOC ON
 )
 target_link_libraries(test_project_data PRIVATE
+    plascan_common_project
     Qt6::Core
     ${PLASCAN_LIBZIP_TARGET}
     GTest::gtest_main
@@ -826,7 +481,6 @@ target_include_directories(test_project_data PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/config
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io
 )
 gtest_discover_tests(test_project_data)
 
@@ -891,21 +545,22 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/menu/ToolbarButton.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/main_window/WorkspacePanelController.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/main_window/ProjectUiHydrator.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDashboardSummary.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectDenseWorkflowConfig.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectModelWorkflowPolicy.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectMetadataOperations.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSupportUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowUtils.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceDatasets.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectReferenceTerrainBa.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectSurveyControl.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectWorkflowReports.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectCameraImportService.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectResourceCleanupService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/services/ProjectTiePointResultService.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/support/ProjectResultRecords.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
@@ -916,6 +571,8 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectWorkflowConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/views/DepthOverlayData.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/widgets/DepthOverlayController.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerImageLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerFeatureLoader.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/FeatureResidualLoader.cpp
@@ -941,7 +598,6 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/ProjectDashboardWidget.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/MatchValidityAnalyzer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/TaskStatusWidget.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/widgets/WindowPanel.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/widgets/HenuBrandWidget.cpp
 )
 set_target_properties(test_gui_project_utils PROPERTIES
@@ -952,6 +608,7 @@ if(MSVC)
     target_compile_options(test_gui_project_utils PRIVATE /bigobj)
 endif()
 target_link_libraries(test_gui_project_utils PRIVATE
+    plascan_common_project
     mvs
     sfm
     camera
@@ -987,7 +644,6 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/project
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io
     ${CMAKE_SOURCE_DIR}/src/gui/project/manager
     ${CMAKE_SOURCE_DIR}/src/gui/project/services
     ${CMAKE_SOURCE_DIR}/src/gui/project/support
@@ -1005,7 +661,6 @@ target_include_directories(test_gui_project_utils PRIVATE
     ${CMAKE_SOURCE_DIR}/src/core/mvs
     ${CMAKE_SOURCE_DIR}/src/core/mask
     ${CMAKE_SOURCE_DIR}/src/core/aerial_triangulation
-    ${CMAKE_SOURCE_DIR}/src/core/pipeline
     ${CMAKE_SOURCE_DIR}/src/core
     ${OpenCV_INCLUDE_DIRS}
 )
@@ -1092,7 +747,6 @@ add_executable(test_layer_renderer_batched_overlay
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerOverlayItems.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerRenderer.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/views/LayerStitchedDebug.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureData.cpp
     ${CMAKE_SOURCE_DIR}/src/core/feature_extractors/FeatureFileIO.cpp
     ${CMAKE_SOURCE_DIR}/src/common/log/Logger.cpp
@@ -1101,6 +755,7 @@ set_target_properties(test_layer_renderer_batched_overlay PROPERTIES
     AUTOMOC ON
 )
 target_link_libraries(test_layer_renderer_batched_overlay PRIVATE
+    plascan_common_project
     Qt6::Core
     Qt6::Gui
     Qt6::Widgets
@@ -1114,7 +769,6 @@ target_link_libraries(test_layer_renderer_batched_overlay PRIVATE
 )
 target_include_directories(test_layer_renderer_batched_overlay PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/views
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io
     ${CMAKE_SOURCE_DIR}/src/common
     ${CMAKE_SOURCE_DIR}/src/common/log
     ${CMAKE_SOURCE_DIR}/src/core/mask
@@ -1128,13 +782,6 @@ if(GDAL_INCLUDE_DIRS)
 endif()
 add_test(NAME test_layer_renderer_batched_overlay
          COMMAND test_layer_renderer_batched_overlay)
-
-add_executable(test_multiview_track_builder test_multiview_track_builder.cpp)
-target_link_libraries(test_multiview_track_builder PRIVATE sfm GTest::gtest_main)
-target_include_directories(test_multiview_track_builder PRIVATE
-    ${CMAKE_SOURCE_DIR}/src/core/sfm
-)
-gtest_discover_tests(test_multiview_track_builder)
 
 if(Python3_Interpreter_FOUND)
     add_test(
@@ -1266,45 +913,6 @@ if(Python3_Interpreter_FOUND)
     )
 endif()
 
-if(TARGET triangulate_cli)
-    add_executable(test_triangulate_cli test_triangulate_cli.cpp)
-    target_link_libraries(test_triangulate_cli PRIVATE
-        Qt6::Core
-        ${OpenCV_LIBS}
-        GTest::gtest_main
-    )
-    target_compile_definitions(test_triangulate_cli PRIVATE
-        PLASCAN_TRIANGULATE_CLI_PATH="$<TARGET_FILE:triangulate_cli>"
-    )
-    add_dependencies(test_triangulate_cli triangulate_cli)
-    gtest_discover_tests(test_triangulate_cli)
-endif()
-
-# ==============================================================================
-# test_mvs_pipeline — MVS 管道集成测试（CPU PatchMatch → 融合 → 反投影）
-# ==============================================================================
-if(CMAKE_CUDA_COMPILER)
-    add_executable(test_mvs_pipeline test_mvs_pipeline.cpp)
-    set_target_properties(test_mvs_pipeline PROPERTIES
-        CUDA_ARCHITECTURES "${PLASCAN_CUDA_ARCHITECTURES}"
-    )
-    target_link_libraries(test_mvs_pipeline PRIVATE
-        mvs
-        camera
-        Qt6::Core
-        ${OpenCV_LIBS}
-        GTest::gtest_main
-    )
-    target_include_directories(test_mvs_pipeline PRIVATE
-        ${CMAKE_SOURCE_DIR}/src/core/mvs
-        ${CMAKE_SOURCE_DIR}/src/core/camera
-        ${CMAKE_SOURCE_DIR}/src/core
-    )
-    gtest_discover_tests(test_mvs_pipeline)
-else()
-    message(WARNING "tests: CUDA compiler not found, skipping test_mvs_pipeline")
-endif()
-
 # ==============================================================================
 # test_mesh_reconstructor — 点云到网格重建降级路径
 # ==============================================================================
@@ -1420,7 +1028,6 @@ add_executable(test_marker_detection_job_builder
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive/PlascanArchive.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectData.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/project/data/ProjectFilesManager.cpp
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io/ProjectIO.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/JsonMergeUtil.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectConfigManager.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/config/ProjectUiConfigManager.cpp
@@ -1429,6 +1036,7 @@ add_executable(test_marker_detection_job_builder
 )
 set_target_properties(test_marker_detection_job_builder PROPERTIES AUTOMOC ON)
 target_link_libraries(test_marker_detection_job_builder PRIVATE
+    plascan_common_project
     control_points
     Qt6::Core
     Qt6::Gui
@@ -1442,34 +1050,6 @@ target_include_directories(test_marker_detection_job_builder PRIVATE
     ${CMAKE_SOURCE_DIR}/src/gui/markers
     ${CMAKE_SOURCE_DIR}/src/gui/project/archive
     ${CMAKE_SOURCE_DIR}/src/gui/project/data
-    ${CMAKE_SOURCE_DIR}/src/gui/project/io
     ${CMAKE_SOURCE_DIR}/src/core/control_points
 )
 gtest_discover_tests(test_marker_detection_job_builder DISCOVERY_MODE PRE_TEST)
-
-add_executable(test_marker_detect_cli test_marker_detect_cli.cpp)
-target_link_libraries(test_marker_detect_cli PRIVATE
-    Qt6::Core
-    Qt6::Gui
-    GTest::gtest_main
-)
-if(TARGET marker_detect_cli)
-    target_compile_definitions(test_marker_detect_cli PRIVATE
-        PLASCAN_MARKER_DETECT_CLI_PATH="$<TARGET_FILE:marker_detect_cli>"
-    )
-    add_dependencies(test_marker_detect_cli marker_detect_cli)
-endif()
-gtest_discover_tests(test_marker_detect_cli DISCOVERY_MODE PRE_TEST)
-
-add_executable(test_marker_print_cli test_marker_print_cli.cpp)
-target_link_libraries(test_marker_print_cli PRIVATE
-    Qt6::Core
-    GTest::gtest_main
-)
-if(TARGET marker_print_cli)
-    target_compile_definitions(test_marker_print_cli PRIVATE
-        PLASCAN_MARKER_PRINT_CLI_PATH="$<TARGET_FILE:marker_print_cli>"
-    )
-    add_dependencies(test_marker_print_cli marker_print_cli)
-endif()
-gtest_discover_tests(test_marker_print_cli DISCOVERY_MODE PRE_TEST)

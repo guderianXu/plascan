@@ -8,8 +8,10 @@
 #include <QPointF>
 #include <QColor>
 #include <QImage>
+#include <QPixmap>
 #include <QString>
 #include <QRectF>
+#include <QTransform>
 
 #include "FeatureResidualLoader.h"
 
@@ -34,6 +36,12 @@ public:
     bool addImageLayer(const QString &path, int z = 0);
     bool addImageLayer(const QImage &image, int z = 0);
     static QImage loadImageForDisplay(const QString &path, const QString &plascanPath);
+
+    bool setDepthOverlay(const QImage &overlay,
+                         const QImage &intensity_base = QImage(),
+                         int z = 10);
+    void clearDepthOverlay();
+    bool hasDepthOverlay() const noexcept { return _depthOverlayItem != nullptr; }
 
     // 清除所有已添加的图层
     void clear();
@@ -112,6 +120,12 @@ private:
     QList<QGraphicsItem *> _featureResidualItems{};
     QList<QGraphicsItem *> _matchItems{};
     QList<QGraphicsItem *> _maskItems{};
+    QGraphicsPixmapItem *_depthOverlayItem{};
+    QGraphicsPixmapItem *_baseImageItem{};
+    QPixmap _baseImagePixmap;
+    QTransform _baseImageTransform;
+    QPointF _baseImagePosition;
+    bool _intensityBaseActive{false};
     QRectF _imageBounds{};
 
     // 当前项目的 .plascan 文件路径（可为空：表示未打开项目）

@@ -18,7 +18,7 @@
 // =============================================================================
 #include "ProjectData.h"
 #include "PlascanArchive.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "Logger.h"
 
 #include <QDir>
@@ -31,6 +31,8 @@
 #include <QSet>
 #include <QTimer>
 #include <QUuid>
+
+using xjw::common::project::ProjectIO;
 
 namespace {
 

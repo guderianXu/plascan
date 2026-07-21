@@ -29,34 +29,34 @@ ProjectModelGenerationWorkflow::ProjectModelGenerationWorkflow(
             this,
             [this](const QString &stage, int percent)
     {
-        if (_stage == Stage::DenseCloud && belongsToActiveProject())
+        if (_stage == Stage::DepthMaps && belongsToActiveProject())
         {
             emit meshProgressChanged(QStringLiteral("准备深度图：%1").arg(stage), percent);
         }
     });
     connect(_denseManager,
-            &ProjectDenseReconstructionManager::denseCloudResultReady,
+            &ProjectDenseReconstructionManager::depthMapBatchReady,
             this,
-            [this](const QString &dense_cloud_path, int)
+            [this](const QString &output_directory, int)
     {
-        if (_stage != Stage::DenseCloud || !belongsToActiveProject())
+        if (_stage != Stage::DepthMaps || !belongsToActiveProject())
         {
             return;
         }
 
-        const QString result_directory = QDir::cleanPath(QFileInfo(dense_cloud_path).absolutePath());
-        if (!_expectedDenseOutputDir.isEmpty() &&
-            result_directory.compare(_expectedDenseOutputDir, Qt::CaseInsensitive) != 0)
+        const QString result_directory = QDir::cleanPath(output_directory);
+        if (!_expectedDepthOutputDir.isEmpty() &&
+            result_directory.compare(_expectedDepthOutputDir, Qt::CaseInsensitive) != 0)
         {
             return;
         }
 
         QJsonObject model_settings = _pendingModelSettings;
-        const QString depth_directory = result_directory;
         model_settings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
-        model_settings[QStringLiteral("source_path")] = depth_directory;
-        model_settings[QStringLiteral("depthMapSourcePath")] = depth_directory;
-        model_settings[QStringLiteral("source_point_cloud_path")] = dense_cloud_path;
+        model_settings[QStringLiteral("source_path")] = result_directory;
+        model_settings[QStringLiteral("depthMapSourcePath")] = result_directory;
+        model_settings[QStringLiteral("reconstruction_mode")] = QStringLiteral("depth_tsdf");
+        model_settings.remove(QStringLiteral("source_point_cloud_path"));
         model_settings[QStringLiteral("pipeline_mode")] = true;
         startModelStage(model_settings);
     });
@@ -65,7 +65,7 @@ ProjectModelGenerationWorkflow::ProjectModelGenerationWorkflow(
             this,
             [this](bool success)
     {
-        if (_stage != Stage::DenseCloud)
+        if (_stage != Stage::DepthMaps)
         {
             return;
         }
@@ -130,7 +130,7 @@ void ProjectModelGenerationWorkflow::start(const QJsonObject &settings)
         return;
     }
 
-    startDenseStage(decision.denseSettings, decision.modelSettings);
+    startDepthStage(decision.depthSettings, decision.modelSettings);
 }
 
 bool ProjectModelGenerationWorkflow::isRunning() const
@@ -140,7 +140,7 @@ bool ProjectModelGenerationWorkflow::isRunning() const
 
 bool ProjectModelGenerationWorkflow::isPreparingDenseCloud() const
 {
-    return _stage == Stage::DenseCloud;
+    return _stage == Stage::DepthMaps;
 }
 
 bool ProjectModelGenerationWorkflow::consumeInternalMvsFinished()
@@ -163,14 +163,13 @@ void ProjectModelGenerationWorkflow::startModelStage(const QJsonObject &settings
     }
 }
 
-void ProjectModelGenerationWorkflow::startDenseStage(const QJsonObject &dense_settings,
+void ProjectModelGenerationWorkflow::startDepthStage(const QJsonObject &depth_settings,
                                                       const QJsonObject &model_settings)
 {
-    _stage = Stage::DenseCloud;
+    _stage = Stage::DepthMaps;
     _pendingModelSettings = model_settings;
-    QJsonObject dense_settings_with_runtime = dense_settings;
-    dense_settings_with_runtime[QStringLiteral("transient_for_model")] = true;
-    QString output_directory = dense_settings_with_runtime.value(QStringLiteral("output_dir")).toString().trimmed();
+    QJsonObject depth_settings_with_runtime = depth_settings;
+    QString output_directory = depth_settings_with_runtime.value(QStringLiteral("output_dir")).toString().trimmed();
     const QString project_directory = QFileInfo(_projectPath).absolutePath();
     if (output_directory.isEmpty())
     {
@@ -180,24 +179,10 @@ void ProjectModelGenerationWorkflow::startDenseStage(const QJsonObject &dense_se
     {
         output_directory = QDir(project_directory).filePath(output_directory);
     }
-    _expectedDenseOutputDir = QDir::cleanPath(QFileInfo(output_directory).absoluteFilePath());
+    _expectedDepthOutputDir = QDir::cleanPath(QFileInfo(output_directory).absoluteFilePath());
     emit meshProgressChanged(QStringLiteral("正在准备深度图..."), 0);
 
-    const QString action = dense_settings_with_runtime.value(QStringLiteral("workflow_action")).toString();
-    if (action == QStringLiteral("fuse_existing_depth_maps"))
-    {
-        if (_denseManager->startFuseDepthMapsAsync(dense_settings_with_runtime))
-        {
-            _internalMvsFinishPending = true;
-        }
-        else
-        {
-            finish(false);
-        }
-        return;
-    }
-
-    if (_denseManager->startGenerateDenseCloudAsync(dense_settings_with_runtime))
+    if (_denseManager->startEstimateDepthMapsAsync(depth_settings_with_runtime))
     {
         _internalMvsFinishPending = true;
     }
@@ -216,7 +201,7 @@ void ProjectModelGenerationWorkflow::finish(bool success)
 {
     _stage = Stage::Idle;
     _projectPath.clear();
-    _expectedDenseOutputDir.clear();
+    _expectedDepthOutputDir.clear();
     _pendingModelSettings = QJsonObject();
     emit meshProgressFinished(success);
 }

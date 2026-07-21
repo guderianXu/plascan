@@ -25,7 +25,7 @@ ControlNetworkPoint point(const char *id,
                           MarkerRole role = MarkerRole::ControlPoint)
 {
     ControlNetworkPoint value;
-    value.markerId = QString::fromLatin1(id);
+    value.markerId = id;
     value.role = role;
     value.estimatedPoint = local;
     value.referencePoint = referencePoint(local);
@@ -47,7 +47,7 @@ TEST(ControlNetworkSolverTest, RecoversWeightedSimilarityFromNonCollinearControl
 
     const auto result = xjw::control_points::solveControlNetwork(input);
 
-    ASSERT_TRUE(result.ok) << result.error.toStdString();
+    ASSERT_TRUE(result.ok) << result.error;
     EXPECT_NEAR(result.transform.scale, 2.0, 1.0e-10);
     const auto mapped = result.transform.apply({{0.25, 0.5, 0.75}});
     const auto expected = referencePoint({{0.25, 0.5, 0.75}});
@@ -71,7 +71,7 @@ TEST(ControlNetworkSolverTest, RejectsCollinearControlGeometry)
     const auto result = xjw::control_points::solveControlNetwork(input);
 
     EXPECT_FALSE(result.ok);
-    EXPECT_TRUE(result.error.contains(QStringLiteral("共线")));
+    EXPECT_NE(result.error.find("共线"), std::string::npos);
 }
 
 TEST(ControlNetworkSolverTest, RejectsGrossControlOutlierAndExcludesCheckPointFromFit)
@@ -91,7 +91,7 @@ TEST(ControlNetworkSolverTest, RejectsGrossControlOutlierAndExcludesCheckPointFr
 
     const auto result = xjw::control_points::solveControlNetwork(input);
 
-    ASSERT_TRUE(result.ok) << result.error.toStdString();
+    ASSERT_TRUE(result.ok) << result.error;
     EXPECT_NEAR(result.transform.scale, 2.0, 1.0e-8);
     EXPECT_EQ(result.controlInlierCount, 4);
     ASSERT_EQ(result.checkPointResiduals.size(), 1);
@@ -100,7 +100,7 @@ TEST(ControlNetworkSolverTest, RejectsGrossControlOutlierAndExcludesCheckPointFr
                                   result.controlResiduals.cend(),
                                   [](const auto &residual)
                                   {
-                                      return residual.markerId == QStringLiteral("BAD");
+                                      return residual.markerId == "BAD";
                                   });
     ASSERT_NE(bad, result.controlResiduals.cend());
     EXPECT_FALSE(bad->inlier);

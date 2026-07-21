@@ -1,6 +1,7 @@
 #include "PnpSolver.h"
 
 #include "DeterministicOpenCvRansac.h"
+#include "geometry/OpenCvCameraAdapter.h"
 #include "OpenCvCompat.h"
 #include <opencv2/core.hpp>
 
@@ -9,60 +10,6 @@
 
 namespace xjw
 {
-namespace
-{
-
-cv::Mat cameraToWorldRotationToOpenCvRvec(const std::array<double, 9> &cameraToWorldRotation,
-                                          bool depthFlipped)
-{
-    cv::Mat R_c2w = cv::Mat::eye(3, 3, CV_64F);
-    for (int row = 0; row < 3; ++row)
-    {
-        for (int col = 0; col < 3; ++col)
-        {
-            R_c2w.at<double>(row, col) = cameraToWorldRotation[static_cast<size_t>(row * 3 + col)];
-        }
-    }
-
-    cv::Mat R_cv = R_c2w.t();
-    if (depthFlipped)
-    {
-        R_cv.at<double>(0, 2) *= -1;
-        R_cv.at<double>(1, 2) *= -1;
-        R_cv.at<double>(2, 0) *= -1;
-        R_cv.at<double>(2, 1) *= -1;
-    }
-
-    cv::Mat rvec;
-    cv::Rodrigues(R_cv, rvec);
-    return rvec;
-}
-
-cv::Mat cameraCenterToOpenCvTvec(const std::array<double, 9> &cameraToWorldRotation,
-                                 const std::array<double, 3> &cameraCenter,
-                                 bool depthFlipped)
-{
-    cv::Mat R_c2w = cv::Mat::eye(3, 3, CV_64F);
-    for (int row = 0; row < 3; ++row)
-    {
-        for (int col = 0; col < 3; ++col)
-        {
-            R_c2w.at<double>(row, col) = cameraToWorldRotation[static_cast<size_t>(row * 3 + col)];
-        }
-    }
-
-    cv::Mat R_cv = R_c2w.t();
-    cv::Mat C = (cv::Mat_<double>(3, 1) << cameraCenter[0], cameraCenter[1], cameraCenter[2]);
-    cv::Mat tvec = -R_cv * C;
-    if (depthFlipped)
-    {
-        tvec.at<double>(2) *= -1;
-    }
-    return tvec;
-}
-
-} // namespace
-
 PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints,
                            const std::vector<std::array<double, 2>> &imagePoints, double fu, double fv, double cu,
                            double cv, int uDir, int vDir, bool depthFlipped, const PnpOptions &options)
@@ -85,10 +32,8 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
     // 构造内参矩阵
     // TSai 模型：u = uDir * fu * x + cu → OpenCV 等效：fx = uDir * fu
     // 当 depthFlipped 时需额外翻转符号，使归一化坐标处于正深度约定
-    const double depthSign = depthFlipped ? -1.0 : 1.0;
-    const double fx = depthSign * (uDir < 0 ? -1.0 : 1.0) * fu;
-    const double fy = depthSign * (vDir < 0 ? -1.0 : 1.0) * fv;
-    cv::Mat cameraMatrix = (cv::Mat_<double>(3, 3) << fx, 0.0, cu, 0.0, fy, cv, 0.0, 0.0, 1.0);
+    const cv::Mat cameraMatrix = openCvCameraMatrix(
+        fu, fv, cu, cv, uDir, vDir, depthFlipped, true);
 
     // 暂不考虑畸变（假设已去畸变或畸变较小）
     cv::Mat distCoeffs = cv::Mat::zeros(4, 1, CV_64F);
@@ -98,8 +43,9 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
     const bool useExtrinsicGuess = options.useInitialPose;
     if (useExtrinsicGuess)
     {
-        rvec = cameraToWorldRotationToOpenCvRvec(options.initialCameraToWorldRotation, depthFlipped);
-        tvec = cameraCenterToOpenCvTvec(options.initialCameraToWorldRotation,
+        rvec = openCvRvecFromCameraToWorldPose(
+            options.initialCameraToWorldRotation, depthFlipped);
+        tvec = openCvTvecFromCameraPose(options.initialCameraToWorldRotation,
                                         options.initialCameraCenter,
                                         depthFlipped);
     }
@@ -176,7 +122,11 @@ PnpResult PnpSolver::solve(const std::vector<std::array<double, 3>> &worldPoints
     const bool passesConfiguredRatio = inlierRatio >= options.minInlierRatio;
     const bool passesAbsoluteSupport = options.allowRelaxedInlierRatio &&
         inliers.rows >= relaxedAbsoluteMinInliers && inlierRatio >= relaxedMinInlierRatio;
-    if (!passesConfiguredRatio && !passesAbsoluteSupport)
+    const bool isSmallSample = options.smallSampleThreshold > 0 &&
+        static_cast<int>(n) < options.smallSampleThreshold;
+    const bool passesSmallSampleRatio = !isSmallSample ||
+        inlierRatio >= std::clamp(options.smallSampleMinInlierRatio, 0.0, 1.0);
+    if ((!passesConfiguredRatio && !passesAbsoluteSupport) || !passesSmallSampleRatio)
     {
         return result;
     }

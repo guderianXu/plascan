@@ -1,3 +1,21 @@
+add_library(control_network STATIC
+    registration/ControlNetworkSolver.cpp
+    registration/ControlNetworkSolver.h
+    registration/PriorTrack.h
+    model/MarkerRoles.h
+)
+
+target_include_directories(control_network PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/core/sfm
+)
+
+target_link_libraries(control_network PUBLIC
+    ${OpenCV_LIBS}
+)
+
+target_compile_features(control_network PUBLIC cxx_std_17)
+
 add_library(control_points STATIC
     model/MarkerSet.cpp
     model/MarkerSetValidator.cpp
@@ -10,7 +28,6 @@ add_library(control_points STATIC
     geometry/MarkerGeometry.cpp
     geometry/MarkerProjectionPredictor.cpp
     reference/CoordinateReference.cpp
-    registration/ControlNetworkSolver.cpp
     quality/MarkerQualityReport.cpp
     detection/AprilTagDetector.cpp
     detection/DetectionMerger.cpp
@@ -27,6 +44,7 @@ target_include_directories(control_points PUBLIC
 )
 
 target_link_libraries(control_points PUBLIC
+    control_network
     Qt6::Core
     Qt6::Gui
     ${OpenCV_LIBS}
@@ -185,5 +203,13 @@ if(BUILD_TESTS)
         control_points
         GTest::gtest
     )
-    gtest_discover_tests(test_marker_pdf_writer DISCOVERY_MODE PRE_TEST)
+    set(_marker_pdf_qt_platform_plugin_path
+        "${VCPKG_INSTALLED_DIR}/${VCPKG_TARGET_TRIPLET}/Qt6/plugins/platforms")
+    gtest_discover_tests(test_marker_pdf_writer
+        DISCOVERY_MODE PRE_TEST
+        PROPERTIES
+            ENVIRONMENT "QT_QPA_PLATFORM=offscreen"
+            ENVIRONMENT_MODIFICATION
+                "QT_QPA_PLATFORM_PLUGIN_PATH=set:${_marker_pdf_qt_platform_plugin_path}"
+    )
 endif()

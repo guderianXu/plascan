@@ -441,10 +441,13 @@
       <item row="2" column="0" colspan="2">
        <widget class="QCheckBox" name="m_savePyramidLevelsCheck">
         <property name="toolTip">
-         <string>额外保存 Level 3 粗层和 Level 2 中层的原始深度与置信度，仅用于质量诊断；会增加磁盘占用。</string>
+         <string>保存 Level 3 粗层和 Level 2 中层的原始深度、掩膜与预览，供照片上的分级深度信息显示使用；会增加磁盘占用。</string>
         </property>
         <property name="text">
-         <string>保存 Level 2/3 调试栅格</string>
+         <string>保存 Level 2/3 可视化栅格</string>
+        </property>
+        <property name="checked">
+         <bool>true</bool>
         </property>
        </widget>
       </item>

@@ -133,6 +133,9 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_excludeFixedTiePointsCheck->setChecked(true);
     _ui->m_guidedImageMatchingCheck->setChecked(false);
     _ui->m_adaptiveCameraModelCheck->setChecked(true);
+    _ui->m_adaptiveCameraModelCheck->setToolTip(
+        QStringLiteral("控制正式 BA 是否联合优化共享焦距。关闭后仍会在没有完整相机先验时执行焦距初始化搜索，"
+                       "并将最佳焦距固定用于重建。"));
     stabilizeInputControl(_ui->m_qualityCombo);
     stabilizeInputControl(_ui->m_referenceSourceCombo);
     stabilizeInputControl(_ui->m_keypointLimitSpin);

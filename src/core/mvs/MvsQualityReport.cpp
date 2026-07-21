@@ -203,6 +203,58 @@ float searchBoundaryRatio(const cv::Mat &depthMap,
 
 } // namespace
 
+float measureDepthDiscontinuityRatio(const cv::Mat &depthMap,
+                                     float relativeThreshold)
+{
+    if (depthMap.empty() || depthMap.type() != CV_32F)
+    {
+        return 0.0f;
+    }
+
+    const cv::Mat sampled_depth = boundedQualitySample(depthMap);
+    const float threshold = std::max(0.0f, relativeThreshold);
+    std::uint64_t comparable_pairs = 0;
+    std::uint64_t discontinuous_pairs = 0;
+    const auto compare_pair = [&](float first, float second)
+    {
+        if (first <= 0.0f || second <= 0.0f ||
+            !std::isfinite(first) || !std::isfinite(second))
+        {
+            return;
+        }
+
+        ++comparable_pairs;
+        const float scale = std::max(1.0e-6f, std::min(std::fabs(first), std::fabs(second)));
+        if (std::fabs(first - second) / scale > threshold)
+        {
+            ++discontinuous_pairs;
+        }
+    };
+
+    for (int row = 0; row < sampled_depth.rows; ++row)
+    {
+        const float *depth_row = sampled_depth.ptr<float>(row);
+        const float *next_row = row + 1 < sampled_depth.rows
+            ? sampled_depth.ptr<float>(row + 1)
+            : nullptr;
+        for (int column = 0; column < sampled_depth.cols; ++column)
+        {
+            if (column + 1 < sampled_depth.cols)
+            {
+                compare_pair(depth_row[column], depth_row[column + 1]);
+            }
+            if (next_row)
+            {
+                compare_pair(depth_row[column], next_row[column]);
+            }
+        }
+    }
+
+    return comparable_pairs > 0
+        ? static_cast<float>(discontinuous_pairs) / static_cast<float>(comparable_pairs)
+        : 0.0f;
+}
+
 DepthMapQualityMetrics analyzeDepthMapQuality(const cv::Mat &depthMap,
                                               const cv::Mat &confidenceMap,
                                               int sourceViewCount,
@@ -230,6 +282,7 @@ DepthMapQualityMetrics analyzeDepthMapQuality(const cv::Mat &depthMap,
         sampled_valid_count,
         depthNear,
         depthFar);
+    metrics.depthDiscontinuityRatio = measureDepthDiscontinuityRatio(sampled_depth);
     const int sampled_outlier_count = countLocalDepthOutliers(sampled_depth);
     metrics.localDepthOutlierRatio = sampled_valid_count > 0
         ? static_cast<float>(sampled_outlier_count) / static_cast<float>(sampled_valid_count)
@@ -306,6 +359,8 @@ QJsonObject depthMapQualityMetricsToJson(const DepthMapQualityMetrics &metrics)
     object.insert(QStringLiteral("largest_component_ratio"), rounded(metrics.largestComponentRatio));
     object.insert(QStringLiteral("depth_at_search_boundary_ratio"),
                   rounded(metrics.depthAtSearchBoundaryRatio));
+    object.insert(QStringLiteral("depth_discontinuity_ratio"),
+                  rounded(metrics.depthDiscontinuityRatio));
     object.insert(QStringLiteral("low_confidence_full_coverage"), metrics.lowConfidenceFullCoverage);
     object.insert(QStringLiteral("local_depth_outlier_count"), metrics.localDepthOutlierCount);
     object.insert(QStringLiteral("local_depth_outlier_ratio"), rounded(metrics.localDepthOutlierRatio));

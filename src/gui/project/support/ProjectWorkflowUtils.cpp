@@ -817,7 +817,7 @@ bool runSparsePointLocalOptim(const SparsePointContext &context,
     const bool qualityMetricsAvailable =
         sourceRoot.value(QStringLiteral("quality_metrics_available")).toBool(true);
 
-    xjw::SparseCloudLocalOptimOptions options;
+    xjw::SparsePointCloudSpatialCleanupOptions options;
     options.voxelSize = settings.value(QStringLiteral("voxelSize")).toDouble(0.0);
     options.minVoxelPoints = settings.value(QStringLiteral("minVoxelPoints")).toInt(2);
     options.localReprojFilter = qualityMetricsAvailable &&

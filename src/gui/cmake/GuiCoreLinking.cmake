@@ -125,6 +125,13 @@ if(EXISTS ${CMAKE_SOURCE_DIR}/src/core/CMakeLists.txt)
     message(WARNING "plascan_core matchphototask target not available - 连接点匹配任务将不可用")
   endif()
 
+  if(TARGET aerial_triangulation)
+    message(STATUS "plascan_gui: linking against aerial_triangulation target")
+    target_link_libraries(plascan_gui PRIVATE aerial_triangulation)
+  else()
+    message(WARNING "plascan_core aerial_triangulation target not available - 空中三角测量功能将不可用")
+  endif()
+
   if(TARGET mvs)
     message(STATUS "plascan_gui: linking against mvs target")
     target_link_libraries(plascan_gui PRIVATE mvs)

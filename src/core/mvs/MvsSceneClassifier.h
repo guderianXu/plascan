@@ -17,5 +17,7 @@ int recommendedMvsSourceViewCount(MvsSceneProfile scene_profile,
                                   int configured_count,
                                   int view_count);
 
+float recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile scene_profile);
+
 } // namespace mvs
 } // namespace xjw

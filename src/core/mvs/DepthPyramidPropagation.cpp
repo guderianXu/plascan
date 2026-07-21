@@ -2,6 +2,8 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
+#include <vector>
 
 #include <opencv2/imgproc.hpp>
 
@@ -134,11 +136,12 @@ DepthSearchPrior propagateDepthPrior(const DepthLevelResult &parent,
             const float target_guide = guide.at<float>(row, column);
 
             float weight_sum = 0.0f;
-            float depth_sum = 0.0f;
             float confidence_sum = 0.0f;
             float uncertainty_sum = 0.0f;
             float gradient_sum = 0.0f;
             cv::Vec3f normal_sum(0.0f, 0.0f, 0.0f);
+            std::vector<std::pair<float, float>> weighted_depths;
+            weighted_depths.reserve(16);
 
             for (int delta_row = -1; delta_row <= 2; ++delta_row)
             {
@@ -172,7 +175,7 @@ DepthSearchPrior propagateDepthPrior(const DepthLevelResult &parent,
                     const float depth = parent.depth.at<float>(sample_row, sample_column);
                     const float confidence = parentConfidence(parent, sample_row, sample_column);
                     weight_sum += weight;
-                    depth_sum += weight * depth;
+                    weighted_depths.emplace_back(depth, weight);
                     confidence_sum += weight * confidence;
                     uncertainty_sum += weight * parentUncertainty(parent, sample_row, sample_column, depth);
                     gradient_sum += weight * localDepthGradient(parent, sample_row, sample_column, depth);
@@ -188,7 +191,23 @@ DepthSearchPrior propagateDepthPrior(const DepthLevelResult &parent,
                 continue;
             }
 
-            const float center = depth_sum / weight_sum;
+            std::sort(weighted_depths.begin(), weighted_depths.end(),
+                      [](const auto &left, const auto &right)
+                      {
+                          return left.first < right.first;
+                      });
+            const float median_weight = 0.5f * weight_sum;
+            float accumulated_weight = 0.0f;
+            float center = weighted_depths.back().first;
+            for (const auto &[depth, weight] : weighted_depths)
+            {
+                accumulated_weight += weight;
+                if (accumulated_weight >= median_weight)
+                {
+                    center = depth;
+                    break;
+                }
+            }
             const float confidence = std::max(0.1f, confidence_sum / weight_sum);
             const float uncertainty = uncertainty_sum / weight_sum;
             const float gradient_radius = 0.5f * gradient_sum / weight_sum;

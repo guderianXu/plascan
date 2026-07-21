@@ -39,9 +39,19 @@ struct VisualHullConfig
 
 struct MeshConnectivityStats
 {
+    struct Component
+    {
+        std::size_t faceCount = 0;
+        std::array<float, 3> boundsMin{};
+        std::array<float, 3> boundsMax{};
+        double diagonal = 0.0;
+    };
+
     int componentCount = 0;
     std::size_t largestComponentFaceCount = 0;
     double largestComponentFaceRatio = 0.0;
+    std::vector<std::size_t> componentFaceCounts;
+    std::vector<Component> components;
 };
 
 class VisualHullReconstructor

@@ -111,6 +111,16 @@ class ObservationNetworkBuilder
     static ObservationNetwork build(const std::vector<std::string> &nodeNames, const std::vector<MatchEdge> &edges,
                                     const std::vector<GpsCoord> &gps, const ObservationNetworkConfig &cfg);
 
+    /**
+     * @brief 当强边已经覆盖全部节点并保持连通时，仅返回强边；否则原样返回输入边。
+     *
+     * 该保守筛选用于增量 SfM：弱边只在对连通性没有贡献时才会被移除，避免
+     * 重复纹理产生的低支持错误边污染多视轨迹，同时不破坏稀疏观测网络。
+     */
+    static std::vector<MatchEdge> selectStrongConnectedCore(int numNodes,
+                                                             const std::vector<MatchEdge> &edges,
+                                                             int strongMinMatches);
+
   private:
     // ── 各算法实现 ──
     static std::vector<NetworkEdge> runComplete(int n, const std::vector<MatchEdge> &edges,
@@ -139,29 +149,6 @@ class ObservationNetworkBuilder
     /// 计算每节点度数
     static std::vector<int> computeDegrees(int n, const std::vector<NetworkEdge> &edges);
 
-    // ── KDTree 辅助（内部实现，2D 点集） ──
-    struct KDNode
-    {
-        double x, y; ///< 2D 坐标
-        int index;   ///< 对应 nodeNames 的下标
-    };
-
-    /// 构建 2D KDTree，返回重排后的节点数组；depth 参数用于递归
-    static void buildKD(std::vector<KDNode> &nodes, int lo, int hi, int depth);
-
-    /// 在 KDTree 中查找 (qx,qy) 的 k 个最近邻（不含 queryIdx 自身）
-    static void queryKD(const std::vector<KDNode> &nodes, int lo, int hi, int depth, double qx, double qy, int queryIdx,
-                        int k, std::vector<std::pair<double, int>> &result);
-
-    // ── Union-Find（MST 用） ──
-    struct UnionFind
-    {
-        std::vector<int> parent;
-        std::vector<int> rankValues;
-        explicit UnionFind(int n);
-        int find(int x);
-        bool unite(int a, int b);
-    };
 };
 
 } // namespace xjw

@@ -9,15 +9,15 @@ TEST(MarkerQualityReportTest, SeparatesControlAndCheckPointStatistics)
     xjw::control_points::ControlNetworkResult network;
     network.ok = true;
     network.controlResiduals = {
-        {QStringLiteral("C1"), xjw::control_points::MarkerRole::ControlPoint,
+        {"C1", xjw::control_points::MarkerRole::ControlPoint,
          {{0.1, 0.0, 0.0}}, 0.1, 1.0, true},
-        {QStringLiteral("C2"), xjw::control_points::MarkerRole::ControlPoint,
+        {"C2", xjw::control_points::MarkerRole::ControlPoint,
          {{0.0, 0.2, 0.0}}, 0.2, 2.0, true},
-        {QStringLiteral("C3"), xjw::control_points::MarkerRole::ControlPoint,
+        {"C3", xjw::control_points::MarkerRole::ControlPoint,
          {{1.0, 0.0, 0.0}}, 1.0, 10.0, false},
     };
     network.checkPointResiduals = {
-        {QStringLiteral("K1"), xjw::control_points::MarkerRole::CheckPoint,
+        {"K1", xjw::control_points::MarkerRole::CheckPoint,
          {{0.0, 0.0, 0.3}}, 0.3, 3.0, false},
     };
 

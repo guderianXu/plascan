@@ -12,6 +12,7 @@
 #include <QSaveFile>
 
 #include <algorithm>
+#include <cmath>
 
 namespace xjw::mvs
 {
@@ -59,15 +60,38 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("ref_index"), refIndex);
     object.insert(QStringLiteral("ref_image"), refImage);
     object.insert(QStringLiteral("source_images"), stringListToJsonArray(sourceImages));
+    QJsonArray source_indices;
+    for (const int source_index : sourceIndices)
+    {
+        source_indices.append(source_index);
+    }
+    object.insert(QStringLiteral("source_indices"), source_indices);
     object.insert(QStringLiteral("source_plan"), sourcePlan);
     object.insert(QStringLiteral("source_view_count"), sourceViewCount);
     object.insert(QStringLiteral("source_quality_mean"), meanSourceQualityScore);
     object.insert(QStringLiteral("source_quality_min"), minSourceQualityScore);
     object.insert(QStringLiteral("depth_confidence_mean"), meanDepthConfidence);
     object.insert(QStringLiteral("valid_pixel_count"), validPixelCount);
+    if (validCoverage >= 0.0 && validCoverage <= 1.0 && std::isfinite(validCoverage))
+    {
+        object.insert(QStringLiteral("valid_coverage"), validCoverage);
+    }
     object.insert(QStringLiteral("depth_quality"), depthQuality);
+    object.insert(QStringLiteral("depth_completeness"), depthCompleteness);
     object.insert(QStringLiteral("quality_decision"), qualityDecision);
     object.insert(QStringLiteral("pyramid_levels"), pyramidLevels);
+    object.insert(QStringLiteral("mask_source"), maskSource);
+    object.insert(QStringLiteral("mask_coverage"), maskCoverage);
+    object.insert(QStringLiteral("selected_level"), selectedLevel);
+    object.insert(QStringLiteral("fallback_reason"), fallbackReason);
+    object.insert(QStringLiteral("pyramid_requested_level_count"),
+                  pyramidRequestedLevelCount);
+    object.insert(QStringLiteral("pyramid_active_level_count"),
+                  pyramidActiveLevelCount);
+    object.insert(QStringLiteral("pyramid_minimum_short_side"),
+                  pyramidMinimumShortSide);
+    object.insert(QStringLiteral("pyramid_degraded_reason"),
+                  pyramidDegradedReason);
     object.insert(QStringLiteral("scene_profile"), sceneProfile);
     object.insert(QStringLiteral("filter_mode"), filterMode);
     object.insert(QStringLiteral("acceptance"), acceptance);
@@ -78,7 +102,13 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("depth_png"), depthPng);
     object.insert(QStringLiteral("raw_depth_path"), rawDepthPath);
     object.insert(QStringLiteral("raw_confidence_path"), rawConfidencePath);
+    object.insert(QStringLiteral("raw_geometry_support_path"), rawGeometrySupportPath);
+    object.insert(QStringLiteral("raw_geometry_source_mask_path"), rawGeometrySourceMaskPath);
+    object.insert(QStringLiteral("raw_inverse_depth_mean_path"), rawInverseDepthMeanPath);
+    object.insert(QStringLiteral("raw_inverse_depth_spread_path"), rawInverseDepthSpreadPath);
+    object.insert(QStringLiteral("cross_view_repaired_mask_path"), crossViewRepairedMaskPath);
     object.insert(QStringLiteral("valid_mask_path"), validMaskPath);
+    object.insert(QStringLiteral("support_mask_path"), supportMaskPath);
     object.insert(QStringLiteral("grid_width"), gridWidth);
     object.insert(QStringLiteral("grid_height"), gridHeight);
     object.insert(QStringLiteral("elapsed_ms"), QString::number(elapsedMs));
@@ -93,15 +123,35 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.refIndex = object.value(QStringLiteral("ref_index")).toInt(-1);
     record.refImage = object.value(QStringLiteral("ref_image")).toString();
     record.sourceImages = jsonArrayToStringList(object.value(QStringLiteral("source_images")).toArray());
+    for (const QJsonValue &value : object.value(QStringLiteral("source_indices")).toArray())
+    {
+        record.sourceIndices.push_back(value.toInt(-1));
+    }
     record.sourcePlan = object.value(QStringLiteral("source_plan")).toArray();
     record.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(0);
     record.meanSourceQualityScore = object.value(QStringLiteral("source_quality_mean")).toDouble(0.0);
     record.minSourceQualityScore = object.value(QStringLiteral("source_quality_min")).toDouble(0.0);
     record.meanDepthConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(0.0);
     record.validPixelCount = object.value(QStringLiteral("valid_pixel_count")).toInt(0);
+    record.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(-1.0);
     record.depthQuality = object.value(QStringLiteral("depth_quality")).toObject();
+    record.depthCompleteness = object.value(
+        QStringLiteral("depth_completeness")).toObject();
     record.qualityDecision = object.value(QStringLiteral("quality_decision")).toObject();
     record.pyramidLevels = object.value(QStringLiteral("pyramid_levels")).toArray();
+    record.maskSource = object.value(QStringLiteral("mask_source")).toString();
+    record.maskCoverage = object.value(QStringLiteral("mask_coverage")).toDouble(-1.0);
+    record.selectedLevel = object.value(QStringLiteral("selected_level")).toInt(0);
+    record.fallbackReason = object.value(QStringLiteral("fallback_reason")).toString();
+    record.pyramidRequestedLevelCount = object.value(
+        QStringLiteral("pyramid_requested_level_count")).toInt(3);
+    record.pyramidActiveLevelCount = object.value(
+        QStringLiteral("pyramid_active_level_count")).toInt(
+            record.pyramidLevels.size());
+    record.pyramidMinimumShortSide = object.value(
+        QStringLiteral("pyramid_minimum_short_side")).toInt(0);
+    record.pyramidDegradedReason = object.value(
+        QStringLiteral("pyramid_degraded_reason")).toString();
     record.sceneProfile = object.value(QStringLiteral("scene_profile")).toString();
     record.filterMode = object.value(QStringLiteral("filter_mode")).toString();
     record.acceptance = object.value(QStringLiteral("acceptance")).toString(
@@ -113,7 +163,18 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
     record.depthPng = object.value(QStringLiteral("depth_png")).toString();
     record.rawDepthPath = object.value(QStringLiteral("raw_depth_path")).toString();
     record.rawConfidencePath = object.value(QStringLiteral("raw_confidence_path")).toString();
+    record.rawGeometrySupportPath = object.value(
+        QStringLiteral("raw_geometry_support_path")).toString();
+    record.rawGeometrySourceMaskPath = object.value(
+        QStringLiteral("raw_geometry_source_mask_path")).toString();
+    record.rawInverseDepthMeanPath = object.value(
+        QStringLiteral("raw_inverse_depth_mean_path")).toString();
+    record.rawInverseDepthSpreadPath = object.value(
+        QStringLiteral("raw_inverse_depth_spread_path")).toString();
+    record.crossViewRepairedMaskPath = object.value(
+        QStringLiteral("cross_view_repaired_mask_path")).toString();
     record.validMaskPath = object.value(QStringLiteral("valid_mask_path")).toString();
+    record.supportMaskPath = object.value(QStringLiteral("support_mask_path")).toString();
     record.gridWidth = object.value(QStringLiteral("grid_width")).toInt(0);
     record.gridHeight = object.value(QStringLiteral("grid_height")).toInt(0);
     const QJsonValue elapsed = object.value(QStringLiteral("elapsed_ms"));
@@ -310,6 +371,22 @@ void MvsWorkspaceManifest::markCompleted(const MvsDepthFrameRecord &record)
     {
         completed.pyramidLevels = _frames[index].pyramidLevels;
     }
+    if (completed.maskSource.isEmpty() && index >= 0)
+    {
+        completed.maskSource = _frames[index].maskSource;
+    }
+    if (completed.maskCoverage < 0.0 && index >= 0)
+    {
+        completed.maskCoverage = _frames[index].maskCoverage;
+    }
+    if (completed.selectedLevel <= 0 && index >= 0)
+    {
+        completed.selectedLevel = _frames[index].selectedLevel;
+    }
+    if (completed.fallbackReason.isEmpty() && index >= 0)
+    {
+        completed.fallbackReason = _frames[index].fallbackReason;
+    }
     if (completed.sceneProfile.isEmpty() && index >= 0)
     {
         completed.sceneProfile = _frames[index].sceneProfile;
@@ -449,6 +526,16 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(QStringLiteral("scene_profile"), static_cast<int>(config.sceneProfile));
     root.insert(QStringLiteral("depth_filter_mode"), static_cast<int>(config.depthFilterMode));
     root.insert(QStringLiteral("adaptive_depth_filter_mode"), config.adaptiveDepthFilterMode);
+    root.insert(QStringLiteral("two_source_cross_view_growth"),
+                config.enableTwoSourceCrossViewGrowth);
+    root.insert(QStringLiteral("two_source_growth_distance_pixels"),
+                config.twoSourceGrowthDistancePixels);
+    root.insert(QStringLiteral("two_source_growth_inverse_depth_spread"),
+                config.twoSourceGrowthInverseDepthSpread);
+    root.insert(QStringLiteral("two_source_growth_normal_angle_degrees"),
+                config.twoSourceGrowthNormalAngleDegrees);
+    root.insert(QStringLiteral("two_source_growth_maximum_component_area"),
+                config.twoSourceGrowthMaximumComponentArea);
     root.insert(QStringLiteral("save_intermediate_pyramid_levels"),
                 config.saveIntermediatePyramidLevels);
     root.insert(QStringLiteral("patch_match"), patch);

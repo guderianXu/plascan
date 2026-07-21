@@ -32,6 +32,34 @@ TEST(AlgorithmCompatTest, DefaultMatcherForFeatureSuffix)
     EXPECT_EQ(defaultMatcherForFeatureSuffix("image.dedode"), "dedode");
 }
 
+TEST(AlgorithmCompatTest, NormalizesFeatureSuffixTokensAndPaths)
+{
+    EXPECT_EQ(normalizedFeatureSuffix("dsk"), ".dsk");
+    EXPECT_EQ(normalizedFeatureSuffix(".ALK"), ".alk");
+    EXPECT_EQ(normalizedFeatureSuffix("folder/image.SIFT"), ".sift");
+    EXPECT_TRUE(normalizedFeatureSuffix("  ").isEmpty());
+}
+
+TEST(AlgorithmCompatTest, NormalizesAndDeduplicatesFeatureSuffixLists)
+{
+    const QStringList normalized = normalizedFeatureSuffixes(
+        {QStringLiteral("dsk"), QStringLiteral(".DSK"), QStringLiteral("image.alk"), QString()});
+
+    EXPECT_EQ(normalized, QStringList({QStringLiteral(".dsk"), QStringLiteral(".alk")}));
+}
+
+TEST(AlgorithmCompatTest, MapsFeatureSuffixesToExtractorAlgorithms)
+{
+    EXPECT_EQ(featureAlgorithmForSuffix(".dsk"), "disk");
+    EXPECT_EQ(featureAlgorithmForSuffix(".alk"), "aliked");
+    EXPECT_EQ(featureAlgorithmForSuffix(".sp"), "superpoint");
+    EXPECT_EQ(featureAlgorithmForSuffix(".sift"), "sift");
+    EXPECT_EQ(featureAlgorithmForSuffix(".orb"), "orb");
+    EXPECT_EQ(featureAlgorithmForSuffix(".akz"), "akaze");
+    EXPECT_EQ(featureAlgorithmForSuffix(".dedode"), "dedode");
+    EXPECT_TRUE(featureAlgorithmForSuffix(".unknown").isEmpty());
+}
+
 TEST(AlgorithmCompatTest, EndToEndHasNoFeatures)
 {
     for (const auto &algo : {"loftr", "roma"})

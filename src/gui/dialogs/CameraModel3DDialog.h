@@ -3,7 +3,7 @@
 // 功能: 相机三维模型可视化对话框声明
 // 职责:
 //   - CameraSceneWidget: 基于 Qt RHI/Vulkan 的三维交互场景控件，
-//                        支持相机姿态、点云、PLY 网格模型的渲染与交互旋转/缩放/平移
+//                        支持相机姿态、点云、PLY 网格和 OBJ/MTL 纹理模型渲染
 //   - CameraModel3DDialog: 封装 CameraSceneWidget 的对话框，从项目元数据读取
 //                          相机信息并在三维场景中展示
 // =============================================================================
@@ -21,6 +21,7 @@
 #include <QRect>
 #include <QRhiWidget>
 #include <QScopedPointer>
+#include <QSharedPointer>
 #include <QSet>
 #include <QSize>
 #include <QVector>
@@ -52,9 +53,9 @@ class QResizeEvent;
 // =============================================================================
 // CameraSceneWidget
 // 继承自 QRhiWidget，提供基于 Vulkan 后端的三维场景渲染控件。
-// 使用 QRhiBuffer + .qsb shader（顶点色 shader + Phong 光照 shader）
+// 使用 QRhiBuffer + .qsb shader（顶点色、Phong 光照和 UV 纹理 shader）
 // 功能包括：
-//   - 渲染相机姿态（位置+视锥体）、点云（xyz 文件）、网格模型（PLY 文件）
+//   - 渲染相机姿态（位置+视锥体）、点云（xyz）、PLY 网格和 OBJ/MTL 纹理模型
 //   - Arcball 自由旋转、单轴环旋转（X/Y/Z）
 //   - 滚轮缩放、中键平移
 //   - 实时显示坐标轴指示器和欧拉角信息
@@ -312,6 +313,35 @@ private:
         QString uploadedImageKey;
     };
 
+    struct RhiTexturedMeshPipelineSet
+    {
+        QScopedPointer<QRhiBuffer> uniformBuffer;
+        QScopedPointer<QRhiTexture> texture;
+        QScopedPointer<QRhiSampler> sampler;
+        QScopedPointer<QRhiShaderResourceBindings> bindings;
+        QScopedPointer<QRhiGraphicsPipeline> pipeline;
+        QSize textureSize;
+        QString uploadedTexturePath;
+        QString vertexShaderPath;
+        QString fragmentShaderPath;
+    };
+
+    struct RhiCameraThumbnailResource
+    {
+        QScopedPointer<QRhiBuffer> vertexBuffer;
+        QScopedPointer<QRhiTexture> texture;
+        QScopedPointer<QRhiShaderResourceBindings> bindings;
+    };
+
+    struct RhiCameraThumbnailPipelineSet
+    {
+        QScopedPointer<QRhiBuffer> uniformBuffer;
+        QScopedPointer<QRhiSampler> sampler;
+        QScopedPointer<QRhiGraphicsPipeline> pipeline;
+        QHash<QString, QSharedPointer<RhiCameraThumbnailResource>> resources;
+        bool resourcesDirty = true;
+    };
+
     struct SceneUniforms
     {
         QMatrix4x4 mvp;
@@ -348,12 +378,16 @@ private:
 
     bool ensureRhiBuffer(RhiBufferSet *buffer, QRhiResourceUpdateBatch *updates);
     bool ensurePipeline(RhiPipelineSet *pipeline, int topology, int strideBytes, bool hasNormals);
+    bool ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *updates);
     bool ensureImagePipeline(QRhiResourceUpdateBatch *updates);
+    bool ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *updates);
     void drawRhiBuffer(QRhiCommandBuffer *cb,
                        RhiBufferSet *buffer,
                        RhiPipelineSet *pipeline,
                        const SceneUniforms &uniforms);
+    void drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms);
     void drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
+    void drawCameraThumbnails(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp);
     void drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &uniforms);
 
     // 点云 GPU 资源
@@ -379,10 +413,15 @@ private:
     RhiPipelineSet _modelPointPipeline;
     RhiPipelineSet _meshTrianglePipeline;
     RhiPipelineSet _meshPointPipeline;
+    RhiTexturedMeshPipelineSet _texturedMeshPipeline;
     RhiImagePipelineSet _imagePipeline;
+    RhiCameraThumbnailPipelineSet _thumbnailPipeline;
 
     QVector<CameraPose> _poses;             // 当前相机姿态列表
     RenderCloud _cloud;     // 当前显示的点云或网格（源自文件或外部调用）
+    QImage _meshTextureImage;
+    QString _meshTexturePath;
+    bool _meshHasTexture = false;
 
     // 场景中心/半径/包围盒缓存（避免每帧遍历大量点）
     mutable QVector3D  _cachedCenter;

@@ -2,8 +2,10 @@
 
 #include <QGraphicsView>
 #include "LayerRenderer.h"
+#include "DepthOverlayData.h"
 #include <QFutureWatcher>
 #include <QImage>
+#include <QJsonObject>
 #include <opencv2/core/types.hpp>  // 完整cv::KeyPoint定义,MOC需要
 #include <vector>
 #include <map>
@@ -14,6 +16,7 @@
 
 class QGraphicsScene;
 class LayerRenderer;
+namespace xjw::gui::widgets { class DepthOverlayController; }
 
 class CanvasWidget : public QGraphicsView
 {
@@ -33,6 +36,11 @@ public:
     bool showsInterestPoints() const { return _showInterestPoints; }
     bool showsFeatureResiduals() const { return _currentFeatureOpts.showResiduals; }
     bool showsMaskOverlay() const { return _showMaskOverlay; }
+    bool depthOverlayEnabled() const { return _depthOverlayEnabled; }
+    bool depthOverlayVisible() const { return _depthOverlayVisible; }
+    bool depthIntensityVisible() const { return _depthIntensityVisible; }
+    bool featureDiagnosticsSuppressed() const { return _depthInspectionActive; }
+    xjw::gui::views::DepthOverlayLevel depthOverlayLevel() const { return _depthOverlayLevel; }
     QRectF imageBounds() const
     {
         return _layerRenderer ? _layerRenderer->imageBounds() : QRectF();
@@ -54,6 +62,11 @@ public slots:
 
     // 控制是否显示蒙版轮廓叠加层。
     void setShowMaskOverlay(bool show);
+
+    void setProjectMetadata(const QJsonObject &metadata);
+    void setDepthOverlayEnabled(bool enabled);
+    void setDepthOverlayLevel(xjw::gui::views::DepthOverlayLevel level);
+    void setDepthIntensityVisible(bool visible);
 
 public slots:
     // 控制是否在视图上叠加显示兴趣点
@@ -93,6 +106,17 @@ signals:
     void interestPointsVisibilityChanged(bool visible);
     void featureResidualVisibilityChanged(bool visible);
     void maskOverlayVisibilityChanged(bool visible);
+    void depthOverlayAvailabilityChanged(bool available);
+    void depthOverlayLevelsAvailabilityChanged(bool finalAvailable,
+                                               bool level1Available,
+                                               bool level2Available,
+                                               bool level3Available,
+                                               const QString &finalReason,
+                                               const QString &level1Reason,
+                                               const QString &level2Reason,
+                                               const QString &level3Reason);
+    void depthOverlayVisibilityChanged(bool visible);
+    void depthOverlayError(const QString &message);
     void featureResidualAvailabilityChanged(bool available);
     // 照片区域被右键时发送原始影像像素坐标；视图旋转和缩放不会改变该坐标。
     void imageContextRequested(const QString &imagePath, const QPointF &originalPixel);
@@ -101,6 +125,9 @@ private:
     // 启动异步加载特征文件的通用方法（在主线程调度后台任务）
     void startSpLoadForImage(const QString &imagePath);
     void startResidualLoadForImage(const QString &imagePath);
+    void refreshDepthOverlay();
+    void setDepthInspectionActive(bool active);
+    bool shouldRenderFeatureDiagnostics() const { return !_depthInspectionActive; }
 
 protected:
     // 当控件变为可见时（如被 QStackedWidget 切换到前台），重新 fitInView 以修正首次显示尺寸
@@ -115,6 +142,7 @@ protected:
 
 private:
     LayerRenderer *_layerRenderer{};
+    xjw::gui::widgets::DepthOverlayController *_depthOverlayController{};
     bool _showInterestPoints{true};  // 默认启用特征点显示
     bool _showMaskOverlay{true}; // 默认显示照片蒙版轮廓
     QString _activeFeatureSuffix{QStringLiteral(".sp")};  // 当前选择的特征提取器后缀
@@ -128,6 +156,12 @@ private:
     int _residualLoadGeneration{0};
     int _viewRotationDegrees{0};
     bool _singleImageReady{false};
+    bool _depthOverlayEnabled{false};
+    bool _depthIntensityVisible{false};
+    bool _depthOverlayVisible{false};
+    bool _depthInspectionActive{false};
+    xjw::gui::views::DepthOverlayLevel _depthOverlayLevel{
+        xjw::gui::views::DepthOverlayLevel::Final};
 
     // 缩放限制（避免无限放大/缩小导致精度或性能问题）
     double _zoomFactor{1.0};

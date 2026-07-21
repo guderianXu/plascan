@@ -2,7 +2,7 @@
 
 #include "ProjectManager.h"
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
 #include "ProjectSparseWorkflow.h"
@@ -93,7 +93,7 @@ void ProjectSparseReconstructionManager::startTriangulationAsync(const QJsonObje
     }
 
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const bool overwriteExistingResult = settings.value(QStringLiteral("overwriteExistingResult")).toBool(false);
     int replaceIndex = -1;
     QString outputDir;
@@ -259,7 +259,7 @@ void ProjectSparseReconstructionManager::startSparsePointWorkflow(SparsePointWor
     }
 
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const QString outputDir = QDir(assetsDir).filePath(
         QStringLiteral("aerial_triangulation/%1_%2")
             .arg(spec.outputDirPrefix,

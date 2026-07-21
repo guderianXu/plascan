@@ -80,6 +80,10 @@ private:
                                           const QString &sectionName,
                                           const QString &path,
                                           const QString &storage);
+    QStandardItem *appendTopLevelAggregate(const QString &name,
+                                           xjw::gui::widgets::WorkspaceSection section,
+                                           const QString &sectionName,
+                                           const QStringList &paths);
     void sortSectionChildrenByFileName(QStandardItem *section);
     bool resourceFromIndex(const QModelIndex &index, QString *section, QString *resourcePath) const;
     QString resolveResourcePath(const QString &resourcePath) const;

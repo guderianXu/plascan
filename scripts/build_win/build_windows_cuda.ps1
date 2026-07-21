@@ -3,6 +3,9 @@ param(
     [string] $SourceDir = "",
     [string] $BuildDir = "",
     [string] $VcpkgRoot = "C:\BuildTools\VC\vcpkg",
+    [string] $VcpkgBuildtreesRoot = "",
+    [string] $VcpkgPackagesRoot = "",
+    [string] $VcpkgDownloadsRoot = "",
     [string] $VsDevCmd = "C:\BuildTools\Common7\Tools\VsDevCmd.bat",
     [string] $CMakeExe = "C:\BuildTools\Common7\IDE\CommonExtensions\Microsoft\CMake\CMake\bin\cmake.exe",
     [string] $CudaRoot = "C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1",
@@ -41,6 +44,27 @@ function Set-Utf8ConsoleEnvironment
 }
 
 Set-Utf8ConsoleEnvironment
+
+function Invoke-NativeCommand
+{
+    param(
+        [Parameter(Mandatory = $true)][string] $FilePath,
+        [string[]] $Arguments = @(),
+        [Parameter(Mandatory = $true)][ref] $ExitCode
+    )
+
+    $previousErrorActionPreference = $ErrorActionPreference
+    try
+    {
+        $ErrorActionPreference = "Continue"
+        & $FilePath @Arguments
+        $ExitCode.Value = $LASTEXITCODE
+    }
+    finally
+    {
+        $ErrorActionPreference = $previousErrorActionPreference
+    }
+}
 
 function Resolve-FullPath
 {
@@ -1206,12 +1230,33 @@ if ([string]::IsNullOrWhiteSpace($BuildDir))
 }
 $BuildDir = Resolve-FullPath $BuildDir
 
+$vcpkgWorkDrive = Split-Path -Qualifier $BuildDir
+if ([string]::IsNullOrWhiteSpace($vcpkgWorkDrive))
+{
+    throw "BuildDir must have a Windows drive qualifier so short vcpkg work roots can be derived: $BuildDir"
+}
+if ([string]::IsNullOrWhiteSpace($VcpkgBuildtreesRoot))
+{
+    $VcpkgBuildtreesRoot = Join-Path $vcpkgWorkDrive "vbt"
+}
+if ([string]::IsNullOrWhiteSpace($VcpkgPackagesRoot))
+{
+    $VcpkgPackagesRoot = Join-Path $vcpkgWorkDrive "vpk"
+}
+if ([string]::IsNullOrWhiteSpace($VcpkgDownloadsRoot))
+{
+    $VcpkgDownloadsRoot = Join-Path $vcpkgWorkDrive "vdl"
+}
+
 if ([string]::IsNullOrWhiteSpace($TorchRoot))
 {
     $TorchRoot = Join-Path $SourceDir "build\env\libtorch-cu130\libtorch"
 }
 $TorchRoot = Resolve-FullPath $TorchRoot
 $VcpkgRoot = Resolve-FullPath $VcpkgRoot
+$VcpkgBuildtreesRoot = Resolve-FullPath $VcpkgBuildtreesRoot
+$VcpkgPackagesRoot = Resolve-FullPath $VcpkgPackagesRoot
+$VcpkgDownloadsRoot = Resolve-FullPath $VcpkgDownloadsRoot
 $CudaRoot = Resolve-FullPath $CudaRoot
 $CMakeExe = Resolve-FullPath $CMakeExe
 $VsDevCmd = Resolve-FullPath $VsDevCmd
@@ -1226,6 +1271,9 @@ $vcpkgToolchain = Join-Path $VcpkgRoot "scripts\buildsystems\vcpkg.cmake"
 $sourceDirCMake = Convert-ToCMakePath $SourceDir
 $buildDirCMake = Convert-ToCMakePath $BuildDir
 $vcpkgInstalledCMake = Convert-ToCMakePath $vcpkgInstalled
+$vcpkgBuildtreesRootCMake = Convert-ToCMakePath $VcpkgBuildtreesRoot
+$vcpkgPackagesRootCMake = Convert-ToCMakePath $VcpkgPackagesRoot
+$vcpkgDownloadsRootCMake = Convert-ToCMakePath $VcpkgDownloadsRoot
 $vcpkgOverlayTripletsCMake = ""
 $vcpkgOverlayPortsCMake = ""
 $torchConfigDirCMake = Convert-ToCMakePath $torchConfigDir
@@ -1247,6 +1295,11 @@ Assert-ExistingPath $cudaNvcc "CUDA nvcc"
 Assert-ExistingPath $TorchRoot "TorchRoot"
 Assert-ExistingPath $torchConfig "TorchConfig.cmake"
 Assert-ExistingPath $CMakeExe "CMake"
+
+foreach ($vcpkgWorkRoot in @($VcpkgBuildtreesRoot, $VcpkgPackagesRoot, $VcpkgDownloadsRoot))
+{
+    New-Item -ItemType Directory -Force -Path $vcpkgWorkRoot | Out-Null
+}
 
 if ($Jobs -le 0)
 {
@@ -1378,6 +1431,9 @@ Write-Host "  SourceDir: $SourceDir"
 Write-Host "  BuildDir:  $BuildDir"
 Write-Host "  Vcpkg:     $VcpkgRoot"
 Write-Host "  Installed: $vcpkgInstalled"
+Write-Host "  Buildtrees: $VcpkgBuildtreesRoot"
+Write-Host "  Packages:   $VcpkgPackagesRoot"
+Write-Host "  Downloads:  $VcpkgDownloadsRoot"
 Write-Host "  CUDA:      $CudaRoot"
 if ($EnableOpenCvDnnCuda)
 {
@@ -1398,17 +1454,25 @@ Write-Host "  OpenCV DNN CUDA: $(if ($EnableOpenCvDnnCuda) { 'enabled' } else { 
 
 if (-not $BuildOnly)
 {
+    $vcpkgInstallOptions = @(
+        "--x-buildtrees-root=$vcpkgBuildtreesRootCMake",
+        "--x-packages-root=$vcpkgPackagesRootCMake",
+        "--downloads-root=$vcpkgDownloadsRootCMake"
+    ) -join ";"
     $configureArgs = @(
         "-S", $sourceDirCMake,
         "-B", $buildDirCMake,
         "-G", "Ninja",
         "-UVCPKG_MANIFEST_FEATURES",
+        "-UQt6*_DIR",
         "-DCMAKE_BUILD_TYPE=Release",
         "-DCMAKE_TOOLCHAIN_FILE=$vcpkgToolchainCMake",
         "-DVCPKG_TARGET_TRIPLET=x64-windows",
         "-DVCPKG_INSTALLED_DIR=$vcpkgInstalledCMake",
         "-DVCPKG_MANIFEST_DIR=$sourceDirCMake",
         "-DVCPKG_MANIFEST_INSTALL=$(if ($InstallDeps) { 'ON' } else { 'OFF' })",
+        "-DVCPKG_INSTALL_OPTIONS=$vcpkgInstallOptions",
+        "-DCMAKE_PREFIX_PATH=$env:CMAKE_PREFIX_PATH",
         "-DVCPKG_APPLOCAL_DEPS=OFF",
         "-DPLASCAN_ENABLE_CONDA=OFF",
         "-DPLASCAN_CONDA_PREFIX=",
@@ -1463,10 +1527,11 @@ if (-not $BuildOnly)
         $configureArgs += "-DVCPKG_MANIFEST_FEATURES=$manifestFeaturesValue"
     }
 
-    & $CMakeExe @configureArgs
-    if ($LASTEXITCODE -ne 0)
+    $configureExitCode = 0
+    Invoke-NativeCommand -FilePath $CMakeExe -Arguments $configureArgs -ExitCode ([ref]$configureExitCode)
+    if ($configureExitCode -ne 0)
     {
-        throw "CMake configure failed with exit code $LASTEXITCODE"
+        throw "CMake configure failed with exit code $configureExitCode"
     }
     if ($EnableOpenCvDnnCuda)
     {
@@ -1497,10 +1562,11 @@ if (-not $ConfigureOnly)
         $buildArgs += @("--target", $Target)
     }
 
-    & $CMakeExe @buildArgs
-    if ($LASTEXITCODE -ne 0)
+    $buildExitCode = 0
+    Invoke-NativeCommand -FilePath $CMakeExe -Arguments $buildArgs -ExitCode ([ref]$buildExitCode)
+    if ($buildExitCode -ne 0)
     {
-        throw "CMake build failed with exit code $LASTEXITCODE"
+        throw "CMake build failed with exit code $buildExitCode"
     }
 
     Sync-VcpkgRuntime -BuildPath $BuildDir -TripletRoot $vcpkgTripletRoot
@@ -1526,10 +1592,11 @@ if ($RunTests)
         $ctestArgs += @("-R", $CTestRegex)
     }
 
-    & $ctestExe @ctestArgs
-    if ($LASTEXITCODE -ne 0)
+    $ctestExitCode = 0
+    Invoke-NativeCommand -FilePath $ctestExe -Arguments $ctestArgs -ExitCode ([ref]$ctestExitCode)
+    if ($ctestExitCode -ne 0)
     {
-        throw "CTest failed with exit code $LASTEXITCODE"
+        throw "CTest failed with exit code $ctestExitCode"
     }
 }
 

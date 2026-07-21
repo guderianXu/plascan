@@ -372,21 +372,67 @@ MeshConnectivityStats VisualHullReconstructor::analyzeConnectivity(const TriMesh
         unite(a, c);
     }
 
-    std::unordered_map<int, std::size_t> face_counts;
+    struct ComponentAccumulator
+    {
+        std::size_t faceCount = 0;
+        std::array<float, 3> minimum{
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max(),
+            std::numeric_limits<float>::max()};
+        std::array<float, 3> maximum{
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest(),
+            std::numeric_limits<float>::lowest()};
+    };
+
+    std::unordered_map<int, ComponentAccumulator> component_accumulators;
     for (const Triangle &face : mesh.faces)
     {
         if (face.v[0] < 0 || face.v[0] >= static_cast<int>(mesh.vertices.size()))
         {
             continue;
         }
-        ++face_counts[find_root(face.v[0])];
+        ComponentAccumulator &component = component_accumulators[find_root(face.v[0])];
+        ++component.faceCount;
+        for (const int vertex_index : face.v)
+        {
+            if (vertex_index < 0 || vertex_index >= static_cast<int>(mesh.vertices.size()))
+            {
+                continue;
+            }
+            const MeshVertex &vertex = mesh.vertices[static_cast<std::size_t>(vertex_index)];
+            const std::array<float, 3> point{vertex.x, vertex.y, vertex.z};
+            for (int axis = 0; axis < 3; ++axis)
+            {
+                component.minimum[axis] = std::min(component.minimum[axis], point[axis]);
+                component.maximum[axis] = std::max(component.maximum[axis], point[axis]);
+            }
+        }
     }
-    stats.componentCount = static_cast<int>(face_counts.size());
-    for (const auto &[root, face_count] : face_counts)
+    stats.componentCount = static_cast<int>(component_accumulators.size());
+    for (const auto &[root, component] : component_accumulators)
     {
         (void)root;
-        stats.largestComponentFaceCount = std::max(stats.largestComponentFaceCount, face_count);
+        stats.largestComponentFaceCount = std::max(stats.largestComponentFaceCount,
+                                                   component.faceCount);
+        stats.componentFaceCounts.push_back(component.faceCount);
+        MeshConnectivityStats::Component diagnostic;
+        diagnostic.faceCount = component.faceCount;
+        diagnostic.boundsMin = component.minimum;
+        diagnostic.boundsMax = component.maximum;
+        const double dx = static_cast<double>(component.maximum[0] - component.minimum[0]);
+        const double dy = static_cast<double>(component.maximum[1] - component.minimum[1]);
+        const double dz = static_cast<double>(component.maximum[2] - component.minimum[2]);
+        diagnostic.diagonal = std::sqrt(dx * dx + dy * dy + dz * dz);
+        stats.components.push_back(diagnostic);
     }
+    std::sort(stats.componentFaceCounts.begin(), stats.componentFaceCounts.end(), std::greater<>());
+    std::sort(stats.components.begin(), stats.components.end(),
+              [](const MeshConnectivityStats::Component &left,
+                 const MeshConnectivityStats::Component &right)
+              {
+                  return left.faceCount > right.faceCount;
+              });
     stats.largestComponentFaceRatio = mesh.faces.empty()
         ? 0.0
         : static_cast<double>(stats.largestComponentFaceCount) /

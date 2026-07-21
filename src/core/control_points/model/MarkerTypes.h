@@ -1,5 +1,7 @@
 #pragma once
 
+#include "model/MarkerRoles.h"
+
 #include <QPointF>
 #include <QString>
 #include <QVector>
@@ -13,28 +15,6 @@ namespace xjw::control_points
 
 using MarkerId = QString;
 using ScaleBarId = QString;
-
-enum class MarkerRole
-{
-    TieMarker,
-    ControlPoint,
-    CheckPoint
-};
-
-enum class ProjectionState
-{
-    ManualPinned,
-    AutoDetected,
-    Predicted,
-    Blocked,
-    Disabled
-};
-
-enum class ScaleBarRole
-{
-    Control,
-    Check
-};
 
 class MarkerModelError final : public std::runtime_error
 {

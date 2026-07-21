@@ -133,6 +133,24 @@ TEST(ModelImageMetricsTest, DinoMaskKeepsLargestBrightForeground)
     EXPECT_GT(cv::countNonZero(mask), 1800);
 }
 
+TEST(ModelImageMetricsTest, DinoMaskPreservesLargeArchitecturalOpenings)
+{
+    cv::Mat image = cv::Mat::zeros(160, 200, CV_8UC3);
+    cv::rectangle(image, cv::Rect(30, 20, 140, 120),
+                  cv::Scalar(170, 180, 190), cv::FILLED);
+    cv::rectangle(image, cv::Rect(65, 50, 70, 55), cv::Scalar(0, 0, 0), cv::FILLED);
+    cv::rectangle(image, cv::Rect(45, 35, 2, 2), cv::Scalar(0, 0, 0), cv::FILLED);
+
+    const cv::Mat mask = xjw::qc::buildDinoForegroundMask(image);
+
+    ASSERT_FALSE(mask.empty());
+    EXPECT_EQ(mask.at<std::uint8_t>(75, 100), 0)
+        << "A large opening must remain background for silhouette quality.";
+    EXPECT_EQ(mask.at<std::uint8_t>(36, 46), 255)
+        << "Small dark texture holes should still be suppressed.";
+    EXPECT_EQ(mask.at<std::uint8_t>(30, 40), 255);
+}
+
 TEST(ModelImageMetricsTest, MeasuresAerialStructureEdgeShift)
 {
     cv::Mat source = cv::Mat::zeros(100, 100, CV_8UC3);
@@ -296,6 +314,14 @@ TEST(ModelImageQualityEvaluatorTest, WritesSyntheticViewDiagnostics)
         QStringLiteral("model_quality_report.json"))));
     EXPECT_TRUE(QFileInfo::exists(QDir(output_path).filePath(
         QStringLiteral("contact_sheet.png"))));
+    const QDir comparison(QDir(output_path).filePath(QStringLiteral("comparisons/synthetic")));
+    EXPECT_TRUE(QFileInfo::exists(comparison.filePath(QStringLiteral("reference_edge.png"))));
+    EXPECT_TRUE(QFileInfo::exists(comparison.filePath(QStringLiteral("rendered_edge.png"))));
+    EXPECT_TRUE(QFileInfo::exists(
+        comparison.filePath(QStringLiteral("edge_distance_bidirectional.png"))));
+    EXPECT_TRUE(QFileInfo::exists(
+        comparison.filePath(QStringLiteral("edge_p90_tail_mask.png"))));
+    EXPECT_TRUE(result.views[0].edgeTail.available);
 }
 
 TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)
@@ -322,6 +348,22 @@ TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)
     frame[QStringLiteral("ref_image")] = image_path;
     frame[QStringLiteral("raw_depth_path")] = QDir(directory.path()).filePath(
         QStringLiteral("depth_7.bin"));
+    frame[QStringLiteral("raw_geometry_support_path")] = QDir(directory.path()).filePath(
+        QStringLiteral("depth_7_geometry_support.bin"));
+    frame[QStringLiteral("raw_geometry_source_mask_path")] = QDir(directory.path()).filePath(
+        QStringLiteral("depth_7_geometry_source_mask.bin"));
+    frame[QStringLiteral("raw_inverse_depth_mean_path")] = QDir(directory.path()).filePath(
+        QStringLiteral("depth_7_inverse_depth_mean.bin"));
+    frame[QStringLiteral("raw_inverse_depth_spread_path")] = QDir(directory.path()).filePath(
+        QStringLiteral("depth_7_inverse_depth_spread.bin"));
+    frame[QStringLiteral("cross_view_repaired_mask_path")] = QDir(directory.path()).filePath(
+        QStringLiteral("depth_7_cross_view_repaired_mask.png"));
+    frame[QStringLiteral("valid_mask_path")] = QDir(directory.path()).filePath(
+        QStringLiteral("depth_7_mask.png"));
+    frame[QStringLiteral("support_mask_path")] = QDir(directory.path()).filePath(
+        QStringLiteral("depth_7_support.png"));
+    frame[QStringLiteral("acceptance")] = QStringLiteral("accepted");
+    frame[QStringLiteral("fusion_eligible")] = true;
     frame[QStringLiteral("grid_width")] = 128;
     frame[QStringLiteral("grid_height")] = 96;
     frame[QStringLiteral("camera_model")] = camera;
@@ -347,6 +389,19 @@ TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)
     EXPECT_EQ(views[0].imagePath, image_path);
     EXPECT_EQ(views[0].cameraWidth, 128);
     EXPECT_EQ(views[0].cameraHeight, 96);
+    EXPECT_EQ(views[0].depthPath, frame.value(QStringLiteral("raw_depth_path")).toString());
+    EXPECT_EQ(views[0].geometrySupportPath,
+              frame.value(QStringLiteral("raw_geometry_support_path")).toString());
+    EXPECT_EQ(views[0].geometrySourceMaskPath,
+              frame.value(QStringLiteral("raw_geometry_source_mask_path")).toString());
+    EXPECT_EQ(views[0].inverseDepthMeanPath,
+              frame.value(QStringLiteral("raw_inverse_depth_mean_path")).toString());
+    EXPECT_EQ(views[0].inverseDepthSpreadPath,
+              frame.value(QStringLiteral("raw_inverse_depth_spread_path")).toString());
+    EXPECT_EQ(views[0].crossViewRepairedMaskPath,
+              frame.value(QStringLiteral("cross_view_repaired_mask_path")).toString());
+    EXPECT_EQ(views[0].frameAcceptance, QStringLiteral("accepted"));
+    EXPECT_TRUE(views[0].fusionEligible);
     EXPECT_DOUBLE_EQ(views[0].camera.focalX(), 400.0);
 }
 

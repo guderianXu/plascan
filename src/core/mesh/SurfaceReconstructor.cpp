@@ -5,6 +5,7 @@
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/features/normal_estimation.h>
 #include <plapoint/io/ply_io.h>
 #include <plapoint/mesh/poisson_reconstruction.h>
 #include <plapoint/search/kdtree.h>
@@ -1244,6 +1245,43 @@ PlaPointCloud pointXYZRGBToCloud(const std::vector<detail::PointXYZRGB> &points)
     return cloud;
 }
 
+bool estimateMissingPoissonNormals(std::vector<detail::PointXYZRGB> *points,
+                                   int neighbor_count,
+                                   plapoint::ProcessingDevice device)
+{
+    if (!points || points->empty())
+    {
+        return false;
+    }
+
+    PlaPointCloud cloud = pointXYZRGBToCloud(*points);
+    const int point_count = static_cast<int>(points->size());
+    const int k_neighbors = std::clamp(neighbor_count, 3, std::min(64, point_count));
+    const auto normals = plapoint::estimateNormals(cloud, k_neighbors, device);
+    if (normals.rows() != static_cast<plamatrix::Index>(points->size()) || normals.cols() != 3)
+    {
+        return false;
+    }
+
+    for (plamatrix::Index row = 0; row < normals.rows(); ++row)
+    {
+        detail::PointXYZRGB &point = (*points)[static_cast<std::size_t>(row)];
+        const float nx = normals(row, 0);
+        const float ny = normals(row, 1);
+        const float nz = normals(row, 2);
+        const float length = std::sqrt(nx * nx + ny * ny + nz * nz);
+        if (!std::isfinite(length) || length <= 1.0e-8f)
+        {
+            continue;
+        }
+        point.nx = nx / length;
+        point.ny = ny / length;
+        point.nz = nz / length;
+        point.hasNormal = true;
+    }
+    return validPoissonPointCount(*points) >= 120;
+}
+
 std::vector<detail::PointXYZRGB> loadPointsForMeshing(const std::string &cloudPath,
                                                       const ReconstructionConfig &config,
                                                       std::string *errorMsg,
@@ -1521,22 +1559,69 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
             progress("正在执行 Poisson 重建...", 0.30f);
             try
             {
-                if (validPoissonPointCount(points) < 120)
+                const std::size_t poisson_input_points = points.size();
+                const std::size_t valid_points_before_repair = validPoissonPointCount(points);
+                bool estimated_normals = false;
+                if (valid_points_before_repair < 120 && !config.allowHeightGridFallback)
                 {
-                    throw std::runtime_error("Poisson: valid oriented points are insufficient");
+                    progress("连接点缺少法线，正在估计 Poisson 法线...", 0.305f);
+                    estimated_normals = estimateMissingPoissonNormals(
+                        &points,
+                        config.kNormals,
+                        config.preprocessingDevice);
+                }
+                const std::size_t valid_points_after_repair = validPoissonPointCount(points);
+                if (valid_points_after_repair < 120)
+                {
+                    progress("Poisson 输入质量: 输入=" + std::to_string(poisson_input_points) +
+                                 " 修复前有效=" + std::to_string(valid_points_before_repair) +
+                                 " 修复后有效=" + std::to_string(valid_points_after_repair) +
+                                 "；保留原始点云用于回退...",
+                             0.308f);
+                    throw std::runtime_error(
+                        "Poisson: valid oriented points are insufficient "
+                        "(input=" + std::to_string(poisson_input_points) +
+                        ", valid_before_repair=" + std::to_string(valid_points_before_repair) +
+                        ", valid_after_repair=" + std::to_string(valid_points_after_repair) + ")");
                 }
                 const std::size_t removed_invalid_points =
                     detail::removeInvalidPoissonPoints(&points);
-                if (removed_invalid_points > 0)
+                detail::PoissonPointComponentStats component_stats;
+                component_stats.retainedPointCount = points.size();
+                constexpr std::size_t max_component_cleanup_points = 3000000;
+                if (config.cleanSmallComponents && points.size() <= max_component_cleanup_points)
                 {
-                    progress("已剔除 " + std::to_string(removed_invalid_points) +
-                                 " 个坐标或法线无效点...",
-                             0.305f);
+                    const std::size_t min_component_points = static_cast<std::size_t>(
+                        std::clamp(config.minComponentFaces / 2, 32, 512));
+                    component_stats = detail::removeSmallPoissonPointComponents(
+                        &points, min_component_points, 4.0f);
+                }
+                else if (config.cleanSmallComponents && points.size() > max_component_cleanup_points)
+                {
+                    progress("Poisson 输入超过 3000000 点，跳过精细连通分量清理...", 0.307f);
+                }
+
+                progress("Poisson 输入质量: 输入=" + std::to_string(poisson_input_points) +
+                             " 修复前有效=" + std::to_string(valid_points_before_repair) +
+                             " 无效移除=" + std::to_string(removed_invalid_points) +
+                             " 连通分量=" + std::to_string(component_stats.componentCount) +
+                             " 碎片移除=" + std::to_string(component_stats.removedPointCount) +
+                             " 保留=" + std::to_string(points.size()) + "...",
+                         0.308f);
+                if (points.size() < 120 || validPoissonPointCount(points) < 120)
+                {
+                    throw std::runtime_error(
+                        "Poisson: valid oriented points are insufficient "
+                        "(input=" + std::to_string(poisson_input_points) +
+                        ", valid_before_repair=" + std::to_string(valid_points_before_repair) +
+                        ", invalid_removed=" + std::to_string(removed_invalid_points) +
+                        ", fragments_removed=" + std::to_string(component_stats.removedPointCount) +
+                        ", retained=" + std::to_string(points.size()) + ")");
                 }
                 if (config.orientNormalsForClosedSurface)
                 {
                     const float normal_coherence = normalDirectionCoherence(points);
-                    if (normal_coherence < 0.72f)
+                    if (estimated_normals || normal_coherence < 0.72f)
                     {
                         progress("正在统一闭合曲面法线方向...", 0.31f);
                         orientNormalsOutwardFromCentroid(&points, config.poissonThreads);

@@ -1,7 +1,7 @@
 #include "ProjectMarkerRepository.h"
 
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectSurveyControl.h"
 
 #include <QJsonObject>
@@ -103,7 +103,7 @@ control_points::MarkerSet &ProjectMarkerRepository::markerSet() noexcept
 
 QString ProjectMarkerRepository::sidecarPath() const
 {
-    return _projectData ? ProjectIO::markerSetPath(_projectData->currentProjectPath()) : QString();
+    return _projectData ? xjw::common::project::ProjectIO::markerSetPath(_projectData->currentProjectPath()) : QString();
 }
 
 quint64 ProjectMarkerRepository::revision() const noexcept

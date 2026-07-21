@@ -1,7 +1,7 @@
 #include "FeatureResidualLoader.h"
 
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <QDir>
 #include <QFile>
@@ -32,7 +32,7 @@ QString latestSidecarPath(const QJsonObject &metadata, const QString &projectPat
     for (int index = records.size() - 1; index >= 0; --index)
     {
         const QJsonObject files = records.at(index).toObject().value(QStringLiteral("files")).toObject();
-        const QString path = ProjectIO::resolveProjectResourcePath(
+        const QString path = xjw::common::project::ProjectIO::resolveProjectResourcePath(
             projectPath,
             files.value(QStringLiteral("sparse_cloud_points_json")).toString());
         if (QFileInfo::exists(path))

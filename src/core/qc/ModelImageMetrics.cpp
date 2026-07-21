@@ -281,7 +281,20 @@ cv::Mat buildDinoForegroundMask(const cv::Mat &sourceBgr)
     cv::floodFill(flood, cv::Point(0, 0), cv::Scalar(255));
     flood = flood(cv::Rect(1, 1, mask.cols, mask.rows));
     cv::bitwise_not(flood, flood);
-    cv::bitwise_or(mask, flood, mask);
+    cv::Mat hole_labels;
+    cv::Mat hole_statistics;
+    cv::Mat hole_centroids;
+    const int hole_count = cv::connectedComponentsWithStats(
+        flood, hole_labels, hole_statistics, hole_centroids, 8, CV_32S);
+    const int maximum_noise_hole_area = std::max(
+        16, static_cast<int>(std::lround(largest_area * 0.0025)));
+    for (int label = 1; label < hole_count; ++label)
+    {
+        if (hole_statistics.at<int>(label, cv::CC_STAT_AREA) <= maximum_noise_hole_area)
+        {
+            mask.setTo(255, hole_labels == label);
+        }
+    }
     return mask;
 }
 

@@ -8,7 +8,6 @@
 #include "MainMenu.h"
 #include "AboutDialog.h"
 #include "ToolbarButton.h"
-#include "WindowPanel.h"
 
 #include <QDir>
 #include <QMainWindow>
@@ -304,6 +303,32 @@ QIcon makeMaskToolbarIcon()
     return QIcon(pixmap);
 }
 
+QIcon makeDepthOverlayToolbarIcon()
+{
+    QPixmap pixmap(56, 56);
+    pixmap.fill(Qt::transparent);
+    QPainter painter(&pixmap);
+    painter.setRenderHint(QPainter::Antialiasing, true);
+
+    const QRectF frame(5.0, 7.0, 46.0, 42.0);
+    painter.setPen(QPen(QColor(128, 132, 136), 2.5));
+    painter.setBrush(Qt::NoBrush);
+    painter.drawRoundedRect(frame, 2.0, 2.0);
+
+    painter.setPen(Qt::NoPen);
+    const QList<QColor> colors = {
+        QColor(49, 54, 149), QColor(69, 117, 180), QColor(116, 173, 209),
+        QColor(171, 217, 233), QColor(224, 243, 248), QColor(254, 224, 144),
+        QColor(253, 174, 97), QColor(244, 109, 67), QColor(165, 0, 38)};
+    const qreal band_width = 42.0 / static_cast<qreal>(colors.size());
+    for (int index = 0; index < colors.size(); ++index)
+    {
+        painter.setBrush(colors[index]);
+        painter.drawRect(QRectF(7.0 + index * band_width, 9.0, band_width + 0.5, 38.0));
+    }
+    return QIcon(pixmap);
+}
+
 QIcon makeResetViewToolbarIcon()
 {
     QPixmap pixmap(56, 56);
@@ -392,6 +417,44 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     : QObject(mainWindow), _mainWindow(mainWindow)
 {
     if (!_mainWindow) return;
+
+    auto installDepthOverlayActions = [this](QMenu *view_menu, QObject *action_parent)
+    {
+        _showDepthOverlayAct = ensureCheckableAction(
+            _mainWindow,
+            action_parent,
+            view_menu,
+            QStringLiteral("actionShowDepthOverlay"),
+            tr("显示深度图"),
+            false,
+            _featureVisualizationAct);
+        _showDepthOverlayAct->setIcon(makeDepthOverlayToolbarIcon());
+        _showDepthOverlayAct->setToolTip(tr("在当前照片上叠加显示深度信息"));
+
+        _depthOverlayAllLevelsAct = ensureCheckableAction(
+            _mainWindow, action_parent, nullptr,
+            QStringLiteral("actionDepthOverlayAllLevels"), tr("所有级别"), true);
+        _depthOverlayLevel1Act = ensureCheckableAction(
+            _mainWindow, action_parent, nullptr,
+            QStringLiteral("actionDepthOverlayLevel1"), tr("级别 1"), false);
+        _depthOverlayLevel2Act = ensureCheckableAction(
+            _mainWindow, action_parent, nullptr,
+            QStringLiteral("actionDepthOverlayLevel2"), tr("级别 2"), false);
+        _depthOverlayLevel3Act = ensureCheckableAction(
+            _mainWindow, action_parent, nullptr,
+            QStringLiteral("actionDepthOverlayLevel3"), tr("级别 3"), false);
+        _showDepthIntensityAct = ensureCheckableAction(
+            _mainWindow, action_parent, nullptr,
+            QStringLiteral("actionShowDepthIntensity"), tr("显示强度"), false);
+
+        _depthOverlayLevelGroup = new QActionGroup(this);
+        _depthOverlayLevelGroup->setObjectName(QStringLiteral("depthOverlayLevelActionGroup"));
+        _depthOverlayLevelGroup->setExclusive(true);
+        _depthOverlayLevelGroup->addAction(_depthOverlayAllLevelsAct);
+        _depthOverlayLevelGroup->addAction(_depthOverlayLevel1Act);
+        _depthOverlayLevelGroup->addAction(_depthOverlayLevel2Act);
+        _depthOverlayLevelGroup->addAction(_depthOverlayLevel3Act);
+    };
 
     auto installTiePointsMenu = [this](QMenu *toolsMenu, QAction *before = nullptr)
     {
@@ -558,6 +621,104 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _lockCameraImageAct->setToolTip(tr("固定当前相机图像；模型视角仍可自由旋转"));
     };
 
+    auto installViewMenuLayout = [this](QMenu *viewMenu, QMenu *windowMenu)
+    {
+        if (!viewMenu || !windowMenu)
+        {
+            return;
+        }
+
+        QMenu *imageMenu = ensureSubMenu(_mainWindow,
+                                         viewMenu,
+                                         QStringLiteral("menuViewImageDisplay"),
+                                         tr("影像显示"));
+        _imageDisplayMenu = imageMenu;
+        auto removeAllActions = [](QMenu *menu)
+        {
+            if (!menu)
+            {
+                return;
+            }
+            const QList<QAction *> actions = menu->actions();
+            for (QAction *action : actions)
+            {
+                menu->removeAction(action);
+            }
+        };
+
+        removeAllActions(imageMenu);
+        removeAllActions(windowMenu);
+        removeAllActions(viewMenu);
+
+        for (QAction *action : {_zoomInAct, _zoomOutAct, _resetViewAct, _toggleFullScreenAct})
+        {
+            if (action)
+            {
+                viewMenu->addAction(action);
+            }
+        }
+        viewMenu->addSeparator();
+
+        for (QAction *action : {_rotateImageLeftAct, _rotateImageRightAct})
+        {
+            if (action)
+            {
+                imageMenu->addAction(action);
+            }
+        }
+        imageMenu->addSeparator();
+        for (QAction *action : {_showFeaturePointsAct,
+                                _showFeatureResidualsAct,
+                                _showMaskOverlayAct,
+                                _showDepthOverlayAct})
+        {
+            if (action)
+            {
+                imageMenu->addAction(action);
+            }
+        }
+        imageMenu->addSeparator();
+        if (_featureVisualizationAct)
+        {
+            imageMenu->addAction(_featureVisualizationAct);
+        }
+        viewMenu->addMenu(imageMenu);
+        viewMenu->addSeparator();
+
+        for (QAction *action : {_toggleWorkspaceAct,
+                                _togglePropertiesAct,
+                                _togglePhotosAct,
+                                _toggleLogAct})
+        {
+            if (action)
+            {
+                windowMenu->addAction(action);
+            }
+        }
+        windowMenu->addSeparator();
+        if (_toggleMainToolbarAct)
+        {
+            windowMenu->addAction(_toggleMainToolbarAct);
+        }
+        if (_toggleHenanUniversityBrandAct)
+        {
+            windowMenu->addAction(_toggleHenanUniversityBrandAct);
+        }
+        viewMenu->addMenu(windowMenu);
+
+        QStyle *style = _mainWindow->style();
+        if (style)
+        {
+            _toggleWorkspaceAct->setIcon(style->standardIcon(QStyle::SP_DirHomeIcon));
+            _togglePropertiesAct->setIcon(style->standardIcon(QStyle::SP_FileDialogDetailedView));
+            _togglePhotosAct->setIcon(style->standardIcon(QStyle::SP_FileDialogContentsView));
+            _toggleLogAct->setIcon(style->standardIcon(QStyle::SP_FileDialogInfoView));
+            _toggleMainToolbarAct->setIcon(
+                style->standardIcon(QStyle::SP_ToolBarHorizontalExtensionButton));
+        }
+        updateImageActionAvailability();
+    };
+
     auto installCameraToolbarButton = [this]()
     {
         if (!_toolBar || !_toggleCamerasAct || !_toggleCameraThumbnailsAct || !_toggleDependentCamerasAct)
@@ -656,7 +817,9 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     auto installImageOverlayToolbarButtons = [this]()
     {
         if (!_toolBar || !_showFeaturePointsAct || !_showFeatureResidualsAct
-            || !_showMaskOverlayAct || !_resetViewAct || !_featureVisualizationAct)
+            || !_showMaskOverlayAct || !_showDepthOverlayAct || !_depthOverlayAllLevelsAct
+            || !_depthOverlayLevel1Act || !_depthOverlayLevel2Act || !_depthOverlayLevel3Act
+            || !_showDepthIntensityAct || !_resetViewAct || !_featureVisualizationAct)
         {
             return;
         }
@@ -682,6 +845,23 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             _showMaskOverlayToolbarWidgetAct = xjw::gui::toolbar::createToolbarButton(
                 _toolBar, _showMaskOverlayAct, QStringLiteral("toolButtonShowMaskOverlay"),
+                _toolbarEditingSeparatorAct);
+        }
+        if (!_toolBar->findChild<QToolButton *>(QStringLiteral("toolButtonShowDepthOverlay")))
+        {
+            auto *depth_menu = new QMenu(_toolBar);
+            depth_menu->setObjectName(QStringLiteral("menuToolbarDepthOverlay"));
+            depth_menu->addAction(_depthOverlayAllLevelsAct);
+            depth_menu->addAction(_depthOverlayLevel1Act);
+            depth_menu->addAction(_depthOverlayLevel2Act);
+            depth_menu->addAction(_depthOverlayLevel3Act);
+            depth_menu->addSeparator();
+            depth_menu->addAction(_showDepthIntensityAct);
+            _showDepthOverlayToolbarWidgetAct = xjw::gui::toolbar::createToolbarSplitButton(
+                _toolBar,
+                _showDepthOverlayAct,
+                depth_menu,
+                QStringLiteral("toolButtonShowDepthOverlay"),
                 _toolbarEditingSeparatorAct);
         }
     };
@@ -761,6 +941,13 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _zoomInAct = findNamedChild<QAction>(_mainWindow, "actionZoomIn");
         _zoomOutAct = findNamedChild<QAction>(_mainWindow, "actionZoomOut");
         _resetViewAct = findNamedChild<QAction>(_mainWindow, "actionResetView");
+        _toggleFullScreenAct = ensurePlainAction(_mainWindow,
+                                                 viewMenu,
+                                                 nullptr,
+                                                 QStringLiteral("actionToggleFullScreen"),
+                                                 tr("全屏"));
+        _toggleFullScreenAct->setShortcut(QKeySequence(Qt::Key_F11));
+        _toggleFullScreenAct->setToolTip(tr("切换全屏显示"));
         if (_zoomInAct)
         {
             _zoomInAct->setIcon(makeZoomToolbarIcon(true));
@@ -811,6 +998,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                     QStringLiteral("actionShowMaskOverlay"),
                                                     tr("显示蒙版"), true,
                                                     _featureVisualizationAct);
+        installDepthOverlayActions(viewMenu, _mainWindow);
         _showFeaturePointsAct->setIcon(makeFeaturePointsToolbarIcon());
         _showMaskOverlayAct->setIcon(makeMaskToolbarIcon());
         if (_resetViewAct)
@@ -843,6 +1031,25 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                  tr("照片"),
                                                  true);
         _togglePhotosAct->setToolTip(tr("显示或隐藏照片面板"));
+        if (!_toggleLogAct)
+        {
+            _toggleLogAct = ensureCheckableAction(_mainWindow,
+                                                  windowActionParent,
+                                                  nullptr,
+                                                  QStringLiteral("actionToggleLog"),
+                                                  tr("日志"),
+                                                  false);
+        }
+        _toggleLogAct->setText(tr("日志"));
+        _toggleLogAct->setCheckable(true);
+        _toggleLogAct->setToolTip(tr("显示或隐藏日志面板"));
+        _toggleMainToolbarAct = ensureCheckableAction(_mainWindow,
+                                                      windowActionParent,
+                                                      nullptr,
+                                                      QStringLiteral("actionToggleMainToolbar"),
+                                                      tr("主工具栏"),
+                                                      true);
+        _toggleMainToolbarAct->setToolTip(tr("显示或隐藏主工具栏"));
         QObject *viewActionParent = viewMenu
             ? static_cast<QObject *>(viewMenu)
             : static_cast<QObject *>(_mainWindow);
@@ -886,10 +1093,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         _depthMapEstimateAct = findNamedChild<QAction>(_mainWindow, "actionDepthMapEstimate");
         _fuseDepthMapsAct = findNamedChild<QAction>(_mainWindow, "actionFuseDepthMaps");
         _refineDenseCloudAct = findNamedChild<QAction>(_mainWindow, "actionRefineDenseCloud");
-        _meshReconstructAct = findNamedChild<QAction>(_mainWindow, "actionMeshReconstruct");
-        _textureMappingAct = findNamedChild<QAction>(_mainWindow, "actionTextureMapping");
-        _exportModelAct = findNamedChild<QAction>(_mainWindow, "actionExportModel");
-
         _overlapAnalysisAct = findNamedChild<QAction>(_mainWindow, "actionOverlapAnalysis");
         _intersectionCheckAct = findNamedChild<QAction>(_mainWindow, "actionIntersectionCheck");
         _intersectionViewResultsAct = findNamedChild<QAction>(_mainWindow, "actionIntersectionViewResults");
@@ -1200,21 +1403,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
             });
         }
 
-        if (windowMenu)
-        {
-            QList<QAction*> windowActs = {
-                _toggleWorkspaceAct,
-                _togglePropertiesAct,
-                _togglePhotosAct,
-                _toggleLogAct
-            };
-            auto *panelAct = new QWidgetAction(windowMenu);
-            auto *wp = new WindowPanel(windowMenu);
-            panelAct->setDefaultWidget(wp);
-            windowMenu->addAction(panelAct);
-            wp->setActions(windowActs);
-        }
-
         _toolBar = findNamedChild<QToolBar>(_mainWindow, "mainToolBar");
         if (_addPhotoAct)
         {
@@ -1246,6 +1434,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         installImageRotationToolbarButtons();
         installImageOverlayToolbarButtons();
         setContextualToolbarVisibility(true, false);
+        installViewMenuLayout(viewMenu, windowMenu);
 
         return;
     }
@@ -1282,6 +1471,10 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _zoomInAct    = viewMenu->addAction(tr("放大"));
     _zoomOutAct   = viewMenu->addAction(tr("缩小"));
     _resetViewAct = viewMenu->addAction(tr("重置视图"));
+    _toggleFullScreenAct = new QAction(tr("全屏"), viewMenu);
+    _toggleFullScreenAct->setObjectName(QStringLiteral("actionToggleFullScreen"));
+    _toggleFullScreenAct->setShortcut(QKeySequence(Qt::Key_F11));
+    _toggleFullScreenAct->setToolTip(tr("切换全屏显示"));
     _zoomInAct->setIcon(makeZoomToolbarIcon(true));
     _zoomOutAct->setIcon(makeZoomToolbarIcon(false));
     _zoomInAct->setToolTip(tr("放大"));
@@ -1325,13 +1518,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
                                                 QStringLiteral("actionShowMaskOverlay"),
                                                 tr("显示蒙版"), true,
                                                 _featureVisualizationAct);
+    installDepthOverlayActions(viewMenu, viewMenu);
     _showFeaturePointsAct->setIcon(makeFeaturePointsToolbarIcon());
     _showMaskOverlayAct->setIcon(makeMaskToolbarIcon());
     _resetViewAct->setIcon(makeResetViewToolbarIcon());
     _resetViewAct->setToolTip(tr("重置视图"));
     viewMenu->addSeparator();
 
-    // 窗口面板子菜单：使用 QWidgetAction + WindowPanel 实现带复选框的面板开关列表
+    // 窗口面板子菜单使用原生 QAction，保持平台菜单的紧凑布局和勾选交互。
     auto *windowMenu = viewMenu->addMenu(tr("窗口"));
     _toggleWorkspaceAct = ensureCheckableAction(_mainWindow,
                                                 windowMenu,
@@ -1356,19 +1550,14 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _togglePhotosAct->setToolTip(tr("显示或隐藏照片面板"));
     _toggleLogAct = new QAction(tr("日志"), windowMenu);
     _toggleLogAct->setCheckable(true);  // 可切换：勾选时面板可见
-    _toggleLogAct->setChecked(true);    // 默认显示日志面板
-    // 将动作列表传给 WindowPanel 组件，以列表形式展示在子菜单中
-    QList<QAction*> windowActs = {
-        _toggleWorkspaceAct,
-        _togglePropertiesAct,
-        _togglePhotosAct,
-        _toggleLogAct
-    };
-    auto *panelAct = new QWidgetAction(windowMenu);
-    auto *wp = new WindowPanel(windowMenu);
-    panelAct->setDefaultWidget(wp);
-    windowMenu->addAction(panelAct);
-    wp->setActions(windowActs);
+    _toggleLogAct->setChecked(false);
+    _toggleLogAct->setObjectName(QStringLiteral("actionToggleLog"));
+    _toggleLogAct->setToolTip(tr("显示或隐藏日志面板"));
+    _toggleMainToolbarAct = new QAction(tr("主工具栏"), windowMenu);
+    _toggleMainToolbarAct->setObjectName(QStringLiteral("actionToggleMainToolbar"));
+    _toggleMainToolbarAct->setCheckable(true);
+    _toggleMainToolbarAct->setChecked(true);
+    _toggleMainToolbarAct->setToolTip(tr("显示或隐藏主工具栏"));
 
     // ---- 工作流程菜单 ----
     // 提供高层一键式处理流程入口，适合不需要分步调试的普通用户
@@ -1387,7 +1576,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     installModelDisplayMenu(_modelMenu);
 
     // ---- 重建菜单 ----
-    // 三级菜单结构：稀疏重建 / 密集重建 / 模型生成
+    // 重建菜单只保留稀疏、密集阶段；模型统一从“工作流程 → 生成模型”进入。
     auto *reconMenu = _mainWindow->menuBar()->addMenu(tr("重建"));
 
     // ── 稀疏重建 ──
@@ -1412,12 +1601,6 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
     _depthMapEstimateAct = denseReconMenu->addAction(tr("深度图估计..."));
     _fuseDepthMapsAct    = denseReconMenu->addAction(tr("深度图融合生成密集点云..."));
     _refineDenseCloudAct = denseReconMenu->addAction(tr("密集点云后处理..."));
-
-    // ── 模型生成 ──
-    auto *modelGenMenu = reconMenu->addMenu(tr("模型生成"));
-    _meshReconstructAct = modelGenMenu->addAction(tr("网格重建..."));
-    _textureMappingAct  = modelGenMenu->addAction(tr("纹理映射..."));
-    _exportModelAct     = modelGenMenu->addAction(tr("模型导出..."));
 
     // ---- 工具菜单 ----
     // 提供细粒度的单步工具入口，供高级用户和调试场景使用
@@ -1490,6 +1673,7 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         installImageOverlayToolbarButtons();
         setContextualToolbarVisibility(true, false);
     }
+    installViewMenuLayout(viewMenu, windowMenu);
 }
 
 /** @brief 析构函数（默认实现，所有成员由 Qt 对象树释放）。 */
@@ -1497,6 +1681,9 @@ MainMenu::~MainMenu() = default;
 
 void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImageTools)
 {
+    _imageToolsVisible = showImageTools;
+    updateImageActionAvailability();
+
     if (!_toolBar)
     {
         return;
@@ -1548,9 +1735,130 @@ void MainMenu::setContextualToolbarVisibility(bool showModelTools, bool showImag
     setButtonVisible(_resetImageViewToolbarWidgetAct, showImageTools);
     setButtonVisible(_showFeaturePointsToolbarWidgetAct, showImageTools);
     setButtonVisible(_showMaskOverlayToolbarWidgetAct, showImageTools);
+    setButtonVisible(_showDepthOverlayToolbarWidgetAct, showImageTools);
     const bool zoomEnabled = showModelTools || showImageTools;
     _zoomInAct->setEnabled(zoomEnabled);
     _zoomOutAct->setEnabled(zoomEnabled);
+}
+
+void MainMenu::setImageDisplayReady(bool ready)
+{
+    _imageDisplayReady = ready;
+    updateImageActionAvailability();
+}
+
+void MainMenu::setDepthOverlayAvailable(bool available)
+{
+    _depthOverlayAvailable = available;
+    if (!available)
+    {
+        _depthOverlayFinalAvailable = false;
+        _depthOverlayLevel1Available = false;
+        _depthOverlayLevel2Available = false;
+        _depthOverlayLevel3Available = false;
+    }
+    updateImageActionAvailability();
+}
+
+void MainMenu::setDepthOverlayLevelsAvailable(bool finalAvailable,
+                                              bool level1Available,
+                                              bool level2Available,
+                                              bool level3Available,
+                                              const QString &finalReason,
+                                              const QString &level1Reason,
+                                              const QString &level2Reason,
+                                              const QString &level3Reason)
+{
+    _depthOverlayFinalAvailable = finalAvailable;
+    _depthOverlayLevel1Available = level1Available;
+    _depthOverlayLevel2Available = level2Available;
+    _depthOverlayLevel3Available = level3Available;
+    const auto updateUnavailableHint = [](QAction *action,
+                                          bool available,
+                                          const QString &levelLabel,
+                                          const QString &reason)
+    {
+        if (!action)
+        {
+            return;
+        }
+        const QString hint = available
+            ? QString()
+            : (reason.trimmed().isEmpty()
+                ? QStringLiteral("%1栅格未保存；请重新生成深度图并保存该级别的可视化栅格。")
+                      .arg(levelLabel)
+                : reason);
+        action->setToolTip(hint);
+        action->setStatusTip(hint);
+    };
+    updateUnavailableHint(_depthOverlayAllLevelsAct,
+                          finalAvailable,
+                          QStringLiteral("最终层"),
+                          finalReason);
+    updateUnavailableHint(_depthOverlayLevel1Act,
+                          level1Available,
+                          QStringLiteral("Level 1"),
+                          level1Reason);
+    updateUnavailableHint(_depthOverlayLevel2Act,
+                          level2Available,
+                          QStringLiteral("Level 2"),
+                          level2Reason);
+    updateUnavailableHint(_depthOverlayLevel3Act,
+                          level3Available,
+                          QStringLiteral("Level 3"),
+                          level3Reason);
+    updateImageActionAvailability();
+}
+
+void MainMenu::updateImageActionAvailability()
+{
+    if (_imageDisplayMenu)
+    {
+        _imageDisplayMenu->setEnabled(_imageToolsVisible);
+    }
+
+    const bool imageReady = _imageToolsVisible && _imageDisplayReady;
+    for (QAction *action : {_rotateImageLeftAct,
+                            _rotateImageRightAct,
+                            _showFeaturePointsAct,
+                            _showFeatureResidualsAct,
+                            _showMaskOverlayAct})
+    {
+        if (action)
+        {
+            action->setEnabled(imageReady);
+        }
+    }
+
+    if (_featureVisualizationAct)
+    {
+        _featureVisualizationAct->setEnabled(_imageToolsVisible);
+    }
+
+    const bool depthReady = imageReady && _depthOverlayAvailable;
+    for (QAction *action : {_showDepthOverlayAct, _showDepthIntensityAct})
+    {
+        if (action)
+        {
+            action->setEnabled(depthReady);
+        }
+    }
+    if (_depthOverlayAllLevelsAct)
+    {
+        _depthOverlayAllLevelsAct->setEnabled(depthReady && _depthOverlayFinalAvailable);
+    }
+    if (_depthOverlayLevel1Act)
+    {
+        _depthOverlayLevel1Act->setEnabled(depthReady && _depthOverlayLevel1Available);
+    }
+    if (_depthOverlayLevel2Act)
+    {
+        _depthOverlayLevel2Act->setEnabled(depthReady && _depthOverlayLevel2Available);
+    }
+    if (_depthOverlayLevel3Act)
+    {
+        _depthOverlayLevel3Act->setEnabled(depthReady && _depthOverlayLevel3Available);
+    }
 }
 
 // ============================================================
@@ -1602,6 +1910,7 @@ void MainMenu::setRecentProjects(const QStringList &paths)
 // ============================================================
 
 QAction *MainMenu::toggleLogAction() const   { return _toggleLogAct; }
+QAction *MainMenu::toggleMainToolbarAction() const { return _toggleMainToolbarAct; }
 QToolBar *MainMenu::toolBar() const          { return _toolBar; }
 
 QAction *MainMenu::newAction() const  { return _newAct; }
@@ -1613,11 +1922,18 @@ QAction *MainMenu::exitAction() const { return _exitAct; }
 QAction *MainMenu::zoomInAction() const    { return _zoomInAct; }
 QAction *MainMenu::zoomOutAction() const   { return _zoomOutAct; }
 QAction *MainMenu::resetViewAction() const { return _resetViewAct; }
+QAction *MainMenu::toggleFullScreenAction() const { return _toggleFullScreenAct; }
 QAction *MainMenu::rotateImageLeftAction() const { return _rotateImageLeftAct; }
 QAction *MainMenu::rotateImageRightAction() const { return _rotateImageRightAct; }
 QAction *MainMenu::showFeaturePointsAction() const { return _showFeaturePointsAct; }
 QAction *MainMenu::showFeatureResidualsAction() const { return _showFeatureResidualsAct; }
 QAction *MainMenu::showMaskOverlayAction() const { return _showMaskOverlayAct; }
+QAction *MainMenu::showDepthOverlayAction() const { return _showDepthOverlayAct; }
+QAction *MainMenu::depthOverlayAllLevelsAction() const { return _depthOverlayAllLevelsAct; }
+QAction *MainMenu::depthOverlayLevel1Action() const { return _depthOverlayLevel1Act; }
+QAction *MainMenu::depthOverlayLevel2Action() const { return _depthOverlayLevel2Act; }
+QAction *MainMenu::depthOverlayLevel3Action() const { return _depthOverlayLevel3Act; }
+QAction *MainMenu::showDepthIntensityAction() const { return _showDepthIntensityAct; }
 QAction *MainMenu::toggleGizmoAction() const { return _toggleGizmoAct; }
 QAction *MainMenu::toggleCamerasAction() const { return _toggleCamerasAct; }
 QAction *MainMenu::toggleDependentCamerasAction() const { return _toggleDependentCamerasAct; }
@@ -1673,9 +1989,6 @@ QAction *MainMenu::sparseCloudPostProcessAction() const { return _sparseCloudPos
 QAction *MainMenu::depthMapEstimateAction() const    { return _depthMapEstimateAct; }
 QAction *MainMenu::fuseDepthMapsAction() const       { return _fuseDepthMapsAct; }
 QAction *MainMenu::refineDenseCloudAction() const    { return _refineDenseCloudAct; }
-QAction *MainMenu::meshReconstructAction() const     { return _meshReconstructAct; }
-QAction *MainMenu::textureMappingAction() const      { return _textureMappingAct; }
-QAction *MainMenu::exportModelAction() const         { return _exportModelAct; }
 QAction *MainMenu::exportMatchedPairsAction() const  { return _exportMatchedPairsAct; }
 
 QAction *MainMenu::denseMatchAction() const { return _denseMatchAct; }

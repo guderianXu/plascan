@@ -3,8 +3,10 @@
 #include "DualImageViewer.h"
 #include "MarkerWorkspaceController.h"
 #include "ProjectData.h"
-#include "ProjectIO.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectIO.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "geometry/MarkerProjectionPredictor.h"
 #include "Camera.h"
 #include "io/PathIO.h"
@@ -160,7 +162,7 @@ void MarkerFocusMeasurementDialog::generateGeometryPredictions()
     {
         const QJsonObject image = value.toObject();
         xjw::Camera camera_model;
-        if (!xjw::gui::project::imageCameraFromEntry(image, &camera_model)
+        if (!xjw::common::project::imageCameraFromEntry(image, &camera_model)
             || !camera_model.isValid()) continue;
         const xjw::Camera positive = camera_model.normalizedForPositiveDepth();
         if (!positive.isValid()) continue;
@@ -187,7 +189,7 @@ void MarkerFocusMeasurementDialog::generateGeometryPredictions()
         if (!image_size.isValid()) image_size = QImageReader(camera.imagePath).size();
         camera.imageSize = image_size;
 
-        const QString mask_path = ProjectIO::findMaskForImage(
+        const QString mask_path = xjw::common::project::ProjectIO::findMaskForImage(
             _projectData->currentProjectPath(), camera.imagePath);
         if (!mask_path.isEmpty())
         {

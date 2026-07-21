@@ -11,9 +11,11 @@
 #include "VocabularyOverlapDialog.h"
 #include "ui_VocabularyOverlapDialog.h"
 
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectManager.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "OverlapAnalyzer.h"
 #include "io/PathIO.h"
 
@@ -95,7 +97,7 @@ QString defaultOverlapOutputDir(const QString &projectPath)
     {
         return QString();
     }
-    return QDir(ProjectIO::projectAssetsDir(projectPath)).filePath(QStringLiteral("overlap"));
+    return QDir(xjw::common::project::ProjectIO::projectAssetsDir(projectPath)).filePath(QStringLiteral("overlap"));
 }
 
 QString featurePathInDir(const QString &featureDir, const QString &imagePath, const QString &suffix)
@@ -214,11 +216,11 @@ bool loadCameraInputsForRequest(const VocabularyOverlapRunRequest &request,
     }
 
     const QMap<QString, QJsonObject> metaByPath =
-        xjw::gui::project::projectImageMetaByPath(request.projectMeta, true);
+        xjw::common::project::projectImageMetaByPath(request.projectMeta, true);
 
     for (const QString &imagePath : request.images)
     {
-        const QString normalized = xjw::gui::project::normalizePath(imagePath);
+        const QString normalized = xjw::common::project::normalizePath(imagePath);
         const QJsonObject imageMeta = metaByPath.value(normalized);
         if (imageMeta.isEmpty())
         {
@@ -230,7 +232,7 @@ bool loadCameraInputsForRequest(const VocabularyOverlapRunRequest &request,
         }
 
         xjw::Camera camera;
-        if (!xjw::gui::project::imageCameraFromEntry(imageMeta, &camera))
+        if (!xjw::common::project::imageCameraFromEntry(imageMeta, &camera))
         {
             if (errorMsg)
             {
@@ -289,7 +291,8 @@ bool loadFeaturesForRequest(const VocabularyOverlapRunRequest &request,
         QString featurePath = featurePathInDir(request.featureDir, imagePath, request.suffix);
         if (!QFile::exists(featurePath) && !request.projectPath.isEmpty())
         {
-            featurePath = ProjectIO::featureFileForSuffix(request.projectPath, imagePath, request.suffix);
+            featurePath = xjw::common::project::ProjectIO::featureFileForSuffix(
+                request.projectPath, imagePath, request.suffix);
         }
         if (!QFile::exists(featurePath))
         {
@@ -885,7 +888,7 @@ void VocabularyOverlapDialog::applySettings(const QJsonObject &settings)
     const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
     const QJsonObject projectMeta = _projectManager ? _projectManager->currentMeta() : QJsonObject();
     const QString requestedSuffix = settings.value(QStringLiteral("feature_suffix")).toString(QString());
-    const QString suffix = xjw::gui::project::resolvePreferredFeatureSuffix(projectPath,
+    const QString suffix = xjw::common::project::resolvePreferredFeatureSuffix(projectPath,
                                                                              projectMeta,
                                                                              requestedSuffix);
     const int algorithmIndex = _featureAlgorithmCombo->findData(suffix);
@@ -1010,7 +1013,7 @@ void VocabularyOverlapDialog::onAutoDetectFeatureDir()
         return;
     }
     const QString projectPath = _projectManager->currentProjectPath();
-    _featureDirEdit->setText(ProjectIO::ipfindOutputDir(projectPath));
+    _featureDirEdit->setText(xjw::common::project::ProjectIO::ipfindOutputDir(projectPath));
     refreshFeatureStatus();
     emitSettingsNow();
 }
@@ -1151,7 +1154,9 @@ void VocabularyOverlapDialog::onResetDefaults()
     _referenceElevationSpin->setValue(0.0);
     _cameraNeighborFactorSpin->setValue(2.0);
     _featureAlgorithmCombo->setCurrentIndex(defaultFeatureIndex >= 0 ? defaultFeatureIndex : 0);
-    _featureDirEdit->setText(projectPath.isEmpty() ? QString() : ProjectIO::ipfindOutputDir(projectPath));
+    _featureDirEdit->setText(projectPath.isEmpty()
+                                 ? QString()
+                                 : xjw::common::project::ProjectIO::ipfindOutputDir(projectPath));
     _branchFactorSpin->setValue(10);
     _treeDepthSpin->setValue(3);
     _samplePerImageSpin->setValue(500);
@@ -1200,7 +1205,8 @@ void VocabularyOverlapDialog::refreshFeatureStatus()
         QString featurePath = featurePathInDir(featureDir, imagePath, suffix);
         if (!QFile::exists(featurePath) && _projectManager)
         {
-            featurePath = ProjectIO::featureFileForSuffix(_projectManager->currentProjectPath(), imagePath, suffix);
+            featurePath = xjw::common::project::ProjectIO::featureFileForSuffix(
+                _projectManager->currentProjectPath(), imagePath, suffix);
         }
         const bool found = QFile::exists(featurePath);
         if (found)
@@ -1262,8 +1268,8 @@ QString VocabularyOverlapDialog::defaultFeatureSuffix() const
 {
     const QString projectPath = _projectManager ? _projectManager->currentProjectPath() : QString();
     const QJsonObject projectMeta = _projectManager ? _projectManager->currentMeta() : QJsonObject();
-    const QString inferred = xjw::gui::project::inferPreferredFeatureSuffix(projectPath, projectMeta);
-    return xjw::gui::project::resolvePreferredFeatureSuffix(projectPath,
+    const QString inferred = xjw::common::project::inferPreferredFeatureSuffix(projectPath, projectMeta);
+    return xjw::common::project::resolvePreferredFeatureSuffix(projectPath,
                                                             projectMeta,
                                                             inferred,
                                                             QStringLiteral(".sift"));
@@ -1323,7 +1329,8 @@ bool VocabularyOverlapDialog::loadFeatures(std::vector<xjw::VocabularyImageFeatu
         QString featurePath = featurePathInDir(featureDir, imagePath, suffix);
         if (!QFile::exists(featurePath) && _projectManager)
         {
-            featurePath = ProjectIO::featureFileForSuffix(_projectManager->currentProjectPath(), imagePath, suffix);
+            featurePath = xjw::common::project::ProjectIO::featureFileForSuffix(
+                _projectManager->currentProjectPath(), imagePath, suffix);
         }
         if (!QFile::exists(featurePath))
         {

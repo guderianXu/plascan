@@ -261,20 +261,19 @@ MainWindow 状态栏更新
 
 ### 5.1 异步任务链
 
-使用 Qt 信号槽机制串联异步任务：
+连接点阶段统一由 `MatchPhotosTask` 同步组织其内部阶段，完成后再通过 Qt 信号槽串联空三、MVS 和 DEM：
 
 ```cpp
-connect(featureExtractionRunner, &FeatureExtractionRunner::finished,
-        this, [this]() {
-    // 特征提取完成，启动特征匹配
-    startFeatureMatching();
-});
+xjw::matchphotos::MatchPhotosTask task(options);
+const auto result = task.run(context);
+if (!result.success)
+{
+    finishWithError(result.errorMessage);
+    return;
+}
 
-connect(featureMatchRunner, &FeatureMatchRunner::finished,
-        this, [this]() {
-    // 特征匹配完成，启动三角化
-    startTriangulation();
-});
+writeMatchPhotosResultsToProject(result);
+startTriangulation();
 
 // ... 依此类推
 ```

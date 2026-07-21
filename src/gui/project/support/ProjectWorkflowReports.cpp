@@ -1,7 +1,7 @@
 #include "ProjectWorkflowReports.h"
 
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "project/SparseResultQuality.h"
 #include "ReconstructionQualityReport.h"
 
@@ -338,7 +338,7 @@ ReconstructionQualityProjectReportResult writeReconstructionQualityProjectReport
         return result;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectData->currentProjectPath());
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectData->currentProjectPath());
     if (assetsDir.isEmpty())
     {
         result.errorMessage = QStringLiteral("无法解析项目 assets 目录");
@@ -367,7 +367,11 @@ ReconstructionQualityProjectReportResult writeReconstructionQualityProjectReport
         writeResult.report.value(QStringLiteral("registered_image_count"));
     record[QStringLiteral("sparse_point_count")] = writeResult.report.value(QStringLiteral("sparse_point_count"));
     record[QStringLiteral("dense_point_count")] = writeResult.report.value(QStringLiteral("dense_point_count"));
-    record[QStringLiteral("mvs_valid_coverage")] = writeResult.report.value(QStringLiteral("mvs_valid_coverage"));
+    const QJsonValue mvsCoverage = writeResult.report.value(QStringLiteral("mvs_valid_coverage"));
+    if (mvsCoverage.isDouble())
+    {
+        record[QStringLiteral("mvs_valid_coverage")] = mvsCoverage;
+    }
     record[QStringLiteral("dem_coverage")] = writeResult.report.value(QStringLiteral("dem_coverage"));
     record[QStringLiteral("control_point_count")] = writeResult.report.value(QStringLiteral("control_point_count"));
     record[QStringLiteral("check_point_count")] = writeResult.report.value(QStringLiteral("check_point_count"));

@@ -118,6 +118,8 @@ struct FusionFrameInput
     cv::Mat   depthMap;    ///< CV_32F, 正深度（COLMAP 约定），0=无效
     cv::Mat   normalMap;   ///< CV_32FC3, 法线（相机坐标系），可为空
     cv::Mat   confidence;  ///< CV_32F, [0,1]，可为空
+    cv::Mat   validMask;   ///< CV_8U, 项目/内容蒙版传播后的权威有效区域
+    cv::Mat   supportCount; ///< CV_16U, PatchMatch 多视支持计数
     Camera    cameraModel;  ///< 与深度栅格对应的正深度、零畸变工作相机
     Camera    sourceCamera; ///< 与 imagePath 原始像素对应的完整相机，用于融合取色预处理
     int       viewIndex = -1; ///< 原始 CameraView 下标，用于将 source plan 重映射到融合帧下标
@@ -207,6 +209,11 @@ struct DepthGenConfig
     MvsSceneProfile sceneProfile = MvsSceneProfile::Auto; ///< Auto 时根据相机与稀疏云几何分类
     DepthFilterMode depthFilterMode = DepthFilterMode::Moderate; ///< 显式过滤预设
     bool adaptiveDepthFilterMode = true; ///< Auto 场景下航测用中等、环拍物体用温和过滤
+    bool enableTwoSourceCrossViewGrowth = false; ///< 实验：从三源强核心受控恢复稳定两源缺口
+    int twoSourceGrowthDistancePixels = 3;
+    float twoSourceGrowthInverseDepthSpread = 0.01f;
+    float twoSourceGrowthNormalAngleDegrees = 15.0f;
+    int twoSourceGrowthMaximumComponentArea = 64;
 };
 
 // =============================================================================
@@ -215,6 +222,7 @@ struct DepthGenConfig
 struct CameraView
 {
     std::string imagePath;
+    std::string validRegionMaskPath; ///< 项目蒙版路径；文件中非零=排除，MVS 内部转换为 255=有效
     int         imageWidth  = 0;
     int         imageHeight = 0;
     xjw::Camera camera;

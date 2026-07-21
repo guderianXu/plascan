@@ -43,13 +43,19 @@ class RepoHygieneTest(unittest.TestCase):
         self.assertNotIn("uses: actions/checkout@v4", text)
 
     def test_triangulate_cli_test_uses_process_api_and_unique_temp_dirs(self):
-        source = (ROOT / "tests" / "test_triangulate_cli.cpp").read_text(encoding="utf-8")
+        source = (ROOT / "src" / "cli" / "dense" / "tests" / "test_dense_cli.cpp").read_text(
+            encoding="utf-8"
+        )
+        support = (
+            ROOT / "src" / "cli" / "common" / "tests" / "CliTestSupport.h"
+        ).read_text(encoding="utf-8")
 
         self.assertNotIn("std::system", source)
         self.assertNotIn("plascan_triangulate_cli_regression", source)
         self.assertNotIn("plascan_triangulate_cli_intensity", source)
-        self.assertIn("QProcess", source)
-        self.assertIn("makeUniqueTempDir", source)
+        self.assertIn("QTemporaryDir", source)
+        self.assertIn("runCli", source)
+        self.assertIn("QProcess", support)
 
     def test_windows_runtime_scripts_force_utf8_console_for_native_logs(self):
         script_paths = [

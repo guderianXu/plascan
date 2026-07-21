@@ -6,6 +6,7 @@
 #include "MatchLineOverlay.h"
 #include "DisparityHeatmapOverlay.h"
 #include "MatchValidityAnalyzer.h"
+#include "project/ProjectMetadata.h"
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
@@ -127,42 +128,7 @@ QString findExistingPath(const QStringList &candidates)
     return QString();
 }
 
-QString normalizedImageToken(const QString &token)
-{
-    QString normalized = QDir::cleanPath(token.trimmed());
-    normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    return normalized.toLower();
-}
-
-QString imageBaseToken(const QString &token)
-{
-    const QString base = QFileInfo(token.trimmed()).completeBaseName();
-    return (base.isEmpty() ? token.trimmed() : base).toLower();
-}
-
-bool imageTokenMatches(const QString &filePath,
-                       const QString &fileName,
-                       const QString &displayPath)
-{
-    if (displayPath.trimmed().isEmpty())
-    {
-        return false;
-    }
-
-    const QString displayNorm = normalizedImageToken(displayPath);
-    const QString displayBase = imageBaseToken(displayPath);
-
-    if (!filePath.trimmed().isEmpty())
-    {
-        if (normalizedImageToken(filePath) == displayNorm ||
-            imageBaseToken(filePath) == displayBase)
-        {
-            return true;
-        }
-    }
-
-    return !fileName.trimmed().isEmpty() && imageBaseToken(fileName) == displayBase;
-}
+using xjw::common::project::imageReferenceMatchesToken;
 
 enum class MatchFileDisplayOrder
 {
@@ -179,11 +145,11 @@ MatchFileDisplayOrder displayOrderForMatchFile(const QString &fileImage0Path,
                                                const QString &displayImageB)
 {
     const bool direct =
-        imageTokenMatches(fileImage0Path, fileImage0Name, displayImageA) &&
-        imageTokenMatches(fileImage1Path, fileImage1Name, displayImageB);
+        imageReferenceMatchesToken(fileImage0Path, fileImage0Name, displayImageA) &&
+        imageReferenceMatchesToken(fileImage1Path, fileImage1Name, displayImageB);
     const bool reversed =
-        imageTokenMatches(fileImage0Path, fileImage0Name, displayImageB) &&
-        imageTokenMatches(fileImage1Path, fileImage1Name, displayImageA);
+        imageReferenceMatchesToken(fileImage0Path, fileImage0Name, displayImageB) &&
+        imageReferenceMatchesToken(fileImage1Path, fileImage1Name, displayImageA);
 
     if (direct)
     {
@@ -610,7 +576,7 @@ bool DualImageViewer::parseMatchFile(const QString &matchFile,
         QString assetsDir = QDir(matchDir).filePath("..");
         QString projectRoot = QDir(assetsDir).filePath("..");
 
-        // 优先读取与 .match 同名的 sidecar json（由 FeatureMatchRunner 写入）
+        // 优先读取与 .match 同名的 sidecar json（由统一特征匹配流程写入）
         QString sp0Path;
         QString sp1Path;
         const QString sidecarPath = matchFile + ".json";

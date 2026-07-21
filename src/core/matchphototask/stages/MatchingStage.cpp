@@ -1,6 +1,6 @@
 #include "FeatureData.h"
 #include "FeatureFileIO.h"
-#include "LightGlueFeatureBudget.h"
+#include "lightglue/LightGlueFeatureBudget.h"
 #include "LightGlueMatcher.h"
 #include "MatchFileIO.h"
 #include "MatchPhotosMaskSupport.h"
@@ -116,18 +116,18 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
     lightGlueConfig.useCuda = useCuda;
     lightGlueConfig.cudaDevice = options.cudaDevice;
 
-    const int primaryKeypointBudget = xjw::pipeline::resolveLightGlueKeypointBudget(
+    const int primaryKeypointBudget = xjw::feature_match::resolveLightGlueKeypointBudget(
         algorithmPlan.featureAlgorithm,
         algorithmPlan.matcherAlgorithm,
         useCuda,
         algorithmPlan.maxKeypoints);
-    const float effectiveMatchThreshold = xjw::pipeline::resolveLightGlueMatchThreshold(
+    const float effectiveMatchThreshold = xjw::feature_match::resolveLightGlueMatchThreshold(
         algorithmPlan.featureAlgorithm,
         algorithmPlan.matcherAlgorithm,
         useCuda,
         options.matchThreshold,
         primaryKeypointBudget,
-        xjw::pipeline::LightGlueGpuMemoryInfo{});
+        xjw::feature_match::LightGlueGpuMemoryInfo{});
     lightGlueConfig.scoreThreshold = effectiveMatchThreshold;
 
     int matchedPairs = 0;
@@ -204,20 +204,20 @@ MatchPhotosStageReport MatchingStage::run(const MatchPhotosContext &context,
             QJsonObject matchDiagnostics;
             bool matched = false;
             QString matchError;
-            for (int keypointBudget : xjw::pipeline::lightGlueRetryKeypointBudgets(primaryKeypointBudget))
+            for (int keypointBudget : xjw::feature_match::lightGlueRetryKeypointBudgets(primaryKeypointBudget))
             {
                 try
                 {
-                    const xjw::pipeline::BudgetedFeatureData budgetedFeature0 =
-                        xjw::pipeline::budgetFeatureDataForLightGlue(feature0, keypointBudget);
-                    const xjw::pipeline::BudgetedFeatureData budgetedFeature1 =
-                        xjw::pipeline::budgetFeatureDataForLightGlue(feature1, keypointBudget);
+                    const xjw::feature_match::BudgetedFeatureData budgetedFeature0 =
+                        xjw::feature_match::budgetFeatureDataForLightGlue(feature0, keypointBudget);
+                    const xjw::feature_match::BudgetedFeatureData budgetedFeature1 =
+                        xjw::feature_match::budgetFeatureDataForLightGlue(feature1, keypointBudget);
                     xjw::feature_match::MatchResult limitedMatch =
                         matcher.match(budgetedFeature0.features, budgetedFeature1.features);
                     normalizeMatchResult(&limitedMatch,
                                          budgetedFeature0.features.size(),
                                          budgetedFeature1.features.size());
-                    matchResult = xjw::pipeline::remapLightGlueMatchResultToOriginal(
+                    matchResult = xjw::feature_match::remapLightGlueMatchResultToOriginal(
                         limitedMatch,
                         budgetedFeature0,
                         feature0.size(),

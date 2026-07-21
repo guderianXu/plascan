@@ -52,7 +52,6 @@ target_include_directories(matchphototask PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_extractors/superpoint
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_match
     ${CMAKE_CURRENT_SOURCE_DIR}/../feature_match/lightglue
-    ${CMAKE_CURRENT_SOURCE_DIR}/../pipeline
     ${CMAKE_CURRENT_SOURCE_DIR}/../sfm
 )
 
@@ -64,6 +63,7 @@ target_link_libraries(matchphototask PUBLIC
     feature_match_traditional
     lightglue_matcher
     plascan_common_io
+    plascan_common_project
     sfm
 )
 

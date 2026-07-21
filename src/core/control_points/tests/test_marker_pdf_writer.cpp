@@ -9,6 +9,9 @@
 #include <QSet>
 #include <QTemporaryDir>
 
+#include <algorithm>
+#include <string_view>
+
 using xjw::control_points::AprilTagDetector;
 using xjw::control_points::AprilTagFamily;
 using xjw::control_points::MarkerPdfWriter;
@@ -72,11 +75,21 @@ TEST(MarkerPdfWriterTest, RefusesCircularCodesWithoutCompatibilityCorpus)
 
 int main(int argc, char **argv)
 {
+    const bool lists_tests = std::any_of(argv, argv + argc, [](const char *argument)
+    {
+        return argument && std::string_view(argument) == "--gtest_list_tests";
+    });
+    ::testing::InitGoogleTest(&argc, argv);
+    // CTest 的用例发现不执行渲染，无需在此阶段初始化 Qt 图形后端。
+    if (lists_tests)
+    {
+        return RUN_ALL_TESTS();
+    }
+
     if (qEnvironmentVariableIsEmpty("QT_QPA_PLATFORM"))
     {
         qputenv("QT_QPA_PLATFORM", "offscreen");
     }
     QGuiApplication application(argc, argv);
-    ::testing::InitGoogleTest(&argc, argv);
     return RUN_ALL_TESTS();
 }

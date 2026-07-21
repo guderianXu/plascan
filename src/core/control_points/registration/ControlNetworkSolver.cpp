@@ -237,7 +237,7 @@ ControlNetworkResult solveControlNetwork(const ControlNetworkInput &input)
     }
     if (controls.size() < 3)
     {
-        result.error = QStringLiteral("绝对定向至少需要三个有效控制点");
+        result.error = "绝对定向至少需要三个有效控制点";
         return result;
     }
 
@@ -294,19 +294,19 @@ ControlNetworkResult solveControlNetwork(const ControlNetworkInput &input)
 
     if (!found_non_collinear_sample)
     {
-        result.error = QStringLiteral("控制点几何退化：控制点共线或物方坐标共线");
+        result.error = "控制点几何退化：控制点共线或物方坐标共线";
         return result;
     }
     if (best_inliers.size() < 3)
     {
-        result.error = QStringLiteral("控制网 RANSAC 未找到至少三个一致控制点");
+        result.error = "控制网 RANSAC 未找到至少三个一致控制点";
         return result;
     }
 
     best = weightedUmeyama(best_inliers);
     if (!best.valid)
     {
-        result.error = QStringLiteral("控制网加权 Umeyama 求解失败");
+        result.error = "控制网加权 Umeyama 求解失败";
         return result;
     }
     result.transform = best;
@@ -333,7 +333,7 @@ ControlNetworkResult solveControlNetwork(const ControlNetworkInput &input)
         ? std::sqrt(inlier_sum_squared / static_cast<double>(result.controlInlierCount))
         : 0.0;
     result.ok = result.controlInlierCount >= 3;
-    if (!result.ok) result.error = QStringLiteral("绝对定向后有效控制点少于三个");
+    if (!result.ok) result.error = "绝对定向后有效控制点少于三个";
     return result;
 }
 

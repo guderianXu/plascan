@@ -35,7 +35,7 @@
   #undef NEED_RESTORE_EMIT
 #endif
 
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <QDebug>
 
@@ -68,7 +68,7 @@ std::vector<cv::KeyPoint> loadFeatureKeypointsFromFile(const QString &featurePat
 std::vector<cv::KeyPoint> loadFeatureKeypointsForImage(const QString &plascanPath,
                                                        const QString &imagePath)
 {
-    const QString featurePath = ProjectIO::findFeatureForImage(plascanPath, imagePath);
+    const QString featurePath = xjw::common::project::ProjectIO::findFeatureForImage(plascanPath, imagePath);
     if (featurePath.isEmpty())
     {
         qDebug() << "LayerRenderer: No feature file found for" << imagePath;

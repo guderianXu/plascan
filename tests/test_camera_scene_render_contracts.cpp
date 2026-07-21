@@ -56,6 +56,38 @@ TEST(CameraSceneRenderContractTest, SortsThumbnailPlanesFarToNearBeforeDrawingLa
     EXPECT_GT(label_loop, plane_loop);
 }
 
+TEST(CameraSceneRenderContractTest, ThumbnailPlanesUseTheSceneDepthBuffer)
+{
+    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const qsizetype ensureStart = source.indexOf(
+        QStringLiteral("bool CameraSceneWidget::ensureCameraThumbnailPipeline"));
+    const qsizetype drawStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawCameraThumbnails"), ensureStart);
+    const qsizetype renderStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::render(QRhiCommandBuffer *cb)"), drawStart);
+    const qsizetype overlayStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::paintOverlay(QPainter &painter)"), renderStart);
+
+    ASSERT_GE(ensureStart, 0);
+    ASSERT_GT(drawStart, ensureStart);
+    ASSERT_GT(renderStart, drawStart);
+    ASSERT_GT(overlayStart, renderStart);
+
+    const QString ensureBlock = source.mid(ensureStart, drawStart - ensureStart);
+    const QString renderBlock = source.mid(renderStart, overlayStart - renderStart);
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthTest(true)")));
+    EXPECT_TRUE(ensureBlock.contains(QStringLiteral("setDepthWrite(true)")));
+    EXPECT_LT(renderBlock.indexOf(QStringLiteral("drawCameraThumbnails(cb")),
+              renderBlock.indexOf(QStringLiteral("drawSceneGeometry(cb")));
+
+    const qsizetype overlayEnd = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::drawPlyLoadProgressOverlay"), overlayStart);
+    ASSERT_GT(overlayEnd, overlayStart);
+    const QString overlayBlock = source.mid(overlayStart, overlayEnd - overlayStart);
+    EXPECT_FALSE(overlayBlock.contains(QStringLiteral("drawImageOnCameraPlane")));
+    EXPECT_FALSE(overlayBlock.contains(QStringLiteral("painter.drawPolygon(imagePlane)")));
+}
+
 TEST(CameraSceneRenderContractTest, CachesImageLoadFailuresToPreventRetryStorm)
 {
     const QString header = readProjectFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.h"));

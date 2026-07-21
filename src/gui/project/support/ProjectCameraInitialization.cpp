@@ -1,7 +1,9 @@
 #include "ProjectCameraInitialization.h"
 
 #include "ProjectData.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 
 #include <QImageReader>
 #include <QJsonArray>
@@ -12,6 +14,8 @@
 #include <cmath>
 
 namespace xjw::gui::project {
+
+using xjw::common::project::cameraToJson;
 
 namespace {
 

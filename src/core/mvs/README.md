@@ -4,6 +4,18 @@
 structured around durable frame metadata, planned source views, bounded memory, and artifact-first fusion so
 large projects can be resumed and diagnosed.
 
+## Reusable Workflow Services
+
+- `DenseCloudRefinementService` owns chunked binary PLY refinement, multi-pass terrain spike and local-plane
+  filtering, plus the in-memory fallback used by `dense_cloud_refine_cli`.
+- `StreamingDepthFusionService` owns reference-window selection, small-project frame caching, consensus tuning,
+  batched fusion, and the pre-reduction trigger. Callers provide only a frame loader and progress callback.
+- `PointCloudArtifactIO` creates output directories and writes Binary LE PLY with an explicit normal-retention
+  policy.
+
+These services do not depend on CLI option objects and can be reused by GUI or batch workflows. Their tests
+live under `src/core/mvs/tests/`.
+
 ## Runtime State
 
 - `MvsWorkspaceManifest` is the disk record for depth estimation. Each frame stores the reference image,
@@ -21,9 +33,14 @@ large projects can be resumed and diagnosed.
 - `MvsSceneClassifier` resolves the candidate source pool before image preload and frame-cache preparation.
   High-resolution aerial terrain uses up to eight candidates, while orbital-object capture uses a smaller
   local pool. An explicitly larger user value is retained, and the final value is capped by the number of
-  available views. Logs and CLI reports record both configured and effective pool sizes.
+  available views. Aerial planning keeps the 35-degree maximum triangulation angle; orbital-object rings use
+  47 degrees so the second camera ring neighbor can contribute without admitting the unstable 48--49 degree
+  Temple pairs. Logs and CLI reports record both configured and effective pool sizes.
 - The selected source plan is saved with the depth frame record so depth generation and fusion use the same
   overlap assumptions.
+- When verified pair geometry is available, verified pairs are selected first and shared-track geometry may
+  backfill only the remaining slots. The manifest records the requested count, shortfall, and verified,
+  backfill, or sequence tier for every selected source.
 - If no match or track evidence exists, planning falls back to nearby sequence views instead of defaulting to
   an unbounded all-pairs search.
 
@@ -31,6 +48,12 @@ large projects can be resumed and diagnosed.
 
 - Depth post-processing keeps a preview, raw depth, raw confidence, and `valid mask` when raw artifacts are
   enabled.
+- `valid_coverage` is the canonical per-frame coverage field. Quality reporting also accepts
+  `depth_quality.valid_coverage`, legacy `valid_ratio`, or a value computed from valid pixels and grid size.
+  Missing coverage remains unavailable and is displayed as `—`, never as a measured zero.
+- Depth artifacts are not standalone workspace resources. The photo toolbar resolves the matching frame by
+  `ref_image` and overlays depth on that photo. Feature points and residual diagnostics are temporarily hidden
+  while depth inspection is active, then restored from the user's existing preferences.
 - Local outlier filtering and connected-component speckle filtering remove isolated red-depth spikes while
   preserving large smooth regions.
 - Speckle removal builds a component-removal lookup table and scans the depth image once. It therefore scales
@@ -49,14 +72,28 @@ large projects can be resumed and diagnosed.
 - `DepthPyramidEstimator` runs coarse-to-fine PatchMatch. A parent level propagates a depth center and a
   per-pixel uncertainty radius; low-confidence or invalid regions retain a wider/global search instead of
   being locked to a bad coarse estimate.
+- A finer level that retains less than 60% of the parent coverage is treated as a quality collapse. The
+  estimator keeps the parent depth already resized to the final raster size and records the selected level
+  and coverage-regression reason instead of publishing a severely incomplete fine result.
 - CPU and CUDA PatchMatch consume the same per-pixel search radius. The final frame is accepted,
   validation-only, or rejected by `DepthFrameQualityGate` before fusion.
+- `DepthCompletenessMetrics` measures coverage inside the effective project/content mask rather than against
+  the whole raster. It separately records small interior holes, large interior openings, boundary-connected
+  invalid regions, output-filter retention, and cross-view consistency retention.
+- `valid_mask_path` is the final depth-valid mask; `support_mask_path` is the project/content support region.
+  They are intentionally distinct so a missing depth sample is not silently reinterpreted as free space.
+- Cross-view consistency selects its few-view policy from the actual source count of the current frame. One or
+  two sources use contradiction-only checks; three or more sources use the strict confirmation policy.
+- The 0.80 mask-normalized coverage gate applies only to constrained project/content masks. Aerial frames using
+  `full_image` retain the established edge/interior consistency thresholds instead of being downgraded merely
+  because valid terrain does not cover the whole 6000×4000 raster.
 - Pairwise epipolar rectification is used only when OpenCV reports a usable common valid canvas. Strongly
   convergent object-ring pairs can rectify completely outside the fixed image canvas; those pairs are
   rejected by `EpipolarRectifier` and automatically fall back to the original-camera plane-homography path.
-- Level 1 is always persisted with its summary. When `saveIntermediatePyramidLevels` is enabled, Level 2/3
-  raw depth, confidence, support count, uncertainty, valid mask, depth preview, and confidence preview are
-  also written and exposed below the frame in the workspace tree.
+- Level 1 is always persisted with its summary. The GUI enables `saveIntermediatePyramidLevels` by default,
+  so Level 2/3 raw depth, confidence, support count, uncertainty, valid mask, depth preview, and confidence
+  preview are available to the per-photo overlay. The workspace tree exposes only one non-image aggregate
+  depth-map node; it never materializes individual depth frames or previews as workspace resources.
 
 The corresponding CLI options are:
 
@@ -114,3 +151,138 @@ E:/code/plascan/build/windows-vcpkg-cuda-release/tests/test_mvs_pipeline.exe `
 - These results validate depth scheduling and frame gating. They do not claim that the existing visual-hull
   or mesh stage meets the model-image quality gate; mesh connectivity and rendering quality remain a separate
   follow-up.
+
+## 2026-07-16 Aerial Mesh Policy
+
+- The reconstruction CLI now carries the effective MVS scene profile into meshing. Aerial terrain uses the
+  height-field path; orbital-object scenes keep Poisson reconstruction.
+- For `high` and `highest` aerial runs, the height-field policy keeps at least a 320-cell resolution and skips
+  a second voxel downsample. On the UAV 9-image fixture this changed median rendered coverage from 0.165 to
+  0.791 and edge P90 from 94.37 px to 37.86 px. The strict model-quality gate still fails, so depth support at
+  strip boundaries and residual mesh fragmentation remain follow-up work.
+
+## 2026-07-17 Direct-Depth Regression
+
+- Temple source planning now supplies 2--5 source views per frame instead of almost always two. One-source
+  consistency remains contradiction-only; two sources require one confirmation within 10%, and three or more
+  sources use the 5% threshold. The 47-degree run retained 12 accepted and four validation-only frames, with
+  mean mask-normalized depth coverage `0.9380` and minimum coverage `0.8681`.
+- The direct TSDF path keeps strong single observations, defaults to a 7.5-voxel truncation band, does not carve
+  support-mask-exterior samples, and only fills bounded micro-holes. Small connected components below 2.5% of
+  the largest component are removed. The 47-degree Temple model has one component, rendered coverage `0.8072`,
+  IoU `0.7811`, edge P90 `80.82 px`, and SSIM `0.5673`. Coverage, IoU, and appearance improved substantially,
+  but structural-edge quality remains follow-up work; the implementation does not widen blind hole filling.
+- The fresh UAV9 CUDA regression completed with pipeline status `ok`, 9/9 depth frames, seven accepted and two
+  validation-only frames. Direct parsing of all nine version-3 `SFTB` artifacts reported exactly 40000 SIFT
+  keypoints per image, with no frame above the cap. The aerial profile continues to use the 35-degree angle gate.
+
+## 2026-07-18 Dark-Background Object Completeness
+
+- Orbital-object frames with an explicit project mask now refine only dark interior openings when the excluded
+  background is dark. A protected four-pixel boundary band and a 75% retained-area floor keep the authoritative
+  outer silhouette and thin columns intact; aerial and bright-background images do not use this refinement.
+- On Temple, the refinement increased accepted depth frames from 12 to 15 and reduced large internal invalid
+  regions from 51,796 to 15,139 pixels. The strict three-or-more-source consistency threshold remains 5%; the
+  tested 7.5% relaxation admitted all frames but reduced rendered coverage and SSIM.
+- Direct-depth TSDF now limits positive free-space integration to 36 voxels and requires two distinct camera
+  observations by default. This prevents far background depths from erasing thin foreground columns while
+  rejecting single-view interior sheets. At resolution 320 the selected Temple model has one component,
+  coverage `0.8373`, IoU `0.8185`, edge P90 `81.50 px`, and SSIM `0.5573`; the 384-cell ultra preset reaches
+  coverage `0.8391`, IoU `0.8204`, edge P90 `80.03 px`, and SSIM `0.5655`.
+- The ultra direct-depth preset erodes only the final depth-valid boundary by two pixels before TSDF integration;
+  both high and ultra require two camera observations by default, while high keeps one-pixel
+  erosion. Open mesh boundaries receive one displacement-limited smoothing pass, while interior vertices and
+  real large openings are left untouched. On the same Temple depth artifacts the ultra result keeps one
+  component, reduces post-fill boundary edges from `139751` to `115466`, and records coverage `0.8132`, IoU
+  `0.8040`, edge P90 `80.12 px`, and SSIM `0.5703`. A five-voxel truncation experiment was rejected because it
+  reduced coverage to `0.7524` despite fewer boundary edges.
+
+## 2026-07-18 Robust Mesh Appearance and Weak-Boundary Cleanup
+
+- Direct-depth mesh vertex colors now use per-view mesh z-buffers, strict depth consistency, view-angle weights,
+  robust color outlier rejection, conservative best-view fallback, and normal-aware hole propagation. Temple has
+  no default-gray vertices after coloring; its render SSIM increased from `0.5703` to `0.6022` while geometry
+  coverage and IoU stayed effectively unchanged.
+- OBJ texture generation now projects the original MVS source photographs per face into a tiled atlas. The final
+  Temple camera-atlas check mapped all `1,137,405` faces (`1,111,920` strict and `25,485` conservative fallback),
+  eliminating the former global planar-UV overlap and order-dependent vertex-color bake.
+- Ultra TSDF output automatically peels one open-boundary layer only where every face vertex has weak camera
+  support. The Temple diagnostic removed `12,345` direct candidates and reduced boundary edges from `115,466`
+  to `107,948`; coverage changed from `0.8132` to `0.8126`, IoU from `0.8040` to `0.8036`, and SSIM from
+  `0.6022` to `0.6018`. High quality keeps this cleanup disabled unless explicitly requested.
+
+## 2026-07-18 Depth-Edge and Cross-View Geometry Refinement
+
+- Coarse-to-fine depth propagation now uses a guide-weighted median depth instead of averaging foreground and
+  background samples across a discontinuity. Search-radius uncertainty is still retained, but the prior center no
+  longer invents a surface between two real surfaces.
+- Cross-view validation searches a 3x3 neighborhood around the subpixel projection and validates candidates with
+  a source-to-reference round trip. Its pixel envelope is derived from the configured relative depth tolerance and
+  the actual camera baseline, plus a 3-pixel numerical margin; a fixed 1.5-pixel gate was rejected because it
+  downgraded every Temple frame. Manifests now record confirmed, occluded, contradicted, unverifiable observations
+  and the final rejected-pixel count.
+- With regenerated Temple depths, 15 frames remain accepted and one validation-only. At 384 cells, two-camera TSDF
+  support plus weak-boundary cleanup records coverage `0.8345`, IoU `0.8230`, edge P90 `79.67 px`, and SSIM
+  `0.6031`, compared with the previous ultra baseline `0.8126` / `0.8036` / `80.10 px` / `0.6018`. A one-camera
+  experiment reached edge P90 `77.69 px` but raised boundary edges to `169744` and introduced interior sheets, so
+  it remains rejected.
+- The fresh UAV9 CUDA depth-only regression completed with status `ok`, 9/9 depth frames, eight accepted, one
+  validation-only, and zero rejected. The previous baseline had seven accepted and two validation-only. All nine
+  version-3 `SFTB` artifacts contain exactly 40000 SIFT keypoints, with no image above the configured cap.
+- Final depth artifacts now persist `raw_geometry_support_path`. Each nonzero pixel stores one reference
+  observation plus the number of source views that passed depth, neighborhood, and round-trip geometry checks;
+  this is separate from the PatchMatch source-count diagnostic. Older workspaces without this artifact retain the
+  normal two-camera TSDF rule.
+- Ultra TSDF may recover a one-frame voxel only when its originating depth pixel has at least four geometry
+  observations (reference plus three independently confirmed sources) and observation weight is at least `0.85`.
+  High quality keeps this path disabled. On the regenerated Temple A/B, the conservative four-observation path
+  changed coverage `0.84040` to `0.84286`, IoU `0.82478` to `0.82612`, edge P90 `80.41` to `80.34 px`, and SSIM
+  `0.60371` to `0.60582`; it recovered `239167` verified single-view TSDF samples while retaining one component.
+  A three-observation variant recovered more samples but increased open-boundary edges further, so it was not
+  selected as the default.
+- Two additional completeness experiments were rejected: geometry-filtered `validation_only` frames reduced
+  coverage/SSIM to `0.84053`/`0.60289`, and restoring geometry-confirmed pixels across the two-pixel TSDF mask
+  erosion increased open boundaries without improving edge P90. The remaining high P90 is therefore dominated
+  by view-dependent missing surface regions rather than a uniform one-pixel edge offset.
+
+## 2026-07-19 Post-Consistency Cross-View Repair and Quality Attribution
+
+- Orbital-object consistency filtering now repairs a rejected reference pixel only when three distinct source
+  views reproject into one depth cluster with at most 1.5% relative spread. Projection splats are limited to
+  0.8 pixels and recovered depths must agree with a nearby reference surface when local evidence exists. Real
+  doorway and window openings remain empty because no three-source depth cluster exists there.
+- Recovered pixels are marked separately and excluded from frame admission scoring. This prevents recovery from
+  promoting a baseline `validation_only` frame into fusion. Temple kept 13 accepted and three validation-only
+  frames while recovering 4,193 post-consistency pixels.
+- On the Temple highest-quality workflow, conservative post-filter recovery changed coverage from `0.95077` to
+  `0.95115`, IoU from `0.87530` to `0.88454`, edge P90 from `12.83` to `12.23 px`, and SSIM from `0.60935` to
+  `0.61084`. A two-source variant recovered 25,160 pixels but reduced coverage/SSIM and increased open
+  boundaries, so it is not used.
+- Ultra TSDF samples projected depth at subpixel locations with a discontinuity-aware 2x2 cluster. Neighbor
+  samples farther than 2% relative depth from the nearest surface mode are not averaged. This recovered invalid
+  nearest-neighbor samples while reducing the same-depth Temple boundary count by about 2.7%.
+- Dino quality masks preserve large dark architectural openings and only fill small internal noise holes. The old
+  mask incorrectly filled the Temple doorways, producing an artificial edge P90 near 80 px. With the corrected
+  mask, the selected Ultra Temple model records coverage `0.94975`, IoU `0.88763`, edge P90 `12.48 px`, and
+  SSIM `0.61545`. The strict IoU, edge, and SSIM gates remain open.
+- `model_quality_report.json` includes per-view depth coverage attribution and writes
+  `comparisons/<view>/missing_stage.png`. Missing foreground is separated into support-mask exclusion, invalid
+  depth, insufficient geometry support, and verified depth that did not become a rendered mesh surface.
+
+## 2026-07-20 Geometry Evidence and Orbital Free-Space Consensus
+
+- Final depth artifacts persist the contributing source-view bit mask, inverse-depth mean/spread, and the
+  cross-view repaired-pixel mask alongside geometry support. Legacy workspaces without these files still load
+  with empty evidence maps. Quality diagnostics now write bidirectional edge distance, P90-tail, source-count,
+  inverse-depth-spread, repair, and missing-stage images per validation view.
+- Two-source depth growth and local TSDF surface-patch recovery remain opt-in. On Temple, conservative two-source
+  growth found no eligible pixels, while tested TSDF patch variants increased boundary edges without materially
+  lowering edge P90. Forcing a collapsed Level 1 depth result to replace its stable Level 2 parent was also
+  rejected because it raised the highest-quality edge P90 to `25 px`.
+- Orbital-object TSDF now treats support-mask exterior as free space only after at least five reference cameras
+  agree. A single mask cannot carve geometry, and aerial or legacy workspaces keep carving disabled unless the
+  setting is explicitly enabled. The threshold is configurable with
+  `tsdfMinimumSupportMaskFreeSpaceViews`; `tsdfSupportMaskFreeSpaceCarving=false` remains an explicit override.
+- The final Temple default regression at resolution 320 records coverage `0.95419`, IoU `0.89445`, edge P90
+  `12.65 px`, and SSIM `0.61454`. The Ultra 384 all-view result records `0.95235` / `0.90611` / `12.50 px` /
+  `0.61587`, keeps one main component, and passes the IoU gate. Edge P90 and SSIM remain below the strict targets.

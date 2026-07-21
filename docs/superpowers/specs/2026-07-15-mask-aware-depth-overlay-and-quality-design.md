@@ -1,161 +1,241 @@
-# Mask-aware depth overlay and reconstruction quality design
+# Mask-aware depth overlay and direct depth-surface design
 
 ## Objective
 
-Improve PlaScan depth-map inspection and arbitrary-3D reconstruction quality in two connected steps:
+Improve PlaScan arbitrary-3D reconstruction and depth inspection through one shared persisted depth dataset:
 
-1. Add a Metashape-style depth overlay to the active photo view so users can inspect each depth result against the source texture and mask.
-2. Make project masks and the three-level depth pyramid authoritative inputs to MVS and mesh generation, reducing fragmented sheets, filled openings, edge erosion, and over-smoothed geometry.
+1. Inspect depth only as an overlay on the corresponding source photo; do not expose depth previews as standalone workspace resources.
+2. Make project masks, confidence, pyramid quality, and cross-view consistency authoritative inputs to production geometry.
+3. Generate the default arbitrary-3D model directly from depth frames with confidence-weighted TSDF fusion and Marching Cubes, without creating a dense point cloud as an intermediate product.
+4. Keep GUI, CLI, resume, quality reporting, and regression tools on the same depth metadata and raw artifacts.
 
-The first target datasets are the 16-image Middlebury temple project and the existing 9-image aerial subset. The change must not introduce a second GUI-only depth implementation; GUI and CLI must consume the same persisted depth artifacts and quality metadata.
+The first acceptance datasets are the 16-image Middlebury temple project and the existing 9-image aerial subset.
 
-## Current diagnosis
+## Confirmed diagnosis
 
-The PlaScan temple mesh preserves only a thick outer shell. Columns and openings are split into conflicting depth sheets, boundary regions are removed, and broad horizontal ridges remain. Poisson reconstruction amplifies these defects but is not their first cause.
+The current temple result has several independent problems:
 
-The current MVS path builds an intensity-derived content mask and applies it after depth estimation. Project photo masks are available through `ProjectIO`, but are not explicit per-view inputs to `DepthMapGenerator`. The automatic content mask also uses the opposite semantic convention from project masks:
+- The model workflow asks for a surface reconstruction but `buildMeshFromDepthMaps()` accepts a visual hull first and returns it, so the selected production mode is bypassed.
+- Sending the current fused cloud to Poisson produces fragmented geometry. Poisson amplifies conflicting depth sheets but is not the first cause.
+- The configured MVS source pool is six views, while current frames commonly use only two or three verified sources. This weakens occlusion and cross-view checks.
+- The depth overlay is already partially implemented, but the feature overlay has Z value 1000 while the depth pixmap has Z value 10. Enabling depth inspection therefore leaves blue feature crosses above the colorized depth.
+- The Temple archive contains 16 completed `depth_map_results`, but its reconstruction report predates MVS. The streamed fusion completion path does not refresh that report.
+- Depth artifacts store coverage as `depth_quality.valid_coverage`, while the reconstruction report reads a top-level `valid_ratio`. Even a refreshed report can therefore show a false `0.0%`.
 
-- Project photo mask: `255 = excluded`, `0 = retained foreground`.
-- MVS valid mask: `255 = valid`, `0 = invalid`.
-
-The project already persists final and intermediate pyramid artifacts (`raw_depth_path`, `raw_confidence_path`, `valid_mask_path`, previews, and `pyramid_levels`). These records are sufficient for a metadata-driven overlay without scanning output directories.
+These are workflow, rendering-state, and metadata-schema defects. They must be corrected separately from later numerical depth-quality tuning.
 
 ## User experience
 
-### Toolbar
+### Photo depth inspection
 
-Add a checkable **显示深度图** shortcut to the image-view toolbar. It is off by default. Once enabled, changing photos keeps the mode enabled and automatically loads the corresponding depth result.
+The existing checkable **显示深度图** action remains the only interactive depth viewer. It is off by default. When enabled, changing photos keeps the mode enabled and resolves only the depth record whose normalized `ref_image` exactly matches the active photo.
 
-The adjacent menu contains:
+The adjacent menu exposes:
 
-- 所有级别
+- 最终结果
 - 级别 1
 - 级别 2
 - 级别 3
 - 显示强度
 
-`所有级别` displays the final accepted depth result. Level 1/2/3 display their persisted artifacts. `显示强度` converts the retained source-image area to grayscale before applying the depth colors; it does not display confidence. Confidence remains a separate future mode.
+The final result means the accepted production depth recorded by `selected_level`; it is not an independently guessed file. Level actions display only their own persisted artifacts. `显示强度` converts the retained source-image region to grayscale before applying depth colors; it does not substitute confidence for depth.
 
-The shortcut is disabled when the active photo has no matching depth record. It must never fall back to another photo's result. Missing or stale artifacts produce a concise log entry and leave the original image visible.
+If the active photo has no matching artifact, the action is unavailable for that photo and the original photo remains visible. There is no fallback to another photo or another level.
 
-### Rendering
+### Clean overlay state
 
-Depth is drawn over the current photo, not in a separate tab. Invalid depth and excluded mask pixels are fully transparent. The depth overlay sits above the base image and below feature points, residuals, markers, and editing handles.
+Depth inspection temporarily suppresses feature points, match residuals, and other automatic feature diagnostics that would obscure depth colors. Their user-selected toggle states are preserved and restored when depth inspection is disabled. An asynchronous feature callback must not re-add those items while depth inspection is active.
 
-Depth color normalization uses robust percentiles from valid finite depth values (P2 to P98). This prevents a few outliers from flattening visible depth contrast. The overlay preserves the source image's pixel coordinate system, rotation, zoom, and pan.
+The authoritative mask boundary remains visible because it explains depth support and edge clipping. User annotations and active editing handles keep their existing behavior.
 
-## Components
+Depth is drawn over the current photo in the same pixel coordinate system. Invalid depth and excluded pixels are transparent. Robust P2-to-P98 normalization is computed from finite, positive, valid pixels only. Rotation, zoom, pan, and photo switching must not break alignment.
+
+### Workspace behavior
+
+`DataTreeWidget` no longer creates a depth-map group or individual depth-preview items for either new or existing projects. The dashboard may show depth progress and aggregate quality, but not clickable standalone depth resources.
+
+This is a presentation-only change. `depth_map_results`, raw depth, confidence, masks, pyramid artifacts, previews, invalidation metadata, and cleanup ownership remain persisted. Preview PNG files remain available to logs, tests, and regression tools but are not treated as GUI documents.
+
+## Overlay component responsibilities
 
 ### DepthOverlayController
 
-Add a GUI controller responsible for:
+Retain the existing controller and complete its responsibilities:
 
-- Resolving a depth record by normalized `ref_image` path.
-- Selecting final or Level 1/2/3 artifact metadata.
-- Asynchronously loading raw depth and valid mask.
-- Producing a transparent colorized `QImage` using robust normalization.
-- Optionally creating a masked grayscale base image for intensity mode.
-- Caching rendered overlays by image path, depth level, intensity mode, artifact modification time, and display parameters.
-- Discarding stale asynchronous results when the active image or project changes.
-
-The controller reads project metadata only. Directory scanning is not a primary state source.
+- Resolve records by normalized exact `ref_image` match.
+- Resolve final or Level 1/2/3 artifacts from metadata without directory scanning as primary state.
+- Load raw depth and valid mask asynchronously.
+- Produce a transparent colorized `QImage` with robust normalization.
+- Optionally produce the masked grayscale source image for intensity mode.
+- Cache by project, image, level, intensity mode, artifact modification time, and display parameters.
+- Reject stale results after project, photo, artifact, or mode changes.
+- Emit explicit unavailable and load-error states without replacing the base photo.
 
 ### CanvasWidget and LayerRenderer
 
-`CanvasWidget` owns display state and delegates artifact loading to `DepthOverlayController`. It exposes slots for enabled state, selected level, and intensity mode, and emits availability/state signals for toolbar synchronization.
+`CanvasWidget` owns depth-inspection state and the temporary suppression state for conflicting diagnostics. `LayerRenderer` continues to own one dedicated depth pixmap item. Enabling or clearing it must not destroy feature data or mutate persistent feature-visibility preferences.
 
-`LayerRenderer` owns one dedicated depth pixmap item. It supports replacing, hiding, and clearing that item without disturbing the base image or feature layers.
+### MainMenu, MainWindow, and DataTreeWidget
 
-### MainMenu and MainWindow
+`MainMenu` and `MainWindow` keep the existing action wiring, synchronize availability with the active image, and preserve the enabled mode during photo changes. `DataTreeWidget` ignores `depth_map_results` only when materializing resource nodes; metadata normalization and generated-data cleanup continue to recognize them.
 
-`MainMenu` creates the checkable shortcut and exclusive level actions. `MainWindow` connects them to `CanvasWidget`, updates enabled state from the current image and project metadata, and preserves the user's overlay mode while switching photos.
+## Mask-aware MVS inputs
 
-## Mask-aware MVS
-
-Extend the MVS view/config data so every reference view can carry an optional project photo mask. Before PatchMatch, convert project mask semantics to the internal valid-mask convention. Resize only with nearest-neighbor interpolation.
+Every MVS reference view may carry an optional project photo mask. Project masks use `255 = excluded` and `0 = retained`; MVS valid masks use the opposite convention. Convert explicitly and resize only with nearest-neighbor interpolation.
 
 For every pyramid level:
 
-1. Build the level mask from the authoritative project mask when available.
-2. Otherwise use the existing intensity-derived content mask.
-3. Prevent propagation and random search from accepting excluded reference pixels.
-4. Apply the same valid region to depth, confidence, support count, and uncertainty.
-5. Re-apply the full-resolution authoritative mask after unrectification and before persistence.
+1. Use the authoritative project mask when available; otherwise record fallback to the automatic content mask.
+2. Prevent excluded reference pixels from entering propagation, random search, confidence, support, or uncertainty.
+3. Apply the same valid region to depth and confidence artifacts.
+4. Re-apply the full-resolution authoritative mask after unrectification and before persistence.
+5. Preserve intentional holes. Cleanup may remove isolated retained islands but must not close openings such as the temple doorway.
 
-Mask edges must not be morphologically expanded into excluded background. Any optional cleanup may remove isolated retained islands but must not close intentional openings such as the temple doorway.
+The source-view planner should attempt the configured source count. Verified geometry remains preferred, but a frame that receives fewer sources must record the shortage and source provenance so quality gates can distinguish a genuinely well-supported frame from a weak one.
 
-## Three-level depth responsibilities
+## Depth pyramid and frame acceptance
 
-- **Level 3, global structure:** coarse search and stable depth range. Its result is a prior, not direct production geometry.
-- **Level 2, geometric body:** multi-view reprojection consistency and minimum support produce stable main surfaces.
-- **Level 1, edge and texture refinement:** narrow search around the previous prior, guided by source-image edges and constrained by the authoritative mask.
+- **Level 3:** establishes global depth range and coarse structure.
+- **Level 2:** establishes the main surface with multi-view reprojection checks.
+- **Level 1:** refines edges and texture transitions around the inherited prior.
+- **Final accepted depth:** comes from the finest successful level; a coarser fallback is allowed only when explicitly recorded.
 
-The final accepted depth must come from the finest successful level. A coarser fallback is allowed only when recorded explicitly in metadata and quality reports.
-
-## Fusion and mesh gating
-
-Before a pixel contributes to production geometry, require:
+Before a frame is eligible for production surface fusion, require:
 
 - finite positive depth;
-- valid authoritative mask;
-- minimum source-view support;
-- bounded reprojection/depth disagreement;
-- locally consistent normal or depth gradient.
+- authoritative valid mask;
+- finite confidence;
+- sufficient source-view support for the scene profile;
+- bounded cross-view depth or reprojection disagreement;
+- an accepted or explicitly degraded quality decision.
 
-Reject isolated sheets and mutually conflicting front/back surfaces before normal estimation. Arbitrary-3D mesh generation consumes only the gated fused depth points with finite oriented normals. Sparse tie points and coarse pyramid levels do not silently enter a production mesh. If insufficient oriented points remain, return a diagnostic containing per-frame rejection counts instead of only a Poisson failure.
+Frame rejection and degraded acceptance must be visible in metadata and model diagnostics. A rejected frame may still be inspected in the GUI but must not silently contribute to the production model.
 
-## Metadata and quality reporting
+## Direct TSDF surface generation
 
-Each depth result records:
+### Inputs and bounds
 
-- reference image and selected source images;
-- authoritative mask source and coverage;
-- each pyramid level's paths, dimensions, valid coverage, mean confidence, support statistics, and elapsed time;
-- final accepted level and any fallback reason;
-- depth discontinuity ratio and rejection counts.
+The default arbitrary-3D model input is a collection of accepted depth frames containing:
 
-Mesh reports include input frame count, accepted points, rejected points by reason, finite oriented normal count, and reconstruction mode.
+- reference camera and image dimensions;
+- raw metric depth;
+- confidence;
+- depth-valid mask, which marks pixels that have a finite accepted depth;
+- authoritative support mask, which marks the retained project/content silhouette independently of depth validity;
+- selected source views and quality metadata;
+- source image for optional vertex color sampling.
 
-## Concurrency and memory
+Persisted depth values keep the existing `Camera::projectWorldPointWithDepth()` / `Camera::unprojectPixel()` convention, including `depthAxisFlipped()`. They are camera-axis depth, not Euclidean ray length. Bounds estimation, voxel projection, cross-view comparison, and synthetic tests must use the same camera API instead of re-deriving a second convention.
 
-Overlay loading uses the existing GUI task-runner/QFuture pattern with `QPointer` guards. It never blocks the GUI thread. The LRU cache is bounded by byte size and invalidated by artifact modification time.
+Volume bounds are estimated from robustly sampled, unprojected valid depth observations and expanded by a small truncation margin. A minimum number of accepted frames and spatial samples is required. Sparse tie points may be used only for diagnostic bound validation; they are not surface samples and cannot fill missing geometry.
 
-MVS remains CUDA-accelerated where supported. Mask decoding and overlay colorization use CPU workers because disk IO and host-to-device transfer would dominate this small interactive task.
+### Confidence-weighted projective fusion
+
+Use a CPU/OpenMP projective TSDF implementation first. For each voxel and eligible frame:
+
+1. Project the voxel into the reference camera.
+2. Reject pixels outside the image, authoritative mask, valid depth, or confidence threshold.
+3. Compare voxel camera-space depth with the observed depth and compute a truncated signed distance.
+4. Weight the update by depth confidence, source support, cross-view consistency, and viewing angle.
+5. Integrate color separately from geometry so missing texture never changes occupancy.
+
+The production default requires at least three accepted input frames. A surface voxel must receive consistent weighted observations from at least two distinct cameras before extraction; these defaults remain configurable by scene profile and are recorded in the model report.
+
+The two masks must never be conflated. A zero in the depth-valid mask can mean missing or low-confidence depth and therefore causes no TSDF update. Only a zero in the separately persisted authoritative support mask is an exterior observation that may provide an empty-space constraint inside the reconstruction bounds. These exterior rays must carve unsupported volume without closing retained holes. Legacy frames without a separate support mask receive no silhouette carving rather than treating all invalid depth as free space. Conflicting front/back observations are resolved through signed-distance agreement and minimum accumulated weight, not by averaging exported points.
+
+### Resolution and memory
+
+`meshResolution = 320` means 320 voxels on the longest volume axis, with the other axes derived from physical aspect ratio. Before allocating the TSDF, weight, and optional color volumes, compute and report the required memory. If memory is insufficient, fail with the requested dimensions and byte estimate; do not silently lower resolution or change reconstruction mode.
+
+The first implementation is deterministic CPU/OpenMP. Its interface must keep volume allocation and integration separable so CUDA acceleration can be added later without changing project metadata or model semantics.
+
+### Surface extraction and cleanup
+
+Extract the zero iso-surface with Marching Cubes only where accumulated weight passes the production threshold. Then:
+
+- remove non-finite and degenerate vertices/faces;
+- remove small disconnected components using absolute and largest-component-relative thresholds;
+- preserve intentional openings rather than applying blanket hole filling;
+- orient and normalize finite vertex normals;
+- assign colors from confidence-weighted photo samples when requested.
+
+The output model records `reconstruction_mode = depth_tsdf`, input/accepted frame counts, volume bounds and dimensions, voxel/truncation sizes, integration rejection counts, occupied voxel count, extracted vertices/faces, component statistics, and color coverage.
+
+### Explicit model modes
+
+`depth_tsdf` is the default arbitrary-3D path. It does not emit or consume a dense point cloud. Visual hull and Poisson remain explicit legacy or diagnostic modes only. Failure of TSDF validation, allocation, integration, or extraction returns an actionable error; it must never silently fall back to visual hull, Poisson, sparse points, or a coarser depth level.
+
+## Metadata and reconstruction quality
+
+Depth coverage uses `valid_coverage` as the canonical name. New depth records expose a top-level value and retain the detailed `depth_quality.valid_coverage`. Readers accept, in order:
+
+1. top-level `valid_coverage`;
+2. nested `depth_quality.valid_coverage`;
+3. legacy top-level `valid_ratio`;
+4. a computed ratio from `valid_pixel_count / (grid_width * grid_height)` when dimensions are valid.
+
+No available measurement is represented as unavailable, not numerical zero. The dashboard displays `—` and emits no low-coverage warning until at least one completed frame has a valid measurement.
+
+The reconstruction quality report is refreshed after the final depth artifact of a successful batch is committed, before any optional fusion or model transition. It is refreshed again after model metadata is registered. Streamed fusion and direct-TSDF completion paths use the same refresh contract.
+
+The report records depth frame count, completed/accepted/rejected counts, mean valid coverage, mean confidence, mean source count, accepted fallback levels, and model statistics. Registration counts and unregistered image lists must be derived from one consistent source.
+
+## Concurrency and state changes
+
+Overlay loading uses the existing GUI worker/QFuture pattern with `QPointer` and request-generation guards. It never blocks the GUI thread.
+
+TSDF construction runs outside the GUI thread, reports bounded progress, observes cancellation between integration batches, and publishes model metadata only after the model file is completely written. Cancellation leaves persisted depth artifacts intact and does not register a partial model.
+
+Regenerating or invalidating depth clears overlay cache entries and invalidates dependent TSDF model records through existing project generation identifiers. Hiding depth nodes must not change cleanup or dependency behavior.
 
 ## Error handling
 
-- Missing depth metadata: disable the shortcut for the active photo.
-- Missing raw depth but valid preview: report that level as unavailable rather than silently using a different level.
-- Corrupt raw artifact or size mismatch: log exact paths and expected/actual dimensions; keep the original image visible.
-- Missing project mask: record fallback to automatic content mask.
-- Stale asynchronous result: discard without changing the current view.
+- Missing matching depth record: keep the original photo and mark overlay unavailable.
+- Missing requested raw level: report that level unavailable; never substitute another level.
+- Corrupt depth, confidence, mask, or camera dimensions: include exact paths and expected/actual dimensions.
+- Stale asynchronous overlay result: discard without changing the current view.
+- Insufficient accepted TSDF frames or samples: report frame-level rejection counts.
+- Invalid bounds or non-finite camera transform: identify the frame and stop before allocation.
+- Insufficient memory: report volume dimensions, requested resolution, and byte estimate.
+- Empty or fragmented extracted surface: report occupied voxel, weight, vertex, face, and component counts; do not invoke another model mode.
 
 ## Verification
 
 ### Unit and contract tests
 
-- Resolve depth records by normalized reference-image path without cross-image fallback.
-- Select final and Level 1/2/3 artifacts from metadata.
-- Convert project mask semantics correctly and preserve holes.
-- Normalize depth using only finite valid pixels.
-- Produce transparent excluded/invalid pixels and stable overlay dimensions.
-- Keep overlay Z-order below feature and marker layers.
-- Reject stale asynchronous results.
+- Exact depth-record matching with no cross-photo fallback.
+- Final and Level 1/2/3 selection from metadata.
+- Stale-result rejection and restoration of temporarily suppressed feature layers.
+- No standalone depth nodes while metadata remains available to overlay and cleanup.
+- Correct project-mask conversion and hole preservation at every level.
+- Canonical and legacy coverage schemas produce the same report value; missing coverage remains unavailable.
+- Successful depth completion refreshes quality before the model transition.
+- Synthetic TSDF planes and closed shapes produce correct zero surfaces and finite normals.
+- Conflicting depth sheets, exterior mask rays, weak support, and disconnected islands are rejected while intentional openings remain open.
+- Insufficient memory and insufficient input fail without fallback.
+- CLI model contracts select `depth_tsdf` without requiring a dense-cloud path.
 
-### Integration tests
+All MVS-specific tests remain under `src/core/mvs/tests`.
 
-- Temple: generate all three depth levels, verify mask-constrained coverage, inspect representative front/side views, and build a mesh with finite oriented normals.
-- Nine-image aerial subset: verify that mask fallback does not remove valid ground and that depth/mesh behavior does not regress.
-- GUI: enable the overlay, switch photos, switch levels and intensity mode, zoom/rotate, regenerate depth, and confirm non-blocking refresh.
-- CLI/GUI parity: both paths consume the same depth records and produce the same mesh input statistics.
+### Build and focused tests
 
-### Success criteria
+Use only `E:\code\plascan\build\windows-vcpkg-cuda-release`. Build and run at least:
 
-- Temple depth boundaries follow the project mask and preserve intentional openings.
-- Level 1 contains visibly finer geometric transitions than Levels 2 and 3.
-- The final temple mesh retains columns, doorway, roof, and base as connected recognizable structures without the current broad layered ridges.
-- Overlay switching remains responsive and never displays a depth map from another image.
+- `test_aerial_triangulation_workflow`
+- `test_mvs_depth_pyramid`
+- `test_mvs_types`
+- `test_mvs_pipeline`
+- `test_mvs_rectifier_unit`
+- `test_cli_contracts`
+- affected GUI/project-quality and mesh tests
+
+### End-to-end regression
+
+- Temple: inspect representative final/L1/L2/L3 overlays, confirm clean overlay state, generate a `depth_tsdf` model, and run the image/model quality report.
+- Temple initial acceptance floor: coverage at least 0.75, IoU at least 0.70, edge P90 below 65 pixels, SSIM at least 0.20, largest connected component ratio at least 0.90, and recognizable roof, columns, doorway, and base without broad layered ridges.
+- Nine-image UAV subset: rerun the full workflow, confirm each image has no more than 40,000 SIFT keypoints, and verify terrain depth/model quality does not regress.
+- Reports must identify the actual `depth_tsdf` mode and must not claim a silent visual-hull or Poisson fallback.
 
 ## Scope boundaries
 
-This work does not add GPU shader rendering, confidence visualization, texture-atlas generation, or manual mask editing. Those may be added after depth correctness and overlay diagnostics are validated.
+This work does not add a standalone depth workspace, GPU shader colorization, confidence visualization, texture-atlas generation, or CUDA TSDF integration. Dense-cloud generation remains available as a separately requested product, but it is not part of the default depth-to-model path.

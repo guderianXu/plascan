@@ -1,6 +1,6 @@
 #pragma once
 
-#include "BaInputBuilder.h"
+#include "project/BaInputBuilder.h"
 #include "BundleAdjustService.h"
 
 #include <QJsonObject>

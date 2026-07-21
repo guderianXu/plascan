@@ -2,13 +2,14 @@
 
 #include "ProjectManager.h"
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectCameraImportService.h"
 #include "ProjectCameraInitialization.h"
 #include "ProjectSfmWorkflow.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
-#include "AerialTriangulationService.h"
+#include "workflow/AerialTriangulationWorkflow.h"
+#include "AlgorithmCompat.h"
 
 #include <QDir>
 #include <QFileDialog>
@@ -32,49 +33,6 @@ using xjw::gui::project::InitPoseFinalizeResult;
 using xjw::gui::project::makeInitializedCameraMeta;
 using xjw::gui::project::resolveInitTargets;
 using xjw::gui::project::withPreparedCameras;
-
-namespace
-{
-
-QString featureAlgorithmFromSuffix(QString suffix)
-{
-    suffix = suffix.trimmed().toLower();
-    if (!suffix.startsWith(QLatin1Char('.')))
-    {
-        suffix.prepend(QLatin1Char('.'));
-    }
-    if (suffix == QStringLiteral(".dsk"))
-    {
-        return QStringLiteral("disk");
-    }
-    if (suffix == QStringLiteral(".alk"))
-    {
-        return QStringLiteral("aliked");
-    }
-    if (suffix == QStringLiteral(".sp"))
-    {
-        return QStringLiteral("superpoint");
-    }
-    if (suffix == QStringLiteral(".sift"))
-    {
-        return QStringLiteral("sift");
-    }
-    if (suffix == QStringLiteral(".orb"))
-    {
-        return QStringLiteral("orb");
-    }
-    if (suffix == QStringLiteral(".akz"))
-    {
-        return QStringLiteral("akaze");
-    }
-    if (suffix == QStringLiteral(".dedode"))
-    {
-        return QStringLiteral("dedode");
-    }
-    return QString();
-}
-
-} // namespace
 
 ProjectCameraSetupManager::ProjectCameraSetupManager(ProjectManager *owner,
                                                      ProjectData *projectData,
@@ -573,46 +531,52 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
     }
 
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     const QString timestamp = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
     const QString outputDir = QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation/init_pose_%1").arg(timestamp));
     QDir().mkpath(outputDir);
 
-    xjw::gui::AerialTriangulationServiceOptions opts;
-    opts.images = allImages;
-    opts.plascanPath = projectPath;
-    opts.projectMeta = withPreparedCameras(fullMeta, preparedCameras, overwriteExisting);
-    opts.outputDir = outputDir;
-    opts.quality = settings.value(QStringLiteral("quality")).toInt(1);
-    opts.threads = settings.value(QStringLiteral("threads")).toInt(8);
+    xjw::aerial_triangulation::AerialTriangulationOptions workflowOptions;
+    workflowOptions.images = allImages;
+    workflowOptions.projectPath = projectPath;
+    workflowOptions.projectMeta = withPreparedCameras(fullMeta, preparedCameras, overwriteExisting);
+    workflowOptions.outputDir = outputDir;
+    const int qualityLevel = settings.value(QStringLiteral("quality")).toInt(1);
+    workflowOptions.quality = qualityLevel <= 0
+        ? QStringLiteral("low")
+        : (qualityLevel == 1 ? QStringLiteral("medium")
+                             : (qualityLevel == 2 ? QStringLiteral("high")
+                                                  : QStringLiteral("highest")));
+    workflowOptions.threads = settings.value(QStringLiteral("threads")).toInt(8);
     const QString requestedFeatureSuffix =
         settings.value(QStringLiteral("feature_suffix")).toString().trimmed().toLower();
     QString requestedFeatureAlgorithm =
         settings.value(QStringLiteral("feature_algorithm")).toString().trimmed().toLower();
     if (requestedFeatureAlgorithm.isEmpty())
     {
-        requestedFeatureAlgorithm = featureAlgorithmFromSuffix(requestedFeatureSuffix);
+        requestedFeatureAlgorithm = xjw::feature_match::featureAlgorithmForSuffix(requestedFeatureSuffix);
     }
-    opts.featureAlgorithm = requestedFeatureAlgorithm.isEmpty()
+    workflowOptions.featureAlgorithm = requestedFeatureAlgorithm.isEmpty()
         ? QStringLiteral("disk")
         : requestedFeatureAlgorithm;
-    opts.matchAlgorithm = settings.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
-    if (opts.matchAlgorithm.isEmpty())
+    workflowOptions.matchAlgorithm = settings.value(QStringLiteral("match_algorithm")).toString().trimmed().toLower();
+    if (workflowOptions.matchAlgorithm.isEmpty())
     {
-        opts.matchAlgorithm = QStringLiteral("lightglue");
+        workflowOptions.matchAlgorithm = QStringLiteral("lightglue");
     }
-    opts.autoGenerateMissingMatches = false;
+    workflowOptions.resetAlignment = false;
+    workflowOptions.autoGenerateMissingMatches = false;
 
     LOG_INFO(QStringLiteral("初始化相机位姿: 使用匹配链路 %1 + %2")
-        .arg(opts.featureAlgorithm.toUpper(), opts.matchAlgorithm));
+        .arg(workflowOptions.featureAlgorithm.toUpper(), workflowOptions.matchAlgorithm));
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     _owner->setAtCancelFlag(cancelFlag);
-    opts.cancelFlag = cancelFlag;
+    workflowOptions.cancelFlag = cancelFlag;
 
     QPointer<ProjectCameraSetupManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
-    opts.progressFn = [self, ownerGuard, projectPath](const QString &stage, int pct)
+    workflowOptions.progressFn = [self, ownerGuard, projectPath](const QString &stage, int pct)
     {
         if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
         {
@@ -628,7 +592,7 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
         });
     };
 
-    opts.pairMatchedFn = [self, ownerGuard, projectPath](const QString &img0, const QString &img1,
+    workflowOptions.pairMatchedFn = [self, ownerGuard, projectPath](const QString &img0, const QString &img1,
                                                          const QString &matchPath, int numMatches)
     {
         if (!self || !ownerGuard || ownerGuard->currentProjectPath() != projectPath)
@@ -661,9 +625,9 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
 
     xjw::gui::tasks::runGuarded(
         this,
-        [opts]() mutable
+        [workflowOptions]() mutable
         {
-            return xjw::gui::AerialTriangulationService::run(opts);
+            return xjw::aerial_triangulation::AerialTriangulationWorkflow::run(workflowOptions);
         },
         [outputDir,
          allImages,
@@ -676,13 +640,16 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
          exifCount,
          fallbackCount,
          ownerGuard,
-         projectPath](ProjectCameraSetupManager *manager, xjw::gui::AerialTriangulationServiceResult result) mutable
+         projectPath](ProjectCameraSetupManager *manager,
+                      xjw::aerial_triangulation::AerialTriangulationResult workflowResult) mutable
         {
             if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {
                 return;
             }
 
+            const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
+                workflowResult.reconstructionResult;
             if (!result.success)
             {
                 emit manager->atProgressFinished(false);
@@ -693,13 +660,17 @@ bool ProjectCameraSetupManager::initializeCameraPosesWithSFM(const QJsonObject &
                 return;
             }
 
-            for (const auto &sp : result.newFeatureFiles)
+            for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
+                 workflowResult.tiePointResult.features)
             {
-                manager->_owner->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
+                manager->_owner->appendIpfindResult(feature.imagePath,
+                                                     feature.featurePath,
+                                                     feature.settings);
             }
-            for (const auto &mr : result.newMatchFiles)
+            for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
+                 workflowResult.tiePointResult.matches)
             {
-                manager->_owner->appendIpmatchResult(QStringList{mr.matchPath}, mr.settings);
+                manager->_owner->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
             }
 
             const InitPoseFinalizeResult finalizeResult = finalizeInitializedCameraPoses(manager->_projectData,

@@ -1,8 +1,8 @@
 #include "TriangulationService.h"
 
-#include "BaInputBuilder.h"
+#include "project/BaInputBuilder.h"
 #include "project/SparseResultQuality.h"
-#include "triangulation/InitialSparsePointCloudTriangulator.h"
+#include "triangulation/InitialSparsePointFilter.h"
 #include "io/PathIO.h"
 
 #include <plapoint/core/point_cloud.h>
@@ -81,9 +81,9 @@ TriangulationServiceResult TriangulationService::run(const QJsonObject &meta,
     coreOptions.minTrackLength = options.minTrackLength;
 
     const xjw::InitialSparseTriangulationResult coreResult =
-        xjw::InitialSparsePointCloudFilter::triangulate(buildResult.cameras,
-                                                        buildResult.tracks,
-                                                        coreOptions);
+        xjw::InitialSparsePointFilter::filter(buildResult.cameras,
+                                              buildResult.tracks,
+                                              coreOptions);
 
     result.candidateTrackCount = coreResult.candidateTrackCount;
     result.rejectedByObservationCount = coreResult.rejectedByObservationCount;

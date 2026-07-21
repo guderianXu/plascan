@@ -1,69 +1,53 @@
 cmake_minimum_required(VERSION 3.16)
 project(plascan_sfm LANGUAGES CXX)
 
-# ============================================================
-# SfM 模块（增量式运动恢复结构）
-# 依赖：plascan_camera, plascan_intersection, plascan_bundle_adjust
-# OpenCV/Qt6 由根 CMakeLists.txt 统一查找
-# ============================================================
-
-set(SFM_SOURCES
-    # ---- 通用类型 ----
-
-    # ---- 图结构 ----
+set(SFM_CORE_SOURCES
+    geometry/ProjectionGeometry.cpp
+    geometry/TriangulationQuality.cpp
+    geometry/OpenCvCameraAdapter.cpp
     graph/CorrespondenceGraph.cpp
     graph/ObservationNetworkBuilder.cpp
     tracks/CorrespondenceTrackThinner.cpp
     tracks/MultiViewTrackBuilder.cpp
-
-    # ---- 重建状态 ----
     reconstruction/SfmReconstruction.cpp
-
-    # ---- 质量报告 ----
-    quality/SfmQualityReport.cpp
-
-    # ---- 位姿估计 ----
     pose/PnpSolver.cpp
-
-    # ---- 三角化 ----
     triangulation/Triangulator.cpp
-    triangulation/InitialSparsePointCloudTriangulator.cpp
-
-    # ---- 流水线 ----
+    triangulation/InitialSparsePointFilter.cpp
     pipeline/IncrementalSfm.cpp
-    BaInputBuilder.cpp
+    pipeline/IncrementalSfmDetail.cpp
+    pipeline/InitialPairInitializer.cpp
+    pipeline/ImageRegistrationEngine.cpp
+    pipeline/KnownPoseReconstructor.cpp
+    pipeline/SfmBundleAdjustCoordinator.cpp
     ReferenceTerrainPrior.cpp
-    TriangulationService.cpp
-
-    # ---- 点云过滤 ----
-    filtering/SfmPointCloudFilter.cpp
-    filtering/SparsePointCloudWorkspace.cpp
-    filtering/SparsePointCloudProcessor.cpp
 )
 
-set(SFM_HEADERS
+set(SFM_CORE_HEADERS
+    common/DisjointSet.h
     common/SfmTypes.h
+    geometry/ProjectionGeometry.h
+    geometry/TriangulationQuality.h
+    geometry/OpenCvCameraAdapter.h
     graph/CorrespondenceGraph.h
     graph/ObservationNetworkBuilder.h
     tracks/CorrespondenceTrackThinner.h
     tracks/MultiViewTrackBuilder.h
     reconstruction/SfmReconstruction.h
-    quality/SfmQualityReport.h
     pose/PnpSolver.h
     triangulation/Triangulator.h
-    triangulation/InitialSparsePointCloudTriangulator.h
+    triangulation/InitialSparsePointFilter.h
     pipeline/IncrementalSfm.h
-    BaInputBuilder.h
+    pipeline/IncrementalSfmDetail.h
+    pipeline/InitialPairInitializer.h
+    pipeline/ImageRegistrationEngine.h
+    pipeline/KnownPoseReconstructor.h
+    pipeline/SfmBundleAdjustCoordinator.h
     ReferenceTerrainPrior.h
-    TriangulationService.h
-    filtering/SfmPointCloudFilter.h
-    filtering/SparsePointCloudWorkspace.h
-    filtering/SparsePointCloudProcessor.h
 )
 
-add_library(sfm STATIC ${SFM_SOURCES} ${SFM_HEADERS})
+add_library(sfm_core STATIC ${SFM_CORE_SOURCES} ${SFM_CORE_HEADERS})
 
-target_include_directories(sfm PUBLIC
+target_include_directories(sfm_core PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}
     ${CMAKE_CURRENT_SOURCE_DIR}/../camera
     ${CMAKE_CURRENT_SOURCE_DIR}/../intersection
@@ -72,21 +56,94 @@ target_include_directories(sfm PUBLIC
     ${CMAKE_SOURCE_DIR}/src/common
 )
 
-target_link_libraries(sfm
+target_link_libraries(sfm_core
     PUBLIC
         camera
-        control_points
-        plapoint::plapoint
-    PRIVATE
         intersection
         bundle_adjust
+        control_network
+    PRIVATE
+        plapoint::plapoint
         plamatrix::plamatrix
+        plascan_common_log
+        ${OpenCV_LIBS}
+)
+
+target_compile_features(sfm_core PUBLIC cxx_std_17)
+
+set(SFM_POSTPROCESS_SOURCES
+    quality/SfmQualityMetrics.cpp
+    filtering/SparsePointCloudWorkspace.cpp
+    filtering/SparsePointCloudProcessor.cpp
+)
+
+set(SFM_POSTPROCESS_HEADERS
+    quality/SfmQualityMetrics.h
+    quality/SfmError.h
+    filtering/SparsePointCloudWorkspace.h
+    filtering/SparsePointCloudProcessor.h
+)
+
+add_library(sfm_postprocess STATIC ${SFM_POSTPROCESS_SOURCES} ${SFM_POSTPROCESS_HEADERS})
+
+target_include_directories(sfm_postprocess PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+)
+
+target_link_libraries(sfm_postprocess
+    PUBLIC
+        sfm_core
+        plapoint::plapoint
+)
+
+target_compile_features(sfm_postprocess PUBLIC cxx_std_17)
+
+set(SFM_PROJECT_SOURCES
+    project/BaInputBuilder.cpp
+    project/ProjectMatchInputReader.cpp
+    project/BaTrackBuilder.cpp
+    project/SurveyControlBaAdapter.cpp
+    project/MarkerBaAdapter.cpp
+    project/SfmQualityJsonSerializer.cpp
+    TriangulationService.cpp
+)
+
+set(SFM_PROJECT_HEADERS
+    project/BaInputBuilder.h
+    project/ProjectMatchInputReader.h
+    project/BaTrackBuilder.h
+    project/SurveyControlBaAdapter.h
+    project/MarkerBaAdapter.h
+    project/SfmQualityJsonSerializer.h
+    TriangulationService.h
+)
+
+add_library(sfm_project STATIC ${SFM_PROJECT_SOURCES} ${SFM_PROJECT_HEADERS})
+
+target_include_directories(sfm_project PUBLIC
+    ${CMAKE_CURRENT_SOURCE_DIR}
+    ${CMAKE_SOURCE_DIR}/src/common
+)
+
+target_link_libraries(sfm_project
+    PUBLIC
+        sfm_core
+        sfm_postprocess
+        control_points
         Qt6::Core
         Qt6::Gui
+    PRIVATE
         plascan_common_log
         plascan_common_io
         plascan_common_project
         ${OpenCV_LIBS}
 )
 
-target_compile_features(sfm PUBLIC cxx_std_17)
+target_compile_features(sfm_project PUBLIC cxx_std_17)
+
+add_library(sfm INTERFACE)
+target_link_libraries(sfm INTERFACE sfm_core sfm_postprocess sfm_project)
+
+if(BUILD_TESTS)
+    add_subdirectory(test)
+endif()

@@ -117,17 +117,6 @@
       <string>窗口</string>
      </property>
     </widget>
-    <addaction name="actionZoomIn"/>
-    <addaction name="actionZoomOut"/>
-    <addaction name="actionResetView"/>
-    <addaction name="separator"/>
-    <addaction name="actionToggleGizmo"/>
-    <addaction name="actionToggleCameras"/>
-    <addaction name="actionToggleHenanUniversityBrand"/>
-    <addaction name="separator"/>
-    <addaction name="actionFeatureVisualization"/>
-    <addaction name="separator"/>
-    <addaction name="menuWindow"/>
    </widget>
    <widget class="QMenu" name="menuWorkflow">
     <property name="title">
@@ -176,17 +165,8 @@
      <addaction name="actionFuseDepthMaps"/>
      <addaction name="actionRefineDenseCloud"/>
     </widget>
-    <widget class="QMenu" name="menuModelGeneration">
-     <property name="title">
-      <string>模型生成</string>
-     </property>
-     <addaction name="actionMeshReconstruct"/>
-     <addaction name="actionTextureMapping"/>
-     <addaction name="actionExportModel"/>
-    </widget>
     <addaction name="menuSparseReconstruction"/>
     <addaction name="menuDenseReconstruction"/>
-    <addaction name="menuModelGeneration"/>
    </widget>
    <widget class="QMenu" name="menuTools">
     <property name="title">
@@ -484,21 +464,6 @@
   <action name="actionRefineDenseCloud">
    <property name="text">
     <string>密集点云后处理...</string>
-   </property>
-  </action>
-  <action name="actionMeshReconstruct">
-   <property name="text">
-    <string>网格重建...</string>
-   </property>
-  </action>
-  <action name="actionTextureMapping">
-   <property name="text">
-    <string>纹理映射...</string>
-   </property>
-  </action>
-  <action name="actionExportModel">
-   <property name="text">
-    <string>模型导出...</string>
    </property>
   </action>
   <action name="actionOverlapAnalysis">

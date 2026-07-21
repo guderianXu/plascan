@@ -230,6 +230,14 @@ void configureReadOnlyTable(QTableWidget *table)
     table->horizontalHeader()->setStretchLastSection(true);
 }
 
+void updateTableVisibility(QTableWidget *table)
+{
+    if (table)
+    {
+        table->setVisible(table->rowCount() > 0);
+    }
+}
+
 } // namespace
 
 ProjectDashboardWidget::ProjectDashboardWidget(QWidget *parent)
@@ -390,6 +398,7 @@ void ProjectDashboardWidget::updateTaskTable()
                              2,
                              makeReadOnlyItem(taskProgressText(record)));
     }
+    updateTableVisibility(_taskTable);
 }
 
 void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
@@ -427,6 +436,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
             _workflowTable->setItem(row, 1, makeReadOnlyItem(step.title));
             _workflowTable->setItem(row, 2, makeReadOnlyItem(step.detail));
         }
+        updateTableVisibility(_workflowTable);
     }
 
     if (_referenceTable)
@@ -450,6 +460,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                                                            ? path
                                                            : QFileInfo(path).fileName()));
         }
+        updateTableVisibility(_referenceTable);
     }
 
     if (_qualityTable)
@@ -487,10 +498,11 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                                 &row,
                                 tr("稠密点"),
                                 metricValueText(report.value(QStringLiteral("dense_point_count"))));
+                const QJsonValue mvsCoverage = report.value(QStringLiteral("mvs_valid_coverage"));
                 appendMetricRow(_qualityTable,
                                 &row,
                                 tr("MVS覆盖"),
-                                metricValueText(report.value(QStringLiteral("mvs_valid_coverage")), true));
+                                mvsCoverage.isDouble() ? metricValueText(mvsCoverage, true) : tr("—"));
                 appendMetricRow(_qualityTable,
                                 &row,
                                 tr("DEM覆盖"),
@@ -519,6 +531,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                                 metricValueText(report.value(QStringLiteral("ba_prior_reference_count"))));
             }
         }
+        updateTableVisibility(_qualityTable);
     }
 
     if (_qualityAlertTable)
@@ -545,15 +558,14 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                                    tr("重建质量"),
                                    tr("注册影像 %1/%2").arg(registered).arg(total));
                 }
-                const double mvsCoverage = report.value(QStringLiteral("mvs_valid_coverage")).toDouble(-1.0);
-                if (mvsCoverage >= 0.0 && mvsCoverage < 0.6)
+                const QJsonValue mvsCoverage = report.value(QStringLiteral("mvs_valid_coverage"));
+                if (mvsCoverage.isDouble() && mvsCoverage.toDouble() < 0.6)
                 {
                     appendAlertRow(_qualityAlertTable,
                                    &row,
                                    tr("注意"),
                                    tr("重建质量"),
-                                   tr("MVS覆盖 %1").arg(metricValueText(report.value(QStringLiteral("mvs_valid_coverage")),
-                                                                      true)));
+                                   tr("MVS覆盖 %1").arg(metricValueText(mvsCoverage, true)));
                 }
                 const double demCoverage = report.value(QStringLiteral("dem_coverage")).toDouble(-1.0);
                 if (demCoverage >= 0.0 && demCoverage < 0.6)
@@ -637,6 +649,7 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                            tr("质量中心"),
                            tr("暂无阻塞项或可显示的参考误差指标。"));
         }
+        updateTableVisibility(_qualityAlertTable);
     }
 
     if (_reportTable)
@@ -659,5 +672,6 @@ void ProjectDashboardWidget::updateTables(const QJsonObject &meta)
                                    makeReadOnlyItem(QFileInfo(path).fileName().isEmpty() ? path
                                                                                          : QFileInfo(path).fileName()));
         }
+        updateTableVisibility(_reportTable);
     }
 }

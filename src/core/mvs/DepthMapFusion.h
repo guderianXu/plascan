@@ -16,6 +16,7 @@
 #include <string>
 #include <functional>
 #include <memory>
+#include <cstdint>
 #include <vector>
 
 namespace xjw
@@ -37,6 +38,9 @@ struct StereoFusionConfig
     int   workerCount        = 0;      ///< CPU 融合线程数；0 表示按硬件自动选择
     bool  useColor           = true;   ///< 是否按原图给融合点赋色
     int   colorCacheCapacity = 4;      ///< 原图懒加载 LRU 缓存容量
+    bool  requireValidMask   = false;  ///< 要求每帧提供尺寸一致的权威有效蒙版
+    int   minSupportViews    = 0;      ///< PatchMatch 支持数下限；0 表示不检查
+    float maxLocalDepthGradient = 0.20f; ///< 局部相对深度突变上限；<=0 表示不检查
     bool  fuseOnlyFirstFrame = false;  ///< 流式窗口模式：只从窗口首帧产生点
     bool  enableLowYieldFallback = false; ///< 显式预览/低产出模式才允许降到双视一致
     float lowYieldFallbackMinRatio = 0.01f; ///< 严格融合点数 / 首帧有效深度低于该比例时触发 fallback
@@ -45,6 +49,17 @@ struct StereoFusionConfig
     float bboxMin[3]         = {-1e9f, -1e9f, -1e9f};
     float bboxMax[3]         = { 1e9f,  1e9f,  1e9f};
     std::shared_ptr<std::atomic_bool> cancelFlag; ///< 外部取消标志；置位后融合尽快返回 false
+};
+
+struct FusionRejectionStats
+{
+    std::uint64_t maskRejected = 0;
+    std::uint64_t supportRejected = 0;
+    std::uint64_t depthGradientRejected = 0;
+    std::uint64_t reprojectionRejected = 0;
+    std::uint64_t depthConsistencyRejected = 0;
+    std::uint64_t normalRejected = 0;
+    std::uint64_t insufficientObservations = 0;
 };
 
 // =============================================================================
@@ -92,6 +107,8 @@ public:
         return _filteredDepths;
     }
 
+    FusionRejectionStats rejectionStats() const;
+
 private:
     StereoFusionConfig _config;
 
@@ -133,6 +150,9 @@ private:
                    std::vector<std::vector<char>> &fusedMask,
                    FusedPoint &outPoint);
 
+    bool isPixelEligible(const FusionFrameInput &frame, int row, int col);
+    void resetRejectionStats();
+
     /// 两视图 minNumPixels<=1 场景的并行快速融合路径
     bool fuseTwoViewSingleObservationFast(
         const std::vector<FusionFrameInput> &frames,
@@ -153,6 +173,13 @@ private:
     static float median(std::vector<float> &v);
 
     std::vector<cv::Mat> _filteredDepths;
+    std::atomic<std::uint64_t> _maskRejected{0};
+    std::atomic<std::uint64_t> _supportRejected{0};
+    std::atomic<std::uint64_t> _depthGradientRejected{0};
+    std::atomic<std::uint64_t> _reprojectionRejected{0};
+    std::atomic<std::uint64_t> _depthConsistencyRejected{0};
+    std::atomic<std::uint64_t> _normalRejected{0};
+    std::atomic<std::uint64_t> _insufficientObservations{0};
 };
 
 } // namespace mvs

@@ -2,7 +2,7 @@
 
 #include "ProjectData.h"
 #include "ProjectMetadataOperations.h"
-#include "AerialTriangulationService.h"
+#include "model/AerialTriangulationResult.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -36,7 +36,7 @@ QMap<QString, QJsonObject> filterSfmCameraUpdates(const QMap<QString, QJsonObjec
 } // namespace
 
 InitPoseFinalizeResult finalizeInitializedCameraPoses(ProjectData *projectData,
-                                                     const xjw::gui::AerialTriangulationServiceResult &result,
+                                                     const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result,
                                                      const QSet<QString> &targetImages,
                                                      const QSet<QString> &existingImages,
                                                      bool overwriteExisting,

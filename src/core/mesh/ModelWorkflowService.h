@@ -8,6 +8,11 @@
 
 #include <functional>
 
+namespace xjw::mesh
+{
+struct DepthTsdfOptions;
+}
+
 namespace xjw::mesh::workflow
 {
 
@@ -37,6 +42,7 @@ struct TextureBuildRequest
 {
     QString meshPath;
     QString outputDir;
+    QString depthMapSourcePath;
     xjw::mesh::TextureMappingConfig texture;
     std::function<void(const QString &, int)> progress;
 };
@@ -67,7 +73,13 @@ struct PointCloudQualityReport
 };
 
 int meshResolutionFromSettings(const QJsonObject &settings);
+QString depthReconstructionModeFromSettings(const QJsonObject &settings);
+xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &settings,
+                                                         int requestedResolution);
 xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings);
+xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedResolution,
+                                                                   bool aerialTerrain,
+                                                                   bool preserveDetail);
 int holeFillPassesFromArea(double maxHoleArea);
 xjw::mesh::TextureMappingConfig defaultTextureConfig();
 xjw::mesh::TextureMappingConfig textureConfigFromSettings(const QJsonObject &settings);

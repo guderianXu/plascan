@@ -1,6 +1,7 @@
 #include "DepthFrameQualityGate.h"
 
 #include <algorithm>
+#include <cmath>
 
 namespace xjw
 {
@@ -64,6 +65,47 @@ DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourc
     return settings;
 }
 
+float depthConsistencyRelativeThreshold(MvsSceneProfile, int viewCount)
+{
+    if (viewCount <= 1)
+    {
+        return 0.25f;
+    }
+    if (viewCount == 2)
+    {
+        return 0.10f;
+    }
+    return 0.05f;
+}
+
+bool useContradictionOnlyDepthConsistency(int sourceViewCount)
+{
+    return sourceViewCount <= 1;
+}
+
+DepthConsistencyEvidence classifyDepthConsistencyEvidence(float expectedDepth,
+                                                           float measuredDepth,
+                                                           float relativeThreshold)
+{
+    if (!std::isfinite(expectedDepth) || expectedDepth <= 0.0f ||
+        !std::isfinite(measuredDepth) || measuredDepth <= 0.0f)
+    {
+        return DepthConsistencyEvidence::Unverifiable;
+    }
+
+    const float threshold = std::max(0.0f, relativeThreshold);
+    const float relative_delta = (measuredDepth - expectedDepth) / expectedDepth;
+    if (std::fabs(relative_delta) <= threshold)
+    {
+        return DepthConsistencyEvidence::Consistent;
+    }
+    if (relative_delta < -threshold)
+    {
+        return DepthConsistencyEvidence::Occluded;
+    }
+    return DepthConsistencyEvidence::Contradicted;
+}
+
 DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input)
 {
     DepthFrameQualityDecision decision;
@@ -92,6 +134,51 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         decision.reasons.emplace_back("insufficient_valid_coverage");
     }
 
+    if (input.outputFilterRetentionRatio >= 0.0f
+        && input.outputFilterRetentionRatio < 0.75f)
+    {
+        lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
+        decision.reasons.emplace_back("destructive_output_filter_collapse");
+    }
+    else if (input.outputFilterRetentionRatio >= 0.0f
+             && input.outputFilterRetentionRatio < 0.90f)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back("output_filter_coverage_loss");
+    }
+
+    if (input.hasConstrainedSupportMask
+        && input.validWithinMaskRatio >= 0.0f
+        && input.validWithinMaskRatio < 0.80f)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back("insufficient_mask_normalized_coverage");
+    }
+
+    const bool aerial_edge_neighborhood =
+        input.sceneProfile == MvsSceneProfile::AerialTerrain
+        && input.sourceViewCount <= 5;
+    const float consistency_reject_threshold =
+        input.sceneProfile == MvsSceneProfile::AerialTerrain
+        ? (aerial_edge_neighborhood ? 0.20f : 0.25f)
+        : 0.75f;
+    const float consistency_validation_threshold =
+        input.sceneProfile == MvsSceneProfile::AerialTerrain
+        ? (aerial_edge_neighborhood ? 0.50f : 0.55f)
+        : 0.90f;
+    if (input.consistencyRetentionRatio >= 0.0f
+        && input.consistencyRetentionRatio < consistency_reject_threshold)
+    {
+        lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
+        decision.reasons.emplace_back("depth_consistency_collapse");
+    }
+    else if (input.consistencyRetentionRatio >= 0.0f
+             && input.consistencyRetentionRatio < consistency_validation_threshold)
+    {
+        lowerAcceptance(DepthFrameAcceptance::ValidationOnly, decision);
+        decision.reasons.emplace_back("depth_consistency_coverage_loss");
+    }
+
     if (input.largestComponentRatio < 0.15f)
     {
         lowerAcceptance(DepthFrameAcceptance::Rejected, decision);
@@ -106,9 +193,6 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
         decision.reasons.emplace_back("low_confidence_full_coverage");
     }
 
-    const bool aerial_edge_neighborhood =
-        input.sceneProfile == MvsSceneProfile::AerialTerrain &&
-        input.sourceViewCount <= 5;
     const float consistency_threshold = input.sceneProfile == MvsSceneProfile::AerialTerrain
         ? (aerial_edge_neighborhood ? 0.50f : 0.55f)
         : 0.45f;

@@ -1,4 +1,5 @@
 #include "tracks/MultiViewTrackBuilder.h"
+#include "common/DisjointSet.h"
 
 #include <algorithm>
 #include <cmath>
@@ -10,75 +11,6 @@ namespace xjw
 
 namespace
 {
-
-class DisjointSet
-{
-public:
-    int add(const MultiViewTrackBuilder::ObservationKey &key)
-    {
-        const auto it = _indexByKey.find(key);
-        if (it != _indexByKey.end())
-        {
-            return it->second;
-        }
-
-        const int index = static_cast<int>(_keys.size());
-        _indexByKey.emplace(key, index);
-        _keys.push_back(key);
-        _parent.push_back(index);
-        return index;
-    }
-
-    int addMergedRoot(int a, int b, int *mergedRoot)
-    {
-        int rootA = find(a);
-        int rootB = find(b);
-        if (rootA == rootB)
-        {
-            if (mergedRoot)
-            {
-                *mergedRoot = rootA;
-            }
-            return rootA;
-        }
-        if (rootB < rootA)
-        {
-            std::swap(rootA, rootB);
-        }
-        _parent[rootB] = rootA;
-        if (mergedRoot)
-        {
-            *mergedRoot = rootB;
-        }
-        return rootA;
-    }
-
-    int find(int index)
-    {
-        int root = index;
-        while (_parent[root] != root)
-        {
-            root = _parent[root];
-        }
-        while (_parent[index] != index)
-        {
-            const int next = _parent[index];
-            _parent[index] = root;
-            index = next;
-        }
-        return root;
-    }
-
-    const std::vector<MultiViewTrackBuilder::ObservationKey> &keys() const
-    {
-        return _keys;
-    }
-
-private:
-    std::map<MultiViewTrackBuilder::ObservationKey, int> _indexByKey;
-    std::vector<MultiViewTrackBuilder::ObservationKey> _keys;
-    std::vector<int> _parent;
-};
 
 void rebuildTrackStats(MultiViewTrackBuildResult *result)
 {
@@ -202,17 +134,31 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
 {
     MultiViewTrackBuildResult result;
 
-    DisjointSet disjointSet;
+    detail::DisjointSet disjointSet;
+    std::map<ObservationKey, int> indexByKey;
+    std::vector<ObservationKey> keys;
+    const auto observationIndex = [&](const ObservationKey &key)
+    {
+        const auto existing = indexByKey.find(key);
+        if (existing != indexByKey.end())
+        {
+            return existing->second;
+        }
+        const int index = disjointSet.add();
+        indexByKey.emplace(key, index);
+        keys.push_back(key);
+        return index;
+    };
+
     std::vector<std::pair<int, int>> indexedEdges;
     indexedEdges.reserve(_edges.size());
     for (const auto &edge : _edges)
     {
-        const int left = disjointSet.add(edge.first);
-        const int right = disjointSet.add(edge.second);
+        const int left = observationIndex(edge.first);
+        const int right = observationIndex(edge.second);
         indexedEdges.emplace_back(left, right);
     }
 
-    const std::vector<ObservationKey> &keys = disjointSet.keys();
     std::vector<std::map<ImageId, FeatureIdx>> featureByImageByRoot(keys.size());
     for (int i = 0; i < static_cast<int>(keys.size()); ++i)
     {
@@ -268,8 +214,10 @@ MultiViewTrackBuildResult MultiViewTrackBuilder::build(const BuildOptions &optio
             continue;
         }
 
-        int mergedRoot = leftRoot;
-        const int newRoot = disjointSet.addMergedRoot(leftRoot, rightRoot, &mergedRoot);
+        const detail::DisjointSet::MergeResult mergeResult =
+            disjointSet.unite(leftRoot, rightRoot);
+        const int newRoot = mergeResult.root;
+        const int mergedRoot = mergeResult.absorbedRoot;
         if (newRoot != mergedRoot)
         {
             edgeScoreSumByRoot[static_cast<size_t>(newRoot)] +=

@@ -8,7 +8,7 @@
 
 #include "ProjectDialogJsonSettingBase.h"
 
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <QDir>
 #include <QFile>
@@ -89,7 +89,7 @@ QString ProjectDialogJsonSettingBase::dialogFilePath() const
     {
         return QString();
     }
-    const QString root = ProjectIO::projectRootFromPlascan(_plascanPath);
+    const QString root = xjw::common::project::ProjectIO::projectRootFromPlascan(_plascanPath);
     if (root.isEmpty())
     {
         return QString();

@@ -1,7 +1,7 @@
 #include "ProjectSurveyControl.h"
 
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "io/MarkerCsv.h"
 #include "io/MarkerSetStore.h"
 #include "io/SurveyControlMigration.h"
@@ -54,7 +54,7 @@ SurveyControlProjectImportResult publishMarkerSet(ProjectData *projectData,
                                                   const control_points::MarkerSet &markerSet)
 {
     SurveyControlProjectImportResult result;
-    const QString sidecar_path = ProjectIO::markerSetPath(projectData->currentProjectPath());
+    const QString sidecar_path = xjw::common::project::ProjectIO::markerSetPath(projectData->currentProjectPath());
     const bool sidecar_existed = QFile::exists(sidecar_path);
     QByteArray previous_bytes;
     if (sidecar_existed)

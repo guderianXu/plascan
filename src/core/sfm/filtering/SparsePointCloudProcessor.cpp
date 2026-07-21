@@ -654,11 +654,4 @@ SparsePointCloudSpatialCleanupResult SparsePointCloudProcessor::spatialCleanup(
     return result;
 }
 
-SparseCloudLocalOptimResult SparsePointCloudProcessor::localOptim(
-    std::vector<SparsePointCloudPoint> *points,
-    const SparseCloudLocalOptimOptions &options)
-{
-    return spatialCleanup(points, options);
-}
-
 } // namespace xjw

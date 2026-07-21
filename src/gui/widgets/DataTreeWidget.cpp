@@ -32,121 +32,45 @@ namespace
 
 constexpr int SectionRole = Qt::UserRole + 1;
 constexpr int ResourcePathRole = Qt::UserRole + 2;
+constexpr int AggregateResourcePathsRole = Qt::UserRole + 3;
 
-QString depthResultKind(const QJsonObject &record)
+QString depthRecordPrimaryPath(const QJsonObject &record)
 {
-    const QString explicitKind = record.value(QStringLiteral("result_type")).toString();
-    if (!explicitKind.isEmpty())
+    for (const QString &key : {
+             QStringLiteral("depth_png"),
+             QStringLiteral("raw_depth_path"),
+             QStringLiteral("valid_mask_path"),
+             QStringLiteral("preview_path")})
     {
-        return explicitKind;
-    }
-
-    if (!record.value(QStringLiteral("raw_depth_path")).toString().isEmpty() ||
-        !record.value(QStringLiteral("ref_image")).toString().isEmpty())
-    {
-        return QStringLiteral("mvs_depth");
-    }
-
-    return QStringLiteral("legacy_preview");
-}
-
-QString depthPyramidDisplayLabel(const QJsonArray &levels)
-{
-    QStringList labels;
-    for (const QJsonValue &value : levels)
-    {
-        const int level = value.toObject().value(QStringLiteral("level")).toInt(0);
-        const QString label = level > 0 ? QStringLiteral("L%1").arg(level) : QString();
-        if (!label.isEmpty() && !labels.contains(label))
+        const QString path = record.value(key).toString().trimmed();
+        if (!path.isEmpty())
         {
-            labels.append(label);
+            return path;
         }
     }
-    return labels.join(QLatin1Char('/'));
+    return QString();
 }
 
-QString depthSceneDisplayLabel(const QString &scene_profile)
+QString depthQualityLabel(QString profile)
 {
-    if (scene_profile == QStringLiteral("aerial_terrain"))
-    {
-        return QStringLiteral("航测地形");
-    }
-    if (scene_profile == QStringLiteral("orbital_object"))
-    {
-        return QStringLiteral("环拍物体");
-    }
-    if (scene_profile == QStringLiteral("custom"))
-    {
-        return QStringLiteral("自定义场景");
-    }
-    return {};
+    profile = profile.trimmed().toLower();
+    if (profile == QStringLiteral("highest")) return QStringLiteral("超高质量");
+    if (profile == QStringLiteral("high")) return QStringLiteral("高质量");
+    if (profile == QStringLiteral("medium")) return QStringLiteral("中等质量");
+    if (profile == QStringLiteral("low")) return QStringLiteral("低质量");
+    if (profile == QStringLiteral("lowest")) return QStringLiteral("超低质量");
+    if (profile == QStringLiteral("custom")) return QStringLiteral("自定义质量");
+    return QString();
 }
 
-QString depthFilterDisplayLabel(const QString &filter_mode)
+QString depthFilterLabel(QString mode)
 {
-    if (filter_mode == QStringLiteral("mild"))
-    {
-        return QStringLiteral("温和过滤");
-    }
-    if (filter_mode == QStringLiteral("moderate"))
-    {
-        return QStringLiteral("中等过滤");
-    }
-    if (filter_mode == QStringLiteral("aggressive"))
-    {
-        return QStringLiteral("强过滤");
-    }
-    return {};
-}
-
-QString depthAcceptanceDisplayLabel(const QJsonObject &record)
-{
-    QString acceptance = record.value(QStringLiteral("acceptance")).toString();
-    if (acceptance.isEmpty())
-    {
-        acceptance = record.value(QStringLiteral("quality_decision"))
-                         .toObject()
-                         .value(QStringLiteral("acceptance"))
-                         .toString();
-    }
-    if (acceptance == QStringLiteral("accepted"))
-    {
-        return QStringLiteral("通过");
-    }
-    if (acceptance == QStringLiteral("validation_only"))
-    {
-        return QStringLiteral("仅验证");
-    }
-    if (acceptance == QStringLiteral("rejected"))
-    {
-        return QStringLiteral("拒绝融合");
-    }
-    return {};
-}
-
-void appendDepthDiagnosticLabel(QString &name, const QString &label)
-{
-    if (!label.isEmpty())
-    {
-        name += QStringLiteral("  [%1]").arg(label);
-    }
-}
-
-int mvsDepthResultCount(const QJsonArray &depthResults)
-{
-    int count = 0;
-    for (const QJsonValue &value : depthResults)
-    {
-        if (!value.isObject())
-        {
-            continue;
-        }
-        if (depthResultKind(value.toObject()) == QStringLiteral("mvs_depth"))
-        {
-            ++count;
-        }
-    }
-    return count;
+    mode = mode.trimmed().toLower();
+    if (mode == QStringLiteral("mild")) return QStringLiteral("轻度过滤");
+    if (mode == QStringLiteral("moderate")) return QStringLiteral("中度过滤");
+    if (mode == QStringLiteral("aggressive")) return QStringLiteral("强过滤");
+    if (mode == QStringLiteral("auto")) return QStringLiteral("自适应过滤");
+    return QString();
 }
 
 bool isDisplayableMeshResult(const QJsonObject &record)
@@ -351,29 +275,6 @@ int countObjectsWithPath(const QJsonArray &records, std::initializer_list<const 
             continue;
         }
         if (!resultPath(value.toObject(), keys).isEmpty())
-        {
-            ++count;
-        }
-    }
-    return count;
-}
-
-int displayableMvsDepthResultCount(const QJsonArray &depthResults)
-{
-    int count = 0;
-    for (const QJsonValue &value : depthResults)
-    {
-        if (!value.isObject())
-        {
-            continue;
-        }
-
-        const QJsonObject record = value.toObject();
-        if (depthResultKind(record) != QStringLiteral("mvs_depth"))
-        {
-            continue;
-        }
-        if (!record.value(QStringLiteral("depth_png")).toString().trimmed().isEmpty())
         {
             ++count;
         }
@@ -755,6 +656,30 @@ QStandardItem *DataTreeWidget::appendTopLevelResource(
     return nameItem;
 }
 
+QStandardItem *DataTreeWidget::appendTopLevelAggregate(
+    const QString &name,
+    xjw::gui::widgets::WorkspaceSection section,
+    const QString &sectionName,
+    const QStringList &paths)
+{
+    if (paths.isEmpty())
+    {
+        return nullptr;
+    }
+
+    auto *nameItem = new QStandardItem(name);
+    auto *pathItem = new QStandardItem(QString());
+    auto *storageItem = new QStandardItem(QStringLiteral("generated"));
+    nameItem->setFlags(nameItem->flags() & ~Qt::ItemIsEditable);
+    pathItem->setFlags(pathItem->flags() & ~Qt::ItemIsEditable);
+    storageItem->setFlags(storageItem->flags() & ~Qt::ItemIsEditable);
+    nameItem->setIcon(xjw::gui::widgets::workspaceSectionIcon(section));
+    nameItem->setData(sectionName, SectionRole);
+    nameItem->setData(paths, AggregateResourcePathsRole);
+    _model->appendRow({nameItem, pathItem, storageItem});
+    return nameItem;
+}
+
 void DataTreeWidget::sortSectionChildrenByFileName(QStandardItem *section)
 {
     if (!section || section->rowCount() < 2)
@@ -892,8 +817,8 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
     QJsonArray ipfindResults = normalized.value("ipfind_results").toArray();
     QJsonArray ipmatchResults = normalized.value("ipmatch_results").toArray();
     QJsonArray modelResults = normalized.value("model_results").toArray();
-    QJsonArray depthResults = normalized.value("depth_map_results").toArray();
     QJsonArray denseResults = normalized.value("dense_cloud_results").toArray();
+    QJsonArray depthResults = normalized.value("depth_map_results").toArray();
     QJsonArray atResults = normalized.value("aerial_triangulation_results").toArray();
     QJsonArray demResults = normalized.value("dem_results").toArray();
     QJsonArray orthoResults = normalized.value("ortho_results").toArray();
@@ -955,7 +880,44 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         }
     }
 
-    const int depthMapCount = displayableMvsDepthResultCount(depthResults);
+    QStringList depthPaths;
+    QSet<QString> depthPathKeys;
+    QSet<QString> depthFrameKeys;
+    QJsonObject latestDepthRecord;
+    for (int index = depthResults.size() - 1; index >= 0; --index)
+    {
+        const QJsonObject record = depthResults.at(index).toObject();
+        const QString primaryPath = depthRecordPrimaryPath(record);
+        if (primaryPath.isEmpty())
+        {
+            continue;
+        }
+
+        const QString pathKey = QDir::cleanPath(QDir::fromNativeSeparators(primaryPath)).toCaseFolded();
+        if (!depthPathKeys.contains(pathKey))
+        {
+            depthPathKeys.insert(pathKey);
+            depthPaths.append(primaryPath);
+        }
+
+        QString frameKey = record.value(QStringLiteral("ref_image")).toString().trimmed();
+        if (frameKey.isEmpty())
+        {
+            frameKey = primaryPath;
+        }
+        frameKey = QDir::cleanPath(QDir::fromNativeSeparators(frameKey)).toCaseFolded();
+        if (depthFrameKeys.contains(frameKey))
+        {
+            continue;
+        }
+
+        depthFrameKeys.insert(frameKey);
+        if (latestDepthRecord.isEmpty())
+        {
+            latestDepthRecord = record;
+        }
+    }
+
     const int denseCount = countObjectsWithPath(denseResults, {"dense_cloud_xyz", "source_sparse_cloud"});
     const int modelCount = displayableMeshResultCount(modelResults) + _transientModels.size();
     const int demCount = countObjectsWithPath(demResults, {"dem_tif", "dem_path"});
@@ -1000,9 +962,24 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
                                currentTiePointPath,
                                QStringLiteral("generated"));
     }
-    auto *depthMaps = depthMapCount <= 0
-        ? nullptr
-        : createSection(QStringLiteral("深度图"), depthMapCount, WorkspaceSection::DepthMaps);
+    if (!depthPaths.isEmpty())
+    {
+        QString qualityProfile = latestDepthRecord.value(QStringLiteral("quality_profile")).toString();
+        if (qualityProfile.isEmpty())
+        {
+            qualityProfile = latestDepthRecord.value(QStringLiteral("qualityProfile")).toString();
+        }
+        QStringList summaryParts{QLocale().toString(depthFrameKeys.size())};
+        const QString qualityLabel = depthQualityLabel(qualityProfile);
+        const QString filterLabel = depthFilterLabel(
+            latestDepthRecord.value(QStringLiteral("filter_mode")).toString());
+        if (!qualityLabel.isEmpty()) summaryParts.append(qualityLabel);
+        if (!filterLabel.isEmpty()) summaryParts.append(filterLabel);
+        appendTopLevelAggregate(QStringLiteral("深度图（%1）").arg(summaryParts.join(QStringLiteral("，"))),
+                                WorkspaceSection::DepthMaps,
+                                QStringLiteral("深度图"),
+                                depthPaths);
+    }
     auto *denseCloud = denseCount <= 0
         ? nullptr
         : createSection(QStringLiteral("稠密点云"), denseCount, WorkspaceSection::DenseCloud);
@@ -1098,72 +1075,6 @@ void DataTreeWidget::populateFromMeta(const QJsonObject &meta)
         if (name.isEmpty()) name = modelPath;
         name += QStringLiteral("  [临时]");
         appendItemRow(model3d, name, modelPath, QStringLiteral("temporary"));
-    }
-
-    // ── 深度图 ────────────────────────────────────────────────────────────
-    for (const QJsonValue &v : depthResults) {
-        if (!v.isObject()) continue;
-        const QJsonObject obj = v.toObject();
-        if (depthResultKind(obj) == QStringLiteral("mvs_depth"))
-        {
-            const QString path = obj.value(QStringLiteral("depth_png")).toString();
-            if (path.isEmpty()) continue;
-            QString name = QFileInfo(path).fileName().isEmpty() ? path : QFileInfo(path).fileName();
-            const int gw = obj.value(QStringLiteral("grid_width")).toInt(-1);
-            const int gh = obj.value(QStringLiteral("grid_height")).toInt(-1);
-            if (gw > 0 && gh > 0)
-                name = QStringLiteral("%1  [%2x%3]").arg(name).arg(gw).arg(gh);
-            const QString device = obj.value(QStringLiteral("device")).toString();
-            if (!device.isEmpty() && device != QStringLiteral("unknown"))
-            {
-                name += QStringLiteral("  [%1]").arg(device);
-            }
-            appendDepthDiagnosticLabel(
-                name,
-                depthPyramidDisplayLabel(obj.value(QStringLiteral("pyramid_levels")).toArray()));
-            appendDepthDiagnosticLabel(
-                name,
-                depthSceneDisplayLabel(obj.value(QStringLiteral("scene_profile")).toString()));
-            appendDepthDiagnosticLabel(
-                name,
-                depthFilterDisplayLabel(obj.value(QStringLiteral("filter_mode")).toString()));
-            appendDepthDiagnosticLabel(name, depthAcceptanceDisplayLabel(obj));
-            const QString status = obj.value(QStringLiteral("status")).toString();
-            if (!status.isEmpty() && status != QStringLiteral("completed"))
-            {
-                name += QStringLiteral("  [%1]").arg(status);
-            }
-            QStandardItem *depth_frame_item =
-                appendItemRow(depthMaps, name, path, QStringLiteral("generated"));
-            const QJsonArray pyramid_levels = obj.value(QStringLiteral("pyramid_levels")).toArray();
-            for (const QJsonValue &level_value : pyramid_levels)
-            {
-                const QJsonObject level_object = level_value.toObject();
-                const int level = level_object.value(QStringLiteral("level")).toInt();
-                if (level <= 1)
-                {
-                    continue;
-                }
-
-                const QString level_prefix = QStringLiteral("Level %1").arg(level);
-                const auto append_level_preview = [this, depth_frame_item, level_prefix, level_object](
-                                                      const QString &key,
-                                                      const QString &label)
-                {
-                    const QString preview_path = level_object.value(key).toString();
-                    if (!preview_path.isEmpty())
-                    {
-                        appendItemRow(depth_frame_item,
-                                      QStringLiteral("%1 %2").arg(level_prefix, label),
-                                      preview_path,
-                                      QStringLiteral("generated"));
-                    }
-                };
-                append_level_preview(QStringLiteral("preview_path"), QStringLiteral("深度"));
-                append_level_preview(QStringLiteral("confidence_preview_path"),
-                                     QStringLiteral("置信度"));
-            }
-        }
     }
 
     // ── 稠密点云 ──────────────────────────────────────────────────────────
@@ -1310,12 +1221,40 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
     QList<QModelIndex> rows;
     QString sectionName;
     bool sameSection = true;
+    bool hasAggregateRow = false;
+    bool hasRegularRow = false;
     for (const QModelIndex &i : uniqueRows) {
         QString rowSection;
         QString rowPath;
+        const QModelIndex nameIndex = i.sibling(i.row(), 0);
+        const QStringList aggregatePaths = _model->data(nameIndex, AggregateResourcePathsRole).toStringList();
+        if (!aggregatePaths.isEmpty())
+        {
+            rowSection = _model->data(nameIndex, SectionRole).toString();
+            for (const QString &aggregatePath : aggregatePaths)
+            {
+                const QString resolvedPath = resolveResourcePath(aggregatePath);
+                if (!resolvedPath.isEmpty() && !paths.contains(resolvedPath))
+                {
+                    paths.append(resolvedPath);
+                }
+            }
+            rows.append(i);
+            hasAggregateRow = true;
+            if (sectionName.isEmpty())
+            {
+                sectionName = rowSection;
+            }
+            else if (sectionName != rowSection)
+            {
+                sameSection = false;
+            }
+            continue;
+        }
         if (resourceFromIndex(i, &rowSection, &rowPath)) {
             paths << rowPath;
             rows.append(i);
+            hasRegularRow = true;
             if (sectionName.isEmpty()) {
                 sectionName = rowSection;
             } else if (sectionName != rowSection) {
@@ -1329,25 +1268,39 @@ void DataTreeWidget::onContextMenuRequested(const QPoint &pos)
     }
 
     QMenu menu(this);
-    QAction *openAct = menu.addAction(tr("打开"));
-    QAction *revealAct = menu.addAction(tr("在文件管理器中显示"));
-    QAction *propAct = menu.addAction(tr("属性..."));
-    QAction *packAct = menu.addAction(tr("打包到归档 (.plascan)"));
-    QAction *removeAct = menu.addAction(tr("移除引用"));
+    const bool depthAggregateOnly = hasAggregateRow && !hasRegularRow
+        && sameSection && sectionName == QStringLiteral("深度图");
+    QAction *openAct = nullptr;
+    QAction *revealAct = nullptr;
+    QAction *propAct = nullptr;
+    QAction *packAct = nullptr;
+    QAction *removeAct = nullptr;
     QAction *deleteAct = nullptr;
     QAction *sideOpenAct = nullptr;
-    if (sameSection && !sectionName.isEmpty() && sectionName != QStringLiteral("照片"))
+    if (depthAggregateOnly)
     {
-        deleteAct = menu.addAction(tr("删除数据"));
+        deleteAct = menu.addAction(tr("删除深度图"));
     }
-    if (sameSection
-        && paths.size() == 1
-        && (sectionName == QStringLiteral("照片")
-            || sectionName == QStringLiteral("深度图")
-            || sectionName == QStringLiteral("DEM")
-            || sectionName == QStringLiteral("正射影像")))
+    else
     {
-        sideOpenAct = menu.addAction(tr("在侧边打开"));
+        openAct = menu.addAction(tr("打开"));
+        revealAct = menu.addAction(tr("在文件管理器中显示"));
+        propAct = menu.addAction(tr("属性..."));
+        packAct = menu.addAction(tr("打包到归档 (.plascan)"));
+        removeAct = menu.addAction(tr("移除引用"));
+        if (sameSection && !sectionName.isEmpty() && sectionName != QStringLiteral("照片"))
+        {
+            deleteAct = menu.addAction(tr("删除数据"));
+        }
+        if (sameSection
+            && paths.size() == 1
+            && (sectionName == QStringLiteral("照片")
+                || sectionName == QStringLiteral("深度图")
+                || sectionName == QStringLiteral("DEM")
+                || sectionName == QStringLiteral("正射影像")))
+        {
+            sideOpenAct = menu.addAction(tr("在侧边打开"));
+        }
     }
 
     QAction *act = menu.exec(_view->viewport()->mapToGlobal(pos));

@@ -46,7 +46,12 @@ struct DenseGenerationSettings
     QString qualityProfile = QStringLiteral("medium");
     QString sceneProfile = QStringLiteral("auto");
     QString depthFilterMode = QStringLiteral("auto");
-    bool saveIntermediatePyramidLevels = false;
+    bool saveIntermediatePyramidLevels = true;
+    bool enableTwoSourceCrossViewGrowth = false;
+    int twoSourceGrowthDistancePixels = 3;
+    float twoSourceGrowthInverseDepthSpread = 0.01f;
+    float twoSourceGrowthNormalAngleDegrees = 15.0f;
+    int twoSourceGrowthMaximumComponentArea = 64;
     plapoint::ProcessingDevice processingDevice = plapoint::ProcessingDevice::Auto;
     bool pipelineMode = false;  // 流水线模式：跳过所有交互对话框
 };

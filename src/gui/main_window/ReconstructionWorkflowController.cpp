@@ -6,8 +6,10 @@
 #include "ReconstructionWorkflowController.h"
 #include "MainWindow.h"
 #include "ProjectManager.h"
-#include "ProjectIO.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectIO.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "DenseMatchRunner.h"
 #include "graph/ObservationNetworkBuilder.h"
 
@@ -584,7 +586,7 @@ void ReconstructionWorkflowController::openObservationNetworkDialog()
                         const QString plascanPath = pmGuard->currentProjectPath();
                         if (!plascanPath.isEmpty())
                         {
-                            const QString assetsDir = ProjectIO::projectAssetsDir(plascanPath);
+                            const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(plascanPath);
                             const QString obsnetDir = QDir(assetsDir).filePath(QStringLiteral("obsnet"));
                             QDir().mkpath(obsnetDir);
                             const QString ts = QDateTime::currentDateTime().toString(QStringLiteral("yyyyMMdd_HHmmss"));
@@ -690,9 +692,9 @@ void ReconstructionWorkflowController::openInitCameraPoseDialog()
     QStringList imagePaths;
     if (_projectManager)
     {
-        imagePaths = xjw::gui::project::projectImagePaths(_projectManager->currentMeta());
+        imagePaths = xjw::common::project::projectImagePaths(_projectManager->currentMeta());
         dlg->setAvailableFeatureSuffixes(
-            xjw::gui::project::projectFeatureSuffixes(_projectManager->currentProjectPath(),
+            xjw::common::project::projectFeatureSuffixes(_projectManager->currentProjectPath(),
                                                        _projectManager->currentMeta()));
     }
     dlg->setAvailableImages(imagePaths);
@@ -810,7 +812,7 @@ void ReconstructionWorkflowController::openReconBundleAdjustDialog()
             dlg->setAvailableImages(images);
         }
 
-        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
         if (!assetsDir.isEmpty())
         {
             dlg->setDefaultOutputDir(QDir(assetsDir).filePath(QStringLiteral("ba")));
@@ -1176,18 +1178,22 @@ void ReconstructionWorkflowController::openGenerateModelDialog()
         dlg->setSourceCandidates(buildGenerateModelSourceCandidates(_projectManager->currentMeta()));
     }
 
-    connect(dlg, &GenerateModelDialog::runRequested, this, [this](const QJsonObject &settings)
-    {
-        LOG_INFO(QStringLiteral("生成模型: %1")
-            .arg(QString::fromUtf8(QJsonDocument(settings).toJson(QJsonDocument::Compact))));
+    connect(dlg,
+            &GenerateModelDialog::runRequested,
+            this,
+            [this](const QJsonObject &settings)
+            {
+                LOG_INFO(QStringLiteral("生成模型: %1")
+                    .arg(QString::fromUtf8(QJsonDocument(settings).toJson(QJsonDocument::Compact))));
 
-        if (!_projectManager)
-        {
-            return;
-        }
+                if (!_projectManager)
+                {
+                    return;
+                }
 
-        _projectManager->startGenerateModelAsync(settings);
-    });
+                _projectManager->startGenerateModelAsync(settings);
+            },
+            Qt::QueuedConnection);
 
     dlg->exec();
 }

@@ -1,6 +1,7 @@
 #pragma once
 
-#include "Camera.h"
+#include "ProjectCameraIO.h"
+#include "ProjectMetadata.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -21,103 +22,6 @@ struct LatestModelMeshLookupResult
     QJsonObject modelRecord;
     QString errorMessage;
 };
-
-inline QString normalizePath(const QString &path)
-{
-    return QDir::cleanPath(QFileInfo(path).absoluteFilePath());
-}
-
-inline bool pathTokenMatchesImage(const QString &token, const QString &imagePath)
-{
-    if (token.isEmpty() || imagePath.isEmpty())
-    {
-        return false;
-    }
-
-    const QString normalizedToken = normalizePath(token);
-    const QString normalizedImage = normalizePath(imagePath);
-    if (normalizedToken == normalizedImage)
-    {
-        return true;
-    }
-
-    if (QFileInfo(token).fileName() == QFileInfo(imagePath).fileName())
-    {
-        return true;
-    }
-
-    return QFileInfo(token).completeBaseName() == QFileInfo(imagePath).completeBaseName();
-}
-
-inline bool cameraFromJson(const QJsonObject &cameraObject, xjw::Camera *camera)
-{
-    if (!camera || cameraObject.isEmpty())
-    {
-        return false;
-    }
-
-    const QJsonArray centerArray = cameraObject.value(QStringLiteral("C")).toArray();
-    const QJsonArray rotationArray = cameraObject.value(QStringLiteral("R")).toArray();
-    if (centerArray.size() < 3 || rotationArray.size() < 9)
-    {
-        return false;
-    }
-
-    std::array<double, 3> center{{centerArray.at(0).toDouble(),
-                                  centerArray.at(1).toDouble(),
-                                  centerArray.at(2).toDouble()}};
-    if (cameraObject.value(QStringLiteral("camera_center_unit"))
-            .toString()
-            .compare(QStringLiteral("mm"), Qt::CaseInsensitive)
-        == 0)
-    {
-        center[0] /= 1000.0;
-        center[1] /= 1000.0;
-        center[2] /= 1000.0;
-    }
-
-    std::array<double, 9> rotation{};
-    for (int index = 0; index < 9; ++index)
-    {
-        rotation[index] = rotationArray.at(index).toDouble();
-    }
-
-    const double pitch = cameraObject.value(QStringLiteral("pitch")).toDouble(1.0);
-    const bool intrinsicsInMillimeters =
-        cameraObject.value(QStringLiteral("intrinsics_unit"))
-            .toString()
-            .compare(QStringLiteral("mm"), Qt::CaseInsensitive)
-        == 0;
-    const double fu = cameraObject.value(QStringLiteral("fu")).toDouble();
-    const double fv = cameraObject.value(QStringLiteral("fv")).toDouble();
-    const double cu = cameraObject.value(QStringLiteral("cu")).toDouble();
-    const double cv = cameraObject.value(QStringLiteral("cv")).toDouble();
-
-    if (intrinsicsInMillimeters)
-    {
-        camera->setIntrinsicsMillimeters(fu, fv, cu, cv, pitch);
-    }
-    else
-    {
-        camera->setPixelPitch(pitch);
-        camera->setIntrinsics(fu,
-                              fv,
-                              cu,
-                              cv);
-    }
-
-    camera->setAxisDirections(cameraObject.value(QStringLiteral("u_direction")).toInt(1),
-                              cameraObject.value(QStringLiteral("v_direction")).toInt(1));
-    camera->setDepthAxisFlipped(cameraObject.value(QStringLiteral("depth_axis_flipped")).toBool(false));
-    camera->setDistortion(cameraObject.value(QStringLiteral("k1")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("k2")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("k3")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("p1")).toDouble(0.0),
-                          cameraObject.value(QStringLiteral("p2")).toDouble(0.0));
-    camera->setPose(rotation, center);
-
-    return true;
-}
 
 inline LatestModelMeshLookupResult resolveLatestModelMeshRecord(const QJsonObject &metadata)
 {
@@ -155,6 +59,7 @@ inline QJsonObject enrichModelResultFromTerrain(const QJsonObject &baseModelResu
         QStringLiteral("final_model_format"),
         QStringLiteral("requested_export_format"),
         QStringLiteral("texture_png"),
+        QStringLiteral("texture_image"),
         QStringLiteral("texture_size"),
         QStringLiteral("texture_algorithm"),
         QStringLiteral("uv_method"),

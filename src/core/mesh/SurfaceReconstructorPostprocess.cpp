@@ -149,24 +149,24 @@ std::uint64_t edgeKey(int a, int b)
     return (static_cast<std::uint64_t>(lo) << 32) | hi;
 }
 
-void keepLargestConnectedComponent(TriMesh *mesh)
+std::vector<std::vector<int>> findFaceComponents(const TriMesh &mesh)
 {
-    if (!mesh || mesh->faces.empty())
+    if (mesh.faces.empty())
     {
-        return;
+        return {};
     }
 
     std::unordered_map<std::uint64_t, std::vector<int>> edgeToFaces;
-    edgeToFaces.reserve(mesh->faces.size() * 3);
-    for (std::size_t faceIndex = 0; faceIndex < mesh->faces.size(); ++faceIndex)
+    edgeToFaces.reserve(mesh.faces.size() * 3);
+    for (std::size_t faceIndex = 0; faceIndex < mesh.faces.size(); ++faceIndex)
     {
-        const Triangle &face = mesh->faces[faceIndex];
+        const Triangle &face = mesh.faces[faceIndex];
         edgeToFaces[edgeKey(face.v[0], face.v[1])].push_back(static_cast<int>(faceIndex));
         edgeToFaces[edgeKey(face.v[1], face.v[2])].push_back(static_cast<int>(faceIndex));
         edgeToFaces[edgeKey(face.v[2], face.v[0])].push_back(static_cast<int>(faceIndex));
     }
 
-    std::vector<std::vector<int>> adjacency(mesh->faces.size());
+    std::vector<std::vector<int>> adjacency(mesh.faces.size());
     for (const auto &entry : edgeToFaces)
     {
         const auto &edgeFaces = entry.second;
@@ -180,9 +180,9 @@ void keepLargestConnectedComponent(TriMesh *mesh)
         }
     }
 
-    std::vector<std::uint8_t> visited(mesh->faces.size(), 0);
-    std::vector<int> largestComponent;
-    for (std::size_t start = 0; start < mesh->faces.size(); ++start)
+    std::vector<std::uint8_t> visited(mesh.faces.size(), 0);
+    std::vector<std::vector<int>> components;
+    for (std::size_t start = 0; start < mesh.faces.size(); ++start)
     {
         if (visited[start])
         {
@@ -209,11 +209,29 @@ void keepLargestConnectedComponent(TriMesh *mesh)
             }
         }
 
-        if (component.size() > largestComponent.size())
-        {
-            largestComponent = std::move(component);
-        }
+        components.push_back(std::move(component));
     }
+
+    return components;
+}
+
+void keepLargestConnectedComponent(TriMesh *mesh)
+{
+    if (!mesh || mesh->faces.empty())
+    {
+        return;
+    }
+
+    const std::vector<std::vector<int>> components = findFaceComponents(*mesh);
+    const auto largest = std::max_element(
+        components.cbegin(),
+        components.cend(),
+        [](const auto &left, const auto &right) { return left.size() < right.size(); });
+    if (largest == components.cend())
+    {
+        return;
+    }
+    const std::vector<int> &largestComponent = *largest;
 
     if (largestComponent.empty())
     {
@@ -363,15 +381,90 @@ void removeDegenerateFaces(TriMesh *mesh)
     assignFromPlaMesh(plapoint::mesh::removeDegenerateFaces(toPlaMesh(*mesh), 5.0e-9f), mesh);
 }
 
-void removeSmallConnectedComponents(TriMesh *mesh, int minFaces)
+int compactReferencedVertices(TriMesh *mesh)
 {
-    if (!mesh || mesh->faces.empty() || minFaces <= 1)
+    if (!mesh || mesh->vertices.empty() || mesh->faces.empty())
+    {
+        return 0;
+    }
+
+    std::vector<std::uint8_t> referenced(mesh->vertices.size(), 0);
+    for (const Triangle &face : mesh->faces)
+    {
+        for (int corner = 0; corner < 3; ++corner)
+        {
+            const int vertex_index = face.v[corner];
+            if (vertex_index < 0 || static_cast<std::size_t>(vertex_index) >= mesh->vertices.size())
+            {
+                return 0;
+            }
+            referenced[static_cast<std::size_t>(vertex_index)] = 1;
+        }
+    }
+
+    const int removed_count = static_cast<int>(std::count(
+        referenced.cbegin(), referenced.cend(), std::uint8_t{0}));
+    if (removed_count <= 0)
+    {
+        return 0;
+    }
+
+    std::vector<int> old_to_new(mesh->vertices.size(), -1);
+    std::vector<MeshVertex> compact_vertices;
+    compact_vertices.reserve(mesh->vertices.size() - static_cast<std::size_t>(removed_count));
+    for (std::size_t old_index = 0; old_index < mesh->vertices.size(); ++old_index)
+    {
+        if (!referenced[old_index])
+        {
+            continue;
+        }
+        old_to_new[old_index] = static_cast<int>(compact_vertices.size());
+        compact_vertices.push_back(mesh->vertices[old_index]);
+    }
+
+    for (Triangle &face : mesh->faces)
+    {
+        for (int corner = 0; corner < 3; ++corner)
+        {
+            face.v[corner] = old_to_new[static_cast<std::size_t>(face.v[corner])];
+        }
+    }
+    mesh->vertices = std::move(compact_vertices);
+    return removed_count;
+}
+
+void removeSmallConnectedComponents(TriMesh *mesh,
+                                    int minFaces,
+                                    float minimumLargestComponentRatio)
+{
+    if (!mesh || mesh->faces.empty())
     {
         return;
     }
+    if (minFaces <= 1 && minimumLargestComponentRatio <= 0.0f)
+    {
+        return;
+    }
+
+    int effective_minimum_faces = std::max(2, minFaces);
+    if (minimumLargestComponentRatio > 0.0f)
+    {
+        const std::vector<std::vector<int>> components = findFaceComponents(*mesh);
+        const auto largest = std::max_element(
+            components.cbegin(),
+            components.cend(),
+            [](const auto &left, const auto &right) { return left.size() < right.size(); });
+        if (largest != components.cend())
+        {
+            const int relative_minimum = static_cast<int>(std::ceil(
+                static_cast<double>(largest->size()) *
+                std::clamp(minimumLargestComponentRatio, 0.0f, 1.0f)));
+            effective_minimum_faces = std::max(effective_minimum_faces, relative_minimum);
+        }
+    }
     PlaMesh filtered = plapoint::mesh::removeSmallConnectedComponents(
         toPlaMesh(*mesh),
-        static_cast<std::size_t>(minFaces));
+        static_cast<std::size_t>(effective_minimum_faces));
     if (filtered.hasFaces() && filtered.faces()->rows() > 0)
     {
         assignFromPlaMesh(filtered, mesh);
@@ -381,7 +474,9 @@ void removeSmallConnectedComponents(TriMesh *mesh, int minFaces)
     keepLargestConnectedComponent(mesh);
 }
 
-int fillSmallBoundaryHoles(TriMesh *mesh, int maxBoundaryEdges)
+int fillSmallBoundaryHoles(TriMesh *mesh,
+                           int maxBoundaryEdges,
+                           float maxBoundaryDiameter)
 {
     if (!mesh || mesh->faces.empty() || mesh->vertices.empty() || maxBoundaryEdges < 3)
     {
@@ -476,6 +571,31 @@ int fillSmallBoundaryHoles(TriMesh *mesh, int maxBoundaryEdges)
             {
                 continue;
             }
+            if (maxBoundaryDiameter > 0.0f)
+            {
+                const float maximum_squared = maxBoundaryDiameter * maxBoundaryDiameter;
+                bool diameter_exceeded = false;
+                for (std::size_t first = 0; first < loop.size() && !diameter_exceeded; ++first)
+                {
+                    const MeshVertex &a = mesh->vertices[static_cast<std::size_t>(loop[first])];
+                    for (std::size_t second = first + 1; second < loop.size(); ++second)
+                    {
+                        const MeshVertex &b = mesh->vertices[static_cast<std::size_t>(loop[second])];
+                        const float dx = a.x - b.x;
+                        const float dy = a.y - b.y;
+                        const float dz = a.z - b.z;
+                        if (dx * dx + dy * dy + dz * dz > maximum_squared)
+                        {
+                            diameter_exceeded = true;
+                            break;
+                        }
+                    }
+                }
+                if (diameter_exceeded)
+                {
+                    continue;
+                }
+            }
 
             MeshVertex center;
             int red_sum = 0;
@@ -515,6 +635,81 @@ int fillSmallBoundaryHoles(TriMesh *mesh, int maxBoundaryEdges)
 
     mesh->faces.insert(mesh->faces.end(), added_faces.begin(), added_faces.end());
     return filled_holes;
+}
+
+int smoothOpenBoundaryVertices(TriMesh *mesh,
+                               int iterations,
+                               float lambda,
+                               float maximumDisplacement)
+{
+    if (!mesh || mesh->vertices.empty() || mesh->faces.empty() ||
+        iterations <= 0 || lambda <= 0.0f || maximumDisplacement <= 0.0f)
+    {
+        return 0;
+    }
+
+    std::unordered_map<std::uint64_t, int> edge_counts;
+    edge_counts.reserve(mesh->faces.size() * 3);
+    for (const Triangle &face : mesh->faces)
+    {
+        ++edge_counts[edgeKey(face.v[0], face.v[1])];
+        ++edge_counts[edgeKey(face.v[1], face.v[2])];
+        ++edge_counts[edgeKey(face.v[2], face.v[0])];
+    }
+
+    std::vector<std::vector<int>> boundary_neighbors(mesh->vertices.size());
+    for (const Triangle &face : mesh->faces)
+    {
+        const std::array<std::array<int, 2>, 3> edges{{
+            {{face.v[0], face.v[1]}},
+            {{face.v[1], face.v[2]}},
+            {{face.v[2], face.v[0]}}
+        }};
+        for (const auto &edge : edges)
+        {
+            if (edge_counts[edgeKey(edge[0], edge[1])] == 1)
+            {
+                boundary_neighbors[static_cast<std::size_t>(edge[0])].push_back(edge[1]);
+                boundary_neighbors[static_cast<std::size_t>(edge[1])].push_back(edge[0]);
+            }
+        }
+    }
+
+    lambda = std::clamp(lambda, 0.0f, 1.0f);
+    std::vector<std::uint8_t> moved(mesh->vertices.size(), 0);
+    for (int iteration = 0; iteration < iterations; ++iteration)
+    {
+        const std::vector<MeshVertex> source = mesh->vertices;
+        for (std::size_t index = 0; index < source.size(); ++index)
+        {
+            const auto &neighbors = boundary_neighbors[index];
+            if (neighbors.size() != 2)
+            {
+                continue;
+            }
+
+            const MeshVertex &first = source[static_cast<std::size_t>(neighbors[0])];
+            const MeshVertex &second = source[static_cast<std::size_t>(neighbors[1])];
+            const MeshVertex &current = source[index];
+            float dx = ((first.x + second.x) * 0.5f - current.x) * lambda;
+            float dy = ((first.y + second.y) * 0.5f - current.y) * lambda;
+            float dz = ((first.z + second.z) * 0.5f - current.z) * lambda;
+            const float displacement = std::sqrt(dx * dx + dy * dy + dz * dz);
+            if (displacement > maximumDisplacement)
+            {
+                const float scale = maximumDisplacement / displacement;
+                dx *= scale;
+                dy *= scale;
+                dz *= scale;
+            }
+            mesh->vertices[index].x = current.x + dx;
+            mesh->vertices[index].y = current.y + dy;
+            mesh->vertices[index].z = current.z + dz;
+            moved[index] = 1;
+        }
+    }
+
+    return static_cast<int>(std::count(moved.cbegin(), moved.cend(), std::uint8_t{1}));
 }
 
 void simplifyVoxelMeshAdaptive(TriMesh *mesh,

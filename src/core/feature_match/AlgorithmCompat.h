@@ -31,15 +31,52 @@ inline QStringList compatibleFeatureSuffixes(const QString &algo)
 inline QString normalizedFeatureSuffix(const QString &pathOrSuffix)
 {
     QString suffix = pathOrSuffix.trimmed().toLower();
+    if (suffix.isEmpty())
+    {
+        return QString();
+    }
     if (!suffix.startsWith(QLatin1Char('.')))
     {
-        suffix = QFileInfo(suffix).suffix().toLower();
-        if (!suffix.isEmpty())
+        const QString fileSuffix = QFileInfo(suffix).suffix().toLower();
+        if (!fileSuffix.isEmpty())
         {
-            suffix.prepend(QLatin1Char('.'));
+            suffix = fileSuffix;
         }
+        else if (suffix.contains(QLatin1Char('/')) || suffix.contains(QLatin1Char('\\')))
+        {
+            return QString();
+        }
+        suffix.prepend(QLatin1Char('.'));
     }
     return suffix;
+}
+
+inline QStringList normalizedFeatureSuffixes(const QStringList &suffixes)
+{
+    QStringList normalized;
+    for (const QString &suffix : suffixes)
+    {
+        const QString value = normalizedFeatureSuffix(suffix);
+        if (!value.isEmpty() && !normalized.contains(value))
+        {
+            normalized.append(value);
+        }
+    }
+    return normalized;
+}
+
+inline QString featureAlgorithmForSuffix(const QString &pathOrSuffix)
+{
+    static const QMap<QString, QString> algorithms = {
+        {QStringLiteral(".dsk"), QStringLiteral("disk")},
+        {QStringLiteral(".alk"), QStringLiteral("aliked")},
+        {QStringLiteral(".sp"), QStringLiteral("superpoint")},
+        {QStringLiteral(".sift"), QStringLiteral("sift")},
+        {QStringLiteral(".orb"), QStringLiteral("orb")},
+        {QStringLiteral(".akz"), QStringLiteral("akaze")},
+        {QStringLiteral(".dedode"), QStringLiteral("dedode")},
+    };
+    return algorithms.value(normalizedFeatureSuffix(pathOrSuffix));
 }
 
 inline QString defaultMatcherForFeatureSuffix(const QString &pathOrSuffix)

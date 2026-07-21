@@ -40,6 +40,11 @@
 namespace xjw
 {
 
+class ImageRegistrationEngine;
+class InitialPairInitializer;
+class KnownPoseReconstructor;
+class SfmBundleAdjustCoordinator;
+
 // ---- 选项 ----
 
 enum class SfmExecutionProfile
@@ -308,6 +313,11 @@ class IncrementalSfm
     }
 
   private:
+    friend class ImageRegistrationEngine;
+    friend class InitialPairInitializer;
+    friend class KnownPoseReconstructor;
+    friend class SfmBundleAdjustCoordinator;
+
     IncrementalSfmOptions _sfmOptions;
 
     /// 对应关系图

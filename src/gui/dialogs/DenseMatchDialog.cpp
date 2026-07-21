@@ -4,7 +4,7 @@
 // =============================================================================
 #include "DenseMatchDialog.h"
 #include "ProjectManager.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectData.h"
 
 #include <QLabel>
@@ -53,7 +53,7 @@ void DenseMatchDialog::loadProjectImages()
 
     if (_projectManager && !_projectManager->currentProjectPath().isEmpty())
     {
-        const QString assetsDir = ProjectIO::projectAssetsDir(
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(
             _projectManager->currentProjectPath());
         _outputEdit->setText(
             QDir(assetsDir).filePath(QStringLiteral("dense_match")));
@@ -84,7 +84,7 @@ void DenseMatchDialog::refreshMatchPairs()
         return;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(
         _projectManager->currentProjectPath());
     const QString matchDir = QDir(assetsDir).filePath(QStringLiteral("matches"));
 

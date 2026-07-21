@@ -341,6 +341,34 @@ void finalizePairSelection(PairSelectionResult *result, int maxPairs)
     }
 }
 
+bool coversAllImagePairs(const PairSelectionResult &result, const QStringList &images)
+{
+    if (result.allPairCount <= 0 || result.allowedPairKeys.size() != result.allPairCount)
+    {
+        return false;
+    }
+
+    QSet<QString> allowedKeys;
+    allowedKeys.reserve(result.allowedPairKeys.size());
+    for (const QString &pairKey : result.allowedPairKeys)
+    {
+        allowedKeys.insert(pairKey);
+    }
+
+    for (int indexA = 0; indexA < images.size(); ++indexA)
+    {
+        for (int indexB = indexA + 1; indexB < images.size(); ++indexB)
+        {
+            const QString pairKey = makePairKey(images, indexA, indexB);
+            if (pairKey.isEmpty() || !allowedKeys.contains(pairKey))
+            {
+                return false;
+            }
+        }
+    }
+    return true;
+}
+
 } // namespace
 
 PairSelectionResult PairSelector::select(const PairSelectionInput &input,
@@ -434,7 +462,7 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
     finalizePairSelection(&result, policy.maxPairs);
     // 完整的全量列表用“非限制匹配”表示，
     // 下游无需携带一份冗余的 N^2 白名单。
-    if (useExhaustive && result.allowedPairKeys.size() == result.allPairCount)
+    if (coversAllImagePairs(result, input.images))
     {
         result.restrictPairs = false;
     }

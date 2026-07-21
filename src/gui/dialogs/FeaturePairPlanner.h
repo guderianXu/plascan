@@ -1,6 +1,6 @@
 #pragma once
 
-#include "SfmPairPlanner.h"
+#include "reconstruction/SfmPairPlanner.h"
 
 #include <QStringList>
 
@@ -24,7 +24,7 @@ struct FeaturePairPlan
 {
     QStringList pairs;
     QStringList corePairKeys;
-    SfmPairPlan corePlan;
+    xjw::aerial_triangulation::SfmPairPlan corePlan;
 };
 
 FeaturePairPlan planFeatureMatchPairPlan(const QStringList &imageBaseNames,

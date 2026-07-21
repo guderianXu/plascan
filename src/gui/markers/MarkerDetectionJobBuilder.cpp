@@ -1,7 +1,7 @@
 #include "MarkerDetectionJobBuilder.h"
 
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -43,7 +43,7 @@ MarkerDetectionJobBuildResult MarkerDetectionJobBuilder::build(
         const QJsonObject metadata = value.toObject();
         const QString image_id = metadata.value(QStringLiteral("image_uuid")).toString().trimmed();
         const QString stored_path = metadata.value(QStringLiteral("path")).toString().trimmed();
-        const QString image_path = ProjectIO::resolveProjectResourcePath(project_path, stored_path);
+        const QString image_path = xjw::common::project::ProjectIO::resolveProjectResourcePath(project_path, stored_path);
 
         if (image_id.isEmpty())
         {
@@ -65,7 +65,7 @@ MarkerDetectionJobBuildResult MarkerDetectionJobBuilder::build(
         const QString stored_mask = metadata.value(QStringLiteral("mask_path")).toString().trimmed();
         if (!stored_mask.isEmpty())
         {
-            mask_path = ProjectIO::resolveProjectResourcePath(project_path, stored_mask);
+            mask_path = xjw::common::project::ProjectIO::resolveProjectResourcePath(project_path, stored_mask);
             if (!QFileInfo::exists(mask_path))
             {
                 result.errors.push_back(QStringLiteral("影像声明的检测蒙版不存在: %1").arg(mask_path));
@@ -74,7 +74,7 @@ MarkerDetectionJobBuildResult MarkerDetectionJobBuilder::build(
         }
         else
         {
-            mask_path = ProjectIO::findMaskForImage(project_path, image_path);
+            mask_path = xjw::common::project::ProjectIO::findMaskForImage(project_path, image_path);
         }
 
         QString signature = metadata.value(QStringLiteral("image_content_signature")).toString();

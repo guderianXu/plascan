@@ -14,9 +14,10 @@
 
 #include "FeatureExtractionRunner.h"
 #include "Logger.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectManager.h"
 #include "io/PathIO.h"
+#include "model/FeatureExtractorModelCatalog.h"
 #include "model/TorchScriptModelResolver.h"
 #include <QByteArray>
 #include <QDir>
@@ -63,41 +64,6 @@ QString findModelFile(const QString &modelName)
     return resolver.findModel(modelName);
 }
 
-QStringList extractorModelCandidates(const QString &algorithm, bool useCuda)
-{
-    const QString suffix = useCuda ? QStringLiteral("cuda") : QStringLiteral("cpu");
-    if (algorithm == QStringLiteral("disk"))
-    {
-        return {
-            QStringLiteral("disk_extractor_%1_8192.torchscript").arg(suffix),
-            QStringLiteral("disk_extractor_%1_8192.pt").arg(suffix),
-            QStringLiteral("disk_extractor_%1_1200.torchscript").arg(suffix),
-            QStringLiteral("disk_extractor_%1_1200.pt").arg(suffix),
-            QStringLiteral("disk_extractor.torchscript"),
-            QStringLiteral("disk_extractor.pt"),
-        };
-    }
-    if (algorithm == QStringLiteral("aliked"))
-    {
-        return {
-            QStringLiteral("aliked_extractor_%1_480.torchscript").arg(suffix),
-            QStringLiteral("aliked_extractor_%1_480.pt").arg(suffix),
-            QStringLiteral("aliked_extractor.torchscript"),
-            QStringLiteral("aliked_extractor.pt"),
-        };
-    }
-
-    return {};
-}
-
-bool isManagedExtractorModelPath(const QString &path)
-{
-    const QString fileName = QFileInfo(path).fileName().toLower();
-    return fileName.startsWith(QStringLiteral("superpoint_extractor"))
-        || fileName.startsWith(QStringLiteral("disk_extractor"))
-        || fileName.startsWith(QStringLiteral("aliked_extractor"));
-}
-
 QString resolveExtractorModelPath(const QString &algorithm, bool useCuda, const QString &configuredPath)
 {
     QString modelPath = configuredPath.trimmed();
@@ -106,13 +72,15 @@ QString resolveExtractorModelPath(const QString &algorithm, bool useCuda, const 
         const QFileInfo info(modelPath);
         const QString fileName = info.fileName().toLower();
         const QString expectedDeviceToken = useCuda ? QStringLiteral("_cuda") : QStringLiteral("_cpu");
-        if (info.exists() && (!isManagedExtractorModelPath(modelPath) || fileName.contains(expectedDeviceToken)))
+        if (info.exists()
+            && (!xjw::common::model::isManagedFeatureExtractorModelPath(modelPath)
+                || fileName.contains(expectedDeviceToken)))
         {
             return QDir::cleanPath(info.absoluteFilePath());
         }
     }
 
-    for (const QString &candidate : extractorModelCandidates(algorithm, useCuda))
+    for (const QString &candidate : xjw::common::model::featureExtractorModelCandidates(algorithm, useCuda))
     {
         modelPath = findModelFile(candidate);
         if (!modelPath.isEmpty())
@@ -168,7 +136,7 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
             LOG_ERROR("%s", qUtf8Printable(QString("特征提取缺少输出目录，且项目已关闭或 ProjectManager 不可用")));
             return false;
         }
-        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
         outputDir = QDir(assetsDir).filePath(QStringLiteral("ip"));
     }
     
@@ -236,14 +204,9 @@ bool FeatureExtractionRunner::run(const QJsonObject &config, const QStringList &
         if (featureAlgorithm == QStringLiteral("superpoint"))
         {
             // 确定模型路径: 优先 CPU 模型 (始终存在), CUDA 模型可选
-            QStringList modelCandidates;
-            if (spConfig.device.is_cuda())
-                modelCandidates << "superpoint_extractor_cuda.torchscript"
-                                << "superpoint_extractor_cuda.pt";
-            modelCandidates << "superpoint_extractor_cpu.torchscript"
-                            << "superpoint_extractor_cpu.pt"
-                            << "superpoint_extractor.torchscript"
-                            << "superpoint_extractor.pt";
+            const QStringList modelCandidates = xjw::common::model::featureExtractorModelCandidates(
+                QStringLiteral("superpoint"),
+                spConfig.device.is_cuda());
 
             QString modelPath = config["model_path"].toString().trimmed();
             if (!modelPath.isEmpty() && !QFile::exists(modelPath))

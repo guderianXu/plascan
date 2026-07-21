@@ -41,34 +41,6 @@ void setComboDataOrFirst(QComboBox *combo, const QString &data)
     combo->setCurrentIndex(index >= 0 ? index : 0);
 }
 
-QString normalizeFeatureSuffix(QString suffix)
-{
-    suffix = suffix.trimmed().toLower();
-    if (suffix.isEmpty())
-    {
-        return QString();
-    }
-    if (!suffix.startsWith(QLatin1Char('.')))
-    {
-        suffix.prepend(QLatin1Char('.'));
-    }
-    return suffix;
-}
-
-QStringList normalizeFeatureSuffixes(const QStringList &suffixes)
-{
-    QStringList normalizedSuffixes;
-    for (const QString &suffix : suffixes)
-    {
-        const QString normalized = normalizeFeatureSuffix(suffix);
-        if (!normalized.isEmpty() && !normalizedSuffixes.contains(normalized))
-        {
-            normalizedSuffixes.append(normalized);
-        }
-    }
-    return normalizedSuffixes;
-}
-
 } // namespace
 
 FeatureMatchingDialog::FeatureMatchingDialog(QWidget *parent)
@@ -391,7 +363,7 @@ void FeatureMatchingDialog::onAlgorithmChanged(int)
 
 void FeatureMatchingDialog::setAvailableFeatureSuffixes(const QStringList &suffixes)
 {
-    _projectFeatureSuffixes = normalizeFeatureSuffixes(suffixes);
+    _projectFeatureSuffixes = xjw::feature_match::normalizedFeatureSuffixes(suffixes);
     refreshFeatureSuffixChoices();
 }
 

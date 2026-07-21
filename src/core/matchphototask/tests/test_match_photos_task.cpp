@@ -260,9 +260,9 @@ TEST(MatchPhotosTaskTest, FeatureStageUsesDenseSiftThresholdForTiePointExtractio
     ASSERT_FALSE(source.isEmpty());
 
     EXPECT_TRUE(source.contains(QStringLiteral("imageConfig.detectionThreshold")));
-    EXPECT_TRUE(source.contains(QStringLiteral("0.0001f")))
+    EXPECT_TRUE(source.contains(QStringLiteral("0.0005f")))
         << "连接点生成使用 CUDA SIFT 时不能沿用 TraditionalFeatureConfig 默认 0.005，"
-           "Dino/Hayabusa2 这类低纹理影像需要更低阈值保证足够连接点候选。";
+           "同时不能低于已验证的 0.0005，否则弱响应点会干扰 LightGlue 的跨视角对应。";
     EXPECT_TRUE(source.contains(QStringLiteral("0.003f")))
         << "快速模式仍应保留较高阈值，避免大项目生成过密候选点。";
 }
@@ -441,10 +441,10 @@ TEST(MatchPhotosTaskTest, MatchSidecarCarriesAerialTiePointFrontendSignature)
     ASSERT_TRUE(sidecarFile.open(QIODevice::ReadOnly));
     const QJsonObject sidecar = QJsonDocument::fromJson(sidecarFile.readAll()).object();
 
-    EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_frontend_version")).toInt(), 2);
+    EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_frontend_version")).toInt(), 3);
     EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_feature_max_keypoints")).toInt(), 40000);
     EXPECT_EQ(sidecar.value(QStringLiteral("tie_point_keypoint_limit_per_megapixel")).toInt(), 0);
-    EXPECT_NEAR(sidecar.value(QStringLiteral("dense_sift_threshold")).toDouble(), 0.0001, 1e-9);
+    EXPECT_NEAR(sidecar.value(QStringLiteral("dense_sift_threshold")).toDouble(), 0.0005, 1e-9);
 }
 
 TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
@@ -473,6 +473,27 @@ TEST(MatchPhotosTaskTest, GeometryAndTrackStagesUseExistingCoreImplementations)
     EXPECT_TRUE(tiePointSource.contains(QStringLiteral("latest_tie_points.json")));
     EXPECT_TRUE(tiePointSource.contains(QStringLiteral("plascan_tie_points")));
     EXPECT_FALSE(trackSource.contains(QStringLiteral("轨迹构建阶段尚未接入")));
+}
+
+TEST(MatchPhotosTaskTest, GeometryQualityRejectsWeakAmbiguousPair)
+{
+    // temple 3-7 像对的 35/59 内点是重复结构产生的伪几何模型，
+    // 不能仅因为超过 20 个内点就送入多视轨迹构建。
+    EXPECT_FALSE(xjw::matchphotos::passesGeometryQualityGate(59, 35, 20));
+}
+
+TEST(MatchPhotosTaskTest, GeometryQualityKeepsCleanLowSupportPair)
+{
+    // 真实宽基线像对可能内点数不高，但内点率足够高时仍应保留。
+    EXPECT_TRUE(xjw::matchphotos::passesGeometryQualityGate(49, 40, 20));
+    EXPECT_TRUE(xjw::matchphotos::passesGeometryQualityGate(22, 20, 20));
+}
+
+TEST(MatchPhotosTaskTest, GeometryQualityKeepsStrongSupportPair)
+{
+    // 高内点数本身已经提供足够稳定的两视几何，不应被内点率误杀。
+    EXPECT_TRUE(xjw::matchphotos::passesGeometryQualityGate(500, 100, 20));
+    EXPECT_FALSE(xjw::matchphotos::passesGeometryQualityGate(100, 19, 20));
 }
 
 TEST(MatchPhotosTaskTest, GeometryStageRecoversDenseAndDisconnectedSiftLightGluePairs)

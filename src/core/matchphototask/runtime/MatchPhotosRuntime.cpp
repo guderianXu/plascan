@@ -1,6 +1,7 @@
 #include "FeatureData.h"
 #include "match.h"
 #include "MatchPhotosRuntime.h"
+#include "project/ProjectMetadata.h"
 
 #include <QCoreApplication>
 #include <QDir>
@@ -19,7 +20,9 @@ namespace matchphotos
 namespace
 {
 
-constexpr int kTiePointFrontendVersion = 2;
+constexpr int kTiePointFrontendVersion = 3;
+
+using xjw::common::project::imageTokensReferToSameImage;
 
 QString cleanPath(const QString &path)
 {
@@ -32,32 +35,11 @@ QString imageBaseName(const QString &path)
     return base.isEmpty() ? QFileInfo(path).fileName() : base;
 }
 
-QString normalizedImageToken(const QString &path)
-{
-    QString normalized = cleanPath(path);
-    normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    return normalized.toLower();
-}
-
-bool imageTokenMatches(const QString &candidate, const QString &imagePath)
-{
-    if (candidate.trimmed().isEmpty() || imagePath.trimmed().isEmpty())
-    {
-        return false;
-    }
-
-    const QFileInfo candidateInfo(candidate);
-    const QFileInfo imageInfo(imagePath);
-    return normalizedImageToken(candidate) == normalizedImageToken(imagePath) ||
-           candidateInfo.fileName().compare(imageInfo.fileName(), Qt::CaseInsensitive) == 0 ||
-           candidateInfo.completeBaseName().compare(imageInfo.completeBaseName(), Qt::CaseInsensitive) == 0;
-}
-
 QString resolveImageToken(const QString &token, const QStringList &images)
 {
     for (const QString &imagePath : images)
     {
-        if (imageTokenMatches(token, imagePath))
+        if (imageTokensReferToSameImage(token, imagePath))
         {
             return imagePath;
         }
@@ -121,8 +103,8 @@ float denseSiftThresholdForTiePointFrontend(const MatchPhotosAlgorithmPlan &plan
     if (plan.featureAlgorithm.trimmed().toLower() == QStringLiteral("sift") &&
         plan.matcherAlgorithm.trimmed().toLower() == QStringLiteral("lightglue"))
     {
-        // 与空三 SfM 前端保持一致：SIFT+LightGlue 用更低阈值生成密集连接点。
-        return 0.0001f;
+        // 与空三 SfM 前端保持一致：兼顾低纹理覆盖与 LightGlue 有效特征预算。
+        return 0.0005f;
     }
     return 0.0f;
 }
@@ -230,7 +212,8 @@ bool resolveMatchPhotosPair(const MatchPhotosContext &context,
         }
     }
 
-    if (image0.trimmed().isEmpty() || image1.trimmed().isEmpty() || imageTokenMatches(image0, image1))
+    if (image0.trimmed().isEmpty() || image1.trimmed().isEmpty() ||
+        imageTokensReferToSameImage(image0, image1))
     {
         if (errorMessage)
         {

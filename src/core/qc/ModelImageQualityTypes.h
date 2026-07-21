@@ -43,6 +43,35 @@ struct ModelViewQuality
     bool appearanceAvailable = false;
     double foregroundSsim = 0.0;
     double foregroundPsnr = 0.0;
+    struct EdgeTailDiagnostics
+    {
+        bool available = false;
+        double thresholdPixels = 0.0;
+        int referenceEdgePixelCount = 0;
+        int renderedEdgePixelCount = 0;
+        int referenceTailPixelCount = 0;
+        int renderedTailPixelCount = 0;
+        double tailGeometrySupportMean = 0.0;
+        double tailGeometrySourceCountMean = 0.0;
+        double tailInverseDepthSpreadMean = 0.0;
+        int tailCrossViewRepairedPixelCount = 0;
+    } edgeTail;
+    struct DepthCoverageAttribution
+    {
+        bool available = false;
+        bool fusionEligible = true;
+        QString frameAcceptance;
+        int geometrySupportThreshold = 0;
+        int foregroundPixelCount = 0;
+        int meshMissingPixelCount = 0;
+        int outsideSupportMissingPixelCount = 0;
+        int depthInvalidMissingPixelCount = 0;
+        int geometryUnverifiedMissingPixelCount = 0;
+        int verifiedDepthButMeshMissingPixelCount = 0;
+        double verifiedDepthForegroundCoverage = 0.0;
+        double missingWithoutVerifiedDepthRate = 0.0;
+        double verifiedDepthButMeshMissingRate = 0.0;
+    } depthAttribution;
 };
 
 enum class ModelSceneType
@@ -58,6 +87,16 @@ struct ModelValidationView
     xjw::Camera camera;
     int cameraWidth = 0;
     int cameraHeight = 0;
+    QString depthPath;
+    QString geometrySupportPath;
+    QString geometrySourceMaskPath;
+    QString inverseDepthMeanPath;
+    QString inverseDepthSpreadPath;
+    QString crossViewRepairedMaskPath;
+    QString validMaskPath;
+    QString supportMaskPath;
+    QString frameAcceptance;
+    bool fusionEligible = true;
 };
 
 struct ModelImageQualityOptions

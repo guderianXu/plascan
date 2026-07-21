@@ -1,4 +1,5 @@
 #include "Triangulator.h"
+#include "geometry/OpenCvCameraAdapter.h"
 
 #include "log/Logger.h"
 
@@ -775,34 +776,7 @@ bool Triangulator::triangulateMultiView(const std::vector<TrackElement> &observa
         if (elem.featureIdx >= img.keypoints.size())
             continue;
 
-        auto R = cam.cameraToWorldRotation();
-        auto C = cam.cameraCenter();
-        double fu = cam.focalX(), fv = cam.focalY();
-        double cu = cam.principalX(), cv = cam.principalY();
-        int udir = cam.uAxisSign(), vdir = cam.vAxisSign();
-        double fx = (udir < 0 ? -1.0 : 1.0) * fu;
-        double fy = (vdir < 0 ? -1.0 : 1.0) * fv;
-
-        // R 是 camera-to-world（行优先），world-to-camera = R^T
-        // t_w2c = -R^T * C
-        cv::Mat Rw(3, 3, CV_64F);
-        for (int i = 0; i < 3; ++i)
-            for (int j = 0; j < 3; ++j)
-                Rw.at<double>(i, j) = R[i * 3 + j]; // camera-to-world
-
-        cv::Mat Rc = Rw.t(); // world-to-camera
-        cv::Mat Cvec = (cv::Mat_<double>(3, 1) << C[0], C[1], C[2]);
-        cv::Mat tvec = -Rc * Cvec;
-
-        cv::Mat K = (cv::Mat_<double>(3, 3) << fx, 0.0, cu, 0.0, fy, cv, 0.0, 0.0, 1.0);
-
-        cv::Mat Rt(3, 4, CV_64F);
-        Rc.copyTo(Rt(cv::Rect(0, 0, 3, 3)));
-        tvec.copyTo(Rt(cv::Rect(3, 0, 1, 3)));
-
-        cv::Mat P = K * Rt; // 3x4
-
-        projMats.push_back(P);
+        projMats.push_back(openCvProjectionMatrix(cam));
         pts.emplace_back(img.keypoints[elem.featureIdx].x, img.keypoints[elem.featureIdx].y);
     }
 

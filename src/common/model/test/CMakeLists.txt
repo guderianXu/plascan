@@ -1,0 +1,11 @@
+find_package(GTest REQUIRED)
+include(GoogleTest)
+
+add_executable(test_common_feature_extractor_model_catalog
+  FeatureExtractorModelCatalog_tests.cpp
+)
+target_link_libraries(test_common_feature_extractor_model_catalog PRIVATE
+  plascan_common_model
+  GTest::gtest_main
+)
+gtest_discover_tests(test_common_feature_extractor_model_catalog DISCOVERY_MODE PRE_TEST)

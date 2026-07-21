@@ -97,6 +97,40 @@ TEST(ReconstructionQualityReport, BuildsSummaryFromProjectMetadata)
     EXPECT_TRUE(report.value(QStringLiteral("ba_summary")).isObject());
 }
 
+TEST(ReconstructionQualityReport, ReadsCanonicalNestedLegacyAndComputedDepthCoverage)
+{
+    const QJsonObject canonical{
+        {QStringLiteral("status"), QStringLiteral("completed")},
+        {QStringLiteral("valid_coverage"), 0.8}};
+    const QJsonObject nested{
+        {QStringLiteral("status"), QStringLiteral("completed")},
+        {QStringLiteral("depth_quality"),
+         QJsonObject{{QStringLiteral("valid_coverage"), 0.6}}}};
+    const QJsonObject legacy{
+        {QStringLiteral("status"), QStringLiteral("completed")},
+        {QStringLiteral("valid_ratio"), 0.4}};
+    const QJsonObject computed{
+        {QStringLiteral("status"), QStringLiteral("completed")},
+        {QStringLiteral("valid_pixel_count"), 25},
+        {QStringLiteral("grid_width"), 10},
+        {QStringLiteral("grid_height"), 10}};
+    const QJsonObject meta{
+        {QStringLiteral("depth_map_results"), QJsonArray{canonical, nested, legacy, computed}}};
+
+    const QJsonObject report = ReconstructionQualityReport::buildFromProjectMeta(meta);
+    EXPECT_NEAR(report.value(QStringLiteral("mvs_valid_coverage")).toDouble(), 0.5125, 1e-9);
+}
+
+TEST(ReconstructionQualityReport, LeavesCoverageUnavailableWhenNoFrameHasAMeasurement)
+{
+    const QJsonObject meta{
+        {QStringLiteral("depth_map_results"),
+         QJsonArray{QJsonObject{{QStringLiteral("status"), QStringLiteral("completed")}}}}};
+
+    const QJsonObject report = ReconstructionQualityReport::buildFromProjectMeta(meta);
+    EXPECT_FALSE(report.contains(QStringLiteral("mvs_valid_coverage")));
+}
+
 TEST(ReconstructionQualityReport, UsesCurrentWorkflowArtifactsInsteadOfStaleReportRecords)
 {
     QJsonObject staleReport;

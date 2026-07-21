@@ -1,7 +1,7 @@
 #pragma once
 
 #include "common/SfmTypes.h"
-#include "model/MarkerTypes.h"
+#include "model/MarkerRoles.h"
 
 #include <array>
 #include <string>

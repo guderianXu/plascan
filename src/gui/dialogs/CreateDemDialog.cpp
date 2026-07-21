@@ -155,7 +155,6 @@ void CreateDemDialog::onRunClicked()
         QJsonObject settings;
         settings[QStringLiteral("dem_resolution")] = 0.0;
         settings[QStringLiteral("dem_type")]       = QStringLiteral("float32");
-        settings[QStringLiteral("matcher")]        = QStringLiteral("disk_lightglue");
 
         setRunning(true);
         emit requestRunFullPipeline(images, QString(), settings);

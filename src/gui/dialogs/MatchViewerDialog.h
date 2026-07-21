@@ -14,7 +14,7 @@
 #include <QString>
 #include <QVector>
 
-#include "MatchResultCatalog.h"
+#include "preparation/MatchResultCatalog.h"
 
 // 前向声明，减少头文件依赖
 class DualImageViewer;  // 双图并列查看器（左右各一个 ImageViewWidget）
@@ -58,7 +58,7 @@ public:
         const QString &imgA, const QString &imgB,
         const QString &disparityFile, QWidget *parent = nullptr);
 
-    void setMatchVariants(const QVector<xjw::pipeline::MatchVariant> &variants,
+    void setMatchVariants(const QVector<xjw::aerial_triangulation::MatchVariant> &variants,
                           const QString &selectedMatchFile);
 
     void setInitialTab(int tabIndex);
@@ -129,7 +129,7 @@ private:
     // 将当前显示参数保存到 project_dialog.json（项目级）
     void saveSettings();
     // 应用一个稀疏匹配算法变体，必要时重新加载 .match 文件
-    void applyMatchVariant(const xjw::pipeline::MatchVariant &variant, bool forceReload);
+    void applyMatchVariant(const xjw::aerial_triangulation::MatchVariant &variant, bool forceReload);
 
     // ── 核心控件 ──────────────────────────────────────────────────
     DualImageViewer *_viewer = nullptr;  // 双图查看器，持有左右 ImageViewWidget 和 MatchLineOverlay
@@ -177,7 +177,7 @@ private:
     int _totalMatches = 0;     // 已加载的总匹配点数（加载成功后更新）
     int _validMatches = -1;    // 空三后仍有效的匹配数，-1 表示暂无分类
     int _invalidMatches = -1;  // 空三后被过滤的匹配数，-1 表示暂无分类
-    QVector<xjw::pipeline::MatchVariant> _matchVariants;
+    QVector<xjw::aerial_triangulation::MatchVariant> _matchVariants;
     QString _currentVariantSummary;
     DialogSettingStore *_setting = nullptr; ///< 项目级记忆化管理器（可空）
 };

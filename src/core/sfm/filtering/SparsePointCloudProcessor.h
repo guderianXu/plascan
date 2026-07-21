@@ -131,9 +131,6 @@ struct SparsePointCloudSpatialCleanupResult
     int removedByDeduplication  = 0;   ///< 去重副除
 };
 
-using SparseCloudLocalOptimOptions = SparsePointCloudSpatialCleanupOptions;
-using SparseCloudLocalOptimResult = SparsePointCloudSpatialCleanupResult;
-
 struct SparsePointCloudOptimizeOptions
 {
     SparsePointCloudFilterOptions filterOptions;
@@ -187,8 +184,6 @@ public:
         std::vector<SparsePointCloudPoint> *points,
         const SparsePointCloudSpatialCleanupOptions &options);
 
-    static SparseCloudLocalOptimResult localOptim(std::vector<SparsePointCloudPoint> *points,
-                                                  const SparseCloudLocalOptimOptions &options);
 };
 
 } // namespace xjw

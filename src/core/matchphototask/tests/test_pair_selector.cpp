@@ -78,6 +78,25 @@ TEST(MatchPhotosPairSelectorTest, LargeSetFallsBackToSequenceWindow)
     ASSERT_NE(findPair(result.candidates, 0, 2), nullptr);
 }
 
+TEST(MatchPhotosPairSelectorTest, FullSequenceCandidateSetIsReportedAsUnrestricted)
+{
+    xjw::matchphotos::PairSelectionInput input;
+    input.images = makeImages(5);
+
+    xjw::matchphotos::PairSelectionPolicy policy;
+    policy.mode = xjw::matchphotos::PairSelectionMode::Sequence;
+    policy.exhaustiveMaxImages = 1;
+    policy.sequenceWindow = 4;
+
+    const xjw::matchphotos::PairSelectionResult result =
+        xjw::matchphotos::PairSelector::select(input, policy);
+
+    EXPECT_EQ(result.allPairCount, 10);
+    EXPECT_EQ(result.allowedPairKeys.size(), result.allPairCount);
+    EXPECT_FALSE(result.restrictPairs)
+        << "完整候选图不应作为受限列表传入 SfM，否则候选优先级会改变轨迹合并顺序。";
+}
+
 TEST(MatchPhotosPairSelectorTest, MergesOverlapAndVocabularyCandidates)
 {
     xjw::OverlapAnalysisResult cameraOverlap;

@@ -47,12 +47,12 @@ bool sameMatchPath(const QString &lhs, const QString &rhs)
     return !left.isEmpty() && left == right;
 }
 
-QString variantAlgorithmLabel(const xjw::pipeline::MatchVariant &variant)
+QString variantAlgorithmLabel(const xjw::aerial_triangulation::MatchVariant &variant)
 {
-    return xjw::pipeline::MatchResultCatalog::algorithmDisplayLabel(variant);
+    return xjw::aerial_triangulation::MatchResultCatalog::algorithmDisplayLabel(variant);
 }
 
-QString variantComboLabel(const xjw::pipeline::MatchVariant &variant)
+QString variantComboLabel(const xjw::aerial_triangulation::MatchVariant &variant)
 {
     const QString counts = variant.hasInlierStats
         ? QStringLiteral("几何内点 %1 / 原始 %2")
@@ -215,7 +215,7 @@ MatchViewerDialog* MatchViewerDialog::forDenseMatch(
     return dlg;
 }
 
-void MatchViewerDialog::setMatchVariants(const QVector<xjw::pipeline::MatchVariant> &variants,
+void MatchViewerDialog::setMatchVariants(const QVector<xjw::aerial_triangulation::MatchVariant> &variants,
                                          const QString &selectedMatchFile)
 {
     _matchVariants = variants;
@@ -231,7 +231,7 @@ void MatchViewerDialog::setMatchVariants(const QVector<xjw::pipeline::MatchVaria
         _variantCombo->clear();
         for (int i = 0; i < _matchVariants.size(); ++i)
         {
-            const xjw::pipeline::MatchVariant &variant = _matchVariants.at(i);
+            const xjw::aerial_triangulation::MatchVariant &variant = _matchVariants.at(i);
             if (!variant.compatible || variant.matchFilePath.trimmed().isEmpty())
             {
                 continue;
@@ -387,7 +387,7 @@ void MatchViewerDialog::onVariantChanged(int index)
     applyMatchVariant(_matchVariants.at(variantIndex), true);
 }
 
-void MatchViewerDialog::applyMatchVariant(const xjw::pipeline::MatchVariant &variant, bool forceReload)
+void MatchViewerDialog::applyMatchVariant(const xjw::aerial_triangulation::MatchVariant &variant, bool forceReload)
 {
     if (!variant.compatible || variant.matchFilePath.trimmed().isEmpty())
     {

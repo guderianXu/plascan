@@ -1,6 +1,6 @@
 #include <gtest/gtest.h>
 
-#include "LightGlueFeatureBudget.h"
+#include "lightglue/LightGlueFeatureBudget.h"
 
 #include "feature_match/match.h"
 
@@ -37,83 +37,83 @@ xjw::feature_extractors::FeatureData makeFeatureData(int count, int width = 4000
 
 TEST(LightGlueFeatureBudgetTest, CapsSiftLightGlueOnCudaByDefault)
 {
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, -1),
               4096);
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, 2048),
               2048);
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, 9999),
               4096);
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("disk"), QStringLiteral("lightglue"), true, -1),
               -1);
 }
 
 TEST(LightGlueFeatureBudgetTest, RaisesSiftLightGlueBudgetWhenGpuMemoryAllows)
 {
-    xjw::pipeline::LightGlueGpuMemoryInfo memory;
+    xjw::feature_match::LightGlueGpuMemoryInfo memory;
     memory.available = true;
     memory.freeBytes = 7ull * 1024ull * 1024ull * 1024ull;
     memory.totalBytes = 8ull * 1024ull * 1024ull * 1024ull;
 
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, -1, memory),
               6144);
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, 8192, memory),
               6144);
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, 2048, memory),
               2048);
 }
 
 TEST(LightGlueFeatureBudgetTest, LowGpuMemoryKeepsSiftLightGlueConservative)
 {
-    xjw::pipeline::LightGlueGpuMemoryInfo memory;
+    xjw::feature_match::LightGlueGpuMemoryInfo memory;
     memory.available = true;
     memory.freeBytes = 3ull * 1024ull * 1024ull * 1024ull;
     memory.totalBytes = 8ull * 1024ull * 1024ull * 1024ull;
 
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, -1, memory),
               3072);
 }
 
 TEST(LightGlueFeatureBudgetTest, LargeGpuMemoryUsesLargerSiftLightGlueBudget)
 {
-    xjw::pipeline::LightGlueGpuMemoryInfo memory;
+    xjw::feature_match::LightGlueGpuMemoryInfo memory;
     memory.available = true;
     memory.freeBytes = 14ull * 1024ull * 1024ull * 1024ull;
     memory.totalBytes = 16ull * 1024ull * 1024ull * 1024ull;
 
-    EXPECT_EQ(xjw::pipeline::resolveLightGlueKeypointBudget(
+    EXPECT_EQ(xjw::feature_match::resolveLightGlueKeypointBudget(
                   QStringLiteral("sift"), QStringLiteral("lightglue"), true, -1, memory),
               12288);
 }
 
 TEST(LightGlueFeatureBudgetTest, RelaxesSiftLightGlueThresholdOnlyWithinSafeBounds)
 {
-    xjw::pipeline::LightGlueGpuMemoryInfo memory;
+    xjw::feature_match::LightGlueGpuMemoryInfo memory;
     memory.available = true;
     memory.freeBytes = 7ull * 1024ull * 1024ull * 1024ull;
     memory.totalBytes = 8ull * 1024ull * 1024ull * 1024ull;
 
-    EXPECT_FLOAT_EQ(xjw::pipeline::resolveLightGlueMatchThreshold(
+    EXPECT_FLOAT_EQ(xjw::feature_match::resolveLightGlueMatchThreshold(
                         QStringLiteral("sift"), QStringLiteral("lightglue"), true, 0.20f, 6144, memory),
                     0.12f);
-    EXPECT_FLOAT_EQ(xjw::pipeline::resolveLightGlueMatchThreshold(
+    EXPECT_FLOAT_EQ(xjw::feature_match::resolveLightGlueMatchThreshold(
                         QStringLiteral("sift"), QStringLiteral("lightglue"), true, 0.05f, 6144, memory),
                     0.05f);
-    EXPECT_FLOAT_EQ(xjw::pipeline::resolveLightGlueMatchThreshold(
+    EXPECT_FLOAT_EQ(xjw::feature_match::resolveLightGlueMatchThreshold(
                         QStringLiteral("disk"), QStringLiteral("lightglue"), true, 0.20f, 6144, memory),
                     0.20f);
 }
 
 TEST(LightGlueFeatureBudgetTest, RetryBudgetsUseMemoryAwareBudgetAsStartingPoint)
 {
-    const QVector<int> budgets = xjw::pipeline::lightGlueRetryKeypointBudgets(12288);
+    const QVector<int> budgets = xjw::feature_match::lightGlueRetryKeypointBudgets(12288);
 
     ASSERT_GE(budgets.size(), 4);
     EXPECT_EQ(budgets.at(0), 12288);
@@ -126,8 +126,8 @@ TEST(LightGlueFeatureBudgetTest, RetryBudgetsUseMemoryAwareBudgetAsStartingPoint
 TEST(LightGlueFeatureBudgetTest, SelectsBudgetedFeaturesAndTracksOriginalIndices)
 {
     const xjw::feature_extractors::FeatureData input = makeFeatureData(10);
-    const xjw::pipeline::BudgetedFeatureData budgeted =
-        xjw::pipeline::budgetFeatureDataForLightGlue(input, 4);
+    const xjw::feature_match::BudgetedFeatureData budgeted =
+        xjw::feature_match::budgetFeatureDataForLightGlue(input, 4);
 
     ASSERT_TRUE(budgeted.limited);
     ASSERT_EQ(budgeted.features.size(), 4);
@@ -148,10 +148,10 @@ TEST(LightGlueFeatureBudgetTest, RemapsBudgetedMatchResultBackToOriginalKeypoint
 {
     const xjw::feature_extractors::FeatureData input0 = makeFeatureData(8);
     const xjw::feature_extractors::FeatureData input1 = makeFeatureData(9);
-    xjw::pipeline::BudgetedFeatureData budgeted0 =
-        xjw::pipeline::budgetFeatureDataForLightGlue(input0, 3);
-    xjw::pipeline::BudgetedFeatureData budgeted1 =
-        xjw::pipeline::budgetFeatureDataForLightGlue(input1, 4);
+    xjw::feature_match::BudgetedFeatureData budgeted0 =
+        xjw::feature_match::budgetFeatureDataForLightGlue(input0, 3);
+    xjw::feature_match::BudgetedFeatureData budgeted1 =
+        xjw::feature_match::budgetFeatureDataForLightGlue(input1, 4);
 
     xjw::feature_match::MatchResult limited;
     limited.sourceAlgorithm = "lightglue";
@@ -166,7 +166,7 @@ TEST(LightGlueFeatureBudgetTest, RemapsBudgetedMatchResultBackToOriginalKeypoint
     limited.buildCvMatchesFromIndices();
 
     const xjw::feature_match::MatchResult remapped =
-        xjw::pipeline::remapLightGlueMatchResultToOriginal(
+        xjw::feature_match::remapLightGlueMatchResultToOriginal(
             limited,
             budgeted0,
             input0.size(),

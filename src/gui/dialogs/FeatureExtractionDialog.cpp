@@ -3,6 +3,7 @@
 
 #include "FeatureExtractionDialog.h"
 #include "ui_FeatureExtractionDialog.h"
+#include "model/FeatureExtractorModelCatalog.h"
 #include "model/TorchScriptModelResolver.h"
 
 #include <QAbstractItemView>
@@ -69,63 +70,9 @@ QString findModelFile(const QString &modelName)
     return resolver.findModel(modelName);
 }
 
-QStringList modelCandidates(const QString &algorithm, bool useCuda)
-{
-    if (algorithm == QStringLiteral("superpoint"))
-    {
-        QStringList candidates;
-        if (useCuda)
-        {
-            candidates << QStringLiteral("superpoint_extractor_cuda.torchscript")
-                       << QStringLiteral("superpoint_extractor_cuda.pt");
-        }
-        candidates << QStringLiteral("superpoint_extractor_cpu.torchscript")
-                   << QStringLiteral("superpoint_extractor_cpu.pt")
-                   << QStringLiteral("superpoint_extractor.torchscript")
-                   << QStringLiteral("superpoint_extractor.pt");
-        return candidates;
-    }
-
-    if (algorithm == QStringLiteral("disk"))
-    {
-        QStringList candidates;
-        if (useCuda)
-        {
-            candidates << QStringLiteral("disk_extractor_cuda_8192.torchscript")
-                       << QStringLiteral("disk_extractor_cuda_8192.pt")
-                       << QStringLiteral("disk_extractor_cuda_1200.torchscript")
-                       << QStringLiteral("disk_extractor_cuda_1200.pt");
-        }
-        candidates << QStringLiteral("disk_extractor_cpu_8192.torchscript")
-                   << QStringLiteral("disk_extractor_cpu_8192.pt")
-                   << QStringLiteral("disk_extractor_cpu_1200.torchscript")
-                   << QStringLiteral("disk_extractor_cpu_1200.pt")
-                   << QStringLiteral("disk_extractor.torchscript")
-                   << QStringLiteral("disk_extractor.pt");
-        return candidates;
-    }
-
-    if (algorithm == QStringLiteral("aliked"))
-    {
-        QStringList candidates;
-        if (useCuda)
-        {
-            candidates << QStringLiteral("aliked_extractor_cuda_480.torchscript")
-                       << QStringLiteral("aliked_extractor_cuda_480.pt");
-        }
-        candidates << QStringLiteral("aliked_extractor_cpu_480.torchscript")
-                   << QStringLiteral("aliked_extractor_cpu_480.pt")
-                   << QStringLiteral("aliked_extractor.torchscript")
-                   << QStringLiteral("aliked_extractor.pt");
-        return candidates;
-    }
-
-    return {};
-}
-
 QString defaultModelPath(const QString &algorithm, bool useCuda)
 {
-    const QStringList candidates = modelCandidates(algorithm, useCuda);
+    const QStringList candidates = xjw::common::model::featureExtractorModelCandidates(algorithm, useCuda);
     for (const QString &candidate : candidates)
     {
         const QString path = findModelFile(candidate);
@@ -135,14 +82,6 @@ QString defaultModelPath(const QString &algorithm, bool useCuda)
         }
     }
     return QString();
-}
-
-bool isManagedModelPath(const QString &path)
-{
-    const QString fileName = QFileInfo(path).fileName().toLower();
-    return fileName.startsWith(QStringLiteral("superpoint_extractor"))
-        || fileName.startsWith(QStringLiteral("disk_extractor"))
-        || fileName.startsWith(QStringLiteral("aliked_extractor"));
 }
 
 bool deviceTextRequestsCuda(const QString &deviceText)
@@ -551,7 +490,8 @@ void FeatureExtractionDialog::updateModelPathForCurrentAlgorithm()
 
     const QString resolvedPath = defaultModelPath(algo, deviceTextRequestsCuda(_deviceCombo->currentText()));
     const QString currentPath = _modelPathEdit->text().trimmed();
-    const bool shouldReplace = currentPath.isEmpty() || isManagedModelPath(currentPath);
+    const bool shouldReplace = currentPath.isEmpty()
+        || xjw::common::model::isManagedFeatureExtractorModelPath(currentPath);
 
     if (shouldReplace)
     {

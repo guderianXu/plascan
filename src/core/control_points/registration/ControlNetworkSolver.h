@@ -1,10 +1,10 @@
 #pragma once
 
-#include "model/MarkerTypes.h"
-
-#include <QVector>
+#include "model/MarkerRoles.h"
 
 #include <array>
+#include <string>
+#include <vector>
 
 namespace xjw::control_points
 {
@@ -24,7 +24,7 @@ struct SimilarityTransform3D
 
 struct ControlNetworkPoint
 {
-    MarkerId markerId;
+    std::string markerId;
     MarkerRole role = MarkerRole::TieMarker;
     bool enabled = true;
     std::array<double, 3> estimatedPoint{{0.0, 0.0, 0.0}};
@@ -34,7 +34,7 @@ struct ControlNetworkPoint
 
 struct MarkerResidual
 {
-    MarkerId markerId;
+    std::string markerId;
     MarkerRole role = MarkerRole::TieMarker;
     std::array<double, 3> delta{{0.0, 0.0, 0.0}};
     double total = 0.0;
@@ -52,7 +52,7 @@ struct ControlNetworkOptions
 
 struct ControlNetworkInput
 {
-    QVector<ControlNetworkPoint> points;
+    std::vector<ControlNetworkPoint> points;
     ControlNetworkOptions options;
 };
 
@@ -60,11 +60,11 @@ struct ControlNetworkResult
 {
     bool ok = false;
     SimilarityTransform3D transform;
-    QVector<MarkerResidual> controlResiduals;
-    QVector<MarkerResidual> checkPointResiduals;
+    std::vector<MarkerResidual> controlResiduals;
+    std::vector<MarkerResidual> checkPointResiduals;
     int controlInlierCount = 0;
     double controlInlierRms = 0.0;
-    QString error;
+    std::string error;
 };
 
 ControlNetworkResult solveControlNetwork(const ControlNetworkInput &input);

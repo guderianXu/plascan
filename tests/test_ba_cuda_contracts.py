@@ -22,14 +22,17 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn("VCPKG_MANIFEST_FEATURES=$manifestFeaturesValue", script)
 
     def test_aerial_triangulation_cuda_requests_auto_ba_with_cuda_thresholds(self):
-        source = read_text("src/core/aerial_triangulation/AerialTriangulationService.cpp")
+        source = read_text(
+            "src/core/aerial_triangulation/reconstruction/SfmAttemptRunner.cpp"
+        )
 
-        self.assertIn("sfmOpts.baOptions.backend = xjw::BABackend::Auto;", source)
-        self.assertIn("sfmOpts.baOptions.ceresCudaDevice = 0;", source)
-        self.assertIn("sfmOpts.baOptions.minCeresCudaObservations = 500000;", source)
-        self.assertIn("sfmOpts.baOptions.minCeresCpuObservations = 50000;", source)
-        self.assertIn("sfmOpts.baOptions.enableBackendQualityGate = true;", source)
-        self.assertIn("BundleAdjust::backendName(sfmOpts.baOptions.backend)", source)
+        self.assertIn("options->baOptions.backend = BABackend::Auto;", source)
+        self.assertIn("options->baOptions.minNativeCudaCameras = 50;", source)
+        self.assertIn("options->baOptions.minNativeCudaObservations = 500000;", source)
+        self.assertIn("options->baOptions.minCeresCudaObservations = 500000;", source)
+        self.assertIn("options->baOptions.minCeresCpuObservations = 50000;", source)
+        self.assertIn("options->baOptions.enableBackendQualityGate = true;", source)
+        self.assertIn("options->baOptions.allowBackendFallback = true;", source)
 
     def test_bundle_adjust_service_records_requested_and_used_backend(self):
         source = read_text("src/gui/project/services/BundleAdjustService.cpp")
@@ -41,22 +44,6 @@ class BaCudaContractsTest(unittest.TestCase):
         self.assertIn('saveObj[QStringLiteral("ba_backend_selection_reason")]', source)
         self.assertIn('saveObj[QStringLiteral("ba_quality_gate_rejected")]', source)
         self.assertIn('saveObj[QStringLiteral("ba_valid_track_ratio")]', source)
-
-    def test_bundle_adjust_cli_exposes_ba_backend_controls(self):
-        source = read_text("src/cli/cli_bundle_adjust.cpp")
-
-        self.assertIn('--ba-backend', source)
-        self.assertIn('--ba-cuda-device', source)
-        self.assertIn('--ba-min-cuda-cameras', source)
-        self.assertIn('--ba-min-cuda-observations', source)
-        self.assertIn('--ba-min-cpu-observations', source)
-        self.assertIn('--ba-max-ceres-point-only-observations', source)
-        self.assertIn('--ba-quality-gate', source)
-        self.assertIn('--ba-max-rms-growth', source)
-        self.assertIn('--ba-min-valid-track-ratio', source)
-        self.assertIn('--ba-compare-legacy', source)
-        self.assertIn('parseBaBackendName(toQString(baBackendRaw))', source)
-        self.assertIn('baOptions.backend', source)
 
     def test_standalone_bundle_adjust_defaults_to_auto_backend(self):
         dialog = read_text("src/gui/dialogs/BundleAdjustDialog.cpp")

@@ -5,6 +5,7 @@
 
 #include <array>
 #include <cmath>
+#include <cstring>
 #include <cstdio>
 
 namespace xjw
@@ -284,14 +285,15 @@ cv::Mat EpipolarRectifier::unrectifyDepth(
     const RectifiedPair &pair,
     int origW, int origH)
 {
-    if (rectifiedDepth.empty() || pair.H1inv.empty())
+    const cv::Mat &reference_homography = pair.refIsRight ? pair.H2 : pair.H1;
+    if (rectifiedDepth.empty() || reference_homography.empty())
         return cv::Mat();
 
     const int rW = rectifiedDepth.cols;
     const int rH = rectifiedDepth.rows;
     cv::Mat result(origH, origW, CV_32FC1, cv::Scalar(0.0f));
 
-    const double *h = pair.H1.ptr<double>(0);
+    const double *h = reference_homography.ptr<double>(0);
     const double h00 = h[0], h01 = h[1], h02 = h[2];
     const double h10 = h[3], h11 = h[4], h12 = h[5];
     const double h20 = h[6], h21 = h[7], h22 = h[8];
@@ -313,6 +315,52 @@ cv::Mat EpipolarRectifier::unrectifyDepth(
             float d = rectifiedDepth.at<float>(srcRow, srcCol);
             if (d > 0.0f)
                 result.at<float>(row, col) = d;
+        }
+    }
+    return result;
+}
+
+cv::Mat EpipolarRectifier::unrectifyNearest(
+    const cv::Mat &rectifiedArtifact,
+    const RectifiedPair &pair,
+    int origW,
+    int origH)
+{
+    const cv::Mat &reference_homography = pair.refIsRight ? pair.H2 : pair.H1;
+    if (rectifiedArtifact.empty() || reference_homography.empty() || origW <= 0 || origH <= 0)
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat homography;
+    reference_homography.convertTo(homography, CV_64F);
+    const double *values = homography.ptr<double>(0);
+    cv::Mat result = cv::Mat::zeros(origH, origW, rectifiedArtifact.type());
+    const std::size_t element_size = rectifiedArtifact.elemSize();
+
+    for (int row = 0; row < origH; ++row)
+    {
+        for (int col = 0; col < origW; ++col)
+        {
+            const double scale = values[6] * col + values[7] * row + values[8];
+            if (std::abs(scale) < 1.0e-12)
+            {
+                continue;
+            }
+            const int source_col = static_cast<int>(std::lround(
+                (values[0] * col + values[1] * row + values[2]) / scale));
+            const int source_row = static_cast<int>(std::lround(
+                (values[3] * col + values[4] * row + values[5]) / scale));
+            if (source_col < 0 || source_col >= rectifiedArtifact.cols ||
+                source_row < 0 || source_row >= rectifiedArtifact.rows)
+            {
+                continue;
+            }
+
+            std::memcpy(result.ptr(row) + static_cast<std::size_t>(col) * element_size,
+                        rectifiedArtifact.ptr(source_row) +
+                            static_cast<std::size_t>(source_col) * element_size,
+                        element_size);
         }
     }
     return result;

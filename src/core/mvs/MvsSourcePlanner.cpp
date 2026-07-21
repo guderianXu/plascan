@@ -6,6 +6,7 @@
 #include <cmath>
 #include <limits>
 #include <unordered_map>
+#include <unordered_set>
 
 namespace xjw
 {
@@ -27,6 +28,9 @@ MvsSourcePlanEntry makeEntry(const MvsSourceCandidate &candidate,
     entry.baselineScore = std::clamp(candidate.baselineScore, 0.0f, 1.0f);
     entry.knownOverlap = candidate.knownOverlap;
     entry.verifiedPairGeometry = candidate.verifiedPairGeometry;
+    entry.tier = candidate.verifiedPairGeometry
+        ? MvsSourceTier::VerifiedPair
+        : MvsSourceTier::TrackGeometryBackfill;
     entry.sequenceDistance = candidate.sequenceDistance > 0
         ? candidate.sequenceDistance
         : std::abs(candidate.viewIndex - options.refIndex);
@@ -209,6 +213,7 @@ std::vector<MvsSourcePlanEntry> sequenceFallbackEntries(const MvsSourcePlannerOp
             entry.viewIndex = viewIndex;
             entry.sequenceDistance = delta;
             entry.sequenceFallback = true;
+            entry.tier = MvsSourceTier::SequenceFallback;
             entry.score = -static_cast<float>(delta);
             entry.sourceQualityScore = std::clamp(0.10f / static_cast<float>(delta), 0.0f, 1.0f);
             entries.push_back(entry);
@@ -227,6 +232,7 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
                                  const MvsSourcePlannerOptions &options)
 {
     MvsSourcePlan plan;
+    plan.requestedSourceCount = std::max(0, options.maxSources);
     if (options.maxSources <= 0)
     {
         return plan;
@@ -302,7 +308,80 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
         plan.usedSequenceFallback = !plan.selected.empty();
     }
 
+    plan.sourceViewShortfall = std::max(
+        0,
+        plan.requestedSourceCount - static_cast<int>(plan.selected.size()));
+
     return plan;
+}
+
+MvsSourcePlan planMvsSourceViewsVerifiedFirst(
+    const std::vector<MvsSourceCandidate> &candidates,
+    const MvsSourcePlannerOptions &options)
+{
+    MvsSourcePlannerOptions verifiedOptions = options;
+    verifiedOptions.requireVerifiedPairGeometry = true;
+    verifiedOptions.allowSequenceFallback = false;
+    MvsSourcePlan result = planMvsSourceViews(candidates, verifiedOptions);
+    result.requestedSourceCount = std::max(0, options.maxSources);
+    for (MvsSourcePlanEntry &entry : result.selected)
+    {
+        entry.tier = MvsSourceTier::VerifiedPair;
+    }
+
+    if (static_cast<int>(result.selected.size()) >= result.requestedSourceCount)
+    {
+        result.sourceViewShortfall = 0;
+        return result;
+    }
+
+    std::unordered_set<int> selectedViews;
+    selectedViews.reserve(result.selected.size());
+    for (const MvsSourcePlanEntry &entry : result.selected)
+    {
+        selectedViews.insert(entry.viewIndex);
+    }
+
+    std::vector<MvsSourceCandidate> remaining;
+    remaining.reserve(candidates.size());
+    for (const MvsSourceCandidate &candidate : candidates)
+    {
+        if (selectedViews.find(candidate.viewIndex) == selectedViews.end())
+        {
+            remaining.push_back(candidate);
+        }
+    }
+
+    MvsSourcePlannerOptions backfillOptions = options;
+    backfillOptions.requireVerifiedPairGeometry = false;
+    backfillOptions.allowSequenceFallback = false;
+    backfillOptions.allowWeakKnownOverlap = false;
+    backfillOptions.rejectAngleOutliers = true;
+    backfillOptions.minTriangulationAngleDeg = std::max(
+        0.2f, options.minTriangulationAngleDeg);
+    backfillOptions.maxTriangulationAngleDeg = options.maxTriangulationAngleDeg;
+    backfillOptions.minSharedTracks = 20;
+    // A backfill view may be absent from the verified-pair tier because its
+    // pair verification did not meet the production threshold.  It still
+    // needs direct geometric evidence of its own: projected sparse overlap
+    // alone is not sufficient and previously admitted zero-inlier views into
+    // PatchMatch for weak Temple frames.
+    backfillOptions.minGeometricInliers = 1;
+    backfillOptions.minSourceQualityScore = 0.35f;
+    backfillOptions.maxSources = result.requestedSourceCount -
+        static_cast<int>(result.selected.size());
+    MvsSourcePlan backfill = planMvsSourceViews(remaining, backfillOptions);
+    for (MvsSourcePlanEntry &entry : backfill.selected)
+    {
+        entry.tier = MvsSourceTier::TrackGeometryBackfill;
+        result.selected.push_back(entry);
+    }
+    result.rejected = std::move(backfill.rejected);
+    result.usedSequenceFallback = false;
+    result.sourceViewShortfall = std::max(
+        0,
+        result.requestedSourceCount - static_cast<int>(result.selected.size()));
+    return result;
 }
 
 QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)
@@ -318,6 +397,16 @@ QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)
     object.insert(QStringLiteral("known_overlap"), entry.knownOverlap);
     object.insert(QStringLiteral("verified_pair_geometry"), entry.verifiedPairGeometry);
     object.insert(QStringLiteral("sequence_fallback"), entry.sequenceFallback);
+    QString sourceTier = QStringLiteral("verified_pair");
+    if (entry.tier == MvsSourceTier::TrackGeometryBackfill)
+    {
+        sourceTier = QStringLiteral("track_geometry_backfill");
+    }
+    else if (entry.tier == MvsSourceTier::SequenceFallback)
+    {
+        sourceTier = QStringLiteral("sequence_fallback");
+    }
+    object.insert(QStringLiteral("source_tier"), sourceTier);
     object.insert(QStringLiteral("score"), entry.score);
     object.insert(QStringLiteral("source_quality_score"), entry.sourceQualityScore);
     return object;

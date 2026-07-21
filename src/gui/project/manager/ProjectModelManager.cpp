@@ -4,6 +4,7 @@
 #include "ProjectData.h"
 #include "ProjectDenseWorkflowConfig.h"
 #include "ProjectMetadataOperations.h"
+#include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
 #include "ProjectWorkflowUtils.h"
 #include "Logger.h"
@@ -17,6 +18,7 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QThread>
 #include <QtConcurrent/QtConcurrent>
 
 #include <algorithm>
@@ -203,7 +205,7 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
     const QString sourceData = settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
     const QString sourcePath = settings.value(QStringLiteral("source_path")).toString(denseCloudPath);
     const QString sourceDenseCloud =
-        (sourceData == QStringLiteral("point_cloud") || sourceData == QStringLiteral("depth_maps"))
+        sourceData == QStringLiteral("point_cloud")
             ? denseCloudPath
             : QString();
 
@@ -222,6 +224,9 @@ QJsonObject buildMeshReconstructionRecord(const QJsonObject &taskResult,
     modelRecord[QStringLiteral("source_path")] = sourcePath;
     modelRecord[QStringLiteral("source_label")] = settings.value(QStringLiteral("source_label")).toString();
     modelRecord[QStringLiteral("requested_method")] = settings.value(QStringLiteral("method")).toString();
+    modelRecord[QStringLiteral("reconstruction_mode")] =
+        taskResult.value(QStringLiteral("reconstruction_mode"))
+            .toString(settings.value(QStringLiteral("reconstruction_mode")).toString());
     modelRecord[QStringLiteral("requested_quality_profile")] =
         settings.contains(QStringLiteral("qualityProfile"))
             ? settings.value(QStringLiteral("qualityProfile")).toString()
@@ -511,7 +516,7 @@ void ProjectModelManager::startGenerateModelAsync()
     settings[QStringLiteral("method")] = QStringLiteral("Poisson Surface");
     settings[QStringLiteral("qualityProfile")] = QStringLiteral("balanced");
     settings[QStringLiteral("voxelDensity")] = QStringLiteral("medium");
-    settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
+    settings[QStringLiteral("export_format")] = QStringLiteral("OBJ");
     startMeshReconstructionAsync(settings);
 }
 
@@ -542,6 +547,12 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     }
 
     QJsonObject effectiveSettings = settings;
+    if (!effectiveSettings.contains(QStringLiteral("threads")))
+    {
+        effectiveSettings[QStringLiteral("threads")] =
+            xjw::gui::project::recommendedInteractiveModelWorkerCount(
+                QThread::idealThreadCount());
+    }
     effectiveSettings[QStringLiteral("source_path")] = resolvedSource.requestedSourcePath;
     effectiveSettings[QStringLiteral("resolved_point_cloud_path")] = resolvedSource.sourcePointCloudPath;
 
@@ -656,6 +667,9 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
 
     const QString meshPath = lookup.meshPath;
     const QJsonObject baseRecord = lookup.modelRecord;
+    const QString depthMapSourcePath =
+        baseRecord.value(QStringLiteral("depth_map_source_path"))
+            .toString(baseRecord.value(QStringLiteral("source_path")).toString());
 
     {
         QJsonObject meta = _projectData->metadata();
@@ -672,7 +686,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     runModelAsyncTask(
         this,
-        [self, ownerGuard, meshPath, productsDir, settings, projectPath]() -> ModelTaskResult {
+        [self, ownerGuard, meshPath, productsDir, depthMapSourcePath, settings, projectPath]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
             {
@@ -683,6 +697,7 @@ void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)
             xjw::mesh::workflow::TextureBuildRequest request;
             request.meshPath = meshPath;
             request.outputDir = productsDir;
+            request.depthMapSourcePath = depthMapSourcePath;
             request.texture = xjw::mesh::workflow::textureConfigFromSettings(settings);
             request.progress = makeProgressReporter(self, ownerGuard, projectPath);
 

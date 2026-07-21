@@ -14,12 +14,17 @@ add_library(plascan_common_string_utils STATIC
 )
 
 add_library(plascan_common_model STATIC
+  model/FeatureExtractorModelCatalog.cpp
   model/Sam21ModelCatalog.cpp
   model/TorchScriptModelResolver.cpp
   model/U2NetModelCatalog.cpp
 )
 
 add_library(plascan_common_project STATIC
+  project/ProjectCameraIO.cpp
+  project/ProjectIO.cpp
+  project/ProjectMatchCatalog.cpp
+  project/ProjectMetadata.cpp
   project/SparseResultQuality.cpp
 )
 
@@ -62,8 +67,10 @@ target_link_libraries(plascan_common_io PUBLIC
 target_link_libraries(plascan_common_model PUBLIC Qt6::Core)
 target_compile_definitions(plascan_common_model PRIVATE PLASCAN_SOURCE_DIR="${CMAKE_SOURCE_DIR}")
 
-target_link_libraries(plascan_common_project PUBLIC Qt6::Core)
+target_link_libraries(plascan_common_project PUBLIC Qt6::Core camera)
 
 if(BUILD_TESTS)
   add_subdirectory(string_utils/test)
+  add_subdirectory(model/test)
+  add_subdirectory(project/test)
 endif()

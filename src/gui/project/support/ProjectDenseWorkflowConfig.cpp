@@ -88,7 +88,11 @@ int autoGpuFrameWorkers(int threads, int viewCount)
 {
     const int maxByViews = std::max(1, viewCount);
     const int maxGpuWorkers = std::min(2, maxByViews);
-    const int desired = threads >= 8 ? 2 : 1;
+    // The GUI renderer and CUDA depth estimator share the same device. Running
+    // two high-quality frames concurrently can starve Qt's OpenGL rendering and
+    // make the application appear frozen. Keep the automatic GUI-safe default
+    // at one; an explicit gpu_frame_workers value can still opt into two.
+    const int desired = std::clamp(threads, 1, 1);
     return std::clamp(desired, 1, maxGpuWorkers);
 }
 
@@ -245,7 +249,17 @@ DenseGenerationSettings denseGenerationSettingsFromJson(const QJsonObject &setti
     parsed.sceneProfile = settings.value(QStringLiteral("sceneProfile")).toString(QStringLiteral("auto"));
     parsed.depthFilterMode = settings.value(QStringLiteral("depthFilterMode")).toString(QStringLiteral("auto"));
     parsed.saveIntermediatePyramidLevels =
-        settings.value(QStringLiteral("saveIntermediatePyramidLevels")).toBool(false);
+        settings.value(QStringLiteral("saveIntermediatePyramidLevels")).toBool(true);
+    parsed.enableTwoSourceCrossViewGrowth = settings.value(
+        QStringLiteral("enableTwoSourceCrossViewGrowth")).toBool(false);
+    parsed.twoSourceGrowthDistancePixels = settings.value(
+        QStringLiteral("twoSourceGrowthDistancePixels")).toInt(3);
+    parsed.twoSourceGrowthInverseDepthSpread = static_cast<float>(settings.value(
+        QStringLiteral("twoSourceGrowthInverseDepthSpread")).toDouble(0.01));
+    parsed.twoSourceGrowthNormalAngleDegrees = static_cast<float>(settings.value(
+        QStringLiteral("twoSourceGrowthNormalAngleDegrees")).toDouble(15.0));
+    parsed.twoSourceGrowthMaximumComponentArea = settings.value(
+        QStringLiteral("twoSourceGrowthMaximumComponentArea")).toInt(64);
     parsed.processingDevice = processingDeviceFromString(
         settings.value(QStringLiteral("processingDevice")).toString(QStringLiteral("auto")));
     parsed.pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
@@ -258,7 +272,10 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
 {
     xjw::mvs::DepthGenConfig config;
     config.numSourceViews = std::min(settings.minViews, viewCount - 1);
-    const int totalThreads = std::max(1, settings.threads);
+    // This configuration is used by the interactive project workflow. Leave
+    // one logical worker out of the historical eight-thread budget so Qt can
+    // continue processing input, painting, progress, and cancellation events.
+    const int totalThreads = std::clamp(settings.threads, 1, 7);
     const int maxByViews = std::max(1, viewCount);
     const int maxGpuWorkers = std::min(2, maxByViews);
     const int maxCpuWorkers = std::min(4, maxByViews);
@@ -276,7 +293,9 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
                          : autoCpuFrameWorkers(totalThreads, viewCount),
                      1,
                      maxCpuWorkers);
-    config.cpuWorkerCount = std::max(1, totalThreads / std::max(1, config.cpuFrameWorkerCount));
+    const int activeFrameWorkers = std::max(
+        1, config.gpuFrameWorkerCount + config.cpuFrameWorkerCount);
+    config.cpuWorkerCount = std::max(1, totalThreads / activeFrameWorkers);
     config.patchMatch.numIterations = settings.iterations;
     config.patchMatch.patchHalf = (settings.patchSize - 1) / 2;
     config.patchMatch.numSourceViews = config.numSourceViews;
@@ -297,6 +316,16 @@ xjw::mvs::DepthGenConfig buildDepthGenConfig(const DenseGenerationSettings &sett
     config.adaptiveDepthFilterMode = settings.depthFilterMode.trimmed().compare(
         QStringLiteral("auto"), Qt::CaseInsensitive) == 0;
     config.saveIntermediatePyramidLevels = settings.saveIntermediatePyramidLevels;
+    config.enableTwoSourceCrossViewGrowth =
+        settings.enableTwoSourceCrossViewGrowth;
+    config.twoSourceGrowthDistancePixels =
+        settings.twoSourceGrowthDistancePixels;
+    config.twoSourceGrowthInverseDepthSpread =
+        settings.twoSourceGrowthInverseDepthSpread;
+    config.twoSourceGrowthNormalAngleDegrees =
+        settings.twoSourceGrowthNormalAngleDegrees;
+    config.twoSourceGrowthMaximumComponentArea =
+        settings.twoSourceGrowthMaximumComponentArea;
 
     if (viewCount <= 2)
     {

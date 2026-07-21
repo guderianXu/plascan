@@ -1,6 +1,7 @@
 #include "FeaturePairPlanner.h"
 
-#include "SfmPairPlanner.h"
+#include "reconstruction/SfmPairPlanner.h"
+#include "project/ProjectMatchCatalog.h"
 
 #include <QFileInfo>
 #include <QHash>
@@ -11,27 +12,23 @@
 namespace xjw::gui
 {
 
+using xjw::aerial_triangulation::SfmPairPlannerOptions;
+using xjw::aerial_triangulation::canonicalSfmPath;
+using xjw::aerial_triangulation::planSfmMatchPairs;
+
 namespace
 {
 
 QString guiPairKey(const QString &lhs, const QString &rhs)
 {
-    if (lhs == rhs)
-    {
-        return {};
-    }
-    return (lhs < rhs)
-        ? QStringLiteral("%1__%2").arg(lhs, rhs)
-        : QStringLiteral("%1__%2").arg(rhs, lhs);
+    return xjw::common::project::canonicalImagePairKey(
+        lhs, rhs, QStringLiteral("__"));
 }
 
 QString pipelinePairKey(const QString &lhs, const QString &rhs)
 {
-    if (lhs == rhs)
-    {
-        return {};
-    }
-    return QStringLiteral("%1|%2").arg(lhs, rhs);
+    return xjw::common::project::encodeImagePairKey(
+        lhs, rhs, QStringLiteral("|"));
 }
 
 QStringList convertCanonicalPairsToGuiPairs(const QStringList &canonicalPairs,
@@ -42,14 +39,16 @@ QStringList convertCanonicalPairsToGuiPairs(const QStringList &canonicalPairs,
     pairs.reserve(canonicalPairs.size());
     for (const QString &canonicalPair : canonicalPairs)
     {
-        const QStringList parts = canonicalPair.split(QLatin1Char('\n'));
-        if (parts.size() != 2)
+        QString canonical_lhs;
+        QString canonical_rhs;
+        if (!xjw::common::project::decodeImagePairKey(
+                canonicalPair, QStringLiteral("\n"), &canonical_lhs, &canonical_rhs))
         {
             continue;
         }
 
-        const QString lhs = nameByCanonicalPath.value(parts.at(0));
-        const QString rhs = nameByCanonicalPath.value(parts.at(1));
+        const QString lhs = nameByCanonicalPath.value(canonical_lhs);
+        const QString rhs = nameByCanonicalPath.value(canonical_rhs);
         const QString pair = guiPairKey(lhs, rhs);
         if (pair.isEmpty() || seen.contains(pair))
         {
@@ -69,14 +68,16 @@ QStringList convertCanonicalPairsToPipelinePairs(const QStringList &canonicalPai
     pairs.reserve(canonicalPairs.size());
     for (const QString &canonicalPair : canonicalPairs)
     {
-        const QStringList parts = canonicalPair.split(QLatin1Char('\n'));
-        if (parts.size() != 2)
+        QString canonical_lhs;
+        QString canonical_rhs;
+        if (!xjw::common::project::decodeImagePairKey(
+                canonicalPair, QStringLiteral("\n"), &canonical_lhs, &canonical_rhs))
         {
             continue;
         }
 
-        const QString lhs = pathByCanonicalPath.value(parts.at(0));
-        const QString rhs = pathByCanonicalPath.value(parts.at(1));
+        const QString lhs = pathByCanonicalPath.value(canonical_lhs);
+        const QString rhs = pathByCanonicalPath.value(canonical_rhs);
         const QString pair = pipelinePairKey(lhs, rhs);
         if (pair.isEmpty() || seen.contains(pair))
         {

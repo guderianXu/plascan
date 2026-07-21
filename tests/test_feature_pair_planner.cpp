@@ -1,5 +1,5 @@
 #include "FeaturePairPlanner.h"
-#include "SfmPairPlanner.h"
+#include "reconstruction/SfmPairPlanner.h"
 
 #include <gtest/gtest.h>
 
@@ -184,15 +184,15 @@ TEST(FeaturePairPlannerTest, PathPlanExposesCorePairPlanAndMatchesCorePlanner)
     const QStringList images = numberedImagePaths(25);
     const FeaturePairPlan guiPlan = planFeatureMatchPairPathPlan(images, options);
 
-    xjw::gui::SfmPairPlannerOptions coreOptions;
+    xjw::aerial_triangulation::SfmPairPlannerOptions coreOptions;
     coreOptions.autoRestrictKnownCameraPairs = true;
     coreOptions.knownCameraAllPairsMaxImages = options.exhaustiveMaxImages;
     coreOptions.knownCameraPairWindow = options.sequentialWindow;
     coreOptions.knownCameraSpatialNeighborCount = options.spatialNeighborCount;
     coreOptions.knownCameraCenters = options.knownCameraCenters;
     coreOptions.knownCameraOverlapMaxExpansion = options.knownCameraOverlapMaxExpansion;
-    const xjw::gui::SfmPairPlan corePlan =
-        xjw::gui::planSfmMatchPairs(images, QStringList(), coreOptions);
+    const xjw::aerial_triangulation::SfmPairPlan corePlan =
+        xjw::aerial_triangulation::planSfmMatchPairs(images, QStringList(), coreOptions);
 
     ASSERT_TRUE(corePlan.restrictPairs);
     EXPECT_EQ(guiPlan.corePairKeys, corePlan.allowedPairKeys);
@@ -204,15 +204,15 @@ TEST(FeaturePairPlannerTest, PathPlanExposesCorePairPlanAndMatchesCorePlanner)
     {
         const QStringList pairParts = guiPlan.pairs.at(i).split(QLatin1Char('|'));
         ASSERT_EQ(pairParts.size(), 2);
-        EXPECT_EQ(xjw::gui::canonicalSfmPairKey(pairParts.at(0), pairParts.at(1)),
+        EXPECT_EQ(xjw::aerial_triangulation::canonicalSfmPairKey(pairParts.at(0), pairParts.at(1)),
                   corePlan.allowedPairKeys.at(i));
     }
 
     const QString spatialKey =
-        xjw::gui::canonicalSfmPairKey(images.at(0), images.at(20));
+        xjw::aerial_triangulation::canonicalSfmPairKey(images.at(0), images.at(20));
     const auto spatialIt = std::find_if(guiPlan.corePlan.pairCandidates.begin(),
                                         guiPlan.corePlan.pairCandidates.end(),
-                                        [&](const xjw::gui::SfmPairCandidate &candidate)
+                                        [&](const xjw::aerial_triangulation::SfmPairCandidate &candidate)
     {
         return candidate.pairKey == spatialKey;
     });

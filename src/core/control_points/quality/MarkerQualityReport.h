@@ -1,5 +1,6 @@
 #pragma once
 
+#include "model/MarkerTypes.h"
 #include "registration/ControlNetworkSolver.h"
 
 #include <QVector>

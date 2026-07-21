@@ -10,10 +10,17 @@
 #include <QJsonArray>
 #include <QJsonDocument>
 #include <QRegularExpression>
+#include <QThread>
 #include <QtGlobal>
 
 namespace xjw::gui::project
 {
+
+int recommendedInteractiveModelWorkerCount(int ideal_thread_count)
+{
+    const int available_threads = ideal_thread_count > 0 ? ideal_thread_count : 4;
+    return qBound(1, available_threads - 2, 8);
+}
 
 namespace
 {
@@ -446,6 +453,11 @@ ModelWorkflowDecision decideModelGenerationWorkflow(const QJsonObject &settings,
 {
     ModelWorkflowDecision decision;
     decision.modelSettings = settings;
+    if (!decision.modelSettings.contains(QStringLiteral("threads")))
+    {
+        decision.modelSettings[QStringLiteral("threads")] =
+            recommendedInteractiveModelWorkerCount(QThread::idealThreadCount());
+    }
 
     const QString source_data =
         settings.value(QStringLiteral("source_data")).toString(QStringLiteral("point_cloud"));
@@ -456,7 +468,10 @@ ModelWorkflowDecision decideModelGenerationWorkflow(const QJsonObject &settings,
     }
 
     decision.depthMapSourcePath = depthSourcePathFromSettings(settings);
+    decision.modelSettings[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
     decision.modelSettings[QStringLiteral("depthMapSourcePath")] = decision.depthMapSourcePath;
+    decision.modelSettings[QStringLiteral("reconstruction_mode")] = QStringLiteral("depth_tsdf");
+    decision.modelSettings.remove(QStringLiteral("source_point_cloud_path"));
     const bool reuse_depth_maps = settings.value(QStringLiteral("reuseDepthMaps")).toBool(true);
     const auto stored_frames = decision.depthMapSourcePath.isEmpty()
         ? xjw::core::project::collectLatestStoredDepthFrames(project_metadata)
@@ -479,46 +494,21 @@ ModelWorkflowDecision decideModelGenerationWorkflow(const QJsonObject &settings,
         static_cast<int>(stored_frames.frames.size()) >= expected_frame_count &&
         !depth_config_hash.isEmpty() && input_signature_matches;
 
-    if (reuse_depth_maps)
+    if (reuse_depth_maps && stored_batch_complete)
     {
-        if (stored_batch_complete)
-        {
-            decision.reusableDenseCloudPath = reusableDenseCloudForDepthSource(
-                decision.depthMapSourcePath,
-                project_metadata,
-                stored_frames,
-                depth_config_hash,
-                current_input_signature);
-        }
-        if (!decision.reusableDenseCloudPath.isEmpty())
-        {
-            decision.modelSettings[QStringLiteral("source_point_cloud_path")] =
-                decision.reusableDenseCloudPath;
-            decision.reason = QStringLiteral("深度图目录已有可复用的密集点云。");
-            return decision;
-        }
-
-        if (stored_batch_complete)
-        {
-            decision.action = ModelWorkflowAction::FuseDepthMapsThenMesh;
-            decision.denseSettings =
-                denseSettingsFromModelSettings(settings, decision.depthMapSourcePath);
-            decision.denseSettings[QStringLiteral("workflow_action")] =
-                QStringLiteral("fuse_existing_depth_maps");
-            decision.reason = QStringLiteral("已有可复用深度图，先自动融合为密集点云。");
-            return decision;
-        }
+        decision.reason = QStringLiteral("已有完整深度图批次，直接进行 TSDF 表面重建。");
+        return decision;
     }
 
-    decision.action = ModelWorkflowAction::GenerateDenseCloudThenMesh;
-    decision.denseSettings = denseSettingsFromModelSettings(settings, decision.depthMapSourcePath);
-    decision.denseSettings[QStringLiteral("workflow_action")] =
-        QStringLiteral("generate_dense_cloud");
-    decision.denseSettings[QStringLiteral("force_depth_recompute")] = !reuse_depth_maps;
-    decision.denseSettings[QStringLiteral("expected_depth_frame_count")] = expected_frame_count;
+    decision.action = ModelWorkflowAction::GenerateDepthMapsThenMesh;
+    decision.depthSettings = denseSettingsFromModelSettings(settings, decision.depthMapSourcePath);
+    decision.depthSettings[QStringLiteral("workflow_action")] =
+        QStringLiteral("generate_depth_maps");
+    decision.depthSettings[QStringLiteral("force_depth_recompute")] = !reuse_depth_maps;
+    decision.depthSettings[QStringLiteral("expected_depth_frame_count")] = expected_frame_count;
     decision.reason = reuse_depth_maps
-        ? QStringLiteral("缺少可复用深度图，先自动估计深度图并融合。")
-        : QStringLiteral("未启用深度图复用，重新估计深度图并融合。");
+        ? QStringLiteral("缺少完整可复用深度图批次，先自动估计深度图。")
+        : QStringLiteral("未启用深度图复用，重新估计深度图。");
     return decision;
 }
 

@@ -15,5 +15,7 @@ cv::Size depthPyramidWorkingSize(int imageWidth,
                                  int imageHeight,
                                  int downsampleFactor);
 
+int depthPyramidMinimumLevelShortSide();
+
 } // namespace mvs
 } // namespace xjw

@@ -7,7 +7,9 @@
 #include "ProjectMetadataOperations.h"
 #include "ProjectModelWorkflowPolicy.h"
 #include "ProjectResultRecords.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "ProjectWorkflowUtils.h"
 #include "project/SparseResultQuality.h"
 #include "GuiTaskRunner.h"
@@ -15,8 +17,8 @@
 #include "DenseCloudQualityFilter.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
-#include "MatchResultCatalog.h"
-#include "ProjectIO.h"
+#include "preparation/MatchResultCatalog.h"
+#include "project/ProjectIO.h"
 #include "SparseCloudPreprocessor.h"
 #include "io/PathIO.h"
 #include <plapoint/core/point_cloud.h>
@@ -73,6 +75,7 @@ using xjw::gui::project::findLatestProductionAtResultIndex;
 using xjw::gui::project::makeDenseResultRecord;
 using xjw::gui::project::makeDepthResultRecord;
 using xjw::gui::project::sparseResultBlockingReason;
+using xjw::common::project::normalizePath;
 using xjw::core::project::buildStoredFusionFrame;
 using xjw::core::project::collectLatestStoredDepthFrames;
 using xjw::core::project::collectStoredDepthFramesForDirectory;
@@ -80,7 +83,7 @@ using xjw::core::project::depthFrameArtifactsExist;
 using xjw::core::project::FusionFrameBuildResult;
 using xjw::core::project::estimateFusionFrameWorkingSetBytes;
 using xjw::core::project::recommendedDepthFrameLoadWorkers;
-using xjw::gui::project::normalizePath;
+using xjw::common::project::normalizePath;
 using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::projectDepthInputSignature;
 using xjw::core::project::rawConfidenceStoragePath;
@@ -141,19 +144,19 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
         }
     }
 
-    xjw::pipeline::MatchResultCatalogConfig config;
+    xjw::aerial_triangulation::MatchResultCatalogConfig config;
     config.matchDirectory = matchDir;
-    const xjw::pipeline::MatchResultCatalogSummary summary =
-        xjw::pipeline::MatchResultCatalog(config).scan();
+    const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
+        xjw::aerial_triangulation::MatchResultCatalog(config).scan();
     qualities.reserve(static_cast<size_t>(summary.pairGroups.size()));
-    for (const xjw::pipeline::MatchPairGroup &group : summary.pairGroups)
+    for (const xjw::aerial_triangulation::MatchPairGroup &group : summary.pairGroups)
     {
         if (group.bestVariantIndex < 0 || group.bestVariantIndex >= group.variants.size())
         {
             continue;
         }
 
-        const xjw::pipeline::MatchVariant &variant = group.variants.at(group.bestVariantIndex);
+        const xjw::aerial_triangulation::MatchVariant &variant = group.variants.at(group.bestVariantIndex);
         if (!variant.compatible || !variant.hasInlierStats || variant.geometricVerifiedInliers <= 0)
         {
             continue;
@@ -179,7 +182,7 @@ void attachMvsSourcePairQualities(xjw::mvs::DepthGenConfig *config,
     }
 
     config->sourcePairQualities =
-        loadMvsSourcePairQualities(ProjectIO::ipmatchOutputDir(plascanPath));
+        loadMvsSourcePairQualities(xjw::common::project::ProjectIO::ipmatchOutputDir(plascanPath));
     config->requireVerifiedSourcePairs = !config->sourcePairQualities.empty();
     if (config->requireVerifiedSourcePairs)
     {
@@ -1391,20 +1394,20 @@ void ProjectDenseReconstructionManager::clearActiveMvsCancelFlag(
     }
 }
 
-void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonObject &settings)
+bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonObject &settings)
 {
     using namespace xjw::mvs;
 
     if (!ensureProjectOpen(QStringLiteral("请先打开一个项目。"), QStringLiteral("深度图估计")))
     {
-        return;
+        return false;
     }
     if (isMvsRunning())
     {
         QMessageBox::information(_parentWidget,
                                  QStringLiteral("深度图估计"),
                                  QStringLiteral("已有深度图或密集点云任务正在运行，请先等待或取消当前任务。"));
-        return;
+        return false;
     }
 
     const xjw::gui::project::DenseGenerationSettings request = denseGenerationSettingsFromJson(settings);
@@ -1415,7 +1418,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("未找到空三结果，请先执行空中三角测量。"));
-        return;
+        return false;
     }
 
     const int realIdx = (request.atIndex >= 0 && request.atIndex < atArr.size())
@@ -1426,7 +1429,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("未找到可用的正式 SfM/BA 稀疏点云结果。请先运行三维重建/空三。"));
-        return;
+        return false;
     }
     const QJsonObject atResult = atArr[realIdx].toObject();
     const QString project_input_signature = projectDepthInputSignature(meta, realIdx);
@@ -1440,7 +1443,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                              reason.isEmpty()
                                  ? QStringLiteral("所选稀疏点云不是正式 SfM/BA 结果。")
                                  : reason);
-        return;
+        return false;
     }
     const QJsonArray selImgArr = atResult.value(QStringLiteral("selected_images")).toArray();
     const QJsonObject files = atResult.value(QStringLiteral("files")).toObject();
@@ -1457,7 +1460,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("空三结果中影像数量不足（至少需要2张）。"));
-        return;
+        return false;
     }
 
     const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
@@ -1470,7 +1473,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
                                                                   mvsOutDir);
         if (action == ExistingDepthAction::Cancel)
         {
-            return;
+            return false;
         }
 
         if (action == ExistingDepthAction::Overwrite)
@@ -1493,21 +1496,24 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         QMessageBox::warning(_parentWidget,
                              QStringLiteral("深度图估计"),
                              QStringLiteral("部分影像缺少相机参数，无法执行深度图估计。"));
-        return;
+        return false;
     }
 
     std::vector<CameraView> views;
     views.reserve(selectedImages.size());
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     for (const QString &imgPath : selectedImages)
     {
         CameraView view;
         view.imagePath = xjw::common::io::toUtf8Path(imgPath);
+        view.validRegionMaskPath = xjw::common::io::toUtf8Path(
+            xjw::common::project::ProjectIO::findMaskForImage(projectPath, imgPath));
         if (!cameraForImagePath(camMap, imgPath, &view.camera))
         {
             QMessageBox::warning(_parentWidget,
                                  QStringLiteral("深度图估计"),
                                  QStringLiteral("影像缺少相机参数：%1").arg(QDir::toNativeSeparators(imgPath)));
-            return;
+            return false;
         }
         applyImageSizeToMvsView(imgPath, &view);
         views.push_back(std::move(view));
@@ -1526,7 +1532,6 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     gen->setOutputDir(xjw::common::io::toUtf8Path(mvsOutDir));
 
     QPointer<ProjectDenseReconstructionManager> self(this);
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
                      [self, projectPath](const QString &stage, float ratio) {
         if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
@@ -1545,12 +1550,13 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
              projectPath,
              project_input_signature,
              reconstruction_generation_id,
+             quality_profile = request.qualityProfile,
              batch_frame_count = selectedImages.size()](const QJsonObject &artifact) {
         if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
         {
             return;
         }
-        const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(
+        QJsonObject depthResult = makeProjectDepthRecordFromArtifact(
             artifact,
             sparseXyz,
             mvsOutDir,
@@ -1561,12 +1567,19 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         {
             return;
         }
+        depthResult[QStringLiteral("quality_profile")] = quality_profile;
         upsertProjectRecordByPath(self->_projectData,
                                   QStringLiteral("depth_map_results"),
                                   QStringLiteral("depth_png"),
                                   depthResult);
     });
-    connect(gen, &DepthMapGenerator::finished, this, [self, projectPath](bool success) {
+    connect(gen,
+            &DepthMapGenerator::finished,
+            this,
+            [self,
+             projectPath,
+             mvsOutDir,
+             selectedImageCount = selectedImages.size()](bool success) {
         if (!self)
         {
             return;
@@ -1576,14 +1589,14 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         if (success && project_matches)
         {
             self->_owner->refreshReconstructionQualityReport();
+            emit self->depthMapBatchReady(mvsOutDir, selectedImageCount);
         }
         emit self->mvsProgressFinished(success && project_matches);
-        if (project_matches)
+        if (!success && project_matches)
         {
-            QMessageBox::information(self->_parentWidget,
-                                     QStringLiteral("深度图估计"),
-                                     success ? QStringLiteral("深度图估计完成。")
-                                             : QStringLiteral("深度图估计失败或被取消。"));
+            QMessageBox::warning(self->_parentWidget,
+                                 QStringLiteral("深度图估计"),
+                                 QStringLiteral("深度图估计失败或被取消。"));
         }
         if (self->_activeMvsGenerator)
         {
@@ -1599,7 +1612,10 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
-            SparseCloudPreprocessor pp(request.processingDevice);
+            // Sparse-cloud cleanup is a small preparation step. Keep it on CPU
+            // so PlaPoint CUDA filtering cannot overlap GPU initialization with
+            // the following PatchMatch task in the interactive workflow.
+            SparseCloudPreprocessor pp(plapoint::ProcessingDevice::CPU);
             PreprocessResult ppRes;
             std::string ppErr;
             if (pp.run(xjw::common::io::toUtf8Path(sparseXyz), views, ppRes, &ppErr))
@@ -1636,6 +1652,7 @@ void ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
             genSelf->start();
         }, Qt::QueuedConnection);
     });
+    return true;
 }
 
 bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObject &settings)
@@ -2150,6 +2167,7 @@ bool ProjectDenseReconstructionManager::startFuseDepthMapsAsync(const QJsonObjec
                                           QStringLiteral("dense_cloud_xyz"),
                                           denseResult);
             }
+            self->_owner->refreshReconstructionQualityReport();
             emit self->denseCloudResultReady(outputPly, pointCount);
             emit self->mvsProgressFinished(true);
             if (!pipelineMode)
@@ -2256,10 +2274,13 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     }
 
     std::vector<CameraView> views;
+    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     for (const QString &imgPath : selectedImages)
     {
         CameraView view;
         view.imagePath = xjw::common::io::toUtf8Path(imgPath);
+        view.validRegionMaskPath = xjw::common::io::toUtf8Path(
+            xjw::common::project::ProjectIO::findMaskForImage(projectPath, imgPath));
         if (!cameraForImagePath(camMap, imgPath, &view.camera))
         {
             QMessageBox::warning(_parentWidget,
@@ -2334,7 +2355,6 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     gen->setOutputDir(xjw::common::io::toUtf8Path(mvsOutDir));
 
     QPointer<ProjectDenseReconstructionManager> self(this);
-    const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     QObject::connect(gen, &DepthMapGenerator::progressChanged, this,
                      [self, projectPath](const QString &stage, float ratio) {
         if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
@@ -2353,12 +2373,13 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
              projectPath,
              project_input_signature,
              reconstruction_generation_id,
+             quality_profile = request.qualityProfile,
              batch_frame_count = selectedImages.size()](const QJsonObject &artifact) {
         if (!self || !self->_owner || self->_owner->currentProjectPath() != projectPath)
         {
             return;
         }
-        const QJsonObject depthResult = makeProjectDepthRecordFromArtifact(
+        QJsonObject depthResult = makeProjectDepthRecordFromArtifact(
             artifact,
             sparseXyz,
             mvsOutDir,
@@ -2369,6 +2390,7 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         {
             return;
         }
+        depthResult[QStringLiteral("quality_profile")] = quality_profile;
         upsertProjectRecordByPath(self->_projectData,
                                   QStringLiteral("depth_map_results"),
                                   QStringLiteral("depth_png"),
@@ -2471,6 +2493,10 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
             return;
         }
 
+        if (success)
+        {
+            self->_owner->refreshReconstructionQualityReport();
+        }
         const bool pipelineMode = settings.value(QStringLiteral("pipeline_mode")).toBool(false);
         const bool shouldStartFusion = success && (continueMissingMode || pipelineMode);
 
@@ -2524,7 +2550,10 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
         SparseCloud sparse;
         if (!sparseXyz.isEmpty() && QFile::exists(sparseXyz))
         {
-            SparseCloudPreprocessor pp(request.processingDevice);
+            // Sparse-cloud cleanup is a small preparation step. Keep it on CPU
+            // so PlaPoint CUDA filtering cannot overlap GPU initialization with
+            // the following PatchMatch task in the interactive workflow.
+            SparseCloudPreprocessor pp(plapoint::ProcessingDevice::CPU);
             PreprocessResult ppRes;
             std::string ppErr;
             if (pp.run(xjw::common::io::toUtf8Path(sparseXyz), views, ppRes, &ppErr))

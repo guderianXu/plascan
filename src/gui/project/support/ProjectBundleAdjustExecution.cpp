@@ -2,7 +2,7 @@
 
 #include "PlascanArchive.h"
 #include "ProjectFilesManager.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectReferenceTerrainBa.h"
 #include "io/MarkerSetStore.h"
 
@@ -60,7 +60,7 @@ BundleAdjustExecutionResult runBundleAdjustExecution(const QJsonObject &coreData
 
     xjw::core::project::MarkerBaInput markerInput;
     control_points::MarkerSet markerSet;
-    const QString markerSetPath = ProjectIO::markerSetPath(plascanPath);
+    const QString markerSetPath = xjw::common::project::ProjectIO::markerSetPath(plascanPath);
     if (QFileInfo::exists(markerSetPath))
     {
         const control_points::MarkerSetIoResult loaded =

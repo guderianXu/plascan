@@ -19,7 +19,7 @@
 
 #include <functional>
 
-#include "MatchResultCatalog.h"
+#include "preparation/MatchResultCatalog.h"
 
 // Qt 控件前向声明
 class QComboBox;
@@ -88,7 +88,7 @@ private:
         int validPoints = 0;     // 有效连接点或几何验证内点数
         int invalidPoints = 0;   // 未被几何验证或空三最终轨迹接受的匹配数
         QString matchFilePath;   // 对应 .match 文件的完整路径
-        QVector<xjw::pipeline::MatchVariant> variants; // 同一影像对的全部算法结果
+        QVector<xjw::aerial_triangulation::MatchVariant> variants; // 同一影像对的全部算法结果
         bool hasInlierStats = false; // true 表示 validPoints 来自几何验证内点统计
         bool hasTrackValidity = false; // true 表示 validPoints/invalidPoints 来自空三最终轨迹
         int compatibleVariantCount = 0; // 可由查看器加载的算法结果数量

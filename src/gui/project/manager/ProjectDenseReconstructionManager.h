@@ -22,7 +22,7 @@ public:
                                                QWidget *parentWidget,
                                                QObject *parent = nullptr);
 
-    void startEstimateDepthMapsAsync(const QJsonObject &settings);
+    bool startEstimateDepthMapsAsync(const QJsonObject &settings);
     bool startFuseDepthMapsAsync(const QJsonObject &settings);
     bool startGenerateDenseCloudAsync(const QJsonObject &settings);
     void startDenseCloudRefineAsync(const QJsonObject &settings);
@@ -32,6 +32,7 @@ public:
 signals:
     void mvsProgressChanged(const QString &stage, int percent);
     void mvsProgressFinished(bool success);
+    void depthMapBatchReady(const QString &outputDirectory, int frameCount);
     void denseCloudResultReady(const QString &denseCloudPath, int pointCount);
 
 private:

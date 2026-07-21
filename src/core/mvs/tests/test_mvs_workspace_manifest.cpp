@@ -29,12 +29,23 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.depthPng = QStringLiteral("depth_%1.png").arg(index, 3, 10, QLatin1Char('0'));
     record.rawDepthPath = QStringLiteral("depth_%1.bin").arg(index, 3, 10, QLatin1Char('0'));
     record.rawConfidencePath = QStringLiteral("confidence_%1.bin").arg(index, 3, 10, QLatin1Char('0'));
+    record.rawGeometrySupportPath = QStringLiteral("geometry_support_%1.bin")
+                                        .arg(index, 3, 10, QLatin1Char('0'));
     record.validMaskPath = QStringLiteral("mask_%1.png").arg(index, 3, 10, QLatin1Char('0'));
     record.gridWidth = 6000;
     record.gridHeight = 4000;
     record.elapsedMs = 1000 + index;
     record.configHash = QStringLiteral("cfg-a");
     record.sourceImages = {QStringLiteral("source_a.jpg"), QStringLiteral("source_b.jpg")};
+    record.sourceIndices = {7, 9};
+    record.rawGeometrySourceMaskPath = QStringLiteral("geometry_source_mask_%1.bin")
+                                           .arg(index, 3, 10, QLatin1Char('0'));
+    record.rawInverseDepthMeanPath = QStringLiteral("inverse_depth_mean_%1.bin")
+                                         .arg(index, 3, 10, QLatin1Char('0'));
+    record.rawInverseDepthSpreadPath = QStringLiteral("inverse_depth_spread_%1.bin")
+                                           .arg(index, 3, 10, QLatin1Char('0'));
+    record.crossViewRepairedMaskPath = QStringLiteral("cross_view_repaired_%1.png")
+                                           .arg(index, 3, 10, QLatin1Char('0'));
     QJsonObject source_plan_entry;
     source_plan_entry.insert(QStringLiteral("view_index"), 7);
     source_plan_entry.insert(QStringLiteral("source_image"), QStringLiteral("source_a.jpg"));
@@ -82,6 +93,17 @@ TEST(MvsWorkspaceManifest, SavesAndLoadsFrameRecordsAtomically)
     ASSERT_EQ(loaded.frames().size(), 1);
     EXPECT_EQ(loaded.frames().front().refImage, QStringLiteral("image_002.jpg"));
     EXPECT_EQ(loaded.frames().front().rawConfidencePath, QStringLiteral("confidence_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawGeometrySupportPath,
+              QStringLiteral("geometry_support_002.bin"));
+    EXPECT_EQ(loaded.frames().front().sourceIndices, QVector<int>({7, 9}));
+    EXPECT_EQ(loaded.frames().front().rawGeometrySourceMaskPath,
+              QStringLiteral("geometry_source_mask_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawInverseDepthMeanPath,
+              QStringLiteral("inverse_depth_mean_002.bin"));
+    EXPECT_EQ(loaded.frames().front().rawInverseDepthSpreadPath,
+              QStringLiteral("inverse_depth_spread_002.bin"));
+    EXPECT_EQ(loaded.frames().front().crossViewRepairedMaskPath,
+              QStringLiteral("cross_view_repaired_002.png"));
     EXPECT_EQ(loaded.frames().front().gridWidth, 6000);
     EXPECT_EQ(loaded.frames().front().gridHeight, 4000);
     EXPECT_EQ(loaded.configHash(), QStringLiteral("cfg-a"));
@@ -156,6 +178,23 @@ TEST(MvsWorkspaceManifest, CompletedFrameUpdatePreservesExistingSourcePlan)
     EXPECT_EQ(manifest.frames().front().sourcePlan.at(0).toObject().value(QStringLiteral("view_index")).toInt(), 7);
 }
 
+TEST(MvsWorkspaceManifest, LoadsLegacyRecordWithoutGeometryEvidencePaths)
+{
+    const QJsonObject legacy{
+        {QStringLiteral("ref_index"), 4},
+        {QStringLiteral("ref_image"), QStringLiteral("image_004.jpg")},
+        {QStringLiteral("status"), QStringLiteral("completed")},
+        {QStringLiteral("raw_depth_path"), QStringLiteral("depth_004.bin")}};
+
+    const MvsDepthFrameRecord record = MvsDepthFrameRecord::fromJson(legacy);
+
+    EXPECT_TRUE(record.sourceIndices.isEmpty());
+    EXPECT_TRUE(record.rawGeometrySourceMaskPath.isEmpty());
+    EXPECT_TRUE(record.rawInverseDepthMeanPath.isEmpty());
+    EXPECT_TRUE(record.rawInverseDepthSpreadPath.isEmpty());
+    EXPECT_TRUE(record.crossViewRepairedMaskPath.isEmpty());
+}
+
 TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
 {
     QTemporaryDir tempDir;
@@ -169,6 +208,8 @@ TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
     record.minSourceQualityScore = 0.43;
     record.meanDepthConfidence = 0.81;
     record.validPixelCount = 123456;
+    record.validCoverage = 0.625;
+    record.supportMaskPath = QStringLiteral("support_006.png");
 
     MvsWorkspaceManifest manifest;
     manifest.setConfigHash(QStringLiteral("cfg-a"));
@@ -186,6 +227,8 @@ TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
     EXPECT_DOUBLE_EQ(loadedRecord.minSourceQualityScore, 0.43);
     EXPECT_DOUBLE_EQ(loadedRecord.meanDepthConfidence, 0.81);
     EXPECT_EQ(loadedRecord.validPixelCount, 123456);
+    EXPECT_DOUBLE_EQ(loadedRecord.validCoverage, 0.625);
+    EXPECT_EQ(loadedRecord.supportMaskPath, QStringLiteral("support_006.png"));
 
     const QJsonObject json = loadedRecord.toJson();
     EXPECT_EQ(json.value(QStringLiteral("source_view_count")).toInt(), 2);
@@ -193,6 +236,9 @@ TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
     EXPECT_DOUBLE_EQ(json.value(QStringLiteral("source_quality_min")).toDouble(), 0.43);
     EXPECT_DOUBLE_EQ(json.value(QStringLiteral("depth_confidence_mean")).toDouble(), 0.81);
     EXPECT_EQ(json.value(QStringLiteral("valid_pixel_count")).toInt(), 123456);
+    EXPECT_DOUBLE_EQ(json.value(QStringLiteral("valid_coverage")).toDouble(), 0.625);
+    EXPECT_EQ(json.value(QStringLiteral("support_mask_path")).toString(),
+              QStringLiteral("support_006.png"));
 }
 
 TEST(MvsWorkspaceManifest, PreservesDepthQualityDiagnostics)
@@ -247,17 +293,39 @@ TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)
         {QStringLiteral("acceptance"), QStringLiteral("accepted")},
         {QStringLiteral("calibrated_confidence"), 0.72}
     };
+    record.depthCompleteness = QJsonObject{
+        {QStringLiteral("available"), true},
+        {QStringLiteral("mask_pixel_count"), 1000},
+        {QStringLiteral("valid_within_mask_count"), 875},
+        {QStringLiteral("valid_within_mask_ratio"), 0.875},
+        {QStringLiteral("output_filter_retention_ratio"), 0.91}
+    };
     record.sceneProfile = QStringLiteral("orbital_object");
     record.filterMode = QStringLiteral("mild");
     record.acceptance = QStringLiteral("accepted");
+    record.maskSource = QStringLiteral("project");
+    record.maskCoverage = 0.625;
+    record.selectedLevel = 2;
+    record.fallbackReason = QStringLiteral("level 1 failed: insufficient support");
+    record.pyramidRequestedLevelCount = 3;
+    record.pyramidActiveLevelCount = 2;
+    record.pyramidMinimumShortSide = 160;
+    record.pyramidDegradedReason = QStringLiteral(
+        "image short side 480 cannot keep three pyramid levels above 160 pixels");
     record.pyramidLevels = QJsonArray{
         QJsonObject{
             {QStringLiteral("level"), 3},
-            {QStringLiteral("downsample_factor"), 4}
+            {QStringLiteral("downsample_factor"), 4},
+            {QStringLiteral("valid_coverage"), 0.58},
+            {QStringLiteral("mean_support_views"), 3.25},
+            {QStringLiteral("depth_discontinuity_ratio"), 0.04}
         },
         QJsonObject{
             {QStringLiteral("level"), 2},
-            {QStringLiteral("downsample_factor"), 2}
+            {QStringLiteral("downsample_factor"), 2},
+            {QStringLiteral("valid_coverage"), 0.61},
+            {QStringLiteral("mean_support_views"), 3.75},
+            {QStringLiteral("depth_discontinuity_ratio"), 0.07}
         },
         QJsonObject{
             {QStringLiteral("level"), 1},
@@ -279,16 +347,46 @@ TEST(MvsWorkspaceManifest, PreservesQualityGateAndPyramidDiagnostics)
                   .value(QStringLiteral("acceptance"))
                   .toString(),
               QStringLiteral("accepted"));
+    EXPECT_DOUBLE_EQ(loaded.frames().front().depthCompleteness
+                         .value(QStringLiteral("valid_within_mask_ratio"))
+                         .toDouble(),
+                     0.875);
+    EXPECT_DOUBLE_EQ(loaded.frames().front().toJson()
+                         .value(QStringLiteral("depth_completeness"))
+                         .toObject()
+                         .value(QStringLiteral("output_filter_retention_ratio"))
+                         .toDouble(),
+                     0.91);
     ASSERT_EQ(loaded.frames().front().pyramidLevels.size(), 3);
     EXPECT_EQ(loaded.frames().front().sceneProfile,
               QStringLiteral("orbital_object"));
     EXPECT_EQ(loaded.frames().front().filterMode, QStringLiteral("mild"));
     EXPECT_EQ(loaded.frames().front().acceptance, QStringLiteral("accepted"));
+    EXPECT_EQ(loaded.frames().front().maskSource, QStringLiteral("project"));
+    EXPECT_DOUBLE_EQ(loaded.frames().front().maskCoverage, 0.625);
+    EXPECT_EQ(loaded.frames().front().selectedLevel, 2);
+    EXPECT_EQ(loaded.frames().front().fallbackReason,
+              QStringLiteral("level 1 failed: insufficient support"));
+    EXPECT_EQ(loaded.frames().front().pyramidRequestedLevelCount, 3);
+    EXPECT_EQ(loaded.frames().front().pyramidActiveLevelCount, 2);
+    EXPECT_EQ(loaded.frames().front().pyramidMinimumShortSide, 160);
+    EXPECT_TRUE(loaded.frames().front().pyramidDegradedReason.contains(
+        QStringLiteral("short side 480")));
     EXPECT_EQ(loaded.frames().front().pyramidLevels.at(2)
                   .toObject()
                   .value(QStringLiteral("level"))
                   .toInt(),
               1);
+    const QJsonObject level_two = loaded.frames().front().pyramidLevels.at(1).toObject();
+    EXPECT_DOUBLE_EQ(level_two.value(QStringLiteral("mean_support_views")).toDouble(), 3.75);
+    EXPECT_DOUBLE_EQ(level_two.value(QStringLiteral("depth_discontinuity_ratio")).toDouble(), 0.07);
+    const QJsonObject frame_json = loaded.frames().front().toJson();
+    EXPECT_EQ(frame_json.value(QStringLiteral("mask_source")).toString(),
+              QStringLiteral("project"));
+    EXPECT_DOUBLE_EQ(frame_json.value(QStringLiteral("mask_coverage")).toDouble(), 0.625);
+    EXPECT_EQ(frame_json.value(QStringLiteral("selected_level")).toInt(), 2);
+    EXPECT_EQ(frame_json.value(QStringLiteral("fallback_reason")).toString(),
+              QStringLiteral("level 1 failed: insufficient support"));
     EXPECT_EQ(loaded.toJson().value(QStringLiteral("schema")).toString(),
               QStringLiteral("plascan.mvs.workspace.v2"));
 }

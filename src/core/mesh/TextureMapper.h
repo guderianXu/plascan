@@ -3,8 +3,12 @@
 #include <functional>
 #include <string>
 
+#include <QVector>
+
 namespace xjw::mesh
 {
+
+struct MeshColorView;
 
 /**
  * @brief 纹理映射配置。
@@ -31,6 +35,10 @@ struct TextureMappingResult
     std::string textureAlgorithm;
     std::string uvMethod;
     std::string blendMethod;
+    int sourceViewCount = 0;
+    int mappedFaceCount = 0;
+    int fallbackMappedFaceCount = 0;
+    int unmappedFaceCount = 0;
 };
 
 /**
@@ -47,6 +55,14 @@ public:
                                                   const TextureMappingConfig &config,
                                                   TextureMappingResult *result,
                                                   std::string *errorMsg = nullptr);
+
+    static bool generateCameraTexturedModelFromMeshFile(
+        const std::string &meshPath,
+        const std::string &productsDir,
+        const TextureMappingConfig &config,
+        const QVector<MeshColorView> &views,
+        TextureMappingResult *result,
+        std::string *errorMsg = nullptr);
 };
 
 } // namespace xjw::mesh

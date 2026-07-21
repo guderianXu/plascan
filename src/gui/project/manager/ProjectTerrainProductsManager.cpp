@@ -3,15 +3,15 @@
 #include "ProjectManager.h"
 #include "ProjectData.h"
 #include "DepthFrameUtils.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 #include "ProjectMetadataOperations.h"
 #include "ProjectResultRecords.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "ProjectWorkflowUtils.h"
 #include "ProjectCameraImportService.h"
-#include "FeatureExtractionRunner.h"
-#include "FeatureMatchRunner.h"
-#include "FeaturePairPlanner.h"
+#include "MatchPhotosTask.h"
 #include "GuiTaskRunner.h"
 #include "Logger.h"
 #include "Camera.h"
@@ -23,6 +23,7 @@
 #include <QMap>
 #include <QMessageBox>
 #include <QPointer>
+#include <QThread>
 #include <QtConcurrent>
 #include <QFutureWatcher>
 #include <QTimer>
@@ -121,42 +122,6 @@ bool pathIsInsideDirectory(const QString &path, const QString &directory)
            !QDir::isAbsolutePath(relativePath);
 }
 
-QString canonicalFeatureAlgorithmFromMatcher(const QString &matcher)
-{
-    const QString lower = matcher.toLower();
-    if (lower.contains(QStringLiteral("aliked")))
-    {
-        return QStringLiteral("aliked");
-    }
-    if (lower.contains(QStringLiteral("disk")))
-    {
-        return QStringLiteral("disk");
-    }
-    if (lower.contains(QStringLiteral("sift")))
-    {
-        return QStringLiteral("sift");
-    }
-    if (lower.contains(QStringLiteral("orb")))
-    {
-        return QStringLiteral("orb");
-    }
-    return QStringLiteral("superpoint");
-}
-
-QString canonicalMatchAlgorithmFromMatcher(const QString &matcher)
-{
-    const QString lower = matcher.toLower();
-    if (lower.contains(QStringLiteral("superglue")))
-    {
-        return QStringLiteral("superglue");
-    }
-    if (lower.contains(QStringLiteral("loftr")))
-    {
-        return QStringLiteral("loftr");
-    }
-    return QStringLiteral("lightglue");
-}
-
 bool cameraForTerrainImagePath(const QMap<QString, xjw::Camera> &camMap,
                                const QString &imagePath,
                                xjw::Camera *camera)
@@ -166,7 +131,7 @@ bool cameraForTerrainImagePath(const QMap<QString, xjw::Camera> &camMap,
         return false;
     }
 
-    const QString normalizedPath = xjw::gui::project::normalizePath(imagePath);
+    const QString normalizedPath = xjw::common::project::normalizePath(imagePath);
     const auto it = camMap.constFind(normalizedPath);
     if (it == camMap.constEnd())
     {
@@ -620,25 +585,11 @@ void ProjectTerrainProductsManager::startFullDemPipelineAsync(const QStringList 
 
     // 步骤 2-6: 启动异步流水线任务
     DemPipelineContext ctx;
+    ctx.projectPath = _owner->currentProjectPath();
     ctx.images = images;
-    for (int i = 0; i < camFilesArr.size(); ++i)
-        ctx.cameraPaths << camFilesArr.at(i).toString();
-    bool hasAllCameras = false;
-    const QMap<QString, xjw::Camera> camerasByImage =
-        _owner->getCamerasForImages(images, &hasAllCameras);
-    if (hasAllCameras)
-    {
-        ctx.knownCameraCenters.reserve(static_cast<std::size_t>(images.size()));
-        for (const QString &image : images)
-        {
-            const QString normalizedImage = xjw::gui::project::normalizePath(image);
-            ctx.knownCameraCenters.push_back(camerasByImage.value(normalizedImage).cameraCenter());
-        }
-    }
+    ctx.referenceCameras = _owner->getCamerasForImages(images);
+    ctx.maskPaths = xjw::common::project::ProjectIO::maskPathsForImages(ctx.projectPath, images);
     ctx.outputDir = outputDir;
-    const QString matcher = pipelineSettings.value(QStringLiteral("matcher")).toString(QStringLiteral("disk_lightglue"));
-    ctx.featureAlgorithm = canonicalFeatureAlgorithmFromMatcher(matcher);
-    ctx.matchAlgorithm = canonicalMatchAlgorithmFromMatcher(matcher);
     ctx.demResolution = pipelineSettings.value(QStringLiteral("dem_resolution")).toDouble(0.0);
     ctx.demType = pipelineSettings.value(QStringLiteral("dem_type")).toString(QStringLiteral("float32"));
 
@@ -864,7 +815,7 @@ void ProjectTerrainProductsManager::startMapProjectAsync(const QStringList &imag
     QString out = outputPath.trimmed();
     if (out.isEmpty())
     {
-        const QString root = ProjectIO::projectRootFromPlascan(_owner->currentProjectPath());
+        const QString root = xjw::common::project::ProjectIO::projectRootFromPlascan(_owner->currentProjectPath());
         out = QDir(root).filePath(QStringLiteral("assets/ortho/relative_dom.tif"));
     }
     out = QDir::cleanPath(out);
@@ -979,89 +930,110 @@ void ProjectTerrainProductsManager::runFullDemPipelineInBackground(const DemPipe
     LOG_INFO(QStringLiteral("[DEM流水线] 影像数量: %1").arg(ctx.images.size()));
     for (int i = 0; i < ctx.images.size(); ++i)
         LOG_INFO(QStringLiteral("[DEM流水线]   [%1] %2").arg(i).arg(ctx.images[i]));
-    LOG_INFO(QStringLiteral("[DEM流水线] 特征算法: %1 | 匹配算法: %2").arg(ctx.featureAlgorithm, ctx.matchAlgorithm));
+    LOG_INFO(QStringLiteral("[DEM流水线] 连接点算法: SIFT + LightGlue"));
     LOG_INFO(QStringLiteral("[DEM流水线] 输出目录: %1").arg(ctx.outputDir.isEmpty() ? QStringLiteral("(自动)") : ctx.outputDir));
 
-    // 步骤 1: 特征提取（在后台线程同步执行，FeatureExtractionRunner::run 是纯同步的）
-    LOG_INFO(QStringLiteral("[DEM流水线] ── 步骤 1/5: 特征提取 (%1) ──").arg(ctx.featureAlgorithm));
-    emit demPipelineProgressChanged(QStringLiteral("特征提取"), 0);
-
+    // 步骤 1-2: 使用统一的连接点任务完成影像对规划、特征提取、匹配、几何验证和轨迹构建。
+    LOG_INFO(QStringLiteral("[DEM流水线] ── 步骤 1-2/5: 创建连接点 (SIFT + LightGlue) ──"));
+    emit demPipelineProgressChanged(QStringLiteral("创建连接点"), 0);
     std::atomic<bool> cancelFlag(false);
     std::atomic<int> progressCount(0);
-
-    QJsonObject featureConfig;
-    featureConfig[QStringLiteral("feature_algorithm")] = ctx.featureAlgorithm;
-    featureConfig[QStringLiteral("device")] = QStringLiteral("CUDA");
-    featureConfig[QStringLiteral("use_cuda")] = true;
-    featureConfig[QStringLiteral("max_num_keypoints")] = 2048;
-
     QPointer<ProjectManager> ownerGuard(_owner);
-    const bool featureOk = FeatureExtractionRunner::run(featureConfig, ctx.images, ownerGuard, cancelFlag, progressCount);
-    if (!featureOk)
+
+    xjw::matchphotos::MatchPhotosOptions options;
+    options.planOnly = false;
+    options.featureAlgorithm = QStringLiteral("sift");
+    options.matcherAlgorithm = QStringLiteral("lightglue");
+    options.device = xjw::matchphotos::ComputeDevice::Auto;
+    options.pairPolicy.exhaustiveMaxImages = 80;
+    options.pairPolicy.sequenceWindow = 4;
+    options.useReferencePreselection = !ctx.referenceCameras.isEmpty();
+
+    xjw::matchphotos::MatchPhotosContext context;
+    context.projectPath = ctx.projectPath;
+    context.workingDirectory = xjw::common::project::ProjectIO::projectAssetsDir(ctx.projectPath);
+    context.featureDirectory = xjw::common::project::ProjectIO::ipfindOutputDir(ctx.projectPath);
+    context.matchDirectory = xjw::common::project::ProjectIO::ipmatchOutputDir(ctx.projectPath);
+    context.pairInput.images = ctx.images;
+    context.referenceCameras = ctx.referenceCameras;
+    context.maskPaths = ctx.maskPaths;
+    context.cancelFlag = &cancelFlag;
+    context.progressCount = &progressCount;
+    context.progressCallback = [self](const QString &, const QString &stage, int current, int total)
     {
-        LOG_ERROR(QStringLiteral("[DEM流水线] ✗ 特征提取失败（FeatureExtractionRunner::run 返回 false）"));
-        if (parentWidget)
+        if (!self)
         {
-            QMetaObject::invokeMethod(parentWidget.data(), [parentWidget]() {
-                if (!parentWidget)
-                {
-                    return;
-                }
-                QMessageBox::warning(parentWidget,
-                                     QStringLiteral("创建相对 DEM"),
-                                     QStringLiteral("特征提取失败，流水线中止。"));
-        }, Qt::QueuedConnection);
+            return;
         }
+        const int stagePercent = total > 0 ? qBound(0, current * 40 / total, 40) : 0;
+        emit self->demPipelineProgressChanged(stage, stagePercent);
+    };
+
+    const xjw::matchphotos::MatchPhotosTask task(options);
+    const xjw::matchphotos::MatchPhotosResult matchPhotosResult = task.run(context);
+    if (!matchPhotosResult.success)
+    {
+        const QString error = matchPhotosResult.errorMessage.isEmpty()
+            ? QStringLiteral("连接点创建失败")
+            : matchPhotosResult.errorMessage;
+        LOG_ERROR(QStringLiteral("[DEM流水线] ✗ %1").arg(error));
         if (self)
         {
-            emit self->demPipelineFinished(false, QStringLiteral("特征提取失败"));
+            emit self->demPipelineFinished(false, error);
         }
         return;
     }
-    LOG_INFO(QStringLiteral("[DEM流水线] ✓ 特征提取完成"));
 
-    // 步骤 2: 特征匹配（同步执行）
-    LOG_INFO(QStringLiteral("[DEM流水线] ── 步骤 2/5: 特征匹配 (%1) ──").arg(ctx.matchAlgorithm));
-    emit demPipelineProgressChanged(QStringLiteral("特征匹配"), 20);
-
-    xjw::gui::FeaturePairPlannerOptions pairOptions;
-    pairOptions.exhaustiveMaxImages = 80;
-    pairOptions.sequentialWindow = 4;
-    pairOptions.spatialNeighborCount = ctx.knownCameraCenters.empty() ? 0 : 8;
-    pairOptions.knownCameraCenters = ctx.knownCameraCenters;
-    const xjw::gui::FeaturePairPlan pairPlan =
-        xjw::gui::planFeatureMatchPairPathPlan(ctx.images, pairOptions);
-    const QStringList imagePairs = pairPlan.pairs;
-    QStringList sourceTypes;
-    for (const xjw::gui::SfmPairCandidate &candidate : pairPlan.corePlan.pairCandidates)
+    QVector<ProjectIpfindResultRecord> featureRecords;
+    featureRecords.reserve(static_cast<int>(matchPhotosResult.features.size()));
+    for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature : matchPhotosResult.features)
     {
-        for (const QString &sourceType : candidate.sourceTypes)
-        {
-            if (!sourceTypes.contains(sourceType))
-            {
-                sourceTypes.append(sourceType);
-            }
-        }
+        featureRecords.push_back(ProjectIpfindResultRecord{feature.imagePath, feature.featurePath, feature.settings});
     }
-    sourceTypes.sort();
-    const int exhaustivePairCount = ctx.images.size() > 1
-        ? (ctx.images.size() * (ctx.images.size() - 1)) / 2
-        : 0;
-    LOG_INFO(QStringLiteral("[DEM流水线] 匹配对规划完成: planned=%1 exhaustive=%2 window=%3 cameraCenters=%4 sourceTypes=%5")
-                 .arg(imagePairs.size())
-                 .arg(exhaustivePairCount)
-                 .arg(pairOptions.sequentialWindow)
-                 .arg(static_cast<int>(ctx.knownCameraCenters.size()))
-                 .arg(sourceTypes.isEmpty() ? QStringLiteral("fallback_window") : sourceTypes.join(QLatin1Char(','))));
 
-    QJsonObject matchConfig;
-    matchConfig[QStringLiteral("match_algorithm")] = ctx.matchAlgorithm;
-    matchConfig[QStringLiteral("use_cuda")] = true;
-    matchConfig[QStringLiteral("outlier_method")] = QStringLiteral("fundamental_ransac");
+    QVector<ProjectIpmatchResultRecord> matchRecords;
+    matchRecords.reserve(static_cast<int>(matchPhotosResult.matches.size()));
+    for (const xjw::matchphotos::MatchPhotosMatchRecord &match : matchPhotosResult.matches)
+    {
+        QJsonObject matchSettings = match.settings;
+        if (!matchPhotosResult.tiePointPath.isEmpty())
+        {
+            matchSettings[QStringLiteral("tie_point_path")] = matchPhotosResult.tiePointPath;
+            matchSettings[QStringLiteral("track_count")] = matchPhotosResult.trackCount;
+            matchSettings[QStringLiteral("track_summary")] = matchPhotosResult.trackSummary;
+        }
+        matchRecords.push_back(ProjectIpmatchResultRecord{QStringList{match.matchPath}, matchSettings});
+    }
 
-    progressCount.store(0);
-    FeatureMatchRunner::run(matchConfig, imagePairs, ownerGuard, cancelFlag, progressCount);
-    LOG_INFO(QStringLiteral("[DEM流水线] ✓ 特征匹配完成"));
+    bool writebackOk = false;
+    if (ownerGuard)
+    {
+        const Qt::ConnectionType connectionType = ownerGuard->thread() == QThread::currentThread()
+            ? Qt::DirectConnection
+            : Qt::BlockingQueuedConnection;
+        QMetaObject::invokeMethod(ownerGuard.data(),
+                                  [ownerGuard, projectPath = ctx.projectPath, featureRecords, matchRecords, &writebackOk]()
+        {
+            if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
+            {
+                return;
+            }
+            ownerGuard->appendIpfindResults(featureRecords);
+            ownerGuard->appendIpmatchResults(matchRecords);
+            writebackOk = true;
+        }, connectionType);
+    }
+    if (!writebackOk)
+    {
+        const QString error = QStringLiteral("项目已切换，连接点结果未写回，流水线中止");
+        LOG_ERROR(QStringLiteral("[DEM流水线] ✗ %1").arg(error));
+        if (self)
+        {
+            emit self->demPipelineFinished(false, error);
+        }
+        return;
+    }
+    LOG_INFO(QStringLiteral("[DEM流水线] ✓ 连接点创建完成并已写回项目"));
 
     // 步骤 3-5: 正式 SfM/BA 稀疏云 → MVS → DEM 需要在主线程通过信号链驱动
     LOG_INFO(QStringLiteral("[DEM流水线] ── 步骤 3/5: 检查正式 SfM/BA 稀疏点云（切换到主线程信号链）──"));

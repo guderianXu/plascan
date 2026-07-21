@@ -13,6 +13,7 @@ namespace
 {
 
 constexpr int kMinimumLevelShortSide = 160;
+constexpr int kMinimumFinalShortSide = 320;
 
 DepthPyramidLevelConfig makeLevel(const PatchMatchConfig &base_config,
                                   int level,
@@ -54,13 +55,20 @@ cv::Size depthPyramidWorkingSize(int image_width,
                     std::max(1, image_height / factor));
 }
 
+int depthPyramidMinimumLevelShortSide()
+{
+    return kMinimumLevelShortSide;
+}
+
 DepthPyramidConfig makeDepthPyramidConfig(const PatchMatchConfig &base_config,
                                           int image_width,
                                           int image_height)
 {
     DepthPyramidConfig result;
-    const int final_factor = std::max(1, base_config.downsampleFactor);
     const int short_side = std::max(1, std::min(image_width, image_height));
+    const int requested_final_factor = std::max(1, base_config.downsampleFactor);
+    const int maximum_final_factor = std::max(1, short_side / kMinimumFinalShortSide);
+    const int final_factor = std::min(requested_final_factor, maximum_final_factor);
     const int maximum_factor = std::max(1, short_side / kMinimumLevelShortSide);
     const std::array<int, 3> desired_factors = {
         final_factor * 4,

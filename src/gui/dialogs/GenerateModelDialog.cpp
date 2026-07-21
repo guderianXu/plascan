@@ -364,8 +364,17 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray &candidates)
         automatic_depth_maps[QLatin1String(kDisplay)] = tr("自动生成深度图");
         automatic_depth_maps[QLatin1String(kSupported)] = true;
         automatic_depth_maps[QLatin1String(kNote)] =
-            tr("当前没有可复用深度图；生成模型时将自动估计深度图、融合密集点云并生成网格。");
+            tr("当前没有可复用深度图；生成模型时将自动估计深度图并直接进行 TSDF 表面重建。");
         _candidates.insert(0, automatic_depth_maps);
+
+        // Older projects could persist tie points as the model source before the
+        // automatic depth-map workflow existed. Do not let that stale choice
+        // silently bypass dense reconstruction when this dialog is reopened.
+        if (_pendingSourceData == QStringLiteral("tie_points"))
+        {
+            _pendingSourceData = QStringLiteral("depth_maps");
+            _pendingSourcePath.clear();
+        }
     }
     refreshSourceTypes();
 }
@@ -405,10 +414,20 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("meshResolution")] = qualityMeshResolution(quality);
     settings[QStringLiteral("targetFaces")] = targetFaces;
     settings[QStringLiteral("simplifyTargetFaces")] = targetFaces;
-    settings[QStringLiteral("method")] = surfaceType == QStringLiteral("height_field")
-        ? QStringLiteral("Height Field")
-        : QStringLiteral("Poisson Surface");
-    settings[QStringLiteral("export_format")] = QStringLiteral("PLY");
+    if (sourceData == QStringLiteral("depth_maps") &&
+        surfaceType == QStringLiteral("arbitrary_3d"))
+    {
+        settings[QStringLiteral("method")] = QStringLiteral("Depth TSDF");
+        settings[QStringLiteral("reconstruction_mode")] = QStringLiteral("depth_tsdf");
+    }
+    else
+    {
+        settings[QStringLiteral("method")] = surfaceType == QStringLiteral("height_field")
+            ? QStringLiteral("Height Field")
+            : QStringLiteral("Poisson Surface");
+    }
+    // PLY 仍会作为几何回退写出；OBJ/MTL/PNG 是工作区的高质量纹理显示路径。
+    settings[QStringLiteral("export_format")] = QStringLiteral("OBJ");
     settings[QStringLiteral("saveAfterEachStep")] = _saveEachStepCheck->isChecked();
     settings[QStringLiteral("splitIntoBlocks")] = _splitRegionCheck->isChecked();
     settings[QStringLiteral("blockSizeMeters")] = _blockSizeSpin->value();
@@ -618,7 +637,7 @@ void GenerateModelDialog::updateAvailability()
     {
         _statusLabel->setText(
             tr("缺少深度图时将自动估计深度图；已有兼容深度图时将按“重用深度图”设置复用，"
-               "随后自动融合密集点云并生成模型。"));
+               "随后直接进行 TSDF 表面重建。"));
         return;
     }
     _statusLabel->setText(note.isEmpty()
@@ -654,8 +673,8 @@ void GenerateModelDialog::onRun()
         return;
     }
 
-    emit runRequested(settings);
     accept();
+    emit runRequested(settings);
 }
 
 void GenerateModelDialog::onSourceTypeChanged()

@@ -7,7 +7,7 @@
 #include "MarkerWorkspaceController.h"
 #include "PrintMarkersDialog.h"
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <gtest/gtest.h>
 
@@ -223,7 +223,7 @@ TEST(MarkerDetectionReviewTest, PersistsNonCodedCandidateUntilUserAcceptsIt)
     const auto entry = fixture.controller->detectionReviewQueue().entries.front();
     EXPECT_EQ(entry.reason, QStringLiteral("unassociated_non_coded"));
 
-    const QString review_path = ProjectIO::markerDetectionReviewPath(
+    const QString review_path = xjw::common::project::ProjectIO::markerDetectionReviewPath(
         fixture.project.currentProjectPath());
     const auto persisted = xjw::control_points::DetectionReviewStore(review_path).load();
     ASSERT_TRUE(persisted.ok) << persisted.error.toStdString();

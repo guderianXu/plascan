@@ -35,12 +35,12 @@ private:
     enum class Stage
     {
         Idle,
-        DenseCloud,
+        DepthMaps,
         Model
     };
 
     void startModelStage(const QJsonObject &settings);
-    void startDenseStage(const QJsonObject &dense_settings,
+    void startDepthStage(const QJsonObject &depth_settings,
                          const QJsonObject &model_settings);
     bool belongsToActiveProject() const;
     void finish(bool success);
@@ -52,7 +52,7 @@ private:
     ProjectModelManager *_modelManager = nullptr;
     Stage _stage = Stage::Idle;
     QString _projectPath;
-    QString _expectedDenseOutputDir;
+    QString _expectedDepthOutputDir;
     QJsonObject _pendingModelSettings;
     bool _internalMvsFinishPending = false;
 };

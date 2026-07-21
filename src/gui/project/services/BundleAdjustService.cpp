@@ -12,7 +12,9 @@
 #include "LaserConstraintAssociation.h"
 #include "LaserConstraintMap.h"
 #include "Logger.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "io/PathIO.h"
 
 #include <QDir>
@@ -415,7 +417,7 @@ BaServiceResult BundleAdjustService::run(
             const std::array<double, 3> &point =
                 baResult.points[static_cast<std::size_t>(input.trackIndex)].point;
             control_points::MarkerResidual residual;
-            residual.markerId = input.markerId;
+            residual.markerId = input.markerId.toStdString();
             residual.role = input.role;
             double sigma_sum_squared = 0.0;
             for (int axis = 0; axis < 3; ++axis)
@@ -600,7 +602,7 @@ BaServiceResult BundleAdjustService::run(
             (c1[2]-c0[2])*(c1[2]-c0[2]));
 
         const QJsonObject beforeJson  = opts.beforeCamMeta.value(imgPath);
-        const QJsonObject afterJson = xjw::gui::project::cameraToJson(camAfter);
+        const QJsonObject afterJson = xjw::common::project::cameraToJson(camAfter);
 
         // 收集待提交的相机更新
         pendingCamUpdates.insert(imgPath, afterJson);

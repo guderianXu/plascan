@@ -6,9 +6,14 @@ add_library(meshing STATIC
     SurfaceReconstructorPostprocess.cpp
     SurfaceReconstructorHeightGrid.cpp
     DepthMapMeshBuilder.cpp
+    DepthTsdfSurfaceBuilder.cpp
     VisualHullReconstructor.cpp
     MeshIO.cpp
+    MeshColorizer.cpp
+    MeshFaceColorOptimizer.cpp
+    MeshQuadricSimplifier.cpp
     TextureMapper.cpp
+    CameraTextureMapper.cpp
     ModelWorkflowService.cpp
 )
 

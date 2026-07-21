@@ -1,0 +1,31 @@
+find_package(GTest REQUIRED)
+include(GoogleTest)
+
+add_executable(test_common_project_io test_project_io.cpp)
+target_link_libraries(test_common_project_io PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_common_project_io DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_common_project_metadata test_project_metadata.cpp)
+target_link_libraries(test_common_project_metadata PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_common_project_metadata DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_common_project_camera_io test_project_camera_io.cpp)
+target_link_libraries(test_common_project_camera_io PRIVATE
+  plascan_common_project
+  camera
+  GTest::gtest_main
+)
+gtest_discover_tests(test_common_project_camera_io DISCOVERY_MODE PRE_TEST)
+
+add_executable(test_common_project_match_catalog test_project_match_catalog.cpp)
+target_link_libraries(test_common_project_match_catalog PRIVATE
+  plascan_common_project
+  GTest::gtest_main
+)
+gtest_discover_tests(test_common_project_match_catalog DISCOVERY_MODE PRE_TEST)

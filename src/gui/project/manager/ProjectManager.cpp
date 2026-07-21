@@ -5,8 +5,10 @@
 #include "ProjectTaskDispatcher.h"
 #include "ProjectUiCommands.h"
 #include "ProjectData.h"
-#include "ProjectIO.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectIO.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "ProjectCameraImportService.h"
 #include "ProjectBundleAdjustExecution.h"
 #include "ProjectBundleAdjustWorkflow.h"
@@ -46,7 +48,6 @@
 #include "SparseCloudValidator.h"
 #include "SurfaceReconstructor.h"
 
-#include "AerialTriangulationService.h"
 
 #include <QMessageBox>
 #include <QCoreApplication>
@@ -85,8 +86,8 @@
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
 
-using xjw::gui::project::cameraFromJson;
-using xjw::gui::project::cameraToJson;
+using xjw::common::project::cameraFromJson;
+using xjw::common::project::cameraToJson;
 using xjw::gui::project::BundleAdjustExecutionResult;
 using xjw::gui::project::buildDepthGenConfig;
 using xjw::gui::project::buildSparsePointWorkflowSuccessMessage;
@@ -103,8 +104,8 @@ using xjw::gui::project::makeDenseResultRecord;
 using xjw::gui::project::makeDepthResultRecord;
 using xjw::gui::project::makeInitializedCameraMeta;
 using xjw::gui::project::makeModelResultRecord;
-using xjw::gui::project::normalizePath;
-using xjw::gui::project::pathTokenMatchesImage;
+using xjw::common::project::normalizePath;
+using xjw::common::project::pathTokenMatchesImage;
 using xjw::gui::project::persistProjectMeta;
 using xjw::gui::project::projectFilesMeta;
 using xjw::gui::project::resolveInitTargets;
@@ -1128,7 +1129,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
     QSet<QString> projectImageKeys;
     for (const QString &imagePath : allImages)
     {
-        const QString resolvedPath = ProjectIO::resolveProjectResourcePath(projectPath, imagePath);
+        const QString resolvedPath = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, imagePath);
         const QString key = normalizePath(resolvedPath);
         if (key.isEmpty() || projectImageKeys.contains(key))
         {
@@ -1143,7 +1144,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
     QSet<QString> seen;
     for (const QString &requestedPath : requestedImages)
     {
-        const QString resolvedPath = ProjectIO::resolveProjectResourcePath(projectPath, requestedPath);
+        const QString resolvedPath = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, requestedPath);
         const QString key = normalizePath(resolvedPath);
         if (!key.isEmpty() && projectImages.contains(key) && !seen.contains(key))
         {
@@ -1157,7 +1158,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
         return;
     }
 
-    const QString activeImage = ProjectIO::resolveProjectResourcePath(projectPath, _activeImagePath);
+    const QString activeImage = xjw::common::project::ProjectIO::resolveProjectResourcePath(projectPath, _activeImagePath);
     const QString currentImage = projectImages.value(normalizePath(activeImage));
     GenerateMaskDialog dialog(selectedImages, currentImage, _parent);
     connect(&dialog, &GenerateMaskDialog::sam21InstallRequested,
@@ -1179,7 +1180,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
         return;
     }
 
-    const QString masksDir = ProjectIO::maskOutputDir(projectPath);
+    const QString masksDir = xjw::common::project::ProjectIO::maskOutputDir(projectPath);
     if (masksDir.isEmpty() || !QDir().mkpath(masksDir))
     {
         showWarning(QStringLiteral("无法创建蒙版输出目录：%1").arg(masksDir), QStringLiteral("生成蒙版"));
@@ -1334,7 +1335,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
                     continue;
                 }
 
-                const QString maskPath = ProjectIO::maskOutputPathForImage(projectPath, imagePath);
+                const QString maskPath = xjw::common::project::ProjectIO::maskOutputPathForImage(projectPath, imagePath);
                 if (QFileInfo::exists(maskPath) && operation != xjw::mask::MaskOperation::Replace)
                 {
                     const cv::Mat existing = xjw::common::io::readImage(maskPath, cv::IMREAD_GRAYSCALE);
@@ -1395,7 +1396,7 @@ void ProjectManager::openGenerateMaskDialogForImages(const QStringList &requeste
             for (int i = 0; i < images.size(); ++i)
             {
                 QJsonObject image = images.at(i).toObject();
-                const QString imagePath = ProjectIO::resolveProjectResourcePath(
+                const QString imagePath = xjw::common::project::ProjectIO::resolveProjectResourcePath(
                     projectPath,
                     image.value(QStringLiteral("path")).toString());
                 const QString normalized = normalizePath(imagePath);
@@ -1511,7 +1512,7 @@ void ProjectManager::prepareReferenceTerrainBundleAdjust()
         return;
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(currentProjectPath());
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(currentProjectPath());
     const QString outputDir = QDir(assetsDir).filePath(
         QStringLiteral("bundle_adjust/%1_%2")
             .arg(demPriorPath.isEmpty()
@@ -2276,7 +2277,7 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
 
     // 从运行时元数据中建立路径 → 影像元数据索引，再按需解析相机。
     const QMap<QString, QJsonObject> imageMetaByPath =
-        xjw::gui::project::projectImageMetaByPath(projectFilesMeta(_projectData), true);
+        xjw::common::project::projectImageMetaByPath(projectFilesMeta(_projectData), true);
 
     for (const QString &imgPath : images)
     {
@@ -2289,7 +2290,7 @@ QMap<QString, xjw::Camera> ProjectManager::getCamerasForImages(
         }
 
         xjw::Camera cam;
-        if (!xjw::gui::project::imageCameraFromEntry(imageMeta, &cam))
+        if (!xjw::common::project::imageCameraFromEntry(imageMeta, &cam))
         {
             if (hasCamerasForAll) *hasCamerasForAll = false;
             continue;
@@ -2387,7 +2388,7 @@ bool ProjectManager::acceptBundleAdjustPreview(QString *errorMsg)
         LOG_WARN(commitResult.warningMessage);
     }
 
-    const QString assetsDir = ProjectIO::projectAssetsDir(currentProjectPath());
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(currentProjectPath());
     const QString baOutputDir = assetsDir.isEmpty()
         ? QString()
         : QDir(assetsDir).filePath(

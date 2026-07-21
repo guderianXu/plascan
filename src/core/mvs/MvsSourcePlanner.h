@@ -20,6 +20,13 @@ enum class MvsSourceRejectReason
     LowQuality
 };
 
+enum class MvsSourceTier
+{
+    VerifiedPair,
+    TrackGeometryBackfill,
+    SequenceFallback
+};
+
 struct MvsSourceCandidate
 {
     int viewIndex = -1;
@@ -45,6 +52,7 @@ struct MvsSourcePlanEntry
     bool knownOverlap = false;
     bool verifiedPairGeometry = false;
     bool sequenceFallback = false;
+    MvsSourceTier tier = MvsSourceTier::VerifiedPair;
     float score = 0.0f;
     float sourceQualityScore = 0.0f;
 };
@@ -78,10 +86,15 @@ struct MvsSourcePlan
     std::vector<MvsSourcePlanEntry> selected;
     std::vector<MvsSourceRejectedCandidate> rejected;
     bool usedSequenceFallback = false;
+    int requestedSourceCount = 0;
+    int sourceViewShortfall = 0;
 };
 
 MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidates,
                                  const MvsSourcePlannerOptions &options);
+MvsSourcePlan planMvsSourceViewsVerifiedFirst(
+    const std::vector<MvsSourceCandidate> &candidates,
+    const MvsSourcePlannerOptions &options);
 
 QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry);
 

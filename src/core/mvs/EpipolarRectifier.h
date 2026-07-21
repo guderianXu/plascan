@@ -40,6 +40,12 @@ public:
         const cv::Mat &rectifiedDepth,
         const RectifiedPair &pair,
         int origW, int origH);
+
+    static cv::Mat unrectifyNearest(
+        const cv::Mat &rectifiedArtifact,
+        const RectifiedPair &pair,
+        int origW,
+        int origH);
 };
 
 } // namespace mvs

@@ -3,12 +3,12 @@
 // =============================================================================
 
 #include "ObservationNetworkBuilder.h"
+#include "common/DisjointSet.h"
+
+#include <plapoint/search/spatial_kdtree.h>
 
 #include <algorithm>
-#include <cassert>
 #include <cmath>
-#include <limits>
-#include <numeric>
 #include <unordered_map>
 
 namespace xjw
@@ -75,6 +75,46 @@ ObservationNetwork ObservationNetworkBuilder::build(const std::vector<std::strin
     net.edges = std::move(selected);
     net.degrees = computeDegrees(n, net.edges);
     return net;
+}
+
+std::vector<MatchEdge> ObservationNetworkBuilder::selectStrongConnectedCore(
+    int numNodes,
+    const std::vector<MatchEdge> &edges,
+    int strongMinMatches)
+{
+    if (numNodes <= 1 || edges.empty())
+    {
+        return edges;
+    }
+
+    detail::DisjointSet disjointSet(numNodes);
+    std::vector<MatchEdge> strongEdges;
+    strongEdges.reserve(edges.size());
+    for (const MatchEdge &edge : edges)
+    {
+        if (edge.idx0 < 0 || edge.idx0 >= numNodes || edge.idx1 < 0 || edge.idx1 >= numNodes ||
+            edge.numMatches < strongMinMatches)
+        {
+            continue;
+        }
+        strongEdges.push_back(edge);
+        disjointSet.unite(edge.idx0, edge.idx1);
+    }
+
+    if (strongEdges.empty())
+    {
+        return edges;
+    }
+
+    const int root = disjointSet.find(0);
+    for (int node = 1; node < numNodes; ++node)
+    {
+        if (disjointSet.find(node) != root)
+        {
+            return edges;
+        }
+    }
+    return strongEdges;
 }
 
 // ===========================================================================
@@ -165,41 +205,6 @@ std::vector<NetworkEdge> ObservationNetworkBuilder::runKNN(int n, const std::vec
 // MST 算法 — Kruskal 最大生成树（最大化连通性）
 // ===========================================================================
 
-ObservationNetworkBuilder::UnionFind::UnionFind(int n) : parent(n), rankValues(n, 0)
-{
-    std::iota(parent.begin(), parent.end(), 0);
-}
-
-int ObservationNetworkBuilder::UnionFind::find(int x)
-{
-    while (parent[x] != x)
-    {
-        parent[x] = parent[parent[x]]; // 路径压缩
-        x = parent[x];
-    }
-    return x;
-}
-
-bool ObservationNetworkBuilder::UnionFind::unite(int a, int b)
-{
-    a = find(a);
-    b = find(b);
-    if (a == b)
-    {
-        return false;
-    }
-    if (rankValues[a] < rankValues[b])
-    {
-        std::swap(a, b);
-    }
-    parent[b] = a;
-    if (rankValues[a] == rankValues[b])
-    {
-        ++rankValues[a];
-    }
-    return true;
-}
-
 std::vector<NetworkEdge> ObservationNetworkBuilder::runMST(int n, const std::vector<MatchEdge> &edges,
                                                            const ObservationNetworkConfig & /*cfg*/)
 {
@@ -213,7 +218,7 @@ std::vector<NetworkEdge> ObservationNetworkBuilder::runMST(int n, const std::vec
     std::sort(sorted.begin(), sorted.end(),
               [](const MatchEdge *a, const MatchEdge *b) { return a->numMatches > b->numMatches; });
 
-    UnionFind uf(n);
+    detail::DisjointSet disjointSet(n);
     std::vector<NetworkEdge> out;
     out.reserve(n - 1);
     for (const auto *e : sorted)
@@ -222,7 +227,7 @@ std::vector<NetworkEdge> ObservationNetworkBuilder::runMST(int n, const std::vec
         {
             break;
         }
-        if (uf.unite(e->idx0, e->idx1))
+        if (disjointSet.unite(e->idx0, e->idx1).merged)
         {
             out.push_back({e->idx0, e->idx1, e->numMatches, 0.0});
         }
@@ -254,78 +259,6 @@ std::vector<NetworkEdge> ObservationNetworkBuilder::runSpatial(int /*n*/, const 
 //               找到空间最近的 K 个邻居后过滤有效匹配边
 // ===========================================================================
 
-void ObservationNetworkBuilder::buildKD(std::vector<KDNode> &nodes, int lo, int hi, int depth)
-{
-    if (hi - lo <= 1)
-    {
-        return;
-    }
-    int axis = depth % 2;
-    int mid = (lo + hi) / 2;
-    std::nth_element(nodes.begin() + lo, nodes.begin() + mid, nodes.begin() + hi,
-                     [axis](const KDNode &a, const KDNode &b) { return axis == 0 ? a.x < b.x : a.y < b.y; });
-    buildKD(nodes, lo, mid, depth + 1);
-    buildKD(nodes, mid + 1, hi, depth + 1);
-}
-
-void ObservationNetworkBuilder::queryKD(const std::vector<KDNode> &nodes, int lo, int hi, int depth, double qx,
-                                        double qy, int queryIdx, int k, std::vector<std::pair<double, int>> &result)
-{
-    if (hi - lo <= 0)
-    {
-        return;
-    }
-
-    int axis = depth % 2;
-    int mid = (lo + hi) / 2;
-
-    const KDNode &node = nodes[mid];
-    if (node.index != queryIdx)
-    {
-        double dx = node.x - qx, dy = node.y - qy;
-        double d2 = dx * dx + dy * dy;
-        if ((int)result.size() < k)
-        {
-            result.emplace_back(d2, node.index);
-            if ((int)result.size() == k)
-                std::make_heap(result.begin(), result.end()); // max-heap on distance
-        }
-        else if (d2 < result.front().first)
-        {
-            std::pop_heap(result.begin(), result.end());
-            result.back() = {d2, node.index};
-            std::push_heap(result.begin(), result.end());
-        }
-    }
-
-    // 判断哪侧更近
-    double splitVal = (axis == 0) ? node.x : node.y;
-    double qVal = (axis == 0) ? qx : qy;
-    int nearSide = (qVal <= splitVal) ? 0 : 1; // 0=left,1=right
-
-    auto recurse = [&](int side)
-    {
-        if (side == 0 && lo < mid)
-        {
-            queryKD(nodes, lo, mid, depth + 1, qx, qy, queryIdx, k, result);
-        }
-        else if (side == 1 && mid + 1 < hi)
-        {
-            queryKD(nodes, mid + 1, hi, depth + 1, qx, qy, queryIdx, k, result);
-        }
-    };
-
-    recurse(nearSide);
-
-    // 检查另一侧是否可能更近
-    double planeDist = qVal - splitVal;
-    double maxDist2 = result.empty() ? std::numeric_limits<double>::max() : result.front().first;
-    if (planeDist * planeDist < maxDist2)
-    {
-        recurse(1 - nearSide);
-    }
-}
-
 std::vector<NetworkEdge> ObservationNetworkBuilder::runKDTree(int n, const std::vector<MatchEdge> &edges,
                                                               const std::vector<GpsCoord> &gps,
                                                               const ObservationNetworkConfig &cfg)
@@ -334,25 +267,24 @@ std::vector<NetworkEdge> ObservationNetworkBuilder::runKDTree(int n, const std::
     bool hasGps =
         ((int)gps.size() == n) && std::any_of(gps.begin(), gps.end(), [](const GpsCoord &g) { return g.valid; });
 
-    std::vector<KDNode> kdNodes(n);
+    using SpatialTree = plapoint::search::SpatialKdTree<2, double>;
+    std::vector<SpatialTree::Point> spatialPoints(static_cast<std::size_t>(n));
     for (int i = 0; i < n; ++i)
     {
-        kdNodes[i].index = i;
+        SpatialTree::Point &point = spatialPoints[static_cast<std::size_t>(i)];
+        point.index = i;
         if (hasGps && gps[i].valid)
         {
-            kdNodes[i].x = gps[i].lat;
-            kdNodes[i].y = gps[i].lon;
+            point.coords = {gps[i].lat, gps[i].lon};
         }
         else
         {
             // 无 GPS：使用序列索引作为 1D 坐标，y=0
-            kdNodes[i].x = static_cast<double>(i);
-            kdNodes[i].y = 0.0;
+            point.coords = {static_cast<double>(i), 0.0};
         }
     }
 
-    // 构建 KD 树
-    buildKD(kdNodes, 0, n, 0);
+    const SpatialTree spatialTree(spatialPoints);
 
     // 构建匹配查找映射: (min,max) -> numMatches
     std::unordered_map<long long, int> matchMap;
@@ -367,17 +299,24 @@ std::vector<NetworkEdge> ObservationNetworkBuilder::runKDTree(int n, const std::
     // 为每个节点查询 K 近邻，收集有匹配的边
     std::unordered_map<long long, bool> added;
     std::vector<NetworkEdge> out;
-    const int k = cfg.k;
+    const std::size_t k = static_cast<std::size_t>(std::max(0, cfg.k));
 
     for (int i = 0; i < n; ++i)
     {
-        std::vector<std::pair<double, int>> nbrs;
-        nbrs.reserve(k + 1);
-        queryKD(kdNodes, 0, n, 0, kdNodes[i].x, kdNodes[i].y, i, k, nbrs);
-
-        for (const auto &[distanceSquared, j] : nbrs)
+        std::vector<SpatialTree::Neighbor> neighbors =
+            spatialTree.kNearestByPointIndex(static_cast<std::size_t>(i), k);
+        std::sort(neighbors.begin(), neighbors.end(), [](const auto &left, const auto &right)
         {
-            (void)distanceSquared;
+            if (left.distanceSquared != right.distanceSquared)
+            {
+                return left.distanceSquared < right.distanceSquared;
+            }
+            return left.index < right.index;
+        });
+
+        for (const SpatialTree::Neighbor &neighbor : neighbors)
+        {
+            const int j = neighbor.index;
             int a = std::min(i, j), b = std::max(i, j);
             long long key = ((long long)a << 32) | (unsigned)b;
             if (added.count(key))

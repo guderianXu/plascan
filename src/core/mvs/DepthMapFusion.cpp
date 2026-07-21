@@ -228,6 +228,118 @@ DepthMapFusion::DepthMapFusion(const StereoFusionConfig &config)
 {
 }
 
+void DepthMapFusion::resetRejectionStats()
+{
+    _maskRejected.store(0, std::memory_order_relaxed);
+    _supportRejected.store(0, std::memory_order_relaxed);
+    _depthGradientRejected.store(0, std::memory_order_relaxed);
+    _reprojectionRejected.store(0, std::memory_order_relaxed);
+    _depthConsistencyRejected.store(0, std::memory_order_relaxed);
+    _normalRejected.store(0, std::memory_order_relaxed);
+    _insufficientObservations.store(0, std::memory_order_relaxed);
+}
+
+FusionRejectionStats DepthMapFusion::rejectionStats() const
+{
+    FusionRejectionStats stats;
+    stats.maskRejected = _maskRejected.load(std::memory_order_relaxed);
+    stats.supportRejected = _supportRejected.load(std::memory_order_relaxed);
+    stats.depthGradientRejected = _depthGradientRejected.load(std::memory_order_relaxed);
+    stats.reprojectionRejected = _reprojectionRejected.load(std::memory_order_relaxed);
+    stats.depthConsistencyRejected = _depthConsistencyRejected.load(std::memory_order_relaxed);
+    stats.normalRejected = _normalRejected.load(std::memory_order_relaxed);
+    stats.insufficientObservations = _insufficientObservations.load(std::memory_order_relaxed);
+    return stats;
+}
+
+bool DepthMapFusion::isPixelEligible(const FusionFrameInput &frame, int row, int col)
+{
+    if (row < 0 || row >= frame.depthMap.rows || col < 0 || col >= frame.depthMap.cols)
+    {
+        return false;
+    }
+
+    const float depth = frame.depthMap.at<float>(row, col);
+    if (!std::isfinite(depth) || depth <= 0.0f)
+    {
+        return false;
+    }
+
+    if (!frame.validMask.empty() && frame.validMask.at<std::uint8_t>(row, col) == 0)
+    {
+        _maskRejected.fetch_add(1, std::memory_order_relaxed);
+        return false;
+    }
+
+    if (_config.minSupportViews > 0 && !frame.supportCount.empty())
+    {
+        int support_count = 0;
+        if (frame.supportCount.type() == CV_16U)
+        {
+            support_count = static_cast<int>(frame.supportCount.at<std::uint16_t>(row, col));
+        }
+        else if (frame.supportCount.type() == CV_8U)
+        {
+            support_count = static_cast<int>(frame.supportCount.at<std::uint8_t>(row, col));
+        }
+        else if (frame.supportCount.type() == CV_32F)
+        {
+            support_count = static_cast<int>(std::lround(frame.supportCount.at<float>(row, col)));
+        }
+        if (support_count < _config.minSupportViews)
+        {
+            _supportRejected.fetch_add(1, std::memory_order_relaxed);
+            return false;
+        }
+    }
+
+    if (_config.maxLocalDepthGradient > 0.0f)
+    {
+        constexpr int offsets[4][2] = {{-1, 0}, {1, 0}, {0, -1}, {0, 1}};
+        std::array<float, 4> relative_differences{};
+        int difference_count = 0;
+        for (const auto &offset : offsets)
+        {
+            const int neighbor_row = row + offset[0];
+            const int neighbor_col = col + offset[1];
+            if (neighbor_row < 0 || neighbor_row >= frame.depthMap.rows ||
+                neighbor_col < 0 || neighbor_col >= frame.depthMap.cols)
+            {
+                continue;
+            }
+            if (!frame.validMask.empty() &&
+                frame.validMask.at<std::uint8_t>(neighbor_row, neighbor_col) == 0)
+            {
+                continue;
+            }
+            const float neighbor_depth = frame.depthMap.at<float>(neighbor_row, neighbor_col);
+            if (!std::isfinite(neighbor_depth) || neighbor_depth <= 0.0f)
+            {
+                continue;
+            }
+            const float denominator = std::max({std::fabs(depth), std::fabs(neighbor_depth), 1.0e-6f});
+            relative_differences[static_cast<std::size_t>(difference_count++)] =
+                std::fabs(depth - neighbor_depth) / denominator;
+        }
+
+        if (difference_count >= 2)
+        {
+            const int lower_middle = (difference_count - 1) / 2;
+            std::nth_element(relative_differences.begin(),
+                             relative_differences.begin() + lower_middle,
+                             relative_differences.begin() + difference_count);
+            if (relative_differences[static_cast<std::size_t>(lower_middle)] >
+                _config.maxLocalDepthGradient)
+            {
+                _depthGradientRejected.fetch_add(1, std::memory_order_relaxed);
+                return false;
+            }
+        }
+    }
+
+    return true;
+}
+
 // =============================================================================
 float DepthMapFusion::median(std::vector<float> &v)
 {
@@ -470,12 +582,11 @@ bool DepthMapFusion::fusePixel(
             continue;
         }
 
-        // 读深度
-        float d = frames[fi].depthMap.at<float>(r, c);
-        if (d <= 0.f)
+        if (!isPixelEligible(frames[fi], r, c))
         {
             continue;
         }
+        const float d = frames[fi].depthMap.at<float>(r, c);
 
         // 非首次遍历需要做一致性检查
         if (td > 0 && hasRef)
@@ -492,6 +603,7 @@ bool DepthMapFusion::fusePixel(
             float dv = v_proj - r;
             if (du*du + dv*dv > maxReprojSq)
             {
+                _reprojectionRejected.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
 
@@ -504,6 +616,7 @@ bool DepthMapFusion::fusePixel(
             float relDepthErr = std::fabs(d - Zc_expect) / Zc_expect;
             if (relDepthErr > maxDepthErr)
             {
+                _depthConsistencyRejected.fetch_add(1, std::memory_order_relaxed);
                 continue;
             }
 
@@ -532,6 +645,7 @@ bool DepthMapFusion::fusePixel(
                                  nw_curr[2]*nw_ref[2];
                 if (cosAngle < cosMaxNormErr)
                 {
+                    _normalRejected.fetch_add(1, std::memory_order_relaxed);
                     continue;
                 }
             }
@@ -656,6 +770,7 @@ bool DepthMapFusion::fusePixel(
     // 检查最少观测数
     if ((int)xs.size() < _config.minNumPixels)
     {
+        _insufficientObservations.fetch_add(1, std::memory_order_relaxed);
         for (const AcceptedPixel &pixel : acceptedPixels)
         {
             const FrameGeometry &g = geom[pixel.frameIdx];
@@ -852,7 +967,7 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                     for (int col = 0; col < W; ++col)
                     {
                         const float depth = depthRow[col];
-                        if (depth <= 0.f)
+                        if (depth <= 0.f || !isPixelEligible(frames[fi], row, col))
                         {
                             continue;
                         }
@@ -905,18 +1020,30 @@ bool DepthMapFusion::fuseTwoViewSingleObservationFast(
                                 const float otherDepth = frames[other].depthMap.at<float>(otherRow, otherCol);
                                 const float zExpected = positiveDepth(
                                     geom[other].cameraModel, x0, y0, z0);
-                                bool consistent = otherDepth > 0.f &&
-                                                  zExpected > 0.f &&
-                                                  du * du + dv * dv <= maxReprojSq &&
-                                                  std::fabs(otherDepth - zExpected) / zExpected <=
-                                                      _config.maxDepthError;
+                                bool consistent = isPixelEligible(frames[other], otherRow, otherCol) &&
+                                                  zExpected > 0.f;
+                                if (consistent && du * du + dv * dv > maxReprojSq)
+                                {
+                                    _reprojectionRejected.fetch_add(1, std::memory_order_relaxed);
+                                    consistent = false;
+                                }
+                                if (consistent &&
+                                    std::fabs(otherDepth - zExpected) / zExpected > _config.maxDepthError)
+                                {
+                                    _depthConsistencyRejected.fetch_add(1, std::memory_order_relaxed);
+                                    consistent = false;
+                                }
                                 if (consistent && hasNormal0 && !frames[other].normalMap.empty())
                                 {
                                     float tx = 0.f, ty = 0.f, tz = 0.f;
                                     if (readWorldNormal(other, otherRow, otherCol, tx, ty, tz))
                                     {
                                         const float cosAngle = nx0 * tx + ny0 * ty + nz0 * tz;
-                                        consistent = cosAngle >= cosMaxNormErr;
+                                        if (cosAngle < cosMaxNormErr)
+                                        {
+                                            _normalRejected.fetch_add(1, std::memory_order_relaxed);
+                                            consistent = false;
+                                        }
                                     }
                                 }
                                 if (consistent)
@@ -1225,7 +1352,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                 for (int col = 0; col < W; ++col)
                 {
                     const float depth = depthRow[col];
-                    if (depth <= 0.0f)
+                    if (depth <= 0.0f || !isPixelEligible(frames[fi], row, col))
                     {
                         continue;
                     }
@@ -1329,6 +1456,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                             const float dv = vOther - static_cast<float>(otherRow);
                             if (du * du + dv * dv > maxReprojSq)
                             {
+                                _reprojectionRejected.fetch_add(1, std::memory_order_relaxed);
                                 continue;
                             }
 
@@ -1336,9 +1464,15 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                                 frames[otherFrame].depthMap.at<float>(otherRow, otherCol);
                             const float expectedDepth = positiveDepth(
                                 otherGeom.cameraModel, point.x, point.y, point.z);
-                            if (otherDepth <= 0.0f || expectedDepth <= 0.0f ||
-                                std::fabs(otherDepth - expectedDepth) / expectedDepth > _config.maxDepthError)
+                            if (!isPixelEligible(frames[otherFrame], otherRow, otherCol) ||
+                                expectedDepth <= 0.0f)
                             {
+                                continue;
+                            }
+                            if (std::fabs(otherDepth - expectedDepth) / expectedDepth >
+                                _config.maxDepthError)
+                            {
+                                _depthConsistencyRejected.fetch_add(1, std::memory_order_relaxed);
                                 continue;
                             }
 
@@ -1363,6 +1497,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
                                     point.nx * otherNx + point.ny * otherNy + point.nz * otherNz;
                                 if (cosAngle < cosMaxNormErr)
                                 {
+                                    _normalRejected.fetch_add(1, std::memory_order_relaxed);
                                     continue;
                                 }
                             }
@@ -1403,6 +1538,7 @@ bool DepthMapFusion::fuseFirstFrameObservationsFast(
 
                         if (observationCount < requiredObservations)
                         {
+                            _insufficientObservations.fetch_add(1, std::memory_order_relaxed);
                             continue;
                         }
 
@@ -1521,6 +1657,7 @@ bool DepthMapFusion::fuse(
 {
     fusedPoints.clear();
     _filteredDepths.clear();
+    resetRejectionStats();
 
     if (frames.empty())
     {
@@ -1558,6 +1695,44 @@ bool DepthMapFusion::fuse(
             if (errorMsg)
             {
                 *errorMsg = "帧 " + std::to_string(fi) + " 深度图为空";
+            }
+            return false;
+        }
+        if (frames[fi].depthMap.type() != CV_32F)
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "帧 " + std::to_string(fi) + " 深度图必须为 CV_32F";
+            }
+            return false;
+        }
+        if (_config.requireValidMask && frames[fi].validMask.empty())
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "帧 " + std::to_string(fi) + " 缺少权威有效蒙版";
+            }
+            return false;
+        }
+        if (!frames[fi].validMask.empty() &&
+            (frames[fi].validMask.type() != CV_8U ||
+             frames[fi].validMask.size() != frames[fi].depthMap.size()))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "帧 " + std::to_string(fi) + " 有效蒙版类型或尺寸不匹配";
+            }
+            return false;
+        }
+        if (!frames[fi].supportCount.empty() &&
+            (frames[fi].supportCount.size() != frames[fi].depthMap.size() ||
+             (frames[fi].supportCount.type() != CV_16U &&
+              frames[fi].supportCount.type() != CV_8U &&
+              frames[fi].supportCount.type() != CV_32F)))
+        {
+            if (errorMsg)
+            {
+                *errorMsg = "帧 " + std::to_string(fi) + " 支持计数类型或尺寸不匹配";
             }
             return false;
         }
@@ -1738,7 +1913,18 @@ bool DepthMapFusion::fuse(
                 fi, frameValid, frameFused, 100.f * frameFused / std::max(1, frameValid));
     }
 
-    fprintf(stderr, "[StereoFusion] 融合完成：总点数=%d\n", (int)fusedPoints.size());
+    const FusionRejectionStats stats = rejectionStats();
+    fprintf(stderr,
+            "[StereoFusion] 融合完成：总点数=%d mask=%llu support=%llu gradient=%llu "
+            "reprojection=%llu depth=%llu normal=%llu observations=%llu\n",
+            static_cast<int>(fusedPoints.size()),
+            static_cast<unsigned long long>(stats.maskRejected),
+            static_cast<unsigned long long>(stats.supportRejected),
+            static_cast<unsigned long long>(stats.depthGradientRejected),
+            static_cast<unsigned long long>(stats.reprojectionRejected),
+            static_cast<unsigned long long>(stats.depthConsistencyRejected),
+            static_cast<unsigned long long>(stats.normalRejected),
+            static_cast<unsigned long long>(stats.insufficientObservations));
 
     if (progressCb)
     {

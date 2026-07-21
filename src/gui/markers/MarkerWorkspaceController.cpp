@@ -3,7 +3,7 @@
 #include "CanvasWidget.h"
 #include "MarkerUndoCommand.h"
 #include "ProjectData.h"
-#include "ProjectIO.h"
+#include "project/ProjectIO.h"
 
 #include <QDir>
 #include <QFileInfo>
@@ -76,7 +76,7 @@ bool MarkerWorkspaceController::openProject(QString *error)
         return false;
     }
     const auto loaded = control_points::DetectionReviewStore(
-                            ProjectIO::markerDetectionReviewPath(
+                            xjw::common::project::ProjectIO::markerDetectionReviewPath(
                                 _projectData->currentProjectPath()))
                             .load();
     if (!loaded.ok)

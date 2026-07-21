@@ -19,7 +19,9 @@ set(GUI_SOURCES
   main_window/MainWindow.ui
   main_window/ModelDropSupport.cpp
   main_window/MenuWorkflowController.cpp
+  main_window/ProjectUiHydrator.cpp
   main_window/ReconstructionWorkflowController.cpp
+  main_window/WorkspacePanelController.cpp
   menu/ToolbarButton.cpp
   menu/MainMenu.cpp
   markers/ProjectMarkerRepository.cpp
@@ -40,12 +42,10 @@ set(GUI_SOURCES
   project/archive/PlascanArchive.cpp
   project/data/ProjectData.cpp
   project/data/ProjectFilesManager.cpp
-  project/io/ProjectIO.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
   project/services/ProjectTiePointResultService.cpp
-  project/support/ProjectSupportUtils.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
@@ -73,6 +73,8 @@ set(GUI_SOURCES
   project/manager/ProjectCameraSetupManager.cpp
   tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
+  views/DepthOverlayData.cpp
+  widgets/DepthOverlayController.cpp
   views/LayerFeatureLoader.cpp
   views/FeatureResidualLoader.cpp
   views/LayerImageLoader.cpp
@@ -87,8 +89,6 @@ set(GUI_SOURCES
   widgets/ProjectDashboardWidget.cpp
   widgets/ReferencePanelWidget.cpp
   widgets/SelectionPropertiesWidget.cpp
-  widgets/WindowPanel.cpp
-  widgets/WindowPanel.ui
   widgets/ImageViewWidget.cpp
   widgets/ImageViewWidget.ui
   widgets/MatchLineOverlay.cpp
@@ -148,11 +148,6 @@ set(GUI_SOURCES
   dialogs/DenseMatchDialogUi.cpp
 )
 
-list(APPEND GUI_SOURCES
-  ../core/aerial_triangulation/GuidedRematchService.cpp
-  ../core/aerial_triangulation/MatchResultCatalog.cpp
-)
-
 set(GUI_HEADERS
   config/AppConfigManager.h
   config/ImageViewRotationSettings.h
@@ -168,10 +163,10 @@ set(GUI_HEADERS
   config/settings/ProjectDialogJsonSettingBase.h
   config/settings/DialogSettingStore.h
   config/settings/DialogSettingKeys.h
-  compat/QtTorchMacroGuard.h
   main_window/MainWindow.h
   main_window/ModelDropSupport.h
   main_window/MenuWorkflowController.h
+  main_window/ProjectUiHydrator.h
   main_window/ReconstructionWorkflowController.h
   menu/ToolbarButton.h
   menu/MainMenu.h
@@ -191,12 +186,10 @@ set(GUI_HEADERS
   project/archive/PlascanArchive.h
   project/data/ProjectData.h
   project/data/ProjectFilesManager.h
-  project/io/ProjectIO.h
   project/services/BundleAdjustService.h
   project/services/ProjectCameraImportService.h
   project/services/ProjectResourceCleanupService.h
   project/services/ProjectTiePointResultService.h
-  project/support/ProjectSupportUtils.h
   project/support/ProjectBundleAdjustExecution.h
   project/support/ProjectBundleAdjustWorkflow.h
   project/support/ProjectCameraInitialization.h
@@ -225,6 +218,8 @@ set(GUI_HEADERS
   tasks/DenseMatchRunner.h
   tasks/FeatureExtractionRunner.h
   tasks/GuiTaskRunner.h
+  views/DepthOverlayData.h
+  widgets/DepthOverlayController.h
   views/LayerFeatureLoader.h
   views/FeatureResidualLoader.h
   views/LayerImageLoader.h
@@ -238,7 +233,7 @@ set(GUI_HEADERS
   widgets/ProjectDashboardWidget.h
   widgets/ReferencePanelWidget.h
   widgets/SelectionPropertiesWidget.h
-  widgets/WindowPanel.h
+  main_window/WorkspacePanelController.h
   widgets/ImageViewWidget.h
   widgets/MatchLineOverlay.h
   widgets/DisparityHeatmapOverlay.h
@@ -294,12 +289,10 @@ set(GUI_PROJECT_SOURCES
   project/archive/PlascanArchive.cpp
   project/data/ProjectData.cpp
   project/data/ProjectFilesManager.cpp
-  project/io/ProjectIO.cpp
   project/services/BundleAdjustService.cpp
   project/services/ProjectCameraImportService.cpp
   project/services/ProjectResourceCleanupService.cpp
   project/services/ProjectTiePointResultService.cpp
-  project/support/ProjectSupportUtils.cpp
   project/support/ProjectBundleAdjustExecution.cpp
   project/support/ProjectBundleAdjustWorkflow.cpp
   project/support/ProjectCameraInitialization.cpp
@@ -330,11 +323,6 @@ set(GUI_PROJECT_SOURCES
 set(GUI_TASK_SOURCES
   tasks/DenseMatchRunner.cpp
   tasks/FeatureExtractionRunner.cpp
-  ../core/aerial_triangulation/AerialTriangulationWorkflow.cpp
-  ../core/pipeline/FeatureMatchRunner.cpp
-  ../core/aerial_triangulation/ReconstructionPrerequisiteReport.cpp
-  ../core/aerial_triangulation/AerialTriangulationService.cpp
-  ../core/aerial_triangulation/SfmSearchPolicy.cpp
 )
 
 set(GUI_DIALOG_SOURCES

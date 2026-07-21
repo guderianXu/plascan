@@ -6,7 +6,9 @@
 #include "CameraModel3DDialog.h"
 #include "DualImageViewer.h"
 #include "ObservationNetworkView.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 
 #include <QPushButton>
 #include <QStackedWidget>
@@ -339,7 +341,7 @@ void WorkspaceCenterWidget::setProjectMeta(const QJsonObject &meta)
 
 void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
 {
-    const QJsonArray images = xjw::gui::project::projectImageEntries(meta);
+    const QJsonArray images = xjw::common::project::projectImageEntries(meta);
     QVector<CameraSceneWidget::CameraPose> poses;
     poses.reserve(images.size());
 
@@ -347,7 +349,7 @@ void WorkspaceCenterWidget::refreshModelFromMeta(const QJsonObject &meta)
     {
         const QJsonObject imageObject = v.toObject();
         xjw::Camera camera;
-        if (!xjw::gui::project::imageCameraFromEntry(imageObject, &camera))
+        if (!xjw::common::project::imageCameraFromEntry(imageObject, &camera))
         {
             continue;
         }

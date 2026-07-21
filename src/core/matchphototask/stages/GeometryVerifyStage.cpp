@@ -42,6 +42,30 @@ namespace xjw
 {
 namespace matchphotos
 {
+
+bool passesGeometryQualityGate(int rawMatchCount,
+                               int inlierCount,
+                               int minimumInliers)
+{
+    if (inlierCount < minimumInliers)
+    {
+        return false;
+    }
+
+    // 64 个内点已能稳定约束基础矩阵；低于此数量时，重复结构可能使
+    // USAC 找到少量但自洽的伪模型，因此还要求至少 70% 的原始匹配支持它。
+    constexpr int strongSupportInliers = 64;
+    constexpr double minimumWeakSupportRatio = 0.70;
+    if (inlierCount >= strongSupportInliers || rawMatchCount <= 0)
+    {
+        return true;
+    }
+
+    const double inlierRatio = static_cast<double>(inlierCount) /
+        static_cast<double>(rawMatchCount);
+    return inlierRatio >= minimumWeakSupportRatio;
+}
+
 namespace
 {
 
@@ -79,6 +103,7 @@ void normalizeMatchResult(xjw::feature_match::MatchResult *matchResult,
 
 void applyVerifiedMatch(MatchPhotosMatchRecord *record,
                         const xjw::feature_match::MatchResult &filteredMatch,
+                        int rawMatchCount,
                         int minimumInliers)
 {
     if (!record)
@@ -87,7 +112,9 @@ void applyVerifiedMatch(MatchPhotosMatchRecord *record,
     }
 
     record->geometricInlierCount = filteredMatch.numMatches;
-    record->passedGeometry = filteredMatch.numMatches >= minimumInliers;
+    record->passedGeometry = passesGeometryQualityGate(rawMatchCount,
+                                                       filteredMatch.numMatches,
+                                                       minimumInliers);
     record->inlierIndexPairs.clear();
     if (record->passedGeometry)
     {
@@ -98,7 +125,11 @@ void applyVerifiedMatch(MatchPhotosMatchRecord *record,
         }
     }
     record->settings[QStringLiteral("geometry_verified")] = record->passedGeometry;
+    record->settings[QStringLiteral("geometry_raw_matches")] = rawMatchCount;
     record->settings[QStringLiteral("geometric_inliers")] = record->geometricInlierCount;
+    record->settings[QStringLiteral("geometry_inlier_ratio")] = rawMatchCount > 0
+        ? static_cast<double>(record->geometricInlierCount) / static_cast<double>(rawMatchCount)
+        : 0.0;
 }
 
 xjw::feature_match::MatchResult filterGeometry(
@@ -175,7 +206,10 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
         xjw::feature_match::MatchResult filteredMatch =
             filterGeometry(rawMatch, feature0, feature1, filterConfig);
         const int primaryInliers = filteredMatch.numMatches;
-        applyVerifiedMatch(&record, filteredMatch, options.geometryMinInliers);
+        applyVerifiedMatch(&record,
+                           filteredMatch,
+                           rawMatch.numMatches,
+                           options.geometryMinInliers);
 
         if (shouldAugmentDenseSiftPair(options, record, rawMatch.numMatches))
         {
@@ -202,7 +236,10 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
                                       usedCuda,
                                       &record))
             {
-                applyVerifiedMatch(&record, recoveredFiltered, options.geometryMinInliers);
+                applyVerifiedMatch(&record,
+                                   recoveredFiltered,
+                                   recoveredRaw.numMatches,
+                                   options.geometryMinInliers);
                 ++denseRecoveredPairs;
             }
         }
@@ -276,7 +313,10 @@ MatchPhotosStageReport GeometryVerifyStage::run(const MatchPhotosContext &contex
                 continue;
             }
 
-            applyVerifiedMatch(&record, recoveredFiltered, options.geometryMinInliers);
+            applyVerifiedMatch(&record,
+                               recoveredFiltered,
+                               recoveredRaw.numMatches,
+                               options.geometryMinInliers);
             record.settings[QStringLiteral("geometry_reproj_threshold")] = options.geometryReprojThreshold;
             ++passedPairs;
             --failedPairs;

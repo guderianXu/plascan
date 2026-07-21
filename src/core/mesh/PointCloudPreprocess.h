@@ -27,6 +27,15 @@ struct PointXYZRGB
     std::uint8_t b = 200;
 };
 
+struct PoissonPointComponentStats
+{
+    std::size_t componentCount = 0;
+    std::size_t removedComponentCount = 0;
+    std::size_t removedPointCount = 0;
+    std::size_t retainedPointCount = 0;
+    float medianNeighborSpacing = 0.0f;
+};
+
 float estimateBaseVoxelStep(const std::vector<PointXYZRGB> &points,
                             int resolution);
 
@@ -43,6 +52,11 @@ std::vector<PointXYZRGB> statisticalDenoisePoints(const std::vector<PointXYZRGB>
                                                         plapoint::ProcessingDevice::Auto);
 
 std::size_t removeInvalidPoissonPoints(std::vector<PointXYZRGB> *points);
+
+PoissonPointComponentStats removeSmallPoissonPointComponents(
+    std::vector<PointXYZRGB> *points,
+    std::size_t minComponentPoints,
+    float neighborDistanceFactor = 4.0f);
 
 } // namespace detail
 } // namespace mesh

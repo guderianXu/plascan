@@ -130,7 +130,7 @@ GUI 的 `工作流程` 菜单提供三个互相独立的工程入口：
 
 | 入口 | 输出 | 说明 |
 |------|------|------|
-| `三维重建` | 稀疏点云、密集点云、PLY/OBJ 三维模型 | 不生成 DEM/DOM，适合检查建模与点云质量 |
+| `三维重建` | 稀疏点云、深度图、PLY/OBJ 三维模型 | 任意三维深度源默认直接 TSDF 建模；密集点云是独立可选产品，不生成 DEM/DOM |
 | `创建 DEM` | `dem.tif`、`depth_map.png`、可选 DEM 网格模型 | 自动模式从立体影像开始，手动模式可直接使用已有密集点云 |
 | `生成 正射影像` | DOM GeoTIFF/PNG | 默认全选项目影像，分辨率为 `0` 时自动沿用 DEM 网格 |
 
@@ -142,6 +142,8 @@ GUI 的 `工作流程` 菜单提供三个互相独立的工程入口：
 
 - MVS 稳定性：`MvsWorkspaceManifest` 记录每帧深度图状态、输入/输出路径、device、耗时、错误和配置 hash。深度图完成后写入项目 metadata，GUI 目录树按文件名自然排序刷新。
 - MVS 质量：`MvsSourcePlanner` 基于 shared tracks、几何内点、三角角、覆盖率、baseline 和序列距离规划 source view。深度图同时输出 preview、raw depth、confidence 和 valid mask，融合阶段使用同一份 source plan。
+- 模型生成：任意三维的深度源默认执行 `raw depth + confidence + valid/support mask + camera -> TSDF -> Marching Cubes`，不生成或消费密集点云中间产物。Visual Hull 与 Poisson 只保留为显式 legacy/诊断模式，TSDF 失败不会静默换算法。
+- 深度检查：工作区只显示一个不可打开的聚合“深度图”节点，右键可删除整批最终层和金字塔层数据；照片工具栏的“显示深度信息”按当前照片叠加最终层或可用的金字塔诊断层，单个级别缺失不会禁用整个按钮。GUI 默认保存 Level 2/3 可视化栅格，关闭叠加后恢复原有特征点/残差显示偏好。
 - Terrain 产品：`TerrainProductManifest` 记录 DEM/DOM、error、count、confidence 和 coverage 栅格。DEM/DOM 不再只是临时图，而是带质量 artifact 的 terrain product chain。
 - 参考地形/QC：`ReconstructionQualityReport`、`PointCloudAlignment`、`DemDifference` 和 `ReferenceTerrainPrior` 支持外部 DEM/LiDAR 后验检查、点云/DEM 误差报告，以及 BA soft prior。
 
@@ -285,7 +287,15 @@ src/
 │   ├── dialogs/               # 参数配置对话框
 │   ├── widgets/               # 3D 画布 + 影像查看器
 │   └── project/               # 项目管理 (.plascan 归档)
-├── cli/                       # 命令行工具
+├── cli/                       # 模块化命令行工具
+│   ├── camera/                # 相机格式转换
+│   ├── control_points/        # 标靶检测与打印
+│   ├── features/              # 特征与连接点
+│   ├── dense/                 # 密集重建阶段
+│   ├── reconstruction/        # 可独立执行的重建阶段与诊断工具
+│   ├── workflows/             # GUI“工作流程”菜单对应的 CLI
+│   ├── quality/               # 质量验收
+│   └── common/                # CLI 共享基础设施
 └── common/                    # 通用工具 (日志, 数学, 结果包装)
 3rdparty/
 ├── plapoint/   (submodule)    # 自研 GPU 点云库
@@ -293,6 +303,14 @@ src/
 ```
 
 ## CLI 工具
+
+CLI 在源码和 CMake 中按领域拆分，但保留原有独立可执行文件名，因此已有脚本无需改命令。
+每个 CLI 模块也在自己的 `tests/` 中维护测试。模块职责和扩展规则见
+[`src/cli/README.md`](src/cli/README.md)。
+
+公共路径、token、UTF-8 控制台、JSON 和输出覆盖策略由 `plascan_cli_support` 统一提供。
+一键重建进一步拆为 Options、Runner、Progress 和 Report；密集点云细化、流式深度融合及点云
+PLY 写出由 `core/mvs` 服务承担，避免 CLI 与核心流程维护两套实现。
 
 ### 相机格式转换 (`camera_convert_cli`)
 

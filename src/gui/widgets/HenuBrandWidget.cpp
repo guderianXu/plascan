@@ -14,17 +14,17 @@ HenuBrandWidget::HenuBrandWidget(QWidget *parent)
     setObjectName(QStringLiteral("henuBrandWidget"));
     setToolTip(QStringLiteral("河南大学 / Henan University"));
     setMinimumSize(minimumSizeHint());
-    setSizePolicy(QSizePolicy::Fixed, QSizePolicy::Fixed);
+    setSizePolicy(QSizePolicy::Preferred, QSizePolicy::Fixed);
 }
 
 QSize HenuBrandWidget::minimumSizeHint() const
 {
-    return QSize(230, 40);
+    return QSize(160, 36);
 }
 
 QSize HenuBrandWidget::sizeHint() const
 {
-    return QSize(250, 40);
+    return QSize(200, 36);
 }
 
 void HenuBrandWidget::paintEvent(QPaintEvent *event)

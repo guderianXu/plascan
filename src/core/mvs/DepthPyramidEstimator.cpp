@@ -2,10 +2,12 @@
 
 #include "PatchMatchCUDA.h"
 #include "DepthPyramidPolicy.h"
+#include "MvsQualityReport.h"
 
 #include <algorithm>
 #include <chrono>
 #include <cmath>
+#include <sstream>
 
 #include <opencv2/imgproc.hpp>
 
@@ -115,6 +117,90 @@ cv::Mat nativeLevelArtifact(const cv::Mat &artifact, const cv::Size &working_siz
     return native_artifact;
 }
 
+cv::Mat resizedValidMask(const cv::Mat &valid_mask, const cv::Size &target_size)
+{
+    if (valid_mask.empty() || target_size.width <= 0 || target_size.height <= 0)
+    {
+        return cv::Mat();
+    }
+
+    cv::Mat binary_mask;
+    if (valid_mask.type() == CV_8U)
+    {
+        cv::compare(valid_mask, 0, binary_mask, cv::CMP_GT);
+    }
+    else
+    {
+        cv::Mat converted;
+        valid_mask.convertTo(converted, CV_8U);
+        cv::compare(converted, 0, binary_mask, cv::CMP_GT);
+    }
+    if (binary_mask.size() == target_size)
+    {
+        return binary_mask;
+    }
+
+    cv::Mat resized_mask;
+    cv::resize(binary_mask, resized_mask, target_size, 0.0, 0.0, cv::INTER_NEAREST);
+    return resized_mask;
+}
+
+void applyValidMaskToPrior(DepthSearchPrior &prior, const cv::Mat &valid_mask)
+{
+    if (valid_mask.empty() || prior.center.empty())
+    {
+        return;
+    }
+
+    const cv::Mat invalid_mask = valid_mask == 0;
+    prior.center.setTo(cv::Scalar(0.0f), invalid_mask);
+    if (!prior.radius.empty())
+    {
+        prior.radius.setTo(cv::Scalar(0.0f), invalid_mask);
+    }
+    if (!prior.normalMap.empty())
+    {
+        prior.normalMap.setTo(cv::Scalar(0.0f, 0.0f, 0.0f), invalid_mask);
+    }
+    if (!prior.validMask.empty())
+    {
+        prior.validMask.setTo(cv::Scalar(0), invalid_mask);
+    }
+}
+
+void applyValidMaskToLevelResult(DepthLevelResult &result, const cv::Mat &valid_mask)
+{
+    if (result.depth.empty() || valid_mask.empty())
+    {
+        return;
+    }
+
+    const cv::Mat output_mask = resizedValidMask(valid_mask, result.depth.size());
+    const cv::Mat invalid_mask = output_mask == 0;
+    result.depth.setTo(cv::Scalar(0.0f), invalid_mask);
+    if (!result.normalMap.empty())
+    {
+        result.normalMap.setTo(cv::Scalar(0.0f, 0.0f, 0.0f), invalid_mask);
+    }
+    if (!result.confidence.empty())
+    {
+        result.confidence.setTo(cv::Scalar(0.0f), invalid_mask);
+    }
+    if (!result.supportCount.empty())
+    {
+        result.supportCount.setTo(cv::Scalar(0), invalid_mask);
+    }
+    if (!result.uncertainty.empty())
+    {
+        result.uncertainty.setTo(cv::Scalar(0.0f), invalid_mask);
+    }
+    if (result.validMask.empty())
+    {
+        result.validMask = result.depth > 0.0f;
+    }
+    result.validMask.setTo(cv::Scalar(0), invalid_mask);
+}
+
 DepthLevelSummary summarizeLevel(const DepthLevelResult &level,
                                  const cv::Size &full_resolution,
                                  double elapsed_ms)
@@ -143,6 +229,12 @@ DepthLevelSummary summarizeLevel(const DepthLevelResult &level,
         const cv::Mat native_confidence = nativeLevelArtifact(level.confidence, working_size);
         summary.meanConfidence = static_cast<float>(cv::mean(native_confidence, valid_mask)[0]);
     }
+    if (!level.supportCount.empty() && summary.validPixelCount > 0)
+    {
+        const cv::Mat native_support = nativeLevelArtifact(level.supportCount, working_size);
+        summary.meanSupportViews = static_cast<float>(cv::mean(native_support, valid_mask)[0]);
+    }
+    summary.depthDiscontinuityRatio = measureDepthDiscontinuityRatio(native_depth);
     return summary;
 }
 
@@ -188,6 +280,7 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             request.referenceImage.cols,
             request.referenceImage.rows,
             level_config.patchMatch.downsampleFactor);
+        const cv::Mat level_valid_mask = resizedValidMask(request.referenceValidMask, target_size);
         DepthSearchPrior prior;
         if (has_parent)
         {
@@ -197,9 +290,11 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             prior = propagateDepthPrior(parent, guide, target_size);
         }
         mergeSparseHint(prior, request.sparseDepthHints[index], target_size);
+        applyValidMaskToPrior(prior, level_valid_mask);
 
         PatchMatchBackendRequest backend_request;
         backend_request.referenceImage = request.referenceImage;
+        backend_request.referenceValidMask = level_valid_mask;
         backend_request.sourceImages = request.sourceImages;
         backend_request.referenceCamera = request.referenceCamera;
         backend_request.sourceCameras = request.sourceCameras;
@@ -212,6 +307,10 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
         std::string level_error;
         const auto start = std::chrono::steady_clock::now();
         const bool level_ok = _backend->estimate(backend_request, level_result, &level_error);
+        if (level_ok)
+        {
+            applyValidMaskToLevelResult(level_result, level_valid_mask);
+        }
         const double elapsed_ms = std::chrono::duration<double, std::milli>(
             std::chrono::steady_clock::now() - start).count();
 
@@ -221,6 +320,9 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             elapsed_ms);
         summary.success = level_ok && !level_result.depth.empty();
         summary.errorMessage = level_error;
+        const float parent_coverage = result.levelSummaries.empty()
+            ? 0.0f
+            : result.levelSummaries.back().validCoverage;
         result.levelSummaries.push_back(summary);
 
         if (!summary.success)
@@ -230,6 +332,21 @@ DepthPyramidResult DepthPyramidEstimator::estimate(const DepthPyramidRequest &re
             {
                 return result;
             }
+            break;
+        }
+
+        constexpr float kMinimumCoverageRetention = 0.60f;
+        if (has_parent && parent_coverage > 0.0f &&
+            summary.validCoverage < parent_coverage * kMinimumCoverageRetention)
+        {
+            std::ostringstream message;
+            message << "Level " << summary.level
+                    << " coverage regression: " << summary.validCoverage
+                    << " < " << kMinimumCoverageRetention
+                    << " * parent " << parent_coverage;
+            result.errorMessage = message.str();
+            result.levelSummaries.back().success = false;
+            result.levelSummaries.back().errorMessage = result.errorMessage;
             break;
         }
 

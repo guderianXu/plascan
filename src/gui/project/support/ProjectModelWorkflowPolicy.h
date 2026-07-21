@@ -11,19 +11,19 @@ inline constexpr int kDenseFusionPipelineVersion = 2;
 enum class ModelWorkflowAction
 {
     RunMeshDirectly,
-    FuseDepthMapsThenMesh,
-    GenerateDenseCloudThenMesh
+    GenerateDepthMapsThenMesh
 };
 
 struct ModelWorkflowDecision
 {
     ModelWorkflowAction action = ModelWorkflowAction::RunMeshDirectly;
     QJsonObject modelSettings;
-    QJsonObject denseSettings;
+    QJsonObject depthSettings;
     QString depthMapSourcePath;
-    QString reusableDenseCloudPath;
     QString reason;
 };
+
+int recommendedInteractiveModelWorkerCount(int idealThreadCount);
 
 ModelWorkflowDecision decideModelGenerationWorkflow(const QJsonObject &settings,
                                                      const QJsonObject &project_metadata);

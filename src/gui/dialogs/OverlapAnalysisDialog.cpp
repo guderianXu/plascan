@@ -7,7 +7,9 @@
 #include "OverlapAnalysisDialog.h"
 
 #include "ProjectManager.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "OverlapAnalyzer.h"
 #include "ui_OverlapAnalysisDialog.h"
 #include "io/PathIO.h"
@@ -61,7 +63,7 @@ void OverlapAnalysisDialog::loadProjectImages()
         return;
     }
 
-    const QJsonArray images = xjw::gui::project::projectImageEntries(_projectManager->currentMeta());
+    const QJsonArray images = xjw::common::project::projectImageEntries(_projectManager->currentMeta());
     for (const QJsonValue &v : images)
     {
         const QJsonObject obj = v.toObject();
@@ -106,7 +108,7 @@ void OverlapAnalysisDialog::runAnalysis()
     }
 
     const QMap<QString, QJsonObject> imageMetaByPath =
-        xjw::gui::project::projectImageMetaByPath(_projectManager->currentMeta());
+        xjw::common::project::projectImageMetaByPath(_projectManager->currentMeta());
 
     std::vector<xjw::OverlapImageInput> inputs;
     QStringList inputNames;
@@ -124,7 +126,7 @@ void OverlapAnalysisDialog::runAnalysis()
         }
 
         xjw::Camera cam;
-        if (!xjw::gui::project::imageCameraFromEntry(imageMetaByPath.value(path), &cam))
+        if (!xjw::common::project::imageCameraFromEntry(imageMetaByPath.value(path), &cam))
         {
             continue;
         }

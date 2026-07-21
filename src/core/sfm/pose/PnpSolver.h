@@ -50,6 +50,12 @@ struct PnpOptions
     /// 宽松通过时仍要求的最低绝对内点数；<=0 时使用 max(minNumInliers, 15)。
     int relaxedMinNumInliers = 0;
 
+    /// 原始候选少于该数量时视为小样本；<=0 时关闭小样本保护。
+    int smallSampleThreshold = 20;
+
+    /// 小样本 PnP 必须达到的最低内点率，防止少量错误对应形成可接受的绝对内点数。
+    double smallSampleMinInlierRatio = 0.80;
+
     /// 是否向 solvePnPRansac 提供外参初值。
     bool useInitialPose = false;
 

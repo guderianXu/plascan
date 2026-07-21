@@ -14,6 +14,7 @@
 #include <QGraphicsPixmapItem>
 #include <QImage>
 #include <QPixmap>
+#include <QTransform>
 
 #include <QGraphicsItem>
 #include <QGraphicsPathItem>
@@ -78,8 +79,72 @@ bool LayerRenderer::addImageLayer(const QImage &image, int z)
     item->setVisible(true);
     item->setZValue(z);
     _layers.append(item);
+    if (z == 0 && !_baseImageItem)
+    {
+        _baseImageItem = item;
+        _baseImagePixmap = pix;
+        _baseImageTransform = item->transform();
+        _baseImagePosition = item->pos();
+    }
     _imageBounds = _imageBounds.isNull() ? item->sceneBoundingRect() : _imageBounds.united(item->sceneBoundingRect());
     return true;
+}
+
+bool LayerRenderer::setDepthOverlay(const QImage &overlay,
+                                    const QImage &intensity_base,
+                                    int z)
+{
+    if (!_scene || overlay.isNull())
+    {
+        return false;
+    }
+
+    clearDepthOverlay();
+    const QRectF target_bounds = _imageBounds.isEmpty()
+        ? QRectF(QPointF(0.0, 0.0), QSizeF(overlay.size()))
+        : _imageBounds;
+    _depthOverlayItem = _scene->addPixmap(QPixmap::fromImage(overlay));
+    if (!_depthOverlayItem)
+    {
+        return false;
+    }
+    _depthOverlayItem->setPos(target_bounds.topLeft());
+    _depthOverlayItem->setTransform(QTransform::fromScale(
+        target_bounds.width() / static_cast<qreal>(overlay.width()),
+        target_bounds.height() / static_cast<qreal>(overlay.height())));
+    _depthOverlayItem->setZValue(z);
+
+    if (!intensity_base.isNull() && _baseImageItem)
+    {
+        _baseImageItem->setPixmap(QPixmap::fromImage(intensity_base));
+        _baseImageItem->setPos(target_bounds.topLeft());
+        _baseImageItem->setTransform(QTransform::fromScale(
+            target_bounds.width() / static_cast<qreal>(intensity_base.width()),
+            target_bounds.height() / static_cast<qreal>(intensity_base.height())));
+        _intensityBaseActive = true;
+    }
+    return true;
+}
+
+void LayerRenderer::clearDepthOverlay()
+{
+    if (_depthOverlayItem)
+    {
+        if (_scene)
+        {
+            _scene->removeItem(_depthOverlayItem);
+        }
+        delete _depthOverlayItem;
+        _depthOverlayItem = nullptr;
+    }
+
+    if (_intensityBaseActive && _baseImageItem)
+    {
+        _baseImageItem->setPixmap(_baseImagePixmap);
+        _baseImageItem->setTransform(_baseImageTransform);
+        _baseImageItem->setPos(_baseImagePosition);
+    }
+    _intensityBaseActive = false;
 }
 
 bool LayerRenderer::addFeatureLayerFromVwip(const QString &imagePath)
@@ -222,6 +287,7 @@ void LayerRenderer::addFeatureResidualItems(
 
 void LayerRenderer::clear()
 {
+    clearDepthOverlay();
     clearMaskLayers();
     clearFeatureResidualLayers();
 
@@ -234,6 +300,10 @@ void LayerRenderer::clear()
         }
     }
     _layers.clear();
+    _baseImageItem = nullptr;
+    _baseImagePixmap = QPixmap();
+    _baseImageTransform = QTransform();
+    _baseImagePosition = QPointF();
     _imageBounds = QRectF();
 }
 

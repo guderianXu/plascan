@@ -16,6 +16,7 @@ namespace mvs
 struct PatchMatchBackendRequest
 {
     cv::Mat referenceImage;
+    cv::Mat referenceValidMask;
     std::vector<cv::Mat> sourceImages;
     Camera referenceCamera;
     std::vector<Camera> sourceCameras;
@@ -38,6 +39,7 @@ public:
 struct DepthPyramidRequest
 {
     cv::Mat referenceImage;
+    cv::Mat referenceValidMask;
     std::vector<cv::Mat> sourceImages;
     cv::Mat guideImage;
     Camera referenceCamera;
@@ -56,6 +58,8 @@ struct DepthLevelSummary
     int validPixelCount = 0;
     float validCoverage = 0.0f;
     float meanConfidence = 0.0f;
+    float meanSupportViews = 0.0f;
+    float depthDiscontinuityRatio = 0.0f;
     double elapsedMs = 0.0;
     bool success = false;
     std::string errorMessage;

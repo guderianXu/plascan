@@ -14,7 +14,9 @@
 #include "ui_CameraModel3DDialog.h"
 
 #include "ProjectManager.h"
-#include "ProjectSupportUtils.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
 #include "LayerImageLoader.h"
 #include "Logger.h"
 #include "io/PathIO.h"
@@ -25,7 +27,6 @@
 #include <QLabel>
 #include <QPainter>
 #include <QPainterPath>
-#include <QTransform>
 #include <QMouseEvent>
 #include <QWheelEvent>
 #include <QCursor>
@@ -51,6 +52,7 @@
 #include <rhi/qshader.h>
 #include <QSizePolicy>
 #include <QStringList>
+#include <QTextStream>
 #include <QWidget>
 #include <algorithm>
 #include <cmath>
@@ -118,9 +120,107 @@ RenderCloud cloneRenderCloud(const RenderCloud &src)
                 f(i, d) = src.faces()->getValue(i, d);
         dst.setFaces(std::move(f));
     }
+    if (src.hasFaceTextureIndices())
+    {
+        plamatrix::DenseMatrix<int, plamatrix::Device::CPU> ft(
+            src.faceTextureIndices()->rows(), 3);
+        for (int i = 0; i < src.faceTextureIndices()->rows(); ++i)
+        {
+            for (int d = 0; d < 3; ++d)
+            {
+                ft(i, d) = src.faceTextureIndices()->getValue(i, d);
+            }
+        }
+        dst.setFaceTextureIndices(std::move(ft));
+    }
     dst.setMaterialLibraryFile(src.materialLibraryFile());
     dst.setTextureImageFile(src.textureImageFile());
     return dst;
+}
+
+struct ObjLoadResult
+{
+    std::shared_ptr<RenderCloud> cloud;
+    QImage textureImage;
+    QString texturePath;
+    QString textureWarning;
+};
+
+QString firstDiffuseTexturePath(const QString &obj_path, const RenderCloud &cloud)
+{
+    QString material_name = xjw::common::io::fromUtf8Path(cloud.materialLibraryFile()).trimmed();
+    if (material_name.isEmpty())
+    {
+        return QString();
+    }
+
+    QFileInfo material_info(material_name);
+    const QString material_path = material_info.isAbsolute()
+        ? material_info.absoluteFilePath()
+        : QDir(QFileInfo(obj_path).absolutePath()).filePath(material_name);
+    QFile material_file(material_path);
+    if (!material_file.open(QIODevice::ReadOnly | QIODevice::Text))
+    {
+        return QString();
+    }
+
+    QTextStream stream(&material_file);
+    while (!stream.atEnd())
+    {
+        const QString line = stream.readLine().trimmed();
+        if (!line.startsWith(QStringLiteral("map_Kd")))
+        {
+            continue;
+        }
+        const QString texture_reference = line.mid(6).trimmed();
+        if (texture_reference.isEmpty())
+        {
+            return QString();
+        }
+        QFileInfo texture_info(texture_reference);
+        return QDir::cleanPath(texture_info.isAbsolute()
+            ? texture_info.absoluteFilePath()
+            : QDir(QFileInfo(material_path).absolutePath()).filePath(texture_reference));
+    }
+    return QString();
+}
+
+ObjLoadResult loadObjWithMaterialTexture(const QString &obj_path,
+                                         const std::function<void(int, const QString &)> &progress)
+{
+    ObjLoadResult result;
+    result.cloud = plapoint::io::readObj<float>(
+        xjw::common::io::toNativeNarrowPath(obj_path));
+    if (!result.cloud || result.cloud->size() == 0)
+    {
+        return result;
+    }
+    if (!result.cloud->hasTextureCoords() || !result.cloud->hasFaceTextureIndices())
+    {
+        result.textureWarning = QStringLiteral("OBJ 未包含完整的面级 UV，使用顶点颜色显示");
+        return result;
+    }
+
+    if (progress)
+    {
+        progress(88, QStringLiteral("正在读取 OBJ 材质纹理..."));
+    }
+    result.texturePath = firstDiffuseTexturePath(obj_path, *result.cloud);
+    if (result.texturePath.isEmpty())
+    {
+        result.textureWarning = QStringLiteral("OBJ 的 MTL 未指定漫反射纹理，使用顶点颜色显示");
+        return result;
+    }
+    if (!QFileInfo::exists(result.texturePath) || !result.textureImage.load(result.texturePath))
+    {
+        result.textureWarning = QStringLiteral("无法读取 OBJ 纹理图像: %1").arg(result.texturePath);
+        result.textureImage = QImage();
+        return result;
+    }
+
+    result.cloud->setTextureImageFile(
+        xjw::common::io::toUtf8Path(result.texturePath));
+    return result;
 }
 
 enum class PlyScalarType
@@ -215,34 +315,6 @@ int plyScalarTypeSize(PlyScalarType type)
     default:
         return 0;
     }
-}
-
-bool drawImageOnCameraPlane(QPainter &painter, const QPolygonF &imagePlane, const QImage &image)
-{
-    if (image.isNull() || imagePlane.size() != 4)
-    {
-        return false;
-    }
-
-    QPolygonF sourceQuad;
-    // 目标平面点序为右上、左上、左下、右下，因此源图像也使用相同语义顺序。
-    sourceQuad << QPointF(float(image.width()), 0.0f)
-               << QPointF(0.0f, 0.0f)
-               << QPointF(0.0f, float(image.height()))
-               << QPointF(float(image.width()), float(image.height()));
-
-    QTransform imageToPlane;
-    if (!QTransform::quadToQuad(sourceQuad, imagePlane, imageToPlane))
-    {
-        return false;
-    }
-
-    painter.save();
-    painter.setRenderHint(QPainter::SmoothPixmapTransform, true);
-    painter.setWorldTransform(imageToPlane, true);
-    painter.drawImage(QPointF(0.0, 0.0), image);
-    painter.restore();
-    return true;
 }
 
 quint64 availableSystemMemoryBytes()
@@ -694,6 +766,7 @@ void CameraSceneWidget::setCameraPoses(const QVector<CameraPose> &poses)
     _cameraImageCache.clear();
     _cameraImageLoadsInFlight.clear();
     _cameraImageLoadFailures.clear();
+    _thumbnailPipeline.resourcesDirty = true;
     if (_showCameraImage)
     {
         updateActiveCameraForView();
@@ -943,6 +1016,10 @@ void CameraSceneWidget::setPointCloud(const RenderCloud &cloud)
 {
     cancelPendingLoad();
     _cloud = cloneRenderCloud(cloud);
+    _meshTextureImage = QImage();
+    _meshTexturePath.clear();
+    _meshHasTexture = false;
+    _texturedMeshPipeline.uploadedTexturePath.clear();
     _currentCloudPath.clear();
     _preferModelPointRender = false;
     _cacheDirty = true;
@@ -961,6 +1038,10 @@ void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
     cancelPendingLoad();
     _currentCloudPath = xyzPath;
     _cloud = RenderCloud();
+    _meshTextureImage = QImage();
+    _meshTexturePath.clear();
+    _meshHasTexture = false;
+    _texturedMeshPipeline.uploadedTexturePath.clear();
     _preferModelPointRender = false;
     _cacheDirty = true;
     _gpuDirty   = true;
@@ -1012,6 +1093,10 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
     cancelPendingLoad();
     _currentCloudPath = plyPath;
     _cloud = RenderCloud();
+    _meshTextureImage = QImage();
+    _meshTexturePath.clear();
+    _meshHasTexture = false;
+    _texturedMeshPipeline.uploadedTexturePath.clear();
     _preferModelPointRender = true;
     _cacheDirty = true;
     _gpuDirty   = true;
@@ -1142,6 +1227,10 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
     cancelPendingLoad();
     _currentCloudPath = objPath;
     _cloud = RenderCloud();
+    _meshTextureImage = QImage();
+    _meshTexturePath.clear();
+    _meshHasTexture = false;
+    _texturedMeshPipeline.uploadedTexturePath.clear();
     _preferModelPointRender = false;
     _cacheDirty = true;
     _gpuDirty = true;
@@ -1154,8 +1243,8 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
     const int gen = _loadGen;
     emit plyLoadProgressChanged(gen, 0, _plyLoadProgressText);
     QPointer<CameraSceneWidget> self(this);
-    auto *watcher = new QFutureWatcher<std::shared_ptr<RenderCloud>>(this);
-    connect(watcher, &QFutureWatcher<std::shared_ptr<RenderCloud>>::finished,
+    auto *watcher = new QFutureWatcher<ObjLoadResult>(this);
+    connect(watcher, &QFutureWatcher<ObjLoadResult>::finished,
             watcher, [self, watcher, gen]()
     {
         if (!self)
@@ -1165,10 +1254,13 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
         }
         if (gen == self->_loadGen)
         {
-            auto result = watcher->result();
-            if (result)
+            ObjLoadResult result = watcher->result();
+            if (result.cloud)
             {
-                self->_cloud = std::move(*result);
+                self->_cloud = std::move(*result.cloud);
+                self->_meshTextureImage = result.textureImage;
+                self->_meshTexturePath = result.texturePath;
+                self->_texturedMeshPipeline.uploadedTexturePath.clear();
             }
             self->_preferModelPointRender = !self->_cloud.hasFaces();
             self->_loading = false;
@@ -1180,9 +1272,16 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
             }
             else
             {
-                LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面")
+                LOG_INFO(QStringLiteral("[3D] OBJ 模型加载完成，共 %1 顶点 / %2 面%3")
                              .arg(self->_cloud.size())
-                             .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0));
+                             .arg(self->_cloud.hasFaces() ? static_cast<int>(self->_cloud.faces()->rows()) : 0)
+                             .arg(self->_meshTextureImage.isNull()
+                                      ? QStringLiteral("（顶点颜色）")
+                                      : QStringLiteral("（MTL 纹理）")));
+                if (!result.textureWarning.isEmpty())
+                {
+                    LOG_WARN(QStringLiteral("[3D] %1").arg(result.textureWarning));
+                }
             }
             self->invalidateCache();
             self->_gpuDirty = true;
@@ -1190,7 +1289,7 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
         }
         watcher->deleteLater();
     });
-    watcher->setFuture(QtConcurrent::run([objPath, self, gen]() -> std::shared_ptr<RenderCloud>
+    watcher->setFuture(QtConcurrent::run([objPath, self, gen]() -> ObjLoadResult
     {
         auto reportProgress = [self, gen](int percent, const QString &statusText)
         {
@@ -1211,24 +1310,26 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
         try
         {
             reportProgress(5, QStringLiteral("正在解析 OBJ 模型..."));
-            auto cloud = plapoint::io::readObj<float>(xjw::common::io::toNativeNarrowPath(objPath));
-            if (!cloud || cloud->size() == 0)
+            ObjLoadResult result = loadObjWithMaterialTexture(objPath, reportProgress);
+            if (!result.cloud || result.cloud->size() == 0)
             {
                 reportProgress(100, QStringLiteral("OBJ 模型为空"));
-                return nullptr;
+                return result;
             }
             reportProgress(96,
                            QStringLiteral("正在上传 OBJ 模型 (%1 顶点 / %2 面)...")
-                               .arg(cloud->size())
-                               .arg(cloud->hasFaces() ? static_cast<int>(cloud->faces()->rows()) : 0));
-            return cloud;
+                               .arg(result.cloud->size())
+                               .arg(result.cloud->hasFaces()
+                                        ? static_cast<int>(result.cloud->faces()->rows())
+                                        : 0));
+            return result;
         }
         catch (const std::exception &e)
         {
             LOG_ERROR(QStringLiteral("[3D] OBJ 加载失败: %1").arg(QString::fromStdString(e.what())));
         }
         reportProgress(100, QStringLiteral("OBJ 加载失败"));
-        return nullptr;
+        return ObjLoadResult();
     }));
 }
 
@@ -1904,6 +2005,10 @@ void CameraSceneWidget::initialize(QRhiCommandBuffer *cb)
     _meshTrianglePipeline.fragmentShaderPath = QStringLiteral(":/shaders/camera_scene_mesh.frag.qsb");
     _meshPointPipeline.vertexShaderPath = _meshTrianglePipeline.vertexShaderPath;
     _meshPointPipeline.fragmentShaderPath = _meshTrianglePipeline.fragmentShaderPath;
+    _texturedMeshPipeline.vertexShaderPath =
+        QStringLiteral(":/shaders/camera_scene_textured_mesh.vert.qsb");
+    _texturedMeshPipeline.fragmentShaderPath =
+        QStringLiteral(":/shaders/camera_scene_textured_mesh.frag.qsb");
 
     _gpuDirty = true;
     _pipelinesDirty = true;
@@ -1930,6 +2035,13 @@ void CameraSceneWidget::releaseResources()
     _meshPointPipeline.uniformBuffer.reset();
     _meshPointPipeline.bindings.reset();
     _meshPointPipeline.pipeline.reset();
+    _texturedMeshPipeline.uniformBuffer.reset();
+    _texturedMeshPipeline.texture.reset();
+    _texturedMeshPipeline.sampler.reset();
+    _texturedMeshPipeline.bindings.reset();
+    _texturedMeshPipeline.pipeline.reset();
+    _texturedMeshPipeline.textureSize = QSize();
+    _texturedMeshPipeline.uploadedTexturePath.clear();
     _imagePipeline.vertexBuffer.reset();
     _imagePipeline.uniformBuffer.reset();
     _imagePipeline.texture.reset();
@@ -1938,6 +2050,11 @@ void CameraSceneWidget::releaseResources()
     _imagePipeline.pipeline.reset();
     _imagePipeline.textureSize = QSize();
     _imagePipeline.uploadedImageKey.clear();
+    _thumbnailPipeline.resources.clear();
+    _thumbnailPipeline.uniformBuffer.reset();
+    _thumbnailPipeline.sampler.reset();
+    _thumbnailPipeline.pipeline.reset();
+    _thumbnailPipeline.resourcesDirty = true;
     _rhiReady = false;
     _gpuDirty = true;
     _pipelinesDirty = true;
@@ -2009,11 +2126,34 @@ void CameraSceneWidget::uploadGpuData()
     // ── 2. 网格（hasFaces）或含法向量点云（!hasFaces && hasNormals）──────────
     _meshVertCount = 0;
     _meshHasFaces = false;
+    _meshHasTexture = false;
     if (!(_cloud.size() == 0) && _cloud.hasFaces()) {
         _meshHasFaces = true;
         const bool hasVertCol = _cloud.hasColors();
         const bool hasNrm     = _cloud.hasNormals();
         const std::size_t Nv  = _cloud.size();
+        bool hasTexture = !_meshTextureImage.isNull()
+            && _cloud.hasTextureCoords()
+            && _cloud.hasFaceTextureIndices()
+            && _cloud.faceTextureIndices()->rows() == _cloud.faces()->rows();
+        if (hasTexture)
+        {
+            const int textureCoordinateCount = _cloud.textureCoords()->rows();
+            for (int faceIndex = 0; faceIndex < _cloud.faceTextureIndices()->rows() && hasTexture;
+                 ++faceIndex)
+            {
+                for (int corner = 0; corner < 3; ++corner)
+                {
+                    const int textureIndex = _cloud.faceTextureIndices()->getValue(faceIndex, corner);
+                    hasTexture = textureIndex >= 0 && textureIndex < textureCoordinateCount;
+                    if (!hasTexture)
+                    {
+                        break;
+                    }
+                }
+            }
+        }
+        _meshHasTexture = hasTexture;
 
         // 计算（或复用）逐顶点法向量
         std::vector<QVector3D> vNormals(Nv);
@@ -2050,9 +2190,10 @@ void CameraSceneWidget::uploadGpuData()
             for (auto &n : vNormals) n.normalize();
         }
 
-        // 展开面片为平坦顶点数组（stride=9 floats: xyz nxnynz rgb）
+        // 展开面片。纹理模型额外携带面角 UV，避免共享顶点跨相机接缝时丢失纹理坐标。
+        const int meshStrideFloats = hasTexture ? 11 : 9;
         QVector<float> data;
-        data.reserve(static_cast<int>(_cloud.faces()->rows()) * 3 * 9);
+        data.reserve(static_cast<int>(_cloud.faces()->rows()) * 3 * meshStrideFloats);
         const auto nFaces = static_cast<std::size_t>(_cloud.faces()->rows());
         for (std::size_t fi = 0; fi < nFaces; ++fi) {
             const std::size_t i0 = static_cast<std::size_t>(_cloud.faces()->getValue(static_cast<plamatrix::Index>(fi), 0));
@@ -2073,10 +2214,17 @@ void CameraSceneWidget::uploadGpuData()
                 } else {
                     data << 0.55f << 0.55f << 0.58f;
                 }
+                if (hasTexture)
+                {
+                    const int textureIndex = _cloud.faceTextureIndices()->getValue(
+                        static_cast<plamatrix::Index>(fi), vi);
+                    data << _cloud.textureCoords()->getValue(textureIndex, 0)
+                         << _cloud.textureCoords()->getValue(textureIndex, 1);
+                }
             }
         }
-        _meshVertCount = data.size() / 9;
-        assignBuffer(_meshBuffer, data, _meshVertCount, 9);
+        _meshVertCount = data.size() / meshStrideFloats;
+        assignBuffer(_meshBuffer, data, _meshVertCount, meshStrideFloats);
     } else if (!(_cloud.size() == 0) && !_cloud.hasFaces() && _cloud.hasNormals()) {
         // 含法向量但无面片 → 点图元 + Phong 光照（稠密点云等）
         const bool hasColors = _cloud.hasColors();
@@ -2136,6 +2284,8 @@ void CameraSceneWidget::uploadGpuData()
         }
     }
 
+    _thumbnailPipeline.resourcesDirty = true;
+    _pipelinesDirty = true;
     _gpuDirty = false;
 }
 
@@ -2268,6 +2418,128 @@ bool CameraSceneWidget::ensurePipeline(RhiPipelineSet *pipeline, int topology, i
     return true;
 }
 
+bool CameraSceneWidget::ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *updates)
+{
+    if (!_meshHasTexture || _meshTextureImage.isNull() || !updates)
+    {
+        return true;
+    }
+
+    const bool recreateTexture = !_texturedMeshPipeline.texture
+        || _texturedMeshPipeline.textureSize != _meshTextureImage.size();
+    if (recreateTexture)
+    {
+        _texturedMeshPipeline.texture.reset(
+            rhi()->newTexture(QRhiTexture::RGBA8, _meshTextureImage.size()));
+        if (!_texturedMeshPipeline.texture->create())
+        {
+            _renderError = QStringLiteral("Vulkan 模型纹理创建失败：%1").arg(_meshTexturePath);
+            return false;
+        }
+        _texturedMeshPipeline.textureSize = _meshTextureImage.size();
+        _texturedMeshPipeline.uploadedTexturePath.clear();
+        _texturedMeshPipeline.pipeline.reset();
+        _texturedMeshPipeline.bindings.reset();
+    }
+    if (_texturedMeshPipeline.uploadedTexturePath != _meshTexturePath)
+    {
+        const QImage uploadImage = _meshTextureImage.convertToFormat(QImage::Format_RGBA8888);
+        updates->uploadTexture(_texturedMeshPipeline.texture.data(), uploadImage);
+        _texturedMeshPipeline.uploadedTexturePath = _meshTexturePath;
+    }
+
+    if (!_texturedMeshPipeline.sampler)
+    {
+        _texturedMeshPipeline.sampler.reset(rhi()->newSampler(QRhiSampler::Linear,
+                                                              QRhiSampler::Linear,
+                                                              QRhiSampler::None,
+                                                              QRhiSampler::ClampToEdge,
+                                                              QRhiSampler::ClampToEdge));
+        if (!_texturedMeshPipeline.sampler->create())
+        {
+            _renderError = QStringLiteral("Vulkan 模型纹理采样器创建失败。");
+            return false;
+        }
+    }
+    if (_texturedMeshPipeline.pipeline && !_pipelinesDirty)
+    {
+        return true;
+    }
+
+    QString error;
+    const QShader vertexShader = loadSceneShader(_texturedMeshPipeline.vertexShaderPath, &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+    const QShader fragmentShader = loadSceneShader(_texturedMeshPipeline.fragmentShaderPath, &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+
+    _texturedMeshPipeline.pipeline.reset();
+    _texturedMeshPipeline.bindings.reset();
+    _texturedMeshPipeline.uniformBuffer.reset(
+        rhi()->newBuffer(QRhiBuffer::Dynamic,
+                         QRhiBuffer::UniformBuffer,
+                         quint32(sizeof(SceneUniforms))));
+    if (!_texturedMeshPipeline.uniformBuffer->create())
+    {
+        _renderError = QStringLiteral("Vulkan 纹理模型 uniform 缓冲创建失败。");
+        return false;
+    }
+
+    _texturedMeshPipeline.bindings.reset(rhi()->newShaderResourceBindings());
+    _texturedMeshPipeline.bindings->setBindings({
+        QRhiShaderResourceBinding::uniformBuffer(
+            0,
+            QRhiShaderResourceBinding::VertexStage | QRhiShaderResourceBinding::FragmentStage,
+            _texturedMeshPipeline.uniformBuffer.data()),
+        QRhiShaderResourceBinding::sampledTexture(
+            1,
+            QRhiShaderResourceBinding::FragmentStage,
+            _texturedMeshPipeline.texture.data(),
+            _texturedMeshPipeline.sampler.data())
+    });
+    if (!_texturedMeshPipeline.bindings->create())
+    {
+        _renderError = QStringLiteral("Vulkan 纹理模型 shader 资源绑定创建失败。");
+        return false;
+    }
+
+    QRhiVertexInputLayout inputLayout;
+    inputLayout.setBindings({QRhiVertexInputBinding(quint32(_meshBuffer.strideBytes))});
+    inputLayout.setAttributes({
+        QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+        QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float)),
+        QRhiVertexInputAttribute(0, 2, QRhiVertexInputAttribute::Float2, 9 * sizeof(float)),
+    });
+
+    _texturedMeshPipeline.pipeline.reset(rhi()->newGraphicsPipeline());
+    _texturedMeshPipeline.pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+    _texturedMeshPipeline.pipeline->setShaderStages({
+        QRhiShaderStage(QRhiShaderStage::Vertex, vertexShader),
+        QRhiShaderStage(QRhiShaderStage::Fragment, fragmentShader),
+    });
+    _texturedMeshPipeline.pipeline->setVertexInputLayout(inputLayout);
+    _texturedMeshPipeline.pipeline->setShaderResourceBindings(_texturedMeshPipeline.bindings.data());
+    _texturedMeshPipeline.pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    _texturedMeshPipeline.pipeline->setSampleCount(sampleCount());
+    _texturedMeshPipeline.pipeline->setDepthTest(true);
+    _texturedMeshPipeline.pipeline->setDepthWrite(true);
+    _texturedMeshPipeline.pipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+    _texturedMeshPipeline.pipeline->setCullMode(QRhiGraphicsPipeline::None);
+    if (!_texturedMeshPipeline.pipeline->create())
+    {
+        _renderError = QStringLiteral("Vulkan 纹理模型图形管线创建失败。");
+        return false;
+    }
+    return true;
+}
+
 void CameraSceneWidget::drawRhiBuffer(QRhiCommandBuffer *cb,
                                       RhiBufferSet *buffer,
                                       RhiPipelineSet *pipeline,
@@ -2284,6 +2556,23 @@ void CameraSceneWidget::drawRhiBuffer(QRhiCommandBuffer *cb,
     const QRhiCommandBuffer::VertexInput vertexInput(buffer->vertexBuffer.data(), 0);
     cb->setVertexInput(0, 1, &vertexInput);
     cb->draw(quint32(buffer->vertexCount));
+}
+
+void CameraSceneWidget::drawTexturedMesh(QRhiCommandBuffer *cb, const SceneUniforms &uniforms)
+{
+    if (!cb || !_meshBuffer.vertexBuffer || _meshBuffer.vertexCount <= 0
+        || !_texturedMeshPipeline.pipeline || !_texturedMeshPipeline.uniformBuffer)
+    {
+        return;
+    }
+
+    _texturedMeshPipeline.uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(
+        &uniforms, sizeof(SceneUniforms));
+    cb->setGraphicsPipeline(_texturedMeshPipeline.pipeline.data());
+    cb->setShaderResources(_texturedMeshPipeline.bindings.data());
+    const QRhiCommandBuffer::VertexInput vertexInput(_meshBuffer.vertexBuffer.data(), 0);
+    cb->setVertexInput(0, 1, &vertexInput);
+    cb->draw(quint32(_meshBuffer.vertexCount));
 }
 
 bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
@@ -2434,6 +2723,223 @@ bool CameraSceneWidget::ensureImagePipeline(QRhiResourceUpdateBatch *updates)
     return true;
 }
 
+bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *updates)
+{
+    if (!_showCameras || !_showCameraThumbnails || !updates)
+    {
+        return true;
+    }
+
+    if (_thumbnailPipeline.resourcesDirty)
+    {
+        _thumbnailPipeline.resources.clear();
+        _thumbnailPipeline.pipeline.reset();
+        _thumbnailPipeline.resourcesDirty = false;
+    }
+
+    if (!_thumbnailPipeline.uniformBuffer)
+    {
+        _thumbnailPipeline.uniformBuffer.reset(rhi()->newBuffer(
+            QRhiBuffer::Dynamic, QRhiBuffer::UniformBuffer, sizeof(ImagePlaneUniforms)));
+        if (!_thumbnailPipeline.uniformBuffer->create())
+        {
+            _renderError = QStringLiteral("Vulkan 相机缩略图矩阵缓冲创建失败。");
+            return false;
+        }
+    }
+    if (!_thumbnailPipeline.sampler)
+    {
+        _thumbnailPipeline.sampler.reset(rhi()->newSampler(QRhiSampler::Linear,
+                                                           QRhiSampler::Linear,
+                                                           QRhiSampler::None,
+                                                           QRhiSampler::ClampToEdge,
+                                                           QRhiSampler::ClampToEdge));
+        if (!_thumbnailPipeline.sampler->create())
+        {
+            _renderError = QStringLiteral("Vulkan 相机缩略图采样器创建失败。");
+            return false;
+        }
+    }
+
+    const float plane_half_extent = cameraImagePlaneHalfExtent();
+    const float plane_half_height = plane_half_extent * 0.68f;
+    for (qsizetype pose_index = 0; pose_index < _poses.size(); ++pose_index)
+    {
+        const CameraPose &pose = _poses.at(pose_index);
+        if (pose.imagePath.isEmpty())
+        {
+            continue;
+        }
+        requestCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Thumbnail);
+        const QImage image = cachedCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Thumbnail);
+        if (image.isNull())
+        {
+            continue;
+        }
+
+        const QString resource_key = cameraPlaneImageKey(
+            pose.imagePath, CameraImagePlaneMode::Thumbnail) + QLatin1Char('#') + QString::number(pose_index);
+        if (_thumbnailPipeline.resources.contains(resource_key))
+        {
+            continue;
+        }
+
+        const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
+        const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
+        const QVector<QVector3D> corners = xjw::gui::camera_scene::cameraImagePlaneCorners(
+            pose.center, right, up, plane_half_extent, plane_half_height);
+        if (corners.size() != 4)
+        {
+            continue;
+        }
+
+        const QVector3D &p1 = corners.at(0);
+        const QVector3D &p2 = corners.at(1);
+        const QVector3D &p3 = corners.at(2);
+        const QVector3D &p4 = corners.at(3);
+        const float vertices[] = {
+            p1.x(), p1.y(), p1.z(), 1.0f, 0.0f,
+            p2.x(), p2.y(), p2.z(), 0.0f, 0.0f,
+            p3.x(), p3.y(), p3.z(), 0.0f, 1.0f,
+            p1.x(), p1.y(), p1.z(), 1.0f, 0.0f,
+            p3.x(), p3.y(), p3.z(), 0.0f, 1.0f,
+            p4.x(), p4.y(), p4.z(), 1.0f, 1.0f,
+        };
+
+        auto resource = QSharedPointer<RhiCameraThumbnailResource>::create();
+        resource->vertexBuffer.reset(rhi()->newBuffer(
+            QRhiBuffer::Static, QRhiBuffer::VertexBuffer, sizeof(vertices)));
+        if (!resource->vertexBuffer->create())
+        {
+            _renderError = QStringLiteral("Vulkan 相机缩略图顶点缓冲创建失败。");
+            return false;
+        }
+        updates->uploadStaticBuffer(resource->vertexBuffer.data(), vertices);
+
+        resource->texture.reset(rhi()->newTexture(QRhiTexture::RGBA8, image.size()));
+        if (!resource->texture->create())
+        {
+            _renderError = QStringLiteral("Vulkan 相机缩略图纹理创建失败：%1").arg(pose.imagePath);
+            return false;
+        }
+        QImage upload_image = image.convertToFormat(QImage::Format_RGBA8888);
+        if (rhi()->isYUpInNDC())
+        {
+            upload_image.flip();
+        }
+        updates->uploadTexture(resource->texture.data(), upload_image);
+
+        resource->bindings.reset(rhi()->newShaderResourceBindings());
+        resource->bindings->setBindings({
+            QRhiShaderResourceBinding::uniformBuffer(0,
+                                                      QRhiShaderResourceBinding::VertexStage,
+                                                      _thumbnailPipeline.uniformBuffer.data()),
+            QRhiShaderResourceBinding::sampledTexture(1,
+                                                      QRhiShaderResourceBinding::FragmentStage,
+                                                      resource->texture.data(),
+                                                      _thumbnailPipeline.sampler.data())
+        });
+        if (!resource->bindings->create())
+        {
+            _renderError = QStringLiteral("Vulkan 相机缩略图资源绑定创建失败。");
+            return false;
+        }
+        _thumbnailPipeline.resources.insert(resource_key, resource);
+    }
+
+    if (_thumbnailPipeline.resources.isEmpty())
+    {
+        return true;
+    }
+    if (_thumbnailPipeline.pipeline && !_pipelinesDirty)
+    {
+        return true;
+    }
+
+    QString error;
+    const QShader vertex_shader = loadSceneShader(
+        QStringLiteral(":/shaders/camera_scene_image.vert.qsb"), &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+    const QShader fragment_shader = loadSceneShader(
+        QStringLiteral(":/shaders/camera_scene_image.frag.qsb"), &error);
+    if (!error.isEmpty())
+    {
+        _renderError = error;
+        return false;
+    }
+
+    QRhiVertexInputLayout input_layout;
+    input_layout.setBindings({QRhiVertexInputBinding(5 * sizeof(float))});
+    input_layout.setAttributes({
+        QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
+        QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float2, 3 * sizeof(float)),
+    });
+
+    _thumbnailPipeline.pipeline.reset(rhi()->newGraphicsPipeline());
+    _thumbnailPipeline.pipeline->setTopology(QRhiGraphicsPipeline::Triangles);
+    _thumbnailPipeline.pipeline->setShaderStages({
+        QRhiShaderStage(QRhiShaderStage::Vertex, vertex_shader),
+        QRhiShaderStage(QRhiShaderStage::Fragment, fragment_shader),
+    });
+    _thumbnailPipeline.pipeline->setVertexInputLayout(input_layout);
+    _thumbnailPipeline.pipeline->setShaderResourceBindings(
+        _thumbnailPipeline.resources.constBegin().value()->bindings.data());
+    _thumbnailPipeline.pipeline->setRenderPassDescriptor(renderTarget()->renderPassDescriptor());
+    _thumbnailPipeline.pipeline->setSampleCount(sampleCount());
+    _thumbnailPipeline.pipeline->setDepthTest(true);
+    _thumbnailPipeline.pipeline->setDepthWrite(true);
+    _thumbnailPipeline.pipeline->setDepthOp(QRhiGraphicsPipeline::LessOrEqual);
+    _thumbnailPipeline.pipeline->setCullMode(QRhiGraphicsPipeline::None);
+    if (!_thumbnailPipeline.pipeline->create())
+    {
+        _renderError = QStringLiteral("Vulkan 相机缩略图图形管线创建失败。");
+        return false;
+    }
+    return true;
+}
+
+void CameraSceneWidget::drawCameraThumbnails(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp)
+{
+    if (!cb || !_showCameras || !_showCameraThumbnails || !_thumbnailPipeline.pipeline
+        || !_thumbnailPipeline.uniformBuffer)
+    {
+        return;
+    }
+
+    ImagePlaneUniforms uniforms;
+    uniforms.mvp = mvp;
+    _thumbnailPipeline.uniformBuffer->fullDynamicBufferUpdateForCurrentFrame(&uniforms, sizeof(uniforms));
+    cb->setGraphicsPipeline(_thumbnailPipeline.pipeline.data());
+
+    QVector<QVector3D> camera_centers;
+    camera_centers.reserve(_poses.size());
+    for (const CameraPose &pose : _poses)
+    {
+        camera_centers.push_back(pose.center);
+    }
+    const QVector<int> camera_draw_order = xjw::gui::camera_scene::farToNearCameraIndices(
+        camera_centers, sceneMatrices().modelView);
+    for (const int pose_index : camera_draw_order)
+    {
+        const CameraPose &pose = _poses.at(pose_index);
+        const QString resource_key = cameraPlaneImageKey(
+            pose.imagePath, CameraImagePlaneMode::Thumbnail) + QLatin1Char('#') + QString::number(pose_index);
+        const auto resource = _thumbnailPipeline.resources.value(resource_key);
+        if (!resource || !resource->vertexBuffer || !resource->bindings)
+        {
+            continue;
+        }
+        cb->setShaderResources(resource->bindings.data());
+        const QRhiCommandBuffer::VertexInput vertex_input(resource->vertexBuffer.data(), 0);
+        cb->setVertexInput(0, 1, &vertex_input);
+        cb->draw(6);
+    }
+}
+
 void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatrix4x4 &mvp)
 {
     if (!cb || !_showCameraImage || !_imagePipeline.pipeline || !_imagePipeline.vertexBuffer
@@ -2504,10 +3010,17 @@ void CameraSceneWidget::drawSceneGeometry(QRhiCommandBuffer *cb, SceneUniforms &
     drawRhiBuffer(cb, &_pointBuffer, &_colorPointPipeline, uniforms);
 
     uniforms.lightDirPointSize.setW(_meshHasFaces ? 1.0f : 1.5f);
-    drawRhiBuffer(cb,
-                  &_meshBuffer,
-                  _meshHasFaces ? &_meshTrianglePipeline : &_meshPointPipeline,
-                  uniforms);
+    if (_meshHasTexture)
+    {
+        drawTexturedMesh(cb, uniforms);
+    }
+    else
+    {
+        drawRhiBuffer(cb,
+                      &_meshBuffer,
+                      _meshHasFaces ? &_meshTrianglePipeline : &_meshPointPipeline,
+                      uniforms);
+    }
 
     uniforms.lightDirPointSize.setW(_modelPointSize);
     drawRhiBuffer(cb, &_modelPointBuffer, &_modelPointPipeline, uniforms);
@@ -2547,11 +3060,15 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
                         false) ||
         !ensurePipeline(&_meshTrianglePipeline,
                         int(QRhiGraphicsPipeline::Triangles),
-                        9 * int(sizeof(float)),
+                        _meshBuffer.strideBytes > 0
+                            ? _meshBuffer.strideBytes
+                            : 9 * int(sizeof(float)),
                         true) ||
         !ensurePipeline(&_meshPointPipeline,
                         int(QRhiGraphicsPipeline::Points),
-                        9 * int(sizeof(float)),
+                        _meshBuffer.strideBytes > 0
+                            ? _meshBuffer.strideBytes
+                            : 9 * int(sizeof(float)),
                         true))
     {
         requestOverlayUpdate();
@@ -2566,7 +3083,9 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
         requestOverlayUpdate();
         return;
     }
-    if (!ensureImagePipeline(updates))
+    if (!ensureTexturedMeshPipeline(updates)
+        || !ensureCameraThumbnailPipeline(updates)
+        || !ensureImagePipeline(updates))
     {
         requestOverlayUpdate();
         return;
@@ -2606,6 +3125,7 @@ void CameraSceneWidget::render(QRhiCommandBuffer *cb)
     {
         drawActiveCameraImage(cb, mvp);
     }
+    drawCameraThumbnails(cb, mvp);
     drawSceneGeometry(cb, uniforms);
     if (_cameraImageDisplayLayer == CameraImageDisplayLayer::Foreground)
     {
@@ -2717,87 +3237,6 @@ void CameraSceneWidget::paintOverlay(QPainter &painter)
         {
             painter.setPen(QColor(120, 120, 120));
             painter.drawText(rect(), Qt::AlignCenter, tr("暂无相机参数，显示默认模型球"));
-        }
-
-        QVector<QVector3D> camera_centers;
-        camera_centers.reserve(_poses.size());
-        for (const CameraPose &pose : _poses)
-        {
-            camera_centers.push_back(pose.center);
-        }
-        const QVector<int> camera_draw_order = xjw::gui::camera_scene::farToNearCameraIndices(
-            camera_centers, sceneMatrices().modelView);
-
-        for (const int poseIndex : camera_draw_order)
-        {
-            const CameraPose &pose = _poses.at(poseIndex);
-            const bool highlighted = isCameraHighlighted(pose);
-            const QColor selectedCameraFill(255, 86, 104, 185);
-            const QColor normalCameraFill(40, 118, 190, cameraCount > 200 ? 88 : 150);
-            const QColor planeOutlineColor = highlighted ? QColor(210, 42, 62, 235)
-                                                         : QColor(32, 92, 160, cameraCount > 200 ? 115 : 170);
-            bool ok = false;
-            projectToScreen(pose.center, &ok);
-            if (!ok) continue;
-
-            const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
-            const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
-            const QVector3D p1 = pose.center + right * planeHalfExtent + up * planeHalfHeight;
-            const QVector3D p2 = pose.center - right * planeHalfExtent + up * planeHalfHeight;
-            const QVector3D p3 = pose.center - right * planeHalfExtent - up * planeHalfHeight;
-            const QVector3D p4 = pose.center + right * planeHalfExtent - up * planeHalfHeight;
-
-            bool ok1 = false;
-            bool ok2 = false;
-            bool ok3 = false;
-            bool ok4 = false;
-            const QPointF pp1 = projectToScreen(p1, &ok1);
-            const QPointF pp2 = projectToScreen(p2, &ok2);
-            const QPointF pp3 = projectToScreen(p3, &ok3);
-            const QPointF pp4 = projectToScreen(p4, &ok4);
-            if (ok1 && ok2 && ok3 && ok4)
-            {
-                QPolygonF imagePlane;
-                imagePlane << pp1 << pp2 << pp3 << pp4;
-                QImage planeImage = _showCameraThumbnails
-                    ? cachedCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Thumbnail)
-                    : QImage();
-                if (_showCameraThumbnails && !pose.imagePath.isEmpty())
-                {
-                    requestCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Thumbnail);
-                }
-
-                painter.setPen(Qt::NoPen);
-                if (!planeImage.isNull())
-                {
-                    const bool imageDrawn = drawImageOnCameraPlane(painter, imagePlane, planeImage);
-                    if (!imageDrawn)
-                    {
-                        painter.setBrush(highlighted ? selectedCameraFill : normalCameraFill);
-                        painter.drawPolygon(imagePlane);
-                    }
-                    else if (highlighted)
-                    {
-                        painter.setBrush(QColor(255, 86, 104, 55));
-                        painter.drawPolygon(imagePlane);
-                    }
-                }
-                else
-                {
-                    painter.setBrush(highlighted ? selectedCameraFill : normalCameraFill);
-                    painter.drawPolygon(imagePlane);
-                }
-                painter.setBrush(Qt::NoBrush);
-                const QPen planeOutlinePen(planeOutlineColor, highlighted ? 2.2 : 1.1);
-                painter.setPen(planeOutlinePen);
-                painter.drawPolygon(imagePlane);
-                if (highlighted)
-                {
-                    painter.setPen(QPen(QColor(255, 245, 248, 210), 1.0));
-                    painter.drawLine((pp1 + pp3) * 0.5, (pp2 + pp4) * 0.5);
-                }
-            }
-
         }
 
         QVector<int> camera_label_order;
@@ -3454,12 +3893,12 @@ QVector<CameraSceneWidget::CameraPose> CameraModel3DDialog::readCamerasFromMeta(
         return poses;
     }
 
-    const QJsonArray images = xjw::gui::project::projectImageEntries(_projectManager->currentMeta());
+    const QJsonArray images = xjw::common::project::projectImageEntries(_projectManager->currentMeta());
     for (const QJsonValue &imageValue : images)
     {
         const QJsonObject imageObject = imageValue.toObject();
         xjw::Camera camera;
-        if (!xjw::gui::project::imageCameraFromEntry(imageObject, &camera))
+        if (!xjw::common::project::imageCameraFromEntry(imageObject, &camera))
         {
             continue;
         }

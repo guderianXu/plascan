@@ -23,12 +23,16 @@ struct DepthMapQualityMetrics
     float p75Confidence = 0.0f;
     float largestComponentRatio = 0.0f;
     float depthAtSearchBoundaryRatio = 0.0f;
+    float depthDiscontinuityRatio = 0.0f;
     bool lowConfidenceFullCoverage = false;
     int localDepthOutlierCount = 0;
     float localDepthOutlierRatio = 0.0f;
     bool hasLocalDepthOutliers = false;
     float recommendedFusionConfidence = 0.0f;
 };
+
+float measureDepthDiscontinuityRatio(const cv::Mat &depthMap,
+                                     float relativeThreshold = 0.05f);
 
 DepthMapQualityMetrics analyzeDepthMapQuality(const cv::Mat &depthMap,
                                               const cv::Mat &confidenceMap,

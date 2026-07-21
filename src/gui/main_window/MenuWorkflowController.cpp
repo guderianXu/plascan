@@ -1,12 +1,13 @@
 #include "MenuWorkflowController.h"
 
 #include "ProjectManager.h"
-#include "ProjectIO.h"
-#include "ProjectSupportUtils.h"
-#include "AerialTriangulationService.h"
-#include "AerialTriangulationWorkflow.h"
-#include "MatchResultCatalog.h"
-#include "ReconstructionPrerequisiteReport.h"
+#include "project/ProjectIO.h"
+#include "project/ProjectCameraIO.h"
+#include "project/ProjectMatchCatalog.h"
+#include "project/ProjectMetadata.h"
+#include "workflow/AerialTriangulationWorkflow.h"
+#include "preparation/MatchResultCatalog.h"
+#include "preparation/ReconstructionPrerequisiteReport.h"
 #include "Logger.h"
 #include "project/SparseResultQuality.h"
 
@@ -60,20 +61,6 @@
 
 namespace
 {
-
-/// 生成稳定的影像对 key，用于匹配约束和历史结果索引。
-QString canonicalPairKey(const QString &imageA, const QString &imageB)
-{
-    const QString normA = xjw::gui::project::normalizePath(imageA);
-    const QString normB = xjw::gui::project::normalizePath(imageB);
-    if (normA.isEmpty() || normB.isEmpty() || normA == normB)
-    {
-        return QString();
-    }
-    return (normA < normB)
-        ? (normA + QStringLiteral("\n") + normB)
-        : (normB + QStringLiteral("\n") + normA);
-}
 
 bool isSequenceReferencePreselection(const QJsonObject &settings)
 {
@@ -222,7 +209,7 @@ QStringList loadGeneratedPairConstraints(const QString &projectPath,
     QSet<QString> coveredSelectedImages;
     for (const QString &imagePath : selectedImages)
     {
-        selectedSet.insert(xjw::gui::project::normalizePath(imagePath));
+        selectedSet.insert(xjw::common::project::normalizePath(imagePath));
     }
 
     QStringList allowedPairs;
@@ -238,21 +225,22 @@ QStringList loadGeneratedPairConstraints(const QString &projectPath,
 
         const QString tokenA = pairText.left(separator);
         const QString tokenB = pairText.mid(separator + 2);
-        const QString imageA = xjw::gui::project::resolveProjectImagePathFromToken(tokenA, projectMeta);
-        const QString imageB = xjw::gui::project::resolveProjectImagePathFromToken(tokenB, projectMeta);
+        const QString imageA = xjw::common::project::resolveProjectImagePathFromToken(tokenA, projectMeta);
+        const QString imageB = xjw::common::project::resolveProjectImagePathFromToken(tokenB, projectMeta);
         if (imageA.isEmpty() || imageB.isEmpty())
         {
             continue;
         }
 
-        const QString normA = xjw::gui::project::normalizePath(imageA);
-        const QString normB = xjw::gui::project::normalizePath(imageB);
+        const QString normA = xjw::common::project::normalizePath(imageA);
+        const QString normB = xjw::common::project::normalizePath(imageB);
         if (!selectedSet.contains(normA) || !selectedSet.contains(normB))
         {
             continue;
         }
 
-        const QString pairKey = canonicalPairKey(normA, normB);
+        const QString pairKey = xjw::common::project::canonicalImagePairKey(
+            normA, normB, QStringLiteral("\n"));
         if (pairKey.isEmpty() || seenPairs.contains(pairKey))
         {
             continue;
@@ -381,7 +369,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
     int availableFeatureCount = 0;
     for (const QString &imagePath : images)
     {
-        if (!ProjectIO::findFeatureForImage(projectPath, imagePath).isEmpty())
+        if (!xjw::common::project::ProjectIO::findFeatureForImage(projectPath, imagePath).isEmpty())
         {
             ++availableFeatureCount;
         }
@@ -450,7 +438,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         return true;
     };
 
-    auto variantAlgorithmMatches = [&](const xjw::pipeline::MatchVariant &variant) -> bool
+    auto variantAlgorithmMatches = [&](const xjw::aerial_triangulation::MatchVariant &variant) -> bool
     {
         if (!variant.compatible)
         {
@@ -493,14 +481,14 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
 
     if (!projectPath.isEmpty())
     {
-        xjw::pipeline::MatchResultCatalogConfig catalogConfig;
-        catalogConfig.matchDirectory = ProjectIO::ipmatchOutputDir(projectPath);
+        xjw::aerial_triangulation::MatchResultCatalogConfig catalogConfig;
+        catalogConfig.matchDirectory = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
         catalogConfig.targetImagePaths = images;
-        const xjw::pipeline::MatchResultCatalogSummary catalogSummary =
-            xjw::pipeline::MatchResultCatalog(catalogConfig).scan();
-        for (const xjw::pipeline::MatchPairGroup &group : catalogSummary.pairGroups)
+        const xjw::aerial_triangulation::MatchResultCatalogSummary catalogSummary =
+            xjw::aerial_triangulation::MatchResultCatalog(catalogConfig).scan();
+        for (const xjw::aerial_triangulation::MatchPairGroup &group : catalogSummary.pairGroups)
         {
-            for (const xjw::pipeline::MatchVariant &variant : group.variants)
+            for (const xjw::aerial_triangulation::MatchVariant &variant : group.variants)
             {
                 if (!variantAlgorithmMatches(variant))
                 {
@@ -579,7 +567,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
 
     if (!projectPath.isEmpty())
     {
-        QFile noMatchFile(QDir(ProjectIO::ipmatchOutputDir(projectPath))
+        QFile noMatchFile(QDir(xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath))
                               .filePath(QStringLiteral("no_match_pairs.json")));
         if (noMatchFile.open(QIODevice::ReadOnly))
         {
@@ -806,7 +794,7 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
         && generatedPairProcessedCount == 0;
     summary.hasMatches = images.size() < 2 || (!generatedPlanHasNoProcessedPairs && matchStats.matchedEdgeCount > 0);
 
-    xjw::gui::ReconstructionPrerequisiteReport prerequisiteReport;
+    xjw::aerial_triangulation::ReconstructionPrerequisiteReport prerequisiteReport;
     prerequisiteReport.imageCount = static_cast<int>(images.size());
     prerequisiteReport.plannedPairCount = generatedPairRequiredCount;
     prerequisiteReport.validMatchPairCount = matchStats.matchedEdgeCount;
@@ -822,25 +810,25 @@ MenuWorkflowController::summarizeSparsePrerequisites(const QStringList &images,
 
     const auto recommendedAction = prerequisiteReport.recommendedAction();
     const bool matchingProducedNoUsableEdges =
-        recommendedAction == xjw::gui::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality;
+        recommendedAction == xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality;
     summary.blockOnMatchQuality = matchingProducedNoUsableEdges;
 
     switch (recommendedAction)
     {
-    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::RunSfmWithExistingMatches:
+    case xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::RunSfmWithExistingMatches:
         LOG_INFO(QStringLiteral("空三上游数据就绪：复用已有匹配 %1 对，已确认无匹配 %2 对")
                      .arg(prerequisiteReport.validMatchPairCount)
                      .arg(prerequisiteReport.settledNoMatchPairCount));
         break;
-    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::FillMissingMatchesOnly:
+    case xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::FillMissingMatchesOnly:
         LOG_INFO(QStringLiteral("空三缺少部分匹配：只补齐缺失 pair %1 对，复用已有匹配 %2 对")
                      .arg(prerequisiteReport.missingMatchPairCount)
                      .arg(prerequisiteReport.validMatchPairCount));
         break;
-    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::PrepareFeaturesAndMatches:
+    case xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::PrepareFeaturesAndMatches:
         LOG_INFO(QStringLiteral("空三缺少连接点输入：创建连接点流程将自动提取特征并匹配"));
         break;
-    case xjw::gui::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality:
+    case xjw::aerial_triangulation::ReconstructionPrerequisiteRecommendedAction::InspectMatchQuality:
         LOG_WARN(QStringLiteral("匹配阶段已完成，但没有可用于空三的连接边；请检查匹配参数、重叠对和几何验证报告。"));
         break;
     }
@@ -933,7 +921,7 @@ void MenuWorkflowController::openFeatureExtractionDialog()
         }
 
         // 设置默认输出目录
-        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
         if (!assetsDir.isEmpty() && saved.value(QStringLiteral("output_dir")).toString().isEmpty())
         {
             QJsonObject defaultOutput = saved;
@@ -1238,11 +1226,11 @@ void MenuWorkflowController::applySavedFeatureDisplayOptions(const QJsonObject &
     const QString savedSuffix = sv.value(QStringLiteral("feature_suffix")).toString().trimmed();
     if (canvas)
     {
-        const QString inferredSuffix = xjw::gui::project::inferPreferredFeatureSuffix(
+        const QString inferredSuffix = xjw::common::project::inferPreferredFeatureSuffix(
             _projectManager->currentProjectPath(), _projectManager->currentMeta());
         const bool savedSuffixUsable = !savedSuffix.isEmpty()
             && (inferredSuffix.isEmpty()
-                || xjw::gui::project::projectHasFeatureSuffix(
+                || xjw::common::project::projectHasFeatureSuffix(
                     _projectManager->currentProjectPath(), _projectManager->currentMeta(), savedSuffix));
         if (savedSuffixUsable)
         {
@@ -1320,7 +1308,7 @@ void MenuWorkflowController::openThreeDReconstructionDialog()
     if (_projectManager)
     {
         const QString projectPath = _projectManager->currentProjectPath();
-        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
         if (!assetsDir.isEmpty())
         {
             dlg->setDefaultOutputDir(QDir(assetsDir).filePath(QStringLiteral("three_d_reconstruction")));
@@ -1529,7 +1517,7 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
     if (outputRoot.isEmpty())
     {
-        const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
         outputRoot = QDir(assetsDir).filePath(QStringLiteral("aerial_triangulation"));
     }
     outputRoot = QDir::cleanPath(outputRoot);
@@ -1634,7 +1622,7 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
         settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
 
     const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    xjw::gui::AerialTriangulationWorkflowOptions workflowOptions;
+    xjw::aerial_triangulation::AerialTriangulationOptions workflowOptions;
     workflowOptions.images = images;
     workflowOptions.projectPath = projectPath;
     workflowOptions.projectMeta = projectMeta;
@@ -1666,10 +1654,10 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     workflowOptions.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
     workflowOptions.threads = workflowThreads;
     workflowOptions.autoGenerateMissingMatches = fillMissingTiePoints;
-    workflowOptions.assetsDir = ProjectIO::projectAssetsDir(projectPath);
-    workflowOptions.featureDir = ProjectIO::ipfindOutputDir(projectPath);
-    workflowOptions.matchDir = ProjectIO::ipmatchOutputDir(projectPath);
-    workflowOptions.maskPaths = ProjectIO::maskPathsForImages(projectPath, images);
+    workflowOptions.assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
+    workflowOptions.featureDir = xjw::common::project::ProjectIO::ipfindOutputDir(projectPath);
+    workflowOptions.matchDir = xjw::common::project::ProjectIO::ipmatchOutputDir(projectPath);
+    workflowOptions.maskPaths = xjw::common::project::ProjectIO::maskPathsForImages(projectPath, images);
     workflowOptions.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
     workflowOptions.featureGrayscaleMax = 1.0f;
 
@@ -1740,8 +1728,8 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     pm->setAtCancelFlag(cancelFlag);
     workflowOptions.cancelFlag = cancelFlag;
-    const xjw::gui::AerialTriangulationResolvedConfig resolved =
-        xjw::gui::AerialTriangulationWorkflow::resolveConfig(workflowOptions);
+    const xjw::aerial_triangulation::AerialTriangulationResolvedConfig resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(workflowOptions);
 
     emit pm->atProgressChanged(resetCurrentAlignment || fillMissingTiePoints
                                    ? QStringLiteral("空中三角测量: 准备连接点...")
@@ -1749,20 +1737,15 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                                0);
 
     const QStringList sfmImages = images;
-    const QString sfmOutputDir = resolved.serviceOptions.outputDir;
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+    const QString sfmOutputDir = resolved.pipelineInput.outputDir;
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     xjw::gui::tasks::runGuarded(
         this,
         [runWorkflowOptions = std::move(workflowOptions), sfmImages, sfmOutputDir, assetsDir]() mutable
         {
-            xjw::gui::AerialTriangulationWorkflowResult workflowResult =
-                xjw::gui::AerialTriangulationWorkflow::run(
-                    runWorkflowOptions,
-                    [](const xjw::gui::AerialTriangulationServiceOptions &runOpts)
-            {
-                return xjw::gui::AerialTriangulationService::run(runOpts);
-            });
-            const xjw::gui::AerialTriangulationServiceResult &result = workflowResult.serviceResult;
+            xjw::aerial_triangulation::AerialTriangulationResult workflowResult =
+                xjw::aerial_triangulation::AerialTriangulationWorkflow::run(runWorkflowOptions);
+            const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result = workflowResult.reconstructionResult;
             if (result.success && !assetsDir.isEmpty())
             {
                 QJsonObject report;
@@ -1807,12 +1790,12 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
          sfmOutputDir,
          projectPath,
          resetCurrentAlignment](MenuWorkflowController *controller,
-                                xjw::gui::AerialTriangulationWorkflowResult workflowResult) mutable {
+                                xjw::aerial_triangulation::AerialTriangulationResult workflowResult) mutable {
             if (!pmGuard)
             {
                 return;
             }
-            xjw::gui::AerialTriangulationServiceResult &result = workflowResult.serviceResult;
+            xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result = workflowResult.reconstructionResult;
             pmGuard->clearAtCancelFlag(cancelFlag);
             if (pmGuard->currentProjectPath() != projectPath)
             {
@@ -1839,20 +1822,69 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                                                 feature.featurePath,
                                                 feature.settings);
                 }
-            }
-            else
-            {
-                for (const auto &sp : result.newFeatureFiles)
+                for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
+                     workflowResult.tiePointResult.matches)
                 {
-                    pmGuard->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
+                    pmGuard->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
                 }
             }
-            for (const auto &match : result.newMatchFiles)
+
+            if (!result.success)
             {
-                pmGuard->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
+                emit pmGuard->atProgressFinished(false);
+                QMessageBox::warning(controller->_mainWindow,
+                                     QStringLiteral("空中三角测量"),
+                                     result.errorMessage.isEmpty()
+                                         ? QStringLiteral("空中三角测量失败。")
+                                         : result.errorMessage);
+                return;
             }
 
-            if (result.success && resetCurrentAlignment)
+            int registeredImageCount = result.numRegisteredImages;
+            QJsonObject resultRecordExtra = result.resultRecordExtra;
+            QString sparseBlockingReason = QStringLiteral("SFM 未生成可用的正式稀疏点云。");
+            QStringList registeredImages;
+            if (result.success && !result.sparseCloudPath.isEmpty())
+            {
+                const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
+                registeredImages.reserve(sfmImages.size());
+                for (const QString &imagePath : sfmImages)
+                {
+                    const QString normalized = xjw::common::project::normalizePath(imagePath);
+                    if (registeredCameraKeys.contains(normalized))
+                    {
+                        registeredImages.append(normalized);
+                    }
+                }
+                if (registeredImages.size() < registeredCameraKeys.size())
+                {
+                    for (const QString &imagePath : registeredCameraKeys)
+                    {
+                        if (!registeredImages.contains(imagePath))
+                        {
+                            registeredImages.append(imagePath);
+                        }
+                    }
+                }
+                registeredImageCount = registeredImages.size();
+
+                resultRecordExtra[QStringLiteral("source")] = QStringLiteral("aerial_triangulation");
+                sparseBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
+            }
+
+            if (!xjw::gui::project::isProductionSparseResult(resultRecordExtra))
+            {
+                emit pmGuard->atProgressFinished(false);
+                QMessageBox::warning(controller->_mainWindow,
+                                     QStringLiteral("空中三角测量"),
+                                     sparseBlockingReason.isEmpty()
+                                         ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
+                                         : sparseBlockingReason);
+                return;
+            }
+
+            // 只有通过 MVS 入口质量门控的正式 SfM 结果才写回工程，避免失败候选污染相机状态。
+            if (resetCurrentAlignment)
             {
                 int updated = 0;
                 int cleared = 0;
@@ -1882,68 +1914,17 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
                 }
             }
 
-            int registeredImageCount = result.numRegisteredImages;
-            QJsonObject resultRecordExtra = result.resultRecordExtra;
-            QString sparseBlockingReason = QStringLiteral("SFM 未生成可用的正式稀疏点云。");
-            if (result.success && !result.sparseCloudPath.isEmpty())
+            if (!pmGuard->replaceTiePointResult(result.sparseCloudPath,
+                                                result.numPoints3D,
+                                                registeredImages,
+                                                sfmOutputDir,
+                                                resultRecordExtra))
             {
-                const QStringList registeredCameraKeys = result.pendingCamUpdates.keys();
-                QStringList registeredImages;
-                registeredImages.reserve(sfmImages.size());
-                for (const QString &imagePath : sfmImages)
-                {
-                    const QString normalized = xjw::gui::project::normalizePath(imagePath);
-                    if (registeredCameraKeys.contains(normalized))
-                    {
-                        registeredImages.append(normalized);
-                    }
-                }
-                if (registeredImages.size() < registeredCameraKeys.size())
-                {
-                    for (const QString &imagePath : registeredCameraKeys)
-                    {
-                        if (!registeredImages.contains(imagePath))
-                        {
-                            registeredImages.append(imagePath);
-                        }
-                    }
-                }
-                registeredImageCount = registeredImages.size();
-
-                resultRecordExtra[QStringLiteral("source")] = QStringLiteral("aerial_triangulation");
-                if (!pmGuard->replaceTiePointResult(result.sparseCloudPath,
-                                                    result.numPoints3D,
-                                                    registeredImages,
-                                                    sfmOutputDir,
-                                                    resultRecordExtra))
-                {
-                    emit pmGuard->atProgressFinished(false);
-                    return;
-                }
-                sparseBlockingReason = xjw::gui::project::sparseResultBlockingReason(resultRecordExtra);
-            }
-
-            emit pmGuard->atProgressFinished(result.success);
-            if (!result.success)
-            {
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("空中三角测量"),
-                                     result.errorMessage.isEmpty()
-                                         ? QStringLiteral("空中三角测量失败。")
-                                         : result.errorMessage);
+                emit pmGuard->atProgressFinished(false);
                 return;
             }
 
-            if (!xjw::gui::project::isProductionSparseResult(resultRecordExtra))
-            {
-                QMessageBox::warning(controller->_mainWindow,
-                                     QStringLiteral("空中三角测量"),
-                                     sparseBlockingReason.isEmpty()
-                                         ? QStringLiteral("当前 SfM/BA 稀疏点云质量不足。")
-                                         : sparseBlockingReason);
-                return;
-            }
-
+            emit pmGuard->atProgressFinished(true);
             QMessageBox::information(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
                                      QStringLiteral("正式 SfM/BA 稀疏云已生成。\n注册影像: %1\n点数: %2\n路径: %3")
@@ -1973,7 +1954,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     QString outputRoot = settings.value(QStringLiteral("output_dir")).toString().trimmed();
     if (outputRoot.isEmpty())
     {
-        const QString assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
+        const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
         outputRoot = QDir(assetsDir).filePath(QStringLiteral("three_d_reconstruction"));
     }
     outputRoot = QDir::cleanPath(outputRoot);
@@ -1983,33 +1964,32 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     runSettings[QStringLiteral("output_dir")] = outputRoot;
 
     auto *pm = _projectManager;
-    xjw::gui::AerialTriangulationServiceOptions opts;
-    opts.images = images;
-    opts.plascanPath = pm->currentProjectPath();
-    opts.projectMeta = pm->coreProjectMeta();
-    opts.outputDir = QDir(outputRoot).filePath(QStringLiteral("sparse"));
+    xjw::aerial_triangulation::AerialTriangulationOptions workflowOptions;
+    workflowOptions.images = images;
+    workflowOptions.projectPath = pm->currentProjectPath();
+    workflowOptions.projectMeta = pm->coreProjectMeta();
+    workflowOptions.outputDir = outputRoot;
     const int workflowThreads = std::max(1, settings.value(QStringLiteral("threads")).toInt(8));
-    opts.threads = workflowThreads;
-    opts.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
-    opts.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
+    workflowOptions.threads = workflowThreads;
+    workflowOptions.device = settings.value(QStringLiteral("device")).toString(QStringLiteral("auto"));
+    workflowOptions.featureAlgorithm = settings.value(QStringLiteral("feature_algorithm"))
                                  .toString(QStringLiteral("disk"))
                                  .trimmed()
                                  .toLower();
-    opts.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
+    workflowOptions.matchAlgorithm = settings.value(QStringLiteral("match_algorithm"))
                               .toString(QStringLiteral("lightglue"))
                               .trimmed()
                               .toLower();
-    opts.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
-    opts.featureGrayscaleMax = 1.0f;
-    opts.cudaParallelPairs = opts.device == QStringLiteral("cpu")
-        ? 1
-        : std::clamp(std::max(1, workflowThreads / 4), 1, 2);
+    workflowOptions.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
+    workflowOptions.featureGrayscaleMax = 1.0f;
+    workflowOptions.resetAlignment = settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
+    workflowOptions.autoGenerateMissingMatches = true;
 
     const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));
-    opts.quality = sfmQualityLevelFromWorkflowQuality(quality);
+    workflowOptions.quality = quality;
 
     QPointer<ProjectManager> pmGuard(pm);
-    opts.progressFn = [pmGuard](const QString &stage, int percent) {
+    workflowOptions.progressFn = [pmGuard](const QString &stage, int percent) {
         if (!pmGuard)
         {
             return;
@@ -2018,7 +1998,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
             emit manager->atProgressChanged(QStringLiteral("三维重建/空三: %1").arg(stage), percent);
         });
     };
-    opts.pairMatchedFn = [pmGuard](const QString &img0,
+    workflowOptions.pairMatchedFn = [pmGuard](const QString &img0,
                                    const QString &img1,
                                    const QString &matchPath,
                                    int numMatches) {
@@ -2034,18 +2014,23 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
 
     auto cancelFlag = std::make_shared<std::atomic<bool>>(false);
     pm->setAtCancelFlag(cancelFlag);
-    opts.cancelFlag = cancelFlag;
+    workflowOptions.cancelFlag = cancelFlag;
 
     emit pm->atProgressChanged(QStringLiteral("三维重建: 启动空中三角测量..."), 0);
 
     const QStringList sfmImages = images;
-    const QString sfmOutputDir = opts.outputDir;
+    const QString sfmOutputDir =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(workflowOptions)
+            .pipelineInput.outputDir;
     const QString projectPath = pm->currentProjectPath();
-    const QString assetsDir = ProjectIO::projectAssetsDir(projectPath);
+    const QString assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(projectPath);
     xjw::gui::tasks::runGuarded(
         this,
-        [runOpts = std::move(opts), sfmImages, sfmOutputDir, assetsDir]() mutable {
-            xjw::gui::AerialTriangulationServiceResult result = xjw::gui::AerialTriangulationService::run(runOpts);
+        [runWorkflowOptions = std::move(workflowOptions), sfmImages, sfmOutputDir, assetsDir]() mutable {
+            xjw::aerial_triangulation::AerialTriangulationResult workflowResult =
+                xjw::aerial_triangulation::AerialTriangulationWorkflow::run(runWorkflowOptions);
+            const xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
+                workflowResult.reconstructionResult;
 
             if (result.success && !assetsDir.isEmpty())
             {
@@ -2078,14 +2063,15 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                                                   QStringLiteral("three_d_reconstruction_sfm_report_history.json"),
                                                   report);
             }
-            return result;
+            return workflowResult;
         },
         [pmGuard,
          cancelFlag,
          projectPath,
          runSettings,
          sfmImages,
-         sfmOutputDir](MenuWorkflowController *controller, xjw::gui::AerialTriangulationServiceResult result) mutable {
+         sfmOutputDir](MenuWorkflowController *controller,
+                       xjw::aerial_triangulation::AerialTriangulationResult workflowResult) mutable {
             if (!pmGuard)
             {
                 return;
@@ -2107,11 +2093,15 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                 return;
             }
 
-            for (const auto &sp : result.newFeatureFiles)
+            xjw::aerial_triangulation::AerialTriangulationReconstructionResult &result =
+                workflowResult.reconstructionResult;
+            for (const xjw::matchphotos::MatchPhotosFeatureRecord &feature :
+                 workflowResult.tiePointResult.features)
             {
-                pmGuard->appendIpfindResult(sp.imagePath, sp.featurePath, QJsonObject());
+                pmGuard->appendIpfindResult(feature.imagePath, feature.featurePath, feature.settings);
             }
-            for (const auto &match : result.newMatchFiles)
+            for (const xjw::matchphotos::MatchPhotosMatchRecord &match :
+                 workflowResult.tiePointResult.matches)
             {
                 pmGuard->appendIpmatchResult(QStringList{match.matchPath}, match.settings);
             }
@@ -2153,7 +2143,7 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
                 registeredImages.reserve(sfmImages.size());
                 for (const QString &imagePath : sfmImages)
                 {
-                    const QString normalized = xjw::gui::project::normalizePath(imagePath);
+                    const QString normalized = xjw::common::project::normalizePath(imagePath);
                     if (registeredCameraKeys.contains(normalized))
                     {
                         registeredImages.append(normalized);
@@ -2479,7 +2469,7 @@ void MenuWorkflowController::openMapProjectDialog()
             dlg->setAvailableImages(images);
         }
 
-        QString projectRoot = ProjectIO::projectRootFromPlascan(_projectManager->currentProjectPath());
+        QString projectRoot = xjw::common::project::ProjectIO::projectRootFromPlascan(_projectManager->currentProjectPath());
         if (!projectRoot.isEmpty())
         {
             dlg->setProjectRoot(projectRoot);
@@ -2626,7 +2616,7 @@ void MenuWorkflowController::openWorkflowReportDialog()
     QString assetsDir;
     if (_projectManager)
     {
-        assetsDir = ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
+        assetsDir = xjw::common::project::ProjectIO::projectAssetsDir(_projectManager->currentProjectPath());
     }
 
     auto *dlg = new WorkflowReportDialog(assetsDir, _mainWindow);

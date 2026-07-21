@@ -18,68 +18,6 @@
 namespace
 {
 
-QString normalizeFeatureSuffix(QString suffix)
-{
-    suffix = suffix.trimmed().toLower();
-    if (suffix.isEmpty())
-    {
-        return QString();
-    }
-    if (!suffix.startsWith(QLatin1Char('.')))
-    {
-        suffix.prepend(QLatin1Char('.'));
-    }
-    return suffix;
-}
-
-QStringList normalizeFeatureSuffixes(const QStringList &suffixes)
-{
-    QStringList normalized;
-    for (const QString &suffix : suffixes)
-    {
-        const QString value = normalizeFeatureSuffix(suffix);
-        if (!value.isEmpty() && !normalized.contains(value))
-        {
-            normalized.append(value);
-        }
-    }
-    return normalized;
-}
-
-QString featureAlgorithmForSuffix(const QString &suffix)
-{
-    const QString normalized = normalizeFeatureSuffix(suffix);
-    if (normalized == QStringLiteral(".dsk"))
-    {
-        return QStringLiteral("disk");
-    }
-    if (normalized == QStringLiteral(".alk"))
-    {
-        return QStringLiteral("aliked");
-    }
-    if (normalized == QStringLiteral(".sp"))
-    {
-        return QStringLiteral("superpoint");
-    }
-    if (normalized == QStringLiteral(".sift"))
-    {
-        return QStringLiteral("sift");
-    }
-    if (normalized == QStringLiteral(".orb"))
-    {
-        return QStringLiteral("orb");
-    }
-    if (normalized == QStringLiteral(".akz"))
-    {
-        return QStringLiteral("akaze");
-    }
-    if (normalized == QStringLiteral(".dedode"))
-    {
-        return QStringLiteral("dedode");
-    }
-    return QString();
-}
-
 void setComboDataOrFirst(QComboBox *combo, const QString &data)
 {
     if (!combo)
@@ -358,7 +296,7 @@ void InitCameraPoseDialog::setAvailableImages(const QStringList &imagePaths)
 
 void InitCameraPoseDialog::setAvailableFeatureSuffixes(const QStringList &suffixes)
 {
-    _projectFeatureSuffixes = normalizeFeatureSuffixes(suffixes);
+    _projectFeatureSuffixes = xjw::feature_match::normalizedFeatureSuffixes(suffixes);
     refreshFeatureSuffixChoices();
 }
 
@@ -436,7 +374,8 @@ void InitCameraPoseDialog::applySettings(const QJsonObject &s)
     }
     if (s.contains("feature_suffix"))
     {
-        const QString suffix = normalizeFeatureSuffix(s.value(QStringLiteral("feature_suffix")).toString());
+        const QString suffix = xjw::feature_match::normalizedFeatureSuffix(
+            s.value(QStringLiteral("feature_suffix")).toString());
         const int idx = _featureSuffixCombo->findData(suffix);
         if (idx >= 0)
         {
@@ -486,13 +425,13 @@ QString InitCameraPoseDialog::selectedFeatureSuffix() const
     }
     const QVariant data = _featureSuffixCombo->currentData();
     const QString suffix = data.isValid() ? data.toString() : _featureSuffixCombo->currentText();
-    const QString normalized = normalizeFeatureSuffix(suffix);
+    const QString normalized = xjw::feature_match::normalizedFeatureSuffix(suffix);
     return normalized.isEmpty() ? QStringLiteral(".dsk") : normalized;
 }
 
 QString InitCameraPoseDialog::selectedFeatureAlgorithm() const
 {
-    const QString algorithm = featureAlgorithmForSuffix(selectedFeatureSuffix());
+    const QString algorithm = xjw::feature_match::featureAlgorithmForSuffix(selectedFeatureSuffix());
     return algorithm.isEmpty() ? QStringLiteral("disk") : algorithm;
 }
 
@@ -510,7 +449,7 @@ void InitCameraPoseDialog::refreshFeatureSuffixChoices()
     QStringList suffixes;
     for (const QString &suffix : compatibleSuffixes)
     {
-        const QString normalized = normalizeFeatureSuffix(suffix);
+        const QString normalized = xjw::feature_match::normalizedFeatureSuffix(suffix);
         if (normalized.isEmpty())
         {
             continue;
@@ -525,7 +464,7 @@ void InitCameraPoseDialog::refreshFeatureSuffixChoices()
     {
         suffixes = compatibleSuffixes.isEmpty()
             ? QStringList{QStringLiteral(".dsk")}
-            : normalizeFeatureSuffixes(compatibleSuffixes);
+            : xjw::feature_match::normalizedFeatureSuffixes(compatibleSuffixes);
     }
 
     _featureSuffixCombo->blockSignals(true);

@@ -3,7 +3,8 @@
 #include "LayerFeatureLoader.h"
 #include "FeatureResidualLoader.h"
 #include "LayerRenderer.h"
-#include "ProjectIO.h"
+#include "DepthOverlayController.h"
+#include "project/ProjectIO.h"
 #include "GuiTaskRunner.h"
 #include "io/PathIO.h"
 
@@ -54,6 +55,42 @@ CanvasWidget::CanvasWidget(QWidget *parent)
 
     // 渲染器：负责把影像层加入到 scene
     _layerRenderer = new LayerRenderer(scene, this);
+    _depthOverlayController = new xjw::gui::widgets::DepthOverlayController(this);
+    connect(_depthOverlayController,
+            &xjw::gui::widgets::DepthOverlayController::overlayReady,
+            this,
+            [this](const QString &image_path,
+                   const QImage &overlay,
+                   const QImage &intensity_base)
+            {
+                if (!_depthOverlayEnabled
+                    || QDir::cleanPath(image_path) != QDir::cleanPath(_currentImagePath)
+                    || !_layerRenderer)
+                {
+                    return;
+                }
+                _depthOverlayVisible = _layerRenderer->setDepthOverlay(
+                    overlay, intensity_base, 10);
+                emit depthOverlayVisibilityChanged(_depthOverlayVisible);
+            });
+    connect(_depthOverlayController,
+            &xjw::gui::widgets::DepthOverlayController::overlayFailed,
+            this,
+            [this](const QString &image_path, const QString &error_message)
+            {
+                if (QDir::cleanPath(image_path) != QDir::cleanPath(_currentImagePath))
+                {
+                    return;
+                }
+                if (_layerRenderer)
+                {
+                    _layerRenderer->clearDepthOverlay();
+                }
+                _depthOverlayVisible = false;
+                setDepthInspectionActive(false);
+                emit depthOverlayVisibilityChanged(false);
+                emit depthOverlayError(error_message);
+            });
 
     // 默认设置：平滑缩放，开启抗锯齿（若需要可调整）
     setRenderHint(QPainter::Antialiasing, true);
@@ -76,7 +113,8 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
     _showInterestPoints = opts.showPoints;
     _layerRenderer->setFeatureDisplayOptions(opts);
     // Use the options' showPoints to control visibility: 当 opts.showPoints 为 true 时加载特征点，否则清除
-    if (opts.showPoints && !_currentImagePath.trimmed().isEmpty()
+    if (shouldRenderFeatureDiagnostics()
+        && opts.showPoints && !_currentImagePath.trimmed().isEmpty()
         && !isDepthMapPreviewPath(_currentImagePath)) {
         _layerRenderer->clearFeatureLayers();
         startSpLoadForImage(_currentImagePath);
@@ -84,7 +122,8 @@ void CanvasWidget::applyFeatureDisplayOptions(const LayerRenderer::FeatureDispla
         _layerRenderer->clearFeatureLayers();
     }
     _layerRenderer->clearFeatureResidualLayers();
-    if (opts.showResiduals && !_currentImagePath.trimmed().isEmpty()
+    if (shouldRenderFeatureDiagnostics()
+        && opts.showResiduals && !_currentImagePath.trimmed().isEmpty()
         && !isDepthMapPreviewPath(_currentImagePath))
     {
         startResidualLoadForImage(_currentImagePath);
@@ -128,6 +167,16 @@ void CanvasWidget::showImage(const QString &path)
     // 确保清除上一次的匹配连线层，避免其干扰新的场景布局
     _layerRenderer->clearMatchLayers();
     _layerRenderer->clearMaskLayers();
+    _layerRenderer->clearDepthOverlay();
+    if (_depthOverlayController)
+    {
+        _depthOverlayController->cancelPending();
+    }
+    if (_depthOverlayVisible)
+    {
+        _depthOverlayVisible = false;
+        emit depthOverlayVisibilityChanged(false);
+    }
 
     if (path.trimmed().isEmpty())
     {
@@ -197,6 +246,7 @@ void CanvasWidget::showImage(const QString &path)
 
         // 通知外部当前活跃影像已变更（MainWindow 据此持久化状态）
         emit self->activeImageChanged(loadedPath);
+        self->refreshDepthOverlay();
 
         // 让视图自动适配内容
         self->scene()->setSceneRect(self->scene()->itemsBoundingRect());
@@ -207,7 +257,7 @@ void CanvasWidget::showImage(const QString &path)
 
         // 自动加载特征点（默认启用）
         // 跳过非项目影像（如深度图 depth_*.png）的特征点加载，避免无意义的 .sp 查找
-        if (!isDepthMap) {
+        if (!isDepthMap && self->shouldRenderFeatureDiagnostics()) {
             if (self->_showInterestPoints)
             {
                 self->startSpLoadForImage(loadedPath);
@@ -222,6 +272,151 @@ void CanvasWidget::showImage(const QString &path)
         return LayerRenderer::loadImageForDisplay(pathCopy, projectPath);
     });
     watcher->setFuture(future);
+}
+
+void CanvasWidget::setProjectMetadata(const QJsonObject &metadata)
+{
+    if (!_depthOverlayController)
+    {
+        return;
+    }
+    _depthOverlayController->setProjectMetadata(metadata);
+    _depthOverlayController->setProjectPath(property("currentProjectPath").toString());
+    refreshDepthOverlay();
+}
+
+void CanvasWidget::setDepthOverlayEnabled(bool enabled)
+{
+    if (_depthOverlayEnabled == enabled)
+    {
+        return;
+    }
+    _depthOverlayEnabled = enabled;
+    if (!enabled)
+    {
+        if (_depthOverlayController)
+        {
+            _depthOverlayController->cancelPending();
+        }
+        if (_layerRenderer)
+        {
+            _layerRenderer->clearDepthOverlay();
+        }
+        _depthOverlayVisible = false;
+        setDepthInspectionActive(false);
+        emit depthOverlayVisibilityChanged(false);
+        return;
+    }
+    refreshDepthOverlay();
+}
+
+void CanvasWidget::setDepthOverlayLevel(xjw::gui::views::DepthOverlayLevel level)
+{
+    if (_depthOverlayLevel == level)
+    {
+        return;
+    }
+    _depthOverlayLevel = level;
+    refreshDepthOverlay();
+}
+
+void CanvasWidget::setDepthIntensityVisible(bool visible)
+{
+    if (_depthIntensityVisible == visible)
+    {
+        return;
+    }
+    _depthIntensityVisible = visible;
+    refreshDepthOverlay();
+}
+
+void CanvasWidget::refreshDepthOverlay()
+{
+    if (!_depthOverlayController || !_layerRenderer)
+    {
+        return;
+    }
+    const bool is_display_image = _singleImageReady
+        && !_currentImagePath.trimmed().isEmpty()
+        && !isDepthMapPreviewPath(_currentImagePath);
+    const auto availability_for = [this, is_display_image](
+                                      xjw::gui::views::DepthOverlayLevel level)
+    {
+        return is_display_image
+            ? _depthOverlayController->artifactAvailability(_currentImagePath, level)
+            : xjw::gui::views::DepthOverlayAvailability{};
+    };
+    const auto final_status = availability_for(
+        xjw::gui::views::DepthOverlayLevel::Final);
+    const auto level_1_status = availability_for(
+        xjw::gui::views::DepthOverlayLevel::Level1);
+    const auto level_2_status = availability_for(
+        xjw::gui::views::DepthOverlayLevel::Level2);
+    const auto level_3_status = availability_for(
+        xjw::gui::views::DepthOverlayLevel::Level3);
+    const bool final_available = final_status.available;
+    const bool level_1_available = level_1_status.available;
+    const bool level_2_available = level_2_status.available;
+    const bool level_3_available = level_3_status.available;
+    const bool any_available = is_display_image
+        && _depthOverlayController->anyArtifactAvailable(_currentImagePath);
+    const bool selected_available = is_display_image
+        && _depthOverlayController->artifactAvailable(_currentImagePath, _depthOverlayLevel);
+    emit depthOverlayAvailabilityChanged(any_available);
+    emit depthOverlayLevelsAvailabilityChanged(final_available,
+                                               level_1_available,
+                                               level_2_available,
+                                               level_3_available,
+                                               final_status.reason,
+                                               level_1_status.reason,
+                                               level_2_status.reason,
+                                               level_3_status.reason);
+    if (!_depthOverlayEnabled
+        || !is_display_image
+        || !selected_available)
+    {
+        _depthOverlayController->cancelPending();
+        _layerRenderer->clearDepthOverlay();
+        _depthOverlayVisible = false;
+        setDepthInspectionActive(false);
+        emit depthOverlayVisibilityChanged(false);
+        return;
+    }
+
+    _layerRenderer->clearDepthOverlay();
+    _depthOverlayVisible = false;
+    setDepthInspectionActive(true);
+    xjw::gui::views::DepthOverlayRenderOptions options;
+    options.showIntensity = _depthIntensityVisible;
+    _depthOverlayController->request(_currentImagePath, _depthOverlayLevel, options);
+}
+
+void CanvasWidget::setDepthInspectionActive(bool active)
+{
+    if (_depthInspectionActive == active || !_layerRenderer)
+    {
+        return;
+    }
+
+    _depthInspectionActive = active;
+    ++_featureLoadGeneration;
+    ++_residualLoadGeneration;
+    _layerRenderer->clearFeatureLayers();
+    _layerRenderer->clearFeatureResidualLayers();
+
+    if (active || _currentImagePath.trimmed().isEmpty()
+        || isDepthMapPreviewPath(_currentImagePath))
+    {
+        return;
+    }
+    if (_showInterestPoints && _currentFeatureOpts.showPoints)
+    {
+        startSpLoadForImage(_currentImagePath);
+    }
+    if (_currentFeatureOpts.showResiduals)
+    {
+        startResidualLoadForImage(_currentImagePath);
+    }
 }
 
 void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, const QString &matchFile)
@@ -350,6 +545,10 @@ void CanvasWidget::showMatchedPair(const QString &imgA, const QString &imgB, con
         if (v.isValid())
         {
             _layerRenderer->setCurrentProjectPath(v.toString());
+            if (_depthOverlayController)
+            {
+                _depthOverlayController->setProjectPath(v.toString());
+            }
         }
     }
 
@@ -524,7 +723,7 @@ QStringList CanvasWidget::availableFeatureSuffixes() const
 {
     if (_currentImagePath.isEmpty()) return {};
     const QString projectPath = property("currentProjectPath").toString();
-    return ProjectIO::availableFeatureSuffixes(projectPath, _currentImagePath);
+    return xjw::common::project::ProjectIO::availableFeatureSuffixes(projectPath, _currentImagePath);
 }
 
 void CanvasWidget::setShowInterestPoints(bool show)
@@ -541,7 +740,8 @@ void CanvasWidget::setShowInterestPoints(bool show)
     }
     if (!_layerRenderer) return;
 
-    if (_showInterestPoints && !_currentImagePath.trimmed().isEmpty())
+    if (shouldRenderFeatureDiagnostics()
+        && _showInterestPoints && !_currentImagePath.trimmed().isEmpty())
     {
         // 异步加载当前影像的特征文件
         _layerRenderer->clearFeatureLayers();
@@ -567,7 +767,8 @@ void CanvasWidget::setShowFeatureResiduals(bool show)
     }
     _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
     _layerRenderer->clearFeatureResidualLayers();
-    if (show && !_currentImagePath.trimmed().isEmpty()
+    if (shouldRenderFeatureDiagnostics()
+        && show && !_currentImagePath.trimmed().isEmpty()
         && !isDepthMapPreviewPath(_currentImagePath))
     {
         startResidualLoadForImage(_currentImagePath);
@@ -578,6 +779,14 @@ void CanvasWidget::setShowFeatureResiduals(bool show)
 void CanvasWidget::startSpLoadForImage(const QString &imagePath)
 {
     if (imagePath.trimmed().isEmpty()) return;
+    if (!shouldRenderFeatureDiagnostics())
+    {
+        if (_layerRenderer)
+        {
+            _layerRenderer->clearFeatureLayers();
+        }
+        return;
+    }
 
     const QString imagePathCopy = imagePath;
     const QString activeSuffix = _activeFeatureSuffix;
@@ -608,7 +817,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         {
             std::vector<cv::KeyPoint> empty;
             // 使用当前选中的后缀查找特征文件。
-            const QString spFile = ProjectIO::featureOutputPathForImage(
+            const QString spFile = xjw::common::project::ProjectIO::featureOutputPathForImage(
                 projectPath, imagePathCopy, activeSuffix);
             LOG_DEBUG(QStringLiteral("startSpLoadForImage: suffix=%1 file=%2")
                 .arg(activeSuffix, spFile));
@@ -686,7 +895,7 @@ void CanvasWidget::startSpLoadForImage(const QString &imagePath)
         [self, imagePathCopy, activeSuffix, generation](CanvasWidget *widget,
                                                         std::vector<cv::KeyPoint> kps) mutable
         {
-            if (!self || widget != self.data())
+            if (!self || widget != self.data() || !self->shouldRenderFeatureDiagnostics())
             {
                 return;
             }
@@ -735,7 +944,7 @@ void CanvasWidget::reloadMaskOverlay()
     }
 
     const QString projectPath = property("currentProjectPath").toString();
-    const QString maskPath = ProjectIO::findMaskForImage(projectPath, _currentImagePath);
+    const QString maskPath = xjw::common::project::ProjectIO::findMaskForImage(projectPath, _currentImagePath);
     if (maskPath.isEmpty())
     {
         return;
@@ -747,6 +956,14 @@ void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
 {
     if (imagePath.trimmed().isEmpty())
     {
+        return;
+    }
+    if (!shouldRenderFeatureDiagnostics())
+    {
+        if (_layerRenderer)
+        {
+            _layerRenderer->clearFeatureResidualLayers();
+        }
         return;
     }
 
@@ -763,7 +980,9 @@ void CanvasWidget::startResidualLoadForImage(const QString &imagePath)
         [self, imagePathCopy, generation](CanvasWidget *widget,
                                           QVector<xjw::gui::views::FeatureResidualVector> residuals)
         {
-            if (!self || widget != self.data() || generation != self->_residualLoadGeneration)
+            if (!self || widget != self.data()
+                || !self->shouldRenderFeatureDiagnostics()
+                || generation != self->_residualLoadGeneration)
             {
                 return;
             }
@@ -805,7 +1024,8 @@ void CanvasWidget::reloadInterestPoints(const QString &imagePath)
     }
 
     // 仅在用户开启叠加兴趣点或当前图像为目标时刷新渲染
-    if (_showInterestPoints && !_currentImagePath.trimmed().isEmpty()) {
+    if (shouldRenderFeatureDiagnostics()
+        && _showInterestPoints && !_currentImagePath.trimmed().isEmpty()) {
         // 如果请求的路径不是当前显示的影像，仍尝试加载以更新缓存（但不叠加到当前视图）
         if (QDir::cleanPath(imagePath) == QDir::cleanPath(_currentImagePath)) {
             // 对当前显示影像，直接触发加载并叠加
@@ -835,7 +1055,10 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
 
     // 直接在主线程同步读取特征文件并更新显示，使用当前活动的后缀
     const QString projectPath = property("currentProjectPath").toString();
-    const QString spFile = ProjectIO::featureFileForSuffix(projectPath, imagePath, _activeFeatureSuffix);
+    const QString spFile = xjw::common::project::ProjectIO::featureFileForSuffix(
+        projectPath,
+        imagePath,
+        _activeFeatureSuffix);
     if (spFile.isEmpty())
     {
         LOG_DEBUG(QStringLiteral("immediateReloadInterestPoints: no %1 found for %2")
@@ -916,7 +1139,7 @@ void CanvasWidget::immediateReloadInterestPoints(const QString &imagePath)
     _spCache[imagePath + _activeFeatureSuffix] = std::make_pair(fi.lastModified(), keypoints);
 
     // 仅当刷新的是“当前显示的影像”时才更新场景，避免处理批量图像时最后一张覆盖当前视图。
-    if (isCurrentImage && _layerRenderer)
+    if (isCurrentImage && _layerRenderer && shouldRenderFeatureDiagnostics())
     {
         _layerRenderer->setFeatureDisplayOptions(_currentFeatureOpts);
         if (!_showInterestPoints || !_currentFeatureOpts.showPoints)

@@ -7,12 +7,15 @@
 
 - 主构建目录：`E:\code\plascan\build\windows-vcpkg-cuda-release`
 - vcpkg 依赖：`E:\code\plascan\build\windows-vcpkg-cuda-release\vcpkg_installed`
+- vcpkg 临时工作根：默认使用主构建目录所在盘的根目录，例如
+  `E:\vbt`（buildtrees）、`E:\vpk`（packages）、`E:\vdl`（downloads）
 - CUDA：`C:\Program Files\NVIDIA GPU Computing Toolkit\CUDA\v13.1`
 - LibTorch：`E:\code\plascan\build\env\libtorch-cu130\libtorch`
 
 脚本会设置统一的 `PATH`、`Torch_DIR`、`PLASCAN_TORCH_DIR`、`CMAKE_PREFIX_PATH`、
-`CUDA_PATH` 和 Qt plugin 环境，并同步 Qt platform plugins 与 LibTorch 运行时 DLL，
-避免 CMake/CTest 混用旧 CPU LibTorch、旧 vcpkg 或其它项目的依赖。
+`CUDA_PATH` 和 Qt plugin 环境，并将 `CMAKE_PREFIX_PATH` 写入 CMake 缓存，保证 Ninja
+自动重新配置时仍使用同一套 vcpkg/LibTorch 前缀。脚本还会同步 Qt platform plugins 与
+LibTorch 运行时 DLL，避免 CMake/CTest 混用旧 CPU LibTorch、旧 vcpkg 或其它项目的依赖。
 
 ## 前置条件
 
@@ -128,6 +131,9 @@ powershell -NoProfile -ExecutionPolicy Bypass -File E:\code\plascan\scripts\buil
 | `-SourceDir <path>` | 源码目录，默认脚本目录上两级，即项目根目录。 |
 | `-BuildDir <path>` | 构建目录，默认 `build\windows-vcpkg-cuda-release`。必须位于项目 `build` 目录下。 |
 | `-VcpkgRoot <path>` | vcpkg 根目录，默认 `C:\BuildTools\VC\vcpkg`。 |
+| `-VcpkgBuildtreesRoot <path>` | vcpkg buildtrees 短路径，默认是主构建目录所在盘的 `\vbt`。 |
+| `-VcpkgPackagesRoot <path>` | vcpkg packages 短路径，默认是主构建目录所在盘的 `\vpk`。 |
+| `-VcpkgDownloadsRoot <path>` | vcpkg 下载缓存，默认是主构建目录所在盘的 `\vdl`；可指向已有下载缓存。 |
 | `-VsDevCmd <path>` | VS Build Tools 环境脚本。 |
 | `-CMakeExe <path>` | CMake 可执行文件路径。 |
 | `-CudaRoot <path>` | CUDA Toolkit 根目录，默认 CUDA 13.1。 |
@@ -218,6 +224,21 @@ PlaScan Vulkan rendering requires QtGui built with Vulkan support.
 如果使用 `-InstallDeps` 触发 vcpkg 安装，可能遇到本机 vcpkg/ICU 的
 `icu-i18n.pc` 查找失败。日常构建默认不加 `-InstallDeps`，而使用当前 CUDA 构建目录
 自己的 `vcpkg_installed`。需要重建依赖时，先确认 vcpkg baseline 和二进制缓存状态。
+
+### Qt mocs_compilation.cpp 报 C1083 Invalid argument
+
+Qt Debug 构建会生成较深的 autogen 路径。如果 vcpkg 位于带时间戳和提交哈希的 snapshot
+目录，`buildtrees\qtbase` 可能接近 Windows 路径长度限制，并出现无法打开空文件名的
+`C1083`。脚本通过 `VCPKG_INSTALL_OPTIONS` 固定短的 buildtrees/packages 根目录，并默认选择
+主构建目录所在盘以避免系统盘空间不足；保留已有
+下载缓存时只需覆盖 downloads 路径，例如：
+
+```powershell
+pwsh scripts\build_win\build_windows_cuda.ps1 -InstallDeps `
+  -VcpkgRoot E:\code\plascan\build\env\vcpkg-snapshot\vcpkg-<commit> `
+  -VcpkgBuildtreesRoot C:\vbt -VcpkgPackagesRoot C:\vpk `
+  -VcpkgDownloadsRoot E:\code\plascan\build\env\vcpkg-snapshot\vcpkg-<commit>\downloads
+```
 
 ## 建议
 

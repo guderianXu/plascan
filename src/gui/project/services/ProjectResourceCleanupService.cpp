@@ -56,6 +56,9 @@ QString primaryPathForSectionRecord(const QString &section,
     else if (section == QStringLiteral("深度图"))
     {
         path = record.value(QStringLiteral("depth_png")).toString();
+        if (path.isEmpty()) path = record.value(QStringLiteral("raw_depth_path")).toString();
+        if (path.isEmpty()) path = record.value(QStringLiteral("valid_mask_path")).toString();
+        if (path.isEmpty()) path = record.value(QStringLiteral("preview_path")).toString();
     }
     else if (section == QStringLiteral("稠密点云"))
     {
@@ -113,18 +116,31 @@ void collectSectionRecordArtifacts(const QString &section,
 
     if (section == QStringLiteral("深度图"))
     {
-        appendUniquePath(filePaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("depth_png")).toString()));
-        appendUniquePath(filePaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("raw_depth_path")).toString()));
-        appendUniquePath(filePaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("raw_confidence_path")).toString()));
-        appendUniquePath(filePaths,
-                         normalizedProjectPath(projectRoot,
-                                               record.value(QStringLiteral("valid_mask_path")).toString()));
+        const auto collectDepthPaths = [&](const QJsonObject &depthArtifact)
+        {
+            for (const QString &key : {
+                     QStringLiteral("depth_png"),
+                     QStringLiteral("raw_depth_path"),
+                     QStringLiteral("raw_confidence_path"),
+                     QStringLiteral("raw_support_count_path"),
+                     QStringLiteral("raw_uncertainty_path"),
+                     QStringLiteral("valid_mask_path"),
+                     QStringLiteral("support_mask_path"),
+                     QStringLiteral("normal_map_path"),
+                     QStringLiteral("raw_normal_path"),
+                     QStringLiteral("preview_path"),
+                     QStringLiteral("confidence_preview_path")})
+            {
+                appendUniquePath(filePaths,
+                                 normalizedProjectPath(projectRoot,
+                                                       depthArtifact.value(key).toString()));
+            }
+        };
+        collectDepthPaths(record);
+        for (const QJsonValue &levelValue : record.value(QStringLiteral("pyramid_levels")).toArray())
+        {
+            collectDepthPaths(levelValue.toObject());
+        }
         return;
     }
 
@@ -143,7 +159,8 @@ void collectSectionRecordArtifacts(const QString &section,
             QStringLiteral("model_obj"),
             QStringLiteral("model_mtl"),
             QStringLiteral("model_ply"),
-            QStringLiteral("texture_png")
+            QStringLiteral("texture_png"),
+            QStringLiteral("texture_image")
         };
         for (const QString &key : modelKeys)
         {

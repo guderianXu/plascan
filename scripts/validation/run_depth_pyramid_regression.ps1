@@ -121,10 +121,10 @@ function Invoke-DepthPyramidRegression
     }
 
     $report = Get-Content -LiteralPath $reportPath -Raw -Encoding UTF8 | ConvertFrom-Json
-    $modelPath = [string]$report.model.final_model_path
+    $modelPath = [string]$report.model.model_ply
     if ([string]::IsNullOrWhiteSpace($modelPath))
     {
-        $modelPath = [string]$report.model.model_ply
+        $modelPath = [string]$report.model.mesh_ply
     }
     if ([string]::IsNullOrWhiteSpace($modelPath) -or
         -not (Test-Path -LiteralPath $modelPath -PathType Leaf))

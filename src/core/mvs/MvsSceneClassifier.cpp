@@ -217,5 +217,10 @@ int recommendedMvsSourceViewCount(MvsSceneProfile scene_profile,
     return std::min(requested_count, view_count - 1);
 }
 
+float recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile sceneProfile)
+{
+    return sceneProfile == MvsSceneProfile::OrbitalObject ? 47.0f : 35.0f;
+}
+
 } // namespace mvs
 } // namespace xjw

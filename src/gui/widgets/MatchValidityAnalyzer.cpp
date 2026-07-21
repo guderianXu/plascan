@@ -1,4 +1,5 @@
 #include "MatchValidityAnalyzer.h"
+#include "project/ProjectMetadata.h"
 
 #include <QDataStream>
 #include <QDir>
@@ -29,42 +30,7 @@ struct MatchIndexData
     QVector<MatchIndexPair> pairs;
 };
 
-QString normalizedImageToken(const QString &token)
-{
-    QString normalized = QDir::cleanPath(QDir::fromNativeSeparators(token.trimmed()));
-    normalized.replace(QLatin1Char('\\'), QLatin1Char('/'));
-    return normalized.toLower();
-}
-
-QString imageBaseToken(const QString &token)
-{
-    const QString base = QFileInfo(token.trimmed()).completeBaseName();
-    return (base.isEmpty() ? token.trimmed() : base).toLower();
-}
-
-bool imageTokenMatches(const QString &filePath,
-                       const QString &fileName,
-                       const QString &displayPath)
-{
-    if (displayPath.trimmed().isEmpty())
-    {
-        return false;
-    }
-
-    const QString displayNorm = normalizedImageToken(displayPath);
-    const QString displayBase = imageBaseToken(displayPath);
-
-    if (!filePath.trimmed().isEmpty())
-    {
-        if (normalizedImageToken(filePath) == displayNorm ||
-            imageBaseToken(filePath) == displayBase)
-        {
-            return true;
-        }
-    }
-
-    return !fileName.trimmed().isEmpty() && imageBaseToken(fileName) == displayBase;
-}
+using xjw::common::project::imageReferenceMatchesToken;
 
 enum class DisplayOrder
 {
@@ -81,11 +47,11 @@ DisplayOrder displayOrderForImages(const QString &fileImage0Path,
                                    const QString &displayImageB)
 {
     const bool direct =
-        imageTokenMatches(fileImage0Path, fileImage0Name, displayImageA) &&
-        imageTokenMatches(fileImage1Path, fileImage1Name, displayImageB);
+        imageReferenceMatchesToken(fileImage0Path, fileImage0Name, displayImageA) &&
+        imageReferenceMatchesToken(fileImage1Path, fileImage1Name, displayImageB);
     const bool reversed =
-        imageTokenMatches(fileImage0Path, fileImage0Name, displayImageB) &&
-        imageTokenMatches(fileImage1Path, fileImage1Name, displayImageA);
+        imageReferenceMatchesToken(fileImage0Path, fileImage0Name, displayImageB) &&
+        imageReferenceMatchesToken(fileImage1Path, fileImage1Name, displayImageA);
 
     if (direct)
     {
@@ -353,11 +319,11 @@ QSet<QString> validPairsFromSparseSidecar(const QString &sidecarPath,
 
             const QString imagePath = observation.value(QStringLiteral("image_path")).toString();
             const QString imageName = observation.value(QStringLiteral("image_name")).toString();
-            if (imageTokenMatches(imagePath, imageName, displayImageA))
+            if (imageReferenceMatchesToken(imagePath, imageName, displayImageA))
             {
                 indicesA.insert(featureIndex);
             }
-            if (imageTokenMatches(imagePath, imageName, displayImageB))
+            if (imageReferenceMatchesToken(imagePath, imageName, displayImageB))
             {
                 indicesB.insert(featureIndex);
             }
