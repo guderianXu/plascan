@@ -17818,6 +17818,16 @@ TEST(CameraModel3DDialogTest, DenseCameraScenesThrottleLabelsAndFrustumSize)
     EXPECT_FALSE(source.contains(QStringLiteral("const float base = qMax(0.1f, r * 0.06f);")));
 }
 
+TEST(CameraModel3DDialogTest, CompactModelsUseScaleRelativeSceneFraming)
+{
+    const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    ASSERT_FALSE(source.isEmpty());
+
+    EXPECT_TRUE(source.contains(QStringLiteral("qMax(1.0e-4f, dists[p95] * 1.15f)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("_cachedRadius * 0.002f")));
+    EXPECT_FALSE(source.contains(QStringLiteral("_cachedRadius = qMax(1.0f, dists[p95] * 1.15f)")));
+}
+
 TEST(CameraModel3DDialogTest, ModelViewMinimumSizeDoesNotLimitDockResizing)
 {
     const QString source = readProjectSourceFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));

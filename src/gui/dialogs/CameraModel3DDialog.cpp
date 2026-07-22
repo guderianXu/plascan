@@ -989,14 +989,19 @@ void CameraSceneWidget::invalidateCache() const
         {
             std::sort(dists.begin(), dists.end());
             const int p95 = std::min((int)dists.size() - 1, (int)(dists.size() * 0.95));
-            _cachedRadius = qMax(1.0f, dists[p95] * 1.15f);
+            // Keep the framing scale proportional to the loaded scene.  A fixed
+            // one-world-unit floor makes compact photogrammetry models (Temple
+            // is well below one unit across) appear as a tiny speck even though
+            // their geometry is valid.
+            _cachedRadius = qMax(1.0e-4f, dists[p95] * 1.15f);
         }
         else
         {
             _cachedRadius = 1.0f;
         }
 
-        _cachedCameraFrustumBase = qMax(0.1f, _cachedRadius * 0.02f);
+        const float minimum_frustum_base = qMax(1.0e-5f, _cachedRadius * 0.002f);
+        _cachedCameraFrustumBase = qMax(minimum_frustum_base, _cachedRadius * 0.02f);
         if (_poses.size() > 1)
         {
             std::vector<float> nearestDistances;
@@ -1024,7 +1029,8 @@ void CameraSceneWidget::invalidateCache() const
                                  nearestDistances.begin() + static_cast<std::ptrdiff_t>(medianIndex),
                                  nearestDistances.end());
                 const float spacingBase = nearestDistances[medianIndex] * 0.25f;
-                _cachedCameraFrustumBase = qMax(0.1f, qMin(_cachedCameraFrustumBase, spacingBase));
+                _cachedCameraFrustumBase =
+                    qMax(minimum_frustum_base, qMin(_cachedCameraFrustumBase, spacingBase));
             }
         }
     }
