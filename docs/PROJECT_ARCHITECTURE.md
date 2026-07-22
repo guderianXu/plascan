@@ -321,7 +321,7 @@ core/
 │   ├── model/                  # GUI/CLI 共用 Options、ResolvedConfig、Result DTO
 │   ├── workflow/               # 唯一入口与正式 Pipeline
 │   ├── preparation/            # MatchPhotosTask 适配、缓存编目和前置检查
-│   ├── reconstruction/         # 单次 SfM、标记点先验、候选对与图诊断
+│   ├── reconstruction/         # 单次 SfM、标记点先验、相机内参清洗、候选对与图诊断
 │   ├── search/                 # 无相机焦距候选排序和资源策略
 │   ├── reporting/              # 稀疏点云、质量元数据和结果记录
 │   └── CMakeLists.txt          # 独立 aerial_triangulation target
@@ -353,7 +353,9 @@ Camera/BATrack 观测扁平化为 CUDA 工作集，在固定相机投影下优�
 焦距初始化与“自适应相机模型拟合”解耦：后者只决定正式 BA 是否释放共享焦距，关闭后仍使用搜索得到的
 最佳初始焦距作为固定内参。粗筛不写 PLY、项目结果或匹配缓存。
 E/F/H 和 PnP 的 OpenCV RANSAC 调用由稳定种子保护，结果不应随粗筛 worker 数变化。照片序列外推/插值仅作为
-PnP 初值，未经 3D-2D 几何验证的相机不会计入正式注册覆盖率。
+PnP 初值，未经 3D-2D 几何验证的相机不会计入正式注册覆盖率。重置当前对齐但复用项目内参时，
+`CameraIntrinsicPriorSanitizer` 会仅在同尺寸相机存在占主导焦距群时修正超过 2 倍的旧 SfM 焦距离群值；
+它不复用旧外参，并将修正数量、焦距中位值和影像列表写入 SfM 诊断。
 
 `aerial_triangulation/reporting/QualityReportWriter.cpp` 在内存中构造稀疏点、逐相机残差、BA 摘要和
 SfM 诊断；`AerialTriangulationResultWriter.cpp` 再把 `sfm_sparse.ply` 与 `sfm_sparse_points.json`
@@ -413,10 +415,10 @@ gui/
 │   ├── SurveyControlDialog.h/cpp            # 控制点/检查点/比例尺导入和查看
 │   ├── CreateDemDialog.h/cpp                # DEM 生成参数
 │   ├── MapProjectDialog.h/cpp               # 地图投影参数
-│   ├── ModelGenerationDialog.h/cpp          # 模型生成
-│   ├── MeshReconstructionDialog.h/cpp       # 网格重建参数
-│   ├── TextureMappingDialog.h/cpp           # 纹理映射参数
-│   ├── ModelExportDialog.h/cpp              # 模型导出
+│   ├── GenerateModelDialog.h/cpp            # “工作流程 → 生成模型”唯一入口
+│   ├── MeshReconstructionDialog.h/cpp       # 旧网格参数组件（不再直接暴露菜单）
+│   ├── TextureMappingDialog.h/cpp           # 旧纹理参数组件（不再直接暴露菜单）
+│   ├── ModelExportDialog.h/cpp               # 旧导出参数组件（不再直接暴露菜单）
 │   ├── OverlapAnalysisDialog.h/cpp          # 重叠度分析
 │   ├── VocabularyOverlapDialog.h/cpp/ui     # 基于特征词汇获取重叠对
 │   ├── FeaturePointVisualizationDialog.h/cpp  # 特征点可视化
@@ -534,11 +536,11 @@ gui/
                                  │├深度图估计...
                                  │├深度图融合...
                                  │└密集点云后处理...
-                                 └模型生成
-                                  ├网格重建...
-                                  ├纹理映射...
-                                  └模型导出...
+                                 └（模型生成统一由“工作流程 → 生成模型”进入）
 ```
+
+模型生成只有一个用户入口。旧网格重建、纹理映射和模型导出对话框仍作为内部兼容组件保留，但不再
+出现在“重建”菜单，避免两套入口产生不同设置和结果。
 
 ### 数据流 (稀疏重建 → 密集重建 → 模型)
 
@@ -570,6 +572,8 @@ gui/
 深度图的磁盘 manifest 哈希覆盖估计参数、影像路径/大小/修改时间、相机内外参、
 匹配对质量约束和稀疏点云内容。项目结果中的深度批次还记录当前影像、相机与正式空三结果的
 输入签名；重新平差、修改相机或切换空三结果后，旧深度图不会直接参与融合或模型生成。
+深度结果另带 `algorithm_revision`；影响几何质量的生产算法升级会递增该值，生成模型工作流仅透明
+复用当前修订版的完整批次，旧批次保留在磁盘并先触发当前多视深度重算。
 可复用的密集点云必须与深度批次的目录、数量、配置哈希和输入签名一致，并通过 PLY 头与
 非零顶点数检查。
 
@@ -593,13 +597,17 @@ Level 1/2/3 栅格及对应项目元数据，但不会删除源照片。照片�
 融合。强单次观测有独立权重门槛。环拍物体工作区只有在至少五个参考相机都将采样判为支持掩膜外时，
 才把该证据作为低权重自由空间；单视图不能雕刻模型，航测和无法识别场景的旧工作区默认仍只忽略
 掩膜外采样。TSDF 默认截断带为 7.5 体素；普通插值仅填边界不超过 16 条边且物理直径不超过 4 体素的小闭环，并在 JSON 中记录
-单/多视支持、拒绝原因、分量面数/包围盒及补洞前后边界数。超高质量档还会剥离一轮全部顶点均为
-弱相机支持的开放边界尖片，并单独记录候选面和实际移除面数。PLY 顶点色经过网格 z-buffer、深度、
+单/多视支持、拒绝原因、分量面数/包围盒及补洞前后边界数。超高质量档还会剥离两轮至少含两条开放边
+且带弱相机支持顶点的终端悬挂三角形，并执行两轮限位边界平滑；候选面和实际移除面数会单独记录。PLY
+顶点色经过网格 z-buffer、深度、
 视角及颜色离群检查；OBJ 纹理使用原始相机影像的逐面投影 UV 图集，不再把顶点色作全局平面烘焙。
 GUI 的生成模型入口默认请求 OBJ，同时始终保留 `model_from_mesh.ply` 作为几何/兼容回退；项目记录保存
 `model_obj`、`model_mtl`、`texture_image`/`texture_png` 和最终显示路径。工作区选择模型时优先异步加载
 OBJ，在后台解析 MTL 与纹理图，并在 Vulkan 网格管线中按 `faceTextureIndices` 展开每个面角的 UV；
-MTL、纹理或完整 UV 缺失时回退到顶点颜色，不在 GUI 主线程执行文件解析或图像读取。
+`ObjRenderPreparation` 同时在后台生成可直接上传的交错顶点缓冲，GUI 线程只负责 GPU 上传。OBJ 读取器
+使用连续文件缓冲、`from_chars` 和扁平三角形数组，避免逐行字符串流和嵌套面数组；相机纹理导出按
+“相机 + 空间顶点”复用 UV，只在主视图接缝处拆分纹理坐标。MTL、纹理或完整 UV 缺失时回退到顶点
+颜色，不在 GUI 主线程执行文件解析、图像读取或百万面三角形展开。
 
 最终深度证据除几何支持数外，还保存来源相机 bit mask、逆深度均值/相对离散度和跨视图修补掩膜；
 旧清单缺少这些字段时按空证据读取。模型质量报告对每个视图保存双向边缘距离、P90 长尾位置及其

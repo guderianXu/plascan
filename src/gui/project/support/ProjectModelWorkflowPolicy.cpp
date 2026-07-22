@@ -13,6 +13,8 @@
 #include <QThread>
 #include <QtGlobal>
 
+#include <algorithm>
+
 namespace xjw::gui::project
 {
 
@@ -489,10 +491,18 @@ ModelWorkflowDecision decideModelGenerationWorkflow(const QJsonObject &settings,
     const QString stored_input_signature = consistentProjectInputSignature(stored_frames);
     const bool input_signature_matches = current_input_signature.isEmpty() ||
         stored_input_signature == current_input_signature;
+    const bool algorithm_revision_matches = std::all_of(
+        stored_frames.frames.begin(),
+        stored_frames.frames.end(),
+        [](const xjw::core::project::StoredDepthFrameRecord &frame)
+        {
+            return frame.algorithmRevision == xjw::mvs::kMvsDepthAlgorithmRevision;
+        });
     const bool stored_batch_complete = stored_frames.status.ok &&
         stored_frames.frames.size() >= 2 &&
         static_cast<int>(stored_frames.frames.size()) >= expected_frame_count &&
-        !depth_config_hash.isEmpty() && input_signature_matches;
+        !depth_config_hash.isEmpty() && input_signature_matches &&
+        algorithm_revision_matches;
 
     if (reuse_depth_maps && stored_batch_complete)
     {
@@ -507,7 +517,9 @@ ModelWorkflowDecision decideModelGenerationWorkflow(const QJsonObject &settings,
     decision.depthSettings[QStringLiteral("force_depth_recompute")] = !reuse_depth_maps;
     decision.depthSettings[QStringLiteral("expected_depth_frame_count")] = expected_frame_count;
     decision.reason = reuse_depth_maps
-        ? QStringLiteral("缺少完整可复用深度图批次，先自动估计深度图。")
+        ? (stored_frames.status.ok && !algorithm_revision_matches
+               ? QStringLiteral("已有深度图由旧版算法生成，先自动重新估计当前多视深度图。")
+               : QStringLiteral("缺少完整可复用深度图批次，先自动估计深度图。"))
         : QStringLiteral("未启用深度图复用，重新估计深度图。");
     return decision;
 }

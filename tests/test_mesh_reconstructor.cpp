@@ -16,6 +16,7 @@
 
 #include <plamatrix/dense/dense_matrix.h>
 #include <plapoint/core/point_cloud.h>
+#include <plapoint/io/obj_io.h>
 #include <plapoint/io/ply_io.h>
 
 #include <opencv2/imgproc.hpp>
@@ -119,6 +120,13 @@ TEST(DepthTsdfSurfaceBuilderTest, UsesLargestComponentRelativeCleanupByDefault)
     EXPECT_FLOAT_EQ(options.maximumInterpolationRelativeDepthSpread, 0.02f);
     EXPECT_FLOAT_EQ(options.maximumObservationInverseDepthSpread, 0.0f);
     EXPECT_TRUE(options.allowInvalidNearestPixelRecovery);
+    EXPECT_FLOAT_EQ(options.maximumInvalidNearestPixelRecoveryInverseDepthSpread, 0.0f);
+    EXPECT_FALSE(options.enableCrossViewConsensusDepth);
+    EXPECT_FLOAT_EQ(options.maximumCrossViewConsensusInverseDepthSpread, 0.02f);
+    EXPECT_FALSE(options.enableGeometrySingleViewNeighborhoodGuard);
+    EXPECT_EQ(options.minimumGeometrySingleViewNeighborCount, 2);
+    EXPECT_EQ(options.geometrySingleViewGrowthPasses, 2);
+    EXPECT_FLOAT_EQ(options.maximumGeometrySingleViewNeighborTsdfDelta, 0.35f);
     EXPECT_FLOAT_EQ(options.truncationVoxels, 7.5f);
     EXPECT_FALSE(options.enableSupportMaskFreeSpaceCarving);
     EXPECT_FALSE(options.fillSmallBoundaryHoles);
@@ -212,6 +220,54 @@ TEST(DepthTsdfSurfaceBuilderTest, InvalidNearestPixelRecoveryCanBeDisabled)
 
     EXPECT_FALSE(sample.valid);
     EXPECT_TRUE(sample.rejectedInvalidNearestPixelRecovery);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, InvalidNearestRecoveryRejectsCrossViewUnstableNeighbor)
+{
+    const cv::Mat depth(2, 2, CV_32FC1, cv::Scalar(2.0f));
+    auto frame = makeSamplingFrame(depth);
+    frame.depthValidMask.at<std::uint8_t>(0, 0) = 0;
+    frame.inverseDepthRelativeSpread.setTo(0.02f);
+
+    const auto sample = xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+        frame,
+        frame.depthValidMask,
+        cv::Point2d(0.1, 0.1),
+        0.25f,
+        true,
+        0.02f,
+        0.0f,
+        true,
+        0.015f);
+
+    EXPECT_FALSE(sample.valid);
+    EXPECT_TRUE(sample.rejectedInvalidNearestPixelRecovery);
+    EXPECT_EQ(sample.failure, xjw::mesh::DepthTsdfObservationFailure::GeometryConsistency);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, StableCrossViewConsensusCanReplaceReferenceDepth)
+{
+    const cv::Mat depth(2, 2, CV_32FC1, cv::Scalar(2.0f));
+    auto frame = makeSamplingFrame(depth);
+    frame.inverseDepthMean = cv::Mat(depth.size(), CV_32FC1, cv::Scalar(0.5f));
+    frame.inverseDepthMean.at<float>(0, 0) = 0.4f;
+
+    const auto sample = xjw::mesh::DepthTsdfSurfaceBuilder::sampleObservation(
+        frame,
+        frame.depthValidMask,
+        cv::Point2d(0.0, 0.0),
+        0.25f,
+        true,
+        0.02f,
+        0.0f,
+        true,
+        0.0f,
+        true,
+        0.02f);
+
+    ASSERT_TRUE(sample.valid);
+    EXPECT_TRUE(sample.usedCrossViewConsensusDepth);
+    EXPECT_NEAR(sample.depth, 2.5f, 1.0e-5f);
 }
 
 TEST(SurfaceReconstructorPostprocessTest, SmoothsOnlyOpenBoundaryVertices)
@@ -400,6 +456,38 @@ TEST(DepthTsdfSurfaceBuilderTest, GeometryVerifiedSingleObservationRequiresTwoSo
         0.9f, 1, 0.9f, options, nullptr, nullptr, 2));
     EXPECT_FALSE(xjw::mesh::DepthTsdfSurfaceBuilder::isSampleSupported(
         0.8f, 1, 0.8f, options, nullptr, nullptr, 3));
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, GeometrySingleViewGrowthKeepsOnlyCoreConnectedSamples)
+{
+    xjw::mesh::DepthTsdfLayout layout;
+    layout.cells = {2, 2, 2};
+    layout.sampleCount = 27;
+    std::vector<float> tsdf(27, 0.0f);
+    std::vector<std::uint8_t> supported(27, 0);
+    const auto index = [](int x, int y, int z)
+    {
+        return static_cast<std::size_t>(z * 9 + y * 3 + x);
+    };
+    supported[index(0, 1, 1)] = 1;
+    supported[index(1, 0, 1)] = 1;
+    const std::vector<std::size_t> candidates{index(1, 1, 1), index(2, 2, 2)};
+
+    const int accepted =
+        xjw::mesh::DepthTsdfSurfaceBuilder::growGeometryVerifiedSingleViewSamples(
+            layout, tsdf, candidates, 2, 1, 0.1f, &supported);
+
+    EXPECT_EQ(accepted, 1);
+    EXPECT_EQ(supported[index(1, 1, 1)], 1);
+    EXPECT_EQ(supported[index(2, 2, 2)], 0);
+}
+
+TEST(DepthTsdfSurfaceBuilderTest, WeakBoundaryTrimTargetsOnlyDanglingFaces)
+{
+    EXPECT_TRUE(xjw::mesh::DepthTsdfSurfaceBuilder::shouldTrimWeakBoundaryFace(2, 1));
+    EXPECT_TRUE(xjw::mesh::DepthTsdfSurfaceBuilder::shouldTrimWeakBoundaryFace(3, 1));
+    EXPECT_FALSE(xjw::mesh::DepthTsdfSurfaceBuilder::shouldTrimWeakBoundaryFace(1, 3));
+    EXPECT_FALSE(xjw::mesh::DepthTsdfSurfaceBuilder::shouldTrimWeakBoundaryFace(2, 0));
 }
 
 TEST(DepthTsdfSurfaceBuilderTest, MemoryFailureDoesNotLowerResolution)
@@ -1779,12 +1867,26 @@ TEST(MeshWorkflowSettingsTest, DepthTsdfObservationEdgeGatesAreConfigurable)
 {
     const QJsonObject settings{
         {QStringLiteral("tsdfMaximumObservationInverseDepthSpread"), 0.03},
-        {QStringLiteral("tsdfAllowInvalidNearestPixelRecovery"), false}};
+        {QStringLiteral("tsdfAllowInvalidNearestPixelRecovery"), false},
+        {QStringLiteral("tsdfMaximumInvalidNearestPixelRecoveryInverseDepthSpread"), 0.015},
+        {QStringLiteral("tsdfCrossViewConsensusDepth"), true},
+        {QStringLiteral("tsdfMaximumCrossViewConsensusInverseDepthSpread"), 0.025},
+        {QStringLiteral("tsdfGeometrySingleViewNeighborhoodGuard"), true},
+        {QStringLiteral("tsdfMinimumGeometrySingleViewNeighborCount"), 4},
+        {QStringLiteral("tsdfGeometrySingleViewGrowthPasses"), 3},
+        {QStringLiteral("tsdfMaximumGeometrySingleViewNeighborTsdfDelta"), 0.2}};
 
     const auto options = xjw::mesh::workflow::depthTsdfOptionsFromSettings(settings, 384);
 
     EXPECT_FLOAT_EQ(options.maximumObservationInverseDepthSpread, 0.03f);
     EXPECT_FALSE(options.allowInvalidNearestPixelRecovery);
+    EXPECT_FLOAT_EQ(options.maximumInvalidNearestPixelRecoveryInverseDepthSpread, 0.015f);
+    EXPECT_TRUE(options.enableCrossViewConsensusDepth);
+    EXPECT_FLOAT_EQ(options.maximumCrossViewConsensusInverseDepthSpread, 0.025f);
+    EXPECT_TRUE(options.enableGeometrySingleViewNeighborhoodGuard);
+    EXPECT_EQ(options.minimumGeometrySingleViewNeighborCount, 4);
+    EXPECT_EQ(options.geometrySingleViewGrowthPasses, 3);
+    EXPECT_FLOAT_EQ(options.maximumGeometrySingleViewNeighborTsdfDelta, 0.2f);
 }
 
 TEST(MeshWorkflowSettingsTest, DepthTsdfExposureCompensationIsExplicitOptIn)
@@ -1831,7 +1933,10 @@ TEST(MeshWorkflowSettingsTest, UltraEnablesOnlyGeometryVerifiedSingleObservation
     EXPECT_TRUE(ultra.allowGeometryVerifiedSingleObservation);
     EXPECT_TRUE(ultra.enableDiscontinuityAwareSampling);
     EXPECT_FLOAT_EQ(ultra.maximumInterpolationRelativeDepthSpread, 0.02f);
-    EXPECT_EQ(ultra.minimumGeometrySupportCount, 4);
+    EXPECT_FALSE(ultra.allowInvalidNearestPixelRecovery);
+    EXPECT_TRUE(high.allowInvalidNearestPixelRecovery);
+    EXPECT_EQ(ultra.minimumGeometrySupportCount, 3);
+    EXPECT_EQ(high.minimumGeometrySupportCount, 4);
     EXPECT_FLOAT_EQ(ultra.minimumGeometryVerifiedObservationWeight, 0.85f);
     EXPECT_EQ(ultra.minimumDistinctCameraSupport, 2);
 }
@@ -1845,11 +1950,14 @@ TEST(MeshWorkflowSettingsTest, UltraDepthTsdfRequiresThreeCameraSupportByDefault
 
     EXPECT_EQ(ultra_options.minimumDistinctCameraSupport, 2);
     EXPECT_EQ(high_options.minimumDistinctCameraSupport, 2);
-    EXPECT_EQ(ultra_options.boundarySmoothingIterations, 1);
+    EXPECT_EQ(ultra_options.boundarySmoothingIterations, 2);
+    EXPECT_EQ(high_options.boundarySmoothingIterations, 1);
     EXPECT_EQ(ultra_options.depthValidBoundaryErosionPixels, 2);
     EXPECT_EQ(high_options.depthValidBoundaryErosionPixels, 1);
     EXPECT_TRUE(ultra_options.trimWeakBoundaryTips);
     EXPECT_FALSE(high_options.trimWeakBoundaryTips);
+    EXPECT_EQ(ultra_options.weakBoundaryTipTrimPasses, 2);
+    EXPECT_EQ(high_options.weakBoundaryTipTrimPasses, 1);
 
     const QJsonObject disabled_settings{
         {QStringLiteral("tsdfTrimWeakBoundaryTips"), false}};
@@ -2205,7 +2313,8 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     ASSERT_TRUE(xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
         ply_path.string(), root.string(), config, QVector<xjw::mesh::MeshColorView>{view},
         &result, &error)) << error;
-    EXPECT_EQ(result.textureAlgorithm, "camera_projected_atlas_v1");
+    EXPECT_EQ(result.textureAlgorithm, "camera_projected_atlas_v2");
+    EXPECT_EQ(result.uvMethod, "indexed_vertex_view_projection");
     EXPECT_EQ(result.sourceViewCount, 1);
     EXPECT_EQ(result.mappedFaceCount, 2);
     EXPECT_EQ(result.fallbackMappedFaceCount, 0);
@@ -2213,9 +2322,75 @@ TEST(TextureMapperTest, CameraAtlasUsesPerFaceProjectedUvWithoutPlanarOverlap)
     EXPECT_TRUE(fs::exists(result.modelObjPath));
     EXPECT_TRUE(fs::exists(result.texturePngPath));
 
+    const auto textured_mesh = plapoint::io::readObj<float>(result.modelObjPath);
+    ASSERT_TRUE(textured_mesh != nullptr);
+    ASSERT_TRUE(textured_mesh->hasTextureCoords());
+    ASSERT_TRUE(textured_mesh->hasFaceTextureIndices());
+    EXPECT_LT(textured_mesh->textureCoords()->rows(),
+              textured_mesh->faces()->rows() * 3);
+
     std::ifstream obj_file(result.modelObjPath);
     std::stringstream obj_buffer;
     obj_buffer << obj_file.rdbuf();
     EXPECT_NE(obj_buffer.str().find("vt "), std::string::npos);
     EXPECT_NE(obj_buffer.str().find("usemtl material0"), std::string::npos);
+}
+
+TEST(TextureMapperTest, CameraAtlasDoesNotSampleBackgroundAcrossMaskedFaceCorner)
+{
+    namespace fs = std::filesystem;
+    const fs::path root = fs::temp_directory_path() /
+        "plascan_camera_texture_masked_corner_test";
+    fs::remove_all(root);
+    fs::create_directories(root);
+    const fs::path ply_path = root / "mesh.ply";
+
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> points(3, 3);
+    points(0, 0) = -0.4f; points(0, 1) = -0.3f; points(0, 2) = 2.0f;
+    points(1, 0) = 0.4f;  points(1, 1) = -0.3f; points(1, 2) = 2.0f;
+    points(2, 0) = -0.4f; points(2, 1) = 0.3f;  points(2, 2) = 2.0f;
+    plapoint::PointCloud<float, plamatrix::Device::CPU> mesh(std::move(points));
+    plamatrix::DenseMatrix<int, plamatrix::Device::CPU> faces(1, 3);
+    faces(0, 0) = 0; faces(0, 1) = 1; faces(0, 2) = 2;
+    mesh.setFaces(std::move(faces));
+    plamatrix::DenseMatrix<std::uint8_t, plamatrix::Device::CPU> colors(3, 3);
+    for (int row = 0; row < 3; ++row)
+    {
+        colors(row, 0) = 180;
+        colors(row, 1) = 130;
+        colors(row, 2) = 80;
+    }
+    mesh.setColors(std::move(colors));
+    plapoint::io::writePly<float>(
+        ply_path.string(), mesh, plapoint::io::PlyFormat::BinaryLE);
+
+    xjw::mesh::MeshColorView view;
+    view.camera.setIntrinsics(40.0, 40.0, 24.0, 18.0);
+    view.camera.setPose(std::array<double, 9>{1.0, 0.0, 0.0,
+                                              0.0, 1.0, 0.0,
+                                              0.0, 0.0, 1.0},
+                        std::array<double, 3>{0.0, 0.0, 0.0});
+    view.colorBgr = cv::Mat(36, 48, CV_8UC3, cv::Scalar(0, 0, 0));
+    view.depth = cv::Mat(36, 48, CV_32FC1, cv::Scalar(2.0f));
+    view.confidence = cv::Mat(36, 48, CV_32FC1, cv::Scalar(0.9f));
+    view.depthValidMask = cv::Mat(36, 48, CV_8UC1, cv::Scalar(255));
+    view.supportMask = cv::Mat(36, 48, CV_8UC1, cv::Scalar(255));
+    view.supportMask.at<std::uint8_t>(12, 16) = 0;
+
+    xjw::mesh::TextureMappingConfig config;
+    config.textureSize = 1024;
+    xjw::mesh::TextureMappingResult result;
+    std::string error;
+    ASSERT_TRUE(xjw::mesh::TextureMapper::generateCameraTexturedModelFromMeshFile(
+        ply_path.string(), root.string(), config,
+        QVector<xjw::mesh::MeshColorView>{view}, &result, &error)) << error;
+    EXPECT_EQ(result.mappedFaceCount, 0);
+    EXPECT_EQ(result.unmappedFaceCount, 1);
+
+    const cv::Mat atlas = cv::imread(result.texturePngPath, cv::IMREAD_COLOR);
+    ASSERT_FALSE(atlas.empty());
+    const cv::Vec3b fallback = atlas.at<cv::Vec3b>(2, 2);
+    EXPECT_GT(fallback[0], 0);
+    EXPECT_GT(fallback[1], 0);
+    EXPECT_GT(fallback[2], 0);
 }

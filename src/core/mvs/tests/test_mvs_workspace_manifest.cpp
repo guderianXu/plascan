@@ -36,6 +36,7 @@ MvsDepthFrameRecord makeRecord(int index, const QString &name, const QString &st
     record.gridHeight = 4000;
     record.elapsedMs = 1000 + index;
     record.configHash = QStringLiteral("cfg-a");
+    record.algorithmRevision = xjw::mvs::kMvsDepthAlgorithmRevision;
     record.sourceImages = {QStringLiteral("source_a.jpg"), QStringLiteral("source_b.jpg")};
     record.sourceIndices = {7, 9};
     record.rawGeometrySourceMaskPath = QStringLiteral("geometry_source_mask_%1.bin")
@@ -193,6 +194,7 @@ TEST(MvsWorkspaceManifest, LoadsLegacyRecordWithoutGeometryEvidencePaths)
     EXPECT_TRUE(record.rawInverseDepthMeanPath.isEmpty());
     EXPECT_TRUE(record.rawInverseDepthSpreadPath.isEmpty());
     EXPECT_TRUE(record.crossViewRepairedMaskPath.isEmpty());
+    EXPECT_EQ(record.algorithmRevision, 0);
 }
 
 TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
@@ -229,6 +231,8 @@ TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
     EXPECT_EQ(loadedRecord.validPixelCount, 123456);
     EXPECT_DOUBLE_EQ(loadedRecord.validCoverage, 0.625);
     EXPECT_EQ(loadedRecord.supportMaskPath, QStringLiteral("support_006.png"));
+    EXPECT_EQ(loadedRecord.algorithmRevision,
+              xjw::mvs::kMvsDepthAlgorithmRevision);
 
     const QJsonObject json = loadedRecord.toJson();
     EXPECT_EQ(json.value(QStringLiteral("source_view_count")).toInt(), 2);
@@ -239,6 +243,8 @@ TEST(MvsWorkspaceManifest, PreservesSourceQualityAndDepthConfidenceSummary)
     EXPECT_DOUBLE_EQ(json.value(QStringLiteral("valid_coverage")).toDouble(), 0.625);
     EXPECT_EQ(json.value(QStringLiteral("support_mask_path")).toString(),
               QStringLiteral("support_006.png"));
+    EXPECT_EQ(json.value(QStringLiteral("algorithm_revision")).toInt(),
+              xjw::mvs::kMvsDepthAlgorithmRevision);
 }
 
 TEST(MvsWorkspaceManifest, PreservesDepthQualityDiagnostics)

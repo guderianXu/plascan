@@ -364,6 +364,7 @@ TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)
         QStringLiteral("depth_7_support.png"));
     frame[QStringLiteral("acceptance")] = QStringLiteral("accepted");
     frame[QStringLiteral("fusion_eligible")] = true;
+    frame[QStringLiteral("source_view_count")] = 2;
     frame[QStringLiteral("grid_width")] = 128;
     frame[QStringLiteral("grid_height")] = 96;
     frame[QStringLiteral("camera_model")] = camera;
@@ -402,6 +403,7 @@ TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)
               frame.value(QStringLiteral("cross_view_repaired_mask_path")).toString());
     EXPECT_EQ(views[0].frameAcceptance, QStringLiteral("accepted"));
     EXPECT_TRUE(views[0].fusionEligible);
+    EXPECT_EQ(views[0].sourceViewCount, 2);
     EXPECT_DOUBLE_EQ(views[0].camera.focalX(), 400.0);
 }
 

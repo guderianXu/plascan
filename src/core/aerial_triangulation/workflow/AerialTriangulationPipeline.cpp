@@ -182,6 +182,12 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         input.images.size() >= 3 && !hasCompleteCameraIntrinsicPrior(input);
 
     PreparedAerialTriangulationInput attemptInput = input;
+    // 焦距粗搜索只比较固定内参下的几何结果。若把 BA 内参拟合混入候选，
+    // 同一焦距尺度会因局部极值而产生不可比较的注册结果。
+    if (needsFocalInitializationSearch)
+    {
+        attemptInput.adaptiveCameraModelFitting = false;
+    }
     attemptInput.progressFn = [originalProgress, needsFocalInitializationSearch](
                                   const QString &stage, int percent)
     {
@@ -200,7 +206,9 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
     SfmAttemptExecutionResult execution = _attemptRunner(attemptInput);
     QVector<AdaptiveFocalCandidate> focalCandidates;
     std::vector<SfmCandidateSummary> candidateSummaries;
+    QVector<SfmAttemptExecutionResult> candidateExecutions;
     double selectedFocalScale = input.estimatedFocalScale;
+    bool adaptiveRefinementAccepted = false;
 
     if (needsFocalInitializationSearch)
     {
@@ -218,6 +226,7 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
             focalCandidates.append(candidateFromExecution(focalScale, candidateExecution));
             candidateSummaries.push_back(summaryFromExecution(
                 candidateIndex, focalScale, candidateExecution));
+            candidateExecutions.append(std::move(candidateExecution));
         };
         appendCandidate(input.estimatedFocalScale, std::move(execution));
         execution = {};
@@ -267,18 +276,39 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         const std::vector<SfmCandidateSummary> ranked = rankCandidates(candidateSummaries);
         const int selectedIndex = ranked.empty() ? 0 : ranked.front().candidateIndex;
         selectedFocalScale = focalCandidates.at(selectedIndex).focalScale;
-        PreparedAerialTriangulationInput replayInput = input;
-        replayInput.estimatedFocalScale = selectedFocalScale;
-        replayInput.progressFn = [originalProgress](const QString &stage, int percent)
+        execution = std::move(candidateExecutions[selectedIndex]);
+
+        if (input.adaptiveCameraModelFitting)
         {
-            if (originalProgress)
+            PreparedAerialTriangulationInput refinementInput = input;
+            refinementInput.estimatedFocalScale = selectedFocalScale;
+            refinementInput.progressFn = [originalProgress](const QString &stage, int percent)
             {
-                originalProgress(
-                    QStringLiteral("使用最佳焦距正式重建: %1").arg(stage),
-                    80 + std::clamp(percent, 0, 100) * 10 / 100);
+                if (originalProgress)
+                {
+                    originalProgress(
+                        QStringLiteral("使用最佳焦距细化内参: %1").arg(stage),
+                        80 + std::clamp(percent, 0, 100) * 10 / 100);
+                }
+            };
+            SfmAttemptExecutionResult refinedExecution = _attemptRunner(refinementInput);
+            const QJsonObject sparseQuality = sparseQualityFromExecution(input, refinedExecution);
+            if (!sparseQuality.isEmpty())
+            {
+                refinedExecution.result.sfmDiagnostics.insert(
+                    QStringLiteral("sparse_quality"), sparseQuality);
             }
-        };
-        execution = _attemptRunner(replayInput);
+
+            SfmCandidateSummary baselineSummary = candidateSummaries[static_cast<std::size_t>(selectedIndex)];
+            baselineSummary.candidateIndex = 0;
+            SfmCandidateSummary refinementSummary = summaryFromExecution(
+                1, selectedFocalScale, refinedExecution);
+            if (isBetterCandidate(refinementSummary, baselineSummary))
+            {
+                execution = std::move(refinedExecution);
+                adaptiveRefinementAccepted = true;
+            }
+        }
     }
     else
     {
@@ -301,6 +331,8 @@ AerialTriangulationReconstructionResult AerialTriangulationPipeline::run(
         QStringLiteral("focal_initialization_search"), focalCandidates.size() > 1);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("adaptive_camera_model_fitting"), input.adaptiveCameraModelFitting);
+    execution.result.sfmDiagnostics.insert(
+        QStringLiteral("adaptive_camera_model_refinement_accepted"), adaptiveRefinementAccepted);
     execution.result.sfmDiagnostics.insert(
         QStringLiteral("adaptive_focal_scale"), selectedFocalScale);
     execution.result.sfmDiagnostics.insert(

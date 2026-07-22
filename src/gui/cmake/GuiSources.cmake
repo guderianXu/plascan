@@ -110,6 +110,7 @@ set(GUI_SOURCES
   dialogs/BundleAdjustDialog.cpp
   dialogs/CameraModel3DDialog.cpp
   dialogs/CameraSceneViewMath.cpp
+  dialogs/ObjRenderPreparation.cpp
   dialogs/StereoProcessingDialog.cpp
   dialogs/OverlapAnalysisDialog.cpp
   dialogs/CreateDemDialog.cpp
@@ -252,6 +253,7 @@ set(GUI_HEADERS
   dialogs/BundleAdjustDialog.h
   dialogs/CameraModel3DDialog.h
   dialogs/CameraSceneViewMath.h
+  dialogs/ObjRenderPreparation.h
   dialogs/StereoProcessingDialog.h
   dialogs/OverlapAnalysisDialog.h
   dialogs/CreateDemDialog.h
@@ -335,6 +337,7 @@ set(GUI_DIALOG_SOURCES
   dialogs/BundleAdjustDialog.cpp
   dialogs/CameraModel3DDialog.cpp
   dialogs/CameraSceneViewMath.cpp
+  dialogs/ObjRenderPreparation.cpp
   dialogs/StereoProcessingDialog.cpp
   dialogs/OverlapAnalysisDialog.cpp
   dialogs/CreateDemDialog.cpp

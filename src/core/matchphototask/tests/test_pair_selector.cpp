@@ -76,6 +76,7 @@ TEST(MatchPhotosPairSelectorTest, LargeSetFallsBackToSequenceWindow)
     EXPECT_EQ(result.allPairCount, 15);
     EXPECT_EQ(result.candidates.size(), 9);
     ASSERT_NE(findPair(result.candidates, 0, 2), nullptr);
+    EXPECT_EQ(findPair(result.candidates, 0, 5), nullptr);
 }
 
 TEST(MatchPhotosPairSelectorTest, FullSequenceCandidateSetIsReportedAsUnrestricted)
@@ -95,6 +96,28 @@ TEST(MatchPhotosPairSelectorTest, FullSequenceCandidateSetIsReportedAsUnrestrict
     EXPECT_EQ(result.allowedPairKeys.size(), result.allPairCount);
     EXPECT_FALSE(result.restrictPairs)
         << "完整候选图不应作为受限列表传入 SfM，否则候选优先级会改变轨迹合并顺序。";
+}
+
+TEST(MatchPhotosPairSelectorTest, ClosedRingWindowCoversAllPairsAtHalfSequenceLength)
+{
+    xjw::matchphotos::PairSelectionInput input;
+    input.images = makeImages(16);
+
+    xjw::matchphotos::PairSelectionPolicy policy;
+    policy.mode = xjw::matchphotos::PairSelectionMode::Sequence;
+    policy.exhaustiveMaxImages = 1;
+    policy.sequenceWindow = 8;
+    policy.closeSequenceLoop = true;
+
+    const xjw::matchphotos::PairSelectionResult result =
+        xjw::matchphotos::PairSelector::select(input, policy);
+
+    EXPECT_EQ(result.allPairCount, 120);
+    EXPECT_EQ(result.candidates.size(), 120u);
+    EXPECT_FALSE(result.restrictPairs);
+    const auto *wrappedPair = findPair(result.candidates, 0, 9);
+    ASSERT_NE(wrappedPair, nullptr);
+    EXPECT_TRUE(hasSource(*wrappedPair, xjw::matchphotos::PairSource::SequenceWindow));
 }
 
 TEST(MatchPhotosPairSelectorTest, MergesOverlapAndVocabularyCandidates)

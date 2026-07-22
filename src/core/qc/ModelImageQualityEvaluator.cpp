@@ -394,7 +394,9 @@ ModelViewQuality::DepthCoverageAttribution attributeMissingDepthCoverage(
         geometry_support.type() == CV_16UC1)
     {
         geometry_support = resizedNearest(geometry_support, reference_mask.size());
-        result.geometrySupportThreshold = 4;
+        result.geometrySupportThreshold = validation.sourceViewCount > 0
+            ? std::min(4, std::max(2, validation.sourceViewCount + 1))
+            : 4;
     }
     else
     {
@@ -677,6 +679,7 @@ QVector<ModelValidationView> ModelImageQualityEvaluator::validationViewsFromMvsW
         view.supportMaskPath = frame.supportMaskPath;
         view.frameAcceptance = frame.acceptance;
         view.fusionEligible = frame.fusionEligible;
+        view.sourceViewCount = frame.sourceViewCount;
         views.push_back(std::move(view));
     }
     if (views.isEmpty() && error)

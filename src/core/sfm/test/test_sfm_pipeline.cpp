@@ -1076,6 +1076,58 @@ TEST_F(SfmPipelineTest, FailedHighVisibilityImageIsRetriedAfterModelGrows)
     EXPECT_EQ(result.numRegisteredImages, 4);
 }
 
+TEST_F(SfmPipelineTest, SequenceModePrefersAdjacentInitialPairOverStrongerCrossSequenceMatch)
+{
+    opts.autoSelectInitPair = true;
+    opts.maxInitPairCandidates = 1;
+    opts.evaluateMultipleInitialPairModels = false;
+    opts.enforceSequencePoseConsistency = true;
+    opts.sequenceLoopClosure = true;
+    opts.initMinNumMatches = 30;
+    opts.initMinNumInliers = 10;
+    opts.initMinChiralityInliers = 10;
+    opts.pnpOptions.minNumInliers = 10;
+    opts.localBAInterval = 100;
+    opts.globalBAInterval = 100;
+    opts.iterativeBARounds = 1;
+    opts.filterMinTrackLen = 1;
+
+    const std::vector<Camera> cameras{
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(10.0, 0.0, 0.0),
+        makeCamera(20.0, 0.0, 0.0),
+        makeCamera(30.0, 0.0, 0.0),
+    };
+    const auto points = generatePoints(480, 10.0, 0.0, 20.0, 6.0, 77);
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    std::vector<FeatureMatch> matches01;
+    std::vector<FeatureMatch> matches12;
+    std::vector<FeatureMatch> matches02;
+    buildKnownPoseTracks(cameras, points, keypoints, matches01, matches12, matches02);
+    ASSERT_GE(matches01.size(), 100u);
+
+    // 跨序列像对 0-2 保留更多匹配。序列模式仍必须以 0-1 或 1-2 作为种子。
+    matches02.insert(matches02.end(), matches02.begin(), matches02.end());
+
+    IncrementalSfm sfm(opts);
+    for (ImageId imageId = 0; imageId < cameras.size(); ++imageId)
+    {
+        sfm.addImageWithCamera(imageId,
+                               "sequence_" + std::to_string(imageId) + ".png",
+                               cameras[imageId],
+                               keypoints[imageId]);
+    }
+    sfm.addMatches(0, 1, matches01);
+    sfm.addMatches(1, 2, matches12);
+    sfm.addMatches(0, 2, matches02);
+
+    const IncrementalSfmResult result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    EXPECT_TRUE((result.selectedInitialImageId1 == 0 && result.selectedInitialImageId2 == 1) ||
+                (result.selectedInitialImageId1 == 1 && result.selectedInitialImageId2 == 2));
+}
+
 // 2. 进度回调正常工作
 TEST_F(SfmPipelineTest, ProgressCallbackWorks)
 {

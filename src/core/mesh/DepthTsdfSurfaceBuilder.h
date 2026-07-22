@@ -48,10 +48,17 @@ struct DepthTsdfOptions
     float minimumGeometryVerifiedObservationWeight = 0.85f;
     int minimumGeometrySupportCount = 4;
     bool allowGeometryVerifiedSingleObservation = false;
+    bool enableGeometrySingleViewNeighborhoodGuard = false;
+    int minimumGeometrySingleViewNeighborCount = 2;
+    int geometrySingleViewGrowthPasses = 2;
+    float maximumGeometrySingleViewNeighborTsdfDelta = 0.35f;
     bool enableDiscontinuityAwareSampling = false;
     float maximumInterpolationRelativeDepthSpread = 0.02f;
     float maximumObservationInverseDepthSpread = 0.0f;
     bool allowInvalidNearestPixelRecovery = true;
+    float maximumInvalidNearestPixelRecoveryInverseDepthSpread = 0.0f;
+    bool enableCrossViewConsensusDepth = false;
+    float maximumCrossViewConsensusInverseDepthSpread = 0.02f;
     bool enableSurfacePatchSupport = false;
     int minimumSurfacePatchSourceCount = 2;
     int minimumSurfacePatchCoreNeighborCount = 3;
@@ -114,9 +121,13 @@ struct DepthTsdfStatistics
     std::uint64_t discontinuityRejectedCandidateCount = 0;
     std::uint64_t rejectedGeometryConsistencyCount = 0;
     std::uint64_t rejectedInvalidNearestPixelRecoveryCount = 0;
+    std::uint64_t crossViewConsensusDepthObservationCount = 0;
     std::uint64_t supportedSampleCount = 0;
     std::uint64_t singleViewSupportedSampleCount = 0;
     std::uint64_t geometryVerifiedSingleViewSupportedSampleCount = 0;
+    std::uint64_t geometrySingleViewNeighborhoodCandidateCount = 0;
+    std::uint64_t geometrySingleViewNeighborhoodAcceptedCount = 0;
+    std::uint64_t geometrySingleViewNeighborhoodRejectedCount = 0;
     std::uint64_t multiViewSupportedSampleCount = 0;
     std::uint64_t rejectedAccumulatedWeightCount = 0;
     std::uint64_t rejectedSingleObservationWeightCount = 0;
@@ -133,10 +144,17 @@ struct DepthTsdfStatistics
     float effectiveMinimumGeometryVerifiedObservationWeight = 0.0f;
     int effectiveMinimumGeometrySupportCount = 0;
     bool effectiveAllowGeometryVerifiedSingleObservation = false;
+    bool effectiveGeometrySingleViewNeighborhoodGuard = false;
+    int effectiveMinimumGeometrySingleViewNeighborCount = 0;
+    int effectiveGeometrySingleViewGrowthPasses = 0;
+    float effectiveMaximumGeometrySingleViewNeighborTsdfDelta = 0.0f;
     bool effectiveDiscontinuityAwareSampling = false;
     float effectiveMaximumInterpolationRelativeDepthSpread = 0.0f;
     float effectiveMaximumObservationInverseDepthSpread = 0.0f;
     bool effectiveAllowInvalidNearestPixelRecovery = true;
+    float effectiveMaximumInvalidNearestPixelRecoveryInverseDepthSpread = 0.0f;
+    bool effectiveCrossViewConsensusDepth = false;
+    float effectiveMaximumCrossViewConsensusInverseDepthSpread = 0.0f;
     bool effectiveSurfacePatchSupport = false;
     int effectiveMinimumSurfacePatchSourceCount = 0;
     int effectiveMinimumSurfacePatchCoreNeighborCount = 0;
@@ -240,6 +258,7 @@ struct DepthTsdfObservationSample
     int discontinuityRejectedPixelCount = 0;
     bool recoveredFromInvalidNearestPixel = false;
     bool rejectedInvalidNearestPixelRecovery = false;
+    bool usedCrossViewConsensusDepth = false;
     DepthTsdfObservationFailure failure = DepthTsdfObservationFailure::Projection;
 };
 
@@ -263,7 +282,10 @@ public:
         bool discontinuityAware,
         float maximumRelativeDepthSpread,
         float maximumObservationInverseDepthSpread = 0.0f,
-        bool allowInvalidNearestPixelRecovery = true);
+        bool allowInvalidNearestPixelRecovery = true,
+        float maximumInvalidNearestPixelRecoveryInverseDepthSpread = 0.0f,
+        bool enableCrossViewConsensusDepth = false,
+        float maximumCrossViewConsensusInverseDepthSpread = 0.02f);
     static bool isSampleSupported(float accumulatedWeight,
                                   int distinctSupportCount,
                                   float maximumObservationWeight,
@@ -272,6 +294,16 @@ public:
                                   bool *multiView = nullptr,
                                   int maximumGeometrySupportCount = 0,
                                   bool *geometryVerifiedSingleView = nullptr);
+    static int growGeometryVerifiedSingleViewSamples(
+        const DepthTsdfLayout &layout,
+        const std::vector<float> &tsdf,
+        const std::vector<std::size_t> &candidateIndices,
+        int minimumNeighborCount,
+        int passes,
+        float maximumTsdfDelta,
+        std::vector<std::uint8_t> *supported);
+    static bool shouldTrimWeakBoundaryFace(int boundaryEdgeCount,
+                                           int weakVertexCount);
     static DepthTsdfResult build(const QVector<DepthTsdfFrame> &frames,
                                  const DepthTsdfOptions &options);
     static QJsonObject statisticsToJson(const DepthTsdfResult &result);

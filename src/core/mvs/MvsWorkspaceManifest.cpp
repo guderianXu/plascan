@@ -114,6 +114,7 @@ QJsonObject MvsDepthFrameRecord::toJson() const
     object.insert(QStringLiteral("elapsed_ms"), QString::number(elapsedMs));
     object.insert(QStringLiteral("error"), error);
     object.insert(QStringLiteral("config_hash"), configHash);
+    object.insert(QStringLiteral("algorithm_revision"), algorithmRevision);
     return object;
 }
 
@@ -182,6 +183,8 @@ MvsDepthFrameRecord MvsDepthFrameRecord::fromJson(const QJsonObject &object)
                                           : static_cast<qint64>(elapsed.toDouble(0.0));
     record.error = object.value(QStringLiteral("error")).toString();
     record.configHash = object.value(QStringLiteral("config_hash")).toString();
+    record.algorithmRevision = object.value(
+        QStringLiteral("algorithm_revision")).toInt(0);
     if (record.pyramidLevels.isEmpty() && record.gridWidth > 0 && record.gridHeight > 0)
     {
         record.pyramidLevels.append(QJsonObject{
@@ -337,6 +340,7 @@ void MvsWorkspaceManifest::markRunning(int refIndex, const QString &refImage, co
     record.status = QStringLiteral("running");
     record.error.clear();
     record.configHash = configHash;
+    record.algorithmRevision = kMvsDepthAlgorithmRevision;
     upsertFrame(record);
 }
 
@@ -446,6 +450,7 @@ QJsonObject MvsWorkspaceManifest::toJson() const
 {
     QJsonObject root;
     root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.workspace.v2"));
+    root.insert(QStringLiteral("algorithm_revision"), kMvsDepthAlgorithmRevision);
     root.insert(QStringLiteral("config_hash"), _configHash);
 
     QJsonArray frames;
@@ -517,6 +522,7 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
 
     QJsonObject root;
     root.insert(QStringLiteral("schema"), QStringLiteral("plascan.mvs.depth.config.v3"));
+    root.insert(QStringLiteral("algorithm_revision"), kMvsDepthAlgorithmRevision);
     root.insert(QStringLiteral("view_count"), viewCount);
     root.insert(QStringLiteral("input_signature"),
                 QString::fromStdString(config.inputSignature));

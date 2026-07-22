@@ -97,6 +97,7 @@ struct ModelValidationView
     QString supportMaskPath;
     QString frameAcceptance;
     bool fusionEligible = true;
+    int sourceViewCount = 0;
 };
 
 struct ModelImageQualityOptions

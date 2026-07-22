@@ -58,6 +58,7 @@
 #include "WorkspacePanelController.h"
 #include "HenuBrandWidget.h"
 #include "TaskStatusWidget.h"
+#include "ObjRenderPreparation.h"
 
 #include "Camera.h"
 #include "DemDomIO.h"
@@ -1957,6 +1958,8 @@ TEST(ModelWorkflowPolicyTest, CompleteDepthBatchRunsTsdfDirectlyWithoutDenseClou
         depth_record[QStringLiteral("depth_png")] = depth_png;
         depth_record[QStringLiteral("raw_depth_path")] = raw_depth;
         depth_record[QStringLiteral("config_hash")] = QStringLiteral("config-a");
+        depth_record[QStringLiteral("algorithm_revision")] =
+            xjw::mvs::kMvsDepthAlgorithmRevision;
         depth_records.append(depth_record);
     }
 
@@ -2003,6 +2006,20 @@ TEST(ModelWorkflowPolicyTest, CompleteDepthBatchRunsTsdfDirectlyWithoutDenseClou
     EXPECT_EQ(legacy_decision.modelSettings.value(QStringLiteral("reconstruction_mode")).toString(),
               QStringLiteral("depth_tsdf"));
     EXPECT_FALSE(legacy_decision.modelSettings.contains(QStringLiteral("source_point_cloud_path")));
+
+    QJsonArray stale_depth_records = depth_records;
+    for (qsizetype index = 0; index < stale_depth_records.size(); ++index)
+    {
+        QJsonObject stale_record = stale_depth_records.at(index).toObject();
+        stale_record.remove(QStringLiteral("algorithm_revision"));
+        stale_depth_records[index] = stale_record;
+    }
+    metadata[QStringLiteral("depth_map_results")] = stale_depth_records;
+    const auto stale_depth_decision =
+        xjw::gui::project::decideModelGenerationWorkflow(settings, metadata);
+    EXPECT_EQ(stale_depth_decision.action,
+              xjw::gui::project::ModelWorkflowAction::GenerateDepthMapsThenMesh);
+    EXPECT_TRUE(stale_depth_decision.reason.contains(QStringLiteral("旧版算法")));
 }
 
 TEST(ModelWorkflowPolicyTest, CompleteDepthBatchDoesNotRequireValidDenseCloud)
@@ -2027,7 +2044,9 @@ TEST(ModelWorkflowPolicyTest, CompleteDepthBatchDoesNotRequireValidDenseCloud)
             {QStringLiteral("ref_image"), QStringLiteral("image_%1.jpg").arg(index)},
             {QStringLiteral("depth_png"), depth_png},
             {QStringLiteral("raw_depth_path"), raw_depth},
-            {QStringLiteral("config_hash"), QStringLiteral("config-a")}
+            {QStringLiteral("config_hash"), QStringLiteral("config-a")},
+            {QStringLiteral("algorithm_revision"),
+             xjw::mvs::kMvsDepthAlgorithmRevision}
         });
     }
 
@@ -2084,7 +2103,9 @@ TEST(ModelWorkflowPolicyTest, CompleteDepthBatchIgnoresTruncatedDenseCloud)
             {QStringLiteral("ref_image"), QStringLiteral("image_%1.jpg").arg(index)},
             {QStringLiteral("depth_png"), depth_png},
             {QStringLiteral("raw_depth_path"), raw_depth},
-            {QStringLiteral("config_hash"), QStringLiteral("config-a")}
+            {QStringLiteral("config_hash"), QStringLiteral("config-a")},
+            {QStringLiteral("algorithm_revision"),
+             xjw::mvs::kMvsDepthAlgorithmRevision}
         });
     }
 
@@ -2328,6 +2349,8 @@ TEST(ModelWorkflowPolicyTest, DepthMapsWithStoredFramesRunTsdfDirectly)
     frame_0[QStringLiteral("raw_depth_path")] = raw_0;
     frame_0[QStringLiteral("raw_confidence_path")] = confidence_0;
     frame_0[QStringLiteral("config_hash")] = QStringLiteral("config-a");
+    frame_0[QStringLiteral("algorithm_revision")] =
+        xjw::mvs::kMvsDepthAlgorithmRevision;
     frame_0[QStringLiteral("grid_width")] = 1;
     frame_0[QStringLiteral("grid_height")] = 1;
 
@@ -15063,7 +15086,7 @@ TEST(MatchViewerSidecarOrderTest, ReordersCachedPointsWhenDisplayOrderIsReversed
     EXPECT_TRUE(source.contains(QStringLiteral("reversed ? p1 : p0")));
 }
 
-TEST(MatchViewerValidityTest, UsesFinalSparseTrackValidity)
+TEST(MatchViewerValidityTest, UsesTiePointTrackValidityBeforeSparsePointFallback)
 {
     const QString analyzerHeader =
         readProjectSourceFile(QStringLiteral("src/gui/widgets/MatchValidityAnalyzer.h"));
@@ -15082,7 +15105,10 @@ TEST(MatchViewerValidityTest, UsesFinalSparseTrackValidity)
 
     EXPECT_TRUE(analyzerHeader.contains(QStringLiteral("MatchValidityResult")));
     EXPECT_TRUE(analyzerSource.contains(QStringLiteral("matched_indices0")));
+    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("latest_tie_points.json")));
+    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("tiePointSidecarPaths")));
     EXPECT_TRUE(analyzerSource.contains(QStringLiteral("sfm_sparse_points.json")));
+    EXPECT_TRUE(analyzerSource.contains(QStringLiteral("QStringLiteral(\"tracks\")")));
     EXPECT_TRUE(analyzerSource.contains(QStringLiteral("observations")));
     EXPECT_TRUE(dualSource.contains(QStringLiteral("analyzeMatchTrackValidity(matchFile, imgA, imgB)")));
     EXPECT_TRUE(dualSource.contains(QStringLiteral("emit matchValidityLoaded")));
@@ -15152,6 +15178,64 @@ TEST(MatchViewerValidityTest, IgnoresSparsePointsWithDuplicateImageObservations)
     EXPECT_FALSE(result.inlierMask.at(1));
     EXPECT_EQ(result.validCount, 0);
     EXPECT_EQ(result.invalidCount, 2);
+}
+
+TEST(MatchViewerValidityTest, PrefersTiePointTracksWhoseFeatureIndicesMatchRawPairs)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+
+    const QString imageA = QDir(tempDir.path()).filePath(QStringLiteral("imageA.png"));
+    const QString imageB = QDir(tempDir.path()).filePath(QStringLiteral("imageB.png"));
+    const QString matchFile = QDir(tempDir.path()).filePath(QStringLiteral("imageA__imageB_lightglue.match"));
+    const QString tiePointSidecar = QDir(tempDir.path()).filePath(QStringLiteral("latest_tie_points.json"));
+    const QString sparseSidecar = QDir(tempDir.path()).filePath(QStringLiteral("sfm_sparse_points.json"));
+
+    QJsonObject matchSidecar;
+    matchSidecar.insert(QStringLiteral("image0_path"), imageA);
+    matchSidecar.insert(QStringLiteral("image0_name"), QStringLiteral("imageA"));
+    matchSidecar.insert(QStringLiteral("image1_path"), imageB);
+    matchSidecar.insert(QStringLiteral("image1_name"), QStringLiteral("imageB"));
+    matchSidecar.insert(QStringLiteral("matched_indices0"), QJsonArray{10, 11});
+    matchSidecar.insert(QStringLiteral("matched_indices1"), QJsonArray{20, 21});
+    QFile matchSidecarFile(matchFile + QStringLiteral(".json"));
+    ASSERT_TRUE(matchSidecarFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    matchSidecarFile.write(QJsonDocument(matchSidecar).toJson(QJsonDocument::Compact));
+    matchSidecarFile.close();
+
+    const QJsonArray validObservations{
+        QJsonObject{{QStringLiteral("image_path"), imageA}, {QStringLiteral("feature_idx"), 10}},
+        QJsonObject{{QStringLiteral("image_path"), imageB}, {QStringLiteral("feature_idx"), 20}}
+    };
+    QFile tiePointFile(tiePointSidecar);
+    ASSERT_TRUE(tiePointFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    tiePointFile.write(QJsonDocument(QJsonObject{{QStringLiteral("tracks"), QJsonArray{
+        QJsonObject{{QStringLiteral("observations"), validObservations}}
+    }}}).toJson(QJsonDocument::Compact));
+    tiePointFile.close();
+
+    QFile sparseFile(sparseSidecar);
+    ASSERT_TRUE(sparseFile.open(QIODevice::WriteOnly | QIODevice::Truncate));
+    sparseFile.write(QJsonDocument(QJsonObject{{QStringLiteral("points"), QJsonArray{
+        QJsonObject{{QStringLiteral("observations"), QJsonArray{
+            QJsonObject{{QStringLiteral("image_path"), imageA}, {QStringLiteral("feature_idx"), 99}},
+            QJsonObject{{QStringLiteral("image_path"), imageB}, {QStringLiteral("feature_idx"), 98}}
+        }}}
+    }}}).toJson(QJsonDocument::Compact));
+    sparseFile.close();
+
+    MatchValidityContext context;
+    context.tiePointSidecarPaths = QStringList{tiePointSidecar};
+    context.sparseSidecarPaths = QStringList{sparseSidecar};
+    const MatchValidityResult result = analyzeMatchTrackValidity(matchFile, imageA, imageB, context);
+
+    ASSERT_TRUE(result.hasTrackValidity);
+    EXPECT_EQ(result.sparseSidecarPath, tiePointSidecar);
+    EXPECT_EQ(result.validCount, 1);
+    EXPECT_EQ(result.invalidCount, 1);
+    ASSERT_EQ(result.inlierMask.size(), 2);
+    EXPECT_TRUE(result.inlierMask.at(0));
+    EXPECT_FALSE(result.inlierMask.at(1));
 }
 
 TEST(MatchPairSelectorOverlapCandidatesTest, ListsOverlapPairsEvenWhenNoMatchFileExists)
@@ -17634,6 +17718,48 @@ TEST(CameraModel3DDialogTest, ObjReaderPreservesPerFaceTextureSeams)
     EXPECT_EQ(cloud->faceTextureIndices()->getValue(1, 0), 3);
     EXPECT_NE(cloud->faceTextureIndices()->getValue(0, 0),
               cloud->faceTextureIndices()->getValue(1, 0));
+
+    const ObjRenderPreparation prepared = prepareObjRenderData(*cloud, true);
+    ASSERT_TRUE(prepared.isValid());
+    EXPECT_TRUE(prepared.hasTexture);
+    EXPECT_EQ(prepared.vertexCount, 6);
+    EXPECT_EQ(prepared.strideBytes, 11 * static_cast<int>(sizeof(float)));
+    const float *renderVertices = reinterpret_cast<const float *>(prepared.vertexData.constData());
+    EXPECT_FLOAT_EQ(renderVertices[9], 0.0f);
+    EXPECT_FLOAT_EQ(renderVertices[10], 0.0f);
+    EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 9], 0.25f);
+    EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 10], 0.25f);
+}
+
+TEST(CameraModel3DDialogTest, ObjReaderBenchmarkUsesConfiguredModel)
+{
+    const QString objPath = qEnvironmentVariable("PLASCAN_OBJ_BENCHMARK_PATH");
+    if (objPath.isEmpty())
+    {
+        GTEST_SKIP() << "PLASCAN_OBJ_BENCHMARK_PATH is not set";
+    }
+    ASSERT_TRUE(QFileInfo::exists(objPath));
+
+    QElapsedTimer timer;
+    timer.start();
+    auto cloud = plapoint::io::readObj<float>(objPath.toStdString());
+    const qint64 parseElapsedMs = timer.elapsed();
+
+    ASSERT_TRUE(cloud != nullptr);
+    ASSERT_GT(cloud->size(), 0u);
+    ASSERT_TRUE(cloud->hasFaces());
+    timer.restart();
+    const ObjRenderPreparation prepared = prepareObjRenderData(*cloud, true);
+    const qint64 prepareElapsedMs = timer.elapsed();
+    ASSERT_TRUE(prepared.isValid());
+    RecordProperty("obj_parse_elapsed_ms", parseElapsedMs);
+    RecordProperty("obj_prepare_elapsed_ms", prepareElapsedMs);
+    RecordProperty("obj_vertex_count", static_cast<qint64>(cloud->size()));
+    RecordProperty("obj_face_count", static_cast<qint64>(cloud->faces()->rows()));
+    std::cout << "OBJ benchmark: parse " << parseElapsedMs
+              << " ms, prepare " << prepareElapsedMs << " ms, "
+              << cloud->size() << " vertices, " << cloud->faces()->rows()
+              << " faces\n";
 }
 
 TEST(CameraModel3DDialogTest, ObjLoadingShowsProgressOverlay)

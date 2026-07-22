@@ -11,6 +11,7 @@
 #include <opencv2/imgproc.hpp>
 
 #include <QDir>
+#include <QColor>
 #include <QFileInfo>
 #include <QImage>
 #include <QPainter>
@@ -18,9 +19,11 @@
 #include <algorithm>
 #include <array>
 #include <cmath>
+#include <cstdint>
 #include <fstream>
 #include <limits>
 #include <memory>
+#include <unordered_map>
 #include <vector>
 
 namespace xjw::mesh
@@ -195,6 +198,87 @@ bool projectFace(const MeshColorView &view,
     return true;
 }
 
+bool faceProjectsInsideMask(const MeshColorView &view,
+                            const std::array<std::array<double, 2>, 3> &pixels,
+                            bool requireDepthEvidence,
+                            const std::array<std::array<double, 3>, 3> &vertices,
+                            float absoluteTolerance)
+{
+    if (view.supportMask.type() != CV_8UC1 ||
+        view.supportMask.size() != view.colorBgr.size())
+    {
+        return false;
+    }
+
+    for (int corner = 0; corner < 3; ++corner)
+    {
+        const int column = static_cast<int>(std::lround(pixels[corner][0]));
+        const int row = static_cast<int>(std::lround(pixels[corner][1]));
+        if (row < 0 || column < 0 || row >= view.supportMask.rows ||
+            column >= view.supportMask.cols ||
+            view.supportMask.at<std::uint8_t>(row, column) == 0)
+        {
+            return false;
+        }
+        if (!requireDepthEvidence)
+        {
+            continue;
+        }
+        if (view.depthValidMask.type() != CV_8UC1 ||
+            view.depth.type() != CV_32FC1 ||
+            view.confidence.type() != CV_32FC1 ||
+            view.depthValidMask.size() != view.supportMask.size() ||
+            view.depth.size() != view.supportMask.size() ||
+            view.confidence.size() != view.supportMask.size() ||
+            view.depthValidMask.at<std::uint8_t>(row, column) == 0)
+        {
+            return false;
+        }
+
+        double projected_pixel[2]{};
+        double camera_depth = 0.0;
+        if (!view.camera.projectWorldPointWithDepth(
+                vertices[corner].data(), projected_pixel, camera_depth))
+        {
+            return false;
+        }
+        const float observed_depth = view.depth.at<float>(row, column);
+        const float confidence = view.confidence.at<float>(row, column);
+        const float tolerance = std::max(
+            absoluteTolerance,
+            0.012f * std::fabs(static_cast<float>(camera_depth)));
+        if (!std::isfinite(observed_depth) || observed_depth <= 0.0f ||
+            !std::isfinite(confidence) || confidence < 0.25f ||
+            std::fabs(observed_depth - static_cast<float>(camera_depth)) > tolerance)
+        {
+            return false;
+        }
+    }
+    return true;
+}
+
+QColor fallbackTextureColor(const PlaPointCloud &mesh)
+{
+    if (!mesh.hasColors() || mesh.size() == 0)
+    {
+        return QColor(145, 145, 150);
+    }
+    std::uint64_t red = 0;
+    std::uint64_t green = 0;
+    std::uint64_t blue = 0;
+    for (std::size_t index = 0; index < mesh.size(); ++index)
+    {
+        const auto row = static_cast<plamatrix::Index>(index);
+        red += mesh.colors()->getValue(row, 0);
+        green += mesh.colors()->getValue(row, 1);
+        blue += mesh.colors()->getValue(row, 2);
+    }
+    const std::uint64_t count = mesh.size();
+    return QColor(static_cast<int>(red / count),
+                  static_cast<int>(green / count),
+                  static_cast<int>(blue / count));
+}
+
 float relaxedCameraScore(const MeshColorView &view,
                          const std::array<double, 3> &centroid,
                          const std::array<float, 3> &normal)
@@ -301,13 +385,26 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
         tiles[static_cast<std::size_t>(view_index)] = {
             scale, static_cast<float>(offset_x), static_cast<float>(offset_y)};
     }
+    const int fallback_patch_size = std::max(2, padding);
+    painter.fillRect(0,
+                     0,
+                     fallback_patch_size,
+                     fallback_patch_size,
+                     fallbackTextureColor(*mesh));
     painter.end();
+    const float fallback_u = (fallback_patch_size * 0.5f) / (texture_size - 1);
+    const float fallback_v = 1.0f -
+        (fallback_patch_size * 0.5f) / (texture_size - 1);
 
     auto *faces = mesh->faces();
     const int face_count = static_cast<int>(faces->rows());
-    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture_coordinates(
-        static_cast<plamatrix::Index>(face_count) * 3, 2);
     plamatrix::DenseMatrix<int, plamatrix::Device::CPU> texture_indices(face_count, 3);
+    std::vector<std::array<float, 2>> texture_coordinate_values;
+    texture_coordinate_values.reserve(std::min<std::size_t>(
+        static_cast<std::size_t>(face_count) * 3,
+        mesh->size() * static_cast<std::size_t>(std::max(2, std::min(view_count, 6)))));
+    std::unordered_map<std::uint64_t, int> texture_index_by_vertex_view;
+    texture_index_by_vertex_view.reserve(texture_coordinate_values.capacity());
     const float absolute_tolerance = std::max(meshDiagonal(*mesh) / 64.0f, 1.0e-7f);
     int mapped_faces = 0;
     int fallback_mapped_faces = 0;
@@ -349,6 +446,11 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
             {
                 continue;
             }
+            if (!faceProjectsInsideMask(
+                    views[view_index], pixels, true, vertices, absolute_tolerance))
+            {
+                continue;
+            }
             best_score = score;
             best_view = view_index;
             best_pixels = pixels;
@@ -369,6 +471,11 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                 {
                     continue;
                 }
+                if (!faceProjectsInsideMask(
+                        views[view_index], pixels, false, vertices, absolute_tolerance))
+                {
+                    continue;
+                }
                 best_score = score;
                 best_view = view_index;
                 best_pixels = pixels;
@@ -378,10 +485,8 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
 
         for (int corner = 0; corner < 3; ++corner)
         {
-            const int texture_index = face_index * 3 + corner;
-            texture_indices.setValue(face_index, corner, texture_index);
             float u = 0.0f;
-            float v = 0.0f;
+            float v = fallback_v;
             if (best_view >= 0)
             {
                 const AtlasTile &tile = tiles[static_cast<std::size_t>(best_view)];
@@ -391,8 +496,28 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                     (tile.offsetY + static_cast<float>(best_pixels[corner][1]) * tile.scale) /
                         (texture_size - 1);
             }
-            texture_coordinates.setValue(texture_index, 0, std::clamp(u, 0.0f, 1.0f));
-            texture_coordinates.setValue(texture_index, 1, std::clamp(v, 0.0f, 1.0f));
+            else
+            {
+                u = fallback_u;
+            }
+            const std::uint64_t texture_key =
+                (static_cast<std::uint64_t>(static_cast<std::uint32_t>(best_view + 1)) << 32U)
+                | static_cast<std::uint32_t>(indices[corner]);
+            const auto existing = texture_index_by_vertex_view.find(texture_key);
+            int texture_index = 0;
+            if (existing != texture_index_by_vertex_view.end())
+            {
+                texture_index = existing->second;
+            }
+            else
+            {
+                texture_index = static_cast<int>(texture_coordinate_values.size());
+                texture_coordinate_values.push_back({
+                    std::clamp(u, 0.0f, 1.0f),
+                    std::clamp(v, 0.0f, 1.0f)});
+                texture_index_by_vertex_view.emplace(texture_key, texture_index);
+            }
+            texture_indices.setValue(face_index, corner, texture_index);
         }
         if (best_view >= 0)
         {
@@ -403,6 +528,15 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
         {
             ++unmapped_faces;
         }
+    }
+    plamatrix::DenseMatrix<float, plamatrix::Device::CPU> texture_coordinates(
+        static_cast<plamatrix::Index>(texture_coordinate_values.size()), 2);
+    for (std::size_t index = 0; index < texture_coordinate_values.size(); ++index)
+    {
+        texture_coordinates.setValue(static_cast<plamatrix::Index>(index), 0,
+                                     texture_coordinate_values[index][0]);
+        texture_coordinates.setValue(static_cast<plamatrix::Index>(index), 1,
+                                     texture_coordinate_values[index][1]);
     }
     mesh->setTextureCoords(std::move(texture_coordinates));
     mesh->setFaceTextureIndices(std::move(texture_indices));
@@ -431,9 +565,9 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
         result->modelMtlPath = xjw::common::io::toUtf8Path(mtl_path);
         result->texturePngPath = xjw::common::io::toUtf8Path(texture_path);
         result->textureSize = texture_size;
-        result->textureAlgorithm = "camera_projected_atlas_v1";
-        result->uvMethod = "per_face_camera_projection";
-        result->blendMethod = "best_view_depth_angle_score";
+        result->textureAlgorithm = "camera_projected_atlas_v2";
+        result->uvMethod = "indexed_vertex_view_projection";
+        result->blendMethod = "best_view_face_visibility_score";
         result->sourceViewCount = view_count;
         result->mappedFaceCount = mapped_faces;
         result->fallbackMappedFaceCount = fallback_mapped_faces;

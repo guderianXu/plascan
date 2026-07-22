@@ -11,6 +11,10 @@ namespace xjw::mvs
 
 struct DepthGenConfig;
 
+// Increment whenever a production depth algorithm change makes persisted
+// depth maps unsuitable for transparent reuse by a newer build.
+inline constexpr int kMvsDepthAlgorithmRevision = 4;
+
 struct MvsDepthFrameRecord
 {
     int refIndex = -1;
@@ -58,6 +62,7 @@ struct MvsDepthFrameRecord
     qint64 elapsedMs = 0;
     QString error;
     QString configHash;
+    int algorithmRevision = 0;
 
     QJsonObject toJson() const;
     static MvsDepthFrameRecord fromJson(const QJsonObject &object);

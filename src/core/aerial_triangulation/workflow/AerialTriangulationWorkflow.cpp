@@ -232,8 +232,9 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     pipeline.useProjectCameraIntrinsics = true;
     pipeline.useProjectCameraPoses = !options.resetAlignment;
     pipeline.adaptiveCameraModelFitting = options.adaptiveCameraModelFitting;
-    pipeline.enforceSequencePoseConsistency = options.referencePreselection &&
-        normalizedToken(options.referenceMode, QStringLiteral("source_code")) == QStringLiteral("sequence");
+    // “照片序列”是像对候选和初始化的弱先验，不代表相机中心必须满足等距轨迹。
+    // 对环拍、变焦或物体旋转序列施加硬距离门限，会把几何验证通过的 PnP 位姿误判为异常。
+    pipeline.enforceSequencePoseConsistency = false;
     pipeline.sequenceLoopClosure = options.referencePreselection &&
         normalizedToken(options.referenceMode, QStringLiteral("source_code")) == QStringLiteral("sequence");
     pipeline.useInitialPairHint = options.useInitialPairHint;
@@ -284,6 +285,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     {
         tieOptions.pairPolicy.mode = matchphotos::PairSelectionMode::Sequence;
         tieOptions.pairPolicy.sequenceWindow = sequenceWindowForQuality(options.quality);
+        tieOptions.pairPolicy.closeSequenceLoop = true;
         tieOptions.useReferencePreselection = false;
         pairPlanningMode = QStringLiteral("sequence");
     }

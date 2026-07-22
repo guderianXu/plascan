@@ -1,4 +1,5 @@
 #include "reconstruction/SfmAttemptRunner.h"
+#include "reconstruction/CameraIntrinsicPriorSanitizer.h"
 #include "reconstruction/MarkerPriorLoader.h"
 
 #include "io/PathIO.h"
@@ -242,6 +243,16 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             break;
         }
     }
+
+    // 重置当前对齐时只应复用可信内参。工程文件可能保存过上次失败 SfM 的自标定结果，
+    // 少数严重错误焦距会把单张相机中心吸附到模型附近，且不会明显拉高全局 RMS。
+    CameraIntrinsicPriorSanitizationResult intrinsicSanitization;
+    if (!hasCompleteCameraFiles && input.useProjectCameraIntrinsics &&
+        !input.useProjectCameraPoses)
+    {
+        intrinsicSanitization = sanitizeProjectCameraIntrinsicPriors(
+            input.images, &projectCameraByPath);
+    }
     sfmOptions.useKnownCameraPoses = hasCompleteCameraFiles || hasCompleteProjectPoseCameras;
     if (sfmOptions.useKnownCameraPoses)
     {
@@ -378,6 +389,16 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     diagnostics.insert(QStringLiteral("control_network_applied"), sfmResult.controlNetworkApplied);
     diagnostics.insert(QStringLiteral("control_point_constraints"),
                        sfmResult.controlPointConstraintCount);
+    diagnostics.insert(QStringLiteral("project_intrinsic_prior_inspected"),
+                       intrinsicSanitization.inspectedCameraCount);
+    diagnostics.insert(QStringLiteral("project_intrinsic_prior_dominant_group"),
+                       intrinsicSanitization.dominantGroupCount);
+    diagnostics.insert(QStringLiteral("project_intrinsic_prior_median_focal_px"),
+                       intrinsicSanitization.dominantMedianFocalPixels);
+    diagnostics.insert(QStringLiteral("project_intrinsic_prior_normalized"),
+                       intrinsicSanitization.normalizedCameraCount);
+    diagnostics.insert(QStringLiteral("project_intrinsic_prior_normalized_images"),
+                       QJsonArray::fromStringList(intrinsicSanitization.normalizedImagePaths));
     execution.result.sfmDiagnostics = diagnostics;
 
     if (!sfmResult.success)

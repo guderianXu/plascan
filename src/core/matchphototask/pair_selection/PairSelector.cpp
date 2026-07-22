@@ -114,18 +114,32 @@ void addExhaustiveCandidates(PairSelectionResult *result, const QStringList &ima
     }
 }
 
-void addSequenceCandidates(PairSelectionResult *result, const QStringList &images, int window)
+void addSequenceCandidates(PairSelectionResult *result,
+                           const QStringList &images,
+                           int window,
+                           bool closeSequenceLoop)
 {
-    const int safeWindow = std::max(1, window);
     const int imageCount = static_cast<int>(images.size());
+    if (imageCount < 2)
+    {
+        return;
+    }
+
+    const int safeWindow = std::min(std::max(1, window), imageCount - 1);
     for (int i = 0; i < imageCount; ++i)
     {
-        const int last = std::min(imageCount - 1, i + safeWindow);
-        for (int j = i + 1; j <= last; ++j)
+        for (int j = i + 1; j < imageCount; ++j)
         {
-            const int distance = j - i;
+            const int linearDistance = j - i;
+            const int distance = closeSequenceLoop
+                ? std::min(linearDistance, imageCount - linearDistance)
+                : linearDistance;
+            if (distance > safeWindow)
+            {
+                continue;
+            }
             // 对有序航拍/巡视器序列，相邻影像更可能重叠；
-            // 因此距离越近的邻居给略高排序分。
+            // 环拍数据按循环距离补充首尾跨界边，距离越近的邻居给略高排序分。
             const double sequenceScore =
                 static_cast<double>(safeWindow - distance + 1) / static_cast<double>(safeWindow);
             PairCandidate *candidate =
@@ -442,7 +456,10 @@ PairSelectionResult PairSelector::select(const PairSelectionInput &input,
     {
         // 序列窗口 fallback 有意放在最后：
         // 当 overlap 或 retrieval 已提供更强先验时，应优先使用那些结果。
-        addSequenceCandidates(&result, input.images, policy.sequenceWindow);
+        addSequenceCandidates(&result,
+                              input.images,
+                              policy.sequenceWindow,
+                              policy.closeSequenceLoop);
         result.restrictPairs = true;
     }
 

@@ -5805,6 +5805,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         artifact[QStringLiteral("grid_height")] = result.depthMap->rows;
         artifact[QStringLiteral("result_type")] = QStringLiteral("mvs_depth");
         artifact[QStringLiteral("config_hash")] = _depthConfigHash;
+        artifact[QStringLiteral("algorithm_revision")] = kMvsDepthAlgorithmRevision;
         artifact[QStringLiteral("manifest_path")] = _workspaceManifestPath;
 
         MvsDepthFrameRecord record;
@@ -5868,6 +5869,7 @@ bool DepthMapGenerator::saveDepthFrameArtifacts(int frameIndex,
         record.gridHeight = result.depthMap->rows;
         record.elapsedMs = static_cast<qint64>(std::llround(result.elapsedMs));
         record.configHash = _depthConfigHash;
+        record.algorithmRevision = kMvsDepthAlgorithmRevision;
 
         {
             std::lock_guard<std::mutex> lock(_workspaceManifestMutex);

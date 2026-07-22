@@ -19,6 +19,8 @@ add_aerial_triangulation_test(test_aerial_triangulation_workflow
                               test_aerial_triangulation_workflow.cpp)
 add_aerial_triangulation_test(test_tie_point_preparation test_tie_point_preparation.cpp)
 add_aerial_triangulation_test(test_sfm_attempt_runner test_sfm_attempt_runner.cpp)
+add_aerial_triangulation_test(test_camera_intrinsic_prior_sanitizer
+                              test_camera_intrinsic_prior_sanitizer.cpp)
 add_aerial_triangulation_test(test_adaptive_focal_search test_adaptive_focal_search.cpp)
 add_aerial_triangulation_test(test_aerial_triangulation_pipeline
                               test_aerial_triangulation_pipeline.cpp)

@@ -398,6 +398,8 @@ private:
     RhiBufferSet _meshBuffer;
     int _meshVertCount = 0;
     bool _meshHasFaces = true;  ///< false 时用点图元绘制含法向量点云
+    bool _preparedObjMeshBuffer = false;
+    bool _preparedObjMeshHasTexture = false;
 
     // 无面片模型（作为点云绘制）GPU 资源
     RhiBufferSet _modelPointBuffer;

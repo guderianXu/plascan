@@ -15,6 +15,8 @@
 - `preparation/MatchResultCatalog.*`：编目 `.match` 及 sidecar，选择与当前影像和前端签名兼容的结果。
 - `preparation/ReconstructionPrerequisiteReport.*`：生成特征、匹配和图连通性的结构化前置检查结果。
 - `reconstruction/SfmAttemptRunner.*`：把连接点 JSON 转换为 `IncrementalSfm` 输入，配置 BA 并执行一次 SfM 尝试。
+- `reconstruction/CameraIntrinsicPriorSanitizer.*`：无外部相机文件且重置对齐时，修正项目中明显偏离主焦距群的旧 SfM 内参，
+  防止错误焦距造成单相机中心坍缩。
 - `reconstruction/MarkerPriorLoader.*`：从项目标记点 sidecar 装载控制点、检查点、比例尺和像点投影先验。
 - `reconstruction/SfmPairPlanner.h`、`SfmMatchDiagnostics.h`：候选对规划和匹配图诊断类型。
 - `search/AdaptiveFocalSearch.*`、`SfmSearchPolicy.*`：无完整相机先验时的焦距候选排序和资源预算。
@@ -43,7 +45,8 @@
 
 ## 相机、焦距与先验
 
-- 完整 `.tsai` 相机列表走已知相机路径；项目元数据相机可作为初值，重置对齐时不会复用。
+- 完整 `.tsai` 相机列表走已知相机路径；项目元数据相机可作为初值。重置对齐时只复用内参而不复用旧外参；
+  若无外部相机文件且至少 70% 相机形成稳定焦距群，会清洗偏离该群超过 2 倍的历史 SfM 焦距离群值。
 - 无完整相机先验时，焦距尺度表示 `焦距像素 / 影像最长边像素`。Pipeline 始终评估
   `0.55、0.70、0.85、1.2、1.6、2.0、2.4、2.8、3.2、4.0、5.2、6.4` 的广域候选，即使低焦距基准已注册全部影像，
   也不会跳过窄视场检查。候选按注册覆盖、多视网络强度、点数和重投影质量排序，最佳非默认尺度会以正式配置重放。

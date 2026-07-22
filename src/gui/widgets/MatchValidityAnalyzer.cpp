@@ -275,15 +275,35 @@ QStringList candidateSparseSidecarsInAssetsDir(const QString &assetsDir)
     return candidates;
 }
 
+QStringList candidateTiePointSidecarsInAssetsDir(const QString &assetsDir)
+{
+    QStringList candidates;
+    QDirIterator it(assetsDir,
+                    QStringList{QStringLiteral("latest_tie_points.json")},
+                    QDir::Files,
+                    QDirIterator::Subdirectories);
+    while (it.hasNext())
+    {
+        candidates.append(QDir::cleanPath(it.next()));
+    }
+
+    std::sort(candidates.begin(), candidates.end(), [](const QString &a, const QString &b)
+    {
+        return QFileInfo(a).lastModified() > QFileInfo(b).lastModified();
+    });
+    return candidates;
+}
+
 QString matchPairKey(int indexA, int indexB)
 {
     return QString::number(indexA) + QLatin1Char('|') + QString::number(indexB);
 }
 
-QSet<QString> validPairsFromSparseSidecar(const QString &sidecarPath,
-                                          const QString &displayImageA,
-                                          const QString &displayImageB,
-                                          bool *hasObservationSchema)
+QSet<QString> validPairsFromTrackSidecar(const QString &sidecarPath,
+                                         const QString &trackArrayName,
+                                         const QString &displayImageA,
+                                         const QString &displayImageB,
+                                         bool *hasObservationSchema)
 {
     QSet<QString> validPairs;
     if (hasObservationSchema)
@@ -292,11 +312,11 @@ QSet<QString> validPairsFromSparseSidecar(const QString &sidecarPath,
     }
 
     const QJsonObject root = readJsonObject(sidecarPath);
-    const QJsonArray points = root.value(QStringLiteral("points")).toArray();
-    for (const QJsonValue &pointValue : points)
+    const QJsonArray tracks = root.value(trackArrayName).toArray();
+    for (const QJsonValue &trackValue : tracks)
     {
         const QJsonArray observations =
-            pointValue.toObject().value(QStringLiteral("observations")).toArray();
+            trackValue.toObject().value(QStringLiteral("observations")).toArray();
         if (observations.isEmpty())
         {
             continue;
@@ -329,9 +349,8 @@ QSet<QString> validPairsFromSparseSidecar(const QString &sidecarPath,
             }
         }
 
-        // 最终 SfM 点在同一张影像里理论上只能有一个 feature 观测。
-        // 若出现多个不同 feature，说明该点或导出记录存在歧义，不能做交叉组合，
-        // 否则会把实际不存在的匹配对误标成“有效”。
+        // 单条轨迹在同一张影像里理论上只能有一个 feature 观测。若出现多个不同
+        // feature，说明记录存在歧义，不能做交叉组合，否则会误标不存在的匹配对。
         if (indicesA.size() == 1 && indicesB.size() == 1)
         {
             validPairs.insert(matchPairKey(*indicesA.constBegin(), *indicesB.constBegin()));
@@ -352,6 +371,7 @@ MatchValidityContext buildMatchValidityContextForMatchDirectory(const QString &m
     }
 
     const QString assetsDir = QDir(matchDirectory).absoluteFilePath(QStringLiteral(".."));
+    context.tiePointSidecarPaths = candidateTiePointSidecarsInAssetsDir(assetsDir);
     context.sparseSidecarPaths = candidateSparseSidecarsInAssetsDir(assetsDir);
     return context;
 }
@@ -376,7 +396,7 @@ MatchValidityResult analyzeMatchTrackValidity(const QString &matchFile,
         return result;
     }
 
-    if (context.sparseSidecarPaths.isEmpty())
+    if (context.tiePointSidecarPaths.isEmpty() && context.sparseSidecarPaths.isEmpty())
     {
         return result;
     }
@@ -387,32 +407,48 @@ MatchValidityResult analyzeMatchTrackValidity(const QString &matchFile,
         return result;
     }
 
-    for (const QString &sidecarPath : context.sparseSidecarPaths)
+    // 连接点轨迹在特征匹配完成后直接生成，其 feature_idx 与 .match.json 完全对应。
+    // 稀疏点导出可能经历重编号，不能优先用于原始匹配的有效性统计。
+    const auto classifyFromSidecars = [&](const QStringList &sidecarPaths,
+                                          const QString &trackArrayName) -> bool
     {
-        bool hasObservationSchema = false;
-        const QSet<QString> validPairs = validPairsFromSparseSidecar(
-            sidecarPath, displayImageA, displayImageB, &hasObservationSchema);
-        if (!hasObservationSchema)
+        for (const QString &sidecarPath : sidecarPaths)
         {
-            continue;
-        }
+            bool hasObservationSchema = false;
+            const QSet<QString> validPairs = validPairsFromTrackSidecar(
+                sidecarPath, trackArrayName, displayImageA, displayImageB, &hasObservationSchema);
+            if (!hasObservationSchema)
+            {
+                continue;
+            }
 
-        result.hasTrackValidity = true;
-        result.sparseSidecarPath = sidecarPath;
-        result.inlierMask.reserve(matchIndices.pairs.size());
-        for (const MatchIndexPair &pair : matchIndices.pairs)
-        {
-            const bool valid = validPairs.contains(matchPairKey(pair.indexA, pair.indexB));
-            result.inlierMask.append(valid);
-            if (valid)
+            result.hasTrackValidity = true;
+            result.sparseSidecarPath = sidecarPath;
+            result.inlierMask.reserve(matchIndices.pairs.size());
+            for (const MatchIndexPair &pair : matchIndices.pairs)
             {
-                ++result.validCount;
+                const bool valid = validPairs.contains(matchPairKey(pair.indexA, pair.indexB));
+                result.inlierMask.append(valid);
+                if (valid)
+                {
+                    ++result.validCount;
+                }
+                else
+                {
+                    ++result.invalidCount;
+                }
             }
-            else
-            {
-                ++result.invalidCount;
-            }
+            return true;
         }
+        return false;
+    };
+
+    if (classifyFromSidecars(context.tiePointSidecarPaths, QStringLiteral("tracks")))
+    {
+        return result;
+    }
+    if (classifyFromSidecars(context.sparseSidecarPaths, QStringLiteral("points")))
+    {
         return result;
     }
 

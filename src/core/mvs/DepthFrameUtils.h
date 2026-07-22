@@ -4,6 +4,7 @@
 
 #include "Camera.h"
 #include "DepthMapFusion.h"
+#include "MvsWorkspaceManifest.h"
 
 #include <QJsonObject>
 #include <QString>
@@ -29,6 +30,7 @@ struct StoredDepthFrameRecord
     QStringList sourceImages;
     QString configHash;
     QString projectInputSignature;
+    int algorithmRevision = 0;
     int gridWidth = 0;
     int gridHeight = 0;
 };

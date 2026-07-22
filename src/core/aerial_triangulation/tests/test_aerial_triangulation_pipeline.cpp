@@ -223,6 +223,59 @@ TEST(AerialTriangulationPipelineTest, InitializesUnknownFocalEvenWhenAdaptiveMod
                      5.2);
 }
 
+TEST(AerialTriangulationPipelineTest, RejectsAdaptiveRefinementWhenItLosesRegisteredImages)
+{
+    QVector<double> attemptedScales;
+    QVector<bool> attemptedAdaptiveFlags;
+    const auto attemptRunner = [&attemptedScales, &attemptedAdaptiveFlags](
+                                   const xjw::aerial_triangulation::PreparedAerialTriangulationInput &input)
+    {
+        attemptedScales.append(input.estimatedFocalScale);
+        attemptedAdaptiveFlags.append(input.adaptiveCameraModelFitting);
+
+        xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
+        execution.result.success = true;
+        execution.result.numRegisteredImages = 9;
+        execution.result.numPoints3D = 700;
+        execution.result.meanReprojError = 0.6;
+        if (std::abs(input.estimatedFocalScale - 0.85) < 1.0e-9)
+        {
+            execution.result.numRegisteredImages = input.adaptiveCameraModelFitting ? 9 : 16;
+            execution.result.numPoints3D = input.adaptiveCameraModelFitting ? 900 : 1800;
+            execution.result.meanReprojError = input.adaptiveCameraModelFitting ? 0.3 : 0.45;
+        }
+        return execution;
+    };
+    const auto resultWriter = [](
+                                  const xjw::aerial_triangulation::PreparedAerialTriangulationInput &,
+                                  xjw::aerial_triangulation::SfmAttemptExecutionResult *,
+                                  QString *)
+    {
+        return true;
+    };
+
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    for (int index = 0; index < 16; ++index)
+    {
+        input.images.append(QStringLiteral("image_%1.png").arg(index));
+    }
+    input.adaptiveCameraModelFitting = true;
+
+    const xjw::aerial_triangulation::AerialTriangulationReconstructionResult result =
+        xjw::aerial_triangulation::AerialTriangulationPipeline(attemptRunner, resultWriter).run(input);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_EQ(result.numRegisteredImages, 16);
+    EXPECT_TRUE(std::all_of(attemptedAdaptiveFlags.cbegin(),
+                            attemptedAdaptiveFlags.cend() - 1,
+                            [](bool enabled) { return !enabled; }));
+    ASSERT_FALSE(attemptedAdaptiveFlags.isEmpty());
+    EXPECT_TRUE(attemptedAdaptiveFlags.back());
+    EXPECT_DOUBLE_EQ(attemptedScales.back(), 0.85);
+    EXPECT_FALSE(result.sfmDiagnostics.value(
+        QStringLiteral("adaptive_camera_model_refinement_accepted")).toBool());
+}
+
 TEST(AerialTriangulationPipelineTest, DefaultEstimatedFocalScaleUsesLongestImageDimensionRatio)
 {
     const xjw::aerial_triangulation::PreparedAerialTriangulationInput input;

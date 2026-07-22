@@ -31,6 +31,8 @@ struct PairSelectionPolicy
     // 小项目可以承受全量匹配；大项目会回退到重叠候选、序列窗口等先验。
     int exhaustiveMaxImages = 20;
     int sequenceWindow = 4;
+    /// 序列是否首尾闭环。转台/环拍数据可显式启用，以补充首尾跨界像对。
+    bool closeSequenceLoop = false;
 
     // 0 表示不限制。后续可用于快速预览，或先匹配高优先级 pair 的分阶段流程。
     int maxPairs = 0;

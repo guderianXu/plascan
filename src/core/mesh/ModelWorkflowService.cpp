@@ -231,11 +231,30 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.minimumGeometryVerifiedObservationWeight)),
         0.05f,
         1.0f);
+    const int automatic_minimum_geometry_support = options.resolution >= 384 ? 3 : 4;
     options.minimumGeometrySupportCount = qBound(
         2,
         settings.value(QStringLiteral("tsdfMinimumGeometrySupportCount"))
-            .toInt(options.minimumGeometrySupportCount),
+            .toInt(automatic_minimum_geometry_support),
         16);
+    options.enableGeometrySingleViewNeighborhoodGuard = settings.value(
+        QStringLiteral("tsdfGeometrySingleViewNeighborhoodGuard")).toBool(false);
+    options.minimumGeometrySingleViewNeighborCount = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfMinimumGeometrySingleViewNeighborCount"))
+            .toInt(options.minimumGeometrySingleViewNeighborCount),
+        26);
+    options.geometrySingleViewGrowthPasses = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfGeometrySingleViewGrowthPasses"))
+            .toInt(options.geometrySingleViewGrowthPasses),
+        6);
+    options.maximumGeometrySingleViewNeighborTsdfDelta = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMaximumGeometrySingleViewNeighborTsdfDelta"))
+                               .toDouble(options.maximumGeometrySingleViewNeighborTsdfDelta)),
+        0.01f,
+        2.0f);
     options.enableDiscontinuityAwareSampling = settings.value(
         QStringLiteral("tsdfDiscontinuityAwareSampling")).toBool(
             options.resolution >= 384);
@@ -253,7 +272,21 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         0.10f);
     options.allowInvalidNearestPixelRecovery = settings.value(
         QStringLiteral("tsdfAllowInvalidNearestPixelRecovery")).toBool(
-            options.allowInvalidNearestPixelRecovery);
+            options.resolution < 384);
+    options.maximumInvalidNearestPixelRecoveryInverseDepthSpread = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMaximumInvalidNearestPixelRecoveryInverseDepthSpread"))
+                               .toDouble(options.maximumInvalidNearestPixelRecoveryInverseDepthSpread)),
+        0.0f,
+        0.10f);
+    options.enableCrossViewConsensusDepth = settings.value(
+        QStringLiteral("tsdfCrossViewConsensusDepth")).toBool(false);
+    options.maximumCrossViewConsensusInverseDepthSpread = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMaximumCrossViewConsensusInverseDepthSpread"))
+                               .toDouble(options.maximumCrossViewConsensusInverseDepthSpread)),
+        0.001f,
+        0.10f);
     options.enableSurfacePatchSupport = settings.value(
         QStringLiteral("tsdfSurfacePatchSupport")).toBool(false);
     options.minimumSurfacePatchSourceCount = qBound(
@@ -340,9 +373,11 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.maximumHoleDiameterVoxels)),
         0.0f,
         64.0f);
+    const int automatic_boundary_smoothing_iterations = options.resolution >= 384 ? 2 : 1;
     options.boundarySmoothingIterations = qBound(
         0,
-        settings.value(QStringLiteral("tsdfBoundarySmoothingIterations")).toInt(1),
+        settings.value(QStringLiteral("tsdfBoundarySmoothingIterations"))
+            .toInt(automatic_boundary_smoothing_iterations),
         4);
     options.boundarySmoothingLambda = std::clamp(
         static_cast<float>(settings.value(QStringLiteral("tsdfBoundarySmoothingLambda"))
@@ -359,9 +394,11 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
     options.trimWeakBoundaryTips = settings.value(
         QStringLiteral("tsdfTrimWeakBoundaryTips")).toBool(
             automatic_trim_weak_boundary_tips);
+    const int automatic_weak_boundary_trim_passes = options.resolution >= 384 ? 2 : 1;
     options.weakBoundaryTipTrimPasses = qBound(
         1,
-        settings.value(QStringLiteral("tsdfWeakBoundaryTipTrimPasses")).toInt(1),
+        settings.value(QStringLiteral("tsdfWeakBoundaryTipTrimPasses"))
+            .toInt(automatic_weak_boundary_trim_passes),
         4);
     return options;
 }

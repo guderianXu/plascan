@@ -178,6 +178,8 @@ StoredDepthFramesResult collectStoredDepthFramesInDirectory(const QJsonArray &de
             }
         }
         frame.configHash = record.value(QStringLiteral("config_hash")).toString();
+        frame.algorithmRevision = record.value(
+            QStringLiteral("algorithm_revision")).toInt(0);
         frame.projectInputSignature =
             record.value(QStringLiteral("project_input_signature")).toString();
         frame.gridWidth = record.value(QStringLiteral("grid_width")).toInt();

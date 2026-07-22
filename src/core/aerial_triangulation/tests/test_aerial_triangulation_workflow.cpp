@@ -89,8 +89,9 @@ TEST(AerialTriangulationWorkflowTest, SequenceModeOnlyChangesPairSelectionPolicy
     EXPECT_EQ(resolved.tiePointOptions.pairPolicy.mode,
               xjw::matchphotos::PairSelectionMode::Sequence);
     EXPECT_EQ(resolved.tiePointOptions.pairPolicy.sequenceWindow, 6);
+    EXPECT_TRUE(resolved.tiePointOptions.pairPolicy.closeSequenceLoop);
     EXPECT_FALSE(resolved.tiePointOptions.useReferencePreselection);
-    EXPECT_TRUE(resolved.pipelineInput.enforceSequencePoseConsistency);
+    EXPECT_FALSE(resolved.pipelineInput.enforceSequencePoseConsistency);
     EXPECT_TRUE(resolved.pipelineInput.sequenceLoopClosure);
 }
 

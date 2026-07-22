@@ -11,6 +11,7 @@
 // =============================================================================
 #include "CameraModel3DDialog.h"
 #include "CameraSceneViewMath.h"
+#include "ObjRenderPreparation.h"
 #include "ui_CameraModel3DDialog.h"
 
 #include "ProjectManager.h"
@@ -43,6 +44,7 @@
 #include <QFile>
 #include <QFileInfo>
 #include <QDir>
+#include <QElapsedTimer>
 #include <QKeyEvent>
 #include <QKeySequence>
 #include <QMetaObject>
@@ -141,9 +143,12 @@ RenderCloud cloneRenderCloud(const RenderCloud &src)
 struct ObjLoadResult
 {
     std::shared_ptr<RenderCloud> cloud;
+    ObjRenderPreparation renderPreparation;
     QImage textureImage;
     QString texturePath;
     QString textureWarning;
+    qint64 parseElapsedMs = 0;
+    qint64 prepareElapsedMs = 0;
 };
 
 QString firstDiffuseTexturePath(const QString &obj_path, const RenderCloud &cloud)
@@ -189,8 +194,11 @@ ObjLoadResult loadObjWithMaterialTexture(const QString &obj_path,
                                          const std::function<void(int, const QString &)> &progress)
 {
     ObjLoadResult result;
+    QElapsedTimer timer;
+    timer.start();
     result.cloud = plapoint::io::readObj<float>(
         xjw::common::io::toNativeNarrowPath(obj_path));
+    result.parseElapsedMs = timer.elapsed();
     if (!result.cloud || result.cloud->size() == 0)
     {
         return result;
@@ -198,28 +206,40 @@ ObjLoadResult loadObjWithMaterialTexture(const QString &obj_path,
     if (!result.cloud->hasTextureCoords() || !result.cloud->hasFaceTextureIndices())
     {
         result.textureWarning = QStringLiteral("OBJ 未包含完整的面级 UV，使用顶点颜色显示");
-        return result;
+    }
+    else
+    {
+        if (progress)
+        {
+            progress(82, QStringLiteral("正在读取 OBJ 材质纹理..."));
+        }
+        result.texturePath = firstDiffuseTexturePath(obj_path, *result.cloud);
+        if (result.texturePath.isEmpty())
+        {
+            result.textureWarning = QStringLiteral("OBJ 的 MTL 未指定漫反射纹理，使用顶点颜色显示");
+        }
+        else if (!QFileInfo::exists(result.texturePath)
+                 || !result.textureImage.load(result.texturePath))
+        {
+            result.textureWarning = QStringLiteral("无法读取 OBJ 纹理图像: %1")
+                                        .arg(result.texturePath);
+            result.textureImage = QImage();
+        }
     }
 
+    if (!result.textureImage.isNull())
+    {
+        result.cloud->setTextureImageFile(
+            xjw::common::io::toUtf8Path(result.texturePath));
+    }
     if (progress)
     {
-        progress(88, QStringLiteral("正在读取 OBJ 材质纹理..."));
+        progress(88, QStringLiteral("正在准备 OBJ 渲染数据..."));
     }
-    result.texturePath = firstDiffuseTexturePath(obj_path, *result.cloud);
-    if (result.texturePath.isEmpty())
-    {
-        result.textureWarning = QStringLiteral("OBJ 的 MTL 未指定漫反射纹理，使用顶点颜色显示");
-        return result;
-    }
-    if (!QFileInfo::exists(result.texturePath) || !result.textureImage.load(result.texturePath))
-    {
-        result.textureWarning = QStringLiteral("无法读取 OBJ 纹理图像: %1").arg(result.texturePath);
-        result.textureImage = QImage();
-        return result;
-    }
-
-    result.cloud->setTextureImageFile(
-        xjw::common::io::toUtf8Path(result.texturePath));
+    timer.restart();
+    result.renderPreparation = prepareObjRenderData(
+        *result.cloud, !result.textureImage.isNull());
+    result.prepareElapsedMs = timer.elapsed();
     return result;
 }
 
@@ -1019,6 +1039,8 @@ void CameraSceneWidget::setPointCloud(const RenderCloud &cloud)
     _meshTextureImage = QImage();
     _meshTexturePath.clear();
     _meshHasTexture = false;
+    _preparedObjMeshBuffer = false;
+    _preparedObjMeshHasTexture = false;
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _currentCloudPath.clear();
     _preferModelPointRender = false;
@@ -1041,6 +1063,8 @@ void CameraSceneWidget::loadPointCloudFromXyz(const QString &xyzPath)
     _meshTextureImage = QImage();
     _meshTexturePath.clear();
     _meshHasTexture = false;
+    _preparedObjMeshBuffer = false;
+    _preparedObjMeshHasTexture = false;
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _preferModelPointRender = false;
     _cacheDirty = true;
@@ -1096,6 +1120,8 @@ void CameraSceneWidget::loadModelFromPly(const QString &plyPath)
     _meshTextureImage = QImage();
     _meshTexturePath.clear();
     _meshHasTexture = false;
+    _preparedObjMeshBuffer = false;
+    _preparedObjMeshHasTexture = false;
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _preferModelPointRender = true;
     _cacheDirty = true;
@@ -1230,6 +1256,8 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
     _meshTextureImage = QImage();
     _meshTexturePath.clear();
     _meshHasTexture = false;
+    _preparedObjMeshBuffer = false;
+    _preparedObjMeshHasTexture = false;
     _texturedMeshPipeline.uploadedTexturePath.clear();
     _preferModelPointRender = false;
     _cacheDirty = true;
@@ -1261,6 +1289,16 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
                 self->_meshTextureImage = result.textureImage;
                 self->_meshTexturePath = result.texturePath;
                 self->_texturedMeshPipeline.uploadedTexturePath.clear();
+                if (result.renderPreparation.isValid())
+                {
+                    self->_meshBuffer.vertexData = std::move(
+                        result.renderPreparation.vertexData);
+                    self->_meshBuffer.vertexCount = result.renderPreparation.vertexCount;
+                    self->_meshBuffer.strideBytes = result.renderPreparation.strideBytes;
+                    self->_meshBuffer.dirty = true;
+                    self->_preparedObjMeshBuffer = true;
+                    self->_preparedObjMeshHasTexture = result.renderPreparation.hasTexture;
+                }
             }
             self->_preferModelPointRender = !self->_cloud.hasFaces();
             self->_loading = false;
@@ -1278,6 +1316,9 @@ void CameraSceneWidget::loadModelFromObj(const QString &objPath)
                              .arg(self->_meshTextureImage.isNull()
                                       ? QStringLiteral("（顶点颜色）")
                                       : QStringLiteral("（MTL 纹理）")));
+                LOG_INFO(QStringLiteral("[3D] OBJ 耗时: 解析 %1 ms，渲染数据准备 %2 ms")
+                             .arg(result.parseElapsedMs)
+                             .arg(result.prepareElapsedMs));
                 if (!result.textureWarning.isEmpty())
                 {
                     LOG_WARN(QStringLiteral("[3D] %1").arg(result.textureWarning));
@@ -2074,6 +2115,10 @@ void CameraSceneWidget::resizeEvent(QResizeEvent *event)
 
 void CameraSceneWidget::uploadGpuData()
 {
+    const bool use_prepared_obj_mesh = _preparedObjMeshBuffer
+        && _cloud.hasFaces()
+        && _meshBuffer.vertexCount > 0
+        && !_meshBuffer.vertexData.isEmpty();
     auto assignBuffer = [](RhiBufferSet &buffer,
                            const QVector<float> &data,
                            int vertexCount,
@@ -2087,13 +2132,16 @@ void CameraSceneWidget::uploadGpuData()
     };
 
     _pointBuffer.vertexCount = 0;
-    _meshBuffer.vertexCount = 0;
     _modelPointBuffer.vertexCount = 0;
     _lineBuffer.vertexCount = 0;
     _pointBuffer.vertexData.clear();
-    _meshBuffer.vertexData.clear();
     _modelPointBuffer.vertexData.clear();
     _lineBuffer.vertexData.clear();
+    if (!use_prepared_obj_mesh)
+    {
+        _meshBuffer.vertexCount = 0;
+        _meshBuffer.vertexData.clear();
+    }
 
     // ── 1. 点云（_cloud，无面片且无法向量，颜色直通）──────────────────────────
     _pointCount = 0;
@@ -2129,6 +2177,13 @@ void CameraSceneWidget::uploadGpuData()
     _meshHasTexture = false;
     if (!(_cloud.size() == 0) && _cloud.hasFaces()) {
         _meshHasFaces = true;
+        if (use_prepared_obj_mesh)
+        {
+            _meshVertCount = _meshBuffer.vertexCount;
+            _meshHasTexture = _preparedObjMeshHasTexture;
+        }
+        else
+        {
         const bool hasVertCol = _cloud.hasColors();
         const bool hasNrm     = _cloud.hasNormals();
         const std::size_t Nv  = _cloud.size();
@@ -2225,6 +2280,7 @@ void CameraSceneWidget::uploadGpuData()
         }
         _meshVertCount = data.size() / meshStrideFloats;
         assignBuffer(_meshBuffer, data, _meshVertCount, meshStrideFloats);
+        }
     } else if (!(_cloud.size() == 0) && !_cloud.hasFaces() && _cloud.hasNormals()) {
         // 含法向量但无面片 → 点图元 + Phong 光照（稠密点云等）
         const bool hasColors = _cloud.hasColors();

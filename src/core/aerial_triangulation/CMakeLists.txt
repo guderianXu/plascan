@@ -15,6 +15,8 @@ add_library(aerial_triangulation STATIC
     preparation/TiePointPreparation.h
     reconstruction/MarkerPriorLoader.cpp
     reconstruction/MarkerPriorLoader.h
+    reconstruction/CameraIntrinsicPriorSanitizer.cpp
+    reconstruction/CameraIntrinsicPriorSanitizer.h
     reconstruction/SfmAttemptRunner.cpp
     reconstruction/SfmAttemptRunner.h
     reporting/AerialTriangulationResultWriter.cpp

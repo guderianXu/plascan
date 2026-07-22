@@ -542,6 +542,7 @@ add_executable(test_gui_project_utils
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CreateTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ThinTiePointsDialog.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/dialogs/CleanTiePointsDialog.cpp
+    ${CMAKE_SOURCE_DIR}/src/gui/dialogs/ObjRenderPreparation.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/ToolbarButton.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/menu/MainMenu.cpp
     ${CMAKE_SOURCE_DIR}/src/gui/main_window/ModelDropSupport.cpp

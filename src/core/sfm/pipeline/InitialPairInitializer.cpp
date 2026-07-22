@@ -59,10 +59,22 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
         double matchCoverage;
         size_t endpointDegree = 0;
         size_t localGraphReach = 0;
+        bool isDirectSequencePair = false;
     };
     std::vector<PairInfo> pairs;
 
     auto allIds = _reconstruction->allImageIds();
+    const ImageId imageCount = static_cast<ImageId>(_reconstruction->numImages());
+    const auto isDirectSequencePair = [this, imageCount](ImageId first, ImageId second)
+    {
+        if (!_sfmOptions.sequenceLoopClosure || imageCount < 2)
+        {
+            return false;
+        }
+        const ImageId distance = first > second ? first - second : second - first;
+        return distance == 1 ||
+               (_sfmOptions.sequenceLoopClosure && distance + 1 == imageCount);
+    };
     for (size_t i = 0; i < allIds.size(); ++i)
     {
         for (size_t j = i + 1; j < allIds.size(); ++j)
@@ -83,7 +95,14 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
                     // 但作为初始像对基线很弱，容易把无相机 SfM 初始化到病态解。
                     score *= 0.25;
                 }
-                pairs.push_back({allIds[i], allIds[j], nm, score, coverage});
+                pairs.push_back({allIds[i],
+                                 allIds[j],
+                                 nm,
+                                 score,
+                                 coverage,
+                                 0,
+                                 0,
+                                 isDirectSequencePair(allIds[i], allIds[j])});
             }
         }
     }
@@ -134,8 +153,15 @@ std::vector<std::pair<ImageId, ImageId>> IncrementalSfm::selectInitialPairCandid
     // 按“可用于初始化的分数”降序排序，而不是只看匹配数。
     // 近重复视角可能匹配数最高，但不是好的初始基线。
     std::sort(pairs.begin(), pairs.end(),
-              [](const PairInfo &a, const PairInfo &b)
+              [this](const PairInfo &a, const PairInfo &b)
               {
+                  // 对环拍/连续拍摄，先用直接相邻帧建立种子模型。跨越多个序号的
+                  // 高匹配像对可能来自重复纹理，若先用于相对定向会把后续 PnP 拉入错误环段。
+                  if (_sfmOptions.sequenceLoopClosure &&
+                      a.isDirectSequencePair != b.isDirectSequencePair)
+                  {
+                      return a.isDirectSequencePair;
+                  }
                   if (std::abs(a.initialPairScore - b.initialPairScore) > 1e-9)
                   {
                       return a.initialPairScore > b.initialPairScore;
