@@ -138,6 +138,19 @@ bool ProjectModelGenerationWorkflow::isRunning() const
     return _stage != Stage::Idle;
 }
 
+void ProjectModelGenerationWorkflow::cancel()
+{
+    if (_stage == Stage::DepthMaps)
+    {
+        _denseManager->cancelMvs();
+        return;
+    }
+    if (_stage == Stage::Model)
+    {
+        _modelManager->cancelActiveTask();
+    }
+}
+
 bool ProjectModelGenerationWorkflow::isPreparingDenseCloud() const
 {
     return _stage == Stage::DepthMaps;

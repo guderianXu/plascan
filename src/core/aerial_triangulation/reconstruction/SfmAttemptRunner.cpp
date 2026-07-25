@@ -257,6 +257,8 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
     if (sfmOptions.useKnownCameraPoses)
     {
         sfmOptions.baOptions.refineSharedFocalLength = false;
+        sfmOptions.refineKnownCameraPoseWithSoftPrior =
+            !input.lockInputCameraPoses;
     }
     else
     {

@@ -195,6 +195,8 @@ public slots:
     
     // 取消正在运行的 MVS 任务
     void cancelMvs();
+    // 取消正在运行的模型生成任务
+    void cancelModelGeneration();
 
     // 取消正在运行的 AT/SFM 任务
     void cancelAt();

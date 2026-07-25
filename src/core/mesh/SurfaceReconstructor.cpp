@@ -1749,7 +1749,8 @@ bool SurfaceReconstructor::reconstructFromPointCloudFile(const std::string &clou
     {
         progress("正在修复小边界孔洞...", 0.73f);
         const int max_boundary_edges = std::clamp(config.holeFillPasses * 8, 16, 256);
-        detail::fillSmallBoundaryHoles(&mesh, max_boundary_edges);
+        detail::fillSmallBoundaryHoles(
+            &mesh, max_boundary_edges, 0.0f, nullptr, nullptr);
         detail::removeDegenerateFaces(&mesh);
     }
 

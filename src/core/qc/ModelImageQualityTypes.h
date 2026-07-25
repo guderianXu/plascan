@@ -40,6 +40,30 @@ struct ModelViewQuality
     double floatingPixelRate = 1.0;
     double edgeP50Pixels = std::numeric_limits<double>::infinity();
     double edgeP90Pixels = std::numeric_limits<double>::infinity();
+    double referenceToRenderEdgeP50Pixels = std::numeric_limits<double>::infinity();
+    double referenceToRenderEdgeP90Pixels = std::numeric_limits<double>::infinity();
+    double renderToReferenceEdgeP50Pixels = std::numeric_limits<double>::infinity();
+    double renderToReferenceEdgeP90Pixels = std::numeric_limits<double>::infinity();
+    double silhouetteEdgeP50Pixels = std::numeric_limits<double>::infinity();
+    double silhouetteEdgeP90Pixels = std::numeric_limits<double>::infinity();
+    double referenceToRenderSilhouetteEdgeP50Pixels =
+        std::numeric_limits<double>::infinity();
+    double referenceToRenderSilhouetteEdgeP90Pixels =
+        std::numeric_limits<double>::infinity();
+    double renderToReferenceSilhouetteEdgeP50Pixels =
+        std::numeric_limits<double>::infinity();
+    double renderToReferenceSilhouetteEdgeP90Pixels =
+        std::numeric_limits<double>::infinity();
+    double structureEdgeP50Pixels = std::numeric_limits<double>::infinity();
+    double structureEdgeP90Pixels = std::numeric_limits<double>::infinity();
+    double referenceToRenderStructureEdgeP50Pixels =
+        std::numeric_limits<double>::infinity();
+    double referenceToRenderStructureEdgeP90Pixels =
+        std::numeric_limits<double>::infinity();
+    double renderToReferenceStructureEdgeP50Pixels =
+        std::numeric_limits<double>::infinity();
+    double renderToReferenceStructureEdgeP90Pixels =
+        std::numeric_limits<double>::infinity();
     bool appearanceAvailable = false;
     double foregroundSsim = 0.0;
     double foregroundPsnr = 0.0;
@@ -47,6 +71,8 @@ struct ModelViewQuality
     {
         bool available = false;
         double thresholdPixels = 0.0;
+        double referenceThresholdPixels = 0.0;
+        double renderedThresholdPixels = 0.0;
         int referenceEdgePixelCount = 0;
         int renderedEdgePixelCount = 0;
         int referenceTailPixelCount = 0;

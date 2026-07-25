@@ -21,6 +21,7 @@ struct ReconstructionCliOptions
     std::string sfmFeatureAlgorithm = "disk";
     std::string sfmMatchAlgorithm = "lightglue";
     bool sfmGuidedRematching = false;
+    bool lockInputCameraPoses = false;
     int quality = 3;
     int threads = 8;
     int cudaParallelPairs = 1;

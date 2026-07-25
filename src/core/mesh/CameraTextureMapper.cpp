@@ -40,6 +40,13 @@ struct AtlasTile
     float offsetY = 0.0f;
 };
 
+struct FaceViewSelection
+{
+    int viewIndex = -1;
+    float score = -1.0f;
+    bool relaxed = false;
+};
+
 std::shared_ptr<PlaPointCloud> loadMesh(const std::string &mesh_path)
 {
     const QString suffix = QFileInfo(xjw::common::io::fromUtf8Path(mesh_path)).suffix().toLower();
@@ -199,7 +206,6 @@ bool projectFace(const MeshColorView &view,
 }
 
 bool faceProjectsInsideMask(const MeshColorView &view,
-                            const std::array<std::array<double, 2>, 3> &pixels,
                             bool requireDepthEvidence,
                             const std::array<std::array<double, 3>, 3> &vertices,
                             float absoluteTolerance)
@@ -210,10 +216,33 @@ bool faceProjectsInsideMask(const MeshColorView &view,
         return false;
     }
 
-    for (int corner = 0; corner < 3; ++corner)
+    constexpr std::array<std::array<double, 3>, 7> kSampleWeights{{
+        {{1.0, 0.0, 0.0}},
+        {{0.0, 1.0, 0.0}},
+        {{0.0, 0.0, 1.0}},
+        {{0.5, 0.5, 0.0}},
+        {{0.0, 0.5, 0.5}},
+        {{0.5, 0.0, 0.5}},
+        {{1.0 / 3.0, 1.0 / 3.0, 1.0 / 3.0}}
+    }};
+    for (const auto &weights : kSampleWeights)
     {
-        const int column = static_cast<int>(std::lround(pixels[corner][0]));
-        const int row = static_cast<int>(std::lround(pixels[corner][1]));
+        std::array<double, 3> sample{};
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            sample[axis] = weights[0] * vertices[0][axis] +
+                           weights[1] * vertices[1][axis] +
+                           weights[2] * vertices[2][axis];
+        }
+        double projected_pixel[2]{};
+        double camera_depth = 0.0;
+        if (!view.camera.projectWorldPointWithDepth(
+                sample.data(), projected_pixel, camera_depth))
+        {
+            return false;
+        }
+        const int column = static_cast<int>(std::lround(projected_pixel[0]));
+        const int row = static_cast<int>(std::lround(projected_pixel[1]));
         if (row < 0 || column < 0 || row >= view.supportMask.rows ||
             column >= view.supportMask.cols ||
             view.supportMask.at<std::uint8_t>(row, column) == 0)
@@ -235,13 +264,6 @@ bool faceProjectsInsideMask(const MeshColorView &view,
             return false;
         }
 
-        double projected_pixel[2]{};
-        double camera_depth = 0.0;
-        if (!view.camera.projectWorldPointWithDepth(
-                vertices[corner].data(), projected_pixel, camera_depth))
-        {
-            return false;
-        }
         const float observed_depth = view.depth.at<float>(row, column);
         const float confidence = view.confidence.at<float>(row, column);
         const float tolerance = std::max(
@@ -408,13 +430,16 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
     const float absolute_tolerance = std::max(meshDiagonal(*mesh) / 64.0f, 1.0e-7f);
     int mapped_faces = 0;
     int fallback_mapped_faces = 0;
+    int coherence_adjusted_faces = 0;
     int unmapped_faces = 0;
+    std::vector<FaceViewSelection> face_selections(
+        static_cast<std::size_t>(face_count));
     for (int face_index = 0; face_index < face_count; ++face_index)
     {
         if (config.progressFn && (face_index % 4096 == 0 || face_index + 1 == face_count))
         {
             config.progressFn("正在选择每个三角面的最佳相机...",
-                              20 + static_cast<int>(65.0 * (face_index + 1) /
+                              20 + static_cast<int>(40.0 * (face_index + 1) /
                                                     std::max(face_count, 1)));
         }
         const std::array<int, 3> indices{
@@ -432,7 +457,6 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
         const std::array<float, 3> normal = faceNormal(vertices[0], vertices[1], vertices[2]);
         int best_view = -1;
         float best_score = -1.0f;
-        std::array<std::array<double, 2>, 3> best_pixels{};
         for (int view_index = 0; view_index < views.size(); ++view_index)
         {
             const float score = cameraScore(
@@ -447,13 +471,12 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                 continue;
             }
             if (!faceProjectsInsideMask(
-                    views[view_index], pixels, true, vertices, absolute_tolerance))
+                    views[view_index], true, vertices, absolute_tolerance))
             {
                 continue;
             }
             best_score = score;
             best_view = view_index;
-            best_pixels = pixels;
         }
         bool used_fallback = false;
         if (best_view < 0)
@@ -472,15 +495,135 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
                     continue;
                 }
                 if (!faceProjectsInsideMask(
-                        views[view_index], pixels, false, vertices, absolute_tolerance))
+                        views[view_index], false, vertices, absolute_tolerance))
                 {
                     continue;
                 }
                 best_score = score;
                 best_view = view_index;
-                best_pixels = pixels;
                 used_fallback = true;
             }
+        }
+
+        face_selections[static_cast<std::size_t>(face_index)] =
+            {best_view, best_score, used_fallback};
+    }
+
+    const std::size_t vote_stride = static_cast<std::size_t>(view_count);
+    std::vector<std::uint16_t> vertex_view_votes(mesh->size() * vote_stride, 0);
+    for (int face_index = 0; face_index < face_count; ++face_index)
+    {
+        const int view_index =
+            face_selections[static_cast<std::size_t>(face_index)].viewIndex;
+        if (view_index < 0)
+        {
+            continue;
+        }
+        for (int corner = 0; corner < 3; ++corner)
+        {
+            const int vertex_index = faces->getValue(face_index, corner);
+            std::uint16_t &vote = vertex_view_votes[
+                static_cast<std::size_t>(vertex_index) * vote_stride +
+                static_cast<std::size_t>(view_index)];
+            if (vote < std::numeric_limits<std::uint16_t>::max())
+            {
+                ++vote;
+            }
+        }
+    }
+
+    for (int face_index = 0; face_index < face_count; ++face_index)
+    {
+        if (config.progressFn && (face_index % 4096 == 0 || face_index + 1 == face_count))
+        {
+            config.progressFn("正在抑制相邻三角面的纹理相机跳变...",
+                              60 + static_cast<int>(15.0 * (face_index + 1) /
+                                                    std::max(face_count, 1)));
+        }
+        const std::array<int, 3> indices{
+            faces->getValue(face_index, 0),
+            faces->getValue(face_index, 1),
+            faces->getValue(face_index, 2)};
+        FaceViewSelection &selection =
+            face_selections[static_cast<std::size_t>(face_index)];
+        int coherent_view = selection.viewIndex;
+        int coherent_votes = -1;
+        int current_votes = 0;
+        for (int view_index = 0; view_index < view_count; ++view_index)
+        {
+            int votes = 0;
+            for (const int vertex_index : indices)
+            {
+                votes += vertex_view_votes[
+                    static_cast<std::size_t>(vertex_index) * vote_stride +
+                    static_cast<std::size_t>(view_index)];
+            }
+            if (view_index == selection.viewIndex)
+            {
+                current_votes = votes;
+            }
+            if (votes > coherent_votes)
+            {
+                coherent_votes = votes;
+                coherent_view = view_index;
+            }
+        }
+        if (coherent_view < 0 || coherent_view == selection.viewIndex ||
+            coherent_votes < current_votes + 2)
+        {
+            continue;
+        }
+
+        const std::array<std::array<double, 3>, 3> vertices{
+            faceVertex(*mesh, indices[0]),
+            faceVertex(*mesh, indices[1]),
+            faceVertex(*mesh, indices[2])};
+        const std::array<double, 3> centroid{
+            (vertices[0][0] + vertices[1][0] + vertices[2][0]) / 3.0,
+            (vertices[0][1] + vertices[1][1] + vertices[2][1]) / 3.0,
+            (vertices[0][2] + vertices[1][2] + vertices[2][2]) / 3.0};
+        const std::array<float, 3> normal = faceNormal(
+            vertices[0], vertices[1], vertices[2]);
+        const float coherent_score = cameraScore(
+            views[coherent_view], centroid, normal, absolute_tolerance);
+        std::array<std::array<double, 2>, 3> pixels{};
+        if (coherent_score < std::max(0.0f, selection.score) * 0.65f ||
+            !projectFace(views[coherent_view], vertices, &pixels) ||
+            !faceProjectsInsideMask(
+                views[coherent_view], true, vertices, absolute_tolerance))
+        {
+            continue;
+        }
+        selection = {coherent_view, coherent_score, false};
+        ++coherence_adjusted_faces;
+    }
+
+    for (int face_index = 0; face_index < face_count; ++face_index)
+    {
+        if (config.progressFn && (face_index % 4096 == 0 || face_index + 1 == face_count))
+        {
+            config.progressFn("正在写入连续纹理坐标...",
+                              75 + static_cast<int>(10.0 * (face_index + 1) /
+                                                    std::max(face_count, 1)));
+        }
+        const std::array<int, 3> indices{
+            faces->getValue(face_index, 0),
+            faces->getValue(face_index, 1),
+            faces->getValue(face_index, 2)};
+        const std::array<std::array<double, 3>, 3> vertices{
+            faceVertex(*mesh, indices[0]),
+            faceVertex(*mesh, indices[1]),
+            faceVertex(*mesh, indices[2])};
+        FaceViewSelection selection =
+            face_selections[static_cast<std::size_t>(face_index)];
+        int best_view = selection.viewIndex;
+        bool used_fallback = selection.relaxed;
+        std::array<std::array<double, 2>, 3> best_pixels{};
+        if (best_view >= 0 &&
+            !projectFace(views[best_view], vertices, &best_pixels))
+        {
+            best_view = -1;
+            used_fallback = false;
         }
 
         for (int corner = 0; corner < 3; ++corner)
@@ -565,12 +708,13 @@ bool TextureMapper::generateCameraTexturedModelFromMeshFile(
         result->modelMtlPath = xjw::common::io::toUtf8Path(mtl_path);
         result->texturePngPath = xjw::common::io::toUtf8Path(texture_path);
         result->textureSize = texture_size;
-        result->textureAlgorithm = "camera_projected_atlas_v2";
+        result->textureAlgorithm = "camera_projected_atlas_v3";
         result->uvMethod = "indexed_vertex_view_projection";
-        result->blendMethod = "best_view_face_visibility_score";
+        result->blendMethod = "coherent_best_view_face_visibility_score";
         result->sourceViewCount = view_count;
         result->mappedFaceCount = mapped_faces;
         result->fallbackMappedFaceCount = fallback_mapped_faces;
+        result->coherenceAdjustedFaceCount = coherence_adjusted_faces;
         result->unmappedFaceCount = unmapped_faces;
     }
     return true;

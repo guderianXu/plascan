@@ -130,3 +130,16 @@ void ProjectReconstructionManager::cancelMvs()
 {
     _denseManager->cancelMvs();
 }
+
+void ProjectReconstructionManager::cancelModelGeneration()
+{
+    if (_modelWorkflow && _modelWorkflow->isRunning())
+    {
+        _modelWorkflow->cancel();
+        return;
+    }
+    if (_modelManager)
+    {
+        _modelManager->cancelActiveTask();
+    }
+}

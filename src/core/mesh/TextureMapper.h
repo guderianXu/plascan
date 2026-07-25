@@ -38,6 +38,7 @@ struct TextureMappingResult
     int sourceViewCount = 0;
     int mappedFaceCount = 0;
     int fallbackMappedFaceCount = 0;
+    int coherenceAdjustedFaceCount = 0;
     int unmappedFaceCount = 0;
 };
 

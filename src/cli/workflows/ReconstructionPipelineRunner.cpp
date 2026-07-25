@@ -1079,6 +1079,7 @@ xjw::cli::ReconstructionCliOptions options;
     auto &sfmFeatureAlgorithm = options.sfmFeatureAlgorithm;
     auto &sfmMatchAlgorithm = options.sfmMatchAlgorithm;
     auto &sfmGuidedRematching = options.sfmGuidedRematching;
+    auto &lockInputCameraPoses = options.lockInputCameraPoses;
     auto &quality = options.quality;
     auto &threads = options.threads;
     auto &cudaParallelPairs = options.cudaParallelPairs;
@@ -1219,6 +1220,7 @@ xjw::cli::ReconstructionCliOptions options;
     sfmOptions.featureAlgorithm = QString::fromStdString(sfmFeatureAlgorithm);
     sfmOptions.matchAlgorithm = QString::fromStdString(sfmMatchAlgorithm);
     sfmOptions.guidedImageMatching = sfmGuidedRematching;
+    sfmOptions.lockInputCameraPoses = lockInputCameraPoses;
     const QStringList qualityNames = {
         QStringLiteral("low"),
         QStringLiteral("medium"),

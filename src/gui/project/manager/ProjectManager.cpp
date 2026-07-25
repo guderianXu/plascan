@@ -2641,6 +2641,11 @@ void ProjectManager::cancelMvs()
     _taskDispatcher->cancelMvs();
 }
 
+void ProjectManager::cancelModelGeneration()
+{
+    _taskDispatcher->cancelModelGeneration();
+}
+
 // ── 取消正在运行的 AT/SFM 任务 ──────────────────────────────────────────────
 void ProjectManager::cancelAt()
 {

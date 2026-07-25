@@ -309,6 +309,7 @@ TEST(MvsSceneClassifierTest, RecommendsSceneAwareSourceViewPool)
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 4, 3, 9), 6);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 3, 16), 6);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 4, 3, 16), 4);
+    EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::OrbitalObject, 2, 6, 16), 6);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 3, 5), 4);
     EXPECT_EQ(recommendedMvsSourceViewCount(MvsSceneProfile::AerialTerrain, 2, 10, 16), 10);
 }
@@ -318,7 +319,8 @@ TEST(MvsSceneClassifierTest, AllowsWiderObjectRingBaselines)
     using xjw::mvs::MvsSceneProfile;
     using xjw::mvs::recommendedMvsSourceMaximumAngleDeg;
 
-    EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::OrbitalObject), 47.0f);
+    EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::OrbitalObject, 4), 47.0f);
+    EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::OrbitalObject, 6), 70.0f);
     EXPECT_FLOAT_EQ(recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile::AerialTerrain), 35.0f);
 }
 

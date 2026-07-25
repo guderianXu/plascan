@@ -214,3 +214,17 @@ TEST(AerialTriangulationWorkflowTest, ResetForcesPreparationAndReusesOnlyProject
     EXPECT_TRUE(reuseResolved.pipelineInput.useProjectCameraIntrinsics);
     EXPECT_TRUE(reuseResolved.pipelineInput.useProjectCameraPoses);
 }
+
+TEST(AerialTriangulationWorkflowTest, PropagatesExactInputPoseLock)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.lockInputCameraPoses = true;
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_TRUE(resolved.pipelineInput.lockInputCameraPoses);
+    EXPECT_TRUE(resolved.resolvedSettings.value(
+        QStringLiteral("lock_input_camera_poses")).toBool());
+}

@@ -124,13 +124,33 @@ ModelViewQuality evaluateModelViewMasks(const cv::Mat &referenceMask,
     const cv::Mat rendered_edge = maskEdge(rendered);
     if (cv::countNonZero(reference_edge) > 0 && cv::countNonZero(rendered_edge) > 0)
     {
-        std::vector<float> distances;
-        distances.reserve(static_cast<std::size_t>(
-            cv::countNonZero(reference_edge) + cv::countNonZero(rendered_edge)));
-        appendEdgeDistances(reference_edge, rendered_edge, &distances);
-        appendEdgeDistances(rendered_edge, reference_edge, &distances);
-        quality.edgeP50Pixels = percentile(distances, 0.50);
-        quality.edgeP90Pixels = percentile(distances, 0.90);
+        std::vector<float> reference_to_render;
+        std::vector<float> render_to_reference;
+        reference_to_render.reserve(
+            static_cast<std::size_t>(cv::countNonZero(reference_edge)));
+        render_to_reference.reserve(
+            static_cast<std::size_t>(cv::countNonZero(rendered_edge)));
+        appendEdgeDistances(reference_edge, rendered_edge, &reference_to_render);
+        appendEdgeDistances(rendered_edge, reference_edge, &render_to_reference);
+        quality.referenceToRenderEdgeP50Pixels = percentile(reference_to_render, 0.50);
+        quality.referenceToRenderEdgeP90Pixels = percentile(reference_to_render, 0.90);
+        quality.renderToReferenceEdgeP50Pixels = percentile(render_to_reference, 0.50);
+        quality.renderToReferenceEdgeP90Pixels = percentile(render_to_reference, 0.90);
+        reference_to_render.insert(reference_to_render.end(),
+                                   render_to_reference.begin(),
+                                   render_to_reference.end());
+        quality.edgeP50Pixels = percentile(reference_to_render, 0.50);
+        quality.edgeP90Pixels = percentile(reference_to_render, 0.90);
+        quality.silhouetteEdgeP50Pixels = quality.edgeP50Pixels;
+        quality.silhouetteEdgeP90Pixels = quality.edgeP90Pixels;
+        quality.referenceToRenderSilhouetteEdgeP50Pixels =
+            quality.referenceToRenderEdgeP50Pixels;
+        quality.referenceToRenderSilhouetteEdgeP90Pixels =
+            quality.referenceToRenderEdgeP90Pixels;
+        quality.renderToReferenceSilhouetteEdgeP50Pixels =
+            quality.renderToReferenceEdgeP50Pixels;
+        quality.renderToReferenceSilhouetteEdgeP90Pixels =
+            quality.renderToReferenceEdgeP90Pixels;
     }
     return quality;
 }
@@ -231,13 +251,31 @@ void evaluateModelViewStructure(const cv::Mat &sourceBgr,
         return;
     }
 
-    std::vector<float> distances;
-    distances.reserve(static_cast<std::size_t>(
-        cv::countNonZero(source_edge) + cv::countNonZero(rendered_edge)));
-    appendEdgeDistances(source_edge, rendered_edge, &distances);
-    appendEdgeDistances(rendered_edge, source_edge, &distances);
-    quality->edgeP50Pixels = percentile(distances, 0.50);
-    quality->edgeP90Pixels = percentile(distances, 0.90);
+    std::vector<float> reference_to_render;
+    std::vector<float> render_to_reference;
+    reference_to_render.reserve(static_cast<std::size_t>(cv::countNonZero(source_edge)));
+    render_to_reference.reserve(static_cast<std::size_t>(cv::countNonZero(rendered_edge)));
+    appendEdgeDistances(source_edge, rendered_edge, &reference_to_render);
+    appendEdgeDistances(rendered_edge, source_edge, &render_to_reference);
+    quality->referenceToRenderEdgeP50Pixels = percentile(reference_to_render, 0.50);
+    quality->referenceToRenderEdgeP90Pixels = percentile(reference_to_render, 0.90);
+    quality->renderToReferenceEdgeP50Pixels = percentile(render_to_reference, 0.50);
+    quality->renderToReferenceEdgeP90Pixels = percentile(render_to_reference, 0.90);
+    reference_to_render.insert(reference_to_render.end(),
+                               render_to_reference.begin(),
+                               render_to_reference.end());
+    quality->edgeP50Pixels = percentile(reference_to_render, 0.50);
+    quality->edgeP90Pixels = percentile(reference_to_render, 0.90);
+    quality->structureEdgeP50Pixels = quality->edgeP50Pixels;
+    quality->structureEdgeP90Pixels = quality->edgeP90Pixels;
+    quality->referenceToRenderStructureEdgeP50Pixels =
+        quality->referenceToRenderEdgeP50Pixels;
+    quality->referenceToRenderStructureEdgeP90Pixels =
+        quality->referenceToRenderEdgeP90Pixels;
+    quality->renderToReferenceStructureEdgeP50Pixels =
+        quality->renderToReferenceEdgeP50Pixels;
+    quality->renderToReferenceStructureEdgeP90Pixels =
+        quality->renderToReferenceEdgeP90Pixels;
 }
 
 cv::Mat buildDinoForegroundMask(const cv::Mat &sourceBgr)

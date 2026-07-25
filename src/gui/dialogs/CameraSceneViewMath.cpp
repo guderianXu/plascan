@@ -52,8 +52,10 @@ int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
     }
 
     int best_index = -1;
+    bool has_best_position = false;
+    float best_position_score = -std::numeric_limits<float>::infinity();
     float best_direction_score = -std::numeric_limits<float>::infinity();
-    float best_center_score = -std::numeric_limits<float>::infinity();
+    float best_optical_axis_score = -std::numeric_limits<float>::infinity();
     for (const CameraViewCandidate &candidate : candidates)
     {
         if (!candidate.imageAvailable || candidate.index < 0)
@@ -67,22 +69,38 @@ int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
             continue;
         }
 
-        const float direction_score = QVector3D::dotProduct(forward, view_direction);
+        // 三维视图的观察方向首先由相机光心在模型周围的方位决定。
+        // 不能仅比较光轴：局部外参方向存在噪声或翻转时，会把圆轨道对侧
+        // 的照片误判为当前观察方向的照片。
         const QVector3D toward_scene = normalizedOrZero(sceneCenter - candidate.center);
-        const float center_score = toward_scene.isNull()
+        const bool has_position = !toward_scene.isNull();
+        const float position_score = has_position
+            ? QVector3D::dotProduct(toward_scene, view_direction)
+            : 0.0f;
+        const float direction_score = QVector3D::dotProduct(forward, view_direction);
+        const float optical_axis_score = toward_scene.isNull()
             ? 0.0f
             : QVector3D::dotProduct(forward, toward_scene);
+        const bool better_position = has_position
+            && (!has_best_position || position_score > best_position_score + ScoreEpsilon);
+        const bool same_position = has_position && has_best_position
+            && std::abs(position_score - best_position_score) <= ScoreEpsilon;
+        const bool both_without_position = !has_position && !has_best_position;
         const bool better_direction = direction_score > best_direction_score + ScoreEpsilon;
         const bool same_direction = std::abs(direction_score - best_direction_score) <= ScoreEpsilon;
-        const bool better_center = center_score > best_center_score + ScoreEpsilon;
-        const bool same_center = std::abs(center_score - best_center_score) <= ScoreEpsilon;
-        if (better_direction
-            || (same_direction && better_center)
-            || (same_direction && same_center && (best_index < 0 || candidate.index < best_index)))
+        const bool better_optical_axis = optical_axis_score > best_optical_axis_score + ScoreEpsilon;
+        const bool same_optical_axis = std::abs(optical_axis_score - best_optical_axis_score) <= ScoreEpsilon;
+        if (better_position
+            || ((same_position || both_without_position) && better_direction)
+            || ((same_position || both_without_position) && same_direction && better_optical_axis)
+            || ((same_position || both_without_position) && same_direction && same_optical_axis
+                && (best_index < 0 || candidate.index < best_index)))
         {
             best_index = candidate.index;
+            has_best_position = has_position;
+            best_position_score = position_score;
             best_direction_score = direction_score;
-            best_center_score = center_score;
+            best_optical_axis_score = optical_axis_score;
         }
     }
     return best_index;
@@ -99,6 +117,25 @@ QVector3D cameraForwardDirection(const QMatrix3x3 &cameraToWorld,
         forward = -forward;
     }
     return normalizedOrZero(forward);
+}
+
+CameraImagePlaneAxes cameraImagePlaneAxes(const QMatrix3x3 &cameraToWorld,
+                                          int uAxisSign,
+                                          int vAxisSign)
+{
+    const QVector3D camera_x(cameraToWorld(0, 0),
+                             cameraToWorld(1, 0),
+                             cameraToWorld(2, 0));
+    const QVector3D camera_y(cameraToWorld(0, 1),
+                             cameraToWorld(1, 1),
+                             cameraToWorld(2, 1));
+    const float u_sign = uAxisSign < 0 ? -1.0f : 1.0f;
+    const float v_sign = vAxisSign < 0 ? -1.0f : 1.0f;
+
+    CameraImagePlaneAxes axes;
+    axes.right = normalizedOrZero(camera_x * u_sign);
+    axes.up = normalizedOrZero(camera_y * -v_sign);
+    return axes;
 }
 
 QVector3D currentWorldViewDirection(const QQuaternion &viewRotation)

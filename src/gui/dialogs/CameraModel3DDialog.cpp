@@ -2273,7 +2273,14 @@ void CameraSceneWidget::uploadGpuData()
                          << _cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 1) / 255.f
                          << _cloud.colors()->getValue(static_cast<plamatrix::Index>(idx), 2) / 255.f;
                 } else {
-                    data << 0.55f << 0.55f << 0.58f;
+                    if (hasTexture)
+                    {
+                        data << -1.0f << -1.0f << -1.0f;
+                    }
+                    else
+                    {
+                        data << 0.55f << 0.55f << 0.58f;
+                    }
                 }
                 if (hasTexture)
                 {
@@ -2577,7 +2584,8 @@ bool CameraSceneWidget::ensureTexturedMeshPipeline(QRhiResourceUpdateBatch *upda
     inputLayout.setAttributes({
         QRhiVertexInputAttribute(0, 0, QRhiVertexInputAttribute::Float3, 0),
         QRhiVertexInputAttribute(0, 1, QRhiVertexInputAttribute::Float3, 3 * sizeof(float)),
-        QRhiVertexInputAttribute(0, 2, QRhiVertexInputAttribute::Float2, 9 * sizeof(float)),
+        QRhiVertexInputAttribute(0, 2, QRhiVertexInputAttribute::Float3, 6 * sizeof(float)),
+        QRhiVertexInputAttribute(0, 3, QRhiVertexInputAttribute::Float2, 9 * sizeof(float)),
     });
 
     _texturedMeshPipeline.pipeline.reset(rhi()->newGraphicsPipeline());
@@ -2846,10 +2854,11 @@ bool CameraSceneWidget::ensureCameraThumbnailPipeline(QRhiResourceUpdateBatch *u
             continue;
         }
 
-        const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
-        const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
+        const xjw::gui::camera_scene::CameraImagePlaneAxes axes =
+            xjw::gui::camera_scene::cameraImagePlaneAxes(
+                pose.rotation, pose.uAxisSign, pose.vAxisSign);
         const QVector<QVector3D> corners = xjw::gui::camera_scene::cameraImagePlaneCorners(
-            pose.center, right, up, plane_half_extent, plane_half_height);
+            pose.center, axes.right, axes.up, plane_half_extent, plane_half_height);
         if (corners.size() != 4)
         {
             continue;
@@ -3034,10 +3043,11 @@ void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatr
     const float image_half_height = qBound(thumbnail_half_extent * 0.68f * 2.6f,
                                            image_half_extent / qMax(0.1f, aspect),
                                            image_half_extent * 1.6f);
-    const QVector3D right(pose.rotation(0, 0), pose.rotation(1, 0), pose.rotation(2, 0));
-    const QVector3D up(pose.rotation(0, 1), pose.rotation(1, 1), pose.rotation(2, 1));
+    const xjw::gui::camera_scene::CameraImagePlaneAxes axes =
+        xjw::gui::camera_scene::cameraImagePlaneAxes(
+            pose.rotation, pose.uAxisSign, pose.vAxisSign);
     const QVector<QVector3D> corners = xjw::gui::camera_scene::cameraImagePlaneCorners(
-        pose.center, right, up, image_half_extent, image_half_height);
+        pose.center, axes.right, axes.up, image_half_extent, image_half_height);
     if (corners.size() != 4)
     {
         return;

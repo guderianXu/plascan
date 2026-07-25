@@ -51,6 +51,7 @@ public:
 
     QJsonArray getAvailableAtResults() const;
     void cancelMvs() const;
+    void cancelModelGeneration() const;
 
 private:
     ProjectCameraSetupManager *_cameraManager = nullptr;

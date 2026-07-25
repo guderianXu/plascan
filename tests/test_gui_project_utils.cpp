@@ -3183,7 +3183,13 @@ TEST(GuiAsyncLifetimeTest, ProjectModelTasksUseQPointerGuards)
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("const QString projectPath = _owner ? _owner->currentProjectPath() : QString()")))
         << "Mesh tasks must bind results to the project that launched them.";
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("QPointer<ProjectManager> ownerGuard(_owner)")));
-    EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, ownerGuard, resolvedSource, effectiveSettings, projectPath]() -> ModelTaskResult")));
+    EXPECT_TRUE(meshBlock.contains(QStringLiteral(
+        "[self,\n"
+        "         ownerGuard,\n"
+        "         resolvedSource,\n"
+        "         effectiveSettings,\n"
+        "         projectPath,\n"
+        "         cancel_flag]() -> ModelTaskResult")));
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("makeProgressReporter(self, ownerGuard, projectPath)")));
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("[self, ownerGuard, resolvedSource, effectiveSettings, projectPath, dialogTitle](const ModelTaskResult &task)")));
     EXPECT_TRUE(meshBlock.contains(QStringLiteral("ownerGuard->currentProjectPath() != projectPath")))
@@ -17725,6 +17731,9 @@ TEST(CameraModel3DDialogTest, ObjReaderPreservesPerFaceTextureSeams)
     EXPECT_EQ(prepared.vertexCount, 6);
     EXPECT_EQ(prepared.strideBytes, 11 * static_cast<int>(sizeof(float)));
     const float *renderVertices = reinterpret_cast<const float *>(prepared.vertexData.constData());
+    EXPECT_FLOAT_EQ(renderVertices[6], -1.0f);
+    EXPECT_FLOAT_EQ(renderVertices[7], -1.0f);
+    EXPECT_FLOAT_EQ(renderVertices[8], -1.0f);
     EXPECT_FLOAT_EQ(renderVertices[9], 0.0f);
     EXPECT_FLOAT_EQ(renderVertices[10], 0.0f);
     EXPECT_FLOAT_EQ(renderVertices[3 * 11 + 9], 0.25f);
@@ -17803,8 +17812,13 @@ TEST(CameraModel3DDialogTest, ObjMaterialTextureUsesFaceUvRhiPipeline)
     EXPECT_TRUE(source.contains(QStringLiteral("drawTexturedMesh")));
     EXPECT_TRUE(header.contains(QStringLiteral("RhiTexturedMeshPipelineSet")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("1.0 - aTexCoord.y")));
+    EXPECT_TRUE(vertexShader.contains(QStringLiteral("aColor")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("sampler2D modelTexture")));
     EXPECT_TRUE(fragmentShader.contains(QStringLiteral("texture(modelTexture, vTexCoord)")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("hasVertexColor")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("textureWeight")));
+    EXPECT_TRUE(fragmentShader.contains(QStringLiteral("srgbToLinear")));
+    EXPECT_FALSE(fragmentShader.contains(QStringLiteral("0.55 + 0.75 * diff")));
 }
 
 TEST(CameraModel3DDialogTest, DenseCameraScenesThrottleLabelsAndFrustumSize)

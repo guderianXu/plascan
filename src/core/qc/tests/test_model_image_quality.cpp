@@ -94,6 +94,44 @@ TEST(ModelImageMetricsTest, MeasuresMaskOverlapAndSymmetricEdgeDistance)
     EXPECT_NEAR(quality.floatingPixelRate, 1.0 / 3.0, 1.0e-6);
     EXPECT_GE(quality.edgeP90Pixels, 9.0);
     EXPECT_LE(quality.edgeP90Pixels, 10.5);
+    EXPECT_GE(quality.referenceToRenderEdgeP90Pixels, 9.0);
+    EXPECT_LE(quality.referenceToRenderEdgeP90Pixels, 10.5);
+    EXPECT_GE(quality.renderToReferenceEdgeP90Pixels, 9.0);
+    EXPECT_LE(quality.renderToReferenceEdgeP90Pixels, 10.5);
+    EXPECT_DOUBLE_EQ(quality.silhouetteEdgeP90Pixels, quality.edgeP90Pixels);
+}
+
+TEST(ModelImageMetricsTest, SeparatesMissingAndFloatingEdgeDirections)
+{
+    cv::Mat reference = cv::Mat::zeros(100, 120, CV_8UC1);
+    cv::Mat rendered = cv::Mat::zeros(100, 120, CV_8UC1);
+    cv::rectangle(reference, cv::Rect(10, 20, 30, 40), cv::Scalar(255), cv::FILLED);
+    cv::rectangle(rendered, cv::Rect(10, 20, 30, 40), cv::Scalar(255), cv::FILLED);
+    cv::rectangle(rendered, cv::Rect(70, 15, 35, 50), cv::Scalar(255), cv::FILLED);
+
+    const xjw::qc::ModelViewQuality quality =
+        xjw::qc::evaluateModelViewMasks(reference, rendered);
+
+    EXPECT_LE(quality.referenceToRenderEdgeP90Pixels, 0.1);
+    EXPECT_GE(quality.renderToReferenceEdgeP90Pixels, 30.0);
+    EXPECT_GT(quality.edgeP90Pixels, quality.referenceToRenderEdgeP90Pixels);
+}
+
+TEST(ModelImageMetricsTest, KeepsSilhouetteAndAppearanceStructureEdgesSeparate)
+{
+    cv::Mat mask = cv::Mat::zeros(100, 100, CV_8UC1);
+    cv::rectangle(mask, cv::Rect(10, 10, 80, 80), cv::Scalar(255), cv::FILLED);
+    cv::Mat source = cv::Mat::zeros(100, 100, CV_8UC3);
+    cv::Mat rendered = cv::Mat::zeros(100, 100, CV_8UC3);
+    cv::line(source, cv::Point(30, 15), cv::Point(30, 85), cv::Scalar(255, 255, 255), 3);
+    cv::line(rendered, cv::Point(60, 15), cv::Point(60, 85), cv::Scalar(255, 255, 255), 3);
+
+    xjw::qc::ModelViewQuality quality = xjw::qc::evaluateModelViewMasks(mask, mask);
+    xjw::qc::evaluateModelViewStructure(source, rendered, mask, &quality);
+
+    EXPECT_LE(quality.silhouetteEdgeP90Pixels, 0.1);
+    EXPECT_GE(quality.structureEdgeP90Pixels, 25.0);
+    EXPECT_DOUBLE_EQ(quality.edgeP90Pixels, quality.structureEdgeP90Pixels);
 }
 
 TEST(ModelImageMetricsTest, IdenticalForegroundHasPerfectAppearanceScore)
@@ -320,8 +358,24 @@ TEST(ModelImageQualityEvaluatorTest, WritesSyntheticViewDiagnostics)
     EXPECT_TRUE(QFileInfo::exists(
         comparison.filePath(QStringLiteral("edge_distance_bidirectional.png"))));
     EXPECT_TRUE(QFileInfo::exists(
+        comparison.filePath(QStringLiteral("edge_distance_reference_to_render.png"))));
+    EXPECT_TRUE(QFileInfo::exists(
+        comparison.filePath(QStringLiteral("edge_distance_render_to_reference.png"))));
+    EXPECT_TRUE(QFileInfo::exists(
         comparison.filePath(QStringLiteral("edge_p90_tail_mask.png"))));
+    EXPECT_TRUE(QFileInfo::exists(
+        comparison.filePath(QStringLiteral("edge_reference_to_render_p90_tail.png"))));
+    EXPECT_TRUE(QFileInfo::exists(
+        comparison.filePath(QStringLiteral("edge_render_to_reference_p90_tail.png"))));
     EXPECT_TRUE(result.views[0].edgeTail.available);
+    EXPECT_TRUE(result.summary.contains(
+        QStringLiteral("median_reference_to_render_edge_p90_pixels")));
+    EXPECT_TRUE(result.summary.contains(
+        QStringLiteral("median_render_to_reference_edge_p90_pixels")));
+    EXPECT_TRUE(result.summary.contains(
+        QStringLiteral("median_silhouette_edge_p90_pixels")));
+    EXPECT_TRUE(result.summary.contains(
+        QStringLiteral("median_structure_edge_p90_pixels")));
 }
 
 TEST(ModelImageQualityEvaluatorTest, LoadsValidationViewsFromMvsManifest)

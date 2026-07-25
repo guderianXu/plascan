@@ -1875,7 +1875,14 @@ void MainWindow::setupProjectManager()
             this, &MainWindow::onMvsFinished);
 
     // ── 网格重建状态栏进度条 ──────────────────────────────────────
-    _meshTaskStatus = createTaskStatus(220, false, QString());
+    _meshTaskStatus = createTaskStatus(220, true, tr("正在取消模型生成..."));
+    connect(_meshTaskStatus, &TaskStatusWidget::cancelRequested, this, [this]()
+    {
+        if (_projectManager)
+        {
+            _projectManager->cancelModelGeneration();
+        }
+    });
 
     connect(_projectManager, &ProjectManager::meshProgressChanged,
             this, &MainWindow::onMeshProgress);

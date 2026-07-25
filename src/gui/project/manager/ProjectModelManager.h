@@ -3,6 +3,9 @@
 #include <QObject>
 #include <QJsonObject>
 
+#include <atomic>
+#include <memory>
+
 class QWidget;
 class ProjectData;
 class ProjectManager;
@@ -20,6 +23,7 @@ public:
     void startGenerateModelAsync();
     bool startMeshReconstructionAsync(const QJsonObject &settings);
     void startTextureMappingAsync(const QJsonObject &settings);
+    void cancelActiveTask();
     bool isRunning() const;
 
 signals:
@@ -37,4 +41,5 @@ private:
     ProjectData *_projectData = nullptr;
     QWidget *_parentWidget = nullptr;
     bool _isRunning = false;
+    std::shared_ptr<std::atomic_bool> _activeCancelFlag;
 };

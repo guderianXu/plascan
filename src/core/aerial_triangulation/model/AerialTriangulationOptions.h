@@ -38,6 +38,9 @@ struct AerialTriangulationOptions
     bool excludeFixedTiePoints = true;
     bool guidedImageMatching = false;
     bool adaptiveCameraModelFitting = true;
+    // Benchmark/reference-camera workflows can request exact external poses.
+    // Normal GUI alignment keeps the existing soft-prior refinement behavior.
+    bool lockInputCameraPoses = false;
     bool useInitialPairHint = false;
     ImageId initialImageId1 = kInvalidImageId;
     ImageId initialImageId2 = kInvalidImageId;
@@ -85,6 +88,7 @@ struct PreparedAerialTriangulationInput
     bool useProjectCameraIntrinsics = true;
     bool useProjectCameraPoses = false;
     bool adaptiveCameraModelFitting = true;
+    bool lockInputCameraPoses = false;
     bool enforceSequencePoseConsistency = false;
     bool sequenceLoopClosure = false;
     bool useInitialPairHint = false;

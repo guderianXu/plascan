@@ -4,6 +4,7 @@ add_library(meshing STATIC
     SurfaceReconstructor.cpp
     PointCloudPreprocess.cpp
     SurfaceReconstructorPostprocess.cpp
+    BoundaryAwareVoxelSimplifier.cpp
     SurfaceReconstructorHeightGrid.cpp
     DepthMapMeshBuilder.cpp
     DepthTsdfSurfaceBuilder.cpp
@@ -12,6 +13,8 @@ add_library(meshing STATIC
     MeshColorizer.cpp
     MeshFaceColorOptimizer.cpp
     MeshQuadricSimplifier.cpp
+    MeshTopologyQuality.cpp
+    MeshIsotropicRemesher.cpp
     TextureMapper.cpp
     CameraTextureMapper.cpp
     ModelWorkflowService.cpp

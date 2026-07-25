@@ -2118,7 +2118,8 @@ void DepthMapGenerator::prepareFrameCaches()
         plannerOptions.rejectAngleOutliers = true;
         plannerOptions.minTriangulationAngleDeg = 0.2f;
         plannerOptions.maxTriangulationAngleDeg =
-            recommendedMvsSourceMaximumAngleDeg(_effectiveSceneProfile);
+            recommendedMvsSourceMaximumAngleDeg(
+                _effectiveSceneProfile, desiredSourceCount);
         if (requireVerifiedSourcePairs)
         {
             plannerOptions.minGeometricInliers = minVerifiedPairInliers;

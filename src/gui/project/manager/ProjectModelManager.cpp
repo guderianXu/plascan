@@ -563,13 +563,20 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
     }
 
     _isRunning = true;
+    _activeCancelFlag = std::make_shared<std::atomic_bool>(false);
+    const std::shared_ptr<std::atomic_bool> cancel_flag = _activeCancelFlag;
     emit meshProgressChanged(tr("正在初始化模型生成..."), 0);
     QPointer<ProjectModelManager> self(this);
     QPointer<ProjectManager> ownerGuard(_owner);
     const QString projectPath = _owner ? _owner->currentProjectPath() : QString();
     runModelAsyncTask(
         this,
-        [self, ownerGuard, resolvedSource, effectiveSettings, projectPath]() -> ModelTaskResult {
+        [self,
+         ownerGuard,
+         resolvedSource,
+         effectiveSettings,
+         projectPath,
+         cancel_flag]() -> ModelTaskResult {
             ModelTaskResult task;
             if (!self)
             {
@@ -588,7 +595,20 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                     .toString(effectiveSettings.value(QStringLiteral("source_path")).toString());
             request.outputRoot = resolvedSource.outputRoot;
             request.settings = effectiveSettings;
-            request.progress = makeProgressReporter(self, ownerGuard, projectPath);
+            request.isCancelled = [cancel_flag]()
+            {
+                return cancel_flag->load(std::memory_order_relaxed);
+            };
+            const auto progress_reporter =
+                makeProgressReporter(self, ownerGuard, projectPath);
+            request.progress = [cancel_flag, progress_reporter](
+                                   const QString &stage, int percent)
+            {
+                if (!cancel_flag->load(std::memory_order_relaxed))
+                {
+                    progress_reporter(stage, percent);
+                }
+            };
 
             const xjw::mesh::workflow::WorkflowResult workflowResult =
                 xjw::mesh::workflow::buildModel(request);
@@ -601,6 +621,7 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
                 return;
             }
             self->_isRunning = false;
+            self->_activeCancelFlag.reset();
             if (!ownerGuard || ownerGuard->currentProjectPath() != projectPath)
             {
                 emit self->meshProgressFinished(false);
@@ -632,6 +653,16 @@ bool ProjectModelManager::startMeshReconstructionAsync(const QJsonObject &settin
             });
         });
     return true;
+}
+
+void ProjectModelManager::cancelActiveTask()
+{
+    if (!_isRunning || !_activeCancelFlag)
+    {
+        return;
+    }
+    _activeCancelFlag->store(true, std::memory_order_relaxed);
+    emit meshProgressChanged(tr("正在取消模型生成..."), 99);
 }
 
 void ProjectModelManager::startTextureMappingAsync(const QJsonObject &settings)

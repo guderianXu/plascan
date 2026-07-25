@@ -125,9 +125,10 @@ ObjRenderPreparation prepareObjRenderData(const ObjRenderCloud &cloud,
             }
             else
             {
-                *output++ = 0.55f;
-                *output++ = 0.55f;
-                *output++ = 0.58f;
+                const float fallback_color = has_texture ? -1.0f : 0.55f;
+                *output++ = fallback_color;
+                *output++ = fallback_color;
+                *output++ = has_texture ? -1.0f : 0.58f;
             }
             if (has_texture)
             {

@@ -37,6 +37,8 @@ QJsonObject textureResultToJson(const xjw::mesh::TextureMappingResult &result)
     object[QStringLiteral("texture_mapped_face_count")] = result.mappedFaceCount;
     object[QStringLiteral("texture_fallback_mapped_face_count")] =
         result.fallbackMappedFaceCount;
+    object[QStringLiteral("texture_coherence_adjusted_face_count")] =
+        result.coherenceAdjustedFaceCount;
     object[QStringLiteral("texture_unmapped_face_count")] = result.unmappedFaceCount;
     return object;
 }
@@ -150,13 +152,217 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         QStringLiteral("tsdfCompensateColorExposure")).toBool(false);
     options.coherentFacePrimaryViewColors = settings.value(
         QStringLiteral("tsdfCoherentFacePrimaryViewColors")).toBool(false);
-    options.enableQuadricSimplification = settings.value(
-        QStringLiteral("tsdfQuadricSimplification")).toBool(false);
     options.simplifyTargetFaces = qBound(
         0,
         settings.value(QStringLiteral("simplifyTargetFaces"))
             .toInt(settings.value(QStringLiteral("targetFaces")).toInt(0)),
         2000000);
+    options.enableQuadricSimplification = settings.contains(
+        QStringLiteral("tsdfQuadricSimplification"))
+        ? settings.value(QStringLiteral("tsdfQuadricSimplification")).toBool()
+        : options.simplifyTargetFaces > 0;
+    options.enableVoxelFallbackSimplification = settings.value(
+        QStringLiteral("tsdfVoxelFallbackSimplification")).toBool(true);
+    const bool automatic_voxel_fallback_qem_polish =
+        options.resolution >= 384 &&
+        options.simplifyTargetFaces > 0 &&
+        options.simplifyTargetFaces <= 240000 &&
+        settings.value(QStringLiteral("surface_type"))
+                .toString(QStringLiteral("arbitrary_3d")) ==
+            QStringLiteral("arbitrary_3d");
+    options.enableVoxelFallbackQemPolish = settings.value(
+        QStringLiteral("tsdfVoxelFallbackQemPolish")).toBool(
+            automatic_voxel_fallback_qem_polish);
+    options.voxelFallbackMinimumProtectedBoundaryVertices = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVoxelFallbackMinimumProtectedBoundaryVertices")).toInt(1),
+        256);
+    options.voxelFallbackMaximumCollapsibleBoundaryDiameterVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVoxelFallbackMaximumCollapsibleBoundaryDiameterVoxels"))
+                               .toDouble(0.0)),
+        0.0f,
+        16.0f);
+    options.voxelFallbackMaximumNormalClusterAngleDegrees = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVoxelFallbackMaximumNormalClusterAngleDegrees"))
+                               .toDouble(180.0)),
+        5.0f,
+        180.0f);
+    options.voxelFallbackInitialClusterFactor = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVoxelFallbackInitialClusterFactor"))
+                               .toDouble(1.0)),
+        1.0f,
+        4.0f);
+    options.enableVoxelFallbackMultiViewSilhouetteProtection = settings.value(
+        QStringLiteral("tsdfVoxelFallbackMultiViewSilhouetteProtection"))
+            .toBool(true);
+    options.voxelFallbackMinimumSilhouetteViews = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfVoxelFallbackMinimumSilhouetteViews"))
+            .toInt(2),
+        8);
+    options.voxelFallbackSilhouetteBandPixels = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfVoxelFallbackSilhouetteBandPixels"))
+            .toInt(2),
+        8);
+    options.voxelFallbackSilhouetteDepthToleranceVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVoxelFallbackSilhouetteDepthToleranceVoxels"))
+                               .toDouble(8.0)),
+        1.0f,
+        32.0f);
+    options.voxelFallbackMaximumSliverRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVoxelFallbackMaximumSliverRatio"))
+                               .toDouble(0.08)),
+        0.0f,
+        0.50f);
+    const bool automatic_triangle_quality_optimization =
+        options.resolution >= 384 && options.simplifyTargetFaces > 0;
+    options.enableTriangleQualityOptimization = settings.value(
+        QStringLiteral("tsdfTriangleQualityOptimization")).toBool(
+            automatic_triangle_quality_optimization);
+    options.triangleQualityOptimizationMaximumPasses = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfTriangleQualityOptimizationMaximumPasses"))
+            .toInt(options.triangleQualityOptimizationMaximumPasses),
+        12);
+    options.triangleQualityMinimumAspectImprovementRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTriangleQualityMinimumAspectImprovementRatio"))
+                               .toDouble(
+                                   options.triangleQualityMinimumAspectImprovementRatio)),
+        0.0f,
+        0.25f);
+    options.triangleQualityMaximumFeatureAngleDegrees = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTriangleQualityMaximumFeatureAngleDegrees"))
+                               .toDouble(
+                                   options.triangleQualityMaximumFeatureAngleDegrees)),
+        5.0f,
+        90.0f);
+    options.triangleQualityMaximumNormalDeviationDegrees = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTriangleQualityMaximumNormalDeviationDegrees"))
+                               .toDouble(
+                                   options.triangleQualityMaximumNormalDeviationDegrees)),
+        5.0f,
+        90.0f);
+    options.enableTriangleQualityTangentialRelaxation = settings.value(
+        QStringLiteral("tsdfTriangleQualityTangentialRelaxation")).toBool(
+            options.enableTriangleQualityTangentialRelaxation);
+    options.triangleQualityTangentialRelaxationPasses = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfTriangleQualityTangentialRelaxationPasses"))
+            .toInt(options.triangleQualityTangentialRelaxationPasses),
+        8);
+    options.triangleQualityTangentialRelaxationLambda = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTriangleQualityTangentialRelaxationLambda"))
+                               .toDouble(
+                                   options.triangleQualityTangentialRelaxationLambda)),
+        0.0f,
+        1.0f);
+    options.triangleQualityTangentialMaximumDisplacementEdgeRatio =
+        std::clamp(
+            static_cast<float>(settings.value(QStringLiteral(
+                "tsdfTriangleQualityTangentialMaximumDisplacementEdgeRatio"))
+                                   .toDouble(
+                                       options
+                                           .triangleQualityTangentialMaximumDisplacementEdgeRatio)),
+            0.0f,
+            0.50f);
+    const bool automatic_isotropic_remeshing =
+        automatic_triangle_quality_optimization &&
+        options.simplifyTargetFaces <= 120000;
+    options.enableTriangleQualityIsotropicRemeshing = settings.value(
+        QStringLiteral("tsdfTriangleQualityIsotropicRemeshing")).toBool(
+            automatic_isotropic_remeshing);
+    options.triangleQualityIsotropicRemeshingPasses = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfTriangleQualityIsotropicRemeshingPasses"))
+            .toInt(options.triangleQualityIsotropicRemeshingPasses),
+        4);
+    options.triangleQualityIsotropicShortEdgeRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTriangleQualityIsotropicShortEdgeRatio"))
+                               .toDouble(
+                                   options.triangleQualityIsotropicShortEdgeRatio)),
+        0.05f,
+        0.45f);
+    options.triangleQualityIsotropicLongEdgeRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTriangleQualityIsotropicLongEdgeRatio"))
+                               .toDouble(
+                                   options.triangleQualityIsotropicLongEdgeRatio)),
+        1.25f,
+        4.0f);
+    options.triangleQualityIsotropicMaximumFaceGrowthRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTriangleQualityIsotropicMaximumFaceGrowthRatio"))
+                               .toDouble(
+                                   options
+                                       .triangleQualityIsotropicMaximumFaceGrowthRatio)),
+        0.0f,
+        0.20f);
+    options.topologyQualityMaximumBoundaryEdgeRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTopologyQualityMaximumBoundaryEdgeRatio"))
+                               .toDouble(
+                                   options.topologyQualityMaximumBoundaryEdgeRatio)),
+        0.0f,
+        1.0f);
+    options.topologyQualityMaximumHighAspectFaceRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTopologyQualityMaximumHighAspectFaceRatio"))
+                               .toDouble(
+                                   options.topologyQualityMaximumHighAspectFaceRatio)),
+        0.0f,
+        1.0f);
+    options.topologyQualityMaximumExtremeAspectFaceRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTopologyQualityMaximumExtremeAspectFaceRatio"))
+                               .toDouble(
+                                   options.topologyQualityMaximumExtremeAspectFaceRatio)),
+        0.0f,
+        1.0f);
+    options.maximumSimplificationBoundaryEdgeGrowthRatio = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumSimplificationBoundaryEdgeGrowthRatio"))
+                               .toDouble(options.maximumSimplificationBoundaryEdgeGrowthRatio)),
+        0.0f,
+        1.0f);
+    options.simplificationMaximumPasses = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfSimplificationMaximumPasses"))
+            .toInt(options.simplificationMaximumPasses),
+        96);
+    options.simplificationFeatureAngleDegrees = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfSimplificationFeatureAngleDegrees"))
+                               .toDouble(options.simplificationFeatureAngleDegrees)),
+        5.0f,
+        85.0f);
+    options.simplificationMaximumNormalDeviationDegrees = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfSimplificationMaximumNormalDeviationDegrees"))
+                               .toDouble(options.simplificationMaximumNormalDeviationDegrees)),
+        5.0f,
+        85.0f);
+    options.simplificationMinimumSharpEdgeEndpointDegree = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfSimplificationMinimumSharpEdgeEndpointDegree"))
+            .toInt(options.simplificationMinimumSharpEdgeEndpointDegree),
+        4);
+    options.simplifySimpleOpenBoundaries = settings.value(
+        QStringLiteral("tsdfSimplifySimpleOpenBoundaries"))
+            .toBool(options.simplifySimpleOpenBoundaries);
     options.minimumInputFrames = 3;
     const int automatic_camera_support = 2;
     options.minimumDistinctCameraSupport = qBound(
@@ -287,8 +493,65 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.maximumCrossViewConsensusInverseDepthSpread)),
         0.001f,
         0.10f);
+    options.crossViewConsensusContourBandOnly = settings.value(
+        QStringLiteral("tsdfCrossViewConsensusContourBandOnly")).toBool(false);
+    options.enableRobustFrameQualityWeighting = settings.value(
+        QStringLiteral("tsdfRobustFrameQualityWeighting")).toBool(false);
+    options.robustFrameQualityMinimumMultiplier = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfRobustFrameQualityMinimumMultiplier"))
+                               .toDouble(
+                                   options.robustFrameQualityMinimumMultiplier)),
+        0.05f,
+        1.0f);
+    options.robustFrameQualityMadFloor = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfRobustFrameQualityMadFloor"))
+                               .toDouble(options.robustFrameQualityMadFloor)),
+        0.001f,
+        0.10f);
+    options.robustFrameQualityPenaltyOnset = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfRobustFrameQualityPenaltyOnset"))
+                               .toDouble(options.robustFrameQualityPenaltyOnset)),
+        0.0f,
+        4.0f);
+    options.robustFrameQualityPenaltyStrength = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfRobustFrameQualityPenaltyStrength"))
+                               .toDouble(options.robustFrameQualityPenaltyStrength)),
+        0.0f,
+        4.0f);
+    const bool automatic_surface_patch_support = options.resolution >= 384 &&
+        options.simplifyTargetFaces > 0 && options.simplifyTargetFaces <= 120000;
     options.enableSurfacePatchSupport = settings.value(
-        QStringLiteral("tsdfSurfacePatchSupport")).toBool(false);
+        QStringLiteral("tsdfSurfacePatchSupport")).toBool(
+            automatic_surface_patch_support);
+    options.enableContourBandZeroCrossingSupport = settings.value(
+        QStringLiteral("tsdfContourBandZeroCrossingSupport")).toBool(false);
+    options.collectZeroCrossingDiagnostics = settings.value(
+        QStringLiteral("tsdfCollectZeroCrossingDiagnostics")).toBool(false);
+    options.enableGeometryZeroCrossingRecovery = settings.value(
+        QStringLiteral("tsdfGeometryZeroCrossingRecovery")).toBool(false);
+    options.geometryZeroCrossingMinimumSupportedCorners = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfGeometryZeroCrossingMinimumSupportedCorners"))
+            .toInt(options.geometryZeroCrossingMinimumSupportedCorners),
+        7);
+    options.geometryZeroCrossingMinimumCellVotes = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfGeometryZeroCrossingMinimumCellVotes"))
+            .toInt(options.geometryZeroCrossingMinimumCellVotes),
+        8);
+    const float automatic_minimum_surface_patch_observation_weight = 0.60f;
+    options.minimumSurfacePatchObservationWeight = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMinimumSurfacePatchObservationWeight"))
+                               .toDouble(automatic_minimum_surface_patch_observation_weight)),
+        0.05f,
+        1.0f);
     options.minimumSurfacePatchSourceCount = qBound(
         2,
         settings.value(QStringLiteral("tsdfMinimumSurfacePatchSourceCount"))
@@ -299,6 +562,11 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         settings.value(QStringLiteral("tsdfMinimumSurfacePatchCoreNeighborCount"))
             .toInt(options.minimumSurfacePatchCoreNeighborCount),
         26);
+    options.surfacePatchGrowthPasses = qBound(
+        1,
+        settings.value(QStringLiteral("tsdfSurfacePatchGrowthPasses"))
+            .toInt(1),
+        6);
     options.maximumSurfacePatchInverseDepthSpread = std::clamp(
         static_cast<float>(settings.value(
             QStringLiteral("tsdfMaximumSurfacePatchInverseDepthSpread"))
@@ -336,6 +604,23 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         settings.value(QStringLiteral("tsdfDepthValidBoundaryErosionPixels"))
             .toInt(automatic_boundary_erosion),
         4);
+    const bool automatic_boundary_recovery = options.resolution >= 384 &&
+        options.simplifyTargetFaces > 0 && options.simplifyTargetFaces <= 120000;
+    options.enableGeometryVerifiedBoundaryRecovery = settings.value(
+        QStringLiteral("tsdfGeometryVerifiedBoundaryRecovery")).toBool(
+            automatic_boundary_recovery);
+    options.minimumBoundaryRecoveryGeometrySupport = qBound(
+        2,
+        settings.value(QStringLiteral("tsdfMinimumBoundaryRecoveryGeometrySupport"))
+            .toInt(options.minimumBoundaryRecoveryGeometrySupport),
+        16);
+    options.maximumBoundaryRecoveryInverseDepthSpread = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfMaximumBoundaryRecoveryInverseDepthSpread"))
+                               .toDouble(
+                                   options.maximumBoundaryRecoveryInverseDepthSpread)),
+        0.001f,
+        0.05f);
     options.supportMaskFreeSpaceWeight = std::clamp(
         static_cast<float>(settings.value(QStringLiteral("tsdfSupportMaskFreeSpaceWeight"))
                                .toDouble(options.supportMaskFreeSpaceWeight)),
@@ -351,6 +636,9 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         QStringLiteral("interpolation")).toString(QStringLiteral("enabled"));
     options.fillSmallBoundaryHoles = interpolation != QStringLiteral("disabled")
         && settings.value(QStringLiteral("holeFill")).toBool(true);
+    options.splitPinchedBoundaryVertices = settings.value(
+        QStringLiteral("tsdfSplitPinchedBoundaryVertices"))
+            .toBool(options.splitPinchedBoundaryVertices);
     const double maximum_hole_area = std::max(
         1.0, settings.value(QStringLiteral("maxHoleSize")).toDouble(100.0));
     const int conservative_edges = std::clamp(
@@ -359,10 +647,10 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
         32);
     options.maximumHoleBoundaryEdges = interpolation == QStringLiteral("extrapolated")
         ? std::clamp(std::max(64, conservative_edges * 4), 64, 128)
-        : conservative_edges;
+        : std::clamp(std::max(48, conservative_edges * 3), 32, 64);
     options.maximumHoleDiameterVoxels = interpolation == QStringLiteral("extrapolated")
         ? 16.0f
-        : 4.0f;
+        : 10.0f;
     options.maximumHoleBoundaryEdges = qBound(
         3,
         settings.value(QStringLiteral("tsdfMaximumHoleBoundaryEdges"))
@@ -373,6 +661,109 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.maximumHoleDiameterVoxels)),
         0.0f,
         64.0f);
+    const bool automatic_final_hole_fill =
+        options.fillSmallBoundaryHoles &&
+        options.resolution >= 384 &&
+        options.simplifyTargetFaces > 0 &&
+        options.simplifyTargetFaces <= 120000;
+    options.enableSilhouetteAwareFinalHoleFill = settings.value(
+        QStringLiteral("tsdfSilhouetteAwareFinalHoleFill")).toBool(
+            automatic_final_hole_fill);
+    if (automatic_final_hole_fill)
+    {
+        options.finalHoleFillMaximumBoundaryEdges = 192;
+        options.finalHoleFillMaximumDiameterVoxels = 48.0f;
+        options.finalHoleFillMaximumFaceGrowthRatio = 0.20f;
+    }
+    options.finalHoleFillMaximumBoundaryEdges = qBound(
+        3,
+        settings.value(QStringLiteral("tsdfFinalHoleFillMaximumBoundaryEdges"))
+            .toInt(options.finalHoleFillMaximumBoundaryEdges),
+        256);
+    options.finalHoleFillMaximumDiameterVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfFinalHoleFillMaximumDiameterVoxels"))
+                               .toDouble(options.finalHoleFillMaximumDiameterVoxels)),
+        0.0f,
+        64.0f);
+    options.finalHoleFillMaximumFaceGrowthRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfFinalHoleFillMaximumFaceGrowthRatio"))
+                               .toDouble(options.finalHoleFillMaximumFaceGrowthRatio)),
+        0.0f,
+        0.50f);
+    options.finalHoleFillMaximumSliverRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfFinalHoleFillMaximumSliverRatio"))
+                               .toDouble(options.finalHoleFillMaximumSliverRatio)),
+        0.0f,
+        0.50f);
+    options.enableVisibilityConstrainedFinalHoleFill = settings.value(
+        QStringLiteral("tsdfVisibilityConstrainedFinalHoleFill")).toBool(
+            automatic_final_hole_fill &&
+            options.enableSilhouetteAwareFinalHoleFill);
+    options.visibilityHoleFillMinimumSupportingViews = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityHoleFillMinimumSupportingViews"))
+            .toInt(options.visibilityHoleFillMinimumSupportingViews),
+        8);
+    options.visibilityHoleFillMaximumConflictViews = qBound(
+        0,
+        settings.value(QStringLiteral(
+            "tsdfVisibilityHoleFillMaximumConflictViews"))
+            .toInt(
+                automatic_final_hole_fill &&
+                        settings.value(QStringLiteral("surface_type"))
+                                .toString(QStringLiteral("arbitrary_3d")) ==
+                            QStringLiteral("arbitrary_3d")
+                    ? 2
+                    : options.visibilityHoleFillMaximumConflictViews),
+        8);
+    options.visibilityHoleFillDepthToleranceVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityHoleFillDepthToleranceVoxels"))
+                               .toDouble(
+                                   options.visibilityHoleFillDepthToleranceVoxels)),
+        1.0f,
+        32.0f);
+    options.visibilityHoleFillStrongSilhouetteRatio = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfVisibilityHoleFillStrongSilhouetteRatio"))
+                               .toDouble(
+                                   options.visibilityHoleFillStrongSilhouetteRatio)),
+        0.0f,
+        1.0f);
+    options.enableTinyBoundaryLoopCollapse = settings.value(
+        QStringLiteral("tsdfTinyBoundaryLoopCollapse")).toBool(
+            automatic_final_hole_fill &&
+            options.enableVisibilityConstrainedFinalHoleFill);
+    options.tinyBoundaryLoopCollapseMaximumEdges = qBound(
+        3,
+        settings.value(QStringLiteral(
+            "tsdfTinyBoundaryLoopCollapseMaximumEdges"))
+            .toInt(options.tinyBoundaryLoopCollapseMaximumEdges),
+        16);
+    options.tinyBoundaryLoopCollapseMaximumDiameterVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTinyBoundaryLoopCollapseMaximumDiameterVoxels"))
+                               .toDouble(
+                                   options.tinyBoundaryLoopCollapseMaximumDiameterVoxels)),
+        0.0f,
+        8.0f);
+    options.tinyBoundaryLoopCollapseMaximumEdgeVoxels = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral(
+            "tsdfTinyBoundaryLoopCollapseMaximumEdgeVoxels"))
+                               .toDouble(
+                                   options.tinyBoundaryLoopCollapseMaximumEdgeVoxels)),
+        0.0f,
+        1.0f);
+    options.tinyBoundaryLoopCollapseMaximumPasses = qBound(
+        1,
+        settings.value(QStringLiteral(
+            "tsdfTinyBoundaryLoopCollapseMaximumPasses"))
+            .toInt(options.tinyBoundaryLoopCollapseMaximumPasses),
+        8);
     const int automatic_boundary_smoothing_iterations = options.resolution >= 384 ? 2 : 1;
     options.boundarySmoothingIterations = qBound(
         0,
@@ -390,6 +781,49 @@ xjw::mesh::DepthTsdfOptions makeDepthTsdfOptions(const QJsonObject &settings,
                                .toDouble(options.maximumBoundarySmoothingDisplacementVoxels)),
         0.0f,
         1.0f);
+    const bool automatic_surface_denoising =
+        options.resolution >= 384 &&
+        options.simplifyTargetFaces > 0 &&
+        options.simplifyTargetFaces <= 120000 &&
+        settings.value(QStringLiteral("surface_type"))
+                .toString(QStringLiteral("arbitrary_3d")) ==
+            QStringLiteral("arbitrary_3d");
+    const int automatic_surface_denoising_iterations =
+        automatic_surface_denoising ? 1 : options.surfaceDenoisingIterations;
+    if (automatic_surface_denoising)
+    {
+        options.surfaceDenoisingLambda = 0.30f;
+        options.maximumSurfaceDenoisingDisplacementVoxels = 0.12f;
+        options.maximumSurfaceDenoisingNormalAngleDegrees = 25.0f;
+        options.surfaceDenoisingBoundaryProtectionRings = 1;
+    }
+    options.surfaceDenoisingIterations = qBound(
+        0,
+        settings.value(QStringLiteral("tsdfSurfaceDenoisingIterations"))
+            .toInt(automatic_surface_denoising_iterations),
+        3);
+    options.surfaceDenoisingLambda = std::clamp(
+        static_cast<float>(settings.value(QStringLiteral("tsdfSurfaceDenoisingLambda"))
+                               .toDouble(options.surfaceDenoisingLambda)),
+        0.0f,
+        0.75f);
+    options.maximumSurfaceDenoisingDisplacementVoxels = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumSurfaceDenoisingDisplacementVoxels"))
+                               .toDouble(options.maximumSurfaceDenoisingDisplacementVoxels)),
+        0.0f,
+        0.5f);
+    options.maximumSurfaceDenoisingNormalAngleDegrees = std::clamp(
+        static_cast<float>(settings.value(
+            QStringLiteral("tsdfMaximumSurfaceDenoisingNormalAngleDegrees"))
+                               .toDouble(options.maximumSurfaceDenoisingNormalAngleDegrees)),
+        5.0f,
+        60.0f);
+    options.surfaceDenoisingBoundaryProtectionRings = qBound(
+        0,
+        settings.value(QStringLiteral("tsdfSurfaceDenoisingBoundaryProtectionRings"))
+            .toInt(options.surfaceDenoisingBoundaryProtectionRings),
+        2);
     const bool automatic_trim_weak_boundary_tips = options.resolution >= 384;
     options.trimWeakBoundaryTips = settings.value(
         QStringLiteral("tsdfTrimWeakBoundaryTips")).toBool(
@@ -421,6 +855,57 @@ xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &sett
                                                          int requestedResolution)
 {
     return makeDepthTsdfOptions(settings, requestedResolution);
+}
+
+void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
+                                   xjw::mesh::DepthTsdfOptions *options)
+{
+    if (!options)
+    {
+        return;
+    }
+
+    if (!settings.contains(QStringLiteral("tsdfSupportMaskFreeSpaceCarving")))
+    {
+        options->enableSupportMaskFreeSpaceCarving = true;
+    }
+    if (!settings.contains(QStringLiteral("tsdfMinimumSupportMaskFreeSpaceViews")))
+    {
+        options->minimumSupportMaskFreeSpaceViews = 5;
+    }
+    if (!settings.contains(QStringLiteral("tsdfRobustFrameQualityWeighting")))
+    {
+        options->enableRobustFrameQualityWeighting = true;
+    }
+
+    const bool high_detail_model = options->resolution >= 384 &&
+        options->simplifyTargetFaces > 0 &&
+        options->simplifyTargetFaces <= 120000;
+    if (!high_detail_model)
+    {
+        return;
+    }
+    if (!settings.contains(QStringLiteral("tsdfTruncationVoxels")))
+    {
+        options->truncationVoxels = 12.0f;
+    }
+    if (!settings.contains(QStringLiteral("tsdfSurfaceSupportBandVoxels")))
+    {
+        options->surfaceSupportBandVoxels = 12.0f;
+    }
+    if (!settings.contains(QStringLiteral("tsdfAllowInvalidNearestPixelRecovery")))
+    {
+        options->allowInvalidNearestPixelRecovery = true;
+    }
+    if (!settings.contains(QStringLiteral(
+            "tsdfMaximumInvalidNearestPixelRecoveryInverseDepthSpread")))
+    {
+        options->maximumInvalidNearestPixelRecoveryInverseDepthSpread = 0.01f;
+    }
+    if (!settings.contains(QStringLiteral("tsdfGeometryZeroCrossingRecovery")))
+    {
+        options->enableGeometryZeroCrossingRecovery = true;
+    }
 }
 
 int meshResolutionFromSettings(const QJsonObject &settings)
@@ -831,17 +1316,30 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             });
         const bool orbital_workspace = orbital_frame_count >=
             std::max(3, static_cast<int>(artifacts.size() / 2));
-        if (orbital_workspace &&
-            !request.settings.contains(QStringLiteral("tsdfSupportMaskFreeSpaceCarving")))
+        if (orbital_workspace)
         {
-            options.enableSupportMaskFreeSpaceCarving = true;
+            applyOrbitalDepthTsdfDefaults(request.settings, &options);
         }
-        if (orbital_workspace &&
-            !request.settings.contains(QStringLiteral("tsdfMinimumSupportMaskFreeSpaceViews")))
+        const int tsdf_progress_end = request.exportObj ? 84 : 96;
+        if (request.progress)
         {
-            options.minimumSupportMaskFreeSpaceViews = 5;
+            options.progress = [progress = request.progress,
+                                tsdf_progress_end](const QString &stage, int percent)
+            {
+                const int bounded_percent = std::clamp(percent, 0, 100);
+                progress(stage, bounded_percent * tsdf_progress_end / 100);
+            };
         }
-        options.progress = request.progress;
+        options.isCancelled = request.isCancelled;
+        result.payload[QStringLiteral(
+            "configured_robust_frame_quality_weighting")] =
+            options.enableRobustFrameQualityWeighting;
+        result.payload[QStringLiteral(
+            "configured_triangle_quality_optimization")] =
+            options.enableTriangleQualityOptimization;
+        result.payload[QStringLiteral(
+            "configured_triangle_quality_isotropic_remeshing")] =
+            options.enableTriangleQualityIsotropicRemeshing;
         const DepthTsdfResult tsdf = DepthTsdfSurfaceBuilder::build(loaded.frames, options);
         mergePayload(DepthTsdfSurfaceBuilder::statisticsToJson(tsdf), &result.payload);
         result.payload[QStringLiteral("tsdf_resolution_x")] = tsdf.layout.cells[0];
@@ -870,14 +1368,33 @@ WorkflowResult buildMeshFromDepthMaps(const DepthMapMeshBuildRequest &request)
             view.qualityWeight = frame.frameQualityWeight;
             texture_views.push_back(std::move(view));
         }
+        if (request.progress)
+        {
+            request.progress(QStringLiteral("正在保存三角网格..."),
+                             request.exportObj ? 85 : 97);
+        }
+        std::function<void(const QString &, int)> output_progress = request.progress;
+        if (request.exportObj && request.progress)
+        {
+            output_progress = [progress = request.progress](
+                                  const QString &stage, int percent)
+            {
+                const int bounded_percent = std::clamp(percent, 0, 100);
+                progress(stage, 87 + bounded_percent * 12 / 100);
+            };
+        }
         result = saveMeshAndOptionalTexture(tsdf.mesh,
                                             "depth_tsdf",
                                             output_root,
                                             request.exportObj,
                                             request.texture,
-                                            request.progress,
+                                            output_progress,
                                             &texture_views);
         mergePayload(diagnostics, &result.payload);
+        if (result.ok && request.progress)
+        {
+            request.progress(QStringLiteral("模型生成完成"), 100);
+        }
         return result;
     }
 
@@ -986,6 +1503,7 @@ WorkflowResult buildModel(const ModelBuildRequest &request)
         depth_request.reconstruction = reconstruction;
         depth_request.exportObj = exportObjRequested(request.settings);
         depth_request.texture = defaultTextureConfig();
+        depth_request.isCancelled = request.isCancelled;
         depth_request.progress = request.progress;
         result = buildMeshFromDepthMaps(depth_request);
     }

@@ -43,6 +43,21 @@ TEST(CameraSceneViewMathTest, UsesStableIndexWhenCameraScoresMatch)
               2);
 }
 
+TEST(CameraSceneViewMathTest, UsesCameraCenterSideBeforeNoisyOpticalAxis)
+{
+    const QVector<CameraViewCandidate> candidates{
+        // 0 号相机位于当前观察方向一侧，但其光轴被错误翻转。
+        {0, QVector3D(0.0f, 0.0f, 1.0f), QVector3D(0.0f, 0.0f, 3.0f), true},
+        // 1 号相机在模型背面，光轴恰好会误导旧的纯光轴选择策略。
+        {1, QVector3D(0.0f, 0.0f, -1.0f), QVector3D(0.0f, 0.0f, -3.0f), true},
+    };
+
+    EXPECT_EQ(selectCameraForView(candidates,
+                                  QVector3D(0.0f, 0.0f, -1.0f),
+                                  QVector3D()),
+              0);
+}
+
 TEST(CameraSceneViewMathTest, CalibratedProjectionMapsOpticalAxisToPrincipalPoint)
 {
     const QMatrix4x4 projection = calibratedProjection(
@@ -89,4 +104,21 @@ TEST(CameraSceneViewMathTest, BuildsImagePlaneInCameraWorldCoordinates)
     EXPECT_EQ(corners.at(1), QVector3D(6.0f, 22.0f, 30.0f));
     EXPECT_EQ(corners.at(2), QVector3D(6.0f, 18.0f, 30.0f));
     EXPECT_EQ(corners.at(3), QVector3D(14.0f, 18.0f, 30.0f));
+}
+
+TEST(CameraSceneViewMathTest, ConvertsPixelAxesToVisualImagePlaneAxes)
+{
+    QMatrix3x3 rotation;
+    rotation.fill(0.0f);
+    rotation(0, 0) = 1.0f;
+    rotation(1, 1) = 1.0f;
+    rotation(2, 2) = 1.0f;
+
+    const CameraImagePlaneAxes axes = cameraImagePlaneAxes(rotation, 1, 1);
+    EXPECT_EQ(axes.right, QVector3D(1.0f, 0.0f, 0.0f));
+    EXPECT_EQ(axes.up, QVector3D(0.0f, -1.0f, 0.0f));
+
+    const CameraImagePlaneAxes reversedAxes = cameraImagePlaneAxes(rotation, -1, -1);
+    EXPECT_EQ(reversedAxes.right, QVector3D(-1.0f, 0.0f, 0.0f));
+    EXPECT_EQ(reversedAxes.up, QVector3D(0.0f, 1.0f, 0.0f));
 }

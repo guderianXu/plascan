@@ -232,6 +232,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     pipeline.useProjectCameraIntrinsics = true;
     pipeline.useProjectCameraPoses = !options.resetAlignment;
     pipeline.adaptiveCameraModelFitting = options.adaptiveCameraModelFitting;
+    pipeline.lockInputCameraPoses = options.lockInputCameraPoses;
     // “照片序列”是像对候选和初始化的弱先验，不代表相机中心必须满足等距轨迹。
     // 对环拍、变焦或物体旋转序列施加硬距离门限，会把几何验证通过的 PnP 位姿误判为异常。
     pipeline.enforceSequencePoseConsistency = false;
@@ -349,6 +350,8 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     settings.insert(QStringLiteral("use_project_camera_poses"), pipeline.useProjectCameraPoses);
     settings.insert(QStringLiteral("adaptive_camera_model_fitting"),
                     options.adaptiveCameraModelFitting);
+    settings.insert(QStringLiteral("lock_input_camera_poses"),
+                    pipeline.lockInputCameraPoses);
     settings.insert(QStringLiteral("cuda_parallel_pairs_requested"), options.cudaParallelPairs);
     settings.insert(QStringLiteral("cuda_parallel_pairs_effective"), 0);
     settings.insert(QStringLiteral("reference_preselection_available"),

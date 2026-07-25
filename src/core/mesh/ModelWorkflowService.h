@@ -35,6 +35,7 @@ struct DepthMapMeshBuildRequest
     xjw::mesh::ReconstructionConfig reconstruction;
     bool exportObj = false;
     xjw::mesh::TextureMappingConfig texture;
+    std::function<bool()> isCancelled;
     std::function<void(const QString &, int)> progress;
 };
 
@@ -55,6 +56,7 @@ struct ModelBuildRequest
     QString depthMapSourcePath;
     QString outputRoot;
     QJsonObject settings;
+    std::function<bool()> isCancelled;
     std::function<void(const QString &, int)> progress;
 };
 
@@ -76,6 +78,8 @@ int meshResolutionFromSettings(const QJsonObject &settings);
 QString depthReconstructionModeFromSettings(const QJsonObject &settings);
 xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &settings,
                                                          int requestedResolution);
+void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
+                                   xjw::mesh::DepthTsdfOptions *options);
 xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings);
 xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedResolution,
                                                                    bool aerialTerrain,

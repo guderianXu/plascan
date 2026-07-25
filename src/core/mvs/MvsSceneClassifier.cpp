@@ -210,6 +210,8 @@ int recommendedMvsSourceViewCount(MvsSceneProfile scene_profile,
     }
     else if (scene_profile == MvsSceneProfile::OrbitalObject)
     {
+        // High-resolution orbital scenes need the wider +/-3 pair to reject
+        // coherent background surfaces that can survive a four-view vote.
         scene_target = high_quality ? 6 : 4;
     }
 
@@ -217,9 +219,20 @@ int recommendedMvsSourceViewCount(MvsSceneProfile scene_profile,
     return std::min(requested_count, view_count - 1);
 }
 
-float recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile sceneProfile)
+float recommendedMvsSourceMaximumAngleDeg(MvsSceneProfile sceneProfile,
+                                          int requested_source_count)
 {
-    return sceneProfile == MvsSceneProfile::OrbitalObject ? 47.0f : 35.0f;
+    if (sceneProfile != MvsSceneProfile::OrbitalObject)
+    {
+        return 35.0f;
+    }
+
+    // Dense object rings such as Middlebury Dino have about 22.5 degrees
+    // between adjacent views. A 47-degree gate can never satisfy a six-view
+    // high-quality request because it only admits the +/-1 and +/-2 cameras.
+    // Keep the conservative gate for four-view jobs, and admit the +/-3 pair
+    // for high-quality six-source jobs.
+    return requested_source_count >= 6 ? 70.0f : 47.0f;
 }
 
 } // namespace mvs

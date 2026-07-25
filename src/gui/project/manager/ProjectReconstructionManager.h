@@ -41,6 +41,7 @@ public:
     QJsonArray getAvailableAtResults() const;
     void startTask(Task task, const QJsonObject &settings = QJsonObject());
     void cancelMvs();
+    void cancelModelGeneration();
 
 signals:
     void mvsProgressChanged(const QString &stage, int percent);

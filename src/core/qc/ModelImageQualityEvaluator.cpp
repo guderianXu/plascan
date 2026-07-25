@@ -132,7 +132,11 @@ struct EdgeTailArtifacts
     cv::Mat referenceEdge;
     cv::Mat renderedEdge;
     cv::Mat distanceHeatmap;
+    cv::Mat referenceToRenderDistanceHeatmap;
+    cv::Mat renderToReferenceDistanceHeatmap;
     cv::Mat tailMask;
+    cv::Mat referenceTailMask;
+    cv::Mat renderedTailMask;
     cv::Mat geometrySupport;
     cv::Mat geometrySourceMask;
     cv::Mat geometrySourceCount;
@@ -191,12 +195,16 @@ EdgeTailArtifacts buildEdgeTailArtifacts(
     const ModelValidationView &validation,
     const cv::Mat &reference_mask,
     const cv::Mat &rendered_mask,
-    double p90_threshold)
+    double p90_threshold,
+    double reference_p90_threshold,
+    double rendered_p90_threshold)
 {
     EdgeTailArtifacts result;
     if (reference_mask.empty() || rendered_mask.empty() ||
         reference_mask.size() != rendered_mask.size() ||
-        !std::isfinite(p90_threshold))
+        !std::isfinite(p90_threshold) ||
+        !std::isfinite(reference_p90_threshold) ||
+        !std::isfinite(rendered_p90_threshold))
     {
         return result;
     }
@@ -211,10 +219,17 @@ EdgeTailArtifacts buildEdgeTailArtifacts(
     const cv::Mat reference_to_render = distanceToEdge(result.renderedEdge);
     const cv::Mat render_to_reference = distanceToEdge(result.referenceEdge);
     cv::Mat distance_values(reference_mask.size(), CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat reference_distance_values(
+        reference_mask.size(), CV_32FC1, cv::Scalar(0.0f));
+    cv::Mat rendered_distance_values(
+        reference_mask.size(), CV_32FC1, cv::Scalar(0.0f));
     cv::Mat reference_tail(reference_mask.size(), CV_8UC1, cv::Scalar(0));
     cv::Mat rendered_tail(reference_mask.size(), CV_8UC1, cv::Scalar(0));
     float maximum_distance = 0.0f;
-    const float threshold = static_cast<float>(std::max(0.0, p90_threshold));
+    const float reference_threshold = static_cast<float>(
+        std::max(0.0, reference_p90_threshold));
+    const float rendered_threshold = static_cast<float>(
+        std::max(0.0, rendered_p90_threshold));
     for (int row = 0; row < reference_mask.rows; ++row)
     {
         for (int column = 0; column < reference_mask.cols; ++column)
@@ -223,8 +238,9 @@ EdgeTailArtifacts buildEdgeTailArtifacts(
             {
                 const float distance = reference_to_render.at<float>(row, column);
                 distance_values.at<float>(row, column) = distance;
+                reference_distance_values.at<float>(row, column) = distance;
                 maximum_distance = std::max(maximum_distance, distance);
-                if (distance + 1.0e-4f >= threshold)
+                if (distance + 1.0e-4f >= reference_threshold)
                 {
                     reference_tail.at<std::uint8_t>(row, column) = 255;
                 }
@@ -234,8 +250,9 @@ EdgeTailArtifacts buildEdgeTailArtifacts(
                 const float distance = render_to_reference.at<float>(row, column);
                 distance_values.at<float>(row, column) = std::max(
                     distance_values.at<float>(row, column), distance);
+                rendered_distance_values.at<float>(row, column) = distance;
                 maximum_distance = std::max(maximum_distance, distance);
-                if (distance + 1.0e-4f >= threshold)
+                if (distance + 1.0e-4f >= rendered_threshold)
                 {
                     rendered_tail.at<std::uint8_t>(row, column) = 255;
                 }
@@ -250,9 +267,19 @@ EdgeTailArtifacts buildEdgeTailArtifacts(
     cv::Mat overlapping_tail;
     cv::bitwise_and(reference_tail, rendered_tail, overlapping_tail);
     result.tailMask.setTo(cv::Scalar(255, 0, 255), overlapping_tail);
+    result.referenceTailMask = reference_tail;
+    result.renderedTailMask = rendered_tail;
     result.distanceHeatmap = colorizeFloat(
         distance_values,
         result.referenceEdge | result.renderedEdge,
+        std::max(1.0f, maximum_distance));
+    result.referenceToRenderDistanceHeatmap = colorizeFloat(
+        reference_distance_values,
+        result.referenceEdge,
+        std::max(1.0f, maximum_distance));
+    result.renderToReferenceDistanceHeatmap = colorizeFloat(
+        rendered_distance_values,
+        result.renderedEdge,
         std::max(1.0f, maximum_distance));
 
     cv::Mat geometry_support;
@@ -334,6 +361,8 @@ EdgeTailArtifacts buildEdgeTailArtifacts(
 
     result.diagnostics.available = true;
     result.diagnostics.thresholdPixels = p90_threshold;
+    result.diagnostics.referenceThresholdPixels = reference_p90_threshold;
+    result.diagnostics.renderedThresholdPixels = rendered_p90_threshold;
     result.diagnostics.referenceEdgePixelCount = cv::countNonZero(result.referenceEdge);
     result.diagnostics.renderedEdgePixelCount = cv::countNonZero(result.renderedEdge);
     result.diagnostics.referenceTailPixelCount = cv::countNonZero(reference_tail);
@@ -506,6 +535,10 @@ QJsonObject edgeTailToJson(
     QJsonObject object;
     object[QStringLiteral("available")] = diagnostics.available;
     object[QStringLiteral("threshold_pixels")] = diagnostics.thresholdPixels;
+    object[QStringLiteral("reference_threshold_pixels")] =
+        diagnostics.referenceThresholdPixels;
+    object[QStringLiteral("rendered_threshold_pixels")] =
+        diagnostics.renderedThresholdPixels;
     object[QStringLiteral("reference_edge_pixel_count")] =
         diagnostics.referenceEdgePixelCount;
     object[QStringLiteral("rendered_edge_pixel_count")] =
@@ -542,6 +575,54 @@ QJsonObject viewToJson(const ModelViewQuality &view)
         ? QJsonValue(view.edgeP50Pixels) : QJsonValue();
     object[QStringLiteral("edge_p90_pixels")] = std::isfinite(view.edgeP90Pixels)
         ? QJsonValue(view.edgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("reference_to_render_edge_p50_pixels")] =
+        std::isfinite(view.referenceToRenderEdgeP50Pixels)
+        ? QJsonValue(view.referenceToRenderEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("reference_to_render_edge_p90_pixels")] =
+        std::isfinite(view.referenceToRenderEdgeP90Pixels)
+        ? QJsonValue(view.referenceToRenderEdgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("render_to_reference_edge_p50_pixels")] =
+        std::isfinite(view.renderToReferenceEdgeP50Pixels)
+        ? QJsonValue(view.renderToReferenceEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("render_to_reference_edge_p90_pixels")] =
+        std::isfinite(view.renderToReferenceEdgeP90Pixels)
+        ? QJsonValue(view.renderToReferenceEdgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("silhouette_edge_p50_pixels")] =
+        std::isfinite(view.silhouetteEdgeP50Pixels)
+        ? QJsonValue(view.silhouetteEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("silhouette_edge_p90_pixels")] =
+        std::isfinite(view.silhouetteEdgeP90Pixels)
+        ? QJsonValue(view.silhouetteEdgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("reference_to_render_silhouette_edge_p50_pixels")] =
+        std::isfinite(view.referenceToRenderSilhouetteEdgeP50Pixels)
+        ? QJsonValue(view.referenceToRenderSilhouetteEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("reference_to_render_silhouette_edge_p90_pixels")] =
+        std::isfinite(view.referenceToRenderSilhouetteEdgeP90Pixels)
+        ? QJsonValue(view.referenceToRenderSilhouetteEdgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("render_to_reference_silhouette_edge_p50_pixels")] =
+        std::isfinite(view.renderToReferenceSilhouetteEdgeP50Pixels)
+        ? QJsonValue(view.renderToReferenceSilhouetteEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("render_to_reference_silhouette_edge_p90_pixels")] =
+        std::isfinite(view.renderToReferenceSilhouetteEdgeP90Pixels)
+        ? QJsonValue(view.renderToReferenceSilhouetteEdgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("structure_edge_p50_pixels")] =
+        std::isfinite(view.structureEdgeP50Pixels)
+        ? QJsonValue(view.structureEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("structure_edge_p90_pixels")] =
+        std::isfinite(view.structureEdgeP90Pixels)
+        ? QJsonValue(view.structureEdgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("reference_to_render_structure_edge_p50_pixels")] =
+        std::isfinite(view.referenceToRenderStructureEdgeP50Pixels)
+        ? QJsonValue(view.referenceToRenderStructureEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("reference_to_render_structure_edge_p90_pixels")] =
+        std::isfinite(view.referenceToRenderStructureEdgeP90Pixels)
+        ? QJsonValue(view.referenceToRenderStructureEdgeP90Pixels) : QJsonValue();
+    object[QStringLiteral("render_to_reference_structure_edge_p50_pixels")] =
+        std::isfinite(view.renderToReferenceStructureEdgeP50Pixels)
+        ? QJsonValue(view.renderToReferenceStructureEdgeP50Pixels) : QJsonValue();
+    object[QStringLiteral("render_to_reference_structure_edge_p90_pixels")] =
+        std::isfinite(view.renderToReferenceStructureEdgeP90Pixels)
+        ? QJsonValue(view.renderToReferenceStructureEdgeP90Pixels) : QJsonValue();
     object[QStringLiteral("appearance_available")] = view.appearanceAvailable;
     object[QStringLiteral("foreground_ssim")] = view.foregroundSsim;
     object[QStringLiteral("foreground_psnr")] = view.foregroundPsnr;
@@ -611,10 +692,14 @@ bool writeReportFiles(const ModelImageQualityOptions &options,
         return false;
     }
 
-    QByteArray csv("view_id,image_path,render_ok,coverage,iou,floating_rate,edge_p50,edge_p90,ssim,psnr,error\n");
+    QByteArray csv(
+        "view_id,image_path,render_ok,coverage,iou,floating_rate,edge_p50,edge_p90,"
+        "reference_to_render_edge_p50,reference_to_render_edge_p90,"
+        "render_to_reference_edge_p50,render_to_reference_edge_p90,ssim,psnr,error\n");
     for (const ModelViewQuality &view : result.views)
     {
-        QString line = QStringLiteral("\"%1\",\"%2\",%3,%4,%5,%6,%7,%8,%9,%10,\"%11\"\n")
+        QString line = QStringLiteral(
+            "\"%1\",\"%2\",%3,%4,%5,%6,%7,%8,%9,%10,%11,%12,%13,%14,\"%15\"\n")
             .arg(csvEscaped(view.viewId))
             .arg(csvEscaped(view.imagePath))
             .arg(view.renderOk ? 1 : 0)
@@ -623,6 +708,10 @@ bool writeReportFiles(const ModelImageQualityOptions &options,
             .arg(view.floatingPixelRate, 0, 'g', 10)
             .arg(view.edgeP50Pixels, 0, 'g', 10)
             .arg(view.edgeP90Pixels, 0, 'g', 10)
+            .arg(view.referenceToRenderEdgeP50Pixels, 0, 'g', 10)
+            .arg(view.referenceToRenderEdgeP90Pixels, 0, 'g', 10)
+            .arg(view.renderToReferenceEdgeP50Pixels, 0, 'g', 10)
+            .arg(view.renderToReferenceEdgeP90Pixels, 0, 'g', 10)
             .arg(view.foregroundSsim, 0, 'g', 10)
             .arg(view.foregroundPsnr, 0, 'g', 10)
             .arg(csvEscaped(view.error));
@@ -884,7 +973,12 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
         quality.depthAttribution = attributeMissingDepthCoverage(
             validation, reference_mask, render.validMask, &missing_stage);
         const EdgeTailArtifacts edge_tail = buildEdgeTailArtifacts(
-            validation, reference_mask, render.validMask, quality.edgeP90Pixels);
+            validation,
+            reference_mask,
+            render.validMask,
+            quality.edgeP90Pixels,
+            quality.referenceToRenderEdgeP90Pixels,
+            quality.renderToReferenceEdgeP90Pixels);
         quality.edgeTail = edge_tail.diagnostics;
 
         const QString view_directory = QDir(options.outputDirectory).filePath(
@@ -920,8 +1014,20 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
                 directory.filePath(QStringLiteral("edge_distance_bidirectional.png")),
                 edge_tail.distanceHeatmap);
             xjw::common::io::writeImage(
+                directory.filePath(QStringLiteral("edge_distance_reference_to_render.png")),
+                edge_tail.referenceToRenderDistanceHeatmap);
+            xjw::common::io::writeImage(
+                directory.filePath(QStringLiteral("edge_distance_render_to_reference.png")),
+                edge_tail.renderToReferenceDistanceHeatmap);
+            xjw::common::io::writeImage(
                 directory.filePath(QStringLiteral("edge_p90_tail_mask.png")),
                 edge_tail.tailMask);
+            xjw::common::io::writeImage(
+                directory.filePath(QStringLiteral("edge_reference_to_render_p90_tail.png")),
+                edge_tail.referenceTailMask);
+            xjw::common::io::writeImage(
+                directory.filePath(QStringLiteral("edge_render_to_reference_p90_tail.png")),
+                edge_tail.renderedTailMask);
             if (!edge_tail.geometrySupport.empty())
             {
                 xjw::common::io::writeImage(
@@ -976,6 +1082,12 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
     std::vector<double> coverage;
     std::vector<double> iou;
     std::vector<double> edge;
+    std::vector<double> reference_to_render_edge;
+    std::vector<double> render_to_reference_edge;
+    std::vector<double> silhouette_edge;
+    std::vector<double> reference_to_render_silhouette_edge;
+    std::vector<double> render_to_reference_silhouette_edge;
+    std::vector<double> structure_edge;
     std::vector<double> ssim;
     for (const ModelViewQuality &view : result.views)
     {
@@ -984,6 +1096,16 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
             coverage.push_back(view.referenceCoverage);
             iou.push_back(view.silhouetteIou);
             edge.push_back(view.edgeP90Pixels);
+            reference_to_render_edge.push_back(
+                view.referenceToRenderEdgeP90Pixels);
+            render_to_reference_edge.push_back(
+                view.renderToReferenceEdgeP90Pixels);
+            silhouette_edge.push_back(view.silhouetteEdgeP90Pixels);
+            reference_to_render_silhouette_edge.push_back(
+                view.referenceToRenderSilhouetteEdgeP90Pixels);
+            render_to_reference_silhouette_edge.push_back(
+                view.renderToReferenceSilhouetteEdgeP90Pixels);
+            structure_edge.push_back(view.structureEdgeP90Pixels);
             if (view.appearanceAvailable)
             {
                 ssim.push_back(view.foregroundSsim);
@@ -997,6 +1119,20 @@ ModelImageQualityResult ModelImageQualityEvaluator::evaluate(
     result.summary[QStringLiteral("median_coverage")] = median(coverage);
     result.summary[QStringLiteral("median_iou")] = median(iou);
     result.summary[QStringLiteral("median_edge_p90_pixels")] = median(edge);
+    result.summary[QStringLiteral("median_reference_to_render_edge_p90_pixels")] =
+        median(reference_to_render_edge);
+    result.summary[QStringLiteral("median_render_to_reference_edge_p90_pixels")] =
+        median(render_to_reference_edge);
+    result.summary[QStringLiteral("median_silhouette_edge_p90_pixels")] =
+        median(silhouette_edge);
+    result.summary[
+        QStringLiteral("median_reference_to_render_silhouette_edge_p90_pixels")] =
+        median(reference_to_render_silhouette_edge);
+    result.summary[
+        QStringLiteral("median_render_to_reference_silhouette_edge_p90_pixels")] =
+        median(render_to_reference_silhouette_edge);
+    result.summary[QStringLiteral("median_structure_edge_p90_pixels")] =
+        median(structure_edge);
     result.summary[QStringLiteral("median_ssim")] = median(ssim);
     std::vector<double> verified_depth_coverage;
     std::vector<double> missing_without_verified_depth;

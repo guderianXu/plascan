@@ -564,7 +564,9 @@ void IncrementalSfm::alignReconstructionToKnownPosePriors(const std::vector<Imag
 
 void IncrementalSfm::refineKnownCameraPosesWithPnp()
 {
-    if (!_sfmOptions.useKnownCameraPoses || !_reconstruction)
+    if (!_sfmOptions.useKnownCameraPoses ||
+        !_sfmOptions.refineKnownCameraPoseWithSoftPrior ||
+        !_reconstruction)
     {
         return;
     }

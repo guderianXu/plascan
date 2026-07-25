@@ -31,11 +31,12 @@ live under `src/core/mvs/tests/`.
 - `MvsSourcePlanner` scores candidate source views by shared tracks, geometric inliers, triangulation angle,
   projected coverage, baseline, known overlap, and sequence distance.
 - `MvsSceneClassifier` resolves the candidate source pool before image preload and frame-cache preparation.
-  High-resolution aerial terrain uses up to eight candidates, while orbital-object capture uses a smaller
-  local pool. An explicitly larger user value is retained, and the final value is capped by the number of
-  available views. Aerial planning keeps the 35-degree maximum triangulation angle; orbital-object rings use
-  47 degrees so the second camera ring neighbor can contribute without admitting the unstable 48--49 degree
-  Temple pairs. Logs and CLI reports record both configured and effective pool sizes.
+  High-resolution aerial terrain uses up to eight candidates, while high-resolution orbital-object capture
+  uses six ring views and low-resolution object capture uses four. The final value is capped by the number
+  of available views. Aerial planning keeps the 35-degree maximum triangulation angle; four-source orbital
+  jobs use 47 degrees so the second ring neighbor can contribute, while high-quality six-source jobs admit
+  the roughly 67-degree third neighbors with a 70-degree gate so coherent background surfaces require wider
+  cross-view agreement. Logs and CLI reports record both configured and effective pool sizes.
 - The selected source plan is saved with the depth frame record so depth generation and fusion use the same
   overlap assumptions.
 - When verified pair geometry is available, verified pairs are selected first and shared-track geometry may
@@ -286,3 +287,13 @@ E:/code/plascan/build/windows-vcpkg-cuda-release/tests/test_mvs_pipeline.exe `
 - The final Temple default regression at resolution 320 records coverage `0.95419`, IoU `0.89445`, edge P90
   `12.65 px`, and SSIM `0.61454`. The Ultra 384 all-view result records `0.95235` / `0.90611` / `12.50 px` /
   `0.61587`, keeps one main component, and passes the IoU gate. Edge P90 and SSIM remain below the strict targets.
+
+## 2026-07-25 Project-Mask and Source-Pool Validation
+
+- Temple regressions must forward the project exclusion masks into MVS. The content-mask fallback retained about
+  43% of each image and included the dark curtain behind the object, which fused into an artificial wall. Passing
+  the same project masks used by the GUI (or `--mvs-mask-dir` in the reconstruction CLI) reduced the retained
+  region to about 27% and removed that wall. This artifact is a mask-input problem, not a TSDF hole-fill failure.
+- With identical project masks, four and six source views produced mixed Temple results: four views slightly
+  improved SSIM and one edge metric, while six improved IoU and reference-edge agreement. High-quality orbital
+  reconstruction therefore keeps six source views and the 70-degree gate; lower-quality jobs keep four views.

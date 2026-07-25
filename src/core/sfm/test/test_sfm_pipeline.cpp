@@ -480,6 +480,48 @@ TEST_F(SfmInitTest, KnownCameraPoseModeRunsGlobalBAAndRefinesNoisyPose)
               centerDistance(inputCameras[1], trueCameras[1]));
 }
 
+TEST_F(SfmInitTest, LockedKnownCameraPoseModeKeepsInputExtrinsicsExact)
+{
+    opts.useKnownCameraPoses = true;
+    opts.refineKnownCameraPoseWithSoftPrior = false;
+    opts.triangulatorOptions.minTriAngle = 0.1;
+    opts.triangulatorOptions.maxReprojError = 0.5;
+    opts.triangulatorOptions.continueMaxReprojError = 0.5;
+    opts.triangulatorOptions.completeMaxReprojError = 0.5;
+    opts.filterMaxReprojError = 0.5;
+    opts.filterMinTriAngle = 0.1;
+
+    const std::vector<Camera> cameras = {
+        makeCamera(0.0, 0.0, 0.0),
+        makeCamera(2.0, 0.0, 0.0),
+        makeCamera(4.0, 0.0, 0.0),
+    };
+    const auto points = generatePoints(80, 2.0, 0.0, 70.0, 1.5, 83);
+    std::vector<std::vector<FeatureKeypoint>> keypoints;
+    std::vector<FeatureMatch> matches01;
+    std::vector<FeatureMatch> matches12;
+    std::vector<FeatureMatch> matches02;
+    buildKnownPoseTracks(cameras, points, keypoints, matches01, matches12, matches02);
+
+    IncrementalSfm sfm(opts);
+    sfm.addImageWithCamera(0, "locked_pose_0.png", cameras[0], keypoints[0]);
+    sfm.addImageWithCamera(1, "locked_pose_1.png", cameras[1], keypoints[1]);
+    sfm.addImageWithCamera(2, "locked_pose_2.png", cameras[2], keypoints[2]);
+    sfm.addMatches(0, 1, matches01);
+    sfm.addMatches(1, 2, matches12);
+    sfm.addMatches(0, 2, matches02);
+
+    const auto result = sfm.run();
+
+    ASSERT_TRUE(result.success) << result.summary;
+    ASSERT_NE(result.reconstruction, nullptr);
+    EXPECT_GT(result.baTracksOptimized, 0);
+    for (ImageId imageId = 0; imageId < 3; ++imageId)
+    {
+        EXPECT_LT(centerDistance(result.reconstruction->camera(imageId), cameras[imageId]), 1e-9);
+    }
+}
+
 TEST_F(SfmInitTest, KnownCameraPoseModeRejectsAllTwoViewOutputWhenMultiViewTracksExist)
 {
     opts.useKnownCameraPoses = true;

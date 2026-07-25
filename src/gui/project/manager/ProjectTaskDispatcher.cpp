@@ -118,3 +118,11 @@ void ProjectTaskDispatcher::cancelMvs() const
         _reconstructionManager->cancelMvs();
     }
 }
+
+void ProjectTaskDispatcher::cancelModelGeneration() const
+{
+    if (_reconstructionManager)
+    {
+        _reconstructionManager->cancelModelGeneration();
+    }
+}

@@ -4,12 +4,17 @@
 
 #include <algorithm>
 #include <array>
+#include <atomic>
 #include <cmath>
 #include <cstdint>
 #include <limits>
 #include <unordered_map>
 #include <unordered_set>
 #include <vector>
+
+#ifdef MESHING_OPENMP
+#include <omp.h>
+#endif
 
 namespace xjw::mesh
 {
@@ -213,6 +218,8 @@ bool collapsePreservesFaces(const TriMesh &mesh,
                  vertexFaces[static_cast<std::size_t>(remove)].cend());
     std::sort(faces.begin(), faces.end());
     faces.erase(std::unique(faces.begin(), faces.end()), faces.end());
+    std::unordered_set<FaceKey, FaceKeyHash> remapped_faces;
+    remapped_faces.reserve(faces.size());
     for (int faceIndex : faces)
     {
         const Triangle &face = mesh.faces[static_cast<std::size_t>(faceIndex)];
@@ -229,6 +236,12 @@ bool collapsePreservesFaces(const TriMesh &mesh,
         {
             continue;
         }
+        FaceKey remapped_key{{remapped[0], remapped[1], remapped[2]}};
+        std::sort(remapped_key.vertices.begin(), remapped_key.vertices.end());
+        if (!remapped_faces.insert(remapped_key).second)
+        {
+            return false;
+        }
         std::array<Vec3, 3> vertices;
         for (int corner = 0; corner < 3; ++corner)
         {
@@ -238,7 +251,8 @@ bool collapsePreservesFaces(const TriMesh &mesh,
         }
         const Vec3 newCross = cross(subtract(vertices[1], vertices[0]),
                                     subtract(vertices[2], vertices[0]));
-        if (length(newCross) <= 1.0e-14)
+        constexpr double minimumDoubleArea = 1.0e-8;
+        if (length(newCross) <= minimumDoubleArea)
         {
             return false;
         }
@@ -326,16 +340,33 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
     constexpr double pi = 3.14159265358979323846;
     const double featureCosine = std::cos(options.featureAngleDegrees * pi / 180.0);
     const double normalCosine = std::cos(options.maximumNormalDeviationDegrees * pi / 180.0);
+    const auto cancellationRequested = [&options]()
+    {
+        return options.isCancelled && options.isCancelled();
+    };
+    int stagnant_pass_count = 0;
     for (int pass = 0; pass < std::max(1, options.maximumPasses)
          && mesh->faceCount() > target; ++pass)
     {
+        if (cancellationRequested())
+        {
+            statistics.cancelled = true;
+            break;
+        }
+        const int input_face_count_this_pass = mesh->faceCount();
         std::vector<Quadric> quadrics(mesh->vertices.size());
         std::vector<std::vector<int>> vertexFaces(mesh->vertices.size());
         std::vector<std::vector<int>> neighbors(mesh->vertices.size());
         std::unordered_map<std::uint64_t, EdgeRecord> edges;
         edges.reserve(mesh->faces.size() * 2);
+        bool pass_cancelled = false;
         for (std::size_t faceIndex = 0; faceIndex < mesh->faces.size(); ++faceIndex)
         {
+            if ((faceIndex & 4095U) == 0U && cancellationRequested())
+            {
+                pass_cancelled = true;
+                break;
+            }
             const Triangle &face = mesh->faces[faceIndex];
             const Vec3 normal = faceNormal(*mesh, face);
             const Vec3 point = positionOf(mesh->vertices[static_cast<std::size_t>(face.v[0])]);
@@ -347,6 +378,7 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
                     static_cast<int>(faceIndex));
                 const int next = face.v[(corner + 1) % 3];
                 neighbors[static_cast<std::size_t>(face.v[corner])].push_back(next);
+                neighbors[static_cast<std::size_t>(next)].push_back(face.v[corner]);
                 const std::uint64_t key = edgeKey(face.v[corner], next);
                 EdgeRecord &edge = edges[key];
                 if (edge.faceCount == 0)
@@ -362,47 +394,155 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
                 ++edge.faceCount;
             }
         }
+        if (pass_cancelled)
+        {
+            statistics.cancelled = true;
+            break;
+        }
         for (auto &list : neighbors)
         {
             std::sort(list.begin(), list.end());
             list.erase(std::unique(list.begin(), list.end()), list.end());
         }
         std::vector<std::uint8_t> boundary(mesh->vertices.size(), 0);
+        std::vector<std::uint8_t> non_manifold(mesh->vertices.size(), 0);
+        std::vector<int> boundary_degree(mesh->vertices.size(), 0);
+        std::vector<int> sharp_edge_degree(mesh->vertices.size(), 0);
         for (const auto &item : edges)
         {
             if (item.second.faceCount == 1)
             {
                 boundary[static_cast<std::size_t>(item.second.first)] = 1;
                 boundary[static_cast<std::size_t>(item.second.second)] = 1;
+                ++boundary_degree[static_cast<std::size_t>(item.second.first)];
+                ++boundary_degree[static_cast<std::size_t>(item.second.second)];
+            }
+            if (item.second.sharp)
+            {
+                ++sharp_edge_degree[static_cast<std::size_t>(item.second.first)];
+                ++sharp_edge_degree[static_cast<std::size_t>(item.second.second)];
+            }
+            if (item.second.faceCount > 2)
+            {
+                non_manifold[static_cast<std::size_t>(item.second.first)] = 1;
+                non_manifold[static_cast<std::size_t>(item.second.second)] = 1;
+            }
+        }
+        std::vector<std::uint8_t> boundary_protected = boundary;
+        std::vector<std::uint8_t> topology_protected = non_manifold;
+        for (std::size_t vertex_index = 0; vertex_index < boundary_degree.size(); ++vertex_index)
+        {
+            if (boundary_degree[vertex_index] != 0 && boundary_degree[vertex_index] != 2)
+            {
+                topology_protected[vertex_index] = 1;
+            }
+        }
+        for (int protection_ring = 0; protection_ring < 2; ++protection_ring)
+        {
+            const std::vector<std::uint8_t> previous_protection = topology_protected;
+            for (std::size_t vertex_index = 0; vertex_index < previous_protection.size();
+                 ++vertex_index)
+            {
+                if (!previous_protection[vertex_index])
+                {
+                    continue;
+                }
+                for (const int neighbor : neighbors[vertex_index])
+                {
+                    topology_protected[static_cast<std::size_t>(neighbor)] = 1;
+                }
             }
         }
 
-        std::vector<CollapseCandidate> candidates;
-        candidates.reserve(edges.size());
+        std::vector<EdgeRecord> edge_records;
+        edge_records.reserve(edges.size());
         for (const auto &item : edges)
         {
-            const EdgeRecord &edge = item.second;
-            if (options.preserveOpenBoundaries &&
-                (boundary[static_cast<std::size_t>(edge.first)] ||
-                 boundary[static_cast<std::size_t>(edge.second)]))
+            edge_records.push_back(item.second);
+        }
+        struct CandidateWorkerResult
+        {
+            std::vector<CollapseCandidate> candidates;
+            int rejectedBoundaryEdgeCount = 0;
+            int rejectedFeatureEdgeCount = 0;
+            int rejectedTopologyEdgeCount = 0;
+            int rejectedFlipEdgeCount = 0;
+        };
+        int worker_count = 1;
+#ifdef MESHING_OPENMP
+        worker_count = options.workerCount > 0
+            ? std::clamp(options.workerCount, 1, omp_get_max_threads())
+            : std::max(1, omp_get_max_threads());
+#endif
+        std::vector<CandidateWorkerResult> worker_results(
+            static_cast<std::size_t>(worker_count));
+        const std::size_t candidates_per_worker =
+            edge_records.size() / static_cast<std::size_t>(worker_count) + 1;
+        for (CandidateWorkerResult &worker_result : worker_results)
+        {
+            worker_result.candidates.reserve(candidates_per_worker / 3 + 1);
+        }
+        std::atomic<bool> candidate_cancelled{false};
+        const auto evaluate_edge = [&](std::size_t edge_index, int worker_index)
+        {
+            if (candidate_cancelled.load(std::memory_order_relaxed))
             {
-                ++statistics.rejectedBoundaryEdgeCount;
-                continue;
+                return;
             }
-            if (edge.sharp)
+            if ((edge_index & 8191U) == 0U && cancellationRequested())
             {
-                ++statistics.rejectedFeatureEdgeCount;
-                continue;
+                candidate_cancelled.store(true, std::memory_order_relaxed);
+                return;
+            }
+            CandidateWorkerResult &worker_result =
+                worker_results[static_cast<std::size_t>(worker_index)];
+            const EdgeRecord &edge = edge_records[edge_index];
+            if (edge.faceCount > 2 ||
+                topology_protected[static_cast<std::size_t>(edge.first)] ||
+                topology_protected[static_cast<std::size_t>(edge.second)])
+            {
+                ++worker_result.rejectedTopologyEdgeCount;
+                return;
+            }
+            const bool touches_boundary_neighborhood =
+                boundary_protected[static_cast<std::size_t>(edge.first)] ||
+                boundary_protected[static_cast<std::size_t>(edge.second)];
+            const bool simple_boundary_edge = options.simplifySimpleOpenBoundaries &&
+                edge.faceCount == 1 &&
+                boundary_degree[static_cast<std::size_t>(edge.first)] == 2 &&
+                boundary_degree[static_cast<std::size_t>(edge.second)] == 2;
+            if (options.preserveOpenBoundaries && touches_boundary_neighborhood &&
+                !simple_boundary_edge)
+            {
+                ++worker_result.rejectedBoundaryEdgeCount;
+                return;
+            }
+            const int minimum_sharp_degree = std::max(
+                1, options.minimumSharpEdgeEndpointDegree);
+            const bool persistent_sharp_edge = edge.sharp &&
+                (minimum_sharp_degree <= 1 ||
+                 (sharp_edge_degree[static_cast<std::size_t>(edge.first)] >= minimum_sharp_degree &&
+                  sharp_edge_degree[static_cast<std::size_t>(edge.second)] >= minimum_sharp_degree));
+            if (persistent_sharp_edge)
+            {
+                ++worker_result.rejectedFeatureEdgeCount;
+                return;
             }
             const auto &firstNeighbors = neighbors[static_cast<std::size_t>(edge.first)];
             const auto &secondNeighbors = neighbors[static_cast<std::size_t>(edge.second)];
             int commonNeighborCount = 0;
+            std::array<int, 2> common_neighbors{{-1, -1}};
             std::size_t firstIndex = 0;
             std::size_t secondIndex = 0;
             while (firstIndex < firstNeighbors.size() && secondIndex < secondNeighbors.size())
             {
                 if (firstNeighbors[firstIndex] == secondNeighbors[secondIndex])
                 {
+                    if (commonNeighborCount < static_cast<int>(common_neighbors.size()))
+                    {
+                        common_neighbors[static_cast<std::size_t>(commonNeighborCount)] =
+                            firstNeighbors[firstIndex];
+                    }
                     ++commonNeighborCount; ++firstIndex; ++secondIndex;
                 }
                 else if (firstNeighbors[firstIndex] < secondNeighbors[secondIndex])
@@ -416,8 +556,15 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
             }
             if (commonNeighborCount != edge.faceCount)
             {
-                ++statistics.rejectedTopologyEdgeCount;
-                continue;
+                ++worker_result.rejectedTopologyEdgeCount;
+                return;
+            }
+            if (edge.faceCount == 2 && common_neighbors[0] >= 0 &&
+                common_neighbors[1] >= 0 &&
+                edges.find(edgeKey(common_neighbors[0], common_neighbors[1])) != edges.cend())
+            {
+                ++worker_result.rejectedTopologyEdgeCount;
+                return;
             }
             const Quadric quadric = addQuadrics(
                 quadrics[static_cast<std::size_t>(edge.first)],
@@ -429,10 +576,56 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
             if (!collapsePreservesFaces(*mesh, vertexFaces, edge.first, edge.second,
                                         position, normalCosine))
             {
-                ++statistics.rejectedFlipEdgeCount;
-                continue;
+                ++worker_result.rejectedFlipEdgeCount;
+                return;
             }
-            candidates.push_back({edge.first, edge.second, position, evaluate(quadric, position)});
+            worker_result.candidates.push_back(
+                {edge.first, edge.second, position, evaluate(quadric, position)});
+        };
+#ifdef MESHING_OPENMP
+#pragma omp parallel num_threads(worker_count)
+        {
+            const int worker_index = omp_get_thread_num();
+#pragma omp for schedule(dynamic, 512)
+            for (int edge_index = 0;
+                 edge_index < static_cast<int>(edge_records.size());
+                 ++edge_index)
+            {
+                evaluate_edge(static_cast<std::size_t>(edge_index), worker_index);
+            }
+        }
+#else
+        for (std::size_t edge_index = 0; edge_index < edge_records.size(); ++edge_index)
+        {
+            evaluate_edge(edge_index, 0);
+        }
+#endif
+        if (candidate_cancelled.load(std::memory_order_relaxed))
+        {
+            statistics.cancelled = true;
+            break;
+        }
+        std::size_t candidate_count = 0;
+        for (const CandidateWorkerResult &worker_result : worker_results)
+        {
+            candidate_count += worker_result.candidates.size();
+            statistics.rejectedBoundaryEdgeCount +=
+                worker_result.rejectedBoundaryEdgeCount;
+            statistics.rejectedFeatureEdgeCount +=
+                worker_result.rejectedFeatureEdgeCount;
+            statistics.rejectedTopologyEdgeCount +=
+                worker_result.rejectedTopologyEdgeCount;
+            statistics.rejectedFlipEdgeCount +=
+                worker_result.rejectedFlipEdgeCount;
+        }
+        std::vector<CollapseCandidate> candidates;
+        candidates.reserve(candidate_count);
+        for (CandidateWorkerResult &worker_result : worker_results)
+        {
+            candidates.insert(
+                candidates.end(),
+                std::make_move_iterator(worker_result.candidates.begin()),
+                std::make_move_iterator(worker_result.candidates.end()));
         }
         std::sort(candidates.begin(), candidates.end(), [](const auto &left, const auto &right)
         {
@@ -452,21 +645,50 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
         std::vector<CollapseCandidate> selected;
         selected.reserve(static_cast<std::size_t>(desiredFaceReduction / 2 + 1));
         int estimatedReduction = 0;
+        std::size_t examined_candidate_count = 0;
         for (const CollapseCandidate &candidate : candidates)
         {
-            if (used[static_cast<std::size_t>(candidate.keep)] ||
-                used[static_cast<std::size_t>(candidate.remove)])
+            if ((examined_candidate_count++ & 2047U) == 0U && cancellationRequested())
+            {
+                pass_cancelled = true;
+                break;
+            }
+            bool overlaps_selected_neighborhood =
+                used[static_cast<std::size_t>(candidate.keep)] ||
+                used[static_cast<std::size_t>(candidate.remove)];
+            for (const int neighbor : neighbors[static_cast<std::size_t>(candidate.keep)])
+            {
+                overlaps_selected_neighborhood = overlaps_selected_neighborhood ||
+                    used[static_cast<std::size_t>(neighbor)];
+            }
+            for (const int neighbor : neighbors[static_cast<std::size_t>(candidate.remove)])
+            {
+                overlaps_selected_neighborhood = overlaps_selected_neighborhood ||
+                    used[static_cast<std::size_t>(neighbor)];
+            }
+            if (overlaps_selected_neighborhood)
             {
                 continue;
             }
             used[static_cast<std::size_t>(candidate.keep)] = 1;
             used[static_cast<std::size_t>(candidate.remove)] = 1;
+            // The overlap test above already rejects any edge whose endpoints
+            // share a one-ring face neighborhood with a selected endpoint.
+            // Marking every neighbor as used as well expands the exclusion to
+            // two rings, although those collapses cannot touch the same face.
+            // Keeping only the endpoints therefore preserves independent
+            // face updates while allowing substantially larger safe batches.
             selected.push_back(candidate);
             estimatedReduction += 2;
             if (estimatedReduction >= desiredFaceReduction)
             {
                 break;
             }
+        }
+        if (pass_cancelled)
+        {
+            statistics.cancelled = true;
+            break;
         }
         if (selected.empty())
         {
@@ -475,6 +697,35 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
         applyCollapses(mesh, selected);
         statistics.collapsedEdgeCount += static_cast<int>(selected.size());
         statistics.passCount = pass + 1;
+        if (options.progress)
+        {
+            options.progress(statistics.passCount, mesh->faceCount());
+        }
+        const int face_reduction =
+            input_face_count_this_pass - mesh->faceCount();
+        const double reduction_ratio =
+            static_cast<double>(std::max(0, face_reduction)) /
+            std::max(1, input_face_count_this_pass);
+        const int target_margin = std::max(16, target / 100);
+        const bool remains_well_above_target =
+            mesh->faceCount() > target + target_margin;
+        if (remains_well_above_target &&
+            options.minimumFaceReductionRatio > 0.0f &&
+            reduction_ratio <
+                static_cast<double>(options.minimumFaceReductionRatio))
+        {
+            ++stagnant_pass_count;
+        }
+        else
+        {
+            stagnant_pass_count = 0;
+        }
+        if (stagnant_pass_count >=
+            std::max(1, options.maximumStagnantPasses))
+        {
+            statistics.stoppedByStagnation = true;
+            break;
+        }
     }
 
     detail::removeDegenerateFaces(mesh);

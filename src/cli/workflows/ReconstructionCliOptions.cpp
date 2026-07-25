@@ -24,6 +24,8 @@ void ReconstructionCliOptions::addTo(CLI::App &app)
         ->check(CLI::IsMember({"lightglue", "sift_flann", "sift_bf_l2"}));
     app.add_flag("--sfm-guided-rematching", sfmGuidedRematching,
                  "enable guided rematching after initial SfM");
+    app.add_flag("--lock-input-camera-poses", lockInputCameraPoses,
+                 "keep input camera extrinsics fixed during known-pose SfM/BA");
     app.add_option("--quality", quality, "SFM quality level 0..3");
     app.add_option("--threads", threads, "CPU thread count");
     app.add_option("--cuda-parallel-pairs", cudaParallelPairs, "LightGlue CUDA parallel pair count");

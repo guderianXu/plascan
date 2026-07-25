@@ -23,6 +23,7 @@ public:
                                             QObject *parent = nullptr);
 
     void start(const QJsonObject &settings);
+    void cancel();
     bool isRunning() const;
     bool isPreparingDenseCloud() const;
     bool consumeInternalMvsFinished();

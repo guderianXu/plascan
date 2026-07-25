@@ -17,6 +17,12 @@ struct CameraViewCandidate
     bool imageAvailable = false;
 };
 
+struct CameraImagePlaneAxes
+{
+    QVector3D right;
+    QVector3D up;
+};
+
 class CameraImageSelectionState
 {
 public:
@@ -43,6 +49,12 @@ int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
 
 QVector3D cameraForwardDirection(const QMatrix3x3 &cameraToWorld,
                                  bool depthAxisFlipped);
+
+// 将相机像素坐标的 +u/+v 方向转换为三维照片平面的右/上轴。
+// Qt 纹理的 v=0 位于图像上边，因此 up 必须与相机像素 +v 方向相反。
+CameraImagePlaneAxes cameraImagePlaneAxes(const QMatrix3x3 &cameraToWorld,
+                                          int uAxisSign,
+                                          int vAxisSign);
 
 QVector3D currentWorldViewDirection(const QQuaternion &viewRotation);
 

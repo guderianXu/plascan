@@ -68,13 +68,15 @@ public:
     // CameraPose：单个相机的姿态信息
     //   name     - 相机/影像名称（用于 3D 场景中的文字标注）
     //   center   - 相机光心在世界坐标系中的位置（单位与项目坐标一致）
-    //   rotation - 3×3 旋转矩阵 R（行主序），列向量依次为 right/up/forward
+    //   rotation - 3×3 camera-to-world 旋转矩阵 R（行主序），列向量依次为
+    //              camera +x / camera +y / physical forward。照片平面的视觉上轴
+    //              还必须结合 vAxisSign 换算。
     // -------------------------------------------------------------------------
     struct CameraPose {
         QString name;       // 相机名称（用于标注）
         QString imagePath;  // 影像路径（用于与影像列表联动高亮）
         QVector3D center;   // 相机光心世界坐标
-        QMatrix3x3 rotation; // 相机旋转矩阵（right/up/forward 列向量）
+        QMatrix3x3 rotation; // 相机旋转矩阵（camera +x/+y/forward 列向量）
         float focalX = 0.0f;
         float focalY = 0.0f;
         float principalX = 0.0f;
