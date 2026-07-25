@@ -391,8 +391,11 @@ QImage colorizeDepthOverlay(const cv::Mat &depth,
                 continue;
             }
             const float value = std::clamp(depth.at<float>(row, column), lower, upper);
-            const int lut_index = std::clamp(
+            const int normalized_index = std::clamp(
                 static_cast<int>(std::lround(255.0f * (value - lower) / range)), 0, 255);
+            // Depth grows away from the camera, while the overlay convention is
+            // red for near surfaces and blue for far surfaces.
+            const int lut_index = 255 - normalized_index;
             const cv::Vec3b color = color_lut.at<cv::Vec3b>(0, lut_index);
             const int offset = column * 4;
             rgba_row[offset] = color[2];

@@ -308,7 +308,7 @@ TEST(DepthOverlayDataTest, ColorizationUsesRobustP2P98Range)
     EXPECT_NE(overlay.pixel(50, 0), overlay.pixel(98, 0));
 }
 
-TEST(DepthOverlayDataTest, ColorizationWritesRgbaChannelsInQtOrder)
+TEST(DepthOverlayDataTest, ColorizationUsesRedNearBlueFarAndWritesRgbaChannelsInQtOrder)
 {
     cv::Mat depth(1, 100, CV_32FC1);
     for (int column = 0; column < depth.cols; ++column)
@@ -320,11 +320,19 @@ TEST(DepthOverlayDataTest, ColorizationWritesRgbaChannelsInQtOrder)
     const QImage overlay = xjw::gui::views::colorizeDepthOverlay(depth, valid, 123);
 
     ASSERT_FALSE(overlay.isNull());
-    const QColor first = overlay.pixelColor(0, 0);
-    EXPECT_EQ(first.red(), 48);
-    EXPECT_EQ(first.green(), 18);
-    EXPECT_EQ(first.blue(), 59);
-    EXPECT_EQ(first.alpha(), 123);
+    const QColor near_color = overlay.pixelColor(0, 0);
+    EXPECT_EQ(near_color.red(), 122);
+    EXPECT_EQ(near_color.green(), 4);
+    EXPECT_EQ(near_color.blue(), 3);
+    EXPECT_EQ(near_color.alpha(), 123);
+    EXPECT_GT(near_color.red(), near_color.blue());
+
+    const QColor far_color = overlay.pixelColor(depth.cols - 1, 0);
+    EXPECT_EQ(far_color.red(), 48);
+    EXPECT_EQ(far_color.green(), 18);
+    EXPECT_EQ(far_color.blue(), 59);
+    EXPECT_EQ(far_color.alpha(), 123);
+    EXPECT_GT(far_color.blue(), far_color.red());
 }
 
 TEST(DepthOverlayDataTest, LargePeriodicDepthDoesNotBiasPercentileSampling)
