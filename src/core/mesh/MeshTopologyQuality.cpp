@@ -201,6 +201,21 @@ double triangleQuality(const TriMesh &mesh, const Triangle &face)
         : 0.0;
 }
 
+double quantile(std::vector<double> *values, double fraction)
+{
+    if (!values || values->empty())
+    {
+        return 0.0;
+    }
+    std::sort(values->begin(), values->end());
+    const double position = std::clamp(fraction, 0.0, 1.0) *
+        static_cast<double>(values->size() - 1);
+    const std::size_t lower = static_cast<std::size_t>(std::floor(position));
+    const std::size_t upper = static_cast<std::size_t>(std::ceil(position));
+    const double blend = position - static_cast<double>(lower);
+    return (*values)[lower] * (1.0 - blend) + (*values)[upper] * blend;
+}
+
 int oppositeVertex(const Triangle &face, int first, int second)
 {
     for (const int vertex : face.v)
@@ -259,7 +274,11 @@ bool passesMeshTopologyQualityGate(
         statistics.highAspectFaceRatio <=
             thresholds.maximumHighAspectFaceRatio &&
         statistics.extremeAspectFaceRatio <=
-            thresholds.maximumExtremeAspectFaceRatio;
+            thresholds.maximumExtremeAspectFaceRatio &&
+        statistics.topologicalComplexity <=
+            thresholds.maximumTopologicalComplexity &&
+        (!statistics.closedTopologyEvaluated ||
+         statistics.closedGenusEstimate <= thresholds.maximumClosedGenus);
 }
 
 MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
@@ -276,6 +295,8 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
     edges.reserve(mesh.faces.size() * 2);
     std::vector<int> valid_face_indices;
     valid_face_indices.reserve(mesh.faces.size());
+    std::vector<Vec3> face_normals(mesh.faces.size());
+    std::vector<std::uint8_t> referenced_vertices(mesh.vertices.size(), 0);
     for (std::size_t face_index = 0;
          face_index < mesh.faces.size();
          ++face_index)
@@ -286,10 +307,14 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
             continue;
         }
         valid_face_indices.push_back(static_cast<int>(face_index));
+        face_normals[face_index] = faceNormal(mesh, face);
         ++statistics.validFaceCount;
         addEdge(&edges, face.v[0], face.v[1], static_cast<int>(face_index));
         addEdge(&edges, face.v[1], face.v[2], static_cast<int>(face_index));
         addEdge(&edges, face.v[2], face.v[0], static_cast<int>(face_index));
+        referenced_vertices[static_cast<std::size_t>(face.v[0])] = 1;
+        referenced_vertices[static_cast<std::size_t>(face.v[1])] = 1;
+        referenced_vertices[static_cast<std::size_t>(face.v[2])] = 1;
 
         const double quality = triangleQuality(mesh, face);
         const double aspect = triangleAspectRatio(mesh, face);
@@ -310,6 +335,11 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
 
     statistics.uniqueEdgeCount = static_cast<int>(edges.size());
     DisjointSet face_components(mesh.faces.size());
+    std::vector<double> adjacent_normal_angles;
+    adjacent_normal_angles.reserve(edges.size());
+    int adjacent_over_30_count = 0;
+    constexpr double radians_to_degrees =
+        57.295779513082320876798154814105;
     for (const auto &[key, edge] : edges)
     {
         (void)key;
@@ -324,7 +354,31 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
         if (edge.firstFace >= 0 && edge.secondFace >= 0)
         {
             face_components.unite(edge.firstFace, edge.secondFace);
+            if (edge.faceCount == 2)
+            {
+                const Vec3 &first_normal =
+                    face_normals[static_cast<std::size_t>(edge.firstFace)];
+                const Vec3 &second_normal =
+                    face_normals[static_cast<std::size_t>(edge.secondFace)];
+                const double angle = std::acos(std::clamp(
+                    dot(first_normal, second_normal), -1.0, 1.0)) *
+                    radians_to_degrees;
+                adjacent_normal_angles.push_back(angle);
+                adjacent_over_30_count += angle > 30.0 ? 1 : 0;
+            }
         }
+    }
+    statistics.adjacentFacePairCount =
+        static_cast<int>(adjacent_normal_angles.size());
+    if (!adjacent_normal_angles.empty())
+    {
+        statistics.adjacentNormalAngleMedianDegrees =
+            quantile(&adjacent_normal_angles, 0.50);
+        statistics.adjacentNormalAngleP90Degrees =
+            quantile(&adjacent_normal_angles, 0.90);
+        statistics.adjacentNormalAngleOver30Ratio =
+            static_cast<double>(adjacent_over_30_count) /
+            static_cast<double>(adjacent_normal_angles.size());
     }
 
     std::unordered_map<int, int> component_face_counts;
@@ -337,6 +391,28 @@ MeshTopologyQualityStatistics evaluateMeshTopologyQuality(
     }
     statistics.componentCount =
         static_cast<int>(component_face_counts.size());
+    statistics.referencedVertexCount = static_cast<int>(std::count(
+        referenced_vertices.cbegin(),
+        referenced_vertices.cend(),
+        static_cast<std::uint8_t>(1)));
+    statistics.eulerCharacteristic =
+        statistics.referencedVertexCount -
+        statistics.uniqueEdgeCount +
+        statistics.validFaceCount;
+    statistics.topologicalComplexity = std::max(
+        0,
+        2 * statistics.componentCount -
+            statistics.eulerCharacteristic);
+    statistics.closedTopologyEvaluated =
+        statistics.validFaceCount > 0 &&
+        statistics.boundaryEdgeCount == 0 &&
+        statistics.nonManifoldEdgeCount == 0;
+    if (statistics.closedTopologyEvaluated)
+    {
+        statistics.closedGenusEstimate = std::max(
+            0.0,
+            static_cast<double>(statistics.topologicalComplexity) / 2.0);
+    }
     if (statistics.uniqueEdgeCount > 0)
     {
         statistics.boundaryEdgeRatio =

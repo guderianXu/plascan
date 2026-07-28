@@ -70,7 +70,16 @@ float calibrateDepthConfidence(const DepthConfidenceComponents &components);
 
 DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourceViews);
 
-float depthConsistencyRelativeThreshold(MvsSceneProfile sceneProfile, int viewCount);
+int minimumDepthConsistencySourceConfirmations(DepthFilterMode mode,
+                                               int availableSourceViews);
+int minimumDepthConsistencySourceConfirmations(MvsSceneProfile sceneProfile,
+                                               DepthFilterMode mode,
+                                               int availableSourceViews);
+
+float depthConsistencyRelativeThreshold(
+    MvsSceneProfile sceneProfile,
+    int viewCount,
+    DepthFilterMode filterMode = DepthFilterMode::Moderate);
 
 bool useContradictionOnlyDepthConsistency(int sourceViewCount);
 

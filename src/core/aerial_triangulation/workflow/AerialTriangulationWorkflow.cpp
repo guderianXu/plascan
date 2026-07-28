@@ -273,7 +273,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     tieOptions.useGenericPreselection = options.genericPreselection;
     tieOptions.useReferencePreselection = options.referencePreselection;
     tieOptions.excludeStationaryTiePoints = options.excludeFixedTiePoints;
-    tieOptions.reuseExistingFeatures = !options.resetAlignment &&
+    tieOptions.reuseExistingFeatures = options.reuseExistingMatches &&
         tieOptions.maskApplyMode != QStringLiteral("keypoints");
 
     const QString referenceMode = normalizedToken(options.referenceMode,
@@ -331,9 +331,10 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
         };
     }
 
-    resolved.prepareTiePoints = options.resetAlignment || options.autoGenerateMissingMatches ||
+    resolved.prepareTiePoints = !options.reuseExistingMatches ||
+        options.autoGenerateMissingMatches ||
         !QFileInfo::exists(canonicalTiePointPath);
-    resolved.forceRebuildTiePoints = options.resetAlignment;
+    resolved.forceRebuildTiePoints = !options.reuseExistingMatches;
     QJsonObject &settings = resolved.resolvedSettings;
     settings.insert(QStringLiteral("quality"), normalizedToken(options.quality, QStringLiteral("high")));
     settings.insert(QStringLiteral("feature_algorithm"), feature);
@@ -345,6 +346,7 @@ AerialTriangulationResolvedConfig AerialTriangulationWorkflow::resolveConfig(
     settings.insert(QStringLiteral("tiepoint_limit"), options.tiepointLimit);
     settings.insert(QStringLiteral("mask_apply_mode"), tieOptions.maskApplyMode);
     settings.insert(QStringLiteral("reset_current_alignment"), options.resetAlignment);
+    settings.insert(QStringLiteral("reuse_existing_matches"), options.reuseExistingMatches);
     settings.insert(QStringLiteral("use_project_camera_intrinsics"),
                     pipeline.useProjectCameraIntrinsics);
     settings.insert(QStringLiteral("use_project_camera_poses"), pipeline.useProjectCameraPoses);

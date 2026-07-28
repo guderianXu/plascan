@@ -1,0 +1,22 @@
+{
+    "generate_model": {
+        "calculateVertexColors": true,
+        "interpolation": "enabled",
+        "meshResolution": 384,
+        "quality": "ultra",
+        "qualityProfile": "detail",
+        "reconstruction_mode": "depth_tsdf",
+        "simplifyTargetFaces": 60000,
+        "source_data": "depth_maps",
+        "surface_type": "arbitrary_3d",
+        "targetFaces": 60000,
+        "tsdfAllowInvalidNearestPixelRecovery": false,
+        "tsdfGeometryZeroCrossingRecovery": false,
+        "tsdfMinimumDistinctCameraSupport": 3,
+        "tsdfMinimumGeometrySupportCount": 4,
+        "tsdfRobustFrameQualityRejection": true,
+        "tsdfSurfacePatchSupport": false,
+        "tsdfSurfaceSupportBandVoxels": 4.0,
+        "tsdfTruncationVoxels": 6.0
+    }
+}

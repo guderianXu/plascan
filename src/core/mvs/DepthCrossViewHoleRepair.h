@@ -1,6 +1,7 @@
 #pragma once
 
 #include "Camera.h"
+#include "DepthAnchoredHoleInterpolator.h"
 
 #include <opencv2/core.hpp>
 
@@ -24,6 +25,7 @@ struct CrossViewHoleRepairOptions
     float maximumGrowthNormalAngleDegrees = 15.0f;
     float maximumGrowthImageGradient = 80.0f;
     int maximumGrowthComponentArea = 64;
+    DepthAnchoredHoleInterpolationOptions anchoredInterpolation;
 };
 
 struct CrossViewHoleRepairStats
@@ -40,6 +42,7 @@ struct CrossViewHoleRepairStats
     std::uint64_t growthRejectedSourceOverlapCount = 0;
     std::uint64_t growthRejectedNormalCount = 0;
     std::uint64_t growthRejectedImageEdgeCount = 0;
+    DepthAnchoredHoleInterpolationStats anchoredInterpolation;
 };
 
 cv::Mat projectSourceDepthToReference(

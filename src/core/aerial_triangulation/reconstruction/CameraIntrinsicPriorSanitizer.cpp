@@ -48,6 +48,49 @@ struct CameraFocalRecord
 
 } // namespace
 
+bool isTrustedProjectCameraIntrinsic(const QJsonObject &cameraObject)
+{
+    if (cameraObject.isEmpty())
+    {
+        return false;
+    }
+
+    const QString intrinsicSource =
+        cameraObject.value(QStringLiteral("intrinsic_source")).toString().trimmed().toLower();
+    if (intrinsicSource == QLatin1String("sfm_estimated"))
+    {
+        return false;
+    }
+    if (intrinsicSource == QLatin1String("imported") ||
+        intrinsicSource == QLatin1String("calibrated") ||
+        intrinsicSource == QLatin1String("user") ||
+        intrinsicSource == QLatin1String("exif"))
+    {
+        return true;
+    }
+
+    if (!cameraObject.value(QStringLiteral("source_file")).toString().trimmed().isEmpty())
+    {
+        return true;
+    }
+
+    const QString source =
+        cameraObject.value(QStringLiteral("source")).toString().trimmed().toLower();
+    if (source == QLatin1String("init_from_intrinsics") ||
+        source == QLatin1String("init_pose_intrinsics_manual"))
+    {
+        return true;
+    }
+    if (source == QLatin1String("init_from_exif_or_default") ||
+        source == QLatin1String("init_pose_intrinsics_from_exif_or_default"))
+    {
+        const QString focalSource =
+            cameraObject.value(QStringLiteral("focal_source")).toString().trimmed().toLower();
+        return !focalSource.isEmpty() && focalSource != QLatin1String("default_mm");
+    }
+    return false;
+}
+
 CameraIntrinsicPriorSanitizationResult sanitizeProjectCameraIntrinsicPriors(
     const QStringList &imagePaths,
     QMap<QString, QJsonObject> *cameraByPath)

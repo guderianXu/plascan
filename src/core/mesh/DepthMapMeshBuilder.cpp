@@ -367,10 +367,31 @@ QVector<DepthFrameArtifact> DepthMapMeshBuilder::discoverDepthFrames(const QStri
                 : frame.acceptance != QStringLiteral("rejected");
             frame.validCoverage = object.value(QStringLiteral("valid_coverage")).toDouble(
                 depthQuality.value(QStringLiteral("valid_coverage")).toDouble(-1.0));
+            const QJsonObject depthCompleteness =
+                object.value(QStringLiteral("depth_completeness")).toObject();
+            frame.validWithinMaskRatio =
+                object.value(QStringLiteral("valid_within_mask_ratio")).toDouble(
+                    depthCompleteness.value(
+                        QStringLiteral("valid_within_mask_ratio")).toDouble(-1.0));
+            frame.consistencyRetentionRatio =
+                depthCompleteness.value(
+                    QStringLiteral("consistency_retention_ratio")).toDouble(-1.0);
+            frame.largestComponentRatio =
+                depthQuality.value(
+                    QStringLiteral("largest_component_ratio")).toDouble(-1.0);
             frame.meanConfidence = object.value(QStringLiteral("depth_confidence_mean")).toDouble(
                 depthQuality.value(QStringLiteral("mean_confidence")).toDouble(-1.0));
             frame.sourceViewCount = object.value(QStringLiteral("source_view_count")).toInt(
                 depthQuality.value(QStringLiteral("source_view_count")).toInt(0));
+            for (const QJsonValue &reason :
+                 qualityDecision.value(QStringLiteral("reasons")).toArray())
+            {
+                const QString text = reason.toString().trimmed();
+                if (!text.isEmpty())
+                {
+                    frame.qualityReasons.append(text);
+                }
+            }
             frame.gridWidth = object.value(QStringLiteral("grid_width")).toInt();
             frame.gridHeight = object.value(QStringLiteral("grid_height")).toInt();
             frame.hasCameraModel = parseCameraModel(

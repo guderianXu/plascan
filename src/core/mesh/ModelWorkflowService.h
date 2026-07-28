@@ -79,7 +79,8 @@ QString depthReconstructionModeFromSettings(const QJsonObject &settings);
 xjw::mesh::DepthTsdfOptions depthTsdfOptionsFromSettings(const QJsonObject &settings,
                                                          int requestedResolution);
 void applyOrbitalDepthTsdfDefaults(const QJsonObject &settings,
-                                   xjw::mesh::DepthTsdfOptions *options);
+                                   xjw::mesh::DepthTsdfOptions *options,
+                                   int maximumReliableResolution = 0);
 xjw::mesh::ReconstructionConfig reconstructionConfigFromModelSettings(const QJsonObject &settings);
 xjw::mesh::ReconstructionConfig reconstructionConfigForDenseScene(int requestedResolution,
                                                                    bool aerialTerrain,

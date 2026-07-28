@@ -55,28 +55,6 @@ QString canonicalPairKeyForImages(const QString &imageA, const QString &imageB)
         QStringLiteral("|"));
 }
 
-QString resolveProjectImagePath(const QString &token,
-                                const QStringList &projectImages,
-                                const QMap<QString, QString> &baseToPath)
-{
-    const QString normalizedToken = xjw::common::project::normalizedImageToken(token);
-    for (const QString &imagePath : projectImages)
-    {
-        if (xjw::common::project::normalizedImageToken(imagePath) == normalizedToken)
-        {
-            return imagePath;
-        }
-    }
-
-    const QString base = imageBaseToken(token);
-    if (baseToPath.contains(base))
-    {
-        return baseToPath.value(base);
-    }
-
-    return token;
-}
-
 bool pairContainsImage(const QString &imageA,
                        const QString &imageB,
                        const QString &imagePath,
@@ -824,7 +802,7 @@ void MatchPairSelectorDialog::onMatchPairsLoaded()
         generation == _matchLoadGeneration &&
         normalizedImageToken(imagePath) == normalizedImageToken(_currentImage);
 
-    const MatchInfoList matches = watcher->result();
+    MatchInfoList matches = watcher->result();
     watcher->deleteLater();
     if (watcher == _priorityMatchLoadWatcher)
     {
@@ -839,6 +817,27 @@ void MatchPairSelectorDialog::onMatchPairsLoaded()
     {
         return;
     }
+
+    const QStringList current_project_images =
+        _projectManager ? _projectManager->getAllImages() : QStringList();
+    if (xjw::common::project::resolveProjectImagePathFromToken(imagePath,
+                                                               current_project_images)
+            .isEmpty())
+    {
+        scheduleRefresh();
+        return;
+    }
+    matches.erase(
+        std::remove_if(matches.begin(),
+                       matches.end(),
+                       [&current_project_images](const MatchInfo &match)
+                       {
+                           return xjw::common::project::resolveProjectImagePathFromToken(
+                                      match.imagePath,
+                                      current_project_images)
+                               .isEmpty();
+                       }),
+        matches.end());
 
     if (priorityLoad)
     {
@@ -913,7 +912,8 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parsePriorityMat
 
         QString otherImagePath = otherToken.isEmpty()
             ? inferOtherImageFromMatchFileName(matchInfo, imagePath, baseToPath)
-            : resolveProjectImagePath(otherToken, snapshot.allImages, baseToPath);
+            : xjw::common::project::resolveProjectImagePathFromToken(otherToken,
+                                                                     snapshot.allImages);
         if (otherImagePath.trimmed().isEmpty() || imageTokensReferToSameImage(otherImagePath, imagePath))
         {
             continue;
@@ -998,6 +998,8 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
     {
         xjw::aerial_triangulation::MatchResultCatalogConfig config;
         config.matchDirectory = snapshot.matchDir;
+        config.targetImagePath = imagePath;
+        config.targetImagePaths = snapshot.allImages;
         config.progressCallback = progressCallback;
         const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
             xjw::aerial_triangulation::MatchResultCatalog(config).scan();
@@ -1010,7 +1012,9 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
                 continue;
             }
 
-            const QString otherImagePath = resolveProjectImagePath(otherToken, snapshot.allImages, baseToPath);
+            const QString otherImagePath =
+                xjw::common::project::resolveProjectImagePathFromToken(otherToken,
+                                                                       snapshot.allImages);
             if (otherImagePath.trimmed().isEmpty() ||
                 imageTokensReferToSameImage(otherImagePath, imagePath))
             {
@@ -1081,11 +1085,6 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
     {
         QJsonObject meta = snapshot.meta;
         const QString baseFileName = QFileInfo(imagePath).fileName();
-        QMap<QString, QString> imageNameToPath;
-        for (const QString &img : snapshot.allImages) {
-            imageNameToPath[QFileInfo(img).fileName()] = img;
-        }
-
         QJsonArray ipmatchResults = meta.value(QStringLiteral("ipmatch_results")).toArray();
         for (const QJsonValue &val : ipmatchResults) {
             if (!val.isObject()) continue;
@@ -1110,8 +1109,9 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::parseMatchDataFo
                     QFileInfo(p).completeBaseName() == baseName) {
                     containsCurrent = true;
                 } else {
-                    const QString fn = QFileInfo(p).fileName();
-                    matchedPath = imageNameToPath.contains(fn) ? imageNameToPath[fn] : p;
+                    matchedPath =
+                        xjw::common::project::resolveProjectImagePathFromToken(p,
+                                                                               snapshot.allImages);
                 }
             }
             if (!containsCurrent || matchedPath.isEmpty()) continue;
@@ -1181,7 +1181,9 @@ MatchPairSelectorDialog::MatchInfoList MatchPairSelectorDialog::loadOverlapCandi
         }
 
         const QString otherToken = imageTokensReferToSameImage(imageA, imagePath) ? imageB : imageA;
-        const QString otherImagePath = resolveProjectImagePath(otherToken, snapshot.allImages, baseToPath);
+        const QString otherImagePath =
+            xjw::common::project::resolveProjectImagePathFromToken(otherToken,
+                                                                   snapshot.allImages);
         if (otherImagePath.trimmed().isEmpty() ||
             imageTokensReferToSameImage(otherImagePath, imagePath))
         {

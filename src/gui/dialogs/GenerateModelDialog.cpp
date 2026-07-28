@@ -12,6 +12,7 @@
 #include <QScreen>
 #include <QScrollArea>
 #include <QShowEvent>
+#include <QSignalBlocker>
 #include <QSizePolicy>
 #include <QToolButton>
 #include <QVBoxLayout>
@@ -220,6 +221,7 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
     _calculateColorsCheck = new QCheckBox(tr("计算顶点颜色"), _advancedContent);
     _strictMasksCheck = new QCheckBox(tr("使用严格的体积掩模"), _advancedContent);
     _reuseDepthMapsCheck = new QCheckBox(tr("重用深度图"), _advancedContent);
+    _reuseDepthMapsCheck->setObjectName(QStringLiteral("reuseDepthMapsCheck"));
     _replaceDefaultCheck = new QCheckBox(tr("替换默认模型"), _advancedContent);
     _calculateColorsCheck->setChecked(true);
     _reuseDepthMapsCheck->setChecked(true);
@@ -277,7 +279,14 @@ GenerateModelDialog::GenerateModelDialog(QWidget *parent)
             this, &GenerateModelDialog::emitSettingsNow);
     connect(_calculateColorsCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
     connect(_strictMasksCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
-    connect(_reuseDepthMapsCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
+    connect(_reuseDepthMapsCheck, &QCheckBox::toggled, this, [this](bool checked)
+    {
+        if (_hasReusableDepthMaps)
+        {
+            _reuseDepthMapsRequested = checked;
+        }
+        emitSettingsNow();
+    });
     connect(_replaceDefaultCheck, &QCheckBox::toggled, this, &GenerateModelDialog::emitSettingsNow);
 
     setAdvancedExpanded(false);
@@ -339,7 +348,8 @@ void GenerateModelDialog::applySettings(const QJsonObject &settings)
     _saveEachStepCheck->setChecked(settings.value(QStringLiteral("saveAfterEachStep")).toBool(false));
     _calculateColorsCheck->setChecked(settings.value(QStringLiteral("calculateVertexColors")).toBool(true));
     _strictMasksCheck->setChecked(settings.value(QStringLiteral("strictVolumetricMasks")).toBool(false));
-    _reuseDepthMapsCheck->setChecked(settings.value(QStringLiteral("reuseDepthMaps")).toBool(true));
+    _reuseDepthMapsRequested = settings.value(QStringLiteral("reuseDepthMaps")).toBool(true);
+    _reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested);
     _replaceDefaultCheck->setChecked(settings.value(QStringLiteral("replaceDefaultModel")).toBool(false));
 }
 
@@ -347,12 +357,18 @@ void GenerateModelDialog::setSourceCandidates(const QJsonArray &candidates)
 {
     _candidates = candidates;
     bool has_depth_maps = false;
+    _hasReusableDepthMaps = false;
     for (const QJsonValue &value : _candidates)
     {
-        if (value.toObject().value(QLatin1String(kSourceData)).toString() == QStringLiteral("depth_maps"))
+        const QJsonObject candidate = value.toObject();
+        if (candidate.value(QLatin1String(kSourceData)).toString() == QStringLiteral("depth_maps"))
         {
             has_depth_maps = true;
-            break;
+            if (candidate.value(QLatin1String(kSupported)).toBool(false) &&
+                !candidate.value(QLatin1String(kSourcePath)).toString().trimmed().isEmpty())
+            {
+                _hasReusableDepthMaps = true;
+            }
         }
     }
     if (!has_depth_maps)
@@ -436,7 +452,8 @@ QJsonObject GenerateModelDialog::collectSettings() const
     settings[QStringLiteral("depthFiltering")] = _depthFilterCombo->currentData().toString();
     settings[QStringLiteral("calculateVertexColors")] = _calculateColorsCheck->isChecked();
     settings[QStringLiteral("strictVolumetricMasks")] = _strictMasksCheck->isChecked();
-    settings[QStringLiteral("reuseDepthMaps")] = _reuseDepthMapsCheck->isChecked();
+    settings[QStringLiteral("reuseDepthMaps")] =
+        _hasReusableDepthMaps && _reuseDepthMapsRequested;
     settings[QStringLiteral("replaceDefaultModel")] = _replaceDefaultCheck->isChecked();
 
     if (sourceData == QStringLiteral("point_cloud")
@@ -619,6 +636,22 @@ void GenerateModelDialog::updateAvailability()
     const QString note = candidate.value(QLatin1String(kNote)).toString();
     const bool hasCandidate = !sourceData.isEmpty();
 
+    _reuseDepthMapsCheck->setEnabled(_hasReusableDepthMaps);
+    if (_hasReusableDepthMaps)
+    {
+        const QSignalBlocker blocker(_reuseDepthMapsCheck);
+        _reuseDepthMapsCheck->setChecked(_reuseDepthMapsRequested);
+        _reuseDepthMapsCheck->setToolTip(
+            tr("复用项目中已有且兼容的深度图，避免重复估计。"));
+    }
+    else
+    {
+        const QSignalBlocker blocker(_reuseDepthMapsCheck);
+        _reuseDepthMapsCheck->setChecked(false);
+        _reuseDepthMapsCheck->setToolTip(
+            tr("当前项目没有可复用的深度图；生成模型时将先自动估计深度图。"));
+    }
+
     updateBlockControlsAvailability();
     _okButton->setEnabled(hasCandidate && supported);
     if (!hasCandidate)
@@ -635,9 +668,9 @@ void GenerateModelDialog::updateAvailability()
     }
     if (sourceData == QStringLiteral("depth_maps"))
     {
-        _statusLabel->setText(
-            tr("缺少深度图时将自动估计深度图；已有兼容深度图时将按“重用深度图”设置复用，"
-               "随后直接进行 TSDF 表面重建。"));
+        _statusLabel->setText(_hasReusableDepthMaps
+            ? tr("项目中存在兼容深度图，可选择是否复用；随后将直接进行 TSDF 表面重建。")
+            : tr("当前项目没有可复用的深度图，将先自动估计深度图，再进行 TSDF 表面重建。"));
         return;
     }
     _statusLabel->setText(note.isEmpty()

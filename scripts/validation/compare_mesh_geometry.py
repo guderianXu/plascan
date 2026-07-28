@@ -22,6 +22,17 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--samples", type=int, default=200_000)
     parser.add_argument("--seed", type=int, default=20260724)
     parser.add_argument(
+        "--proximity-chunk-size",
+        type=int,
+        default=250,
+        help="Maximum query points per closest-surface batch; lower this for highly fragmented meshes.",
+    )
+    parser.add_argument(
+        "--aligned-candidate-output",
+        type=Path,
+        help="Optional path for exporting the camera-aligned candidate mesh used by the comparison.",
+    )
+    parser.add_argument(
         "--reference-middlebury-par",
         type=Path,
         help="Optional Middlebury *_par.txt whose camera centers define reference coordinates.",
@@ -260,12 +271,12 @@ def closest_surface_metrics(
     sample_count: int,
     seed: int,
     thresholds: list[float],
+    chunk_size: int,
 ) -> dict[str, Any]:
     np.random.seed(seed)
     points, source_face_ids = trimesh.sample.sample_surface(source, sample_count)
     distances: list[np.ndarray] = []
     target_face_ids: list[np.ndarray] = []
-    chunk_size = 20_000
     for offset in range(0, sample_count, chunk_size):
         chunk = points[offset : offset + chunk_size]
         _, chunk_distances, chunk_face_ids = trimesh.proximity.closest_point(target, chunk)
@@ -292,6 +303,8 @@ def main() -> int:
     args = parse_args()
     if args.samples < 1:
         raise ValueError("--samples must be positive")
+    if args.proximity_chunk_size < 1:
+        raise ValueError("--proximity-chunk-size must be positive")
     if any(threshold <= 0.0 for threshold in args.thresholds):
         raise ValueError("--thresholds must all be positive")
     reference_path = args.reference.resolve()
@@ -309,6 +322,10 @@ def main() -> int:
             args.reference_middlebury_par.resolve(),
             args.candidate_mvs_manifest.resolve(),
         )
+    if args.aligned_candidate_output is not None:
+        aligned_candidate_path = args.aligned_candidate_output.resolve()
+        aligned_candidate_path.parent.mkdir(parents=True, exist_ok=True)
+        candidate.export(aligned_candidate_path)
     report = {
         "reference_path": str(reference_path),
         "candidate_path": str(candidate_path),
@@ -323,6 +340,7 @@ def main() -> int:
             args.samples,
             args.seed,
             args.thresholds,
+            args.proximity_chunk_size,
         ),
         "reference_to_candidate": closest_surface_metrics(
             reference,
@@ -330,6 +348,7 @@ def main() -> int:
             args.samples,
             args.seed + 1,
             args.thresholds,
+            args.proximity_chunk_size,
         ),
     }
     forward = report["candidate_to_reference"]["distance"]

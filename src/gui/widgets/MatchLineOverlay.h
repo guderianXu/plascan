@@ -54,8 +54,11 @@ public:
     // 高亮/展示控制：仅显示指定索引（当启用时，覆盖层只绘制这些索引）
     void setHighlightedIndices(const QVector<int> &indices);
     void clearHighlightedIndices();
-    void setShowOnlyHighlighted(bool onlyHighlighted) { _showOnlyHighlighted = onlyHighlighted; update(); }
+    void setShowOnlyHighlighted(bool onlyHighlighted);
     bool showOnlyHighlighted() const { return _showOnlyHighlighted; }
+
+signals:
+    void visibleMatchesChanged();
     
 public slots:
     // 当视图变化时，外部调用此方法触发重绘

@@ -73,3 +73,30 @@ TEST(CameraIntrinsicPriorSanitizerTest, KeepsModerateFocalDifferencesAndMixedCam
     EXPECT_DOUBLE_EQ(cameras.value(QStringLiteral("camera_5.png")).value(QStringLiteral("fu")).toDouble(),
                      1720.0);
 }
+
+TEST(CameraIntrinsicPriorSanitizerTest, AcceptsOnlyExplicitlyTrustedIntrinsicSources)
+{
+    QJsonObject imported = makeCamera(9000.0);
+    imported.insert(QStringLiteral("source_file"), QStringLiteral("onc_t.tsai"));
+    EXPECT_TRUE(xjw::aerial_triangulation::isTrustedProjectCameraIntrinsic(imported));
+
+    QJsonObject manual = makeCamera(9000.0);
+    manual.insert(QStringLiteral("source"), QStringLiteral("init_from_intrinsics"));
+    EXPECT_TRUE(xjw::aerial_triangulation::isTrustedProjectCameraIntrinsic(manual));
+
+    QJsonObject exif = makeCamera(9000.0);
+    exif.insert(QStringLiteral("source"), QStringLiteral("init_from_exif_or_default"));
+    exif.insert(QStringLiteral("focal_source"), QStringLiteral("exif_focal_length"));
+    EXPECT_TRUE(xjw::aerial_triangulation::isTrustedProjectCameraIntrinsic(exif));
+
+    QJsonObject fallback = makeCamera(1200.0);
+    fallback.insert(QStringLiteral("source"), QStringLiteral("init_from_exif_or_default"));
+    fallback.insert(QStringLiteral("focal_source"), QStringLiteral("default_mm"));
+    EXPECT_FALSE(xjw::aerial_triangulation::isTrustedProjectCameraIntrinsic(fallback));
+
+    QJsonObject sfmEstimated = makeCamera(430.0);
+    sfmEstimated.insert(QStringLiteral("intrinsic_source"), QStringLiteral("sfm_estimated"));
+    EXPECT_FALSE(xjw::aerial_triangulation::isTrustedProjectCameraIntrinsic(sfmEstimated));
+
+    EXPECT_FALSE(xjw::aerial_triangulation::isTrustedProjectCameraIntrinsic(makeCamera(430.0)));
+}

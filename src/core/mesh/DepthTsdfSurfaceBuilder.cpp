@@ -1,14 +1,26 @@
 #include "DepthTsdfSurfaceBuilder.h"
 
+#include "AdaptiveTsdfOctree.h"
+#include "ConsistentIsoSurfaceExtractor.h"
 #include "DepthFrameUtils.h"
+#include "DepthFusionFramePolicy.h"
+#include "DepthMeshCompleteness.h"
+#include "DepthImplicitFieldRegularizer.h"
+#include "DepthTsdfCellSheetRecovery.h"
+#include "DepthVisibilityHistogram.h"
+#include "MeshBoundaryAttribution.h"
 #include "MeshColorizer.h"
 #include "MeshQuadricSimplifier.h"
+#include "OpenMeshSimplifier.h"
 #include "MeshTopologyQuality.h"
+#include "Mc33IsoSurfaceExtractor.h"
+#include "SparseTgvSolver.h"
 #include "SurfaceReconstructorPostprocess.h"
 #include "io/PathIO.h"
 
 #include <QJsonArray>
 #include <QFileInfo>
+#include <QSet>
 
 #include <opencv2/imgcodecs.hpp>
 #include <opencv2/imgproc.hpp>
@@ -115,6 +127,30 @@ MeshBoundaryTopology boundaryTopology(const TriMesh &mesh)
 int boundaryEdgeCount(const TriMesh &mesh)
 {
     return boundaryTopology(mesh).boundaryEdgeCount;
+}
+
+bool meshVerticesInsidePaddedLayout(const TriMesh &mesh,
+                                    const DepthTsdfLayout &layout,
+                                    float paddingVoxels = 2.0f)
+{
+    const float maximum_voxel_size = std::max(
+        {layout.voxelSize[0], layout.voxelSize[1], layout.voxelSize[2]});
+    const float padding = std::max(0.0f, paddingVoxels) * maximum_voxel_size;
+    for (const MeshVertex &vertex : mesh.vertices)
+    {
+        const std::array<float, 3> position{{vertex.x, vertex.y, vertex.z}};
+        for (int axis = 0; axis < 3; ++axis)
+        {
+            const float value = position[static_cast<std::size_t>(axis)];
+            if (!std::isfinite(value) ||
+                value < layout.boundsMin[axis] - padding ||
+                value > layout.boundsMax[axis] + padding)
+            {
+                return false;
+            }
+        }
+    }
+    return true;
 }
 
 struct TriangleQualitySummary
@@ -610,6 +646,58 @@ QString frameArtifactError(const DepthFrameArtifact &artifact, const QString &re
              reason);
 }
 
+bool hasOnlyRecoverableOrbitalQualityReasons(const DepthFrameArtifact &artifact)
+{
+    if (artifact.qualityReasons.isEmpty())
+    {
+        return false;
+    }
+
+    static const QSet<QString> recoverableReasons{
+        QStringLiteral("insufficient_mask_normalized_coverage"),
+        QStringLiteral("depth_consistency_collapse"),
+        QStringLiteral("depth_consistency_coverage_loss"),
+        QStringLiteral("weak_multiview_consistency")
+    };
+    return std::all_of(
+        artifact.qualityReasons.cbegin(),
+        artifact.qualityReasons.cend(),
+        [](const QString &reason)
+        {
+            return recoverableReasons.contains(reason);
+        });
+}
+
+bool canUseRejectedOrbitalFrameAsAuxiliary(const DepthFrameArtifact &artifact)
+{
+    if (artifact.acceptance != QStringLiteral("rejected")
+        || artifact.sceneProfile != QStringLiteral("orbital_object")
+        || artifact.validCoverage < 0.02
+        || artifact.validWithinMaskRatio < 0.10
+        || artifact.consistencyRetentionRatio < 0.10
+        || artifact.largestComponentRatio < 0.15
+        || artifact.meanConfidence < 0.45
+        || artifact.sourceViewCount < 2)
+    {
+        return false;
+    }
+
+    return hasOnlyRecoverableOrbitalQualityReasons(artifact);
+}
+
+bool canPromoteHealthyOrbitalValidationFrame(const DepthFrameArtifact &artifact)
+{
+    return artifact.acceptance == QStringLiteral("validation_only")
+        && artifact.sceneProfile == QStringLiteral("orbital_object")
+        && artifact.validCoverage >= 0.02
+        && artifact.validWithinMaskRatio >= 0.90
+        && artifact.consistencyRetentionRatio >= 0.90
+        && artifact.largestComponentRatio >= 0.15
+        && artifact.meanConfidence >= 0.45
+        && artifact.sourceViewCount >= 2
+        && hasOnlyRecoverableOrbitalQualityReasons(artifact);
+}
+
 bool loadFloatMatrix(const QString &path, cv::Mat *matrix, QString *reason)
 {
     if (!matrix)
@@ -1026,7 +1114,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
         return result;
     }
     if (options.enableSurfacePatchSupport ||
-        options.enableContourBandZeroCrossingSupport)
+        options.enableContourBandZeroCrossingSupport ||
+        options.enableGlobalImplicitRegularization ||
+        options.enableAdaptiveTgvRegularization)
     {
         std::uint64_t evidence_bytes = 0;
         const std::size_t float_field_count =
@@ -1044,6 +1134,26 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::validateAllocation(
             return result;
         }
         result.layout.requiredBytes += evidence_bytes;
+    }
+    if (options.enableAdaptiveTgvRegularization)
+    {
+        constexpr std::uint64_t kSparseTgvBytesPerActiveSample =
+            sizeof(AdaptiveTsdfOctreeNode) + sizeof(float) * 23u + 32u;
+        std::uint64_t adaptive_bytes = 0;
+        if (!checkedMultiply(
+                result.layout.sampleCount,
+                sizeof(DepthVisibilityHistogram) +
+                    kSparseTgvBytesPerActiveSample,
+                &adaptive_bytes) ||
+            result.layout.requiredBytes >
+                std::numeric_limits<std::uint64_t>::max() - adaptive_bytes)
+        {
+            result.layout.ok = false;
+            result.errorMessage = QStringLiteral(
+                "TSDF adaptive TGV allocation overflow");
+            return result;
+        }
+        result.layout.requiredBytes += adaptive_bytes;
     }
 
     const std::uint64_t available = options.availableMemoryBytes > 0
@@ -1073,10 +1183,21 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
     DepthTsdfFrameLoadResult result;
     for (const DepthFrameArtifact &artifact : artifacts)
     {
+        const bool recovered_rejected_frame =
+            canUseRejectedOrbitalFrameAsAuxiliary(artifact);
+        const bool promoted_validation_frame =
+            canPromoteHealthyOrbitalValidationFrame(artifact);
+        const bool validation_only =
+            (artifact.acceptance == QStringLiteral("validation_only")
+             && !promoted_validation_frame)
+            || recovered_rejected_frame;
+        const bool quality_override =
+            validation_only || promoted_validation_frame;
         if ((!artifact.status.isEmpty() && artifact.status != QStringLiteral("completed")) ||
-            !artifact.fusionEligible ||
-            artifact.acceptance == QStringLiteral("rejected") ||
-            artifact.acceptance == QStringLiteral("validation_only"))
+            (!artifact.fusionEligible && !quality_override) ||
+            (artifact.acceptance == QStringLiteral("rejected")
+             && !recovered_rejected_frame) ||
+            artifact.acceptance == QStringLiteral("failed"))
         {
             continue;
         }
@@ -1253,12 +1374,14 @@ DepthTsdfFrameLoadResult DepthTsdfSurfaceBuilder::loadFrames(
         frame.frameQualityWeight = artifact.meanConfidence >= 0.0
             ? static_cast<float>(std::clamp(artifact.meanConfidence, 0.05, 1.0))
             : 1.0f;
+        frame.auxiliarySurfaceOnly = validation_only;
         result.frames.push_back(std::move(frame));
     }
 
     if (result.frames.size() < 3)
     {
-        result.errorMessage = QStringLiteral("TSDF requires at least 3 accepted depth frames; loaded=%1")
+        result.errorMessage = QStringLiteral(
+            "TSDF requires at least 3 usable primary or auxiliary depth frames; loaded=%1")
                                   .arg(result.frames.size());
         return result;
     }
@@ -2185,6 +2308,14 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.robustFrameQualityPenaltyOnset;
     const float requested_robust_frame_quality_penalty_strength =
         options.robustFrameQualityPenaltyStrength;
+    const bool requested_robust_frame_quality_rejection =
+        options.enableRobustFrameQualityRejection;
+    const float requested_robust_frame_quality_rejection_sigma =
+        options.robustFrameQualityRejectionSigma;
+    const float requested_robust_frame_quality_maximum_rejected_ratio =
+        options.robustFrameQualityMaximumRejectedRatio;
+    const int requested_robust_frame_quality_minimum_retained_frames =
+        options.robustFrameQualityMinimumRetainedFrames;
     result.statistics.inputFrameCount = frames.size();
     if (frames.size() < options.minimumInputFrames)
     {
@@ -2219,10 +2350,22 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.acceptedFrameCount = frames.size();
     QVector<float> raw_frame_quality_weights;
     raw_frame_quality_weights.reserve(frames.size());
+    std::vector<DepthFusionView> fusion_views;
+    fusion_views.reserve(static_cast<std::size_t>(frames.size()));
+    QVector<int> auxiliary_surface_only_ref_indices;
     for (const DepthTsdfFrame &frame : frames)
     {
         raw_frame_quality_weights.push_back(std::clamp(
             frame.frameQualityWeight, 0.0f, 1.0f));
+        DepthFusionView view;
+        view.frameIndex = static_cast<int>(fusion_views.size());
+        view.refIndex = frame.refIndex;
+        view.cameraCenter = frame.camera.cameraCenter();
+        fusion_views.push_back(view);
+        if (frame.auxiliarySurfaceOnly)
+        {
+            auxiliary_surface_only_ref_indices.push_back(frame.refIndex);
+        }
     }
     QVector<float> effective_frame_quality_weights =
         raw_frame_quality_weights;
@@ -2245,6 +2388,132 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             &robust_frame_quality_median,
             &robust_frame_quality_scale);
     }
+    for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
+    {
+        if (frames[frame_index].auxiliarySurfaceOnly)
+        {
+            effective_frame_quality_weights[frame_index] *= std::clamp(
+                options.validationOnlyFrameWeightMultiplier, 0.05f, 1.0f);
+        }
+    }
+    QVector<int> rejected_frame_indices;
+    QVector<int> rejected_frame_ref_indices;
+    QVector<int> coverage_protected_ref_indices;
+    const bool robust_frame_quality_rejection_enabled =
+        requested_robust_frame_quality_rejection &&
+        robust_frame_quality_scale > 0.0f;
+    if (robust_frame_quality_rejection_enabled)
+    {
+        QVector<int> low_tail_candidates;
+        for (int frame_index = 0;
+             frame_index < raw_frame_quality_weights.size();
+             ++frame_index)
+        {
+            const float low_tail_sigma =
+                (robust_frame_quality_median -
+                 raw_frame_quality_weights[frame_index]) /
+                robust_frame_quality_scale;
+            if (low_tail_sigma >
+                std::max(0.0f,
+                         requested_robust_frame_quality_rejection_sigma))
+            {
+                low_tail_candidates.push_back(frame_index);
+            }
+        }
+        std::sort(
+            low_tail_candidates.begin(),
+            low_tail_candidates.end(),
+            [&raw_frame_quality_weights](int left, int right)
+            {
+                return raw_frame_quality_weights[left] <
+                    raw_frame_quality_weights[right];
+            });
+        const int frame_count = static_cast<int>(frames.size());
+        const int minimum_retained_frames = std::clamp(
+            std::max(options.minimumInputFrames,
+                     requested_robust_frame_quality_minimum_retained_frames),
+            1,
+            frame_count);
+        const int ratio_limit = static_cast<int>(std::floor(
+            frame_count *
+            std::clamp(
+                requested_robust_frame_quality_maximum_rejected_ratio,
+                0.0f,
+                0.50f)));
+        const int rejection_limit = std::max(
+            0,
+            std::min(ratio_limit,
+                     frame_count - minimum_retained_frames));
+        for (int candidate_index = 0;
+             candidate_index < low_tail_candidates.size() &&
+             candidate_index < rejection_limit;
+             ++candidate_index)
+        {
+            const int frame_index = low_tail_candidates[candidate_index];
+            if (options.enableOrbitalFrameCoverageProtection)
+            {
+                const std::vector<float> trial_weights(
+                    effective_frame_quality_weights.cbegin(),
+                    effective_frame_quality_weights.cend());
+                if (!DepthFusionFramePolicy::canRejectWithoutCoverageGap(
+                        fusion_views,
+                        trial_weights,
+                        frame_index,
+                        options.maximumOrbitalAngularGapRatio,
+                        minimum_retained_frames))
+                {
+                    effective_frame_quality_weights[frame_index] = std::max(
+                        effective_frame_quality_weights[frame_index],
+                        raw_frame_quality_weights[frame_index] *
+                            std::clamp(
+                                options.coverageProtectedFrameMinimumMultiplier,
+                                0.05f,
+                                1.0f));
+                    coverage_protected_ref_indices.push_back(
+                        frames[frame_index].refIndex);
+                    continue;
+                }
+            }
+            effective_frame_quality_weights[frame_index] = 0.0f;
+            rejected_frame_indices.push_back(frame_index);
+            rejected_frame_ref_indices.push_back(frames[frame_index].refIndex);
+        }
+    }
+    const std::vector<float> final_frame_quality_weights(
+        effective_frame_quality_weights.cbegin(),
+        effective_frame_quality_weights.cend());
+    const OrbitalCoverageStatistics orbital_coverage =
+        options.enableOrbitalFrameCoverageProtection
+        ? DepthFusionFramePolicy::evaluateOrbitalCoverage(
+              fusion_views, final_frame_quality_weights)
+        : OrbitalCoverageStatistics{};
+    result.statistics.effectiveRobustFrameQualityRejection =
+        robust_frame_quality_rejection_enabled;
+    result.statistics.robustFrameQualityRejectedFrameCount =
+        rejected_frame_indices.size();
+    result.statistics.acceptedFrameCount = static_cast<int>(std::count_if(
+        effective_frame_quality_weights.cbegin(),
+        effective_frame_quality_weights.cend(),
+        [](float weight)
+        {
+            return weight > 0.0f;
+        }));
+    result.statistics.auxiliarySurfaceOnlyFrameCount =
+        auxiliary_surface_only_ref_indices.size();
+    result.statistics.auxiliarySurfaceOnlyRefIndices =
+        auxiliary_surface_only_ref_indices;
+    result.statistics.effectiveOrbitalFrameCoverageProtection =
+        options.enableOrbitalFrameCoverageProtection;
+    result.statistics.orbitalCoverageProtectedFrameCount =
+        coverage_protected_ref_indices.size();
+    result.statistics.orbitalCoverageProtectedRefIndices =
+        coverage_protected_ref_indices;
+    result.statistics.orbitalMedianAngularSpacingDegrees =
+        orbital_coverage.medianAngularSpacingDegrees;
+    result.statistics.orbitalMaximumAngularGapDegrees =
+        orbital_coverage.maximumAngularGapDegrees;
+    result.statistics.orbitalMaximumAngularGapRatio =
+        orbital_coverage.maximumAngularGapRatio;
     for (int frame_index = 0;
          frame_index < effective_frame_quality_weights.size();
          ++frame_index)
@@ -2382,7 +2651,16 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
     }
 
-    const DepthTsdfBoundsResult bounds = estimateBounds(frames);
+    QVector<DepthTsdfFrame> retained_frames;
+    retained_frames.reserve(frames.size() - rejected_frame_indices.size());
+    for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
+    {
+        if (effective_frame_quality_weights[frame_index] > 0.0f)
+        {
+            retained_frames.push_back(frames[frame_index]);
+        }
+    }
+    const DepthTsdfBoundsResult bounds = estimateBounds(retained_frames);
     if (!bounds.ok)
     {
         result.errorMessage = bounds.errorMessage;
@@ -2390,7 +2668,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     }
     result = validateAllocation(bounds.minimum, bounds.maximum, options);
     result.statistics.inputFrameCount = frames.size();
-    result.statistics.acceptedFrameCount = frames.size();
+    result.statistics.acceptedFrameCount = retained_frames.size();
     result.statistics.effectiveRobustFrameQualityWeighting =
         robust_frame_quality_weighting_enabled;
     result.statistics.robustFrameQualityDownweightedFrameCount =
@@ -2401,6 +2679,28 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         robust_frame_quality_scale;
     result.statistics.robustFrameQualityMinimumEffectiveWeight =
         robust_frame_quality_minimum_effective_weight;
+    result.statistics.effectiveRobustFrameQualityRejection =
+        robust_frame_quality_rejection_enabled;
+    result.statistics.robustFrameQualityRejectedFrameCount =
+        rejected_frame_indices.size();
+    result.statistics.robustFrameQualityRejectedRefIndices =
+        rejected_frame_ref_indices;
+    result.statistics.auxiliarySurfaceOnlyFrameCount =
+        auxiliary_surface_only_ref_indices.size();
+    result.statistics.auxiliarySurfaceOnlyRefIndices =
+        auxiliary_surface_only_ref_indices;
+    result.statistics.effectiveOrbitalFrameCoverageProtection =
+        options.enableOrbitalFrameCoverageProtection;
+    result.statistics.orbitalCoverageProtectedFrameCount =
+        coverage_protected_ref_indices.size();
+    result.statistics.orbitalCoverageProtectedRefIndices =
+        coverage_protected_ref_indices;
+    result.statistics.orbitalMedianAngularSpacingDegrees =
+        orbital_coverage.medianAngularSpacingDegrees;
+    result.statistics.orbitalMaximumAngularGapDegrees =
+        orbital_coverage.maximumAngularGapDegrees;
+    result.statistics.orbitalMaximumAngularGapRatio =
+        orbital_coverage.maximumAngularGapRatio;
     if (!result.ok)
     {
         return result;
@@ -2421,6 +2721,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     std::vector<float> surfaceTsdfWeightedSum;
     std::vector<float> surfaceObservationWeight;
     std::vector<float> contourBandObservationWeight;
+    std::vector<DepthVisibilityHistogram> visibilityHistograms;
     try
     {
         tsdf.assign(static_cast<std::size_t>(result.layout.sampleCount), 1.0f);
@@ -2431,7 +2732,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             static_cast<std::size_t>(result.layout.sampleCount), 0);
         support.assign(static_cast<std::size_t>(result.layout.sampleCount), 0);
         if (options.enableSurfacePatchSupport ||
-            options.enableContourBandZeroCrossingSupport)
+            options.enableContourBandZeroCrossingSupport ||
+            options.enableGlobalImplicitRegularization ||
+            options.enableAdaptiveTgvRegularization)
         {
             geometrySourceMask.assign(
                 static_cast<std::size_t>(result.layout.sampleCount), 0);
@@ -2447,6 +2750,11 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 contourBandObservationWeight.assign(
                     static_cast<std::size_t>(result.layout.sampleCount), 0.0f);
             }
+        }
+        if (options.enableAdaptiveTgvRegularization)
+        {
+            visibilityHistograms.resize(
+                static_cast<std::size_t>(result.layout.sampleCount));
         }
     }
     catch (const std::bad_alloc &)
@@ -2480,6 +2788,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     unsigned long long rejectedProjectionCount = 0;
     unsigned long long rejectedSupportMaskCount = 0;
     unsigned long long supportMaskFreeSpaceUpdateCount = 0;
+    unsigned long long supportMaskFreeSpaceSurfaceVetoCount = 0;
+    unsigned long long auxiliaryOutsideSurfaceBandRejectedCount = 0;
     unsigned long long rejectedDepthValidCount = 0;
     unsigned long long rejectedDepthCount = 0;
     unsigned long long rejectedConfidenceCount = 0;
@@ -2496,7 +2806,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
 #ifdef MESHING_OPENMP
     const int workerCount = options.workerCount > 0 ? options.workerCount : omp_get_max_threads();
 #pragma omp parallel for schedule(static) num_threads(workerCount) \
-    reduction(+:integratedVoxelUpdates,rejectedProjectionCount,rejectedSupportMaskCount,supportMaskFreeSpaceUpdateCount,rejectedDepthValidCount,rejectedDepthCount,rejectedConfidenceCount,subpixelObservationCount,recoveredNeighborObservationCount,discontinuityRejectedCandidateCount,rejectedGeometryConsistencyCount,rejectedInvalidNearestPixelRecoveryCount,crossViewConsensusDepthObservationCount)
+    reduction(+:integratedVoxelUpdates,rejectedProjectionCount,rejectedSupportMaskCount,supportMaskFreeSpaceUpdateCount,supportMaskFreeSpaceSurfaceVetoCount,auxiliaryOutsideSurfaceBandRejectedCount,rejectedDepthValidCount,rejectedDepthCount,rejectedConfidenceCount,subpixelObservationCount,recoveredNeighborObservationCount,discontinuityRejectedCandidateCount,rejectedGeometryConsistencyCount,rejectedInvalidNearestPixelRecoveryCount,crossViewConsensusDepthObservationCount)
 #endif
     for (int z = 0; z < zSamples; ++z)
     {
@@ -2524,6 +2834,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 int support_mask_free_space_votes = 0;
                 for (int frame_index = 0; frame_index < frames.size(); ++frame_index)
                 {
+                    if (effective_frame_quality_weights[frame_index] <= 0.0f)
+                    {
+                        continue;
+                    }
                     const DepthTsdfFrame &frame = frames[frame_index];
                     double pixel[2]{};
                     double voxelDepth = 0.0;
@@ -2555,7 +2869,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         switch (observation.failure)
                         {
                         case DepthTsdfObservationFailure::SupportMask:
-                            if (options.enableSupportMaskFreeSpaceCarving)
+                            if (options.enableSupportMaskFreeSpaceCarving &&
+                                !frame.auxiliarySurfaceOnly)
                             {
                                 ++support_mask_free_space_votes;
                             }
@@ -2607,6 +2922,25 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     const float confidence = observation.confidence;
                     const float signedDistance =
                         observedDepth - static_cast<float>(voxelDepth);
+                    if (frame.auxiliarySurfaceOnly &&
+                        std::fabs(signedDistance) > surface_support_distance)
+                    {
+                        ++auxiliaryOutsideSurfaceBandRejectedCount;
+                        continue;
+                    }
+                    const float observationWeight =
+                        confidence *
+                        effective_frame_quality_weights[frame_index];
+                    if (!visibilityHistograms.empty() &&
+                        options.adaptiveTgvUseGlobalVisibilityField)
+                    {
+                        visibilityHistograms[index].add(
+                            std::clamp(
+                                signedDistance / truncation,
+                                -1.0f,
+                                1.0f),
+                            observationWeight);
+                    }
                     if (signedDistance < -truncation)
                     {
                         continue;
@@ -2617,8 +2951,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     }
                     const float normalized = std::clamp(
                         signedDistance / truncation, -1.0f, 1.0f);
-                    const float observationWeight =
-                        confidence * effective_frame_quality_weights[frame_index];
+                    if (!visibilityHistograms.empty() &&
+                        !options.adaptiveTgvUseGlobalVisibilityField)
+                    {
+                        visibilityHistograms[index].add(
+                            normalized, observationWeight);
+                    }
                     integrateWeighted(&tsdf[index],
                                       &weight[index],
                                       normalized,
@@ -2632,7 +2970,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             maximumGeometrySupportCount[index],
                             observation.geometrySupportCount);
                         if (options.enableSurfacePatchSupport ||
-                            options.enableContourBandZeroCrossingSupport)
+                            options.enableContourBandZeroCrossingSupport ||
+                            options.enableGlobalImplicitRegularization ||
+                            options.enableAdaptiveTgvRegularization)
                         {
                             geometrySourceMask[index] = static_cast<std::uint16_t>(
                                 geometrySourceMask[index] |
@@ -2675,12 +3015,29 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 if (options.enableSupportMaskFreeSpaceCarving &&
                     support_mask_free_space_votes >= minimum_free_space_views)
                 {
+                    const bool has_surface_evidence =
+                        support[index] > 0 ||
+                        (!surfaceObservationWeight.empty() &&
+                         surfaceObservationWeight[index] > 0.0f);
+                    if (options.enableSurfaceEvidenceFreeSpaceVeto &&
+                        has_surface_evidence)
+                    {
+                        supportMaskFreeSpaceSurfaceVetoCount +=
+                            support_mask_free_space_votes;
+                        continue;
+                    }
+                    const float carving_weight =
+                        std::max(0.0f, options.supportMaskFreeSpaceWeight) *
+                        support_mask_free_space_votes;
                     integrateWeighted(
                         &tsdf[index],
                         &weight[index],
                         1.0f,
-                        std::max(0.0f, options.supportMaskFreeSpaceWeight) *
-                            support_mask_free_space_votes);
+                        carving_weight);
+                    if (!visibilityHistograms.empty())
+                    {
+                        visibilityHistograms[index].add(1.0f, carving_weight);
+                    }
                     ++integratedVoxelUpdates;
                     supportMaskFreeSpaceUpdateCount += support_mask_free_space_votes;
                 }
@@ -2711,6 +3068,10 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.rejectedProjectionCount = rejectedProjectionCount;
     result.statistics.rejectedSupportMaskCount = rejectedSupportMaskCount;
     result.statistics.supportMaskFreeSpaceUpdateCount = supportMaskFreeSpaceUpdateCount;
+    result.statistics.supportMaskFreeSpaceSurfaceVetoCount =
+        supportMaskFreeSpaceSurfaceVetoCount;
+    result.statistics.auxiliaryOutsideSurfaceBandRejectedCount =
+        auxiliaryOutsideSurfaceBandRejectedCount;
     result.statistics.rejectedDepthValidCount = rejectedDepthValidCount;
     result.statistics.rejectedDepthCount = rejectedDepthCount;
     result.statistics.rejectedConfidenceCount = rejectedConfidenceCount;
@@ -2766,6 +3127,37 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.enableContourBandZeroCrossingSupport;
     result.statistics.effectiveGeometryZeroCrossingRecovery =
         options.enableGeometryZeroCrossingRecovery;
+    result.statistics.effectiveGeometryZeroCrossingCellSheets =
+        options.enableGeometryZeroCrossingCellSheets;
+    result.statistics
+        .effectiveMaximumGeometryZeroCrossingSheetSingleVoteAbsoluteTsdf =
+        options.maximumGeometryZeroCrossingSheetSingleVoteAbsoluteTsdf;
+    result.statistics.effectiveGlobalImplicitRegularization =
+        options.enableGlobalImplicitRegularization;
+    result.statistics.effectiveAdaptiveTgvRegularization =
+        options.enableAdaptiveTgvRegularization;
+    result.statistics.effectiveAdaptiveTgvGlobalVisibilityField =
+        options.enableAdaptiveTgvRegularization &&
+        options.adaptiveTgvUseGlobalVisibilityField;
+    result.statistics.effectiveImplicitRegularizationLevels =
+        options.implicitRegularizationLevels;
+    result.statistics.effectiveImplicitRegularizationPassesPerLevel =
+        options.implicitRegularizationPassesPerLevel;
+    result.statistics.effectiveImplicitRegularizationSmoothness =
+        options.implicitRegularizationSmoothness;
+    result.statistics.effectiveImplicitRegularizationDataFidelity =
+        options.implicitRegularizationDataFidelity;
+    result.statistics.effectiveImplicitRegularizationMaximumUpdate =
+        options.implicitRegularizationMaximumUpdate;
+    result.statistics.effectiveImplicitRegularizationEdgeThreshold =
+        options.implicitRegularizationEdgeThreshold;
+    result.statistics.effectiveImplicitRegularizationRecoverAxialGaps =
+        options.implicitRegularizationRecoverAxialGaps;
+    result.statistics.effectiveImplicitRegularizationMinimumBridgeAxes =
+        options.implicitRegularizationMinimumBridgeAxes;
+    result.statistics
+        .effectiveImplicitRegularizationMaximumBridgePredictionDelta =
+        options.implicitRegularizationMaximumBridgePredictionDelta;
     result.statistics.effectiveMinimumSurfacePatchObservationWeight =
         options.minimumSurfacePatchObservationWeight;
     result.statistics.effectiveMinimumSurfacePatchSourceCount =
@@ -2794,6 +3186,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         : 0.0f;
     result.statistics.effectiveMinimumSupportMaskFreeSpaceViews = std::clamp(
         options.minimumSupportMaskFreeSpaceViews, 1, 16);
+    result.statistics.effectiveSurfaceEvidenceFreeSpaceVeto =
+        options.enableSurfaceEvidenceFreeSpaceVeto;
     result.statistics.effectiveDepthValidBoundaryErosionPixels = erosion_pixels;
     result.statistics.effectiveGeometryVerifiedBoundaryRecovery =
         options.enableGeometryVerifiedBoundaryRecovery;
@@ -2805,6 +3199,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         boundary_recovered_depth_valid_pixel_count;
 
     std::vector<std::uint8_t> supported(static_cast<std::size_t>(result.layout.sampleCount), 0);
+    std::vector<std::uint8_t> adaptiveTgvExtractionSupport;
     std::vector<std::size_t> guarded_geometry_single_view_candidates;
     if (options.enableGeometrySingleViewNeighborhoodGuard)
     {
@@ -2880,7 +3275,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     }
     if ((options.enableSurfacePatchSupport ||
          options.enableContourBandZeroCrossingSupport ||
-         options.enableGeometryZeroCrossingRecovery) &&
+         options.enableGeometryZeroCrossingRecovery ||
+         options.enableGlobalImplicitRegularization ||
+         options.enableAdaptiveTgvRegularization) &&
         !geometrySourceMask.empty())
     {
         const int minimum_source_count = std::clamp(
@@ -2895,6 +3292,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             options.maximumSurfacePatchNormalAngleDegrees, 5.0f, 45.0f);
         const float maximum_absolute_tsdf = std::clamp(
             options.maximumSurfacePatchAbsoluteTsdf, 0.05f, 0.95f);
+        const float maximum_contour_band_absolute_tsdf = std::clamp(
+            options.maximumContourBandAbsoluteTsdf,
+            maximum_absolute_tsdf,
+            0.95f);
+        result.statistics.effectiveMaximumContourBandAbsoluteTsdf =
+            maximum_contour_band_absolute_tsdf;
         const float minimum_surface_weight_ratio = std::clamp(
             options.minimumSurfacePatchWeightRatio, 0.01f, 1.0f);
         std::vector<float> surface_candidate_tsdf = tsdf;
@@ -2938,11 +3341,14 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             continue;
                         }
                         ++result.statistics.surfacePatchConsideredSampleCount;
+                        const bool has_contour_band_evidence =
+                            options.enableContourBandZeroCrossingSupport &&
+                            contourBandObservationWeight[index] > 1.0e-6f;
                         if (options.enableContourBandZeroCrossingSupport)
                         {
                             ++result.statistics
                                   .contourBandZeroCrossingConsideredSampleCount;
-                            if (contourBandObservationWeight[index] <= 1.0e-6f)
+                            if (!has_contour_band_evidence)
                             {
                                 ++result.statistics
                                       .contourBandZeroCrossingRejectedNoContourCount;
@@ -2952,6 +3358,11 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             options.minimumSurfacePatchObservationWeight)
                         {
                             ++result.statistics.surfacePatchRejectedWeightCount;
+                            if (has_contour_band_evidence)
+                            {
+                                ++result.statistics
+                                      .contourBandZeroCrossingRejectedWeightCount;
+                            }
                             continue;
                         }
                         if (bitCount(geometrySourceMask[index]) <
@@ -2959,6 +3370,11 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         {
                             ++result.statistics
                                   .surfacePatchRejectedSourceOverlapCount;
+                            if (has_contour_band_evidence)
+                            {
+                                ++result.statistics
+                                      .contourBandZeroCrossingRejectedSourceOverlapCount;
+                            }
                             continue;
                         }
                         const std::uint16_t spread_value =
@@ -2969,16 +3385,42 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                                 maximum_spread)
                         {
                             ++result.statistics.surfacePatchRejectedDepthSpreadCount;
+                            if (has_contour_band_evidence)
+                            {
+                                ++result.statistics
+                                      .contourBandZeroCrossingRejectedDepthSpreadCount;
+                            }
                             continue;
                         }
-                        if (surfaceObservationWeight[index] <= 1.0e-6f ||
+                        const bool insufficient_surface_weight_ratio =
+                            surfaceObservationWeight[index] <= 1.0e-6f ||
                             weight[index] <= 1.0e-6f ||
                             surfaceObservationWeight[index] / weight[index] <
-                                minimum_surface_weight_ratio ||
+                                minimum_surface_weight_ratio;
+                        const bool excessive_absolute_tsdf =
                             std::fabs(surface_candidate_tsdf[index]) >
-                                maximum_absolute_tsdf)
+                            (has_contour_band_evidence
+                                 ? maximum_contour_band_absolute_tsdf
+                                 : maximum_absolute_tsdf);
+                        if (insufficient_surface_weight_ratio ||
+                            excessive_absolute_tsdf)
                         {
                             ++result.statistics.surfacePatchRejectedFreeSpaceCount;
+                            if (has_contour_band_evidence)
+                            {
+                                ++result.statistics
+                                      .contourBandZeroCrossingRejectedFreeSpaceCount;
+                                if (insufficient_surface_weight_ratio)
+                                {
+                                    ++result.statistics
+                                          .contourBandZeroCrossingRejectedSurfaceWeightRatioCount;
+                                }
+                                if (excessive_absolute_tsdf)
+                                {
+                                    ++result.statistics
+                                          .contourBandZeroCrossingRejectedAbsoluteTsdfCount;
+                                }
+                            }
                             continue;
                         }
 
@@ -3056,6 +3498,11 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         {
                             ++result.statistics
                                   .surfacePatchRejectedSourceOverlapCount;
+                            if (has_contour_band_evidence)
+                            {
+                                ++result.statistics
+                                      .contourBandZeroCrossingRejectedNeighborhoodCount;
+                            }
                             continue;
                         }
                         const bool normal_patch_supported =
@@ -3063,22 +3510,32 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                             has_normal_agreement &&
                             agreeing_core_neighbor_count >=
                                 minimum_core_neighbor_count;
-                        const bool zero_crossing_supported =
-                            options.enableContourBandZeroCrossingSupport &&
-                            contourBandObservationWeight[index] > 1.0e-6f &&
+                        const bool has_geometry_support =
                             maximumGeometrySupportCount[index] >=
-                                options.minimumBoundaryRecoveryGeometrySupport &&
+                            options.minimumBoundaryRecoveryGeometrySupport;
+                        const bool has_sign_pair =
                             same_sign_core_neighbor_count >= 1 &&
                             opposite_sign_core_neighbor_count >= 1;
+                        const bool zero_crossing_supported =
+                            has_contour_band_evidence &&
+                            has_geometry_support &&
+                            has_sign_pair;
                         if (!normal_patch_supported &&
                             !zero_crossing_supported)
                         {
                             ++result.statistics.surfacePatchRejectedNormalCount;
-                            if (options.enableContourBandZeroCrossingSupport &&
-                                contourBandObservationWeight[index] > 1.0e-6f)
+                            if (has_contour_band_evidence)
                             {
-                                ++result.statistics
-                                      .contourBandZeroCrossingRejectedNoSignPairCount;
+                                if (!has_geometry_support)
+                                {
+                                    ++result.statistics
+                                          .contourBandZeroCrossingRejectedGeometrySupportCount;
+                                }
+                                else if (!has_sign_pair)
+                                {
+                                    ++result.statistics
+                                          .contourBandZeroCrossingRejectedNoSignPairCount;
+                                }
                             }
                             continue;
                         }
@@ -3102,9 +3559,12 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 break;
             }
         }
-        if (options.enableGeometryZeroCrossingRecovery)
+        std::vector<std::uint8_t> eligible;
+        if (options.enableGeometryZeroCrossingRecovery ||
+            options.enableGlobalImplicitRegularization ||
+            options.enableAdaptiveTgvRegularization)
         {
-            std::vector<std::uint8_t> eligible(supported.size(), 0);
+            eligible.assign(supported.size(), 0);
             for (std::size_t index = 0; index < supported.size(); ++index)
             {
                 const std::uint16_t spread_value =
@@ -3125,22 +3585,52 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     std::fabs(surface_candidate_tsdf[index]) <=
                         maximum_absolute_tsdf;
             }
+        }
+        if (options.enableGeometryZeroCrossingRecovery)
+        {
             const std::vector<std::uint8_t> supported_before_recovery =
                 supported;
             const DepthTsdfZeroCrossingRecoveryStatistics recovery =
-                recoverGeometryVerifiedZeroCrossingSamples(
-                    result.layout,
-                    surface_candidate_tsdf,
-                    weight,
-                    geometrySourceMask,
-                    eligible,
-                    options.geometryZeroCrossingMinimumSupportedCorners,
-                    options.geometryZeroCrossingMinimumCellVotes,
-                    &supported);
+                options.enableGeometryZeroCrossingCellSheets
+                ? recoverGeometryVerifiedZeroCrossingCellSheets(
+                      result.layout,
+                      surface_candidate_tsdf,
+                      weight,
+                      geometrySourceMask,
+                      eligible,
+                      options.geometryZeroCrossingMinimumSupportedCorners,
+                      options.minimumGeometryZeroCrossingSheetCells,
+                      options.minimumGeometryZeroCrossingSheetAnchorCells,
+                      options
+                          .maximumGeometryZeroCrossingSheetSingleVoteAbsoluteTsdf,
+                      &supported)
+                : recoverGeometryVerifiedZeroCrossingSamples(
+                      result.layout,
+                      surface_candidate_tsdf,
+                      weight,
+                      geometrySourceMask,
+                      eligible,
+                      options.geometryZeroCrossingMinimumSupportedCorners,
+                      options.geometryZeroCrossingMinimumCellVotes,
+                      &supported);
             result.statistics.geometryZeroCrossingCandidateSampleCount =
                 recovery.candidateSampleCount;
             result.statistics.geometryZeroCrossingRecoveredSampleCount =
                 recovery.recoveredSampleCount;
+            result.statistics.geometryZeroCrossingSheetCandidateCellCount =
+                recovery.candidateCellCount;
+            result.statistics.geometryZeroCrossingSheetAcceptedCellCount =
+                recovery.acceptedCellCount;
+            result.statistics.geometryZeroCrossingSheetComponentCount =
+                recovery.componentCount;
+            result.statistics.geometryZeroCrossingSheetAcceptedComponentCount =
+                recovery.acceptedComponentCount;
+            result.statistics
+                .geometryZeroCrossingSheetRejectedSmallComponentCount =
+                recovery.rejectedSmallComponentCount;
+            result.statistics
+                .geometryZeroCrossingSheetRejectedAnchorComponentCount =
+                recovery.rejectedAnchorComponentCount;
             result.statistics.supportedSampleCount +=
                 recovery.recoveredSampleCount;
             for (std::size_t index = 0; index < supported.size(); ++index)
@@ -3149,6 +3639,356 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     supported[index] != 0)
                 {
                     tsdf[index] = surface_candidate_tsdf[index];
+                }
+            }
+        }
+        if (options.enableGlobalImplicitRegularization)
+        {
+            if (options.progress)
+            {
+                options.progress(
+                    QStringLiteral("正在进行多尺度隐式场正则化..."), 73);
+            }
+            DepthImplicitFieldRegularizationOptions regularization_options;
+            regularization_options.coarseToFineLevels =
+                options.implicitRegularizationLevels;
+            regularization_options.passesPerLevel =
+                options.implicitRegularizationPassesPerLevel;
+            regularization_options.smoothness =
+                options.implicitRegularizationSmoothness;
+            regularization_options.dataFidelity =
+                options.implicitRegularizationDataFidelity;
+            regularization_options.maximumUpdate =
+                options.implicitRegularizationMaximumUpdate;
+            regularization_options.edgeThreshold =
+                options.implicitRegularizationEdgeThreshold;
+            regularization_options.recoverAxialGaps =
+                options.implicitRegularizationRecoverAxialGaps;
+            regularization_options.minimumBridgeAxes =
+                options.implicitRegularizationMinimumBridgeAxes;
+            regularization_options.maximumBridgePredictionDelta =
+                options.implicitRegularizationMaximumBridgePredictionDelta;
+            const DepthImplicitFieldRegularizationStatistics regularization =
+                DepthImplicitFieldRegularizer::regularize(
+                    {result.layout.cells[0] + 1,
+                     result.layout.cells[1] + 1,
+                     result.layout.cells[2] + 1},
+                    surface_candidate_tsdf,
+                    surfaceObservationWeight,
+                    geometrySourceMask,
+                    eligible,
+                    regularization_options,
+                    &tsdf,
+                    &supported,
+                    options.isCancelled);
+            result.statistics.implicitRegularizationBridgeCandidateCount =
+                regularization.bridgeCandidateCount;
+            result.statistics.implicitRegularizationRecoveredSampleCount =
+                regularization.recoveredSampleCount;
+            result.statistics.implicitRegularizationUpdateOperationCount =
+                regularization.updateOperationCount;
+            result.statistics.implicitRegularizationMeanAbsoluteUpdate =
+                regularization.meanAbsoluteUpdate;
+            result.statistics.implicitRegularizationMaximumAbsoluteUpdate =
+                regularization.maximumAbsoluteUpdate;
+            result.statistics.implicitRegularizationElapsedMs =
+                regularization.elapsedMs;
+            result.statistics.supportedSampleCount +=
+                regularization.recoveredSampleCount;
+            if (regularization.cancelled)
+            {
+                result.errorMessage =
+                    QStringLiteral("TSDF 隐式场正则化已取消");
+                return result;
+            }
+        }
+        if (options.enableAdaptiveTgvRegularization)
+        {
+            if (options.progress)
+            {
+                options.progress(
+                    QStringLiteral("正在构建 2:1 平衡可见性八叉树..."), 72);
+            }
+
+            std::vector<std::uint8_t> active(supported.size(), 0);
+            std::vector<float> adaptive_field = tsdf;
+            constexpr float kHalfHistogramBinWidth =
+                1.0f / static_cast<float>(
+                    kDepthVisibilityHistogramBinCount);
+            result.statistics.effectiveAdaptiveTgvMaximumActiveAbsoluteField =
+                options.adaptiveTgvMaximumActiveAbsoluteField;
+            for (std::size_t index = 0; index < active.size(); ++index)
+            {
+                if (visibilityHistograms[index].empty())
+                {
+                    continue;
+                }
+                const bool unsupported_sample = weight[index] <= 1.0e-6f;
+                if (unsupported_sample &&
+                    (!options.adaptiveTgvUseGlobalVisibilityField ||
+                     !options.adaptiveTgvRecoverUnsupportedSamples))
+                {
+                    continue;
+                }
+                const DepthVisibilityHistogramSummary histogram =
+                    visibilityHistograms[index].summary();
+                const float median = histogram.weightedMedian();
+                float candidate_value = median;
+                if (weight[index] <= 1.0e-6f)
+                {
+                    candidate_value = median;
+                }
+                else
+                {
+                    candidate_value = std::clamp(
+                        tsdf[index],
+                        median - kHalfHistogramBinWidth,
+                        median + kHalfHistogramBinWidth);
+                }
+                if (std::fabs(candidate_value) >
+                    options.adaptiveTgvMaximumActiveAbsoluteField)
+                {
+                    continue;
+                }
+                adaptive_field[index] = candidate_value;
+                active[index] = 1;
+                ++result.statistics.adaptiveTgvHistogramSampleCount;
+                if (weight[index] <= 1.0e-6f)
+                {
+                    ++result.statistics
+                          .adaptiveTgvGlobalVisibilitySampleCount;
+                }
+            }
+
+            AdaptiveTsdfOctreeOptions octree_options;
+            octree_options.maximumMergeLevel =
+                options.adaptiveTgvMaximumMergeLevel;
+            octree_options.minimumMergeAbsoluteField =
+                options.adaptiveTgvMinimumMergeAbsoluteField;
+            octree_options.maximumMergeFieldRange =
+                options.adaptiveTgvMaximumMergeFieldRange;
+
+            AdaptiveTsdfOctreeResult octree;
+            const auto octree_start = std::chrono::steady_clock::now();
+            try
+            {
+                octree = AdaptiveTsdfOctree::build(
+                    {result.layout.cells[0] + 1,
+                     result.layout.cells[1] + 1,
+                     result.layout.cells[2] + 1},
+                    adaptive_field,
+                    weight,
+                    geometrySourceMask,
+                    active,
+                    supported,
+                    visibilityHistograms,
+                    octree_options);
+            }
+            catch (const std::bad_alloc &)
+            {
+                result.errorMessage = QStringLiteral(
+                    "自适应 TGV 八叉树内存分配失败");
+                return result;
+            }
+            catch (const std::exception &error)
+            {
+                result.errorMessage = QStringLiteral(
+                    "自适应 TGV 八叉树构建失败: %1")
+                                          .arg(QString::fromUtf8(error.what()));
+                return result;
+            }
+            result.statistics.adaptiveTgvOctreeElapsedMs =
+                std::chrono::duration_cast<std::chrono::milliseconds>(
+                    std::chrono::steady_clock::now() - octree_start)
+                    .count();
+            result.statistics.adaptiveTgvInputActiveSampleCount =
+                octree.statistics.inputActiveSampleCount;
+            result.statistics.adaptiveTgvLeafCount = octree.leaves.size();
+            result.statistics.adaptiveTgvMergedNodeCount =
+                octree.statistics.mergedNodeCount;
+            result.statistics.adaptiveTgvBalanceSplitCount =
+                octree.statistics.balanceSplitCount;
+            result.statistics.adaptiveTgvTwoToOneBalanced =
+                octree.statistics.twoToOneBalanced;
+            if (octree.leaves.empty())
+            {
+                result.errorMessage = QStringLiteral(
+                    "自适应 TGV 八叉树没有可求解节点");
+                return result;
+            }
+            if (options.isCancelled && options.isCancelled())
+            {
+                result.errorMessage = QStringLiteral(
+                    "自适应 TGV 八叉树构建已取消");
+                return result;
+            }
+
+            SparseTgvOptions tgv_options;
+            tgv_options.maximumIterations =
+                options.adaptiveTgvMaximumIterations;
+            tgv_options.minimumIterations =
+                options.adaptiveTgvMinimumIterations;
+            tgv_options.firstOrderWeight =
+                options.adaptiveTgvFirstOrderWeight;
+            tgv_options.secondOrderWeight =
+                options.adaptiveTgvSecondOrderWeight;
+            tgv_options.dataFidelity =
+                options.adaptiveTgvDataFidelity;
+            tgv_options.primalStep =
+                options.adaptiveTgvPrimalStep;
+            tgv_options.dualStep =
+                options.adaptiveTgvDualStep;
+            tgv_options.convergenceTolerance =
+                options.adaptiveTgvConvergenceTolerance;
+            const SparseTgvStatistics tgv = SparseTgvSolver::solve(
+                tgv_options,
+                &octree,
+                options.isCancelled,
+                [&](int iteration, int maximum_iterations)
+                {
+                    if (options.progress &&
+                        (iteration == 1 || iteration % 5 == 0 ||
+                         iteration == maximum_iterations))
+                    {
+                        options.progress(
+                            QStringLiteral(
+                                "正在进行稀疏 TGV 全局优化（%1/%2）...")
+                                .arg(iteration)
+                                .arg(maximum_iterations),
+                            73 + iteration * 3 /
+                                std::max(1, maximum_iterations));
+                    }
+                });
+            result.statistics.adaptiveTgvIterationCount =
+                tgv.iterationCount;
+            result.statistics.adaptiveTgvInitialMeanAbsoluteCurvature =
+                tgv.initialMeanAbsoluteCurvature;
+            result.statistics.adaptiveTgvFinalMeanAbsoluteCurvature =
+                tgv.finalMeanAbsoluteCurvature;
+            result.statistics.adaptiveTgvFinalMeanAbsoluteUpdate =
+                tgv.finalMeanAbsoluteUpdate;
+            result.statistics.adaptiveTgvSolverElapsedMs =
+                tgv.elapsedMs;
+            if (tgv.cancelled)
+            {
+                result.errorMessage = QStringLiteral(
+                    "稀疏 TGV 全局优化已取消");
+                return result;
+            }
+
+            for (const AdaptiveTsdfOctreeNode &leaf : octree.leaves)
+            {
+                const int end_x = std::min(
+                    result.layout.cells[0] + 1,
+                    leaf.origin[0] + leaf.size);
+                const int end_y = std::min(
+                    result.layout.cells[1] + 1,
+                    leaf.origin[1] + leaf.size);
+                const int end_z = std::min(
+                    result.layout.cells[2] + 1,
+                    leaf.origin[2] + leaf.size);
+                for (int z = leaf.origin[2]; z < end_z; ++z)
+                {
+                    for (int y = leaf.origin[1]; y < end_y; ++y)
+                    {
+                        for (int x = leaf.origin[0]; x < end_x; ++x)
+                        {
+                            const std::size_t index =
+                                sampleIndex(result.layout, x, y, z);
+                            if (active[index] != 0)
+                            {
+                                tsdf[index] = leaf.value;
+                            }
+                        }
+                    }
+                }
+            }
+            if (options.adaptiveTgvUseGlobalVisibilityField)
+            {
+                adaptiveTgvExtractionSupport = active;
+                if (!options.adaptiveTgvRecoverUnsupportedSamples)
+                {
+                    for (std::size_t index = 0;
+                         index < adaptiveTgvExtractionSupport.size();
+                         ++index)
+                    {
+                        adaptiveTgvExtractionSupport[index] =
+                            adaptiveTgvExtractionSupport[index] != 0 &&
+                            supported[index] != 0
+                            ? 1
+                            : 0;
+                    }
+                }
+            }
+            else if (options.adaptiveTgvRecoverUnsupportedSamples)
+            {
+                std::vector<std::uint8_t> robust_eligible = eligible;
+                const float maximum_conflict_ratio = std::clamp(
+                    options.adaptiveTgvMaximumRecoveryConflictRatio,
+                    0.0f,
+                    0.5f);
+                for (std::size_t index = 0;
+                     index < robust_eligible.size();
+                     ++index)
+                {
+                    if (robust_eligible[index] != 0 &&
+                        visibilityHistograms[index]
+                                .summary()
+                                .conflictingSignRatio() >
+                            maximum_conflict_ratio)
+                    {
+                        robust_eligible[index] = 0;
+                    }
+                }
+                const int recovery_passes = std::clamp(
+                    options.adaptiveTgvRecoveryPasses, 1, 6);
+                for (int pass = 0; pass < recovery_passes; ++pass)
+                {
+                    const DepthTsdfZeroCrossingRecoveryStatistics recovery =
+                        options.enableGeometryZeroCrossingCellSheets
+                        ? recoverGeometryVerifiedZeroCrossingCellSheets(
+                              result.layout,
+                              tsdf,
+                              weight,
+                              geometrySourceMask,
+                              robust_eligible,
+                              options.adaptiveTgvMinimumRecoveryNeighbors,
+                              options.minimumGeometryZeroCrossingSheetCells,
+                              options.minimumGeometryZeroCrossingSheetAnchorCells,
+                              options
+                                  .maximumGeometryZeroCrossingSheetSingleVoteAbsoluteTsdf,
+                              &supported)
+                        : recoverGeometryVerifiedZeroCrossingSamples(
+                              result.layout,
+                              tsdf,
+                              weight,
+                              geometrySourceMask,
+                              robust_eligible,
+                              options.adaptiveTgvMinimumRecoveryNeighbors,
+                              options.geometryZeroCrossingMinimumCellVotes,
+                              &supported);
+                    result.statistics.adaptiveTgvRecoveredSampleCount +=
+                        recovery.recoveredSampleCount;
+                    result.statistics.geometryZeroCrossingSheetCandidateCellCount +=
+                        recovery.candidateCellCount;
+                    result.statistics.geometryZeroCrossingSheetAcceptedCellCount +=
+                        recovery.acceptedCellCount;
+                    result.statistics.geometryZeroCrossingSheetComponentCount +=
+                        recovery.componentCount;
+                    result.statistics.geometryZeroCrossingSheetAcceptedComponentCount +=
+                        recovery.acceptedComponentCount;
+                    result.statistics
+                        .geometryZeroCrossingSheetRejectedSmallComponentCount +=
+                        recovery.rejectedSmallComponentCount;
+                    result.statistics
+                        .geometryZeroCrossingSheetRejectedAnchorComponentCount +=
+                        recovery.rejectedAnchorComponentCount;
+                    result.statistics.supportedSampleCount +=
+                        recovery.recoveredSampleCount;
+                    if (recovery.recoveredSampleCount == 0)
+                    {
+                        break;
+                    }
                 }
             }
         }
@@ -3162,6 +4002,20 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
 
     result.statistics.effectiveZeroCrossingDiagnostics =
         options.collectZeroCrossingDiagnostics;
+    result.statistics.effectiveConsistentIsoSurfaceExtraction =
+        options.enableConsistentIsoSurfaceExtraction;
+    result.statistics.effectiveMc33IsoSurfaceExtraction =
+        options.enableMc33IsoSurfaceExtraction;
+    result.statistics.effectiveMc33RequireSupportedSignChange =
+        options.enableMc33IsoSurfaceExtraction &&
+        options.mc33RequireSupportedSignChange;
+    if (options.enableConsistentIsoSurfaceExtraction &&
+        options.enableMc33IsoSurfaceExtraction)
+    {
+        result.errorMessage = QStringLiteral(
+            "TSDF consistent and MC33 iso-surface extractors cannot both be enabled");
+        return result;
+    }
     if (options.collectZeroCrossingDiagnostics)
     {
         const DepthTsdfZeroCrossingStatistics zero_crossings = analyzeZeroCrossings(
@@ -3214,53 +4068,146 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     const PostprocessClock::time_point marching_cubes_start = PostprocessClock::now();
     try
     {
-        plapoint::mesh::MarchingCubes<float> marchingCubes;
-        marchingCubes.setBounds(
-            {result.layout.boundsMin[0], result.layout.boundsMin[1], result.layout.boundsMin[2]},
-            {result.layout.boundsMax[0], result.layout.boundsMax[1], result.layout.boundsMax[2]});
-        marchingCubes.setResolution(result.layout.cells[0],
-                                    result.layout.cells[1],
-                                    result.layout.cells[2]);
-        marchingCubes.setIsoLevel(0.0f);
-        auto [vertices, faces] = marchingCubes.extract(
-            [&](float x, float y, float z)
+        if (options.enableMc33IsoSurfaceExtraction)
+        {
+            const std::vector<std::uint8_t> &extraction_support =
+                !adaptiveTgvExtractionSupport.empty()
+                ? adaptiveTgvExtractionSupport
+                : supported;
+            Mc33IsoSurfaceOptions extraction_options;
+            extraction_options.isoLevel = 0.0f;
+            extraction_options.requireSupportedSignChange =
+                options.mc33RequireSupportedSignChange;
+            extraction_options.isCancelled = options.isCancelled;
+            Mc33IsoSurfaceResult extraction =
+                Mc33IsoSurfaceExtractor::extract(
+                    result.layout.boundsMin,
+                    result.layout.boundsMax,
+                    result.layout.cells,
+                    tsdf,
+                    extraction_support,
+                    extraction_options);
+            if (!extraction.ok)
             {
-                const int ix = std::clamp(static_cast<int>(std::lround(
-                                              (x - result.layout.boundsMin[0]) /
-                                              result.layout.voxelSize[0])),
-                                          0,
-                                          result.layout.cells[0]);
-                const int iy = std::clamp(static_cast<int>(std::lround(
-                                              (y - result.layout.boundsMin[1]) /
-                                              result.layout.voxelSize[1])),
-                                          0,
-                                          result.layout.cells[1]);
-                const int iz = std::clamp(static_cast<int>(std::lround(
-                                              (z - result.layout.boundsMin[2]) /
-                                              result.layout.voxelSize[2])),
-                                          0,
-                                          result.layout.cells[2]);
-                const std::size_t index = sampleIndex(result.layout, ix, iy, iz);
-                return supported[index] != 0 ? tsdf[index] : 1.0f;
-            });
-        result.mesh.vertices.resize(static_cast<std::size_t>(vertices.rows()));
-        for (plamatrix::Index row = 0; row < vertices.rows(); ++row)
-        {
-            MeshVertex &vertex = result.mesh.vertices[static_cast<std::size_t>(row)];
-            vertex.x = vertices(row, 0);
-            vertex.y = vertices(row, 1);
-            vertex.z = vertices(row, 2);
+                result.errorMessage =
+                    QStringLiteral("TSDF MC33 iso-surface extraction failed: %1")
+                        .arg(QString::fromStdString(extraction.errorMessage));
+                return result;
+            }
+            result.mesh = std::move(extraction.mesh);
+            result.statistics.mc33SupportMaskedSampleCount =
+                extraction.statistics.supportMaskedSampleCount;
+            result.statistics.mc33RejectedUnsupportedCellFaceCount =
+                extraction.statistics.rejectedUnsupportedCellFaceCount;
         }
-        result.mesh.faces.resize(static_cast<std::size_t>(faces.rows()));
-        for (plamatrix::Index row = 0; row < faces.rows(); ++row)
+        else if (options.enableConsistentIsoSurfaceExtraction)
         {
-            Triangle &face = result.mesh.faces[static_cast<std::size_t>(row)];
-            face.v[0] = static_cast<int>(std::lround(faces(row, 0)));
-            face.v[1] = static_cast<int>(std::lround(faces(row, 1)));
-            face.v[2] = static_cast<int>(std::lround(faces(row, 2)));
+            const std::vector<std::uint8_t> &extraction_support =
+                !adaptiveTgvExtractionSupport.empty()
+                ? adaptiveTgvExtractionSupport
+                : supported;
+            ConsistentIsoSurfaceOptions extraction_options;
+            extraction_options.isoLevel = 0.0f;
+            extraction_options.isCancelled = options.isCancelled;
+            ConsistentIsoSurfaceResult extraction =
+                ConsistentIsoSurfaceExtractor::extract(
+                    result.layout.boundsMin,
+                    result.layout.boundsMax,
+                    result.layout.cells,
+                    tsdf,
+                    extraction_support,
+                    extraction_options);
+            if (!extraction.ok)
+            {
+                result.errorMessage =
+                    QStringLiteral("TSDF consistent iso-surface extraction failed: %1")
+                        .arg(QString::fromStdString(extraction.errorMessage));
+                return result;
+            }
+            result.mesh = std::move(extraction.mesh);
+            result.statistics.isoSurfaceAmbiguousFaceCount =
+                extraction.statistics.uniqueAmbiguousFaceCount;
+            result.statistics.isoSurfaceTopologyAdjustedCellCount =
+                extraction.statistics.topologyAdjustedCellCount;
+            result.statistics.isoSurfaceDeciderTieCount =
+                extraction.statistics.deciderTieCount;
+            result.statistics.isoSurfaceMultipleLoopCellCount =
+                extraction.statistics.multipleLoopCellCount;
+            result.statistics.isoSurfaceEdgeVertexCacheHitCount =
+                extraction.statistics.edgeVertexCacheHitCount;
+            result.statistics.isoSurfaceEdgeVertexCacheMissCount =
+                extraction.statistics.edgeVertexCacheMissCount;
+            result.statistics.isoSurfaceInteriorLoopVertexCount =
+                extraction.statistics.interiorLoopVertexCount;
+            result.statistics.isoSurfaceRejectedDegenerateFaceCount =
+                extraction.statistics.rejectedDegenerateFaceCount;
+            result.statistics.isoSurfaceUnresolvedCellCount =
+                extraction.statistics.unresolvedCellCount;
+        }
+        else
+        {
+            plapoint::mesh::MarchingCubes<float> marchingCubes;
+            marchingCubes.setBounds(
+                {result.layout.boundsMin[0],
+                 result.layout.boundsMin[1],
+                 result.layout.boundsMin[2]},
+                {result.layout.boundsMax[0],
+                 result.layout.boundsMax[1],
+                 result.layout.boundsMax[2]});
+            marchingCubes.setResolution(result.layout.cells[0],
+                                        result.layout.cells[1],
+                                        result.layout.cells[2]);
+            marchingCubes.setIsoLevel(0.0f);
+            auto [vertices, faces] = marchingCubes.extract(
+                [&](float x, float y, float z)
+                {
+                    const int ix = std::clamp(static_cast<int>(std::lround(
+                                                  (x - result.layout.boundsMin[0]) /
+                                                  result.layout.voxelSize[0])),
+                                              0,
+                                              result.layout.cells[0]);
+                    const int iy = std::clamp(static_cast<int>(std::lround(
+                                                  (y - result.layout.boundsMin[1]) /
+                                                  result.layout.voxelSize[1])),
+                                              0,
+                                              result.layout.cells[1]);
+                    const int iz = std::clamp(static_cast<int>(std::lround(
+                                                  (z - result.layout.boundsMin[2]) /
+                                                  result.layout.voxelSize[2])),
+                                              0,
+                                              result.layout.cells[2]);
+                    const std::size_t index =
+                        sampleIndex(result.layout, ix, iy, iz);
+                    const bool extractable =
+                        !adaptiveTgvExtractionSupport.empty()
+                        ? adaptiveTgvExtractionSupport[index] != 0
+                        : supported[index] != 0;
+                    return extractable ? tsdf[index] : 1.0f;
+                });
+            result.mesh.vertices.resize(
+                static_cast<std::size_t>(vertices.rows()));
+            for (plamatrix::Index row = 0; row < vertices.rows(); ++row)
+            {
+                MeshVertex &vertex =
+                    result.mesh.vertices[static_cast<std::size_t>(row)];
+                vertex.x = vertices(row, 0);
+                vertex.y = vertices(row, 1);
+                vertex.z = vertices(row, 2);
+            }
+            result.mesh.faces.resize(static_cast<std::size_t>(faces.rows()));
+            for (plamatrix::Index row = 0; row < faces.rows(); ++row)
+            {
+                Triangle &face =
+                    result.mesh.faces[static_cast<std::size_t>(row)];
+                face.v[0] = static_cast<int>(std::lround(faces(row, 0)));
+                face.v[1] = static_cast<int>(std::lround(faces(row, 1)));
+                face.v[2] = static_cast<int>(std::lround(faces(row, 2)));
+            }
         }
         result.statistics.marchingCubesVertexCount = result.mesh.vertexCount();
         result.statistics.marchingCubesFaceCount = result.mesh.faceCount();
+        result.statistics.marchingCubesBoundaryEdgeCount =
+            boundaryEdgeCount(result.mesh);
         result.statistics.marchingCubesElapsedMs =
             elapsedMilliseconds(marching_cubes_start);
     }
@@ -3282,13 +4229,34 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     }
 
     const PostprocessClock::time_point cleanup_start = PostprocessClock::now();
-    detail::removeDegenerateFaces(&result.mesh);
-    detail::weldCoincidentVertices(&result.mesh, 1.0e-6f);
+    const float minimum_degenerate_face_area =
+        options.enableConsistentIsoSurfaceExtraction ||
+            options.enableMc33IsoSurfaceExtraction
+        ? 0.0f
+        : 5.0e-9f;
+    const int faces_before_degenerate_cleanup = result.mesh.faceCount();
+    detail::removeDegenerateFaces(
+        &result.mesh,
+        minimum_degenerate_face_area);
+    result.statistics.initialDegenerateRemovedFaceCount = std::max(
+        0,
+        faces_before_degenerate_cleanup - result.mesh.faceCount());
+    if (!options.enableConsistentIsoSurfaceExtraction &&
+        !options.enableMc33IsoSurfaceExtraction)
+    {
+        detail::weldCoincidentVertices(&result.mesh, 1.0e-6f);
+    }
+    const int faces_before_component_filter = result.mesh.faceCount();
     detail::removeSmallConnectedComponents(
         &result.mesh,
         std::max(2, options.minimumComponentFaces),
         options.minimumComponentFaceRatio);
+    result.statistics.componentFilterRemovedFaceCount = std::max(
+        0,
+        faces_before_component_filter - result.mesh.faceCount());
     result.statistics.componentFilteredFaceCount = result.mesh.faceCount();
+    result.statistics.componentFilteredBoundaryEdgeCount =
+        boundaryEdgeCount(result.mesh);
     const WeakBoundaryTipResult weak_tips = trimWeakBoundaryTips(
         &result.mesh,
         result.layout,
@@ -3306,6 +4274,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             std::max(2, options.minimumComponentFaces),
             options.minimumComponentFaceRatio);
     }
+    result.statistics.weakBoundaryTrimmedBoundaryEdgeCount =
+        boundaryEdgeCount(result.mesh);
     reportProgress(QStringLiteral("正在清理 TSDF 网格拓扑..."), 84);
     if (postprocessCancelled())
     {
@@ -3317,7 +4287,53 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             detail::removeDuplicateFaces(&result.mesh);
         result.statistics.removedNonManifoldFaceCount =
             detail::removeNonManifoldFaces(&result.mesh);
-        detail::removeDegenerateFaces(&result.mesh);
+        detail::removeDegenerateFaces(
+            &result.mesh,
+            minimum_degenerate_face_area);
+    }
+    result.statistics.topologyCleanedBoundaryEdgeCount =
+        boundaryEdgeCount(result.mesh);
+    if (options.collectZeroCrossingDiagnostics)
+    {
+        MeshBoundaryAttributionOptions attribution_options;
+        attribution_options.minimumSourceCount =
+            options.minimumSurfacePatchSourceCount;
+        attribution_options.maximumInverseDepthSpread =
+            options.maximumSurfacePatchInverseDepthSpread;
+        attribution_options.minimumSurfaceWeightRatio =
+            options.minimumSurfacePatchWeightRatio;
+        attribution_options.maximumAbsoluteTsdf =
+            options.maximumContourBandAbsoluteTsdf;
+        const MeshBoundaryAttributionStatistics attribution =
+            attributeMeshBoundaryEdges(
+                result.mesh,
+                result.layout,
+                tsdf,
+                weight,
+                surfaceObservationWeight,
+                geometrySourceMask,
+                minimumInverseDepthSpread,
+                supported,
+                attribution_options);
+        result.statistics.topologyCleanedAttributionEdgeCount =
+            attribution.boundaryEdgeCount;
+        result.statistics.topologyCleanedAttributionNoObservationEdgeCount =
+            attribution.noObservationEdgeCount;
+        result.statistics.topologyCleanedAttributionInsufficientSourceEdgeCount =
+            attribution.insufficientSourceEdgeCount;
+        result.statistics.topologyCleanedAttributionDepthSpreadRejectedEdgeCount =
+            attribution.depthSpreadRejectedEdgeCount;
+        result.statistics.topologyCleanedAttributionSurfaceWeightRejectedEdgeCount =
+            attribution.surfaceWeightRejectedEdgeCount;
+        result.statistics.topologyCleanedAttributionAbsoluteTsdfRejectedEdgeCount =
+            attribution.absoluteTsdfRejectedEdgeCount;
+        result.statistics.topologyCleanedAttributionSupportGateRejectedEdgeCount =
+            attribution.supportGateRejectedEdgeCount;
+        result.statistics
+            .topologyCleanedAttributionExtractionOrPostprocessEdgeCount =
+            attribution.extractionOrPostprocessEdgeCount;
+        result.statistics.topologyCleanedAttributionUnclassifiedEdgeCount =
+            attribution.unclassifiedEdgeCount;
     }
     result.statistics.boundaryEdgeCountBefore = boundaryEdgeCount(result.mesh);
     if (options.fillSmallBoundaryHoles)
@@ -3337,7 +4353,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             std::max(0.0f, options.maximumHoleDiameterVoxels) * maximum_voxel_size);
         result.statistics.addedHoleFillFaceCount = std::max(
             0, result.mesh.faceCount() - faces_before);
-        detail::removeDegenerateFaces(&result.mesh);
+        detail::removeDegenerateFaces(
+            &result.mesh,
+            minimum_degenerate_face_area);
     }
     if (options.boundarySmoothingIterations > 0)
     {
@@ -3360,6 +4378,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         options.maximumSurfaceDenoisingNormalAngleDegrees;
     result.statistics.effectiveSurfaceDenoisingBoundaryProtectionRings =
         options.surfaceDenoisingBoundaryProtectionRings;
+    result.statistics.effectivePostSimplificationSurfaceDenoising =
+        options.enablePostSimplificationSurfaceDenoising &&
+        options.surfaceDenoisingIterations > 0;
     if (options.surfaceDenoisingIterations > 0)
     {
         const float maximum_voxel_size = std::max({result.layout.voxelSize[0],
@@ -3374,7 +4395,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 options.maximumSurfaceDenoisingNormalAngleDegrees,
                 options.surfaceDenoisingBoundaryProtectionRings);
     }
-    detail::removeDegenerateFaces(&result.mesh);
+    detail::removeDegenerateFaces(
+        &result.mesh,
+        minimum_degenerate_face_area);
     if (options.fillSmallBoundaryHoles)
     {
         result.statistics.splitPinchedBoundaryVertexCount +=
@@ -3389,7 +4412,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             std::max(0.0f, options.maximumHoleDiameterVoxels) * maximum_voxel_size);
         result.statistics.addedHoleFillFaceCount += std::max(
             0, result.mesh.faceCount() - faces_before_refill);
-        detail::removeDegenerateFaces(&result.mesh);
+        detail::removeDegenerateFaces(
+            &result.mesh,
+            minimum_degenerate_face_area);
     }
     reportProgress(QStringLiteral("正在修补和整理网格边界..."), 86);
     if (postprocessCancelled())
@@ -3421,7 +4446,137 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.effectiveVoxelFallbackSilhouetteDepthToleranceVoxels =
         options.voxelFallbackSilhouetteDepthToleranceVoxels;
     const PostprocessClock::time_point simplification_start = PostprocessClock::now();
-    if (options.enableQuadricSimplification && options.simplifyTargetFaces > 0 &&
+    if (options.enableOpenMeshSimplification &&
+        options.simplifyTargetFaces > 0 &&
+        result.mesh.faceCount() > options.simplifyTargetFaces)
+    {
+        reportProgress(
+            QStringLiteral("正在进行 OpenMesh 拓扑约束简化..."), 87);
+        result.statistics.openMeshSimplificationAttempted = true;
+        result.statistics.openMeshSimplificationInputVertexCount =
+            result.mesh.vertexCount();
+        result.statistics.openMeshSimplificationInputFaceCount =
+            result.mesh.faceCount();
+
+        TriMesh candidate = result.mesh;
+        const MeshBoundaryTopology topology_before =
+            boundaryTopology(result.mesh);
+        const MeshTopologyQualityStatistics quality_before =
+            evaluateMeshTopologyQuality(result.mesh);
+        result.statistics.openMeshBoundaryEdgeCountBefore =
+            topology_before.boundaryEdgeCount;
+        result.statistics.openMeshNonManifoldEdgeCountBefore =
+            topology_before.nonManifoldEdgeCount;
+
+        OpenMeshSimplifyOptions simplify_options;
+        simplify_options.targetFaceCount = options.simplifyTargetFaces;
+        simplify_options.maximumNormalDeviationDegrees =
+            options.openMeshMaximumNormalDeviationDegrees;
+        simplify_options.maximumNormalFlippingDegrees =
+            options.openMeshMaximumNormalFlippingDegrees;
+        simplify_options.smoothingIterations =
+            options.openMeshSmoothingIterations;
+        simplify_options.smoothingMaximumDisplacement =
+            options.openMeshSmoothingMaximumDisplacementVoxels *
+            std::max({
+                result.layout.voxelSize[0],
+                result.layout.voxelSize[1],
+                result.layout.voxelSize[2]});
+        simplify_options.smoothingFeatureAngleDegrees =
+            options.openMeshSmoothingFeatureAngleDegrees;
+        simplify_options.notificationInterval =
+            options.openMeshNotificationInterval;
+        simplify_options.isCancelled = options.isCancelled;
+        simplify_options.progress = [&reportProgress](
+            int collapsed_vertex_count,
+            int estimated_face_count)
+        {
+            reportProgress(
+                QStringLiteral(
+                    "正在进行 OpenMesh 拓扑约束简化（已折叠 %1 点，约 %2 面）...")
+                    .arg(collapsed_vertex_count)
+                    .arg(estimated_face_count),
+                88);
+        };
+
+        const OpenMeshSimplifyStatistics simplify_statistics =
+            simplifyMeshWithOpenMesh(&candidate, simplify_options);
+        const MeshBoundaryTopology topology_after =
+            boundaryTopology(candidate);
+        const MeshTopologyQualityStatistics quality_after =
+            evaluateMeshTopologyQuality(candidate);
+        result.statistics.openMeshSimplificationOutputVertexCount =
+            candidate.vertexCount();
+        result.statistics.openMeshSimplificationOutputFaceCount =
+            candidate.faceCount();
+        result.statistics.openMeshSimplificationCollapsedVertexCount =
+            simplify_statistics.collapsedVertexCount;
+        result.statistics.openMeshSimplificationRejectedInputFaceCount =
+            simplify_statistics.rejectedInputFaceCount;
+        result.statistics.openMeshInconsistentSharedEdgeCountBefore =
+            simplify_statistics.inconsistentSharedEdgeCountBefore;
+        result.statistics.openMeshReorientedInputFaceCount =
+            simplify_statistics.reorientedInputFaceCount;
+        result.statistics.openMeshRemovedContradictoryFaceCount =
+            simplify_statistics.removedContradictoryFaceCount;
+        result.statistics.openMeshOrientationConflictCount =
+            simplify_statistics.orientationConflictCount;
+        result.statistics.openMeshSmoothingApplied =
+            simplify_statistics.smoothingApplied;
+        result.statistics.openMeshSimplificationReachedTarget =
+            simplify_statistics.reachedTarget;
+        result.statistics.openMeshSimplificationCancelled =
+            simplify_statistics.cancelled;
+        result.statistics.openMeshSimplificationError =
+            QString::fromStdString(simplify_statistics.error);
+        result.statistics.openMeshBoundaryEdgeCountAfter =
+            topology_after.boundaryEdgeCount;
+        result.statistics.openMeshNonManifoldEdgeCountAfter =
+            topology_after.nonManifoldEdgeCount;
+
+        const auto topology_growth_is_safe = [](int before, int after)
+        {
+            return after <= before + std::max(
+                8, static_cast<int>(std::ceil(before * 0.10f)));
+        };
+        const double maximum_accepted_normal_median = std::max(
+            quality_before.adjacentNormalAngleMedianDegrees + 8.0,
+            static_cast<double>(
+                options.openMeshMaximumNormalDeviationDegrees));
+        const double maximum_accepted_high_aspect_ratio = std::max(
+            quality_before.highAspectFaceRatio * 1.5, 0.10);
+        const bool accept_simplification =
+            simplify_statistics.succeeded &&
+            candidate.faceCount() < result.mesh.faceCount() &&
+            meshVerticesInsidePaddedLayout(candidate, result.layout) &&
+            topology_growth_is_safe(
+                topology_before.boundaryEdgeCount,
+                topology_after.boundaryEdgeCount) &&
+            topology_growth_is_safe(
+                topology_before.danglingBoundaryVertexCount,
+                topology_after.danglingBoundaryVertexCount) &&
+            topology_after.nonManifoldEdgeCount <=
+                topology_before.nonManifoldEdgeCount &&
+            quality_after.adjacentNormalAngleMedianDegrees <=
+                maximum_accepted_normal_median &&
+            quality_after.highAspectFaceRatio <=
+                maximum_accepted_high_aspect_ratio;
+        result.statistics.openMeshSimplificationAccepted =
+            accept_simplification;
+        result.statistics.effectiveOpenMeshSimplification =
+            accept_simplification;
+        if (accept_simplification)
+        {
+            result.mesh = std::move(candidate);
+        }
+        if (postprocessCancelled())
+        {
+            return result;
+        }
+    }
+    if (!result.statistics.openMeshSimplificationAccepted &&
+        options.enableQuadricSimplification &&
+        options.simplifyTargetFaces > 0 &&
         result.mesh.faceCount() > options.simplifyTargetFaces)
     {
         reportProgress(QStringLiteral("正在进行保拓扑 QEM 简化..."), 87);
@@ -3433,6 +4588,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         simplify_options.targetFaceCount = options.simplifyTargetFaces;
         simplify_options.maximumPasses = options.simplificationMaximumPasses;
         simplify_options.workerCount = options.workerCount;
+        simplify_options.minimumFaceArea = minimum_degenerate_face_area;
         simplify_options.featureAngleDegrees = options.simplificationFeatureAngleDegrees;
         simplify_options.maximumNormalDeviationDegrees =
             options.simplificationMaximumNormalDeviationDegrees;
@@ -3463,6 +4619,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             simplification_boundary_edge_count_before,
             simplified_boundary_edge_count,
             options.maximumSimplificationBoundaryEdgeGrowthRatio) &&
+            meshVerticesInsidePaddedLayout(result.mesh, result.layout) &&
             topology_growth_is_safe(topology_before.danglingBoundaryVertexCount,
                                     topology_after.danglingBoundaryVertexCount) &&
             topology_growth_is_safe(topology_before.nonManifoldEdgeCount,
@@ -3505,6 +4662,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         }
     }
     if (options.enableQuadricSimplification &&
+        !result.statistics.openMeshSimplificationAccepted &&
         options.enableVoxelFallbackSimplification &&
         options.simplifyTargetFaces > 0 &&
         !result.statistics.quadricSimplifyReachedTarget &&
@@ -3568,7 +4726,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             boundary_protection);
         detail::removeDuplicateFaces(&candidate);
         detail::removeNonManifoldFaces(&candidate);
-        detail::removeDegenerateFaces(&candidate);
+        detail::removeDegenerateFaces(
+            &candidate,
+            minimum_degenerate_face_area);
         detail::removeSmallConnectedComponents(
             &candidate,
             std::max(2, options.minimumComponentFaces),
@@ -3586,7 +4746,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                         maximum_voxel_size);
             result.statistics.addedHoleFillFaceCount += std::max(
                 0, candidate.faceCount() - faces_before_fallback_fill);
-            detail::removeDegenerateFaces(&candidate);
+            detail::removeDegenerateFaces(
+                &candidate,
+                minimum_degenerate_face_area);
         }
         detail::compactReferencedVertices(&candidate);
 
@@ -3605,6 +4767,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             polish_options.targetFaceCount = polish_target_faces;
             polish_options.maximumPasses = options.simplificationMaximumPasses;
             polish_options.workerCount = options.workerCount;
+            polish_options.minimumFaceArea = minimum_degenerate_face_area;
             polish_options.featureAngleDegrees = std::max(
                 options.simplificationFeatureAngleDegrees, 80.0f);
             polish_options.maximumNormalDeviationDegrees = std::max(
@@ -3635,6 +4798,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 polish_topology_before.boundaryEdgeCount,
                 polish_topology_after.boundaryEdgeCount,
                 options.maximumSimplificationBoundaryEdgeGrowthRatio) &&
+                meshVerticesInsidePaddedLayout(candidate, result.layout) &&
                 polish_topology_after.danglingBoundaryVertexCount <=
                     polish_topology_before.danglingBoundaryVertexCount +
                         std::max(8, static_cast<int>(std::ceil(
@@ -3673,6 +4837,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             !triangle_quality_is_safe;
         const bool accept_fallback = !candidate.empty() &&
             candidate.faceCount() < result.mesh.faceCount() &&
+            meshVerticesInsidePaddedLayout(candidate, result.layout) &&
             triangle_quality_is_safe &&
             topology_growth_is_safe(topology_before.boundaryEdgeCount,
                                     topology_after.boundaryEdgeCount) &&
@@ -3689,6 +4854,21 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         {
             return result;
         }
+    }
+    const int faces_before_post_simplification_component_filter =
+        result.mesh.faceCount();
+    detail::removeSmallConnectedComponents(
+        &result.mesh,
+        std::max(2, options.minimumComponentFaces),
+        options.minimumComponentFaceRatio);
+    result.statistics.postSimplificationComponentFilterRemovedFaceCount =
+        std::max(
+            0,
+            faces_before_post_simplification_component_filter -
+                result.mesh.faceCount());
+    if (result.statistics.postSimplificationComponentFilterRemovedFaceCount > 0)
+    {
+        detail::compactReferencedVertices(&result.mesh);
     }
     result.statistics.effectiveSilhouetteAwareFinalHoleFill =
         options.enableSilhouetteAwareFinalHoleFill;
@@ -3773,7 +4953,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 &protected_silhouette_vertices,
                 &protected_hole_count,
                 true);
-            detail::removeDegenerateFaces(&candidate);
+            detail::removeDegenerateFaces(
+                &candidate,
+                minimum_degenerate_face_area);
             detail::compactReferencedVertices(&candidate);
 
             const MeshBoundaryTopology topology_after =
@@ -3793,6 +4975,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 quality_after.sliverRatio <= quality_before.sliverRatio;
             const bool accept_final_fill =
                 filled_hole_count > 0 &&
+                meshVerticesInsidePaddedLayout(candidate, result.layout) &&
                 topology_after.boundaryEdgeCount < topology_before.boundaryEdgeCount &&
                 topology_after.danglingBoundaryVertexCount <=
                     topology_before.danglingBoundaryVertexCount &&
@@ -3802,6 +4985,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 triangle_quality_is_safe;
 
             if (accept_final_fill &&
+                !result.statistics.openMeshSimplificationAccepted &&
                 options.enableQuadricSimplification &&
                 options.simplifyTargetFaces > 0 &&
                 candidate.faceCount() > options.simplifyTargetFaces)
@@ -3817,6 +5001,8 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 post_fill_options.targetFaceCount = options.simplifyTargetFaces;
                 post_fill_options.maximumPasses = options.simplificationMaximumPasses;
                 post_fill_options.workerCount = options.workerCount;
+                post_fill_options.minimumFaceArea =
+                    minimum_degenerate_face_area;
                 post_fill_options.featureAngleDegrees =
                     options.simplificationFeatureAngleDegrees;
                 post_fill_options.maximumNormalDeviationDegrees =
@@ -3846,6 +5032,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 const bool accept_post_fill_simplification =
                     !candidate.empty() &&
                     candidate.faceCount() < filled_candidate.faceCount() &&
+                    meshVerticesInsidePaddedLayout(candidate, result.layout) &&
                     post_fill_topology.boundaryEdgeCount <=
                         permitted_boundary_edges &&
                     post_fill_topology.danglingBoundaryVertexCount <=
@@ -4190,7 +5377,9 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
             &protected_silhouette_vertices,
             &protected_hole_count,
             true);
-        detail::removeDegenerateFaces(&candidate);
+        detail::removeDegenerateFaces(
+            &candidate,
+            minimum_degenerate_face_area);
         detail::compactReferencedVertices(&candidate);
 
         const MeshBoundaryTopology topology_after =
@@ -4210,6 +5399,7 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                     quality_before.sliverRatio + 1.0e-12);
         const bool accept_residual_fill =
             filled_hole_count > 0 &&
+            meshVerticesInsidePaddedLayout(candidate, result.layout) &&
             topology_after.boundaryEdgeCount <
                 topology_before.boundaryEdgeCount &&
             topology_after.danglingBoundaryVertexCount <=
@@ -4239,6 +5429,130 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
                 filled_hole_count;
             result.statistics.addedHoleFillFaceCount +=
                 added_face_count;
+        }
+        if (postprocessCancelled())
+        {
+            return result;
+        }
+    }
+    if (result.statistics.effectivePostSimplificationSurfaceDenoising)
+    {
+        reportProgress(
+            QStringLiteral("正在进行轮廓保护的最终表面降噪..."), 93);
+        result.statistics.postSimplificationSurfaceDenoisingAttempted = true;
+        MeshTopologyQualityThresholds quality_thresholds;
+        quality_thresholds.maximumBoundaryEdgeRatio =
+            std::max(0.0f, options.topologyQualityMaximumBoundaryEdgeRatio);
+        quality_thresholds.maximumHighAspectFaceRatio =
+            std::max(0.0f, options.topologyQualityMaximumHighAspectFaceRatio);
+        quality_thresholds.maximumExtremeAspectFaceRatio =
+            std::max(0.0f, options.topologyQualityMaximumExtremeAspectFaceRatio);
+        const MeshTopologyQualityStatistics quality_before =
+            evaluateMeshTopologyQuality(result.mesh, quality_thresholds);
+        result.statistics.postSimplificationNormalAngleMedianBefore =
+            quality_before.adjacentNormalAngleMedianDegrees;
+        result.statistics.postSimplificationNormalAngleP90Before =
+            quality_before.adjacentNormalAngleP90Degrees;
+        result.statistics.postSimplificationNormalAngleOver30RatioBefore =
+            quality_before.adjacentNormalAngleOver30Ratio;
+        result.statistics.postSimplificationHighAspectFaceRatioBefore =
+            quality_before.highAspectFaceRatio;
+        result.statistics.postSimplificationExtremeAspectFaceRatioBefore =
+            quality_before.extremeAspectFaceRatio;
+
+        TriMesh candidate = result.mesh;
+        const float maximum_voxel_size = std::max({
+            result.layout.voxelSize[0],
+            result.layout.voxelSize[1],
+            result.layout.voxelSize[2]});
+        const int moved_vertex_count =
+            detail::smoothSurfaceVerticesNormalAware(
+                &candidate,
+                options.surfaceDenoisingIterations,
+                options.surfaceDenoisingLambda,
+                options.maximumSurfaceDenoisingDisplacementVoxels *
+                    maximum_voxel_size,
+                options.maximumSurfaceDenoisingNormalAngleDegrees,
+                options.surfaceDenoisingBoundaryProtectionRings);
+        MeshTriangleOptimizationOptions relaxation_options;
+        relaxation_options.maximumPasses = 0;
+        relaxation_options.maximumFeatureAngleDegrees =
+            options.triangleQualityMaximumFeatureAngleDegrees;
+        relaxation_options.maximumNormalDeviationDegrees =
+            options.triangleQualityMaximumNormalDeviationDegrees;
+        relaxation_options.enableTangentialRelaxation = true;
+        relaxation_options.tangentialRelaxationPasses = 1;
+        relaxation_options.tangentialRelaxationLambda = std::min(
+            0.30f, options.triangleQualityTangentialRelaxationLambda);
+        relaxation_options.tangentialMaximumDisplacementEdgeRatio = std::min(
+            0.10f,
+            options.triangleQualityTangentialMaximumDisplacementEdgeRatio);
+        relaxation_options.enableIsotropicRemeshing = false;
+        relaxation_options.isCancelled = options.isCancelled;
+        const MeshTriangleOptimizationStatistics relaxation =
+            optimizeTriangleQuality(&candidate, relaxation_options);
+        result.statistics.postSimplificationTangentialRelaxedVertexCount =
+            relaxation.tangentialRelaxedVertexCount;
+        detail::recomputeNormals(&candidate);
+        const MeshTopologyQualityStatistics quality_after =
+            evaluateMeshTopologyQuality(candidate, quality_thresholds);
+        result.statistics.postSimplificationSmoothedSurfaceVertexCount =
+            moved_vertex_count;
+        result.statistics.postSimplificationNormalAngleMedianAfter =
+            quality_after.adjacentNormalAngleMedianDegrees;
+        result.statistics.postSimplificationNormalAngleP90After =
+            quality_after.adjacentNormalAngleP90Degrees;
+        result.statistics.postSimplificationNormalAngleOver30RatioAfter =
+            quality_after.adjacentNormalAngleOver30Ratio;
+        result.statistics.postSimplificationHighAspectFaceRatioAfter =
+            quality_after.highAspectFaceRatio;
+        result.statistics.postSimplificationExtremeAspectFaceRatioAfter =
+            quality_after.extremeAspectFaceRatio;
+
+        constexpr double ratio_epsilon = 1.0e-12;
+        const bool topology_preserved =
+            quality_after.validFaceCount == quality_before.validFaceCount &&
+            quality_after.boundaryEdgeCount == quality_before.boundaryEdgeCount &&
+            quality_after.nonManifoldEdgeCount ==
+                quality_before.nonManifoldEdgeCount &&
+            quality_after.componentCount == quality_before.componentCount &&
+            quality_after.largestComponentFaceRatio + ratio_epsilon >=
+                quality_before.largestComponentFaceRatio;
+        const bool triangle_quality_is_safe =
+            quality_after.highAspectFaceRatio <=
+                std::max(
+                    quality_before.highAspectFaceRatio * 1.02,
+                    quality_before.highAspectFaceRatio + 0.002) &&
+            quality_after.extremeAspectFaceRatio <=
+                std::max(
+                    quality_before.extremeAspectFaceRatio * 1.02,
+                    quality_before.extremeAspectFaceRatio + 0.001);
+        const bool normal_quality_is_safe =
+            quality_after.adjacentNormalAngleMedianDegrees <=
+                quality_before.adjacentNormalAngleMedianDegrees + 0.25 &&
+            quality_after.adjacentNormalAngleP90Degrees <=
+                quality_before.adjacentNormalAngleP90Degrees + 1.0 &&
+            quality_after.adjacentNormalAngleOver30Ratio <=
+                quality_before.adjacentNormalAngleOver30Ratio + 0.0025;
+        const bool normal_quality_improved =
+            quality_after.adjacentNormalAngleMedianDegrees + 0.10 <
+                quality_before.adjacentNormalAngleMedianDegrees ||
+            quality_after.adjacentNormalAngleP90Degrees + 0.50 <
+                quality_before.adjacentNormalAngleP90Degrees ||
+            quality_after.adjacentNormalAngleOver30Ratio + 0.001 <
+                quality_before.adjacentNormalAngleOver30Ratio;
+        const bool accept_denoising =
+            moved_vertex_count > 0 &&
+            meshVerticesInsidePaddedLayout(candidate, result.layout) &&
+            topology_preserved &&
+            triangle_quality_is_safe &&
+            normal_quality_is_safe &&
+            normal_quality_improved;
+        result.statistics.postSimplificationSurfaceDenoisingAccepted =
+            accept_denoising;
+        if (accept_denoising)
+        {
+            result.mesh = std::move(candidate);
         }
         if (postprocessCancelled())
         {
@@ -4339,10 +5653,24 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         std::max(0.0f, options.topologyQualityMaximumHighAspectFaceRatio);
     topology_quality_thresholds.maximumExtremeAspectFaceRatio =
         std::max(0.0f, options.topologyQualityMaximumExtremeAspectFaceRatio);
+    topology_quality_thresholds.maximumClosedGenus =
+        std::max(0.0f, options.topologyQualityMaximumClosedGenus);
+    topology_quality_thresholds.maximumTopologicalComplexity =
+        std::max(0, options.topologyQualityMaximumTopologicalComplexity);
     const MeshTopologyQualityStatistics topology_quality =
         evaluateMeshTopologyQuality(result.mesh, topology_quality_thresholds);
     result.statistics.topologyQualityUniqueEdgeCount =
         topology_quality.uniqueEdgeCount;
+    result.statistics.topologyQualityReferencedVertexCount =
+        topology_quality.referencedVertexCount;
+    result.statistics.topologyQualityEulerCharacteristic =
+        topology_quality.eulerCharacteristic;
+    result.statistics.topologyQualityTopologicalComplexity =
+        topology_quality.topologicalComplexity;
+    result.statistics.topologyQualityClosedGenusEstimate =
+        topology_quality.closedGenusEstimate;
+    result.statistics.topologyQualityClosedTopologyEvaluated =
+        topology_quality.closedTopologyEvaluated;
     result.statistics.topologyQualityBoundaryEdgeCount =
         topology_quality.boundaryEdgeCount;
     result.statistics.topologyQualityNonManifoldEdgeCount =
@@ -4361,6 +5689,62 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
         topology_quality.highAspectFaceRatio;
     result.statistics.topologyQualityExtremeAspectFaceRatio =
         topology_quality.extremeAspectFaceRatio;
+    result.statistics.topologyQualityAdjacentFacePairCount =
+        topology_quality.adjacentFacePairCount;
+    result.statistics.topologyQualityAdjacentNormalAngleMedianDegrees =
+        topology_quality.adjacentNormalAngleMedianDegrees;
+    result.statistics.topologyQualityAdjacentNormalAngleP90Degrees =
+        topology_quality.adjacentNormalAngleP90Degrees;
+    result.statistics.topologyQualityAdjacentNormalAngleOver30Ratio =
+        topology_quality.adjacentNormalAngleOver30Ratio;
+    if (options.collectZeroCrossingDiagnostics)
+    {
+        MeshBoundaryAttributionOptions attribution_options;
+        attribution_options.minimumSourceCount =
+            options.minimumSurfacePatchSourceCount;
+        attribution_options.maximumInverseDepthSpread =
+            options.maximumSurfacePatchInverseDepthSpread;
+        attribution_options.minimumSurfaceWeightRatio =
+            options.minimumSurfacePatchWeightRatio;
+        attribution_options.maximumAbsoluteTsdf =
+            options.maximumContourBandAbsoluteTsdf;
+        std::vector<MeshBoundaryAttributionReason> vertex_reasons;
+        const MeshBoundaryAttributionStatistics attribution =
+            attributeMeshBoundaryEdges(
+                result.mesh,
+                result.layout,
+                tsdf,
+                weight,
+                surfaceObservationWeight,
+                geometrySourceMask,
+                minimumInverseDepthSpread,
+                supported,
+                attribution_options,
+                &vertex_reasons);
+        result.boundaryAttributionDebugMesh = result.mesh;
+        applyMeshBoundaryAttributionColors(
+            &result.boundaryAttributionDebugMesh,
+            vertex_reasons);
+        result.statistics.boundaryAttributionEdgeCount =
+            attribution.boundaryEdgeCount;
+        result.statistics.boundaryAttributionNoObservationEdgeCount =
+            attribution.noObservationEdgeCount;
+        result.statistics.boundaryAttributionInsufficientSourceEdgeCount =
+            attribution.insufficientSourceEdgeCount;
+        result.statistics.boundaryAttributionDepthSpreadRejectedEdgeCount =
+            attribution.depthSpreadRejectedEdgeCount;
+        result.statistics.boundaryAttributionSurfaceWeightRejectedEdgeCount =
+            attribution.surfaceWeightRejectedEdgeCount;
+        result.statistics.boundaryAttributionAbsoluteTsdfRejectedEdgeCount =
+            attribution.absoluteTsdfRejectedEdgeCount;
+        result.statistics.boundaryAttributionSupportGateRejectedEdgeCount =
+            attribution.supportGateRejectedEdgeCount;
+        result.statistics
+            .boundaryAttributionExtractionOrPostprocessEdgeCount =
+            attribution.extractionOrPostprocessEdgeCount;
+        result.statistics.boundaryAttributionUnclassifiedEdgeCount =
+            attribution.unclassifiedEdgeCount;
+    }
     result.statistics.topologyQualityStrictGatePassed =
         topology_quality.strictGatePassed;
     const MeshConnectivityStats connectivity =
@@ -4371,6 +5755,63 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
     result.statistics.components = connectivity.components;
     result.statistics.vertexCount = result.mesh.vertexCount();
     result.statistics.faceCount = result.mesh.faceCount();
+    result.statistics.effectiveDepthCompletenessDiagnostics =
+        options.enableDepthCompletenessDiagnostics;
+    result.statistics.effectiveDepthCompletenessGateEnforcement =
+        options.enforceDepthCompletenessGate;
+    if (options.enableDepthCompletenessDiagnostics)
+    {
+        if (options.progress)
+        {
+            options.progress(QStringLiteral("正在检查各视角模型完整性..."), 99);
+        }
+        DepthMeshCompletenessOptions completeness_options;
+        completeness_options.maximumDepthSamplesPerFrame =
+            options.depthCompletenessMaximumSamplesPerFrame;
+        completeness_options.tolerance =
+            maximum_voxel_size *
+            std::max(1.0f, options.depthCompletenessToleranceVoxels);
+        completeness_options.minimumP10FrameRecall =
+            options.minimumDepthCompletenessP10Recall;
+        completeness_options.minimumMedianFrameRecall =
+            options.minimumDepthCompletenessMedianRecall;
+        const DepthMeshCompletenessStatistics completeness =
+            DepthMeshCompleteness::evaluate(
+                result.mesh, frames, completeness_options);
+        result.statistics.depthCompletenessAvailable = completeness.available;
+        result.statistics.depthCompletenessGatePassed = completeness.gatePassed;
+        result.statistics.depthCompletenessTolerance = completeness.tolerance;
+        result.statistics.depthCompletenessSampledPointCount =
+            completeness.sampledDepthPointCount;
+        result.statistics.depthCompletenessExplainedPointCount =
+            completeness.explainedDepthPointCount;
+        result.statistics.depthCompletenessAggregateRecall =
+            completeness.aggregateRecall;
+        result.statistics.depthCompletenessMinimumFrameRecall =
+            completeness.minimumFrameRecall;
+        result.statistics.depthCompletenessP10FrameRecall =
+            completeness.p10FrameRecall;
+        result.statistics.depthCompletenessMedianFrameRecall =
+            completeness.medianFrameRecall;
+        for (const DepthMeshFrameCompleteness &frame : completeness.frames)
+        {
+            result.statistics.depthCompletenessRefIndices.push_back(
+                frame.refIndex);
+            result.statistics.depthCompletenessFrameRecalls.push_back(
+                frame.recall);
+        }
+        if (options.enforceDepthCompletenessGate &&
+            (!completeness.available || !completeness.gatePassed))
+        {
+            result.errorMessage = QStringLiteral(
+                "TSDF 深度观测完整性质量门未通过：中位召回率=%1，"
+                "P10 召回率=%2，最低召回率=%3。模型可能存在整侧缺失或大面积空洞。")
+                                      .arg(completeness.medianFrameRecall, 0, 'f', 4)
+                                      .arg(completeness.p10FrameRecall, 0, 'f', 4)
+                                      .arg(completeness.minimumFrameRecall, 0, 'f', 4);
+            return result;
+        }
+    }
     result.statistics.postIntegrationElapsedMs =
         elapsedMilliseconds(postprocess_start);
 
@@ -4386,6 +5827,35 @@ DepthTsdfResult DepthTsdfSurfaceBuilder::build(const QVector<DepthTsdfFrame> &fr
 QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &result)
 {
     const DepthTsdfStatistics &statistics = result.statistics;
+    QJsonArray rejected_frame_ref_indices;
+    for (const int ref_index :
+         statistics.robustFrameQualityRejectedRefIndices)
+    {
+        rejected_frame_ref_indices.append(ref_index);
+    }
+    QJsonArray auxiliary_surface_only_ref_indices;
+    for (const int ref_index : statistics.auxiliarySurfaceOnlyRefIndices)
+    {
+        auxiliary_surface_only_ref_indices.append(ref_index);
+    }
+    QJsonArray orbital_coverage_protected_ref_indices;
+    for (const int ref_index : statistics.orbitalCoverageProtectedRefIndices)
+    {
+        orbital_coverage_protected_ref_indices.append(ref_index);
+    }
+    QJsonArray depth_completeness_frames;
+    const int completeness_frame_count = std::min(
+        statistics.depthCompletenessRefIndices.size(),
+        statistics.depthCompletenessFrameRecalls.size());
+    for (int index = 0; index < completeness_frame_count; ++index)
+    {
+        depth_completeness_frames.append(QJsonObject{
+            {QStringLiteral("ref_index"),
+             statistics.depthCompletenessRefIndices[index]},
+            {QStringLiteral("recall"),
+             statistics.depthCompletenessFrameRecalls[index]}
+        });
+    }
     QJsonArray component_face_counts;
     for (const std::size_t face_count : statistics.componentFaceCounts)
     {
@@ -4432,6 +5902,10 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          static_cast<double>(statistics.rejectedSupportMaskCount)},
         {QStringLiteral("support_mask_free_space_update_count"),
          static_cast<double>(statistics.supportMaskFreeSpaceUpdateCount)},
+        {QStringLiteral("support_mask_free_space_surface_veto_count"),
+         static_cast<double>(statistics.supportMaskFreeSpaceSurfaceVetoCount)},
+        {QStringLiteral("auxiliary_outside_surface_band_rejected_count"),
+         static_cast<double>(statistics.auxiliaryOutsideSurfaceBandRejectedCount)},
         {QStringLiteral("rejected_depth_valid_count"),
          static_cast<double>(statistics.rejectedDepthValidCount)},
         {QStringLiteral("rejected_depth_count"),
@@ -4482,10 +5956,53 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          static_cast<double>(statistics.contourBandZeroCrossingRecoveredSampleCount)},
         {QStringLiteral("contour_band_zero_crossing_rejected_no_contour_count"),
          static_cast<double>(statistics.contourBandZeroCrossingRejectedNoContourCount)},
+        {QStringLiteral("contour_band_zero_crossing_rejected_weight_count"),
+         static_cast<double>(statistics.contourBandZeroCrossingRejectedWeightCount)},
+        {QStringLiteral("contour_band_zero_crossing_rejected_source_overlap_count"),
+         static_cast<double>(
+             statistics.contourBandZeroCrossingRejectedSourceOverlapCount)},
+        {QStringLiteral("contour_band_zero_crossing_rejected_depth_spread_count"),
+         static_cast<double>(
+             statistics.contourBandZeroCrossingRejectedDepthSpreadCount)},
+        {QStringLiteral("contour_band_zero_crossing_rejected_free_space_count"),
+         static_cast<double>(
+             statistics.contourBandZeroCrossingRejectedFreeSpaceCount)},
+        {QStringLiteral(
+             "contour_band_zero_crossing_rejected_surface_weight_ratio_count"),
+         static_cast<double>(
+             statistics.contourBandZeroCrossingRejectedSurfaceWeightRatioCount)},
+        {QStringLiteral(
+             "contour_band_zero_crossing_rejected_absolute_tsdf_count"),
+         static_cast<double>(
+             statistics.contourBandZeroCrossingRejectedAbsoluteTsdfCount)},
+        {QStringLiteral("contour_band_zero_crossing_rejected_neighborhood_count"),
+         static_cast<double>(
+             statistics.contourBandZeroCrossingRejectedNeighborhoodCount)},
+        {QStringLiteral(
+             "contour_band_zero_crossing_rejected_geometry_support_count"),
+         static_cast<double>(
+             statistics.contourBandZeroCrossingRejectedGeometrySupportCount)},
         {QStringLiteral("contour_band_zero_crossing_rejected_no_sign_pair_count"),
          static_cast<double>(statistics.contourBandZeroCrossingRejectedNoSignPairCount)},
+        {QStringLiteral("effective_maximum_contour_band_absolute_tsdf"),
+         statistics.effectiveMaximumContourBandAbsoluteTsdf},
         {QStringLiteral("effective_zero_crossing_diagnostics"),
          statistics.effectiveZeroCrossingDiagnostics},
+        {QStringLiteral("effective_consistent_iso_surface_extraction"),
+         statistics.effectiveConsistentIsoSurfaceExtraction},
+        {QStringLiteral("effective_mc33_iso_surface_extraction"),
+         statistics.effectiveMc33IsoSurfaceExtraction},
+        {QStringLiteral("effective_mc33_require_supported_sign_change"),
+         statistics.effectiveMc33RequireSupportedSignChange},
+        {QStringLiteral("mc33_support_masked_sample_count"),
+         static_cast<double>(statistics.mc33SupportMaskedSampleCount)},
+        {QStringLiteral("mc33_rejected_unsupported_cell_face_count"),
+         static_cast<double>(
+             statistics.mc33RejectedUnsupportedCellFaceCount)},
+        {QStringLiteral("initial_degenerate_removed_face_count"),
+         statistics.initialDegenerateRemovedFaceCount},
+        {QStringLiteral("component_filter_removed_face_count"),
+         statistics.componentFilterRemovedFaceCount},
         {QStringLiteral("effective_geometry_zero_crossing_recovery"),
          statistics.effectiveGeometryZeroCrossingRecovery},
         {QStringLiteral("geometry_zero_crossing_candidate_sample_count"),
@@ -4494,6 +6011,109 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
         {QStringLiteral("geometry_zero_crossing_recovered_sample_count"),
          static_cast<double>(
              statistics.geometryZeroCrossingRecoveredSampleCount)},
+        {QStringLiteral("effective_geometry_zero_crossing_cell_sheets"),
+         statistics.effectiveGeometryZeroCrossingCellSheets},
+        {QStringLiteral(
+             "geometry_zero_crossing_sheet_candidate_cell_count"),
+         static_cast<double>(
+             statistics.geometryZeroCrossingSheetCandidateCellCount)},
+        {QStringLiteral(
+             "geometry_zero_crossing_sheet_accepted_cell_count"),
+         static_cast<double>(
+             statistics.geometryZeroCrossingSheetAcceptedCellCount)},
+        {QStringLiteral("geometry_zero_crossing_sheet_component_count"),
+         statistics.geometryZeroCrossingSheetComponentCount},
+        {QStringLiteral(
+             "geometry_zero_crossing_sheet_accepted_component_count"),
+         statistics.geometryZeroCrossingSheetAcceptedComponentCount},
+        {QStringLiteral(
+             "geometry_zero_crossing_sheet_rejected_small_component_count"),
+         statistics.geometryZeroCrossingSheetRejectedSmallComponentCount},
+        {QStringLiteral(
+             "geometry_zero_crossing_sheet_rejected_anchor_component_count"),
+         statistics.geometryZeroCrossingSheetRejectedAnchorComponentCount},
+        {QStringLiteral(
+             "effective_maximum_geometry_zero_crossing_sheet_single_vote_absolute_tsdf"),
+         statistics
+             .effectiveMaximumGeometryZeroCrossingSheetSingleVoteAbsoluteTsdf},
+        {QStringLiteral("effective_global_implicit_regularization"),
+         statistics.effectiveGlobalImplicitRegularization},
+        {QStringLiteral("effective_implicit_regularization_levels"),
+         statistics.effectiveImplicitRegularizationLevels},
+        {QStringLiteral(
+             "effective_implicit_regularization_passes_per_level"),
+         statistics.effectiveImplicitRegularizationPassesPerLevel},
+        {QStringLiteral("effective_implicit_regularization_smoothness"),
+         statistics.effectiveImplicitRegularizationSmoothness},
+        {QStringLiteral("effective_implicit_regularization_data_fidelity"),
+         statistics.effectiveImplicitRegularizationDataFidelity},
+        {QStringLiteral("effective_implicit_regularization_maximum_update"),
+         statistics.effectiveImplicitRegularizationMaximumUpdate},
+        {QStringLiteral("effective_implicit_regularization_edge_threshold"),
+         statistics.effectiveImplicitRegularizationEdgeThreshold},
+        {QStringLiteral(
+             "effective_implicit_regularization_recover_axial_gaps"),
+         statistics.effectiveImplicitRegularizationRecoverAxialGaps},
+        {QStringLiteral(
+             "effective_implicit_regularization_minimum_bridge_axes"),
+         statistics.effectiveImplicitRegularizationMinimumBridgeAxes},
+        {QStringLiteral(
+             "effective_implicit_regularization_maximum_bridge_prediction_delta"),
+         statistics
+             .effectiveImplicitRegularizationMaximumBridgePredictionDelta},
+        {QStringLiteral(
+             "implicit_regularization_bridge_candidate_count"),
+         static_cast<double>(
+             statistics.implicitRegularizationBridgeCandidateCount)},
+        {QStringLiteral("implicit_regularization_recovered_sample_count"),
+         static_cast<double>(
+             statistics.implicitRegularizationRecoveredSampleCount)},
+        {QStringLiteral("implicit_regularization_update_operation_count"),
+         static_cast<double>(
+             statistics.implicitRegularizationUpdateOperationCount)},
+        {QStringLiteral("implicit_regularization_mean_absolute_update"),
+         statistics.implicitRegularizationMeanAbsoluteUpdate},
+        {QStringLiteral("implicit_regularization_maximum_absolute_update"),
+         statistics.implicitRegularizationMaximumAbsoluteUpdate},
+        {QStringLiteral("implicit_regularization_elapsed_ms"),
+         static_cast<double>(statistics.implicitRegularizationElapsedMs)},
+        {QStringLiteral("effective_adaptive_tgv_regularization"),
+         statistics.effectiveAdaptiveTgvRegularization},
+        {QStringLiteral(
+             "effective_adaptive_tgv_global_visibility_field"),
+         statistics.effectiveAdaptiveTgvGlobalVisibilityField},
+        {QStringLiteral(
+             "effective_adaptive_tgv_maximum_active_absolute_field"),
+         statistics.effectiveAdaptiveTgvMaximumActiveAbsoluteField},
+        {QStringLiteral("adaptive_tgv_histogram_sample_count"),
+         static_cast<double>(statistics.adaptiveTgvHistogramSampleCount)},
+        {QStringLiteral("adaptive_tgv_input_active_sample_count"),
+         static_cast<double>(statistics.adaptiveTgvInputActiveSampleCount)},
+        {QStringLiteral("adaptive_tgv_leaf_count"),
+         static_cast<double>(statistics.adaptiveTgvLeafCount)},
+        {QStringLiteral("adaptive_tgv_merged_node_count"),
+         static_cast<double>(statistics.adaptiveTgvMergedNodeCount)},
+        {QStringLiteral("adaptive_tgv_balance_split_count"),
+         static_cast<double>(statistics.adaptiveTgvBalanceSplitCount)},
+        {QStringLiteral("adaptive_tgv_global_visibility_sample_count"),
+         static_cast<double>(
+             statistics.adaptiveTgvGlobalVisibilitySampleCount)},
+        {QStringLiteral("adaptive_tgv_recovered_sample_count"),
+         static_cast<double>(statistics.adaptiveTgvRecoveredSampleCount)},
+        {QStringLiteral("adaptive_tgv_two_to_one_balanced"),
+         statistics.adaptiveTgvTwoToOneBalanced},
+        {QStringLiteral("adaptive_tgv_iteration_count"),
+         statistics.adaptiveTgvIterationCount},
+        {QStringLiteral("adaptive_tgv_initial_mean_absolute_curvature"),
+         statistics.adaptiveTgvInitialMeanAbsoluteCurvature},
+        {QStringLiteral("adaptive_tgv_final_mean_absolute_curvature"),
+         statistics.adaptiveTgvFinalMeanAbsoluteCurvature},
+        {QStringLiteral("adaptive_tgv_final_mean_absolute_update"),
+         statistics.adaptiveTgvFinalMeanAbsoluteUpdate},
+        {QStringLiteral("adaptive_tgv_octree_elapsed_ms"),
+         static_cast<double>(statistics.adaptiveTgvOctreeElapsedMs)},
+        {QStringLiteral("adaptive_tgv_solver_elapsed_ms"),
+         static_cast<double>(statistics.adaptiveTgvSolverElapsedMs)},
         {QStringLiteral("zero_crossing_observed_cell_count"),
          static_cast<double>(statistics.zeroCrossingObservedCellCount)},
         {QStringLiteral("zero_crossing_raw_candidate_cell_count"),
@@ -4555,6 +6175,28 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.robustFrameQualityScale},
         {QStringLiteral("robust_frame_quality_minimum_effective_weight"),
          statistics.robustFrameQualityMinimumEffectiveWeight},
+        {QStringLiteral("effective_robust_frame_quality_rejection"),
+         statistics.effectiveRobustFrameQualityRejection},
+        {QStringLiteral("robust_frame_quality_rejected_frame_count"),
+         statistics.robustFrameQualityRejectedFrameCount},
+        {QStringLiteral("robust_frame_quality_rejected_ref_indices"),
+         rejected_frame_ref_indices},
+        {QStringLiteral("auxiliary_surface_only_frame_count"),
+         statistics.auxiliarySurfaceOnlyFrameCount},
+        {QStringLiteral("auxiliary_surface_only_ref_indices"),
+         auxiliary_surface_only_ref_indices},
+        {QStringLiteral("effective_orbital_frame_coverage_protection"),
+         statistics.effectiveOrbitalFrameCoverageProtection},
+        {QStringLiteral("orbital_coverage_protected_frame_count"),
+         statistics.orbitalCoverageProtectedFrameCount},
+        {QStringLiteral("orbital_coverage_protected_ref_indices"),
+         orbital_coverage_protected_ref_indices},
+        {QStringLiteral("orbital_median_angular_spacing_degrees"),
+         statistics.orbitalMedianAngularSpacingDegrees},
+        {QStringLiteral("orbital_maximum_angular_gap_degrees"),
+         statistics.orbitalMaximumAngularGapDegrees},
+        {QStringLiteral("orbital_maximum_angular_gap_ratio"),
+         statistics.orbitalMaximumAngularGapRatio},
         {QStringLiteral("effective_surface_patch_support"),
          statistics.effectiveSurfacePatchSupport},
         {QStringLiteral("effective_minimum_surface_patch_observation_weight"),
@@ -4583,6 +6225,8 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveMaximumFreeSpaceVoxels},
         {QStringLiteral("effective_minimum_support_mask_free_space_views"),
          statistics.effectiveMinimumSupportMaskFreeSpaceViews},
+        {QStringLiteral("effective_surface_evidence_free_space_veto"),
+         statistics.effectiveSurfaceEvidenceFreeSpaceVeto},
         {QStringLiteral("effective_depth_valid_boundary_erosion_pixels"),
          statistics.effectiveDepthValidBoundaryErosionPixels},
         {QStringLiteral("effective_geometry_verified_boundary_recovery"),
@@ -4601,6 +6245,65 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.marchingCubesVertexCount},
         {QStringLiteral("marching_cubes_face_count"),
          statistics.marchingCubesFaceCount},
+        {QStringLiteral("marching_cubes_boundary_edge_count"),
+         statistics.marchingCubesBoundaryEdgeCount},
+        {QStringLiteral("iso_surface_ambiguous_face_count"),
+         static_cast<double>(statistics.isoSurfaceAmbiguousFaceCount)},
+        {QStringLiteral("iso_surface_topology_adjusted_cell_count"),
+         static_cast<double>(statistics.isoSurfaceTopologyAdjustedCellCount)},
+        {QStringLiteral("iso_surface_decider_tie_count"),
+         static_cast<double>(statistics.isoSurfaceDeciderTieCount)},
+        {QStringLiteral("iso_surface_multiple_loop_cell_count"),
+         static_cast<double>(statistics.isoSurfaceMultipleLoopCellCount)},
+        {QStringLiteral("iso_surface_edge_vertex_cache_hit_count"),
+         static_cast<double>(statistics.isoSurfaceEdgeVertexCacheHitCount)},
+        {QStringLiteral("iso_surface_edge_vertex_cache_miss_count"),
+         static_cast<double>(statistics.isoSurfaceEdgeVertexCacheMissCount)},
+        {QStringLiteral("iso_surface_interior_loop_vertex_count"),
+         static_cast<double>(statistics.isoSurfaceInteriorLoopVertexCount)},
+        {QStringLiteral("iso_surface_rejected_degenerate_face_count"),
+         static_cast<double>(statistics.isoSurfaceRejectedDegenerateFaceCount)},
+        {QStringLiteral("iso_surface_unresolved_cell_count"),
+         static_cast<double>(statistics.isoSurfaceUnresolvedCellCount)},
+        {QStringLiteral("component_filtered_boundary_edge_count"),
+         statistics.componentFilteredBoundaryEdgeCount},
+        {QStringLiteral("weak_boundary_trimmed_boundary_edge_count"),
+         statistics.weakBoundaryTrimmedBoundaryEdgeCount},
+        {QStringLiteral("topology_cleaned_boundary_edge_count"),
+         statistics.topologyCleanedBoundaryEdgeCount},
+        {QStringLiteral("topology_cleaned_attribution_edge_count"),
+         static_cast<double>(statistics.topologyCleanedAttributionEdgeCount)},
+        {QStringLiteral("topology_cleaned_attribution_no_observation_edge_count"),
+         static_cast<double>(
+             statistics.topologyCleanedAttributionNoObservationEdgeCount)},
+        {QStringLiteral(
+             "topology_cleaned_attribution_insufficient_source_edge_count"),
+         static_cast<double>(
+             statistics.topologyCleanedAttributionInsufficientSourceEdgeCount)},
+        {QStringLiteral(
+             "topology_cleaned_attribution_depth_spread_rejected_edge_count"),
+         static_cast<double>(
+             statistics.topologyCleanedAttributionDepthSpreadRejectedEdgeCount)},
+        {QStringLiteral(
+             "topology_cleaned_attribution_surface_weight_rejected_edge_count"),
+         static_cast<double>(
+             statistics.topologyCleanedAttributionSurfaceWeightRejectedEdgeCount)},
+        {QStringLiteral(
+             "topology_cleaned_attribution_absolute_tsdf_rejected_edge_count"),
+         static_cast<double>(
+             statistics.topologyCleanedAttributionAbsoluteTsdfRejectedEdgeCount)},
+        {QStringLiteral(
+             "topology_cleaned_attribution_support_gate_rejected_edge_count"),
+         static_cast<double>(
+             statistics.topologyCleanedAttributionSupportGateRejectedEdgeCount)},
+        {QStringLiteral(
+             "topology_cleaned_attribution_extraction_or_postprocess_edge_count"),
+         static_cast<double>(
+             statistics
+                 .topologyCleanedAttributionExtractionOrPostprocessEdgeCount)},
+        {QStringLiteral("topology_cleaned_attribution_unclassified_edge_count"),
+         static_cast<double>(
+             statistics.topologyCleanedAttributionUnclassifiedEdgeCount)},
         {QStringLiteral("marching_cubes_elapsed_ms"),
          static_cast<qint64>(statistics.marchingCubesElapsedMs)},
         {QStringLiteral("mesh_cleanup_elapsed_ms"),
@@ -4617,6 +6320,9 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.preSimplificationFaceCount},
         {QStringLiteral("post_simplification_face_count"),
          statistics.postSimplificationFaceCount},
+        {QStringLiteral(
+             "post_simplification_component_filter_removed_face_count"),
+         statistics.postSimplificationComponentFilterRemovedFaceCount},
         {QStringLiteral("compacted_unused_vertex_count"),
          statistics.compactedUnusedVertexCount},
         {QStringLiteral("removed_duplicate_face_count"),
@@ -4748,6 +6454,46 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.effectiveMaximumSurfaceDenoisingNormalAngleDegrees},
         {QStringLiteral("effective_surface_denoising_boundary_protection_rings"),
          statistics.effectiveSurfaceDenoisingBoundaryProtectionRings},
+        {QStringLiteral("effective_post_simplification_surface_denoising"),
+         statistics.effectivePostSimplificationSurfaceDenoising},
+        {QStringLiteral("post_simplification_surface_denoising_attempted"),
+         statistics.postSimplificationSurfaceDenoisingAttempted},
+        {QStringLiteral("post_simplification_surface_denoising_accepted"),
+         statistics.postSimplificationSurfaceDenoisingAccepted},
+        {QStringLiteral(
+             "post_simplification_smoothed_surface_vertex_count"),
+         statistics.postSimplificationSmoothedSurfaceVertexCount},
+        {QStringLiteral(
+             "post_simplification_tangential_relaxed_vertex_count"),
+         statistics.postSimplificationTangentialRelaxedVertexCount},
+        {QStringLiteral(
+             "post_simplification_high_aspect_face_ratio_before"),
+         statistics.postSimplificationHighAspectFaceRatioBefore},
+        {QStringLiteral(
+             "post_simplification_high_aspect_face_ratio_after"),
+         statistics.postSimplificationHighAspectFaceRatioAfter},
+        {QStringLiteral(
+             "post_simplification_extreme_aspect_face_ratio_before"),
+         statistics.postSimplificationExtremeAspectFaceRatioBefore},
+        {QStringLiteral(
+             "post_simplification_extreme_aspect_face_ratio_after"),
+         statistics.postSimplificationExtremeAspectFaceRatioAfter},
+        {QStringLiteral(
+             "post_simplification_normal_angle_median_before"),
+         statistics.postSimplificationNormalAngleMedianBefore},
+        {QStringLiteral(
+             "post_simplification_normal_angle_median_after"),
+         statistics.postSimplificationNormalAngleMedianAfter},
+        {QStringLiteral("post_simplification_normal_angle_p90_before"),
+         statistics.postSimplificationNormalAngleP90Before},
+        {QStringLiteral("post_simplification_normal_angle_p90_after"),
+         statistics.postSimplificationNormalAngleP90After},
+        {QStringLiteral(
+             "post_simplification_normal_angle_over_30_ratio_before"),
+         statistics.postSimplificationNormalAngleOver30RatioBefore},
+        {QStringLiteral(
+             "post_simplification_normal_angle_over_30_ratio_after"),
+         statistics.postSimplificationNormalAngleOver30RatioAfter},
         {QStringLiteral("weak_boundary_tip_vertex_count"),
          statistics.weakBoundaryTipVertexCount},
         {QStringLiteral("candidate_weak_boundary_tip_face_count"),
@@ -4786,6 +6532,48 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.coherentPrimaryViewFaceCount},
         {QStringLiteral("coherent_primary_view_vertex_count"),
          statistics.coherentPrimaryViewVertexCount},
+        {QStringLiteral("openmesh_simplification_attempted"),
+         statistics.openMeshSimplificationAttempted},
+        {QStringLiteral("effective_openmesh_simplification"),
+         statistics.effectiveOpenMeshSimplification},
+        {QStringLiteral("openmesh_simplification_accepted"),
+         statistics.openMeshSimplificationAccepted},
+        {QStringLiteral("openmesh_simplification_reached_target"),
+         statistics.openMeshSimplificationReachedTarget},
+        {QStringLiteral("openmesh_simplification_cancelled"),
+         statistics.openMeshSimplificationCancelled},
+        {QStringLiteral("openmesh_simplification_input_vertex_count"),
+         statistics.openMeshSimplificationInputVertexCount},
+        {QStringLiteral("openmesh_simplification_input_face_count"),
+         statistics.openMeshSimplificationInputFaceCount},
+        {QStringLiteral("openmesh_simplification_output_vertex_count"),
+         statistics.openMeshSimplificationOutputVertexCount},
+        {QStringLiteral("openmesh_simplification_output_face_count"),
+         statistics.openMeshSimplificationOutputFaceCount},
+        {QStringLiteral("openmesh_simplification_collapsed_vertex_count"),
+         statistics.openMeshSimplificationCollapsedVertexCount},
+        {QStringLiteral("openmesh_simplification_rejected_input_face_count"),
+         statistics.openMeshSimplificationRejectedInputFaceCount},
+        {QStringLiteral("openmesh_inconsistent_shared_edge_count_before"),
+         statistics.openMeshInconsistentSharedEdgeCountBefore},
+        {QStringLiteral("openmesh_reoriented_input_face_count"),
+         statistics.openMeshReorientedInputFaceCount},
+        {QStringLiteral("openmesh_removed_contradictory_face_count"),
+         statistics.openMeshRemovedContradictoryFaceCount},
+        {QStringLiteral("openmesh_orientation_conflict_count"),
+         statistics.openMeshOrientationConflictCount},
+        {QStringLiteral("openmesh_smoothing_applied"),
+         statistics.openMeshSmoothingApplied},
+        {QStringLiteral("openmesh_boundary_edge_count_before"),
+         statistics.openMeshBoundaryEdgeCountBefore},
+        {QStringLiteral("openmesh_boundary_edge_count_after"),
+         statistics.openMeshBoundaryEdgeCountAfter},
+        {QStringLiteral("openmesh_non_manifold_edge_count_before"),
+         statistics.openMeshNonManifoldEdgeCountBefore},
+        {QStringLiteral("openmesh_non_manifold_edge_count_after"),
+         statistics.openMeshNonManifoldEdgeCountAfter},
+        {QStringLiteral("openmesh_simplification_error"),
+         statistics.openMeshSimplificationError},
         {QStringLiteral("effective_quadric_simplification"),
          statistics.effectiveQuadricSimplification},
         {QStringLiteral("quadric_simplification_accepted"),
@@ -4923,6 +6711,16 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.triangleQualityExtremeAspectFaceRatioAfter},
         {QStringLiteral("topology_quality_unique_edge_count"),
          statistics.topologyQualityUniqueEdgeCount},
+        {QStringLiteral("topology_quality_referenced_vertex_count"),
+         statistics.topologyQualityReferencedVertexCount},
+        {QStringLiteral("topology_quality_euler_characteristic"),
+         statistics.topologyQualityEulerCharacteristic},
+        {QStringLiteral("topology_quality_topological_complexity"),
+         statistics.topologyQualityTopologicalComplexity},
+        {QStringLiteral("topology_quality_closed_genus_estimate"),
+         statistics.topologyQualityClosedGenusEstimate},
+        {QStringLiteral("topology_quality_closed_topology_evaluated"),
+         statistics.topologyQualityClosedTopologyEvaluated},
         {QStringLiteral("topology_quality_boundary_edge_count"),
          statistics.topologyQualityBoundaryEdgeCount},
         {QStringLiteral("topology_quality_non_manifold_edge_count"),
@@ -4941,8 +6739,75 @@ QJsonObject DepthTsdfSurfaceBuilder::statisticsToJson(const DepthTsdfResult &res
          statistics.topologyQualityHighAspectFaceRatio},
         {QStringLiteral("topology_quality_extreme_aspect_face_ratio"),
          statistics.topologyQualityExtremeAspectFaceRatio},
+        {QStringLiteral("topology_quality_adjacent_face_pair_count"),
+         statistics.topologyQualityAdjacentFacePairCount},
+        {QStringLiteral(
+             "topology_quality_adjacent_normal_angle_median_degrees"),
+         statistics.topologyQualityAdjacentNormalAngleMedianDegrees},
+        {QStringLiteral(
+             "topology_quality_adjacent_normal_angle_p90_degrees"),
+         statistics.topologyQualityAdjacentNormalAngleP90Degrees},
+        {QStringLiteral(
+             "topology_quality_adjacent_normal_angle_over_30_ratio"),
+         statistics.topologyQualityAdjacentNormalAngleOver30Ratio},
         {QStringLiteral("topology_quality_strict_gate_passed"),
          statistics.topologyQualityStrictGatePassed},
+        {QStringLiteral("effective_depth_completeness_diagnostics"),
+         statistics.effectiveDepthCompletenessDiagnostics},
+        {QStringLiteral("effective_depth_completeness_gate_enforcement"),
+         statistics.effectiveDepthCompletenessGateEnforcement},
+        {QStringLiteral("depth_completeness_available"),
+         statistics.depthCompletenessAvailable},
+        {QStringLiteral("depth_completeness_gate_passed"),
+         statistics.depthCompletenessGatePassed},
+        {QStringLiteral("depth_completeness_tolerance"),
+         statistics.depthCompletenessTolerance},
+        {QStringLiteral("depth_completeness_sampled_point_count"),
+         static_cast<double>(statistics.depthCompletenessSampledPointCount)},
+        {QStringLiteral("depth_completeness_explained_point_count"),
+         static_cast<double>(statistics.depthCompletenessExplainedPointCount)},
+        {QStringLiteral("depth_completeness_aggregate_recall"),
+         statistics.depthCompletenessAggregateRecall},
+        {QStringLiteral("depth_completeness_minimum_frame_recall"),
+         statistics.depthCompletenessMinimumFrameRecall},
+        {QStringLiteral("depth_completeness_p10_frame_recall"),
+         statistics.depthCompletenessP10FrameRecall},
+        {QStringLiteral("depth_completeness_median_frame_recall"),
+         statistics.depthCompletenessMedianFrameRecall},
+        {QStringLiteral("depth_completeness_frames"),
+         depth_completeness_frames},
+        {QStringLiteral("boundary_attribution_edge_count"),
+         static_cast<double>(statistics.boundaryAttributionEdgeCount)},
+        {QStringLiteral("boundary_attribution_no_observation_edge_count"),
+         static_cast<double>(
+             statistics.boundaryAttributionNoObservationEdgeCount)},
+        {QStringLiteral("boundary_attribution_insufficient_source_edge_count"),
+         static_cast<double>(
+             statistics.boundaryAttributionInsufficientSourceEdgeCount)},
+        {QStringLiteral(
+             "boundary_attribution_depth_spread_rejected_edge_count"),
+         static_cast<double>(
+             statistics.boundaryAttributionDepthSpreadRejectedEdgeCount)},
+        {QStringLiteral(
+             "boundary_attribution_surface_weight_rejected_edge_count"),
+         static_cast<double>(
+             statistics.boundaryAttributionSurfaceWeightRejectedEdgeCount)},
+        {QStringLiteral(
+             "boundary_attribution_absolute_tsdf_rejected_edge_count"),
+         static_cast<double>(
+             statistics.boundaryAttributionAbsoluteTsdfRejectedEdgeCount)},
+        {QStringLiteral(
+             "boundary_attribution_support_gate_rejected_edge_count"),
+         static_cast<double>(
+             statistics.boundaryAttributionSupportGateRejectedEdgeCount)},
+        {QStringLiteral(
+             "boundary_attribution_extraction_or_postprocess_edge_count"),
+         static_cast<double>(
+             statistics
+                 .boundaryAttributionExtractionOrPostprocessEdgeCount)},
+        {QStringLiteral("boundary_attribution_unclassified_edge_count"),
+         static_cast<double>(
+             statistics.boundaryAttributionUnclassifiedEdgeCount)},
         {QStringLiteral("vertex_count"), statistics.vertexCount},
         {QStringLiteral("face_count"), statistics.faceCount},
         {QStringLiteral("component_count"), statistics.componentCount},

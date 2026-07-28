@@ -5,6 +5,7 @@
 #include "model/AerialTriangulationResult.h"
 
 #include <QMap>
+#include <QSize>
 #include <QString>
 #include <QStringList>
 
@@ -52,6 +53,9 @@ public:
                                   const QStringList &selectedImages,
                                   PreparedTiePointGraph *graph,
                                   QString *errorMessage);
+
+    // 影像尺寸只能来自真实文件头，不能由受蒙版裁剪后的关键点包围盒推断。
+    static QSize resolveInputImageSize(const QString &imagePath);
 };
 
 } // namespace xjw::aerial_triangulation

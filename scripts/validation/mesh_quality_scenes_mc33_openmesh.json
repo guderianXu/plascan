@@ -1,0 +1,32 @@
+{
+    "schema": "plascan.mesh_quality_scenes.v1",
+    "scenes": [
+        {
+            "name": "dino",
+            "depth_map_dir": "${BUILD_DIR}/analysis/dino_true_pose_depth_moderate_strict/mvs",
+            "settings_json": "${REPO_ROOT}/scripts/validation/mesh_mc33_openmesh_simplification.json",
+            "settings_key": "generate_model",
+            "expected_depth_file_count": 161,
+            "expected_depth_artifacts_sha256": "0f11813b9af8318dede1c8d1a110fbd05804ec4cc2be734b87b6239c31982b38",
+            "expected_settings_sha256": "27a7d2f0dda28f428c663b245560d711445bab309774871e86fc4db7af7db7f2",
+            "baseline_mesh": "${BUILD_DIR}/analysis/dino_true_pose_strict_tgv_contour_cell_sheets/products/model_from_mesh.ply",
+            "reference_mesh": "${BUILD_DIR}/analysis/metashape_dino/mesh.ply",
+            "baseline_metrics": {
+                "face_count": 170106,
+                "boundary_edge_count": 24880,
+                "component_count": 6,
+                "high_aspect_face_ratio": 0.11642740408921497,
+                "normal_median_degrees": 29.712372643127054,
+                "chamfer_l1": 0.0008833338414324333
+            }
+        }
+    ],
+    "gate": {
+        "maximum_face_count_ratio": 1.02,
+        "maximum_boundary_edge_count_ratio": 1.02,
+        "maximum_component_count_increase": 0,
+        "maximum_high_aspect_ratio_multiplier": 1.02,
+        "maximum_normal_median_increase_degrees": 1.0,
+        "maximum_chamfer_l1_ratio": 1.025
+    }
+}

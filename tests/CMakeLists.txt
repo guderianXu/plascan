@@ -917,7 +917,14 @@ endif()
 # ==============================================================================
 # test_mesh_reconstructor — 点云到网格重建降级路径
 # ==============================================================================
-add_executable(test_mesh_reconstructor test_mesh_reconstructor.cpp)
+add_executable(test_mesh_reconstructor
+    test_mesh_reconstructor.cpp
+    test_mesh_boundary_attribution.cpp
+    test_consistent_isosurface_extractor.cpp
+    test_mc33_isosurface_extractor.cpp
+    test_mesh_face_orientation.cpp
+    test_openmesh_simplifier.cpp
+)
 target_link_libraries(test_mesh_reconstructor PRIVATE
     meshing
     plapoint::plapoint

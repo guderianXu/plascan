@@ -53,6 +53,18 @@ TEST(ProjectMetadataTest, ResolvesImageByPathFileNameOrStem)
     EXPECT_TRUE(resolveProjectImagePathFromToken(QStringLiteral("missing"), metadata).isEmpty());
 }
 
+TEST(ProjectMetadataTest, ResolvesOnlyImagesStillReferencedByCurrentProjectList)
+{
+    const QString retained_image = QStringLiteral("E:/dataset/retained.png");
+    const QString removed_image = QStringLiteral("E:/dataset/removed.png");
+    const QStringList current_images{retained_image};
+
+    EXPECT_EQ(resolveProjectImagePathFromToken(QStringLiteral("retained"), current_images),
+              retained_image);
+    EXPECT_TRUE(resolveProjectImagePathFromToken(removed_image, current_images).isEmpty());
+    EXPECT_TRUE(resolveProjectImagePathFromToken(QStringLiteral("removed.png"), current_images).isEmpty());
+}
+
 TEST(ProjectMetadataTest, NormalizesImageTokensAcrossSeparatorsAndCase)
 {
     EXPECT_EQ(normalizedImageToken(QStringLiteral("  Folder\\Sub\\IMAGE.PNG  ")),

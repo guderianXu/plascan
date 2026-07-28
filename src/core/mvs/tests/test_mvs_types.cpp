@@ -162,6 +162,25 @@ TEST(MvsSourceViewSelectionTest, DoesNotPadScoredSourcesWithZeroOverlapNeighbors
     EXPECT_EQ(selected.front(), 3);
 }
 
+TEST(MvsSourceViewSelectionTest, RejectsPointBehindEitherCameraForBaselineGeometry)
+{
+    const double rotation[9] = {1, 0, 0, 0, 1, 0, 0, 0, 1};
+    const double firstCenter[3] = {0, 0, 0};
+    const double secondCenter[3] = {1, 0, 0};
+
+    CameraView first;
+    first.camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1,
+                              rotation, firstCenter, false);
+    CameraView second;
+    second.camera = makeCamera(1000.0, 1000.0, 50.0, 50.0, 1, 1,
+                               rotation, secondCenter, false);
+
+    EXPECT_NEAR(mvsTriangulationAngleDeg(first, second, {{0.0f, 0.0f, 10.0f}}),
+                5.710593f,
+                1e-5f);
+    EXPECT_FLOAT_EQ(mvsTriangulationAngleDeg(first, second, {{0.0f, 0.0f, -10.0f}}), 0.0f);
+}
+
 TEST(MvsSparseHintVisibilityTest, RequiresReferenceAndSelectedSourceVisibility)
 {
     const double R_wc[9] = {1,0,0, 0,1,0, 0,0,1};

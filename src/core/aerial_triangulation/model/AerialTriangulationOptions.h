@@ -30,6 +30,9 @@ struct AerialTriangulationOptions
     bool referencePreselection = false;
     QString referenceMode = QStringLiteral("source_code");
     bool resetAlignment = true;
+    // 重置相机对齐与重建连接点是两个独立动作。默认保留兼容的特征、匹配和连接点缓存，
+    // 让用户可以在相同观测网络上重新尝试 SfM/BA。
+    bool reuseExistingMatches = true;
     bool saveAfterEachStep = false;
 
     int keypointLimit = 40000;

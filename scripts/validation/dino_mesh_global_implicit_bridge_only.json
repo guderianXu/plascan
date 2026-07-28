@@ -1,0 +1,20 @@
+{
+    "generate_model": {
+        "calculateVertexColors": true,
+        "interpolation": "enabled",
+        "meshResolution": 384,
+        "quality": "ultra",
+        "qualityProfile": "detail",
+        "reconstruction_mode": "depth_tsdf",
+        "simplifyTargetFaces": 60000,
+        "source_data": "depth_maps",
+        "surface_type": "arbitrary_3d",
+        "targetFaces": 60000,
+        "tsdfCollectZeroCrossingDiagnostics": true,
+        "tsdfGlobalImplicitRegularization": true,
+        "tsdfImplicitRegularizationLevels": 1,
+        "tsdfImplicitRegularizationPassesPerLevel": 1,
+        "tsdfImplicitRegularizationRecoverAxialGaps": true,
+        "tsdfImplicitRegularizationSmoothness": 0.0
+    }
+}

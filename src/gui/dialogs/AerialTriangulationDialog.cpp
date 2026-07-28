@@ -136,6 +136,14 @@ void AerialTriangulationDialog::setupUi()
     _ui->m_adaptiveCameraModelCheck->setToolTip(
         QStringLiteral("控制正式 BA 是否联合优化共享焦距。关闭后仍会在没有完整相机先验时执行焦距初始化搜索，"
                        "并将最佳焦距固定用于重建。"));
+    _ui->m_reuseExistingMatchesCheck->setChecked(true);
+    _ui->m_reuseExistingMatchesCheck->setToolTip(
+        QStringLiteral("重置当前对齐时保留并复用兼容的特征、匹配和连接点缓存，只重新执行 SfM/BA。"
+                       "取消勾选后才会删除当前影像对应的匹配缓存并重新提取、匹配和整理连接点。"));
+    _ui->m_lockInputCameraPosesCheck->setChecked(false);
+    _ui->m_lockInputCameraPosesCheck->setToolTip(
+        QStringLiteral("使用项目中已导入的相机内外参，并在空三和 BA 中保持外参不变。"
+                       "适用于 Middlebury、COLMAP 或测量系统提供的真实标定位姿。"));
     stabilizeInputControl(_ui->m_qualityCombo);
     stabilizeInputControl(_ui->m_referenceSourceCombo);
     stabilizeInputControl(_ui->m_keypointLimitSpin);
@@ -148,6 +156,8 @@ void AerialTriangulationDialog::setupUi()
     stabilizeCheckBox(_ui->m_excludeFixedTiePointsCheck);
     stabilizeCheckBox(_ui->m_guidedImageMatchingCheck);
     stabilizeCheckBox(_ui->m_adaptiveCameraModelCheck);
+    stabilizeCheckBox(_ui->m_reuseExistingMatchesCheck);
+    stabilizeCheckBox(_ui->m_lockInputCameraPosesCheck);
     setReferencePreselectionAvailable(false, 0, 0);
     setAdvancedExpanded(false);
 
@@ -184,11 +194,29 @@ void AerialTriangulationDialog::setupUi()
         connect(checkBox, &QCheckBox::toggled, this, &AerialTriangulationDialog::emitSettingsChanged);
     };
     connectCheckBox(_ui->m_genericPreselectionCheck);
-    connectCheckBox(_ui->m_resetAlignmentCheck);
+    connect(_ui->m_resetAlignmentCheck, &QCheckBox::toggled, this,
+            [this](bool checked)
+    {
+        if (checked && _ui->m_lockInputCameraPosesCheck->isChecked())
+        {
+            _ui->m_lockInputCameraPosesCheck->setChecked(false);
+        }
+        emitSettingsChanged();
+    });
     connectCheckBox(_ui->m_saveAfterEachStepCheck);
     connectCheckBox(_ui->m_excludeFixedTiePointsCheck);
     connectCheckBox(_ui->m_guidedImageMatchingCheck);
     connectCheckBox(_ui->m_adaptiveCameraModelCheck);
+    connectCheckBox(_ui->m_reuseExistingMatchesCheck);
+    connect(_ui->m_lockInputCameraPosesCheck, &QCheckBox::toggled, this,
+            [this](bool checked)
+    {
+        if (checked && _ui->m_resetAlignmentCheck->isChecked())
+        {
+            _ui->m_resetAlignmentCheck->setChecked(false);
+        }
+        emitSettingsChanged();
+    });
 
     connect(_ui->m_keypointLimitSpin, QOverload<int>::of(&QSpinBox::valueChanged),
             this, &AerialTriangulationDialog::emitSettingsChanged);
@@ -253,6 +281,8 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
     const QSignalBlocker blockExclude(_ui->m_excludeFixedTiePointsCheck);
     const QSignalBlocker blockGuided(_ui->m_guidedImageMatchingCheck);
     const QSignalBlocker blockAdaptive(_ui->m_adaptiveCameraModelCheck);
+    const QSignalBlocker blockReuseMatches(_ui->m_reuseExistingMatchesCheck);
+    const QSignalBlocker blockLockPoses(_ui->m_lockInputCameraPosesCheck);
 
     setComboByData(_ui->m_qualityCombo, settings.value(QStringLiteral("quality")).toString(QStringLiteral("high")));
     _ui->m_genericPreselectionCheck->setChecked(
@@ -276,6 +306,14 @@ void AerialTriangulationDialog::applySettings(const QJsonObject &settings)
         settings.value(QStringLiteral("guided_image_matching")).toBool(false));
     _ui->m_adaptiveCameraModelCheck->setChecked(
         settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool(true));
+    _ui->m_reuseExistingMatchesCheck->setChecked(
+        settings.value(QStringLiteral("reuse_existing_matches")).toBool(true));
+    _ui->m_lockInputCameraPosesCheck->setChecked(
+        settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false));
+    if (_ui->m_lockInputCameraPosesCheck->isChecked())
+    {
+        _ui->m_resetAlignmentCheck->setChecked(false);
+    }
 
     _ui->m_referenceSourceCombo->setEnabled(true);
     _applyingSettings = false;
@@ -290,7 +328,10 @@ QJsonObject AerialTriangulationDialog::collectSettings() const
     settings[QStringLiteral("reference_preselection")] = _ui->m_referencePreselectionCheck->isChecked();
     settings[QStringLiteral("reference_preselection_source")] =
         comboDataOr(_ui->m_referenceSourceCombo, QStringLiteral("source_code"));
-    settings[QStringLiteral("reset_current_alignment")] = _ui->m_resetAlignmentCheck->isChecked();
+    settings[QStringLiteral("reset_current_alignment")] =
+        _ui->m_lockInputCameraPosesCheck->isChecked()
+        ? false
+        : _ui->m_resetAlignmentCheck->isChecked();
     settings[QStringLiteral("save_project_after_each_step")] = _ui->m_saveAfterEachStepCheck->isChecked();
     settings[QStringLiteral("keypoint_limit")] = _ui->m_keypointLimitSpin->value();
     settings[QStringLiteral("tiepoint_limit")] = _ui->m_tiepointLimitSpin->value();
@@ -298,6 +339,10 @@ QJsonObject AerialTriangulationDialog::collectSettings() const
     settings[QStringLiteral("exclude_fixed_tie_points")] = _ui->m_excludeFixedTiePointsCheck->isChecked();
     settings[QStringLiteral("guided_image_matching")] = _ui->m_guidedImageMatchingCheck->isChecked();
     settings[QStringLiteral("adaptive_camera_model_fitting")] = _ui->m_adaptiveCameraModelCheck->isChecked();
+    settings[QStringLiteral("reuse_existing_matches")] =
+        _ui->m_reuseExistingMatchesCheck->isChecked();
+    settings[QStringLiteral("lock_input_camera_poses")] =
+        _ui->m_lockInputCameraPosesCheck->isChecked();
     return settings;
 }
 

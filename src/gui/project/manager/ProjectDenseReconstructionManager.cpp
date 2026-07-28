@@ -17,6 +17,7 @@
 #include "DenseCloudQualityFilter.h"
 #include "DepthMapFusion.h"
 #include "DepthMapGenerator.h"
+#include "MvsSourcePlanner.h"
 #include "preparation/MatchResultCatalog.h"
 #include "project/ProjectIO.h"
 #include "SparseCloudPreprocessor.h"
@@ -102,7 +103,9 @@ QString utcNowIso()
     return QDateTime::currentDateTimeUtc().toString(Qt::ISODate);
 }
 
-std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QString &matchDir)
+std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(
+    const QString &matchDir,
+    const std::vector<std::string> &currentImagePaths)
 {
     std::vector<xjw::mvs::MvsSourcePairQuality> qualities;
     if (matchDir.trimmed().isEmpty())
@@ -146,6 +149,10 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
 
     xjw::aerial_triangulation::MatchResultCatalogConfig config;
     config.matchDirectory = matchDir;
+    for (const std::string &imagePath : currentImagePaths)
+    {
+        config.targetImagePaths.append(xjw::common::io::fromUtf8Path(imagePath));
+    }
     const xjw::aerial_triangulation::MatchResultCatalogSummary summary =
         xjw::aerial_triangulation::MatchResultCatalog(config).scan();
     qualities.reserve(static_cast<size_t>(summary.pairGroups.size()));
@@ -174,20 +181,40 @@ std::vector<xjw::mvs::MvsSourcePairQuality> loadMvsSourcePairQualities(const QSt
 }
 
 void attachMvsSourcePairQualities(xjw::mvs::DepthGenConfig *config,
-                                  const QString &plascanPath)
+                                  const QString &plascanPath,
+                                  const std::vector<xjw::mvs::CameraView> &views)
 {
     if (!config || plascanPath.trimmed().isEmpty())
     {
         return;
     }
 
-    config->sourcePairQualities =
-        loadMvsSourcePairQualities(xjw::common::project::ProjectIO::ipmatchOutputDir(plascanPath));
+    std::vector<std::string> currentImagePaths;
+    currentImagePaths.reserve(views.size());
+    for (const xjw::mvs::CameraView &view : views)
+    {
+        currentImagePaths.push_back(view.imagePath);
+    }
+    const std::vector<xjw::mvs::MvsSourcePairQuality> loadedQualities =
+        loadMvsSourcePairQualities(
+            xjw::common::project::ProjectIO::ipmatchOutputDir(plascanPath),
+            currentImagePaths);
+    config->sourcePairQualities = xjw::mvs::filterMvsSourcePairQualitiesForImages(
+        loadedQualities, currentImagePaths);
     config->requireVerifiedSourcePairs = !config->sourcePairQualities.empty();
     if (config->requireVerifiedSourcePairs)
     {
-        LOG_INFO(QStringLiteral("[MVS] 已加载 %1 个几何验证匹配对用于源视图筛选")
-                     .arg(config->sourcePairQualities.size()));
+        LOG_INFO(QStringLiteral(
+                     "[MVS] 当前影像集合采用 %1 个几何验证匹配对；忽略 %2 个旧引用或重复记录")
+                     .arg(config->sourcePairQualities.size())
+                     .arg(loadedQualities.size() - config->sourcePairQualities.size()));
+    }
+    else if (!loadedQualities.empty())
+    {
+        LOG_WARN(QStringLiteral(
+                     "[MVS] 匹配目录中的 %1 个几何验证对均不属于当前影像集合，"
+                     "已忽略旧引用并回退到当前空三稀疏轨迹选择源视图")
+                     .arg(loadedQualities.size()));
     }
 }
 
@@ -1524,7 +1551,7 @@ bool ProjectDenseReconstructionManager::startEstimateDepthMapsAsync(const QJsonO
     genCfg.runFusion = false;
     genCfg.saveIntermediateDepthMaps = true;
     genCfg.intermediateDir = xjw::common::io::toUtf8Path(mvsOutDir);
-    attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath());
+    attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath(), views);
 
     auto *gen = new DepthMapGenerator(this);
     gen->setViews(views);
@@ -2297,7 +2324,7 @@ bool ProjectDenseReconstructionManager::startGenerateDenseCloudAsync(const QJson
     genCfg.saveIntermediateDepthMaps = true;
     const QString mvsOutDir = resolveProjectOutputDir(_owner->currentProjectPath(), request.outputDir, QStringLiteral("mvs_output"));
     genCfg.intermediateDir = xjw::common::io::toUtf8Path(mvsOutDir);
-    attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath());
+    attachMvsSourcePairQualities(&genCfg, _owner->currentProjectPath(), views);
     if (request.pipelineMode)
     {
         // 一键流程复用“深度图融合生成密集点云”的同一入口，避免内部融合与手动融合产物不一致。

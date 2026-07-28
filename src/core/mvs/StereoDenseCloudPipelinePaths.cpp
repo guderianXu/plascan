@@ -7,6 +7,7 @@
 #include "DisparityFilter.h"
 #include "PointCloudTifIO.h"
 #include "SubpixelRefiner.h"
+#include "CameraBaseline.h"
 
 #include <QDir>
 
@@ -114,12 +115,15 @@ bool runOriginalDepthPath(const cv::Mat &grayL,
     const Camera &pdmL = leftCamera;
     const Camera &pdmR = rightCamera;
 
-    auto C1 = leftCamera.cameraCenter();
-    auto C2 = rightCamera.cameraCenter();
-    double baseline = std::sqrt(
-        (C2[0]-C1[0])*(C2[0]-C1[0]) +
-        (C2[1]-C1[1])*(C2[1]-C1[1]) +
-        (C2[2]-C1[2])*(C2[2]-C1[2]));
+    const CameraBaseline pairBaseline = CameraBaseline::evaluate(leftCamera, rightCamera);
+    if (!pairBaseline.isValid())
+    {
+        res.errorMsg = "Stereo reconstruction requires two non-coincident camera centers.";
+        return false;
+    }
+    const double baseline = pairBaseline.length();
+    const auto C1 = leftCamera.cameraCenter();
+    const auto C2 = rightCamera.cameraCenter();
 
     auto R1 = leftCamera.cameraToWorldRotation();
     auto R2 = rightCamera.cameraToWorldRotation();
@@ -368,12 +372,13 @@ bool runRectifiedDisparityPath(const cv::Mat &grayL,
     const cv::Mat &rectLeftImage = rect.rectLeft;
     const cv::Mat &rectRightImage = rect.rectRight;
 
-    auto C1 = leftCamera.cameraCenter();
-    auto C2 = rightCamera.cameraCenter();
-    double baseline = std::sqrt(
-        (C2[0]-C1[0])*(C2[0]-C1[0]) +
-        (C2[1]-C1[1])*(C2[1]-C1[1]) +
-        (C2[2]-C1[2])*(C2[2]-C1[2]));
+    const CameraBaseline pairBaseline = CameraBaseline::evaluate(leftCamera, rightCamera);
+    if (!pairBaseline.isValid())
+    {
+        res.errorMsg = "Stereo reconstruction requires two non-coincident camera centers.";
+        return false;
+    }
+    const double baseline = pairBaseline.length();
     double avgDepth = baseline * 10.0;
     float zNear = static_cast<float>(avgDepth * config.depthRange.nearScale);
     float zFar = static_cast<float>(avgDepth * config.depthRange.farScale);

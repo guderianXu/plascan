@@ -22,8 +22,6 @@
 #include <QDebug>
 #include <QRegularExpression>
 
-#include <algorithm>
-
 namespace {
 
 bool readSgmtMatchFile(const QString &matchFile,
@@ -328,6 +326,8 @@ void DualImageViewer::connectSignals()
             this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
     connect(_rightView, &ImageViewWidget::viewTransformChanged,
             this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
+    connect(_overlay, &MatchLineOverlay::visibleMatchesChanged,
+            this, &DualImageViewer::scheduleOverlayUpdate, Qt::QueuedConnection);
 
     auto forwardImageLoadFailure = [this](const QString &, const QString &message)
     {
@@ -527,18 +527,14 @@ void DualImageViewer::updateOverlayNow()
     int useCount = qMax(leftCount, rightCount);
     if (useCount <= 0) return;
 
+    // 端点必须与实际可见连线使用同一索引集合。空集合表示当前没有可显示
+    // 的连线，而不是“未设置筛选”，因此此时保持全部端点隐藏。
     QVector<bool> mask(useCount, false);
-    if (_overlay->showOnlyHighlighted()) {
-        // 高亮模式下不隐藏点，避免用户看不到已选点
-        std::fill(mask.begin(), mask.end(), true);
-    } else {
-        if (vis.isEmpty()) {
-            // 无可见连线时不应隐藏所有点（例如手动模式仅有待配对点）
-            std::fill(mask.begin(), mask.end(), true);
-        } else {
-            for (int idx : vis) {
-                if (idx >= 0 && idx < useCount) mask[idx] = true;
-            }
+    for (int idx : vis)
+    {
+        if (idx >= 0 && idx < useCount)
+        {
+            mask[idx] = true;
         }
     }
 

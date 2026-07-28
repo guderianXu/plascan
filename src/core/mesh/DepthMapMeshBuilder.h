@@ -5,6 +5,7 @@
 #include "VisualHullReconstructor.h"
 
 #include <QString>
+#include <QStringList>
 #include <QVector>
 
 #include <functional>
@@ -32,8 +33,12 @@ struct DepthFrameArtifact
     QString sceneProfile;
     bool fusionEligible = true;
     double validCoverage = -1.0;
+    double validWithinMaskRatio = -1.0;
+    double consistencyRetentionRatio = -1.0;
+    double largestComponentRatio = -1.0;
     double meanConfidence = -1.0;
     int sourceViewCount = 0;
+    QStringList qualityReasons;
     int gridWidth = 0;
     int gridHeight = 0;
     Camera cameraModel;

@@ -106,8 +106,9 @@ std::vector<int> replayCandidateIndices(
 
 std::vector<double> adaptiveFocalScaleCandidates()
 {
-    // 覆盖广角、普通视场与转台/长焦影像。Middlebury dino 的真实焦距约为最长边的 5.17 倍。
-    return {0.55, 0.70, 0.85, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 4.0, 5.2, 6.4};
+    // 覆盖广角、普通视场与转台/长焦影像。Hayabusa2 ONC-T 的焦距约为图像宽度的 9 倍。
+    return {0.55, 0.70, 0.85, 1.2, 1.6, 2.0, 2.4, 2.8, 3.2, 4.0, 5.2, 6.4,
+            8.0, 9.0, 10.0};
 }
 
 bool shouldStopAdaptiveFocalReplay(int totalImages,

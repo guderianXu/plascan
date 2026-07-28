@@ -7,6 +7,7 @@ add_library(qc STATIC
     ModelImageMetrics.cpp
     ModelGeometryComparator.cpp
     ModelImageQualityEvaluator.cpp
+    ProcessingBaselineManager.cpp
 )
 
 target_include_directories(qc PUBLIC
@@ -107,4 +108,22 @@ if(BUILD_TESTS)
     )
 
     gtest_discover_tests(test_model_image_quality DISCOVERY_MODE PRE_TEST)
+
+    add_executable(test_processing_baseline_manager
+        tests/test_processing_baseline_manager.cpp
+    )
+
+    target_link_libraries(test_processing_baseline_manager PRIVATE
+        qc
+        meshing
+        Qt6::Core
+        GTest::gtest_main
+    )
+
+    target_include_directories(test_processing_baseline_manager PRIVATE
+        ${CMAKE_CURRENT_SOURCE_DIR}
+        ${CMAKE_SOURCE_DIR}/src/core/mesh
+    )
+
+    gtest_discover_tests(test_processing_baseline_manager DISCOVERY_MODE PRE_TEST)
 endif()

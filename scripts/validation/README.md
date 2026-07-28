@@ -42,3 +42,65 @@ Run all scripts with the repository Python environment:
 
 Python dependencies used by the comparison scripts are `numpy`, `Pillow`,
 `scipy`, `rtree`, and `trimesh`.
+
+## Reproducible mesh-quality baseline
+
+`run_mesh_quality_baseline.ps1` freezes the depth artifacts, effective settings,
+mesh CLI, baseline mesh, and optional third-party reference mesh with SHA-256
+records before reconstruction. It then produces mesh metrics, registered
+geometry comparisons, a fixed-view contact sheet, and a hard-gate summary.
+Pinned depth and settings hashes in `mesh_quality_scenes.json` make the runner
+fail before reconstruction when a scene input drifts.
+
+When zero-crossing diagnostics are enabled, each scene also writes
+`products/boundary_attribution_debug.ply`. Interior vertices are dark gray;
+boundary vertices use orange for extraction/postprocess, purple for support
+gate rejection, red for absolute-TSDF rejection, yellow for surface-weight
+rejection, magenta for depth-spread rejection, cyan for insufficient sources,
+blue for no observation, and white for unclassified edges. The mesh statistics
+record boundary counts after Marching Cubes, component filtering, weak-tip
+trimming, topology cleanup, simplification, fallback simplification, and final
+hole handling.
+
+The default scene definitions are in `mesh_quality_scenes.json`. Paths support
+`${REPO_ROOT}`, `${BUILD_DIR}`, and environment-variable tokens. Temple input
+is intentionally supplied through `TEMPLE_DEPTH_DIR` instead of embedding a
+machine-specific data path:
+
+```powershell
+$env:TEMPLE_DEPTH_DIR = 'E:\path\to\temple\mvs'
+.\scripts\validation\run_mesh_quality_baseline.ps1 `
+  -CandidateName cell_sheet_baseline `
+  -ValidateOnly
+```
+
+Remove `-ValidateOnly` to reconstruct all selected scenes. The runner refuses
+to overwrite an existing candidate directory. Use a new candidate name for
+every experiment; `-ReuseExistingModel` is only for resuming an interrupted
+report whose model already exists in that exact candidate directory.
+
+The accepted MC33/OpenMesh validation profiles are:
+
+- Dino: `mesh_gui_detail_openmesh_dino_170k_v5.json` with
+  `mesh_quality_scenes_gui_detail_openmesh_dino_v5.json`.
+- Temple: `mesh_mc33_openmesh_temple_v4.json` with
+  `mesh_quality_scenes_mc33_openmesh_temple_v4.json`.
+
+The frozen 2026-07-27 runs are
+`task40_gui_detail_openmesh_dino_v5` and `task40_temple_openmesh_v8`.
+Dino finished with 169,976 faces, 4 boundary edges, one component, a
+20.86-degree adjacent-normal median, and 0.0008787 Chamfer-L1. Temple finished
+with 60,060 faces, no boundary edges, one component, and an 11.59-degree
+adjacent-normal median. Both strict gates passed; inspect each scene's
+`contact_sheet.png` before accepting later parameter changes.
+
+`mesh_gui_ultra_openmesh.json` is the GUI-equivalent smoke profile: it only
+sets the visible Ultra/240,000-face controls and leaves all TSDF advanced
+options automatic. Its frozen supplemental runs are
+`analysis/gui_ultra_openmesh_dino_240k` and
+`analysis/gui_ultra_openmesh_temple_240k`. Dino produced 239,971 faces,
+7 boundary edges, one component, a 16.79-degree normal median, and 0.0008693
+Chamfer-L1 against the registered Metashape mesh. Temple produced 239,949
+faces, 45 boundary edges, one component, and an 8.55-degree normal median.
+These runs verify that GUI defaults select MC33, adaptive TGV, the six-voxel
+geometry profile, and OpenMesh rather than only the explicit validation JSON.

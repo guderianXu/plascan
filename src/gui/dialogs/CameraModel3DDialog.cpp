@@ -1724,19 +1724,6 @@ void CameraSceneWidget::updateActiveCameraForView()
         candidates,
         xjw::gui::camera_scene::currentWorldViewDirection(_viewRot),
         sceneCenter());
-    if (_activeCameraImagePoseIndex >= 0)
-    {
-        return;
-    }
-
-    for (qsizetype index = 0; index < _poses.size(); ++index)
-    {
-        if (!_poses.at(index).imagePath.isEmpty())
-        {
-            _activeCameraImagePoseIndex = static_cast<int>(index);
-            return;
-        }
-    }
 }
 
 int CameraSceneWidget::displayedCameraImagePoseIndex() const
@@ -1768,14 +1755,6 @@ int CameraSceneWidget::displayedCameraImagePoseIndex() const
     if (_activeCameraImagePoseIndex >= 0 && _activeCameraImagePoseIndex < _poses.size())
     {
         return _activeCameraImagePoseIndex;
-    }
-
-    for (qsizetype index = 0; index < _poses.size(); ++index)
-    {
-        if (!_poses.at(index).imagePath.isEmpty())
-        {
-            return static_cast<int>(index);
-        }
     }
     return -1;
 }
@@ -3033,21 +3012,25 @@ void CameraSceneWidget::drawActiveCameraImage(QRhiCommandBuffer *cb, const QMatr
 
     const CameraPose &pose = _poses.at(pose_index);
     const QImage image = cachedCameraPlaneImage(pose.imagePath, CameraImagePlaneMode::Image);
-    const float aspect = image.isNull()
-        ? (4.0f / 3.0f)
-        : qBound(0.35f,
-                 static_cast<float>(image.width()) / qMax(1.0f, static_cast<float>(image.height())),
-                 3.0f);
-    const float thumbnail_half_extent = cameraImagePlaneHalfExtent();
-    const float image_half_extent = qMax(thumbnail_half_extent * 5.2f, sceneRadius() * 0.28f);
-    const float image_half_height = qBound(thumbnail_half_extent * 0.68f * 2.6f,
-                                           image_half_extent / qMax(0.1f, aspect),
-                                           image_half_extent * 1.6f);
+    const int image_width = pose.imageWidth > 0 ? pose.imageWidth : image.width();
+    const int image_height = pose.imageHeight > 0 ? pose.imageHeight : image.height();
+    const QVector3D forward = xjw::gui::camera_scene::cameraForwardDirection(
+        pose.rotation, pose.depthAxisFlipped);
     const xjw::gui::camera_scene::CameraImagePlaneAxes axes =
         xjw::gui::camera_scene::cameraImagePlaneAxes(
             pose.rotation, pose.uAxisSign, pose.vAxisSign);
-    const QVector<QVector3D> corners = xjw::gui::camera_scene::cameraImagePlaneCorners(
-        pose.center, axes.right, axes.up, image_half_extent, image_half_height);
+    const QVector<QVector3D> corners = xjw::gui::camera_scene::calibratedImagePlaneCorners(
+        pose.center,
+        forward,
+        axes.right,
+        axes.up,
+        sceneCenter(),
+        pose.focalX,
+        pose.focalY,
+        pose.principalX,
+        pose.principalY,
+        image_width,
+        image_height);
     if (corners.size() != 4)
     {
         return;

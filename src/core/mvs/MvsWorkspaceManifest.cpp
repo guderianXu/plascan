@@ -532,6 +532,8 @@ QString makeMvsDepthConfigHash(const DepthGenConfig &config, int viewCount)
     root.insert(QStringLiteral("scene_profile"), static_cast<int>(config.sceneProfile));
     root.insert(QStringLiteral("depth_filter_mode"), static_cast<int>(config.depthFilterMode));
     root.insert(QStringLiteral("adaptive_depth_filter_mode"), config.adaptiveDepthFilterMode);
+    root.insert(QStringLiteral("cross_view_hole_repair_source_count"),
+                config.crossViewHoleRepairSourceCount);
     root.insert(QStringLiteral("two_source_cross_view_growth"),
                 config.enableTwoSourceCrossViewGrowth);
     root.insert(QStringLiteral("two_source_growth_distance_pixels"),

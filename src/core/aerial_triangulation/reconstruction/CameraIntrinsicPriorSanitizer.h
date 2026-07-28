@@ -7,6 +7,10 @@
 namespace xjw::aerial_triangulation
 {
 
+// 仅显式导入、人工设置或来自有效 EXIF 的内参可作为下一次空三的先验。
+// SfM 自标定结果和旧工程中缺少来源信息的相机都必须重新进入焦距搜索。
+bool isTrustedProjectCameraIntrinsic(const QJsonObject &cameraObject);
+
 struct CameraIntrinsicPriorSanitizationResult
 {
     int inspectedCameraCount = 0;

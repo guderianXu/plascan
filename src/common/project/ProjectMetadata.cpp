@@ -201,11 +201,17 @@ QMap<QString, QJsonObject> projectImageMetaByPath(const QJsonObject &metadata,
 QString resolveProjectImagePathFromToken(const QString &token,
                                          const QJsonObject &metadata)
 {
+    return resolveProjectImagePathFromToken(token, projectImagePaths(metadata));
+}
+
+QString resolveProjectImagePathFromToken(const QString &token,
+                                         const QStringList &project_image_paths)
+{
     if (token.isEmpty())
     {
         return QString();
     }
-    for (const QString &image_path : projectImagePaths(metadata))
+    for (const QString &image_path : project_image_paths)
     {
         if (pathTokenMatchesImage(token, image_path))
         {

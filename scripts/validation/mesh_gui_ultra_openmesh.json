@@ -1,0 +1,14 @@
+{
+    "generate_model": {
+        "calculateVertexColors": true,
+        "interpolation": "enabled",
+        "meshResolution": 384,
+        "quality": "ultra",
+        "qualityProfile": "detail",
+        "reconstruction_mode": "depth_tsdf",
+        "simplifyTargetFaces": 240000,
+        "source_data": "depth_maps",
+        "surface_type": "arbitrary_3d",
+        "targetFaces": 240000
+    }
+}

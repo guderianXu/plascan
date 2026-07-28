@@ -398,13 +398,17 @@ void weldCoincidentVertices(TriMesh *mesh, float relativeTolerance)
     mesh->vertices = std::move(welded_vertices);
 }
 
-void removeDegenerateFaces(TriMesh *mesh)
+void removeDegenerateFaces(TriMesh *mesh, float minimumArea)
 {
     if (!mesh)
     {
         return;
     }
-    assignFromPlaMesh(plapoint::mesh::removeDegenerateFaces(toPlaMesh(*mesh), 5.0e-9f), mesh);
+    assignFromPlaMesh(
+        plapoint::mesh::removeDegenerateFaces(
+            toPlaMesh(*mesh),
+            std::max(0.0f, minimumArea)),
+        mesh);
 }
 
 int compactReferencedVertices(TriMesh *mesh)

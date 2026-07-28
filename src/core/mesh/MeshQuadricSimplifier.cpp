@@ -210,7 +210,8 @@ bool collapsePreservesFaces(const TriMesh &mesh,
                             int keep,
                             int remove,
                             const Vec3 &position,
-                            double minimumNormalCosine)
+                            double minimumNormalCosine,
+                            double minimumFaceArea)
 {
     std::vector<int> faces = vertexFaces[static_cast<std::size_t>(keep)];
     faces.insert(faces.end(),
@@ -251,7 +252,8 @@ bool collapsePreservesFaces(const TriMesh &mesh,
         }
         const Vec3 newCross = cross(subtract(vertices[1], vertices[0]),
                                     subtract(vertices[2], vertices[0]));
-        constexpr double minimumDoubleArea = 1.0e-8;
+        const double minimumDoubleArea =
+            std::max(1.0e-18, 2.0 * minimumFaceArea);
         if (length(newCross) <= minimumDoubleArea)
         {
             return false;
@@ -574,7 +576,11 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
                 positionOf(mesh->vertices[static_cast<std::size_t>(edge.first)]),
                 positionOf(mesh->vertices[static_cast<std::size_t>(edge.second)]));
             if (!collapsePreservesFaces(*mesh, vertexFaces, edge.first, edge.second,
-                                        position, normalCosine))
+                                        position, normalCosine,
+                                        std::max(
+                                            0.0,
+                                            static_cast<double>(
+                                                options.minimumFaceArea))))
             {
                 ++worker_result.rejectedFlipEdgeCount;
                 return;
@@ -728,7 +734,9 @@ QuadricSimplifyStatistics simplifyMeshQuadric(
         }
     }
 
-    detail::removeDegenerateFaces(mesh);
+    detail::removeDegenerateFaces(
+        mesh,
+        std::max(0.0f, options.minimumFaceArea));
     detail::compactReferencedVertices(mesh);
     detail::recomputeNormals(mesh);
     statistics.outputVertexCount = mesh->vertexCount();

@@ -59,6 +59,8 @@ private:
     QJsonArray _candidates;
     QString _pendingSourceData;
     QString _pendingSourcePath;
+    bool _hasReusableDepthMaps = false;
+    bool _reuseDepthMapsRequested = true;
 
     QComboBox *_sourceCombo = nullptr;
     QComboBox *_sourceItemCombo = nullptr;

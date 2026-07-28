@@ -58,6 +58,36 @@ TEST(CameraSceneViewMathTest, UsesCameraCenterSideBeforeNoisyOpticalAxis)
               0);
 }
 
+TEST(CameraSceneViewMathTest, RejectsCameraWhenCurrentViewHasNoMatchingDirection)
+{
+    const QVector<CameraViewCandidate> candidates{
+        {0, QVector3D(-1.0f, 0.0f, 0.0f), QVector3D(3.0f, 0.0f, 0.0f), true},
+        {1, QVector3D(1.0f, 0.0f, 0.0f), QVector3D(-3.0f, 0.0f, 0.0f), true},
+    };
+
+    EXPECT_EQ(selectCameraForView(candidates,
+                                  QVector3D(0.0f, 0.0f, -1.0f),
+                                  QVector3D()),
+              -1);
+}
+
+TEST(CameraSceneViewMathTest, AcceptsCameraWithinViewMatchingAngle)
+{
+    constexpr float pi = 3.14159265358979323846f;
+    const float angle_radians = 25.0f * pi / 180.0f;
+    const QVector3D camera_to_scene(std::sin(angle_radians),
+                                    0.0f,
+                                    -std::cos(angle_radians));
+    const QVector<CameraViewCandidate> candidates{
+        {3, camera_to_scene, -camera_to_scene * 4.0f, true},
+    };
+
+    EXPECT_EQ(selectCameraForView(candidates,
+                                  QVector3D(0.0f, 0.0f, -1.0f),
+                                  QVector3D()),
+              3);
+}
+
 TEST(CameraSceneViewMathTest, CalibratedProjectionMapsOpticalAxisToPrincipalPoint)
 {
     const QMatrix4x4 projection = calibratedProjection(
@@ -104,6 +134,46 @@ TEST(CameraSceneViewMathTest, BuildsImagePlaneInCameraWorldCoordinates)
     EXPECT_EQ(corners.at(1), QVector3D(6.0f, 22.0f, 30.0f));
     EXPECT_EQ(corners.at(2), QVector3D(6.0f, 18.0f, 30.0f));
     EXPECT_EQ(corners.at(3), QVector3D(14.0f, 18.0f, 30.0f));
+}
+
+TEST(CameraSceneViewMathTest, BuildsCalibratedImagePlaneAtTheModelDepth)
+{
+    const QVector<QVector3D> corners = calibratedImagePlaneCorners(
+        QVector3D(0.0f, 0.0f, 10.0f),
+        QVector3D(0.0f, 0.0f, -1.0f),
+        QVector3D(1.0f, 0.0f, 0.0f),
+        QVector3D(0.0f, 1.0f, 0.0f),
+        QVector3D(),
+        1000.0f,
+        1000.0f,
+        500.0f,
+        250.0f,
+        1000,
+        500);
+
+    ASSERT_EQ(corners.size(), 4);
+    EXPECT_EQ(corners.at(0), QVector3D(5.0f, 2.5f, 0.0f));
+    EXPECT_EQ(corners.at(1), QVector3D(-5.0f, 2.5f, 0.0f));
+    EXPECT_EQ(corners.at(2), QVector3D(-5.0f, -2.5f, 0.0f));
+    EXPECT_EQ(corners.at(3), QVector3D(5.0f, -2.5f, 0.0f));
+}
+
+TEST(CameraSceneViewMathTest, CalibratedImagePlaneRejectsModelBehindCamera)
+{
+    const QVector<QVector3D> corners = calibratedImagePlaneCorners(
+        QVector3D(),
+        QVector3D(0.0f, 0.0f, -1.0f),
+        QVector3D(1.0f, 0.0f, 0.0f),
+        QVector3D(0.0f, 1.0f, 0.0f),
+        QVector3D(0.0f, 0.0f, 2.0f),
+        1000.0f,
+        1000.0f,
+        500.0f,
+        250.0f,
+        1000,
+        500);
+
+    EXPECT_TRUE(corners.isEmpty());
 }
 
 TEST(CameraSceneViewMathTest, ConvertsPixelAxesToVisualImagePlaneAxes)

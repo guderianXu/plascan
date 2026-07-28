@@ -1,4 +1,5 @@
 #include "DepthCrossViewHoleRepair.h"
+#include "DepthAnchoredHoleInterpolator.h"
 
 #include <gtest/gtest.h>
 
@@ -179,6 +180,80 @@ TEST(DepthCrossViewHoleRepairTest, RejectsOversizedTwoSourceComponent)
     EXPECT_EQ(stats.twoSourceGrownPixelCount, 0U);
     EXPECT_EQ(stats.growthRejectedComponentAreaCount, 1U);
     EXPECT_EQ(cv::countNonZero(reference(cv::Rect(28, 28, 7, 7)) > 0.0f), 0);
+}
+
+TEST(DepthAnchoredHoleInterpolatorTest, FillsInternalComponentBetweenStrongAnchors)
+{
+    cv::Mat depth(48, 48, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Rect hole(16, 16, 16, 16);
+    depth(hole).setTo(0.0f);
+    cv::Mat anchors(48, 48, CV_8UC1, cv::Scalar(0));
+    for (const cv::Point &point : {
+             cv::Point(18, 18), cv::Point(24, 18), cv::Point(29, 18),
+             cv::Point(18, 24), cv::Point(29, 24),
+             cv::Point(18, 29), cv::Point(24, 29), cv::Point(29, 29)})
+    {
+        depth.at<float>(point.y, point.x) = 2.0f;
+        anchors.at<std::uint8_t>(point.y, point.x) = 255;
+    }
+    const cv::Mat support(48, 48, CV_8UC1, cv::Scalar(255));
+    cv::Mat confidence(48, 48, CV_32FC1, cv::Scalar(0.8f));
+    cv::Mat repaired(48, 48, CV_8UC1, cv::Scalar(0));
+    const cv::Mat guide(48, 48, CV_8UC1, cv::Scalar(128));
+    xjw::mvs::DepthAnchoredHoleInterpolationOptions options;
+    options.enabled = true;
+
+    const auto stats = xjw::mvs::interpolateAnchoredInternalDepthHoles(
+        depth, support, anchors, &guide, options, &confidence, &repaired);
+
+    EXPECT_GT(stats.acceptedComponentCount, 0U);
+    EXPECT_EQ(cv::countNonZero(depth(hole) <= 0.0f), 0);
+    EXPECT_NEAR(depth.at<float>(24, 24), 2.0f, 1.0e-3f);
+    EXPECT_NEAR(confidence.at<float>(24, 24), 0.45f, 1.0e-4f);
+    EXPECT_EQ(repaired.at<std::uint8_t>(24, 24), 255);
+}
+
+TEST(DepthAnchoredHoleInterpolatorTest, PreservesOpeningInSupportMask)
+{
+    cv::Mat depth(40, 40, CV_32FC1, cv::Scalar(2.0f));
+    const cv::Rect opening(14, 14, 12, 12);
+    depth(opening).setTo(0.0f);
+    cv::Mat support(40, 40, CV_8UC1, cv::Scalar(255));
+    support(opening).setTo(0);
+    cv::Mat anchors(40, 40, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthAnchoredHoleInterpolationOptions options;
+    options.enabled = true;
+
+    const auto stats = xjw::mvs::interpolateAnchoredInternalDepthHoles(
+        depth, support, anchors, nullptr, options);
+
+    EXPECT_EQ(stats.interpolatedPixelCount, 0U);
+    EXPECT_EQ(cv::countNonZero(depth(opening) > 0.0f), 0);
+}
+
+TEST(DepthAnchoredHoleInterpolatorTest, RejectsDepthDiscontinuity)
+{
+    cv::Mat depth(48, 48, CV_32FC1, cv::Scalar(2.0f));
+    depth.colRange(24, 48).setTo(4.0f);
+    const cv::Rect hole(20, 16, 8, 16);
+    depth(hole).setTo(0.0f);
+    cv::Mat anchors(48, 48, CV_8UC1, cv::Scalar(0));
+    for (const cv::Point &point : {
+             cv::Point(21, 18), cv::Point(26, 18), cv::Point(21, 24),
+             cv::Point(26, 24), cv::Point(21, 29), cv::Point(26, 29)})
+    {
+        depth.at<float>(point.y, point.x) = point.x < 24 ? 2.0f : 4.0f;
+        anchors.at<std::uint8_t>(point.y, point.x) = 255;
+    }
+    const cv::Mat support(48, 48, CV_8UC1, cv::Scalar(255));
+    xjw::mvs::DepthAnchoredHoleInterpolationOptions options;
+    options.enabled = true;
+
+    const auto stats = xjw::mvs::interpolateAnchoredInternalDepthHoles(
+        depth, support, anchors, nullptr, options);
+
+    EXPECT_GT(stats.rejectedBoundarySpreadComponentCount, 0U);
+    EXPECT_GT(cv::countNonZero(depth(hole) <= 0.0f), 0);
 }
 
 } // namespace

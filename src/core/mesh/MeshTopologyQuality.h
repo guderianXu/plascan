@@ -18,11 +18,14 @@ struct MeshTopologyQualityThresholds
     int maximumNonManifoldEdgeCount = 0;
     int maximumComponentCount = 1;
     double minimumLargestComponentFaceRatio = 0.995;
+    int maximumTopologicalComplexity = 128;
+    double maximumClosedGenus = 64.0;
 };
 
 struct MeshTopologyQualityStatistics
 {
     int validFaceCount = 0;
+    int referencedVertexCount = 0;
     int uniqueEdgeCount = 0;
     int boundaryEdgeCount = 0;
     int nonManifoldEdgeCount = 0;
@@ -36,6 +39,14 @@ struct MeshTopologyQualityStatistics
     double skinnyFaceRatio = 0.0;
     double highAspectFaceRatio = 0.0;
     double extremeAspectFaceRatio = 0.0;
+    int adjacentFacePairCount = 0;
+    double adjacentNormalAngleMedianDegrees = 0.0;
+    double adjacentNormalAngleP90Degrees = 0.0;
+    double adjacentNormalAngleOver30Ratio = 0.0;
+    int eulerCharacteristic = 0;
+    int topologicalComplexity = 0;
+    double closedGenusEstimate = 0.0;
+    bool closedTopologyEvaluated = false;
     bool strictGatePassed = false;
 };
 

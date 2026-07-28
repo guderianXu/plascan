@@ -270,6 +270,7 @@ int main(int argc, char *argv[])
     bool referencePreselection = false;
     bool resetAlignment = true;
     bool noResetAlignment = false;
+    bool noReuseExistingMatches = false;
     bool saveAfterEachStep = false;
     bool guidedImageMatching = false;
     bool adaptiveCameraModelFitting = true;
@@ -302,8 +303,11 @@ int main(int argc, char *argv[])
     app.add_flag("--generic-preselection", genericPreselection, "启用通用预选");
     app.add_flag("--no-generic-preselection", noGenericPreselection, "禁用通用预选");
     app.add_flag("--reference-preselection", referencePreselection, "启用参考预选；source/estimated 需要相机文件，sequence 可无相机");
-    app.add_flag("--reset-alignment", resetAlignment, "重置当前对齐并重新准备连接点");
-    app.add_flag("--no-reset-alignment", noResetAlignment, "保留当前对齐；可与仅复用缓存模式组合使用");
+    app.add_flag("--reset-alignment", resetAlignment, "忽略当前相机外方位并重新执行 SfM/BA");
+    app.add_flag("--no-reset-alignment", noResetAlignment, "以当前相机位姿作为 SfM/BA 初值");
+    app.add_flag("--no-reuse-existing-matches",
+                 noReuseExistingMatches,
+                 "删除当前匹配和连接点缓存，重新提取、匹配并整理连接点");
     app.add_flag("--save-after-each-step", saveAfterEachStep, "每个步骤完成后保存项目");
     app.add_flag("--guided-image-matching", guidedImageMatching, "启用指导图像匹配");
     app.add_flag("--adaptive-camera-model-fitting", adaptiveCameraModelFitting, "启用自适应相机模型拟合");
@@ -412,6 +416,7 @@ int main(int argc, char *argv[])
     options.referencePreselection = referencePreselection;
     options.referenceMode = requestedReferenceMode;
     options.resetAlignment = resetAlignment;
+    options.reuseExistingMatches = !noReuseExistingMatches;
     options.saveAfterEachStep = saveAfterEachStep;
     options.keypointLimit = std::max(0, keypointLimit);
     options.tiepointLimit = std::max(0, tiepointLimit);

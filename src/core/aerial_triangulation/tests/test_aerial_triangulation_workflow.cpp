@@ -194,7 +194,44 @@ TEST(AerialTriangulationWorkflowTest, ExistingTiePointGraphSkipsPreparation)
     EXPECT_TRUE(result.reconstructionResult.success);
 }
 
-TEST(AerialTriangulationWorkflowTest, ResetForcesPreparationAndReusesOnlyProjectIntrinsics)
+TEST(AerialTriangulationWorkflowTest, ResetAlignmentStillSkipsExistingTiePointGraph)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.resetAlignment = true;
+    options.reuseExistingMatches = true;
+    options.autoGenerateMissingMatches = false;
+    const QString tiePointPath = QDir(options.assetsDir)
+        .filePath(QStringLiteral("tie_points/latest_tie_points.json"));
+    ASSERT_TRUE(QDir().mkpath(QFileInfo(tiePointPath).absolutePath()));
+    QFile tiePoints(tiePointPath);
+    ASSERT_TRUE(tiePoints.open(QIODevice::WriteOnly));
+    tiePoints.write("{}");
+    tiePoints.close();
+
+    bool tiePointRunnerCalled = false;
+    const auto result = xjw::aerial_triangulation::AerialTriangulationWorkflow::run(
+        options,
+        [](const xjw::aerial_triangulation::PreparedAerialTriangulationInput &input)
+        {
+            EXPECT_FALSE(input.useProjectCameraPoses);
+            xjw::aerial_triangulation::AerialTriangulationReconstructionResult reconstruction;
+            reconstruction.success = true;
+            return reconstruction;
+        },
+        [&](const xjw::matchphotos::MatchPhotosOptions &,
+            const xjw::matchphotos::MatchPhotosContext &)
+        {
+            tiePointRunnerCalled = true;
+            return xjw::matchphotos::MatchPhotosResult{};
+        });
+
+    EXPECT_FALSE(tiePointRunnerCalled);
+    EXPECT_FALSE(result.tiePointPreparationExecuted);
+    EXPECT_TRUE(result.reconstructionResult.success);
+}
+
+TEST(AerialTriangulationWorkflowTest, ResetAlignmentReusesExistingMatchesByDefault)
 {
     QTemporaryDir tempDir;
     auto options = makeBaseOptions(tempDir.path());
@@ -203,8 +240,8 @@ TEST(AerialTriangulationWorkflowTest, ResetForcesPreparationAndReusesOnlyProject
     const auto resolved =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
 
-    EXPECT_TRUE(resolved.prepareTiePoints);
-    EXPECT_TRUE(resolved.forceRebuildTiePoints);
+    EXPECT_FALSE(resolved.forceRebuildTiePoints);
+    EXPECT_TRUE(resolved.tiePointOptions.reuseExistingFeatures);
     EXPECT_TRUE(resolved.pipelineInput.useProjectCameraIntrinsics);
     EXPECT_FALSE(resolved.pipelineInput.useProjectCameraPoses);
 
@@ -213,6 +250,24 @@ TEST(AerialTriangulationWorkflowTest, ResetForcesPreparationAndReusesOnlyProject
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
     EXPECT_TRUE(reuseResolved.pipelineInput.useProjectCameraIntrinsics);
     EXPECT_TRUE(reuseResolved.pipelineInput.useProjectCameraPoses);
+}
+
+TEST(AerialTriangulationWorkflowTest, DisablingMatchReuseForcesTiePointRebuild)
+{
+    QTemporaryDir tempDir;
+    auto options = makeBaseOptions(tempDir.path());
+    options.resetAlignment = true;
+    options.reuseExistingMatches = false;
+
+    const auto resolved =
+        xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(options);
+
+    EXPECT_TRUE(resolved.prepareTiePoints);
+    EXPECT_TRUE(resolved.forceRebuildTiePoints);
+    EXPECT_FALSE(resolved.tiePointOptions.reuseExistingFeatures);
+    EXPECT_EQ(resolved.resolvedSettings.value(
+                  QStringLiteral("tie_point_preparation")).toString(),
+              QStringLiteral("force_rebuild"));
 }
 
 TEST(AerialTriangulationWorkflowTest, PropagatesExactInputPoseLock)

@@ -38,6 +38,7 @@ void MatchLineOverlay::setHighlightedIndices(const QVector<int> &indices)
     _highlightIndices = indices;
     _cacheValid = false;
     update();
+    emit visibleMatchesChanged();
 }
 
 void MatchLineOverlay::clearHighlightedIndices()
@@ -45,6 +46,20 @@ void MatchLineOverlay::clearHighlightedIndices()
     _highlightIndices.clear();
     _cacheValid = false;
     update();
+    emit visibleMatchesChanged();
+}
+
+void MatchLineOverlay::setShowOnlyHighlighted(bool onlyHighlighted)
+{
+    if (_showOnlyHighlighted == onlyHighlighted)
+    {
+        return;
+    }
+
+    _showOnlyHighlighted = onlyHighlighted;
+    _cacheValid = false;
+    update();
+    emit visibleMatchesChanged();
 }
 
 void MatchLineOverlay::setViewWidgets(ImageViewWidget *leftView, ImageViewWidget *rightView)
@@ -77,6 +92,7 @@ void MatchLineOverlay::setMatches(const QVector<QPointF> &ptsA,
     _ptsB = ptsB;
     _cacheValid = false;
     update();
+    emit visibleMatchesChanged();
 }
 
 void MatchLineOverlay::setInlierMask(const QVector<bool> &inlierMask)
@@ -84,6 +100,7 @@ void MatchLineOverlay::setInlierMask(const QVector<bool> &inlierMask)
     _inlierMask = inlierMask;
     _cacheValid = false;
     update();
+    emit visibleMatchesChanged();
 }
 
 void MatchLineOverlay::setLineColor(const QColor &color)
@@ -109,6 +126,7 @@ void MatchLineOverlay::setMaxDisplayCount(int maxCount)
     _maxDisplayCount = maxCount;
     _cacheValid = false;
     update();
+    emit visibleMatchesChanged();
 }
 
 void MatchLineOverlay::setShowOnlyInliers(bool onlyInliers)
@@ -116,6 +134,7 @@ void MatchLineOverlay::setShowOnlyInliers(bool onlyInliers)
     _showOnlyInliers = onlyInliers;
     _cacheValid = false;
     update();
+    emit visibleMatchesChanged();
 }
 
 void MatchLineOverlay::setShowEndPoints(bool show)

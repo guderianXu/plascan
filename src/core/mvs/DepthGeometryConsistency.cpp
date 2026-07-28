@@ -178,18 +178,15 @@ ProjectedDepthConsistencyResult evaluateProjectedDepthConsistency(
 bool shouldRetainDepthFromConsistencyVotes(int sourceViewCount,
                                            int consistentVotes,
                                            int,
-                                           int contradictedVotes)
+                                           int contradictedVotes,
+                                           int minimumSourceConfirmations)
 {
     if (sourceViewCount <= 1)
     {
         return contradictedVotes <= 0;
     }
-    if (consistentVotes <= 0)
-    {
-        return false;
-    }
-
-    return true;
+    return consistentVotes >= std::clamp(
+        minimumSourceConfirmations, 1, sourceViewCount);
 }
 
 cv::Mat makeGeometrySupportCount(const cv::Mat &retainedDepth,

@@ -45,7 +45,8 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
 
 int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
                         const QVector3D &worldViewDirection,
-                        const QVector3D &sceneCenter);
+                        const QVector3D &sceneCenter,
+                        float maximumViewAngleDegrees = 30.0f);
 
 QVector3D cameraForwardDirection(const QMatrix3x3 &cameraToWorld,
                                  bool depthAxisFlipped);
@@ -74,5 +75,17 @@ QVector<QVector3D> cameraImagePlaneCorners(const QVector3D &center,
                                            const QVector3D &up,
                                            float halfWidth,
                                            float halfHeight);
+
+QVector<QVector3D> calibratedImagePlaneCorners(const QVector3D &cameraCenter,
+                                               const QVector3D &forward,
+                                               const QVector3D &right,
+                                               const QVector3D &up,
+                                               const QVector3D &sceneCenter,
+                                               float focalX,
+                                               float focalY,
+                                               float principalX,
+                                               float principalY,
+                                               int imageWidth,
+                                               int imageHeight);
 
 } // namespace xjw::gui::camera_scene

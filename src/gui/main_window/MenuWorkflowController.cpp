@@ -1568,9 +1568,9 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
             }
 
             bool autoFillMissing = false;
-            const bool resetCurrentAlignment =
-                runSettings.value(QStringLiteral("reset_current_alignment")).toBool(true);
-            if (prereq.blockOnMatchQuality && !resetCurrentAlignment)
+            const bool reuseExistingMatches =
+                runSettings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
+            if (prereq.blockOnMatchQuality && reuseExistingMatches)
             {
                 emit pmGuard->atProgressFinished(false);
                 const QString details = prereq.warningMessages.isEmpty()
@@ -1578,7 +1578,10 @@ void MenuWorkflowController::startAerialTriangulationWorkflow(const QJsonObject 
                     : prereq.warningMessages.join(QStringLiteral("\n"));
                 QMessageBox::warning(controller->_mainWindow,
                                      QStringLiteral("空中三角测量"),
-                                     QStringLiteral("%1\n\n不会自动重新跑完整匹配。").arg(details));
+                                     QStringLiteral(
+                                         "%1\n\n当前已选择“重用现有匹配”，不会自动重新跑完整匹配。"
+                                         "如需重建匹配，请在高级设置中取消该选项。")
+                                         .arg(details));
                 return;
             }
             if (!prereq.missingMessages.isEmpty())
@@ -1633,6 +1636,10 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     workflowOptions.referenceMode =
         settings.value(QStringLiteral("reference_preselection_source")).toString(QStringLiteral("source_code"));
     workflowOptions.resetAlignment = settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
+    workflowOptions.reuseExistingMatches =
+        settings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
+    workflowOptions.lockInputCameraPoses =
+        settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false);
     workflowOptions.saveAfterEachStep = settings.value(QStringLiteral("save_project_after_each_step")).toBool(false);
     workflowOptions.keypointLimit = settings.value(QStringLiteral("keypoint_limit")).toInt(40000);
     workflowOptions.tiepointLimit = settings.value(QStringLiteral("tiepoint_limit")).toInt(4000);
@@ -1731,10 +1738,10 @@ void MenuWorkflowController::runUnifiedAerialTriangulation(const QJsonObject &se
     const xjw::aerial_triangulation::AerialTriangulationResolvedConfig resolved =
         xjw::aerial_triangulation::AerialTriangulationWorkflow::resolveConfig(workflowOptions);
 
-    emit pm->atProgressChanged(resetCurrentAlignment || fillMissingTiePoints
-                                   ? QStringLiteral("空中三角测量: 准备连接点...")
-                                   : QStringLiteral("空中三角测量: 启动 SfM/BA..."),
-                               0);
+    emit pm->atProgressChanged(resolved.prepareTiePoints
+                                    ? QStringLiteral("空中三角测量: 准备连接点...")
+                                    : QStringLiteral("空中三角测量: 启动 SfM/BA..."),
+                                0);
 
     const QStringList sfmImages = images;
     const QString sfmOutputDir = resolved.pipelineInput.outputDir;
@@ -1983,6 +1990,10 @@ void MenuWorkflowController::startThreeDReconstructionWorkflow(const QJsonObject
     workflowOptions.featureGrayscaleMin = normalizedFeatureGrayscaleMin(settings);
     workflowOptions.featureGrayscaleMax = 1.0f;
     workflowOptions.resetAlignment = settings.value(QStringLiteral("reset_current_alignment")).toBool(true);
+    workflowOptions.reuseExistingMatches =
+        settings.value(QStringLiteral("reuse_existing_matches")).toBool(true);
+    workflowOptions.lockInputCameraPoses =
+        settings.value(QStringLiteral("lock_input_camera_poses")).toBool(false);
     workflowOptions.autoGenerateMissingMatches = true;
 
     const QString quality = settings.value(QStringLiteral("quality")).toString(QStringLiteral("standard"));

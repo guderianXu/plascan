@@ -1161,10 +1161,10 @@ TEST(DepthFrameQualityGateTest, UsesPerFrameSourceCountForConsistencyPolicy)
     EXPECT_FALSE(xjw::mvs::useContradictionOnlyDepthConsistency(3));
     EXPECT_FLOAT_EQ(xjw::mvs::depthConsistencyRelativeThreshold(
                         xjw::mvs::MvsSceneProfile::OrbitalObject, 2),
-                    0.10f);
+                    0.06f);
     EXPECT_FLOAT_EQ(xjw::mvs::depthConsistencyRelativeThreshold(
                         xjw::mvs::MvsSceneProfile::OrbitalObject, 3),
-                    0.05f);
+                    0.008f);
 }
 
 TEST(DepthFrameQualityGateTest, ClassifiesOcclusionWithoutRejectingReferenceDepth)
@@ -1249,6 +1249,10 @@ TEST(DepthGeometryConsistencyTest, UsesAllVerifiableSourceVotes)
     EXPECT_TRUE(shouldRetainDepthFromConsistencyVotes(4, 1, 0, 3));
     EXPECT_FALSE(shouldRetainDepthFromConsistencyVotes(4, 0, 0, 4));
     EXPECT_TRUE(shouldRetainDepthFromConsistencyVotes(5, 3, 0, 2));
+    EXPECT_FALSE(shouldRetainDepthFromConsistencyVotes(6, 1, 0, 5, 2));
+    EXPECT_TRUE(shouldRetainDepthFromConsistencyVotes(6, 2, 0, 4, 2));
+    EXPECT_FALSE(shouldRetainDepthFromConsistencyVotes(6, 2, 0, 4, 3));
+    EXPECT_TRUE(shouldRetainDepthFromConsistencyVotes(6, 3, 0, 3, 3));
 }
 
 TEST(DepthGeometryConsistencyTest, GeometrySupportCountsReferenceAndConfirmedSources)
@@ -1295,7 +1299,7 @@ TEST(DepthGeometryConsistencyTest, BuildsSourceAndInverseDepthEvidence)
     EXPECT_EQ(evidence.supportCount.at<std::uint16_t>(0, 2), 2);
 }
 
-TEST(DepthFrameQualityGateTest, RejectsDepthConsistencyCollapse)
+TEST(DepthFrameQualityGateTest, MakesOrbitalConsistencyLossAuxiliaryBeforeCollapse)
 {
     xjw::mvs::DepthFrameQualityInput input;
     input.sceneProfile = xjw::mvs::MvsSceneProfile::OrbitalObject;
@@ -1310,11 +1314,24 @@ TEST(DepthFrameQualityGateTest, RejectsDepthConsistencyCollapse)
 
     const auto decision = xjw::mvs::evaluateDepthFrame(input);
 
-    EXPECT_EQ(decision.acceptance, xjw::mvs::DepthFrameAcceptance::Rejected);
-    EXPECT_NE(std::find(decision.reasons.begin(),
+    EXPECT_EQ(decision.acceptance,
+              xjw::mvs::DepthFrameAcceptance::ValidationOnly);
+    EXPECT_EQ(std::find(decision.reasons.begin(),
                         decision.reasons.end(),
                         std::string("depth_consistency_collapse")),
               decision.reasons.end());
+    EXPECT_NE(std::find(decision.reasons.begin(),
+                        decision.reasons.end(),
+                        std::string("depth_consistency_coverage_loss")),
+              decision.reasons.end());
+
+    input.consistencyRetentionRatio = 0.08f;
+    const auto collapsed = xjw::mvs::evaluateDepthFrame(input);
+    EXPECT_EQ(collapsed.acceptance, xjw::mvs::DepthFrameAcceptance::Rejected);
+    EXPECT_NE(std::find(collapsed.reasons.begin(),
+                        collapsed.reasons.end(),
+                        std::string("depth_consistency_collapse")),
+              collapsed.reasons.end());
 }
 
 TEST(DepthFrameQualityGateTest, MakesMarginalMaskCoverageValidationOnly)
@@ -1444,16 +1461,54 @@ TEST(DepthFrameQualityGateTest, CalibratesConfidenceAndCapsFilterViews)
     EXPECT_EQ(settings.minComponentArea, 64);
     EXPECT_FLOAT_EQ(settings.localDepthOutlierRelThreshold, 0.15f);
     EXPECT_EQ(settings.minConsistentViews, 2);
+    EXPECT_EQ(xjw::mvs::minimumDepthConsistencySourceConfirmations(
+                  xjw::mvs::DepthFilterMode::Mild, 6),
+              1);
+    EXPECT_EQ(xjw::mvs::minimumDepthConsistencySourceConfirmations(
+                  xjw::mvs::MvsSceneProfile::OrbitalObject,
+                  xjw::mvs::DepthFilterMode::Mild,
+                  6),
+              2);
+    EXPECT_EQ(xjw::mvs::minimumDepthConsistencySourceConfirmations(
+                  xjw::mvs::MvsSceneProfile::AerialTerrain,
+                  xjw::mvs::DepthFilterMode::Mild,
+                  6),
+              1);
+    EXPECT_EQ(xjw::mvs::minimumDepthConsistencySourceConfirmations(
+                  xjw::mvs::DepthFilterMode::Moderate, 6),
+              2);
+    EXPECT_EQ(xjw::mvs::minimumDepthConsistencySourceConfirmations(
+                  xjw::mvs::DepthFilterMode::Aggressive, 6),
+              3);
+    EXPECT_EQ(xjw::mvs::minimumDepthConsistencySourceConfirmations(
+                  xjw::mvs::DepthFilterMode::Moderate, 1),
+              0);
 }
 
-TEST(DepthFrameQualityGateTest, KeepsStrictMultiViewConsistencyThreshold)
+TEST(DepthFrameQualityGateTest, ScalesMultiViewConsistencyThresholdByFilterMode)
 {
     using xjw::mvs::depthConsistencyRelativeThreshold;
+    using xjw::mvs::DepthFilterMode;
     using xjw::mvs::MvsSceneProfile;
 
-    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(MvsSceneProfile::OrbitalObject, 16), 0.05f);
-    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(MvsSceneProfile::AerialTerrain, 9), 0.05f);
-    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(MvsSceneProfile::OrbitalObject, 2), 0.10f);
+    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(
+                        MvsSceneProfile::OrbitalObject, 16, DepthFilterMode::Mild),
+                    0.0125f);
+    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(
+                        MvsSceneProfile::OrbitalObject, 16, DepthFilterMode::Moderate),
+                    0.008f);
+    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(
+                        MvsSceneProfile::OrbitalObject, 16, DepthFilterMode::Aggressive),
+                    0.005f);
+    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(
+                        MvsSceneProfile::AerialTerrain, 9, DepthFilterMode::Moderate),
+                    0.015f);
+    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(
+                        MvsSceneProfile::OrbitalObject, 2, DepthFilterMode::Mild),
+                    0.10f);
+    EXPECT_FLOAT_EQ(depthConsistencyRelativeThreshold(
+                        MvsSceneProfile::OrbitalObject, 2, DepthFilterMode::Moderate),
+                    0.06f);
 }
 
 TEST(DepthConsistencyCacheTest, EvictsUnpinnedFramesWithinByteBudget)

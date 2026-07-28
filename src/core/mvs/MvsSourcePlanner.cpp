@@ -1,10 +1,14 @@
 #include "MvsSourcePlanner.h"
 
+#include <QDir>
+#include <QFileInfo>
 #include <QJsonArray>
 
 #include <algorithm>
 #include <cmath>
 #include <limits>
+#include <map>
+#include <set>
 #include <unordered_map>
 #include <unordered_set>
 
@@ -15,6 +19,38 @@ namespace mvs
 
 namespace
 {
+
+QString normalizedSourceImagePath(const std::string &path)
+{
+    const QString rawPath = QString::fromStdString(path).trimmed();
+    if (rawPath.isEmpty())
+    {
+        return QString();
+    }
+
+    const QFileInfo info(rawPath);
+    QString absolutePath = info.exists() ? info.canonicalFilePath() : info.absoluteFilePath();
+    if (absolutePath.isEmpty())
+    {
+        absolutePath = rawPath;
+    }
+    return QDir::cleanPath(absolutePath)
+        .replace(QLatin1Char('\\'), QLatin1Char('/'))
+        .toCaseFolded();
+}
+
+QString sourcePairKey(const std::string &imageA, const std::string &imageB)
+{
+    const QString keyA = normalizedSourceImagePath(imageA);
+    const QString keyB = normalizedSourceImagePath(imageB);
+    if (keyA.isEmpty() || keyB.isEmpty() || keyA == keyB)
+    {
+        return QString();
+    }
+    return keyA < keyB
+        ? keyA + QLatin1Char('\n') + keyB
+        : keyB + QLatin1Char('\n') + keyA;
+}
 
 MvsSourcePlanEntry makeEntry(const MvsSourceCandidate &candidate,
                              const MvsSourcePlannerOptions &options)
@@ -382,6 +418,54 @@ MvsSourcePlan planMvsSourceViewsVerifiedFirst(
         0,
         result.requestedSourceCount - static_cast<int>(result.selected.size()));
     return result;
+}
+
+std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
+    const std::vector<MvsSourcePairQuality> &qualities,
+    const std::vector<std::string> &imagePaths)
+{
+    std::set<QString> activeImages;
+    for (const std::string &imagePath : imagePaths)
+    {
+        const QString normalizedPath = normalizedSourceImagePath(imagePath);
+        if (!normalizedPath.isEmpty())
+        {
+            activeImages.insert(normalizedPath);
+        }
+    }
+
+    std::map<QString, MvsSourcePairQuality> bestByPair;
+    for (const MvsSourcePairQuality &quality : qualities)
+    {
+        const QString imageA = normalizedSourceImagePath(quality.imageA);
+        const QString imageB = normalizedSourceImagePath(quality.imageB);
+        if (activeImages.find(imageA) == activeImages.end()
+            || activeImages.find(imageB) == activeImages.end())
+        {
+            continue;
+        }
+
+        const QString key = sourcePairKey(quality.imageA, quality.imageB);
+        if (key.isEmpty())
+        {
+            continue;
+        }
+
+        auto it = bestByPair.find(key);
+        if (it == bestByPair.end()
+            || quality.geometricInliers > it->second.geometricInliers)
+        {
+            bestByPair[key] = quality;
+        }
+    }
+
+    std::vector<MvsSourcePairQuality> filtered;
+    filtered.reserve(bestByPair.size());
+    for (auto &item : bestByPair)
+    {
+        filtered.push_back(std::move(item.second));
+    }
+    return filtered;
 }
 
 QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry)

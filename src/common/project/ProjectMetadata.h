@@ -26,6 +26,8 @@ QMap<QString, QJsonObject> projectImageMetaByPath(const QJsonObject &metadata,
 
 QString resolveProjectImagePathFromToken(const QString &token,
                                          const QJsonObject &metadata);
+QString resolveProjectImagePathFromToken(const QString &token,
+                                         const QStringList &project_image_paths);
 QString resolveProjectFeaturePathFromToken(const QString &project_path,
                                            const QJsonObject &metadata,
                                            const QString &token);

@@ -1412,21 +1412,19 @@ MainMenu::MainMenu(QMainWindow *mainWindow)
         {
             _addFolderAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DirOpenIcon));
         }
-        if (_workflowAerialTriangulationAct)
+        const QList<QAction *> workflowActions{
+            _workflowAerialTriangulationAct,
+            _threeDReconstructionAct,
+            _generateModelAct,
+            _createDEMAct,
+            _generateOrthoAct
+        };
+        for (QAction *action : workflowActions)
         {
-            _workflowAerialTriangulationAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
-        }
-        if (_threeDReconstructionAct)
-        {
-            _threeDReconstructionAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_MediaPlay));
-        }
-        if (_createDEMAct)
-        {
-            _createDEMAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DriveHDIcon));
-        }
-        if (_generateOrthoAct)
-        {
-            _generateOrthoAct->setIcon(_mainWindow->style()->standardIcon(QStyle::SP_DesktopIcon));
+            if (action)
+            {
+                action->setIcon(QIcon());
+            }
         }
         initializeToolbar();
         installCameraToolbarButton();

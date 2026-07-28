@@ -1,5 +1,5 @@
 # 生产静态库：Camera/Tsai I/O、坐标归一化和外部格式转换器。
-add_library(camera STATIC Camera.cpp CameraFormatConverter.cpp)
+add_library(camera STATIC Camera.cpp CameraBaseline.cpp CameraFormatConverter.cpp)
 target_include_directories(camera PUBLIC ${CMAKE_CURRENT_SOURCE_DIR})
 target_link_libraries(camera
 	PUBLIC plascan_common_io
@@ -23,6 +23,15 @@ if(BUILD_TESTS)
 		)
 		target_include_directories(test_camera_unit PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
 		gtest_discover_tests(test_camera_unit)
+
+		# 相机中心距离、三角交会角与深度/基线比的统一摄影测量几何测试。
+		add_executable(test_camera_baseline test/CameraBaseline_tests.cpp)
+		target_link_libraries(test_camera_baseline PRIVATE
+			camera
+			GTest::gtest_main
+		)
+		target_include_directories(test_camera_baseline PRIVATE ${CMAKE_SOURCE_DIR}/src/core/camera)
+		gtest_discover_tests(test_camera_baseline)
 
 		# 仓库测试数据回归：TEST_DATA_DIR 使用绝对源码路径，不依赖 CTest 工作目录。
 		add_executable(test_camera_tsai test/test_tsai_loader.cpp)

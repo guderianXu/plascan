@@ -314,6 +314,21 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     {
         *repaired_mask = cv::Mat(reference_depth.size(), CV_8UC1, cv::Scalar(0));
     }
+    auto interpolate_anchored_components = [&]()
+    {
+        stats.anchoredInterpolation = interpolateAnchoredInternalDepthHoles(
+            reference_depth,
+            has_support
+                ? support_mask
+                : cv::Mat(reference_depth.size(), CV_8UC1, cv::Scalar(255)),
+            strong_repaired_mask,
+            guide_gray,
+            options.anchoredInterpolation,
+            has_confidence ? reference_confidence : nullptr,
+            repaired_mask);
+        stats.repairedPixelCount +=
+            stats.anchoredInterpolation.interpolatedPixelCount;
+    };
     const int minimum_sources = std::max(2, options.minimumDistinctSourceCount);
     const float maximum_spread = std::clamp(
         options.maximumRelativeDepthSpread, 0.001f, 0.10f);
@@ -458,6 +473,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     if (!options.enableTwoSourceGrowth || !has_votes || !has_geometry_evidence ||
         !reference_camera || !reference_camera->isValid())
     {
+        interpolate_anchored_components();
         return stats;
     }
 
@@ -472,6 +488,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     const cv::Mat image_gradient = guideGradient(guide_gray, reference_depth.size());
     if (image_gradient.empty())
     {
+        interpolate_anchored_components();
         return stats;
     }
 
@@ -591,6 +608,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
     }
     if (cv::countNonZero(weak_mask) == 0)
     {
+        interpolate_anchored_components();
         return stats;
     }
 
@@ -779,6 +797,7 @@ CrossViewHoleRepairStats repairDepthHolesFromProjectedSources(
             }
         }
     }
+    interpolate_anchored_components();
     return stats;
 }
 

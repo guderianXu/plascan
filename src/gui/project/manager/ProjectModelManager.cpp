@@ -18,6 +18,7 @@
 #include <QMessageBox>
 #include <QMetaObject>
 #include <QPointer>
+#include <QStringList>
 #include <QThread>
 #include <QtConcurrent/QtConcurrent>
 
@@ -261,11 +262,75 @@ QJsonObject buildTextureMappingRecord(const QJsonObject &baseRecord,
 
 QString meshReconstructionSuccessMessage(const QJsonObject &taskResult)
 {
-    return QStringLiteral("网格重建完成。\n模型: %1\n纹理模型: %2\n顶点: %3  面数: %4")
+    QString message = QStringLiteral(
+        "网格重建完成。\n模型: %1\n纹理模型: %2\n顶点: %3  面数: %4")
         .arg(taskResult.value(QStringLiteral("final_model_path")).toString())
         .arg(taskResult.value(QStringLiteral("model_obj")).toString())
         .arg(taskResult.value(QStringLiteral("vertex_count")).toInt(-1))
         .arg(taskResult.value(QStringLiteral("face_count")).toInt(-1));
+    if (!taskResult.contains(QStringLiteral("accepted_frame_count")))
+    {
+        return message;
+    }
+
+    message += QStringLiteral("\n融合深度: %1/%2 帧（辅助 %3，质量剔除 %4）")
+                   .arg(taskResult.value(QStringLiteral("accepted_frame_count")).toInt())
+                   .arg(taskResult.value(QStringLiteral("input_frame_count")).toInt())
+                   .arg(taskResult.value(
+                       QStringLiteral("auxiliary_surface_only_frame_count")).toInt())
+                   .arg(taskResult.value(
+                       QStringLiteral("robust_frame_quality_rejected_frame_count")).toInt());
+    const QJsonArray rejected_refs = taskResult.value(
+        QStringLiteral("robust_frame_quality_rejected_ref_indices")).toArray();
+    if (!rejected_refs.isEmpty())
+    {
+        QStringList ref_labels;
+        ref_labels.reserve(rejected_refs.size());
+        for (const QJsonValue &value : rejected_refs)
+        {
+            ref_labels.push_back(QString::number(value.toInt()));
+        }
+        message += QStringLiteral("\n被剔除视角: %1").arg(ref_labels.join(
+            QStringLiteral(", ")));
+    }
+    if (taskResult.value(QStringLiteral("orbital_maximum_angular_gap_degrees"))
+            .toDouble() > 0.0)
+    {
+        message += QStringLiteral("\n最大环向视角缺口: %1°（中位间隔的 %2 倍）")
+                       .arg(taskResult.value(
+                           QStringLiteral("orbital_maximum_angular_gap_degrees"))
+                                .toDouble(),
+                            0,
+                            'f',
+                            1)
+                       .arg(taskResult.value(
+                           QStringLiteral("orbital_maximum_angular_gap_ratio"))
+                                .toDouble(),
+                            0,
+                            'f',
+                            2);
+    }
+    if (taskResult.value(QStringLiteral("depth_completeness_available")).toBool())
+    {
+        message += QStringLiteral("\n深度完整性: 中位 %1%，P10 %2%（%3）")
+                       .arg(100.0 * taskResult.value(
+                           QStringLiteral("depth_completeness_median_frame_recall"))
+                                        .toDouble(),
+                            0,
+                            'f',
+                            1)
+                       .arg(100.0 * taskResult.value(
+                           QStringLiteral("depth_completeness_p10_frame_recall"))
+                                        .toDouble(),
+                            0,
+                            'f',
+                            1)
+                       .arg(taskResult.value(
+                           QStringLiteral("depth_completeness_gate_passed")).toBool()
+                                ? QStringLiteral("通过")
+                                : QStringLiteral("未通过"));
+    }
+    return message;
 }
 
 QString textureMappingSuccessMessage(const QJsonObject &taskResult)

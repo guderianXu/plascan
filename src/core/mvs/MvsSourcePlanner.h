@@ -1,7 +1,10 @@
 #pragma once
 
+#include "MvsTypes.h"
+
 #include <QJsonObject>
 
+#include <string>
 #include <vector>
 
 namespace xjw
@@ -95,6 +98,10 @@ MvsSourcePlan planMvsSourceViews(const std::vector<MvsSourceCandidate> &candidat
 MvsSourcePlan planMvsSourceViewsVerifiedFirst(
     const std::vector<MvsSourceCandidate> &candidates,
     const MvsSourcePlannerOptions &options);
+
+std::vector<MvsSourcePairQuality> filterMvsSourcePairQualitiesForImages(
+    const std::vector<MvsSourcePairQuality> &qualities,
+    const std::vector<std::string> &imagePaths);
 
 QJsonObject mvsSourcePlanEntryToJson(const MvsSourcePlanEntry &entry);
 

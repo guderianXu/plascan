@@ -14,6 +14,7 @@ struct QuadricSimplifyOptions
     int workerCount = 0;
     float minimumFaceReductionRatio = 0.001f;
     int maximumStagnantPasses = 2;
+    float minimumFaceArea = 5.0e-9f;
     float featureAngleDegrees = 35.0f;
     float maximumNormalDeviationDegrees = 45.0f;
     bool preserveOpenBoundaries = true;

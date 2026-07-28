@@ -11,6 +11,7 @@
 #include "DepthFrameUtils.h"
 #include "DepthPyramidPolicy.h"
 #include "EpipolarRectifier.h"
+#include "CameraBaseline.h"
 #include "MvsImagePreprocessor.h"
 #include "MvsQualityReport.h"
 #include "MvsSourcePlanner.h"
@@ -336,11 +337,12 @@ struct MvsSourcePairQualityLookup
     }
 };
 
-MvsSourcePairQualityLookup buildMvsSourcePairQualityLookup(const DepthGenConfig &config)
+MvsSourcePairQualityLookup buildMvsSourcePairQualityLookup(
+    const std::vector<MvsSourcePairQuality> &qualities)
 {
     MvsSourcePairQualityLookup lookup;
-    lookup.qualitiesByPairKey.reserve(config.sourcePairQualities.size());
-    for (const MvsSourcePairQuality &quality : config.sourcePairQualities)
+    lookup.qualitiesByPairKey.reserve(qualities.size());
+    for (const MvsSourcePairQuality &quality : qualities)
     {
         const std::string key = mvsSourcePairKey(quality.imageA, quality.imageB);
         if (key.empty())
@@ -989,6 +991,7 @@ CrossViewHoleRepairOptions orbitalCrossViewHoleRepairOptions(
         config.twoSourceGrowthNormalAngleDegrees;
     options.maximumGrowthComponentArea =
         config.twoSourceGrowthMaximumComponentArea;
+    options.anchoredInterpolation.enabled = true;
     return options;
 }
 
@@ -1023,6 +1026,44 @@ std::vector<int> consistencySourceIndicesForFrame(const std::vector<DepthFrameRe
         if (idx != refIdx)
         {
             sources.push_back(idx);
+        }
+    }
+    return sources;
+}
+
+std::vector<int> orbitalHoleRepairSourceIndices(
+    const std::vector<DepthFrameResult> &frames,
+    const std::vector<int> &consistencySources,
+    int refIdx,
+    int viewCount,
+    int requestedSourceCount)
+{
+    std::vector<int> sources;
+    const int target_count = std::clamp(
+        requestedSourceCount, 2, std::min(16, std::max(2, viewCount - 1)));
+    auto append_source = [&](int source_index)
+    {
+        if (source_index < 0 || source_index >= viewCount || source_index == refIdx ||
+            source_index >= static_cast<int>(frames.size()) ||
+            !frames[source_index].eligibleAsConsistencySource() ||
+            std::find(sources.begin(), sources.end(), source_index) != sources.end())
+        {
+            return;
+        }
+        sources.push_back(source_index);
+    };
+    for (int source_index : consistencySources)
+    {
+        append_source(source_index);
+    }
+    for (int distance = 1;
+         distance < viewCount && static_cast<int>(sources.size()) < target_count;
+         ++distance)
+    {
+        append_source((refIdx - distance + viewCount) % viewCount);
+        if (static_cast<int>(sources.size()) < target_count)
+        {
+            append_source((refIdx + distance) % viewCount);
         }
     }
     return sources;
@@ -1257,6 +1298,7 @@ void accumulateDepthConsistency(const cv::Mat &referenceDepth,
 
 cv::Mat makeDepthConsistencyMask(const cv::Mat &referenceDepth,
                                  int sourceViewCount,
+                                 int minimumSourceConfirmations,
                                  const cv::Mat &consistentVotes,
                                  const cv::Mat &occludedVotes,
                                  const cv::Mat &contradictedVotes)
@@ -1279,7 +1321,8 @@ cv::Mat makeDepthConsistencyMask(const cv::Mat &referenceDepth,
                     sourceViewCount,
                     consistent_row[column],
                     occluded_row[column],
-                    contradicted_row[column]))
+                    contradicted_row[column],
+                    minimumSourceConfirmations))
             {
                 mask_row[column] = 255;
             }
@@ -1316,6 +1359,46 @@ void updateDepthCompletenessAfterPostprocess(DepthFrameResult &result,
         depth, effective_mask);
 }
 
+DepthAnchoredHoleInterpolationStats repairPostprocessedInternalDepthHoles(
+    DepthFrameResult &result,
+    cv::Mat &depth,
+    cv::Mat &confidence,
+    MvsSceneProfile sceneProfile)
+{
+    if (sceneProfile != MvsSceneProfile::OrbitalObject ||
+        !result.supportRegionMask || result.supportRegionMask->empty() ||
+        !result.crossViewRepairedMask || result.crossViewRepairedMask->empty())
+    {
+        return {};
+    }
+    cv::Mat support_mask = *result.supportRegionMask;
+    if (support_mask.size() != depth.size())
+    {
+        cv::resize(
+            support_mask, support_mask, depth.size(), 0.0, 0.0, cv::INTER_NEAREST);
+    }
+    cv::Mat anchor_mask = *result.crossViewRepairedMask;
+    if (anchor_mask.size() != depth.size())
+    {
+        cv::resize(
+            anchor_mask, anchor_mask, depth.size(), 0.0, 0.0, cv::INTER_NEAREST);
+    }
+    if (result.crossViewRepairedMask->size() != depth.size())
+    {
+        *result.crossViewRepairedMask = anchor_mask.clone();
+    }
+    DepthAnchoredHoleInterpolationOptions options;
+    options.enabled = true;
+    return interpolateAnchoredInternalDepthHoles(
+        depth,
+        support_mask,
+        anchor_mask,
+        nullptr,
+        options,
+        confidence.empty() ? nullptr : &confidence,
+        result.crossViewRepairedMask.data());
+}
+
 void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
                                              const cv::Mat &depth,
                                              const cv::Mat &confidence,
@@ -1323,29 +1406,13 @@ void updateDepthFrameQualityAfterConsistency(DepthFrameResult &result,
                                              DepthFilterMode filter_mode,
                                              float consistency_keep_rate)
 {
-    cv::Mat quality_depth = depth;
-    cv::Mat quality_confidence = confidence;
-    if (result.crossViewRepairedMask &&
-        result.crossViewRepairedMask->type() == CV_8UC1 &&
-        result.crossViewRepairedMask->size() == depth.size())
-    {
-        quality_depth = depth.clone();
-        quality_depth.setTo(0.0f, *result.crossViewRepairedMask);
-        if (!confidence.empty() && confidence.type() == CV_32FC1 &&
-            confidence.size() == depth.size())
-        {
-            quality_confidence = confidence.clone();
-            quality_confidence.setTo(0.0f, *result.crossViewRepairedMask);
-        }
-    }
-    float quality_consistency_keep_rate = consistency_keep_rate;
-    if (result.crossViewRepairedMask &&
-        result.depthCompleteness.preConsistencyValidCount > 0)
-    {
-        quality_consistency_keep_rate = static_cast<float>(
-            cv::countNonZero(quality_depth > 0.0f)) /
-            static_cast<float>(result.depthCompleteness.preConsistencyValidCount);
-    }
+    // Frame acceptance describes the final depth product that enters fusion.
+    // Repaired pixels retain their per-pixel provenance and are guarded again by
+    // TSDF geometry support, so removing them here would penalize the same
+    // evidence twice and could downgrade an otherwise complete orbital sequence.
+    const cv::Mat &quality_depth = depth;
+    const cv::Mat &quality_confidence = confidence;
+    const float quality_consistency_keep_rate = consistency_keep_rate;
     const float search_boundary_ratio =
         result.qualityMetrics.depthAtSearchBoundaryRatio;
     result.qualityMetrics = analyzeDepthMapQuality(
@@ -2065,10 +2132,30 @@ void DepthMapGenerator::prepareFrameCaches()
     buildVisibilityBitsFromFrameCaches();
 
     _frameCachesReady = true;
-    const MvsSourcePairQualityLookup pairQualityLookup = buildMvsSourcePairQualityLookup(_config);
+    std::vector<std::string> activeImagePaths;
+    activeImagePaths.reserve(_views.size());
+    for (const CameraView &view : _views)
+    {
+        activeImagePaths.push_back(view.imagePath);
+    }
+    const std::vector<MvsSourcePairQuality> activePairQualities =
+        filterMvsSourcePairQualitiesForImages(_config.sourcePairQualities, activeImagePaths);
+    const MvsSourcePairQualityLookup pairQualityLookup =
+        buildMvsSourcePairQualityLookup(activePairQualities);
     const bool hasSourcePairQuality = !pairQualityLookup.qualitiesByPairKey.empty();
     const bool requireVerifiedSourcePairs = _config.requireVerifiedSourcePairs && hasSourcePairQuality;
     const int minVerifiedPairInliers = std::max(1, _config.minSourcePairGeometricInliers);
+    int referenceTrackFallbackCount = 0;
+    if (_config.requireVerifiedSourcePairs
+        && !_config.sourcePairQualities.empty()
+        && !hasSourcePairQuality)
+    {
+        LOG_WARN(QStringLiteral(
+                     "[MVS] 配置中的 %1 个几何验证对均不属于当前 %2 张影像，"
+                     "已忽略旧引用并回退到当前空三稀疏轨迹")
+                     .arg(_config.sourcePairQualities.size())
+                     .arg(NV));
+    }
 
     auto sampledMedianAngle = [this, NV](int refIdx, int sourceIdx) -> float
     {
@@ -2086,9 +2173,14 @@ void DepthMapGenerator::prepareFrameCaches()
             {
                 continue;
             }
-            angles.push_back(mvsTriangulationAngleDeg(_views[refIdx],
-                                                       _views[sourceIdx],
-                                                       _sparse.points[pointIndex]));
+            const float angle = mvsTriangulationAngleDeg(_views[refIdx],
+                                                          _views[sourceIdx],
+                                                          _sparse.points[pointIndex]);
+            if (angle <= 0.0f)
+            {
+                continue;
+            }
+            angles.push_back(angle);
             if (angles.size() >= kMaxAngleSamples)
             {
                 break;
@@ -2120,21 +2212,6 @@ void DepthMapGenerator::prepareFrameCaches()
         plannerOptions.maxTriangulationAngleDeg =
             recommendedMvsSourceMaximumAngleDeg(
                 _effectiveSceneProfile, desiredSourceCount);
-        if (requireVerifiedSourcePairs)
-        {
-            plannerOptions.minGeometricInliers = minVerifiedPairInliers;
-            plannerOptions.allowWeakKnownOverlap = false;
-            plannerOptions.requireVerifiedPairGeometry = true;
-            plannerOptions.allowSequenceFallback = false;
-        }
-        else if (_config.numSourceViews >= 5 && _config.fusion.minConsistentViews >= 3)
-        {
-            plannerOptions.minSharedTracks = 20;
-            plannerOptions.minGeometricInliers = 20;
-            plannerOptions.minSourceQualityScore = 0.35f;
-            plannerOptions.allowWeakKnownOverlap = false;
-        }
-
         struct RankedSourceCandidate
         {
             int viewIndex = -1;
@@ -2175,6 +2252,38 @@ void DepthMapGenerator::prepareFrameCaches()
                       return a.viewIndex < b.viewIndex;
                   });
 
+        bool referenceHasPairQuality = false;
+        for (const RankedSourceCandidate &candidate : rankedSourceCandidates)
+        {
+            if (pairQualityLookup.find(
+                    _views[static_cast<size_t>(refIdx)].imagePath,
+                    _views[static_cast<size_t>(candidate.viewIndex)].imagePath))
+            {
+                referenceHasPairQuality = true;
+                break;
+            }
+        }
+        const bool requireVerifiedSourcePairsForReference =
+            requireVerifiedSourcePairs && referenceHasPairQuality;
+        if (requireVerifiedSourcePairsForReference)
+        {
+            plannerOptions.minGeometricInliers = minVerifiedPairInliers;
+            plannerOptions.allowWeakKnownOverlap = false;
+            plannerOptions.requireVerifiedPairGeometry = true;
+            plannerOptions.allowSequenceFallback = false;
+        }
+        else if (_config.numSourceViews >= 5 && _config.fusion.minConsistentViews >= 3)
+        {
+            plannerOptions.minSharedTracks = 20;
+            plannerOptions.minGeometricInliers = 20;
+            plannerOptions.minSourceQualityScore = 0.35f;
+            plannerOptions.allowWeakKnownOverlap = false;
+        }
+        if (requireVerifiedSourcePairs && !referenceHasPairQuality)
+        {
+            ++referenceTrackFallbackCount;
+        }
+
         std::vector<MvsSourceCandidate> candidates;
         candidates.reserve(rankedSourceCandidates.size());
         int provenSourceCount = 0;
@@ -2196,7 +2305,7 @@ void DepthMapGenerator::prepareFrameCaches()
             const MvsSourcePairQuality *pairQuality = pairQualityLookup.find(
                 _views[static_cast<size_t>(refIdx)].imagePath,
                 _views[static_cast<size_t>(candidate.viewIndex)].imagePath);
-            sourceCandidate.geometricInliers = hasSourcePairQuality
+            sourceCandidate.geometricInliers = referenceHasPairQuality
                 ? (pairQuality ? std::max(0, pairQuality->geometricInliers) : 0)
                 : candidate.commonVisiblePoints;
             sourceCandidate.verifiedPairGeometry = pairQuality
@@ -2208,7 +2317,7 @@ void DepthMapGenerator::prepareFrameCaches()
                 : 0.0f;
             sourceCandidate.baselineScore = std::clamp(medianAngle / 20.0f, 0.0f, 1.0f);
             sourceCandidate.sequenceDistance = candidate.sequenceDistance;
-            sourceCandidate.knownOverlap = hasSourcePairQuality
+            sourceCandidate.knownOverlap = referenceHasPairQuality
                 ? sourceCandidate.verifiedPairGeometry
                 : true;
             candidates.push_back(sourceCandidate);
@@ -2227,7 +2336,7 @@ void DepthMapGenerator::prepareFrameCaches()
             }
         }
 
-        const MvsSourcePlan sourcePlan = requireVerifiedSourcePairs
+        const MvsSourcePlan sourcePlan = requireVerifiedSourcePairsForReference
             ? planMvsSourceViewsVerifiedFirst(candidates, plannerOptions)
             : planMvsSourceViews(candidates, plannerOptions);
 
@@ -2281,6 +2390,14 @@ void DepthMapGenerator::prepareFrameCaches()
         }
     }
 
+    if (referenceTrackFallbackCount > 0)
+    {
+        LOG_WARN(QStringLiteral(
+                     "[MVS] %1/%2 个参考帧在当前影像集合中没有几何验证对，"
+                     "已逐帧回退到当前空三稀疏轨迹，避免源视图被旧引用清空")
+                     .arg(referenceTrackFallbackCount)
+                     .arg(NV));
+    }
     LOG_INFO(QStringLiteral("[MVS] MVS 可见性缓存完成: views=%1 points=%2 elapsed=%3 ms")
                  .arg(NV)
                  .arg(static_cast<qulonglong>(pointCount))
@@ -2640,14 +2757,15 @@ bool DepthMapGenerator::estimateDepthRangeFromVisiblePoints(
         const int NVall = static_cast<int>(_views.size());
         for (int ia = 0; ia < NVall; ++ia)
         {
-            const std::array<double, 3> ca = _views[ia].camera.cameraCenter();
             for (int ib = ia + 1; ib < NVall; ++ib)
             {
-                const std::array<double, 3> cb = _views[ib].camera.cameraCenter();
-                const float dx = static_cast<float>(ca[0] - cb[0]);
-                const float dy = static_cast<float>(ca[1] - cb[1]);
-                const float dz = static_cast<float>(ca[2] - cb[2]);
-                maxBaseline = std::max(maxBaseline, std::sqrt(dx*dx + dy*dy + dz*dz));
+                const CameraBaseline baseline = CameraBaseline::evaluate(
+                    _views[ia].camera,
+                    _views[ib].camera);
+                if (baseline.isValid())
+                {
+                    maxBaseline = std::max(maxBaseline, static_cast<float>(baseline.length()));
+                }
             }
         }
         if (maxBaseline > 1e-3f)
@@ -4424,11 +4542,26 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         const int rowWorkers = std::max(1, _config.cpuWorkerCount);
         const std::vector<int> consistencySources =
             consistencySourceIndicesForFrame(_depthFrames, i, NV);
+        const std::vector<int> repairSources =
+            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject
+            ? orbitalHoleRepairSourceIndices(
+                  _depthFrames,
+                  consistencySources,
+                  i,
+                  NV,
+                  _config.crossViewHoleRepairSourceCount)
+            : consistencySources;
         const bool fewViews = useContradictionOnlyDepthConsistency(
             static_cast<int>(consistencySources.size()));
         const float relThresh = depthConsistencyRelativeThreshold(
             _effectiveSceneProfile,
-            static_cast<int>(consistencySources.size()));
+            static_cast<int>(consistencySources.size()),
+            _effectiveDepthFilterMode);
+        const int minimum_source_confirmations =
+            minimumDepthConsistencySourceConfirmations(
+                _effectiveSceneProfile,
+                _effectiveDepthFilterMode,
+                static_cast<int>(consistencySources.size()));
         const int beforeValid = cv::countNonZero(depthI > 0.0f);
         const CrossViewHoleRepairOptions repair_options =
             orbitalCrossViewHoleRepairOptions(_config);
@@ -4444,14 +4577,14 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         std::vector<cv::Mat> projected_sources;
         if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
         {
-            projected_sources.resize(consistencySources.size());
+            projected_sources.resize(repairSources.size());
         }
 
         for (int source_ordinal = 0;
-             source_ordinal < static_cast<int>(consistencySources.size());
+             source_ordinal < static_cast<int>(repairSources.size());
              ++source_ordinal)
         {
-            const int j = consistencySources[static_cast<std::size_t>(source_ordinal)];
+            const int j = repairSources[static_cast<std::size_t>(source_ordinal)];
             if (_cancelled.load())
             {
                 return;
@@ -4469,21 +4602,26 @@ void DepthMapGenerator::crossCheckDepthConsistency()
                 ? _depthFrames[j].cameraModel
                 : mvsPinholeCamera(_views[j].camera);
 
-            accumulateDepthConsistency(depthI,
-                                       camI,
-                                       depthJ,
-                                       camJ,
-                                       source_ordinal,
-                                       relThresh,
-                                       rowWorkers,
-                                       _cancelled,
-                                       consistent_votes,
-                                       occluded_votes,
-                                       contradicted_votes,
-                                       unverifiable_votes,
-                                       geometry_source_mask,
-                                       source_inverse_depth_sum,
-                                       source_inverse_depth_squared_sum);
+            if (std::find(
+                    consistencySources.begin(), consistencySources.end(), j) !=
+                consistencySources.end())
+            {
+                accumulateDepthConsistency(depthI,
+                                           camI,
+                                           depthJ,
+                                           camJ,
+                                           source_ordinal,
+                                           relThresh,
+                                           rowWorkers,
+                                           _cancelled,
+                                           consistent_votes,
+                                           occluded_votes,
+                                           contradicted_votes,
+                                           unverifiable_votes,
+                                           geometry_source_mask,
+                                           source_inverse_depth_sum,
+                                           source_inverse_depth_squared_sum);
+            }
             if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
             {
                 projected_sources[static_cast<std::size_t>(source_ordinal)] =
@@ -4512,6 +4650,7 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         const cv::Mat consistentMask = makeDepthConsistencyMask(
             depthI,
             static_cast<int>(consistencySources.size()),
+            minimum_source_confirmations,
             consistent_votes,
             occluded_votes,
             contradicted_votes);
@@ -4561,10 +4700,13 @@ void DepthMapGenerator::crossCheckDepthConsistency()
         _depthFrames[i].depthCompleteness.restoredFromPrefilterCount += restored_count;
         int afterValid = cv::countNonZero(depthI > 0);
         float keepRate = beforeValid > 0 ? 100.f * afterValid / beforeValid : 0.f;
-        fprintf(stderr, "[MVS] 帧%d 一致性检查(%s, 源视图 %zu/%d, 跨视补回 %llu, 两源生长 %llu/%llu): %d→%d 有效像素 (保留 %.1f%%)\n",
+        fprintf(stderr, "[MVS] 帧%d 一致性检查(%s, 检查/修复源 %zu/%zu, 最少确认 %d, 跨视补回 %llu, 锚定插值 %llu, 两源生长 %llu/%llu): %d→%d 有效像素 (保留 %.1f%%)\n",
                 i, fewViews ? "仅移除矛盾" : "需要确认",
-                consistencySources.size(), std::max(0, NV - 1),
+                consistencySources.size(), repairSources.size(),
+                minimum_source_confirmations,
                 static_cast<unsigned long long>(repair_stats.repairedPixelCount),
+                static_cast<unsigned long long>(
+                    repair_stats.anchoredInterpolation.interpolatedPixelCount),
                 static_cast<unsigned long long>(repair_stats.twoSourceGrownPixelCount),
                 static_cast<unsigned long long>(repair_stats.twoSourceCandidatePixelCount),
                 beforeValid, afterValid, keepRate);
@@ -4745,9 +4887,24 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             _depthFrames,
             frame_index,
             view_count);
+        const std::vector<int> repair_source_indices =
+            _effectiveSceneProfile == MvsSceneProfile::OrbitalObject
+            ? orbitalHoleRepairSourceIndices(
+                  _depthFrames,
+                  source_indices,
+                  frame_index,
+                  view_count,
+                  _config.crossViewHoleRepairSourceCount)
+            : source_indices;
         const float relative_threshold = depthConsistencyRelativeThreshold(
             _effectiveSceneProfile,
-            static_cast<int>(source_indices.size()));
+            static_cast<int>(source_indices.size()),
+            _effectiveDepthFilterMode);
+        const int minimum_source_confirmations =
+            minimumDepthConsistencySourceConfirmations(
+                _effectiveSceneProfile,
+                _effectiveDepthFilterMode,
+                static_cast<int>(source_indices.size()));
         const CrossViewHoleRepairOptions repair_options =
             orbitalCrossViewHoleRepairOptions(_config);
         cv::Mat consistent_votes(reference->depth.size(), CV_16U, cv::Scalar(0));
@@ -4762,14 +4919,14 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         std::vector<cv::Mat> projected_sources;
         if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
         {
-            projected_sources.resize(source_indices.size());
+            projected_sources.resize(repair_source_indices.size());
         }
 
         for (int source_ordinal = 0;
-             source_ordinal < static_cast<int>(source_indices.size());
+             source_ordinal < static_cast<int>(repair_source_indices.size());
              ++source_ordinal)
         {
-            const int source_index = source_indices[
+            const int source_index = repair_source_indices[
                 static_cast<std::size_t>(source_ordinal)];
             if (_cancelled.load())
             {
@@ -4792,23 +4949,29 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
                              .arg(QString::fromStdString(load_error)));
                 continue;
             }
-            accumulateDepthConsistency(reference->depth,
-                                       reference_camera,
-                                       source->depth,
-                                       _depthFrames[source_index].cameraModel.isValid()
-                                           ? _depthFrames[source_index].cameraModel
-                                           : mvsPinholeCamera(_views[source_index].camera),
-                                       source_ordinal,
-                                       relative_threshold,
-                                       row_workers,
-                                       _cancelled,
-                                       consistent_votes,
-                                       occluded_votes,
-                                       contradicted_votes,
-                                       unverifiable_votes,
-                                       geometry_source_mask,
-                                       source_inverse_depth_sum,
-                                       source_inverse_depth_squared_sum);
+            if (std::find(
+                    source_indices.begin(), source_indices.end(), source_index) !=
+                source_indices.end())
+            {
+                accumulateDepthConsistency(
+                    reference->depth,
+                    reference_camera,
+                    source->depth,
+                    _depthFrames[source_index].cameraModel.isValid()
+                        ? _depthFrames[source_index].cameraModel
+                        : mvsPinholeCamera(_views[source_index].camera),
+                    source_ordinal,
+                    relative_threshold,
+                    row_workers,
+                    _cancelled,
+                    consistent_votes,
+                    occluded_votes,
+                    contradicted_votes,
+                    unverifiable_votes,
+                    geometry_source_mask,
+                    source_inverse_depth_sum,
+                    source_inverse_depth_squared_sum);
+            }
             if (_effectiveSceneProfile == MvsSceneProfile::OrbitalObject)
             {
                 projected_sources[static_cast<std::size_t>(source_ordinal)] =
@@ -4839,6 +5002,7 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
         const cv::Mat consistent_mask = makeDepthConsistencyMask(
             filtered_depth,
             static_cast<int>(source_indices.size()),
+            minimum_source_confirmations,
             consistent_votes,
             occluded_votes,
             contradicted_votes);
@@ -4933,6 +5097,23 @@ bool DepthMapGenerator::crossCheckDepthConsistencyStreaming()
             frame_index,
             view_count);
         _depthFrames[frame_index].depthPostprocessApplied = true;
+        const DepthAnchoredHoleInterpolationStats final_repair =
+            repairPostprocessedInternalDepthHoles(
+                _depthFrames[frame_index],
+                filtered_depth,
+                filtered_confidence,
+                _effectiveSceneProfile);
+        _depthFrames[frame_index].depthCompleteness.crossViewRepairedCount +=
+            static_cast<int>(final_repair.interpolatedPixelCount);
+        if (final_repair.interpolatedPixelCount > 0)
+        {
+            fprintf(
+                stderr,
+                "[MVS] 帧%d 最终后处理后锚定修复 %llu 像素 (%llu 个内部连通域)\n",
+                frame_index,
+                static_cast<unsigned long long>(final_repair.interpolatedPixelCount),
+                static_cast<unsigned long long>(final_repair.acceptedComponentCount));
+        }
         updateDepthCompletenessAfterPostprocess(
             _depthFrames[frame_index],
             filtered_depth,
@@ -6466,6 +6647,14 @@ void DepthMapGenerator::runInBackground()
                                                                   res.refViewIdx,
                                                                   static_cast<int>(_views.size()));
                 res.depthPostprocessApplied = true;
+                const DepthAnchoredHoleInterpolationStats final_repair =
+                    repairPostprocessedInternalDepthHoles(
+                        res,
+                        *res.depthMap,
+                        confidence,
+                        _effectiveSceneProfile);
+                res.depthCompleteness.crossViewRepairedCount +=
+                    static_cast<int>(final_repair.interpolatedPixelCount);
                 updateDepthCompletenessAfterPostprocess(
                     res, *res.depthMap, res.depthPostprocess);
                 const int valid_before = res.depthPostprocess.validBeforePostprocess;

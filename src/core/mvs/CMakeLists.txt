@@ -19,6 +19,7 @@ set(MVS_CXX_SOURCES
     DenseCloudQualityFilter.cpp
     DepthCompletenessMetrics.cpp
     DepthConsistencyCache.cpp
+    DepthAnchoredHoleInterpolator.cpp
     DepthCrossViewHoleRepair.cpp
     DepthGeometryConsistency.cpp
     DepthMapFusion.cpp
@@ -54,6 +55,7 @@ set(MVS_HEADERS
     DenseCloudQualityFilter.h
     DepthCompletenessMetrics.h
     DepthConsistencyCache.h
+    DepthAnchoredHoleInterpolator.h
     DepthCrossViewHoleRepair.h
     DepthGeometryConsistency.h
     MvsTypes.h

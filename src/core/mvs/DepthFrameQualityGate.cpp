@@ -65,7 +65,37 @@ DepthFilterSettings depthFilterSettings(DepthFilterMode mode, int availableSourc
     return settings;
 }
 
-float depthConsistencyRelativeThreshold(MvsSceneProfile, int viewCount)
+int minimumDepthConsistencySourceConfirmations(DepthFilterMode mode,
+                                               int availableSourceViews)
+{
+    if (availableSourceViews <= 1)
+    {
+        return 0;
+    }
+    const DepthFilterSettings settings =
+        depthFilterSettings(mode, availableSourceViews);
+    return std::clamp(settings.minConsistentViews - 1,
+                      1,
+                      availableSourceViews);
+}
+
+int minimumDepthConsistencySourceConfirmations(MvsSceneProfile sceneProfile,
+                                               DepthFilterMode mode,
+                                               int availableSourceViews)
+{
+    const int baseline =
+        minimumDepthConsistencySourceConfirmations(mode, availableSourceViews);
+    if (sceneProfile == MvsSceneProfile::OrbitalObject &&
+        mode == DepthFilterMode::Mild && availableSourceViews >= 4)
+    {
+        return std::max(2, baseline);
+    }
+    return baseline;
+}
+
+float depthConsistencyRelativeThreshold(MvsSceneProfile sceneProfile,
+                                        int viewCount,
+                                        DepthFilterMode filterMode)
 {
     if (viewCount <= 1)
     {
@@ -73,9 +103,40 @@ float depthConsistencyRelativeThreshold(MvsSceneProfile, int viewCount)
     }
     if (viewCount == 2)
     {
-        return 0.10f;
+        switch (filterMode)
+        {
+        case DepthFilterMode::Mild:
+            return 0.10f;
+        case DepthFilterMode::Aggressive:
+            return 0.03f;
+        case DepthFilterMode::Moderate:
+        default:
+            return 0.06f;
+        }
     }
-    return 0.05f;
+    if (sceneProfile == MvsSceneProfile::OrbitalObject)
+    {
+        switch (filterMode)
+        {
+        case DepthFilterMode::Mild:
+            return 0.0125f;
+        case DepthFilterMode::Aggressive:
+            return 0.005f;
+        case DepthFilterMode::Moderate:
+        default:
+            return 0.008f;
+        }
+    }
+    switch (filterMode)
+    {
+    case DepthFilterMode::Mild:
+        return 0.03f;
+    case DepthFilterMode::Aggressive:
+        return 0.0075f;
+    case DepthFilterMode::Moderate:
+    default:
+        return 0.015f;
+    }
 }
 
 bool useContradictionOnlyDepthConsistency(int sourceViewCount)
@@ -161,7 +222,10 @@ DepthFrameQualityDecision evaluateDepthFrame(const DepthFrameQualityInput &input
     const float consistency_reject_threshold =
         input.sceneProfile == MvsSceneProfile::AerialTerrain
         ? (aerial_edge_neighborhood ? 0.20f : 0.25f)
-        : 0.75f;
+        // 环拍物体经过跨视过滤后，保留下来的深度仍是可用于表面约束的
+        // 几何核心。只有接近一致性安全回退线的帧才应整帧拒绝；
+        // 中等保留率帧由 validation_only 低权重参与 TSDF。
+        : 0.10f;
     const float consistency_validation_threshold =
         input.sceneProfile == MvsSceneProfile::AerialTerrain
         ? (aerial_edge_neighborhood ? 0.50f : 0.55f)

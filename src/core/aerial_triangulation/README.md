@@ -26,8 +26,9 @@
 
 1. `resolveConfig()` 把用户质量、关键点/连接点限制、蒙版、预选、设备和相机设置分别解析为
    `MatchPhotosOptions` 与 `PreparedAerialTriangulationInput`。
-2. 缺少 `assets/tie_points/latest_tie_points.json` 时自动调用创建连接点；勾选“重置当前对齐”时，
-   先删除旧匹配负缓存、匹配文件和连接点文件，再重新提取与匹配。
+2. 缺少 `assets/tie_points/latest_tie_points.json` 时自动调用创建连接点。“重置当前对齐”只让 SfM
+   忽略旧相机外方位并重新解算；默认勾选“重用现有匹配”，直接复用兼容的特征、匹配与连接点缓存。
+   只有取消“重用现有匹配”时，才删除旧匹配文件和连接点文件并重新提取、匹配与整理轨迹。
 3. `AerialTriangulationPipeline` 只读取本次解析出的连接点路径，不扫描另一套特征或匹配缓存。
 4. `SfmAttemptRunner` 装载连接点、多视观测和标记点先验，调用 `IncrementalSfm` 与统一 BA 后端。
 5. `AerialTriangulationResultWriter` 发布稀疏点云、待写回相机、质量指标和诊断。GUI 在任务完成且未取消后，

@@ -120,8 +120,32 @@ TEST(CameraSceneRenderContractTest, CameraImageShaderProjectsAWorldSpacePlane)
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("layout(location = 0) in vec3 position")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("uniform ImagePlaneUniforms")));
     EXPECT_TRUE(vertexShader.contains(QStringLiteral("uMVP * vec4(position, 1.0)")));
-    EXPECT_TRUE(source.contains(QStringLiteral("cameraImagePlaneCorners")));
+    EXPECT_TRUE(source.contains(QStringLiteral("calibratedImagePlaneCorners")));
+    EXPECT_FALSE(source.contains(QStringLiteral("const float image_half_extent")));
+    EXPECT_FALSE(source.contains(QStringLiteral("thumbnail_half_extent * 5.2f")));
     EXPECT_FALSE(source.contains(QStringLiteral("activeCameraImageViewportScale")));
+}
+
+TEST(CameraSceneRenderContractTest, AutomaticImageModeHasNoFirstPhotoFallback)
+{
+    const QString source = readProjectFile(QStringLiteral("src/gui/dialogs/CameraModel3DDialog.cpp"));
+    const qsizetype updateStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::updateActiveCameraForView()"));
+    const qsizetype displayedStart = source.indexOf(
+        QStringLiteral("int CameraSceneWidget::displayedCameraImagePoseIndex() const"), updateStart);
+    const qsizetype refreshStart = source.indexOf(
+        QStringLiteral("void CameraSceneWidget::refreshLockedCameraImage()"), displayedStart);
+
+    ASSERT_GE(updateStart, 0);
+    ASSERT_GT(displayedStart, updateStart);
+    ASSERT_GT(refreshStart, displayedStart);
+
+    const QString updateBlock = source.mid(updateStart, displayedStart - updateStart);
+    const QString displayedBlock = source.mid(displayedStart, refreshStart - displayedStart);
+    const qsizetype selectionCall = updateBlock.indexOf(QStringLiteral("selectCameraForView("));
+    ASSERT_GE(selectionCall, 0);
+    EXPECT_EQ(updateBlock.indexOf(QStringLiteral("_poses.at(index).imagePath"), selectionCall), -1);
+    EXPECT_FALSE(displayedBlock.contains(QStringLiteral("for (qsizetype index")));
 }
 
 TEST(CameraSceneRenderContractTest, MainWorkspaceCopiesCompleteCameraDisplayPose)

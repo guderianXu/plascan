@@ -5,6 +5,7 @@
 #include "project/ProjectMetadata.h"
 #include "reporting/AerialTriangulationResultWriter.h"
 #include "reporting/QualityReportWriter.h"
+#include "reconstruction/CameraIntrinsicPriorSanitizer.h"
 #include "search/AdaptiveFocalSearch.h"
 #include "search/SfmSearchPolicy.h"
 
@@ -48,7 +49,8 @@ bool hasCompleteCameraIntrinsicPrior(const PreparedAerialTriangulationInput &inp
         const QJsonObject cameraObject =
             metadata.value().value(QStringLiteral("camera")).toObject();
         Camera camera;
-        if (!xjw::common::project::cameraFromJson(cameraObject, &camera) ||
+        if (!isTrustedProjectCameraIntrinsic(cameraObject) ||
+            !xjw::common::project::cameraFromJson(cameraObject, &camera) ||
             !camera.isValid())
         {
             return false;

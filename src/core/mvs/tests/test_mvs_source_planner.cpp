@@ -4,11 +4,13 @@
 
 using xjw::mvs::mvsSourcePlanEntryToJson;
 using xjw::mvs::MvsSourceCandidate;
+using xjw::mvs::MvsSourcePairQuality;
 using xjw::mvs::MvsSourcePlannerOptions;
 using xjw::mvs::MvsSourceRejectReason;
 using xjw::mvs::MvsSourceTier;
 using xjw::mvs::planMvsSourceViews;
 using xjw::mvs::planMvsSourceViewsVerifiedFirst;
+using xjw::mvs::filterMvsSourcePairQualitiesForImages;
 
 namespace
 {
@@ -34,6 +36,41 @@ MvsSourceCandidate candidate(int viewIndex,
 }
 
 } // namespace
+
+TEST(MvsSourcePlanner, FiltersRemovedImageReferencesBeforeEnablingVerifiedPairGate)
+{
+    const std::vector<std::string> currentImages = {
+        "E:/data/current/image_01.tif",
+        "E:/data/current/image_02.tif",
+        "E:/data/current/image_03.tif",
+    };
+    const std::vector<MvsSourcePairQuality> qualities = {
+        {"E:/data/removed/image_01.tif", "E:/data/removed/image_02.tif", 150, 120, true},
+        {"E:\\data\\current\\image_01.tif", "e:/DATA/current/image_02.tif", 90, 70, true},
+        {"E:/data/current/image_02.tif", "E:/data/current/image_01.tif", 110, 85, true},
+        {"E:/data/current/image_02.tif", "E:/data/removed/image_03.tif", 100, 80, true},
+    };
+
+    const auto filtered = filterMvsSourcePairQualitiesForImages(qualities, currentImages);
+
+    ASSERT_EQ(filtered.size(), 1u);
+    EXPECT_EQ(filtered[0].geometricInliers, 85);
+    EXPECT_EQ(filtered[0].imageA, "E:/data/current/image_02.tif");
+    EXPECT_EQ(filtered[0].imageB, "E:/data/current/image_01.tif");
+}
+
+TEST(MvsSourcePlanner, EntirelyStalePairCatalogProducesNoActiveQuality)
+{
+    const std::vector<std::string> currentImages = {
+        "E:/data/current/image_01.tif",
+        "E:/data/current/image_02.tif",
+    };
+    const std::vector<MvsSourcePairQuality> staleQualities = {
+        {"E:/data/removed/image_01.tif", "E:/data/removed/image_02.tif", 150, 120, true},
+    };
+
+    EXPECT_TRUE(filterMvsSourcePairQualitiesForImages(staleQualities, currentImages).empty());
+}
 
 TEST(MvsSourcePlanner, VerifiedPairsStayFirstAndQualifiedGeometryBackfillsShortfall)
 {

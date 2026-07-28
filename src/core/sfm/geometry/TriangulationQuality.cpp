@@ -1,5 +1,6 @@
 #include "TriangulationQuality.h"
 
+#include "CameraBaseline.h"
 #include "Intersection.h"
 #include "geometry/ProjectionGeometry.h"
 
@@ -28,19 +29,6 @@ double minimumTriangulationAngleDeg(const std::vector<Camera> &cameras,
             continue;
         }
 
-        const std::array<double, 3> leftCenter =
-            cameras[static_cast<std::size_t>(leftObservation.cameraIndex)].cameraCenter();
-        const std::array<double, 3> leftVector{{leftCenter[0] - worldPoint[0],
-                                                leftCenter[1] - worldPoint[1],
-                                                leftCenter[2] - worldPoint[2]}};
-        const double leftNorm = std::sqrt(leftVector[0] * leftVector[0]
-                                        + leftVector[1] * leftVector[1]
-                                        + leftVector[2] * leftVector[2]);
-        if (leftNorm < 1e-12)
-        {
-            continue;
-        }
-
         for (std::size_t rightIndex = leftIndex + 1;
              rightIndex < track.observations.size();
              ++rightIndex)
@@ -52,25 +40,18 @@ double minimumTriangulationAngleDeg(const std::vector<Camera> &cameras,
                 continue;
             }
 
-            const std::array<double, 3> rightCenter =
-                cameras[static_cast<std::size_t>(rightObservation.cameraIndex)].cameraCenter();
-            const std::array<double, 3> rightVector{{rightCenter[0] - worldPoint[0],
-                                                     rightCenter[1] - worldPoint[1],
-                                                     rightCenter[2] - worldPoint[2]}};
-            const double rightNorm = std::sqrt(rightVector[0] * rightVector[0]
-                                             + rightVector[1] * rightVector[1]
-                                             + rightVector[2] * rightVector[2]);
-            if (rightNorm < 1e-12)
+            const CameraBaseline baseline = CameraBaseline::evaluate(
+                cameras[static_cast<std::size_t>(leftObservation.cameraIndex)],
+                cameras[static_cast<std::size_t>(rightObservation.cameraIndex)],
+                worldPoint);
+            if (!baseline.isValid()
+                || !baseline.hasPointGeometry()
+                || !baseline.isPointInFrontOfBothCameras()
+                || !baseline.triangulationAngleDeg().has_value())
             {
                 continue;
             }
-
-            const double dot = leftVector[0] * rightVector[0]
-                             + leftVector[1] * rightVector[1]
-                             + leftVector[2] * rightVector[2];
-            const double cosine = std::clamp(dot / (leftNorm * rightNorm), -1.0, 1.0);
-            constexpr double radiansToDegrees = 180.0 / 3.14159265358979323846;
-            minimumAngleDeg = std::min(minimumAngleDeg, std::acos(cosine) * radiansToDegrees);
+            minimumAngleDeg = std::min(minimumAngleDeg, *baseline.triangulationAngleDeg());
         }
     }
 

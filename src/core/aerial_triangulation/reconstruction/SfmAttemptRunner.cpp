@@ -16,6 +16,8 @@
 #include <QJsonObject>
 #include <QSize>
 
+#include <opencv2/imgcodecs.hpp>
+
 #include <algorithm>
 #include <cmath>
 #include <limits>
@@ -101,31 +103,6 @@ Camera cameraWithIdentityPose(Camera camera)
     return camera;
 }
 
-QSize imageSizeForInput(const QString &imagePath,
-                        const std::vector<FeatureKeypoint> &keypoints)
-{
-    QImageReader reader(imagePath);
-    const QSize decodedSize = reader.size();
-    if (decodedSize.isValid())
-    {
-        return decodedSize;
-    }
-
-    float maxX = 0.0f;
-    float maxY = 0.0f;
-    for (const FeatureKeypoint &keypoint : keypoints)
-    {
-        maxX = std::max(maxX, keypoint.x);
-        maxY = std::max(maxY, keypoint.y);
-    }
-    if (maxX > 0.0f && maxY > 0.0f)
-    {
-        return QSize(std::max(2, static_cast<int>(std::ceil(maxX)) + 1),
-                     std::max(2, static_cast<int>(std::ceil(maxY)) + 1));
-    }
-    return QSize(1920, 1080);
-}
-
 void configureSfmOptions(const PreparedAerialTriangulationInput &input,
                          IncrementalSfmOptions *options)
 {
@@ -181,6 +158,24 @@ void configureSfmOptions(const PreparedAerialTriangulationInput &input,
 
 } // namespace
 
+QSize SfmAttemptRunner::resolveInputImageSize(const QString &imagePath)
+{
+    QImageReader reader(imagePath);
+    const QSize headerSize = reader.size();
+    if (headerSize.isValid())
+    {
+        return headerSize;
+    }
+
+    // Qt 的 TIFF 插件或 Unicode 路径可能不可用，统一 IO 会按字节解码并兼容本地路径。
+    const cv::Mat decoded = xjw::common::io::readImage(imagePath, cv::IMREAD_UNCHANGED);
+    if (!decoded.empty() && decoded.cols > 0 && decoded.rows > 0)
+    {
+        return QSize(decoded.cols, decoded.rows);
+    }
+    return {};
+}
+
 SfmAttemptExecutionResult SfmAttemptRunner::run(
     const PreparedAerialTriangulationInput &input) const
 {
@@ -212,6 +207,7 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
 
     QMap<QString, QJsonObject> projectCameraByPath;
     QSet<QString> projectPosePaths;
+    int rejectedProjectIntrinsicCount = 0;
     if ((input.useProjectCameraIntrinsics || input.useProjectCameraPoses) &&
         !input.projectMeta.isEmpty())
     {
@@ -225,7 +221,16 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                 xjw::common::project::cameraFromJson(cameraObject, &camera) &&
                 camera.isValid())
             {
-                projectCameraByPath.insert(it.key(), cameraObject);
+                const bool trustedIntrinsic =
+                    isTrustedProjectCameraIntrinsic(cameraObject);
+                if (input.useProjectCameraPoses || trustedIntrinsic)
+                {
+                    projectCameraByPath.insert(it.key(), cameraObject);
+                }
+                else
+                {
+                    ++rejectedProjectIntrinsicCount;
+                }
                 if (input.useProjectCameraPoses && cameraMetadataHasUsablePose(cameraObject))
                 {
                     projectPosePaths.insert(it.key());
@@ -313,7 +318,14 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             }
         }
 
-        const QSize imageSize = imageSizeForInput(imagePath, keypoints);
+        const QSize imageSize = resolveInputImageSize(imagePath);
+        if (!imageSize.isValid())
+        {
+            execution.result.errorMessage =
+                QStringLiteral("无法读取影像尺寸，不能初始化相机内参: %1").arg(imagePath);
+            execution.result.summary = execution.result.errorMessage;
+            return execution;
+        }
         const double focal = std::max(imageSize.width(), imageSize.height()) *
             std::max(0.1, input.estimatedFocalScale);
         Camera camera;
@@ -401,6 +413,8 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
                        intrinsicSanitization.normalizedCameraCount);
     diagnostics.insert(QStringLiteral("project_intrinsic_prior_normalized_images"),
                        QJsonArray::fromStringList(intrinsicSanitization.normalizedImagePaths));
+    diagnostics.insert(QStringLiteral("project_intrinsic_prior_rejected"),
+                       rejectedProjectIntrinsicCount);
     execution.result.sfmDiagnostics = diagnostics;
 
     if (!sfmResult.success)
@@ -418,10 +432,15 @@ SfmAttemptExecutionResult SfmAttemptRunner::run(
             const ImageId imageId = static_cast<ImageId>(index);
             if (execution.reconstruction->isRegistered(imageId))
             {
+                QJsonObject cameraObject = xjw::common::project::cameraToJson(
+                    execution.reconstruction->camera(imageId));
+                cameraObject.insert(QStringLiteral("intrinsic_source"),
+                                    QStringLiteral("sfm_estimated"));
+                cameraObject.insert(QStringLiteral("pose_source"),
+                                    QStringLiteral("sfm_estimated"));
                 execution.result.pendingCamUpdates.insert(
                     xjw::common::project::normalizePath(input.images.at(index)),
-                    xjw::common::project::cameraToJson(
-                        execution.reconstruction->camera(imageId)));
+                    cameraObject);
             }
         }
     }

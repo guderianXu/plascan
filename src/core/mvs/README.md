@@ -29,7 +29,9 @@ live under `src/core/mvs/tests/`.
 ## Source Planning
 
 - `MvsSourcePlanner` scores candidate source views by shared tracks, geometric inliers, triangulation angle,
-  projected coverage, baseline, known overlap, and sequence distance.
+  projected coverage, baseline, known overlap, and sequence distance. The angle and physical-front checks are
+  computed through `core/camera/CameraBaseline`, so zero-baseline pairs and points behind either camera do not
+  become MVS source evidence.
 - `MvsSceneClassifier` resolves the candidate source pool before image preload and frame-cache preparation.
   High-resolution aerial terrain uses up to eight candidates, while high-resolution orbital-object capture
   uses six ring views and low-resolution object capture uses four. The final value is capped by the number
@@ -83,8 +85,12 @@ live under `src/core/mvs/tests/`.
   invalid regions, output-filter retention, and cross-view consistency retention.
 - `valid_mask_path` is the final depth-valid mask; `support_mask_path` is the project/content support region.
   They are intentionally distinct so a missing depth sample is not silently reinterpreted as free space.
-- Cross-view consistency selects its few-view policy from the actual source count of the current frame. One or
-  two sources use contradiction-only checks; three or more sources use the strict confirmation policy.
+- Cross-view consistency selects its few-view policy from the actual source count and depth-filter preset.
+  One source remains contradiction-only. With multiple sources, `mild`, `moderate`, and `aggressive` require
+  respectively one, two, and three independent source confirmations when enough sources are available. This
+  prevents a single agreeing outlier pair from preserving fragmented orbital-object depth. For three or more
+  sources their relative-depth tolerances are 3%, 1.5%, and 0.75%; two-source frames retain wider 10%, 6%,
+  and 3% tolerances because their baseline evidence is weaker.
 - The 0.80 mask-normalized coverage gate applies only to constrained project/content masks. Aerial frames using
   `full_image` retain the established edge/interior consistency thresholds instead of being downgraded merely
   because valid terrain does not cover the whole 6000×4000 raster.
@@ -297,3 +303,36 @@ E:/code/plascan/build/windows-vcpkg-cuda-release/tests/test_mvs_pipeline.exe `
 - With identical project masks, four and six source views produced mixed Temple results: four views slightly
   improved SSIM and one edge metric, while six improved IoU and reference-edge agreement. High-quality orbital
   reconstruction therefore keeps six source views and the 70-degree gate; lower-quality jobs keep four views.
+
+## 2026-07-27 Orbital Fusion Admission and Completeness Gate
+
+- Direct-depth orbital fusion no longer treats a slightly low mean confidence as proof that an entire view has no
+  geometric value. `validation_only` artifacts are admitted as low-weight, surface-only auxiliary observations;
+  they never estimate the TSDF bounds or cast free-space votes.
+- Robust frame confidence remains a continuous weight by default. Explicit hard rejection is guarded by camera
+  ring coverage, so adjacent removals cannot create an angular gap larger than twice the median spacing.
+- Support-mask free-space carving is off by default for orbital data. If explicitly enabled, it still requires
+  multi-camera consensus and cannot erase a voxel that already carries surface evidence.
+- The final mesh is checked against valid supported depth samples from every view. Per-frame, P10, median, and
+  aggregate recalls are written to the model report; orbital jobs reject a result that fails the completeness
+  gate instead of registering a half-model as successful.
+- Frozen Dino validation fused all 16 frames (two auxiliary), with P10/median recall `0.7238`/`0.8693`.
+  Temple fused all 16 frames with `0.7604`/`0.8439`. Both enforced gates and the existing geometry baselines pass.
+
+## 2026-07-28 Supported MC33 Surface and Sampling-Aware Orbital Defaults
+
+- The signed-distance visibility histogram now has nine bins with an exact zero centre. Zero evidence is excluded
+  from positive/negative conflict counts, and symmetric even-weight medians no longer inherit a negative tie bias.
+- MC33 output keeps a face only when its source cell contains an observed non-positive corner and an observed
+  positive corner. This removes the second, unsupported zero crossing formerly created at the back of the observed
+  TSDF band.
+- Orbital high-detail defaults cap the TSDF resolution from the median input depth-map sampling and scale the face
+  budget quadratically. A 640x480 Dino/Temple workspace therefore maps a GUI request of 384 cells and 240,000 faces
+  to 192 cells and 60,000 faces. `tsdfOrbitalAdaptiveResolution=false` preserves an explicit legacy request.
+- Final hole filling remains visibility- and silhouette-constrained. It can close supported internal defects up to
+  384 boundary edges, while large Temple column openings remain protected by size, diameter, and view evidence.
+- Frozen GUI-equivalent Dino validation produced 60,826 faces, reduced boundary edges from 12,459 to 374, and
+  improved minimum/P10/median depth recall to `0.7770`/`0.8226`/`0.9270`; the strict quality gate passes.
+  Temple produced 61,402 faces from all 16 frames and reduced boundary edges from 6,639 to 1,032 while preserving
+  the architectural openings. Its boundary ratio is `0.01114`, slightly above the generic `0.01` strict threshold,
+  so it remains reported rather than being hidden by an unsafe threshold change.

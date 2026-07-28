@@ -344,6 +344,7 @@ TEST(PhotogrammetryWorkflowCliGTest, AerialTriangulationCliAcceptsImageOnlyListF
     EXPECT_EQ(resolved.value(QStringLiteral("quality")).toString(), QStringLiteral("highest"));
     EXPECT_EQ(resolved.value(QStringLiteral("keypoint_limit")).toInt(), 40000);
     EXPECT_EQ(resolved.value(QStringLiteral("tiepoint_limit")).toInt(), 4000);
+    EXPECT_TRUE(resolved.value(QStringLiteral("reuse_existing_matches")).toBool());
     EXPECT_EQ(resolved.value(QStringLiteral("tie_point_preparation")).toString(),
               QStringLiteral("fill_missing"));
     const QJsonObject tiePointContext = report.value(QStringLiteral("tie_point_context")).toObject();

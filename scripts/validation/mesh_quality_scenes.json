@@ -1,0 +1,49 @@
+{
+    "schema": "plascan.mesh_quality_scenes.v1",
+    "scenes": [
+        {
+            "name": "dino",
+            "depth_map_dir": "${BUILD_DIR}/analysis/dino_true_pose_depth_moderate_strict/mvs",
+            "settings_json": "${REPO_ROOT}/scripts/validation/dino_mesh_adaptive_tgv_contour_cell_sheets.json",
+            "settings_key": "generate_model",
+            "expected_depth_file_count": 161,
+            "expected_depth_artifacts_sha256": "0f11813b9af8318dede1c8d1a110fbd05804ec4cc2be734b87b6239c31982b38",
+            "expected_settings_sha256": "7586b0feed9f0f336145339a8e0becaba60418d016fe1128765d7586208fecff",
+            "baseline_mesh": "${BUILD_DIR}/analysis/dino_true_pose_strict_tgv_contour_cell_sheets/products/model_from_mesh.ply",
+            "reference_mesh": "${BUILD_DIR}/analysis/metashape_dino/mesh.ply",
+            "baseline_metrics": {
+                "face_count": 170106,
+                "boundary_edge_count": 24880,
+                "component_count": 6,
+                "high_aspect_face_ratio": 0.11642740408921497,
+                "normal_median_degrees": 29.712372643127054,
+                "chamfer_l1": 0.0008833338414324333
+            }
+        },
+        {
+            "name": "temple",
+            "depth_map_dir": "${TEMPLE_DEPTH_DIR}",
+            "settings_json": "${REPO_ROOT}/scripts/validation/dino_mesh_adaptive_tgv_contour_cell_sheets.json",
+            "settings_key": "generate_model",
+            "expected_depth_file_count": 161,
+            "expected_depth_artifacts_sha256": "4824680a7144c758f5717ded09f8ad9a2f67d467fbb11fadc0c1688e711dc2ac",
+            "expected_settings_sha256": "7586b0feed9f0f336145339a8e0becaba60418d016fe1128765d7586208fecff",
+            "baseline_mesh": "${BUILD_DIR}/analysis/temple_true_pose_tgv_contour_cell_sheets/products/model_from_mesh.ply",
+            "baseline_metrics": {
+                "face_count": 60278,
+                "boundary_edge_count": 4654,
+                "component_count": 1,
+                "high_aspect_face_ratio": 0.061913135804107636,
+                "normal_median_degrees": 16.14984017095689
+            }
+        }
+    ],
+    "gate": {
+        "maximum_face_count_ratio": 1.02,
+        "maximum_boundary_edge_count_ratio": 1.02,
+        "maximum_component_count_increase": 0,
+        "maximum_high_aspect_ratio_multiplier": 1.02,
+        "maximum_normal_median_increase_degrees": 1.0,
+        "maximum_chamfer_l1_ratio": 1.025
+    }
+}

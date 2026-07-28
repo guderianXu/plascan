@@ -7,18 +7,55 @@ add_library(meshing STATIC
     BoundaryAwareVoxelSimplifier.cpp
     SurfaceReconstructorHeightGrid.cpp
     DepthMapMeshBuilder.cpp
+    DepthFusionFramePolicy.cpp
+    DepthMeshCompleteness.cpp
     DepthTsdfSurfaceBuilder.cpp
+    DepthTsdfCellSheetRecovery.cpp
+    IsoSurfaceTopology.cpp
+    ConsistentIsoSurfaceInternal.cpp
+    ConsistentIsoSurfaceExtractor.cpp
+    Mc33IsoSurfaceExtractor.cpp
+    DepthImplicitFieldRegularizer.cpp
+    DepthVisibilityHistogram.cpp
+    AdaptiveTsdfOctree.cpp
+    SparseTgvSolver.cpp
     VisualHullReconstructor.cpp
     MeshIO.cpp
     MeshColorizer.cpp
     MeshFaceColorOptimizer.cpp
     MeshQuadricSimplifier.cpp
+    MeshFaceOrientation.cpp
+    OpenMeshSimplifier.cpp
     MeshTopologyQuality.cpp
+    MeshBoundaryAttribution.cpp
     MeshIsotropicRemesher.cpp
     TextureMapper.cpp
     CameraTextureMapper.cpp
     ModelWorkflowService.cpp
 )
+
+set(PLASCAN_MC33_INCLUDE_DIR "" CACHE PATH
+    "Optional directory containing the MIT-licensed mc33cpp.h header")
+if(PLASCAN_MC33_INCLUDE_DIR)
+    if(NOT EXISTS "${PLASCAN_MC33_INCLUDE_DIR}/mc33cpp.h")
+        message(FATAL_ERROR
+            "PLASCAN_MC33_INCLUDE_DIR does not contain mc33cpp.h: "
+            "${PLASCAN_MC33_INCLUDE_DIR}")
+    endif()
+    target_include_directories(meshing SYSTEM PRIVATE
+        "${PLASCAN_MC33_INCLUDE_DIR}")
+    target_compile_definitions(meshing PRIVATE PLASCAN_HAS_MC33=1)
+else()
+    target_compile_definitions(meshing PRIVATE PLASCAN_HAS_MC33=0)
+endif()
+
+find_package(OpenMesh CONFIG QUIET)
+if(OpenMesh_FOUND)
+    target_link_libraries(meshing PRIVATE OpenMeshCore OpenMeshTools)
+    target_compile_definitions(meshing PRIVATE PLASCAN_HAS_OPENMESH=1)
+else()
+    target_compile_definitions(meshing PRIVATE PLASCAN_HAS_OPENMESH=0)
+endif()
 
 target_include_directories(meshing PUBLIC
     ${CMAKE_CURRENT_SOURCE_DIR}

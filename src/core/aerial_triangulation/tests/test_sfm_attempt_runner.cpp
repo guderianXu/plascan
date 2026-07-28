@@ -14,6 +14,8 @@
 #include <QTemporaryDir>
 #include <QImage>
 
+#include <opencv2/imgcodecs.hpp>
+
 #include <array>
 #include <vector>
 
@@ -155,6 +157,26 @@ TEST(SfmAttemptRunnerTest, RejectsTiePointFileFromAnotherImageSet)
         &graph,
         &errorMessage));
     EXPECT_TRUE(errorMessage.contains(QStringLiteral("影像集合")));
+}
+
+TEST(SfmAttemptRunnerTest, ResolvesUnicodeTiffSizeWithoutUsingKeypointBounds)
+{
+    QTemporaryDir tempDir;
+    ASSERT_TRUE(tempDir.isValid());
+    const QString unicodeDir = QDir(tempDir.path()).filePath(QStringLiteral("三维建模"));
+    ASSERT_TRUE(QDir().mkpath(unicodeDir));
+    const QString imagePath = QDir(unicodeDir).filePath(QStringLiteral("龙宫.tif"));
+
+    const cv::Mat image(1024, 1024, CV_8UC1, cv::Scalar(127));
+    const QString temporaryAsciiPath =
+        QDir(tempDir.path()).filePath(QStringLiteral("unicode_source.tif"));
+    ASSERT_TRUE(cv::imwrite(temporaryAsciiPath.toStdString(), image));
+    ASSERT_TRUE(QFile::rename(temporaryAsciiPath, imagePath));
+
+    EXPECT_EQ(xjw::aerial_triangulation::SfmAttemptRunner::resolveInputImageSize(imagePath),
+              QSize(1024, 1024));
+    EXPECT_FALSE(xjw::aerial_triangulation::SfmAttemptRunner::resolveInputImageSize(
+        QDir(unicodeDir).filePath(QStringLiteral("missing.tif"))).isValid());
 }
 
 TEST(SfmAttemptRunnerTest, LoadsMarkerTracksAndScaleBarsFromProjectSidecar)

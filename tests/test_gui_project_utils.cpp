@@ -47,6 +47,9 @@
 #include "ModelDropSupport.h"
 #include "DataTreeWidget.h"
 #include "CanvasWidget.h"
+#include "DualImageViewer.h"
+#include "ImageViewWidget.h"
+#include "MatchLineOverlay.h"
 #include "DepthOverlayData.h"
 #include "DepthOverlayController.h"
 #include "FeatureResidualLoader.h"
@@ -80,8 +83,10 @@
 #include <QEventLoop>
 #include <QFile>
 #include <QGroupBox>
+#include <QGraphicsEllipseItem>
 #include <QGraphicsItem>
 #include <QGraphicsScene>
+#include <QGraphicsView>
 #include <QImage>
 #include <QItemSelectionModel>
 #include <QJsonArray>
@@ -103,6 +108,7 @@
 #include <QSizePolicy>
 #include <QSpinBox>
 #include <QStackedWidget>
+#include <QStyle>
 #include <QTemporaryDir>
 #include <QTextStream>
 #include <QToolBar>
@@ -2452,8 +2458,16 @@ TEST(GenerateModelDialogTest, OffersAutomaticDepthMapsWithoutExistingDepthArtifa
 
 TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
 {
+    QJsonObject depth_maps;
+    depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    depth_maps[QStringLiteral("source_label")] = QStringLiteral("深度图");
+    depth_maps[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/mvs_output");
+    depth_maps[QStringLiteral("display")] = QStringLiteral("深度图 - mvs_output");
+    depth_maps[QStringLiteral("supported")] = true;
+
     GenerateModelDialog dialog;
     dialog.applySettings(QJsonObject());
+    dialog.setSourceCandidates(QJsonArray{depth_maps});
 
     QCheckBox *reuse_check = nullptr;
     for (QCheckBox *check : dialog.findChildren<QCheckBox *>())
@@ -2466,6 +2480,45 @@ TEST(GenerateModelDialogTest, ReusesDepthMapsByDefaultForLegacySettings)
     }
 
     ASSERT_NE(reuse_check, nullptr);
+    EXPECT_TRUE(reuse_check->isChecked());
+}
+
+TEST(GenerateModelDialogTest, DisablesDepthMapReuseWhenProjectHasNoDepthMaps)
+{
+    QJsonObject tie_points;
+    tie_points[QStringLiteral("source_data")] = QStringLiteral("tie_points");
+    tie_points[QStringLiteral("source_label")] = QStringLiteral("连接点");
+    tie_points[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/sparse.ply");
+    tie_points[QStringLiteral("display")] = QStringLiteral("连接点");
+    tie_points[QStringLiteral("supported")] = true;
+
+    GenerateModelDialog dialog;
+    dialog.applySettings(QJsonObject{{QStringLiteral("reuseDepthMaps"), true}});
+    dialog.setSourceCandidates(QJsonArray{tie_points});
+
+    auto *reuse_check = dialog.findChild<QCheckBox *>(QStringLiteral("reuseDepthMapsCheck"));
+    ASSERT_NE(reuse_check, nullptr);
+    EXPECT_FALSE(reuse_check->isEnabled());
+    EXPECT_FALSE(reuse_check->isChecked());
+    EXPECT_TRUE(reuse_check->toolTip().contains(QStringLiteral("没有可复用的深度图")));
+}
+
+TEST(GenerateModelDialogTest, EnablesDepthMapReuseWhenProjectHasDepthMaps)
+{
+    QJsonObject depth_maps;
+    depth_maps[QStringLiteral("source_data")] = QStringLiteral("depth_maps");
+    depth_maps[QStringLiteral("source_label")] = QStringLiteral("深度图");
+    depth_maps[QStringLiteral("source_path")] = QStringLiteral("E:/tmp/mvs_output");
+    depth_maps[QStringLiteral("display")] = QStringLiteral("深度图 - mvs_output");
+    depth_maps[QStringLiteral("supported")] = true;
+
+    GenerateModelDialog dialog;
+    dialog.applySettings(QJsonObject{{QStringLiteral("reuseDepthMaps"), true}});
+    dialog.setSourceCandidates(QJsonArray{depth_maps});
+
+    auto *reuse_check = dialog.findChild<QCheckBox *>(QStringLiteral("reuseDepthMapsCheck"));
+    ASSERT_NE(reuse_check, nullptr);
+    EXPECT_TRUE(reuse_check->isEnabled());
     EXPECT_TRUE(reuse_check->isChecked());
 }
 
@@ -8438,6 +8491,46 @@ TEST(MainMenuZoomTest, WorkflowCommandsRemainInMenusButAreRemovedFromToolbar)
     }
 }
 
+TEST(MainMenuWorkflowTest, WorkflowCommandsDoNotShowLeadingIcons)
+{
+    QMainWindow window;
+
+    auto *projectMenu = window.menuBar()->addMenu(QStringLiteral("项目"));
+    projectMenu->setObjectName(QStringLiteral("menuProject"));
+    auto *newProject = new QAction(QStringLiteral("新建项目"), &window);
+    newProject->setObjectName(QStringLiteral("actionNewProject"));
+    projectMenu->addAction(newProject);
+
+    auto *workflowMenu = window.menuBar()->addMenu(QStringLiteral("工作流程"));
+    workflowMenu->setObjectName(QStringLiteral("menuWorkflow"));
+
+    auto makeWorkflowAction = [&window, workflowMenu](const char *objectName, const QString &text)
+    {
+        auto *action = new QAction(
+            window.style()->standardIcon(QStyle::SP_MessageBoxInformation), text, &window);
+        action->setObjectName(QString::fromLatin1(objectName));
+        workflowMenu->addAction(action);
+        return action;
+    };
+
+    const QList<QAction *> workflowActions{
+        makeWorkflowAction("actionWorkflowAerialTriangulation", QStringLiteral("空中三角测量...")),
+        makeWorkflowAction("actionThreeDReconstruction", QStringLiteral("三维重建")),
+        makeWorkflowAction("actionGenerateModel", QStringLiteral("生成模型...")),
+        makeWorkflowAction("actionCreateDEM", QStringLiteral("创建 DEM")),
+        makeWorkflowAction("actionGenerateOrtho", QStringLiteral("生成正射影像"))
+    };
+
+    MainMenu menu(&window);
+
+    for (QAction *action : workflowActions)
+    {
+        ASSERT_NE(action, nullptr);
+        EXPECT_TRUE(action->icon().isNull()) << qPrintable(action->text());
+        EXPECT_TRUE(workflowMenu->actions().contains(action));
+    }
+}
+
 TEST(MainWindowZoomTest, DispatchesZoomToActiveImageOrModelView)
 {
     const QString sceneHeader =
@@ -11873,6 +11966,10 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     auto *guidedImageMatchingCheck = dialog.findChild<QCheckBox *>(QStringLiteral("m_guidedImageMatchingCheck"));
     auto *adaptiveCameraModelCheck =
         dialog.findChild<QCheckBox *>(QStringLiteral("m_adaptiveCameraModelCheck"));
+    auto *reuseExistingMatchesCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_reuseExistingMatchesCheck"));
+    auto *lockInputCameraPosesCheck =
+        dialog.findChild<QCheckBox *>(QStringLiteral("m_lockInputCameraPosesCheck"));
     auto *statusLabel = dialog.findChild<QLabel *>(QStringLiteral("m_statusLabel"));
     auto *advancedToggle = dialog.findChild<QToolButton *>(QStringLiteral("m_advancedToggle"));
     auto *advancedContent = dialog.findChild<QWidget *>(QStringLiteral("m_advancedContent"));
@@ -11889,6 +11986,8 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     ASSERT_NE(excludeFixedTiePointsCheck, nullptr);
     ASSERT_NE(guidedImageMatchingCheck, nullptr);
     ASSERT_NE(adaptiveCameraModelCheck, nullptr);
+    ASSERT_NE(reuseExistingMatchesCheck, nullptr);
+    ASSERT_NE(lockInputCameraPosesCheck, nullptr);
     ASSERT_NE(statusLabel, nullptr);
     ASSERT_NE(advancedToggle, nullptr);
     ASSERT_NE(advancedContent, nullptr);
@@ -11942,6 +12041,11 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_TRUE(adaptiveCameraModelCheck->isChecked());
     EXPECT_TRUE(adaptiveCameraModelCheck->toolTip().contains(QStringLiteral("焦距初始化")));
     EXPECT_TRUE(adaptiveCameraModelCheck->toolTip().contains(QStringLiteral("BA")));
+    EXPECT_TRUE(reuseExistingMatchesCheck->isChecked());
+    EXPECT_TRUE(reuseExistingMatchesCheck->toolTip().contains(QStringLiteral("SfM/BA")));
+    EXPECT_FALSE(lockInputCameraPosesCheck->isChecked());
+    EXPECT_TRUE(lockInputCameraPosesCheck->toolTip().contains(
+        QStringLiteral("Middlebury")));
 
     QJsonObject settings = dialog.collectSettings();
     EXPECT_EQ(settings.value(QStringLiteral("workflow_kind")).toString(),
@@ -11953,6 +12057,8 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_EQ(settings.value(QStringLiteral("tiepoint_limit")).toInt(), 4000);
     EXPECT_EQ(settings.value(QStringLiteral("mask_apply_mode")).toString(), QStringLiteral("keypoints"));
     EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("reuse_existing_matches")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("lock_input_camera_poses")).toBool());
 
     QJsonObject appliedSettings;
     appliedSettings[QStringLiteral("quality")] = QStringLiteral("highest");
@@ -11967,6 +12073,8 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     appliedSettings[QStringLiteral("exclude_fixed_tie_points")] = false;
     appliedSettings[QStringLiteral("guided_image_matching")] = true;
     appliedSettings[QStringLiteral("adaptive_camera_model_fitting")] = true;
+    appliedSettings[QStringLiteral("reuse_existing_matches")] = false;
+    appliedSettings[QStringLiteral("lock_input_camera_poses")] = true;
     dialog.applySettings(appliedSettings);
 
     settings = dialog.collectSettings();
@@ -11983,6 +12091,14 @@ TEST(AerialTriangulationDialogTest, UsesMetashapeStyleDefaultsAndCollectsSetting
     EXPECT_FALSE(settings.value(QStringLiteral("exclude_fixed_tie_points")).toBool());
     EXPECT_TRUE(settings.value(QStringLiteral("guided_image_matching")).toBool());
     EXPECT_TRUE(settings.value(QStringLiteral("adaptive_camera_model_fitting")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("reuse_existing_matches")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("lock_input_camera_poses")).toBool());
+    EXPECT_FALSE(settings.value(QStringLiteral("reset_current_alignment")).toBool());
+
+    resetAlignmentCheck->setChecked(true);
+    settings = dialog.collectSettings();
+    EXPECT_FALSE(settings.value(QStringLiteral("lock_input_camera_poses")).toBool());
+    EXPECT_TRUE(settings.value(QStringLiteral("reset_current_alignment")).toBool());
 }
 
 TEST(AerialTriangulationDialogTest, ReferencePreselectionStaysClickableWhenCamerasAreIncomplete)
@@ -15425,13 +15541,16 @@ TEST(MatchPairSelectorCatalogTest, UsesCatalogGroupsAndPassesVariantsToViewer)
                                             parseStart);
     ASSERT_GT(overlapStart, parseStart);
     const QString parseBody = source.mid(parseStart, overlapStart - parseStart);
-    EXPECT_FALSE(parseBody.contains(QStringLiteral("config.targetImagePath = imagePath")))
-        << "The match selector progress bar must represent the whole match directory access, not the current image.";
+    EXPECT_TRUE(parseBody.contains(QStringLiteral("config.targetImagePath = imagePath")));
+    EXPECT_TRUE(parseBody.contains(QStringLiteral("config.targetImagePaths = snapshot.allImages")));
     EXPECT_TRUE(source.contains(QStringLiteral(".scan()")));
     EXPECT_TRUE(source.contains(QStringLiteral("bestVariantIndex")));
     EXPECT_TRUE(source.contains(QStringLiteral("const QString base = imageBaseToken(imgPath);")));
     EXPECT_TRUE(source.contains(QStringLiteral("baseToPath.insert(base, imgPath)")));
     EXPECT_TRUE(source.contains(QStringLiteral("setMatchVariants(info.variants, info.matchFilePath)")));
+    EXPECT_TRUE(source.contains(QStringLiteral("const QStringList current_project_images")));
+    EXPECT_TRUE(source.contains(QStringLiteral("resolveProjectImagePathFromToken(\n"
+                                               "                                      match.imagePath")));
     EXPECT_TRUE(aerialSources.contains(QStringLiteral("preparation/MatchResultCatalog.cpp")));
 }
 
@@ -15480,6 +15599,48 @@ TEST(MatchViewerResponsivenessTest, LimitsDefaultSparseRenderingWork)
         << "Sparse match lines should have a finite default draw budget.";
     EXPECT_FALSE(dialogSource.contains(QStringLiteral("_maxCountSpin->setValue(0);")))
         << "Opening a large match file must not auto-switch the viewer back to unlimited rendering.";
+}
+
+TEST(MatchViewerEndpointVisibilityTest, HidesAllEndpointsWhenNoMatchLineIsVisible)
+{
+    DualImageViewer viewer;
+    viewer.resize(800, 600);
+    viewer.show();
+
+    const QVector<QPointF> leftPoints{
+        QPointF(20.0, 20.0),
+        QPointF(40.0, 40.0),
+        QPointF(60.0, 60.0)
+    };
+    const QVector<QPointF> rightPoints{
+        QPointF(25.0, 25.0),
+        QPointF(45.0, 45.0),
+        QPointF(65.0, 65.0)
+    };
+
+    viewer.leftView()->setMatchPoints(leftPoints);
+    viewer.rightView()->setMatchPoints(rightPoints);
+    viewer.overlay()->setMatches(leftPoints, rightPoints);
+    viewer.overlay()->setInlierMask(QVector<bool>{false, false, false});
+    viewer.overlay()->setShowOnlyInliers(true);
+    QTest::qWait(30);
+
+    auto visiblePointCount = [](ImageViewWidget *imageView)
+    {
+        int count = 0;
+        const QList<QGraphicsItem *> items = imageView->view()->scene()->items();
+        for (QGraphicsItem *item : items)
+        {
+            if (qgraphicsitem_cast<QGraphicsEllipseItem *>(item) && item->isVisible())
+            {
+                ++count;
+            }
+        }
+        return count;
+    };
+
+    EXPECT_EQ(visiblePointCount(viewer.leftView()), 0);
+    EXPECT_EQ(visiblePointCount(viewer.rightView()), 0);
 }
 
 TEST(CodeStyleTest, MatchViewerDialogUsesLowerCamelPrivateMemberNames)

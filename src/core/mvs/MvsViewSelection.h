@@ -1,6 +1,7 @@
 #pragma once
 
 #include "MvsTypes.h"
+#include "CameraBaseline.h"
 
 #include <algorithm>
 #include <cmath>
@@ -77,25 +78,20 @@ inline float mvsTriangulationAngleDeg(const CameraView &a,
                                       const CameraView &b,
                                       const std::array<float, 3> &point)
 {
-    const std::array<double, 3> ca = a.camera.cameraCenter();
-    const std::array<double, 3> cb = b.camera.cameraCenter();
-
-    const float ax = point[0] - static_cast<float>(ca[0]);
-    const float ay = point[1] - static_cast<float>(ca[1]);
-    const float az = point[2] - static_cast<float>(ca[2]);
-    const float bx = point[0] - static_cast<float>(cb[0]);
-    const float by = point[1] - static_cast<float>(cb[1]);
-    const float bz = point[2] - static_cast<float>(cb[2]);
-    const float an = std::sqrt(ax * ax + ay * ay + az * az);
-    const float bn = std::sqrt(bx * bx + by * by + bz * bz);
-    if (an <= 1e-6f || bn <= 1e-6f)
+    const CameraBaseline baseline = CameraBaseline::evaluate(
+        a.camera,
+        b.camera,
+        {{static_cast<double>(point[0]),
+          static_cast<double>(point[1]),
+          static_cast<double>(point[2])}});
+    if (!baseline.isValid()
+        || !baseline.hasPointGeometry()
+        || !baseline.isPointInFrontOfBothCameras()
+        || !baseline.triangulationAngleDeg().has_value())
     {
         return 0.f;
     }
-    float c = (ax * bx + ay * by + az * bz) / (an * bn);
-    c = std::max(-1.f, std::min(1.f, c));
-    constexpr float kPi = 3.14159265358979323846f;
-    return std::acos(c) * 180.0f / kPi;
+    return static_cast<float>(*baseline.triangulationAngleDeg());
 }
 
 inline std::vector<size_t> collectMvsVisibleSparsePointIndices(const std::vector<CameraView> &views,

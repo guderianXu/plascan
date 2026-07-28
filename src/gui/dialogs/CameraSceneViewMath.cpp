@@ -43,7 +43,8 @@ QVector<int> farToNearCameraIndices(const QVector<QVector3D> &centers,
 
 int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
                         const QVector3D &worldViewDirection,
-                        const QVector3D &sceneCenter)
+                        const QVector3D &sceneCenter,
+                        float maximumViewAngleDegrees)
 {
     const QVector3D view_direction = normalizedOrZero(worldViewDirection);
     if (view_direction.isNull())
@@ -103,7 +104,20 @@ int selectCameraForView(const QVector<CameraViewCandidate> &candidates,
             best_optical_axis_score = optical_axis_score;
         }
     }
-    return best_index;
+    if (best_index < 0)
+    {
+        return -1;
+    }
+
+    constexpr float pi = 3.14159265358979323846f;
+    const float maximum_angle = std::clamp(maximumViewAngleDegrees, 0.0f, 180.0f);
+    const float minimum_match_score = std::cos(maximum_angle * pi / 180.0f);
+    const float best_match_score = has_best_position
+        ? best_position_score
+        : best_direction_score;
+    return best_match_score + ScoreEpsilon >= minimum_match_score
+        ? best_index
+        : -1;
 }
 
 QVector3D cameraForwardDirection(const QMatrix3x3 &cameraToWorld,
@@ -191,6 +205,67 @@ QVector<QVector3D> cameraImagePlaneCorners(const QVector3D &center,
         center - horizontal + vertical,
         center - horizontal - vertical,
         center + horizontal - vertical,
+    };
+}
+
+QVector<QVector3D> calibratedImagePlaneCorners(const QVector3D &cameraCenter,
+                                               const QVector3D &forward,
+                                               const QVector3D &right,
+                                               const QVector3D &up,
+                                               const QVector3D &sceneCenter,
+                                               float focalX,
+                                               float focalY,
+                                               float principalX,
+                                               float principalY,
+                                               int imageWidth,
+                                               int imageHeight)
+{
+    const QVector3D forward_axis = normalizedOrZero(forward);
+    const QVector3D right_axis = normalizedOrZero(right);
+    const QVector3D up_axis = normalizedOrZero(up);
+    if (forward_axis.isNull() || right_axis.isNull() || up_axis.isNull())
+    {
+        return {};
+    }
+
+    const float model_depth = QVector3D::dotProduct(sceneCenter - cameraCenter, forward_axis);
+    if (!std::isfinite(model_depth) || model_depth <= ScoreEpsilon)
+    {
+        return {};
+    }
+
+    const QVector3D optical_axis_center = cameraCenter + forward_axis * model_depth;
+    const bool valid_intrinsics = std::isfinite(focalX)
+        && std::isfinite(focalY)
+        && std::isfinite(principalX)
+        && std::isfinite(principalY)
+        && focalX > ScoreEpsilon
+        && focalY > ScoreEpsilon
+        && imageWidth > 0
+        && imageHeight > 0;
+    if (!valid_intrinsics)
+    {
+        constexpr float half_fov_radians = 22.5f * 3.14159265358979323846f / 180.0f;
+        const float aspect = imageWidth > 0 && imageHeight > 0
+            ? static_cast<float>(imageWidth) / static_cast<float>(imageHeight)
+            : 4.0f / 3.0f;
+        const float half_height = model_depth * std::tan(half_fov_radians);
+        const float half_width = half_height * aspect;
+        return cameraImagePlaneCorners(
+            optical_axis_center, right_axis, up_axis, half_width, half_height);
+    }
+
+    const float left_extent = principalX * model_depth / focalX;
+    const float right_extent =
+        (static_cast<float>(imageWidth) - principalX) * model_depth / focalX;
+    const float top_extent = principalY * model_depth / focalY;
+    const float bottom_extent =
+        (static_cast<float>(imageHeight) - principalY) * model_depth / focalY;
+    return {
+        optical_axis_center + right_axis * right_extent + up_axis * top_extent,
+        optical_axis_center - right_axis * left_extent + up_axis * top_extent,
+        optical_axis_center - right_axis * left_extent - up_axis * bottom_extent,
+        optical_axis_center + right_axis * right_extent - up_axis * bottom_extent,
     };
 }
 

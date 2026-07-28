@@ -115,8 +115,9 @@ TEST(SfmSearchPolicyTest, AdaptiveFocalSweepCoversNarrowFieldOfViewCameras)
     const std::vector<double> scales = xjw::aerial_triangulation::adaptiveFocalScaleCandidates();
 
     ASSERT_FALSE(scales.empty());
-    EXPECT_GE(scales.back(), 5.2);
+    EXPECT_GE(scales.back(), 9.0);
     EXPECT_NE(std::find(scales.begin(), scales.end(), 5.2), scales.end());
+    EXPECT_NE(std::find(scales.begin(), scales.end(), 9.0), scales.end());
 }
 
 TEST(SfmSearchPolicyTest, AdaptiveReplayStopsOnlyAfterFullRegistration)

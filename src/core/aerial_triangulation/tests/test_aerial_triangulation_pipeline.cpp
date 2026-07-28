@@ -283,6 +283,61 @@ TEST(AerialTriangulationPipelineTest, DefaultEstimatedFocalScaleUsesLongestImage
     EXPECT_DOUBLE_EQ(input.estimatedFocalScale, 1.2);
 }
 
+TEST(AerialTriangulationPipelineTest, LegacySfmCameraMetadataDoesNotSuppressFocalSearch)
+{
+    QVector<double> attemptedScales;
+    const auto attemptRunner = [&attemptedScales](
+                                   const xjw::aerial_triangulation::PreparedAerialTriangulationInput &input)
+    {
+        attemptedScales.append(input.estimatedFocalScale);
+        xjw::aerial_triangulation::SfmAttemptExecutionResult execution;
+        execution.result.success = true;
+        execution.result.numRegisteredImages = input.images.size();
+        execution.result.numPoints3D = 100;
+        execution.result.meanReprojError = 0.5;
+        return execution;
+    };
+    const auto resultWriter = [](
+                                  const xjw::aerial_triangulation::PreparedAerialTriangulationInput &,
+                                  xjw::aerial_triangulation::SfmAttemptExecutionResult *,
+                                  QString *)
+    {
+        return true;
+    };
+
+    QJsonArray images;
+    xjw::aerial_triangulation::PreparedAerialTriangulationInput input;
+    for (int index = 0; index < 3; ++index)
+    {
+        const QString path = QStringLiteral("legacy_%1.tif").arg(index);
+        input.images.append(path);
+        images.append(QJsonObject{
+            {QStringLiteral("path"), path},
+            {QStringLiteral("camera"),
+             QJsonObject{
+                 {QStringLiteral("fu"), 430.0},
+                 {QStringLiteral("fv"), 430.0},
+                 {QStringLiteral("cu"), 390.0},
+                 {QStringLiteral("cv"), 360.0},
+                 {QStringLiteral("pitch"), 1.0},
+                 {QStringLiteral("C"), QJsonArray{0.0, 0.0, 0.0}},
+                 {QStringLiteral("R"), QJsonArray{1.0, 0.0, 0.0,
+                                                  0.0, 1.0, 0.0,
+                                                  0.0, 0.0, 1.0}},
+             }},
+        });
+    }
+    input.projectMeta.insert(QStringLiteral("images"), images);
+    input.useProjectCameraIntrinsics = true;
+
+    const auto result =
+        xjw::aerial_triangulation::AerialTriangulationPipeline(attemptRunner, resultWriter).run(input);
+
+    ASSERT_TRUE(result.success);
+    EXPECT_GT(attemptedScales.size(), 1);
+    EXPECT_TRUE(result.sfmDiagnostics.value(QStringLiteral("focal_initialization_search")).toBool());
+}
+
 TEST(AerialTriangulationPipelineTest, PrefersRigidPhotogrammetricNetworkOverMoreWeakPoints)
 {
     const auto sparseQuality = [](int pointCount,
